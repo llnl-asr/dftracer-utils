@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Tests for the native analytical / relational DataFrame methods.
 
 These primitives (``window``, ``gap_fill``, ``join``, ``asof``, ``interval``,
@@ -370,7 +371,7 @@ def test_lazy_join_matches_eager():
         plan = left.lazy().join(right.lazy(), "k", how)
         assert plan.columns == eager.to_arrow().column_names
         assert _dict(plan.collect()) == _dict(eager)
-        assert _dict(plan.collect(morsel_rows=1)) == _dict(eager)
+        assert _dict(plan.collect(batch_size=1)) == _dict(eager)
     assert "join left [k] = [k]" in left.lazy().join(right.lazy(), "k", "left").explain()
     with pytest.raises(ValueError):
         left.lazy().join(right.lazy(), "nope").columns
@@ -382,7 +383,7 @@ def test_lookup_and_nest_joins():
     eager = left.join(right, "k", "lookup")
     assert _dict(eager) == {"k": [1, 2, 3, 1], "a": ["x", "y", None, "x"]}
     plan = left.lazy().join(right.lazy(), "k", "lookup")
-    assert _dict(plan.collect(morsel_rows=1)) == _dict(eager)
+    assert _dict(plan.collect(batch_size=1)) == _dict(eager)
     with pytest.raises(ValueError, match="key 2"):
         left.join(_df({"k": [2, 2], "a": ["y", "z"]}), "k", "lookup")
     nested = left.join(right, "k", "nest", suffix="m")
@@ -398,7 +399,7 @@ def test_lazy_concat_and_union_match_eager():
     assert plan.columns == ["k", "s"]
     assert "concat" in plan.explain()
     assert _dict(plan.collect()) == _dict(eager)
-    assert _dict(plan.collect(morsel_rows=1)) == _dict(eager)
+    assert _dict(plan.collect(batch_size=1)) == _dict(eager)
     assert _dict(a.lazy().union(b.lazy()).collect()) == _dict(a.union(b))
     assert _dict(a.lazy().concat(b.lazy(), a.lazy()).collect()) == _dict(a.concat(b, a))
     # A filter after the concat applies to both sides.
@@ -500,7 +501,7 @@ def test_lazy_relational_ops_match_eager():
     assert lazy.columns == ["pid", "ts", "dur", "rn", "cum", "prev"]
     assert "frame_op dftu.frame.window" in lazy.explain()
     assert _dict(lazy.collect()) == _dict(ev.window(["pid"], ["ts"], specs))
-    assert _dict(lazy.collect(morsel_rows=1)) == _dict(ev.window(["pid"], ["ts"], specs))
+    assert _dict(lazy.collect(batch_size=1)) == _dict(ev.window(["pid"], ["ts"], specs))
     assert _dict(lazy.sort_by("cum", descending=True).select(["cum"]).collect()) == {
         "cum": [6, 4, 3, 1]
     }
@@ -568,7 +569,7 @@ def test_lazy_relational_ops_match_eager():
     assert un.columns == ["pid", "value", "count"]
     assert "unnest tk" in un.explain()
     assert _dict(un.collect()) == _dict(nested.unnest("tk"))
-    assert _dict(nested.lazy().unnest("tk", keep_empty=True).collect(morsel_rows=1)) == _dict(
+    assert _dict(nested.lazy().unnest("tk", keep_empty=True).collect(batch_size=1)) == _dict(
         nested.unnest("tk", keep_empty=True)
     )
     # The flattened field is addressable by name in a later filter.

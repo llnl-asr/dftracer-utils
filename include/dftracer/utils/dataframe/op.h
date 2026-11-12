@@ -1,14 +1,17 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_DATAFRAME_OP_H
 #define DFTRACER_UTILS_DATAFRAME_OP_H
 
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/scalar.h>
 #include <dftracer/utils/dataframe/types.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
 
 #include <cstdint>
 #include <optional>
 #include <span>
-#include <string_view>
 
 namespace dftracer::utils::dataframe {
 
@@ -100,7 +103,7 @@ class OpSig {
 
     /// A human-readable spelling of the signature. Backed by static storage
     /// (dftu_op_signature), so the returned view stays valid indefinitely.
-    std::string_view to_string() const noexcept {
+    dstd::StringView to_string() const noexcept {
         return dftu_op_signature(sig_);
     }
 
@@ -122,9 +125,9 @@ class OpDesc {
     OpDesc() noexcept = default;
     OpDesc(const dftu_op_desc* desc) noexcept : desc_(desc) {}
 
-    std::string_view name() const noexcept { return desc_->name; }
+    dstd::StringView name() const noexcept { return desc_->name; }
     OpSig sig() const noexcept { return OpSig(desc_->sig); }
-    const void* fn() const noexcept { return desc_->fn; }
+    dftu_op_generic_fn fn() const noexcept { return desc_->fn; }
 
     explicit operator bool() const noexcept { return desc_ != nullptr; }
 
@@ -133,16 +136,17 @@ class OpDesc {
 };
 
 /// Looks up a registered op by name (built-in or user). Empty if none.
-inline std::optional<OpDesc> find_op(const char* name) noexcept {
+inline dstd::Optional<OpDesc> find_op(const char* name) noexcept {
     const dftu_op_desc* d = dftu_op_find(name);
-    if (d == nullptr) return std::nullopt;
+    if (d == nullptr) return dstd::nullopt;
     return OpDesc(d);
 }
 
 /// Number of registered ops (built-ins + user), for discovery/listing.
 inline std::uint32_t op_count() noexcept { return dftu_op_count(); }
 
-/// The op at index `i` in [0, op_count()); an empty OpDesc if out of range.
+/// The op at index `i` in [0, op_count()); an empty @ref OpDesc if out of
+/// range.
 inline OpDesc op_at(std::uint32_t i) noexcept { return OpDesc(dftu_op_at(i)); }
 
 /// Builder for a dftu_op_arg. Slots are indexed by operand-TOKEN position (a
@@ -221,13 +225,13 @@ class OpArgs {
     /// Borrows `items`: it must outlive the dftu_op_run* call this is passed
     /// to.
     OpArgs& agglist(std::uint32_t i,
-                    std::span<const dftu_group_agg> items) noexcept {
+                    dstd::Span<const dftu_group_agg> items) noexcept {
         arg_.args[i].agglist.items = items.data();
         arg_.args[i].agglist.n = static_cast<std::int32_t>(items.size());
         return *this;
     }
     /// Borrows `s`: `s` must outlive the dftu_op_run* call this is passed to.
-    OpArgs& str(std::uint32_t i, std::string_view s) noexcept {
+    OpArgs& str(std::uint32_t i, dstd::StringView s) noexcept {
         arg_.args[i].str.ptr = s.data();
         arg_.args[i].str.len = static_cast<std::int32_t>(s.size());
         return *this;
@@ -243,7 +247,7 @@ class OpArgs {
     /// Borrows `items`: it must outlive the dftu_op_run* call this is passed
     /// to.
     OpArgs& i32list(std::uint32_t i,
-                    std::span<const std::int32_t> items) noexcept {
+                    dstd::Span<const std::int32_t> items) noexcept {
         arg_.args[i].i32list.items = items.data();
         arg_.args[i].i32list.n = static_cast<std::int32_t>(items.size());
         return *this;
@@ -251,7 +255,7 @@ class OpArgs {
     /// Borrows `items`: it must outlive the dftu_op_run* call this is passed
     /// to.
     OpArgs& i64list(std::uint32_t i,
-                    std::span<const std::int64_t> items) noexcept {
+                    dstd::Span<const std::int64_t> items) noexcept {
         arg_.args[i].i64list.items = items.data();
         arg_.args[i].i64list.n = static_cast<std::int32_t>(items.size());
         return *this;
@@ -259,7 +263,7 @@ class OpArgs {
     /// Borrows `items`: it must outlive the dftu_op_run* call this is passed
     /// to.
     OpArgs& winlist(std::uint32_t i,
-                    std::span<const dftu_window_spec> items) noexcept {
+                    dstd::Span<const dftu_window_spec> items) noexcept {
         arg_.args[i].winlist.items = items.data();
         arg_.args[i].winlist.n = static_cast<std::int32_t>(items.size());
         return *this;

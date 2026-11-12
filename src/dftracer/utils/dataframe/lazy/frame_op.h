@@ -1,11 +1,16 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_DATAFRAME_LAZY_FRAME_OP_H
 #define DFTRACER_UTILS_DATAFRAME_LAZY_FRAME_OP_H
 
+#include <dftracer/utils/dataframe/internal/errors.h>
 #include <dftracer/utils/dataframe/lazy/common.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <algorithm>
 #include <iterator>
-#include <string_view>
 
 namespace dftracer::utils::dataframe::lazy_internal {
 
@@ -30,10 +35,30 @@ inline const char* window_end(const dftu_window_spec& w) {
 // the op runs; SERIES shares the column; EXPR / DUQL / LAZY operands are
 // refused (no owned form).
 class OwnedFrameOpArgs {
+    struct Key {
+        explicit Key() = default;
+    };
+
    public:
-    OwnedFrameOpArgs(const dftu_op_desc& op, const OpArgs& args,
-                     std::vector<LazyFrame> frames)
-        : frames_(std::move(frames)) {
+    explicit OwnedFrameOpArgs(Key) {}
+
+    /// The operands of `op` copied out of `args`, with `frames` for its frame
+    /// operands after the primary one. An @ref ErrorCode::InvalidArgument
+    /// error for a frame or column operand that is missing, for an operand
+    /// with no owned form, and for a frame count that does not match.
+    static dstd::Result<dstd::SharedPtr<const OwnedFrameOpArgs>> make(
+        const dftu_op_desc& op, const OpArgs& args,
+        dstd::Vector<LazyFrame> frames) {
+        auto out = dstd::make_shared<OwnedFrameOpArgs>(Key{});
+        auto filled = out->fill(op, args, std::move(frames));
+        if (!filled) return filled.error();
+        return dstd::SharedPtr<const OwnedFrameOpArgs>(std::move(out));
+    }
+
+   private:
+    dstd::Result<void> fill(const dftu_op_desc& op, const OpArgs& args,
+                            dstd::Vector<LazyFrame> frames) {
+        frames_ = std::move(frames);
         const dftu_op_arg& raw = args.raw();
         std::size_t next_frame = 0;
         for (int i = 0; i < DFTU_OP_MAX_ARGS; ++i) {
@@ -47,18 +72,16 @@ class OwnedFrameOpArgs {
                 case DFTU_TOK_FRAME:
                     if (i == 0) break;
                     if (next_frame >= frames_.size())
-                        throw std::invalid_argument(
-                            std::string("lazy frame op '") + op.name +
-                            "': operand " + std::to_string(i) +
-                            " is a frame but no plan was given for it");
+                        return invalid_argument<
+                            "lazy frame op '{}': operand {} is a frame but no "
+                            "plan was given for it">(op.name, i);
                     s.frame_index = next_frame++;
                     break;
                 case DFTU_TOK_SERIES:
                     if (!v.series)
-                        throw std::invalid_argument(
-                            std::string("lazy frame op '") + op.name +
-                            "': operand " + std::to_string(i) +
-                            " is a column but none was given");
+                        return invalid_argument<
+                            "lazy frame op '{}': operand {} is a column but "
+                            "none was given">(op.name, i);
                     s.series = Series{dftu_series_share(v.series)};
                     break;
                 case DFTU_TOK_SCALAR:
@@ -88,8 +111,8 @@ class OwnedFrameOpArgs {
                     s.val.i32 = v.i32;
                     break;
                 case DFTU_TOK_STR:
-                    s.strings.emplace_back(v.str.ptr ? std::string(v.str.ptr)
-                                                     : std::string());
+                    s.strings.emplace_back(v.str.ptr ? dstd::String(v.str.ptr)
+                                                     : dstd::String());
                     break;
                 case DFTU_TOK_STRLIST:
                     for (int32_t k = 0; k < v.list.n; ++k)
@@ -130,24 +153,24 @@ class OwnedFrameOpArgs {
                 case DFTU_TOK_EXPR:
                 case DFTU_TOK_DUQL:
                 case DFTU_TOK_LAZY:
-                    throw std::invalid_argument(std::string("lazy frame op '") +
-                                                op.name + "': operand " +
-                                                std::to_string(i) +
-                                                " has no owned form in a plan");
+                    return invalid_argument<
+                        "lazy frame op '{}': operand {} has no owned form in "
+                        "a plan">(op.name, i);
             }
             slots_.push_back(std::move(s));
         }
         if (next_frame != frames_.size())
-            throw std::invalid_argument(
-                std::string("lazy frame op '") + op.name +
-                "': " + std::to_string(frames_.size()) + " plan(s) given for " +
-                std::to_string(next_frame) + " frame operand(s)");
+            return invalid_argument<
+                "lazy frame op '{}': {} plan(s) given for {} frame "
+                "operand(s)">(op.name, frames_.size(), next_frame);
+        return {};
     }
 
-    const std::vector<LazyFrame>& frames() const noexcept { return frames_; }
+   public:
+    const dstd::Vector<LazyFrame>& frames() const noexcept { return frames_; }
 
     // The strings of operand `i` (a STR or STRLIST operand).
-    const std::vector<std::string>& strings_at(std::size_t i) const {
+    const dstd::Vector<dstd::String>& strings_at(std::size_t i) const {
         return slots_[i].strings;
     }
 
@@ -166,9 +189,9 @@ class OwnedFrameOpArgs {
 
     // The same operands over other frame plans; `frames` must match the
     // frame operand count.
-    std::shared_ptr<const OwnedFrameOpArgs> with_frames(
-        std::vector<LazyFrame> frames) const {
-        auto out = std::shared_ptr<OwnedFrameOpArgs>(new OwnedFrameOpArgs());
+    dstd::SharedPtr<const OwnedFrameOpArgs> with_frames(
+        dstd::Vector<LazyFrame> frames) const {
+        auto out = dstd::make_shared<OwnedFrameOpArgs>(Key{});
         out->slots_.reserve(slots_.size());
         for (const Slot& s : slots_) {
             Slot c;
@@ -192,9 +215,9 @@ class OwnedFrameOpArgs {
 
     // The C operand bag, pointing into this object's storage; `cstrs` and
     // `wins` are scratch the bag points into and must outlive the run.
-    dftu_op_arg bind(std::vector<std::vector<const char*>>& cstrs,
-                     std::vector<std::vector<dftu_window_spec>>& wins,
-                     std::vector<std::vector<dftu_group_agg>>& aggs) const {
+    dftu_op_arg bind(dstd::Vector<dstd::Vector<const char*>>& cstrs,
+                     dstd::Vector<dstd::Vector<dftu_window_spec>>& wins,
+                     dstd::Vector<dstd::Vector<dftu_group_agg>>& aggs) const {
         dftu_op_arg out{};
         cstrs.assign(slots_.size(), {});
         wins.assign(slots_.size(), {});
@@ -233,7 +256,7 @@ class OwnedFrameOpArgs {
                     v.str.len = static_cast<int32_t>(s.strings.front().size());
                     break;
                 case DFTU_TOK_STRLIST:
-                    for (const std::string& str : s.strings)
+                    for (const dstd::String& str : s.strings)
                         cstrs[i].push_back(str.c_str());
                     v.list.items = cstrs[i].data();
                     v.list.n = static_cast<int32_t>(cstrs[i].size());
@@ -290,24 +313,22 @@ class OwnedFrameOpArgs {
     }
 
    private:
-    OwnedFrameOpArgs() = default;
-
     struct Slot {
         dftu_op_tok tok = DFTU_TOK_NONE;
         dftu_op_val val{};
         Series series;
-        std::vector<std::string> strings;
-        std::vector<std::int32_t> i32s;
-        std::vector<std::int64_t> i64s;
-        std::vector<dftu_group_agg> aggs;
-        std::vector<dftu_window_spec> wins;
-        std::vector<bool> has_value;
-        std::vector<bool> has_time;
-        std::vector<bool> has_end;
+        dstd::Vector<dstd::String> strings;
+        dstd::Vector<std::int32_t> i32s;
+        dstd::Vector<std::int64_t> i64s;
+        dstd::Vector<dftu_group_agg> aggs;
+        dstd::Vector<dftu_window_spec> wins;
+        dstd::Vector<bool> has_value;
+        dstd::Vector<bool> has_time;
+        dstd::Vector<bool> has_end;
         std::size_t frame_index = 0;
     };
-    std::vector<Slot> slots_;
-    std::vector<LazyFrame> frames_;
+    dstd::Vector<Slot> slots_;
+    dstd::Vector<LazyFrame> frames_;
 };
 
 // The registry op that applies per partition: its second operand lists the
@@ -321,7 +342,7 @@ inline constexpr const char* WITH_COLUMN_OP = "dftu.frame.with_column";
 // operands: they run over one morsel at a time, the same rows as over the whole
 // input. Any other column op (a running, rolling, sorting, ranking or
 // reducing one) needs the whole column.
-inline constexpr std::string_view ELEMENTWISE_COLUMN_OPS[] = {
+inline constexpr dstd::StringView ELEMENTWISE_COLUMN_OPS[] = {
     "dftu.series.add",
     "dftu.series.sub",
     "dftu.series.mul",
@@ -385,7 +406,7 @@ inline constexpr std::string_view ELEMENTWISE_COLUMN_OPS[] = {
     "dftu.series.dt_format",
     "dftu.series.with_timezone"};
 
-inline bool column_op_elementwise(std::string_view series_op) {
+inline bool column_op_elementwise(dstd::StringView series_op) {
     return std::find(std::begin(ELEMENTWISE_COLUMN_OPS),
                      std::end(ELEMENTWISE_COLUMN_OPS),
                      series_op) != std::end(ELEMENTWISE_COLUMN_OPS);
@@ -399,38 +420,40 @@ inline constexpr std::int64_t NATIVE_SHIFT_MAX = 1024;
 
 // Runs the registry op `op` over `primary`, collecting each further frame
 // operand's plan, and returns its result.
-inline coro::CoroTask<DataFrame> run_frame_op(
+inline coro::CoroTask<dstd::Result<DataFrame>> run_frame_op(
     const dftu_op_desc* op, const OwnedFrameOpArgs& args, DataFrame primary,
-    const std::string& name, const std::vector<std::string>& sch) {
-    std::vector<dftu_dataframe*> handles;
+    const dstd::String& name, const dstd::Vector<dstd::String>& sch) {
+    dstd::Vector<dftu_dataframe*> handles;
     struct Free {
-        std::vector<dftu_dataframe*>& h;
+        dstd::Vector<dftu_dataframe*>& h;
         ~Free() {
             for (dftu_dataframe* p : h) dftu_dataframe_free(p);
         }
     } guard{handles};
     handles.push_back(dataframe_handle_wrap(std::move(primary)));
     for (const LazyFrame& other : args.frames()) {
-        DataFrame f = co_await other.collect();
+        auto collecting = other.collect();
+        DataFrame f = co_await std::move(collecting).or_fail();
         handles.push_back(dataframe_handle_wrap(std::move(f)));
     }
-    std::vector<std::vector<const char*>> cstrs;
-    std::vector<std::vector<dftu_window_spec>> wins;
-    std::vector<std::vector<dftu_group_agg>> aggs;
+    dstd::Vector<dstd::Vector<const char*>> cstrs;
+    dstd::Vector<dstd::Vector<dftu_window_spec>> wins;
+    dstd::Vector<dstd::Vector<dftu_group_agg>> aggs;
     const dftu_op_arg bag = args.bind(cstrs, wins, aggs);
-    std::vector<const dftu_dataframe*> frames(handles.begin(), handles.end());
+    dstd::Vector<const dftu_dataframe*> frames(handles.begin(), handles.end());
     dftu_dataframe* result = dftu_op_run_frame(
         op, frames.data(), static_cast<uint32_t>(frames.size()), &bag);
     if (!result)
-        throw std::runtime_error("lazy frame op '" + name +
-                                 "' failed: the op returned no frame");
+        co_return common::make_error<
+            "lazy frame op '{}' failed: the op returned no frame">(
+            common::ErrorCode::Internal, name.c_str());
     DataFrame out = dataframe_handle_take(result);
     if (has_rest(sch)) {
-        if (column_index_of(out.names, std::string(REST_COLUMN)) < 0)
-            throw std::runtime_error(
-                "lazy frame op '" + name +
-                "' dropped the columns the scan returned beyond the "
-                "plan's schema");
+        if (column_index_of(out.names, dstd::String(REST_COLUMN)) < 0)
+            co_return common::make_error<
+                "lazy frame op '{}' dropped the columns the scan returned "
+                "beyond the plan's schema">(common::ErrorCode::Internal,
+                                            name.c_str());
         out = rest_to_back(std::move(out));
     }
     co_return out;

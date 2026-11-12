@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
 # Build the C and C++ install layout (bin, lib, include, CMake package files)
 # with Release dependencies and pack it.
 #
 #   package.sh <deps directory> <output tarball>
 #
-# The deps directory holds the installs that prebuild_wheel_deps.sh or
-# build_rocksdb.sh made, so the build links the same RocksDB as the wheels.
+# The deps directory holds the dependency installs the wheels use, so the
+# build links the same libraries as the wheels.
 
 set -euo pipefail
 
@@ -16,7 +17,6 @@ build="${root}/build/package"
 prefix="${build}/prefix"
 
 export DFTRACER_UTILS_DEPS_PREFIX="${deps}"
-export DFTRACER_UTILS_ROCKSDB_PREFIX="${deps}/rocksdb-$("${root}/scripts/ci/rocksdb_version.sh")"
 
 launcher=()
 if command -v sccache >/dev/null 2>&1; then

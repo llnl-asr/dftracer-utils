@@ -1,11 +1,12 @@
+// SPDX-License-Identifier: MIT
 // Source planning hooks: the SourceAbsorption rule offers ops bottom up to
 // Source::apply_*, and ProviderSource mirrors the hooks over
 // dftu_source_vt::apply. A C++ fake exercises the planner contract; a
 // hand-written vtable exercises the C marshaling and derived-source ownership.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/coro/task.h>
-#include <dftracer/utils/core/runtime.h>
+#include <dataframe/expr_ok.h>
+#include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/expr.h>
@@ -13,51 +14,31 @@
 #include <dftracer/utils/dataframe/internal/lazy_plan.h>
 #include <dftracer/utils/dataframe/internal/provider_source.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/fmt.h>
+#include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <memory/fresh_process.h>
+#include <task_result.h>
 
 #include <cstdint>
 #include <memory>
-#include <optional>
-#include <set>
 #include <stdexcept>
-#include <string>
 #include <utility>
-#include <vector>
 
-using dftracer::utils::coro::CoroTask;
-using dftracer::utils::dataframe::Agg;
-using dftracer::utils::dataframe::AggregateSpec;
-using dftracer::utils::dataframe::ApplyStatus;
-using dftracer::utils::dataframe::col;
-using dftracer::utils::dataframe::DataFrame;
-using dftracer::utils::dataframe::eval;
-using dftracer::utils::dataframe::Expr;
-using dftracer::utils::dataframe::expr_col_index;
-using dftracer::utils::dataframe::expr_fingerprint;
-using dftracer::utils::dataframe::GroupAgg;
-using dftracer::utils::dataframe::InMemorySource;
-using dftracer::utils::dataframe::JoinSpec;
-using dftracer::utils::dataframe::LazyFrame;
-using dftracer::utils::dataframe::make_provider_source;
-using dftracer::utils::dataframe::NamedExpr;
-using dftracer::utils::dataframe::ScanRequest;
-using dftracer::utils::dataframe::ScanResult;
-using dftracer::utils::dataframe::Schema;
-using dftracer::utils::dataframe::Series;
-using dftracer::utils::dataframe::SortSpec;
-using dftracer::utils::dataframe::Source;
-using dftracer::utils::dataframe::SourceApplication;
-using dftracer::utils::dataframe::TypeId;
-using dftracer::utils::dataframe::detail::apply_plan_rule;
-using dftracer::utils::dataframe::detail::optimize_plan;
-using dftracer::utils::dataframe::detail::plan_fingerprint;
-using dftracer::utils::dataframe::detail::PlanRule;
+using namespace dftracer::utils;
+using namespace dftracer::utils::dataframe;
 
 namespace {
 
 template <class T>
-T run(CoroTask<T> t) {
-    T out = dftracer::utils::default_runtime().submit(std::move(t)).get();
+T run(coro::CoroTask<dstd::Result<T>> t) {
+    T out = dftu_utils_test::ok(
+        dftracer::utils::default_runtime().submit(std::move(t)).get());
     if constexpr (std::is_same_v<T, DataFrame>)
         for (Series& c : out.columns) c = c.materialize();
     return out;
@@ -71,9 +52,9 @@ DataFrame share(const DataFrame& df) {
 }
 
 DataFrame make_df() {
-    std::vector<std::int64_t> a{1, 2, 3, 4, 5, 6};
-    std::vector<std::int64_t> b{60, 50, 40, 30, 20, 10};
-    std::vector<std::int64_t> g{1, 1, 2, 2, 3, 3};
+    dstd::Vector<std::int64_t> a{1, 2, 3, 4, 5, 6};
+    dstd::Vector<std::int64_t> b{60, 50, 40, 30, 20, 10};
+    dstd::Vector<std::int64_t> g{1, 1, 2, 2, 3, 3};
     DataFrame df;
     df.names = {"a", "b", "g"};
     df.columns.push_back(Series::flat_i64(a.data(), 6));
@@ -82,10 +63,10 @@ DataFrame make_df() {
     return df;
 }
 
-std::vector<std::int64_t> ints(const DataFrame& df, const std::string& name) {
+dstd::Vector<std::int64_t> ints(const DataFrame& df, const dstd::String& name) {
     const Series& c = df.column(name);
     const std::int64_t* p = c.data<std::int64_t>();
-    return std::vector<std::int64_t>(p, p + c.length());
+    return dstd::Vector<std::int64_t>(p, p + c.length());
 }
 
 enum class Kind {
@@ -100,14 +81,14 @@ enum class Kind {
 };
 
 struct Log {
-    std::vector<Kind> offered;
-    std::optional<AggregateSpec> last_agg;
-    std::optional<SortSpec> last_sort;
+    dstd::Vector<Kind> offered;
+    dstd::Optional<AggregateSpec> last_agg;
+    dstd::Optional<SortSpec> last_sort;
     std::int64_t last_k = -1;
 };
 
 struct Policy {
-    std::set<Kind> accept;
+    dstd::Set<Kind> accept;
     ApplyStatus filter_status = ApplyStatus::Exact;
     bool return_same_handle = false;
     bool projection_inexact = false;
@@ -119,9 +100,9 @@ struct Policy {
 class SmartSource final : public Source,
                           public std::enable_shared_from_this<SmartSource> {
    public:
-    SmartSource(DataFrame df, std::shared_ptr<Log> log,
-                std::shared_ptr<const Policy> policy,
-                std::set<std::uint64_t> seen = {})
+    SmartSource(DataFrame df, dstd::SharedPtr<Log> log,
+                dstd::SharedPtr<const Policy> policy,
+                dstd::Set<std::uint64_t> seen = {})
         : inner_(share(df)),
           frame_(std::move(df)),
           log_(std::move(log)),
@@ -129,47 +110,47 @@ class SmartSource final : public Source,
           seen_(std::move(seen)) {}
 
     Schema schema() const override { return inner_.schema(); }
-    ScanResult scan(const ScanRequest& req) const override {
+    dstd::Result<ScanResult> scan(const ScanRequest& req) const override {
         return inner_.scan(req);
     }
     const DataFrame* as_frame() const override { return inner_.as_frame(); }
 
-    std::optional<SourceApplication> apply_filter(
+    dstd::Optional<SourceApplication> apply_filter(
         const Expr& predicate) const override {
         log_->offered.push_back(Kind::Filter);
         const std::uint64_t fp = expr_fingerprint(predicate);
-        if (!accepts(Kind::Filter) || seen_.count(fp)) return std::nullopt;
-        std::set<std::uint64_t> seen = seen_;
+        if (!accepts(Kind::Filter) || seen_.count(fp)) return dstd::nullopt;
+        dstd::Set<std::uint64_t> seen = seen_;
         seen.insert(fp);
         if (policy_->filter_status == ApplyStatus::Inexact)
             return derive(share(frame_), ApplyStatus::Inexact, std::move(seen));
-        std::vector<const Series*> in;
+        dstd::Vector<const Series*> in;
         for (const Series& c : frame_.columns) in.push_back(&c);
-        return derive(frame_.filter(eval(predicate, in)), ApplyStatus::Exact,
-                      std::move(seen));
+        return derive(frame_.filter(dftu_utils_test::eval_ok(predicate, in)),
+                      ApplyStatus::Exact, std::move(seen));
     }
 
-    std::optional<SourceApplication> apply_projection(
-        const std::vector<NamedExpr>& exprs) const override {
+    dstd::Optional<SourceApplication> apply_projection(
+        const dstd::Vector<NamedExpr>& exprs) const override {
         log_->offered.push_back(Kind::Projection);
-        if (!accepts(Kind::Projection)) return std::nullopt;
-        std::vector<std::string> names;
+        if (!accepts(Kind::Projection)) return dstd::nullopt;
+        dstd::Vector<dstd::String> names;
         for (const NamedExpr& e : exprs)
             names.push_back(
                 frame_.names[static_cast<std::size_t>(expr_col_index(e.expr))]);
-        return derive(frame_.select(names), policy_->projection_inexact
-                                                ? ApplyStatus::Inexact
-                                                : ApplyStatus::Exact);
+        return derive(dftu_utils_test::ok(frame_.select(names)),
+                      policy_->projection_inexact ? ApplyStatus::Inexact
+                                                  : ApplyStatus::Exact);
     }
 
-    std::optional<SourceApplication> apply_aggregation(
+    dstd::Optional<SourceApplication> apply_aggregation(
         const AggregateSpec& spec) const override {
         log_->offered.push_back(Kind::Aggregation);
         log_->last_agg = spec;
-        if (!accepts(Kind::Aggregation)) return std::nullopt;
-        std::vector<std::string> keys;
+        if (!accepts(Kind::Aggregation)) return dstd::nullopt;
+        dstd::Vector<dstd::String> keys;
         for (const NamedExpr& k : spec.keys) keys.push_back(k.name);
-        std::vector<GroupAgg> aggs;
+        dstd::Vector<GroupAgg> aggs;
         for (const auto& a : spec.aggs) {
             GroupAgg ga;
             ga.op = a.op;
@@ -180,88 +161,95 @@ class SmartSource final : public Source,
                     expr_col_index(a.input))];
             aggs.push_back(ga);
         }
-        return derive(frame_.group_by(keys, aggs).sort_by(keys.front()),
-                      ApplyStatus::Exact);
+        return derive(
+            dftu_utils_test::ok(dftu_utils_test::ok(frame_.group_by(keys, aggs))
+                                    .sort_by(keys.front())),
+            ApplyStatus::Exact);
     }
 
-    std::optional<SourceApplication> apply_sort(
+    dstd::Optional<SourceApplication> apply_sort(
         const SortSpec& spec) const override {
         log_->offered.push_back(Kind::Sort);
         log_->last_sort = spec;
-        if (!accepts(Kind::Sort)) return std::nullopt;
-        return derive(frame_.sort_by_multi(spec.by, spec.descending),
-                      ApplyStatus::Exact);
+        if (!accepts(Kind::Sort)) return dstd::nullopt;
+        return derive(
+            dftu_utils_test::ok(frame_.sort_by_multi(spec.by, spec.descending)),
+            ApplyStatus::Exact);
     }
 
-    std::optional<SourceApplication> apply_topn(const SortSpec& spec,
-                                                std::int64_t k) const override {
+    dstd::Optional<SourceApplication> apply_topn(
+        const SortSpec& spec, std::int64_t k) const override {
         log_->offered.push_back(Kind::TopN);
         log_->last_sort = spec;
         log_->last_k = k;
-        if (!accepts(Kind::TopN)) return std::nullopt;
-        return derive(frame_.sort_by_multi(spec.by, spec.descending).head(k),
-                      ApplyStatus::Exact);
+        if (!accepts(Kind::TopN)) return dstd::nullopt;
+        return derive(
+            dftu_utils_test::ok(frame_.sort_by_multi(spec.by, spec.descending))
+                .head(k),
+            ApplyStatus::Exact);
     }
 
-    std::optional<SourceApplication> apply_limit(
+    dstd::Optional<SourceApplication> apply_limit(
         std::int64_t offset, std::int64_t n) const override {
         log_->offered.push_back(Kind::Limit);
-        if (!accepts(Kind::Limit)) return std::nullopt;
+        if (!accepts(Kind::Limit)) return dstd::nullopt;
         return derive(frame_.slice(offset, n), ApplyStatus::Exact);
     }
 
-    std::optional<SourceApplication> apply_tail(std::int64_t n) const override {
+    dstd::Optional<SourceApplication> apply_tail(
+        std::int64_t n) const override {
         log_->offered.push_back(Kind::Tail);
-        if (!accepts(Kind::Tail)) return std::nullopt;
+        if (!accepts(Kind::Tail)) return dstd::nullopt;
         return derive(frame_.tail(n), ApplyStatus::Exact);
     }
 
-    std::optional<SourceApplication> apply_join(
+    dstd::Optional<SourceApplication> apply_join(
         const JoinSpec& spec) const override {
         log_->offered.push_back(Kind::Join);
         const auto* other = dynamic_cast<const SmartSource*>(spec.other.get());
-        if (!accepts(Kind::Join) || !other) return std::nullopt;
-        return derive(frame_.join(other->frame_, spec.left_on, spec.right_on,
-                                  spec.how, spec.suffix),
-                      ApplyStatus::Exact);
+        if (!accepts(Kind::Join) || !other) return dstd::nullopt;
+        auto joined = frame_.join(other->frame_, spec.left_on, spec.right_on,
+                                  spec.how, spec.suffix);
+        if (!joined) return dstd::nullopt;
+        return derive(std::move(*joined), ApplyStatus::Exact);
     }
 
    private:
     bool accepts(Kind k) const { return policy_->accept.count(k) != 0; }
 
-    std::optional<SourceApplication> derive(
+    dstd::Optional<SourceApplication> derive(
         DataFrame df, ApplyStatus status,
-        std::optional<std::set<std::uint64_t>> seen = std::nullopt) const {
+        dstd::Optional<dstd::Set<std::uint64_t>> seen = dstd::nullopt) const {
         if (policy_->return_same_handle)
             return SourceApplication{shared_from_this(), status};
         return SourceApplication{
-            std::make_shared<SmartSource>(std::move(df), log_, policy_,
-                                          seen ? std::move(*seen) : seen_),
+            dstd::make_shared<SmartSource>(std::move(df), log_, policy_,
+                                           seen ? std::move(*seen) : seen_),
             status};
     }
 
     InMemorySource inner_;
     DataFrame frame_;
-    std::shared_ptr<Log> log_;
-    std::shared_ptr<const Policy> policy_;
-    std::set<std::uint64_t> seen_;
+    dstd::SharedPtr<Log> log_;
+    dstd::SharedPtr<const Policy> policy_;
+    dstd::Set<std::uint64_t> seen_;
 };
 
 struct Smart {
-    std::shared_ptr<Log> log;
+    dstd::SharedPtr<Log> log;
     LazyFrame lf;
 };
 
 Smart smart(Policy policy) {
-    auto log = std::make_shared<Log>();
-    LazyFrame lf = LazyFrame::scan(std::make_shared<SmartSource>(
-        make_df(), log, std::make_shared<Policy>(std::move(policy))));
+    auto log = dstd::make_shared<Log>();
+    LazyFrame lf = LazyFrame::scan(dstd::make_shared<SmartSource>(
+        make_df(), log, dstd::make_shared<Policy>(std::move(policy))));
     return Smart{std::move(log), std::move(lf)};
 }
 
-std::vector<double> nums(const DataFrame& df, const std::string& name) {
+dstd::Vector<double> nums(const DataFrame& df, const dstd::String& name) {
     const Series& c = df.column(name);
-    std::vector<double> out;
+    dstd::Vector<double> out;
     for (std::int64_t i = 0; i < c.length(); ++i)
         out.push_back(c.type() == TypeId::Float64
                           ? c.data<double>()[i]
@@ -269,7 +257,7 @@ std::vector<double> nums(const DataFrame& df, const std::string& name) {
     return out;
 }
 
-std::set<Kind> all_kinds() {
+dstd::Set<Kind> all_kinds() {
     return {Kind::Filter, Kind::Projection, Kind::Aggregation, Kind::Sort,
             Kind::TopN,   Kind::Limit,      Kind::Tail,        Kind::Join};
 }
@@ -283,20 +271,22 @@ TEST_SUITE("source_hooks") {
                            .filter(col(0) > std::int64_t{2})
                            .sort_by("b")
                            .head(2);
-        CHECK(plan_fingerprint(apply_plan_rule(
-                  lf, PlanRule::SourceAbsorption)) == plan_fingerprint(lf));
+        CHECK(dataframe::detail::plan_fingerprint(
+                  dataframe::detail::apply_plan_rule(
+                      lf, dataframe::detail::PlanRule::SourceAbsorption)) ==
+              dataframe::detail::plan_fingerprint(lf));
     }
 
     TEST_CASE("an exact filter, sort and limit leave no residual ops") {
         Smart s = smart({all_kinds()});
         LazyFrame lf =
             s.lf.filter(col(0) > std::int64_t{2}).sort_by("b").head(2);
-        const std::string plan = lf.explain();
-        CHECK(plan.find("filter") == std::string::npos);
-        CHECK(plan.find("sort_by") == std::string::npos);
-        CHECK(plan.find("slice") == std::string::npos);
+        const dstd::String plan = lf.explain();
+        CHECK(plan.find("filter") == dstd::String::npos);
+        CHECK(plan.find("sort_by") == dstd::String::npos);
+        CHECK(plan.find("slice") == dstd::String::npos);
         DataFrame r = run(lf.collect());
-        CHECK(ints(r, "a") == std::vector<std::int64_t>{6, 5});
+        CHECK(ints(r, "a") == dstd::Vector<std::int64_t>{6, 5});
     }
 
     TEST_CASE("an inexact filter stays above the derived source") {
@@ -306,11 +296,11 @@ TEST_SUITE("source_hooks") {
         LazyFrame lf = s.lf.filter(col(0) > std::int64_t{2})
                            .filter(col(1) > std::int64_t{20})
                            .sort_by("a");
-        const std::string plan = lf.explain();
-        CHECK(plan.find("filter") != std::string::npos);
-        CHECK(plan.find("sort_by") != std::string::npos);
+        const dstd::String plan = lf.explain();
+        CHECK(plan.find("filter") != dstd::String::npos);
+        CHECK(plan.find("sort_by") != dstd::String::npos);
         DataFrame r = run(lf.collect());
-        CHECK(ints(r, "a") == std::vector<std::int64_t>{3, 4});
+        CHECK(ints(r, "a") == dstd::Vector<std::int64_t>{3, 4});
     }
 
     TEST_CASE("after an inexact filter only filters are offered") {
@@ -318,11 +308,12 @@ TEST_SUITE("source_hooks") {
         p.filter_status = ApplyStatus::Inexact;
         Smart s = smart(p);
         s.log->offered.clear();
-        apply_plan_rule(s.lf.filter(col(0) > std::int64_t{2})
-                            .filter(col(1) > std::int64_t{20})
-                            .sort_by("a"),
-                        PlanRule::SourceAbsorption);
-        CHECK(s.log->offered == std::vector<Kind>{Kind::Filter, Kind::Filter});
+        dataframe::detail::apply_plan_rule(
+            s.lf.filter(col(0) > std::int64_t{2})
+                .filter(col(1) > std::int64_t{20})
+                .sort_by("a"),
+            dataframe::detail::PlanRule::SourceAbsorption);
+        CHECK(s.log->offered == dstd::Vector<Kind>{Kind::Filter, Kind::Filter});
     }
 
     TEST_CASE("a refused op ends the walk") {
@@ -330,29 +321,30 @@ TEST_SUITE("source_hooks") {
         s.log->offered.clear();
         LazyFrame lf =
             s.lf.filter(col(0) > std::int64_t{1}).sort_by("b").head(2);
-        LazyFrame out = apply_plan_rule(lf, PlanRule::SourceAbsorption);
-        CHECK(s.log->offered == std::vector<Kind>{Kind::Filter, Kind::Sort});
-        const std::string plan = out.explain();
-        CHECK(plan.find("sort_by") != std::string::npos);
-        CHECK(plan.find("slice") != std::string::npos);
-        CHECK(ints(run(lf.collect()), "a") == std::vector<std::int64_t>{6, 5});
+        LazyFrame out = dataframe::detail::apply_plan_rule(
+            lf, dataframe::detail::PlanRule::SourceAbsorption);
+        CHECK(s.log->offered == dstd::Vector<Kind>{Kind::Filter, Kind::Sort});
+        const dstd::String plan = out.explain();
+        CHECK(plan.find("sort_by") != dstd::String::npos);
+        CHECK(plan.find("slice") != dstd::String::npos);
+        CHECK(ints(run(lf.collect()), "a") == dstd::Vector<std::int64_t>{6, 5});
     }
 
     TEST_CASE("a projection changes the source schema for later ops") {
         Smart s = smart({all_kinds()});
         LazyFrame lf = s.lf.select({"b", "a"}).filter(col(1) > std::int64_t{4});
-        const std::string plan = lf.explain();
+        const dstd::String plan = lf.explain();
         CHECK(plan.rfind("scan [b, a]", 0) == 0);
-        CHECK(plan.find("filter") == std::string::npos);
+        CHECK(plan.find("filter") == dstd::String::npos);
         DataFrame r = run(lf.collect());
-        CHECK(r.names == std::vector<std::string>{"b", "a"});
-        CHECK(ints(r, "a") == std::vector<std::int64_t>{5, 6});
+        CHECK(r.names == dstd::Vector<dstd::String>{"b", "a"});
+        CHECK(ints(r, "a") == dstd::Vector<std::int64_t>{5, 6});
     }
 
     TEST_CASE("an aggregation arrives as positional expressions") {
         Smart s = smart({all_kinds()});
         LazyFrame lf =
-            s.lf.group_by(std::vector<std::string>{"g"},
+            s.lf.group_by(dstd::Vector<dstd::String>{"g"},
                           {{Agg::Count, "", "n"}, {Agg::Sum, "b", "sum_b"}});
         DataFrame r = run(lf.collect());
         REQUIRE(s.log->last_agg);
@@ -368,35 +360,37 @@ TEST_SUITE("source_hooks") {
         CHECK(spec.aggs[1].op == Agg::Sum);
         CHECK(expr_col_index(spec.aggs[1].input) == 0);
         CHECK(spec.aggs[1].out == "sum_b");
-        CHECK(lf.explain().find("group_by") == std::string::npos);
-        CHECK(r.names == std::vector<std::string>{"g", "n", "sum_b"});
-        CHECK(nums(r, "sum_b") == std::vector<double>{110, 70, 30});
+        CHECK(lf.explain().find("group_by") == dstd::String::npos);
+        CHECK(r.names == dstd::Vector<dstd::String>{"g", "n", "sum_b"});
+        CHECK(nums(r, "sum_b") == dstd::Vector<double>{110, 70, 30});
     }
 
     TEST_CASE("topk arrives as a descending top-n") {
         Smart s = smart({all_kinds()});
         DataFrame r = run(s.lf.topk("b", 2, true).collect());
         REQUIRE(s.log->last_sort);
-        CHECK(s.log->last_sort->by == std::vector<std::string>{"b"});
-        CHECK(s.log->last_sort->descending == std::vector<bool>{true});
+        CHECK(s.log->last_sort->by == dstd::Vector<dstd::String>{"b"});
+        CHECK(s.log->last_sort->descending == dstd::Vector<bool>{true});
         CHECK(s.log->last_k == 2);
-        CHECK(ints(r, "b") == std::vector<std::int64_t>{60, 50});
+        CHECK(ints(r, "b") == dstd::Vector<std::int64_t>{60, 50});
     }
 
     TEST_CASE("the pipeline is idempotent with a smart source") {
         Policy p{all_kinds()};
         p.filter_status = ApplyStatus::Inexact;
         Smart s = smart(p);
-        LazyFrame once =
-            optimize_plan(s.lf.filter(col(0) > std::int64_t{2}).select({"a"}));
-        CHECK(plan_fingerprint(optimize_plan(once)) == plan_fingerprint(once));
+        LazyFrame once = dataframe::detail::optimize_plan(
+            s.lf.filter(col(0) > std::int64_t{2}).select({"a"}));
+        CHECK(dataframe::detail::plan_fingerprint(
+                  dataframe::detail::optimize_plan(once)) ==
+              dataframe::detail::plan_fingerprint(once));
     }
 
     TEST_CASE("tail reaches the source") {
         Smart s = smart({all_kinds()});
         LazyFrame lf = s.lf.tail(2);
-        CHECK(lf.explain().find("tail") == std::string::npos);
-        CHECK(ints(run(lf.collect()), "a") == std::vector<std::int64_t>{5, 6});
+        CHECK(lf.explain().find("tail") == dstd::String::npos);
+        CHECK(ints(run(lf.collect()), "a") == dstd::Vector<std::int64_t>{5, 6});
     }
 
     TEST_CASE("a join with a fully absorbed right side is absorbed") {
@@ -404,7 +398,7 @@ TEST_SUITE("source_hooks") {
         Smart right = smart({all_kinds()});
         LazyFrame lf =
             left.lf.join(right.lf.filter(col(0) > std::int64_t{4}), {"a"});
-        CHECK(lf.explain().find("join") == std::string::npos);
+        CHECK(lf.explain().find("join") == dstd::String::npos);
         DataFrame got = run(lf.collect());
         DataFrame want = run(
             make_df()
@@ -423,8 +417,8 @@ TEST_SUITE("source_hooks") {
                                     "_right", true);
         // The source's join has the SQL rule for null keys, so the host runs
         // this one: the join stays in the plan and is never offered.
-        CHECK(lf.explain().find("join") != std::string::npos);
-        CHECK(lf.explain().find("nulls_equal") != std::string::npos);
+        CHECK(lf.explain().find("join") != dstd::String::npos);
+        CHECK(lf.explain().find("nulls_equal") != dstd::String::npos);
         CHECK(left.log->offered.empty());
     }
 
@@ -433,7 +427,7 @@ TEST_SUITE("source_hooks") {
         Smart right = smart({{Kind::Filter}});
         left.log->offered.clear();
         LazyFrame lf = left.lf.join(right.lf.sort_by("b"), {"a"});
-        CHECK(lf.explain().find("join") != std::string::npos);
+        CHECK(lf.explain().find("join") != dstd::String::npos);
         CHECK(left.log->offered.empty());
         CHECK(run(lf.collect()).num_rows() == 6);
     }
@@ -441,26 +435,43 @@ TEST_SUITE("source_hooks") {
     TEST_CASE("a join with a different kind of source is refused") {
         Smart left = smart({all_kinds()});
         LazyFrame lf = left.lf.join(make_df().lazy(), {"a"});
-        CHECK(lf.explain().find("join") != std::string::npos);
-        CHECK(left.log->offered == std::vector<Kind>{Kind::Join});
+        CHECK(lf.explain().find("join") != dstd::String::npos);
+        CHECK(left.log->offered == dstd::Vector<Kind>{Kind::Join});
     }
 
-    TEST_CASE("a hook returning the same handle is a contract error") {
+    TEST_CASE("a hook returning the same handle ends the process" *
+              doctest::skip()) {
+        fresh_process::announce_abort();
         Policy p{all_kinds()};
         p.return_same_handle = true;
         Smart s = smart(p);
-        CHECK_THROWS_AS(apply_plan_rule(s.lf.filter(col(0) > std::int64_t{1}),
-                                        PlanRule::SourceAbsorption),
-                        std::logic_error);
+        (void)dataframe::detail::apply_plan_rule(
+            s.lf.filter(col(0) > std::int64_t{1}),
+            dataframe::detail::PlanRule::SourceAbsorption);
     }
 
-    TEST_CASE("an inexact schema change is a contract error") {
+    TEST_CASE("a hook returning the same handle is fatal") {
+        auto result = fresh_process::run(
+            "a hook returning the same handle ends the process");
+        CHECK(result.aborted_with(
+            "source planning hook accepted an op without a new source"));
+    }
+
+    TEST_CASE("an inexact schema change ends the process" * doctest::skip()) {
+        fresh_process::announce_abort();
         Policy p{all_kinds()};
         p.projection_inexact = true;
         Smart s = smart(p);
-        CHECK_THROWS_AS(
-            apply_plan_rule(s.lf.select({"a"}), PlanRule::SourceAbsorption),
-            std::logic_error);
+        (void)dataframe::detail::apply_plan_rule(
+            s.lf.select({"a"}), dataframe::detail::PlanRule::SourceAbsorption);
+    }
+
+    TEST_CASE("an inexact schema change is fatal") {
+        auto result =
+            fresh_process::run("an inexact schema change ends the process");
+        CHECK(result.aborted_with(
+            "source planning hook accepted an op as inexact, but it changes "
+            "the schema"));
     }
 }
 
@@ -473,14 +484,14 @@ struct ApplyFixture {
     std::int64_t limit = -1;
     int derived_alive = 0;
     int derived_destroyed = 0;
-    std::vector<dftu_apply_request> requests;
-    std::vector<std::string> key_names;
-    std::vector<std::string> agg_ops;
-    std::vector<bool> agg_has_input;
+    dstd::Vector<dftu_apply_request> requests;
+    dstd::Vector<dstd::String> key_names;
+    dstd::Vector<dstd::String> agg_ops;
+    dstd::Vector<bool> agg_has_input;
     bool join_is_ours = false;
-    std::vector<std::string> join_on;
+    dstd::Vector<dstd::String> join_on;
     std::int32_t join_how = -1;
-    std::string join_suffix;
+    dstd::String join_suffix;
 };
 
 struct Derived {
@@ -494,7 +505,7 @@ struct CursorState {
 };
 
 dftu_dataframe* make_rows(std::int64_t offset, std::int64_t n) {
-    std::vector<std::int64_t> ids, vals;
+    dstd::Vector<std::int64_t> ids, vals;
     for (std::int64_t i = 0; i < 10; ++i) {
         ids.push_back(i);
         vals.push_back(i * 10);
@@ -585,8 +596,8 @@ void c_apply(void* self, const dftu_apply_request* req,
         const dftu_apply_join_args& j = req->u.join;
         fx->join_is_ours = j.other_vt && j.other_vt->schema == c_schema;
         for (std::int32_t i = 0; i < j.n_on; ++i)
-            fx->join_on.push_back(std::string(j.left_on[i]) + "=" +
-                                  j.right_on[i]);
+            fx->join_on.push_back(
+                dstd::fmt<"{}={}">(j.left_on[i], j.right_on[i]));
         fx->join_how = j.how;
         fx->join_suffix = j.suffix;
     }
@@ -615,7 +626,7 @@ TEST_SUITE("source_hooks_c_abi") {
         {
             LazyFrame lf = c_frame(fx).slice(2, 3);
             DataFrame r = run(lf.collect());
-            CHECK(ints(r, "id") == std::vector<std::int64_t>{2, 3, 4});
+            CHECK(ints(r, "id") == dstd::Vector<std::int64_t>{2, 3, 4});
             REQUIRE_FALSE(fx.requests.empty());
             CHECK(fx.requests[0].kind == DFTU_APPLY_LIMIT);
             CHECK(fx.requests[0].u.limit.offset == 2);
@@ -627,10 +638,10 @@ TEST_SUITE("source_hooks_c_abi") {
 
     TEST_CASE("an open cursor keeps its derived source alive") {
         ApplyFixture fx;
-        std::unique_ptr<dftracer::utils::dataframe::Cursor> cur;
+        dstd::UniquePtr<dftracer::utils::dataframe::Cursor> cur;
         {
             LazyFrame lf = c_frame(fx).slice(0, 4);
-            cur = lf.open_cursor();
+            cur = dftu_utils_test::ok(lf.open_cursor());
         }
         CHECK(fx.derived_alive == 1);
         cur.reset();
@@ -641,8 +652,8 @@ TEST_SUITE("source_hooks_c_abi") {
         ApplyFixture fx;
         fx.answer = DFTU_APPLY_INEXACT;
         LazyFrame lf = c_frame(fx).select({"val"});
-        const std::string plan = lf.explain();
-        CHECK(plan.find("select [val]") != std::string::npos);
+        const dstd::String plan = lf.explain();
+        CHECK(plan.find("select [val]") != dstd::String::npos);
         CHECK(fx.derived_alive == 0);
     }
 
@@ -650,21 +661,22 @@ TEST_SUITE("source_hooks_c_abi") {
         ApplyFixture fx;
         fx.answer = 42;
         LazyFrame lf = c_frame(fx).slice(0, 2);
-        CHECK(lf.explain().find("slice") != std::string::npos);
+        CHECK(lf.explain().find("slice") != dstd::String::npos);
         CHECK(fx.derived_alive == 0);
-        CHECK(ints(run(lf.collect()), "id") == std::vector<std::int64_t>{0, 1});
+        CHECK(ints(run(lf.collect()), "id") ==
+              dstd::Vector<std::int64_t>{0, 1});
     }
 
     TEST_CASE("an aggregation marshals named keys and optional inputs") {
         ApplyFixture fx;
         fx.answer = DFTU_APPLY_NO_CHANGE;
         LazyFrame lf = c_frame(fx).group_by(
-            std::vector<std::string>{"id"},
+            dstd::Vector<dstd::String>{"id"},
             {{Agg::Count, "", "n"}, {Agg::Sum, "val", "s"}});
         lf.explain();
-        CHECK(fx.key_names == std::vector<std::string>{"id"});
-        CHECK(fx.agg_ops == std::vector<std::string>{"count", "sum"});
-        CHECK(fx.agg_has_input == std::vector<bool>{false, true});
+        CHECK(fx.key_names == dstd::Vector<dstd::String>{"id"});
+        CHECK(fx.agg_ops == dstd::Vector<dstd::String>{"count", "sum"});
+        CHECK(fx.agg_has_input == dstd::Vector<bool>{false, true});
     }
 
     TEST_CASE("tail marshals its row count") {
@@ -678,15 +690,15 @@ TEST_SUITE("source_hooks_c_abi") {
 
     TEST_CASE("a join marshals the other source and keeps it alive") {
         ApplyFixture fx;
-        std::unique_ptr<dftracer::utils::dataframe::Cursor> cur;
+        dstd::UniquePtr<dftracer::utils::dataframe::Cursor> cur;
         {
             LazyFrame right = c_frame(fx).slice(0, 5);
             LazyFrame lf = c_frame(fx).join(
                 right, {"id"}, dftracer::utils::dataframe::JoinHow::Left, "_r");
-            cur = lf.open_cursor();
+            cur = dftu_utils_test::ok(lf.open_cursor());
         }
         CHECK(fx.join_is_ours);
-        CHECK(fx.join_on == std::vector<std::string>{"id=id"});
+        CHECK(fx.join_on == dstd::Vector<dstd::String>{"id=id"});
         CHECK(fx.join_how == DFTU_JOIN_LEFT);
         CHECK(fx.join_suffix == "_r");
         // The limit-derived right side and the join-derived source.
@@ -701,8 +713,9 @@ TEST_SUITE("source_hooks_c_abi") {
                                    nullptr, nullptr};
         LazyFrame lf =
             LazyFrame::scan(make_provider_source(vt, &fx)).slice(1, 2);
-        CHECK(lf.explain().find("slice") != std::string::npos);
-        CHECK(ints(run(lf.collect()), "id") == std::vector<std::int64_t>{1, 2});
+        CHECK(lf.explain().find("slice") != dstd::String::npos);
+        CHECK(ints(run(lf.collect()), "id") ==
+              dstd::Vector<std::int64_t>{1, 2});
         CHECK(fx.requests.empty());
     }
 }
@@ -710,44 +723,56 @@ TEST_SUITE("source_hooks_c_abi") {
 namespace {
 
 struct BatchLog {
+    bool throw_batch = false;
+    bool fail_open = false;
     int opened = 0;
     int scans = 0;
     int batches = 0;
     std::size_t last_members = 0;
+    std::size_t last_opened = 0;
 };
 
 // An in-memory source that reports a batch key, and counts how it is read.
 class KeyedSource final : public Source {
    public:
-    KeyedSource(DataFrame df, std::string key, std::shared_ptr<BatchLog> log)
+    KeyedSource(DataFrame df, dstd::String key, dstd::SharedPtr<BatchLog> log,
+                bool streams = true)
         : inner_(share(df)),
           frame_(std::move(df)),
           key_(std::move(key)),
-          log_(std::move(log)) {}
+          log_(std::move(log)),
+          streams_(streams) {}
 
     Schema schema() const override { return inner_.schema(); }
-    ScanResult scan(const ScanRequest& req) const override {
+    dstd::Result<ScanResult> scan(const ScanRequest& req) const override {
         ++log_->scans;
         return inner_.scan(req);
     }
-    std::optional<std::string> batch_key() const override { return key_; }
-    std::optional<
-        std::vector<std::unique_ptr<dftracer::utils::dataframe::Cursor>>>
-    open_batch(std::vector<std::shared_ptr<const Source>> members,
+    dstd::Optional<dstd::String> batch_key() const override { return key_; }
+    bool streams_in_batch() const override { return streams_; }
+    dstd::Result<dstd::Optional<
+        dstd::Vector<dstd::UniquePtr<dftracer::utils::dataframe::Cursor>>>>
+    open_batch(dstd::Vector<dstd::SharedPtr<const Source>> members,
                std::uint64_t) const override {
         ++log_->opened;
-        std::vector<std::unique_ptr<dftracer::utils::dataframe::Cursor>> out;
+        log_->last_opened = members.size();
+        if (log_->fail_open)
+            return dftracer::utils::common::make_error<"open boom">(
+                dftracer::utils::common::ErrorCode::Io);
+        dstd::Vector<dstd::UniquePtr<dftracer::utils::dataframe::Cursor>> out;
         for (const auto& m : members)
-            out.push_back(static_cast<const KeyedSource&>(*m)
-                              .inner_.scan(ScanRequest{})
+            out.push_back(dftu_utils_test::ok(
+                              static_cast<const KeyedSource&>(*m).inner_.scan(
+                                  ScanRequest{}))
                               .cursor);
         return out;
     }
-    CoroTask<std::vector<DataFrame>> collect_batch(
-        std::vector<std::shared_ptr<const Source>> members) const override {
+    coro::CoroTask<dstd::Result<dstd::Vector<DataFrame>>> collect_batch(
+        dstd::Vector<dstd::SharedPtr<const Source>> members) const override {
         ++log_->batches;
+        if (log_->throw_batch) throw std::runtime_error("batch boom");
         log_->last_members = members.size();
-        std::vector<DataFrame> out;
+        dstd::Vector<DataFrame> out;
         for (const auto& m : members)
             out.push_back(share(static_cast<const KeyedSource&>(*m).frame_));
         co_return out;
@@ -756,20 +781,22 @@ class KeyedSource final : public Source {
    private:
     InMemorySource inner_;
     DataFrame frame_;
-    std::string key_;
-    std::shared_ptr<BatchLog> log_;
+    dstd::String key_;
+    dstd::SharedPtr<BatchLog> log_;
+    bool streams_;
 };
 
-LazyFrame keyed(const std::string& key, std::shared_ptr<BatchLog> log) {
-    return LazyFrame::scan(
-        std::make_shared<KeyedSource>(make_df(), key, std::move(log)));
+LazyFrame keyed(const dstd::String& key, dstd::SharedPtr<BatchLog> log,
+                bool streams = true) {
+    return LazyFrame::scan(dstd::make_shared<KeyedSource>(
+        make_df(), key, std::move(log), streams));
 }
 
 }  // namespace
 
 TEST_SUITE("batched leaves") {
     TEST_CASE("a join of two same-key sources reads through one batch") {
-        auto log = std::make_shared<BatchLog>();
+        auto log = dstd::make_shared<BatchLog>();
         LazyFrame lf =
             keyed("k", log).join(keyed("k", log).select({"a", "g"}), {"a"});
         DataFrame got = run(lf.collect());
@@ -786,18 +813,18 @@ TEST_SUITE("batched leaves") {
     }
 
     TEST_CASE("a concat shares the batch and keeps each side's ops") {
-        auto log = std::make_shared<BatchLog>();
+        auto log = dstd::make_shared<BatchLog>();
         LazyFrame lf =
             keyed("k", log)
                 .filter(col(0) > std::int64_t{4})
                 .concat(keyed("k", log).filter(col(0) < std::int64_t{2}));
         DataFrame got = run(lf.collect());
         CHECK(log->batches == 1);
-        CHECK(ints(got, "a") == std::vector<std::int64_t>{5, 6, 1});
+        CHECK(ints(got, "a") == dstd::Vector<std::int64_t>{5, 6, 1});
     }
 
     TEST_CASE("different keys do not batch") {
-        auto log = std::make_shared<BatchLog>();
+        auto log = dstd::make_shared<BatchLog>();
         DataFrame got =
             run(keyed("x", log).join(keyed("y", log), {"a"}).collect());
         CHECK(log->batches == 0);
@@ -806,37 +833,317 @@ TEST_SUITE("batched leaves") {
     }
 
     TEST_CASE("collect_all streams a group of top-level plans") {
-        auto log = std::make_shared<BatchLog>();
-        std::vector<DataFrame> out =
+        auto log = dstd::make_shared<BatchLog>();
+        dstd::Vector<DataFrame> out =
             run(dftracer::utils::dataframe::collect_all(
                 {keyed("k", log).filter(col(0) > std::int64_t{3}),
                  keyed("k", log).head(2), keyed("k", log)}));
         CHECK(log->opened == 1);
         CHECK(log->batches == 0);
         CHECK(log->scans == 0);
-        CHECK(ints(out[0], "a") == std::vector<std::int64_t>{4, 5, 6});
+        CHECK(ints(out[0], "a") == dstd::Vector<std::int64_t>{4, 5, 6});
         CHECK(out[1].num_rows() == 2);
         CHECK(out[2].num_rows() == 6);
     }
 
-    TEST_CASE("a leading projection keeps a group on the buffered read") {
-        auto log = std::make_shared<BatchLog>();
+    TEST_CASE("a leading projection streams with the group") {
+        auto log = dstd::make_shared<BatchLog>();
+        dstd::Vector<DataFrame> out =
+            run(dftracer::utils::dataframe::collect_all(
+                {keyed("k", log).select({"g", "a"}), keyed("k", log)}));
+        CHECK(log->opened == 1);
+        CHECK(log->batches == 0);
+        const DataFrame want =
+            run(make_df().lazy().select({"g", "a"}).collect());
+        CHECK(out[0].names == want.names);
+        CHECK(ints(out[0], "a") == ints(want, "a"));
+        CHECK(out[1].num_rows() == 6);
+    }
+
+    TEST_CASE("a member that cannot stream does not hold the others back") {
+        auto log = dstd::make_shared<BatchLog>();
+        dstd::Vector<DataFrame> out =
+            run(dftracer::utils::dataframe::collect_all(
+                {keyed("k", log).filter(col(0) > std::int64_t{3}),
+                 keyed("k", log, false).head(2), keyed("k", log),
+                 keyed("k", log, false)}));
+        // Two stream together; the two that cannot share one buffered read.
+        CHECK(log->opened == 1);
+        CHECK(log->last_opened == 2);
+        CHECK(log->batches == 1);
+        CHECK(log->last_members == 2);
+        CHECK(ints(out[0], "a") == dstd::Vector<std::int64_t>{4, 5, 6});
+        CHECK(out[1].num_rows() == 2);
+        CHECK(out[2].num_rows() == 6);
+        CHECK(out[3].num_rows() == 6);
+    }
+
+    TEST_CASE("a single member that can stream reads with the others") {
+        auto log = dstd::make_shared<BatchLog>();
         run(dftracer::utils::dataframe::collect_all(
-            {keyed("k", log).select({"a"}), keyed("k", log)}));
+            {keyed("k", log), keyed("k", log, false)}));
         CHECK(log->opened == 0);
         CHECK(log->batches == 1);
+        CHECK(log->last_members == 2);
     }
 
     TEST_CASE("collect_all batches leaves across roots and their children") {
-        auto log = std::make_shared<BatchLog>();
-        std::vector<DataFrame> out =
+        auto log = dstd::make_shared<BatchLog>();
+        dstd::Vector<DataFrame> out =
             run(dftracer::utils::dataframe::collect_all(
                 {keyed("k", log).join(keyed("k", log), {"a"}),
                  keyed("k", log).head(2)}));
-        CHECK(log->batches == 1);
-        CHECK(log->last_members == 3);
-        CHECK(log->scans == 0);
+        // The two roots stream; the join's other side is no root, so it
+        // reads on its own.
+        CHECK(log->opened == 1);
+        CHECK(log->last_opened == 2);
+        CHECK(log->batches == 0);
+        CHECK(log->scans == 1);
         CHECK(out[0].num_rows() == 6);
         CHECK(out[1].num_rows() == 2);
+    }
+}
+
+namespace {
+
+enum class BatchFault { NoCollect, ShortCollect, ShortOpen };
+
+// A keyed source that breaks the batch contract the way `fault` says: it keeps
+// the default collect_batch, returns too few frames, or opens too few cursors.
+class FaultBatchSource final : public Source {
+   public:
+    FaultBatchSource(DataFrame df, BatchFault fault)
+        : inner_(share(df)), frame_(std::move(df)), fault_(fault) {}
+
+    Schema schema() const override { return inner_.schema(); }
+    dstd::Result<ScanResult> scan(const ScanRequest& req) const override {
+        return inner_.scan(req);
+    }
+    dstd::Optional<dstd::String> batch_key() const override { return "k"; }
+    bool streams_in_batch() const override {
+        return fault_ == BatchFault::ShortOpen;
+    }
+    dstd::Result<dstd::Optional<
+        dstd::Vector<dstd::UniquePtr<dftracer::utils::dataframe::Cursor>>>>
+    open_batch(dstd::Vector<dstd::SharedPtr<const Source>>,
+               std::uint64_t) const override {
+        if (fault_ != BatchFault::ShortOpen)
+            return dstd::Optional<dstd::Vector<
+                dstd::UniquePtr<dftracer::utils::dataframe::Cursor>>>{};
+        dstd::Vector<dstd::UniquePtr<dftracer::utils::dataframe::Cursor>> out;
+        out.push_back(dftu_utils_test::ok(inner_.scan(ScanRequest{})).cursor);
+        return out;
+    }
+    coro::CoroTask<dstd::Result<dstd::Vector<DataFrame>>> collect_batch(
+        dstd::Vector<dstd::SharedPtr<const Source>> members) const override {
+        if (fault_ == BatchFault::NoCollect) {
+            auto base = Source::collect_batch(std::move(members));
+            co_return co_await std::move(base);
+        }
+        dstd::Vector<DataFrame> out;
+        out.push_back(share(frame_));
+        co_return out;
+    }
+
+   private:
+    InMemorySource inner_;
+    DataFrame frame_;
+    BatchFault fault_;
+};
+
+void collect_faulty_batch(BatchFault fault) {
+    auto leaf = [&] {
+        return LazyFrame::scan(
+            dstd::make_shared<FaultBatchSource>(make_df(), fault));
+    };
+    (void)dftracer::utils::default_runtime()
+        .submit(dftracer::utils::dataframe::collect_all({leaf(), leaf()}))
+        .get();
+}
+
+}  // namespace
+
+TEST_SUITE("batch contract") {
+    TEST_CASE("a batch source without collect_batch ends the process" *
+              doctest::skip()) {
+        fresh_process::announce_abort();
+        collect_faulty_batch(BatchFault::NoCollect);
+    }
+
+    TEST_CASE("a batch source without collect_batch is fatal") {
+        auto result = fresh_process::run(
+            "a batch source without collect_batch ends the process");
+        CHECK(result.aborted_with(
+            "Source::collect_batch: a source with a batch_key() must "
+            "override it"));
+    }
+
+    TEST_CASE("a collect_batch with too few frames ends the process" *
+              doctest::skip()) {
+        fresh_process::announce_abort();
+        collect_faulty_batch(BatchFault::ShortCollect);
+    }
+
+    TEST_CASE("a collect_batch with too few frames is fatal") {
+        auto result = fresh_process::run(
+            "a collect_batch with too few frames ends the process");
+        CHECK(result.aborted_with(
+            "Source::collect_batch returned a frame count that differs from "
+            "its member count"));
+    }
+
+    TEST_CASE("an open_batch with too few cursors ends the process" *
+              doctest::skip()) {
+        fresh_process::announce_abort();
+        collect_faulty_batch(BatchFault::ShortOpen);
+    }
+
+    TEST_CASE("an open_batch with too few cursors is fatal") {
+        auto result = fresh_process::run(
+            "an open_batch with too few cursors ends the process");
+        CHECK(result.aborted_with(
+            "Source::open_batch returned a cursor count that differs from "
+            "its member count"));
+    }
+}
+
+namespace {
+
+enum class SourceFault { Throw, Stop, ScanFails };
+
+class FaultyCursor final : public dftracer::utils::dataframe::Cursor {
+   public:
+    explicit FaultyCursor(SourceFault fault) : fault_(fault) {}
+    coro::CoroTask<MorselResult> next(std::int64_t) override {
+        if (fault_ == SourceFault::Throw)
+            throw std::runtime_error("source boom");
+        co_await coro::stop_here();
+        co_return MorselResult(dstd::nullopt);
+    }
+
+   private:
+    SourceFault fault_;
+};
+
+// A source from outside the dataframe library: its task throws or stops.
+class FaultySource final : public Source {
+   public:
+    explicit FaultySource(SourceFault fault) : fault_(fault) {}
+    Schema schema() const override {
+        return {{dftracer::utils::dataframe::Field{
+            "a", dftracer::utils::dataframe::scalar(TypeId::Int64), true}}};
+    }
+    dstd::Result<ScanResult> scan(const ScanRequest& req) const override {
+        if (fault_ == SourceFault::ScanFails)
+            return dftracer::utils::common::make_error<"scan boom">(
+                dftracer::utils::common::ErrorCode::Io);
+        ScanResult r;
+        r.cursor = dstd::make_unique<FaultyCursor>(fault_);
+        r.filters.assign(req.filters.size(),
+                         dftracer::utils::dataframe::Pushed::No);
+        return r;
+    }
+
+   private:
+    SourceFault fault_;
+};
+
+LazyFrame faulty(SourceFault fault) {
+    return LazyFrame::scan(dstd::make_shared<FaultySource>(fault));
+}
+
+}  // namespace
+
+TEST_SUITE("source that fails") {
+    TEST_CASE("a source whose task throws ends the collect with an error") {
+        const auto collected = dftracer::utils::default_runtime()
+                                   .submit(faulty(SourceFault::Throw).collect())
+                                   .get();
+        REQUIRE_FALSE(collected.has_value());
+        CHECK(dstd::String(collected.error().c_str()).find("source boom") !=
+              dstd::String::npos);
+    }
+
+    TEST_CASE("a source whose task throws fails the ops over it the same way") {
+        const auto filtered = dftracer::utils::default_runtime()
+                                  .submit(faulty(SourceFault::Throw)
+                                              .filter(col(0) > std::int64_t{1})
+                                              .head(3)
+                                              .collect())
+                                  .get();
+        REQUIRE_FALSE(filtered.has_value());
+        CHECK(dstd::String(filtered.error().c_str()).find("source boom") !=
+              dstd::String::npos);
+        const auto joined = dftracer::utils::default_runtime()
+                                .submit(faulty(SourceFault::Throw)
+                                            .join(make_df().lazy(), {"a"})
+                                            .collect())
+                                .get();
+        REQUIRE_FALSE(joined.has_value());
+        CHECK(dstd::String(joined.error().c_str()).find("source boom") !=
+              dstd::String::npos);
+    }
+
+    TEST_CASE("a source whose task throws ends the stream with an error") {
+        auto stream_error =
+            [](LazyFrame lf) -> coro::CoroTask<dstd::Result<void>> {
+            auto g = lf.stream();
+            while (auto df = co_await g.next())
+                if (!*df) co_return df->error();
+            co_return dstd::Result<void>();
+        };
+        const auto result =
+            dftracer::utils::default_runtime()
+                .submit(stream_error(faulty(SourceFault::Throw)))
+                .get();
+        REQUIRE_FALSE(result.has_value());
+        CHECK(dstd::String(result.error().c_str()).find("source boom") !=
+              dstd::String::npos);
+    }
+
+    TEST_CASE("a scan that fails ends the collect with its error") {
+        const auto collected = dftracer::utils::default_runtime()
+                                   .submit(faulty(SourceFault::ScanFails)
+                                               .filter(col(0) > std::int64_t{1})
+                                               .collect())
+                                   .get();
+        dftu_utils_test::expect_error(
+            collected, dftracer::utils::common::ErrorCode::Io, "scan boom");
+    }
+
+    TEST_CASE("an open_batch that fails ends the collect with its error") {
+        auto log = dstd::make_shared<BatchLog>();
+        log->fail_open = true;
+        const auto collected =
+            dftracer::utils::default_runtime()
+                .submit(dftracer::utils::dataframe::collect_all(
+                    {keyed("k", log), keyed("k", log)}))
+                .get();
+        CHECK(log->opened == 1);
+        dftu_utils_test::expect_error(
+            collected, dftracer::utils::common::ErrorCode::Io, "open boom");
+    }
+
+    TEST_CASE("a collect_batch that throws ends the collect with an error") {
+        auto log = dstd::make_shared<BatchLog>();
+        log->throw_batch = true;
+        const auto collected =
+            dftracer::utils::default_runtime()
+                .submit(keyed("k", log)
+                            .join(keyed("k", log).select({"a", "g"}), {"a"})
+                            .collect())
+                .get();
+        CHECK(log->batches == 1);
+        REQUIRE_FALSE(collected.has_value());
+        CHECK(dstd::String(collected.error().c_str()).find("batch boom") !=
+              dstd::String::npos);
+    }
+
+    TEST_CASE("a source that stops ends the collect stopped") {
+        const auto collected = dftracer::utils::default_runtime()
+                                   .submit(faulty(SourceFault::Stop).collect())
+                                   .get();
+        REQUIRE_FALSE(collected.has_value());
+        CHECK(collected.error().condition() == dstd::Condition::Cancelled);
     }
 }

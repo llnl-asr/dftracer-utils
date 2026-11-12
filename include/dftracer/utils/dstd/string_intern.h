@@ -1,0 +1,252 @@
+// SPDX-License-Identifier: MIT
+#ifndef DFTRACER_UTILS_DSTD_STRING_INTERN_H
+#define DFTRACER_UTILS_DSTD_STRING_INTERN_H
+
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/result.h>
+#include <dftracer/utils/dstd/string.h>
+
+#include <array>
+#include <atomic>
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <mutex>
+#include <string_view>
+
+namespace dftracer::utils::memory {
+class Pool;
+}
+
+namespace dftracer::utils::dstd {
+
+class StringIntern {
+    using Slot = std::atomic<const char*>;
+    using LogSlot = std::atomic<std::uint32_t>;
+    using IndexSlot = std::atomic<std::uint64_t>;
+
+   public:
+    static constexpr std::size_t BLOCK_BITS = 10;
+    static constexpr std::size_t BLOCK_SIZE = 1u << BLOCK_BITS;
+    static constexpr std::size_t DIRECTORY_SIZE = 1u << 18;
+    static constexpr std::size_t FAST_CAPACITY = BLOCK_SIZE * DIRECTORY_SIZE;
+
+    static constexpr std::uint32_t NO_ID = UINT32_MAX;
+
+    /// Chunks start at FIRST_CHUNK_BYTES and double up to CHUNK_BYTES. A record
+    /// larger than CHUNK_BYTES gets a chunk of its own. Records are
+    /// `{u32 len, u32 chunk, bytes}` padded to 4.
+    static constexpr std::size_t FIRST_CHUNK_BYTES = std::size_t{1} << 7;
+    static constexpr std::size_t CHUNK_BYTES = std::size_t{1} << 20;
+
+    /// Owned bytes that a column can hold by `shared_ptr`. Take views only
+    /// inside records that `locate` returned.
+    class Chunk {
+       public:
+        Chunk(std::size_t size, memory::Pool& pool);
+        ~Chunk();
+        Chunk(const Chunk&) = delete;
+        Chunk& operator=(const Chunk&) = delete;
+
+        const char* data() const noexcept { return data_; }
+        std::size_t size() const noexcept { return size_; }
+
+       private:
+        char* data_;
+        std::size_t size_;
+    };
+
+    /// `data` is null when the id has no string. `offset` is where `data`
+    /// starts inside chunk `chunk`.
+    struct Location {
+        const char* data;
+        std::uint32_t len;
+        std::uint32_t chunk;
+        std::uint32_t offset;
+    };
+
+    enum class InsertStatus {
+        Ok,
+        /// The id holds another string.
+        Conflict,
+        /// The id is past FAST_CAPACITY.
+        OutOfRange,
+    };
+
+    /// Memory is charged to @p pool, or to the general pool when it is null,
+    /// whatever thread allocates. The pool must stay open until the table and
+    /// every chunk it handed out are gone.
+    explicit StringIntern(memory::Pool* pool = nullptr);
+    ~StringIntern();
+
+    StringIntern(const StringIntern&) = delete;
+    StringIntern& operator=(const StringIntern&) = delete;
+    StringIntern(StringIntern&&) = delete;
+    StringIntern& operator=(StringIntern&&) = delete;
+
+    /// The id of `sv`, inserting it when new. Ends the process on a
+    /// deterministic id collision, so a table with deterministic ids takes
+    /// @ref try_get_or_insert. Also ends the process when the chunk table or
+    /// the id space is exhausted.
+    std::uint32_t get_or_insert(StringView sv);
+
+    /// Like @ref get_or_insert, but a deterministic id collision, which the
+    /// strings cause, comes back as an error. Without deterministic ids it
+    /// never fails.
+    [[nodiscard]] Result<std::uint32_t> try_get_or_insert(StringView sv);
+
+    /// The id of `sv`, or NO_ID when the table does not hold it. Takes no
+    /// lock.
+    std::uint32_t find(StringView sv) const;
+
+    /// Insert at a specific id, for loading a persisted dictionary. A
+    /// conflicting id is reported, not rebound, and `resolve(id)` names the
+    /// string it holds. Must precede any `resolve(id)` at that id.
+    [[nodiscard]] InsertStatus insert_at_id(std::uint32_t id, StringView sv);
+
+    /// Empty means no string at this id. An id past the table's reach ends the
+    /// process.
+    StringView resolve(std::uint32_t id) const;
+
+    Location locate(std::uint32_t id) const;
+
+    /// Valid for any chunk index that `locate` returned. The chunk outlives the
+    /// intern while the returned pointer is held.
+    SharedPtr<Chunk> chunk(std::uint32_t i) const;
+
+    /// Number of strings interned, and the id of the n-th in insertion order.
+    /// Content-derived ids are sparse, so walk these rather than the id range.
+    std::size_t entry_count() const;
+
+    std::uint32_t entry_id(std::size_t n) const;
+
+    StringView intern(StringView sv);
+
+    std::size_t size() const {
+        return string_count_.load(std::memory_order_acquire);
+    }
+
+    /// Derive ids from string content instead of a counter, so ids match across
+    /// MPI ranks. A hash collision is an error of @ref try_get_or_insert, so
+    /// use it for small dictionaries. Must precede any `get_or_insert`.
+    void enable_deterministic_ids() noexcept {
+        deterministic_ids_.store(true, std::memory_order_release);
+    }
+
+   private:
+    using ChunkRef = SharedPtr<Chunk>;
+
+    static constexpr std::size_t CHUNK_BLOCK_BITS = 8;
+    static constexpr std::size_t CHUNK_BLOCK_SIZE = 1u << CHUNK_BLOCK_BITS;
+    static constexpr std::size_t CHUNK_DIRECTORY_SIZE = 1u << 12;
+    static constexpr std::size_t RECORD_HEADER = 8;
+
+    static constexpr std::size_t SHARDS = 64;
+    static_assert((SHARDS & (SHARDS - 1)) == 0);
+    static constexpr std::size_t INITIAL_INDEX_SLOTS = 1u << 4;
+
+    /// Open-addressed string -> id lookup. Slots hold `(low 32 hash bits << 32)
+    /// | (id + 1)`, so 0 is free. Growth publishes a replacement and never
+    /// writes the old one again.
+    struct Index {
+        std::size_t mask;
+        IndexSlot* slots;
+        Index* retired_next;
+    };
+
+    struct alignas(128) Shard {
+        std::mutex mu;
+        std::atomic<Index*> index{nullptr};
+        Index* retired = nullptr;
+        std::size_t index_size = 0;
+        std::size_t cur_used = 0;
+        std::size_t cur_size = 0;
+        std::uint32_t cur = 0;
+        bool have_cur = false;
+    };
+
+    static void release_bytes(void* p, std::size_t bytes) noexcept;
+
+    /// N entries in two levels, with leaves made on first use. Entries never
+    /// move once made.
+    template <class Block, std::size_t N>
+    struct Directory {
+        static constexpr std::size_t LEAF_BITS = 10;
+        static constexpr std::size_t LEAF = std::size_t{1} << LEAF_BITS;
+        static constexpr std::size_t TOP = (N + LEAF - 1) / LEAF;
+        using Entry = std::atomic<Block*>;
+
+        Block* load(std::size_t i) const noexcept {
+            const Entry* leaf =
+                top[i >> LEAF_BITS].load(std::memory_order_acquire);
+            return leaf ? leaf[i & (LEAF - 1)].load(std::memory_order_acquire)
+                        : nullptr;
+        }
+
+        std::array<std::atomic<Entry*>, TOP> top{};
+    };
+
+    template <class T>
+    class Array {
+       public:
+        explicit Array(T* p, std::size_t n) noexcept : p_(p), n_(n) {}
+        Array(const Array&) = delete;
+        Array& operator=(const Array&) = delete;
+        ~Array() {
+            if (!p_) return;
+            std::destroy_n(p_, n_);
+            release_bytes(p_, n_ * sizeof(T));
+        }
+        T& operator[](std::size_t i) const noexcept { return p_[i]; }
+
+       private:
+        T* p_;
+        std::size_t n_;
+    };
+
+    const char* slot_value(std::uint32_t id) const;
+    static StringView record_view(const char* rec);
+    static std::uint32_t record_chunk(const char* rec);
+    const ChunkRef* chunk_ref(std::uint32_t i) const;
+    static std::size_t shard_of(std::size_t h);
+    static Error collision(const char* existing, StringView sv);
+    std::uint32_t add_chunk(std::size_t bytes);
+    const char* write_record(Shard& sh, StringView sv);
+    Index* make_index(std::size_t slots);
+    static void delete_index(Index* idx);
+    std::uint32_t lookup(std::size_t h, StringView sv) const;
+    void index_insert(Shard& sh, std::size_t h, std::uint32_t id);
+    Index* grow_index(Shard& sh);
+    void advance_string_count(std::uint32_t id);
+    void log_entry(std::uint32_t id);
+    bool bind_slot(std::uint32_t id, const char* str, bool cas);
+    std::size_t hash(StringView sv) const;
+    template <class T>
+    T* make_array(std::size_t n) const;
+    template <class T>
+    static void free_array(T* a, std::size_t n) noexcept;
+    template <class T>
+    Array<T> make_owned(std::size_t n) const;
+    template <class Block, std::size_t N>
+    typename Directory<Block, N>::Entry& entry(Directory<Block, N>& dir,
+                                               std::size_t i);
+    template <class Block, std::size_t N>
+    void free_directory(Directory<Block, N>& dir,
+                        std::size_t block_size) noexcept;
+    SharedPtr<Chunk> make_chunk(std::size_t bytes);
+
+    memory::Pool* pool_;
+    Directory<Slot, DIRECTORY_SIZE> directory_;
+    Directory<LogSlot, DIRECTORY_SIZE> log_;
+    Directory<ChunkRef, CHUNK_DIRECTORY_SIZE> chunk_dir_;
+    Array<Shard> shards_;
+    std::atomic<std::size_t> chunk_count_{0};
+    std::atomic<std::size_t> log_next_{0};
+    mutable std::atomic<std::size_t> entry_count_{0};
+    std::atomic<std::size_t> string_count_{0};
+    std::atomic<bool> deterministic_ids_{false};
+};
+
+}  // namespace dftracer::utils::dstd
+
+#endif  // DFTRACER_UTILS_DSTD_STRING_INTERN_H

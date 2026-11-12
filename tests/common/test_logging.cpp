@@ -1,0 +1,278 @@
+// SPDX-License-Identifier: MIT
+#define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/fmt.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/runtime/runtime.h>
+#include <doctest/doctest.h>
+#include <task_result.h>
+
+#include <cstddef>
+#include <cstdio>
+#include <cstdlib>
+
+using namespace dftracer::utils;
+
+namespace {
+
+// Run fn() with the logger writing to an in-memory sink and return everything
+// it emitted. Ambient logging env vars are cleared first so cfg alone drives
+// behavior; a safe stderr sink is restored before the memory stream is closed.
+template <typename F>
+dstd::String capture_log(dftracer::utils::common::logger::Config cfg, F&& fn) {
+    ::unsetenv("DFTRACER_UTILS_LOG_LEVEL");
+    ::unsetenv("DFTRACER_UTILS_LOG_COLOR");
+    ::unsetenv("DFTRACER_UTILS_LOG_FILE");
+    ::unsetenv("NO_COLOR");
+    ::unsetenv("FORCE_COLOR");
+    ::unsetenv("CLICOLOR_FORCE");
+
+    char* buf = nullptr;
+    std::size_t size = 0;
+    std::FILE* fp = ::open_memstream(&buf, &size);
+    REQUIRE(fp != nullptr);
+
+    cfg.sink = fp;
+    dftracer::utils::common::logger::init(cfg);
+    fn();
+    std::fflush(fp);
+    dstd::String out(buf, size);
+
+    dftracer::utils::common::logger::init(
+        dftracer::utils::common::logger::
+            Config{});  // restore stderr sink before closing the stream
+    std::fclose(fp);
+    std::free(buf);
+    return out;
+}
+
+bool contains(const dstd::String& hay, const char* needle) {
+    return hay.find(needle) != dstd::String::npos;
+}
+
+}  // namespace
+
+TEST_CASE("level gating suppresses below the threshold") {
+    auto out = capture_log(
+        {.level = dftracer::utils::common::logger::Level::Warn,
+         .color = dftracer::utils::common::logger::ColorMode::Never},
+        [] {
+            DFTRACER_UTILS_LOG_DEBUG("dbg-line");
+            DFTRACER_UTILS_LOG_INFO("inf-line");
+            DFTRACER_UTILS_LOG_WARN("wrn-line");
+            DFTRACER_UTILS_LOG_ERROR("err-line");
+        });
+    CHECK_FALSE(contains(out, "dbg-line"));
+    CHECK_FALSE(contains(out, "inf-line"));
+    CHECK(contains(out, "wrn-line"));
+    CHECK(contains(out, "err-line"));
+}
+
+TEST_CASE("set_level / get_level roundtrip and runtime suppression") {
+    dftracer::utils::common::logger::set_level(
+        dftracer::utils::common::logger::Level::Debug);
+    CHECK(dftracer::utils::common::logger::level() ==
+          dftracer::utils::common::logger::Level::Debug);
+    dftracer::utils::common::logger::set_level(
+        dftracer::utils::common::logger::Level::Error);
+    CHECK(dftracer::utils::common::logger::level() ==
+          dftracer::utils::common::logger::Level::Error);
+
+    auto out = capture_log(
+        {.level = dftracer::utils::common::logger::Level::Trace,
+         .color = dftracer::utils::common::logger::ColorMode::Never},
+        [] {
+            dftracer::utils::common::logger::set_level(
+                dftracer::utils::common::logger::Level::Error);
+            DFTRACER_UTILS_LOG_INFO("hidden-line");
+            DFTRACER_UTILS_LOG_ERROR("shown-line");
+        });
+    CHECK_FALSE(contains(out, "hidden-line"));
+    CHECK(contains(out, "shown-line"));
+}
+
+TEST_CASE("color modes") {
+    auto never = capture_log(
+        {.level = dftracer::utils::common::logger::Level::Info,
+         .color = dftracer::utils::common::logger::ColorMode::Never},
+        [] { DFTRACER_UTILS_LOG_INFO("plain"); });
+    CHECK_FALSE(contains(never, "\x1b["));
+
+    auto always = capture_log(
+        {.level = dftracer::utils::common::logger::Level::Info,
+         .color = dftracer::utils::common::logger::ColorMode::Always},
+        [] { DFTRACER_UTILS_LOG_INFO("colored"); });
+    CHECK(contains(always, "\x1b["));
+}
+
+TEST_CASE("format: level tag, message, and location") {
+    auto out = capture_log(
+        {.level = dftracer::utils::common::logger::Level::Info,
+         .color = dftracer::utils::common::logger::ColorMode::Never},
+        [] { DFTRACER_UTILS_LOG_ERROR("boom {}", 42); });
+    CHECK(contains(out, "ERROR"));
+    CHECK(contains(out, "boom 42"));
+    CHECK(contains(out, "test_logging.cpp:"));  // (basename:line)
+}
+
+TEST_CASE("show_location=false drops the file:line suffix") {
+    auto out =
+        capture_log({.level = dftracer::utils::common::logger::Level::Info,
+                     .color = dftracer::utils::common::logger::ColorMode::Never,
+                     .show_location = false},
+                    [] { DFTRACER_UTILS_LOG_INFO("no-loc-line"); });
+    CHECK(contains(out, "no-loc-line"));
+    CHECK_FALSE(contains(out, "test_logging.cpp"));
+}
+
+namespace {
+
+// The text after "[YYYY-MM-DD HH:MM:SS.mmm] ", or an empty view when the line
+// does not start with a 23-byte timestamp.
+dstd::StringView after_stamp(const dstd::String& line) {
+    const dstd::StringView v(line);
+    if (v.size() < 26 || v[0] != '[' || v[24] != ']' || v[25] != ' ') return {};
+    return v.substr(26);
+}
+
+common::logger::Config plain(bool location) {
+    return {.level = common::logger::Level::Info,
+            .color = common::logger::ColorMode::Never,
+            .show_location = location};
+}
+
+}  // namespace
+
+TEST_CASE("line shape: no arguments, no location") {
+    auto out = capture_log(plain(false), [] { DFTRACER_UTILS_LOG_WARN("hi"); });
+    CHECK(after_stamp(out) == "WARN  hi\n");
+}
+
+TEST_CASE("line shape: several arguments and literal braces") {
+    auto out = capture_log(plain(false), [] {
+        DFTRACER_UTILS_LOG_ERROR("a={} b={:04} c={:.2f} d={} e={} {{}}", 1, 42,
+                                 0.5, "str", true);
+    });
+    CHECK(after_stamp(out) == "ERROR a=1 b=0042 c=0.50 d=str e=true {}\n");
+}
+
+TEST_CASE("line shape: location suffix is (basename:line)") {
+    int line = 0;
+    auto out = capture_log(plain(true), [&] {
+        line = __LINE__ + 1;
+        DFTRACER_UTILS_LOG_INFO("x={}", 5);
+    });
+    const dstd::String want =
+        dstd::fmt<"INFO  x=5 (test_logging.cpp:{})\n">(line);
+    CHECK(after_stamp(out) == dstd::StringView(want));
+}
+
+TEST_CASE("line shape: color wraps the stamp and the level") {
+    auto out = capture_log({.level = common::logger::Level::Info,
+                            .color = common::logger::ColorMode::Always,
+                            .show_location = false},
+                           [] { DFTRACER_UTILS_LOG_WARN("c"); });
+    const dstd::StringView v(out);
+    REQUIRE(v.size() > 30);
+    CHECK(v.substr(0, 5) == "\x1b[2m[");
+    CHECK(v.substr(28) == "]\x1b[0m \x1b[33mWARN \x1b[0m c\n");
+}
+
+TEST_CASE("a message over the cap is cut and ends in an ellipsis") {
+    const dstd::String big(3000, 'x');
+    auto out =
+        capture_log(plain(false), [&] { DFTRACER_UTILS_LOG_WARN("{}", big); });
+    const dstd::StringView body = after_stamp(out);
+    REQUIRE(body.size() == 6 + common::logger::detail::MESSAGE_CAP + 1);
+    CHECK(body.substr(0, 6) == "WARN  ");
+    CHECK(
+        body.substr(6, common::logger::detail::MESSAGE_CAP - 3) ==
+        dstd::StringView(big.data(), common::logger::detail::MESSAGE_CAP - 3));
+    CHECK(body.substr(6 + common::logger::detail::MESSAGE_CAP - 3) == "...\n");
+}
+
+TEST_CASE("env DFTRACER_UTILS_LOG_LEVEL overrides the config") {
+    ::setenv("DFTRACER_UTILS_LOG_LEVEL", "error", 1);
+    dftracer::utils::common::logger::init(
+        dftracer::utils::common::logger::Config{
+            .level =
+                dftracer::utils::common::logger::Level::Debug});  // env should
+                                                                  // win
+    CHECK(dftracer::utils::common::logger::level() ==
+          dftracer::utils::common::logger::Level::Error);
+
+    ::unsetenv("DFTRACER_UTILS_LOG_LEVEL");
+    dftracer::utils::common::logger::init(
+        dftracer::utils::common::logger::Config{
+            .level = dftracer::utils::common::logger::Level::Info});
+    CHECK(dftracer::utils::common::logger::level() ==
+          dftracer::utils::common::logger::Level::Info);
+}
+
+#if DFTRACER_UTILS_LOGGER_TRACE_ENABLED
+static void inner_scope() { DFTRACER_UTILS_TRACE_SCOPE("k={}", 7); }
+
+TEST_CASE("TRACE_SCOPE emits nested enter/exit with timing") {
+    auto out = capture_log(
+        {.level = dftracer::utils::common::logger::Level::Trace,
+         .color = dftracer::utils::common::logger::ColorMode::Never},
+        [] {
+            DFTRACER_UTILS_TRACE_SCOPE();  // label = func name
+            inner_scope();
+        });
+    CHECK(contains(out, "-> "));
+    CHECK(contains(out, "<- "));
+    CHECK(contains(out, "ms]"));  // exit carries a duration
+    CHECK(contains(out, "k=7"));  // labeled inner scope
+    // Flat output (no indentation): the inner scope's enter follows the
+    // outer's.
+    auto outer = out.find("-> ");
+    auto inner = out.find("k=7");
+    CHECK(inner != dstd::String::npos);
+    CHECK(inner > outer);
+}
+
+TEST_CASE("TRACE_SCOPE is silent when Trace is disabled") {
+    auto out = capture_log(
+        {.level = dftracer::utils::common::logger::Level::Info,
+         .color = dftracer::utils::common::logger::ColorMode::Never},
+        [] {
+            DFTRACER_UTILS_TRACE_SCOPE("should-not-appear");
+            DFTRACER_UTILS_LOG_INFO("visible-line");
+        });
+    CHECK_FALSE(contains(out, "-> "));
+    CHECK_FALSE(contains(out, "should-not-appear"));
+    CHECK(contains(out, "visible-line"));
+}
+
+static dftracer::utils::coro::CoroTask<int> traced_leaf(int x) {
+    DFTRACER_UTILS_TRACE_SCOPE("leaf x={}", x);
+    co_return x * 2;
+}
+
+static dftracer::utils::coro::CoroTask<int> traced_root() {
+    // The ScopeTracer lives in this coroutine frame across the co_await
+    // suspensions below; on GCC 12/13 a large frame local here would corrupt.
+    DFTRACER_UTILS_TRACE_SCOPE("root");
+    int a = co_await traced_leaf(10);
+    int b = co_await traced_leaf(20);
+    co_return a + b;
+}
+
+TEST_CASE("TRACE_SCOPE is frame-safe across coroutine suspension") {
+    auto out = capture_log(
+        {.level = dftracer::utils::common::logger::Level::Trace,
+         .color = dftracer::utils::common::logger::ColorMode::Never},
+        [] {
+            dftracer::utils::Runtime rt(2);
+            int r =
+                dftu_utils_test::ok(rt.submit(traced_root(), "traced").get());
+            CHECK(r == 60);  // (10*2) + (20*2); wrong value => frame corruption
+        });
+    CHECK(contains(out, "-> traced_root: root"));
+    CHECK(contains(out, "<- traced_root: root"));
+    CHECK(contains(out, "leaf x=10"));
+    CHECK(contains(out, "leaf x=20"));
+}
+#endif  // DFTRACER_UTILS_LOGGER_TRACE_ENABLED

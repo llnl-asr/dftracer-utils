@@ -1,9 +1,13 @@
+// SPDX-License-Identifier: MIT
+#include <dftracer/utils/dstd/fmt.h>
+#include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/duql/subsumption.h>
 
 #include <cstdint>
-#include <map>
 #include <optional>
-#include <set>
 #include <string>
 #include <variant>
 
@@ -11,22 +15,22 @@ namespace dftracer::utils::duql {
 
 namespace {
 
-std::optional<double> as_number(const LiteralValue& v) {
+dstd::Optional<double> as_number(const LiteralValue& v) {
     if (auto p = std::get_if<std::int64_t>(&v)) return static_cast<double>(*p);
     if (auto p = std::get_if<std::uint64_t>(&v)) return static_cast<double>(*p);
     if (auto p = std::get_if<double>(&v)) return *p;
-    return std::nullopt;
+    return dstd::nullopt;
 }
 
 // Canonical token for one literal, used as a set-membership key.
-std::string literal_key(const LiteralValue& v) {
-    if (auto p = std::get_if<std::string>(&v)) return "s:" + *p;
+dstd::String literal_key(const LiteralValue& v) {
+    if (auto p = std::get_if<dstd::String>(&v)) return dstd::fmt<"s:{}">(*p);
     if (auto p = std::get_if<bool>(&v)) return *p ? "b:1" : "b:0";
     if (auto p = std::get_if<std::int64_t>(&v))
-        return "n:" + std::to_string(static_cast<double>(*p));
+        return dstd::fmt<"n:{:f}">(static_cast<double>(*p));
     if (auto p = std::get_if<std::uint64_t>(&v))
-        return "n:" + std::to_string(static_cast<double>(*p));
-    if (auto p = std::get_if<double>(&v)) return "n:" + std::to_string(*p);
+        return dstd::fmt<"n:{:f}">(static_cast<double>(*p));
+    if (auto p = std::get_if<double>(&v)) return dstd::fmt<"n:{:f}">(*p);
     return "?";
 }
 
@@ -37,17 +41,17 @@ struct Bound {
 };
 
 struct Interval {
-    std::optional<Bound> lo;  // lower bound (> or >=), empty = -inf
-    std::optional<Bound> hi;  // upper bound (< or <=), empty = +inf
+    dstd::Optional<Bound> lo;  // lower bound (> or >=), empty = -inf
+    dstd::Optional<Bound> hi;  // upper bound (< or <=), empty = +inf
 };
 
 // Intersect a conjunction's per-field constraints: keep the tighter bound.
-void tighten_lo(std::optional<Bound>& cur, const Bound& cand) {
+void tighten_lo(dstd::Optional<Bound>& cur, const Bound& cand) {
     if (!cur || cand.val > cur->val ||
         (cand.val == cur->val && cand.strict && !cur->strict))
         cur = cand;
 }
-void tighten_hi(std::optional<Bound>& cur, const Bound& cand) {
+void tighten_hi(dstd::Optional<Bound>& cur, const Bound& cand) {
     if (!cur || cand.val < cur->val ||
         (cand.val == cur->val && cand.strict && !cur->strict))
         cur = cand;
@@ -55,13 +59,15 @@ void tighten_hi(std::optional<Bound>& cur, const Bound& cand) {
 
 // True if query's bound is at least as restrictive as mv's (so query's
 // admitted values are a subset of mv's on that side).
-bool lo_within(const std::optional<Bound>& q, const std::optional<Bound>& mv) {
+bool lo_within(const dstd::Optional<Bound>& q,
+               const dstd::Optional<Bound>& mv) {
     if (!mv) return true;
     if (!q) return false;
     if (q->val != mv->val) return q->val > mv->val;
     return (q->strict ? 1 : 0) >= (mv->strict ? 1 : 0);
 }
-bool hi_within(const std::optional<Bound>& q, const std::optional<Bound>& mv) {
+bool hi_within(const dstd::Optional<Bound>& q,
+               const dstd::Optional<Bound>& mv) {
     if (!mv) return true;
     if (!q) return false;
     if (q->val != mv->val) return q->val < mv->val;
@@ -75,22 +81,24 @@ bool point_in(double v, const Interval& iv) {
         return false;
     return true;
 }
-std::optional<double> as_point(const Interval& iv) {
+dstd::Optional<double> as_point(const Interval& iv) {
     if (iv.lo && iv.hi && !iv.lo->strict && !iv.hi->strict &&
         iv.lo->val == iv.hi->val)
         return iv.lo->val;
-    return std::nullopt;
+    return dstd::nullopt;
 }
 
 // A conjunction split into numeric intervals, value sets, and opaque
 // residuals (or/not/like/!=/not in) keyed by canonical source.
 struct Buckets {
-    std::map<std::string, Interval> intervals;
-    std::map<std::string, std::map<std::string, std::optional<double>>> sets;
-    std::set<std::string> residual;
+    dstd::HashMap<dstd::String, Interval> intervals;
+    dstd::HashMap<dstd::String,
+                  dstd::HashMap<dstd::String, dstd::Optional<double>>>
+        sets;
+    dstd::HashSet<dstd::String> residual;
 };
 
-void add_set_value(Buckets& b, const std::string& field,
+void add_set_value(Buckets& b, const dstd::String& field,
                    const LiteralValue& v) {
     b.sets[field].emplace(literal_key(v), as_number(v));
 }
@@ -98,16 +106,16 @@ void add_set_value(Buckets& b, const std::string& field,
 // An `or` made only of equality/IN tests on ONE field is a value set
 // (`name == a or name == b` is `name in [a,b]`). Collects the field + values,
 // or returns false if the disjunction mixes fields or carries any other op.
-bool or_to_set(const QueryNode& node, std::string& field,
-               std::map<std::string, std::optional<double>>& vals) {
+bool or_to_set(const detail::QueryNode& node, dstd::String& field,
+               dstd::HashMap<dstd::String, dstd::Optional<double>>& vals) {
     return std::visit(
         [&](auto&& n) -> bool {
             using T = std::decay_t<decltype(n)>;
-            if constexpr (std::is_same_v<T, OrNode>) {
+            if constexpr (std::is_same_v<T, detail::OrNode>) {
                 return or_to_set(*n.left, field, vals) &&
                        or_to_set(*n.right, field, vals);
-            } else if constexpr (std::is_same_v<T, CompareNode>) {
-                if (n.op != CompareOp::EQ || n.field.any) return false;
+            } else if constexpr (std::is_same_v<T, detail::CompareNode>) {
+                if (n.op != CompareOp::Eq || n.field.any) return false;
                 if (field.empty())
                     field = n.field.path;
                 else if (field != n.field.path)
@@ -115,7 +123,7 @@ bool or_to_set(const QueryNode& node, std::string& field,
                 vals.emplace(literal_key(n.value.value),
                              as_number(n.value.value));
                 return true;
-            } else if constexpr (std::is_same_v<T, InNode>) {
+            } else if constexpr (std::is_same_v<T, detail::InNode>) {
                 if (n.field.any) return false;
                 if (field.empty())
                     field = n.field.path;
@@ -131,14 +139,14 @@ bool or_to_set(const QueryNode& node, std::string& field,
         node.data);
 }
 
-void flatten(const QueryNode& node, Buckets& b) {
+void flatten(const detail::QueryNode& node, Buckets& b) {
     std::visit(
         [&](auto&& n) {
             using T = std::decay_t<decltype(n)>;
-            if constexpr (std::is_same_v<T, AndNode>) {
+            if constexpr (std::is_same_v<T, detail::AndNode>) {
                 flatten(*n.left, b);
                 flatten(*n.right, b);
-            } else if constexpr (std::is_same_v<T, CompareNode>) {
+            } else if constexpr (std::is_same_v<T, detail::CompareNode>) {
                 // Two any() bounds may hold on different elements, so they
                 // do not narrow one interval.
                 if (n.field.any) {
@@ -146,7 +154,7 @@ void flatten(const QueryNode& node, Buckets& b) {
                     return;
                 }
                 const auto num = as_number(n.value.value);
-                if (n.op == CompareOp::EQ) {
+                if (n.op == CompareOp::Eq) {
                     if (num) {
                         auto& iv = b.intervals[n.field.path];
                         tighten_lo(iv.lo, Bound{*num, false});
@@ -155,28 +163,28 @@ void flatten(const QueryNode& node, Buckets& b) {
                         add_set_value(b, n.field.path, n.value.value);
                     }
                 } else if (num &&
-                           (n.op == CompareOp::GT || n.op == CompareOp::GE)) {
+                           (n.op == CompareOp::Gt || n.op == CompareOp::Ge)) {
                     tighten_lo(b.intervals[n.field.path].lo,
-                               Bound{*num, n.op == CompareOp::GT});
+                               Bound{*num, n.op == CompareOp::Gt});
                 } else if (num &&
-                           (n.op == CompareOp::LT || n.op == CompareOp::LE)) {
+                           (n.op == CompareOp::Lt || n.op == CompareOp::Le)) {
                     tighten_hi(b.intervals[n.field.path].hi,
-                               Bound{*num, n.op == CompareOp::LT});
+                               Bound{*num, n.op == CompareOp::Lt});
                 } else {
                     b.residual.insert(to_string(node));  // NE, or non-numeric
                 }
-            } else if constexpr (std::is_same_v<T, InNode>) {
+            } else if constexpr (std::is_same_v<T, detail::InNode>) {
                 if (n.field.any) {
                     b.residual.insert(to_string(node));
                     return;
                 }
                 for (const auto& e : n.values.elements)
                     add_set_value(b, n.field.path, e.value);
-            } else if constexpr (std::is_same_v<T, OrNode>) {
+            } else if constexpr (std::is_same_v<T, detail::OrNode>) {
                 // An all-equality/IN-on-one-field `or` is a value set; any
                 // other disjunction stays an opaque residual.
-                std::string field;
-                std::map<std::string, std::optional<double>> vals;
+                dstd::String field;
+                dstd::HashMap<dstd::String, dstd::Optional<double>> vals;
                 if (or_to_set(node, field, vals))
                     for (const auto& [k, v] : vals) b.sets[field].emplace(k, v);
                 else
@@ -191,7 +199,7 @@ void flatten(const QueryNode& node, Buckets& b) {
 
 // Every value listed for `field` in `q` sets is numeric and inside `iv`.
 bool set_within_interval(
-    const std::map<std::string, std::optional<double>>& vals,
+    const dstd::HashMap<dstd::String, dstd::Optional<double>>& vals,
     const Interval& iv) {
     for (const auto& entry : vals) {
         const auto& num = entry.second;
@@ -204,7 +212,8 @@ bool set_within_interval(
 
 // Conjunctive containment: both predicates flattened to buckets, no top-level
 // disjunction (or is one opaque residual atom here).
-static bool conj_subsumes(const QueryNode& mv, const QueryNode& query) {
+static bool conj_subsumes(const detail::QueryNode& mv,
+                          const detail::QueryNode& query) {
     Buckets M, Q;
     flatten(mv, M);
     flatten(query, Q);
@@ -261,10 +270,11 @@ static bool conj_subsumes(const QueryNode& mv, const QueryNode& query) {
     return true;
 }
 
-bool query_subsumes(const QueryNode& mv, const QueryNode& query) {
+bool query_subsumes(const detail::QueryNode& mv,
+                    const detail::QueryNode& query) {
     // A top-level `or` on the query is a union: mv must subsume every branch.
     // Exact (rows(A or B) subset X iff rows(A) subset X and rows(B) subset X).
-    if (auto* o = std::get_if<OrNode>(&query.data))
+    if (auto* o = std::get_if<detail::OrNode>(&query.data))
         return query_subsumes(mv, *o->left) && query_subsumes(mv, *o->right);
     // Conjunctive match first - it also matches a whole `or` as an identical
     // residual (e.g. the query re-uses the mv's disjunction verbatim).
@@ -272,7 +282,7 @@ bool query_subsumes(const QueryNode& mv, const QueryNode& query) {
     // Otherwise a top-level `or` on the mv widens it: the query fits if it fits
     // some branch. Sound but incomplete - a query spanning branches is
     // declined.
-    if (auto* o = std::get_if<OrNode>(&mv.data))
+    if (auto* o = std::get_if<detail::OrNode>(&mv.data))
         return query_subsumes(*o->left, query) ||
                query_subsumes(*o->right, query);
     return false;

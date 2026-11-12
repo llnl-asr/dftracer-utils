@@ -13,7 +13,7 @@ Troubleshoot common problems
 A query returns nothing, "No trace files found" or "Not a gzip trace"
 ----------------------------------------------------------------------
 
-**Symptom**: ``TraceViewer("traces/")`` (or ``dftracer_view -d traces/``)
+**Symptom**: ``TraceViewer("traces/")`` (or ``dftracer_view traces/``)
 collects an empty result, the CLI logs ``No trace files found in: <dir>``,
 or a query fails with ``Not a gzip trace``.
 
@@ -21,13 +21,11 @@ or a query fails with ``Not a gzip trace``.
 files, plain or gzip; other names, ``.json`` included, are not trace
 files (pass a ``.json`` trace with ``--files``). An index
 reads gzip only, so a View or an ``Indexer`` fails on a plain file rather
-than reading it as empty. ``dftracer_view``, ``dftracer_run`` and
-``dftracer_index`` write a gzip copy of a plain file under ``split/`` and
-read that. The other common cause is a typo'd or relative path resolved
+than reading it as empty. The other common cause is a typo'd or relative path resolved
 from the wrong working directory.
 
 **Fix**: compress plain files (``dftracer_pgzip``, see
-:doc:`io/compression`) or read them through the CLI tools, and confirm the
+:doc:`io/compression`), and confirm the
 path with ``ls`` before re-running.
 
 The first query is slow, but a later one on the same data is fast

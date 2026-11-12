@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The ``DataFrame`` Python wrapper.
 
 ``DataFrame`` wraps the native ``_DataFrame`` handle: native frame ops plus
@@ -26,6 +27,7 @@ from typing import (
     Union,
     cast,
     get_args,
+    overload,
 )
 
 from . import dftracer_utils_ext as _ext
@@ -49,11 +51,11 @@ from .series import (
 )
 
 if TYPE_CHECKING:
-    import numpy as np  # ty: ignore[unresolved-import]
-    import pandas as pd  # ty: ignore[unresolved-import]
-    import polars as pl  # ty: ignore[unresolved-import]
-    import pyarrow as pa  # ty: ignore[unresolved-import]
-    from pandas.api.extensions import ExtensionArray  # ty: ignore[unresolved-import]
+    import numpy as np  # ty: ignore[import-not-found]
+    import pandas as pd  # ty: ignore[import-not-found]
+    import polars as pl  # ty: ignore[import-not-found]
+    import pyarrow as pa  # ty: ignore[import-not-found]
+    from pandas.api.extensions import ExtensionArray  # ty: ignore[import-not-found]
 
     from .columnar import Agg, ColumnExpr, GroupBy, Named
     from .indexing import At, ILoc, Loc, Resampler
@@ -507,7 +509,7 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
     def from_parquet(cls, path: str, columns: Optional[Sequence[str]] = None) -> "DataFrame":
         """Read a Parquet file into a frame (needs pyarrow)."""
         _require_pyarrow()
-        import pyarrow.parquet as pq  # ty: ignore[unresolved-import]
+        import pyarrow.parquet as pq  # ty: ignore[import-not-found]
 
         table = pq.read_table(path, columns=columns)
         # Dask writes its default index as a column of this name and lists it as
@@ -625,7 +627,7 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
         if arrow:
             out = _to_pandas(self.to_arrow(), arrow)
         else:
-            import pandas as pd  # ty: ignore[unresolved-import]
+            import pandas as pd  # ty: ignore[import-not-found]
 
             def one(name: str) -> "Union[pd.Series, np.ndarray, ExtensionArray]":
                 col = self._native[name]
@@ -642,7 +644,7 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
         polars raises its own error), without pyarrow; otherwise each column
         uses the native conversion."""
         try:
-            import polars as pl  # ty: ignore[unresolved-import]
+            import polars as pl  # ty: ignore[import-not-found]
         except ImportError:
             raise ImportError(
                 "polars is required for to_polars(). Install with: pip install polars"
@@ -655,6 +657,10 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
             return pl.DataFrame(self)
         return pl.DataFrame({name: self[name].to_polars() for name in self.columns})
 
+    @overload
+    def __getitem__(self, key: str) -> Series: ...
+    @overload
+    def __getitem__(self, key: "Union[Sequence[str], Series]") -> "DataFrame": ...
     def __getitem__(self, key: "Union[str, Sequence[str], Series]") -> "Union[Series, DataFrame]":
         """``df["a"]`` is a column; ``df[["a", "b"]]`` a projection; ``df[mask]``
         with a Bool Series the matching rows (the pandas spellings)."""
@@ -824,7 +830,7 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
         the last, and ``False`` marks every one of them. Nulls compare
         equal."""
         cols = list(self.columns) if subset is None else _names(subset)
-        frame = cast("DataFrame", self[cols])
+        frame = self[cols]
         if keep is False:
             return cast("Series", _wrap(frame._native.is_duplicated()))
         if keep == "last":
@@ -881,7 +887,7 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
         keys = _names(index)
         if len(keys) == 1 and aggfunc in get_args(PivotAgg):
             return self.pivot(keys[0], columns, values, cast("PivotAgg", aggfunc))
-        picked = cast("DataFrame", self[keys + [columns, values]])
+        picked = self[keys + [columns, values]]
         cells = getattr(picked.groupby(keys + [columns]), aggfunc)()
         row = "__dftu_pivot_row__"
         cells = cells.assign(**{row: cells.groupby(keys).ngroup()["ngroup"]})

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """String columns over a View, dictionary export, Arrow slices and IPC."""
 
 import gzip

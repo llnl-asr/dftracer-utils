@@ -1,18 +1,22 @@
+// SPDX-License-Identifier: MIT
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/kernels/order.h>
+#include <dftracer/utils/dstd/fatal.h>
+#include <dftracer/utils/dstd/fmt.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <numeric>
-#include <stdexcept>
-#include <string>
 
 namespace dftracer::utils::dataframe {
 
 namespace {
 
-std::optional<ColumnView::Kind> kind_of(TypeId t) {
+dstd::Optional<ColumnView::Kind> kind_of(TypeId t) {
     switch (physical_type(t)) {
         case TypeId::Bool:
         case TypeId::Int8:
@@ -34,7 +38,7 @@ std::optional<ColumnView::Kind> kind_of(TypeId t) {
         case TypeId::LargeBinary:
             return ColumnView::Kind::Bytes;
         default:
-            return std::nullopt;
+            return dstd::nullopt;
     }
 }
 
@@ -53,19 +57,22 @@ ColumnView::ColumnView(const Series& column)
     type_ = column_.type();
     const auto kind = kind_of(type_);
     if (!kind)
-        throw std::invalid_argument(std::string("column type '") +
-                                    type_name(type_) + "' has no order");
+        dstd::fatal(
+            dstd::fmt<
+                "column type '{}' has no order; check ColumnView::supports "
+                "first">(type_name(type_))
+                .c_str());
     kind_ = *kind;
     physical_ = physical_type(type_);
     const dftu_series& h = *column_.handle();
     length_ = h.length;
-    data_ = h.data ? h.data->data() : nullptr;
-    validity_ = h.validity ? h.validity->data() : nullptr;
+    data_ = h.data.block() ? h.data.data() : nullptr;
+    validity_ = h.validity.block() ? h.validity.data() : nullptr;
     if (kind_ == Kind::Bytes) {
         if (h.wide_offsets())
-            off64_ = reinterpret_cast<const std::int64_t*>(h.offsets->data());
+            off64_ = reinterpret_cast<const std::int64_t*>(h.offsets.data());
         else
-            off32_ = reinterpret_cast<const std::int32_t*>(h.offsets->data());
+            off32_ = reinterpret_cast<const std::int32_t*>(h.offsets.data());
     }
 }
 
@@ -130,14 +137,14 @@ double ColumnView::get_double(std::int64_t i) const noexcept {
     }
 }
 
-std::string_view ColumnView::get_bytes(std::int64_t i) const noexcept {
+dstd::StringView ColumnView::get_bytes(std::int64_t i) const noexcept {
     const auto at = static_cast<std::size_t>(i);
     const char* d = reinterpret_cast<const char*>(data_);
     if (off64_ != nullptr)
-        return std::string_view(
+        return dstd::StringView(
             d + off64_[at],
             static_cast<std::size_t>(off64_[at + 1] - off64_[at]));
-    return std::string_view(
+    return dstd::StringView(
         d + off32_[at], static_cast<std::size_t>(off32_[at + 1] - off32_[at]));
 }
 
@@ -151,17 +158,17 @@ int ColumnView::compare(std::int64_t a, const ColumnView& other,
         case Kind::Float:
             return compare_doubles(get_double(a), other.get_double(b));
         default: {
-            const std::string_view x = get_bytes(a);
-            const std::string_view y = other.get_bytes(b);
+            const dstd::StringView x = get_bytes(a);
+            const dstd::StringView y = other.get_bytes(b);
             const int c = x.compare(y);
             return c < 0 ? -1 : (c > 0 ? 1 : 0);
         }
     }
 }
 
-std::vector<std::int64_t> order_rows(const std::vector<ColumnView>& keys,
-                                     std::int64_t n) {
-    std::vector<std::int64_t> order(static_cast<std::size_t>(n));
+dstd::Vector<std::int64_t> order_rows(const dstd::Vector<ColumnView>& keys,
+                                      std::int64_t n) {
+    dstd::Vector<std::int64_t> order(static_cast<std::size_t>(n));
     std::iota(order.begin(), order.end(), 0);
     if (keys.empty()) return order;
     std::sort(order.begin(), order.end(), [&](std::int64_t a, std::int64_t b) {
@@ -180,7 +187,7 @@ std::vector<std::int64_t> order_rows(const std::vector<ColumnView>& keys,
     return order;
 }
 
-bool same_keys(const std::vector<ColumnView>& keys, std::int64_t a,
+bool same_keys(const dstd::Vector<ColumnView>& keys, std::int64_t a,
                std::int64_t b) {
     for (const ColumnView& k : keys) {
         const bool na = k.is_null(a);
@@ -191,8 +198,8 @@ bool same_keys(const std::vector<ColumnView>& keys, std::int64_t a,
     return true;
 }
 
-std::int64_t run_end(const std::vector<ColumnView>& keys,
-                     const std::vector<std::int64_t>& order,
+std::int64_t run_end(const dstd::Vector<ColumnView>& keys,
+                     const dstd::Vector<std::int64_t>& order,
                      std::int64_t begin) {
     const auto n = static_cast<std::int64_t>(order.size());
     const std::int64_t rep = order[static_cast<std::size_t>(begin)];

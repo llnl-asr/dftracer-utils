@@ -1,31 +1,44 @@
+// SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/tuple.h>
+#include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/trace/views/view_plan_ops.h>
 #include <dftracer/utils/trace/views/view_scan.h>
 #include <dftracer/utils/trace/views/view_source.h>
 #include <doctest/doctest.h>
+#include <generator_ok.h>
+#include <task_result.h>
+#include <testing_utilities.h>
+#include <trace/views/test_view_common.h>
 
 #include <algorithm>
 #include <fstream>
-#include <map>
 #include <memory>
-#include <set>
-#include <string>
-#include <vector>
 
-#include "test_view_common.h"
+using namespace dftracer::utils;
+using namespace dftracer::utils::trace::internal;
+using namespace dftracer::utils::trace::views;
+using namespace dftu_utils_test;
+using namespace test_view_common;
 
 namespace {
 
 // A multi-member trace whose members carry different arg keys (x on the
 // first half, y on the second), so a per-batch morsel's columns differ and
 // the streaming path must exercise name-based reconciliation.
-std::string create_mixed_arg_trace(TestEnvironment& env) {
-    std::string pfw = env.get_dir() + "/mixed_args.pfw";
-    std::ofstream ofs(pfw);
+dstd::String create_mixed_arg_trace(TestEnvironment& env) {
+    dstd::String pfw = env.dir() + "/mixed_args.pfw";
+    dftu_utils_test::FileOut ofs(pfw);
     for (int i = 0; i < 25; ++i)
         ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
             << (1000 + i * 100) << R"(,"dur":)" << (10 + i)
@@ -35,19 +48,19 @@ std::string create_mixed_arg_trace(TestEnvironment& env) {
             << (4000 + i * 100) << R"(,"dur":)" << (10 + i)
             << R"(,"args":{"y":)" << i << R"(}})" << "\n";
     ofs.close();
-    std::string gz = pfw + ".gz";
+    dstd::String gz = pfw + ".gz";
     // A small member size forces the x-events and y-events into separate
     // gzip members, so the scan splits them into separate batches/morsels.
     dftu_utils_test::compress_file_to_gzip_multimember(pfw, gz, 512);
-    fs::remove(pfw);
+    dstd::fs::remove(pfw).discard();
     return gz;
 }
 
 // (name, x, y) tuples, sorted for order-independent comparison across the
 // streaming (fan-out order) and buffered (accumulate-then-build) paths.
-std::vector<std::tuple<std::string, double, double>> row_key_set(
+dstd::Vector<dstd::Tuple<dstd::String, double, double>> row_key_set(
     const dataframe::DataFrame& df) {
-    std::vector<std::tuple<std::string, double, double>> rows;
+    dstd::Vector<dstd::Tuple<dstd::String, double, double>> rows;
     const bool has_x = bhas(df, "args.x");
     const bool has_y = bhas(df, "args.y");
     for (std::int64_t i = 0; i < df.num_rows(); ++i) {
@@ -67,26 +80,55 @@ std::vector<std::tuple<std::string, double, double>> row_key_set(
     return rows;
 }
 
+// 40 events whose args carry exactly `keys`, in a trace named `name`.
+dstd::String create_args_trace(TestEnvironment& env, const dstd::String& name,
+                               const dstd::Vector<dstd::String>& keys) {
+    const dstd::String pfw = env.dir() + "/" + name + ".pfw";
+    dftu_utils_test::FileOut ofs(pfw);
+    for (int i = 0; i < 40; ++i) {
+        ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
+            << (1000 + i * 100) << R"(,"dur":)" << (10 + i) << R"(,"args":{)";
+        for (std::size_t k = 0; k < keys.size(); ++k)
+            ofs << (k ? "," : "") << '"' << keys[k] << R"(":)" << i;
+        ofs << "}}\n";
+    }
+    ofs.close();
+    const dstd::String gz = pfw + ".gz";
+    dftu_utils_test::compress_file_to_gzip_multimember(pfw, gz, 512);
+    dstd::fs::remove(pfw).has_value();
+    return gz;
+}
+
+dstd::Set<dstd::String> arg_columns(const dataframe::DataFrame& df) {
+    dstd::Set<dstd::String> out;
+    for (const dstd::String& n : df.names)
+        if (n.rfind("args.", 0) == 0) out.insert(dstd::String(n));
+    return out;
+}
+
 }  // namespace
 
-namespace scan = dftracer::utils::trace::views::detail::scan;
+using namespace dftracer::utils::trace;
 
 namespace {
 
 constexpr int DISTINCT_EVENTS = 900;
 
-std::string distinct_run(int i) { return "r" + std::to_string((i * i) % 17); }
-std::string distinct_metric(int i) {
-    return "m" + std::to_string((i / 7 + i % 5) % 9);
+dstd::String distinct_run(int i) {
+    const auto u = static_cast<unsigned>(i);
+    return "r" + dstd::to_string((u * u) % 17);
+}
+dstd::String distinct_metric(int i) {
+    return "m" + dstd::to_string((i / 7 + i % 5) % 9);
 }
 
 // 900 events whose (run, metric) pairs first appear at scattered rows, written
 // into many small gzip members and indexed with a tiny checkpoint size, so the
 // scan has many units and first occurrences land in different ones.
-std::string create_distinct_trace(TestEnvironment& env,
-                                  const std::string& idx_dir) {
-    std::string pfw = env.get_dir() + "/distinct.pfw";
-    std::ofstream ofs(pfw);
+dstd::String create_distinct_trace(TestEnvironment& env,
+                                   const dstd::String& idx_dir) {
+    dstd::String pfw = env.dir() + "/distinct.pfw";
+    dftu_utils_test::FileOut ofs(pfw);
     for (int i = 0; i < DISTINCT_EVENTS; ++i) {
         static const char* const NAMES[] = {"read", "write", "open", "lseek"};
         ofs << R"({"ph":"X","name":")" << NAMES[i % 4]
@@ -95,9 +137,9 @@ std::string create_distinct_trace(TestEnvironment& env,
             << distinct_metric(i) << R"(","val":)" << (i % 5) << "}\n";
     }
     ofs.close();
-    std::string gz = pfw + ".gz";
+    dstd::String gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip_multimember(pfw, gz, 512);
-    fs::remove(pfw);
+    dstd::fs::remove(pfw).has_value();
     REQUIRE(dftu_utils_test::build_index(gz, idx_dir,
                                          /*checkpoint_size=*/256));
     return gz;
@@ -106,15 +148,81 @@ std::string create_distinct_trace(TestEnvironment& env,
 }  // namespace
 
 TEST_SUITE("trace scan - streaming row query") {
+    TEST_CASE("a select-all frame holds only its own trace's args columns") {
+        TestEnvironment env(200);
+        const dstd::String gz_a = create_args_trace(env, "trace_a", {"a", "b"});
+        const dstd::String gz_b = create_args_trace(env, "trace_b", {"c"});
+        const dstd::Set<dstd::String> only_a{"args.a", "args.b"};
+        const dstd::Set<dstd::String> only_b{"args.c"};
+
+        const auto plan_a = views::detail::scan::from_file(
+            dstd::String(gz_a),
+            dstd::String(dstd::String(determine_index_path(gz_a, ""))));
+        CHECK(arg_columns(run(
+                  views::detail::scan::collect(plan_a).collect())) == only_a);
+
+        const auto plan_b = views::detail::scan::from_file(
+            dstd::String(gz_b),
+            dstd::String(dstd::String(determine_index_path(gz_b, ""))));
+        CHECK(arg_columns(run(
+                  views::detail::scan::collect(plan_b).collect())) == only_b);
+        CHECK(arg_columns(run(views::detail::scan::collect_frame(plan_b))) ==
+              only_b);
+
+        // The schema a plan declares comes from the index it reads, which
+        // here holds both traces.
+        dstd::Vector<dstd::String> schema_b;
+        for (const auto& name :
+             dftu_utils_test::ok(views::detail::scan::columns(plan_b)))
+            schema_b.emplace_back(name);
+        CHECK(std::find(schema_b.begin(), schema_b.end(), "a") ==
+              schema_b.end());
+        CHECK(std::find(schema_b.begin(), schema_b.end(), "c") !=
+              schema_b.end());
+        dataframe::Schema declared = ViewSource(plan_b).schema();
+        dstd::Set<dstd::String> declared_args;
+        for (const auto& f : declared.fields)
+            if (f.name.rfind("args.", 0) == 0)
+                declared_args.insert(dstd::String(f.name));
+        CHECK(declared_args == only_b);
+    }
+
+    TEST_CASE("traces sharing one index root keep their own args columns") {
+        TestEnvironment env(200);
+        const dstd::String gz_a = create_args_trace(env, "trace_a", {"a", "b"});
+        const dstd::String gz_b = create_args_trace(env, "trace_b", {"c"});
+        const dstd::String idx_dir = env.dir() + "/shared.dftindex";
+        REQUIRE(dftu_utils_test::build_index(gz_a, idx_dir, 256));
+        REQUIRE(dftu_utils_test::build_index(gz_b, idx_dir, 256));
+
+        const auto plan_a = views::detail::scan::from_file(
+            dstd::String(gz_a),
+            dstd::String(dstd::String(determine_index_path(gz_a, idx_dir))));
+        CHECK(
+            arg_columns(run(views::detail::scan::collect(plan_a).collect())) ==
+            dstd::Set<dstd::String>{"args.a", "args.b"});
+        const auto plan_b = views::detail::scan::from_file(
+            dstd::String(gz_b),
+            dstd::String(dstd::String(determine_index_path(gz_b, idx_dir))));
+        CHECK(
+            arg_columns(run(views::detail::scan::collect(plan_b).collect())) ==
+            dstd::Set<dstd::String>{"args.c"});
+        CHECK(arg_columns(run(views::detail::scan::collect_frame(plan_b))) ==
+              dstd::Set<dstd::String>{"args.c"});
+    }
+
     TEST_CASE(
         "collect() streaming row query matches the buffered collect_frame()") {
         TestEnvironment env(200);
-        std::string gz = create_mixed_arg_trace(env);
-        std::string idx = determine_index_path(gz, "");
-        scan::ScanPlan v = scan::from_file(gz, idx);
+        dstd::String gz = create_mixed_arg_trace(env);
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
+        views::detail::scan::ScanPlan v =
+            views::detail::scan::from_file(dstd::String(gz), dstd::String(idx));
 
-        dataframe::DataFrame via_lazy = run(scan::collect(v).collect());
-        dataframe::DataFrame via_eager = run(scan::collect_frame(v));
+        dataframe::DataFrame via_lazy =
+            run(views::detail::scan::collect(v).collect());
+        dataframe::DataFrame via_eager =
+            run(views::detail::scan::collect_frame(v));
 
         REQUIRE(via_lazy.num_rows() == 50);
         REQUIRE(via_lazy.num_rows() == via_eager.num_rows());
@@ -128,17 +236,20 @@ TEST_SUITE("trace scan - streaming row query") {
 
     TEST_CASE("scan::stream() drained matches scan::collect()") {
         TestEnvironment env(200);
-        std::string gz = create_mixed_arg_trace(env);
-        std::string idx = determine_index_path(gz, "");
-        scan::ScanPlan v = scan::from_file(gz, idx);
+        dstd::String gz = create_mixed_arg_trace(env);
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
+        views::detail::scan::ScanPlan v =
+            views::detail::scan::from_file(dstd::String(gz), dstd::String(idx));
 
-        auto drain = [](const scan::ScanPlan& view) {
+        auto drain = [](const views::detail::scan::ScanPlan& view) {
             return dftracer::utils::default_runtime()
-                .submit([](scan::ScanPlan vv)
-                            -> coro::CoroTask<std::vector<
-                                std::tuple<std::string, double, double>>> {
-                    std::vector<std::tuple<std::string, double, double>> rows;
-                    auto gen = scan::stream(vv);
+                .submit([](views::detail::scan::ScanPlan vv)
+                            -> coro::CoroTask<dstd::Vector<
+                                dstd::Tuple<dstd::String, double, double>>> {
+                    dstd::Vector<dstd::Tuple<dstd::String, double, double>>
+                        rows;
+                    auto gen = dftu_utils_test::ok_items(
+                        views::detail::scan::stream(vv));
                     while (auto chunk = co_await gen.next()) {
                         auto part = row_key_set(*chunk);
                         rows.insert(rows.end(), part.begin(), part.end());
@@ -148,10 +259,11 @@ TEST_SUITE("trace scan - streaming row query") {
                 .get();
         };
 
-        std::vector<std::tuple<std::string, double, double>> via_stream =
-            drain(v);
+        dstd::Vector<dstd::Tuple<dstd::String, double, double>> via_stream =
+            dftu_utils_test::ok(drain(v));
         std::sort(via_stream.begin(), via_stream.end());
-        dataframe::DataFrame via_collect = run(scan::collect(v).collect());
+        dataframe::DataFrame via_collect =
+            run(views::detail::scan::collect(v).collect());
 
         REQUIRE(static_cast<std::int64_t>(via_stream.size()) ==
                 via_collect.num_rows());
@@ -160,11 +272,15 @@ TEST_SUITE("trace scan - streaming row query") {
 
     TEST_CASE("collect() falls back to buffered collect_frame() with select") {
         const auto& s = shared_trace();
-        scan::ScanPlan v =
-            scan::select(scan::from_file(s.gz, s.idx), {"cat", "name"});
+        views::detail::scan::ScanPlan v = views::detail::scan::select(
+            views::detail::scan::from_file(dstd::String(s.gz),
+                                           dstd::String(s.idx)),
+            {"cat", "name"});
 
-        dataframe::DataFrame via_lazy = run(scan::collect(v).collect());
-        dataframe::DataFrame via_eager = run(scan::collect_frame(v));
+        dataframe::DataFrame via_lazy =
+            run(views::detail::scan::collect(v).collect());
+        dataframe::DataFrame via_eager =
+            run(views::detail::scan::collect_frame(v));
 
         REQUIRE(via_lazy.num_rows() == via_eager.num_rows());
         CHECK(via_lazy.columns.size() == 2);
@@ -174,26 +290,30 @@ TEST_SUITE("trace scan - streaming row query") {
     TEST_CASE(
         "scan::stream() bounds a buffered select-plan into multiple chunks") {
         const auto& s = shared_trace();  // 50 rows
-        scan::ScanPlan v =
-            scan::select(scan::from_file(s.gz, s.idx), {"cat", "name"});
+        views::detail::scan::ScanPlan v = views::detail::scan::select(
+            views::detail::scan::from_file(dstd::String(s.gz),
+                                           dstd::String(s.idx)),
+            {"cat", "name"});
 
-        auto [chunks, rows] =
+        auto [chunks, rows] = dftu_utils_test::ok(
             dftracer::utils::default_runtime()
-                .submit([](scan::ScanPlan vv)
+                .submit([](views::detail::scan::ScanPlan vv)
                             -> coro::CoroTask<
-                                std::pair<std::size_t, std::int64_t>> {
+                                dstd::Pair<std::size_t, std::int64_t>> {
                     std::size_t n = 0;
                     std::int64_t nrows = 0;
-                    auto gen = scan::stream(vv, 10);
+                    auto gen = dftu_utils_test::ok_items(
+                        views::detail::scan::stream(vv, 10));
                     while (auto chunk = co_await gen.next()) {
                         ++n;
                         nrows += chunk->num_rows();
                     }
-                    co_return std::make_pair(n, nrows);
+                    co_return dstd::make_pair(n, nrows);
                 }(v))
-                .get();
+                .get());
 
-        dataframe::DataFrame via_collect = run(scan::collect(v).collect());
+        dataframe::DataFrame via_collect =
+            run(views::detail::scan::collect(v).collect());
         CHECK(chunks > 1);
         CHECK(rows == via_collect.num_rows());
     }
@@ -202,29 +322,34 @@ TEST_SUITE("trace scan - streaming row query") {
         "scan::stream() with select+sort+limit streams multiple bounded "
         "chunks matching collect()") {
         const auto& s = shared_trace();  // 50 rows
-        scan::ScanPlan v =
-            scan::limit(scan::sort_by(scan::select(scan::from_file(s.gz, s.idx),
-                                                   {"cat", "name", "dur"}),
-                                      "dur", /*descending=*/true),
-                        20);
+        views::detail::scan::ScanPlan v = views::detail::scan::limit(
+            views::detail::scan::sort_by(
+                views::detail::scan::select(
+                    views::detail::scan::from_file(dstd::String(s.gz),
+                                                   dstd::String(s.idx)),
+                    {"cat", "name", "dur"}),
+                "dur", /*descending=*/true),
+            20);
 
-        auto [chunks, rows] =
+        auto [chunks, rows] = dftu_utils_test::ok(
             dftracer::utils::default_runtime()
-                .submit([](scan::ScanPlan vv)
+                .submit([](views::detail::scan::ScanPlan vv)
                             -> coro::CoroTask<
-                                std::pair<std::size_t, std::int64_t>> {
+                                dstd::Pair<std::size_t, std::int64_t>> {
                     std::size_t n = 0;
                     std::int64_t nrows = 0;
-                    auto gen = scan::stream(vv, 5);
+                    auto gen = dftu_utils_test::ok_items(
+                        views::detail::scan::stream(vv, 5));
                     while (auto chunk = co_await gen.next()) {
                         ++n;
                         nrows += chunk->num_rows();
                     }
-                    co_return std::make_pair(n, nrows);
+                    co_return dstd::make_pair(n, nrows);
                 }(v))
-                .get();
+                .get());
 
-        dataframe::DataFrame via_collect = run(scan::collect(v).collect());
+        dataframe::DataFrame via_collect =
+            run(views::detail::scan::collect(v).collect());
         CHECK(chunks > 1);
         CHECK(rows == via_collect.num_rows());
         REQUIRE(via_collect.num_rows() == 20);
@@ -239,17 +364,23 @@ TEST_SUITE("trace scan - streaming row query") {
         "aggregated trace scan sort_by+limit is identical whether run via "
         "collect() or collect_frame()") {
         TestEnvironment env(200);
-        std::string gz = create_mixed_arg_trace(env);
-        std::string idx = determine_index_path(gz, "");
-        scan::ScanPlan v = scan::limit(
-            scan::sort_by(scan::agg(scan::group_by(scan::from_file(gz, idx),
-                                                   {GroupKey::name()}),
-                                    {{AggOp::Count, "", "n"}}),
-                          "n", /*descending=*/true),
+        dstd::String gz = create_mixed_arg_trace(env);
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
+        views::detail::scan::ScanPlan v = views::detail::scan::limit(
+            views::detail::scan::sort_by(
+                views::detail::scan::agg(
+                    views::detail::scan::group_by(
+                        views::detail::scan::from_file(dstd::String(gz),
+                                                       dstd::String(idx)),
+                        {GroupKey::name()}),
+                    {{AggOp::Count, "", "n"}}),
+                "n", /*descending=*/true),
             1);
 
-        dataframe::DataFrame via_lazy = run(scan::collect(v).collect());
-        dataframe::DataFrame via_eager = run(scan::collect_frame(v));
+        dataframe::DataFrame via_lazy =
+            run(views::detail::scan::collect(v).collect());
+        dataframe::DataFrame via_eager =
+            run(views::detail::scan::collect_frame(v));
 
         REQUIRE(via_lazy.num_rows() == 1);
         REQUIRE(via_lazy.num_rows() == via_eager.num_rows());
@@ -259,13 +390,34 @@ TEST_SUITE("trace scan - streaming row query") {
         CHECK(bnum(via_lazy, 0, "n") == bnum(via_eager, 0, "n"));
     }
 
-    TEST_CASE("ViewSource pushdown: col filter -> Query (Exact), matches") {
-        namespace df = dftracer::utils::dataframe;
-        const auto& s = shared_trace();
-        scan::ScanPlan v = scan::from_file(s.gz, s.idx);
-        auto src = std::make_shared<ViewSource>(v);
+    TEST_CASE("a ViewSource whose scan fails returns the error, not a throw") {
+        TestEnvironment env(200);
+        dstd::String gz = create_mixed_arg_trace(env);
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
+        views::detail::scan::ScanPlan v = views::detail::scan::agg(
+            views::detail::scan::group_by(
+                views::detail::scan::from_file(dstd::String(gz),
+                                               dstd::String(idx)),
+                {GroupKey::name()}),
+            {{AggOp::Count, "", "n"}});
+        auto src = dstd::make_shared<ViewSource>(v);
 
-        const std::vector<std::string> names = src->names();
+        dataframe::ScanRequest req;
+        req.projection = {"no_such_column"};
+        const auto scanned = src->scan(req);
+        REQUIRE_FALSE(scanned.has_value());
+        CHECK(
+            dstd::StringView(scanned.error().c_str()).find("no_such_column") !=
+            dstd::StringView::npos);
+    }
+
+    TEST_CASE("ViewSource pushdown: col filter -> Query (Exact), matches") {
+        const auto& s = shared_trace();
+        views::detail::scan::ScanPlan v = views::detail::scan::from_file(
+            dstd::String(s.gz), dstd::String(s.idx));
+        auto src = dstd::make_shared<ViewSource>(v);
+
+        const dstd::Vector<dstd::String> names = src->names();
         int di = -1;
         for (int i = 0; i < static_cast<int>(names.size()); ++i)
             if (names[i] == "dur") di = i;
@@ -273,18 +425,20 @@ TEST_SUITE("trace scan - streaming row query") {
 
         // Direct scan(): the predicate is translatable and fully applied by the
         // trace scan, so it comes back Exact.
-        df::ScanRequest req;
-        req.filters.push_back(df::col(di) > std::int64_t{25});
-        df::ScanResult sr = src->scan(req);
+        dataframe::ScanRequest req;
+        req.filters.push_back(dataframe::col(di) > std::int64_t{25});
+        dataframe::ScanResult sr = dftu_utils_test::ok(src->scan(req));
         REQUIRE(sr.filters.size() == 1);
-        CHECK(sr.filters[0] == df::Pushed::Exact);
+        CHECK(sr.filters[0] == dataframe::Pushed::Exact);
 
         // End-to-end: the pushed-down result equals engine-applied filtering
         // over the unfiltered events.
-        df::DataFrame filtered = run(df::LazyFrame::scan(src)
-                                         .filter(df::col(di) > std::int64_t{25})
-                                         .collect());
-        df::DataFrame all = run(scan::collect(v).collect());
+        dataframe::DataFrame filtered =
+            run(dataframe::LazyFrame::scan(src)
+                    .filter(dataframe::col(di) > std::int64_t{25})
+                    .collect());
+        dataframe::DataFrame all =
+            run(views::detail::scan::collect(v).collect());
         std::int64_t expect = 0;
         for (std::int64_t i = 0; i < all.num_rows(); ++i)
             if (bnum(all, i, "dur") > 25) ++expect;
@@ -295,12 +449,12 @@ TEST_SUITE("trace scan - streaming row query") {
     }
 
     TEST_CASE("ViewSource pushdown: non-translatable filter falls back (No)") {
-        namespace df = dftracer::utils::dataframe;
         const auto& s = shared_trace();
-        scan::ScanPlan v = scan::from_file(s.gz, s.idx);
-        auto src = std::make_shared<ViewSource>(v);
+        views::detail::scan::ScanPlan v = views::detail::scan::from_file(
+            dstd::String(s.gz), dstd::String(s.idx));
+        auto src = dstd::make_shared<ViewSource>(v);
 
-        const std::vector<std::string> names = src->names();
+        const dstd::Vector<dstd::String> names = src->names();
         int di = -1;
         for (int i = 0; i < static_cast<int>(names.size()); ++i)
             if (names[i] == "dur") di = i;
@@ -308,16 +462,18 @@ TEST_SUITE("trace scan - streaming row query") {
 
         // (dur + dur) > 50 is not a bare col-cmp-scalar, so it cannot be
         // translated to a Query; the engine applies it instead.
-        df::Expr pred = (df::col(di) + df::col(di)) > std::int64_t{50};
-        df::ScanRequest req;
+        dataframe::Expr pred =
+            (dataframe::col(di) + dataframe::col(di)) > std::int64_t{50};
+        dataframe::ScanRequest req;
         req.filters.push_back(pred);
-        df::ScanResult sr = src->scan(req);
+        dataframe::ScanResult sr = dftu_utils_test::ok(src->scan(req));
         REQUIRE(sr.filters.size() == 1);
-        CHECK(sr.filters[0] == df::Pushed::No);
+        CHECK(sr.filters[0] == dataframe::Pushed::No);
 
-        df::DataFrame got =
-            run(df::LazyFrame::scan(src).filter(pred).collect());
-        df::DataFrame all = run(scan::collect(v).collect());
+        dataframe::DataFrame got =
+            run(dataframe::LazyFrame::scan(src).filter(pred).collect());
+        dataframe::DataFrame all =
+            run(views::detail::scan::collect(v).collect());
         std::int64_t expect = 0;
         for (std::int64_t i = 0; i < all.num_rows(); ++i)
             if (2 * bnum(all, i, "dur") > 50) ++expect;
@@ -328,90 +484,90 @@ TEST_SUITE("trace scan - streaming row query") {
     }
 
     TEST_CASE("ViewSource pushdown: string predicates and is_in") {
-        namespace df = dftracer::utils::dataframe;
         const auto& s = shared_trace();  // 30 "read" + 20 "fwrite"
-        scan::ScanPlan v = scan::from_file(s.gz, s.idx);
-        auto src = std::make_shared<ViewSource>(v);
+        views::detail::scan::ScanPlan v = views::detail::scan::from_file(
+            dstd::String(s.gz), dstd::String(s.idx));
+        auto src = dstd::make_shared<ViewSource>(v);
 
-        const std::vector<std::string> names = src->names();
+        const dstd::Vector<dstd::String> names = src->names();
         int ni = -1;
         for (int i = 0; i < static_cast<int>(names.size()); ++i)
             if (names[i] == "name") ni = i;
         REQUIRE(ni >= 0);
 
-        auto pushed_as = [&](const df::Expr& pred) {
-            df::ScanRequest req;
+        auto pushed_as = [&](const dataframe::Expr& pred) {
+            dataframe::ScanRequest req;
             req.filters.push_back(pred);
-            df::ScanResult sr = src->scan(req);
+            dataframe::ScanResult sr = dftu_utils_test::ok(src->scan(req));
             REQUIRE(sr.filters.size() == 1);
             return sr.filters[0];
         };
-        auto scanned = [&](const df::Expr& pred) {
-            df::DataFrame out =
-                run(df::LazyFrame::scan(src).filter(pred).collect());
-            std::map<std::string, std::int64_t> by_name;
+        auto scanned = [&](const dataframe::Expr& pred) {
+            dataframe::DataFrame out =
+                run(dataframe::LazyFrame::scan(src).filter(pred).collect());
+            dstd::Map<dstd::String, std::int64_t> by_name;
             for (std::int64_t i = 0; i < out.num_rows(); ++i)
                 ++by_name[bstr(out, i, "name")];
             return by_name;
         };
-        using M = std::map<std::string, std::int64_t>;
+        using M = dstd::Map<dstd::String, std::int64_t>;
 
         SUBCASE("like pushes exactly") {
-            df::Expr pred =
-                df::expr_str_pred(df::StrPredOp::Like, df::col(ni), "fw%");
-            CHECK(pushed_as(pred) == df::Pushed::Exact);
+            dataframe::Expr pred = dataframe::expr_str_pred(
+                dataframe::StrPredOp::Like, dataframe::col(ni), "fw%");
+            CHECK(pushed_as(pred) == dataframe::Pushed::Exact);
             CHECK(scanned(pred) == M{{"fwrite", 20}});
         }
         SUBCASE("starts_with and ends_with push as an escaped like") {
-            df::Expr pre =
-                df::expr_str_pred(df::StrPredOp::StartsWith, df::col(ni), "re");
-            CHECK(pushed_as(pre) == df::Pushed::Exact);
+            dataframe::Expr pre = dataframe::expr_str_pred(
+                dataframe::StrPredOp::StartsWith, dataframe::col(ni), "re");
+            CHECK(pushed_as(pre) == dataframe::Pushed::Exact);
             CHECK(scanned(pre) == M{{"read", 30}});
-            df::Expr suf =
-                df::expr_str_pred(df::StrPredOp::EndsWith, df::col(ni), "ite");
-            CHECK(pushed_as(suf) == df::Pushed::Exact);
+            dataframe::Expr suf = dataframe::expr_str_pred(
+                dataframe::StrPredOp::EndsWith, dataframe::col(ni), "ite");
+            CHECK(pushed_as(suf) == dataframe::Pushed::Exact);
             CHECK(scanned(suf) == M{{"fwrite", 20}});
             // A wildcard in the literal is escaped, so it matches nothing here
             // rather than everything.
-            df::Expr lit =
-                df::expr_str_pred(df::StrPredOp::StartsWith, df::col(ni), "%");
-            CHECK(pushed_as(lit) == df::Pushed::Exact);
+            dataframe::Expr lit = dataframe::expr_str_pred(
+                dataframe::StrPredOp::StartsWith, dataframe::col(ni), "%");
+            CHECK(pushed_as(lit) == dataframe::Pushed::Exact);
             CHECK(scanned(lit).empty());
         }
         SUBCASE("contains pushes as a case-insensitive superset, Inexact") {
-            df::Expr pred =
-                df::expr_str_pred(df::StrPredOp::Contains, df::col(ni), "ea");
-            CHECK(pushed_as(pred) == df::Pushed::Inexact);
+            dataframe::Expr pred = dataframe::expr_str_pred(
+                dataframe::StrPredOp::Contains, dataframe::col(ni), "ea");
+            CHECK(pushed_as(pred) == dataframe::Pushed::Inexact);
             CHECK(scanned(pred) == M{{"read", 30}});
             // The engine re-applies the case-sensitive form over the superset.
-            df::Expr upper =
-                df::expr_str_pred(df::StrPredOp::Contains, df::col(ni), "EA");
-            CHECK(pushed_as(upper) == df::Pushed::Inexact);
+            dataframe::Expr upper = dataframe::expr_str_pred(
+                dataframe::StrPredOp::Contains, dataframe::col(ni), "EA");
+            CHECK(pushed_as(upper) == dataframe::Pushed::Inexact);
             CHECK(scanned(upper).empty());
         }
         SUBCASE("regex stays with the engine") {
-            df::Expr pred =
-                df::expr_str_pred(df::StrPredOp::Search, df::col(ni), "^f");
-            CHECK(pushed_as(pred) == df::Pushed::No);
+            dataframe::Expr pred = dataframe::expr_str_pred(
+                dataframe::StrPredOp::Search, dataframe::col(ni), "^f");
+            CHECK(pushed_as(pred) == dataframe::Pushed::No);
             CHECK(scanned(pred) == M{{"fwrite", 20}});
         }
         SUBCASE("is_in pushes exactly") {
-            df::Expr pred =
-                df::expr_is_in(df::col(ni), df::Series::strings({"read", "x"}));
-            CHECK(pushed_as(pred) == df::Pushed::Exact);
+            dataframe::Expr pred = dataframe::expr_is_in(
+                dataframe::col(ni), dataframe::Series::strings({"read", "x"}));
+            CHECK(pushed_as(pred) == dataframe::Pushed::Exact);
             CHECK(scanned(pred) == M{{"read", 30}});
-            CHECK(pushed_as(~pred) == df::Pushed::Exact);
+            CHECK(pushed_as(~pred) == dataframe::Pushed::Exact);
             CHECK(scanned(~pred) == M{{"fwrite", 20}});
         }
     }
 
     TEST_CASE("ViewSource pushdown: AND/OR/NOT of col filters") {
-        namespace df = dftracer::utils::dataframe;
         const auto& s = shared_trace();
-        scan::ScanPlan v = scan::from_file(s.gz, s.idx);
-        auto src = std::make_shared<ViewSource>(v);
+        views::detail::scan::ScanPlan v = views::detail::scan::from_file(
+            dstd::String(s.gz), dstd::String(s.idx));
+        auto src = dstd::make_shared<ViewSource>(v);
 
-        const std::vector<std::string> names = src->names();
+        const dstd::Vector<dstd::String> names = src->names();
         int di = -1, ti = -1;
         for (int i = 0; i < static_cast<int>(names.size()); ++i) {
             if (names[i] == "dur") di = i;
@@ -420,12 +576,13 @@ TEST_SUITE("trace scan - streaming row query") {
         REQUIRE(di >= 0);
         REQUIRE(ti >= 0);
 
-        df::DataFrame all = run(scan::collect(v).collect());
+        dataframe::DataFrame all =
+            run(views::detail::scan::collect(v).collect());
 
-        auto pushed_as = [&](const df::Expr& pred) {
-            df::ScanRequest req;
+        auto pushed_as = [&](const dataframe::Expr& pred) {
+            dataframe::ScanRequest req;
             req.filters.push_back(pred);
-            df::ScanResult sr = src->scan(req);
+            dataframe::ScanResult sr = dftu_utils_test::ok(src->scan(req));
             REQUIRE(sr.filters.size() == 1);
             return sr.filters[0];
         };
@@ -435,15 +592,15 @@ TEST_SUITE("trace scan - streaming row query") {
                 if (keep(bnum(all, i, "dur"), bnum(all, i, "ts"))) ++n;
             return n;
         };
-        auto scanned = [&](const df::Expr& pred) {
-            return run(df::LazyFrame::scan(src).filter(pred).collect())
+        auto scanned = [&](const dataframe::Expr& pred) {
+            return run(dataframe::LazyFrame::scan(src).filter(pred).collect())
                 .num_rows();
         };
 
         SUBCASE("both conjuncts translate, so the AND is Exact") {
-            df::Expr pred = (df::col(di) > std::int64_t{25}) &
-                            (df::col(di) < std::int64_t{45});
-            CHECK(pushed_as(pred) == df::Pushed::Exact);
+            dataframe::Expr pred = (dataframe::col(di) > std::int64_t{25}) &
+                                   (dataframe::col(di) < std::int64_t{45});
+            CHECK(pushed_as(pred) == dataframe::Pushed::Exact);
             const std::int64_t want = rows_matching(
                 [](double d, double) { return d > 25 && d < 45; });
             CHECK(want > 0);
@@ -454,9 +611,10 @@ TEST_SUITE("trace scan - streaming row query") {
             "one untranslatable conjunct leaves the other pushed, Inexact") {
             // The pushed half selects a superset, so the engine must re-apply
             // the predicate; marking this Exact would return the superset.
-            df::Expr pred = (df::col(di) > std::int64_t{25}) &
-                            ((df::col(di) + df::col(di)) > std::int64_t{70});
-            CHECK(pushed_as(pred) == df::Pushed::Inexact);
+            dataframe::Expr pred =
+                (dataframe::col(di) > std::int64_t{25}) &
+                ((dataframe::col(di) + dataframe::col(di)) > std::int64_t{70});
+            CHECK(pushed_as(pred) == dataframe::Pushed::Inexact);
             const std::int64_t want = rows_matching(
                 [](double d, double) { return d > 25 && 2 * d > 70; });
             CHECK(want > 0);
@@ -464,9 +622,9 @@ TEST_SUITE("trace scan - streaming row query") {
         }
 
         SUBCASE("both disjuncts translate, so the OR is Exact") {
-            df::Expr pred = (df::col(di) < std::int64_t{15}) |
-                            (df::col(di) > std::int64_t{45});
-            CHECK(pushed_as(pred) == df::Pushed::Exact);
+            dataframe::Expr pred = (dataframe::col(di) < std::int64_t{15}) |
+                                   (dataframe::col(di) > std::int64_t{45});
+            CHECK(pushed_as(pred) == dataframe::Pushed::Exact);
             const std::int64_t want = rows_matching(
                 [](double d, double) { return d < 15 || d > 45; });
             CHECK(want > 0);
@@ -476,9 +634,10 @@ TEST_SUITE("trace scan - streaming row query") {
         SUBCASE("one untranslatable disjunct sinks the whole OR") {
             // Pushing only the translatable side would drop every row the
             // other side keeps, so nothing is pushed at all.
-            df::Expr pred = (df::col(di) > std::int64_t{45}) |
-                            ((df::col(di) + df::col(di)) < std::int64_t{30});
-            CHECK(pushed_as(pred) == df::Pushed::No);
+            dataframe::Expr pred =
+                (dataframe::col(di) > std::int64_t{45}) |
+                ((dataframe::col(di) + dataframe::col(di)) < std::int64_t{30});
+            CHECK(pushed_as(pred) == dataframe::Pushed::No);
             const std::int64_t want = rows_matching(
                 [](double d, double) { return d > 45 || 2 * d < 30; });
             CHECK(want > 0);
@@ -486,8 +645,8 @@ TEST_SUITE("trace scan - streaming row query") {
         }
 
         SUBCASE("NOT of an exact predicate is Exact") {
-            df::Expr pred = ~(df::col(di) > std::int64_t{25});
-            CHECK(pushed_as(pred) == df::Pushed::Exact);
+            dataframe::Expr pred = ~(dataframe::col(di) > std::int64_t{25});
+            CHECK(pushed_as(pred) == dataframe::Pushed::Exact);
             // Regression: the chunk pruner used to answer a NotNode with the
             // set-difference complement of its operand's may-match chunks,
             // which dropped every chunk holding events on both sides of the
@@ -501,9 +660,10 @@ TEST_SUITE("trace scan - streaming row query") {
         SUBCASE("NOT of a merely-superset predicate is not pushed") {
             // Negating a superset yields a SUBSET, which would drop rows the
             // predicate keeps, so the whole NOT falls back to the engine.
-            df::Expr pred = ~((df::col(di) > std::int64_t{25}) &
-                              ((df::col(di) + df::col(di)) > std::int64_t{70}));
-            CHECK(pushed_as(pred) == df::Pushed::No);
+            dataframe::Expr pred = ~(
+                (dataframe::col(di) > std::int64_t{25}) &
+                ((dataframe::col(di) + dataframe::col(di)) > std::int64_t{70}));
+            CHECK(pushed_as(pred) == dataframe::Pushed::No);
             const std::int64_t want = rows_matching(
                 [](double d, double) { return !(d > 25 && 2 * d > 70); });
             CHECK(want > 0);
@@ -511,9 +671,9 @@ TEST_SUITE("trace scan - streaming row query") {
         }
 
         SUBCASE("two columns combine") {
-            df::Expr pred = (df::col(di) > std::int64_t{25}) &
-                            (df::col(ti) > std::int64_t{0});
-            CHECK(pushed_as(pred) == df::Pushed::Exact);
+            dataframe::Expr pred = (dataframe::col(di) > std::int64_t{25}) &
+                                   (dataframe::col(ti) > std::int64_t{0});
+            CHECK(pushed_as(pred) == dataframe::Pushed::Exact);
             const std::int64_t want = rows_matching(
                 [](double d, double t) { return d > 25 && t > 0; });
             CHECK(want > 0);
@@ -523,46 +683,49 @@ TEST_SUITE("trace scan - streaming row query") {
 
     TEST_CASE(
         "ViewSource pushdown: projection harvests only selected columns") {
-        namespace df = dftracer::utils::dataframe;
         const auto& s = shared_trace();
-        scan::ScanPlan v = scan::from_file(s.gz, s.idx);
-        auto src = std::make_shared<ViewSource>(v);
+        views::detail::scan::ScanPlan v = views::detail::scan::from_file(
+            dstd::String(s.gz), dstd::String(s.idx));
+        auto src = dstd::make_shared<ViewSource>(v);
 
-        df::DataFrame proj =
-            run(df::LazyFrame::scan(src).select({"cat", "name"}).collect());
+        dataframe::DataFrame proj = run(
+            dataframe::LazyFrame::scan(src).select({"cat", "name"}).collect());
         REQUIRE(proj.columns.size() == 2);
         CHECK(bhas(proj, "cat"));
         CHECK(bhas(proj, "name"));
         CHECK(proj.num_rows() == 50);
         for (std::int64_t i = 0; i < proj.num_rows(); ++i) {
-            const std::string cat = bstr(proj, i, "cat");
+            const dstd::String cat = bstr(proj, i, "cat");
             CHECK((cat == "POSIX" || cat == "STDIO"));
         }
     }
 
     TEST_CASE("ViewSource head(10) early-stops the scan (cancellation)") {
-        namespace df = dftracer::utils::dataframe;
         const auto& s = shared_trace();  // 50 events
-        scan::ScanPlan v = scan::from_file(s.gz, s.idx);
-        auto src = std::make_shared<ViewSource>(v);
+        views::detail::scan::ScanPlan v = views::detail::scan::from_file(
+            dstd::String(s.gz), dstd::String(s.idx));
+        auto src = dstd::make_shared<ViewSource>(v);
 
-        df::DataFrame h = run(df::LazyFrame::scan(src).head(10).collect());
+        dataframe::DataFrame h =
+            run(dataframe::LazyFrame::scan(src).head(10).collect());
         CHECK(h.num_rows() == 10);
     }
 
     TEST_CASE(
         "ViewSource schema() types match the actually collected columns "
         "for a statically-known select") {
-        namespace df = dftracer::utils::dataframe;
         const auto& s = shared_trace();
-        scan::ScanPlan v = scan::select(scan::from_file(s.gz, s.idx),
-                                        {"name", "cat", "pid", "ts", "dur"});
-        auto src = std::make_shared<ViewSource>(v);
+        views::detail::scan::ScanPlan v = views::detail::scan::select(
+            views::detail::scan::from_file(dstd::String(s.gz),
+                                           dstd::String(s.idx)),
+            {"name", "cat", "pid", "ts", "dur"});
+        auto src = dstd::make_shared<ViewSource>(v);
 
-        df::Schema schema = src->schema();
+        dataframe::Schema schema = src->schema();
         REQUIRE(schema.fields.size() == 5);
 
-        df::DataFrame got = run(df::LazyFrame::scan(src).collect());
+        dataframe::DataFrame got =
+            run(dataframe::LazyFrame::scan(src).collect());
         REQUIRE(got.columns.size() == schema.fields.size());
         for (std::size_t i = 0; i < schema.fields.size(); ++i) {
             const std::int64_t ci = bcol(got, schema.fields[i].name);
@@ -575,44 +738,47 @@ TEST_SUITE("trace scan - streaming row query") {
     TEST_CASE(
         "ViewSource schema() reports every column, marking a data-dependent "
         "args.* value Unknown") {
-        namespace df = dftracer::utils::dataframe;
         TestEnvironment env(200);
-        std::string gz = create_mixed_arg_trace(env);
-        std::string idx = determine_index_path(gz, "");
-        scan::ScanPlan v =
-            scan::select(scan::from_file(gz, idx), {"name", "args.x"});
-        auto src = std::make_shared<ViewSource>(v);
+        dstd::String gz = create_mixed_arg_trace(env);
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
+        views::detail::scan::ScanPlan v = views::detail::scan::select(
+            views::detail::scan::from_file(dstd::String(gz), dstd::String(idx)),
+            {"name", "args.x"});
+        auto src = dstd::make_shared<ViewSource>(v);
 
-        df::Schema schema = src->schema();
+        dataframe::Schema schema = src->schema();
         REQUIRE(schema.fields.size() == 2);
         CHECK(schema.fields[0].name == "name");
         CHECK(schema.fields[1].name == "args.x");
         // A column whose type the scan infers per batch says so rather than
         // silencing the whole schema.
-        CHECK(schema.fields[0].type.id == df::TypeId::String);
-        CHECK(schema.fields[1].type.id == df::TypeId::Unknown);
+        CHECK(schema.fields[0].type.id == dataframe::TypeId::String);
+        CHECK(schema.fields[1].type.id == dataframe::TypeId::Unknown);
 
         // schema() may report Unknown for a data-dependent column, but the
         // collected frame always resolves to a concrete type.
-        df::DataFrame got = run(df::LazyFrame::scan(src).collect());
-        for (const df::Series& c : got.columns)
-            CHECK(c.type() != df::TypeId::Unknown);
+        dataframe::DataFrame got =
+            run(dataframe::LazyFrame::scan(src).collect());
+        for (const dataframe::Series& c : got.columns)
+            CHECK(c.type() != dataframe::TypeId::Unknown);
     }
 
     TEST_CASE(
         "ViewSource schema() types match the buffered frame for an "
         "aggregated view") {
-        namespace df = dftracer::utils::dataframe;
         TestEnvironment env(200);
-        std::string gz = create_mixed_arg_trace(env);
-        std::string idx = determine_index_path(gz, "");
-        scan::ScanPlan v = scan::agg(
-            scan::group_by(scan::from_file(gz, idx), {GroupKey::name()}),
+        dstd::String gz = create_mixed_arg_trace(env);
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
+        views::detail::scan::ScanPlan v = views::detail::scan::agg(
+            views::detail::scan::group_by(
+                views::detail::scan::from_file(dstd::String(gz),
+                                               dstd::String(idx)),
+                {GroupKey::name()}),
             {{AggOp::Count, "", "n"}});
-        auto src = std::make_shared<ViewSource>(v);
+        auto src = dstd::make_shared<ViewSource>(v);
 
-        df::Schema schema = src->schema();
-        df::DataFrame buf = run(scan::collect_frame(v));
+        dataframe::Schema schema = src->schema();
+        dataframe::DataFrame buf = run(views::detail::scan::collect_frame(v));
         REQUIRE(schema.fields.size() == buf.names.size());
         for (std::size_t i = 0; i < buf.columns.size(); ++i) {
             CHECK(schema.fields[i].name == buf.names[i]);
@@ -622,21 +788,27 @@ TEST_SUITE("trace scan - streaming row query") {
 
     TEST_CASE("scan::stream() over a histogram aggregation yields one chunk") {
         TestEnvironment env(200);
-        std::string gz = create_mixed_arg_trace(env);
-        std::string idx = determine_index_path(gz, "");
-        scan::ScanPlan v = scan::agg(
-            scan::group_by(scan::from_file(gz, idx), {GroupKey::cat()}),
+        dstd::String gz = create_mixed_arg_trace(env);
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
+        views::detail::scan::ScanPlan v = views::detail::scan::agg(
+            views::detail::scan::group_by(
+                views::detail::scan::from_file(dstd::String(gz),
+                                               dstd::String(idx)),
+                {GroupKey::cat()}),
             {{AggOp::Hist, "dur", "h"}});
 
         std::size_t chunks =
-            dftracer::utils::default_runtime()
-                .submit([](scan::ScanPlan vv) -> coro::CoroTask<std::size_t> {
-                    std::size_t n = 0;
-                    auto gen = scan::stream(vv, 1);
-                    while (auto chunk = co_await gen.next()) ++n;
-                    co_return n;
-                }(v))
-                .get();
+            dftu_utils_test::ok(dftracer::utils::default_runtime()
+                                    .submit([](views::detail::scan::ScanPlan vv)
+                                                -> coro::CoroTask<std::size_t> {
+                                        std::size_t n = 0;
+                                        auto gen =
+                                            views::detail::scan::stream(vv, 1);
+                                        while (auto chunk = co_await gen.next())
+                                            ++n;
+                                        co_return n;
+                                    }(v))
+                                    .get());
 
         CHECK(chunks == 1);
     }
@@ -644,46 +816,50 @@ TEST_SUITE("trace scan - streaming row query") {
     TEST_CASE(
         "ViewSource schema() reports a concrete type for an args column once "
         "the index has harvested it") {
-        namespace df = dftracer::utils::dataframe;
         TestEnvironment env(200);
-        std::string gz = create_mixed_arg_trace(env);
-        std::string idx = determine_index_path(gz, "");
+        dstd::String gz = create_mixed_arg_trace(env);
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         // Build the index (and its harvested column types) before asking for
         // the schema, so the "x" arg's type is known from the index rather
         // than data-dependent.
         {
             StringSink sink;
-            scan::export_json(scan::from_file(gz, idx), sink).get();
+            dftu_utils_test::ok(views::detail::scan::export_json(
+                                    views::detail::scan::from_file(
+                                        dstd::String(gz), dstd::String(idx)),
+                                    sink)
+                                    .get());
         }
 
-        scan::ScanPlan v =
-            scan::select(scan::from_file(gz, idx), {"name", "args.x"});
-        auto src = std::make_shared<ViewSource>(v);
+        views::detail::scan::ScanPlan v = views::detail::scan::select(
+            views::detail::scan::from_file(dstd::String(gz), dstd::String(idx)),
+            {"name", "args.x"});
+        auto src = dstd::make_shared<ViewSource>(v);
 
-        df::Schema schema = src->schema();
+        dataframe::Schema schema = src->schema();
         REQUIRE(schema.fields.size() == 2);
         CHECK(schema.fields[0].name == "name");
         CHECK(schema.fields[1].name == "args.x");
-        CHECK(schema.fields[0].type.id == df::TypeId::String);
+        CHECK(schema.fields[0].type.id == dataframe::TypeId::String);
         // The index harvested "x" as an integer column; schema() must report
         // that concretely instead of falling back to Unknown.
-        CHECK(schema.fields[1].type.id == df::TypeId::Int64);
+        CHECK(schema.fields[1].type.id == dataframe::TypeId::Int64);
     }
 
     TEST_CASE("ViewSource distinct pushdown is absorbed and matches the host") {
-        namespace df = dftracer::utils::dataframe;
         TestEnvironment env(200);
-        const std::string idx_dir = env.get_dir() + "/distinct.dftindex";
-        std::string gz = create_distinct_trace(env, idx_dir);
-        std::string idx = determine_index_path(gz, idx_dir);
+        const dstd::String idx_dir = env.dir() + "/distinct.dftindex";
+        dstd::String gz = create_distinct_trace(env, idx_dir);
+        dstd::String idx = dstd::String(determine_index_path(gz, idx_dir));
 
-        scan::ScanPlan v =
-            scan::select(scan::from_file(gz, idx), {"run", "metric"});
+        views::detail::scan::ScanPlan v = views::detail::scan::select(
+            views::detail::scan::from_file(dstd::String(gz), dstd::String(idx)),
+            {"run", "metric"});
         {
             const auto& plan = *v;
-            auto vdef = dftracer::utils::trace::views::detail::make_vdef(
-                plan, /*for_aggregation=*/false);
+            auto vdef = ok(dftracer::utils::trace::views::detail::make_vdef(
+                plan, /*for_aggregation=*/false));
             std::uint64_t skipped = 0;
             auto units =
                 run(dftracer::utils::trace::views::detail::gather_units(
@@ -692,23 +868,23 @@ TEST_SUITE("trace scan - streaming row query") {
         }
 
         // Expected: the first row of each key in file order.
-        std::vector<std::pair<std::string, std::string>> want;
-        std::set<std::pair<std::string, std::string>> seen;
+        dstd::Vector<dstd::Pair<dstd::String, dstd::String>> want;
+        dstd::Set<dstd::Pair<dstd::String, dstd::String>> seen;
         for (int i = 0; i < DISTINCT_EVENTS; ++i) {
-            std::pair<std::string, std::string> k{distinct_run(i),
-                                                  distinct_metric(i)};
+            dstd::Pair<dstd::String, dstd::String> k{distinct_run(i),
+                                                     distinct_metric(i)};
             if (seen.insert(k).second) want.push_back(k);
         }
         REQUIRE(want.size() > 20);
 
-        df::LazyFrame lf = scan::collect(v);
+        dataframe::LazyFrame lf = views::detail::scan::collect(v);
         // The plan says the source does the distinct.
-        CHECK(lf.unique().explain().find("unique") == std::string::npos);
+        CHECK(lf.unique().explain().find("unique") == dstd::String::npos);
         CHECK(lf.drop_duplicates().explain().find("unique") ==
-              std::string::npos);
+              dstd::String::npos);
 
         for (int round = 0; round < 3; ++round) {
-            df::DataFrame pushed = run(lf.unique().collect());
+            dataframe::DataFrame pushed = run(lf.unique().collect());
             REQUIRE(pushed.num_rows() ==
                     static_cast<std::int64_t>(want.size()));
             for (std::int64_t i = 0; i < pushed.num_rows(); ++i) {
@@ -720,13 +896,16 @@ TEST_SUITE("trace scan - streaming row query") {
         }
 
         // A subset keys only that column and keeps the first row per key.
-        df::LazyFrame lf2 = scan::collect(
-            scan::select(scan::from_file(gz, idx), {"run", "metric"}));
+        dataframe::LazyFrame lf2 =
+            views::detail::scan::collect(views::detail::scan::select(
+                views::detail::scan::from_file(dstd::String(gz),
+                                               dstd::String(idx)),
+                {"run", "metric"}));
         CHECK(lf2.unique({"args.run"}).explain().find("unique") ==
-              std::string::npos);
-        df::DataFrame sub = run(lf2.unique({"args.run"}).collect());
-        std::vector<std::pair<std::string, std::string>> want_sub;
-        std::set<std::string> seen_run;
+              dstd::String::npos);
+        dataframe::DataFrame sub = run(lf2.unique({"args.run"}).collect());
+        dstd::Vector<dstd::Pair<dstd::String, dstd::String>> want_sub;
+        dstd::Set<dstd::String> seen_run;
         for (int i = 0; i < DISTINCT_EVENTS; ++i)
             if (seen_run.insert(distinct_run(i)).second)
                 want_sub.emplace_back(distinct_run(i), distinct_metric(i));
@@ -741,20 +920,25 @@ TEST_SUITE("trace scan - streaming row query") {
 
     TEST_CASE("ViewSource refuses a distinct over a computed column") {
         TestEnvironment env(200);
-        const std::string idx_dir = env.get_dir() + "/distinct.dftindex";
-        std::string gz = create_distinct_trace(env, idx_dir);
-        std::string idx = determine_index_path(gz, idx_dir);
-        scan::ScanPlan v = scan::select(scan::from_file(gz, idx), {"io_cat"});
-        namespace df = dftracer::utils::dataframe;
-        df::LazyFrame lf = scan::collect(v);
-        CHECK(lf.unique().explain().find("unique") != std::string::npos);
+        const dstd::String idx_dir = env.dir() + "/distinct.dftindex";
+        dstd::String gz = create_distinct_trace(env, idx_dir);
+        dstd::String idx = dstd::String(determine_index_path(gz, idx_dir));
+        views::detail::scan::ScanPlan v = views::detail::scan::select(
+            views::detail::scan::from_file(dstd::String(gz), dstd::String(idx)),
+            {"io_cat"});
+        dataframe::LazyFrame lf = views::detail::scan::collect(v);
+        CHECK(lf.unique().explain().find("unique") != dstd::String::npos);
         // io_cat comes from the event name, which a scan key cannot read as
         // a field, so the host cursor must see the real categories.
         const std::int64_t host =
-            run(scan::collect(
-                    scan::select(scan::from_file(gz, idx), {"io_cat"}))
-                    .collect())
-                .unique()
+            dftu_utils_test::ok(
+                run(views::detail::scan::collect(
+                        views::detail::scan::select(
+                            views::detail::scan::from_file(dstd::String(gz),
+                                                           dstd::String(idx)),
+                            {"io_cat"}))
+                        .collect())
+                    .unique())
                 .num_rows();
         CHECK(host > 1);
         CHECK(run(lf.unique().collect()).num_rows() == host);

@@ -1,25 +1,31 @@
+// SPDX-License-Identifier: MIT
 // A column or frame slice is a view with the values of a gather: same values,
 // nulls, null count, type and layout, sharing the value storage and valid after
 // the base is released.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 
-#include <dftracer/utils/core/runtime.h>
+#include <dataframe/expr_ok.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/view_builder.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/fmt.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <cstdint>
 #include <cstring>
-#include <memory>
-#include <optional>
-#include <string>
-#include <string_view>
 #include <utility>
-#include <vector>
+
+using namespace dftracer::utils;
 
 using namespace dftracer::utils::dataframe;
 
@@ -27,9 +33,9 @@ namespace {
 
 constexpr std::int64_t N = 40;
 
-using Row = std::optional<std::string>;
-using Rows = std::vector<Row>;
-using Idx = std::vector<std::int64_t>;
+using Row = dstd::Optional<dstd::String>;
+using Rows = dstd::Vector<Row>;
+using Idx = dstd::Vector<std::int64_t>;
 
 const char* const POOL[] = {"read",
                             "write",
@@ -48,8 +54,8 @@ Rows rows_for(bool nulls) {
     return r;
 }
 
-std::vector<std::uint8_t> bitmap(bool nulls) {
-    std::vector<std::uint8_t> v((N + 7) / 8, 0);
+dstd::Vector<std::uint8_t> bitmap(bool nulls) {
+    dstd::Vector<std::uint8_t> v((N + 7) / 8, 0);
     for (std::int64_t i = 0; i < N; ++i)
         if (!null_at(i, nulls))
             v[static_cast<std::size_t>(i >> 3)] |=
@@ -58,13 +64,13 @@ std::vector<std::uint8_t> bitmap(bool nulls) {
 }
 
 Series strings_of(const Rows& rows, TypeId type) {
-    std::vector<std::int32_t> off{0};
-    std::string data;
+    dstd::Vector<std::int32_t> off{0};
+    dstd::String data;
     for (const Row& r : rows) {
         if (r) data += *r;
         off.push_back(static_cast<std::int32_t>(data.size()));
     }
-    std::vector<std::uint8_t> valid((rows.size() + 7) / 8, 0);
+    dstd::Vector<std::uint8_t> valid((rows.size() + 7) / 8, 0);
     bool any_null = false;
     for (std::size_t i = 0; i < rows.size(); ++i) {
         if (rows[i])
@@ -82,10 +88,10 @@ Series large_of(const Rows& rows) {
     Series s = strings_of(rows, TypeId::String);
     auto* o = new dftu_series(*s.handle());
     o->type = TypeId::LargeString;
-    o->offsets = Buffer::allocate(static_cast<std::size_t>(o->length + 1) *
-                                  sizeof(std::int64_t));
+    o->offsets = new_buffer(static_cast<std::size_t>(o->length + 1) *
+                            sizeof(std::int64_t));
     const std::int32_t* src = s.offsets();
-    auto* dst = reinterpret_cast<std::int64_t*>(o->offsets->data());
+    auto* dst = reinterpret_cast<std::int64_t*>(writable(o->offsets));
     for (std::int64_t i = 0; i <= o->length; ++i) dst[i] = src[i];
     return Series{o};
 }
@@ -95,21 +101,22 @@ Series selection_over(const Series& base, const Idx& idx) {
     adopt_type_from(*o, *base.handle());
     o->encoding = Encoding::Selection;
     o->length = static_cast<std::int64_t>(idx.size());
-    o->data = Buffer::allocate(idx.size() * sizeof(std::int64_t));
-    std::memcpy(o->data->data(), idx.data(), idx.size() * sizeof(std::int64_t));
-    o->set_child(std::make_shared<dftu_series>(*base.handle()));
+    o->data = new_buffer(idx.size() * sizeof(std::int64_t));
+    std::memcpy(writable(o->data), idx.data(),
+                idx.size() * sizeof(std::int64_t));
+    o->set_child(dstd::make_shared<dftu_series>(*base.handle()));
     return Series{o};
 }
 
 Series int64_of(bool nulls) {
-    std::vector<std::int64_t> v;
+    dstd::Vector<std::int64_t> v;
     for (std::int64_t i = 0; i < N; ++i) v.push_back(i * 37 - 100);
     auto valid = bitmap(nulls);
     return Series::flat_i64(v.data(), N, nulls ? valid.data() : nullptr);
 }
 
 Series float64_of(bool nulls) {
-    std::vector<double> v;
+    dstd::Vector<double> v;
     for (std::int64_t i = 0; i < N; ++i)
         v.push_back(static_cast<double>(i) * 1.5);
     auto valid = bitmap(nulls);
@@ -117,7 +124,7 @@ Series float64_of(bool nulls) {
 }
 
 Series bool_of(bool nulls) {
-    std::vector<std::uint8_t> bits((N + 7) / 8, 0);
+    dstd::Vector<std::uint8_t> bits((N + 7) / 8, 0);
     for (std::int64_t i = 0; i < N; ++i)
         if (i % 3 != 1) bits[static_cast<std::size_t>(i >> 3)] |= 1u << (i & 7);
     auto valid = bitmap(nulls);
@@ -139,53 +146,55 @@ Idx scatter() {
 }
 
 struct Case {
-    std::string name;
+    dstd::String name;
     Series col;
 };
 
-std::vector<Case> cases() {
-    std::vector<Case> out;
+dstd::Vector<Case> cases() {
+    dstd::Vector<Case> out;
     for (bool nulls : {false, true}) {
-        const std::string suffix = nulls ? " nulls" : "";
+        const dstd::String suffix = nulls ? " nulls" : "";
         const Rows rows = rows_for(nulls);
-        out.push_back({"int64" + suffix, int64_of(nulls)});
-        out.push_back({"float64" + suffix, float64_of(nulls)});
-        out.push_back({"bool" + suffix, bool_of(nulls)});
-        out.push_back({"string" + suffix, strings_of(rows, TypeId::String)});
-        out.push_back({"large string" + suffix, large_of(rows)});
-        out.push_back({"binary" + suffix, strings_of(rows, TypeId::Binary)});
+        out.push_back({dstd::fmt<"int64{}">(suffix), int64_of(nulls)});
+        out.push_back({dstd::fmt<"float64{}">(suffix), float64_of(nulls)});
+        out.push_back({dstd::fmt<"bool{}">(suffix), bool_of(nulls)});
         out.push_back(
-            {"json" + suffix, strings_of(rows, TypeId::String).as_json()});
-        out.push_back({"view" + suffix, view_of(rows)});
-        out.push_back({"dictionary" + suffix,
+            {dstd::fmt<"string{}">(suffix), strings_of(rows, TypeId::String)});
+        out.push_back({dstd::fmt<"large string{}">(suffix), large_of(rows)});
+        out.push_back(
+            {dstd::fmt<"binary{}">(suffix), strings_of(rows, TypeId::Binary)});
+        out.push_back({dstd::fmt<"json{}">(suffix),
+                       strings_of(rows, TypeId::String).as_json()});
+        out.push_back({dstd::fmt<"view{}">(suffix), view_of(rows)});
+        out.push_back({dstd::fmt<"dictionary{}">(suffix),
                        strings_of(rows, TypeId::String).dictionary_encode()});
         out.push_back(
-            {"selection string" + suffix,
+            {dstd::fmt<"selection string{}">(suffix),
              selection_over(strings_of(rows, TypeId::String), scatter())});
-        out.push_back({"selection int64" + suffix,
+        out.push_back({dstd::fmt<"selection int64{}">(suffix),
                        selection_over(int64_of(nulls), scatter())});
     }
     return out;
 }
 
-std::string repr(const Series& in, std::int64_t i) {
+dstd::String repr(const Series& in, std::int64_t i) {
     if (in.is_null(i)) return "<null>";
     switch (in.type()) {
         case TypeId::Int64:
-            return std::to_string(in.data<std::int64_t>()[i]);
+            return dstd::to_string(in.data<std::int64_t>()[i]);
         case TypeId::Float64:
-            return std::to_string(in.data<double>()[i]);
+            return dstd::to_string(in.data<double>()[i]);
         case TypeId::Bool:
             return ((in.data<std::uint8_t>()[i >> 3] >> (i & 7)) & 1) ? "T"
                                                                       : "F";
         default:
-            return std::string(in.string_at(i));
+            return dstd::String(in.string_at(i));
     }
 }
 
-std::vector<std::string> reprs(const Series& in) {
+dstd::Vector<dstd::String> reprs(const Series& in) {
     Series flat = in.is_flat() ? in.share() : in.materialize();
-    std::vector<std::string> out;
+    dstd::Vector<dstd::String> out;
     for (std::int64_t i = 0; i < flat.length(); ++i)
         out.push_back(repr(flat, i));
     return out;
@@ -244,16 +253,16 @@ TEST_SUITE("slice views") {
     TEST_CASE("a slice reads after its base is freed") {
         for (const Case& c : cases()) {
             CAPTURE(c.name);
-            auto base = std::make_unique<Series>(c.col.share());
-            std::vector<std::string> want = reprs(c.col.take(range(9, 17)));
+            auto base = dstd::make_unique<Series>(c.col.share());
+            dstd::Vector<dstd::String> want = reprs(c.col.take(range(9, 17)));
             Series got{dftu_series_slice(base->handle(), 9, 17)};
             base.reset();
-            std::vector<std::string> before = reprs(got);
+            dstd::Vector<dstd::String> before = reprs(got);
             CHECK(before == want);
         }
-        std::vector<Case> all = cases();
-        std::vector<std::vector<std::string>> want;
-        std::vector<Series> slices;
+        dstd::Vector<Case> all = cases();
+        dstd::Vector<dstd::Vector<dstd::String>> want;
+        dstd::Vector<Series> slices;
         for (Case& c : all) {
             want.push_back(reprs(c.col.take(range(9, 17))));
             slices.emplace_back(dftu_series_slice(c.col.handle(), 9, 17));
@@ -302,17 +311,18 @@ TEST_SUITE("slice views") {
                     CAPTURE(len);
                     Series got{dftu_series_slice(base.handle(), offset, len)};
                     Series want = base.take(range(offset, len));
-                    CHECK(got.sum().i64() == want.sum().i64());
+                    CHECK(dftu_utils_test::ok(got.sum()).i64() ==
+                          dftu_utils_test::ok(want.sum()).i64());
                 }
         }
     }
 
     TEST_CASE("list and struct columns are refused") {
-        std::vector<std::int64_t> v{1, 2, 3, 4};
+        dstd::Vector<std::int64_t> v{1, 2, 3, 4};
         Series list = Series::list({0, 1, 3, 4}, Series::flat_i64(v.data(), 4));
         CHECK(dftu_series_slice(list.handle(), 0, 2) == nullptr);
 
-        std::vector<Series> fields;
+        dstd::Vector<Series> fields;
         fields.push_back(Series::flat_i64(v.data(), 4));
         Series st = Series::structs({"a"}, std::move(fields));
         CHECK(dftu_series_slice(st.handle(), 0, 2) == nullptr);
@@ -325,8 +335,8 @@ TEST_SUITE("slice views") {
             df.names.push_back(c.name);
             df.columns.push_back(c.col.share());
         }
-        std::vector<std::int32_t> off{0};
-        std::vector<std::int64_t> vals;
+        dstd::Vector<std::int32_t> off{0};
+        dstd::Vector<std::int64_t> vals;
         for (std::int64_t i = 0; i < N; ++i) {
             for (std::int64_t k = 0; k < i % 4; ++k) vals.push_back(i * 10 + k);
             off.push_back(static_cast<std::int32_t>(vals.size()));
@@ -378,19 +388,22 @@ TEST_SUITE("slice views") {
         df.columns.push_back(
             strings_of(rows, TypeId::String).dictionary_encode());
 
-        DataFrame lazy = dftracer::utils::default_runtime()
-                             .submit(df.lazy()
-                                         .filter(col(0) > std::int64_t{10})
-                                         .with_column("j", col(0) + col(0))
-                                         .collect(7))
-                             .get();
+        DataFrame lazy = dftu_utils_test::ok(
+            dftracer::utils::default_runtime()
+                .submit(df.lazy()
+                            .filter(col(0) > std::int64_t{10})
+                            .with_column("j", col(0) + col(0))
+                            .collect(7))
+                .get());
 
-        std::vector<const Series*> in;
+        dstd::Vector<const Series*> in;
         for (const Series& c : df.columns) in.push_back(&c);
-        DataFrame kept = df.filter(eval(col(0) > std::int64_t{10}, in));
-        std::vector<const Series*> kin;
+        DataFrame kept =
+            df.filter(dftu_utils_test::eval_ok(col(0) > std::int64_t{10}, in));
+        dstd::Vector<const Series*> kin;
         for (const Series& c : kept.columns) kin.push_back(&c);
-        DataFrame want = kept.with_column("j", eval(col(0) + col(0), kin));
+        DataFrame want = kept.with_column(
+            "j", dftu_utils_test::eval_ok(col(0) + col(0), kin));
 
         REQUIRE(lazy.num_columns() == want.num_columns());
         CHECK(lazy.names == want.names);
@@ -409,8 +422,8 @@ TEST_SUITE("slice views") {
             Series s = strings_of(rows, TypeId::String);
             if (layout == 1) s = view_of(rows);
             if (layout == 2) s = s.dictionary_encode();
-            std::vector<const Series*> in{&s};
-            Series got = eval(
+            dstd::Vector<const Series*> in{&s};
+            Series got = dftu_utils_test::eval_ok(
                 expr_str_pred(StrPredOp::Contains, expr_col(0), "name"), in);
             Series want = s.str_contains("name");
             REQUIRE(got.length() == want.length());

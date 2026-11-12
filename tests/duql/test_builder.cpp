@@ -1,4 +1,9 @@
+// SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/abi.h>
 #include <dftracer/utils/duql/builder.h>
 #include <dftracer/utils/duql/internal/duql_handle.h>
@@ -7,16 +12,16 @@
 #include <dftracer/utils/duql/syntax/parser.h>
 #include <dftracer/utils/duql/syntax/tree.h>
 #include <doctest/doctest.h>
+#include <duql/eval_json.h>
 #include <simdjson.h>
 
 #include <cstring>
 #include <stdexcept>
-#include <string>
 #include <utility>
-#include <vector>
+
+using namespace dftracer::utils;
 
 using namespace dftracer::utils::duql;
-using dftracer::utils::json::JsonValue;
 
 namespace {
 
@@ -32,7 +37,9 @@ struct JsonDoc {
             valid = true;
         }
     }
-    JsonValue root() { return valid ? JsonValue(elem) : JsonValue(); }
+    json::JsonValue root() {
+        return valid ? json::JsonValue(elem) : json::JsonValue();
+    }
 };
 
 // Owns a dftu_duql and its serialized string across the assertions.
@@ -40,9 +47,9 @@ struct AbiDuql {
     dftu_duql* h;
     explicit AbiDuql(dftu_duql* q) : h(q) {}
     ~AbiDuql() { dftu_duql_free(h); }
-    std::string str() const {
+    dstd::String str() const {
         char* s = dftu_duql_to_string(h);
-        std::string out = s ? s : "";
+        dstd::String out = s ? s : "";
         dftu_duql_string_free(s);
         return out;
     }
@@ -61,8 +68,8 @@ TEST_CASE("C++ fluent Field builder matches parse") {
 
     JsonDoc hit(R"({"cat":"POSIX","dur":200})");
     JsonDoc miss(R"({"cat":"POSIX","dur":50})");
-    CHECK(built->evaluate(hit.root()));
-    CHECK_FALSE(built->evaluate(miss.root()));
+    CHECK(eval_json(*built, hit.root()));
+    CHECK_FALSE(eval_json(*built, miss.root()));
 
     CHECK(Field("name").like("%read%").to_string() ==
           Query::from_string(R"(name like "%read%")")->to_string());
@@ -79,11 +86,11 @@ TEST_CASE("C++ builder compare matches parse") {
 
     JsonDoc match(R"({"cat":"POSIX"})");
     JsonDoc no_match(R"({"cat":"STDIO"})");
-    CHECK(built->evaluate(match.root()) == parsed->evaluate(match.root()));
-    CHECK(built->evaluate(no_match.root()) ==
-          parsed->evaluate(no_match.root()));
-    CHECK(built->evaluate(match.root()));
-    CHECK_FALSE(built->evaluate(no_match.root()));
+    CHECK(eval_json(*built, match.root()) == eval_json(*parsed, match.root()));
+    CHECK(eval_json(*built, no_match.root()) ==
+          eval_json(*parsed, no_match.root()));
+    CHECK(eval_json(*built, match.root()));
+    CHECK_FALSE(eval_json(*built, no_match.root()));
 }
 
 TEST_CASE("C++ builder numeric typing round-trips") {
@@ -106,7 +113,7 @@ TEST_CASE("C++ builder combinators match parse") {
                             R"({"cat":"STDIO","dur":100})"};
     for (const char* ev : events) {
         JsonDoc doc(ev);
-        CHECK(built->evaluate(doc.root()) == parsed->evaluate(doc.root()));
+        CHECK(eval_json(*built, doc.root()) == eval_json(*parsed, doc.root()));
     }
 }
 
@@ -118,30 +125,30 @@ TEST_CASE("C++ builder or / not match parse") {
     REQUIRE(parsed.has_value());
     CHECK(built->to_string() == parsed->to_string());
     JsonDoc doc(R"({"cat":"POSIX"})");
-    CHECK(built->evaluate(doc.root()) == parsed->evaluate(doc.root()));
-    CHECK(built->evaluate(doc.root()));
+    CHECK(eval_json(*built, doc.root()) == eval_json(*parsed, doc.root()));
+    CHECK(eval_json(*built, doc.root()));
 }
 
 TEST_CASE("C++ builder in / match round-trip") {
-    auto in = field_in("cat", std::vector<std::string>{"POSIX", "STDIO"});
+    auto in = field_in("cat", dstd::Vector<dstd::String>{"POSIX", "STDIO"});
     CHECK(in.to_string() ==
           Query::from_string(R"(cat in ["POSIX", "STDIO"])")->to_string());
 
-    auto ints = field_in("pid", std::vector<std::int64_t>{1, 2, 3});
+    auto ints = field_in("pid", dstd::Vector<std::int64_t>{1, 2, 3});
     CHECK(ints.to_string() ==
           Query::from_string("pid in [1, 2, 3]")->to_string());
 
-    auto like = field_match("name", MatchOp::LIKE, "MPI_%").build();
+    auto like = field_match("name", MatchOp::Like, "MPI_%").build();
     REQUIRE(like.has_value());
     auto parsed = Query::from_string(R"(name like "MPI_%")");
     REQUIRE(parsed.has_value());
     CHECK(like->to_string() == parsed->to_string());
     JsonDoc a(R"({"name":"MPI_Send"})");
     JsonDoc b(R"({"name":"POSIX_read"})");
-    CHECK(like->evaluate(a.root()) == parsed->evaluate(a.root()));
-    CHECK(like->evaluate(b.root()) == parsed->evaluate(b.root()));
-    CHECK(like->evaluate(a.root()));
-    CHECK_FALSE(like->evaluate(b.root()));
+    CHECK(eval_json(*like, a.root()) == eval_json(*parsed, a.root()));
+    CHECK(eval_json(*like, b.root()) == eval_json(*parsed, b.root()));
+    CHECK(eval_json(*like, a.root()));
+    CHECK_FALSE(eval_json(*like, b.root()));
 }
 
 TEST_CASE("C ABI builder compare matches parse") {
@@ -153,8 +160,8 @@ TEST_CASE("C ABI builder compare matches parse") {
 
     JsonDoc match(R"({"cat":"POSIX"})");
     JsonDoc no_match(R"({"cat":"STDIO"})");
-    CHECK(built.duql().evaluate(match.root()));
-    CHECK_FALSE(built.duql().evaluate(no_match.root()));
+    CHECK(eval_json(built.duql(), match.root()));
+    CHECK_FALSE(eval_json(built.duql(), no_match.root()));
 }
 
 TEST_CASE("C ABI builder numeric and combinators") {
@@ -173,12 +180,12 @@ TEST_CASE("C ABI builder numeric and combinators") {
 
     JsonDoc doc(R"({"cat":"POSIX","dur":100})");
     JsonDoc doc2(R"({"cat":"POSIX","dur":10})");
-    CHECK(both.duql().evaluate(doc.root()) ==
-          parsed.duql().evaluate(doc.root()));
-    CHECK(both.duql().evaluate(doc2.root()) ==
-          parsed.duql().evaluate(doc2.root()));
-    CHECK(both.duql().evaluate(doc.root()));
-    CHECK_FALSE(both.duql().evaluate(doc2.root()));
+    CHECK(eval_json(both.duql(), doc.root()) ==
+          eval_json(parsed.duql(), doc.root()));
+    CHECK(eval_json(both.duql(), doc2.root()) ==
+          eval_json(parsed.duql(), doc2.root()));
+    CHECK(eval_json(both.duql(), doc.root()));
+    CHECK_FALSE(eval_json(both.duql(), doc2.root()));
 }
 
 TEST_CASE("C ABI builder in / not_in / match") {
@@ -202,9 +209,9 @@ TEST_CASE("C ABI builder in / not_in / match") {
     REQUIRE(match_parsed.h != nullptr);
     CHECK(match.str() == match_parsed.str());
     JsonDoc a(R"({"name":"MPI_Send"})");
-    CHECK(match.duql().evaluate(a.root()) ==
-          match_parsed.duql().evaluate(a.root()));
-    CHECK(match.duql().evaluate(a.root()));
+    CHECK(eval_json(match.duql(), a.root()) ==
+          eval_json(match_parsed.duql(), a.root()));
+    CHECK(eval_json(match.duql(), a.root()));
 }
 
 TEST_CASE("C ABI builder or / not") {
@@ -216,7 +223,7 @@ TEST_CASE("C ABI builder or / not") {
     REQUIRE(parsed.h != nullptr);
     CHECK(q.str() == parsed.str());
     JsonDoc doc(R"({"cat":"POSIX"})");
-    CHECK(q.duql().evaluate(doc.root()));
+    CHECK(eval_json(q.duql(), doc.root()));
 }
 
 TEST_CASE("C ABI builder null field is safe") {
@@ -237,15 +244,15 @@ TEST_CASE("any() builds the same leaf from C++, the C ABI and the DSL") {
 
     JsonDoc hit(R"({"tags":["b","a"],"sizes":[1,200]})");
     JsonDoc miss(R"({"tags":["b"],"sizes":[1]})");
-    CHECK(c.duql().evaluate(hit.root()));
-    CHECK_FALSE(c.duql().evaluate(miss.root()));
-    CHECK(in.duql().evaluate(hit.root()));
-    CHECK_FALSE(in.duql().evaluate(miss.root()));
+    CHECK(eval_json(c.duql(), hit.root()));
+    CHECK_FALSE(eval_json(c.duql(), miss.root()));
+    CHECK(eval_json(in.duql(), hit.root()));
+    CHECK_FALSE(eval_json(in.duql(), miss.root()));
 }
 
 namespace {
 
-void check_same_tree(const Pipe& built, const std::string& text) {
+void check_same_tree(const Pipe& built, const dstd::String& text) {
     CAPTURE(text);
     CAPTURE(built.raw());
     auto want = syntax::parse(text);
@@ -253,13 +260,15 @@ void check_same_tree(const Pipe& built, const std::string& text) {
     auto got = syntax::parse(built.raw());
     REQUIRE_MESSAGE(got.has_value(), got.error().format());
     CHECK(syntax::equal(*got, *want));
-    CHECK(built.text() == syntax::to_text(*want));
+    auto text_of_built = built.text();
+    REQUIRE(text_of_built.has_value());
+    CHECK(*text_of_built == syntax::to_text(*want));
 }
 
 }  // namespace
 
 TEST_CASE("pipe builder builds the text tree of every stage and expression") {
-    const std::vector<std::pair<Pipe, std::string>> cases = {
+    const dstd::Vector<dstd::Pair<Pipe, dstd::String>> cases = {
         {source("t.pfw.gz")
              .where(c("name") == "read" && c("dur") > 1000)
              .group({"pid"}, {{"n", fn("count")}})
@@ -332,7 +341,8 @@ TEST_CASE("pipe builder builds the text tree of every stage and expression") {
              .select({"name", Item("d", c("dur") * 2), "ts"})
              .drop({"args.x", "cat"})
              .rename({{"n", "name"}, {"p", "args.path"}}),
-         "select name, d = dur * 2, ts | drop args.x, cat | rename n = name, "
+         "select name, d = dur * 2, ts | drop args.x, cat | rename n = "
+         "name, "
          "p = args.path"},
         {Pipe().distinct().distinct({c("pid"), c("tid")}),
          "distinct | distinct pid, tid"},
@@ -345,14 +355,16 @@ TEST_CASE("pipe builder builds the text tree of every stage and expression") {
                      {{"n", fn("row_number")},
                       {"gap", c("ts") - fn("lag", {c("ts")})}})
              .window({}, {"ts"}, {{"r", fn("rank")}}),
-         "window pid, name sort ts { n = row_number(), gap = ts - lag(ts) } "
+         "window pid, name sort ts { n = row_number(), gap = ts - lag(ts) "
+         "} "
          "| window sort ts { r = rank() }"},
         {Pipe().window({"pid"}, {"ts"},
                        {{"a", fn("sum", {c("dur")}).over_rows(3)},
                         {"b", fn("mean", {c("dur")}).over(duration(1, "s"))},
                         {"d", fn("max", {c("dur")}).over(param("w"))},
                         {"e", fn("count").over(5)}}),
-         "window pid sort ts { a = sum(dur) over 3 rows, b = mean(dur) over "
+         "window pid sort ts { a = sum(dur) over 3 rows, b = mean(dur) "
+         "over "
          "1s, d = max(dur) over $w, e = count() over 5 }"},
         {Pipe()
              .pivot(c("name"), {"a", "b"}, {{"s", fn("sum", {c("dur")})}})
@@ -364,8 +376,8 @@ TEST_CASE("pipe builder builds the text tree of every stage and expression") {
              .pivot(c("k"), {"a", "b"}, {{"n", fn("count")}}, {"x", ""})
              .take_range(3, param("b")),
          R"(distinct c = cat, d = dur // 10 | pivot k in ["a" as x, "b"] { n = count() } | take 3..$b)"},
-        {Pipe().sort({SortKey(-c("dur"), Nulls::LAST),
-                      SortKey(c("name"), Nulls::FIRST)}),
+        {Pipe().sort({SortKey(-c("dur"), Nulls::Last),
+                      SortKey(c("name"), Nulls::First)}),
          "sort -dur nulls last, name nulls first"},
         {Pipe().take(3, {c("pid")}, {-c("dur")}).take(param("k")),
          "take 3 by pid sort -dur | take $k"},
@@ -384,22 +396,23 @@ TEST_CASE("pipe builder builds the text tree of every stage and expression") {
              .lookup("files", {JoinKey(c("fhash"), c("fh")), "pid"}),
          "lookup files on fhash into f | lookup files on fhash == fh, pid"},
         {Pipe()
-             .lookup("files", {"fhash"}, {}, LookupHow::INNER)
-             .lookup("files", {"fhash"}, {}, LookupHow::ANTI)
-             .lookup("files", {"fhash"}, "f", LookupHow::INNER),
-         "lookup files on fhash inner | lookup files on fhash anti | lookup "
+             .lookup("files", {"fhash"}, {}, LookupHow::Inner)
+             .lookup("files", {"fhash"}, {}, LookupHow::Anti)
+             .lookup("files", {"fhash"}, "f", LookupHow::Inner),
+         "lookup files on fhash inner | lookup files on fhash anti | "
+         "lookup "
          "files on fhash inner into f"},
         {Pipe().lookup(source("f.pfw.gz").where(c("x") == 1), {"pid"}, "m",
-                       LookupHow::INNER),
+                       LookupHow::Inner),
          R"(lookup (from "f.pfw.gz" | where x == 1) on pid inner into m)"},
-        {Pipe().lookup(rowset("files").take(3), {"pid"}, {}, LookupHow::ANTI),
+        {Pipe().lookup(rowset("files").take(3), {"pid"}, {}, LookupHow::Anti),
          "lookup (from files | take 3) on pid anti"},
         {Pipe().lookup_asof(rowset("s"), {"pid"}, "ts"),
          "lookup (from s) on pid asof ts"},
         {Pipe()
              .lookup_asof("samples", {"pid"}, JoinKey(c("ts"), c("t")),
-                          Asof::NEAREST, duration(5, "ms"))
-             .lookup_asof("samples", {"pid"}, "ts", Asof::FORWARD),
+                          Asof::Nearest, duration(5, "ms"))
+             .lookup_asof("samples", {"pid"}, "ts", Asof::Forward),
          "lookup samples on pid asof ts == t nearest within 5ms | lookup "
          "samples on pid asof ts forward"},
         {Pipe().lookup_overlap("spans", {"pid"}, "m"),
@@ -413,7 +426,8 @@ TEST_CASE("pipe builder builds the text tree of every stage and expression") {
              .call_tree()
              .bucket(duration(1, "s"), true)
              .bucket(duration(2, "s")),
-         "time_range 1s .. 5s overlap | call_tree | bucket 1s fill | bucket "
+         "time_range 1s .. 5s overlap | call_tree | bucket 1s fill | "
+         "bucket "
          "2s"},
         {Pipe()
              .bucket(duration(1, "ms"), true, {}, "forward")
@@ -421,31 +435,36 @@ TEST_CASE("pipe builder builds the text tree of every stage and expression") {
                      duration(6, "ms"))
              .bucket(duration(1, "ms"), true, {}, "zero", param("lo"),
                      param("hi") + duration(1, "ms")),
-         "bucket 1ms fill forward | bucket 1ms fill linear from 0 to 6ms as b "
+         "bucket 1ms fill forward | bucket 1ms fill linear from 0 to 6ms "
+         "as b "
          "| bucket 1ms fill from $lo to $hi + 1ms"},
         {Pipe()
-             .bucket(duration(5, "s"), false, {}, "zero", std::nullopt,
-                     std::nullopt, duration(1, "s"))
-             .bucket(duration(5, "s"), false, {}, "zero", std::nullopt,
-                     std::nullopt, duration(1, "s"), duration(500, "ms"))
+             .bucket(duration(5, "s"), false, {}, "zero", dstd::nullopt,
+                     dstd::nullopt, duration(1, "s"))
+             .bucket(duration(5, "s"), false, {}, "zero", dstd::nullopt,
+                     dstd::nullopt, duration(1, "s"), duration(500, "ms"))
              .bucket(duration(5, "s"), true, "b", "forward", lit(0),
                      duration(6, "s"), duration(1, "s"), duration(500, "ms"))
-             .bucket(duration(5, "s"), false, {}, "zero", std::nullopt,
-                     std::nullopt, std::nullopt, duration(500, "ms"))
-             .bucket(param("w"), false, {}, "zero", std::nullopt, std::nullopt,
-                     param("e"), param("a")),
-         "bucket 5s every 1s | bucket 5s every 1s at 500ms | bucket 5s every "
-         "1s at 500ms fill forward from 0 to 6s as b | bucket 5s at 500ms | "
+             .bucket(duration(5, "s"), false, {}, "zero", dstd::nullopt,
+                     dstd::nullopt, dstd::nullopt, duration(500, "ms"))
+             .bucket(param("w"), false, {}, "zero", dstd::nullopt,
+                     dstd::nullopt, param("e"), param("a")),
+         "bucket 5s every 1s | bucket 5s every 1s at 500ms | bucket 5s "
+         "every "
+         "1s at 500ms fill forward from 0 to 6s as b | bucket 5s at 500ms "
+         "| "
          "bucket $w every $e at $a"},
         {Pipe()
              .time_range(param("t0"), param("t0") + duration(10, "s"))
-             .time_range(duration(1, "s"), std::nullopt)
-             .time_range(std::nullopt, duration(5, "s"), true)
+             .time_range(duration(1, "s"), dstd::nullopt)
+             .time_range(dstd::nullopt, duration(5, "s"), true)
              .bucket(duration(1, "s"), true, "sec")
              .sample(param("n"), false, param("s"))
              .union_with("runs"),
-         "time_range $t0 .. $t0 + 10s | time_range 1s .. | time_range .. 5s "
-         "overlap | bucket 1s fill as sec | sample $n seed $s | union runs"},
+         "time_range $t0 .. $t0 + 10s | time_range 1s .. | time_range .. "
+         "5s "
+         "overlap | bucket 1s fill as sec | sample $n seed $s | union "
+         "runs"},
         {Pipe().where(c("name").is_in(param("names")) &&
                       c("name").not_in(param("skip")) &&
                       c("path").like(param("p")) &&
@@ -459,7 +478,8 @@ TEST_CASE("pipe builder builds the text tree of every stage and expression") {
              .let("big", rowset("data").where(c("dur") > 100))
              .define("slow", {"x"}, c("x") > 5)
              .where(fn("slow", {c("dur")})),
-         "let big = from data | where dur > 100;\ndef slow(x) = x > 5;\nfrom "
+         "let big = from data | where dur > 100;\ndef slow(x) = x > "
+         "5;\nfrom "
          "big | where slow(dur)"},
         {rowset("data")
              .define("io_rate", {"d"},
@@ -472,7 +492,8 @@ TEST_CASE("pipe builder builds the text tree of every stage and expression") {
              .use("pos")
              .sort({c("b")}),
          "def io_rate(d) = where cat == \"POSIX\" | bucket d | agg { b = "
-         "sum(size) };\ndef pos = where size > 0;\nfrom data | io_rate(1ms) | "
+         "sum(size) };\ndef pos = where size > 0;\nfrom data | "
+         "io_rate(1ms) | "
          "pos() | sort b"},
         {source_param("f").where(c("x") == 1), "from $f | where x == 1"},
         {sources({"a.pfw.gz", "b.pfw.gz"}), R"(from "a.pfw.gz", "b.pfw.gz")"},
@@ -483,59 +504,99 @@ TEST_CASE("pipe builder builds the text tree of every stage and expression") {
 }
 
 TEST_CASE("an index follows a field path") {
-    CHECK_THROWS_AS(fn("sort", {c("xs")})[0], std::invalid_argument);
-    CHECK_THROWS_AS((c("a") + 1)[0], std::invalid_argument);
-    CHECK_THROWS_AS(Col(5)[0], std::invalid_argument);
+    CHECK(fn("sort", {c("xs")})[0].error() == "an index follows a field path");
+    CHECK((c("a") + 1)[0].error() == "an index follows a field path");
+    CHECK(Col(5)[0].error() == "an index follows a field path");
+    CHECK(c("a")[0].error().empty());
+}
+
+TEST_CASE("a builder value keeps its first input error through composition") {
+    const Col bad_index = Col(5)[0];
+    const Col bad_number = lit(std::nan(""));
+    CHECK(bad_number.error() == "duql: a number must be finite");
+    CHECK((bad_index + bad_number).error() == "an index follows a field path");
+    CHECK((bad_number + bad_index).error() == "duql: a number must be finite");
+    CHECK(fn("f", {c("x"), bad_number}).error() ==
+          "duql: a number must be finite");
+    CHECK(duration(std::nan(""), "s").error() ==
+          "duql: a number must be finite");
+    const Pipe p = Pipe().where(bad_index).where(bad_number);
+    CHECK(p.error() == "an index follows a field path");
+    auto text = p.text();
+    REQUIRE_FALSE(text.has_value());
+    CHECK(text.error().message == "an index follows a field path");
+    CHECK(Pipe().select({bad_number}).error() ==
+          "duql: a number must be finite");
+    CHECK(Pipe().lookup(Pipe().where(bad_number), {"k"}).error() ==
+          "duql: a number must be finite");
+    CHECK(Pipe().take(c("n") + bad_number).take(1).error() ==
+          "duql: a number must be finite");
+    const auto source_text =
+        Source().rowset("x", Pipe().where(bad_number)).text();
+    REQUIRE_FALSE(source_text.has_value());
+    CHECK(source_text.error().message == "duql: a number must be finite");
+}
+
+TEST_CASE("pipe time_range and anti lookup report their own errors") {
+    CHECK(Pipe().time_range(dstd::nullopt, dstd::nullopt).error() ==
+          "duql: time_range needs a low or a high bound");
+    CHECK(Pipe().time_range(lit(1), dstd::nullopt).error().empty());
+    CHECK(Pipe().lookup("hosts", {"host"}, "info", LookupHow::Anti).error() ==
+          "duql: an anti lookup cannot take into");
 }
 
 TEST_CASE("pipe bucket rejects a range without fill and a bad mode") {
-    CHECK_THROWS_AS(Pipe().bucket(duration(1, "s"), false, {}, "forward"),
-                    std::invalid_argument);
-    CHECK_THROWS_AS(
-        Pipe().bucket(duration(1, "s"), false, {}, "zero", lit(0), lit(1)),
-        std::invalid_argument);
-    CHECK_THROWS_AS(Pipe().bucket(duration(1, "s"), true, {}, "cubic"),
-                    std::invalid_argument);
-    CHECK_THROWS_AS(Pipe().bucket(duration(1, "s"), true, {}, "zero", lit(0)),
-                    std::invalid_argument);
+    CHECK(Pipe().bucket(duration(1, "s"), false, {}, "forward").error() ==
+          "duql: a bucket mode or range needs fill");
+    CHECK(Pipe()
+              .bucket(duration(1, "s"), false, {}, "zero", lit(0), lit(1))
+              .error() == "duql: a bucket mode or range needs fill");
+    CHECK(Pipe().bucket(duration(1, "s"), true, {}, "cubic").error() ==
+          "duql: bucket mode is zero, forward or linear");
+    CHECK(Pipe().bucket(duration(1, "s"), true, {}, "zero", lit(0)).error() ==
+          "duql: a bucket range needs both low and high");
 }
 
 TEST_CASE("pipe builder writes any string as a literal") {
     CHECK(lit("a\"b'c").raw() == R"("a\"b'c")");
     CHECK(lit("ends\\").raw() == R"("ends\\")");
     CHECK(lit("a\nb").raw() == R"("a\nb")");
-    CHECK_THROWS_AS(lit(std::nan("")), std::invalid_argument);
     check_same_tree(Pipe().where(c("x") == "q\" s' b\\"),
                     R"(where x == 'q" s\' b\\')");
 }
 
 TEST_CASE("pipe builder binds parameters and reports parse errors") {
-    Pipe p = Pipe().where(c("name") == param("n")).bind("n", std::string("x"));
+    Pipe p = Pipe().where(c("name") == param("n")).bind("n", dstd::String("x"));
     REQUIRE(p.bound().size() == 1);
     CHECK(p.bound()[0].first == "n");
     auto scalar = [](const ParamValue& v) { return std::get<LiteralValue>(v); };
-    CHECK(std::get<std::string>(scalar(p.bound()[0].second)) == "x");
+    CHECK(std::get<dstd::String>(scalar(p.bound()[0].second)) == "x");
     p = p.bind("n", LiteralValue{std::int64_t{3}});
     REQUIRE(p.bound().size() == 1);
     CHECK(std::get<std::int64_t>(scalar(p.bound()[0].second)) == 3);
-    p = p.bind("n",
-               std::vector<LiteralValue>{std::string("a"), std::string("b")});
-    CHECK(std::get<std::vector<LiteralValue>>(p.bound()[0].second).size() == 2);
-    CHECK_THROWS_AS((void)Pipe().where(c("a..b") == 1).text(),
-                    std::invalid_argument);
+    p = p.bind(
+        "n", dstd::Vector<LiteralValue>{dstd::String("a"), dstd::String("b")});
+    CHECK(std::get<dstd::Vector<LiteralValue>>(p.bound()[0].second).size() ==
+          2);
+    auto bad = Pipe().where(c("a..b") == 1).text();
+    REQUIRE_FALSE(bad.has_value());
+    CHECK_FALSE(bad.error().message.empty());
 }
 
 TEST_CASE("source builder writes the members in order") {
-    const std::string text = Source()
-                                 .rowset("data", Pipe().where(c("ph") != "M"))
-                                 .flag("args_fallback", true)
-                                 .text();
-    CHECK(text == "data = where ph != \"M\";\ndef args_fallback = true");
-    CHECK(Source().flag("x", false).text() == "def x = false");
+    const auto text = Source()
+                          .rowset("data", Pipe().where(c("ph") != "M"))
+                          .flag("args_fallback", true)
+                          .text();
+    REQUIRE(text.has_value());
+    CHECK(*text == "data = where ph != \"M\";\ndef args_fallback = true");
+    const auto flag = Source().flag("x", false).text();
+    REQUIRE(flag.has_value());
+    CHECK(*flag == "def x = false");
 }
 
 TEST_CASE("source builder writes macros and compiles") {
-    const std::string text =
+    const auto built =
         Source()
             .define("slow", {"t"}, c("dur") > param("t"))
             .define("fast", {"t"}, Pipe().where(c("dur") < param("t")))
@@ -544,6 +605,8 @@ TEST_CASE("source builder writes macros and compiles") {
                                  .select({{"fhash", c("args.value")}, "pid"})
                                  .distinct())
             .text();
+    REQUIRE(built.has_value());
+    const dstd::String& text = *built;
     CHECK(text ==
           "files = where name == \"FH\" | select fhash = args.value, pid | "
           "distinct;\n"
@@ -554,8 +617,12 @@ TEST_CASE("source builder writes macros and compiles") {
 }
 
 TEST_CASE("source builder refuses a row set that reads a file") {
-    CHECK_THROWS_AS(Source().rowset("x", rowset("runs")),
-                    std::invalid_argument);
-    CHECK_THROWS_AS(Source().rowset("x", source("a.pfw")),
-                    std::invalid_argument);
+    const auto from_rowset = Source().rowset("x", rowset("runs")).text();
+    REQUIRE_FALSE(from_rowset.has_value());
+    CHECK(from_rowset.error().message ==
+          "a source row set cannot start with from");
+    const auto from_file = Source().rowset("x", source("a.pfw")).text();
+    REQUIRE_FALSE(from_file.has_value());
+    CHECK(from_file.error().message ==
+          "a source row set cannot start with from");
 }

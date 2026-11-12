@@ -1,15 +1,17 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_TRACE_VIEWS_PIPELINE_H
 #define DFTRACER_UTILS_TRACE_VIEWS_PIPELINE_H
 
-#include <dftracer/utils/core/common/string_intern.h>
-#include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/result.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/trace/views/view_definition.h>
 #include <dftracer/utils/trace/views/view_plan.h>
 
 #include <cstdint>
-#include <span>
-#include <vector>
 
 namespace dftracer::utils::trace::views::detail {
 
@@ -30,25 +32,25 @@ struct PipelineNode {
 /// driver run.
 struct Pipeline {
     PipelineNode source;
-    std::vector<PipelineNode> ops;
-    std::vector<PipelineNode> sinks;
+    dstd::Vector<PipelineNode> ops;
+    dstd::Vector<PipelineNode> sinks;
 };
 
 /// Lowering (a): the scan as the Source with every fold in `sinks` fused into
 /// one pass, no streaming ops. Executing it is exactly
 /// `fuse(plan, vdef, sinks, ...)`. `sinks` is borrowed, not copied.
 Pipeline lower_fused_folds(const ViewPlan& plan, const ViewDefinition& vdef,
-                           std::span<Fold* const> sinks);
+                           dstd::Span<Fold* const> sinks);
 
 /// Run a lowered pipeline. A Source feeding fold Sinks with no streaming ops is
-/// lowering (a): one direct `fuse` call. Throws std::logic_error on a shape no
-/// lowering handles yet, rather than silently dropping nodes. Taken by value:
-/// a coroutine holding a reference to a caller's temporary plan dangles as soon
-/// as the call is not itself the awaited full-expression.
-coro::CoroTask<ExportStats> execute(Pipeline pipeline,
-                                    dftracer::utils::StringIntern& intern,
-                                    const CoverageSet* covered = nullptr,
-                                    std::uint64_t limit = 0);
+/// lowering (a): one direct `fuse` call, whose error is the result. A shape no
+/// lowering handles yet ends the process, rather than silently dropping nodes.
+/// Taken by value: a coroutine holding a reference to a caller's temporary
+/// plan dangles as soon as the call is not itself the awaited
+/// full-expression.
+coro::CoroTask<dstd::Result<ExportStats>> execute(
+    Pipeline pipeline, dftracer::utils::dstd::StringIntern& intern,
+    const CoverageSet* covered = nullptr, std::uint64_t limit = 0);
 
 }  // namespace dftracer::utils::trace::views::detail
 

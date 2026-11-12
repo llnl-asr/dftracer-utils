@@ -1,13 +1,13 @@
+// SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/agg/detail.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
-#include <stdexcept>
-#include <string>
-#include <string_view>
 #include <utility>
-#include <vector>
 
 namespace dftracer::utils::dataframe {
 
@@ -16,8 +16,13 @@ namespace {
 // Set in a FieldStat's domain byte when a nonzero ecarry follows it.
 constexpr std::uint8_t HAS_ECARRY = 0x80;
 
+// A serialized dyn cell is at least its 4-byte id, the domain byte and the
+// compact mask. A count the bytes left cannot hold is corrupt, so it cannot
+// size a vector past the blob.
+constexpr std::uint64_t MIN_DYN_CELL_BYTES = 7;
+
 template <class T>
-void put(std::string& s, T v) {
+void put(dstd::String& s, T v) {
     s.append(reinterpret_cast<const char*>(&v), sizeof(T));
 }
 // A FieldStat is written field by field, never as a raw copy, which would write
@@ -66,14 +71,14 @@ void stat_from_words(const std::uint64_t (&w)[STAT_WORDS], FieldStat& f) {
     f.cm4 = word_double(w[11]);
 }
 
-void put_head(std::string& s, const FieldStat& f) {
+void put_head(dstd::String& s, const FieldStat& f) {
     put(s, static_cast<std::uint8_t>(static_cast<std::uint8_t>(f.domain) |
                                      (f.ecarry ? HAS_ECARRY : 0)));
     if (f.ecarry) put(s, f.ecarry);
 }
 
 // The layout of a stored blob: the first four words, the head, the other eight.
-void put_full(std::string& s, const FieldStat& f) {
+void put_full(dstd::String& s, const FieldStat& f) {
     std::uint64_t w[STAT_WORDS];
     stat_words(f, w);
     for (std::size_t i = 0; i < 4; ++i) put(s, w[i]);
@@ -83,7 +88,7 @@ void put_full(std::string& s, const FieldStat& f) {
 
 // The head, a 16-bit mask of the nonzero words and only those words: most
 // states leave the higher moments at zero.
-void put_compact(std::string& s, const FieldStat& f) {
+void put_compact(dstd::String& s, const FieldStat& f) {
     put_head(s, f);
     std::uint64_t w[STAT_WORDS];
     stat_words(f, w);
@@ -95,34 +100,41 @@ void put_compact(std::string& s, const FieldStat& f) {
         if (w[i]) put(s, w[i]);
 }
 
-void put_stat(std::string& s, const FieldStat& f, bool compact) {
+void put_stat(dstd::String& s, const FieldStat& f, bool compact) {
     if (compact)
         put_compact(s, f);
     else
         put_full(s, f);
 }
-void put_bytes(std::string& s, std::string_view b) {
+void put_bytes(dstd::String& s, dstd::StringView b) {
     put(s, static_cast<std::uint64_t>(b.size()));
     s.append(b);
 }
 // A bounded reader: a blob from another process is untrusted bytes, so every
 // read checks the end and every count is checked against the bytes left
 // (each counted element costs at least one byte to read) before a container
-// is sized by it. A short or corrupt blob throws std::invalid_argument.
+// is sized by it. A short or corrupt blob sets `bad`, reads as zeros from then
+// on, and agg_deserialize returns an InvalidArgument error.
 struct Reader {
     const char* p;
     const char* end;
+    bool bad = false;
     std::size_t left() const { return static_cast<std::size_t>(end - p); }
-    [[noreturn]] static void truncated() {
-        throw std::invalid_argument(
-            "agg_deserialize: the blob is truncated or corrupt");
+    void fail() {
+        bad = true;
+        p = end;
     }
-    void count(std::uint64_t n) const {
-        if (n > left()) truncated();
+    bool count(std::uint64_t n) {
+        if (n <= left()) return true;
+        fail();
+        return false;
     }
     template <class T>
     T get() {
-        if (left() < sizeof(T)) truncated();
+        if (left() < sizeof(T)) {
+            fail();
+            return T{};
+        }
         T v;
         std::memcpy(&v, p, sizeof(T));
         p += sizeof(T);
@@ -131,7 +143,7 @@ struct Reader {
     void get_head(FieldStat& f) {
         const std::uint8_t b = get<std::uint8_t>();
         const std::uint8_t d = b & static_cast<std::uint8_t>(~HAS_ECARRY);
-        if (d > static_cast<std::uint8_t>(FieldStatDomain::F64)) truncated();
+        if (d > static_cast<std::uint8_t>(FieldStatDomain::F64)) fail();
         f.domain = static_cast<FieldStatDomain>(d);
         if (b & HAS_ECARRY) f.ecarry = get<std::int64_t>();
     }
@@ -141,7 +153,7 @@ struct Reader {
         if (compact) {
             get_head(f);
             const std::uint16_t mask = get<std::uint16_t>();
-            if (mask >> STAT_WORDS) truncated();
+            if (mask >> STAT_WORDS) fail();
             for (std::size_t i = 0; i < STAT_WORDS; ++i)
                 if (mask & (1u << i)) w[i] = get<std::uint64_t>();
         } else {
@@ -153,18 +165,39 @@ struct Reader {
         stat_from_words(w, f);
         return f;
     }
-    std::string get_bytes() {
+    dstd::String get_bytes() {
         std::uint64_t n = get<std::uint64_t>();
-        count(n);
-        std::string r(p, n);
+        if (!count(n)) return {};
+        dstd::String r(p, n);
         p += n;
         return r;
     }
     void skip(std::uint64_t n) {
-        count(n);
+        if (!count(n)) return;
         p += n;
     }
+    bool count_cells(std::uint64_t n) {
+        if (n <= left() / MIN_DYN_CELL_BYTES) return true;
+        fail();
+        return false;
+    }
+    // A fixed tag of the dyn section's layout. A blob of an older layout fails
+    // here instead of being misread.
+    bool expect(const char (&tag)[4]) {
+        if (left() < sizeof(tag) || std::memcmp(p, tag, sizeof(tag)) != 0) {
+            fail();
+            return false;
+        }
+        p += sizeof(tag);
+        return true;
+    }
 };
+
+dstd::Unexpected<dstd::Error> corrupt_blob() {
+    return common::make_error(
+        common::ErrorCode::InvalidArgument,
+        "agg_deserialize: the blob is truncated or corrupt");
+}
 
 }  // namespace
 
@@ -172,9 +205,14 @@ struct Reader {
 // instead of misreading the bytes. A full blob starts with a small spec count.
 constexpr char COMPACT_MAGIC[4] = {'D', 'F', 'T', 'C'};
 
-std::string agg_serialize(const AggState& st_in, bool compact) {
+// The dyn section's tag, after the specs. A blob of an older layout fails here
+// instead of being misread.
+constexpr char DYN_FULL_MAGIC[4] = {'D', 'F', 'T', 'F'};
+constexpr char DYN_LIGHT_MAGIC[4] = {'D', 'F', 'T', 'E'};
+
+dstd::String agg_serialize(const AggState& st_in, bool compact) {
     const AggState& st = settled(st_in);
-    std::string s;
+    dstd::String s;
     if (compact) s.append(COMPACT_MAGIC, sizeof(COMPACT_MAGIC));
     put(s, static_cast<std::uint32_t>(st.specs.size()));
     put(s, static_cast<std::uint32_t>(st.nkeys));
@@ -194,8 +232,8 @@ std::string agg_serialize(const AggState& st_in, bool compact) {
                                              ? st.key_time_unit[k]
                                              : TimeUnit::Micro));
     for (std::size_t k = 0; k < st.nkeys; ++k)
-        put_bytes(
-            s, k < st.key_timezone.size() ? st.key_timezone[k] : std::string());
+        put_bytes(s, k < st.key_timezone.size() ? st.key_timezone[k]
+                                                : dstd::String());
     for (std::size_t k = 0; k < st.nkeys; ++k)
         put(s, k < st.key_byte_width.size() ? st.key_byte_width[k]
                                             : std::int32_t{0});
@@ -224,7 +262,7 @@ std::string agg_serialize(const AggState& st_in, bool compact) {
     put(s, ng);
     for (std::size_t k = 0; k < st.nkeys; ++k) {
         if (st.key_is_bytes[k])
-            for (const std::string& v : st.skey_cols[k]) put_bytes(s, v);
+            for (const dstd::String& v : st.skey_cols[k]) put_bytes(s, v);
         else
             for (std::int64_t v : st.ikey_cols[k]) put(s, v);
         for (std::uint8_t v : st.nkey_cols[k]) put(s, v);
@@ -236,11 +274,11 @@ std::string agg_serialize(const AggState& st_in, bool compact) {
         for (std::uint64_t b : st.fl_last) put(s, b);
         for (std::int64_t x : st.fl_first_idx) put(s, x);
         for (std::int64_t x : st.fl_last_idx) put(s, x);
-        for (const std::string& v : st.fl_first_s) put_bytes(s, v);
-        for (const std::string& v : st.fl_last_s) put_bytes(s, v);
+        for (const dstd::String& v : st.fl_first_s) put_bytes(s, v);
+        for (const dstd::String& v : st.fl_last_s) put_bytes(s, v);
     }
     if (st.has_sketch) {
-        std::vector<std::uint8_t> blob;
+        dstd::Vector<std::uint8_t> blob;
         for (const DDSketch& sk : st.sketches) {
             sk.serialize_into(blob);
             put(s, static_cast<std::uint32_t>(blob.size()));
@@ -248,7 +286,7 @@ std::string agg_serialize(const AggState& st_in, bool compact) {
         }
     }
     if (st.has_msk) {
-        std::vector<std::uint8_t> blob;
+        dstd::Vector<std::uint8_t> blob;
         for (const MergeSketch& sk : st.msk) {
             sk.serialize_into(blob);
             put(s, static_cast<std::uint32_t>(blob.size()));
@@ -259,15 +297,15 @@ std::string agg_serialize(const AggState& st_in, bool compact) {
     if (st.has_arg) {
         for (double b : st.arg_by) put(s, b);
         for (char h : st.arg_has) put(s, static_cast<std::uint8_t>(h));
-        for (const std::string& r : st.arg_repr) put_bytes(s, r);
+        for (const dstd::String& r : st.arg_repr) put_bytes(s, r);
     }
     put(s, static_cast<std::uint8_t>(st.has_set ? 1 : 0));
     if (st.has_set) {
         for (const AggState::StringSet& gset : st.sets) {
             put(s, static_cast<std::uint32_t>(gset.size()));
-            std::vector<std::string_view> sorted(gset.begin(), gset.end());
+            dstd::Vector<dstd::StringView> sorted(gset.begin(), gset.end());
             std::sort(sorted.begin(), sorted.end());
-            for (const std::string_view v : sorted) put_bytes(s, v);
+            for (const dstd::StringView v : sorted) put_bytes(s, v);
         }
     }
     put(s, static_cast<std::uint8_t>(st.has_occ ? 1 : 0));
@@ -293,29 +331,56 @@ std::string agg_serialize(const AggState& st_in, bool compact) {
             put_bytes(s, d.out_prefix);
         }
         put(s, static_cast<std::uint8_t>(st.dyn_has_sketch ? 1 : 0));
-        put(s, static_cast<std::uint32_t>(st.dyn_domain.size()));
-        for (const auto& [name, dom] : st.dyn_domain) {
-            put_bytes(s, name);
-            put(s, static_cast<std::uint8_t>(dom));
-        }
-        for (std::int64_t g = 0; g < ng; ++g) {
-            const std::map<std::string, FieldStat>& gmap =
-                st.dyn_fs[static_cast<std::size_t>(g)];
-            put(s, static_cast<std::uint64_t>(gmap.size()));
-            for (const auto& [name, fs] : gmap) {
-                put_bytes(s, name);
-                put_stat(s, fs, compact);
+        // Tag, name table once (name and domain), then each group's cells by
+        // id.
+        if (st.dyn_light_on) {
+            s.append(DYN_LIGHT_MAGIC, sizeof(DYN_LIGHT_MAGIC));
+            put(s, static_cast<std::uint32_t>(st.dyn_names.size()));
+            for (std::size_t i = 0; i < st.dyn_names.size(); ++i) {
+                put_bytes(s, st.dyn_name(static_cast<std::uint32_t>(i)));
+                put(s, static_cast<std::uint8_t>(st.dyn_domain[i]));
+            }
+            // The record the words are read with, so a reader whose mask rules
+            // differ from the writer's fails here.
+            put(s, st.dyn_light_mask);
+            put(s, static_cast<std::uint8_t>(st.dyn_light_stride));
+            for (std::int64_t g = 0; g < ng; ++g) {
+                const DynLightCells& cells =
+                    st.dyn_light[static_cast<std::size_t>(g)];
+                put(s, static_cast<std::uint64_t>(cells.words.size()));
+                for (std::uint64_t w : cells.words) put(s, w);
+                put(s, static_cast<std::uint64_t>(cells.carry.size()));
+                for (const auto& [id, wrap] : cells.carry) {
+                    put(s, id);
+                    put(s, wrap);
+                }
+            }
+        } else {
+            s.append(DYN_FULL_MAGIC, sizeof(DYN_FULL_MAGIC));
+            put(s, static_cast<std::uint32_t>(st.dyn_names.size()));
+            for (std::size_t i = 0; i < st.dyn_names.size(); ++i) {
+                put_bytes(s, st.dyn_name(static_cast<std::uint32_t>(i)));
+                put(s, static_cast<std::uint8_t>(st.dyn_domain[i]));
+            }
+            for (std::int64_t g = 0; g < ng; ++g) {
+                const dstd::Vector<DynCell>& cells =
+                    st.dyn_fs[static_cast<std::size_t>(g)];
+                put(s, static_cast<std::uint64_t>(cells.size()));
+                for (const DynCell& c : cells) {
+                    put(s, c.id);
+                    put_stat(s, c.stat, compact);
+                }
             }
         }
         if (st.dyn_has_sketch) {
-            std::vector<std::uint8_t> blob;
+            dstd::Vector<std::uint8_t> blob;
             for (std::int64_t g = 0; g < ng; ++g) {
-                const std::map<std::string, DDSketch>& gsk =
+                const dstd::Vector<DynSketchCell>& cells =
                     st.dyn_sketch[static_cast<std::size_t>(g)];
-                put(s, static_cast<std::uint64_t>(gsk.size()));
-                for (const auto& [name, sk] : gsk) {
-                    put_bytes(s, name);
-                    sk.serialize_into(blob);
+                put(s, static_cast<std::uint64_t>(cells.size()));
+                for (const DynSketchCell& c : cells) {
+                    put(s, c.id);
+                    c.sketch.serialize_into(blob);
                     put(s, static_cast<std::uint32_t>(blob.size()));
                     s.append(reinterpret_cast<const char*>(blob.data()),
                              blob.size());
@@ -377,13 +442,15 @@ std::string agg_serialize(const AggState& st_in, bool compact) {
     return s;
 }
 
-AggStatePtr agg_deserialize(const std::string& blob, bool compact) {
+dstd::Result<AggStatePtr> agg_deserialize(const dstd::String& blob,
+                                          bool compact) {
     Reader r{blob.data(), blob.data() + blob.size()};
     const bool marked =
         blob.size() >= sizeof(COMPACT_MAGIC) &&
         std::memcmp(blob.data(), COMPACT_MAGIC, sizeof(COMPACT_MAGIC)) == 0;
     if (marked != compact)
-        throw std::runtime_error(
+        return common::make_error(
+            common::ErrorCode::Parse,
             "agg_deserialize: the blob is in the other (compact or full) "
             "format");
     if (marked) r.p += sizeof(COMPACT_MAGIC);
@@ -391,55 +458,55 @@ AggStatePtr agg_deserialize(const std::string& blob, bool compact) {
     const std::uint32_t ns = r.get<std::uint32_t>();
     const std::uint32_t nkeys = r.get<std::uint32_t>();
     st->nkeys = nkeys;
-    r.count(nkeys);
+    if (!r.count(nkeys)) return corrupt_blob();
     st->key_is_bytes.resize(nkeys);
     for (std::uint32_t k = 0; k < nkeys; ++k)
         st->key_is_bytes[k] = static_cast<char>(r.get<std::uint8_t>());
-    r.count(nkeys);
+    if (!r.count(nkeys)) return corrupt_blob();
     st->key_domain.resize(nkeys);
     for (std::uint32_t k = 0; k < nkeys; ++k) {
         const std::uint8_t d = r.get<std::uint8_t>();
         if (d > static_cast<std::uint8_t>(FieldStatDomain::F64))
-            Reader::truncated();
+            return corrupt_blob();
         st->key_domain[k] = static_cast<FieldStatDomain>(d);
     }
-    r.count(nkeys);
+    if (!r.count(nkeys)) return corrupt_blob();
     st->key_type.resize(nkeys);
     for (std::uint32_t k = 0; k < nkeys; ++k) {
         const std::uint8_t t = r.get<std::uint8_t>();
-        if (t > static_cast<std::uint8_t>(TypeId::Map)) Reader::truncated();
+        if (t > static_cast<std::uint8_t>(TypeId::Map)) return corrupt_blob();
         st->key_type[k] = static_cast<TypeId>(t);
     }
-    r.count(nkeys);
+    if (!r.count(nkeys)) return corrupt_blob();
     st->key_json.resize(nkeys);
     for (std::uint32_t k = 0; k < nkeys; ++k)
         st->key_json[k] = r.get<std::uint8_t>() != 0;
-    r.count(nkeys);
+    if (!r.count(nkeys)) return corrupt_blob();
     st->key_time_unit.resize(nkeys);
     for (std::uint32_t k = 0; k < nkeys; ++k)
         st->key_time_unit[k] = static_cast<TimeUnit>(r.get<std::int32_t>());
-    r.count(nkeys);
+    if (!r.count(nkeys)) return corrupt_blob();
     st->key_timezone.resize(nkeys);
     for (std::uint32_t k = 0; k < nkeys; ++k)
         st->key_timezone[k] = r.get_bytes();
-    r.count(nkeys);
+    if (!r.count(nkeys)) return corrupt_blob();
     st->key_byte_width.resize(nkeys);
     for (std::uint32_t k = 0; k < nkeys; ++k)
         st->key_byte_width[k] = r.get<std::int32_t>();
-    r.count(nkeys);
+    if (!r.count(nkeys)) return corrupt_blob();
     st->key_decimal_precision.resize(nkeys);
     for (std::uint32_t k = 0; k < nkeys; ++k)
         st->key_decimal_precision[k] = r.get<std::int32_t>();
-    r.count(nkeys);
+    if (!r.count(nkeys)) return corrupt_blob();
     st->key_decimal_scale.resize(nkeys);
     for (std::uint32_t k = 0; k < nkeys; ++k)
         st->key_decimal_scale[k] = r.get<std::int32_t>();
-    r.count(ns);
+    if (!r.count(ns)) return corrupt_blob();
     st->specs.resize(ns);
     for (std::uint32_t i = 0; i < ns; ++i) {
         const std::int32_t op = r.get<std::int32_t>();
         if (op < 0 || op > static_cast<std::int32_t>(AggOp::SketchQuantile))
-            Reader::truncated();
+            return corrupt_blob();
         st->specs[i].op = static_cast<AggOp>(op);
         st->specs[i].value_col = r.get<std::int32_t>();
         st->specs[i].out = r.get_bytes();
@@ -448,68 +515,68 @@ AggStatePtr agg_deserialize(const std::string& blob, bool compact) {
     }
     st->init_layout();
     const std::uint32_t nf = r.get<std::uint32_t>();
-    if (nf != st->nf) Reader::truncated();
-    r.count(nf);
+    if (nf != st->nf) return corrupt_blob();
+    if (!r.count(nf)) return corrupt_blob();
     st->field_domain.resize(nf);
     for (std::uint32_t i = 0; i < nf; ++i)
         st->field_domain[i] =
             static_cast<FieldStatDomain>(r.get<std::uint8_t>());
-    if (st->has_fl != (r.get<std::uint8_t>() != 0)) Reader::truncated();
+    if (st->has_fl != (r.get<std::uint8_t>() != 0)) return corrupt_blob();
     if (st->has_fl) {
-        r.count(nf);
+        if (!r.count(nf)) return corrupt_blob();
         st->field_is_str.resize(nf);
         for (std::uint32_t i = 0; i < nf; ++i)
             st->field_is_str[i] = static_cast<char>(r.get<std::uint8_t>());
     }
     const std::int64_t ng = r.get<std::int64_t>();
-    if (ng < 0) Reader::truncated();
-    r.count(nkeys);
+    if (ng < 0) return corrupt_blob();
+    if (!r.count(nkeys)) return corrupt_blob();
     st->ikey_cols.resize(nkeys);
-    r.count(nkeys);
+    if (!r.count(nkeys)) return corrupt_blob();
     st->skey_cols.resize(nkeys);
-    r.count(nkeys);
+    if (!r.count(nkeys)) return corrupt_blob();
     st->nkey_cols.resize(nkeys);
     for (std::uint32_t k = 0; k < nkeys; ++k) {
         if (st->key_is_bytes[k]) {
-            r.count(static_cast<std::size_t>(ng));
+            if (!r.count(static_cast<std::size_t>(ng))) return corrupt_blob();
             st->skey_cols[k].resize(static_cast<std::size_t>(ng));
             for (std::int64_t g = 0; g < ng; ++g)
                 st->skey_cols[k][static_cast<std::size_t>(g)] = r.get_bytes();
         } else {
-            r.count(static_cast<std::size_t>(ng));
+            if (!r.count(static_cast<std::size_t>(ng))) return corrupt_blob();
             st->ikey_cols[k].resize(static_cast<std::size_t>(ng));
             for (std::int64_t g = 0; g < ng; ++g)
                 st->ikey_cols[k][static_cast<std::size_t>(g)] =
                     r.get<std::int64_t>();
         }
-        r.count(static_cast<std::size_t>(ng));
+        if (!r.count(static_cast<std::size_t>(ng))) return corrupt_blob();
         st->nkey_cols[k].resize(static_cast<std::size_t>(ng));
         for (std::int64_t g = 0; g < ng; ++g)
             st->nkey_cols[k][static_cast<std::size_t>(g)] =
                 r.get<std::uint8_t>();
     }
     st->rebuild_key_buckets(ng);
-    r.count(static_cast<std::size_t>(ng));
+    if (!r.count(static_cast<std::size_t>(ng))) return corrupt_blob();
     st->counts.resize(static_cast<std::size_t>(ng));
     for (std::int64_t g = 0; g < ng; ++g)
         st->counts[static_cast<std::size_t>(g)] = r.get<std::uint64_t>();
-    r.count(static_cast<std::size_t>(ng) * nf);
+    if (!r.count(static_cast<std::size_t>(ng) * nf)) return corrupt_blob();
     st->fstats.resize(static_cast<std::size_t>(ng) * nf);
     for (std::size_t i = 0; i < st->fstats.size(); ++i)
         st->fstats[i] = r.get_stat(compact);
     if (st->has_fl) {
         const std::size_t sz = static_cast<std::size_t>(ng) * nf;
-        r.count(sz);
+        if (!r.count(sz)) return corrupt_blob();
         st->fl_first.resize(sz);
-        r.count(sz);
+        if (!r.count(sz)) return corrupt_blob();
         st->fl_last.resize(sz);
-        r.count(sz);
+        if (!r.count(sz)) return corrupt_blob();
         st->fl_first_idx.resize(sz);
-        r.count(sz);
+        if (!r.count(sz)) return corrupt_blob();
         st->fl_last_idx.resize(sz);
-        r.count(sz);
+        if (!r.count(sz)) return corrupt_blob();
         st->fl_first_s.resize(sz);
-        r.count(sz);
+        if (!r.count(sz)) return corrupt_blob();
         st->fl_last_s.resize(sz);
         for (std::size_t i = 0; i < sz; ++i)
             st->fl_first[i] = r.get<std::uint64_t>();
@@ -524,11 +591,11 @@ AggStatePtr agg_deserialize(const std::string& blob, bool compact) {
     }
     if (st->has_sketch) {
         const std::size_t sz = static_cast<std::size_t>(ng) * st->n_sketch;
-        r.count(sz);
+        if (!r.count(sz)) return corrupt_blob();
         st->sketches.reserve(sz);
         for (std::size_t i = 0; i < sz; ++i) {
             const std::uint32_t blen = r.get<std::uint32_t>();
-            r.count(blen);
+            if (!r.count(blen)) return corrupt_blob();
             st->sketches.push_back(DDSketch::deserialize(
                 reinterpret_cast<const std::uint8_t*>(r.p), blen));
             r.p += blen;
@@ -536,52 +603,53 @@ AggStatePtr agg_deserialize(const std::string& blob, bool compact) {
     }
     if (st->has_msk) {
         const std::size_t sz = static_cast<std::size_t>(ng) * st->n_msk;
-        r.count(sz);
+        if (!r.count(sz)) return corrupt_blob();
         st->msk.reserve(sz);
         for (std::size_t i = 0; i < sz; ++i) {
             const std::uint32_t blen = r.get<std::uint32_t>();
-            r.count(blen);
+            if (!r.count(blen)) return corrupt_blob();
             st->msk.push_back(MergeSketch::deserialize(
                 reinterpret_cast<const std::uint8_t*>(r.p), blen));
             r.p += blen;
         }
     }
-    if (st->has_arg != (r.get<std::uint8_t>() != 0)) Reader::truncated();
+    if (st->has_arg != (r.get<std::uint8_t>() != 0)) return corrupt_blob();
     if (st->has_arg) {
         const std::size_t sz = static_cast<std::size_t>(ng) * st->n_arg;
         const std::size_t rz = static_cast<std::size_t>(ng) * st->n_arg_repr;
-        r.count(sz);
+        if (!r.count(sz)) return corrupt_blob();
         st->arg_by.resize(sz);
-        r.count(sz);
+        if (!r.count(sz)) return corrupt_blob();
         st->arg_has.resize(sz);
-        r.count(rz);
+        if (!r.count(rz)) return corrupt_blob();
         st->arg_repr.resize(rz);
         for (std::size_t i = 0; i < sz; ++i) st->arg_by[i] = r.get<double>();
         for (std::size_t i = 0; i < sz; ++i)
             st->arg_has[i] = static_cast<char>(r.get<std::uint8_t>());
         for (std::size_t i = 0; i < rz; ++i) st->arg_repr[i] = r.get_bytes();
     }
-    if (st->has_set != (r.get<std::uint8_t>() != 0)) Reader::truncated();
+    if (st->has_set != (r.get<std::uint8_t>() != 0)) return corrupt_blob();
     if (st->has_set) {
         const std::size_t sz = static_cast<std::size_t>(ng) * st->n_set;
-        r.count(sz);
+        if (!r.count(sz)) return corrupt_blob();
         st->sets.resize(sz);
         for (std::size_t i = 0; i < sz; ++i) {
             const std::uint32_t cnt = r.get<std::uint32_t>();
+            if (!r.count(cnt)) return corrupt_blob();
             for (std::uint32_t j = 0; j < cnt; ++j)
                 st->sets[i].insert(r.get_bytes());
         }
     }
-    if (st->has_occ != (r.get<std::uint8_t>() != 0)) Reader::truncated();
+    if (st->has_occ != (r.get<std::uint8_t>() != 0)) return corrupt_blob();
     if (st->has_occ) {
         const std::size_t sz = static_cast<std::size_t>(ng) * st->n_occ;
-        r.count(sz);
+        if (!r.count(sz)) return corrupt_blob();
         st->occ_total.resize(sz);
-        r.count(sz);
+        if (!r.count(sz)) return corrupt_blob();
         st->occ_ts.resize(sz);
-        r.count(sz);
+        if (!r.count(sz)) return corrupt_blob();
         st->occ_te.resize(sz);
-        r.count(sz);
+        if (!r.count(sz)) return corrupt_blob();
         st->occ_deltas.resize(sz);
         for (std::size_t i = 0; i < sz; ++i)
             st->occ_total[i] = r.get<std::uint64_t>();
@@ -591,7 +659,7 @@ AggStatePtr agg_deserialize(const std::string& blob, bool compact) {
             st->occ_te[i] = r.get<std::uint64_t>();
         for (std::size_t i = 0; i < sz; ++i) {
             const std::uint64_t cnt = r.get<std::uint64_t>();
-            r.count(static_cast<std::size_t>(cnt));
+            if (!r.count(static_cast<std::size_t>(cnt))) return corrupt_blob();
             st->occ_deltas[i].reserve(static_cast<std::size_t>(cnt));
             for (std::uint64_t j = 0; j < cnt; ++j) {
                 const std::uint64_t t = r.get<std::uint64_t>();
@@ -605,13 +673,13 @@ AggStatePtr agg_deserialize(const std::string& blob, bool compact) {
     st->has_dyn = r.get<std::uint8_t>() != 0;
     if (st->has_dyn) {
         const std::uint32_t nd = r.get<std::uint32_t>();
-        if (nd == 0) Reader::truncated();
-        r.count(nd);
+        if (nd == 0) return corrupt_blob();
+        if (!r.count(nd)) return corrupt_blob();
         st->dyn_specs.resize(nd);
         for (std::uint32_t i = 0; i < nd; ++i) {
             const std::int32_t op = r.get<std::int32_t>();
             if (op < 0 || op > static_cast<std::int32_t>(AggOp::SketchQuantile))
-                Reader::truncated();
+                return corrupt_blob();
             st->dyn_specs[i].op = static_cast<AggOp>(op);
             st->dyn_specs[i].param = r.get<double>();
             st->dyn_specs[i].out_prefix = r.get_bytes();
@@ -619,79 +687,150 @@ AggStatePtr agg_deserialize(const std::string& blob, bool compact) {
         bool sketch = false;
         for (const AggDynSpec& d : st->dyn_specs)
             if (d.op == AggOp::Pct) sketch = true;
-        if ((r.get<std::uint8_t>() != 0) != sketch) Reader::truncated();
+        if ((r.get<std::uint8_t>() != 0) != sketch) return corrupt_blob();
         st->dyn_has_sketch = sketch;
-        const std::uint32_t ndom = r.get<std::uint32_t>();
-        for (std::uint32_t i = 0; i < ndom; ++i) {
-            std::string name = r.get_bytes();
-            st->dyn_domain.emplace(
-                std::move(name),
-                static_cast<FieldStatDomain>(r.get<std::uint8_t>()));
+        // The light record the specs need is derived after them, as init_layout
+        // saw none.
+        st->dyn_light_layout();
+        if (r.left() < sizeof(DYN_FULL_MAGIC)) return corrupt_blob();
+        const bool light_cells =
+            std::memcmp(r.p, DYN_LIGHT_MAGIC, sizeof(DYN_LIGHT_MAGIC)) == 0;
+        if (!r.expect(light_cells ? DYN_LIGHT_MAGIC : DYN_FULL_MAGIC))
+            return corrupt_blob();
+        if (light_cells && !st->dyn_light_ok) return corrupt_blob();
+        const std::uint32_t nnames = r.get<std::uint32_t>();
+        if (!r.count(nnames)) return corrupt_blob();
+        st->dyn_names.reserve(nnames);
+        st->dyn_domain.reserve(nnames);
+        for (std::uint32_t i = 0; i < nnames; ++i) {
+            const dstd::String name = r.get_bytes();
+            const auto dom =
+                static_cast<FieldStatDomain>(r.get<std::uint8_t>());
+            if (dom > FieldStatDomain::F64) return corrupt_blob();
+            // A repeated name would break the id -> name mapping.
+            if (st->dyn_intern(name, dom) != i) return corrupt_blob();
         }
-        r.count(static_cast<std::size_t>(ng));
-        st->dyn_fs.resize(static_cast<std::size_t>(ng));
-        for (std::int64_t g = 0; g < ng; ++g) {
-            const std::uint64_t cnt = r.get<std::uint64_t>();
-            for (std::uint64_t j = 0; j < cnt; ++j) {
-                std::string name = r.get_bytes();
-                st->dyn_fs[static_cast<std::size_t>(g)].emplace(
-                    std::move(name), r.get_stat(compact));
+        if (!r.count(static_cast<std::size_t>(ng))) return corrupt_blob();
+        if (light_cells) {
+            const std::uint8_t mask = r.get<std::uint8_t>();
+            const std::uint8_t stride = r.get<std::uint8_t>();
+            if (mask != st->dyn_light_mask || stride != st->dyn_light_stride)
+                return corrupt_blob();
+            st->dyn_light_on = true;
+            st->dyn_light.resize(static_cast<std::size_t>(ng));
+            for (std::int64_t g = 0; g < ng; ++g) {
+                DynLightCells& cells =
+                    st->dyn_light[static_cast<std::size_t>(g)];
+                const std::uint64_t nw = r.get<std::uint64_t>();
+                if (!r.count_cells(nw)) return corrupt_blob();
+                if (nw % st->dyn_light_stride != 0) return corrupt_blob();
+                cells.words.resize(static_cast<std::size_t>(nw));
+                std::uint32_t prev = 0;
+                for (std::uint64_t j = 0; j < nw; ++j) {
+                    cells.words[static_cast<std::size_t>(j)] =
+                        r.get<std::uint64_t>();
+                    if (j % st->dyn_light_stride != 0) continue;
+                    // The cells are written in id order and must stay in it.
+                    const auto id = static_cast<std::uint32_t>(
+                        cells.words[static_cast<std::size_t>(j)] &
+                        DYN_LIGHT_ID);
+                    if (id >= nnames || (j != 0 && id <= prev))
+                        return corrupt_blob();
+                    prev = id;
+                }
+                const std::uint64_t nc = r.get<std::uint64_t>();
+                if (!r.count_cells(nc)) return corrupt_blob();
+                cells.carry.reserve(static_cast<std::size_t>(nc));
+                for (std::uint64_t j = 0; j < nc; ++j) {
+                    const std::uint32_t id = r.get<std::uint32_t>();
+                    const std::int64_t wrap = r.get<std::int64_t>();
+                    if (id >= nnames || wrap == 0 ||
+                        (!cells.carry.empty() &&
+                         cells.carry.back().first >= id))
+                        return corrupt_blob();
+                    cells.carry.emplace_back(id, wrap);
+                }
+            }
+        } else {
+            st->dyn_fs.resize(static_cast<std::size_t>(ng));
+            for (std::int64_t g = 0; g < ng; ++g) {
+                const std::uint64_t cnt = r.get<std::uint64_t>();
+                if (!r.count_cells(cnt)) return corrupt_blob();
+                dstd::Vector<DynCell>& cells =
+                    st->dyn_fs[static_cast<std::size_t>(g)];
+                cells.reserve(static_cast<std::size_t>(cnt));
+                for (std::uint64_t j = 0; j < cnt; ++j) {
+                    const std::uint32_t id = r.get<std::uint32_t>();
+                    FieldStat fs = r.get_stat(compact);
+                    // The cells are written in id order and must stay in it.
+                    if (id >= nnames ||
+                        (!cells.empty() && cells.back().id >= id))
+                        return corrupt_blob();
+                    cells.push_back(DynCell{std::move(fs), id});
+                }
             }
         }
         if (st->dyn_has_sketch) {
-            r.count(static_cast<std::size_t>(ng));
+            if (!r.count(static_cast<std::size_t>(ng))) return corrupt_blob();
             st->dyn_sketch.resize(static_cast<std::size_t>(ng));
             for (std::int64_t g = 0; g < ng; ++g) {
                 const std::uint64_t cnt = r.get<std::uint64_t>();
+                if (!r.count_cells(cnt)) return corrupt_blob();
+                dstd::Vector<DynSketchCell>& cells =
+                    st->dyn_sketch[static_cast<std::size_t>(g)];
+                cells.reserve(static_cast<std::size_t>(cnt));
                 for (std::uint64_t j = 0; j < cnt; ++j) {
-                    std::string name = r.get_bytes();
+                    const std::uint32_t id = r.get<std::uint32_t>();
                     const std::uint32_t blen = r.get<std::uint32_t>();
-                    r.count(blen);
-                    st->dyn_sketch[static_cast<std::size_t>(g)].emplace(
-                        std::move(name),
-                        DDSketch::deserialize(
-                            reinterpret_cast<const std::uint8_t*>(r.p), blen));
+                    if (!r.count(blen)) return corrupt_blob();
+                    DDSketch sk = DDSketch::deserialize(
+                        reinterpret_cast<const std::uint8_t*>(r.p), blen);
                     r.p += blen;
+                    if (id >= nnames ||
+                        (!cells.empty() && cells.back().id >= id))
+                        return corrupt_blob();
+                    cells.push_back(DynSketchCell{std::move(sk), id});
                 }
             }
         }
     }
-    if (st->has_bitor != (r.get<std::uint8_t>() != 0)) Reader::truncated();
+    if (st->has_bitor != (r.get<std::uint8_t>() != 0)) return corrupt_blob();
     if (st->has_bitor) {
         const std::size_t sz = static_cast<std::size_t>(ng) * st->n_bitor;
-        r.count(sz);
+        if (!r.count(sz)) return corrupt_blob();
         st->bitor_acc.resize(sz);
         for (std::size_t i = 0; i < sz; ++i)
             st->bitor_acc[i] = r.get<std::uint64_t>();
     }
-    if (st->has_prod != (r.get<std::uint8_t>() != 0)) Reader::truncated();
+    if (st->has_prod != (r.get<std::uint8_t>() != 0)) return corrupt_blob();
     if (st->has_prod) {
         const std::size_t sz = static_cast<std::size_t>(ng) * st->n_prod;
-        r.count(sz);
+        if (!r.count(sz)) return corrupt_blob();
         st->prod_acc.resize(sz);
         for (std::size_t i = 0; i < sz; ++i) st->prod_acc[i] = r.get<double>();
     }
-    if (st->has_kmv != (r.get<std::uint8_t>() != 0)) Reader::truncated();
+    if (st->has_kmv != (r.get<std::uint8_t>() != 0)) return corrupt_blob();
     if (st->has_kmv) {
         const std::size_t sz = static_cast<std::size_t>(ng) * st->n_kmv;
-        r.count(sz);
+        if (!r.count(sz)) return corrupt_blob();
         st->kmv.resize(sz);
         for (std::size_t i = 0; i < sz; ++i) {
             const std::uint32_t cnt = r.get<std::uint32_t>();
+            if (!r.count(cnt)) return corrupt_blob();
             for (std::uint32_t j = 0; j < cnt; ++j) {
                 const std::uint64_t h = r.get<std::uint64_t>();
                 st->kmv[i].emplace(h, r.get_bytes());
             }
         }
     }
-    if (st->has_lst != (r.get<std::uint8_t>() != 0)) Reader::truncated();
+    if (st->has_lst != (r.get<std::uint8_t>() != 0)) return corrupt_blob();
     if (st->has_lst) {
         const std::size_t sz = static_cast<std::size_t>(ng) * st->n_lst;
-        r.count(sz);
+        if (!r.count(sz)) return corrupt_blob();
         st->lst.resize(sz);
         for (std::size_t i = 0; i < sz; ++i) {
             const std::uint32_t cnt = r.get<std::uint32_t>();
-            r.count(cnt);
+            if (!r.count(cnt)) return corrupt_blob();
             st->lst[i].reserve(cnt);
             for (std::uint32_t j = 0; j < cnt; ++j) {
                 const double by = r.get<double>();
@@ -699,24 +838,25 @@ AggStatePtr agg_deserialize(const std::string& blob, bool compact) {
             }
         }
     }
-    if (st->has_ss != (r.get<std::uint8_t>() != 0)) Reader::truncated();
+    if (st->has_ss != (r.get<std::uint8_t>() != 0)) return corrupt_blob();
     if (st->has_ss) {
         const std::size_t sz = static_cast<std::size_t>(ng) * st->n_ss;
-        r.count(sz);
+        if (!r.count(sz)) return corrupt_blob();
         st->ss_counters.resize(sz);
         for (std::size_t i = 0; i < sz; ++i) {
             const std::uint32_t cnt = r.get<std::uint32_t>();
+            if (!r.count(cnt)) return corrupt_blob();
             for (std::uint32_t j = 0; j < cnt; ++j) {
-                std::string v = r.get_bytes();
+                dstd::String v = r.get_bytes();
                 st->ss_counters[i].emplace(std::move(v),
                                            r.get<std::uint64_t>());
             }
         }
     }
-    if (st->has_co != (r.get<std::uint8_t>() != 0)) Reader::truncated();
+    if (st->has_co != (r.get<std::uint8_t>() != 0)) return corrupt_blob();
     if (st->has_co) {
         const std::size_t sz = static_cast<std::size_t>(ng) * st->n_co;
-        r.count(sz * 64);
+        if (!r.count(sz * 64)) return corrupt_blob();
         st->co.resize(sz);
         for (std::size_t i = 0; i < sz; ++i) {
             CoStat& c = st->co[i];
@@ -730,6 +870,7 @@ AggStatePtr agg_deserialize(const std::string& blob, bool compact) {
             c.cxy = r.get<double>();
         }
     }
+    if (r.bad) return corrupt_blob();
     st->inited = true;
     return st;
 }

@@ -1,11 +1,21 @@
-#include <dftracer/utils/core/common/base64.h>
-#include <dftracer/utils/core/common/hash/hash.h>
-#include <dftracer/utils/core/common/to_chars.h>
+// SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/agg/detail.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>  // dftu_series
 #include <dftracer/utils/dataframe/internal/column_read.h>  // read_i64/u64/f64
 #include <dftracer/utils/dataframe/parallel.h>
 #include <dftracer/utils/dataframe/sketch.h>  // DDSketch, sketch_bucket_keys
+#include <dftracer/utils/dstd/base64.h>
+#include <dftracer/utils/dstd/fatal.h>
+#include <dftracer/utils/dstd/fmt.h>
+#include <dftracer/utils/dstd/function_ref.h>
+#include <dftracer/utils/dstd/hash/hash.h>
+#include <dftracer/utils/dstd/hash/xxh3.h>
+#include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <algorithm>
 #include <bit>
@@ -15,11 +25,8 @@
 #include <functional>
 #include <limits>
 #include <numeric>
-#include <stdexcept>
 #include <string>
-#include <string_view>
 #include <utility>
-#include <vector>
 
 namespace dftracer::utils::dataframe {
 
@@ -152,11 +159,17 @@ void fs_add(FieldStat& fs, const Series& c, std::int64_t i, FieldStatDomain d) {
     }
 }
 
+// The type a text aggregate met as a non-null nested cell, set by cell_repr and
+// read by agg_accumulate after its row loop, so the per-row path stays free of
+// a result and a column that is all null or out of range is not refused.
+thread_local TypeId t_nested_text_type = TypeId::Unknown;
+thread_local bool t_has_nested_text = false;
+
 // Generic string form of a cell, for ArgMax's repr and SetUnion's values:
 // matches the View's to_str (std::to_string for numbers, the raw text for a
 // String column) so the two engines agree on ArgMax/SetUnion output.
-std::string cell_repr(const Series& c, std::int64_t i) {
-    if (c.type() == TypeId::String) return std::string(c.string_at(i));
+dstd::String cell_repr(const Series& c, std::int64_t i) {
+    if (c.type() == TypeId::String) return dstd::String(c.string_at(i));
     switch (c.type()) {
         // A nested cell has no integer to read; the integer reader would give
         // 0 for every row.
@@ -164,19 +177,19 @@ std::string cell_repr(const Series& c, std::int64_t i) {
         case TypeId::LargeList:
         case TypeId::FixedSizeList:
         case TypeId::Struct:
-            throw std::invalid_argument(
-                std::string("agg: a ") + type_name(c.type()) +
-                " column has no text form for this aggregate");
+            t_nested_text_type = c.type();
+            t_has_nested_text = true;
+            return {};
         default:
             break;
     }
     switch (col_domain(c.type())) {
         case FieldStatDomain::F64:
-            return std::to_string(read_f64(c, i));
+            return dstd::to_string(read_f64(c, i));
         case FieldStatDomain::U64:
-            return std::to_string(read_u64(c, i));
+            return dstd::to_string(read_u64(c, i));
         default:
-            return std::to_string(read_i64(c, i));
+            return dstd::to_string(read_i64(c, i));
     }
 }
 
@@ -208,54 +221,77 @@ bool set_is_list(TypeId t) {
 
 // One non-null element as set text: a float as the shortest text that parses
 // back to the same value (never six fixed decimals), a string as itself.
-std::string set_text(const Series& c, std::int64_t i) {
+dstd::String set_text(const Series& c, std::int64_t i) {
     switch (c.type()) {
         case TypeId::String:
-            return std::string(c.string_at(i));
+            return dstd::String(c.string_at(i));
         case TypeId::Float32:
-            return dftracer::utils::float_text(
+            return dftracer::utils::dstd::float_text(
                 static_cast<float>(read_f64(c, i)));
         case TypeId::Float64:
-            return dftracer::utils::double_text(read_f64(c, i));
+            return dftracer::utils::dstd::double_text(read_f64(c, i));
         default:
             return cell_repr(c, i);
     }
 }
 
-void set_insert(AggState::StringSet& set, std::string v, std::size_t group,
-                bool typed) {
-    if (!typed && v.find(AGG_SET_SEP) != std::string::npos)
-        throw std::invalid_argument(
-            "set_union: a string value in group " + std::to_string(group) +
-            " contains the set separator (0x1e), which the joined text cannot "
-            "hold");
+// False, with the value left out, for an untyped value that holds the
+// separator; the caller reports it after the row loop.
+bool set_insert(AggState::StringSet& set, dstd::String v, bool typed) {
+    if (!typed && v.find(AGG_SET_SEP) != dstd::String::npos) return false;
     set.insert(std::move(v));
+    return true;
 }
 
-// KMV element hash. FNV-1a avalanches poorly, so the mix is what makes the
-// bottom-k order (and the [0,1) normalization the estimator divides by)
-// uniform.
-std::uint64_t kmv_hash(std::string_view v) {
-    return dftracer::utils::hash::fnv1a_mix(
-        dftracer::utils::hash::fnv1a_hash(v));
+// KMV element hash. XXH3 avalanches, which makes the bottom-k order (and the
+// [0,1) normalization the estimator divides by) uniform.
+std::uint64_t kmv_hash(dstd::StringView v) {
+    return dftracer::utils::dstd::hash::xxh3_64(v);
 }
 
 }  // namespace
 
 void AggStateDeleter::operator()(AggState* p) const noexcept { delete p; }
 
-AggStatePtr agg_new(std::vector<AggSpec> specs, std::vector<AggDynSpec> dyn) {
+AggStatePtr agg_new(dstd::Vector<AggSpec> specs, dstd::Vector<AggDynSpec> dyn) {
     AggStatePtr s(new AggState());
+    // The dyn finalize computes only these ops. Any other would come out as a
+    // silent 0.0 in every group; agg_accumulate reports it.
+    for (const AggDynSpec& d : dyn) {
+        switch (d.op) {
+            case AggOp::Count:
+            case AggOp::Sum:
+            case AggOp::Min:
+            case AggOp::Max:
+            case AggOp::SumSq:
+            case AggOp::Mean:
+            case AggOp::Var:
+            case AggOp::Std:
+            case AggOp::Skew:
+            case AggOp::Kurt:
+            case AggOp::Pct:
+                break;
+            default:
+                if (s->init_error.empty())
+                    s->init_error = dstd::fmt<
+                        "group_by: dyn columns support count, sum, min, max, "
+                        "sum_sq, mean, var, std, skew, kurt and pct; op {} "
+                        "for prefix '{}' is not one of them">(
+                        static_cast<int>(d.op), d.out_prefix);
+        }
+    }
     s->specs = std::move(specs);
     s->dyn_specs = std::move(dyn);
     s->init_layout();
     return s;
 }
 
-void agg_accumulate(AggState& st, const std::vector<const Series*>& keys,
-                    const std::vector<const Series*>& values,
-                    std::int64_t begin, std::int64_t end) {
-    agg_accumulate(st, keys, values, std::vector<AggDynInput>{}, begin, end);
+dstd::Result<void> agg_accumulate(AggState& st,
+                                  const dstd::Vector<const Series*>& keys,
+                                  const dstd::Vector<const Series*>& values,
+                                  std::int64_t begin, std::int64_t end) {
+    return agg_accumulate(st, keys, values, dstd::Vector<AggDynInput>{}, begin,
+                          end);
 }
 
 namespace {
@@ -281,9 +317,9 @@ bool plain8(const Series& c, Plain8& out) {
     if (t != TypeId::Int64 && t != TypeId::Uint64 && t != TypeId::Float64)
         return false;
     const dftu_series& h = *c.handle();
-    if (h.encoding != Encoding::Flat || !h.data) return false;
-    out.data = h.data->data();
-    out.validity = h.validity ? h.validity->data() : nullptr;
+    if (h.encoding != Encoding::Flat || !h.data.block()) return false;
+    out.data = h.data.data();
+    out.validity = h.validity.block() ? h.validity.data() : nullptr;
     out.domain = col_domain(t);
     return true;
 }
@@ -297,16 +333,16 @@ struct PlainKey {
     const char* text = nullptr;
     std::int64_t text_size = 0;
     const std::int32_t* codes = nullptr;
-    std::vector<std::string_view> dvals;
+    dstd::Vector<dstd::StringView> dvals;
     const std::uint8_t* views = nullptr;
-    std::vector<const char*> blob_data;
+    dstd::Vector<const char*> blob_data;
     bool is_str = false;
     bool is_null(std::int64_t i) const { return fixed.is_null(i); }
     bool by_ref() const { return codes || views; }
     std::int64_t offset(std::int64_t i) const {
         return off64 ? off64[i] : off32[i];
     }
-    std::string_view str(std::int64_t i) const {
+    dstd::StringView str(std::int64_t i) const {
         if (codes) return dvals[static_cast<std::size_t>(codes[i])];
         if (views) {
             const std::uint8_t* v = views + static_cast<std::size_t>(i) * 16;
@@ -314,20 +350,20 @@ struct PlainKey {
             std::memcpy(&size, v, sizeof(size));
             const auto n = static_cast<std::size_t>(size);
             if (size <= 12)
-                return std::string_view(reinterpret_cast<const char*>(v + 4),
+                return dstd::StringView(reinterpret_cast<const char*>(v + 4),
                                         n);
             std::int32_t index, offset;
             std::memcpy(&index, v + 8, sizeof(index));
             std::memcpy(&offset, v + 12, sizeof(offset));
             if (static_cast<std::size_t>(index) >= blob_data.size()) return {};
-            return std::string_view(
+            return dstd::StringView(
                 blob_data[static_cast<std::size_t>(index)] + offset, n);
         }
         if (off64)
-            return std::string_view(
+            return dstd::StringView(
                 text + off64[i],
                 static_cast<std::size_t>(off64[i + 1] - off64[i]));
-        return std::string_view(
+        return dstd::StringView(
             text + off32[i], static_cast<std::size_t>(off32[i + 1] - off32[i]));
     }
 };
@@ -336,43 +372,44 @@ bool plain_key(const Series& c, PlainKey& out) {
     if (plain8(c, out.fixed)) return true;
     const dftu_series& h = *c.handle();
     const TypeId narrow = narrow_varwidth_type(h.type);
-    if ((narrow != TypeId::String && narrow != TypeId::Binary) || !h.data)
+    if ((narrow != TypeId::String && narrow != TypeId::Binary) ||
+        !h.data.block())
         return false;
     if (h.encoding == Encoding::Dictionary) {
         const dftu_series* child = h.child().get();
         if (!child) return false;
-        out.codes = reinterpret_cast<const std::int32_t*>(h.data->data());
+        out.codes = reinterpret_cast<const std::int32_t*>(h.data.data());
         out.dvals.resize(static_cast<std::size_t>(child->length));
         for (std::size_t j = 0; j < out.dvals.size(); ++j) {
             std::int64_t n = 0;
             const char* p =
                 dftu_series_string_at(child, static_cast<std::int64_t>(j), &n);
             if (p)
-                out.dvals[j] = std::string_view(p, static_cast<std::size_t>(n));
+                out.dvals[j] = dstd::StringView(p, static_cast<std::size_t>(n));
         }
         out.is_str = true;
-        out.fixed.validity = h.validity ? h.validity->data() : nullptr;
+        out.fixed.validity = h.validity.block() ? h.validity.data() : nullptr;
         return true;
     }
     if (h.encoding == Encoding::View) {
-        out.views = h.data->data();
+        out.views = h.data.data();
         if (h.blobs)
             for (const auto& b : *h.blobs)
                 out.blob_data.push_back(
-                    reinterpret_cast<const char*>(b->data()));
+                    reinterpret_cast<const char*>(b.data()));
         out.is_str = true;
-        out.fixed.validity = h.validity ? h.validity->data() : nullptr;
+        out.fixed.validity = h.validity.block() ? h.validity.data() : nullptr;
         return true;
     }
     if (h.encoding != Encoding::Flat) return false;
     out.is_str = true;
-    out.text = reinterpret_cast<const char*>(h.data->data());
-    out.text_size = static_cast<std::int64_t>(h.data->size());
-    out.fixed.validity = h.validity ? h.validity->data() : nullptr;
-    if (h.offsets && h.wide_offsets())
-        out.off64 = reinterpret_cast<const std::int64_t*>(h.offsets->data());
-    else if (h.offsets)
-        out.off32 = reinterpret_cast<const std::int32_t*>(h.offsets->data());
+    out.text = reinterpret_cast<const char*>(h.data.data());
+    out.text_size = static_cast<std::int64_t>(h.data.size());
+    out.fixed.validity = h.validity.block() ? h.validity.data() : nullptr;
+    if (h.offsets.block() && h.wide_offsets())
+        out.off64 = reinterpret_cast<const std::int64_t*>(h.offsets.data());
+    else if (h.offsets.block())
+        out.off32 = reinterpret_cast<const std::int32_t*>(h.offsets.data());
     else
         return false;
     return true;
@@ -380,9 +417,9 @@ bool plain_key(const Series& c, PlainKey& out) {
 
 // Whether the plain loop can run this state over these columns, and the
 // column views it reads if so.
-bool plain_shape(const AggState& st, const std::vector<const Series*>& keys,
-                 const std::vector<const Series*>& values,
-                 std::vector<PlainKey>& k, std::vector<Plain8>& v) {
+bool plain_shape(const AggState& st, const dstd::Vector<const Series*>& keys,
+                 const dstd::Vector<const Series*>& values,
+                 dstd::Vector<PlainKey>& k, dstd::Vector<Plain8>& v) {
     if (st.has_fl || st.has_arg || st.has_bitor || st.has_prod || st.has_msk ||
         st.has_kmv || st.has_lst || st.has_ss || st.has_co || st.has_set ||
         st.has_occ || st.has_dyn)
@@ -403,14 +440,14 @@ bool plain_shape(const AggState& st, const std::vector<const Series*>& keys,
 // word, a string of up to 16 bytes its length and two words.
 constexpr std::uint64_t FAST_TAG = 0xFFFFFFFF00000000ULL;
 
-std::size_t key_word_count(const std::vector<PlainKey>& k) {
+std::size_t key_word_count(const dstd::Vector<PlainKey>& k) {
     std::size_t w = 0;
     for (const PlainKey& kk : k) w += kk.is_str ? 3 : 1;
     return w;
 }
 
 // Row i's key words; false for a string longer than 16 bytes.
-bool key_words(const std::vector<PlainKey>& k, std::int64_t i,
+bool key_words(const dstd::Vector<PlainKey>& k, std::int64_t i,
                std::uint64_t* w) {
     for (const PlainKey& kk : k) {
         if (!kk.is_str) {
@@ -418,7 +455,7 @@ bool key_words(const std::vector<PlainKey>& k, std::int64_t i,
             continue;
         }
         if (kk.by_ref()) {
-            const std::string_view sv = kk.str(i);
+            const dstd::StringView sv = kk.str(i);
             const std::size_t n = sv.size();
             if (n > 16) return false;
             std::uint64_t a = 0, b = 0;
@@ -466,10 +503,10 @@ bool key_words(const std::vector<PlainKey>& k, std::int64_t i,
 // Independent products summed, so the words hash in parallel, then one mix.
 std::uint64_t hash_words(const std::uint64_t* w, std::size_t W) {
     std::uint64_t h = 0;
-    constexpr std::uint64_t K = dftracer::utils::hash::GOLDEN_RATIO;
+    constexpr std::uint64_t K = dftracer::utils::dstd::hash::GOLDEN_RATIO;
     std::uint64_t m = K;
     for (std::size_t j = 0; j < W; ++j, m += 2 * K) h += w[j] * m;
-    return dftracer::utils::hash::splitmix64(h);
+    return dftracer::utils::dstd::hash::splitmix64(h);
 }
 
 // The group in the word table with these words, or -1.
@@ -521,7 +558,7 @@ void fast_add(AggState& st, std::uint64_t h, const std::uint64_t* w) {
 
 // Whether the word table takes this state over these keys (string keys,
 // no nulls, every group so far seen through it), opening it on first use.
-bool fast_open(AggState& st, const std::vector<PlainKey>& k,
+bool fast_open(AggState& st, const dstd::Vector<PlainKey>& k,
                bool any_keys = false) {
     if (st.fast_refused) return false;
     bool fast = any_keys;
@@ -542,12 +579,13 @@ bool fast_open(AggState& st, const std::vector<PlainKey>& k,
     return true;
 }
 
-// The Welford step of FieldStat::add_double for the moment words (shift,
-// cmean, cm2) of a light cell, in the same operations in the same order so a
-// std column's bits equal the FieldStat route's. `n_prev` is the count before
-// this value and `sum` the field's sum word before it, or null when the
-// aggregates do not keep one (then a state whose moment words are all zero was
-// built from zeros, so it is centred on 0, as FieldStat centres it on sum / n).
+// The Welford step (cited at FieldStat) of FieldStat::add_double for the moment
+// words (shift, cmean, cm2) of a light cell, in the same operations in the same
+// order so a std column's bits equal the FieldStat route's. `n_prev` is the
+// count before this value and `sum` the field's sum word before it, or null
+// when the aggregates do not keep one (then a state whose moment words are all
+// zero was built from zeros, so it is centred on 0, as FieldStat centres it on
+// sum / n).
 __attribute__((always_inline)) inline void light_moments(
     std::uint64_t* mom, const std::uint64_t* sum, std::uint64_t n_prev,
     FieldStatDomain domain, std::uint64_t bits) {
@@ -680,7 +718,7 @@ __attribute__((noinline, cold)) void add_carry(AggState& st, std::size_t slot,
 }
 
 // find_or_add_group over a row's key words.
-std::int64_t slow_group_words(AggState& st, const std::vector<PlainKey>& k,
+std::int64_t slow_group_words(AggState& st, const dstd::Vector<PlainKey>& k,
                               const std::uint64_t* w) {
     std::size_t at[64];
     for (std::size_t j = 0, p = 0; j < k.size(); ++j) {
@@ -689,8 +727,8 @@ std::int64_t slow_group_words(AggState& st, const std::vector<PlainKey>& k,
     }
     return st.find_or_add_group(
         [&](std::size_t j) { return static_cast<std::int64_t>(w[at[j]]); },
-        [&](std::size_t j) -> std::string_view {
-            return std::string_view(
+        [&](std::size_t j) -> dstd::StringView {
+            return dstd::StringView(
                 reinterpret_cast<const char*>(w + at[j] + 1),
                 static_cast<std::size_t>(w[at[j]]));
         },
@@ -718,11 +756,11 @@ bool light_cells(const AggState& st) {
     return true;
 }
 
-bool accumulate_plain(AggState& st, const std::vector<const Series*>& keys,
-                      const std::vector<const Series*>& values,
+bool accumulate_plain(AggState& st, const dstd::Vector<const Series*>& keys,
+                      const dstd::Vector<const Series*>& values,
                       std::int64_t begin, std::int64_t end) {
-    std::vector<PlainKey> k;
-    std::vector<Plain8> v;
+    dstd::Vector<PlainKey> k;
+    dstd::Vector<Plain8> v;
     if (!plain_shape(st, keys, values, k, v)) return false;
     const std::size_t nf = st.nf;
     // The higher moments are computed only when a reducer reads them; with
@@ -736,8 +774,8 @@ bool accumulate_plain(AggState& st, const std::vector<const Series*>& keys,
     // state that is not light keep them only when a reducer reads them.
     const bool moments = st.light_on ? false : !light_reducers(st);
     // A quantile field's sketch keys for the chunk, one SIMD pass per field.
-    std::vector<std::vector<std::int32_t>> sketch_keys;
-    std::vector<std::vector<double>> sketch_vals;
+    dstd::Vector<dstd::Vector<std::int32_t>> sketch_keys;
+    dstd::Vector<dstd::Vector<double>> sketch_vals;
     if (st.has_sketch) {
         const double lg = DDSketch{}.log_gamma();
         const auto clen = static_cast<std::size_t>(end - begin);
@@ -746,7 +784,7 @@ bool accumulate_plain(AggState& st, const std::vector<const Series*>& keys,
         for (std::size_t fj = 0; fj < nf; ++fj) {
             const int sk = st.field_sketch[fj];
             if (sk < 0) continue;
-            std::vector<double>& vals =
+            dstd::Vector<double>& vals =
                 sketch_vals[static_cast<std::size_t>(sk)];
             vals.resize(clen);
             for (std::size_t r = 0; r < clen; ++r) {
@@ -765,7 +803,7 @@ bool accumulate_plain(AggState& st, const std::vector<const Series*>& keys,
                         break;
                 }
             }
-            std::vector<std::int32_t>& ks =
+            dstd::Vector<std::int32_t>& ks =
                 sketch_keys[static_cast<std::size_t>(sk)];
             ks.resize(clen);
             sketch_bucket_keys(vals.data(), static_cast<std::int64_t>(clen), lg,
@@ -915,7 +953,7 @@ bool accumulate_plain(AggState& st, const std::vector<const Series*>& keys,
             [&](std::size_t j) {
                 return static_cast<std::int64_t>(k[j].fixed.bits(i));
             },
-            [&](std::size_t j) -> std::string_view { return k[j].str(i); },
+            [&](std::size_t j) -> dstd::StringView { return k[j].str(i); },
             [&](std::size_t j) { return k[j].is_null(i); });
     };
 
@@ -924,12 +962,12 @@ bool accumulate_plain(AggState& st, const std::vector<const Series*>& keys,
     // depends on overlap instead of stalling one after another.
     constexpr std::int64_t BATCH = 1024;
     constexpr std::int64_t AHEAD = 16;
-    std::vector<std::int64_t> groups(static_cast<std::size_t>(BATCH));
+    dstd::Vector<std::int64_t> groups(static_cast<std::size_t>(BATCH));
     auto add_batch = [&]<bool Moments, bool Nulls>(std::int64_t b0,
                                                    std::int64_t m) {
         for (std::int64_t r = 0; r < m; ++r) {
             // No prefetch of an empty stats array: a prefetch of address
-            // zero walks the page tables for nothing, 25 ns a row.
+            // zero walks the page tables for nothing.
             if (r + AHEAD < m) {
                 const auto ga = static_cast<std::size_t>(
                     groups[static_cast<std::size_t>(r + AHEAD)]);
@@ -995,10 +1033,10 @@ bool accumulate_plain(AggState& st, const std::vector<const Series*>& keys,
     // candidate is wrong or missing takes the scalar path.
     auto run_fast = [&]<bool Moments, bool Nulls>() {
         const std::size_t W = st.fast_stride;
-        std::vector<std::uint64_t> words(static_cast<std::size_t>(BATCH) * W);
-        std::vector<std::uint64_t> hashes(static_cast<std::size_t>(BATCH));
-        std::vector<std::uint8_t> packable(static_cast<std::size_t>(BATCH));
-        std::vector<std::int64_t> cand(static_cast<std::size_t>(BATCH));
+        dstd::Vector<std::uint64_t> words(static_cast<std::size_t>(BATCH) * W);
+        dstd::Vector<std::uint64_t> hashes(static_cast<std::size_t>(BATCH));
+        dstd::Vector<std::uint8_t> packable(static_cast<std::size_t>(BATCH));
+        dstd::Vector<std::int64_t> cand(static_cast<std::size_t>(BATCH));
         for (std::int64_t b0 = begin; b0 < end; b0 += BATCH) {
             const std::int64_t m = std::min(BATCH, end - b0);
             for (std::int64_t r = 0; r < m; ++r) {
@@ -1084,7 +1122,7 @@ bool accumulate_plain(AggState& st, const std::vector<const Series*>& keys,
     // later rows are one table load. The word table, if open, is kept in step.
     auto run_dict = [&]<bool Moments, bool Nulls>(bool fast) {
         const PlainKey& kk = k[0];
-        std::vector<std::int32_t> code_group(kk.dvals.size(), -1);
+        dstd::Vector<std::int32_t> code_group(kk.dvals.size(), -1);
         std::uint64_t w[3];
         for (std::int64_t i = begin; i < end; ++i) {
             std::int64_t g;
@@ -1153,14 +1191,37 @@ bool accumulate_plain(AggState& st, const std::vector<const Series*>& keys,
 
 }  // namespace
 
-void agg_accumulate(AggState& st, const std::vector<const Series*>& keys,
-                    const std::vector<const Series*>& values,
-                    const std::vector<AggDynInput>& dyn_in, std::int64_t begin,
-                    std::int64_t end) {
-    std::string sketch_bytes;
-    if (st.has_dyn)
-        for (const AggDynInput& di : dyn_in)
-            st.dyn_domain.emplace(di.name, col_domain(di.col->type()));
+dstd::Result<void> agg_accumulate(AggState& st,
+                                  const dstd::Vector<const Series*>& keys,
+                                  const dstd::Vector<const Series*>& values,
+                                  const dstd::Vector<AggDynInput>& dyn_in,
+                                  std::int64_t begin, std::int64_t end) {
+    if (!st.init_error.empty())
+        return common::make_error(common::ErrorCode::InvalidArgument,
+                                  st.init_error);
+    dstd::String sketch_bytes;
+    if (st.has_dyn) {
+        // Resolve every dyn input once, before the row loop.
+        bool light = st.dyn_light_ok;
+        st.dyn_slots.resize(dyn_in.size());
+        for (std::size_t s = 0; s < dyn_in.size(); ++s) {
+            const AggDynInput& di = dyn_in[s];
+            const FieldStatDomain dom = col_domain(di.col->type());
+            const std::uint32_t id = st.dyn_intern(di.name, dom);
+            // The light words are read in the name's first domain. A call that
+            // brings another one keeps the full cells.
+            if (st.dyn_domain[static_cast<std::size_t>(id)] != dom)
+                light = false;
+            st.dyn_slots[s] = DynSlot{id, dom};
+        }
+        if (light && !st.dyn_light_on && st.ngroups() == 0) {
+            // No group holds a cell yet, so the light record can hold them all.
+            st.dyn_light_on = true;
+            st.dyn_light.clear();
+        } else if (!light && st.dyn_light_on) {
+            st.dyn_settle();
+        }
+    }
     if (!st.inited) {
         st.nkeys = keys.size();
         st.key_is_bytes.resize(st.nkeys);
@@ -1178,10 +1239,10 @@ void agg_accumulate(AggState& st, const std::vector<const Series*>& keys,
         for (std::size_t k = 0; k < st.nkeys; ++k) {
             const TypeId kt = keys[k]->type();
             if (!is_group_key_type(kt)) {
-                throw std::invalid_argument(
-                    std::string("group_by: key column type '") + type_name(kt) +
-                    "' is not supported as a group key (no int64/double "
-                    "domain to hash it in)");
+                return common::make_error<
+                    "group_by: key column type '{}' is not supported "
+                    "as a group key (no int64/double domain to hash it "
+                    "in)">(common::ErrorCode::InvalidArgument, type_name(kt));
             }
             st.key_is_bytes[k] = is_bytes_key_type(kt) ? 1 : 0;
             st.key_domain[k] = col_domain(kt);
@@ -1219,10 +1280,11 @@ void agg_accumulate(AggState& st, const std::vector<const Series*>& keys,
             const AggOp op = st.specs[s].op;
             if (op != AggOp::CountValid && op != AggOp::First &&
                 op != AggOp::Last)
-                throw std::invalid_argument(
-                    std::string("group_by: aggregate '") + st.specs[s].out +
-                    "' reduces a String column numerically; only "
-                    "count_valid, first and last apply to strings");
+                return common::make_error<
+                    "group_by: aggregate '{}' reduces a String column "
+                    "numerically; only count_valid, first and last apply "
+                    "to strings">(common::ErrorCode::InvalidArgument,
+                                  st.specs[s].out);
         }
         for (std::size_t s = 0; s < st.specs.size(); ++s) {
             if (st.specs[s].op != AggOp::SetUnion || st.spec_set[s] < 0)
@@ -1237,32 +1299,31 @@ void agg_accumulate(AggState& st, const std::vector<const Series*>& keys,
             }
             if (set_is_list(t) && set_scalar_type(vc->child(0).type())) {
                 if (!vc->is_flat())
-                    throw std::invalid_argument(
-                        std::string("set_union: aggregate '") +
-                        st.specs[s].out + "' needs a flat list column");
+                    return common::make_error<
+                        "set_union: aggregate '{}' needs a flat list column">(
+                        common::ErrorCode::InvalidArgument, st.specs[s].out);
                 if (set_typed(st.specs[s]))
                     st.specs[s].param =
                         1.0 + static_cast<double>(vc->child(0).type());
                 continue;
             }
-            throw std::invalid_argument(
-                std::string("set_union: aggregate '") + st.specs[s].out +
-                "' does not support " +
+            return common::make_error<
+                "set_union: aggregate '{}' does not support {}; use "
+                "a string, bool, number or a list of those">(
+                common::ErrorCode::InvalidArgument, st.specs[s].out,
                 (set_is_list(t)
-                     ? std::string("a list of ") +
-                           type_name(vc->child(0).type())
-                     : std::string("a column of type ") + type_name(t)) +
-                "; use a string, bool, number or a list of those");
+                     ? dstd::fmt<"a list of {}">(type_name(vc->child(0).type()))
+                     : dstd::fmt<"a column of type {}">(type_name(t))));
         }
         for (std::size_t s = 0; s < st.specs.size(); ++s) {
             if (st.specs[s].op != AggOp::SketchQuantile) continue;
             const Series* vc =
                 values[static_cast<std::size_t>(st.specs[s].value_col)];
             if (narrow_varwidth_type(vc->type()) != TypeId::String)
-                throw std::invalid_argument(
-                    std::string("group_by: aggregate '") + st.specs[s].out +
-                    "' reads base64 sketch text, not a " +
-                    type_name(vc->type()) + " column");
+                return common::make_error<
+                    "group_by: aggregate '{}' reads base64 sketch text, "
+                    "not a {} column">(common::ErrorCode::InvalidArgument,
+                                       st.specs[s].out, type_name(vc->type()));
         }
         st.inited = true;
     }
@@ -1275,8 +1336,8 @@ void agg_accumulate(AggState& st, const std::vector<const Series*>& keys,
                                 : 0;
     const std::int64_t clen = end - begin;
     // A List column's elements, fetched once per batch for the set slots.
-    std::vector<Series> set_elems;
-    std::vector<char> set_slot_typed;
+    dstd::Vector<Series> set_elems;
+    dstd::Vector<char> set_slot_typed;
     if (st.has_set) {
         set_elems.resize(st.n_set);
         set_slot_typed.assign(st.n_set, 0);
@@ -1294,15 +1355,18 @@ void agg_accumulate(AggState& st, const std::vector<const Series*>& keys,
     // positional / collection state. Every buffer is resolved once and the
     // row loop is loads and adds; the generic loop below makes a C ABI call
     // per cell.
-    if (accumulate_plain(st, keys, values, begin, end)) return;
+    if (accumulate_plain(st, keys, values, begin, end))
+        return dstd::Result<void>();
     st.settle_light();
+    t_has_nested_text = false;
+    std::size_t separator_group = static_cast<std::size_t>(-1);
 
     // Precompute DDSketch bucket keys for each sketch field in one SIMD pass
     // over the chunk (the logarithm is the costly step); the per-group scatter
     // below just increments a bin. Null rows get a garbage key that the scatter
     // skips.
-    std::vector<std::vector<std::int32_t>> chunk_keys;
-    std::vector<std::vector<double>> chunk_vals;
+    dstd::Vector<dstd::Vector<std::int32_t>> chunk_keys;
+    dstd::Vector<dstd::Vector<double>> chunk_vals;
     if (st.has_sketch && clen > 0) {
         const double lg = DDSketch{}.log_gamma();
         chunk_keys.assign(st.n_sketch, {});
@@ -1312,7 +1376,7 @@ void agg_accumulate(AggState& st, const std::vector<const Series*>& keys,
             if (sk < 0) continue;
             const Series* vc =
                 values[static_cast<std::size_t>(st.field_vc[fj])];
-            std::vector<double>& vals =
+            dstd::Vector<double>& vals =
                 chunk_vals[static_cast<std::size_t>(sk)];
             vals.resize(static_cast<std::size_t>(clen));
             for (std::int64_t r = 0; r < clen; ++r)
@@ -1354,7 +1418,7 @@ void agg_accumulate(AggState& st, const std::vector<const Series*>& keys,
                 if (st.fl_first_idx[sl] < 0 || row < st.fl_first_idx[sl]) {
                     st.fl_first_idx[sl] = row;
                     if (st.field_is_str[fj])
-                        st.fl_first_s[sl] = std::string(vc->string_at(i));
+                        st.fl_first_s[sl] = dstd::String(vc->string_at(i));
                     else
                         st.fl_first[sl] =
                             read_bits(*vc, i, st.field_domain[fj]);
@@ -1362,7 +1426,7 @@ void agg_accumulate(AggState& st, const std::vector<const Series*>& keys,
                 if (row > st.fl_last_idx[sl]) {
                     st.fl_last_idx[sl] = row;
                     if (st.field_is_str[fj])
-                        st.fl_last_s[sl] = std::string(vc->string_at(i));
+                        st.fl_last_s[sl] = dstd::String(vc->string_at(i));
                     else
                         st.fl_last[sl] = read_bits(*vc, i, st.field_domain[fj]);
                 }
@@ -1381,13 +1445,13 @@ void agg_accumulate(AggState& st, const std::vector<const Series*>& keys,
                 const double byv =
                     read_as_double(*byc, i, col_domain(byc->type()));
                 const std::size_t as = abase + slot;
-                const std::vector<int>& reprs = st.arg_slot_reprs[slot];
+                const dstd::Vector<int>& reprs = st.arg_slot_reprs[slot];
                 // A missing value at the winning row reprs as "" (matches the
                 // View fold's src.value(field) for an absent field).
-                auto repr_of = [&](int ri) -> std::string {
+                auto repr_of = [&](int ri) -> dstd::String {
                     const Series* vc = values[static_cast<std::size_t>(
                         st.arg_val_col[static_cast<std::size_t>(ri)])];
-                    return vc->is_null(i) ? std::string() : cell_repr(*vc, i);
+                    return vc->is_null(i) ? dstd::String() : cell_repr(*vc, i);
                 };
                 // Strict compare, so a tie keeps the row seen first; the View
                 // fold does the same and the two engines are compared row for
@@ -1430,7 +1494,7 @@ void agg_accumulate(AggState& st, const std::vector<const Series*>& keys,
                 const Series* vc =
                     values[static_cast<std::size_t>(st.msk_val_col[slot])];
                 if (vc->is_null(i)) continue;
-                if (!base64_decode_into(vc->string_at(i), sketch_bytes))
+                if (!dstd::base64_decode_into(vc->string_at(i), sketch_bytes))
                     continue;
                 const MergeSketch one = MergeSketch::deserialize(
                     reinterpret_cast<const std::uint8_t*>(sketch_bytes.data()),
@@ -1444,7 +1508,7 @@ void agg_accumulate(AggState& st, const std::vector<const Series*>& keys,
                 const Series* vc =
                     values[static_cast<std::size_t>(st.kmv_val_col[slot])];
                 if (vc->is_null(i)) continue;
-                std::string v = cell_repr(*vc, i);
+                dstd::String v = cell_repr(*vc, i);
                 KmvMap& m = st.kmv[kbase + slot];
                 const std::uint64_t h = kmv_hash(v);
                 // Past the k-th smallest hash the element cannot enter, so the
@@ -1504,9 +1568,10 @@ void agg_accumulate(AggState& st, const std::vector<const Series*>& keys,
                 AggState::StringSet& set =
                     st.sets[static_cast<std::size_t>(g) * st.n_set + slot];
                 if (!set_is_list(vc->type())) {
-                    set_insert(set, set_text(*vc, i),
-                               static_cast<std::size_t>(g),
-                               set_slot_typed[slot] != 0);
+                    if (!set_insert(set, set_text(*vc, i),
+                                    set_slot_typed[slot] != 0))
+                        if (separator_group == static_cast<std::size_t>(-1))
+                            separator_group = static_cast<std::size_t>(g);
                     continue;
                 }
                 const Series& elems = set_elems[slot];
@@ -1517,10 +1582,11 @@ void agg_accumulate(AggState& st, const std::vector<const Series*>& keys,
                                             ? vc->offsets()[i + 1]
                                             : vc->offsets64()[i + 1];
                 for (std::int64_t k = lo; k < hi; ++k)
-                    if (!elems.is_null(k))
-                        set_insert(set, set_text(elems, k),
-                                   static_cast<std::size_t>(g),
-                                   set_slot_typed[slot] != 0);
+                    if (!elems.is_null(k) &&
+                        !set_insert(set, set_text(elems, k),
+                                    set_slot_typed[slot] != 0))
+                        if (separator_group == static_cast<std::size_t>(-1))
+                            separator_group = static_cast<std::size_t>(g);
             }
         }
         if (st.has_occ) {
@@ -1562,38 +1628,69 @@ void agg_accumulate(AggState& st, const std::vector<const Series*>& keys,
             }
         }
         if (st.has_dyn) {
-            for (const AggDynInput& di : dyn_in) {
-                if (di.col->is_null(i)) continue;
-                const FieldStatDomain d = col_domain(di.col->type());
-                std::map<std::string, FieldStat>& gmap =
+            if (st.dyn_light_on) {
+                for (std::size_t s = 0; s < dyn_in.size(); ++s) {
+                    const AggDynInput& di = dyn_in[s];
+                    if (di.col->is_null(i)) continue;
+                    const DynSlot& slot = st.dyn_slots[s];
+                    std::uint64_t* cell = st.dyn_light_cell(g, slot.id);
+                    const int wrap = light_add(
+                        cell, 1, st.dyn_light_mask, DYN_LIGHT_PRESENT_BIT,
+                        slot.domain, read_bits(*di.col, i, slot.domain));
+                    if (wrap != 0) st.dyn_light_carry_add(g, slot.id, wrap);
+                    if (st.dyn_has_sketch)
+                        dyn_sketch_cell_of(
+                            st.dyn_sketch[static_cast<std::size_t>(g)], slot.id)
+                            .add(read_as_double(*di.col, i, slot.domain));
+                }
+            } else {
+                dstd::Vector<DynCell>& cells =
                     st.dyn_fs[static_cast<std::size_t>(g)];
-                fs_add(gmap[di.name], *di.col, i, d);
-                if (st.dyn_has_sketch)
-                    st.dyn_sketch[static_cast<std::size_t>(g)][di.name].add(
-                        read_as_double(*di.col, i, d));
+                for (std::size_t s = 0; s < dyn_in.size(); ++s) {
+                    const AggDynInput& di = dyn_in[s];
+                    if (di.col->is_null(i)) continue;
+                    const DynSlot& slot = st.dyn_slots[s];
+                    fs_add(dyn_cell_of(cells, slot.id), *di.col, i,
+                           slot.domain);
+                    if (st.dyn_has_sketch)
+                        dyn_sketch_cell_of(
+                            st.dyn_sketch[static_cast<std::size_t>(g)], slot.id)
+                            .add(read_as_double(*di.col, i, slot.domain));
+                }
             }
         }
     }
+    if (t_has_nested_text) {
+        t_has_nested_text = false;
+        return common::make_error<
+            "agg: a {} column has no text form for this aggregate">(
+            common::ErrorCode::InvalidArgument, type_name(t_nested_text_type));
+    }
+    if (separator_group != static_cast<std::size_t>(-1))
+        return common::make_error<
+            "set_union: a string value in group {} contains the "
+            "set separator (0x1e), which the joined text cannot "
+            "hold">(common::ErrorCode::InvalidArgument, separator_group);
+    return dstd::Result<void>();
 }
 
-void agg_accumulate(AggState& st, const Series& key,
-                    const std::vector<const Series*>& values,
-                    std::int64_t begin, std::int64_t end) {
-    const std::vector<const Series*> keys{&key};
-    agg_accumulate(st, keys, values, begin, end);
+dstd::Result<void> agg_accumulate(AggState& st, const Series& key,
+                                  const dstd::Vector<const Series*>& values,
+                                  std::int64_t begin, std::int64_t end) {
+    const dstd::Vector<const Series*> keys{&key};
+    return agg_accumulate(st, keys, values, begin, end);
 }
 
 void agg_set_row_base(AggState& st, std::int64_t base) { st.row_base = base; }
 
 void agg_merge(AggState& into, const AggState& other) {
-    std::vector<std::int64_t> order(static_cast<std::size_t>(other.ngroups()));
+    dstd::Vector<std::int64_t> order(static_cast<std::size_t>(other.ngroups()));
     std::iota(order.begin(), order.end(), 0);
     agg_merge(into, other, order);
 }
 
-void agg_merge(AggState& into, const AggState& other_in,
-               const std::vector<std::int64_t>& order) {
-    const AggState& other = settled(other_in);
+void agg_merge(AggState& into, const AggState& other,
+               const dstd::Vector<std::int64_t>& order) {
     into.settle_light();
     if (!other.inited) return;
     if (!into.inited) {
@@ -1613,17 +1710,21 @@ void agg_merge(AggState& into, const AggState& other_in,
         into.nkey_cols.assign(into.nkeys, {});
         into.inited = true;
     }
-    for (const auto& [name, d] : other.dyn_domain)
-        into.dyn_domain.emplace(name, d);
+    dstd::Vector<std::uint32_t> dyn_map;
+    if (other.has_dyn) dyn_map = into.dyn_remap(other);
+    if (into.has_dyn)
+        into.dyn_light_open_for_merge(other,
+                                      other.has_dyn ? &dyn_map : nullptr);
     for (const std::int64_t j : order)
-        into.merge_group(into.group_of_other(other, j), other, j);
+        into.merge_group(into.group_of_other(other, j), other, j,
+                         other.has_dyn ? &dyn_map : nullptr);
 }
 
-bool agg_pack_shape(AggState& st, const std::vector<const Series*>& keys,
-                    const std::vector<const Series*>& values, AggPacked& out) {
-    if (!st.inited) agg_accumulate(st, keys, values, 0, 0);
-    std::vector<PlainKey> k;
-    std::vector<Plain8> v;
+bool agg_pack_shape(AggState& st, const dstd::Vector<const Series*>& keys,
+                    const dstd::Vector<const Series*>& values, AggPacked& out) {
+    if (!st.inited && !agg_accumulate(st, keys, values, 0, 0)) return false;
+    dstd::Vector<PlainKey> k;
+    dstd::Vector<Plain8> v;
     if (!st.inited || !light_reducers(st) || st.has_sketch ||
         !plain_shape(st, keys, values, k, v) || k.empty() || k.size() > 21)
         return false;
@@ -1639,13 +1740,13 @@ bool agg_pack_shape(AggState& st, const std::vector<const Series*>& keys,
            keys[0]->length() < (std::int64_t{1} << 32);
 }
 
-bool agg_pack(const AggState& st, const std::vector<const Series*>& keys,
-              const std::vector<const Series*>& values, std::int64_t begin,
+bool agg_pack(const AggState& st, const dstd::Vector<const Series*>& keys,
+              const dstd::Vector<const Series*>& values, std::int64_t begin,
               std::int64_t end, const AggPacked& shape,
-              std::vector<AggPages>& out,
-              const std::function<void(std::size_t)>& full) {
-    std::vector<PlainKey> k;
-    std::vector<Plain8> v;
+              dstd::Vector<AggPages>& out,
+              dstd::FunctionRef<void(std::size_t)> full) {
+    dstd::Vector<PlainKey> k;
+    dstd::Vector<Plain8> v;
     if (!plain_shape(st, keys, values, k, v)) return false;
     // The partition from the hash's top word, scaled to any count.
     const auto parts = static_cast<std::uint64_t>(out.size());
@@ -1697,20 +1798,22 @@ bool agg_pack(const AggState& st, const std::vector<const Series*>& keys,
     }
 }
 
-void agg_accumulate_packed(AggState& st, const std::vector<const Series*>& keys,
-                           const std::vector<const Series*>& values,
+void agg_accumulate_packed(AggState& st,
+                           const dstd::Vector<const Series*>& keys,
+                           const dstd::Vector<const Series*>& values,
                            const AggPacked& shape, const AggPages& rows) {
-    if (!st.inited) agg_accumulate(st, keys, values, 0, 0);
-    std::vector<PlainKey> k;
-    std::vector<Plain8> v;
+    if (!st.inited && !agg_accumulate(st, keys, values, 0, 0))
+        dstd::fatal("agg_accumulate_packed: the columns were rejected");
+    dstd::Vector<PlainKey> k;
+    dstd::Vector<Plain8> v;
     if (!plain_shape(st, keys, values, k, v))
-        throw std::logic_error("agg_accumulate_packed: not a packable shape");
+        dstd::fatal("agg_accumulate_packed: not a packable shape");
     if (st.ngroups() == 0 && st.fstats.empty()) {
         st.light_on = true;
         st.init_light();
     }
     if (!st.light_on || !fast_open(st, k, true))
-        throw std::logic_error("agg_accumulate_packed: not a light state");
+        dstd::fatal("agg_accumulate_packed: not a light state");
     const std::size_t nf = st.nf;
     const std::size_t W = shape.W;
     for (std::size_t pg = 0; pg < rows.pages.size(); ++pg) {
@@ -1752,9 +1855,9 @@ void agg_accumulate_packed(AggState& st, const std::vector<const Series*>& keys,
 
 AggStatePtr agg_in_first_seen_order(AggStatePtr st) {
     if (!st || !st->inited || !agg_first_rows_known(*st)) return st;
-    const std::vector<std::int64_t>& first = st->group_first_row;
+    const dstd::Vector<std::int64_t>& first = st->group_first_row;
     if (std::is_sorted(first.begin(), first.end())) return st;
-    std::vector<std::int64_t> order(first.size());
+    dstd::Vector<std::int64_t> order(first.size());
     std::iota(order.begin(), order.end(), 0);
     std::sort(order.begin(), order.end(), [&](std::int64_t a, std::int64_t b) {
         return first[static_cast<std::size_t>(a)] <
@@ -1764,7 +1867,7 @@ AggStatePtr agg_in_first_seen_order(AggStatePtr st) {
     return st;
 }
 
-AggStatePtr agg_merge_many(std::vector<AggStatePtr>& partials) {
+AggStatePtr agg_merge_many(dstd::Vector<AggStatePtr>& partials) {
     std::size_t widest = partials.size();
     for (std::size_t p = 0; p < partials.size(); ++p)
         if (partials[p] && partials[p]->inited &&
@@ -1778,17 +1881,25 @@ AggStatePtr agg_merge_many(std::vector<AggStatePtr>& partials) {
     }
     AggStatePtr base = std::move(partials[widest]);
     base->settle_light();
-    std::vector<const AggState*> others;
+    dstd::Vector<const AggState*> others;
     for (const AggStatePtr& p : partials)
         if (p && p->inited) others.push_back(&settled(*p));
-    for (const AggState* o : others)
-        for (const auto& [name, d] : o->dyn_domain)
-            base->dyn_domain.emplace(name, d);
+    // One remap per partial, built here because it grows base's name table
+    // and the merges below run in parallel.
+    dstd::Vector<dstd::Vector<std::uint32_t>> dyn_map(others.size());
+    for (std::size_t p = 0; p < others.size(); ++p)
+        if (others[p]->has_dyn) dyn_map[p] = base->dyn_remap(*others[p]);
+    // Before the parallel merge, as taking or dropping the light dyn form
+    // rewrites the whole state.
+    if (base->has_dyn)
+        for (std::size_t p = 0; p < others.size(); ++p)
+            base->dyn_light_open_for_merge(
+                *others[p], others[p]->has_dyn ? &dyn_map[p] : nullptr);
 
     // Each other's group -> base group, or -1: one fork-join over every
     // (partial, group) pair.
-    std::vector<std::vector<std::int64_t>> map(others.size());
-    std::vector<std::int64_t> offset(others.size() + 1, 0);
+    dstd::Vector<dstd::Vector<std::int64_t>> map(others.size());
+    dstd::Vector<std::int64_t> offset(others.size() + 1, 0);
     for (std::size_t p = 0; p < others.size(); ++p) {
         map[p].assign(static_cast<std::size_t>(others[p]->ngroups()), -1);
         offset[p + 1] = offset[p] + others[p]->ngroups();
@@ -1807,26 +1918,28 @@ AggStatePtr agg_merge_many(std::vector<AggStatePtr>& partials) {
     constexpr std::int64_t GRAIN = 1024;
     parallel_for(ng, GRAIN, [&](std::int64_t gb, std::int64_t ge) {
         for (std::size_t p = 0; p < others.size(); ++p) {
-            const std::vector<std::int64_t>& m = map[p];
+            const dstd::Vector<std::int64_t>& m = map[p];
             for (std::size_t j = 0; j < m.size(); ++j)
                 if (m[j] >= gb && m[j] < ge)
-                    base->merge_group(m[j], *others[p],
-                                      static_cast<std::int64_t>(j));
+                    base->merge_group(
+                        m[j], *others[p], static_cast<std::int64_t>(j),
+                        others[p]->has_dyn ? &dyn_map[p] : nullptr);
         }
     });
     for (std::size_t p = 0; p < others.size(); ++p) {
-        const std::vector<std::int64_t>& m = map[p];
+        const dstd::Vector<std::int64_t>& m = map[p];
         for (std::size_t j = 0; j < m.size(); ++j)
             if (m[j] < 0)
                 base->merge_group(base->group_of_other(
                                       *others[p], static_cast<std::int64_t>(j)),
-                                  *others[p], static_cast<std::int64_t>(j));
+                                  *others[p], static_cast<std::int64_t>(j),
+                                  others[p]->has_dyn ? &dyn_map[p] : nullptr);
     }
     return base;
 }
 
 AggStatePtr agg_regroup(const AggState& src_in,
-                        const std::vector<std::int32_t>& keep,
+                        const dstd::Vector<std::int32_t>& keep,
                         std::int64_t bucket_recut) {
     const AggState& src = settled(src_in);
     AggStatePtr dst(new AggState());
@@ -1871,7 +1984,7 @@ AggStatePtr agg_regroup(const AggState& src_in,
                     v = (v / bucket_recut) * bucket_recut;
                 return v;
             },
-            [&](std::size_t k) -> std::string_view {
+            [&](std::size_t k) -> dstd::StringView {
                 return src.skey_cols[static_cast<std::size_t>(keep[k])]
                                     [static_cast<std::size_t>(j)];
             },
@@ -1889,7 +2002,7 @@ AggStatePtr agg_clip_occupancy(const AggState& src_in, std::uint64_t lo,
                                double bucket_scale,
                                std::int64_t bucket_origin) {
     const AggState& src = settled(src_in);
-    std::vector<std::int32_t> all(src.nkeys);
+    dstd::Vector<std::int32_t> all(src.nkeys);
     std::iota(all.begin(), all.end(), 0);
     AggStatePtr dst = agg_regroup(src, all);
     AggState& st = *dst;
@@ -1921,9 +2034,9 @@ AggStatePtr agg_clip_occupancy(const AggState& src_in, std::uint64_t lo,
     };
 
     const std::size_t nkeys = st.nkeys;
-    ankerl::unordered_dense::map<std::string, std::size_t> rest_at;
-    std::vector<std::vector<std::int64_t>> rests;
-    std::string sig;
+    dstd::HashMap<dstd::String, std::size_t> rest_at;
+    dstd::Vector<dstd::Vector<std::int64_t>> rests;
+    dstd::String sig;
     const std::int64_t ng = st.ngroups();
     for (std::int64_t g = 0; g < ng; ++g) {
         const std::size_t gi = static_cast<std::size_t>(g);
@@ -1933,7 +2046,7 @@ AggStatePtr agg_clip_occupancy(const AggState& src_in, std::uint64_t lo,
             sig.push_back(null ? '\0' : '\1');
             if (null) continue;
             if (st.key_is_bytes[k]) {
-                const std::string& v = st.skey_cols[k][gi];
+                const dstd::String& v = st.skey_cols[k][gi];
                 const std::uint64_t len = v.size();
                 sig.append(reinterpret_cast<const char*>(&len), sizeof(len));
                 sig += v;
@@ -1947,21 +2060,21 @@ AggStatePtr agg_clip_occupancy(const AggState& src_in, std::uint64_t lo,
         rests[it->second].push_back(g);
     }
 
-    std::vector<std::pair<std::uint64_t, std::int64_t>> pts;
-    std::vector<std::int64_t> ik(nkeys);
-    std::vector<std::string> sk(nkeys);
-    std::vector<std::uint8_t> nk(nkeys);
-    for (const std::vector<std::int64_t>& members : rests) {
+    dstd::Vector<dstd::Pair<std::uint64_t, std::int64_t>> pts;
+    dstd::Vector<std::int64_t> ik(nkeys);
+    dstd::Vector<dstd::String> sk(nkeys);
+    dstd::Vector<std::uint8_t> nk(nkeys);
+    for (const dstd::Vector<std::int64_t>& members : rests) {
         const std::size_t rep = static_cast<std::size_t>(members.front());
         for (std::size_t k = 1; k < nkeys; ++k) {
             ik[k] = st.key_is_bytes[k] ? 0 : st.ikey_cols[k][rep];
-            sk[k] = st.key_is_bytes[k] ? st.skey_cols[k][rep] : std::string();
+            sk[k] = st.key_is_bytes[k] ? st.skey_cols[k][rep] : dstd::String();
             nk[k] = st.nkey_cols[k][rep];
         }
         auto slot_of = [&](std::int64_t bucket, std::size_t slot) {
             const std::int64_t g = st.find_or_add_group(
                 [&](std::size_t k) { return k == 0 ? bucket : ik[k]; },
-                [&](std::size_t k) { return std::string_view(sk[k]); },
+                [&](std::size_t k) { return dstd::StringView(sk[k]); },
                 [&](std::size_t k) { return k != 0 && nk[k] != 0; });
             return static_cast<std::size_t>(g) * n_occ + slot;
         };

@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: MIT
 # Usage: run-in-podman.sh <image> <phase-script> [args...]
 # Runs a CI phase inside podman on the allocated node, mirroring the images the
 # GitHub workflows use.
@@ -11,12 +12,6 @@ shift
 PODMAN_STORE=/var/tmp/$USER/podman-root
 PODMAN_RUNROOT=/var/tmp/$USER/podman-run
 mkdir -p "$PODMAN_STORE" "$PODMAN_RUNROOT"
-
-# RocksDB is built once by the rocksdb phase and shared with every other one.
-# Mounted at the path build_rocksdb.sh defaults to, so the prefix matches the
-# one the GitHub jobs bake into their cache.
-DEPS_DIR=/var/tmp/$USER/dftracer-deps
-mkdir -p "$DEPS_DIR"
 
 # CMakeLists sets ccache as the compiler launcher, but without CCACHE_DIR each
 # container caches into its own $HOME and --rm discards it: every phase, and
@@ -37,13 +32,11 @@ fi
 podman --root "$PODMAN_STORE" --runroot "$PODMAN_RUNROOT" run --rm \
   --user 0:0 \
   -v "$PWD:/ws" -w /ws \
-  -v "$DEPS_DIR:/opt/dftracer-deps" \
   -v "$CCACHE_HOST:/ccache" \
   "${DIST_MOUNT[@]}" \
   -e CI_PROJECT_DIR=/ws \
   -e DFTRACER_DIST \
   -e CMAKE_POLICY_VERSION_MINIMUM=3.5 \
-  -e ROCKSDB_VERSION \
   -e PHASE_COUNT \
   -e CCACHE_DIR=/ccache \
   -e CCACHE_BASEDIR=/ws \

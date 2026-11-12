@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Containment over a trace with View: the call tree (per-event level/parent_id)
 // and the folded flamegraph (name-path node frame), both from one buffered fold
 // of one scan.
@@ -5,34 +6,40 @@
 // usage: view_containment_example <trace.pfw.gz> [index_dir]
 
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/trace/views/view.h>
 
 #include <cstdio>
 #include <string>
 
-namespace views = dftracer::utils::trace::views;
-namespace df = dftracer::utils::dataframe;
+using namespace dftracer::utils;
 
 int main(int argc, char** argv) {
     if (argc < 2) {
         std::fprintf(stderr, "usage: %s <trace.pfw.gz> [index_dir]\n", argv[0]);
         return 1;
     }
-    const std::string file = argv[1];
-    const std::string index_dir = argc > 2 ? argv[2] : "";
+    const dftracer::utils::dstd::String file = argv[1];
+    const dftracer::utils::dstd::String index_dir = argc > 2 ? argv[2] : "";
 
-    views::View v = views::View::from_file(file, index_dir);
-    views::ContainmentResult both = v.containment().collect().get();
+    trace::views::View v = trace::views::View::from_file(file, index_dir);
+    auto collected = v.containment().collect().get();
+    if (!collected) {
+        std::fprintf(stderr, "%s\n", collected.error().format().c_str());
+        return 1;
+    }
+    trace::views::ContainmentResult both = std::move(*collected);
 
     // Call tree: every event plus its nesting level and parent row index.
-    const df::DataFrame& ct = both.call_tree;
+    const dataframe::DataFrame& ct = both.call_tree;
     std::printf("call_tree: %lld events (columns: ",
                 static_cast<long long>(ct.num_rows()));
-    for (const std::string& n : ct.names) std::printf("%s ", n.c_str());
+    for (const dftracer::utils::dstd::String& n : ct.names)
+        std::printf("%s ", n.c_str());
     std::printf(")\n");
 
     // Flamegraph: events folded by root-to-node name path.
-    const df::DataFrame& fg = both.flamegraph;
+    const dataframe::DataFrame& fg = both.flamegraph;
     std::printf("flamegraph: %lld nodes\n",
                 static_cast<long long>(fg.num_rows()));
     return 0;

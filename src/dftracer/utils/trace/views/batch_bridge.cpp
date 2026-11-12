@@ -1,4 +1,7 @@
+// SPDX-License-Identifier: MIT
 #include <dftracer/utils/dataframe/batch_ops.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/trace/views/batch_bridge.h>
 #include <dftracer/utils/trace/views/native_row_fold.h>
 
@@ -8,9 +11,9 @@ namespace dftracer::utils::trace::views::detail {
 
 namespace {
 
-dataframe::DataFrame base_frame(EventRows events,
-                                const dftracer::utils::StringIntern& intern,
-                                const ColumnSpec& spec) {
+dataframe::DataFrame base_frame(
+    EventRows events, const dftracer::utils::dstd::StringIntern& intern,
+    const ColumnSpec& spec) {
     dataframe::DataFrame f = build_row_frame(events, intern, spec.select,
                                              spec.time_scale, spec.by_path);
     if (spec.json)
@@ -28,7 +31,7 @@ dataframe::DataFrame base_frame(EventRows events,
 }  // namespace
 
 dataframe::DataFrame events_to_frame(
-    EventRows events, const dftracer::utils::StringIntern& intern,
+    EventRows events, const dftracer::utils::dstd::StringIntern& intern,
     const ColumnSpec& spec) {
     dataframe::DataFrame f = base_frame(events, intern, spec);
     if (spec.emit_dyn)
@@ -41,7 +44,8 @@ dataframe::DataFrame events_to_frame(
 }
 
 dataframe::Morsel events_to_morsel(
-    EventRows events, std::shared_ptr<dftracer::utils::StringIntern> intern,
+    EventRows events,
+    dstd::SharedPtr<dftracer::utils::dstd::StringIntern> intern,
     const ColumnSpec& spec) {
     dataframe::DataFrame f = events_to_frame(events, *intern, spec);
 
@@ -50,7 +54,7 @@ dataframe::Morsel events_to_morsel(
     m.columns = std::move(f.columns);
     dataframe::MorselDyn& d = m.dyn_state();
     d.name_ids.reserve(f.names.size());
-    for (const std::string& name : f.names)
+    for (const auto& name : f.names)
         d.name_ids.push_back(intern->get_or_insert(name));
     d.intern = std::move(intern);
     return m;

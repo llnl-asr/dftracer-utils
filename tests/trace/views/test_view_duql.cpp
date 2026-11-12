@@ -1,8 +1,20 @@
+// SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/error.h>
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/expr.h>
-#include <dftracer/utils/index/indexer.h>
+#include <dftracer/utils/dstd/algorithm.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/trace/index/indexer.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
+#include <testing_utilities.h>
+#include <trace/views/test_view_common.h>
 
 #include <algorithm>
 #include <array>
@@ -10,21 +22,19 @@
 #include <cmath>
 #include <cstdlib>
 #include <fstream>
-#include <map>
 #include <optional>
-#include <set>
-#include <string>
-#include <vector>
 
-#include "test_view_common.h"
-
-namespace df = dftracer::utils::dataframe;
+using namespace dftracer::utils;
+using namespace dftracer::utils::trace::internal;
+using namespace dftracer::utils::trace::views;
+using namespace dftu_utils_test;
+using namespace test_view_common;
 
 namespace {
 
 dftu_series* plug_twice(const dftu_series* in) {
     const std::int64_t n = dftu_series_length(in);
-    std::vector<std::int64_t> v(static_cast<std::size_t>(n));
+    dstd::Vector<std::int64_t> v(static_cast<std::size_t>(n));
     dftu_series* flat = dftu_series_materialize(in);
     const auto* d = static_cast<const std::int64_t*>(dftu_series_data(flat));
     for (std::int64_t i = 0; i < n; ++i)
@@ -35,7 +45,7 @@ dftu_series* plug_twice(const dftu_series* in) {
 
 dftu_series* plug_add2(const dftu_series* a, const dftu_series* b) {
     const std::int64_t n = dftu_series_length(a);
-    std::vector<std::int64_t> v(static_cast<std::size_t>(n));
+    dstd::Vector<std::int64_t> v(static_cast<std::size_t>(n));
     dftu_series* fa = dftu_series_materialize(a);
     dftu_series* fb = dftu_series_materialize(b);
     const auto* x = static_cast<const std::int64_t*>(dftu_series_data(fa));
@@ -49,7 +59,7 @@ dftu_series* plug_add2(const dftu_series* a, const dftu_series* b) {
 
 dftu_series* plug_scale(const dftu_series* in, double f) {
     const std::int64_t n = dftu_series_length(in);
-    std::vector<double> v(static_cast<std::size_t>(n));
+    dstd::Vector<double> v(static_cast<std::size_t>(n));
     dftu_series* flat = dftu_series_materialize(in);
     const auto* d = static_cast<const std::int64_t*>(dftu_series_data(flat));
     for (std::int64_t i = 0; i < n; ++i)
@@ -62,9 +72,9 @@ dftu_dataframe* plug_head(const dftu_dataframe* df, int64_t n) {
     return dftu_dataframe_head(df, n);
 }
 
-std::vector<double> series_values(const dftu_series* in) {
+dstd::Vector<double> series_values(const dftu_series* in) {
     const std::int64_t n = dftu_series_length(in);
-    std::vector<double> out(static_cast<std::size_t>(n));
+    dstd::Vector<double> out(static_cast<std::size_t>(n));
     dftu_series* flat = dftu_series_materialize(in);
     const void* d = dftu_series_data(flat);
     for (std::int64_t i = 0; i < n; ++i)
@@ -105,15 +115,15 @@ struct PluginReducers {
     PluginReducers() {
         const dftu_op_desc ops[] = {
             {"myplug.total", DFTU_OP_SIG(F64, SERIES, NONE, NONE),
-             reinterpret_cast<const void*>(&plug_total)},
+             reinterpret_cast<dftu_op_generic_fn>(&plug_total)},
             {"myplug.scaled", DFTU_OP_SIG(F64, SERIES, F64, NONE),
-             reinterpret_cast<const void*>(&plug_scaled)},
+             reinterpret_cast<dftu_op_generic_fn>(&plug_scaled)},
             {"myplug.count_i", DFTU_OP_SIG(I64, SERIES, NONE, NONE),
-             reinterpret_cast<const void*>(&plug_count)},
+             reinterpret_cast<dftu_op_generic_fn>(&plug_count)},
             {"myplug.big", DFTU_OP_SIG(BOOL, SERIES, I32, NONE),
-             reinterpret_cast<const void*>(&plug_big)},
+             reinterpret_cast<dftu_op_generic_fn>(&plug_big)},
             {"myplug.unrun", DFTU_OP_SIG(SCALAR, SERIES, I32, NONE),
-             reinterpret_cast<const void*>(&plug_unrun)}};
+             reinterpret_cast<dftu_op_generic_fn>(&plug_unrun)}};
         for (const auto& op : ops) REQUIRE(dftu_op_register(&op) == 0);
     }
     ~PluginReducers() {
@@ -125,13 +135,13 @@ struct PluginOps {
     PluginOps() {
         const dftu_op_desc ops[] = {
             {"myplug.twice", DFTU_OP_SIG(SERIES, SERIES, NONE, NONE),
-             reinterpret_cast<const void*>(&plug_twice)},
+             reinterpret_cast<dftu_op_generic_fn>(&plug_twice)},
             {"myplug.add2", DFTU_OP_SIG(SERIES, SERIES, SERIES, NONE),
-             reinterpret_cast<const void*>(&plug_add2)},
+             reinterpret_cast<dftu_op_generic_fn>(&plug_add2)},
             {"myplug.scale", DFTU_OP_SIG(SERIES, SERIES, F64, NONE),
-             reinterpret_cast<const void*>(&plug_scale)},
+             reinterpret_cast<dftu_op_generic_fn>(&plug_scale)},
             {"myplug.head", DFTU_OP_SIG(FRAME, FRAME, I64, NONE),
-             reinterpret_cast<const void*>(&plug_head)}};
+             reinterpret_cast<dftu_op_generic_fn>(&plug_head)}};
         for (const auto& op : ops) REQUIRE(dftu_op_register(&op) == 0);
     }
     ~PluginOps() {
@@ -143,103 +153,143 @@ struct PluginOps {
 
 View base() {
     const auto& s = shared_trace();
-    return View::from_file(s.gz, s.idx);
+    return View::from_file(dstd::String(s.gz), dstd::String(s.idx));
 }
 
-df::DataFrame frame(const View& v) { return run(v.collect()); }
+dstd::Result<dataframe::DataFrame> frame_result(const View& v) {
+    return dftracer::utils::default_runtime().submit(v.collect()).get();
+}
 
-df::DataFrame pipe(const std::string& text, const duql::Params& p = {}) {
+dataframe::DataFrame frame(const View& v) {
+    return dftu_utils_test::ok(frame_result(v));
+}
+
+// The message of the error a view fails with, from building it or from
+// running it; empty when it does not fail.
+dstd::String failure_of(const dstd::Function<View()>& make) {
+    const View built = make();
+    if (const auto kept = built.status(); !kept.has_value())
+        return kept.error().c_str();
+    const auto result = frame_result(built);
+    if (!result.has_value()) return result.error().c_str();
+    return {};
+}
+
+dataframe::DataFrame pipe(const dstd::String& text,
+                          const duql::Params& p = {}) {
     return frame(base().duql(text, p));
 }
 
-std::vector<double> nums(const df::DataFrame& f, std::string_view name) {
-    std::vector<double> out;
+dstd::Vector<double> nums(const dataframe::DataFrame& f,
+                          dstd::StringView name) {
+    dstd::Vector<double> out;
     for (std::int64_t r = 0; r < f.num_rows(); ++r)
         out.push_back(bnum(f, r, name));
     return out;
 }
 
 // Row `r` of the list column `name`, as `[a,b]`.
-std::string items(const df::DataFrame& f, std::int64_t r,
-                  std::string_view name) {
-    const df::Series& c = f.columns[static_cast<std::size_t>(bcol(f, name))];
+dstd::String items(const dataframe::DataFrame& f, std::int64_t r,
+                   dstd::StringView name) {
+    const dataframe::Series& c =
+        f.columns[static_cast<std::size_t>(bcol(f, name))];
     if (c.is_null(r)) return "null";
-    const df::Series l = c.materialize();
+    const dataframe::Series l = c.materialize();
     REQUIRE((l.offsets() || l.offsets64()));
     const std::int64_t lo = l.offsets() ? l.offsets()[r] : l.offsets64()[r];
     const std::int64_t hi =
         l.offsets() ? l.offsets()[r + 1] : l.offsets64()[r + 1];
-    const df::Series child = l.child(0).materialize();
-    std::string out = "[";
+    const dataframe::Series child = l.child(0).materialize();
+    dstd::String out = "[";
     for (std::int64_t i = lo; i < hi; ++i) {
         if (i > lo) out += ",";
         if (child.is_null(i))
             out += "null";
-        else if (child.type() == df::TypeId::String)
+        else if (child.type() == dataframe::TypeId::String)
             out += child.string_at(i);
-        else if (child.type() == df::TypeId::Float64)
-            out += std::to_string(child.data<double>()[i]);
+        else if (child.type() == dataframe::TypeId::Float64)
+            out += dstd::to_string(child.data<double>()[i]);
         else
-            out += std::to_string(child.data<std::int64_t>()[i]);
+            out += dstd::to_string(child.data<std::int64_t>()[i]);
     }
     return out + "]";
 }
 
-std::string text(const df::DataFrame& f) {
-    std::string out;
+dstd::String text(const dataframe::DataFrame& f) {
+    dstd::String out;
     for (std::size_t c = 0; c < f.columns.size(); ++c) {
         out += f.names[c] + ":";
         for (std::int64_t r = 0; r < f.num_rows(); ++r) {
             if (f.columns[c].is_null(r))
                 out += "null";
-            else if (f.columns[c].type() == df::TypeId::List)
+            else if (f.columns[c].type() == dataframe::TypeId::List)
                 out += items(f, r, f.names[c]);
-            else if (f.columns[c].type() == df::TypeId::String)
+            else if (f.columns[c].type() == dataframe::TypeId::String)
                 out += bstr(f, r, f.names[c]);
             else
-                out += std::to_string(bnum(f, r, f.names[c]));
+                out += dstd::to_string(bnum(f, r, f.names[c]));
             out += ",";
         }
     }
     return out;
 }
 
-bool fails_with(const std::string& q, std::vector<std::string> words) {
-    try {
-        (void)frame(base().duql(q));
-    } catch (const DFTUtilsException& e) {
-        const std::string what = e.what();
-        for (const auto& w : words)
-            if (what.find(w) == std::string::npos) {
-                MESSAGE(what);
-                return false;
-            }
-        return true;
-    }
-    return false;
+bool fails_with(const dstd::String& q, dstd::Vector<dstd::String> words) {
+    const dstd::String what = failure_of([&] { return base().duql(q); });
+    if (what.empty()) return false;
+    for (const auto& w : words)
+        if (what.find(w) == dstd::String::npos) {
+            MESSAGE(what);
+            return false;
+        }
+    return true;
 }
 
-std::string event(int ts, const std::string& args, int dur = 10) {
+dstd::String event(int ts, const dstd::String& args, int dur = 10) {
     return R"({"ph":"X","name":"op","cat":"POSIX","pid":1,"tid":1,"ts":)" +
-           std::to_string(ts) + R"(,"dur":)" + std::to_string(dur) +
+           dstd::to_string(ts) + R"(,"dur":)" + dstd::to_string(dur) +
            R"(,"args":{)" + args + "}}";
 }
 
-View view_of_lines(TestEnvironment& env, const std::vector<std::string>& lines,
-                   const std::string& name = "lines.pfw") {
-    const std::string pfw = env.get_dir() + "/" + name;
+View view_of_lines(TestEnvironment& env,
+                   const dstd::Vector<dstd::String>& lines,
+                   const dstd::String& name = "lines.pfw") {
+    const dstd::String pfw = env.dir() + "/" + name;
     {
-        std::ofstream o(pfw);
+        dftu_utils_test::FileOut o(pfw);
         for (const auto& l : lines) o << l << "\n";
     }
-    const std::string gz = pfw + ".gz";
+    const dstd::String gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
-    fs::remove(pfw);
-    dftracer::utils::index::Indexer::open({gz}).build();
-    return View::from_file(gz, determine_index_path(gz, ""));
+    dstd::fs::remove(pfw).discard();
+    dftu_utils_test::ok(
+        dftu_utils_test::ok(dftracer::utils::trace::index::Indexer::open(
+                                {dstd::String(dstd::StringView(gz))}))
+            .build());
+    return View::from_file(
+        dstd::String(gz),
+        dstd::String(dstd::String(determine_index_path(gz, ""))));
 }
 
-std::int32_t col_of(const View& v, std::string_view name) {
+// A 60-record trace whose every third record carries no dur, so the duration
+// aggregates read 40 values while the row count stays 60 (dur values sum to
+// 419).
+dstd::Vector<dstd::String> null_dur_lines() {
+    dstd::Vector<dstd::String> lines;
+    for (int i = 0; i < 60; ++i) {
+        dstd::String rec = R"({"ph":"X","name":")" +
+                           dstd::String(i % 2 ? "a" : "b") + R"(","pid":)" +
+                           dstd::to_string(i % 4) + R"(,"tid":1,"ts":)" +
+                           dstd::to_string(100 + i * 10);
+        if (i % 3 != 0) rec += R"(,"dur":)" + dstd::to_string(i * 7 % 23);
+        if (i % 5 != 0)
+            rec += R"(,"cat":")" + dstd::String(i % 4 ? "x" : "") + "\"";
+        lines.push_back(rec + R"(,"args":{}})");
+    }
+    return lines;
+}
+
+std::int32_t col_of(const View& v, dstd::StringView name) {
     const auto names = v.schema();
     for (std::size_t i = 0; i < names.size(); ++i)
         if (names[i] == name) return static_cast<std::int32_t>(i);
@@ -251,24 +301,25 @@ std::int32_t col_of(const View& v, std::string_view name) {
 
 TEST_SUITE("View duql pipeline") {
     TEST_CASE("derive, sort and take equal the hand-written View calls") {
-        const df::DataFrame got =
+        const dataframe::DataFrame got =
             pipe(R"(where cat == "POSIX" | derive ms = dur / 1000 | sort -ms)"
                  " | take 5 | select name, ms");
 
         View hand = base().duql(R"(cat == "POSIX")");
         hand = hand.with_column(
             "ms",
-            df::expr_arith(df::ArithOp::Div, df::expr_col(col_of(hand, "dur")),
-                           df::expr_lit(std::int64_t{1000})));
-        const df::DataFrame want =
-            frame(hand.sort_by_multi({"ms"}, std::vector<bool>{true})
+            dataframe::expr_arith(dataframe::ArithOp::Div,
+                                  dataframe::expr_col(col_of(hand, "dur")),
+                                  dataframe::expr_lit(std::int64_t{1000})));
+        const dataframe::DataFrame want =
+            frame(hand.sort_by_multi({"ms"}, dstd::Vector<bool>{true})
                       .head(5)
                       .select({"name", "ms"}));
 
-        CHECK(got.names == std::vector<std::string>{"name", "ms"});
+        CHECK(got.names == dstd::Vector<dstd::String>{"name", "ms"});
         CHECK(nums(got, "ms") == nums(want, "ms"));
         CHECK(nums(got, "ms") ==
-              std::vector<double>{0.039, 0.038, 0.037, 0.036, 0.035});
+              dstd::Vector<double>{0.039, 0.038, 0.037, 0.036, 0.035});
         CHECK(bstr(got, 0, "name") == "read");
     }
 
@@ -277,7 +328,7 @@ TEST_SUITE("View duql pipeline") {
         CHECK(pipe("where dur > 0.03ms").num_rows() == 18);
         CHECK(pipe("where dur between 10us and 0.012ms").num_rows() == 3);
         CHECK(pipe("derive x = 1 | where dur + 1us > 39us").num_rows() == 2);
-        CHECK_THROWS_AS(base().duql("where pid > 1ms"), DFTUtilsException);
+        expect_refused(base().duql("where pid > 1ms"), "");
     }
 
     TEST_CASE("a duration keeps its unit only where the unit is clear") {
@@ -298,12 +349,12 @@ TEST_SUITE("View duql pipeline") {
                               "group name { c = count() } | where c > 1ms",
                               "derive x = dur / 1000 | where x > 30us"}) {
             CAPTURE(q);
-            CHECK_THROWS_AS(base().duql(q), DFTUtilsException);
+            expect_refused(base().duql(q), "");
         }
     }
 
     TEST_CASE("time functions") {
-        const df::DataFrame f = pipe(
+        const dataframe::DataFrame f = pipe(
             "where cat == \"POSIX\" | derive b = bin(ts, 1ms),"
             " s = to_seconds(dur), n = as_time(dur, \"ms\")"
             " | sort ts | take 12 | select ts, b, s, n");
@@ -320,18 +371,18 @@ TEST_SUITE("View duql pipeline") {
         const std::int64_t DAY = 86400000000;
         const auto at = [](std::int64_t ts) {
             return R"({"ph":"X","name":"op","cat":"POSIX","pid":1,"tid":1,"ts":)" +
-                   std::to_string(ts) + R"(,"dur":10,"args":{}})";
+                   dstd::to_string(ts) + R"(,"dur":10,"args":{}})";
         };
         const View v =
             view_of_lines(env, {at(T0), at(T0 + DAY), at(T0 + 7 * DAY)});
 
-        const df::DataFrame hour = frame(v.duql(
+        const dataframe::DataFrame hour = frame(v.duql(
             R"(derive h = date_part(ts, "hour"), )"
             R"(d = format_time(ts, "%F %T.%f") | sort ts | select ts, h, d)"));
         CHECK(bnum(hour, 0, "h") == 22);
         CHECK(bstr(hour, 0, "d") == "2023-11-14 22:13:20.123456");
 
-        const df::DataFrame week = frame(
+        const dataframe::DataFrame week = frame(
             v.duql(R"(where ts > 0 | group w = date_part(ts, "day_of_week") )"
                    R"({ n = count() } | sort w)"));
         REQUIRE(week.num_rows() == 2);
@@ -340,13 +391,13 @@ TEST_SUITE("View duql pipeline") {
         CHECK(bnum(week, 1, "w") == 2);
         CHECK(bnum(week, 1, "n") == 1);
 
-        const df::DataFrame scan = frame(v.duql(
+        const dataframe::DataFrame scan = frame(v.duql(
             R"(where date_part(ts, "year") == 2023 | derive y = date_part(ts, "year"))"));
         CHECK(scan.num_rows() == 3);
         duql::Params p;
-        p.emplace("part", duql::LiteralValue{std::string("minute")});
-        p.emplace("fmt", duql::LiteralValue{std::string("%H:%M")});
-        const df::DataFrame bound =
+        p.emplace("part", duql::LiteralValue{dstd::String("minute")});
+        p.emplace("fmt", duql::LiteralValue{dstd::String("%H:%M")});
+        const dataframe::DataFrame bound =
             frame(v.duql("where ts > 0 | derive m = date_part(ts, $part), "
                          "t = format_time(ts, $fmt) | sort ts | take 1",
                          p));
@@ -375,13 +426,13 @@ TEST_SUITE("View duql pipeline") {
         const std::int64_t stamp = micros();
         const auto at = [](std::int64_t ts) {
             return R"({"ph":"X","name":"op","cat":"POSIX","pid":1,"tid":1,"ts":)" +
-                   std::to_string(ts) + R"(,"dur":10,"args":{}})";
+                   dstd::to_string(ts) + R"(,"dur":10,"args":{}})";
         };
         const View v = view_of_lines(
             env, {at(stamp), at(stamp - 7200000000), at(stamp - 5)});
 
         const std::int64_t before = micros();
-        const df::DataFrame f =
+        const dataframe::DataFrame f =
             frame(v.duql("derive a = now(), b = now() | sort ts"));
         const std::int64_t after = micros();
         REQUIRE(f.num_rows() == 3);
@@ -393,13 +444,13 @@ TEST_SUITE("View duql pipeline") {
             CHECK(a <= after);
         }
 
-        const df::DataFrame last =
+        const dataframe::DataFrame last =
             frame(v.duql("where ts > now() - 1h | derive a = now() | sort ts"));
         REQUIRE(last.num_rows() == 2);
         CHECK(bnum(last, 0, "ts") == doctest::Approx(double(stamp - 5)));
         CHECK(bnum(last, 1, "ts") == doctest::Approx(double(stamp)));
 
-        const df::DataFrame both = frame(
+        const dataframe::DataFrame both = frame(
             v.duql("derive a = now(), b = now() | where ts > now() - 1h"));
         CHECK(both.num_rows() == 2);
 
@@ -415,10 +466,10 @@ TEST_SUITE("View duql pipeline") {
 
     TEST_CASE("list and pattern parameters") {
         duql::Params p;
-        p.emplace("names", std::vector<duql::LiteralValue>{
-                               std::string("read"), std::string("write")});
-        p.emplace("pat", duql::LiteralValue{std::string("re%")});
-        p.emplace("one", duql::LiteralValue{std::string("read")});
+        p.emplace("names", dstd::Vector<duql::LiteralValue>{
+                               dstd::String("read"), dstd::String("write")});
+        p.emplace("pat", duql::LiteralValue{dstd::String("re%")});
+        p.emplace("one", duql::LiteralValue{dstd::String("read")});
         CHECK(
             text(pipe("where name in $names | select ts, name", p)) ==
             text(pipe(R"(where name in ["read", "write"] | select ts, name)")));
@@ -433,47 +484,47 @@ TEST_SUITE("View duql pipeline") {
              {"where name == $names", "where name in $one",
               "where name like $names", "where name in $nope"}) {
             CAPTURE(q);
-            CHECK_THROWS_AS(base().duql(q, p), DFTUtilsException);
+            expect_refused(base().duql(q, p), "");
         }
     }
 
     TEST_CASE(
         "regex_replace agrees at scan time, after a group and as a Series") {
-        const std::string fn =
+        const dstd::String fn =
             R"(regex_replace(name, "^(?<h>.)(.*)$", "$2${h}"))";
-        const df::DataFrame scan = pipe(
+        const dataframe::DataFrame scan = pipe(
             "derive r = " + fn + " | select name, r | distinct | sort name");
-        const df::DataFrame grouped =
+        const dataframe::DataFrame grouped =
             pipe("group name { n = count() } | derive r = " + fn +
                  " | sort name | select name, r");
         CHECK(text(scan) == text(grouped));
         REQUIRE(scan.num_rows() > 1);
-        const df::Series names = grouped.columns[0].materialize();
-        const df::Series want =
+        const dataframe::Series names = grouped.columns[0].materialize();
+        const dataframe::Series want =
             names.str_regex_replace("^(?<h>.)(.*)$", "$2${h}").materialize();
-        const df::Series got = grouped.columns[1].materialize();
+        const dataframe::Series got = grouped.columns[1].materialize();
         for (std::int64_t r = 0; r < grouped.num_rows(); ++r) {
             CAPTURE(r);
-            CHECK(std::string(got.string_at(r)) ==
-                  std::string(want.string_at(r)));
-            const std::string n(names.string_at(r));
-            CHECK(std::string(got.string_at(r)) == n.substr(1) + n[0]);
+            CHECK(dstd::String(got.string_at(r)) ==
+                  dstd::String(want.string_at(r)));
+            const dstd::String n(names.string_at(r));
+            CHECK(dstd::String(got.string_at(r)) == n.substr(1) + n[0]);
         }
     }
 
     TEST_CASE("count arguments from a column match the scan evaluator") {
-        const df::DataFrame g = pipe(
+        const dataframe::DataFrame g = pipe(
             "group name { n = count() } | derive a = substr(name, n), "
             "b = substr(name, 1, n), r = round(1.23456, n) | sort name");
         REQUIRE(g.num_rows() > 1);
         for (std::int64_t r = 0; r < g.num_rows(); ++r) {
             CAPTURE(r);
-            const std::string name = bstr(g, r, "name");
+            const dstd::String name = bstr(g, r, "name");
             const auto n = static_cast<std::size_t>(bnum(g, r, "n"));
             CHECK(bstr(g, r, "a") ==
-                  (n < name.size() ? name.substr(n) : std::string()));
+                  (n < name.size() ? name.substr(n) : dstd::String()));
             CHECK(bstr(g, r, "b") ==
-                  (name.size() > 1 ? name.substr(1, n) : std::string()));
+                  (name.size() > 1 ? name.substr(1, n) : dstd::String()));
             double want = 1.23456;
             const double scale = std::pow(10.0, static_cast<double>(n));
             want = std::round(want * scale) / scale;
@@ -482,23 +533,24 @@ TEST_SUITE("View duql pipeline") {
     }
 
     TEST_CASE("a column needle keeps the same rows at scan time and after") {
-        const std::string keep = "contains(name, lower(substr(cat, 3, 1)))";
-        const df::DataFrame scan = pipe("where " + keep +
-                                        " | select name, cat | distinct | "
-                                        "sort name");
-        const df::DataFrame grouped =
+        const dstd::String keep = "contains(name, lower(substr(cat, 3, 1)))";
+        const dataframe::DataFrame scan =
+            pipe("where " + keep +
+                 " | select name, cat | distinct | "
+                 "sort name");
+        const dataframe::DataFrame grouped =
             pipe("group name, cat { n = count() } | where " + keep +
                  " | sort name | select name, cat");
         CHECK(text(scan) == text(grouped));
         CHECK(scan.num_rows() >= 1);
-        CHECK(text(scan).find("fwrite") != std::string::npos);
-        CHECK(text(scan).find("read,") == std::string::npos);
+        CHECK(text(scan).find("fwrite") != dstd::String::npos);
+        CHECK(text(scan).find("read,") == dstd::String::npos);
     }
 
     TEST_CASE("regex_replace takes parameter patterns and compile errors") {
         duql::Params p;
-        p.emplace("re", duql::LiteralValue{std::string("^re")});
-        p.emplace("to", duql::LiteralValue{std::string("RE")});
+        p.emplace("re", duql::LiteralValue{dstd::String("^re")});
+        p.emplace("to", duql::LiteralValue{dstd::String("RE")});
         CHECK(text(pipe("derive r = regex_replace(name, $re, $to) | "
                         "select name, r | distinct | sort name",
                         p)) ==
@@ -513,23 +565,23 @@ TEST_SUITE("View duql pipeline") {
 
     TEST_CASE("parse adds a String column per named group") {
         TestEnvironment env(10);
-        const auto named = [](int ts, const std::string& name) {
-            return std::string(R"({"ph":"X","name":")") + name +
+        const auto named = [](int ts, const dstd::String& name) {
+            return dstd::String(R"({"ph":"X","name":")") + name +
                    R"(","cat":"POSIX","pid":1,"tid":1,"ts":)" +
-                   std::to_string(ts) + R"(,"dur":10})";
+                   dstd::to_string(ts) + R"(,"dur":10})";
         };
         const View v = view_of_lines(
             env,
             {named(1, "open64_17"), named(2, "read"), named(3, "close"),
              R"({"ph":"X","cat":"POSIX","pid":1,"tid":1,"ts":4,"dur":10})"});
-        const auto run_parse = [&](const std::string& q) {
+        const auto run_parse = [&](const dstd::String& q) {
             return frame(v.duql(q + " | sort ts"));
         };
 
-        df::DataFrame f = run_parse(
+        dataframe::DataFrame f = run_parse(
             R"re(parse name ~ "(?<op>[a-z]+)\d*_(?<fd>\d+)" | select ts, op, fd)re");
         REQUIRE(f.num_rows() == 4);
-        CHECK(f.columns[bcol(f, "op")].type() == df::TypeId::String);
+        CHECK(f.columns[bcol(f, "op")].type() == dataframe::TypeId::String);
         CHECK(bstr(f, 0, "op") == "open");
         CHECK(bstr(f, 0, "fd") == "17");
         for (std::int64_t r = 1; r < 4; ++r) {
@@ -547,7 +599,7 @@ TEST_SUITE("View duql pipeline") {
         CHECK(f.columns[bcol(f, "fd")].is_null(3));
 
         duql::Params p;
-        p.emplace("re", duql::LiteralValue{std::string("(?<op>[a-z]+)")});
+        p.emplace("re", duql::LiteralValue{dstd::String("(?<op>[a-z]+)")});
         CHECK(text(frame(
                   v.duql("parse name ~ $re | select ts, op | sort ts", p))) ==
               text(run_parse(
@@ -576,25 +628,37 @@ TEST_SUITE("View duql pipeline") {
         duql::Params p;
         p.emplace("min", duql::LiteralValue{std::uint64_t{30}});
         p.emplace("n", duql::LiteralValue{std::uint64_t{3}});
-        const df::DataFrame want =
+        const dataframe::DataFrame want =
             pipe(R"(where cat == "POSIX" and dur > $min | derive ms = dur /)"
                  " 1000 | sort -ms | take $n | select name, ms",
                  p);
-        const df::DataFrame got = frame(base().duql(q));
+        const dataframe::DataFrame got = frame(base().duql(q));
         CHECK(got.names == want.names);
         CHECK(nums(got, "ms") == nums(want, "ms"));
         CHECK(got.num_rows() == 3);
     }
 
+    TEST_CASE("a resolved column in a derived term is refused") {
+        CHECK(fails_with("derive x = resolved.fhash.path",
+                         {"resolved.", "fhash -> files.path"}));
+    }
+
+    TEST_CASE("a builder pipe that holds an error does not run") {
+        const duql::Pipe q =
+            duql::Pipe().time_range(dstd::nullopt, dstd::nullopt);
+        REQUIRE_FALSE(q.error().empty());
+        test_view_common::expect_refused(base().duql(q), "time_range");
+    }
+
     TEST_CASE("sort keeps nulls last unless nulls first") {
-        const std::string q =
+        const dstd::String q =
             "derive y = if(dur > 35, null, dur) | sort -y{} | take 9"
             " | select y";
-        const df::DataFrame last =
-            pipe(std::string(q).replace(q.find("{}"), 2, ""));
+        const dataframe::DataFrame last =
+            pipe(dstd::String(q).replace(q.find("{}"), 2, ""));
         CHECK(bnum(last, 0, "y") == 35);
-        const df::DataFrame first =
-            pipe(std::string(q).replace(q.find("{}"), 2, " nulls first"));
+        const dataframe::DataFrame first =
+            pipe(dstd::String(q).replace(q.find("{}"), 2, " nulls first"));
         const auto& y = first.columns[0];
         for (std::int64_t r = 0; r < 8; ++r) CHECK(y.is_null(r));
         CHECK_FALSE(y.is_null(8));
@@ -602,9 +666,10 @@ TEST_SUITE("View duql pipeline") {
     }
 
     TEST_CASE("skip and take window a sorted result") {
-        const df::DataFrame f = pipe("sort ts | skip 45 | take 10 | select ts");
+        const dataframe::DataFrame f =
+            pipe("sort ts | skip 45 | take 10 | select ts");
         CHECK(nums(f, "ts") ==
-              std::vector<double>{6500, 6600, 6700, 6800, 6900});
+              dstd::Vector<double>{6500, 6600, 6700, 6800, 6900});
     }
 
     TEST_CASE("named distinct keys, pivot labels and take a..b") {
@@ -613,43 +678,43 @@ TEST_SUITE("View duql pipeline") {
         CHECK(text(pipe("distinct dur // 10 as d | sort d")) ==
               text(pipe("derive d = dur // 10 | distinct d | sort d")));
 
-        const df::DataFrame one = pipe(
+        const dataframe::DataFrame one = pipe(
             R"(pivot name in ["read" as r, "write" as w] { n = count() })");
-        CHECK(one.names == std::vector<std::string>{"r", "w"});
-        const df::DataFrame plain =
+        CHECK(one.names == dstd::Vector<dstd::String>{"r", "w"});
+        const dataframe::DataFrame plain =
             pipe(R"(pivot name in ["read", "write"] { n = count() })");
         CHECK(nums(one, "r") == nums(plain, "n.read"));
-        const df::DataFrame two = pipe(
+        const dataframe::DataFrame two = pipe(
             R"(pivot name in ["read" as r, "write"] { n = count(), s = sum(dur) })");
         CHECK(two.names ==
-              std::vector<std::string>{"n_r", "n.write", "s_r", "s.write"});
+              dstd::Vector<dstd::String>{"n_r", "n.write", "s_r", "s.write"});
 
         const auto all = nums(pipe("sort ts | select ts"), "ts");
         const auto mid = nums(pipe("sort ts | take 3..5 | select ts"), "ts");
         REQUIRE(mid.size() == 3);
-        CHECK(mid == std::vector<double>(all.begin() + 2, all.begin() + 5));
+        CHECK(mid == dstd::Vector<double>(all.begin() + 2, all.begin() + 5));
         CHECK(nums(pipe("sort ts | take 1..1 | select ts"), "ts").size() == 1);
         for (const char* q : {"take 0..2", "take 5..3", "take 1..2 by cat"}) {
             CAPTURE(q);
-            CHECK_THROWS_AS(base().duql(q), DFTUtilsException);
+            expect_refused(base().duql(q), "");
         }
     }
 
     TEST_CASE("aggregate expressions in a block") {
-        const df::DataFrame f = pipe(
+        const dataframe::DataFrame f = pipe(
             "group name { n = count(), ms = sum(dur) / 1000, "
             "r = sum(dur) / count(), m = coalesce(max(dur), 0), "
             "k = max(max(dur), 0) } | sort name");
         CHECK(f.names ==
-              std::vector<std::string>{"name", "n", "ms", "r", "m", "k"});
+              dstd::Vector<dstd::String>{"name", "n", "ms", "r", "m", "k"});
         CHECK(text(f) ==
               text(pipe("group name { n = count(), s = sum(dur), "
                         "m = max(dur) } | derive ms = s / 1000, r = s / n, "
                         "m = coalesce(m, 0), k = max(m, 0) | "
                         "select name, n, ms, r, m, k | sort name")));
-        const df::DataFrame e =
+        const dataframe::DataFrame e =
             pipe("where dur < 0 | agg { r = sum(dur) / count(), n = count() }");
-        CHECK(e.names == std::vector<std::string>{"r", "n"});
+        CHECK(e.names == dstd::Vector<dstd::String>{"r", "n"});
         REQUIRE(e.num_rows() == 1);
         CHECK(text(e) == text(pipe("where dur < 0 | agg { s = sum(dur), "
                                    "n = count() } | derive r = s / n | "
@@ -657,22 +722,19 @@ TEST_SUITE("View duql pipeline") {
     }
 
     TEST_CASE("unnamed aggregates and case blocks") {
-        const df::DataFrame f =
+        const dataframe::DataFrame f =
             pipe("group cat { count(), sum(dur) } | sort cat");
-        CHECK(f.names == std::vector<std::string>{"cat", "count", "sum_dur"});
+        CHECK(f.names == dstd::Vector<dstd::String>{"cat", "count", "sum_dur"});
         CHECK(text(f) ==
               text(pipe("group cat { count = count(), sum_dur = sum(dur) } | "
                         "sort cat")));
         for (const char* q :
              {"agg { count(), count() }", "group cat { count(), count() }"}) {
             CAPTURE(q);
-            try {
-                (void)base().duql(q);
-                FAIL("no error");
-            } catch (const DFTUtilsException& e) {
-                CHECK(std::string(e.what()).find("'count'") !=
-                      std::string::npos);
-            }
+            const dstd::String what =
+                failure_of([&] { return base().duql(q); });
+            REQUIRE_FALSE(what.empty());
+            CHECK(what.find("'count'") != dstd::String::npos);
         }
 
         CHECK(
@@ -687,20 +749,20 @@ TEST_SUITE("View duql pipeline") {
     }
 
     TEST_CASE("distinct keeps first occurrences of the keys") {
-        const df::DataFrame f = pipe("distinct cat | sort cat");
+        const dataframe::DataFrame f = pipe("distinct cat | sort cat");
         REQUIRE(f.num_rows() == 2);
-        CHECK(f.names == std::vector<std::string>{"cat"});
+        CHECK(f.names == dstd::Vector<dstd::String>{"cat"});
         CHECK(bstr(f, 0, "cat") == "POSIX");
         CHECK(bstr(f, 1, "cat") == "STDIO");
     }
 
     TEST_CASE("select, rename and drop shape the columns") {
-        const df::DataFrame f =
+        const dataframe::DataFrame f =
             pipe("select name, dur | rename d = dur | drop name | take 1");
-        CHECK(f.names == std::vector<std::string>{"d"});
-        const df::DataFrame g =
+        CHECK(f.names == dstd::Vector<dstd::String>{"d"});
+        const dataframe::DataFrame g =
             pipe("take 1 | select twice = dur * 2, dur, n = name");
-        CHECK(g.names == std::vector<std::string>{"twice", "dur", "n"});
+        CHECK(g.names == dstd::Vector<dstd::String>{"twice", "dur", "n"});
         CHECK(bnum(g, 0, "twice") == 2 * bnum(g, 0, "dur"));
     }
 
@@ -709,42 +771,46 @@ TEST_SUITE("View duql pipeline") {
         CHECK(pipe("derive y = 1 | where nope is missing").num_rows() == 50);
         CHECK(pipe("derive y = 1 | where exists(nope)").num_rows() == 0);
         CHECK(pipe("derive y = 1 | where exists(dur)").num_rows() == 50);
-        const df::DataFrame f = pipe("take 1 | derive r = nope + 1");
+        const dataframe::DataFrame f = pipe("take 1 | derive r = nope + 1");
         CHECK(f.columns[static_cast<std::size_t>(bcol(f, "r"))].is_null(0));
     }
 
     TEST_CASE("explain lists each step") {
-        const std::string plan = base().explain_duql(
+        const dstd::String plan = dftu_utils_test::ok(base().explain_duql(
             R"(where cat == "POSIX" | derive ms = dur / 1000 | sort -ms)"
-            " | take 5");
+            " | take 5"));
         CHECK(plan.find("scan filter: cat == \"POSIX\" (pushed)\n") == 0);
-        CHECK(plan.find("with_column ms = dur / 1000\n") != std::string::npos);
-        CHECK(plan.find("sort_by_multi ms\n") != std::string::npos);
-        CHECK(plan.find("head 5\n") != std::string::npos);
+        CHECK(plan.find("with_column ms = dur / 1000\n") != dstd::String::npos);
+        CHECK(plan.find("sort_by_multi ms\n") != dstd::String::npos);
+        CHECK(plan.find("head 5\n") != dstd::String::npos);
     }
 
     TEST_CASE("explain lists the reshaping steps") {
         const View v = base();
-        auto has = [](const std::string& plan, const char* line) {
-            INFO(plan);
-            CHECK(plan.find(line) != std::string::npos);
+        auto has = [](dstd::StringView plan, const char* line) {
+            INFO(dstd::String(plan));
+            CHECK(plan.find(line) != dstd::StringView::npos);
         };
-        has(v.explain_duql("window name sort -dur { r = row_number() }"),
+        has(dftu_utils_test::ok(
+                v.explain_duql("window name sort -dur { r = row_number() }")),
             "window keys name; sort -dur; r = row_number()\n");
-        has(v.explain_duql("expand tags as t with_index i keep_empty"),
+        has(dftu_utils_test::ok(
+                v.explain_duql("expand tags as t with_index i keep_empty")),
             "expand tags as t with_index i keep_empty\n");
-        has(v.explain_duql("pivot cat { n = count() }"),
+        has(dftu_utils_test::ok(v.explain_duql("pivot cat { n = count() }")),
             "pivot cat (columns after the scan)\n");
-        has(v.explain_duql("pivot cat in [\"POSIX\"] { n = count() }"),
+        has(dftu_utils_test::ok(
+                v.explain_duql("pivot cat in [\"POSIX\"] { n = count() }")),
             "pivot cat in [POSIX]\n");
-        has(v.explain_duql("unpivot ts, dur as k, v"),
+        has(dftu_utils_test::ok(v.explain_duql("unpivot ts, dur as k, v")),
             "unpivot ts, dur as k, v\n");
-        has(v.explain_duql("derive z = 1 | where any(tags, . == \"a\")"),
+        has(dftu_utils_test::ok(
+                v.explain_duql("derive z = 1 | where any(tags, . == \"a\")")),
             "quantify __duql_q_0 = any(tags, . == \"a\")\n");
     }
 
     TEST_CASE("results do not depend on workers or checkpoint size") {
-        const std::vector<std::string> queries = {
+        const dstd::Vector<dstd::String> queries = {
             "where dur > 50 | derive x = dur * 2 | skip 7 | take 300"
             " | select ts, x",
             "derive k = dur % 7 | distinct k",
@@ -760,19 +826,22 @@ TEST_SUITE("View duql pipeline") {
         };
         TestEnvironment big(10);
         TestEnvironment small(10);
-        const std::vector<std::string> files = {
-            create_multimember_trace(big, 600, 6000),
-            create_multimember_trace(small, 600, 1024)};
+        const dstd::Vector<dstd::String> files = {
+            create_multimember_trace(big, 300, 6000),
+            create_multimember_trace(small, 300, 1024)};
         for (const auto& q : queries) {
             INFO("query: ", q);
-            std::optional<std::string> want;
+            dstd::Optional<dstd::String> want;
             for (const auto& gz : files)
                 for (std::size_t workers : {1, 2, 8}) {
                     dftracer::utils::Runtime rt(workers);
                     const View v =
-                        View::from_file(gz, determine_index_path(gz, ""))
+                        View::from_file(dstd::String(gz),
+                                        dstd::String(dstd::String(
+                                            determine_index_path(gz, ""))))
                             .duql(q);
-                    const std::string got = text(rt.submit(v.collect()).get());
+                    const dstd::String got =
+                        text(dftu_utils_test::ok(rt.submit(v.collect()).get()));
                     if (!want) want = got;
                     CHECK_MESSAGE(got == *want, gz, " workers ", workers, ": ",
                                   got.substr(0, 200), " vs ",
@@ -790,23 +859,23 @@ TEST_SUITE("View duql pipeline") {
 
 TEST_SUITE("View duql aggregation") {
     TEST_CASE("a bare distinct keeps every column") {
-        const df::DataFrame got = pipe("select name, cat | distinct");
-        CHECK(got.names == std::vector<std::string>{"name", "cat"});
+        const dataframe::DataFrame got = pipe("select name, cat | distinct");
+        CHECK(got.names == dstd::Vector<dstd::String>{"name", "cat"});
         CHECK(got.num_rows() == 2);
     }
 
     TEST_CASE("a select before a trace group keeps the group's columns") {
-        const df::DataFrame got =
+        const dataframe::DataFrame got =
             pipe("select name | group name { n = count() }");
-        CHECK(got.names == std::vector<std::string>{"name", "n"});
+        CHECK(got.names == dstd::Vector<dstd::String>{"name", "n"});
         CHECK(text(got) == text(pipe("group name { n = count() }")));
     }
 
     TEST_CASE("count and time per name equal the trace group_by") {
-        const df::DataFrame got =
+        const dataframe::DataFrame got =
             pipe("group name { n = count(), t = sum(dur) }");
-        CHECK(got.names == std::vector<std::string>{"name", "n", "t"});
-        const df::DataFrame want =
+        CHECK(got.names == dstd::Vector<dstd::String>{"name", "n", "t"});
+        const dataframe::DataFrame want =
             frame(base()
                       .group_by({GroupKey::field("name")})
                       .agg({{AggOp::Count, "", "n"}, {AggOp::Sum, "dur", "t"}})
@@ -816,16 +885,16 @@ TEST_SUITE("View duql aggregation") {
         CHECK(bstr(got, 0, "name") == "fwrite");
         CHECK(bnum(got, 0, "n") == 20);
         CHECK(bnum(got, 1, "t") == 30 * 10 + 29 * 30 / 2);
-        CHECK(got.columns[2].type() == df::TypeId::Int64);
+        CHECK(got.columns[2].type() == dataframe::TypeId::Int64);
     }
 
     TEST_CASE("an expression key gives true, false and null groups") {
-        const df::DataFrame f = pipe(
+        const dataframe::DataFrame f = pipe(
             "derive y = if(dur > 35, null, dur) | group big = y > 30"
             " { n = count() }");
         REQUIRE(f.num_rows() == 3);
-        CHECK(f.names == std::vector<std::string>{"big", "n"});
-        CHECK(nums(f, "n") == std::vector<double>{32, 10, 8});
+        CHECK(f.names == dstd::Vector<dstd::String>{"big", "n"});
+        CHECK(nums(f, "n") == dstd::Vector<double>{32, 10, 8});
         CHECK(f.columns[0].is_null(2));
     }
 
@@ -835,7 +904,7 @@ TEST_SUITE("View duql aggregation") {
               "where dur < 0 | derive d = dur"
               " | agg { n = count(), m = max(d) }"}) {
             INFO(q);
-            const df::DataFrame f = pipe(q);
+            const dataframe::DataFrame f = pipe(q);
             REQUIRE(f.num_rows() == 1);
             CHECK(bnum(f, 0, "n") == 0);
             CHECK(f.columns[1].is_null(0));
@@ -852,18 +921,18 @@ TEST_SUITE("View duql aggregation") {
               "derive z = 1 | agg { n = count(), c = count(x), s = sum(x),"
               " m = mean(x) }"}) {
             INFO(q);
-            const df::DataFrame f = frame(v.duql(q));
+            const dataframe::DataFrame f = frame(v.duql(q));
             CHECK(bnum(f, 0, "n") == 3);
             CHECK(bnum(f, 0, "c") == 2);
             CHECK(bnum(f, 0, "s") == 4);
-            CHECK(f.columns[2].type() == df::TypeId::Int64);
+            CHECK(f.columns[2].type() == dataframe::TypeId::Int64);
             CHECK(bnum(f, 0, "m") == 2.0);
         }
     }
 
     TEST_CASE("quantile is within 1% on both plans") {
         TestEnvironment env(10);
-        std::vector<std::string> lines;
+        dstd::Vector<dstd::String> lines;
         for (int i = 1; i <= 1000; ++i) lines.push_back(event(i, "", i));
         const View v = view_of_lines(env, lines);
         for (const char* q : {"agg { p = quantile(dur, 0.5) }",
@@ -885,33 +954,24 @@ TEST_SUITE("View duql aggregation") {
 
     TEST_CASE("every shared aggregate agrees across plans over nulls") {
         TestEnvironment env(10);
-        std::vector<std::string> lines;
-        for (int i = 0; i < 60; ++i) {
-            std::string rec = R"({"ph":"X","name":")" +
-                              std::string(i % 2 ? "a" : "b") + R"(","pid":)" +
-                              std::to_string(i % 4) + R"(,"tid":1,"ts":)" +
-                              std::to_string(100 + i * 10);
-            if (i % 3 != 0) rec += R"(,"dur":)" + std::to_string(i * 7 % 23);
-            if (i % 5 != 0)
-                rec += R"(,"cat":")" + std::string(i % 4 ? "x" : "") + "\"";
-            lines.push_back(rec + R"(,"args":{}})");
-        }
-        const View v = view_of_lines(env, lines);
-        const std::string aggs =
+        const View v = view_of_lines(env, null_dur_lines());
+        const dstd::String aggs =
             "{ n = count(), su = sum(dur), lo = min(dur), hi = max(dur),"
             " m = mean(dur), va = var(dur), sd = std(dur),"
             " p = quantile(dur, 0.9), h = histogram(dur) }";
         for (const char* keys : {"", "cat", "pid", "cat, pid", "name, cat"}) {
-            const std::string stage =
-                std::string(*keys ? "group " : "agg ") + keys + " " + aggs;
+            const dstd::String stage =
+                dstd::String(*keys ? "group " : "agg ") + keys + " " + aggs;
             INFO(stage);
-            const std::string trace_plan = v.explain_duql(stage);
-            CHECK(trace_plan.find("(trace plan)") != std::string::npos);
-            const std::string frame_plan =
-                v.explain_duql("derive z = 1 | " + stage);
-            CHECK(frame_plan.find("(frame plan)") != std::string::npos);
-            const df::DataFrame a = frame(v.duql(stage));
-            const df::DataFrame b = frame(v.duql("derive z = 1 | " + stage));
+            const dstd::String trace_plan =
+                dftu_utils_test::ok(v.explain_duql(stage));
+            CHECK(trace_plan.find("(trace plan)") != dstd::String::npos);
+            const dstd::String frame_plan =
+                dftu_utils_test::ok(v.explain_duql("derive z = 1 | " + stage));
+            CHECK(frame_plan.find("(frame plan)") != dstd::String::npos);
+            const dataframe::DataFrame a = frame(v.duql(stage));
+            const dataframe::DataFrame b =
+                frame(v.duql("derive z = 1 | " + stage));
             REQUIRE(a.names == b.names);
             CHECK(a.num_rows() == b.num_rows());
             for (std::size_t c = 0; c < a.columns.size(); ++c) {
@@ -923,7 +983,7 @@ TEST_SUITE("View duql aggregation") {
                     INFO("row ", r);
                     REQUIRE(a.columns[c].is_null(r) == b.columns[c].is_null(r));
                     if (a.columns[c].is_null(r)) continue;
-                    if (a.columns[c].type() == df::TypeId::String)
+                    if (a.columns[c].type() == dataframe::TypeId::String)
                         CHECK(bstr(a, r, a.names[c]) == bstr(b, r, b.names[c]));
                     else
                         CHECK(bnum(a, r, a.names[c]) ==
@@ -933,13 +993,72 @@ TEST_SUITE("View duql aggregation") {
         }
     }
 
+    TEST_CASE("a record without dur has no duration on either plan") {
+        TestEnvironment env(10);
+        const View v = view_of_lines(env, null_dur_lines());
+        const auto agree = [&v](const dstd::String& stage, bool trace_plan) {
+            INFO(stage);
+            const dstd::String plan =
+                dftu_utils_test::ok(v.explain_duql(stage));
+            CHECK(plan.find(trace_plan ? "(trace plan)" : "(frame plan)") !=
+                  dstd::String::npos);
+            const dataframe::DataFrame f = frame(v.duql(stage));
+            REQUIRE(f.num_rows() == 1);
+            CHECK(bnum(f, 0, "n") == 60.0);
+            CHECK(bnum(f, 0, "m") == doctest::Approx(419.0 / 40));
+            if (bhas(f, "s")) CHECK(bnum(f, 0, "s") == 419.0);
+            if (bhas(f, "c")) CHECK(bnum(f, 0, "c") == 40.0);
+        };
+        agree("agg { s = sum(dur), m = mean(dur), n = count() }", true);
+        // count(field) counts the values that are there, and runs on the
+        // scanned columns, so it takes the frame plan.
+        agree("agg { c = count(dur), m = mean(dur), n = count() }", false);
+        agree(
+            "derive z = 1 | agg { c = count(dur), m = mean(dur), n = count() }",
+            false);
+    }
+
+    TEST_CASE("a dur column is null where the record has no dur") {
+        TestEnvironment env(10);
+        const View v = view_of_lines(env, null_dur_lines());
+        for (const dstd::String& q :
+             {dstd::String("select ts, dur"),
+              dstd::String("derive z = 1 | select ts, dur")}) {
+            INFO(q);
+            const dataframe::DataFrame f = frame(v.duql(q));
+            REQUIRE(f.num_rows() == 60);
+            const dataframe::Series& dur =
+                f.columns[static_cast<std::size_t>(bcol(f, "dur"))];
+            for (std::int64_t r = 0; r < 60; ++r) {
+                const bool missing = r % 3 == 0;
+                INFO("row ", r);
+                CHECK(dur.is_null(r) == missing);
+                if (!missing)
+                    CHECK(bnum(f, r, "dur") == static_cast<double>(r * 7 % 23));
+            }
+        }
+    }
+
+    TEST_CASE("distinct keeps a dur-less record apart from dur 0") {
+        TestEnvironment env(10);
+        const View v = view_of_lines(
+            env,
+            {R"({"ph":"X","name":"a","pid":1,"tid":1,"ts":100,"dur":0,"args":{}})",
+             R"({"ph":"X","name":"a","pid":1,"tid":1,"ts":200,"args":{}})"});
+        const dataframe::DataFrame f = frame(v.duql("select dur | distinct"));
+        REQUIRE(f.num_rows() == 2);
+        const dataframe::Series& dur =
+            f.columns[static_cast<std::size_t>(bcol(f, "dur"))];
+        CHECK(dur.null_count() == 1);
+    }
+
     TEST_CASE("first, last, count_if and count(e) run on the columns") {
-        const df::DataFrame f = pipe(
+        const dataframe::DataFrame f = pipe(
             "group cat { f = first(ts), l = last(ts), c = count_if(dur > 20),"
             " e = count(nope) }");
-        CHECK(base()
-                  .explain_duql("group cat { f = first(ts) }")
-                  .find("(frame plan)") != std::string::npos);
+        CHECK(dftu_utils_test::ok(
+                  base().explain_duql("group cat { f = first(ts) }"))
+                  .find("(frame plan)") != dstd::String::npos);
         REQUIRE(f.num_rows() == 2);
         CHECK(bnum(f, 0, "f") == 1000);
         CHECK(bnum(f, 0, "l") == 3900);
@@ -969,21 +1088,21 @@ TEST_SUITE("View duql aggregation") {
     }
 
     TEST_CASE("top rows per key") {
-        const df::DataFrame f =
+        const dataframe::DataFrame f =
             pipe("take 2 by name sort -dur | select name, dur");
-        CHECK(f.names == std::vector<std::string>{"name", "dur"});
+        CHECK(f.names == dstd::Vector<dstd::String>{"name", "dur"});
         REQUIRE(f.num_rows() == 4);
-        CHECK(nums(f, "dur") == std::vector<double>{39, 39, 38, 38});
+        CHECK(nums(f, "dur") == dstd::Vector<double>{39, 39, 38, 38});
         CHECK(bstr(f, 0, "name") == "read");
         CHECK(bstr(f, 1, "name") == "fwrite");
         CHECK(pipe("take 3 by cat").num_rows() == 6);
         CHECK(pipe("take 0 by cat").num_rows() == 0);
         CHECK(nums(pipe("take 1 by dur % 2 | select dur"), "dur") ==
-              std::vector<double>{10, 11});
+              dstd::Vector<double>{10, 11});
     }
 
     TEST_CASE("sample keeps rows in input order") {
-        const df::DataFrame a = pipe("sample 10 seed 7 | select ts");
+        const dataframe::DataFrame a = pipe("sample 10 seed 7 | select ts");
         REQUIRE(a.num_rows() == 10);
         const auto ts = nums(a, "ts");
         CHECK(std::is_sorted(ts.begin(), ts.end()));
@@ -996,18 +1115,23 @@ TEST_SUITE("View duql aggregation") {
 
     TEST_CASE("sample a percent") {
         TestEnvironment env(10);
-        const std::string gz = create_multimember_trace(env, 100000, 1 << 20);
-        const View v = View::from_file(gz, determine_index_path(gz, ""));
+        // The bounds are 10% of the expected 10% sample, as a count.
+        constexpr int EVENTS = 20000;
+        const dstd::String gz = create_multimember_trace(env, EVENTS, 1 << 20);
+        const View v = View::from_file(
+            dstd::String(gz),
+            dstd::String(dstd::String(determine_index_path(gz, ""))));
         const std::int64_t n =
             frame(v.duql("sample 10% | select ts")).num_rows();
-        CHECK(n >= 9000);
-        CHECK(n <= 11000);
+        CHECK(n >= EVENTS / 10 - EVENTS / 100);
+        CHECK(n <= EVENTS / 10 + EVENTS / 100);
     }
 
     TEST_CASE("time_range pushed and on the columns") {
-        const df::DataFrame pushed = pipe("time_range 1ms .. 2ms | select ts");
-        CHECK(base().explain_duql("time_range 1ms .. 2ms").find("(pushed)") !=
-              std::string::npos);
+        const dataframe::DataFrame pushed =
+            pipe("time_range 1ms .. 2ms | select ts");
+        CHECK(dftu_utils_test::ok(base().explain_duql("time_range 1ms .. 2ms"))
+                  .find("(pushed)") != dstd::String::npos);
         CHECK(text(pushed) ==
               text(frame(base().time_range(1000, 2000).select({"ts"}))));
         CHECK(pushed.num_rows() == 10);
@@ -1031,8 +1155,7 @@ TEST_SUITE("View duql aggregation") {
               text(pipe("where ts < 2000 | select ts")));
         CHECK(pipe("time_range .. 1006 overlap").num_rows() ==
               pipe("where ts < 1006").num_rows());
-        CHECK_THROWS_AS(base().duql("time_range 2ms .. 1ms"),
-                        DFTUtilsException);
+        expect_refused(base().duql("time_range 2ms .. 1ms"), "");
     }
 
     TEST_CASE("sample takes parameters and bucket a name") {
@@ -1041,16 +1164,17 @@ TEST_SUITE("View duql aggregation") {
         p.emplace("s", duql::LiteralValue{std::uint64_t{7}});
         CHECK(text(pipe("sample $n seed $s | select ts", p)) ==
               text(pipe("sample 10 seed 7 | select ts")));
-        const df::DataFrame named =
+        const dataframe::DataFrame named =
             pipe("bucket 1ms as sec | agg { n = count() }");
-        const df::DataFrame plain = pipe("bucket 1ms | agg { n = count() }");
+        const dataframe::DataFrame plain =
+            pipe("bucket 1ms | agg { n = count() }");
         CHECK(named.names[0] == "sec");
         CHECK(nums(named, "sec") == nums(plain, "bucket"));
         CHECK(nums(named, "n") == nums(plain, "n"));
     }
 
     TEST_CASE("union takes a row set or a file by name") {
-        const std::string let =
+        const dstd::String let =
             R"(let r = where cat == "POSIX" | select ts; select ts | )";
         CHECK(text(pipe(let + "union r")) ==
               text(pipe(let + "union (from r)")));
@@ -1059,12 +1183,12 @@ TEST_SUITE("View duql aggregation") {
     TEST_CASE("busy time per bucket clips each event") {
         TestEnvironment env(10);
         const View v = view_of_lines(env, {event(0, "", 3500)});
-        const df::DataFrame f =
+        const dataframe::DataFrame f =
             frame(v.duql("bucket 1ms | agg { b = busy(), n = count() }"));
         REQUIRE(f.num_rows() == 4);
         CHECK(f.names[0] == "bucket");
-        CHECK(nums(f, "bucket") == std::vector<double>{0, 1000, 2000, 3000});
-        CHECK(nums(f, "b") == std::vector<double>{1000, 1000, 1000, 500});
+        CHECK(nums(f, "bucket") == dstd::Vector<double>{0, 1000, 2000, 3000});
+        CHECK(nums(f, "b") == dstd::Vector<double>{1000, 1000, 1000, 500});
         CHECK(bnum(f, 0, "n") == 1);
         for (std::int64_t r = 1; r < 4; ++r)
             CHECK((f.columns[2].is_null(r) || bnum(f, r, "n") == 0));
@@ -1078,51 +1202,53 @@ TEST_SUITE("View duql aggregation") {
                               "derive z = 1 | bucket 1ms fill"
                               " | agg { n = count(), m = max(dur) }"}) {
             INFO(q);
-            const df::DataFrame f = frame(v.duql(q));
+            const dataframe::DataFrame f = frame(v.duql(q));
             CHECK(nums(f, "bucket") ==
-                  std::vector<double>{0, 1000, 2000, 3000});
-            CHECK(nums(f, "n") == std::vector<double>{1, 0, 0, 1});
+                  dstd::Vector<double>{0, 1000, 2000, 3000});
+            CHECK(nums(f, "n") == dstd::Vector<double>{1, 0, 0, 1});
         }
-        const df::DataFrame g =
+        const dataframe::DataFrame g =
             pipe("bucket 1ms fill | group cat { n = count() }");
-        CHECK(g.names == std::vector<std::string>{"bucket", "cat", "n"});
+        CHECK(g.names == dstd::Vector<dstd::String>{"bucket", "cat", "n"});
         CHECK(g.num_rows() == 6 * 2);
         CHECK(fails_with("bucket 1ms | derive z = 1", {"bucket", "group"}));
     }
 
     TEST_CASE("fill stops at DUQL_FILL_MAX_ROWS") {
         ::setenv("DUQL_FILL_MAX_ROWS", "5", 1);
-        CHECK_THROWS_AS(
-            frame(base().duql("bucket 100us fill | agg { n = count() }")),
-            DFTUtilsException);
+        CHECK_FALSE(failure_of([&] {
+                        return base().duql(
+                            "bucket 100us fill | agg { n = count() }");
+                    }).empty());
         ::unsetenv("DUQL_FILL_MAX_ROWS");
     }
 
     TEST_CASE("fill modes and ranges") {
         struct Cell {
-            std::string g;
+            dstd::String g;
             int bucket;
-            std::optional<double> v;
+            dstd::Optional<double> v;
         };
-        const std::vector<Cell> data = {{"a", 1, 10.0},
-                                        {"a", 3, std::nullopt},
-                                        {"a", 4, 40.0},
-                                        {"b", 0, 5.0},
-                                        {"b", 6, 65.0}};
-        std::vector<std::string> lines;
+        const dstd::Vector<Cell> data = {{"a", 1, 10.0},
+                                         {"a", 3, dstd::nullopt},
+                                         {"a", 4, 40.0},
+                                         {"b", 0, 5.0},
+                                         {"b", 6, 65.0}};
+        dstd::Vector<dstd::String> lines;
         for (const auto& c : data) {
-            std::string args = R"("g":")" + c.g + "\"";
-            if (c.v) args += R"(,"v":)" + std::to_string(int(*c.v));
+            dstd::String args = R"("g":")" + c.g + "\"";
+            if (c.v) args += R"(,"v":)" + dstd::to_string(int(*c.v));
             lines.push_back(event(c.bucket * 1000, args, 1));
         }
         TestEnvironment env(10);
         const View v = view_of_lines(env, lines);
-        const std::string tail =
+        const dstd::String tail =
             " | group grp { m = mean(args.v), n = count() }";
-        const auto run_q = [&](const std::string& q) {
+        const auto run_q = [&](const dstd::String& q) {
             return frame(v.duql("derive grp = args.g | " + q + tail));
         };
-        const auto find = [](const df::DataFrame& f, const std::string& g,
+        const auto find = [](const dataframe::DataFrame& f,
+                             const dstd::String& g,
                              int bucket) -> std::int64_t {
             for (std::int64_t r = 0; r < f.num_rows(); ++r)
                 if (bstr(f, r, "grp") == g &&
@@ -1130,31 +1256,31 @@ TEST_SUITE("View duql aggregation") {
                     return r;
             return -1;
         };
-        const auto real = [&](const std::string& g,
-                              int b) -> std::optional<Cell> {
+        const auto real = [&](const dstd::String& g,
+                              int b) -> dstd::Optional<Cell> {
             for (const auto& c : data)
                 if (c.g == g && c.bucket == b) return c;
-            return std::nullopt;
+            return dstd::nullopt;
         };
-        const auto present = [&](const std::string& g,
-                                 int b) -> std::optional<double> {
+        const auto present = [&](const dstd::String& g,
+                                 int b) -> dstd::Optional<double> {
             const auto c = real(g, b);
-            return c ? c->v : std::nullopt;
+            return c ? c->v : dstd::nullopt;
         };
-        const auto before = [&](const std::string& g, int b) {
+        const auto before = [&](const dstd::String& g, int b) {
             for (int i = b - 1; i >= 0; --i)
                 if (present(g, i)) return i;
             return -1;
         };
-        const auto after = [&](const std::string& g, int b) {
+        const auto after = [&](const dstd::String& g, int b) {
             for (int i = b + 1; i <= 6; ++i)
                 if (present(g, i)) return i;
             return -1;
         };
         for (const char* mode : {"", "forward", "linear"}) {
             INFO(mode);
-            const df::DataFrame f =
-                run_q(std::string("bucket 1ms fill ") + mode);
+            const dataframe::DataFrame f =
+                run_q(dstd::String("bucket 1ms fill ") + mode);
             CHECK(f.num_rows() == 14);
             for (const char* g : {"a", "b"})
                 for (int b = 0; b <= 6; ++b) {
@@ -1165,12 +1291,12 @@ TEST_SUITE("View duql aggregation") {
                     CHECK(bnum(f, r, "n") == (c ? 1 : 0));
                     const int lo = before(g, b);
                     const int hi = after(g, b);
-                    std::optional<double> want;
+                    dstd::Optional<double> want;
                     if (c) {
                         want = c->v;
-                    } else if (std::string(mode) == "forward" && lo >= 0) {
+                    } else if (dstd::String(mode) == "forward" && lo >= 0) {
                         want = present(g, lo);
-                    } else if (std::string(mode) == "linear" && lo >= 0 &&
+                    } else if (dstd::String(mode) == "linear" && lo >= 0 &&
                                hi >= 0) {
                         want = *present(g, lo) +
                                (*present(g, hi) - *present(g, lo)) * (b - lo) /
@@ -1189,29 +1315,30 @@ TEST_SUITE("View duql aggregation") {
                 }
         }
 
-        const df::DataFrame wide = frame(
+        const dataframe::DataFrame wide = frame(
             v.duql("bucket 1ms fill from 0 to 8ms | agg { n = count() }"));
-        CHECK(nums(wide, "bucket") == std::vector<double>{0, 1000, 2000, 3000,
-                                                          4000, 5000, 6000,
-                                                          7000, 8000});
+        CHECK(nums(wide, "bucket") == dstd::Vector<double>{0, 1000, 2000, 3000,
+                                                           4000, 5000, 6000,
+                                                           7000, 8000});
         CHECK(nums(wide, "n") ==
-              std::vector<double>{1, 1, 0, 1, 1, 0, 1, 0, 0});
-        const df::DataFrame narrow =
+              dstd::Vector<double>{1, 1, 0, 1, 1, 0, 1, 0, 0});
+        const dataframe::DataFrame narrow =
             frame(v.duql("bucket 1ms fill from 2ms to 3500us"
                          " | agg { n = count() }"));
         CHECK(nums(narrow, "bucket") ==
-              std::vector<double>{0, 1000, 2000, 3000, 4000, 6000});
-        CHECK(nums(narrow, "n") == std::vector<double>{1, 1, 0, 1, 1, 1});
+              dstd::Vector<double>{0, 1000, 2000, 3000, 4000, 6000});
+        CHECK(nums(narrow, "n") == dstd::Vector<double>{1, 1, 0, 1, 1, 1});
         duql::Params p;
         p.emplace("lo", duql::LiteralValue{std::uint64_t{4000}});
         p.emplace("hi", duql::LiteralValue{std::uint64_t{7000}});
-        const df::DataFrame par =
+        const dataframe::DataFrame par =
             frame(v.duql("bucket 1ms fill forward from $lo to $hi + 1ms"
                          " | agg { m = max(args.v), n = count() }",
                          p));
-        CHECK(nums(par, "bucket") ==
-              std::vector<double>{0, 1000, 3000, 4000, 5000, 6000, 7000, 8000});
-        CHECK(nums(par, "n") == std::vector<double>{1, 1, 1, 1, 0, 1, 0, 0});
+        CHECK(nums(par, "bucket") == dstd::Vector<double>{0, 1000, 3000, 4000,
+                                                          5000, 6000, 7000,
+                                                          8000});
+        CHECK(nums(par, "n") == dstd::Vector<double>{1, 1, 1, 1, 0, 1, 0, 0});
         CHECK(bnum(par, 4, "m") == 40);
         CHECK(bnum(par, 6, "m") == 65);
         CHECK(bnum(par, 7, "m") == 65);
@@ -1219,10 +1346,11 @@ TEST_SUITE("View duql aggregation") {
             fails_with("bucket 1ms fill from 5ms to 2ms | agg { n = count() }",
                        {"lo <= hi"}));
         ::setenv("DUQL_FILL_MAX_ROWS", "5", 1);
-        CHECK_THROWS_AS(
-            frame(
-                v.duql("bucket 1ms fill from 0 to 8ms | agg { n = count() }")),
-            DFTUtilsException);
+        CHECK_FALSE(
+            failure_of([&] {
+                return v.duql(
+                    "bucket 1ms fill from 0 to 8ms | agg { n = count() }");
+            }).empty());
         ::unsetenv("DUQL_FILL_MAX_ROWS");
     }
 
@@ -1231,12 +1359,12 @@ TEST_SUITE("View duql aggregation") {
         const char* g;
         int size;
     };
-    using HopCell = std::pair<std::int64_t, std::int64_t>;
+    using HopCell = dstd::Pair<std::int64_t, std::int64_t>;
 
     // Brute force: each window start T + k * E that holds the time.
-    static std::map<std::pair<std::int64_t, std::string>, HopCell>
-    hop_reference(const std::vector<HopRow>& rows, int W, int E, int T) {
-        std::map<std::pair<std::int64_t, std::string>, HopCell> out;
+    static dstd::Map<dstd::Pair<std::int64_t, dstd::String>, HopCell>
+    hop_reference(const dstd::Vector<HopRow>& rows, int W, int E, int T) {
+        dstd::Map<dstd::Pair<std::int64_t, dstd::String>, HopCell> out;
         for (const auto& r : rows)
             for (int k = -200; k <= 200; ++k) {
                 const int s = T + k * E;
@@ -1249,36 +1377,37 @@ TEST_SUITE("View duql aggregation") {
         return out;
     }
 
-    static std::vector<std::string> hop_lines(const std::vector<HopRow>& rows) {
-        std::vector<std::string> lines;
+    static dstd::Vector<dstd::String> hop_lines(
+        const dstd::Vector<HopRow>& rows) {
+        dstd::Vector<dstd::String> lines;
         for (const auto& r : rows)
             lines.push_back(event(r.t,
-                                  std::string(R"("g":")") + r.g +
-                                      R"(","size":)" + std::to_string(r.size),
+                                  dstd::String(R"("g":")") + r.g +
+                                      R"(","size":)" + dstd::to_string(r.size),
                                   1));
         return lines;
     }
 
-    const std::vector<HopRow> HOP_ROWS = {{0, "a", 1},    {1000, "b", 2},
-                                          {2000, "a", 3}, {3000, "b", 4},
-                                          {3500, "a", 5}, {9000, "b", 6}};
+    const dstd::Vector<HopRow> HOP_ROWS = {{0, "a", 1},    {1000, "b", 2},
+                                           {2000, "a", 3}, {3000, "b", 4},
+                                           {3500, "a", 5}, {9000, "b", 6}};
 
     TEST_CASE("hopping buckets: the moving rate") {
         TestEnvironment env(10);
         const View v = view_of_lines(
             env, {event(0, R"("size":1)"), event(1000, R"("size":2)"),
                   event(2000, R"("size":3)"), event(3000, R"("size":4)")});
-        const df::DataFrame f =
+        const dataframe::DataFrame f =
             frame(v.duql("bucket 2ms every 1ms | agg { b = sum(args.size),"
                          " n = count() }"));
         CHECK(nums(f, "bucket") ==
-              std::vector<double>{-1000, 0, 1000, 2000, 3000});
-        CHECK(nums(f, "b") == std::vector<double>{1, 3, 5, 7, 4});
-        CHECK(nums(f, "n") == std::vector<double>{1, 2, 2, 2, 1});
-        const df::DataFrame o =
+              dstd::Vector<double>{-1000, 0, 1000, 2000, 3000});
+        CHECK(nums(f, "b") == dstd::Vector<double>{1, 3, 5, 7, 4});
+        CHECK(nums(f, "n") == dstd::Vector<double>{1, 2, 2, 2, 1});
+        const dataframe::DataFrame o =
             frame(v.duql("bucket 2ms at 1ms | agg { n = count() }"));
-        CHECK(nums(o, "bucket") == std::vector<double>{-1000, 1000, 3000});
-        CHECK(nums(o, "n") == std::vector<double>{1, 2, 1});
+        CHECK(nums(o, "bucket") == dstd::Vector<double>{-1000, 1000, 3000});
+        CHECK(nums(o, "n") == dstd::Vector<double>{1, 2, 1});
         CHECK(
             text(frame(v.duql("bucket 1ms every 1ms | agg { n = count() }"))) ==
             text(frame(v.duql("bucket 1ms | agg { n = count() }"))));
@@ -1291,7 +1420,7 @@ TEST_SUITE("View duql aggregation") {
             const char* q;
             int W, E, T;
         };
-        const std::vector<Shape> shapes = {
+        const dstd::Vector<Shape> shapes = {
             {"bucket 2ms every 1ms", 2000, 1000, 0},
             {"bucket 3ms every 2ms", 3000, 2000, 0},
             {"bucket 1ms every 2ms", 1000, 2000, 0},
@@ -1300,8 +1429,8 @@ TEST_SUITE("View duql aggregation") {
         for (const auto& sh : shapes) {
             INFO(sh.q);
             const auto want = hop_reference(HOP_ROWS, sh.W, sh.E, sh.T);
-            const df::DataFrame f = frame(
-                v.duql(std::string("derive grp = args.g | ") + sh.q +
+            const dataframe::DataFrame f = frame(
+                v.duql(dstd::String("derive grp = args.g | ") + sh.q +
                        " | group grp { b = sum(args.size), n = count() }"));
             REQUIRE(static_cast<std::size_t>(f.num_rows()) == want.size());
             std::int64_t r = 0;
@@ -1314,10 +1443,10 @@ TEST_SUITE("View duql aggregation") {
                       cell.second);
                 ++r;
             }
-            std::set<std::int64_t> seen;
+            dstd::Set<std::int64_t> seen;
             for (const auto& [key, cell] : want) seen.insert(key.first);
-            const df::DataFrame all =
-                frame(v.duql(std::string(sh.q) + " | agg { n = count() }"));
+            const dataframe::DataFrame all =
+                frame(v.duql(dstd::String(sh.q) + " | agg { n = count() }"));
             CHECK(static_cast<std::size_t>(all.num_rows()) == seen.size());
         }
     }
@@ -1334,8 +1463,8 @@ TEST_SUITE("View duql aggregation") {
              {"bucket $w every $e at $t | agg { n = count() }",
               "bucket 3ms every 2000us at 0.5ms | agg { n = count() }"}) {
             INFO(q);
-            const df::DataFrame f = frame(v.duql(q, p));
-            std::map<std::int64_t, std::int64_t> by_start;
+            const dataframe::DataFrame f = frame(v.duql(q, p));
+            dstd::Map<std::int64_t, std::int64_t> by_start;
             for (const auto& [key, cell] : want)
                 by_start[key.first] += cell.second;
             REQUIRE(static_cast<std::size_t>(f.num_rows()) == by_start.size());
@@ -1356,49 +1485,49 @@ TEST_SUITE("View duql aggregation") {
         TestEnvironment env(10);
         const View v =
             view_of_lines(env, {event(0, "", 1), event(4500, "", 1)});
-        const df::DataFrame f =
+        const dataframe::DataFrame f =
             frame(v.duql("bucket 1ms every 2ms fill | agg { n = count() }"));
-        CHECK(nums(f, "bucket") == std::vector<double>{0, 2000, 4000});
-        CHECK(nums(f, "n") == std::vector<double>{1, 0, 1});
-        const df::DataFrame g =
+        CHECK(nums(f, "bucket") == dstd::Vector<double>{0, 2000, 4000});
+        CHECK(nums(f, "n") == dstd::Vector<double>{1, 0, 1});
+        const dataframe::DataFrame g =
             frame(v.duql("bucket 2ms every 2ms at 1ms fill from 0 to 7ms"
                          " | agg { n = count() }"));
         CHECK(nums(g, "bucket") ==
-              std::vector<double>{-1000, 1000, 3000, 5000, 7000});
-        CHECK(nums(g, "n") == std::vector<double>{1, 0, 1, 0, 0});
-        const df::DataFrame h = frame(v.duql(
+              dstd::Vector<double>{-1000, 1000, 3000, 5000, 7000});
+        CHECK(nums(g, "n") == dstd::Vector<double>{1, 0, 1, 0, 0});
+        const dataframe::DataFrame h = frame(v.duql(
             "bucket 2ms every 1ms fill forward | agg { m = max(dur), n = "
             "count() }"));
         CHECK(nums(h, "bucket") ==
-              std::vector<double>{-1000, 0, 1000, 2000, 3000, 4000});
-        CHECK(nums(h, "n") == std::vector<double>{1, 1, 0, 0, 1, 1});
-        CHECK(nums(h, "m") == std::vector<double>{1, 1, 1, 1, 1, 1});
+              dstd::Vector<double>{-1000, 0, 1000, 2000, 3000, 4000});
+        CHECK(nums(h, "n") == dstd::Vector<double>{1, 1, 0, 0, 1, 1});
+        CHECK(nums(h, "m") == dstd::Vector<double>{1, 1, 1, 1, 1, 1});
     }
 
     TEST_CASE("hopping buckets drop a row without a time") {
         TestEnvironment env(10);
         const View v = view_of_lines(
             env, {event(0, "", 1), event(500, "", 7), event(1000, "", 1)});
-        const df::DataFrame f =
+        const dataframe::DataFrame f =
             frame(v.duql("derive ts = if(dur == 7, null, ts)"
                          " | bucket 2ms every 1ms | agg { n = count() }"));
-        CHECK(nums(f, "bucket") == std::vector<double>{-1000, 0, 1000});
-        CHECK(nums(f, "n") == std::vector<double>{1, 2, 1});
+        CHECK(nums(f, "bucket") == dstd::Vector<double>{-1000, 0, 1000});
+        CHECK(nums(f, "n") == dstd::Vector<double>{1, 2, 1});
     }
 
     TEST_CASE("a bucket origin gives the same rows on both plans") {
         TestEnvironment env(10);
         const View v = view_of_lines(env, hop_lines(HOP_ROWS));
-        const df::DataFrame trace = frame(v.duql(
+        const dataframe::DataFrame trace = frame(v.duql(
             "bucket 2ms at 500us | agg { n = count(), s = sum(args.size) }"));
-        const df::DataFrame fold = frame(
+        const dataframe::DataFrame fold = frame(
             v.duql("bucket 2ms at 500us | agg { n = count(),"
                    " s = sum(args.size), d = count_distinct(args.size) }"));
         CHECK(nums(trace, "bucket") == nums(fold, "bucket"));
         CHECK(nums(trace, "n") == nums(fold, "n"));
         CHECK(nums(trace, "s") == nums(fold, "s"));
-        std::vector<double> want;
-        std::map<std::int64_t, double> by;
+        dstd::Vector<double> want;
+        dstd::Map<std::int64_t, double> by;
         for (const auto& r : HOP_ROWS) {
             const std::int64_t s =
                 (r.t - 500) / 2000 * 2000 + 500 - (r.t < 500 ? 2000 : 0);
@@ -1406,10 +1535,10 @@ TEST_SUITE("View duql aggregation") {
         }
         for (const auto& [s, n] : by) want.push_back(n);
         CHECK(nums(trace, "n") == want);
-        const std::string plan =
-            base().explain_duql("bucket 2ms at 500us | agg { n = count() }");
+        const dstd::String plan = dftu_utils_test::ok(
+            base().explain_duql("bucket 2ms at 500us | agg { n = count() }"));
         CHECK(plan.find("time_bucket 2000 us at 500 us\n") !=
-              std::string::npos);
+              dstd::String::npos);
     }
 
     TEST_CASE(
@@ -1417,24 +1546,24 @@ TEST_SUITE("View duql aggregation") {
         "plan") {
         TestEnvironment env(10);
         const View v = view_of_lines(env, hop_lines(HOP_ROWS));
-        const df::DataFrame plain =
+        const dataframe::DataFrame plain =
             frame(v.duql("bucket 1500ns | agg { n = count() }"));
-        const df::DataFrame fold =
+        const dataframe::DataFrame fold =
             frame(v.duql("bucket 1500ns | agg { n = count(), d = "
                          "count_distinct(args.size) }"));
         CHECK(nums(plain, "bucket") == nums(fold, "bucket"));
         CHECK(nums(plain, "n") == nums(fold, "n"));
-        CHECK(base()
-                  .explain_duql("bucket 1500ns | agg { n = count() }")
-                  .find("group (frame plan)") != std::string::npos);
+        CHECK(dftu_utils_test::ok(
+                  base().explain_duql("bucket 1500ns | agg { n = count() }"))
+                  .find("group (frame plan)") != dstd::String::npos);
     }
 
     TEST_CASE("hopping buckets explain and refuse occupancy") {
-        const std::string plan = base().explain_duql(
-            "bucket 2ms every 1ms at 500us | agg { n = count() }");
+        const dstd::String plan = dftu_utils_test::ok(base().explain_duql(
+            "bucket 2ms every 1ms at 500us | agg { n = count() }"));
         CHECK(plan.find("hop buckets 2000 every 1000 at 500\n") !=
-              std::string::npos);
-        CHECK(plan.find("group (frame plan)") != std::string::npos);
+              dstd::String::npos);
+        CHECK(plan.find("group (frame plan)") != dstd::String::npos);
         CHECK(fails_with("bucket 5s every 1s | agg { u = utilization() }",
                          {"utilization", "hopping bucket"}));
         CHECK(fails_with("bucket 5s every 1s | agg { b = busy() }",
@@ -1443,17 +1572,15 @@ TEST_SUITE("View duql aggregation") {
 
     TEST_CASE("a trace stage needs its role") {
         const View generic = base().record_schema("generic");
-        try {
-            (void)generic.duql("time_range 1s .. 2s");
-            FAIL("expected a failure");
-        } catch (const DFTUtilsException& e) {
-            CHECK(std::string(e.what()).find("time role") != std::string::npos);
-        }
+        const dstd::String what =
+            failure_of([&] { return generic.duql("time_range 1s .. 2s"); });
+        REQUIRE_FALSE(what.empty());
+        CHECK(what.find("time role") != dstd::String::npos);
     }
 
     TEST_CASE("call_tree gives depth and parent") {
-        const df::DataFrame f = pipe("call_tree");
-        const df::DataFrame want = run(base().call_tree().collect());
+        const dataframe::DataFrame f = pipe("call_tree");
+        const dataframe::DataFrame want = run(base().call_tree().collect());
         CHECK(f.num_rows() == want.num_rows());
         CHECK(bhas(f, "depth"));
         CHECK(bhas(f, "parent"));
@@ -1463,44 +1590,46 @@ TEST_SUITE("View duql aggregation") {
     }
 
     TEST_CASE("explain names each new step") {
-        const std::string plan = base().explain_duql(
+        const dstd::String plan = dftu_utils_test::ok(base().explain_duql(
             "time_range 0 .. 10s | bucket 1ms | group cat { n = count() }"
-            " | take 1 by cat | sample 5 seed 3");
+            " | take 1 by cat | sample 5 seed 3"));
         CHECK(plan.find("scan time_range 0 .. 10000000 (pushed)\n") !=
-              std::string::npos);
-        CHECK(plan.find("time_bucket 1000 us\n") != std::string::npos);
+              dstd::String::npos);
+        CHECK(plan.find("time_bucket 1000 us\n") != dstd::String::npos);
         CHECK(plan.find("group (trace plan): keys cat; aggs n = count()\n") !=
-              std::string::npos);
-        CHECK(plan.find("head_by cat 1\n") != std::string::npos);
-        CHECK(plan.find("sample 5 seed 3\n") != std::string::npos);
+              dstd::String::npos);
+        CHECK(plan.find("head_by cat 1\n") != dstd::String::npos);
+        CHECK(plan.find("sample 5 seed 3\n") != dstd::String::npos);
     }
 
     TEST_CASE("a group takes parameters") {
         duql::Params p;
         p.emplace("min", duql::LiteralValue{std::uint64_t{30}});
-        const df::DataFrame f =
+        const dataframe::DataFrame f =
             pipe("where dur > $min | group name { n = count() }", p);
-        CHECK(nums(f, "n") == std::vector<double>{9, 9});
+        CHECK(nums(f, "n") == dstd::Vector<double>{9, 9});
     }
 }
 
 namespace {
 
-std::string cell(const df::Series& s, std::int64_t r) {
+dstd::String cell(const dataframe::Series& s, std::int64_t r) {
     if (s.is_null(r)) return "null";
-    if (s.type() == df::TypeId::String) return std::string(s.string_at(r));
-    if (s.type() == df::TypeId::Bool)
-        return s.cast(df::TypeId::Int64).data<std::int64_t>()[r] ? "true"
-                                                                 : "false";
-    const double v = s.cast(df::TypeId::Float64).data<double>()[r];
+    if (s.type() == dataframe::TypeId::String)
+        return dstd::String(s.string_at(r));
+    if (s.type() == dataframe::TypeId::Bool)
+        return s.cast(dataframe::TypeId::Int64).data<std::int64_t>()[r]
+                   ? "true"
+                   : "false";
+    const double v = s.cast(dataframe::TypeId::Float64).data<double>()[r];
     if (v == static_cast<double>(static_cast<std::int64_t>(v)))
-        return std::to_string(static_cast<std::int64_t>(v));
-    return std::to_string(v);
+        return dstd::to_string(static_cast<std::int64_t>(v));
+    return dstd::to_string(v);
 }
 
 // Every row as `a,b`, rows joined by `;`.
-std::string rows(const df::DataFrame& f) {
-    std::string out;
+dstd::String rows(const dataframe::DataFrame& f) {
+    dstd::String out;
     for (std::int64_t r = 0; r < f.num_rows(); ++r) {
         if (r) out += ';';
         for (std::size_t c = 0; c < f.columns.size(); ++c) {
@@ -1511,24 +1640,24 @@ std::string rows(const df::DataFrame& f) {
     return out;
 }
 
-std::string sorted(const df::DataFrame& f) {
-    std::vector<std::string> out;
+dstd::String sorted(const dataframe::DataFrame& f) {
+    dstd::Vector<dstd::String> out;
     for (std::int64_t r = 0; r < f.num_rows(); ++r)
         out.push_back(cell(f.columns.front(), r));
     std::sort(out.begin(), out.end());
-    std::string text;
+    dstd::String text;
     for (const auto& o : out) text += o + ";";
     return text;
 }
 
-std::string line(const std::string& cat, int ts, const std::string& args) {
+dstd::String line(const dstd::String& cat, int ts, const dstd::String& args) {
     return R"({"ph":"X","name":"op","cat":")" + cat +
-           R"(","pid":1,"tid":1,"ts":)" + std::to_string(ts) +
+           R"(","pid":1,"tid":1,"ts":)" + dstd::to_string(ts) +
            R"(,"dur":10,"args":{)" + args + "}}";
 }
 
 // `where` as the scan filter and as a stage after the scan.
-std::vector<std::string> both(const std::string& cond) {
+dstd::Vector<dstd::String> both(const dstd::String& cond) {
     return {"where " + cond + " | select ts",
             "derive z = 1 | where " + cond + " | select ts"};
 }
@@ -1554,7 +1683,7 @@ TEST_SUITE("View duql quantifiers") {
             env, {line("io", 1, R"("h":[])"), line("io", 2, R"("h":[1,5])"),
                   line("io", 3, R"("x":1)")});
         for (const auto& [cond, want] :
-             std::vector<std::pair<std::string, std::string>>{
+             dstd::Vector<dstd::Pair<dstd::String, dstd::String>>{
                  {"all(h, . > 0)", "1;2"},
                  {"any(h, . > 3)", "2"},
                  {"not all(h, . > 0)", ""},
@@ -1574,7 +1703,7 @@ TEST_SUITE("View duql quantifiers") {
                                            line("io", 2, R"("h":[9,"a"])"),
                                            line("io", 3, R"("h":[1,2])")});
         for (const auto& [cond, want] :
-             std::vector<std::pair<std::string, std::string>>{
+             dstd::Vector<dstd::Pair<dstd::String, dstd::String>>{
                  {"any(h, . > 3)", "2"},
                  {"not any(h, . > 3)", "3"},
                  {"all(h, . < 3)", "3"},
@@ -1582,9 +1711,9 @@ TEST_SUITE("View duql quantifiers") {
             INFO(cond);
             CHECK(rows(frame(v.duql(both(cond).front()))) == want);
             // After the scan, elements of mixed types have no column kernel.
-            CHECK_THROWS_WITH_AS(frame(v.duql(both(cond).back())),
-                                 doctest::Contains("mix types"),
-                                 DFTUtilsException);
+            CHECK(failure_of([&] {
+                      return v.duql(both(cond).back());
+                  }).find("mix types") != dstd::String::npos);
         }
     }
 
@@ -1597,9 +1726,9 @@ TEST_SUITE("View duql quantifiers") {
             CHECK(rows(frame(v.duql(q))) == "1");
         }
         CHECK(rows(frame(v.duql(both("any(g[-1], . == 2)").front()))) == "2");
-        CHECK_THROWS_WITH_AS(frame(v.duql(both("any(g[-1], . == 2)").back())),
-                             doctest::Contains("negative index"),
-                             DFTUtilsException);
+        CHECK(failure_of([&] {
+                  return v.duql(both("any(g[-1], . == 2)").back());
+              }).find("negative index") != dstd::String::npos);
     }
 
     TEST_CASE("a quantifier in a derive") {
@@ -1615,26 +1744,27 @@ TEST_SUITE("View duql quantifiers") {
 
 TEST_SUITE("View duql window") {
     TEST_CASE("rank within a file keeps the top rows in input order") {
-        const df::DataFrame all = pipe("select fhash, dur");
-        const df::DataFrame got = pipe(
+        const dataframe::DataFrame all = pipe("select fhash, dur");
+        const dataframe::DataFrame got = pipe(
             "window fhash sort -dur { r = row_number() } | where r <= 3"
             " | select fhash, dur, r");
         // Reference: per fhash, the three largest dur (ties by input order).
-        std::map<std::string, std::vector<std::pair<double, std::int64_t>>> by;
+        dstd::Map<dstd::String, dstd::Vector<dstd::Pair<double, std::int64_t>>>
+            by;
         for (std::int64_t r = 0; r < all.num_rows(); ++r)
             by[cell(all.columns[0], r)].emplace_back(bnum(all, r, "dur"), r);
-        std::map<std::int64_t, std::int64_t> rank;
+        dstd::Map<std::int64_t, std::int64_t> rank;
         for (auto& [k, v] : by) {
-            std::stable_sort(v.begin(), v.end(),
-                             [](auto a, auto b) { return a.first > b.first; });
+            dstd::stable_sort(v.begin(), v.end(),
+                              [](auto a, auto b) { return a.first > b.first; });
             for (std::size_t i = 0; i < v.size() && i < 3; ++i)
                 rank[v[i].second] = static_cast<std::int64_t>(i) + 1;
         }
-        std::string want;
+        dstd::String want;
         for (const auto& [row, r] : rank) {
             if (!want.empty()) want += ';';
             want += cell(all.columns[0], row) + "," +
-                    cell(all.columns[1], row) + "," + std::to_string(r);
+                    cell(all.columns[1], row) + "," + dstd::to_string(r);
         }
         CHECK(rows(got) == want);
     }
@@ -1648,10 +1778,10 @@ TEST_SUITE("View duql window") {
     }
 
     TEST_CASE("a share of the partition sums to one") {
-        const df::DataFrame f = pipe(
+        const dataframe::DataFrame f = pipe(
             "window name { t = sum(dur) } | derive share = dur / t"
             " | select name, share");
-        std::map<std::string, double> sums;
+        dstd::Map<dstd::String, double> sums;
         for (std::int64_t r = 0; r < f.num_rows(); ++r)
             sums[cell(f.columns[0], r)] += bnum(f, r, "share");
         REQUIRE_FALSE(sums.empty());
@@ -1667,7 +1797,7 @@ TEST_SUITE("View duql window") {
             env, {event(1, R"("g":"a","x":3)"), event(2, R"("g":"a")"),
                   event(3, R"("g":"b","x":5)"), event(4, R"("g":"a","x":3)"),
                   event(5, R"("g":"b","x":1)")});
-        const auto run_q = [&](const std::string& entry) {
+        const auto run_q = [&](const dstd::String& entry) {
             return rows(frame(
                 v.duql("window g sort -x { v = " + entry + " } | select v")));
         };
@@ -1690,15 +1820,15 @@ TEST_SUITE("View duql window") {
         CHECK(run_q("last(x)") == "3;3;1;3;1");
         CHECK(run_q("var(x)") == "0;0;8;0;8");
         // The rest equal `group` on each partition, on every row in order.
-        const auto by_group = [&](const std::string& agg) {
-            const df::DataFrame g =
+        const auto by_group = [&](const dstd::String& agg) {
+            const dataframe::DataFrame g =
                 frame(v.duql("group g { v = " + agg + " } | select g, v"));
-            std::map<std::string, std::string> value;
+            dstd::Map<dstd::String, dstd::String> value;
             for (std::int64_t r = 0; r < g.num_rows(); ++r)
                 value[cell(g.columns[0], r)] = cell(g.columns[1], r);
-            const df::DataFrame w = frame(
+            const dataframe::DataFrame w = frame(
                 v.duql("window g sort -x { v = " + agg + " } | select g, v"));
-            std::string out;
+            dstd::String out;
             for (std::int64_t r = 0; r < w.num_rows(); ++r) {
                 CHECK(cell(w.columns[1], r) == value[cell(w.columns[0], r)]);
                 out += (out.empty() ? "" : ";") + cell(w.columns[0], r);
@@ -1709,30 +1839,31 @@ TEST_SUITE("View duql window") {
         CHECK(by_group("quantile(x, 0.5)") == "a;a;b;a;b");
         CHECK(rows(frame(v.duql("window g { h = histogram(x) } | derive n = "
                                 "len(h) | select n"))) ==
-              rows(frame(v.duql("group g { h = histogram(x) } | derive n = "
-                                "len(h) | select g, n"))
-                       .select({"n"})
-                       .take(std::vector<std::int64_t>{0, 0, 1, 0, 1})));
+              rows(dftu_utils_test::ok(
+                       frame(v.duql("group g { h = histogram(x) } | derive n = "
+                                    "len(h) | select g, n"))
+                           .select({"n"}))
+                       .take(dstd::Vector<std::int64_t>{0, 0, 1, 0, 1})));
         CHECK(rows(frame(v.duql("window { n = count(), r = rank() }"
                                 " | select n, r"))) == "5,1;5,1;5,1;5,1;5,1");
     }
 
     struct Pt {
-        std::string g;
+        dstd::String g;
         std::int64_t key;
-        std::optional<std::int64_t> x;
+        dstd::Optional<std::int64_t> x;
     };
 
-    static std::string shown(std::optional<double> v) {
+    static dstd::String shown(dstd::Optional<double> v) {
         if (!v) return "null";
         if (*v == static_cast<double>(static_cast<std::int64_t>(*v)))
-            return std::to_string(static_cast<std::int64_t>(*v));
-        return std::to_string(*v);
+            return dstd::to_string(static_cast<std::int64_t>(*v));
+        return dstd::to_string(*v);
     }
 
-    static std::string aggregated(const std::string& fn,
-                                  const std::vector<double>& in) {
-        if (fn == "count") return std::to_string(in.size());
+    static dstd::String aggregated(const dstd::String& fn,
+                                   const dstd::Vector<double>& in) {
+        if (fn == "count") return dstd::to_string(in.size());
         if (in.empty()) return "null";
         double sum = 0;
         for (const double v : in) sum += v;
@@ -1742,13 +1873,13 @@ TEST_SUITE("View duql window") {
                                  : *std::max_element(in.begin(), in.end()));
     }
 
-    static View points_view(TestEnvironment & env, const std::vector<Pt>& pts,
+    static View points_view(TestEnvironment & env, const dstd::Vector<Pt>& pts,
                             bool key_in_ts) {
-        std::vector<std::string> lines;
+        dstd::Vector<dstd::String> lines;
         for (const auto& p : pts) {
-            std::string args =
-                R"("g":")" + p.g + R"(","k":)" + std::to_string(p.key);
-            if (p.x) args += R"(,"x":)" + std::to_string(*p.x);
+            dstd::String args =
+                R"("g":")" + p.g + R"(","k":)" + dstd::to_string(p.key);
+            if (p.x) args += R"(,"x":)" + dstd::to_string(*p.x);
             lines.push_back(event(key_in_ts
                                       ? static_cast<int>(p.key)
                                       : static_cast<int>(lines.size()) + 1,
@@ -1759,11 +1890,11 @@ TEST_SUITE("View duql window") {
 
     // `fn(x)` per row over the rows `in_frame(i, j)` selects.
     template <class InFrame>
-    std::string framed_ref(const std::vector<Pt>& pts, const std::string& fn,
-                           InFrame in_frame) {
-        std::string out;
+    dstd::String framed_ref(const dstd::Vector<Pt>& pts, const dstd::String& fn,
+                            InFrame in_frame) {
+        dstd::String out;
         for (std::size_t i = 0; i < pts.size(); ++i) {
-            std::vector<double> present;
+            dstd::Vector<double> present;
             for (std::size_t j = 0; j < pts.size(); ++j)
                 if (pts[j].g == pts[i].g && in_frame(i, j) && pts[j].x)
                     present.push_back(static_cast<double>(*pts[j].x));
@@ -1774,24 +1905,24 @@ TEST_SUITE("View duql window") {
 
     TEST_CASE("rows frames against a reference") {
         TestEnvironment env;
-        const std::vector<Pt> pts = {
-            {"a", 1, 4}, {"a", 2, std::nullopt}, {"a", 3, 7}, {"b", 4, 2},
-            {"a", 5, 1}, {"b", 6, std::nullopt}, {"b", 7, 9}, {"a", 8, 5}};
+        const dstd::Vector<Pt> pts = {
+            {"a", 1, 4}, {"a", 2, dstd::nullopt}, {"a", 3, 7}, {"b", 4, 2},
+            {"a", 5, 1}, {"b", 6, dstd::nullopt}, {"b", 7, 9}, {"a", 8, 5}};
         const View v = points_view(env, pts, false);
-        std::vector<std::size_t> at(pts.size());
-        std::map<std::string, std::size_t> seen;
+        dstd::Vector<std::size_t> at(pts.size());
+        dstd::Map<dstd::String, std::size_t> seen;
         for (std::size_t i = 0; i < pts.size(); ++i) at[i] = seen[pts[i].g]++;
         for (const std::int64_t n : {1, 3, 20}) {
             for (const char* fn : {"sum", "mean", "min", "max", "count"}) {
-                const std::string want =
+                const dstd::String want =
                     framed_ref(pts, fn, [&](std::size_t i, std::size_t j) {
                         return at[j] <= at[i] &&
                                static_cast<std::int64_t>(at[j]) >
                                    static_cast<std::int64_t>(at[i]) - n;
                     });
-                const std::string q =
-                    "window g sort ts { v = " + std::string(fn) + "(x) over " +
-                    std::to_string(n) + " rows } | select v";
+                const dstd::String q =
+                    "window g sort ts { v = " + dstd::String(fn) + "(x) over " +
+                    dstd::to_string(n) + " rows } | select v";
                 CHECK_MESSAGE(rows(frame(v.duql(q))) == want, q);
             }
         }
@@ -1829,34 +1960,34 @@ TEST_SUITE("View duql window") {
     TEST_CASE("time frames over a duration and a number against a reference") {
         TestEnvironment env;
         // Rows out of key order, with ties and null values.
-        const std::vector<Pt> pts = {{"a", 3000000, 4},
-                                     {"a", 400000, std::nullopt},
-                                     {"b", 900000, 2},
-                                     {"a", 3000000, 7},
-                                     {"b", 900000, std::nullopt},
-                                     {"a", 400000, std::nullopt},
-                                     {"b", 2500000, 9},
-                                     {"a", 1200000, 5},
-                                     {"a", 3400000, std::nullopt}};
+        const dstd::Vector<Pt> pts = {{"a", 3000000, 4},
+                                      {"a", 400000, dstd::nullopt},
+                                      {"b", 900000, 2},
+                                      {"a", 3000000, 7},
+                                      {"b", 900000, dstd::nullopt},
+                                      {"a", 400000, dstd::nullopt},
+                                      {"b", 2500000, 9},
+                                      {"a", 1200000, 5},
+                                      {"a", 3400000, dstd::nullopt}};
         const View v = points_view(env, pts, true);
         for (const char* fn : {"sum", "mean", "min", "max", "count"}) {
-            const std::string want =
+            const dstd::String want =
                 framed_ref(pts, fn, [&](std::size_t i, std::size_t j) {
                     return pts[j].key <= pts[i].key &&
                            pts[j].key >= pts[i].key - 1000000;
                 });
-            const std::string by_time =
-                "window g sort ts { v = " + std::string(fn) +
+            const dstd::String by_time =
+                "window g sort ts { v = " + dstd::String(fn) +
                 "(x) over 1s } | select v";
             CHECK_MESSAGE(rows(frame(v.duql(by_time))) == want, by_time);
-            const std::string by_number =
-                "window g sort k { v = " + std::string(fn) +
+            const dstd::String by_number =
+                "window g sort k { v = " + dstd::String(fn) +
                 "(x) over 1000000 } | select v";
             CHECK_MESSAGE(rows(frame(v.duql(by_number))) == want, by_number);
         }
         duql::Params p;
         p.emplace("w", duql::LiteralValue{std::uint64_t{600000}});
-        const std::string want =
+        const dstd::String want =
             framed_ref(pts, "sum", [&](std::size_t i, std::size_t j) {
                 return pts[j].key <= pts[i].key &&
                        pts[j].key >= pts[i].key - 600000;
@@ -1868,50 +1999,50 @@ TEST_SUITE("View duql window") {
 
     TEST_CASE("more window functions against a reference") {
         TestEnvironment env;
-        const std::vector<Pt> pts = {{"a", 3, 4},
-                                     {"a", 1, std::nullopt},
-                                     {"b", 2, 8},
-                                     {"a", 3, 7},
-                                     {"b", 2, std::nullopt},
-                                     {"a", 5, 1},
-                                     {"b", 9, 2},
-                                     {"a", 1, 6},
-                                     {"a", 4, std::nullopt}};
+        const dstd::Vector<Pt> pts = {{"a", 3, 4},
+                                      {"a", 1, dstd::nullopt},
+                                      {"b", 2, 8},
+                                      {"a", 3, 7},
+                                      {"b", 2, dstd::nullopt},
+                                      {"a", 5, 1},
+                                      {"b", 9, 2},
+                                      {"a", 1, 6},
+                                      {"a", 4, dstd::nullopt}};
         const View v = points_view(env, pts, false);
         // Each partition in sort order, ties in row order.
-        std::map<std::string, std::vector<std::size_t>> order;
+        dstd::Map<dstd::String, dstd::Vector<std::size_t>> order;
         for (std::size_t i = 0; i < pts.size(); ++i)
             order[pts[i].g].push_back(i);
         for (auto& [g, idx] : order)
-            std::stable_sort(idx.begin(), idx.end(),
-                             [&](std::size_t a, std::size_t b) {
-                                 return pts[a].key < pts[b].key;
-                             });
+            dstd::stable_sort(idx.begin(), idx.end(),
+                              [&](std::size_t a, std::size_t b) {
+                                  return pts[a].key < pts[b].key;
+                              });
         const auto per_row = [&](auto&& at_position) {
-            std::vector<std::string> out(pts.size());
+            dstd::Vector<dstd::String> out(pts.size());
             for (const auto& [g, idx] : order)
                 for (std::size_t p = 0; p < idx.size(); ++p)
                     out[idx[p]] = at_position(idx, p);
-            std::string text;
+            dstd::String text;
             for (std::size_t i = 0; i < out.size(); ++i)
                 text += (i ? ";" : "") + out[i];
             return text;
         };
-        const auto x_at = [&](const std::vector<std::size_t>& idx,
-                              std::size_t p) -> std::optional<double> {
+        const auto x_at = [&](const dstd::Vector<std::size_t>& idx,
+                              std::size_t p) -> dstd::Optional<double> {
             if (pts[idx[p]].x) return static_cast<double>(*pts[idx[p]].x);
-            return std::nullopt;
+            return dstd::nullopt;
         };
-        const auto run_q = [&](const std::string& entry) {
+        const auto run_q = [&](const dstd::String& entry) {
             return rows(frame(
                 v.duql("window g sort k { v = " + entry + " } | select v")));
         };
         const auto running = [&](bool mean, int which) {
             return per_row([&](const auto& idx, std::size_t p) {
-                std::vector<double> seen;
+                dstd::Vector<double> seen;
                 for (std::size_t q = 0; q <= p; ++q)
                     if (const auto x = x_at(idx, q)) seen.push_back(*x);
-                if (seen.empty()) return std::string("null");
+                if (seen.empty()) return dstd::String("null");
                 if (mean) return aggregated("mean", seen);
                 return aggregated(which ? "max" : "min", seen);
             });
@@ -1923,14 +2054,14 @@ TEST_SUITE("View duql window") {
               per_row([&](const auto& idx, std::size_t p) {
                   for (std::size_t q = p + 1; q-- > 0;)
                       if (const auto x = x_at(idx, q)) return shown(x);
-                  return std::string("null");
+                  return dstd::String("null");
               }));
         CHECK(run_q("nth(x, 2)") == per_row([&](const auto& idx, std::size_t) {
                   return idx.size() >= 2 ? shown(x_at(idx, 1))
-                                         : std::string("null");
+                                         : dstd::String("null");
               }));
         CHECK(run_q("nth(x, 9)") == per_row([&](const auto&, std::size_t) {
-                  return std::string("null");
+                  return dstd::String("null");
               }));
         CHECK(run_q("ntile(3)") == per_row([&](const auto& idx, std::size_t p) {
                   const std::size_t sz = idx.size(), base = sz / 3,
@@ -1944,7 +2075,7 @@ TEST_SUITE("View duql window") {
                       }
                       left -= w;
                   }
-                  return std::to_string(bucket);
+                  return dstd::to_string(bucket);
               }));
         CHECK(run_q("percent_rank()") ==
               per_row([&](const auto& idx, std::size_t p) {
@@ -1969,21 +2100,21 @@ TEST_SUITE("View duql window") {
               "0,1;0,1;0,1;0,1;0,1;0,1;0,1;0,1;0,1");
         CHECK(run_q("lag(x, 1, -1)") ==
               per_row([&](const auto& idx, std::size_t p) {
-                  return p == 0 ? std::string("-1") : shown(x_at(idx, p - 1));
+                  return p == 0 ? dstd::String("-1") : shown(x_at(idx, p - 1));
               }));
         CHECK(run_q("lead(x, 2, 0)") ==
               per_row([&](const auto& idx, std::size_t p) {
-                  return p + 2 >= idx.size() ? std::string("0")
+                  return p + 2 >= idx.size() ? dstd::String("0")
                                              : shown(x_at(idx, p + 2));
               }));
     }
 
     TEST_CASE("count_distinct and arg_max over a frame") {
         TestEnvironment env;
-        const auto at = [](int ts, const std::string& f, int dur) {
+        const auto at = [](int ts, const dstd::String& f, int dur) {
             return event(ts,
                          R"("g":"a","f":")" + f + R"(","n":"r)" +
-                             std::to_string(ts) + R"(")",
+                             dstd::to_string(ts) + R"(")",
                          dur);
         };
         const View files = view_of_lines(
@@ -2008,10 +2139,10 @@ TEST_SUITE("View duql window") {
 
     TEST_CASE("count_if and collect over a partition and a frame") {
         TestEnvironment env;
-        const auto at = [](int ts, const std::string& g, const std::string& x,
+        const auto at = [](int ts, const dstd::String& g, const dstd::String& x,
                            int dur) {
             return event(ts,
-                         R"("g":")" + g + R"(","n":"r)" + std::to_string(ts) +
+                         R"("g":")" + g + R"(","n":"r)" + dstd::to_string(ts) +
                              R"(")" + x,
                          dur);
         };
@@ -2020,12 +2151,12 @@ TEST_SUITE("View duql window") {
                   at(4, "b", "", 1), at(5, "a", "", 8)});
         CHECK(rows(frame(v.duql("window g { c = count_if(dur > 5) }"
                                 " | select c"))) == "2;1;2;1;2");
-        const df::DataFrame f =
+        const dataframe::DataFrame f =
             frame(v.duql("window g { l = collect(n) } | select l"));
         CHECK(items(f, 0, "l") == "[r1,r3,r5]");
         CHECK(items(f, 1, "l") == "[r2,r4]");
         CHECK(items(f, 4, "l") == "[r1,r3,r5]");
-        const df::DataFrame w =
+        const dataframe::DataFrame w =
             frame(v.duql("window g sort ts { l = collect(n) over 2 rows,"
                          " c = count_if(dur > 5) over 2 rows }"
                          " | select l, c"));
@@ -2035,7 +2166,7 @@ TEST_SUITE("View duql window") {
         CHECK(bnum(w, 4, "c") == 2);
         CHECK(bnum(w, 0, "c") == 0);
         CHECK(w.columns[static_cast<std::size_t>(bcol(w, "l"))].type() ==
-              df::TypeId::List);
+              dataframe::TypeId::List);
         const View gaps = view_of_lines(
             env,
             {at(1, "a", R"(,"x":3)", 1), at(2, "a", "", 1),
@@ -2049,17 +2180,17 @@ TEST_SUITE("View duql window") {
 
     TEST_CASE("framed var, std and quantile against a reference") {
         TestEnvironment env;
-        const std::vector<std::int64_t> ts = {1000000, 1400000, 1900000,
-                                              2600000, 2700000, 3900000};
-        const std::vector<std::int64_t> dur = {
+        const dstd::Vector<std::int64_t> ts = {1000000, 1400000, 1900000,
+                                               2600000, 2700000, 3900000};
+        const dstd::Vector<std::int64_t> dur = {
             1000000007, 1000000003, 1000000011, 1000000001, 1000000020, 9};
-        std::vector<std::string> lines;
+        dstd::Vector<dstd::String> lines;
         for (std::size_t i = 0; i < ts.size(); ++i)
             lines.push_back(event(static_cast<int>(ts[i]), R"("g":"a")",
                                   static_cast<int>(dur[i])));
         const View v = view_of_lines(env, lines);
-        const auto stats = [&](const std::vector<std::size_t>& in) {
-            std::vector<double> x;
+        const auto stats = [&](const dstd::Vector<std::size_t>& in) {
+            dstd::Vector<double> x;
             for (const auto j : in) x.push_back(static_cast<double>(dur[j]));
             std::sort(x.begin(), x.end());
             const double pos = 0.5 * static_cast<double>(x.size() - 1);
@@ -2076,15 +2207,15 @@ TEST_SUITE("View duql window") {
             return std::array<double, 2>{
                 q, x.size() < 2 ? -1 : ss / static_cast<double>(x.size() - 1)};
         };
-        const df::DataFrame rowsf = frame(
+        const dataframe::DataFrame rowsf = frame(
             v.duql("window g sort ts { m = quantile(dur, 0.5) over 3 rows,"
                    " s = var(dur) over 3 rows } | select m, s"));
-        const df::DataFrame timef =
+        const dataframe::DataFrame timef =
             frame(v.duql("window g sort ts { m = quantile(dur, 0.5) over 1s,"
                          " s = var(dur) over 1s, d = std(dur) over 1s }"
                          " | select m, s, d"));
         for (std::size_t i = 0; i < ts.size(); ++i) {
-            std::vector<std::size_t> in;
+            dstd::Vector<std::size_t> in;
             for (std::size_t j = i >= 2 ? i - 2 : 0; j <= i; ++j)
                 in.push_back(j);
             auto st = stats(in);
@@ -2182,7 +2313,7 @@ TEST_SUITE("View duql window") {
 }
 
 TEST_SUITE("View duql expand") {
-    const std::vector<std::string> HOSTS = {
+    const dstd::Vector<dstd::String> HOSTS = {
         line("io", 1, R"("hosts":["a","b"])"), line("io", 2, R"("hosts":[])"),
         line("io", 3, R"("x":1)")};
 
@@ -2223,7 +2354,7 @@ TEST_SUITE("View duql expand") {
 }
 
 TEST_SUITE("View duql pivot and unpivot") {
-    const std::vector<std::string> METRICS = {
+    const dstd::Vector<dstd::String> METRICS = {
         line("io", 1, R"("f":"a","metric":"cpu","v":1)"),
         line("io", 2, R"("f":"a","metric":"mem","v":2)"),
         line("io", 3, R"("f":"b","metric":"cpu","v":3)")};
@@ -2231,19 +2362,19 @@ TEST_SUITE("View duql pivot and unpivot") {
     TEST_CASE("metrics as columns") {
         TestEnvironment env;
         const View v = view_of_lines(env, METRICS);
-        const df::DataFrame f =
+        const dataframe::DataFrame f =
             frame(v.duql("select f, metric, v | pivot metric { s = sum(v) }"));
-        CHECK(f.names == std::vector<std::string>{"f", "s.cpu", "s.mem"});
+        CHECK(f.names == dstd::Vector<dstd::String>{"f", "s.cpu", "s.mem"});
         CHECK(rows(f) == "a,1,2;b,3,null");
     }
 
     TEST_CASE("fixed columns allow later stages") {
         TestEnvironment env;
         const View v = view_of_lines(env, METRICS);
-        const df::DataFrame f =
+        const dataframe::DataFrame f =
             frame(v.duql("select f, metric, v | pivot metric in [\"mem\"]"
                          " { s = sum(v) } | where s.mem > 0"));
-        CHECK(f.names == std::vector<std::string>{"f", "s.mem"});
+        CHECK(f.names == dstd::Vector<dstd::String>{"f", "s.mem"});
         CHECK(rows(f) == "a,2");
     }
 
@@ -2253,15 +2384,11 @@ TEST_SUITE("View duql pivot and unpivot") {
             env, {line("io", 1, R"("m":"x")"), line("io", 2, R"("m":"y")"),
                   line("io", 3, R"("m":"z")")});
         setenv("DUQL_PIVOT_MAX_COLUMNS", "2", 1);
-        std::string what;
-        try {
-            (void)frame(v.duql("select m | pivot m { n = count() }"));
-        } catch (const DFTUtilsException& e) {
-            what = e.what();
-        }
+        const dstd::String what = failure_of(
+            [&] { return v.duql("select m | pivot m { n = count() }"); });
         unsetenv("DUQL_PIVOT_MAX_COLUMNS");
-        CHECK(what.find("gives 3") != std::string::npos);
-        CHECK(what.find("(2)") != std::string::npos);
+        CHECK(what.find("gives 3") != dstd::String::npos);
+        CHECK(what.find("(2)") != dstd::String::npos);
     }
 
     TEST_CASE("a stage after an open pivot asks for in") {
@@ -2271,9 +2398,9 @@ TEST_SUITE("View duql pivot and unpivot") {
     TEST_CASE("two fields to rows") {
         TestEnvironment env;
         const View v = view_of_lines(env, {line("io", 1, R"("a":1,"b":2)")});
-        const df::DataFrame f =
+        const dataframe::DataFrame f =
             frame(v.duql("select name, a, b | unpivot a, b as k, v"));
-        CHECK(f.names == std::vector<std::string>{"name", "k", "v"});
+        CHECK(f.names == dstd::Vector<dstd::String>{"name", "k", "v"});
         CHECK(rows(f) == "op,a,1;op,b,2");
     }
 
@@ -2283,42 +2410,44 @@ TEST_SUITE("View duql pivot and unpivot") {
             view_of_lines(env, {line("io", 1, R"("a":1,"b":2.5,"s":"t")")});
         CHECK(rows(frame(v.duql("select a, b | unpivot a, b as k, v"))) ==
               "a,1;b,2.500000");
-        std::string what;
-        try {
-            (void)frame(v.duql("select a, s | unpivot a, s as k, v"));
-        } catch (const DFTUtilsException& e) {
-            what = e.what();
-        }
-        CHECK(what.find("mixes") != std::string::npos);
+        const dstd::String what = failure_of(
+            [&] { return v.duql("select a, s | unpivot a, s as k, v"); });
+        CHECK(what.find("mixes") != dstd::String::npos);
     }
 }
 
 TEST_SUITE("View duql reshape determinism") {
-    // 3000 events over three names with repeated durations; `tags` cycles
-    // through ["a", "b"], [], ["c"] and missing.
-    static std::string reshape_trace(TestEnvironment & env,
-                                     std::size_t member_bytes) {
-        const std::string pfw = env.get_dir() + "/rs.pfw";
+    // Events over three names with repeated durations; `tags` cycles through
+    // ["a", "b"], [], ["c"] and missing. Enough lines for 2 members of 20000
+    // bytes and 18 of 2048.
+    constexpr int RESHAPE_EVENTS = 300;
+
+    static dstd::String reshape_trace(TestEnvironment & env,
+                                      std::size_t member_bytes) {
+        const dstd::String pfw = env.dir() + "/rs.pfw";
         {
-            std::ofstream o(pfw);
+            dftu_utils_test::FileOut o(pfw);
             const char* tags[] = {R"(,"tags":["a","b"])", R"(,"tags":[])",
                                   R"(,"tags":["c"])", ""};
-            for (int i = 0; i < 3000; ++i)
+            for (int i = 0; i < RESHAPE_EVENTS; ++i)
                 o << R"({"ph":"X","name":")" << "abc"[i % 3]
                   << R"(","cat":"POSIX","pid":1,"tid":1,"ts":)"
                   << 1000 + i * 100 << R"(,"dur":)" << (i * 37) % 101
                   << R"(,"args":{"n":)" << i << tags[i % 4] << "}}\n";
         }
-        const std::string gz = pfw + ".gz";
+        const dstd::String gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip_multimember(pfw, gz,
                                                            member_bytes);
-        fs::remove(pfw);
-        dftracer::utils::index::Indexer::open({gz}).build();
+        dstd::fs::remove(pfw).discard();
+        dftu_utils_test::ok(
+            dftu_utils_test::ok(dftracer::utils::trace::index::Indexer::open(
+                                    {dstd::String(dstd::StringView(gz))}))
+                .build());
         return gz;
     }
 
     TEST_CASE("reshaping stages do not depend on workers or checkpoints") {
-        const std::vector<std::string> queries = {
+        const dstd::Vector<dstd::String> queries = {
             "window name sort ts { r = row_number(), p = lag(dur) }"
             " | expand tags | select ts, name, r, p, tags",
             "window name sort -dur { k = rank(), d = dense_rank(),"
@@ -2330,18 +2459,21 @@ TEST_SUITE("View duql reshape determinism") {
         };
         TestEnvironment big(10);
         TestEnvironment small(10);
-        const std::vector<std::string> files = {reshape_trace(big, 20000),
-                                                reshape_trace(small, 2048)};
+        const dstd::Vector<dstd::String> files = {reshape_trace(big, 20000),
+                                                  reshape_trace(small, 2048)};
         for (const auto& q : queries) {
             INFO("query: ", q);
-            std::optional<std::string> want;
+            dstd::Optional<dstd::String> want;
             for (const auto& gz : files)
                 for (std::size_t workers : {1, 2, 8}) {
                     dftracer::utils::Runtime rt(workers);
                     const View v =
-                        View::from_file(gz, determine_index_path(gz, ""))
+                        View::from_file(dstd::String(gz),
+                                        dstd::String(dstd::String(
+                                            determine_index_path(gz, ""))))
                             .duql(q);
-                    const std::string got = rows(rt.submit(v.collect()).get());
+                    const dstd::String got =
+                        rows(dftu_utils_test::ok(rt.submit(v.collect()).get()));
                     if (!want) want = got;
                     CHECK_MESSAGE(got == *want, gz, " workers ", workers, ": ",
                                   got.substr(0, 200), " vs ",
@@ -2353,15 +2485,17 @@ TEST_SUITE("View duql reshape determinism") {
 
     TEST_CASE("a quantifier gives the same rows in the scan and after it") {
         TestEnvironment env(10);
-        const std::string gz = reshape_trace(env, 4096);
-        const View v = View::from_file(gz, determine_index_path(gz, ""));
+        const dstd::String gz = reshape_trace(env, 4096);
+        const View v = View::from_file(
+            dstd::String(gz),
+            dstd::String(dstd::String(determine_index_path(gz, ""))));
         for (const char* cond :
              {R"(any(tags, . == "b"))", R"(all(tags, . != "a"))",
               R"(not any(tags, . < "b" and ^.dur > 50))"}) {
-            INFO(std::string(cond));
+            INFO(dstd::String(cond));
             const auto qs = both(cond);
             // A scan filter alone keeps no row order.
-            const std::string scan = sorted(frame(v.duql(qs[0])));
+            const dstd::String scan = sorted(frame(v.duql(qs[0])));
             CHECK_FALSE(scan.empty());
             CHECK(sorted(frame(v.duql(qs[1]))) == scan);
         }
@@ -2382,39 +2516,40 @@ TEST_SUITE("View duql folded aggregates") {
     TEST_CASE("count_distinct, collect, arg_max and arg_min per group") {
         TestEnvironment env(10);
         const View v = groups_view(env);
-        const std::string q =
+        const dstd::String q =
             "group g { n = count(), d = count_distinct(x), c = collect(x),"
             " hi = arg_max(x, y), lo = arg_min(x, y), s = sum(x) }";
-        CHECK(v.explain_duql(q).find("group fold over") != std::string::npos);
-        for (const std::string& stage : {q, "derive z = 1 | " + q}) {
+        CHECK(dftu_utils_test::ok(v.explain_duql(q)).find("group fold over") !=
+              dstd::String::npos);
+        for (const dstd::String& stage : {q, "derive z = 1 | " + q}) {
             INFO(stage);
-            const df::DataFrame f = frame(v.duql(stage));
+            const dataframe::DataFrame f = frame(v.duql(stage));
             REQUIRE(f.num_rows() == 3);
             CHECK(bstr(f, 0, "g") == "a");
             CHECK(bstr(f, 1, "g") == "b");
             CHECK(f.columns[0].is_null(2));
-            CHECK(nums(f, "n") == std::vector<double>{4, 2, 1});
-            CHECK(nums(f, "d") == std::vector<double>{3, 1, 1});
+            CHECK(nums(f, "n") == dstd::Vector<double>{4, 2, 1});
+            CHECK(nums(f, "d") == dstd::Vector<double>{3, 1, 1});
             CHECK(items(f, 0, "c") == "[1,2,1,3]");
             CHECK(items(f, 1, "c") == "[7,7]");
             CHECK(items(f, 2, "c") == "[4]");
             // Ties keep the first row: y = 9 at x = 2, then at x = 1.
-            CHECK(nums(f, "hi") == std::vector<double>{2, 7, 4});
-            CHECK(nums(f, "lo") == std::vector<double>{1, 7, 4});
-            CHECK(nums(f, "s") == std::vector<double>{7, 14, 4});
-            CHECK(f.columns[bcol(f, "hi")].type() == df::TypeId::Int64);
-            CHECK(f.columns[bcol(f, "d")].type() == df::TypeId::Int64);
+            CHECK(nums(f, "hi") == dstd::Vector<double>{2, 7, 4});
+            CHECK(nums(f, "lo") == dstd::Vector<double>{1, 7, 4});
+            CHECK(nums(f, "s") == dstd::Vector<double>{7, 14, 4});
+            CHECK(f.columns[bcol(f, "hi")].type() == dataframe::TypeId::Int64);
+            CHECK(f.columns[bcol(f, "d")].type() == dataframe::TypeId::Int64);
         }
     }
 
     TEST_CASE("folded aggregates skip nulls and give one row over none") {
         TestEnvironment env(10);
         const View v = groups_view(env);
-        const df::DataFrame f =
+        const dataframe::DataFrame f =
             frame(v.duql("agg { d = count_distinct(y), c = collect(y) }"));
         CHECK(bnum(f, 0, "d") == 4);
         CHECK(items(f, 0, "c") == "[5,9,9,2,2,1]");
-        const df::DataFrame none = frame(v.duql(
+        const dataframe::DataFrame none = frame(v.duql(
             "where dur < 0 | agg { d = count_distinct(x), c = collect(x) }"));
         REQUIRE(none.num_rows() == 1);
         CHECK(bnum(none, 0, "d") == 0);
@@ -2423,11 +2558,11 @@ TEST_SUITE("View duql folded aggregates") {
 
     TEST_CASE("sketches merge into quantiles") {
         TestEnvironment env(10);
-        std::vector<std::string> lines;
+        dstd::Vector<dstd::String> lines;
         for (int i = 1; i <= 1000; ++i)
-            lines.push_back(event(i, R"("g":)" + std::to_string(i % 2), i));
+            lines.push_back(event(i, R"("g":)" + dstd::to_string(i % 2), i));
         const View v = view_of_lines(env, lines);
-        const df::DataFrame f =
+        const dataframe::DataFrame f =
             frame(v.duql("group g { s = sketch(dur) }"
                          " | agg { p = quantile(merge(s), 0.5), m = merge(s),"
                          " n = count() }"));
@@ -2435,11 +2570,11 @@ TEST_SUITE("View duql folded aggregates") {
         CHECK(bnum(f, 0, "p") >= 495);
         CHECK(bnum(f, 0, "p") <= 505);
         CHECK(!bstr(f, 0, "m").empty());
-        const df::DataFrame again =
+        const dataframe::DataFrame again =
             frame(v.duql("group g { s = sketch(dur) } | agg { m = merge(s) }"
                          " | agg { p = quantile(merge(m), 0.5) }"));
         CHECK(bnum(again, 0, "p") == bnum(f, 0, "p"));
-        const df::DataFrame junk = frame(v.duql(
+        const dataframe::DataFrame junk = frame(v.duql(
             R"(derive j = "junk" | agg { m = merge(j), s = sketch(j) })"));
         CHECK(junk.columns[0].is_null(0));
         CHECK(junk.columns[1].is_null(0));
@@ -2448,7 +2583,7 @@ TEST_SUITE("View duql folded aggregates") {
     TEST_CASE("folded aggregates in a pivot") {
         TestEnvironment env(10);
         const View v = groups_view(env);
-        const df::DataFrame f =
+        const dataframe::DataFrame f =
             frame(v.duql(R"(where g is not null | select g, x, y)"
                          R"( | pivot g in ["a", "b"] { c = collect(x) })"));
         REQUIRE(f.num_rows() >= 1);
@@ -2468,7 +2603,7 @@ TEST_SUITE("View duql array and object functions") {
     TEST_CASE("each function after the scan") {
         TestEnvironment env(10);
         const View v = functions_view(env);
-        const df::DataFrame f = frame(v.duql(
+        const dataframe::DataFrame f = frame(v.duql(
             R"(derive p = split(s, ","), n = len(split(s, ",")),)"
             R"( m = slice(xs, 1, -1), t = slice(xs, -2), e = slice(xs, 9),)"
             R"( k = keys(o), w = values(o), q = parse_json(j))"
@@ -2476,7 +2611,7 @@ TEST_SUITE("View duql array and object functions") {
         REQUIRE(f.num_rows() == 2);
         CHECK(items(f, 0, "p") == "[a,b,,c]");
         CHECK(items(f, 1, "p") == "[x]");
-        CHECK(nums(f, "n") == std::vector<double>{4, 1});
+        CHECK(nums(f, "n") == dstd::Vector<double>{4, 1});
         CHECK(items(f, 0, "m") == "[2,3]");
         CHECK(items(f, 0, "t") == "[3,4]");
         CHECK(items(f, 0, "e") == "[]");
@@ -2499,11 +2634,12 @@ TEST_SUITE("View duql array and object functions") {
               "len(slice(xs, -2)) == 2", "len(keys(o)) == 2",
               "sum(values(o)) == 3", "len(flatten(xs)) == 4"}) {
             INFO(cond);
-            const std::string scan = std::string("where ") + cond;
-            const std::string after =
-                std::string("derive z = 1 | where ") + cond;
-            CHECK(v.explain_duql(scan).find("with_column") ==
-                  std::string::npos);
+            const dstd::String scan = dstd::String("where ") + cond;
+            const dstd::String after =
+                dstd::String("derive z = 1 | where ") + cond;
+            CHECK(
+                dftu_utils_test::ok(v.explain_duql(scan)).find("with_column") ==
+                dstd::String::npos);
             CHECK(frame(v.duql(scan)).num_rows() == 1);
             CHECK(frame(v.duql(after)).num_rows() == 1);
         }
@@ -2518,7 +2654,7 @@ TEST_SUITE("View duql array and object functions") {
     TEST_CASE("a wrong input type is unknown") {
         TestEnvironment env(10);
         const View v = functions_view(env);
-        const df::DataFrame f = frame(
+        const dataframe::DataFrame f = frame(
             v.duql(R"(derive a = split(dur, ","), b = slice(s, 0, 1),)"
                    R"( c = keys(s), d = flatten(o) | select a, b, c, d)"));
         for (std::size_t c = 0; c < f.columns.size(); ++c) {
@@ -2531,13 +2667,10 @@ TEST_SUITE("View duql array and object functions") {
     TEST_CASE("a function of parse_json after the scan is a compile error") {
         TestEnvironment env(10);
         const View v = functions_view(env);
-        try {
-            (void)frame(v.duql(R"(derive p = split(parse_json(j), ","))"));
-            FAIL("split(parse_json(j)) compiled");
-        } catch (const DFTUtilsException& e) {
-            CHECK(std::string(e.what()).find("scan filter") !=
-                  std::string::npos);
-        }
+        const dstd::String what = failure_of(
+            [&] { return v.duql(R"(derive p = split(parse_json(j), ","))"); });
+        REQUIRE_MESSAGE(!what.empty(), "split(parse_json(j)) compiled");
+        CHECK(what.find("scan filter") != dstd::String::npos);
         CHECK(frame(v.duql(R"(where split(parse_json(j), ",") is null)"))
                   .num_rows() == 2);
     }
@@ -2545,22 +2678,19 @@ TEST_SUITE("View duql array and object functions") {
     TEST_CASE("values of fields with different types is a compile error") {
         TestEnvironment env(10);
         const View v = view_of_lines(env, {event(1, R"("o":{"a":1,"b":"x"})")});
-        try {
-            (void)frame(v.duql("derive w = values(o)"));
-            FAIL("values() of mixed fields compiled");
-        } catch (const DFTUtilsException& e) {
-            CHECK(std::string(e.what()).find("different types") !=
-                  std::string::npos);
-        }
+        const dstd::String what =
+            failure_of([&] { return v.duql("derive w = values(o)"); });
+        REQUIRE_MESSAGE(!what.empty(), "values() of mixed fields compiled");
+        CHECK(what.find("different types") != dstd::String::npos);
     }
 }
 
 TEST_SUITE("View duql array indexes and lists") {
     static View arrays_view(TestEnvironment & env) {
-        auto line = [](int ts, const char* name, const std::string& args) {
-            return R"({"ph":"X","name":")" + std::string(name) +
+        auto line = [](int ts, const char* name, const dstd::String& args) {
+            return R"({"ph":"X","name":")" + dstd::String(name) +
                    R"(","cat":"POSIX","pid":1,"tid":1,"ts":)" +
-                   std::to_string(ts) + R"(,"dur":10,"args":{)" + args + "}}";
+                   dstd::to_string(ts) + R"(,"dur":10,"args":{)" + args + "}}";
         };
         return view_of_lines(
             env, {line(1, "read",
@@ -2569,12 +2699,29 @@ TEST_SUITE("View duql array indexes and lists") {
                   line(3, "open", R"("xs":[],"i":0,"tags":[])")});
     }
 
+    TEST_CASE("an array holding a number too large for a double is a list") {
+        TestEnvironment env(10);
+        auto line = [](int ts, const char* name, const dstd::String& args) {
+            return R"({"ph":"X","name":")" + dstd::String(name) +
+                   R"(","cat":"POSIX","pid":1,"tid":1,"ts":)" +
+                   dstd::to_string(ts) + R"(,"dur":10,"args":{)" + args + "}}";
+        };
+        const View v =
+            view_of_lines(env, {line(1, "read", R"("xs":[10,20,30])"),
+                                line(2, "huge", R"("xs":[1,1e400,2,4])"),
+                                line(3, "open", R"("xs":[5])")});
+        const dataframe::DataFrame f =
+            frame(v.duql("derive n = len(xs) | select name, n"));
+        REQUIRE(f.num_rows() == 3);
+        CHECK(nums(f, "n") == dstd::Vector<double>{3, 4, 1});
+    }
+
     TEST_CASE("a per-row index") {
         TestEnvironment env(10);
         const View v = arrays_view(env);
         duql::Params p;
         p.emplace("n", duql::LiteralValue{std::int64_t{1}});
-        const df::DataFrame f = frame(v.duql(
+        const dataframe::DataFrame f = frame(v.duql(
             "derive a = xs[i], b = xs[$n], c = xs[i - 3] | select a, b, c", p));
         REQUIRE(f.num_rows() == 3);
         CHECK(bnum(f, 0, "a") == 30);
@@ -2585,21 +2732,21 @@ TEST_SUITE("View duql array indexes and lists") {
             CHECK(f.columns[static_cast<std::size_t>(bcol(f, n))].is_null(1));
             CHECK(f.columns[static_cast<std::size_t>(bcol(f, n))].is_null(2));
         }
-        CHECK(v.explain_duql("derive a = xs[i]").find("call __duql_c_") !=
-              std::string::npos);
+        CHECK(dftu_utils_test::ok(v.explain_duql("derive a = xs[i]"))
+                  .find("call __duql_c_") != dstd::String::npos);
     }
 
     TEST_CASE("a list value") {
         TestEnvironment env(10);
         const View v = arrays_view(env);
-        const df::DataFrame f = frame(
+        const dataframe::DataFrame f = frame(
             v.duql(R"(derive t = [cat, name], k = len([1, 2, 3]) | )"
                    R"(where contains(["read", "write"], name) | select t, k)"));
         REQUIRE(f.num_rows() == 2);
         CHECK(items(f, 0, "t") == "[POSIX,read]");
         CHECK(items(f, 1, "t") == "[POSIX,write]");
-        CHECK(nums(f, "k") == std::vector<double>{3, 3});
-        const df::DataFrame e =
+        CHECK(nums(f, "k") == dstd::Vector<double>{3, 3});
+        const dataframe::DataFrame e =
             frame(v.duql("derive t = [] | select t | take 1"));
         CHECK(items(e, 0, "t") == "[]");
         CHECK(fails_with(R"(derive t = [cat, ts])", {"one type"}));
@@ -2609,14 +2756,14 @@ TEST_SUITE("View duql array indexes and lists") {
     TEST_CASE("an index into a derived list reads the derived column") {
         TestEnvironment env(10);
         const View v = arrays_view(env);
-        const df::DataFrame f =
+        const dataframe::DataFrame f =
             frame(v.duql(R"(derive l = [cat, name] | derive y = l[1], z = l[0])"
                          R"( | select y, z | take 1)"));
         CHECK(bstr(f, 0, "y") == "read");
         CHECK(bstr(f, 0, "z") == "POSIX");
         const View w =
             view_of_lines(env, {event(1, R"("s":"a,b")")}, "split.pfw");
-        const df::DataFrame g =
+        const dataframe::DataFrame g =
             frame(w.duql(R"(derive l = split(s, ",") | derive y = l[1],)"
                          R"( z = l[-1] | select y, z)"));
         CHECK(bstr(g, 0, "y") == "b");
@@ -2626,7 +2773,7 @@ TEST_SUITE("View duql array indexes and lists") {
     TEST_CASE("a list with nulls and mixed numbers") {
         TestEnvironment env(10);
         const View v = arrays_view(env);
-        const df::DataFrame f =
+        const dataframe::DataFrame f =
             frame(v.duql(R"(derive t = [cat, null], u = [cat, nosuch],)"
                          R"( w = [null, nosuch], l = [1, 2.5] | derive)"
                          R"( x = l[i - 2], y = l[i - 1], n = len(l))"
@@ -2642,8 +2789,8 @@ TEST_SUITE("View duql array indexes and lists") {
              {"len([cat, null]) == 2", "len([1, 2.5, nosuch]) == 3",
               "contains([1, 2.5], dur - 9)"}) {
             INFO(cond);
-            CHECK(frame(v.duql(std::string("where ") + cond)).num_rows() == 3);
-            CHECK(frame(v.duql(std::string("derive z = 1 | where ") + cond))
+            CHECK(frame(v.duql(dstd::String("where ") + cond)).num_rows() == 3);
+            CHECK(frame(v.duql(dstd::String("derive z = 1 | where ") + cond))
                       .num_rows() == 3);
         }
     }
@@ -2651,7 +2798,7 @@ TEST_SUITE("View duql array indexes and lists") {
     TEST_CASE("array functions") {
         TestEnvironment env(10);
         const View v = arrays_view(env);
-        const df::DataFrame f =
+        const dataframe::DataFrame f =
             frame(v.duql(R"(derive s = sort(tags), u = unique(tags),)"
                          R"( j = join(tags, ","), p = index_of(tags, "a"))"
                          R"( | select s, u, j, p)"));
@@ -2667,7 +2814,7 @@ TEST_SUITE("View duql array indexes and lists") {
             f.columns[static_cast<std::size_t>(bcol(f, "j"))].is_null(2));
         CHECK(f.columns[static_cast<std::size_t>(bcol(f, "p"))].is_null(1));
         CHECK(f.columns[static_cast<std::size_t>(bcol(f, "p"))].is_null(2));
-        const df::DataFrame g =
+        const dataframe::DataFrame g =
             frame(v.duql(R"(derive a = index_of(xs, 20.0), b = sort(xs),)"
                          R"( c = join(xs, ","), d = join(tags, "-"))"
                          R"( | select a, b, c, d)"));
@@ -2677,14 +2824,16 @@ TEST_SUITE("View duql array indexes and lists") {
         CHECK(bstr(g, 2, "c").empty());
         CHECK(g.columns[static_cast<std::size_t>(bcol(g, "d"))].is_null(2) ==
               false);
-        CHECK(v.explain_duql("derive s = sort(tags), j = join(tags, \",\")")
-                  .find("call __duql_c_") != std::string::npos);
+        CHECK(
+            dftu_utils_test::ok(
+                v.explain_duql("derive s = sort(tags), j = join(tags, \",\")"))
+                .find("call __duql_c_") != dstd::String::npos);
     }
 
     TEST_CASE("each form in the scan filter and after it") {
         TestEnvironment env(10);
         const View v = arrays_view(env);
-        const std::vector<std::pair<const char*, std::size_t>> conds = {
+        const dstd::Vector<dstd::Pair<const char*, std::size_t>> conds = {
             {R"(index_of(tags, "a") == 1)", 1},
             {"len(sort(tags)) == 4", 1},
             {"len(unique(tags)) == 3", 1},
@@ -2695,11 +2844,12 @@ TEST_SUITE("View duql array indexes and lists") {
             {R"(contains(["read", "write"], name))", 2}};
         for (const auto& [cond, rows] : conds) {
             INFO(cond);
-            const std::string scan = std::string("where ") + cond;
-            const std::string after =
-                std::string("derive z = 1 | where ") + cond;
-            CHECK(v.explain_duql(scan).find("with_column") ==
-                  std::string::npos);
+            const dstd::String scan = dstd::String("where ") + cond;
+            const dstd::String after =
+                dstd::String("derive z = 1 | where ") + cond;
+            CHECK(
+                dftu_utils_test::ok(v.explain_duql(scan)).find("with_column") ==
+                dstd::String::npos);
             CHECK(static_cast<std::size_t>(frame(v.duql(scan)).num_rows()) ==
                   rows);
             CHECK(static_cast<std::size_t>(frame(v.duql(after)).num_rows()) ==
@@ -2712,99 +2862,96 @@ TEST_SUITE("View duql array indexes and lists") {
         const View v = arrays_view(env);
         CHECK(fails_with("derive a = xs[i].b", {"index"}));
         duql::Params p;
-        p.emplace("n", duql::LiteralValue{std::string("x")});
-        try {
-            (void)frame(v.duql("derive a = xs[$n]", p));
-            FAIL("xs[$n] with a string compiled");
-        } catch (const DFTUtilsException& e) {
-            CHECK(std::string(e.what()).find("$n") != std::string::npos);
-        }
+        p.emplace("n", duql::LiteralValue{dstd::String("x")});
+        const dstd::String what =
+            failure_of([&] { return v.duql("derive a = xs[$n]", p); });
+        REQUIRE_MESSAGE(!what.empty(), "xs[$n] with a string compiled");
+        CHECK(what.find("$n") != dstd::String::npos);
     }
 
     TEST_CASE("an index inside a quantifier after the scan is an error") {
         TestEnvironment env(10);
         const View v = arrays_view(env);
         CHECK_NOTHROW((void)frame(v.duql("where any(xs, . > 1)")));
-        try {
-            (void)frame(v.duql("derive z = 1 | where any(tags, xs[i] > 1)"));
-            FAIL("an index in a quantifier compiled");
-        } catch (const DFTUtilsException& e) {
-            CHECK(std::string(e.what()).find("call_column") !=
-                  std::string::npos);
-        }
+        const dstd::String what = failure_of([&] {
+            return v.duql("derive z = 1 | where any(tags, xs[i] > 1)");
+        });
+        REQUIRE_FALSE(what.empty());
+        CHECK(what.find("call_column") != dstd::String::npos);
     }
 }
 
 TEST_SUITE("View duql session") {
     // `events` as a dftracer trace, one event per (pid, tid, ts, dur), in
     // the order given, gzip members of about `member_bytes`.
-    static std::string session_trace(
+    static dstd::String session_trace(
         TestEnvironment & env,
-        const std::vector<std::array<std::int64_t, 4>>& events,
+        const dstd::Vector<std::array<std::int64_t, 4>>& events,
         std::size_t member_bytes = 4096) {
-        const std::string pfw = env.get_dir() + "/sess.pfw";
+        const dstd::String pfw = env.dir() + "/sess.pfw";
         {
-            std::ofstream o(pfw);
+            dftu_utils_test::FileOut o(pfw);
             for (const auto& [pid, tid, ts, dur] : events)
                 o << R"({"ph":"X","name":"read","cat":"POSIX","pid":)" << pid
                   << R"(,"tid":)" << tid << R"(,"ts":)" << ts << R"(,"dur":)"
                   << dur << "}\n";
         }
-        const std::string gz = pfw + ".gz";
+        const dstd::String gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip_multimember(pfw, gz,
                                                            member_bytes);
-        fs::remove(pfw);
-        dftracer::utils::index::Indexer::open({gz}).build();
+        dstd::fs::remove(pfw).discard();
+        dftu_utils_test::ok(
+            dftu_utils_test::ok(dftracer::utils::trace::index::Indexer::open(
+                                    {dstd::String(dstd::StringView(gz))}))
+                .build());
         return gz;
     }
 
-    static View view_of(const std::string& gz) {
-        return View::from_file(gz, determine_index_path(gz, ""));
+    static View view_of(const dstd::String& gz) {
+        return View::from_file(
+            dstd::String(gz),
+            dstd::String(dstd::String(determine_index_path(gz, ""))));
     }
 
     TEST_CASE("an idle gap after the latest end starts a session") {
         TestEnvironment env(10);
         // Written newest first; pid 1 ends at 110 before its third event.
-        const std::string gz = session_trace(
+        const dstd::String gz = session_trace(
             env,
             {{1, 1, 500, 5}, {2, 1, 20, 5}, {1, 1, 10, 100}, {1, 1, 0, 5}});
-        const df::DataFrame f = frame(
+        const dataframe::DataFrame f = frame(
             view_of(gz).duql("session pid gap 100 | select pid, ts, session"));
         CHECK(rows(f) == "1,500,2;2,20,1;1,10,1;1,0,1");
     }
 
     TEST_CASE("a session longer than max splits") {
         TestEnvironment env(10);
-        const std::string gz = session_trace(
+        const dstd::String gz = session_trace(
             env, {{1, 1, 0, 0}, {1, 1, 50, 0}, {1, 1, 100, 0}, {1, 1, 150, 0}});
-        const df::DataFrame f = frame(
+        const dataframe::DataFrame f = frame(
             view_of(gz).duql("session gap 60 max 120 as s | select ts, s"));
         CHECK(rows(f) == "0,1;50,1;100,1;150,2");
     }
 
     TEST_CASE("one scan reads the keys, time and duration") {
         TestEnvironment env(10);
-        const std::string gz = session_trace(env, {{1, 1, 0, 5}});
-        const std::string plan = view_of(gz).explain_duql(
-            "session pid gap 1s | group pid, session { n = count() }");
-        CHECK(plan.find("scan select: pid, ts, dur\n") != std::string::npos);
+        const dstd::String gz = session_trace(env, {{1, 1, 0, 5}});
+        const dstd::String plan = dftu_utils_test::ok(view_of(gz).explain_duql(
+            "session pid gap 1s | group pid, session { n = count() }"));
+        CHECK(plan.find("scan select: pid, ts, dur\n") != dstd::String::npos);
         CHECK(plan.find("session keys pid; time ts end ts + dur; gap "
                         "1000000; max none; as session\n") !=
-              std::string::npos);
-        std::string what;
-        try {
-            (void)frame(view_of(gz).duql("session pid gap 1 as ts"));
-        } catch (const std::exception& e) {
-            what = e.what();
-        }
-        CHECK(what.find("already a column") != std::string::npos);
+              dstd::String::npos);
+        const dstd::String what = failure_of(
+            [&] { return view_of(gz).duql("session pid gap 1 as ts"); });
+        CHECK(what.find("already a column") != dstd::String::npos);
     }
 
     TEST_CASE("sessions do not depend on workers or checkpoints") {
-        // 4000 events of 4 threads, written out of time order.
-        std::vector<std::array<std::int64_t, 4>> events;
+        // 400 events of 4 threads, written out of time order.
+        dstd::Vector<std::array<std::int64_t, 4>> events;
         std::uint64_t x = 88172645463325252ULL;
-        for (int i = 0; i < 4000; ++i) {
+        for (int i = 0; i < 400; ++i) {
             x ^= x << 13;
             x ^= x >> 7;
             x ^= x << 17;
@@ -2814,7 +2961,7 @@ TEST_SUITE("View duql session") {
         }
         TestEnvironment big(10);
         TestEnvironment small(10);
-        const std::vector<std::string> files = {
+        const dstd::Vector<dstd::String> files = {
             session_trace(big, events, 20000),
             session_trace(small, events, 2048)};
         for (const char* q :
@@ -2822,12 +2969,12 @@ TEST_SUITE("View duql session") {
               "{ n = count(), t = sum(dur) } | sort pid, tid, session",
               "session pid gap 300 max 5000 | select ts, pid, session"}) {
             INFO("query: ", q);
-            std::optional<std::string> want;
+            dstd::Optional<dstd::String> want;
             for (const auto& gz : files)
                 for (std::size_t workers : {1, 2, 8}) {
                     dftracer::utils::Runtime rt(workers);
-                    const std::string got =
-                        rows(rt.submit(view_of(gz).duql(q).collect()).get());
+                    const dstd::String got = rows(dftu_utils_test::ok(
+                        rt.submit(view_of(gz).duql(q).collect()).get()));
                     if (!want) want = got;
                     CHECK(got == *want);
                 }
@@ -2851,15 +2998,15 @@ TEST_SUITE("View duql plugin functions") {
         PluginOps ops;
         CHECK(text(pipe("derive d = myplug.add2(dur, ts) | select d")) ==
               text(pipe("derive d = dur + ts | select d")));
-        const df::DataFrame got =
+        const dataframe::DataFrame got =
             pipe("derive d = myplug.scale(dur, 1.5) | select d");
-        CHECK(got.columns[0].type() == df::TypeId::Float64);
+        CHECK(got.columns[0].type() == dataframe::TypeId::Float64);
         CHECK(text(got) == text(pipe("derive d = dur * 1.5 | select d")));
     }
 
     TEST_CASE("a table op with an integer operand") {
         PluginOps ops;
-        const df::DataFrame got = pipe("sort ts | call myplug.head(3)");
+        const dataframe::DataFrame got = pipe("sort ts | call myplug.head(3)");
         CHECK(got.num_rows() == 3);
         CHECK(text(got) == text(pipe("sort ts | take 3")));
     }
@@ -2879,28 +3026,28 @@ TEST_SUITE("View duql plugin functions") {
         TestEnvironment env(10);
         const View v =
             view_of_lines(env, {event(1, R"("x":3)"), event(2, R"("x":5)")});
-        const df::DataFrame f =
+        const dataframe::DataFrame f =
             frame(v.duql("derive d = myplug.twice(x) + 1 | select d"));
-        CHECK(nums(f, "d") == std::vector<double>{7, 11});
+        CHECK(nums(f, "d") == dstd::Vector<double>{7, 11});
     }
 }
 
 TEST_SUITE("View duql plugin reducers") {
     TEST_CASE("a reducer per group equals the built-in") {
         PluginReducers ops;
-        const df::DataFrame got = pipe(
+        const dataframe::DataFrame got = pipe(
             "group name { t = myplug.total(dur), n = myplug.count_i(dur),"
             " s = myplug.scaled(dur, 1.5) }");
-        const df::DataFrame want = pipe(
+        const dataframe::DataFrame want = pipe(
             "group name { t = sum(dur), n = count(), s = sum(dur) * 1.5 }");
         CHECK(got.num_rows() == want.num_rows());
         CHECK(nums(got, "t") == nums(want, "t"));
         CHECK(nums(got, "n") == nums(want, "n"));
         CHECK(nums(got, "s") == nums(want, "s"));
         CHECK(got.columns[static_cast<std::size_t>(bcol(got, "t"))].type() ==
-              df::TypeId::Float64);
+              dataframe::TypeId::Float64);
         CHECK(got.columns[static_cast<std::size_t>(bcol(got, "n"))].type() ==
-              df::TypeId::Int64);
+              dataframe::TypeId::Int64);
     }
 
     TEST_CASE("a reducer inside an aggregate expression") {
@@ -2919,20 +3066,21 @@ TEST_SUITE("View duql plugin reducers") {
         const View v = view_of_lines(
             env, {event(1, R"("g":1,"x":1.5)"), event(2, R"("g":1,"x":2.5)"),
                   event(3, R"("g":2)"), event(4, R"("g":3,"x":1.0)")});
-        const df::DataFrame f =
+        const dataframe::DataFrame f =
             frame(v.duql("group g { t = myplug.total(x), b = myplug.big(x, 2),"
                          " m = myplug.total(missing_field) }"));
         REQUIRE(f.num_rows() == 3);
-        const df::Series t =
+        const dataframe::Series t =
             f.columns[static_cast<std::size_t>(bcol(f, "t"))].materialize();
         CHECK(t.data<double>()[0] == 4.0);
         CHECK(t.is_null(1));
         CHECK(t.data<double>()[2] == 1.0);
         const auto& b = f.columns[static_cast<std::size_t>(bcol(f, "b"))];
-        CHECK(b.type() == df::TypeId::Bool);
+        CHECK(b.type() == dataframe::TypeId::Bool);
         CHECK(!b.is_null(0));
         CHECK(b.is_null(1));
-        const df::Series flags = b.cast(df::TypeId::Int64).materialize();
+        const dataframe::Series flags =
+            b.cast(dataframe::TypeId::Int64).materialize();
         CHECK(flags.data<std::int64_t>()[0] == 1);
         CHECK(flags.data<std::int64_t>()[2] == 0);
         const auto& m = f.columns[static_cast<std::size_t>(bcol(f, "m"))];
@@ -2957,7 +3105,7 @@ TEST_SUITE("View duql plugin reducers") {
 
     TEST_CASE("agg over no rows gives null") {
         PluginReducers ops;
-        const df::DataFrame f =
+        const dataframe::DataFrame f =
             pipe("where dur < 0 | agg { t = myplug.total(dur) }");
         REQUIRE(f.num_rows() == 1);
         CHECK(f.columns[0].is_null(0));

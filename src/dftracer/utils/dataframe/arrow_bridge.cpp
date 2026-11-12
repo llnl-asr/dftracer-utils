@@ -1,15 +1,20 @@
+// SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/config.h>
 #include <dftracer/utils/dataframe/arrow_bridge.h>
+#include <dftracer/utils/dstd/fatal.h>
+#include <dftracer/utils/dstd/vector.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 
-#include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
 #include <nanoarrow/nanoarrow.h>
 
 #include <cstring>
 #include <memory>
 #include <stdexcept>
-#include <vector>
 
 namespace dftracer::utils::dataframe {
 namespace {
@@ -175,7 +180,7 @@ bool from_arrow_type(const ArrowSchemaView& view, TypeId& out) {
             return true;
         default:
             DFTRACER_UTILS_LOG_ERROR(
-                "Arrow import: unsupported type '%s'",
+                "Arrow import: unsupported type '{}'",
                 ArrowTypeString(view.type) ? ArrowTypeString(view.type) : "?");
             return false;
     }
@@ -183,13 +188,29 @@ bool from_arrow_type(const ArrowSchemaView& view, TypeId& out) {
 
 /// Keeps a column's buffers (and, for a selection, its base) alive for as long
 /// as an exported ArrowArray references them, and owns the array's buffer list.
-struct ExportedArray {
-    std::vector<std::shared_ptr<Buffer>> keep;
-    std::shared_ptr<dftu_series> child_keep;
-    std::vector<std::shared_ptr<dftu_series>> children_keep;
+struct ExportedArray : dstd::HeapObject {
+    dstd::Vector<BufferView> keep;
+    dstd::SharedPtr<dftu_series> child_keep;
+    dstd::Vector<dstd::SharedPtr<dftu_series>> children_keep;
     const void* buffers[3];
-    std::vector<const void*> view_buffers;
-    std::vector<std::int64_t> view_sizes;
+    dstd::Vector<const void*> view_buffers;
+    dstd::Vector<std::int64_t> view_sizes;
+    /// The exported dictionary or child arrays, and pointers to the children.
+    dstd::Vector<ArrowArray> arrays;
+    dstd::Vector<ArrowArray*> child_ptrs;
+
+    /// Sets aside @p n zeroed arrays; call once.
+    ArrowArray* reserve_arrays(std::size_t n) {
+        arrays.resize(n);
+        return arrays.data();
+    }
+    void set_children(ArrowArray* array, std::size_t n) {
+        reserve_arrays(n);
+        child_ptrs.resize(n);
+        for (std::size_t i = 0; i < n; ++i) child_ptrs[i] = &arrays[i];
+        array->n_children = static_cast<std::int64_t>(n);
+        array->children = child_ptrs.data();
+    }
 };
 
 bool is_varwidth(TypeId t) {
@@ -206,15 +227,12 @@ void release_exported(ArrowArray* array) {
     if (array->dictionary != nullptr) {
         if (array->dictionary->release != nullptr)
             array->dictionary->release(array->dictionary);
-        delete array->dictionary;
         array->dictionary = nullptr;
     }
     for (std::int64_t i = 0; i < array->n_children; ++i) {
         if (array->children[i]->release != nullptr)
             array->children[i]->release(array->children[i]);
-        delete array->children[i];
     }
-    delete[] array->children;
     array->children = nullptr;
     delete static_cast<ExportedArray*>(array->private_data);
     array->private_data = nullptr;
@@ -227,8 +245,8 @@ void export_flat(const dftu_series& col, ArrowArray* array) {
     auto* h = new ExportedArray();
     h->keep.push_back(col.validity);
     h->keep.push_back(col.data);
-    h->buffers[0] = col.validity ? col.validity->data() : nullptr;
-    h->buffers[1] = col.data ? col.data->data() : nullptr;
+    h->buffers[0] = col.validity.block() ? col.validity.data() : nullptr;
+    h->buffers[1] = col.data.block() ? col.data.data() : nullptr;
     array->length = col.length;
     array->null_count = col.null_count;
     array->offset = 0;
@@ -245,13 +263,14 @@ void export_view(const dftu_series& col, ArrowArray* array) {
     auto* h = new ExportedArray();
     h->keep.push_back(col.validity);
     h->keep.push_back(col.data);
-    h->view_buffers.push_back(col.validity ? col.validity->data() : nullptr);
-    h->view_buffers.push_back(col.data ? col.data->data() : nullptr);
+    h->view_buffers.push_back(col.validity.block() ? col.validity.data()
+                                                   : nullptr);
+    h->view_buffers.push_back(col.data.block() ? col.data.data() : nullptr);
     if (col.blobs)
         for (const auto& b : *col.blobs) {
             h->keep.push_back(b);
-            h->view_buffers.push_back(b->data());
-            h->view_sizes.push_back(static_cast<std::int64_t>(b->size()));
+            h->view_buffers.push_back(b.data());
+            h->view_sizes.push_back(static_cast<std::int64_t>(b.size()));
         }
     h->view_buffers.push_back(h->view_sizes.data());
     array->length = col.length;
@@ -271,38 +290,38 @@ void export_dict(const dftu_series& col, ArrowArray* array) {
     h->keep.push_back(col.validity);
     h->keep.push_back(col.data);
     h->child_keep = col.child();
-    h->buffers[0] = col.validity ? col.validity->data() : nullptr;
-    h->buffers[1] = col.data ? col.data->data() : nullptr;
+    h->buffers[0] = col.validity.block() ? col.validity.data() : nullptr;
+    h->buffers[1] = col.data.block() ? col.data.data() : nullptr;
     array->length = col.length;
     array->null_count = col.null_count;
-    if (col.encoding == Encoding::Selection && col.data) {
+    if (col.encoding == Encoding::Selection && col.data.block()) {
         const auto* idx =
-            reinterpret_cast<const std::int64_t*>(col.data->data());
+            reinterpret_cast<const std::int64_t*>(col.data.data());
         const std::int64_t n = col.length;
         std::int64_t fills = 0;
         for (std::int64_t i = 0; i < n; ++i) fills += idx[i] < 0;
         if (fills > 0) {
-            auto fixed = Buffer::allocate(static_cast<std::size_t>(n) *
-                                          sizeof(std::int64_t));
-            auto valid = Buffer::allocate(static_cast<std::size_t>(n + 7) / 8);
-            auto* out = reinterpret_cast<std::int64_t*>(fixed->data());
-            if (col.validity)
-                std::memcpy(valid->data(), col.validity->data(), valid->size());
+            auto fixed =
+                new_buffer(static_cast<std::size_t>(n) * sizeof(std::int64_t));
+            auto valid = new_buffer(static_cast<std::size_t>(n + 7) / 8);
+            auto* out = reinterpret_cast<std::int64_t*>(writable(fixed));
+            if (col.validity.block())
+                std::memcpy(writable(valid), col.validity.data(), valid.size());
             else
-                std::memset(valid->data(), 0xff, valid->size());
+                std::memset(writable(valid), 0xff, valid.size());
             for (std::int64_t i = 0; i < n; ++i) {
                 out[i] = idx[i] < 0 ? 0 : idx[i];
                 if (idx[i] < 0)
-                    valid->data()[i >> 3] &=
+                    writable(valid)[i >> 3] &=
                         static_cast<std::uint8_t>(~(1u << (i & 7)));
             }
             std::int64_t nulls = 0;
             for (std::int64_t i = 0; i < n; ++i)
-                nulls += !((valid->data()[i >> 3] >> (i & 7)) & 1);
+                nulls += !((valid.data()[i >> 3] >> (i & 7)) & 1);
             h->keep.push_back(fixed);
             h->keep.push_back(valid);
-            h->buffers[0] = valid->data();
-            h->buffers[1] = fixed->data();
+            h->buffers[0] = valid.data();
+            h->buffers[1] = fixed.data();
             array->null_count = nulls;
         }
     }
@@ -311,7 +330,7 @@ void export_dict(const dftu_series& col, ArrowArray* array) {
     array->buffers = h->buffers;
     array->private_data = h;
     array->release = release_exported;
-    array->dictionary = new ArrowArray();
+    array->dictionary = h->reserve_arrays(1);
     export_array(*col.child(), array->dictionary);
 }
 
@@ -320,9 +339,9 @@ void export_varwidth(const dftu_series& col, ArrowArray* array) {
     h->keep.push_back(col.validity);
     h->keep.push_back(col.offsets);
     h->keep.push_back(col.data);
-    h->buffers[0] = col.validity ? col.validity->data() : nullptr;
-    h->buffers[1] = col.offsets ? col.offsets->data() : nullptr;
-    h->buffers[2] = col.data ? col.data->data() : nullptr;
+    h->buffers[0] = col.validity.block() ? col.validity.data() : nullptr;
+    h->buffers[1] = col.offsets.block() ? col.offsets.data() : nullptr;
+    h->buffers[2] = col.data.block() ? col.data.data() : nullptr;
     array->length = col.length;
     array->null_count = col.null_count;
     array->offset = 0;
@@ -339,9 +358,9 @@ void export_varwidth_large(const dftu_series& col, ArrowArray* array) {
     h->keep.push_back(col.validity);
     h->keep.push_back(col.offsets);
     h->keep.push_back(col.data);
-    h->buffers[0] = col.validity ? col.validity->data() : nullptr;
-    h->buffers[1] = col.offsets ? col.offsets->data() : nullptr;
-    h->buffers[2] = col.data ? col.data->data() : nullptr;
+    h->buffers[0] = col.validity.block() ? col.validity.data() : nullptr;
+    h->buffers[1] = col.offsets.block() ? col.offsets.data() : nullptr;
+    h->buffers[2] = col.data.block() ? col.data.data() : nullptr;
     array->length = col.length;
     array->null_count = col.null_count;
     array->offset = 0;
@@ -355,16 +374,14 @@ void export_varwidth_large(const dftu_series& col, ArrowArray* array) {
 void export_struct(const dftu_series& col, ArrowArray* array) {
     auto* h = new ExportedArray();
     h->keep.push_back(col.validity);
-    h->buffers[0] = col.validity ? col.validity->data() : nullptr;
+    h->buffers[0] = col.validity.block() ? col.validity.data() : nullptr;
     array->length = col.length;
     array->null_count = col.null_count;
     array->offset = 0;
     array->n_buffers = 1;
     array->buffers = h->buffers;
-    array->n_children = static_cast<std::int64_t>(col.num_fields());
-    array->children = new ArrowArray*[col.num_fields()];
+    h->set_children(array, col.num_fields());
     for (std::size_t i = 0; i < col.num_fields(); ++i) {
-        array->children[i] = new ArrowArray();
         export_array(*col.nested[i].series, array->children[i]);
         h->children_keep.push_back(col.nested[i].series);
     }
@@ -380,16 +397,14 @@ void export_list(const dftu_series& col, ArrowArray* array) {
     h->keep.push_back(col.validity);
     h->keep.push_back(col.offsets);
     h->child_keep = col.child();
-    h->buffers[0] = col.validity ? col.validity->data() : nullptr;
-    h->buffers[1] = col.offsets ? col.offsets->data() : nullptr;
+    h->buffers[0] = col.validity.block() ? col.validity.data() : nullptr;
+    h->buffers[1] = col.offsets.block() ? col.offsets.data() : nullptr;
     array->length = col.length;
     array->null_count = col.null_count;
     array->offset = 0;
     array->n_buffers = 2;
     array->buffers = h->buffers;
-    array->n_children = 1;
-    array->children = new ArrowArray*[1];
-    array->children[0] = new ArrowArray();
+    h->set_children(array, 1);
     export_array(*col.child(), array->children[0]);
     array->private_data = h;
     array->release = release_exported;
@@ -401,16 +416,14 @@ void export_list_large(const dftu_series& col, ArrowArray* array) {
     h->keep.push_back(col.validity);
     h->keep.push_back(col.offsets);
     h->child_keep = col.child();
-    h->buffers[0] = col.validity ? col.validity->data() : nullptr;
-    h->buffers[1] = col.offsets ? col.offsets->data() : nullptr;
+    h->buffers[0] = col.validity.block() ? col.validity.data() : nullptr;
+    h->buffers[1] = col.offsets.block() ? col.offsets.data() : nullptr;
     array->length = col.length;
     array->null_count = col.null_count;
     array->offset = 0;
     array->n_buffers = 2;
     array->buffers = h->buffers;
-    array->n_children = 1;
-    array->children = new ArrowArray*[1];
-    array->children[0] = new ArrowArray();
+    h->set_children(array, 1);
     export_array(*col.child(), array->children[0]);
     array->private_data = h;
     array->release = release_exported;
@@ -422,15 +435,13 @@ void export_fixed_size_list(const dftu_series& col, ArrowArray* array) {
     auto* h = new ExportedArray();
     h->keep.push_back(col.validity);
     h->child_keep = col.child();
-    h->buffers[0] = col.validity ? col.validity->data() : nullptr;
+    h->buffers[0] = col.validity.block() ? col.validity.data() : nullptr;
     array->length = col.length;
     array->null_count = col.null_count;
     array->offset = 0;
     array->n_buffers = 1;
     array->buffers = h->buffers;
-    array->n_children = 1;
-    array->children = new ArrowArray*[1];
-    array->children[0] = new ArrowArray();
+    h->set_children(array, 1);
     export_array(*col.child(), array->children[0]);
     array->private_data = h;
     array->release = release_exported;
@@ -446,7 +457,7 @@ void export_array(const dftu_series& col, ArrowArray* array) {
     if (col.is_chunked()) {
         Series joined{dftu_series_materialize(&col)};
         if (!joined.valid())
-            throw std::runtime_error("to_arrow: cannot join a chunked column");
+            dstd::fatal("to_arrow: cannot join a chunked column");
         export_array(*joined.handle(), array);
         return;
     }
@@ -472,7 +483,7 @@ void export_array(const dftu_series& col, ArrowArray* array) {
 
 void build_schema(const dftu_series& col, ArrowSchema* schema);
 
-constexpr std::string_view JSON_EXTENSION = "arrow.json";
+constexpr dstd::StringView JSON_EXTENSION = "arrow.json";
 
 // Marks `schema` as the canonical `arrow.json` extension over utf8.
 void set_json_extension(ArrowSchema* schema) {
@@ -579,12 +590,12 @@ void to_arrow(const Series& col, ArrowSchema* schema, ArrowArray* array) {
     export_array(*c, array);
 }
 
-std::vector<ArrowArray> to_arrow_batches(const Series& st,
-                                         ArrowSchema* schema) {
+dstd::Vector<ArrowArray> to_arrow_batches(const Series& st,
+                                          ArrowSchema* schema) {
     const dftu_series* c = st.handle();
-    std::vector<ArrowArray> out;
+    dstd::Vector<ArrowArray> out;
     bool per_chunk = c != nullptr && c->type == TypeId::Struct &&
-                     c->num_fields() > 0 && !c->validity;
+                     c->num_fields() > 0 && !c->validity.block();
     std::size_t nchunks = 0;
     if (per_chunk) {
         const dftu_series& first = *c->nested[0].series;
@@ -593,7 +604,7 @@ std::vector<ArrowArray> to_arrow_batches(const Series& st,
         for (std::size_t i = 0; per_chunk && i < c->num_fields(); ++i) {
             const dftu_series& f = *c->nested[i].series;
             per_chunk = f.is_chunked() && f.nested.size() == nchunks &&
-                        std::memcmp(f.data->data(), first.data->data(),
+                        std::memcmp(f.data.data(), first.data.data(),
                                     (nchunks + 1) * sizeof(std::int64_t)) == 0;
             for (std::size_t k = 0; per_chunk && k < nchunks; ++k)
                 per_chunk = f.nested[k].series->encoding == Encoding::Flat;
@@ -606,22 +617,15 @@ std::vector<ArrowArray> to_arrow_batches(const Series& st,
     }
     build_schema(*c, schema);
     out.reserve(nchunks);
-    try {
-        for (std::size_t k = 0; k < nchunks; ++k) {
-            dftu_series batch;
-            batch.type = TypeId::Struct;
-            batch.length = c->nested[0].series->nested[k].series->length;
-            for (std::size_t i = 0; i < c->num_fields(); ++i)
-                batch.nested.push_back(
-                    {c->nested[i].series->nested[k].series, c->nested[i].name});
-            out.emplace_back();
-            export_struct(batch, &out.back());
-        }
-    } catch (...) {
-        for (auto& a : out)
-            if (a.release) a.release(&a);
-        if (schema->release) schema->release(schema);
-        throw;
+    for (std::size_t k = 0; k < nchunks; ++k) {
+        dftu_series batch;
+        batch.type = TypeId::Struct;
+        batch.length = c->nested[0].series->nested[k].series->length;
+        for (std::size_t i = 0; i < c->num_fields(); ++i)
+            batch.nested.push_back(
+                {c->nested[i].series->nested[k].series, c->nested[i].name});
+        out.emplace_back();
+        export_struct(batch, &out.back());
     }
     return out;
 }
@@ -630,32 +634,30 @@ namespace {
 
 // The validity or bool bits [offset, offset + n) of `bits`: wrapped when the
 // offset is byte-aligned, else copied into a fresh bitmap.
-std::shared_ptr<Buffer> import_bits(const void* bits, std::int64_t offset,
-                                    std::int64_t n,
-                                    const std::shared_ptr<void>& owner) {
+BufferView import_bits(const void* bits, std::int64_t offset, std::int64_t n,
+                       const dstd::SharedPtr<void>& owner) {
     auto* p = static_cast<std::uint8_t*>(const_cast<void*>(bits));
     const std::size_t bytes = (static_cast<std::size_t>(n) + 7) / 8;
-    if (offset % 8 == 0)
-        return Buffer::wrap(p + offset / 8, bytes, [owner](void*) {});
-    auto out = Buffer::allocate(bytes);
-    std::memset(out->data(), 0, bytes);
+    if (offset % 8 == 0) return borrow_buffer(p + offset / 8, bytes, owner);
+    auto out = new_buffer(bytes);
+    std::memset(writable(out), 0, bytes);
     for (std::int64_t i = 0; i < n; ++i) {
         const std::int64_t b = offset + i;
         if ((p[b >> 3] >> (b & 7)) & 1)
-            out->data()[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
+            writable(out)[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
     }
     return out;
 }
 
 void import_validity(dftu_series* col, const ArrowArray* arr,
-                     const std::shared_ptr<void>& owner) {
+                     const dstd::SharedPtr<void>& owner) {
     if (arr->n_buffers == 0 || arr->buffers[0] == nullptr) return;
     col->validity =
         import_bits(arr->buffers[0], arr->offset, arr->length, owner);
     if (arr->null_count < 0) {
         std::int64_t nulls = 0;
         for (std::int64_t i = 0; i < arr->length; ++i)
-            nulls += !((col->validity->data()[i >> 3] >> (i & 7)) & 1);
+            nulls += !((col->validity.data()[i >> 3] >> (i & 7)) & 1);
         col->null_count = nulls;
     }
 }
@@ -674,7 +676,7 @@ ArrowArray child_window(const ArrowArray* child, std::int64_t offset,
 // `owner` keeps the backing Arrow array alive for as long as any wrapped buffer
 // survives, so the imported buffers can alias `arr` zero copy.
 Series import_flat(const ArrowSchema* schema, const ArrowArray* arr,
-                   std::shared_ptr<void> owner) {
+                   dstd::SharedPtr<void> owner) {
     ArrowSchemaView view;
     ArrowError error;
     if (ArrowSchemaViewInit(&view, schema, &error) != NANOARROW_OK)
@@ -713,17 +715,17 @@ Series import_flat(const ArrowSchema* schema, const ArrowArray* arr,
         auto* views =
             static_cast<std::uint8_t*>(const_cast<void*>(arr->buffers[1])) +
             static_cast<std::size_t>(arr->offset) * 16;
-        col->data = Buffer::wrap(views, static_cast<std::size_t>(n) * 16,
-                                 [owner](void*) {});
+        col->data =
+            borrow_buffer(views, static_cast<std::size_t>(n) * 16, owner);
         const std::int64_t n_blobs = arr->n_buffers - 3;
         const auto* sizes =
             static_cast<const std::int64_t*>(arr->buffers[arr->n_buffers - 1]);
-        auto blobs = std::make_shared<std::vector<std::shared_ptr<Buffer>>>();
+        auto blobs = dstd::make_shared<dstd::Vector<BufferView>>();
         for (std::int64_t k = 0; k < n_blobs; ++k)
-            blobs->push_back(Buffer::wrap(
-                static_cast<std::uint8_t*>(
-                    const_cast<void*>(arr->buffers[2 + k])),
-                static_cast<std::size_t>(sizes[k]), [owner](void*) {}));
+            blobs->push_back(
+                borrow_buffer(static_cast<std::uint8_t*>(
+                                  const_cast<void*>(arr->buffers[2 + k])),
+                              static_cast<std::size_t>(sizes[k]), owner));
         col->blobs = std::move(blobs);
         wrap_validity();
         return Series{col};
@@ -734,15 +736,14 @@ Series import_flat(const ArrowSchema* schema, const ArrowArray* arr,
         // arr->offset and index the data as they are.
         const std::int32_t* offs =
             static_cast<const std::int32_t*>(arr->buffers[1]) + arr->offset;
-        std::size_t data_len =
+        std::size_t data_size =
             offs != nullptr ? static_cast<std::size_t>(offs[n]) : 0;
-        col->offsets = Buffer::wrap(
+        col->offsets = borrow_buffer(
             reinterpret_cast<std::uint8_t*>(const_cast<std::int32_t*>(offs)),
-            static_cast<std::size_t>(n + 1) * sizeof(std::int32_t),
-            [owner](void*) {});
-        col->data = Buffer::wrap(
+            static_cast<std::size_t>(n + 1) * sizeof(std::int32_t), owner);
+        col->data = borrow_buffer(
             static_cast<std::uint8_t*>(const_cast<void*>(arr->buffers[2])),
-            data_len, [owner](void*) {});
+            data_size, owner);
         wrap_validity();
         return Series{col};
     }
@@ -751,15 +752,14 @@ Series import_flat(const ArrowSchema* schema, const ArrowArray* arr,
         // 3 buffers: validity, int64 offsets (n+1), data.
         const std::int64_t* offs =
             static_cast<const std::int64_t*>(arr->buffers[1]) + arr->offset;
-        std::size_t data_len =
+        std::size_t data_size =
             offs != nullptr ? static_cast<std::size_t>(offs[n]) : 0;
-        col->offsets = Buffer::wrap(
+        col->offsets = borrow_buffer(
             reinterpret_cast<std::uint8_t*>(const_cast<std::int64_t*>(offs)),
-            static_cast<std::size_t>(n + 1) * sizeof(std::int64_t),
-            [owner](void*) {});
-        col->data = Buffer::wrap(
+            static_cast<std::size_t>(n + 1) * sizeof(std::int64_t), owner);
+        col->data = borrow_buffer(
             static_cast<std::uint8_t*>(const_cast<void*>(arr->buffers[2])),
-            data_len, [owner](void*) {});
+            data_size, owner);
         wrap_validity();
         return Series{col};
     }
@@ -775,23 +775,23 @@ Series import_flat(const ArrowSchema* schema, const ArrowArray* arr,
         return Series{col};
     }
     auto* data = static_cast<std::uint8_t*>(const_cast<void*>(arr->buffers[1]));
-    std::size_t data_len = (type == TypeId::FixedSizeBinary)
-                               ? static_cast<std::size_t>(n) * width
-                               : buffer_bytes(type, n);
-    col->data = Buffer::wrap(data + ptr_off, data_len, [owner](void*) {});
+    std::size_t data_size = (type == TypeId::FixedSizeBinary)
+                                ? static_cast<std::size_t>(n) * width
+                                : buffer_bytes(type, n);
+    col->data = borrow_buffer(data + ptr_off, data_size, owner);
     wrap_validity();
     return Series{col};
 }
 
 Series import_any(const ArrowSchema* schema, const ArrowArray* arr,
-                  std::shared_ptr<void> owner);
+                  dstd::SharedPtr<void> owner);
 
 // LIST and MAP: validity + int32 offsets (n+1), one child array. `map_type`
 // selects which TypeId to tag the result with; both share the same wire
 // layout (int32 offsets over a child array - the Struct{key, value} entries,
 // for MAP), so only the tag differs. The child is imported recursively.
 Series import_list_like(TypeId result_type, const ArrowSchema* schema,
-                        const ArrowArray* arr, std::shared_ptr<void> owner) {
+                        const ArrowArray* arr, dstd::SharedPtr<void> owner) {
     if (schema->n_children != 1 || arr->n_children != 1) return Series{};
     auto* col = new dftu_series();
     col->type = result_type;
@@ -799,24 +799,23 @@ Series import_list_like(TypeId result_type, const ArrowSchema* schema,
     col->length = arr->length;
     col->null_count = arr->null_count < 0 ? 0 : arr->null_count;
     std::int64_t n = arr->length;
-    col->offsets = Buffer::wrap(
+    col->offsets = borrow_buffer(
         static_cast<std::uint8_t*>(const_cast<void*>(arr->buffers[1])) +
             static_cast<std::size_t>(arr->offset) * sizeof(std::int32_t),
-        static_cast<std::size_t>(n + 1) * sizeof(std::int32_t),
-        [owner](void*) {});
+        static_cast<std::size_t>(n + 1) * sizeof(std::int32_t), owner);
     import_validity(col, arr, owner);
     Series child = import_any(schema->children[0], arr->children[0], owner);
     if (!child.valid()) {
         delete col;
         return Series{};
     }
-    col->set_child(std::shared_ptr<dftu_series>(child.release()));
+    col->set_child(adopt_series(child.release()));
     return Series{col};
 }
 
 // LargeList: same shape as import_list_like but with int64 offsets.
 Series import_large_list(const ArrowSchema* schema, const ArrowArray* arr,
-                         std::shared_ptr<void> owner) {
+                         dstd::SharedPtr<void> owner) {
     if (schema->n_children != 1 || arr->n_children != 1) return Series{};
     auto* col = new dftu_series();
     col->type = TypeId::LargeList;
@@ -824,18 +823,17 @@ Series import_large_list(const ArrowSchema* schema, const ArrowArray* arr,
     col->length = arr->length;
     col->null_count = arr->null_count < 0 ? 0 : arr->null_count;
     std::int64_t n = arr->length;
-    col->offsets = Buffer::wrap(
+    col->offsets = borrow_buffer(
         static_cast<std::uint8_t*>(const_cast<void*>(arr->buffers[1])) +
             static_cast<std::size_t>(arr->offset) * sizeof(std::int64_t),
-        static_cast<std::size_t>(n + 1) * sizeof(std::int64_t),
-        [owner](void*) {});
+        static_cast<std::size_t>(n + 1) * sizeof(std::int64_t), owner);
     import_validity(col, arr, owner);
     Series child = import_any(schema->children[0], arr->children[0], owner);
     if (!child.valid()) {
         delete col;
         return Series{};
     }
-    col->set_child(std::shared_ptr<dftu_series>(child.release()));
+    col->set_child(adopt_series(child.release()));
     return Series{col};
 }
 
@@ -843,7 +841,7 @@ Series import_large_list(const ArrowSchema* schema, const ArrowArray* arr,
 // length * fixed_size flattened elements.
 Series import_fixed_size_list(const ArrowSchemaView& view,
                               const ArrowSchema* schema, const ArrowArray* arr,
-                              std::shared_ptr<void> owner) {
+                              dstd::SharedPtr<void> owner) {
     if (schema->n_children != 1 || arr->n_children != 1) return Series{};
     auto* col = new dftu_series();
     col->type = TypeId::FixedSizeList;
@@ -861,14 +859,14 @@ Series import_fixed_size_list(const ArrowSchemaView& view,
         delete col;
         return Series{};
     }
-    col->set_child(std::shared_ptr<dftu_series>(child.release()));
+    col->set_child(adopt_series(child.release()));
     return Series{col};
 }
 
 // Inverse of export_struct; each field column is imported recursively and
 // aliases `arr` through `owner`.
 Series import_struct(const ArrowSchema* schema, const ArrowArray* arr,
-                     std::shared_ptr<void> owner) {
+                     dstd::SharedPtr<void> owner) {
     if (schema->n_children != arr->n_children) return Series{};
     auto* col = new dftu_series();
     col->type = TypeId::Struct;
@@ -885,7 +883,7 @@ Series import_struct(const ArrowSchema* schema, const ArrowArray* arr,
             return Series{};
         }
         col->nested.push_back(
-            {std::shared_ptr<dftu_series>(child.release()),
+            {adopt_series(child.release()),
              schema->children[i]->name ? schema->children[i]->name : ""});
     }
     return Series{col};
@@ -895,7 +893,7 @@ Series import_struct(const ArrowSchema* schema, const ArrowArray* arr,
 // a SELECTION column (the widths the engine and exporter use); any other index
 // width is copied into int32 DICTIONARY codes.
 Series import_dict(const ArrowSchema* schema, const ArrowArray* arr,
-                   std::shared_ptr<void> owner) {
+                   dstd::SharedPtr<void> owner) {
     if (schema->dictionary == nullptr || arr->dictionary == nullptr)
         return Series{};
     ArrowSchemaView view;
@@ -920,33 +918,30 @@ Series import_dict(const ArrowSchema* schema, const ArrowArray* arr,
     adopt_type_from(*col, *values.handle());
     col->length = n;
     col->null_count = arr->null_count < 0 ? 0 : arr->null_count;
-    col->set_child(std::shared_ptr<dftu_series>(values.release()));
+    col->set_child(adopt_series(values.release()));
     import_validity(col, arr, owner);
 
     if (index_type == TypeId::Int64) {
         col->encoding = Encoding::Selection;
-        col->data = Buffer::wrap(
+        col->data = borrow_buffer(
             static_cast<std::uint8_t*>(const_cast<void*>(arr->buffers[1])) +
                 off * sizeof(std::int64_t),
-            static_cast<std::size_t>(n) * sizeof(std::int64_t),
-            [owner](void*) {});
+            static_cast<std::size_t>(n) * sizeof(std::int64_t), owner);
         return Series{col};
     }
     if (index_type == TypeId::Int32) {
         col->encoding = Encoding::Dictionary;
-        col->data = Buffer::wrap(
+        col->data = borrow_buffer(
             static_cast<std::uint8_t*>(const_cast<void*>(arr->buffers[1])) +
                 off * sizeof(std::int32_t),
-            static_cast<std::size_t>(n) * sizeof(std::int32_t),
-            [owner](void*) {});
+            static_cast<std::size_t>(n) * sizeof(std::int32_t), owner);
         return Series{col};
     }
 
     // Other index widths (int8/16, uint*): copy into int32 DICTIONARY codes.
     col->encoding = Encoding::Dictionary;
-    col->data =
-        Buffer::allocate(static_cast<std::size_t>(n) * sizeof(std::int32_t));
-    auto* codes = reinterpret_cast<std::int32_t*>(col->data->data());
+    col->data = new_buffer(static_cast<std::size_t>(n) * sizeof(std::int32_t));
+    auto* codes = reinterpret_cast<std::int32_t*>(writable(col->data));
     const std::size_t w = byte_width(index_type).value_or(0);
     const auto* raw =
         static_cast<const std::uint8_t*>(arr->buffers[1]) + off * w;
@@ -972,7 +967,7 @@ Series import_dict(const ArrowSchema* schema, const ArrowArray* arr,
 // LargeList/FixedSizeList/Struct/Map nest recursively, everything else (flat
 // fixed-width and variable-width) through import_flat.
 Series import_any(const ArrowSchema* schema, const ArrowArray* arr,
-                  std::shared_ptr<void> owner) {
+                  dstd::SharedPtr<void> owner) {
     if (schema->dictionary != nullptr) return import_dict(schema, arr, owner);
     ArrowSchemaView view;
     ArrowError error;
@@ -994,7 +989,7 @@ Series import_any(const ArrowSchema* schema, const ArrowArray* arr,
     }
     Series out = import_flat(schema, arr, owner);
     if (view.extension_name.data != nullptr &&
-        std::string_view(
+        dstd::StringView(
             view.extension_name.data,
             static_cast<std::size_t>(view.extension_name.size_bytes)) ==
             JSON_EXTENSION &&
@@ -1005,19 +1000,19 @@ Series import_any(const ArrowSchema* schema, const ArrowArray* arr,
 
 // Move `array` into a shared owner that runs its release once the last wrapped
 // buffer is dropped; the caller's array is marked released.
-std::shared_ptr<ArrowArray> adopt_array(ArrowArray* array) {
-    auto* moved = new ArrowArray(*array);
+dstd::SharedPtr<ArrowArray> adopt_array(ArrowArray* array) {
+    auto* moved = dstd::make_unique<ArrowArray>(*array).release();
     array->release = nullptr;
-    return std::shared_ptr<ArrowArray>(moved, [](ArrowArray* a) {
+    return dstd::adopt_shared_ptr(moved, [](ArrowArray* a) {
         if (a->release != nullptr) a->release(a);
-        delete a;
+        dstd::UniquePtr<ArrowArray>(a).reset();
     });
 }
 
 }  // namespace
 
 Series from_arrow(const ArrowSchema* schema, ArrowArray* array) {
-    std::shared_ptr<ArrowArray> owner = adopt_array(array);
+    dstd::SharedPtr<ArrowArray> owner = adopt_array(array);
     return import_any(schema, owner.get(), owner);
 }
 
@@ -1028,7 +1023,7 @@ DataFrame dataframe_from_arrow(const ArrowSchema* schema, ArrowArray* array) {
         return DataFrame{};
     if (view.type != NANOARROW_TYPE_STRUCT) return DataFrame{};
 
-    std::shared_ptr<ArrowArray> owner = adopt_array(array);
+    dstd::SharedPtr<ArrowArray> owner = adopt_array(array);
     DataFrame df;
     df.names.reserve(static_cast<std::size_t>(schema->n_children));
     df.columns.reserve(static_cast<std::size_t>(schema->n_children));

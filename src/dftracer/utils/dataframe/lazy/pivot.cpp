@@ -1,4 +1,11 @@
+// SPDX-License-Identifier: MIT
+#include <dftracer/utils/dataframe/internal/governor.h>
 #include <dftracer/utils/dataframe/lazy/cursors.h>
+#include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 
 namespace dftracer::utils::dataframe {
 
@@ -16,9 +23,9 @@ namespace {
 // reported via out_names().
 class PivotCursor : public Cursor {
    public:
-    PivotCursor(std::unique_ptr<Cursor> in, std::uint64_t budget,
-                std::vector<std::string> sch, std::string index, std::string on,
-                std::string values, std::string agg)
+    PivotCursor(dstd::UniquePtr<Cursor> in, std::uint64_t budget,
+                dstd::Vector<dstd::String> sch, dstd::String index,
+                dstd::String on, dstd::String values, dstd::String agg)
         : first_(std::move(in)),
           spool_(budget / share::SPOOL),
           budget_(budget),
@@ -28,8 +35,14 @@ class PivotCursor : public Cursor {
           values_(std::move(values)),
           agg_(std::move(agg)) {}
 
-    coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
-        if (!built_) co_await build(max_rows);
+    std::uint64_t resident_bytes() const override { return gov_.reserved(); }
+
+    coro::CoroTask<MorselResult> next(std::int64_t max_rows) override {
+        if (!built_) {
+            auto building = build(max_rows);
+            auto built = co_await std::move(building);
+            if (!built) co_return built.error();
+        }
         const std::int64_t C = static_cast<std::int64_t>(col_of_.size());
         // One output row costs C cells of up to 16 bytes (the source value and
         // its take index), so a batch holds at most a fraction of the budget.
@@ -44,18 +57,20 @@ class PivotCursor : public Cursor {
             // `m` is the next sorted morsel and `ahead_` the one after it, so
             // an index value that continues into the next morsel is held
             // back and every other one leaves with this batch.
-            std::optional<Morsel> m = std::move(ahead_);
+            dstd::Optional<Morsel> m = std::move(ahead_);
             ahead_.reset();
             if (!m && !eof_) {
-                m = co_await sorted_->next(pull);
+                auto task = sorted_->next(pull);
+                m = co_await std::move(task).or_fail();
                 if (!m) eof_ = true;
             }
             if (m && !eof_) {
-                ahead_ = co_await sorted_->next(pull);
+                auto task = sorted_->next(pull);
+                ahead_ = co_await std::move(task).or_fail();
                 if (!ahead_) eof_ = true;
             }
-            if (!m && pending_rows_ == 0) co_return std::nullopt;
-            std::vector<Series> idx, on, val;
+            if (!m && pending_rows_ == 0) co_return MorselResult(dstd::nullopt);
+            dstd::Vector<Series> idx, on, val;
             if (pending_rows_ > 0) {
                 idx.push_back(pending_[0].share());
                 on.push_back(pending_[1].share());
@@ -66,32 +81,36 @@ class PivotCursor : public Cursor {
                 on.push_back(m->columns[1].share());
                 val.push_back(m->columns[2].share());
             }
-            Series ic = (idx.size() == 1 ? idx[0].share()
-                                         : concat_columns(column_ptrs(idx)))
-                            .materialize();
-            Series oc = (on.size() == 1 ? on[0].share()
-                                        : concat_columns(column_ptrs(on)))
-                            .materialize();
-            Series vc = (val.size() == 1 ? val[0].share()
-                                         : concat_columns(column_ptrs(val)))
-                            .materialize();
+            auto idx_joined = joined(idx);
+            if (!idx_joined) co_return idx_joined.error();
+            auto on_joined = joined(on);
+            if (!on_joined) co_return on_joined.error();
+            auto val_joined = joined(val);
+            if (!val_joined) co_return val_joined.error();
+            Series ic = std::move(*idx_joined);
+            Series oc = std::move(*on_joined);
+            Series vc = std::move(*val_joined);
             const std::int64_t n = ic.length();
             std::int64_t done = n;
             if (ahead_) {
-                std::vector<Series> one;
+                KeyRefusal refusal;
+                dstd::Vector<Series> one;
                 one.push_back(ic.share());
-                const std::string last = row_key(one, n - 1);
-                std::vector<Series> next_idx;
+                const dstd::String last = row_key(one, n - 1, refusal);
+                dstd::Vector<Series> next_idx;
                 next_idx.push_back(ahead_->columns[0].share());
-                if (row_key(next_idx, 0) == last) {
+                if (row_key(next_idx, 0, refusal) == last) {
                     done = n - 1;
-                    while (done > 0 && row_key(one, done - 1) == last) --done;
+                    while (done > 0 && !refusal.refused() &&
+                           row_key(one, done - 1, refusal) == last)
+                        --done;
                 }
+                if (refusal.refused()) co_return refusal.error();
             }
             const std::int64_t rest = n - done;
             pending_.clear();
             if (rest > 0) {
-                std::vector<std::int64_t> tail(static_cast<std::size_t>(rest));
+                dstd::Vector<std::int64_t> tail(static_cast<std::size_t>(rest));
                 std::iota(tail.begin(), tail.end(), done);
                 pending_.push_back(ic.take(tail));
                 pending_.push_back(oc.take(tail));
@@ -103,33 +122,51 @@ class PivotCursor : public Cursor {
         }
     }
 
-    std::optional<std::vector<std::string>> out_names() const override {
+    dstd::Optional<dstd::Vector<dstd::String>> out_names() const override {
         return produced_;
     }
 
    private:
-    int idx_of(const std::string& name) const {
+    // The cells of `parts` as one materialized column.
+    static dstd::Result<Series> joined(const dstd::Vector<Series>& parts) {
+        if (parts.size() == 1) return parts[0].materialize();
+        auto whole = concat_columns(column_ptrs(parts));
+        if (!whole) return whole.error();
+        return whole->materialize();
+    }
+
+    int idx_of(const dstd::String& name) const {
         auto it = std::find(sch_.begin(), sch_.end(), name);
         return it == sch_.end() ? -1 : static_cast<int>(it - sch_.begin());
     }
 
-    coro::CoroTask<void> build(std::int64_t max_rows) {
-        const int ii = require_col(sch_, index_, "pivot");
-        const int ci = require_col(sch_, on_, "pivot");
-        const int vi = require_col(sch_, values_, "pivot");
+    coro::CoroTask<dstd::Result<void>> build(std::int64_t max_rows) {
+        auto index_at = require_col(sch_, index_, "pivot");
+        if (!index_at) co_return index_at.error();
+        auto on_at = require_col(sch_, on_, "pivot");
+        if (!on_at) co_return on_at.error();
+        auto values_at = require_col(sch_, values_, "pivot");
+        if (!values_at) co_return values_at.error();
+        const int ii = *index_at;
+        const int ci = *on_at;
+        const int vi = *values_at;
 
-        ankerl::unordered_dense::set<std::string> seen;
-        std::vector<Series> distinct;
-        while (auto m = co_await first_->next(max_rows)) {
+        dstd::HashSet<dstd::String> seen;
+        dstd::Vector<Series> distinct;
+        for (;;) {
+            auto task = first_->next(max_rows);
+            auto m = co_await std::move(task).or_fail();
+            if (!m) break;
             const Series& ic = m->columns[static_cast<std::size_t>(ii)];
             const Series& oc = m->columns[static_cast<std::size_t>(ci)];
             const Series& vc = m->columns[static_cast<std::size_t>(vi)];
-            distinct_into(oc, seen, distinct);
-            std::vector<std::int64_t> keep;
+            auto distinct_ok = distinct_into(oc, seen, distinct);
+            if (!distinct_ok) co_return distinct_ok;
+            dstd::Vector<std::int64_t> keep;
             keep.reserve(static_cast<std::size_t>(m->rows));
             for (std::int64_t i = 0; i < m->rows; ++i)
                 if (!ic.is_null(i)) keep.push_back(i);
-            std::vector<Series> cols;
+            dstd::Vector<Series> cols;
             if (static_cast<std::int64_t>(keep.size()) == m->rows) {
                 cols.push_back(ic.share());
                 cols.push_back(oc.share());
@@ -139,51 +176,72 @@ class PivotCursor : public Cursor {
                 cols.push_back(oc.take(keep));
                 cols.push_back(vc.take(keep));
             }
-            spool_.add(std::move(cols), static_cast<std::int64_t>(keep.size()));
+            auto added = spool_.add(std::move(cols),
+                                    static_cast<std::int64_t>(keep.size()));
+            if (!added) co_return added;
+            if (has_cap(budget_) && gov_.check(spool_.memory_bytes()) != 0) {
+                auto spilled = spool_.spill();
+                if (!spilled) co_return spilled.error();
+                gov_.spilled(spool_.memory_bytes());
+            }
         }
         first_.reset();
 
-        uniq_col_ =
-            distinct.empty()
-                ? Series{}
-                : concat_columns(column_ptrs(distinct)).unique().materialize();
+        if (!distinct.empty()) {
+            auto all = concat_columns(column_ptrs(distinct));
+            if (!all) co_return all.error();
+            uniq_col_ = all->unique().materialize();
+        }
         const std::int64_t C = uniq_col_.length();
-        std::vector<Series> one;
+        dstd::Vector<Series> one;
         one.push_back(uniq_col_.share());
+        KeyRefusal refusal;
         for (std::int64_t c = 0; c < C; ++c)
-            col_of_.emplace(row_key(one, c), c);
+            col_of_.emplace(row_key(one, c, refusal), c);
+        if (refusal.refused()) co_return refusal.error();
         produced_.push_back(index_);
         for (std::int64_t c = 0; c < C; ++c)
             produced_.push_back(cell_to_string(uniq_col_, c));
 
-        const std::string i_name = "__dftu_pivot_index__";
-        const std::string o_name = "__dftu_pivot_on__";
-        const std::string v_name = "__dftu_pivot_value__";
-        auto grouped = make_group_by(
-            spool_.reader(), std::vector<std::string>{i_name, o_name, v_name},
-            std::vector<std::string>{i_name, o_name},
-            std::vector<GroupAgg>{GroupAgg{agg_from_string(agg_), v_name, "v"}},
-            budget_ / share::SPOOL);
-        sorted_ = make_sort_merge(
-            std::move(grouped), std::vector<std::string>{i_name, o_name, "v"},
-            std::vector<std::string>{i_name}, std::vector<bool>{false},
-            budget_ / share::SPOOL);
+        const dstd::String i_name = "__dftu_pivot_index__";
+        const dstd::String o_name = "__dftu_pivot_on__";
+        const dstd::String v_name = "__dftu_pivot_value__";
+        auto reader = spool_.reader();
+        if (!reader) co_return reader.error();
+        auto agg = agg_from_string(agg_);
+        if (!agg) co_return agg.error();
+        auto grouped =
+            make_group_by(std::move(*reader),
+                          dstd::Vector<dstd::String>{i_name, o_name, v_name},
+                          dstd::Vector<dstd::String>{i_name, o_name},
+                          dstd::Vector<GroupAgg>{GroupAgg{*agg, v_name, "v"}},
+                          budget_ / share::SPOOL);
+        if (!grouped) co_return grouped.error();
+        auto sorted =
+            make_sort_merge(std::move(*grouped),
+                            dstd::Vector<dstd::String>{i_name, o_name, "v"},
+                            dstd::Vector<dstd::String>{i_name},
+                            dstd::Vector<bool>{false}, budget_ / share::SPOOL);
+        if (!sorted) co_return sorted.error();
+        sorted_ = std::move(*sorted);
         built_ = true;
+        co_return dstd::Result<void>{};
     }
 
     // `rows` leading rows of the three sorted cell columns hold whole index
     // values; each distinct index value becomes one output row.
-    Morsel widen(const Series& ic, const Series& oc, const Series& vc,
-                 std::int64_t rows) const {
+    MorselResult widen(const Series& ic, const Series& oc, const Series& vc,
+                       std::int64_t rows) const {
+        KeyRefusal refusal;
         const std::int64_t C = static_cast<std::int64_t>(col_of_.size());
-        std::vector<Series> ione, cone;
+        dstd::Vector<Series> ione, cone;
         ione.push_back(ic.share());
         cone.push_back(oc.share());
-        std::vector<std::int64_t> first_row;
-        std::vector<std::int64_t> cell_src;
-        std::string prev;
+        dstd::Vector<std::int64_t> first_row;
+        dstd::Vector<std::int64_t> cell_src;
+        dstd::String prev;
         for (std::int64_t i = 0; i < rows; ++i) {
-            std::string key = row_key(ione, i);
+            dstd::String key = row_key(ione, i, refusal);
             if (first_row.empty() || key != prev) {
                 first_row.push_back(i);
                 cell_src.resize(cell_src.size() + static_cast<std::size_t>(C),
@@ -191,16 +249,17 @@ class PivotCursor : public Cursor {
                 prev = std::move(key);
             }
             if (oc.is_null(i)) continue;
-            auto it = col_of_.find(row_key(cone, i));
+            auto it = col_of_.find(row_key(cone, i, refusal));
             if (it != col_of_.end())
                 cell_src[(first_row.size() - 1) * static_cast<std::size_t>(C) +
                          static_cast<std::size_t>(it->second)] = i;
         }
+        if (refusal.refused()) return refusal.error();
         const std::size_t R = first_row.size();
         DataFrame out;
         out.names.push_back(index_);
         out.columns.push_back(ic.take(first_row).materialize());
-        std::vector<std::int64_t> ti(R);
+        dstd::Vector<std::int64_t> ti(R);
         for (std::int64_t c = 0; c < C; ++c) {
             for (std::size_t r = 0; r < R; ++r)
                 ti[r] = cell_src[r * static_cast<std::size_t>(C) +
@@ -208,49 +267,52 @@ class PivotCursor : public Cursor {
             out.names.push_back(produced_[static_cast<std::size_t>(c) + 1]);
             out.columns.push_back(vc.take(ti).materialize());
         }
-        return morsel_of(std::move(out));
+        return MorselResult(morsel_of(std::move(out)));
     }
 
     // Append the first-occurrence non-null cells of `col` to `chunks`.
-    static void distinct_into(const Series& col,
-                              ankerl::unordered_dense::set<std::string>& seen,
-                              std::vector<Series>& chunks) {
-        std::vector<Series> one;
+    static dstd::Result<void> distinct_into(const Series& col,
+                                            dstd::HashSet<dstd::String>& seen,
+                                            dstd::Vector<Series>& chunks) {
+        dstd::Vector<Series> one;
         one.push_back(col.share());
-        std::vector<std::int64_t> keep;
+        dstd::Vector<std::int64_t> keep;
+        KeyRefusal refusal;
         for (std::int64_t i = 0; i < col.length(); ++i)
-            if (!col.is_null(i) && seen.insert(row_key(one, i)).second)
+            if (!col.is_null(i) && seen.insert(row_key(one, i, refusal)).second)
                 keep.push_back(i);
+        if (refusal.refused()) return refusal.error();
         if (!keep.empty()) chunks.push_back(col.take(keep));
+        return {};
     }
 
-    std::unique_ptr<Cursor> first_, sorted_;
+    Governor gov_{"pivot"};
+    dstd::UniquePtr<Cursor> first_, sorted_;
     spill::Spool spool_;
     std::uint64_t budget_;
-    std::vector<std::string> sch_;
-    std::string index_, on_, values_, agg_;
+    dstd::Vector<dstd::String> sch_;
+    dstd::String index_, on_, values_, agg_;
     bool built_ = false;
     bool eof_ = false;
     Series uniq_col_;
-    ankerl::unordered_dense::map<std::string, std::int64_t> col_of_;
-    std::vector<Series> pending_;
+    dstd::HashMap<dstd::String, std::int64_t> col_of_;
+    dstd::Vector<Series> pending_;
     std::int64_t pending_rows_ = 0;
-    std::optional<Morsel> ahead_;
-    std::vector<std::string> produced_;
+    dstd::Optional<Morsel> ahead_;
+    dstd::Vector<dstd::String> produced_;
 };
 
 }  // namespace
 
 namespace lazy_internal {
 
-std::unique_ptr<Cursor> make_pivot(std::unique_ptr<Cursor> in,
-                                   std::uint64_t budget,
-                                   std::vector<std::string> sch,
-                                   std::string index, std::string on,
-                                   std::string values, std::string agg) {
-    return std::make_unique<PivotCursor>(std::move(in), budget, std::move(sch),
-                                         std::move(index), std::move(on),
-                                         std::move(values), std::move(agg));
+CursorResult make_pivot(dstd::UniquePtr<Cursor> in, std::uint64_t budget,
+                        dstd::Vector<dstd::String> sch, dstd::String index,
+                        dstd::String on, dstd::String values,
+                        dstd::String agg) {
+    return dstd::make_unique<PivotCursor>(std::move(in), budget, std::move(sch),
+                                          std::move(index), std::move(on),
+                                          std::move(values), std::move(agg));
 }
 
 }  // namespace lazy_internal

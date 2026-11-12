@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 /* Example producer plugin: a ZERO-KEY dft.ext.agg accumulator, the AggState
  * form of a scalar handle. Each batch arrives as a column dataframe and is
  * folded whole into one accumulator named com.example.dur_stats, computing the
@@ -61,7 +62,8 @@ static const char* const* provides(void* self) {
 
 static dftu_plugin g_plugin;
 
-DFTU_PLUGIN_EXPORT dftu_plugin* dftracer_plugin(dftu_plugin_host* h, const dftu_value* config) {
+DFTU_PLUGIN_EXPORT dftu_plugin* dftracer_plugin(dftu_plugin_host* h,
+                                                const dftu_value* config) {
     (void)h;
     (void)config;
     g_plugin.abi_version = DFTRACER_UTILS_PLUGIN_ABI_VERSION;

@@ -1,16 +1,20 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_DUQL_QUERY_H
 #define DFTRACER_UTILS_DUQL_QUERY_H
 
-#include <dftracer/utils/core/common/transparent_string_hash.h>
-#include <dftracer/utils/duql/ast.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/transparent_string_hash.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/builder.h>
-#include <dftracer/utils/duql/evaluator.h>
-#include <dftracer/utils/duql/fields.h>
-#include <dftracer/utils/duql/parser.h>
+#include <dftracer/utils/duql/detail/ast.h>
+#include <dftracer/utils/duql/detail/query_access.h>
+#include <dftracer/utils/duql/error.h>
+#include <dftracer/utils/duql/value_map.h>
 
-#include <optional>
-#include <string>
-#include <string_view>
+namespace dftracer::utils::json {
+class Value;
+}
 
 namespace dftracer::utils::duql {
 
@@ -18,67 +22,75 @@ namespace dftracer::utils::duql {
 class Query {
    public:
     /// Parse a query DSL string. Returns error on invalid syntax.
-    static dftracer::utils::expected<Query, DuqlError> from_string(
-        std::string_view input);
-    /// A query over a compiled filter; its source is the filter's text.
-    static Query from_node(QueryNodePtr root);
+    static dftracer::utils::dstd::Expected<Query, DuqlError> from_string(
+        dstd::StringView input);
 
     Query(const Query& other);
     Query& operator=(const Query& other);
     Query(Query&&) = default;
     Query& operator=(Query&&) = default;
 
-    /// Whether the filter keeps `event`: TRUE under three-valued logic, so a
-    /// leaf on a missing or null field, or across types, does not pass.
-    /// With `args_fallback`, a bare name the event lacks reads the field of
-    /// that name under `args`.
-    bool evaluate(const json::JsonValue& event,
-                  bool args_fallback = true) const;
-    /// As above, on a flattened record (a key absent from `fields` is
-    /// missing).
+    /// Whether the filter keeps the flattened record `fields`: TRUE under
+    /// three-valued logic, so a leaf on a missing or null field, or across
+    /// types, does not pass. A key absent from `fields` is missing.
     bool evaluate(const ValueMap& fields) const;
-    /// Access the root AST node.
-    const QueryNode& root() const { return *root_; }
+    /// Whether the filter keeps the raw JSON event `event`, the value that
+    /// @ref json::Document::parse returned, with the same answer as the
+    /// engine: three-valued logic as in @ref evaluate, and a bare name the
+    /// event lacks reads the field of that name under `args`. A line that is
+    /// not a JSON object keeps nothing. Use it where there is no index: a live
+    /// trace, a socket, a plugin, a small file.
+    ///
+    /// It reads from the parse that @ref json::Document::parse made and
+    /// parses nothing again: only the fields the filter names are read, each
+    /// by a fresh lookup from the start of the event. A root `event` stays
+    /// readable afterward, but child values taken from it earlier are
+    /// invalid, as after a new parse. A value taken out of an event is
+    /// evaluated from its own text, which a parser of its own reads once more.
+    /// For files on disk View is the fast path.
+    bool matches(const json::Value& event) const;
     /// Original query source string.
-    const std::string& source() const { return source_; }
+    const dstd::String& source() const { return source_; }
     /// Serialize AST back to query DSL string.
-    std::string to_string() const;
+    dstd::String to_string() const;
     /// Fields referenced by this query, precomputed at construction.
-    const dftracer::utils::StringViewSet& fields() const { return fields_; }
-    bool references(std::string_view field) const {
+    const dftracer::utils::dstd::StringViewSet& fields() const {
+        return fields_;
+    }
+    bool references(dstd::StringView field) const {
         return fields_.count(field) > 0;
     }
     /// The paths used as any(path), sorted.
-    const std::vector<std::string>& any_paths() const { return any_paths_; }
-    /// Whether some leaf is an expression (ExprLeaf), which may read a whole
-    /// array or object.
+    const dstd::Vector<dstd::String>& any_paths() const { return any_paths_; }
+    /// Whether some leaf is an expression (arithmetic, a function, field
+    /// against field), which may read a whole array or object.
     bool has_expressions() const { return has_expressions_; }
 
    private:
-    Query(QueryNodePtr root, std::string source)
-        : root_(std::move(root)),
-          source_(std::move(source)),
-          fields_(collect_fields(*root_)),
-          any_paths_(collect_any_paths(*root_)),
-          has_expressions_(has_expression_leaf(*root_)) {}
+    friend struct detail::QueryAccess;
 
-    QueryNodePtr root_;
-    std::string source_;
-    dftracer::utils::StringViewSet fields_;
-    std::vector<std::string> any_paths_;
+    Query(detail::QueryNodePtr root, dstd::String source);
+
+    detail::QueryNodePtr root_;
+    dstd::String source_;
+    dftracer::utils::dstd::StringViewSet fields_;
+    dstd::Vector<dstd::String> any_paths_;
     bool has_expressions_ = false;
 };
+
+namespace detail {
+
+inline const QueryNode& QueryAccess::root(const Query& q) { return *q.root_; }
+
+}  // namespace detail
 
 /// `a and b`, sharing the expression terms of both.
 Query conjoin(const Query& a, const Query& b);
 
 inline auto Expr::build() const { return Query::from_string(to_string()); }
 
-/// Parse a query string, throwing DuqlParseError on failure.
-Query parse_or_throw(std::string_view input);
-
-/// Parse a query string into std::optional (nullopt on failure).
-std::optional<Query> try_parse(std::string_view input);
+/// Parse a query string into dstd::Optional (nullopt on failure).
+dstd::Optional<Query> try_parse(dstd::StringView input);
 
 }  // namespace dftracer::utils::duql
 

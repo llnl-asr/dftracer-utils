@@ -1,18 +1,16 @@
+// SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/coro/channel.h>
-#include <dftracer/utils/core/coro/when_all.h>
-#include <dftracer/utils/core/coro/yield.h>
-#include <dftracer/utils/core/pipeline/executor.h>
-#include <dftracer/utils/core/pipeline/scheduler.h>
-#include <dftracer/utils/core/pipeline/thread_pool_executor.h>
-#include <dftracer/utils/core/runtime.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
-#include <dftracer/utils/core/tasks/task.h>
+#include <dftracer/utils/coro/channel.h>
+#include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/coro/when_all.h>
+#include <dftracer/utils/coro/yield.h>
+#include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <atomic>
 #include <chrono>
-#include <vector>
 
 using namespace dftracer::utils;
 
@@ -21,26 +19,21 @@ using namespace dftracer::utils;
 // ============================================================================
 
 TEST_CASE("Yield - Executor::current() is nullptr outside worker") {
-    CHECK(Executor::current() == nullptr);
+    CHECK(coro::Executor::current() == nullptr);
 }
 
 TEST_CASE("Yield - Executor::current() is set inside worker task") {
-    ThreadPoolExecutor executor(ExecutorConfig{.num_threads = 1});
-    Scheduler scheduler(&executor);
+    Runtime rt(1);
 
-    std::atomic<Executor*> observed{nullptr};
+    std::atomic<coro::Executor*> observed{nullptr};
 
-    auto task = make_task(
-        [&](CoroScope&) -> coro::CoroTask<void> {
-            observed.store(Executor::current());
-            co_return;
-        },
-        "CheckCurrent");
+    auto body = [&]() -> coro::CoroTask<void> {
+        observed.store(coro::Executor::current());
+        co_return;
+    };
 
-    scheduler.schedule(task);
-    task->wait();
-    CHECK(observed.load() == &executor);
-    executor.shutdown();
+    dftu_utils_test::ok(rt.block_on(body()));
+    CHECK(observed.load() == rt.executor());
 }
 
 // ============================================================================
@@ -48,25 +41,20 @@ TEST_CASE("Yield - Executor::current() is set inside worker task") {
 // ============================================================================
 
 TEST_CASE("Yield - maybe_yield() does not hang with executor") {
-    ThreadPoolExecutor executor(ExecutorConfig{.num_threads = 2});
-    Scheduler scheduler(&executor);
+    Runtime rt(2);
 
     std::atomic<int> counter{0};
 
-    auto task = make_task(
-        [&](CoroScope&) -> coro::CoroTask<void> {
-            for (int i = 0; i < 100; ++i) {
-                counter.fetch_add(1);
-                co_await coro::maybe_yield();
-            }
-            co_return;
-        },
-        "MaybeYieldLoop");
+    auto body = [&]() -> coro::CoroTask<void> {
+        for (int i = 0; i < 100; ++i) {
+            counter.fetch_add(1);
+            co_await coro::maybe_yield();
+        }
+        co_return;
+    };
 
-    scheduler.schedule(task);
-    task->wait();
+    dftu_utils_test::ok(rt.block_on(body()));
     CHECK(counter.load() == 100);
-    executor.shutdown();
 }
 
 // ============================================================================
@@ -74,25 +62,20 @@ TEST_CASE("Yield - maybe_yield() does not hang with executor") {
 // ============================================================================
 
 TEST_CASE("Yield - yield() does not hang with executor") {
-    ThreadPoolExecutor executor(ExecutorConfig{.num_threads = 2});
-    Scheduler scheduler(&executor);
+    Runtime rt(2);
 
     std::atomic<int> counter{0};
 
-    auto task = make_task(
-        [&](CoroScope&) -> coro::CoroTask<void> {
-            for (int i = 0; i < 10; ++i) {
-                counter.fetch_add(1);
-                co_await coro::yield();
-            }
-            co_return;
-        },
-        "YieldLoop");
+    auto body = [&]() -> coro::CoroTask<void> {
+        for (int i = 0; i < 10; ++i) {
+            counter.fetch_add(1);
+            co_await coro::yield();
+        }
+        co_return;
+    };
 
-    scheduler.schedule(task);
-    task->wait();
+    dftu_utils_test::ok(rt.block_on(body()));
     CHECK(counter.load() == 10);
-    executor.shutdown();
 }
 
 // ============================================================================
@@ -118,42 +101,30 @@ TEST_CASE("Yield - timeslice duration 0 disables yielding") {
 // ============================================================================
 
 TEST_CASE("Yield - Multiple coroutines yielding concurrently") {
-    ThreadPoolExecutor executor(ExecutorConfig{.num_threads = 4});
-    Scheduler scheduler(&executor);
+    Runtime rt(4);
 
     constexpr int NUM_TASKS = 20;
     constexpr int ITERS_PER_TASK = 50;
     std::atomic<int> total{0};
 
-    auto task = make_task(
-        [&](CoroScope& ctx) -> coro::CoroTask<void> {
-            co_await ctx.coro_scope(
-                [&](CoroScope& scope) -> coro::CoroTask<void> {
-                    for (int t = 0; t < NUM_TASKS; ++t) {
-                        scope.spawn(
-                            [&total](CoroScope&) -> coro::CoroTask<void> {
-                                for (int i = 0; i < ITERS_PER_TASK; ++i) {
-                                    total.fetch_add(1);
-                                    co_await coro::maybe_yield();
-                                }
-                                co_return;
-                            });
+    dftu_utils_test::ok(rt.block_on(
+        coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
+            for (int t = 0; t < NUM_TASKS; ++t) {
+                scope.spawn([&total]() -> coro::CoroTask<void> {
+                    for (int i = 0; i < ITERS_PER_TASK; ++i) {
+                        total.fetch_add(1);
+                        co_await coro::maybe_yield();
                     }
                     co_return;
                 });
+            }
             co_return;
-        },
-        "ConcurrentYield");
-
-    scheduler.schedule(task);
-    task->wait();
+        })));
     CHECK(total.load() == NUM_TASKS * ITERS_PER_TASK);
-    executor.shutdown();
 }
 
 TEST_CASE("Yield - Forced yield re-enqueues on executor") {
-    ThreadPoolExecutor executor(ExecutorConfig{.num_threads = 2});
-    Scheduler scheduler(&executor);
+    Runtime rt(2);
 
     // Two tasks that yield() back and forth.  Each increments a counter.
     // If yield() didn't re-enqueue, one would starve.
@@ -161,63 +132,54 @@ TEST_CASE("Yield - Forced yield re-enqueues on executor") {
     std::atomic<int> a_count{0};
     std::atomic<int> b_count{0};
 
-    auto task = make_task(
-        [&](CoroScope& ctx) -> coro::CoroTask<void> {
-            co_await ctx.coro_scope(
-                [&](CoroScope& scope) -> coro::CoroTask<void> {
-                    scope.spawn([&a_count](CoroScope&) -> coro::CoroTask<void> {
-                        for (int i = 0; i < ITERS; ++i) {
-                            a_count.fetch_add(1);
-                            co_await coro::yield();
-                        }
-                        co_return;
-                    });
-                    scope.spawn([&b_count](CoroScope&) -> coro::CoroTask<void> {
-                        for (int i = 0; i < ITERS; ++i) {
-                            b_count.fetch_add(1);
-                            co_await coro::yield();
-                        }
-                        co_return;
-                    });
-                    co_return;
-                });
+    dftu_utils_test::ok(rt.block_on(
+        coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
+            scope.spawn([&a_count]() -> coro::CoroTask<void> {
+                for (int i = 0; i < ITERS; ++i) {
+                    a_count.fetch_add(1);
+                    co_await coro::yield();
+                }
+                co_return;
+            });
+            scope.spawn([&b_count]() -> coro::CoroTask<void> {
+                for (int i = 0; i < ITERS; ++i) {
+                    b_count.fetch_add(1);
+                    co_await coro::yield();
+                }
+                co_return;
+            });
             co_return;
-        },
-        "ForcedYieldPingPong");
-
-    scheduler.schedule(task);
-    task->wait();
+        })));
     CHECK(a_count.load() == ITERS);
     CHECK(b_count.load() == ITERS);
-    executor.shutdown();
 }
 
 TEST_CASE("CoroTask::get on a pool worker sees the finished task's result") {
     // The inner task finishes on whichever worker completes the last part of
     // its when_all, so the worker blocked in get() learns of it only through
     // the task's own completion signal.
-    auto part = [](int base) -> coro::CoroTask<std::vector<int>> {
-        std::vector<int> v;
+    auto part = [](int base) -> coro::CoroTask<dstd::Vector<int>> {
+        dstd::Vector<int> v;
         for (int i = 0; i < 512; ++i) v.push_back(base + i);
         co_await coro::yield();
         co_return v;
     };
-    auto inner = [part]() -> coro::CoroTask<std::vector<int>> {
-        std::vector<coro::CoroTask<std::vector<int>>> parts;
+    auto inner = [part]() -> coro::CoroTask<dstd::Vector<int>> {
+        dstd::Vector<coro::CoroTask<dstd::Vector<int>>> parts;
         for (int k = 0; k < 8; ++k) parts.push_back(part(k * 512));
-        std::vector<std::vector<int>> got =
-            co_await coro::when_all(std::move(parts));
-        std::vector<int> all;
+        auto got = co_await coro::when_all(std::move(parts));
+        dstd::Vector<int> all;
         for (auto& g : got) all.insert(all.end(), g.begin(), g.end());
         co_return all;
     };
     auto outer = [inner]() -> coro::CoroTask<long long> {
-        std::vector<int> v = inner().get();
+        dstd::Vector<int> v = dftu_utils_test::ok(inner().get());
         long long sum = 0;
         for (int x : v) sum += x;
         co_return sum;
     };
     for (int round = 0; round < 64; ++round)
-        CHECK(dftracer::utils::default_runtime().submit(outer()).get() ==
+        CHECK(dftu_utils_test::ok(
+                  dftracer::utils::default_runtime().submit(outer()).get()) ==
               4096LL * 4095 / 2);
 }

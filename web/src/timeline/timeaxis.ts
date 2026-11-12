@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Timelapse axis: a monotonic piecewise-linear map from real microseconds to
 // the compressed "display" microseconds the timeline lays out in. Active spans
 // keep slope 1; each between-run idle gap collapses to a fixed break width so

@@ -1,39 +1,33 @@
+// SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/coro/task.h>
-#include <dftracer/utils/core/runtime.h>
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/fmt.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <cstdint>
-#include <memory>
-#include <optional>
 #include <stdexcept>
-#include <string>
 #include <utility>
-#include <vector>
 
-using dftracer::utils::coro::CoroTask;
-using dftracer::utils::dataframe::ConcatHow;
-using dftracer::utils::dataframe::ConcatPlan;
-using dftracer::utils::dataframe::Cursor;
-using dftracer::utils::dataframe::DataFrame;
-using dftracer::utils::dataframe::Encoding;
-using dftracer::utils::dataframe::Field;
-using dftracer::utils::dataframe::LazyFrame;
-using dftracer::utils::dataframe::Morsel;
-using dftracer::utils::dataframe::Schema;
-using dftracer::utils::dataframe::Series;
-using dftracer::utils::dataframe::Source;
-using dftracer::utils::dataframe::TypeId;
+using namespace dftracer::utils;
+using namespace dftracer::utils::dataframe;
 
 namespace {
 
 constexpr int PARTS = 60;
 
-std::vector<DataFrame> shared(const std::vector<DataFrame>& parts) {
-    std::vector<DataFrame> out;
+dstd::Vector<DataFrame> shared(const dstd::Vector<DataFrame>& parts) {
+    dstd::Vector<DataFrame> out;
     for (const DataFrame& p : parts) {
         DataFrame df;
         df.names = p.names;
@@ -45,11 +39,11 @@ std::vector<DataFrame> shared(const std::vector<DataFrame>& parts) {
 
 class PartsCursor : public Cursor {
    public:
-    explicit PartsCursor(std::shared_ptr<const std::vector<DataFrame>> parts)
+    explicit PartsCursor(dstd::SharedPtr<const dstd::Vector<DataFrame>> parts)
         : parts_(std::move(parts)) {}
 
-    CoroTask<std::optional<Morsel>> next(std::int64_t) override {
-        if (next_ >= parts_->size()) co_return std::nullopt;
+    coro::CoroTask<MorselResult> next(std::int64_t) override {
+        if (next_ >= parts_->size()) co_return MorselResult(dstd::nullopt);
         const DataFrame& df = (*parts_)[next_++];
         Morsel m;
         m.rows = df.num_rows();
@@ -59,20 +53,21 @@ class PartsCursor : public Cursor {
             m.columns.push_back(df.columns[c].share());
             dyn.name_ids.push_back(intern_->get_or_insert(df.names[c]));
         }
-        co_return m;
+        co_return MorselResult(std::move(m));
     }
 
    private:
-    std::shared_ptr<const std::vector<DataFrame>> parts_;
-    std::shared_ptr<dftracer::utils::StringIntern> intern_ =
-        std::make_shared<dftracer::utils::StringIntern>();
+    dstd::SharedPtr<const dstd::Vector<DataFrame>> parts_;
+    dstd::SharedPtr<dstd::StringIntern> intern_ =
+        dstd::make_shared<dstd::StringIntern>();
     std::size_t next_ = 0;
 };
 
 class PartsSource : public Source {
    public:
-    PartsSource(const std::vector<DataFrame>& parts, std::size_t leading)
-        : parts_(std::make_shared<const std::vector<DataFrame>>(shared(parts))),
+    PartsSource(const dstd::Vector<DataFrame>& parts, std::size_t leading)
+        : parts_(
+              dstd::make_shared<const dstd::Vector<DataFrame>>(shared(parts))),
           leading_(leading) {}
 
     Schema schema() const override {
@@ -86,31 +81,36 @@ class PartsSource : public Source {
         return s;
     }
 
-    dftracer::utils::dataframe::ScanResult scan(
+    dstd::Result<dftracer::utils::dataframe::ScanResult> scan(
         const dftracer::utils::dataframe::ScanRequest& req) const override {
         dftracer::utils::dataframe::ScanResult r;
-        r.cursor = std::make_unique<PartsCursor>(parts_);
+        r.cursor = dstd::make_unique<PartsCursor>(parts_);
         r.filters.assign(req.filters.size(),
                          dftracer::utils::dataframe::Pushed::No);
         return r;
     }
 
    private:
-    std::shared_ptr<const std::vector<DataFrame>> parts_;
+    dstd::SharedPtr<const dstd::Vector<DataFrame>> parts_;
     std::size_t leading_;
 };
 
-DataFrame collect(const std::vector<DataFrame>& parts, std::size_t leading) {
-    auto source = std::make_shared<PartsSource>(parts, leading);
+dstd::Result<DataFrame> collect_result(const dstd::Vector<DataFrame>& parts,
+                                       std::size_t leading) {
+    auto source = dstd::make_shared<PartsSource>(parts, leading);
     return dftracer::utils::default_runtime()
         .submit(LazyFrame::scan(source).collect())
         .get();
 }
 
-DataFrame serial(const std::vector<DataFrame>& parts, ConcatHow how) {
-    std::vector<const DataFrame*> ptrs;
+DataFrame collect(const dstd::Vector<DataFrame>& parts, std::size_t leading) {
+    return dftu_utils_test::ok(collect_result(parts, leading));
+}
+
+DataFrame serial(const dstd::Vector<DataFrame>& parts, ConcatHow how) {
+    dstd::Vector<const DataFrame*> ptrs;
     for (const DataFrame& p : parts) ptrs.push_back(&p);
-    return dftracer::utils::dataframe::concat(ptrs, how);
+    return dftu_utils_test::ok(dftracer::utils::dataframe::concat(ptrs, how));
 }
 
 void check_equal(const DataFrame& got, const DataFrame& want) {
@@ -140,28 +140,28 @@ void check_equal(const DataFrame& got, const DataFrame& want) {
 }
 
 Series ints(std::int64_t base, std::int64_t n) {
-    std::vector<std::int64_t> v(static_cast<std::size_t>(n));
+    dstd::Vector<std::int64_t> v(static_cast<std::size_t>(n));
     for (std::int64_t i = 0; i < n; ++i)
         v[static_cast<std::size_t>(i)] = base + i;
     return Series::flat_i64(v.data(), n);
 }
 
 Series doubles(std::int64_t base, std::int64_t n) {
-    std::vector<double> v(static_cast<std::size_t>(n));
+    dstd::Vector<double> v(static_cast<std::size_t>(n));
     for (std::int64_t i = 0; i < n; ++i)
         v[static_cast<std::size_t>(i)] = static_cast<double>(base + i) / 4;
     return Series::flat_f64(v.data(), n);
 }
 
 Series words(std::int64_t base, std::int64_t n) {
-    std::vector<std::string> v;
+    dstd::Vector<dstd::String> v;
     for (std::int64_t i = 0; i < n; ++i)
-        v.push_back("w" + std::to_string(base + i));
+        v.push_back(dstd::fmt<"w{}">(base + i));
     return Series::strings(v);
 }
 
-std::vector<DataFrame> equal_parts() {
-    std::vector<DataFrame> parts;
+dstd::Vector<DataFrame> equal_parts() {
+    dstd::Vector<DataFrame> parts;
     std::int64_t base = 0;
     for (int k = 0; k < PARTS; ++k) {
         const std::int64_t n = 5 + k % 7;
@@ -176,15 +176,15 @@ std::vector<DataFrame> equal_parts() {
     return parts;
 }
 
-std::vector<DataFrame> ragged_parts() {
-    std::vector<DataFrame> parts;
+dstd::Vector<DataFrame> ragged_parts() {
+    dstd::Vector<DataFrame> parts;
     std::int64_t base = 0;
     for (int k = 0; k < PARTS; ++k) {
         const std::int64_t n = 4 + k % 5;
         DataFrame df;
         df.names = {"i"};
         df.columns.push_back(ints(base, n));
-        df.names.push_back("x" + std::to_string(k % 3));
+        df.names.push_back(dstd::fmt<"x{}">(k % 3));
         df.columns.push_back(ints(base * 2, n));
         df.names.push_back("v");
         df.columns.push_back(k % 2 ? doubles(base, n) : ints(base, n));
@@ -220,8 +220,8 @@ TEST_CASE("a collect of parts with different columns equals the diagonal") {
 TEST_CASE("an error in one column fails the collect") {
     auto parts = ragged_parts();
     for (std::size_t k = 0; k < parts.size(); ++k) {
-        std::vector<Series> field;
-        std::vector<Series> nested;
+        dstd::Vector<Series> field;
+        dstd::Vector<Series> nested;
         nested.push_back(ints(0, parts[k].num_rows()));
         field.push_back(k == 7 ? Series::structs({"b"}, std::move(nested))
                                : ints(0, parts[k].num_rows()));
@@ -229,40 +229,40 @@ TEST_CASE("an error in one column fails the collect") {
         parts[k].columns.push_back(Series::structs({"a"}, std::move(field)));
     }
 
-    std::string serial_error;
-    try {
-        serial(parts, ConcatHow::Diagonal);
-    } catch (const std::exception& e) {
-        serial_error = e.what();
-    }
+    dstd::Vector<const DataFrame*> ptrs;
+    for (const DataFrame& p : parts) ptrs.push_back(&p);
+    const auto serial_result =
+        dftracer::utils::dataframe::concat(ptrs, ConcatHow::Diagonal);
+    REQUIRE(!serial_result.has_value());
+    const dstd::String serial_error = serial_result.error().c_str();
     REQUIRE_FALSE(serial_error.empty());
-    try {
-        collect(parts, 1);
-        FAIL("the collect must throw");
-    } catch (const std::exception& e) {
-        CHECK(std::string(e.what()) == serial_error);
-    }
+    const auto collected = collect_result(parts, 1);
+    REQUIRE_FALSE(collected.has_value());
+    CHECK(dstd::String(collected.error().c_str()) == serial_error);
 }
 
 TEST_CASE("ConcatPlan columns equal the serial concat, column by column") {
     for (const ConcatHow how : {ConcatHow::Vertical, ConcatHow::Diagonal}) {
         const auto parts =
             how == ConcatHow::Vertical ? equal_parts() : ragged_parts();
-        std::vector<const DataFrame*> ptrs;
+        dstd::Vector<const DataFrame*> ptrs;
         for (const DataFrame& p : parts) ptrs.push_back(&p);
-        const ConcatPlan plan(ptrs, how);
+        const ConcatPlan plan =
+            dftu_utils_test::ok(ConcatPlan::make(ptrs, how));
         DataFrame got;
         got.names = plan.names();
         for (std::size_t c = 0; c < got.names.size(); ++c)
-            got.columns.push_back(plan.column(c));
+            got.columns.push_back(dftu_utils_test::ok(plan.column(c)));
         check_equal(got, serial(parts, how));
     }
 }
 
 TEST_CASE("ConcatPlan refuses vertical parts with different schemas") {
     const auto parts = ragged_parts();
-    std::vector<const DataFrame*> ptrs;
+    dstd::Vector<const DataFrame*> ptrs;
     for (const DataFrame& p : parts) ptrs.push_back(&p);
-    CHECK_THROWS_AS(ConcatPlan(ptrs, ConcatHow::Vertical),
-                    std::invalid_argument);
+    const auto plan = ConcatPlan::make(ptrs, ConcatHow::Vertical);
+    REQUIRE(!plan.has_value());
+    CHECK(common::errorcode_of(plan.error()) ==
+          common::ErrorCode::InvalidArgument);
 }

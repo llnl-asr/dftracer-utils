@@ -1,0 +1,281 @@
+// SPDX-License-Identifier: MIT
+#include <dftracer/utils/dataframe/log2_histogram.h>
+#include <dftracer/utils/dstd/bits.h>
+#include <dftracer/utils/dstd/fmt.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <simdjson.h>
+
+#include <algorithm>
+
+namespace dftracer::utils::dataframe {
+
+std::size_t Log2Histogram::bin_index(std::uint64_t value) {
+    // floor(log2(value)) + 1, and 0 for value 0.
+    return static_cast<std::size_t>(dstd::bits::bit_width_u64(value));
+}
+
+std::uint64_t Log2Histogram::bin_lower(std::size_t bin) {
+    if (bin == 0) return 0;
+    if (bin == 1) return 1;
+    return static_cast<std::uint64_t>(1) << (bin - 1);
+}
+
+std::uint64_t Log2Histogram::bin_upper(std::size_t bin) {
+    if (bin == 0) return 0;
+    if (bin >= 64) return std::numeric_limits<std::uint64_t>::max();
+    return (static_cast<std::uint64_t>(1) << bin);
+}
+
+void Log2Histogram::add(std::uint64_t value, std::uint64_t count) {
+    std::size_t idx = bin_index(value);
+    bins_[idx] += count;
+    total_count_ += count;
+}
+
+void Log2Histogram::merge(const Log2Histogram& other) {
+    for (std::size_t i = 0; i < NUM_BINS; ++i) {
+        bins_[i] += other.bins_[i];
+    }
+    total_count_ += other.total_count_;
+}
+
+double Log2Histogram::approx_percentile(double p) const {
+    if (total_count_ == 0) return 0.0;
+    if (p <= 0.0) return 0.0;
+    if (p >= 1.0) {
+        // Find the highest non-empty bin
+        for (std::size_t i = NUM_BINS; i > 0; --i) {
+            if (bins_[i - 1] > 0) {
+                return static_cast<double>(bin_upper(i - 1));
+            }
+        }
+        return 0.0;
+    }
+
+    double target = p * static_cast<double>(total_count_);
+    double cumulative = 0.0;
+
+    for (std::size_t i = 0; i < NUM_BINS; ++i) {
+        if (bins_[i] == 0) continue;
+        cumulative += static_cast<double>(bins_[i]);
+        if (cumulative >= target) {
+            // Interpolate within the bin
+            double prev_cumulative = cumulative - static_cast<double>(bins_[i]);
+            double fraction =
+                (target - prev_cumulative) / static_cast<double>(bins_[i]);
+            double lo = static_cast<double>(bin_lower(i));
+            double hi = static_cast<double>(bin_upper(i));
+            return lo + fraction * (hi - lo);
+        }
+    }
+
+    return 0.0;
+}
+
+namespace {
+dstd::String format_count(std::uint64_t count) {
+    if (count < 1000) return dstd::to_string(count);
+    dstd::String s = dstd::to_string(count);
+    dstd::String result;
+    int pos = 0;
+    int len = static_cast<int>(s.size());
+    for (int i = 0; i < len; ++i) {
+        if (pos > 0 && (len - i) % 3 == 0) result += ',';
+        result += s[i];
+        ++pos;
+    }
+    return result;
+}
+
+dstd::String format_range(std::uint64_t lo, std::uint64_t hi,
+                          const dstd::String& unit) {
+    if (lo == hi && lo == 0) return dstd::fmt<"0 {}">(unit);
+    return dstd::fmt<"[{}, {}) {}">(format_count(lo), format_count(hi), unit);
+}
+
+dstd::String pad_right(dstd::String s, std::size_t width) {
+    if (s.size() < width) s.resize(width, ' ');
+    return s;
+}
+}  // namespace
+
+dstd::String Log2Histogram::render_ascii(std::size_t max_width,
+                                         const dstd::String& unit) const {
+    if (total_count_ == 0) return "    (no data)\n";
+
+    // Find max count for scaling
+    std::uint64_t max_count = 0;
+    for (std::size_t i = 0; i < NUM_BINS; ++i) {
+        if (bins_[i] > max_count) max_count = bins_[i];
+    }
+
+    dstd::String out;
+    for (std::size_t i = 0; i < NUM_BINS; ++i) {
+        if (bins_[i] == 0) continue;
+
+        dstd::String range = format_range(bin_lower(i), bin_upper(i), unit);
+        dstd::String count_str = format_count(bins_[i]);
+
+        // Scale bar
+        std::size_t bar_size = 0;
+        if (max_count > 0) {
+            bar_size = static_cast<std::size_t>(static_cast<double>(bins_[i]) /
+                                                static_cast<double>(max_count) *
+                                                static_cast<double>(max_width));
+            if (bar_size == 0 && bins_[i] > 0) bar_size = 1;
+        }
+
+        out += dstd::fmt<"    {} |{} {}\n">(
+            pad_right(range, 24),
+            pad_right(dstd::String(bar_size, '#'), max_width), count_str);
+    }
+
+    return out;
+}
+
+dstd::String Log2Histogram::render_blocks(std::size_t max_width,
+                                          const dstd::String& unit,
+                                          const dstd::String& indent) const {
+    if (total_count_ == 0) return dstd::fmt<"{}(no data)\n">(indent);
+
+    // Unicode block elements: 8 levels from thinnest to fullest
+    static const char* blocks[] = {
+        " ",      "\u2581",  // ▁
+        "\u2582",            // ▂
+        "\u2583",            // ▃
+        "\u2584",            // ▄
+        "\u2585",            // ▅
+        "\u2586",            // ▆
+        "\u2587",            // ▇
+        "\u2588"             // █
+    };
+
+    std::uint64_t max_count = 0;
+    for (std::size_t i = 0; i < NUM_BINS; ++i) {
+        if (bins_[i] > max_count) max_count = bins_[i];
+    }
+
+    dstd::String out;
+    for (std::size_t i = 0; i < NUM_BINS; ++i) {
+        if (bins_[i] == 0) continue;
+
+        dstd::String range = format_range(bin_lower(i), bin_upper(i), unit);
+        dstd::String count_str = format_count(bins_[i]);
+
+        // Scale to max_width full blocks + fractional last block
+        double scaled = static_cast<double>(bins_[i]) /
+                        static_cast<double>(max_count) *
+                        static_cast<double>(max_width);
+        auto full_blocks = static_cast<std::size_t>(scaled);
+        int frac =
+            static_cast<int>((scaled - static_cast<double>(full_blocks)) * 8.0);
+        if (full_blocks == 0 && frac == 0 && bins_[i] > 0) frac = 1;
+
+        dstd::String bar;
+        for (std::size_t b = 0; b < full_blocks; ++b) {
+            bar += blocks[8];
+        }
+        if (frac > 0 && full_blocks < max_width) {
+            bar += blocks[frac];
+        }
+
+        // Pad to fixed display width
+        std::size_t display_size = full_blocks + (frac > 0 ? 1 : 0);
+        dstd::String padding;
+        if (display_size < max_width) {
+            padding = dstd::String(max_width - display_size, ' ');
+        }
+
+        out += indent;
+        out += pad_right(range, 24);
+        out += bar;
+        out += padding;
+        out += " ";
+        out += count_str;
+        out += "\n";
+    }
+
+    return out;
+}
+
+dstd::String Log2Histogram::to_json() const {
+    dstd::String ss;
+    ss += '[';
+    bool first = true;
+    for (std::size_t i = 0; i < NUM_BINS; ++i) {
+        if (bins_[i] == 0) continue;
+        if (!first) ss += ',';
+        first = false;
+        ss += '[';
+        ss += dstd::to_string(i);
+        ss += ',';
+        ss += dstd::to_string(bins_[i]);
+        ss += ']';
+    }
+    ss += ']';
+    return ss;
+}
+
+dstd::String Log2Histogram::to_json_detailed() const {
+    dstd::String ss;
+    ss += '[';
+    bool first = true;
+    for (std::size_t i = 0; i < NUM_BINS; ++i) {
+        if (bins_[i] == 0) continue;
+        if (!first) ss += ',';
+        first = false;
+        ss += "{\"bin\":";
+        ss += dstd::to_string(i);
+        ss += ",\"lo\":";
+        ss += dstd::to_string(bin_lower(i));
+        ss += ",\"hi\":";
+        // Top bin is unbounded (bin_upper is UINT64_MAX); emit null instead.
+        if (i >= 64) {
+            ss += "null";
+        } else {
+            ss += dstd::to_string(bin_upper(i));
+        }
+        ss += ",\"count\":";
+        ss += dstd::to_string(bins_[i]);
+        ss += '}';
+    }
+    ss += ']';
+    return ss;
+}
+
+Log2Histogram Log2Histogram::from_json(const dstd::String& json) {
+    Log2Histogram hist;
+
+    simdjson::dom::parser parser;
+    auto result = parser.parse(json.data(), json.size());
+    if (result.error()) return hist;
+
+    auto root = result.value_unsafe();
+    if (!root.is_array()) return hist;
+
+    simdjson::dom::array root_arr;
+    if (root.get(root_arr)) return hist;
+
+    for (auto pair : root_arr) {
+        if (!pair.is_array()) continue;
+        simdjson::dom::array arr;
+        if (pair.get(arr)) continue;
+        if (arr.size() != 2) continue;
+
+        auto bin_idx_result = arr.at(0).get_uint64();
+        auto count_result = arr.at(1).get_uint64();
+        if (bin_idx_result.error() || count_result.error()) continue;
+
+        std::size_t bin_idx =
+            static_cast<std::size_t>(bin_idx_result.value_unsafe());
+        std::uint64_t count = count_result.value_unsafe();
+        if (bin_idx < NUM_BINS) {
+            hist.bins_[bin_idx] += count;
+            hist.total_count_ += count;
+        }
+    }
+    return hist;
+}
+
+}  // namespace dftracer::utils::dataframe

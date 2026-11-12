@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Generate Mermaid diagrams for the C++ API reference from Doxygen XML.
 
 Two kinds of diagram are produced:
@@ -139,30 +140,19 @@ COMPONENT_GROUPS = [
             "dftracer::utils::ExecutorConfig",
             "dftracer::utils::ExecutorProgress",
             "dftracer::utils::TaskExecutor",
-            "dftracer::utils::Task",
-            "dftracer::utils::TypedTask",
             "dftracer::utils::TaskHandle",
             "dftracer::utils::TypedTaskHandle",
-            "dftracer::utils::TaskResult",
             "dftracer::utils::TaskInfo",
             "dftracer::utils::TaskProgress",
-            "dftracer::utils::NoOpTask",
-            "dftracer::utils::CoroScope",
-            "dftracer::utils::Pipeline",
-            "dftracer::utils::PipelineConfig",
-            "dftracer::utils::PipelineOutput",
-            "dftracer::utils::PipelineError",
             "dftracer::utils::TimerService",
             "dftracer::utils::ShardedMutex",
-            "dftracer::utils::ObjectPool",
             "dftracer::utils::BufferPool",
             "dftracer::utils::StringIntern",
             "dftracer::utils::StringArena",
         ],
         "Executor and Runtime",
     ),
-    ("task_graph", ["dftracer::utils::task_graph::"], "Task Graph"),
-    ("io", ["dftracer::utils::io::"], "I/O Backends"),
+    ("io", ["dftracer::utils::runtime::io::"], "I/O Backends"),
     ("duql", ["dftracer::utils::duql::"], "duql"),
     (
         "dataframe",
@@ -175,23 +165,15 @@ COMPONENT_GROUPS = [
         ["dftracer::utils::trace::"],
         "Trace Domain",
     ),
-    ("reader", ["dftracer::utils::utilities::reader::"], "Trace Reader"),
-    ("index", ["dftracer::utils::index::"], "Index"),
-    ("arrow", ["dftracer::utils::utilities::common::arrow::"], "Arrow Bridge"),
+    ("index", ["dftracer::utils::trace::index::"], "Index"),
     (
         "utilities",
         [
-            "dftracer::utils::utilities::fileio",
-            "dftracer::utils::utilities::filesystem::",
             "dftracer::utils::utilities::hash::",
-            "dftracer::utils::utilities::text::",
-            "dftracer::utils::utilities::replay::",
-            "dftracer::utils::utilities::dlio::",
             "dftracer::utils::utilities::common::statistics::",
         ],
         "Utilities",
     ),
-    ("server", ["dftracer::utils::server::"], "HTTP Server"),
 ]
 
 
@@ -273,7 +255,7 @@ def generate_collaboration(
     """classDiagram of a group's inheritance + composition edges.
 
     Edges to types outside the group are kept and the target drawn as a greyed
-    leaf, so cross-layer relationships (e.g. TaskGraph holding a core Task) show.
+    leaf, so cross-layer relationships (e.g. a Channel holding a coro Task) show.
     Only classes touched by an edge are drawn; returns None when the group has
     no relationships worth a diagram, or when its external fan-out is too broad.
     """
@@ -357,28 +339,42 @@ def generate_collaboration(
     return "\n".join(lines) + "\n"
 
 
-# Bottom-to-top: core is the foundation at the base; each arrow points from a
-# library to the one built on top of it (A --> B reads "B is built on A").
+# Bottom-to-top: runtime is the foundation at the base; each arrow points from
+# a library to the one built on top of it (A --> B reads "B is built on A").
 ARCHITECTURE_MMD = """graph BT
-    utilities["dftracer_utils_utilities<br/><i>readers, index, aggregation,<br/>comparison, statistics, plugins, dlio, replay</i>"]
+    utilities["dftracer_utils_domains<br/><i>comparison, statistics, genesis,<br/>plugins, server, dlio, replay</i>"]
+    trace["dftracer_utils_trace<br/><i>index, views, trace reader, Arrow</i>"]
     dataframe["dftracer_utils_dataframe<br/><i>Series/DataFrame, Highway SIMD kernels,<br/>Arrow bridge, columnar query execution</i>"]
     query["dftracer_utils_duql<br/><i>predicate IR, string codec, evaluator</i>"]
+    io["dftracer_utils_fileio<br/><i>gzip, file I/O, hashing</i>"]
     json["dftracer_utils_json<br/><i>simdjson-backed parsing</i>"]
-    core["dftracer_utils_core<br/><i>coroutines, tasks, task graph, io backend,<br/>pipelines, primitives</i>"]
+    yaml["dftracer_utils_yaml<br/><i>line-index reader, YAML writer</i>"]
+    store["dftracer_utils_store<br/><i>key-value store engine</i>"]
+    runtime["dftracer_utils_runtime<br/><i>coroutines, tasks, task graph, io backend,<br/>pipelines, primitives</i>"]
 
-    core --> json
+    runtime --> io
+    runtime --> json
+    runtime --> store
+    io --> trace
+    store --> trace
+    trace --> utilities
+    yaml --> trace
     json --> query
     query --> dataframe
-    dataframe --> utilities
+    dataframe --> trace
 
     compose["AsyncOp compose model<br/><i>| sequence &nbsp; &amp;&amp; both &nbsp; || either &nbsp; .or_else</i>"]
-    core -.- compose
+    runtime -.- compose
 
-    style core fill:#4a90d9,stroke:#2c5f8a,color:#fff
+    style runtime fill:#4a90d9,stroke:#2c5f8a,color:#fff
     style dataframe fill:#e8f4e8,stroke:#5a9,color:#333
     style utilities fill:#e8f4e8,stroke:#5a9,color:#333
+    style trace fill:#e8f4e8,stroke:#5a9,color:#333
+    style store fill:#f0f0f0,stroke:#999,color:#333
     style query fill:#f0f0f0,stroke:#999,color:#333
+    style io fill:#f0f0f0,stroke:#999,color:#333
     style json fill:#f0f0f0,stroke:#999,color:#333
+    style yaml fill:#f0f0f0,stroke:#999,color:#333
     style compose fill:#fff6e0,stroke:#d9a94a,color:#333
 """
 

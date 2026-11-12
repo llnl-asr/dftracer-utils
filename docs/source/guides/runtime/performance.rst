@@ -23,29 +23,29 @@ chunks; too many on a shared or oversubscribed node hurts more than it helps.
 
    .. tab-item:: C++
 
-      ``Runtime`` (``dftracer/utils/core/runtime.h``, namespace
+      ``Runtime`` (``dftracer/utils/runtime/runtime.h``, namespace
       ``dftracer::utils``) takes a thread count directly, or a full
       ``ExecutorConfig`` for finer control:
 
       .. code-block:: cpp
 
-         #include <dftracer/utils/core/runtime.h>
+         #include <dftracer/utils/runtime/runtime.h>
          using namespace dftracer::utils;
 
          Runtime rt(8);   // 8 worker threads; 0 = hardware_concurrency
 
          ExecutorConfig config;
-         config.num_threads = 8;      // running cap; 0 = hardware_concurrency
-         config.io_pool_size = 4;     // I/O thread pool; 0 = hardware_concurrency
+         config.thread_count = 8;      // running cap; 0 = hardware_concurrency
+         config.io_pool_size = 4;     // I/O thread pool; 0 = one per worker
          config.min_workers = 2;      // elastic floor: start at 2, grow to
-                                       // num_threads under backlog, idle-retire
+                                       // thread_count under backlog, idle-retire
                                        // back down (0 = eager, spawn all up front)
          Runtime elastic_rt(config);
 
       ``DFTRACER_UTILS_THREADS`` overrides any requested count at process
       start (set it to ``1`` for a single-threaded async loop while
       debugging) - it takes precedence over both the constructor argument and
-      ``ExecutorConfig::num_threads``.
+      ``ExecutorConfig::thread_count``.
 
    .. tab-item:: Python
 
@@ -59,15 +59,18 @@ chunks; too many on a shared or oversubscribed node hurts more than it helps.
          rt = Runtime(threads=8, io_threads=8, python_threads=4)
          tv = TraceViewer("./traces", runtime=rt)  # view execution uses rt's pool
 
-      - ``threads``: C++ executor worker threads (0 = hardware_concurrency).
-      - ``io_threads``: C++ I/O thread pool (0 = hardware_concurrency).
+      - ``threads``: C++ executor worker threads (0 keeps the current count,
+        the hardware concurrency for a new runtime).
+      - ``io_threads``: C++ I/O threads, which only grow (0 keeps the count).
       - ``python_threads``: a ``ThreadPoolExecutor`` size for
         ``rt.submit(python_callable)`` (0 = ``min(32, threads)``); it does not
         affect C++-side scan/aggregation work.
 
-      Without an explicit ``runtime=``, a viewer runs on a process-wide
-      default runtime. Pass a ``Runtime`` explicitly when you need a
-      non-default thread count or want several viewers to share one pool.
+      A process has one runtime, and every viewer, pipeline and index build
+      runs on it. ``Runtime(threads=...)`` sets its thread count in place,
+      while work runs, and the new count holds for everything after; leaving
+      a ``with`` block does not stop the runtime, which runs until the
+      process exits.
 
 Data-parallel loops: parallel_for / parallel_reduce
 ---------------------------------------------------------
@@ -265,11 +268,9 @@ M4 Pro (10 performance and 4 efficiency cores), best of 5, September
      - 3.1x
      - 7.2x
 
-Faster than pandas on every row, polars on every row but two (a filtered
-count per name, where the eager form gathers six columns, and a 64-group
-sum, a millisecond behind at the noise floor), and DuckDB on every row
-but the first of those, where the two are within a millisecond; the plan
-form is ahead of polars there too. A plan runs at the eager speed, or ahead of it
+``benchmarks/dataframe_vs_pandas_polars.py`` measures these ops against
+pandas, polars and DuckDB on your own host.
+A plan runs at the eager speed, or ahead of it
 where projection pushdown reads fewer columns; ``lazy`` p99 is the
 streaming sketch quantile, exact to about 1e-3. Every engine's result
 matches ours on every row. DuckDB's numbers are for a result
@@ -367,6 +368,5 @@ See also
 - :doc:`../../concepts/async-runtime` for the coroutine/executor model these
   knobs configure.
 - :doc:`memory-budget` for bounding memory instead of CPU parallelism.
-- :doc:`task-graphs` for building an explicit DAG on top of this runtime.
 - :doc:`../../concepts/coroutine-caveats` for rules to follow before sharing
   state across a parallel body.

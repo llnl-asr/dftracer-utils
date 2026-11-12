@@ -1,12 +1,12 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_DATAFRAME_ARROW_BRIDGE_H
 #define DFTRACER_UTILS_DATAFRAME_ARROW_BRIDGE_H
 
-#include <dftracer/utils/core/common/config.h>
+#include <dftracer/utils/common/config.h>
+#include <dftracer/utils/dstd/vector.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 
 #include <dftracer/utils/dataframe/dataframe.h>
-
-#include <vector>
 
 struct ArrowSchema;
 struct ArrowArray;
@@ -24,7 +24,8 @@ void to_arrow(const Series& col, ArrowSchema* schema, ArrowArray* array);
 /// every field is a CHUNKED column with identical chunk starts and flat
 /// chunks, else one joined batch. Zero copy; each array keeps its chunks
 /// alive. The caller owns `schema` and every returned array.
-std::vector<ArrowArray> to_arrow_batches(const Series& st, ArrowSchema* schema);
+dstd::Vector<ArrowArray> to_arrow_batches(const Series& st,
+                                          ArrowSchema* schema);
 
 /// Import a FLAT primitive Arrow array as a Series, wrapping its buffers zero
 /// copy. Ownership of `array` moves into the returned Series (the array's

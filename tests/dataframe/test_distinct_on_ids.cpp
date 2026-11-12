@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // unique, nunique, value_counts, is_in and frame unique give the results of
 // the same column copied flat, for every column layout.
 
@@ -7,54 +8,57 @@
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/view_builder.h>
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <limits>
-#include <memory>
-#include <optional>
-#include <string>
-#include <string_view>
 #include <utility>
-#include <vector>
+
+using namespace dftracer::utils;
 
 using namespace dftracer::utils::dataframe;
 
 namespace {
 
-using Idx = std::vector<std::int64_t>;
+using Idx = dstd::Vector<std::int64_t>;
 constexpr std::int64_t N = 60;
 constexpr std::int64_t CUTS[] = {0, 7, 8, 31, N};
 
 bool nullish(std::int64_t i) { return i % 11 == 4 || i % 17 == 9; }
 
-std::vector<std::uint8_t> validity_bits() {
-    std::vector<std::uint8_t> v(static_cast<std::size_t>((N + 7) / 8), 0);
+dstd::Vector<std::uint8_t> validity_bits() {
+    dstd::Vector<std::uint8_t> v(static_cast<std::size_t>((N + 7) / 8), 0);
     for (std::int64_t i = 0; i < N; ++i)
         if (!nullish(i)) v[static_cast<std::size_t>(i >> 3)] |= 1u << (i & 7);
     return v;
 }
 
 Series flat_strings() {
-    static const std::vector<std::string> POOL = {
+    static const dstd::Vector<dstd::String> POOL = {
         "read",
         "",
         "a name of exactly 16",
         "write",
         "0123456789abcdef",
         "a considerably longer name than the others"};
-    std::vector<std::string> keep;
+    dstd::Vector<dstd::String> keep;
     for (std::int64_t i = 0; i < N; ++i)
         keep.push_back(POOL[static_cast<std::size_t>((i * 5 + i / 7) % 6)]);
-    std::vector<std::string_view> v(keep.begin(), keep.end());
+    dstd::Vector<dstd::StringView> v(keep.begin(), keep.end());
     const auto valid = validity_bits();
     return Series::strings(v, valid.data());
 }
 
 Series flat_i64() {
-    std::vector<std::int64_t> v;
+    dstd::Vector<std::int64_t> v;
     for (std::int64_t i = 0; i < N; ++i) v.push_back((i * 7) % 9 - 4);
     const auto valid = validity_bits();
     return Series::flat_i64(v.data(), N, valid.data());
@@ -63,7 +67,7 @@ Series flat_i64() {
 Series flat_f64() {
     const double POOL[] = {0.0, -0.0,  std::numeric_limits<double>::quiet_NaN(),
                            1.5, -2.25, std::numeric_limits<double>::infinity()};
-    std::vector<double> v;
+    dstd::Vector<double> v;
     for (std::int64_t i = 0; i < N; ++i)
         v.push_back(POOL[static_cast<std::size_t>((i * 5 + i / 7) % 6)]);
     const auto valid = validity_bits();
@@ -71,7 +75,7 @@ Series flat_f64() {
 }
 
 Series flat_bool() {
-    std::vector<std::uint8_t> bits(static_cast<std::size_t>((N + 7) / 8), 0);
+    dstd::Vector<std::uint8_t> bits(static_cast<std::size_t>((N + 7) / 8), 0);
     for (std::int64_t i = 0; i < N; ++i)
         if ((i * 3 + i / 5) % 4 < 2)
             bits[static_cast<std::size_t>(i >> 3)] |= 1u << (i & 7);
@@ -84,9 +88,10 @@ Series selection_over(const Series& base, const Idx& idx) {
     adopt_type_from(*o, *base.handle());
     o->encoding = Encoding::Selection;
     o->length = static_cast<std::int64_t>(idx.size());
-    o->data = Buffer::allocate(idx.size() * sizeof(std::int64_t));
-    std::memcpy(o->data->data(), idx.data(), idx.size() * sizeof(std::int64_t));
-    o->set_child(std::make_shared<dftu_series>(*base.handle()));
+    o->data = new_buffer(idx.size() * sizeof(std::int64_t));
+    std::memcpy(writable(o->data), idx.data(),
+                idx.size() * sizeof(std::int64_t));
+    o->set_child(dstd::make_shared<dftu_series>(*base.handle()));
     return Series{o};
 }
 
@@ -103,7 +108,7 @@ Series range_of(const Series& flat, std::int64_t b, std::int64_t e) {
 }
 
 Series chunked_of(const Series& flat, bool is_string) {
-    std::vector<std::shared_ptr<dftu_series>> chunks;
+    dstd::Vector<dstd::SharedPtr<dftu_series>> chunks;
     for (int k = 0; k < 4; ++k) {
         Series piece = range_of(flat, CUTS[k], CUTS[k + 1]);
         switch (k % 4) {
@@ -123,14 +128,14 @@ Series chunked_of(const Series& flat, bool is_string) {
             default:
                 break;
         }
-        chunks.push_back(std::make_shared<dftu_series>(*piece.handle()));
+        chunks.push_back(dstd::make_shared<dftu_series>(*piece.handle()));
     }
     return Series{make_chunked(std::move(chunks))};
 }
 
-std::vector<std::pair<std::string, Series>> layouts(const Series& flat) {
+dstd::Vector<dstd::Pair<dstd::String, Series>> layouts(const Series& flat) {
     const bool s = flat.type() == TypeId::String;
-    std::vector<std::pair<std::string, Series>> out;
+    dstd::Vector<dstd::Pair<dstd::String, Series>> out;
     out.emplace_back("flat", flat.share());
     if (s) {
         out.emplace_back("view", view_of(flat));
@@ -144,9 +149,9 @@ std::vector<std::pair<std::string, Series>> layouts(const Series& flat) {
     return out;
 }
 
-std::vector<std::string> cells(const Series& in) {
+dstd::Vector<dstd::String> cells(const Series& in) {
     Series s = in.materialize();
-    std::vector<std::string> out;
+    dstd::Vector<dstd::String> out;
     for (std::int64_t i = 0; i < s.length(); ++i) {
         if (s.is_null(i)) {
             out.push_back("<null>");
@@ -154,29 +159,29 @@ std::vector<std::string> cells(const Series& in) {
         }
         switch (s.type()) {
             case TypeId::String:
-                out.push_back(std::string(s.string_at(i)));
+                out.push_back(dstd::String(s.string_at(i)));
                 break;
             case TypeId::Int64:
-                out.push_back(std::to_string(s.data<std::int64_t>()[i]));
+                out.push_back(dstd::to_string(s.data<std::int64_t>()[i]));
                 break;
             case TypeId::Float64: {
                 std::uint64_t bits;
                 std::memcpy(&bits, s.data<double>() + i, 8);
-                out.push_back(std::to_string(bits));
+                out.push_back(dstd::to_string(bits));
                 break;
             }
             default:
-                out.push_back(std::to_string(
+                out.push_back(dstd::to_string(
                     (s.data<std::uint8_t>()[i >> 3] >> (i & 7)) & 1));
         }
     }
     return out;
 }
 
-std::vector<std::string> frame_cells(const DataFrame& df) {
-    std::vector<std::string> out;
+dstd::Vector<dstd::String> frame_cells(const DataFrame& df) {
+    dstd::Vector<dstd::String> out;
     for (const Series& c : df.columns)
-        for (const std::string& x : cells(c)) out.push_back(x);
+        for (const dstd::String& x : cells(c)) out.push_back(x);
     return out;
 }
 
@@ -188,7 +193,7 @@ Series flat_copy(const Series& c) { return c.materialize(); }
 
 TEST_SUITE("distinct on ids") {
     TEST_CASE("series distinct ops match the flat copy in every layout") {
-        const std::pair<const char*, Series> bases[] = {
+        const dstd::Pair<const char*, Series> bases[] = {
             {"string", flat_strings()},
             {"int64", flat_i64()},
             {"float64", flat_f64()},
@@ -203,8 +208,8 @@ TEST_SUITE("distinct on ids") {
                 CHECK(col.unique().length() == ref.unique().length());
                 CHECK(col.nunique() == ref.nunique());
                 CHECK(col.nunique() == col.unique().length());
-                const DataFrame vc = col.value_counts();
-                const DataFrame rc = ref.value_counts();
+                const DataFrame vc = dftu_utils_test::ok(col.value_counts());
+                const DataFrame rc = dftu_utils_test::ok(ref.value_counts());
                 CHECK(frame_cells(vc) == frame_cells(rc));
                 CHECK(vc.num_rows() == rc.num_rows());
                 const Series nd = needles(base);
@@ -218,7 +223,8 @@ TEST_SUITE("distinct on ids") {
     TEST_CASE(
         "string value counts count the nulls out and keep first-seen ties") {
         const Series s = flat_strings();
-        const DataFrame vc = s.dictionary_encode().value_counts();
+        const DataFrame vc =
+            dftu_utils_test::ok(s.dictionary_encode().value_counts());
         std::int64_t total = 0;
         const Series cnt = vc.columns[1].materialize();
         for (std::int64_t i = 0; i < cnt.length(); ++i) {
@@ -245,14 +251,14 @@ TEST_SUITE("distinct on ids") {
                 df.names.push_back(NAMES[c]);
                 df.columns.push_back(std::move(pick));
             }
-            for (const std::vector<std::string>& subset :
-                 {std::vector<std::string>{}, std::vector<std::string>{"s"},
-                  std::vector<std::string>{"i", "b"},
-                  std::vector<std::string>{"f", "s"}}) {
+            for (const dstd::Vector<dstd::String>& subset :
+                 {dstd::Vector<dstd::String>{}, dstd::Vector<dstd::String>{"s"},
+                  dstd::Vector<dstd::String>{"i", "b"},
+                  dstd::Vector<dstd::String>{"f", "s"}}) {
                 CAPTURE(variant);
                 CAPTURE(subset.size());
-                const DataFrame got = df.unique(subset);
-                const DataFrame want = ref.unique(subset);
+                const DataFrame got = dftu_utils_test::ok(df.unique(subset));
+                const DataFrame want = dftu_utils_test::ok(ref.unique(subset));
                 CHECK(got.num_rows() == want.num_rows());
                 CHECK(frame_cells(got) == frame_cells(want));
             }
@@ -263,17 +269,17 @@ TEST_SUITE("distinct on ids") {
         const Series e = flat_i64().take(Idx{});
         CHECK(e.unique().length() == 0);
         CHECK(e.nunique() == 0);
-        CHECK(e.value_counts().num_rows() == 0);
+        CHECK(dftu_utils_test::ok(e.value_counts()).num_rows() == 0);
         DataFrame df;
         df.names = {"a"};
         df.columns.push_back(e.share());
-        CHECK(df.unique().num_rows() == 0);
+        CHECK(dftu_utils_test::ok(df.unique()).num_rows() == 0);
     }
 
     TEST_CASE("float unique keeps every NaN row and the sorted order") {
-        std::vector<double> v{std::nan(""), std::nan(""), 1.0, 0.0,
-                              -0.0,         7.0,          5.0};
-        std::vector<std::uint8_t> valid{0b0111111};
+        dstd::Vector<double> v{std::nan(""), std::nan(""), 1.0, 0.0,
+                               -0.0,         7.0,          5.0};
+        dstd::Vector<std::uint8_t> valid{0b0111111};
         Series s = Series::flat(TypeId::Float64, v.data(), 7, valid.data());
         Series u = s.unique();
         REQUIRE(u.length() == 5);

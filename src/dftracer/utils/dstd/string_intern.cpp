@@ -1,0 +1,447 @@
+// SPDX-License-Identifier: MIT
+#include <dftracer/utils/dstd/fatal.h>
+#include <dftracer/utils/dstd/fmt.h>
+#include <dftracer/utils/dstd/hash/xxh3.h>
+#include <dftracer/utils/dstd/hasher.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/memory/allocator.h>
+#include <dftracer/utils/memory/detail/manager.h>
+
+#include <algorithm>
+#include <cstring>
+#include <memory>
+#include <string>
+
+namespace dftracer::utils::dstd {
+
+namespace {
+constexpr std::size_t CHUNK_ALIGN = 8;
+
+String id_text(std::uint32_t id) {
+    char buf[16];
+    const auto r = to_chars(buf, buf + sizeof(buf), id);
+    return String(buf, r.ptr);
+}
+}  // namespace
+
+StringIntern::Chunk::Chunk(std::size_t size, memory::Pool& pool)
+    : data_(static_cast<char*>(
+          memory::detail::allocate(size, CHUNK_ALIGN, pool))),
+      size_(size) {}
+
+StringIntern::Chunk::~Chunk() { memory::detail::deallocate(data_, size_); }
+
+void StringIntern::release_bytes(void* p, std::size_t bytes) noexcept {
+    memory::detail::deallocate(p, bytes);
+}
+
+StringIntern::StringIntern(memory::Pool* pool)
+    : pool_(pool ? pool : &memory::detail::Manager::get().general()),
+      shards_(make_owned<Shard>(SHARDS)) {}
+
+StringIntern::~StringIntern() {
+    for (std::size_t s = 0; s < SHARDS; ++s) {
+        if (auto* i = shards_[s].index.load(std::memory_order_relaxed))
+            delete_index(i);
+        for (auto* old = shards_[s].retired; old;) {
+            auto* next = old->retired_next;
+            delete_index(old);
+            old = next;
+        }
+    }
+    free_directory(chunk_dir_, CHUNK_BLOCK_SIZE);
+    free_directory(directory_, BLOCK_SIZE);
+    free_directory(log_, BLOCK_SIZE);
+}
+
+std::uint32_t StringIntern::find(StringView sv) const {
+    return lookup(hash(sv), sv);
+}
+
+std::uint32_t StringIntern::get_or_insert(StringView sv) {
+    auto id = try_get_or_insert(sv);
+    if (!id) fatal(id.error().c_str());
+    return *id;
+}
+
+Result<std::uint32_t> StringIntern::try_get_or_insert(StringView sv) {
+    const auto h = hash(sv);
+    if (auto id = lookup(h, sv); id != NO_ID) return id;
+
+    Shard& sh = shards_[shard_of(h)];
+    std::lock_guard lock(sh.mu);
+    if (auto id = lookup(h, sv); id != NO_ID) return id;
+
+    const bool det = deterministic_ids_.load(std::memory_order_acquire);
+    std::uint32_t id;
+    if (det) {
+        id = static_cast<std::uint32_t>(h & (FAST_CAPACITY - 1));
+        if (const auto* existing = slot_value(id)) {
+            if (record_view(existing) == sv) return id;
+            return Unexpected<Error>(collision(existing, sv));
+        }
+    } else {
+        id = static_cast<std::uint32_t>(
+            string_count_.fetch_add(1, std::memory_order_relaxed));
+    }
+
+    const char* rec = write_record(sh, sv);
+    if (!bind_slot(id, rec, det)) {
+        return Unexpected<Error>(collision(slot_value(id), sv));
+    }
+    index_insert(sh, h, id);
+    if (det) advance_string_count(id);
+    return id;
+}
+
+StringIntern::InsertStatus StringIntern::insert_at_id(std::uint32_t id,
+                                                      StringView sv) {
+    if (id >= FAST_CAPACITY) return InsertStatus::OutOfRange;
+
+    const auto h = hash(sv);
+    Shard& sh = shards_[shard_of(h)];
+    std::lock_guard lock(sh.mu);
+
+    if (const auto* existing = slot_value(id)) {
+        return record_view(existing) == sv ? InsertStatus::Ok
+                                           : InsertStatus::Conflict;
+    }
+
+    if (auto existing_id = lookup(h, sv); existing_id != NO_ID) {
+        bind_slot(id, slot_value(existing_id), true);
+    } else {
+        bind_slot(id, write_record(sh, sv), true);
+        index_insert(sh, h, id);
+    }
+    advance_string_count(id);
+    return InsertStatus::Ok;
+}
+
+StringView StringIntern::resolve(std::uint32_t id) const {
+    if (id >= FAST_CAPACITY) {
+        fatal("string intern: id is out of range", id_text(id).c_str());
+    }
+    const auto* p = slot_value(id);
+    return p ? record_view(p) : StringView{};
+}
+
+StringIntern::Location StringIntern::locate(std::uint32_t id) const {
+    const auto* p = id < FAST_CAPACITY ? slot_value(id) : nullptr;
+    if (!p) return {nullptr, 0, 0, 0};
+    const auto v = record_view(p);
+    const auto c = record_chunk(p);
+    return {v.data(), static_cast<std::uint32_t>(v.size()), c,
+            static_cast<std::uint32_t>(v.data() - chunk_ref(c)->get()->data())};
+}
+
+SharedPtr<StringIntern::Chunk> StringIntern::chunk(std::uint32_t i) const {
+    return *chunk_ref(i);
+}
+
+std::size_t StringIntern::entry_count() const {
+    auto n = entry_count_.load(std::memory_order_acquire);
+    const auto start = n;
+    for (;; ++n) {
+        auto* block = log_.load(n >> BLOCK_BITS);
+        if (!block ||
+            block[n & (BLOCK_SIZE - 1)].load(std::memory_order_acquire) == 0)
+            break;
+    }
+    auto seen = start;
+    while (seen < n &&
+           !entry_count_.compare_exchange_weak(
+               seen, n, std::memory_order_release, std::memory_order_relaxed)) {
+    }
+    return n;
+}
+
+std::uint32_t StringIntern::entry_id(std::size_t n) const {
+    auto* block = log_.load(n >> BLOCK_BITS);
+    if (!block) return 0;
+    const auto v = block[n & (BLOCK_SIZE - 1)].load(std::memory_order_acquire);
+    return v == 0 ? 0 : v - 1;
+}
+
+StringView StringIntern::intern(StringView sv) {
+    return resolve(get_or_insert(sv));
+}
+
+const char* StringIntern::slot_value(std::uint32_t id) const {
+    if (id >= FAST_CAPACITY) return nullptr;
+    auto* block = directory_.load(id >> BLOCK_BITS);
+    if (!block) return nullptr;
+    return block[id & (BLOCK_SIZE - 1)].load(std::memory_order_acquire);
+}
+
+StringView StringIntern::record_view(const char* rec) {
+    std::uint32_t len;
+    std::memcpy(&len, rec, sizeof len);
+    return {rec + RECORD_HEADER, len};
+}
+
+std::uint32_t StringIntern::record_chunk(const char* rec) {
+    std::uint32_t c;
+    std::memcpy(&c, rec + 4, sizeof c);
+    return c;
+}
+
+/// An entry is written once before any record in its chunk is published, so
+/// a reader that saw such a record may read it.
+const StringIntern::ChunkRef* StringIntern::chunk_ref(std::uint32_t i) const {
+    auto* block = chunk_dir_.load(i >> CHUNK_BLOCK_BITS);
+    return &block[i & (CHUNK_BLOCK_SIZE - 1)];
+}
+
+std::size_t StringIntern::shard_of(std::size_t h) {
+    return (h >> 40) & (SHARDS - 1);
+}
+
+Error StringIntern::collision(const char* existing, StringView sv) {
+    return Error(
+        Condition::InvalidArgument,
+        StringView(fmt<"string intern: deterministic id collision between "
+                       "'{}' and '{}'; the dictionary is too large for this "
+                       "id space">(record_view(existing), sv)
+                       .c_str()));
+}
+
+std::uint32_t StringIntern::add_chunk(std::size_t bytes) {
+    const auto n = chunk_count_.fetch_add(1, std::memory_order_relaxed);
+    if (n >= CHUNK_DIRECTORY_SIZE * CHUNK_BLOCK_SIZE) {
+        fatal("string intern: exhausted the chunk table");
+    }
+    auto& dir = entry(chunk_dir_, n >> CHUNK_BLOCK_BITS);
+    auto* block = dir.load(std::memory_order_acquire);
+    if (!block) {
+        auto* fresh = make_array<ChunkRef>(CHUNK_BLOCK_SIZE);
+        if (dir.compare_exchange_strong(block, fresh,
+                                        std::memory_order_acq_rel)) {
+            block = fresh;
+        } else {
+            free_array(fresh, CHUNK_BLOCK_SIZE);
+        }
+    }
+    block[n & (CHUNK_BLOCK_SIZE - 1)] = make_chunk(bytes);
+    return static_cast<std::uint32_t>(n);
+}
+
+/// Caller holds the shard's mutex. Publish the result through a slot.
+const char* StringIntern::write_record(Shard& sh, StringView sv) {
+    const std::size_t need = (RECORD_HEADER + sv.size() + 3) & ~std::size_t{3};
+    std::uint32_t c;
+    std::size_t off;
+    if (need > CHUNK_BYTES) {
+        c = add_chunk(need);
+        off = 0;
+    } else {
+        if (!sh.have_cur || sh.cur_used + need > sh.cur_size) {
+            std::size_t size = sh.have_cur
+                                   ? std::min(sh.cur_size * 2, CHUNK_BYTES)
+                                   : FIRST_CHUNK_BYTES;
+            while (size < need) size *= 2;
+            sh.cur = add_chunk(size);
+            sh.cur_size = size;
+            sh.have_cur = true;
+            sh.cur_used = 0;
+        }
+        c = sh.cur;
+        off = sh.cur_used;
+        sh.cur_used += need;
+    }
+    auto* rec = const_cast<char*>(chunk_ref(c)->get()->data()) + off;
+    const auto len = static_cast<std::uint32_t>(sv.size());
+    std::memcpy(rec, &len, sizeof len);
+    std::memcpy(rec + 4, &c, sizeof c);
+    if (!sv.empty()) std::memcpy(rec + RECORD_HEADER, sv.data(), sv.size());
+    return rec;
+}
+
+StringIntern::Index* StringIntern::make_index(std::size_t slots) {
+    auto* array = make_array<IndexSlot>(slots);
+    auto* idx = make_array<Index>(1);
+    *idx = Index{slots - 1, array, nullptr};
+    return idx;
+}
+
+void StringIntern::delete_index(Index* idx) {
+    free_array(idx->slots, idx->mask + 1);
+    free_array(idx, 1);
+}
+
+std::uint32_t StringIntern::lookup(std::size_t h, StringView sv) const {
+    const auto* idx =
+        shards_[shard_of(h)].index.load(std::memory_order_acquire);
+    if (!idx) return NO_ID;
+    const std::uint64_t tag = static_cast<std::uint32_t>(h);
+    for (std::size_t i = h & idx->mask;; i = (i + 1) & idx->mask) {
+        auto v = idx->slots[i].load(std::memory_order_acquire);
+        if (v == 0) return NO_ID;
+        if ((v >> 32) != tag) continue;
+        const auto id = static_cast<std::uint32_t>(v) - 1;
+        const auto* s = slot_value(id);
+        if (s && record_view(s) == sv) return id;
+    }
+}
+
+/// Caller holds the shard's mutex.
+void StringIntern::index_insert(Shard& sh, std::size_t h, std::uint32_t id) {
+    auto* idx = sh.index.load(std::memory_order_relaxed);
+    if (!idx) {
+        idx = make_index(INITIAL_INDEX_SLOTS);
+        sh.index.store(idx, std::memory_order_release);
+    } else if ((sh.index_size + 1) * 4 >= (idx->mask + 1) * 3) {
+        idx = grow_index(sh);
+    }
+    const std::uint64_t v =
+        (static_cast<std::uint64_t>(static_cast<std::uint32_t>(h)) << 32) |
+        (static_cast<std::uint64_t>(id) + 1);
+    for (std::size_t i = h & idx->mask;; i = (i + 1) & idx->mask) {
+        if (idx->slots[i].load(std::memory_order_relaxed) == 0) {
+            idx->slots[i].store(v, std::memory_order_release);
+            break;
+        }
+    }
+    ++sh.index_size;
+}
+
+StringIntern::Index* StringIntern::grow_index(Shard& sh) {
+    auto* old = sh.index.load(std::memory_order_relaxed);
+    auto* fresh = make_index((old->mask + 1) * 2);
+    for (std::size_t i = 0; i <= old->mask; ++i) {
+        auto v = old->slots[i].load(std::memory_order_relaxed);
+        if (v == 0) continue;
+        const auto h32 = static_cast<std::size_t>(v >> 32);
+        for (std::size_t j = h32 & fresh->mask;; j = (j + 1) & fresh->mask) {
+            if (fresh->slots[j].load(std::memory_order_relaxed) == 0) {
+                fresh->slots[j].store(v, std::memory_order_relaxed);
+                break;
+            }
+        }
+    }
+    old->retired_next = sh.retired;
+    sh.retired = old;
+    sh.index.store(fresh, std::memory_order_release);
+    return fresh;
+}
+
+void StringIntern::advance_string_count(std::uint32_t id) {
+    const std::size_t need = static_cast<std::size_t>(id) + 1;
+    auto cur = string_count_.load(std::memory_order_relaxed);
+    while (need > cur && !string_count_.compare_exchange_weak(
+                             cur, need, std::memory_order_release,
+                             std::memory_order_relaxed)) {
+    }
+}
+
+/// A slot holds `id + 1`, so a reader stops at the first empty slot and never
+/// sees a hole below the count it returns.
+void StringIntern::log_entry(std::uint32_t id) {
+    const auto n = log_next_.fetch_add(1, std::memory_order_relaxed);
+    auto& dir = entry(log_, n >> BLOCK_BITS);
+    auto* block = dir.load(std::memory_order_acquire);
+    if (!block) {
+        auto* fresh = make_array<LogSlot>(BLOCK_SIZE);
+        if (dir.compare_exchange_strong(block, fresh,
+                                        std::memory_order_acq_rel)) {
+            block = fresh;
+        } else {
+            free_array(fresh, BLOCK_SIZE);
+        }
+    }
+    block[n & (BLOCK_SIZE - 1)].store(id + 1, std::memory_order_release);
+}
+
+bool StringIntern::bind_slot(std::uint32_t id, const char* str, bool cas) {
+    if (id >= FAST_CAPACITY) {
+        fatal("string intern: exhausted the id space at", id_text(id).c_str());
+    }
+    auto& dir = entry(directory_, id >> BLOCK_BITS);
+    auto* block = dir.load(std::memory_order_acquire);
+    if (!block) {
+        auto* fresh = make_array<Slot>(BLOCK_SIZE);
+        if (dir.compare_exchange_strong(block, fresh,
+                                        std::memory_order_acq_rel)) {
+            block = fresh;
+        } else {
+            free_array(fresh, BLOCK_SIZE);
+        }
+    }
+    auto& slot = block[id & (BLOCK_SIZE - 1)];
+    if (cas) {
+        const char* expected = nullptr;
+        if (!slot.compare_exchange_strong(expected, str,
+                                          std::memory_order_acq_rel))
+            return false;
+    } else {
+        slot.store(str, std::memory_order_release);
+    }
+    log_entry(id);
+    return true;
+}
+
+/// Deterministic ids are this hash, so it must agree across processes and stay
+/// as stored. It is XXH3, whose output is fixed by its specification.
+std::size_t StringIntern::hash(StringView sv) const {
+    return static_cast<std::size_t>(hash::xxh3_64(sv));
+}
+
+template <class T>
+T* StringIntern::make_array(std::size_t n) const {
+    void* p = memory::detail::allocate(n * sizeof(T), alignof(T), *pool_);
+    auto* a = static_cast<T*>(p);
+    std::uninitialized_value_construct_n(a, n);
+    return a;
+}
+
+template <class T>
+void StringIntern::free_array(T* a, std::size_t n) noexcept {
+    if (!a) return;
+    std::destroy_n(a, n);
+    memory::detail::deallocate(a, n * sizeof(T));
+}
+
+template <class T>
+StringIntern::Array<T> StringIntern::make_owned(std::size_t n) const {
+    return Array<T>(make_array<T>(n), n);
+}
+
+template <class Block, std::size_t N>
+typename StringIntern::Directory<Block, N>::Entry& StringIntern::entry(
+    Directory<Block, N>& dir, std::size_t i) {
+    using D = Directory<Block, N>;
+    auto& top = dir.top[i >> D::LEAF_BITS];
+    auto* leaf = top.load(std::memory_order_acquire);
+    if (!leaf) {
+        auto* fresh = make_array<typename D::Entry>(D::LEAF);
+        if (top.compare_exchange_strong(leaf, fresh,
+                                        std::memory_order_acq_rel)) {
+            leaf = fresh;
+        } else {
+            free_array(fresh, D::LEAF);
+        }
+    }
+    return leaf[i & (D::LEAF - 1)];
+}
+
+template <class Block, std::size_t N>
+void StringIntern::free_directory(Directory<Block, N>& dir,
+                                  std::size_t block_size) noexcept {
+    using D = Directory<Block, N>;
+    for (auto& top : dir.top) {
+        auto* leaf = top.load(std::memory_order_relaxed);
+        if (!leaf) continue;
+        for (std::size_t i = 0; i < D::LEAF; ++i)
+            free_array(leaf[i].load(std::memory_order_relaxed), block_size);
+        free_array(leaf, D::LEAF);
+    }
+}
+
+SharedPtr<StringIntern::Chunk> StringIntern::make_chunk(std::size_t bytes) {
+    return std::allocate_shared<Chunk>(memory::PoolAllocator<Chunk>(*pool_),
+                                       bytes, *pool_);
+}
+
+}  // namespace dftracer::utils::dstd

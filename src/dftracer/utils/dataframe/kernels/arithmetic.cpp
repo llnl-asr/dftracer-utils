@@ -1,4 +1,5 @@
-#include <dftracer/utils/core/common/logging.h>
+// SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/decimal_arith.h>
@@ -8,13 +9,14 @@
 #include <dftracer/utils/dataframe/internal/type_promotion.h>
 #include <dftracer/utils/dataframe/kernels/arithmetic.h>
 #include <dftracer/utils/dataframe/parallel.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <type_traits>
-#include <vector>
 
 // Highway runtime dispatch: foreach_target.h recompiles this TU once per ISA,
 // then HWY_DYNAMIC_DISPATCH selects the best at load time.
@@ -26,44 +28,48 @@
 HWY_BEFORE_NAMESPACE();
 namespace dftracer::utils::dataframe {
 namespace HWY_NAMESPACE {
-namespace hn = hwy::HWY_NAMESPACE;
 
-#define DF_DEFINE_BINOP(NAME, HWYOP, SCALAROP)                             \
-    template <class T>                                                     \
-    void NAME(const void* av, const void* bv, void* ov, std::size_t n) {   \
-        const T* a = static_cast<const T*>(av);                            \
-        const T* b = static_cast<const T*>(bv);                            \
-        T* out = static_cast<T*>(ov);                                      \
-        const hn::ScalableTag<T> d;                                        \
-        const std::size_t lanes = hn::Lanes(d);                            \
-        std::size_t i = 0;                                                 \
-        for (; i + lanes <= n; i += lanes)                                 \
-            hn::StoreU(HWYOP(hn::LoadU(d, a + i), hn::LoadU(d, b + i)), d, \
-                       out + i);                                           \
-        for (; i < n; ++i) out[i] = SCALAROP;                              \
+#define DFTRACER_UTILS_DEFINE_BINOP(NAME, HWYOP, SCALAROP)               \
+    template <class T>                                                   \
+    void NAME(const void* av, const void* bv, void* ov, std::size_t n) { \
+        const T* a = static_cast<const T*>(av);                          \
+        const T* b = static_cast<const T*>(bv);                          \
+        T* out = static_cast<T*>(ov);                                    \
+        const hwy::HWY_NAMESPACE::ScalableTag<T> d;                      \
+        const std::size_t lanes = hwy::HWY_NAMESPACE::Lanes(d);          \
+        std::size_t i = 0;                                               \
+        for (; i + lanes <= n; i += lanes)                               \
+            hwy::HWY_NAMESPACE::StoreU(                                  \
+                HWYOP(hwy::HWY_NAMESPACE::LoadU(d, a + i),               \
+                      hwy::HWY_NAMESPACE::LoadU(d, b + i)),              \
+                d, out + i);                                             \
+        for (; i < n; ++i) out[i] = SCALAROP;                            \
     }
 
-DF_DEFINE_BINOP(AddImpl, hn::Add, a[i] + b[i])
-DF_DEFINE_BINOP(SubImpl, hn::Sub, a[i] - b[i])
-DF_DEFINE_BINOP(MulImpl, hn::Mul, a[i] * b[i])
+DFTRACER_UTILS_DEFINE_BINOP(AddImpl, hwy::HWY_NAMESPACE::Add, a[i] + b[i])
+DFTRACER_UTILS_DEFINE_BINOP(SubImpl, hwy::HWY_NAMESPACE::Sub, a[i] - b[i])
+DFTRACER_UTILS_DEFINE_BINOP(MulImpl, hwy::HWY_NAMESPACE::Mul, a[i] * b[i])
 
-#undef DF_DEFINE_BINOP
+#undef DFTRACER_UTILS_DEFINE_BINOP
 
-// Division: floats use the SIMD hn::Div; integers have no SIMD divide, so a
-// scalar loop with a divide-by-zero guard (result 0). The DSL promotes to
-// double before dividing, so the integer path is a defensive fallback.
+// Division: floats use the SIMD hwy::HWY_NAMESPACE::Div; integers have no SIMD
+// divide, so a scalar loop with a divide-by-zero guard (result 0). The DSL
+// promotes to double before dividing, so the integer path is a defensive
+// fallback.
 template <class T>
 void DivImpl(const void* av, const void* bv, void* ov, std::size_t n) {
     const T* a = static_cast<const T*>(av);
     const T* b = static_cast<const T*>(bv);
     T* out = static_cast<T*>(ov);
     if constexpr (std::is_floating_point_v<T>) {
-        const hn::ScalableTag<T> d;
-        const std::size_t lanes = hn::Lanes(d);
+        const hwy::HWY_NAMESPACE::ScalableTag<T> d;
+        const std::size_t lanes = hwy::HWY_NAMESPACE::Lanes(d);
         std::size_t i = 0;
         for (; i + lanes <= n; i += lanes)
-            hn::StoreU(hn::Div(hn::LoadU(d, a + i), hn::LoadU(d, b + i)), d,
-                       out + i);
+            hwy::HWY_NAMESPACE::StoreU(
+                hwy::HWY_NAMESPACE::Div(hwy::HWY_NAMESPACE::LoadU(d, a + i),
+                                        hwy::HWY_NAMESPACE::LoadU(d, b + i)),
+                d, out + i);
         for (; i < n; ++i) out[i] = a[i] / b[i];
     } else {
         for (std::size_t i = 0; i < n; ++i)
@@ -73,26 +79,27 @@ void DivImpl(const void* av, const void* bv, void* ov, std::size_t n) {
 
 // Broadcast a scalar across the column. The scalar is converted to the column
 // type T, so every numeric type is represented exactly (no double round-trip).
-#define DF_DEFINE_SCALAR(NAME, HWYOP, SCALAROP)                          \
-    template <class T>                                                   \
-    void NAME(const void* av, dftu_scalar sc, void* ov, std::size_t n) { \
-        const T* a = static_cast<const T*>(av);                          \
-        T* out = static_cast<T*>(ov);                                    \
-        const T s = scalar_as<T>(sc);                                    \
-        const hn::ScalableTag<T> d;                                      \
-        const auto vs = hn::Set(d, s);                                   \
-        const std::size_t lanes = hn::Lanes(d);                          \
-        std::size_t i = 0;                                               \
-        for (; i + lanes <= n; i += lanes)                               \
-            hn::StoreU(HWYOP(hn::LoadU(d, a + i), vs), d, out + i);      \
-        for (; i < n; ++i) out[i] = SCALAROP;                            \
+#define DFTRACER_UTILS_DEFINE_SCALAR(NAME, HWYOP, SCALAROP)                  \
+    template <class T>                                                       \
+    void NAME(const void* av, dftu_scalar sc, void* ov, std::size_t n) {     \
+        const T* a = static_cast<const T*>(av);                              \
+        T* out = static_cast<T*>(ov);                                        \
+        const T s = scalar_as<T>(sc);                                        \
+        const hwy::HWY_NAMESPACE::ScalableTag<T> d;                          \
+        const auto vs = hwy::HWY_NAMESPACE::Set(d, s);                       \
+        const std::size_t lanes = hwy::HWY_NAMESPACE::Lanes(d);              \
+        std::size_t i = 0;                                                   \
+        for (; i + lanes <= n; i += lanes)                                   \
+            hwy::HWY_NAMESPACE::StoreU(                                      \
+                HWYOP(hwy::HWY_NAMESPACE::LoadU(d, a + i), vs), d, out + i); \
+        for (; i < n; ++i) out[i] = SCALAROP;                                \
     }
 
-DF_DEFINE_SCALAR(AddSImpl, hn::Add, a[i] + s)
-DF_DEFINE_SCALAR(SubSImpl, hn::Sub, a[i] - s)
-DF_DEFINE_SCALAR(MulSImpl, hn::Mul, a[i] * s)
+DFTRACER_UTILS_DEFINE_SCALAR(AddSImpl, hwy::HWY_NAMESPACE::Add, a[i] + s)
+DFTRACER_UTILS_DEFINE_SCALAR(SubSImpl, hwy::HWY_NAMESPACE::Sub, a[i] - s)
+DFTRACER_UTILS_DEFINE_SCALAR(MulSImpl, hwy::HWY_NAMESPACE::Mul, a[i] * s)
 
-#undef DF_DEFINE_SCALAR
+#undef DFTRACER_UTILS_DEFINE_SCALAR
 
 // Broadcast division: floats SIMD, integers scalar with a zero guard.
 template <class T>
@@ -101,12 +108,15 @@ void DivSImpl(const void* av, dftu_scalar sc, void* ov, std::size_t n) {
     T* out = static_cast<T*>(ov);
     const T s = scalar_as<T>(sc);
     if constexpr (std::is_floating_point_v<T>) {
-        const hn::ScalableTag<T> d;
-        const auto vs = hn::Set(d, s);
-        const std::size_t lanes = hn::Lanes(d);
+        const hwy::HWY_NAMESPACE::ScalableTag<T> d;
+        const auto vs = hwy::HWY_NAMESPACE::Set(d, s);
+        const std::size_t lanes = hwy::HWY_NAMESPACE::Lanes(d);
         std::size_t i = 0;
         for (; i + lanes <= n; i += lanes)
-            hn::StoreU(hn::Div(hn::LoadU(d, a + i), vs), d, out + i);
+            hwy::HWY_NAMESPACE::StoreU(
+                hwy::HWY_NAMESPACE::Div(hwy::HWY_NAMESPACE::LoadU(d, a + i),
+                                        vs),
+                d, out + i);
         for (; i < n; ++i) out[i] = a[i] / s;
     } else {
         for (std::size_t i = 0; i < n; ++i)
@@ -137,36 +147,43 @@ void AddParallelImpl(const void* av, const void* bv, void* ov, std::size_t n) {
 
 void AddKernel(std::int32_t type, const void* a, const void* b, void* out,
                std::size_t n) {
-    DF_NUMERIC_DISPATCH(static_cast<TypeId>(type), AddParallelImpl, a, b, out,
-                        n)
+    DFTRACER_UTILS_NUMERIC_DISPATCH(static_cast<TypeId>(type), AddParallelImpl,
+                                    a, b, out, n)
 }
 void SubKernel(std::int32_t type, const void* a, const void* b, void* out,
                std::size_t n) {
-    DF_NUMERIC_DISPATCH(static_cast<TypeId>(type), SubImpl, a, b, out, n)
+    DFTRACER_UTILS_NUMERIC_DISPATCH(static_cast<TypeId>(type), SubImpl, a, b,
+                                    out, n)
 }
 void MulKernel(std::int32_t type, const void* a, const void* b, void* out,
                std::size_t n) {
-    DF_NUMERIC_DISPATCH(static_cast<TypeId>(type), MulImpl, a, b, out, n)
+    DFTRACER_UTILS_NUMERIC_DISPATCH(static_cast<TypeId>(type), MulImpl, a, b,
+                                    out, n)
 }
 void AddScalarKernel(std::int32_t type, const void* a, dftu_scalar s, void* out,
                      std::size_t n) {
-    DF_NUMERIC_DISPATCH(static_cast<TypeId>(type), AddSImpl, a, s, out, n)
+    DFTRACER_UTILS_NUMERIC_DISPATCH(static_cast<TypeId>(type), AddSImpl, a, s,
+                                    out, n)
 }
 void SubScalarKernel(std::int32_t type, const void* a, dftu_scalar s, void* out,
                      std::size_t n) {
-    DF_NUMERIC_DISPATCH(static_cast<TypeId>(type), SubSImpl, a, s, out, n)
+    DFTRACER_UTILS_NUMERIC_DISPATCH(static_cast<TypeId>(type), SubSImpl, a, s,
+                                    out, n)
 }
 void MulScalarKernel(std::int32_t type, const void* a, dftu_scalar s, void* out,
                      std::size_t n) {
-    DF_NUMERIC_DISPATCH(static_cast<TypeId>(type), MulSImpl, a, s, out, n)
+    DFTRACER_UTILS_NUMERIC_DISPATCH(static_cast<TypeId>(type), MulSImpl, a, s,
+                                    out, n)
 }
 void DivKernel(std::int32_t type, const void* a, const void* b, void* out,
                std::size_t n) {
-    DF_NUMERIC_DISPATCH(static_cast<TypeId>(type), DivImpl, a, b, out, n)
+    DFTRACER_UTILS_NUMERIC_DISPATCH(static_cast<TypeId>(type), DivImpl, a, b,
+                                    out, n)
 }
 void DivScalarKernel(std::int32_t type, const void* a, dftu_scalar s, void* out,
                      std::size_t n) {
-    DF_NUMERIC_DISPATCH(static_cast<TypeId>(type), DivSImpl, a, s, out, n)
+    DFTRACER_UTILS_NUMERIC_DISPATCH(static_cast<TypeId>(type), DivSImpl, a, s,
+                                    out, n)
 }
 
 }  // namespace HWY_NAMESPACE
@@ -230,7 +247,7 @@ dftu_series* temporal_scalar_op(const dftu_series* a, dftu_scalar s, BinOp op) {
     auto res = temporal_scalarop_result(a->type, a->time_unit(), op);
     if (!res) {
         DFTRACER_UTILS_LOG_ERROR(
-            "arithmetic: scalar op not defined for temporal type '%s'",
+            "arithmetic: scalar op not defined for temporal type '{}'",
             type_name(a->type));
         return nullptr;
     }
@@ -241,11 +258,11 @@ dftu_series* temporal_scalar_op(const dftu_series* a, dftu_scalar s, BinOp op) {
     out->null_count = a->null_count;
     out->validity = a->validity;
     out->set_time_unit(res->unit);
-    out->data = Buffer::allocate(static_cast<std::size_t>(a->length) *
-                                 byte_width(TypeId::Int64).value_or(0));
+    out->data = new_buffer(static_cast<std::size_t>(a->length) *
+                           byte_width(TypeId::Int64).value_or(0));
     const std::int32_t t = static_cast<std::int32_t>(TypeId::Int64);
-    const void* pa = a->data->data();
-    void* po = out->data->data();
+    const void* pa = a->data.data();
+    void* po = writable(out->data);
     const std::size_t n = static_cast<std::size_t>(a->length);
     if (op == BinOp::Mul)
         HWY_DYNAMIC_DISPATCH(MulScalarKernel)(t, pa, s, po, n);
@@ -280,12 +297,12 @@ dftu_series* scalar_op(const dftu_series* a, dftu_scalar s, BinOp op) {
     out->length = src->length;
     out->null_count = src->null_count;
     out->validity = src->validity;
-    out->data = Buffer::allocate(static_cast<std::size_t>(src->length) *
-                                 byte_width(src->type).value_or(0));
+    out->data = new_buffer(static_cast<std::size_t>(src->length) *
+                           byte_width(src->type).value_or(0));
 
     std::int32_t t = static_cast<std::int32_t>(src->type);
-    const void* pa = src->data->data();
-    void* po = out->data->data();
+    const void* pa = src->data.data();
+    void* po = writable(out->data);
     std::size_t n = static_cast<std::size_t>(src->length);
     switch (op) {
         case BinOp::Add:
@@ -310,12 +327,12 @@ dftu_series* scalar_op(const dftu_series* a, dftu_scalar s, BinOp op) {
 // of the two bitmaps (a missing bitmap means all valid), null_count recounted.
 void and_validity(const dftu_series* a, const dftu_series* b,
                   dftu_series* out) {
-    if (!a->validity && !b->validity) return;
+    if (!a->validity.block() && !b->validity.block()) return;
     const std::size_t bytes = buffer_bytes(TypeId::Bool, out->length);
-    auto v = Buffer::allocate(bytes);
-    std::uint8_t* dst = v->data();
-    const std::uint8_t* va = a->validity ? a->validity->data() : nullptr;
-    const std::uint8_t* vb = b->validity ? b->validity->data() : nullptr;
+    auto v = new_buffer(bytes);
+    std::uint8_t* dst = writable(v);
+    const std::uint8_t* va = a->validity.block() ? a->validity.data() : nullptr;
+    const std::uint8_t* vb = b->validity.block() ? b->validity.data() : nullptr;
     for (std::size_t i = 0; i < bytes; ++i)
         dst[i] = static_cast<std::uint8_t>((va ? va[i] : 0xFF) &
                                            (vb ? vb[i] : 0xFF));
@@ -334,16 +351,16 @@ dftu_series* temporal_binop(const dftu_series* a, const dftu_series* b,
                               b->time_unit(), b->timezone(), op);
     if (!res) {
         DFTRACER_UTILS_LOG_ERROR(
-            "arithmetic: op not defined for temporal types '%s' and '%s'",
+            "arithmetic: op not defined for temporal types '{}' and '{}'",
             type_name(a->type), type_name(b->type));
         return nullptr;
     }
 
-    std::vector<std::int64_t> tmp_a, tmp_b;
+    dstd::Vector<std::int64_t> tmp_a, tmp_b;
     const auto* pa = static_cast<const std::int64_t*>(
-        static_cast<const void*>(a->data->data()));
+        static_cast<const void*>(a->data.data()));
     const auto* pb = static_cast<const std::int64_t*>(
-        static_cast<const void*>(b->data->data()));
+        static_cast<const void*>(b->data.data()));
     const std::size_t n = static_cast<std::size_t>(a->length);
     if (a->time_unit() != res->unit) {
         auto rescaled = rescale_ticks_up(pa, n, a->time_unit(), res->unit);
@@ -372,9 +389,9 @@ dftu_series* temporal_binop(const dftu_series* a, const dftu_series* b,
     out->length = a->length;
     out->set_time_unit(res->unit);
     out->set_timezone(res->timezone);
-    out->data = Buffer::allocate(n * byte_width(TypeId::Int64).value_or(0));
+    out->data = new_buffer(n * byte_width(TypeId::Int64).value_or(0));
     const std::int32_t t = static_cast<std::int32_t>(TypeId::Int64);
-    void* po = out->data->data();
+    void* po = writable(out->data);
     if (op == BinOp::Add)
         HWY_DYNAMIC_DISPATCH(AddKernel)(t, pa, pb, po, n);
     else
@@ -427,23 +444,23 @@ dftu_series* decimal_binop_exact(const dftu_series* a, const dftu_series* b,
     out->set_decimal(result_precision, result_scale);
     const std::size_t width = is256 ? 32 : 16;
     const std::int64_t n = a->length;
-    out->data = Buffer::allocate(static_cast<std::size_t>(n) * width);
-    const auto* pa = static_cast<const std::uint8_t*>(a->data->data());
-    const auto* pb = static_cast<const std::uint8_t*>(b->data->data());
-    auto* po = static_cast<std::uint8_t*>(out->data->data());
+    out->data = new_buffer(static_cast<std::size_t>(n) * width);
+    const auto* pa = static_cast<const std::uint8_t*>(a->data.data());
+    const auto* pb = static_cast<const std::uint8_t*>(b->data.data());
+    auto* po = static_cast<std::uint8_t*>(writable(out->data));
 
     bool ok = true;
     if (!is256) {
         for (std::int64_t i = 0; i < n && ok; ++i) {
-            const i128 va = load_i128(pa + static_cast<std::size_t>(i) * 16);
-            const i128 vb = load_i128(pb + static_cast<std::size_t>(i) * 16);
-            std::optional<i128> r;
+            const I128 va = load_i128(pa + static_cast<std::size_t>(i) * 16);
+            const I128 vb = load_i128(pb + static_cast<std::size_t>(i) * 16);
+            dstd::Optional<I128> r;
             if (op == BinOp::Add || op == BinOp::Sub) {
                 auto ra = rescale_up_i128(va, a->decimal_scale(), result_scale);
                 auto rb = rescale_up_i128(vb, b->decimal_scale(), result_scale);
                 if (ra && rb) {
-                    const i128 rhs = op == BinOp::Add ? *rb : -*rb;
-                    const i128 sum = *ra + rhs;
+                    const I128 rhs = op == BinOp::Add ? *rb : -*rb;
+                    const I128 sum = *ra + rhs;
                     const bool overflow = ((*ra ^ sum) & (rhs ^ sum)) < 0;
                     if (!overflow && i128_fits_precision(sum, result_precision))
                         r = sum;
@@ -473,7 +490,7 @@ dftu_series* decimal_binop_exact(const dftu_series* a, const dftu_series* b,
                 load_limbs256(pb + static_cast<std::size_t>(i) * 32);
             auto ra = rescale_up_256(va, a->decimal_scale(), result_scale);
             auto rb = rescale_up_256(vb, b->decimal_scale(), result_scale);
-            std::optional<Limbs256> r;
+            dstd::Optional<Limbs256> r;
             if (ra && rb)
                 r = addsub_checked_256(*ra, *rb, op == BinOp::Sub,
                                        result_precision);
@@ -545,13 +562,13 @@ dftu_series* binop(const dftu_series* a, const dftu_series* b, BinOp op) {
     out->type = pa_src->type;
     out->encoding = Encoding::Flat;
     out->length = pa_src->length;
-    out->data = Buffer::allocate(static_cast<std::size_t>(pa_src->length) *
-                                 byte_width(pa_src->type).value_or(0));
+    out->data = new_buffer(static_cast<std::size_t>(pa_src->length) *
+                           byte_width(pa_src->type).value_or(0));
 
     std::int32_t t = static_cast<std::int32_t>(pa_src->type);
-    const void* pa = pa_src->data->data();
-    const void* pb = pb_src->data->data();
-    void* po = out->data->data();
+    const void* pa = pa_src->data.data();
+    const void* pb = pb_src->data.data();
+    void* po = writable(out->data);
     std::size_t n = static_cast<std::size_t>(pa_src->length);
     switch (op) {
         case BinOp::Add:

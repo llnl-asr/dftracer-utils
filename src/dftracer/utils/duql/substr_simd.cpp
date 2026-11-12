@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+#include <dftracer/utils/dstd/ascii.h>
 #include <dftracer/utils/duql/substr_simd.h>
 
 #include <cstddef>
@@ -12,7 +14,6 @@
 HWY_BEFORE_NAMESPACE();
 namespace dftracer::utils::duql::detail {
 namespace HWY_NAMESPACE {
-namespace hn = hwy::HWY_NAMESPACE;
 
 // Needles at or below this length take the SIMD first-byte scan; longer ones
 // fall back to a scalar search (the per-candidate compare dominates, so the
@@ -21,7 +22,8 @@ namespace hn = hwy::HWY_NAMESPACE;
 constexpr std::int64_t SUBSTR_SIMD_MAX_NEEDLE = 64;
 
 inline std::uint8_t fold(std::uint8_t c) {
-    return c >= 'A' && c <= 'Z' ? static_cast<std::uint8_t>(c | 0x20) : c;
+    return static_cast<std::uint8_t>(
+        dstd::to_ascii_lower(static_cast<char>(c)));
 }
 
 // Whether the `m` bytes at `h` equal `needle`, ASCII letters folded when
@@ -38,15 +40,15 @@ bool same(const std::uint8_t* h, const char* needle, std::int64_t m) {
     }
 }
 
-// First index in [0, hay_len - needle_len] whose needle_len bytes match, or
+// First index in [0, hay_size - needle_size] whose needle_size bytes match, or
 // -1. Callers handle the empty needle and needle-longer-than-haystack cases
 // before dispatch.
 template <bool ICASE>
-std::int64_t Find(const char* hay, std::int64_t hay_len, const char* needle,
-                  std::int64_t needle_len) {
+std::int64_t Find(const char* hay, std::int64_t hay_size, const char* needle,
+                  std::int64_t needle_size) {
     const std::uint8_t* hp = reinterpret_cast<const std::uint8_t*>(hay);
-    const std::int64_t last = hay_len - needle_len;  // inclusive last start
-    const std::int64_t m = needle_len;
+    const std::int64_t last = hay_size - needle_size;  // inclusive last start
+    const std::int64_t m = needle_size;
     const auto head = static_cast<std::uint8_t>(needle[0]);
     auto scalar_from = [&](std::int64_t i) -> std::int64_t {
         for (; i <= last; ++i)
@@ -56,31 +58,36 @@ std::int64_t Find(const char* hay, std::int64_t hay_len, const char* needle,
         return -1;
     };
     if (m > SUBSTR_SIMD_MAX_NEEDLE) return scalar_from(0);
-    const hn::ScalableTag<std::uint8_t> d;
-    const std::size_t lanes = hn::Lanes(d);
-    const auto first = hn::Set(d, head);
-    const auto upper_a = hn::Set(d, static_cast<std::uint8_t>('A'));
-    const auto letters = hn::Set(d, static_cast<std::uint8_t>(26));
-    const auto bit = hn::Set(d, static_cast<std::uint8_t>(0x20));
+    const hwy::HWY_NAMESPACE::ScalableTag<std::uint8_t> d;
+    const std::size_t lanes = hwy::HWY_NAMESPACE::Lanes(d);
+    const auto first = hwy::HWY_NAMESPACE::Set(d, head);
+    const auto upper_a =
+        hwy::HWY_NAMESPACE::Set(d, static_cast<std::uint8_t>('A'));
+    const auto letters =
+        hwy::HWY_NAMESPACE::Set(d, static_cast<std::uint8_t>(26));
+    const auto bit =
+        hwy::HWY_NAMESPACE::Set(d, static_cast<std::uint8_t>(0x20));
     std::int64_t i = 0;
     // The candidate offsets in a block are read from a 64-bit mask accumulator;
     // skip the vector loop when a target's u8 vector exceeds 64 lanes (some
     // scalable ISAs), leaving the scalar tail to cover every position.
     const bool vec_ok = lanes <= 64;
     // Load `lanes` bytes at a time; require i + lanes <= last + 1 so the load
-    // stays in bounds (last + 1 <= hay_len for m >= 1) and every candidate has
+    // stays in bounds (last + 1 <= hay_size for m >= 1) and every candidate has
     // a full needle after it.
     for (; vec_ok && i + static_cast<std::int64_t>(lanes) <= last + 1;
          i += static_cast<std::int64_t>(lanes)) {
-        auto v = hn::LoadU(d, hp + i);
+        auto v = hwy::HWY_NAMESPACE::LoadU(d, hp + i);
         if constexpr (ICASE) {
             // An uppercase ASCII letter is (v - 'A') < 26 unsigned.
-            const auto upper = hn::Lt(hn::Sub(v, upper_a), letters);
-            v = hn::IfThenElse(upper, hn::Or(v, bit), v);
+            const auto upper = hwy::HWY_NAMESPACE::Lt(
+                hwy::HWY_NAMESPACE::Sub(v, upper_a), letters);
+            v = hwy::HWY_NAMESPACE::IfThenElse(
+                upper, hwy::HWY_NAMESPACE::Or(v, bit), v);
         }
-        const auto eq = hn::Eq(v, first);
+        const auto eq = hwy::HWY_NAMESPACE::Eq(v, first);
         alignas(8) std::uint8_t mbytes[8] = {0};
-        hn::StoreMaskBits(d, eq, mbytes);
+        hwy::HWY_NAMESPACE::StoreMaskBits(d, eq, mbytes);
         std::uint64_t bits;
         std::memcpy(&bits, mbytes, sizeof(bits));
         while (bits != 0) {
@@ -94,14 +101,14 @@ std::int64_t Find(const char* hay, std::int64_t hay_len, const char* needle,
     return scalar_from(i);
 }
 
-std::int64_t SubstrFind(const char* hay, std::int64_t hay_len,
-                        const char* needle, std::int64_t needle_len) {
-    return Find<false>(hay, hay_len, needle, needle_len);
+std::int64_t SubstrFind(const char* hay, std::int64_t hay_size,
+                        const char* needle, std::int64_t needle_size) {
+    return Find<false>(hay, hay_size, needle, needle_size);
 }
 
-std::int64_t SubstrFindIcase(const char* hay, std::int64_t hay_len,
-                             const char* needle, std::int64_t needle_len) {
-    return Find<true>(hay, hay_len, needle, needle_len);
+std::int64_t SubstrFindIcase(const char* hay, std::int64_t hay_size,
+                             const char* needle, std::int64_t needle_size) {
+    return Find<true>(hay, hay_size, needle, needle_size);
 }
 
 }  // namespace HWY_NAMESPACE
@@ -114,20 +121,20 @@ namespace dftracer::utils::duql::detail {
 HWY_EXPORT(SubstrFind);
 HWY_EXPORT(SubstrFindIcase);
 
-std::int64_t substr_find(const char* hay, std::int64_t hay_len,
-                         const char* needle, std::int64_t needle_len) {
-    if (needle_len <= 0)
+std::int64_t substr_find(const char* hay, std::int64_t hay_size,
+                         const char* needle, std::int64_t needle_size) {
+    if (needle_size <= 0)
         return 0;  // empty needle matches at 0 (find semantics)
-    if (needle_len > hay_len) return -1;
-    return HWY_DYNAMIC_DISPATCH(SubstrFind)(hay, hay_len, needle, needle_len);
+    if (needle_size > hay_size) return -1;
+    return HWY_DYNAMIC_DISPATCH(SubstrFind)(hay, hay_size, needle, needle_size);
 }
 
-std::int64_t substr_find_icase(const char* hay, std::int64_t hay_len,
-                               const char* needle, std::int64_t needle_len) {
-    if (needle_len <= 0) return 0;
-    if (needle_len > hay_len) return -1;
-    return HWY_DYNAMIC_DISPATCH(SubstrFindIcase)(hay, hay_len, needle,
-                                                 needle_len);
+std::int64_t substr_find_icase(const char* hay, std::int64_t hay_size,
+                               const char* needle, std::int64_t needle_size) {
+    if (needle_size <= 0) return 0;
+    if (needle_size > hay_size) return -1;
+    return HWY_DYNAMIC_DISPATCH(SubstrFindIcase)(hay, hay_size, needle,
+                                                 needle_size);
 }
 
 }  // namespace dftracer::utils::duql::detail

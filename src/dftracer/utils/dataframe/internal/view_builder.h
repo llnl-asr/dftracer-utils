@@ -1,15 +1,16 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_DATAFRAME_INTERNAL_VIEW_BUILDER_H
 #define DFTRACER_UTILS_DATAFRAME_INTERNAL_VIEW_BUILDER_H
 
-#include <ankerl/unordered_dense.h>
-#include <dftracer/utils/dataframe/buffer.h>
+#include <dftracer/utils/dataframe/internal/buffers.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dataframe/types.h>
+#include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <cstdint>
 #include <memory>
-#include <string_view>
-#include <vector>
 
 struct dftu_series;
 
@@ -20,7 +21,7 @@ namespace dftracer::utils::dataframe {
 /// values are copied. Buffers are deduplicated by data pointer.
 ///
 /// Not thread safe. A value longer than INT32_MAX bytes cannot be a view and
-/// throws std::length_error. A value of a flat column that starts past
+/// ends the process. A value of a flat column that starts past
 /// INT32_MAX bytes of its buffer cannot have a view offset, so it is copied
 /// into a buffer owned by the builder.
 class ViewBuilder {
@@ -29,13 +30,13 @@ class ViewBuilder {
 
     /// The buffer's index; a buffer already added (same data pointer) returns
     /// its index.
-    std::int32_t add_buffer(std::shared_ptr<Buffer> buffer);
+    std::int32_t add_buffer(BufferView buffer);
 
     /// A row viewing `bytes`, which must lie inside buffer `buffer_index`.
-    void append(std::string_view bytes, std::int32_t buffer_index);
+    void append(dstd::StringView bytes, std::int32_t buffer_index);
 
     /// A row of at most 12 bytes, copied into the view.
-    void append_inline(std::string_view bytes);
+    void append_inline(dstd::StringView bytes);
 
     void append_null();
 
@@ -57,14 +58,14 @@ class ViewBuilder {
 
    private:
     std::uint8_t* new_view();
-    std::int32_t cached_buffer(const std::shared_ptr<Buffer>& buffer);
+    std::int32_t cached_buffer(const BufferView& buffer);
     void append_flat(const dftu_series& col, std::int64_t row);
     void append_view_row(const dftu_series& col, std::int64_t row);
 
-    std::vector<std::uint8_t> views_;
-    std::vector<std::shared_ptr<Buffer>> buffers_;
-    ankerl::unordered_dense::map<const std::uint8_t*, std::int32_t> index_of_;
-    std::vector<std::int64_t> null_rows_;
+    dstd::Vector<std::uint8_t> views_;
+    dstd::Vector<BufferView> buffers_;
+    dstd::HashMap<const std::uint8_t*, std::int32_t> index_of_;
+    dstd::Vector<std::int64_t> null_rows_;
     const std::uint8_t* last_data_ = nullptr;
     std::int32_t last_index_ = 0;
 };

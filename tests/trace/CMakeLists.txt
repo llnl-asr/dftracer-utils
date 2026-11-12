@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 # ##############################################################################
 # Trace Library Tests
 # ##############################################################################
@@ -9,10 +10,10 @@ set(TRACE_TEST_SOURCES
     test_chunk_verifier.cpp
     test_trace_config.cpp
     test_chunk_extractor.cpp
-    test_event_collector.cpp
     test_index_builder.cpp
     test_metadata_collector.cpp
     test_time_metric.cpp
+    test_index_root_stat.cpp
 
     # Indexing
     indexing/test_bloom_filter.cpp
@@ -26,6 +27,7 @@ set(TRACE_TEST_SOURCES
     views/test_view_definition.cpp
     views/test_view_planner.cpp
     views/test_view_index_freshness.cpp
+    views/test_view_index_grow.cpp
     views/test_live_view.cpp
     views/test_view_scanner.cpp
     views/test_view_scan.cpp
@@ -39,6 +41,8 @@ set(TRACE_TEST_SOURCES
     views/test_metadata_query.cpp
     views/test_field_filter.cpp
     views/test_view_aggregate.cpp
+    views/test_view_partials.cpp
+    views/test_view_index_parity.cpp
     views/test_time_window.cpp
     views/test_generic_view.cpp
     views/test_schema_view.cpp
@@ -53,7 +57,10 @@ set(TRACE_TEST_SOURCES
     views/test_view_mv.cpp
     views/test_coverage.cpp
     views/test_fold.cpp
+    views/test_fold_shapes.cpp
+    views/test_fold_ondemand.cpp
     views/test_pipeline_plan.cpp
+    views/test_view_fatal.cpp
     views/test_stream_early_out.cpp
     views/test_agg_transform_memory.cpp
     views/test_vectorized_fold.cpp
@@ -83,17 +90,12 @@ set(TRACE_TEST_SOURCES
 
     # Aggregators
     aggregators/test_aggregation_metrics.cpp
-    aggregators/test_aggregation_rollup.cpp
-    aggregators/test_aggregation_key.cpp
     aggregators/test_aggregation_config.cpp
-    aggregators/test_aggregation_serialization.cpp
-    aggregators/test_variance_tier.cpp
-    aggregators/test_aggregator_utility.cpp
-    aggregators/test_event_aggregator_utility.cpp
-    aggregators/test_aggregation_augmentation.cpp
     aggregators/test_system_metrics.cpp
-    aggregators/test_system_metrics_merge_operator.cpp
-    aggregators/test_dft_trace_writer.cpp
+    aggregators/test_agg_parity.cpp
+    aggregators/test_quantile_store.cpp
+    aggregators/test_agg_partial.cpp
+    aggregators/test_agg_query.cpp
 
     # Comparator
     comparator/test_comparison_result.cpp
@@ -101,6 +103,12 @@ set(TRACE_TEST_SOURCES
     comparator/test_is_data_transfer_op.cpp
     comparator/test_tree_table_formatter.cpp
 )
+
+# These read counters that exist only when DFTRACER_UTILS_TEST_PROBES is ON.
+if(DFTRACER_UTILS_TEST_PROBES)
+  list(APPEND TRACE_TEST_SOURCES test_bootstrap_parallelism.cpp
+       test_bootstrap_peak.cpp)
+endif()
 
 foreach(test_file ${TRACE_TEST_SOURCES})
   string(REPLACE ".cpp" "" bin_exec ${test_file})
@@ -133,8 +141,8 @@ foreach(test_file ${TRACE_TEST_SOURCES})
   add_test(NAME trace/${bin_exec} COMMAND ${target_name})
   set_tests_properties(trace/${bin_exec} PROPERTIES
                        WORKING_DIRECTORY "${test_working_directory}")
-  # Hundreds of queries over several traces: about 75 s alone on a laptop,
-  # several times that on the macOS coverage runner.
+  # Hundreds of queries over several traces, which is slower still under
+  # coverage.
   if(bin_exec STREQUAL "views/test_view_duql")
     set(duql_timeout 600)
     if(DFTRACER_UTILS_COVERAGE OR DFTRACER_UTILS_ENABLE_TSAN
@@ -154,3 +162,28 @@ foreach(threads 1 2 8)
       "${CMAKE_CURRENT_BINARY_DIR}/workdirs/trace_views_test_view_duql_joins"
     ENVIRONMENT "DFTRACER_UTILS_THREADS=${threads}")
 endforeach()
+
+# With more workers than units, every unit is claimed before narrow() lands.
+add_test(NAME trace/views/test_dynamic_prune_t224
+         COMMAND trace_views_test_dynamic_prune)
+set_tests_properties(trace/views/test_dynamic_prune_t224 PROPERTIES
+  WORKING_DIRECTORY
+    "${CMAKE_CURRENT_BINARY_DIR}/workdirs/trace_views_test_dynamic_prune"
+  ENVIRONMENT "DFTRACER_UTILS_THREADS=224")
+
+
+# The parity test replays references recorded from the CLI tools and the View.
+target_compile_definitions(trace_aggregators_test_agg_parity PRIVATE
+  DFTRACER_UTILS_AGG_PARITY_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/aggregators/data")
+add_dependencies(trace_aggregators_test_agg_parity
+                 dftracer_comparator dftracer_gen_dlio_config)
+set_tests_properties(trace/aggregators/test_agg_parity PROPERTIES
+  ENVIRONMENT "DFTRACER_UTILS_COMPARATOR_PATH=$<TARGET_FILE:dftracer_comparator>;DFTRACER_UTILS_GEN_DLIO_CONFIG_PATH=$<TARGET_FILE:dftracer_gen_dlio_config>"
+  TIMEOUT 600)
+
+# The allocator counts its allocations only in debug mode, which is fixed
+# before the first allocation.
+set_tests_properties(trace/aggregators/test_quantile_store PROPERTIES
+  ENVIRONMENT "DFTRACER_UTILS_MEMORY_DEBUG=1")
+set_tests_properties(trace/aggregators/test_agg_partial PROPERTIES
+  ENVIRONMENT "DFTRACER_UTILS_MEMORY_DEBUG=1")

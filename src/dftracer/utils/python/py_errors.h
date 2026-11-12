@@ -1,9 +1,12 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_PYTHON_PY_ERRORS_H
 #define DFTRACER_UTILS_PYTHON_PY_ERRORS_H
 
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
-#include <dftracer/utils/core/common/error.h>
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/error.h>
+#include <dftracer/utils/python/py_error_exception.h>
 
 #include <exception>
 
@@ -28,15 +31,14 @@ int init_py_errors(PyObject *m);
 
 // Map a coarse ErrorCode to its Python exception type (borrowed reference).
 // Falls back to the DFTUtilsError base for UNKNOWN/INTERNAL.
-PyObject *py_error_type_for(dftracer::utils::ErrorCode code);
+PyObject *py_error_type_for(dftracer::utils::common::ErrorCode code);
 /// Domain-aware: maps a domain error (e.g. the duql domain) to its Python
 /// type, falling back to the portable-condition map.
-PyObject *py_error_type_for(const dftracer::utils::DFTUtilsException &e);
+PyObject *py_error_type_for(const dftracer::utils::dstd::Error &error);
 
-// Set the current Python error from a caught C++ exception, choosing the typed
-// DFTUtils* exception (DFTUtilsException -> its code; std::invalid_argument ->
-// DFTUtilsValueError; else the DFTUtilsError base). Mirrors run_blocking's
-// dispatch for the bindings that catch and translate inline.
+// Set the current Python error from a caught C++ exception. PyErrorException
+// maps by its error, std::invalid_argument to DFTUtilsValueError and anything
+// else to the DFTUtilsError base, as run_blocking does for inline bindings.
 void set_typed_py_error(const std::exception &e);
 
 }  // namespace dftracer::utils::python

@@ -1,38 +1,53 @@
-// Dynamic filter pushdown (docs/plans/plugin_runtime.md section 12, gap 10):
-// once a scan is already open, nothing could previously narrow what remains.
-// dataframe::Cursor::narrow() is the advisory hook; views::detail::DynamicPrune
-// is the state ViewSource's streaming cursor writes into so a running fuse()
-// scan can skip units it has not claimed yet without the caller re-planning.
+// SPDX-License-Identifier: MIT
+// Dynamic filter pushdown: once a scan is already open, nothing could
+// previously narrow what remains. dataframe::Cursor::narrow() is the advisory
+// hook; views::detail::DynamicPrune is the state ViewSource's streaming cursor
+// writes into so a running fuse() scan can skip units it has not claimed yet
+// without the caller re-planning.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/string_intern.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/scalar.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/dstd/thread.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/builder.h>
 #include <dftracer/utils/duql/query.h>
-#include <dftracer/utils/index/plan/chunk_pruner.h>
+#include <dftracer/utils/trace/index/plan/chunk_pruner.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/trace/views/view_plan.h>
 #include <dftracer/utils/trace/views/view_plan_ops.h>
+#include <dftracer/utils/trace/views/view_scan.h>
+#include <dftracer/utils/trace/views/view_scanner_utility.h>
 #include <dftracer/utils/trace/views/view_source.h>
 #include <doctest/doctest.h>
+#include <generator_ok.h>
+#include <task_result.h>
+#include <testing_utilities.h>
+#include <trace/views/test_view_common.h>
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <fstream>
 #include <memory>
-#include <set>
-#include <string>
-#include <vector>
+#include <mutex>
+#include <thread>
 
-#include "test_view_common.h"
+using namespace dftracer::utils;
+using namespace dftracer::utils::trace::internal;
+using namespace dftracer::utils::trace::views;
+using namespace dftu_utils_test;
+using namespace test_view_common;
 
 using namespace dftracer::utils::trace::views::detail;
-using dftracer::utils::StringIntern;
-namespace q = dftracer::utils::duql;
-namespace scan = dftracer::utils::trace::views::detail::scan;
-using scan::ScanPlan;
+using namespace dftracer::utils::trace;
 
 namespace {
 
@@ -40,34 +55,36 @@ namespace {
 // units it saw sealed (fully scanned end to end), so a test can compare row
 // content and scan work between a narrowed and unnarrowed run.
 struct NameCollectorFold : Fold {
-    std::vector<std::uint32_t> name_ids;
+    dstd::Vector<std::uint32_t> name_ids;
     std::uint64_t sealed_units = 0;
 
     bool accepts(const ScanShape&) const override { return true; }
-    std::unique_ptr<Fold> slice() const override {
-        return std::make_unique<NameCollectorFold>();
+    dstd::UniquePtr<Fold> slice() const override {
+        return dstd::make_unique<NameCollectorFold>();
     }
-    void step(const FoldBatch& b) override {
+    dstd::Result<void> step(const FoldBatch& b) override {
         for (const auto& e : b.events) name_ids.push_back(e.name_id);
+        return {};
     }
     void seal_unit(const ScanUnit&) override { ++sealed_units; }
     void drop_unit(const ScanUnit&) override {}
-    void merge(Fold& other) override {
+    dstd::Result<void> merge(Fold& other) override {
         auto& o = static_cast<NameCollectorFold&>(other);
         name_ids.insert(name_ids.end(), o.name_ids.begin(), o.name_ids.end());
         sealed_units += o.sealed_units;
+        return {};
     }
     coro::CoroTask<bool> finalize(const CoverageSet&) override {
         co_return true;
     }
 };
 
-std::vector<std::string> matching_names(const NameCollectorFold& f,
-                                        StringIntern& intern,
-                                        std::string_view want) {
-    std::vector<std::string> out;
+dstd::Vector<dstd::String> matching_names(const NameCollectorFold& f,
+                                          dstd::StringIntern& intern,
+                                          dstd::StringView want) {
+    dstd::Vector<dstd::String> out;
     for (std::uint32_t id : f.name_ids) {
-        std::string n(intern.resolve(id));
+        dstd::String n(intern.resolve(id));
         if (n == want) out.push_back(std::move(n));
     }
     std::sort(out.begin(), out.end());
@@ -88,9 +105,9 @@ std::vector<std::string> matching_names(const NameCollectorFold& f,
 // what the producer has not claimed yet, and the producer runs ahead by a
 // roughly fixed number of rows, so at 40 it pruned 8 rows of 158 and a fast
 // machine lost the race outright. At 200 it prunes about half.
-std::string create_grouped_trace(TestEnvironment& env, int per_name = 40) {
-    std::string pfw = env.get_dir() + "/grouped.pfw";
-    std::ofstream ofs(pfw);
+dstd::String create_grouped_trace(TestEnvironment& env, int per_name = 40) {
+    dstd::String pfw = env.dir() + "/grouped.pfw";
+    dftu_utils_test::FileOut ofs(pfw);
     std::uint64_t ts = 1000;
     int pid = 1;
     for (const char* name : {"alpha", "beta", "gamma"}) {
@@ -103,25 +120,25 @@ std::string create_grouped_trace(TestEnvironment& env, int per_name = 40) {
         ++pid;
     }
     ofs.close();
-    std::string gz = pfw + ".gz";
+    dstd::String gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip_multimember(pfw, gz, 200);
-    fs::remove(pfw);
+    dstd::fs::remove(pfw).discard();
     return gz;
 }
 
 // Wraps a Source so a test can count the rows its cursor actually produced
 // and see whether a narrow() reached it; everything else passes through.
 struct CountingCursor : dataframe::Cursor {
-    std::unique_ptr<dataframe::Cursor> inner;
+    dstd::UniquePtr<dataframe::Cursor> inner;
     std::size_t* rows;
     std::size_t* narrows;
-    CountingCursor(std::unique_ptr<dataframe::Cursor> in, std::size_t* r,
+    CountingCursor(dstd::UniquePtr<dataframe::Cursor> in, std::size_t* r,
                    std::size_t* n)
         : inner(std::move(in)), rows(r), narrows(n) {}
-    coro::CoroTask<std::optional<dataframe::Morsel>> next(
+    coro::CoroTask<dataframe::MorselResult> next(
         std::int64_t max_rows) override {
         auto m = co_await inner->next(max_rows);
-        if (m) *rows += static_cast<std::size_t>(m->rows);
+        if (m && *m) *rows += static_cast<std::size_t>((*m)->rows);
         co_return m;
     }
     coro::CoroTask<bool> narrow(const dataframe::Expr& predicate) override {
@@ -131,20 +148,34 @@ struct CountingCursor : dataframe::Cursor {
 };
 
 struct CountingSource : dataframe::Source {
-    std::shared_ptr<const dataframe::Source> inner;
+    dstd::SharedPtr<const dataframe::Source> inner;
     mutable std::size_t rows = 0;
     mutable std::size_t narrows = 0;
-    explicit CountingSource(std::shared_ptr<const dataframe::Source> in)
+    explicit CountingSource(dstd::SharedPtr<const dataframe::Source> in)
         : inner(std::move(in)) {}
     dataframe::Schema schema() const override { return inner->schema(); }
-    dataframe::ScanResult scan(
+    dstd::Result<dataframe::ScanResult> scan(
         const dataframe::ScanRequest& req) const override {
-        dataframe::ScanResult r = inner->scan(req);
-        r.cursor = std::make_unique<CountingCursor>(std::move(r.cursor), &rows,
-                                                    &narrows);
+        auto scanned = inner->scan(req);
+        if (!scanned) return scanned.error();
+        dataframe::ScanResult r = std::move(*scanned);
+        r.cursor = dstd::make_unique<CountingCursor>(std::move(r.cursor), &rows,
+                                                     &narrows);
         return r;
     }
 };
+
+// Events one unit yields through ViewScannerUtility, driven to completion.
+coro::CoroTask<std::uint64_t> scan_unit_events(ScanUnit unit,
+                                               ViewDefinition vdef) {
+    ViewScannerUtility scanner;
+    std::uint64_t matched = 0;
+    const ViewScannerInput input =
+        make_scanner_input(unit, vdef, dstd::nullopt);
+    auto gen = dftu_utils_test::ok_items(scanner(input));
+    while (auto batch = co_await gen.next()) matched += batch->events_matched;
+    co_return matched;
+}
 
 }  // namespace
 
@@ -152,15 +183,18 @@ TEST_SUITE("Dynamic filter pushdown") {
     TEST_CASE(
         "a narrow() prune reads strictly fewer chunks and the same rows") {
         TestEnvironment env(200);
-        std::string gz = create_grouped_trace(env);
-        const std::string idx_dir = env.get_dir() + "/grouped.dftindex";
+        dstd::String gz = create_grouped_trace(env);
+        const dstd::String idx_dir = env.dir() + "/grouped.dftindex";
         REQUIRE(dftu_utils_test::build_index(gz, idx_dir,
                                              /*checkpoint_size=*/256));
-        const std::string idx = determine_index_path(gz, idx_dir);
+        const dstd::String idx =
+            dstd::String(determine_index_path(gz, idx_dir));
 
-        ScanPlan plan_ptr = scan::from_file(gz, idx);
+        views::detail::scan::ScanPlan plan_ptr =
+            views::detail::scan::from_file(dstd::String(gz), dstd::String(idx));
         const ViewPlan& plan = *plan_ptr;
-        ViewDefinition vdef = make_vdef(plan, /*for_aggregation=*/false);
+        ViewDefinition vdef =
+            dftu_utils_test::ok(make_vdef(plan, /*for_aggregation=*/false));
 
         std::uint64_t static_skipped = 0;
         auto units = run(gather_units(plan, vdef, static_skipped));
@@ -168,7 +202,7 @@ TEST_SUITE("Dynamic filter pushdown") {
         // chunk, or this test would not exercise anything.
         REQUIRE(units.size() > 1);
 
-        StringIntern intern_a;
+        dstd::StringIntern intern_a;
         NameCollectorFold fold_a;
         std::array<Fold*, 1> folds_a{&fold_a};
         ExportStats baseline = run(fuse(plan, vdef, folds_a, intern_a));
@@ -177,22 +211,24 @@ TEST_SUITE("Dynamic filter pushdown") {
         // Build the same narrowing ViewSource::scan()/Cursor::narrow() would:
         // a bloom/dictionary prune of every remaining checkpoint against
         // name == "gamma", turned into per-file exclusions.
-        q::Expr e = q::field_cmp("name", q::CompareOp::EQ,
-                                 q::LiteralNode{std::string("gamma")});
+        duql::Expr e =
+            duql::field_cmp("name", duql::CompareOp::Eq,
+                            duql::LiteralNode{dstd::String("gamma")});
         auto built = std::move(e).build();
         REQUIRE(built.has_value());
-        q::Query narrow_query = std::move(built.value());
+        duql::Query narrow_query = std::move(built.value());
 
         DynamicPrune dyn_prune;
         for (const ViewFile& f : plan.files) {
-            dftracer::utils::index::plan::ChunkPrunerInput pin{
-                f.index_path, f.file_path, narrow_query};
-            dftracer::utils::index::plan::ChunkPruner pruner;
+            dftracer::utils::trace::index::plan::ChunkPrunerInput pin{
+                dstd::String(dstd::StringView(f.index_path)),
+                dstd::String(dstd::StringView(f.file_path)), narrow_query};
+            dftracer::utils::trace::index::plan::ChunkPruner pruner;
             auto out = run(pruner(pin));
             REQUIRE(out.success);
-            std::set<std::uint64_t> keep(out.candidate_checkpoints.begin(),
-                                         out.candidate_checkpoints.end());
-            std::vector<std::uint64_t> excluded;
+            dstd::Set<std::uint64_t> keep(out.candidate_checkpoints.begin(),
+                                          out.candidate_checkpoints.end());
+            dstd::Vector<std::uint64_t> excluded;
             for (std::uint64_t c = 0; c < out.total_checkpoints; ++c)
                 if (!keep.count(c)) excluded.push_back(c);
             // The prune must find at least one chunk it can rule out, or the
@@ -201,7 +237,7 @@ TEST_SUITE("Dynamic filter pushdown") {
             dyn_prune.exclude_checkpoints(f.file_path, excluded);
         }
 
-        StringIntern intern_b;
+        dstd::StringIntern intern_b;
         NameCollectorFold fold_b;
         std::array<Fold*, 1> folds_b{&fold_b};
         ExportStats narrowed =
@@ -229,27 +265,29 @@ TEST_SUITE("Dynamic filter pushdown") {
         "ViewSource's streaming cursor narrow() drives DynamicPrune and "
         "keeps results correct") {
         TestEnvironment env(200);
-        std::string gz = create_grouped_trace(env, /*per_name=*/200);
-        const std::string idx_dir = env.get_dir() + "/grouped2.dftindex";
+        dstd::String gz = create_grouped_trace(env, /*per_name=*/200);
+        const dstd::String idx_dir = env.dir() + "/grouped2.dftindex";
         REQUIRE(dftu_utils_test::build_index(gz, idx_dir,
                                              /*checkpoint_size=*/256));
-        const std::string idx = determine_index_path(gz, idx_dir);
+        const dstd::String idx =
+            dstd::String(determine_index_path(gz, idx_dir));
 
-        ScanPlan plan_ptr = scan::from_file(gz, idx);
+        views::detail::scan::ScanPlan plan_ptr =
+            views::detail::scan::from_file(dstd::String(gz), dstd::String(idx));
         ViewSource src(plan_ptr);
         // A pushed projection fixes every morsel's columns to exactly this
         // list, in this order (see ScanRequest::projection); the unselected
         // path instead lets a morsel's columns vary batch to batch, which
         // would make "column 0 is pid" an assumption this test cannot make.
         // A tight memory_budget throttles the scan to about one checkpoint
-        // in flight at a time (CoroSemaphore gates each unit's byte range
+        // in flight at a time (AsyncSemaphore gates each unit's byte range
         // before it is claimed), so "narrow partway" below is deterministic
         // instead of racing a scan that a handful of worker threads could
         // otherwise finish before the test ever calls narrow().
         dataframe::ScanRequest req;
         req.projection = {"pid"};
         req.memory_budget = 300;
-        dataframe::ScanResult res = src.scan(req);
+        dataframe::ScanResult res = dftu_utils_test::ok(src.scan(req));
         REQUIRE(res.cursor);
 
         // Pull the first morsel before narrowing, exactly like a plugin that
@@ -297,7 +335,7 @@ TEST_SUITE("Dynamic filter pushdown") {
         // than the nominal 120 events: tight checkpointing can replay a
         // boundary chunk in more than one unit, inflating even a full scan
         // past the nominal count.
-        dataframe::ScanResult unnarrowed = src.scan(req);
+        dataframe::ScanResult unnarrowed = dftu_utils_test::ok(src.scan(req));
         REQUIRE(unnarrowed.cursor);
         std::size_t full_total = 0, full_pid3 = 0;
         for (;;) {
@@ -311,19 +349,15 @@ TEST_SUITE("Dynamic filter pushdown") {
     TEST_CASE(
         "a source that ignores narrow() entirely still returns correct "
         "results") {
-        using dataframe::DataFrame;
-        using dataframe::InMemorySource;
-        using dataframe::LazyFrame;
-        using dataframe::Series;
-
         std::array<std::int64_t, 5> xs{1, 2, 3, 4, 5};
-        DataFrame df;
+        dataframe::DataFrame df;
         df.names = {"x"};
-        df.columns.push_back(Series::flat_i64(xs.data(), xs.size()));
+        df.columns.push_back(dataframe::Series::flat_i64(xs.data(), xs.size()));
 
-        auto source = std::make_shared<InMemorySource>(std::move(df));
+        auto source =
+            dstd::make_shared<dataframe::InMemorySource>(std::move(df));
         dataframe::ScanRequest req;
-        dataframe::ScanResult res = source->scan(req);
+        dataframe::ScanResult res = dftu_utils_test::ok(source->scan(req));
         REQUIRE(res.cursor);
 
         // The base Cursor::narrow() a source does not override: it must be
@@ -333,8 +367,8 @@ TEST_SUITE("Dynamic filter pushdown") {
 
         // Correctness never depended on the source acting on it: the engine
         // still applies the filter itself over every row the cursor yields.
-        DataFrame filtered =
-            run(LazyFrame::scan(source)
+        dataframe::DataFrame filtered =
+            run(dataframe::LazyFrame::scan(source)
                     .filter(dataframe::col(0) > std::int64_t{2})
                     .collect());
         REQUIRE(filtered.num_rows() == 3);
@@ -342,37 +376,35 @@ TEST_SUITE("Dynamic filter pushdown") {
 
     TEST_CASE(
         "a lazy join over a trace scan narrows the scan to its build keys") {
-        using dataframe::DataFrame;
-        using dataframe::JoinHow;
-        using dataframe::LazyFrame;
-        using dataframe::Series;
-
         TestEnvironment env(200);
-        std::string gz = create_grouped_trace(env, /*per_name=*/200);
-        const std::string idx_dir = env.get_dir() + "/grouped3.dftindex";
+        dstd::String gz = create_grouped_trace(env, /*per_name=*/200);
+        const dstd::String idx_dir = env.dir() + "/grouped3.dftindex";
         REQUIRE(dftu_utils_test::build_index(gz, idx_dir,
                                              /*checkpoint_size=*/256));
-        const std::string idx = determine_index_path(gz, idx_dir);
-        ScanPlan plan_ptr = scan::from_file(gz, idx);
+        const dstd::String idx =
+            dstd::String(determine_index_path(gz, idx_dir));
+        views::detail::scan::ScanPlan plan_ptr =
+            views::detail::scan::from_file(dstd::String(gz), dstd::String(idx));
 
         // The build side: one key, pid 3, the last of the three groups, in
         // the scan's own key type.
         std::array<std::uint64_t, 1> key{3};
-        DataFrame right;
+        dataframe::DataFrame right;
         right.names = {"pid"};
         right.columns.push_back(
-            Series::flat(dataframe::TypeId::Uint64, key.data(), 1));
+            dataframe::Series::flat(dataframe::TypeId::Uint64, key.data(), 1));
 
         // The same tight budget as the cursor-level test above, so the
         // producer cannot run the whole scan before the join's first pull
         // sends the narrowing.
-        auto joined_src = std::make_shared<CountingSource>(
-            std::make_shared<ViewSource>(plan_ptr));
-        DataFrame out = run(LazyFrame::scan(joined_src)
-                                .select({"pid"})
-                                .join(right.lazy(), {"pid"}, JoinHow::Inner)
-                                .memory_budget(300)
-                                .collect());
+        auto joined_src = dstd::make_shared<CountingSource>(
+            dstd::make_shared<ViewSource>(plan_ptr));
+        dataframe::DataFrame out =
+            run(dataframe::LazyFrame::scan(joined_src)
+                    .select({"pid"})
+                    .join(right.lazy(), {"pid"}, dataframe::JoinHow::Inner)
+                    .memory_budget(300)
+                    .collect());
         CHECK(joined_src->narrows == 1);
         REQUIRE(out.num_rows() >= 200);
         const auto pid_col = out.columns[0].materialize();
@@ -381,12 +413,12 @@ TEST_SUITE("Dynamic filter pushdown") {
 
         // Against a plain scan: the join read strictly fewer rows from the
         // source, and every pid-3 row the full scan has is in the join.
-        auto full_src = std::make_shared<CountingSource>(
-            std::make_shared<ViewSource>(plan_ptr));
-        DataFrame full = run(LazyFrame::scan(full_src)
-                                 .select({"pid"})
-                                 .memory_budget(300)
-                                 .collect());
+        auto full_src = dstd::make_shared<CountingSource>(
+            dstd::make_shared<ViewSource>(plan_ptr));
+        dataframe::DataFrame full = run(dataframe::LazyFrame::scan(full_src)
+                                            .select({"pid"})
+                                            .memory_budget(300)
+                                            .collect());
         CHECK(full_src->narrows == 0);
         std::int64_t full_pid3 = 0;
         const auto all_col = full.columns[0].materialize();
@@ -395,5 +427,59 @@ TEST_SUITE("Dynamic filter pushdown") {
             if (all[i] == 3) ++full_pid3;
         CHECK(out.num_rows() == full_pid3);
         CHECK(joined_src->rows < full_src->rows);
+    }
+
+    TEST_CASE("threads planning and scanning on their own never stall") {
+        TestEnvironment env(200);
+        dstd::String gz = create_grouped_trace(env, /*per_name=*/200);
+        const dstd::String idx_dir = env.dir() + "/stall.dftindex";
+        REQUIRE(dftu_utils_test::build_index(gz, idx_dir,
+                                             /*checkpoint_size=*/256));
+        const dstd::String idx =
+            dstd::String(determine_index_path(gz, idx_dir));
+
+        // Each call plans over its own ViewPlan, so threads share the index
+        // and nothing else.
+        auto scan_all = [&] {
+            views::detail::scan::ScanPlan plan_ptr =
+                views::detail::scan::from_file(dstd::String(gz),
+                                               dstd::String(idx));
+            const ViewPlan& plan = *plan_ptr;
+            ViewDefinition vdef =
+                dftu_utils_test::ok(make_vdef(plan, /*for_aggregation=*/false));
+            std::uint64_t skipped = 0;
+            std::uint64_t matched = 0;
+            for (const ScanUnit& u :
+                 dftu_utils_test::ok(gather_units(plan, vdef, skipped).get()))
+                matched += dftu_utils_test::ok(scan_unit_events(u, vdef).get());
+            return matched;
+        };
+        const std::uint64_t expected = scan_all();
+        REQUIRE(expected > 0);
+
+        constexpr int THREADS = 8;
+        constexpr int ROUNDS = 6;
+        std::atomic<int> wrong{0};
+        std::atomic<int> failed{0};
+        dstd::String first_error;
+        std::mutex error_mutex;
+        dstd::Vector<dstd::Thread> threads;
+        for (int t = 0; t < THREADS; ++t)
+            threads.emplace_back([&] {
+                for (int r = 0; r < ROUNDS; ++r) {
+                    try {
+                        if (scan_all() != expected) ++wrong;
+                    } catch (const std::exception& e) {
+                        if (failed++ == 0) {
+                            std::lock_guard<std::mutex> lock(error_mutex);
+                            first_error = e.what();
+                        }
+                    }
+                }
+            });
+        for (auto& t : threads) t.join();
+        INFO(first_error);
+        CHECK(failed == 0);
+        CHECK(wrong == 0);
     }
 }

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_TESTS_TESTING_RUNTIME_H
 #define DFTRACER_UTILS_TESTS_TESTING_RUNTIME_H
 
@@ -5,12 +6,28 @@
 // testing_utilities.h so the 160-odd tests that never touch the runtime do not
 // pay for its headers.
 
-#include <dftracer/utils/core/runtime.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/coro/executor.h>
+#include <dftracer/utils/coro/run_loop.h>
+#include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/runtime/runtime.h>
+#include <task_result.h>
 
+#include <cstddef>
+#include <type_traits>
 #include <utility>
 
 namespace dftu_utils_test {
+
+/// The width a pool of @p n threads gets. Valgrind mode caps every compute and
+/// I/O pool at two threads, so a test that checks a width asks for this one.
+constexpr std::size_t pool_width(std::size_t n) {
+#ifdef DFTRACER_UTILS_VALGRIND_MODE
+    return n < 2 ? n : 2;
+#else
+    return n;
+#endif
+}
 
 /// Run `fn` as a coroutine on a private Runtime and block until it finishes.
 /// The runtime is shut down before returning, so anything the body spawned has
@@ -18,10 +35,24 @@ namespace dftu_utils_test {
 template <typename Fn>
 void run_coro(Fn&& fn, const char* tag = "test") {
     dftracer::utils::Runtime rt(4);
-    auto task =
-        dftracer::utils::run_coro_scope(rt.executor(), std::forward<Fn>(fn));
-    rt.submit(std::move(task), tag).wait();
+    ok(rt.submit(dftracer::utils::coro::with_scope(std::forward<Fn>(fn)), tag)
+           .wait());
     rt.shutdown();
+}
+
+/// Drives the task on the calling thread, as get() did before it used the
+/// process pool. Gives the value of the task, and ends the test when the task
+/// stopped.
+template <class T>
+T run_here(dftracer::utils::coro::CoroTask<T> task) {
+    dftracer::utils::coro::RunLoop loop;
+    dftracer::utils::coro::CurrentScope bind{loop};
+    auto result = task.get();
+    if constexpr (std::is_same_v<decltype(result), T>) {
+        return result;
+    } else {
+        return ok(std::move(result));
+    }
 }
 
 }  // namespace dftu_utils_test

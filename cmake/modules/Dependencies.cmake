@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 # ==============================================================================
 # CPM Configuration
 # ==============================================================================
@@ -34,175 +35,143 @@ find_package(
   OPTIONAL_COMPONENTS Development.SABIModule)
 
 # ==============================================================================
-# Utility Dependencies
+# Package configs for dependencies we install
 # ==============================================================================
 
-function(need_argparse)
-  if(NOT argparse_ADDED)
-    cpmaddpackage(
-      NAME
-      argparse
-      GITHUB_REPOSITORY
-      p-ranav/argparse
-      VERSION
-      3.2
-      OPTIONS
-      "ARGPARSE_BUILD_TESTS OFF"
-      "ARGPARSE_BUILD_SAMPLES OFF"
-      FORCE
-      YES)
+# Writes and installs lib/cmake/<name>/<name>Config.cmake. It finds each
+# package in DEPENDENCIES beside this one (see bundled_find_dependency) and
+# includes TARGETS_FILE, the file install(EXPORT) wrote.
+function(install_dependency_config NAME TARGETS_FILE)
+  cmake_parse_arguments(ARG "" "" DEPENDENCIES ${ARGN})
+  set(content "include(CMakeFindDependencyMacro)\n")
+  foreach(pkg ${ARG_DEPENDENCIES})
+    if(pkg STREQUAL "Threads")
+      string(APPEND content "find_dependency(Threads)\n")
+    else()
+      bundled_find_dependency(line ${pkg})
+      string(APPEND content "${line}")
+    endif()
+  endforeach()
+  string(APPEND content
+         "include(\"\${CMAKE_CURRENT_LIST_DIR}/${TARGETS_FILE}\")\n")
+  file(WRITE ${CMAKE_BINARY_DIR}/dependency_configs/${NAME}/${NAME}Config.cmake
+       "${content}")
+  install(FILES ${CMAKE_BINARY_DIR}/dependency_configs/${NAME}/${NAME}Config.cmake
+          DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/${NAME})
+endfunction()
+
+# Installs only the archives of a CPM package, whose own install would also put
+# its headers, pkg-config and documentation files in the prefix, with a config
+# that gives NAMESPACE::<target> to a static library of ours that links it.
+# Without EXPORT_SET the targets go into a new export set. With one, the package
+# is added EXCLUDE_FROM_ALL and declares that set for its targets; it stays the
+# only export set of them, which is what our own exports need, so the config
+# declares the imported targets by hand. Only a static build needs the
+# archives.
+function(install_dependency_archive NAME NAMESPACE)
+  cmake_parse_arguments(ARG "" "EXPORT_SET" "TARGETS;DEPENDENCIES" ${ARGN})
+  if(NOT DFTRACER_UTILS_BUILD_STATIC)
+    return()
+  endif()
+  set(targets_file ${NAME}-targets.cmake)
+  if(ARG_EXPORT_SET)
+    install(TARGETS ${ARG_TARGETS} ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
+    set(content "")
+    foreach(target ${ARG_TARGETS})
+      string(
+        APPEND
+        content
+        "if(NOT TARGET ${NAMESPACE}${target})
+  add_library(${NAMESPACE}${target} STATIC IMPORTED)
+  set_target_properties(
+    ${NAMESPACE}${target}
+    PROPERTIES IMPORTED_LOCATION
+               \"\${CMAKE_CURRENT_LIST_DIR}/../../$<TARGET_FILE_NAME:${target}>\")
+  if(\"Threads\" IN_LIST _dftu_${NAME}_link)
+    set_property(TARGET ${NAMESPACE}${target} PROPERTY INTERFACE_LINK_LIBRARIES Threads::Threads)
+  endif()
+endif()
+")
+    endforeach()
+    set(generated ${CMAKE_BINARY_DIR}/dependency_configs/${NAME}/${targets_file})
+    set(prefix_content "set(_dftu_${NAME}_link ${ARG_DEPENDENCIES})\n")
+    file(GENERATE OUTPUT ${generated} CONTENT "${prefix_content}${content}")
+    install(FILES ${generated}
+            DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/${NAME})
+  else()
+    install(
+      TARGETS ${ARG_TARGETS}
+      EXPORT ${NAME}Targets
+      ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
+    install(
+      EXPORT ${NAME}Targets
+      FILE ${targets_file}
+      NAMESPACE ${NAMESPACE}
+      DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/${NAME})
+  endif()
+  install_dependency_config(${NAME} ${targets_file}
+                            DEPENDENCIES ${ARG_DEPENDENCIES})
+endfunction()
+
+# The static libraries link highway, utf8proc and vectorscan privately, so a
+# program that links one needs their archives. Highway and utf8proc install as
+# the export dftracer_utils_deps, vectorscan as a hand-written imported target
+# because an imported target cannot be exported. Archives and CMake files only:
+# no header of these reaches the prefix, and no public header includes one.
+function(install_private_static_deps)
+  if(NOT DFTRACER_UTILS_BUILD_STATIC)
+    return()
+  endif()
+
+  set(deps_targets)
+  foreach(target hwy hwy_contrib utf8proc_static)
+    if(TARGET ${target})
+      set_target_properties(${target} PROPERTIES OUTPUT_NAME dftracer_utils_${target})
+      list(APPEND deps_targets ${target})
+    endif()
+  endforeach()
+  if(deps_targets)
+    install(
+      TARGETS ${deps_targets}
+      EXPORT dftracer_utils_depsTargets
+      ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
+    install(
+      EXPORT dftracer_utils_depsTargets
+      FILE dftracer_utils_depsTargets.cmake
+      NAMESPACE dftracer_utils_deps::
+      DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/dftracer_utils_deps)
+    install_dependency_config(dftracer_utils_deps dftracer_utils_depsTargets.cmake)
+  endif()
+
+  if(TARGET dftracer_utils_vectorscan::hs)
+    get_target_property(hs_lib dftracer_utils_vectorscan::hs IMPORTED_LOCATION)
+    set(hs_name ${CMAKE_STATIC_LIBRARY_PREFIX}dftracer_utils_hs${CMAKE_STATIC_LIBRARY_SUFFIX})
+    install(FILES "${hs_lib}" DESTINATION ${CMAKE_INSTALL_LIBDIR}
+            RENAME ${hs_name})
+    set(hs_config ${CMAKE_BINARY_DIR}/dftracer_utils_vectorscan/dftracer_utils_vectorscanConfig.cmake)
+    file(
+      WRITE ${hs_config}
+      "if(NOT TARGET dftracer_utils_vectorscan::hs)
+  add_library(dftracer_utils_vectorscan::hs STATIC IMPORTED)
+  set_target_properties(
+    dftracer_utils_vectorscan::hs
+    PROPERTIES IMPORTED_LOCATION
+               \"\${CMAKE_CURRENT_LIST_DIR}/../../${hs_name}\")
+endif()
+")
+    install(FILES ${hs_config}
+            DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/dftracer_utils_vectorscan)
   endif()
 endfunction()
 
-function(need_ghc_filesystem)
-  if(NOT ghc_filesystem_ADDED)
-    cpmaddpackage(
-      NAME
-      ghc_filesystem
-      GITHUB_REPOSITORY
-      gulrak/filesystem
-      VERSION
-      1.5.14
-      OPTIONS
-      "GHC_FILESYSTEM_WITH_INSTALL ON"
-      FORCE
-      YES)
-  endif()
-endfunction()
+# ==============================================================================
+# Utility Dependencies
+# ==============================================================================
 
 function(need_nonstd_span)
   if(NOT nonstd_span_ADDED)
     cpmaddpackage(NAME nonstd_span GITHUB_REPOSITORY nonstd-lite/span-lite
                   VERSION 0.11.0)
-  endif()
-endfunction()
-
-function(need_unordered_dense)
-  if(NOT unordered_dense_ADDED)
-    cpmaddpackage(
-      NAME
-      unordered_dense
-      GITHUB_REPOSITORY
-      martinus/unordered_dense
-      VERSION
-      4.4.0
-      OPTIONS
-      "UNORDERED_DENSE_INSTALL ON"
-      FORCE
-      YES)
-  endif()
-
-  # Public dependency: our installed headers include <ankerl/unordered_dense.h>,
-  # so a consumer (or a plugin that reaches the parser path) building against
-  # the install prefix needs it there. The upstream UNORDERED_DENSE_INSTALL
-  # export does not land in our prefix, so install the single header explicitly,
-  # as simdjson and concurrentqueue are, matching the $<INSTALL_INTERFACE> dir.
-  if(DEFINED unordered_dense_SOURCE_DIR)
-    install(FILES ${unordered_dense_SOURCE_DIR}/include/ankerl/unordered_dense.h
-            DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/ankerl)
-  endif()
-endfunction()
-
-function(link_unordered_dense TARGET_NAME)
-  if(NOT TARGET_NAME)
-    message(FATAL_ERROR "link_unordered_dense: TARGET_NAME is required")
-  endif()
-
-  if(NOT TARGET ${TARGET_NAME})
-    message(
-      FATAL_ERROR "link_unordered_dense: Target '${TARGET_NAME}' does not exist"
-    )
-  endif()
-
-  if(NOT TARGET unordered_dense::unordered_dense)
-    message(
-      FATAL_ERROR
-        "link_unordered_dense: ankerl::unordered_dense not found! Call need_unordered_dense() first."
-    )
-  endif()
-
-  get_target_property(UD_INC unordered_dense::unordered_dense
-                      INTERFACE_INCLUDE_DIRECTORIES)
-  target_include_directories(
-    ${TARGET_NAME} PUBLIC "$<BUILD_INTERFACE:${UD_INC}>"
-                          "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>")
-endfunction()
-
-function(need_tl_expected)
-  # tl::expected is only needed when C++23 std::expected is unavailable
-  if(CMAKE_CXX_STANDARD GREATER_EQUAL 23)
-    dftracer_utils_warn(
-      "C++23 detected: using std::expected (skipping tl::expected)")
-    return()
-  endif()
-
-  if(NOT tl_expected_ADDED)
-    cpmaddpackage(
-      NAME
-      tl_expected
-      GITHUB_REPOSITORY
-      TartanLlama/expected
-      VERSION
-      1.1.0
-      GIT_TAG
-      "v1.1.0"
-      DOWNLOAD_ONLY
-      YES)
-  endif()
-
-  if(tl_expected_ADDED)
-    if(NOT TARGET tl::expected)
-      add_library(tl_expected INTERFACE)
-      target_include_directories(
-        tl_expected
-        INTERFACE $<BUILD_INTERFACE:${tl_expected_SOURCE_DIR}/include>
-                  $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
-      add_library(tl::expected ALIAS tl_expected)
-
-      install(
-        DIRECTORY ${tl_expected_SOURCE_DIR}/include/tl/
-        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/tl
-        FILES_MATCHING
-        PATTERN "*.hpp")
-
-      install(TARGETS tl_expected EXPORT tl_expectedTargets)
-      install(
-        EXPORT tl_expectedTargets
-        FILE tl_expectedTargets.cmake
-        NAMESPACE tl::
-        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/tl_expected)
-    endif()
-
-    dftracer_utils_ok("Added tl::expected header-only library via CPM")
-  endif()
-endfunction()
-
-function(link_tl_expected TARGET_NAME)
-  if(NOT TARGET_NAME)
-    message(FATAL_ERROR "link_tl_expected: TARGET_NAME is required")
-  endif()
-
-  if(NOT TARGET ${TARGET_NAME})
-    message(
-      FATAL_ERROR "link_tl_expected: Target '${TARGET_NAME}' does not exist")
-  endif()
-
-  # C++23: std::expected is built-in, no linking needed
-  if(CMAKE_CXX_STANDARD GREATER_EQUAL 23)
-    return()
-  endif()
-
-  if(TARGET tl::expected)
-    target_link_libraries(${TARGET_NAME} PUBLIC tl::expected)
-    dftracer_utils_ok("Linked ${TARGET_NAME} to tl::expected")
-  elseif(TARGET tl_expected)
-    target_link_libraries(${TARGET_NAME} PUBLIC tl_expected)
-    dftracer_utils_ok("Linked ${TARGET_NAME} to tl_expected")
-  else()
-    message(
-      FATAL_ERROR
-        "link_tl_expected: No tl::expected found! Call need_tl_expected() first."
-    )
   endif()
 endfunction()
 
@@ -243,6 +212,7 @@ function(need_simdjson)
       target_compile_features(simdjson_static PUBLIC cxx_std_17)
       # Suppress warnings from simdjson (third-party code)
       target_compile_options(simdjson_static PRIVATE -w)
+      target_compile_definitions(simdjson_static PRIVATE SIMDJSON_EXCEPTIONS=0)
       set_target_properties(
         simdjson_static
         PROPERTIES OUTPUT_NAME simdjson
@@ -262,6 +232,7 @@ function(need_simdjson)
       target_compile_features(simdjson_shared PUBLIC cxx_std_17)
       # Suppress warnings from simdjson (third-party code)
       target_compile_options(simdjson_shared PRIVATE -w)
+      target_compile_definitions(simdjson_shared PRIVATE SIMDJSON_EXCEPTIONS=0)
       set_target_properties(
         simdjson_shared
         PROPERTIES OUTPUT_NAME simdjson
@@ -273,10 +244,6 @@ function(need_simdjson)
     elseif(DFTRACER_UTILS_BUILD_STATIC)
       add_library(simdjson::simdjson ALIAS simdjson_static)
     endif()
-
-    # Install header
-    install(FILES ${simdjson_SOURCE_DIR}/singleheader/simdjson.h
-            DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 
     if(SIMDJSON_TARGETS)
       install(
@@ -291,6 +258,11 @@ function(need_simdjson)
         FILE simdjsonTargets.cmake
         NAMESPACE simdjson::
         DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/simdjson)
+
+      file(WRITE ${CMAKE_BINARY_DIR}/simdjson/simdjsonConfig.cmake
+           "include(\"\${CMAKE_CURRENT_LIST_DIR}/simdjsonTargets.cmake\")\n")
+      install(FILES ${CMAKE_BINARY_DIR}/simdjson/simdjsonConfig.cmake
+              DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/simdjson)
     endif()
   endif()
 endfunction()
@@ -349,517 +321,18 @@ function(link_simdjson TARGET_NAME LIBRARY_TYPE)
 endfunction()
 
 # ==============================================================================
-# RocksDB
-# ==============================================================================
-
-
-# Consume a RocksDB install tree built by scripts/ci/build_rocksdb.sh.
-function(_use_prebuilt_rocksdb PREFIX)
-  list(PREPEND CMAKE_PREFIX_PATH "${PREFIX}")
-  find_package(
-    RocksDB
-    ${DFTRACER_UTILS_ROCKSDB_VERSION}
-    REQUIRED
-    CONFIG
-    PATHS
-    "${PREFIX}"
-    NO_DEFAULT_PATH)
-  dftracer_utils_ok("Using prebuilt RocksDB from ${PREFIX}")
-
-  foreach(tool ldb sst_dump)
-    if(EXISTS "${PREFIX}/bin/${tool}")
-      file(
-        COPY "${PREFIX}/bin/${tool}"
-        DESTINATION "${CMAKE_BINARY_DIR}/bin"
-        FILE_PERMISSIONS
-          OWNER_READ
-          OWNER_WRITE
-          OWNER_EXECUTE
-          GROUP_READ
-          GROUP_EXECUTE
-          WORLD_READ
-          WORLD_EXECUTE)
-      install(PROGRAMS "${PREFIX}/bin/${tool}"
-              DESTINATION ${CMAKE_INSTALL_BINDIR})
-      if(SKBUILD)
-        create_python_wrapper(${tool})
-      endif()
-    else()
-      message(WARNING "Prebuilt RocksDB at ${PREFIX} has no bin/${tool}")
-    endif()
-  endforeach()
-endfunction()
-
-# Function to find or build RocksDB
-function(need_rocksdb)
-  # TSan needs RocksDB instrumented too, so an uninstrumented prebuilt tree
-  # would report false positives; build from source instead.
-  if(DFTRACER_UTILS_ROCKSDB_PREFIX AND DFTRACER_UTILS_ENABLE_TSAN)
-    dftracer_utils_warn(
-      "Ignoring DFTRACER_UTILS_ROCKSDB_PREFIX: TSan requires a source build")
-  elseif(DFTRACER_UTILS_ROCKSDB_PREFIX)
-    _use_prebuilt_rocksdb("${DFTRACER_UTILS_ROCKSDB_PREFIX}")
-    set(RocksDB_FOUND
-        TRUE
-        PARENT_SCOPE)
-    set(RocksDB_CPM
-        FALSE
-        PARENT_SCOPE)
-    set(ROCKSDB_IS_STATIC
-        TRUE
-        PARENT_SCOPE)
-    return()
-  endif()
-
-  if(DFTRACER_UTILS_LOCAL_PACKAGES)
-    find_package(RocksDB ${DFTRACER_UTILS_ROCKSDB_VERSION} QUIET CONFIG)
-    if(NOT RocksDB_FOUND)
-      find_package(rocksdb ${DFTRACER_UTILS_ROCKSDB_VERSION} QUIET CONFIG)
-    endif()
-    if(NOT RocksDB_FOUND AND rocksdb_FOUND)
-      set(RocksDB_FOUND TRUE)
-    endif()
-    if(NOT RocksDB_FOUND)
-      find_package(RocksDB ${DFTRACER_UTILS_ROCKSDB_VERSION} QUIET)
-    endif()
-  endif()
-
-  if(DFTRACER_UTILS_LOCAL_PACKAGES AND RocksDB_FOUND)
-    dftracer_utils_ok("Found system RocksDB")
-
-    if(NOT TARGET RocksDB::rocksdb)
-      if(TARGET rocksdb)
-        add_library(RocksDB::rocksdb ALIAS rocksdb)
-      elseif(TARGET rocksdb-shared)
-        add_library(RocksDB::rocksdb ALIAS rocksdb-shared)
-      elseif(TARGET RocksDB::RocksDB)
-        add_library(RocksDB::rocksdb ALIAS RocksDB::RocksDB)
-      elseif(DEFINED RocksDB_LIBRARY AND DEFINED RocksDB_INCLUDE_DIR)
-        add_library(RocksDB::rocksdb UNKNOWN IMPORTED)
-        set_target_properties(
-          RocksDB::rocksdb
-          PROPERTIES IMPORTED_LOCATION "${RocksDB_LIBRARY}"
-                     INTERFACE_INCLUDE_DIRECTORIES "${RocksDB_INCLUDE_DIR}")
-      elseif(DEFINED ROCKSDB_LIBRARIES AND DEFINED ROCKSDB_INCLUDE_DIRS)
-        add_library(RocksDB::rocksdb UNKNOWN IMPORTED)
-        set_target_properties(
-          RocksDB::rocksdb
-          PROPERTIES IMPORTED_LOCATION ""
-                     INTERFACE_LINK_LIBRARIES "${ROCKSDB_LIBRARIES}"
-                     INTERFACE_INCLUDE_DIRECTORIES "${ROCKSDB_INCLUDE_DIRS}")
-      endif()
-    endif()
-
-    if(NOT TARGET RocksDB::rocksdb)
-      message(
-        FATAL_ERROR
-          "need_rocksdb: RocksDB was found but no usable target could be created."
-      )
-    endif()
-
-    set(RocksDB_FOUND
-        ${RocksDB_FOUND}
-        PARENT_SCOPE)
-    set(RocksDB_CPM
-        FALSE
-        PARENT_SCOPE)
-  else()
-    if(NOT rocksdb_ADDED)
-      cpmaddpackage(
-        NAME
-        rocksdb
-        GITHUB_REPOSITORY
-        facebook/rocksdb
-        VERSION
-        ${DFTRACER_UTILS_ROCKSDB_VERSION}
-        GIT_TAG
-        v${DFTRACER_UTILS_ROCKSDB_VERSION}
-        OPTIONS
-        "ROCKSDB_BUILD_SHARED OFF"
-        "PORTABLE 1"
-        "WITH_TESTS OFF"
-        "WITH_TOOLS OFF"
-        "WITH_CORE_TOOLS ON"
-        "WITH_TRACE_TOOLS OFF"
-        "WITH_BENCHMARK_TOOLS OFF"
-        "WITH_GFLAGS OFF"
-        "WITH_SNAPPY OFF"
-        "WITH_LZ4 ${DFTRACER_UTILS_ENABLE_LZ4}"
-        "WITH_ZLIB ON"
-        "WITH_ZSTD ${DFTRACER_UTILS_ENABLE_ZSTD}"
-        "WITH_BZ2 OFF"
-        "USE_RTTI ON"
-        "FAIL_ON_WARNINGS OFF"
-        FORCE
-        YES)
-    endif()
-
-    if(TARGET rocksdb AND NOT TARGET RocksDB::rocksdb_static)
-      add_library(RocksDB::rocksdb_static ALIAS rocksdb)
-    endif()
-    if(TARGET rocksdb-shared AND NOT TARGET RocksDB::rocksdb_shared)
-      add_library(RocksDB::rocksdb_shared ALIAS rocksdb-shared)
-    endif()
-    if(NOT TARGET RocksDB::rocksdb)
-      if(TARGET RocksDB::rocksdb_shared)
-        add_library(RocksDB::rocksdb ALIAS rocksdb-shared)
-      elseif(TARGET RocksDB::rocksdb_static)
-        add_library(RocksDB::rocksdb ALIAS rocksdb)
-      endif()
-    endif()
-
-    if(rocksdb_ADDED
-       OR TARGET rocksdb
-       OR TARGET rocksdb-shared)
-      dftracer_utils_ok("Built RocksDB with CPM")
-
-      set(ROCKSDB_LIBRARY_DIR "${CMAKE_BINARY_DIR}/lib")
-
-      if(TARGET rocksdb)
-        set_target_properties(
-          rocksdb
-          PROPERTIES POSITION_INDEPENDENT_CODE ON
-                     ARCHIVE_OUTPUT_DIRECTORY "${ROCKSDB_LIBRARY_DIR}"
-                     LIBRARY_OUTPUT_DIRECTORY "${ROCKSDB_LIBRARY_DIR}"
-                     RUNTIME_OUTPUT_DIRECTORY "${ROCKSDB_LIBRARY_DIR}")
-        target_compile_definitions(rocksdb PUBLIC ROCKSDB_USE_RTTI)
-        if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
-          target_compile_options(rocksdb PRIVATE -frtti)
-          target_compile_options(rocksdb PUBLIC -Wno-conversion)
-        endif()
-        # -Wrestrict is a gcc-12 false positive in rocksdb's std::string code.
-        if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-          target_compile_options(rocksdb PRIVATE -Wno-restrict)
-        endif()
-        install(
-          TARGETS rocksdb
-          EXPORT rocksdbTargets
-          ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
-          LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-          RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
-      endif()
-      if(TARGET rocksdb-shared)
-        set_target_properties(
-          rocksdb-shared
-          PROPERTIES POSITION_INDEPENDENT_CODE ON
-                     ARCHIVE_OUTPUT_DIRECTORY "${ROCKSDB_LIBRARY_DIR}"
-                     LIBRARY_OUTPUT_DIRECTORY "${ROCKSDB_LIBRARY_DIR}"
-                     RUNTIME_OUTPUT_DIRECTORY "${ROCKSDB_LIBRARY_DIR}")
-        target_compile_definitions(rocksdb-shared PUBLIC ROCKSDB_USE_RTTI)
-        if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
-          target_compile_options(rocksdb-shared PRIVATE -frtti)
-          target_compile_options(rocksdb-shared PUBLIC -Wno-conversion)
-        endif()
-        # -Wrestrict is a gcc-12 false positive in rocksdb's std::string code.
-        if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-          target_compile_options(rocksdb-shared PRIVATE -Wno-restrict)
-        endif()
-        install(
-          TARGETS rocksdb-shared
-          EXPORT rocksdbTargets
-          ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
-          LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-          RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
-      endif()
-
-      list(APPEND DEPENDENCY_LIBRARY_DIRS "${ROCKSDB_LIBRARY_DIR}")
-      list(REMOVE_DUPLICATES DEPENDENCY_LIBRARY_DIRS)
-      set(DEPENDENCY_LIBRARY_DIRS
-          "${DEPENDENCY_LIBRARY_DIRS}"
-          PARENT_SCOPE)
-
-      list(APPEND CMAKE_BUILD_RPATH "${ROCKSDB_LIBRARY_DIR}")
-      list(REMOVE_DUPLICATES CMAKE_BUILD_RPATH)
-      set(CMAKE_BUILD_RPATH
-          "${CMAKE_BUILD_RPATH}"
-          PARENT_SCOPE)
-
-      list(APPEND CMAKE_INSTALL_RPATH "${ROCKSDB_LIBRARY_DIR}")
-      list(REMOVE_DUPLICATES CMAKE_INSTALL_RPATH)
-      set(CMAKE_INSTALL_RPATH
-          "${CMAKE_INSTALL_RPATH}"
-          PARENT_SCOPE)
-
-      # Stage rocksdb's ldb (and sst_dump) into bin/ and reuse the standard
-      # $ORIGIN/../lib rpath helper so they find librocksdb.so without
-      # LD_LIBRARY_PATH. Install alongside our own binaries and ship a venv
-      # wrapper when building a Python wheel.
-      foreach(tool ldb sst_dump)
-        if(TARGET ${tool})
-          set_target_properties(${tool} PROPERTIES RUNTIME_OUTPUT_DIRECTORY
-                                                   "${CMAKE_BINARY_DIR}/bin")
-          target_add_rpath(${tool})
-          install(TARGETS ${tool} RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
-          if(SKBUILD)
-            create_python_wrapper(${tool})
-          endif()
-        endif()
-      endforeach()
-
-      set(RocksDB_FOUND
-          TRUE
-          PARENT_SCOPE)
-      set(RocksDB_CPM
-          TRUE
-          PARENT_SCOPE)
-      set(ROCKSDB_IS_STATIC
-          TRUE
-          PARENT_SCOPE)
-    endif()
-  endif()
-endfunction()
-
-function(link_rocksdb TARGET_NAME LIBRARY_TYPE)
-  if(NOT TARGET_NAME)
-    message(FATAL_ERROR "link_rocksdb: TARGET_NAME is required")
-  endif()
-
-  if(NOT LIBRARY_TYPE MATCHES "^(STATIC|SHARED)$")
-    message(
-      FATAL_ERROR "link_rocksdb: LIBRARY_TYPE must be either STATIC or SHARED")
-  endif()
-
-  if(NOT TARGET ${TARGET_NAME})
-    message(FATAL_ERROR "link_rocksdb: Target '${TARGET_NAME}' does not exist")
-  endif()
-
-  if(NOT TARGET RocksDB::rocksdb
-     AND NOT TARGET RocksDB::rocksdb_static
-     AND NOT TARGET RocksDB::rocksdb_shared
-     AND NOT TARGET rocksdb
-     AND NOT TARGET rocksdb-shared)
-    message(
-      FATAL_ERROR
-        "link_rocksdb: No RocksDB found! Call need_rocksdb() first or ensure system RocksDB is available."
-    )
-  endif()
-
-  if(LIBRARY_TYPE STREQUAL "STATIC")
-    if(TARGET RocksDB::rocksdb_static)
-      target_link_libraries(${TARGET_NAME} PUBLIC RocksDB::rocksdb_static)
-      dftracer_utils_ok("Linked ${TARGET_NAME} to RocksDB::rocksdb_static")
-    elseif(TARGET rocksdb)
-      target_link_libraries(${TARGET_NAME} PUBLIC rocksdb)
-      dftracer_utils_ok("Linked ${TARGET_NAME} to rocksdb")
-    elseif(TARGET RocksDB::rocksdb)
-      target_link_libraries(${TARGET_NAME} PUBLIC RocksDB::rocksdb)
-      dftracer_utils_ok("Linked ${TARGET_NAME} to RocksDB::rocksdb")
-    else()
-      message(
-        FATAL_ERROR
-          "Static RocksDB requested for ${TARGET_NAME}, but no static RocksDB target is available"
-      )
-    endif()
-  else()
-    if(TARGET RocksDB::rocksdb_shared)
-      target_link_libraries(${TARGET_NAME} PUBLIC RocksDB::rocksdb_shared)
-      dftracer_utils_ok("Linked ${TARGET_NAME} to RocksDB::rocksdb_shared")
-    elseif(TARGET rocksdb-shared)
-      target_link_libraries(${TARGET_NAME} PUBLIC rocksdb-shared)
-      dftracer_utils_ok("Linked ${TARGET_NAME} to rocksdb-shared")
-    elseif(TARGET RocksDB::rocksdb)
-      target_link_libraries(${TARGET_NAME} PUBLIC RocksDB::rocksdb)
-      dftracer_utils_ok("Linked ${TARGET_NAME} to RocksDB::rocksdb")
-    elseif(TARGET RocksDB::rocksdb_static)
-      target_link_libraries(${TARGET_NAME} PUBLIC RocksDB::rocksdb_static)
-      dftracer_utils_ok("Linked ${TARGET_NAME} to RocksDB::rocksdb_static")
-    elseif(TARGET rocksdb)
-      target_link_libraries(${TARGET_NAME} PUBLIC rocksdb)
-      dftracer_utils_ok("Linked ${TARGET_NAME} to rocksdb")
-    endif()
-  endif()
-endfunction()
-
-# ==============================================================================
 # Compression Dependencies
 # ==============================================================================
 
-function(need_lz4)
-  if(DEFINED CACHE{lz4_LIBRARIES} AND NOT EXISTS "${lz4_LIBRARIES}")
-    unset(lz4_LIBRARIES CACHE)
+# zlib-ng in its native API (zng_ names) as one static PIC archive with hidden
+# visibility. The utilities library links it privately, so no library of ours
+# exports a zlib symbol and a process that also loads the system zlib binds no
+# call of its own to ours. No zlib header is installed: no public header
+# includes one.
+function(need_zlib)
+  if(TARGET dftracer::zlib)
+    return()
   endif()
-  if(DEFINED CACHE{lz4_INCLUDE_DIRS} AND NOT EXISTS "${lz4_INCLUDE_DIRS}")
-    unset(lz4_INCLUDE_DIRS CACHE)
-  endif()
-
-  find_path(lz4_INCLUDE_DIRS NAMES lz4.h)
-  find_library(lz4_LIBRARIES NAMES lz4)
-
-  if(lz4_INCLUDE_DIRS
-     AND lz4_LIBRARIES
-     AND EXISTS "${lz4_LIBRARIES}")
-    dftracer_utils_ok("Found system lz4: ${lz4_LIBRARIES}")
-
-    if(NOT TARGET lz4::lz4)
-      add_library(lz4::lz4 UNKNOWN IMPORTED)
-      set_target_properties(
-        lz4::lz4 PROPERTIES IMPORTED_LOCATION "${lz4_LIBRARIES}"
-                            INTERFACE_INCLUDE_DIRECTORIES "${lz4_INCLUDE_DIRS}")
-    endif()
-
-    set(lz4_FOUND
-        TRUE
-        PARENT_SCOPE)
-    set(lz4_INCLUDE_DIRS
-        ${lz4_INCLUDE_DIRS}
-        PARENT_SCOPE)
-    set(lz4_LIBRARIES
-        ${lz4_LIBRARIES}
-        PARENT_SCOPE)
-    set(lz4_CPM
-        FALSE
-        PARENT_SCOPE)
-    set(lz4_FOUND
-        TRUE
-        CACHE BOOL "lz4 availability" FORCE)
-    set(lz4_INCLUDE_DIRS
-        "${lz4_INCLUDE_DIRS}"
-        CACHE PATH "lz4 include directories" FORCE)
-    set(lz4_LIBRARIES
-        "${lz4_LIBRARIES}"
-        CACHE STRING "lz4 libraries" FORCE)
-  else()
-    if(NOT lz4_ADDED)
-      cpmaddpackage(
-        NAME
-        lz4
-        GITHUB_REPOSITORY
-        lz4/lz4
-        VERSION
-        1.10.0
-        GIT_TAG
-        v1.10.0
-        DOWNLOAD_ONLY
-        YES)
-    endif()
-
-    if(lz4_ADDED)
-      dftracer_utils_ok("Built lz4 with CPM")
-
-      set(LZ4_TARGETS)
-      set(LZ4_SOURCES
-          ${lz4_SOURCE_DIR}/lib/lz4.c ${lz4_SOURCE_DIR}/lib/lz4frame.c
-          ${lz4_SOURCE_DIR}/lib/lz4hc.c ${lz4_SOURCE_DIR}/lib/xxhash.c)
-      set(LZ4_SHARED_OUTPUT
-          "${CMAKE_BINARY_DIR}/lib/${CMAKE_SHARED_LIBRARY_PREFIX}lz4${CMAKE_SHARED_LIBRARY_SUFFIX}"
-      )
-      set(LZ4_STATIC_OUTPUT
-          "${CMAKE_BINARY_DIR}/lib/${CMAKE_STATIC_LIBRARY_PREFIX}lz4${CMAKE_STATIC_LIBRARY_SUFFIX}"
-      )
-      set(LZ4_PREFERRED_OUTPUT "${LZ4_STATIC_OUTPUT}")
-      if(DFTRACER_UTILS_BUILD_SHARED)
-        set(LZ4_PREFERRED_OUTPUT "${LZ4_SHARED_OUTPUT}")
-      endif()
-
-      if(DFTRACER_UTILS_BUILD_STATIC)
-        add_library(lz4_static STATIC ${LZ4_SOURCES})
-        target_include_directories(
-          lz4_static PUBLIC $<BUILD_INTERFACE:${lz4_SOURCE_DIR}/lib>
-                            $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
-        set_target_properties(
-          lz4_static
-          PROPERTIES OUTPUT_NAME lz4
-                     ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib
-                     LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
-        list(APPEND LZ4_TARGETS lz4_static)
-      endif()
-
-      if(DFTRACER_UTILS_BUILD_SHARED)
-        add_library(lz4_shared SHARED ${LZ4_SOURCES})
-        target_include_directories(
-          lz4_shared PUBLIC $<BUILD_INTERFACE:${lz4_SOURCE_DIR}/lib>
-                            $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
-        set_target_properties(
-          lz4_shared
-          PROPERTIES OUTPUT_NAME lz4
-                     ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib
-                     LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
-        list(APPEND LZ4_TARGETS lz4_shared)
-      endif()
-
-      if(TARGET lz4_static AND NOT TARGET lz4::lz4_static)
-        add_library(lz4::lz4_static UNKNOWN IMPORTED GLOBAL)
-        set_target_properties(
-          lz4::lz4_static
-          PROPERTIES IMPORTED_LOCATION "${LZ4_STATIC_OUTPUT}"
-                     INTERFACE_INCLUDE_DIRECTORIES "${lz4_SOURCE_DIR}/lib")
-        add_dependencies(lz4::lz4_static lz4_static)
-      endif()
-      if(TARGET lz4_shared AND NOT TARGET lz4::lz4_shared)
-        add_library(lz4::lz4_shared UNKNOWN IMPORTED GLOBAL)
-        set_target_properties(
-          lz4::lz4_shared
-          PROPERTIES IMPORTED_LOCATION "${LZ4_SHARED_OUTPUT}"
-                     INTERFACE_INCLUDE_DIRECTORIES "${lz4_SOURCE_DIR}/lib")
-        add_dependencies(lz4::lz4_shared lz4_shared)
-      endif()
-      if(NOT TARGET lz4::lz4)
-        add_library(lz4::lz4 UNKNOWN IMPORTED GLOBAL)
-        if(TARGET lz4::lz4_shared)
-          set_target_properties(
-            lz4::lz4
-            PROPERTIES IMPORTED_LOCATION "${LZ4_SHARED_OUTPUT}"
-                       INTERFACE_INCLUDE_DIRECTORIES "${lz4_SOURCE_DIR}/lib")
-          add_dependencies(lz4::lz4 lz4_shared)
-        elseif(TARGET lz4::lz4_static)
-          set_target_properties(
-            lz4::lz4
-            PROPERTIES IMPORTED_LOCATION "${LZ4_STATIC_OUTPUT}"
-                       INTERFACE_INCLUDE_DIRECTORIES "${lz4_SOURCE_DIR}/lib")
-          add_dependencies(lz4::lz4 lz4_static)
-        endif()
-      endif()
-
-      install(FILES ${lz4_SOURCE_DIR}/lib/lz4.h ${lz4_SOURCE_DIR}/lib/lz4frame.h
-                    ${lz4_SOURCE_DIR}/lib/lz4hc.h ${lz4_SOURCE_DIR}/lib/xxhash.h
-              DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
-
-      if(LZ4_TARGETS)
-        install(
-          TARGETS ${LZ4_TARGETS}
-          EXPORT lz4Targets
-          ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
-          LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-          RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
-        install(
-          EXPORT lz4Targets
-          FILE lz4Targets.cmake
-          NAMESPACE lz4::
-          DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/lz4)
-      endif()
-
-      set(lz4_FOUND
-          TRUE
-          PARENT_SCOPE)
-      set(lz4_INCLUDE_DIRS
-          ${lz4_SOURCE_DIR}/lib
-          PARENT_SCOPE)
-      set(lz4_LIBRARIES
-          ${LZ4_PREFERRED_OUTPUT}
-          PARENT_SCOPE)
-      set(lz4_CPM
-          TRUE
-          PARENT_SCOPE)
-
-      # Seed the variables RocksDB's bundled Findlz4.cmake checks.
-      set(lz4_FOUND
-          TRUE
-          CACHE BOOL "lz4 availability" FORCE)
-      set(lz4_INCLUDE_DIRS
-          "${lz4_SOURCE_DIR}/lib"
-          CACHE PATH "lz4 include directories" FORCE)
-      set(lz4_LIBRARIES
-          "${LZ4_PREFERRED_OUTPUT}"
-          CACHE STRING "lz4 libraries" FORCE)
-    endif()
-  endif()
-endfunction()
-
-function(_try_zlib_ng OUT_VAR)
-  set(${OUT_VAR}
-      FALSE
-      PARENT_SCOPE)
-
   cpmaddpackage(
     NAME
     zlib-ng
@@ -870,8 +343,9 @@ function(_try_zlib_ng OUT_VAR)
     GIT_TAG
     2.3.3
     OPTIONS
-    "ZLIB_COMPAT ON"
-    "ZLIB_ENABLE_TESTS OFF"
+    "ZLIB_COMPAT OFF"
+    "ZLIB_ALIASES OFF"
+    "BUILD_TESTING OFF"
     "ZLIBNG_ENABLE_TESTS OFF"
     "WITH_GTEST OFF"
     "WITH_OPTIM ON"
@@ -879,607 +353,110 @@ function(_try_zlib_ng OUT_VAR)
     "WITH_NATIVE_INSTRUCTIONS OFF"
     "INSTALL_UTILS OFF"
     "SKIP_INSTALL_ALL ON")
-
-  if(NOT zlib-ng_ADDED)
-    # CPM reports ADDED=NO when zlib-ng was already added earlier (src/ adds it,
-    # then tests/ asks again) OR on a reconfigure of an existing build dir. Not
-    # a failure: the zlib-ng targets are still defined. Re-expose the dirs and
-    # report success, and ensure the dftracer_zlib_* aliases exist here too -
-    # the one-time property/install setup below is skipped, but the aliases must
-    # be (re)created idempotently because on a reconfigure the first (src/) call
-    # also takes this branch, so nothing else creates them and link_zlib() would
-    # otherwise find no zlib. add_library(ALIAS) name-collides globally, so the
-    # NOT TARGET guard makes each a no-op once it exists.
-    if(TARGET zlib-ng OR TARGET zlib-ng-static)
-      set(ZLIB_SOURCE_DIR
-          ${zlib-ng_SOURCE_DIR}
-          PARENT_SCOPE)
-      set(ZLIB_BINARY_DIR
-          ${zlib-ng_BINARY_DIR}
-          PARENT_SCOPE)
-      if(DFTRACER_UTILS_BUILD_SHARED
-         AND TARGET zlib-ng
-         AND NOT TARGET dftracer_zlib_shared)
-        get_target_property(_zng_a zlib-ng ALIASED_TARGET)
-        if(NOT _zng_a)
-          set(_zng_a zlib-ng)
-        endif()
-        add_library(dftracer_zlib_shared ALIAS ${_zng_a})
-        if(NOT TARGET dftracer::zlib)
-          add_library(dftracer::zlib ALIAS ${_zng_a})
-        endif()
-      endif()
-      if(DFTRACER_UTILS_BUILD_STATIC
-         AND TARGET zlib-ng-static
-         AND NOT TARGET dftracer_zlib_static)
-        get_target_property(_zngs_a zlib-ng-static ALIASED_TARGET)
-        if(NOT _zngs_a)
-          set(_zngs_a zlib-ng-static)
-        endif()
-        add_library(dftracer_zlib_static ALIAS ${_zngs_a})
-        if(NOT TARGET dftracer::zlibstatic)
-          add_library(dftracer::zlibstatic ALIAS ${_zngs_a})
-        endif()
-        if(NOT TARGET dftracer::zlib)
-          add_library(dftracer::zlib ALIAS ${_zngs_a})
-        endif()
-      endif()
-      set(${OUT_VAR}
-          TRUE
-          PARENT_SCOPE)
-      return()
-    endif()
-    message(WARNING "zlib-ng CPM add failed; will fall back to madler/zlib")
-    return()
+  # BUILD_SHARED_LIBS is OFF, so zlib-ng makes the one static target zlib-ng.
+  set(_zng zlib-ng)
+  get_target_property(_zng_type ${_zng} TYPE)
+  if(NOT _zng_type STREQUAL "STATIC_LIBRARY")
+    message(FATAL_ERROR "need_zlib: zlib-ng is a ${_zng_type}")
   endif()
-
-  # zlib-ng compat mode: real targets are `zlib-ng` (shared) and
-  # `zlib-ng-static` (static); `zlib`/`zlibstatic` are ALIAS-only and cannot
-  # have properties or further aliases set on them.
-  set(ZLIB_NG_TARGETS)
-  if(DFTRACER_UTILS_BUILD_SHARED AND TARGET zlib-ng)
-    # zlib-ng may be an ALIAS (compat mode) - resolve to the real target before
-    # mutating/aliasing, and guard the alias-adds against reconfigure.
-    get_target_property(_zng_shared_alias zlib-ng ALIASED_TARGET)
-    if(_zng_shared_alias)
-      set(_zng_shared ${_zng_shared_alias})
-    else()
-      set(_zng_shared zlib-ng)
-    endif()
-    get_target_property(_zng_type ${_zng_shared} TYPE)
-    if(_zng_type STREQUAL "SHARED_LIBRARY")
-      set_target_properties(
-        ${_zng_shared}
-        PROPERTIES OUTPUT_NAME dftracer_zlib LIBRARY_OUTPUT_DIRECTORY
-                                             ${CMAKE_BINARY_DIR}/lib)
-      target_include_directories(
-        ${_zng_shared} PUBLIC $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
-      if(NOT TARGET dftracer_zlib_shared)
-        add_library(dftracer_zlib_shared ALIAS ${_zng_shared})
-      endif()
-      if(NOT TARGET dftracer::zlib)
-        add_library(dftracer::zlib ALIAS ${_zng_shared})
-      endif()
-      list(APPEND ZLIB_NG_TARGETS ${_zng_shared})
-      dftracer_utils_ok("Using zlib-ng (compat, shared) as dftracer_zlib")
-    endif()
+  set_target_properties(
+    ${_zng}
+    PROPERTIES OUTPUT_NAME dftracer_utils_zlib
+               ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib
+               POSITION_INDEPENDENT_CODE ON
+               C_VISIBILITY_PRESET hidden
+               VISIBILITY_INLINES_HIDDEN ON)
+  add_library(dftracer::zlib ALIAS ${_zng})
+  # A static library of ours that links the archive needs it at install.
+  if(DFTRACER_UTILS_BUILD_STATIC)
+    install(
+      TARGETS ${_zng}
+      EXPORT dftracer_utils_zlibTargets
+      ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
+    install(
+      EXPORT dftracer_utils_zlibTargets
+      FILE dftracer_utils_zlibTargets.cmake
+      NAMESPACE dftracer::
+      DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/dftracer_utils_zlib)
+    install_dependency_config(dftracer_utils_zlib dftracer_utils_zlibTargets.cmake)
   endif()
-
-  if(DFTRACER_UTILS_BUILD_STATIC AND TARGET zlib-ng-static)
-    # In ZLIB_COMPAT mode zlib-ng-static can itself be an ALIAS (to zlibstatic);
-    # set_target_properties/target_include_directories/install all reject alias
-    # targets, so resolve to the real one. Guard the alias-adds so a reconfigure
-    # (which rebuilds the target graph) does not redefine them.
-    get_target_property(_zng_static_alias zlib-ng-static ALIASED_TARGET)
-    if(_zng_static_alias)
-      set(_zng_static ${_zng_static_alias})
-    else()
-      set(_zng_static zlib-ng-static)
-    endif()
-    # PIC: link_zlib falls back to this archive for a shared library when
-    # zlib-ng made no shared target (BUILD_SHARED_LIBS off).
-    set_target_properties(
-      ${_zng_static}
-      PROPERTIES OUTPUT_NAME dftracer_zlib
-                 ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib
-                 POSITION_INDEPENDENT_CODE ON)
-    target_include_directories(
-      ${_zng_static} PUBLIC $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
-    if(NOT TARGET dftracer_zlib_static)
-      add_library(dftracer_zlib_static ALIAS ${_zng_static})
-    endif()
-    if(NOT TARGET dftracer::zlibstatic)
-      add_library(dftracer::zlibstatic ALIAS ${_zng_static})
-    endif()
-    if(NOT TARGET dftracer::zlib)
-      add_library(dftracer::zlib ALIAS ${_zng_static})
-    endif()
-    list(APPEND ZLIB_NG_TARGETS ${_zng_static})
-    dftracer_utils_ok("Using zlib-ng (compat, static) as dftracer_zlib")
-  endif()
-
-  if(NOT ZLIB_NG_TARGETS)
-    message(WARNING "zlib-ng targets not found after CPM add; falling back")
-    return()
-  endif()
-
-  install(
-    TARGETS ${ZLIB_NG_TARGETS}
-    EXPORT ZlibTargets
-    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
-    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
-  install(
-    EXPORT ZlibTargets
-    FILE ZlibTargets.cmake
-    NAMESPACE dftracer::
-    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/zlib)
-
-  # Compat headers: zlib-ng generates zlib.h/zconf.h in its binary dir when
-  # ZLIB_COMPAT=ON, and zlib_name_mangling.h (which zlib.h includes) is always
-  # generated into the binary dir. Fall back to source dir if a generated copy
-  # is absent.
-  foreach(hdr zlib.h zconf.h zlib_name_mangling.h)
-    if(EXISTS "${zlib-ng_BINARY_DIR}/${hdr}")
-      install(FILES "${zlib-ng_BINARY_DIR}/${hdr}"
-              DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
-    elseif(EXISTS "${zlib-ng_SOURCE_DIR}/${hdr}")
-      install(FILES "${zlib-ng_SOURCE_DIR}/${hdr}"
-              DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
-    endif()
-  endforeach()
-
-  set(ZLIB_SOURCE_DIR
-      ${zlib-ng_SOURCE_DIR}
-      PARENT_SCOPE)
-  set(ZLIB_BINARY_DIR
-      ${zlib-ng_BINARY_DIR}
-      PARENT_SCOPE)
-  set(${OUT_VAR}
-      TRUE
-      PARENT_SCOPE)
+  dftracer_utils_ok("Using zlib-ng ${CPM_PACKAGE_zlib-ng_VERSION} (native, static, hidden)")
 endfunction()
 
-function(need_zlib)
-  if(DFTRACER_USE_ZLIB_NG)
-    _try_zlib_ng(_ZLIB_NG_OK)
-    if(_ZLIB_NG_OK)
-      set(ZLIB_CPM
-          TRUE
-          PARENT_SCOPE)
-      set(ZLIB_SOURCE_DIR
-          ${ZLIB_SOURCE_DIR}
-          PARENT_SCOPE)
-      set(ZLIB_BINARY_DIR
-          ${ZLIB_BINARY_DIR}
-          PARENT_SCOPE)
-      set(ZLIB_FOUND
-          FALSE
-          PARENT_SCOPE)
-      return()
-    endif()
-  endif()
-
-  find_package(ZLIB 1.2 QUIET)
-
-  if(ZLIB_FOUND)
-    dftracer_utils_ok("Found system ZLIB: ${ZLIB_LIBRARIES}")
-
-    # Set variables in parent scope so they persist outside the function
-    set(ZLIB_FOUND
-        ${ZLIB_FOUND}
-        PARENT_SCOPE)
-    set(ZLIB_LIBRARIES
-        ${ZLIB_LIBRARIES}
-        PARENT_SCOPE)
-    set(ZLIB_INCLUDE_DIRS
-        ${ZLIB_INCLUDE_DIRS}
-        PARENT_SCOPE)
-    set(ZLIB_CPM
-        FALSE
-        PARENT_SCOPE)
-  else()
-    set(ZLIB_CPM
-        FALSE
-        PARENT_SCOPE)
-    # Build with CPM
-    cpmaddpackage(
-      NAME
-      ZLIB
-      GITHUB_REPOSITORY
-      madler/zlib
-      VERSION
-      1.3.1
-      OPTIONS
-      "ZLIB_BUILD_STATIC OFF"
-      "ZLIB_BUILD_SHARED ON"
-      "ZLIB_INSTALL OFF"
-      "ZLIB_BUILD_EXAMPLES OFF"
-      DOWNLOAD_ONLY
-      YES)
-
-    if(ZLIB_ADDED)
-      dftracer_utils_ok("Built ZLIB with CPM")
-      set(ZLIB_CPM
-          TRUE
-          PARENT_SCOPE)
-
-      # Make sure the source and binary directories are available in parent
-      # scope
-      set(ZLIB_SOURCE_DIR
-          ${ZLIB_SOURCE_DIR}
-          PARENT_SCOPE)
-      set(ZLIB_BINARY_DIR
-          ${ZLIB_BINARY_DIR}
-          PARENT_SCOPE)
-
-      # Create our own zlib targets with proper install interface and fix macOS
-      # issues
-      set(ZLIB_TARGETS)
-
-      if(APPLE)
-        # Create patched source files for macOS to fix type conflicts
-        set(ZLIB_SOURCES_PATCHED "")
-        foreach(src_file adler32.c crc32.c)
-          file(READ "${ZLIB_SOURCE_DIR}/${src_file}" SRC_CONTENT)
-          # Replace z_off64_t parameter with z_off_t in function definitions to
-          # match declarations
-          string(REGEX REPLACE "z_off64_t len2\\)" "z_off_t len2)"
-                               SRC_CONTENT_FIXED "${SRC_CONTENT}")
-          string(REGEX REPLACE "z_off64_t len2\\s*\\{" "z_off_t len2 {"
-                               SRC_CONTENT_FIXED "${SRC_CONTENT_FIXED}")
-          file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/${src_file}"
-               "${SRC_CONTENT_FIXED}")
-          list(APPEND ZLIB_SOURCES_PATCHED
-               "${CMAKE_CURRENT_BINARY_DIR}/${src_file}")
-        endforeach()
-
-        # Add the rest of the files normally
-        foreach(
-          src_file
-          compress.c
-          deflate.c
-          gzclose.c
-          gzlib.c
-          gzread.c
-          gzwrite.c
-          inflate.c
-          infback.c
-          inftrees.c
-          inffast.c
-          trees.c
-          uncompr.c
-          zutil.c)
-          list(APPEND ZLIB_SOURCES_PATCHED "${ZLIB_SOURCE_DIR}/${src_file}")
-        endforeach()
-
-        if(DFTRACER_UTILS_BUILD_SHARED)
-          add_library(dftracer_zlib_shared SHARED ${ZLIB_SOURCES_PATCHED})
-          list(APPEND ZLIB_TARGETS dftracer_zlib_shared)
-        endif()
-        if(DFTRACER_UTILS_BUILD_STATIC)
-          add_library(dftracer_zlib_static STATIC ${ZLIB_SOURCES_PATCHED})
-          list(APPEND ZLIB_TARGETS dftracer_zlib_static)
-        endif()
-      else()
-        set(ZLIB_SOURCES
-            ${ZLIB_SOURCE_DIR}/adler32.c
-            ${ZLIB_SOURCE_DIR}/compress.c
-            ${ZLIB_SOURCE_DIR}/crc32.c
-            ${ZLIB_SOURCE_DIR}/deflate.c
-            ${ZLIB_SOURCE_DIR}/gzclose.c
-            ${ZLIB_SOURCE_DIR}/gzlib.c
-            ${ZLIB_SOURCE_DIR}/gzread.c
-            ${ZLIB_SOURCE_DIR}/gzwrite.c
-            ${ZLIB_SOURCE_DIR}/inflate.c
-            ${ZLIB_SOURCE_DIR}/infback.c
-            ${ZLIB_SOURCE_DIR}/inftrees.c
-            ${ZLIB_SOURCE_DIR}/inffast.c
-            ${ZLIB_SOURCE_DIR}/trees.c
-            ${ZLIB_SOURCE_DIR}/uncompr.c
-            ${ZLIB_SOURCE_DIR}/zutil.c)
-
-        if(DFTRACER_UTILS_BUILD_SHARED)
-          add_library(dftracer_zlib_shared SHARED ${ZLIB_SOURCES})
-          list(APPEND ZLIB_TARGETS dftracer_zlib_shared)
-        endif()
-        if(DFTRACER_UTILS_BUILD_STATIC)
-          add_library(dftracer_zlib_static STATIC ${ZLIB_SOURCES})
-          list(APPEND ZLIB_TARGETS dftracer_zlib_static)
-        endif()
-      endif()
-
-      # Fix type mismatch issues on macOS by ensuring consistent type
-      # definitions
-      foreach(zlib_target ${ZLIB_TARGETS})
-        if(APPLE)
-          target_compile_definitions(
-            ${zlib_target} PRIVATE _LARGEFILE64_SOURCE=1 _FILE_OFFSET_BITS=64)
-        else()
-          target_compile_definitions(
-            ${zlib_target} PRIVATE _LARGEFILE64_SOURCE=1 _FILE_OFFSET_BITS=64
-                                   Z_HAVE_STDARG_H=1)
-        endif()
-
-        # Set proper include directories for build and install
-        target_include_directories(
-          ${zlib_target}
-          PUBLIC $<BUILD_INTERFACE:${ZLIB_SOURCE_DIR}>
-                 $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
-
-        # Copy the generated zconf.h from the original zlib build
-        if(EXISTS "${ZLIB_BINARY_DIR}/zconf.h")
-          configure_file("${ZLIB_BINARY_DIR}/zconf.h"
-                         "${CMAKE_CURRENT_BINARY_DIR}/zconf.h" COPYONLY)
-          target_include_directories(
-            ${zlib_target}
-            PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}>)
-        endif()
-      endforeach()
-
-      # Set output names and create aliases
-      if(DFTRACER_UTILS_BUILD_SHARED)
-        set_target_properties(
-          dftracer_zlib_shared
-          PROPERTIES OUTPUT_NAME dftracer_zlib
-                     LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib
-                     ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
-        add_library(dftracer::zlib ALIAS dftracer_zlib_shared)
-        dftracer_utils_ok("Added dftracer_zlib shared library")
-      endif()
-
-      if(DFTRACER_UTILS_BUILD_STATIC)
-        set_target_properties(
-          dftracer_zlib_static
-          PROPERTIES OUTPUT_NAME dftracer_zlib
-                     LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib
-                     ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
-        add_library(dftracer::zlibstatic ALIAS dftracer_zlib_static)
-        dftracer_utils_ok("Added dftracer_zlib static library")
-        # If only static is built, make it the default alias
-        if(NOT DFTRACER_UTILS_BUILD_SHARED)
-          add_library(dftracer::zlib ALIAS dftracer_zlib_static)
-        endif()
-      endif()
-
-      # Install our custom zlib targets
-      if(ZLIB_TARGETS)
-        install(
-          TARGETS ${ZLIB_TARGETS}
-          EXPORT ZlibTargets
-          ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
-          LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-          RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
-      endif()
-
-      install(
-        EXPORT ZlibTargets
-        FILE ZlibTargets.cmake
-        NAMESPACE dftracer::
-        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/zlib)
-
-      # Install zlib headers manually
-      if(ZLIB_SOURCE_DIR AND ZLIB_BINARY_DIR)
-        if(EXISTS "${ZLIB_SOURCE_DIR}/zlib.h")
-          install(FILES "${ZLIB_SOURCE_DIR}/zlib.h"
-                  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
-        endif()
-
-        if(EXISTS "${ZLIB_BINARY_DIR}/zconf.h")
-          install(FILES "${ZLIB_BINARY_DIR}/zconf.h"
-                  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
-        endif()
-      endif()
-
-      # Make zlib available in parent scope for Arrow - let Arrow build its own
-      if(DFTRACER_UTILS_BUILD_SHARED)
-        set(ZLIB_LIBRARIES
-            dftracer_zlib_shared
-            PARENT_SCOPE)
-      elseif(DFTRACER_UTILS_BUILD_STATIC)
-        set(ZLIB_LIBRARIES
-            dftracer_zlib_static
-            PARENT_SCOPE)
-      endif()
-      set(ZLIB_INCLUDE_DIRS
-          ${ZLIB_SOURCE_DIR} ${ZLIB_BINARY_DIR}
-          PARENT_SCOPE)
-      # Don't set ZLIB_FOUND to let Arrow build its own zlib
-      set(ZLIB_FOUND
-          FALSE
-          PARENT_SCOPE)
-    endif()
-  endif()
-endfunction()
-
-function(link_zlib TARGET_NAME LIBRARY_TYPE)
-  # Validate parameters
-  if(NOT TARGET_NAME)
-    message(FATAL_ERROR "link_zlib: TARGET_NAME is required")
-  endif()
-
-  if(NOT LIBRARY_TYPE MATCHES "^(STATIC|SHARED)$")
-    message(
-      FATAL_ERROR "link_zlib: LIBRARY_TYPE must be either STATIC or SHARED")
-  endif()
-
+# Links the zlib-ng archive into TARGET_NAME privately: its headers reach only
+# TARGET_NAME's own sources, and a shared library keeps its symbols hidden.
+function(link_zlib TARGET_NAME)
   if(NOT TARGET ${TARGET_NAME})
     message(FATAL_ERROR "link_zlib: Target '${TARGET_NAME}' does not exist")
   endif()
-
-  # Check if any zlib variant is available
-  set(ZLIB_AVAILABLE FALSE)
-  if(TARGET dftracer_zlib_static
-     OR TARGET dftracer_zlib_shared
-     OR ZLIB_FOUND)
-    set(ZLIB_AVAILABLE TRUE)
+  if(NOT TARGET dftracer::zlib)
+    message(FATAL_ERROR "link_zlib: call need_zlib() first")
   endif()
-
-  if(NOT ZLIB_AVAILABLE)
-    message(
-      FATAL_ERROR
-        "link_zlib: No zlib found! Call need_zlib() first or ensure system zlib is available."
-    )
-  endif()
-
-  # Link appropriate zlib variant Use PUBLIC linkage since zlib headers may be
-  # included in public headers
-  if(LIBRARY_TYPE STREQUAL "STATIC")
-    # For static libraries, prefer static zlib if available
-    if(TARGET dftracer_zlib_static)
-      target_link_libraries(${TARGET_NAME} PUBLIC dftracer::zlibstatic)
-      dftracer_utils_ok("Linked ${TARGET_NAME} to dftracer zlibstatic")
-    elseif(TARGET dftracer_zlib_shared)
-      target_link_libraries(${TARGET_NAME} PUBLIC dftracer::zlib)
-      dftracer_utils_ok("Linked ${TARGET_NAME} to dftracer zlib (shared)")
-    elseif(ZLIB_FOUND)
-      target_link_libraries(${TARGET_NAME} PUBLIC ZLIB::ZLIB)
-      dftracer_utils_ok("Linked ${TARGET_NAME} to system ZLIB::ZLIB")
-    endif()
-  else() # SHARED
-    # For shared libraries, prefer shared zlib if available
-    if(TARGET dftracer_zlib_shared)
-      target_link_libraries(${TARGET_NAME} PUBLIC dftracer::zlib)
-      dftracer_utils_ok("Linked ${TARGET_NAME} to dftracer zlib (shared)")
-    elseif(TARGET dftracer_zlib_static)
-      target_link_libraries(${TARGET_NAME} PUBLIC dftracer::zlibstatic)
-      dftracer_utils_ok("Linked ${TARGET_NAME} to dftracer zlibstatic")
-    elseif(ZLIB_FOUND)
-      target_link_libraries(${TARGET_NAME} PUBLIC ZLIB::ZLIB)
-      dftracer_utils_ok("Linked ${TARGET_NAME} to system ZLIB::ZLIB")
-    endif()
-  endif()
+  target_link_libraries(${TARGET_NAME} PRIVATE dftracer::zlib)
 endfunction()
 
+# zstd 1.5.7 from source for every build, never the system copy: one static
+# PIC archive with hidden visibility. A system zstd can be years older and
+# slower, and with hidden symbols a process that also loads the system libzstd
+# (Python) binds no call of its own to ours. The legacy decoders are off: nothing we read predates zstd 1.0.
 function(need_zstd)
-  if(DFTRACER_UTILS_LOCAL_PACKAGES)
-    find_package(zstd QUIET CONFIG)
-    if(NOT zstd_FOUND)
-      find_path(zstd_INCLUDE_DIRS NAMES zstd.h)
-      find_library(zstd_LIBRARIES NAMES zstd)
-      if(zstd_INCLUDE_DIRS AND zstd_LIBRARIES)
-        set(zstd_FOUND TRUE)
-      endif()
-    endif()
+  if(NOT zstd_ADDED)
+    cpmaddpackage(
+      NAME
+      zstd
+      GITHUB_REPOSITORY
+      facebook/zstd
+      VERSION
+      1.5.7
+      GIT_TAG
+      v1.5.7
+      SOURCE_SUBDIR
+      build/cmake
+      OPTIONS
+      "CMAKE_OSX_DEPLOYMENT_TARGET ${CMAKE_OSX_DEPLOYMENT_TARGET}"
+      "ZSTD_BUILD_PROGRAMS OFF"
+      "ZSTD_BUILD_TESTS OFF"
+      "ZSTD_BUILD_SHARED OFF"
+      "ZSTD_BUILD_STATIC ON"
+      "ZSTD_LEGACY_SUPPORT OFF"
+      EXCLUDE_FROM_ALL
+      YES
+      FORCE
+      YES)
+  endif()
+  if(NOT TARGET libzstd_static)
+    message(FATAL_ERROR "need_zstd: the zstd build made no libzstd_static")
   endif()
 
-  if(DFTRACER_UTILS_LOCAL_PACKAGES AND zstd_FOUND)
-    dftracer_utils_ok("Found system zstd")
-    if(DEFINED zstd_LIBRARIES)
-      # Provide the same target names as the CPM branch: zstd::libzstd_shared
-      # for consumers (nanoarrow IPC) and zstd::zstd for RocksDB.
-      foreach(_zstd_t zstd::libzstd_shared zstd::zstd)
-        if(NOT TARGET ${_zstd_t})
-          add_library(${_zstd_t} UNKNOWN IMPORTED)
-          set_target_properties(
-            ${_zstd_t}
-            PROPERTIES IMPORTED_LOCATION "${zstd_LIBRARIES}"
-                       INTERFACE_INCLUDE_DIRECTORIES "${zstd_INCLUDE_DIRS}")
-        endif()
-      endforeach()
-    endif()
-    set(zstd_FOUND
-        TRUE
-        PARENT_SCOPE)
-    set(zstd_CPM
-        FALSE
-        PARENT_SCOPE)
-  else()
-    if(NOT zstd_ADDED)
-      cpmaddpackage(
-        NAME
-        zstd
-        GITHUB_REPOSITORY
-        facebook/zstd
-        VERSION
-        1.5.7
-        GIT_TAG
-        v1.5.7
-        SOURCE_SUBDIR
-        build/cmake
-        OPTIONS
-        "CMAKE_OSX_DEPLOYMENT_TARGET ${CMAKE_OSX_DEPLOYMENT_TARGET}"
-        "ZSTD_BUILD_PROGRAMS OFF"
-        "ZSTD_BUILD_TESTS OFF"
-        "ZSTD_BUILD_SHARED ${DFTRACER_UTILS_BUILD_SHARED}"
-        "ZSTD_BUILD_STATIC ON")
-    endif()
-
-    if(zstd_ADDED)
-      dftracer_utils_ok("Built zstd with CPM")
-
-      set(_zstd_real)
-      foreach(_zstd_t libzstd_shared libzstd_static)
-        if(TARGET ${_zstd_t})
-          set_target_properties(
-            ${_zstd_t}
-            PROPERTIES ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
-                       LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
-                       RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
-          # zstd's vendored legacy decoders trip GCC -Wmaybe-uninitialized;
-          # third-party source, so silence it on zstd's own targets only.
-          if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
-            target_compile_options(${_zstd_t} PRIVATE -Wno-maybe-uninitialized)
-          endif()
-          if(DEFINED zstd_SOURCE_DIR)
-            set_property(
-              TARGET ${_zstd_t}
-              APPEND
-              PROPERTY INTERFACE_INCLUDE_DIRECTORIES
-                       "$<BUILD_INTERFACE:${zstd_SOURCE_DIR}/lib>")
-          endif()
-          install(
-            TARGETS ${_zstd_t}
-            ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
-            LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-            RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
-          # zstd's build tree exposes only libzstd_shared / libzstd_static; the
-          # zstd:: namespaced names exist only post-install. Other consumers
-          # (nanoarrow IPC) link the namespaced names, so alias them.
-          if(NOT TARGET zstd::${_zstd_t})
-            add_library(zstd::${_zstd_t} ALIAS ${_zstd_t})
-          endif()
-          if(NOT _zstd_real)
-            set(_zstd_real ${_zstd_t})
-          endif()
-        endif()
-      endforeach()
-
-      if(_zstd_real)
-        if(_zstd_real STREQUAL libzstd_shared)
-          set(_zstd_output
-              "${CMAKE_BINARY_DIR}/lib/${CMAKE_SHARED_LIBRARY_PREFIX}zstd${CMAKE_SHARED_LIBRARY_SUFFIX}"
-          )
-        else()
-          set(_zstd_output
-              "${CMAKE_BINARY_DIR}/lib/${CMAKE_STATIC_LIBRARY_PREFIX}zstd${CMAKE_STATIC_LIBRARY_SUFFIX}"
-          )
-        endif()
-
-        if(NOT TARGET zstd::zstd)
-          add_library(zstd::zstd ALIAS ${_zstd_real})
-        endif()
-
-        if(DEFINED zstd_SOURCE_DIR)
-          set(ZSTD_INCLUDE_DIRS
-              "${zstd_SOURCE_DIR}/lib"
-              CACHE PATH "zstd include directory (CPM)" FORCE)
-          install(FILES "${zstd_SOURCE_DIR}/lib/zstd.h"
-                  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
-        endif()
-        set(ZSTD_LIBRARIES
-            "${_zstd_output}"
-            CACHE FILEPATH "zstd library (CPM)" FORCE)
-      endif()
-
-      set(zstd_FOUND
-          TRUE
-          PARENT_SCOPE)
-      set(zstd_CPM
-          TRUE
-          PARENT_SCOPE)
-    endif()
+  set_target_properties(
+    libzstd_static
+    PROPERTIES POSITION_INDEPENDENT_CODE ON
+               C_VISIBILITY_PRESET hidden
+               ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
+  # zstd.h marks its API visible unless these are defined; empty, the hidden
+  # preset holds for every symbol of the archive.
+  target_compile_definitions(
+    libzstd_static PRIVATE "ZSTDLIB_VISIBLE=" "ZSTDERRORLIB_VISIBLE="
+                           "ZDICTLIB_VISIBLE=")
+  # zstd's own sources trip GCC -Wmaybe-uninitialized, and POOL_thread ends in
+  # an assert(0) that GCC does not always treat as noreturn (-Wreturn-type).
+  # Third-party source, so silence both on zstd's target only.
+  if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
+    target_compile_options(libzstd_static PRIVATE -Wno-maybe-uninitialized
+                                                  -Wno-return-type)
   endif()
+  set_property(
+    TARGET libzstd_static
+    APPEND
+    PROPERTY INTERFACE_INCLUDE_DIRECTORIES
+             "$<BUILD_INTERFACE:${zstd_SOURCE_DIR}/lib>")
+  # zstd's build tree names only libzstd_static; nanoarrow links
+  # zstd::libzstd_static. The installed zstdConfig.cmake names it the same.
+  if(NOT TARGET zstd::libzstd_static)
+    add_library(zstd::libzstd_static ALIAS libzstd_static)
+  endif()
+  install_dependency_archive(zstd zstd:: EXPORT_SET zstdExports TARGETS libzstd_static)
+  dftracer_utils_ok("Built zstd 1.5.7 with CPM (static, hidden)")
 endfunction()
 
 # ==============================================================================
@@ -1509,18 +486,34 @@ function(need_libdeflate)
       OPTIONS
       "LIBDEFLATE_BUILD_SHARED_LIB OFF"
       "LIBDEFLATE_BUILD_STATIC_LIB ON"
-      "LIBDEFLATE_BUILD_GZIP OFF")
+      "LIBDEFLATE_BUILD_GZIP OFF"
+      EXCLUDE_FROM_ALL
+      YES)
   endif()
 
   if(libdeflate_ADDED)
     # The static lib links into our shared libraries, so it must be PIC (GNU ld
     # rejects non-PIC objects in a shared object; macOS ld tolerates it).
     if(TARGET libdeflate_static)
+      # Each of our shared libraries holds its own copy, so its internal data
+      # stays hidden or the copies bind to one symbol, an ODR violation in ASan.
       set_target_properties(libdeflate_static
-                            PROPERTIES POSITION_INDEPENDENT_CODE ON)
+                            PROPERTIES POSITION_INDEPENDENT_CODE ON
+                                       C_VISIBILITY_PRESET hidden)
+      # Its header is not installed.
+      set_target_properties(libdeflate_static PROPERTIES PUBLIC_HEADER "")
+      install_dependency_archive(libdeflate libdeflate:: EXPORT_SET libdeflate_exported_targets TARGETS libdeflate_static)
     endif()
     dftracer_utils_ok("Built libdeflate with CPM")
   endif()
+endfunction()
+
+# Link the zstd archive need_zstd built into `target`.
+function(link_zstd target)
+  if(NOT TARGET zstd::libzstd_static)
+    message(FATAL_ERROR "link_zstd: call need_zstd() first")
+  endif()
+  target_link_libraries(${target} PRIVATE zstd::libzstd_static)
 endfunction()
 
 # Link the resolved libdeflate target (name varies: CPM static build vs a system
@@ -1543,75 +536,10 @@ endfunction()
 # Concurrency Dependencies
 # ==============================================================================
 
-function(need_readerwriterqueue)
-  if(NOT readerwriterqueue_ADDED)
-    cpmaddpackage(
-      NAME
-      readerwriterqueue
-      GITHUB_REPOSITORY
-      cameron314/readerwriterqueue
-      GIT_TAG
-      211616e0554f93152ab3108b8d93fbc23174a9d9
-      DOWNLOAD_ONLY
-      YES)
-
-    if(readerwriterqueue_ADDED)
-      add_library(readerwriterqueue INTERFACE)
-      target_include_directories(
-        readerwriterqueue
-        INTERFACE $<BUILD_INTERFACE:${readerwriterqueue_SOURCE_DIR}>
-                  $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
-      install(FILES ${readerwriterqueue_SOURCE_DIR}/readerwriterqueue.h
-                    ${readerwriterqueue_SOURCE_DIR}/atomicops.h
-              DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
-
-      # Install and export the target
-      install(TARGETS readerwriterqueue EXPORT readerwriterqueueTargets)
-      install(
-        EXPORT readerwriterqueueTargets
-        FILE readerwriterqueueTargets.cmake
-        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/readerwriterqueue)
-
-      dftracer_utils_ok("Added readerwriterqueue header-only library")
-    endif()
-  endif()
-endfunction()
-
-function(need_concurrentqueue)
-  if(NOT concurrentqueue_ADDED)
-    cpmaddpackage(
-      NAME
-      concurrentqueue
-      GITHUB_REPOSITORY
-      cameron314/concurrentqueue
-      GIT_TAG
-      c68072129c8a5b4025122ca5a0c82ab14b30cb03
-      DOWNLOAD_ONLY
-      YES)
-
-    if(concurrentqueue_ADDED)
-      add_library(concurrentqueue INTERFACE)
-      target_include_directories(
-        concurrentqueue
-        INTERFACE $<BUILD_INTERFACE:${concurrentqueue_SOURCE_DIR}>
-                  $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
-      install(
-        FILES ${concurrentqueue_SOURCE_DIR}/concurrentqueue.h
-              ${concurrentqueue_SOURCE_DIR}/blockingconcurrentqueue.h
-              ${concurrentqueue_SOURCE_DIR}/lightweightsemaphore.h
-        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
-
-      # Install and export the target
-      install(TARGETS concurrentqueue EXPORT concurrentqueueTargets)
-      install(
-        EXPORT concurrentqueueTargets
-        FILE concurrentqueueTargets.cmake
-        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/concurrentqueue)
-
-      dftracer_utils_ok("Added concurrentqueue header-only library")
-    endif()
-  endif()
-endfunction()
+# concurrentqueue is vendored as
+# include/dftracer/utils/dstd/vendor/concurrentqueue.h, because a public header
+# (coro/channel.h, coro/timer_service.h) includes it. A CPM package stays in
+# src/ only.
 
 # ==============================================================================
 # Arrow Data Interface Dependencies (nanoarrow)
@@ -1683,15 +611,9 @@ function(need_nanoarrow)
           PUBLIC $<BUILD_INTERFACE:${NANOARROW_FLATCC_INCLUDE}>
                  $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
         # Enable zstd compression for Arrow IPC
-        if(DFTRACER_UTILS_ENABLE_ZSTD)
-          target_compile_definitions(nanoarrow_static
-                                     PRIVATE NANOARROW_IPC_WITH_ZSTD)
-          if(TARGET zstd::libzstd_static)
-            target_link_libraries(nanoarrow_static PRIVATE zstd::libzstd_static)
-          elseif(TARGET zstd::libzstd_shared)
-            target_link_libraries(nanoarrow_static PRIVATE zstd::libzstd_shared)
-          endif()
-        endif()
+        target_compile_definitions(nanoarrow_static
+                                   PRIVATE NANOARROW_IPC_WITH_ZSTD)
+        target_link_libraries(nanoarrow_static PRIVATE zstd::libzstd_static)
       endif()
       set_target_properties(
         nanoarrow_static
@@ -1717,15 +639,9 @@ function(need_nanoarrow)
           PUBLIC $<BUILD_INTERFACE:${NANOARROW_FLATCC_INCLUDE}>
                  $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
         # Enable zstd compression for Arrow IPC
-        if(DFTRACER_UTILS_ENABLE_ZSTD)
-          target_compile_definitions(nanoarrow_shared
-                                     PRIVATE NANOARROW_IPC_WITH_ZSTD)
-          if(TARGET zstd::libzstd_shared)
-            target_link_libraries(nanoarrow_shared PRIVATE zstd::libzstd_shared)
-          elseif(TARGET zstd::libzstd_static)
-            target_link_libraries(nanoarrow_shared PRIVATE zstd::libzstd_static)
-          endif()
-        endif()
+        target_compile_definitions(nanoarrow_shared
+                                   PRIVATE NANOARROW_IPC_WITH_ZSTD)
+        target_link_libraries(nanoarrow_shared PRIVATE zstd::libzstd_static)
       endif()
       set_target_properties(
         nanoarrow_shared
@@ -1739,26 +655,6 @@ function(need_nanoarrow)
       dftracer_utils_ok("Added nanoarrow shared library")
     elseif(DFTRACER_UTILS_BUILD_STATIC)
       add_library(nanoarrow::nanoarrow ALIAS nanoarrow_static)
-    endif()
-
-    # Install headers
-    install(
-      DIRECTORY ${nanoarrow_SOURCE_DIR}/src/nanoarrow/
-      DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/nanoarrow
-      FILES_MATCHING
-      PATTERN "*.h"
-      PATTERN "*.hpp"
-      PATTERN "testing" EXCLUDE
-      PATTERN "integration" EXCLUDE
-      PATTERN "device" EXCLUDE)
-    install(FILES ${CMAKE_CURRENT_BINARY_DIR}/nanoarrow/nanoarrow_config.h
-            DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/nanoarrow)
-    if(DFTRACER_UTILS_ENABLE_ARROW_IPC)
-      install(
-        DIRECTORY ${nanoarrow_SOURCE_DIR}/thirdparty/flatcc/include/flatcc/
-        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/flatcc
-        FILES_MATCHING
-        PATTERN "*.h")
     endif()
 
     # Suppress warnings from nanoarrow headers (redundant redeclarations, shadow
@@ -1785,6 +681,14 @@ function(need_nanoarrow)
         FILE nanoarrowTargets.cmake
         NAMESPACE nanoarrow::
         DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/nanoarrow)
+
+      # nanoarrow_static links zstd for the IPC codec.
+      set(nanoarrow_dependencies)
+      if(DFTRACER_UTILS_ENABLE_ARROW_IPC AND DFTRACER_UTILS_BUILD_STATIC)
+        set(nanoarrow_dependencies zstd)
+      endif()
+      install_dependency_config(nanoarrow nanoarrowTargets.cmake DEPENDENCIES
+                                ${nanoarrow_dependencies})
     endif()
 
     dftracer_utils_ok("Added nanoarrow 0.8.0 via CPM")
@@ -1900,8 +804,17 @@ function(need_pcre2)
       "PCRE2_SUPPORT_LIBBZ2 OFF"
       "PCRE2_SUPPORT_LIBZ OFF"
       "PCRE2_SUPPORT_LIBEDIT OFF"
-      "PCRE2_SUPPORT_LIBREADLINE OFF")
+      "PCRE2_SUPPORT_LIBREADLINE OFF"
+      EXCLUDE_FROM_ALL
+      YES)
     if(pcre2_ADDED)
+      set(pcre2_dependencies)
+      if(REQUIRE_PTHREAD)
+        set(pcre2_dependencies Threads)
+      endif()
+      install_dependency_archive(pcre2 pcre2:: EXPORT_SET pcre2-targets
+                                 TARGETS pcre2-8-static
+                                 DEPENDENCIES ${pcre2_dependencies})
       dftracer_utils_ok("Added PCRE2 ${pcre2_VERSION} via CPM")
     endif()
   endif()
@@ -1934,8 +847,8 @@ function(need_utf8proc)
     # utf8proc.c includes utf8proc_data.c itself. The static archive links into
     # our shared libraries, so it must be PIC.
     add_library(utf8proc_static STATIC ${utf8proc_SOURCE_DIR}/utf8proc.c)
-    target_include_directories(utf8proc_static SYSTEM
-                               PUBLIC ${utf8proc_SOURCE_DIR})
+    target_include_directories(
+      utf8proc_static SYSTEM PUBLIC $<BUILD_INTERFACE:${utf8proc_SOURCE_DIR}>)
     target_compile_definitions(utf8proc_static PUBLIC UTF8PROC_STATIC)
     target_compile_options(utf8proc_static PRIVATE -w)
     set_target_properties(utf8proc_static PROPERTIES POSITION_INDEPENDENT_CODE
@@ -1949,7 +862,7 @@ endfunction()
 # ==============================================================================
 
 function(need_vectorscan)
-  if(TARGET dftracer_utils_hs)
+  if(TARGET dftracer_utils_vectorscan::hs)
     return()
   endif()
   include(ExternalProject)
@@ -1974,9 +887,19 @@ function(need_vectorscan)
     list(APPEND hs_args
          "-DCMAKE_OSX_ARCHITECTURES=${CMAKE_OSX_ARCHITECTURES}")
   endif()
+  # Each function starts on a 64-byte line, so an edit to our code linked
+  # before Vectorscan does not shift its scan loops on the front end.
   foreach(lang C CXX)
+    set(hs_flags "")
     if(CMAKE_${lang}_COMPILER_ID STREQUAL "GNU")
-      list(APPEND hs_args "-DCMAKE_${lang}_FLAGS=-Wno-psabi")
+      list(APPEND hs_flags -Wno-psabi)
+    endif()
+    if(CMAKE_${lang}_COMPILER_ID MATCHES "GNU|Clang")
+      list(APPEND hs_flags -falign-functions=64)
+    endif()
+    if(hs_flags)
+      list(JOIN hs_flags " " hs_flags)
+      list(APPEND hs_args "-DCMAKE_${lang}_FLAGS=${hs_flags}")
     endif()
   endforeach()
   set(hs_fixed_args
@@ -2015,9 +938,9 @@ function(need_vectorscan)
   set(hs_lib "${hs_prefix}/lib/${CMAKE_STATIC_LIBRARY_PREFIX}hs${CMAKE_STATIC_LIBRARY_SUFFIX}")
   set(hs_stamp "${hs_prefix}/.dftracer-fingerprint")
 
-  add_library(dftracer_utils_hs STATIC IMPORTED GLOBAL)
+  add_library(dftracer_utils_vectorscan::hs STATIC IMPORTED GLOBAL)
   set_target_properties(
-    dftracer_utils_hs PROPERTIES IMPORTED_LOCATION "${hs_lib}"
+    dftracer_utils_vectorscan::hs PROPERTIES IMPORTED_LOCATION "${hs_lib}"
                                  INTERFACE_INCLUDE_DIRECTORIES
                                  "${hs_prefix}/include/hs")
 
@@ -2118,19 +1041,22 @@ function(need_vectorscan)
                -DRAGEL=${RAGEL}
                ${boost_args}
                ${hs_args}
-    BUILD_BYPRODUCTS "${hs_lib}"
     USES_TERMINAL_BUILD ON)
   # Written only after the install step succeeded, so an interrupted build
   # never leaves a prefix that looks complete.
   file(WRITE "${CMAKE_BINARY_DIR}/_deps/vectorscan.fingerprint"
        "${hs_fingerprint}")
+  # The library is written by the install step, so it is a byproduct of this
+  # later step: Ninja then checks it after install and relinks its users in
+  # the same build.
   ExternalProject_Add_Step(
     dftracer_utils_vectorscan_ep fingerprint
     COMMAND ${CMAKE_COMMAND} -E copy
             "${CMAKE_BINARY_DIR}/_deps/vectorscan.fingerprint" "${hs_stamp}"
-    DEPENDEES install)
+    DEPENDEES install
+    BYPRODUCTS "${hs_lib}")
 
-  add_dependencies(dftracer_utils_hs dftracer_utils_vectorscan_ep)
+  add_dependencies(dftracer_utils_vectorscan::hs dftracer_utils_vectorscan_ep)
   dftracer_utils_ok("Vectorscan ${hs_version} external static build (${hs_lib})")
 endfunction()
 
@@ -2188,54 +1114,13 @@ function(link_boost_math TARGET_NAME)
 endfunction()
 
 # ==============================================================================
-# yaml-cpp - YAML emit/parse for DLIO config generation
-# ==============================================================================
-
-function(need_yaml_cpp)
-  if(NOT yaml-cpp_ADDED)
-    cpmaddpackage(
-      NAME
-      yaml-cpp
-      GITHUB_REPOSITORY
-      jbeder/yaml-cpp
-      GIT_TAG
-      yaml-cpp-0.9.0
-      OPTIONS
-      "YAML_CPP_BUILD_TESTS OFF"
-      "YAML_CPP_BUILD_TOOLS OFF"
-      "YAML_CPP_BUILD_CONTRIB OFF"
-      "YAML_BUILD_SHARED_LIBS OFF"
-      "YAML_CPP_INSTALL ON"
-      FORCE
-      YES)
-  endif()
-endfunction()
-
-# Link yaml-cpp PRIVATE so the static library is bundled into the consumer and
-# the header path stays out of the installed/exported target set.
-function(link_yaml_cpp TARGET_NAME)
-  if(NOT TARGET_NAME)
-    message(FATAL_ERROR "link_yaml_cpp: TARGET_NAME is required")
-  endif()
-  if(NOT TARGET ${TARGET_NAME})
-    message(FATAL_ERROR "link_yaml_cpp: target '${TARGET_NAME}' does not exist")
-  endif()
-  if(NOT TARGET yaml-cpp::yaml-cpp)
-    message(
-      FATAL_ERROR
-        "link_yaml_cpp: yaml-cpp::yaml-cpp target missing; call need_yaml_cpp() first"
-    )
-  endif()
-  target_link_libraries(${TARGET_NAME} PRIVATE yaml-cpp::yaml-cpp)
-  dftracer_utils_ok("Linked ${TARGET_NAME} to yaml-cpp")
-endfunction()
-
-# ==============================================================================
 # Testing Dependencies
 # ==============================================================================
 
 function(need_test_deps)
-  cpmaddpackage(NAME doctest GITHUB_REPOSITORY doctest/doctest VERSION 2.4.11)
+  cpmaddpackage(
+    NAME doctest GITHUB_REPOSITORY doctest/doctest VERSION 2.4.11
+    OPTIONS "DOCTEST_NO_INSTALL ON")
 
   cpmaddpackage(
     NAME
@@ -2259,57 +1144,7 @@ endfunction()
 # Compiler Feature Checks and Helpers
 # ==============================================================================
 
-macro(check_std_filesystem)
-  # Probe once and cache; try_compile otherwise re-runs a compiler every
-  # reconfigure. The status message below still prints each configure.
-  if(NOT DEFINED DFTRACER_UTILS_HAS_STD_FILESYSTEM)
-    try_compile(
-      _dftracer_has_std_filesystem "${CMAKE_BINARY_DIR}/temp"
-      "${CMAKE_CURRENT_SOURCE_DIR}/cmake/tests/has_filesystem.cpp" CXX_STANDARD
-      ${CMAKE_CXX_STANDARD} CXX_STANDARD_REQUIRED ON
-      LINK_LIBRARIES stdc++fs)
-    set(DFTRACER_UTILS_HAS_STD_FILESYSTEM
-        ${_dftracer_has_std_filesystem}
-        CACHE INTERNAL "Compiler provides a usable std::filesystem")
-  endif()
-  if(DFTRACER_UTILS_HAS_STD_FILESYSTEM)
-    dftracer_utils_ok("Compiler has std::filesystem support")
-  else()
-    dftracer_utils_warn(
-      "Compiler does not have std::filesystem support. Use gulrak::filesystem")
-  endif(DFTRACER_UTILS_HAS_STD_FILESYSTEM)
-endmacro()
-
-function(add_stdfs_if_needed TARGET)
-  if(DFTRACER_UTILS_HAS_STD_FILESYSTEM)
-    target_link_libraries(${TARGET} PRIVATE stdc++fs)
-  endif()
-endfunction()
-
-# Report which ObjectPool atomics path object_pool.h auto-selects under the
-# active -march (DWCAS if the 16-byte CAS is lock-free, else the packed 64-bit
-# CAS). We add no ISA flags on purpose: forcing -mcx16/+lse would raise the
-# binary's CPU floor and could SIGILL on older hardware. Both paths are
-# lock-free and correct everywhere; the fast path turns on automatically when
-# the toolchain already targets a capable baseline (Apple Silicon,
-# -march=native).
-macro(check_dwcas)
-  if(NOT DEFINED DFTRACER_UTILS_HAS_DWCAS)
-    try_compile(_dftracer_has_dwcas "${CMAKE_BINARY_DIR}/temp"
-                "${CMAKE_CURRENT_SOURCE_DIR}/cmake/tests/has_dwcas.cpp")
-    set(DFTRACER_UTILS_HAS_DWCAS
-        ${_dftracer_has_dwcas}
-        CACHE INTERNAL
-              "ObjectPool: 16-byte CAS is lock-free under active flags")
-  endif()
-
-  dftracer_utils_section("ObjectPool atomics")
-  if(DFTRACER_UTILS_HAS_DWCAS)
-    dftracer_utils_ok("DWCAS fast path (lock-free 16-byte CAS)")
-  else()
-    dftracer_utils_ok("Packed fallback (lock-free 64-bit CAS, portable)")
-  endif()
-
+macro(link_libatomic)
   # libatomic safety net for targets that can't inline the atomic (e.g. 32-bit;
   # every 64-bit target we ship is inline lock-free and does not need it). Only
   # apply the directory-scope link when dftracer-utils owns the build, never

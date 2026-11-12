@@ -1,25 +1,19 @@
+// SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dataframe/expr_ok.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/kernels/kernels.h>
 #include <dftracer/utils/dataframe/scalar.h>
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
 
 #include <cstdint>
-#include <string>
-#include <vector>
 
-using dftracer::utils::dataframe::CmpOp;
-using dftracer::utils::dataframe::dictionary_encode;
-using dftracer::utils::dataframe::Encoding;
-using dftracer::utils::dataframe::eval;
-using dftracer::utils::dataframe::eval_many;
-using dftracer::utils::dataframe::Expr;
-using dftracer::utils::dataframe::expr_cmp;
-using dftracer::utils::dataframe::expr_col;
-using dftracer::utils::dataframe::Scalar;
-using dftracer::utils::dataframe::Series;
+using namespace dftracer::utils;
+using namespace dftracer::utils::dataframe;
 
 namespace {
 
@@ -37,22 +31,22 @@ TEST_SUITE("expr string comparisons") {
     TEST_CASE(
         "col == string literal masks matching rows, != is the complement") {
         Series cat = Series::strings({"POSIX", "STDIO", "POSIX", "MPIIO"});
-        std::vector<const Series*> in{&cat};
+        dstd::Vector<const Series*> in{&cat};
 
-        Series eq_mask =
-            eval(expr_cmp(CmpOp::Eq, expr_col(0),
-                          dftracer::utils::dataframe::str("POSIX")),
-                 in);
+        Series eq_mask = dftu_utils_test::eval_ok(
+            expr_cmp(CmpOp::Eq, expr_col(0),
+                     dftracer::utils::dataframe::str("POSIX")),
+            in);
         REQUIRE(eq_mask.valid());
         CHECK(mask_bit(eq_mask, 0));
         CHECK_FALSE(mask_bit(eq_mask, 1));
         CHECK(mask_bit(eq_mask, 2));
         CHECK_FALSE(mask_bit(eq_mask, 3));
 
-        Series ne_mask =
-            eval(expr_cmp(CmpOp::Ne, expr_col(0),
-                          dftracer::utils::dataframe::str("POSIX")),
-                 in);
+        Series ne_mask = dftu_utils_test::eval_ok(
+            expr_cmp(CmpOp::Ne, expr_col(0),
+                     dftracer::utils::dataframe::str("POSIX")),
+            in);
         REQUIRE(ne_mask.valid());
         for (int i = 0; i < 4; ++i)
             CHECK(mask_bit(ne_mask, i) == !mask_bit(eq_mask, i));
@@ -62,16 +56,16 @@ TEST_SUITE("expr string comparisons") {
         "expr_cmp copies a STR rhs; mutating the source buffer afterward "
         "does not change the result") {
         Series cat = Series::strings({"POSIX", "STDIO", "POSIX"});
-        std::vector<const Series*> in{&cat};
+        dstd::Vector<const Series*> in{&cat};
 
-        std::string needle = "POSIX";
+        dstd::String needle = "POSIX";
         Expr e = expr_cmp(CmpOp::Eq, expr_col(0),
                           dftracer::utils::dataframe::str(needle));
 
         needle.assign(needle.size(), 'X');  // clobber the original buffer
         needle.shrink_to_fit();
 
-        Series mask = eval(e, in);
+        Series mask = dftu_utils_test::eval_ok(e, in);
         REQUIRE(mask.valid());
         CHECK(mask_bit(mask, 0));
         CHECK_FALSE(mask_bit(mask, 1));
@@ -82,16 +76,16 @@ TEST_SUITE("expr string comparisons") {
         "expr_cmp copies a STR rhs; destroying the source string "
         "afterward does not change the result") {
         Series cat = Series::strings({"POSIX", "STDIO", "POSIX"});
-        std::vector<const Series*> in{&cat};
+        dstd::Vector<const Series*> in{&cat};
 
         Expr e;
         {
-            std::string needle = "POSIX";
+            dstd::String needle = "POSIX";
             e = expr_cmp(CmpOp::Eq, expr_col(0),
                          dftracer::utils::dataframe::str(needle));
         }  // needle destroyed here
 
-        Series mask = eval(e, in);
+        Series mask = dftu_utils_test::eval_ok(e, in);
         REQUIRE(mask.valid());
         CHECK(mask_bit(mask, 0));
         CHECK_FALSE(mask_bit(mask, 1));
@@ -103,17 +97,17 @@ TEST_SUITE("expr string comparisons") {
         Series dict = dictionary_encode(flat);
         REQUIRE(dict.encoding() == Encoding::Dictionary);
 
-        std::vector<const Series*> flat_in{&flat};
-        std::vector<const Series*> dict_in{&dict};
+        dstd::Vector<const Series*> flat_in{&flat};
+        dstd::Vector<const Series*> dict_in{&dict};
 
-        Series flat_mask =
-            eval(expr_cmp(CmpOp::Eq, expr_col(0),
-                          dftracer::utils::dataframe::str("read")),
-                 flat_in);
-        Series dict_mask =
-            eval(expr_cmp(CmpOp::Eq, expr_col(0),
-                          dftracer::utils::dataframe::str("read")),
-                 dict_in);
+        Series flat_mask = dftu_utils_test::eval_ok(
+            expr_cmp(CmpOp::Eq, expr_col(0),
+                     dftracer::utils::dataframe::str("read")),
+            flat_in);
+        Series dict_mask = dftu_utils_test::eval_ok(
+            expr_cmp(CmpOp::Eq, expr_col(0),
+                     dftracer::utils::dataframe::str("read")),
+            dict_in);
 
         REQUIRE(flat_mask.valid());
         REQUIRE(dict_mask.valid());
@@ -163,14 +157,15 @@ TEST_SUITE("expr string comparisons") {
         "CSE keys on string content: two different literals in one "
         "eval_many stay distinct") {
         Series cat = Series::strings({"POSIX", "STDIO", "POSIX"});
-        std::vector<const Series*> in{&cat};
+        dstd::Vector<const Series*> in{&cat};
 
         Expr posix_eq = expr_cmp(CmpOp::Eq, expr_col(0),
                                  dftracer::utils::dataframe::str("POSIX"));
         Expr stdio_eq = expr_cmp(CmpOp::Eq, expr_col(0),
                                  dftracer::utils::dataframe::str("STDIO"));
 
-        std::vector<Series> outs = eval_many({posix_eq, stdio_eq}, in);
+        dstd::Vector<Series> outs =
+            dftu_utils_test::eval_many_ok({posix_eq, stdio_eq}, in);
         REQUIRE(outs.size() == 2);
         REQUIRE(outs[0].valid());
         REQUIRE(outs[1].valid());

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """DataFrame.eval lowers the pandas method calls the analyzer's presets use, and
 agrees with pandas eval on the preset strings."""
 

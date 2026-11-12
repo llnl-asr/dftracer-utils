@@ -1,21 +1,32 @@
+// SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dataframe/dataframe.h>
-#include <dftracer/utils/index/indexer.h>
-#include <dftracer/utils/utilities/reader/trace_reader.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/trace/index/indexer.h>
+#include <dftracer/utils/trace/reader/trace_reader.h>
 #include <doctest/doctest.h>
+#include <generator_ok.h>
 #include <simdjson.h>
+#include <task_result.h>
+#include <testing_utilities.h>
+#include <trace/views/test_view_common.h>
 
-#include <set>
-#include <string>
 #include <string_view>
-#include <vector>
 
-#include "test_view_common.h"
+using namespace dftracer::utils;
+using namespace dftracer::utils::trace::internal;
+using namespace dftracer::utils::trace::views;
+using namespace dftu_utils_test;
+using namespace test_view_common;
 
 template <>
-struct doctest::StringMaker<std::set<std::string>> {
-    static doctest::String convert(const std::set<std::string>& names) {
-        std::string out = "{";
+struct doctest::StringMaker<dstd::Set<dstd::String>> {
+    static doctest::String convert(const dstd::Set<dstd::String>& names) {
+        dstd::String out = "{";
         for (const auto& n : names) out += (out.size() > 1 ? "," : "") + n;
         return (out + "}").c_str();
     }
@@ -23,10 +34,7 @@ struct doctest::StringMaker<std::set<std::string>> {
 
 namespace {
 
-using Names = std::set<std::string>;
-using dataframe::DataFrame;
-using dataframe::Series;
-namespace reader = dftracer::utils::utilities::reader;
+using Names = dstd::Set<dstd::String>;
 
 // One event per line, named by its role. `x` sits under args as a number, an
 // empty string, a string, null or not at all; `lvl` is a top-level string that
@@ -52,8 +60,8 @@ struct Case {
     bool numeric_x;
 };
 
-const std::vector<Case>& cases() {
-    static const std::vector<Case> c = {
+const dstd::Vector<Case>& cases() {
+    static const dstd::Vector<Case> c = {
         {"x == 1", {"a1"}, true},
         {"x != 1", {"a2", "a3"}, true},
         {"not (x == 1)", {"a2", "a3"}, true},
@@ -73,35 +81,38 @@ const std::vector<Case>& cases() {
     return c;
 }
 
-std::string write_trace(TestEnvironment& env) {
-    const std::string plain = env.get_dir() + "/paths.pfw";
+dstd::String write_trace(TestEnvironment& env) {
+    const dstd::String plain = env.dir() + "/paths.pfw";
     {
-        std::ofstream out(plain);
+        dftu_utils_test::FileOut out(plain);
         int ts = 1000;
         for (const char* ev : EVENTS) {
-            std::string line(ev);
+            dstd::String line(ev);
             line.insert(1, R"("ph":"X","pid":1,"tid":1,"ts":)" +
-                               std::to_string(ts) + R"(,"dur":10,)");
+                               dstd::to_string(ts) + R"(,"dur":10,)");
             out << line << "\n";
             ts += 100;
         }
     }
-    const std::string gz = plain + ".gz";
+    const dstd::String gz = plain + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip(plain, gz));
-    fs::remove(plain);
-    dftracer::utils::index::Indexer::open({gz}).build();
+    dstd::fs::remove(plain).discard();
+    dftu_utils_test::ok(
+        dftu_utils_test::ok(dftracer::utils::trace::index::Indexer::open(
+                                {dstd::String(dstd::StringView(gz))}))
+            .build());
     return gz;
 }
 
-std::string name_of(std::string_view line) {
+dstd::String name_of(dstd::StringView line) {
     simdjson::dom::parser p;
     simdjson::padded_string s(line);
-    std::string_view name;
+    dstd::StringView name;
     REQUIRE(p.parse(s)["name"].get(name) == simdjson::SUCCESS);
-    return std::string(name);
+    return dstd::String(name);
 }
 
-Names names_of(const DataFrame& df) {
+Names names_of(const dataframe::DataFrame& df) {
     Names out;
     const auto col = bcol(df, "name");
     REQUIRE(col >= 0);
@@ -110,18 +121,22 @@ Names names_of(const DataFrame& df) {
     return out;
 }
 
-View view_of(const std::string& gz, const char* filter) {
-    return View::from_file(gz, determine_index_path(gz, "")).duql(filter);
+View view_of(const dstd::String& gz, const char* filter) {
+    return View::from_file(
+               dstd::String(gz),
+               dstd::String(dstd::String(determine_index_path(gz, ""))))
+        .duql(filter);
 }
 
 coro::CoroTask<Names> reader_lines(
-    coro::AsyncGenerator<utilities::fileio::lines::Line> gen) {
+    coro::AsyncGenerator<fileio::lines::Line> gen) {
     Names out;
     while (auto line = co_await gen.next()) out.insert(name_of(line->content));
     co_return out;
 }
 
-coro::CoroTask<Names> reader_json(coro::AsyncGenerator<reader::JsonLine> gen) {
+coro::CoroTask<Names> reader_json(
+    coro::AsyncGenerator<trace::reader::JsonLine> gen) {
     Names out;
     while (auto opt = co_await gen.next())
         if (auto v = opt->parser->get_string("name")) out.emplace(*v);
@@ -132,30 +147,30 @@ coro::CoroTask<Names> reader_json(coro::AsyncGenerator<reader::JsonLine> gen) {
 // one type, so x keeps only the values of the filter's literal type and every
 // other value becomes null, which gives the same result by the spec rule. `sh`
 // has no column form and no filter selects it, so it is left out.
-DataFrame frame_of(bool numeric_x) {
-    const std::vector<std::string_view> name{"a1", "a2", "a3", "e", "s",
-                                             "n",  "m",  "mp", "np"};
-    const std::vector<std::string_view> cat{"POSIX", "STDIO", "STDIO",
-                                            "STDIO", "STDIO", "STDIO",
-                                            "STDIO", "POSIX", "POSIX"};
-    DataFrame df;
+dataframe::DataFrame frame_of(bool numeric_x) {
+    const dstd::Vector<dstd::StringView> name{"a1", "a2", "a3", "e", "s",
+                                              "n",  "m",  "mp", "np"};
+    const dstd::Vector<dstd::StringView> cat{"POSIX", "STDIO", "STDIO",
+                                             "STDIO", "STDIO", "STDIO",
+                                             "STDIO", "POSIX", "POSIX"};
+    dataframe::DataFrame df;
     df.names = {"name", "cat", "x", "lvl"};
-    df.columns.push_back(Series::strings(name));
-    df.columns.push_back(Series::strings(cat));
+    df.columns.push_back(dataframe::Series::strings(name));
+    df.columns.push_back(dataframe::Series::strings(cat));
     if (numeric_x) {
         const std::int64_t x[] = {1, 2, 3, 0, 0, 0, 0, 0, 0};
         const std::uint8_t valid[] = {0b00000111, 0};
-        df.columns.push_back(Series::flat_i64(x, 9, valid));
+        df.columns.push_back(dataframe::Series::flat_i64(x, 9, valid));
     } else {
-        const std::vector<std::string_view> x{"", "", "", "", "a",
-                                              "", "", "", ""};
+        const dstd::Vector<dstd::StringView> x{"", "", "", "", "a",
+                                               "", "", "", ""};
         const std::uint8_t valid[] = {0b00011000, 0};
-        df.columns.push_back(Series::strings(x, valid));
+        df.columns.push_back(dataframe::Series::strings(x, valid));
     }
-    const std::vector<std::string_view> lvl{"hi", "", "", "", "",
-                                            "",   "", "", ""};
+    const dstd::Vector<dstd::StringView> lvl{"hi", "", "", "", "",
+                                             "",   "", "", ""};
     const std::uint8_t lvl_valid[] = {0b00000011, 0};
-    df.columns.push_back(Series::strings(lvl, lvl_valid));
+    df.columns.push_back(dataframe::Series::strings(lvl, lvl_valid));
     return df;
 }
 
@@ -164,12 +179,13 @@ DataFrame frame_of(bool numeric_x) {
 TEST_SUITE("duql paths") {
     TEST_CASE("every path selects the records the three-valued rule keeps") {
         TestEnvironment env(10);
-        const std::string gz = write_trace(env);
-        reader::TraceReader tr({.file_path = gz, .index_dir = env.get_dir()});
+        const dstd::String gz = write_trace(env);
+        trace::reader::TraceReader tr({.file_path = dstd::String(gz),
+                                       .index_dir = dstd::String(env.dir())});
         REQUIRE(tr.has_index());
 
         for (const auto& c : cases()) {
-            CAPTURE(std::string(c.filter));
+            CAPTURE(dstd::String(c.filter));
 
             const auto rows = run(view_of(gz, c.filter).collect());
             CHECK(names_of(rows) == c.expected);
@@ -192,15 +208,18 @@ TEST_SUITE("duql paths") {
             for (const auto& line : sink.lines()) sunk.insert(name_of(line));
             CHECK(sunk == c.expected);
 
-            reader::ReadConfig rc;
+            trace::reader::ReadConfig rc;
             rc.query = c.filter;
-            CHECK(run(reader_lines(tr.read_lines(rc))) == c.expected);
-            CHECK(run(reader_json(tr.read_json(rc))) == c.expected);
+            CHECK(run(reader_lines(dftu_utils_test::ok_items(
+                      tr.read_lines(rc)))) == c.expected);
+            CHECK(run(reader_json(dftu_utils_test::ok_items(
+                      tr.read_json(rc)))) == c.expected);
 
-            const DataFrame df = frame_of(c.numeric_x);
+            const dataframe::DataFrame df = frame_of(c.numeric_x);
             const auto q = duql::Query::from_string(c.filter);
             REQUIRE(q.has_value());
-            CHECK(names_of(df.filter(df.mask(*q))) == c.expected);
+            CHECK(names_of(df.filter(dftu_utils_test::ok(df.mask(*q)))) ==
+                  c.expected);
         }
     }
 
@@ -220,7 +239,7 @@ TEST_SUITE("duql paths") {
             Names expected;
             bool frame;  // Reads only x, so a typed frame can hold it.
         };
-        const std::vector<ExprCase> expr_cases = {
+        const dstd::Vector<ExprCase> expr_cases = {
             {"x * 2 > 9", {"t2", "t3", "t4"}, true},
             {"x % 2 == 0", {"t1", "t3"}, true},
             {"x between 5 and 6", {"t2", "t3"}, true},
@@ -246,38 +265,42 @@ TEST_SUITE("duql paths") {
         };
 
         TestEnvironment env(10);
-        const std::string plain = env.get_dir() + "/exprs.pfw";
+        const dstd::String plain = env.dir() + "/exprs.pfw";
         {
-            std::ofstream out(plain);
+            dftu_utils_test::FileOut out(plain);
             int ts = 1000;
             for (const char* ev : RECORDS) {
-                std::string line(ev);
+                dstd::String line(ev);
                 line.insert(1, R"("ph":"X","pid":1,"tid":1,"ts":)" +
-                                   std::to_string(ts) + R"(,"dur":10,)");
+                                   dstd::to_string(ts) + R"(,"dur":10,)");
                 out << line << "\n";
                 ts += 100;
             }
         }
-        const std::string gz = plain + ".gz";
+        const dstd::String gz = plain + ".gz";
         REQUIRE(dftu_utils_test::compress_file_to_gzip(plain, gz));
-        fs::remove(plain);
-        dftracer::utils::index::Indexer::open({gz}).build();
-        reader::TraceReader tr({.file_path = gz, .index_dir = env.get_dir()});
+        dstd::fs::remove(plain).discard();
+        dftu_utils_test::ok(
+            dftu_utils_test::ok(dftracer::utils::trace::index::Indexer::open(
+                                    {dstd::String(dstd::StringView(gz))}))
+                .build());
+        trace::reader::TraceReader tr({.file_path = dstd::String(gz),
+                                       .index_dir = dstd::String(env.dir())});
         REQUIRE(tr.has_index());
 
-        DataFrame frame;
+        dataframe::DataFrame frame;
         {
-            const std::vector<std::string_view> name{"t1", "t2", "t3", "t4",
-                                                     "t5"};
+            const dstd::Vector<dstd::StringView> name{"t1", "t2", "t3", "t4",
+                                                      "t5"};
             const std::int64_t x[] = {4, 5, 6, 7, 0};
             const std::uint8_t valid[] = {0b00001111};
             frame.names = {"name", "x"};
-            frame.columns.push_back(Series::strings(name));
-            frame.columns.push_back(Series::flat_i64(x, 5, valid));
+            frame.columns.push_back(dataframe::Series::strings(name));
+            frame.columns.push_back(dataframe::Series::flat_i64(x, 5, valid));
         }
 
         for (const auto& c : expr_cases) {
-            CAPTURE(std::string(c.filter));
+            CAPTURE(dstd::String(c.filter));
             CHECK(names_of(run(view_of(gz, c.filter).collect())) == c.expected);
             CHECK(names_of(run(view_of(gz, c.filter)
                                    .group_by({GroupKey::name()})
@@ -288,30 +311,36 @@ TEST_SUITE("duql paths") {
             Names sunk;
             for (const auto& line : sink.lines()) sunk.insert(name_of(line));
             CHECK(sunk == c.expected);
-            reader::ReadConfig rc;
+            trace::reader::ReadConfig rc;
             rc.query = c.filter;
-            CHECK(run(reader_lines(tr.read_lines(rc))) == c.expected);
-            CHECK(run(reader_json(tr.read_json(rc))) == c.expected);
+            CHECK(run(reader_lines(dftu_utils_test::ok_items(
+                      tr.read_lines(rc)))) == c.expected);
+            CHECK(run(reader_json(dftu_utils_test::ok_items(
+                      tr.read_json(rc)))) == c.expected);
             if (c.frame) {
                 const auto q = duql::Query::from_string(c.filter);
                 REQUIRE(q.has_value());
-                CHECK(names_of(frame.filter(frame.mask(*q))) == c.expected);
+                CHECK(names_of(frame.filter(
+                          dftu_utils_test::ok(frame.mask(*q)))) == c.expected);
             }
         }
     }
 
     TEST_CASE("exists() keeps a file whose only value is an empty array") {
         TestEnvironment env(10);
-        const std::string plain = env.get_dir() + "/empty.pfw";
+        const dstd::String plain = env.dir() + "/empty.pfw";
         {
-            std::ofstream out(plain);
+            dftu_utils_test::FileOut out(plain);
             out << R"({"ph":"X","pid":1,"tid":1,"ts":1,"dur":1,"name":"e","args":{"tags":[]}})"
                 << "\n";
         }
-        const std::string gz = plain + ".gz";
+        const dstd::String gz = plain + ".gz";
         REQUIRE(dftu_utils_test::compress_file_to_gzip(plain, gz));
-        fs::remove(plain);
-        dftracer::utils::index::Indexer::open({gz}).build();
+        dstd::fs::remove(plain).discard();
+        dftu_utils_test::ok(
+            dftu_utils_test::ok(dftracer::utils::trace::index::Indexer::open(
+                                    {dstd::String(dstd::StringView(gz))}))
+                .build());
         CHECK(names_of(run(view_of(gz, "exists(tags)").collect())) ==
               Names{"e"});
         CHECK(run(view_of(gz, "exists(nothing_here)").collect()).num_rows() ==
@@ -319,16 +348,16 @@ TEST_SUITE("duql paths") {
     }
 
     TEST_CASE("a DataFrame without the column selects as if it were missing") {
-        DataFrame df;
-        const std::vector<std::string_view> name{"p", "s"};
-        const std::vector<std::string_view> cat{"POSIX", "STDIO"};
+        dataframe::DataFrame df;
+        const dstd::Vector<dstd::StringView> name{"p", "s"};
+        const dstd::Vector<dstd::StringView> cat{"POSIX", "STDIO"};
         df.names = {"name", "cat"};
-        df.columns.push_back(Series::strings(name));
-        df.columns.push_back(Series::strings(cat));
+        df.columns.push_back(dataframe::Series::strings(name));
+        df.columns.push_back(dataframe::Series::strings(cat));
         auto kept = [&](const char* filter) {
             const auto q = duql::Query::from_string(filter);
             REQUIRE(q.has_value());
-            return names_of(df.filter(df.mask(*q)));
+            return names_of(df.filter(dftu_utils_test::ok(df.mask(*q))));
         };
         CHECK(kept("x == 1").empty());
         CHECK(kept("not (x == 1)").empty());

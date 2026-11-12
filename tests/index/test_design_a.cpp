@@ -1,0 +1,269 @@
+// SPDX-License-Identifier: MIT
+#define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/common/str_format.h>
+#include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/thread.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/memory/detail/manager.h>
+#include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/trace/index/build/batch_builder.h>
+#include <dftracer/utils/trace/index/build/file_admission.h>
+#include <dftracer/utils/trace/index/build/index_fold_driver.h>
+#include <dftracer/utils/trace/index/build/parse_gate.h>
+#include <dftracer/utils/trace/internal/utils.h>
+#include <doctest/doctest.h>
+#include <index_test_helpers.h>
+#include <task_result.h>
+#include <testing_utilities.h>
+
+#include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <cstddef>
+#include <cstdint>
+#include <cstdio>
+#include <thread>
+#include <utility>
+
+using namespace dftracer::utils;
+
+namespace {
+
+constexpr std::size_t SINK_LIMIT = std::size_t{2} << 20;
+constexpr std::size_t BUDGET = std::size_t{160} << 20;
+constexpr std::size_t SLACK = std::size_t{24} << 20;
+constexpr int SMALL_FILES = 96;
+constexpr int SMALL_EVENTS = 3000;
+
+dstd::String small_trace(const dstd::String& dir, int n) {
+    dstd::String out;
+    out += "[\n";
+    for (int i = 0; i < SMALL_EVENTS; ++i) {
+        out += common::str_cat(
+            R"({"id":)", i, R"(,"name":"op)", (i + n) % 40,
+            R"(","cat":"POSIX","pid":)", 1 + n % 7, R"(,"tid":)", 10 + i % 5,
+            R"(,"ph":"X","ts":)", 1000 + i * 10 + n * 7, R"(,"dur":)",
+            3 + i % 50, R"(,"args":{"fname":"/data/d)", n % 9, "/f",
+            (i * 31 + n) % 700, R"(","size":)", (i * 17) % 4096,
+            R"(,"hhash":"h)", n, R"("}})", "\n");
+    }
+    out += "]\n";
+    return dftu_utils_test::write_gz_trace(
+        dir + "/s" + dstd::to_string(n) + ".pfw.gz", out);
+}
+
+// Each segment walks the same names in another order, so the first appearance
+// of a string depends on which segment is read first.
+constexpr int SEGMENT_LINES = 4096;
+constexpr int NAMES = 61;
+
+dstd::String big_trace(const dstd::String& dir, const dstd::String& stem,
+                       int lines, int variant) {
+    dstd::String out;
+    out += "[\n";
+    for (int i = 0; i < lines; ++i) {
+        const int seg = i / SEGMENT_LINES;
+        const int step = 2 * ((seg * 7 + variant) % 29) + 1;
+        const int pick = (i * step + seg * 13) % NAMES;
+        out += common::str_cat(
+            R"({"id":)", i, R"(,"name":"op)", pick, R"(","cat":"c)",
+            (pick * 3 + seg) % 11, R"(","pid":)", 1 + (i + seg) % 7,
+            R"(,"tid":)", 10 + i % 5, R"(,"ph":"X","ts":)", 1000 + i * 10,
+            R"(,"dur":)", 3 + i % 50, R"(,"args":{"fname":"/data/s)", seg, "/f",
+            (i * step) % 97, R"(","size":)", (i * 17) % 4096, R"(,"hhash":"h)",
+            (pick + variant) % 17, R"(","path":"/p)", seg % 5, "/q",
+            (pick * 5 + i) % 53, R"(/r)", i % 31,
+            R"(","note":"abcdefghijklmnopqrstuvwxyz0123456789"}})", "\n");
+    }
+    out += "]\n";
+    return dftu_utils_test::write_gz_trace(dir + "/" + stem + ".pfw.gz", out);
+}
+
+trace::index::build::IndexBuildBatchResult build_with(
+    const dstd::Vector<dstd::String>& files, const dstd::String& index_dir,
+    std::size_t workers, std::uint64_t budget) {
+    trace::index::build::IndexBuildBatchResult result;
+    const dstd::String staging = index_dir + ".staging";
+    auto counter = dstd::make_shared<std::atomic<std::size_t>>(0);
+    Runtime rt(workers);
+    auto task = coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+        auto config =
+            dstd::make_shared<trace::index::build::IndexBuildBatchConfig>();
+        for (const auto& file : files) config->file_paths.emplace_back(file);
+        config->index_dir = dstd::String(index_dir);
+        config->parallelism = workers;
+        config->memory_budget = budget;
+        result = co_await trace::index::build::BatchBuilder::process(
+            std::move(config));
+    });
+    dftu_utils_test::ok(rt.submit(std::move(task), "design-a").wait());
+    rt.shutdown();
+    return result;
+}
+
+struct Peak {
+    std::size_t bytes = 0;
+    std::size_t in_flight = 0;
+};
+
+Peak peak_of_build(const dstd::Vector<dstd::String>& files,
+                   const dstd::String& index_dir, std::size_t workers,
+                   std::uint64_t budget) {
+    std::atomic<bool> done{false};
+    std::atomic<std::size_t> peak{0};
+    dstd::Thread sampler([&] {
+        while (!done.load(std::memory_order_relaxed)) {
+            const auto live = memory::detail::Manager::get().stats().live;
+            auto seen = peak.load(std::memory_order_relaxed);
+            while (live > seen && !peak.compare_exchange_weak(
+                                      seen, live, std::memory_order_relaxed)) {
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+    });
+    const auto base = memory::detail::Manager::get().stats().live;
+    const auto result = build_with(files, index_dir, workers, budget);
+    done.store(true);
+    sampler.join();
+    REQUIRE(result.indexed == files.size());
+    const auto top = peak.load();
+    return {top > base ? top - base : 0, result.metrics.max_files_in_flight};
+}
+
+using Family = dstd::Vector<dstd::Pair<dstd::String, dstd::String>>;
+using Dump = dstd::Map<dstd::String, Family>;
+
+Dump dump_index(const dstd::String& first_file, const dstd::String& index_dir) {
+    const auto path = dstd::String(
+        trace::internal::determine_index_path(first_file, index_dir));
+    Dump out;
+    for (auto& record : dftu_utils_test::dump_index(path))
+        out[record.name].emplace_back(record.scope + record.key,
+                                      std::move(record.value));
+    return out;
+}
+
+void check_same(const Dump& a, const Dump& b, const char* what) {
+    REQUIRE(a.size() == b.size());
+    for (const auto& [name, rows] : a) {
+        const auto it = b.find(name);
+        REQUIRE(it != b.end());
+        INFO(what << ": family " << name);
+        REQUIRE(rows.size() == it->second.size());
+        for (std::size_t i = 0; i < rows.size(); ++i) {
+            if (rows[i] != it->second[i]) {
+                FAIL("row " << i << " differs in " << name << " (" << what
+                            << ")");
+            }
+        }
+    }
+}
+
+}  // namespace
+
+TEST_SUITE("DesignA") {
+    TEST_CASE("the peak stays under the budget at 2 and at 16 workers") {
+        dftu_utils_test::TestEnvironment env(10);
+        dstd::Vector<dstd::String> files;
+        for (int i = 0; i < SMALL_FILES; ++i)
+            files.push_back(small_trace(env.dir(), i));
+
+        const auto limit =
+            trace::index::build::g_max_sink_bytes.exchange(SINK_LIMIT);
+        const auto few = peak_of_build(files, env.dir() + "/idx2", 2, BUDGET);
+        const auto many =
+            peak_of_build(files, env.dir() + "/idx16", 16, BUDGET);
+        trace::index::build::g_max_sink_bytes.store(limit);
+        MESSAGE("peak live bytes: 2 workers "
+                << few.bytes << " (" << few.in_flight
+                << " files at once), 16 workers " << many.bytes << " ("
+                << many.in_flight << " files at once)");
+        CHECK(few.bytes < BUDGET + SLACK);
+        CHECK(many.bytes < BUDGET + SLACK);
+        CHECK(many.in_flight >= 4);
+        CHECK(many.in_flight < 16);
+        CHECK(few.in_flight <= 2);
+    }
+
+    TEST_CASE("one large file is granted a parse window of most workers") {
+        constexpr std::size_t WORKERS = 8;
+        // With one file in flight the gate grants a slot and the bytes for
+        // every other worker, and no more.
+        trace::index::build::ParseGate gate(nullptr, WORKERS);
+        gate.file_in();
+        REQUIRE(gate.spare_workers());
+        std::size_t pieces = 0;
+        memory::Reservation unused;
+        gate.take_slot();
+        ++pieces;
+        while (gate.try_slot() && gate.try_piece(0, unused)) ++pieces;
+        CHECK(pieces == WORKERS);
+        CHECK_FALSE(gate.try_slot());
+        for (std::size_t i = 0; i < pieces; ++i) gate.give_slot();
+
+        trace::index::build::ParseGate busy(nullptr, WORKERS);
+        for (std::size_t i = 0; i < WORKERS; ++i) busy.file_in();
+        CHECK_FALSE(busy.spare_workers());
+    }
+
+    TEST_CASE(
+        "a file's plaintext estimate is one function for index and view") {
+        constexpr std::uint64_t PACKED = 3 << 20;
+        CHECK(trace::index::build::FileAdmission::plaintext_estimate(
+                  0, PACKED) == PACKED * common::constants::file_admission::
+                                             PLAINTEXT_PER_COMPRESSED_BYTE);
+        CHECK(trace::index::build::FileAdmission::plaintext_estimate(
+                  50 << 20, PACKED) == (std::uint64_t{50} << 20));
+    }
+
+    TEST_CASE("the parse probes cost nothing and count only when enabled") {
+        constexpr int BIG_LINES = SEGMENT_LINES * 8;
+        dftu_utils_test::TestEnvironment env(10);
+        dstd::Vector<dstd::String> files;
+        files.push_back(big_trace(env.dir(), "big", BIG_LINES, 0));
+
+        trace::index::build::g_probe_parse.store(false);
+        trace::index::build::g_max_parse_in_flight.store(0);
+        const auto off = build_with(files, env.dir() + "/off", 4, 0);
+        REQUIRE(off.indexed == 1);
+        CHECK(trace::index::build::g_max_parse_in_flight.load() == 0);
+
+        trace::index::build::g_probe_parse.store(true);
+        const auto on = build_with(files, env.dir() + "/on", 4, 0);
+        trace::index::build::g_probe_parse.store(false);
+        REQUIRE(on.indexed == 1);
+        CHECK(trace::index::build::g_max_parse_in_flight.load() >= 1);
+        CHECK(trace::index::build::g_max_parse_in_flight.load() <= 5);
+    }
+
+    TEST_CASE("a parallel build equals a one worker build byte for byte") {
+        constexpr std::size_t WORKERS = 8;
+        constexpr int LINES = SEGMENT_LINES * 12;
+        dftu_utils_test::TestEnvironment env(10);
+        dstd::Vector<dstd::String> files;
+        files.push_back(big_trace(env.dir(), "a", LINES, 1));
+        files.push_back(small_trace(env.dir(), 0));
+
+        trace::index::build::g_probe_intern_order.store(true);
+        trace::index::build::g_intern_order_digest.store(0);
+        const auto one = build_with(files, env.dir() + "/idx1", 1, 0);
+        REQUIRE(one.indexed == files.size());
+        const auto order = trace::index::build::g_intern_order_digest.load();
+        const auto expect = dump_index(files[0], env.dir() + "/idx1");
+        for (int run = 0; run < 3; ++run) {
+            const auto dir = env.dir() + "/idx_par" + dstd::to_string(run);
+            trace::index::build::g_intern_order_digest.store(0);
+            const auto many = build_with(files, dir, WORKERS, 0);
+            REQUIRE(many.indexed == files.size());
+            check_same(expect, dump_index(files[0], dir), "8 workers");
+            CHECK(trace::index::build::g_intern_order_digest.load() == order);
+        }
+        trace::index::build::g_probe_intern_order.store(false);
+    }
+}

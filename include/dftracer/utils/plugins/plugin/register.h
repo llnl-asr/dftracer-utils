@@ -1,6 +1,10 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_PLUGINS_PLUGIN_REGISTER_H
 #define DFTRACER_UTILS_PLUGINS_PLUGIN_REGISTER_H
 
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <dftracer/utils/plugins/plugin/async.h>
 #include <dftracer/utils/plugins/plugin/map.h>
@@ -15,11 +19,7 @@
 #include <cstring>
 #include <exception>
 #include <iterator>
-#include <memory>
-#include <string>
-#include <string_view>
 #include <utility>
-#include <vector>
 
 namespace dftracer::utils::plugins {
 
@@ -54,10 +54,10 @@ class ConfigValue {
     double as_f64(double dflt = 0.0) const noexcept {
         return dftu_as_f64(v_, dflt);
     }
-    std::string_view as_str(std::string_view dflt = {}) const noexcept {
+    dstd::StringView as_str(dstd::StringView dflt = {}) const noexcept {
         std::uint32_t n = 0;
         const char* s = dftu_as_str(v_, &n);
-        return s ? std::string_view{s, n} : dflt;
+        return s ? dstd::StringView{s, n} : dflt;
     }
 
     /// ARRAY child count or OBJECT member count; 0 for any other kind.
@@ -70,11 +70,11 @@ class ConfigValue {
                                              : ConfigValue{};
     }
     /// Member `key` of an OBJECT; absent or not an object yields null.
-    ConfigValue operator[](std::string_view key) const noexcept {
+    ConfigValue operator[](dstd::StringView key) const noexcept {
         if (!is_object()) return ConfigValue{};
         for (std::uint32_t i = 0; i < v_->count; ++i) {
             const dftu_member& m = v_->as.members[i];
-            if (std::string_view{m.key, m.key_len} == key)
+            if (dstd::StringView{m.key, m.key_len} == key)
                 return ConfigValue{m.value};
         }
         return ConfigValue{};
@@ -93,50 +93,50 @@ class Config {
     Config() = default;
     explicit Config(const dftu_value* root) : root_(root) {}
 
-    const dftu_value* find(std::string_view key) const {
+    const dftu_value* find(dstd::StringView key) const {
         if (!root_ || root_->kind != DFTU_VAL_OBJECT) return nullptr;
         for (std::uint32_t i = 0; i < root_->count; ++i) {
             const dftu_member& m = root_->as.members[i];
-            if (std::string_view{m.key, m.key_len} == key) return m.value;
+            if (dstd::StringView{m.key, m.key_len} == key) return m.value;
         }
         return nullptr;
     }
 
-    std::string_view get(std::string_view key,
-                         std::string_view dflt = {}) const {
+    dstd::StringView get(dstd::StringView key,
+                         dstd::StringView dflt = {}) const {
         const dftu_value* v = find(key);
         return (v && v->kind == DFTU_VAL_STR)
-                   ? std::string_view{v->as.str, v->count}
+                   ? dstd::StringView{v->as.str, v->count}
                    : dflt;
     }
-    std::int64_t get_int(std::string_view key, std::int64_t dflt = 0) const {
+    std::int64_t get_int(dstd::StringView key, std::int64_t dflt = 0) const {
         return dftu_as_i64(find(key), dflt);
     }
-    double get_double(std::string_view key, double dflt = 0.0) const {
+    double get_double(dstd::StringView key, double dflt = 0.0) const {
         return dftu_as_f64(find(key), dflt);
     }
-    bool get_bool(std::string_view key, bool dflt = false) const {
+    bool get_bool(dstd::StringView key, bool dflt = false) const {
         return dftu_as_bool(find(key), dflt ? 1 : 0) != 0;
     }
-    Config child(std::string_view key) const {
+    Config child(dstd::StringView key) const {
         const dftu_value* v = find(key);
         return Config{(v && v->kind == DFTU_VAL_OBJECT) ? v : nullptr};
     }
 
     /// Typed view of the value at `key`, of any kind (including ARRAY/OBJECT);
     /// null if absent. Prefer this over raw() for walking nested config.
-    ConfigValue value(std::string_view key) const {
+    ConfigValue value(dstd::StringView key) const {
         return ConfigValue{find(key)};
     }
     /// Typed view of the ARRAY at `key`; null if absent or not an array.
     /// Iterate elements with ConfigValue::size()/operator[].
-    ConfigValue array(std::string_view key) const {
+    ConfigValue array(dstd::StringView key) const {
         return ConfigValue{raw_array(key)};
     }
     /// The ARRAY at `key` coerced to int64 per element (dftu_as_i64 rules);
     /// empty if the key is absent or not an array.
-    std::vector<std::int64_t> get_int_array(std::string_view key) const {
-        std::vector<std::int64_t> out;
+    dstd::Vector<std::int64_t> get_int_array(dstd::StringView key) const {
+        dstd::Vector<std::int64_t> out;
         if (const dftu_value* a = raw_array(key)) {
             out.reserve(a->count);
             for (std::uint32_t i = 0; i < a->count; ++i)
@@ -146,8 +146,8 @@ class Config {
     }
     /// The ARRAY at `key` coerced to double per element (dftu_as_f64 rules);
     /// empty if the key is absent or not an array.
-    std::vector<double> get_double_array(std::string_view key) const {
-        std::vector<double> out;
+    dstd::Vector<double> get_double_array(dstd::StringView key) const {
+        dstd::Vector<double> out;
         if (const dftu_value* a = raw_array(key)) {
             out.reserve(a->count);
             for (std::uint32_t i = 0; i < a->count; ++i)
@@ -158,15 +158,16 @@ class Config {
     /// The ARRAY at `key` as string_views (non-STR elements yield an empty
     /// view); the views borrow the host-owned config tree. Empty if the key is
     /// absent or not an array.
-    std::vector<std::string_view> get_string_array(std::string_view key) const {
-        std::vector<std::string_view> out;
+    dstd::Vector<dstd::StringView> get_string_array(
+        dstd::StringView key) const {
+        dstd::Vector<dstd::StringView> out;
         if (const dftu_value* a = raw_array(key)) {
             out.reserve(a->count);
             for (std::uint32_t i = 0; i < a->count; ++i) {
                 const dftu_value& e = a->as.items[i];
                 out.push_back(e.kind == DFTU_VAL_STR
-                                  ? std::string_view{e.as.str, e.count}
-                                  : std::string_view{});
+                                  ? dstd::StringView{e.as.str, e.count}
+                                  : dstd::StringView{});
             }
         }
         return out;
@@ -176,7 +177,7 @@ class Config {
     const dftu_value* raw() const { return root_; }
 
    private:
-    const dftu_value* raw_array(std::string_view key) const {
+    const dftu_value* raw_array(dstd::StringView key) const {
         const dftu_value* v = find(key);
         return (v && v->kind == DFTU_VAL_ARRAY) ? v : nullptr;
     }
@@ -190,7 +191,7 @@ template <class Slice>
 struct Holder {
     dftu_plugin vt{};
     Config config;
-    std::string plan; /**< backs plan_duql's const char* */
+    dstd::String plan; /**< backs plan_duql's const char* */
 };
 
 template <class Slice>
@@ -303,8 +304,8 @@ enum class NameList { Provides, Consumes, Reads };
 // which is the lifetime dftu_plugin::provides/consumes/reads require.
 template <class Slice, NameList Which>
 const char* const* name_list_thunk(void*) {
-    static const std::vector<const char*> names = [] {
-        std::vector<const char*> v;
+    static const dstd::Vector<const char*> NAMES = [] {
+        dstd::Vector<const char*> v;
         if constexpr (Which == NameList::Provides) {
             for (const char* n : Slice::provides()) v.push_back(n);
         } else if constexpr (Which == NameList::Consumes) {
@@ -315,7 +316,7 @@ const char* const* name_list_thunk(void*) {
         v.push_back(nullptr);
         return v;
     }();
-    return names.data();
+    return NAMES.data();
 }
 
 /// A Slice declaring the config keys it reads via a static `config_keys()`
@@ -333,15 +334,15 @@ concept DeclaresConfigKeys = requires {
 // `query` an unknown one.
 template <class Slice>
 const dftu_config_key* config_key_thunk(void*) {
-    static const std::vector<dftu_config_key> keys = [] {
-        std::vector<dftu_config_key> v;
+    static const dstd::Vector<dftu_config_key> KEYS = [] {
+        dstd::Vector<dftu_config_key> v;
         for (const dftu_config_key& k : Slice::config_keys()) v.push_back(k);
         v.push_back({"duql", DFTU_VAL_STR, 0,
                      "coarse DSL predicate the scan is pruned by"});
         v.push_back({nullptr, DFTU_CONFIG_ANY, 0, nullptr});
         return v;
     }();
-    return keys.data();
+    return KEYS.data();
 }
 
 }  // namespace detail
@@ -364,7 +365,7 @@ template <class Slice>
 dftu_plugin* make_plugin(const dftu_value* config) {
     auto* hd = new detail::Holder<Slice>();
     hd->config = Config(config);
-    hd->plan = std::string(hd->config.get("duql"));
+    hd->plan = hd->config.get("duql");
 
     dftu_plugin& vt = hd->vt;
     vt.abi_version = DFTRACER_UTILS_PLUGIN_ABI_VERSION;
@@ -456,7 +457,11 @@ dftu_plugin* make_plugin(const dftu_value* config) {
         vt.config_keys = &detail::config_key_thunk<Slice>;
     if constexpr (detail::MeasurableSlice<Slice>)
         vt.bytes = [](void* slice) -> std::uint64_t {
-            return static_cast<const Slice*>(slice)->bytes();
+            try {
+                return static_cast<const Slice*>(slice)->bytes();
+            } catch (...) {
+                return 0;
+            }
         };
     if constexpr (detail::ReclaimableSlice<Slice>)
         vt.reclaim = [](void* slice, std::uint64_t want) -> std::uint64_t {
@@ -482,8 +487,8 @@ concept FrameFinalize = requires(State& s) {
 /// A state that can be written out and read back, which is what lets the host
 /// spill it under the scan's memory budget.
 template <class State>
-concept Spillable = requires(const State& s, std::string_view b) {
-    { s.serialize() } -> std::convertible_to<std::string>;
+concept Spillable = requires(const State& s, dstd::StringView b) {
+    { s.serialize() } -> std::convertible_to<dstd::String>;
     { State::deserialize(b) } -> std::same_as<State*>;
 };
 
@@ -509,7 +514,7 @@ struct EmptySlice {
 template <class State>
 struct StateBox {
     State state;
-    std::string scratch;
+    dstd::String scratch;
 };
 
 /// The dftu_state_desc for `State`, filled from what State actually offers.
@@ -546,19 +551,23 @@ const dftu_state_desc& state_desc_of(const char* name) {
         };
         if constexpr (Measurable<State>)
             d.bytes = [](const void* s) -> std::uint64_t {
-                return static_cast<const Box*>(s)->state.bytes();
+                try {
+                    return static_cast<const Box*>(s)->state.bytes();
+                } catch (...) {
+                    return 0;
+                }
             };
         if constexpr (Spillable<State>) {
             d.serialize = [](const void* s, dftu_bytes* out,
                              dftu_error*) -> int {
                 try {
-                    auto* buf = new std::string(
+                    auto* buf = new dstd::String(
                         static_cast<const Box*>(s)->state.serialize());
                     out->data = buf->data();
                     out->len = buf->size();
                     out->ud = buf;
                     out->free_fn = [](void*, void* ud) {
-                        delete static_cast<std::string*>(ud);
+                        delete static_cast<dstd::String*>(ud);
                     };
                     return 0;
                 } catch (...) {
@@ -567,9 +576,9 @@ const dftu_state_desc& state_desc_of(const char* name) {
             };
             d.deserialize = [](void*, dftu_bytes in, dftu_error*) -> void* {
                 try {
-                    auto box = std::make_unique<Box>();
-                    std::unique_ptr<State> s{State::deserialize(
-                        std::string_view{static_cast<const char*>(in.data),
+                    auto box = dstd::make_unique<Box>();
+                    dstd::UniquePtr<State> s{State::deserialize(
+                        dstd::StringView{static_cast<const char*>(in.data),
                                          static_cast<std::size_t>(in.len)})};
                     if (!s) return nullptr;
                     box->state = std::move(*s);
@@ -642,11 +651,12 @@ class PluginBuilder {
         return *this;
     }
 
-    /// Register `src` as the LazyFrame source `name`, which must be
+    /// Register `src` as the @ref dftracer::utils::dataframe::LazyFrame
+    /// "LazyFrame" source `name`, which must be
     /// `<plugin>.<name>`; see plugin/source.h for what S provides. The host
     /// owns it once registered and destroys it when the provider goes away.
     template <class S>
-    PluginBuilder& source(const char* name, std::unique_ptr<S> src) {
+    PluginBuilder& source(const char* name, dstd::UniquePtr<S> src) {
         const dftu_svc_providers* p =
             ext<dftu_svc_providers>(DFTU_SVC_PROVIDERS);
         if (!p || !p->register_provider)
@@ -664,7 +674,7 @@ class PluginBuilder {
     /// `<plugin>.<name>`; see plugin/node.h for what N provides. The host
     /// owns it once registered and unregisters it before the plugin unloads.
     template <class N>
-    PluginBuilder& node(const char* name, std::unique_ptr<N> node) {
+    PluginBuilder& node(const char* name, dstd::UniquePtr<N> node) {
         const dftu_svc_nodes* p = ext<dftu_svc_nodes>(DFTU_SVC_NODES);
         if (!p || !p->register_node) return fail("no node registry at load");
         const dftu_node_vt* vt = node_vtable<N>();
@@ -680,7 +690,7 @@ class PluginBuilder {
     /// `<plugin>.<name>` and outlive the plugin. State needs update(const
     /// dftu_dataframe*), merge(State&) and finalize(); it additionally gets a
     /// memory budget from bytes() and spilling from serialize() plus a static
-    /// deserialize(std::string_view) -> State*.
+    /// deserialize(dstd::StringView) -> State*.
     template <class State>
     PluginBuilder& state(const char* name) {
         const dftu_svc_agg* agg = ext<dftu_svc_agg>(DFTU_SVC_AGG);
@@ -721,7 +731,7 @@ class PluginBuilder {
     bool ok_ = true;
 };
 
-/// Entry point for the builder; see PluginBuilder.
+/// Entry point for the builder; see @ref PluginBuilder.
 inline PluginBuilder plugin(dftu_plugin_host* host, const dftu_value* config) {
     return PluginBuilder{host, config};
 }

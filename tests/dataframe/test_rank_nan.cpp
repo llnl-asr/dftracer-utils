@@ -1,36 +1,37 @@
+// SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
 
 #include <cmath>
 #include <cstdint>
-#include <vector>
 
-using dftracer::utils::dataframe::RankMethod;
-using dftracer::utils::dataframe::Series;
+using namespace dftracer::utils;
+using namespace dftracer::utils::dataframe;
 
 namespace {
 
 const double NAN_ = std::nan("");
 
-Series floats(const std::vector<double>& v,
-              const std::vector<std::uint8_t>& valid = {}) {
+Series floats(const dstd::Vector<double>& v,
+              const dstd::Vector<std::uint8_t>& valid = {}) {
     return Series::flat_f64(v.data(), static_cast<std::int64_t>(v.size()),
                             valid.empty() ? nullptr : valid.data());
 }
 
 // Reference: drop the missing rows, rank the rest, scatter back.
-std::vector<double> reference(const std::vector<double>& x, RankMethod method,
-                              bool descending, bool pct) {
-    std::vector<double> present;
-    std::vector<std::size_t> at;
+dstd::Vector<double> reference(const dstd::Vector<double>& x, RankMethod method,
+                               bool descending, bool pct) {
+    dstd::Vector<double> present;
+    dstd::Vector<std::size_t> at;
     for (std::size_t i = 0; i < x.size(); ++i)
         if (!std::isnan(x[i])) {
             present.push_back(x[i]);
             at.push_back(i);
         }
-    std::vector<double> out(x.size(), NAN_);
+    dstd::Vector<double> out(x.size(), NAN_);
     if (present.empty()) return out;
     Series r = floats(present).rank(method, descending, pct);
     for (std::size_t t = 0; t < at.size(); ++t)
@@ -99,7 +100,7 @@ TEST_CASE("every method and direction equals ranking the present rows") {
         return s;
     };
     for (int round = 0; round < 40; ++round) {
-        std::vector<double> x(60);
+        dstd::Vector<double> x(60);
         for (auto& v : x)
             v = (next() % 5 == 0) ? NAN_ : static_cast<double>(next() % 9);
         for (RankMethod m :

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Static-typing regression guard for the typed @jit.plugin DSL.
 
 Runs the type checker on two fixtures under tests/python/typing/: the sample
@@ -41,7 +42,7 @@ def test_wrong_fixture_is_flagged():
     for rule in (
         "unsupported-operator",
         "missing-argument",
-        "unresolved-attribute",
+        "missing-attribute",
         "invalid-argument-type",
     ):
         assert rule in out, f"expected {rule} diagnostic, got:\n{out}"

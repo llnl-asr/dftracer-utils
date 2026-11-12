@@ -1,9 +1,9 @@
+// SPDX-License-Identifier: MIT
 /* Conformance plugin: touches every dftu.svc.* service slot from real C,
  * plus the provider-schema-types and plan-node surfaces, and reports one
- * pass/fail line per service through dftu_svc_result. Modeled on DuckDB's
- * reference-extension-c: a single artifact proving the whole ABI is
- * reachable and usable, not merely that its headers compile as C
- * (c_abi_guard already covers that).
+ * pass/fail line per service through dftu_svc_result. A single artifact
+ * proving the whole ABI is reachable and usable, not merely that its headers
+ * compile as C (c_abi_guard already covers that).
  *
  * Config: "workdir" (required) - a scratch directory for the io/writer/
  * trace/arrow files this plugin writes. "force_missing" (optional) - a
@@ -188,11 +188,12 @@ static dftu_task* src_next(void* self, int64_t max_rows,
     cur->done = 1;
     {
         static const int64_t n_vals[3] = {1, 2, 3};
-        static const int64_t amount_vals[3] = {100, 200, 300};
+        /* Decimal128 values, 16 bytes each, little-endian: 1.00 2.00 3.00 */
+        static const int64_t amount_vals[6] = {100, 0, 200, 0, 300, 0};
         dftu_series* n_col =
             dftu_series_new_flat(DFTU_TYPE_INT64, n_vals, 3, NULL);
         dftu_series* amount_col =
-            dftu_series_new_flat(DFTU_TYPE_INT64, amount_vals, 3, NULL);
+            dftu_series_new_flat(DFTU_TYPE_DECIMAL128, amount_vals, 3, NULL);
         dftu_series* cols[2];
         cols[0] = n_col;
         cols[1] = amount_col;
@@ -354,7 +355,7 @@ static int64_t count_rows(const dftu_series* v) {
 
 static const dftu_op_desc COUNT_ROWS_OP = {"reference_plugin.count_rows",
                                            DFTU_OP_SIG(I64, SERIES, NONE, NONE),
-                                           (const void*)&count_rows};
+                                           (dftu_op_generic_fn)&count_rows};
 
 /* ---- Compose leaf op: doubles an int64 value, inline. */
 

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """A @jit.plugin inside a Session: attach, the fused scan, and the reads a body
 declares."""
 

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """End-to-end test for the dftracer_plugin CLI.
 
 `new` scaffolds a template plugin, `build` compiles it against the bundled ABI

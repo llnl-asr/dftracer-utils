@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """fillna for bool and string columns, native bool/string constants, NaN text, SIMD cast to bool, and cut options."""
 
 import time

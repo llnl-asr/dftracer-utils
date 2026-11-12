@@ -1,34 +1,38 @@
+// SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/coro/task.h>
-#include <dftracer/utils/core/runtime.h>
+#include <dataframe/expr_ok.h>
+#include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <cstdint>
-#include <span>
 #include <stdexcept>
-#include <string>
-#include <string_view>
 #include <utility>
-#include <vector>
+
+using namespace dftracer::utils;
 
 using namespace dftracer::utils::dataframe;
 
 namespace {
 
-DataFrame run(dftracer::utils::coro::CoroTask<DataFrame> t) {
-    DataFrame out =
-        dftracer::utils::default_runtime().submit(std::move(t)).get();
+DataFrame run(dftracer::utils::coro::CoroTask<dstd::Result<DataFrame>> t) {
+    DataFrame out = dftu_utils_test::ok(
+        dftracer::utils::default_runtime().submit(std::move(t)).get());
     for (Series& c : out.columns) c = c.materialize();
     return out;
 }
 
-DataFrame two_ints(const std::vector<std::int64_t>& a,
-                   const std::vector<std::uint8_t>& av,
-                   const std::vector<std::int64_t>& b,
-                   const std::vector<std::uint8_t>& bv) {
+DataFrame two_ints(const dstd::Vector<std::int64_t>& a,
+                   const dstd::Vector<std::uint8_t>& av,
+                   const dstd::Vector<std::int64_t>& b,
+                   const dstd::Vector<std::uint8_t>& bv) {
     DataFrame d;
     d.names = {"a", "b"};
     const auto n = static_cast<std::int64_t>(a.size());
@@ -39,7 +43,7 @@ DataFrame two_ints(const std::vector<std::int64_t>& a,
     return d;
 }
 
-std::vector<std::int64_t> column_of(const DataFrame& d, const char* name) {
+dstd::Vector<std::int64_t> column_of(const DataFrame& d, const char* name) {
     const Series& s = d.column(name);
     return {s.data<std::int64_t>(), s.data<std::int64_t>() + s.length()};
 }
@@ -50,8 +54,8 @@ TEST_CASE("filter keeps the rows where a column is at least another") {
     DataFrame d = two_ints({1, 5, 3}, {}, {2, 4, 3}, {});
     DataFrame out = run(
         d.lazy().filter(expr_cmp_expr(CmpOp::Ge, col(0), col(1))).collect(2));
-    CHECK(column_of(out, "a") == std::vector<std::int64_t>{5, 3});
-    CHECK(column_of(out, "b") == std::vector<std::int64_t>{4, 3});
+    CHECK(column_of(out, "a") == dstd::Vector<std::int64_t>{5, 3});
+    CHECK(column_of(out, "b") == dstd::Vector<std::int64_t>{4, 3});
 }
 
 TEST_CASE("a null on either side leaves the row out") {
@@ -66,31 +70,31 @@ TEST_CASE("a null on either side leaves the row out") {
 TEST_CASE("columns that cannot compare fail with an error naming both types") {
     DataFrame d;
     d.names = {"s", "i"};
-    std::vector<std::string_view> words{"a", "b"};
-    std::vector<std::int64_t> ints{1, 2};
+    dstd::Vector<dstd::StringView> words{"a", "b"};
+    dstd::Vector<std::int64_t> ints{1, 2};
     d.columns.push_back(
-        Series::strings(std::span<const std::string_view>(words)));
+        Series::strings(dstd::Span<const dstd::StringView>(words)));
     d.columns.push_back(Series::flat_i64(ints.data(), 2));
-    try {
-        run(d.lazy()
-                .filter(expr_cmp_expr(CmpOp::Lt, col(0), col(1)))
-                .collect(2));
-        FAIL("a string column compared with an integer column did not fail");
-    } catch (const std::exception& e) {
-        const std::string msg = e.what();
-        CHECK(msg.find("string") != std::string::npos);
-        CHECK((msg.find("int64") != std::string::npos ||
-               msg.find("integer") != std::string::npos));
-    }
+    const auto collected =
+        dftracer::utils::default_runtime()
+            .submit(d.lazy()
+                        .filter(expr_cmp_expr(CmpOp::Lt, col(0), col(1)))
+                        .collect(2))
+            .get();
+    REQUIRE_FALSE(collected.has_value());
+    const dstd::String msg = collected.error().c_str();
+    CHECK(msg.find("string") != dstd::String::npos);
+    CHECK((msg.find("int64") != dstd::String::npos ||
+           msg.find("integer") != dstd::String::npos));
 }
 
 TEST_CASE("the lazy filter equals the eager filter of the same mask") {
     DataFrame d = two_ints({1, 5, 3, 9, 2}, {}, {2, 4, 3, 1, 8}, {});
     const Expr pred = expr_cmp_expr(CmpOp::Gt, col(0), col(1));
-    std::vector<const Series*> inputs{&d.columns[0], &d.columns[1]};
-    DataFrame eager = d.filter(eval(pred, inputs));
+    dstd::Vector<const Series*> inputs{&d.columns[0], &d.columns[1]};
+    DataFrame eager = d.filter(dftu_utils_test::eval_ok(pred, inputs));
     DataFrame lazy = run(d.lazy().filter(pred).collect(2));
     CHECK(column_of(lazy, "a") == column_of(eager, "a"));
     CHECK(column_of(lazy, "b") == column_of(eager, "b"));
-    CHECK(column_of(lazy, "a") == std::vector<std::int64_t>{5, 9});
+    CHECK(column_of(lazy, "a") == dstd::Vector<std::int64_t>{5, 9});
 }

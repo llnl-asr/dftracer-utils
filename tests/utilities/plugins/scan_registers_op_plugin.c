@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 /* Test-only plugin that tries to register an op from on_batch instead of its
  * factory. The scan-time host must refuse: registration is a load-time
  * concern, so an op registered here would land after ordering, the prune and
@@ -22,7 +23,7 @@ static int64_t late(const dftu_series* v) {
 }
 
 static const dftu_op_desc g_op = {OP_NAME, DFTU_OP_SIG(I64, SERIES, NONE, NONE),
-                                  (const void*)&late};
+                                  (dftu_op_generic_fn)&late};
 
 static int64_t g_refused;
 

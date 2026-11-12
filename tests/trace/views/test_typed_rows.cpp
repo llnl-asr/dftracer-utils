@@ -1,44 +1,52 @@
+// SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/index/indexer.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/trace/index/indexer.h>
 #include <dftracer/utils/trace/views/typed_rows.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
+#include <testing_utilities.h>
+#include <trace/views/test_view_common.h>
 
 #include <algorithm>
 #include <cstdint>
-#include <optional>
-#include <string>
-#include <utility>
-#include <vector>
+#include <limits>
 
-#include "test_view_common.h"
+using namespace dftracer::utils;
+using namespace dftracer::utils::trace::internal;
+using namespace dftracer::utils::trace::views;
+using namespace dftu_utils_test;
+using namespace test_view_common;
 
 namespace {
-
-using dftracer::utils::index::Field;
-using dftracer::utils::index::Json;
 
 constexpr int RECORDS = 3000;
 
 struct Access {
-    Field<std::string, "op"> op;
-    Field<std::int64_t, "lat"> lat;
-    Field<std::optional<std::int64_t>, "io.off"> off;
-    Field<std::optional<Json>, "tags"> tags;
-    Field<std::optional<std::string>, "hosts.1"> host;
+    trace::index::Field<dstd::String, "op"> op;
+    trace::index::Field<std::int64_t, "lat"> lat;
+    trace::index::Field<dstd::Optional<std::int64_t>, "io.off"> off;
+    trace::index::Field<dstd::Optional<trace::index::Json>, "tags"> tags;
+    trace::index::Field<dstd::Optional<dstd::String>, "hosts.1"> host;
 };
 
 struct Event {
-    Field<std::string, "name"> name;
-    Field<double, "ts"> ts;
-    Field<std::optional<std::int64_t>, "args.size"> size;
+    trace::index::Field<dstd::String, "name"> name;
+    trace::index::Field<double, "ts"> ts;
+    trace::index::Field<dstd::Optional<std::int64_t>, "args.size"> size;
 };
 
 // Record i: op read on even i, lat i, io.off 10*i on multiples of 3, tags on
 // multiples of 5, and hosts on multiples of 7.
-std::string write_access(TestEnvironment& env, const std::string& extra) {
-    const std::string plain = env.get_dir() + "/access.ndjson";
+dstd::String write_access(TestEnvironment& env, const dstd::String& extra) {
+    const dstd::String plain = env.dir() + "/access.ndjson";
     {
-        std::ofstream out(plain);
+        dftu_utils_test::FileOut out(plain);
         for (int i = 0; i < RECORDS; ++i) {
             out << R"({"op":")" << (i % 2 ? "write" : "read") << R"(","lat":)"
                 << i;
@@ -49,16 +57,29 @@ std::string write_access(TestEnvironment& env, const std::string& extra) {
         }
         out << extra;
     }
-    const std::string gz = plain + ".gz";
+    const dstd::String gz = plain + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                16 * 1024));
-    fs::remove(plain);
-    dftracer::utils::index::Indexer::open({gz}).build();
+    dstd::fs::remove(plain).discard();
+    dftu_utils_test::ok(
+        dftu_utils_test::ok(dftracer::utils::trace::index::Indexer::open(
+                                {dstd::String(dstd::StringView(gz))}))
+            .build());
     return gz;
 }
 
-View view_of(const std::string& gz) {
-    return View::from_file(gz, determine_index_path(gz, ""));
+struct Wide {
+    trace::index::Field<std::int64_t, "k"> k;
+    trace::index::Field<dstd::Optional<double>, "inf"> inf;
+    trace::index::Field<dstd::Optional<std::uint64_t>, "big"> big;
+    trace::index::Field<dstd::Optional<dstd::String>, "s"> s;
+    trace::index::Field<dstd::Optional<trace::index::Json>, "j"> j;
+};
+
+View view_of(const dstd::String& gz) {
+    return View::from_file(
+        dstd::String(gz),
+        dstd::String(dstd::String(determine_index_path(gz, ""))));
 }
 
 }  // namespace
@@ -82,12 +103,13 @@ TEST_SUITE("TypedRows") {
             CHECK(r.tags->has_value() == (i % 5 == 0));
             if (i % 5 == 0) CHECK((*r.tags)->text == R"({"a":"x","b":[1,2]})");
             CHECK(r.host->has_value() == (i % 7 == 0));
-            if (i % 7 == 0) CHECK(**r.host == "h" + std::to_string(i));
+            if (i % 7 == 0)
+                CHECK(dstd::String(**r.host) == "h" + dstd::to_string(i));
         }
 
-        const auto df = view_of(gz).collect().get();
+        const auto df = dftu_utils_test::ok(view_of(gz).collect().get());
         REQUIRE(df.num_rows() == RECORDS);
-        std::vector<std::pair<std::string, std::int64_t>> want, have;
+        dstd::Vector<dstd::Pair<dstd::String, std::int64_t>> want, have;
         for (std::int64_t i = 0; i < RECORDS; ++i)
             want.emplace_back(bstr(df, i, "op"),
                               static_cast<std::int64_t>(bnum(df, i, "lat")));
@@ -121,9 +143,9 @@ TEST_SUITE("TypedRows") {
 
     TEST_CASE("dftracer metadata records are left out unless selected") {
         TestEnvironment env(10);
-        const std::string pfw = env.get_dir() + "/meta.pfw";
+        const dstd::String pfw = env.dir() + "/meta.pfw";
         {
-            std::ofstream ofs(pfw);
+            dftu_utils_test::FileOut ofs(pfw);
             ofs << R"({"ph":"M","name":"process_name","pid":1,"tid":1,)"
                    R"("args":{"name":"app"}})"
                 << "\n";
@@ -132,9 +154,9 @@ TEST_SUITE("TypedRows") {
                        R"("tid":1,"ts":)"
                     << 1000 + i << R"(,"dur":5,"args":{"size":)" << i << "}}\n";
         }
-        const std::string gz = pfw + ".gz";
+        const dstd::String gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        fs::remove(pfw);
+        dstd::fs::remove(pfw).discard();
         const auto events = run(rows<Event>(view_of(gz)));
         REQUIRE(events.size() == 20);
         for (const Event& e : events) {
@@ -142,9 +164,47 @@ TEST_SUITE("TypedRows") {
             CHECK(e.size->has_value());
         }
         const auto any = view_of(gz).phase(Phase::Any);
-        CHECK(run(rows<Event>(any)).size() == any.collect().get().num_rows());
+        CHECK(run(rows<Event>(any)).size() ==
+              dftu_utils_test::ok(any.collect().get()).num_rows());
         const auto meta = run(rows<Event>(view_of(gz).phase(Phase::Metadata)));
         REQUIRE(meta.size() == 1);
         CHECK(*meta[0].name == "process_name");
+    }
+
+    TEST_CASE("lines with a huge number, a bad escape or bad bytes are kept") {
+        TestEnvironment env(10);
+        const dstd::String plain = env.dir() + "/wide.ndjson";
+        {
+            dftu_utils_test::FileOut out(plain);
+            out << R"({"k":1,"inf":1e400,"s":"a"})" << "\n";
+            out << R"({"k":2,"s":"a\qb"})" << "\n";
+            out << "{\"k\":3,\"s\":\"b\xff"
+                   "d\"}\n";
+            out << R"({"k":4,"big":18446744073709551615,"s":"c"})" << "\n";
+            out << R"({"k":5,"inf":-1e400,"s":"d"})" << "\n";
+            out << R"({"k":6,"j":{"b":[1e400],"a":"q\q"},"s":"e"})" << "\n";
+            out << R"({"k":7,"big":123456789012345678901234567890,"s":"f"})"
+                << "\n";
+        }
+        const dstd::String gz = plain + ".gz";
+        REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
+                                                                   1 << 20));
+        dstd::fs::remove(plain).discard();
+        dftu_utils_test::ok(
+            dftu_utils_test::ok(dftracer::utils::trace::index::Indexer::open(
+                                    {dstd::String(dstd::StringView(gz))}))
+                .build());
+        auto got = run(rows<Wide>(view_of(gz)));
+        REQUIRE(got.size() == 7);
+        std::sort(got.begin(), got.end(),
+                  [](const Wide& a, const Wide& b) { return *a.k < *b.k; });
+        CHECK(**got[0].inf == std::numeric_limits<double>::infinity());
+        CHECK(**got[1].s == R"(a\qb)");
+        CHECK(**got[2].s == "b?d");
+        CHECK(**got[3].big == 18446744073709551615ULL);
+        CHECK(**got[4].inf == -std::numeric_limits<double>::infinity());
+        CHECK((*got[5].j)->text == R"({"b":[1e400],"a":"q\q"})");
+        CHECK_FALSE(got[6].big->has_value());
+        CHECK(**got[6].s == "f");
     }
 }

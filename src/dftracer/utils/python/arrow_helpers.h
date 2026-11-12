@@ -1,15 +1,16 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_PYTHON_ARROW_HELPERS_H
 #define DFTRACER_UTILS_PYTHON_ARROW_HELPERS_H
 
-#include <dftracer/utils/core/common/config.h>
+#include <dftracer/utils/common/config.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 
 #include <Python.h>
-#include <dftracer/utils/utilities/common/arrow/arrow_export.h>
+#include <dftracer/utils/trace/arrow/arrow_export.h>
 
 namespace dftracer::utils::python {
 
-using utilities::common::arrow::ArrowExportResult;
+using trace::arrow::ArrowExportResult;
 
 /// Wrap an ArrowExportResult in an ArrowBatchCapsuleObject.
 /// Returns a new reference, or NULL on error.

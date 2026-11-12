@@ -1,12 +1,14 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_DATAFRAME_INTERNAL_NATIVE_TRANSFORM_H
 #define DFTRACER_UTILS_DATAFRAME_INTERNAL_NATIVE_TRANSFORM_H
 
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <cstdint>
 #include <optional>
-#include <string>
-#include <vector>
 
 namespace dftracer::utils::dataframe {
 
@@ -17,15 +19,14 @@ namespace dftracer::utils::dataframe {
 /// columns. `typed` is the schema the composed plan declares; the step returns
 /// those columns, in the input row order. Empty when the kind, a column type or
 /// a column name is not covered, and the caller then composes the plan.
-std::optional<LazyFrame> native_group_transform(
-    const LazyFrame& plan, const std::vector<std::string>& keys,
+dstd::Optional<LazyFrame> native_group_transform(
+    const LazyFrame& plan, const dstd::Vector<dstd::String>& keys,
     GroupwiseOp kind, std::int64_t n, const Schema& typed);
 
 /// The window plan of the same transform: what the native step must equal.
-LazyFrame composed_group_transform(const LazyFrame& plan,
-                                   const std::vector<std::string>& keys,
-                                   GroupwiseOp kind, std::int64_t n,
-                                   RankMethod method, bool ascending);
+dstd::Result<LazyFrame> composed_group_transform(
+    const LazyFrame& plan, const dstd::Vector<dstd::String>& keys,
+    GroupwiseOp kind, std::int64_t n, RankMethod method, bool ascending);
 
 /// The rows the native transform has grouped on one numeric key column with no
 /// key string, since the process started. For tests: a plan that should take

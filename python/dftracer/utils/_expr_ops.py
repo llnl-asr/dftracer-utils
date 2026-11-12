@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The column ops of the expression language: a registered ``dftu.series.*``
 op applied to a value inside an expression, the polars spellings
 (``col("x").cum_sum()``, ``.rolling_mean(3)``, ``.sort()``, ``.over("k")``,

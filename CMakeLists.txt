@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 cmake_minimum_required(VERSION 3.20)
 
 # Allow dependencies with older CMake minimum versions
@@ -78,12 +79,24 @@ set(DEPENDENCY_LIBRARY_DIRS "")
 option(DFTRACER_UTILS_TESTS "Build tests" OFF)
 option(DFTRACER_UTILS_COVERAGE "Enable coverage reporting" OFF)
 option(DFTRACER_UTILS_DEBUG "Enable debug mode including verbose logging" OFF)
+if(DFTRACER_UTILS_DEBUG)
+  add_compile_definitions(DFTRACER_UTILS_EXPECTED_CHECKS=1)
+endif()
+option(
+  DFTRACER_UTILS_TEST_PROBES
+  "Compile in the counters and switches that only tests read; the tests that read them build only when it is ON"
+  OFF)
+if(DFTRACER_UTILS_TEST_PROBES)
+  add_compile_definitions(DFTRACER_UTILS_TEST_PROBES=1)
+endif()
 option(
   DFTRACER_UTILS_LOGGER_LEVEL_TRACE
   "Compile in TRACE-level logging and coroutine auto-tracing (still runtime-gated by DFTRACER_UTILS_LOG_LEVEL); OFF strips it for a minimal build"
   ON)
 option(DFTRACER_UTILS_BUILD_SHARED "Build shared library" ON)
 option(DFTRACER_UTILS_BUILD_STATIC "Build static library" ON)
+option(DFTRACER_UTILS_SINGLE_LIBRARY
+       "Build one library dftracer_utils instead of one per area" OFF)
 option(DFTRACER_UTILS_BUILD_BINARIES "Build command-line binaries" ON)
 option(DFTRACER_UTILS_BUILD_PYTHON "Build Python bindings" OFF)
 option(DFTRACER_UTILS_ENABLE_PCH "Enable precompiled headers" OFF)
@@ -96,12 +109,18 @@ option(DFTRACER_UTILS_VALGRIND_MODE
 if(DFTRACER_UTILS_VALGRIND_MODE)
   add_compile_definitions(DFTRACER_UTILS_VALGRIND_MODE=1)
 endif()
-set(DFTRACER_UTILS_ROCKSDB_VERSION
-    "11.1.2"
-    CACHE STRING "RocksDB version to find or build")
-set(DFTRACER_UTILS_ROCKSDB_PREFIX
-    "$ENV{DFTRACER_UTILS_ROCKSDB_PREFIX}"
-    CACHE PATH "Install prefix of a prebuilt RocksDB to use instead of source")
+set(DFTRACER_UTILS_MEMORY_BACKEND
+    "page_heap"
+    CACHE STRING
+    "Default memory backend: page_heap or system; the environment variable of the same name overrides it at start")
+set_property(CACHE DFTRACER_UTILS_MEMORY_BACKEND PROPERTY STRINGS page_heap
+                                                          system)
+if(NOT DFTRACER_UTILS_MEMORY_BACKEND MATCHES "^(page_heap|system)$")
+  message(
+    FATAL_ERROR
+      "DFTRACER_UTILS_MEMORY_BACKEND must be page_heap or system, not '${DFTRACER_UTILS_MEMORY_BACKEND}'"
+  )
+endif()
 set(DFTRACER_UTILS_DEPS_BUILD_TYPE
     "RelWithDebInfo"
     CACHE STRING "Build type of the dependencies built as installs (vectorscan)")
@@ -109,15 +128,12 @@ set(DFTRACER_UTILS_DEPS_PREFIX
     "$ENV{DFTRACER_UTILS_DEPS_PREFIX}"
     CACHE PATH "Directory that keeps dependency installs between builds")
 option(DFTRACER_UTILS_ENABLE_MPI "Enable MPI support for call tree" OFF)
-option(DFTRACER_USE_ZLIB_NG "Use zlib-ng (compat) instead of madler/zlib; falls back to madler on failure" ON)
 option(DFTRACER_UTILS_ENABLE_ARROW "Enable Arrow C Data Interface via nanoarrow" ON)
 option(DFTRACER_UTILS_ENABLE_VECTORSCAN "Use Vectorscan for duql regexes and the raw prefilter" ON)
 option(DFTRACER_UTILS_ENABLE_ARROW_IPC "Enable Arrow IPC file read/write via nanoarrow" ON)
-option(DFTRACER_UTILS_ENABLE_ZSTD "Enable ZSTD compression for RocksDB" ON)
-option(DFTRACER_UTILS_ENABLE_LZ4 "Enable LZ4 compression for RocksDB" OFF)
 option(
   DFTRACER_UTILS_LOCAL_PACKAGES
-  "Prefer system-installed bundled dependencies (RocksDB, zstd, simdjson, ...) when available; set OFF to build them from source for portable wheels"
+  "Prefer system-installed bundled dependencies (zstd, simdjson, ...) when available; set OFF to build them from source for portable wheels"
   ON)
 
 if(DFTRACER_UTILS_TESTS)
@@ -219,9 +235,12 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/modules/PythonHelpers.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/modules/Sanitizer.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/modules/PrecompiledHeader.cmake)
 
-# Enable the lock-free 16-byte CAS (DWCAS) fast path for ObjectPool when the
-# target supports it; otherwise the header transparently uses a packed fallback.
-check_dwcas()
+# pcre2 and highway put BUILD_SHARED_LIBS in the cache, so without this the
+# dependencies added before them see it unset on the first configure only, and
+# zlib-ng then exports a target name that changes on the next configure.
+set(BUILD_SHARED_LIBS OFF)
+
+link_libatomic()
 
 configure_sanitizers()
 print_sanitizer_status()
@@ -245,21 +264,21 @@ endif()
 if(DFTRACER_UTILS_DEBUG)
   configure_file(
     "${CMAKE_CURRENT_SOURCE_DIR}/cmake/configure_files/dftracer_utils_config.dbg.h.in"
-    "${CMAKE_BINARY_DIR}/include/dftracer/utils/core/common/config.h"
+    "${CMAKE_BINARY_DIR}/include/dftracer/utils/common/config.h"
     @ONLY)
 else()
   configure_file(
     "${CMAKE_CURRENT_SOURCE_DIR}/cmake/configure_files/dftracer_utils_config.h.in"
-    "${CMAKE_BINARY_DIR}/include/dftracer/utils/core/common/config.h"
+    "${CMAKE_BINARY_DIR}/include/dftracer/utils/common/config.h"
     @ONLY)
 endif()
 
 dftracer_utils_interface_versions("${CMAKE_CURRENT_SOURCE_DIR}/VERSION"
                                   "${CMAKE_BINARY_DIR}/include")
 
-set_coverage_compiler_flags(DFTRACER_UTILS_TESTS AND DFTRACER_UTILS_COVERAGE)
-
-check_std_filesystem()
+if(DFTRACER_UTILS_TESTS AND DFTRACER_UTILS_COVERAGE)
+  add_compile_definitions(DFTRACER_UTILS_COVERAGE_BUILD)
+endif()
 
 # Configuration summary
 dftracer_utils_section("dftracer-utils ${DFTRACER_UTILS_VERSION}")
@@ -269,27 +288,19 @@ dftracer_utils_item("Compiler       "
 dftracer_utils_item("Target arch    " "${CMAKE_SYSTEM_PROCESSOR}")
 dftracer_utils_item(
   "Libraries      "
-  "shared=${DFTRACER_UTILS_BUILD_SHARED} static=${DFTRACER_UTILS_BUILD_STATIC}")
+  "shared=${DFTRACER_UTILS_BUILD_SHARED} static=${DFTRACER_UTILS_BUILD_STATIC} single=${DFTRACER_UTILS_SINGLE_LIBRARY}"
+)
 dftracer_utils_item(
   "Binaries / PyExt"
   "${DFTRACER_UTILS_BUILD_BINARIES} / ${DFTRACER_UTILS_BUILD_PYTHON}")
 dftracer_utils_item("Tests          " "${DFTRACER_UTILS_TESTS}")
 dftracer_utils_item("MPI            " "${DFTRACER_UTILS_ENABLE_MPI}")
-dftracer_utils_item(
-  "Compression    "
-  "zstd=${DFTRACER_UTILS_ENABLE_ZSTD} lz4=${DFTRACER_UTILS_ENABLE_LZ4}")
 dftracer_utils_item("Arrow          " "${DFTRACER_UTILS_ENABLE_ARROW}")
 dftracer_utils_item("Vectorscan     " "${DFTRACER_UTILS_ENABLE_VECTORSCAN}")
 dftracer_utils_item("Async I/O      "
                     "io_uring=${DFTRACER_UTILS_HAVE_IO_URING} kqueue=${DFTRACER_UTILS_HAVE_KQUEUE}"
 )
 dftracer_utils_item("Lustre API     " "${DFTRACER_UTILS_HAVE_LUSTREAPI}")
-if(DFTRACER_UTILS_HAS_DWCAS)
-  set(_dftracer_atomics_path "DWCAS (lock-free 16-byte CAS)")
-else()
-  set(_dftracer_atomics_path "packed (lock-free 64-bit CAS, portable)")
-endif()
-dftracer_utils_item("Atomics path   " "${_dftracer_atomics_path}")
 
 add_subdirectory(src)
 

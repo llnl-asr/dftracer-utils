@@ -76,29 +76,6 @@ Compare them
          )
          cmp = baseline.compare(TraceViewer("variant.pfw.gz")).collect()
 
-   .. tab-item:: C++
-
-      ``CompareView`` (``dftracer/utils/trace/comparator/compare_view.h``)
-      wraps a baseline and a variant ``View``; ``group_by``/``agg`` set the
-      shared aggregation plan and ``collect()`` runs both scans and returns the
-      comparison ``DataFrame``.
-
-      .. code-block:: cpp
-
-         #include <dftracer/utils/trace/comparator/compare_view.h>
-         #include <dftracer/utils/trace/views/view.h>
-
-         using namespace dftracer::utils::trace;
-
-         auto cmp = comparator::CompareView::of(
-                        views::View::from_file("baseline.pfw.gz"),
-                        views::View::from_file("variant.pfw.gz"))
-                        .group_by({views::GroupKey::cat()})
-                        .agg({{views::AggOp::Count, "", "count"},
-                              {views::AggOp::Mean, "dur", "mean_dur"}})
-                        .collect()
-                        .get();  // blocks; a dataframe::DataFrame
-
 Read the regression columns
 -------------------------------
 
@@ -162,8 +139,7 @@ What you learned
 ------------------
 
 - Build a comparison by aggregating a **baseline** and a **variant** the same
-  way and joining on the group key: ``TraceViewer.compare(other)`` in Python,
-  ``CompareView`` in C++.
+  way and joining on the group key: ``TraceViewer.compare(other)`` in Python.
 - The baseline's ``group_by``/``agg`` plan drives both sides; the result
   carries ``l_<m>`` / ``r_<m>`` per metric plus derived ``delta_<m>`` and
   ``pct_<m>``, including for count-like metrics.

@@ -1,24 +1,24 @@
+// SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/series.h>
-#include <dftracer/utils/utilities/host_ops.h>
+#include <dftracer/utils/domains/plugins/host_ops.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
 
 #include <algorithm>
-#include <filesystem>
-#include <fstream>
-#include <string>
-#include <vector>
 
-using dftracer::utils::dataframe::Series;
-using dftracer::utils::dataframe::TypeId;
+using namespace dftracer::utils;
+using namespace dftracer::utils::dataframe;
 
 namespace {
 
-namespace sfs = std::filesystem;
-
-dftu_op_val str_val(const std::string& s) {
+dftu_op_val str_val(const dstd::String& s) {
     dftu_op_val v{};
     v.str.ptr = s.c_str();
     v.str.len = static_cast<int32_t>(s.size());
@@ -42,27 +42,25 @@ bool run_bool(const char* name, const dftu_op_arg& arg) {
     return r.value.i != 0;
 }
 
-std::vector<std::string> rows(const Series& s) {
-    std::vector<std::string> out;
+dstd::Vector<dstd::String> rows(const Series& s) {
+    dstd::Vector<dstd::String> out;
     for (std::int64_t i = 0; i < s.length(); ++i)
         out.emplace_back(s.string_at(i));
     std::sort(out.begin(), out.end());
     return out;
 }
 
-void write_file(const sfs::path& p, const std::string& text) {
-    std::ofstream f(p, std::ios::binary);
-    f << text;
+void write_file(dstd::PathView p, const dstd::String& text) {
+    const dstd::Path owned(p.str());
+    dstd::fs::write_file(dstd::PathView(owned), text).discard();
 }
-
-using dftu_utils_test::ScopedTestDir;
 
 }  // namespace
 
 TEST_SUITE("host_ops") {
     TEST_CASE("register_host_ops is idempotent") {
-        dftracer::utils::utilities::register_host_ops();
-        dftracer::utils::utilities::register_host_ops();
+        domains::plugins::register_host_ops();
+        domains::plugins::register_host_ops();
         CHECK(dftu_op_find("dftu.fs.scan_dir") != nullptr);
     }
 
@@ -81,7 +79,7 @@ TEST_SUITE("host_ops") {
         for (const Expected& e : expected) {
             const dftu_op_desc* op = dftu_op_find(e.name);
             REQUIRE_MESSAGE(op != nullptr, e.name);
-            CHECK(std::string(dftu_op_signature(op->sig)) == e.signature);
+            CHECK(dstd::String(dftu_op_signature(op->sig)) == e.signature);
         }
         // The column op that stayed a kernel, next to its inverse.
         CHECK(dftu_op_find("dftu.hex.format64") != nullptr);
@@ -89,25 +87,25 @@ TEST_SUITE("host_ops") {
     }
 
     TEST_CASE("dftu.fs.scan_dir lists a directory as a String column") {
-        ScopedTestDir dir("dftu_host_ops_scan");
+        dftu_utils_test::ScopedTestDir dir("dftu_host_ops_scan");
         write_file(dir.path() / "a.log", "x");
         write_file(dir.path() / "b.txt", "y");
 
-        const std::string root = dir.path().string();
+        const dstd::String root = dstd::String(dir.path().str());
         dftu_op_arg arg{};
         arg.args[0] = str_val(root);
         Series out = run_series("dftu.fs.scan_dir", nullptr, arg);
         REQUIRE(out.handle() != nullptr);
         CHECK(out.type() == TypeId::String);
-        std::vector<std::string> got = rows(out);
+        dstd::Vector<dstd::String> got = rows(out);
         REQUIRE(got.size() == 2);
-        CHECK(got[0] == (dir.path() / "a.log").string());
-        CHECK(got[1] == (dir.path() / "b.txt").string());
+        CHECK(got[0] == (dir.path() / "a.log").str());
+        CHECK(got[1] == (dir.path() / "b.txt").str());
     }
 
     TEST_CASE("dftu.fs.scan_dir reports a missing directory as a null column") {
-        const std::string missing =
-            (sfs::current_path() / "dftu_host_ops_absent").string();
+        const dstd::String missing = dstd::String(
+            (dstd::fs::current_path().value() / "dftu_host_ops_absent").str());
         dftu_op_arg arg{};
         arg.args[0] = str_val(missing);
         Series out = run_series("dftu.fs.scan_dir", nullptr, arg);
@@ -115,53 +113,54 @@ TEST_SUITE("host_ops") {
     }
 
     TEST_CASE("dftu.fs.scan_dir_pattern keeps only matching files") {
-        ScopedTestDir dir("dftu_host_ops_pattern");
+        dftu_utils_test::ScopedTestDir dir("dftu_host_ops_pattern");
         write_file(dir.path() / "a.log", "x");
         write_file(dir.path() / "b.txt", "y");
         write_file(dir.path() / "c.log", "z");
 
-        const std::string root = dir.path().string();
-        const std::string pattern = ".log";
+        const dstd::String root = dstd::String(dir.path().str());
+        const dstd::String pattern = ".log";
         dftu_op_arg arg{};
         arg.args[0] = str_val(root);
         arg.args[1] = str_val(pattern);
         Series out = run_series("dftu.fs.scan_dir_pattern", nullptr, arg);
         REQUIRE(out.handle() != nullptr);
-        std::vector<std::string> got = rows(out);
+        dstd::Vector<dstd::String> got = rows(out);
         REQUIRE(got.size() == 2);
-        CHECK(got[0] == (dir.path() / "a.log").string());
-        CHECK(got[1] == (dir.path() / "c.log").string());
+        CHECK(got[0] == (dir.path() / "a.log").str());
+        CHECK(got[1] == (dir.path() / "c.log").str());
     }
 
     TEST_CASE("dftu.file.compress and dftu.file.decompress round trip") {
-        ScopedTestDir dir("dftu_host_ops_gzip");
-        const std::string text(64 * 1024, 'q');
-        const std::string src = (dir.path() / "in.txt").string();
-        const std::string gz = (dir.path() / "in.txt.gz").string();
-        const std::string back = (dir.path() / "out.txt").string();
+        dftu_utils_test::ScopedTestDir dir("dftu_host_ops_gzip");
+        const dstd::String text(64 * 1024, 'q');
+        const dstd::String src = dstd::String((dir.path() / "in.txt").str());
+        const dstd::String gz = dstd::String((dir.path() / "in.txt.gz").str());
+        const dstd::String back = dstd::String((dir.path() / "out.txt").str());
         write_file(src, text);
 
         dftu_op_arg carg{};
         carg.args[0] = str_val(src);
         carg.args[1] = str_val(gz);
         CHECK(run_bool("dftu.file.compress", carg));
-        CHECK(sfs::exists(gz));
+        CHECK(dstd::fs::exists(gz).value());
 
         dftu_op_arg darg{};
         darg.args[0] = str_val(gz);
         darg.args[1] = str_val(back);
         CHECK(run_bool("dftu.file.decompress", darg));
 
-        std::ifstream f(back, std::ios::binary);
-        std::string got((std::istreambuf_iterator<char>(f)),
-                        std::istreambuf_iterator<char>());
+        dstd::String got =
+            dstd::fs::read_file(dstd::PathView(back)).value_or(dstd::String());
         CHECK(got == text);
     }
 
     TEST_CASE("dftu.file.compress reports a missing input as false") {
-        ScopedTestDir dir("dftu_host_ops_gzip_missing");
-        const std::string src = (dir.path() / "absent.txt").string();
-        const std::string gz = (dir.path() / "absent.txt.gz").string();
+        dftu_utils_test::ScopedTestDir dir("dftu_host_ops_gzip_missing");
+        const dstd::String src =
+            dstd::String((dir.path() / "absent.txt").str());
+        const dstd::String gz =
+            dstd::String((dir.path() / "absent.txt.gz").str());
         dftu_op_arg arg{};
         arg.args[0] = str_val(src);
         arg.args[1] = str_val(gz);
@@ -171,7 +170,7 @@ TEST_SUITE("host_ops") {
     TEST_CASE("dftu.text.line_filter keeps the rows containing the needle") {
         Series lines = Series::strings(
             {"ERROR: disk full", "INFO: ok", "ERROR: timeout", "DEBUG: trace"});
-        const std::string needle = "ERROR";
+        const dstd::String needle = "ERROR";
         dftu_op_arg arg{};
         arg.args[1] = str_val(needle);
         Series kept = run_series("dftu.text.line_filter", lines.handle(), arg);

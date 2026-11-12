@@ -1,12 +1,21 @@
+// SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/index/indexer.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/trace/index/indexer.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
+#include <testing_utilities.h>
+#include <trace/views/test_view_common.h>
 
-#include <string>
-#include <vector>
-
-#include "test_view_common.h"
+using namespace dftracer::utils;
+using namespace dftracer::utils::trace::internal;
+using namespace dftracer::utils::trace::views;
+using namespace dftu_utils_test;
 
 namespace {
 
@@ -15,36 +24,43 @@ constexpr int RECORDS = 3000;
 // Records whose `tags` hold 2 to 4 copies of "t<i / 300>", so each run of 300
 // records, and so each chunk, holds its own tag; `sizes` holds [i % 7, i].
 // Record 2999 also carries "rare" at position 5.
-std::string write_tagged(TestEnvironment& env, std::size_t path_budget) {
-    const std::string plain = env.get_dir() + "/tagged.ndjson";
+dstd::String write_tagged(TestEnvironment& env, std::size_t path_budget) {
+    const dstd::String plain = env.dir() + "/tagged.ndjson";
     {
-        std::ofstream out(plain);
+        dftu_utils_test::FileOut out(plain);
         for (int i = 0; i < RECORDS; ++i) {
-            const std::string t = "\"t" + std::to_string(i / 300) + "\"";
+            const dstd::String t = "\"t" + dstd::to_string(i / 300) + "\"";
             out << R"({"op":"read","tags":[)" << t;
             for (int k = 1; k < 2 + i % 3; ++k) out << "," << t;
             if (i == RECORDS - 1) out << R"(,"x","x","rare")";
             out << R"(],"sizes":[)" << i % 7 << "," << i << "]}\n";
         }
     }
-    const std::string gz = plain + ".gz";
+    const dstd::String gz = plain + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                16 * 1024));
-    fs::remove(plain);
-    dftracer::utils::index::IndexerOptions o;
+    dstd::fs::remove(plain).discard();
+    dftracer::utils::trace::index::IndexerOptions o;
     o.bloom->path_budget = path_budget;
-    dftracer::utils::index::Indexer::open({gz}, o).build();
+    dftu_utils_test::ok(
+        dftu_utils_test::ok(dftracer::utils::trace::index::Indexer::open(
+                                {dstd::String(dstd::StringView(gz))}, o))
+            .build());
     return gz;
 }
 
-View view_of(const std::string& gz) {
-    return View::from_file(gz, determine_index_path(gz, ""));
+View view_of(const dstd::String& gz) {
+    return View::from_file(
+        dstd::String(gz),
+        dstd::String(dstd::String(determine_index_path(gz, ""))));
 }
 
-std::size_t rows(const View& v) { return v.collect().get().num_rows(); }
+std::size_t rows(const View& v) {
+    return dftu_utils_test::ok(v.collect().get()).num_rows();
+}
 
 struct NullSink : ExportSink {
-    void write(std::string_view) override {}
+    void write(dstd::StringView) override {}
 };
 
 }  // namespace
@@ -53,21 +69,25 @@ TEST_SUITE("AnyView") {
     TEST_CASE("any() filters rows and skips chunks without the value") {
         TestEnvironment env(10);
         const auto gz = write_tagged(env, 1024);
-        const std::string q = R"(any(tags) == "t7")";
+        const dstd::String q = R"(any(tags) == "t7")";
         CHECK(rows(view_of(gz).duql(q)) == 300);
         CHECK(rows(view_of(gz).duql(R"(not any(tags) == "t7")")) ==
               RECORDS - 300);
         CHECK(rows(view_of(gz).duql("any(sizes) >= 2990")) == 10);
         NullSink sink;
-        const auto stats = view_of(gz).duql(q).sink_json(sink).get();
+        const auto stats =
+            dftu_utils_test::ok(view_of(gz).duql(q).sink_json(sink).get());
         CHECK(stats.events_matched == 300);
         CHECK(stats.chunks_skipped > 0);
 
-        auto ix = dftracer::utils::index::Indexer::open({gz});
-        const auto e = ix.explain(q);
+        auto ix =
+            dftu_utils_test::ok(dftracer::utils::trace::index::Indexer::open(
+                {dstd::String(dstd::StringView(gz))}));
+        const auto e = dftu_utils_test::ok(ix.explain(q));
         REQUIRE(e.size() == 1);
         CHECK(e[0].read.size() < e[0].chunks);
-        CHECK(ix.explain(R"(any(tags) == "absent")")[0].read.empty());
+        CHECK(dftu_utils_test::ok(ix.explain(R"(any(tags) == "absent")"))[0]
+                  .read.empty());
     }
 
     TEST_CASE("an aggregate counts the rows a row scan returns") {
@@ -77,11 +97,12 @@ TEST_SUITE("AnyView") {
              {R"(any(tags) == "t3")", R"(any(tags) in ["t1", "t2"])",
               "any(sizes) < 1", R"(any(tags) != "t0")"}) {
             CAPTURE(q);
-            const auto df = view_of(gz)
-                                .duql(q)
-                                .agg({{AggOp::Count, "", "n"}})
-                                .collect()
-                                .get();
+            const auto df =
+                dftu_utils_test::ok(view_of(gz)
+                                        .duql(q)
+                                        .agg({{AggOp::Count, "", "n"}})
+                                        .collect()
+                                        .get());
             const auto& n = df.columns[df.column_index("n")];
             CHECK(static_cast<std::size_t>(n.values<std::int64_t>()[0]) ==
                   rows(view_of(gz).duql(q)));
@@ -98,7 +119,7 @@ TEST_SUITE("AnyView") {
         TestEnvironment env(10);
         const auto gz = write_tagged(env, 1024);
         for (const auto& [cond, want] :
-             std::vector<std::pair<std::string, std::size_t>>{
+             dstd::Vector<dstd::Pair<dstd::String, std::size_t>>{
                  {R"(any(tags, . == "t7"))", 300},
                  {R"(all(tags, . == "t0"))", 300},
                  {"any(sizes, . >= 2990 and . > ^.sizes[0])", 10},
@@ -108,11 +129,15 @@ TEST_SUITE("AnyView") {
             CHECK(rows(view_of(gz).duql("derive z = 1 | where " + cond)) ==
                   want);
             NullSink sink;
-            CHECK(view_of(gz).duql(cond).sink_json(sink).get().events_matched ==
-                  want);
+            CHECK(dftu_utils_test::ok(
+                      view_of(gz).duql(cond).sink_json(sink).get())
+                      .events_matched == want);
         }
-        auto ix = dftracer::utils::index::Indexer::open({gz});
-        const auto e = ix.explain(R"(any(tags, . == "absent"))");
+        auto ix =
+            dftu_utils_test::ok(dftracer::utils::trace::index::Indexer::open(
+                {dstd::String(dstd::StringView(gz))}));
+        const auto e =
+            dftu_utils_test::ok(ix.explain(R"(any(tags, . == "absent"))"));
         REQUIRE(e.size() == 1);
         CHECK(e[0].read.size() == e[0].chunks);
     }
@@ -120,21 +145,21 @@ TEST_SUITE("AnyView") {
     TEST_CASE("expand reads an array of a path-decoded record") {
         TestEnvironment env(10);
         const auto gz = write_tagged(env, 1024);
-        const auto df = view_of(gz)
-                            .duql(
-                                "expand sizes with_index k | take 4"
-                                " | select sizes, k")
-                            .collect()
-                            .get();
+        const auto df =
+            dftu_utils_test::ok(view_of(gz)
+                                    .duql("expand sizes with_index k | take 4"
+                                          " | select sizes, k")
+                                    .collect()
+                                    .get());
         REQUIRE(df.num_rows() == 4);
         const auto& s = df.columns[df.column_index("sizes")];
         const auto& k = df.columns[df.column_index("k")];
         const auto sv = s.values<std::int64_t>();
-        CHECK(std::vector<std::int64_t>(sv.begin(), sv.end()) ==
-              std::vector<std::int64_t>{0, 0, 1, 1});
+        CHECK(dstd::Vector<std::int64_t>(sv.begin(), sv.end()) ==
+              dstd::Vector<std::int64_t>{0, 0, 1, 1});
         const auto kv = k.values<std::int64_t>();
-        CHECK(std::vector<std::int64_t>(kv.begin(), kv.end()) ==
-              std::vector<std::int64_t>{0, 1, 0, 1});
+        CHECK(dstd::Vector<std::int64_t>(kv.begin(), kv.end()) ==
+              dstd::Vector<std::int64_t>{0, 1, 0, 1});
     }
 
     TEST_CASE("an array index reads the same in the scan and after it") {

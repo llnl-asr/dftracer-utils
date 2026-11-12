@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 /* Example consumer plugin: at finalize it asks dft.ext.agg for the producer's
  * cross-worker-merged accumulator by name; the host hands back the finalized
  * result as a one-row dataframe, which this plugin reads with the dataframe C
@@ -113,7 +114,8 @@ static const char* const* consumes(void* self) {
 
 static dftu_plugin g_plugin;
 
-DFTU_PLUGIN_EXPORT dftu_plugin* dftracer_plugin(dftu_plugin_host* h, const dftu_value* config) {
+DFTU_PLUGIN_EXPORT dftu_plugin* dftracer_plugin(dftu_plugin_host* h,
+                                                const dftu_value* config) {
     (void)h;
     (void)config;
     g_plugin.abi_version = DFTRACER_UTILS_PLUGIN_ABI_VERSION;

@@ -1,14 +1,14 @@
+// SPDX-License-Identifier: MIT
 #include <dftracer/utils/dataframe/abi.h>
-#include <dftracer/utils/index/abi.h>
+#include <dftracer/utils/trace/index/abi.h>
 #include <dftracer/utils/trace/views/abi.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <testing_utilities.h>
 #include <unistd.h>
 #include <unity.h>
-
-#include "testing_utilities.h"
 
 static test_environment_handle_t g_env = NULL;
 
@@ -121,7 +121,8 @@ static void test_file_list(void) {
         TEST_ASSERT_TRUE(DFTU_RESULT_OK(f));
         TEST_ASSERT_EQUAL_UINT64(file_size(DFTU_RESULT_VALUE(f).path),
                                  DFTU_RESULT_VALUE(f).size_bytes);
-        TEST_ASSERT_TRUE(DFTU_RESULT_VALUE(f).file_id >= 0);
+        TEST_ASSERT_TRUE(DFTU_RESULT_VALUE(f).size_bytes > 0);
+        TEST_ASSERT_TRUE(strlen(DFTU_RESULT_VALUE(f).index_path) > 0);
     }
     dftu_indexer_file_result out = dftu_indexer_file_list_get(list, 2);
     TEST_ASSERT_FALSE(DFTU_RESULT_OK(out));
@@ -417,6 +418,36 @@ static void test_evidence_settings(void) {
     free(trace);
 }
 
+static void test_aggregation_settings(void) {
+    char* trace = test_environment_create_dft_gzip_file(g_env, 25);
+    const char* paths[] = {trace};
+    dftu_indexer_options opts;
+    dftu_indexer_options_init(&opts);
+    TEST_ASSERT_EQUAL_UINT64(1000000, opts.aggregation_time_interval_us);
+    TEST_ASSERT_EQUAL_INT(1, opts.aggregation_compute_percentiles);
+    TEST_ASSERT_EQUAL_INT(1, opts.aggregation_group_by_file);
+
+    dftu_indexer_open_result o = dftu_indexer_open(paths, 1, &opts);
+    TEST_ASSERT_TRUE(DFTU_RESULT_OK(o));
+    dftu_indexer* ix = DFTU_RESULT_VALUE(o);
+    TEST_ASSERT_TRUE(DFTU_RESULT_OK(dftu_indexer_build(ix)));
+    dftu_indexer_status_result st = dftu_indexer_status(ix);
+    TEST_ASSERT_TRUE(DFTU_RESULT_OK(st));
+    TEST_ASSERT_EQUAL_UINT64(0, DFTU_RESULT_VALUE(st).needs_work);
+    dftu_indexer_free(ix);
+
+    // Another window is another tier, so the file needs work again.
+    opts.aggregation_time_interval_us = 250000;
+    o = dftu_indexer_open(paths, 1, &opts);
+    TEST_ASSERT_TRUE(DFTU_RESULT_OK(o));
+    ix = DFTU_RESULT_VALUE(o);
+    st = dftu_indexer_status(ix);
+    TEST_ASSERT_TRUE(DFTU_RESULT_OK(st));
+    TEST_ASSERT_EQUAL_UINT64(1, DFTU_RESULT_VALUE(st).needs_work);
+    dftu_indexer_free(ix);
+    free(trace);
+}
+
 int main(void) {
     UNITY_BEGIN();
     RUN_TEST(test_open_with_default_options);
@@ -432,5 +463,6 @@ int main(void) {
     RUN_TEST(test_schema_option_and_file_field);
     RUN_TEST(test_schema_registry_calls);
     RUN_TEST(test_evidence_settings);
+    RUN_TEST(test_aggregation_settings);
     return UNITY_END();
 }

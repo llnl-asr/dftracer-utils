@@ -1,0 +1,414 @@
+// SPDX-License-Identifier: MIT
+#include <dftracer/utils/memory/attrib.h>
+#include <dftracer/utils/memory/debug.h>
+#include <dftracer/utils/memory/detail/constants.h>
+#include <dftracer/utils/memory/detail/heap.h>
+#include <dftracer/utils/memory/detail/manager.h>
+#include <dftracer/utils/memory/detail/pool_access.h>
+#include <dftracer/utils/memory/heap_page.h>
+#include <dftracer/utils/memory/heap_system.h>
+#include <dftracer/utils/memory/settings.h>
+
+#include <atomic>
+#include <cerrno>
+#include <cstddef>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <limits>
+#include <new>
+
+namespace dftracer::utils::memory::detail {
+
+namespace {
+
+// The debug values wrap the backend of the same name without Debug, so debug
+// costs the plain cases nothing.
+enum class Dispatch : std::uint8_t {
+    PageHeap,
+    System,
+    DebugPageHeap,
+    DebugSystem,
+    Unresolved = 0xff,
+};
+
+std::atomic<std::uint8_t> g_dispatch{
+    static_cast<std::uint8_t>(Dispatch::Unresolved)};
+std::atomic<bool> g_exit_check{constants::DEFAULT_EXIT_CHECK};
+std::atomic<std::uint32_t> g_decay_ms{constants::DEFAULT_DECAY_MS};
+std::atomic<std::size_t> g_hard_cap{0};
+std::atomic<std::size_t> g_map_budget{0};
+
+constexpr Backend compiled_backend() noexcept {
+#ifdef DFTRACER_UTILS_MEMORY_BACKEND_SYSTEM
+    return Backend::System;
+#else
+    return Config{}.backend;
+#endif
+}
+
+struct Resolved {
+    Config config;
+    bool debug = constants::DEFAULT_DEBUG;
+    bool exit_check = constants::DEFAULT_EXIT_CHECK;
+};
+
+bool read_flag(const char* name, bool fallback) noexcept {
+    const char* value = std::getenv(name);
+    if (value == nullptr || value[0] == '\0') return fallback;
+    if (std::strcmp(value, "1") == 0) return true;
+    if (std::strcmp(value, "0") == 0) return false;
+    char message[160];
+    std::snprintf(message, sizeof(message),
+                  "dftracer-utils memory: %s must be 0 or 1\n", name);
+    abort_with(message);
+}
+
+// The one getenv in memory. These settings must be fixed before the first
+// allocation, which can come before common reads the environment.
+Resolved resolve_environment() noexcept {
+    Resolved resolved;
+    Config& config = resolved.config;
+    const char* backend = std::getenv(constants::MEMORY_BACKEND_ENV);
+    if (backend == nullptr || backend[0] == '\0') {
+        config.backend = compiled_backend();
+    } else if (std::strcmp(backend, "page_heap") == 0) {
+        config.backend = Backend::PageHeap;
+    } else if (std::strcmp(backend, "system") == 0) {
+        config.backend = Backend::System;
+    } else {
+        abort_with(
+            "dftracer-utils memory: DFTRACER_UTILS_MEMORY_BACKEND must be "
+            "page_heap or system\n");
+    }
+    const char* decay = std::getenv(constants::DECAY_MS_ENV);
+    if (decay != nullptr && decay[0] != '\0') {
+        char* end = nullptr;
+        errno = 0;
+        unsigned long long value = std::strtoull(decay, &end, 10);
+        if (decay[0] < '0' || decay[0] > '9' || *end != '\0' || errno != 0 ||
+            value > std::numeric_limits<std::uint32_t>::max()) {
+            abort_with(
+                "dftracer-utils memory: DFTRACER_UTILS_MEM_DECAY_MS must be "
+                "a whole number of milliseconds up to 4294967295\n");
+        }
+        config.decay_ms = static_cast<std::uint32_t>(value);
+    }
+    resolved.debug = read_flag(constants::DEBUG_ENV, resolved.debug);
+    resolved.exit_check =
+        read_flag(constants::EXIT_CHECK_ENV, resolved.exit_check);
+    return resolved;
+}
+
+constexpr Dispatch dispatch_of(Backend backend, bool debug) noexcept {
+    if (backend == Backend::PageHeap) {
+        return debug ? Dispatch::DebugPageHeap : Dispatch::PageHeap;
+    }
+    return debug ? Dispatch::DebugSystem : Dispatch::System;
+}
+
+// The other settings are stored before the dispatch value, which readers load
+// with acquire.
+[[gnu::noinline]] Dispatch resolve_dispatch() noexcept {
+    Resolved resolved = resolve_environment();
+    g_decay_ms.store(resolved.config.decay_ms, std::memory_order_relaxed);
+    g_exit_check.store(resolved.exit_check, std::memory_order_relaxed);
+    Dispatch d = dispatch_of(resolved.config.backend, resolved.debug);
+    g_dispatch.store(static_cast<std::uint8_t>(d), std::memory_order_release);
+    return d;
+}
+
+Dispatch dispatch() noexcept {
+    auto d = static_cast<Dispatch>(g_dispatch.load(std::memory_order_acquire));
+    if (d == Dispatch::Unresolved) [[unlikely]]
+        return resolve_dispatch();
+    return d;
+}
+
+// The page heap and system paths below are tail calls, so they run without a
+// frame of their own and keep the return address of the public entry as the
+// site.
+template <bool Fatal>
+[[gnu::noinline]] void* allocate_other(std::size_t size, std::size_t align,
+                                       void* site) {
+    switch (dispatch()) {
+        case Dispatch::PageHeap:
+            if constexpr (Fatal) return page_allocate(size, align);
+            return page_try_allocate(size, align);
+        case Dispatch::System:
+            if constexpr (Fatal) return system_allocate(size, align);
+            return system_try_allocate(size, align);
+        case Dispatch::DebugPageHeap:
+        case Dispatch::DebugSystem: {
+            void* p = debug_allocate(size, align, site);
+            if constexpr (Fatal) {
+                if (p == nullptr) out_of_memory(size);
+            }
+            return p;
+        }
+        case Dispatch::Unresolved:
+            break;
+    }
+    abort_with("dftracer-utils memory: unknown backend\n");
+}
+
+[[gnu::noinline]] void deallocate_other(void* p, std::size_t size,
+                                        bool sized) noexcept {
+    switch (dispatch()) {
+        case Dispatch::PageHeap:
+            sized ? page_deallocate(p, size) : page_deallocate(p);
+            return;
+        case Dispatch::System:
+            sized ? system_deallocate(p, size) : system_deallocate(p);
+            return;
+        case Dispatch::DebugPageHeap:
+        case Dispatch::DebugSystem:
+            debug_deallocate(p, size, sized);
+            return;
+        case Dispatch::Unresolved:
+            break;
+    }
+    abort_with("dftracer-utils memory: unknown backend\n");
+}
+
+Backend backend() noexcept {
+    switch (dispatch()) {
+        case Dispatch::PageHeap:
+        case Dispatch::DebugPageHeap:
+            return Backend::PageHeap;
+        case Dispatch::System:
+        case Dispatch::DebugSystem:
+            return Backend::System;
+        case Dispatch::Unresolved:
+            break;
+    }
+    abort_with("dftracer-utils memory: unknown backend\n");
+}
+
+}  // namespace
+
+Backend active_backend() noexcept { return backend(); }
+
+bool debug_enabled() noexcept {
+    Dispatch d = dispatch();
+    return d == Dispatch::DebugPageHeap || d == Dispatch::DebugSystem;
+}
+
+bool exit_check_env() noexcept {
+    dispatch();
+    return g_exit_check.load(std::memory_order_relaxed);
+}
+
+std::uint32_t decay_ms() noexcept {
+    backend();
+    return g_decay_ms.load(std::memory_order_relaxed);
+}
+
+std::size_t hard_cap() noexcept {
+    return g_hard_cap.load(std::memory_order_relaxed);
+}
+
+void set_hard_cap(std::size_t bytes) noexcept {
+    g_hard_cap.store(bytes, std::memory_order_relaxed);
+}
+
+std::size_t map_budget() noexcept {
+    return g_map_budget.load(std::memory_order_relaxed);
+}
+
+void set_map_budget(std::size_t bytes) noexcept {
+    g_map_budget.store(bytes, std::memory_order_relaxed);
+}
+
+AttribCache& attrib_local() {
+    switch (backend()) {
+        case Backend::PageHeap:
+            return page_attrib();
+        case Backend::System:
+            return system_attrib();
+    }
+    abort_with("dftracer-utils memory: unknown backend\n");
+}
+
+void out_of_memory(std::size_t size) noexcept {
+    char message[256];
+    std::size_t cap = hard_cap();
+    if (cap != 0) {
+        std::snprintf(message, sizeof(message),
+                      "dftracer-utils memory: out of memory allocating %zu "
+                      "bytes; the hard limit %s is %zu bytes\n",
+                      size, constants::HARD_LIMIT_ENV, cap);
+    } else {
+        std::snprintf(message, sizeof(message),
+                      "dftracer-utils memory: out of memory allocating %zu "
+                      "bytes\n",
+                      size);
+    }
+    abort_with(message);
+}
+
+void size_overflow() noexcept {
+    abort_with("dftracer-utils memory: allocation size overflows\n");
+}
+
+void* allocate(std::size_t size, std::size_t align) {
+    switch (static_cast<Dispatch>(g_dispatch.load(std::memory_order_acquire))) {
+        case Dispatch::PageHeap:
+            return page_allocate(size, align);
+        case Dispatch::System:
+            return system_allocate(size, align);
+        default:
+            return allocate_other<true>(size, align,
+                                        __builtin_return_address(0));
+    }
+}
+
+namespace {
+
+template <bool Fatal>
+void* allocate_at_in(std::size_t size, std::size_t align, Pool& pool,
+                     void* site) {
+    switch (static_cast<Dispatch>(g_dispatch.load(std::memory_order_acquire))) {
+        case Dispatch::PageHeap:
+            if constexpr (Fatal) {
+                return page_allocate_to(size, align,
+                                        detail::PoolAccess::id(pool));
+            }
+            return page_try_allocate_to(size, align,
+                                        detail::PoolAccess::id(pool));
+        default:
+            break;
+    }
+    ScopeOverride scope{attrib_local(), detail::PoolAccess::id(pool)};
+    return allocate_other<Fatal>(size, align, site);
+}
+
+}  // namespace
+
+void* allocate_at(std::size_t size, std::size_t align, Pool& pool, void* site) {
+    return allocate_at_in<true>(size, align, pool, site);
+}
+
+void* allocate(std::size_t size, std::size_t align, Pool& pool) {
+    return allocate_at(size, align, pool, __builtin_return_address(0));
+}
+
+void* try_allocate(std::size_t size, std::size_t align) noexcept {
+    return allocate_other<false>(size, align, __builtin_return_address(0));
+}
+
+void* try_allocate_at(std::size_t size, std::size_t align, Pool& pool,
+                      void* site) noexcept {
+    return allocate_at_in<false>(size, align, pool, site);
+}
+
+void deallocate(void* p) noexcept {
+    switch (static_cast<Dispatch>(g_dispatch.load(std::memory_order_acquire))) {
+        case Dispatch::PageHeap:
+            page_deallocate(p);
+            return;
+        case Dispatch::System:
+            system_deallocate(p);
+            return;
+        default:
+            deallocate_other(p, 0, false);
+            return;
+    }
+}
+
+void deallocate(void* p, std::size_t size) noexcept {
+    switch (static_cast<Dispatch>(g_dispatch.load(std::memory_order_acquire))) {
+        case Dispatch::PageHeap:
+            page_deallocate(p, size);
+            return;
+        case Dispatch::System:
+            system_deallocate(p, size);
+            return;
+        default:
+            deallocate_other(p, size, true);
+            return;
+    }
+}
+
+void deallocate_retained(void* p, std::size_t size) noexcept {
+    switch (static_cast<Dispatch>(g_dispatch.load(std::memory_order_acquire))) {
+        case Dispatch::PageHeap:
+            page_deallocate(p, size);
+            return;
+        case Dispatch::System:
+            system_deallocate(p, size);
+            return;
+        default:
+            if (p != nullptr && debug_enabled()) {
+                debug_retain(p, size);
+                return;
+            }
+            deallocate_other(p, size, true);
+            return;
+    }
+}
+
+void* reallocate(void* p, std::size_t old_size, std::size_t new_size,
+                 std::size_t align) {
+    switch (dispatch()) {
+        case Dispatch::PageHeap:
+            return page_reallocate(p, old_size, new_size, align);
+        case Dispatch::System:
+            return system_reallocate(p, old_size, new_size, align);
+        case Dispatch::DebugPageHeap:
+        case Dispatch::DebugSystem: {
+            void* moved = debug_reallocate(p, old_size, new_size, align,
+                                           __builtin_return_address(0));
+            if (moved == nullptr) out_of_memory(new_size);
+            return moved;
+        }
+        case Dispatch::Unresolved:
+            break;
+    }
+    abort_with("dftracer-utils memory: unknown backend\n");
+}
+
+void trim(Mode mode) noexcept {
+    switch (backend()) {
+        case Backend::PageHeap:
+            page_trim(mode);
+            return;
+        case Backend::System:
+            return;
+    }
+}
+
+void* c_malloc(std::size_t size) noexcept {
+    return try_allocate(size, alignof(std::max_align_t));
+}
+
+void c_free(void* p) noexcept {
+    if (p != nullptr) deallocate(p);
+}
+
+void trim_thread() noexcept {
+    switch (backend()) {
+        case Backend::PageHeap:
+            page_trim_thread();
+            return;
+        case Backend::System:
+            return;
+    }
+}
+
+}  // namespace dftracer::utils::memory::detail
+
+namespace dftracer::utils::memory {
+
+Config config() noexcept {
+    Config out;
+    out.backend = detail::backend();
+    out.decay_ms = detail::decay_ms();
+    out.budget = detail::Manager::get().budget();
+    out.hard_cap = detail::hard_cap();
+    out.limit_headroom = detail::Manager::get().limit_headroom();
+    out.spill_headroom = detail::Manager::get().spill_headroom();
+    return out;
+}
+
+}  // namespace dftracer::utils::memory

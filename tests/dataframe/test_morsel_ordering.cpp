@@ -1,29 +1,24 @@
+// SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/coro/task.h>
-#include <dftracer/utils/core/runtime.h>
+#include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <cstdint>
-#include <memory>
-#include <optional>
-#include <vector>
 
-using dftracer::utils::coro::CoroTask;
-using dftracer::utils::dataframe::Cursor;
-using dftracer::utils::dataframe::DataFrame;
-using dftracer::utils::dataframe::InMemorySource;
-using dftracer::utils::dataframe::LazyFrame;
-using dftracer::utils::dataframe::Morsel;
-using dftracer::utils::dataframe::Ordering;
-using dftracer::utils::dataframe::Series;
+using namespace dftracer::utils;
+using namespace dftracer::utils::dataframe;
 
 namespace {
 
 DataFrame make_df(std::int64_t n) {
-    std::vector<std::int64_t> a(static_cast<std::size_t>(n));
+    dstd::Vector<std::int64_t> a(static_cast<std::size_t>(n));
     for (std::int64_t i = 0; i < n; ++i) a[static_cast<std::size_t>(i)] = i;
     DataFrame df;
     df.names = {"a"};
@@ -32,23 +27,25 @@ DataFrame make_df(std::int64_t n) {
 }
 
 struct DrainResult {
-    std::vector<std::int64_t> batch_indices;
-    std::vector<Ordering> orderings;
-    std::vector<int> ordered_columns;
-    std::vector<bool> ordered_descendings;
-    std::vector<std::vector<std::int64_t>> ordered_column_values;
+    dstd::Vector<std::int64_t> batch_indices;
+    dstd::Vector<Ordering> orderings;
+    dstd::Vector<int> ordered_columns;
+    dstd::Vector<bool> ordered_descendings;
+    dstd::Vector<dstd::Vector<std::int64_t>> ordered_column_values;
     std::int64_t total_rows = 0;
 };
 
-CoroTask<DrainResult> drain(std::unique_ptr<Cursor> cur,
-                            std::int64_t max_rows) {
+coro::CoroTask<DrainResult> drain(dstd::UniquePtr<Cursor> cur,
+                                  std::int64_t max_rows) {
     DrainResult out;
-    while (auto m = co_await cur->next(max_rows)) {
+    for (;;) {
+        auto m = dftu_utils_test::ok(co_await cur->next(max_rows));
+        if (!m) break;
         out.batch_indices.push_back(m->batch_index);
         out.orderings.push_back(m->ordering);
         out.ordered_columns.push_back(m->ordered_column);
         out.ordered_descendings.push_back(m->ordered_descending);
-        std::vector<std::int64_t> vals;
+        dstd::Vector<std::int64_t> vals;
         if (m->ordering == Ordering::ByColumn && m->ordered_column >= 0) {
             const Series& c =
                 m->columns[static_cast<std::size_t>(m->ordered_column)];
@@ -62,10 +59,12 @@ CoroTask<DrainResult> drain(std::unique_ptr<Cursor> cur,
     co_return out;
 }
 
-DrainResult run_drain(std::unique_ptr<Cursor> cur, std::int64_t max_rows) {
-    return dftracer::utils::default_runtime()
-        .submit(drain(std::move(cur), max_rows))
-        .get();
+DrainResult run_drain(dstd::Result<dstd::UniquePtr<Cursor>> opened,
+                      std::int64_t max_rows) {
+    return dftu_utils_test::ok(
+        dftracer::utils::default_runtime()
+            .submit(drain(dftu_utils_test::ok(std::move(opened)), max_rows))
+            .get());
 }
 
 }  // namespace
@@ -73,7 +72,7 @@ DrainResult run_drain(std::unique_ptr<Cursor> cur, std::int64_t max_rows) {
 TEST_CASE(
     "InMemorySource morsels are Sequence-ordered with a contiguous "
     "batch_index") {
-    auto source = std::make_shared<InMemorySource>(make_df(10));
+    auto source = dstd::make_shared<InMemorySource>(make_df(10));
     LazyFrame lf = LazyFrame::scan(source);
     DrainResult r = run_drain(lf.open_cursor(), 3);
 
@@ -86,7 +85,7 @@ TEST_CASE(
 }
 
 TEST_CASE("select/with_column/fill_null preserve Sequence ordering") {
-    auto source = std::make_shared<InMemorySource>(make_df(10));
+    auto source = dstd::make_shared<InMemorySource>(make_df(10));
     LazyFrame lf =
         LazyFrame::scan(source)
             .select({"a"})
@@ -104,7 +103,7 @@ TEST_CASE("select/with_column/fill_null preserve Sequence ordering") {
 }
 
 TEST_CASE("sort_by claims ByColumn ordering by the sort key, and it holds") {
-    auto source = std::make_shared<InMemorySource>(make_df(10));
+    auto source = dstd::make_shared<InMemorySource>(make_df(10));
     LazyFrame lf = LazyFrame::scan(source).sort_by("a", /*descending=*/true);
     DrainResult r = run_drain(lf.open_cursor(), 1 << 20);
 
@@ -120,7 +119,7 @@ TEST_CASE("sort_by claims ByColumn ordering by the sort key, and it holds") {
 }
 
 TEST_CASE("filter downstream of sort_by still claims and holds the ordering") {
-    auto source = std::make_shared<InMemorySource>(make_df(10));
+    auto source = dstd::make_shared<InMemorySource>(make_df(10));
     LazyFrame lf =
         LazyFrame::scan(source)
             .sort_by("a", /*descending=*/false)
@@ -139,7 +138,7 @@ TEST_CASE("filter downstream of sort_by still claims and holds the ordering") {
 }
 
 TEST_CASE("with_row_index claims ByColumn ordering by the new index column") {
-    auto source = std::make_shared<InMemorySource>(make_df(10));
+    auto source = dstd::make_shared<InMemorySource>(make_df(10));
     LazyFrame lf = LazyFrame::scan(source).with_row_index("idx");
     DrainResult r = run_drain(lf.open_cursor(), 3);
 
@@ -156,7 +155,7 @@ TEST_CASE("with_row_index claims ByColumn ordering by the new index column") {
 
 TEST_CASE(
     "an op that reorders rows (group_by after sort_by) clears the claim") {
-    auto source = std::make_shared<InMemorySource>(make_df(10));
+    auto source = dstd::make_shared<InMemorySource>(make_df(10));
     dftracer::utils::dataframe::GroupAgg count_agg;
     count_agg.op = dftracer::utils::dataframe::Agg::Count;
     count_agg.out = "n";
@@ -170,7 +169,7 @@ TEST_CASE(
 }
 
 TEST_CASE("group_by reports Unordered downstream") {
-    auto source = std::make_shared<InMemorySource>(make_df(10));
+    auto source = dstd::make_shared<InMemorySource>(make_df(10));
     dftracer::utils::dataframe::GroupAgg count_agg;
     count_agg.op = dftracer::utils::dataframe::Agg::Count;
     count_agg.out = "n";
@@ -182,7 +181,7 @@ TEST_CASE("group_by reports Unordered downstream") {
 }
 
 TEST_CASE("unique reports Unordered downstream") {
-    auto source = std::make_shared<InMemorySource>(make_df(10));
+    auto source = dstd::make_shared<InMemorySource>(make_df(10));
     LazyFrame lf = LazyFrame::scan(source).unique();
     DrainResult r = run_drain(lf.open_cursor(), 1 << 20);
 

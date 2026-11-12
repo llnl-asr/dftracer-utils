@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The pandas and polars spellings on DataFrame / Series / LazyFrame, and the
 ``dftracer.utils.pandas`` / ``dftracer.utils.polars`` shim modules. Every
 alias is checked against the engine op it forwards to, by value."""
@@ -261,7 +262,7 @@ def test_unique_subset_eager_and_lazy():
     lazy = df.lazy().unique(subset="k")
     assert "unique [k]" in lazy.explain()
     assert _dict(lazy.collect()) == by_k
-    assert _dict(lazy.collect(morsel_rows=2)) == by_k
+    assert _dict(lazy.collect(batch_size=2)) == by_k
     assert _dict(df.lazy().drop_duplicates("v").collect()) == {"k": [1, 1, 2, 3], "v": [1, 2, 3, 4]}
     with pytest.raises(KeyError):
         df.unique("nope")
@@ -292,7 +293,7 @@ def test_reduce_family_eager_lazy_and_grouped():
     # Lazy: a streaming group-by.
     lazy = df.lazy().group_by("k").sum()
     assert lazy.columns == ["k", "a", "b"]
-    assert _dict(lazy.collect(morsel_rows=1)) == _dict(df.group_by("k").sum())
+    assert _dict(lazy.collect(batch_size=1)) == _dict(df.group_by("k").sum())
     assert _dict(df.lazy().mean().collect()) == _dict(df.mean())
     assert _dict(df.lazy().group_by(None, "sum:a").collect()) == {"sum_a": [6]}
     assert _dict(df.lazy().group_by("k").size().collect()) == _dict(df.group_by("k").size())

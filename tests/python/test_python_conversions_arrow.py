@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """to_polars / to_pandas through Arrow equal the native paths; string columns
 convert to Python objects without being materialized."""
 
@@ -30,7 +31,7 @@ def _series(layout, chunked):
     s = Series(_array(layout))
     if not chunked:
         return s
-    out = DataFrame({"s": s}).lazy().collect(morsel_rows=MORSEL)["s"]
+    out = DataFrame({"s": s}).lazy().collect(batch_size=MORSEL)["s"]
     assert out.encoding == 5
     return out
 
@@ -55,7 +56,7 @@ def _frame(layout, chunked):
     )
     if not chunked:
         return base
-    out = base.lazy().collect(morsel_rows=MORSEL)
+    out = base.lazy().collect(batch_size=MORSEL)
     assert out["s"].encoding == 5
     return out
 

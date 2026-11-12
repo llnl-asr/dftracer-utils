@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Tier 2: a plugin registers its own mergeable state type and the host drives
 // it like an accumulator without knowing its shape - one instance per worker
 // slice, merged at the fan-in, spilled past the memory budget, finalized once.
@@ -5,44 +6,34 @@
 // could do; what is under test is the machinery around it, not the shape.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/memory_budget.h>
-#include <dftracer/utils/core/common/string_intern.h>
-#include <dftracer/utils/core/runtime.h>
-#include <dftracer/utils/plugins/fold_adapter.h>
+#include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/domains/plugins/fold_adapter.h>
+#include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/memory/budget.h>
+#include <dftracer/utils/runtime/runtime.h>
 
-#include <memory>
 // After fold_adapter.h so nanoarrow is set up before dataframe/abi.h's
 // arrow_abi.
 #include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/plugin.h>
 #include <dftracer/utils/trace/schema.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/trace/views/fold_event.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
-#include <map>
-#include <span>
-#include <string>
 #include <variant>
-#include <vector>
 
-using dftracer::utils::NO_SPILL_BUDGET;
-using dftracer::utils::Runtime;
-using dftracer::utils::StringIntern;
-using dftracer::utils::plugins::NamedResultRegistry;
-using dftracer::utils::plugins::PluginFold;
-using dftracer::utils::plugins::RegisteredState;
-using dftracer::utils::plugins::StateRegistry;
-using dftracer::utils::trace::RecordPhase;
-namespace coro = dftracer::utils::coro;
-namespace views = dftracer::utils::trace::views;
-using views::detail::FoldBatch;
-using views::detail::FoldEvent;
-using views::detail::ScanUnit;
+using namespace dftracer::utils;
 
 namespace {
 
@@ -56,17 +47,17 @@ constexpr std::uint64_t TINY_BUDGET = 4096;
 // matters.
 constexpr std::uint64_t BYTES_PER_ENTRY = 64;
 
-using Totals = std::map<std::string, std::uint64_t>;
+using Totals = dstd::Map<dstd::String, std::uint64_t>;
 
 // "name\0dur\0..." - a self-contained encoding used both for a spill run and
 // for the finalized result, so a spilled state and an in-memory one are read
 // back the same way.
-std::string encode(const Totals& t) {
-    std::string out;
+dstd::String encode(const Totals& t) {
+    dstd::String out;
     for (const auto& [name, dur] : t) {
         out.append(name);
         out.push_back('\0');
-        out.append(std::to_string(dur));
+        out.append(dstd::to_string(dur));
         out.push_back('\0');
     }
     return out;
@@ -76,10 +67,10 @@ Totals decode(const char* p, std::size_t n) {
     Totals out;
     std::size_t at = 0;
     while (at < n) {
-        const std::string name(p + at);
+        const dstd::String name(p + at);
         at += name.size() + 1;
         if (at > n) break;
-        const std::string dur(p + at);
+        const dstd::String dur(p + at);
         at += dur.size() + 1;
         out[name] += std::strtoull(dur.c_str(), nullptr, 10);
     }
@@ -90,7 +81,7 @@ Totals decode(const char* p, std::size_t n) {
 
 void* state_init(void*) { return new Totals(); }
 
-std::string_view str_at(const dftu_series* col, std::int64_t r) {
+dstd::StringView str_at(const dftu_series* col, std::int64_t r) {
     const std::int32_t* off = dftu_series_offsets(col);
     const char* base = static_cast<const char*>(dftu_series_data(col));
     if (!off || !base) return {};
@@ -112,7 +103,7 @@ int state_update(void* state, const dftu_dataframe* df, dftu_error* err) {
         static_cast<const std::uint64_t*>(dftu_series_data(flat_dur));
     auto& t = *static_cast<Totals*>(state);
     for (std::int64_t r = 0; r < dftu_series_length(flat_name); ++r)
-        t[std::string(str_at(flat_name, r))] += durs[r];
+        t[dstd::String(str_at(flat_name, r))] += durs[r];
     dftu_series_free(flat_name);
     dftu_series_free(flat_dur);
     dftu_series_free(name);
@@ -133,7 +124,7 @@ std::uint64_t state_bytes(const void* state) {
 void free_buffer(void* data, void*) { delete[] static_cast<char*>(data); }
 
 int state_serialize(const void* state, dftu_bytes* out, dftu_error*) {
-    const std::string enc = encode(*static_cast<const Totals*>(state));
+    const dstd::String enc = encode(*static_cast<const Totals*>(state));
     char* buf = new char[enc.size() ? enc.size() : 1];
     std::memcpy(buf, enc.data(), enc.size());
     out->data = buf;
@@ -151,7 +142,7 @@ void* state_deserialize(void*, dftu_bytes in, dftu_error*) {
 int state_finalize(void* state, dftu_result_value* out, dftu_error*) {
     // Held past the call: the host copies BYTES results, but not until it
     // returns from here.
-    static thread_local std::string enc;
+    static thread_local dstd::String enc;
     enc = encode(*static_cast<Totals*>(state));
     out->kind = DFTU_RESULT_KIND_BYTES;
     out->u.bytes.data = enc.data();
@@ -197,12 +188,13 @@ dftu_plugin state_only_plugin() {
     return p;
 }
 
-FoldEvent evt(StringIntern& intern, const std::string& name,
-              std::uint64_t dur) {
-    FoldEvent fe;
+trace::views::detail::FoldEvent evt(dstd::StringIntern& intern,
+                                    const dstd::String& name,
+                                    std::uint64_t dur) {
+    trace::views::detail::FoldEvent fe;
     fe.cat_id = intern.get_or_insert("POSIX");
     fe.name_id = intern.get_or_insert(name);
-    fe.phase = RecordPhase::COMPLETE;
+    fe.phase = trace::RecordPhase::Complete;
     fe.pid = 1;
     fe.tid = 1;
     fe.ts = dur;
@@ -213,21 +205,26 @@ FoldEvent evt(StringIntern& intern, const std::string& name,
 
 // GROUPS distinct names, each seen once per slice, so every total depends on
 // the cross-slice merge as well as on any spill.
-std::vector<std::vector<FoldEvent>> slices(StringIntern& intern, int n_slices) {
-    std::vector<std::vector<FoldEvent>> out(static_cast<std::size_t>(n_slices));
+dstd::Vector<dstd::Vector<trace::views::detail::FoldEvent>> slices(
+    dstd::StringIntern& intern, int n_slices) {
+    dstd::Vector<dstd::Vector<trace::views::detail::FoldEvent>> out(
+        static_cast<std::size_t>(n_slices));
     for (int s = 0; s < n_slices; ++s)
         for (int i = 0; i < GROUPS; ++i)
             out[static_cast<std::size_t>(s)].push_back(
-                evt(intern, "op_" + std::to_string(i),
+                evt(intern, "op_" + dstd::to_string(i),
                     static_cast<std::uint64_t>((s + 1) * (i + 1))));
     return out;
 }
 
-void finalize_now(PluginFold& f) {
+void finalize_now(domains::plugins::PluginFold& f) {
     Runtime rt(1);
-    rt.scope("fin", [&](dftracer::utils::CoroScope&) -> coro::CoroTask<void> {
-          co_await f.finalize(views::detail::CoverageSet{});
-      }).wait();
+    dftu_utils_test::ok(
+        rt.submit(coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+                      co_await f.finalize(trace::views::detail::CoverageSet{});
+                  }),
+                  "fin")
+            .wait());
     rt.shutdown();
 }
 
@@ -238,23 +235,27 @@ struct RunResult {
 };
 
 RunResult run_state(bool spillable, std::uint64_t budget, int n_slices) {
-    StateRegistry registry{
-        RegisteredState{STATE_NAME, make_desc(spillable), nullptr}};
+    domains::plugins::StateRegistry registry{domains::plugins::RegisteredState{
+        STATE_NAME, make_desc(spillable), nullptr}};
     dftu_plugin p = state_only_plugin();
-    StringIntern intern;
-    NamedResultRegistry named;
-    PluginFold master(&p, intern, nullptr, &named, "state_test", budget,
-                      &registry);
-    for (const std::vector<FoldEvent>& evs : slices(intern, n_slices)) {
+    dstd::StringIntern intern;
+    plugins::NamedResultRegistry named;
+    domains::plugins::PluginFold master(&p, intern, nullptr, &named,
+                                        "state_test", budget, &registry);
+    for (const dstd::Vector<trace::views::detail::FoldEvent>& evs :
+         slices(intern, n_slices)) {
         auto slice = master.slice();
-        auto* pf = static_cast<PluginFold*>(slice.get());
-        ScanUnit unit{};
+        auto* pf = static_cast<domains::plugins::PluginFold*>(slice.get());
+        trace::views::detail::ScanUnit unit{};
         for (std::size_t at = 0; at < evs.size(); at += BATCH) {
             const std::size_t n = std::min<std::size_t>(BATCH, evs.size() - at);
-            pf->step(FoldBatch{
-                std::span<const FoldEvent>(evs.data() + at, n), unit, {}});
+            dftu_utils_test::ok(pf->step(trace::views::detail::FoldBatch{
+                dstd::Span<const trace::views::detail::FoldEvent>(
+                    evs.data() + at, n),
+                unit,
+                {}}));
         }
-        master.merge(*pf);
+        dftu_utils_test::ok(master.merge(*pf));
     }
 
     RunResult out;
@@ -264,7 +265,7 @@ RunResult run_state(bool spillable, std::uint64_t budget, int n_slices) {
 
     auto it = named.results().find(STATE_NAME);
     REQUIRE(it != named.results().end());
-    const auto& bytes = std::get<std::vector<std::byte>>(it->second);
+    const auto& bytes = std::get<dstd::Vector<std::byte>>(it->second);
     out.totals =
         decode(reinterpret_cast<const char*>(bytes.data()), bytes.size());
     return out;
@@ -276,7 +277,7 @@ RunResult run_state(bool spillable, std::uint64_t budget, int n_slices) {
 struct GrowingSlice {
     std::uint64_t held = 0;
     std::uint64_t events = 0;
-    std::vector<std::uint64_t> reclaims;
+    dstd::Vector<std::uint64_t> reclaims;
 };
 
 struct SliceRun {
@@ -334,20 +335,24 @@ dftu_plugin growing_plugin(bool reclaimable) {
 
 SliceRun run_slice(bool reclaimable, std::uint64_t budget, int n_slices) {
     dftu_plugin p = growing_plugin(reclaimable);
-    StringIntern intern;
-    NamedResultRegistry named;
-    PluginFold master(&p, intern, nullptr, &named, "slice_test", budget,
-                      nullptr);
-    for (const std::vector<FoldEvent>& evs : slices(intern, n_slices)) {
+    dstd::StringIntern intern;
+    plugins::NamedResultRegistry named;
+    domains::plugins::PluginFold master(&p, intern, nullptr, &named,
+                                        "slice_test", budget, nullptr);
+    for (const dstd::Vector<trace::views::detail::FoldEvent>& evs :
+         slices(intern, n_slices)) {
         auto slice = master.slice();
-        auto* pf = static_cast<PluginFold*>(slice.get());
-        ScanUnit unit{};
+        auto* pf = static_cast<domains::plugins::PluginFold*>(slice.get());
+        trace::views::detail::ScanUnit unit{};
         for (std::size_t at = 0; at < evs.size(); at += BATCH) {
             const std::size_t n = std::min<std::size_t>(BATCH, evs.size() - at);
-            pf->step(FoldBatch{
-                std::span<const FoldEvent>(evs.data() + at, n), unit, {}});
+            dftu_utils_test::ok(pf->step(trace::views::detail::FoldBatch{
+                dstd::Span<const trace::views::detail::FoldEvent>(
+                    evs.data() + at, n),
+                unit,
+                {}}));
         }
-        master.merge(*pf);
+        dftu_utils_test::ok(master.merge(*pf));
     }
     SliceRun out;
     out.reclaims = master.slice_reclaims();
@@ -363,7 +368,7 @@ Totals expected(int n_slices) {
     Totals want;
     for (int s = 0; s < n_slices; ++s)
         for (int i = 0; i < GROUPS; ++i)
-            want["op_" + std::to_string(i)] +=
+            want["op_" + dstd::to_string(i)] +=
                 static_cast<std::uint64_t>((s + 1) * (i + 1));
     return want;
 }
@@ -371,8 +376,10 @@ Totals expected(int n_slices) {
 }  // namespace
 
 TEST_CASE("a registered state merges across worker slices") {
-    const RunResult one = run_state(true, NO_SPILL_BUDGET, 1);
-    const RunResult many = run_state(true, NO_SPILL_BUDGET, 4);
+    const RunResult one =
+        run_state(true, dftracer::utils::memory::NO_SPILL_BUDGET, 1);
+    const RunResult many =
+        run_state(true, dftracer::utils::memory::NO_SPILL_BUDGET, 4);
 
     CHECK(one.runs == 0);
     CHECK(many.runs == 0);
@@ -384,7 +391,8 @@ TEST_CASE("a registered state merges across worker slices") {
 }
 
 TEST_CASE("a serializable state spills past the budget, same result") {
-    const RunResult want = run_state(true, NO_SPILL_BUDGET, 4);
+    const RunResult want =
+        run_state(true, dftracer::utils::memory::NO_SPILL_BUDGET, 4);
     const RunResult got = run_state(true, TINY_BUDGET, 4);
 
     // The mechanism, not just the answer: a budget that was silently ignored
@@ -406,7 +414,8 @@ TEST_CASE("a state with no serialize pair is refused a spill") {
 }
 
 TEST_CASE("a plugin's own slice is asked to reclaim past the budget") {
-    const SliceRun free = run_slice(true, NO_SPILL_BUDGET, 4);
+    const SliceRun free =
+        run_slice(true, dftracer::utils::memory::NO_SPILL_BUDGET, 4);
     const SliceRun held = run_slice(true, TINY_BUDGET, 4);
 
     CHECK(free.reclaims == 0);

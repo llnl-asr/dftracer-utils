@@ -243,6 +243,22 @@ type (``string``, ``bool``, ``int64``, ``uint64`` or ``float64``), ascending, so
 ``10`` follows ``9``; a group of nulls is an empty list, and a string may hold any
 byte. The trace aggregate keeps the text form only.
 
+Pre-aggregated counters and frames
+----------------------------------
+
+A pre-aggregated counter record stands for the events it counts.
+A trace aggregation counts it as its ``args.count`` events and takes its duration, size and offset statistics from its args.
+A frame holds rows, so the same record is one row of a frame, and a frame's ``count()`` is its number of rows.
+
+These shapes of a trace aggregation still run on frames, so a pre-aggregated record is one row there too:
+
+* percentiles and histograms;
+* a plan that decodes its records by path;
+* a time bucket on a plan with no schema;
+* a group key on an argument the index build did not keep.
+
+Every other unfiltered aggregation gives the same answer from the index, from the trace, and alone or beside other aggregations in one session.
+
 Occupancy: concurrency-aware duration
 -------------------------------------
 
@@ -426,14 +442,14 @@ Custom metrics (C++)
 When the built-in aggregate vocabulary cannot express a metric (custom
 bucketing, a representative value, a side output), fold over the raw scanned
 batches with ``map_batches``: your ``fold`` runs over each batch on one of
-``num_slots`` worker slots, and ``combine`` reduces the per-slot partials into
+``slot_count`` worker slots, and ``combine`` reduces the per-slot partials into
 one. This runs over the same index-pruned parallel scan the built-in aggregates
 use.
 
 .. code-block:: cpp
 
    auto result = View::from_file("trace.pfw.gz")
-                     .map_batches<MyPartial>(fold, combine, /*num_slots=*/8)
+                     .map_batches<MyPartial>(fold, combine, /*slot_count=*/8)
                      .get();
 
 This is a C++ / native surface; there is no Python equivalent. From Python, use

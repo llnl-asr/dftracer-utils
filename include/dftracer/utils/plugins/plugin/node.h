@@ -1,15 +1,16 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_PLUGINS_PLUGIN_NODE_H
 #define DFTRACER_UTILS_PLUGINS_PLUGIN_NODE_H
 
-#include <dftracer/utils/core/coro/abi.h>
+#include <dftracer/utils/coro/abi.h>
 #include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/plugins/plugin/source.h>
 
 #include <cstdint>
-#include <memory>
-#include <optional>
 #include <stdexcept>
-#include <string_view>
 #include <utility>
 
 /* A LazyFrame plan node written as a C++ class. node_vtable<N>() adapts N to
@@ -19,7 +20,7 @@
  * N provides:
  *   void output_schema(const SchemaView& in, const OpArgs& args,
  *                      SchemaBuilder& out) const;
- *   std::unique_ptr<C> open(InputCursor in, const OpArgs& args,
+ *   dstd::UniquePtr<C> open(InputCursor in, const OpArgs& args,
  *                           std::uint64_t memory_budget) const;
  * where C is a cursor type as in plugin/source.h (next, and optionally
  * narrow / resident_bytes / reclaim). The cursor owns `in` and pulls it with
@@ -55,10 +56,10 @@ class OpArgs {
     const dftu_op_val& operator[](int i) const { return a_->args[i]; }
     std::int64_t i64(int i) const { return a_->args[i].i64; }
     double f64(int i) const { return a_->args[i].f64; }
-    std::string_view str(int i) const {
+    dstd::StringView str(int i) const {
         const auto& s = a_->args[i].str;
-        return s.ptr ? std::string_view(s.ptr, static_cast<std::size_t>(s.len))
-                     : std::string_view();
+        return s.ptr ? dstd::StringView(s.ptr, static_cast<std::size_t>(s.len))
+                     : dstd::StringView();
     }
     const dftu_op_arg* raw() const noexcept { return a_; }
 
@@ -82,7 +83,7 @@ struct InputOwnership {
 class InputCursor {
    public:
     InputCursor(void* self, const dftu_cursor_vt* vt,
-                std::shared_ptr<detail::InputOwnership> own) noexcept
+                dstd::SharedPtr<detail::InputOwnership> own) noexcept
         : self_(self), vt_(vt), own_(std::move(own)) {}
     InputCursor(InputCursor&& o) noexcept
         : self_(o.self_),
@@ -100,9 +101,9 @@ class InputCursor {
         }
     }
 
-    /// The next upstream frame, or std::nullopt at the end of the stream.
+    /// The next upstream frame, or dstd::nullopt at the end of the stream.
     /// Throws std::runtime_error when the upstream fails.
-    std::optional<OwnedFrame> next(std::int64_t max_rows) {
+    dstd::Optional<OwnedFrame> next(std::int64_t max_rows) {
         dftu_result_frame out{};
         dftu_task* t = vt_->next(self_, max_rows, &out);
         if (t && dftu_task_run(dftu_default_runtime(), t) != 0)
@@ -110,7 +111,7 @@ class InputCursor {
         if (!DFTU_RESULT_OK(out))
             throw std::runtime_error(out.u.err.message ? out.u.err.message
                                                        : "upstream failed");
-        if (!out.u.value) return std::nullopt;
+        if (!out.u.value) return dstd::nullopt;
         return OwnedFrame(out.u.value);
     }
 
@@ -127,14 +128,14 @@ class InputCursor {
    private:
     void* self_;
     const dftu_cursor_vt* vt_;
-    std::shared_ptr<detail::InputOwnership> own_;
+    dstd::SharedPtr<detail::InputOwnership> own_;
 };
 
 namespace detail {
 
 template <class N>
 struct NodeBox {
-    std::unique_ptr<N> node;
+    dstd::UniquePtr<N> node;
 };
 
 template <class N>
@@ -152,7 +153,7 @@ struct NodeVt {
     static void* open(void* self, void* in_self, const dftu_cursor_vt* in_vt,
                       const dftu_op_arg* args, std::uint64_t memory_budget,
                       void** out_cursor_self, const dftu_cursor_vt** out_vt) {
-        auto own = std::make_shared<InputOwnership>();
+        auto own = dstd::make_shared<InputOwnership>();
         try {
             auto cursor = static_cast<NodeBox<N>*>(self)->node->open(
                 InputCursor(in_self, in_vt, own), OpArgs(args), memory_budget);
@@ -174,8 +175,8 @@ struct NodeVt {
     static void destroy(void* self) { delete static_cast<NodeBox<N>*>(self); }
 
     static const dftu_node_vt* vt() {
-        static const dftu_node_vt v = {output_schema, open, destroy};
-        return &v;
+        static const dftu_node_vt VT = {output_schema, open, destroy};
+        return &VT;
     }
 };
 
@@ -190,7 +191,7 @@ const dftu_node_vt* node_vtable() {
 /// Wrap `node` as the `self` its vtable expects. Ownership passes to whoever
 /// calls the vtable's destroy() on it.
 template <class N>
-void* make_node_self(std::unique_ptr<N> node) {
+void* make_node_self(dstd::UniquePtr<N> node) {
     return new detail::NodeBox<N>{std::move(node)};
 }
 

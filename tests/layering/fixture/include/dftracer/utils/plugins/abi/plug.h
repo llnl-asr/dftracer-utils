@@ -1,0 +1,4 @@
+// SPDX-License-Identifier: MIT
+#ifndef DFTRACER_UTILS_PLUGINS_ABI_PLUG_H
+#define DFTRACER_UTILS_PLUGINS_ABI_PLUG_H
+#endif

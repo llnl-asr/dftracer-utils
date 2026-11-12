@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Vectorized column authoring: a column expression evaluates on the native vec
 engine (our SIMD columnar format) and returns a native VecColumn. Arrow appears
 only when the test asks for it, via VecColumn.to_arrow()."""

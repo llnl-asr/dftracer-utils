@@ -1,15 +1,17 @@
+// SPDX-License-Identifier: MIT
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
+#include <dftracer/utils/dstd/any.h>
+#include <dftracer/utils/dstd/future.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/python/py_errors.h>
 #include <dftracer/utils/python/py_method.h>
 #include <dftracer/utils/python/py_runtime_mixin.h>
 #include <dftracer/utils/python/py_type_helpers.h>
 #include <dftracer/utils/python/task_handle.h>
 
-#include <any>
 #include <chrono>
 #include <future>
-#include <string>
 
 static void TaskHandle_dealloc(TaskHandleObject *self) {
     self->future.~shared_future();
@@ -22,9 +24,10 @@ static PyObject *TaskHandle_new(PyTypeObject *type, PyObject * /*args*/,
                                 PyObject * /*kwds*/) {
     TaskHandleObject *self = (TaskHandleObject *)type->tp_alloc(type, 0);
     if (self) {
-        new (&self->future) std::shared_future<void>();
-        new (&self->typed_future) std::shared_future<std::any>();
-        new (&self->name) std::string();
+        new (&self->future) dftracer::utils::dstd::SharedFuture<void>();
+        new (&self->typed_future)
+            dftracer::utils::dstd::SharedFuture<dftracer::utils::dstd::Any>();
+        new (&self->name) dftracer::utils::dstd::String();
         self->has_typed_future = false;
         self->task_id = -1;
     }
@@ -37,18 +40,17 @@ static PyObject *TaskHandle_get(TaskHandleObject *self,
         Py_RETURN_NONE;
     }
     if (self->has_typed_future) {
-        std::any result;
+        dftracer::utils::dstd::Any result;
         if (!run_blocking_r([&] { return self->typed_future.get(); }, result))
             return NULL;
         if (result.has_value()) {
-            try {
-                PyObject *obj = std::any_cast<PyObject *>(result);
-                if (obj) {
-                    Py_INCREF(obj);
-                    return obj;
+            // Not a PyObject* falls through to None
+            if (PyObject **obj =
+                    dftracer::utils::dstd::any_cast<PyObject *>(&result)) {
+                if (*obj) {
+                    Py_INCREF(*obj);
+                    return *obj;
                 }
-            } catch (const std::bad_any_cast &) {
-                // Not a PyObject* — fall through to None
             }
         }
         Py_RETURN_NONE;
@@ -97,51 +99,23 @@ static PyMethodDef TaskHandle_methods[] = {
      "Raises RuntimeError if the task failed."},
     {"done", DFTU_PYCFUNCTION(TaskHandle_done), METH_NOARGS,
      "Return True if task has completed."},
-    {NULL}};
+    {NULL, NULL, 0, NULL}};
 
 static PyGetSetDef TaskHandle_getsetters[] = {
     {"name", (getter)TaskHandle_get_name, NULL, "Task name", NULL},
     {"task_id", (getter)TaskHandle_get_task_id, NULL, "Task identifier", NULL},
-    {NULL}};
+    {NULL, NULL, NULL, NULL, NULL}};
 
 PyTypeObject TaskHandleType = {
-    PyVarObject_HEAD_INIT(NULL, 0) "dftracer_utils_ext.TaskHandle",
-    sizeof(TaskHandleObject),                       /* tp_basicsize */
-    0,                                              /* tp_itemsize */
-    (destructor)TaskHandle_dealloc,                 /* tp_dealloc */
-    0,                                              /* tp_vectorcall_offset */
-    0,                                              /* tp_getattr */
-    0,                                              /* tp_setattr */
-    0,                                              /* tp_as_async */
-    0,                                              /* tp_repr */
-    0,                                              /* tp_as_number */
-    0,                                              /* tp_as_sequence */
-    0,                                              /* tp_as_mapping */
-    0,                                              /* tp_hash */
-    0,                                              /* tp_call */
-    0,                                              /* tp_str */
-    0,                                              /* tp_getattro */
-    0,                                              /* tp_setattro */
-    0,                                              /* tp_as_buffer */
-    Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE,       /* tp_flags */
-    "Handle to an async task submitted to Runtime", /* tp_doc */
-    0,                                              /* tp_traverse */
-    0,                                              /* tp_clear */
-    0,                                              /* tp_richcompare */
-    0,                                              /* tp_weaklistoffset */
-    0,                                              /* tp_iter */
-    0,                                              /* tp_iternext */
-    TaskHandle_methods,                             /* tp_methods */
-    0,                                              /* tp_members */
-    TaskHandle_getsetters,                          /* tp_getset */
-    0,                                              /* tp_base */
-    0,                                              /* tp_dict */
-    0,                                              /* tp_descr_get */
-    0,                                              /* tp_descr_set */
-    0,                                              /* tp_dictoffset */
-    0,                                              /* tp_init */
-    0,                                              /* tp_alloc */
-    TaskHandle_new,                                 /* tp_new */
+    .ob_base = PyVarObject_HEAD_INIT(NULL, 0).tp_name =
+        "dftracer_utils_ext.TaskHandle",
+    .tp_basicsize = sizeof(TaskHandleObject),
+    .tp_dealloc = (destructor)TaskHandle_dealloc,
+    .tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE,
+    .tp_doc = "Handle to an async task submitted to Runtime",
+    .tp_methods = TaskHandle_methods,
+    .tp_getset = TaskHandle_getsetters,
+    .tp_new = TaskHandle_new,
 };
 
 int dftracer::utils::python::init_task_handle(PyObject *m) {

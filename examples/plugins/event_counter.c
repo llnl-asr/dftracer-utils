@@ -1,9 +1,10 @@
+// SPDX-License-Identifier: MIT
 /* Example dftracer-utils plugin in pure C, implementing the vtable directly
  * against abi.h with no C++ wrapper: counts events and tracks max duration.
  *
  * Build: cc -std=c99 -shared -fPIC -I<repo>/include \
  *           -o event_counter.so event_counter.c
- * Run:   dftracer_run -d ./traces --plugin ./event_counter.so
+ * Run:   dftracer_run ./traces --plugin ./event_counter.so
  */
 
 #include <dftracer/utils/dataframe/abi.h>
@@ -76,7 +77,8 @@ static void destroy(void* self) { (void)self; }
 
 static dftu_plugin g_plugin;
 
-DFTU_PLUGIN_EXPORT dftu_plugin* dftracer_plugin(dftu_plugin_host* h, const dftu_value* config) {
+DFTU_PLUGIN_EXPORT dftu_plugin* dftracer_plugin(dftu_plugin_host* h,
+                                                const dftu_value* config) {
     (void)h;
     (void)config;
     g_plugin.abi_version = DFTRACER_UTILS_PLUGIN_ABI_VERSION;

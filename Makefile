@@ -1,4 +1,4 @@
-.PHONY: coverage coverage-clean coverage-view coverage-open test test-coverage test-py build clean format check-format cmake-format lint typecheck help \
+.PHONY: coverage coverage-clean coverage-view coverage-open test test-coverage test-py test-single build clean format check-format cmake-format lint typecheck help \
         valgrind valgrind-cpp valgrind-py valgrind-mpi valgrind-build valgrind-shell valgrind-clean \
         docker-test-gcc12 docker-test-latest
 
@@ -19,6 +19,7 @@ help:
 	@echo "  test            - Build and run tests without coverage"
 	@echo "  test-coverage   - Run tests with coverage (requires prior coverage build)"
 	@echo "  test-py         - Run Python tests in isolated venv"
+	@echo "  test-single     - Build, ctest and pytest with the single library option"
 	@echo "  format          - Format code using clang-format"
 	@echo "  check-format    - Check code formatting"
 	@echo "  cmake-format    - Format CMake files"
@@ -89,6 +90,22 @@ test-py:
 	fi
 	@rm -rf .venv_test_py
 	@echo "Python tests completed successfully!"
+
+# Build with DFTRACER_UTILS_SINGLE_LIBRARY, run ctest, then install the Python
+# extension the same way and run pytest.
+test-single:
+	@echo "Building and running tests with a single library..."
+	@cmake --preset tests-single
+	@cmake --build --preset tests-single $(if $(BUILD_JOBS),-j $(BUILD_JOBS))
+	@ctest --preset tests-single $(CTEST_ARGS)
+	@rm -rf .venv_test_single
+	@python3 -m venv .venv_test_single
+	@.venv_test_single/bin/pip install --upgrade pip setuptools wheel
+	@$(if $(BUILD_JOBS),CMAKE_BUILD_PARALLEL_LEVEL=$(BUILD_JOBS) ).venv_test_single/bin/pip install -e .[dev] --config-settings=cmake.define.DFTRACER_UTILS_SINGLE_LIBRARY=ON --config-settings=build-dir='build/{wheel_tag}-single'
+	@cmake -DEXTENSION="$$(.venv_test_single/bin/python -c 'import dftracer.utils.dftracer_utils_ext as m; print(m.__file__)')" -DTOOL=build/build-tests-single/bin/dftracer_info -P cmake/scripts/check_single_library.cmake
+	@.venv_test_single/bin/pytest tests/python -v
+	@rm -rf .venv_test_single
+	@echo "Single library tests completed successfully!"
 
 # Valgrind tests
 VALGRIND_MAKE = $(MAKE) --no-print-directory -C tests/valgrind

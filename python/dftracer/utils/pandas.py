@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The pandas-shaped face of the engine: ``import dftracer.utils.pandas as pd``.
 
 ``DataFrame`` and ``Series`` are the engine's own classes (every op runs in

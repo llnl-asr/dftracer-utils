@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """``apply`` / ``map`` over a user function, engine-first.
 
 A Python callable is tried in three tiers, fastest first:

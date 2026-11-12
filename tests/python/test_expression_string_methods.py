@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The expression forms of the eager ``Series.str`` methods: each gives the
 eager result (values, nulls, types) and, where pandas has the method, pandas'."""
 

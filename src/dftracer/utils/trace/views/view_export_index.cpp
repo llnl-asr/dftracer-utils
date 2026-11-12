@@ -1,17 +1,25 @@
-#include <dftracer/utils/core/common/constants.h>
-#include <dftracer/utils/core/common/error.h>
-#include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/common/string_intern.h>
-#include <dftracer/utils/core/coro/channel.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
-#include <dftracer/utils/index/build/batch_builder.h>
-#include <dftracer/utils/index/build/chunk_indexer.h>
-#include <dftracer/utils/index/extensions/bloom_fold.h>
-#include <dftracer/utils/index/gzip/gzip_member_record.h>
-#include <dftracer/utils/index/store/index_database.h>
-#include <dftracer/utils/index/store/index_database_writer_context.h>
-#include <dftracer/utils/index/store/internal/helpers.h>
+// SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/coro/channel.h>
+#include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dstd/intern_cache.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/fileio/file_helpers.h>
+#include <dftracer/utils/fileio/gzip_line_writer.h>
 #include <dftracer/utils/json/record_parser.h>
+#include <dftracer/utils/json/value.h>
+#include <dftracer/utils/json/value_access.h>
+#include <dftracer/utils/trace/index/build/batch_builder.h>
+#include <dftracer/utils/trace/index/build/chunk_indexer.h>
+#include <dftracer/utils/trace/index/extensions/bloom_fold.h>
+#include <dftracer/utils/trace/index/gzip/gzip_member_record.h>
+#include <dftracer/utils/trace/index/index.h>
+#include <dftracer/utils/trace/index/store/root_layout.h>
+#include <dftracer/utils/trace/index/tables.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/coverage.h>
 #include <dftracer/utils/trace/views/fold.h>
@@ -20,7 +28,6 @@
 #include <dftracer/utils/trace/views/view_executor.h>
 #include <dftracer/utils/trace/views/view_scan.h>
 #include <dftracer/utils/trace/views/view_scanner_utility.h>
-#include <dftracer/utils/utilities/fileio/gzip_line_writer.h>
 #include <simdjson.h>
 
 #include <algorithm>
@@ -28,11 +35,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
-#include <memory>
 #include <mutex>
-#include <span>
-#include <string>
-#include <vector>
 
 // Fused export + index: write the View's events as a new multi-member trace AND
 // build its member+bloom+stats index in one pass (no re-inflate of the output).
@@ -44,69 +47,80 @@ namespace dftracer::utils::trace::views::detail {
 namespace {
 
 // Per-part index data, accumulated while writing and persisted together at the
-// end so all parts land in one index transaction sharing one index_path.
+// end, all under one index_path.
 struct PartData {
-    std::string path;
-    std::vector<dftracer::utils::index::gzip::GzipMemberRecord> members;
+    dstd::String path;
+    dstd::Vector<dftracer::utils::trace::index::gzip::GzipMemberRecord> members;
     std::uint64_t total_uc = 0;
     std::uint64_t total_lines = 0;
 };
 
 }  // namespace
 
-coro::CoroTask<ExportStats> run_export_trace_indexed(
+coro::CoroTask<dstd::Result<ExportStats>> run_export_trace_indexed(
     const ViewPlan& plan, const TraceWriteOptions& opts,
     const ProgressFn* progress) {
     // Member size defaults to the checkpoint granularity (a member == a chunk).
     constexpr std::size_t DEFAULT_FLUSH_BYTES =
-        constants::indexer::DEFAULT_CHECKPOINT_SIZE;
+        common::constants::indexer::DEFAULT_CHECKPOINT_SIZE;
     constexpr std::size_t MAX_PRODUCERS = 16;
 
-    ViewDefinition vdef = make_vdef(plan, /*for_aggregation=*/false);
+    auto made = make_vdef(plan, /*for_aggregation=*/false);
+    if (!made) co_return made.error();
+    ViewDefinition vdef = std::move(*made);
     std::uint64_t skipped = 0;
-    auto units = co_await gather_units(plan, vdef, skipped);
+    auto gathered = co_await gather_units(plan, vdef, skipped);
+    if (!gathered) co_return gathered.error();
+    auto units = std::move(*gathered);
 
     const std::size_t member_size =
         opts.member_size ? opts.member_size : DEFAULT_FLUSH_BYTES;
     const std::size_t part_size = opts.part_size;  // 0 = single file
     const bool multi = part_size > 0;
 
-    const std::size_t num_producers = std::max<std::size_t>(
+    const std::size_t producer_count = std::max<std::size_t>(
         1, std::min<std::size_t>(std::max<std::size_t>(units.size(), 1),
                                  MAX_PRODUCERS));
 
     // Index folds key their state per file_path, so one fold set spans all
     // parts; finalize (after the members are committed) writes the bloom.
-    const std::string index_path = trace::internal::determine_index_path(
+    const dstd::String index_path = trace::internal::determine_index_path(
         opts.output_path, opts.index_path);
     const auto& schema = plan_record_schema(plan);
-    dftracer::utils::StringIntern intern;
-    dftracer::utils::index::extensions::BloomFold bloom(
-        intern, dftracer::utils::index::build::for_schema({}, schema));
+    dftracer::utils::dstd::StringIntern intern;
+    dftracer::utils::trace::index::extensions::BloomFold bloom(
+        intern, dftracer::utils::trace::index::build::for_schema({}, schema));
     std::array<Fold*, 1> folds{&bloom};
 
-    std::vector<PartData> parts;
+    dstd::Vector<PartData> parts;
     std::atomic<std::uint64_t> matched{0}, scanned{0}, units_done{0};
     std::atomic<std::uint64_t> invalid{0}, unconverted{0};
     bool ok = true;
     // Set when the consumer fails, so producers stop scanning.
     std::atomic<bool> failed{false};
+    // The first error of the producers, which a scan error also stops.
+    std::mutex scan_error_mu;
+    dstd::Optional<dstd::Error> scan_error;
 
     // Each fold call takes a slice (parser, scratch and BloomFold slice), so
     // workers share no state; all slices merge into `bloom` after the writer
     // closes.
     struct FoldSlice {
-        std::unique_ptr<Fold> bloom;
+        explicit FoldSlice(dftracer::utils::dstd::StringIntern& table)
+            : cache(table) {}
+        dstd::UniquePtr<Fold> bloom;
         dftracer::utils::json::RecordParser parser;
-        std::string parse_buf;
+        dftracer::utils::json::Document document;
+        dftracer::utils::dstd::InternCache cache;
+        dstd::String parse_buf;
         FoldEventBuffer events;
     };
     std::mutex pool_mu;
-    std::vector<std::unique_ptr<FoldSlice>> pool;
+    dstd::Vector<dstd::UniquePtr<FoldSlice>> pool;
 
-    auto fold_member = [&](const utilities::fileio::MemberRef& ref,
-                           std::string_view data) {
-        std::unique_ptr<FoldSlice> sl;
+    auto fold_member_body = [&](const fileio::MemberRef& ref,
+                                dstd::StringView data) -> dstd::Result<void> {
+        dstd::UniquePtr<FoldSlice> sl;
         {
             std::lock_guard<std::mutex> lk(pool_mu);
             if (!pool.empty()) {
@@ -115,43 +129,60 @@ coro::CoroTask<ExportStats> run_export_trace_indexed(
             }
         }
         if (!sl) {
-            sl = std::make_unique<FoldSlice>();
+            sl = dstd::make_unique<FoldSlice>(intern);
             sl->bloom = bloom.slice();
         }
         sl->events.clear();
         for (std::size_t ls = 0, i = 0; i < data.size(); ++i) {
             if (data[i] != '\n') continue;
-            std::string_view line = data.substr(ls, i - ls);
+            dstd::StringView line = data.substr(ls, i - ls);
             ls = i + 1;
             if (line.empty()) continue;
+            if (vdef.by_path) {
+                auto parsed = sl->document.parse(line);
+                if (!parsed) continue;
+                FoldEvent& fe = sl->events.append();
+                decode_record_into(fe, *parsed, intern, /*capture_schema=*/true,
+                                   nullptr, vdef.record_schema, nullptr,
+                                   INDEX_MAX_CHILDREN, nullptr,
+                                   /*skip_never_indexed=*/true, &sl->cache);
+                if (json::detail::ValueAccess::broken(*parsed))
+                    sl->events.discard_last();
+                continue;
+            }
             sl->parse_buf.assign(line);
             sl->parse_buf.resize(line.size() + simdjson::SIMDJSON_PADDING,
                                  '\0');
             auto doc =
                 sl->parser.parse(sl->parse_buf.data(), line.size(), false);
-            if (doc.error()) continue;
-            if (vdef.by_path)
-                decode_record_into(sl->events.append(), doc.value_unsafe(),
-                                   intern, /*capture_schema=*/true, nullptr,
-                                   vdef.record_schema, nullptr,
-                                   INDEX_MAX_CHILDREN, nullptr,
-                                   /*skip_never_indexed=*/true);
-            else
+            if (!doc.error()) {
                 extract_fold_event_into(sl->events.append(), doc.value_unsafe(),
                                         intern, /*needs_args=*/true,
                                         /*extra_fields=*/nullptr,
                                         /*capture_schema=*/true);
+                continue;
+            }
+            auto parsed = sl->document.parse(line);
+            if (!parsed) continue;
+            FoldEvent& fe = sl->events.append();
+            extract_fold_event_into(fe, *parsed, intern, /*needs_args=*/true,
+                                    &sl->cache, /*nested_captures=*/nullptr,
+                                    /*capture_schema=*/true);
+            if (json::detail::ValueAccess::broken(*parsed))
+                sl->events.discard_last();
         }
         ScanUnit unit;
-        unit.file_path = utilities::fileio::gzip_part_path(
+        unit.file_path = fileio::gzip_part_path(
             opts.output_path, static_cast<int>(ref.part), multi);
         unit.index_path = index_path;
         unit.checkpoint_idx = ref.part_index;
         FoldBatch fb{sl->events.events(), unit};
-        sl->bloom->step(fb);
+        auto stepped = sl->bloom->step(fb);
+        if (!stepped) return stepped.error();
         sl->bloom->seal_unit(unit);
         std::lock_guard<std::mutex> lk(pool_mu);
         pool.push_back(std::move(sl));
+        return {};
     };
 
     auto part_at = [&](std::size_t p) -> PartData& {
@@ -159,18 +190,18 @@ coro::CoroTask<ExportStats> run_export_trace_indexed(
         return parts[p];
     };
 
-    utilities::fileio::GzipWriterOptions wopts;
+    fileio::GzipWriterOptions wopts;
     wopts.member_size = member_size;
     wopts.level = opts.level;
-    wopts.workers = opts.num_workers;
+    wopts.workers = opts.worker_count;
     wopts.part_size = part_size;
     wopts.compress = opts.compress;
     wopts.part_name = [&](std::size_t i) {
-        return utilities::fileio::gzip_part_path(opts.output_path,
-                                                 static_cast<int>(i), multi);
+        return fileio::gzip_part_path(opts.output_path, static_cast<int>(i),
+                                      multi);
     };
-    wopts.on_member = [&](const utilities::fileio::MemberInfo& m) {
-        dftracer::utils::index::gzip::GzipMemberRecord rec;
+    wopts.on_member = [&](const fileio::MemberInfo& m) {
+        dftracer::utils::trace::index::gzip::GzipMemberRecord rec;
         auto& pd = part_at(m.part);
         rec.member_idx = pd.members.size();
         rec.c_offset = m.c_offset;
@@ -181,156 +212,176 @@ coro::CoroTask<ExportStats> run_export_trace_indexed(
         rec.last_line_num = rec.first_line_num + (m.lines ? m.lines - 1 : 0);
         pd.members.push_back(rec);
     };
-    wopts.on_part = [&](std::size_t part, const std::string& path,
+    wopts.on_part = [&](std::size_t part, dstd::StringView path,
                         std::uint64_t uc_bytes, std::uint64_t lines) {
         auto& pd = part_at(part);
         pd.path = path;
         pd.total_uc = uc_bytes;
         pd.total_lines = lines;
     };
-    wopts.fold = fold_member;
-    auto opened = co_await utilities::fileio::GzipLineWriter::open(
-        opts.output_path, std::move(wopts));
+    wopts.fold = [&](const fileio::MemberRef& ref,
+                     dstd::StringView data) -> dstd::Result<void> {
+        return fold_member_body(ref, data);
+    };
+    auto opened = co_await fileio::GzipLineWriter::open(
+        dstd::String(opts.output_path), std::move(wopts));
     if (!opened) {
-        throw DFTUtilsException(
-            ErrorCode::IO, "export_trace failed writing " + opts.output_path);
+        co_return common::make_error<"export_trace failed writing {}">(
+            common::ErrorCode::Io, opts.output_path);
     }
     auto writer = std::move(*opened);
 
-    auto ch = coro::make_channel<std::string>(2 * num_producers + 1);
+    auto ch = coro::make_channel<dstd::String>(2 * producer_count + 1);
 
-    co_await run_coro_scope([&](CoroScope& scope) -> coro::CoroTask<void> {
-        co_await scope.scope([&](CoroScope& child) -> coro::CoroTask<void> {
-            // Consumer: append batches in arrival order; the writer cuts
-            // members and names their parts.
-            child.spawn([&](CoroScope&) -> coro::CoroTask<void> {
-                auto cons = ch->consumer();
-                while (auto item = co_await cons.receive()) {
-                    if (co_await writer.append(*item)) continue;
-                    ok = false;
-                    failed.store(true, std::memory_order_relaxed);
-                    // Drain, so producers blocked on the channel finish.
-                    while (co_await cons.receive()) {
-                    }
-                    co_return;
+    co_await coro::with_scope([&](coro::Scope& child) -> coro::CoroTask<void> {
+        // Consumer: append batches in arrival order; the writer cuts
+        // members and names their parts.
+        child.spawn([&]() -> coro::CoroTask<void> {
+            auto cons = ch->consumer();
+            for (;;) {
+                auto item = co_await cons.receive();
+                if (!item) break;
+                const auto append_ok = co_await writer.append(*item);
+                if (append_ok) continue;
+                ok = false;
+                failed.store(true, std::memory_order_relaxed);
+                // Drain, so producers blocked on the channel finish.
+                for (;;) {
+                    const auto receive_ok = co_await cons.receive();
+                    if (!receive_ok) break;
                 }
                 co_return;
-            });
-
-            // One shared producer, captured by reference (GCC rejects a
-            // move-only init-capture in a coroutine lambda) and released when
-            // this sub-scope joins, so the channel closes and the consumer
-            // drains before close().
-            {
-                auto prod = ch->producer();
-                co_await child.scope([&](CoroScope& workers)
-                                         -> coro::CoroTask<void> {
-                    for (std::size_t w = 0; w < num_producers; ++w) {
-                        workers.spawn([&,
-                                       w](CoroScope&) -> coro::CoroTask<void> {
-                            std::string batch;
-                            for (std::size_t i = w; i < units.size();
-                                 i += num_producers) {
-                                if (is_cancelled(plan) ||
-                                    failed.load(std::memory_order_relaxed))
-                                    co_return;
-                                ViewScannerInput sin = make_scanner_input(
-                                    units[i], vdef, vdef.query);
-                                ViewScannerUtility scanner;
-                                auto gen = scanner(sin);
-                                while (auto b = co_await gen.next()) {
-                                    if (is_cancelled(plan) ||
-                                        failed.load(std::memory_order_relaxed))
-                                        co_return;
-                                    matched.fetch_add(
-                                        b->events_matched,
-                                        std::memory_order_relaxed);
-                                    scanned.fetch_add(
-                                        b->events_scanned,
-                                        std::memory_order_relaxed);
-                                    invalid.fetch_add(
-                                        b->lines_invalid,
-                                        std::memory_order_relaxed);
-                                    unconverted.fetch_add(
-                                        b->values_unconverted,
-                                        std::memory_order_relaxed);
-                                    if (b->events.empty()) continue;
-                                    batch.clear();
-                                    for (const auto& ev : b->events) {
-                                        batch.append(ev);
-                                        batch.push_back('\n');
-                                    }
-                                    co_await prod.send(batch);
-                                }
-                                if (progress)
-                                    (*progress)(
-                                        units_done.fetch_add(
-                                            1, std::memory_order_relaxed) +
-                                            1,
-                                        units.size());
-                            }
-                            co_return;
-                        });
-                    }
-                    co_return;
-                });
             }
             co_return;
         });
+
+        // One shared producer, captured by reference (GCC rejects a
+        // move-only init-capture in a coroutine lambda) and released when
+        // this sub-scope joins, so the channel closes and the consumer
+        // drains before close().
+        {
+            auto prod = ch->producer();
+            co_await coro::with_scope([&](coro::Scope& workers)
+                                          -> coro::CoroTask<void> {
+                for (std::size_t w = 0; w < producer_count; ++w) {
+                    workers.spawn([&, w]() -> coro::CoroTask<void> {
+                        dstd::String batch;
+                        for (std::size_t i = w; i < units.size();
+                             i += producer_count) {
+                            if (is_cancelled(plan) ||
+                                failed.load(std::memory_order_relaxed))
+                                co_return;
+                            ViewScannerInput sin =
+                                make_scanner_input(units[i], vdef, vdef.query);
+                            ViewScannerUtility scanner;
+                            auto gen = scanner(sin);
+                            for (;;) {
+                                auto next = co_await gen.next();
+                                if (!next) break;
+                                if (!*next) {
+                                    {
+                                        std::lock_guard<std::mutex> lk(
+                                            scan_error_mu);
+                                        if (!scan_error)
+                                            scan_error = next->error();
+                                    }
+                                    failed.store(true,
+                                                 std::memory_order_relaxed);
+                                    co_return;
+                                }
+                                auto& b = *next;
+                                if (is_cancelled(plan) ||
+                                    failed.load(std::memory_order_relaxed))
+                                    co_return;
+                                matched.fetch_add(b->events_matched,
+                                                  std::memory_order_relaxed);
+                                scanned.fetch_add(b->events_scanned,
+                                                  std::memory_order_relaxed);
+                                invalid.fetch_add(b->lines_invalid,
+                                                  std::memory_order_relaxed);
+                                unconverted.fetch_add(
+                                    b->values_unconverted,
+                                    std::memory_order_relaxed);
+                                if (b->events.empty()) continue;
+                                batch.clear();
+                                for (const auto& ev : b->events) {
+                                    batch.append(ev);
+                                    batch.push_back('\n');
+                                }
+                                co_await prod.send(batch);
+                            }
+                            if (progress)
+                                (*progress)(units_done.fetch_add(
+                                                1, std::memory_order_relaxed) +
+                                                1,
+                                            units.size());
+                        }
+                        co_return;
+                    });
+                }
+                co_return;
+            });
+        }
+        co_return;
     });
 
-    if (ok && !co_await writer.close()) ok = false;
+    if (ok) {
+        const auto closed = co_await writer.close();
+        if (!closed) ok = false;
+    }
+    if (scan_error) co_return *scan_error;
     if (!ok || parts.empty()) {
-        throw DFTUtilsException(
-            ErrorCode::IO, "export_trace failed writing " + opts.output_path);
+        co_return common::make_error<"export_trace failed writing {}">(
+            common::ErrorCode::Io, opts.output_path);
     }
 
-    for (auto& sl : pool) bloom.merge(*sl->bloom);
+    for (auto& sl : pool)
+        if (auto merged = bloom.merge(*sl->bloom); !merged)
+            co_return merged.error();
 
-    // Persist the index for every part in one transaction. Registering each
-    // with its exact mtime/size makes the resolver accept it as fresh; any
-    // later edit trips the stale check and rebuilds.
-    try {
-        dftracer::utils::index::store::IndexDatabase db(index_path);
-        auto w = db.begin_write();
+    // Persist the index of every part, one commit each. Registering each with
+    // its exact mtime/size makes the resolver accept it as fresh; any later
+    // edit trips the stale check and rebuilds.
+    {
+        using trace::index::store::IndexExtension;
+        dstd::String failure;
+        auto index = trace::index::Index::open(
+            trace::index::normalize_index_root(index_path));
+        if (!index) failure = dstd::String(index.error().message());
         // BloomFold::finalize below writes the dft.index data; until then
-        // the parts have members but no bloom tier, which a later scan fills.
-        namespace records = dftracer::utils::index::store::records;
-        using dftracer::utils::index::store::IndexExtension;
+        // the parts have members but no bloom tier, which a later scan
+        // fills.
         for (const auto& part : parts) {
-            auto logical =
-                dftracer::utils::index::store::internal::get_logical_path(
-                    part.path);
-            const auto hash =
-                dftracer::utils::index::store::internal::calculate_file_hash(
-                    part.path);
+            if (!failure.empty()) break;
+            auto logical = fileio::get_logical_path(part.path);
+            const auto hash = fileio::calculate_file_hash(part.path);
             const auto mtime = static_cast<std::uint64_t>(
-                dftracer::utils::index::store::internal::
-                    get_file_modification_time(part.path));
-            const auto bytes =
-                dftracer::utils::index::store::internal::file_size_bytes(
-                    part.path);
-            const int fid = w->file_id_for(logical);
-            records::put_file_record(
-                *w, logical,
-                {static_cast<std::uint32_t>(fid), mtime, hash, bytes});
-            for (auto ext : {IndexExtension::ZONEMAP, IndexExtension::BLOOM,
-                             IndexExtension::COUNTS, IndexExtension::POSTINGS,
-                             IndexExtension::STATS})
-                records::clear_file(*w, ext, fid);
-            records::clear_file(*w, IndexExtension::MEMBERS, fid);
+                fileio::get_file_modification_time(part.path));
+            const auto bytes = fileio::file_size_bytes(part.path);
+            auto build = index->build(
+                logical, trace::index::SourceStat{mtime, bytes, hash});
+            if (!build) {
+                failure = dstd::String(build.error().message());
+                break;
+            }
+            for (auto ext : {IndexExtension::Zonemap, IndexExtension::Bloom,
+                             IndexExtension::Counts, IndexExtension::Postings,
+                             IndexExtension::Stats})
+                build->clear(ext);
             for (const auto& m : part.members)
-                records::put_gzip_member(*w, fid, m);
-            records::put_file_metadata(*w, fid, member_size, part.total_lines,
-                                       part.total_uc, false);
-            records::put_manifest(*w, fid, IndexExtension::MEMBERS, 0);
-            records::put_profile(*w, fid, schema.id, schema.params_hash());
+                trace::index::put_gzip_member(*build, m);
+            trace::index::put_file_metadata(
+                *build, member_size, part.total_lines, part.total_uc, false);
+            build->finish(IndexExtension::Members, 0);
+            trace::index::put_profile(*build, schema.id);
+            build->finish(IndexExtension::Profile, schema.params_hash());
+            auto committed = co_await build->commit();
+            if (!committed) failure = dstd::String(committed.error().message());
         }
-        w->commit();
-    } catch (const std::exception& e) {
-        throw DFTUtilsException(ErrorCode::IO,
-                                std::string("fused index build failed for ") +
-                                    opts.output_path + ": " + e.what());
+        if (!failure.empty()) {
+            co_return common::make_error<"fused index build failed for {}: {}">(
+                common::ErrorCode::Io, opts.output_path, failure);
+        }
     }
 
     // Members are committed, so the folds' finalize can open the index, resolve

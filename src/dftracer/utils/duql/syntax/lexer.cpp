@@ -1,29 +1,28 @@
+// SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/str_format.h>
+#include <dftracer/utils/dstd/ascii.h>
+#include <dftracer/utils/dstd/fmt.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/syntax/lexer.h>
-
-#include <cctype>
-#include <string>
 
 namespace dftracer::utils::duql::syntax {
 
 namespace {
 
-bool name_start(char c) {
-    return std::isalpha(static_cast<unsigned char>(c)) || c == '_';
-}
+bool name_start(char c) { return dstd::is_ascii_alpha(c) || c == '_'; }
 
-bool name_char(char c) {
-    return std::isalnum(static_cast<unsigned char>(c)) || c == '_';
-}
+bool name_char(char c) { return dstd::is_ascii_alnum(c) || c == '_'; }
 
-bool digit(char c) { return std::isdigit(static_cast<unsigned char>(c)); }
+bool digit(char c) { return dstd::is_ascii_digit(c); }
 
-constexpr std::string_view DURATION_UNITS[] = {"ns", "us", "ms", "s",
+constexpr dstd::StringView DURATION_UNITS[] = {"ns", "us", "ms", "s",
                                                "m",  "h",  "d"};
 
 }  // namespace
 
-duql::DuqlError make_error(std::string_view source, std::size_t offset,
-                           std::size_t length, std::string message) {
+duql::DuqlError make_error(dstd::StringView source, std::size_t offset,
+                           std::size_t length, dstd::String message) {
     if (offset > source.size()) offset = source.size();
     std::size_t line = 1;
     std::size_t line_start = 0;
@@ -33,20 +32,20 @@ duql::DuqlError make_error(std::string_view source, std::size_t offset,
             line_start = i + 1;
         }
     std::size_t line_end = source.find('\n', line_start);
-    if (line_end == std::string_view::npos) line_end = source.size();
+    if (line_end == dstd::StringView::npos) line_end = source.size();
     const std::size_t column = offset - line_start;
-    std::string indicator(column, ' ');
+    dstd::String indicator(column, ' ');
     indicator += '^';
     for (std::size_t i = 1; i < length; ++i) indicator += '~';
     return duql::DuqlError{
         std::move(message), column,
-        std::string(source.substr(line_start, line_end - line_start)),
+        dstd::String(source.substr(line_start, line_end - line_start)),
         std::move(indicator), line};
 }
 
-dftracer::utils::expected<std::vector<Token>, duql::DuqlError> lex(
-    std::string_view src) {
-    std::vector<Token> out;
+dftracer::utils::dstd::Expected<dstd::Vector<Token>, duql::DuqlError> lex(
+    dstd::StringView src) {
+    dstd::Vector<Token> out;
     std::size_t pos = 0;
     bool adjacent = false;
     auto push = [&](Tok kind, std::size_t start, std::size_t len) {
@@ -58,7 +57,7 @@ dftracer::utils::expected<std::vector<Token>, duql::DuqlError> lex(
 
     while (true) {
         while (pos < src.size()) {
-            if (std::isspace(static_cast<unsigned char>(src[pos]))) {
+            if (::dftracer::utils::dstd::is_ascii_space(src[pos])) {
                 ++pos;
                 adjacent = false;
             } else if (src[pos] == '#') {
@@ -77,10 +76,10 @@ dftracer::utils::expected<std::vector<Token>, duql::DuqlError> lex(
             std::size_t i = pos + 1;
             while (i < src.size() && src[i] != c) i += src[i] == '\\' ? 2 : 1;
             if (i >= src.size())
-                return dftracer::utils::unexpected(
+                return dftracer::utils::dstd::Unexpected(
                     make_error(src, start, src.size() - start,
                                "Unterminated string literal"));
-            out.push_back({Tok::STRING, src.substr(start + 1, i - start - 1),
+            out.push_back({Tok::String, src.substr(start + 1, i - start - 1),
                            start, adjacent});
             pos = i + 1;
             adjacent = true;
@@ -88,12 +87,12 @@ dftracer::utils::expected<std::vector<Token>, duql::DuqlError> lex(
         }
         if (c == '`') {
             const std::size_t close = src.find('`', pos + 1);
-            if (close == std::string_view::npos || close == pos + 1)
-                return dftracer::utils::unexpected(make_error(
+            if (close == dstd::StringView::npos || close == pos + 1)
+                return dftracer::utils::dstd::Unexpected(make_error(
                     src, start, 1,
-                    close == std::string_view::npos ? "Unterminated quoted key"
+                    close == dstd::StringView::npos ? "Unterminated quoted key"
                                                     : "Empty quoted key"));
-            out.push_back({Tok::QNAME, src.substr(start + 1, close - start - 1),
+            out.push_back({Tok::Qname, src.substr(start + 1, close - start - 1),
                            start, adjacent});
             pos = close + 1;
             adjacent = true;
@@ -118,28 +117,28 @@ dftracer::utils::expected<std::vector<Token>, duql::DuqlError> lex(
             std::size_t j = i;
             while (name_char(at(j))) ++j;
             if (j == i) {
-                push(is_float ? Tok::FLOAT : Tok::INT, start, i - start);
+                push(is_float ? Tok::Float : Tok::Int, start, i - start);
                 continue;
             }
-            const std::string_view suffix = src.substr(i, j - i);
+            const dstd::StringView suffix = src.substr(i, j - i);
             bool unit = false;
             for (auto u : DURATION_UNITS) unit |= suffix == u;
             if (!unit)
-                return dftracer::utils::unexpected(
+                return dftracer::utils::dstd::Unexpected(
                     make_error(src, start, j - start, "Invalid number"));
-            push(Tok::DURATION, start, j - start);
+            push(Tok::Duration, start, j - start);
             continue;
         }
         if (name_start(c)) {
             std::size_t i = pos;
             while (name_char(at(i))) ++i;
-            push(Tok::NAME, start, i - start);
+            push(Tok::Name, start, i - start);
             continue;
         }
         if (c == '$' && name_start(n)) {
             std::size_t i = pos + 1;
             while (name_char(at(i))) ++i;
-            out.push_back({Tok::PARAM, src.substr(start + 1, i - start - 1),
+            out.push_back({Tok::Param, src.substr(start + 1, i - start - 1),
                            start, adjacent});
             pos = i;
             adjacent = true;
@@ -149,96 +148,96 @@ dftracer::utils::expected<std::vector<Token>, duql::DuqlError> lex(
         switch (c) {
             case '=':
                 if (n == '>') {
-                    push(Tok::FATARROW, start, 2);
+                    push(Tok::Fatarrow, start, 2);
                     continue;
                 }
-                push(n == '=' ? Tok::EQ : Tok::ASSIGN, start, n == '=' ? 2 : 1);
+                push(n == '=' ? Tok::Eq : Tok::Assign, start, n == '=' ? 2 : 1);
                 continue;
             case '!':
                 if (n == '=') {
-                    push(Tok::NE, start, 2);
+                    push(Tok::Ne, start, 2);
                     continue;
                 }
                 if (n == '~') {
                     const bool i = at(pos + 2) == '*';
-                    push(i ? Tok::NIREGEX : Tok::NREGEX, start, i ? 3 : 2);
+                    push(i ? Tok::Niregex : Tok::Nregex, start, i ? 3 : 2);
                     continue;
                 }
                 break;
             case '<':
-                push(n == '=' ? Tok::LE : Tok::LT, start, n == '=' ? 2 : 1);
+                push(n == '=' ? Tok::Le : Tok::Lt, start, n == '=' ? 2 : 1);
                 continue;
             case '>':
-                push(n == '=' ? Tok::GE : Tok::GT, start, n == '=' ? 2 : 1);
+                push(n == '=' ? Tok::Ge : Tok::Gt, start, n == '=' ? 2 : 1);
                 continue;
             case '~':
-                push(n == '*' ? Tok::IREGEX : Tok::REGEX, start,
+                push(n == '*' ? Tok::Iregex : Tok::Regex, start,
                      n == '*' ? 2 : 1);
                 continue;
             case '+':
-                push(Tok::PLUS, start, 1);
+                push(Tok::Plus, start, 1);
                 continue;
             case '-':
-                push(n == '>' ? Tok::ARROW : Tok::MINUS, start,
+                push(n == '>' ? Tok::Arrow : Tok::Minus, start,
                      n == '>' ? 2 : 1);
                 continue;
             case '*':
-                push(Tok::STAR, start, 1);
+                push(Tok::Star, start, 1);
                 continue;
             case '/':
-                push(n == '/' ? Tok::SLASH2 : Tok::SLASH, start,
+                push(n == '/' ? Tok::Slash2 : Tok::Slash, start,
                      n == '/' ? 2 : 1);
                 continue;
             case '%':
-                push(Tok::PERCENT, start, 1);
+                push(Tok::Percent, start, 1);
                 continue;
             case '?':
                 if (n == '?') {
-                    push(Tok::COALESCE, start, 2);
+                    push(Tok::Coalesce, start, 2);
                     continue;
                 }
                 break;
             case '.':
-                push(n == '.' ? Tok::DOTDOT : Tok::DOT, start,
+                push(n == '.' ? Tok::Dotdot : Tok::Dot, start,
                      n == '.' ? 2 : 1);
                 continue;
             case '^':
-                push(Tok::CARET, start, 1);
+                push(Tok::Caret, start, 1);
                 continue;
             case '|':
-                push(Tok::PIPE, start, 1);
+                push(Tok::Pipe, start, 1);
                 continue;
             case ',':
-                push(Tok::COMMA, start, 1);
+                push(Tok::Comma, start, 1);
                 continue;
             case ';':
-                push(Tok::SEMI, start, 1);
+                push(Tok::Semi, start, 1);
                 continue;
             case '(':
-                push(Tok::LPAREN, start, 1);
+                push(Tok::Lparen, start, 1);
                 continue;
             case ')':
-                push(Tok::RPAREN, start, 1);
+                push(Tok::Rparen, start, 1);
                 continue;
             case '[':
-                push(Tok::LBRACKET, start, 1);
+                push(Tok::Lbracket, start, 1);
                 continue;
             case ']':
-                push(Tok::RBRACKET, start, 1);
+                push(Tok::Rbracket, start, 1);
                 continue;
             case '{':
-                push(Tok::LBRACE, start, 1);
+                push(Tok::Lbrace, start, 1);
                 continue;
             case '}':
-                push(Tok::RBRACE, start, 1);
+                push(Tok::Rbrace, start, 1);
                 continue;
             default:
                 break;
         }
-        return dftracer::utils::unexpected(make_error(
-            src, start, 1, std::string("Unexpected character '") + c + "'"));
+        return dftracer::utils::dstd::Unexpected(make_error(
+            src, start, 1, dstd::fmt<"Unexpected character '{}'">(c)));
     }
-    out.push_back({Tok::END, src.substr(src.size(), 0), src.size(), adjacent});
+    out.push_back({Tok::End, src.substr(src.size(), 0), src.size(), adjacent});
     return out;
 }
 

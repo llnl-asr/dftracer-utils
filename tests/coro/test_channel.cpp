@@ -1,17 +1,22 @@
+// SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/coro/channel.h>
-#include <dftracer/utils/core/coro/yield.h>
-#include <dftracer/utils/core/pipeline/pipeline.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
-#include <dftracer/utils/core/tasks/task.h>
+#include <dftracer/utils/coro/channel.h>
+#include <dftracer/utils/coro/generator.h>
+#include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/coro/yield.h>
+#include <dftracer/utils/dstd/fmt.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/thread.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <atomic>
 #include <chrono>
-#include <memory>
-#include <string>
 #include <thread>
-#include <vector>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::coro;
@@ -56,6 +61,14 @@ bool blocking_receive(ChannelT& channel, ItemT& item) {
         }
         std::this_thread::sleep_for(backoff);
     }
+}
+
+void run_together(Runtime& rt, dstd::Vector<coro::CoroTask<void>> tasks) {
+    dftu_utils_test::ok(rt.block_on(
+        coro::with_scope([&tasks](coro::Scope& scope) -> coro::CoroTask<void> {
+            for (auto& task : tasks) scope.spawn(std::move(task));
+            co_return;
+        })));
 }
 
 }  // namespace
@@ -133,23 +146,23 @@ TEST_CASE("Channel - Close channel") {
 TEST_CASE("Channel - Producer guard") {
     Channel<int> channel(10);
 
-    CHECK(channel.num_producers() == 0);
+    CHECK(channel.producer_count() == 0);
 
     {
         auto p1 = channel.producer();
         auto guard1 = p1.guard();
-        CHECK(channel.num_producers() == 1);
+        CHECK(channel.producer_count() == 1);
 
         {
             auto p2 = channel.producer();
             auto guard2 = p2.guard();
-            CHECK(channel.num_producers() == 2);
+            CHECK(channel.producer_count() == 2);
         }
 
-        CHECK(channel.num_producers() == 1);
+        CHECK(channel.producer_count() == 1);
     }
 
-    CHECK(channel.num_producers() == 0);
+    CHECK(channel.producer_count() == 0);
     CHECK(channel.is_closed() == true);
 }
 
@@ -165,7 +178,7 @@ TEST_CASE("Channel - Single producer, single consumer") {
     std::atomic<int> sum_consumed{0};
 
     // Producer thread
-    std::thread producer([&, p = channel.producer()]() mutable {
+    dstd::Thread producer([&, p = channel.producer()]() mutable {
         auto guard = p.guard();
         for (int i = 0; i < NUM_ITEMS; ++i) {
             if (blocking_send(channel, i)) sum_produced.fetch_add(i);
@@ -173,7 +186,7 @@ TEST_CASE("Channel - Single producer, single consumer") {
     });
 
     // Consumer thread
-    std::thread consumer([&]() {
+    dstd::Thread consumer([&]() {
         int value;
         while (blocking_receive(channel, value)) {
             sum_consumed.fetch_add(value);
@@ -194,7 +207,7 @@ TEST_CASE("Channel - receive waits before first producer registration") {
     std::atomic<bool> receive_success{false};
     std::atomic<int> received_value{-1};
 
-    std::thread consumer([&]() {
+    dstd::Thread consumer([&]() {
         int value = 0;
         consumer_entered.store(true, std::memory_order_release);
         bool success = blocking_receive(channel, value);
@@ -210,9 +223,9 @@ TEST_CASE("Channel - receive waits before first producer registration") {
 
     CHECK(consumer_done.load(std::memory_order_acquire) == false);
 
-    std::thread producer([&, p = channel.producer()]() mutable {
+    dstd::Thread producer([&, p = channel.producer()]() mutable {
         auto guard = p.guard();
-        CHECK(channel.num_producers() >= 1);
+        CHECK(channel.producer_count() >= 1);
         CHECK(blocking_send(channel, 123));
     });
 
@@ -246,7 +259,7 @@ TEST_CASE("Channel - Multiple producers, single consumer" *
     std::atomic<int> total_consumed{0};
 
     // Producer threads
-    std::vector<std::thread> producers;
+    dstd::Vector<dstd::Thread> producers;
     for (int p = 0; p < NUM_PRODUCERS; ++p) {
         producers.emplace_back([&, p, prod = channel.producer()]() mutable {
             auto guard = prod.guard();
@@ -259,7 +272,7 @@ TEST_CASE("Channel - Multiple producers, single consumer" *
     }
 
     // Consumer thread
-    std::thread consumer([&]() {
+    dstd::Thread consumer([&]() {
         int value;
         while (blocking_receive(channel, value)) {
             total_consumed.fetch_add(value);
@@ -284,7 +297,7 @@ TEST_CASE("Channel - Single producer, multiple consumers" *
     std::atomic<int> sum_consumed{0};
 
     // Producer thread
-    std::thread producer([&, p = channel.producer()]() mutable {
+    dstd::Thread producer([&, p = channel.producer()]() mutable {
         auto guard = p.guard();
         for (int i = 0; i < NUM_ITEMS; ++i) {
             CHECK(blocking_send(channel, i));
@@ -293,7 +306,7 @@ TEST_CASE("Channel - Single producer, multiple consumers" *
     });
 
     // Consumer threads
-    std::vector<std::thread> consumers;
+    dstd::Vector<dstd::Thread> consumers;
     for (int c = 0; c < NUM_CONSUMERS; ++c) {
         consumers.emplace_back([&]() {
             int value;
@@ -316,14 +329,14 @@ TEST_CASE("Channel - Single producer, multiple consumers" *
 // ============================================================================
 
 TEST_CASE("Channel - String messages") {
-    Channel<std::string> channel(10);
+    Channel<dstd::String> channel(10);
 
     CHECK(channel.try_send("Hello"));
     CHECK(channel.try_send("World"));
     CHECK(channel.try_send("from"));
     CHECK(channel.try_send("Channel"));
 
-    std::string msg;
+    dstd::String msg;
     CHECK(blocking_receive(channel, msg) == true);
     CHECK(msg == "Hello");
 
@@ -340,11 +353,11 @@ TEST_CASE("Channel - String messages") {
 TEST_CASE("Channel - Complex data type") {
     struct Event {
         int id;
-        std::string name;
+        dstd::String name;
         double value;
 
         Event() : id(0), value(0.0) {}
-        Event(int i, std::string n, double v)
+        Event(int i, dstd::String n, double v)
             : id(i), name(std::move(n)), value(v) {}
     };
 
@@ -369,130 +382,96 @@ TEST_CASE("Channel - Complex data type") {
 }
 
 // ============================================================================
-// Channel with Pipeline Integration Tests
+// Channel Between Tasks Tests
 // ============================================================================
 
-TEST_CASE("Channel - With tasks in pipeline") {
+TEST_CASE("Channel - Tasks run in order") {
     Channel<int> channel(100);
 
     std::atomic<int> producer_sum{0};
     std::atomic<int> consumer_sum{0};
 
-    // Create producer task
-    auto producer_task = make_task(
-        [&, p = channel.producer()](
-            [[maybe_unused]] CoroScope& ctx) mutable -> coro::CoroTask<int> {
-            auto guard = p.guard();
+    auto producer_task =
+        [&, p = channel.producer()]() mutable -> coro::CoroTask<void> {
+        auto guard = p.guard();
 
-            for (int i = 0; i < 100; ++i) {
-                CHECK(co_await channel.send(i));
-                producer_sum.fetch_add(i);
-            }
+        for (int i = 0; i < 100; ++i) {
+            CHECK(co_await channel.send(i));
+            producer_sum.fetch_add(i);
+        }
+        co_return;
+    };
 
-            co_return 100;
-        },
-        "Producer");
+    auto consumer_task = [&]() -> coro::CoroTask<void> {
+        int value;
 
-    // Create consumer task
-    auto consumer_task = make_task(
-        [&]([[maybe_unused]] CoroScope& ctx,
-            [[maybe_unused]] int count) -> coro::CoroTask<int> {
-            int value;
-            int items_consumed = 0;
+        while (blocking_receive(channel, value)) {
+            consumer_sum.fetch_add(value);
+        }
+        co_return;
+    };
 
-            while (blocking_receive(channel, value)) {
-                consumer_sum.fetch_add(value);
-                items_consumed++;
-            }
+    auto in_order = [&]() -> coro::CoroTask<void> {
+        co_await producer_task();
+        co_await consumer_task();
+    };
 
-            co_return items_consumed;
-        },
-        "Consumer");
+    Runtime rt(2);
+    dftu_utils_test::ok(rt.block_on(in_order()));
 
-    consumer_task->depends_on(producer_task);
-
-    // Execute in pipeline
-    auto config =
-        PipelineConfig().with_name("ChannelTest").with_compute_threads(2);
-
-    Pipeline pipeline(config);
-    pipeline.set_source(producer_task);
-    pipeline.set_destination(consumer_task);
-
-    auto output = pipeline.execute();
-
-    // Success if no exception thrown
     CHECK(producer_sum.load() == consumer_sum.load());
 }
 
-TEST_CASE("Channel - Pipeline with transform") {
+TEST_CASE("Channel - Chained transform tasks") {
     Channel<int> input_channel(50);
     Channel<int> output_channel(50);
 
-    std::vector<int> produced_values;
-    std::vector<int> transformed_values;
-    std::vector<int> consumed_values;
+    dstd::Vector<int> produced_values;
+    dstd::Vector<int> transformed_values;
+    dstd::Vector<int> consumed_values;
 
-    // Producer task
-    auto producer = make_task(
-        [&, p = input_channel.producer()](
-            [[maybe_unused]] CoroScope& ctx) mutable -> coro::CoroTask<int> {
-            auto guard = p.guard();
+    auto producer =
+        [&, p = input_channel.producer()]() mutable -> coro::CoroTask<void> {
+        auto guard = p.guard();
 
-            for (int i = 1; i <= 10; ++i) {
-                CHECK(co_await input_channel.send(i));
-                produced_values.push_back(i);
-            }
-
-            co_return 10;
-        },
-        "Producer");
+        for (int i = 1; i <= 10; ++i) {
+            CHECK(co_await input_channel.send(i));
+            produced_values.push_back(i);
+        }
+        co_return;
+    };
 
     // Transform task (multiply by 2)
-    auto transform = make_task(
-        [&, op = output_channel.producer()](
-            [[maybe_unused]] CoroScope& ctx,
-            [[maybe_unused]] int count) mutable -> coro::CoroTask<int> {
-            auto out_guard = op.guard();
+    auto transform =
+        [&, op = output_channel.producer()]() mutable -> coro::CoroTask<void> {
+        auto out_guard = op.guard();
 
-            int value;
-            while (blocking_receive(input_channel, value)) {
-                int transformed = value * 2;
-                CHECK(co_await output_channel.send(transformed));
-                transformed_values.push_back(transformed);
-            }
+        int value;
+        while (blocking_receive(input_channel, value)) {
+            int transformed = value * 2;
+            CHECK(co_await output_channel.send(transformed));
+            transformed_values.push_back(transformed);
+        }
+        co_return;
+    };
 
-            co_return static_cast<int>(transformed_values.size());
-        },
-        "Transform");
+    auto consumer = [&]() -> coro::CoroTask<void> {
+        int value;
+        while (blocking_receive(output_channel, value)) {
+            consumed_values.push_back(value);
+        }
+        co_return;
+    };
 
-    // Consumer task
-    auto consumer = make_task(
-        [&]([[maybe_unused]] CoroScope& ctx,
-            [[maybe_unused]] int count) -> coro::CoroTask<int> {
-            int value;
-            while (blocking_receive(output_channel, value)) {
-                consumed_values.push_back(value);
-            }
+    auto in_order = [&]() -> coro::CoroTask<void> {
+        co_await producer();
+        co_await transform();
+        co_await consumer();
+    };
 
-            co_return static_cast<int>(consumed_values.size());
-        },
-        "Consumer");
+    Runtime rt(3);
+    dftu_utils_test::ok(rt.block_on(in_order()));
 
-    transform->depends_on(producer);
-    consumer->depends_on(transform);
-
-    // Execute pipeline
-    auto config =
-        PipelineConfig().with_name("TransformPipeline").with_compute_threads(3);
-
-    Pipeline pipeline(config);
-    pipeline.set_source(producer);
-    pipeline.set_destination(consumer);
-
-    auto output = pipeline.execute();
-
-    // Success if no exception thrown
     CHECK(produced_values.size() == 10);
     CHECK(transformed_values.size() == 10);
     CHECK(consumed_values.size() == 10);
@@ -511,64 +490,44 @@ TEST_CASE("Channel - Fan-out pattern (one producer, multiple consumers)") {
     std::atomic<int> sum_consumer1{0};
     std::atomic<int> sum_consumer2{0};
 
-    // Producer
-    auto producer = make_task(
-        [&, p = channel.producer()](
-            [[maybe_unused]] CoroScope& ctx) mutable -> coro::CoroTask<int> {
-            auto guard = p.guard();
+    auto producer = [&,
+                     p = channel.producer()]() mutable -> coro::CoroTask<void> {
+        auto guard = p.guard();
 
-            for (int i = 0; i < 100; ++i) {
-                CHECK(co_await channel.send(i));
-                sum_produced.fetch_add(i);
-            }
+        for (int i = 0; i < 100; ++i) {
+            CHECK(co_await channel.send(i));
+            sum_produced.fetch_add(i);
+        }
+        co_return;
+    };
 
-            co_return 100;
-        },
-        "Producer");
+    auto consumer1 = [&]() -> coro::CoroTask<void> {
+        int value;
 
-    // Consumer 1 - no input parameter since it's a source task
-    auto consumer1 = make_task(
-        [&]([[maybe_unused]] CoroScope& ctx) -> coro::CoroTask<int> {
-            int value;
-            int items = 0;
+        while (channel.try_receive(value)) {
+            sum_consumer1.fetch_add(value);
+        }
+        co_return;
+    };
 
-            while (channel.try_receive(value)) {
-                sum_consumer1.fetch_add(value);
-                items++;
-            }
+    auto consumer2 = [&]() -> coro::CoroTask<void> {
+        int value;
 
-            co_return items;
-        },
-        "Consumer1");
+        while (blocking_receive(channel, value)) {
+            sum_consumer2.fetch_add(value);
+        }
+        co_return;
+    };
 
-    // Consumer 2 - no input parameter since it's a source task
-    auto consumer2 = make_task(
-        [&]([[maybe_unused]] CoroScope& ctx) -> coro::CoroTask<int> {
-            int value;
-            int items = 0;
+    // All tasks run in parallel: the producer fills the channel while the
+    // consumers drain it concurrently.
+    Runtime rt(3);
+    dstd::Vector<coro::CoroTask<void>> tasks;
+    tasks.push_back(producer());
+    tasks.push_back(consumer1());
+    tasks.push_back(consumer2());
+    run_together(rt, std::move(tasks));
 
-            while (blocking_receive(channel, value)) {
-                sum_consumer2.fetch_add(value);
-                items++;
-            }
-
-            co_return items;
-        },
-        "Consumer2");
-
-    // No dependencies - all tasks run in parallel
-    // Producer fills the channel, consumers drain it concurrently
-
-    // Execute pipeline
-    auto config =
-        PipelineConfig().with_name("FanOutPipeline").with_compute_threads(3);
-
-    Pipeline pipeline(config);
-    pipeline.set_source({producer, consumer1, consumer2});
-
-    auto output = pipeline.execute();
-
-    // Success if no exception thrown
     // Both consumers should get all items (or split them)
     int total_consumed = sum_consumer1.load() + sum_consumer2.load();
     CHECK(total_consumed == sum_produced.load());
@@ -585,7 +544,7 @@ TEST_CASE("Channel - High throughput stress test") {
     std::atomic<int> items_sent{0};
     std::atomic<int> items_received{0};
 
-    std::thread producer([&, p = channel.producer()]() mutable {
+    dstd::Thread producer([&, p = channel.producer()]() mutable {
         auto guard = p.guard();
         for (int i = 0; i < NUM_ITEMS; ++i) {
             CHECK(blocking_send(channel, i));
@@ -593,7 +552,7 @@ TEST_CASE("Channel - High throughput stress test") {
         }
     });
 
-    std::thread consumer([&]() {
+    dstd::Thread consumer([&]() {
         int value;
         while (blocking_receive(channel, value)) {
             items_received.fetch_add(1);
@@ -635,7 +594,7 @@ TEST_CASE("Channel - close wakes blocked receive" * doctest::test_suite("vg")) {
     std::atomic<bool> receive_done{false};
     bool receive_result = true;
 
-    std::thread receiver([&]() {
+    dstd::Thread receiver([&]() {
         int value = 0;
         receiver_entered.store(true, std::memory_order_release);
         receive_result = blocking_receive(channel, value);
@@ -663,12 +622,12 @@ TEST_CASE("Channel - last producer release wakes blocked receive") {
     Channel<int> channel(10);
 
     auto cp = channel.producer();
-    auto guard = std::make_unique<Channel<int>::ProducerGuard>(cp.guard());
+    auto guard = dstd::make_unique<Channel<int>::ProducerGuard>(cp.guard());
 
     std::atomic<bool> receiver_entered{false};
     bool receive_result = true;
 
-    std::thread receiver([&]() {
+    dstd::Thread receiver([&]() {
         int value = 0;
         receiver_entered.store(true, std::memory_order_release);
         receive_result = blocking_receive(channel, value);
@@ -679,7 +638,7 @@ TEST_CASE("Channel - last producer release wakes blocked receive") {
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
 
-    CHECK(channel.num_producers() == 1);
+    CHECK(channel.producer_count() == 1);
 
     auto t0 = std::chrono::steady_clock::now();
     guard.reset();
@@ -688,7 +647,7 @@ TEST_CASE("Channel - last producer release wakes blocked receive") {
         std::chrono::steady_clock::now() - t0);
 
     CHECK(receive_result == false);
-    CHECK(channel.num_producers() == 0);
+    CHECK(channel.producer_count() == 0);
     CHECK(channel.is_closed() == true);
     CHECK(elapsed.count() < 200);
 }
@@ -700,45 +659,39 @@ TEST_CASE("Channel - send_async unblocks when receiver drains") {
     std::atomic<bool> third_send_completed{false};
     std::atomic<int> consumed_sum{0};
 
-    auto producer = make_task(
-        [&, p = channel->producer()](
-            CoroScope& /*ctx*/) mutable -> coro::CoroTask<void> {
-            auto guard = p.guard();
-            CHECK(co_await channel->send(1));
-            CHECK(co_await channel->send(2));
-            third_send_started.store(true, std::memory_order_release);
-            CHECK(co_await channel->send(3));
-            third_send_completed.store(true, std::memory_order_release);
-            co_return;
-        },
-        "AsyncSendProducer");
+    auto producer =
+        [&, p = channel->producer()]() mutable -> coro::CoroTask<void> {
+        auto guard = p.guard();
+        CHECK(co_await channel->send(1));
+        CHECK(co_await channel->send(2));
+        third_send_started.store(true, std::memory_order_release);
+        CHECK(co_await channel->send(3));
+        third_send_completed.store(true, std::memory_order_release);
+        co_return;
+    };
 
-    auto consumer = make_task(
-        [&](CoroScope& ctx) -> coro::CoroTask<void> {
-            while (!third_send_started.load(std::memory_order_acquire)) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(1));
-                co_await coro::yield();
-            }
-
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    auto consumer = [&]() -> coro::CoroTask<void> {
+        while (!third_send_started.load(std::memory_order_acquire)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
             co_await coro::yield();
+        }
 
-            CHECK(third_send_completed.load(std::memory_order_acquire) ==
-                  false);
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        co_await coro::yield();
 
-            while (auto item = co_await ctx.receive(channel)) {
-                consumed_sum.fetch_add(*item);
-            }
-            co_return;
-        },
-        "AsyncSendConsumer");
+        CHECK(third_send_completed.load(std::memory_order_acquire) == false);
 
-    auto config =
-        PipelineConfig().with_name("AsyncSendDrain").with_compute_threads(2);
+        while (auto item = co_await channel->receive()) {
+            consumed_sum.fetch_add(*item);
+        }
+        co_return;
+    };
 
-    Pipeline pipeline(config);
-    pipeline.set_source({producer, consumer});
-    pipeline.execute();
+    Runtime rt(2);
+    dstd::Vector<coro::CoroTask<void>> tasks;
+    tasks.push_back(producer());
+    tasks.push_back(consumer());
+    run_together(rt, std::move(tasks));
 
     CHECK(third_send_started.load(std::memory_order_acquire) == true);
     CHECK(third_send_completed.load(std::memory_order_acquire) == true);
@@ -752,36 +705,31 @@ TEST_CASE("Channel - send_async resumes false when closed") {
     std::atomic<bool> second_send_completed{false};
     std::atomic<bool> second_send_result{true};
 
-    auto producer = make_task(
-        [&, p = channel->producer()](
-            CoroScope& /*ctx*/) mutable -> coro::CoroTask<void> {
-            auto guard = p.guard();
-            CHECK(co_await channel->send(1));
-            second_send_started.store(true, std::memory_order_release);
-            const bool sent = co_await channel->send(2);
-            second_send_result.store(sent, std::memory_order_release);
-            second_send_completed.store(true, std::memory_order_release);
-            co_return;
-        },
-        "AsyncSendCloseProducer");
+    auto producer =
+        [&, p = channel->producer()]() mutable -> coro::CoroTask<void> {
+        auto guard = p.guard();
+        CHECK(co_await channel->send(1));
+        second_send_started.store(true, std::memory_order_release);
+        const bool sent = co_await channel->send(2);
+        second_send_result.store(sent, std::memory_order_release);
+        second_send_completed.store(true, std::memory_order_release);
+        co_return;
+    };
 
-    auto closer = make_task(
-        [&](CoroScope& /* ctx */) -> coro::CoroTask<void> {
-            while (!second_send_started.load(std::memory_order_acquire)) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(1));
-                co_await coro::yield();
-            }
-            channel->close();
-            co_return;
-        },
-        "AsyncSendCloser");
+    auto closer = [&]() -> coro::CoroTask<void> {
+        while (!second_send_started.load(std::memory_order_acquire)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            co_await coro::yield();
+        }
+        channel->close();
+        co_return;
+    };
 
-    auto config =
-        PipelineConfig().with_name("AsyncSendClose").with_compute_threads(2);
-
-    Pipeline pipeline(config);
-    pipeline.set_source({producer, closer});
-    pipeline.execute();
+    Runtime rt(2);
+    dstd::Vector<coro::CoroTask<void>> tasks;
+    tasks.push_back(producer());
+    tasks.push_back(closer());
+    run_together(rt, std::move(tasks));
 
     CHECK(second_send_started.load(std::memory_order_acquire) == true);
     CHECK(second_send_completed.load(std::memory_order_acquire) == true);
@@ -791,43 +739,37 @@ TEST_CASE("Channel - send_async resumes false when closed") {
 TEST_CASE("Channel - async bounded handoff on single compute thread") {
     Channel<int> channel(1);
 
-    const int num_items = TSAN_BUILD ? 1000 : 5000;
+    const int item_count = TSAN_BUILD ? 1000 : 5000;
     std::atomic<int> produced{0};
     std::atomic<int> consumed{0};
 
-    auto producer = make_task(
-        [&, p = channel.producer()](
-            CoroScope& /*ctx*/) mutable -> coro::CoroTask<void> {
-            auto guard = p.guard();
-            for (int i = 1; i <= num_items; ++i) {
-                CHECK(co_await channel.send(i));
-                produced.fetch_add(i, std::memory_order_relaxed);
-            }
-            co_return;
-        },
-        "SingleThreadAsyncProducer");
+    auto producer = [&,
+                     p = channel.producer()]() mutable -> coro::CoroTask<void> {
+        auto guard = p.guard();
+        for (int i = 1; i <= item_count; ++i) {
+            CHECK(co_await channel.send(i));
+            produced.fetch_add(i, std::memory_order_relaxed);
+        }
+        co_return;
+    };
 
-    auto consumer = make_task(
-        [&](CoroScope& ctx) -> coro::CoroTask<void> {
-            while (auto item = co_await ctx.receive(channel)) {
-                consumed.fetch_add(*item, std::memory_order_relaxed);
-            }
-            co_return;
-        },
-        "SingleThreadAsyncConsumer");
+    auto consumer = [&]() -> coro::CoroTask<void> {
+        while (auto item = co_await channel.receive()) {
+            consumed.fetch_add(*item, std::memory_order_relaxed);
+        }
+        co_return;
+    };
 
-    auto config = PipelineConfig()
-                      .with_name("SingleThreadAsyncHandoff")
-                      .with_compute_threads(1);
-
-    Pipeline pipeline(config);
-    pipeline.set_source({producer, consumer});
-    pipeline.execute();
+    Runtime rt(1);
+    dstd::Vector<coro::CoroTask<void>> tasks;
+    tasks.push_back(producer());
+    tasks.push_back(consumer());
+    run_together(rt, std::move(tasks));
 
     CHECK(produced.load(std::memory_order_relaxed) ==
           consumed.load(std::memory_order_relaxed));
     CHECK(consumed.load(std::memory_order_relaxed) ==
-          (num_items * (num_items + 1)) / 2);
+          (item_count * (item_count + 1)) / 2);
 }
 
 // ============================================================================
@@ -840,44 +782,29 @@ TEST_CASE("Channel - receive_async()") {
     std::atomic<int> producer_sum{0};
     std::atomic<int> consumer_sum{0};
 
-    // Producer task
-    auto producer = make_task(
-        [&, p = channel.producer()](
-            [[maybe_unused]] CoroScope& ctx) mutable -> coro::CoroTask<int> {
-            auto guard = p.guard();
+    auto producer = [&,
+                     p = channel.producer()]() mutable -> coro::CoroTask<void> {
+        auto guard = p.guard();
 
-            for (int i = 0; i < 50; ++i) {
-                CHECK(co_await channel.send(i));
-                producer_sum.fetch_add(i);
-            }
+        for (int i = 0; i < 50; ++i) {
+            CHECK(co_await channel.send(i));
+            producer_sum.fetch_add(i);
+        }
+        co_return;
+    };
 
-            co_return 50;
-        },
-        "Producer");
+    auto consumer = [&]() -> coro::CoroTask<void> {
+        while (auto item_opt = co_await channel.receive()) {
+            consumer_sum.fetch_add(*item_opt);
+        }
+        co_return;
+    };
 
-    // Consumer task using receive_async()
-    auto consumer = make_task(
-        [&](CoroScope& ctx) -> coro::CoroTask<int> {
-            int items_consumed = 0;
-
-            while (auto item_opt = co_await ctx.receive(channel)) {
-                consumer_sum.fetch_add(*item_opt);
-                items_consumed++;
-            }
-
-            co_return items_consumed;
-        },
-        "Consumer");
-
-    // No dependencies - producer and consumer run in parallel
-
-    auto config =
-        PipelineConfig().with_name("AsyncReceiveTest").with_compute_threads(2);
-
-    Pipeline pipeline(config);
-    pipeline.set_source({producer, consumer});
-
-    auto output = pipeline.execute();
+    Runtime rt(2);
+    dstd::Vector<coro::CoroTask<void>> tasks;
+    tasks.push_back(producer());
+    tasks.push_back(consumer());
+    run_together(rt, std::move(tasks));
 
     CHECK(producer_sum.load() == consumer_sum.load());
     CHECK(consumer_sum.load() == (49 * 50 / 2));  // sum of 0..49
@@ -890,126 +817,90 @@ TEST_CASE("Channel - receive_async() with multiple consumers") {
     std::atomic<int> consumer1_sum{0};
     std::atomic<int> consumer2_sum{0};
 
-    // Producer task
-    auto producer = make_task(
-        [&, p = channel.producer()](
-            [[maybe_unused]] CoroScope& ctx) mutable -> coro::CoroTask<int> {
-            auto guard = p.guard();
+    auto producer = [&,
+                     p = channel.producer()]() mutable -> coro::CoroTask<void> {
+        auto guard = p.guard();
 
-            for (int i = 0; i < 100; ++i) {
-                CHECK(co_await channel.send(i));
-                producer_sum.fetch_add(i);
-            }
+        for (int i = 0; i < 100; ++i) {
+            CHECK(co_await channel.send(i));
+            producer_sum.fetch_add(i);
+        }
+        co_return;
+    };
 
-            co_return 100;
-        },
-        "Producer");
+    auto consumer1 = [&]() -> coro::CoroTask<void> {
+        while (auto item_opt = co_await channel.receive()) {
+            consumer1_sum.fetch_add(*item_opt);
+        }
+        co_return;
+    };
 
-    // Consumer 1 using receive_async()
-    auto consumer1 = make_task(
-        [&](CoroScope& ctx) -> coro::CoroTask<int> {
-            int items = 0;
+    auto consumer2 = [&]() -> coro::CoroTask<void> {
+        while (auto item_opt = co_await channel.receive()) {
+            consumer2_sum.fetch_add(*item_opt);
+        }
+        co_return;
+    };
 
-            while (auto item_opt = co_await ctx.receive(channel)) {
-                consumer1_sum.fetch_add(*item_opt);
-                items++;
-            }
-
-            co_return items;
-        },
-        "Consumer1");
-
-    // Consumer 2 using receive_async()
-    auto consumer2 = make_task(
-        [&](CoroScope& ctx) -> coro::CoroTask<int> {
-            int items = 0;
-
-            while (auto item_opt = co_await ctx.receive(channel)) {
-                consumer2_sum.fetch_add(*item_opt);
-                items++;
-            }
-
-            co_return items;
-        },
-        "Consumer2");
-
-    auto config = PipelineConfig()
-                      .with_name("MultiConsumerAsync")
-                      .with_compute_threads(3);
-
-    Pipeline pipeline(config);
-    pipeline.set_source({producer, consumer1, consumer2});
-
-    auto output = pipeline.execute();
+    Runtime rt(3);
+    dstd::Vector<coro::CoroTask<void>> tasks;
+    tasks.push_back(producer());
+    tasks.push_back(consumer1());
+    tasks.push_back(consumer2());
+    run_together(rt, std::move(tasks));
 
     // Both consumers should split the items
     int total_consumed = consumer1_sum.load() + consumer2_sum.load();
     CHECK(total_consumed == producer_sum.load());
 }
 
-TEST_CASE("Channel - receive_async() with transform pipeline") {
+TEST_CASE("Channel - receive_async() with transform chain") {
     Channel<int> input_channel(50);
     Channel<int> output_channel(50);
 
-    std::vector<int> produced_values;
-    std::vector<int> transformed_values;
-    std::vector<int> consumed_values;
+    dstd::Vector<int> produced_values;
+    dstd::Vector<int> transformed_values;
+    dstd::Vector<int> consumed_values;
 
-    // Producer task
-    auto producer = make_task(
-        [&, p = input_channel.producer()](
-            [[maybe_unused]] CoroScope& ctx) mutable -> coro::CoroTask<int> {
-            auto guard = p.guard();
+    auto producer =
+        [&, p = input_channel.producer()]() mutable -> coro::CoroTask<void> {
+        auto guard = p.guard();
 
-            for (int i = 1; i <= 20; ++i) {
-                CHECK(co_await input_channel.send(i));
-                produced_values.push_back(i);
-            }
+        for (int i = 1; i <= 20; ++i) {
+            CHECK(co_await input_channel.send(i));
+            produced_values.push_back(i);
+        }
+        co_return;
+    };
 
-            co_return 20;
-        },
-        "Producer");
+    // Transform using receive_async() (square the values)
+    auto transform =
+        [&, op = output_channel.producer()]() mutable -> coro::CoroTask<void> {
+        auto out_guard = op.guard();
 
-    // Transform task using receive_async() (square the values)
-    auto transform = make_task(
-        [&, op = output_channel.producer()](
-            CoroScope& ctx,
-            [[maybe_unused]] int count) mutable -> coro::CoroTask<int> {
-            auto out_guard = op.guard();
+        while (auto item_opt = co_await input_channel.receive()) {
+            int transformed = (*item_opt) * (*item_opt);  // Square
+            CHECK(co_await output_channel.send(transformed));
+            transformed_values.push_back(transformed);
+        }
+        co_return;
+    };
 
-            while (auto item_opt = co_await ctx.receive(input_channel)) {
-                int transformed = (*item_opt) * (*item_opt);  // Square
-                CHECK(co_await output_channel.send(transformed));
-                transformed_values.push_back(transformed);
-            }
+    auto consumer = [&]() -> coro::CoroTask<void> {
+        while (auto item_opt = co_await output_channel.receive()) {
+            consumed_values.push_back(*item_opt);
+        }
+        co_return;
+    };
 
-            co_return static_cast<int>(transformed_values.size());
-        },
-        "Transform");
+    auto in_order = [&]() -> coro::CoroTask<void> {
+        co_await producer();
+        co_await transform();
+        co_await consumer();
+    };
 
-    // Consumer task using receive_async()
-    auto consumer = make_task(
-        [&](CoroScope& ctx, [[maybe_unused]] int count) -> coro::CoroTask<int> {
-            while (auto item_opt = co_await ctx.receive(output_channel)) {
-                consumed_values.push_back(*item_opt);
-            }
-
-            co_return static_cast<int>(consumed_values.size());
-        },
-        "Consumer");
-
-    transform->depends_on(producer);
-    consumer->depends_on(transform);
-
-    auto config = PipelineConfig()
-                      .with_name("AsyncTransformPipeline")
-                      .with_compute_threads(3);
-
-    Pipeline pipeline(config);
-    pipeline.set_source(producer);
-    pipeline.set_destination(consumer);
-
-    auto output = pipeline.execute();
+    Runtime rt(3);
+    dftu_utils_test::ok(rt.block_on(in_order()));
 
     CHECK(produced_values.size() == 20);
     CHECK(transformed_values.size() == 20);
@@ -1028,45 +919,29 @@ TEST_CASE("Channel - receive_async() fallback") {
     std::atomic<int> producer_sum{0};
     std::atomic<int> consumer_sum{0};
 
-    // Producer task
-    auto producer = make_task(
-        [&, p = channel.producer()](
-            [[maybe_unused]] CoroScope& ctx) mutable -> coro::CoroTask<int> {
-            auto guard = p.guard();
+    auto producer = [&,
+                     p = channel.producer()]() mutable -> coro::CoroTask<void> {
+        auto guard = p.guard();
 
-            for (int i = 0; i < 30; ++i) {
-                CHECK(co_await channel.send(i));
-                producer_sum.fetch_add(i);
-            }
+        for (int i = 0; i < 30; ++i) {
+            CHECK(co_await channel.send(i));
+            producer_sum.fetch_add(i);
+        }
+        co_return;
+    };
 
-            co_return 30;
-        },
-        "Producer");
+    auto consumer = [&]() -> coro::CoroTask<void> {
+        while (auto item_opt = co_await channel.receive()) {
+            consumer_sum.fetch_add(*item_opt);
+        }
+        co_return;
+    };
 
-    // Consumer task using receive_async()
-    auto consumer = make_task(
-        [&](CoroScope& ctx) -> coro::CoroTask<int> {
-            int items_consumed = 0;
-
-            while (auto item_opt = co_await ctx.receive(channel)) {
-                consumer_sum.fetch_add(*item_opt);
-                items_consumed++;
-            }
-
-            co_return items_consumed;
-        },
-        "Consumer");
-
-    // No dependencies - producer and consumer run in parallel
-
-    auto config = PipelineConfig()
-                      .with_name("AsyncReceiveFallback")
-                      .with_compute_threads(2);
-
-    Pipeline pipeline(config);
-    pipeline.set_source({producer, consumer});
-
-    auto output = pipeline.execute();
+    Runtime rt(2);
+    dstd::Vector<coro::CoroTask<void>> tasks;
+    tasks.push_back(producer());
+    tasks.push_back(consumer());
+    run_together(rt, std::move(tasks));
 
     CHECK(producer_sum.load() == consumer_sum.load());
     CHECK(consumer_sum.load() == (29 * 30 / 2));  // sum of 0..29
@@ -1080,45 +955,29 @@ TEST_CASE("Channel - receive_async() stress test") {
 
     constexpr int NUM_ITEMS = 1000;
 
-    // Producer task
-    auto producer = make_task(
-        [&, p = channel.producer()](
-            [[maybe_unused]] CoroScope& ctx) mutable -> coro::CoroTask<int> {
-            auto guard = p.guard();
+    auto producer = [&,
+                     p = channel.producer()]() mutable -> coro::CoroTask<void> {
+        auto guard = p.guard();
 
-            for (int i = 0; i < NUM_ITEMS; ++i) {
-                CHECK(co_await channel.send(i));
-                items_sent.fetch_add(1);
-            }
+        for (int i = 0; i < NUM_ITEMS; ++i) {
+            CHECK(co_await channel.send(i));
+            items_sent.fetch_add(1);
+        }
+        co_return;
+    };
 
-            co_return NUM_ITEMS;
-        },
-        "Producer");
+    auto consumer = [&]() -> coro::CoroTask<void> {
+        while (auto item_opt = co_await channel.receive()) {
+            items_received.fetch_add(1);
+        }
+        co_return;
+    };
 
-    // Consumer task using receive_async()
-    auto consumer = make_task(
-        [&](CoroScope& ctx) -> coro::CoroTask<int> {
-            int items = 0;
-
-            while (auto item_opt = co_await ctx.receive(channel)) {
-                items_received.fetch_add(1);
-                items++;
-            }
-
-            co_return items;
-        },
-        "Consumer");
-
-    // No dependencies - producer and consumer run in parallel
-
-    auto config = PipelineConfig()
-                      .with_name("AsyncReceiveStress")
-                      .with_compute_threads(2);
-
-    Pipeline pipeline(config);
-    pipeline.set_source({producer, consumer});
-
-    auto output = pipeline.execute();
+    Runtime rt(2);
+    dstd::Vector<coro::CoroTask<void>> tasks;
+    tasks.push_back(producer());
+    tasks.push_back(consumer());
+    run_together(rt, std::move(tasks));
 
     CHECK(items_sent.load() == NUM_ITEMS);
     CHECK(items_received.load() == NUM_ITEMS);
@@ -1134,62 +993,34 @@ TEST_CASE("Channel - Multiple producers, multiple consumers (blocking)") {
     std::atomic<int> total_produced{0};
     std::atomic<int> total_consumed{0};
 
-    std::vector<std::shared_ptr<Task>> producers;
-    std::vector<std::shared_ptr<Task>> consumers;
+    auto make_producer = [&](int p, auto prod) -> coro::CoroTask<void> {
+        auto guard = prod.guard();
 
-    // Create multiple producers
+        for (int i = 0; i < ITEMS_PER_PRODUCER; ++i) {
+            int value = p * 1000 + i;
+            CHECK(co_await channel.send(value));
+            total_produced.fetch_add(value);
+        }
+    };
+
+    auto consume = [&]() -> coro::CoroTask<void> {
+        int value;
+
+        while (blocking_receive(channel, value)) {
+            total_consumed.fetch_add(value);
+        }
+        co_return;
+    };
+
+    Runtime rt(NUM_PRODUCERS + NUM_CONSUMERS);
+    dstd::Vector<coro::CoroTask<void>> tasks;
     for (int p = 0; p < NUM_PRODUCERS; ++p) {
-        auto producer = make_task(
-            [&, p,
-             prod = channel.producer()]([[maybe_unused]] CoroScope& ctx) mutable
-                -> coro::CoroTask<int> {
-                auto guard = prod.guard();
-
-                for (int i = 0; i < ITEMS_PER_PRODUCER; ++i) {
-                    int value = p * 1000 + i;
-                    CHECK(co_await channel.send(value));
-                    total_produced.fetch_add(value);
-                }
-
-                co_return ITEMS_PER_PRODUCER;
-            },
-            "Producer" + std::to_string(p));
-        producers.push_back(producer);
+        tasks.push_back(make_producer(p, channel.producer()));
     }
-
-    // Create multiple consumers
     for (int c = 0; c < NUM_CONSUMERS; ++c) {
-        auto consumer = make_task(
-            [&]([[maybe_unused]] CoroScope& ctx) -> coro::CoroTask<int> {
-                int items = 0;
-                int value;
-
-                while (blocking_receive(channel, value)) {
-                    total_consumed.fetch_add(value);
-                    items++;
-                }
-
-                co_return items;
-            },
-            "Consumer" + std::to_string(c));
-        consumers.push_back(consumer);
+        tasks.push_back(consume());
     }
-
-    // Execute all tasks in parallel
-    auto config = PipelineConfig()
-                      .with_name("MultiProducerMultiConsumer")
-                      .with_compute_threads(NUM_PRODUCERS + NUM_CONSUMERS);
-
-    Pipeline pipeline(config);
-
-    // Combine all producers and consumers as source tasks
-    std::vector<std::shared_ptr<Task>> all_tasks;
-    all_tasks.insert(all_tasks.end(), producers.begin(), producers.end());
-    all_tasks.insert(all_tasks.end(), consumers.begin(), consumers.end());
-
-    pipeline.set_source(all_tasks);
-
-    auto output = pipeline.execute();
+    run_together(rt, std::move(tasks));
 
     // Verify all items were produced and consumed
     CHECK(total_produced.load() == total_consumed.load());
@@ -1213,61 +1044,32 @@ TEST_CASE(
     std::atomic<int> total_produced{0};
     std::atomic<int> total_consumed{0};
 
-    std::vector<std::shared_ptr<Task>> producers;
-    std::vector<std::shared_ptr<Task>> consumers;
+    auto make_producer = [&](int p, auto prod) -> coro::CoroTask<void> {
+        auto guard = prod.guard();
 
-    // Create multiple producers
+        for (int i = 0; i < ITEMS_PER_PRODUCER; ++i) {
+            int value = p * 1000 + i;
+            CHECK(co_await channel.send(value));
+            total_produced.fetch_add(value);
+        }
+    };
+
+    auto consume = [&]() -> coro::CoroTask<void> {
+        while (auto item_opt = co_await channel.receive()) {
+            total_consumed.fetch_add(*item_opt);
+        }
+        co_return;
+    };
+
+    Runtime rt(NUM_PRODUCERS + NUM_CONSUMERS);
+    dstd::Vector<coro::CoroTask<void>> tasks;
     for (int p = 0; p < NUM_PRODUCERS; ++p) {
-        auto producer = make_task(
-            [&, p,
-             prod = channel.producer()]([[maybe_unused]] CoroScope& ctx) mutable
-                -> coro::CoroTask<int> {
-                auto guard = prod.guard();
-
-                for (int i = 0; i < ITEMS_PER_PRODUCER; ++i) {
-                    int value = p * 1000 + i;
-                    CHECK(co_await channel.send(value));
-                    total_produced.fetch_add(value);
-                }
-
-                co_return ITEMS_PER_PRODUCER;
-            },
-            "Producer" + std::to_string(p));
-        producers.push_back(producer);
+        tasks.push_back(make_producer(p, channel.producer()));
     }
-
-    // Create multiple consumers using receive_async()
     for (int c = 0; c < NUM_CONSUMERS; ++c) {
-        auto consumer = make_task(
-            [&](CoroScope& ctx) -> coro::CoroTask<int> {
-                int items = 0;
-
-                while (auto item_opt = co_await ctx.receive(channel)) {
-                    total_consumed.fetch_add(*item_opt);
-                    items++;
-                }
-
-                co_return items;
-            },
-            "Consumer" + std::to_string(c));
-        consumers.push_back(consumer);
+        tasks.push_back(consume());
     }
-
-    // Execute all tasks in parallel
-    auto config = PipelineConfig()
-                      .with_name("MultiProducerMultiConsumerAsync")
-                      .with_compute_threads(NUM_PRODUCERS + NUM_CONSUMERS);
-
-    Pipeline pipeline(config);
-
-    // Combine all producers and consumers as source tasks
-    std::vector<std::shared_ptr<Task>> all_tasks;
-    all_tasks.insert(all_tasks.end(), producers.begin(), producers.end());
-    all_tasks.insert(all_tasks.end(), consumers.begin(), consumers.end());
-
-    pipeline.set_source(all_tasks);
-
-    auto output = pipeline.execute();
+    run_together(rt, std::move(tasks));
 
     // Verify all items were produced and consumed
     CHECK(total_produced.load() == total_consumed.load());
@@ -1287,55 +1089,55 @@ TEST_CASE(
 TEST_CASE("Channel - producer() basic") {
     Channel<int> channel(10);
 
-    CHECK(channel.num_producers() == 0);
+    CHECK(channel.producer_count() == 0);
 
     {
         auto p1 = channel.producer();
         auto guard1 = p1.guard();
-        CHECK(channel.num_producers() == 1);
+        CHECK(channel.producer_count() == 1);
 
         {
             auto p2 = channel.producer();
             auto guard2 = p2.guard();
-            CHECK(channel.num_producers() == 2);
+            CHECK(channel.producer_count() == 2);
         }
 
-        CHECK(channel.num_producers() == 1);
+        CHECK(channel.producer_count() == 1);
     }
     // guard destroyed -> released
-    CHECK(channel.num_producers() == 0);
+    CHECK(channel.producer_count() == 0);
     CHECK(channel.is_closed() == true);
 }
 
 TEST_CASE("Channel - producer() bulk") {
     Channel<int> channel(10);
 
-    CHECK(channel.num_producers() == 0);
+    CHECK(channel.producer_count() == 0);
 
     // Create and release multiple producers
     {
         auto p1 = channel.producer();
         auto guard1 = p1.guard();
-        CHECK(channel.num_producers() == 1);
+        CHECK(channel.producer_count() == 1);
 
         auto p2 = channel.producer();
         auto guard2 = p2.guard();
-        CHECK(channel.num_producers() == 2);
+        CHECK(channel.producer_count() == 2);
 
         auto p3 = channel.producer();
         auto guard3 = p3.guard();
-        CHECK(channel.num_producers() == 3);
+        CHECK(channel.producer_count() == 3);
 
         auto p4 = channel.producer();
         auto guard4 = p4.guard();
-        CHECK(channel.num_producers() == 4);
+        CHECK(channel.producer_count() == 4);
 
         auto p5 = channel.producer();
         auto guard5 = p5.guard();
-        CHECK(channel.num_producers() == 5);
+        CHECK(channel.producer_count() == 5);
     }
     // All released
-    CHECK(channel.num_producers() == 0);
+    CHECK(channel.producer_count() == 0);
     CHECK(channel.is_closed() == true);
 }
 
@@ -1370,7 +1172,7 @@ TEST_CASE("Channel - producer() with threads") {
     std::atomic<int> total_consumed{0};
 
     // Producer threads use producer()
-    std::vector<std::thread> producers;
+    dstd::Vector<dstd::Thread> producers;
     for (int p = 0; p < NUM_PRODUCERS; ++p) {
         producers.emplace_back([&, p, prod = channel.producer()]() mutable {
             auto guard = prod.guard();  // RAII release
@@ -1383,7 +1185,7 @@ TEST_CASE("Channel - producer() with threads") {
     }
 
     // Consumer thread
-    std::thread consumer([&]() {
+    dstd::Thread consumer([&]() {
         int value;
         while (blocking_receive(channel, value)) {
             total_consumed.fetch_add(value);
@@ -1404,48 +1206,35 @@ TEST_CASE("Channel - producer() with scope.spawn() pattern") {
     std::atomic<int> total_produced{0};
     std::atomic<int> total_consumed{0};
 
-    auto streaming_task = make_task(
-        [&](CoroScope& ctx) -> coro::CoroTask<void> {
-            co_await ctx.scope([&](CoroScope& scope) -> coro::CoroTask<void> {
-                // Spawn producers using producer()
-                for (int p = 0; p < NUM_PRODUCERS; ++p) {
-                    scope.spawn([&, p, prod = channel->producer()](
-                                    CoroScope& /*pctx*/) mutable
-                                    -> coro::CoroTask<void> {
-                        auto guard = prod.guard();
-                        for (int i = 0; i < ITEMS_PER_PRODUCER; ++i) {
-                            int value = p * 1000 + i;
-                            CHECK(co_await channel->send(value));
-                            total_produced.fetch_add(value);
-                        }
-                        co_return;
-                    });
-                }
+    Runtime rt(NUM_PRODUCERS + 1);
+    dftu_utils_test::ok(rt.block_on(
+        coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
+            // Spawn producers using producer()
+            for (int p = 0; p < NUM_PRODUCERS; ++p) {
+                scope.spawn([&, p, prod = channel->producer()]() mutable
+                                -> coro::CoroTask<void> {
+                    auto guard = prod.guard();
+                    for (int i = 0; i < ITEMS_PER_PRODUCER; ++i) {
+                        int value = p * 1000 + i;
+                        CHECK(co_await channel->send(value));
+                        total_produced.fetch_add(value);
+                    }
+                    co_return;
+                });
+            }
 
-                // Consumer coroutine
-                auto* total_consumed_ptr = &total_consumed;
-                scope.spawn([total_consumed_ptr,
-                             channel](CoroScope& cctx) -> coro::CoroTask<void> {
-                    while (auto item = co_await cctx.receive(channel)) {
+            // Consumer coroutine
+            auto* total_consumed_ptr = &total_consumed;
+            scope.spawn(
+                [total_consumed_ptr, channel]() -> coro::CoroTask<void> {
+                    while (auto item = co_await channel->receive()) {
                         total_consumed_ptr->fetch_add(*item);
                     }
                     co_return;
                 });
 
-                co_return;
-            });
             co_return;
-        },
-        "ScopeSpawnAdopt");
-
-    auto config = PipelineConfig()
-                      .with_name("AdoptScopeSpawn")
-                      .with_compute_threads(NUM_PRODUCERS + 1);
-
-    Pipeline pipeline(config);
-    pipeline.set_source(streaming_task);
-    pipeline.set_destination(streaming_task);
-    pipeline.execute();
+        })));
 
     CHECK(total_produced.load() == total_consumed.load());
     int expected_sum = 0;
@@ -1463,50 +1252,37 @@ TEST_CASE("Channel - producer() early exit in scope.spawn()") {
     constexpr int NUM_PRODUCERS = 4;
     std::atomic<int> total_consumed{0};
 
-    auto streaming_task = make_task(
-        [&](CoroScope& ctx) -> coro::CoroTask<void> {
-            co_await ctx.scope([&](CoroScope& scope) -> coro::CoroTask<void> {
-                // Some producers exit early (simulating skip/error)
-                for (int p = 0; p < NUM_PRODUCERS; ++p) {
-                    scope.spawn([&, p, prod = channel->producer()](
-                                    CoroScope& /*pctx*/) mutable
-                                    -> coro::CoroTask<void> {
-                        auto guard = prod.guard();
-                        if (p % 2 == 0) {
-                            // Early exit - guard still releases
-                            co_return;
-                        }
-                        for (int i = 0; i < 10; ++i) {
-                            CHECK(co_await channel->send(p * 100 + i));
-                        }
+    Runtime rt(NUM_PRODUCERS + 1);
+    dftu_utils_test::ok(rt.block_on(
+        coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
+            // Some producers exit early (simulating skip/error)
+            for (int p = 0; p < NUM_PRODUCERS; ++p) {
+                scope.spawn([&, p, prod = channel->producer()]() mutable
+                                -> coro::CoroTask<void> {
+                    auto guard = prod.guard();
+                    if (p % 2 == 0) {
+                        // Early exit - guard still releases
                         co_return;
-                    });
-                }
+                    }
+                    for (int i = 0; i < 10; ++i) {
+                        CHECK(co_await channel->send(p * 100 + i));
+                    }
+                    co_return;
+                });
+            }
 
-                // Consumer
-                auto* total_consumed_ptr = &total_consumed;
-                scope.spawn([total_consumed_ptr,
-                             channel](CoroScope& cctx) -> coro::CoroTask<void> {
-                    while (auto item = co_await cctx.receive(channel)) {
+            // Consumer
+            auto* total_consumed_ptr = &total_consumed;
+            scope.spawn(
+                [total_consumed_ptr, channel]() -> coro::CoroTask<void> {
+                    while (auto item = co_await channel->receive()) {
                         total_consumed_ptr->fetch_add(1);
                     }
                     co_return;
                 });
 
-                co_return;
-            });
             co_return;
-        },
-        "EarlyExitAdopt");
-
-    auto config = PipelineConfig()
-                      .with_name("AdoptEarlyExit")
-                      .with_compute_threads(NUM_PRODUCERS + 1);
-
-    Pipeline pipeline(config);
-    pipeline.set_source(streaming_task);
-    pipeline.set_destination(streaming_task);
-    pipeline.execute();
+        })));
 
     // Only producers 1 and 3 send 10 items each
     CHECK(total_consumed.load() == 20);
@@ -1521,62 +1297,47 @@ TEST_CASE("Channel - producer() two-stage pipeline with scope.spawn()") {
     constexpr int ITEMS_PER_PRODUCER = 20;
     std::atomic<int> total_consumed{0};
 
-    auto streaming_task = make_task(
-        [&](CoroScope& ctx) -> coro::CoroTask<void> {
-            co_await ctx.scope([&](CoroScope& scope) -> coro::CoroTask<void> {
-                // Stage 1: producers -> stage1 channel
-                for (int p = 0; p < NUM_PRODUCERS; ++p) {
-                    scope.spawn([&, p, prod = stage1->producer()](
-                                    CoroScope& /*pctx*/) mutable
-                                    -> coro::CoroTask<void> {
-                        auto guard = prod.guard();
-                        for (int i = 0; i < ITEMS_PER_PRODUCER; ++i) {
-                            CHECK(co_await stage1->send(p * 1000 + i));
-                        }
-                        co_return;
-                    });
-                }
+    Runtime rt(NUM_PRODUCERS + NUM_WORKERS + 1);
+    dftu_utils_test::ok(rt.block_on(
+        coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
+            // Stage 1: producers -> stage1 channel
+            for (int p = 0; p < NUM_PRODUCERS; ++p) {
+                scope.spawn([&, p, prod = stage1->producer()]() mutable
+                                -> coro::CoroTask<void> {
+                    auto guard = prod.guard();
+                    for (int i = 0; i < ITEMS_PER_PRODUCER; ++i) {
+                        CHECK(co_await stage1->send(p * 1000 + i));
+                    }
+                    co_return;
+                });
+            }
 
-                // Stage 2: workers read stage1, write stage2
-                auto* stage1_ptr = &stage1;
-                auto* stage2_ptr = &stage2;
-                for (int w = 0; w < NUM_WORKERS; ++w) {
-                    scope.spawn(
-                        [stage1_ptr, prod = stage2->producer()](
-                            CoroScope& wctx) mutable -> coro::CoroTask<void> {
-                            auto guard = prod.guard();
-                            while (auto item =
-                                       co_await wctx.receive(**stage1_ptr)) {
-                                CHECK(co_await prod.send(*item * 2));
-                            }
-                            co_return;
-                        });
-                }
+            // Stage 2: workers read stage1, write stage2
+            auto* stage1_ptr = &stage1;
+            auto* stage2_ptr = &stage2;
+            for (int w = 0; w < NUM_WORKERS; ++w) {
+                scope.spawn([stage1_ptr, prod = stage2->producer()]() mutable
+                                -> coro::CoroTask<void> {
+                    auto guard = prod.guard();
+                    while (auto item = co_await (*stage1_ptr)->receive()) {
+                        CHECK(co_await prod.send(*item * 2));
+                    }
+                    co_return;
+                });
+            }
 
-                // Final consumer
-                auto* total_consumed_ptr = &total_consumed;
-                scope.spawn([total_consumed_ptr, stage2_ptr](
-                                CoroScope& cctx) -> coro::CoroTask<void> {
-                    while (auto item = co_await cctx.receive(**stage2_ptr)) {
+            // Final consumer
+            auto* total_consumed_ptr = &total_consumed;
+            scope.spawn(
+                [total_consumed_ptr, stage2_ptr]() -> coro::CoroTask<void> {
+                    while (auto item = co_await (*stage2_ptr)->receive()) {
                         total_consumed_ptr->fetch_add(1);
                     }
                     co_return;
                 });
 
-                co_return;
-            });
             co_return;
-        },
-        "TwoStagePipeline");
-
-    auto config = PipelineConfig()
-                      .with_name("AdoptTwoStage")
-                      .with_compute_threads(NUM_PRODUCERS + NUM_WORKERS + 1);
-
-    Pipeline pipeline(config);
-    pipeline.set_source(streaming_task);
-    pipeline.set_destination(streaming_task);
-    pipeline.execute();
+        })));
 
     CHECK(total_consumed.load() == NUM_PRODUCERS * ITEMS_PER_PRODUCER);
 }
@@ -1592,45 +1353,62 @@ TEST_CASE("Channel - spawn_transforms() basic") {
     constexpr int NUM_ITEMS = 100;
     std::atomic<int> total_consumed{0};
 
-    auto streaming_task = make_task(
-        [&](CoroScope& ctx) -> coro::CoroTask<void> {
-            co_await ctx.scope([&](CoroScope& scope) -> coro::CoroTask<void> {
-                // Single producer
-                scope.spawn_producer(
-                    input, [](CoroScope& /*ctx*/) -> coro::Generator<int> {
-                        for (int i = 1; i <= NUM_ITEMS; ++i) {
-                            co_yield i;
-                        }
-                    });
-
-                // Transform: square each value
-                scope.spawn_transforms(
-                    input, output, 4,
-                    [](CoroScope& /*ctx*/, int val) -> coro::CoroTask<int> {
-                        co_return val* val;
-                    });
-
-                // Consumer
-                scope.spawn_consumers(
-                    output, 1,
-                    [&](CoroScope& /*ctx*/, int val) -> coro::CoroTask<void> {
-                        total_consumed.fetch_add(val);
+    Runtime rt(4);
+    dftu_utils_test::ok(rt.block_on(
+        coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
+            // Single producer
+            auto generate = []() -> coro::Generator<int> {
+                for (int i = 1; i <= NUM_ITEMS; ++i) {
+                    co_yield i;
+                }
+            };
+            scope.spawn([&]() -> coro::CoroTask<void> {
+                auto ch = input->producer();
+                auto guard = ch.guard();
+                coro::Generator<int> gen = generate();
+                for (auto item : gen) {
+                    const auto send_ok = co_await ch.send(std::move(item));
+                    if (!send_ok) {
                         co_return;
-                    });
-
+                    }
+                }
                 co_return;
             });
+
+            // Transform: square each value
+            auto square = [](int val) -> coro::CoroTask<int> {
+                co_return val* val;
+            };
+            for (int w = 0; w < 4; ++w) {
+                scope.spawn([&]() -> coro::CoroTask<void> {
+                    auto op = output->producer();
+                    auto guard = op.guard();
+                    for (;;) {
+                        auto item = co_await input->receive();
+                        if (!item) break;
+                        auto result = co_await square(std::move(*item));
+                        const auto send_ok =
+                            co_await op.send(std::move(result));
+                        if (!send_ok) {
+                            co_return;
+                        }
+                    }
+                    co_return;
+                });
+            }
+
+            // Consumer
+            scope.spawn([&]() -> coro::CoroTask<void> {
+                for (;;) {
+                    auto item = co_await output->receive();
+                    if (!item) break;
+                    total_consumed.fetch_add(*item);
+                }
+                co_return;
+            });
+
             co_return;
-        },
-        "TransformBasic");
-
-    auto config =
-        PipelineConfig().with_name("SpawnTransforms").with_compute_threads(4);
-
-    Pipeline pipeline(config);
-    pipeline.set_source(streaming_task);
-    pipeline.set_destination(streaming_task);
-    pipeline.execute();
+        })));
 
     // sum of squares 1..100
     int expected = 0;
@@ -1640,58 +1418,87 @@ TEST_CASE("Channel - spawn_transforms() basic") {
 
 TEST_CASE("Channel - spawn_transforms() two-stage pipeline") {
     auto stage1 = coro::make_channel<int>(50);
-    auto stage2 = coro::make_channel<std::string>(50);
-    auto stage3 = coro::make_channel<std::string>(50);
+    auto stage2 = coro::make_channel<dstd::String>(50);
+    auto stage3 = coro::make_channel<dstd::String>(50);
 
     std::atomic<int> total_consumed{0};
 
-    auto streaming_task = make_task(
-        [&](CoroScope& ctx) -> coro::CoroTask<void> {
-            co_await ctx.scope([&](CoroScope& scope) -> coro::CoroTask<void> {
-                // Producer: emit integers
-                scope.spawn_producer(
-                    stage1, [](CoroScope& /*ctx*/) -> coro::Generator<int> {
-                        for (int i = 0; i < 50; ++i) co_yield i;
-                    });
-
-                // Transform 1: int -> string
-                scope.spawn_transforms(
-                    stage1, stage2, 2,
-                    [](CoroScope& /*ctx*/,
-                       int val) -> coro::CoroTask<std::string> {
-                        co_return std::to_string(val);
-                    });
-
-                // Transform 2: string -> string (prefix)
-                scope.spawn_transforms(
-                    stage2, stage3, 2,
-                    [](CoroScope& /*ctx*/,
-                       std::string val) -> coro::CoroTask<std::string> {
-                        co_return "item_" + val;
-                    });
-
-                // Consumer
-                scope.spawn_consumers(
-                    stage3, 1,
-                    [&](CoroScope& /*ctx*/,
-                        std::string /*val*/) -> coro::CoroTask<void> {
-                        total_consumed.fetch_add(1);
+    Runtime rt(8);
+    dftu_utils_test::ok(rt.block_on(
+        coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
+            // Producer: emit integers
+            auto generate = []() -> coro::Generator<int> {
+                for (int i = 0; i < 50; ++i) co_yield i;
+            };
+            scope.spawn([&]() -> coro::CoroTask<void> {
+                auto ch = stage1->producer();
+                auto guard = ch.guard();
+                coro::Generator<int> gen = generate();
+                for (auto item : gen) {
+                    const auto send_ok = co_await ch.send(std::move(item));
+                    if (!send_ok) {
                         co_return;
-                    });
-
+                    }
+                }
                 co_return;
             });
+
+            // Transform 1: int -> string
+            auto to_string_op = [](int val) -> coro::CoroTask<dstd::String> {
+                co_return dstd::to_string(val);
+            };
+            for (int w = 0; w < 2; ++w) {
+                scope.spawn([&]() -> coro::CoroTask<void> {
+                    auto op = stage2->producer();
+                    auto guard = op.guard();
+                    for (;;) {
+                        auto item = co_await stage1->receive();
+                        if (!item) break;
+                        auto result = co_await to_string_op(std::move(*item));
+                        const auto send_ok =
+                            co_await op.send(std::move(result));
+                        if (!send_ok) {
+                            co_return;
+                        }
+                    }
+                    co_return;
+                });
+            }
+
+            // Transform 2: string -> string (prefix)
+            auto prefix = [](dstd::String val) -> coro::CoroTask<dstd::String> {
+                co_return dstd::fmt<"item_{}">(val);
+            };
+            for (int w = 0; w < 2; ++w) {
+                scope.spawn([&]() -> coro::CoroTask<void> {
+                    auto op = stage3->producer();
+                    auto guard = op.guard();
+                    for (;;) {
+                        auto item = co_await stage2->receive();
+                        if (!item) break;
+                        auto result = co_await prefix(std::move(*item));
+                        const auto send_ok =
+                            co_await op.send(std::move(result));
+                        if (!send_ok) {
+                            co_return;
+                        }
+                    }
+                    co_return;
+                });
+            }
+
+            // Consumer
+            scope.spawn([&]() -> coro::CoroTask<void> {
+                for (;;) {
+                    auto item = co_await stage3->receive();
+                    if (!item) break;
+                    total_consumed.fetch_add(1);
+                }
+                co_return;
+            });
+
             co_return;
-        },
-        "TwoStageTransform");
-
-    auto config =
-        PipelineConfig().with_name("ChainedTransforms").with_compute_threads(8);
-
-    Pipeline pipeline(config);
-    pipeline.set_source(streaming_task);
-    pipeline.set_destination(streaming_task);
-    pipeline.execute();
+        })));
 
     CHECK(total_consumed.load() == 50);
 }

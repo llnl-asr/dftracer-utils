@@ -1,16 +1,19 @@
+// SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/trace/statistics/statistics_query_utility.h>
+#include <dftracer/utils/domains/analysis/statistics/statistics_query_utility.h>
+#include <dftracer/utils/dstd/string.h>
 #include <doctest/doctest.h>
 #include <simdjson.h>
+#include <task_result.h>
 
-#include <string>
+using namespace dftracer::utils;
 
-using namespace dftracer::utils::trace::statistics;
+using namespace dftracer::utils::domains::analysis::statistics;
 
 static TraceStatistics make_test_stats() {
     TraceStatistics ts;
     ts.success = true;
-    ts.num_chunks = 2;
+    ts.chunk_count = 2;
     ts.file_path = "/test/file.pfw.gz";
     ts.index_path = "/test/file.pfw.gz.idx";
 
@@ -30,10 +33,10 @@ TEST_SUITE("StatisticsQueryUtility") {
 
         StatisticsQueryInput input;
         input.stats = stats;
-        input.query_type = StatisticsQueryType::SUMMARY;
+        input.query_type = StatisticsQueryType::Summary;
 
         StatisticsQueryUtility query;
-        auto output = query(input).get();
+        auto output = dftu_utils_test::ok(query(input).get());
 
         CHECK(output.total_events == 5);
         CHECK(output.query_type_name == "summary");
@@ -48,10 +51,10 @@ TEST_SUITE("StatisticsQueryUtility") {
 
         StatisticsQueryInput input;
         input.stats = stats;
-        input.query_type = StatisticsQueryType::CATEGORIES;
+        input.query_type = StatisticsQueryType::Categories;
 
         StatisticsQueryUtility query;
-        auto output = query(input).get();
+        auto output = dftu_utils_test::ok(query(input).get());
 
         CHECK(output.results.size() == 2);
         // POSIX has 3 events, storage has 2
@@ -66,10 +69,10 @@ TEST_SUITE("StatisticsQueryUtility") {
 
         StatisticsQueryInput input;
         input.stats = stats;
-        input.query_type = StatisticsQueryType::NAMES;
+        input.query_type = StatisticsQueryType::Names;
 
         StatisticsQueryUtility query;
-        auto output = query(input).get();
+        auto output = dftu_utils_test::ok(query(input).get());
 
         CHECK(output.results.size() == 4);
         // read=2, write=1, open=1, close=1
@@ -82,10 +85,10 @@ TEST_SUITE("StatisticsQueryUtility") {
 
         StatisticsQueryInput input;
         input.stats = stats;
-        input.query_type = StatisticsQueryType::PID_TIDS;
+        input.query_type = StatisticsQueryType::PidTids;
 
         StatisticsQueryUtility query;
-        auto output = query(input).get();
+        auto output = dftu_utils_test::ok(query(input).get());
 
         CHECK(!output.results.empty());
         // 1:1=2, 1:2=1, 2:1=2
@@ -104,10 +107,10 @@ TEST_SUITE("StatisticsQueryUtility") {
 
         StatisticsQueryInput input;
         input.stats = stats;
-        input.query_type = StatisticsQueryType::TIME_RANGE;
+        input.query_type = StatisticsQueryType::TimeRange;
 
         StatisticsQueryUtility query;
-        auto output = query(input).get();
+        auto output = dftu_utils_test::ok(query(input).get());
 
         CHECK(output.min_timestamp_us == 1000);
         CHECK(output.max_timestamp_us == 5010);  // 5000 + 10
@@ -119,10 +122,10 @@ TEST_SUITE("StatisticsQueryUtility") {
 
         StatisticsQueryInput input;
         input.stats = stats;
-        input.query_type = StatisticsQueryType::DURATION_STATS;
+        input.query_type = StatisticsQueryType::DurationStats;
 
         StatisticsQueryUtility query;
-        auto output = query(input).get();
+        auto output = dftu_utils_test::ok(query(input).get());
 
         CHECK(output.duration_count == 5);
         CHECK(output.duration_mean_us == doctest::Approx(132.0));
@@ -136,11 +139,11 @@ TEST_SUITE("StatisticsQueryUtility") {
 
         StatisticsQueryInput input;
         input.stats = stats;
-        input.query_type = StatisticsQueryType::TOP_N_NAMES;
+        input.query_type = StatisticsQueryType::TopNNames;
         input.top_n = 2;
 
         StatisticsQueryUtility query;
-        auto output = query(input).get();
+        auto output = dftu_utils_test::ok(query(input).get());
 
         CHECK(output.results.size() == 2);
         // Top 2: read=2, then one of write/open/close=1
@@ -154,11 +157,11 @@ TEST_SUITE("StatisticsQueryUtility") {
 
         StatisticsQueryInput input;
         input.stats = stats;
-        input.query_type = StatisticsQueryType::TOP_N_CATEGORIES;
+        input.query_type = StatisticsQueryType::TopNCategories;
         input.top_n = 1;
 
         StatisticsQueryUtility query;
-        auto output = query(input).get();
+        auto output = dftu_utils_test::ok(query(input).get());
 
         CHECK(output.results.size() == 1);
         CHECK(output.results[0].first == "POSIX");
@@ -169,12 +172,9 @@ TEST_SUITE("StatisticsQueryUtility") {
         auto stats = make_test_stats();
 
         StatisticsQueryType types[] = {
-            StatisticsQueryType::SUMMARY,
-            StatisticsQueryType::CATEGORIES,
-            StatisticsQueryType::NAMES,
-            StatisticsQueryType::TIME_RANGE,
-            StatisticsQueryType::DURATION_STATS,
-            StatisticsQueryType::TOP_N_NAMES,
+            StatisticsQueryType::Summary,       StatisticsQueryType::Categories,
+            StatisticsQueryType::Names,         StatisticsQueryType::TimeRange,
+            StatisticsQueryType::DurationStats, StatisticsQueryType::TopNNames,
         };
 
         StatisticsQueryUtility query;
@@ -185,11 +185,11 @@ TEST_SUITE("StatisticsQueryUtility") {
             input.query_type = qt;
             input.top_n = 5;
 
-            auto output = query(input).get();
-            std::string json = output.to_json();
+            auto output = dftu_utils_test::ok(query(input).get());
+            dstd::String json = dstd::String(output.to_json());
 
             simdjson::dom::parser parser;
-            auto result = parser.parse(json);
+            auto result = parser.parse(simdjson::padded_string(json));
             REQUIRE(!result.error());
 
             auto root = result.value_unsafe();

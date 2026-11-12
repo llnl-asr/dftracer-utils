@@ -1,42 +1,41 @@
+// SPDX-License-Identifier: MIT
 // DFTU_SVC_OPS: exposes the dataframe engine's op registry to a plugin by
 // name, so it can run any registered column/aggregate/frame op on a
 // Series/DataFrame it already holds without linking the dataframe C ABI.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/string_intern.h>
+#include <dftracer/utils/domains/plugins/fold_adapter.h>
+#include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/plugins/abi.h>
-#include <dftracer/utils/plugins/fold_adapter.h>
 
-#include <memory>
 // After fold_adapter.h so nanoarrow is set up before dataframe/abi.h's
 // arrow_abi.
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/plugin.h>
 #include <doctest/doctest.h>
 
 #include <cstdint>
-#include <vector>
 
-using dftracer::utils::StringIntern;
-using dftracer::utils::plugins::Host;
-using dftracer::utils::plugins::PluginFold;
+using namespace dftracer::utils;
 
 namespace {
 
 struct TrivialSlice {
     explicit TrivialSlice(const dftracer::utils::plugins::Config&) {}
-    void step(const dftu_dataframe*, Host) {}
+    void step(const dftu_dataframe*, plugins::Host) {}
     void merge(TrivialSlice&) {}
-    void finalize(Host) {}
+    void finalize(plugins::Host) {}
 };
 
 struct HostFixture {
-    StringIntern intern;
+    dstd::StringIntern intern;
     dftu_plugin* plugin =
         dftracer::utils::plugins::make_plugin<TrivialSlice>(nullptr);
-    std::unique_ptr<PluginFold> fold =
-        std::make_unique<PluginFold>(plugin, intern);
+    dstd::UniquePtr<domains::plugins::PluginFold> fold =
+        dstd::make_unique<domains::plugins::PluginFold>(plugin, intern);
     dftu_plugin_host& host() { return fold->host(); }
     ~HostFixture() {
         fold.reset();
@@ -48,7 +47,7 @@ struct HostFixture {
 
 TEST_CASE("plugin ops: run_op runs a registered column op by name") {
     HostFixture fx;
-    Host h{&fx.host()};
+    plugins::Host h{&fx.host()};
 
     const std::int64_t a_vals[] = {1, 2, 3};
     const std::int64_t b_vals[] = {10, 20, 30};
@@ -73,7 +72,7 @@ TEST_CASE("plugin ops: run_op runs a registered column op by name") {
 
 TEST_CASE("plugin ops: run_op reports unknown names and bad arity") {
     HostFixture fx;
-    Host h{&fx.host()};
+    plugins::Host h{&fx.host()};
 
     CHECK(h.run_op("dftu.test.nonexistent_op", {}) == nullptr);
 
@@ -113,7 +112,7 @@ TEST_CASE("plugin ops: unknown op and a failed op are distinguishable") {
 
 TEST_CASE("plugin ops: find_op resolves a built-in by name") {
     HostFixture fx;
-    Host h{&fx.host()};
+    plugins::Host h{&fx.host()};
 
     const dftu_op_desc* desc = h.find_op("dftu.series.add");
     REQUIRE(desc);
@@ -186,17 +185,17 @@ std::int64_t sum_through_data(const dftu_series* v) {
 dftu_series* doubled_through_data(const dftu_series* v) {
     const auto* d = static_cast<const std::int64_t*>(dftu_series_data(v));
     if (!d) return nullptr;
-    std::vector<std::int64_t> out(
+    dstd::Vector<std::int64_t> out(
         static_cast<std::size_t>(dftu_series_length(v)));
     for (std::size_t i = 0; i < out.size(); ++i) out[i] = 2 * d[i];
     return dftu_series_new_flat(DFTU_TYPE_INT64, out.data(),
                                 static_cast<std::int64_t>(out.size()), nullptr);
 }
 
-std::shared_ptr<dftu_series> flat_chunk(std::vector<std::int64_t> v) {
-    return {dftu_series_new_flat(DFTU_TYPE_INT64, v.data(),
-                                 static_cast<std::int64_t>(v.size()), nullptr),
-            dftu_series_free};
+dstd::SharedPtr<dftu_series> flat_chunk(dstd::Vector<std::int64_t> v) {
+    return adopt_series(
+        dftu_series_new_flat(DFTU_TYPE_INT64, v.data(),
+                             static_cast<std::int64_t>(v.size()), nullptr));
 }
 
 }  // namespace
@@ -209,10 +208,10 @@ TEST_CASE("plugin ops: a plugin op over a chunked column equals the joined") {
 
     static const dftu_op_desc sum_op = {
         "chunk_join_test.sum", DFTU_OP_SIG(I64, SERIES, NONE, NONE),
-        reinterpret_cast<const void*>(&sum_through_data)};
+        reinterpret_cast<dftu_op_generic_fn>(&sum_through_data)};
     static const dftu_op_desc dbl_op = {
         "chunk_join_test.double", DFTU_OP_SIG(SERIES, SERIES, NONE, NONE),
-        reinterpret_cast<const void*>(&doubled_through_data)};
+        reinterpret_cast<dftu_op_generic_fn>(&doubled_through_data)};
     if (!dftu_op_find(sum_op.name)) REQUIRE(dftu_op_register(&sum_op) == 0);
     if (!dftu_op_find(dbl_op.name)) REQUIRE(dftu_op_register(&dbl_op) == 0);
 

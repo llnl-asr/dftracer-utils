@@ -1,23 +1,19 @@
+// SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/index/extensions/bloom_filter.h>
-#include <dftracer/utils/index/store/index_database.h>
-#include <dftracer/utils/index/store/index_database_writer_context.h>
-#include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/fileio/file_helpers.h>
+#include <dftracer/utils/trace/index/extensions/scalable_bloom_filter.h>
 #include <dftracer/utils/trace/views/view_definition.h>
 #include <dftracer/utils/trace/views/view_planner_utility.h>
 #include <doctest/doctest.h>
 #include <index_test_helpers.h>
-
-#include <string>
-
-#include "testing_utilities.h"
+#include <testing_utilities.h>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::trace::views;
-using namespace dftracer::utils::index::extensions;
-using dftracer::utils::index::store::IndexDatabase;
-using dftracer::utils::index::store::internal::get_logical_path;
+using namespace dftracer::utils::trace::index::extensions;
 
 // Helper: create a .idx with 4 checkpoints
 // Checkpoint layout:
@@ -25,18 +21,15 @@ using dftracer::utils::index::store::internal::get_logical_path;
 //   1: name={open,close}, cat={POSIX}
 //   2: name={train}, cat={compute}
 //   3: name={forward}, cat={compute,ai_framework}
-static void populate_test_idx(const std::string& index_path,
-                              const std::string& file_path) {
-    IndexDatabase idx_db(index_path);
-    auto writer = idx_db.begin_write();
-    writer->init_schema();
-
-    int fid = dftu_utils_test::register_test_file(
-        *writer, get_logical_path(file_path), 40000);
+static void populate_test_idx(const dstd::String& index_path,
+                              const dstd::String& file_path) {
+    auto index = dftu_utils_test::open_test_index(index_path);
+    auto writer = dftu_utils_test::register_test_file(
+        index, dftu_utils_test::index_key(file_path), 40000);
 
     struct ChunkDims {
-        std::vector<std::string> names;
-        std::vector<std::string> cats;
+        dstd::Vector<dstd::String> names;
+        dstd::Vector<dstd::String> cats;
     };
 
     ChunkDims chunks[] = {
@@ -46,77 +39,76 @@ static void populate_test_idx(const std::string& index_path,
         {{"forward"}, {"compute", "ai_framework"}},
     };
 
-    BloomFilter file_name_bloom(100, 0.01);
-    BloomFilter file_cat_bloom(100, 0.01);
+    ScalableBloomFilter file_name_bloom(100, 0.01);
+    ScalableBloomFilter file_cat_bloom(100, 0.01);
 
     for (int ckpt = 0; ckpt < 4; ++ckpt) {
-        BloomFilter name_bloom(100, 0.01);
+        ScalableBloomFilter name_bloom(100, 0.01);
         for (const auto& n : chunks[ckpt].names) {
             name_bloom.add(n);
             file_name_bloom.add(n);
         }
         auto name_blob = name_bloom.serialize();
         dftu_utils_test::put_chunk_bloom(
-            *writer, fid, static_cast<std::uint64_t>(ckpt), "name", name_blob,
-            name_bloom.num_entries());
+            writer, static_cast<std::uint64_t>(ckpt), "name", name_blob,
+            name_bloom.entry_count());
 
-        BloomFilter cat_bloom(100, 0.01);
+        ScalableBloomFilter cat_bloom(100, 0.01);
         for (const auto& c : chunks[ckpt].cats) {
             cat_bloom.add(c);
             file_cat_bloom.add(c);
         }
         auto cat_blob = cat_bloom.serialize();
         dftu_utils_test::put_chunk_bloom(
-            *writer, fid, static_cast<std::uint64_t>(ckpt), "cat", cat_blob,
-            cat_bloom.num_entries());
+            writer, static_cast<std::uint64_t>(ckpt), "cat", cat_blob,
+            cat_bloom.entry_count());
 
         const auto m = static_cast<std::uint64_t>(ckpt);
-        dftu_utils_test::index_records::put_gzip_member(
-            *writer, fid,
-            dftracer::utils::index::gzip::GzipMemberRecord{
-                .member_idx = m,
-                .c_offset = m * 5000,
-                .c_size = 5000,
-                .uc_offset = m * 10000,
-                .uc_size = 10000,
-                .first_line_num = m * 10 + 1,
-                .last_line_num = m * 10 + 10,
-            });
+        dftracer::utils::trace::index::put_gzip_member(
+            writer, dftracer::utils::trace::index::gzip::GzipMemberRecord{
+                        .member_idx = m,
+                        .c_offset = m * 5000,
+                        .c_size = 5000,
+                        .uc_offset = m * 10000,
+                        .uc_size = 10000,
+                        .first_line_num = m * 10 + 1,
+                        .last_line_num = m * 10 + 10,
+                    });
     }
 
     auto name_blob = file_name_bloom.serialize();
-    dftu_utils_test::put_file_bloom(*writer, fid, "name", name_blob,
-                                    file_name_bloom.num_entries());
+    dftu_utils_test::put_file_bloom(writer, "name", name_blob,
+                                    file_name_bloom.entry_count());
 
     auto cat_blob = file_cat_bloom.serialize();
-    dftu_utils_test::put_file_bloom(*writer, fid, "cat", cat_blob,
-                                    file_cat_bloom.num_entries());
+    dftu_utils_test::put_file_bloom(writer, "cat", cat_blob,
+                                    file_cat_bloom.entry_count());
 
-    dftu_utils_test::index_records::put_path(
-        *writer, dftu_utils_test::IndexExtension::BLOOM, fid, "name");
-    dftu_utils_test::index_records::put_path(
-        *writer, dftu_utils_test::IndexExtension::BLOOM, fid, "cat");
-    dftu_utils_test::mark_built(*writer, fid);
-    writer->commit();
+    dftracer::utils::trace::index::put_path(
+        writer, trace::index::store::IndexExtension::Bloom, "name");
+    dftracer::utils::trace::index::put_path(
+        writer, trace::index::store::IndexExtension::Bloom, "cat");
+    dftu_utils_test::mark_built(writer);
+    dftu_utils_test::commit_test_build(writer);
 }
 
 TEST_SUITE("ViewPlannerUtility") {
     TEST_CASE("ViewPlanner - IO view filters to POSIX chunks") {
-        std::string test_dir =
+        dstd::String test_dir = dstd::String(
             dftu_utils_test::make_unique_test_path("test_view_builder_io")
-                .string();
-        fs::create_directories(test_dir);
+                .str());
+        REQUIRE(dstd::fs::create_directories(test_dir).has_value());
 
-        std::string index_path = test_dir + "/test.pfw.gz.idx";
-        std::string file_path = "/fake/test.pfw.gz";
+        dstd::String index_path = test_dir + "/test.pfw.gz.idx";
+        dstd::String file_path = "/fake/test.pfw.gz";
         populate_test_idx(index_path, file_path);
 
         ViewPlannerInput input;
         input.with_view(ViewDefinition::io_view())
-            .with_file_path(file_path)
-            .with_index_path(index_path)
+            .with_file_path(dstd::String(file_path))
+            .with_index_path(dstd::String(index_path))
             .with_uncompressed_size(40000)
-            .with_num_checkpoints(4);
+            .with_checkpoint_count(4);
 
         ViewPlannerUtility builder;
         auto output = builder(input).get();
@@ -134,25 +126,25 @@ TEST_SUITE("ViewPlannerUtility") {
             CHECK(c.end_byte > c.start_byte);
         }
 
-        fs::remove_all(test_dir);
+        dstd::fs::remove_all(test_dir).discard();
     }
 
     TEST_CASE("ViewPlanner - Compute view filters to compute chunks") {
-        std::string test_dir =
+        dstd::String test_dir = dstd::String(
             dftu_utils_test::make_unique_test_path("test_view_builder_compute")
-                .string();
-        fs::create_directories(test_dir);
+                .str());
+        REQUIRE(dstd::fs::create_directories(test_dir).has_value());
 
-        std::string index_path = test_dir + "/test.pfw.gz.idx";
-        std::string file_path = "/fake/test.pfw.gz";
+        dstd::String index_path = test_dir + "/test.pfw.gz.idx";
+        dstd::String file_path = "/fake/test.pfw.gz";
         populate_test_idx(index_path, file_path);
 
         ViewPlannerInput input;
         input.with_view(ViewDefinition::compute_view())
-            .with_file_path(file_path)
-            .with_index_path(index_path)
+            .with_file_path(dstd::String(file_path))
+            .with_index_path(dstd::String(index_path))
             .with_uncompressed_size(40000)
-            .with_num_checkpoints(4);
+            .with_checkpoint_count(4);
 
         ViewPlannerUtility builder;
         auto output = builder(input).get();
@@ -164,17 +156,17 @@ TEST_SUITE("ViewPlannerUtility") {
         CHECK(output->candidates.size() >= 2);
         CHECK(output->skipped_checkpoints >= 2);
 
-        fs::remove_all(test_dir);
+        dstd::fs::remove_all(test_dir).discard();
     }
 
     TEST_CASE("ViewPlanner - File-level skip for absent values") {
-        std::string test_dir =
+        dstd::String test_dir = dstd::String(
             dftu_utils_test::make_unique_test_path("test_view_builder_skip")
-                .string();
-        fs::create_directories(test_dir);
+                .str());
+        REQUIRE(dstd::fs::create_directories(test_dir).has_value());
 
-        std::string index_path = test_dir + "/test.pfw.gz.idx";
-        std::string file_path = "/fake/test.pfw.gz";
+        dstd::String index_path = test_dir + "/test.pfw.gz.idx";
+        dstd::String file_path = "/fake/test.pfw.gz";
         populate_test_idx(index_path, file_path);
 
         ViewDefinition view;
@@ -182,10 +174,10 @@ TEST_SUITE("ViewPlannerUtility") {
 
         ViewPlannerInput input;
         input.with_view(view)
-            .with_file_path(file_path)
-            .with_index_path(index_path)
+            .with_file_path(dstd::String(file_path))
+            .with_index_path(dstd::String(index_path))
             .with_uncompressed_size(40000)
-            .with_num_checkpoints(4);
+            .with_checkpoint_count(4);
 
         ViewPlannerUtility builder;
         auto output = builder(input).get();
@@ -195,17 +187,17 @@ TEST_SUITE("ViewPlannerUtility") {
         CHECK(output->candidates.empty());
         CHECK(output->skipped_checkpoints == 4);
 
-        fs::remove_all(test_dir);
+        dstd::fs::remove_all(test_dir).discard();
     }
 
     TEST_CASE("ViewPlanner - No bloom predicates returns all chunks") {
-        std::string test_dir =
+        dstd::String test_dir = dstd::String(
             dftu_utils_test::make_unique_test_path("test_view_builder_nobl")
-                .string();
-        fs::create_directories(test_dir);
+                .str());
+        REQUIRE(dstd::fs::create_directories(test_dir).has_value());
 
-        std::string index_path = test_dir + "/test.pfw.gz.idx";
-        std::string file_path = "/fake/test.pfw.gz";
+        dstd::String index_path = test_dir + "/test.pfw.gz.idx";
+        dstd::String file_path = "/fake/test.pfw.gz";
         populate_test_idx(index_path, file_path);
 
         ViewDefinition view;
@@ -213,10 +205,10 @@ TEST_SUITE("ViewPlannerUtility") {
 
         ViewPlannerInput input;
         input.with_view(view)
-            .with_file_path(file_path)
-            .with_index_path(index_path)
+            .with_file_path(dstd::String(file_path))
+            .with_index_path(dstd::String(index_path))
             .with_uncompressed_size(40000)
-            .with_num_checkpoints(4);
+            .with_checkpoint_count(4);
 
         ViewPlannerUtility builder;
         auto output = builder(input).get();
@@ -226,7 +218,7 @@ TEST_SUITE("ViewPlannerUtility") {
         CHECK(output->candidates.size() == 4);
         CHECK(output->skipped_checkpoints == 0);
 
-        fs::remove_all(test_dir);
+        dstd::fs::remove_all(test_dir).discard();
     }
 
     TEST_CASE("ViewPlanner - No index reads the file as one unit") {
@@ -238,7 +230,7 @@ TEST_SUITE("ViewPlannerUtility") {
             .with_file_path("/fake/file.pfw.gz")
             .with_index_path("")  // No bloom index
             .with_uncompressed_size(30000)
-            .with_num_checkpoints(3);
+            .with_checkpoint_count(3);
 
         ViewPlannerUtility builder;
         auto output = builder(input).get();
@@ -260,7 +252,7 @@ TEST_SUITE("ViewPlannerUtility") {
             .with_file_path("/fake/file.pfw.gz")
             .with_index_path("")
             .with_uncompressed_size(10000)
-            .with_num_checkpoints(0);
+            .with_checkpoint_count(0);
 
         ViewPlannerUtility builder;
         auto output = builder(input).get();
@@ -273,33 +265,31 @@ TEST_SUITE("ViewPlannerUtility") {
     }
 
     TEST_CASE("ViewPlanner - Dimension alias resolution") {
-        std::string test_dir =
+        dstd::String test_dir = dstd::String(
             dftu_utils_test::make_unique_test_path("test_view_builder_alias")
-                .string();
-        fs::create_directories(test_dir);
+                .str());
+        REQUIRE(dstd::fs::create_directories(test_dir).has_value());
 
-        std::string index_path = test_dir + "/test.pfw.gz.idx";
-        std::string file_path = "/fake/test.pfw.gz";
+        dstd::String index_path = test_dir + "/test.pfw.gz.idx";
+        dstd::String file_path = "/fake/test.pfw.gz";
 
-        IndexDatabase idx_db(index_path);
         {
-            auto writer = idx_db.begin_write();
-            writer->init_schema();
-            int fid = dftu_utils_test::register_test_file(
-                *writer, get_logical_path(file_path), 10000);
+            auto index = dftu_utils_test::open_test_index(index_path);
+            auto writer = dftu_utils_test::register_test_file(
+                index, dftu_utils_test::index_key(file_path), 10000);
 
-            BloomFilter fhash_bloom(100, 0.01);
+            ScalableBloomFilter fhash_bloom(100, 0.01);
             fhash_bloom.add("hash123");
             auto blob = fhash_bloom.serialize();
 
-            dftu_utils_test::put_file_bloom(*writer, fid, "fhash", blob,
-                                            fhash_bloom.num_entries());
-            dftu_utils_test::put_chunk_bloom(*writer, fid, 0, "fhash", blob,
-                                             fhash_bloom.num_entries());
-            dftu_utils_test::index_records::put_path(
-                *writer, dftu_utils_test::IndexExtension::BLOOM, fid, "fhash");
-            dftu_utils_test::mark_built(*writer, fid);
-            writer->commit();
+            dftu_utils_test::put_file_bloom(writer, "fhash", blob,
+                                            fhash_bloom.entry_count());
+            dftu_utils_test::put_chunk_bloom(writer, 0, "fhash", blob,
+                                             fhash_bloom.entry_count());
+            dftracer::utils::trace::index::put_path(
+                writer, trace::index::store::IndexExtension::Bloom, "fhash");
+            dftu_utils_test::mark_built(writer);
+            dftu_utils_test::commit_test_build(writer);
         }
 
         // Use "file" alias which should resolve to "fhash"
@@ -308,10 +298,10 @@ TEST_SUITE("ViewPlannerUtility") {
 
         ViewPlannerInput input;
         input.with_view(view)
-            .with_file_path(file_path)
-            .with_index_path(index_path)
+            .with_file_path(dstd::String(file_path))
+            .with_index_path(dstd::String(index_path))
             .with_uncompressed_size(10000)
-            .with_num_checkpoints(1);
+            .with_checkpoint_count(1);
 
         ViewPlannerUtility builder;
         auto output = builder(input).get();
@@ -320,6 +310,42 @@ TEST_SUITE("ViewPlannerUtility") {
         CHECK(output->file_may_match);
         CHECK(output->candidates.size() == 1);
 
-        fs::remove_all(test_dir);
+        dstd::fs::remove_all(test_dir).discard();
+    }
+
+    TEST_CASE("ViewPlanner - several chunks without a chunk table fail") {
+        dstd::String test_dir = dstd::String(
+            dftu_utils_test::make_unique_test_path("test_view_builder_no_table")
+                .str());
+        REQUIRE(dstd::fs::create_directories(test_dir).has_value());
+
+        dstd::String index_path = test_dir + "/test.pfw.gz.idx";
+        dstd::String file_path = "/fake/test.pfw.gz";
+
+        {
+            auto index = dftu_utils_test::open_test_index(index_path);
+            auto writer = dftu_utils_test::register_test_file(
+                index, dftu_utils_test::index_key(file_path), 10000);
+            dftu_utils_test::commit_test_build(writer);
+        }
+
+        ViewDefinition view;
+        view.with_name("no_table");
+
+        ViewPlannerInput input;
+        input.with_view(view)
+            .with_file_path(dstd::String(file_path))
+            .with_index_path(dstd::String(index_path))
+            .with_uncompressed_size(10000)
+            .with_checkpoint_count(3);
+
+        ViewPlannerUtility builder;
+        auto output = builder(input).get();
+
+        REQUIRE_FALSE(output);
+        CHECK(dstd::String(output.error().message()).find("chunk table") !=
+              dstd::String::npos);
+
+        dstd::fs::remove_all(test_dir).discard();
     }
 }

@@ -1,25 +1,24 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_TRACE_VIEWS_FOLD_H
 #define DFTRACER_UTILS_TRACE_VIEWS_FOLD_H
 
-#include <dftracer/utils/core/common/string_intern.h>
-#include <dftracer/utils/core/coro/async_semaphore.h>
-#include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/coro/async_semaphore.h>
+#include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/trace/views/coverage.h>
 #include <dftracer/utils/trace/views/fold_event.h>
 #include <dftracer/utils/trace/views/view_scan.h>
 
 #include <atomic>
 #include <cstdint>
-#include <memory>
 #include <mutex>
-#include <optional>
-#include <span>
-#include <string>
-#include <string_view>
-#include <unordered_map>
-#include <unordered_set>
-#include <vector>
 
 // A plugin fold stashes the dftu_task* its on_batch returned for the async
 // driver to await; forward-declared to keep the C ABI out of this header.
@@ -29,12 +28,12 @@ struct dftu_task;
 namespace dftracer::utils::trace::views::detail {
 
 struct FoldBatch {
-    std::span<const FoldEvent> events;  // valid for the `step` call only
+    dstd::Span<const FoldEvent> events;  // valid for the `step` call only
     const ScanUnit& unit;
     // Raw NDJSON lines, populated only when a wants_raw() fold is present, in
     // scan order. A raw fold parses these itself (arbitrary-JSON access); a
     // FoldEvent fold ignores them. Valid for the `step` call only.
-    std::span<const std::string_view> raw = {};
+    dstd::Span<const dstd::StringView> raw = {};
 };
 
 /// Per-worker keyed byte scratchpad so a producer fold can hand a derived value
@@ -44,21 +43,21 @@ class FoldPortBus {
    public:
     void publish(std::uint64_t key, const void* data, std::uint32_t len);
     /// NULL if `key` was not published since the last clear.
-    const void* consume(std::uint64_t key, std::uint32_t* out_len) const;
+    const void* consume(std::uint64_t key, std::uint32_t* out_size) const;
     void clear();
 
     /// The batch as a frame after the last transforming fold, for every fold
     /// stepped after it in the same batch; unset until a fold rewrites it,
     /// and each later fold then reads this instead of the events.
-    std::optional<dftracer::utils::dataframe::DataFrame> frame;
+    dstd::Optional<dftracer::utils::dataframe::DataFrame> frame;
 
    private:
     struct Entry {
         std::size_t offset;
         std::uint32_t len;
     };
-    std::unordered_map<std::uint64_t, Entry> index_;
-    std::vector<std::byte> arena_;
+    dstd::HashMap<std::uint64_t, Entry> index_;
+    dstd::Vector<std::byte> arena_;
 };
 
 /// A push Sink over the fused scan, batch-grained so the virtual call amortizes
@@ -103,17 +102,17 @@ class Fold {
     /// captured into each event beyond what the POD carries and beyond flat
     /// args (which needs_args() already covers). Merged with the plan's own
     /// captures.
-    virtual std::vector<std::string> extra_captures() const { return {}; }
+    virtual dstd::Vector<dstd::String> extra_captures() const { return {}; }
 
     /// One per worker slot, folded lock-free, merged after the fan-out joins.
-    virtual std::unique_ptr<Fold> slice() const = 0;
+    virtual dstd::UniquePtr<Fold> slice() const = 0;
 
-    virtual void step(const FoldBatch& batch) = 0;
+    virtual dstd::Result<void> step(const FoldBatch& batch) = 0;
     virtual void seal_unit(const ScanUnit& unit) = 0;
     virtual void drop_unit(const ScanUnit& unit) = 0;
     /// A unit the scan passes over unread (covered or pruned mid-scan).
     virtual void skip_unit(const ScanUnit&) {}
-    virtual void merge(Fold& slice) = 0;
+    virtual dstd::Result<void> merge(Fold& slice) = 0;
 
     /// `covered` bounds what a fold may claim. Returns false to persist
     /// nothing.
@@ -140,12 +139,12 @@ class Fold {
 class DynamicPrune {
    public:
     /// Excludes every checkpoint of `file_path` from the remaining scan.
-    void exclude_file(const std::string& file_path);
+    void exclude_file(const dstd::String& file_path);
     /// Excludes `checkpoints` of `file_path`; merges into any prior
     /// exclusion for the same file.
-    void exclude_checkpoints(const std::string& file_path,
-                             std::vector<std::uint64_t> checkpoints);
-    bool is_excluded(const std::string& file_path,
+    void exclude_checkpoints(const dstd::String& file_path,
+                             dstd::Vector<std::uint64_t> checkpoints);
+    bool is_excluded(const dstd::String& file_path,
                      std::uint64_t checkpoint_idx) const;
     /// Called by a fuse worker for each unit it skips because of this prune.
     void record_skip() { skipped_.fetch_add(1, std::memory_order_relaxed); }
@@ -155,8 +154,8 @@ class DynamicPrune {
 
    private:
     mutable std::mutex mu_;
-    std::unordered_set<std::string> excluded_files_;
-    std::unordered_map<std::string, std::unordered_set<std::uint64_t>>
+    dstd::HashSet<dstd::String> excluded_files_;
+    dstd::HashMap<dstd::String, dstd::HashSet<std::uint64_t>>
         excluded_checkpoints_;
     std::atomic<std::uint64_t> skipped_{0};
 };
@@ -168,17 +167,18 @@ class DynamicPrune {
 /// narrow() call mid-scan can still take effect on units not yet claimed.
 /// `gate` (optional) holds one permit per unit a worker may claim; its owner
 /// returns a permit as each unit's output is consumed, which bounds how far
-/// claims run ahead of the oldest open unit.
-coro::CoroTask<ExportStats> fuse(
+/// claims run ahead of the oldest open unit. The first error of gather_units,
+/// a unit read or a fold step ends the scan and is the result.
+coro::CoroTask<dstd::Result<ExportStats>> fuse(
     const ViewPlan& plan, const ViewDefinition& vdef,
-    std::span<Fold* const> folds, dftracer::utils::StringIntern& intern,
+    dstd::Span<Fold* const> folds, dftracer::utils::dstd::StringIntern& intern,
     const CoverageSet* covered = nullptr, std::uint64_t limit = 0,
-    DynamicPrune* dyn_prune = nullptr, coro::CoroSemaphore* gate = nullptr);
+    DynamicPrune* dyn_prune = nullptr, coro::AsyncSemaphore* gate = nullptr);
 
 /// Fields the scanner must capture into each event's args for this plan: the
 /// non-scalar Field group keys and nested agg fields the POD does not natively
 /// carry (type/ph, a.b, a[0]). Empty for a plain plan.
-std::vector<std::string> extra_capture_fields(const ViewPlan& plan);
+dstd::Vector<dstd::String> extra_capture_fields(const ViewPlan& plan);
 
 }  // namespace dftracer::utils::trace::views::detail
 

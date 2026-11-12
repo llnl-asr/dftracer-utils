@@ -1,11 +1,11 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_DUQL_LOWER_H
 #define DFTRACER_UTILS_DUQL_LOWER_H
 
-#include <dftracer/utils/core/common/expected.h>
+#include <dftracer/utils/dstd/expected.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/duql/parser.h>
 #include <dftracer/utils/duql/syntax/tree.h>
-
-#include <string_view>
 
 namespace dftracer::utils::duql {
 
@@ -14,10 +14,10 @@ namespace dftracer::utils::duql {
 /// the construct and the stage that adds it, for anything outside that
 /// subset, and for a parameter `params` does not bind. `source` is the text
 /// `program` was parsed from, for error positions. Its `def`s and those on
-/// `$DFTRACER_DUQL_PATH` expand first.
-dftracer::utils::expected<duql::QueryNodePtr, duql::DuqlError> lower_filter(
-    syntax::Program program, const duql::Params& params,
-    std::string_view source);
+/// `$DFTRACER_UTILS_DUQL_PATH` expand first.
+dftracer::utils::dstd::Expected<duql::detail::QueryNodePtr, duql::DuqlError>
+lower_filter(syntax::Program program, const duql::Params& params,
+             dstd::StringView source);
 
 }  // namespace dftracer::utils::duql
 

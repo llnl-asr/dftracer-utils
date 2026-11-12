@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
 #
 # Keep dependency installs in the sccache bucket, because the GitHub cache
 # holds only 10 GB per repository.
@@ -7,9 +8,8 @@
 #   deps_cache.sh save <kind> <dir>
 #
 # The object is named by <kind>, the runner image and the content of
-# Dependencies.cmake, build_rocksdb.sh and the RocksDB version. That key only
-# picks a candidate: CMake reuses an install only when its own fingerprint
-# matches, so a wrong candidate is rebuilt.
+# Dependencies.cmake. That key only picks a candidate: CMake reuses an install
+# only when its own fingerprint matches, so a wrong candidate is rebuilt.
 # A cache problem is never an error, since the build then makes the install.
 
 set -uo pipefail
@@ -30,11 +30,16 @@ export AWS_REQUEST_CHECKSUM_CALCULATION=when_required
 export AWS_RESPONSE_CHECKSUM_VALIDATION=when_required
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-hash="$({ cat "$root/cmake/modules/Dependencies.cmake" "$root/scripts/ci/build_rocksdb.sh"; "$root/scripts/ci/rocksdb_version.sh"; } | git hash-object --stdin | cut -c1-16)"
+hash="$(git hash-object "$root/cmake/modules/Dependencies.cmake" | cut -c1-16)"
 name="deps/${kind}-${ImageOS:-${RUNNER_OS:-local}}-${RUNNER_ARCH:-$(uname -m)}-${hash}.tar.gz"
 s3() { aws --endpoint-url "$SCCACHE_ENDPOINT" "$@"; }
 tmp="$(mktemp)"
 trap 'rm -f "$tmp"' EXIT
+# Each install sits in a folder named by its own fingerprint, which holds more
+# than the key does (the compiler version, for one). A folder that restore did
+# not bring means the stored archive is stale, so save replaces it.
+restored="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/deps-cache-${kind}.list"
+entries() { ls -A "$dir" 2>/dev/null | LC_ALL=C sort; }
 
 case "$cmd" in
 restore)
@@ -47,11 +52,13 @@ restore)
 	else
 		echo "deps cache: no usable ${name}"
 	fi
+	entries >"$restored"
 	;;
 save)
 	if [ -z "$(ls -A "$dir" 2>/dev/null)" ]; then
 		echo "deps cache: nothing to save in ${dir}"
-	elif s3 s3api head-object --bucket "$SCCACHE_BUCKET" --key "$name" >/dev/null 2>&1; then
+	elif [ -f "$restored" ] && [ "$(entries)" = "$(cat "$restored")" ] &&
+		s3 s3api head-object --bucket "$SCCACHE_BUCKET" --key "$name" >/dev/null 2>&1; then
 		echo "deps cache: ${name} is already stored"
 	elif tar -czf "$tmp" -C "$dir" . &&
 		s3 s3 cp "$tmp" "s3://${SCCACHE_BUCKET}/${name}" --only-show-errors; then

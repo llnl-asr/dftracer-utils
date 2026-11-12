@@ -12,9 +12,9 @@ these patterns safe.
 Run work in a scope
 -------------------
 
-Every task runs inside a ``CoroScope``. ``Runtime`` (in
-``dftracer/utils/core/runtime.h``) has four entry points; pick the one that
-matches how you need to wait:
+Spawned tasks run inside a ``coro::Scope``, which joins every child before it
+ends. ``Runtime`` (in ``dftracer/utils/runtime/runtime.h``) has three ways to
+run work; pick the one that matches how you need to wait:
 
 .. list-table::
    :header-rows: 1
@@ -23,15 +23,13 @@ matches how you need to wait:
    * - Entry point
      - Use when
    * - ``rt.submit(task)`` -> ``TaskHandle``
-     - You already have a ``coro::CoroTask<void>`` and just want to fire it
-       and get a handle back.
-   * - ``rt.scope(name, func)`` -> ``TaskHandle``
-     - Non-blocking: start a ``CoroScope``-taking task, keep going, and
-       ``.wait()`` (or ``.get()`` for the typed overload) on the handle later.
-   * - ``rt.run_blocking(name, func)``
-     - Blocking: start a ``CoroScope``-taking task and block the caller until
-       the scope finishes. The common case for a synchronous entry point like
-       ``main()``.
+     - Non-blocking: start a ``coro::CoroTask`` (a ``coro::with_scope(fn)``
+       task gives it a ``Scope``), keep going, and ``.wait()`` (or ``.get()``
+       for the typed overload) on the handle later.
+   * - ``rt.block_on(task)``
+     - Blocking: run a ``coro::CoroTask`` and block the caller until it ends,
+       returning its result. The common case for a synchronous entry point
+       like ``main()``.
    * - ``rt.parallel_for(n, grain, body)`` / ``rt.parallel_reduce(n, grain, identity, map, combine)``
      - A chunked data-parallel range over ``[0, n)``; both block until every
        chunk is done, no manual scope needed.
@@ -42,21 +40,25 @@ matches how you need to wait:
 
       .. code-block:: cpp
 
-         #include <dftracer/utils/core/runtime.h>
+         #include <dftracer/utils/coro/scope.h>
+         #include <dftracer/utils/runtime/runtime.h>
          using namespace dftracer::utils;
 
          Runtime rt;                          // threads = hardware concurrency
 
          // Blocks the caller until the scope is done.
-         rt.run_blocking("job", [](CoroScope& scope) -> coro::CoroTask<void> {
-             int n = co_await do_work(scope);
-             use(n);
-         });
+         int n = rt.block_on(coro::with_scope(
+             [](coro::Scope& scope) -> coro::CoroTask<int> {
+                 int n = co_await do_work(scope);
+                 co_return n;
+             }));
+         use(n);
 
          // Non-blocking: fire it, keep going, join later.
-         auto handle = rt.scope("job2", [](CoroScope& scope) -> coro::CoroTask<void> {
-             co_await do_other_work(scope);
-         });
+         auto handle = rt.submit(coro::with_scope(
+             [](coro::Scope& scope) -> coro::CoroTask<void> {
+                 co_await do_other_work(scope);
+             }));
          handle.wait();
 
          // Chunked fan-out over a range, no manual scope.
@@ -78,22 +80,24 @@ matches how you need to wait:
 Fan-out / fan-in
 ----------------
 
-Spawn many children, then join them. ``scope.spawn`` starts a child immediately
-and returns a ``SpawnFuture`` you can ``co_await``; ``when_all`` awaits a whole
-batch and returns their results in order.
+Start many children, then join them. ``when_all`` awaits a whole batch and
+returns their results in order.
 
 .. code-block:: cpp
 
-   coro::CoroTask<std::int64_t> total(CoroScope& scope,
-                                      const std::vector<std::string>& files) {
-       std::vector<coro::CoroTask<std::int64_t>> tasks;
+   coro::CoroTask<std::int64_t> total(const std::vector<std::string>& files) {
+       dstd::Vector<coro::CoroTask<std::int64_t>> tasks;
        for (const auto& f : files)
-           tasks.push_back(count_lines(scope, f));   // one child per file
+           tasks.push_back(count_lines(f));          // one child per file
        auto counts = co_await coro::when_all(std::move(tasks));
        std::int64_t sum = 0;
        for (auto c : counts) sum += c;
        co_return sum;
    }
+
+To start a child inside a scope and await it later, ``scope.spawn_future(task)``
+returns a ``SpawnFuture`` you can ``co_await``; ``scope.spawn(fn)`` starts a
+``void`` child that the scope joins.
 
 For the common numeric fan-out there is a shortcut: ``Runtime::parallel_for``
 and ``parallel_reduce`` run a chunked range across the pool and block until it
@@ -112,10 +116,9 @@ Race: first to finish
 
 .. code-block:: cpp
 
-   auto r = co_await coro::when_any({read(cache_fd, buf, len),
-                                     read(disk_fd, buf, len)});
+   auto r = co_await coro::when_any(read_cache(), read_disk());
    switch (r.index) { case 0: /* cache */ break; case 1: /* disk */ break; }
-   process(r.result);
+   use(r.result);
 
 Stream with channels
 --------------------
@@ -128,18 +131,251 @@ exits); a ``consumer()`` reads until close.
 
    auto ch = coro::make_channel<Batch>(/*capacity=*/1000);
 
-   auto produce = [pg = ch->producer()](CoroScope&) mutable -> coro::CoroTask<void> {
+   auto produce = [pg = ch->producer()]() mutable -> coro::CoroTask<void> {
        auto guard = pg.guard();                       // RAII: releases on exit
        for (auto& b : read_batches()) co_await pg.send(std::move(b));
    };
-   auto consume = [c = ch->consumer()](CoroScope&) mutable -> coro::CoroTask<void> {
+   auto consume = [c = ch->consumer()]() mutable -> coro::CoroTask<void> {
        while (auto b = co_await c.receive()) write(*b);   // nullopt when closed
    };
 
-   rt.run_blocking("stream", [&](CoroScope& scope) -> coro::CoroTask<void> {
-       co_await coro::when_all(scope.spawn(produce), scope.spawn(consume));
-   });
+   rt.block_on(coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
+       scope.spawn(std::move(produce));
+       scope.spawn(std::move(consume));
+       co_return;
+   }));
 
 See :doc:`../../cpp_api/coro` for the full channel, ``when_all``/``when_any``,
-and combinator API, and :doc:`../../pipeline` for the ``Pipeline`` executor that
-runs a declarative task graph.
+and combinator API.
+
+Error handling
+--------------
+
+A task reports a failure by returning a ``dstd::Result``. ``Runtime::block_on``
+gives the task's result back, so the caller checks it the same way; a task that
+was cancelled or stopped gives an error too.
+
+.. code-block:: cpp
+
+   auto task = []() -> coro::CoroTask<dstd::Result<void>> {
+       if (risky_operation() < 0) {
+           co_return common::make_error(common::ErrorCode::Io,
+                                        "Failed to open file");
+       }
+       co_return dstd::Result<void>{};
+   };
+   auto done = rt.block_on(task());
+   if (!done) std::cerr << "Task failed: " << done.error().c_str() << std::endl;
+
+Inside a task, ``co_await coro::or_fail(std::move(r))`` gives the value of a
+``dstd::Result`` or ends the task with its error. The result of a
+``scope.spawn_future`` child goes only to its ``SpawnFuture``, so check it where
+you await it:
+
+.. code-block:: cpp
+
+   coro::CoroTask<dstd::Result<void>> spawned(coro::Scope& scope) {
+       auto future = scope.spawn_future(
+           []() -> coro::CoroTask<dstd::Result<int>> {
+               int result = risky_operation();
+               if (result < 0) {
+                   co_return common::make_error(common::ErrorCode::Internal,
+                                                "Operation failed");
+               }
+               co_return result;
+           });
+       dstd::Result<int> result = co_await future;
+       if (!result) co_return result.error();
+       use_data(*result);
+       co_return dstd::Result<void>{};
+   }
+
+An exception that code built with exceptions throws in a task still reaches the
+caller of ``block_on`` as that exception.
+
+On a channel, check the values of ``send()`` and ``receive()``. Both are falsy
+on a closed channel, which means the other side exited or failed:
+
+.. code-block:: cpp
+
+   auto channel = coro::make_channel<std::string>(100);
+
+   auto produce = [ch = channel->producer(),
+                   items = std::move(items)]() mutable -> coro::CoroTask<void> {
+       auto guard = ch.guard();
+       for (auto& item : items) {
+           if (!co_await ch.send(std::move(item))) {
+               // Channel closed (consumer exited or error)
+               co_return;
+           }
+       }
+   };
+
+   auto consume = [channel]() -> coro::CoroTask<void> {
+       while (auto item = co_await channel->receive()) {
+           process(*item);
+       }
+       // Loop exits when channel closes (all producers exited)
+   };
+
+Timeouts and cancellation
+-------------------------
+
+A task cancels cooperatively: it checks ``scope.stop_requested()`` (true after
+``request_stop()``, a child error, or executor shutdown) and yields so that a
+stop can take effect.
+
+.. code-block:: cpp
+
+   coro::CoroTask<void> cancellable(
+       coro::Scope& scope, dstd::SharedPtr<coro::Channel<std::string>> channel) {
+       // Long-running loop that respects cancellation
+       while (!scope.stop_requested()) {
+           auto item = co_await channel->receive();
+           if (!item) break;  // Channel closed
+
+           process(*item);
+
+           // Yield frequently to allow cancellation checks
+           co_await coro::maybe_yield();
+       }
+   }
+
+To put a time limit on an operation, race it against ``coro::timeout`` with
+``when_any``. The losers are cancelled:
+
+.. code-block:: cpp
+
+   coro::CoroTask<void> raced() {
+       // Race the cache against the disk, with a 100ms timeout
+       auto* timers = coro::Executor::current()->timers();
+       auto result = co_await coro::when_any(read_from_cache(), read_from_disk(),
+                                             coro::timeout(100ms, timers));
+       if (result.index == 2) {
+           std::cerr << "Read timeout" << std::endl;
+       } else if (result.index == 0) {
+           use_data(result.get<0>());
+       } else {
+           use_data(result.get<1>());
+       }
+   }
+
+See :doc:`../../cpp_api/coro` for ``timeout`` and the cancellation details.
+
+Bound the time and the fan-out of coroutines
+--------------------------------------------
+
+These combinators take ``coro::CoroTask`` values and run on the current executor.
+
+Limit how long a task runs:
+
+.. code-block:: cpp
+
+   #include <dftracer/utils/coro/time.h>
+
+   using namespace std::chrono_literals;
+
+   co_await coro::sleep(10ms);
+   dstd::Result<int> value = co_await coro::with_timeout(read_value(), 5s);
+
+``with_timeout`` gives a ``dstd::Result``. On a timeout the result holds an error whose condition is ``dstd::Condition::Timeout``.
+It wakes the task if the task is parked on a channel, an event, a semaphore, a mutex, a sleep or a spawned future.
+A task that computes without a wait, or that waits on I/O, ends only when it reaches its next wait.
+
+Retry a failing task:
+
+.. code-block:: cpp
+
+   #include <dftracer/utils/coro/retry.h>
+
+   coro::RetryPolicy policy;
+   policy.max_attempts = 5;
+   policy.initial_backoff = 50ms;
+   policy.jitter = 0.2;
+   auto data = co_await coro::retry([&]() { return fetch(path); }, std::move(policy));
+
+``retry`` takes a function, since a task runs once.
+It retries a task that raised an exception, and gives a result as it is.
+It never retries a stopped task.
+
+Run many jobs with a limit:
+
+.. code-block:: cpp
+
+   #include <dftracer/utils/coro/combinators.h>
+
+   coro::ParallelOptions options;
+   options.max_in_flight = 8;
+   auto sizes = co_await coro::parallel_map(std::move(paths), measure, options);
+
+``parallel_map`` gives results in item order.
+The first error ends running jobs as cancelled at their next wait and is then raised.
+``parallel_map_unordered`` returns an ``AsyncGenerator`` that yields each result as it finishes.
+
+Use ``when_all_settled`` to get each outcome as a ``dstd::Expected``, and ``first_success`` to take the first task that does not fail and cancel the others.
+
+Stop a tree of tasks
+--------------------
+
+A ``coro::Scope`` stops its children when one fails, when ``request_stop`` runs or when the task that holds it is cancelled.
+A stopped child ends as cancelled at its next wait, and a parked child wakes at once.
+A task that is cancelled at a wait is not resumed. Its frame is destroyed, and the stop moves up to the first scope or combinator, which joins its children and stops its own task.
+``with_scope`` links the scope to its task, so nested scopes stop together.
+
+.. code-block:: cpp
+
+   co_await coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
+       scope.spawn(read_all());
+       scope.spawn(write_all());
+       co_return;
+   });
+
+Pass ``coro::ScopeMode::Supervisor`` to ``with_scope`` when a failure must not stop the siblings.
+``join`` then waits for all of them and raises the first error.
+
+Use a ``coro::StopSource`` to stop work from code that holds no scope:
+
+.. code-block:: cpp
+
+   coro::StopSource source;
+   co_await coro::with_stop_token(run_server(), source.token());
+   // elsewhere: source.request_stop();
+
+A task that computes without waits reads ``co_await coro::this_coro::stop_requested``.
+
+Shape a stream
+--------------
+
+``coro/stream.h`` holds every operation on ``coro::AsyncGenerator``.
+Each one is a function and an adaptor, so ``filter(gen, pred)`` and ``gen | filter(pred)`` do the same.
+
+- ``map``, ``flat_map``, ``filter``, ``take``, ``take_until``, ``concat``, ``chunks``, ``zip`` and ``fold`` read one item at a time.
+  A function that they call may return a ``CoroTask``, which they await.
+- ``merge`` reads many generators at once and yields items as they come.
+- ``flat_map_merge`` does the same for the generators a function returns, with a limit on how many run.
+- ``buffer`` reads ahead of the reader by a bounded number of items.
+- ``with_item_timeout`` bounds the wait for each item and yields ``dstd::Result`` items. A wait that times out yields a ``dstd::Condition::Timeout`` error and ends the stream.
+
+A sync ``coro::Generator`` has the same ``map``, ``flat_map``, ``filter``, ``take``, ``take_until``, ``concat``, ``chunks``, ``zip`` and ``fold``, and the same ``next``.
+Its functions give plain values, because it cannot wait, so ``merge``, ``flat_map_merge``, ``map_ordered``, ``map_unordered``, ``buffer`` and ``with_item_timeout`` are only on ``AsyncGenerator``.
+``coro::to_async(std::move(gen))`` turns a ``Generator`` into an ``AsyncGenerator`` for those.
+
+A stop or a cancel of the task that reads a generator also ends a wait inside the generator.
+The generator then ends as cancelled and the task that reads it stops.
+
+``merge``, ``flat_map_merge`` and ``buffer`` run their sources in the background, so a source must own what it uses.
+Each of them keeps the order of one source, and raises the first error from the next read.
+Dropping the stream ends those sources at their current wait.
+
+Run a range or a set of tasks
+-----------------------------
+
+``coro/parallel.h`` has ``parallel_for``, ``parallel_reduce`` and ``parallel_scan``, which wait without holding a thread.
+``Partition::Dynamic`` balances uneven work, and ``Partition::Static`` gives the same chunks on each run with the same ``max_in_flight``.
+
+``coro/join_set.h`` has ``with_join_set`` for tasks that are added as work comes, and ``as_completed`` for a known list.
+Both give outcomes as they finish, with errors as values.
+``JoinSet::next_within`` bounds a wait, and a result that comes at that moment stays for the next read.
+
+``stage | coro::ordered(n)`` and ``stage | coro::unordered(n)`` turn a batch stage into a stream stage that runs ``n`` items at once.
+The ordered form holds its output in input order, and ``n`` also bounds the results that wait for a slow item.

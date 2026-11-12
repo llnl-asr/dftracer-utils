@@ -108,9 +108,10 @@ view with ``collect()`` - each call returns a ``Deferred<T>`` handle - then
    df::LazyResult<Small> small_plan = base.branch<Small>([](ViewSession& s) {
        return s.fold<Small>(
            Query::from_string("dur < 25").value(),
-           [](Small& acc, const json::JsonValue& jv, std::string_view) {
+           [](Small& acc, json::Value& jv, std::string_view) {
                ++acc.n;
-               acc.sum += jv["dur"].get<double>(0);
+               auto dur = jv.find("dur");
+               acc.sum += dur ? dur->as_double().value_or(0) : 0;
            },
            [](Small&& a, Small&& b) {
                a.n += b.n;
@@ -173,8 +174,8 @@ inherits:
    df::LazyFrame delta =
        base.compare(trace.filter(Query::from_string("rank == 1").value()));
 
-   df::DataFrame joined_df = co_await joined.collect();
-   df::DataFrame diff = co_await delta.collect();
+   dstd::Result<df::DataFrame> joined_df = co_await joined.collect();
+   dstd::Result<df::DataFrame> diff = co_await delta.collect();
 
 Notes
 -----

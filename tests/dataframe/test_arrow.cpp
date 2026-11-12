@@ -1,26 +1,23 @@
+// SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/config.h>
+#include <dftracer/utils/common/config.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
 
 #include <cstdint>
-#include <string>
-#include <vector>
 
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/arrow.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
 #include <nanoarrow/nanoarrow.h>
 
 #include <cstring>
-#include <memory>
 
-using dftracer::utils::dataframe::Buffer;
-using dftracer::utils::dataframe::DataFrame;
-using dftracer::utils::dataframe::Encoding;
-using dftracer::utils::dataframe::OwnedArrow;
-using dftracer::utils::dataframe::Series;
-using dftracer::utils::dataframe::TypeId;
+using namespace dftracer::utils;
+using namespace dftracer::utils::dataframe;
 
 namespace {
 
@@ -30,8 +27,8 @@ constexpr const char* VIEW_LONG_B = "another quite long string value";
 struct ViewFixture {
     std::uint8_t views[4 * 16] = {};
     std::uint8_t validity = 0b0111;
-    std::string blob_a = VIEW_LONG_A;
-    std::string blob_b = VIEW_LONG_B;
+    dstd::String blob_a = VIEW_LONG_A;
+    dstd::String blob_b = VIEW_LONG_B;
     const void* bufs[2] = {blob_a.data(), blob_b.data()};
     std::int64_t sizes[2] = {static_cast<std::int64_t>(blob_a.size()),
                              static_cast<std::int64_t>(blob_b.size())};
@@ -41,7 +38,7 @@ struct ViewFixture {
         ++static_cast<ViewFixture*>(ctx)->released;
     }
 
-    void put(int row, const std::string& s, std::int32_t index,
+    void put(int row, const dstd::String& s, std::int32_t index,
              std::int32_t offset) {
         std::uint8_t* v = views + row * 16;
         const auto size = static_cast<std::int32_t>(s.size());
@@ -79,9 +76,9 @@ TEST_SUITE("dataframe_arrow_public") {
             Series s = f.make();
             REQUIRE(s.valid());
             OwnedArrow a = s.to_arrow();
-            CHECK(std::string(a.schema()->format) == "vu");
+            CHECK(dstd::String(a.schema()->format) == "vu");
             CHECK(a.array()->n_buffers == 5);
-            CHECK(a.array()->buffers[1] == s.handle()->data->data());
+            CHECK(a.array()->buffers[1] == s.handle()->data.data());
             CHECK(a.array()->buffers[2] == f.blob_a.data());
             CHECK(a.array()->buffers[3] == f.blob_b.data());
             const auto* sizes =
@@ -92,7 +89,7 @@ TEST_SUITE("dataframe_arrow_public") {
             Series back = Series::from_arrow(a.schema(), a.array());
             REQUIRE(back.valid());
             CHECK(back.handle()->encoding == Encoding::View);
-            CHECK(back.handle()->data->data() == s.handle()->data->data());
+            CHECK(back.handle()->data.data() == s.handle()->data.data());
             REQUIRE(back.length() == 4);
             CHECK(back.string_at(0) == "short");
             CHECK(back.string_at(1) == VIEW_LONG_A);
@@ -107,7 +104,7 @@ TEST_SUITE("dataframe_arrow_public") {
         Series s = f.make(TypeId::Binary);
         REQUIRE(s.valid());
         OwnedArrow a = s.to_arrow();
-        CHECK(std::string(a.schema()->format) == "vz");
+        CHECK(dstd::String(a.schema()->format) == "vz");
         Series back = Series::from_arrow(a.schema(), a.array());
         REQUIRE(back.valid());
         CHECK(back.type() == TypeId::Binary);
@@ -142,7 +139,7 @@ TEST_SUITE("dataframe_arrow_public") {
             Series back = Series::from_arrow(&schema, &arr);
             REQUIRE(back.valid());
             CHECK(arr.release == nullptr);
-            CHECK(back.handle()->data->data() == f.views + 16);
+            CHECK(back.handle()->data.data() == f.views + 16);
             REQUIRE(back.length() == 3);
             CHECK(back.string_at(0) == VIEW_LONG_A);
             CHECK(back.string_at(1) == VIEW_LONG_B);
@@ -161,14 +158,14 @@ TEST_SUITE("dataframe_arrow_public") {
         col->type = TypeId::String;
         col->encoding = Encoding::Dictionary;
         col->length = 4;
-        col->data = Buffer::allocate(16);
+        col->data = new_buffer(16);
         const std::int32_t codes[4] = {2, 1, 1, 0};
-        std::memcpy(col->data->data(), codes, 16);
-        col->set_child(std::shared_ptr<dftu_series>(values.release()));
+        std::memcpy(writable(col->data), codes, 16);
+        col->set_child(adopt_series(values.release()));
         {
             Series dict{col};
             OwnedArrow a = dict.to_arrow();
-            CHECK(std::string(a.schema()->dictionary->format) == "vu");
+            CHECK(dstd::String(a.schema()->dictionary->format) == "vu");
             CHECK(a.array()->dictionary->n_buffers == 5);
             Series back = Series::from_arrow(a.schema(), a.array());
             REQUIRE(back.valid());
@@ -183,7 +180,7 @@ TEST_SUITE("dataframe_arrow_public") {
     }
 
     TEST_CASE("Series round-trips through the public Arrow bridge") {
-        std::vector<std::int64_t> vals = {10, 20, 30, 40};
+        dstd::Vector<std::int64_t> vals = {10, 20, 30, 40};
         Series s = Series::flat_i64(vals.data(),
                                     static_cast<std::int64_t>(vals.size()));
 
@@ -211,8 +208,8 @@ TEST_SUITE("dataframe_arrow_public") {
     }
 
     TEST_CASE("DataFrame round-trips schema, columns, and values") {
-        std::vector<std::int64_t> ints = {1, 2, 3};
-        std::vector<double> reals = {1.5, 2.5, 3.5};
+        dstd::Vector<std::int64_t> ints = {1, 2, 3};
+        dstd::Vector<double> reals = {1.5, 2.5, 3.5};
 
         DataFrame df;
         df.names = {"id", "value"};
@@ -293,9 +290,9 @@ TEST_SUITE("dataframe_arrow_public") {
     }
 
     TEST_CASE("Struct column round-trips through the Arrow bridge") {
-        std::vector<std::int64_t> a = {10, 20, 30};
-        std::vector<double> b = {1.5, 2.5, 3.5};
-        std::vector<Series> fields;
+        dstd::Vector<std::int64_t> a = {10, 20, 30};
+        dstd::Vector<double> b = {1.5, 2.5, 3.5};
+        dstd::Vector<Series> fields;
         fields.push_back(Series::flat_i64(a.data(), 3));
         fields.push_back(Series::flat_f64(b.data(), 3));
         Series st = Series::structs({"a", "b"}, std::move(fields));
@@ -322,7 +319,7 @@ TEST_SUITE("dataframe_arrow_public") {
     }
 
     TEST_CASE("Importing a sliced string array keeps the slice's rows") {
-        std::vector<std::string_view> v = {"a", "", "c", "d"};
+        dstd::Vector<dstd::StringView> v = {"a", "", "c", "d"};
         const std::uint8_t valid = 0b1101;
         Series s = Series::strings(v, &valid);
         OwnedArrow a = s.to_arrow();
@@ -338,7 +335,7 @@ TEST_SUITE("dataframe_arrow_public") {
     }
 
     TEST_CASE("Importing a sliced bool array keeps the slice's bits") {
-        std::vector<std::uint8_t> bits(3, 0);
+        dstd::Vector<std::uint8_t> bits(3, 0);
         for (int i = 0; i < 20; ++i)
             if (i % 4 == 0)
                 bits[i / 8] |= static_cast<std::uint8_t>(1 << (i % 8));
@@ -370,10 +367,10 @@ TEST_SUITE("dataframe_arrow_public") {
         REQUIRE(a.array()->dictionary != nullptr);
         const auto* idx =
             static_cast<const std::int64_t*>(a.array()->buffers[1]);
-        const std::int64_t dict_len = a.array()->dictionary->length;
+        const std::int64_t dict_size = a.array()->dictionary->length;
         for (int i = 0; i < 2; ++i) {
             CHECK(idx[i] >= 0);
-            CHECK(idx[i] < dict_len);
+            CHECK(idx[i] < dict_size);
         }
         CHECK(a.array()->null_count == 1);
         Series back = Series::from_arrow(a.schema(), a.array());
@@ -387,9 +384,9 @@ TEST_SUITE("dataframe_arrow_public") {
         df.names = {"s"};
         df.columns.push_back(
             Series::strings({"a", "b", "a", "a"}).dictionary_encode());
-        std::vector<std::uint8_t> bytes;
-        CHECK_NOTHROW(bytes = df.to_ipc());
-        CHECK_FALSE(bytes.empty());
+        auto bytes = df.to_ipc();
+        REQUIRE(bytes.has_value());
+        CHECK_FALSE(bytes->empty());
     }
 #endif
 }

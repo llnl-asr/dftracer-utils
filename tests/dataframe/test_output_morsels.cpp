@@ -1,10 +1,10 @@
+// SPDX-License-Identifier: MIT
 // Ops that make more rows than they read, or one result for the whole input,
 // must hand it on in morsels that fit the memory budget, and the rows must be
 // the ones an unlimited run gives.
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/coro/async_generator.h>
-#include <dftracer/utils/core/coro/task.h>
-#include <dftracer/utils/core/runtime.h>
+#include <dftracer/utils/coro/async_generator.h>
+#include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/grace_join.h>
@@ -12,68 +12,92 @@
 #include <dftracer/utils/dataframe/internal/native_transform.h>
 #include <dftracer/utils/dataframe/lazy/frame_op.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/fmt.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <algorithm>
 #include <cstdint>
-#include <string>
-#include <vector>
+
+using namespace dftracer::utils;
 
 using namespace dftracer::utils::dataframe;
-using dftracer::utils::coro::CoroTask;
 
 namespace {
 
 constexpr std::int64_t MAX_ROWS = 1'000'000;
 
-CoroTask<std::vector<DataFrame>> stream_all(LazyFrame lf,
-                                            std::int64_t max_rows) {
-    std::vector<DataFrame> out;
+coro::CoroTask<dstd::Vector<DataFrame>> stream_all(LazyFrame lf,
+                                                   std::int64_t max_rows) {
+    dstd::Vector<DataFrame> out;
     auto g = lf.stream(max_rows);
-    while (auto df = co_await g.next()) out.push_back(std::move(*df));
+    while (auto df = co_await g.next())
+        out.push_back(dftu_utils_test::ok(std::move(*df)));
     co_return out;
 }
 
-std::vector<DataFrame> morsels(const LazyFrame& lf,
-                               std::int64_t max_rows = MAX_ROWS) {
-    return dftracer::utils::default_runtime()
-        .submit(stream_all(lf, max_rows))
-        .get();
+dstd::String key_of(const dstd::Vector<Series>& cols, std::int64_t r) {
+    KeyRefusal refusal;
+    dstd::String key = row_key(cols, r, refusal);
+    REQUIRE_FALSE(refusal.refused());
+    return key;
 }
 
-std::int64_t most_rows(const std::vector<DataFrame>& parts) {
+coro::CoroTask<dstd::Result<void>> stream_status(LazyFrame lf,
+                                                 std::int64_t max_rows) {
+    auto g = lf.stream(max_rows);
+    while (auto df = co_await g.next())
+        if (!*df) co_return df->error();
+    co_return dstd::Result<void>();
+}
+
+dstd::Vector<DataFrame> morsels(const LazyFrame& lf,
+                                std::int64_t max_rows = MAX_ROWS) {
+    return dftu_utils_test::ok(dftracer::utils::default_runtime()
+                                   .submit(stream_all(lf, max_rows))
+                                   .get());
+}
+
+std::int64_t most_rows(const dstd::Vector<DataFrame>& parts) {
     std::int64_t most = 0;
     for (const DataFrame& p : parts) most = std::max(most, p.num_rows());
     return most;
 }
 
-void add_keys(const DataFrame& p, std::vector<std::string>& keys) {
-    std::vector<Series> cols;
+void add_keys(const DataFrame& p, dstd::Vector<dstd::String>& keys) {
+    dstd::Vector<Series> cols;
     for (const Series& c : p.columns) cols.push_back(c.materialize());
     for (std::int64_t r = 0; r < p.num_rows(); ++r)
-        keys.push_back(row_key(cols, r));
+        keys.push_back(key_of(cols, r));
 }
 
 // Every row of every morsel as a key, sorted: the rows, whatever their order.
-std::vector<std::string> row_set(const std::vector<DataFrame>& parts) {
-    std::vector<std::string> keys;
+dstd::Vector<dstd::String> row_set(const dstd::Vector<DataFrame>& parts) {
+    dstd::Vector<dstd::String> keys;
     for (const DataFrame& p : parts) add_keys(p, keys);
     std::sort(keys.begin(), keys.end());
     return keys;
 }
 
-std::vector<std::string> row_set(const DataFrame& one) {
-    std::vector<std::string> keys;
+dstd::Vector<dstd::String> row_set(const DataFrame& one) {
+    dstd::Vector<dstd::String> keys;
     add_keys(one, keys);
     std::sort(keys.begin(), keys.end());
     return keys;
 }
 
 // The morsels joined in the order they came.
-DataFrame joined(const std::vector<DataFrame>& parts) {
-    std::vector<const DataFrame*> ptrs;
+DataFrame joined(const dstd::Vector<DataFrame>& parts) {
+    dstd::Vector<const DataFrame*> ptrs;
     for (const DataFrame& p : parts) ptrs.push_back(&p);
-    return concat(ptrs, ConcatHow::Vertical);
+    return dftu_utils_test::ok(concat(ptrs, ConcatHow::Vertical));
 }
 
 // The same rows in the same order: for the ops that keep the order of their
@@ -82,20 +106,20 @@ void expect_same_rows(const DataFrame& got, const DataFrame& want) {
     REQUIRE(got.names == want.names);
     REQUIRE(got.num_rows() == want.num_rows());
     for (std::size_t c = 0; c < got.columns.size(); ++c) {
-        std::vector<Series> x, y;
+        dstd::Vector<Series> x, y;
         x.push_back(got.columns[c].materialize());
         y.push_back(want.columns[c].materialize());
         for (std::int64_t r = 0; r < got.num_rows(); ++r)
-            REQUIRE(row_key(x, r) == row_key(y, r));
+            REQUIRE(key_of(x, r) == key_of(y, r));
     }
 }
 
-DataFrame ints(const std::vector<std::string>& names, std::int64_t rows,
+DataFrame ints(const dstd::Vector<dstd::String>& names, std::int64_t rows,
                std::int64_t mod) {
     DataFrame df;
     df.names = names;
     for (std::size_t c = 0; c < names.size(); ++c) {
-        std::vector<std::int64_t> v(static_cast<std::size_t>(rows));
+        dstd::Vector<std::int64_t> v(static_cast<std::size_t>(rows));
         for (std::int64_t i = 0; i < rows; ++i)
             v[static_cast<std::size_t>(i)] =
                 (i * static_cast<std::int64_t>(c + 3)) % mod;
@@ -109,7 +133,7 @@ DataFrame ints(const std::vector<std::string>& names, std::int64_t rows,
 class CountedTimes : public Source {
    public:
     CountedTimes(std::int64_t morsels, std::int64_t rows,
-                 std::shared_ptr<std::int64_t> pulled)
+                 dstd::SharedPtr<std::int64_t> pulled)
         : morsels_(morsels), rows_(rows), pulled_(std::move(pulled)) {}
 
     Schema schema() const override {
@@ -120,9 +144,9 @@ class CountedTimes : public Source {
         return out;
     }
 
-    ScanResult scan(const ScanRequest& req) const override {
+    dstd::Result<ScanResult> scan(const ScanRequest& req) const override {
         ScanResult r;
-        r.cursor = std::make_unique<Rows>(morsels_, rows_, pulled_);
+        r.cursor = dstd::make_unique<Rows>(morsels_, rows_, pulled_);
         r.filters.assign(req.filters.size(), Pushed::No);
         return r;
     }
@@ -131,11 +155,11 @@ class CountedTimes : public Source {
     class Rows : public Cursor {
        public:
         Rows(std::int64_t morsels, std::int64_t rows,
-             std::shared_ptr<std::int64_t> pulled)
+             dstd::SharedPtr<std::int64_t> pulled)
             : morsels_(morsels), rows_(rows), pulled_(std::move(pulled)) {}
-        CoroTask<std::optional<Morsel>> next(std::int64_t) override {
-            if (*pulled_ >= morsels_) co_return std::nullopt;
-            std::vector<std::int64_t> t(static_cast<std::size_t>(rows_)),
+        coro::CoroTask<MorselResult> next(std::int64_t) override {
+            if (*pulled_ >= morsels_) co_return MorselResult(dstd::nullopt);
+            dstd::Vector<std::int64_t> t(static_cast<std::size_t>(rows_)),
                 v(static_cast<std::size_t>(rows_), 1);
             for (std::int64_t i = 0; i < rows_; ++i)
                 t[static_cast<std::size_t>(i)] = *pulled_ * rows_ + i;
@@ -144,21 +168,21 @@ class CountedTimes : public Source {
             m.rows = rows_;
             m.columns.push_back(Series::flat_i64(t.data(), rows_));
             m.columns.push_back(Series::flat_i64(v.data(), rows_));
-            co_return m;
+            co_return MorselResult(std::move(m));
         }
 
        private:
         std::int64_t morsels_, rows_;
-        std::shared_ptr<std::int64_t> pulled_;
+        dstd::SharedPtr<std::int64_t> pulled_;
     };
 
     std::int64_t morsels_, rows_;
-    std::shared_ptr<std::int64_t> pulled_;
+    dstd::SharedPtr<std::int64_t> pulled_;
 };
 
 // The morsels pulled from the source when the plan's first morsel came out.
-CoroTask<std::int64_t> pulled_at_first(LazyFrame lf,
-                                       std::shared_ptr<std::int64_t> pulled) {
+coro::CoroTask<std::int64_t> pulled_at_first(
+    LazyFrame lf, dstd::SharedPtr<std::int64_t> pulled) {
     auto g = lf.stream(1000);
     auto first = co_await g.next();
     REQUIRE(first.has_value());
@@ -172,23 +196,24 @@ TEST_SUITE("output morsels") {
         // Ascending time: a window behind the newest time is final, so the
         // first windows leave long before the input is read.
         constexpr std::int64_t MORSELS = 50;
-        auto pulled = std::make_shared<std::int64_t>(0);
+        auto pulled = dstd::make_shared<std::int64_t>(0);
         const LazyFrame plan =
             LazyFrame::scan(
-                std::make_shared<CountedTimes>(MORSELS, 1000, pulled))
+                dstd::make_shared<CountedTimes>(MORSELS, 1000, pulled))
                 .memory_budget(1 << 20)
                 .group_by_dynamic("t", 10, 30, {GroupAgg{Agg::Sum, "v", "s"}});
-        const std::int64_t at = dftracer::utils::default_runtime()
+        const std::int64_t at =
+            dftu_utils_test::ok(dftracer::utils::default_runtime()
                                     .submit(pulled_at_first(plan, pulled))
-                                    .get();
+                                    .get());
         CHECK(at < MORSELS / 2);
     }
 
     TEST_CASE("explode of long lists leaves in morsels of the output share") {
         const std::int64_t rows = 2000, len = 50;
-        std::vector<std::int32_t> offs(static_cast<std::size_t>(rows) + 1);
-        std::vector<std::int64_t> items(static_cast<std::size_t>(rows * len));
-        std::vector<std::int64_t> id(static_cast<std::size_t>(rows));
+        dstd::Vector<std::int32_t> offs(static_cast<std::size_t>(rows) + 1);
+        dstd::Vector<std::int64_t> items(static_cast<std::size_t>(rows * len));
+        dstd::Vector<std::int64_t> id(static_cast<std::size_t>(rows));
         for (std::int64_t i = 0; i <= rows; ++i)
             offs[static_cast<std::size_t>(i)] =
                 static_cast<std::int32_t>(i * len);
@@ -212,9 +237,9 @@ TEST_SUITE("output morsels") {
     }
 
     TEST_CASE("unpivot of many value columns leaves in morsels of the share") {
-        std::vector<std::string> names = {"id"};
-        for (int c = 0; c < 10; ++c) names.push_back("v" + std::to_string(c));
-        const std::vector<std::string> vals(names.begin() + 1, names.end());
+        dstd::Vector<dstd::String> names = {"id"};
+        for (int c = 0; c < 10; ++c) names.push_back(dstd::fmt<"v{}">(c));
+        const dstd::Vector<dstd::String> vals(names.begin() + 1, names.end());
         const DataFrame df = ints(names, 4000, 97);
         const auto whole = morsels(df.lazy().unpivot({"id"}, vals));
         const auto cut =
@@ -224,8 +249,9 @@ TEST_SUITE("output morsels") {
         // An unpivot lists a morsel by value column, so the order between
         // morsels follows their size; within a value column the rows keep the
         // order of the input.
-        expect_same_rows(joined(cut).sort_by("variable", false),
-                         joined(whole).sort_by("variable", false));
+        expect_same_rows(
+            dftu_utils_test::ok(joined(cut).sort_by("variable", false)),
+            dftu_utils_test::ok(joined(whole).sort_by("variable", false)));
     }
 
     TEST_CASE("a join with many matches leaves in morsels of the share") {
@@ -260,7 +286,8 @@ TEST_SUITE("output morsels") {
         const std::uint64_t before = cross_join_spooled_rows();
         const auto cut = morsels(left.lazy().memory_budget(64 << 10).join(
             right.lazy(), {}, JoinHow::Cross));
-        const DataFrame want = left.join(right, {}, JoinHow::Cross);
+        const DataFrame want =
+            dftu_utils_test::ok(left.join(right, {}, JoinHow::Cross));
         REQUIRE(want.num_rows() == 150000);
         CHECK(cross_join_spooled_rows() - before == 1500);
         CHECK(most_rows(cut) < 3000);
@@ -271,13 +298,14 @@ TEST_SUITE("output morsels") {
         const auto kept = morsels(left.lazy().memory_budget(64 << 10).join(
             small.lazy(), {}, JoinHow::Cross));
         CHECK(cross_join_spooled_rows() == mid);
-        CHECK(row_set(kept) == row_set(left.join(small, {}, JoinHow::Cross)));
+        CHECK(row_set(kept) == row_set(dftu_utils_test::ok(
+                                   left.join(small, {}, JoinHow::Cross))));
     }
 
     TEST_CASE(
         "take and group_by_dynamic leave in morsels of at most max rows") {
         const DataFrame df = ints({"t", "v"}, 6000, 5000);
-        std::vector<std::int64_t> idx;
+        dstd::Vector<std::int64_t> idx;
         for (std::int64_t i = 0; i < 5000; ++i) idx.push_back(5999 - i);
         const auto taken = morsels(df.lazy().take(idx), 1000);
         CHECK(most_rows(taken) <= 1000);
@@ -285,35 +313,40 @@ TEST_SUITE("output morsels") {
         expect_same_rows(joined(taken), df.take(idx));
         // group_by_dynamic needs an ascending time: t = 3 * row.
         const DataFrame tf = ints({"t", "v"}, 6000, std::int64_t{1} << 40);
-        const std::vector<GroupAgg> aggs = {GroupAgg{Agg::Sum, "v", "s"}};
+        const dstd::Vector<GroupAgg> aggs = {GroupAgg{Agg::Sum, "v", "s"}};
         const auto windows =
             morsels(tf.lazy().group_by_dynamic("t", 7, 7, aggs), 500);
         CHECK(most_rows(windows) <= 500);
         CHECK(windows.size() >= 2);
-        expect_same_rows(joined(windows), tf.group_by_dynamic("t", 7, 7, aggs));
+        expect_same_rows(
+            joined(windows),
+            dftu_utils_test::ok(tf.group_by_dynamic("t", 7, 7, aggs)));
     }
 
     TEST_CASE("group_by_dynamic refuses a time that goes back") {
-        std::vector<std::int64_t> t{1, 5, 9, 4, 12};
-        std::vector<std::int64_t> v{1, 1, 1, 1, 1};
+        dstd::Vector<std::int64_t> t{1, 5, 9, 4, 12};
+        dstd::Vector<std::int64_t> v{1, 1, 1, 1, 1};
         DataFrame df;
         df.names = {"t", "v"};
         df.columns.push_back(Series::flat_i64(t.data(), 5));
         df.columns.push_back(Series::flat_i64(v.data(), 5));
-        const std::vector<GroupAgg> aggs = {GroupAgg{Agg::Count, "", "n"}};
-        CHECK_THROWS_WITH_AS(df.group_by_dynamic("t", 2, 4, aggs),
-                             "group_by_dynamic: t must ascend, 4 follows 9",
-                             std::invalid_argument);
-        CHECK_THROWS_WITH_AS(
-            morsels(df.lazy().memory_budget(1 << 20).group_by_dynamic("t", 2, 4,
+        const dstd::Vector<GroupAgg> aggs = {GroupAgg{Agg::Count, "", "n"}};
+        dftu_utils_test::expect_error(
+            df.group_by_dynamic("t", 2, 4, aggs),
+            dftracer::utils::common::ErrorCode::InvalidArgument,
+            "group_by_dynamic: t must ascend, 4 follows 9");
+        dftu_utils_test::expect_error(
+            dftracer::utils::default_runtime()
+                .submit(stream_status(
+                    df.lazy().memory_budget(1 << 20).group_by_dynamic("t", 2, 4,
                                                                       aggs),
-                    2),
-            "group_by_dynamic: t must ascend, 4 follows 9",
-            std::invalid_argument);
+                    2))
+                .get(),
+            dftracer::utils::common::ErrorCode::InvalidArgument,
+            "group_by_dynamic: t must ascend, 4 follows 9");
     }
 
     TEST_CASE("an elementwise column op runs one morsel at a time") {
-        using dftracer::utils::dataframe::OpArgs;
         const DataFrame df = ints({"t", "v"}, 6000, 5000);
         dftu_scalar five{};
         five.kind = DFTU_SCALAR_TAG_I64;
@@ -347,9 +380,9 @@ TEST_SUITE("output morsels") {
     }
 
     TEST_CASE("every elementwise column op is a registered column op") {
-        for (const std::string_view name :
+        for (const dstd::StringView name :
              lazy_internal::ELEMENTWISE_COLUMN_OPS) {
-            const dftu_op_desc* op = dftu_op_find(std::string(name).c_str());
+            const dftu_op_desc* op = dftu_op_find(dstd::String(name).c_str());
             REQUIRE_MESSAGE(op, name);
             CHECK_MESSAGE(dftu_op_kind_of(op->sig) == DFTU_OP_KIND_SERIES,
                           name);
@@ -357,7 +390,6 @@ TEST_SUITE("output morsels") {
     }
 
     TEST_CASE("a frame op over an input with no rows gets typed columns") {
-        using dftracer::utils::dataframe::OpArgs;
         const DataFrame none = ints({"t", "v"}, 0, 7);
         dftu_scalar zero{};
         zero.kind = DFTU_SCALAR_TAG_I64;
@@ -381,15 +413,15 @@ TEST_SUITE("output morsels") {
 
     TEST_CASE("a grouped result with no rows still leaves with its columns") {
         const DataFrame none = ints({"t", "v"}, 0, 7);
-        const std::vector<GroupAgg> aggs = {GroupAgg{Agg::Sum, "v", "s"}};
-        const std::vector<std::string> want = {"t", "s"};
+        const dstd::Vector<GroupAgg> aggs = {GroupAgg{Agg::Sum, "v", "s"}};
+        const dstd::Vector<dstd::String> want = {"t", "s"};
         for (const std::uint64_t budget :
              {std::uint64_t{0}, std::uint64_t{1} << 20}) {
             INFO("budget=" << budget);
             const LazyFrame in =
                 budget ? none.lazy().memory_budget(budget) : none.lazy();
             for (const LazyFrame& lf :
-                 {in.group_by(std::vector<std::string>{"t"}, aggs),
+                 {in.group_by(dstd::Vector<dstd::String>{"t"}, aggs),
                   in.group_by_dynamic("t", 7, 7, aggs)}) {
                 const auto parts = morsels(lf, 64);
                 REQUIRE(parts.size() == 1);
@@ -404,19 +436,20 @@ TEST_SUITE("output morsels") {
         // t = 3 * row ascends; v differs per row, so first and last show the
         // row order inside each window.
         const DataFrame df = ints({"t", "v"}, 20000, std::int64_t{1} << 40);
-        const std::vector<GroupAgg> aggs = {
+        const dstd::Vector<GroupAgg> aggs = {
             GroupAgg{Agg::Sum, "v", "s"}, GroupAgg{Agg::Count, "v", "n"},
             GroupAgg{Agg::Min, "t", "lo"}, GroupAgg{Agg::First, "v", "f"},
             GroupAgg{Agg::Last, "v", "l"}};
         for (const auto& [every, period] :
-             {std::pair<std::int64_t, std::int64_t>{1, 1}, {3, 3}, {2, 7}}) {
+             {dstd::Pair<std::int64_t, std::int64_t>{1, 1}, {3, 3}, {2, 7}}) {
             INFO("every=" << every << " period=" << period);
             const auto got =
                 morsels(df.lazy().memory_budget(64 << 10).group_by_dynamic(
                             "t", every, period, aggs),
                         500);
             expect_same_rows(joined(got),
-                             df.group_by_dynamic("t", every, period, aggs));
+                             dftu_utils_test::ok(df.group_by_dynamic(
+                                 "t", every, period, aggs)));
         }
     }
 
@@ -428,19 +461,20 @@ TEST_SUITE("output morsels") {
                 500);
             // The running best leaves as one morsel; the sort in several.
             CHECK(cut.size() > 1);
-            expect_same_rows(joined(cut), df.topk("a", 3000, largest));
+            expect_same_rows(joined(cut),
+                             dftu_utils_test::ok(df.topk("a", 3000, largest)));
             const auto kept = morsels(
                 df.lazy().memory_budget(64 << 20).topk("a", 3000, largest),
                 500);
             CHECK(kept.size() == 1);
-            expect_same_rows(joined(kept), df.topk("a", 3000, largest));
+            expect_same_rows(joined(kept),
+                             dftu_utils_test::ok(df.topk("a", 3000, largest)));
         }
     }
 
     TEST_CASE("a whole-column op under a budget sees the whole input") {
-        using dftracer::utils::dataframe::OpArgs;
         DataFrame df = ints({"t"}, 6000, 5000);
-        std::vector<double> f(6000);
+        dstd::Vector<double> f(6000);
         for (std::size_t i = 0; i < f.size(); ++i)
             f[i] = static_cast<double>(i % 97) * 0.1;
         df.names.push_back("v");
@@ -464,14 +498,13 @@ TEST_SUITE("output morsels") {
     }
 
     TEST_CASE("a running or positional column op runs one morsel at a time") {
-        using dftracer::utils::dataframe::OpArgs;
         constexpr std::int64_t ROWS = 6000;
         // Int64 with nulls in runs (a leading run, a run across a morsel
         // edge), Int32 and Float64.
-        std::vector<std::int64_t> a(ROWS);
-        std::vector<std::int32_t> b(ROWS);
-        std::vector<double> c(ROWS);
-        std::vector<std::uint8_t> valid((ROWS + 7) / 8, 0xFF);
+        dstd::Vector<std::int64_t> a(ROWS);
+        dstd::Vector<std::int32_t> b(ROWS);
+        dstd::Vector<double> c(ROWS);
+        dstd::Vector<std::uint8_t> valid((ROWS + 7) / 8, 0xFF);
         for (std::int64_t i = 0; i < ROWS; ++i) {
             const auto k = static_cast<std::size_t>(i);
             a[k] = (i * 7919) % 1000 - 500;
@@ -551,7 +584,6 @@ TEST_SUITE("output morsels") {
     }
 
     TEST_CASE("with_column of a column runs one morsel at a time") {
-        using dftracer::utils::dataframe::OpArgs;
         const DataFrame df = ints({"t", "v"}, 6000, 5000);
         const DataFrame extra = ints({"w"}, 6000, 77);
         for (const char* name : {"w", "v"}) {
@@ -573,13 +605,12 @@ TEST_SUITE("output morsels") {
     }
 
     TEST_CASE("frame ops with a lazy twin or a lazy form do not collect") {
-        using dftracer::utils::dataframe::OpArgs;
         const DataFrame df = ints({"t", "v", "w"}, 6000, 100);
         const auto streamed = [](const LazyFrame& lf) {
-            return lf.explain().find("frame_op") == std::string::npos;
+            return lf.explain().find("frame_op") == dstd::String::npos;
         };
         {
-            std::vector<std::uint8_t> bits(6000 / 8 + 1, 0);
+            dstd::Vector<std::uint8_t> bits(6000 / 8 + 1, 0);
             for (std::int64_t i = 0; i < 6000; i += 3)
                 bits[static_cast<std::size_t>(i >> 3)] |=
                     static_cast<std::uint8_t>(1u << (i & 7));
@@ -598,21 +629,23 @@ TEST_SUITE("output morsels") {
             const LazyFrame lf =
                 df.lazy().frame_op("dftu.frame.sort_by_multi_per_col", args);
             CHECK(streamed(lf));
-            expect_same_rows(
-                joined(morsels(lf, 1000)),
-                df.sort_by_multi({"v", "w"}, std::vector<bool>{true, false}));
+            expect_same_rows(joined(morsels(lf, 1000)),
+                             dftu_utils_test::ok(df.sort_by_multi(
+                                 {"v", "w"}, dstd::Vector<bool>{true, false})));
         }
         {
-            const std::vector<GroupAgg> aggs = {GroupAgg{Agg::Sum, "v", "s"}};
+            const dstd::Vector<GroupAgg> aggs = {GroupAgg{Agg::Sum, "v", "s"}};
             const dftu_group_agg raw[] = {{"sum", "v", "s"}};
             OpArgs args;
             args.str(1, "t").i64(2, 7).i64(3, 7).agglist(4, raw);
-            const DataFrame sorted = df.sort_by("t", false);
+            const DataFrame sorted =
+                dftu_utils_test::ok(df.sort_by("t", false));
             const LazyFrame lf =
                 sorted.lazy().frame_op("dftu.frame.group_by_dynamic", args);
             CHECK(streamed(lf));
-            expect_same_rows(joined(morsels(lf, 500)),
-                             sorted.group_by_dynamic("t", 7, 7, aggs));
+            expect_same_rows(
+                joined(morsels(lf, 500)),
+                dftu_utils_test::ok(sorted.group_by_dynamic("t", 7, 7, aggs)));
         }
     }
 }

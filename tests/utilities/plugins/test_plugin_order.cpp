@@ -1,35 +1,33 @@
+// SPDX-License-Identifier: MIT
 // Fold ordering from the plugins' declared provides/consumes: a consumer
 // registered before its producer still reads the producer's whole-scan
 // accumulator, and the three graph faults (missing provider, duplicate
 // provider, cycle) fail at build instead of after a wasted scan.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/runtime.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/domains/plugins/plugins_internal.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi.h>
-#include <dftracer/utils/plugins/plugins_internal.h>
+#include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
+#include <utilities/plugins/test_plugin_common.h>
 
 #include <atomic>
 #include <cstdint>
-#include <fstream>
-#include <string>
-#include <vector>
 
-#include "test_plugin_common.h"
+using namespace dftracer::utils;
 
-using dftracer::utils::CoroScope;
-using dftracer::utils::Runtime;
-using dftracer::utils::plugins::build_injected_plugins;
-using dftracer::utils::plugins::fold_order;
 using View = dftracer::utils::trace::views::View;
 using ViewFile = dftracer::utils::trace::views::ViewFile;
-using test_plugin_common::index_trace;
-namespace coro = dftracer::utils::coro;
 
 namespace {
 
@@ -55,8 +53,8 @@ dftu_plugin make_bare_plugin(void* self) {
 
 // A plugin whose provides/consumes come from `self`, for the graph checks.
 struct NameLists {
-    std::vector<const char*> provides{nullptr};
-    std::vector<const char*> consumes{nullptr};
+    dstd::Vector<const char*> provides{nullptr};
+    dstd::Vector<const char*> consumes{nullptr};
 };
 
 const char* const* names_provides(void* self) {
@@ -128,35 +126,35 @@ dftu_plugin make_consumer() {
     return p;
 }
 
-std::string make_trace(dftu_utils_test::TestEnvironment& env,
-                       const std::string& tag, int n) {
-    std::string dir = env.get_dir() + "/" + tag;
-    fs::create_directories(dir);
-    std::string pfw = dir + "/trace.pfw";
-    std::ofstream ofs(pfw);
+dstd::String make_trace(dftu_utils_test::TestEnvironment& env,
+                        const dstd::String& tag, int n) {
+    dstd::String dir = env.dir() + "/" + tag;
+    REQUIRE(dstd::fs::create_directories(dir).has_value());
+    dstd::String pfw = dir + "/trace.pfw";
+    dstd::String ofs;
     for (int i = 0; i < n; ++i)
-        ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
-            << (1000 + i * 100) << R"(,"dur":)" << (10 + i) << R"(,"args":{}})"
-            << "\n";
-    ofs.close();
-    std::string gz = pfw + ".gz";
+        ofs += common::str_cat(
+            R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)",
+            (1000 + i * 100), R"(,"dur":)", (10 + i), R"(,"args":{}})", "\n");
+    dstd::fs::write_file(dstd::PathView(pfw), ofs).discard();
+    dstd::String gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
-    fs::remove(pfw);
+    dstd::fs::remove(pfw).discard();
     return gz;
 }
 
-void run_host(std::vector<dftu_plugin*> plugins, std::vector<ViewFile> files) {
-    auto set = build_injected_plugins(std::move(plugins));
+void run_host(dstd::Vector<dftu_plugin*> plugins,
+              dstd::Vector<ViewFile> files) {
+    auto set = domains::plugins::build_injected_plugins(std::move(plugins));
     REQUIRE(set.has_value());
     View view = View::from_files(std::move(files));
     Runtime rt(4);
-    auto task = dftracer::utils::run_coro_scope(
-        rt.executor(), [&](CoroScope&) -> coro::CoroTask<void> {
-            auto run = co_await set->run(view);
-            REQUIRE(run.has_value());
-            co_return;
-        });
-    rt.submit(std::move(task), "plugin-order").wait();
+    auto task = coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+        auto run = co_await set->run(view);
+        REQUIRE(run.has_value());
+        co_return;
+    });
+    dftu_utils_test::ok(rt.submit(std::move(task), "plugin-order").wait());
     rt.shutdown();
 }
 
@@ -165,7 +163,8 @@ void run_host(std::vector<dftu_plugin*> plugins, std::vector<ViewFile> files) {
 TEST_SUITE("PluginFoldOrder") {
     TEST_CASE("a consumer registered first still reads its producer") {
         dftu_utils_test::TestEnvironment env(40);
-        ViewFile file = index_trace(make_trace(env, "t", 40));
+        ViewFile file =
+            test_plugin_common::index_trace(make_trace(env, "t", 40));
 
         dftu_plugin consumer = make_consumer();
         dftu_plugin producer = make_producer();
@@ -185,9 +184,10 @@ TEST_SUITE("PluginFoldOrder") {
     TEST_CASE("the provider is ordered before its consumer") {
         dftu_plugin consumer = make_consumer();
         dftu_plugin producer = make_producer();
-        auto set = build_injected_plugins({&consumer, &producer});
+        auto set =
+            domains::plugins::build_injected_plugins({&consumer, &producer});
         REQUIRE(set.has_value());
-        std::vector<std::size_t> order = fold_order(*set);
+        dstd::Vector<std::size_t> order = domains::plugins::fold_order(*set);
         REQUIRE(order.size() == 2);
         CHECK(order[0] == 1);
         CHECK(order[1] == 0);
@@ -197,9 +197,9 @@ TEST_SUITE("PluginFoldOrder") {
         NameLists a, b;
         dftu_plugin pa = make_graph_plugin(&a);
         dftu_plugin pb = make_graph_plugin(&b);
-        auto set = build_injected_plugins({&pa, &pb});
+        auto set = domains::plugins::build_injected_plugins({&pa, &pb});
         REQUIRE(set.has_value());
-        std::vector<std::size_t> order = fold_order(*set);
+        dstd::Vector<std::size_t> order = domains::plugins::fold_order(*set);
         REQUIRE(order.size() == 2);
         CHECK(order[0] == 0);
         CHECK(order[1] == 1);
@@ -209,12 +209,12 @@ TEST_SUITE("PluginFoldOrder") {
         NameLists consumer;
         consumer.consumes = {"com.example.absent", nullptr};
         dftu_plugin p = make_graph_plugin(&consumer);
-        auto set = build_injected_plugins({&p});
+        auto set = domains::plugins::build_injected_plugins({&p});
         REQUIRE_FALSE(set.has_value());
-        CHECK(set.error().message.find("com.example.absent") !=
-              std::string::npos);
-        CHECK(set.error().message.find("no loaded plugin provides") !=
-              std::string::npos);
+        CHECK(set.error().message().find("com.example.absent") !=
+              dstd::String::npos);
+        CHECK(set.error().message().find("no loaded plugin provides") !=
+              dstd::String::npos);
     }
 
     TEST_CASE("two plugins providing the same name fail the build") {
@@ -223,10 +223,11 @@ TEST_SUITE("PluginFoldOrder") {
         b.provides = {"com.example.dup", nullptr};
         dftu_plugin pa = make_graph_plugin(&a);
         dftu_plugin pb = make_graph_plugin(&b);
-        auto set = build_injected_plugins({&pa, &pb});
+        auto set = domains::plugins::build_injected_plugins({&pa, &pb});
         REQUIRE_FALSE(set.has_value());
-        CHECK(set.error().message.find("com.example.dup") != std::string::npos);
-        CHECK(set.error().message.find("both provide") != std::string::npos);
+        CHECK(set.error().message().find("com.example.dup") !=
+              dstd::String::npos);
+        CHECK(set.error().message().find("both provide") != dstd::String::npos);
     }
 
     TEST_CASE("a provides/consumes cycle fails the build") {
@@ -237,31 +238,32 @@ TEST_SUITE("PluginFoldOrder") {
         b.consumes = {"com.example.a", nullptr};
         dftu_plugin pa = make_graph_plugin(&a);
         dftu_plugin pb = make_graph_plugin(&b);
-        auto set = build_injected_plugins({&pa, &pb});
+        auto set = domains::plugins::build_injected_plugins({&pa, &pb});
         REQUIRE_FALSE(set.has_value());
-        CHECK(set.error().message.find("cycle") != std::string::npos);
+        CHECK(set.error().message().find("cycle") != dstd::String::npos);
     }
 
     TEST_CASE("a dftu.-prefixed provided name fails the build") {
         NameLists a;
         a.provides = {"dftu.hash.fnv1a", nullptr};
         dftu_plugin pa = make_graph_plugin(&a);
-        auto set = build_injected_plugins({&pa});
+        auto set = domains::plugins::build_injected_plugins({&pa});
         REQUIRE_FALSE(set.has_value());
-        CHECK(set.error().message.find("dftu.hash.fnv1a") != std::string::npos);
-        CHECK(set.error().message.find("belongs to the host") !=
-              std::string::npos);
+        CHECK(set.error().message().find("dftu.hash.fnv1a") !=
+              dstd::String::npos);
+        CHECK(set.error().message().find("belongs to the host") !=
+              dstd::String::npos);
     }
 
     TEST_CASE("a dftu.-prefixed consumed name fails the build") {
         NameLists a;
         a.consumes = {"dftu.svc.agg", nullptr};
         dftu_plugin pa = make_graph_plugin(&a);
-        auto set = build_injected_plugins({&pa});
+        auto set = domains::plugins::build_injected_plugins({&pa});
         REQUIRE_FALSE(set.has_value());
-        CHECK(set.error().message.find("dftu.svc.agg") != std::string::npos);
-        CHECK(set.error().message.find("belongs to the host") !=
-              std::string::npos);
+        CHECK(set.error().message().find("dftu.svc.agg") != dstd::String::npos);
+        CHECK(set.error().message().find("belongs to the host") !=
+              dstd::String::npos);
     }
 
     TEST_CASE("a plugin consuming its own name is not a cycle") {
@@ -269,8 +271,8 @@ TEST_SUITE("PluginFoldOrder") {
         a.provides = {"com.example.self", nullptr};
         a.consumes = {"com.example.self", nullptr};
         dftu_plugin pa = make_graph_plugin(&a);
-        auto set = build_injected_plugins({&pa});
+        auto set = domains::plugins::build_injected_plugins({&pa});
         REQUIRE(set.has_value());
-        CHECK(fold_order(*set).size() == 1);
+        CHECK(domains::plugins::fold_order(*set).size() == 1);
     }
 }

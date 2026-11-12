@@ -1,12 +1,16 @@
+// SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/coro/async_semaphore.h>
-#include <dftracer/utils/core/coro/coro.h>
-#include <dftracer/utils/core/coro/when_all.h>
-#include <dftracer/utils/core/coro/yield.h>
-#include <dftracer/utils/core/runtime.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/coro/async_semaphore.h>
+#include <dftracer/utils/coro/detail/coro.h>
+#include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/coro/when_all.h>
+#include <dftracer/utils/coro/yield.h>
+#include <dftracer/utils/dstd/thread.h>
+#include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 #include <testing_runtime.h>
+#include <testing_utilities.h>
 
 #include <atomic>
 #include <chrono>
@@ -14,22 +18,21 @@
 #include <vector>
 
 using namespace dftracer::utils;
-using dftu_utils_test::run_coro;
 
-TEST_SUITE("CoroSemaphore") {
+TEST_SUITE("AsyncSemaphore") {
     TEST_CASE("never exceeds capacity under contention") {
-        coro::CoroSemaphore sem(100);
+        coro::AsyncSemaphore sem(100);
         std::atomic<std::int64_t> in_use{0};
         std::atomic<std::int64_t> peak{0};
         const int n = 64;
 
-        run_coro([&](CoroScope&) -> coro::CoroTask<void> {
-            std::vector<coro::CoroTask<void>> tasks;
+        dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
+            dstd::Vector<coro::CoroTask<void>> tasks;
             for (int i = 0; i < n; ++i) {
                 // Sizes 10..40 so several fit at once but not all.
                 std::uint64_t need = 10 + (i % 4) * 10;
                 tasks.push_back(
-                    [](coro::CoroSemaphore& s, std::uint64_t bytes,
+                    [](coro::AsyncSemaphore& s, std::uint64_t bytes,
                        std::atomic<std::int64_t>& cur,
                        std::atomic<std::int64_t>& hi) -> coro::CoroTask<void> {
                         co_await s.acquire(bytes);
@@ -55,10 +58,10 @@ TEST_SUITE("CoroSemaphore") {
     }
 
     TEST_CASE("an over-capacity request still completes") {
-        coro::CoroSemaphore sem(50);
+        coro::AsyncSemaphore sem(50);
         std::atomic<bool> done{false};
 
-        run_coro([&](CoroScope&) -> coro::CoroTask<void> {
+        dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
             // 200 > capacity 50: clamps to capacity and runs once idle.
             co_await sem.acquire(200);
             done.store(true);
@@ -70,15 +73,15 @@ TEST_SUITE("CoroSemaphore") {
     }
 
     TEST_CASE("all acquirers eventually make progress") {
-        coro::CoroSemaphore sem(16);
+        coro::AsyncSemaphore sem(16);
         std::atomic<int> completed{0};
         const int n = 100;
 
-        run_coro([&](CoroScope&) -> coro::CoroTask<void> {
-            std::vector<coro::CoroTask<void>> tasks;
+        dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
+            dstd::Vector<coro::CoroTask<void>> tasks;
             for (int i = 0; i < n; ++i) {
                 tasks.push_back(
-                    [](coro::CoroSemaphore& s,
+                    [](coro::AsyncSemaphore& s,
                        std::atomic<int>& c) -> coro::CoroTask<void> {
                         co_await s.acquire(8);
                         co_await coro::yield();
@@ -95,17 +98,19 @@ TEST_SUITE("CoroSemaphore") {
     }
 
     // A waiter parked on acquire() must resume when release() is called from a
-    // thread with no Executor::current() (a plain std::thread). Bounded wait: a
-    // regression manifests as a hang, so time out and fail rather than block.
+    // thread with no Executor::current() (a plain dstd::Thread). Bounded
+    // wait: a regression manifests as a hang, so time out and fail rather than
+    // block.
     TEST_CASE("release() from an off-executor thread wakes a parked waiter") {
-        coro::CoroSemaphore sem(10);
+        coro::AsyncSemaphore sem(10);
         std::atomic<bool> waiter_done{false};
         std::atomic<bool> finished{false};
 
-        std::thread worker([&] {
-            run_coro([&](CoroScope&) -> coro::CoroTask<void> {
+        dstd::Thread worker([&] {
+            dftu_utils_test::run_coro([&](coro::Scope&)
+                                          -> coro::CoroTask<void> {
                 co_await sem.acquire(10);  // take all capacity
-                std::thread releaser([&sem] {
+                dstd::Thread releaser([&sem] {
                     // No Executor::current() here.
                     std::this_thread::sleep_for(std::chrono::milliseconds(50));
                     sem.release(10);

@@ -1,26 +1,27 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_PYTHON_MEMORYVIEW_BATCH_H
 #define DFTRACER_UTILS_PYTHON_MEMORYVIEW_BATCH_H
 
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
-#include <dftracer/utils/core/coro/channel.h>
+#include <dftracer/utils/coro/channel.h>
+#include <dftracer/utils/dstd/future.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <atomic>
 #include <cstddef>
 #include <exception>
-#include <future>
-#include <memory>
 #include <mutex>
-#include <vector>
 
 namespace dftracer::utils::python {
 
-struct MemoryViewBatchData {
-    std::vector<char> buffer;
-    std::vector<Py_ssize_t> offsets;
-    std::vector<Py_ssize_t> lengths;
+struct MemoryViewBatchData : dstd::HeapObject {
+    dstd::Vector<char> buffer;
+    dstd::Vector<Py_ssize_t> offsets;
+    dstd::Vector<Py_ssize_t> lengths;
 
-    std::size_t num_entries() const { return offsets.size(); }
+    std::size_t entry_count() const { return offsets.size(); }
 };
 
 struct MemoryViewBatchObject {
@@ -32,14 +33,14 @@ extern PyTypeObject MemoryViewBatchType;
 PyObject *MemoryViewBatch_item(MemoryViewBatchObject *self, Py_ssize_t i);
 
 struct MemoryViewBatchIteratorState {
-    std::shared_ptr<dftracer::utils::coro::Channel<MemoryViewBatchData>>
+    dstd::SharedPtr<dftracer::utils::coro::Channel<MemoryViewBatchData>>
         channel;
     std::mutex error_mtx;
     std::exception_ptr error;
     std::atomic<bool> cancelled{false};
     std::size_t memory_budget_bytes = 0;
     std::atomic<std::size_t> bytes_in_queue{0};
-    std::shared_future<void> task_future;
+    dstd::SharedFuture<void> task_future;
 
     void set_error(std::exception_ptr e) {
         std::lock_guard<std::mutex> lock(error_mtx);

@@ -1,29 +1,27 @@
+// SPDX-License-Identifier: MIT
 // The OwnedLazyFrame fluent facade: every method reaches the host through
 // DFTU_SVC_OPS::run_lazy (dftu.lazy.* in the op registry), never by linking
 // dftu_lazyframe_* directly, so this exercises the run_lazy dispatch path
 // end to end through a real fold_adapter host.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/string_intern.h>
+#include <dftracer/utils/domains/plugins/fold_adapter.h>
+#include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/plugins/abi.h>
-#include <dftracer/utils/plugins/fold_adapter.h>
 
-#include <memory>
 // After fold_adapter.h so nanoarrow is set up before dataframe/abi.h's
 // arrow_abi.
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/scalar.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/plugins/plugin.h>
 #include <dftracer/utils/plugins/result_registry.h>
 #include <doctest/doctest.h>
 
 #include <cstdint>
-#include <vector>
 
-using dftracer::utils::StringIntern;
-using dftracer::utils::plugins::OwnedLazyFrame;
-using dftracer::utils::plugins::PluginFold;
+using namespace dftracer::utils;
 
 namespace {
 
@@ -35,11 +33,11 @@ struct TrivialSlice {
 };
 
 struct HostFixture {
-    StringIntern intern;
+    dstd::StringIntern intern;
     dftu_plugin* plugin =
         dftracer::utils::plugins::make_plugin<TrivialSlice>(nullptr);
-    std::unique_ptr<PluginFold> fold =
-        std::make_unique<PluginFold>(plugin, intern);
+    dstd::UniquePtr<domains::plugins::PluginFold> fold =
+        dstd::make_unique<domains::plugins::PluginFold>(plugin, intern);
     dftu_plugin_host& host() { return fold->host(); }
     ~HostFixture() {
         fold.reset();
@@ -51,7 +49,8 @@ struct HostFixture {
 /// the fixture's real op registry, mirroring how a plugin would construct
 /// the starting point of a plan (dftu_dataframe_lazy is a direct, unregistred
 /// ABI call - only the plan-building steps ride the registry).
-OwnedLazyFrame make_lazy(HostFixture& fx, dftu_dataframe** keep_source) {
+plugins::OwnedLazyFrame make_lazy(HostFixture& fx,
+                                  dftu_dataframe** keep_source) {
     const auto* ops = static_cast<const dftu_svc_ops*>(
         fx.host().get_service(fx.host().h, DFTU_SVC_OPS));
     REQUIRE(ops);
@@ -73,7 +72,7 @@ OwnedLazyFrame make_lazy(HostFixture& fx, dftu_dataframe** keep_source) {
 
     dftu_lazyframe* lf = dftu_dataframe_lazy(df);
     REQUIRE(lf);
-    return OwnedLazyFrame{lf, ops, fx.host().h};
+    return plugins::OwnedLazyFrame{lf, ops, fx.host().h};
 }
 
 }  // namespace
@@ -81,7 +80,7 @@ OwnedLazyFrame make_lazy(HostFixture& fx, dftu_dataframe** keep_source) {
 TEST_CASE("lazyframe facade: chained plan matches the equivalent direct plan") {
     HostFixture fx;
     dftu_dataframe* source = nullptr;
-    OwnedLazyFrame lf = make_lazy(fx, &source);
+    plugins::OwnedLazyFrame lf = make_lazy(fx, &source);
 
     dftu_expr* col1 = dftu_expr_col(1);
     dftu_expr* gt15 =
@@ -89,7 +88,7 @@ TEST_CASE("lazyframe facade: chained plan matches the equivalent direct plan") {
     dftu_expr_free(col1);  // a child is shared, the handle is the caller's
     REQUIRE(gt15);
 
-    OwnedLazyFrame out = lf.filter(gt15).sort_by("dur", true).head(3);
+    plugins::OwnedLazyFrame out = lf.filter(gt15).sort_by("dur", true).head(3);
     dftu_expr_free(gt15);
 
     REQUIRE(out.handle);
@@ -143,12 +142,13 @@ TEST_CASE(
     "calls short-circuit on") {
     HostFixture fx;
     dftu_dataframe* source = nullptr;
-    OwnedLazyFrame lf = make_lazy(fx, &source);
+    plugins::OwnedLazyFrame lf = make_lazy(fx, &source);
 
     // filter_mask(nullptr) is an arity/shape mismatch the run_lazy dispatch
     // rejects outright (see dftu_op_run_lazy's SERIES-operand null check), so
     // this fails mid-chain rather than only surfacing at collect.
-    OwnedLazyFrame out = lf.filter_mask(nullptr).head(1).sort_by("dur", false);
+    plugins::OwnedLazyFrame out =
+        lf.filter_mask(nullptr).head(1).sort_by("dur", false);
     CHECK_FALSE(out.handle);
     // The chain borrowed lf, so a failure inside it leaves the source intact
     // and still usable rather than emptying it as a side effect.
@@ -157,12 +157,12 @@ TEST_CASE(
 
     // Calling a method again on an already-empty OwnedLazyFrame must not
     // crash or double-free; it stays empty.
-    OwnedLazyFrame still_empty = out.head(5);
+    plugins::OwnedLazyFrame still_empty = out.head(5);
     CHECK_FALSE(still_empty.handle);
 
     // With no ops extension wired up at all, every op rejects the same way.
-    OwnedLazyFrame unwired{dftu_dataframe_lazy(source)};
-    OwnedLazyFrame unwired_out = unwired.head(1);
+    plugins::OwnedLazyFrame unwired{dftu_dataframe_lazy(source)};
+    plugins::OwnedLazyFrame unwired_out = unwired.head(1);
     CHECK_FALSE(unwired_out.handle);
 
     dftu_dataframe_free(source);
@@ -175,10 +175,10 @@ TEST_CASE(
     "lazyframe facade: a plan is reusable for more than one derived plan") {
     HostFixture fx;
     dftu_dataframe* source = nullptr;
-    OwnedLazyFrame lf = make_lazy(fx, &source);
+    plugins::OwnedLazyFrame lf = make_lazy(fx, &source);
 
-    OwnedLazyFrame first = lf.head(2);
-    OwnedLazyFrame second = lf.head(3);
+    plugins::OwnedLazyFrame first = lf.head(2);
+    plugins::OwnedLazyFrame second = lf.head(3);
 
     REQUIRE(lf.handle);  // still usable after both
     REQUIRE(first.handle);
@@ -198,10 +198,10 @@ TEST_CASE(
 TEST_CASE("lazyframe facade: take and group_by_dynamic reach the host") {
     HostFixture fx;
     dftu_dataframe* source = nullptr;
-    OwnedLazyFrame lf = make_lazy(fx, &source);
+    plugins::OwnedLazyFrame lf = make_lazy(fx, &source);
 
     const std::int64_t idx[2] = {4, 0};
-    OwnedLazyFrame taken = lf.take(idx);
+    plugins::OwnedLazyFrame taken = lf.take(idx);
     REQUIRE(taken.handle);
     dftu_dataframe* taken_df = dftu_lazyframe_collect(taken.handle, -1);
     REQUIRE(taken_df);
@@ -216,7 +216,7 @@ TEST_CASE("lazyframe facade: take and group_by_dynamic reach the host") {
     dftu_dataframe_free(taken_df);
 
     dftu_group_agg aggs[1] = {{"sum", "dur", "dur_sum"}};
-    OwnedLazyFrame windowed =
+    plugins::OwnedLazyFrame windowed =
         lf.group_by_dynamic("id", 2, 2, {aggs, 1}, 1, false);
     REQUIRE(windowed.handle);
     dftu_dataframe* windowed_df = dftu_lazyframe_collect(windowed.handle, -1);

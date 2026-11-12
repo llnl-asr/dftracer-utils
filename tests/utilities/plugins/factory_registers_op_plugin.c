@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 /* Test-only plugin whose factory registers a dataframe op at load and then
  * runs that op during the scan. Proves registration from the factory happens
  * early enough to matter: the op is in the registry before the first batch,
@@ -17,7 +18,7 @@ static int64_t double_rows(const dftu_series* v) {
 }
 
 static const dftu_op_desc g_op = {OP_NAME, DFTU_OP_SIG(I64, SERIES, NONE, NONE),
-                                  (const void*)&double_rows};
+                                  (dftu_op_generic_fn)&double_rows};
 
 static int64_t g_total;
 

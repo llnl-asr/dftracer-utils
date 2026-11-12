@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 /* A real C consumer of the dftu_io ABI. Each call returns a dftu_task; since
  * C has no coroutines, the C++ harness co_awaits them in sequence (the fd from
  * open flows into write/pread/close). This proves even the async I/O vtable is
@@ -5,6 +6,7 @@
 #include <dftracer/utils/plugins/abi.h>
 #include <fcntl.h>
 #include <stdint.h>
+#include <utilities/plugins/abi_c_consumers.h>
 
 static const dftu_io* io_of(const dftu_plugin_host* h) {
     return (const dftu_io*)h->get_service(h->h, DFTU_SVC_IO);

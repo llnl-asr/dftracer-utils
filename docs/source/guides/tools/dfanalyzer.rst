@@ -76,8 +76,8 @@ building it inline:
 Under the hood this calls ``build_index_distributed``, which is a thin
 wrapper over :doc:`../scale/distributed-index`'s ``distributed_index`` plus
 the dfanalyzer aggregation config (``time_interval_ms`` /
-``group_by_file``). See that guide for the staging-directory layout
-(``local_staging``/``shared_staging``) when you call it directly instead of
+``group_by_file``). See that guide for the arguments and the returned result
+when you call it directly instead of
 through ``ensure_index``.
 
 Read frames through the same Dask client

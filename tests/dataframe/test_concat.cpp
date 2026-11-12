@@ -1,10 +1,10 @@
+// SPDX-License-Identifier: MIT
 // Vertical concatenation and union, eager and lazy, through the C++ facade,
 // the C ABI and the op registry.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 
-#include <dftracer/utils/core/coro/task.h>
-#include <dftracer/utils/core/runtime.h>
+#include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/dataframe.h>
@@ -13,36 +13,31 @@
 #include <dftracer/utils/dataframe/kernels/dictionary.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/op.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <cstdint>
 #include <cstring>
-#include <memory>
-#include <optional>
 #include <stdexcept>
-#include <string>
 #include <utility>
-#include <vector>
 
-using dftracer::utils::coro::CoroTask;
-using dftracer::utils::dataframe::col;
-using dftracer::utils::dataframe::ConcatHow;
-using dftracer::utils::dataframe::DataFrame;
-using dftracer::utils::dataframe::InMemorySource;
-using dftracer::utils::dataframe::LazyFrame;
-using dftracer::utils::dataframe::OpArgs;
-using dftracer::utils::dataframe::Schema;
-using dftracer::utils::dataframe::Series;
-using dftracer::utils::dataframe::TypeId;
+using namespace dftracer::utils;
+using namespace dftracer::utils::dataframe;
 
 namespace {
 
-DataFrame run(CoroTask<DataFrame> t) {
-    return dftracer::utils::default_runtime().submit(std::move(t)).get();
+DataFrame run(coro::CoroTask<dstd::Result<DataFrame>> t) {
+    return dftu_utils_test::ok(
+        dftracer::utils::default_runtime().submit(std::move(t)).get());
 }
 
-Series i64s(const std::vector<std::int64_t>& v,
-            const std::vector<std::uint8_t>& validity = {}) {
+Series i64s(const dstd::Vector<std::int64_t>& v,
+            const dstd::Vector<std::uint8_t>& validity = {}) {
     return Series::flat_i64(v.data(), static_cast<std::int64_t>(v.size()),
                             validity.empty() ? nullptr : validity.data());
 }
@@ -65,41 +60,41 @@ DataFrame make_b() {
     return df;
 }
 
-using I = std::optional<std::int64_t>;
-using S = std::optional<std::string>;
-const I NI = std::nullopt;
+using I = dstd::Optional<std::int64_t>;
+using S = dstd::Optional<dstd::String>;
+const I NI = dstd::nullopt;
 
-std::vector<I> i64_col(const DataFrame& df, const std::string& name) {
+dstd::Vector<I> i64_col(const DataFrame& df, const dstd::String& name) {
     Series c = df.column(name);
     REQUIRE(c.valid());
     c = c.materialize();
-    std::vector<I> out;
+    dstd::Vector<I> out;
     for (std::int64_t i = 0; i < c.length(); ++i) {
         if (c.is_null(i))
-            out.emplace_back(std::nullopt);
+            out.emplace_back(dstd::nullopt);
         else
             out.emplace_back(c.data<std::int64_t>()[i]);
     }
     return out;
 }
 
-std::vector<S> str_col(const DataFrame& df, const std::string& name) {
+dstd::Vector<S> str_col(const DataFrame& df, const dstd::String& name) {
     Series c = df.column(name);
     REQUIRE(c.valid());
     c = c.materialize();
-    std::vector<S> out;
+    dstd::Vector<S> out;
     for (std::int64_t i = 0; i < c.length(); ++i) {
         if (c.is_null(i))
-            out.emplace_back(std::nullopt);
+            out.emplace_back(dstd::nullopt);
         else
-            out.emplace_back(std::string(c.string_at(i)));
+            out.emplace_back(dstd::String(c.string_at(i)));
     }
     return out;
 }
 
 dftu_dataframe* to_abi(const DataFrame& df) {
-    std::vector<const char*> names;
-    std::vector<dftu_series*> cols;
+    dstd::Vector<const char*> names;
+    dstd::Vector<dftu_series*> cols;
     for (std::size_t i = 0; i < df.names.size(); ++i) {
         names.push_back(df.names[i].c_str());
         cols.push_back(df.columns[i].share().release());
@@ -108,16 +103,16 @@ dftu_dataframe* to_abi(const DataFrame& df) {
                               static_cast<int32_t>(names.size()));
 }
 
-std::vector<S> texts(const Series& s) {
-    std::vector<S> out;
+dstd::Vector<S> texts(const Series& s) {
+    dstd::Vector<S> out;
     for (std::int64_t i = 0; i < s.length(); ++i)
-        out.push_back(s.is_null(i) ? std::nullopt
-                                   : std::optional<std::string>(
-                                         std::string(s.string_at(i))));
+        out.push_back(s.is_null(i) ? dstd::nullopt
+                                   : dstd::Optional<dstd::String>(
+                                         dstd::String(s.string_at(i))));
     return out;
 }
 
-Series dict_of(const std::vector<std::string>& v) {
+Series dict_of(const dstd::Vector<dstd::String>& v) {
     return Series::strings(v).dictionary_encode();
 }
 
@@ -133,16 +128,18 @@ TEST_SUITE("dataframe concat") {
                 dftracer::utils::dataframe::Encoding::Dictionary);
         REQUIRE(b.encoding() ==
                 dftracer::utils::dataframe::Encoding::Dictionary);
-        Series out = dftracer::utils::dataframe::concat_columns({&a, &b});
+        Series out = dftu_utils_test::ok(
+            dftracer::utils::dataframe::concat_columns({&a, &b}));
         CHECK(out.encoding() ==
               dftracer::utils::dataframe::Encoding::Dictionary);
-        CHECK(texts(out) == std::vector<S>{"a", "b", "a", "b", "c"});
+        CHECK(texts(out) == dstd::Vector<S>{"a", "b", "a", "b", "c"});
         CHECK(dict_size(out) == 3);
 
-        Series alone = dftracer::utils::dataframe::concat_columns({&a});
+        Series alone = dftu_utils_test::ok(
+            dftracer::utils::dataframe::concat_columns({&a}));
         CHECK(alone.encoding() ==
               dftracer::utils::dataframe::Encoding::Dictionary);
-        CHECK(texts(alone) == std::vector<S>{"a", "b", "a"});
+        CHECK(texts(alone) == dstd::Vector<S>{"a", "b", "a"});
     }
 
     TEST_CASE("dictionary parts keep nulls and accept an empty part") {
@@ -153,20 +150,22 @@ TEST_SUITE("dataframe concat") {
             codes, std::move(va), &valid);
         Series e = dict_of({});
         Series b = dict_of({"q", "r"});
-        Series out = dftracer::utils::dataframe::concat_columns({&a, &e, &b});
+        Series out = dftu_utils_test::ok(
+            dftracer::utils::dataframe::concat_columns({&a, &e, &b}));
         CHECK(out.encoding() ==
               dftracer::utils::dataframe::Encoding::Dictionary);
         CHECK(out.null_count() == 2);
-        CHECK(texts(out) ==
-              std::vector<S>{"p", std::nullopt, "p", std::nullopt, "q", "r"});
+        CHECK(texts(out) == dstd::Vector<S>{"p", dstd::nullopt, "p",
+                                            dstd::nullopt, "q", "r"});
     }
 
     TEST_CASE("mixed flat and dictionary parts give a view column") {
         Series a = dict_of({"a", "b", "a"});
         Series f = Series::strings({"z", "a"});
-        Series out = dftracer::utils::dataframe::concat_columns({&a, &f});
+        Series out = dftu_utils_test::ok(
+            dftracer::utils::dataframe::concat_columns({&a, &f}));
         CHECK(out.encoding() == dftracer::utils::dataframe::Encoding::View);
-        CHECK(texts(out) == std::vector<S>{"a", "b", "a", "z", "a"});
+        CHECK(texts(out) == dstd::Vector<S>{"a", "b", "a", "z", "a"});
     }
 
     TEST_CASE("a dictionary part with a LargeString part gives a String view") {
@@ -174,44 +173,48 @@ TEST_SUITE("dataframe concat") {
         w->type = TypeId::LargeString;
         w->encoding = dftracer::utils::dataframe::Encoding::Flat;
         w->length = 2;
-        w->offsets = dftracer::utils::dataframe::Buffer::allocate(
-            3 * sizeof(std::int64_t));
-        w->data = dftracer::utils::dataframe::Buffer::allocate(3);
-        auto* off = reinterpret_cast<std::int64_t*>(w->offsets->data());
+        w->offsets =
+            dftracer::utils::dataframe::new_buffer(3 * sizeof(std::int64_t));
+        w->data = dftracer::utils::dataframe::new_buffer(3);
+        auto* off = reinterpret_cast<std::int64_t*>(
+            dftracer::utils::dataframe::writable(w->offsets));
         off[0] = 0;
         off[1] = 1;
         off[2] = 3;
-        std::memcpy(w->data->data(), "xyy", 3);
+        std::memcpy(dftracer::utils::dataframe::writable(w->data), "xyy", 3);
         Series wide{w};
         Series a = dict_of({"a", "b", "a"});
-        Series out = dftracer::utils::dataframe::concat_columns({&a, &wide});
+        Series out = dftu_utils_test::ok(
+            dftracer::utils::dataframe::concat_columns({&a, &wide}));
         CHECK(out.type() == TypeId::String);
         CHECK(out.encoding() == dftracer::utils::dataframe::Encoding::View);
-        CHECK(texts(out) == std::vector<S>{"a", "b", "a", "x", "yy"});
+        CHECK(texts(out) == dstd::Vector<S>{"a", "b", "a", "x", "yy"});
     }
 
     TEST_CASE("a dictionary column marked JSON concatenates with a flat one") {
         Series d = dict_of({"1", "2", "1"}).as_json();
         Series f = Series::strings({"3"}).as_json();
-        Series out = dftracer::utils::dataframe::concat_columns({&d, &f});
+        Series out = dftu_utils_test::ok(
+            dftracer::utils::dataframe::concat_columns({&d, &f}));
         CHECK(out.is_json());
-        CHECK(texts(out) == std::vector<S>{"1", "2", "1", "3"});
+        CHECK(texts(out) == dstd::Vector<S>{"1", "2", "1", "3"});
     }
 
     TEST_CASE("eager vertical keeps every row in order, nulls included") {
         DataFrame a = make_a();
         DataFrame b = make_b();
-        DataFrame out = dftracer::utils::dataframe::concat({&a, &b});
-        CHECK(out.names == std::vector<std::string>{"k", "s"});
-        CHECK(i64_col(out, "k") == std::vector<I>{1, 2, NI, 2, 4});
-        CHECK(str_col(out, "s") == std::vector<S>{"x", "y", "z", "y", "w"});
+        DataFrame out =
+            dftu_utils_test::ok(dftracer::utils::dataframe::concat({&a, &b}));
+        CHECK(out.names == dstd::Vector<dstd::String>{"k", "s"});
+        CHECK(i64_col(out, "k") == dstd::Vector<I>{1, 2, NI, 2, 4});
+        CHECK(str_col(out, "s") == dstd::Vector<S>{"x", "y", "z", "y", "w"});
     }
 
     TEST_CASE("list and struct columns concatenate with their nulls") {
         // a: [[1, 2], null]; b: [[], [3]]
-        auto part = [](std::vector<std::int32_t> offs,
-                       std::vector<std::int64_t> vals,
-                       std::vector<std::int64_t> rows) {
+        auto part = [](dstd::Vector<std::int32_t> offs,
+                       dstd::Vector<std::int64_t> vals,
+                       dstd::Vector<std::int64_t> rows) {
             DataFrame df;
             df.names = {"l"};
             df.columns.push_back(Series::list(offs, i64s(vals)).take(rows));
@@ -219,7 +222,8 @@ TEST_SUITE("dataframe concat") {
         };
         DataFrame a = part({0, 2, 2}, {1, 2}, {0, -1});
         DataFrame b = part({0, 0, 1}, {3}, {0, 1});
-        DataFrame out = dftracer::utils::dataframe::concat({&a, &b});
+        DataFrame out =
+            dftu_utils_test::ok(dftracer::utils::dataframe::concat({&a, &b}));
         const Series& l = out.columns.front();
         REQUIRE(l.type() == TypeId::List);
         REQUIRE(l.length() == 4);
@@ -227,25 +231,26 @@ TEST_SUITE("dataframe concat") {
         CHECK_FALSE(l.is_null(2));
         const Series flat = l.materialize();
         const std::int32_t* off = flat.offsets();
-        CHECK(std::vector<std::int32_t>(off, off + 5) ==
-              std::vector<std::int32_t>{0, 2, 2, 2, 3});
+        CHECK(dstd::Vector<std::int32_t>(off, off + 5) ==
+              dstd::Vector<std::int32_t>{0, 2, 2, 2, 3});
         CHECK(flat.child(0).data<std::int64_t>()[2] == 3);
 
         DataFrame s1;
         s1.names = {"s"};
         {
-            std::vector<Series> f;
+            dstd::Vector<Series> f;
             f.push_back(i64s({1, 2}));
             s1.columns.push_back(Series::structs({"x"}, std::move(f)));
         }
         DataFrame s2;
         s2.names = {"s"};
         {
-            std::vector<Series> f;
+            dstd::Vector<Series> f;
             f.push_back(i64s({3}));
             s2.columns.push_back(Series::structs({"x"}, std::move(f)));
         }
-        DataFrame st = dftracer::utils::dataframe::concat({&s1, &s2});
+        DataFrame st =
+            dftu_utils_test::ok(dftracer::utils::dataframe::concat({&s1, &s2}));
         REQUIRE(st.columns.front().type() == TypeId::Struct);
         CHECK(st.columns.front().child(0).data<std::int64_t>()[2] == 3);
     }
@@ -253,12 +258,13 @@ TEST_SUITE("dataframe concat") {
     TEST_CASE("lazy parity with eager under one and many morsels") {
         DataFrame a = make_a();
         DataFrame b = make_b();
-        DataFrame eager = dftracer::utils::dataframe::concat({&a, &b});
-        for (std::int64_t morsel : std::vector<std::int64_t>{0, 1, 2}) {
+        DataFrame eager =
+            dftu_utils_test::ok(dftracer::utils::dataframe::concat({&a, &b}));
+        for (std::int64_t morsel : dstd::Vector<std::int64_t>{0, 1, 2}) {
             LazyFrame la =
-                LazyFrame::scan(std::make_shared<InMemorySource>(make_a()));
+                LazyFrame::scan(dstd::make_shared<InMemorySource>(make_a()));
             LazyFrame lb =
-                LazyFrame::scan(std::make_shared<InMemorySource>(make_b()));
+                LazyFrame::scan(dstd::make_shared<InMemorySource>(make_b()));
             DataFrame out = run(la.concat(lb).collect(morsel));
             CHECK(out.names == eager.names);
             CHECK(i64_col(out, "k") == i64_col(eager, "k"));
@@ -268,54 +274,54 @@ TEST_SUITE("dataframe concat") {
 
     TEST_CASE("lazy schema, output_schema and explain") {
         LazyFrame la =
-            LazyFrame::scan(std::make_shared<InMemorySource>(make_a()));
+            LazyFrame::scan(dstd::make_shared<InMemorySource>(make_a()));
         LazyFrame lb =
-            LazyFrame::scan(std::make_shared<InMemorySource>(make_b()));
+            LazyFrame::scan(dstd::make_shared<InMemorySource>(make_b()));
         LazyFrame plan = la.concat(lb);
-        CHECK(plan.schema() == std::vector<std::string>{"k", "s"});
+        CHECK(plan.schema() == dstd::Vector<dstd::String>{"k", "s"});
         Schema s = plan.output_schema();
         REQUIRE(s.fields.size() == 2);
         CHECK(s.fields[0].type.id == TypeId::Int64);
         CHECK(s.fields[1].type.id == TypeId::String);
-        CHECK(plan.explain().find("concat") != std::string::npos);
+        CHECK(plan.explain().find("concat") != dstd::String::npos);
     }
 
     TEST_CASE("a filter after the concat applies to both sides") {
         LazyFrame la =
-            LazyFrame::scan(std::make_shared<InMemorySource>(make_a()));
+            LazyFrame::scan(dstd::make_shared<InMemorySource>(make_a()));
         LazyFrame lb =
-            LazyFrame::scan(std::make_shared<InMemorySource>(make_b()));
+            LazyFrame::scan(dstd::make_shared<InMemorySource>(make_b()));
         LazyFrame plan = la.concat(lb).filter(col(0) > std::int64_t{1});
-        std::string text = plan.explain();
+        dstd::String text = plan.explain();
         CHECK(text.find("concat") < text.find("filter"));
         DataFrame out = run(plan.collect(1));
-        CHECK(i64_col(out, "k") == std::vector<I>{2, 2, 4});
-        CHECK(str_col(out, "s") == std::vector<S>{"y", "y", "w"});
+        CHECK(i64_col(out, "k") == dstd::Vector<I>{2, 2, 4});
+        CHECK(str_col(out, "s") == dstd::Vector<S>{"y", "y", "w"});
     }
 
     TEST_CASE("the right side may itself be lazy work") {
         LazyFrame la =
-            LazyFrame::scan(std::make_shared<InMemorySource>(make_a()));
+            LazyFrame::scan(dstd::make_shared<InMemorySource>(make_a()));
         LazyFrame lb =
-            LazyFrame::scan(std::make_shared<InMemorySource>(make_b()))
+            LazyFrame::scan(dstd::make_shared<InMemorySource>(make_b()))
                 .filter(col(0) > std::int64_t{3});
         DataFrame out = run(la.concat(lb).collect());
-        CHECK(i64_col(out, "k") == std::vector<I>{1, 2, NI, 4});
+        CHECK(i64_col(out, "k") == dstd::Vector<I>{1, 2, NI, 4});
     }
 
     TEST_CASE("concat then unique is union") {
         LazyFrame la =
-            LazyFrame::scan(std::make_shared<InMemorySource>(make_a()));
+            LazyFrame::scan(dstd::make_shared<InMemorySource>(make_a()));
         LazyFrame lb =
-            LazyFrame::scan(std::make_shared<InMemorySource>(make_b()));
+            LazyFrame::scan(dstd::make_shared<InMemorySource>(make_b()));
         DataFrame out = run(la.concat(lb).unique().collect());
-        CHECK(i64_col(out, "k") == std::vector<I>{1, 2, NI, 4});
-        CHECK(str_col(out, "s") == std::vector<S>{"x", "y", "z", "w"});
+        CHECK(i64_col(out, "k") == dstd::Vector<I>{1, 2, NI, 4});
+        CHECK(str_col(out, "s") == dstd::Vector<S>{"x", "y", "z", "w"});
     }
 
     TEST_CASE("refusals name the problem") {
         LazyFrame la =
-            LazyFrame::scan(std::make_shared<InMemorySource>(make_a()));
+            LazyFrame::scan(dstd::make_shared<InMemorySource>(make_a()));
         DataFrame fewer;
         fewer.names = {"k"};
         fewer.columns.push_back(i64s({1}));
@@ -325,18 +331,24 @@ TEST_SUITE("dataframe concat") {
         retyped.names = {"k", "s"};
         retyped.columns.push_back(Series::strings({"1"}));
         retyped.columns.push_back(Series::strings({"q"}));
-        CHECK_THROWS_WITH_AS(
+        dftu_utils_test::expect_error(
             la.concat(LazyFrame::scan(
-                std::make_shared<InMemorySource>(std::move(fewer)))),
-            "concat: column count differs (2 vs 1)", std::invalid_argument);
-        CHECK_THROWS_WITH_AS(
-            la.concat(LazyFrame::scan(
-                std::make_shared<InMemorySource>(std::move(renamed)))),
-            "concat: column 1 is 's' vs 't'", std::invalid_argument);
-        CHECK_THROWS_WITH_AS(
-            la.concat(LazyFrame::scan(
-                std::make_shared<InMemorySource>(std::move(retyped)))),
-            "concat: column 'k' type differs", std::invalid_argument);
+                          dstd::make_shared<InMemorySource>(std::move(fewer))))
+                .status(),
+            dftracer::utils::common::ErrorCode::InvalidArgument,
+            "concat: column count differs (2 vs 1)");
+        dftu_utils_test::expect_error(
+            la.concat(LazyFrame::scan(dstd::make_shared<InMemorySource>(
+                          std::move(renamed))))
+                .status(),
+            dftracer::utils::common::ErrorCode::InvalidArgument,
+            "concat: column 1 is 's' vs 't'");
+        dftu_utils_test::expect_error(
+            la.concat(LazyFrame::scan(dstd::make_shared<InMemorySource>(
+                          std::move(retyped))))
+                .status(),
+            dftracer::utils::common::ErrorCode::InvalidArgument,
+            "concat: column 'k' type differs");
     }
 
     TEST_CASE("C ABI: concat, concat2, union and lazy concat") {
@@ -373,7 +385,7 @@ TEST_SUITE("dataframe concat") {
         REQUIRE(lc);
         char* text = dftu_lazyframe_explain(lc);
         REQUIRE(text);
-        CHECK(std::string(text).find("concat") != std::string::npos);
+        CHECK(dstd::String(text).find("concat") != dstd::String::npos);
         dftu_duql_string_free(text);
         dftu_dataframe* collected = dftu_lazyframe_collect(lc, 0);
         REQUIRE(collected);

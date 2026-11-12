@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #define PY_SSIZE_T_CLEAN
 #include <dftracer/utils/python/memoryview_batch.h>
 #include <dftracer/utils/python/py_type_helpers.h>
@@ -24,7 +25,7 @@ static int MemoryViewBatch_getbuffer(MemoryViewBatchObject *self,
 
 static Py_ssize_t MemoryViewBatch_length(MemoryViewBatchObject *self) {
     if (!self->data) return 0;
-    return static_cast<Py_ssize_t>(self->data->num_entries());
+    return static_cast<Py_ssize_t>(self->data->entry_count());
 }
 
 PyObject *MemoryViewBatch_item(MemoryViewBatchObject *self, Py_ssize_t i) {
@@ -32,7 +33,7 @@ PyObject *MemoryViewBatch_item(MemoryViewBatchObject *self, Py_ssize_t i) {
         PyErr_SetString(PyExc_IndexError, "MemoryViewBatch has no data");
         return NULL;
     }
-    Py_ssize_t n = static_cast<Py_ssize_t>(self->data->num_entries());
+    Py_ssize_t n = static_cast<Py_ssize_t>(self->data->entry_count());
     if (i < 0 || i >= n) {
         PyErr_SetString(PyExc_IndexError, "MemoryViewBatch index out of range");
         return NULL;
@@ -64,17 +65,15 @@ static PyBufferProcs MemoryViewBatch_as_buffer = {
 };
 
 static PySequenceMethods MemoryViewBatch_as_sequence = {
-    (lenfunc)MemoryViewBatch_length,
-    NULL,
-    NULL,
-    (ssizeargfunc)MemoryViewBatch_item,
+    .sq_length = (lenfunc)MemoryViewBatch_length,
+    .sq_item = (ssizeargfunc)MemoryViewBatch_item,
 };
 
 static PyObject *MemoryViewBatch_get_num_entries(MemoryViewBatchObject *self,
                                                  void *) {
     if (!self->data) return PyLong_FromLong(0);
     return PyLong_FromSsize_t(
-        static_cast<Py_ssize_t>(self->data->num_entries()));
+        static_cast<Py_ssize_t>(self->data->entry_count()));
 }
 
 static PyObject *MemoryViewBatch_get_num_bytes(MemoryViewBatchObject *self,
@@ -89,7 +88,7 @@ static PyGetSetDef MemoryViewBatch_getsetters[] = {
      "Number of entries", NULL},
     {"num_bytes", (getter)MemoryViewBatch_get_num_bytes, NULL,
      "Total buffer size in bytes", NULL},
-    {NULL}};
+    {NULL, NULL, NULL, NULL, NULL}};
 
 PyTypeObject MemoryViewBatchType = {
     .ob_base = PyVarObject_HEAD_INIT(NULL, 0).tp_name =

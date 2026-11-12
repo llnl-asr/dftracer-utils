@@ -1,13 +1,14 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_DATAFRAME_KERNELS_ORDER_H
 #define DFTRACER_UTILS_DATAFRAME_KERNELS_ORDER_H
 
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dataframe/types.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <cmath>
 #include <cstdint>
-#include <string_view>
-#include <vector>
 
 namespace dftracer::utils::dataframe {
 
@@ -31,7 +32,7 @@ class ColumnView {
     /// Whether a column of type `t` can be viewed.
     static bool supports(TypeId t) noexcept;
 
-    /// Throws std::invalid_argument for an unsupported type.
+    /// Ends the process for an unsupported type: check @ref supports first.
     explicit ColumnView(const Series& column);
 
     /// A view of the same buffers.
@@ -63,7 +64,7 @@ class ColumnView {
     /// The value of any numeric column as a double.
     double get_double(std::int64_t i) const noexcept;
     /// The bytes of a Bytes column.
-    std::string_view get_bytes(std::int64_t i) const noexcept;
+    dstd::StringView get_bytes(std::int64_t i) const noexcept;
 
     /// Three-way order of non-null rows `a` and `b` of this column: numeric
     /// by value with NaN last and equal to NaN, bytes by memcmp then length.
@@ -89,17 +90,17 @@ class ColumnView {
 
 /// The row indices [0, n) ordered by `keys` ascending, a null sorting after
 /// every value, ties in row order.
-std::vector<std::int64_t> order_rows(const std::vector<ColumnView>& keys,
-                                     std::int64_t n);
+dstd::Vector<std::int64_t> order_rows(const dstd::Vector<ColumnView>& keys,
+                                      std::int64_t n);
 
 /// Whether rows `a` and `b` hold the same key tuple, a null equal to a null.
-bool same_keys(const std::vector<ColumnView>& keys, std::int64_t a,
+bool same_keys(const dstd::Vector<ColumnView>& keys, std::int64_t a,
                std::int64_t b);
 
 /// Given `order` from order_rows, the end of the run of rows from position
 /// `begin` that share its key tuple.
-std::int64_t run_end(const std::vector<ColumnView>& keys,
-                     const std::vector<std::int64_t>& order,
+std::int64_t run_end(const dstd::Vector<ColumnView>& keys,
+                     const dstd::Vector<std::int64_t>& order,
                      std::int64_t begin);
 
 }  // namespace dftracer::utils::dataframe

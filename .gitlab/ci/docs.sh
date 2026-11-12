@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: MIT
 # Sphinx docs; output in public/ is published by `distribute`. Doxygen first:
 # conf.py wires breathe to docs/doxygen/xml, and without it every C++ API page
 # resolves to nothing. .readthedocs.yaml does the same in its pre_build.

@@ -1,19 +1,24 @@
+// SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/runtime.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
-#include <dftracer/utils/index/build/batch_builder.h>
-#include <dftracer/utils/index/extensions/kinds/payloads.h>
-#include <dftracer/utils/index/gzip/gzip_indexer.h>
-#include <dftracer/utils/index/gzip/gzip_member_scanner.h>
-#include <dftracer/utils/index/schemas/dft/bloom_core.h>
-#include <dftracer/utils/index/store/db_manager.h>
-#include <dftracer/utils/index/store/index_database.h>
-#include <dftracer/utils/index/store/index_database_writer_context.h>
-#include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/dstd/file.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/hash/constants.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/fileio/compress/libdeflate_gzip.h>
+#include <dftracer/utils/fileio/file_helpers.h>
+#include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/event.h>
+#include <dftracer/utils/trace/index/build/batch_builder.h>
+#include <dftracer/utils/trace/index/extensions/kinds/payloads.h>
+#include <dftracer/utils/trace/index/gzip/gzip_indexer.h>
+#include <dftracer/utils/trace/index/gzip/gzip_member_scanner.h>
+#include <dftracer/utils/trace/index/schemas/dft/bloom_core.h>
 #include <dftracer/utils/trace/internal/utils.h>
-#include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 #include <doctest/doctest.h>
 #include <fcntl.h>
 #include <index_test_helpers.h>
@@ -22,11 +27,9 @@
 #include <testing_utilities.h>
 #include <unistd.h>
 
-#include <memory>
-
 using namespace dftracer::utils;
-using namespace dftracer::utils::index::build;
-using namespace dftracer::utils::index::store;
+using namespace dftracer::utils::trace::index::build;
+using namespace dftracer::utils::trace::index::store;
 
 using namespace dftu_utils_test;
 
@@ -36,17 +39,17 @@ namespace {
 // caller concern (resolve_and_build pre-filters), so `success` == indexed.
 struct BuildOutcome {
     bool success = false;
-    std::string index_path;
+    dstd::String index_path;
     std::size_t total_lines = 0;
 };
 
-BuildOutcome build_one(const std::string& gz, bool force = false) {
+BuildOutcome build_one(const dstd::String& gz, bool force = false) {
     BuildOutcome out;
-    run_coro([&](CoroScope& scope) -> coro::CoroTask<void> {
-        auto cfg = std::make_shared<IndexBuildBatchConfig>();
-        cfg->file_paths = {gz};
+    run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
+        auto cfg = dstd::make_shared<IndexBuildBatchConfig>();
+        cfg->file_paths = {dstd::String(dstd::StringView(gz))};
         cfg->force_rebuild = force;
-        auto r = co_await BatchBuilder::process(&scope, std::move(cfg));
+        auto r = co_await BatchBuilder::process(std::move(cfg));
         out.success = r.indexed >= 1 && r.failed == 0;
         if (!r.results.empty()) {
             out.index_path = r.results[0].index_path;
@@ -59,41 +62,40 @@ BuildOutcome build_one(const std::string& gz, bool force = false) {
 
 // Build a gzip file out of `member_texts`, one gzip member each, and return
 // its path plus the compressed offset of every member.
-std::pair<std::string, std::vector<std::uint64_t>> write_multi_member_gz(
-    const std::vector<std::string>& member_texts) {
-    using dftracer::utils::utilities::fileio::compress::GzipMemberCompressor;
-    std::vector<std::uint8_t> bytes;
-    std::vector<std::uint64_t> offsets;
+dstd::Pair<dstd::String, dstd::Vector<std::uint64_t>> write_multi_member_gz(
+    const dstd::Vector<dstd::String>& member_texts) {
+    dstd::Vector<std::uint8_t> bytes;
+    dstd::Vector<std::uint64_t> offsets;
     for (const auto& text : member_texts) {
         offsets.push_back(bytes.size());
-        GzipMemberCompressor comp;
+        fileio::compress::GzipMemberCompressor comp;
         auto member = comp.compress_member(text.data(), text.size());
         REQUIRE(member.has_value());
         bytes.insert(bytes.end(), member->begin(), member->end());
     }
     // Put the fixture in its own directory: the index derives as
     // <dir>/.dftindex next to the trace, so a unique filename in the shared
-    // temp root would still collapse every case onto one shared RocksDB and
+    // temp root would still collapse every case onto one shared index and
     // corrupt it.
     auto dir = make_unique_test_path("members");
-    fs::create_directories(dir);
+    REQUIRE(dstd::fs::create_directories(dir).has_value());
     auto path = dir / "members.pfw.gz";
-    std::ofstream ofs(path, std::ios::binary);
-    ofs.write(reinterpret_cast<const char*>(bytes.data()),
-              static_cast<std::streamsize>(bytes.size()));
-    ofs.close();
-    return {path.string(), offsets};
+    dstd::String ofs;
+    ofs.append(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+    dstd::fs::write_file(dstd::PathView(path), ofs).discard();
+    return {dstd::String(path.str()), offsets};
 }
 
-std::string dftu_lines(int start_id, int count,
-                       const std::string& name = "op") {
-    std::string out;
+dstd::String dftu_lines(int start_id, int count,
+                        const dstd::String& name = "op") {
+    dstd::String out;
     for (int i = 0; i < count; ++i) {
-        out +=
-            "{\"id\":" + std::to_string(start_id + i) + ",\"name\":\"" + name +
-            "\",\"cat\":\"POSIX\",\"pid\":1,\"tid\":1,"
-            "\"ts\":" +
-            std::to_string(1000 + start_id + i) + ",\"dur\":10,\"ph\":\"X\"}\n";
+        out += "{\"id\":" + dstd::to_string(start_id + i) + ",\"name\":\"" +
+               name +
+               "\",\"cat\":\"POSIX\",\"pid\":1,\"tid\":1,"
+               "\"ts\":" +
+               dstd::to_string(1000 + start_id + i) +
+               ",\"dur\":10,\"ph\":\"X\"}\n";
     }
     return out;
 }
@@ -107,31 +109,28 @@ TEST_SUITE("IndexBuilder") {
     // exactly one slice. If either is wrong, summed slice line counts drift
     // from the whole-file count.
     TEST_CASE("Sliced builds conserve lines across member boundaries") {
-        namespace gz = dftracer::utils::index::gzip;
-        using dftracer::utils::index::gzip::GzipMember;
-
         // Members deliberately end mid-line so lines straddle boundaries.
-        const std::vector<std::string> texts = {
+        const dstd::Vector<dstd::String> texts = {
             "line1\nlineA_par",      // ends mid-line
             "t1\nlineB\nlineC_par",  // starts + ends mid-line
             "t2\nline4\n",           // starts mid-line
         };
         auto [gz_file, offs] = write_multi_member_gz(texts);
-        const std::uint64_t fsize = fs::file_size(gz_file);
+        const std::uint64_t fsize = dstd::fs::file_size(gz_file).value();
 
-        std::vector<GzipMember> members(texts.size());
+        dstd::Vector<trace::index::gzip::GzipMember> members(texts.size());
         for (std::size_t i = 0; i < texts.size(); ++i) {
             members[i].c_offset = offs[i];
             members[i].c_size =
                 (i + 1 < offs.size() ? offs[i + 1] : fsize) - offs[i];
         }
 
-        dftracer::utils::index::gzip::CheckpointIndexer::VisitorList
+        dftracer::utils::trace::index::gzip::CheckpointIndexer::VisitorList
             no_visitors;
 
         std::uint64_t whole_lines = 0;
-        run_coro([&](CoroScope& scope) -> coro::CoroTask<void> {
-            auto a = co_await gz::build_gzip_index_artifacts(
+        run_coro([&](coro::Scope& scope) -> coro::CoroTask<void> {
+            auto a = co_await trace::index::gzip::build_gzip_index_artifacts(
                 gz_file, 1u << 20, no_visitors, &scope);
             REQUIRE(a.has_value());
             whole_lines = a->total_lines;
@@ -139,13 +138,14 @@ TEST_SUITE("IndexBuilder") {
 
         std::uint64_t sliced_lines = 0;
         for (std::size_t b = 0; b < members.size(); ++b) {
-            gz::GzipMemberSlice slice;
+            trace::index::gzip::GzipMemberSlice slice;
             slice.members = &members;
             slice.member_begin = b;
             slice.member_end = b + 1;
-            run_coro([&](CoroScope& scope) -> coro::CoroTask<void> {
-                auto a = co_await gz::build_gzip_index_artifacts(
-                    gz_file, 1u << 20, no_visitors, &scope, &slice);
+            run_coro([&](coro::Scope& scope) -> coro::CoroTask<void> {
+                auto a =
+                    co_await trace::index::gzip::build_gzip_index_artifacts(
+                        gz_file, 1u << 20, no_visitors, &scope, &slice);
                 REQUIRE(a.has_value());
                 sliced_lines += a->total_lines;
             });
@@ -157,85 +157,81 @@ TEST_SUITE("IndexBuilder") {
 
     TEST_CASE("Build checkpoint-only index") {
         TestEnvironment env(valgrind_scale(1000, 10));
-        std::string gz_file = env.create_dft_test_gzip_file(
+        dstd::String gz_file = env.create_dft_test_gzip_file(
             static_cast<int>(valgrind_scale(1000, 10)));
 
         auto result = build_one(gz_file);
 
         CHECK(result.success);
-        CHECK(fs::exists(result.index_path));
+        CHECK(dstd::fs::exists(result.index_path).value());
     }
 
     TEST_CASE("Files under different index roots each build into their own") {
-        std::vector<std::string> files;
+        dstd::Vector<dstd::String> files;
         for (const char* name : {"a", "b"}) {
             auto dir = make_unique_test_path(name);
-            fs::create_directories(dir);
-            const std::string path = (dir / "t.pfw.gz").string();
-            const std::string text = dftu_lines(0, 20);
-            dftracer::utils::utilities::fileio::compress::GzipMemberCompressor
-                comp;
+            REQUIRE(dstd::fs::create_directories(dir).has_value());
+            const dstd::String path = dstd::String((dir / "t.pfw.gz").str());
+            const dstd::String text = dftu_lines(0, 20);
+            dftracer::utils::fileio::compress::GzipMemberCompressor comp;
             auto member = comp.compress_member(text.data(), text.size());
             REQUIRE(member.has_value());
-            std::ofstream(path, std::ios::binary)
-                .write(reinterpret_cast<const char*>(member->data()),
-                       static_cast<std::streamsize>(member->size()));
+            dstd::fs::write_file(
+                dstd::PathView(path),
+                dstd::StringView(reinterpret_cast<const char*>(member->data()),
+                                 member->size()))
+                .discard();
             files.push_back(path);
         }
         IndexBuildBatchResult r;
-        run_coro([&](CoroScope& scope) -> coro::CoroTask<void> {
-            auto cfg = std::make_shared<IndexBuildBatchConfig>();
-            cfg->file_paths = files;
-            r = co_await BatchBuilder::process(&scope, std::move(cfg));
+        run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
+            auto cfg = dstd::make_shared<IndexBuildBatchConfig>();
+            for (const auto& file : files) cfg->file_paths.emplace_back(file);
+            r = co_await BatchBuilder::process(std::move(cfg));
             co_return;
         });
         CHECK(r.indexed == 2);
         REQUIRE(r.results.size() == 2);
         for (std::size_t i = 0; i < files.size(); ++i) {
             CAPTURE(files[i]);
-            const std::string idx =
+            const dstd::String idx = dstd::String(
                 dftracer::utils::trace::internal::determine_index_path(files[i],
-                                                                       "");
-            CHECK(r.results[i].index_path == idx);
-            IndexDatabase db(idx, IndexOpenMode::ReadOnly);
-            CHECK(db.get_file_info_id(
-                      dftracer::utils::index::store::internal::get_logical_path(
-                          files[i])) >= 0);
+                                                                       ""));
+            CHECK(dstd::StringView(r.results[i].index_path) ==
+                  dstd::StringView(idx));
+            const auto snapshot = index_snapshot(idx);
+            CHECK(find_indexed_file(snapshot, files[i]).has_value());
         }
     }
 
     TEST_CASE("Build with bloom") {
         TestEnvironment env(valgrind_scale(1000, 10));
-        std::string gz_file = env.create_dft_test_gzip_file(
+        dstd::String gz_file = env.create_dft_test_gzip_file(
             static_cast<int>(valgrind_scale(1000, 10)));
 
         auto result = build_one(gz_file);
 
         REQUIRE(result.success);
-        REQUIRE(fs::exists(result.index_path));
+        REQUIRE(dstd::fs::exists(result.index_path).value());
 
-        IndexDatabase db(result.index_path);
-        int fid = db.get_file_info_id(
-            dftracer::utils::index::store::internal::get_logical_path(gz_file));
-        REQUIRE(fid >= 0);
-        CHECK(db.pruning_tier_current(fid));
+        const auto snapshot = index_snapshot(result.index_path);
+        const auto file = require_indexed_file(snapshot, gz_file);
+        CHECK(pruning_tier_current(snapshot, file));
     }
 
     TEST_CASE("Member table covers every gzip member") {
-        const std::vector<std::string> texts = {
+        const dstd::Vector<dstd::String> texts = {
             dftu_lines(0, 40), dftu_lines(40, 25), dftu_lines(65, 35)};
         auto [gz_file, c_offsets] = write_multi_member_gz(texts);
-        const std::uint64_t file_size = fs::file_size(gz_file);
+        const std::uint64_t file_size = dstd::fs::file_size(gz_file).value();
 
         auto result = build_one(gz_file);
         REQUIRE(result.success);
 
-        IndexDatabase db(result.index_path);
-        int fid = db.get_file_info_id(
-            dftracer::utils::index::store::internal::get_logical_path(gz_file));
-        REQUIRE(fid >= 0);
+        const auto snapshot = index_snapshot(result.index_path);
+        const auto file = require_indexed_file(snapshot, gz_file);
 
-        auto members = db.query_gzip_members(fid);
+        auto members = index_take(trace::index::members(snapshot, file));
         REQUIRE(members.size() == texts.size());
 
         std::uint64_t expected_uc = 0;
@@ -257,10 +253,10 @@ TEST_SUITE("IndexBuilder") {
     TEST_CASE("Member scan finds every member across scan windows") {
         // Hex text compresses to about half, so the members span several
         // scan windows and many headers sit near a window edge.
-        std::vector<std::string> texts;
-        std::uint64_t state = 0x9E3779B97F4A7C15ULL;
+        dstd::Vector<dstd::String> texts;
+        std::uint64_t state = dstd::hash::GOLDEN_RATIO;
         while (texts.size() < 400) {
-            std::string t;
+            dstd::String t;
             const std::size_t lines = 600 + texts.size() % 97;
             for (std::size_t l = 0; l < lines; ++l) {
                 for (int k = 0; k < 6; ++k) {
@@ -276,19 +272,19 @@ TEST_SUITE("IndexBuilder") {
             texts.push_back(std::move(t));
         }
         auto [gz_file, c_offsets] = write_multi_member_gz(texts);
-        const std::uint64_t file_size = fs::file_size(gz_file);
+        const std::uint64_t file_size = dstd::fs::file_size(gz_file).value();
         REQUIRE(file_size >
-                2 * dftracer::utils::index::gzip::MEMBER_SCAN_WINDOW);
+                2 * dftracer::utils::trace::index::gzip::MEMBER_SCAN_WINDOW);
 
-        std::vector<dftracer::utils::index::gzip::GzipMember> found;
+        dstd::Vector<dftracer::utils::trace::index::gzip::GzipMember> found;
         bool ok = false;
-        const int fd = ::open(gz_file.c_str(), O_RDONLY);
-        REQUIRE(fd >= 0);
-        run_coro([&](CoroScope&) -> coro::CoroTask<void> {
-            ok = co_await dftracer::utils::index::gzip::
+        auto fd_file = dstd::File::open(gz_file, {});
+        REQUIRE(fd_file);
+        const int fd = fd_file->native_handle();
+        run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
+            ok = co_await dftracer::utils::trace::index::gzip::
                 enumerate_gzip_member_candidates(fd, file_size, found);
         });
-        ::close(fd);
         REQUIRE(ok);
         REQUIRE(found.size() == c_offsets.size());
         for (std::size_t i = 0; i < found.size(); ++i) {
@@ -301,21 +297,41 @@ TEST_SUITE("IndexBuilder") {
         }
     }
 
+    TEST_CASE("The member scan accepts the OS byte zlib writes on macOS") {
+        const dstd::Vector<dstd::String> texts = {
+            dftu_lines(0, 40), dftu_lines(40, 25), dftu_lines(65, 35)};
+        auto [gz_file, c_offsets] = write_multi_member_gz(texts);
+        auto fd_file = dstd::File::open(
+            gz_file, dstd::OpenOptions{.access = dstd::Access::ReadWrite});
+        REQUIRE(fd_file);
+        const int fd = fd_file->native_handle();
+        const unsigned char macos = 19;
+        for (const std::uint64_t at : c_offsets)
+            REQUIRE(::pwrite(fd, &macos, 1, static_cast<off_t>(at + 9)) == 1);
+        const std::uint64_t file_size = dstd::fs::file_size(gz_file).value();
+        dstd::Vector<dftracer::utils::trace::index::gzip::GzipMember> found;
+        bool ok = false;
+        run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
+            ok = co_await dftracer::utils::trace::index::gzip::
+                enumerate_gzip_member_candidates(fd, file_size, found);
+        });
+        REQUIRE(ok);
+        CHECK(found.size() == c_offsets.size());
+    }
+
     TEST_CASE("Pruner chunks are gzip members") {
-        const std::vector<std::string> texts = {
+        const dstd::Vector<dstd::String> texts = {
             dftu_lines(0, 40), dftu_lines(40, 25, "rare"), dftu_lines(65, 35)};
         auto [gz_file, c_offsets] = write_multi_member_gz(texts);
 
         auto result = build_one(gz_file);
         REQUIRE(result.success);
 
-        IndexDatabase db(result.index_path);
-        int fid = db.get_file_info_id(
-            dftracer::utils::index::store::internal::get_logical_path(gz_file));
-        REQUIRE(fid >= 0);
+        const auto snapshot = index_snapshot(result.index_path);
+        const auto file = require_indexed_file(snapshot, gz_file);
 
-        auto members = db.query_gzip_members(fid);
-        auto spans = db.query_chunk_spans(fid);
+        auto members = index_take(trace::index::members(snapshot, file));
+        auto spans = index_take(trace::index::spans(snapshot, file));
         REQUIRE(spans.size() == members.size());
         for (std::size_t i = 0; i < spans.size(); ++i) {
             CHECK(spans[i].uc_offset == members[i].uc_offset);
@@ -326,15 +342,17 @@ TEST_SUITE("IndexBuilder") {
 
         // Events are attributed to the member that holds them, so a name
         // confined to one member yields exactly that chunk.
-        auto rare_chunks = db.posting_granules(
-            fid, "name",
-            dftracer::utils::index::extensions::kinds::value_hash("rare"));
+        auto rare_chunks = index_take(trace::index::posting_granules(
+            snapshot, file, "name",
+            dftracer::utils::trace::index::extensions::kinds::value_hash(
+                "rare")));
         REQUIRE(rare_chunks.size() == 1);
         CHECK(rare_chunks[0] == 1);
 
-        auto common_chunks = db.posting_granules(
-            fid, "name",
-            dftracer::utils::index::extensions::kinds::value_hash("op"));
+        auto common_chunks = index_take(trace::index::posting_granules(
+            snapshot, file, "name",
+            dftracer::utils::trace::index::extensions::kinds::value_hash(
+                "op")));
         std::sort(common_chunks.begin(), common_chunks.end());
         REQUIRE(common_chunks.size() == 2);
         CHECK(common_chunks[0] == 0);
@@ -347,12 +365,10 @@ TEST_SUITE("IndexBuilder") {
         auto result = build_one(gz_file);
         REQUIRE(result.success);
 
-        IndexDatabase db(result.index_path);
-        int fid = db.get_file_info_id(
-            dftracer::utils::index::store::internal::get_logical_path(gz_file));
-        REQUIRE(fid >= 0);
+        const auto snapshot = index_snapshot(result.index_path);
+        const auto file = require_indexed_file(snapshot, gz_file);
 
-        auto members = db.query_gzip_members(fid);
+        auto members = index_take(trace::index::members(snapshot, file));
         REQUIRE(members.size() == 1);
         CHECK(members[0].c_offset == 0);
         CHECK(members[0].uc_offset == 0);
@@ -363,7 +379,7 @@ TEST_SUITE("IndexBuilder") {
     // No builder-level skip: a repeat build re-indexes and must stay valid.
     TEST_CASE("Repeat build re-indexes and stays valid") {
         TestEnvironment env(valgrind_scale(1000, 10));
-        std::string gz_file = env.create_dft_test_gzip_file(
+        dstd::String gz_file = env.create_dft_test_gzip_file(
             static_cast<int>(valgrind_scale(1000, 10)));
 
         auto first = build_one(gz_file);
@@ -372,16 +388,14 @@ TEST_SUITE("IndexBuilder") {
         auto second = build_one(gz_file);
         CHECK(second.success);
 
-        IndexDatabase db(second.index_path);
-        int fid = db.get_file_info_id(
-            dftracer::utils::index::store::internal::get_logical_path(gz_file));
-        REQUIRE(fid >= 0);
-        CHECK(db.pruning_tier_current(fid));
+        const auto snapshot = index_snapshot(second.index_path);
+        const auto file = require_indexed_file(snapshot, gz_file);
+        CHECK(pruning_tier_current(snapshot, file));
     }
 
     TEST_CASE("Force rebuild") {
         TestEnvironment env(valgrind_scale(1000, 10));
-        std::string gz_file = env.create_dft_test_gzip_file(
+        dstd::String gz_file = env.create_dft_test_gzip_file(
             static_cast<int>(valgrind_scale(1000, 10)));
 
         auto first = build_one(gz_file);
@@ -394,7 +408,7 @@ TEST_SUITE("IndexBuilder") {
     TEST_CASE("Result has correct line count") {
         const std::size_t n_idx_lines = valgrind_scale(1000, 10);
         TestEnvironment env(n_idx_lines);
-        std::string gz_file =
+        dstd::String gz_file =
             env.create_dft_test_gzip_file(static_cast<int>(n_idx_lines));
 
         auto result = build_one(gz_file);

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Trace writers and result readers shared by the jit plugin tests."""
 
 import gzip

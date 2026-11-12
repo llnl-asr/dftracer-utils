@@ -1,40 +1,33 @@
+// SPDX-License-Identifier: MIT
 // The expression forms of the eager Series.str methods: each gives the eager
 // result (values, nulls, type), infer_type agrees with eval, index / rindex
 // fail the plan run on a miss, and a bool cast then capitalize spells
 // True / False.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dataframe/expr_ok.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dataframe/types.h>
+#include <dftracer/utils/dstd/fmt.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/thread.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
 
+#include <atomic>
 #include <cstdint>
 #include <limits>
 #include <stdexcept>
-#include <string>
-#include <string_view>
-#include <vector>
 
-using dftracer::utils::dataframe::DataType;
-using dftracer::utils::dataframe::eval;
-using dftracer::utils::dataframe::Expr;
-using dftracer::utils::dataframe::expr_cast;
-using dftracer::utils::dataframe::expr_col;
-using dftracer::utils::dataframe::expr_list_get;
-using dftracer::utils::dataframe::expr_str_fn;
-using dftracer::utils::dataframe::expr_str_map;
-using dftracer::utils::dataframe::infer_type;
-using dftracer::utils::dataframe::Series;
-using dftracer::utils::dataframe::StrFn;
-using dftracer::utils::dataframe::StrMapOp;
-using dftracer::utils::dataframe::TypeId;
+using namespace dftracer::utils;
+using namespace dftracer::utils::dataframe;
 
 namespace {
 
 Series sample() {
-    const std::vector<std::string_view> rows{
+    const dstd::Vector<dstd::StringView> rows{
         "hello world", "Foo-Bar,baz", "",    "  x1 ",
         "ABC",         "a,b,c",       "-42", "null row"};
     const std::uint8_t validity = 0b11111011;  // row 2 is null
@@ -62,16 +55,22 @@ void same(const Series& got, const Series& want) {
 }
 
 Series run(const Expr& e, const Series& s) {
-    std::vector<const Series*> in{&s};
-    Series out = eval(e, in);
-    DataType dt = infer_type(e, {s.data_type()});
+    dstd::Vector<const Series*> in{&s};
+    Series out = dftu_utils_test::eval_ok(e, in);
+    DataType dt = dftu_utils_test::infer_type_ok(e, {s.data_type()});
     REQUIRE(out.valid());
     CHECK(dt.id == out.type());
     return out;
 }
 
-Expr fn(StrFn f, std::string_view t = {}, std::int64_t i0 = 0,
-        std::string_view t2 = {}, std::int64_t i1 = 0) {
+// Whether compiling or evaluating `e` over `s` fails with InvalidArgument.
+bool refused(const Expr& e, const Series& s) {
+    dstd::Vector<const Series*> in{&s};
+    return dftu_utils_test::is_invalid(dftracer::utils::dataframe::eval(e, in));
+}
+
+Expr fn(StrFn f, dstd::StringView t = {}, std::int64_t i0 = 0,
+        dstd::StringView t2 = {}, std::int64_t i1 = 0) {
     return expr_str_fn(f, expr_col(0), nullptr, t, t2, i0, i1);
 }
 
@@ -163,7 +162,7 @@ TEST_SUITE("expression string methods") {
         same(run(fn(StrFn::Wrap, {}, 5, {}, 31), s), s.str_wrap(5, 31));
         // Keys "o" and "-"; "o" -> "00", "-" deleted. Per key a codepoint L
         // (1 + the value's codepoints, 0 to delete), then the value.
-        const std::string text2(
+        const dstd::String text2(
             "\x03"
             "00"
             "\x00",
@@ -173,14 +172,10 @@ TEST_SUITE("expression string methods") {
                              Series::strings({"00", ""})));
         CHECK(run(fn(StrFn::Translate, "o-", 0, text2), s).string_at(0) ==
               "hell00 w00rld");
-        CHECK_THROWS_AS(run(fn(StrFn::Normalize, {}, 4), s),
-                        std::invalid_argument);
-        CHECK_THROWS_AS(run(fn(StrFn::Wrap, {}, 0, {}, 31), s),
-                        std::invalid_argument);
-        CHECK_THROWS_AS(run(fn(StrFn::Translate, "aa", 0, "\x01\x01"), s),
-                        std::invalid_argument);
-        CHECK_THROWS_AS(run(fn(StrFn::Translate, "a", 0, ""), s),
-                        std::invalid_argument);
+        CHECK(refused(fn(StrFn::Normalize, {}, 4), s));
+        CHECK(refused(fn(StrFn::Wrap, {}, 0, {}, 31), s));
+        CHECK(refused(fn(StrFn::Translate, "aa", 0, "\x01\x01"), s));
+        CHECK(refused(fn(StrFn::Translate, "a", 0, ""), s));
     }
 
     TEST_CASE("get reads a list element or a string byte") {
@@ -191,7 +186,7 @@ TEST_SUITE("expression string methods") {
         CHECK(byte.is_null(7) == false);
         Series past = run(fn(StrFn::Get, {}, 50), s);
         CHECK(past.is_null(0));
-        CHECK_THROWS_AS(run(fn(StrFn::Get, {}, -1), s), std::invalid_argument);
+        CHECK(refused(fn(StrFn::Get, {}, -1), s));
         // On a list the same call reads the element.
         Series elem = run(expr_str_fn(StrFn::Get, fn(StrFn::Split, ","),
                                       nullptr, {}, {}, 1, 0),
@@ -202,12 +197,13 @@ TEST_SUITE("expression string methods") {
     TEST_CASE("cat joins two columns with a separator") {
         Series s = sample();
         Series t = Series::strings({"1", "2", "3", "4", "5", "6", "7", "8"});
-        std::vector<const Series*> in{&s, &t};
+        dstd::Vector<const Series*> in{&s, &t};
         Expr e = expr_str_fn(StrFn::Cat, expr_col(0), nullptr, "-", {}, 0, 0);
-        CHECK_THROWS_AS(eval(e, in), std::invalid_argument);  // no other column
+        CHECK(dftu_utils_test::is_invalid(
+            dftracer::utils::dataframe::eval(e, in)));  // no other column
         const Expr other = expr_col(1);
         Expr cat = expr_str_fn(StrFn::Cat, expr_col(0), &other, "-", {}, 0, 0);
-        Series out = eval(cat, in);
+        Series out = dftu_utils_test::eval_ok(cat, in);
         REQUIRE(out.valid());
         CHECK(out.string_at(0) == "hello world-1");
         CHECK(out.is_null(2));
@@ -215,17 +211,16 @@ TEST_SUITE("expression string methods") {
 
     TEST_CASE("index and rindex fail the run on a row without the substring") {
         Series s = sample();
-        std::string message;
-        try {
-            run(fn(StrFn::Index, "o"), s);
-        } catch (const std::invalid_argument& e) {
-            message = e.what();
-        }
-        CHECK(message.find("not found in every row") != std::string::npos);
-        CHECK(message.find("'o'") != std::string::npos);
+        dstd::Vector<const Series*> in{&s};
+        auto failed =
+            dftracer::utils::dataframe::eval(fn(StrFn::Index, "o"), in);
+        REQUIRE(dftu_utils_test::is_invalid(failed));
+        const dstd::String message(failed.error().message());
+        CHECK(message.find("not found in every row") != dstd::String::npos);
+        CHECK(message.find("'o'") != dstd::String::npos);
         // A null row is not a miss.
         const std::uint8_t only_first = 0b01;
-        const std::vector<std::string_view> pair{"foo", "x"};
+        const dstd::Vector<dstd::StringView> pair{"foo", "x"};
         Series with_null = Series::strings(pair, &only_first);
         Series idx0 = run(fn(StrFn::Index, "o"), with_null);
         CHECK(idx0.is_null(1));
@@ -234,6 +229,27 @@ TEST_SUITE("expression string methods") {
         CHECK(idx.data<std::int64_t>()[0] == 1);
         Series ridx = run(fn(StrFn::Rindex, "o"), ok);
         CHECK(ridx.data<std::int64_t>()[0] == 2);
+    }
+
+    TEST_CASE("concurrent failing evals each report their own message") {
+        Series s = sample();
+        std::atomic<int> wrong{0};
+        auto worker = [&](dstd::StringView needle) {
+            const Expr e = fn(StrFn::Index, needle);
+            dstd::Vector<const Series*> in{&s};
+            for (int i = 0; i < 300; ++i) {
+                auto r = dftracer::utils::dataframe::eval(e, in);
+                if (r.has_value() || dstd::String(r.error().message())
+                                             .find(dstd::fmt<"'{}'">(needle)) ==
+                                         dstd::String::npos)
+                    ++wrong;
+            }
+        };
+        dstd::Thread a([&] { worker("Q"); });
+        dstd::Thread b([&] { worker("Z"); });
+        a.join();
+        b.join();
+        CHECK(wrong.load() == 0);
     }
 
     TEST_CASE("a bool cast to string then capitalize spells True and False") {
@@ -251,8 +267,9 @@ TEST_SUITE("expression string methods") {
     TEST_CASE("a non-string operand is refused") {
         const std::int64_t v[] = {1, 2};
         Series n = Series::flat_i64(v, 2);
-        std::vector<const Series*> in{&n};
-        CHECK_THROWS_AS(eval(fn(StrFn::IsAlpha), in), std::invalid_argument);
+        dstd::Vector<const Series*> in{&n};
+        CHECK(dftu_utils_test::is_invalid(
+            dftracer::utils::dataframe::eval(fn(StrFn::IsAlpha), in)));
         CHECK(dftu_expr_str_fn(99, nullptr, nullptr, "", 0, "", 0, 0, 0) ==
               nullptr);
     }

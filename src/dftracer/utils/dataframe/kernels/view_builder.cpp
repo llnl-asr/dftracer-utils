@@ -1,10 +1,13 @@
+// SPDX-License-Identifier: MIT
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/view_builder.h>
+#include <dftracer/utils/dstd/fatal.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <cstring>
 #include <limits>
-#include <stdexcept>
-#include <vector>
 
 namespace dftracer::utils::dataframe {
 
@@ -16,7 +19,7 @@ constexpr std::size_t PREFIX_BYTES = 4;
 constexpr std::int64_t INT32_LIMIT = std::numeric_limits<std::int32_t>::max();
 
 bool own_null(const dftu_series& c, std::int64_t i) {
-    return c.validity && !((c.validity->data()[i >> 3] >> (i & 7)) & 1);
+    return c.validity.block() && !((c.validity.data()[i >> 3] >> (i & 7)) & 1);
 }
 
 }  // namespace
@@ -33,31 +36,29 @@ std::uint8_t* ViewBuilder::new_view() {
     return views_.data() + at;
 }
 
-std::int32_t ViewBuilder::add_buffer(std::shared_ptr<Buffer> buffer) {
-    const std::uint8_t* key = buffer->data();
+std::int32_t ViewBuilder::add_buffer(BufferView buffer) {
+    const std::uint8_t* key = buffer.data();
     auto [it, fresh] =
         index_of_.try_emplace(key, static_cast<std::int32_t>(buffers_.size()));
     if (fresh) {
-        if (buffers_.size() >= static_cast<std::size_t>(INT32_LIMIT)) {
-            index_of_.erase(it);
-            throw std::length_error("view column: too many buffers");
-        }
+        if (buffers_.size() >= static_cast<std::size_t>(INT32_LIMIT))
+            dstd::fatal("view column: too many buffers");
         buffers_.push_back(std::move(buffer));
     }
     return it->second;
 }
 
-std::int32_t ViewBuilder::cached_buffer(const std::shared_ptr<Buffer>& buffer) {
-    if (buffer->data() != last_data_) {
+std::int32_t ViewBuilder::cached_buffer(const BufferView& buffer) {
+    if (buffer.data() != last_data_) {
         last_index_ = add_buffer(buffer);
-        last_data_ = buffer->data();
+        last_data_ = buffer.data();
     }
     return last_index_;
 }
 
-void ViewBuilder::append_inline(std::string_view bytes) {
+void ViewBuilder::append_inline(dstd::StringView bytes) {
     if (bytes.size() > static_cast<std::size_t>(INLINE_MAX))
-        throw std::length_error("view column: inline value over 12 bytes");
+        dstd::fatal("view column: inline value over 12 bytes");
     std::uint8_t* v = new_view();
     const auto size = static_cast<std::int32_t>(bytes.size());
     std::memcpy(v, &size, sizeof(size));
@@ -65,16 +66,16 @@ void ViewBuilder::append_inline(std::string_view bytes) {
         std::memcpy(v + PREFIX_BYTES, bytes.data(), bytes.size());
 }
 
-void ViewBuilder::append(std::string_view bytes, std::int32_t buffer_index) {
+void ViewBuilder::append(dstd::StringView bytes, std::int32_t buffer_index) {
     if (bytes.size() <= static_cast<std::size_t>(INLINE_MAX))
         return append_inline(bytes);
     if (bytes.size() > static_cast<std::size_t>(INT32_LIMIT))
-        throw std::length_error("view column: value over INT32_MAX bytes");
+        dstd::fatal("view column: value over INT32_MAX bytes");
     const std::int64_t offset =
         reinterpret_cast<const std::uint8_t*>(bytes.data()) -
-        buffers_[static_cast<std::size_t>(buffer_index)]->data();
+        buffers_[static_cast<std::size_t>(buffer_index)].data();
     if (offset < 0 || offset > INT32_LIMIT)
-        throw std::length_error("view column: offset outside int32");
+        dstd::fatal("view column: offset outside int32");
     std::uint8_t* v = new_view();
     const auto size = static_cast<std::int32_t>(bytes.size());
     const auto off = static_cast<std::int32_t>(offset);
@@ -94,40 +95,40 @@ void ViewBuilder::append_flat(const dftu_series& c, std::int64_t row) {
     std::int64_t begin, end;
     if (c.wide_offsets()) {
         const auto* off =
-            reinterpret_cast<const std::int64_t*>(c.offsets->data());
+            reinterpret_cast<const std::int64_t*>(c.offsets.data());
         begin = off[idx];
         end = off[idx + 1];
     } else {
         const auto* off =
-            reinterpret_cast<const std::int32_t*>(c.offsets->data());
+            reinterpret_cast<const std::int32_t*>(c.offsets.data());
         begin = off[idx];
         end = off[idx + 1];
     }
     const std::int64_t len = end - begin;
     if (len > INLINE_MAX) {
         if (len > INT32_LIMIT)
-            throw std::length_error("view column: value over INT32_MAX bytes");
+            dstd::fatal("view column: value over INT32_MAX bytes");
         const char* bytes =
-            reinterpret_cast<const char*>(c.data->data()) + begin;
+            reinterpret_cast<const char*>(c.data.data()) + begin;
         if (begin > INT32_LIMIT) {
-            auto copy = Buffer::allocate(static_cast<std::size_t>(len));
-            std::memcpy(copy->data(), bytes, static_cast<std::size_t>(len));
-            const std::string_view sv(
-                reinterpret_cast<const char*>(copy->data()),
+            auto copy = new_buffer(static_cast<std::size_t>(len));
+            std::memcpy(writable(copy), bytes, static_cast<std::size_t>(len));
+            const dstd::StringView sv(
+                reinterpret_cast<const char*>(copy.data()),
                 static_cast<std::size_t>(len));
             return append(sv, add_buffer(std::move(copy)));
         }
-        return append(std::string_view(bytes, static_cast<std::size_t>(len)),
+        return append(dstd::StringView(bytes, static_cast<std::size_t>(len)),
                       cached_buffer(c.data));
     }
-    append_inline(std::string_view(
-        len ? reinterpret_cast<const char*>(c.data->data()) + begin : "",
+    append_inline(dstd::StringView(
+        len ? reinterpret_cast<const char*>(c.data.data()) + begin : "",
         static_cast<std::size_t>(len)));
 }
 
 void ViewBuilder::append_view_row(const dftu_series& c, std::int64_t row) {
     const std::uint8_t* src =
-        c.data->data() + static_cast<std::size_t>(row) * VIEW_BYTES;
+        c.data.data() + static_cast<std::size_t>(row) * VIEW_BYTES;
     std::uint8_t* v = new_view();
     std::memcpy(v, src, VIEW_BYTES);
     std::int32_t size;
@@ -152,12 +153,12 @@ void ViewBuilder::append_row(const dftu_series& col, std::int64_t row) {
                 return append_view_row(*c, i);
             case Encoding::Dictionary:
                 i = reinterpret_cast<const std::int32_t*>(
-                    c->data->data())[static_cast<std::size_t>(i)];
+                    c->data.data())[static_cast<std::size_t>(i)];
                 c = c->child().get();
                 break;
             case Encoding::Selection:
                 i = reinterpret_cast<const std::int64_t*>(
-                    c->data->data())[static_cast<std::size_t>(i)];
+                    c->data.data())[static_cast<std::size_t>(i)];
                 if (i < 0) return append_null();
                 c = c->child().get();
                 break;
@@ -168,8 +169,7 @@ void ViewBuilder::append_row(const dftu_series& col, std::int64_t row) {
                 break;
             }
             default:
-                throw std::invalid_argument(
-                    "view column: unsupported encoding");
+                dstd::fatal("view column: unsupported encoding");
         }
     }
 }
@@ -181,14 +181,14 @@ void ViewBuilder::append_column(const dftu_series& col) {
         const std::size_t entries_at = views_.size();
         append_column(*col.child());
         const std::size_t entries = views_.size() - entries_at;
-        const std::vector<std::uint8_t> entry_views(
+        const dstd::Vector<std::uint8_t> entry_views(
             views_.begin() + static_cast<std::ptrdiff_t>(entries_at),
             views_.end());
         views_.resize(entries_at +
                       static_cast<std::size_t>(col.length) * VIEW_BYTES);
         std::uint8_t* dst = views_.data() + entries_at;
         const auto* codes =
-            reinterpret_cast<const std::int32_t*>(col.data->data());
+            reinterpret_cast<const std::int32_t*>(col.data.data());
         const std::size_t k = entries / VIEW_BYTES;
         for (std::int64_t i = 0; i < col.length; ++i) {
             const auto code = static_cast<std::uint32_t>(codes[i]);
@@ -208,7 +208,7 @@ void ViewBuilder::append_column(const dftu_series& col) {
     }
     const std::int64_t n = col.length;
     if (n == 0) return;
-    std::vector<std::int32_t> remap;
+    dstd::Vector<std::int32_t> remap;
     if (col.blobs) {
         remap.reserve(col.blobs->size());
         for (const auto& b : *col.blobs) remap.push_back(add_buffer(b));
@@ -217,7 +217,7 @@ void ViewBuilder::append_column(const dftu_series& col) {
     const std::size_t at = views_.size();
     views_.resize(at + static_cast<std::size_t>(n) * VIEW_BYTES);
     std::uint8_t* dst = views_.data() + at;
-    const std::uint8_t* src = col.data->data();
+    const std::uint8_t* src = col.data.data();
     std::memcpy(dst, src, static_cast<std::size_t>(n) * VIEW_BYTES);
     for (std::int64_t i = 0; i < n; ++i) {
         std::uint8_t* v = dst + static_cast<std::size_t>(i) * VIEW_BYTES;
@@ -229,7 +229,7 @@ void ViewBuilder::append_column(const dftu_series& col) {
         const std::int32_t mapped = remap[static_cast<std::size_t>(index)];
         std::memcpy(v + 8, &mapped, sizeof(mapped));
     }
-    if (col.validity && col.null_count > 0)
+    if (col.validity.block() && col.null_count > 0)
         for (std::int64_t i = 0; i < n; ++i)
             if (own_null(col, i)) null_rows_.push_back(base + i);
 }
@@ -241,15 +241,16 @@ Series ViewBuilder::finish(TypeId type, bool json) {
     out->set_json(json);
     out->encoding = Encoding::View;
     out->length = n;
-    auto bytes = std::make_shared<std::vector<std::uint8_t>>(std::move(views_));
-    out->data = Buffer::wrap(bytes->data(), bytes->size(), [bytes](void*) {});
-    out->blobs = std::make_shared<const std::vector<std::shared_ptr<Buffer>>>(
-        std::move(buffers_));
+    auto bytes =
+        dstd::make_shared<dstd::Vector<std::uint8_t>>(std::move(views_));
+    out->data = borrow_buffer(bytes->data(), bytes->size(), bytes);
+    out->blobs =
+        dstd::make_shared<const dstd::Vector<BufferView>>(std::move(buffers_));
     if (!null_rows_.empty()) {
-        out->validity = Buffer::allocate(static_cast<std::size_t>((n + 7) / 8));
-        std::memset(out->validity->data(), 0xFF, out->validity->size());
+        out->validity = new_buffer(static_cast<std::size_t>((n + 7) / 8));
+        std::memset(writable(out->validity), 0xFF, out->validity.size());
         for (std::int64_t r : null_rows_)
-            out->validity->data()[r >> 3] &=
+            writable(out->validity)[r >> 3] &=
                 static_cast<std::uint8_t>(~(1u << (r & 7)));
         out->null_count = static_cast<std::int64_t>(null_rows_.size());
     }

@@ -1,23 +1,38 @@
-#include <dftracer/utils/core/common/bits.h>
-#include <dftracer/utils/core/common/config.h>
-#include <dftracer/utils/core/common/constants.h>
-#include <dftracer/utils/core/common/filesystem.h>  // fs:: portability alias
-#include <dftracer/utils/core/common/filesystem_info.h>
-#include <dftracer/utils/core/common/logging.h>
-#include <dftracer/utils/core/common/scoped_fd.h>
-#include <dftracer/utils/core/common/spill_dir.h>
-#include <dftracer/utils/core/common/str_format.h>
-#include <dftracer/utils/core/env.h>
+// SPDX-License-Identifier: MIT
+// The _advanced create functions take the tracked allocator.
+#define ZSTD_STATIC_LINKING_ONLY
+#include <dftracer/utils/common/config.h>
+#include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/common/env.h>
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/common/filesystem_info.h>
+#include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/common/spill_dir.h>
+#include <dftracer/utils/common/str_format.h>
+#include <dftracer/utils/coro/executor.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/spill.h>
 #include <dftracer/utils/dataframe/types.h>
+#include <dftracer/utils/dstd/ascii.h>
+#include <dftracer/utils/dstd/bits.h>
+#include <dftracer/utils/dstd/fatal.h>
+#include <dftracer/utils/dstd/fmt.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/ptr_hash.h>
+#include <dftracer/utils/dstd/scoped_fd.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/memory/detail/heap.h>
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <unistd.h>
-#ifdef DFTRACER_UTILS_ENABLE_ZSTD
 #include <zstd.h>
-#endif
 
 #include <algorithm>
 #include <atomic>
@@ -29,35 +44,53 @@ namespace dftracer::utils::dataframe::spill {
 namespace {
 
 template <class T>
-void put_pod(std::string& out, T v) {
+void put_pod(dstd::String& out, T v) {
     out.append(reinterpret_cast<const char*>(&v), sizeof(T));
 }
 
+// The bytes of a blob being read. A read past the end sets `bad` and gives
+// zeros, so the reader checks once per column instead of once per field.
+struct In {
+    const std::uint8_t*& p;
+    const std::uint8_t* end;
+    bool bad = false;
+};
+
 template <class T>
-T get_pod(const std::uint8_t*& p, const std::uint8_t* end) {
-    if (p + sizeof(T) > end) throw std::runtime_error("spill: truncated read");
+T get_pod(In& in) {
+    if (in.bad || static_cast<std::size_t>(in.end - in.p) < sizeof(T)) {
+        in.bad = true;
+        return T{};
+    }
     T v;
-    std::memcpy(&v, p, sizeof(T));
-    p += sizeof(T);
+    std::memcpy(&v, in.p, sizeof(T));
+    in.p += sizeof(T);
     return v;
 }
 
-void put_bytes(std::string& out, const void* data, std::size_t n) {
+void put_bytes(dstd::String& out, const void* data, std::size_t n) {
     out.append(static_cast<const char*>(data), n);
 }
 
-const std::uint8_t* take_bytes(const std::uint8_t*& p, const std::uint8_t* end,
-                               std::size_t n) {
-    if (p + n > end) throw std::runtime_error("spill: truncated read");
-    const std::uint8_t* start = p;
-    p += n;
+const std::uint8_t* take_bytes(In& in, std::size_t n) {
+    if (in.bad || static_cast<std::size_t>(in.end - in.p) < n) {
+        in.bad = true;
+        return nullptr;
+    }
+    const std::uint8_t* start = in.p;
+    in.p += n;
     return start;
 }
 
+dstd::Unexpected<dstd::Error> truncated_read() {
+    return common::make_error<"spill: truncated read">(
+        common::ErrorCode::Parse);
+}
+
 // Validity bitmap (Arrow layout, 1 = valid) built from per-row null flags.
-std::vector<std::uint8_t> validity_bitmap(const Series& s) {
+dstd::Vector<std::uint8_t> validity_bitmap(const Series& s) {
     const std::int64_t n = s.length();
-    std::vector<std::uint8_t> bits(static_cast<std::size_t>((n + 7) / 8), 0);
+    dstd::Vector<std::uint8_t> bits(static_cast<std::size_t>((n + 7) / 8), 0);
     for (std::int64_t i = 0; i < n; ++i)
         if (!s.is_null(i))
             bits[static_cast<std::size_t>(i >> 3)] |=
@@ -68,31 +101,32 @@ std::vector<std::uint8_t> validity_bitmap(const Series& s) {
 }  // namespace
 
 namespace {
-void add_new_bytes(const dftu_series* c, std::unordered_set<const void*>& seen,
+void add_new_bytes(const dftu_series* c,
+                   dstd::HashSet<const void*, dstd::PtrHash>& seen,
                    std::size_t& total) {
-    auto add = [&](const std::shared_ptr<Buffer>& b) {
-        if (b && seen.insert(b.get()).second) total += b->size();
+    auto add = [&](const BufferView& b) {
+        if (b.block() && seen.insert(b.data()).second) total += b.size();
     };
     add(c->data);
     add(c->offsets);
     add(c->validity);
     // A view column's data buffers are not counted: for a scan they are the
     // string table's blocks, shared by every part and freed by no spill, and
-    // walking their list per part cost a collect 37 ms.
+    // walking their list per part slows a collect.
     for (const auto& n : c->nested)
         if (n.series) add_new_bytes(n.series.get(), seen, total);
 }
 }  // namespace
 
-std::size_t new_buffer_bytes(const std::vector<Series>& cols,
-                             std::unordered_set<const void*>& seen) {
+std::size_t new_buffer_bytes(const dstd::Vector<Series>& cols,
+                             dstd::HashSet<const void*, dstd::PtrHash>& seen) {
     std::size_t total = 0;
     for (const Series& c : cols)
         if (c.valid()) add_new_bytes(c.handle(), seen, total);
     return total;
 }
 
-std::size_t columns_bytes(const std::vector<Series>& cols) {
+std::size_t columns_bytes(const dstd::Vector<Series>& cols) {
     std::size_t total = 0;
     for (const Series& c : cols) {
         const std::int64_t n = c.length();
@@ -130,21 +164,19 @@ namespace {
 // Cursor replaying a Spool: in-memory morsels first, then the spilled run.
 class SpoolReader : public Cursor {
    public:
-    SpoolReader(const std::vector<Morsel>* mem, std::string spill_path)
-        : mem_(mem) {
-        if (!spill_path.empty()) disk_ = std::make_unique<Reader>(spill_path);
-    }
-    coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
-        std::optional<Morsel> mem;
-        if (try_next(max_rows, mem)) co_return mem;
+    SpoolReader(const dstd::Vector<Morsel>* mem, dstd::UniquePtr<Reader> disk)
+        : mem_(mem), disk_(std::move(disk)) {}
+    coro::CoroTask<MorselResult> next(std::int64_t max_rows) override {
+        MorselResult mem;
+        if (try_next(max_rows, mem)) co_return std::move(mem);
         if (disk_) co_return co_await disk_->next(max_rows);
-        co_return std::nullopt;
+        co_return dstd::nullopt;
     }
 
     // True only while replaying the in-memory prefix, which shares buffers and
     // never suspends. Once that is drained the run continues on disk, where
     // next() must do the awaiting.
-    bool try_next(std::int64_t, std::optional<Morsel>& out) override {
+    bool try_next(std::int64_t, MorselResult& out) override {
         if (pos_ >= mem_->size()) return false;
         const Morsel& m = (*mem_)[pos_++];
         Morsel o;
@@ -156,40 +188,43 @@ class SpoolReader : public Cursor {
     }
 
    private:
-    const std::vector<Morsel>* mem_;
+    const dstd::Vector<Morsel>* mem_;
     std::size_t pos_ = 0;
-    std::unique_ptr<Reader> disk_;
+    dstd::UniquePtr<Reader> disk_;
 };
 
 // Cursor replaying a Spool backwards: the spilled morsels from the last, then
 // the in-memory ones from the last.
 class SpoolReverseReader : public Cursor {
    public:
-    SpoolReverseReader(const std::vector<Morsel>* mem, std::string spill_path,
-                       std::vector<std::uint64_t> offsets)
-        : mem_(mem), offsets_(std::move(offsets)), left_(mem->size()) {
-        if (!spill_path.empty()) disk_ = std::make_unique<Reader>(spill_path);
-    }
-    coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
+    SpoolReverseReader(const dstd::Vector<Morsel>* mem,
+                       dstd::UniquePtr<Reader> disk,
+                       dstd::Vector<std::uint64_t> offsets)
+        : mem_(mem),
+          offsets_(std::move(offsets)),
+          left_(mem->size()),
+          disk_(std::move(disk)) {}
+    coro::CoroTask<MorselResult> next(std::int64_t max_rows) override {
         if (!offsets_.empty()) {
-            disk_->seek(offsets_.back());
+            const auto sought = disk_->seek(offsets_.back());
+            if (!sought) co_return sought.error();
             offsets_.pop_back();
             co_return co_await disk_->next(max_rows);
         }
-        if (left_ == 0) co_return std::nullopt;
+        if (left_ == 0) co_return dstd::nullopt;
         const Morsel& m = (*mem_)[--left_];
         Morsel o;
         o.rows = m.rows;
         o.columns.reserve(m.columns.size());
         for (const Series& c : m.columns) o.columns.push_back(c.share());
-        co_return o;
+        co_return std::move(o);
     }
 
    private:
-    const std::vector<Morsel>* mem_;
-    std::vector<std::uint64_t> offsets_;
+    const dstd::Vector<Morsel>* mem_;
+    dstd::Vector<std::uint64_t> offsets_;
     std::size_t left_;
-    std::unique_ptr<Reader> disk_;
+    dstd::UniquePtr<Reader> disk_;
 };
 
 }  // namespace
@@ -198,20 +233,20 @@ namespace {
 
 // The `count` values of `child` from `base`: `child` itself when they are
 // all of it, else a gather (slice covers fixed-width types only).
-Series list_values(Series child, std::int64_t base, std::int64_t count) {
+dstd::Result<Series> list_values(Series child, std::int64_t base,
+                                 std::int64_t count) {
     if (base == 0 && count == child.length()) return child;
-    std::vector<std::int64_t> rows(static_cast<std::size_t>(count));
+    dstd::Vector<std::int64_t> rows(static_cast<std::size_t>(count));
     for (std::int64_t i = 0; i < count; ++i)
         rows[static_cast<std::size_t>(i)] = base + i;
     Series out = child.take(rows);
     if (!out.valid())
-        throw std::invalid_argument(std::string("spill: cannot gather a ") +
-                                    std::string(type_name(child.type())) +
-                                    " list child");
+        return common::make_error<"spill: cannot gather a {} list child">(
+            common::ErrorCode::InvalidArgument, type_name(child.type()));
     return out;
 }
 
-void put_series_trailer(std::string& out, const Series& s) {
+void put_series_trailer(dstd::String& out, const Series& s) {
     const dftu_series& h = *s.handle();
     put_pod<std::uint8_t>(out, h.json() ? 1 : 0);
     put_pod<std::int32_t>(out, static_cast<std::int32_t>(h.time_unit()));
@@ -222,7 +257,7 @@ void put_series_trailer(std::string& out, const Series& s) {
 
 }  // namespace
 
-void put_series(std::string& out, const Series& s_in) {
+dstd::Result<void> put_series(dstd::String& out, const Series& s_in) {
     Series s =
         s_in.encoding() == Encoding::Flat ? s_in.share() : s_in.materialize();
     const TypeId t = s.type();
@@ -232,19 +267,22 @@ void put_series(std::string& out, const Series& s_in) {
     put_pod<std::int64_t>(out, n);
     put_pod<std::int64_t>(out, nulls);
     if (nulls > 0) {
-        std::vector<std::uint8_t> v = validity_bitmap(s);
+        dstd::Vector<std::uint8_t> v = validity_bitmap(s);
         put_bytes(out, v.data(), v.size());
     }
     if (t == TypeId::FixedSizeList) {
         const std::int32_t width = s.handle()->fixed_size();
         put_pod<std::int32_t>(out, width);
-        put_series(out, list_values(s.child(0), 0, n * width));
+        auto values = list_values(s.child(0), 0, n * width);
+        if (!values) return values.error();
+        auto put = put_series(out, *values);
+        if (!put) return put;
         put_series_trailer(out, s);
-        return;
+        return {};
     }
     if (t == TypeId::List || t == TypeId::LargeList || t == TypeId::Map) {
         const bool wide = t == TypeId::LargeList;
-        std::vector<std::int64_t> offs(static_cast<std::size_t>(n + 1));
+        dstd::Vector<std::int64_t> offs(static_cast<std::size_t>(n + 1));
         for (std::int64_t i = 0; i <= n; ++i)
             offs[static_cast<std::size_t>(i)] =
                 wide ? s.offsets64()[i] : s.offsets()[i];
@@ -255,22 +293,26 @@ void put_series(std::string& out, const Series& s_in) {
                 put_pod<std::int64_t>(out, o);
             else
                 put_pod<std::int32_t>(out, static_cast<std::int32_t>(o));
-        put_series(out, list_values(s.child(0), base, offs.back()));
+        auto values = list_values(s.child(0), base, offs.back());
+        if (!values) return values.error();
+        auto put = put_series(out, *values);
+        if (!put) return put;
         put_series_trailer(out, s);
-        return;
+        return {};
     }
     if (t == TypeId::Struct) {
         const std::int64_t fields = s.num_children();
         put_pod<std::int32_t>(out, static_cast<std::int32_t>(fields));
         for (std::int64_t i = 0; i < fields; ++i) {
-            const std::string name = s.field_name(i);
+            const dstd::String name = s.field_name(i);
             put_pod<std::uint32_t>(out,
                                    static_cast<std::uint32_t>(name.size()));
             put_bytes(out, name.data(), name.size());
-            put_series(out, s.child(i));
+            auto put = put_series(out, s.child(i));
+            if (!put) return put;
         }
         put_series_trailer(out, s);
-        return;
+        return {};
     }
     if (t == TypeId::Decimal128 || t == TypeId::Decimal256) {
         // read_f64 divides by 10^decimal_scale, so it must round-trip too.
@@ -305,51 +347,65 @@ void put_series(std::string& out, const Series& s_in) {
         put_bytes(out, dftu_series_data(s.handle()), bytes);
     }
     put_series_trailer(out, s);
+    return {};
 }
 
 namespace {
 
-Series get_series_data(const std::uint8_t*& p, const std::uint8_t* end);
+dstd::Result<Series> get_series_data(In& in);
 
-}  // namespace
-
-Series get_series(const std::uint8_t*& p, const std::uint8_t* end) {
-    Series s = get_series_data(p, end);
-    const bool json = get_pod<std::uint8_t>(p, end) != 0;
-    const auto unit = static_cast<TimeUnit>(get_pod<std::int32_t>(p, end));
-    const auto zone_bytes = get_pod<std::uint32_t>(p, end);
-    const auto* zone = take_bytes(p, end, zone_bytes);
+dstd::Result<Series> get_series_in(In& in) {
+    auto data = get_series_data(in);
+    if (!data) return data;
+    Series s = std::move(*data);
+    const bool json = get_pod<std::uint8_t>(in) != 0;
+    const auto unit = static_cast<TimeUnit>(get_pod<std::int32_t>(in));
+    const auto zone_bytes = get_pod<std::uint32_t>(in);
+    const auto* zone = take_bytes(in, zone_bytes);
+    if (in.bad) return truncated_read();
     dftu_series* h = s.handle();
     h->set_json(json);
     h->set_time_unit(unit);
     h->set_timezone(
-        std::string_view(reinterpret_cast<const char*>(zone), zone_bytes));
+        dstd::StringView(reinterpret_cast<const char*>(zone), zone_bytes));
     return s;
+}
+
+}  // namespace
+
+dstd::Result<Series> get_series(const std::uint8_t*& p,
+                                const std::uint8_t* end) {
+    In in{p, end};
+    return get_series_in(in);
 }
 
 namespace {
 
-Series get_series_data(const std::uint8_t*& p, const std::uint8_t* end) {
-    const auto type = static_cast<TypeId>(get_pod<std::int32_t>(p, end));
-    const std::int64_t n = get_pod<std::int64_t>(p, end);
-    const std::int64_t nulls = get_pod<std::int64_t>(p, end);
+dstd::Result<Series> get_series_data(In& in) {
+    const auto type = static_cast<TypeId>(get_pod<std::int32_t>(in));
+    const std::int64_t n = get_pod<std::int64_t>(in);
+    const std::int64_t nulls = get_pod<std::int64_t>(in);
+    if (in.bad) return truncated_read();
     const std::uint8_t* validity = nullptr;
     if (nulls > 0)
-        validity = take_bytes(p, end, static_cast<std::size_t>((n + 7) / 8));
+        validity = take_bytes(in, static_cast<std::size_t>((n + 7) / 8));
+    if (in.bad) return truncated_read();
     const auto dt = static_cast<dftu_dtype>(static_cast<std::int32_t>(type));
     if (type == TypeId::FixedSizeList) {
-        const auto width = get_pod<std::int32_t>(p, end);
-        Series child = get_series(p, end);
+        const auto width = get_pod<std::int32_t>(in);
+        if (in.bad) return truncated_read();
+        auto child = get_series_in(in);
+        if (!child) return child;
         auto* col = new dftu_series();
         col->type = type;
         col->encoding = Encoding::Flat;
         col->length = n;
         col->set_fixed_size(width);
-        col->set_child(std::shared_ptr<dftu_series>(child.release()));
+        col->set_child(adopt_series(child->release()));
         if (validity != nullptr) {
             const std::size_t vbytes = static_cast<std::size_t>((n + 7) / 8);
-            col->validity = Buffer::allocate(vbytes);
-            std::memcpy(col->validity->data(), validity, vbytes);
+            col->validity = new_buffer(vbytes);
+            std::memcpy(writable(col->validity), validity, vbytes);
             col->null_count = nulls;
         }
         return Series{col};
@@ -360,123 +416,128 @@ Series get_series_data(const std::uint8_t*& p, const std::uint8_t* end) {
         const std::size_t width =
             wide ? sizeof(std::int64_t) : sizeof(std::int32_t);
         const std::size_t off_bytes = static_cast<std::size_t>(n + 1) * width;
-        const std::uint8_t* offs = take_bytes(p, end, off_bytes);
-        Series child = get_series(p, end);
+        const std::uint8_t* offs = take_bytes(in, off_bytes);
+        if (in.bad) return truncated_read();
+        auto child = get_series_in(in);
+        if (!child) return child;
         auto* col = new dftu_series();
         col->type = type;
         col->encoding = Encoding::Flat;
         col->length = n;
-        auto buffer = Buffer::allocate(off_bytes);
-        if (off_bytes != 0) std::memcpy(buffer->data(), offs, off_bytes);
+        auto buffer = new_buffer(off_bytes);
+        if (off_bytes != 0) std::memcpy(writable(buffer), offs, off_bytes);
         col->offsets = std::move(buffer);
-        col->set_child(std::shared_ptr<dftu_series>(child.release()));
+        col->set_child(adopt_series(child->release()));
         if (validity != nullptr) {
             const std::size_t vbytes = static_cast<std::size_t>((n + 7) / 8);
-            col->validity = Buffer::allocate(vbytes);
-            std::memcpy(col->validity->data(), validity, vbytes);
+            col->validity = new_buffer(vbytes);
+            std::memcpy(writable(col->validity), validity, vbytes);
             col->null_count = nulls;
         }
         return Series{col};
     }
     if (type == TypeId::Struct) {
-        const auto fields = get_pod<std::int32_t>(p, end);
+        const auto fields = get_pod<std::int32_t>(in);
+        if (in.bad) return truncated_read();
         auto* col = new dftu_series();
         col->type = type;
         col->encoding = Encoding::Flat;
         col->length = n;
+        // Frees the column on a failed read.
+        Series owner{col};
         for (std::int32_t i = 0; i < fields; ++i) {
-            const auto name_bytes = get_pod<std::uint32_t>(p, end);
-            const auto* name = take_bytes(p, end, name_bytes);
-            std::string field(reinterpret_cast<const char*>(name), name_bytes);
-            Series child = get_series(p, end);
+            const auto name_bytes = get_pod<std::uint32_t>(in);
+            const auto* name = take_bytes(in, name_bytes);
+            if (in.bad) return truncated_read();
+            dstd::String field(reinterpret_cast<const char*>(name), name_bytes);
+            auto child = get_series_in(in);
+            if (!child) return child;
             col->nested.push_back(
-                {std::shared_ptr<dftu_series>(child.release()),
-                 std::move(field)});
+                {adopt_series(child->release()), std::move(field)});
         }
         if (validity != nullptr) {
             const std::size_t vbytes = static_cast<std::size_t>((n + 7) / 8);
-            col->validity = Buffer::allocate(vbytes);
-            std::memcpy(col->validity->data(), validity, vbytes);
+            col->validity = new_buffer(vbytes);
+            std::memcpy(writable(col->validity), validity, vbytes);
             col->null_count = nulls;
         }
-        return Series{col};
+        return owner;
     }
     if (type == TypeId::Decimal128 || type == TypeId::Decimal256) {
-        const std::int32_t precision = get_pod<std::int32_t>(p, end);
-        const std::int32_t scale = get_pod<std::int32_t>(p, end);
+        const std::int32_t precision = get_pod<std::int32_t>(in);
+        const std::int32_t scale = get_pod<std::int32_t>(in);
         const std::size_t bytes = buffer_bytes(type, n);
-        const std::uint8_t* data = take_bytes(p, end, bytes);
+        const std::uint8_t* data = take_bytes(in, bytes);
+        if (in.bad) return truncated_read();
         auto* col = new dftu_series();
         col->type = type;
         col->encoding = Encoding::Flat;
         col->length = n;
         col->set_decimal(precision, scale);
-        col->data = Buffer::allocate(bytes);
-        if (bytes != 0) std::memcpy(col->data->data(), data, bytes);
+        col->data = new_buffer(bytes);
+        if (bytes != 0) std::memcpy(writable(col->data), data, bytes);
         if (validity != nullptr) {
             const std::size_t vbytes = static_cast<std::size_t>((n + 7) / 8);
-            col->validity = Buffer::allocate(vbytes);
-            std::memcpy(col->validity->data(), validity, vbytes);
+            col->validity = new_buffer(vbytes);
+            std::memcpy(writable(col->validity), validity, vbytes);
             col->null_count = nulls;
         }
         return Series{col};
     }
     if (type == TypeId::FixedSizeBinary) {
-        const std::int32_t width = get_pod<std::int32_t>(p, end);
+        const std::int32_t width = get_pod<std::int32_t>(in);
         const std::size_t bytes =
             static_cast<std::size_t>(n) * static_cast<std::size_t>(width);
-        const std::uint8_t* data = take_bytes(p, end, bytes);
+        const std::uint8_t* data = take_bytes(in, bytes);
+        if (in.bad) return truncated_read();
         auto* col = new dftu_series();
         col->type = type;
         col->encoding = Encoding::Flat;
         col->length = n;
         col->set_fixed_size(width);
-        col->data = Buffer::allocate(bytes);
-        if (bytes != 0) std::memcpy(col->data->data(), data, bytes);
+        col->data = new_buffer(bytes);
+        if (bytes != 0) std::memcpy(writable(col->data), data, bytes);
         if (validity != nullptr) {
             const std::size_t vbytes = static_cast<std::size_t>((n + 7) / 8);
-            col->validity = Buffer::allocate(vbytes);
-            std::memcpy(col->validity->data(), validity, vbytes);
+            col->validity = new_buffer(vbytes);
+            std::memcpy(writable(col->validity), validity, vbytes);
             col->null_count = nulls;
         }
         return Series{col};
     }
-    if (is_wide_offset_type(type)) {  // LargeString / LargeBinary
-        const std::int64_t nbytes = get_pod<std::int64_t>(p, end);
-        const auto* offs = reinterpret_cast<const std::int64_t*>(take_bytes(
-            p, end, static_cast<std::size_t>(n + 1) * sizeof(std::int64_t)));
+    if (is_wide_offset_type(type) || !byte_width(type)) {
+        // String, Binary, LargeString and LargeBinary. The offsets sit at any
+        // byte of the blob, so they are copied, never read in place.
+        const std::size_t width = is_wide_offset_type(type)
+                                      ? sizeof(std::int64_t)
+                                      : sizeof(std::int32_t);
+        const std::int64_t nbytes = get_pod<std::int64_t>(in);
+        const std::size_t off_bytes = static_cast<std::size_t>(n + 1) * width;
+        const std::uint8_t* offs = take_bytes(in, off_bytes);
         const std::uint8_t* data =
-            take_bytes(p, end, static_cast<std::size_t>(nbytes));
+            take_bytes(in, static_cast<std::size_t>(nbytes));
+        if (in.bad) return truncated_read();
         auto* col = new dftu_series();
         col->type = type;
         col->encoding = Encoding::Flat;
         col->length = n;
-        col->offsets = Buffer::allocate(static_cast<std::size_t>(n + 1) *
-                                        sizeof(std::int64_t));
-        std::memcpy(col->offsets->data(), offs,
-                    static_cast<std::size_t>(n + 1) * sizeof(std::int64_t));
-        col->data = Buffer::allocate(static_cast<std::size_t>(nbytes));
+        col->offsets = new_buffer(off_bytes);
+        std::memcpy(writable(col->offsets), offs, off_bytes);
+        col->data = new_buffer(static_cast<std::size_t>(nbytes));
         if (nbytes != 0)
-            std::memcpy(col->data->data(), data,
+            std::memcpy(writable(col->data), data,
                         static_cast<std::size_t>(nbytes));
         if (validity != nullptr) {
             const std::size_t vbytes = static_cast<std::size_t>((n + 7) / 8);
-            col->validity = Buffer::allocate(vbytes);
-            std::memcpy(col->validity->data(), validity, vbytes);
+            col->validity = new_buffer(vbytes);
+            std::memcpy(writable(col->validity), validity, vbytes);
             col->null_count = nulls;
         }
         return Series{col};
     }
-    if (!byte_width(type)) {  // String / Binary
-        const std::int64_t nbytes = get_pod<std::int64_t>(p, end);
-        const auto* offs = reinterpret_cast<const std::int32_t*>(take_bytes(
-            p, end, static_cast<std::size_t>(n + 1) * sizeof(std::int32_t)));
-        const std::uint8_t* data =
-            take_bytes(p, end, static_cast<std::size_t>(nbytes));
-        return Series{dftu_series_new_string(dt, offs, data, n, validity)};
-    }
     const std::size_t bytes = buffer_bytes(type, n);
-    const std::uint8_t* data = take_bytes(p, end, bytes);
+    const std::uint8_t* data = take_bytes(in, bytes);
+    if (in.bad) return truncated_read();
     return Series{dftu_series_new_flat(dt, data, n, validity)};
 }
 
@@ -485,6 +546,17 @@ Series get_series_data(const std::uint8_t*& p, const std::uint8_t* end) {
 namespace {
 
 constexpr std::size_t REGION_ALIGN = 64;
+
+struct Mapping : dftracer::utils::dstd::HeapObject {
+    void* addr;
+    std::size_t bytes;
+};
+
+void unmap(void* context) {
+    auto* m = static_cast<Mapping*>(context);
+    ::munmap(m->addr, m->bytes);
+    delete m;
+}
 
 bool is_nested(TypeId t) {
     return t == TypeId::Struct || t == TypeId::List || t == TypeId::LargeList ||
@@ -495,7 +567,7 @@ struct Piece {
     const void* src = nullptr;
     std::size_t bytes = 0;
     std::size_t at = 0;
-    std::vector<std::uint8_t> owned;
+    dstd::Vector<std::uint8_t> owned;
 };
 
 struct ColumnPlan {
@@ -505,18 +577,26 @@ struct ColumnPlan {
 
 }  // namespace
 
-PartFile::PartFile() : file_(unwrap(SpillFile::create())) {}
+PartFile::PartFile(dstd::UniquePtr<common::SpillFile> file)
+    : file_(std::move(file)) {}
+
+dstd::Result<dstd::UniquePtr<PartFile>> PartFile::create() {
+    auto file = common::SpillFile::create();
+    if (!file) return file.error();
+    return dstd::make_unique<PartFile>(std::move(*file));
+}
 
 PartFile::~PartFile() = default;
 
-std::vector<Series> PartFile::append(const std::vector<Series>& cols) {
-    std::vector<ColumnPlan> plans(cols.size());
+dstd::Result<dstd::Vector<Series>> PartFile::append(
+    const dstd::Vector<Series>& cols) {
+    dstd::Vector<ColumnPlan> plans(cols.size());
     std::size_t at = 0;
     const auto place = [&at](Piece& p, const void* src, std::size_t bytes) {
         p.src = src;
         p.bytes = bytes;
         p.at = at;
-        at = bits::align_up(at + bytes, REGION_ALIGN);
+        at = dstd::bits::align_up(at + bytes, REGION_ALIGN);
     };
     for (std::size_t i = 0; i < cols.size(); ++i) {
         const Series& c = cols[i];
@@ -556,37 +636,46 @@ std::vector<Series> PartFile::append(const std::vector<Series>& cols) {
     const long page_size = ::sysconf(_SC_PAGESIZE);
     const std::size_t page =
         page_size > 0 ? static_cast<std::size_t>(page_size) : 4096;
-    const std::size_t region_bytes = bits::align_up(at, page);
-    std::vector<Series> out;
+    const std::size_t region_bytes = dstd::bits::align_up(at, page);
+    dstd::Vector<Series> out;
     out.reserve(cols.size());
     if (region_bytes == 0) {
         for (const Series& c : cols) out.push_back(c.share());
         return out;
     }
     const std::uint64_t base = file_->reserve(region_bytes, page);
-    for (const ColumnPlan& cp : plans)
-        for (const Piece* p : {&cp.validity, &cp.offsets, &cp.data})
-            if (p->bytes != 0)
-                unwrap(file_->write_at(base + p->at, p->src, p->bytes));
-    // The last bytes may be padding: extend so the mapped pages exist.
-    if (::ftruncate(file_->fd(), static_cast<off_t>(base + region_bytes)) != 0)
-        throw std::runtime_error("spill: cannot extend the spill file (" +
-                                 std::string(std::strerror(errno)) + "); set " +
-                                 constants::SPILL_DIR_ENV +
-                                 " to a directory with free space");
+    {
+        coro::BlockingRegion blocking;
+        for (const ColumnPlan& cp : plans)
+            for (const Piece* p : {&cp.validity, &cp.offsets, &cp.data})
+                if (p->bytes != 0) {
+                    const auto wrote =
+                        file_->write_at(base + p->at, p->src, p->bytes);
+                    if (!wrote) return wrote.error();
+                }
+        // The last bytes may be padding: extend so the mapped pages exist.
+        const auto resized = file_->file().resize(base + region_bytes);
+        if (!resized)
+            return common::make_error<
+                "spill: cannot extend the spill file ({}); set {} to a "
+                "directory with free space">(common::ErrorCode::Io,
+                                             resized.error().format(),
+                                             common::constants::SPILL_DIR_ENV);
+    }
     void* map = ::mmap(nullptr, region_bytes, PROT_READ, MAP_SHARED,
-                       file_->fd(), static_cast<off_t>(base));
+                       file_->file().native_handle(), static_cast<off_t>(base));
     if (map == MAP_FAILED)
-        throw std::runtime_error("spill: cannot map the spill file (" +
-                                 std::string(std::strerror(errno)) + "); set " +
-                                 constants::SPILL_DIR_ENV +
-                                 " to a usable directory");
-    const std::shared_ptr<void> region(
-        map, [region_bytes](void* m) { ::munmap(m, region_bytes); });
-    const auto window = [&](const Piece& p) -> std::shared_ptr<Buffer> {
-        if (p.bytes == 0) return Buffer::allocate(0);
-        return Buffer::wrap(static_cast<std::uint8_t*>(map) + p.at, p.bytes,
-                            [region](void*) {});
+        return common::make_error<
+            "spill: cannot map the spill file ({}); set {} to a usable "
+            "directory">(common::ErrorCode::Io, std::strerror(errno),
+                         common::constants::SPILL_DIR_ENV);
+    Mapping* mapping = new Mapping{{}, map, region_bytes};
+    memory::BlockRef region =
+        memory::Block::borrow(map, region_bytes, unmap, mapping);
+    const BufferView whole(std::move(region));
+    const auto window = [&](const Piece& p) -> BufferView {
+        if (p.bytes == 0) return new_buffer(0);
+        return whole.slice(p.at, p.bytes);
     };
     for (std::size_t i = 0; i < cols.size(); ++i) {
         const ColumnPlan& cp = plans[i];
@@ -609,73 +698,85 @@ std::vector<Series> PartFile::append(const std::vector<Series>& cols) {
     return out;
 }
 
-Dir::Dir() : dir_(unwrap(ScopedSpillSubdir::create("dftu_lazy"))) {}
+Dir::Dir(common::ScopedSpillSubdir dir) : dir_(std::move(dir)) {}
+
+dstd::Result<dstd::SharedPtr<Dir>> Dir::create() {
+    auto dir = common::ScopedSpillSubdir::create("dftu_lazy");
+    if (!dir) return dir.error();
+    return dstd::make_shared<Dir>(std::move(*dir));
+}
 
 Dir::~Dir() = default;
 
 int Dir::next_run() { return runs_.fetch_add(1); }
 
-std::string Dir::run_path(int id) const {
-    return (fs::path(dir_.path()) / ("run_" + std::to_string(id) + ".bin"))
-        .string();
+void Dir::remove_run(const dstd::String& path) const noexcept {
+    const auto size = dstd::fs::file_size(dstd::PathView(path));
+    const std::uint64_t bytes = size.has_value() ? *size : 0;
+    const auto removed = dstd::fs::remove(dstd::PathView(path));
+    if (removed.has_value() && *removed && bytes) dir_.charge().release(bytes);
+}
+
+dstd::String Dir::run_path(int id) const {
+    return dstd::String(
+        (dir_.path().view() / dstd::fmt<"run_{}.bin">(id)).str());
 }
 
 namespace {
 
-bool spill_compression_on(const std::string& path) {
-#ifdef DFTRACER_UTILS_ENABLE_ZSTD
-    const auto v = Env::get(constants::SPILL_COMPRESS_ENV);
-    const auto is = [&](std::string_view a, std::string_view b = {},
-                        std::string_view c = {}) {
+const ZSTD_customMem TRACKED_MEM = {
+    [](void*, std::size_t size) -> void* {
+        return dftracer::utils::memory::detail::c_malloc(size);
+    },
+    [](void*, void* p) { dftracer::utils::memory::detail::c_free(p); },
+    nullptr};
+
+bool spill_compression_on(const dstd::String& path) {
+    const auto v = common::Env::get(common::constants::SPILL_COMPRESS_ENV);
+    const auto is = [&](dstd::StringView a, dstd::StringView b = {},
+                        dstd::StringView c = {}) {
         return v &&
-               (::dftracer::utils::detail::iequals(*v, a) ||
-                (!b.empty() && ::dftracer::utils::detail::iequals(*v, b)) ||
-                (!c.empty() && ::dftracer::utils::detail::iequals(*v, c)));
+               (::dftracer::utils::dstd::ascii_iequals(*v, a) ||
+                (!b.empty() && ::dftracer::utils::dstd::ascii_iequals(*v, b)) ||
+                (!c.empty() && ::dftracer::utils::dstd::ascii_iequals(*v, c)));
     };
     if (is("off", "0")) return false;
     if (is("on", "1", "zstd")) return true;
-    return is_network_filesystem(filesystem_kind(path));
-#else
-    (void)path;
-    static const bool warned = [] {
-        const auto v = Env::get(constants::SPILL_COMPRESS_ENV);
-        if (v && (::dftracer::utils::detail::iequals(*v, "on") || *v == "1" ||
-                  ::dftracer::utils::detail::iequals(*v, "zstd")))
-            DFTRACER_UTILS_LOG_WARN(
-                "%s is set but this build has no zstd; spilled runs are not "
-                "compressed",
-                constants::SPILL_COMPRESS_ENV);
-        return true;
-    }();
-    (void)warned;
-    return false;
-#endif
+    return common::is_network_filesystem(common::filesystem_kind(path));
 }
 
 // A morsel smaller than this is not worth a compression call.
 constexpr std::size_t COMPRESS_MIN_BYTES = 4096;
 
+std::FILE* open_file(const dstd::String& path, const char* mode) {
+    coro::BlockingRegion blocking;
+    return std::fopen(path.c_str(), mode);
+}
+
 }  // namespace
 
-#ifdef DFTRACER_UTILS_ENABLE_ZSTD
 struct Writer::Codec {
-    ZSTD_CCtx* ctx = ZSTD_createCCtx();
-    std::string out;
+    ZSTD_CCtx* ctx = ZSTD_createCCtx_advanced(TRACKED_MEM);
+    dstd::String out;
     ~Codec() { ZSTD_freeCCtx(ctx); }
 };
 struct Reader::Codec {
-    ZSTD_DCtx* ctx = ZSTD_createDCtx();
+    ZSTD_DCtx* ctx = ZSTD_createDCtx_advanced(TRACKED_MEM);
     ~Codec() { ZSTD_freeDCtx(ctx); }
 };
-#else
-struct Writer::Codec {};
-struct Reader::Codec {};
-#endif
 
-Writer::Writer(const std::string& path)
-    : os_(path, std::ios::binary | std::ios::trunc) {
-    if (!os_) throw std::runtime_error("spill: cannot open run file " + path);
-    if (spill_compression_on(path)) codec_ = std::make_unique<Codec>();
+Writer::Writer(dstd::ScopedFile os, dstd::SharedPtr<common::SpillCharge> charge)
+    : os_(std::move(os)), charge_(std::move(charge)) {}
+
+dstd::Result<Writer> Writer::open(const dstd::String& path) {
+    dstd::ScopedFile os(open_file(path, "wb"));
+    if (!os)
+        return common::make_error<"spill: cannot open run file {}">(
+            common::ErrorCode::Io, path);
+    Writer w(std::move(os),
+             common::ScopedSpillSubdir::charge_for(dstd::PathView(path)));
+    if (spill_compression_on(path)) w.codec_ = dstd::make_unique<Codec>();
+    return w;
 }
 
 Writer::Writer(Writer&&) noexcept = default;
@@ -684,15 +785,18 @@ Writer::~Writer() = default;
 
 // Each morsel is [stored bytes][raw bytes][payload]; the payload is zstd when
 // the two differ.
-void Writer::write(const std::vector<Series>& cols, std::int64_t rows) {
+dstd::Result<void> Writer::write(const dstd::Vector<Series>& cols,
+                                 std::int64_t rows) {
     blob_.clear();
     put_pod<std::int64_t>(blob_, rows);
     put_pod<std::int32_t>(blob_, static_cast<std::int32_t>(cols.size()));
-    for (const Series& c : cols) put_series(blob_, c);
+    for (const Series& c : cols) {
+        auto put = put_series(blob_, c);
+        if (!put) return put;
+    }
     const char* payload = blob_.data();
     std::int64_t stored = static_cast<std::int64_t>(blob_.size());
     const std::int64_t raw = stored;
-#ifdef DFTRACER_UTILS_ENABLE_ZSTD
     if (codec_ && blob_.size() >= COMPRESS_MIN_BYTES) {
         codec_->out.resize(ZSTD_compressBound(blob_.size()));
         const std::size_t n = ZSTD_compressCCtx(codec_->ctx, codec_->out.data(),
@@ -703,140 +807,187 @@ void Writer::write(const std::vector<Series>& cols, std::int64_t rows) {
             stored = static_cast<std::int64_t>(n);
         }
     }
-#endif
-    os_.write(reinterpret_cast<const char*>(&stored), sizeof(stored));
-    os_.write(reinterpret_cast<const char*>(&raw), sizeof(raw));
-    os_.write(payload, static_cast<std::streamsize>(stored));
-    if (!os_)
-        throw std::runtime_error("spill: cannot write a run file (disk full?)");
-    written_ +=
+    const std::size_t payload_bytes = static_cast<std::size_t>(stored);
+    coro::BlockingRegion blocking;
+    if (std::fwrite(&stored, sizeof(stored), 1, os_.get()) != 1 ||
+        std::fwrite(&raw, sizeof(raw), 1, os_.get()) != 1 ||
+        std::fwrite(payload, 1, payload_bytes, os_.get()) != payload_bytes)
+        return common::make_error<
+            "spill: cannot write a run file (disk full?)">(
+            common::ErrorCode::Io);
+    const std::uint64_t n =
         sizeof(stored) + sizeof(raw) + static_cast<std::uint64_t>(stored);
+    written_ += n;
+    if (charge_) charge_->add(n);
+    return {};
 }
 
-void Writer::close() {
-    os_.close();
-    if (!os_)
-        throw std::runtime_error(
-            "spill: cannot finish a run file (disk full?)");
+dstd::Result<void> Writer::close() {
+    coro::BlockingRegion blocking;
+    std::FILE* f = os_.release();
+    if (!f || std::fclose(f) != 0)
+        return common::make_error<
+            "spill: cannot finish a run file (disk full?)">(
+            common::ErrorCode::Io);
+    return {};
 }
 
-std::uint64_t write_run(Writer& w, const std::vector<Series>& cols,
-                        std::int64_t rows, std::int64_t rows_per_morsel) {
+dstd::Result<std::uint64_t> write_run(Writer& w,
+                                      const dstd::Vector<Series>& cols,
+                                      std::int64_t rows,
+                                      std::int64_t rows_per_morsel) {
     std::uint64_t largest = 0;
     rows_per_morsel = std::max<std::int64_t>(rows_per_morsel, 1);
     for (std::int64_t off = 0; off < rows; off += rows_per_morsel) {
         const std::int64_t len = std::min(rows_per_morsel, rows - off);
-        std::vector<Series> piece;
+        dstd::Vector<Series> piece;
         piece.reserve(cols.size());
         for (const Series& c : cols)
             piece.push_back(c.slice(off, len).materialize());
         largest = std::max<std::uint64_t>(largest, columns_bytes(piece));
-        w.write(piece, len);
+        auto wrote = w.write(piece, len);
+        if (!wrote) return wrote.error();
     }
     return largest;
 }
 
-HashPartitions::HashPartitions(Dir& dir, std::size_t parts)
+HashPartitions::HashPartitions(std::size_t parts)
     : bytes_(parts, 0), rows_(parts, 0) {
     paths_.reserve(parts);
     writers_.reserve(parts);
-    for (std::size_t p = 0; p < parts; ++p) {
-        paths_.push_back(dir.run_path(dir.next_run()));
-        writers_.emplace_back(paths_.back());
-    }
 }
 
-void HashPartitions::write(std::size_t p, const std::vector<Series>& cols,
-                           std::int64_t rows) {
+dstd::Result<HashPartitions> HashPartitions::make(Dir& dir, std::size_t parts) {
+    HashPartitions out(parts);
+    for (std::size_t p = 0; p < parts; ++p) {
+        out.paths_.push_back(dir.run_path(dir.next_run()));
+        auto writer = Writer::open(out.paths_.back());
+        if (!writer) return writer.error();
+        out.writers_.push_back(std::move(*writer));
+    }
+    return out;
+}
+
+dstd::Result<void> HashPartitions::write(std::size_t p,
+                                         const dstd::Vector<Series>& cols,
+                                         std::int64_t rows) {
     bytes_[p] += columns_bytes(cols);
     rows_[p] += rows;
-    writers_[p].write(cols, rows);
+    return writers_[p].write(cols, rows);
 }
 
-void HashPartitions::close() {
-    for (Writer& w : writers_) w.close();
+dstd::Result<void> HashPartitions::close() {
+    for (Writer& w : writers_) {
+        auto closed = w.close();
+        if (!closed) return closed;
+    }
+    return {};
 }
 
-Reader::Reader(const std::string& path) : is_(path, std::ios::binary) {
-    if (!is_) throw std::runtime_error("spill: cannot open run file " + path);
-    std::error_code ec;
-    size_ = fs::file_size(path, ec);
-    if (ec) throw std::runtime_error("spill: cannot stat run file " + path);
+Reader::Reader(dstd::ScopedFile is, std::uint64_t size)
+    : is_(std::move(is)), size_(size) {}
+
+dstd::Result<dstd::UniquePtr<Reader>> Reader::open(const dstd::String& path) {
+    dstd::ScopedFile is(open_file(path, "rb"));
+    if (!is)
+        return common::make_error<"spill: cannot open run file {}">(
+            common::ErrorCode::Io, path);
+    const auto sized = dstd::fs::file_size(dstd::PathView(path));
+    if (!sized)
+        return common::make_error<"spill: cannot stat run file {}">(
+            common::ErrorCode::Io, path);
+    return dstd::make_unique<Reader>(std::move(is), *sized);
 }
 
 Reader::~Reader() = default;
 
-void Reader::seek(std::uint64_t pos) {
-    is_.clear();
-    is_.seekg(static_cast<std::streamoff>(pos));
+dstd::Result<void> Reader::seek(std::uint64_t pos) {
+    if (::fseeko(is_.get(), static_cast<off_t>(pos), SEEK_SET) != 0)
+        return common::make_error<"spill: cannot seek in a run file">(
+            common::ErrorCode::Io);
+    return {};
 }
 
-coro::CoroTask<std::optional<Morsel>> Reader::next(std::int64_t /*max_rows*/) {
+coro::CoroTask<MorselResult> Reader::next(std::int64_t /*max_rows*/) {
     std::int64_t sizes[2] = {0, 0};
-    is_.read(reinterpret_cast<char*>(sizes), sizeof(sizes));
-    if (is_.gcount() == 0) co_return std::nullopt;
-    if (is_.gcount() != static_cast<std::streamsize>(sizeof(sizes)))
-        throw std::runtime_error("spill: short run read");
-    const auto at = static_cast<std::uint64_t>(is_.tellg());
+    std::size_t got_sizes = 0;
+    {
+        coro::BlockingRegion blocking;
+        got_sizes = std::fread(sizes, 1, sizeof(sizes), is_.get());
+    }
+    if (got_sizes == 0) co_return dstd::nullopt;
+    if (got_sizes != sizeof(sizes))
+        co_return common::make_error<"spill: short run read">(
+            common::ErrorCode::Io);
+    const auto at = static_cast<std::uint64_t>(::ftello(is_.get()));
     if (sizes[0] < 0 || sizes[1] < 0 ||
         static_cast<std::uint64_t>(sizes[0]) > size_ - at)
-        throw std::runtime_error("spill: corrupt run file (bad morsel size)");
+        co_return common::make_error<
+            "spill: corrupt run file (bad morsel size)">(
+            common::ErrorCode::Parse);
     const auto stored = static_cast<std::size_t>(sizes[0]);
     const auto raw = static_cast<std::size_t>(sizes[1]);
-    const auto grow = [](std::unique_ptr<char[]>& buf, std::size_t& cap,
+    const auto grow = [](dstd::UniquePtr<char[]>& buf, std::size_t& cap,
                          std::size_t need) {
         if (need <= cap) return;
-        buf = std::make_unique_for_overwrite<char[]>(need);
+        buf = dstd::make_unique_for_overwrite<char[]>(need);
         cap = need;
     };
+    std::size_t got = 0;
     if (stored == raw) {
         grow(raw_, raw_cap_, raw);
-        is_.read(raw_.get(), static_cast<std::streamsize>(raw));
+        coro::BlockingRegion blocking;
+        got = std::fread(raw_.get(), 1, raw, is_.get());
     } else {
-#ifdef DFTRACER_UTILS_ENABLE_ZSTD
-        if (!codec_) codec_ = std::make_unique<Codec>();
+        if (!codec_) codec_ = dstd::make_unique<Codec>();
         grow(stored_, stored_cap_, stored);
-        is_.read(stored_.get(), static_cast<std::streamsize>(stored));
-        if (static_cast<std::size_t>(is_.gcount()) != stored)
-            throw std::runtime_error("spill: short run read");
+        {
+            coro::BlockingRegion blocking;
+            got = std::fread(stored_.get(), 1, stored, is_.get());
+        }
+        if (got != stored)
+            co_return common::make_error<"spill: short run read">(
+                common::ErrorCode::Io);
         if (ZSTD_getFrameContentSize(stored_.get(), stored) != raw)
-            throw std::runtime_error(
-                "spill: corrupt run file (bad compressed size)");
+            co_return common::make_error<
+                "spill: corrupt run file (bad compressed size)">(
+                common::ErrorCode::Parse);
         grow(raw_, raw_cap_, raw);
         if (ZSTD_decompressDCtx(codec_->ctx, raw_.get(), raw, stored_.get(),
                                 stored) != raw)
-            throw std::runtime_error("spill: corrupt compressed morsel");
-#else
-        throw std::runtime_error("spill: compressed morsel without zstd");
-#endif
+            co_return common::make_error<"spill: corrupt compressed morsel">(
+                common::ErrorCode::Parse);
     }
-    if (static_cast<std::size_t>(is_.gcount()) != stored)
-        throw std::runtime_error("spill: short run read");
+    if (got != stored)
+        co_return common::make_error<"spill: short run read">(
+            common::ErrorCode::Io);
     const auto* p = reinterpret_cast<const std::uint8_t*>(raw_.get());
     const std::uint8_t* pend = p + raw;
+    In in{p, pend};
     Morsel m;
-    m.rows = get_pod<std::int64_t>(p, pend);
-    const std::int32_t ncols = get_pod<std::int32_t>(p, pend);
+    m.rows = get_pod<std::int64_t>(in);
+    const std::int32_t ncols = get_pod<std::int32_t>(in);
+    if (in.bad || ncols < 0 || static_cast<std::size_t>(ncols) > raw)
+        co_return truncated_read();
     m.columns.reserve(static_cast<std::size_t>(ncols));
-    for (std::int32_t c = 0; c < ncols; ++c)
-        m.columns.push_back(get_series(p, pend));
-    co_return m;
+    for (std::int32_t c = 0; c < ncols; ++c) {
+        auto column = get_series(p, pend);
+        if (!column) co_return column.error();
+        m.columns.push_back(std::move(*column));
+    }
+    co_return std::move(m);
 }
 
-Spool::Spool(std::uint64_t budget, std::shared_ptr<Dir> dir)
+Spool::Spool(std::uint64_t budget, dstd::SharedPtr<Dir> dir)
     : budget_(budget), dir_(std::move(dir)) {}
 
 Spool::~Spool() {
     writer_.reset();
-    if (!run_.empty()) {
-        std::error_code ec;
-        fs::remove(run_, ec);
-    }
+    if (!run_.empty()) dir_->remove_run(run_);
 }
 
-void Spool::add(std::vector<Series> columns, std::int64_t rows) {
-    if (read_)
-        throw std::logic_error("spool: a morsel was added after a reader");
+dstd::Result<void> Spool::add(dstd::Vector<Series> columns, std::int64_t rows) {
+    if (read_) dstd::fatal("spool: a morsel was added after a reader");
     if (!spilling_) {
         const std::size_t bytes = columns_bytes(columns);
         bytes_ += bytes;
@@ -845,86 +996,140 @@ void Spool::add(std::vector<Series> columns, std::int64_t rows) {
         m.rows = rows;
         m.columns = std::move(columns);
         mem_.push_back(std::move(m));
-        if (bytes_ > budget_) {  // overflow: subsequent morsels go to disk
-            if (!dir_) dir_ = std::make_shared<Dir>();
-            run_ = dir_->run_path(dir_->next_run());
-            writer_ = std::make_unique<Writer>(run_);
-            spilling_ = true;
-        }
-        return;
+        if (bytes_ > budget_) return open_run();  // later morsels go to disk
+        return {};
     }
     total_bytes_ += columns_bytes(columns);
     offsets_.push_back(writer_->bytes());
-    writer_->write(columns, rows);
+    return writer_->write(columns, rows);
 }
 
-std::unique_ptr<Cursor> Spool::reader() {
+dstd::Result<void> Spool::open_run() {
+    if (!dir_) {
+        auto dir = Dir::create();
+        if (!dir) return dir.error();
+        dir_ = std::move(*dir);
+    }
+    run_ = dir_->run_path(dir_->next_run());
+    auto writer = Writer::open(run_);
+    if (!writer) return writer.error();
+    writer_ = dstd::make_unique<Writer>(std::move(*writer));
+    spilling_ = true;
+    return {};
+}
+
+dstd::Result<std::uint64_t> Spool::spill() {
+    if (read_ || spilling_) return std::uint64_t{0};
+    auto opened = open_run();
+    if (!opened) return opened.error();
+    for (const Morsel& m : mem_) {
+        offsets_.push_back(writer_->bytes());
+        auto wrote = writer_->write(m.columns, m.rows);
+        if (!wrote) return wrote.error();
+    }
+    mem_.clear();
+    const std::uint64_t freed = bytes_;
+    bytes_ = 0;
+    return freed;
+}
+
+dstd::Result<dstd::UniquePtr<Reader>> Spool::open_disk() {
     // The run is closed by the first reader; any number of readers may follow.
     read_ = true;
     if (writer_) {
-        writer_->close();
+        auto closed = writer_->close();
+        if (!closed) return closed.error();
         writer_.reset();
     }
-    return std::make_unique<SpoolReader>(&mem_, run_);
+    if (run_.empty()) return dstd::UniquePtr<Reader>();
+    return Reader::open(run_);
 }
 
-std::unique_ptr<Cursor> Spool::reverse_reader() {
-    read_ = true;
-    if (writer_) {
-        writer_->close();
-        writer_.reset();
-    }
-    return std::make_unique<SpoolReverseReader>(&mem_, run_, offsets_);
+dstd::Result<dstd::UniquePtr<Cursor>> Spool::reader() {
+    auto disk = open_disk();
+    if (!disk) return disk.error();
+    return dstd::UniquePtr<Cursor>(
+        dstd::make_unique<SpoolReader>(&mem_, std::move(*disk)));
 }
 
-void write_agg_run(AggState& state, const std::string& path) {
+dstd::Result<dstd::UniquePtr<Cursor>> Spool::reverse_reader() {
+    auto disk = open_disk();
+    if (!disk) return disk.error();
+    return dstd::UniquePtr<Cursor>(dstd::make_unique<SpoolReverseReader>(
+        &mem_, std::move(*disk), offsets_));
+}
+
+dstd::Result<void> write_agg_run(AggState& state, const dstd::String& path) {
     agg_sort_groups(state);
-    std::ofstream os(path, std::ios::binary);
-    if (!os) throw std::runtime_error("agg spill: cannot open run " + path);
-    const std::int64_t ng = agg_num_groups(state);
+    dstd::ScopedFile os(open_file(path, "wb"));
+    if (!os)
+        return common::make_error<"agg spill: cannot open run {}">(
+            common::ErrorCode::Io, path);
+    const dstd::SharedPtr<common::SpillCharge> charge =
+        common::ScopedSpillSubdir::charge_for(dstd::PathView(path));
+    const std::int64_t ng = agg_group_count(state);
     for (std::int64_t g = 0; g < ng; ++g) {
-        const std::string blob =
+        const dstd::String blob =
             agg_serialize(*agg_extract_group(state, g), true);
         if (blob.size() > std::numeric_limits<std::uint32_t>::max())
-            throw std::runtime_error("agg spill: a group state is over 4 GiB");
+            dstd::fatal("agg spill: a group state is over 4 GiB");
         const std::uint32_t len = static_cast<std::uint32_t>(blob.size());
-        os.write(reinterpret_cast<const char*>(&len), sizeof(len));
-        os.write(blob.data(), static_cast<std::streamsize>(blob.size()));
-        if (!os)
-            throw std::runtime_error("agg spill: cannot write run " + path);
+        if (std::fwrite(&len, sizeof(len), 1, os.get()) != 1 ||
+            std::fwrite(blob.data(), 1, blob.size(), os.get()) != blob.size())
+            return common::make_error<"agg spill: cannot write run {}">(
+                common::ErrorCode::Io, path);
+        if (charge) charge->add(sizeof(len) + blob.size());
     }
-    os.close();
-    if (!os) throw std::runtime_error("agg spill: cannot write run " + path);
+    coro::BlockingRegion blocking;
+    if (std::fclose(os.release()) != 0)
+        return common::make_error<"agg spill: cannot write run {}">(
+            common::ErrorCode::Io, path);
+    return {};
 }
 
-AggRunReader::AggRunReader(const std::string& path)
-    : is_(path, std::ios::binary) {
-    if (!is_) throw std::runtime_error("agg spill: cannot open run " + path);
-    std::error_code ec;
-    size_ = fs::file_size(path, ec);
-    if (ec) throw std::runtime_error("agg spill: cannot stat run " + path);
-    advance();
+AggRunReader::AggRunReader(dstd::ScopedFile is, std::uint64_t size)
+    : is_(std::move(is)), size_(size) {}
+
+dstd::Result<dstd::UniquePtr<AggRunReader>> AggRunReader::open(
+    const dstd::String& path) {
+    dstd::ScopedFile is(open_file(path, "rb"));
+    if (!is)
+        return common::make_error<"agg spill: cannot open run {}">(
+            common::ErrorCode::Io, path);
+    const auto sized = dstd::fs::file_size(dstd::PathView(path));
+    if (!sized)
+        return common::make_error<"agg spill: cannot stat run {}">(
+            common::ErrorCode::Io, path);
+    auto reader = dstd::make_unique<AggRunReader>(std::move(is), *sized);
+    auto first = reader->advance();
+    if (!first) return first.error();
+    return reader;
 }
 
-void AggRunReader::advance() {
+dstd::Result<void> AggRunReader::advance() {
     std::uint32_t len = 0;
-    is_.read(reinterpret_cast<char*>(&len), sizeof(len));
-    if (is_.gcount() == 0) {
+    const std::size_t got_size = std::fread(&len, 1, sizeof(len), is_.get());
+    if (got_size == 0) {
         valid_ = false;
-        return;
+        return {};
     }
-    if (is_.gcount() != static_cast<std::streamsize>(sizeof(len)))
-        throw std::runtime_error("agg spill: truncated run");
+    if (got_size != sizeof(len))
+        return common::make_error<"agg spill: truncated run">(
+            common::ErrorCode::Io);
     pos_ += sizeof(len);
     if (len > size_ - pos_)
-        throw std::runtime_error("agg spill: corrupt run (bad state size)");
+        return common::make_error<"agg spill: corrupt run (bad state size)">(
+            common::ErrorCode::Parse);
     pos_ += len;
-    std::string blob(len, '\0');
-    is_.read(blob.data(), static_cast<std::streamsize>(len));
-    if (is_.gcount() != static_cast<std::streamsize>(len))
-        throw std::runtime_error("agg spill: truncated run");
-    cur_ = agg_deserialize(blob, true);
+    dstd::String blob(len, '\0');
+    if (std::fread(blob.data(), 1, len, is_.get()) != len)
+        return common::make_error<"agg spill: truncated run">(
+            common::ErrorCode::Io);
+    auto state = agg_deserialize(blob, true);
+    if (!state) return state.error();
+    cur_ = std::move(*state);
     valid_ = true;
+    return {};
 }
 
 }  // namespace dftracer::utils::dataframe::spill

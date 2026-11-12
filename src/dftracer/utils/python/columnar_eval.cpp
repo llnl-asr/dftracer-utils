@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Binding for the native columnar expression engine. Python serializes its
 // expression tree to a flat post-order AST; this rebuilds it as a
 // dataframe::Expr and evaluates it - all the compiler work (type inference,
@@ -6,64 +7,64 @@
 // parallel backend so vec's parallelism seam fans out across the coroutine
 // pool.
 
-#include <dftracer/utils/core/common/config.h>  // DFTRACER_UTILS_ENABLE_ARROW
-#include <dftracer/utils/core/runtime.h>
+#include <dftracer/utils/common/config.h>  // DFTRACER_UTILS_ENABLE_ARROW
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/parallel.h>
+#include <dftracer/utils/dstd/fatal.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/python/columnar_eval.h>
 #include <dftracer/utils/python/py_method.h>
 #include <dftracer/utils/python/py_scalar_helpers.h>
 #include <dftracer/utils/python/series.h>
+#include <dftracer/utils/runtime/runtime.h>
 
 #include <cstdint>
-#include <string>
-#include <string_view>
 #include <utility>
-#include <vector>
 
-namespace dataframe = dftracer::utils::dataframe;
+using namespace dftracer::utils;
 
 namespace {
 
 // AST node opcodes (mirror the serializer in columnar.py).
 enum {
-    AST_COL = 0,
-    AST_LIT_I = 1,
-    AST_LIT_F = 2,
-    AST_BIN = 3,
-    AST_PRIM = 4,
-    AST_CMP = 5,
-    AST_LOGICAL = 6,
-    AST_NOT = 7,
-    AST_CAST = 8,
-    AST_UNARY = 9,
-    AST_CLIP = 10,
-    AST_FILLNA = 11,
-    AST_STR_PRED = 12,
-    AST_STR_MAP = 13,
-    AST_STR_LEN = 14,
-    AST_STR_FIND = 15,
-    AST_STR_REPLACE = 16,
-    AST_STR_SLICE = 17,
-    AST_IS_IN = 18,
-    AST_SELECT = 19,
-    AST_IS_NULL = 20,
-    AST_CMP_EXPR = 21,
-    AST_STR_FN = 22,  // (fn, text, text2, i0, i1, operand count)
-    AST_STR_PRED_COL = 23,
-    AST_STR_REPLACE_COL = 24,
-    AST_LIT_S = 25,
+    AstCol = 0,
+    AstLitI = 1,
+    AstLitF = 2,
+    AstBin = 3,
+    AstPrim = 4,
+    AstCmp = 5,
+    AstLogical = 6,
+    AstNot = 7,
+    AstCast = 8,
+    AstUnary = 9,
+    AstClip = 10,
+    AstFillna = 11,
+    AstStrPred = 12,
+    AstStrMap = 13,
+    AstStrLen = 14,
+    AstStrFind = 15,
+    AstStrReplace = 16,
+    AstStrSlice = 17,
+    AstIsIn = 18,
+    AstSelect = 19,
+    AstIsNull = 20,
+    AstCmpExpr = 21,
+    AstStrFn = 22,  // (fn, text, text2, i0, i1, operand count)
+    AstStrPredCol = 23,
+    AstStrReplaceCol = 24,
+    AstLitS = 25,
 };
 
 // A borrowed view of a Python str; valid while `o` lives, which the ast list
 // guarantees for the duration of build_expr.
-bool py_str_view(PyObject* o, std::string_view* out) {
+bool py_str_view(PyObject* o, dftracer::utils::dstd::StringView* out) {
     Py_ssize_t n = 0;
     const char* s = PyUnicode_AsUTF8AndSize(o, &n);
     if (!s) return false;
-    *out = std::string_view(s, static_cast<std::size_t>(n));
+    *out = dftracer::utils::dstd::StringView(s, static_cast<std::size_t>(n));
     return true;
 }
 
@@ -80,10 +81,10 @@ bool py_values_series(PyObject* list, dataframe::Series* out) {
         if (PyBool_Check(v) || !PyLong_Check(v)) all_int = false;
     }
     if (all_str) {
-        std::vector<std::string> values;
+        dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> values;
         values.reserve(static_cast<std::size_t>(n));
         for (Py_ssize_t i = 0; i < n; ++i) {
-            std::string_view s;
+            dftracer::utils::dstd::StringView s;
             if (!py_str_view(PySequence_Fast_GET_ITEM(seq, i), &s)) {
                 Py_DECREF(seq);
                 return false;
@@ -95,7 +96,7 @@ bool py_values_series(PyObject* list, dataframe::Series* out) {
         return true;
     }
     if (all_int) {
-        std::vector<std::int64_t> values;
+        dftracer::utils::dstd::Vector<std::int64_t> values;
         values.reserve(static_cast<std::size_t>(n));
         for (Py_ssize_t i = 0; i < n; ++i) {
             values.push_back(static_cast<std::int64_t>(
@@ -124,7 +125,7 @@ bool build_expr(PyObject* ast, dataframe::Expr* out) {
         PyErr_SetString(PyExc_TypeError, "ast must be a list");
         return false;
     }
-    std::vector<dataframe::Expr> stack;
+    dftracer::utils::dstd::Vector<dataframe::Expr> stack;
     Py_ssize_t n = PyList_GET_SIZE(ast);
     for (Py_ssize_t k = 0; k < n; ++k) {
         PyObject* t = PyList_GET_ITEM(ast, k);
@@ -140,42 +141,42 @@ bool build_expr(PyObject* ast, dataframe::Expr* out) {
             return e;
         };
         switch (op) {
-            case AST_COL:
+            case AstCol:
                 stack.push_back(dataframe::expr_col(
                     static_cast<std::int32_t>(PyLong_AsLong(arg(1)))));
                 break;
-            case AST_LIT_I:
+            case AstLitI:
                 stack.push_back(dataframe::expr_lit(
                     static_cast<std::int64_t>(PyLong_AsLongLong(arg(1)))));
                 break;
-            case AST_LIT_F:
+            case AstLitF:
                 stack.push_back(dataframe::expr_lit(PyFloat_AsDouble(arg(1))));
                 break;
-            case AST_LIT_S: {
-                std::string_view v;
+            case AstLitS: {
+                dftracer::utils::dstd::StringView v;
                 if (!py_str_view(arg(1), &v)) return false;
                 stack.push_back(dataframe::expr_lit_str(v));
                 break;
             }
-            case AST_BIN: {
+            case AstBin: {
                 dataframe::Expr b = pop(), a = pop();
                 stack.push_back(dataframe::expr_binary(
                     static_cast<dataframe::BinaryOp>(PyLong_AsLong(arg(1))), a,
                     b));
                 break;
             }
-            case AST_PRIM: {
+            case AstPrim: {
                 dataframe::Expr a = pop();
                 stack.push_back(dataframe::expr_prim(
                     static_cast<dataframe::PrimOp>(PyLong_AsLong(arg(1))), a));
                 break;
             }
-            case AST_CMP: {
+            case AstCmp: {
                 dftu_scalar rhs{};
                 if (PyUnicode_Check(arg(2))) {
                     // expr_cmp copies the text into the node, so the borrow
                     // ends with this call.
-                    std::string_view s;
+                    dftracer::utils::dstd::StringView s;
                     if (!py_str_view(arg(2), &s)) return false;
                     rhs.kind = DFTU_SCALAR_TAG_STR;
                     rhs.len = static_cast<std::uint32_t>(s.size());
@@ -189,38 +190,38 @@ bool build_expr(PyObject* ast, dataframe::Expr* out) {
                     rhs));
                 break;
             }
-            case AST_CMP_EXPR: {
+            case AstCmpExpr: {
                 dataframe::Expr b = pop(), a = pop();
                 stack.push_back(dataframe::expr_cmp_expr(
                     static_cast<dataframe::CmpOp>(PyLong_AsLong(arg(1))), a,
                     b));
                 break;
             }
-            case AST_LOGICAL: {
+            case AstLogical: {
                 dataframe::Expr b = pop(), a = pop();
                 stack.push_back(dataframe::expr_logical(
                     static_cast<dataframe::LogicalOp>(PyLong_AsLong(arg(1))), a,
                     b));
                 break;
             }
-            case AST_NOT: {
+            case AstNot: {
                 dataframe::Expr a = pop();
                 stack.push_back(dataframe::expr_not(a));
                 break;
             }
-            case AST_CAST: {
+            case AstCast: {
                 dataframe::Expr a = pop();
                 stack.push_back(dataframe::expr_cast(
                     static_cast<dataframe::TypeId>(PyLong_AsLong(arg(1))), a));
                 break;
             }
-            case AST_UNARY: {
+            case AstUnary: {
                 dataframe::Expr a = pop();
                 stack.push_back(dataframe::expr_unary(
                     static_cast<dataframe::UnaryOp>(PyLong_AsLong(arg(1))), a));
                 break;
             }
-            case AST_CLIP: {
+            case AstClip: {
                 dftu_scalar lo{}, hi{};
                 if (!py_to_scalar(arg(1), &lo) || !py_to_scalar(arg(2), &hi))
                     return false;
@@ -228,15 +229,15 @@ bool build_expr(PyObject* ast, dataframe::Expr* out) {
                 stack.push_back(dataframe::expr_clip(a, lo, hi));
                 break;
             }
-            case AST_FILLNA: {
+            case AstFillna: {
                 dftu_scalar fill{};
                 if (!py_to_scalar(arg(1), &fill)) return false;
                 dataframe::Expr a = pop();
                 stack.push_back(dataframe::expr_fillna(a, fill));
                 break;
             }
-            case AST_STR_PRED: {
-                std::string_view pattern;
+            case AstStrPred: {
+                dftracer::utils::dstd::StringView pattern;
                 if (!py_str_view(arg(2), &pattern)) return false;
                 dataframe::Expr a = pop();
                 stack.push_back(dataframe::expr_str_pred(
@@ -244,7 +245,7 @@ bool build_expr(PyObject* ast, dataframe::Expr* out) {
                     pattern));
                 break;
             }
-            case AST_STR_PRED_COL: {
+            case AstStrPredCol: {
                 if (stack.size() < 2) {
                     PyErr_SetString(PyExc_ValueError,
                                     "string predicate needs its operands");
@@ -252,12 +253,19 @@ bool build_expr(PyObject* ast, dataframe::Expr* out) {
                 }
                 dataframe::Expr needle = pop();
                 dataframe::Expr a = pop();
-                stack.push_back(dataframe::expr_str_pred_col(
+                auto pred = dataframe::expr_str_pred_col(
                     static_cast<dataframe::StrPredOp>(PyLong_AsLong(arg(1))), a,
-                    needle));
+                    needle);
+                if (!pred) {
+                    const dftracer::utils::dstd::String message(
+                        pred.error().message());
+                    PyErr_SetString(PyExc_ValueError, message.c_str());
+                    return false;
+                }
+                stack.push_back(std::move(*pred));
                 break;
             }
-            case AST_STR_REPLACE_COL: {
+            case AstStrReplaceCol: {
                 if (stack.size() < 3) {
                     PyErr_SetString(PyExc_ValueError,
                                     "replace needs its operands");
@@ -269,15 +277,15 @@ bool build_expr(PyObject* ast, dataframe::Expr* out) {
                 stack.push_back(dataframe::expr_str_replace_col(a, from, to));
                 break;
             }
-            case AST_STR_MAP: {
+            case AstStrMap: {
                 dataframe::Expr a = pop();
                 stack.push_back(dataframe::expr_str_map(
                     static_cast<dataframe::StrMapOp>(PyLong_AsLong(arg(1))),
                     a));
                 break;
             }
-            case AST_STR_FN: {
-                std::string_view text, text2;
+            case AstStrFn: {
+                dftracer::utils::dstd::StringView text, text2;
                 if (PyTuple_GET_SIZE(t) != 7 || !py_str_view(arg(2), &text) ||
                     !py_str_view(arg(3), &text2))
                     return false;
@@ -300,21 +308,21 @@ bool build_expr(PyObject* ast, dataframe::Expr* out) {
                     nargs == 2 ? &b : nullptr, text, text2, i0, i1));
                 break;
             }
-            case AST_STR_LEN: {
+            case AstStrLen: {
                 dataframe::Expr a = pop();
                 stack.push_back(
-                    dataframe::expr_str_len(a, PyLong_AsLong(arg(1)) != 0));
+                    dataframe::expr_str_size(a, PyLong_AsLong(arg(1)) != 0));
                 break;
             }
-            case AST_STR_FIND: {
-                std::string_view needle;
+            case AstStrFind: {
+                dftracer::utils::dstd::StringView needle;
                 if (!py_str_view(arg(1), &needle)) return false;
                 dataframe::Expr a = pop();
                 stack.push_back(dataframe::expr_str_find(a, needle));
                 break;
             }
-            case AST_STR_REPLACE: {
-                std::string_view from, to;
+            case AstStrReplace: {
+                dftracer::utils::dstd::StringView from, to;
                 if (!py_str_view(arg(1), &from) || !py_str_view(arg(2), &to))
                     return false;
                 dataframe::Expr a = pop();
@@ -322,7 +330,7 @@ bool build_expr(PyObject* ast, dataframe::Expr* out) {
                     a, from, to, PyLong_AsLong(arg(3)) != 0));
                 break;
             }
-            case AST_STR_SLICE: {
+            case AstStrSlice: {
                 const long long start = PyLong_AsLongLong(arg(1));
                 const long long len = PyLong_AsLongLong(arg(2));
                 if (PyErr_Occurred()) return false;
@@ -330,14 +338,14 @@ bool build_expr(PyObject* ast, dataframe::Expr* out) {
                 stack.push_back(dataframe::expr_str_slice(a, start, len));
                 break;
             }
-            case AST_IS_IN: {
+            case AstIsIn: {
                 dataframe::Series values;
                 if (!py_values_series(arg(1), &values)) return false;
                 dataframe::Expr a = pop();
                 stack.push_back(dataframe::expr_is_in(a, std::move(values)));
                 break;
             }
-            case AST_SELECT: {
+            case AstSelect: {
                 if (stack.size() < 3) {
                     PyErr_SetString(PyExc_ValueError,
                                     "select needs three operands");
@@ -347,7 +355,7 @@ bool build_expr(PyObject* ast, dataframe::Expr* out) {
                 stack.push_back(dataframe::expr_select(cond, a, b));
                 break;
             }
-            case AST_IS_NULL: {
+            case AstIsNull: {
                 if (stack.empty()) {
                     PyErr_SetString(PyExc_ValueError,
                                     "is_null needs an operand");
@@ -379,8 +387,12 @@ bool build_expr(PyObject* ast, dataframe::Expr* out) {
 void runtime_backend(void*, std::int64_t n, std::int64_t grain,
                      void (*body)(void*, std::int64_t, std::int64_t),
                      void* bctx) {
-    dftracer::utils::default_runtime().parallel_for(
+    const auto ran = dftracer::utils::default_runtime().parallel_for(
         n, grain, [&](std::int64_t b, std::int64_t e) { body(bctx, b, e); });
+    if (!ran) {
+        dftracer::utils::dstd::fatal(
+            "parallel_for: the runtime stopped during a fork-join");
+    }
 }
 
 }  // namespace
@@ -392,7 +404,7 @@ bool build_expr_from_ast(PyObject* ast, dataframe::Expr* out) {
 }
 
 // vec_eval(ast, [Series, ...]) -> Series
-PyObject* vec_eval(PyObject* /*self*/, PyObject* args) {
+static PyObject* vec_eval(PyObject* /*self*/, PyObject* args) {
     PyObject* ast = nullptr;
     PyObject* cols_obj = nullptr;
     if (!PyArg_ParseTuple(args, "OO", &ast, &cols_obj)) return nullptr;
@@ -403,7 +415,7 @@ PyObject* vec_eval(PyObject* /*self*/, PyObject* args) {
     PyObject* seq = PySequence_Fast(cols_obj, "columns must be a sequence");
     if (!seq) return nullptr;
     Py_ssize_t nc = PySequence_Fast_GET_SIZE(seq);
-    std::vector<const dataframe::Series*> inputs;
+    dftracer::utils::dstd::Vector<const dataframe::Series*> inputs;
     inputs.reserve(static_cast<std::size_t>(nc));
     for (Py_ssize_t i = 0; i < nc; ++i) {
         const dataframe::Series* c =
@@ -417,18 +429,19 @@ PyObject* vec_eval(PyObject* /*self*/, PyObject* args) {
     }
     Py_DECREF(seq);
 
-    try {
-        return wrap_vec_column(dataframe::eval(expr, inputs));
-    } catch (const std::exception& ex) {
-        PyErr_SetString(PyExc_RuntimeError, ex.what());
+    auto out = dataframe::eval(expr, inputs);
+    if (!out) {
+        const dftracer::utils::dstd::String message(out.error().message());
+        PyErr_SetString(PyExc_RuntimeError, message.c_str());
         return nullptr;
     }
+    return wrap_vec_column(std::move(*out));
 }
 
 // vec_eval_many([ast, ...], [Series, ...]) -> [Series, ...]
 // Compiles all roots into one program so CSE spans them (a subexpression shared
 // across outputs is computed once), sharing the same input column list.
-PyObject* vec_eval_many(PyObject* /*self*/, PyObject* args) {
+static PyObject* vec_eval_many(PyObject* /*self*/, PyObject* args) {
     PyObject* asts_obj = nullptr;
     PyObject* cols_obj = nullptr;
     if (!PyArg_ParseTuple(args, "OO", &asts_obj, &cols_obj)) return nullptr;
@@ -436,7 +449,8 @@ PyObject* vec_eval_many(PyObject* /*self*/, PyObject* args) {
     PyObject* aseq = PySequence_Fast(asts_obj, "asts must be a sequence");
     if (!aseq) return nullptr;
     Py_ssize_t ne = PySequence_Fast_GET_SIZE(aseq);
-    std::vector<dataframe::Expr> roots(static_cast<std::size_t>(ne));
+    dftracer::utils::dstd::Vector<dataframe::Expr> roots(
+        static_cast<std::size_t>(ne));
     for (Py_ssize_t i = 0; i < ne; ++i) {
         if (!build_expr(PySequence_Fast_GET_ITEM(aseq, i),
                         &roots[static_cast<std::size_t>(i)])) {
@@ -449,7 +463,7 @@ PyObject* vec_eval_many(PyObject* /*self*/, PyObject* args) {
     PyObject* seq = PySequence_Fast(cols_obj, "columns must be a sequence");
     if (!seq) return nullptr;
     Py_ssize_t nc = PySequence_Fast_GET_SIZE(seq);
-    std::vector<const dataframe::Series*> inputs;
+    dftracer::utils::dstd::Vector<const dataframe::Series*> inputs;
     inputs.reserve(static_cast<std::size_t>(nc));
     for (Py_ssize_t i = 0; i < nc; ++i) {
         const dataframe::Series* c =
@@ -463,24 +477,24 @@ PyObject* vec_eval_many(PyObject* /*self*/, PyObject* args) {
     }
     Py_DECREF(seq);
 
-    try {
-        std::vector<dataframe::Series> outs =
-            dataframe::eval_many(roots, inputs);
-        PyObject* list = PyList_New(static_cast<Py_ssize_t>(outs.size()));
-        if (!list) return nullptr;
-        for (std::size_t i = 0; i < outs.size(); ++i) {
-            PyObject* s = wrap_vec_column(std::move(outs[i]));
-            if (!s) {
-                Py_DECREF(list);
-                return nullptr;
-            }
-            PyList_SET_ITEM(list, static_cast<Py_ssize_t>(i), s);
-        }
-        return list;
-    } catch (const std::exception& ex) {
-        PyErr_SetString(PyExc_RuntimeError, ex.what());
+    auto res = dataframe::eval_many(roots, inputs);
+    if (!res) {
+        const dftracer::utils::dstd::String message(res.error().message());
+        PyErr_SetString(PyExc_RuntimeError, message.c_str());
         return nullptr;
     }
+    dftracer::utils::dstd::Vector<dataframe::Series>& outs = *res;
+    PyObject* list = PyList_New(static_cast<Py_ssize_t>(outs.size()));
+    if (!list) return nullptr;
+    for (std::size_t i = 0; i < outs.size(); ++i) {
+        PyObject* s = wrap_vec_column(std::move(outs[i]));
+        if (!s) {
+            Py_DECREF(list);
+            return nullptr;
+        }
+        PyList_SET_ITEM(list, static_cast<Py_ssize_t>(i), s);
+    }
+    return list;
 }
 
 int init_columnar_eval(PyObject* m) {

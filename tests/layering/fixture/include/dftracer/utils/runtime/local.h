@@ -1,0 +1,4 @@
+// SPDX-License-Identifier: MIT
+#ifndef DFTRACER_UTILS_RUNTIME_LOCAL_H
+#define DFTRACER_UTILS_RUNTIME_LOCAL_H
+#endif

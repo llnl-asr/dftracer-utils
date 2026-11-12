@@ -1,22 +1,26 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_DATAFRAME_FIELD_H
 #define DFTRACER_UTILS_DATAFRAME_FIELD_H
 
-#include <dftracer/utils/core/common/error.h>
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dstd/fatal.h>
+#include <dftracer/utils/dstd/fmt.h>
+#include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/result.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/builder.h>
 #include <dftracer/utils/duql/query.h>
 
 #include <cstdint>
 #include <memory>
-#include <string>
-#include <string_view>
 #include <type_traits>
-#include <unordered_map>
 #include <utility>
-#include <vector>
 
 // The unified, name-based field entry point `F`: one expression type for both
 // index-pushable filter predicates and in-memory columnar value expressions,
@@ -33,7 +37,7 @@ namespace dftracer::utils::dataframe::field {
 namespace detail {
 
 /// A node in the unified field-expression tree; each subtree lowers to a
-/// dataframe::Expr (value ops) or a duql::Expr (predicate ops), and raises
+/// dataframe::Expr (value ops) or a duql::Expr (predicate ops), and is refused
 /// when lowered to the side it does not belong to.
 enum class FKind : std::uint8_t {
     Col,
@@ -55,26 +59,26 @@ enum class RhsKind : std::uint8_t { Int, Float, Str, Bool };
 
 struct FNode {
     FKind kind;
-    std::string name;            // Col / Match / In field name
+    dstd::String name;           // Col / Match / In field name
     std::int64_t ival = 0;       // LitI, or Int-rhs Cmp value
     double dval = 0.0;           // LitF, or Float-rhs Cmp value
     int op = 0;                  // Bin / Prim / Cmp / Match op code
     RhsKind rhs = RhsKind::Int;  // Cmp rhs type
     bool bval = false;           // Bool-rhs Cmp value
-    std::string str;             // Str-rhs Cmp / Match pattern
+    dstd::String str;            // Str-rhs Cmp / Match pattern
     bool negated = false;        // In: not-in
     bool in_is_string = false;   // In: string vs int element type
-    std::vector<std::int64_t> in_ints;
-    std::vector<std::string> in_strs;
-    std::shared_ptr<const FNode> a;
-    std::shared_ptr<const FNode> b;
+    dstd::Vector<std::int64_t> in_ints;
+    dstd::Vector<dstd::String> in_strs;
+    dstd::SharedPtr<const FNode> a;
+    dstd::SharedPtr<const FNode> b;
 };
 
-using FNodePtr = std::shared_ptr<const FNode>;
+using FNodePtr = dstd::SharedPtr<const FNode>;
 
 template <typename... Fields>
 inline FNodePtr make_node(FKind kind, Fields&&... init) {
-    auto n = std::make_shared<FNode>();
+    auto n = dstd::make_shared<FNode>();
     n->kind = kind;
     (init(*n), ...);
     return n;
@@ -104,22 +108,22 @@ enum class AggFn : std::uint8_t {
 /// ArgMax, and the wildcard flag.
 class FieldAggExpr {
    public:
-    FieldAggExpr(AggFn fn, std::string field, bool wildcard = false,
-                 std::string by = "")
+    FieldAggExpr(AggFn fn, dstd::String field, bool wildcard = false,
+                 dstd::String by = "")
         : fn_(fn),
           field_(std::move(field)),
           by_(std::move(by)),
           wildcard_(wildcard) {}
 
     AggFn fn() const noexcept { return fn_; }
-    const std::string& field() const noexcept { return field_; }
-    const std::string& by() const noexcept { return by_; }
+    const dstd::String& field() const noexcept { return field_; }
+    const dstd::String& by() const noexcept { return by_; }
     bool wildcard() const noexcept { return wildcard_; }
 
    private:
     AggFn fn_;
-    std::string field_;
-    std::string by_;
+    dstd::String field_;
+    dstd::String by_;
     bool wildcard_;
 };
 
@@ -142,70 +146,70 @@ class FieldExpr {
     // (apply); a string/bool rhs is filter-only.
     template <typename T>
     FieldExpr operator==(T&& v) const {
-        return cmp(duql::CompareOp::EQ, std::forward<T>(v));
+        return cmp(duql::CompareOp::Eq, std::forward<T>(v));
     }
     template <typename T>
     FieldExpr operator!=(T&& v) const {
-        return cmp(duql::CompareOp::NE, std::forward<T>(v));
+        return cmp(duql::CompareOp::Ne, std::forward<T>(v));
     }
     template <typename T>
     FieldExpr operator>(T&& v) const {
-        return cmp(duql::CompareOp::GT, std::forward<T>(v));
+        return cmp(duql::CompareOp::Gt, std::forward<T>(v));
     }
     template <typename T>
     FieldExpr operator<(T&& v) const {
-        return cmp(duql::CompareOp::LT, std::forward<T>(v));
+        return cmp(duql::CompareOp::Lt, std::forward<T>(v));
     }
     template <typename T>
     FieldExpr operator>=(T&& v) const {
-        return cmp(duql::CompareOp::GE, std::forward<T>(v));
+        return cmp(duql::CompareOp::Ge, std::forward<T>(v));
     }
     template <typename T>
     FieldExpr operator<=(T&& v) const {
-        return cmp(duql::CompareOp::LE, std::forward<T>(v));
+        return cmp(duql::CompareOp::Le, std::forward<T>(v));
     }
 
     /// Equality/inequality predicate in method form (parity with the Python
     /// `.eq()` / `.ne()`).
     template <typename T>
     FieldExpr eq(T&& v) const {
-        return cmp(duql::CompareOp::EQ, std::forward<T>(v));
+        return cmp(duql::CompareOp::Eq, std::forward<T>(v));
     }
     template <typename T>
     FieldExpr ne(T&& v) const {
-        return cmp(duql::CompareOp::NE, std::forward<T>(v));
+        return cmp(duql::CompareOp::Ne, std::forward<T>(v));
     }
 
     /// Membership predicates (filter-only). The field is (not) one of `values`.
-    FieldExpr in(const std::vector<std::int64_t>& values) const {
+    FieldExpr in(const dstd::Vector<std::int64_t>& values) const {
         return in_impl(values, /*negated=*/false);
     }
-    FieldExpr in(const std::vector<std::string>& values) const {
+    FieldExpr in(const dstd::Vector<dstd::String>& values) const {
         return in_impl(values, /*negated=*/false);
     }
-    FieldExpr not_in(const std::vector<std::int64_t>& values) const {
+    FieldExpr not_in(const dstd::Vector<std::int64_t>& values) const {
         return in_impl(values, /*negated=*/true);
     }
-    FieldExpr not_in(const std::vector<std::string>& values) const {
+    FieldExpr not_in(const dstd::Vector<dstd::String>& values) const {
         return in_impl(values, /*negated=*/true);
     }
 
     /// String-match predicates (filter-only): SQL LIKE / ILIKE, duql regex /
     /// case-insensitive regex, and case-insensitive substring.
-    FieldExpr like(std::string_view pattern) const {
-        return match(duql::MatchOp::LIKE, pattern);
+    FieldExpr like(dstd::StringView pattern) const {
+        return match(duql::MatchOp::Like, pattern);
     }
-    FieldExpr ilike(std::string_view pattern) const {
-        return match(duql::MatchOp::ILIKE, pattern);
+    FieldExpr ilike(dstd::StringView pattern) const {
+        return match(duql::MatchOp::Ilike, pattern);
     }
-    FieldExpr regex(std::string_view pattern) const {
-        return match(duql::MatchOp::REGEX, pattern);
+    FieldExpr regex(dstd::StringView pattern) const {
+        return match(duql::MatchOp::Regex, pattern);
     }
-    FieldExpr iregex(std::string_view pattern) const {
-        return match(duql::MatchOp::IREGEX, pattern);
+    FieldExpr iregex(dstd::StringView pattern) const {
+        return match(duql::MatchOp::Iregex, pattern);
     }
-    FieldExpr contains(std::string_view substring) const {
-        return match(duql::MatchOp::ICONTAINS, substring);
+    FieldExpr contains(dstd::StringView substring) const {
+        return match(duql::MatchOp::Icontains, substring);
     }
 
     /// Unary numeric primitives -> a value expression (evaluate with apply).
@@ -233,22 +237,24 @@ class FieldExpr {
     FieldAggExpr count() const { return agg_of(AggFn::Count); }
     /// The value of this field at the row where `by` is maximal (ArgMax). No
     /// argmin: the engine's AggOp has only ArgMax.
-    FieldAggExpr argmax_by(std::string_view by) const {
+    FieldAggExpr argmax_by(dstd::StringView by) const {
         return FieldAggExpr(AggFn::ArgMax, field_name(), false,
-                            std::string(by));
+                            dstd::String(by));
     }
 
     /// Serialize this predicate to an index-pushable duql::Query.
     ///
-    /// Throws DFTUtilsException(INVALID_ARGUMENT) if the expression mixes value
-    /// ops (arithmetic or a numeric primitive) into the predicate - i.e. it is
-    /// not pushable; evaluate those in memory with apply() instead.
-    duql::Query to_duql() const {
-        duql::Expr e = to_query_expr(require());
-        auto q = e.build();
+    /// Returns an InvalidArgument error if the expression mixes value ops
+    /// (arithmetic or a numeric primitive) into the predicate - i.e. it is not
+    /// pushable; evaluate those in memory with apply() instead. Ends the
+    /// process on an empty expression.
+    dstd::Result<duql::Query> to_duql() const {
+        dstd::Result<duql::Expr> e = to_query_expr(require());
+        if (!e.has_value()) return e.error();
+        auto q = (*e).build();
         if (!q.has_value()) {
-            throw DFTUtilsException::cat(
-                ErrorCode::INVALID_ARGUMENT,
+            return common::make_error(
+                common::ErrorCode::InvalidArgument,
                 "failed to build query from field expression");
         }
         return std::move(q.value());
@@ -261,46 +267,45 @@ class FieldExpr {
     /// resolved to `df`'s column indices and bridged to dataframe::Expr, then
     /// compiled and evaluated in one fused pass (dataframe::eval).
     ///
-    /// Throws DFTUtilsException(INVALID_ARGUMENT) for a filter-only predicate
-    /// (string match, membership, or a string/bool comparison), which has no
-    /// in-memory form (push those down with View::filter / to_duql), or when a
-    /// referenced column is absent from `df`.
-    Series apply(const DataFrame& df) const {
+    /// Returns an InvalidArgument error for a filter-only predicate (string
+    /// match, membership, or a string/bool comparison), which has no in-memory
+    /// form (push those down with View::filter / to_duql), or when a
+    /// referenced column is absent from `df`. Ends the process on an empty
+    /// expression.
+    dstd::Result<Series> apply(const DataFrame& df) const {
         const detail::FNode& root = require();
-        std::vector<std::string> names;
-        collect_value_columns(root, names);
+        dstd::Vector<dstd::String> names;
+        dstd::Result<void> collected = collect_value_columns(root, names);
+        if (!collected.has_value()) return collected.error();
 
-        std::unordered_map<std::string, std::int32_t> index;
-        std::vector<Series> held;
+        dstd::HashMap<dstd::String, std::int32_t> index;
+        dstd::Vector<Series> held;
         held.reserve(names.size());
         for (std::size_t i = 0; i < names.size(); ++i) {
             std::int64_t idx = df.column_index(names[i]);
             if (idx < 0) {
-                throw DFTUtilsException::cat(
-                    ErrorCode::INVALID_ARGUMENT,
-                    "field expression references column not present in frame: ",
-                    names[i]);
+                return common::make_error<
+                    "field expression references column not present in "
+                    "frame: {}">(common::ErrorCode::InvalidArgument, names[i]);
             }
             index.emplace(names[i], static_cast<std::int32_t>(i));
             held.push_back(df.column(names[i]));
         }
 
-        std::vector<const Series*> inputs;
+        dstd::Vector<const Series*> inputs;
         inputs.reserve(held.size());
         for (const Series& s : held) inputs.push_back(&s);
 
-        Expr value = to_value_expr(root, index);
-        return eval(value, inputs);
+        dstd::Result<Expr> value = to_value_expr(root, index);
+        if (!value.has_value()) return value.error();
+        return eval(*value, inputs);
     }
 
    private:
     detail::FNodePtr node_;
 
     const detail::FNode& require() const {
-        if (!node_) {
-            throw DFTUtilsException::cat(ErrorCode::INVALID_ARGUMENT,
-                                         "empty field expression");
-        }
+        if (!node_) dstd::fatal("empty field expression");
         return *node_;
     }
 
@@ -321,7 +326,7 @@ class FieldExpr {
                 n.ival = static_cast<std::int64_t>(v);
             } else {
                 n.rhs = detail::RhsKind::Str;
-                n.str = std::string(std::forward<T>(v));
+                n.str = dstd::String(std::forward<T>(v));
             }
         };
         return FieldExpr(detail::make_node(detail::FKind::Cmp, init));
@@ -335,22 +340,22 @@ class FieldExpr {
             }));
     }
 
-    FieldExpr match(duql::MatchOp op, std::string_view pattern) const {
+    FieldExpr match(duql::MatchOp op, dstd::StringView pattern) const {
         return FieldExpr(
             detail::make_node(detail::FKind::Match, [&](detail::FNode& n) {
                 n.op = static_cast<int>(op);
                 n.name = field_name();
-                n.str = std::string(pattern);
+                n.str = dstd::String(pattern);
             }));
     }
 
     template <typename V>
-    FieldExpr in_impl(const std::vector<V>& values, bool negated) const {
+    FieldExpr in_impl(const dstd::Vector<V>& values, bool negated) const {
         return FieldExpr(
             detail::make_node(detail::FKind::In, [&](detail::FNode& n) {
                 n.name = field_name();
                 n.negated = negated;
-                if constexpr (std::is_same_v<V, std::string>) {
+                if constexpr (std::is_same_v<V, dstd::String>) {
                     n.in_is_string = true;
                     n.in_strs = values;
                 } else {
@@ -364,37 +369,45 @@ class FieldExpr {
 
     /// Bare-column name for the predicate-only ops (match/membership), which
     /// require a field leaf on the left.
-    std::string field_name() const {
+    dstd::String field_name() const {
         const detail::FNode& n = require();
-        if (n.kind != detail::FKind::Col) {
-            throw DFTUtilsException::cat(
-                ErrorCode::INVALID_ARGUMENT,
+        if (n.kind != detail::FKind::Col)
+            dstd::fatal(
                 "string-match / membership needs a bare field on the left");
-        }
         return n.name;
     }
 
     FieldAggExpr agg_of(AggFn fn) const {
         const detail::FNode& n = require();
-        if (n.kind != detail::FKind::Col) {
-            throw DFTUtilsException::cat(
-                ErrorCode::INVALID_ARGUMENT,
-                "aggregate needs a bare field, e.g. F(\"dur\").sum()");
-        }
+        if (n.kind != detail::FKind::Col)
+            dstd::fatal("aggregate needs a bare field, e.g. F(\"dur\").sum()");
         return FieldAggExpr(fn, n.name);
     }
 
-    static duql::Expr to_query_expr(const detail::FNode& n) {
+    static dstd::Result<duql::Expr> to_query_expr(const detail::FNode& n) {
         using detail::FKind;
         switch (n.kind) {
             case FKind::Cmp:
                 return cmp_to_duql(n);
-            case FKind::And:
-                return duql::all_of(to_query_expr(*n.a), to_query_expr(*n.b));
-            case FKind::Or:
-                return duql::any_of(to_query_expr(*n.a), to_query_expr(*n.b));
-            case FKind::Not:
-                return duql::negate(to_query_expr(*n.a));
+            case FKind::And: {
+                dstd::Result<duql::Expr> a = to_query_expr(*n.a);
+                if (!a.has_value()) return a.error();
+                dstd::Result<duql::Expr> b = to_query_expr(*n.b);
+                if (!b.has_value()) return b.error();
+                return duql::all_of(std::move(*a), std::move(*b));
+            }
+            case FKind::Or: {
+                dstd::Result<duql::Expr> a = to_query_expr(*n.a);
+                if (!a.has_value()) return a.error();
+                dstd::Result<duql::Expr> b = to_query_expr(*n.b);
+                if (!b.has_value()) return b.error();
+                return duql::any_of(std::move(*a), std::move(*b));
+            }
+            case FKind::Not: {
+                dstd::Result<duql::Expr> a = to_query_expr(*n.a);
+                if (!a.has_value()) return a.error();
+                return duql::negate(std::move(*a));
+            }
             case FKind::Match:
                 return duql::field_match(
                     n.name, static_cast<duql::MatchOp>(n.op), n.str);
@@ -406,17 +419,17 @@ class FieldExpr {
                 return n.negated ? duql::field_not_in(n.name, n.in_ints)
                                  : duql::field_in(n.name, n.in_ints);
             default:
-                throw DFTUtilsException::cat(
-                    ErrorCode::INVALID_ARGUMENT,
+                return common::make_error(
+                    common::ErrorCode::InvalidArgument,
                     "not an index-pushable predicate; compute it with apply() "
                     "or filter the materialized frame");
         }
     }
 
-    static duql::Expr cmp_to_duql(const detail::FNode& n) {
+    static dstd::Result<duql::Expr> cmp_to_duql(const detail::FNode& n) {
         if (!n.a || n.a->kind != detail::FKind::Col) {
-            throw DFTUtilsException::cat(
-                ErrorCode::INVALID_ARGUMENT,
+            return common::make_error(
+                common::ErrorCode::InvalidArgument,
                 "not an index-pushable predicate; compute it with apply() or "
                 "filter the materialized frame");
         }
@@ -435,109 +448,133 @@ class FieldExpr {
                 return duql::field_cmp(n.a->name, op,
                                        duql::detail::literal(n.str));
         }
-        throw DFTUtilsException::cat(ErrorCode::INVALID_ARGUMENT,
-                                     "unhandled comparison rhs");
+        dstd::fatal("unhandled comparison rhs");
     }
 
-    static void collect_value_columns(const detail::FNode& n,
-                                      std::vector<std::string>& out) {
+    static dstd::Result<void> collect_value_columns(
+        const detail::FNode& n, dstd::Vector<dstd::String>& out) {
         using detail::FKind;
         switch (n.kind) {
             case FKind::Col:
-                for (const std::string& e : out)
-                    if (e == n.name) return;
+                for (const dstd::String& e : out)
+                    if (e == n.name) return dstd::Result<void>();
                 out.push_back(n.name);
-                return;
+                return dstd::Result<void>();
             case FKind::LitI:
             case FKind::LitF:
-                return;
+                return dstd::Result<void>();
             case FKind::Bin:
             case FKind::And:
-            case FKind::Or:
-                collect_value_columns(*n.a, out);
-                collect_value_columns(*n.b, out);
-                return;
+            case FKind::Or: {
+                dstd::Result<void> a = collect_value_columns(*n.a, out);
+                if (!a.has_value()) return a;
+                return collect_value_columns(*n.b, out);
+            }
             case FKind::Prim:
             case FKind::Not:
-                collect_value_columns(*n.a, out);
-                return;
+                return collect_value_columns(*n.a, out);
             case FKind::Cmp:
                 if (n.rhs != detail::RhsKind::Int &&
                     n.rhs != detail::RhsKind::Float) {
-                    throw DFTUtilsException::cat(
-                        ErrorCode::INVALID_ARGUMENT,
+                    return common::make_error(
+                        common::ErrorCode::InvalidArgument,
                         "string/bool comparison is filter-only; push it down "
                         "with View::filter / to_duql()");
                 }
-                collect_value_columns(*n.a, out);
-                return;
+                return collect_value_columns(*n.a, out);
             case FKind::Match:
             case FKind::In:
-                throw DFTUtilsException::cat(
-                    ErrorCode::INVALID_ARGUMENT,
+                return common::make_error(
+                    common::ErrorCode::InvalidArgument,
                     "string-match / membership is filter-only; push it down "
                     "with View::filter / to_duql()");
         }
+        dstd::fatal("unhandled field expression kind");
     }
 
-    static Expr to_value_expr(
+    static dstd::Result<Expr> to_value_expr(
         const detail::FNode& n,
-        const std::unordered_map<std::string, std::int32_t>& index) {
+        const dstd::HashMap<dstd::String, std::int32_t>& index) {
         using detail::FKind;
         // Use the engine's expr_* builders explicitly: `lit` is shadowed by the
         // field-layer literal factory below, so unqualified `lit` here would be
         // the wrong overload.
         switch (n.kind) {
-            case FKind::Col:
-                return expr_col(index.at(n.name));
+            case FKind::Col: {
+                const auto at = index.find(n.name);
+                if (at == index.end())
+                    dstd::fatal("field expression column was not collected");
+                return expr_col(at->second);
+            }
             case FKind::LitI:
                 return expr_lit(n.ival);
             case FKind::LitF:
                 return expr_lit(n.dval);
-            case FKind::Bin:
-                return expr_binary(static_cast<BinaryOp>(n.op),
-                                   to_value_expr(*n.a, index),
-                                   to_value_expr(*n.b, index));
-            case FKind::Prim:
-                return expr_prim(static_cast<PrimOp>(n.op),
-                                 to_value_expr(*n.a, index));
-            case FKind::Cmp:
+            case FKind::Bin: {
+                dstd::Result<Expr> a = to_value_expr(*n.a, index);
+                if (!a.has_value()) return a.error();
+                dstd::Result<Expr> b = to_value_expr(*n.b, index);
+                if (!b.has_value()) return b.error();
+                return expr_binary(static_cast<BinaryOp>(n.op), std::move(*a),
+                                   std::move(*b));
+            }
+            case FKind::Prim: {
+                dstd::Result<Expr> a = to_value_expr(*n.a, index);
+                if (!a.has_value()) return a.error();
+                return expr_prim(static_cast<PrimOp>(n.op), std::move(*a));
+            }
+            case FKind::Cmp: {
+                dstd::Result<Expr> a = to_value_expr(*n.a, index);
+                if (!a.has_value()) return a.error();
                 return expr_cmp(
-                    cmp_code(static_cast<duql::CompareOp>(n.op)),
-                    to_value_expr(*n.a, index),
+                    cmp_code(static_cast<duql::CompareOp>(n.op)), std::move(*a),
                     n.rhs == detail::RhsKind::Float
                         ? ::dftracer::utils::dataframe::detail::expr_scalar_d(
                               n.dval)
                         : ::dftracer::utils::dataframe::detail::expr_scalar_i(
                               n.ival));
-            case FKind::And:
-                return expr_logical(LogicalOp::And, to_value_expr(*n.a, index),
-                                    to_value_expr(*n.b, index));
-            case FKind::Or:
-                return expr_logical(LogicalOp::Or, to_value_expr(*n.a, index),
-                                    to_value_expr(*n.b, index));
-            case FKind::Not:
-                return expr_not(to_value_expr(*n.a, index));
+            }
+            case FKind::And: {
+                dstd::Result<Expr> a = to_value_expr(*n.a, index);
+                if (!a.has_value()) return a.error();
+                dstd::Result<Expr> b = to_value_expr(*n.b, index);
+                if (!b.has_value()) return b.error();
+                return expr_logical(LogicalOp::And, std::move(*a),
+                                    std::move(*b));
+            }
+            case FKind::Or: {
+                dstd::Result<Expr> a = to_value_expr(*n.a, index);
+                if (!a.has_value()) return a.error();
+                dstd::Result<Expr> b = to_value_expr(*n.b, index);
+                if (!b.has_value()) return b.error();
+                return expr_logical(LogicalOp::Or, std::move(*a),
+                                    std::move(*b));
+            }
+            case FKind::Not: {
+                dstd::Result<Expr> a = to_value_expr(*n.a, index);
+                if (!a.has_value()) return a.error();
+                return expr_not(std::move(*a));
+            }
             default:
-                throw DFTUtilsException::cat(
-                    ErrorCode::INVALID_ARGUMENT,
+                return common::make_error(
+                    common::ErrorCode::InvalidArgument,
                     "filter-only predicate has no in-memory form");
         }
     }
 
     static CmpOp cmp_code(duql::CompareOp op) {
         switch (op) {
-            case duql::CompareOp::EQ:
+            case duql::CompareOp::Eq:
                 return CmpOp::Eq;
-            case duql::CompareOp::NE:
+            case duql::CompareOp::Ne:
                 return CmpOp::Ne;
-            case duql::CompareOp::GT:
+            case duql::CompareOp::Gt:
                 return CmpOp::Gt;
-            case duql::CompareOp::LT:
+            case duql::CompareOp::Lt:
                 return CmpOp::Lt;
-            case duql::CompareOp::GE:
+            case duql::CompareOp::Ge:
                 return CmpOp::Ge;
-            case duql::CompareOp::LE:
+            case duql::CompareOp::Le:
                 return CmpOp::Le;
         }
         return CmpOp::Eq;
@@ -638,10 +675,10 @@ inline FieldExpr operator!(const FieldExpr& a) {
 }
 
 /// A field / column reference by name (the same leaf `F(name)` builds).
-inline FieldExpr field(std::string_view name) {
+inline FieldExpr field(dstd::StringView name) {
     return FieldExpr(detail::make_node(
         detail::FKind::Col,
-        [&](detail::FNode& n) { n.name = std::string(name); }));
+        [&](detail::FNode& n) { n.name = dstd::String(name); }));
 }
 
 /// The numeric-args wildcard, reached as `F.any`. `mean()` aggregates every
@@ -664,9 +701,9 @@ struct WildcardField {
 /// Call-form field entry point: `F("dur") > 1000` builds a field leaf, exactly
 /// like `field("dur") > 1000`. The single, canonical F for the dataframe layer
 /// - a superset of the predicate-only duql::F. `F.any` is the numeric-args
-/// wildcard (see WildcardField).
+/// wildcard (see @ref WildcardField).
 struct FieldFactory {
-    FieldExpr operator()(std::string_view name) const { return field(name); }
+    FieldExpr operator()(dstd::StringView name) const { return field(name); }
     WildcardField any{};
 };
 inline constexpr FieldFactory F{};

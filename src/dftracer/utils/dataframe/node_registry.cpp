@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // dftu_node_register/unregister: a process-lifetime, name-keyed registry of
 // plan-node vtables, mirroring provider_registry.cpp. LazyFrame::op
 // (lazyframe.cpp) is the only reader: it resolves and captures a node's
@@ -6,31 +7,50 @@
 
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/internal/node_registry.h>
+#include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/shutdown.h>
+#include <dftracer/utils/dstd/singleton.h>
+#include <dftracer/utils/dstd/string.h>
 
 #include <mutex>
-#include <string>
-#include <unordered_map>
 
 namespace dftracer::utils::dataframe {
 namespace {
 
-std::mutex& registry_mutex() {
-    static std::mutex m;
-    return m;
+struct Nodes {
+    std::mutex mutex;
+    dstd::Optional<dstd::HashMap<dstd::String, NodeEntry>> by_name;
+};
+
+Nodes& registry() {
+    Nodes& held = dstd::Singleton<Nodes>::get();
+    [[maybe_unused]] static const bool hooked = [] {
+        dstd::add_shutdown_hook(dstd::ShutdownStage::FreeCaches, []() noexcept {
+            Nodes& dropped = dstd::Singleton<Nodes>::get();
+            const std::lock_guard<std::mutex> lock(dropped.mutex);
+            dropped.by_name.reset();
+        });
+        return true;
+    }();
+    return held;
 }
 
-std::unordered_map<std::string, NodeEntry>& nodes() {
-    static std::unordered_map<std::string, NodeEntry> m;
-    return m;
+std::mutex& registry_mutex() { return registry().mutex; }
+
+dstd::HashMap<dstd::String, NodeEntry>& nodes() {
+    Nodes& n = registry();
+    if (!n.by_name) n.by_name.emplace();
+    return *n.by_name;
 }
 
 }  // namespace
 
-std::optional<NodeEntry> find_node(const char* name) {
-    if (!name) return std::nullopt;
+dstd::Optional<NodeEntry> find_node(const char* name) {
+    if (!name) return dstd::nullopt;
     std::lock_guard<std::mutex> lock(registry_mutex());
     auto it = nodes().find(name);
-    if (it == nodes().end()) return std::nullopt;
+    if (it == nodes().end()) return dstd::nullopt;
     return it->second;
 }
 

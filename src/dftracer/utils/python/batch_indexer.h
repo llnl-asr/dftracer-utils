@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_PYTHON_BATCH_INDEXER_H
 #define DFTRACER_UTILS_PYTHON_BATCH_INDEXER_H
 
@@ -18,7 +19,6 @@ struct IndexerObject {
     int require_checkpoint;
     int require_bloom;
     int build_bloom;
-    int require_aggregation;
 
     // Bloom tier: args fields indexed for chunk pruning (list, or None for
     // the default set), false-positive rate and expected entries per chunk.
@@ -33,10 +33,9 @@ struct IndexerObject {
     std::uint64_t memory_budget;
     PyObject* schema;  // str or nullptr (detect)
 
-    // Aggregation config (stored for rebuild)
+    // The aggregation tier's settings. Every build makes the tier.
     double time_interval_ms;
-    PyObject* group_keys;            // Python list or None
-    PyObject* custom_metric_fields;  // Python list or None
+    PyObject* group_keys;  // Python list or None
     int compute_percentiles;
     int group_by_file;
 

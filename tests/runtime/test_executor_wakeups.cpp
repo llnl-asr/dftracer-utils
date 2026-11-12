@@ -1,0 +1,193 @@
+// SPDX-License-Identifier: MIT
+#define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/common/platform_compat.h>
+#include <dftracer/utils/coro/async_semaphore.h>
+#include <dftracer/utils/coro/detail/coro.h>
+#include <dftracer/utils/coro/named.h>
+#include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/coro/yield.h>
+#include <dftracer/utils/dstd/file.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/runtime/io/ops.h>
+#include <dftracer/utils/runtime/runtime.h>
+#include <doctest/doctest.h>
+#include <fcntl.h>
+#include <sys/resource.h>
+#include <sys/stat.h>
+#include <task_result.h>
+#include <testing_utilities.h>
+#include <unistd.h>
+
+#include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <cstdint>
+#include <thread>
+
+using namespace dftracer::utils;
+using namespace std::chrono_literals;
+
+namespace {
+
+// Voluntary only on Linux: a thread that polls gives up the CPU itself, while
+// preemptions grow with the load of the machine. macOS counts every switch,
+// sleeps too, as involuntary.
+std::int64_t context_switches() {
+    rusage usage{};
+    getrusage(RUSAGE_SELF, &usage);
+#ifdef __APPLE__
+    return static_cast<std::int64_t>(usage.ru_nivcsw);
+#else
+    return static_cast<std::int64_t>(usage.ru_nvcsw);
+#endif
+}
+
+std::chrono::microseconds cpu_time() {
+    rusage usage{};
+    getrusage(RUSAGE_SELF, &usage);
+    auto us = [](const timeval& tv) {
+        return static_cast<std::int64_t>(tv.tv_sec) * 1000000 + tv.tv_usec;
+    };
+    return std::chrono::microseconds(us(usage.ru_utime) + us(usage.ru_stime));
+}
+
+}  // namespace
+
+TEST_SUITE("ExecutorWakeups") {
+    TEST_CASE("idle workers between bursts do not poll on the short timer") {
+        // With every worker on the backoff ladder a gap costs about 8 switches
+        // per worker, and with one poller far fewer. The bound sits
+        // between the two.
+        constexpr std::size_t THREADS = 32;
+        constexpr int BURSTS = 20;
+        [[maybe_unused]] constexpr std::int64_t MAX_SWITCHES_PER_GAP = 190;
+
+        Runtime rt(THREADS);
+        auto tiny = []() -> coro::CoroTask<void> { co_return; };
+        dstd::Vector<TaskHandle> handles;
+        handles.reserve(THREADS);
+
+        const auto before = context_switches();
+        for (int burst = 0; burst < BURSTS; ++burst) {
+            handles.clear();
+            for (std::size_t i = 0; i < THREADS; ++i) {
+                handles.push_back(rt.submit(tiny(), "Tiny"));
+            }
+            for (auto& handle : handles) dftu_utils_test::ok(handle.wait());
+            std::this_thread::sleep_for(60ms);
+        }
+        const auto switches = context_switches() - before;
+        rt.shutdown();
+
+        MESSAGE("context switches per gap: " << switches / BURSTS);
+#if !defined(DFTRACER_UTILS_TSAN_ENABLED) && \
+    !defined(DFTRACER_UTILS_VALGRIND_MODE)
+        // ThreadSanitizer and Valgrind add switches of their own, so the count
+        // says nothing there. The bursts still run for their checks.
+        CHECK(switches / BURSTS < MAX_SWITCHES_PER_GAP);
+#endif
+    }
+    TEST_CASE("a worker blocked in get() parks while its task waits") {
+        // The task waits on a semaphore that this thread releases after WAIT.
+        // A waiter that spins burns about the whole wait of CPU, and one that
+        // re-checks every millisecond switches about once per millisecond. The
+        // median of the rounds keeps one slow wake-up from deciding the check.
+        constexpr std::size_t THREADS = 4;
+        constexpr int ROUNDS = 5;
+        constexpr auto WAIT = 40ms;
+        constexpr auto MAX_CPU = 40ms;
+        [[maybe_unused]] constexpr std::int64_t MAX_SWITCHES = 150;
+        constexpr auto MAX_MEDIAN_LATENCY = 1ms;
+
+        Runtime rt(THREADS);
+        coro::AsyncSemaphore gate(1);
+        REQUIRE(gate.try_acquire(1));
+        std::atomic<std::int64_t> finished_ns{0};
+
+        auto inner = [&]() -> coro::CoroTask<void> {
+            co_await gate.acquire(1);
+            gate.release(1);
+            REQUIRE(gate.try_acquire(1));
+        };
+        auto outer = [&]() -> coro::CoroTask<void> {
+            dftu_utils_test::ok(inner().get());
+            finished_ns.store(
+                std::chrono::steady_clock::now().time_since_epoch().count(),
+                std::memory_order_release);
+            co_return;
+        };
+
+        // Let the pool settle on its idle backoff first.
+        std::this_thread::sleep_for(100ms);
+        const auto before = context_switches();
+        const auto cpu_before = cpu_time();
+        dstd::Vector<std::chrono::nanoseconds> latencies;
+        for (int round = 0; round < ROUNDS; ++round) {
+            TaskHandle handle = rt.submit(outer(), "Outer");
+            std::this_thread::sleep_for(WAIT);
+            const auto released = std::chrono::steady_clock::now();
+            gate.release(1);
+            dftu_utils_test::ok(handle.wait());
+            latencies.push_back(std::chrono::nanoseconds(finished_ns.load()) -
+                                released.time_since_epoch());
+        }
+        const auto switches = context_switches() - before;
+        const auto cpu = cpu_time() - cpu_before;
+        rt.shutdown();
+
+        std::sort(latencies.begin(), latencies.end());
+        const auto median = latencies[latencies.size() / 2];
+        MESSAGE("context switches over the waits: " << switches);
+        MESSAGE("cpu over the waits: " << cpu.count() << " us");
+        MESSAGE("median get() return after the release: "
+                << std::chrono::duration_cast<std::chrono::microseconds>(median)
+                       .count()
+                << " us");
+        CHECK(cpu < MAX_CPU);
+#ifndef DFTRACER_UTILS_VALGRIND_MODE
+        // Valgrind runs one thread at a time and switches between them on its
+        // own, so the count says nothing there.
+        CHECK(switches < MAX_SWITCHES);
+#endif
+        CHECK(median < MAX_MEDIAN_LATENCY);
+    }
+    TEST_CASE("an I/O op starts without waiting for its worker to idle") {
+        // The write is submitted in one slice and a later slice on the same
+        // worker blocks until the write lands. A batch flushed only when the
+        // worker idles never starts, so the wait runs out.
+        constexpr auto DEADLINE = 3s;
+        const auto path =
+            dftu_utils_test::make_unique_test_path("io_flush_per_slice");
+        auto file = dstd::File::open(dstd::PathView(path),
+                                     {.access = dstd::Access::Write,
+                                      .creation = dstd::Creation::AlwaysNew});
+        REQUIRE(file);
+        const int fd = file->native_handle();
+        static const char BYTE = 'x';
+
+        Runtime rt(1);
+        bool landed = false;
+        dftu_utils_test::ok(rt.block_on(coro::named(
+            "io_flush",
+            coro::with_scope([&](coro::Scope& s) -> coro::CoroTask<void> {
+                s.spawn([fd]() -> coro::CoroTask<void> {
+                    co_await runtime::io::pwrite(fd, &BYTE, 1, 0);
+                });
+                co_await coro::yield();
+                const auto until = std::chrono::steady_clock::now() + DEADLINE;
+                struct stat st{};
+                while (std::chrono::steady_clock::now() < until) {
+                    if (::stat(path.c_str(), &st) == 0 && st.st_size == 1) {
+                        landed = true;
+                        break;
+                    }
+                    std::this_thread::sleep_for(1ms);
+                }
+                co_return;
+            }))));
+        rt.shutdown();
+        dstd::fs::remove(path).discard();
+        CHECK(landed);
+    }
+}

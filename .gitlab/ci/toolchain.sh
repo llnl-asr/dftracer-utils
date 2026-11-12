@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 # Sourced by every phase script. Runs inside a podman container, no LC modules.
 set -eo pipefail
 
@@ -15,20 +16,6 @@ apt-get -o APT::Sandbox::User=root install -y -qq \
   python3 python3-pip python3-venv python3-dev "$@"
 echo ">>> toolchain ready"
 cmake --version
-
-# Read from the CMake pin rather than repeated here: build_rocksdb.sh and the
-# prefix below have to agree with what the build will actually look for.
-ROCKSDB_VERSION="${ROCKSDB_VERSION:-$(scripts/ci/rocksdb_version.sh)}"
-export ROCKSDB_VERSION
-echo "RocksDB pinned at ${ROCKSDB_VERSION}"
-
-# Built once by the rocksdb phase; every other phase links against it instead
-# of rebuilding it in its own container.
-_rocksdb_prefix="/opt/dftracer-deps/rocksdb-${ROCKSDB_VERSION}"
-if [ -x "${_rocksdb_prefix}/bin/ldb" ]; then
-  export DFTRACER_UTILS_ROCKSDB_PREFIX="${_rocksdb_prefix}"
-  echo "using prebuilt RocksDB at ${_rocksdb_prefix}"
-fi
 
 # Every phase container sees the whole node, so five of them each sized to the
 # full machine oversubscribe it. Split the node PHASE_COUNT ways, using the

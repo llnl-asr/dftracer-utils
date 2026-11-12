@@ -1,0 +1,63 @@
+# SPDX-License-Identifier: MIT
+# Files that may name a std type that dstd has. Read by check_dstd_only.cmake.
+# One row per group: <path glob> | <std names, comma separated> | <reason>
+# The names are exact. A new std name in a listed file fails the check, and so
+# does a row whose glob matches no file or whose name no matching file uses.
+# The names ankerl and new stand for the vendored unordered_dense and a raw new.
+
+# The memory library is below dstd, so its tests link only memory.
+tests/memory/* | thread, vector | memory tests link only memory
+tests/memory/fresh_process.h | string, to_string | memory tests link only memory
+tests/memory/test_allocator.cpp | list | memory tests link only memory
+tests/memory/test_debug.cpp | string | memory tests link only memory
+tests/memory/test_global_new.cpp | make_unique, string | memory tests link only memory
+tests/memory/test_heap.cpp | set | memory tests link only memory
+tests/memory/test_heap_interposed.cpp | make_unique | memory tests link only memory
+tests/memory/test_heap_threads.cpp | deque, set | memory tests link only memory
+tests/memory/test_heap_trim.cpp | deque | memory tests link only memory
+tests/memory/test_pool.cpp | string | memory tests link only memory
+tests/memory/test_pool_threads.cpp | deque | memory tests link only memory
+tests/memory/test_pressure.cpp | string | memory tests link only memory
+tests/memory/test_system_backend.cpp | set | memory tests link only memory
+
+# These headers and sources define the dstd type on top of the std one.
+include/dftracer/utils/dstd/deque.h | deque | defines dstd::Deque
+include/dftracer/utils/dstd/future.h | future, promise, shared_future | defines dstd::Future
+include/dftracer/utils/dstd/hash_map.h | ankerl | the vendored table backs dstd::HashMap
+include/dftracer/utils/dstd/list.h | list | defines dstd::List
+include/dftracer/utils/dstd/map.h | map, multimap, multiset, set | defines dstd::Map and dstd::Set
+include/dftracer/utils/dstd/memory.h | shared_ptr, unique_ptr, weak_ptr | defines dstd::UniquePtr and dstd::SharedPtr
+include/dftracer/utils/dstd/optional.h | nullopt, optional | defines dstd::Optional
+include/dftracer/utils/dstd/pair.h | pair, make_pair | defines dstd::Pair
+include/dftracer/utils/dstd/queue.h | priority_queue, queue | defines dstd::Queue
+include/dftracer/utils/dstd/span.h | span | defines dstd::Span
+include/dftracer/utils/dstd/string.h | hash, string_view | defines dstd::StringView and its hash
+include/dftracer/utils/dstd/to_chars.h | from_chars, to_chars | implements dstd::to_chars
+include/dftracer/utils/dstd/tuple.h | tuple | defines dstd::Tuple
+include/dftracer/utils/dstd/variant.h | monostate, variant | defines dstd::Variant
+include/dftracer/utils/dstd/vector.h | vector | defines dstd::Vector
+src/dftracer/utils/dstd/thread.cpp | thread | implements dstd::Thread
+
+# Tests that compare dstd with its std twin or with an independent oracle.
+tests/dstd/test_containers.cpp | deque, map, set, string, string_view, vector | test name and size check against the std twin
+tests/dstd/test_std_extras.cpp | hash, shared_ptr, stable_sort, string, to_string, unique_ptr, unordered_set | compares dstd with its std twin
+tests/dstd/test_cstring_view.cpp | string | CStringView takes a std::string
+tests/dstd/test_fs.cpp | ifstream | independent of dstd::fs::read_file
+tests/dstd/test_fmt.cpp | string | a hole takes a std::string argument
+benchmarks/hash_bench.cpp | ankerl | the old dstd::StringHash went through this vendored hash
+
+# Benchmark scaffolding that must not allocate from the heap under measurement.
+benchmarks/fmt_bench.cpp | string, to_string | the old std::string chain is counted at the global operator new
+benchmarks/heap_bench.cpp | thread, vector | scaffolding must not allocate from the heap under measurement
+benchmarks/memory_attribution_bench.cpp | vector | memory::detail::PoolStats is below dstd
+tests/runtime/test_task_pool.cpp | set, thread, vector | a dstd container or thread would charge the pool under test
+
+
+# Edges to a library that takes std types.
+include/dftracer/utils/dataframe/agg.h | unique_ptr | dstd::UniquePtr takes no custom deleter and AggState is incomplete
+tests/common/test_memory_report.cpp | string | fresh_process::Result holds a std::string
+tests/index/input_syscalls_interpose.cpp | map, pair, string | the interposer library links no dstd
+
+# Registries that must outlive the memory exit check.
+src/dftracer/utils/dataframe/op_registry.cpp | make_unique, string, unique_ptr, vector | registered at static init, before the exit check
+tests/testing_utilities.cpp | string, vector | test bookkeeping that outlives the exit check

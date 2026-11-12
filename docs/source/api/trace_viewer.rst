@@ -11,7 +11,7 @@ no work. ``collect()`` runs the plan in a single pass and returns a
 (``containment``, the partials, ``statistics(lazy=True)``) return a
 :class:`~dftracer.utils.LazyResult`, which also runs on ``collect()``. When an
 index exists next to the traces, the same query is served from the index
-(chunk pruning, aggregation tiers, summaries) instead of a full decompress.
+(chunk pruning, aggregation partials, summaries) instead of a full decompress.
 
 .. code-block:: python
 
@@ -332,28 +332,37 @@ and a plugin set the same way. See :doc:`../guides/analysis/sessions`.
 Live traces
 -----------
 
-``LiveTraceViewer`` is a ``TraceViewer`` over gzip traces that are still being
-written. It reads only whole gzip members, CRC checked: each file up to its
-first unfinished tail, or up to a hole where a member has not landed yet. In
-C++ the same reader is ``trace::views::LiveView``, whose ``refresh()`` returns
-a ``View``.
+``LiveTraceViewer`` follows gzip traces that are still being written.
+It holds no query ops and is not a ``TraceViewer``.
+``snapshot()`` indexes the members written since the last call, once each, and returns a normal ``TraceViewer`` of every whole member.
+In C++ the same calls are ``trace::views::LiveView::snapshot()`` and ``status()``.
 
 .. code-block:: python
 
    from dftracer.utils import LiveTraceViewer
 
    live = LiveTraceViewer("traces/")      # a file, a directory or a list
-   live.group_by("name").agg("count").collect()
+   view = live.snapshot()
+   view.group_by("name").agg("count").collect()
 
-   live.refresh()                         # read what has been written since
-   live.verified_bytes, live.skipped_tail_bytes, live.holes
+   later = live.snapshot()                # sees members written since
+   for f in live.status():                # LiveFileStatus per file
+       print(f.path, f.state, f.verified_bytes)
 
-The verified bytes are copied to ``snapshot_dir``, a private temporary
-directory by default, so it needs room for a copy of the traces; only one
-viewer at a time may use it. Viewers derived from a ``LiveTraceViewer`` are
-plain ``TraceViewer`` objects over its snapshots, and ``refresh()`` drops the
-ops applied to the object itself. Plain ``.pfw`` files have no member
-boundaries and are not read.
+   for new in live.follow(interval=5):    # a viewer of only the new rows
+       print(new.group_by("name").agg("count").collect())
+
+Nothing is copied.
+The index lives where ``TraceViewer`` puts it, or at ``index_path`` when you give one.
+A snapshot stays fixed, so an old snapshot keeps its rows after the file grows.
+``new_rows()`` returns a viewer of the rows no earlier call returned, or ``None``.
+``follow()`` yields those viewers, sleeps when there is nothing new and has no end, so stop iterating to stop.
+A file that a new file replaced starts over.
+A file whose last whole member ends inside a line is held back until a later member ends that line.
+A file stops at its first short or bad member.
+``status()`` reports ``state`` as ``"whole"``, ``"tail"`` or ``"hole"``, with ``verified_bytes``, ``skipped_bytes`` and ``hole_bytes``.
+A file that is named and missing raises at ``snapshot()``.
+Plain ``.pfw`` files have no member boundaries and are not read.
 
 Distributed use
 ---------------
@@ -378,6 +387,10 @@ How the viewer types relate and what they return:
    :undoc-members:
 
 .. autoclass:: dftracer.utils.LiveTraceViewer
+   :members:
+   :undoc-members:
+
+.. autoclass:: dftracer.utils.LiveFileStatus
    :members:
    :undoc-members:
 

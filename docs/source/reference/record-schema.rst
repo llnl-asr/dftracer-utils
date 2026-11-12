@@ -1,10 +1,10 @@
-:description: The keys of a record schema spec, the field types and roles, and the equivalent Python and C++ class declarations.
+:description: The keys of a record schema spec, the field types and roles, and the equivalent Python class declaration.
 
 Record schema
 =============
 
-A record schema is a YAML or JSON mapping, a Python class or a C++ class; all
-three resolve to the same definition. An unknown key or a value of the wrong
+A record schema is a YAML or JSON mapping or a Python class; both
+resolve to the same definition. An unknown key or a value of the wrong
 type is an error that names the source and the key. Specs load from
 ``.yaml``, ``.yml`` and ``.json`` files. To write one, see
 :ref:`the indexing guide <describe-your-own-record-format>`.
@@ -110,47 +110,34 @@ Field settings
 Classes
 -------
 
+Python declares a record schema as a class in ``dftracer.utils.schemas``.
+
 .. list-table::
    :header-rows: 1
-   :widths: 24 38 38
+   :widths: 30 70
 
    * - Spec
      - Python (``dftracer.utils.schemas``)
-     - C++ (``dftracer/utils/index/schema_class.h``)
    * - ``id``, ``extends``
      - ``class A(RecordSchema, id="a")``; subclass a schema class, such as
        ``DFTracer`` or ``Generic``, to extend it
-     - ``static constexpr std::string_view id = "a";`` and
-       ``using extends = B;`` (``schemas::DFTracer``, ``schemas::Generic``)
    * - ``type``
      - annotation ``bool``, ``int``, ``float``, ``str``, ``Json``
-     - member ``Field<T, "path">`` with ``T`` ``bool``, an integer, a
-       floating point type, ``std::string`` or ``Json``
    * - ``optional``
      - ``Optional[...]``
-     - ``std::optional<T>``
    * - ``path``
      - ``field(path=...)``; the attribute name when absent
-     - the ``"path"`` template argument
    * - ``role``, ``unit``
      - ``field(role=..., unit=...)``
-     - ``TimeRole<TimeUnit::MS>``, ``DurationRole<...>``, ``EntityRole``,
-       ``LaneRole``, ``NameRole``
    * - ``always_index``
      - ``field(always_index=True)``
-     - ``AlwaysIndex``
    * - ``source``
      - class attribute ``source = "..."``
-     - ``static constexpr std::string_view SOURCE = "...";``
    * - registration
      - when the class is defined
-     - ``index::register_schema<A>(source)``
    * - reading records as objects
      - ``TraceViewer.rows(A)``; ``A(**fields)``, ``None`` for a field not
        given
-     - ``trace::views::rows<A>(view)`` in
-       ``dftracer/utils/trace/views/typed_rows.h``; ``decode_row<A>`` for
-       one parsed record
 
 Built-in schemas
 ----------------
@@ -183,9 +170,8 @@ One id has one definition per process: registering the same definition
 again does nothing, and another definition is an error that names both
 sources. Where schemas load from:
 
-- ``DFTRACER_SCHEMA_PATH``: files or directories, ``:``-separated, on first
+- ``DFTRACER_UTILS_SCHEMA_PATH``: files or directories, ``:``-separated, on first
   use.
 - ``<index_dir>/schemas/``: when an index there is opened.
-- Python ``dftracer.utils.schemas.register``/``load`` or a schema class,
-  C++ ``index::register_schema``/``load_schemas``, C
+- Python ``dftracer.utils.schemas.register``/``load`` or a schema class, C
   ``dftu_schema_register``/``dftu_schema_load``.

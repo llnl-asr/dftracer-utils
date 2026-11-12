@@ -1,0 +1,44 @@
+// SPDX-License-Identifier: MIT
+#ifndef DFTRACER_UTILS_TRACE_INDEX_SCHEMAS_DFT_AGG_RESERVED_ARGS_H
+#define DFTRACER_UTILS_TRACE_INDEX_SCHEMAS_DFT_AGG_RESERVED_ARGS_H
+
+#include <dftracer/utils/dstd/string.h>
+
+#include <string_view>
+
+namespace dftracer::utils::trace::index::schemas::dft::agg {
+
+/// Reserved event-arg keys that the aggregator handles specially (built-in
+/// metrics + hashes) and therefore must not treat as custom user fields. Shared
+/// by the aggregation visitor and the aggregation-logic updater so the set
+/// cannot drift between them.
+inline bool is_reserved_arg(dstd::StringView k) {
+    if (k.empty()) return false;
+    switch (k[0]) {
+        case 'h':
+            return k == "hhash";
+        case 'f':
+            return k == "fhash";
+        case 'd':
+            return k == "dur" || k == "dur_sum" || k == "dur_min" ||
+                   k == "dur_max" || k == "dftu_cnt" || k == "dft_cnt";
+        case 'r':
+            return k == "ret" || k == "ret_sum" || k == "ret_min" ||
+                   k == "ret_max";
+        case 'o':
+            return k == "offset" || k == "offset_sum" || k == "offset_min" ||
+                   k == "offset_max";
+    }
+    return false;
+}
+
+/// True for a pre-aggregated metric field name (ends in _sum / _min / _max).
+inline bool is_preagg_suffix(dstd::StringView k) {
+    if (k.size() <= 4) return false;
+    const dstd::StringView tail = k.substr(k.size() - 4);
+    return tail == "_sum" || tail == "_min" || tail == "_max";
+}
+
+}  // namespace dftracer::utils::trace::index::schemas::dft::agg
+
+#endif  // DFTRACER_UTILS_TRACE_INDEX_SCHEMAS_DFT_AGG_RESERVED_ARGS_H

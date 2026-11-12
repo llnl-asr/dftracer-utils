@@ -1,15 +1,18 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_DATAFRAME_AGG_H
 #define DFTRACER_UTILS_DATAFRAME_AGG_H
 
 #include <dftracer/utils/dataframe/field_stat.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dataframe/sketch.h>
+#include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/result.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <cstdint>
-#include <map>
 #include <memory>
-#include <string>
-#include <vector>
 
 // The aggregation engine: a mergeable partial group state (`AggState`) with
 // synchronous accumulate / merge / finalize. This is the shared kernel both the
@@ -125,8 +128,8 @@ inline bool agg_uses_raw_value(AggOp op) {
            op == AggOp::Sample || op == AggOp::SketchQuantile;
 }
 
-/// The DataType agg_finalize actually writes for `op` over a value column of
-/// `value_type`: Sum/Min/Max/First/Last widen through the same
+/// The @ref DataType agg_finalize actually writes for `op` over a value column
+/// of `value_type`: Sum/Min/Max/First/Last widen through the same
 /// integer/unsigned/float domain agg_finalize keys on (Int64/Uint64/Float64),
 /// String columns pass First/Last through unchanged, and every other op's
 /// type is fixed regardless of `value_type`. An Unknown `value_type` gives
@@ -149,7 +152,7 @@ DataType set_union_element_type(TypeId t);
 struct AggSpec {
     AggOp op;
     std::int32_t value_col = -1;
-    std::string out;
+    dstd::String out;
     double param = 0.0;  ///< Pct: quantile q in [0, 1]; occupancy: occ_cell_us;
                          ///< Distinct/TopK/BottomK/ApproxTopK/Sample: k;
                          ///< SetUnion: nonzero asks for the typed list
@@ -160,13 +163,13 @@ struct AggSpec {
 /// One reduction applied to every auto-discovered dyn (per-argument) column.
 /// The finalized column for argument `name` is `out_prefix + name`;
 /// `op`/`param` select the reduction (Pct reads a per-name sketch, every other
-/// op the per-name FieldStat). Configured once at agg_new - the argument names
-/// themselves are discovered during accumulate, so a single pass can build the
-/// per-argument aggregates without a name pre-scan.
+/// op the per-name @ref FieldStat). Configured once at agg_new - the argument
+/// names themselves are discovered during accumulate, so a single pass can
+/// build the per-argument aggregates without a name pre-scan.
 struct AggDynSpec {
     AggOp op;
-    double param = 0.0;      ///< Pct quantile q in [0, 1]
-    std::string out_prefix;  ///< finalized column name is `out_prefix + name`
+    double param = 0.0;       ///< Pct quantile q in [0, 1]
+    dstd::String out_prefix;  ///< finalized column name is `out_prefix + name`
 };
 
 /// One dyn value column fed to accumulate, named by its discovered argument.
@@ -174,7 +177,7 @@ struct AggDynSpec {
 /// names seen for it, and an absent name is simply not accumulated
 /// (present-count semantics). `col` is borrowed for the accumulate call only.
 struct AggDynInput {
-    std::string name;
+    dstd::String name;
     const Series* col;
 };
 
@@ -188,29 +191,41 @@ using AggStatePtr = std::unique_ptr<AggState, AggStateDeleter>;
 /// A fresh partial for `specs`, grouping by N key columns. `dyn` (optional)
 /// enables the name-keyed dyn side-table: each spec in `dyn` is one reduction
 /// applied to every argument name fed through agg_accumulate's dyn inputs.
-AggStatePtr agg_new(std::vector<AggSpec> specs,
-                    std::vector<AggDynSpec> dyn = {});
+AggStatePtr agg_new(dstd::Vector<AggSpec> specs,
+                    dstd::Vector<AggDynSpec> dyn = {});
 
 /// Fold rows [begin, end) of a batch (the N `keys` columns + the value columns
 /// the specs reference) into `state`. The composite key is hashed and compared
 /// column-by-column (no string concatenation); each key column keeps its own
 /// type. `end < 0` means the whole column. Serial; one thread per state - the
 /// parallel/async drivers give each chunk its own state.
-void agg_accumulate(AggState& state, const std::vector<const Series*>& keys,
-                    const std::vector<const Series*>& values,
-                    std::int64_t begin = 0, std::int64_t end = -1);
-/// As above plus the dyn inputs: each `AggDynInput` feeds a per-argument value
-/// column whose name is discovered here. Requires `state` to have been built
-/// with a non-empty `dyn` spec list; the column set may differ from batch to
-/// batch, and a group's dyn set grows to the union of names seen for it.
-void agg_accumulate(AggState& state, const std::vector<const Series*>& keys,
-                    const std::vector<const Series*>& values,
-                    const std::vector<AggDynInput>& dyn, std::int64_t begin = 0,
-                    std::int64_t end = -1);
+///
+/// Returns an InvalidArgument error, and leaves `state` unusable, for a spec
+/// the columns cannot feed (a key column type that cannot be grouped, a
+/// numeric reduction over a String column, a SetUnion over an unsupported
+/// type or over a string that holds the separator byte 0x1e, a text
+/// aggregate over a nested column, an unsupported dyn op).
+dstd::Result<void> agg_accumulate(AggState& state,
+                                  const dstd::Vector<const Series*>& keys,
+                                  const dstd::Vector<const Series*>& values,
+                                  std::int64_t begin = 0,
+                                  std::int64_t end = -1);
+/// As above plus the dyn inputs: each @ref AggDynInput feeds a per-argument
+/// value column whose name is discovered here. Requires `state` to have been
+/// built with a non-empty `dyn` spec list; the column set may differ from batch
+/// to batch, and a group's dyn set grows to the union of names seen for it.
+/// Errors are those of the form above.
+dstd::Result<void> agg_accumulate(AggState& state,
+                                  const dstd::Vector<const Series*>& keys,
+                                  const dstd::Vector<const Series*>& values,
+                                  const dstd::Vector<AggDynInput>& dyn,
+                                  std::int64_t begin = 0,
+                                  std::int64_t end = -1);
 /// Single-key convenience: forwards to the N-key form with `keys = {&key}`.
-void agg_accumulate(AggState& state, const Series& key,
-                    const std::vector<const Series*>& values,
-                    std::int64_t begin = 0, std::int64_t end = -1);
+dstd::Result<void> agg_accumulate(AggState& state, const Series& key,
+                                  const dstd::Vector<const Series*>& values,
+                                  std::int64_t begin = 0,
+                                  std::int64_t end = -1);
 
 /// Number rows of the batches that later agg_accumulate calls fold from
 /// `base` (row 0 of a batch is row `base`), so First/Last and the group order
@@ -222,7 +237,7 @@ void agg_set_row_base(AggState& state, std::int64_t base);
 void agg_merge(AggState& into, const AggState& other);
 /// The same, other's groups taken in `order` (indices into its groups).
 void agg_merge(AggState& into, const AggState& other,
-               const std::vector<std::int64_t>& order);
+               const dstd::Vector<std::int64_t>& order);
 
 /// Re-key `src` to a coarser grouping and merge groups that collapse together.
 /// `keep` lists src key-column indices in destination order (a subset and/or
@@ -234,7 +249,7 @@ void agg_merge(AggState& into, const AggState& other,
 /// result shares src's specs and value/field layout; finalize with
 /// agg_finalize. Every index in `keep` must be a valid src key column.
 AggStatePtr agg_regroup(const AggState& src,
-                        const std::vector<std::int32_t>& keep,
+                        const dstd::Vector<std::int32_t>& keep,
                         std::int64_t bucket_recut = 0);
 
 /// Bound every group's occupancy (Busy/Concurrency/Utilization/Active) by the
@@ -254,20 +269,20 @@ AggStatePtr agg_clip_occupancy(const AggState& src, std::uint64_t lo,
 /// Materialize the result: one key column per `key_names` (in order, each
 /// keeping its original type) plus one column per spec, in spec order.
 DataFrame agg_finalize(const AggState& state,
-                       const std::vector<std::string>& key_names);
+                       const dstd::Vector<dstd::String>& key_names);
 /// Single-key convenience: forwards to the vector form with `{key_name}`.
-DataFrame agg_finalize(const AggState& state, const std::string& key_name);
+DataFrame agg_finalize(const AggState& state, const dstd::String& key_name);
 
 /// The dyn argument names of a result with the value domain of each. A result
 /// built from several states (spill parts) finalizes each under the layout of
 /// all of them, so every part has the same columns.
-using AggDynLayout = std::map<std::string, FieldStatDomain>;
+using AggDynLayout = dstd::Map<dstd::String, FieldStatDomain>;
 /// Adds the names `state` discovered to `layout`; a name already in it keeps
 /// its domain.
 void agg_dyn_layout_add(AggDynLayout& layout, const AggState& state);
 /// agg_finalize with the dyn columns of `layout` in place of the state's own.
 DataFrame agg_finalize(const AggState& state,
-                       const std::vector<std::string>& key_names,
+                       const dstd::Vector<dstd::String>& key_names,
                        const AggDynLayout& layout);
 
 /// Serialize a partial to a portable byte blob (distributed partials / spill)
@@ -277,21 +292,24 @@ DataFrame agg_finalize(const AggState& state,
 /// (about a third of the bytes for a sum or a count). It is for blobs that live
 /// for one query, such as a spill; a blob that is stored keeps the default,
 /// and a reader must pass the same `compact` as the writer.
-std::string agg_serialize(const AggState& state, bool compact = false);
-AggStatePtr agg_deserialize(const std::string& blob, bool compact = false);
+dstd::String agg_serialize(const AggState& state, bool compact = false);
+/// Returns an InvalidArgument error for a blob that is truncated or corrupt,
+/// and a Parse error for one in the other (compact or full) format.
+dstd::Result<AggStatePtr> agg_deserialize(const dstd::String& blob,
+                                          bool compact = false);
 
 /// Number of groups currently held by `state`.
-std::int64_t agg_num_groups(const AggState& state);
+std::int64_t agg_group_count(const AggState& state);
 
 /// The specs `state` was built with, in order (key layout excluded). Lets a
 /// consumer finalizing a persisted or regrouped state recover each value
 /// column's op and output name without re-deriving them.
-const std::vector<AggSpec>& agg_specs(const AggState& state);
+const dstd::Vector<AggSpec>& agg_specs(const AggState& state);
 
 /// Render group `g`'s composite key to one string per key column (integer keys
 /// as decimal, string keys verbatim) - a stable per-group identity, e.g. a
-/// rollup row key. `g` must be in [0, agg_num_groups(state)).
-std::vector<std::string> agg_group_key(const AggState& state, std::int64_t g);
+/// rollup row key. `g` must be in [0, agg_group_count(state)).
+dstd::Vector<dstd::String> agg_group_key(const AggState& state, std::int64_t g);
 
 /// Approximate in-memory bytes held by `state` (spill trigger; not exact).
 std::size_t agg_approx_bytes(const AggState& state);
@@ -300,9 +318,9 @@ std::size_t agg_approx_bytes(const AggState& state);
 /// indices, in ascending order. Equal keys always share a list, so merging each
 /// list separately loses nothing; a different `salt` splits the same groups
 /// differently, so a list that is still too big can be split again.
-std::vector<std::vector<std::int64_t>> agg_split_groups(const AggState& state,
-                                                        std::size_t parts,
-                                                        int salt);
+dstd::Vector<dstd::Vector<std::int64_t>> agg_split_groups(const AggState& state,
+                                                          std::size_t parts,
+                                                          int salt);
 
 /// Three-way compare of the composite key of group `ga` in `a` against group
 /// `gb` in `b`. `a` and `b` must share the same key layout (same group_by
@@ -323,16 +341,17 @@ AggStatePtr agg_extract_group(const AggState& state, std::int64_t g);
 /// has no key index, so it is for serializing or finalizing, not for
 /// accumulating more rows.
 AggStatePtr agg_extract_groups(const AggState& state,
-                               const std::vector<std::int64_t>& groups);
+                               const dstd::Vector<std::int64_t>& groups);
 
 /// Like group_agg but returns the mergeable partial instead of finalizing: the
 /// same one-pass parallel accumulate over `keys`/`values`, stopping before
 /// agg_finalize. The caller finalizes (agg_finalize), coarsens (agg_regroup),
 /// or persists (agg_extract_group + agg_serialize) the state. Used by the
 /// rollup materialize path to store per-group partials.
-AggStatePtr group_agg_state(const std::vector<const Series*>& keys,
-                            const std::vector<const Series*>& values,
-                            std::vector<AggSpec> specs);
+/// Errors are those of @ref agg_accumulate.
+dstd::Result<AggStatePtr> group_agg_state(
+    const dstd::Vector<const Series*>& keys,
+    const dstd::Vector<const Series*>& values, dstd::Vector<AggSpec> specs);
 
 /// One value column's already-reduced statistics to seed into an AggState,
 /// identified by `value_col` (the AggSpec value_col index the state was built
@@ -349,19 +368,14 @@ struct AggSeedValue {
 /// seeded groups still finalizes with the right key columns.
 void agg_seed_begin(AggState& state, std::size_t nkeys);
 
-/// Seed one already-reduced group observation into `state` with no raw events,
-/// for a fast path that reads per-group stats (the aggregation tier) instead of
-/// events. `state` must have been built by agg_new with the same specs the
-/// equivalent scan uses. `str_keys` is the composite key, one string per key
-/// column (every seeded key column is a String column). `count` is the group's
-/// row count; each `values` entry merges its FieldStat (and sketch) into the
-/// value column's per-group slot. Repeated calls for the same composite key
-/// merge (FieldStat/sketch merge), exactly like accumulating then merging the
-/// equivalent events. Call agg_seed_finalize once, after all agg_seed_group
-/// calls and before agg_finalize/agg_serialize.
-void agg_seed_group(AggState& state, const std::vector<std::string>& str_keys,
-                    std::uint64_t count,
-                    const std::vector<AggSeedValue>& values);
+/// Seeds one reduced group into `state` (built by agg_new with the scan's
+/// specs). `str_keys` is one String per key column and `null_keys[k]` set makes
+/// key k null (empty means none). Repeated calls for a key merge. Call
+/// agg_seed_finalize once, after all calls and before agg_finalize/serialize.
+/// Ends the process when a spec has no seed representation.
+void agg_seed_group(AggState& state, const dstd::Vector<dstd::String>& str_keys,
+                    const dstd::Vector<bool>& null_keys, std::uint64_t count,
+                    const dstd::Vector<AggSeedValue>& values);
 
 /// Fix each value column's finalized integer/float domain from the seeded
 /// per-group stats, matching the columnar materializer's per-column rule (a
@@ -371,13 +385,16 @@ void agg_seed_finalize(AggState& state);
 
 /// Fused group-by: accumulate the whole batch in one pass over all specs (the
 /// sync driver chunks via the parallel_for seam and merges), then finalize.
-DataFrame group_agg(const std::vector<const Series*>& keys,
-                    const std::vector<const Series*>& values,
-                    std::vector<AggSpec> specs,
-                    const std::vector<std::string>& key_names);
+/// Errors are those of @ref agg_accumulate.
+dstd::Result<DataFrame> group_agg(const dstd::Vector<const Series*>& keys,
+                                  const dstd::Vector<const Series*>& values,
+                                  dstd::Vector<AggSpec> specs,
+                                  const dstd::Vector<dstd::String>& key_names);
 /// Single-key convenience: forwards to the N-key form.
-DataFrame group_agg(const Series& key, const std::vector<const Series*>& values,
-                    std::vector<AggSpec> specs, const std::string& key_name);
+dstd::Result<DataFrame> group_agg(const Series& key,
+                                  const dstd::Vector<const Series*>& values,
+                                  dstd::Vector<AggSpec> specs,
+                                  const dstd::String& key_name);
 
 /// How many group-bys wrote their aggregate columns in place (straight into
 /// the output, with no per-partition columns to join) since the process began.

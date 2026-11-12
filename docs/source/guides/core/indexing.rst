@@ -11,8 +11,8 @@ prunes chunks with it. This page is about building one and keeping it fresh,
 not the pruning mechanics.
 
 The index lives in a ``.dftindex`` directory next to the trace files it
-covers (or wherever you point ``index_dir``); it is a RocksDB store, not a
-single file. Building it is idempotent: run the same build again on unchanged
+covers (or wherever you point ``index_dir``); it is a directory of data
+files, not a single file. Building it is idempotent: run the same build again on unchanged
 traces and it does nothing, so you can call it at the top of every script
 without worrying about redundant work.
 
@@ -20,8 +20,8 @@ without worrying about redundant work.
 
    .. tab-item:: Python
 
-      ``Indexer`` builds the checkpoint and bloom-filter tiers (and,
-      optionally, a pre-aggregated tier). ``ensure_indexed()`` checks what is
+      ``Indexer`` builds the checkpoint, bloom-filter and aggregation tiers.
+      ``ensure_indexed()`` checks what is
       already built and only builds what is missing:
 
       .. code-block:: python
@@ -43,7 +43,8 @@ without worrying about redundant work.
       exists.
 
       Both ``require_checkpoint`` and ``require_bloom`` default to ``True``.
-      Add the pre-aggregated tier with ``require_aggregation``:
+      Every build also makes the aggregation tier, with one standard config
+      (1 s windows, percentiles on); ``aggregation_config`` customizes it:
 
       .. code-block:: python
 
@@ -51,7 +52,7 @@ without worrying about redundant work.
 
          with Indexer(
              "traces/",
-             require_aggregation=AggregationConfig(time_interval_ms=1000),
+             aggregation_config=AggregationConfig(time_interval_ms=5000),
          ) as ix:
              ix.ensure_indexed()  # one fused pass builds all three tiers
 
@@ -112,14 +113,14 @@ without worrying about redundant work.
       a genuinely unindexed file - see :ref:`indexing-first-touch` below. For
       an explicit build (warming the index ahead of serving traffic, or
       refreshing one that already exists), use ``Indexer``
-      (``dftracer/utils/index/indexer.h``), the same path the Python
+      (``dftracer/utils/trace/index/indexer.h``), the same path the Python
       ``Indexer`` drives:
 
       .. code-block:: cpp
 
-         #include <dftracer/utils/index/indexer.h>
+         #include <dftracer/utils/trace/index/indexer.h>
 
-         using namespace dftracer::utils::index;
+         using namespace dftracer::utils::trace::index;
 
          IndexerOptions options;
          // Args fields indexed by name, besides the automatic ones.
@@ -140,8 +141,8 @@ without worrying about redundant work.
 
       .. code-block:: console
 
-         $ dftracer_index --directory traces/
-         $ dftracer_index --directory traces/ --force   # rebuild every tier
+         $ dftracer_index traces/
+         $ dftracer_index traces/ --force   # rebuild every tier
 
       Selected flags (see ``dftracer_index --help`` for the full list):
 
@@ -152,7 +153,7 @@ without worrying about redundant work.
          * - Flag
            - Meaning
          * - ``-d`` / ``--directory``
-           - Directory to scan for ``.pfw``/``.pfw.gz`` files (default ``.``)
+           - Directory to scan for ``.pfw.gz`` files (default ``.``)
          * - ``--index-dir``
            - Directory for the ``.dftindex`` store (default: next to the data)
          * - ``-f`` / ``--force``
@@ -247,20 +248,27 @@ Upgrading the library can also invalidate an index: each on-disk index records
 the ``FORMAT_VERSION`` it was built with, and a build with another version
 rebuilds the index rather than reading it. Changing a bloom setting (such as
 the false positive rate) rebuilds only the extensions it affects. Changing the
-aggregation config (such as ``time_interval_ms``), or a change to a trace whose
-events are in the aggregation tier, clears that tier and aggregates every file
-again, and leaves the other extensions in place: the tier merges all files'
-events without recording which file each came from, so one file's share cannot
-be replaced. Until the next build, queries the tier cannot answer exactly read
-the traces instead. An index directory is cheap to rebuild, so this needs no
-action from you beyond letting the next build run.
+aggregation config (such as ``time_interval_ms``), or a change to a trace
+whose events are in the partials, rebuilds the partials of the files it
+touches, and leaves the other extensions in place. Until the next build,
+queries the partials cannot answer read the traces instead. An index directory
+is cheap to rebuild, so this needs no action from you beyond letting the next
+build run.
 
-The tier builds for files of any record schema. For a path schema it answers
-the group keys ``name``, ``pid`` and ``tid`` (its name, entity and lane roles)
-and aggregates of its duration and time fields, when each role
-field is required, the name is a ``string``, the others are ``int``, times are
-in ``us`` and the source has no ``data`` row set. Any other query reads the
-traces.
+The aggregation keeps one partial per chunk, category, name and host: counts,
+sums, extremes, moments, quantile stores, per-argument statistics and the
+distinct processes, threads and files of the chunk. A query merges the partials
+it needs. A group-by on category, name, host, or on pid and tid when a chunk
+holds one process and thread, is answered from the partials alone. A key the
+partials do not hold (file, extra keys), a time window that cuts a chunk, or a
+filter on an event field is answered by reading the chunks that the chunk
+index selects, so such a query needs the traces.
+
+The partials build for files of any record schema. For a path schema they
+answer the group keys ``name``, ``pid`` and ``tid`` (its name, entity and lane
+roles) and aggregates of its duration and time fields, when each role field is
+required, the name is a ``string``, the others are ``int``, times are in ``us``
+and the source has no ``data`` row set. Any other query reads the traces.
 
 Inspect, rebuild or drop one extension
 --------------------------------------
@@ -321,15 +329,15 @@ rebuilding the rest.
 
    .. tab-item:: CLI
 
-      ``dftracer_info --query detailed`` prints each file's extensions, and
+      ``dftracer_info --report detailed`` prints each file's extensions, and
       marks one whose build failed or that an older version wrote.
 
 ``explain`` reports, per file, the chunks the query reads for its data events
 (the chunks a View row or aggregation scan reads) and, for each pruning extension, the chunks it would rule
 out if it were the only one. It writes nothing. A dropped extension is built
 again by the next build only while ``extensions`` names it. ``core.members``,
-``core.rowset`` and ``dftracer.agg`` (the aggregation tier, rebuilt by a build
-with ``require_aggregation``) cannot be rebuilt or dropped alone.
+``core.rowset`` and ``dftracer.agg`` (the aggregation partials, which every build
+makes) cannot be rebuilt or dropped alone.
 
 Index traces that are not dftracer traces
 ------------------------------------------
@@ -366,7 +374,7 @@ chunks. Detection is per file; set the schema to skip it or to override it:
 
       .. code-block:: console
 
-         $ dftracer_index --directory logs/ --schema generic
+         $ dftracer_index logs/ --schema generic
 
 Read a generic trace with a ``TraceViewer`` (C++ ``View``) as usual.
 Columns are named by path, without an ``args.`` prefix (``op``, ``io.off``,
@@ -391,8 +399,10 @@ an error naming the row set when the schema's source defines none. Declare
 your format as a record schema to use them. A viewer reads
 files of one schema: mixing dftracer traces and generic files in one viewer
 raises an error naming both; an empty file, or one of metadata only, takes
-no vote. A directory viewer finds ``.jsonl`` and ``.ndjson``
-files next to ``.pfw`` traces, plain or gzip, and so does the indexer.
+no vote. A directory viewer lists every ``*.gz`` file, so ``.jsonl.gz`` and
+``.ndjson.gz`` files sit next to ``.pfw.gz`` traces, and so does the
+indexer. A plain ``.pfw``, ``.jsonl`` or ``.ndjson`` file is not listed;
+gzip it first.
 
 .. _describe-your-own-record-format:
 
@@ -402,8 +412,8 @@ Describe your own record format
 A record schema declares the typed fields of a format: the fields a record
 must hold (detection), the fields that play the time, duration and entity
 roles (trace operations), and the fields indexed past the path budget.
-Declare it as a YAML or JSON file, a Python class or a C++ class; all three
-give the same schema (see :doc:`../../reference/record-schema`):
+Declare it as a YAML or JSON file or as a Python class.
+Both give the same schema (see :doc:`../../reference/record-schema`):
 
 .. tab-set::
 
@@ -423,7 +433,7 @@ give the same schema (see :doc:`../../reference/record-schema`):
 
       Put the file where the index finds it: in ``<index_dir>/schemas/``,
       next to the ``.dftindex`` store (beside the data by default), or in a
-      directory named by ``DFTRACER_SCHEMA_PATH`` (``:``-separated).
+      directory named by ``DFTRACER_UTILS_SCHEMA_PATH`` (``:``-separated).
 
    .. tab-item:: Python
 
@@ -442,28 +452,6 @@ give the same schema (see :doc:`../../reference/record-schema`):
              tags: Optional[Json]
 
       The class registers the schema when Python defines it.
-
-   .. tab-item:: C++
-
-      .. code-block:: cpp
-
-         #include <dftracer/utils/index/schema_class.h>
-
-         namespace ix = dftracer::utils::index;
-
-         struct AccessLog {
-             static constexpr std::string_view id = "access_log";
-             ix::Field<std::string, "remote_addr"> remote_addr;
-             ix::Field<std::int64_t, "status"> status;
-             ix::Field<std::int64_t, "ts_ms", ix::TimeRole<ix::TimeUnit::MS>>
-                 ts_ms;
-             ix::Field<double, "request_time",
-                       ix::DurationRole<ix::TimeUnit::S>> request_time;
-             ix::Field<std::string, "upstream", ix::AlwaysIndex> upstream;
-             ix::Field<std::optional<ix::Json>, "tags"> tags;
-         };
-
-         ix::register_schema<AccessLog>("myapp");
 
 List a path, such as a unique blob, under ``index: {never_index: [...]}`` to keep it out of the index while queries still read it.
 
@@ -523,28 +511,6 @@ after the viewer's filters and time window:
       ``rows`` collects the fields first, so use ``collect()`` for bulk
       work.
 
-   .. tab-item:: C++
-
-      .. code-block:: cpp
-
-         #include <dftracer/utils/trace/views/typed_rows.h>
-
-         namespace tv = dftracer::utils::trace::views;
-
-         std::vector<AccessLog> logs =
-             co_await tv::rows<AccessLog>(
-                 tv::View::from_file("access.ndjson.gz").duql("status >= 500"));
-         for (const AccessLog& log : logs)
-             std::printf("%s %f\n", log.upstream->c_str(), *log.request_time);
-
-      The scan workers decode each record straight into the class, which
-      is about twice as fast as ``collect()`` followed by reading the same
-      columns. A member whose value is missing or does not convert keeps
-      its default (empty for ``std::optional``). Rows from different workers
-      arrive in no fixed order. ``rows<T>(view, tv::LAZY)`` defers the read
-      for ``collect_all()`` or a session. The class does not need to be
-      registered to read rows.
-
 Bound the memory an index build uses
 -------------------------------------
 
@@ -552,11 +518,20 @@ An index build holds each file's chunk evidence until the file is written,
 and several files are built at once. ``memory_budget`` caps that the same
 way ``TraceViewer.memory_budget`` caps a scan: 0 (the default) is about a
 third of available memory, and a byte count or a size such as ``"4GB"`` sets
-it. Under the budget, fewer large files are built at a time, and a file
-whose evidence outgrows its share writes its finished chunks to sorted runs
-beside the index (``<index>.spill``) and commits them with the rest of the
-file in one atomic ingest. The index holds the same data either way; a build
-that spills is slower.
+it. A file starts only when the bytes it is expected to hold fit the budget
+beside the files already running, and a file that does not fit waits its turn,
+so the number of files at once follows the budget and not the worker count.
+Each worker also keeps at least 8 MiB of output it has not committed, in half of the
+budget, so a budget of 64 MB or less runs at most 4 workers.
+Workers that have no file help the files that run: they parse pieces of a file
+at the same time, as many as there are free workers and room for. A file
+whose evidence outgrows its share writes its finished chunks in runs to a
+staged write of the index, which no reader sees until the rest of the file
+publishes it. A run is never smaller than 4 MiB, so even a budget of
+1 MiB writes a few runs and not thousands. A file larger than the budget runs alone, with a
+quarter of the budget left for its pieces.
+The index holds the same data whatever the budget, the worker count or the
+order in which the pieces were parsed; a build that spills is slower.
 
 .. tab-set::
 
@@ -579,9 +554,9 @@ that spills is slower.
 
       .. code-block:: console
 
-         $ dftracer_index --directory traces/ --memory-budget 2GB
+         $ dftracer_index traces/ --memory-budget 2GB
 
-Memory not covered: the aggregation tier, and the per-file totals that grow
+Memory not covered: the aggregation partials, and the per-file totals that grow
 with distinct values rather than with the trace's length (file blooms, file
 statistics, the path catalog).
 

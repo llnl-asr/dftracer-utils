@@ -1,28 +1,248 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_TRACE_VIEWS_FOLD_EVENT_H
 #define DFTRACER_UTILS_TRACE_VIEWS_FOLD_EVENT_H
 
-#include <ankerl/unordered_dense.h>
-#include <dftracer/utils/core/common/field_ref.h>
-#include <dftracer/utils/core/common/string_intern.h>
-#include <dftracer/utils/index/record_schema.h>
+#include <dftracer/utils/common/field_ref.h>
+#include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/intern_cache.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/dstd/variant.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/json/json_value.h>
+#include <dftracer/utils/json/value.h>
 #include <dftracer/utils/trace/event.h>
+#include <dftracer/utils/trace/index/record_schema.h>
 #include <simdjson.h>
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
-#include <span>
-#include <string>
-#include <string_view>
+#include <type_traits>
 #include <utility>
 #include <variant>
-#include <vector>
 
 // The owned event the fold-fusion scan core batches, kept in its own header so
 // both the Fold interface and the event accessor depend on the data, not on
 // each other.
 namespace dftracer::utils::trace::views::detail {
+
+/// Fixed-size chunks the entry lists of many events take their storage from.
+/// A block it hands out never moves. reset() hands every block out again.
+template <class T>
+class ChunkArena {
+    static_assert(std::is_trivially_destructible_v<T>);
+
+   public:
+    /// The first chunk holds MIN_CHUNK_ENTRIES and each new one twice the one
+    /// before, up to CHUNK_ENTRIES, so a buffer of a few events stays small.
+    static constexpr std::size_t MIN_CHUNK_ENTRIES = 64;
+    static constexpr std::size_t CHUNK_ENTRIES = 4096;
+    /// Chunks reset() keeps for the next batch. The rest are freed.
+    static constexpr std::size_t RETAIN_CHUNKS = 16;
+
+    T* allocate(std::size_t n) {
+        while (current_ < chunks_.size()) {
+            Chunk& chunk = chunks_[current_];
+            if (chunk.capacity - used_ >= n) {
+                T* out = chunk.data.get() + used_;
+                used_ += n;
+                return out;
+            }
+            ++current_;
+            used_ = 0;
+        }
+        const std::size_t step =
+            chunks_.empty()
+                ? MIN_CHUNK_ENTRIES
+                : std::min(CHUNK_ENTRIES, chunks_.back().capacity * 2);
+        const std::size_t capacity = std::max(n, step);
+        chunks_.push_back(Chunk{dstd::make_unique<T[]>(capacity), capacity});
+        current_ = chunks_.size() - 1;
+        used_ = n;
+        return chunks_.back().data.get();
+    }
+    /// Grows the block `allocate` handed out last from `capacity` to `wanted`
+    /// entries in place. False when it is not the last block or the chunk has
+    /// no room, and nothing changes.
+    bool extend(const T* block, std::size_t capacity, std::size_t wanted) {
+        if (current_ >= chunks_.size()) return false;
+        Chunk& chunk = chunks_[current_];
+        if (block + capacity != chunk.data.get() + used_) return false;
+        if (chunk.capacity - used_ < wanted - capacity) return false;
+        used_ += wanted - capacity;
+        return true;
+    }
+    void reset() {
+        if (chunks_.size() > RETAIN_CHUNKS) chunks_.resize(RETAIN_CHUNKS);
+        current_ = 0;
+        used_ = 0;
+    }
+    std::size_t bytes() const {
+        std::size_t total = 0;
+        for (const Chunk& chunk : chunks_) total += chunk.capacity * sizeof(T);
+        return total;
+    }
+
+   private:
+    struct Chunk {
+        dstd::UniquePtr<T[]> data;
+        std::size_t capacity = 0;
+    };
+    dstd::Vector<Chunk> chunks_;
+    std::size_t current_ = 0;
+    std::size_t used_ = 0;
+};
+
+/// A vector of trivially copyable entries that takes its storage from a
+/// ChunkArena while bound to one, and from the heap otherwise. A copy owns its
+/// entries on the heap, so an event copied out of a batch outlives the batch;
+/// a bound list is valid until its arena resets.
+template <class T>
+class ArenaVec {
+    static_assert(std::is_trivially_destructible_v<T>);
+
+   public:
+    using value_type = T;
+    using iterator = T*;
+    using const_iterator = const T*;
+
+    ArenaVec() = default;
+    ArenaVec(const ArenaVec& other) { assign(other.data_, other.size_); }
+    ArenaVec(ArenaVec&& other) noexcept
+        : data_(other.data_),
+          size_(other.size_),
+          capacity_(other.capacity_),
+          arena_(other.arena_) {
+        other.data_ = nullptr;
+        other.size_ = 0;
+        other.capacity_ = 0;
+        other.arena_ = nullptr;
+    }
+    ArenaVec& operator=(const ArenaVec& other) {
+        if (this != &other) {
+            size_ = 0;
+            assign(other.data_, other.size_);
+        }
+        return *this;
+    }
+    ArenaVec& operator=(ArenaVec&& other) noexcept {
+        if (this != &other) {
+            free_owned();
+            data_ = other.data_;
+            size_ = other.size_;
+            capacity_ = other.capacity_;
+            arena_ = other.arena_;
+            other.data_ = nullptr;
+            other.size_ = 0;
+            other.capacity_ = 0;
+            other.arena_ = nullptr;
+        }
+        return *this;
+    }
+    ~ArenaVec() { free_owned(); }
+
+    /// Takes storage from `arena` from here on. Drops what the list held, so
+    /// a slot whose arena reset starts empty.
+    void bind(ChunkArena<T>* arena) {
+        free_owned();
+        data_ = nullptr;
+        size_ = 0;
+        capacity_ = 0;
+        arena_ = arena;
+    }
+
+    std::size_t size() const { return size_; }
+    bool empty() const { return size_ == 0; }
+    std::size_t capacity() const { return capacity_; }
+    T* data() { return data_; }
+    const T* data() const { return data_; }
+    T* begin() { return data_; }
+    T* end() { return data_ + size_; }
+    const T* begin() const { return data_; }
+    const T* end() const { return data_ + size_; }
+    T& operator[](std::size_t i) { return data_[i]; }
+    const T& operator[](std::size_t i) const { return data_[i]; }
+    T& front() { return data_[0]; }
+    const T& front() const { return data_[0]; }
+    T& back() { return data_[size_ - 1]; }
+    const T& back() const { return data_[size_ - 1]; }
+
+    void clear() { size_ = 0; }
+    void pop_back() { --size_; }
+    void reserve(std::size_t n) {
+        if (n > capacity_) grow(n);
+    }
+    void resize(std::size_t n) {
+        reserve(n);
+        for (std::size_t i = size_; i < n; ++i) data_[i] = T{};
+        size_ = static_cast<std::uint32_t>(n);
+    }
+    void push_back(const T& value) {
+        if (size_ == capacity_) grow(size_ + 1);
+        data_[size_++] = value;
+    }
+    template <class... Args>
+    T& emplace_back(Args&&... args) {
+        if (size_ == capacity_) grow(size_ + 1);
+        data_[size_] = T{std::forward<Args>(args)...};
+        return data_[size_++];
+    }
+    T* erase(T* at) {
+        std::copy(at + 1, end(), at);
+        --size_;
+        return at;
+    }
+
+    template <class It>
+    void assign(It first, It last) {
+        size_ = 0;
+        reserve(static_cast<std::size_t>(std::distance(first, last)));
+        for (; first != last; ++first) data_[size_++] = *first;
+    }
+
+    friend bool operator==(const ArenaVec& a, const ArenaVec& b) {
+        return std::equal(a.begin(), a.end(), b.begin(), b.end());
+    }
+
+   private:
+    void grow(std::size_t need) {
+        const std::size_t capacity =
+            std::max<std::size_t>({need, std::size_t{capacity_} * 2, 4});
+        // The list a decoder fills is the last block of its arena, so it grows
+        // where it is.
+        if (arena_ != nullptr && data_ != nullptr &&
+            arena_->extend(data_, capacity_, capacity)) {
+            capacity_ = static_cast<std::uint32_t>(capacity);
+            return;
+        }
+        T* fresh =
+            arena_ != nullptr
+                ? arena_->allocate(capacity)
+                : dstd::make_unique_for_overwrite<T[]>(capacity).release();
+        std::copy(data_, data_ + size_, fresh);
+        free_owned();
+        data_ = fresh;
+        capacity_ = static_cast<std::uint32_t>(capacity);
+    }
+    void assign(const T* from, std::size_t n) {
+        reserve(n);
+        std::copy(from, from + n, data_);
+        size_ = static_cast<std::uint32_t>(n);
+    }
+    void free_owned() {
+        if (arena_ == nullptr) dstd::UniquePtr<T[]>(data_).reset();
+    }
+
+    T* data_ = nullptr;
+    std::uint32_t size_ = 0;
+    std::uint32_t capacity_ = 0;
+    ChunkArena<T>* arena_ = nullptr;
+};
 
 /// An event owned independently of the simdjson parse that produced it: strings
 /// are interned to ids, never views into the reused parser buffer, so a whole
@@ -37,7 +257,7 @@ struct FoldEvent {
     std::uint64_t tid = 0;
     std::uint64_t ts = 0;
     std::uint64_t dur = 0;
-    RecordPhase phase = RecordPhase::UNKNOWN;
+    RecordPhase phase = RecordPhase::Unknown;
     bool has_dur = false;
     /// A record decoded by exact path (decode_record): every field is in
     /// `args` under its path, and the fixed fields above are unset.
@@ -49,25 +269,26 @@ struct FoldEvent {
     /// Declared-field values that did not convert and read as null.
     std::uint16_t unconverted = 0;
     using ArgValue =
-        std::variant<double, std::int64_t, std::uint32_t, std::uint64_t>;
-    std::vector<std::pair<std::uint32_t, ArgValue>> args;
+        dstd::Variant<double, std::int64_t, std::uint32_t, std::uint64_t>;
+    using Arg = dstd::Pair<std::uint32_t, ArgValue>;
+    ArenaVec<Arg> args;
     /// Top-level values for schema fields the POD does not carry as a scalar
     /// (type/ph/id), kept apart from `args` so a same-named args key cannot
     /// shadow the real top-level field. Same encoding as `args`.
-    std::vector<std::pair<std::uint32_t, ArgValue>> top_fields;
+    ArenaVec<Arg> top_fields;
 
     /// What `args` and `top_fields` leave out or widen, for filters: a JSON
     /// null, a bool (also stored there as 0/1), an empty array or object, or
     /// an array or object whose `args` entry is its canonical JSON text (a
     /// declared json field).
     enum class Special : std::uint8_t {
-        NULL_VALUE,
-        FALSE_VALUE,
-        TRUE_VALUE,
-        EMPTY_ARRAY,
-        EMPTY_OBJECT,
-        JSON_ARRAY,
-        JSON_OBJECT,
+        NullValue,
+        FalseValue,
+        TrueValue,
+        EmptyArray,
+        EmptyObject,
+        JsonArray,
+        JsonObject,
     };
     struct SpecialValue {
         std::uint32_t key;
@@ -75,14 +296,35 @@ struct FoldEvent {
         /// Keyed like `top_fields` rather than `args`.
         bool top = false;
     };
-    std::vector<SpecialValue> specials;
+    ArenaVec<SpecialValue> specials;
 
     /// Every scalar or null leaf of the record, arbitrarily nested, as
-    /// (interned exact path id -> index::store::PathType): "args.io.off",
-    /// "args.hosts.1", a top-level "type". Filled only when the scan captures
-    /// schema (the index build); empty otherwise.
-    std::vector<std::pair<std::uint32_t, std::uint8_t>> schema_leaves;
+    /// (interned exact path id -> trace::index::store::PathType):
+    /// "args.io.off", "args.hosts.1", a top-level "type". Filled only when the
+    /// scan captures schema (the index build); empty otherwise.
+    using SchemaLeaf = dstd::Pair<std::uint32_t, std::uint8_t>;
+    ArenaVec<SchemaLeaf> schema_leaves;
 };
+
+/// Rewrite every interned id of `ev` through `map`, indexed by the old id.
+inline void remap_ids(FoldEvent& ev, dstd::Span<const std::uint32_t> map) {
+    constexpr std::uint32_t NO_ID = dftracer::utils::dstd::StringIntern::NO_ID;
+    const auto at = [&](std::uint32_t& id) {
+        if (id != NO_ID) id = map[id];
+    };
+    at(ev.cat_id);
+    at(ev.name_id);
+    at(ev.fhash_id);
+    at(ev.hhash_id);
+    for (auto* list : {&ev.args, &ev.top_fields})
+        for (auto& [key, value] : *list) {
+            key = map[key];
+            if (auto* text = std::get_if<std::uint32_t>(&value))
+                *text = map[*text];
+        }
+    for (auto& s : ev.specials) s.key = map[s.key];
+    for (auto& leaf : ev.schema_leaves) leaf.first = map[leaf.first];
+}
 
 /// Reset `ev` to a default event, keeping the capacity of its vectors so a
 /// reused slot decodes the next record without allocating.
@@ -102,28 +344,68 @@ inline void reset_fold_event(FoldEvent& ev) {
     ev.schema_leaves = std::move(schema_leaves);
 }
 
-/// FoldEvents a decoding worker reuses from batch to batch. clear() keeps
-/// every slot, and a slot keeps its vectors' capacity, so steady-state decode
-/// allocates nothing per event. Only the first size() slots are live.
+/// FoldEvents a decoding worker reuses from batch to batch. The lists of every
+/// event take their entries from arenas of the buffer. clear() hands the chunks
+/// out again and cuts a batch of more than RETAIN_SLOTS events back to that
+/// many slots.
 class FoldEventBuffer {
    public:
+    static constexpr std::size_t RETAIN_SLOTS = 16384;
+
+    FoldEventBuffer() = default;
+    FoldEventBuffer(const FoldEventBuffer&) = delete;
+    FoldEventBuffer& operator=(const FoldEventBuffer&) = delete;
+
     /// The next slot, in whatever state its last use left it; the decoder
     /// resets it.
     FoldEvent& append() {
-        if (live_ == slots_.size()) slots_.emplace_back();
+        if (live_ == slots_.size()) {
+            FoldEvent& ev = slots_.emplace_back();
+            bind(ev);
+        }
         return slots_[live_++];
     }
     /// Drop the slot append() returned last (a record the caller rejects).
     void discard_last() { --live_; }
-    void clear() { live_ = 0; }
+    void clear() {
+        live_ = 0;
+        if (slots_.size() > RETAIN_SLOTS) {
+            slots_.resize(RETAIN_SLOTS);
+            slots_.shrink_to_fit();
+        }
+        for (FoldEvent& ev : slots_) bind(ev);
+        args_.reset();
+        specials_.reset();
+        leaves_.reset();
+    }
     bool empty() const { return live_ == 0; }
     std::size_t size() const { return live_; }
+    /// Slots allocated, live or idle.
+    std::size_t slot_capacity() const { return slots_.capacity(); }
+    /// Bytes the buffer holds: its slots and the arenas of their lists.
+    std::size_t bytes() const {
+        return slots_.capacity() * sizeof(FoldEvent) + args_.bytes() +
+               specials_.bytes() + leaves_.bytes();
+    }
     const FoldEvent& back() const { return slots_[live_ - 1]; }
-    std::span<const FoldEvent> events() const { return {slots_.data(), live_}; }
+    dstd::Span<const FoldEvent> events() const {
+        return {slots_.data(), live_};
+    }
+    dstd::Span<FoldEvent> events_mut() { return {slots_.data(), live_}; }
 
    private:
-    std::vector<FoldEvent> slots_;
+    void bind(FoldEvent& ev) {
+        ev.args.bind(&args_);
+        ev.top_fields.bind(&args_);
+        ev.specials.bind(&specials_);
+        ev.schema_leaves.bind(&leaves_);
+    }
+
+    dstd::Vector<FoldEvent> slots_;
     std::size_t live_ = 0;
+    ChunkArena<FoldEvent::Arg> args_;
+    ChunkArena<FoldEvent::SpecialValue> specials_;
+    ChunkArena<FoldEvent::SchemaLeaf> leaves_;
 };
 
 /// A read-only sequence of FoldEvents: all of a span, or the ones a list of
@@ -131,12 +413,12 @@ class FoldEventBuffer {
 /// without copying a FoldEvent. Borrows both; they must outlive the view.
 class EventRows {
    public:
-    EventRows(std::span<const FoldEvent> all)
+    EventRows(dstd::Span<const FoldEvent> all)
         : base_(all.data()), n_(all.size()) {}
-    EventRows(const std::vector<FoldEvent>& all)
+    EventRows(const dstd::Vector<FoldEvent>& all)
         : base_(all.data()), n_(all.size()) {}
-    EventRows(std::span<const FoldEvent> all,
-              std::span<const std::uint32_t> pick)
+    EventRows(dstd::Span<const FoldEvent> all,
+              dstd::Span<const std::uint32_t> pick)
         : base_(all.data()), pick_(pick.data()), n_(pick.size()) {}
 
     std::size_t size() const { return n_; }
@@ -172,15 +454,15 @@ class EventRows {
 /// The fixed top-level fields of the trace schema. A bare reference to one of
 /// these resolves to the top-level value, never a same-named args key; reach an
 /// args field with the same name through the explicit `args.<name>` path.
-inline bool is_schema_field(std::string_view f) {
+inline bool is_schema_field(dstd::StringView f) {
     return f == "name" || f == "cat" || f == "pid" || f == "tid" || f == "ts" ||
            f == "dur" || f == "ph" || f == "id" || f == "type";
 }
 
 /// True when `field` addresses a nested value (`a.b`, `a[0]`, `a.0.b`), so it
 /// needs path resolution rather than a single object-key lookup.
-inline bool is_nested_path(std::string_view field) {
-    return field.find_first_of(".[") != std::string_view::npos;
+inline bool is_nested_path(dstd::StringView field) {
+    return field.find_first_of(".[") != dstd::StringView::npos;
 }
 
 /// Resolve a dotted/bracketed path from `root` (`a.b[0].c`, `a.b.0`); `ok` is
@@ -189,22 +471,42 @@ inline bool is_nested_path(std::string_view field) {
 /// single path walker (JsonValue::at) so flat dotted member keys resolve here
 /// too; on failure `ok` is false and `root` is returned unchanged.
 inline simdjson::dom::element resolve_json_path(simdjson::dom::element root,
-                                                std::string_view path,
+                                                dstd::StringView path,
                                                 bool& ok) {
     json::JsonValue v = json::JsonValue(root).at(path);
     ok = v.exists();
     return ok ? v.element() : root;
 }
 
+/// Append an unsigned integer under `key_id` as the metric encoding wants it:
+/// exact as int64 when it fits, else as uint64.
+inline void append_uint_arg(ArenaVec<FoldEvent::Arg>& into,
+                            std::uint32_t key_id, std::uint64_t u) {
+    if (u <=
+        static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()))
+        into.emplace_back(key_id, static_cast<std::int64_t>(u));
+    else
+        into.emplace_back(key_id, u);
+}
+
+/// Append a bool under `key_id` as 0/1 and as a special.
+inline void append_bool_arg(ArenaVec<FoldEvent::Arg>& into,
+                            ArenaVec<FoldEvent::SpecialValue>& specials,
+                            std::uint32_t key_id, bool b, bool top) {
+    using S = FoldEvent::Special;
+    into.emplace_back(key_id, static_cast<std::int64_t>(b));
+    specials.push_back({key_id, b ? S::TrueValue : S::FalseValue, top});
+}
+
 /// Append `v` under `key_id` when it is a scalar: a string interned, an integer
 /// exact as int64 (a uint64 above INT64_MAX as double), a bool as 0/1. A null,
 /// a bool and an empty array or object also go to `specials`; a non-empty
 /// array or object appends nothing.
-inline void append_scalar_arg(
-    std::vector<std::pair<std::uint32_t, FoldEvent::ArgValue>>& into,
-    std::vector<FoldEvent::SpecialValue>& specials, std::uint32_t key_id,
-    simdjson::dom::element v, dftracer::utils::StringIntern& intern,
-    bool top = false) {
+template <class Intern>
+inline void append_scalar_arg(ArenaVec<FoldEvent::Arg>& into,
+                              ArenaVec<FoldEvent::SpecialValue>& specials,
+                              std::uint32_t key_id, simdjson::dom::element v,
+                              Intern& intern, bool top = false) {
     using T = simdjson::dom::element_type;
     using S = FoldEvent::Special;
     switch (v.type()) {
@@ -215,35 +517,26 @@ inline void append_scalar_arg(
         case T::INT64:
             into.emplace_back(key_id, v.get_int64().value_unsafe());
             break;
-        case T::UINT64: {
-            const std::uint64_t u = v.get_uint64().value_unsafe();
-            if (u <= static_cast<std::uint64_t>(
-                         std::numeric_limits<std::int64_t>::max()))
-                into.emplace_back(key_id, static_cast<std::int64_t>(u));
-            else
-                into.emplace_back(key_id, u);
+        case T::UINT64:
+            append_uint_arg(into, key_id, v.get_uint64().value_unsafe());
             break;
-        }
         case T::DOUBLE:
             into.emplace_back(key_id, v.get_double().value_unsafe());
             break;
-        case T::BOOL: {
-            const bool b = v.get_bool().value_unsafe();
-            into.emplace_back(key_id, static_cast<std::int64_t>(b));
-            specials.push_back(
-                {key_id, b ? S::TRUE_VALUE : S::FALSE_VALUE, top});
+        case T::BOOL:
+            append_bool_arg(into, specials, key_id, v.get_bool().value_unsafe(),
+                            top);
             break;
-        }
         case T::NULL_VALUE:
-            specials.push_back({key_id, S::NULL_VALUE, top});
+            specials.push_back({key_id, S::NullValue, top});
             break;
         case T::ARRAY:
             if (v.get_array().value_unsafe().size() == 0)
-                specials.push_back({key_id, S::EMPTY_ARRAY, top});
+                specials.push_back({key_id, S::EmptyArray, top});
             break;
         case T::OBJECT:
             if (v.get_object().value_unsafe().size() == 0)
-                specials.push_back({key_id, S::EMPTY_OBJECT, top});
+                specials.push_back({key_id, S::EmptyObject, top});
             break;
         case T::BIGINT:
             // Wider than 64 bits: kept exact as its digits.
@@ -255,9 +548,9 @@ inline void append_scalar_arg(
 
 /// Flatten the array or object `v` into `ev.args` under `path` the way
 /// dftracer args are flattened (`path.0`, `path.key`).
-void flatten_container(FoldEvent& ev, std::string path,
+void flatten_container(FoldEvent& ev, dstd::String path,
                        simdjson::dom::element v,
-                       dftracer::utils::StringIntern& intern);
+                       dftracer::utils::dstd::StringIntern& intern);
 
 /// Capture a field the POD does not natively carry (top-level type/ph/id, or a
 /// nested a.b/a[0]), JSON type preserved. A name that misses at the event root
@@ -266,12 +559,13 @@ void flatten_container(FoldEvent& ev, std::string path,
 /// schema field goes to `top_fields` so a same-named args key cannot shadow it;
 /// everything else to `args`. No-op when the path is absent.
 inline void capture_extra_field(FoldEvent& ev, simdjson::dom::element root,
-                                dftracer::utils::StringIntern& intern,
-                                const std::string& name) {
+                                dftracer::utils::dstd::StringIntern& intern,
+                                const dstd::String& name) {
     bool ok = false;
     simdjson::dom::element v = resolve_json_path(root, name, ok);
     const bool schema_field = !is_nested_path(name) && is_schema_field(name);
-    if (!ok && !schema_field && !dftracer::utils::has_args_prefix(name)) {
+    if (!ok && !schema_field &&
+        !dftracer::utils::common::has_args_prefix(name)) {
         simdjson::dom::element args;
         if (root["args"].get(args) == simdjson::SUCCESS)
             v = resolve_json_path(args, name, ok);
@@ -289,12 +583,18 @@ inline void capture_extra_field(FoldEvent& ev, simdjson::dom::element root,
         append_scalar_arg(into, ev.specials, key_id, v, intern, schema_field);
 }
 
+struct DecodeHints;
+
 /// Enumerate every scalar or null leaf of `root` (arbitrarily nested) into
 /// ev.schema_leaves by exact path for the index build's path catalog; the
 /// axis and structural keys (pid/tid/ts/dur/ph/id) are excluded.
+///
+/// With `hints`, the path id of a top-level scalar is remembered in `hints`, so
+/// a record interns no path string after its first of that key.
 void capture_schema_leaves(FoldEvent& ev, simdjson::dom::element root,
-                           dftracer::utils::StringIntern& intern,
-                           bool skip_args = false);
+                           dftracer::utils::dstd::StringIntern& intern,
+                           bool skip_args = false,
+                           DecodeHints* hints = nullptr);
 
 /// What one decoding worker learns from its records, valid for one intern and
 /// one record schema: the argument count of the previous record, as the next
@@ -305,16 +605,68 @@ struct DecodeHints {
     std::size_t args = 0;
     /// The path being walked by decode_record, reused so a record's walk
     /// allocates no path string.
-    std::string path;
-    const dftracer::utils::index::RecordSchema* schema = nullptr;
-    std::vector<const dftracer::utils::index::FieldSpec*> fields;
-    std::vector<std::uint8_t> known;
-    /// The catalog path id ("args." + key) of each argument key id, so a
-    /// record's args are walked once for both the event and its leaves: by
-    /// index below FIELD_CACHE_IDS, by map above.
-    std::vector<std::uint32_t> arg_leaf;
-    ankerl::unordered_dense::map<std::uint32_t, std::uint32_t> arg_leaf_far;
+    dstd::String path;
+    const dftracer::utils::trace::index::RecordSchema* schema = nullptr;
+    dstd::Vector<const dftracer::utils::trace::index::FieldSpec*> fields;
+    dstd::Vector<std::uint8_t> known;
+    /// The catalog path id ("args." + key) of each argument key id, by index
+    /// below FIELD_CACHE_IDS and by map above.
+    dstd::Vector<std::uint32_t> arg_leaf;
+    dstd::HashMap<std::uint32_t, std::uint32_t> arg_leaf_far;
+    /// The path id of each top-level key whose value is a scalar. `packed`
+    /// holds a key of up to 8 bytes, zero padded, so it compares as a word.
+    struct TopLeaf {
+        dstd::String key;
+        std::uint64_t packed;
+        std::uint32_t id;
+    };
+    dstd::Vector<TopLeaf> top_leaf;
+    /// The keys of the record being decoded by append_dftracer_record that are
+    /// catalog paths, in order, kept from its one walk of the record.
+    struct WalkedKey {
+        dstd::StringView key;
+        simdjson::dom::element value;
+    };
+    dftracer::utils::dstd::Vector<WalkedKey> walked;
+    /// The key at each position of the previous record's args object with its
+    /// interned id, and of its leaf keys with their path id.
+    struct KeyAt {
+        dftracer::utils::dstd::String key;
+        std::uint32_t id = dftracer::utils::dstd::StringIntern::NO_ID;
+    };
+    dftracer::utils::dstd::Vector<KeyAt> arg_key_at;
+    dftracer::utils::dstd::Vector<KeyAt> top_key_at;
+    /// A leaf of the record being read on demand whose path id waits for the
+    /// end of the record, so the paths are interned in the order the DOM
+    /// reader interns them. A top-level scalar names its `key`; a leaf under a
+    /// nested key holds its path in `deferred_text`; a `resolved` one already
+    /// has its `id`. `in_args` marks a leaf below "args", dropped when the
+    /// event's own args walk lists it.
+    struct DeferredLeaf {
+        dstd::StringView key;
+        std::size_t offset = 0;
+        std::size_t size = 0;
+        std::size_t pos = 0;
+        std::uint32_t id = 0;
+        std::uint8_t tag = 0;
+        bool composed = false;
+        bool resolved = false;
+        bool in_args = false;
+    };
+    dstd::Vector<DeferredLeaf> deferred;
+    dstd::String deferred_text;
 };
+
+/// Whether build_fold_event_into, given DecodeHints, walks the record's args
+/// into `schema_leaves` itself: only a non-empty args object, which the leaf
+/// walk would otherwise visit a second time. An empty or non-object args is
+/// left to capture_schema_leaves, which records it.
+inline bool args_leaves_in_walk(bool needs_args, bool has_args,
+                                simdjson::dom::element args) {
+    simdjson::dom::object obj;
+    return needs_args && has_args &&
+           args.get_object().get(obj) == simdjson::SUCCESS && obj.size() > 0;
+}
 
 /// Decode a record of no known trace format into `ev` (reset first), as an
 /// owned data event (by_path): every
@@ -332,13 +684,36 @@ struct DecodeHints {
 /// `schema_leaves` and its value is not decoded.
 void decode_record_into(
     FoldEvent& ev, simdjson::dom::element root,
-    dftracer::utils::StringIntern& intern, bool capture_schema = true,
-    const std::vector<std::string>* paths = nullptr,
-    const dftracer::utils::index::RecordSchema* record_schema = nullptr,
-    const std::vector<const dftracer::utils::index::FieldSpec*>* path_fields =
-        nullptr,
+    dftracer::utils::dstd::StringIntern& intern, bool capture_schema = true,
+    const dstd::Vector<dstd::String>* paths = nullptr,
+    const dftracer::utils::trace::index::RecordSchema* record_schema = nullptr,
+    const dstd::Vector<const dftracer::utils::trace::index::FieldSpec*>*
+        path_fields = nullptr,
     std::size_t max_children = 0, DecodeHints* hints = nullptr,
     bool skip_never_indexed = false);
+
+/// Decode the record `record`, an object or array, into `ev` (reset first) as
+/// the DOM overload does, in one forward read of its text: no DOM tree is
+/// built. On a line the DOM parser accepts it gives the same event for the same
+/// arguments. It also keeps a line the DOM parser refuses for a number too
+/// large for a double (as signed infinity) or a string with an invalid escape
+/// (as the raw text). The canonical text of a json field or of a collapsed
+/// array or object is the text of that part as written when it is not valid
+/// JSON for the DOM parser. A read error, such as text that is no JSON value in
+/// a part the read reaches, marks the line broken and leaves `ev` reset, which
+/// no consumer keeps; a part the read does not reach is not checked. With
+/// `cache`, bound to `intern`, a string the cache has seen is not looked up in
+/// `intern` again.
+void decode_record_into(
+    FoldEvent& ev, json::Value& record,
+    dftracer::utils::dstd::StringIntern& intern, bool capture_schema = true,
+    const dstd::Vector<dstd::String>* paths = nullptr,
+    const dftracer::utils::trace::index::RecordSchema* record_schema = nullptr,
+    const dstd::Vector<const dftracer::utils::trace::index::FieldSpec*>*
+        path_fields = nullptr,
+    std::size_t max_children = 0, DecodeHints* hints = nullptr,
+    bool skip_never_indexed = false,
+    dftracer::utils::dstd::InternCache* cache = nullptr);
 
 /// The max_children an index build decodes with, so a record of huge arrays
 /// or maps adds a bounded number of catalog paths and zone keys.
@@ -349,11 +724,33 @@ inline constexpr std::size_t INDEX_MAX_CHILDREN = 256;
 /// DFTracerEvent::parse_scalars already. Every string is interned, so the
 /// result outlives `args`'s parser. With `leaves` (and `needs_args`), each
 /// argument leaf also goes into `schema_leaves` as "args.<key>", in the same
-/// walk.
+/// walk. With `cache`, bound to `intern`, a string the cache has seen is not
+/// looked up in `intern` again.
 void build_fold_event_into(FoldEvent& ev, const DFTracerEvent& scalars,
                            simdjson::dom::element args, bool has_args,
-                           dftracer::utils::StringIntern& intern,
-                           bool needs_args, DecodeHints* leaves = nullptr);
+                           dftracer::utils::dstd::StringIntern& intern,
+                           bool needs_args, DecodeHints* leaves = nullptr,
+                           dftracer::utils::dstd::InternCache* cache = nullptr);
+
+/// Decode a DFTracer record into the next slot of `batch`. The result equals
+/// build_fold_event_into and capture_schema_leaves run on
+/// DFTracerEvent::parse_scalars. Returns false, appending no slot, for a record
+/// that is not an object or has no phase. `hints` is the calling worker's own.
+bool append_dftracer_record(FoldEventBuffer& batch, simdjson::dom::element root,
+                            dftracer::utils::dstd::StringIntern& intern,
+                            bool needs_args, bool capture_schema,
+                            DecodeHints& hints,
+                            dftracer::utils::dstd::InternCache* cache);
+
+/// True for the records the index counts in total_events under the dftracer
+/// decoder: an object with a top-level "ph" that is not a metadata phase.
+/// Allocates and interns nothing.
+bool counts_as_event(simdjson::dom::element root);
+
+/// As above for a record read on demand, for a line the DOM parser refused. The
+/// last "ph" counts. A record that reads badly is marked broken and does not
+/// count.
+bool counts_as_event(json::Value& record);
 
 /// Parse a DOM object into `ev` (reset first) as an owned event. Every string
 /// is interned, so the result stays valid after the parser that produced `root`
@@ -364,9 +761,44 @@ void build_fold_event_into(FoldEvent& ev, const DFTracerEvent& scalars,
 /// build's column harvest.
 void extract_fold_event_into(
     FoldEvent& ev, simdjson::dom::element root,
-    dftracer::utils::StringIntern& intern, bool needs_args,
-    const std::vector<std::string>* extra_fields = nullptr,
+    dftracer::utils::dstd::StringIntern& intern, bool needs_args,
+    const dstd::Vector<dstd::String>* extra_fields = nullptr,
     bool capture_schema = false, DecodeHints* hints = nullptr);
+
+/// Read the event `event`, an object, into `ev` (reset first) as an owned
+/// event, in one forward walk of its text: no DOM tree is built. On a line the
+/// DOM parser accepts, it gives the event the DOM form gives with the same
+/// `needs_args`, with no extra fields and no schema capture. It also keeps a
+/// line with an invalid string escape, as the raw text, or with a number too
+/// large for a double, as signed infinity, which the DOM parser refuses. A read
+/// error, such as text that is no JSON value in a part the walk reaches, marks
+/// the line broken and leaves `ev` reset, which no consumer keeps. A part the
+/// walk does not reach is not checked. With `cache`, bound to `intern`, a
+/// string the cache has seen is not looked up in `intern` again. With
+/// `nested_captures`, each name is captured into the event as the DOM form
+/// captures `extra_fields`; the line is read from its start once more for each
+/// name, without a parse.
+void extract_fold_event_into(
+    FoldEvent& ev, json::Value& event,
+    dftracer::utils::dstd::StringIntern& intern, bool needs_args,
+    dftracer::utils::dstd::InternCache* cache = nullptr,
+    const dstd::Vector<dstd::String>* nested_captures = nullptr,
+    bool capture_schema = false, DecodeHints* hints = nullptr);
+
+/// Decode the DFTracer record `record` into the next slot of `batch` in one
+/// forward read of its text, as the DOM overload does, with the same
+/// `schema_leaves` in the same order. A line the DOM parser refuses for a big
+/// number, an invalid escape or a bad byte in a string is kept. Returns false,
+/// appending no slot, for a record that is not an object, has no phase or reads
+/// badly; the last marks `record` broken. `extra_fields` are captured as
+/// @ref extract_fold_event_into captures `nested_captures`. `hints` is the
+/// calling worker's own.
+bool append_dftracer_record(
+    FoldEventBuffer& batch, json::Value& record,
+    dftracer::utils::dstd::StringIntern& intern, bool needs_args,
+    bool capture_schema, DecodeHints& hints,
+    dftracer::utils::dstd::InternCache* cache,
+    const dstd::Vector<dstd::String>* extra_fields = nullptr);
 
 }  // namespace dftracer::utils::trace::views::detail
 

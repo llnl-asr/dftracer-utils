@@ -1,34 +1,34 @@
-#include <dftracer/utils/core/common/error.h>
-#include <dftracer/utils/core/common/hash/constants.h>
+// SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/kernels/filter.h>
+#include <dftracer/utils/dstd/hash/constants.h>
+#include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/trace/views/result_join.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/trace/views/view_plan.h>
 
 #include <algorithm>
-#include <optional>
-#include <span>
 #include <string>
 #include <string_view>
-#include <unordered_map>
-#include <unordered_set>
-#include <vector>
-
-namespace dataframe = dftracer::utils::dataframe;
 
 namespace dftracer::utils::trace::views {
 
 namespace {
 
 // A null key cell is nullopt, so it joins other null keys but never "".
-using Key = std::vector<std::optional<std::string>>;
+using Key = dstd::Vector<dstd::Optional<dstd::String>>;
 
 struct KeyHash {
     std::size_t operator()(const Key& k) const {
-        std::size_t h = dftracer::utils::hash::FNV1A_OFFSET_BASIS_LEGACY;
-        for (const std::optional<std::string>& s : k) {
-            std::size_t sh = std::hash<std::optional<std::string>>{}(s);
-            h ^= sh + dftracer::utils::hash::GOLDEN_RATIO + (h << 6) + (h >> 2);
+        std::size_t h = dftracer::utils::dstd::hash::FNV1A_OFFSET_BASIS_LEGACY;
+        for (const dstd::Optional<dstd::String>& s : k) {
+            std::size_t sh = s ? dstd::Hash<dstd::String>{}(*s) : 0;
+            h ^= sh + dftracer::utils::dstd::hash::GOLDEN_RATIO + (h << 6) +
+                 (h >> 2);
         }
         return h;
     }
@@ -43,54 +43,55 @@ Key key_of(const dataframe::DataFrame& b, std::int64_t n_key,
         if (c.is_null(row))
             k.emplace_back();
         else
-            k.emplace_back(std::string(c.string_at(row)));
+            k.emplace_back(dstd::String(c.string_at(row)));
     }
     return k;
 }
 
 }  // namespace
 
-dataframe::DataFrame join_batches(const dataframe::DataFrame& left,
-                                  const dataframe::DataFrame& right,
-                                  std::int64_t n_key, JoinType type) {
+dstd::Result<dataframe::DataFrame> join_batches(
+    const dataframe::DataFrame& left, const dataframe::DataFrame& right,
+    std::int64_t n_key, JoinType type) {
     // The key schema is the first n_key column names; they must agree.
-    if (n_key > static_cast<std::int64_t>(right.names.size())) return {};
+    if (n_key > static_cast<std::int64_t>(right.names.size()))
+        return dataframe::DataFrame{};
     for (std::int64_t i = 0; i < n_key; ++i)
         if (left.names[static_cast<std::size_t>(i)] !=
             right.names[static_cast<std::size_t>(i)])
-            return {};
+            return dataframe::DataFrame{};
 
     // Keys are matched via string_at(), which reads the offset buffer a
     // non-string column does not have. Aggregation keys are always strings;
-    // reject a non-string key loudly instead of dereferencing null.
+    // reject a non-string key instead of dereferencing null.
     for (std::int64_t i = 0; i < n_key; ++i)
         if (left.columns[static_cast<std::size_t>(i)].type() !=
                 dataframe::TypeId::String ||
             right.columns[static_cast<std::size_t>(i)].type() !=
                 dataframe::TypeId::String)
-            throw DFTUtilsException::cat(
-                ErrorCode::INVALID_ARGUMENT,
+            return common::make_error(
+                common::ErrorCode::InvalidArgument,
                 "join/compare key columns must be string-typed");
 
-    const bool anti = type == JoinType::LEFT_ANTI;
-    const bool left_only = type == JoinType::LEFT_SEMI || anti;
+    const bool anti = type == JoinType::LeftAnti;
+    const bool left_only = type == JoinType::LeftSemi || anti;
     const bool want_left_only =
-        type == JoinType::LEFT || type == JoinType::FULL || anti;
+        type == JoinType::Left || type == JoinType::Full || anti;
     const bool want_right_only =
-        type == JoinType::RIGHT || type == JoinType::FULL;
+        type == JoinType::Right || type == JoinType::Full;
 
-    std::unordered_map<Key, std::int64_t, KeyHash> ridx;
+    dstd::HashMap<Key, std::int64_t, KeyHash> ridx;
     ridx.reserve(static_cast<std::size_t>(right.num_rows()));
     for (std::int64_t r = 0; r < right.num_rows(); ++r)
         ridx.emplace(key_of(right, n_key, r), r);
-    std::unordered_set<Key, KeyHash> matched;
+    dstd::HashSet<Key, KeyHash> matched;
 
     struct Row {
         Key key;
         std::int64_t li;
         std::int64_t ri;
     };
-    std::vector<Row> rows;
+    dstd::Vector<Row> rows;
     for (std::int64_t l = 0; l < left.num_rows(); ++l) {
         auto key = key_of(left, n_key, l);
         auto it = ridx.find(key);
@@ -110,7 +111,7 @@ dataframe::DataFrame join_batches(const dataframe::DataFrame& left,
     std::sort(rows.begin(), rows.end(),
               [](const Row& a, const Row& b) { return a.key < b.key; });
 
-    std::vector<std::int64_t> li, ri;
+    dstd::Vector<std::int64_t> li, ri;
     li.reserve(rows.size());
     ri.reserve(rows.size());
     for (const Row& row : rows) {
@@ -119,18 +120,18 @@ dataframe::DataFrame join_batches(const dataframe::DataFrame& left,
     }
 
     dataframe::DataFrame out;
-    std::vector<std::string_view> vals(rows.size());
-    std::vector<std::uint8_t> vbits((rows.size() + 7) / 8);
+    dstd::Vector<dstd::StringView> vals(rows.size());
+    dstd::Vector<std::uint8_t> vbits((rows.size() + 7) / 8);
     for (std::int64_t k = 0; k < n_key; ++k) {
         std::fill(vbits.begin(), vbits.end(), std::uint8_t{0});
         for (std::size_t r = 0; r < rows.size(); ++r) {
             const auto& cell = rows[r].key[static_cast<std::size_t>(k)];
-            vals[r] = cell ? std::string_view(*cell) : std::string_view();
+            vals[r] = cell ? dstd::StringView(*cell) : dstd::StringView();
             if (cell) vbits[r >> 3] |= static_cast<std::uint8_t>(1u << (r & 7));
         }
         out.names.push_back(left.names[static_cast<std::size_t>(k)]);
         out.columns.push_back(dataframe::Series::strings(
-            std::span<const std::string_view>(vals), vbits.data()));
+            dstd::Span<const dstd::StringView>(vals), vbits.data()));
     }
     for (std::size_t j = static_cast<std::size_t>(n_key);
          j < left.columns.size(); ++j) {

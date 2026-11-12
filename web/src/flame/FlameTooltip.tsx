@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 import type { FlameNode } from "../data/types";
 import { colorFor } from "../timeline/color";
 import { formatTime } from "../timeline/format";

@@ -1,21 +1,31 @@
-#include <dftracer/utils/core/common/logging.h>
+// SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/config.h>
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/intern_cache.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/evaluator.h>
-#include <dftracer/utils/index/plan/prefilter.h>
-#include <dftracer/utils/index/store/index_database.h>
+#include <dftracer/utils/duql/lookup.h>
 #include <dftracer/utils/json/json.h>
 #include <dftracer/utils/json/record_parser.h>
+#include <dftracer/utils/json/value.h>
+#include <dftracer/utils/json/value_access.h>
+#include <dftracer/utils/json/value_path.h>
+#include <dftracer/utils/trace/index/plan/prefilter.h>
+#include <dftracer/utils/trace/reader/file_process_types.h>
+#include <dftracer/utils/trace/reader/indexed_file_reader_utility.h>
+#include <dftracer/utils/trace/reader/internal/reader_factory.h>
+#include <dftracer/utils/trace/reader/internal/stream_config.h>
+#include <dftracer/utils/trace/reader/internal/trace_reader_shared.h>
 #include <dftracer/utils/trace/schema.h>
 #include <dftracer/utils/trace/views/fold_event.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/trace/views/view_definition.h>
 #include <dftracer/utils/trace/views/view_scanner_utility.h>
-#include <dftracer/utils/utilities/fileio/file_process_types.h>
-#include <dftracer/utils/utilities/fileio/indexed_file_reader_utility.h>
-#include <dftracer/utils/utilities/reader/internal/stream_config.h>
 #include <simdjson.h>
 
 #include <cstring>
-#include <string>
 
 namespace dftracer::utils::trace::views {
 
@@ -42,8 +52,8 @@ bool in_role_window(simdjson::dom::element root, const ViewDefinition& view) {
     if (t.is_number()) {
         ts = t.get<double>() * view.time_factor;
     } else if (t.is_string()) {
-        const auto us =
-            dftracer::utils::index::iso8601_micros(t.get<std::string_view>());
+        const auto us = dftracer::utils::trace::index::iso8601_micros(
+            t.get<dstd::StringView>());
         if (!us) return false;
         ts = static_cast<double>(*us);
     } else {
@@ -70,12 +80,12 @@ bool in_window(simdjson::dom::element root, const ViewDefinition& view) {
 
 // The length of the record on a line: without trailing blanks and the comma
 // a JSON-array trace ends records with; 0 for the array's "[" and "]" lines.
-std::size_t record_length(const char* line, std::size_t len) {
+std::size_t record_size(const char* line, std::size_t len) {
     while (len > 0 && (line[len - 1] == ' ' || line[len - 1] == '\t' ||
                        line[len - 1] == '\r'))
         --len;
     if (len > 0 && line[len - 1] == ',') --len;
-    const std::string_view record(line, len);
+    const dstd::StringView record(line, len);
     return record == "[" || record == "]" ? 0 : len;
 }
 
@@ -98,6 +108,260 @@ void decode_into(detail::FoldEvent& ev, simdjson::dom::element root,
                                     input.fold_extra_fields, schema, &hints);
 }
 
+// As decode_into, reading the record on demand, for a line the DOM parser
+// refuses. `schema` is whether a dftracer event enumerates its schema leaves.
+void decode_into(detail::FoldEvent& ev, json::Value& record,
+                 const ViewScannerInput& input, bool schema,
+                 detail::DecodeHints& hints,
+                 dftracer::utils::dstd::InternCache* cache) {
+    if (input.view.by_path) {
+        const bool by_path_schema = input.fold_capture_schema;
+        const bool skip_never = by_path_schema && input.fold_skip_never_indexed;
+        detail::decode_record_into(
+            ev, record, *input.fold_intern, by_path_schema,
+            by_path_schema || input.view.paths.empty() ? nullptr
+                                                       : &input.view.paths,
+            input.view.record_schema, &input.view.path_fields,
+            by_path_schema ? detail::INDEX_MAX_CHILDREN : 0, &hints, skip_never,
+            cache);
+        return;
+    }
+    detail::extract_fold_event_into(ev, record, *input.fold_intern,
+                                    input.fold_needs_args, cache,
+                                    input.fold_extra_fields, schema, &hints);
+}
+
+bool in_role_window(json::Value& root, const ViewDefinition& view) {
+    double ts = 0;
+    const bool has_ts =
+        json::at_path(root, view.time_path, [&](json::Value& t) {
+            switch (t.type()) {
+                case json::Value::Type::Int:
+                case json::Value::Type::Double: {
+                    const auto d = t.as_double();
+                    if (!d) return false;
+                    ts = *d * view.time_factor;
+                    return true;
+                }
+                case json::Value::Type::String: {
+                    const auto text = t.as_string();
+                    const auto us =
+                        text ? dftracer::utils::trace::index::iso8601_micros(
+                                   *text)
+                             : dstd::nullopt;
+                    if (!us) return false;
+                    ts = static_cast<double>(*us);
+                    return true;
+                }
+                default:
+                    return false;
+            }
+        });
+    if (!has_ts) return false;
+    double dur = 0;
+    if (view.window_overlap && !view.duration_path.empty())
+        json::at_path(root, view.duration_path, [&](json::Value& d) {
+            const auto number = d.type() == json::Value::Type::Int ||
+                                        d.type() == json::Value::Type::Double
+                                    ? d.as_double()
+                                    : dstd::nullopt;
+            if (number) dur = *number * view.duration_factor;
+            return number.has_value();
+        });
+    return in_window(true, ts, dur, view);
+}
+
+bool in_window(json::Value& root, const ViewDefinition& view) {
+    if (!view.window) return true;
+    if (!view.time_path.empty()) return in_role_window(root, view);
+    double ts = 0, dur = 0;
+    bool has_ts = false;
+    if (auto t = root.find("ts"))
+        if (const auto d = t->as_double()) {
+            ts = *d;
+            has_ts = true;
+        }
+    if (view.window_overlap)
+        if (auto t = root.find("dur"))
+            if (const auto d = t->as_double()) dur = *d;
+    return in_window(has_ts, ts, dur, view);
+}
+
+bool query_matches(json::Value& event, const duql::Query& query,
+                   bool args_fallback) {
+    json::detail::EventView view;
+    if (!json::detail::ValueAccess::event(event, view)) return false;
+    const duql::OnDemandEvent line(*view.doc, view.text, *view.strings);
+    const bool kept = duql::evaluate(duql::detail::QueryAccess::root(query),
+                                     line, args_fallback);
+    if (line.broken) json::detail::ValueAccess::mark_broken(event);
+    return kept;
+}
+
+// A lookup that failed on a record left its error in its slot, since the
+// evaluator returns one value per record; the scan raises it between chunks.
+dstd::Result<void> check_lookups(const duql::Query& query) {
+    if (const auto failure =
+            duql::lookup_failure(duql::detail::QueryAccess::root(query)))
+        return common::make_error(common::ErrorCode::InvalidArgument,
+                                  failure->message);
+    return {};
+}
+
+struct LineScan {
+    const ViewScannerInput& input;
+    const dstd::Optional<duql::Query>* query;
+    bool use_query;
+    ViewScannerBatch& batch;
+    detail::FoldEventBuffer& pool;
+    detail::DecodeHints& hints;
+    dftracer::utils::dstd::InternCache* cache;
+    json::Document& document;
+    dftracer::utils::json::RecordParser& parser;
+};
+
+void emit_event(LineScan& ls, const char* line_start, std::size_t json_size) {
+    ls.batch.events.emplace_back(line_start, json_size);
+}
+
+// Without a query or args, the decode's own walk reads ph, ts and dur, so the
+// phase and the window are checked on the decoded event. A ts of 0 or a missing
+// dur may be a value the decode does not keep, such as a fraction, so those
+// lines check the window on the text.
+void scan_decoded(LineScan& ls, json::Value& event, const char* line_start,
+                  std::size_t json_size) {
+    const ViewScannerInput& input = ls.input;
+    const ViewDefinition& view = input.view;
+    ViewScannerBatch& batch = ls.batch;
+    detail::FoldEvent& ev = ls.pool.append();
+    decode_into(ev, event, input, false, ls.hints, ls.cache);
+    if (json::detail::ValueAccess::broken(event)) {
+        ls.pool.discard_last();
+        ++batch.lines_invalid;
+        return;
+    }
+    bool match;
+    if (ev.phase == RecordPhase::Metadata) {
+        match = view.include_metadata;
+    } else {
+        batch.events_scanned++;
+        if (!view.window) {
+            match = true;
+        } else if (ev.ts == 0 || (view.window_overlap && !ev.has_dur)) {
+            json::detail::ValueAccess::rewind(event);
+            match = in_window(event, view);
+        } else {
+            match = in_window(true, static_cast<double>(ev.ts),
+                              static_cast<double>(ev.dur), view);
+        }
+    }
+    if (!match) {
+        ls.pool.discard_last();
+        return;
+    }
+    batch.values_unconverted += ev.unconverted;
+    if (input.fold_keep_raw) emit_event(ls, line_start, json_size);
+    batch.events_matched++;
+}
+
+// One line read on demand: the window, the query and the fold decode all
+// read the same parse, which a syntax error in a part they reach drops.
+void scan_line(LineScan& ls, const char* line_start, std::size_t json_size) {
+    const ViewScannerInput& input = ls.input;
+    ViewScannerBatch& batch = ls.batch;
+    auto parsed = ls.document.parse(dstd::StringView(line_start, json_size));
+    if (!parsed || parsed->type() != json::Value::Type::Object) {
+        ++batch.lines_invalid;
+        return;
+    }
+    json::Value& event = *parsed;
+    if (input.fold_intern && !input.fold_needs_args && !ls.use_query &&
+        !input.view.by_path && input.view.time_path.empty() &&
+        !input.fold_capture_schema) {
+        scan_decoded(ls, event, line_start, json_size);
+        return;
+    }
+    const RecordPhase phase =
+        input.view.by_path ? RecordPhase::Unknown : trace::event_phase(event);
+    const bool metadata = phase == RecordPhase::Metadata;
+    bool match;
+    if (metadata) {
+        match = input.view.include_metadata &&
+                (!ls.use_query ||
+                 !(input.view.filter_metadata || input.view.metadata_records) ||
+                 query_matches(event, **ls.query, input.view.args_fallback));
+    } else {
+        match = in_window(event, input.view) &&
+                (!ls.use_query ||
+                 query_matches(event, **ls.query, input.view.args_fallback));
+    }
+    if (json::detail::ValueAccess::broken(event)) {
+        ++batch.lines_invalid;
+        return;
+    }
+    if (!metadata) batch.events_scanned++;
+    if (!match) return;
+    if (input.fold_intern) {
+        json::detail::ValueAccess::rewind(event);
+        decode_into(ls.pool.append(), event, input,
+                    !metadata && input.fold_capture_schema, ls.hints, ls.cache);
+        if (json::detail::ValueAccess::broken(event)) {
+            ls.pool.discard_last();
+            ++batch.lines_invalid;
+            return;
+        }
+        batch.values_unconverted += ls.pool.back().unconverted;
+        if (input.fold_keep_raw) emit_event(ls, line_start, json_size);
+    } else {
+        emit_event(ls, line_start, json_size);
+    }
+    batch.events_matched++;
+}
+
+// One line read through the DOM, for a dftracer fold that captures schema. A
+// line the DOM parser refuses goes to scan_line.
+void scan_dom_line(LineScan& ls, const char* line_start,
+                   std::size_t json_size) {
+    const ViewScannerInput& input = ls.input;
+    ViewScannerBatch& batch = ls.batch;
+    auto result = ls.parser.parse(line_start, json_size);
+    if (result.error()) {
+        // A line the DOM parser refuses is read on demand.
+        scan_line(ls, line_start, json_size);
+        return;
+    }
+    if (!result.value_unsafe().is_object()) {
+        ++batch.lines_invalid;
+        return;
+    }
+    auto root = result.value_unsafe();
+    JsonValue json(root);
+    const RecordPhase phase = read_phase(json["ph"]);
+    const bool metadata = phase == RecordPhase::Metadata;
+    bool match;
+    if (metadata) {
+        // Metadata records bypass the event query unless they are rows the
+        // query filters.
+        match = input.view.include_metadata &&
+                (!ls.use_query ||
+                 !(input.view.filter_metadata || input.view.metadata_records) ||
+                 duql::evaluate(duql::detail::QueryAccess::root(**ls.query),
+                                json, input.view.args_fallback));
+    } else {
+        batch.events_scanned++;
+        match = in_window(root, input.view) &&
+                (!ls.use_query ||
+                 duql::evaluate(duql::detail::QueryAccess::root(**ls.query),
+                                json, input.view.args_fallback));
+    }
+    if (!match) return;
+    decode_into(ls.pool.append(), root, input,
+                !metadata && input.fold_capture_schema, ls.hints);
+    batch.values_unconverted += ls.pool.back().unconverted;
+    if (input.fold_keep_raw) emit_event(ls, line_start, json_size);
+    batch.events_matched++;
+}
+
 }  // namespace
 
 void ScanCounts::add_to(ExportStats& st) const {
@@ -107,12 +371,12 @@ void ScanCounts::add_to(ExportStats& st) const {
     st.values_unconverted += values_unconverted;
 }
 
-ViewScannerInput& ViewScannerInput::with_file_path(const std::string& path) {
+ViewScannerInput& ViewScannerInput::with_file_path(const dstd::String& path) {
     file_path = path;
     return *this;
 }
 
-ViewScannerInput& ViewScannerInput::with_index_path(const std::string& path) {
+ViewScannerInput& ViewScannerInput::with_index_path(const dstd::String& path) {
     index_path = path;
     return *this;
 }
@@ -156,7 +420,7 @@ ViewScannerInput& ViewScannerInput::with_view(const ViewDefinition& v) {
 // calls.
 // A record's phase, and with a window its ts and dur, read without a DOM.
 struct EventProbe {
-    RecordPhase phase = RecordPhase::UNKNOWN;
+    RecordPhase phase = RecordPhase::Unknown;
     bool has_ts = false;
     double ts = 0;
     double dur = 0;
@@ -165,12 +429,18 @@ struct EventProbe {
 static EventProbe probe_event(const char* data, std::size_t n,
                               const ViewDefinition& view) {
     thread_local simdjson::ondemand::parser parser;
-    thread_local std::string padbuf;
+    thread_local dstd::String padbuf;
     padbuf.assign(data, n);
     padbuf.resize(n + simdjson::SIMDJSON_PADDING);
     EventProbe p;
     simdjson::ondemand::document doc;
-    if (parser.iterate(padbuf.data(), n, padbuf.size()).get(doc)) return p;
+    simdjson::error_code code =
+        parser.iterate(padbuf.data(), n, padbuf.size()).get(doc);
+    if (json::detail::is_repairable(code)) {
+        json::detail::repair_line(padbuf.data(), n);
+        code = parser.iterate(padbuf.data(), n, padbuf.size()).get(doc);
+    }
+    if (code) return p;
     auto f = doc.find_field_unordered("ph");
     if (!f.error()) p.phase = read_phase(f.value_unsafe());
     if (!view.window) return p;
@@ -182,10 +452,10 @@ static EventProbe probe_event(const char* data, std::size_t n,
     return p;
 }
 
-coro::AsyncGenerator<ViewScannerBatch> ViewScannerUtility::operator()(
-    const ViewScannerInput& input) {
+coro::AsyncGenerator<dstd::Result<ViewScannerBatch>>
+ViewScannerUtility::operator()(const ViewScannerInput& input) {
     DFTRACER_UTILS_TRACE_SCOPE("read view");
-    const std::optional<duql::Query>* query_src =
+    const dstd::Optional<duql::Query>* query_src =
         input.query ? &input.query : &input.view.query;
 
     const auto& query = *query_src;
@@ -193,20 +463,36 @@ coro::AsyncGenerator<ViewScannerBatch> ViewScannerUtility::operator()(
 
     // Metadata lines bypass the query, so only a scan returning none may drop
     // lines unparsed.
-    std::optional<index::plan::Prefilter> prefilter;
+    dstd::Optional<trace::index::plan::Prefilter> prefilter;
     if (use_query && input.view.prefilter && !input.view.include_metadata)
         prefilter.emplace(*query);
-    std::optional<index::plan::Prefilter::Gate> gate;
+    dstd::Optional<trace::index::plan::Prefilter::Gate> gate;
     if (prefilter && !prefilter->empty()) gate.emplace(*prefilter);
 
     auto reader_input =
-        utilities::fileio::IndexedReadInput::from_file(input.file_path)
+        trace::reader::IndexedReadInput::from_file(input.file_path)
             .with_index(input.index_path);
     if (input.checkpoint_size > 0) {
         reader_input.with_checkpoint_size(input.checkpoint_size);
     }
-    utilities::fileio::IndexedFileReaderUtility reader_utility;
-    auto reader = co_await reader_utility(reader_input);
+    dstd::SharedPtr<trace::reader::internal::Reader> reader;
+    if (input.indexer) {
+        auto made =
+            trace::reader::internal::ReaderFactory::create(input.indexer);
+        if (!made) {
+            co_yield dstd::Result<ViewScannerBatch>(made.error());
+            co_return;
+        }
+        reader = std::move(*made);
+    } else {
+        trace::reader::IndexedFileReaderUtility reader_utility;
+        auto made = co_await reader_utility(reader_input);
+        if (!made) {
+            co_yield dstd::Result<ViewScannerBatch>(made.error());
+            co_return;
+        }
+        reader = std::move(*made);
+    }
 
     // Candidates are gzip-member-aligned byte ranges. A member's last event has
     // its content in this member but its terminating '\n' as the first byte of
@@ -215,15 +501,19 @@ coro::AsyncGenerator<ViewScannerBatch> ViewScannerUtility::operator()(
     // straddling event is read here; the next member then opens on that '\n'
     // and skips the resulting empty leading line, so nothing is dropped or
     // doubled.
-    auto stream = reader->stream(
-        utilities::reader::internal::StreamConfig()
-            .stream_type(
-                utilities::reader::internal::StreamType::MULTI_LINES_BYTES)
-            .range_type(utilities::reader::internal::RangeType::BYTE_RANGE)
+    auto opened = reader->stream(
+        trace::reader::internal::StreamConfig()
+            .stream_type(trace::reader::internal::StreamType::MultiLinesBytes)
+            .range_type(trace::reader::internal::RangeType::ByteRange)
             .buffer_size(input.batch_size)
             .extend_to_line_boundary(true)
             .from(input.start_byte)
             .to(input.end_byte));
+    if (!opened) {
+        co_yield dstd::Result<ViewScannerBatch>(opened.error());
+        co_return;
+    }
+    auto stream = std::move(*opened);
 
     ViewScannerBatch batch;
     detail::FoldEventBuffer local_pool;
@@ -231,10 +521,31 @@ coro::AsyncGenerator<ViewScannerBatch> ViewScannerUtility::operator()(
         input.fold_buffer ? *input.fold_buffer : local_pool;
 
     dftracer::utils::json::RecordParser parser;
+    dftracer::utils::json::Document document;
     detail::DecodeHints hints;
+    dstd::Optional<dftracer::utils::dstd::InternCache> local_cache;
+    dftracer::utils::dstd::InternCache* cache = input.fold_cache;
+    if (!cache && input.fold_intern) {
+        local_cache.emplace(*input.fold_intern);
+        cache = &*local_cache;
+    }
+    // A dftracer event that also enumerates its schema leaves has no on-demand
+    // form.
+    const bool dom_decode =
+        input.fold_intern && !input.view.by_path && input.fold_capture_schema;
+    LineScan scan{input, query_src, use_query, batch, pool,
+                  hints, cache,     document,  parser};
+    const bool whole_lines = reader->has_damage();
+    simdjson::dom::parser whole_parser;
+    json::Document whole_document;
 
     while (!stream->done()) {
-        auto chunk = co_await stream->read_async();
+        auto read = co_await stream->read_async();
+        if (!read) {
+            co_yield dstd::Result<ViewScannerBatch>(read.error());
+            co_return;
+        }
+        const auto chunk = *read;
         if (chunk.empty()) break;
 
         const char* data = chunk.data();
@@ -253,26 +564,36 @@ coro::AsyncGenerator<ViewScannerBatch> ViewScannerUtility::operator()(
             // Chunks end on a line boundary; bytes after the last newline
             // are the file's last line, which has none.
             if (!newline) newline = data + bytes_read;
-            std::size_t line_len = newline - line_start;
+            std::size_t line_size = newline - line_start;
+
+            if (whole_lines) {
+                const std::size_t record = record_size(line_start, line_size);
+                if (record > 0 && !trace::reader::internal::is_whole_record(
+                                      whole_parser, whole_document,
+                                      dstd::StringView(line_start, record))) {
+                    ++batch.lines_invalid;
+                    pos = (newline - data) + 1;
+                    continue;
+                }
+            }
 
             // Fast path: with no query and no metadata records, the only
             // decision is to drop "ph":"M" records and emit the rest, so a
             // targeted phase probe replaces the full DOM parse. Fold mode needs
             // the full parse to build the FoldEvent, so it skips this.
-            if (line_len > 0 && probe_lines) {
+            if (line_size > 0 && probe_lines) {
                 const char* s = line_start;
-                const char* e = line_start + line_len;
+                const char* e = line_start + line_size;
                 while (s < e && (*s == ' ' || *s == '\t')) ++s;
                 if (s < e && *s == '{') {
                     const EventProbe p =
-                        probe_event(line_start, line_len, input.view);
+                        probe_event(line_start, line_size, input.view);
                     if (input.view.by_path ||
-                        p.phase != RecordPhase::METADATA) {
+                        p.phase != RecordPhase::Metadata) {
                         batch.events_scanned++;
                         if (in_window(p.has_ts, p.ts, p.dur, input.view)) {
                             batch.events.emplace_back(
-                                line_start,
-                                record_length(line_start, line_len));
+                                line_start, record_size(line_start, line_size));
                             batch.events_matched++;
                         }
                     }
@@ -281,74 +602,35 @@ coro::AsyncGenerator<ViewScannerBatch> ViewScannerUtility::operator()(
                 continue;
             }
 
-            if (line_len > 0 && gate &&
-                !gate->may_match(std::string_view(line_start, line_len))) {
+            if (line_size > 0 && gate &&
+                !gate->may_match(dstd::StringView(line_start, line_size))) {
                 batch.events_scanned++;
                 pos = (newline - data) + 1;
                 continue;
             }
 
-            const std::size_t json_len = record_length(line_start, line_len);
-            if (json_len > 0) {
-                auto result = parser.parse(line_start, json_len);
-                const bool object =
-                    !result.error() && result.value_unsafe().is_object();
-                if (!object) ++batch.lines_invalid;
-                if (object) {
-                    auto root = result.value_unsafe();
-                    {
-                        JsonValue json(root);
-                        const RecordPhase phase = input.view.by_path
-                                                      ? RecordPhase::UNKNOWN
-                                                      : read_phase(json["ph"]);
-                        const bool metadata = phase == RecordPhase::METADATA;
-                        bool match;
-                        if (metadata) {
-                            // Metadata records bypass the event query unless
-                            // they are rows the query filters.
-                            match = input.view.include_metadata &&
-                                    (!use_query ||
-                                     !(input.view.filter_metadata ||
-                                       input.view.metadata_records) ||
-                                     query->evaluate(json,
-                                                     input.view.args_fallback));
-                        } else {
-                            batch.events_scanned++;
-                            match = in_window(root, input.view) &&
-                                    (!use_query ||
-                                     query->evaluate(json,
-                                                     input.view.args_fallback));
-                        }
-                        if (match) {
-                            if (input.fold_intern) {
-                                // Parse-once: the fold consumer never
-                                // re-parses.
-                                decode_into(
-                                    pool.append(), root, input,
-                                    !metadata && input.fold_capture_schema,
-                                    hints);
-                                batch.values_unconverted +=
-                                    pool.back().unconverted;
-                                if (input.fold_keep_raw)
-                                    batch.events.emplace_back(line_start,
-                                                              json_len);
-                            } else {
-                                batch.events.emplace_back(line_start, json_len);
-                            }
-                            batch.events_matched++;
-                        }
-                    }
-                }
+            const std::size_t json_size = record_size(line_start, line_size);
+            if (json_size > 0) {
+                if (dom_decode)
+                    scan_dom_line(scan, line_start, json_size);
+                else
+                    scan_line(scan, line_start, json_size);
             }
 
             pos = (newline - data) + 1;
         }
 
+        if (use_query)
+            if (auto looked_up = check_lookups(*query); !looked_up) {
+                co_yield dstd::Result<ViewScannerBatch>(looked_up.error());
+                co_return;
+            }
+
         // Yield at end of each chunk, string_view events point into
         // chunk data which is valid until the next co_await read_async().
         if (!batch.events.empty() || !pool.empty() || batch.lines_invalid > 0) {
             batch.fold_events = pool.events();
-            co_yield std::move(batch);
+            co_yield dstd::Result<ViewScannerBatch>(std::move(batch));
             batch = ViewScannerBatch{};
             pool.clear();
         }
@@ -357,7 +639,7 @@ coro::AsyncGenerator<ViewScannerBatch> ViewScannerUtility::operator()(
     // Final batch: normally empty since batches are yielded per chunk above.
     if (!batch.events.empty() || !pool.empty() || batch.lines_invalid > 0) {
         batch.fold_events = pool.events();
-        co_yield std::move(batch);
+        co_yield dstd::Result<ViewScannerBatch>(std::move(batch));
     }
 }
 
@@ -365,23 +647,24 @@ coro::AsyncGenerator<ViewScannerBatch> ViewScannerUtility::operator()(
 
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 
-#include <dftracer/utils/utilities/common/arrow/column_builder.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/trace/arrow/column_builder.h>
 
 namespace dftracer::utils::trace::views {
 
-using utilities::common::arrow::ArrowExportResult;
-using utilities::common::arrow::ColumnType;
-using utilities::common::arrow::RecordBatchBuilder;
+using trace::arrow::ArrowExportResult;
+using trace::arrow::ColumnType;
+using trace::arrow::RecordBatchBuilder;
 
-ArrowExportResult ViewScannerBatch::to_arrow() const {
+dstd::Result<ArrowExportResult> ViewScannerBatch::to_arrow() const {
     RecordBatchBuilder builder;
     return to_arrow(builder);
 }
 
-ArrowExportResult ViewScannerBatch::to_arrow(
+dstd::Result<ArrowExportResult> ViewScannerBatch::to_arrow(
     RecordBatchBuilder& builder) const {
     builder.reserve(events.size());
-    std::vector<std::string> held_serialized;
     dftracer::utils::json::RecordParser parser;
 
     for (const auto& event_str : events) {
@@ -395,31 +678,30 @@ ArrowExportResult ViewScannerBatch::to_arrow(
         auto obj = obj_result.value_unsafe();
 
         for (auto field : obj) {
-            std::string_view key_sv = field.key;
+            dstd::StringView key_sv = field.key;
             auto val = field.value;
 
             if (val.is_int64()) {
-                auto ci = builder.add_or_get_column(key_sv, ColumnType::INT64);
+                auto ci = builder.add_or_get_column(key_sv, ColumnType::Int64);
                 builder.append_int64(ci, val.get_int64().value_unsafe());
             } else if (val.is_uint64()) {
-                auto ci = builder.add_or_get_column(key_sv, ColumnType::UINT64);
+                auto ci = builder.add_or_get_column(key_sv, ColumnType::Uint64);
                 builder.append_uint64(ci, val.get_uint64().value_unsafe());
             } else if (val.is_double()) {
-                auto ci = builder.add_or_get_column(key_sv, ColumnType::DOUBLE);
+                auto ci = builder.add_or_get_column(key_sv, ColumnType::Double);
                 builder.append_double(ci, val.get_double().value_unsafe());
             } else if (val.is_bool()) {
-                auto ci = builder.add_or_get_column(key_sv, ColumnType::BOOL);
+                auto ci = builder.add_or_get_column(key_sv, ColumnType::Bool);
                 builder.append_bool(ci, val.get_bool().value_unsafe());
             } else if (val.is_string()) {
-                auto ci = builder.add_or_get_column(key_sv, ColumnType::STRING);
+                auto ci = builder.add_or_get_column(key_sv, ColumnType::String);
                 builder.append_string(ci, val.get_string().value_unsafe());
             } else if (val.is_null()) {
                 auto existing = builder.find_column(key_sv);
                 if (existing) builder.append_null(*existing);
             } else {
-                auto ci = builder.add_or_get_column(key_sv, ColumnType::STRING);
-                held_serialized.push_back(simdjson::minify(val));
-                builder.append_string(ci, held_serialized.back());
+                auto ci = builder.add_or_get_column(key_sv, ColumnType::String);
+                builder.append_string(ci, simdjson::minify(val));
             }
         }
         builder.end_row();

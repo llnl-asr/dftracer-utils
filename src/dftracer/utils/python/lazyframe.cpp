@@ -1,16 +1,20 @@
+// SPDX-License-Identifier: MIT
 // A native LazyFrame exposed to Python: a deferred query over an in-memory
 // dataframe::DataFrame. Builder methods record ops and return a new LazyFrame;
 // nothing runs until collect(), which materializes a native _DataFrame. A
 // filter/with_column expr's col(i) refers to the i-th column of the frame at
 // that point, so the Python wrapper resolves names to indices against schema().
 
-#include <dftracer/utils/core/common/config.h>  // DFTRACER_UTILS_ENABLE_ARROW
-#include <dftracer/utils/core/common/memory_budget.h>  // NO_SPILL_BUDGET
-#include <dftracer/utils/core/runtime.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/common/config.h>  // DFTRACER_UTILS_ENABLE_ARROW
+#include <dftracer/utils/common/memory_budget.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/memory/budget.h>  // NO_SPILL_BUDGET
 #include <dftracer/utils/python/columnar_eval.h>
 #include <dftracer/utils/python/dataframe.h>
 #include <dftracer/utils/python/lazyframe.h>
@@ -25,15 +29,14 @@
 #include <dftracer/utils/python/py_type_helpers.h>
 #include <dftracer/utils/python/series.h>
 #include <dftracer/utils/python/streaming_iterator.h>
+#include <dftracer/utils/runtime/runtime.h>
 
 #include <cstdint>
 #include <new>
 #include <stdexcept>
-#include <string>
 #include <utility>
-#include <vector>
 
-namespace dataframe = dftracer::utils::dataframe;
+using namespace dftracer::utils;
 
 namespace {
 
@@ -71,12 +74,31 @@ void LazyFrame_dealloc(LazyFrameObject* self) {
     Py_TYPE(self)->tp_free(reinterpret_cast<PyObject*>(self));
 }
 
-// Wrap a builder call that returns a LazyFrame, turning C++ exceptions into
-// Python errors.
+// Wrap a builder call that returns a LazyFrame or a LazyFrame result, turning
+// its error and any C++ exception into a Python ValueError.
 template <class Fn>
 PyObject* run_lazy_op(Fn&& fn) {
     try {
-        return make_lazyframe(fn());
+        auto out = fn();
+        if constexpr (std::is_same_v<decltype(out), LazyFrame>) {
+            const auto built = out.status();
+            if (!built) {
+                PyErr_SetString(PyExc_ValueError, built.error().c_str());
+                return nullptr;
+            }
+            return make_lazyframe(std::move(out));
+        } else {
+            if (!out) {
+                PyErr_SetString(PyExc_ValueError, out.error().c_str());
+                return nullptr;
+            }
+            const auto built = out->status();
+            if (!built) {
+                PyErr_SetString(PyExc_ValueError, built.error().c_str());
+                return nullptr;
+            }
+            return make_lazyframe(std::move(*out));
+        }
     } catch (const std::exception& e) {
         PyErr_SetString(PyExc_ValueError, e.what());
         return nullptr;
@@ -108,7 +130,7 @@ PyObject* LazyFrame_with_column(PyObject* self, PyObject* args) {
 PyObject* LazyFrame_select(PyObject* self, PyObject* names) {
     LazyFrameObject* b = as_lazyframe(self);
     if (!b) return nullptr;
-    std::vector<std::string> ns;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> ns;
     if (!parse_str_list(names, "names", ns)) return nullptr;
     return run_lazy_op([&] { return b->lf.select(std::move(ns)); });
 }
@@ -116,7 +138,7 @@ PyObject* LazyFrame_select(PyObject* self, PyObject* names) {
 PyObject* LazyFrame_rename(PyObject* self, PyObject* names) {
     LazyFrameObject* b = as_lazyframe(self);
     if (!b) return nullptr;
-    std::vector<std::string> ns;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> ns;
     if (!parse_str_list(names, "names", ns)) return nullptr;
     return run_lazy_op([&] { return b->lf.rename(std::move(ns)); });
 }
@@ -124,7 +146,7 @@ PyObject* LazyFrame_rename(PyObject* self, PyObject* names) {
 PyObject* LazyFrame_drop(PyObject* self, PyObject* names) {
     LazyFrameObject* b = as_lazyframe(self);
     if (!b) return nullptr;
-    std::vector<std::string> ns;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> ns;
     if (!parse_str_list(names, "names", ns)) return nullptr;
     return run_lazy_op([&] { return b->lf.drop(std::move(ns)); });
 }
@@ -135,7 +157,7 @@ PyObject* LazyFrame_rename_columns(PyObject* self, PyObject* args) {
     PyObject* from = nullptr;
     PyObject* to = nullptr;
     if (!PyArg_ParseTuple(args, "OO", &from, &to)) return nullptr;
-    std::vector<std::string> f, t;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> f, t;
     if (!parse_str_list(from, "from", f) || !parse_str_list(to, "to", t))
         return nullptr;
     return run_lazy_op(
@@ -161,7 +183,7 @@ PyObject* LazyFrame_head(PyObject* self, PyObject* n) {
 PyObject* LazyFrame_take(PyObject* self, PyObject* seq) {
     LazyFrameObject* b = as_lazyframe(self);
     if (!b) return nullptr;
-    std::vector<std::int64_t> idx;
+    dftracer::utils::dstd::Vector<std::int64_t> idx;
     if (!dftracer::utils::python::parse_int_seq(
             seq, "take() expects a sequence of ints", idx))
         return nullptr;
@@ -197,9 +219,9 @@ PyObject* LazyFrame_sort_by_multi(PyObject* self, PyObject* args,
     if (!PyArg_ParseTupleAndKeywords(args, kwds, "O|O", const_cast<char**>(kw),
                                      &names_obj, &descending_obj))
         return nullptr;
-    std::vector<std::string> names;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> names;
     if (!strings_from_str_or_seq(names_obj, names)) return nullptr;
-    std::vector<bool> descending;
+    dftracer::utils::dstd::Vector<bool> descending;
     if (!descending_obj) {
         descending.push_back(false);
     } else if (PyBool_Check(descending_obj) || PyLong_Check(descending_obj)) {
@@ -260,8 +282,11 @@ PyObject* LazyFrame_reduce(PyObject* self, PyObject* arg) {
     if (!b) return nullptr;
     const char* agg = PyUnicode_AsUTF8(arg);
     if (!agg) return nullptr;
-    return run_lazy_op(
-        [&] { return b->lf.reduce(dataframe::agg_from_string(agg)); });
+    return run_lazy_op([&]() -> dftracer::utils::dstd::Result<LazyFrame> {
+        const auto op = dataframe::agg_from_string(agg);
+        if (!op) return op.error();
+        return b->lf.reduce(*op);
+    });
 }
 
 PyObject* LazyFrame_group_transform(PyObject* self, PyObject* args,
@@ -287,20 +312,26 @@ PyObject* LazyFrame_reduce_specs(PyObject* self, PyObject* args) {
     const char* agg = nullptr;
     PyObject* keys_obj = Py_None;
     if (!PyArg_ParseTuple(args, "s|O", &agg, &keys_obj)) return nullptr;
-    std::vector<std::string> keys;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> keys;
     if (keys_obj != Py_None && !strings_from_str_or_seq(keys_obj, keys))
         return nullptr;
-    std::vector<std::string> specs;
-    try {
-        specs = dftracer::utils::python::reduce_spec_strings(
-            b->lf.reduce_specs(dataframe::agg_from_string(agg), keys));
-    } catch (const std::out_of_range& e) {
-        PyErr_SetString(PyExc_KeyError, e.what());
-        return nullptr;
-    } catch (const std::exception& e) {
-        PyErr_SetString(PyExc_ValueError, e.what());
+    const auto op = dataframe::agg_from_string(agg);
+    if (!op) {
+        PyErr_SetString(PyExc_KeyError, op.error().c_str());
         return nullptr;
     }
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> specs;
+    const auto reduced = b->lf.reduce_specs(*op, keys);
+    if (!reduced) {
+        PyErr_SetString(
+            dftracer::utils::common::errorcode_of(reduced.error()) ==
+                    dftracer::utils::common::ErrorCode::NotFound
+                ? PyExc_KeyError
+                : PyExc_ValueError,
+            reduced.error().c_str());
+        return nullptr;
+    }
+    specs = dftracer::utils::python::reduce_spec_strings(*reduced);
     PyObject* list = PyList_New(static_cast<Py_ssize_t>(specs.size()));
     if (!list) return nullptr;
     for (std::size_t i = 0; i < specs.size(); ++i) {
@@ -361,25 +392,28 @@ PyObject* LazyFrame_window(PyObject* self, PyObject* args, PyObject* kwds) {
     if (!PyArg_ParseTupleAndKeywords(args, kwds, "OOO", const_cast<char**>(kw),
                                      &part, &order, &specs))
         return nullptr;
-    std::vector<std::string> pcols;
-    std::vector<std::string> ocols;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> pcols;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> ocols;
     if (!parse_string_seq(part, "window: partition_by must be names", pcols) ||
         !parse_string_seq(order, "window: order_by must be names", ocols))
         return nullptr;
     dftracer::utils::python::WindowSpecs parsed;
     if (!dftracer::utils::python::parse_window_specs(specs, parsed))
         return nullptr;
-    std::vector<const char*> pc;
-    std::vector<const char*> oc;
-    for (const std::string& s : pcols) pc.push_back(s.c_str());
-    for (const std::string& s : ocols) oc.push_back(s.c_str());
+    dftracer::utils::dstd::Vector<const char*> pc;
+    dftracer::utils::dstd::Vector<const char*> oc;
+    for (const dftracer::utils::dstd::String& s : pcols)
+        pc.push_back(s.c_str());
+    for (const dftracer::utils::dstd::String& s : ocols)
+        oc.push_back(s.c_str());
     dataframe::OpArgs a;
     a.strlist(1, pc.data(), static_cast<std::int32_t>(pc.size()))
         .strlist(2, oc.data(), static_cast<std::int32_t>(oc.size()))
         .winlist(3, parsed.specs);
     return run_lazy_op([&] {
         // A window keeps every input column and appends one per spec.
-        std::vector<std::string> names = b->lf.schema();
+        dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> names =
+            b->lf.schema();
         if (!names.empty())
             for (const dftu_window_spec& s : parsed.specs)
                 names.emplace_back(s.out);
@@ -411,8 +445,8 @@ PyObject* LazyFrame_column_op(PyObject* self, PyObject* args, PyObject* kwds) {
     sb.kind = DFTU_SCALAR_TAG_I64;
     if (a_obj && a_obj != Py_None && !py_to_scalar(a_obj, &sa)) return nullptr;
     if (b_obj && b_obj != Py_None && !py_to_scalar(b_obj, &sb)) return nullptr;
-    const std::string c2 = column2 ? column2 : "";
-    const std::string tx = text ? text : "";
+    const dftracer::utils::dstd::String c2 = column2 ? column2 : "";
+    const dftracer::utils::dstd::String tx = text ? text : "";
     dataframe::OpArgs a;
     a.str(1, column).str(2, op).str(3, c2).scalar(4, sa).scalar(5, sb).str(6,
                                                                            tx);
@@ -440,23 +474,25 @@ PyObject* LazyFrame_gap_fill(PyObject* self, PyObject* args, PyObject* kwds) {
     dftu_gap_fill_mode m;
     if (!dftracer::utils::python::gap_fill_mode_from_str(mode, &m))
         return nullptr;
-    std::vector<std::string> pcols;
-    std::vector<std::string> vcols;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> pcols;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> vcols;
     if (!parse_string_seq(part, "gap_fill: partition_by must be names",
                           pcols) ||
         !parse_string_seq(values, "gap_fill: values must be names", vcols))
         return nullptr;
-    std::vector<std::int64_t> range;
+    dftracer::utils::dstd::Vector<std::int64_t> range;
     if (start_obj != Py_None) {
         const long long s = PyLong_AsLongLong(start_obj);
         const long long e = PyLong_AsLongLong(end_obj);
         if (PyErr_Occurred()) return nullptr;
         range = {static_cast<std::int64_t>(s), static_cast<std::int64_t>(e)};
     }
-    std::vector<const char*> pc;
-    std::vector<const char*> vc;
-    for (const std::string& s : pcols) pc.push_back(s.c_str());
-    for (const std::string& s : vcols) vc.push_back(s.c_str());
+    dftracer::utils::dstd::Vector<const char*> pc;
+    dftracer::utils::dstd::Vector<const char*> vc;
+    for (const dftracer::utils::dstd::String& s : pcols)
+        pc.push_back(s.c_str());
+    for (const dftracer::utils::dstd::String& s : vcols)
+        vc.push_back(s.c_str());
     dataframe::OpArgs a;
     a.strlist(1, pc.data(), static_cast<std::int32_t>(pc.size()))
         .str(2, time)
@@ -488,9 +524,9 @@ PyObject* LazyFrame_asof(PyObject* self, PyObject* args, PyObject* kwds) {
     dftu_asof_direction dir;
     if (!dftracer::utils::python::asof_direction_from_str(direction, &dir))
         return nullptr;
-    std::vector<std::string> equi;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> equi;
     if (!parse_string_seq(by, "asof: by must be names", equi)) return nullptr;
-    std::optional<double> tol;
+    dftracer::utils::dstd::Optional<double> tol;
     if (tol_obj != Py_None) {
         const double t = PyFloat_AsDouble(tol_obj);
         if (PyErr_Occurred()) return nullptr;
@@ -524,7 +560,7 @@ PyObject* LazyFrame_interval(PyObject* self, PyObject* args, PyObject* kwds) {
         return nullptr;
     LazyFrameObject* o = as_lazyframe(other);
     if (!o) return nullptr;
-    std::vector<std::string> equi;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> equi;
     if (!parse_string_seq(by, "interval: by must be names", equi))
         return nullptr;
     return run_lazy_op([&] {
@@ -540,7 +576,8 @@ PyObject* LazyFrame_unpivot(PyObject* self, PyObject* args) {
     PyObject* id_obj = nullptr;
     PyObject* val_obj = nullptr;
     if (!PyArg_ParseTuple(args, "OO", &id_obj, &val_obj)) return nullptr;
-    std::vector<std::string> id_vars, value_vars;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> id_vars,
+        value_vars;
     if (!parse_str_list(id_obj, "id_vars", id_vars) ||
         !parse_str_list(val_obj, "value_vars", value_vars))
         return nullptr;
@@ -570,9 +607,9 @@ PyObject* LazyFrame_group_by(PyObject* self, PyObject* args) {
     PyObject* key_obj = nullptr;
     PyObject* aggs_obj = nullptr;
     if (!PyArg_ParseTuple(args, "OO", &key_obj, &aggs_obj)) return nullptr;
-    std::vector<std::string> keys;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> keys;
     if (!strings_from_str_or_seq(key_obj, keys)) return nullptr;
-    std::vector<GroupAgg> aggs;
+    dftracer::utils::dstd::Vector<GroupAgg> aggs;
     if (!aggs_from_seq(aggs_obj, aggs)) return nullptr;
     return run_lazy_op(
         [&] { return b->lf.group_by(std::move(keys), std::move(aggs)); });
@@ -610,8 +647,8 @@ PyObject* LazyFrame_join(PyObject* self, PyObject* args, PyObject* kwds) {
     if (!o) return nullptr;
     dataframe::JoinHow jh;
     if (!dftracer::utils::python::join_how_from_str(how, jh)) return nullptr;
-    std::vector<std::string> l;
-    std::vector<std::string> r;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> l;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> r;
     if (!dftracer::utils::python::join_keys_from_objs(on, left_on, right_on, jh,
                                                       l, r))
         return nullptr;
@@ -625,7 +662,7 @@ PyObject* LazyFrame_concat(PyObject* self, PyObject* args) {
     LazyFrameObject* b = as_lazyframe(self);
     if (!b) return nullptr;
     const Py_ssize_t n = PyTuple_GET_SIZE(args);
-    std::vector<LazyFrameObject*> others;
+    dftracer::utils::dstd::Vector<LazyFrameObject*> others;
     others.reserve(static_cast<std::size_t>(n));
     for (Py_ssize_t i = 0; i < n; ++i) {
         LazyFrameObject* o = as_lazyframe(PyTuple_GET_ITEM(args, i));
@@ -647,7 +684,7 @@ PyObject* LazyFrame_unique(PyObject* self, PyObject* args, PyObject* kwds) {
     if (!PyArg_ParseTupleAndKeywords(args, kwds, "|O", const_cast<char**>(kw),
                                      &subset_obj))
         return nullptr;
-    std::vector<std::string> subset;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> subset;
     if (subset_obj != Py_None && !strings_from_str_or_seq(subset_obj, subset))
         return nullptr;
     return run_lazy_op([&] { return b->lf.unique(std::move(subset)); });
@@ -674,7 +711,7 @@ PyObject* LazyFrame_head_by(PyObject* self, PyObject* args, PyObject* kwds) {
     if (!PyArg_ParseTupleAndKeywords(args, kwds, "OL", const_cast<char**>(kw),
                                      &keys_obj, &n))
         return nullptr;
-    std::vector<std::string> keys;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> keys;
     if (!strings_from_str_or_seq(keys_obj, keys)) return nullptr;
     return run_lazy_op([&] { return b->lf.head_by(std::move(keys), n); });
 }
@@ -714,7 +751,7 @@ PyObject* LazyFrame_group_by_dynamic(PyObject* self, PyObject* args,
         period = PyLong_AsLongLong(period_obj);
         if (period == -1 && PyErr_Occurred()) return nullptr;
     }
-    std::vector<GroupAgg> aggs;
+    dftracer::utils::dstd::Vector<GroupAgg> aggs;
     if (aggs_obj && aggs_obj != Py_None && !aggs_from_seq(aggs_obj, aggs))
         return nullptr;
     return run_lazy_op([&] {
@@ -770,7 +807,7 @@ PyObject* LazyFrame_auto_spill(PyObject* self, PyObject*) {
 PyObject* LazyFrame_schema(PyObject* self, PyObject*) {
     LazyFrameObject* b = as_lazyframe(self);
     if (!b) return nullptr;
-    std::vector<std::string> names;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> names;
     try {
         names = b->lf.schema();
     } catch (const std::exception& e) {
@@ -783,7 +820,7 @@ PyObject* LazyFrame_schema(PyObject* self, PyObject*) {
 PyObject* LazyFrame_explain(PyObject* self, PyObject*) {
     LazyFrameObject* b = as_lazyframe(self);
     if (!b) return nullptr;
-    std::string text;
+    dftracer::utils::dstd::String text;
     try {
         text = b->lf.explain();
     } catch (const std::exception& e) {
@@ -797,18 +834,20 @@ PyObject* LazyFrame_explain(PyObject* self, PyObject*) {
 PyObject* LazyFrame_collect(PyObject* self, PyObject* args, PyObject* kwds) {
     LazyFrameObject* b = as_lazyframe(self);
     if (!b) return nullptr;
-    long long morsel_rows = 0;
+    long long batch_size = 0;
     PyObject* runtime_arg = nullptr;
-    static const char* kw[] = {"morsel_rows", "runtime", nullptr};
+    static const char* kw[] = {"batch_size", "runtime", nullptr};
     if (!PyArg_ParseTupleAndKeywords(args, kwds, "|LO", const_cast<char**>(kw),
-                                     &morsel_rows, &runtime_arg))
+                                     &batch_size, &runtime_arg))
         return nullptr;
-    std::shared_ptr<dftracer::utils::Runtime> rt =
+    dftracer::utils::dstd::SharedPtr<dftracer::utils::Runtime> rt =
         runtime_from_arg(runtime_arg);
     if (!rt) return nullptr;
     dataframe::DataFrame out;
-    if (!run_blocking(
-            [&] { out = rt->submit(b->lf.collect(morsel_rows)).get(); }))
+    if (!run_blocking([&] {
+            out = dftracer::utils::python::py_unwrap(
+                rt->submit(b->lf.collect(batch_size)).get());
+        }))
         return nullptr;
     return dftracer::utils::python::wrap_dataframe(std::move(out));
 }
@@ -816,19 +855,22 @@ PyObject* LazyFrame_collect(PyObject* self, PyObject* args, PyObject* kwds) {
 // Drains the plan's chunk generator into `state`, which the Python iterator
 // pulls from with the GIL released.
 dftracer::utils::coro::CoroTask<void> drain_stream(
-    dftracer::utils::CoroScope&,
-    std::shared_ptr<
+    dftracer::utils::dstd::SharedPtr<
         dftracer::utils::python::StreamingState<dataframe::DataFrame>>
         state,
-    LazyFrame lf, std::int64_t morsel_rows) {
+    LazyFrame lf, std::int64_t batch_size) {
     try {
-        auto gen = lf.stream(morsel_rows);
-        while (auto df = co_await gen.next()) {
+        auto gen = lf.stream(batch_size);
+        for (;;) {
+            auto next_frame = co_await gen.next();
+            if (!next_frame) break;
             if (state->cancelled()) break;
+            dataframe::DataFrame df =
+                dftracer::utils::python::py_unwrap(std::move(*next_frame));
             const std::size_t bytes =
-                static_cast<std::size_t>(df->num_rows()) *
-                static_cast<std::size_t>(df->num_columns() + 1) * 16;
-            if (!state->push(std::move(*df), bytes)) break;
+                static_cast<std::size_t>(df.num_rows()) *
+                static_cast<std::size_t>(df.num_columns() + 1) * 16;
+            if (!state->push(std::move(df), bytes)) break;
         }
         state->complete();
     } catch (...) {
@@ -839,21 +881,21 @@ dftracer::utils::coro::CoroTask<void> drain_stream(
 PyObject* LazyFrame_stream(PyObject* self, PyObject* args, PyObject* kwds) {
     LazyFrameObject* b = as_lazyframe(self);
     if (!b) return nullptr;
-    long long morsel_rows = 0;
+    long long batch_size = 0;
     PyObject* runtime_arg = nullptr;
-    static const char* kw[] = {"morsel_rows", "runtime", nullptr};
+    static const char* kw[] = {"batch_size", "runtime", nullptr};
     if (!PyArg_ParseTupleAndKeywords(args, kwds, "|LO", const_cast<char**>(kw),
-                                     &morsel_rows, &runtime_arg))
+                                     &batch_size, &runtime_arg))
         return nullptr;
-    std::shared_ptr<dftracer::utils::Runtime> rt =
+    dftracer::utils::dstd::SharedPtr<dftracer::utils::Runtime> rt =
         runtime_from_arg(runtime_arg);
     if (!rt) return nullptr;
-    namespace py = dftracer::utils::python;
-    auto state = std::make_shared<py::StreamingState<dataframe::DataFrame>>(
-        dftracer::utils::compute_memory_budget(0));
-    auto* it = reinterpret_cast<py::ArrowStreamingIteratorObject*>(
-        py::ArrowStreamingIteratorType.tp_new(&py::ArrowStreamingIteratorType,
-                                              nullptr, nullptr));
+    auto state = dftracer::utils::dstd::make_shared<
+        python::StreamingState<dataframe::DataFrame>>(
+        dftracer::utils::common::compute_memory_budget(0));
+    auto* it = reinterpret_cast<python::ArrowStreamingIteratorObject*>(
+        python::ArrowStreamingIteratorType.tp_new(
+            &python::ArrowStreamingIteratorType, nullptr, nullptr));
     if (!it) return nullptr;
     it->cpp_state->state = state;
     it->cpp_state->pull_df = [state]() { return state->pull(); };
@@ -861,9 +903,8 @@ PyObject* LazyFrame_stream(PyObject* self, PyObject* args, PyObject* kwds) {
     it->cpp_state->cancel = [state]() { state->cancel(); };
     LazyFrame lf = b->lf;
     Py_BEGIN_ALLOW_THREADS rt->submit(
-        dftracer::utils::run_coro_scope(rt->executor(), drain_stream, state,
-                                        std::move(lf),
-                                        static_cast<std::int64_t>(morsel_rows)),
+        drain_stream(state, std::move(lf),
+                     static_cast<std::int64_t>(batch_size)),
         "lazyframe_stream");
     Py_END_ALLOW_THREADS return reinterpret_cast<PyObject*>(it);
 }
@@ -1028,14 +1069,14 @@ PyMethodDef LazyFrame_methods[] = {
      "output_schema() -> [(name, dtype id)] without running; a type the "
      "plan cannot know statically is 0 (unknown)."},
     {"stream", DFTU_PYCFUNCTION(LazyFrame_stream), METH_VARARGS | METH_KEYWORDS,
-     "stream(morsel_rows=0, runtime=None) -> iterator of DataFrame chunks."},
+     "stream(batch_size=0, runtime=None) -> iterator of DataFrame chunks."},
     {"schema", LazyFrame_schema, METH_NOARGS,
      "schema() -> list[str] of output column names, or [] if data-dependent."},
     {"explain", LazyFrame_explain, METH_NOARGS,
      "explain() -> str of the optimized plan."},
     {"collect", DFTU_PYCFUNCTION(LazyFrame_collect),
      METH_VARARGS | METH_KEYWORDS,
-     "collect(morsel_rows=65536) -> _DataFrame, running the pipeline."},
+     "collect(batch_size=65536) -> _DataFrame, running the pipeline."},
     {nullptr, nullptr, 0, nullptr}};
 
 PyObject* collect_all_py(PyObject*, PyObject* args, PyObject* kwds) {
@@ -1045,13 +1086,13 @@ PyObject* collect_all_py(PyObject*, PyObject* args, PyObject* kwds) {
     if (!PyArg_ParseTupleAndKeywords(args, kwds, "O|O", const_cast<char**>(kw),
                                      &arg, &runtime_arg))
         return nullptr;
-    std::shared_ptr<dftracer::utils::Runtime> rt =
+    dftracer::utils::dstd::SharedPtr<dftracer::utils::Runtime> rt =
         runtime_from_arg(runtime_arg);
     if (!rt) return nullptr;
     PyObject* seq = PySequence_Fast(arg, "collect_all expects a sequence");
     if (!seq) return nullptr;
     const Py_ssize_t n = PySequence_Fast_GET_SIZE(seq);
-    std::vector<LazyFrame> plans;
+    dftracer::utils::dstd::Vector<LazyFrame> plans;
     plans.reserve(static_cast<std::size_t>(n));
     for (Py_ssize_t i = 0; i < n; ++i) {
         LazyFrameObject* b = as_lazyframe(PySequence_Fast_GET_ITEM(seq, i));
@@ -1062,9 +1103,10 @@ PyObject* collect_all_py(PyObject*, PyObject* args, PyObject* kwds) {
         plans.push_back(b->lf);
     }
     Py_DECREF(seq);
-    std::vector<dataframe::DataFrame> frames;
+    dftracer::utils::dstd::Vector<dataframe::DataFrame> frames;
     if (!run_blocking([&] {
-            frames = rt->submit(dataframe::collect_all(std::move(plans))).get();
+            frames = dftracer::utils::python::py_unwrap(
+                rt->submit(dataframe::collect_all(std::move(plans))).get());
         }))
         return nullptr;
     PyObject* out = PyList_New(static_cast<Py_ssize_t>(frames.size()));

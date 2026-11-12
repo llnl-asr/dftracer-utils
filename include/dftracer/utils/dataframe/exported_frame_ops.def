@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 /* Built-in dataframe frame ops (table -> table) seeded into the op registry
  * under the "dftu.frame." prefix (so they neither clash with the same-named
  * column ops nor need a separate registry). APPEND ONLY.

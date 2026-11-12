@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 # Example plugins built as loadable modules against the public plugin ABI only
 # (the include/ headers); they deliberately link none of the internal libraries,
 # so a broken build here is real ABI rot in abi.h / plugin.h.
@@ -8,6 +9,7 @@ include_directories(${CMAKE_BINARY_DIR}/include)
 # Reads the batch dataframe directly (dftu_series_data / dftu_series_type), so
 # it links the dataframe C ABI like dur_stats_consumer does.
 add_library(event_counter_plugin MODULE event_counter.c)
+target_set_warnings(event_counter_plugin)
 set_target_properties(
   event_counter_plugin
   PROPERTIES OUTPUT_NAME event_counter
@@ -26,6 +28,7 @@ elseif(TARGET dftracer_utils_dataframe::static)
 endif()
 
 add_library(duration_histogram_plugin MODULE duration_histogram.cpp)
+target_set_warnings(duration_histogram_plugin)
 set_target_properties(
   duration_histogram_plugin
   PROPERTIES OUTPUT_NAME duration_histogram
@@ -47,6 +50,7 @@ elseif(TARGET dftracer_utils_dataframe::static)
 endif()
 
 add_library(query_filter_plugin MODULE query_filter.cpp)
+target_set_warnings(query_filter_plugin)
 set_target_properties(
   query_filter_plugin
   PROPERTIES OUTPUT_NAME query_filter
@@ -70,6 +74,7 @@ endif()
 # Reads the batch dataframe directly (dftu_series_data / dftu_series_type), so
 # it links the dataframe C ABI like dur_stats_consumer does.
 add_library(perbatch_producer_plugin MODULE perbatch_producer.c)
+target_set_warnings(perbatch_producer_plugin)
 set_target_properties(
   perbatch_producer_plugin
   PROPERTIES OUTPUT_NAME perbatch_producer
@@ -88,6 +93,7 @@ elseif(TARGET dftracer_utils_dataframe::static)
 endif()
 
 add_library(perbatch_consumer_plugin MODULE perbatch_consumer.c)
+target_set_warnings(perbatch_consumer_plugin)
 set_target_properties(
   perbatch_consumer_plugin
   PROPERTIES OUTPUT_NAME perbatch_consumer
@@ -99,6 +105,7 @@ target_include_directories(perbatch_consumer_plugin
                            PRIVATE ${CMAKE_SOURCE_DIR}/include)
 
 add_library(dur_stats_producer_plugin MODULE dur_stats_producer.c)
+target_set_warnings(dur_stats_producer_plugin)
 set_target_properties(
   dur_stats_producer_plugin
   PROPERTIES OUTPUT_NAME dur_stats_producer
@@ -113,6 +120,7 @@ target_include_directories(dur_stats_producer_plugin
 # dataframe C ABI. C11 because it includes both abi.h headers, which repeat the
 # dftu_series / dftu_dataframe typedefs.
 add_library(dur_stats_consumer_plugin MODULE dur_stats_consumer.c)
+target_set_warnings(dur_stats_consumer_plugin)
 set_target_properties(
   dur_stats_consumer_plugin
   PROPERTIES OUTPUT_NAME dur_stats_consumer
@@ -133,6 +141,7 @@ endif()
 # Reads the batch dataframe directly (dftu_series_data / dftu_series_type), so
 # it links the dataframe C ABI like dur_stats_consumer does.
 add_library(process_counts_plugin MODULE process_counts.c)
+target_set_warnings(process_counts_plugin)
 set_target_properties(
   process_counts_plugin
   PROPERTIES OUTPUT_NAME process_counts
@@ -151,6 +160,7 @@ elseif(TARGET dftracer_utils_dataframe::static)
 endif()
 
 add_library(process_file_edges_plugin MODULE process_file_edges.c)
+target_set_warnings(process_file_edges_plugin)
 set_target_properties(
   process_file_edges_plugin
   PROPERTIES OUTPUT_NAME process_file_edges
@@ -162,6 +172,7 @@ target_include_directories(process_file_edges_plugin
                            PRIVATE ${CMAKE_SOURCE_DIR}/include)
 
 add_library(process_collections_plugin MODULE process_collections.c)
+target_set_warnings(process_collections_plugin)
 set_target_properties(
   process_collections_plugin
   PROPERTIES OUTPUT_NAME process_collections
@@ -173,6 +184,7 @@ target_include_directories(process_collections_plugin
                            PRIVATE ${CMAKE_SOURCE_DIR}/include)
 
 add_library(process_pid_argstats_plugin MODULE process_pid_argstats.c)
+target_set_warnings(process_pid_argstats_plugin)
 set_target_properties(
   process_pid_argstats_plugin
   PROPERTIES OUTPUT_NAME process_pid_argstats
@@ -184,6 +196,7 @@ target_include_directories(process_pid_argstats_plugin
                            PRIVATE ${CMAKE_SOURCE_DIR}/include)
 
 add_library(process_topk_plugin MODULE process_topk.c)
+target_set_warnings(process_topk_plugin)
 set_target_properties(
   process_topk_plugin
   PROPERTIES OUTPUT_NAME process_topk
@@ -195,6 +208,7 @@ target_include_directories(process_topk_plugin
                            PRIVATE ${CMAKE_SOURCE_DIR}/include)
 
 add_library(process_regr_stats_plugin MODULE process_regr_stats.c)
+target_set_warnings(process_regr_stats_plugin)
 set_target_properties(
   process_regr_stats_plugin
   PROPERTIES OUTPUT_NAME process_regr_stats

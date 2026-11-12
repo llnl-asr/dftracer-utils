@@ -1,0 +1,532 @@
+// SPDX-License-Identifier: MIT
+#define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/coro/async_generator.h>
+#include <dftracer/utils/coro/async_mutex.h>
+#include <dftracer/utils/coro/async_once.h>
+#include <dftracer/utils/coro/async_semaphore.h>
+#include <dftracer/utils/coro/channel.h>
+#include <dftracer/utils/coro/completion_latch.h>
+#include <dftracer/utils/coro/detail/coro.h>
+#include <dftracer/utils/coro/executor.h>
+#include <dftracer/utils/coro/join_handle.h>
+#include <dftracer/utils/coro/reserve_async.h>
+#include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/coro/spawn_future.h>
+#include <dftracer/utils/coro/when_all.h>
+#include <dftracer/utils/coro/when_any.h>
+#include <dftracer/utils/coro/yield.h>
+#include <dftracer/utils/dstd/future.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/thread.h>
+#include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/memory/detail/manager.h>
+#include <dftracer/utils/memory/detail/pool_access.h>
+#include <dftracer/utils/runtime/io/ops.h>
+#include <dftracer/utils/runtime/runtime.h>
+#include <doctest/doctest.h>
+#include <unistd.h>
+
+#include <atomic>
+#include <cerrno>
+#include <chrono>
+#include <coroutine>
+#include <cstdlib>
+#include <future>
+#include <memory>
+#include <mutex>
+#include <thread>
+
+using namespace dftracer::utils;
+using namespace std::chrono_literals;
+
+namespace {
+
+constexpr auto HANG_LIMIT = 10s;
+constexpr auto SETTLE = 50ms;
+constexpr std::size_t MIB = std::size_t{1} << 20;
+
+struct Probe {
+    std::atomic<bool> entered{false};
+    std::atomic<bool> finished{false};
+    std::atomic<bool> cancelled{false};
+};
+
+// A frame that a cancelled wait stops never resumes, so its locals tell how it
+// ended: `reached_end` is set by the code after the wait.
+struct Witness {
+    Probe& probe;
+    bool reached_end{false};
+    ~Witness() {
+        probe.cancelled.store(!reached_end);
+        probe.finished.store(true);
+    }
+};
+
+// A hang fails the test and ends the process: the stuck threads cannot be
+// joined, and ctest must not wait for them.
+void fail_hung(const char* what) {
+    FAIL_CHECK(what << " hung");
+    std::_Exit(1);
+}
+
+void shutdown_or_fail(Runtime& rt) {
+    dstd::Promise<void> done;
+    dstd::Future<void> finished = done.get_future();
+    dstd::Thread t([&] {
+        rt.shutdown();
+        done.set_value();
+    });
+    if (finished.wait_for(HANG_LIMIT) != std::future_status::ready) {
+        fail_hung("executor shutdown");
+    }
+    t.join();
+}
+
+void wait_until_entered(const Probe& probe) {
+    const auto deadline = std::chrono::steady_clock::now() + HANG_LIMIT;
+    while (!probe.entered.load(std::memory_order_acquire)) {
+        if (std::chrono::steady_clock::now() > deadline) {
+            fail_hung("frame start");
+        }
+        std::this_thread::sleep_for(1ms);
+    }
+    std::this_thread::sleep_for(SETTLE);
+}
+
+void wait_or_fail(const TaskHandle& task, const char* what) {
+    if (task.future.wait_for(HANG_LIMIT) != std::future_status::ready) {
+        fail_hung(what);
+    }
+}
+
+void expect_cancelled_at_shutdown(Runtime& rt, const Probe& probe) {
+    wait_until_entered(probe);
+    CHECK_FALSE(probe.finished.load());
+    shutdown_or_fail(rt);
+    CHECK(probe.finished.load());
+    CHECK(probe.cancelled.load());
+}
+
+struct Gate {
+    std::mutex mutex;
+    dstd::Vector<std::coroutine_handle<>> parked;
+};
+
+// Parks its awaiter for ever, on no registry: only the test resumes it.
+struct NeverReady {
+    Gate* gate;
+    bool await_ready() const noexcept { return false; }
+    void await_suspend(std::coroutine_handle<> h) {
+        std::lock_guard<std::mutex> lock(gate->mutex);
+        gate->parked.push_back(h);
+    }
+    void await_resume() const noexcept {}
+};
+
+coro::CoroTask<void> stuck_child(Gate* gate) {
+    co_await NeverReady{gate};
+    co_return;
+}
+
+}  // namespace
+
+TEST_CASE("a frame blocked on each awaitable completes at shutdown") {
+    Runtime rt(ExecutorConfig{.thread_count = 2}, false);
+    Probe probe;
+
+    SUBCASE("semaphore") {
+        coro::AsyncSemaphore semaphore(1);
+        REQUIRE(semaphore.try_acquire(1));
+        auto frame = [&]() -> coro::CoroTask<void> {
+            Witness witness{probe};
+            probe.entered.store(true);
+            co_await semaphore.acquire(1);
+            witness.reached_end = true;
+            co_return;
+        };
+        rt.submit(frame(), "BlockedOnSemaphore");
+        expect_cancelled_at_shutdown(rt, probe);
+        // The cancelled waiter took no permit and left no entry behind.
+        semaphore.release(1);
+        CHECK(semaphore.try_acquire(1));
+    }
+
+    SUBCASE("async mutex") {
+        coro::AsyncMutex mutex;
+        auto holder = [&]() -> coro::CoroTask<void> {
+            co_await mutex.lock();
+            co_return;
+        };
+        wait_or_fail(rt.submit(holder(), "HoldsMutex"), "mutex holder");
+        auto frame = [&]() -> coro::CoroTask<void> {
+            Witness witness{probe};
+            probe.entered.store(true);
+            co_await mutex.lock();
+            witness.reached_end = true;
+            co_return;
+        };
+        rt.submit(frame(), "BlockedOnMutex");
+        expect_cancelled_at_shutdown(rt, probe);
+        mutex.unlock();
+    }
+
+    SUBCASE("completion latch") {
+        Gate gate;
+        auto frame = [&]() -> coro::CoroTask<void> {
+            Witness witness{probe};
+            probe.entered.store(true);
+            dstd::Vector<coro::CoroTask<void>> children;
+            children.push_back(stuck_child(&gate));
+            children.push_back(stuck_child(&gate));
+            co_await coro::when_all(std::move(children));
+            witness.reached_end = true;
+            co_return;
+        };
+        rt.submit(frame(), "BlockedOnLatch");
+        expect_cancelled_at_shutdown(rt, probe);
+        // The children never saw the shutdown. Finish them so nothing leaks.
+        dstd::Vector<std::coroutine_handle<>> parked;
+        {
+            std::lock_guard<std::mutex> lock(gate.mutex);
+            parked.swap(gate.parked);
+        }
+        for (auto h : parked) h.resume();
+    }
+
+    SUBCASE("timer") {
+        auto frame = [&]() -> coro::CoroTask<void> {
+            Witness witness{probe};
+            probe.entered.store(true);
+            co_await coro::timeout(1h, rt.executor()->timers());
+            witness.reached_end = true;
+            co_return;
+        };
+        rt.submit(frame(), "BlockedOnTimer");
+        expect_cancelled_at_shutdown(rt, probe);
+    }
+
+    SUBCASE("memory reservation") {
+        memory::Config config;
+        config.budget = 64 * MIB;
+        memory::configure(config);
+        {
+            memory::PoolHandle holds =
+                memory::detail::Manager::get().root().child("holds");
+            memory::PoolHandle pool =
+                memory::detail::Manager::get().root().child("task");
+            memory::Reservation held =
+                memory::detail::PoolAccess::reserve(*holds, 64 * MIB);
+            REQUIRE(held);
+            auto frame = [&]() -> coro::CoroTask<void> {
+                probe.entered.store(true);
+                auto r = co_await coro::reserve_async(
+                    *pool, 32 * MIB,
+                    coro::ReserveAsync::Clock::time_point::max());
+                probe.cancelled.store(!r &&
+                                      r.error() == memory::Status::Cancelled);
+                probe.finished.store(true);
+                co_return;
+            };
+            rt.submit(frame(), "BlockedOnReservation");
+            expect_cancelled_at_shutdown(rt, probe);
+        }
+        memory::configure(memory::Config{});
+    }
+
+    SUBCASE("channel receive") {
+        auto channel = dstd::make_shared<coro::Channel<int>>(1);
+        auto frame = [&]() -> coro::CoroTask<void> {
+            Witness witness{probe};
+            probe.entered.store(true);
+            co_await channel->receive();
+            witness.reached_end = true;
+            co_return;
+        };
+        rt.submit(frame(), "BlockedOnReceive");
+        expect_cancelled_at_shutdown(rt, probe);
+    }
+
+    SUBCASE("channel send") {
+        auto channel = dstd::make_shared<coro::Channel<int>>(1);
+        REQUIRE(channel->try_send(1));
+        auto frame = [&]() -> coro::CoroTask<void> {
+            Witness witness{probe};
+            probe.entered.store(true);
+            co_await channel->send(2);
+            witness.reached_end = true;
+            co_return;
+        };
+        rt.submit(frame(), "BlockedOnSend");
+        expect_cancelled_at_shutdown(rt, probe);
+    }
+
+    SUBCASE("async once") {
+        auto channel = dstd::make_shared<coro::Channel<int>>(1);
+        coro::AsyncOnce<int> once;
+        Probe leader;
+        auto lead = [&]() -> coro::CoroTask<void> {
+            Witness witness{leader};
+            leader.entered.store(true);
+            co_await once.get([&]() -> coro::CoroTask<int> {
+                auto v = co_await channel->receive();
+                co_return v ? *v : 0;
+            });
+            witness.reached_end = true;
+            co_return;
+        };
+        rt.submit(lead(), "OnceLeader");
+        wait_until_entered(leader);
+        auto frame = [&]() -> coro::CoroTask<void> {
+            Witness witness{probe};
+            probe.entered.store(true);
+            co_await once.get([]() -> coro::CoroTask<int> { co_return 1; });
+            witness.reached_end = true;
+            co_return;
+        };
+        rt.submit(frame(), "OnceWaiter");
+        expect_cancelled_at_shutdown(rt, probe);
+        CHECK(leader.finished.load());
+    }
+
+    SUBCASE("spawn future") {
+        auto state = dstd::make_shared<coro::SharedState<int>>();
+        state->executor = rt.executor();
+        auto frame = [&]() -> coro::CoroTask<void> {
+            Witness witness{probe};
+            probe.entered.store(true);
+            coro::SpawnFuture<int> future(state);
+            co_await future;
+            witness.reached_end = true;
+            co_return;
+        };
+        rt.submit(frame(), "BlockedOnSpawnFuture");
+        expect_cancelled_at_shutdown(rt, probe);
+    }
+
+    SUBCASE("join handle") {
+        // A join ends when the tracked frames end, so shutdown wakes the one
+        // they wait on and the join follows.
+        coro::AsyncSemaphore semaphore(1);
+        REQUIRE(semaphore.try_acquire(1));
+        std::atomic<bool> child_cancelled{true};
+        auto frame = [&]() -> coro::CoroTask<void> {
+            probe.entered.store(true);
+            coro::JoinHandle join;
+            auto child =
+                [](coro::AsyncSemaphore* sem,
+                   std::atomic<bool>* cancelled) -> coro::detail::Coro {
+                co_await sem->acquire(1);
+                cancelled->store(false);
+                co_return;
+            }(&semaphore, &child_cancelled);
+            child.handle().promise().executor = rt.executor();
+            child.handle().promise().stoppable = true;
+            join.track(child);
+            child.release().resume();
+            co_await join.join();
+            probe.cancelled.store(child_cancelled.load());
+            probe.finished.store(true);
+            co_return;
+        };
+        rt.submit(frame(), "BlockedOnJoin");
+        expect_cancelled_at_shutdown(rt, probe);
+    }
+
+    SUBCASE("read on the IO backend") {
+        int fds[2];
+        REQUIRE(::pipe(fds) == 0);
+        auto frame = [&]() -> coro::CoroTask<void> {
+            probe.entered.store(true);
+            char byte = 0;
+            ssize_t n = co_await runtime::io::read(fds[0], &byte, 1);
+            probe.cancelled.store(n == -ECANCELED);
+            probe.finished.store(true);
+            co_return;
+        };
+        rt.submit(frame(), "BlockedOnRead");
+        expect_cancelled_at_shutdown(rt, probe);
+        ::close(fds[0]);
+        ::close(fds[1]);
+    }
+}
+
+TEST_CASE("a generator dropped after a scope fan-out does not terminate") {
+    Runtime rt(ExecutorConfig{.thread_count = 4}, false);
+
+    struct Source {
+        static coro::AsyncGenerator<int> numbers(std::atomic<int>* fanned) {
+            co_await coro::with_scope(
+                [fanned](coro::Scope& scope) -> coro::CoroTask<void> {
+                    auto a =
+                        scope.spawn_future([fanned]() -> coro::CoroTask<int> {
+                            fanned->fetch_add(1);
+                            co_return 1;
+                        });
+                    auto b =
+                        scope.spawn_future([fanned]() -> coro::CoroTask<int> {
+                            fanned->fetch_add(1);
+                            co_return 2;
+                        });
+                    co_await a;
+                    co_await b;
+                });
+            co_yield 1;
+            co_yield 2;
+        }
+    };
+
+    std::atomic<int> fanned{0};
+    std::atomic<int> first{0};
+    TaskHandle task =
+        rt.submit(coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+                      {
+                          auto gen = Source::numbers(&fanned);
+                          auto value = co_await gen.next();
+                          first.store(value ? *value : -1);
+                      }
+                      co_return;
+                  }),
+                  "DropGenerator");
+    wait_or_fail(task, "generator task");
+
+    CHECK(first.load() == 1);
+    CHECK(fanned.load() == 2);
+    shutdown_or_fail(rt);
+}
+
+TEST_CASE("when_any cancels a CoroTask loser that never ends") {
+    Runtime rt(ExecutorConfig{.thread_count = 4}, false);
+
+    std::atomic<std::size_t> winner_index{99};
+    std::atomic<bool> loser_started{false};
+    std::atomic<bool> loser_gone{false};
+    auto frame = [&]() -> coro::CoroTask<void> {
+        auto winner = []() -> coro::CoroTask<int> {
+            co_await coro::yield();
+            co_return 1;
+        };
+        // A cancelled task ends at its wait without resuming, so its frame is
+        // destroyed with the destructors of its locals and nothing is thrown.
+        auto loser = [](std::atomic<bool>* started,
+                        std::atomic<bool>* gone) -> coro::CoroTask<int> {
+            struct Guard {
+                std::atomic<bool>* gone;
+                ~Guard() { gone->store(true); }
+            } guard{gone};
+            started->store(true);
+            for (;;) co_await coro::yield();
+        };
+        auto result = co_await coro::when_any(
+            winner(), loser(&loser_started, &loser_gone));
+        winner_index.store(result.index);
+        co_return;
+    };
+    wait_or_fail(rt.submit(frame(), "CancelsNeverEndingLoser"),
+                 "when_any with a never-ending CoroTask loser");
+
+    CHECK(winner_index.load() == 0);
+    // A loser that began is gone. One that the winner beat to the start never
+    // ran.
+    CHECK(loser_started.load() == loser_gone.load());
+    shutdown_or_fail(rt);
+}
+
+namespace {
+
+struct ForeignHandoff {
+    std::atomic<void*> handle{nullptr};
+    coro::Executor* executor = nullptr;
+};
+
+struct ParkForForeign {
+    ForeignHandoff* handoff;
+    bool await_ready() const noexcept { return false; }
+    void await_suspend(std::coroutine_handle<> handle) noexcept {
+        handoff->executor = coro::Executor::current();
+        handoff->handle.store(handle.address(), std::memory_order_release);
+    }
+    void await_resume() const noexcept {}
+};
+
+}  // namespace
+
+TEST_CASE("a runtime can end as soon as a foreign thread resumes its frame") {
+    // The frame finishes while the foreign thread may still be inside the
+    // executor's enqueue, which must not touch the executor after it is gone.
+    // The thread outlives the runtime, as a store's I/O thread does.
+    constexpr int ROUNDS = 50;
+    int ended = 0;
+    for (int round = 0; round < ROUNDS; ++round) {
+        auto rt = dstd::make_unique<Runtime>(ExecutorConfig{.thread_count = 2},
+                                             false);
+        ForeignHandoff handoff;
+        std::atomic<bool> finished{false};
+        std::atomic<bool> released{false};
+        auto frame = [&]() -> coro::CoroTask<void> {
+            ParkForForeign park{&handoff};
+            co_await park;
+            finished.store(true, std::memory_order_release);
+        };
+        rt->submit(frame(), "ResumedByForeignThread");
+        dstd::Thread foreign([&] {
+            void* handle = nullptr;
+            while ((handle = handoff.handle.load(std::memory_order_acquire)) ==
+                   nullptr)
+                std::this_thread::yield();
+            coro::resume_continuation(
+                handoff.executor,
+                std::coroutine_handle<>::from_address(handle));
+            while (!released.load(std::memory_order_acquire))
+                std::this_thread::yield();
+        });
+        const auto deadline = std::chrono::steady_clock::now() + HANG_LIMIT;
+        while (!finished.load(std::memory_order_acquire)) {
+            if (std::chrono::steady_clock::now() > deadline)
+                fail_hung("foreign resume");
+            std::this_thread::yield();
+        }
+        rt.reset();
+        released.store(true, std::memory_order_release);
+        foreign.join();
+        ++ended;
+    }
+    CHECK(ended == ROUNDS);
+}
+
+TEST_CASE("a foreign thread can exit while the runtime it resumed ends") {
+    // The thread leaves the run queue's producer list as the queue is
+    // destroyed, so the two must not touch the same producer at once.
+    constexpr int ROUNDS = 50;
+    int ended = 0;
+    for (int round = 0; round < ROUNDS; ++round) {
+        auto rt = dstd::make_unique<Runtime>(ExecutorConfig{.thread_count = 2},
+                                             false);
+        ForeignHandoff handoff;
+        std::atomic<bool> finished{false};
+        auto frame = [&]() -> coro::CoroTask<void> {
+            ParkForForeign park{&handoff};
+            co_await park;
+            finished.store(true, std::memory_order_release);
+        };
+        rt->submit(frame(), "ResumedByExitingThread");
+        dstd::Thread foreign([&] {
+            void* handle = nullptr;
+            while ((handle = handoff.handle.load(std::memory_order_acquire)) ==
+                   nullptr)
+                std::this_thread::yield();
+            coro::resume_continuation(
+                handoff.executor,
+                std::coroutine_handle<>::from_address(handle));
+        });
+        const auto deadline = std::chrono::steady_clock::now() + HANG_LIMIT;
+        while (!finished.load(std::memory_order_acquire)) {
+            if (std::chrono::steady_clock::now() > deadline)
+                fail_hung("foreign resume");
+            std::this_thread::yield();
+        }
+        rt.reset();
+        foreign.join();
+        ++ended;
+    }
+    CHECK(ended == ROUNDS);
+}

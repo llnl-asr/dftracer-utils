@@ -1,10 +1,11 @@
+# SPDX-License-Identifier: MIT
 """A corrupt index is named, and a repair that does not cure it says so.
 
 The copies of an index that cannot be repaired come from a developer machine, so
 the two tests that need them are gated on environment variables:
 
-  DFTRACER_TEST_CORRUPT_INDEX  a `.dftindex` directory that fails every build
-  DFTRACER_TEST_RELEASED_PYTHON  a Python with the released dftracer-utils 0.0.13
+  DFTRACER_UTILS_TEST_CORRUPT_INDEX  a `.dftindex` directory that fails every build
+  DFTRACER_UTILS_TEST_RELEASED_PYTHON  a Python with the released dftracer-utils 0.0.13
 """
 
 import gzip
@@ -47,17 +48,17 @@ def build(files, index_dir):
     with Indexer(
         files=files,
         index_dir=index_dir,
-        require_aggregation=AggregationConfig(time_interval_ms=5000),
+        aggregation_config=AggregationConfig(time_interval_ms=5000),
     ) as ix:
         ix.ensure_indexed()
 
 
 @pytest.mark.skipif(
-    "DFTRACER_TEST_CORRUPT_INDEX" not in os.environ, reason="needs a corrupt .dftindex copy"
+    "DFTRACER_UTILS_TEST_CORRUPT_INDEX" not in os.environ, reason="needs a corrupt .dftindex copy"
 )
 def test_a_repair_that_does_not_cure_the_index_names_the_directory(tmp_path):
     index = str(tmp_path / ".dftindex")
-    shutil.copytree(os.environ["DFTRACER_TEST_CORRUPT_INDEX"], index)
+    shutil.copytree(os.environ["DFTRACER_UTILS_TEST_CORRUPT_INDEX"], index)
     trace = write_trace(str(tmp_path))
     with pytest.raises(Exception) as caught:
         build([trace], index)
@@ -68,11 +69,11 @@ def test_a_repair_that_does_not_cure_the_index_names_the_directory(tmp_path):
 
 
 @pytest.mark.skipif(
-    "DFTRACER_TEST_CORRUPT_INDEX" not in os.environ, reason="needs a corrupt .dftindex copy"
+    "DFTRACER_UTILS_TEST_CORRUPT_INDEX" not in os.environ, reason="needs a corrupt .dftindex copy"
 )
 def test_deleting_the_directory_as_told_fixes_it(tmp_path):
     index = str(tmp_path / ".dftindex")
-    shutil.copytree(os.environ["DFTRACER_TEST_CORRUPT_INDEX"], index)
+    shutil.copytree(os.environ["DFTRACER_UTILS_TEST_CORRUPT_INDEX"], index)
     trace = write_trace(str(tmp_path))
     with pytest.raises(Exception):
         build([trace], index)
@@ -81,7 +82,7 @@ def test_deleting_the_directory_as_told_fixes_it(tmp_path):
 
 
 @pytest.mark.skipif(
-    "DFTRACER_TEST_RELEASED_PYTHON" not in os.environ,
+    "DFTRACER_UTILS_TEST_RELEASED_PYTHON" not in os.environ,
     reason="needs a Python with dftracer-utils 0.0.13",
 )
 def test_an_index_built_by_the_released_version_is_reused_or_rebuilt(tmp_path):
@@ -91,11 +92,11 @@ def test_an_index_built_by_the_released_version_is_reused_or_rebuilt(tmp_path):
         f"""
         from dftracer.utils import Indexer, AggregationConfig
         with Indexer(files=[{trace!r}], index_dir={index!r},
-                     require_aggregation=AggregationConfig(time_interval_ms=5000)) as ix:
+                     aggregation_config=AggregationConfig(time_interval_ms=5000)) as ix:
             ix.ensure_indexed()
         """
     )
-    subprocess.run([os.environ["DFTRACER_TEST_RELEASED_PYTHON"], "-c", script], check=True)
+    subprocess.run([os.environ["DFTRACER_UTILS_TEST_RELEASED_PYTHON"], "-c", script], check=True)
     build([trace], index)  # opens the older index: no error, whether it is reused or rebuilt
     from dftracer.utils import TraceViewer
 

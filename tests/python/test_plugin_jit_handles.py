@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Cross-worker scalar accumulators for @jit.plugin authoring.
 
 A scalar accumulator is a jit.map with an empty key tuple: it groups nothing, so

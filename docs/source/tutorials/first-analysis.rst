@@ -33,9 +33,8 @@ in Python.
 
 DFTracer traces are line-delimited JSON, usually gzip-compressed
 (``.pfw.gz``). The Python ``Indexer`` and ``TraceViewer`` read gzip files only,
-whether the file has one member or many. ``dftracer_index``, ``dftracer_view``
-and ``dftracer_run`` also accept a plain ``.pfw``, ``.jsonl`` or ``.ndjson``
-file. They write a gzip copy under ``split/`` and read that. Write a tiny
+whether the file has one member or many. A plain ``.pfw``, ``.jsonl`` or
+``.ndjson`` file has to be gzipped first. Write a tiny
 gzip trace so the rest of the lesson has something to read:
 
 .. code-block:: python
@@ -68,7 +67,7 @@ Python and C++ analysis paths both use it.
        ix.ensure_indexed()
 
 The CLI does the same without Python. It indexes every trace under a directory,
-so run ``dftracer_index -d .`` in the folder that holds ``trace.pfw.gz``.
+so run ``dftracer_index .`` in the folder that holds ``trace.pfw.gz``.
 
 3. Group and aggregate
 ----------------------
@@ -352,7 +351,7 @@ What you learned
 
 - A trace is JSON lines, gzip-compressed for the Python reader (``.pfw.gz``);
   **index** it once
-  (``Indexer.ensure_indexed()`` or ``dftracer_index -d <dir>``) and both
+  (``Indexer.ensure_indexed()`` or ``dftracer_index <dir>``) and both
   languages read the same index.
 - **Query** it with ``TraceViewer`` (Python) or ``View`` (C++): ``group_by`` +
   ``agg`` + ``collect``, with aggregate columns named ``count`` / ``sum_dur`` /

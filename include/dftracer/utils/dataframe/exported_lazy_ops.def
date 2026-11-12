@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 /* Built-in dataframe lazy ops (lazy plan -> lazy plan) seeded into the op
  * registry under the "dftu.lazy." prefix. APPEND ONLY.
  *

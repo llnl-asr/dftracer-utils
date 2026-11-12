@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 /* A real C consumer of the dftu_svc_duql ABI: compiled by the C compiler,
  * sees only abi.h. The C++ harness builds the host, interns the strings, and
  * constructs the events; this compiles the filter and matches through the raw
@@ -5,6 +6,7 @@
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <stdint.h>
+#include <utilities/plugins/abi_c_consumers.h>
 
 /* Compile `src` and match row `row` of `df`: 1 match, 0 no-match, -1 on compile
  * failure. */

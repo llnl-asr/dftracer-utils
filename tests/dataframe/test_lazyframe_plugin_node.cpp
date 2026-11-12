@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // dftu_node_register/dftu_lazyframe_op: a plugin plan node is a Cursor the
 // engine drives inside the same pull chain lower_cursor_chain builds for
 // every built-in op, not a second protocol. These tests drive hand-written
@@ -5,45 +6,34 @@
 // same style test_provider_schema_types.cpp uses for dftu_source_vt.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/coro/task.h>
-#include <dftracer/utils/core/coro/task_abi.h>
-#include <dftracer/utils/core/coro/yield.h>
-#include <dftracer/utils/core/runtime.h>
+#include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/coro/task_abi.h>
+#include <dftracer/utils/coro/yield.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/internal/expr_handle.h>
 #include <dftracer/utils/dataframe/internal/provider_source.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/function.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <algorithm>
 #include <cstdint>
-#include <functional>
-#include <memory>
-#include <optional>
 #include <stdexcept>
-#include <string>
-#include <vector>
 
-using dftracer::utils::coro::CoroTask;
-using dftracer::utils::dataframe::col;
-using dftracer::utils::dataframe::Cursor;
-using dftracer::utils::dataframe::DataFrame;
-using dftracer::utils::dataframe::JoinHow;
-using dftracer::utils::dataframe::LazyFrame;
-using dftracer::utils::dataframe::make_provider_source;
-using dftracer::utils::dataframe::Morsel;
-using dftracer::utils::dataframe::OpArgs;
-using dftracer::utils::dataframe::Schema;
-using dftracer::utils::dataframe::Series;
-using dftracer::utils::dataframe::Source;
-using dftracer::utils::dataframe::TimeUnit;
-using dftracer::utils::dataframe::TypeId;
+using namespace dftracer::utils;
+using namespace dftracer::utils::dataframe;
 
 namespace {
 
-DataFrame run(CoroTask<DataFrame> t) {
-    DataFrame out =
-        dftracer::utils::default_runtime().submit(std::move(t)).get();
+DataFrame run(coro::CoroTask<dstd::Result<DataFrame>> t) {
+    DataFrame out = dftu_utils_test::ok(
+        dftracer::utils::default_runtime().submit(std::move(t)).get());
     for (Series& c : out.columns) c = c.materialize();
     return out;
 }
@@ -51,15 +41,15 @@ DataFrame run(CoroTask<DataFrame> t) {
 // ---- A resident int64 source, one morsel per collect. ---------------------
 
 struct IntSource {
-    std::vector<std::string> names;
-    std::vector<std::int64_t> col0;
+    dstd::Vector<dstd::String> names;
+    dstd::Vector<std::int64_t> col0;
 };
 
 int32_t src_schema(void* self, const char* const** out_names) {
     auto* s = static_cast<IntSource*>(self);
-    static thread_local std::vector<const char*> storage;
+    static thread_local dstd::Vector<const char*> storage;
     storage.clear();
-    for (const std::string& n : s->names) storage.push_back(n.c_str());
+    for (const dstd::String& n : s->names) storage.push_back(n.c_str());
     *out_names = storage.data();
     return static_cast<int32_t>(storage.size());
 }
@@ -116,7 +106,7 @@ void src_schema_types(void*, dftu_schema* out) {
                           DFTU_TIME_UNIT_MILLI, "UTC", 0, 0, 0);
 }
 
-std::shared_ptr<Source> make_int_source(IntSource& fx, bool typed) {
+dstd::SharedPtr<Source> make_int_source(IntSource& fx, bool typed) {
     dftu_source_vt vt{};
     vt.schema = src_schema;
     vt.scan = src_scan;
@@ -127,11 +117,12 @@ std::shared_ptr<Source> make_int_source(IntSource& fx, bool typed) {
 
 // ---- "test.double": a streaming node doubling column 0. --------------------
 
-CoroTask<void> pull_and_double(void* in_self, const dftu_cursor_vt* in_vt,
-                               std::int64_t max_rows, dftu_result_frame* out) {
+coro::CoroTask<void> pull_and_double(void* in_self, const dftu_cursor_vt* in_vt,
+                                     std::int64_t max_rows,
+                                     dftu_result_frame* out) {
     dftu_result_frame in_out{};
     if (dftu_task* t = in_vt->next(in_self, max_rows, &in_out)) {
-        auto* task = reinterpret_cast<CoroTask<void>*>(t);
+        auto* task = reinterpret_cast<coro::CoroTask<void>*>(t);
         co_await *task;
         delete task;
     }
@@ -148,7 +139,7 @@ CoroTask<void> pull_and_double(void* in_self, const dftu_cursor_vt* in_vt,
     dftu_series* c0 = dftu_dataframe_column(frame, "val");
     const std::int64_t n = dftu_series_length(c0);
     const auto* data = static_cast<const std::int64_t*>(dftu_series_data(c0));
-    std::vector<std::int64_t> doubled(data, data + n);
+    dstd::Vector<std::int64_t> doubled(data, data + n);
     for (std::int64_t& v : doubled) v *= 2;
     dftu_series_free(c0);
     dftu_series* new_col =
@@ -257,7 +248,7 @@ void* recording_node_open(void* self, void* in_self,
 struct ProbeCursorState {
     void* in_self;
     const dftu_cursor_vt* in_vt;
-    std::vector<bool>* sync_flags;
+    dstd::Vector<bool>* sync_flags;
 };
 
 dftu_task* probe_cursor_next(void* self, std::int64_t max_rows,
@@ -286,7 +277,7 @@ void probe_node_schema(void*, const dftu_schema* in, const dftu_op_arg*,
 void* probe_node_open(void* self, void* in_self, const dftu_cursor_vt* in_vt,
                       const dftu_op_arg*, std::uint64_t, void** out_self,
                       const dftu_cursor_vt** out_vt) {
-    auto* flags = static_cast<std::vector<bool>*>(self);
+    auto* flags = static_cast<dstd::Vector<bool>*>(self);
     auto* st = new ProbeCursorState{in_self, in_vt, flags};
     *out_self = st;
     *out_vt = &PROBE_CURSOR_VT;
@@ -304,10 +295,10 @@ dftu_node_vt make_probe_vt() {
 // mask the predicate selects over its own column. ---------------------------
 
 struct NarrowLog {
-    std::vector<std::vector<bool>> masks;
+    dstd::Vector<dstd::Vector<bool>> masks;
     // A declared resident size and the reclaims the source got for it.
     std::uint64_t bytes = 0;
-    std::vector<std::uint64_t> reclaims;
+    dstd::Vector<std::uint64_t> reclaims;
 };
 
 struct NarrowSource {
@@ -335,12 +326,12 @@ void narrow_cursor_destroy(void* self) {
 dftu_task* narrow_cursor_narrow(void* self, const dftu_expr* predicate,
                                 std::int32_t* out_applied) {
     auto* cs = static_cast<NarrowCursorState*>(self);
-    const std::vector<std::int64_t>& v = cs->owner->src.col0;
+    const dstd::Vector<std::int64_t>& v = cs->owner->src.col0;
     Series column =
         Series::flat_i64(v.data(), static_cast<std::int64_t>(v.size()));
-    Series mask = dftracer::utils::dataframe::eval(
-        dftracer::utils::dataframe::expr_handle_unwrap(predicate), {&column});
-    std::vector<bool> bits;
+    Series mask = dftu_utils_test::ok(dftracer::utils::dataframe::eval(
+        dftracer::utils::dataframe::expr_handle_unwrap(predicate), {&column}));
+    dstd::Vector<bool> bits;
     for (std::int64_t i = 0; i < mask.length(); ++i)
         bits.push_back((mask.data<std::uint8_t>()[i >> 3] >> (i & 7)) & 1);
     cs->owner->log->masks.push_back(std::move(bits));
@@ -382,7 +373,7 @@ void* narrow_src_scan(void* self, const dftu_scan_request*, int32_t*,
     return cs;
 }
 
-std::shared_ptr<Source> make_narrow_source(NarrowSource& fx) {
+dstd::SharedPtr<Source> make_narrow_source(NarrowSource& fx) {
     dftu_source_vt vt{};
     vt.schema = narrow_src_schema;
     vt.scan = narrow_src_scan;
@@ -394,8 +385,9 @@ std::shared_ptr<Source> make_narrow_source(NarrowSource& fx) {
 // input, declares a (fake) resident size and records the reclaim it gets.
 
 struct ForwardLog {
+    bool reclaim_input = false;
     std::uint64_t bytes = 0;
-    std::vector<std::uint64_t> reclaims;
+    dstd::Vector<std::uint64_t> reclaims;
 };
 
 struct ForwardCursorState {
@@ -435,6 +427,8 @@ std::uint64_t forward_cursor_reclaim(void* self, std::uint64_t want) {
     st->log->reclaims.push_back(want);
     const std::uint64_t freed = std::min(want, st->log->bytes);
     st->log->bytes -= freed;
+    if (st->log->reclaim_input && st->in_vt->reclaim)
+        st->in_vt->reclaim(st->in_self, want);
     return freed;
 }
 
@@ -465,7 +459,7 @@ dftu_node_vt make_forward_vt() {
     return vt;
 }
 
-DataFrame right_keys(std::vector<std::int64_t> keys) {
+DataFrame right_keys(dstd::Vector<std::int64_t> keys) {
     DataFrame df;
     df.names = {"key"};
     df.columns.push_back(
@@ -479,13 +473,13 @@ DataFrame right_keys(std::vector<std::int64_t> keys) {
 // suspends via coro::yield).
 class CursorSource : public Source {
    public:
-    explicit CursorSource(std::function<std::unique_ptr<Cursor>()> factory)
+    explicit CursorSource(dstd::Function<dstd::UniquePtr<Cursor>()> factory)
         : factory_(std::move(factory)) {}
     Schema schema() const override {
         return {{dftracer::utils::dataframe::Field{
             "val", dftracer::utils::dataframe::scalar(TypeId::Int64), true}}};
     }
-    dftracer::utils::dataframe::ScanResult scan(
+    dstd::Result<dftracer::utils::dataframe::ScanResult> scan(
         const dftracer::utils::dataframe::ScanRequest& req) const override {
         dftracer::utils::dataframe::ScanResult r;
         r.cursor = factory_();
@@ -495,42 +489,90 @@ class CursorSource : public Source {
     }
 
    private:
-    std::function<std::unique_ptr<Cursor>()> factory_;
+    dstd::Function<dstd::UniquePtr<Cursor>()> factory_;
 };
 
+// A cursor from outside the library whose advisory hooks throw. Its data is
+// the six rows 1..6, in one morsel.
+struct HookFaults {
+    int narrows = 0;
+    int reclaims = 0;
+};
+
+class ThrowingHooksCursor : public Cursor {
+   public:
+    explicit ThrowingHooksCursor(HookFaults* faults) : faults_(faults) {}
+
+    coro::CoroTask<MorselResult> next(std::int64_t) override {
+        if (done_) co_return MorselResult(dstd::nullopt);
+        done_ = true;
+        dstd::Vector<std::int64_t> v{1, 2, 3, 4, 5, 6};
+        Morsel m;
+        m.columns.push_back(Series::flat_i64(v.data(), 6).materialize());
+        m.rows = 6;
+        co_return MorselResult(std::move(m));
+    }
+    coro::CoroTask<bool> narrow(const Expr&) override {
+        ++faults_->narrows;
+        throw std::runtime_error("narrow boom");
+        co_return false;
+    }
+    std::uint64_t resident_bytes() const override { return 1; }
+    coro::CoroTask<std::uint64_t> reclaim(std::uint64_t) override {
+        ++faults_->reclaims;
+        throw std::runtime_error("reclaim boom");
+        co_return 0;
+    }
+
+   private:
+    HookFaults* faults_;
+    bool done_ = false;
+};
+
+LazyFrame throwing_hooks_source(HookFaults& faults) {
+    return LazyFrame::scan(
+        dstd::make_shared<CursorSource>([&faults]() -> dstd::UniquePtr<Cursor> {
+            return dstd::make_unique<ThrowingHooksCursor>(&faults);
+        }));
+}
+
 // Answers synchronously via try_next: one row, then end of stream (or, when
-// `throw_on_call` matches, a synchronous exception instead of a morsel).
+// `fail_on_call` matches, an error instead of a morsel).
 class ThrowingSyncCursor : public Cursor {
    public:
-    explicit ThrowingSyncCursor(int throw_on_call = -1)
-        : throw_on_call_(throw_on_call) {}
+    explicit ThrowingSyncCursor(int fail_on_call = -1)
+        : fail_on_call_(fail_on_call) {}
 
-    CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
-        std::optional<Morsel> out;
+    coro::CoroTask<MorselResult> next(std::int64_t max_rows) override {
+        MorselResult out(dstd::nullopt);
         fill(max_rows, out);
-        co_return out;
+        co_return std::move(out);
     }
-    bool try_next(std::int64_t max_rows, std::optional<Morsel>& out) override {
+    bool try_next(std::int64_t max_rows, MorselResult& out) override {
         fill(max_rows, out);
         return true;
     }
 
    private:
-    void fill(std::int64_t, std::optional<Morsel>& out) {
+    void fill(std::int64_t, MorselResult& out) {
         ++calls_;
-        if (calls_ == throw_on_call_) throw std::runtime_error("sync boom");
-        if (calls_ > 1) {
-            out.reset();
+        if (calls_ == fail_on_call_) {
+            out = dftracer::utils::common::make_error<"sync boom">(
+                dftracer::utils::common::ErrorCode::Io);
             return;
         }
-        std::vector<std::int64_t> v{9};
+        if (calls_ > 1) {
+            out = MorselResult(dstd::nullopt);
+            return;
+        }
+        dstd::Vector<std::int64_t> v{9};
         Morsel m;
         m.columns.push_back(Series::flat_i64(v.data(), 1));
         m.rows = 1;
-        out = std::move(m);
+        out = MorselResult(std::move(m));
     }
 
-    int throw_on_call_;
+    int fail_on_call_;
     int calls_ = 0;
 };
 
@@ -542,16 +584,16 @@ class ThrowingAsyncCursor : public Cursor {
     explicit ThrowingAsyncCursor(int throw_on_call = -1)
         : throw_on_call_(throw_on_call) {}
 
-    CoroTask<std::optional<Morsel>> next(std::int64_t) override {
+    coro::CoroTask<MorselResult> next(std::int64_t) override {
         co_await dftracer::utils::coro::yield();
         ++calls_;
         if (calls_ == throw_on_call_) throw std::runtime_error("async boom");
-        if (calls_ > 1) co_return std::nullopt;
-        std::vector<std::int64_t> v{9};
+        if (calls_ > 1) co_return MorselResult(dstd::nullopt);
+        dstd::Vector<std::int64_t> v{9};
         Morsel m;
         m.columns.push_back(Series::flat_i64(v.data(), 1));
         m.rows = 1;
-        co_return m;
+        co_return MorselResult(std::move(m));
     }
 
    private:
@@ -563,27 +605,29 @@ class ThrowingAsyncCursor : public Cursor {
 // propagation tests: a chain of transforms (filter/select/with_column) over
 // each of these must take the same fast/slow path its source does. ----------
 
-std::vector<std::int64_t> multi_morsel_data() {
+dstd::Vector<std::int64_t> multi_morsel_data() {
     return {1, 2, 3, 4, 5, 6, 7, 8, 9};
 }
 
 // Answers every call via try_next: `chunk` rows at a time until exhausted.
 class MultiSyncCursor : public Cursor {
    public:
-    MultiSyncCursor(std::vector<std::int64_t> data, std::int64_t chunk)
+    MultiSyncCursor(dstd::Vector<std::int64_t> data, std::int64_t chunk)
         : data_(std::move(data)), chunk_(chunk) {}
-    CoroTask<std::optional<Morsel>> next(std::int64_t) override {
-        std::optional<Morsel> out;
+    coro::CoroTask<MorselResult> next(std::int64_t) override {
+        dstd::Optional<Morsel> out;
         fill(out);
-        co_return out;
+        co_return MorselResult(std::move(out));
     }
-    bool try_next(std::int64_t, std::optional<Morsel>& out) override {
-        fill(out);
+    bool try_next(std::int64_t, MorselResult& out) override {
+        dstd::Optional<Morsel> morsel;
+        fill(morsel);
+        out = MorselResult(std::move(morsel));
         return true;
     }
 
    private:
-    void fill(std::optional<Morsel>& out) {
+    void fill(dstd::Optional<Morsel>& out) {
         const auto n64 = static_cast<std::int64_t>(data_.size());
         if (off_ >= n64) {
             out.reset();
@@ -596,7 +640,7 @@ class MultiSyncCursor : public Cursor {
         off_ += n;
         out = std::move(m);
     }
-    std::vector<std::int64_t> data_;
+    dstd::Vector<std::int64_t> data_;
     std::int64_t chunk_;
     std::int64_t off_ = 0;
 };
@@ -605,11 +649,11 @@ class MultiSyncCursor : public Cursor {
 // default): `chunk` rows at a time until exhausted.
 class MultiAsyncCursor : public Cursor {
    public:
-    MultiAsyncCursor(std::vector<std::int64_t> data, std::int64_t chunk)
+    MultiAsyncCursor(dstd::Vector<std::int64_t> data, std::int64_t chunk)
         : data_(std::move(data)), chunk_(chunk) {}
-    CoroTask<std::optional<Morsel>> next(std::int64_t) override {
+    coro::CoroTask<MorselResult> next(std::int64_t) override {
         co_await dftracer::utils::coro::yield();
-        std::optional<Morsel> out;
+        dstd::Optional<Morsel> out;
         const auto n64 = static_cast<std::int64_t>(data_.size());
         if (off_ < n64) {
             const std::int64_t n = std::min(chunk_, n64 - off_);
@@ -619,11 +663,11 @@ class MultiAsyncCursor : public Cursor {
             off_ += n;
             out = std::move(m);
         }
-        co_return out;
+        co_return MorselResult(std::move(out));
     }
 
    private:
-    std::vector<std::int64_t> data_;
+    dstd::Vector<std::int64_t> data_;
     std::int64_t chunk_;
     std::int64_t off_ = 0;
 };
@@ -633,26 +677,29 @@ class MultiAsyncCursor : public Cursor {
 // fallen through to a spilled run on disk).
 class SyncThenAsyncCursor : public Cursor {
    public:
-    SyncThenAsyncCursor(std::vector<std::int64_t> data, std::int64_t chunk,
+    SyncThenAsyncCursor(dstd::Vector<std::int64_t> data, std::int64_t chunk,
                         std::int64_t sync_rows)
         : data_(std::move(data)), chunk_(chunk), sync_rows_(sync_rows) {}
 
-    CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
-        std::optional<Morsel> out;
-        if (try_next(max_rows, out)) co_return out;
+    coro::CoroTask<MorselResult> next(std::int64_t max_rows) override {
+        MorselResult sync(dstd::nullopt);
+        if (try_next(max_rows, sync)) co_return std::move(sync);
         co_await dftracer::utils::coro::yield();
+        dstd::Optional<Morsel> out;
         fill(out);
-        co_return out;
+        co_return MorselResult(std::move(out));
     }
 
-    bool try_next(std::int64_t, std::optional<Morsel>& out) override {
+    bool try_next(std::int64_t, MorselResult& out) override {
         if (off_ >= sync_rows_) return false;
-        fill(out);
+        dstd::Optional<Morsel> morsel;
+        fill(morsel);
+        out = MorselResult(std::move(morsel));
         return true;
     }
 
    private:
-    void fill(std::optional<Morsel>& out) {
+    void fill(dstd::Optional<Morsel>& out) {
         const auto n64 = static_cast<std::int64_t>(data_.size());
         if (off_ >= n64) {
             out.reset();
@@ -665,7 +712,7 @@ class SyncThenAsyncCursor : public Cursor {
         off_ += n;
         out = std::move(m);
     }
-    std::vector<std::int64_t> data_;
+    dstd::Vector<std::int64_t> data_;
     std::int64_t chunk_, sync_rows_;
     std::int64_t off_ = 0;
 };
@@ -674,7 +721,7 @@ class SyncThenAsyncCursor : public Cursor {
 // everything) -> select "val" -> with_column "doubled" = val * 2 -> the sync
 // probe node. Exercises FilterCursor, SelectCursor and WithColumnCursor's
 // try_next in series over whatever source cursor is handed in.
-LazyFrame build_probe_chain(std::shared_ptr<Source> src,
+LazyFrame build_probe_chain(dstd::SharedPtr<Source> src,
                             const char* node_name) {
     return LazyFrame::scan(src)
         .filter(col(0) > std::int64_t{0})
@@ -757,8 +804,8 @@ TEST_SUITE("lazyframe plugin node") {
         IntSource fx{{"val"}, {1}};
         LazyFrame lf = LazyFrame::scan(make_int_source(fx, false))
                            .op("test.double.d", OpArgs());
-        std::string explained = lf.explain();
-        CHECK(explained.find("op test.double.d") != std::string::npos);
+        dstd::String explained = lf.explain();
+        CHECK(explained.find("op test.double.d") != dstd::String::npos);
 
         CHECK(dftu_node_unregister("test.double.d") == 0);
     }
@@ -766,8 +813,9 @@ TEST_SUITE("lazyframe plugin node") {
     TEST_CASE("an unknown node name is a clear error") {
         IntSource fx{{"val"}, {1}};
         LazyFrame base = LazyFrame::scan(make_int_source(fx, false));
-        CHECK_THROWS_AS(base.op("no.such.node", OpArgs()),
-                        std::invalid_argument);
+        dftu_utils_test::expect_error(
+            base.op("no.such.node", OpArgs()).status(),
+            dftracer::utils::common::ErrorCode::InvalidArgument);
 
         dftu_lazyframe* base_c =
             dftu_lazyframe_from_provider("no.such.provider");
@@ -785,7 +833,10 @@ TEST_SUITE("lazyframe plugin node") {
         IntSource fx{{"val"}, {1, 2}};
         LazyFrame lf = LazyFrame::scan(make_int_source(fx, false))
                            .op("test.fails", OpArgs());
-        CHECK_THROWS_AS(run(lf.collect()), std::runtime_error);
+        CHECK_FALSE(dftracer::utils::default_runtime()
+                        .submit(lf.collect())
+                        .get()
+                        .has_value());
 
         CHECK(dftu_node_unregister("test.fails") == 0);
     }
@@ -798,13 +849,13 @@ TEST_SUITE("lazyframe plugin node") {
         LazyFrame lf = LazyFrame::scan(make_int_source(fx, false))
                            .op("test.double.e", OpArgs())
                            .filter(col(0) > std::int64_t{5});
-        std::string explained = lf.explain();
+        dstd::String explained = lf.explain();
         // Structural: the node line still precedes the filter line, so
         // pushdown never hoisted the filter across the opaque node.
         std::size_t op_pos = explained.find("op test.double.e");
         std::size_t filter_pos = explained.find("filter");
-        REQUIRE(op_pos != std::string::npos);
-        REQUIRE(filter_pos != std::string::npos);
+        REQUIRE(op_pos != dstd::String::npos);
+        REQUIRE(filter_pos != dstd::String::npos);
         CHECK(op_pos < filter_pos);
 
         // Functional: the filter must see doubled values (it runs on the
@@ -831,13 +882,13 @@ TEST_SUITE("lazyframe plugin node") {
         LazyFrame lf = LazyFrame::scan(make_int_source(fx, false))
                            .op("test.double.f", OpArgs())
                            .select({"val"});
-        std::string explained = lf.explain();
+        dstd::String explained = lf.explain();
         std::size_t scan_pos = explained.find("scan");
         std::size_t op_pos = explained.find("op test.double.f");
         std::size_t select_pos = explained.find("select");
-        REQUIRE(scan_pos != std::string::npos);
-        REQUIRE(op_pos != std::string::npos);
-        REQUIRE(select_pos != std::string::npos);
+        REQUIRE(scan_pos != dstd::String::npos);
+        REQUIRE(op_pos != dstd::String::npos);
+        REQUIRE(select_pos != dstd::String::npos);
         // If pushdown had (incorrectly) hoisted the select across the node,
         // it would appear as a projection right after "scan", before "op".
         CHECK(scan_pos < op_pos);
@@ -880,14 +931,14 @@ TEST_SUITE("lazyframe plugin node") {
         };
 
         struct Impl {
-            static CoroTask<void> drain_and_count(CountState* st,
-                                                  dftu_result_frame* out) {
+            static coro::CoroTask<void> drain_and_count(
+                CountState* st, dftu_result_frame* out) {
                 std::int64_t total = 0;
                 for (;;) {
                     dftu_result_frame in_out{};
                     if (dftu_task* t =
                             st->in_vt->next(st->in_self, 1 << 20, &in_out)) {
-                        auto* task = reinterpret_cast<CoroTask<void>*>(t);
+                        auto* task = reinterpret_cast<coro::CoroTask<void>*>(t);
                         co_await *task;
                         delete task;
                     }
@@ -963,14 +1014,14 @@ TEST_SUITE("lazyframe plugin node") {
     TEST_CASE(
         "a node over a resident source observes next() returning NULL "
         "(sync path)") {
-        std::vector<bool> sync_flags;
+        dstd::Vector<bool> sync_flags;
         dftu_node_vt vt = make_probe_vt();
         REQUIRE(dftu_node_register("test.sync_probe.resident", &vt,
                                    &sync_flags) == 0);
 
         DataFrame df;
         df.names = {"val"};
-        std::vector<std::int64_t> v{1, 2, 3};
+        dstd::Vector<std::int64_t> v{1, 2, 3};
         df.columns.push_back(Series::flat_i64(v.data(), 3));
 
         LazyFrame lf = df.lazy().op("test.sync_probe.resident", OpArgs());
@@ -994,13 +1045,13 @@ TEST_SUITE("lazyframe plugin node") {
     TEST_CASE(
         "a node over a genuinely suspending source still gets a task and "
         "the right values") {
-        std::vector<bool> sync_flags;
+        dstd::Vector<bool> sync_flags;
         dftu_node_vt vt = make_probe_vt();
         REQUIRE(dftu_node_register("test.sync_probe.async", &vt, &sync_flags) ==
                 0);
 
-        auto src = std::make_shared<CursorSource>(
-            [] { return std::make_unique<ThrowingAsyncCursor>(); });
+        auto src = dstd::make_shared<CursorSource>(
+            [] { return dstd::make_unique<ThrowingAsyncCursor>(); });
         LazyFrame lf =
             LazyFrame::scan(src).op("test.sync_probe.async", OpArgs());
         DataFrame out = run(lf.collect());
@@ -1021,40 +1072,32 @@ TEST_SUITE("lazyframe plugin node") {
         "paths") {
         // Unchecked here: the probe node requires a live self to record into,
         // not nullptr.
-        std::vector<bool> sync_flags;
+        dstd::Vector<bool> sync_flags;
         dftu_node_vt vt = make_probe_vt();
         REQUIRE(dftu_node_register("test.sync_probe.err", &vt, &sync_flags) ==
                 0);
 
         {
-            auto src = std::make_shared<CursorSource>(
-                [] { return std::make_unique<ThrowingSyncCursor>(2); });
+            auto src = dstd::make_shared<CursorSource>(
+                [] { return dstd::make_unique<ThrowingSyncCursor>(2); });
             LazyFrame lf =
                 LazyFrame::scan(src).op("test.sync_probe.err", OpArgs());
-            bool threw = false;
-            try {
-                run(lf.collect());
-            } catch (const std::runtime_error& e) {
-                threw = true;
-                CHECK(std::string(e.what()).find("sync boom") !=
-                      std::string::npos);
-            }
-            CHECK(threw);
+            const auto result =
+                dftracer::utils::default_runtime().submit(lf.collect()).get();
+            REQUIRE_FALSE(result.has_value());
+            CHECK(dstd::String(result.error().c_str()).find("sync boom") !=
+                  dstd::String::npos);
         }
         {
-            auto src = std::make_shared<CursorSource>(
-                [] { return std::make_unique<ThrowingAsyncCursor>(2); });
+            auto src = dstd::make_shared<CursorSource>(
+                [] { return dstd::make_unique<ThrowingAsyncCursor>(2); });
             LazyFrame lf =
                 LazyFrame::scan(src).op("test.sync_probe.err", OpArgs());
-            bool threw = false;
-            try {
-                run(lf.collect());
-            } catch (const std::runtime_error& e) {
-                threw = true;
-                CHECK(std::string(e.what()).find("async boom") !=
-                      std::string::npos);
-            }
-            CHECK(threw);
+            const auto result =
+                dftracer::utils::default_runtime().submit(lf.collect()).get();
+            REQUIRE_FALSE(result.has_value());
+            CHECK(dstd::String(result.error().c_str()).find("async boom") !=
+                  dstd::String::npos);
         }
 
         CHECK(dftu_node_unregister("test.sync_probe.err") == 0);
@@ -1063,13 +1106,13 @@ TEST_SUITE("lazyframe plugin node") {
     TEST_CASE(
         "a resident multi-stage chain (filter/select/with_column) takes the "
         "sync path for every call") {
-        std::vector<bool> sync_flags;
+        dstd::Vector<bool> sync_flags;
         dftu_node_vt vt = make_probe_vt();
         REQUIRE(dftu_node_register("test.sync_probe.chain.resident", &vt,
                                    &sync_flags) == 0);
 
-        auto src = std::make_shared<CursorSource>([] {
-            return std::make_unique<MultiSyncCursor>(multi_morsel_data(), 3);
+        auto src = dstd::make_shared<CursorSource>([] {
+            return dstd::make_unique<MultiSyncCursor>(multi_morsel_data(), 3);
         });
         DataFrame out = run(
             build_probe_chain(src, "test.sync_probe.chain.resident").collect());
@@ -1084,13 +1127,13 @@ TEST_SUITE("lazyframe plugin node") {
     TEST_CASE(
         "a genuinely suspending multi-stage chain takes the async path "
         "throughout and produces identical values") {
-        std::vector<bool> sync_flags;
+        dstd::Vector<bool> sync_flags;
         dftu_node_vt vt = make_probe_vt();
         REQUIRE(dftu_node_register("test.sync_probe.chain.async", &vt,
                                    &sync_flags) == 0);
 
-        auto src = std::make_shared<CursorSource>([] {
-            return std::make_unique<MultiAsyncCursor>(multi_morsel_data(), 3);
+        auto src = dstd::make_shared<CursorSource>([] {
+            return dstd::make_unique<MultiAsyncCursor>(multi_morsel_data(), 3);
         });
         DataFrame out = run(
             build_probe_chain(src, "test.sync_probe.chain.async").collect());
@@ -1105,14 +1148,14 @@ TEST_SUITE("lazyframe plugin node") {
     TEST_CASE(
         "a chain that starts resident and becomes async partway (the "
         "SpoolReader shape) produces correct values across the transition") {
-        std::vector<bool> sync_flags;
+        dstd::Vector<bool> sync_flags;
         dftu_node_vt vt = make_probe_vt();
         REQUIRE(dftu_node_register("test.sync_probe.chain.hybrid", &vt,
                                    &sync_flags) == 0);
 
-        auto src = std::make_shared<CursorSource>([] {
-            return std::make_unique<SyncThenAsyncCursor>(multi_morsel_data(), 3,
-                                                         3);
+        auto src = dstd::make_shared<CursorSource>([] {
+            return dstd::make_unique<SyncThenAsyncCursor>(multi_morsel_data(),
+                                                          3, 3);
         });
         DataFrame out = run(
             build_probe_chain(src, "test.sync_probe.chain.hybrid").collect());
@@ -1132,38 +1175,30 @@ TEST_SUITE("lazyframe plugin node") {
     TEST_CASE(
         "an upstream error through the filter/select/with_column chain is "
         "reported identically on the sync and async paths") {
-        std::vector<bool> sync_flags;
+        dstd::Vector<bool> sync_flags;
         dftu_node_vt vt = make_probe_vt();
         REQUIRE(dftu_node_register("test.sync_probe.chain.err", &vt,
                                    &sync_flags) == 0);
 
         {
-            auto src = std::make_shared<CursorSource>(
-                [] { return std::make_unique<ThrowingSyncCursor>(2); });
+            auto src = dstd::make_shared<CursorSource>(
+                [] { return dstd::make_unique<ThrowingSyncCursor>(2); });
             LazyFrame lf = build_probe_chain(src, "test.sync_probe.chain.err");
-            bool threw = false;
-            try {
-                run(lf.collect());
-            } catch (const std::runtime_error& e) {
-                threw = true;
-                CHECK(std::string(e.what()).find("sync boom") !=
-                      std::string::npos);
-            }
-            CHECK(threw);
+            const auto result =
+                dftracer::utils::default_runtime().submit(lf.collect()).get();
+            REQUIRE_FALSE(result.has_value());
+            CHECK(dstd::String(result.error().c_str()).find("sync boom") !=
+                  dstd::String::npos);
         }
         {
-            auto src = std::make_shared<CursorSource>(
-                [] { return std::make_unique<ThrowingAsyncCursor>(2); });
+            auto src = dstd::make_shared<CursorSource>(
+                [] { return dstd::make_unique<ThrowingAsyncCursor>(2); });
             LazyFrame lf = build_probe_chain(src, "test.sync_probe.chain.err");
-            bool threw = false;
-            try {
-                run(lf.collect());
-            } catch (const std::runtime_error& e) {
-                threw = true;
-                CHECK(std::string(e.what()).find("async boom") !=
-                      std::string::npos);
-            }
-            CHECK(threw);
+            const auto result =
+                dftracer::utils::default_runtime().submit(lf.collect()).get();
+            REQUIRE_FALSE(result.has_value());
+            CHECK(dstd::String(result.error().c_str()).find("async boom") !=
+                  dstd::String::npos);
         }
 
         CHECK(dftu_node_unregister("test.sync_probe.chain.err") == 0);
@@ -1189,8 +1224,8 @@ TEST_SUITE("lazyframe plugin node") {
             REQUIRE(out.num_rows() == 3);  // 2, 4, 4
 
             REQUIRE(log.masks.size() == 1);
-            const std::vector<bool> want{false, true,  false,
-                                         true,  false, false};
+            const dstd::Vector<bool> want{false, true,  false,
+                                          true,  false, false};
             CHECK(log.masks[0] == want);
         }
 
@@ -1248,23 +1283,23 @@ TEST_SUITE("lazyframe plugin node") {
 
         // The offer went through the node's own narrow slot to the source.
         REQUIRE(log.masks.size() == 1);
-        const std::vector<bool> want{false, false, true, false, true, false};
+        const dstd::Vector<bool> want{false, false, true, false, true, false};
         CHECK(log.masks[0] == want);
 
-        // The node's declared size ran past the budget, so the driver asked
-        // it for the excess and it shrank to fit.
+        // The node's declared size cannot be reserved under the budget, so
+        // its governor asked it for all of it at the next morsel.
         REQUIRE(!flog.reclaims.empty());
-        CHECK(flog.reclaims[0] == (std::uint64_t{1} << 40) - 64 * 1024 * 1024);
-        CHECK(flog.bytes == 64 * 1024 * 1024);
+        CHECK(flog.reclaims[0] == std::uint64_t{1} << 40);
+        CHECK(flog.bytes == 0);
 
         CHECK(dftu_node_unregister("test.forward") == 0);
     }
 
     TEST_CASE(
         "a provider under a plugin node is still measured and reclaimed") {
-        // The node owns its input cursor once open() succeeds, so the driver
-        // cannot reach the provider through the node; the registry every
-        // stage joined when the chain was built reaches it regardless.
+        // The node owns its input cursor once open() succeeds. The provider
+        // has its own place in the governor, so it is measured and asked
+        // wherever it ends up.
         constexpr std::uint64_t BUDGET = 64 * 1024 * 1024;
         ForwardLog flog;  // the node itself holds nothing
         dftu_node_vt vt = make_forward_vt();
@@ -1285,9 +1320,37 @@ TEST_SUITE("lazyframe plugin node") {
 
         CHECK(flog.reclaims.empty());
         REQUIRE(!log.reclaims.empty());
-        CHECK(log.reclaims[0] == (std::uint64_t{1} << 40) - BUDGET);
-        CHECK(log.bytes == BUDGET);
+        CHECK(log.reclaims[0] == std::uint64_t{1} << 40);
+        CHECK(log.bytes == 0);
 
         CHECK(dftu_node_unregister("test.forward.under") == 0);
+    }
+
+    TEST_CASE("a narrow that throws is logged and the join still answers") {
+        HookFaults faults;
+        LazyFrame lf = throwing_hooks_source(faults).join(
+            right_keys({2, 4, 4}).lazy(), {"val"}, {"key"}, JoinHow::Inner);
+        DataFrame out = run(lf.collect());
+        CHECK(faults.narrows == 1);
+        CHECK(out.num_rows() == 3);
+    }
+
+    TEST_CASE("a reclaim that throws is logged and counts as nothing freed") {
+        HookFaults faults;
+        ForwardLog flog;
+        flog.reclaim_input = true;
+        flog.bytes = std::uint64_t{1} << 40;
+        dftu_node_vt vt = make_forward_vt();
+        REQUIRE(dftu_node_register("test.forward.throwing", &vt, &flog) == 0);
+
+        LazyFrame lf = throwing_hooks_source(faults)
+                           .op("test.forward.throwing", OpArgs())
+                           .memory_budget(64 * 1024 * 1024);
+        DataFrame out = run(lf.collect());
+        CHECK(out.num_rows() == 6);
+        CHECK(!flog.reclaims.empty());
+        CHECK(faults.reclaims >= 1);
+
+        CHECK(dftu_node_unregister("test.forward.throwing") == 0);
     }
 }

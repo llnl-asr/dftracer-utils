@@ -1,29 +1,33 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_TRACE_VIEWS_VIEW_PLAN_H
 #define DFTRACER_UTILS_TRACE_VIEWS_VIEW_PLAN_H
 
 #include <dftracer/utils/dataframe/expr.h>
+#include <dftracer/utils/dstd/function.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/result.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/trace/views/view.h>
 
 #include <cstdint>
-#include <functional>
-#include <memory>
-#include <optional>
-#include <string>
 #include <utility>
-#include <vector>
 
-namespace dftracer::utils::index::extensions {}
+namespace dftracer::utils::trace::index::extensions {}
 
-namespace dftracer::utils::index {
+namespace dftracer::utils::trace::index {
 struct RecordSchema;
-}  // namespace dftracer::utils::index
+class Snapshot;
+}  // namespace dftracer::utils::trace::index
 
-namespace dftracer::utils::index::plan {
+namespace dftracer::utils::trace::index::plan {
 /// Index-backed name maps for resolved-name group keys. Defined in
 /// view_resolver.h.
 class GroupResolver;
-}  // namespace dftracer::utils::index::plan
+}  // namespace dftracer::utils::trace::index::plan
 
 namespace dftracer::utils::trace::views::detail {
 
@@ -36,16 +40,18 @@ struct AggSchema;
 /// `inputs`, which name row columns (as a row select would). A group key of
 /// kind Expr, or an aggregate's field, names it.
 struct ComputedColumn {
-    std::string name;
+    dstd::String name;
     dataframe::Expr expr;
-    std::vector<std::string> inputs;
+    dstd::Vector<dstd::String> inputs;
 };
 
 /// See ViewPlan::build_step. `run` takes the query the scan would use and
 /// gives the one to use with the lookups' key sets. It is thread-safe and
 /// runs the sides once; a call after a failed one runs them again.
 struct BuildStep {
-    std::function<std::optional<duql::Query>(std::optional<duql::Query>)> run;
+    dstd::Function<dstd::Result<dstd::Optional<duql::Query>>(
+        dstd::Optional<duql::Query>)>
+        run;
 };
 
 struct ViewPlan;
@@ -55,10 +61,10 @@ ExportStats counted(const ViewPlan& plan, ExportStats st);
 /// The logical plan a `View` carries. The ops form a linear pipeline, so a flat
 /// struct captures it; each builder copies and mutates one field.
 struct ViewPlan {
-    std::vector<ViewFile> files;
+    dstd::Vector<ViewFile> files;
 
-    std::optional<duql::Query> query;
-    std::optional<std::pair<double, double>> time_range;
+    dstd::Optional<duql::Query> query;
+    dstd::Optional<dstd::Pair<double, double>> time_range;
     // Default spans every phase of the source's data; callers that want only
     // ph="X" events (or only ph="C") say so with .phase().
     Phase phase = Phase::Any;
@@ -85,9 +91,9 @@ struct ViewPlan {
     /// A trace operation (time range, bucket, occupancy, call tree,
     /// flamegraph) reads this plan, so records need a time.
     bool timed = false;
-    std::vector<ComputedColumn> computed;
-    std::vector<GroupKey> group_by;
-    std::vector<AggSpec> agg;
+    dstd::Vector<ComputedColumn> computed;
+    dstd::Vector<GroupKey> group_by;
+    dstd::Vector<AggSpec> agg;
     /// Aggregate every numeric args.* field as a dynamic per-group metric
     /// (skipping metadata/pre-aggregated args). This is how ph="C" counters
     /// aggregate without naming the fields up front. With `numeric_arg_aggs`
@@ -100,22 +106,22 @@ struct ViewPlan {
     /// legacy bare-mean column. Only FieldStat-derivable ops
     /// (Count/Sum/Min/Max/SumSq/ Mean/Var/Std/Skew/Kurt) are supported here;
     /// Pct needs a per-arg sketch.
-    std::vector<AggSpec> numeric_arg_aggs;
+    dstd::Vector<AggSpec> numeric_arg_aggs;
     /// Out-of-core aggregation budget shared by collect / export_counters /
     /// aggregate_partial: when a worker's in-memory group map grows past this
     /// many bytes it spills to a sorted temp run; the runs are k-way merged at
     /// the end, so the scan/merge peak stays bounded regardless of group
     /// cardinality. 0 (the default) means "auto": ~1/3 of available memory (see
-    /// resolve_spill_budget). Set NO_SPILL_BUDGET to disable spilling.
-    /// collect() still materializes the final table, so this bounds
+    /// memory::resolve_spill_budget). Set memory::NO_SPILL_BUDGET to disable
+    /// spilling. collect() still materializes the final table, so this bounds
     /// intermediate memory only.
     std::uint64_t memory_budget = 0;
     /// Where the scans of this plan add their counts; null counts nothing.
-    std::shared_ptr<ScanCounter> scan_counter;
-    std::vector<std::string> select;
+    dstd::SharedPtr<ScanCounter> scan_counter;
+    dstd::Vector<dstd::String> select;
     /// Paths a row scan with an empty select names as schema columns after
     /// its own; the scan still returns every path.
-    std::vector<dataframe::Field> named_columns;
+    dstd::Vector<dataframe::Field> named_columns;
 
     /// Pagination. `limit` caps the output (0 = unlimited); `offset` skips that
     /// many leading rows/events first. Applied to collect()'s materialized rows
@@ -131,22 +137,21 @@ struct ViewPlan {
     /// offset/limit with the vec sort kernels: `sort_col` sorts by that column
     /// (descending if `sort_desc`); `topk_col` then keeps the `topk_k` best
     /// rows (largest unless `!topk_largest`). Empty column = not applied.
-    std::string sort_col;
+    dstd::String sort_col;
     bool sort_desc = false;
-    std::string topk_col;
+    dstd::String topk_col;
     std::int64_t topk_k = -1;
     bool topk_largest = true;
 
-    /// Root for the materialized-view cache (persist/reconstruct). Empty =
-    /// derive from the files' index location. The cache dir is
-    /// `<root>/<plan-signature>`, so a changed grain (files, filter, group_by,
-    /// agg, bucket, range) lands in a different dir and recomputes.
-    std::string rollup_root;
+    /// Root holding the rollup cache store. Empty = the files' index root.
+    /// Rollups are keyed by the plan signature, so a changed grain (files,
+    /// filter, group_by, agg, bucket, range) recomputes instead of matching.
+    dstd::String rollup_root;
 
-    /// Directory holding materialized filtered-trace views. Empty = derive as
-    /// `<parent-of-index>/.dftindex-views`. Set to relocate MVs (e.g. a scratch
+    /// Directory holding materialized filtered-trace views, one subdir per
+    /// view. Empty = the index root's `views`. Set to relocate MVs (a scratch
     /// dir) away from the dataset.
-    std::string views_root;
+    dstd::String views_root;
 
     /// Persist this query's result as a materialized view (rollup) as a
     /// byproduct of answering it, so a later matching query reads it back.
@@ -162,17 +167,18 @@ struct ViewPlan {
 
     /// Cooperative cancellation, polled by every terminal at its loop
     /// boundaries; empty = never cancelled.
-    std::function<bool()> cancelled;
+    dstd::SharedPtr<dstd::Function<bool()>> cancelled;
 
     /// Memoized fold schema (ensure_schema builds it once before the parallel
     /// fold; workers read it race-free). Mutable so a const plan can cache it;
     /// shared_ptr so plan copies share one build.
-    mutable std::shared_ptr<const AggSchema> schema;
+    mutable dstd::SharedPtr<const AggSchema> schema;
 
     /// Index-backed name maps, built lazily by ensure_resolver when the plan
     /// has a FilePath/HostName group key; used by the post-aggregation re-key
     /// pass.
-    mutable std::shared_ptr<const dftracer::utils::index::plan::GroupResolver>
+    mutable dstd::SharedPtr<
+        const dftracer::utils::trace::index::plan::GroupResolver>
         resolver;
 
     /// The first step of executing a plan that reads duql lookups, shared by
@@ -180,12 +186,37 @@ struct ViewPlan {
     /// the lookups to their rows and puts their key sets in the scan filter.
     /// Nothing runs when the plan is built; effective_query runs it when a
     /// terminal executes the plan.
-    std::shared_ptr<const BuildStep> build_step;
+    dstd::SharedPtr<const BuildStep> build_step;
 
     /// The files' record_schema, memoized by plan_record_schema.
-    mutable std::shared_ptr<const dftracer::utils::index::RecordSchema>
+    mutable dstd::SharedPtr<const dftracer::utils::trace::index::RecordSchema>
         record_schema;
+    /// Why the files have no one record_schema, when plan_record_schema fell
+    /// back to dftracer's.
+    mutable dstd::SharedPtr<const dstd::Error> record_schema_error;
+    /// The error a builder met (a refused argument, an unreadable index).
+    /// Every copy of the plan keeps it, and a terminal returns it first.
+    dstd::SharedPtr<const dstd::Error> error;
+
+    /// Index snapshots by index path, taken where the pins of the files were
+    /// read. Every read of those indexes goes through them, so a refresh that
+    /// commits later cannot show a view rows past its pin.
+    dstd::Vector<dstd::Pair<
+        dstd::String,
+        dstd::SharedPtr<const dftracer::utils::trace::index::Snapshot>>>
+        index_snapshots;
 };
+
+/// The snapshot `plan` holds for `index_path`, else a new one.
+dstd::Result<dftracer::utils::trace::index::Snapshot> snapshot_of(
+    const ViewPlan& plan, dstd::StringView index_path);
+
+/// True when a file of `plan` has a pin (@ref ViewFile::pinned_c_end).
+bool has_pin(const ViewPlan& plan);
+/// True when the index of a pinned file holds more than its pin, so an answer
+/// from the index covers rows the view must leave out. Such a plan reads
+/// chunks.
+dstd::Result<bool> is_past_pin(const ViewPlan& plan);
 
 }  // namespace dftracer::utils::trace::views::detail
 

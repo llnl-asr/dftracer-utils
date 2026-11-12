@@ -1,0 +1,51 @@
+// SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/common/format_detector.h>
+#include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/scoped_fd.h>
+
+namespace dftracer::utils::common {
+
+ArchiveFormat FormatDetector::detect(dstd::StringView file_path) {
+    if (file_path.size() >= 3 &&
+        file_path.substr(file_path.size() - 3) == ".gz") {
+        return ArchiveFormat::Gzip;
+    } else if (file_path.size() >= 5 &&
+               file_path.substr(file_path.size() - 5) == ".gzip") {
+        return ArchiveFormat::Gzip;
+    }
+
+    const dstd::String path(file_path);
+    dstd::ScopedFile file(std::fopen(path.c_str(), "rb"));
+    if (!file) {
+        DFTRACER_UTILS_LOG_ERROR("Failed to open file for format detection: {}",
+                                 path);
+        return ArchiveFormat::Unknown;
+    }
+
+    return detect_from_content(file.get());
+}
+
+ArchiveFormat FormatDetector::detect_from_content(FILE* file) {
+    return has_gzip_magic(file) ? ArchiveFormat::Gzip : ArchiveFormat::Unknown;
+}
+
+bool FormatDetector::is_gzip(FILE* file) {
+    return detect_from_content(file) == ArchiveFormat::Gzip;
+}
+
+bool FormatDetector::has_gzip_magic(FILE* file) {
+    if (fseeko(file, 0, SEEK_SET) != 0) {
+        return false;
+    }
+
+    unsigned char magic[2];
+    if (fread(magic, 1, 2, file) != 2) {
+        return false;
+    }
+
+    return magic[0] == constants::indexer::GZIP_MAGIC_BYTE_0 &&
+           magic[1] == constants::indexer::GZIP_MAGIC_BYTE_1;
+}
+
+}  // namespace dftracer::utils::common

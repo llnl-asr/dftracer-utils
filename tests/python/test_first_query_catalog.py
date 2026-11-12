@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The first full scan of a trace leaves its path catalog, so the columns of a
 trace indexed only by a query list every path."""
 

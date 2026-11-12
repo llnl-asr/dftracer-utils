@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Time and memory of the analyzer-shaped group-by against pandas.
 
 The frame has two keys (a string and a small int) and 20 nullable value

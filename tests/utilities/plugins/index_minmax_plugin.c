@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 /* Test-only plugin registering the index extension "index_minmax.range": per
  * chunk and per file, the min and max of the top-level number "v" (the key is
  * found by text, which the test data allows). Comparisons on "v" prune

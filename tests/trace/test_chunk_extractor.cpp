@@ -1,48 +1,254 @@
+// SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/coro/when_all.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/chunk_extractor_utility.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <fstream>
 
+using namespace dftracer::utils;
 using namespace dftracer::utils::trace;
 using namespace dftu_utils_test;
 
+namespace {
+
+coro::CoroTask<ChunkExtractorUtilityOutput> admitted_extract(
+    ExtractionAdmission* admission, ChunkExtractorUtilityInput input) {
+    co_await admission->enter();
+    ChunkExtractorUtility extractor;
+    auto output = co_await extractor(input);
+    admission->leave();
+    co_return output;
+}
+
+struct AdmittedRun {
+    dstd::Vector<ChunkExtractorUtilityOutput> outputs;
+    std::size_t peak_in_flight = 0;
+    std::uint64_t peak_reserved = 0;
+};
+
+AdmittedRun run_admitted(const dstd::String& file, const dstd::String& out_dir,
+                         std::size_t groups, std::uint64_t total_bytes,
+                         std::uint64_t reserve_bytes) {
+    ExtractionAdmission admission(total_bytes, reserve_bytes, groups);
+    AdmittedRun run;
+    Runtime rt(4);
+    auto body = [&](coro::Scope&) -> coro::CoroTask<void> {
+        dstd::Vector<coro::CoroTask<ChunkExtractorUtilityOutput>> tasks;
+        for (std::size_t i = 0; i < groups; ++i) {
+            tasks.push_back(admitted_extract(
+                &admission, ChunkExtractorUtilityInput::from_files(
+                                static_cast<int>(i + 1), {dstd::String(file)})
+                                .with_output_dir(dstd::String(out_dir))
+                                .with_app_name("bounded")
+                                .with_compression(true)
+                                .with_member_size(64 * 1024)
+                                .with_chunk_size(128 * 1024)
+                                .with_memory_budget(reserve_bytes)));
+        }
+        run.outputs = co_await coro::when_all(std::move(tasks));
+    };
+    dftu_utils_test::ok(
+        rt.submit(coro::with_scope(body), "AdmittedExtract").wait());
+    rt.shutdown();
+    run.peak_in_flight = admission.peak_in_flight();
+    run.peak_reserved = admission.peak_reserved_bytes();
+    return run;
+}
+
+}  // namespace
+
 TEST_SUITE("ChunkExtractor") {
     TEST_CASE("ChunkExtractor - Basic extraction") {
-        // Create test environment
         TestEnvironment env(100);
 
-        // Create a DFTracer test file
-        std::string test_file = env.create_dft_test_gzip_file(5);
+        dstd::String test_file = env.create_dft_test_gzip_file(5);
 
-        // Create manifest
-        internal::DFTracerChunkManifest manifest;
-        manifest.total_size_mb = 0.001;
+        auto input =
+            ChunkExtractorUtilityInput::from_files(0, {dstd::String(test_file)})
+                .with_output_dir(dstd::String(env.dir()))
+                .with_app_name("test");
 
-        internal::DFTracerChunkSpec spec;
-        spec.file_path = test_file;
-        spec.size_mb = 0.001;
-        spec.start_line = 0;
-        spec.end_line = 4;
-        spec.start_byte = 0;
-        spec.end_byte = fs::file_size(test_file);
-        manifest.specs.push_back(spec);
-
-        // Create input
-        auto input = ChunkExtractorUtilityInput::from_manifest(0, manifest)
-                         .with_output_dir(env.get_dir())
-                         .with_app_name("test");
-
-        // Process
         ChunkExtractorUtility extractor;
-        auto output = extractor(input).get();
+        auto output = dftu_utils_test::ok(extractor(input).get());
 
-        // Verify basic properties
         CHECK(output.chunk_index == 0);
         CHECK(output.success == true);
         CHECK(output.events > 0);
+        CHECK(output.chunks.size() == 1);
+    }
+
+    TEST_CASE("ChunkExtractor - Rolls over at the chunk size") {
+        TestEnvironment env(100);
+
+        dstd::String test_file = env.create_dft_test_gzip_file(20000);
+
+        // A chunk ends at the first member end past its size, so small
+        // members give several chunks.
+        auto input =
+            ChunkExtractorUtilityInput::from_files(1, {dstd::String(test_file)})
+                .with_output_dir(dstd::String(env.dir()))
+                .with_app_name("test")
+                .with_compression(true)
+                .with_member_size(64 * 1024)
+                .with_chunk_size(128 * 1024);
+
+        ChunkExtractorUtility extractor;
+        auto output = dftu_utils_test::ok(extractor(input).get());
+
+        REQUIRE(output.success);
+        CHECK(output.chunks.size() >= 2);
+        std::size_t chunk_events = 0;
+        for (const auto& chunk : output.chunks) {
+            CHECK(dstd::fs::exists(chunk.path).value());
+            chunk_events += chunk.events_written;
+        }
+        CHECK(chunk_events == output.events);
+    }
+
+    TEST_CASE("ChunkExtractor - Reads files in order into one writer") {
+        TestEnvironment env(100);
+
+        dstd::String first = env.create_dft_test_gzip_file(30);
+        dstd::String second = env.create_dft_test_gzip_file(40);
+
+        ChunkExtractorUtility extractor;
+        auto one = dftu_utils_test::ok(
+            extractor(
+                ChunkExtractorUtilityInput::from_files(0, {dstd::String(first)})
+                    .with_output_dir(dstd::String(env.dir()))
+                    .with_app_name("one"))
+                .get());
+        auto two = dftu_utils_test::ok(
+            extractor(ChunkExtractorUtilityInput::from_files(
+                          0, {dstd::String(second)})
+                          .with_output_dir(dstd::String(env.dir()))
+                          .with_app_name("two"))
+                .get());
+        auto both = dftu_utils_test::ok(
+            extractor(ChunkExtractorUtilityInput::from_files(
+                          0, {dstd::String(first), dstd::String(second)})
+                          .with_output_dir(dstd::String(env.dir()))
+                          .with_app_name("both"))
+                .get());
+
+        REQUIRE(one.success);
+        REQUIRE(two.success);
+        REQUIRE(both.success);
+        CHECK(both.events == one.events + two.events);
+    }
+
+    TEST_CASE("ChunkExtractor - A missing file fails the group") {
+        TestEnvironment env(100);
+
+        auto input = ChunkExtractorUtilityInput::from_files(
+                         0, {dstd::String(env.dir() + "/no")})
+                         .with_output_dir(dstd::String(env.dir()))
+                         .with_app_name("test");
+
+        ChunkExtractorUtility extractor;
+        auto output = dftu_utils_test::ok(extractor(input).get());
+
+        CHECK(output.success == false);
+        CHECK(output.chunks.empty());
+    }
+
+    TEST_CASE("ChunkExtractor - A file that is not gzip fails the group") {
+        TestEnvironment env(100);
+
+        const dstd::String plain = env.dir() + "/plain.pfw.gz";
+        {
+            dftu_utils_test::FileOut out(plain);
+            out << "{\"name\":\"read\",\"cat\":\"POSIX\",\"ph\":\"X\"}\n";
+        }
+
+        auto input =
+            ChunkExtractorUtilityInput::from_files(0, {dstd::String(plain)})
+                .with_output_dir(dstd::String(env.dir()))
+                .with_app_name("test");
+
+        ChunkExtractorUtility extractor;
+        auto output = dftu_utils_test::ok(extractor(input).get());
+
+        CHECK(output.success == false);
+    }
+
+    TEST_CASE("ChunkExtractor - event_of_line keeps events only") {
+        CHECK(event_of_line("").empty());
+        CHECK(event_of_line("[").empty());
+        CHECK(event_of_line("]").empty());
+
+        const dstd::String event = "{\"name\":\"read\",\"cat\":\"POSIX\"}";
+        CHECK(event_of_line(event) == event);
+    }
+
+    TEST_CASE("ChunkExtractor - plan_extraction_budget shares the budget") {
+        constexpr std::uint64_t MEMBER = 1 << 20;
+        constexpr std::uint64_t GIB = std::uint64_t{1} << 30;
+
+        const auto tiny = plan_extraction_budget(1, 4, 16, MEMBER);
+        CHECK(tiny.writer_bytes == 4 * MEMBER);
+        CHECK(tiny.reserve_bytes > tiny.writer_bytes);
+
+        const auto shared = plan_extraction_budget(GIB, 4, 16, MEMBER);
+        CHECK(shared.writer_bytes == 4 * MEMBER * 18);
+
+        const auto small = plan_extraction_budget(32 * MEMBER, 4, 16, MEMBER);
+        CHECK(small.writer_bytes == 8 * MEMBER);
+    }
+
+    TEST_CASE("ChunkExtractor - A small budget bounds the extractions held") {
+        TestEnvironment env(100);
+        const dstd::String file = env.create_dft_test_gzip_file(20000);
+
+        constexpr std::size_t GROUPS = 6;
+        constexpr std::uint64_t RESERVE = 8 * 1024 * 1024;
+
+        const dstd::String loose_dir = env.dir() + "/loose";
+        const dstd::String tight_dir = env.dir() + "/tight";
+        const auto loose =
+            run_admitted(file, loose_dir, GROUPS, RESERVE * GROUPS, RESERVE);
+        const auto tight =
+            run_admitted(file, tight_dir, GROUPS, RESERVE * 2, RESERVE);
+        const auto single = run_admitted(file, env.dir() + "/single", GROUPS,
+                                         RESERVE / 2, RESERVE);
+
+        CHECK(loose.peak_in_flight <= GROUPS);
+        CHECK(tight.peak_in_flight <= 2);
+        CHECK(tight.peak_reserved <= RESERVE * 2);
+        CHECK(single.peak_in_flight == 1);
+        CHECK(single.peak_reserved <= RESERVE / 2);
+
+        for (const auto* run : {&loose, &tight, &single}) {
+            REQUIRE(run->outputs.size() == GROUPS);
+            for (const auto& output : run->outputs) {
+                CHECK(output.success);
+                CHECK(output.peak_bytes > 0);
+            }
+        }
+        for (std::size_t i = 0; i < GROUPS; ++i) {
+            for (const auto* run : {&tight, &single}) {
+                CHECK(run->outputs[i].events == loose.outputs[i].events);
+                CHECK(run->outputs[i].event_hash ==
+                      loose.outputs[i].event_hash);
+                REQUIRE(run->outputs[i].chunks.size() ==
+                        loose.outputs[i].chunks.size());
+                for (std::size_t c = 0; c < loose.outputs[i].chunks.size();
+                     ++c) {
+                    CHECK(run->outputs[i].chunks[c].bytes_written ==
+                          loose.outputs[i].chunks[c].bytes_written);
+                    CHECK(run->outputs[i].chunks[c].events_written ==
+                          loose.outputs[i].chunks[c].events_written);
+                }
+            }
+        }
     }
 }

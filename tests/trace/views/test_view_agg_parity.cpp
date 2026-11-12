@@ -1,14 +1,25 @@
+// SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include "agg_parity_common.h"
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
+#include <task_result.h>
+#include <trace/views/agg_parity_common.h>
 
-namespace scan = dftracer::utils::trace::views::detail::scan;
+using namespace dftracer::utils;
+using namespace dftracer::utils::trace::internal;
+using namespace dftracer::utils::trace::views;
+using namespace dftu_utils_test;
+using namespace test_view_common;
+using namespace aggparity;
+
+using namespace dftracer::utils::trace;
 
 TEST_SUITE("View") {
     TEST_CASE("View - agg engine path matches the GroupMap path") {
         REQUIRE(parity_env().is_valid());
-        const std::string gz = write_agg_engine_trace(parity_sub("base"));
-        const std::string idx = determine_index_path(gz, "");
-        auto run_both = [&](const GroupKey& gk, const std::string& key_col,
+        const dstd::String gz = write_agg_engine_trace(parity_sub("base"));
+        const dstd::String idx = dstd::String(determine_index_path(gz, ""));
+        auto run_both = [&](const GroupKey& gk, const dstd::String& key_col,
                             std::uint64_t mem_budget) {
             run_both_file(gz, idx, gk, key_col, mem_budget);
         };
@@ -46,23 +57,30 @@ TEST_SUITE("View") {
         SUBCASE("engine path is served by a subsuming rollup, not a rescan") {
             TestEnvironment renv(200);
             REQUIRE(renv.is_valid());
-            const std::string rgz = write_agg_engine_trace(renv.get_dir());
-            const std::string ridx = determine_index_path(rgz, "");
+            const dstd::String rgz = write_agg_engine_trace(renv.dir());
+            const dstd::String ridx =
+                dstd::String(determine_index_path(rgz, ""));
             auto fine = [&] {
-                return scan::agg(
-                    scan::group_by(scan::from_file(rgz, ridx),
-                                   {GroupKey::cat(), GroupKey::name()}),
+                return views::detail::scan::agg(
+                    views::detail::scan::group_by(
+                        views::detail::scan::from_file(dstd::String(rgz),
+                                                       dstd::String(ridx)),
+                        {GroupKey::cat(), GroupKey::name()}),
                     {{AggOp::Count, "", "n"}, {AggOp::Sum, "dur", "sum_dur"}});
             };
             auto coarse = [&] {
-                return scan::agg(
-                    scan::group_by(scan::from_file(rgz, ridx),
-                                   {GroupKey::cat()}),
+                return views::detail::scan::agg(
+                    views::detail::scan::group_by(
+                        views::detail::scan::from_file(dstd::String(rgz),
+                                                       dstd::String(ridx)),
+                        {GroupKey::cat()}),
                     {{AggOp::Count, "", "n"}, {AggOp::Sum, "dur", "sum_dur"}});
             };
 
             dataframe::DataFrame expect = collect_groupmap_plan(coarse());
-            scan::run(fine()).get();  // materialize only the finer rollup
+            dftu_utils_test::ok(
+                views::detail::scan::run(fine())
+                    .get());  // materialize only the finer rollup
             dataframe::DataFrame engine_served = collect_engine_plan(coarse());
             check_match(expect, engine_served, "cat");
         }
@@ -73,26 +91,30 @@ TEST_SUITE("View") {
         SUBCASE("subsuming rollup: same-grain full vocab matches a scan") {
             TestEnvironment renv(200);
             REQUIRE(renv.is_valid());
-            const std::string rgz = write_agg_engine_trace(renv.get_dir());
-            const std::string ridx = determine_index_path(rgz, "");
+            const dstd::String rgz = write_agg_engine_trace(renv.dir());
+            const dstd::String ridx =
+                dstd::String(determine_index_path(rgz, ""));
             auto q = [&] {
-                return scan::agg(scan::group_by(scan::from_file(rgz, ridx),
-                                                {GroupKey::cat()}),
-                                 {
-                                     {AggOp::Count, "", "n"},
-                                     {AggOp::Sum, "dur", "sum_dur"},
-                                     {AggOp::Mean, "dur", "mean_dur"},
-                                     {AggOp::Min, "dur", "min_dur"},
-                                     {AggOp::Max, "dur", "max_dur"},
-                                     {AggOp::Var, "dur", "var_dur"},
-                                     {AggOp::Std, "dur", "std_dur"},
-                                     {AggOp::Pct, "dur", "p90_dur", "", 0.9},
-                                     {AggOp::SetUnion, "cat", "cats"},
-                                     {AggOp::ArgMax, "name", "top_name", "dur"},
-                                 });
+                return views::detail::scan::agg(
+                    views::detail::scan::group_by(
+                        views::detail::scan::from_file(dstd::String(rgz),
+                                                       dstd::String(ridx)),
+                        {GroupKey::cat()}),
+                    {
+                        {AggOp::Count, "", "n"},
+                        {AggOp::Sum, "dur", "sum_dur"},
+                        {AggOp::Mean, "dur", "mean_dur"},
+                        {AggOp::Min, "dur", "min_dur"},
+                        {AggOp::Max, "dur", "max_dur"},
+                        {AggOp::Var, "dur", "var_dur"},
+                        {AggOp::Std, "dur", "std_dur"},
+                        {AggOp::Pct, "dur", "p90_dur", "", 0.9},
+                        {AggOp::SetUnion, "cat", "cats"},
+                        {AggOp::ArgMax, "name", "top_name", "dur"},
+                    });
             };
             dataframe::DataFrame expect = collect_groupmap_plan(q());
-            scan::run(q()).get();
+            dftu_utils_test::ok(views::detail::scan::run(q()).get());
             check_match(expect, collect_engine_plan(q()), "cat");
         }
 
@@ -102,10 +124,11 @@ TEST_SUITE("View") {
         SUBCASE("subsuming rollup: coarsening Pct/SetUnion matches a scan") {
             TestEnvironment renv(200);
             REQUIRE(renv.is_valid());
-            const std::string rgz = write_agg_engine_trace(renv.get_dir());
-            const std::string ridx = determine_index_path(rgz, "");
+            const dstd::String rgz = write_agg_engine_trace(renv.dir());
+            const dstd::String ridx =
+                dstd::String(determine_index_path(rgz, ""));
             auto specs = [] {
-                return std::vector<AggSpec>{
+                return dstd::Vector<AggSpec>{
                     {AggOp::Count, "", "n"},
                     {AggOp::Sum, "dur", "sum_dur"},
                     {AggOp::Mean, "dur", "mean_dur"},
@@ -114,18 +137,23 @@ TEST_SUITE("View") {
                     {AggOp::SetUnion, "name", "names"}};
             };
             auto fine = [&] {
-                return scan::agg(
-                    scan::group_by(scan::from_file(rgz, ridx),
-                                   {GroupKey::cat(), GroupKey::name()}),
+                return views::detail::scan::agg(
+                    views::detail::scan::group_by(
+                        views::detail::scan::from_file(dstd::String(rgz),
+                                                       dstd::String(ridx)),
+                        {GroupKey::cat(), GroupKey::name()}),
                     specs());
             };
             auto coarse = [&] {
-                return scan::agg(scan::group_by(scan::from_file(rgz, ridx),
-                                                {GroupKey::cat()}),
-                                 specs());
+                return views::detail::scan::agg(
+                    views::detail::scan::group_by(
+                        views::detail::scan::from_file(dstd::String(rgz),
+                                                       dstd::String(ridx)),
+                        {GroupKey::cat()}),
+                    specs());
             };
             dataframe::DataFrame expect = collect_groupmap_plan(coarse());
-            scan::run(fine()).get();
+            dftu_utils_test::ok(views::detail::scan::run(fine()).get());
             check_match(expect, collect_engine_plan(coarse()), "cat");
         }
 
@@ -136,11 +164,15 @@ TEST_SUITE("View") {
         SUBCASE("subsuming rollup: occupancy exact same-grain and coarsening") {
             TestEnvironment renv(200);
             REQUIRE(renv.is_valid());
-            const std::string rgz = write_agg_engine_trace(renv.get_dir());
-            const std::string ridx = determine_index_path(rgz, "");
-            auto occ = [&](std::vector<GroupKey> gb) {
-                return scan::agg(
-                    scan::group_by(scan::from_file(rgz, ridx), std::move(gb)),
+            const dstd::String rgz = write_agg_engine_trace(renv.dir());
+            const dstd::String ridx =
+                dstd::String(determine_index_path(rgz, ""));
+            auto occ = [&](dstd::Vector<GroupKey> gb) {
+                return views::detail::scan::agg(
+                    views::detail::scan::group_by(
+                        views::detail::scan::from_file(dstd::String(rgz),
+                                                       dstd::String(ridx)),
+                        std::move(gb)),
                     {
                         {AggOp::Busy, "", "busy"},
                         {AggOp::Active, "", "active"},
@@ -148,13 +180,16 @@ TEST_SUITE("View") {
             };
             dataframe::DataFrame same_expect =
                 collect_groupmap_plan(occ({GroupKey::cat()}));
-            scan::run(occ({GroupKey::cat()})).get();
+            dftu_utils_test::ok(
+                views::detail::scan::run(occ({GroupKey::cat()})).get());
             check_match(same_expect,
                         collect_engine_plan(occ({GroupKey::cat()})), "cat");
 
             dataframe::DataFrame coarse_expect =
                 collect_groupmap_plan(occ({GroupKey::cat()}));
-            scan::run(occ({GroupKey::cat(), GroupKey::name()})).get();
+            dftu_utils_test::ok(views::detail::scan::run(
+                                    occ({GroupKey::cat(), GroupKey::name()}))
+                                    .get());
             check_match(coarse_expect,
                         collect_engine_plan(occ({GroupKey::cat()})), "cat");
         }
@@ -164,13 +199,14 @@ TEST_SUITE("View") {
         SUBCASE("subsuming rollup: Hist same-grain and coarsening") {
             TestEnvironment renv(200);
             REQUIRE(renv.is_valid());
-            const std::string rgz = write_agg_engine_trace(renv.get_dir());
-            const std::string ridx = determine_index_path(rgz, "");
+            const dstd::String rgz = write_agg_engine_trace(renv.dir());
+            const dstd::String ridx =
+                dstd::String(determine_index_path(rgz, ""));
             auto check_hist = [&](const dataframe::DataFrame& expect,
                                   const dataframe::DataFrame& got) {
                 REQUIRE(expect.num_rows() == got.num_rows());
                 for (std::int64_t lr = 0; lr < expect.num_rows(); ++lr) {
-                    const std::string cat = bstr(expect, lr, "cat");
+                    const dstd::String cat = bstr(expect, lr, "cat");
                     std::int64_t er = -1;
                     for (std::int64_t r = 0; r < got.num_rows(); ++r)
                         if (bstr(got, r, "cat") == cat) {
@@ -188,19 +224,25 @@ TEST_SUITE("View") {
                     }
                 }
             };
-            auto hv = [&](std::vector<GroupKey> gb) {
-                return scan::agg(
-                    scan::group_by(scan::from_file(rgz, ridx), std::move(gb)),
+            auto hv = [&](dstd::Vector<GroupKey> gb) {
+                return views::detail::scan::agg(
+                    views::detail::scan::group_by(
+                        views::detail::scan::from_file(dstd::String(rgz),
+                                                       dstd::String(ridx)),
+                        std::move(gb)),
                     {{AggOp::Count, "", "n"}, {AggOp::Hist, "dur", "h"}});
             };
             dataframe::DataFrame same_expect =
                 collect_groupmap_plan(hv({GroupKey::cat()}));
-            scan::run(hv({GroupKey::cat()})).get();
+            dftu_utils_test::ok(
+                views::detail::scan::run(hv({GroupKey::cat()})).get());
             check_hist(same_expect, collect_engine_plan(hv({GroupKey::cat()})));
 
             dataframe::DataFrame coarse_expect =
                 collect_groupmap_plan(hv({GroupKey::cat()}));
-            scan::run(hv({GroupKey::cat(), GroupKey::name()})).get();
+            dftu_utils_test::ok(views::detail::scan::run(
+                                    hv({GroupKey::cat(), GroupKey::name()}))
+                                    .get());
             check_hist(coarse_expect,
                        collect_engine_plan(hv({GroupKey::cat()})));
         }

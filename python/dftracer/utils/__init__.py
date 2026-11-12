@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 import atexit
 from importlib.metadata import PackageNotFoundError, version
 from typing import Optional
@@ -31,19 +32,17 @@ from .dftracer_utils_ext import (  # noqa: F401
     DFTUtilsPipelineError,
     DFTUtilsReaderError,
     DFTUtilsValueError,
-    JsonDictValue,  # noqa: F401
+    consolidate_shard_set,
     get_log_level,
     set_log_color,
     set_log_level,
+    write_shard_set,
 )
 from .dftracer_utils_ext import (
     get_default_runtime as _get_default_native_runtime,
 )
 from .dftracer_utils_ext import (
     peek_default_runtime as _peek_default_native_runtime,
-)
-from .dftracer_utils_ext import (
-    set_default_runtime as _set_default_native_runtime,
 )
 from .enums import AggOp, DType, GroupKey, Phase  # noqa: F401
 from .indexer import (  # noqa: F401
@@ -60,9 +59,10 @@ from .lazyframe import (  # noqa: F401
     collect_all,
     lazy,
 )
-from .live_trace_viewer import LiveTraceViewer  # noqa: F401
+from .live_trace_viewer import LiveFileStatus, LiveTraceViewer  # noqa: F401
 from .runtime import Runtime, TaskHandle  # noqa: F401
 from .series import Series  # noqa: F401
+from .store import Store  # noqa: F401
 from .time_unit import TimeUnit  # noqa: F401
 from .trace_viewer import Containment, Handle, Session, TraceViewer  # noqa: F401
 
@@ -70,7 +70,7 @@ _default_wrapper: Optional["Runtime"] = None
 
 
 def get_default_runtime() -> "Runtime":
-    """Return the module-level default Runtime (lazy-created)."""
+    """Return the process runtime (made on first use)."""
     global _default_wrapper
     if _default_wrapper is None:
         native = _get_default_native_runtime()
@@ -79,10 +79,10 @@ def get_default_runtime() -> "Runtime":
 
 
 def peek_default_runtime() -> Optional["Runtime"]:
-    """Return the current default Runtime, or None if none exists yet.
+    """Return the process runtime, or None before its first use.
 
-    Never creates one, so saving/restoring the default (e.g. in a Dask worker
-    plugin) does not spin up an unused full-machine-sized runtime.
+    Never makes one, so a caller that only looks does not start a
+    full-machine-sized pool.
     """
     global _default_wrapper
     if _default_wrapper is not None:
@@ -94,21 +94,10 @@ def peek_default_runtime() -> Optional["Runtime"]:
     return _default_wrapper
 
 
-def set_default_runtime(runtime: Optional["Runtime"]) -> None:
-    """Replace the module-level default Runtime (pass None to clear)."""
-    global _default_wrapper
-    if runtime is None:
-        _set_default_native_runtime(None)
-        _default_wrapper = None
-    else:
-        _set_default_native_runtime(runtime._native)
-        _default_wrapper = runtime
-
-
 @atexit.register
 def _shutdown_default_runtime() -> None:
-    # Join executor threads while the interpreter is still alive to avoid
-    # teardown hangs. Only act on a lazily-created default; never force one.
+    # Wait for this handle's tasks and stop its Python threads while the
+    # interpreter is still alive. The native exit handler stops the runtime.
     global _default_wrapper
     wrapper = _default_wrapper
     if wrapper is None:
@@ -146,10 +135,11 @@ __all__ = [
     "IndexStatus",
     "AggOp",
     "GroupKey",
-    "JsonDictValue",
     "Phase",
     "TimeUnit",
+    "Store",
     "TraceViewer",
+    "LiveFileStatus",
     "LiveTraceViewer",
     "Containment",
     "Session",
@@ -167,7 +157,8 @@ __all__ = [
     "get_default_runtime",
     "peek_default_runtime",
     "get_log_level",
-    "set_default_runtime",
     "set_log_color",
     "set_log_level",
+    "write_shard_set",
+    "consolidate_shard_set",
 ]

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 /* Example dftracer-utils plugin: the plugin owns its data structure, the engine
  * only moves the bytes. Each slice builds a pid -> event-count map, merges it
  * across workers, then serializes it to a TSV blob and emits it as a named
@@ -121,7 +122,8 @@ static void destroy(void* self) { (void)self; }
 
 static dftu_plugin g_plugin;
 
-DFTU_PLUGIN_EXPORT dftu_plugin* dftracer_plugin(dftu_plugin_host* h, const dftu_value* config) {
+DFTU_PLUGIN_EXPORT dftu_plugin* dftracer_plugin(dftu_plugin_host* h,
+                                                const dftu_value* config) {
     (void)h;
     (void)config;
     g_plugin.abi_version = DFTRACER_UTILS_PLUGIN_ABI_VERSION;

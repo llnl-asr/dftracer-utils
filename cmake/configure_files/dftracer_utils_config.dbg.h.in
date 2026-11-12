@@ -29,15 +29,12 @@
 #cmakedefine DFTRACER_UTILS_CMAKE_CXX_SHARED_LIBRARY_FLAGS "@CMAKE_CXX_SHARED_LIBRARY_FLAGS@"
 
 /* Macro flags */
-#cmakedefine DFTRACER_UTILS_HAS_STD_FILESYSTEM 1
 
 /* Feature flags */
 #cmakedefine DFTRACER_UTILS_VALGRIND_MODE 1
 #cmakedefine DFTRACER_UTILS_ENABLE_ARROW 1
 #cmakedefine DFTRACER_UTILS_ENABLE_VECTORSCAN 1
 #cmakedefine DFTRACER_UTILS_ENABLE_ARROW_IPC 1
-#cmakedefine DFTRACER_UTILS_ENABLE_LZ4 1
-#cmakedefine DFTRACER_UTILS_ENABLE_ZSTD 1
 #cmakedefine DFTRACER_UTILS_ENABLE_MPI 1
 #cmakedefine DFTRACER_UTILS_HAVE_LUSTREAPI 1
 
@@ -51,7 +48,7 @@
 // Common include
 //==========================
 
-#include <dftracer/utils/core/common/platform_compat.h>
+#include <dftracer/utils/common/platform_compat.h>
 
 //==========================
 // Common macro definitions

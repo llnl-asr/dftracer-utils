@@ -1,59 +1,28 @@
+// SPDX-License-Identifier: MIT
 // Drives the C consumers (compose_abi_c_consumer.c, duql_abi_c_consumer.c):
 // the host is built here in C++, but every ABI call happens in a C translation
 // unit through the raw vtables, so this proves the plugin C ABIs work
 // end-to-end from real C, not just from C++.
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/runtime.h>
-#include <dftracer/utils/plugins/fold_adapter.h>
+#include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/domains/plugins/fold_adapter.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/plugins/plugin.h>
+#include <dftracer/utils/runtime/runtime.h>
 // After fold_adapter.h so nanoarrow is set up before dataframe/abi.h's
 // arrow_abi.
-#include <dftracer/utils/dataframe/abi.h>
-#include <dftracer/utils/plugins/plugin.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
+#include <testing_utilities.h>
+#include <utilities/plugins/abi_c_consumers.h>
 
 #include <cstdint>
-#include <filesystem>
-#include <memory>
-#include <string>
-#include <vector>
 
-#include "testing_utilities.h"
-
-using dftracer::utils::CoroScope;
-using dftracer::utils::Runtime;
-using dftracer::utils::StringIntern;
-using dftracer::utils::plugins::PluginFold;
-namespace coro = dftracer::utils::coro;
-
-extern "C" {
-::dftu_task* dftu_test_compose_pipe(const ::dftu_plugin_host*,
-                                    const std::int64_t*, std::int64_t*, int*);
-::dftu_task* dftu_test_compose_all(const ::dftu_plugin_host*,
-                                   const std::int64_t*, std::int64_t*, int*);
-int dftu_test_compose_typecheck(const ::dftu_plugin_host*);
-int dftu_test_query_match(const ::dftu_plugin_host*, const char*, std::uint32_t,
-                          const ::dftu_dataframe*, std::int64_t);
-int dftu_test_query_null_is_safe(const ::dftu_plugin_host*,
-                                 const ::dftu_dataframe*, std::int64_t);
-int dftu_test_sketch(const ::dftu_plugin_host*, double*, std::uint64_t*);
-int dftu_test_sketch_merge(const ::dftu_plugin_host*, std::uint64_t*);
-int dftu_test_ops_fnv1a(const ::dftu_plugin_host*, const char*, std::uint32_t,
-                        std::uint64_t*);
-int dftu_test_ops_find(const ::dftu_plugin_host*);
-int dftu_test_trace_roundtrip(const ::dftu_plugin_host*, const char*,
-                              const ::dftu_dataframe*, int*);
-::dftu_task* dftu_test_io_open(const ::dftu_plugin_host*, const char*, int*);
-::dftu_task* dftu_test_io_write(const ::dftu_plugin_host*, int, const void*,
-                                std::uint64_t, std::int64_t*);
-::dftu_task* dftu_test_io_pread(const ::dftu_plugin_host*, int, void*,
-                                std::uint64_t, std::uint64_t, std::int64_t*);
-::dftu_task* dftu_test_io_close(const ::dftu_plugin_host*, int, int*);
-::dftu_writer* dftu_test_writer_create(const ::dftu_plugin_host*, const char*);
-::dftu_task* dftu_test_writer_open(const ::dftu_plugin_host*, ::dftu_writer*);
-::dftu_task* dftu_test_writer_chunk(const ::dftu_plugin_host*, ::dftu_writer*,
-                                    const void*, std::uint64_t);
-::dftu_task* dftu_test_writer_close(const ::dftu_plugin_host*, ::dftu_writer*);
-}
+using namespace dftracer::utils;
 
 namespace {
 
@@ -76,9 +45,9 @@ struct TestFrame {
     TestFrame(TestFrame&& o) noexcept : df(o.df) { o.df = nullptr; }
 };
 
-dftu_series* string_column(const std::vector<std::string>& vals) {
-    std::vector<std::int32_t> offsets(vals.size() + 1, 0);
-    std::string data;
+dftu_series* string_column(const dstd::Vector<dstd::String>& vals) {
+    dstd::Vector<std::int32_t> offsets(vals.size() + 1, 0);
+    dstd::String data;
     for (std::size_t i = 0; i < vals.size(); ++i) {
         data += vals[i];
         offsets[i + 1] = static_cast<std::int32_t>(data.size());
@@ -90,8 +59,8 @@ dftu_series* string_column(const std::vector<std::string>& vals) {
 
 // A [cat, name] string-column frame; only the columns dftu_svc_duql's tests
 // need.
-TestFrame cat_name_frame(const std::vector<std::string>& cats,
-                         const std::vector<std::string>& names) {
+TestFrame cat_name_frame(const dstd::Vector<dstd::String>& cats,
+                         const dstd::Vector<dstd::String>& names) {
     const char* col_names[2] = {"cat", "name"};
     dftu_series* cols[2] = {string_column(cats), string_column(names)};
     TestFrame f;
@@ -99,13 +68,13 @@ TestFrame cat_name_frame(const std::vector<std::string>& cats,
     return f;
 }
 
-dftu_series* u64_column(const std::vector<std::uint64_t>& vals) {
+dftu_series* u64_column(const dstd::Vector<std::uint64_t>& vals) {
     return dftu_series_new_flat(DFTU_TYPE_UINT64, vals.data(),
                                 static_cast<std::int64_t>(vals.size()),
                                 nullptr);
 }
 
-dftu_series* i64_column(const std::vector<std::int64_t>& vals) {
+dftu_series* i64_column(const dstd::Vector<std::int64_t>& vals) {
     return dftu_series_new_flat(DFTU_TYPE_INT64, vals.data(),
                                 static_cast<std::int64_t>(vals.size()),
                                 nullptr);
@@ -114,9 +83,9 @@ dftu_series* i64_column(const std::vector<std::int64_t>& vals) {
 // A [cat, name, ph, pid, tid, ts, dur] frame - the columns trace_write reads
 // (see fold_adapter.cpp's serialize_row) - N complete events on one pid/tid.
 TestFrame trace_test_frame(std::uint32_t n) {
-    std::vector<std::string> cats(n, "POSIX"), names(n, "write");
-    std::vector<std::uint64_t> pid(n, 7), tid(n, 9), ts(n), dur(n, 3);
-    std::vector<std::int64_t> ph(n, DFTU_PH_COMPLETE);
+    dstd::Vector<dstd::String> cats(n, "POSIX"), names(n, "write");
+    dstd::Vector<std::uint64_t> pid(n, 7), tid(n, 9), ts(n), dur(n, 3);
+    dstd::Vector<std::int64_t> ph(n, DFTU_PH_COMPLETE);
     for (std::uint32_t i = 0; i < n; ++i) ts[i] = 1000000 + i * 100;
     const char* col_names[7] = {"cat", "name", "ph", "pid", "tid", "ts", "dur"};
     dftu_series* cols[7] = {string_column(cats), string_column(names),
@@ -129,12 +98,13 @@ TestFrame trace_test_frame(std::uint32_t n) {
 }
 
 struct HostFixture {
-    StringIntern intern;
+    dstd::StringIntern intern;
     dftu_plugin* plugin;
-    std::unique_ptr<PluginFold> fold;
+    dstd::UniquePtr<domains::plugins::PluginFold> fold;
     HostFixture()
         : plugin(dftracer::utils::plugins::make_plugin<TrivialSlice>(nullptr)),
-          fold(std::make_unique<PluginFold>(plugin, intern)) {}
+          fold(dstd::make_unique<domains::plugins::PluginFold>(plugin,
+                                                               intern)) {}
     ~HostFixture() {
         fold.reset();
         if (plugin && plugin->destroy) plugin->destroy(plugin->self);
@@ -148,9 +118,12 @@ coro::CoroTask<void>* as_coro(::dftu_task* t) {
 
 void drive(::dftu_task* t) {
     Runtime rt(1);
-    rt.scope("c-abi", [&](CoroScope&) -> coro::CoroTask<void> {
-          co_await *as_coro(t);
-      }).wait();
+    dftu_utils_test::ok(
+        rt.submit(coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+                      co_await *as_coro(t);
+                  }),
+                  "c-abi")
+            .wait());
     rt.shutdown();
 }
 
@@ -188,7 +161,7 @@ TEST_CASE("C ABI: dftu_svc_duql compile + match from C") {
     HostFixture fx;
     dftu_plugin_host& host = fx.host();
 
-    std::string src = "cat == \"POSIX\"";
+    dstd::String src = "cat == \"POSIX\"";
     auto len = static_cast<std::uint32_t>(src.size());
 
     // Row 0 is the hit (cat=POSIX), row 1 the miss (cat=STDIO); both name
@@ -198,7 +171,7 @@ TEST_CASE("C ABI: dftu_svc_duql compile + match from C") {
     CHECK(dftu_test_query_match(&host, src.data(), len, frame.df, 0) == 1);
     CHECK(dftu_test_query_match(&host, src.data(), len, frame.df, 1) == 0);
 
-    std::string bad = "cat ==";
+    dstd::String bad = "cat ==";
     CHECK(dftu_test_query_match(&host, bad.data(),
                                 static_cast<std::uint32_t>(bad.size()),
                                 frame.df, 0) == -1);  // malformed -> compile
@@ -223,7 +196,7 @@ TEST_CASE("C ABI: dftu_svc_sketch add/result/merge from C") {
 TEST_CASE("C ABI: dftu_svc_ops runs a host utility op from C") {
     HostFixture fx;
     std::uint64_t hash = 0;
-    std::string data = "hello-world";
+    dstd::String data = "hello-world";
     REQUIRE(dftu_test_ops_fnv1a(&fx.host(), data.data(),
                                 static_cast<std::uint32_t>(data.size()),
                                 &hash) == 0);
@@ -245,7 +218,7 @@ TEST_CASE("C ABI: dftu_svc_trace write then read round-trips from C") {
     const std::uint32_t N = 20;
     TestFrame frame = trace_test_frame(N);
 
-    std::string path = env.get_dir() + "/c_abi.pfw.gz";
+    dstd::String path = env.dir() + "/c_abi.pfw.gz";
     int read = 0;
     REQUIRE(dftu_test_trace_roundtrip(&host, path.c_str(), frame.df, &read) ==
             0);
@@ -256,8 +229,8 @@ TEST_CASE("C ABI: dftu_io write/read round-trips from C") {
     dftu_utils_test::TestEnvironment env(0);
     HostFixture fx;
     dftu_plugin_host& host = fx.host();
-    std::string path = env.get_dir() + "/io_c.bin";
-    std::string data = "hello-io";
+    dstd::String path = env.dir() + "/io_c.bin";
+    dstd::String data = "hello-io";
     char buf[16] = {0};
     int fd = -1;
     std::int64_t wn = 0, rn = 0;
@@ -266,24 +239,29 @@ TEST_CASE("C ABI: dftu_io write/read round-trips from C") {
     // C has no coroutines, so the harness sequences the C-created tasks: the fd
     // from open flows into write/pread/close.
     Runtime rt(1);
-    rt.scope("io", [&](CoroScope&) -> coro::CoroTask<void> {
-          co_await *as_coro(dftu_test_io_open(&host, path.c_str(), &fd));
-          if (fd >= 0) {
-              co_await *as_coro(dftu_test_io_write(
-                  &host, fd, data.data(),
-                  static_cast<std::uint64_t>(data.size()), &wn));
-              co_await *as_coro(dftu_test_io_pread(
-                  &host, fd, buf, static_cast<std::uint64_t>(data.size()), 0,
-                  &rn));
-              co_await *as_coro(dftu_test_io_close(&host, fd, &crc));
-          }
-      }).wait();
+    dftu_utils_test::ok(
+        rt.submit(coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+                      co_await *as_coro(
+                          dftu_test_io_open(&host, path.c_str(), &fd));
+                      if (fd >= 0) {
+                          co_await *as_coro(dftu_test_io_write(
+                              &host, fd, data.data(),
+                              static_cast<std::uint64_t>(data.size()), &wn));
+                          co_await *as_coro(dftu_test_io_pread(
+                              &host, fd, buf,
+                              static_cast<std::uint64_t>(data.size()), 0, &rn));
+                          co_await *as_coro(
+                              dftu_test_io_close(&host, fd, &crc));
+                      }
+                  }),
+                  "io")
+            .wait());
     rt.shutdown();
 
     REQUIRE(fd >= 0);
     CHECK(wn == static_cast<std::int64_t>(data.size()));
     CHECK(rn == static_cast<std::int64_t>(data.size()));
-    CHECK(std::string(buf, data.size()) == data);
+    CHECK(dstd::String(buf, data.size()) == data);
     CHECK(crc == 0);
 }
 
@@ -291,23 +269,26 @@ TEST_CASE("C ABI: dftu_svc_writer create/open/chunk/close from C") {
     dftu_utils_test::TestEnvironment env(0);
     HostFixture fx;
     dftu_plugin_host& host = fx.host();
-    std::string path = env.get_dir() + "/writer_c.out";
-    std::string data = "chunk-from-c";
+    dstd::String path = env.dir() + "/writer_c.out";
+    dstd::String data = "chunk-from-c";
 
     ::dftu_writer* w = dftu_test_writer_create(&host, path.c_str());
     REQUIRE(w != nullptr);
     Runtime rt(1);
-    rt.scope("writer", [&](CoroScope&) -> coro::CoroTask<void> {
-          co_await *as_coro(dftu_test_writer_open(&host, w));
-          co_await *as_coro(dftu_test_writer_chunk(
-              &host, w, data.data(), static_cast<std::uint64_t>(data.size())));
-          co_await *as_coro(dftu_test_writer_close(&host, w));
-      }).wait();
+    dftu_utils_test::ok(
+        rt.submit(coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+                      co_await *as_coro(dftu_test_writer_open(&host, w));
+                      co_await *as_coro(dftu_test_writer_chunk(
+                          &host, w, data.data(),
+                          static_cast<std::uint64_t>(data.size())));
+                      co_await *as_coro(dftu_test_writer_close(&host, w));
+                  }),
+                  "writer")
+            .wait());
     rt.shutdown();
 
     // The sharded writer emits one file per worker: `<path>.shard_0`.
-    std::error_code ec;
-    auto sz = std::filesystem::file_size(path + ".shard_0", ec);
-    CHECK(!ec);
-    CHECK(sz > 0);
+    const auto sz = dstd::fs::file_size(path + ".shard_0");
+    CHECK(sz.has_value());
+    CHECK(sz.value_or(0) > 0);
 }

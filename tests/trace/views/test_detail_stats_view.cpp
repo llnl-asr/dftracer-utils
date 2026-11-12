@@ -1,26 +1,39 @@
+// SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/runtime.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
-#include <dftracer/utils/trace/statistics/detail_stats_view.h>
+#include <dftracer/utils/domains/analysis/statistics/detail_stats_view.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <refused_lines.h>
+#include <task_result.h>
+#include <testing_utilities.h>
+#include <trace/views/test_view_common.h>
 
-#include <string>
-#include <vector>
+#include <fstream>
 
-#include "test_view_common.h"
+using namespace dftracer::utils;
+
+using namespace dftracer::utils::trace::internal;
+using namespace dftu_utils_test;
 
 using namespace test_view_common;
-namespace stats = dftracer::utils::trace::statistics;
+using namespace dftracer::utils::trace;
 
-static stats::DetailedStatistics run_detail(const stats::DetailStatsView& sv,
-                                            const stats::DetailNeeds& needs) {
+static domains::analysis::statistics::DetailedStatistics run_detail(
+    const domains::analysis::statistics::DetailStatsView& sv,
+    const domains::analysis::statistics::DetailNeeds& needs) {
     dftracer::utils::Runtime rt;
-    stats::DetailedStatistics result;
-    rt.run_blocking("detail",
-                    [&](dftracer::utils::CoroScope&)
-                        -> dftracer::utils::coro::CoroTask<void> {
-                        result = co_await sv.collect(needs);
-                    });
+    domains::analysis::statistics::DetailedStatistics result;
+    dftu_utils_test::ok(rt.block_on(dftracer::utils::coro::named(
+        "detail", dftracer::utils::coro::with_scope(
+                      [&](dftracer::utils::coro::Scope&)
+                          -> dftracer::utils::coro::CoroTask<void> {
+                          auto collected = co_await sv.collect(needs);
+                          REQUIRE(collected.has_value());
+                          result = std::move(*collected);
+                      }))));
     return result;
 }
 
@@ -31,29 +44,105 @@ TEST_SUITE("detail stats via View") {
     TEST_CASE("global duration over all events") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
-        std::string gz = create_mixed_trace(env, 30, 20);  // 50 events
-        std::string idx = determine_index_path(gz, "");
+        dstd::String gz = create_mixed_trace(env, 30, 20);  // 50 events
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
-        stats::DetailNeeds needs;                          // no group-by
-        stats::DetailedStatistics d =
-            run_detail(stats::DetailStatsView::from_file(gz, idx), needs);
+        domains::analysis::statistics::DetailNeeds needs;   // no group-by
+        domains::analysis::statistics::DetailedStatistics d = run_detail(
+            domains::analysis::statistics::DetailStatsView::from_file(
+                dstd::String(gz), dstd::String(idx)),
+            needs);
 
         CHECK(d.events_scanned == 50);
         CHECK(d.duration.count() == 50);
         CHECK(d.grouped_duration.empty());
     }
 
+    TEST_CASE("an event without dur adds no duration") {
+        TestEnvironment env(200);
+        REQUIRE(env.is_valid());
+        const dstd::String pfw = env.dir() + "/instants.pfw";
+        {
+            dftu_utils_test::FileOut ofs(pfw);
+            for (int i = 0; i < 5; ++i)
+                ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,)"
+                    << R"("tid":1,"ts":)" << (1000 + i * 100) << R"(,"dur":)"
+                    << (10 + i) << R"(,"args":{}})" << "\n";
+            for (int i = 0; i < 3; ++i)
+                ofs << R"({"ph":"i","name":"read","cat":"POSIX","pid":1,)"
+                    << R"("tid":1,"ts":)" << (2000 + i * 100)
+                    << R"(,"args":{}})" << "\n";
+        }
+        const dstd::String gz = pfw + ".gz";
+        dftu_utils_test::compress_file_to_gzip(pfw, gz);
+        dstd::fs::remove(pfw).discard();
+        const dstd::String idx = dstd::String(determine_index_path(gz, ""));
+
+        dstd::Vector<dstd::String> group_by{"name"};
+        domains::analysis::statistics::DetailNeeds needs;
+        needs.group_by = &group_by;
+        domains::analysis::statistics::DetailedStatistics d = run_detail(
+            domains::analysis::statistics::DetailStatsView::from_file(
+                dstd::String(gz), dstd::String(idx)),
+            needs);
+
+        CHECK(d.events_scanned == 8);
+        CHECK(d.duration.count() == 5);
+        CHECK(d.grouped_duration.at("read").count() == 5);
+    }
+
+    TEST_CASE("a line the DOM parser refuses is scanned") {
+        TestEnvironment env(200);
+        REQUIRE(env.is_valid());
+        const dstd::String pfw = env.dir() + "/refused.pfw";
+        {
+            dftu_utils_test::FileOut ofs(pfw);
+            for (int i = 0; i < 5; ++i)
+                ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,)"
+                    << R"("tid":1,"ts":)" << (1000 + i * 100) << R"(,"dur":)"
+                    << (10 + i) << R"(,"args":{"ret":4096}})" << "\n";
+            for (int k = 0; k < dftu_utils_test::REFUSED_KINDS; ++k)
+                ofs << dftu_utils_test::refused_line(
+                           k, R"("ph":"X","name":"odd","cat":"POSIX","pid":2,)"
+                              R"("tid":1,"ts":)" +
+                                  dstd::to_string(3000 + k * 100) +
+                                  R"(,"dur":)" + dstd::to_string(100 + k))
+                    << "\n";
+        }
+        const dstd::String gz = pfw + ".gz";
+        dftu_utils_test::compress_file_to_gzip(pfw, gz);
+        dstd::fs::remove(pfw).discard();
+        const dstd::String idx = dstd::String(determine_index_path(gz, ""));
+
+        dstd::Vector<dstd::String> group_by{"name"};
+        domains::analysis::statistics::DetailNeeds needs;
+        needs.group_by = &group_by;
+        domains::analysis::statistics::DetailedStatistics d = run_detail(
+            domains::analysis::statistics::DetailStatsView::from_file(
+                dstd::String(gz), dstd::String(idx)),
+            needs);
+
+        CHECK(d.events_scanned == 5 + dftu_utils_test::REFUSED_KINDS);
+        CHECK(d.duration.count() == 5 + dftu_utils_test::REFUSED_KINDS);
+        CHECK(d.grouped_duration.at("read").count() == 5);
+        CHECK(d.grouped_duration.at("odd").count() ==
+              dftu_utils_test::REFUSED_KINDS);
+        CHECK(d.grouped_duration.at("odd").sum == 12 * 100 + 66);
+    }
+
     TEST_CASE("grouped by name") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
-        std::string gz = create_mixed_trace(env, 30, 20);
-        std::string idx = determine_index_path(gz, "");
+        dstd::String gz = create_mixed_trace(env, 30, 20);
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
-        std::vector<std::string> group_by{"name"};
-        stats::DetailNeeds needs;
+        dstd::Vector<dstd::String> group_by{"name"};
+        domains::analysis::statistics::DetailNeeds needs;
         needs.group_by = &group_by;
-        stats::DetailedStatistics d =
-            run_detail(stats::DetailStatsView::from_file(gz, idx), needs);
+        domains::analysis::statistics::DetailedStatistics d = run_detail(
+            domains::analysis::statistics::DetailStatsView::from_file(
+                dstd::String(gz), dstd::String(idx)),
+            needs);
 
         CHECK(d.grouped_duration.size() == 2);  // read, fwrite
         std::uint64_t total = 0;
@@ -66,16 +155,18 @@ TEST_SUITE("detail stats via View") {
     TEST_CASE("grouped by cat with a name filter") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
-        std::string gz = create_mixed_trace(env, 30, 20);
-        std::string idx = determine_index_path(gz, "");
+        dstd::String gz = create_mixed_trace(env, 30, 20);
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
-        std::vector<std::string> group_by{"cat"};
-        std::vector<std::string> filter_names{"read"};
-        stats::DetailNeeds needs;
+        dstd::Vector<dstd::String> group_by{"cat"};
+        dstd::Vector<dstd::String> filter_names{"read"};
+        domains::analysis::statistics::DetailNeeds needs;
         needs.group_by = &group_by;
         needs.filter_names = &filter_names;
-        stats::DetailedStatistics d =
-            run_detail(stats::DetailStatsView::from_file(gz, idx), needs);
+        domains::analysis::statistics::DetailedStatistics d = run_detail(
+            domains::analysis::statistics::DetailStatsView::from_file(
+                dstd::String(gz), dstd::String(idx)),
+            needs);
 
         CHECK(d.events_scanned == 30);  // only POSIX "read"
         CHECK(d.grouped_duration.size() == 1);

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 # ##############################################################################
 # Utilities Tests
 # ##############################################################################
@@ -12,42 +13,35 @@
 set(UTILITIES_TEST_SOURCES
 
     # Statistics
-    common/statistics/test_log2_histogram.cpp
-    common/statistics/test_timestamp_histogram.cpp
+    statistics/test_log2_histogram.cpp
+    statistics/test_timestamp_histogram.cpp
 
     # Distribution fitting
-    common/statistics/test_distributions.cpp
-    common/statistics/test_mixture.cpp
+    statistics/test_distributions.cpp
+    statistics/test_mixture.cpp
 
     # DLIO config generation
     dlio/test_barrier_simulator.cpp
+    dlio/test_trace_loader.cpp
+    dlio/test_yaml_emit.cpp
 
     # Sketches
-    common/statistics/test_ddsketch.cpp
-    common/statistics/test_distinct_sketch.cpp
-    common/statistics/test_field_stat.cpp
+    statistics/test_ddsketch.cpp
+    statistics/test_distinct_sketch.cpp
+    statistics/test_field_stat.cpp
 
     # Indexer
-    indexer/test_rocksdb_storage.cpp
-    indexer/test_scan_prefix.cpp
-    indexer/test_index_database.cpp
     indexer/test_index_builder.cpp
     indexer/test_hash_table_aggregation.cpp
-    indexer/test_sst_ingest_spike.cpp
 
     # Compression
     compression/test_libdeflate_gzip.cpp
     compression/test_gzip_rechunker.cpp
 
-    # Filesystem
-    filesystem/test_directory_scanner.cpp
-    filesystem/test_pattern_directory_scanner.cpp
-
     # Hash
     hash/test_hasher_utility.cpp
 
     # I/O
-    fileio/test_file_reader.cpp
     fileio/test_streaming_file_writer.cpp
     fileio/test_indexed_file_reader.cpp
     fileio/test_file_compressor.cpp
@@ -56,6 +50,7 @@ set(UTILITIES_TEST_SOURCES
     fileio/test_gzip_line_writer.cpp
     fileio/test_line_format.cpp
     fileio/test_gzip_sink.cpp
+    fileio/test_gzip_crc.cpp
 
     # I/O Parallel
     fileio/parallel/test_layout_sizing.cpp
@@ -64,21 +59,18 @@ set(UTILITIES_TEST_SOURCES
     fileio/parallel/test_padded_striped_writer.cpp
 
     # I/O Lines
-    fileio/lines/sources/test_indexed_file_line_iterator.cpp
-    fileio/lines/sources/test_indexed_file_bytes_iterator.cpp
     fileio/lines/sources/test_async_indexed_file_line_generator.cpp
     fileio/lines/sources/test_async_streaming_gz_line_generator.cpp
-    fileio/lines/sources/test_async_indexed_file_bytes_generator.cpp
 
     # Reader
     reader/test_trace_reader.cpp
     reader/test_member_decode_cache.cpp
     reader/test_member_cache_integration.cpp
+    reader/test_member_cache_exit.cpp
+    reader/test_reader_fatal.cpp
     reader/test_large_gzip_members.cpp
     reader/test_gzip_restart_points.cpp
-
-    # Text
-    text/test_line_filter.cpp
+    reader/test_sigill_regression.cpp
 
     # Plugins
     plugins/test_plugin_host_services.cpp
@@ -111,63 +103,36 @@ set(UTILITIES_TEST_SOURCES
 # +++++++++++++++++++++++++++++++++++++++++
 
 if(DFTRACER_UTILS_ENABLE_ARROW)
-  set(ARROW_TEST_SOURCE common/arrow/test_arrow_column_builder.cpp)
-  string(REPLACE ".cpp" "" arrow_bin_exec ${ARROW_TEST_SOURCE})
-  string(REPLACE "/" "_" arrow_target "utilities_${arrow_bin_exec}")
+  foreach(ARROW_TEST_SOURCE arrow/test_arrow_column_builder.cpp
+                            arrow/test_schema_reconcile.cpp)
+    string(REPLACE ".cpp" "" arrow_bin_exec ${ARROW_TEST_SOURCE})
+    string(REPLACE "/" "_" arrow_target "utilities_${arrow_bin_exec}")
 
-  add_executable(${arrow_target} ${ARROW_TEST_SOURCE})
-  target_include_directories(${arrow_target} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
-  target_link_libraries(${arrow_target} PRIVATE doctest::doctest dftracer_utils testing_utilities)
-  link_nanoarrow(${arrow_target} STATIC)
-  target_set_warnings(${arrow_target})
+    add_executable(${arrow_target} ${ARROW_TEST_SOURCE})
+    target_include_directories(${arrow_target} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+    target_link_libraries(${arrow_target} PRIVATE doctest::doctest dftracer_utils testing_utilities)
+    link_nanoarrow(${arrow_target} STATIC)
+    target_set_warnings(${arrow_target})
 
-  get_filename_component(arrow_bin_dir ${arrow_bin_exec} DIRECTORY)
-  get_filename_component(arrow_bin_name ${arrow_bin_exec} NAME)
-  if(arrow_bin_dir)
-    set_target_properties(${arrow_target} PROPERTIES
-      RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/${arrow_bin_dir}")
-  endif()
-  set_target_properties(${arrow_target} PROPERTIES OUTPUT_NAME ${arrow_bin_name})
+    get_filename_component(arrow_bin_dir ${arrow_bin_exec} DIRECTORY)
+    get_filename_component(arrow_bin_name ${arrow_bin_exec} NAME)
+    if(arrow_bin_dir)
+      set_target_properties(${arrow_target} PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/${arrow_bin_dir}")
+    endif()
+    set_target_properties(${arrow_target} PROPERTIES OUTPUT_NAME ${arrow_bin_name})
 
-  if(DFTRACER_UTILS_COVERAGE AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(${arrow_target} PRIVATE --coverage -fprofile-arcs -ftest-coverage)
-    target_link_libraries(${arrow_target} PRIVATE --coverage)
-  endif()
+    if(DFTRACER_UTILS_COVERAGE AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+      target_compile_options(${arrow_target} PRIVATE --coverage -fprofile-arcs -ftest-coverage)
+      target_link_libraries(${arrow_target} PRIVATE --coverage)
+    endif()
 
-  set(arrow_workdir "${CMAKE_CURRENT_BINARY_DIR}/workdirs/${arrow_target}")
-  file(MAKE_DIRECTORY "${arrow_workdir}")
-  add_test(NAME utilities/${arrow_bin_exec} COMMAND ${arrow_target})
-  set_tests_properties(utilities/${arrow_bin_exec} PROPERTIES
-                       WORKING_DIRECTORY "${arrow_workdir}")
-
-  set(ATTRIBUTION_TEST_SOURCE common/arrow/test_arrow_attribution.cpp)
-  string(REPLACE ".cpp" "" attribution_bin_exec ${ATTRIBUTION_TEST_SOURCE})
-  string(REPLACE "/" "_" attribution_target "utilities_${attribution_bin_exec}")
-
-  add_executable(${attribution_target} ${ATTRIBUTION_TEST_SOURCE})
-  target_include_directories(${attribution_target} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
-  target_link_libraries(${attribution_target} PRIVATE doctest::doctest dftracer_utils testing_utilities)
-  link_nanoarrow(${attribution_target} STATIC)
-  target_set_warnings(${attribution_target})
-
-  get_filename_component(attribution_bin_dir ${attribution_bin_exec} DIRECTORY)
-  get_filename_component(attribution_bin_name ${attribution_bin_exec} NAME)
-  if(attribution_bin_dir)
-    set_target_properties(${attribution_target} PROPERTIES
-      RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/${attribution_bin_dir}")
-  endif()
-  set_target_properties(${attribution_target} PROPERTIES OUTPUT_NAME ${attribution_bin_name})
-
-  if(DFTRACER_UTILS_COVERAGE AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(${attribution_target} PRIVATE --coverage -fprofile-arcs -ftest-coverage)
-    target_link_libraries(${attribution_target} PRIVATE --coverage)
-  endif()
-
-  set(attribution_workdir "${CMAKE_CURRENT_BINARY_DIR}/workdirs/${attribution_target}")
-  file(MAKE_DIRECTORY "${attribution_workdir}")
-  add_test(NAME utilities/${attribution_bin_exec} COMMAND ${attribution_target})
-  set_tests_properties(utilities/${attribution_bin_exec} PROPERTIES
-                       WORKING_DIRECTORY "${attribution_workdir}")
+    set(arrow_workdir "${CMAKE_CURRENT_BINARY_DIR}/workdirs/${arrow_target}")
+    file(MAKE_DIRECTORY "${arrow_workdir}")
+    add_test(NAME utilities/${arrow_bin_exec} COMMAND ${arrow_target})
+    set_tests_properties(utilities/${arrow_bin_exec} PROPERTIES
+                         WORKING_DIRECTORY "${arrow_workdir}")
+  endforeach()
 endif()
 
 # +++++++++++++++++++++++++++++++++++++++++
@@ -176,7 +141,7 @@ endif()
 
 if(DFTRACER_UTILS_ENABLE_ARROW_IPC)
   # IPC Writer tests
-  set(ARROW_IPC_TEST_SOURCE common/arrow/test_arrow_ipc_writer.cpp)
+  set(ARROW_IPC_TEST_SOURCE arrow/test_arrow_ipc_writer.cpp)
   string(REPLACE ".cpp" "" arrow_ipc_bin_exec ${ARROW_IPC_TEST_SOURCE})
   string(REPLACE "/" "_" arrow_ipc_target "utilities_${arrow_ipc_bin_exec}")
 
@@ -206,7 +171,7 @@ if(DFTRACER_UTILS_ENABLE_ARROW_IPC)
                        WORKING_DIRECTORY "${arrow_ipc_workdir}")
 
   # IPC Reader tests
-  set(ARROW_IPC_READER_SOURCE common/arrow/test_arrow_ipc_reader.cpp)
+  set(ARROW_IPC_READER_SOURCE arrow/test_arrow_ipc_reader.cpp)
   string(REPLACE ".cpp" "" arrow_ipc_reader_bin ${ARROW_IPC_READER_SOURCE})
   string(REPLACE "/" "_" arrow_ipc_reader_target "utilities_${arrow_ipc_reader_bin}")
 
@@ -300,6 +265,7 @@ target_include_directories(${cabi_target} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..
 target_link_libraries(${cabi_target} PRIVATE doctest::doctest dftracer_utils
                                              testing_utilities)
 target_enable_coroutine(${cabi_target})
+target_set_warnings(${cabi_target})
 set_target_properties(${cabi_target} PROPERTIES OUTPUT_NAME test_plugin_c_abi
   RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/plugins")
 add_test(NAME utilities/plugins/test_plugin_c_abi COMMAND ${cabi_target})
@@ -310,6 +276,7 @@ add_test(NAME utilities/plugins/test_plugin_c_abi COMMAND ${cabi_target})
 # +++++++++++++++++++++++++++++++++++++++++
 
 add_library(bad_abi_version_plugin MODULE plugins/bad_abi_version_plugin.c)
+target_set_warnings(bad_abi_version_plugin)
 set_target_properties(
   bad_abi_version_plugin
   PROPERTIES OUTPUT_NAME bad_abi_version_plugin
@@ -348,6 +315,7 @@ endif()
 foreach(fh_plugin factory_registers_op_plugin factory_escapes_plugin
                   scan_registers_op_plugin index_minmax_plugin)
   add_library(${fh_plugin} MODULE plugins/${fh_plugin}.c)
+  target_set_warnings(${fh_plugin})
   set_target_properties(
     ${fh_plugin}
     PROPERTIES OUTPUT_NAME ${fh_plugin}
@@ -365,6 +333,7 @@ endforeach()
 foreach(cxx_plugin builder_plugin config_keys_plugin reads_projection_plugin
                   provider_fixture_plugin)
   add_library(${cxx_plugin} MODULE plugins/${cxx_plugin}.cpp)
+  target_set_warnings(${cxx_plugin})
   set_target_properties(
     ${cxx_plugin}
     PROPERTIES OUTPUT_NAME ${cxx_plugin}
@@ -446,6 +415,7 @@ endif()
 
 if(DFTRACER_UTILS_ENABLE_ARROW)
   add_library(reference_plugin MODULE plugins/reference_plugin.c)
+  target_set_warnings(reference_plugin)
   set_target_properties(
     reference_plugin
     PROPERTIES OUTPUT_NAME reference_plugin
@@ -481,7 +451,7 @@ if(DFTRACER_UTILS_ENABLE_ARROW)
   endif()
 endif()
 
-# libstdc++'s std::to_chars, inlined through core/common/to_chars.h, trips
+# libstdc++'s std::to_chars, inlined through common/to_chars.h, trips
 # GCC's optimizer-based -Wstrict-overflow=2 inside the system header, which
 # -isystem cannot suppress; the rest of the tests keep =2.
 set_source_files_properties(

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_PLUGINS_ABI_PLUGIN_H
 #define DFTRACER_UTILS_PLUGINS_ABI_PLUGIN_H
 
@@ -136,7 +137,15 @@ typedef struct dftu_plugin {
    the fold or change the prune. */
 typedef dftu_plugin* (*dftu_plugin_factory)(dftu_plugin_host* h,
                                             const dftu_value* config);
-#define DFTRACER_PLUGIN_FACTORY_SYMBOL "dftracer_plugin"
+#define DFTRACER_UTILS_PLUGIN_FACTORY_SYMBOL "dftracer_plugin"
+
+/**
+ * @brief The symbol the host resolves with dlsym; a plugin defines it as its
+ * @ref dftu_plugin_factory. Declared here so a plugin's definition has a
+ * prior declaration.
+ */
+DFTU_PLUGIN_EXPORT dftu_plugin* dftracer_plugin(dftu_plugin_host* h,
+                                                const dftu_value* config);
 
 #ifdef __cplusplus
 }

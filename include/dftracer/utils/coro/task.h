@@ -1,0 +1,1157 @@
+// SPDX-License-Identifier: MIT
+#ifndef DFTRACER_UTILS_CORO_TASK_H
+#define DFTRACER_UTILS_CORO_TASK_H
+
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/common/exception_helpers.h>
+#include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/common/platform_compat.h>
+#include <dftracer/utils/common/typedefs.h>
+#include <dftracer/utils/coro/detail/frame.h>
+#include <dftracer/utils/coro/detail/pool_resume.h>
+#include <dftracer/utils/coro/hooks.h>
+#include <dftracer/utils/coro/yield.h>
+#include <dftracer/utils/dstd/either.h>
+#include <dftracer/utils/dstd/expected.h>
+#include <dftracer/utils/dstd/fatal.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/result.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/tuple.h>
+#include <dftracer/utils/memory/detail/manager.h>
+
+#include <atomic>
+#include <coroutine>
+#include <cstdint>
+#include <cstdlib>
+#include <exception>
+#include <stdexcept>
+#include <tuple>
+#include <type_traits>
+#include <utility>
+
+namespace dftracer::utils::coro {
+
+class Executor;
+class Scope;
+
+template <typename T>
+class CoroTask;
+
+namespace detail {
+template <typename L, typename R>
+CoroTask<dstd::Either<L, R>> either_task(
+    dstd::Either<CoroTask<L>, CoroTask<R>> pair);
+}  // namespace detail
+
+namespace detail {
+/// True when a task that finished may resume the awaiter on this thread,
+/// because the thread runs the awaiter's executor, runs no executor, or the
+/// awaiter has none.
+bool runs_on(Executor* home) noexcept;
+/// Queues `awaiter` on `home`, the executor it runs on.
+void resume_on_home(Executor* home, std::coroutine_handle<> awaiter) noexcept;
+/// Executor::current(), for code that sees only a declaration of Executor.
+Executor* current_executor() noexcept;
+/// Executor::wake_cancelled, for code that sees only a declaration of Executor.
+void wake_cancelled_on(Executor* executor) noexcept;
+}  // namespace detail
+
+namespace this_coro {
+struct ExecutorTag {};
+/// `co_await this_coro::executor` gives the executor the task runs on.
+inline constexpr ExecutorTag executor{};
+struct StopRequestedTag {};
+/// `co_await this_coro::stop_requested` is true when the next wait of this task
+/// would end it as cancelled, for a loop that computes without waits.
+inline constexpr StopRequestedTag stop_requested{};
+}  // namespace this_coro
+
+namespace detail {
+struct ExecutorQuery {
+    Executor* value;
+    bool await_ready() const noexcept { return true; }
+    void await_suspend(std::coroutine_handle<>) const noexcept {}
+    Executor* await_resume() const noexcept { return value; }
+};
+}  // namespace detail
+
+class Scope;
+struct PromiseBase;
+
+namespace detail {
+/// Ends the awaiter of a task that ended cancelled or failed and returns true,
+/// or returns false and the awaiter resumes.
+using ParentEnd = bool (*)(std::coroutine_handle<> awaiter,
+                           PromiseBase& child) noexcept;
+
+template <typename T>
+inline constexpr bool is_expected_v = false;
+template <typename V, typename E>
+inline constexpr bool is_expected_v<dstd::Expected<V, E>> = true;
+
+/// What a blocking wait on a `CoroTask<T>` gives: a dstd::Result<T>, or the
+/// task's own type when that is already a Result. A task that was stopped gives
+/// dstd::Condition::Cancelled. A task with another error type is wrapped like
+/// any other value.
+template <typename T>
+struct TaskResultOf {
+    using type = dstd::Result<T>;
+};
+template <typename V>
+struct TaskResultOf<dstd::Expected<V, dstd::Error>> {
+    using type = dstd::Expected<V, dstd::Error>;
+};
+
+template <typename T>
+struct is_coro_task : std::false_type {};
+template <typename T>
+struct is_coro_task<CoroTask<T>> : std::true_type {};
+template <typename T>
+inline constexpr bool is_coro_task_v = is_coro_task<T>::value;
+
+template <typename V, typename E>
+struct OrFailValue;
+template <typename V, typename E>
+struct OrFailTask;
+template <typename T, typename Task>
+struct SettleTask;
+
+/// True when the scope was asked to stop or its owning task is cancelled.
+bool scope_stopping(const Scope& scope) noexcept;
+
+template <typename T>
+struct ValueQuery {
+    T value;
+    bool await_ready() const noexcept { return true; }
+    void await_suspend(std::coroutine_handle<>) const noexcept {}
+    T await_resume() const noexcept { return value; }
+};
+
+}  // namespace detail
+
+template <typename T>
+using TaskResult = typename detail::TaskResultOf<T>::type;
+
+namespace detail {
+
+/// The error of a task that was stopped.
+inline dstd::Error stopped_error() {
+    return dstd::Error{dstd::Condition::Cancelled, "task cancelled"};
+}
+
+template <typename T>
+TaskResult<T> stopped_result() {
+    return dstd::Unexpected<dstd::Error>(stopped_error());
+}
+}  // namespace detail
+
+struct PromiseBase : detail::FrameAllocation {
+    std::atomic<bool> awaiting_async{false};
+    /// Set (release) when the coroutine reaches its final suspend, so a thread
+    /// blocking on it sees its result through the matching acquire.
+    std::atomic<bool> finished{false};
+    /// Set by the first of the awaiter (once the child returned to it) and
+    /// the child's final suspend; the second one continues the awaiter.
+    std::atomic<bool> handoff{false};
+    std::coroutine_handle<> continuation{nullptr};
+    Executor* executor{nullptr};
+    /// The executor the awaiter runs on. A task that ends elsewhere posts the
+    /// awaiter back to it instead of resuming it on this thread.
+    Executor* continuation_executor{nullptr};
+    /// The @ref Scope that spawned this task, so the task cannot join it.
+    const Scope* scope{nullptr};
+    /// A flag outside the frame that cancels this task and those it awaits,
+    /// set through the future of a @ref Scope spawn.
+    const std::atomic<bool>* cancel_source{nullptr};
+    std::atomic<bool> cancel_flag{false};
+    /// Written before the awaiter is released and read after.
+    bool cancelled{false};
+    bool started{false};
+    /// A cancelled child does not end a frame that holds a scope, which must
+    /// reach its join.
+    bool owns_scope{false};
+    /// The task returned an error result and threw nothing.
+    bool failed{false};
+    detail::ParentEnd parent_end{nullptr};
+    PromiseBase* root_promise{nullptr};
+    detail::RunContext context;
+#if DFTRACER_UTILS_LOGGER_TRACE_ENABLED
+    void* trace_handle{nullptr};  ///< logging::coro_trace enter/leave handle
+    const char* trace_file{nullptr};  ///< coroutine definition site
+    std::uint_least32_t trace_line{0};
+#endif
+
+    void set_executor(Executor* e) { executor = e; }
+    Executor* get_executor() const { return executor; }
+    void set_root_promise(PromiseBase* p) { root_promise = p; }
+    PromiseBase* get_root_promise() {
+        return root_promise ? root_promise : this;
+    }
+
+    bool cancel_requested() const noexcept {
+        const PromiseBase* root = root_promise ? root_promise : this;
+        return cancel_flag.load(std::memory_order_acquire) ||
+               root->cancel_flag.load(std::memory_order_acquire) ||
+               (root->cancel_source &&
+                root->cancel_source->load(std::memory_order_acquire)) ||
+               (root->scope && detail::scope_stopping(*root->scope));
+    }
+
+    /// Releases the awaiter of a task that ended. The frame must not be read
+    /// afterwards, since the awaiter may destroy it.
+    void complete() noexcept {
+        std::coroutine_handle<> next = continuation;
+        Executor* const home = continuation_executor;
+        const bool ends_parent = cancelled || failed;
+        const detail::ParentEnd parent_end_fn = parent_end;
+        finished.store(true, std::memory_order_release);
+        if (!next) {
+            notify_task_finished();
+            return;
+        }
+        if (handoff.exchange(true, std::memory_order_acq_rel)) {
+            if (ends_parent && parent_end_fn != nullptr &&
+                parent_end_fn(next, *this))
+                return;
+            if (detail::runs_on(home)) {
+                next.resume();
+            } else {
+                detail::resume_on_home(home, next);
+            }
+        }
+    }
+
+    /// Ends this task as cancelled too, with no exception, when it holds no
+    /// scope and is cancelled, and returns true then. Call only while suspended
+    /// on that child.
+    bool propagate_cancel() noexcept {
+        if (owns_scope) return false;
+        finish_cancelled();
+        return true;
+    }
+
+    /// True for a frame that must reach a join and so cannot be stopped at a
+    /// wait.
+    bool refuses_stop() const noexcept { return owns_scope; }
+
+    /// Ends the task as cancelled with no exception. The owner destroys the
+    /// frame. Call only from the await_suspend of this task's own frame.
+    void finish_cancelled() noexcept {
+        cancelled = true;
+        complete();
+    }
+};
+
+namespace detail {
+struct StopHere {
+    static constexpr bool CANCEL_EXEMPT = true;
+
+    bool await_ready() const noexcept { return false; }
+
+    template <typename Promise>
+    void await_suspend(std::coroutine_handle<Promise> h) const noexcept {
+        if constexpr (requires { h.promise().finish_cancelled(); }) {
+            h.promise().finish_cancelled();
+        } else {
+            dstd::fatal("coro: stop_here in a frame that cannot stop");
+        }
+    }
+
+    void await_resume() const noexcept {}
+};
+}  // namespace detail
+
+/**
+ * @brief Ends the calling task as cancelled: `co_await stop_here()`.
+ *
+ * The task is not resumed, its frame is destroyed by its owner, and the stop
+ * moves up the await chain to the first scope or combinator, as a stop of one
+ * of its waits does.
+ */
+inline detail::StopHere stop_here() noexcept { return {}; }
+
+namespace detail {
+struct FailWith {
+    static constexpr bool CANCEL_EXEMPT = true;
+    std::exception_ptr exception;
+
+    bool await_ready() const noexcept { return false; }
+
+    template <typename Promise>
+    void await_suspend(std::coroutine_handle<Promise> h) noexcept {
+        if constexpr (requires { h.promise().exception; }) {
+            h.promise().exception = std::move(exception);
+            h.promise().complete();
+        } else {
+            dstd::fatal("coro: fail_with in a frame that cannot fail");
+        }
+    }
+
+    void await_resume() const noexcept {}
+};
+}  // namespace detail
+
+/**
+ * @brief Ends the calling task with @p exception: `co_await fail_with(e)`.
+ *
+ * For a frame built without exceptions that holds an exception from a task
+ * that code with exceptions ran. The task is not resumed, its frame is
+ * destroyed by its owner, and its awaiter sees @p exception as if the task had
+ * thrown it.
+ */
+inline detail::FailWith fail_with(std::exception_ptr exception) noexcept {
+    return {std::move(exception)};
+}
+
+namespace detail {
+
+template <typename Promise>
+bool end_cancelled(std::coroutine_handle<> awaiter,
+                   PromiseBase& child) noexcept {
+    return child.cancelled &&
+           std::coroutine_handle<Promise>::from_address(awaiter.address())
+               .promise()
+               .propagate_cancel();
+}
+
+/// The @ref ParentEnd of an awaiter that ends when its child is cancelled.
+template <typename Promise>
+constexpr ParentEnd cancel_end_for() noexcept {
+    if constexpr (requires(Promise& p) { p.propagate_cancel(); }) {
+        return &end_cancelled<Promise>;
+    } else {
+        return nullptr;
+    }
+}
+
+struct OwnsScopeTag {};
+inline constexpr OwnsScopeTag OWNS_SCOPE{};
+
+/// Result storage for the promise. Non-void stores the value and provides
+/// return_value; void provides return_void instead.
+template <typename T>
+struct ResultHolder {
+    T result;
+    void return_value(T value) { result = std::move(value); }
+    T take_result() { return std::move(result); }
+    T& stored() noexcept { return result; }
+};
+
+/// A type with no default state, such as an Either or a generator, waits in an
+/// Optional.
+template <typename T>
+    requires(!std::is_void_v<T> && !std::is_default_constructible_v<T>)
+struct ResultHolder<T> {
+    dstd::Optional<T> result;
+    void return_value(T value) { result.emplace(std::move(value)); }
+    T take_result() { return std::move(*result); }
+    T& stored() noexcept { return *result; }
+};
+
+template <>
+struct ResultHolder<void> {
+    void return_void() noexcept {}
+};
+
+/// Lazy invoke-result so std::invoke_result_t<Func, void> is never formed.
+template <typename F, typename U>
+struct InvokeRes {
+    using type = std::invoke_result_t<F, U>;
+};
+
+template <typename F>
+struct InvokeRes<F, void> {
+    using type = std::invoke_result_t<F>;
+};
+
+/// Result element type for operator& (AND): tuple of both for non-void left,
+/// just the right's type when the left is void.
+template <typename A, typename B>
+struct AndValue {
+    using type = dstd::Tuple<A, B>;
+};
+
+template <typename B>
+struct AndValue<void, B> {
+    using type = B;
+};
+
+}  // namespace detail
+
+/**
+ * CoroTask<T>
+ *
+ * User-facing coroutine task type
+ *
+ * Usage:
+ * @code
+ * CoroTask<int> compute_async() {
+ *     auto data = co_await read_file();
+ *     co_return process(data);
+ * }
+ *
+ * // In another coroutine:
+ * int result = co_await compute_async();
+ * @endcode
+ */
+template <typename T = void>
+class CoroTask {
+   public:
+    struct promise_type : PromiseBase, detail::ResultHolder<T> {
+        using result_type = T;
+        std::exception_ptr exception;
+
+        CoroTask<T> get_return_object(
+#if DFTRACER_UTILS_LOGGER_TRACE_ENABLED
+            const char* file = DFTRACER_UTILS_CALLER_FILE(),
+            std::uint_least32_t line = DFTRACER_UTILS_CALLER_LINE()
+#endif
+        ) {
+#if DFTRACER_UTILS_LOGGER_TRACE_ENABLED
+            this->trace_file = file;
+            this->trace_line = line;
+#endif
+            return CoroTask{
+                std::coroutine_handle<promise_type>::from_promise(*this)};
+        }
+
+        detail::EnterPoolOnStart initial_suspend() noexcept {
+            return {&this->context};
+        }
+
+        struct FinalAwaiter {
+            bool await_ready() noexcept { return false; }
+            void await_suspend(std::coroutine_handle<promise_type> h) noexcept {
+                if constexpr (detail::is_expected_v<T>) {
+                    auto& p = h.promise();
+                    p.failed =
+                        !p.exception &&
+                        !dstd::detail::ExpectedAccess::holds_value(p.stored());
+                }
+                detail::report_finish(h.address());
+                h.promise().complete();
+            }
+            void await_resume() noexcept {}
+        };
+
+        FinalAwaiter final_suspend() noexcept { return {}; }
+
+        void unhandled_exception() { exception = std::current_exception(); }
+
+        /// Awaiting a task or a join is not a cancel point. A scope must always
+        /// reach its join.
+        template <typename U>
+        static constexpr bool CANCEL_EXEMPT_V =
+            requires { requires std::remove_cvref_t<U>::CANCEL_EXEMPT; };
+
+        template <typename U>
+        bool at_cancel_point() const noexcept {
+            if constexpr (CANCEL_EXEMPT_V<U>) {
+                return false;
+            } else {
+                return this->cancel_requested();
+            }
+        }
+
+        /// Gives the promise, so a @ref Scope in this frame can name its owner.
+        detail::ValueQuery<const PromiseBase*> await_transform(
+            detail::OwnsScopeTag) noexcept {
+            this->owns_scope = true;
+            return {this};
+        }
+
+        detail::ValueQuery<bool> await_transform(
+            this_coro::StopRequestedTag) noexcept {
+            return {this->cancel_requested()};
+        }
+
+        detail::ExecutorQuery await_transform(this_coro::ExecutorTag) noexcept {
+            return {this->executor != nullptr ? this->executor
+                                              : detail::current_executor()};
+        }
+
+        /// `co_await` on one of two tasks gives the value of the one held, on
+        /// the same side.
+        template <typename L, typename R>
+        auto await_transform(dstd::Either<CoroTask<L>, CoroTask<R>>&& pair) {
+            static_assert(!std::is_void_v<L> && !std::is_void_v<R>,
+                          "an Either of tasks needs a value from each side");
+            return await_transform(detail::either_task(std::move(pair)));
+        }
+
+        template <typename V, typename E>
+        detail::OrFailValue<V, E> await_transform(
+            dstd::OrFail<V, E>&& awaitable) noexcept {
+            static_assert(detail::is_expected_v<T>,
+                          "or_fail ends the task with the error, so the task "
+                          "must return a dstd::Expected");
+            return {std::move(awaitable.result)};
+        }
+
+        template <typename V, typename E>
+        auto await_transform(detail::OrFailTask<V, E>&& awaitable) noexcept {
+            static_assert(detail::is_expected_v<T>,
+                          "or_fail ends the task with the error, so the task "
+                          "must return a dstd::Expected");
+            return coro::detail::YieldCheckAwaitable<detail::OrFailTask<V, E>>{
+                std::move(awaitable), &this->context, false, false, false};
+        }
+
+        /// @ref YieldAwaitable makes its own timeslice check.
+        auto await_transform(coro::YieldAwaitable y) {
+            return detail::InPool<coro::YieldAwaitable>{
+                y, &this->context, false, this->cancel_requested()};
+        }
+
+        /// Wrap every other awaitable in a timeslice check.
+        /// Movable rvalue awaitables are moved into the wrapper so
+        /// the temporary does not dangle across a suspension.
+        /// Lvalue awaitables and non-movable rvalues stay as refs.
+        template <typename U>
+        auto await_transform(U&& awaitable) {
+            const bool at_cancel = at_cancel_point<U>();
+            if constexpr (std::is_lvalue_reference_v<U>) {
+                return coro::detail::YieldCheckAwaitable<U>{
+                    awaitable, &this->context, false, false, at_cancel};
+            } else if constexpr (std::is_move_constructible_v<U>) {
+                return coro::detail::YieldCheckAwaitable<U>{
+                    std::move(awaitable), &this->context, false, false,
+                    at_cancel};
+            } else {
+                return coro::detail::YieldCheckAwaitable<U&&>{
+                    static_cast<U&&>(awaitable), &this->context, false, false,
+                    at_cancel};
+            }
+        }
+    };
+
+   private:
+    std::coroutine_handle<promise_type> coro_handle_;
+
+    template <typename V, typename E>
+    friend struct detail::OrFailTask;
+    template <typename U, typename Task>
+    friend struct detail::SettleTask;
+
+    /// Links the task to its awaiter and runs it on this stack until it ends
+    /// or suspends. False when it had already ended.
+    template <typename Promise>
+    bool launch(std::coroutine_handle<Promise> awaiting_coro,
+                detail::ParentEnd end) noexcept {
+        auto& p = coro_handle_.promise();
+        p.continuation = awaiting_coro;
+
+        Executor* awaiter_executor = nullptr;
+        if constexpr (std::is_base_of_v<PromiseBase, Promise>) {
+            auto* awaiting_root = awaiting_coro.promise().get_root_promise();
+            p.set_root_promise(awaiting_root);
+            awaiter_executor = awaiting_coro.promise().get_executor();
+        }
+        if (awaiter_executor == nullptr)
+            awaiter_executor = detail::current_executor();
+        p.continuation_executor = awaiter_executor;
+        if (p.executor == nullptr) p.executor = awaiter_executor;
+
+        // A child that runs on the awaiter's stack never passes through a
+        // queue.
+        if (const CoroutineHooks* hooks = coroutine_hooks();
+            hooks != nullptr && hooks->await_begin != nullptr) [[unlikely]] {
+            hooks->await_begin(hooks->user, coro_handle_.address());
+        }
+
+        if (coro_handle_.done()) return false;
+
+#if DFTRACER_UTILS_LOGGER_TRACE_ENABLED
+        if (common::logger::detail::enabled(common::logger::Level::Trace))
+            [[unlikely]] {
+            p.trace_handle = common::logger::detail::coro_trace_enter(
+                coro_handle_.address(), p.trace_file, p.trace_line);
+        }
+#endif
+        p.started = true;
+        p.parent_end = end;
+        coro_handle_.resume();
+        return true;
+    }
+
+    /// Closes what @ref launch opened for the awaiter, on every way out.
+    static void report_await_end(promise_type& p) noexcept {
+#if DFTRACER_UTILS_LOGGER_TRACE_ENABLED
+        if (p.trace_handle) [[unlikely]] {
+            common::logger::detail::coro_trace_leave(p.trace_handle);
+        }
+#endif
+        if (const CoroutineHooks* hooks = coroutine_hooks();
+            hooks != nullptr && hooks->await_end != nullptr) [[unlikely]] {
+            hooks->await_end(
+                hooks->user,
+                std::coroutine_handle<promise_type>::from_promise(p).address());
+        }
+    }
+
+   public:
+    static constexpr bool CANCEL_EXEMPT = true;
+
+    /// Type alias for result type (used by combinators)
+    using value_type = T;
+    using result_type = T;
+
+    /**
+     * Constructor from coroutine handle
+     * Called by promise_type::get_return_object()
+     */
+    explicit CoroTask(std::coroutine_handle<promise_type> h)
+        : coro_handle_(h) {}
+
+    /**
+     * Destructor - clean up coroutine state
+     */
+    ~CoroTask() {
+        if (coro_handle_) {
+            auto h = coro_handle_;
+            coro_handle_ = nullptr;
+            h.destroy();
+        }
+    }
+
+    /// Move-only semantics (coroutine handle is unique)
+    CoroTask(const CoroTask&) = delete;
+    CoroTask& operator=(const CoroTask&) = delete;
+
+    CoroTask(CoroTask&& other) noexcept : coro_handle_(other.coro_handle_) {
+        other.coro_handle_ = nullptr;
+    }
+
+    CoroTask& operator=(CoroTask&& other) noexcept {
+        if (this != &other) {
+            if (coro_handle_) {
+                coro_handle_.destroy();
+            }
+            coro_handle_ = other.coro_handle_;
+            other.coro_handle_ = nullptr;
+        }
+        return *this;
+    }
+
+    // ========================================================================
+    // Awaitable interface - enables co_await
+    // ========================================================================
+
+    /**
+     * Check if coroutine already completed
+     * If true, no suspension needed (optimization)
+     */
+    bool await_ready() const noexcept { return coro_handle_.done(); }
+
+    // The child runs on this stack, not by symmetric transfer: GCC makes that
+    // transfer a tail call only with sibling-call optimization, and without
+    // it each child that ends at once would add frames until the stack
+    // overflows. A child that suspends continues the awaiter itself.
+    template <typename Promise>
+    bool await_suspend(std::coroutine_handle<Promise> awaiting_coro) noexcept {
+        if (!launch(awaiting_coro, detail::cancel_end_for<Promise>()))
+            return false;
+        auto& p = coro_handle_.promise();
+        // The handoff comes first: a stop job can end the child at any time,
+        // and the exchange orders the read of `cancelled` after that end.
+        if (!p.handoff.exchange(true, std::memory_order_acq_rel)) return true;
+        if constexpr (requires {
+                          awaiting_coro.promise().propagate_cancel();
+                      }) {
+            if (p.cancelled && awaiting_coro.promise().propagate_cancel())
+                return true;
+        }
+        return false;
+    }
+
+    T await_resume() {
+#if defined(__GNUC__) || defined(__clang__)
+        // Never null here (await_resume runs on a live task); silences a
+        // spurious GCC -Wnull-dereference on the promise() reads below.
+        if (!coro_handle_) __builtin_unreachable();
+#endif
+        report_await_end(coro_handle_.promise());
+        if (coro_handle_.promise().cancelled) {
+            detail::cancelled_unstoppable(
+                "a stopped task awaited by a frame that cannot stop; await "
+                "it through settle");
+        }
+        if (coro_handle_.promise().exception) {
+            common::rethrow_and_clear(coro_handle_.promise().exception);
+        }
+        if constexpr (!std::is_void_v<T>) {
+            return coro_handle_.promise().take_result();
+        }
+    }
+
+    // ========================================================================
+    // Manual control (non-coroutine interface)
+    // ========================================================================
+
+    /**
+     * Asks the task to stop. Thread-safe and idempotent. At its next wait, or
+     * that of a task it awaits, it ends as cancelled. Call it on the task
+     * handed to its awaiter, not one it awaits. await_resume() throws
+     * dstd::Condition::Cancelled, so test cancelled() first to avoid it.
+     */
+    void cancel() noexcept {
+        if (coro_handle_) {
+            auto& promise = coro_handle_.promise();
+            promise.cancel_flag.store(true, std::memory_order_release);
+            if (promise.executor) detail::wake_cancelled_on(promise.executor);
+        }
+    }
+
+    bool cancelled() const noexcept {
+        return coro_handle_ && coro_handle_.promise().cancelled;
+    }
+
+    bool started() const noexcept {
+        return coro_handle_ && coro_handle_.promise().started;
+    }
+
+    /**
+     * Check if coroutine has completed
+     */
+    bool done() const noexcept { return coro_handle_ && coro_handle_.done(); }
+
+    /**
+     * Resume coroutine execution (manual control)
+     * Only resume if not already done
+     */
+    void resume() {
+        if (coro_handle_ && !coro_handle_.done()) {
+            memory::detail::Scope scope{
+                memory::detail::Manager::get().general()};
+            coro_handle_.promise().started = true;
+            coro_handle_.resume();
+        }
+    }
+
+    /**
+     * Get result (blocking, for non-coroutine callers)
+     * Resumes coroutine until completion
+     *
+     * @return The value, or an error with dstd::Condition::Cancelled when the
+     *         task was stopped. An exception that the task raised is rethrown.
+     */
+    TaskResult<T> get() {
+        drive_to_completion(coro_handle_, coro_handle_.promise().finished);
+        auto& p = coro_handle_.promise();
+        report_await_end(p);
+        if (p.cancelled) return detail::stopped_result<T>();
+        if (p.exception) common::rethrow_and_clear(p.exception);
+        if constexpr (std::is_void_v<T>) {
+            return {};
+        } else {
+            return TaskResult<T>(p.take_result());
+        }
+    }
+
+    /**
+     * Check if coroutine has pending exception
+     */
+    bool has_exception() const noexcept {
+        return coro_handle_ && coro_handle_.promise().exception != nullptr;
+    }
+
+    /**
+     * Get coroutine handle (for advanced use)
+     */
+    std::coroutine_handle<promise_type> handle() const noexcept {
+        return coro_handle_;
+    }
+
+    /// `co_await task.or_fail()` is `co_await or_fail(std::move(task))`.
+    auto or_fail() &&
+        requires detail::is_expected_v<T>
+    {
+        return detail::OrFailTask<typename T::value_type,
+                                  typename T::error_type>{std::move(*this)};
+    }
+
+    // ========================================================================
+    // Combinators and syntactic sugar
+    // ========================================================================
+
+    /**
+     * Chain operation using then() - transform result with a function
+     * @param func Transformation function (T -> U)
+     * @return New @ref CoroTask holding the transformed result
+     *
+     * Usage:
+     * @code
+     * auto result = co_await compute_async()
+     *     .then([](int x) { return x * 2; })
+     *     .then([](int x) { return dstd::to_string(x); });
+     * @endcode
+     */
+    template <typename Func>
+    auto then(
+        Func&& func) && -> CoroTask<typename detail::InvokeRes<Func, T>::type> {
+        // Pass self as parameter to ensure capture before lazy coroutine
+        // suspends
+        return
+            [](CoroTask<T> self, auto f)
+                -> CoroTask<typename detail::InvokeRes<decltype(f), T>::type> {
+                using U = typename detail::InvokeRes<decltype(f), T>::type;
+                if constexpr (std::is_void_v<T>) {
+                    co_await std::move(self);
+                    if constexpr (std::is_void_v<U>) {
+                        f();
+                        co_return;
+                    } else {
+                        co_return f();
+                    }
+                } else {
+                    T result = co_await std::move(self);
+                    if constexpr (std::is_void_v<U>) {
+                        f(std::move(result));
+                        co_return;
+                    } else {
+                        co_return f(std::move(result));
+                    }
+                }
+            }(std::move(*this), std::forward<Func>(func));
+    }
+
+    /**
+     * Tap operation - inspect value without transforming it
+     * @param func Inspection function (T -> void)
+     * @return CoroTask<T> with same value
+     *
+     * Usage:
+     * @code
+     * auto result = co_await compute_async()
+     *     .tap([](int x) { std::cout << "Got: " << x << "\n"; })
+     *     .then([](int x) { return x * 2; });
+     * @endcode
+     */
+    template <typename Func>
+    auto tap(Func&& func) && -> CoroTask<T> {
+        return [](CoroTask<T> self, auto f) -> CoroTask<T> {
+            if constexpr (std::is_void_v<T>) {
+                co_await std::move(self);
+                f();
+                co_return;
+            } else {
+                T result = co_await std::move(self);
+                f(result);
+                co_return result;
+            }
+        }(std::move(*this), std::forward<Func>(func));
+    }
+
+    /**
+     * Operator> for chaining (same as then())
+     * @param func Transformation function
+     * @return Transformed @ref CoroTask
+     *
+     * Usage:
+     * @code
+     * auto result = co_await compute_async()
+     *     > [](int x) { return x * 2; }
+     *     > [](int x) { return dstd::to_string(x); };
+     * @endcode
+     */
+    template <typename Func>
+    auto operator>(
+        Func&& func) && -> CoroTask<typename detail::InvokeRes<Func, T>::type> {
+        return std::move(*this).then(std::forward<Func>(func));
+    }
+
+    /**
+     * Operator< for reverse composition (func receives this task's result)
+     * @param func Transformation function
+     * @return Transformed @ref CoroTask
+     *
+     * Usage:
+     * @code
+     * auto result = co_await [](int x) { return dstd::to_string(x); }
+     *     < compute_async();
+     * @endcode
+     */
+    template <typename Func>
+    friend auto operator<(Func&& func, CoroTask<T>&& task)
+        -> CoroTask<typename detail::InvokeRes<Func, T>::type> {
+        return std::move(task).then(std::forward<Func>(func));
+    }
+
+    /**
+     * Operator& for parallel composition (AND) - run both tasks, return tuple
+     * @param lhs First task to run in parallel
+     * @param rhs Second task to run in parallel
+     * @return @ref CoroTask holding a tuple of both results
+     *
+     * Note: In the current synchronous execution model, these run sequentially.
+     * For true parallel execution, use @ref Scope::spawn.
+     *
+     * Usage:
+     * @code
+     * auto [result1, result2] = co_await (task1() & task2());
+     * @endcode
+     */
+    template <typename U>
+    friend auto operator&(CoroTask<T>&& lhs, CoroTask<U>&& rhs)
+        -> CoroTask<typename detail::AndValue<T, U>::type> {
+        return [](CoroTask<T> left, CoroTask<U> right)
+                   -> CoroTask<typename detail::AndValue<T, U>::type> {
+            if constexpr (std::is_void_v<T>) {
+                co_await std::move(left);
+                co_return co_await std::move(right);
+            } else {
+                T result1 = co_await std::move(left);
+                U result2 = co_await std::move(right);
+                co_return std::make_tuple(std::move(result1),
+                                          std::move(result2));
+            }
+        }(std::move(lhs), std::move(rhs));
+    }
+
+    /**
+     * or_else - OR/fallback composition: run this task, and if it throws, run
+     * the fallback instead. Yields whichever succeeds.
+     *
+     * @param fallback Fallback task to run if this task fails
+     * @return CoroTask<T> with result from whichever succeeds. A stop of this
+     *         task stops the result and runs no fallback.
+     *
+     * Usage:
+     * @code
+     * auto result = co_await primary_task().or_else(fallback_task());
+     * @endcode
+     */
+    auto or_else(CoroTask<T>&& fallback) && -> CoroTask<T> {
+        return [](CoroTask<T> prim, CoroTask<T> fall) -> CoroTask<T> {
+            auto settled = co_await settle(std::move(prim));
+            if (settled.stopped) co_await stop_here();
+            if (!settled.exception) {
+                if constexpr (std::is_void_v<T>) {
+                    co_return;
+                } else {
+                    co_return std::move(*settled.value);
+                }
+            }
+            if constexpr (std::is_void_v<T>) {
+                co_await std::move(fall);
+                co_return;
+            } else {
+                co_return co_await std::move(fall);
+            }
+        }(std::move(*this), std::move(fallback));
+    }
+};
+
+namespace detail {
+template <typename L, typename R>
+CoroTask<dstd::Either<L, R>> either_task(
+    dstd::Either<CoroTask<L>, CoroTask<R>> pair) {
+    if (pair.is_left()) {
+        L value = co_await std::move(pair.left());
+        co_return dstd::Either<L, R>::left(std::move(value));
+    }
+    R value = co_await std::move(pair.right());
+    co_return dstd::Either<L, R>::right(std::move(value));
+}
+
+/// Ends the task of `h` with `error`, as `co_return` of it would. The owner
+/// destroys the frame. Call only from an await_suspend of that task.
+template <typename Promise, typename E>
+void finish_with_error(std::coroutine_handle<Promise> h, E&& error) noexcept {
+    using R = typename Promise::result_type;
+    auto& p = h.promise();
+    if (p.owns_scope) [[unlikely]] {
+        DFTRACER_UTILS_LOG_ERROR(
+            "{}", "or_fail ended a task that holds a scope before its join");
+        std::abort();
+    }
+    p.return_value(
+        R(dstd::Unexpected<typename R::error_type>(std::forward<E>(error))));
+    p.failed = true;
+    report_finish(h.address());
+    p.complete();
+}
+
+template <typename V, typename E>
+struct OrFailValue {
+    dstd::Expected<V, E> result;
+
+    bool await_ready() const noexcept { return result.has_value(); }
+
+    template <typename Promise>
+    void await_suspend(std::coroutine_handle<Promise> h) noexcept {
+        finish_with_error(h, std::move(result).error());
+    }
+
+    V await_resume() noexcept(std::is_void_v<V> ||
+                              std::is_nothrow_move_constructible_v<V>) {
+        if constexpr (!std::is_void_v<V>) return *std::move(result);
+    }
+};
+
+template <typename V, typename E>
+struct OrFailTask {
+    using Task = CoroTask<dstd::Expected<V, E>>;
+    static constexpr bool CANCEL_EXEMPT = true;
+    Task task;
+
+    bool await_ready() const noexcept { return false; }
+
+    template <typename Promise>
+    bool await_suspend(std::coroutine_handle<Promise> h) noexcept {
+        if (!task.launch(h, &end_failed<Promise>)) return end_now(h);
+        auto& p = task.coro_handle_.promise();
+        if (!p.handoff.exchange(true, std::memory_order_acq_rel)) return true;
+        if (p.cancelled && h.promise().propagate_cancel()) return true;
+        return end_now(h);
+    }
+
+    V await_resume() {
+        auto result = task.await_resume();
+        if constexpr (!std::is_void_v<V>) return *std::move(result);
+    }
+
+   private:
+    template <typename Promise>
+    static bool end_failed(std::coroutine_handle<> awaiter,
+                           PromiseBase& child) noexcept {
+        const auto parent =
+            std::coroutine_handle<Promise>::from_address(awaiter.address());
+        if (child.cancelled) return parent.promise().propagate_cancel();
+        auto& failed = static_cast<typename Task::promise_type&>(child);
+        Task::report_await_end(failed);
+        finish_with_error(parent, std::move(failed.stored()).error());
+        return true;
+    }
+
+    /// The task ended before its awaiter suspended. True when the awaiter
+    /// ended with its error.
+    template <typename Promise>
+    bool end_now(std::coroutine_handle<Promise> h) noexcept {
+        auto& p = task.coro_handle_.promise();
+        if (!p.failed) return false;
+        Task::report_await_end(p);
+        finish_with_error(h, std::move(p.stored()).error());
+        return true;
+    }
+};
+/// The outcome of a task awaited through @ref settle: a value, a stop, or an
+/// exception that code with exceptions on threw in it. Exactly one is set.
+template <typename T>
+struct Settled {
+    dstd::Optional<T> value;
+    bool stopped = false;
+    std::exception_ptr exception;
+};
+
+template <>
+struct Settled<void> {
+    bool done = false;
+    bool stopped = false;
+    std::exception_ptr exception;
+};
+
+/// `Task` is a @ref CoroTask held by value, or a reference to one that lives
+/// as long as the await.
+template <typename T, typename Task>
+struct SettleTask {
+    static constexpr bool CANCEL_EXEMPT = true;
+    Task task;
+
+    bool await_ready() const noexcept { return false; }
+
+    template <typename Promise>
+    bool await_suspend(std::coroutine_handle<Promise> h) noexcept {
+        if (!task.launch(h, nullptr)) return false;
+        return !task.coro_handle_.promise().handoff.exchange(
+            true, std::memory_order_acq_rel);
+    }
+
+    Settled<T> await_resume() noexcept(
+        std::is_void_v<T> || std::is_nothrow_move_constructible_v<T>) {
+        auto& p = task.coro_handle_.promise();
+        CoroTask<T>::report_await_end(p);
+        Settled<T> out;
+        if (p.cancelled) {
+            out.stopped = true;
+        } else if (p.exception) {
+            out.exception = std::move(p.exception);
+            p.exception = nullptr;
+        } else if constexpr (std::is_void_v<T>) {
+            out.done = true;
+        } else {
+            out.value.emplace(p.take_result());
+        }
+        return out;
+    }
+};
+
+/// The body of @ref settle_in_place for an awaitable that is not a task: a
+/// frame that holds the await, so a stop or an exception ends that frame and
+/// not the caller.
+template <typename A>
+CoroTask<typename A::result_type> await_in_place(A& awaitable) {
+    if constexpr (std::is_void_v<typename A::result_type>) {
+        co_await awaitable;
+    } else {
+        co_return co_await awaitable;
+    }
+}
+}  // namespace detail
+
+/**
+ * @brief Awaits @p task and gives how it ended, without ending the caller.
+ *
+ * A stop of the task does not stop the caller, so a frame that holds a
+ * @ref Scope, or a combinator, can still reach its join. Library code only.
+ */
+template <typename T>
+detail::SettleTask<T, CoroTask<T>> settle(CoroTask<T>&& task) noexcept {
+    return {std::move(task)};
+}
+
+/// @ref settle on a task that stays where it is.
+template <typename T>
+detail::SettleTask<T, CoroTask<T>&> settle(CoroTask<T>& task) noexcept {
+    return {task};
+}
+
+/// @ref settle for any awaitable with a `result_type` that stays where it is: a
+/// task is awaited as is, anything else through a frame that holds the await.
+template <typename A>
+auto settle_in_place(A& awaitable) {
+    if constexpr (detail::is_coro_task_v<A>) {
+        return settle(awaitable);
+    } else {
+        return settle(detail::await_in_place(awaitable));
+    }
+}
+
+/**
+ * @brief Gives the value of a result, or ends the calling task with its error.
+ *
+ * `co_await or_fail(r)` in a CoroTask that returns a dstd::Expected yields the
+ * value of `r`. When `r` holds an error, the task ends with that error as if
+ * it had returned it, and its locals are destroyed when its owner destroys
+ * the frame. The task's error type must be constructible from `E`. Not for a
+ * frame that holds a @ref Scope.
+ */
+template <typename V, typename E>
+dstd::OrFail<V, E> or_fail(dstd::Expected<V, E>&& result) noexcept(
+    std::is_nothrow_move_constructible_v<dstd::Expected<V, E>>) {
+    return std::move(result).or_fail();
+}
+
+/// The same for a task: awaits it, then gives its value or ends the calling
+/// task with its error. An exception or a cancel of the task acts as for a
+/// plain `co_await`.
+template <typename V, typename E>
+detail::OrFailTask<V, E> or_fail(
+    CoroTask<dstd::Expected<V, E>>&& task) noexcept {
+    return {std::move(task)};
+}
+
+}  // namespace dftracer::utils::coro
+
+#endif  // DFTRACER_UTILS_CORO_TASK_H

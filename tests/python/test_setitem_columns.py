@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Assigning several columns from a frame or a list of Series
 (openspec change dataframe-setitem-columns)."""
 

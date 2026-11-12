@@ -1,0 +1,437 @@
+// SPDX-License-Identifier: MIT
+#ifndef DFTRACER_UTILS_TRACE_EVENT_H
+#define DFTRACER_UTILS_TRACE_EVENT_H
+
+#include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/json/json_value.h>
+#include <dftracer/utils/json/parser.h>
+#include <dftracer/utils/trace/args_map.h>
+#include <dftracer/utils/trace/schema.h>
+
+#include <cstdint>
+
+namespace dftracer::utils::trace {
+
+using json::JsonValue;
+
+namespace detail {
+
+/// Append a decimal index straight into the path buffer.
+inline void append_index(dstd::String& out, std::size_t v) {
+    char buf[20];
+    char* p = buf + sizeof(buf);
+    do {
+        *--p = static_cast<char>('0' + v % 10);
+        v /= 10;
+    } while (v != 0);
+    out.append(p, static_cast<std::size_t>(buf + sizeof(buf) - p));
+}
+
+inline void insert_scalar_arg(ArgsMap& args, dstd::StringView key,
+                              const JsonValue& v) {
+    if (v.is_string())
+        args.insert(key, dstd::String(v.get<dstd::StringView>()));
+    else if (v.is_uint())
+        args.insert(key, v.get<std::uint64_t>());
+    else if (v.is_int())
+        args.insert(key, v.get<std::int64_t>());
+    else if (v.is_number())
+        args.insert(key, v.get<double>());
+    else if (v.is_bool())
+        args.insert(key, v.get<bool>());
+}
+
+/// Flatten a nested arg value into dotted/indexed scalar keys: objects
+/// contribute "prefix.key", arrays "prefix.<index>", scalars insert at prefix.
+/// Depth is unbounded, so "tags.0.model.size" round-trips. Only invoked when a
+/// value is actually an object/array; flat scalar args never allocate a prefix.
+inline void flatten_arg(dstd::String& prefix, const JsonValue& v,
+                        ArgsMap& args) {
+    if (v.is_object()) {
+        v.for_each_member([&](dstd::StringView k, JsonValue cv) {
+            std::size_t base = prefix.size();
+            prefix += '.';
+            prefix += k;
+            flatten_arg(prefix, cv, args);
+            prefix.resize(base);
+        });
+    } else if (v.is_array()) {
+        auto arr = v.raw().get_array();
+        if (!arr.error()) {
+            std::size_t i = 0;
+            for (auto el : arr.value_unsafe()) {
+                std::size_t base = prefix.size();
+                prefix += '.';
+                append_index(prefix, i++);
+                flatten_arg(prefix, JsonValue(el), args);
+                prefix.resize(base);
+            }
+        }
+    } else {
+        insert_scalar_arg(args, prefix, v);
+    }
+}
+
+inline void insert_arg_member(ArgsMap& args, dstd::StringView key,
+                              const JsonValue& av) {
+    if (av.is_object() || av.is_array()) {
+        dstd::String prefix(key);
+        flatten_arg(prefix, av, args);
+    } else {
+        insert_scalar_arg(args, key, av);
+    }
+}
+
+/// On-demand mirror of flatten_arg: recurse nested objects/arrays into dotted
+/// keys, consuming the cursor in order.
+inline void flatten_arg_ondemand(dstd::String& prefix,
+                                 simdjson::ondemand::value val, ArgsMap& args,
+                                 std::size_t depth = 0) {
+    auto t = val.type();
+    if (t.error()) return;
+    if (depth >= dftracer::utils::common::constants::reader::MAX_READ_DEPTH &&
+        (t.value_unsafe() == simdjson::ondemand::json_type::object ||
+         t.value_unsafe() == simdjson::ondemand::json_type::array)) {
+        auto text = val.raw_json();
+        if (!text.error())
+            args.insert(prefix, dstd::String(text.value_unsafe()));
+        return;
+    }
+    switch (t.value_unsafe()) {
+        case simdjson::ondemand::json_type::object: {
+            auto obj = val.get_object();
+            if (obj.error()) return;
+            for (auto field : obj.value_unsafe()) {
+                if (field.error()) continue;
+                auto k = field.unescaped_key();
+                if (k.error()) continue;
+                auto fv = field.value();
+                if (fv.error()) continue;
+                std::size_t base = prefix.size();
+                prefix += '.';
+                prefix.append(k.value_unsafe());
+                flatten_arg_ondemand(prefix, fv.value_unsafe(), args,
+                                     depth + 1);
+                prefix.resize(base);
+            }
+            break;
+        }
+        case simdjson::ondemand::json_type::array: {
+            auto arr = val.get_array();
+            if (arr.error()) return;
+            std::size_t i = 0;
+            for (auto el : arr.value_unsafe()) {
+                if (el.error()) continue;
+                std::size_t base = prefix.size();
+                prefix += '.';
+                append_index(prefix, i++);
+                flatten_arg_ondemand(prefix, el.value_unsafe(), args,
+                                     depth + 1);
+                prefix.resize(base);
+            }
+            break;
+        }
+        case simdjson::ondemand::json_type::string: {
+            auto r = val.get_string();
+            if (!r.error()) args.insert(prefix, dstd::String(r.value_unsafe()));
+            break;
+        }
+        case simdjson::ondemand::json_type::number: {
+            auto ri = val.get_int64();
+            if (!ri.error()) {
+                auto v = ri.value_unsafe();
+                if (v >= 0)
+                    args.insert(prefix, static_cast<std::uint64_t>(v));
+                else
+                    args.insert(prefix, v);
+            } else {
+                auto rd = val.get_double();
+                if (!rd.error()) args.insert(prefix, rd.value_unsafe());
+            }
+            break;
+        }
+        case simdjson::ondemand::json_type::boolean: {
+            auto r = val.get_bool();
+            if (!r.error()) args.insert(prefix, r.value_unsafe());
+            break;
+        }
+        default:
+            break;
+    }
+}
+
+}  // namespace detail
+
+struct DFTracerEvent {
+    std::uint64_t id = 0;
+    dstd::StringView name;
+    dstd::StringView cat;
+    RecordPhase phase = RecordPhase::Unknown;
+    EventType type = EventType::Unknown;
+    std::uint64_t pid = 0;
+    std::uint64_t tid = 0;
+    std::uint64_t ts = 0;
+    std::uint64_t dur = 0;
+    /// Whether a "dur" field was present on the event. Duration statistics
+    /// count only events that carry a duration (mirrors the viz stats fold), so
+    /// this distinguishes a genuine dur:0 from an absent field.
+    bool has_dur = false;
+
+    ArgsMap args;
+
+    bool is_metadata() const { return phase == RecordPhase::Metadata; }
+    bool is_counter() const { return phase == RecordPhase::Counter; }
+    bool is_aggregated() const { return phase == RecordPhase::Aggregated; }
+    bool is_profile() const {
+        return phase == RecordPhase::Counter && cat != "sys";
+    }
+    bool is_system() const {
+        return phase == RecordPhase::Counter && cat == "sys";
+    }
+    bool is_event() const { return !is_metadata() && !is_counter(); }
+    bool is_complete() const { return phase == RecordPhase::Complete; }
+    static bool parse(const JsonValue& json, DFTracerEvent& out) {
+        simdjson::dom::element unused_args{};
+        bool unused_has_args = false;
+        return parse(json, out, unused_args, unused_has_args);
+    }
+
+    /// Single-pass DOM variant: walks the object once (mirroring parse_scalars)
+    /// while populating the args map, and returns the located args element so
+    /// callers need not look it up again. Field typing matches the original
+    /// per-key JsonValue accessors exactly.
+    static bool parse(const JsonValue& json, DFTracerEvent& out,
+                      simdjson::dom::element& out_args, bool& out_has_args) {
+        out_has_args = false;
+        if (!json.is_object()) return false;
+
+        bool has_ph = false;
+        json.for_each_member([&](dstd::StringView key, JsonValue v) {
+            switch (key.size()) {
+                case 2:
+                    if (key == "ph") {
+                        out.phase = read_phase(v);
+                        has_ph = true;
+                    } else if (key == "id") {
+                        out.id = v.get<std::uint64_t>();
+                    } else if (key == "ts") {
+                        out.ts = v.get<std::uint64_t>();
+                    }
+                    break;
+                case 3:
+                    if (key == "pid") {
+                        out.pid = v.get<std::uint64_t>();
+                    } else if (key == "tid") {
+                        out.tid = v.get<std::uint64_t>();
+                    } else if (key == "cat") {
+                        out.cat = v.get<dstd::StringView>();
+                    } else if (key == "dur") {
+                        out.dur = v.get<std::uint64_t>();
+                        out.has_dur = true;
+                    }
+                    break;
+                case 4:
+                    if (key == "name") {
+                        out.name = v.get<dstd::StringView>();
+                    } else if (key == "type") {
+                        out.type = read_event_type(v);
+                    } else if (key == "args") {
+                        if (v.is_object()) {
+                            out.args.set_valid(true);
+                            v.for_each_member(
+                                [&](dstd::StringView k, JsonValue av) {
+                                    detail::insert_arg_member(out.args, k, av);
+                                });
+                            out_args = v.raw();
+                            out_has_args = true;
+                        }
+                    }
+                    break;
+                default:
+                    break;
+            }
+        });
+
+        return has_ph;
+    }
+
+    static bool parse_scalars(simdjson::dom::element root, DFTracerEvent& out,
+                              simdjson::dom::element& out_args,
+                              bool& out_has_args) {
+        out_has_args = false;
+        if (!root.is_object()) return false;
+
+        bool has_ph = false;
+        simdjson::dom::object members;
+        if (root.get_object().get(members)) return false;
+        for (auto field : members) {
+            dstd::StringView key = field.key;
+            simdjson::dom::element val = field.value;
+            switch (key.size()) {
+                case 2:
+                    if (key == "ph") {
+                        out.phase = read_phase(val);
+                        has_ph = true;
+                    } else if (key == "id") {
+                        if (val.is_uint64())
+                            out.id = val.get_uint64().value_unsafe();
+                    } else if (key == "ts") {
+                        if (val.is_uint64())
+                            out.ts = val.get_uint64().value_unsafe();
+                    }
+                    break;
+                case 3:
+                    if (key == "pid") {
+                        if (val.is_uint64())
+                            out.pid = val.get_uint64().value_unsafe();
+                    } else if (key == "tid") {
+                        if (val.is_uint64())
+                            out.tid = val.get_uint64().value_unsafe();
+                    } else if (key == "cat") {
+                        if (val.is_string())
+                            out.cat = val.get_string().value_unsafe();
+                    } else if (key == "dur") {
+                        if (val.is_uint64()) {
+                            out.dur = val.get_uint64().value_unsafe();
+                            out.has_dur = true;
+                        }
+                    }
+                    break;
+                case 4:
+                    if (key == "name") {
+                        if (val.is_string())
+                            out.name = val.get_string().value_unsafe();
+                    } else if (key == "type") {
+                        out.type = read_event_type(val);
+                    } else if (key == "args") {
+                        if (val.is_object()) {
+                            out_args = val;
+                            out_has_args = true;
+                        }
+                    }
+                    break;
+                default:
+                    break;
+            }
+        }
+        return has_ph;
+    }
+
+    static bool parse_ondemand(json::JsonParser& parser, DFTracerEvent& out) {
+        bool has_ph = false;
+        parser.for_each_field([&](dstd::StringView key,
+                                  simdjson::ondemand::value val) {
+            if (key == "ph") {
+                out.phase = read_phase(val);
+                has_ph = true;
+            } else if (key == "type") {
+                out.type = read_event_type(val);
+            } else if (key == "id") {
+                auto r = val.get_uint64();
+                if (!r.error()) out.id = r.value_unsafe();
+            } else if (key == "name") {
+                auto r = val.get_string();
+                if (!r.error()) out.name = r.value_unsafe();
+            } else if (key == "cat") {
+                auto r = val.get_string();
+                if (!r.error()) out.cat = r.value_unsafe();
+            } else if (key == "pid") {
+                auto r = val.get_uint64();
+                if (!r.error()) out.pid = r.value_unsafe();
+            } else if (key == "tid") {
+                auto r = val.get_uint64();
+                if (!r.error()) out.tid = r.value_unsafe();
+            } else if (key == "ts") {
+                auto r = val.get_uint64();
+                if (!r.error()) out.ts = r.value_unsafe();
+            } else if (key == "dur") {
+                auto r = val.get_uint64();
+                if (!r.error()) {
+                    out.dur = r.value_unsafe();
+                    out.has_dur = true;
+                }
+            } else if (key == "args") {
+                auto obj = val.get_object();
+                if (!obj.error()) {
+                    out.args.set_valid(true);
+                    for (auto field : obj.value_unsafe()) {
+                        if (field.error()) continue;
+                        auto fkey = field.unescaped_key();
+                        if (fkey.error()) continue;
+                        auto fval = field.value();
+                        if (fval.error()) continue;
+
+                        auto jtype = fval.type();
+                        if (jtype.error()) continue;
+
+                        switch (jtype.value_unsafe()) {
+                            case simdjson::ondemand::json_type::string: {
+                                auto r = fval.get_string();
+                                if (!r.error())
+                                    out.args.insert(
+                                        fkey.value_unsafe(),
+                                        dstd::String(r.value_unsafe()));
+                                break;
+                            }
+                            case simdjson::ondemand::json_type::number: {
+                                auto ri = fval.get_int64();
+                                if (!ri.error()) {
+                                    auto v = ri.value_unsafe();
+                                    if (v >= 0)
+                                        out.args.insert(
+                                            fkey.value_unsafe(),
+                                            static_cast<std::uint64_t>(v));
+                                    else
+                                        out.args.insert(fkey.value_unsafe(), v);
+                                } else {
+                                    auto rd = fval.get_double();
+                                    if (!rd.error())
+                                        out.args.insert(fkey.value_unsafe(),
+                                                        rd.value_unsafe());
+                                }
+                                break;
+                            }
+                            case simdjson::ondemand::json_type::boolean: {
+                                auto r = fval.get_bool();
+                                if (!r.error())
+                                    out.args.insert(fkey.value_unsafe(),
+                                                    r.value_unsafe());
+                                break;
+                            }
+                            case simdjson::ondemand::json_type::object:
+                            case simdjson::ondemand::json_type::array: {
+                                dstd::String prefix(fkey.value_unsafe());
+                                detail::flatten_arg_ondemand(
+                                    prefix, fval.value_unsafe(), out.args);
+                                break;
+                            }
+                            default:
+                                break;
+                        }
+                    }
+                }
+            }
+        });
+        return has_ph;
+    }
+};
+
+/// A single parsed event plus the buffers that keep its string_views alive.
+/// Produced by the fused parse path (parse_buffer) and consumed by the index
+/// folds. line_buffer is held shared so `line` can outlive the parse loop.
+struct EventRecord {
+    const DFTracerEvent& ev;
+    const json::JsonValue& json;
+    dstd::StringView line;
+    dstd::SharedPtr<dstd::String> line_buffer;
+    std::size_t checkpoint_idx;
+    std::size_t line_number;
+    simdjson::dom::element args_dom{};
+    bool has_args{false};
+};
+
+}  // namespace dftracer::utils::trace
+
+#endif  // DFTRACER_UTILS_TRACE_EVENT_H

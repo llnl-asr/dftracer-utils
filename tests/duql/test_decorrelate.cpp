@@ -1,32 +1,38 @@
+// SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/fmt.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/decorrelate.h>
 #include <dftracer/utils/duql/syntax/parser.h>
 #include <doctest/doctest.h>
 
-#include <string>
+using namespace dftracer::utils;
 
 using namespace dftracer::utils::duql;
 
 namespace {
 
-std::optional<Decorrelated> run(const std::string& text, bool scalar) {
+dstd::Optional<Decorrelated> run(const dstd::String& text, bool scalar) {
     auto tree = syntax::parse(text);
     REQUIRE(tree.has_value());
-    return decorrelate(*tree->pipeline, scalar);
+    auto d = decorrelate(*tree->pipeline, scalar);
+    REQUIRE(d.has_value());
+    return std::move(*d);
 }
 
-std::string refusal(const std::string& text, bool scalar) {
-    try {
-        (void)run(text, scalar);
-    } catch (const Refusal& r) {
-        return r.message;
-    }
-    return {};
+dstd::String refusal(const dstd::String& text, bool scalar) {
+    auto tree = syntax::parse(text);
+    REQUIRE(tree.has_value());
+    const auto d = decorrelate(*tree->pipeline, scalar);
+    if (d.has_value()) return {};
+    return d.error().message;
 }
 
-bool has(const std::string& text, std::initializer_list<const char*> parts) {
+bool has(const dstd::String& text, std::initializer_list<const char*> parts) {
     for (const char* p : parts)
-        if (text.find(p) == std::string::npos) {
+        if (text.find(p) == dstd::String::npos) {
             MESSAGE(text);
             return false;
         }
@@ -50,7 +56,7 @@ TEST_SUITE("duql decorrelate") {
         REQUIRE(d);
         REQUIRE(d->outer.size() == 1);
         CHECK(syntax::to_text(*d->outer[0]) == "name");
-        CHECK(d->names == std::vector<std::string>{"__ck0"});
+        CHECK(d->names == dstd::Vector<dstd::String>{"__ck0"});
         CHECK(has(syntax::to_text(*d->side),
                   {"dur > 1", "group __ck0 = name", "__correlated_value"}));
         REQUIRE(d->empty);
@@ -100,7 +106,7 @@ TEST_SUITE("duql decorrelate") {
         REQUIRE(d->high);
         CHECK(d->high->open);
         CHECK(syntax::to_text(*d->high->outer) == "ts");
-        CHECK(d->read == RangeRead::MAX);
+        CHECK(d->read == RangeRead::Max);
         CHECK(!d->empty);
         CHECK(has(syntax::to_text(*d->side),
                   {"dur > 1", "select __correlated_value = dur",
@@ -120,7 +126,7 @@ TEST_SUITE("duql decorrelate") {
         CHECK(!d->low->open);
         CHECK(syntax::to_text(*d->low->outer) == "lo");
         CHECK(syntax::to_text(*d->high->outer) == "hi * 2");
-        CHECK(d->read == RangeRead::COUNT);
+        CHECK(d->read == RangeRead::Count);
         CHECK(has(syntax::to_text(*d->side),
                   {"__ck0 = pid", "__correlated_range = ts + 1"}));
         const auto f =
@@ -132,22 +138,23 @@ TEST_SUITE("duql decorrelate") {
     }
 
     TEST_CASE("what a range sub-query gives") {
-        auto read = [](const std::string& agg) {
-            return run("from data | where ts < ^.ts | agg { v = " + agg + " }",
+        auto read = [](const dstd::String& agg) {
+            return run(dstd::fmt<
+                           "from data | where ts < ^.ts | agg { v = {} }">(agg),
                        true)
                 ->read;
         };
-        CHECK(read("count()") == RangeRead::COUNT);
-        CHECK(read("count(dur)") == RangeRead::COUNT_VALUES);
-        CHECK(read("count_if(dur > 2)") == RangeRead::COUNT_IF);
-        CHECK(read("sum(dur)") == RangeRead::SUM);
-        CHECK(read("min(dur)") == RangeRead::MIN);
-        CHECK(read("mean(dur)") == RangeRead::MEAN);
+        CHECK(read("count()") == RangeRead::Count);
+        CHECK(read("count(dur)") == RangeRead::CountValues);
+        CHECK(read("count_if(dur > 2)") == RangeRead::CountIf);
+        CHECK(read("sum(dur)") == RangeRead::Sum);
+        CHECK(read("min(dur)") == RangeRead::Min);
+        CHECK(read("mean(dur)") == RangeRead::Mean);
         CHECK(run("from data | where ts < ^.ts | select dur", true)->read ==
-              RangeRead::ROWS);
+              RangeRead::Rows);
         const auto g = run("from data | where ts < ^.ts | group fd {}", false);
         REQUIRE(g);
-        CHECK(g->read == RangeRead::ROWS);
+        CHECK(g->read == RangeRead::Rows);
         CHECK(has(syntax::to_text(*g->side),
                   {"select fd", "__correlated_range = ts"}));
         const auto b =

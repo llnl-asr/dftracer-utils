@@ -1,7 +1,8 @@
+// SPDX-License-Identifier: MIT
 #include <dftracer/utils/dataframe/kernels/cast.h>
 #include <dftracer/utils/dataframe/parallel.h>
+#include <dftracer/utils/dstd/bits.h>
 
-#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -14,7 +15,6 @@
 HWY_BEFORE_NAMESPACE();
 namespace dftracer::utils::dataframe {
 namespace HWY_NAMESPACE {
-namespace hn = hwy::HWY_NAMESPACE;
 
 // Same-width lane conversion (int <-> float of equal byte width): Highway's
 // ConvertTo matches C++ static_cast (truncation toward zero for float->int).
@@ -22,12 +22,15 @@ template <class S, class D>
 void ConvertSameWidth(const void* sv, void* dv, std::size_t n) {
     const S* s = static_cast<const S*>(sv);
     D* d = static_cast<D*>(dv);
-    const hn::ScalableTag<S> ds;
-    const hn::Rebind<D, decltype(ds)> dd;
-    const std::size_t lanes = hn::Lanes(ds);
+    const hwy::HWY_NAMESPACE::ScalableTag<S> ds;
+    const hwy::HWY_NAMESPACE::Rebind<D, decltype(ds)> dd;
+    const std::size_t lanes = hwy::HWY_NAMESPACE::Lanes(ds);
     std::size_t i = 0;
     for (; i + lanes <= n; i += lanes)
-        hn::StoreU(hn::ConvertTo(dd, hn::LoadU(ds, s + i)), dd, d + i);
+        hwy::HWY_NAMESPACE::StoreU(
+            hwy::HWY_NAMESPACE::ConvertTo(dd,
+                                          hwy::HWY_NAMESPACE::LoadU(ds, s + i)),
+            dd, d + i);
     for (; i < n; ++i) d[i] = static_cast<D>(s[i]);
 }
 
@@ -35,24 +38,30 @@ void ConvertSameWidth(const void* sv, void* dv, std::size_t n) {
 void PromoteF32F64(const void* sv, void* dv, std::size_t n) {
     const float* s = static_cast<const float*>(sv);
     double* d = static_cast<double*>(dv);
-    const hn::ScalableTag<double> dd;
-    const hn::Rebind<float, decltype(dd)> df;
-    const std::size_t lanes = hn::Lanes(dd);
+    const hwy::HWY_NAMESPACE::ScalableTag<double> dd;
+    const hwy::HWY_NAMESPACE::Rebind<float, decltype(dd)> df;
+    const std::size_t lanes = hwy::HWY_NAMESPACE::Lanes(dd);
     std::size_t i = 0;
     for (; i + lanes <= n; i += lanes)
-        hn::StoreU(hn::PromoteTo(dd, hn::LoadU(df, s + i)), dd, d + i);
+        hwy::HWY_NAMESPACE::StoreU(
+            hwy::HWY_NAMESPACE::PromoteTo(dd,
+                                          hwy::HWY_NAMESPACE::LoadU(df, s + i)),
+            dd, d + i);
     for (; i < n; ++i) d[i] = static_cast<double>(s[i]);
 }
 
 void DemoteF64F32(const void* sv, void* dv, std::size_t n) {
     const double* s = static_cast<const double*>(sv);
     float* d = static_cast<float*>(dv);
-    const hn::ScalableTag<double> dd;
-    const hn::Rebind<float, decltype(dd)> df;
-    const std::size_t lanes = hn::Lanes(dd);
+    const hwy::HWY_NAMESPACE::ScalableTag<double> dd;
+    const hwy::HWY_NAMESPACE::Rebind<float, decltype(dd)> df;
+    const std::size_t lanes = hwy::HWY_NAMESPACE::Lanes(dd);
     std::size_t i = 0;
     for (; i + lanes <= n; i += lanes)
-        hn::StoreU(hn::DemoteTo(df, hn::LoadU(dd, s + i)), df, d + i);
+        hwy::HWY_NAMESPACE::StoreU(
+            hwy::HWY_NAMESPACE::DemoteTo(df,
+                                         hwy::HWY_NAMESPACE::LoadU(dd, s + i)),
+            df, d + i);
     for (; i < n; ++i) d[i] = static_cast<float>(s[i]);
 }
 
@@ -60,12 +69,15 @@ void DemoteF64F32(const void* sv, void* dv, std::size_t n) {
 void CastI32F64(const void* sv, void* dv, std::size_t n) {
     const std::int32_t* s = static_cast<const std::int32_t*>(sv);
     double* d = static_cast<double*>(dv);
-    const hn::ScalableTag<double> dd;
-    const hn::Rebind<std::int32_t, decltype(dd)> di;
-    const std::size_t lanes = hn::Lanes(dd);
+    const hwy::HWY_NAMESPACE::ScalableTag<double> dd;
+    const hwy::HWY_NAMESPACE::Rebind<std::int32_t, decltype(dd)> di;
+    const std::size_t lanes = hwy::HWY_NAMESPACE::Lanes(dd);
     std::size_t i = 0;
     for (; i + lanes <= n; i += lanes)
-        hn::StoreU(hn::PromoteTo(dd, hn::LoadU(di, s + i)), dd, d + i);
+        hwy::HWY_NAMESPACE::StoreU(
+            hwy::HWY_NAMESPACE::PromoteTo(dd,
+                                          hwy::HWY_NAMESPACE::LoadU(di, s + i)),
+            dd, d + i);
     for (; i < n; ++i) d[i] = static_cast<double>(s[i]);
 }
 
@@ -85,14 +97,14 @@ void CastF64I64(const void* s, void* d, std::size_t n) {
 // Number -> Bool: one packed result bit per row, 64 rows a word (LSB first, as
 // the column's bit order). A float also writes a validity bit per row, so a NaN
 // is null and not silently true. `bits` and `valid` are zeroed by the caller.
-template <class T, bool kFloat>
+template <class T, bool IsFloat>
 void NonzeroBits(const void* sv, std::uint8_t* bits, std::uint8_t* valid,
                  std::size_t n) {
     const T* s = static_cast<const T*>(sv);
     // At most 64 lanes, so one vector's mask fits the 64-bit word below.
-    const hn::CappedTag<T, 64> d;
-    const std::size_t lanes = hn::Lanes(d);
-    const auto zero = hn::Zero(d);
+    const hwy::HWY_NAMESPACE::CappedTag<T, 64> d;
+    const std::size_t lanes = hwy::HWY_NAMESPACE::Lanes(d);
+    const auto zero = hwy::HWY_NAMESPACE::Zero(d);
     const std::uint64_t lane_bits =
         lanes == 64 ? ~std::uint64_t{0} : (std::uint64_t{1} << lanes) - 1;
     std::size_t i = 0;
@@ -100,32 +112,32 @@ void NonzeroBits(const void* sv, std::uint8_t* bits, std::uint8_t* valid,
         std::uint64_t data_word = 0;
         std::uint64_t valid_word = 0;
         for (std::size_t c = 0; c < 64; c += lanes) {
-            const auto v = hn::LoadU(d, s + i + c);
-            auto nonzero = hn::Ne(v, zero);
-            if constexpr (kFloat) {
-                const auto ordered = hn::Eq(v, v);
+            const auto v = hwy::HWY_NAMESPACE::LoadU(d, s + i + c);
+            auto nonzero = hwy::HWY_NAMESPACE::Ne(v, zero);
+            if constexpr (IsFloat) {
+                const auto ordered = hwy::HWY_NAMESPACE::Eq(v, v);
                 std::uint8_t vb[8] = {};
-                hn::StoreMaskBits(d, ordered, vb);
+                hwy::HWY_NAMESPACE::StoreMaskBits(d, ordered, vb);
                 std::uint64_t vw = 0;
                 std::memcpy(&vw, vb, 8);
                 valid_word |= (vw & lane_bits) << c;
-                nonzero = hn::And(nonzero, ordered);
+                nonzero = hwy::HWY_NAMESPACE::And(nonzero, ordered);
             }
             std::uint8_t db[8] = {};
-            hn::StoreMaskBits(d, nonzero, db);
+            hwy::HWY_NAMESPACE::StoreMaskBits(d, nonzero, db);
             std::uint64_t dw = 0;
             std::memcpy(&dw, db, 8);
             data_word |= (dw & lane_bits) << c;
         }
         std::memcpy(bits + (i >> 3), &data_word, 8);
-        if constexpr (kFloat) std::memcpy(valid + (i >> 3), &valid_word, 8);
+        if constexpr (IsFloat) std::memcpy(valid + (i >> 3), &valid_word, 8);
     }
     for (; i < n; ++i) {
         const T x = s[i];
         bool ordered = true;
-        if constexpr (kFloat) ordered = (x == x);
+        if constexpr (IsFloat) ordered = (x == x);
         if (!ordered) continue;
-        if constexpr (kFloat)
+        if constexpr (IsFloat)
             valid[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
         if (x != T{}) bits[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
     }
@@ -189,12 +201,12 @@ std::int64_t cast_bool_simd(std::int32_t src, const void* sv,
             return -1;
     }
     // A float: the rows with no validity bit are the NaN rows. Count the set
-    // bits a byte at a time, and the last partial byte under its mask.
-    std::int64_t ok = 0;
+    // bits of the whole bytes, and the last partial byte under its mask.
     const std::size_t full = n >> 3;
-    for (std::size_t b = 0; b < full; ++b) ok += std::popcount(valid[b]);
+    auto ok = static_cast<std::int64_t>(
+        dftracer::utils::dstd::bits::popcount_bytes(valid, full));
     if (n & 7)
-        ok += std::popcount(
+        ok += dftracer::utils::dstd::bits::popcount_u64(
             static_cast<std::uint8_t>(valid[full] & ((1u << (n & 7)) - 1u)));
     return static_cast<std::int64_t>(n) - ok;
 }

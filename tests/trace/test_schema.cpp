@@ -1,24 +1,25 @@
+// SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/json/json_value.h>
 #include <dftracer/utils/trace/event.h>
 #include <dftracer/utils/trace/schema.h>
 #include <doctest/doctest.h>
 #include <simdjson.h>
 
-#include <string>
+using namespace dftracer::utils;
 
 using namespace dftracer::utils::trace;
-using dftracer::utils::json::JsonValue;
 
 namespace {
 
 // Parse one NDJSON line into a DFTracerEvent via the DOM path.
-DFTracerEvent parse_line(simdjson::dom::parser& p, const std::string& line) {
-    std::string pad = line;
+DFTracerEvent parse_line(simdjson::dom::parser& p, const dstd::String& line) {
+    dstd::String pad = line;
     pad.resize(line.size() + simdjson::SIMDJSON_PADDING);
     auto doc = p.parse(pad.data(), line.size(), false);
     DFTracerEvent ev;
-    JsonValue jv(doc.value());
+    json::JsonValue jv(doc.value());
     DFTracerEvent::parse(jv, ev);
     return ev;
 }
@@ -27,39 +28,39 @@ DFTracerEvent parse_line(simdjson::dom::parser& p, const std::string& line) {
 
 TEST_SUITE("schema") {
     TEST_CASE("phase codec maps integers and legacy letters both ways") {
-        CHECK(phase_from_int(1) == RecordPhase::COMPLETE);
-        CHECK(phase_from_int(2) == RecordPhase::COUNTER);
-        CHECK(phase_from_int(3) == RecordPhase::AGGREGATED);
-        CHECK(phase_from_int(4) == RecordPhase::METADATA);
-        CHECK(phase_from_int(0) == RecordPhase::UNKNOWN);
-        CHECK(phase_from_int(99) == RecordPhase::UNKNOWN);
+        CHECK(phase_from_int(1) == RecordPhase::Complete);
+        CHECK(phase_from_int(2) == RecordPhase::Counter);
+        CHECK(phase_from_int(3) == RecordPhase::Aggregated);
+        CHECK(phase_from_int(4) == RecordPhase::Metadata);
+        CHECK(phase_from_int(0) == RecordPhase::Unknown);
+        CHECK(phase_from_int(99) == RecordPhase::Unknown);
 
-        CHECK(phase_from_letter("X") == RecordPhase::COMPLETE);
-        CHECK(phase_from_letter("C") == RecordPhase::COUNTER);
-        CHECK(phase_from_letter("A") == RecordPhase::AGGREGATED);
-        CHECK(phase_from_letter("M") == RecordPhase::METADATA);
-        CHECK(phase_from_letter("Z") == RecordPhase::UNKNOWN);
-        CHECK(phase_from_letter("") == RecordPhase::UNKNOWN);
+        CHECK(phase_from_letter("X") == RecordPhase::Complete);
+        CHECK(phase_from_letter("C") == RecordPhase::Counter);
+        CHECK(phase_from_letter("A") == RecordPhase::Aggregated);
+        CHECK(phase_from_letter("M") == RecordPhase::Metadata);
+        CHECK(phase_from_letter("Z") == RecordPhase::Unknown);
+        CHECK(phase_from_letter("") == RecordPhase::Unknown);
 
-        CHECK(phase_to_int(RecordPhase::AGGREGATED) == 3);
-        CHECK(phase_to_letter(RecordPhase::COMPLETE) == 'X');
-        CHECK(phase_to_letter(RecordPhase::UNKNOWN) == '\0');
+        CHECK(phase_to_int(RecordPhase::Aggregated) == 3);
+        CHECK(phase_to_letter(RecordPhase::Complete) == 'X');
+        CHECK(phase_to_letter(RecordPhase::Unknown) == '\0');
     }
 
     TEST_CASE("event type codec: integers, cat inference, unknown fallback") {
-        CHECK(event_type_from_int(1) == EventType::DFTRACER);
-        CHECK(event_type_from_int(3) == EventType::LIBC_IO);
-        CHECK(event_type_from_int(10) == EventType::MPI);
-        CHECK(event_type_from_int(0) == EventType::UNKNOWN);
-        CHECK(event_type_from_int(42) == EventType::UNKNOWN);
+        CHECK(event_type_from_int(1) == EventType::Dftracer);
+        CHECK(event_type_from_int(3) == EventType::LibcIo);
+        CHECK(event_type_from_int(10) == EventType::Mpi);
+        CHECK(event_type_from_int(0) == EventType::Unknown);
+        CHECK(event_type_from_int(42) == EventType::Unknown);
 
-        CHECK(event_type_from_cat("POSIX") == EventType::LIBC_IO);
-        CHECK(event_type_from_cat("STDIO") == EventType::LIBC_IO);
-        CHECK(event_type_from_cat("sys") == EventType::PSUTIL);
-        CHECK(event_type_from_cat("MPI") == EventType::MPI);
-        CHECK(event_type_from_cat("whatever") == EventType::UNKNOWN);
+        CHECK(event_type_from_cat("POSIX") == EventType::LibcIo);
+        CHECK(event_type_from_cat("STDIO") == EventType::LibcIo);
+        CHECK(event_type_from_cat("sys") == EventType::Psutil);
+        CHECK(event_type_from_cat("MPI") == EventType::Mpi);
+        CHECK(event_type_from_cat("whatever") == EventType::Unknown);
 
-        CHECK(event_type_to_int(EventType::PSUTIL) == 7);
+        CHECK(event_type_to_int(EventType::Psutil) == 7);
     }
 }
 
@@ -72,8 +73,8 @@ TEST_SUITE("event-format") {
         CHECK(ev.is_complete());
         CHECK_FALSE(ev.is_metadata());
         CHECK_FALSE(ev.is_counter());
-        CHECK(ev.phase == RecordPhase::COMPLETE);
-        CHECK(ev.type == EventType::LIBC_IO);
+        CHECK(ev.phase == RecordPhase::Complete);
+        CHECK(ev.type == EventType::LibcIo);
         CHECK(ev.dur == 5);
         CHECK(ev.has_dur);
     }
@@ -102,7 +103,7 @@ TEST_SUITE("event-format") {
             p,
             R"({"name":"read","cat":"POSIX","ph":"X","pid":1,"tid":1,"ts":1,"dur":2,"args":{}})");
         CHECK(x.is_complete());
-        CHECK(x.type == EventType::UNKNOWN);  // legacy: no type column
+        CHECK(x.type == EventType::Unknown);  // legacy: no type column
 
         auto c = parse_line(
             p, R"({"name":"cpu","cat":"sys","ph":"C","ts":1,"args":{}})");
@@ -121,7 +122,7 @@ TEST_SUITE("event-format") {
         CHECK(ev.args["num_events"].get<std::uint64_t>() == 9);
         CHECK(ev.args["used.MPI"].get<std::uint64_t>() == 1);
         CHECK(ev.args["used.LIBC_IO"].get<std::uint64_t>() == 1);
-        CHECK(ev.args["app.model"].get<std::string_view>() == "resnet50");
+        CHECK(ev.args["app.model"].get<dstd::StringView>() == "resnet50");
         CHECK(ev.args["app.batch"].get<std::uint64_t>() == 32);
         // Array index then object descent: unbounded depth.
         CHECK(ev.args["tags.0.model.size"].get<std::uint64_t>() == 42);
@@ -131,12 +132,12 @@ TEST_SUITE("event-format") {
 TEST_SUITE("json-path") {
     TEST_CASE("JsonValue::at resolves deep object and array-index paths") {
         simdjson::dom::parser p;
-        std::string s =
+        dstd::String s =
             R"({"args":{"used":{"MPI":1},"tags":[{"model":{"size":42}},{"model":{"size":7}}]}})";
-        std::string pad = s;
+        dstd::String pad = s;
         pad.resize(s.size() + simdjson::SIMDJSON_PADDING);
         auto doc = p.parse(pad.data(), s.size(), false);
-        JsonValue jv(doc.value());
+        json::JsonValue jv(doc.value());
 
         CHECK(jv.at("args.used.MPI").get<std::uint64_t>() == 1);
         CHECK(jv.at("args.tags.0.model.size").get<std::uint64_t>() == 42);

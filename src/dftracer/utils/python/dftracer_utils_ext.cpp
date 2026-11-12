@@ -1,16 +1,20 @@
+// SPDX-License-Identifier: MIT
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
-#include <dftracer/utils/core/common/config.h>
-#include <dftracer/utils/core/common/logging.h>
-#include <dftracer/utils/core/common/memory_budget.h>
-#include <dftracer/utils/index/schemas/dft/agg/aggregation_serialization.h>
+#include <dftracer/utils/common/config.h>
+#include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/common/memory_budget.h>
+#include <dftracer/utils/common/memory_config.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/memory/detail/manager.h>
 #include <dftracer/utils/plugins/abi_version.h>
 #include <dftracer/utils/python/batch_indexer.h>
 #include <dftracer/utils/python/columnar_eval.h>
 #include <dftracer/utils/python/dataframe.h>
-#include <dftracer/utils/python/index_database.h>
+#include <dftracer/utils/python/distribution.h>
+#include <dftracer/utils/python/index.h>
 #include <dftracer/utils/python/indexer.h>
-#include <dftracer/utils/python/json.h>
 #include <dftracer/utils/python/lazyframe.h>
 #include <dftracer/utils/python/memoryview_batch.h>
 #include <dftracer/utils/python/op_runner.h>
@@ -20,12 +24,12 @@
 #include <dftracer/utils/python/py_method.h>
 #include <dftracer/utils/python/runtime.h>
 #include <dftracer/utils/python/series.h>
-#include <dftracer/utils/python/sst_distribution.h>
+#include <dftracer/utils/python/store.h>
 #include <dftracer/utils/python/streaming_iterator.h>
 #include <dftracer/utils/python/task_handle.h>
 #include <dftracer/utils/python/trace_reader_iterator.h>
 #include <dftracer/utils/python/trace_viewer.h>
-#include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
+#include <dftracer/utils/trace/index/schemas/dft/agg/system_metrics.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 #include <dftracer/utils/python/arrow_stream_capsule.h>
 #endif
@@ -38,38 +42,37 @@ namespace {
 PyObject* py_set_log_level(PyObject*, PyObject* args) {
     const char* name = nullptr;
     if (!PyArg_ParseTuple(args, "s", &name)) return nullptr;
-    auto lvl = dftracer::utils::logger::level_from_name(name);
+    auto lvl = dftracer::utils::common::logger::level_from_name(name);
     if (!lvl) {
         PyErr_Format(PyExc_ValueError, "invalid log level: '%s'", name);
         return nullptr;
     }
-    dftracer::utils::logger::set_level(*lvl);
+    dftracer::utils::common::logger::set_level(*lvl);
     Py_RETURN_NONE;
 }
 
 PyObject* py_get_log_level(PyObject*, PyObject*) {
-    return PyUnicode_FromString(dftracer::utils::logger::level_name(
-        dftracer::utils::logger::get_level()));
+    return PyUnicode_FromString(dftracer::utils::common::logger::level_name(
+        dftracer::utils::common::logger::level()));
 }
 
 PyObject* py_set_log_color(PyObject*, PyObject* args) {
     const char* mode = nullptr;
     if (!PyArg_ParseTuple(args, "s", &mode)) return nullptr;
-    using dftracer::utils::logger::ColorMode;
-    const std::string_view m(mode);
-    ColorMode cm;
+    const dftracer::utils::dstd::StringView m(mode);
+    dftracer::utils::common::logger::ColorMode cm;
     if (m == "auto") {
-        cm = ColorMode::Auto;
+        cm = dftracer::utils::common::logger::ColorMode::Auto;
     } else if (m == "always") {
-        cm = ColorMode::Always;
+        cm = dftracer::utils::common::logger::ColorMode::Always;
     } else if (m == "never") {
-        cm = ColorMode::Never;
+        cm = dftracer::utils::common::logger::ColorMode::Never;
     } else {
         PyErr_Format(PyExc_ValueError,
                      "invalid color mode: '%s' (auto|always|never)", mode);
         return nullptr;
     }
-    dftracer::utils::logger::set_color(cm);
+    dftracer::utils::common::logger::set_color(cm);
     Py_RETURN_NONE;
 }
 
@@ -81,11 +84,11 @@ PyObject* py_memory_budget_advice(PyObject*, PyObject* args, PyObject* kwds) {
                                      const_cast<char**>(kwlist), &required,
                                      &available))
         return nullptr;
-    const auto a = dftracer::utils::memory_budget_advice(
+    const auto a = dftracer::utils::common::memory_budget_advice(
         static_cast<std::size_t>(required),
         static_cast<std::size_t>(available));
-    const std::string warning =
-        dftracer::utils::format_memory_budget_warning(a);
+    const dftracer::utils::dstd::String warning =
+        dftracer::utils::common::format_memory_budget_warning(a);
     return Py_BuildValue(
         "{s:O,s:K,s:K,s:K,s:K,s:s}", "fits", a.fits ? Py_True : Py_False,
         "required_bytes", (unsigned long long)a.required_bytes, "peak_bytes",
@@ -133,13 +136,16 @@ PyMODINIT_FUNC PyInit_dftracer_utils_ext(void);  // declared before use
 
 PyMODINIT_FUNC PyInit_dftracer_utils_ext(void) {
     PyObject* m;
+    // numpy and pandas may still hold blocks of ours when the interpreter
+    // exits.
+    dftracer::utils::memory::detail::set_exit_check(false);
     m = PyModule_Create(&dftracer_utils_module);
     if (m == NULL) return NULL;
     // The aggregation CF shard count, so distributed callers split the shard
     // space without hardcoding it (single source of truth).
     PyModule_AddIntConstant(
         m, "NUM_SHARDS",
-        dftracer::utils::index::schemas::dft::agg::AGG_KEY_NUM_SHARDS);
+        dftracer::utils::trace::index::schemas::dft::agg::AGG_KEY_NUM_SHARDS);
     // A JIT plugin built in a source tree stamps this version, so it matches
     // the host it is loaded into.
     if (PyModule_AddIntConstant(m, "PLUGIN_ABI_VERSION",
@@ -147,20 +153,20 @@ PyMODINIT_FUNC PyInit_dftracer_utils_ext(void) {
         return NULL;
     {
         const auto& patterns =
-            dftracer::utils::utilities::filesystem::trace_file_patterns();
-        PyObject* t = PyTuple_New(static_cast<Py_ssize_t>(patterns.size()));
+            dftracer::utils::common::constants::indexer::INPUT_FILE_PATTERNS;
+        constexpr std::size_t pattern_count =
+            sizeof(patterns) / sizeof(patterns[0]);
+        PyObject* t = PyTuple_New(static_cast<Py_ssize_t>(pattern_count));
         if (!t) return NULL;
-        for (std::size_t i = 0; i < patterns.size(); ++i) {
-            PyObject* s = PyUnicode_FromStringAndSize(
-                patterns[i].data(),
-                static_cast<Py_ssize_t>(patterns[i].size()));
+        for (std::size_t i = 0; i < pattern_count; ++i) {
+            PyObject* s = PyUnicode_FromString(patterns[i]);
             if (!s) {
                 Py_DECREF(t);
                 return NULL;
             }
             PyTuple_SET_ITEM(t, static_cast<Py_ssize_t>(i), s);
         }
-        if (PyModule_AddObject(m, "TRACE_FILE_PATTERNS", t) < 0) {
+        if (PyModule_AddObject(m, "INPUT_FILE_PATTERNS", t) < 0) {
             Py_DECREF(t);
             return NULL;
         }
@@ -168,14 +174,19 @@ PyMODINIT_FUNC PyInit_dftracer_utils_ext(void) {
     // Configure the C++ logger for the extension: picks up
     // DFTRACER_UTILS_LOG_LEVEL and auto color (on only when stderr is a TTY),
     // matching the CLI binaries. Without this the logger runs on bare defaults.
-    dftracer::utils::logger::init();
+    dftracer::utils::common::logger::init();
+    if (auto configured = dftracer::utils::common::configure_memory_from_env();
+        !configured) {
+        PyErr_SetString(PyExc_ImportError, configured.error().format().c_str());
+        return NULL;
+    }
     if (dftracer::utils::python::init_py_errors(m) < 0) return NULL;
     if (dftracer::utils::python::init_checkpoint_indexer(m) < 0) return NULL;
     if (dftracer::utils::python::init_indexer(m) < 0) return NULL;
     if (dftracer::utils::python::init_task_handle(m) < 0) return NULL;
     if (dftracer::utils::python::init_runtime(m) < 0) return NULL;
+    if (dftracer::utils::python::init_store(m) < 0) return NULL;
     if (dftracer::utils::python::init_memoryview_batch(m) < 0) return NULL;
-    if (dftracer::utils::python::init_json_dict_value(m) < 0) return NULL;
     if (dftracer::utils::python::init_trace_reader_iterator(m) < 0) return NULL;
     if (dftracer::utils::python::init_arrow_streaming_iterator(m) < 0)
         return NULL;
@@ -189,8 +200,8 @@ PyMODINIT_FUNC PyInit_dftracer_utils_ext(void) {
     if (dftracer::utils::python::init_plugin_host(m) < 0) return NULL;
     if (dftracer::utils::python::init_op_runner(m) < 0) return NULL;
     if (dftracer::utils::python::init_ops(m) < 0) return NULL;
-    if (dftracer::utils::python::init_index_database(m) < 0) return NULL;
-    if (dftracer::utils::python::init_sst_distribution(m) < 0) return NULL;
+    if (dftracer::utils::python::init_index(m) < 0) return NULL;
+    if (dftracer::utils::python::init_distribution(m) < 0) return NULL;
     if (dftracer::utils::python::init_series(m) < 0) return NULL;
     if (dftracer::utils::python::init_dataframe(m) < 0) return NULL;
     if (dftracer::utils::python::init_lazyframe(m) < 0) return NULL;

@@ -1,0 +1,1079 @@
+// SPDX-License-Identifier: MIT
+#define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/common/str_format.h>
+#include <dftracer/utils/dstd/ascii.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/little_endian.h>
+#include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/fileio/file_helpers.h>
+#include <dftracer/utils/trace/index/index.h>
+#include <dftracer/utils/trace/index/indexer.h>
+#include <dftracer/utils/trace/index/plan/prune.h>
+#include <dftracer/utils/trace/index/schemas/dft/agg/agg_partial.h>
+#include <dftracer/utils/trace/index/schemas/dft/agg/agg_store.h>
+#include <dftracer/utils/trace/index/schemas/dft/agg/aggregation_config.h>
+#include <dftracer/utils/trace/index/schemas/dft/agg/chunk_columns.h>
+#include <dftracer/utils/trace/index/store/layout.h>
+#include <dftracer/utils/trace/index/tables.h>
+#include <dftracer/utils/trace/internal/utils.h>
+#include <dftracer/utils/trace/views/sharded_view.h>
+#include <doctest/doctest.h>
+#include <index_test_helpers.h>
+#include <task_result.h>
+#include <testing_utilities.h>
+
+#include <algorithm>
+#include <cstdint>
+#include <cstdlib>
+#include <cstring>
+#include <limits>
+#include <utility>
+
+using namespace dftracer::utils;
+using namespace dftracer::utils::trace::index;
+
+namespace {
+
+constexpr std::size_t CHECKPOINT_SIZE = 4096;
+constexpr int RECORDS = 120;
+
+schemas::dft::agg::ChunkColumn column_of(
+    std::uint32_t path, schemas::dft::agg::ColumnKind kind,
+    const dstd::Vector<std::uint64_t>& rows,
+    const dstd::Vector<std::uint64_t>& bits) {
+    schemas::dft::agg::ChunkColumn column;
+    column.path = path;
+    column.kind = kind;
+    column.rows.assign(rows.begin(), rows.end());
+    column.bits.assign(bits.begin(), bits.end());
+    return column;
+}
+
+schemas::dft::agg::ChunkColumns core_block(std::size_t rows) {
+    schemas::dft::agg::ChunkColumns block;
+    block.rows = rows;
+    block.ids.assign({4, 7, 9});
+    for (std::size_t r = 0; r < rows; ++r) {
+        block.ts.push_back(1000 + r * 37);
+        block.dur.push_back(5 + r * 3);
+        block.has_dur.push_back(r % 3 == 1 ? 0 : 1);
+        block.pid.push_back(10 + r % 2);
+        block.tid.push_back(20 + r % 3);
+        block.phase.push_back(static_cast<std::uint8_t>(r % 4));
+        block.cat.push_back(r < rows / 2 ? 0 : 1);
+        block.name.push_back(2);
+        block.host.push_back(static_cast<std::uint32_t>(r % 3));
+        block.file.push_back(r < rows / 2 ? 1 : 2);
+    }
+    return block;
+}
+
+void check_core_columns(const schemas::dft::agg::ChunkColumns& want,
+                        const schemas::dft::agg::ChunkColumns& got) {
+    REQUIRE(got.rows == want.rows);
+    REQUIRE(got.ids == want.ids);
+    CHECK(got.ts == want.ts);
+    CHECK(got.has_dur == want.has_dur);
+    for (std::size_t r = 0; r < want.rows; ++r)
+        if (want.has_dur[r] != 0) CHECK(got.dur[r] == want.dur[r]);
+    CHECK(got.pid == want.pid);
+    CHECK(got.tid == want.tid);
+    CHECK(got.phase == want.phase);
+    CHECK(got.cat == want.cat);
+    CHECK(got.name == want.name);
+    CHECK(got.host == want.host);
+    CHECK(got.file == want.file);
+}
+
+schemas::dft::agg::ChunkColumns encode_then_decode(
+    const schemas::dft::agg::ChunkColumns& block,
+    std::size_t column_count = std::numeric_limits<std::size_t>::max()) {
+    dstd::Vector<std::uint8_t> bytes;
+    const std::size_t count =
+        column_count == std::numeric_limits<std::size_t>::max()
+            ? block.columns.size()
+            : column_count;
+    schemas::dft::agg::encode_chunk_columns(block, count, bytes);
+    auto got = schemas::dft::agg::decode_chunk_columns(
+        dstd::Span<const std::uint8_t>(bytes.data(), bytes.size()));
+    REQUIRE(got.has_value());
+    return *got;
+}
+
+std::uint64_t double_bits_of(double v) {
+    std::uint64_t bits = 0;
+    std::memcpy(&bits, &v, sizeof bits);
+    return bits;
+}
+
+bool same(const dstd::Vector<std::uint64_t>& got,
+          const dstd::Vector<std::uint64_t>& want) {
+    return got.size() == want.size() &&
+           std::equal(got.begin(), got.end(), want.begin());
+}
+
+schemas::dft::agg::ChunkColumn roundtrip_column(
+    schemas::dft::agg::ColumnKind kind, const dstd::Vector<std::uint64_t>& bits,
+    const dstd::Vector<std::uint64_t>& rows, std::size_t block_rows) {
+    auto block = core_block(block_rows);
+    CHECK(rows.size() == bits.size());
+    block.columns.push_back(column_of(1, kind, rows, bits));
+    const auto got = encode_then_decode(block);
+    check_core_columns(block, got);
+    REQUIRE(got.columns.size() == 1);
+    CHECK(got.columns[0].path == 1);
+    CHECK(got.columns[0].kind == kind);
+    CHECK(got.columns[0].rows == block.columns[0].rows);
+    CHECK(same(got.columns[0].bits, bits));
+    return got.columns[0];
+}
+
+enum class NumKind : std::uint8_t { Int64, Uint64, Double };
+
+struct Num {
+    NumKind kind = NumKind::Double;
+    std::int64_t i = 0;
+    std::uint64_t u = 0;
+    double d = 0;
+
+    std::uint64_t bits() const {
+        switch (kind) {
+            case NumKind::Int64:
+                return static_cast<std::uint64_t>(i);
+            case NumKind::Uint64:
+                return u;
+            default:
+                return double_bits_of(d);
+        }
+    }
+    schemas::dft::agg::ColumnKind column_kind() const {
+        switch (kind) {
+            case NumKind::Int64:
+                return schemas::dft::agg::ColumnKind::Int64;
+            case NumKind::Uint64:
+                return schemas::dft::agg::ColumnKind::Uint64;
+            default:
+                return schemas::dft::agg::ColumnKind::Double;
+        }
+    }
+};
+
+struct Row {
+    std::uint64_t ts = 0;
+    std::uint64_t dur = 0;
+    bool has_dur = false;
+    std::uint64_t pid = 0;
+    std::uint64_t tid = 0;
+    std::uint8_t phase = 0;
+    dstd::String cat;
+    dstd::String name;
+    dstd::String host;
+    dstd::String fhash;
+    dstd::Map<dstd::String, Num, std::less<>> args;
+};
+
+dstd::StringView quoted(const dstd::String& text, dstd::StringView key) {
+    const dstd::String pattern = "\"" + dstd::String(key) + "\":\"";
+    const auto at = text.find(pattern);
+    if (at == dstd::String::npos) return {};
+    const auto from = at + pattern.size();
+    const auto to = text.find('"', from);
+    if (to == dstd::String::npos) return {};
+    return dstd::StringView(text).substr(from, to - from);
+}
+
+bool number(const dstd::String& text, dstd::StringView key,
+            std::uint64_t& out) {
+    const dstd::String pattern = "\"" + dstd::String(key) + "\":";
+    const auto at = text.find(pattern);
+    if (at == dstd::String::npos) return false;
+    const char* from = text.c_str() + at + pattern.size();
+    char* end = nullptr;
+    const auto value = std::strtoull(from, &end, 10);
+    if (end == from) return false;
+    out = value;
+    return true;
+}
+
+std::uint8_t phase_of(dstd::StringView letter) {
+    if (letter == "X") return 1;
+    if (letter == "C") return 2;
+    if (letter == "A") return 3;
+    if (letter == "M") return 4;
+    return 0;
+}
+
+Num classify(const dstd::String& text) {
+    Num n;
+    if (text.find_first_of(".eE") != dstd::String::npos) {
+        n.kind = NumKind::Double;
+        n.d = std::strtod(text.c_str(), nullptr);
+    } else if (!text.empty() && text[0] == '-') {
+        n.kind = NumKind::Int64;
+        n.i = std::strtoll(text.c_str(), nullptr, 10);
+    } else {
+        const auto u = std::strtoull(text.c_str(), nullptr, 10);
+        const auto max = static_cast<unsigned long long>(
+            std::numeric_limits<std::int64_t>::max());
+        if (u > max) {
+            n.kind = NumKind::Uint64;
+            n.u = u;
+        } else {
+            n.kind = NumKind::Int64;
+            n.i = static_cast<std::int64_t>(u);
+        }
+    }
+    return n;
+}
+
+dstd::String trimmed(const dstd::String& text) {
+    std::size_t begin = 0;
+    std::size_t end = text.size();
+    while (begin < end && dstd::is_ascii_space(text[begin])) ++begin;
+    while (end > begin && dstd::is_ascii_space(text[end - 1])) --end;
+    return text.substr(begin, end - begin);
+}
+
+Row parse_row(const dstd::String& line) {
+    Row row;
+    dstd::String head = line;
+    dstd::String args;
+    const auto args_at = head.find("\"args\":{");
+    if (args_at != dstd::String::npos) {
+        const auto close = head.find('}', args_at);
+        REQUIRE(close != dstd::String::npos);
+        args = head.substr(args_at + 8, close - args_at - 8);
+        head.erase(args_at, close + 1 - args_at);
+    }
+    row.cat = dstd::String(quoted(head, "cat"));
+    row.name = dstd::String(quoted(head, "name"));
+    row.phase = phase_of(quoted(head, "ph"));
+    row.host = dstd::String(quoted(args, "hhash"));
+    row.fhash = dstd::String(quoted(args, "fhash"));
+    number(head, "pid", row.pid);
+    number(head, "tid", row.tid);
+    number(head, "ts", row.ts);
+    row.has_dur = number(head, "dur", row.dur);
+
+    std::size_t at = 0;
+    while ((at = args.find('"', at)) != dstd::String::npos) {
+        const auto key_end = args.find('"', at + 1);
+        REQUIRE(key_end != dstd::String::npos);
+        const dstd::String key = args.substr(at + 1, key_end - at - 1);
+        const auto value_at = key_end + 2;
+        REQUIRE(value_at < args.size());
+        if (args[value_at] == '"') {
+            const auto str_end = args.find('"', value_at + 1);
+            REQUIRE(str_end != dstd::String::npos);
+            at = str_end + 1;
+            continue;
+        }
+        auto value_end = args.find(',', value_at);
+        if (value_end == dstd::String::npos) value_end = args.size();
+        row.args.emplace(
+            key,
+            classify(trimmed(args.substr(value_at, value_end - value_at))));
+        at = value_end;
+    }
+    return row;
+}
+
+dstd::Vector<Row> parse_trace(const dstd::String& text) {
+    dstd::Vector<Row> rows;
+    dstd::StringView rest = text;
+    while (!rest.empty()) {
+        const std::size_t eol = rest.find('\n');
+        const dstd::String line(rest.substr(0, eol));
+        rest = eol == dstd::StringView::npos ? dstd::StringView{}
+                                             : rest.substr(eol + 1);
+        const dstd::String body = trimmed(line);
+        if (body.empty() || body[0] == '[' || body[0] == ']') continue;
+        Row row = parse_row(body);
+        if (row.phase == 4) continue;
+        rows.push_back(std::move(row));
+    }
+    return rows;
+}
+
+// The only rows an index keeps in its column blocks.
+dstd::Vector<Row> system_counters(const dstd::Vector<Row>& rows) {
+    dstd::Vector<Row> out;
+    for (const Row& row : rows)
+        if (row.phase == 2 && row.cat == "sys") out.push_back(row);
+    return out;
+}
+
+// The categories keep their case, so a block that lower-cases one is seen.
+dstd::String make_trace(int n) {
+    dstd::String text;
+    text += "[\n";
+    for (int i = 0; i < n; ++i) {
+        const int pid = 1 + i % 3;
+        const int tid = 10 + i % 2;
+        const std::uint64_t ts = 1000000 + static_cast<std::uint64_t>(i) * 997;
+        if (i % 20 == 19) {
+            text += common::str_cat(R"({"id":)", i,
+                                    R"(,"name":"meta","cat":"dftracer")",
+                                    R"(,"ph":"M","ts":)", ts,
+                                    R"(,"args":{"version":"1.0"}})", "\n");
+            continue;
+        }
+        switch (i % 5) {
+            case 0:
+            case 1:
+                text += common::str_cat(
+                    R"({"id":)", i, R"(,"name":"read","cat":"POSIX")",
+                    R"(,"pid":)", pid, R"(,"tid":)", tid, R"(,"ph":"X","ts":)",
+                    ts, R"(,"dur":)", i * 3 % 71, R"(,"args":{"ret":)",
+                    (i * 13) % 4096, R"(,"offset":)", i * 512,
+                    R"(,"hhash":"a1b2c3d4e5f60718")",
+                    R"(,"fhash":"0123456789abcdef"}})", "\n");
+                break;
+            case 2:
+                text += common::str_cat(
+                    R"({"id":)", i, R"(,"name":"app","cat":"App")",
+                    R"(,"pid":)", pid, R"(,"tid":)", tid, R"(,"ph":"C","ts":)",
+                    ts, R"(,"args":{"dur":0.25,"user_pct":41.25,"n":)", i % 7,
+                    R"(,"state":"r"}})", "\n");
+                break;
+            case 3:
+                text += common::str_cat(
+                    R"({"id":)", i, R"(,"name":"cpu","cat":"sys")",
+                    R"(,"pid":)", pid, R"(,"tid":)", tid, R"(,"ph":"C","ts":)",
+                    ts, R"(,"args":{"user_pct":41.25,"sys_pct":8.5)",
+                    R"(,"mem":123456789,"level":)", i % 4, "}}\n");
+                break;
+            default:
+                text += common::str_cat(
+                    R"({"id":)", i, R"(,"name":"step","cat":"App")",
+                    R"(,"pid":)", pid, R"(,"tid":)", tid, R"(,"ph":"A","ts":)",
+                    ts, R"(,"dur":)", i % 11, R"(,"args":{"offset":)",
+                    18446744073709551615ULL, R"(,"delta":-)", i % 9,
+                    R"(,"count":)", i * 0.5, "}}\n");
+                break;
+        }
+    }
+    text += "]\n";
+    return text;
+}
+
+dstd::String write_gzip(const dstd::String& dir, const dstd::String& name,
+                        const dstd::String& text);
+
+// Each trace gets its own name, so each sidecar index is distinct.
+dstd::String write_trace(const dstd::String& dir, const dstd::String& name,
+                         dstd::String& text) {
+    text = make_trace(RECORDS);
+    return write_gzip(dir, name, text);
+}
+
+dstd::String write_gzip(const dstd::String& dir, const dstd::String& name,
+                        const dstd::String& text) {
+    const dstd::String sub = dir + "/" + name;
+    REQUIRE(dstd::fs::create_directories(sub).has_value());
+    const dstd::String pfw = sub + "/trace.pfw";
+    {
+        dstd::fs::write_file(dstd::PathView(pfw), text).discard();
+    }
+    const dstd::String gz = pfw + ".gz";
+    REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(
+        pfw, gz, CHECKPOINT_SIZE));
+    dstd::fs::remove(pfw).discard();
+    return gz;
+}
+
+IndexerOptions options(const dstd::String& index_dir) {
+    IndexerOptions o;
+    o.index_dir = index_dir;
+    o.checkpoint_size = CHECKPOINT_SIZE;
+    o.parallelism = 4;
+    schemas::dft::agg::AggregationConfig c;
+    c.time_interval_us = 100'000;
+    o.aggregation = c;
+    return o;
+}
+
+void build(const dstd::Vector<dstd::String>& files,
+           const dstd::String& index_dir) {
+    dstd::Vector<dstd::String> paths;
+    for (const auto& file : files) paths.emplace_back(file);
+    dftu_utils_test::ok(
+        dftu_utils_test::ok(Indexer::open(std::move(paths), options(index_dir)))
+            .build());
+}
+
+void check_row_core(const schemas::dft::agg::ChunkColumns& block, std::size_t r,
+                    const Row& row) {
+    CHECK(block.ts[r] == row.ts);
+    CHECK(block.has_dur[r] == (row.has_dur ? 1 : 0));
+    CHECK(block.dur[r] == row.dur);
+    CHECK(block.pid[r] == row.pid);
+    CHECK(block.tid[r] == row.tid);
+    CHECK(block.phase[r] == row.phase);
+    REQUIRE(block.cat[r] < block.texts.size());
+    REQUIRE(block.name[r] < block.texts.size());
+    REQUIRE(block.host[r] < block.texts.size());
+    REQUIRE(block.file[r] < block.texts.size());
+    CHECK(block.texts[block.cat[r]] == row.cat.c_str());
+    CHECK(block.texts[block.name[r]] == row.name.c_str());
+    CHECK(block.texts[block.host[r]] == row.host.c_str());
+    CHECK(block.texts[block.file[r]] == row.fhash.c_str());
+}
+
+// One arg path holds one column per kind its values take.
+const schemas::dft::agg::ChunkColumn* column_for(
+    const schemas::dft::agg::ChunkColumns& block, dstd::StringView path,
+    schemas::dft::agg::ColumnKind kind) {
+    for (const schemas::dft::agg::ChunkColumn& column : block.columns)
+        if (column.kind == kind && block.texts[column.path] == path)
+            return &column;
+    return nullptr;
+}
+
+void check_row_args(const schemas::dft::agg::ChunkColumns& block, std::size_t r,
+                    const Row& row) {
+    for (const auto& [path, value] : row.args) {
+        const schemas::dft::agg::ChunkColumn* column =
+            column_for(block, path, value.column_kind());
+        if (column == nullptr) {
+            CHECK_MESSAGE(false, "no column for ", path, " on row ", r);
+            continue;
+        }
+        const auto at =
+            std::lower_bound(column->rows.begin(), column->rows.end(),
+                             static_cast<std::uint64_t>(r));
+        REQUIRE(at != column->rows.end());
+        REQUIRE_MESSAGE(*at == static_cast<std::uint64_t>(r), path, " on row ",
+                        r);
+        const auto k = static_cast<std::size_t>(at - column->rows.begin());
+        CHECK(column->kind == value.column_kind());
+        CHECK(column->bits[k] == value.bits());
+    }
+}
+
+void check_columns_against(const schemas::dft::agg::ChunkColumns& block,
+                           const dstd::Vector<Row>& rows, std::size_t at) {
+    for (const schemas::dft::agg::ChunkColumn& column : block.columns) {
+        const auto& path = block.texts[column.path];
+        CHECK_FALSE(path.empty());
+        CHECK(column.rows.size() == column.bits.size());
+        CHECK(column.rows.size() <= block.rows);
+        CHECK(std::is_sorted(column.rows.begin(), column.rows.end()));
+        for (std::size_t k = 0; k < column.rows.size(); ++k) {
+            REQUIRE(at + column.rows[k] < rows.size());
+            const Row& row = rows[at + column.rows[k]];
+            const auto found = row.args.find(dstd::String(path));
+            REQUIRE_MESSAGE(found != row.args.end(), "no arg ", path.c_str(),
+                            " on row ", column.rows[k]);
+            CHECK(column.kind == found->second.column_kind());
+            CHECK(column.bits[k] == found->second.bits());
+        }
+    }
+}
+
+struct Decoded {
+    std::size_t blocks = 0;
+    std::size_t rows = 0;
+    dstd::Vector<std::uint64_t> chunks;
+};
+
+Decoded read_and_check(const trace::index::Snapshot& snapshot,
+                       const trace::index::FileRef& file,
+                       const dstd::Vector<Row>& rows) {
+    Decoded out;
+    std::size_t at = 0;
+    auto scanned = trace::index::for_each_agg_chunk_columns(
+        snapshot, file,
+        [&](std::uint64_t chunk, const schemas::dft::agg::ChunkColumns& block) {
+            ++out.blocks;
+            out.chunks.push_back(chunk);
+            CHECK(block.chunk == chunk);
+            CHECK(block.texts.size() == block.ids.size());
+            check_columns_against(block, rows, at);
+            std::size_t args = 0;
+            for (std::size_t r = 0; r < block.rows; ++r) {
+                REQUIRE(at < rows.size());
+                check_row_core(block, r, rows[at]);
+                check_row_args(block, r, rows[at]);
+                args += rows[at].args.size();
+                ++at;
+                ++out.rows;
+            }
+            CHECK(args > 0);
+            CHECK_FALSE(block.columns.empty());
+            return true;
+        });
+    REQUIRE(scanned.has_value());
+    CHECK(at == rows.size());
+    CHECK(std::is_sorted(out.chunks.begin(), out.chunks.end()));
+    CHECK(std::adjacent_find(out.chunks.begin(), out.chunks.end()) ==
+          out.chunks.end());
+    return out;
+}
+
+trace::index::Snapshot open_index(const dstd::String& index_path) {
+    auto snapshot = trace::index::plan::open_snapshot(index_path);
+    REQUIRE_MESSAGE(snapshot.has_value(), "the index opens");
+    return std::move(*snapshot);
+}
+
+trace::index::FileRef file_of(const trace::index::Snapshot& snapshot,
+                              const dstd::String& path) {
+    auto file = snapshot.file(fileio::get_logical_path(path));
+    REQUIRE_MESSAGE(file.has_value(), "the file is in the index");
+    return std::move(*file);
+}
+
+dstd::Span<const std::uint8_t> span_of(dstd::StringView bytes) {
+    return dstd::Span<const std::uint8_t>(
+        reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size());
+}
+
+// Named by the text of its path, so two indexes compare without their
+// block-local ids.
+struct ColumnShape {
+    dstd::String path;
+    schemas::dft::agg::ColumnKind kind = schemas::dft::agg::ColumnKind::Int64;
+    dstd::Vector<std::uint64_t> rows;
+    dstd::Vector<std::uint64_t> bits;
+
+    bool operator==(const ColumnShape&) const = default;
+};
+
+// A real DFTracer record whose args repeat a key. The block keeps the first
+// value of each repeated path.
+dstd::String repeated_key_trace() {
+    dstd::String text;
+    text += "[\n";
+    text += common::str_cat(
+        R"({"id":0,"name":"meta","cat":"dftracer","ph":"M","ts":1)",
+        R"(,"args":{"version":"1.0"}})", "\n");
+    for (int i = 0; i < RECORDS; ++i) {
+        text +=
+            common::str_cat(R"({"id":)", i + 1, R"(,"name":"cpu","cat":"sys")",
+                            R"(,"pid":1,"tid":1,"ph":"C","ts":)", 5000 + i * 7,
+                            R"(,"args":{"hhash":"h1","used":)", 10 + i,
+                            R"(,"used":)", 90 + i, R"(,"nested":{"CPP_APP":)",
+                            100 + i, R"(,"CPP_APP":)", 200 + i, "}}}\n");
+    }
+    text += "]\n";
+    return text;
+}
+
+dstd::Vector<dstd::Pair<std::uint64_t, std::uint64_t>> values_of(
+    const schemas::dft::agg::ChunkColumns& block, dstd::StringView path,
+    schemas::dft::agg::ColumnKind kind) {
+    dstd::Vector<dstd::Pair<std::uint64_t, std::uint64_t>> out;
+    const schemas::dft::agg::ChunkColumn* column =
+        column_for(block, path, kind);
+    if (column == nullptr) return out;
+    REQUIRE(column->rows.size() == column->bits.size());
+    for (std::size_t k = 0; k < column->rows.size(); ++k)
+        out.emplace_back(column->rows[k], column->bits[k]);
+    return out;
+}
+
+dstd::Vector<dstd::Pair<std::uint64_t, std::uint64_t>> first_values(
+    std::size_t rows, std::size_t at, std::int64_t first) {
+    dstd::Vector<dstd::Pair<std::uint64_t, std::uint64_t>> out;
+    for (std::size_t r = 0; r < rows; ++r)
+        out.emplace_back(r, static_cast<std::uint64_t>(
+                                first + static_cast<std::int64_t>(at + r)));
+    return out;
+}
+
+dstd::Map<std::uint64_t, dstd::Vector<ColumnShape>> columns_of(
+    const trace::index::Snapshot& snapshot, const trace::index::FileRef& file) {
+    dstd::Map<std::uint64_t, dstd::Vector<ColumnShape>> out;
+    auto scanned = trace::index::for_each_agg_chunk_columns(
+        snapshot, file,
+        [&](std::uint64_t chunk, const schemas::dft::agg::ChunkColumns& block) {
+            dstd::Vector<ColumnShape> shapes;
+            for (const schemas::dft::agg::ChunkColumn& column : block.columns)
+                shapes.push_back({dstd::String(block.texts[column.path]),
+                                  column.kind,
+                                  dstd::Vector<std::uint64_t>(
+                                      column.rows.begin(), column.rows.end()),
+                                  dstd::Vector<std::uint64_t>(
+                                      column.bits.begin(), column.bits.end())});
+            out[chunk] = shapes;
+            return true;
+        });
+    REQUIRE(scanned.has_value());
+    return out;
+}
+
+}  // namespace
+
+TEST_SUITE("ChunkColumns") {
+    TEST_CASE("integers round trip bit exact") {
+        roundtrip_column(
+            schemas::dft::agg::ColumnKind::Int64,
+            {static_cast<std::uint64_t>(std::int64_t{-1}),
+             static_cast<std::uint64_t>(std::int64_t{0}),
+             static_cast<std::uint64_t>(std::int64_t{-9007199254740993LL}),
+             static_cast<std::uint64_t>(
+                 std::numeric_limits<std::int64_t>::min()),
+             static_cast<std::uint64_t>(
+                 std::numeric_limits<std::int64_t>::max()),
+             static_cast<std::uint64_t>(std::int64_t{7})},
+            {0, 1, 2, 3, 4, 5}, 6);
+    }
+
+    TEST_CASE("a uint64 above INT64_MAX round trips bit exact") {
+        roundtrip_column(schemas::dft::agg::ColumnKind::Uint64,
+                         {0, std::numeric_limits<std::uint64_t>::max(),
+                          std::uint64_t{1} << 63, 42},
+                         {0, 1, 2, 3}, 4);
+    }
+
+    TEST_CASE("decimals round trip bit exact") {
+        const dstd::Vector<double> values = {
+            0.1, 12.5, 1e-7, 123456.789, -0.0, 1e300, 5e-324, 3.14159265358979};
+        dstd::Vector<std::uint64_t> bits;
+        for (const double v : values) bits.push_back(double_bits_of(v));
+        const auto column =
+            roundtrip_column(schemas::dft::agg::ColumnKind::Double, bits,
+                             {0, 1, 2, 3, 4, 5, 6, 7}, 8);
+        for (std::size_t k = 0; k < values.size(); ++k)
+            CHECK(double_bits_of(column.double_at(k)) == bits[k]);
+    }
+
+    TEST_CASE("values of mixed exponents round trip bit exact") {
+        const dstd::Vector<double> values = {0.1,   1,      1000, 0.001, 2.5,
+                                             1e-12, 1234.5, 7,    0.5,   1e12};
+        dstd::Vector<std::uint64_t> bits;
+        for (const double v : values) bits.push_back(double_bits_of(v));
+        roundtrip_column(schemas::dft::agg::ColumnKind::Double, bits,
+                         {0, 1, 2, 3, 4, 5, 6, 7, 8, 9}, 10);
+    }
+
+    TEST_CASE("NaN, its payload and the infinities round trip bit exact") {
+        const dstd::Vector<std::uint64_t> bits = {
+            0x7ff8000000000001ULL,
+            0xfff0000000000000ULL,
+            0x7ff0000000000000ULL,
+            double_bits_of(-1.5),
+        };
+        roundtrip_column(schemas::dft::agg::ColumnKind::Double, bits,
+                         {0, 1, 2, 3}, 4);
+    }
+
+    TEST_CASE("random doubles round trip bit exact") {
+        std::uint64_t state = 0x2545f4914f6cdd1dULL;
+        const auto next = [&state] {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            return state;
+        };
+        dstd::Vector<std::uint64_t> bits;
+        dstd::Vector<std::uint64_t> rows;
+        for (std::uint64_t k = 0; k < 300; ++k) {
+            const std::uint64_t exponent = next() % 0x7fe + 1;
+            const std::uint64_t mantissa = next() & 0x000fffffffffffffULL;
+            bits.push_back((next() & 1ULL ? 1ULL << 63 : 0) | (exponent << 52) |
+                           mantissa);
+            rows.push_back(k);
+        }
+        roundtrip_column(schemas::dft::agg::ColumnKind::Double, bits, rows,
+                         static_cast<std::size_t>(rows.size()));
+    }
+
+    TEST_CASE("a column of one row and a column with gaps round trip") {
+        roundtrip_column(schemas::dft::agg::ColumnKind::Int64,
+                         {static_cast<std::uint64_t>(std::int64_t{-3})}, {4},
+                         9);
+        roundtrip_column(
+            schemas::dft::agg::ColumnKind::Double,
+            {double_bits_of(0.25), double_bits_of(41.25), double_bits_of(8.5)},
+            {0, 5, 8}, 9);
+    }
+
+    TEST_CASE("a block with no column holds its core columns") {
+        auto block = core_block(7);
+        const auto got = encode_then_decode(block);
+        check_core_columns(block, got);
+        CHECK(got.columns.empty());
+    }
+
+    TEST_CASE("start times out of order round trip") {
+        // A tracer writes an event at its end, so starts go back in time; one
+        // start near the top makes a delta wrap.
+        auto block = core_block(6);
+        const std::uint64_t ends[] = {100, 110, 120, 130, 140, 150};
+        const std::uint64_t durs[] = {5, 40, 2, 0, 33, 1};
+        const std::uint8_t has[] = {1, 1, 1, 0, 1, 1};
+        for (std::size_t r = 0; r < 6; ++r) {
+            block.has_dur[r] = has[r];
+            block.dur[r] = durs[r];
+            block.ts[r] = ends[r] - durs[r];
+        }
+        check_core_columns(block, encode_then_decode(block));
+        block.ts[4] = std::numeric_limits<std::uint64_t>::max() - 10;
+        block.dur[4] = 20;
+        check_core_columns(block, encode_then_decode(block));
+    }
+
+    TEST_CASE("counters of interleaved names round trip and encode small") {
+        // One row per name per sample, as a sampler writes cpu-0, cpu-1, ...
+        constexpr std::size_t ROWS = 300;
+        const auto make = [](bool interleaved) {
+            auto block = core_block(ROWS);
+            dstd::Vector<std::uint64_t> rows;
+            dstd::Vector<std::uint64_t> pct;
+            dstd::Vector<std::uint64_t> bytes;
+            for (std::size_t r = 0; r < ROWS; ++r) {
+                const std::size_t name = r % 3;
+                const std::size_t sample = r / 3;
+                block.name[r] =
+                    interleaved ? static_cast<std::uint32_t>(name) : 0;
+                rows.push_back(r);
+                const double v = r == 151
+                                     ? 0.1 + 0.2
+                                     : 1000.0 * static_cast<double>(name + 1) +
+                                           0.25 * static_cast<double>(sample);
+                pct.push_back(double_bits_of(v));
+                bytes.push_back(static_cast<std::uint64_t>(
+                    std::int64_t{1000000000} *
+                        static_cast<std::int64_t>(name + 1) +
+                    static_cast<std::int64_t>(sample)));
+            }
+            block.columns.push_back(
+                column_of(1, schemas::dft::agg::ColumnKind::Double, rows, pct));
+            block.columns.push_back(column_of(
+                2, schemas::dft::agg::ColumnKind::Int64, rows, bytes));
+            return block;
+        };
+        const auto column_bytes =
+            [](const schemas::dft::agg::ChunkColumns& block) {
+                dstd::Vector<std::uint8_t> core;
+                dstd::Vector<std::uint8_t> all;
+                schemas::dft::agg::encode_chunk_columns(block, 0, core);
+                schemas::dft::agg::encode_chunk_columns(
+                    block, block.columns.size(), all);
+                return all.size() - core.size();
+            };
+        const auto interleaved = make(true);
+        const auto got = encode_then_decode(interleaved);
+        check_core_columns(interleaved, got);
+        REQUIRE(got.columns.size() == 2);
+        for (std::size_t c = 0; c < 2; ++c) {
+            CHECK(got.columns[c].rows == interleaved.columns[c].rows);
+            CHECK(got.columns[c].bits == interleaved.columns[c].bits);
+        }
+        CHECK(column_bytes(interleaved) * 2 < column_bytes(make(false)));
+    }
+
+    TEST_CASE("several columns of one path of different kinds round trip") {
+        auto block = core_block(4);
+        block.columns.push_back(
+            column_of(1, schemas::dft::agg::ColumnKind::Int64, {0, 2},
+                      {static_cast<std::uint64_t>(std::int64_t{-9}),
+                       static_cast<std::uint64_t>(std::int64_t{11})}));
+        block.columns.push_back(
+            column_of(1, schemas::dft::agg::ColumnKind::Double, {1, 3},
+                      {double_bits_of(0.5), double_bits_of(2.25)}));
+        block.columns.push_back(
+            column_of(2, schemas::dft::agg::ColumnKind::Uint64, {0, 1, 2, 3},
+                      {std::numeric_limits<std::uint64_t>::max(), 1, 2, 3}));
+        const auto got = encode_then_decode(block);
+        check_core_columns(block, got);
+        REQUIRE(got.columns.size() == 3);
+        for (std::size_t c = 0; c < got.columns.size(); ++c) {
+            CHECK(got.columns[c].path == block.columns[c].path);
+            CHECK(got.columns[c].kind == block.columns[c].kind);
+            CHECK(got.columns[c].rows == block.columns[c].rows);
+            CHECK(got.columns[c].bits == block.columns[c].bits);
+        }
+    }
+
+    TEST_CASE("a malformed block is rejected") {
+        auto block = core_block(3);
+        block.columns.push_back(
+            column_of(1, schemas::dft::agg::ColumnKind::Int64, {0, 1},
+                      {1, static_cast<std::uint64_t>(std::int64_t{-1})}));
+        dstd::Vector<std::uint8_t> bytes;
+        schemas::dft::agg::encode_chunk_columns(block, block.columns.size(),
+                                                bytes);
+        const auto truncate = [&](std::size_t size) {
+            auto got = schemas::dft::agg::decode_chunk_columns(
+                dstd::Span<const std::uint8_t>(bytes.data(), size));
+            CHECK_FALSE(got.has_value());
+        };
+        for (std::size_t size = 0; size < bytes.size(); ++size) truncate(size);
+        auto bad = bytes;
+        bad[0] = 99;
+        CHECK_FALSE(schemas::dft::agg::decode_chunk_columns(
+                        dstd::Span<const std::uint8_t>(bad.data(), bad.size()))
+                        .has_value());
+    }
+
+    TEST_CASE("a cat, name or host run above the block's ids is rejected") {
+        auto block = core_block(4);
+        block.columns.push_back(
+            column_of(1, schemas::dft::agg::ColumnKind::Int64, {0, 1},
+                      {1, static_cast<std::uint64_t>(std::int64_t{-1})}));
+        dstd::Vector<std::uint8_t> bytes;
+        schemas::dft::agg::encode_chunk_columns(block, block.columns.size(),
+                                                bytes);
+        const std::size_t ids = block.ids.size();
+        const dstd::Vector<std::uint8_t> values = {2, 3, 4, 0x7f, 0x80, 0xff};
+        std::size_t accepted = 0;
+        std::size_t rejected = 0;
+        for (std::size_t at = 0; at < bytes.size(); ++at) {
+            for (const std::uint8_t value : values) {
+                if (bytes[at] == value) continue;
+                auto patched = bytes;
+                patched[at] = value;
+                auto got = schemas::dft::agg::decode_chunk_columns(
+                    dstd::Span<const std::uint8_t>(patched.data(),
+                                                   patched.size()));
+                if (!got) {
+                    ++rejected;
+                    continue;
+                }
+                ++accepted;
+                for (std::size_t r = 0; r < got->rows; ++r) {
+                    REQUIRE_MESSAGE(got->cat[r] < ids, "cat of row ", r,
+                                    " from byte ", at, " set to ",
+                                    static_cast<int>(value));
+                    REQUIRE_MESSAGE(got->name[r] < ids, "name of row ", r,
+                                    " from byte ", at, " set to ",
+                                    static_cast<int>(value));
+                    REQUIRE_MESSAGE(got->host[r] < ids, "host of row ", r,
+                                    " from byte ", at, " set to ",
+                                    static_cast<int>(value));
+                }
+            }
+        }
+        CHECK(accepted > 0);
+        CHECK(rejected > 0);
+    }
+
+    TEST_CASE("an index stores every numeric field of the system counters") {
+        dftu_utils_test::TestEnvironment env(60);
+        REQUIRE(env.is_valid());
+        dstd::String text;
+        const dstd::String gz = write_trace(env.dir(), "trace", text);
+        const auto all = parse_trace(text);
+        const auto rows = system_counters(all);
+        REQUIRE(rows.size() > 0);
+        REQUIRE(rows.size() < all.size());
+        const dstd::String index_dir = env.dir() + "/idx";
+        build({gz}, index_dir);
+
+        const auto index_path =
+            dstd::String(trace::internal::determine_index_path(gz, index_dir));
+        const auto snapshot = open_index(index_path);
+        const auto file = file_of(snapshot, gz);
+        const auto decoded = read_and_check(snapshot, file, rows);
+        CHECK(decoded.blocks > 1);
+        CHECK(decoded.rows == rows.size());
+        const auto stored_members = trace::index::members(snapshot, file);
+        REQUIRE(stored_members.has_value());
+        CHECK(stored_members->size() >= decoded.blocks);
+    }
+
+    TEST_CASE("the file column names the file hash of a counter, or no file") {
+        dftu_utils_test::TestEnvironment env(60);
+        REQUIRE(env.is_valid());
+        dstd::String text;
+        text += "[\n";
+        for (int i = 0; i < RECORDS; ++i) {
+            text +=
+                common::str_cat(R"({"id":)", i, R"(,"name":"cpu","cat":"sys")",
+                                R"(,"pid":1,"tid":1,"ph":"C","ts":)",
+                                1000 + i * 7, R"(,"args":{"ret":)", i);
+            if (i % 3 != 0) text += R"(,"fhash":"0123456789abcdef")";
+            text += "}}\n";
+        }
+        text += "]\n";
+        const dstd::String body = text;
+        const dstd::String gz = write_gzip(env.dir(), "file_column", body);
+        const dstd::String index_dir = env.dir() + "/idx";
+        build({gz}, index_dir);
+
+        const auto index_path =
+            dstd::String(trace::internal::determine_index_path(gz, index_dir));
+        const auto snapshot = open_index(index_path);
+        const auto file = file_of(snapshot, gz);
+        const auto rows = parse_trace(body);
+        std::size_t at = 0;
+        std::size_t blocks = 0;
+        dstd::Set<dstd::String> texts;
+        std::uint64_t first_chunk = 0;
+        dstd::Vector<std::uint32_t> first_file;
+        dstd::Vector<dstd::String> first_texts;
+        const auto scanned = trace::index::for_each_agg_chunk_columns(
+            snapshot, file,
+            [&](std::uint64_t chunk,
+                const schemas::dft::agg::ChunkColumns& block) {
+                ++blocks;
+                if (blocks == 1) {
+                    first_chunk = chunk;
+                    first_file = block.file;
+                    first_texts = block.texts;
+                }
+                dstd::Set<std::uint32_t> ids;
+                for (std::size_t r = 0; r < block.rows; ++r) {
+                    REQUIRE(at + r < rows.size());
+                    REQUIRE(block.file[r] < block.texts.size());
+                    CHECK(block.texts[block.file[r]] ==
+                          rows[at + r].fhash.c_str());
+                    ids.insert(block.file[r]);
+                    texts.insert(dstd::String(block.texts[block.file[r]]));
+                }
+                CHECK(ids.size() == 2);
+                at += block.rows;
+                return true;
+            });
+        REQUIRE(scanned.has_value());
+        CHECK(blocks > 1);
+        CHECK(at == rows.size());
+        CHECK(texts.size() == 2);
+        CHECK(texts.count("0123456789abcdef") == 1);
+        CHECK(texts.count("") == 1);
+
+        auto one = trace::index::agg_chunk_columns(snapshot, file, first_chunk);
+        REQUIRE(one.has_value());
+        REQUIRE((*one).has_value());
+        CHECK((*one)->chunk == first_chunk);
+        CHECK((*one)->file == first_file);
+        CHECK((*one)->texts == first_texts);
+        auto absent = trace::index::agg_chunk_columns(snapshot, file, 1000);
+        REQUIRE(absent.has_value());
+        CHECK_FALSE((*absent).has_value());
+    }
+
+    TEST_CASE("merge_shard_set copies the column blocks") {
+        dftu_utils_test::TestEnvironment env(200);
+        REQUIRE(env.is_valid());
+        dstd::String text_a;
+        dstd::String text_b;
+        const dstd::String a = write_trace(env.dir(), "alpha", text_a);
+        const dstd::String b = write_trace(env.dir(), "beta", text_b);
+        const auto rows_a = system_counters(parse_trace(text_a));
+        const auto rows_b = system_counters(parse_trace(text_b));
+        const dstd::String ia =
+            dstd::String(trace::internal::determine_index_path(a, ""));
+        const dstd::String ib =
+            dstd::String(trace::internal::determine_index_path(b, ""));
+        build({a}, "");
+        build({b}, "");
+
+        dstd::Map<std::uint64_t, dstd::Vector<ColumnShape>> before_a;
+        dstd::Map<std::uint64_t, dstd::Vector<ColumnShape>> before_b;
+        {
+            const auto snapshot_a = open_index(ia);
+            before_a = columns_of(snapshot_a, file_of(snapshot_a, a));
+            const auto snapshot_b = open_index(ib);
+            before_b = columns_of(snapshot_b, file_of(snapshot_b, b));
+        }
+        REQUIRE_FALSE(before_a.empty());
+        REQUIRE_FALSE(before_b.empty());
+        for (const auto& [chunk, columns] : before_a)
+            CHECK_FALSE(columns.empty());
+
+        const dstd::String root = env.dir() + "/set";
+        REQUIRE(trace::views::write_shard_set(
+                    dstd::String(root), {dstd::String(ia), dstd::String(ib)})
+                    .has_value());
+        const dstd::String out = env.dir() + "/merged";
+        CHECK(dftu_utils_test::ok(trace::views::merge_shard_set(
+                  dstd::String(root), dstd::String(out))) == 2);
+
+        const dstd::String merged =
+            dstd::String(trace::internal::determine_index_path("x", out));
+        const auto snapshot = open_index(merged);
+        const auto file_a = file_of(snapshot, a);
+        const auto file_b = file_of(snapshot, b);
+        const auto decoded_a = read_and_check(snapshot, file_a, rows_a);
+        const auto decoded_b = read_and_check(snapshot, file_b, rows_b);
+        CHECK(decoded_a.blocks > 1);
+        CHECK(decoded_b.blocks > 1);
+        CHECK(columns_of(snapshot, file_a) == before_a);
+        CHECK(columns_of(snapshot, file_b) == before_b);
+    }
+
+    TEST_CASE("a record that repeats an arg key keeps its first value") {
+        dftu_utils_test::TestEnvironment env(60);
+        REQUIRE(env.is_valid());
+        const dstd::String text = repeated_key_trace();
+        const dstd::String gz = write_gzip(env.dir(), "repeat", text);
+        const dstd::String index_dir = env.dir() + "/idx";
+        build({gz}, index_dir);
+
+        const auto index_path =
+            dstd::String(trace::internal::determine_index_path(gz, index_dir));
+        const auto snapshot = open_index(index_path);
+        const auto file = file_of(snapshot, gz);
+        std::size_t at = 0;
+        std::size_t blocks = 0;
+        const auto scanned = trace::index::for_each_agg_chunk_columns(
+            snapshot, file,
+            [&](std::uint64_t chunk,
+                const schemas::dft::agg::ChunkColumns& block) {
+                ++blocks;
+                CHECK(block.chunk == chunk);
+                CHECK(block.rows > 0);
+                REQUIRE(at + block.rows <= RECORDS);
+                CHECK(values_of(block, "used",
+                                schemas::dft::agg::ColumnKind::Int64) ==
+                      first_values(block.rows, at, 10));
+                CHECK(values_of(block, "nested.CPP_APP",
+                                schemas::dft::agg::ColumnKind::Int64) ==
+                      first_values(block.rows, at, 100));
+                at += block.rows;
+                return true;
+            });
+        REQUIRE(scanned.has_value());
+        CHECK(blocks > 0);
+        CHECK(at == RECORDS);
+    }
+
+    TEST_CASE("a stored partial or block is its payload") {
+        dftu_utils_test::TestEnvironment env(60);
+        REQUIRE(env.is_valid());
+        dstd::String text;
+        const dstd::String gz = write_trace(env.dir(), "trace", text);
+        const dstd::String index_dir = env.dir() + "/idx";
+        build({gz}, index_dir);
+
+        const auto index_path =
+            dstd::String(trace::internal::determine_index_path(gz, index_dir));
+        std::size_t blocks = 0;
+        std::size_t partials = 0;
+        for (const auto& record : dftu_utils_test::dump_index(index_path)) {
+            constexpr dstd::StringView AGG = "dftu.idx.dftracer.agg";
+            if (record.name != AGG) continue;
+            REQUIRE_FALSE(record.key.empty());
+            const dstd::StringView value = record.value;
+            const auto kind = static_cast<std::uint8_t>(record.key[0]);
+            if (kind == trace::index::store::layout::agg_kind::COLUMNS) {
+                const auto decoded =
+                    schemas::dft::agg::decode_chunk_columns(span_of(value));
+                REQUIRE_MESSAGE(decoded.has_value(), record.key);
+                ++blocks;
+            } else if (kind == trace::index::store::layout::agg_kind::PARTIAL ||
+                       kind == trace::index::store::layout::agg_kind::
+                                   FILE_PARTIAL) {
+                REQUIRE(
+                    schemas::dft::agg::AggPartial::deserialize(span_of(value))
+                        .has_value());
+                ++partials;
+            } else {
+                CHECK_MESSAGE(
+                    kind == trace::index::store::layout::agg_kind::DICT,
+                    record.key);
+            }
+        }
+        CHECK(blocks > 0);
+        CHECK(partials > 0);
+    }
+}

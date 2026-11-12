@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 /* Example consumer plugin: each batch it consumes the producer's per-batch
  * value on the port named com.example.perbatch_dur and accumulates it, logging
  * a total at finalize. It names the port in `consumes`, so the host runs the
@@ -78,7 +79,8 @@ static const char* const* consumes(void* self) {
 
 static dftu_plugin g_plugin;
 
-DFTU_PLUGIN_EXPORT dftu_plugin* dftracer_plugin(dftu_plugin_host* h, const dftu_value* config) {
+DFTU_PLUGIN_EXPORT dftu_plugin* dftracer_plugin(dftu_plugin_host* h,
+                                                const dftu_value* config) {
     (void)h;
     (void)config;
     g_plugin.abi_version = DFTRACER_UTILS_PLUGIN_ABI_VERSION;

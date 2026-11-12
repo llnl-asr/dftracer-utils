@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The native one-pass conversions behind to_pandas, to_numpy and to_list:
 values, nulls and dtypes equal what pandas holds, for every width, with nulls
 at the byte edges of the validity bitmap, and repeated strings share objects."""

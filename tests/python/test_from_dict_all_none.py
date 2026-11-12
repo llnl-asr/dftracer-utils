@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """A list with no value imports as a string column of nulls
 (openspec change from-dict-all-none)."""
 

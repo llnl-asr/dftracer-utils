@@ -57,7 +57,7 @@ Overview
 ----------------------------
 
 A plugin is a shared library exporting one symbol, ``dftracer_plugin`` (the
-``DFTRACER_PLUGIN_FACTORY_SYMBOL`` the loader resolves via ``dlsym``). It
+``DFTRACER_UTILS_PLUGIN_FACTORY_SYMBOL`` the loader resolves via ``dlsym``). It
 receives the parsed config tree (NULL when none given) and returns a
 ``dftu_plugin``. The host then drives that plugin as a data-parallel fold:
 
@@ -262,7 +262,7 @@ exactness. Returning nothing scans everything.
       .. code-block:: bash
 
          dftracer_run --plugin ./p.so --parg duql='cat == "POSIX"' \
-                      --files trace.pfw.gz
+                      trace.pfw.gz
 
    .. tab-item:: C (raw ABI)
 
@@ -596,8 +596,8 @@ the registry is settled.
              void merge(Graph& other);
              dftu_dataframe* finalize();               // or a bytes result
              std::uint64_t bytes() const;              // optional: the budget measure
-             std::string serialize() const;            // optional pair: spill
-             static Graph* deserialize(std::string_view);
+             dstd::String serialize() const;           // optional pair: spill
+             static Graph* deserialize(dstd::StringView);
          };
 
          extern "C" dftu_plugin* dftracer_plugin(dftu_plugin_host* h,
@@ -841,8 +841,6 @@ A host utility is reached as a named op instead
 (``Host::run_op("dftu.hash.fnv1a", {column})``, ``DFTU_SVC_OPS``). Every
 ``dftu_svc_coro`` combinator has an SDK method (``spawn`` / ``then`` / ``all``
 / ``any`` / ``run_blocking``), so async composition needs no raw ABI.
-See :doc:`guides/plugins/compose-ops` for composing reusable typed ops inside a
-plugin.
 
 10. duql filters against events (DFTU_SVC_DUQL)
 -----------------------------------------------
@@ -963,7 +961,7 @@ output (``writer_create`` / ``writer_open`` / ``writer_chunk`` / ``writer_close`
       .. code-block:: cpp
 
          Task on_finalize(Host h) {
-             Writer w = h.writer("/tmp/out.pfw.gz", /*num_workers=*/4,
+             Writer w = h.writer("/tmp/out.pfw.gz", /*worker_count=*/4,
                                  /*gzip=*/true);
              if (!w) co_return;
              co_await w.open();
@@ -1026,12 +1024,12 @@ shared scan must stay wide enough for every branch):
 
 .. code-block:: cpp
 
-   using dftracer::utils::plugins::Plugins;
+   using dftracer::utils::domains::plugins::Plugins;
 
    auto set = Plugins::builder()
                   .add("./name_edges.so", R"({"duql": "cat == \"POSIX\""})")
                   .add("./dur_stats.so")
-                  .build();                      // Result<Plugins>: a bad path,
+                  .build();                      // dstd::Result<Plugins>: a bad path,
    if (!set) throw std::runtime_error(set.error().message);   // ABI or graph fault
    PluginRun run = co_await set->run(View::from_files(files));
    // NamedResult is a variant: bytes, OwnedArrow, OwnedDataFrame, OwnedLazyFrame.
@@ -1043,8 +1041,8 @@ result tables - read those through :class:`~dftracer.utils.plugins.Plugins`):
 
 .. code-block:: bash
 
-   dftracer_run --plugin ./name_edges.so --files trace.pfw.gz
-   dftracer_run --plugin ./a.so --plugin ./b.so -d ./traces      # one shared scan
+   dftracer_run --plugin ./name_edges.so trace.pfw.gz
+   dftracer_run --plugin ./a.so --plugin ./b.so ./traces      # one shared scan
 
 Use ``-d <directory>`` for a whole tree instead of ``--files``.
 
@@ -1071,7 +1069,7 @@ plugin never links the dataframe ABI to use the engine.
 
    static dftu_series* zscore(const dftu_series* v);   // series -> series
    static const dftu_op_desc ZSCORE = {"me.zscore",
-       DFTU_OP_SIG(SERIES, SERIES, NONE, NONE), (const void*)&zscore};
+       DFTU_OP_SIG(SERIES, SERIES, NONE, NONE), (dftu_op_generic_fn)&zscore};
    return plugin(h, config).op(ZSCORE).fold<MySlice>().build();
 
 **A source** (``DFTU_SVC_PROVIDERS``). A ``dftu_source_vt`` is the C mirror
@@ -1103,27 +1101,27 @@ throwing cursor surfaces as a scan error and a throwing hook as no change.
 
    class Range {                        // rows id = lo..hi-1
     public:
-       std::vector<std::string> names() const { return {"id"}; }
+       dstd::Vector<dstd::String> names() const { return {"id"}; }
        struct Cursor {
            pl::OwnedFrame frame;
-           std::optional<pl::OwnedFrame> next(std::int64_t) {
-               if (!frame) return std::nullopt;
+           dstd::Optional<pl::OwnedFrame> next(std::int64_t) {
+               if (!frame) return dstd::nullopt;
                return std::move(frame);
            }
        };
        pl::ScanResult<Cursor> scan(const pl::ScanView&) const;
        // `id > k` becomes a narrower range; anything else stays with the engine.
-       std::optional<pl::Applied<Range>> apply_filter(pl::ExprView p) const {
+       dstd::Optional<pl::Applied<Range>> apply_filter(pl::ExprView p) const {
            auto c = p.as_compare();
-           if (!c || c->column != 0 || c->op != DFTU_CMP_GT) return std::nullopt;
+           if (!c || c->column != 0 || c->op != DFTU_CMP_GT) return dstd::nullopt;
            return pl::Applied<Range>{
-               std::make_unique<Range>(c->rhs.value.i + 1, hi_)};
+               dstd::make_unique<Range>(c->rhs.value.i + 1, hi_)};
        }
        // ...
    };
 
    return pl::plugin(h, config)
-       .source<Range>("me.range", std::make_unique<Range>(0, 1000))
+       .source<Range>("me.range", dstd::make_unique<Range>(0, 1000))
        .build();
 
 **A plan node** (``DFTU_SVC_NODES``; ``dftu_node_register`` in the
@@ -1160,16 +1158,16 @@ node when ``open`` succeeds and by the host when it fails.
                           pl::SchemaBuilder& out) const { in.copy_all(out); }
        struct Cursor {
            pl::InputCursor in;
-           std::optional<pl::OwnedFrame> next(std::int64_t rows);  // pull, transform
+           dstd::Optional<pl::OwnedFrame> next(std::int64_t rows);  // pull, transform
        };
-       std::unique_ptr<Cursor> open(pl::InputCursor in, const pl::OpArgs&,
+       dstd::UniquePtr<Cursor> open(pl::InputCursor in, const pl::OpArgs&,
                                     std::uint64_t) const {
-           return std::make_unique<Cursor>(Cursor{std::move(in)});
+           return dstd::make_unique<Cursor>(Cursor{std::move(in)});
        }
    };
 
    return pl::plugin(h, config).node<Double>("me.double",
-                                             std::make_unique<Double>()).build();
+                                             dstd::make_unique<Double>()).build();
 
 **Plans inside a plugin.** ``OwnedLazyFrame`` (``result_registry.h``) is the
 fluent facade over ``dftu.lazy.*``: build a plan from a frame
@@ -1285,9 +1283,6 @@ that covers it:
    * - ``Host::io()`` (typed ``Io``)
      - ``DFTU_SVC_IO``
      - `9. Async work and I/O`_
-   * - typed compose ops (``dftracer::utils::plugins::make_op`` / ``run``)
-     - ``DFTU_SVC_COMPOSE``
-     - :doc:`guides/plugins/compose-ops`
    * - ``Host::duql_compile`` / ``duql_matches``
      - ``DFTU_SVC_DUQL``
      - `10. duql filters against events (DFTU_SVC_DUQL)`_
@@ -1341,7 +1336,7 @@ template against ``plugin.h``:
 
 ``dftracer_plugin build`` compiles a source straight to a loadable ``.so``,
 resolving the plugin include directory for you (bundled with an installed wheel,
-or walked up from a source checkout; override with the ``DFTRACER_PLUGIN_INCLUDE``
+or walked up from a source checkout; override with the ``DFTRACER_UTILS_PLUGIN_INCLUDE``
 environment variable):
 
 .. code-block:: bash

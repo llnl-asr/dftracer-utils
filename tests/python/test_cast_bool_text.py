@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Python's astype spells a bool as text the way Python and pandas do."""
 
 import numpy as np

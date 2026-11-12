@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """
 Guard the wheel payload: C++ development artifacts belong to `make install`.
 
@@ -29,11 +30,20 @@ FORBIDDEN_SUFFIXES = (".a",)
 REQUIRED_PATTERNS = (
     "dftracer/utils/__init__.py",
     "dftracer/utils/dftracer_utils_ext",
-    "dftracer/lib/libdftracer_utils_core",
-    "dftracer/lib/libdftracer_utils_utilities",
+    "dftracer/lib/libdftracer_utils_memory",
+    "dftracer/lib/libdftracer_utils_dstd",
+    "dftracer/lib/libdftracer_utils_common",
+    "dftracer/lib/libdftracer_utils_coro",
+    "dftracer/lib/libdftracer_utils_runtime",
+    "dftracer/lib/libdftracer_utils_store",
+    "dftracer/lib/libdftracer_utils_fileio",
+    "dftracer/lib/libdftracer_utils_json",
+    "dftracer/lib/libdftracer_utils_yaml",
+    "dftracer/lib/libdftracer_utils_duql",
+    "dftracer/lib/libdftracer_utils_dataframe",
+    "dftracer/lib/libdftracer_utils_trace",
+    "dftracer/lib/libdftracer_utils_domains",
     "dftracer/bin/dftracer_index",
-    "dftracer/bin/ldb",
-    "dftracer/bin/sst_dump",
     # Plugin headers a pip-installed wheel needs to compile JIT plugins and the
     # dftracer_plugin CLI scaffold: prims.h is included by jit-generated code,
     # plugin.h by the CLI scaffold, abi.h by both.
@@ -43,13 +53,13 @@ REQUIRED_PATTERNS = (
     # The whole include/dftracer/utils tree ships (not a hand-picked subset) so
     # any public C/C++ ABI header compiles standalone from the wheel: spot
     # check headers from directories that were NOT part of the old subset.
-    "dftracer/include/dftracer/utils/core/abi.h",
-    "dftracer/include/dftracer/utils/core/coro/abi.h",
+    "dftracer/include/dftracer/utils/common/abi.h",
+    "dftracer/include/dftracer/utils/store/abi.h",
+    "dftracer/include/dftracer/utils/coro/abi.h",
     "dftracer/include/dftracer/utils/dataframe/abi.h",
     "dftracer/include/dftracer/utils/duql/abi.h",
-    "dftracer/include/dftracer/utils/index/store/index_database.h",
-    "dftracer/include/dftracer/utils/index/indexer.h",
-    "dftracer/include/dftracer/utils/index/abi.h",
+    "dftracer/include/dftracer/utils/trace/index/indexer.h",
+    "dftracer/include/dftracer/utils/trace/index/abi.h",
 )
 
 # Index build internals stay private; Indexer (index/indexer.h) replaces them.
@@ -58,7 +68,6 @@ PRIVATE_HEADERS = (
     "index/build/batch_builder.h",
     "index/build/resolver.h",
     "index/store/shard_manifest.h",
-    "index/store/index_write.h",
     "index/store/layout.h",
     "index/schemas/dft/agg/aggregation_drain.h",
 )

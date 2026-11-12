@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """TraceViewer.agg accepts unified ``F`` aggregate expressions, additive to the
 legacy spec strings. Each ``F.<field>.<op>()`` matches its ``"op:field"`` string
 form, and the ``F.any`` wildcard maps to the numeric-args path."""

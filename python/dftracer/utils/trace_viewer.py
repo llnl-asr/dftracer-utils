@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """``TraceViewer``: a :class:`~dftracer.utils.LazyFrame` over trace files.
 
 A ``TraceViewer`` is a lazy plan whose source is a trace scan. Its trace
@@ -44,6 +45,7 @@ from .series import _wrap
 _S = TypeVar("_S", bound=RecordSchema)
 
 if TYPE_CHECKING:
+    from .enums import DType
     from .plugins import Plugins
     from .runtime import Runtime
 
@@ -301,7 +303,7 @@ class TraceViewer(LazyFrame):
         """Spill budget for the scan and the plan; bytes or a unit string."""
         return self._trace(self._tv.memory_budget(coerce_bytes(nbytes, "nbytes")))
 
-    def group_by(  # ty: ignore[invalid-method-override]
+    def group_by(  # ty: ignore[incompatible-method-override]
         self, *keys: "Union[str, Sequence[str]]"
     ) -> "TraceViewer":
         """Trace group keys: ``name``/``cat``/``pid``/``tid``/``fhash``/
@@ -313,7 +315,7 @@ class TraceViewer(LazyFrame):
             flat.extend([k] if isinstance(k, str) else k)
         return self._trace(self._tv.group_by(*flat))
 
-    def agg(self, *specs: Union[str, Agg]) -> "TraceViewer":  # ty: ignore[invalid-method-override]
+    def agg(self, *specs: Union[str, Agg]) -> "TraceViewer":  # ty: ignore[incompatible-method-override]
         """Trace aggregates: spec strings (``"count"``, ``"mean:dur"``,
         ``"p99:dur"``, ``"busy:dur"``) or bare-field ``Agg`` expressions
         (``F.dur.sum()``, ``F.dur.busy(resolution="1ms")``, ``F.any.mean()``)."""
@@ -361,6 +363,13 @@ class TraceViewer(LazyFrame):
         listed."""
         self._tv.columns()
         return LazyFrame.columns.fget(self)  # type: ignore[attr-defined]
+
+    @property
+    def schema(self) -> "Dict[str, DType]":
+        """Output column names and dtypes without running the plan; raises when
+        the files have no one record schema."""
+        self._tv.columns()
+        return LazyFrame.schema.fget(self)  # type: ignore[attr-defined]
 
     def column_info(self) -> Dict[str, str]:
         """Every column the index knows, mapped to its type name (``"int64"``
@@ -600,7 +609,7 @@ class TraceViewer(LazyFrame):
         """Write the materialized-view manifest at ``dir``."""
         self._tv.register_materialized(dir)
 
-    def stream(self, batch_size: int = 65536) -> "Iterator[DataFrame]":  # ty: ignore[invalid-method-override]
+    def stream(self, batch_size: int = 65536) -> "Iterator[DataFrame]":
         """The rows as :class:`DataFrame` chunks of about ``batch_size`` rows,
         holding a bounded amount in memory."""
         return LazyFrame.stream(self, batch_size)

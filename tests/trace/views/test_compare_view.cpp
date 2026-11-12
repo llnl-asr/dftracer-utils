@@ -1,26 +1,30 @@
+// SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/runtime.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
-#include <dftracer/utils/trace/comparator/compare_view.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/trace/views/compare_view.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
+#include <trace/views/test_view_common.h>
 
-#include <string>
-
-#include "test_view_common.h"
+using namespace dftracer::utils;
+using namespace dftracer::utils::trace::internal;
+using namespace dftracer::utils::trace::views;
+using namespace dftu_utils_test;
 
 using namespace test_view_common;
-namespace comparator = dftracer::utils::trace::comparator;
+using namespace dftracer::utils::trace;
 
 namespace {
 
-std::size_t col(const dataframe::DataFrame& b, const std::string& name) {
+std::size_t col(const dataframe::DataFrame& b, const dstd::String& name) {
     for (std::size_t i = 0; i < b.names.size(); ++i)
         if (b.names[i] == name) return i;
-    throw std::runtime_error("no column: " + name);
+    throw std::runtime_error(("no column: " + name).c_str());
 }
 
 // Row index whose group-key (column 0) string equals `cat`.
-std::int64_t row_of(const dataframe::DataFrame& b, const std::string& cat) {
+std::int64_t row_of(const dataframe::DataFrame& b, const dstd::String& cat) {
     for (std::int64_t i = 0; i < b.num_rows(); ++i)
         if (b.columns[0].string_at(i) == cat) return i;
     return -1;
@@ -37,24 +41,26 @@ TEST_SUITE("CompareView") {
         TestEnvironment var_env(200);
         REQUIRE(base_env.is_valid());
         REQUIRE(var_env.is_valid());
-        std::string base_gz = create_mixed_trace(base_env, 30, 20);
-        std::string var_gz = create_mixed_trace(var_env, 40, 20);
-        std::string base_idx = determine_index_path(base_gz, "");
-        std::string var_idx = determine_index_path(var_gz, "");
+        dstd::String base_gz = create_mixed_trace(base_env, 30, 20);
+        dstd::String var_gz = create_mixed_trace(var_env, 40, 20);
+        dstd::String base_idx = dstd::String(determine_index_path(base_gz, ""));
+        dstd::String var_idx = dstd::String(determine_index_path(var_gz, ""));
 
         dftracer::utils::Runtime rt;
         dataframe::DataFrame result;
-        rt.run_blocking("compare",
-                        [&](dftracer::utils::CoroScope&)
-                            -> dftracer::utils::coro::CoroTask<void> {
-                            auto view =
-                                comparator::CompareView::of(
-                                    View::from_file(base_gz, base_idx),
-                                    View::from_file(var_gz, var_idx))
+        dftu_utils_test::ok(rt.block_on(coro::named(
+            "compare",
+            coro::with_scope(
+                [&](coro::Scope&) -> dftracer::utils::coro::CoroTask<void> {
+                    auto view = trace::views::CompareView::of(
+                                    View::from_file(dstd::String(base_gz),
+                                                    dstd::String(base_idx)),
+                                    View::from_file(dstd::String(var_gz),
+                                                    dstd::String(var_idx)))
                                     .group_by({GroupKey::cat()})
                                     .agg({AggSpec(AggOp::Count, "", "count")});
-                            result = co_await view.collect();
-                        });
+                    result = dftu_utils_test::ok(co_await view.collect());
+                }))));
 
         REQUIRE(result.num_rows() == 2);  // posix, stdio
 

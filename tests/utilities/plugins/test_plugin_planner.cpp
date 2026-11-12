@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Planner level 1: the plugin set feeds the UNION of every plugin's plan_duql
 // into the scan's index prune. Covers the union-query construction (dedup, bail
 // on a no-query or unparseable plugin, single-vs-multi) and the end-to-end
@@ -5,37 +6,36 @@
 // plugin's result.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/runtime.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/domains/plugins/plugins_internal.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/function.h>
+#include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi.h>
-#include <dftracer/utils/plugins/plugins_internal.h>
+#include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <doctest/doctest.h>
+#include <memory/fresh_process.h>
+#include <task_result.h>
 #include <testing_utilities.h>
+#include <utilities/plugins/test_plugin_common.h>
 
 #include <atomic>
 #include <cstdint>
-#include <fstream>
-#include <string>
-#include <vector>
 
-#include "test_plugin_common.h"
+using namespace dftracer::utils;
 
-using dftracer::utils::CoroScope;
-using dftracer::utils::Runtime;
-using dftracer::utils::plugins::build_injected_plugins;
-using dftracer::utils::plugins::detail::plugin_union_prune_query;
 using View = dftracer::utils::trace::views::View;
 using ViewFile = dftracer::utils::trace::views::ViewFile;
 using ExportStats = dftracer::utils::trace::views::ExportStats;
-using test_plugin_common::index_trace;
-namespace coro = dftracer::utils::coro;
 
 namespace {
 
-std::vector<const char*> qs(std::vector<const char*> v) { return v; }
+dstd::Vector<const char*> qs(dstd::Vector<const char*> v) { return v; }
 
 // A plugin that counts the events its own filter keeps. on_batch sees events
 // already filtered by plan_duql, so its count is invariant to host pruning;
@@ -91,40 +91,40 @@ dftu_plugin make_count_plugin(CountState* st) {
 }
 
 // A single-category, single-name trace so a cat filter prunes the whole file.
-std::string make_homog_trace(dftu_utils_test::TestEnvironment& env,
-                             const std::string& tag, const char* name,
-                             const char* cat, int n) {
+dstd::String make_homog_trace(dftu_utils_test::TestEnvironment& env,
+                              const dstd::String& tag, const char* name,
+                              const char* cat, int n) {
     // Own subdir per trace: the index root is keyed off the parent directory,
     // so same-dir traces would share (and clobber) one index.
-    std::string dir = env.get_dir() + "/" + tag;
-    fs::create_directories(dir);
-    std::string pfw = dir + "/trace.pfw";
-    std::ofstream ofs(pfw);
+    dstd::String dir = env.dir() + "/" + tag;
+    REQUIRE(dstd::fs::create_directories(dir).has_value());
+    dstd::String pfw = dir + "/trace.pfw";
+    dstd::String ofs;
     for (int i = 0; i < n; ++i)
-        ofs << R"({"ph":"X","name":")" << name << R"(","cat":")" << cat
-            << R"(","pid":1,"tid":1,"ts":)" << (1000 + i * 100) << R"(,"dur":)"
-            << (10 + i) << R"(,"args":{}})" << "\n";
-    ofs.close();
-    std::string gz = pfw + ".gz";
+        ofs +=
+            common::str_cat(R"({"ph":"X","name":")", name, R"(","cat":")", cat,
+                            R"(","pid":1,"tid":1,"ts":)", (1000 + i * 100),
+                            R"(,"dur":)", (10 + i), R"(,"args":{}})", "\n");
+    dstd::fs::write_file(dstd::PathView(pfw), ofs).discard();
+    dstd::String gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
-    fs::remove(pfw);
+    dstd::fs::remove(pfw).discard();
     return gz;
 }
 
-ExportStats run_host(std::vector<dftu_plugin*> plugins,
-                     std::vector<ViewFile> files) {
-    auto set = build_injected_plugins(std::move(plugins));
+ExportStats run_host(dstd::Vector<dftu_plugin*> plugins,
+                     dstd::Vector<ViewFile> files) {
+    auto set = domains::plugins::build_injected_plugins(std::move(plugins));
     REQUIRE(set.has_value());
     View view = View::from_files(std::move(files));
     ExportStats stats;
     Runtime rt(4);
-    auto task = dftracer::utils::run_coro_scope(
-        rt.executor(), [&](CoroScope&) -> coro::CoroTask<void> {
-            auto run = co_await set->run(view);
-            if (run) stats = run->stats;
-            co_return;
-        });
-    rt.submit(std::move(task), "plugin-planner").wait();
+    auto task = coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+        auto run = co_await set->run(view);
+        if (run) stats = run->stats;
+        co_return;
+    });
+    dftu_utils_test::ok(rt.submit(std::move(task), "plugin-planner").wait());
     rt.shutdown();
     return stats;
 }
@@ -133,28 +133,30 @@ ExportStats run_host(std::vector<dftu_plugin*> plugins,
 
 TEST_SUITE("PluginPlannerUnion") {
     TEST_CASE("no plugins yields no prune") {
-        CHECK_FALSE(plugin_union_prune_query({}).has_value());
+        CHECK_FALSE(
+            domains::plugins::detail::plugin_union_prune_query({}).has_value());
     }
 
     TEST_CASE("a single query is the union verbatim") {
-        auto u = plugin_union_prune_query(qs({R"(cat == "STDIO")"}));
+        auto u = domains::plugins::detail::plugin_union_prune_query(
+            qs({R"(cat == "STDIO")"}));
         REQUIRE(u.has_value());
         CHECK(u->source() == R"(cat == "STDIO")");
     }
 
     TEST_CASE("distinct queries disjoin into a real OR") {
-        auto u = plugin_union_prune_query(
+        auto u = domains::plugins::detail::plugin_union_prune_query(
             qs({R"(cat == "STDIO")", R"(cat == "POSIX")"}));
         REQUIRE(u.has_value());
         // The parenthesized union must parse to a disjunction that keeps events
         // either side selects.
         CHECK(u->references("cat"));
         dftracer::utils::duql::ValueMap posix;
-        posix["cat"] = std::string("POSIX");
+        posix["cat"] = dstd::String("POSIX");
         dftracer::utils::duql::ValueMap stdio;
-        stdio["cat"] = std::string("STDIO");
+        stdio["cat"] = dstd::String("STDIO");
         dftracer::utils::duql::ValueMap other;
-        other["cat"] = std::string("OTHER");
+        other["cat"] = dstd::String("OTHER");
         CHECK(u->evaluate(posix));
         CHECK(u->evaluate(stdio));
         CHECK_FALSE(u->evaluate(other));
@@ -162,22 +164,25 @@ TEST_SUITE("PluginPlannerUnion") {
 
     TEST_CASE("identical queries collapse (no repeated term)") {
         const char* q = R"(cat == "STDIO")";
-        auto u = plugin_union_prune_query(qs({q, q, q}));
+        auto u =
+            domains::plugins::detail::plugin_union_prune_query(qs({q, q, q}));
         REQUIRE(u.has_value());
-        CHECK(u->source() == std::string(q));
+        CHECK(u->source() == dstd::String(q));
     }
 
     TEST_CASE("a plugin without a plan_duql disables the prune") {
-        CHECK_FALSE(plugin_union_prune_query(qs({R"(cat == "STDIO")", nullptr}))
+        CHECK_FALSE(domains::plugins::detail::plugin_union_prune_query(
+                        qs({R"(cat == "STDIO")", nullptr}))
                         .has_value());
-        CHECK_FALSE(plugin_union_prune_query(qs({R"(cat == "STDIO")", ""}))
+        CHECK_FALSE(domains::plugins::detail::plugin_union_prune_query(
+                        qs({R"(cat == "STDIO")", ""}))
                         .has_value());
     }
 
     TEST_CASE("an unparseable plan_duql disables the prune") {
-        CHECK_FALSE(
-            plugin_union_prune_query(qs({R"(cat == "STDIO")", "cat =="}))
-                .has_value());
+        CHECK_FALSE(domains::plugins::detail::plugin_union_prune_query(
+                        qs({R"(cat == "STDIO")", "cat =="}))
+                        .has_value());
     }
 }
 
@@ -189,11 +194,11 @@ TEST_SUITE("PluginPlannerScan") {
         dftu_utils_test::TestEnvironment env(0);
         REQUIRE(env.is_valid());
         const int N = 40;
-        ViewFile stdio =
-            index_trace(make_homog_trace(env, "stdio", "fwrite", "STDIO", N));
-        ViewFile posix =
-            index_trace(make_homog_trace(env, "posix", "read", "POSIX", N));
-        std::vector<ViewFile> files{stdio, posix};
+        ViewFile stdio = test_plugin_common::index_trace(
+            make_homog_trace(env, "stdio", "fwrite", "STDIO", N));
+        ViewFile posix = test_plugin_common::index_trace(
+            make_homog_trace(env, "posix", "read", "POSIX", N));
+        dstd::Vector<ViewFile> files{stdio, posix};
 
         const char* stdio_q = R"(cat == "STDIO")";
 
@@ -229,10 +234,13 @@ TEST_SUITE("PluginPlannerScan") {
         dftu_utils_test::TestEnvironment env(0);
         REQUIRE(env.is_valid());
         const int N = 200;
-        std::vector<ViewFile> files{
-            index_trace(make_homog_trace(env, "s1", "fwrite", "STDIO", N)),
-            index_trace(make_homog_trace(env, "p1", "read", "POSIX", N)),
-            index_trace(make_homog_trace(env, "p2", "write", "POSIX", N))};
+        dstd::Vector<ViewFile> files{
+            test_plugin_common::index_trace(
+                make_homog_trace(env, "s1", "fwrite", "STDIO", N)),
+            test_plugin_common::index_trace(
+                make_homog_trace(env, "p1", "read", "POSIX", N)),
+            test_plugin_common::index_trace(
+                make_homog_trace(env, "p2", "write", "POSIX", N))};
 
         CountState keeps_stdio{R"(cat == "STDIO")"};
         dftu_plugin a = make_count_plugin(&keeps_stdio);
@@ -257,17 +265,8 @@ TEST_SUITE("PluginPlannerScan") {
 // registered on it - so attach() never chunk-prunes the shared scan (run()
 // above is the only path that does).
 TEST_SUITE("PluginAttachHandle") {
-    using dftracer::utils::plugins::PluginRun;
-    using dftracer::utils::trace::views::AggOp;
-    using dftracer::utils::trace::views::AggSpec;
-    using dftracer::utils::trace::views::Deferred;
-    using dftracer::utils::trace::views::ExportStats;
-    using dftracer::utils::trace::views::GroupKey;
-    using dftracer::utils::trace::views::TraceSession;
-    using dftracer::utils::trace::views::ViewSession;
-
     static double col_sum(const dftracer::utils::dataframe::DataFrame& df,
-                          std::string_view name) {
+                          dstd::StringView name) {
         using T = dftracer::utils::dataframe::TypeId;
         auto s = df.column(name);
         double total = 0;
@@ -278,23 +277,33 @@ TEST_SUITE("PluginAttachHandle") {
         return total;
     }
 
-    TEST_CASE("reading the handle before execute() throws") {
+    TEST_CASE("reading the handle before execute() ends the process" *
+              doctest::skip()) {
+        fresh_process::announce_abort();
         dftu_utils_test::TestEnvironment env(0);
         REQUIRE(env.is_valid());
-        std::vector<ViewFile> files{
-            index_trace(make_homog_trace(env, "early", "read", "POSIX", 5))};
+        dstd::Vector<ViewFile> files{test_plugin_common::index_trace(
+            make_homog_trace(env, "early", "read", "POSIX", 5))};
         CountState st{nullptr};
         dftu_plugin p = make_count_plugin(&st);
-        auto set = build_injected_plugins({&p});
+        auto set = domains::plugins::build_injected_plugins({&p});
         REQUIRE(set.has_value());
 
         View base = View::from_files(files);
-        dftracer::utils::dataframe::LazyResult<PluginRun> plugin_result =
-            base.branch<PluginRun>(
-                [&](ViewSession& s) { return set->attach(s); });
-        TraceSession sess = base.session();
-        Deferred<PluginRun> h = sess.collect(plugin_result);
-        CHECK_THROWS_AS(static_cast<void>(h->results), std::logic_error);
+        dftracer::utils::dataframe::LazyResult<domains::plugins::PluginRun>
+            plugin_result = base.branch<domains::plugins::PluginRun>(
+                [&](trace::views::ViewSession& s) { return set->attach(s); });
+        trace::views::TraceSession sess = base.session();
+        trace::views::Deferred<domains::plugins::PluginRun> h =
+            sess.collect(plugin_result);
+        static_cast<void>(h->results);
+    }
+
+    TEST_CASE("reading the handle before execute() is fatal") {
+        auto result = fresh_process::run(
+            "reading the handle before execute() ends the process");
+        CHECK(result.aborted_with(
+            "ViewSession result read before execute() resolved it"));
     }
 
     // A sole plugin branch still resolves correctly through attach(); it just
@@ -305,21 +314,25 @@ TEST_SUITE("PluginAttachHandle") {
         dftu_utils_test::TestEnvironment env(0);
         REQUIRE(env.is_valid());
         const int N = 200;
-        std::vector<ViewFile> files{
-            index_trace(make_homog_trace(env, "solo1", "fwrite", "STDIO", N)),
-            index_trace(make_homog_trace(env, "solo2", "read", "POSIX", N)),
-            index_trace(make_homog_trace(env, "solo3", "write", "POSIX", N))};
+        dstd::Vector<ViewFile> files{
+            test_plugin_common::index_trace(
+                make_homog_trace(env, "solo1", "fwrite", "STDIO", N)),
+            test_plugin_common::index_trace(
+                make_homog_trace(env, "solo2", "read", "POSIX", N)),
+            test_plugin_common::index_trace(
+                make_homog_trace(env, "solo3", "write", "POSIX", N))};
 
         CountState st{R"(cat == "STDIO")"};
         dftu_plugin p = make_count_plugin(&st);
-        auto set = build_injected_plugins({&p});
+        auto set = domains::plugins::build_injected_plugins({&p});
         REQUIRE(set.has_value());
 
         View base = View::from_files(files);
         ExportStats scan{};
-        auto plugin_branch = [&](ViewSession& s) {
-            Deferred<PluginRun> h = set->attach(s);
-            return std::function<void(const ExportStats&)>(
+        auto plugin_branch = [&](trace::views::ViewSession& s) {
+            trace::views::Deferred<domains::plugins::PluginRun> h =
+                set->attach(s);
+            return dstd::Function<void(const ExportStats&)>(
                 [&, h](const ExportStats& stats) mutable {
                     h.get();
                     scan = stats;
@@ -328,12 +341,12 @@ TEST_SUITE("PluginAttachHandle") {
         dftracer::utils::dataframe::LazyFrame plan = base.branch(plugin_branch);
 
         Runtime rt(4);
-        auto task = dftracer::utils::run_coro_scope(
-            rt.executor(), [&](CoroScope&) -> coro::CoroTask<void> {
-                co_await plan.collect();
-                co_return;
-            });
-        rt.submit(std::move(task), "plugin-attach-solo").wait();
+        auto task = coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+            dftu_utils_test::ok(co_await plan.collect());
+            co_return;
+        });
+        dftu_utils_test::ok(
+            rt.submit(std::move(task), "plugin-attach-solo").wait());
         rt.shutdown();
 
         CHECK(st.total.load() == N);  // the plugin's own filter still applies
@@ -353,20 +366,23 @@ TEST_SUITE("PluginAttachHandle") {
         dftu_utils_test::TestEnvironment env(0);
         REQUIRE(env.is_valid());
         const int N = 50;
-        std::vector<ViewFile> files{
-            index_trace(make_homog_trace(env, "mix1", "fwrite", "STDIO", N)),
-            index_trace(make_homog_trace(env, "mix2", "read", "POSIX", N))};
+        dstd::Vector<ViewFile> files{
+            test_plugin_common::index_trace(
+                make_homog_trace(env, "mix1", "fwrite", "STDIO", N)),
+            test_plugin_common::index_trace(
+                make_homog_trace(env, "mix2", "read", "POSIX", N))};
 
         CountState st{R"(cat == "STDIO")"};  // the plugin only wants STDIO
         dftu_plugin p = make_count_plugin(&st);
-        auto set = build_injected_plugins({&p});
+        auto set = domains::plugins::build_injected_plugins({&p});
         REQUIRE(set.has_value());
 
         View base = View::from_files(files);
         ExportStats scan{};
-        auto plugin_branch = [&](ViewSession& s) {
-            Deferred<PluginRun> h = set->attach(s);
-            return std::function<void(const ExportStats&)>(
+        auto plugin_branch = [&](trace::views::ViewSession& s) {
+            trace::views::Deferred<domains::plugins::PluginRun> h =
+                set->attach(s);
+            return dstd::Function<void(const ExportStats&)>(
                 [&, h](const ExportStats& stats) mutable {
                     h.get();
                     scan = stats;
@@ -377,20 +393,21 @@ TEST_SUITE("PluginAttachHandle") {
         dftracer::utils::dataframe::LazyResult<
             dftracer::utils::dataframe::DataFrame>
             all_plan = base.branch<dftracer::utils::dataframe::DataFrame>(
-                [](ViewSession& s) {
-                    return s.collect({}, {{AggOp::Count, "", "n"}});
+                [](trace::views::ViewSession& s) {
+                    return s.collect({},
+                                     {{trace::views::AggOp::Count, "", "n"}});
                 });
 
         dftracer::utils::dataframe::DataFrame all;
         Runtime rt(4);
-        auto task = dftracer::utils::run_coro_scope(
-            rt.executor(), [&](CoroScope&) -> coro::CoroTask<void> {
-                all = std::get<1>(
-                    co_await dftracer::utils::dataframe::collect_all(
-                        plugin_plan, all_plan));
-                co_return;
-            });
-        rt.submit(std::move(task), "plugin-attach-coscan").wait();
+        auto task = coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+            all = std::get<1>(dftu_utils_test::ok(
+                co_await dftracer::utils::dataframe::collect_all(plugin_plan,
+                                                                 all_plan)));
+            co_return;
+        });
+        dftu_utils_test::ok(
+            rt.submit(std::move(task), "plugin-attach-coscan").wait());
         rt.shutdown();
 
         CHECK(st.total.load() == N);  // plugin's own filter is unaffected

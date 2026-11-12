@@ -1,26 +1,27 @@
+// SPDX-License-Identifier: MIT
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/json/json_escape.h>
+#include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view_definition.h>
 #include <simdjson.h>
 
 #include <cstdlib>
-#include <sstream>
-#include <string>
 
 namespace dftracer::utils::trace::views {
 
 using json::escape_json_string;
 
-ViewDefinition& ViewDefinition::with_name(const std::string& n) {
+ViewDefinition& ViewDefinition::with_name(const dstd::String& n) {
     name = n;
     return *this;
 }
 
-ViewDefinition& ViewDefinition::with_description(const std::string& d) {
+ViewDefinition& ViewDefinition::with_description(const dstd::String& d) {
     description = d;
     return *this;
 }
 
-ViewDefinition& ViewDefinition::with_query(const std::string& query_str) {
+ViewDefinition& ViewDefinition::with_query(const dstd::String& query_str) {
     if (!query_str.empty()) {
         auto result = Query::from_string(query_str);
         if (result) query = std::move(*result);
@@ -33,27 +34,34 @@ ViewDefinition& ViewDefinition::with_query(Query q) {
     return *this;
 }
 
-std::string ViewDefinition::to_json() const {
-    std::ostringstream out;
-    out << "{\n";
-    out << "  \"name\": \"" << escape_json_string(name) << "\",\n";
-    out << "  \"description\": \"" << escape_json_string(description) << "\"";
+dstd::String ViewDefinition::to_json() const {
+    dstd::String out;
+    out += "{\n";
+    out += "  \"name\": \"";
+    internal::append_value(out, escape_json_string(name));
+    out += "\",\n";
+    out += "  \"description\": \"";
+    internal::append_value(out, escape_json_string(description));
+    out += "\"";
 
     if (query) {
-        out << ",\n  \"duql\": \"" << escape_json_string(query->source())
-            << "\"";
+        out += ",\n  \"duql\": \"";
+        internal::append_value(out, escape_json_string(query->source()));
+        out += "\"";
     }
 
-    out << ",\n  \"all\": " << (metadata_records ? "true" : "false") << "\n";
-    out << "}";
-    return out.str();
+    out += ",\n  \"all\": ";
+    internal::append_value(out, (metadata_records ? "true" : "false"));
+    out += "\n";
+    out += "}";
+    return out;
 }
 
-ViewDefinition ViewDefinition::from_json(const std::string& json) {
+ViewDefinition ViewDefinition::from_json(const dstd::String& json) {
     ViewDefinition view_def;
 
     simdjson::dom::parser parser;
-    auto result = parser.parse(json);
+    auto result = parser.parse(json.data(), json.size());
     if (result.error()) {
         return view_def;
     }
@@ -65,26 +73,26 @@ ViewDefinition ViewDefinition::from_json(const std::string& json) {
 
     auto name_result = root["name"];
     if (!name_result.error() && name_result.value_unsafe().is_string()) {
-        view_def.name =
-            std::string(name_result.value_unsafe().get_string().value());
+        view_def.name = dstd::String(
+            name_result.value_unsafe().get_string().value_unsafe());
     }
 
     auto desc_result = root["description"];
     if (!desc_result.error() && desc_result.value_unsafe().is_string()) {
-        view_def.description =
-            std::string(desc_result.value_unsafe().get_string().value());
+        view_def.description = dstd::String(
+            desc_result.value_unsafe().get_string().value_unsafe());
     }
 
     auto query_result = root["duql"];
     if (!query_result.error() && query_result.value_unsafe().is_string()) {
-        view_def.with_query(
-            std::string(query_result.value_unsafe().get_string().value()));
+        view_def.with_query(dstd::String(
+            query_result.value_unsafe().get_string().value_unsafe()));
     }
 
     auto all_result = root["all"];
     if (!all_result.error() && all_result.value_unsafe().is_bool()) {
         view_def.metadata_records =
-            all_result.value_unsafe().get_bool().value();
+            all_result.value_unsafe().get_bool().value_unsafe();
         view_def.include_metadata = view_def.metadata_records;
     }
 

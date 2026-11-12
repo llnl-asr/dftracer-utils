@@ -1,14 +1,15 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_PYTHON_BATCH_BYTE_SIZE_H
 #define DFTRACER_UTILS_PYTHON_BATCH_BYTE_SIZE_H
 
-#include <dftracer/utils/core/common/config.h>
+#include <dftracer/utils/common/config.h>
 #include <dftracer/utils/python/memoryview_batch.h>
 #include <dftracer/utils/python/trace_reader_iterator.h>
 
 #include <cstddef>
 
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
-#include <dftracer/utils/utilities/common/arrow/arrow_export.h>
+#include <dftracer/utils/trace/arrow/arrow_export.h>
 #endif
 
 namespace dftracer::utils::python {
@@ -16,11 +17,6 @@ namespace dftracer::utils::python {
 inline std::size_t byte_size(const MemoryViewBatchData &b) {
     return b.buffer.capacity() + b.offsets.capacity() * sizeof(Py_ssize_t) +
            b.lengths.capacity() * sizeof(Py_ssize_t);
-}
-
-inline std::size_t byte_size(const JsonDictBatch &b) {
-    static constexpr std::size_t ESTIMATED_EVENT_BYTES = 512;
-    return b.events.capacity() * ESTIMATED_EVENT_BYTES;
 }
 
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
@@ -44,8 +40,8 @@ inline std::size_t arrow_array_byte_size(const ArrowArray *arr) {
 }
 
 inline std::size_t byte_size(
-    const dftracer::utils::utilities::common::arrow::ArrowExportResult &b) {
-    return arrow_array_byte_size(b.get_array());
+    const dftracer::utils::trace::arrow::ArrowExportResult &b) {
+    return arrow_array_byte_size(b.array());
 }
 
 #endif  // DFTRACER_UTILS_ENABLE_ARROW

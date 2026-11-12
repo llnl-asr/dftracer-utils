@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """iloc / loc / at / iat, set_index / reset_index, assignment through them and
 resample: the index is a column (or the row position), reads are engine row
 ops, writes rebuild the touched columns and rebind the handle (pandas 3

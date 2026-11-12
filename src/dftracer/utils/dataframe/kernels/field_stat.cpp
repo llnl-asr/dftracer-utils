@@ -1,4 +1,5 @@
-#include <dftracer/utils/core/common/logging.h>
+// SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dataframe/internal/column_read.h>
 #include <dftracer/utils/dataframe/internal/field_stat_simd.h>
 #include <dftracer/utils/dataframe/kernels/field_stat.h>
@@ -15,7 +16,6 @@
 HWY_BEFORE_NAMESPACE();
 namespace dftracer::utils::dataframe {
 namespace HWY_NAMESPACE {
-namespace hn = hwy::HWY_NAMESPACE;
 
 // Two passes over the chunk: sum, min and max first, then the central moments
 // about the mean just computed. The second pass also sums the deviations, so
@@ -23,20 +23,21 @@ namespace hn = hwy::HWY_NAMESPACE;
 // error of the mean itself. A raw power-sum pass cancels when the mean is large
 // next to the spread.
 FsRaw MomentsF64Impl(const double* x, std::size_t n) {
-    const hn::ScalableTag<double> d;
-    const std::size_t L = hn::Lanes(d);
-    auto vs = hn::Zero(d);
-    auto vmin = hn::Set(d, x[0]), vmax = hn::Set(d, x[0]);
+    const hwy::HWY_NAMESPACE::ScalableTag<double> d;
+    const std::size_t L = hwy::HWY_NAMESPACE::Lanes(d);
+    auto vs = hwy::HWY_NAMESPACE::Zero(d);
+    auto vmin = hwy::HWY_NAMESPACE::Set(d, x[0]),
+         vmax = hwy::HWY_NAMESPACE::Set(d, x[0]);
     std::size_t i = 0;
     for (; i + L <= n; i += L) {
-        const auto v = hn::LoadU(d, x + i);
-        vs = hn::Add(vs, v);
-        vmin = hn::Min(vmin, v);
-        vmax = hn::Max(vmax, v);
+        const auto v = hwy::HWY_NAMESPACE::LoadU(d, x + i);
+        vs = hwy::HWY_NAMESPACE::Add(vs, v);
+        vmin = hwy::HWY_NAMESPACE::Min(vmin, v);
+        vmax = hwy::HWY_NAMESPACE::Max(vmax, v);
     }
-    FsRaw r{hn::ReduceSum(d, vs),
-            hn::ReduceMin(d, vmin),
-            hn::ReduceMax(d, vmax),
+    FsRaw r{hwy::HWY_NAMESPACE::ReduceSum(d, vs),
+            hwy::HWY_NAMESPACE::ReduceMin(d, vmin),
+            hwy::HWY_NAMESPACE::ReduceMax(d, vmax),
             0,
             0,
             0,
@@ -52,19 +53,23 @@ FsRaw MomentsF64Impl(const double* x, std::size_t n) {
         if (v > r.max) r.max = v;
     }
     const double mean = r.sum / static_cast<double>(n);
-    const auto vm = hn::Set(d, mean);
-    auto v1 = hn::Zero(d), v2 = hn::Zero(d), v3 = hn::Zero(d), v4 = hn::Zero(d);
+    const auto vm = hwy::HWY_NAMESPACE::Set(d, mean);
+    auto v1 = hwy::HWY_NAMESPACE::Zero(d), v2 = hwy::HWY_NAMESPACE::Zero(d),
+         v3 = hwy::HWY_NAMESPACE::Zero(d), v4 = hwy::HWY_NAMESPACE::Zero(d);
     i = 0;
     for (; i + L <= n; i += L) {
-        const auto dv = hn::Sub(hn::LoadU(d, x + i), vm);
-        const auto dd = hn::Mul(dv, dv);
-        v1 = hn::Add(v1, dv);
-        v2 = hn::Add(v2, dd);
-        v3 = hn::Add(v3, hn::Mul(dd, dv));
-        v4 = hn::Add(v4, hn::Mul(dd, dd));
+        const auto dv =
+            hwy::HWY_NAMESPACE::Sub(hwy::HWY_NAMESPACE::LoadU(d, x + i), vm);
+        const auto dd = hwy::HWY_NAMESPACE::Mul(dv, dv);
+        v1 = hwy::HWY_NAMESPACE::Add(v1, dv);
+        v2 = hwy::HWY_NAMESPACE::Add(v2, dd);
+        v3 = hwy::HWY_NAMESPACE::Add(v3, hwy::HWY_NAMESPACE::Mul(dd, dv));
+        v4 = hwy::HWY_NAMESPACE::Add(v4, hwy::HWY_NAMESPACE::Mul(dd, dd));
     }
-    double s1 = hn::ReduceSum(d, v1), s2 = hn::ReduceSum(d, v2),
-           s3 = hn::ReduceSum(d, v3), s4 = hn::ReduceSum(d, v4);
+    double s1 = hwy::HWY_NAMESPACE::ReduceSum(d, v1),
+           s2 = hwy::HWY_NAMESPACE::ReduceSum(d, v2),
+           s3 = hwy::HWY_NAMESPACE::ReduceSum(d, v3),
+           s4 = hwy::HWY_NAMESPACE::ReduceSum(d, v4);
     for (; i < n; ++i) {
         const double dv = x[i] - mean, dd = dv * dv;
         s1 += dv;
@@ -85,36 +90,39 @@ FsRaw MomentsF64Impl(const double* x, std::size_t n) {
 }
 
 FsRaw MomentsI64Impl(const std::int64_t* x, std::size_t n) {
-    const hn::ScalableTag<double> df;
-    const hn::ScalableTag<std::int64_t> di;
-    const std::size_t L = hn::Lanes(df);  // == Lanes(di); both 64-bit lanes
-    auto vs = hn::Zero(df);
+    const hwy::HWY_NAMESPACE::ScalableTag<double> df;
+    const hwy::HWY_NAMESPACE::ScalableTag<std::int64_t> di;
+    const std::size_t L =
+        hwy::HWY_NAMESPACE::Lanes(df);  // == Lanes(di); both 64-bit lanes
+    auto vs = hwy::HWY_NAMESPACE::Zero(df);
     const double x0 = static_cast<double>(x[0]);
-    auto vmin = hn::Set(df, x0), vmax = hn::Set(df, x0);
-    auto es = hn::Zero(di);
-    auto emin = hn::Set(di, x[0]), emax = hn::Set(di, x[0]);
+    auto vmin = hwy::HWY_NAMESPACE::Set(df, x0),
+         vmax = hwy::HWY_NAMESPACE::Set(df, x0);
+    auto es = hwy::HWY_NAMESPACE::Zero(di);
+    auto emin = hwy::HWY_NAMESPACE::Set(di, x[0]),
+         emax = hwy::HWY_NAMESPACE::Set(di, x[0]);
     std::size_t i = 0;
     for (; i + L <= n; i += L) {
-        const auto vi = hn::LoadU(di, x + i);
-        es = hn::Add(es, vi);
-        emin = hn::Min(emin, vi);
-        emax = hn::Max(emax, vi);
-        const auto v = hn::ConvertTo(df, vi);
-        vs = hn::Add(vs, v);
-        vmin = hn::Min(vmin, v);
-        vmax = hn::Max(vmax, v);
+        const auto vi = hwy::HWY_NAMESPACE::LoadU(di, x + i);
+        es = hwy::HWY_NAMESPACE::Add(es, vi);
+        emin = hwy::HWY_NAMESPACE::Min(emin, vi);
+        emax = hwy::HWY_NAMESPACE::Max(emax, vi);
+        const auto v = hwy::HWY_NAMESPACE::ConvertTo(df, vi);
+        vs = hwy::HWY_NAMESPACE::Add(vs, v);
+        vmin = hwy::HWY_NAMESPACE::Min(vmin, v);
+        vmax = hwy::HWY_NAMESPACE::Max(vmax, v);
     }
-    FsRaw r{hn::ReduceSum(df, vs),
-            hn::ReduceMin(df, vmin),
-            hn::ReduceMax(df, vmax),
+    FsRaw r{hwy::HWY_NAMESPACE::ReduceSum(df, vs),
+            hwy::HWY_NAMESPACE::ReduceMin(df, vmin),
+            hwy::HWY_NAMESPACE::ReduceMax(df, vmax),
             0,
             0,
             0,
             0,
             0,
-            hn::ReduceSum(di, es),
-            hn::ReduceMin(di, emin),
-            hn::ReduceMax(di, emax)};
+            hwy::HWY_NAMESPACE::ReduceSum(di, es),
+            hwy::HWY_NAMESPACE::ReduceMin(di, emin),
+            hwy::HWY_NAMESPACE::ReduceMax(di, emax)};
     for (; i < n; ++i) {
         const std::int64_t xi = x[i];
         const double v = static_cast<double>(xi);
@@ -126,20 +134,25 @@ FsRaw MomentsI64Impl(const std::int64_t* x, std::size_t n) {
         if (xi > r.emax) r.emax = xi;
     }
     const double mean = r.sum / static_cast<double>(n);
-    const auto vm = hn::Set(df, mean);
-    auto v1 = hn::Zero(df), v2 = hn::Zero(df), v3 = hn::Zero(df),
-         v4 = hn::Zero(df);
+    const auto vm = hwy::HWY_NAMESPACE::Set(df, mean);
+    auto v1 = hwy::HWY_NAMESPACE::Zero(df), v2 = hwy::HWY_NAMESPACE::Zero(df),
+         v3 = hwy::HWY_NAMESPACE::Zero(df), v4 = hwy::HWY_NAMESPACE::Zero(df);
     i = 0;
     for (; i + L <= n; i += L) {
-        const auto dv = hn::Sub(hn::ConvertTo(df, hn::LoadU(di, x + i)), vm);
-        const auto dd = hn::Mul(dv, dv);
-        v1 = hn::Add(v1, dv);
-        v2 = hn::Add(v2, dd);
-        v3 = hn::Add(v3, hn::Mul(dd, dv));
-        v4 = hn::Add(v4, hn::Mul(dd, dd));
+        const auto dv = hwy::HWY_NAMESPACE::Sub(
+            hwy::HWY_NAMESPACE::ConvertTo(df,
+                                          hwy::HWY_NAMESPACE::LoadU(di, x + i)),
+            vm);
+        const auto dd = hwy::HWY_NAMESPACE::Mul(dv, dv);
+        v1 = hwy::HWY_NAMESPACE::Add(v1, dv);
+        v2 = hwy::HWY_NAMESPACE::Add(v2, dd);
+        v3 = hwy::HWY_NAMESPACE::Add(v3, hwy::HWY_NAMESPACE::Mul(dd, dv));
+        v4 = hwy::HWY_NAMESPACE::Add(v4, hwy::HWY_NAMESPACE::Mul(dd, dd));
     }
-    double s1 = hn::ReduceSum(df, v1), s2 = hn::ReduceSum(df, v2),
-           s3 = hn::ReduceSum(df, v3), s4 = hn::ReduceSum(df, v4);
+    double s1 = hwy::HWY_NAMESPACE::ReduceSum(df, v1),
+           s2 = hwy::HWY_NAMESPACE::ReduceSum(df, v2),
+           s3 = hwy::HWY_NAMESPACE::ReduceSum(df, v3),
+           s4 = hwy::HWY_NAMESPACE::ReduceSum(df, v4);
     for (; i < n; ++i) {
         const double dv = static_cast<double>(x[i]) - mean, dd = dv * dv;
         s1 += dv;
@@ -189,7 +202,7 @@ void scalar_reduce(FieldStat& fs, const Series& c, std::int64_t b,
                    std::int64_t e) {
     const TypeId t = c.type();
     if (!is_arithmetic_type(t) && !is_temporal_type(t)) {
-        DFTRACER_UTILS_LOG_ERROR("field_stat: no numeric value for type '%s'",
+        DFTRACER_UTILS_LOG_ERROR("field_stat: no numeric value for type '{}'",
                                  type_name(t));
         return;
     }

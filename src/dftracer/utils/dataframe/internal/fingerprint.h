@@ -1,20 +1,20 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_DATAFRAME_INTERNAL_FINGERPRINT_H
 #define DFTRACER_UTILS_DATAFRAME_INTERNAL_FINGERPRINT_H
 
-#include <dftracer/utils/core/common/hash/hash.h>
 #include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dstd/hash/hash.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
-#include <string>
-#include <string_view>
 #include <type_traits>
-#include <vector>
 
 namespace dftracer::utils::dataframe::detail {
 
-// Incremental FNV-1a (core/common/hash) over the fields a caller feeds in.
+// Incremental FNV-1a (dstd/hash) over the fields a caller feeds in.
 // Variable-length values are length prefixed so adjacent fields cannot alias.
 class Fingerprint {
    public:
@@ -22,7 +22,7 @@ class Fingerprint {
         const auto* b = static_cast<const unsigned char*>(p);
         for (std::size_t i = 0; i < n; ++i) {
             h_ ^= b[i];
-            h_ *= hash::FNV1A_PRIME;
+            h_ *= dstd::hash::FNV1A_PRIME;
         }
     }
 
@@ -34,21 +34,21 @@ class Fingerprint {
         bytes(buf, sizeof(T));
     }
 
-    void str(std::string_view s) noexcept {
+    void str(dstd::StringView s) noexcept {
         pod(static_cast<std::uint64_t>(s.size()));
         bytes(s.data(), s.size());
     }
 
-    void strs(const std::vector<std::string>& v) noexcept {
+    void strs(const dstd::Vector<dstd::String>& v) noexcept {
         pod(static_cast<std::uint64_t>(v.size()));
-        for (const std::string& s : v) str(s);
+        for (const dstd::String& s : v) str(s);
     }
 
     void scalar(const dftu_scalar& v) noexcept {
         pod(v.kind);
         if (v.kind == DFTU_SCALAR_TAG_STR)
-            str(v.value.s ? std::string_view(v.value.s, v.len)
-                          : std::string_view());
+            str(v.value.s ? dstd::StringView(v.value.s, v.len)
+                          : dstd::StringView());
         else
             pod(v.value.u);
     }
@@ -56,7 +56,7 @@ class Fingerprint {
     std::uint64_t value() const noexcept { return h_; }
 
    private:
-    std::uint64_t h_ = hash::FNV1A_OFFSET_BASIS;
+    std::uint64_t h_ = dstd::hash::FNV1A_OFFSET_BASIS;
 };
 
 }  // namespace dftracer::utils::dataframe::detail

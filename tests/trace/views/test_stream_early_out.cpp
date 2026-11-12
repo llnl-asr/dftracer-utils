@@ -1,13 +1,20 @@
+// SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/runtime.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
+#include <trace/views/test_view_common.h>
 
 #include <chrono>
 #include <memory>
-#include <string>
 #include <thread>
 
-#include "test_view_common.h"
+using namespace dftracer::utils;
+using namespace dftracer::utils::trace::internal;
+using namespace dftracer::utils::trace::views;
+using namespace dftu_utils_test;
 
 namespace {
 
@@ -16,11 +23,11 @@ namespace {
 // last strong reference dies with that coroutine's frame: the weak_ptr expiring
 // means the producer actually finished.
 struct ProducerSentinel {
-    std::shared_ptr<int> strong = std::make_shared<int>(0);
-    std::weak_ptr<int> weak = strong;
+    dstd::SharedPtr<int> strong = dstd::make_shared<int>(0);
+    dstd::WeakPtr<int> weak = strong;
 };
 
-bool wait_until_expired(const std::weak_ptr<int>& w) {
+bool wait_until_expired(const dstd::WeakPtr<int>& w) {
     for (int i = 0; i < 400 && !w.expired(); ++i)
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     return w.expired();
@@ -33,23 +40,27 @@ TEST_SUITE("View - streaming early-out") {
         TestEnvironment env(200);
         // Enough members that a whole-trace scan needs many units, and a byte
         // budget small enough that the producer must wait on the consumer.
-        std::string gz =
+        dstd::String gz =
             test_view_common::create_multimember_trace(env, 4000, 512);
-        std::string idx = determine_index_path(gz, "");
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         ProducerSentinel sentinel;
         {
-            View v = View::from_file(gz, idx).memory_budget(4096).cancel_when(
-                [keep = sentinel.strong] { return false; });
+            View v =
+                View::from_file(dstd::String(gz), dstd::String(idx))
+                    .memory_budget(4096)
+                    .cancel_when([keep = sentinel.strong] { return false; });
 
-            auto pulled =
+            auto pulled = dftu_utils_test::ok(
                 dftracer::utils::default_runtime()
                     .submit([](View vv) -> coro::CoroTask<std::int64_t> {
                         auto gen = vv.stream(64);
                         auto first = co_await gen.next();
-                        co_return first ? first->num_rows() : 0;
+                        co_return first
+                            ? dftu_utils_test::ok(std::move(*first)).num_rows()
+                            : 0;
                     }(v))
-                    .get();
+                    .get());
             CHECK(pulled > 0);
         }
         sentinel.strong.reset();
@@ -62,21 +73,22 @@ TEST_SUITE("View - streaming early-out") {
 
     TEST_CASE("a fully drained stream still returns every row") {
         TestEnvironment env(200);
-        std::string gz =
+        dstd::String gz =
             test_view_common::create_multimember_trace(env, 500, 512);
-        std::string idx = determine_index_path(gz, "");
-        View v = View::from_file(gz, idx).memory_budget(4096);
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
+        View v = View::from_file(dstd::String(gz), dstd::String(idx))
+                     .memory_budget(4096);
 
-        const std::int64_t rows =
+        const std::int64_t rows = dftu_utils_test::ok(
             dftracer::utils::default_runtime()
                 .submit([](View vv) -> coro::CoroTask<std::int64_t> {
                     std::int64_t n = 0;
                     auto gen = vv.stream(64);
                     while (auto chunk = co_await gen.next())
-                        n += chunk->num_rows();
+                        n += dftu_utils_test::ok(std::move(*chunk)).num_rows();
                     co_return n;
                 }(v))
-                .get();
+                .get());
         CHECK(rows == 500);
     }
 }

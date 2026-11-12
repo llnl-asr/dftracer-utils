@@ -1,19 +1,20 @@
+// SPDX-License-Identifier: MIT
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/frame_native.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/python/series_detail.h>
 
 #include <cstdint>
 #include <exception>
-#include <string>
 #include <utility>
 
 namespace dftracer::utils::python::series_detail {
 
 namespace {
 
-std::size_t buffer_size(const std::shared_ptr<dataframe::Buffer>& b) {
-    return b ? b->size() : 0;
+std::size_t buffer_size(const dataframe::BufferView& b) {
+    return b.block() ? b.size() : 0;
 }
 
 std::size_t nbytes_of(const dftu_series& c) {
@@ -33,8 +34,8 @@ Series flat_copy(const Series& s) {
 }  // namespace
 
 Series retype_series(const Series& s, TypeId type, dataframe::TimeUnit unit,
-                     const std::string& zone, int precision, int scale,
-                     int width) {
+                     const dftracer::utils::dstd::String& zone, int precision,
+                     int scale, int width) {
     Series flat = flat_copy(s);
     const auto from_width = dataframe::byte_width(flat.type());
     const auto to_width = dataframe::byte_width(type, width);
@@ -126,9 +127,13 @@ PyObject* Series_to_bytes(PyObject* self, PyObject*) {
         dataframe::DataFrame f;
         f.names.emplace_back("v");
         f.columns.push_back(a->share());
-        const std::string bytes = dataframe::frame_to_native(f);
-        return PyBytes_FromStringAndSize(bytes.data(),
-                                         static_cast<Py_ssize_t>(bytes.size()));
+        const auto bytes = dataframe::frame_to_native(f);
+        if (!bytes) {
+            PyErr_SetString(PyExc_TypeError, bytes.error().c_str());
+            return nullptr;
+        }
+        return PyBytes_FromStringAndSize(
+            bytes->data(), static_cast<Py_ssize_t>(bytes->size()));
     } catch (const std::exception& e) {
         PyErr_SetString(PyExc_TypeError, e.what());
         return nullptr;
@@ -153,8 +158,8 @@ PyObject* series_from_bytes(PyObject*, PyObject* obj) {
     Py_buffer view;
     if (PyObject_GetBuffer(obj, &view, PyBUF_SIMPLE) < 0) return nullptr;
     auto f = dataframe::frame_from_native(
-        std::string_view(static_cast<const char*>(view.buf),
-                         static_cast<std::size_t>(view.len)));
+        dftracer::utils::dstd::StringView(static_cast<const char*>(view.buf),
+                                          static_cast<std::size_t>(view.len)));
     PyBuffer_Release(&view);
     if (!f || f->columns.size() != 1) {
         PyErr_SetString(PyExc_ValueError,

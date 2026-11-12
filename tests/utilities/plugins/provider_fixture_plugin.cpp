@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 /* Test-only plugin exercising rung 2 of the plugin ladder: a plugin
  * registering itself as a named LazyFrame source (dftu.svc.providers@0)
  * rather than only consuming rows.
@@ -24,20 +25,21 @@
  * time (dlopen on an already-resident path returns the same image).
  */
 
-#include <dftracer/utils/core/coro/task.h>
-#include <dftracer/utils/core/coro/task_abi.h>
+#include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/coro/task_abi.h>
 #include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <dftracer/utils/plugins/plugin.h>
 
 #include <atomic>
 #include <cstdint>
 #include <cstring>
-#include <memory>
-#include <optional>
-#include <string>
-#include <vector>
 
+using namespace dftracer::utils;
 namespace {
 
 std::atomic<int> g_rows_source_destroy{0};
@@ -103,7 +105,8 @@ void rows_cursor_destroy(void* self) {
     g_rows_cursor_destroy.fetch_add(1);
 }
 
-const ::dftu_cursor_vt ROWS_CURSOR_VT = {rows_next, rows_cursor_destroy};
+const ::dftu_cursor_vt ROWS_CURSOR_VT = {.next = rows_next,
+                                         .destroy = rows_cursor_destroy};
 
 void* rows_scan(void*, const ::dftu_scan_request*, int32_t*,
                 void** out_cursor_self, const ::dftu_cursor_vt** out_vt) {
@@ -115,8 +118,8 @@ void* rows_scan(void*, const ::dftu_scan_request*, int32_t*,
 
 void rows_source_destroy(void*) { g_rows_source_destroy.fetch_add(1); }
 
-const ::dftu_source_vt ROWS_SOURCE_VT = {rows_schema, rows_scan,
-                                         rows_source_destroy};
+const ::dftu_source_vt ROWS_SOURCE_VT = {
+    .schema = rows_schema, .scan = rows_scan, .destroy = rows_source_destroy};
 
 /* ---- provider_fixture.failing: next() fails on the first call ---- */
 
@@ -135,8 +138,8 @@ dftu_task* failing_next(void*, int64_t, ::dftu_result_frame* out) {
 
 void failing_cursor_destroy(void*) { g_failing_cursor_destroy.fetch_add(1); }
 
-const ::dftu_cursor_vt FAILING_CURSOR_VT = {failing_next,
-                                            failing_cursor_destroy};
+const ::dftu_cursor_vt FAILING_CURSOR_VT = {.next = failing_next,
+                                            .destroy = failing_cursor_destroy};
 
 void* failing_scan(void*, const ::dftu_scan_request*, int32_t*,
                    void** out_cursor_self, const ::dftu_cursor_vt** out_vt) {
@@ -148,8 +151,9 @@ void* failing_scan(void*, const ::dftu_scan_request*, int32_t*,
 
 void failing_source_destroy(void*) {}
 
-const ::dftu_source_vt FAILING_SOURCE_VT = {failing_schema, failing_scan,
-                                            failing_source_destroy};
+const ::dftu_source_vt FAILING_SOURCE_VT = {.schema = failing_schema,
+                                            .scan = failing_scan,
+                                            .destroy = failing_source_destroy};
 
 /* ---- fold side: never exercised (the test never calls Plugins::run) ---- */
 
@@ -168,14 +172,14 @@ class SdkRange {
     SdkRange(const SdkRange&) = delete;
     ~SdkRange() { --g_sdk_alive; }
 
-    std::vector<std::string> names() const { return {"id", "val"}; }
+    dstd::Vector<dstd::String> names() const { return {"id", "val"}; }
 
     class Cursor {
        public:
         explicit Cursor(dftracer::utils::plugins::OwnedFrame f)
             : f_(std::move(f)) {}
-        std::optional<dftracer::utils::plugins::OwnedFrame> next(int64_t) {
-            if (!f_) return std::nullopt;
+        dstd::Optional<dftracer::utils::plugins::OwnedFrame> next(int64_t) {
+            if (!f_) return dstd::nullopt;
             return std::move(f_);
         }
 
@@ -185,26 +189,26 @@ class SdkRange {
 
     dftracer::utils::plugins::ScanResult<Cursor> scan(
         const dftracer::utils::plugins::ScanView&) const {
-        std::vector<int64_t> ids, vals;
+        dstd::Vector<int64_t> ids, vals;
         for (int64_t i = lo_; i < hi_; ++i) {
             ids.push_back(i);
             vals.push_back(i * 10);
         }
-        return {std::make_unique<Cursor>(dftracer::utils::plugins::OwnedFrame(
+        return {dstd::make_unique<Cursor>(dftracer::utils::plugins::OwnedFrame(
                     make_rows_frame(ids.data(), vals.data(),
                                     static_cast<int64_t>(ids.size())))),
                 {}};
     }
 
-    std::optional<dftracer::utils::plugins::Applied<SdkRange>> apply_filter(
+    dstd::Optional<dftracer::utils::plugins::Applied<SdkRange>> apply_filter(
         dftracer::utils::plugins::ExprView pred) const {
         auto cmp = pred.as_compare();
         if (!cmp || cmp->column != 0 || cmp->op != DFTU_CMP_GT ||
             cmp->rhs.kind != DFTU_SCALAR_TAG_I64 || cmp->rhs.value.i + 1 <= lo_)
-            return std::nullopt;
+            return dstd::nullopt;
         ++g_sdk_filters;
         return dftracer::utils::plugins::Applied<SdkRange>{
-            std::make_unique<SdkRange>(cmp->rhs.value.i + 1, hi_)};
+            dstd::make_unique<SdkRange>(cmp->rhs.value.i + 1, hi_)};
     }
 
    private:
@@ -224,16 +228,16 @@ class DoubleVal {
        public:
         explicit Cursor(dftracer::utils::plugins::InputCursor in)
             : in_(std::move(in)) {}
-        std::optional<dftracer::utils::plugins::OwnedFrame> next(
+        dstd::Optional<dftracer::utils::plugins::OwnedFrame> next(
             int64_t max_rows) {
             auto f = in_.next(max_rows);
-            if (!f) return std::nullopt;
+            if (!f) return dstd::nullopt;
             ::dftu_series* id = ::dftu_dataframe_column(f->get(), "id");
             ::dftu_series* val = ::dftu_dataframe_column(f->get(), "val");
             const int64_t n = ::dftu_series_length(val);
             const auto* v =
                 static_cast<const int64_t*>(::dftu_series_data(val));
-            std::vector<int64_t> doubled(v, v + n);
+            dstd::Vector<int64_t> doubled(v, v + n);
             for (int64_t& x : doubled) x *= 2;
             ::dftu_series* cols[] = {
                 id, ::dftu_series_new_flat(DFTU_TYPE_INT64, doubled.data(), n,
@@ -247,10 +251,10 @@ class DoubleVal {
         dftracer::utils::plugins::InputCursor in_;
     };
 
-    std::unique_ptr<Cursor> open(dftracer::utils::plugins::InputCursor in,
+    dstd::UniquePtr<Cursor> open(dftracer::utils::plugins::InputCursor in,
                                  const dftracer::utils::plugins::OpArgs&,
                                  std::uint64_t) const {
-        return std::make_unique<Cursor>(std::move(in));
+        return dstd::make_unique<Cursor>(std::move(in));
     }
 };
 
@@ -261,6 +265,16 @@ void destroy(void*) {}
 dftu_plugin g_plugin;
 
 }  // namespace
+
+extern "C" {
+DFTU_PLUGIN_EXPORT int provider_fixture_gate_ok(void);
+DFTU_PLUGIN_EXPORT int provider_fixture_source_destroy_count(void);
+DFTU_PLUGIN_EXPORT int provider_fixture_cursor_destroy_count(void);
+DFTU_PLUGIN_EXPORT int provider_fixture_failing_next_calls(void);
+DFTU_PLUGIN_EXPORT int provider_fixture_failing_cursor_destroy_count(void);
+DFTU_PLUGIN_EXPORT int provider_fixture_sdk_alive(void);
+DFTU_PLUGIN_EXPORT int provider_fixture_sdk_filters(void);
+}
 
 extern "C" {
 
@@ -316,9 +330,9 @@ DFTU_PLUGIN_EXPORT dftu_plugin* dftracer_plugin(dftu_plugin_host* h,
 
     dftracer::utils::plugins::plugin(h, nullptr)
         .source<SdkRange>("provider_fixture.sdk",
-                          std::make_unique<SdkRange>(0, 10))
+                          dstd::make_unique<SdkRange>(0, 10))
         .node<DoubleVal>("provider_fixture.double",
-                         std::make_unique<DoubleVal>());
+                         dstd::make_unique<DoubleVal>());
 
     std::memset(&g_plugin, 0, sizeof(g_plugin));
     g_plugin.abi_version = DFTRACER_UTILS_PLUGIN_ABI_VERSION;

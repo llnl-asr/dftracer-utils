@@ -4,14 +4,14 @@ Coroutine caveats
 =================
 
 The async core of dftracer-utils is built on C++20 coroutines: ``CoroTask``,
-channels, ``when_all`` / ``when_any``, and the ``CoroScope`` runtime. Coroutines
-are what make the pipeline, the task graph, and the plugin engine read like
+channels, ``when_all`` / ``when_any``, and the ``coro::Scope`` runtime. Coroutines
+are what make the runtime and the plugin engine read like
 straight-line code while running concurrently. They also come with lifetime
 rules and compiler bugs that are easy to trip over and hard to debug, because
 the failures are silent memory corruption rather than clean errors.
 
 This page explains those traps and the patterns the codebase uses to avoid them.
-It is written for anyone about to touch the ``core/coro`` code, or wondering why
+It is written for anyone about to touch the ``coro`` code, or wondering why
 some of it looks the way it does.
 
 Why some of this code looks unusual
@@ -102,7 +102,7 @@ coroutine:
    }
 
    // The spawned lambda is trivial: it only forwards.
-   scope.spawn([params](CoroScope&) -> CoroTask<void> {
+   scope.spawn([params]() -> CoroTask<void> {
        co_await process_group(params);
    });
 
@@ -140,6 +140,33 @@ worst spots, collapsing a chain of nested helper coroutines into a single
 pipeline coroutine (with one minimal public entry point that just moves its
 arguments and returns) was the fix. Which approach wins is code-dependent; the
 guiding metric is *fewer live non-trivial locals across suspension points.*
+
+Lambda temporaries in a co_await
+--------------------------------
+
+GCC 12.1 destroys a lambda temporary twice when the lambda captures by value and
+is written inside a ``co_await`` expression. The captures are freed early, then
+freed again, which shows as a heap-use-after-free in ASan and as invalid reads in
+Valgrind. GCC 13 does not do this. A prvalue object, a named object and a named
+lambda are each destroyed once.
+
+So a lambda inside a ``co_await`` expression may capture only ``&``, ``&name`` or
+``this``. Any other capture goes into a named lambda that is awaited after it:
+
+.. code-block:: cpp
+
+   // Wrong: the by-value capture is destroyed twice on GCC 12.1.
+   co_await coro::with_scope([files](coro::Scope& scope) -> CoroTask<void> { ... });
+
+   // Right: the lambda is a named local.
+   auto run_scope = [files](coro::Scope& scope) -> CoroTask<void> { ... };
+   co_await coro::with_scope(run_scope);
+
+The bodies of lambdas inside the expression are not part of it, and a
+``co_await`` in such a body is checked as its own expression. The ``coro_lambdas``
+ctest (``cmake/scripts/check_coro_lambdas.cmake``) fails on every violation under
+``src/`` and ``include/``, and ``coro_lambdas_self`` checks the check against
+the cases in ``tests/cmake/coro_lambdas/``.
 
 Symmetric transfer and the stack
 --------------------------------
@@ -183,6 +210,34 @@ that span suspend points, bookkeeping). The Heap Allocation eLision Optimization
 - it needs the ramp function inlined, the same translation unit, and bounded
 wrapper code. Treat a coroutine call as an allocation in hot paths, which is
 another reason the code prefers a few larger coroutines over many tiny ones.
+
+Frames of ``CoroTask``, ``AsyncGenerator`` and the ``when_all`` wrapper come
+from the page heap. A frame is counted in the memory pool that is
+current at the call that creates the coroutine, the task's pool, and goes
+back to that pool when the frame is destroyed. A frame is freed, not recycled,
+so AddressSanitizer and Valgrind see a use of a destroyed frame.
+
+With ``DFTRACER_UTILS_MEMORY_DEBUG=1``, a destroyed frame is filled with a
+poison pattern and its memory is not given to any other allocation until the
+task's pool closes or the process exits. Resuming a destroyed frame, or
+reading through it, then finds the pattern and crashes at the cause instead
+of running on stale bytes. The pool counts the retained frame until then, and
+the debug mode holds at most 16 Mi retained frames.
+
+Join and cancel rules
+---------------------
+
+Two rules keep a child coroutine from outliving the frame that it points into:
+
+#. **A scope is joined.** A ``coro::Scope`` that spawned and is destroyed
+   without ``co_await scope.join()`` calls ``std::terminate``.
+   ``coro::with_scope`` joins also when its body raises, so use it in code that
+   can raise between a spawn and the join.
+   A scope that lives across many calls (such as the gzip line writer's) is a member of its owner, and the owner joins it before it closes.
+#. **``when_any`` waits for its losers.** It cancels the losers and awaits them
+   before it returns, so no loser outlives the parent. The cancel token is
+   cooperative: ``when_any`` returns as late as the slowest loser takes to see
+   the token, so a loser checks the token at each ``co_await`` it has.
 
 Practical rules for this codebase
 ---------------------------------
@@ -234,7 +289,7 @@ The mitigations above come from hard-won community experience. The most useful
 starting points:
 
 - Seastar, `Lambda Coroutine Fiasco <https://github.com/scylladb/seastar/blob/master/doc/lambda-coroutine-fiasco.md>`_
-- Arthur O'Dwyer, `ways to get dangling references with coroutines <https://quuxplusone.github.io/blog/2019/07/10/ways-to-get-dangling-references-with-coroutines/>`_
+- Arthur O'Dwyer, `C++2a Coroutines and dangling references <https://quuxplusone.github.io/blog/2019/07/10/ways-to-get-dangling-references-with-coroutines/>`_
 - Lewis Baker, `Understanding Symmetric Transfer <https://lewissbaker.github.io/2020/05/11/understanding_symmetric_transfer>`_
 - CppCon 2023, Francesco Zoffoli, `Problems and Solutions Using Coroutines in a Modern Codebase <https://isocpp.org/blog/2023/09/cppcon-2023-problems-and-solutions-using-coroutines-in-a-modern-codebase-fr>`_
 - CppCoreGuidelines `CP.51 <https://isocpp.github.io/CppCoreGuidelines/CppCoreGuidelines#rcoro-capture>`_ / `CP.52 <https://isocpp.github.io/CppCoreGuidelines/CppCoreGuidelines#rcoro-locks>`_ / `CP.53 <https://isocpp.github.io/CppCoreGuidelines/CppCoreGuidelines#rcoro-reference-parameters>`_

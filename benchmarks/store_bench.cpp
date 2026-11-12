@@ -1,0 +1,2395 @@
+// SPDX-License-Identifier: MIT
+// Measures the index store writer and reader, as the indexer uses them, over
+// one payload, key and value set and one thread list: write GB/s at 1, 16 and
+// 96 threads with one shared file against one file per thread, the writes and
+// syncs of the write path by kind, the bytes on disk and the on-disk
+// amplification of the write, the cost of a commit as the number of scopes
+// grows, the read path (open, point get, scope scan and full scan) on the data
+// the shared write case left behind, and a fold scan over many scopes, the way
+// an index query sums per-file aggregates over every file of a trace set, and
+// an index that grows by many publishes to a shared namespace.
+//
+//   store_bench --smoke
+//
+//   store_bench --dir /scratch --case all --threads 1,16,96 --payload-mib 256
+//
+//   store_bench --dir /private/tmp --case query --gets 100000
+//
+//   store_bench --dir /private/tmp --case fold --fold-scopes 1000,8404
+//   --fold-keys 1024
+//
+//   store_bench --dir /private/tmp --case grow --grow-keys 1000000
+//   --copies 1,10,100,1000
+//
+//   store_bench --dir /p/a --keep /p/kept --threads 96 --payload-mib 4096
+//   store_bench --dir /p/b --reuse /p/kept --threads 96 --payload-mib 4096
+//
+//   store_bench --space /p/kept/shared-96-4096
+//
+// --keep writes the data of the query case under its path and keeps it, with
+// no reads; --reuse reads that data with no writes, so the reads can run on
+// another node, with nothing of the data in its page cache. Both runs take the
+// same --threads, --payload-mib, --value-bytes, --value-kind and
+// --keys-per-batch.
+//
+// --space writes and reads nothing: it prints the space report of every data
+// file of one store directory, the sum of them and the bytes of its summary
+// file, as `name value` lines, and exits.
+//
+// Output: comment lines naming the extent size, the I/O backend, the file
+// system kind and the options the store runs under, then TSV rows. A write row
+// is one mode and thread count; its I/O counts come from io_fault's counting
+// mode and cover every descriptor of the case, so they leave out the header
+// each writer writes when it is created. A query row is one operation, read
+// from the data the shared write case wrote. Keys are 16 bytes and unique, so
+// the keys read back count the entries a case committed. A fold row is one
+// scope count and part count: its scan reads scopes * keys fold entries and
+// yields one output key per distinct key, so ns_per_key divides by keys, and 1,
+// 4 and 16 parts show how one fold scan scales.
+//
+// The grow case writes --grow-keys chunk keys, big-endian and rising, into one
+// scope of a shared namespace in C refreshes, for each C of --copies. A refresh
+// is a new writer, a batch of the next keys and one 4 KiB `meta` value that
+// the newest refresh wins, a commit, a publish and the close of the writer. A
+// grow row names its copies, the state (grown, then packed when Store::pack
+// accepts the namespace) and one operation. refresh is the mean per refresh,
+// with the p99 in extra. The reads run on a snapshot opened after the writes,
+// so the page cache of the operating system is warm. The baseline rows write
+// the same keys through one writer into a namespace that is not shared.
+
+#include <bench_counters.h>
+#include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/common/filesystem_info.h>
+#include <dftracer/utils/common/str_format.h>
+#include <dftracer/utils/coro/executor.h>
+#include <dftracer/utils/coro/named.h>
+#include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dstd/error.h>
+#include <dftracer/utils/dstd/fmt.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/hash/constants.h>
+#include <dftracer/utils/dstd/little_endian.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/thread.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/runtime/io/io_backend.h>
+#include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/store/data_file.h>
+#include <dftracer/utils/store/extent_size.h>
+#include <dftracer/utils/store/io_fault.h>
+#include <dftracer/utils/store/snapshot.h>
+#include <dftracer/utils/store/store.h>
+#include <dftracer/utils/store/writer.h>
+
+#include <algorithm>
+#include <array>
+#include <atomic>
+#include <chrono>
+#include <cstddef>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <iostream>
+#include <numeric>
+#include <random>
+#include <utility>
+
+using namespace dftracer::utils;
+
+namespace {
+
+using dftracer::utils::Runtime;
+using dftracer::utils::dstd::ByteView;
+using store::Batch;
+using store::NamespaceSpec;
+using store::ScopeKey;
+using store::engine::NamespaceId;
+using store::engine::Snapshot;
+using store::engine::Writer;
+using store::engine::WriterErrc;
+using store::engine::WriterOptions;
+using store::engine::WriterTestHook;
+
+constexpr std::uint64_t MIB_BYTES = 1U << 20;
+constexpr std::uint64_t GIB_BYTES = 1U << 30;
+constexpr std::size_t KEY_BYTES = 16;
+/// Scopes one coroutine commits to, so two coroutines share no scope.
+constexpr std::uint64_t SCOPES_PER_CORO = 64;
+/// The runtime the scope and fold cases commit and open on. Each measures one
+/// committing coroutine; a second thread keeps the group commit running.
+constexpr std::size_t SCOPE_CASE_THREADS = 2;
+/// Busy retries of one commit before the case is called stuck.
+constexpr int COMMIT_ATTEMPTS = 1 << 16;
+/// A key index no write uses, so the entry is absent from every scope.
+constexpr std::uint32_t ABSENT_KEY_INDEX = 0xFFFFFFFFU;
+/// The seed of the query keys, fixed so two runs read the same keys.
+constexpr std::uint64_t QUERY_SEED = 0x5EEDC0DEULL;
+/// Scopes the scope-scan rows read.
+constexpr std::uint64_t SCAN_SCOPES = 100;
+/// Point gets of a run unless --gets says otherwise, and of a smoke run.
+constexpr std::uint64_t POINT_GETS = 100000;
+constexpr std::uint64_t POINT_GETS_SMOKE = 2000;
+/// One miss for every this many hits.
+constexpr std::uint64_t GETS_PER_MISS = 10;
+/// The value of one fold entry: one little-endian int64.
+constexpr std::size_t FOLD_VALUE_BYTES = 8;
+/// The key of one fold entry: 'k' and six digits, so the keys of a fold scope
+/// are in key-number order.
+constexpr std::size_t FOLD_KEY_BYTES = 7;
+/// The most keys the six digits of a fold key number.
+constexpr std::uint64_t FOLD_KEY_LIMIT = 1000000;
+/// No key number, so one comparison rejects a malformed fold key.
+constexpr std::uint64_t FOLD_KEY_INVALID = ~std::uint64_t{0};
+/// The modulus of the fold values, so a sum over every scope stays small.
+constexpr std::uint64_t FOLD_VALUE_MODULUS = 1000;
+/// The parts a fold scan is split into: the whole scan, then two meshes.
+constexpr std::uint64_t FOLD_THREADS[] = {1, 4, 16};
+/// The grow case: chunk keys are big-endian chunk numbers, and every refresh
+/// rewrites the summary value.
+constexpr std::size_t GROW_KEY_BYTES = 8;
+constexpr std::size_t GROW_META_BYTES = 4096;
+constexpr char GROW_META_KEY[] = "meta";
+constexpr std::size_t GROW_META_KEY_BYTES = sizeof(GROW_META_KEY) - 1;
+constexpr std::uint64_t GROW_SCAN_KEYS = 1000;
+/// One range scan for every this many point gets, as each reads GROW_SCAN_KEYS.
+constexpr std::uint64_t GETS_PER_GROW_SCAN = 100;
+
+const char* filesystem_name(dftracer::utils::common::FilesystemKind kind) {
+    switch (kind) {
+        case dftracer::utils::common::FilesystemKind::Local:
+            return "local";
+        case dftracer::utils::common::FilesystemKind::Tmpfs:
+            return "tmpfs";
+        case dftracer::utils::common::FilesystemKind::Nfs:
+            return "nfs";
+        case dftracer::utils::common::FilesystemKind::Lustre:
+            return "lustre";
+        case dftracer::utils::common::FilesystemKind::Gpfs:
+            return "gpfs";
+        case dftracer::utils::common::FilesystemKind::Beegfs:
+            return "beegfs";
+        case dftracer::utils::common::FilesystemKind::Unknown:
+            break;
+    }
+    return "unknown";
+}
+
+struct Options {
+    bool smoke = false;
+    bool help = false;
+    dstd::String dir;
+    dstd::Vector<int> threads{1, 16, 96};
+    dstd::Vector<dstd::String> modes{"shared", "per-thread"};
+    std::uint64_t payload_mib = 256;
+    std::size_t value_bytes = 200;
+    bool trace_values = true;
+    std::size_t keys_per_batch = 256;
+    dstd::Vector<std::uint64_t> scopes{10, 1000, 100000};
+    std::uint64_t commits = 20000;
+    std::uint64_t gets = POINT_GETS;
+    dstd::Vector<std::uint64_t> fold_scopes{1000, 8404};
+    std::uint64_t fold_keys = 1024;
+    std::uint64_t grow_keys = 1000000;
+    dstd::Vector<std::uint64_t> copies{1, 10, 100, 1000};
+    dstd::String which = "all";
+    dstd::String keep;
+    dstd::String reuse;
+    dstd::String space;
+    store::PageCodec codec = store::PageCodec::Zstd;
+};
+
+void apply_smoke(Options& opt) {
+    opt.smoke = true;
+    opt.threads = {1, 2};
+    opt.modes = {"shared", "per-thread"};
+    opt.payload_mib = 1;
+    opt.value_bytes = 200;
+    opt.keys_per_batch = 256;
+    opt.scopes = {4, 64};
+    opt.commits = 2000;
+    opt.gets = POINT_GETS_SMOKE;
+    opt.fold_scopes = {50};
+    opt.fold_keys = 64;
+    opt.grow_keys = 20000;
+    opt.copies = {1, 10, 100};
+    opt.which = "all";
+}
+
+dstd::Vector<std::uint64_t> parse_u64_list(const dstd::String& text) {
+    dstd::Vector<std::uint64_t> out;
+    std::size_t at = 0;
+    while (at <= text.size()) {
+        const std::size_t end = text.find(',', at);
+        const dstd::String item =
+            text.substr(at, end == dstd::String::npos ? end : end - at);
+        if (item.empty()) return {};
+        const auto number = dstd::from_chars<std::uint64_t>(item);
+        if (!number) return {};
+        out.push_back(*number);
+        if (end == dstd::String::npos) break;
+        at = end + 1;
+    }
+    return out;
+}
+
+bool parse_args(int argc, char** argv, Options& opt) {
+    for (int i = 1; i < argc; ++i) {
+        const dftracer::utils::dstd::StringView arg = argv[i];
+        const auto value = [&]() -> dstd::String {
+            if (i + 1 < argc) return argv[++i];
+            return {};
+        };
+        if (arg == "--smoke") {
+            apply_smoke(opt);
+        } else if (arg == "--help" || arg == "-h") {
+            opt.help = true;
+        } else if (arg == "--dir") {
+            opt.dir = value();
+        } else if (arg == "--threads") {
+            dstd::Vector<std::uint64_t> parsed = parse_u64_list(value());
+            if (parsed.empty()) return false;
+            opt.threads.clear();
+            for (std::uint64_t threads : parsed) {
+                if (threads == 0 || threads > 4096) return false;
+                opt.threads.push_back(static_cast<int>(threads));
+            }
+        } else if (arg == "--mode") {
+            const dstd::String mode = value();
+            if (mode == "shared") {
+                opt.modes = {"shared"};
+            } else if (mode == "per-thread") {
+                opt.modes = {"per-thread"};
+            } else if (mode == "both") {
+                opt.modes = {"shared", "per-thread"};
+            } else {
+                return false;
+            }
+        } else if (arg == "--payload-mib") {
+            const dstd::Vector<std::uint64_t> parsed = parse_u64_list(value());
+            if (parsed.size() != 1 || parsed[0] == 0) return false;
+            opt.payload_mib = parsed[0];
+        } else if (arg == "--codec") {
+            const dstd::String codec = value();
+            if (codec == "zstd") {
+                opt.codec = store::PageCodec::Zstd;
+            } else if (codec == "none") {
+                opt.codec = store::PageCodec::None;
+            } else {
+                return false;
+            }
+        } else if (arg == "--value-kind") {
+            const dstd::String kind = value();
+            if (kind == "trace") {
+                opt.trace_values = true;
+            } else if (kind == "repeat") {
+                opt.trace_values = false;
+            } else {
+                return false;
+            }
+        } else if (arg == "--value-bytes") {
+            const dstd::Vector<std::uint64_t> parsed = parse_u64_list(value());
+            if (parsed.size() != 1 || parsed[0] == 0) return false;
+            opt.value_bytes = parsed[0];
+        } else if (arg == "--keys-per-batch") {
+            const dstd::Vector<std::uint64_t> parsed = parse_u64_list(value());
+            if (parsed.size() != 1 || parsed[0] == 0) return false;
+            opt.keys_per_batch = parsed[0];
+        } else if (arg == "--scopes") {
+            opt.scopes = parse_u64_list(value());
+            if (opt.scopes.empty()) return false;
+            for (std::uint64_t scopes : opt.scopes) {
+                if (scopes == 0) return false;
+            }
+        } else if (arg == "--commits") {
+            const dstd::Vector<std::uint64_t> parsed = parse_u64_list(value());
+            if (parsed.size() != 1 || parsed[0] == 0) return false;
+            opt.commits = parsed[0];
+        } else if (arg == "--gets") {
+            const dstd::Vector<std::uint64_t> parsed = parse_u64_list(value());
+            if (parsed.size() != 1 || parsed[0] == 0) return false;
+            opt.gets = parsed[0];
+        } else if (arg == "--fold-scopes") {
+            opt.fold_scopes = parse_u64_list(value());
+            if (opt.fold_scopes.empty()) return false;
+            for (std::uint64_t scopes : opt.fold_scopes) {
+                if (scopes == 0) return false;
+            }
+        } else if (arg == "--fold-keys") {
+            const dstd::Vector<std::uint64_t> parsed = parse_u64_list(value());
+            if (parsed.size() != 1 || parsed[0] == 0 ||
+                parsed[0] >= FOLD_KEY_LIMIT) {
+                return false;
+            }
+            opt.fold_keys = parsed[0];
+        } else if (arg == "--grow-keys") {
+            const dstd::Vector<std::uint64_t> parsed = parse_u64_list(value());
+            if (parsed.size() != 1 || parsed[0] == 0) return false;
+            opt.grow_keys = parsed[0];
+        } else if (arg == "--copies") {
+            opt.copies = parse_u64_list(value());
+            if (opt.copies.empty()) return false;
+            for (std::uint64_t copies : opt.copies) {
+                if (copies == 0) return false;
+            }
+        } else if (arg == "--keep") {
+            opt.keep = value();
+            if (opt.keep.empty()) return false;
+        } else if (arg == "--reuse") {
+            opt.reuse = value();
+            if (opt.reuse.empty()) return false;
+        } else if (arg == "--space") {
+            opt.space = value();
+            if (opt.space.empty()) return false;
+        } else if (arg == "--case") {
+            const dstd::String which = value();
+            if (which != "write" && which != "query" && which != "scopes" &&
+                which != "fold" && which != "grow" && which != "all") {
+                return false;
+            }
+            opt.which = which;
+        } else {
+            return false;
+        }
+    }
+    return opt.keep.empty() || opt.reuse.empty();
+}
+
+void usage() {
+    std::cerr
+        << "usage: store_bench [--smoke] [--value-kind trace|repeat] [--dir "
+           "PATH] [--threads 1,16,96]\n"
+           "                   [--mode shared|per-thread|both]\n"
+           "                   [--payload-mib N] [--value-bytes N]\n"
+           "                   [--keys-per-batch N] [--scopes 10,1000,100000]\n"
+           "                   [--commits N] [--gets N]\n"
+           "                   [--fold-scopes 1000,8404] [--fold-keys N]\n"
+           "                   [--grow-keys N] [--copies 1,10,100,1000]\n"
+           "                   [--case write|query|scopes|fold|grow|all]\n"
+           "                   [--keep PATH | --reuse PATH] [--codec "
+           "zstd|none]\n"
+           "                   [--space DIR]\n";
+}
+
+dftracer::utils::dstd::String dstring(dftracer::utils::dstd::StringView text) {
+    return dftracer::utils::dstd::String(text.data(), text.size());
+}
+
+dstd::String to_std(const dftracer::utils::dstd::Error& error) {
+    const dftracer::utils::dstd::StringView message = error.message();
+    if (message.empty()) return dstd::String(error.name());
+    return dstd::fmt<"{}: {}">(error.name(), message);
+}
+
+void require_ran(const dstd::Result<void>& ran) {
+    if (ran.has_value()) return;
+    std::fprintf(stderr, "store_bench: %s\n", ran.error().format().c_str());
+    std::exit(1);
+}
+
+dstd::String fixed(double value, int precision) {
+    char buf[64];
+    char* end = dstd::to_chars_fixed(buf, buf + sizeof(buf), value, precision);
+    return dstd::String(buf, end ? static_cast<std::size_t>(end - buf) : 0);
+}
+
+dstd::String general(double value, int precision) {
+    char buf[64];
+    char* end =
+        dstd::to_chars_general(buf, buf + sizeof(buf), value, precision);
+    return dstd::String(buf, end ? static_cast<std::size_t>(end - buf) : 0);
+}
+
+dstd::String format_ms(std::uint64_t nanos) {
+    return fixed(static_cast<double>(nanos) / 1e6, 3);
+}
+
+/// Every block the snapshot has read so far: the commits it verified, the
+/// blocks of them, the read calls that covered them and the bytes. An open
+/// leaves these at zero, and the first query for a copy pays its commits.
+dstd::String format_read_stats(const store::engine::ReadStats& reads) {
+    return dstd::fmt<
+        "commits_read={} extents_read={} pages_decoded={} "
+        "page_hits={} page_reads={} files_filtered={} "
+        "metadata_blocks_read={} read_calls={} mib_read={}">(
+        reads.commits_verified, reads.extents_read, reads.pages_decoded,
+        reads.page_hits, reads.page_reads, reads.files_filtered,
+        reads.metadata_blocks_read, reads.read_calls,
+        fixed(static_cast<double>(reads.bytes_read) /
+                  static_cast<double>(MIB_BYTES),
+              1));
+}
+
+/// What one open did, and what the snapshot has read so far, as one extra
+/// column.
+dstd::String format_stats(const store::engine::OpenStats& stats,
+                          const store::engine::ReadStats& reads) {
+    return dstd::fmt<
+        "files={} extents={} {} ms list={} files={} tables={} "
+        "total={}">(stats.files, stats.extents, format_read_stats(reads),
+                    general(stats.ms_list, 3), general(stats.ms_open_files, 3),
+                    general(stats.ms_tables, 3), general(stats.ms_total, 3));
+}
+
+dstd::String format_ms_value(double ms) { return general(ms, 3); }
+
+dstd::String format_rate(std::uint64_t rows, std::uint64_t nanos) {
+    return fixed(
+        nanos > 0 ? static_cast<double>(rows) * 1e9 / static_cast<double>(nanos)
+                  : 0,
+        1);
+}
+
+double seconds_between(std::chrono::steady_clock::time_point from,
+                       std::chrono::steady_clock::time_point to) {
+    return std::chrono::duration<double>(to - from).count();
+}
+
+std::uint64_t nanos_between(std::chrono::steady_clock::time_point from,
+                            std::chrono::steady_clock::time_point to) {
+    return static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(to - from)
+            .count());
+}
+
+std::uint64_t indexed(const store::engine::io_fault::Counts& counts,
+                      store::engine::io_fault::WriteKind kind) {
+    return static_cast<std::size_t>(kind) < store::engine::io_fault::KINDS
+               ? counts.bytes[static_cast<std::size_t>(kind)]
+               : 0;
+}
+
+std::uint64_t total_bytes(const store::engine::io_fault::Counts& counts) {
+    std::uint64_t total = 0;
+    for (std::size_t at = 0; at < store::engine::io_fault::KINDS; ++at) {
+        total += counts.bytes[at];
+    }
+    return total;
+}
+
+/// The key of one entry: the coroutine, its batch ordinal and the position in
+/// the batch, all unique, so the keys of a case count its entries.
+std::array<std::uint8_t, KEY_BYTES> make_key(std::uint32_t coro,
+                                             std::uint32_t ordinal,
+                                             std::uint32_t index) {
+    std::array<std::uint8_t, KEY_BYTES> key{};
+    dftracer::utils::dstd::write_u64_le(key.data(), coro);
+    dftracer::utils::dstd::write_u32_le(key.data() + 8, ordinal);
+    dftracer::utils::dstd::write_u32_le(key.data() + 12, index);
+    return key;
+}
+
+/// The values every case writes. trace: VALUE_POOL different lines shaped
+/// like DFTracer events, so they compress about as real index data does;
+/// repeat: one value of one repeated byte. A key picks its value by a hash of
+/// its bytes, so a reader can check any value without a table.
+class ValuePool {
+   public:
+    ValuePool(std::size_t value_bytes, bool trace) {
+        if (!trace) {
+            values_.emplace_back(value_bytes, 'v');
+            return;
+        }
+        std::mt19937_64 rng(VALUE_SEED);
+        static const char* const NAMES[] = {"read",  "write",   "open64",
+                                            "close", "lseek64", "fstat"};
+        static const char* const CATS[] = {"POSIX", "STDIO", "MPI"};
+        values_.reserve(VALUE_POOL);
+        for (std::size_t i = 0; i < VALUE_POOL; ++i) {
+            dstd::String line = dstd::fmt<
+                "{\"id\":{},\"name\":\"{}\",\"cat\":\"{}\",\"pid\":{},\"tid\":{"
+                "},\"ts\":{},\"dur\":{},\"args\":{\"fhash\":\"{}\",\"size_t\":{"
+                "}}}">(rng() % 100000000, NAMES[rng() % 6], CATS[rng() % 3],
+                       rng() % 65536, rng() % 65536, rng() % 10000000000000ULL,
+                       rng() % 100000, rng(), rng() % 1048576);
+            while (line.size() < value_bytes) line += line;
+            line.resize(value_bytes);
+            values_.push_back(std::move(line));
+        }
+    }
+
+    const dstd::String& for_key(const std::uint8_t* key,
+                                std::size_t size) const {
+        std::uint64_t hash =
+            dftracer::utils::dstd::hash::FNV1A_OFFSET_BASIS_LEGACY;
+        for (std::size_t i = 0; i < size; ++i) {
+            hash = (hash ^ key[i]) * dftracer::utils::dstd::hash::FNV1A_PRIME;
+        }
+        return values_[static_cast<std::size_t>(hash % values_.size())];
+    }
+
+   private:
+    static constexpr std::size_t VALUE_POOL = 4096;
+    static constexpr std::uint64_t VALUE_SEED = 0x5eed;
+    dstd::Vector<dstd::String> values_;
+};
+
+dstd::String scope_name(std::uint64_t coro, std::uint64_t slot) {
+    return dstd::fmt<"/bench/c{}-s{}.dft">(coro, slot);
+}
+
+/// The key of one fold entry: 'k' and six digits, so a lexicographic scan
+/// yields the keys in key-number order and a key needs no table.
+dstd::String fold_key(std::uint64_t index) {
+    dstd::String key(FOLD_KEY_BYTES, '0');
+    key[0] = 'k';
+    for (std::size_t at = FOLD_KEY_BYTES; at-- > 1;) {
+        key[at] = static_cast<char>('0' + index % 10);
+        index /= 10;
+    }
+    return key;
+}
+
+dstd::Vector<dstd::String> fold_key_names(std::uint64_t keys) {
+    dstd::Vector<dstd::String> names;
+    names.reserve(static_cast<std::size_t>(keys));
+    for (std::uint64_t at = 0; at < keys; ++at) {
+        names.push_back(fold_key(at));
+    }
+    return names;
+}
+
+/// The key number of one fold key, or FOLD_KEY_INVALID when the bytes are not
+/// one of ours.
+std::uint64_t fold_key_index(ByteView key) {
+    if (key.size() != FOLD_KEY_BYTES) return FOLD_KEY_INVALID;
+    const auto* bytes = reinterpret_cast<const std::uint8_t*>(key.data());
+    if (bytes[0] != static_cast<std::uint8_t>('k')) return FOLD_KEY_INVALID;
+    std::uint64_t index = 0;
+    for (std::size_t at = 1; at < FOLD_KEY_BYTES; ++at) {
+        if (bytes[at] < '0' || bytes[at] > '9') return FOLD_KEY_INVALID;
+        index = index * 10 + static_cast<std::uint64_t>(bytes[at] - '0');
+    }
+    return index;
+}
+
+/// The value the first segment of one scope holds for one key; the second
+/// segment holds 1 for every key of the scope.
+std::uint64_t fold_value(std::uint64_t scope, std::uint64_t key) {
+    return (scope + key) % FOLD_VALUE_MODULUS;
+}
+
+/// What a fold scan over `scopes` scopes must sum one key to: the two
+/// segments of every scope, the first (scope + key) mod FOLD_VALUE_MODULUS and
+/// the second one.
+dstd::Vector<std::int64_t> fold_expectation(std::uint64_t scopes,
+                                            std::uint64_t keys) {
+    dstd::Vector<std::int64_t> expected(static_cast<std::size_t>(keys), 0);
+    for (std::uint64_t key = 0; key < keys; ++key) {
+        std::int64_t sum = 0;
+        for (std::uint64_t scope = 0; scope < scopes; ++scope) {
+            sum += static_cast<std::int64_t>(fold_value(scope, key)) + 1;
+        }
+        expected[static_cast<std::size_t>(key)] = sum;
+    }
+    return expected;
+}
+
+/// A fresh directory under `base`, so concurrent runs never share one. The
+/// caller removes it.
+dstd::String make_temp_dir(const dftracer::utils::dstd::Path& base) {
+    const dstd::String pattern((base / "dftu_store_bench_XXXXXX").str());
+    dstd::Vector<char> buffer(pattern.begin(), pattern.end());
+    buffer.push_back('\0');
+    const char* made = ::mkdtemp(buffer.data());
+    return made == nullptr ? dstd::String() : dstd::String(made);
+}
+
+/// The bytes of every regular file under `dir`, at any depth.
+std::uint64_t directory_bytes(const dstd::String& dir) {
+    std::uint64_t total = 0;
+    auto walked = dftracer::utils::dstd::fs::walk(
+        dir, [&](dftracer::utils::dstd::PathView p,
+                 dftracer::utils::dstd::fs::FileKind kind) {
+            if (kind == dftracer::utils::dstd::fs::FileKind::File) {
+                auto st = dftracer::utils::dstd::fs::stat(p);
+                if (st) total += st->size;
+            }
+            return dftracer::utils::dstd::fs::WalkAction::Continue;
+        });
+    if (!walked) {
+        std::cerr << "store_bench: cannot walk " << dir << ": "
+                  << to_std(walked.error()) << "\n";
+        std::exit(1);
+    }
+    return total;
+}
+
+struct DiskUse {
+    std::uint64_t bytes = 0;
+    std::uint64_t files = 0;
+};
+
+/// The regular files under `dir` at any depth, and their bytes.
+DiskUse disk_use(const dstd::String& dir) {
+    DiskUse use;
+    auto walked = dftracer::utils::dstd::fs::walk(
+        dir, [&](dftracer::utils::dstd::PathView p,
+                 dftracer::utils::dstd::fs::FileKind kind) {
+            if (kind == dftracer::utils::dstd::fs::FileKind::File) {
+                auto st = dftracer::utils::dstd::fs::stat(p);
+                if (st) {
+                    use.bytes += st->size;
+                    ++use.files;
+                }
+            }
+            return dftracer::utils::dstd::fs::WalkAction::Continue;
+        });
+    if (!walked) {
+        std::cerr << "store_bench: cannot walk " << dir << ": "
+                  << to_std(walked.error()) << "\n";
+        std::exit(1);
+    }
+    return use;
+}
+
+/// The key of chunk `chunk`: eight big-endian bytes, so the keys sort by chunk
+/// number and `meta` sorts after every one.
+std::array<std::uint8_t, GROW_KEY_BYTES> grow_key(std::uint64_t chunk) {
+    std::array<std::uint8_t, GROW_KEY_BYTES> key{};
+    for (std::size_t at = GROW_KEY_BYTES; at-- > 0;) {
+        key[at] = static_cast<std::uint8_t>(chunk & 0xFF);
+        chunk >>= 8;
+    }
+    return key;
+}
+
+/// The summary value of refresh `refresh`: its number, then filler.
+dstd::String grow_meta(std::uint64_t refresh) {
+    dstd::String meta(GROW_META_BYTES, 'm');
+    dftracer::utils::dstd::write_u64_le(
+        reinterpret_cast<std::uint8_t*>(meta.data()), refresh);
+    return meta;
+}
+
+bool same_bytes(ByteView bytes, const dstd::String& expected) {
+    return dftracer::utils::dstd::StringView(
+               reinterpret_cast<const char*>(bytes.data()), bytes.size()) ==
+           dftracer::utils::dstd::StringView(expected.data(), expected.size());
+}
+
+/// The keys of one case, and which of them a commit wrote or a key absent from
+/// every scope: what the query case reads and checks.
+struct Workload {
+    std::uint64_t threads = 0;
+    std::uint64_t batches = 0;
+    std::size_t keys_per_batch = 0;
+    std::size_t value_bytes = 0;
+    std::size_t entry_bytes = 0;
+    std::uint64_t per_thread_keys = 0;
+    std::uint64_t payload = 0;
+    std::uint64_t total_keys = 0;
+    std::uint64_t scopes_per_thread = 0;
+    std::uint64_t total_scopes = 0;
+};
+
+Workload workload_of(const Options& opt, std::uint64_t threads) {
+    Workload workload;
+    workload.threads = threads;
+    workload.keys_per_batch = opt.keys_per_batch;
+    workload.value_bytes = opt.value_bytes;
+    workload.entry_bytes = KEY_BYTES + opt.value_bytes;
+    const std::uint64_t per_thread = opt.payload_mib * MIB_BYTES / threads;
+    const std::uint64_t batch_bytes =
+        static_cast<std::uint64_t>(workload.keys_per_batch) *
+        workload.entry_bytes;
+    workload.batches = std::max<std::uint64_t>(1, per_thread / batch_bytes);
+    workload.per_thread_keys = workload.batches * workload.keys_per_batch;
+    workload.payload =
+        workload.per_thread_keys * workload.entry_bytes * threads;
+    workload.total_keys = workload.per_thread_keys * threads;
+    workload.scopes_per_thread =
+        std::min<std::uint64_t>(workload.batches, SCOPES_PER_CORO);
+    workload.total_scopes = workload.scopes_per_thread * threads;
+    return workload;
+}
+
+/// The entries one scope holds: the batch ordinals that map to it.
+std::uint64_t scope_rows(const Workload& workload, std::uint64_t slot) {
+    if (slot >= workload.batches) return 0;
+    return ((workload.batches - 1 - slot) / SCOPES_PER_CORO + 1) *
+           workload.keys_per_batch;
+}
+
+/// The commit of one batch with the retry the writer documents: the bytes of
+/// earlier commits are written, then the same batch commits again (a Busy
+/// commit left it whole).
+coro::CoroTask<bool> commit_retrying(Writer& writer, Batch batch,
+                                     int attempts) {
+    for (int attempt = 0; attempt < attempts; ++attempt) {
+        auto committed = writer.commit(std::move(batch));
+        if (committed.has_value()) co_return true;
+        if (!committed.error().is_code(WriterErrc::Busy)) co_return false;
+        co_await writer.space();
+    }
+    co_return false;
+}
+
+struct WriteRow {
+    dstd::String mode;
+    int threads = 0;
+    std::uint64_t payload = 0;
+    double seconds = 0;
+    /// The close of the store: it has one phase after the last commit, so both
+    /// of these are the close time that `seconds` holds.
+    double seconds_flushed = 0;
+    double seconds_compacted = 0;
+    store::engine::io_fault::Counts counts;
+    std::uint64_t busy = 0;
+    std::uint64_t commits = 0;
+    std::uint64_t keys = 0;
+    std::uint64_t read_keys = 0;
+    std::uint64_t disk_bytes = 0;
+    /// The directory the query case reads, when this case keeps one.
+    dstd::String keep_dir;
+};
+
+struct QueryRow {
+    dstd::String op;
+    std::uint64_t count = 0;
+    double ms_total = 0;
+    double ns_per_item = 0;
+    dstd::String extra;
+    double rss_growth_mib = 0;
+};
+
+struct ScopeRow {
+    std::uint64_t scopes = 0;
+    double ns_new_scope = 0;
+    double ns_commit = 0;
+};
+
+struct FoldRow {
+    std::uint64_t scopes = 0;
+    std::uint64_t keys = 0;
+    std::uint64_t threads = 0;
+    double ms_open = 0;
+    double ms_scan = 0;
+    double ns_per_key = 0;
+    std::uint64_t mismatches = 0;
+    /// What the snapshot had read when the scan of this row finished.
+    store::engine::ReadStats reads;
+};
+
+struct GrowRow {
+    dstd::String copies;
+    dstd::String state;
+    dstd::String op;
+    std::uint64_t count = 0;
+    double ms_total = 0;
+    double ns_per_item = 0;
+    dstd::String extra;
+};
+
+/// One timed fold scan: its parts added, against the sums written.
+struct FoldScan {
+    std::uint64_t nanos = 0;
+    std::uint64_t mismatches = 0;
+    bool ok = true;
+};
+
+/// One query key of one scope, so the timed loop only reads.
+struct QueryItem {
+    std::size_t scope = 0;
+    std::array<std::uint8_t, KEY_BYTES> key{};
+};
+
+struct QueryScan {
+    std::size_t scope = 0;
+    std::uint64_t rows = 0;
+};
+
+struct QueryPlan {
+    dstd::Vector<ScopeKey> scopes;
+    dstd::Vector<QueryItem> hits;
+    dstd::Vector<QueryItem> misses;
+    dstd::Vector<QueryScan> scans;
+};
+
+/// One field of a space report, so the mode prints every report alike.
+struct SpaceField {
+    const char* name;
+    std::uint64_t store::engine::SpaceReport::* value;
+};
+
+constexpr SpaceField SPACE_FIELDS[] = {
+    {"file_bytes", &store::engine::SpaceReport::file_bytes},
+    {"header_bytes", &store::engine::SpaceReport::header_bytes},
+    {"extents", &store::engine::SpaceReport::extents},
+    {"extent_bytes", &store::engine::SpaceReport::extent_bytes},
+    {"extent_page_table_bytes",
+     &store::engine::SpaceReport::extent_page_table_bytes},
+    {"page_bytes", &store::engine::SpaceReport::page_bytes},
+    {"page_raw_bytes", &store::engine::SpaceReport::page_raw_bytes},
+    {"pages", &store::engine::SpaceReport::pages},
+    {"pages_compressed", &store::engine::SpaceReport::pages_compressed},
+    {"pages_dict", &store::engine::SpaceReport::pages_dict},
+    {"dicts", &store::engine::SpaceReport::dicts},
+    {"dict_bytes", &store::engine::SpaceReport::dict_bytes},
+    {"extent_padding_bytes", &store::engine::SpaceReport::extent_padding_bytes},
+    {"gap_bytes", &store::engine::SpaceReport::gap_bytes},
+    {"record_bytes", &store::engine::SpaceReport::record_bytes},
+    {"segment_block_bytes", &store::engine::SpaceReport::segment_block_bytes},
+    {"segment_entries", &store::engine::SpaceReport::segment_entries},
+    {"segment_key_bytes", &store::engine::SpaceReport::segment_key_bytes},
+    {"items_block_bytes", &store::engine::SpaceReport::items_block_bytes},
+    {"directory_leaf_bytes", &store::engine::SpaceReport::directory_leaf_bytes},
+    {"directory_separator_bytes",
+     &store::engine::SpaceReport::directory_separator_bytes},
+    {"directory_entries", &store::engine::SpaceReport::directory_entries},
+    {"directory_key_bytes", &store::engine::SpaceReport::directory_key_bytes},
+    {"directory_commit_key_bytes",
+     &store::engine::SpaceReport::directory_commit_key_bytes},
+    {"filter_bytes", &store::engine::SpaceReport::filter_bytes},
+    {"footer_bytes", &store::engine::SpaceReport::footer_bytes},
+    {"copies", &store::engine::SpaceReport::copies},
+    {"commits", &store::engine::SpaceReport::commits},
+};
+
+/// Prints the space report of every data file of `dir`, then the sum and the
+/// bytes of its summary file: one `name value` per line.
+bool print_space(const dstd::String& dir) {
+    dstd::Vector<dstd::String> names;
+    auto handle = dftracer::utils::dstd::fs::Dir::open(dir);
+    if (!handle) {
+        std::cerr << "store_bench: cannot list " << dir << "\n";
+        return false;
+    }
+    auto listed = handle->entries();
+    if (!listed) return false;
+    for (const auto& entry : *listed) {
+        auto st = handle->stat(entry.name);
+        if (!st || st->kind != dftracer::utils::dstd::fs::FileKind::File)
+            continue;
+        if (dftracer::utils::dstd::PathView(entry.name).extension() != ".dfs")
+            continue;
+        names.push_back(dstd::String(entry.name));
+    }
+    std::sort(names.begin(), names.end());
+    store::engine::SpaceReport sum;
+    for (const dstd::String& name : names) {
+        const dstd::String path = dstd::fmt<"{}/{}">(dir, name);
+        auto report = store::engine::space_report(path);
+        if (!report) {
+            std::cerr << "store_bench: " << path << ": "
+                      << to_std(report.error()) << "\n";
+            return false;
+        }
+        for (const SpaceField& field : SPACE_FIELDS) {
+            const std::uint64_t value = (*report).*(field.value);
+            std::cout << name << "." << field.name << " " << value << "\n";
+            sum.*(field.value) += value;
+        }
+    }
+    for (const SpaceField& field : SPACE_FIELDS) {
+        std::cout << "sum." << field.name << " " << sum.*(field.value) << "\n";
+    }
+    const auto summary_bytes = dftracer::utils::dstd::fs::file_size(
+        dftracer::utils::dstd::Path(dir) / store::engine::SUMMARY_FILE_NAME);
+    std::cout << "summary_bytes " << summary_bytes.value_or(0) << "\n";
+    return true;
+}
+
+struct Bench {
+    Options opt;
+    dstd::String root;
+    dstd::String backend = "none";
+    bool backend_known = false;
+    bool write_header_written = false;
+    bool query_header_written = false;
+    bool scope_header_written = false;
+    bool fold_header_written = false;
+    bool grow_header_written = false;
+    bool comment_written = false;
+    bool failed = false;
+    std::uint32_t extent_size = 0;
+    std::uint64_t case_index = 0;
+    dstd::Vector<QueryRow> query_rows;
+
+    NamespaceSpec spec() const {
+        NamespaceSpec namespace_spec;
+        namespace_spec.name = dstring("bench");
+        namespace_spec.format_version = 0;
+        namespace_spec.fold = store::FoldKind::None;
+        namespace_spec.durable = false;
+        namespace_spec.codec = opt.codec;
+        return namespace_spec;
+    }
+
+    WriterOptions writer_options() const {
+        WriterOptions options;
+        options.host = dstring("store_bench");
+        options.label = dstring("store_bench");
+        return options;
+    }
+
+    void fail(const dstd::String& message) {
+        failed = true;
+        std::cerr << "store_bench: " << message << "\n";
+    }
+
+    bool setup() {
+        dftracer::utils::dstd::Path base;
+        if (opt.smoke) {
+            base = dftracer::utils::dstd::fs::temp_directory();
+        } else {
+            if (opt.dir.empty()) {
+                fail("--dir is required unless --smoke");
+                usage();
+                return false;
+            }
+            base = dftracer::utils::dstd::Path(opt.dir);
+        }
+        const auto made_base =
+            dftracer::utils::dstd::fs::create_directories(base);
+        if (!made_base.has_value()) {
+            fail(dstd::fmt<"cannot create {}: {}">(base.str(),
+                                                   to_std(made_base.error())));
+            return false;
+        }
+        root = make_temp_dir(base);
+        if (root.empty()) {
+            fail(dstd::fmt<"cannot create a directory under {}">(base.str()));
+            return false;
+        }
+        auto chosen = store::engine::extent_size_for(root);
+        if (!chosen) {
+            fail(dstd::fmt<"extent size of {}: {}">(root,
+                                                    to_std(chosen.error())));
+            return false;
+        }
+        extent_size = *chosen;
+        return true;
+    }
+
+    void cleanup() { dftracer::utils::dstd::fs::remove_all(root).discard(); }
+
+    dstd::String case_dir(const dstd::String& name) {
+        return dstd::fmt<"{}/{}-{}">(root, case_index++, name);
+    }
+
+    void note_backend(Runtime& runtime) {
+        if (backend_known) return;
+        if (runtime.executor()->has_io_backend()) {
+            backend = runtime.executor()->io_backend().name();
+        }
+        backend_known = true;
+    }
+
+    void ensure_comment() {
+        if (comment_written) return;
+        comment_written = true;
+        std::cout
+            << "# extent_size=" << extent_size << " backend=" << backend
+            << " fs="
+            << filesystem_name(dftracer::utils::common::filesystem_kind(root))
+            << " dir=" << root << "\n"
+            << "# codec="
+            << (opt.codec == store::PageCodec::Zstd
+                    ? "zstd level 1 per 32 KiB page (raw when it saves under an"
+                      " eighth)"
+                    : "none")
+            << "; Snapshot::open reads only the metadata, and a query reads"
+               " the head of an extent once for its page table and the"
+               " pages it needs through a page cache of "
+            << (dftracer::utils::common::constants::store::
+                    STORE_DEFAULT_PAGE_CACHE_BYTES >>
+                20)
+            << " MiB unless DFTRACER_UTILS_STORE_PAGE_CACHE_BYTES sets it\n"
+            << (opt.trace_values
+                    ? "# values: 4096 different DFTracer-like event lines, "
+                      "picked by key hash, so the writes compress about as real"
+                      " index data does\n"
+                    : "# values: one repeated byte, the best case for the "
+                      "codec\n")
+            << "# rss_growth_mib is the growth of the peak resident set of the"
+               " process (getrusage maxrss) across a phase, and a peak only"
+               " rises, so a phase that reuses the memory of an earlier one"
+               " reports little\n";
+    }
+
+    void ensure_write_header() {
+        if (write_header_written) return;
+        write_header_written = true;
+        std::cout
+            << "mode\tthreads\tpayload_bytes\tseconds\tgib_per_s"
+               "\tseconds_flushed\tseconds_compacted\textent_writes"
+               "\textent_bytes"
+               "\tbig_writes\tbig_bytes\trecord_writes\trecord_bytes"
+               "\theader_writes\theader_bytes\tfooter_bytes\ttrailer_bytes"
+               "\tsyncs\ttotal_bytes\twrite_amp\tdisk_bytes\tdisk_amp"
+               "\tbusy\tmax_extent_bytes\tcommits_per_s\n";
+    }
+
+    void ensure_query_header() {
+        if (query_header_written) return;
+        query_header_written = true;
+        std::cout << "op\tcount\tms_total\tns_per_item\textra"
+                     "\trss_growth_mib\n";
+    }
+
+    void ensure_scope_header() {
+        if (scope_header_written) return;
+        scope_header_written = true;
+        std::cout << "scopes\tns_new_scope\tns_commit\n";
+    }
+
+    void ensure_grow_header() {
+        if (grow_header_written) return;
+        grow_header_written = true;
+        std::cout << "copies\tstate\top\tcount\tms_total\tns_per_item\textra\n";
+    }
+
+    void ensure_fold_header() {
+        if (fold_header_written) return;
+        fold_header_written = true;
+        std::cout << "scopes\tkeys\tthreads\tms_open\tms_scan"
+                     "\tns_per_key\tmismatches\treads\n";
+    }
+
+    bool run();
+    WriteRow run_write_case(Runtime& runtime, const Workload& workload,
+                            const dstd::String& dir, bool per_thread,
+                            bool keep_dir);
+    QueryPlan make_query_plan(const Workload& workload) const;
+    bool run_kept();
+    bool run_query_case(const Workload& workload, const dstd::String& dir);
+    bool query_store(const Workload& workload, const dstd::String& dir,
+                     const QueryPlan& plan);
+    ScopeRow run_scope_case(Runtime& runtime, std::uint64_t scopes);
+    NamespaceSpec fold_spec() const;
+    bool write_fold(Runtime& runtime, const dstd::String& dir,
+                    std::uint64_t scopes, std::uint64_t keys);
+    FoldScan fold_scan(const Snapshot& snapshot,
+                       const NamespaceSpec& namespace_spec,
+                       const dstd::Vector<ScopeKey>& scopes, std::uint64_t keys,
+                       std::uint64_t threads,
+                       const dstd::Vector<std::int64_t>& expected);
+    bool run_fold_case(Runtime& runtime, std::uint64_t scopes);
+    void print_write_row(const WriteRow& row);
+    void print_query_row(const QueryRow& row);
+    void print_scope_row(const ScopeRow& row);
+    void print_fold_row(const FoldRow& row);
+    void print_grow_row(const GrowRow& row);
+    NamespaceSpec grow_spec(bool shared) const;
+    bool run_grow_case(const dstd::String& label, std::uint64_t copies,
+                       bool shared, bool do_pack);
+    bool grow_reads(const dstd::String& label, const char* state,
+                    const dstd::String& dir,
+                    const NamespaceSpec& namespace_spec, const ScopeKey& scope,
+                    std::uint64_t total, std::uint64_t last_refresh);
+    bool check_write_row(const WriteRow& row);
+    std::uint64_t count_keys(const dstd::String& dir);
+    void close_writers(Runtime& runtime,
+                       dstd::Vector<dstd::UniquePtr<Writer>>& writers,
+                       std::atomic<int>& errors);
+    bool report_single_thread_open(const dstd::String& dir,
+                                   const dstd::String& prefix, bool print_now);
+};
+
+QueryRow query_row(dstd::String op, std::uint64_t count, std::uint64_t nanos,
+                   std::uint64_t rss_before, dstd::String extra) {
+    QueryRow row;
+    row.op = std::move(op);
+    row.count = count;
+    row.ms_total = static_cast<double>(nanos) / 1e6;
+    row.ns_per_item =
+        count > 0 ? static_cast<double>(nanos) / static_cast<double>(count) : 0;
+    row.extra = std::move(extra);
+    row.rss_growth_mib =
+        static_cast<double>(dftu::bench::peak_heap_bytes() - rss_before) /
+        static_cast<double>(MIB_BYTES);
+    return row;
+}
+
+void Bench::print_write_row(const WriteRow& row) {
+    ensure_write_header();
+    ensure_comment();
+    const std::uint64_t total = total_bytes(row.counts);
+    const double seconds = row.seconds;
+    const double gib_per_s =
+        seconds > 0 ? static_cast<double>(row.payload) / seconds / GIB_BYTES
+                    : 0;
+    const double write_amp =
+        row.payload > 0
+            ? static_cast<double>(total) / static_cast<double>(row.payload)
+            : 0;
+    const double disk_amp = row.payload > 0
+                                ? static_cast<double>(row.disk_bytes) /
+                                      static_cast<double>(row.payload)
+                                : 0;
+    const double commits_per_s =
+        seconds > 0 ? static_cast<double>(row.commits) / seconds : 0;
+    const auto& counts = row.counts;
+    const auto writes_of = [&counts](store::engine::io_fault::WriteKind kind) {
+        return counts.writes[static_cast<std::size_t>(kind)];
+    };
+    const dstd::String line = dstd::fmt_join<"\t">(
+        row.mode, row.threads, row.payload, fixed(seconds, 6),
+        fixed(gib_per_s, 4), fixed(row.seconds_flushed, 6),
+        fixed(row.seconds_compacted, 6),
+        writes_of(store::engine::io_fault::WriteKind::Extent),
+        indexed(counts, store::engine::io_fault::WriteKind::Extent),
+        writes_of(store::engine::io_fault::WriteKind::Big),
+        indexed(counts, store::engine::io_fault::WriteKind::Big),
+        writes_of(store::engine::io_fault::WriteKind::Record),
+        indexed(counts, store::engine::io_fault::WriteKind::Record),
+        writes_of(store::engine::io_fault::WriteKind::Header),
+        indexed(counts, store::engine::io_fault::WriteKind::Header),
+        indexed(counts, store::engine::io_fault::WriteKind::Footer),
+        indexed(counts, store::engine::io_fault::WriteKind::Trailer),
+        counts.syncs, total, fixed(write_amp, 4), row.disk_bytes,
+        fixed(disk_amp, 4), row.busy,
+        counts.max_bytes[static_cast<std::size_t>(
+            store::engine::io_fault::WriteKind::Extent)],
+        fixed(commits_per_s, 1));
+    std::cout << line << '\n';
+}
+
+void Bench::print_query_row(const QueryRow& row) {
+    ensure_query_header();
+    ensure_comment();
+    const dstd::String line = dstd::fmt_join<"\t">(
+        row.op, row.count, fixed(row.ms_total, 3), fixed(row.ns_per_item, 1),
+        row.extra, fixed(row.rss_growth_mib, 3));
+    std::cout << line << '\n';
+}
+
+void Bench::print_scope_row(const ScopeRow& row) {
+    ensure_scope_header();
+    ensure_comment();
+    const dstd::String line = dstd::fmt_join<"\t">(
+        row.scopes, fixed(row.ns_new_scope, 1), fixed(row.ns_commit, 1));
+    std::cout << line << '\n';
+}
+
+void Bench::print_fold_row(const FoldRow& row) {
+    ensure_fold_header();
+    ensure_comment();
+    const dstd::String line = dstd::fmt_join<"\t">(
+        row.scopes, row.keys, row.threads, fixed(row.ms_open, 3),
+        fixed(row.ms_scan, 3), fixed(row.ns_per_key, 1), row.mismatches,
+        format_read_stats(row.reads));
+    std::cout << line << '\n';
+}
+
+void Bench::print_grow_row(const GrowRow& row) {
+    ensure_grow_header();
+    ensure_comment();
+    const dstd::String line = dstd::fmt_join<"\t">(
+        row.copies, row.state, row.op, row.count, fixed(row.ms_total, 3),
+        fixed(row.ns_per_item, 1), row.extra);
+    std::cout << line << '\n';
+}
+
+/// Opens `dir` a second time under a one-thread default runtime, restores the
+/// default runtime that was installed, and adds the row next to the timed open.
+/// One worker still coalesces the runs, so read_calls shows what the split
+/// alone gives and the time shows what the other workers add. A case whose
+/// rows are printed as they come asks for the row to be printed here.
+bool Bench::report_single_thread_open(const dstd::String& dir,
+                                      const dstd::String& prefix,
+                                      bool print_now) {
+    const std::size_t previous = dftracer::utils::default_runtime().threads();
+    dftracer::utils::configure_default_runtime({.threads = 1});
+    const std::uint64_t rss = dftu::bench::peak_heap_bytes();
+    const auto started = std::chrono::steady_clock::now();
+    auto opened = Snapshot::open(dir);
+    const std::uint64_t nanos =
+        nanos_between(started, std::chrono::steady_clock::now());
+    dftracer::utils::configure_default_runtime({.threads = previous});
+    if (!opened) {
+        fail(dstd::fmt<"one-thread snapshot of {}: {}">(
+            dir, to_std(opened.error())));
+        return false;
+    }
+    QueryRow row = query_row(
+        "open_1t", 1, nanos, rss,
+        prefix + format_stats(opened->open_stats(), opened->read_stats()));
+    if (print_now) {
+        print_query_row(row);
+    } else {
+        query_rows.push_back(std::move(row));
+    }
+    return true;
+}
+
+bool Bench::check_write_row(const WriteRow& row) {
+    const auto& counts = row.counts;
+    const std::size_t extent =
+        static_cast<std::size_t>(store::engine::io_fault::WriteKind::Extent);
+    const std::size_t record =
+        static_cast<std::size_t>(store::engine::io_fault::WriteKind::Record);
+    const std::size_t header =
+        static_cast<std::size_t>(store::engine::io_fault::WriteKind::Header);
+    const std::size_t footer =
+        static_cast<std::size_t>(store::engine::io_fault::WriteKind::Footer);
+    const std::size_t trailer =
+        static_cast<std::size_t>(store::engine::io_fault::WriteKind::Trailer);
+    bool ok = true;
+    const auto require = [&](bool condition, const char* what) {
+        if (!condition) {
+            fail(dstd::fmt<"{} {} threads: {}">(row.mode, row.threads, what));
+            ok = false;
+        }
+    };
+    require(row.seconds > 0, "no time");
+    require(row.seconds_flushed > 0, "no flush time");
+    require(row.seconds_compacted > 0, "no compaction time");
+    require(row.keys > 0, "no keys");
+    require(row.read_keys == row.keys, "the keys read back differ");
+    require(row.disk_bytes > 0, "no bytes on disk");
+    require(counts.writes[extent] > 0, "no extent write");
+    require(counts.bytes[extent] > 0, "no extent bytes");
+    require(counts.writes[record] > 0, "no record write");
+    require(counts.bytes[record] > 0, "no record bytes");
+    require(counts.writes[header] > 0, "no header write");
+    require(counts.bytes[header] > 0, "no header bytes");
+    require(counts.bytes[footer] > 0, "no footer bytes");
+    require(counts.bytes[trailer] > 0, "no trailer bytes");
+    require(counts.syncs > 0, "no sync");
+    const std::uint64_t total = total_bytes(counts);
+    // Extents are compressed, so the bytes written can be fewer than the
+    // payload; the reads of each run check that every row is there.
+    require(total > 0, "no bytes written");
+    return ok;
+}
+
+std::uint64_t Bench::count_keys(const dstd::String& dir) {
+    auto snapshot = Snapshot::open(dir);
+    if (!snapshot) {
+        fail(dstd::fmt<"snapshot of {}: {}">(dir, to_std(snapshot.error())));
+        return 0;
+    }
+    std::uint64_t count = 0;
+    auto cursor = snapshot->scan_all(spec(), {}, {});
+    while (!cursor.at_end()) {
+        ++count;
+        cursor.next();
+    }
+    if (cursor.error()) {
+        fail(dstd::fmt<"scan of {}: {}">(dir, to_std(*cursor.error())));
+    }
+    return count;
+}
+
+void Bench::close_writers(Runtime& runtime,
+                          dstd::Vector<dstd::UniquePtr<Writer>>& writers,
+                          std::atomic<int>& errors) {
+    require_ran(runtime.block_on(coro::named(
+        "store_bench close",
+        coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
+            for (std::size_t at = 0; at < writers.size(); ++at) {
+                Writer* writer = writers[at].get();
+                scope.spawn([writer, &errors]() -> coro::CoroTask<void> {
+                    auto closed = co_await writer->close();
+                    if (!closed) {
+                        errors.fetch_add(1, std::memory_order_relaxed);
+                    }
+                    co_return;
+                });
+            }
+            co_return;
+        }))));
+}
+
+WriteRow Bench::run_write_case(Runtime& runtime, const Workload& workload,
+                               const dstd::String& dir, bool per_thread,
+                               bool keep_dir) {
+    WriteRow row;
+    row.mode = per_thread ? "per-thread" : "shared";
+    row.threads = static_cast<int>(workload.threads);
+    row.payload = workload.payload;
+    row.keys = workload.total_keys;
+    row.commits = workload.batches * workload.threads;
+    const auto made = dftracer::utils::dstd::fs::create_directories(dir);
+    if (!made.has_value()) {
+        fail(dstd::fmt<"cannot create {}: {}">(dir, to_std(made.error())));
+        return row;
+    }
+
+    const std::size_t writers_count =
+        per_thread ? static_cast<std::size_t>(workload.threads) : 1;
+    dstd::Vector<dstd::UniquePtr<Writer>> writers(writers_count);
+    dstd::Vector<NamespaceId> namespaces(writers_count, NamespaceId{0});
+    for (std::size_t at = 0; at < writers_count; ++at) {
+        auto created =
+            Writer::create(dir, *runtime.executor(), writer_options());
+        if (!created) {
+            fail(dstd::fmt<"writer of {}: {}">(dir, to_std(created.error())));
+            return row;
+        }
+        writers[at] = std::move(*created);
+        auto namespace_id = writers[at]->add_namespace(spec());
+        if (!namespace_id) {
+            fail(dstd::fmt<"namespace of {}: {}">(
+                dir, to_std(namespace_id.error())));
+            return row;
+        }
+        namespaces[at] = *namespace_id;
+    }
+
+    const ValuePool values(workload.value_bytes, opt.trace_values);
+    std::atomic<int> errors{0};
+    store::engine::io_fault::start_counting();
+    const auto started = std::chrono::steady_clock::now();
+    require_ran(runtime.block_on(coro::named(
+        "store_bench write",
+        coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
+            for (std::uint64_t at = 0; at < workload.threads; ++at) {
+                scope.spawn([&, at]() -> coro::CoroTask<void> {
+                    const std::size_t slot =
+                        per_thread ? static_cast<std::size_t>(at) : 0;
+                    Writer& writer = *writers[slot];
+                    const NamespaceId namespace_id = namespaces[slot];
+                    for (std::uint64_t batch_index = 0;
+                         batch_index < workload.batches; ++batch_index) {
+                        const ScopeKey scope_key = ScopeKey::file(
+                            scope_name(at, batch_index % SCOPES_PER_CORO));
+                        Batch batch = writer.batch(namespace_id, scope_key, 0);
+                        for (std::size_t k = 0; k < opt.keys_per_batch; ++k) {
+                            const auto key = make_key(
+                                static_cast<std::uint32_t>(at),
+                                static_cast<std::uint32_t>(batch_index),
+                                static_cast<std::uint32_t>(k));
+                            const dstd::String& value =
+                                values.for_key(key.data(), key.size());
+                            batch.put(ByteView{key.data(), key.size()},
+                                      ByteView{value.data(), value.size()});
+                        }
+                        const bool committed = co_await commit_retrying(
+                            writer, std::move(batch), COMMIT_ATTEMPTS);
+                        if (!committed) {
+                            errors.fetch_add(1, std::memory_order_relaxed);
+                            co_return;
+                        }
+                    }
+                    co_return;
+                });
+            }
+            co_return;
+        }))));
+    close_writers(runtime, writers, errors);
+    const auto stopped = std::chrono::steady_clock::now();
+    row.counts = store::engine::io_fault::stop_counting();
+    row.seconds = seconds_between(started, stopped);
+    row.seconds_flushed = row.seconds;
+    row.seconds_compacted = row.seconds;
+    for (const auto& writer : writers) {
+        row.busy += WriterTestHook::extents(*writer).busy;
+    }
+    if (errors.load() > 0) {
+        fail(dstd::fmt<"{} {} threads: a commit or a close failed">(
+            row.mode, workload.threads));
+    }
+    row.read_keys = count_keys(dir);
+    row.disk_bytes = directory_bytes(dir);
+    check_write_row(row);
+    writers.clear();
+    if (keep_dir) {
+        row.keep_dir = dir;
+    } else {
+        dftracer::utils::dstd::fs::remove_all(dir).discard();
+    }
+    return row;
+}
+
+QueryPlan Bench::make_query_plan(const Workload& workload) const {
+    QueryPlan plan;
+    const std::size_t scopes = static_cast<std::size_t>(workload.total_scopes);
+    plan.scopes.reserve(scopes);
+    for (std::uint64_t coro = 0; coro < workload.threads; ++coro) {
+        for (std::uint64_t slot = 0; slot < workload.scopes_per_thread;
+             ++slot) {
+            plan.scopes.push_back(ScopeKey::file(scope_name(coro, slot)));
+        }
+    }
+
+    std::mt19937_64 random(QUERY_SEED);
+    const auto add = [&](dstd::Vector<QueryItem>& items, std::uint64_t count,
+                         bool absent) {
+        items.reserve(items.size() + static_cast<std::size_t>(count));
+        for (std::uint64_t at = 0; at < count; ++at) {
+            const std::uint64_t coro = random() % workload.threads;
+            const std::uint64_t batch_index = random() % workload.batches;
+            const std::uint32_t index =
+                absent ? ABSENT_KEY_INDEX
+                       : static_cast<std::uint32_t>(random() %
+                                                    workload.keys_per_batch);
+            QueryItem item;
+            item.scope =
+                static_cast<std::size_t>(coro) * workload.scopes_per_thread +
+                batch_index % SCOPES_PER_CORO;
+            item.key = make_key(static_cast<std::uint32_t>(coro),
+                                static_cast<std::uint32_t>(batch_index), index);
+            items.push_back(std::move(item));
+        }
+    };
+    add(plan.hits, opt.gets, false);
+    add(plan.misses, std::max<std::uint64_t>(1, opt.gets / GETS_PER_MISS),
+        true);
+
+    dstd::Vector<std::size_t> every_scope(scopes);
+    std::iota(every_scope.begin(), every_scope.end(), std::size_t{0});
+    std::mt19937_64 scan_random(QUERY_SEED ^ dstd::hash::GOLDEN_RATIO);
+    std::shuffle(every_scope.begin(), every_scope.end(), scan_random);
+    if (every_scope.size() > SCAN_SCOPES) {
+        every_scope.resize(static_cast<std::size_t>(SCAN_SCOPES));
+    }
+    for (std::size_t index : every_scope) {
+        const std::uint64_t slot =
+            static_cast<std::uint64_t>(index) % workload.scopes_per_thread;
+        plan.scans.push_back(QueryScan{index, scope_rows(workload, slot)});
+    }
+    return plan;
+}
+
+bool Bench::query_store(const Workload& workload, const dstd::String& dir,
+                        const QueryPlan& plan) {
+    const NamespaceSpec namespace_spec = spec();
+
+    // An open of its own first, so the reported open is the warm one: the
+    // second reads only what the first left in the page cache of the operating
+    // system, and this store caches nothing between opens. The peak resident
+    // set of a process only rises, so the memory an open holds is the growth of
+    // the first one and not of the second, which reuses it.
+    const std::uint64_t cold_rss = dftu::bench::peak_heap_bytes();
+    const auto cold_started = std::chrono::steady_clock::now();
+    std::uint64_t cold_nanos = 0;
+    dftracer::utils::dstd::Optional<Snapshot> cold;
+    {
+        auto opened_cold = Snapshot::open(dir);
+        cold_nanos =
+            nanos_between(cold_started, std::chrono::steady_clock::now());
+        if (!opened_cold) {
+            fail(dstd::fmt<"cold snapshot of {}: {}">(
+                dir, to_std(opened_cold.error())));
+            return false;
+        }
+        cold = std::move(*opened_cold);
+    }
+    const auto open_started = std::chrono::steady_clock::now();
+    auto opened = Snapshot::open(dir);
+    const std::uint64_t open_nanos =
+        nanos_between(open_started, std::chrono::steady_clock::now());
+    if (!opened) {
+        fail(dstd::fmt<"snapshot of {}: {}">(dir, to_std(opened.error())));
+        return false;
+    }
+    Snapshot snapshot = std::move(*opened);
+    query_rows.push_back(query_row(
+        "open", 1, open_nanos, cold_rss,
+        dstd::fmt<"warm ms reported, cold={} ms (cold ms list={} files={} "
+                  "tables={}), rss_growth of the cold open, {}">(
+            format_ms(cold_nanos), format_ms_value(cold->open_stats().ms_list),
+            format_ms_value(cold->open_stats().ms_open_files),
+            format_ms_value(cold->open_stats().ms_tables),
+            format_stats(snapshot.open_stats(), snapshot.read_stats()))));
+    // The first get of the cold snapshot: it pays the reads of the commits
+    // that hold the copy, which the open above did not make.
+    if (cold.has_value()) {
+        const std::uint64_t rss = dftu::bench::peak_heap_bytes();
+        const auto started = std::chrono::steady_clock::now();
+        auto first =
+            cold->get(namespace_spec, plan.scopes[plan.hits.front().scope],
+                      ByteView{plan.hits.front().key.data(),
+                               plan.hits.front().key.size()});
+        const std::uint64_t nanos =
+            nanos_between(started, std::chrono::steady_clock::now());
+        if (first.has_value() && first->has_value()) {
+            query_rows.push_back(
+                query_row("first_get", 1, nanos, rss,
+                          format_read_stats(cold->read_stats())));
+        } else {
+            fail(dstd::fmt<"the first get of the cold snapshot of {} returned "
+                           "nothing">(dir));
+        }
+        cold.reset();
+    }
+    // The same open under a one-thread default runtime, so the read calls the
+    // runs coalesce and the time of a single worker sit next to the pool's.
+    if (!report_single_thread_open(dir, "", false)) return false;
+
+    const ValuePool values(workload.value_bytes, opt.trace_values);
+    std::uint64_t mismatches = 0;
+    {
+        const std::uint64_t rss = dftu::bench::peak_heap_bytes();
+        const auto started = std::chrono::steady_clock::now();
+        for (const QueryItem& item : plan.hits) {
+            auto found =
+                snapshot.get(namespace_spec, plan.scopes[item.scope],
+                             ByteView{item.key.data(), item.key.size()});
+            if (!found) {
+                fail(dstd::fmt<"get of {}: {}">(dir, to_std(found.error())));
+                return false;
+            }
+            const auto& value = *found;
+            if (!value.has_value() ||
+                dftracer::utils::dstd::StringView(
+                    reinterpret_cast<const char*>(value->bytes().data()),
+                    value->bytes().size()) !=
+                    values.for_key(item.key.data(), item.key.size())) {
+                ++mismatches;
+            }
+        }
+        const std::uint64_t nanos =
+            nanos_between(started, std::chrono::steady_clock::now());
+        query_rows.push_back(query_row(
+            "get_hit", plan.hits.size(), nanos, rss,
+            dstd::fmt<"mismatches={} {}">(
+                mismatches, format_read_stats(snapshot.read_stats()))));
+    }
+    if (mismatches > 0) {
+        fail(dstd::fmt<"{} point gets of {} did not return the value written">(
+            mismatches, dir));
+    }
+    mismatches = 0;
+    {
+        const std::uint64_t rss = dftu::bench::peak_heap_bytes();
+        const auto started = std::chrono::steady_clock::now();
+        for (const QueryItem& item : plan.misses) {
+            auto found =
+                snapshot.get(namespace_spec, plan.scopes[item.scope],
+                             ByteView{item.key.data(), item.key.size()});
+            if (!found) {
+                fail(dstd::fmt<"get of {}: {}">(dir, to_std(found.error())));
+                return false;
+            }
+            if (found->has_value()) ++mismatches;
+        }
+        const std::uint64_t nanos =
+            nanos_between(started, std::chrono::steady_clock::now());
+        query_rows.push_back(query_row(
+            "get_miss", plan.misses.size(), nanos, rss,
+            dstd::fmt<"mismatches={} {}">(
+                mismatches, format_read_stats(snapshot.read_stats()))));
+    }
+    if (mismatches > 0) {
+        fail(dstd::fmt<"{} absent keys of {} were found">(mismatches, dir));
+    }
+
+    std::uint64_t scanned = 0;
+    std::uint64_t wrong_scopes = 0;
+    {
+        const std::uint64_t rss = dftu::bench::peak_heap_bytes();
+        const auto started = std::chrono::steady_clock::now();
+        for (const QueryScan& scan : plan.scans) {
+            std::uint64_t rows = 0;
+            auto cursor =
+                snapshot.scan(namespace_spec, plan.scopes[scan.scope], {});
+            while (!cursor.at_end()) {
+                ++rows;
+                cursor.next();
+            }
+            if (cursor.error()) {
+                fail(dstd::fmt<"scan of {}: {}">(dir, to_std(*cursor.error())));
+            }
+            scanned += rows;
+            if (rows != scan.rows) ++wrong_scopes;
+        }
+        const std::uint64_t nanos =
+            nanos_between(started, std::chrono::steady_clock::now());
+        const dstd::String extra = dstd::fmt<"scopes={} rows_per_scope={} {}">(
+            plan.scans.size(),
+            fixed(plan.scans.empty()
+                      ? 0
+                      : static_cast<double>(scanned) /
+                            static_cast<double>(plan.scans.size()),
+                  1),
+            format_read_stats(snapshot.read_stats()));
+        query_rows.push_back(
+            query_row("scan_scope", scanned, nanos, rss, extra));
+    }
+    if (wrong_scopes > 0) {
+        fail(dstd::fmt<"{} scopes of {} hold another row count than written">(
+            wrong_scopes, dir));
+    }
+
+    {
+        const std::uint64_t rss = dftu::bench::peak_heap_bytes();
+        const auto started = std::chrono::steady_clock::now();
+        std::uint64_t rows = 0;
+        auto cursor = snapshot.scan_all(namespace_spec, {}, {});
+        while (!cursor.at_end()) {
+            ++rows;
+            cursor.next();
+        }
+        if (cursor.error()) {
+            fail(dstd::fmt<"scan of {}: {}">(dir, to_std(*cursor.error())));
+        }
+        const std::uint64_t nanos =
+            nanos_between(started, std::chrono::steady_clock::now());
+        query_rows.push_back(
+            query_row("full_scan", rows, nanos, rss,
+                      dstd::fmt<"rows_per_s={} rows_expected={} {}">(
+                          format_rate(rows, nanos), workload.total_keys,
+                          format_read_stats(snapshot.read_stats()))));
+        if (rows != workload.total_keys) {
+            fail(dstd::fmt<"the full scan of {} read {} rows, not {}">(
+                dir, rows, workload.total_keys));
+        }
+    }
+    return true;
+}
+
+bool Bench::run_query_case(const Workload& workload, const dstd::String& dir) {
+    if (dir.empty()) {
+        ensure_comment();
+        std::cout << "# the query case reads the data of the shared write case,"
+                     " which --mode per-thread does not write; skipped\n";
+        return true;
+    }
+    const QueryPlan plan = make_query_plan(workload);
+    return query_store(workload, dir, plan);
+}
+
+ScopeRow Bench::run_scope_case(Runtime& runtime, std::uint64_t scopes) {
+    ScopeRow row;
+    row.scopes = scopes;
+    const dstd::String dir = case_dir(dstd::fmt<"scopes-{}">(scopes));
+    const auto made = dftracer::utils::dstd::fs::create_directories(dir);
+    if (!made.has_value()) {
+        fail(dstd::fmt<"cannot create {}: {}">(dir, to_std(made.error())));
+        return row;
+    }
+    auto created = Writer::create(dir, *runtime.executor(), writer_options());
+    if (!created) {
+        fail(dstd::fmt<"writer of {}: {}">(dir, to_std(created.error())));
+        return row;
+    }
+    dstd::UniquePtr<Writer> writer = std::move(*created);
+    auto namespace_id = writer->add_namespace(spec());
+    if (!namespace_id) {
+        fail(dstd::fmt<"namespace of {}: {}">(dir,
+                                              to_std(namespace_id.error())));
+        return row;
+    }
+
+    const dstd::String value(opt.value_bytes, 'v');
+    std::atomic<bool> ok{true};
+    std::uint64_t new_scope_nanos = 0;
+    std::uint64_t commit_nanos = 0;
+    require_ran(runtime.block_on(
+        coro::named("store_bench scopes", [&]() -> coro::CoroTask<void> {
+            std::uint32_t ordinal = 0;
+            const auto new_started = std::chrono::steady_clock::now();
+            for (std::uint64_t at = 0; at < scopes; ++at) {
+                const ScopeKey scope_key =
+                    ScopeKey::file(dstd::fmt<"/bench/s{}.dft">(at));
+                Batch batch = writer->batch(*namespace_id, scope_key, 0);
+                const auto key =
+                    make_key(0, ordinal, static_cast<std::uint32_t>(at));
+                ordinal += 1;
+                batch.put(ByteView{key.data(), key.size()},
+                          ByteView{value.data(), value.size()});
+                const bool committed = co_await commit_retrying(
+                    *writer, std::move(batch), COMMIT_ATTEMPTS);
+                if (!committed) {
+                    ok.store(false, std::memory_order_relaxed);
+                    co_return;
+                }
+            }
+            const auto new_stopped = std::chrono::steady_clock::now();
+            new_scope_nanos = nanos_between(new_started, new_stopped);
+
+            std::mt19937_64 random(0x5EEDBEEFULL);
+            const auto commit_started = std::chrono::steady_clock::now();
+            for (std::uint64_t at = 0; at < opt.commits; ++at) {
+                const std::uint64_t scope_index = random() % scopes;
+                const ScopeKey scope_key =
+                    ScopeKey::file(dstd::fmt<"/bench/s{}.dft">(scope_index));
+                Batch batch = writer->batch(*namespace_id, scope_key, 0);
+                const auto key = make_key(
+                    0, ordinal, static_cast<std::uint32_t>(scope_index));
+                ordinal += 1;
+                batch.put(ByteView{key.data(), key.size()},
+                          ByteView{value.data(), value.size()});
+                const bool committed = co_await commit_retrying(
+                    *writer, std::move(batch), COMMIT_ATTEMPTS);
+                if (!committed) {
+                    ok.store(false, std::memory_order_relaxed);
+                    co_return;
+                }
+            }
+            commit_nanos =
+                nanos_between(commit_started, std::chrono::steady_clock::now());
+        }())));
+    require_ran(runtime.block_on(
+        coro::named("store_bench scopes close", [&]() -> coro::CoroTask<void> {
+            auto closed = co_await writer->close();
+            if (!closed) {
+                fail(dstd::fmt<"close of {}: {}">(dir, to_std(closed.error())));
+                ok.store(false, std::memory_order_relaxed);
+            }
+        }())));
+    if (!ok.load()) fail(dstd::fmt<"scope case of {} scopes">(scopes));
+    row.ns_new_scope =
+        static_cast<double>(new_scope_nanos) / static_cast<double>(scopes);
+    row.ns_commit =
+        static_cast<double>(commit_nanos) / static_cast<double>(opt.commits);
+    writer.reset();
+    dftracer::utils::dstd::fs::remove_all(dir).discard();
+    return row;
+}
+
+NamespaceSpec Bench::fold_spec() const {
+    NamespaceSpec namespace_spec;
+    namespace_spec.name = dstring("bench-fold");
+    namespace_spec.format_version = 0;
+    namespace_spec.fold = store::FoldKind::SumI64;
+    namespace_spec.durable = false;
+    return namespace_spec;
+}
+
+bool Bench::write_fold(Runtime& runtime, const dstd::String& dir,
+                       std::uint64_t scopes, std::uint64_t keys) {
+    const auto made = dftracer::utils::dstd::fs::create_directories(dir);
+    if (!made.has_value()) {
+        fail(dstd::fmt<"cannot create {}: {}">(dir, to_std(made.error())));
+        return false;
+    }
+    auto created = Writer::create(dir, *runtime.executor(), writer_options());
+    if (!created) {
+        fail(dstd::fmt<"writer of {}: {}">(dir, to_std(created.error())));
+        return false;
+    }
+    dstd::UniquePtr<Writer> writer = std::move(*created);
+    auto namespace_id = writer->add_namespace(fold_spec());
+    if (!namespace_id) {
+        fail(dstd::fmt<"namespace of {}: {}">(dir,
+                                              to_std(namespace_id.error())));
+        return false;
+    }
+
+    // Two batches per scope, so every scope holds two segments and the scan
+    // folds across them: the first with fold_value(scope, key), the second
+    // with 1 for every key.
+    const dstd::Vector<dstd::String> names = fold_key_names(keys);
+    dstd::Vector<std::uint8_t> values(static_cast<std::size_t>(keys) *
+                                      FOLD_VALUE_BYTES);
+    std::array<std::uint8_t, FOLD_VALUE_BYTES> one{};
+    dftracer::utils::dstd::write_u64_le(one.data(), 1);
+    std::atomic<bool> ok{true};
+    require_ran(runtime.block_on(
+        coro::named("store_bench fold write", [&]() -> coro::CoroTask<void> {
+            for (std::uint64_t scope = 0; scope < scopes; ++scope) {
+                const ScopeKey scope_key = ScopeKey::file(scope_name(0, scope));
+                for (std::size_t segment = 0; segment < 2; ++segment) {
+                    Batch batch = writer->batch(*namespace_id, scope_key, 0);
+                    for (std::uint64_t key = 0; key < keys; ++key) {
+                        const std::size_t at =
+                            static_cast<std::size_t>(key) * FOLD_VALUE_BYTES;
+                        const std::uint8_t* bytes = one.data();
+                        if (segment == 0) {
+                            dftracer::utils::dstd::write_u64_le(
+                                values.data() + at, fold_value(scope, key));
+                            bytes = values.data() + at;
+                        }
+                        batch.fold(
+                            ByteView{
+                                names[static_cast<std::size_t>(key)].data(),
+                                names[static_cast<std::size_t>(key)].size()},
+                            ByteView{bytes, FOLD_VALUE_BYTES});
+                    }
+                    const bool committed = co_await commit_retrying(
+                        *writer, std::move(batch), COMMIT_ATTEMPTS);
+                    if (!committed) {
+                        ok.store(false, std::memory_order_relaxed);
+                        co_return;
+                    }
+                }
+            }
+        }())));
+    require_ran(runtime.block_on(
+        coro::named("store_bench fold close", [&]() -> coro::CoroTask<void> {
+            auto closed = co_await writer->close();
+            if (!closed) {
+                fail(dstd::fmt<"close of {}: {}">(dir, to_std(closed.error())));
+                ok.store(false, std::memory_order_relaxed);
+            }
+        }())));
+    if (!ok.load()) {
+        fail(dstd::fmt<"fold write of {} failed">(dir));
+        return false;
+    }
+    return true;
+}
+
+FoldScan Bench::fold_scan(const Snapshot& snapshot,
+                          const NamespaceSpec& namespace_spec,
+                          const dstd::Vector<ScopeKey>& scopes,
+                          std::uint64_t keys, std::uint64_t threads,
+                          const dstd::Vector<std::int64_t>& expected) {
+    FoldScan scan;
+    dstd::Vector<dstd::Vector<std::int64_t>> parts(
+        static_cast<std::size_t>(threads),
+        dstd::Vector<std::int64_t>(static_cast<std::size_t>(keys), 0));
+    std::atomic<int> errors{0};
+    const auto started = std::chrono::steady_clock::now();
+    dstd::Vector<dstd::Thread> workers;
+    workers.reserve(static_cast<std::size_t>(threads));
+    for (std::uint64_t at = 0; at < threads; ++at) {
+        workers.emplace_back([&, at] {
+            const std::size_t part = static_cast<std::size_t>(at);
+            const std::size_t count = static_cast<std::size_t>(threads);
+            const std::size_t begin = scopes.size() * part / count;
+            const std::size_t end = scopes.size() * (part + 1) / count;
+            dstd::Vector<std::int64_t>& sums = parts[part];
+            auto cursor =
+                snapshot.scan(namespace_spec,
+                              dftracer::utils::dstd::Span<const ScopeKey>(
+                                  scopes.data() + begin, end - begin),
+                              {}, {});
+            while (!cursor.at_end()) {
+                auto value = cursor.value();
+                const std::uint64_t index = fold_key_index(cursor.key());
+                if (!value.has_value() || value->size() != FOLD_VALUE_BYTES ||
+                    index >= keys) {
+                    errors.fetch_add(1, std::memory_order_relaxed);
+                    return;
+                }
+                const auto* bytes =
+                    reinterpret_cast<const std::uint8_t*>(value->data());
+                sums[static_cast<std::size_t>(index)] +=
+                    static_cast<std::int64_t>(
+                        dftracer::utils::dstd::read_u64_le(bytes));
+                cursor.next();
+            }
+            if (cursor.error()) errors.fetch_add(1, std::memory_order_relaxed);
+        });
+    }
+    for (auto& worker : workers) worker.join();
+    scan.nanos = nanos_between(started, std::chrono::steady_clock::now());
+    if (errors.load() > 0) {
+        fail(
+            "fold scan: a key or a value of the fold namespace is not the one "
+            "written");
+        scan.ok = false;
+        return scan;
+    }
+    for (std::uint64_t key = 0; key < keys; ++key) {
+        const std::size_t at = static_cast<std::size_t>(key);
+        std::int64_t total = 0;
+        for (const dstd::Vector<std::int64_t>& sums : parts) total += sums[at];
+        if (total != expected[at]) ++scan.mismatches;
+    }
+    return scan;
+}
+
+bool Bench::run_fold_case(Runtime& runtime, std::uint64_t scopes) {
+    const std::uint64_t keys = opt.fold_keys;
+    const dstd::Vector<std::int64_t> expected = fold_expectation(scopes, keys);
+    dstd::Vector<ScopeKey> scope_keys;
+    scope_keys.reserve(static_cast<std::size_t>(scopes));
+    for (std::uint64_t scope = 0; scope < scopes; ++scope) {
+        scope_keys.push_back(ScopeKey::file(scope_name(0, scope)));
+    }
+    const dstd::String dir = case_dir(dstd::fmt<"fold-{}">(scopes));
+    bool ok = true;
+    if (!write_fold(runtime, dir, scopes, keys)) {
+        ok = false;
+    } else {
+        const auto open_started = std::chrono::steady_clock::now();
+        auto opened = Snapshot::open(dir);
+        const std::uint64_t open_nanos =
+            nanos_between(open_started, std::chrono::steady_clock::now());
+        const double ms_open = static_cast<double>(open_nanos) / 1e6;
+        if (!opened) {
+            fail(dstd::fmt<"snapshot of {}: {}">(dir, to_std(opened.error())));
+            ok = false;
+        } else {
+            Snapshot snapshot = std::move(*opened);
+            const dstd::String scope_column = dstd::fmt<"scopes={} ">(scopes);
+            // This case prints its rows as they come, so the open rows of
+            // this directory are printed here and not queued.
+            print_query_row(
+                query_row("open", 1, open_nanos, dftu::bench::peak_heap_bytes(),
+                          scope_column + format_stats(snapshot.open_stats(),
+                                                      snapshot.read_stats())));
+            if (!report_single_thread_open(dir, scope_column, true)) {
+                ok = false;
+            }
+            const NamespaceSpec namespace_spec = fold_spec();
+            for (const std::uint64_t threads : FOLD_THREADS) {
+                const FoldScan scan =
+                    fold_scan(snapshot, namespace_spec, scope_keys, keys,
+                              threads, expected);
+                FoldRow row;
+                row.scopes = scopes;
+                row.keys = keys;
+                row.threads = threads;
+                row.ms_open = ms_open;
+                row.ms_scan = static_cast<double>(scan.nanos) / 1e6;
+                row.reads = snapshot.read_stats();
+                row.ns_per_key =
+                    static_cast<double>(scan.nanos) / static_cast<double>(keys);
+                row.mismatches = scan.mismatches;
+                print_fold_row(row);
+                if (scan.mismatches > 0) {
+                    fail(dstd::fmt<
+                         "{} fold sums of {} differ from the ones written">(
+                        scan.mismatches, dir));
+                    ok = false;
+                }
+                if (!scan.ok) ok = false;
+            }
+        }
+    }
+    dftracer::utils::dstd::fs::remove_all(dir).discard();
+    return ok;
+}
+
+NamespaceSpec Bench::grow_spec(bool shared) const {
+    NamespaceSpec namespace_spec = spec();
+    namespace_spec.name = dstring("bench-grow");
+    namespace_spec.shared = shared;
+    return namespace_spec;
+}
+
+GrowRow grow_row(const dstd::String& label, const char* state, const char* op,
+                 std::uint64_t count, std::uint64_t nanos, dstd::String extra) {
+    GrowRow row;
+    row.copies = label;
+    row.state = state;
+    row.op = op;
+    row.count = count;
+    row.ms_total = static_cast<double>(nanos) / 1e6;
+    row.ns_per_item =
+        count > 0 ? static_cast<double>(nanos) / static_cast<double>(count) : 0;
+    row.extra = std::move(extra);
+    return row;
+}
+
+bool Bench::grow_reads(const dstd::String& label, const char* state,
+                       const dstd::String& dir,
+                       const NamespaceSpec& namespace_spec,
+                       const ScopeKey& scope, std::uint64_t total,
+                       std::uint64_t last_refresh) {
+    const auto open_started = std::chrono::steady_clock::now();
+    auto opened = Snapshot::open(dir);
+    const std::uint64_t open_nanos =
+        nanos_between(open_started, std::chrono::steady_clock::now());
+    if (!opened) {
+        fail(dstd::fmt<"snapshot of {}: {}">(dir, to_std(opened.error())));
+        return false;
+    }
+    Snapshot snapshot = std::move(*opened);
+    print_grow_row(
+        grow_row(label, state, "open", 1, open_nanos,
+                 format_stats(snapshot.open_stats(), snapshot.read_stats())));
+    const DiskUse use = disk_use(dir);
+    print_grow_row(
+        grow_row(label, state, "disk", use.files, 0,
+                 dstd::fmt<"disk_bytes={} files={}">(use.bytes, use.files)));
+
+    const ValuePool values(opt.value_bytes, opt.trace_values);
+    const dstd::String expected_meta = grow_meta(last_refresh);
+    const ByteView meta_key{GROW_META_KEY, GROW_META_KEY_BYTES};
+    bool ok = true;
+
+    std::uint64_t mismatches = 0;
+    {
+        std::mt19937_64 random(QUERY_SEED);
+        const auto started = std::chrono::steady_clock::now();
+        for (std::uint64_t at = 0; at < opt.gets; ++at) {
+            const auto key = grow_key(random() % total);
+            auto found = snapshot.get(namespace_spec, scope,
+                                      ByteView{key.data(), key.size()});
+            if (!found) {
+                fail(dstd::fmt<"get of {}: {}">(dir, to_std(found.error())));
+                return false;
+            }
+            if (!found->has_value() ||
+                !same_bytes((*found)->bytes(),
+                            values.for_key(key.data(), key.size()))) {
+                ++mismatches;
+            }
+        }
+        const std::uint64_t nanos =
+            nanos_between(started, std::chrono::steady_clock::now());
+        print_grow_row(grow_row(
+            label, state, "get_chunk", opt.gets, nanos,
+            dstd::fmt<"mismatches={} {}">(
+                mismatches, format_read_stats(snapshot.read_stats()))));
+    }
+    if (mismatches > 0) {
+        fail(dstd::fmt<"{} chunk gets of {} did not return the value written">(
+            mismatches, dir));
+        ok = false;
+    }
+
+    mismatches = 0;
+    {
+        const auto started = std::chrono::steady_clock::now();
+        for (std::uint64_t at = 0; at < opt.gets; ++at) {
+            auto found = snapshot.get(namespace_spec, scope, meta_key);
+            if (!found) {
+                fail(dstd::fmt<"get of meta of {}: {}">(dir,
+                                                        to_std(found.error())));
+                return false;
+            }
+            if (!found->has_value() ||
+                !same_bytes((*found)->bytes(), expected_meta)) {
+                ++mismatches;
+            }
+        }
+        const std::uint64_t nanos =
+            nanos_between(started, std::chrono::steady_clock::now());
+        print_grow_row(grow_row(label, state, "get_meta", opt.gets, nanos,
+                                dstd::fmt<"mismatches={}">(mismatches)));
+    }
+    if (mismatches > 0) {
+        fail(dstd::fmt<"{} meta gets of {} did not return the newest summary">(
+            mismatches, dir));
+        ok = false;
+    }
+
+    mismatches = 0;
+    {
+        const std::uint64_t span =
+            std::min<std::uint64_t>(GROW_SCAN_KEYS, total);
+        const std::uint64_t scans =
+            std::max<std::uint64_t>(1, opt.gets / GETS_PER_GROW_SCAN);
+        std::mt19937_64 random(QUERY_SEED ^ dstd::hash::GOLDEN_RATIO);
+        const auto started = std::chrono::steady_clock::now();
+        for (std::uint64_t at = 0; at < scans; ++at) {
+            const std::uint64_t first = random() % (total - span + 1);
+            const auto begin = grow_key(first);
+            const auto end = grow_key(first + span);
+            auto cursor = snapshot.scan(namespace_spec, scope,
+                                        ByteView{begin.data(), begin.size()},
+                                        ByteView{end.data(), end.size()});
+            std::uint64_t rows = 0;
+            while (!cursor.at_end()) {
+                const auto want = grow_key(first + rows);
+                auto value = cursor.value();
+                if (rows >= span || !value.has_value() ||
+                    cursor.key().size() != GROW_KEY_BYTES ||
+                    !std::equal(want.begin(), want.end(),
+                                reinterpret_cast<const std::uint8_t*>(
+                                    cursor.key().data())) ||
+                    !same_bytes(*value,
+                                values.for_key(want.data(), want.size()))) {
+                    ++mismatches;
+                    break;
+                }
+                ++rows;
+                cursor.next();
+            }
+            if (cursor.error()) {
+                fail(dstd::fmt<"scan of {}: {}">(dir, to_std(*cursor.error())));
+                return false;
+            }
+            if (rows != span) ++mismatches;
+        }
+        const std::uint64_t nanos =
+            nanos_between(started, std::chrono::steady_clock::now());
+        print_grow_row(
+            grow_row(label, state, "scan_range", scans, nanos,
+                     dstd::fmt<"keys_per_scan={} ns_per_key={} mismatches={}">(
+                         span,
+                         fixed(static_cast<double>(nanos) /
+                                   static_cast<double>(scans * span),
+                               1),
+                         mismatches)));
+    }
+    if (mismatches > 0) {
+        fail(dstd::fmt<"{} range scans of {} did not return the keys written">(
+            mismatches, dir));
+        ok = false;
+    }
+
+    mismatches = 0;
+    {
+        const dstd::String meta_name(GROW_META_KEY, GROW_META_KEY_BYTES);
+        const auto started = std::chrono::steady_clock::now();
+        std::uint64_t rows = 0;
+        auto cursor =
+            snapshot.scan(namespace_spec, scope, ByteView{}, ByteView{});
+        while (!cursor.at_end()) {
+            auto value = cursor.value();
+            bool good = value.has_value();
+            if (good && rows < total) {
+                const auto want = grow_key(rows);
+                good = cursor.key().size() == GROW_KEY_BYTES &&
+                       std::equal(want.begin(), want.end(),
+                                  reinterpret_cast<const std::uint8_t*>(
+                                      cursor.key().data())) &&
+                       same_bytes(*value,
+                                  values.for_key(want.data(), want.size()));
+            } else if (good && rows == total) {
+                good = same_bytes(cursor.key(), meta_name) &&
+                       same_bytes(*value, expected_meta);
+            } else {
+                good = false;
+            }
+            if (!good) ++mismatches;
+            ++rows;
+            cursor.next();
+        }
+        if (cursor.error()) {
+            fail(dstd::fmt<"scan of {}: {}">(dir, to_std(*cursor.error())));
+            return false;
+        }
+        const std::uint64_t nanos =
+            nanos_between(started, std::chrono::steady_clock::now());
+        print_grow_row(grow_row(label, state, "full_scan", rows, nanos,
+                                dstd::fmt<"rows_expected={} mismatches={} {}">(
+                                    total + 1, mismatches,
+                                    format_read_stats(snapshot.read_stats()))));
+        if (rows != total + 1) {
+            fail(dstd::fmt<"the full scan of {} read {} rows, not {}">(
+                dir, rows, total + 1));
+            ok = false;
+        }
+    }
+    if (mismatches > 0) {
+        fail(dstd::fmt<"{} rows of the full scan of {} are not the ones "
+                       "written">(mismatches, dir));
+        ok = false;
+    }
+    return ok;
+}
+
+bool Bench::run_grow_case(const dstd::String& label, std::uint64_t copies,
+                          bool shared, bool do_pack) {
+    const std::uint64_t per_refresh = opt.grow_keys / copies;
+    if (per_refresh == 0) {
+        fail(dstd::fmt<"--grow-keys {} is below --copies {}">(opt.grow_keys,
+                                                              copies));
+        return false;
+    }
+    const std::uint64_t total = per_refresh * copies;
+    const dstd::String dir = case_dir(dstd::fmt<"grow-{}">(label));
+    auto opened = store::Store::open(dstd::StringView(dir.data(), dir.size()));
+    if (!opened) {
+        fail(dstd::fmt<"store of {}: {}">(dir, to_std(opened.error())));
+        return false;
+    }
+    store::Store grown = std::move(*opened);
+    const NamespaceSpec namespace_spec = grow_spec(shared);
+    auto handle = grown.ns(namespace_spec);
+    if (!handle) {
+        fail(dstd::fmt<"namespace of {}: {}">(dir, to_std(handle.error())));
+        return false;
+    }
+    const ScopeKey scope = ScopeKey::file("/bench/grow.dft");
+    const ValuePool values(opt.value_bytes, opt.trace_values);
+    const ByteView meta_key{GROW_META_KEY, GROW_META_KEY_BYTES};
+    dstd::Vector<std::uint64_t> refresh_nanos;
+    refresh_nanos.reserve(static_cast<std::size_t>(copies));
+    std::uint64_t write_nanos = 0;
+    for (std::uint64_t refresh = 0; refresh < copies; ++refresh) {
+        const dstd::String meta = grow_meta(refresh);
+        const auto started = std::chrono::steady_clock::now();
+        Batch batch = grown.building_batch(*handle, scope);
+        for (std::uint64_t at = 0; at < per_refresh; ++at) {
+            const auto key = grow_key(refresh * per_refresh + at);
+            const dstd::String& value = values.for_key(key.data(), key.size());
+            batch.put(ByteView{key.data(), key.size()},
+                      ByteView{value.data(), value.size()});
+        }
+        batch.put(meta_key, ByteView{meta.data(), meta.size()});
+        auto committed =
+            default_runtime().submit(grown.commit(std::move(batch))).get();
+        if (!committed) {
+            fail(dstd::fmt<"commit of {}: {}">(dir, to_std(committed.error())));
+            return false;
+        }
+        store::Publish target;
+        target.ns = &*handle;
+        target.scope = &scope;
+        auto published =
+            default_runtime()
+                .submit(grown.publish(
+                    dftracer::utils::dstd::Span<const store::Publish>(&target,
+                                                                      1)))
+                .get();
+        if (!published) {
+            fail(
+                dstd::fmt<"publish of {}: {}">(dir, to_std(published.error())));
+            return false;
+        }
+        auto closed = default_runtime().submit(grown.close()).get();
+        if (!closed) {
+            fail(dstd::fmt<"close of {}: {}">(dir, to_std(closed.error())));
+            return false;
+        }
+        const std::uint64_t nanos =
+            nanos_between(started, std::chrono::steady_clock::now());
+        refresh_nanos.push_back(nanos);
+        write_nanos += nanos;
+    }
+    std::sort(refresh_nanos.begin(), refresh_nanos.end());
+    const std::size_t p99_at =
+        static_cast<std::size_t>((refresh_nanos.size() * 99 + 99) / 100 - 1);
+    print_grow_row(grow_row(
+        label, "grown", "refresh", copies, write_nanos,
+        dstd::fmt<"mean_ms={} p99_ms={} total_ms={} keys_per_refresh={} "
+                  "keys={}">(
+            fixed(static_cast<double>(write_nanos) / 1e6 /
+                      static_cast<double>(copies),
+                  3),
+            fixed(static_cast<double>(refresh_nanos[p99_at]) / 1e6, 3),
+            fixed(static_cast<double>(write_nanos) / 1e6, 3), per_refresh,
+            total)));
+    bool ok = grow_reads(label, "grown", dir, namespace_spec, scope, total,
+                         copies - 1);
+    if (ok && do_pack) {
+        store::PackOptions pack_options;
+        pack_options.keep_seconds = 0;
+        const auto started = std::chrono::steady_clock::now();
+        auto packed = default_runtime().submit(grown.pack(pack_options)).get();
+        const std::uint64_t nanos =
+            nanos_between(started, std::chrono::steady_clock::now());
+        if (!packed) {
+            print_grow_row(grow_row(label, "grown", "pack_refused", 1, nanos,
+                                    to_std(packed.error())));
+        } else {
+            print_grow_row(grow_row(
+                label, "packed", "pack", 1, nanos,
+                dstd::fmt<"files_packed={} copies_written={} copies_skipped={} "
+                          "files_deleted={} bytes_deleted={}">(
+                    packed->files_packed, packed->copies_written,
+                    packed->copies_skipped, packed->files_deleted,
+                    packed->bytes_deleted)));
+            ok = grow_reads(label, "packed", dir, namespace_spec, scope, total,
+                            copies - 1);
+        }
+    }
+    dftracer::utils::dstd::fs::remove_all(dir).discard();
+    return ok;
+}
+
+bool Bench::run_kept() {
+    const bool keep = !opt.keep.empty();
+    const dstd::String& base = keep ? opt.keep : opt.reuse;
+    for (const dstd::String& mode : opt.modes) {
+        const bool per_thread = mode == "per-thread";
+        for (int threads : opt.threads) {
+            Runtime runtime(static_cast<std::size_t>(threads));
+            note_backend(runtime);
+            const Workload workload =
+                workload_of(opt, static_cast<std::uint64_t>(threads));
+            const dstd::String name =
+                dstd::fmt<"{}-{}-{}">(mode, threads, opt.payload_mib);
+            const dstd::String dir = dstd::fmt<"{}/{}">(base, name);
+            const bool exists =
+                dftracer::utils::dstd::fs::exists(dir).value_or(false);
+            if (keep && exists) {
+                fail(dstd::fmt<"{} exists; --keep writes only a new directory">(
+                    dir));
+                return false;
+            }
+            if (!keep && !exists) {
+                fail(dstd::fmt<"{} does not exist; write it first with --keep">(
+                    dir));
+                return false;
+            }
+            if (keep) {
+                print_write_row(
+                    run_write_case(runtime, workload, dir, per_thread, true));
+            } else {
+                run_query_case(workload, dir);
+            }
+        }
+    }
+    for (const QueryRow& row : query_rows) print_query_row(row);
+    return !failed;
+}
+
+bool Bench::run() {
+    if (!opt.keep.empty() || !opt.reuse.empty()) return run_kept();
+    const bool print_writes = opt.which == "write" || opt.which == "all";
+    const bool do_query = opt.which == "query" || opt.which == "all";
+    const bool do_scopes = opt.which == "scopes" || opt.which == "all";
+    const bool do_fold = opt.which == "fold" || opt.which == "all";
+    const bool do_grow =
+        opt.which == "grow" || (opt.which == "all" && opt.smoke);
+    // The query case reads what the shared write case wrote, so with no write
+    // rows asked for it writes that one case and prints only the query rows.
+    const dstd::Vector<dstd::String> modes =
+        print_writes ? opt.modes : dstd::Vector<dstd::String>{"shared"};
+
+    if (print_writes || do_query) {
+        for (int threads : opt.threads) {
+            Runtime runtime(static_cast<std::size_t>(threads));
+            note_backend(runtime);
+            const Workload workload =
+                workload_of(opt, static_cast<std::uint64_t>(threads));
+            dstd::String query_dir;
+            for (const dstd::String& mode : modes) {
+                const bool per_thread = mode == "per-thread";
+                const bool keep_dir = do_query && !per_thread;
+                const dstd::String name =
+                    dstd::fmt<"{}-{}-{}">(mode, threads, opt.payload_mib);
+                const WriteRow row = run_write_case(
+                    runtime, workload, case_dir(name), per_thread, keep_dir);
+                if (print_writes) print_write_row(row);
+                if (keep_dir) query_dir = row.keep_dir;
+            }
+            if (do_query) {
+                run_query_case(workload, query_dir);
+                if (!query_dir.empty()) {
+                    dftracer::utils::dstd::fs::remove_all(query_dir).discard();
+                }
+            }
+        }
+    }
+    for (const QueryRow& row : query_rows) print_query_row(row);
+    if (do_scopes) {
+        Runtime runtime(SCOPE_CASE_THREADS);
+        note_backend(runtime);
+        for (std::uint64_t scopes : opt.scopes) {
+            const ScopeRow row = run_scope_case(runtime, scopes);
+            print_scope_row(row);
+        }
+    }
+    if (do_fold) {
+        Runtime runtime(SCOPE_CASE_THREADS);
+        note_backend(runtime);
+        for (std::uint64_t scopes : opt.fold_scopes) {
+            if (!run_fold_case(runtime, scopes)) failed = true;
+        }
+    }
+    if (do_grow) {
+        note_backend(default_runtime());
+        if (!run_grow_case("baseline", 1, false, false)) failed = true;
+        for (std::uint64_t copies : opt.copies) {
+            if (!run_grow_case(dstd::to_string(copies), copies, true, true)) {
+                failed = true;
+            }
+        }
+    }
+    return !failed;
+}
+
+}  // namespace
+
+int main(int argc, char** argv) {
+    Options options;
+    if (!parse_args(argc, argv, options)) {
+        usage();
+        return 2;
+    }
+    if (options.help) {
+        usage();
+        return 0;
+    }
+    if (!options.space.empty()) {
+        return print_space(options.space) ? 0 : 1;
+    }
+    Bench bench;
+    bench.opt = options;
+    if (!bench.setup()) {
+        bench.cleanup();
+        return 1;
+    }
+    const bool ok = bench.run();
+    bench.cleanup();
+    return ok ? 0 : 1;
+}

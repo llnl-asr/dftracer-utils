@@ -1,21 +1,22 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_PYTHON_PY_AGG_CONFIG_H
 #define DFTRACER_UTILS_PYTHON_PY_AGG_CONFIG_H
 
 #include <Python.h>
-#include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/python/py_str_helpers.h>
-
-#include <string>
-#include <vector>
+#include <dftracer/utils/trace/index/schemas/dft/agg/aggregation_config.h>
 
 namespace dftracer::utils::python {
 
 /// The aggregation config a Python AggregationConfig describes; a missing or
-/// unreadable attribute keeps its default. Builders and the coordinator of a
-/// distributed build use it alike, so they agree on the params hash.
-inline index::schemas::dft::agg::AggregationConfig agg_config_from_py(
+/// unreadable attribute keeps the standard value. Builders and the coordinator
+/// of a distributed build use it alike, so they agree on the params hash.
+inline trace::index::schemas::dft::agg::AggregationConfig agg_config_from_py(
     PyObject *obj) {
-    index::schemas::dft::agg::AggregationConfig cfg;
+    trace::index::schemas::dft::agg::AggregationConfig cfg =
+        trace::index::schemas::dft::agg::standard_aggregation_config();
     auto attr = [obj](const char *name) -> PyObject * {
         PyObject *v = PyObject_GetAttrString(obj, name);
         if (!v || v == Py_None) {
@@ -48,7 +49,7 @@ inline index::schemas::dft::agg::AggregationConfig agg_config_from_py(
         return out > 0;
     };
     auto pull_strings = [&](const char *name) {
-        std::vector<std::string> out;
+        dstd::Vector<dstd::String> out;
         PyObject *v = attr(name);
         if (!v) return out;
         PyObject *seq = PySequence_Fast(v, "expected list of str");
@@ -66,11 +67,13 @@ inline index::schemas::dft::agg::AggregationConfig agg_config_from_py(
         return out;
     };
     cfg.time_interval_us = static_cast<std::uint64_t>(
-        pull_double("time_interval_ms", 5000.0) * 1000.0);
-    cfg.compute_percentiles = pull_bool("compute_percentiles", false);
-    cfg.group_by_file = pull_bool("group_by_file", true);
+        pull_double("time_interval_ms",
+                    static_cast<double>(cfg.time_interval_us) / 1000.0) *
+        1000.0);
+    cfg.compute_percentiles =
+        pull_bool("compute_percentiles", cfg.compute_percentiles);
+    cfg.group_by_file = pull_bool("group_by_file", cfg.group_by_file);
     cfg.extra_group_keys = pull_strings("group_keys");
-    cfg.custom_metric_fields = pull_strings("custom_metric_fields");
     return cfg;
 }
 

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The duql builder: queries as Python values that print as duql text.
 
 A builder query parses to the same syntax tree as the equal text, so the two
@@ -12,7 +13,7 @@ give the same plan and rows::
         .sort(-c("total"))
         .take(10)
     )
-    q.text()      # 'duql 0.1\\nfrom "trace.pfw.gz"\\n| where ...'
+    q.text()      # 'duql 0.0\\nfrom "trace.pfw.gz"\\n| where ...'
     q.collect()   # a DataFrame
 
 Every builder call only builds; ``collect``, ``count``, ``first``, ``stream``
@@ -138,10 +139,10 @@ class Col:
     def _rbin(self, op: str, other: object) -> "Col":
         return _wrap(f"{_value_text(other)} {op} {self._text}")
 
-    def __eq__(self, other: object) -> "Col":  # type: ignore[override]  # ty: ignore[invalid-method-override]
+    def __eq__(self, other: object) -> "Col":  # type: ignore[override]  # ty: ignore[incompatible-method-override]
         return self._bin("==", other)
 
-    def __ne__(self, other: object) -> "Col":  # type: ignore[override]  # ty: ignore[invalid-method-override]
+    def __ne__(self, other: object) -> "Col":  # type: ignore[override]  # ty: ignore[incompatible-method-override]
         return self._bin("!=", other)
 
     def __lt__(self, other: object) -> "Col":
@@ -901,7 +902,7 @@ def load_path(path: str) -> None:
     """Load the ``def`` macros of the ``.duql`` file ``path``, or of every
     ``.duql`` file in the directory ``path``, for every later query of the
     process. They expand after a query's and a source's own macros, like
-    those on ``$DFTRACER_DUQL_PATH``.
+    those on ``$DFTRACER_UTILS_DUQL_PATH``.
 
     Raises:
         DFTUtilsIOError: If a file cannot be read.

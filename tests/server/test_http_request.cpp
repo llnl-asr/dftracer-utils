@@ -1,17 +1,19 @@
+// SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/server/http_request.h>
+#include <dftracer/utils/domains/server/http_request.h>
+#include <dftracer/utils/dstd/string.h>
 #include <doctest/doctest.h>
 
-#include <string>
+using namespace dftracer::utils;
 
-using namespace dftracer::utils::server;
+using namespace dftracer::utils::domains::server;
 
 // ============================================================================
 // Parsing (delegates to http_parser internally)
 // ============================================================================
 
 TEST_CASE("HttpRequest - parse valid GET") {
-    std::string raw =
+    dstd::String raw =
         "GET /api/files HTTP/1.1\r\n"
         "Host: localhost:8080\r\n"
         "Accept: application/json\r\n"
@@ -28,7 +30,7 @@ TEST_CASE("HttpRequest - parse valid GET") {
 }
 
 TEST_CASE("HttpRequest - parse incomplete returns -2") {
-    std::string raw = "GET /path HTTP/1.1\r\n";
+    dstd::String raw = "GET /path HTTP/1.1\r\n";
 
     HttpRequest req;
     int result = req.parse(raw.data(), raw.size());
@@ -36,7 +38,7 @@ TEST_CASE("HttpRequest - parse incomplete returns -2") {
 }
 
 TEST_CASE("HttpRequest - parse malformed returns -1") {
-    std::string raw =
+    dstd::String raw =
         "INVALID\r\n"
         "\r\n";
 
@@ -50,7 +52,7 @@ TEST_CASE("HttpRequest - parse malformed returns -1") {
 // ============================================================================
 
 TEST_CASE("HttpRequest - header lookup case-insensitive") {
-    std::string raw =
+    dstd::String raw =
         "GET / HTTP/1.1\r\n"
         "Host: example.com\r\n"
         "Content-Type: text/html\r\n"
@@ -82,7 +84,7 @@ TEST_CASE("HttpRequest - header lookup case-insensitive") {
 // ============================================================================
 
 TEST_CASE("HttpRequest - has_header") {
-    std::string raw =
+    dstd::String raw =
         "GET / HTTP/1.1\r\n"
         "Host: localhost\r\n"
         "Connection: keep-alive\r\n"

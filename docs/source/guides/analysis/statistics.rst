@@ -1,9 +1,9 @@
-:description: Compute percentiles, histograms, and fitted distributions over trace durations from a DDSketch built during the scan.
+:description: Compute percentiles and histograms over trace durations from a DDSketch built during the scan.
 
 Distributions, percentiles, and sketches
 =========================================
 
-Beyond counts and means: percentiles, histograms, and fitted distributions over
+Beyond counts and means: percentiles and histograms over
 trace durations (or any numeric field). Percentiles and histograms come from a
 DDSketch computed during the scan, so they are exact to a bounded relative
 accuracy without buffering every value.
@@ -140,69 +140,27 @@ you can compute a percentile or moment on a result column without another scan.
 
 See :doc:`../data/series` for the full reducer list.
 
-Sketches and distribution fitting (C++)
----------------------------------------
+Sketches (C++)
+--------------
 
-The native statistics primitives live in
-``dftracer/utils/utilities/common/statistics/`` (namespace
-``dftracer::utils::utilities::common::statistics``). Use them to accumulate a
-distribution incrementally or off a set of values.
+The sketches live in ``dftracer/utils/dataframe/`` (namespace
+``dftracer::utils::dataframe``). Use them to accumulate a distribution
+incrementally or off a set of values.
 
 ``DDSketch`` - relative-accuracy quantile sketch, mergeable across threads:
 
 .. code-block:: cpp
 
-   #include <dftracer/utils/utilities/common/statistics/ddsketch.h>
+   #include <dftracer/utils/dataframe/sketch.h>
 
-   using namespace dftracer::utils::utilities::common::statistics;
+   using namespace dftracer::utils::dataframe;
 
    DDSketch sketch(0.01);          // 1% relative accuracy
    for (double v : durations) sketch.add(v);
    double p99 = sketch.quantile(0.99);   // NaN on an empty sketch
    // sketch.merge(other), sketch.bins(), sketch.serialize()
 
-``DistinctSketch`` (``BasicDistinctSketch<Precision=13>``) - a mergeable
-HyperLogLog++ distinct-count sketch, for counting a dimension left out of a
-grouping key without keeping every value:
-
-.. code-block:: cpp
-
-   #include <dftracer/utils/utilities/common/statistics/distinct_sketch.h>
-
-   using namespace dftracer::utils::utilities::common::statistics;
-
-   DistinctSketch sketch;              // 8192 registers, ~1.15% std error dense
-   for (auto h : file_hashes) sketch.add_hash(h);   // pre-hashed (fhash/hhash)
-   sketch.add("libc.so");              // or hash a raw string
-   std::uint64_t distinct = sketch.estimate();
-   // sketch.merge_from(other)
-
-It stays sparse (and exact) below ``REGISTERS / 4`` distinct values, then
-promotes to a dense register array; two sketches only merge at the same
-``Precision``.
-
-``Log2Histogram`` - fixed power-of-two bins with an ASCII/block renderer:
-
-.. code-block:: cpp
-
-   #include <dftracer/utils/utilities/common/statistics/log2_histogram.h>
-
-   Log2Histogram hist;
-   hist.add(size_bytes);
-   double p90 = hist.approx_percentile(0.90);
-   std::string chart = hist.render_ascii(40, "bytes");
-
-``distributions.h`` fits parametric distributions (Normal, Lognormal, Gamma,
-Exponential, Weibull) and picks the best by KS statistic:
-
-.. code-block:: cpp
-
-   #include <dftracer/utils/utilities/common/statistics/distributions.h>
-
-   std::vector<FittedDistribution> fits = fit_all_single_distributions(data);
-   std::optional<FittedDistribution> best = best_fit_by_ks(fits);
-
-These are C++ / native primitives. Python exposes the aggregate-level percentiles
+This is a C++ / native primitive. Python exposes the aggregate-level percentiles
 and ``Series`` reducers above rather than the sketch objects; for a fitted
 distribution from Python, collect the values and fit them with SciPy.
 

@@ -1,6 +1,8 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_TRACE_VIEWS_ARG_TYPE_H
 #define DFTRACER_UTILS_TRACE_VIEWS_ARG_TYPE_H
 
+#include <dftracer/utils/dstd/variant.h>
 #include <dftracer/utils/trace/views/fold_event.h>
 
 #include <cstdint>
@@ -71,8 +73,8 @@ struct ArgKinds {
 };
 
 static_assert(std::is_same_v<FoldEvent::ArgValue,
-                             std::variant<double, std::int64_t, std::uint32_t,
-                                          std::uint64_t>>);
+                             dstd::Variant<double, std::int64_t, std::uint32_t,
+                                           std::uint64_t>>);
 
 }  // namespace dftracer::utils::trace::views::detail
 

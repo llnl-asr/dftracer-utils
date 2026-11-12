@@ -1,35 +1,33 @@
+// SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/tasks/coro_scope.h>
-#include <dftracer/utils/index/build/index_visitor.h>
-#include <dftracer/utils/index/gzip/gzip_indexer.h>
-#include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/fileio/compress/libdeflate_gzip.h>
+#include <dftracer/utils/trace/index/build/index_visitor.h>
+#include <dftracer/utils/trace/index/gzip/gzip_indexer.h>
 #include <doctest/doctest.h>
+#include <memory/fresh_process.h>
+#include <task_result.h>
 #include <testing_runtime.h>
 #include <unistd.h>
 
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
-#include <optional>
 #include <random>
 #include <stdexcept>
-#include <string>
-#include <vector>
 
 using namespace dftracer::utils;
-using dftracer::utils::index::gzip::GzipBuildArtifacts;
-using dftracer::utils::index::gzip::GzipMemberRecord;
-using dftu_utils_test::run_coro;
-namespace gz = dftracer::utils::utilities::fileio::compress;
 
 namespace {
 
 constexpr std::uint64_t CKPT = 1u << 20;
 
-std::string hex_lines(std::size_t bytes, std::uint32_t seed) {
+dstd::String hex_lines(std::size_t bytes, std::uint32_t seed) {
     std::mt19937 rng(seed);
     static const char HEX[] = "0123456789abcdef";
-    std::string s;
+    dstd::String s;
     while (s.size() < bytes) {
         s += "{\"id\":\"";
         for (int i = 0; i < 64; ++i) s += HEX[rng() & 15];
@@ -38,9 +36,9 @@ std::string hex_lines(std::size_t bytes, std::uint32_t seed) {
     return s;
 }
 
-std::vector<std::uint8_t> gzip(const std::string& text) {
-    gz::GzipMemberCompressor c;
-    std::vector<std::uint8_t> out(c.bound(text.size()));
+dstd::Vector<std::uint8_t> gzip(const dstd::String& text) {
+    fileio::compress::GzipMemberCompressor c;
+    dstd::Vector<std::uint8_t> out(c.bound(text.size()));
     auto n = c.compress(text.data(), text.size(), out.data(), out.size());
     REQUIRE(n.has_value());
     out.resize(*n);
@@ -48,8 +46,8 @@ std::vector<std::uint8_t> gzip(const std::string& text) {
 }
 
 struct TempFile {
-    std::string path;
-    explicit TempFile(const std::vector<std::uint8_t>& bytes) {
+    dstd::String path;
+    explicit TempFile(const dstd::Vector<std::uint8_t>& bytes) {
         char tmpl[] = "/tmp/dftu_index_pass_XXXXXX";
         const int fd = ::mkstemp(tmpl);
         REQUIRE(fd >= 0);
@@ -61,36 +59,39 @@ struct TempFile {
     ~TempFile() { std::remove(path.c_str()); }
 };
 
-class Recorder : public index::build::IndexVisitor {
+class Recorder : public trace::index::build::IndexVisitor {
    public:
-    std::string bytes;
-    std::vector<std::size_t> checkpoints;
+    dstd::String bytes;
+    dstd::Vector<std::size_t> checkpoints;
     void begin(std::size_t) override {}
-    coro::CoroTask<void> on_checkpoint(std::size_t idx) override {
+    coro::CoroTask<dstd::Result<void>> on_checkpoint(std::size_t idx) override {
         checkpoints.push_back(idx);
-        co_return;
+        co_return dstd::Result<void>{};
     }
-    coro::CoroTask<void> on_chunk(const char* data, std::size_t len,
-                                  std::size_t) override {
+    coro::CoroTask<dstd::Result<void>> on_chunk(const char* data,
+                                                std::size_t len,
+                                                std::size_t) override {
         bytes.append(data, len);
-        co_return;
+        co_return dstd::Result<void>{};
     }
-    void finalize(index::store::IndexDatabaseWriterContext&, int) override {}
 };
 
-GzipBuildArtifacts build(const std::string& path, Recorder* rec) {
-    std::optional<GzipBuildArtifacts> arts;
-    run_coro([&](CoroScope& scope) -> coro::CoroTask<void> {
-        index::gzip::CheckpointIndexer::VisitorList visitors;
+trace::index::gzip::GzipBuildArtifacts build(const dstd::String& path,
+                                             Recorder* rec) {
+    dstd::Optional<trace::index::gzip::GzipBuildArtifacts> arts;
+    dftu_utils_test::run_coro([&](coro::Scope& scope) -> coro::CoroTask<void> {
+        trace::index::gzip::CheckpointIndexer::VisitorList visitors;
         if (rec) visitors.emplace_back(*rec);
-        arts = co_await index::gzip::build_gzip_index_artifacts(
+        auto built = co_await trace::index::gzip::build_gzip_index_artifacts(
             path, CKPT, visitors, &scope);
+        if (built) arts = std::move(*built);
     });
     REQUIRE(arts.has_value());
     return *arts;
 }
 
-void check_same(const GzipBuildArtifacts& a, const GzipBuildArtifacts& b) {
+void check_same(const trace::index::gzip::GzipBuildArtifacts& a,
+                const trace::index::gzip::GzipBuildArtifacts& b) {
     CHECK(a.total_lines == b.total_lines);
     CHECK(a.total_uc_size == b.total_uc_size);
     CHECK(a.truncated == b.truncated);
@@ -98,8 +99,8 @@ void check_same(const GzipBuildArtifacts& a, const GzipBuildArtifacts& b) {
     REQUIRE(a.members.size() == b.members.size());
     for (std::size_t i = 0; i < a.members.size(); ++i) {
         CAPTURE(i);
-        const GzipMemberRecord& x = a.members[i];
-        const GzipMemberRecord& y = b.members[i];
+        const trace::index::gzip::GzipMemberRecord& x = a.members[i];
+        const trace::index::gzip::GzipMemberRecord& y = b.members[i];
         CHECK(x.c_offset == y.c_offset);
         CHECK(x.c_size == y.c_size);
         CHECK(x.uc_offset == y.uc_offset);
@@ -111,8 +112,8 @@ void check_same(const GzipBuildArtifacts& a, const GzipBuildArtifacts& b) {
     }
 }
 
-void check_file(const std::vector<std::uint8_t>& comp,
-                const std::string& expected) {
+void check_file(const dstd::Vector<std::uint8_t>& comp,
+                const dstd::String& expected) {
     TempFile f(comp);
     const auto bare = build(f.path, nullptr);
     Recorder rec;
@@ -126,8 +127,8 @@ void check_file(const std::vector<std::uint8_t>& comp,
 
 TEST_SUITE("index pass without visitors") {
     TEST_CASE("many members give the table a visitor sees") {
-        std::string text;
-        std::vector<std::uint8_t> comp;
+        dstd::String text;
+        dstd::Vector<std::uint8_t> comp;
         for (std::uint32_t i = 0; i < 40; ++i) {
             const auto part = hex_lines(200u << 10, i);
             const auto m = gzip(part);
@@ -143,8 +144,8 @@ TEST_SUITE("index pass without visitors") {
     }
 
     TEST_CASE("zero bytes between members are skipped") {
-        std::string text;
-        std::vector<std::uint8_t> comp;
+        dstd::String text;
+        dstd::Vector<std::uint8_t> comp;
         for (std::uint32_t i = 0; i < 40; ++i) {
             const auto part = hex_lines(200u << 10, 300 + i);
             const auto m = gzip(part);
@@ -170,15 +171,15 @@ TEST_SUITE("index pass without visitors") {
         // A stored (level 0) member copies its text verbatim, so a gzip
         // header in the text is a member candidate that starts a range.
         static const char FAKE[] = "\x10\0\0\0\x1f\x8b\x08\0\0\0\0\0\0\x03";
-        const std::string head = hex_lines(CKPT + (100u << 10), 1);
-        const std::string fake =
-            std::string("x") + std::string(FAKE, sizeof(FAKE) - 1) + "\n";
-        const std::string tail = hex_lines(100u << 10, 2);
-        std::string text = hex_lines(CKPT + (200u << 10), 0);
-        std::vector<std::uint8_t> comp = gzip(text);
-        gz::GzipMemberCompressor stored(0);
-        const std::string mid = head + fake + tail;
-        std::vector<std::uint8_t> m(stored.bound(mid.size()));
+        const dstd::String head = hex_lines(CKPT + (100u << 10), 1);
+        const dstd::String fake =
+            dstd::String("x") + dstd::String(FAKE, sizeof(FAKE) - 1) + "\n";
+        const dstd::String tail = hex_lines(100u << 10, 2);
+        dstd::String text = hex_lines(CKPT + (200u << 10), 0);
+        dstd::Vector<std::uint8_t> comp = gzip(text);
+        fileio::compress::GzipMemberCompressor stored(0);
+        const dstd::String mid = head + fake + tail;
+        dstd::Vector<std::uint8_t> m(stored.bound(mid.size()));
         auto n = stored.compress(mid.data(), mid.size(), m.data(), m.size());
         REQUIRE(n.has_value());
         m.resize(*n);
@@ -202,40 +203,43 @@ TEST_SUITE("index pass without visitors") {
             CHECK(rec.c_offset != fake_at);
     }
 
-    TEST_CASE("a visitor that throws ends the pass with its error") {
+    TEST_CASE("a visitor that fails ends the pass with its error") {
         class Thrower : public Recorder {
            public:
-            coro::CoroTask<void> on_chunk(const char*, std::size_t,
-                                          std::size_t) override {
-                if (++chunks == 5) throw std::runtime_error("bad chunk");
-                co_return;
+            coro::CoroTask<dstd::Result<void>> on_chunk(const char*,
+                                                        std::size_t,
+                                                        std::size_t) override {
+                if (++chunks == 5)
+                    co_return common::make_error<"bad chunk">(
+                        common::ErrorCode::Io);
+                co_return dstd::Result<void>{};
             }
             int chunks = 0;
         };
-        std::vector<std::uint8_t> comp;
+        dstd::Vector<std::uint8_t> comp;
         for (std::uint32_t i = 0; i < 60; ++i) {
             const auto m = gzip(hex_lines(200u << 10, 500 + i));
             comp.insert(comp.end(), m.begin(), m.end());
         }
         TempFile f(comp);
         Thrower thrower;
-        bool threw = false;
-        run_coro([&](CoroScope& scope) -> coro::CoroTask<void> {
-            index::gzip::CheckpointIndexer::VisitorList visitors;
-            visitors.emplace_back(thrower);
-            try {
-                co_await index::gzip::build_gzip_index_artifacts(
-                    f.path, CKPT, visitors, &scope);
-            } catch (const std::runtime_error& e) {
-                threw = std::string(e.what()) == "bad chunk";
-            }
-        });
-        CHECK(threw);
+        bool failed = false;
+        dftu_utils_test::run_coro(
+            [&](coro::Scope& scope) -> coro::CoroTask<void> {
+                trace::index::gzip::CheckpointIndexer::VisitorList visitors;
+                visitors.emplace_back(thrower);
+                auto built =
+                    co_await trace::index::gzip::build_gzip_index_artifacts(
+                        f.path, CKPT, visitors, &scope);
+                failed = !built.has_value() &&
+                         built.error().message() == "bad chunk";
+            });
+        CHECK(failed);
     }
 
     TEST_CASE("a cut file gives the same table") {
-        std::string text;
-        std::vector<std::uint8_t> comp;
+        dstd::String text;
+        dstd::Vector<std::uint8_t> comp;
         for (std::uint32_t i = 0; i < 8; ++i) {
             const auto part = hex_lines(300u << 10, 200 + i);
             const auto m = gzip(part);
@@ -250,5 +254,42 @@ TEST_SUITE("index pass without visitors") {
         check_same(bare, seen);
         CHECK(bare.truncated);
         CHECK(rec.bytes == text.substr(0, rec.bytes.size()));
+    }
+}
+
+TEST_SUITE("gzip indexer arguments") {
+    TEST_CASE("check_arguments names the argument that fails") {
+        using trace::index::gzip::GzipIndexer;
+        const auto empty = GzipIndexer::check_arguments("", CKPT);
+        dftu_utils_test::expect_error(empty, common::ErrorCode::Indexer);
+        CHECK(dstd::String(empty.error().message())
+                  .find("gz_path must not be empty") != dstd::String::npos);
+
+        const auto absent =
+            GzipIndexer::check_arguments("/no/such/dir/t.pfw.gz", CKPT);
+        dftu_utils_test::expect_error(absent, common::ErrorCode::Indexer);
+        CHECK(dstd::String(absent.error().message())
+                  .find("/no/such/dir/t.pfw.gz") != dstd::String::npos);
+
+        const auto comp = gzip(hex_lines(1u << 10, 1));
+        TempFile f(dstd::Vector<std::uint8_t>(comp.begin(), comp.end()));
+        const auto zero = GzipIndexer::check_arguments(f.path, 0);
+        dftu_utils_test::expect_error(zero, common::ErrorCode::Indexer);
+        CHECK(dstd::String(zero.error().message())
+                  .find("ckpt_size must be greater than 0") !=
+              dstd::String::npos);
+        CHECK(GzipIndexer::check_arguments(f.path, CKPT).has_value());
+    }
+
+    TEST_CASE("a gzip indexer over unchecked arguments aborts") {
+        auto result = fresh_process::run(
+            "a gzip indexer over unchecked arguments ends the process");
+        CHECK(result.aborted_with("the arguments were not checked"));
+    }
+
+    TEST_CASE("a gzip indexer over unchecked arguments ends the process" *
+              doctest::skip()) {
+        fresh_process::announce_abort();
+        trace::index::gzip::GzipIndexer indexer("", "/tmp/dftu_unchecked_idx");
     }
 }

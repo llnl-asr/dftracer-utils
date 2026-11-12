@@ -1,9 +1,14 @@
-#include <dftracer/utils/core/common/config.h>
+// SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/config.h>
 #include <dftracer/utils/python/py_type_helpers.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
+#include <dftracer/utils/dstd/deque.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/python/arrow_stream_capsule.h>
 #include <dftracer/utils/python/batch_byte_size.h>
 #include <dftracer/utils/python/py_method.h>
@@ -12,14 +17,10 @@
 
 #include <cerrno>
 #include <cstring>
-#include <deque>
 #include <exception>
 #include <mutex>
-#include <optional>
-#include <string>
 
-using ArrowExportResult =
-    dftracer::utils::utilities::common::arrow::ArrowExportResult;
+using ArrowExportResult = dftracer::utils::trace::arrow::ArrowExportResult;
 
 namespace {
 
@@ -27,18 +28,18 @@ namespace {
 constexpr int STABLE_BATCHES = 5;
 constexpr int MAX_DRAIN = 128;
 
-struct StreamPrivate {
-    std::shared_ptr<ArrowIteratorState> state;
+struct StreamPrivate : dftracer::utils::dstd::HeapObject {
+    dftracer::utils::dstd::SharedPtr<ArrowIteratorState> state;
     dftracer::utils::python::SchemaReconciler reconciler;
     // Drained during discovery, emitted first from get_next.
-    std::deque<ArrowExportResult> pending;
-    std::string last_error;
+    dftracer::utils::dstd::Deque<ArrowExportResult> pending;
+    dftracer::utils::dstd::String last_error;
     bool initialized = false;
     // Sticky: once set, all entry points short-circuit to EIO.
     bool error_set = false;
 };
 
-static void mark_error(StreamPrivate *p, std::string msg) {
+static void mark_error(StreamPrivate *p, dftracer::utils::dstd::String msg) {
     if (p->last_error.empty()) p->last_error = std::move(msg);
     p->error_set = true;
     p->initialized = true;
@@ -71,7 +72,7 @@ static int initialize_stream(StreamPrivate *p) {
         auto dequeued = dftracer::utils::python::byte_size(*batch);
         astate->bytes_in_queue.fetch_sub(dequeued, std::memory_order_acq_rel);
 
-        bool added = p->reconciler.merge(batch->get_schema());
+        bool added = p->reconciler.merge(batch->schema());
         if (!p->reconciler.last_error().empty()) {
             mark_error(p, p->reconciler.last_error());
             return EIO;
@@ -115,7 +116,7 @@ static int stream_get_next(struct ArrowArrayStream *s, struct ArrowArray *out) {
     }
 
     // Drain any discovery-phase batches first, then pull from the channel.
-    std::optional<ArrowExportResult> batch;
+    dftracer::utils::dstd::Optional<ArrowExportResult> batch;
     if (!p->pending.empty()) {
         batch = std::move(p->pending.front());
         p->pending.pop_front();
@@ -143,8 +144,7 @@ static int stream_get_next(struct ArrowArrayStream *s, struct ArrowArray *out) {
         astate->bytes_in_queue.fetch_sub(dequeued, std::memory_order_acq_rel);
     }
 
-    if (p->reconciler.reconcile(batch->get_schema(), batch->get_array(), out) !=
-        0) {
+    if (p->reconciler.reconcile(batch->schema(), batch->array(), out) != 0) {
         mark_error(p, p->reconciler.last_error().empty()
                           ? "schema reconciliation failed"
                           : p->reconciler.last_error());
@@ -191,7 +191,7 @@ static void release_stream_capsule(PyObject *capsule) {
     if (stream && stream->release) {
         stream->release(stream);
     }
-    delete stream;
+    dftracer::utils::dstd::UniquePtr<ArrowArrayStream>(stream).reset();
 }
 
 static PyObject *ArrowBatchStream_arrow_c_stream(ArrowBatchStreamObject *self,
@@ -224,7 +224,8 @@ static PyObject *ArrowBatchStream_arrow_c_stream(ArrowBatchStreamObject *self,
     self->consumed = true;
     self->state.reset();
 
-    auto *stream = new ArrowArrayStream;
+    auto *stream =
+        dftracer::utils::dstd::make_unique<ArrowArrayStream>().release();
     std::memset(stream, 0, sizeof(*stream));
     stream->get_schema = stream_get_schema;
     stream->get_next = stream_get_next;
@@ -236,7 +237,7 @@ static PyObject *ArrowBatchStream_arrow_c_stream(ArrowBatchStreamObject *self,
         PyCapsule_New(stream, "arrow_array_stream", release_stream_capsule);
     if (!capsule) {
         stream->release(stream);
-        delete stream;
+        dftracer::utils::dstd::UniquePtr<ArrowArrayStream>(stream).reset();
         return NULL;
     }
     return capsule;
@@ -258,48 +259,18 @@ static void ArrowBatchStream_dealloc(ArrowBatchStreamObject *self) {
 static PyMethodDef ArrowBatchStream_methods[] = {
     {"__arrow_c_stream__", DFTU_PYCFUNCTION(ArrowBatchStream_arrow_c_stream),
      METH_VARARGS, "Export as Arrow C Data Interface stream PyCapsule"},
-    {NULL}};
+    {NULL, NULL, 0, NULL}};
 
 }  // namespace
 
 PyTypeObject ArrowBatchStreamType = {
-    PyVarObject_HEAD_INIT(NULL, 0) "dftracer_utils_ext._ArrowBatchStream",
-    sizeof(ArrowBatchStreamObject), /* tp_basicsize */
-    0,                              /* tp_itemsize */
-    (destructor)ArrowBatchStream_dealloc,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    Py_TPFLAGS_DEFAULT,
-    "Zero-iteration Arrow stream backed by a C++ coroutine channel",
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    ArrowBatchStream_methods,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
+    .ob_base = PyVarObject_HEAD_INIT(NULL, 0).tp_name =
+        "dftracer_utils_ext._ArrowBatchStream",
+    .tp_basicsize = sizeof(ArrowBatchStreamObject),
+    .tp_dealloc = (destructor)ArrowBatchStream_dealloc,
+    .tp_flags = Py_TPFLAGS_DEFAULT,
+    .tp_doc = "Zero-iteration Arrow stream backed by a C++ coroutine channel",
+    .tp_methods = ArrowBatchStream_methods,
 };
 
 int dftracer::utils::python::init_arrow_batch_stream(PyObject *m) {
@@ -309,11 +280,12 @@ int dftracer::utils::python::init_arrow_batch_stream(PyObject *m) {
 }
 
 PyObject *dftracer::utils::python::make_arrow_batch_stream(
-    std::shared_ptr<ArrowIteratorState> state) {
+    dftracer::utils::dstd::SharedPtr<ArrowIteratorState> state) {
     auto *obj = (ArrowBatchStreamObject *)ArrowBatchStreamType.tp_alloc(
         &ArrowBatchStreamType, 0);
     if (!obj) return NULL;
-    new (&obj->state) std::shared_ptr<ArrowIteratorState>(std::move(state));
+    new (&obj->state)
+        dftracer::utils::dstd::SharedPtr<ArrowIteratorState>(std::move(state));
     obj->consumed = false;
     return (PyObject *)obj;
 }

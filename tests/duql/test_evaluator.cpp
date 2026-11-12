@@ -1,4 +1,11 @@
+// SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/fmt.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/evaluator.h>
 #include <dftracer/utils/duql/numbers.h>
 #include <dftracer/utils/duql/parser.h>
@@ -10,11 +17,10 @@
 #include <cstdlib>
 #include <cstring>
 #include <optional>
-#include <string>
-#include <vector>
+
+using namespace dftracer::utils;
 
 using namespace dftracer::utils::duql;
-using dftracer::utils::json::JsonValue;
 
 namespace {
 
@@ -30,7 +36,9 @@ struct JsonDoc {
             valid = true;
         }
     }
-    JsonValue root() { return valid ? JsonValue(elem) : JsonValue(); }
+    json::JsonValue root() {
+        return valid ? json::JsonValue(elem) : json::JsonValue();
+    }
 };
 
 bool eval(const char* query_str, const char* json_str) {
@@ -56,7 +64,7 @@ Truth truth(const char* query_str, const ValueMap& fields) {
 }
 
 bool eval(const char* query_str, const ValueMap& fields) {
-    return truth(query_str, fields) == Truth::YES;
+    return truth(query_str, fields) == Truth::Yes;
 }
 
 }  // namespace
@@ -185,13 +193,13 @@ TEST_CASE("evaluate - any over flattened positions in a value map") {
     auto ast = parse(R"(any(tags) == "b")");
     REQUIRE(ast.has_value());
     ValueMap m;
-    m["tags.0"] = std::string("a");
-    m["tags.1"] = std::string("b");
-    m["tagsx.0"] = std::string("b");
+    m["tags.0"] = dstd::String("a");
+    m["tags.1"] = dstd::String("b");
+    m["tagsx.0"] = dstd::String("b");
     CHECK(evaluate(**ast, m));
     ValueMap other;
-    other["tagsx.0"] = std::string("b");
-    other["tags.name"] = std::string("b");
+    other["tagsx.0"] = dstd::String("b");
+    other["tags.name"] = dstd::String("b");
     CHECK_FALSE(evaluate(**ast, other));
     auto args = parse("any(args.sizes) > 100");
     REQUIRE(args.has_value());
@@ -202,11 +210,11 @@ TEST_CASE("evaluate - any over flattened positions in a value map") {
 
 TEST_CASE("spec - empty string is a value") {
     CHECK(eval(R"(x == "")", R"({"x":""})"));
-    CHECK(truth(R"(x != "")", R"({"x":""})") == Truth::NO);
+    CHECK(truth(R"(x != "")", R"({"x":""})") == Truth::No);
     ValueMap m;
-    m["x"] = std::string();
+    m["x"] = dstd::String();
     CHECK(eval(R"(x == "")", m));
-    CHECK(truth(R"(x != "")", m) == Truth::NO);
+    CHECK(truth(R"(x != "")", m) == Truth::No);
 }
 
 TEST_CASE("spec - negation does not select missing or null fields") {
@@ -218,55 +226,55 @@ TEST_CASE("spec - negation does not select missing or null fields") {
             CAPTURE(records[i]);
             CHECK(eval(q, records[i]) == expected[i]);
         }
-        CHECK(truth(q, "{}") == Truth::UNKNOWN);
-        CHECK(truth(q, R"({"x":null})") == Truth::UNKNOWN);
+        CHECK(truth(q, "{}") == Truth::Unknown);
+        CHECK(truth(q, R"({"x":null})") == Truth::Unknown);
 
         ValueMap one, two, absent;
         one["x"] = std::int64_t{1};
         two["x"] = std::int64_t{2};
         CHECK_FALSE(eval(q, one));
         CHECK(eval(q, two));
-        CHECK(truth(q, absent) == Truth::UNKNOWN);
+        CHECK(truth(q, absent) == Truth::Unknown);
     }
 }
 
 TEST_CASE("spec - unknown under or") {
     CHECK(eval("x == 1 or y == 5", R"({"y":5})"));
-    CHECK(truth("x == 1 or y == 6", R"({"y":5})") == Truth::UNKNOWN);
-    CHECK(truth("x == 1 and y == 6", R"({"y":5})") == Truth::NO);
+    CHECK(truth("x == 1 or y == 6", R"({"y":5})") == Truth::Unknown);
+    CHECK(truth("x == 1 and y == 6", R"({"y":5})") == Truth::No);
     ValueMap m;
     m["y"] = std::int64_t{5};
     CHECK(eval("x == 1 or y == 5", m));
-    CHECK(truth("x == 1 or y == 6", m) == Truth::UNKNOWN);
-    CHECK(truth("x == 1 and y == 6", m) == Truth::NO);
+    CHECK(truth("x == 1 or y == 6", m) == Truth::Unknown);
+    CHECK(truth("x == 1 and y == 6", m) == Truth::No);
 }
 
 TEST_CASE("spec - type mismatch fails a comparison and its negation") {
     const char* rec = R"({"cat":"POSIX"})";
-    CHECK(truth("cat > 100", rec) == Truth::UNKNOWN);
-    CHECK(truth("not (cat > 100)", rec) == Truth::UNKNOWN);
+    CHECK(truth("cat > 100", rec) == Truth::Unknown);
+    CHECK(truth("not (cat > 100)", rec) == Truth::Unknown);
     CHECK_FALSE(eval("cat > 100", rec));
     CHECK_FALSE(eval("not (cat > 100)", rec));
     ValueMap m;
-    m["cat"] = std::string("POSIX");
-    CHECK(truth("cat > 100", m) == Truth::UNKNOWN);
-    CHECK(truth("not (cat > 100)", m) == Truth::UNKNOWN);
+    m["cat"] = dstd::String("POSIX");
+    CHECK(truth("cat > 100", m) == Truth::Unknown);
+    CHECK(truth("not (cat > 100)", m) == Truth::Unknown);
 }
 
 TEST_CASE("spec - any() over a missing, non-array or non-matching array") {
-    CHECK(truth(R"(any(tags) == "a")", "{}") == Truth::UNKNOWN);
-    CHECK(truth(R"(any(tags) == "a")", R"({"tags":null})") == Truth::UNKNOWN);
-    CHECK(truth(R"(any(tags) == "a")", R"({"tags":"a"})") == Truth::UNKNOWN);
-    CHECK(truth(R"(any(tags) == "a")", R"({"tags":["b"]})") == Truth::NO);
-    CHECK(truth(R"(any(tags) == "a")", R"({"tags":[]})") == Truth::NO);
+    CHECK(truth(R"(any(tags) == "a")", "{}") == Truth::Unknown);
+    CHECK(truth(R"(any(tags) == "a")", R"({"tags":null})") == Truth::Unknown);
+    CHECK(truth(R"(any(tags) == "a")", R"({"tags":"a"})") == Truth::Unknown);
+    CHECK(truth(R"(any(tags) == "a")", R"({"tags":["b"]})") == Truth::No);
+    CHECK(truth(R"(any(tags) == "a")", R"({"tags":[]})") == Truth::No);
     CHECK_FALSE(eval(R"(not (any(tags) == "a"))", "{}"));
     CHECK(eval(R"(not (any(tags) == "a"))", R"({"tags":["b"]})"));
 
     ValueMap absent, b;
-    b["tags.0"] = std::string("b");
-    CHECK(truth(R"(any(tags) == "a")", absent) == Truth::UNKNOWN);
+    b["tags.0"] = dstd::String("b");
+    CHECK(truth(R"(any(tags) == "a")", absent) == Truth::Unknown);
     CHECK_FALSE(eval(R"(not (any(tags) == "a"))", absent));
-    CHECK(truth(R"(any(tags) == "a")", b) == Truth::NO);
+    CHECK(truth(R"(any(tags) == "a")", b) == Truth::No);
     CHECK(eval(R"(not (any(tags) == "a"))", b));
 }
 
@@ -293,39 +301,39 @@ TEST_CASE("spec - exact numeric comparison across int and double") {
 
 TEST_CASE("spec - args fallback only when the bare name is missing") {
     CHECK(truth("ret == 5", R"({"ret":null,"args":{"ret":5}})") ==
-          Truth::UNKNOWN);
+          Truth::Unknown);
     CHECK(eval("ret == 5", R"({"args":{"ret":5}})"));
     CHECK(eval("args.ret == 5", R"({"ret":null,"args":{"ret":5}})"));
 }
 
 TEST_CASE("spec - in and not in") {
-    CHECK(truth(R"(x in ["a", "b"])", R"({"x":1})") == Truth::UNKNOWN);
-    CHECK(truth(R"(x not in ["a", "b"])", R"({"x":1})") == Truth::UNKNOWN);
-    CHECK(truth("x in [1, 2]", R"({"x":"1"})") == Truth::UNKNOWN);
-    CHECK(truth("x not in [1, 2]", R"({"x":"1"})") == Truth::UNKNOWN);
-    CHECK(truth("x not in [1, 2]", "{}") == Truth::UNKNOWN);
-    CHECK(truth("x not in [1, 2]", R"({"x":null})") == Truth::UNKNOWN);
+    CHECK(truth(R"(x in ["a", "b"])", R"({"x":1})") == Truth::Unknown);
+    CHECK(truth(R"(x not in ["a", "b"])", R"({"x":1})") == Truth::Unknown);
+    CHECK(truth("x in [1, 2]", R"({"x":"1"})") == Truth::Unknown);
+    CHECK(truth("x not in [1, 2]", R"({"x":"1"})") == Truth::Unknown);
+    CHECK(truth("x not in [1, 2]", "{}") == Truth::Unknown);
+    CHECK(truth("x not in [1, 2]", R"({"x":null})") == Truth::Unknown);
     CHECK_FALSE(eval("x not in [1, 2]", "{}"));
     CHECK(eval("x not in [1, 2]", R"({"x":3})"));
-    CHECK(truth("x in [1, 2]", R"({"x":3})") == Truth::NO);
+    CHECK(truth("x in [1, 2]", R"({"x":3})") == Truth::No);
 
     ValueMap i, s, absent;
     i["x"] = std::int64_t{1};
-    s["x"] = std::string("1");
-    CHECK(truth(R"(x in ["a", "b"])", i) == Truth::UNKNOWN);
-    CHECK(truth(R"(x not in ["a", "b"])", i) == Truth::UNKNOWN);
-    CHECK(truth("x in [1, 2]", s) == Truth::UNKNOWN);
-    CHECK(truth("x not in [1, 2]", absent) == Truth::UNKNOWN);
+    s["x"] = dstd::String("1");
+    CHECK(truth(R"(x in ["a", "b"])", i) == Truth::Unknown);
+    CHECK(truth(R"(x not in ["a", "b"])", i) == Truth::Unknown);
+    CHECK(truth("x in [1, 2]", s) == Truth::Unknown);
+    CHECK(truth("x not in [1, 2]", absent) == Truth::Unknown);
     CHECK(eval("x in [1, 2]", i));
 }
 
 namespace {
 
 // Keeps the records `query` selects, as their indexes in `records`.
-std::vector<int> kept(const char* query, std::vector<const char*> records) {
+dstd::Vector<int> kept(const char* query, dstd::Vector<const char*> records) {
     auto ast = parse(query);
     REQUIRE_MESSAGE(ast.has_value(), query);
-    std::vector<int> out;
+    dstd::Vector<int> out;
     for (std::size_t i = 0; i < records.size(); ++i) {
         JsonDoc doc(records[i]);
         REQUIRE(doc.valid);
@@ -334,7 +342,7 @@ std::vector<int> kept(const char* query, std::vector<const char*> records) {
     return out;
 }
 
-std::string compile_error(const char* query) {
+dstd::String compile_error(const char* query) {
     auto ast = parse(query);
     REQUIRE_FALSE(ast.has_value());
     return ast.error().message;
@@ -344,7 +352,7 @@ std::string compile_error(const char* query) {
 
 TEST_CASE("expressions - field against field") {
     CHECK(kept("a > b", {R"({"a":3,"b":2})", R"({"a":1,"b":2})",
-                         R"({"a":3})"}) == std::vector<int>{0});
+                         R"({"a":3})"}) == dstd::Vector<int>{0});
 }
 
 TEST_CASE("expressions - negative index") {
@@ -360,63 +368,63 @@ TEST_CASE("expressions - numbers") {
     CHECK(eval("x % 3 == 2", R"({"x":-7})"));
     CHECK(eval("x % -3 == -2", R"({"x":7})"));
     CHECK(eval("x + y == 3.5", R"({"x":1,"y":2.5})"));
-    CHECK(truth("x * 2 > 0", R"({"x":9223372036854775807})") == Truth::UNKNOWN);
+    CHECK(truth("x * 2 > 0", R"({"x":9223372036854775807})") == Truth::Unknown);
     CHECK(eval("x - 1 == 9223372036854775807", R"({"x":9223372036854775808})"));
     CHECK(eval("x // 2.0 == 3.0", R"({"x":7.5})"));
 }
 
 TEST_CASE("expressions - division by zero and overflow are unknown") {
-    CHECK(truth("x / z > 0", R"({"x":1,"z":0})") == Truth::UNKNOWN);
-    CHECK(truth("not (x / z > 0)", R"({"x":1,"z":0})") == Truth::UNKNOWN);
-    CHECK(truth("x // z > 0", R"({"x":1,"z":0})") == Truth::UNKNOWN);
-    CHECK(truth("x % z > 0", R"({"x":1,"z":0})") == Truth::UNKNOWN);
-    CHECK(truth("x * 4 > 0", R"({"x":9223372036854775807})") == Truth::UNKNOWN);
+    CHECK(truth("x / z > 0", R"({"x":1,"z":0})") == Truth::Unknown);
+    CHECK(truth("not (x / z > 0)", R"({"x":1,"z":0})") == Truth::Unknown);
+    CHECK(truth("x // z > 0", R"({"x":1,"z":0})") == Truth::Unknown);
+    CHECK(truth("x % z > 0", R"({"x":1,"z":0})") == Truth::Unknown);
+    CHECK(truth("x * 4 > 0", R"({"x":9223372036854775807})") == Truth::Unknown);
     CHECK(truth("x + 1 > 0", R"({"x":18446744073709551615})") ==
-          Truth::UNKNOWN);
-    CHECK(truth("x + 1 > 0", R"({"x":"a"})") == Truth::UNKNOWN);
-    CHECK(truth("x + 1 > 0", R"({})") == Truth::UNKNOWN);
+          Truth::Unknown);
+    CHECK(truth("x + 1 > 0", R"({"x":"a"})") == Truth::Unknown);
+    CHECK(truth("x + 1 > 0", R"({})") == Truth::Unknown);
 }
 
 TEST_CASE("expressions - presence tests") {
-    const std::vector<const char*> rs = {R"({"x":null})", R"({})",
-                                         R"({"x":0})"};
-    CHECK(kept("x is null", rs) == std::vector<int>{0});
-    CHECK(kept("x is missing", rs) == std::vector<int>{1});
-    CHECK(kept("exists(x)", rs) == std::vector<int>{0, 2});
-    CHECK(kept("x is not null", rs) == std::vector<int>{1, 2});
-    CHECK(kept("x is not missing", rs) == std::vector<int>{0, 2});
-    CHECK(kept("not exists(x)", rs) == std::vector<int>{1});
+    const dstd::Vector<const char*> rs = {R"({"x":null})", R"({})",
+                                          R"({"x":0})"};
+    CHECK(kept("x is null", rs) == dstd::Vector<int>{0});
+    CHECK(kept("x is missing", rs) == dstd::Vector<int>{1});
+    CHECK(kept("exists(x)", rs) == dstd::Vector<int>{0, 2});
+    CHECK(kept("x is not null", rs) == dstd::Vector<int>{1, 2});
+    CHECK(kept("x is not missing", rs) == dstd::Vector<int>{0, 2});
+    CHECK(kept("not exists(x)", rs) == dstd::Vector<int>{1});
 }
 
 TEST_CASE("expressions - coalesce") {
-    const std::vector<const char*> rs = {R"({"a":null,"b":2})", R"({"b":3})",
-                                         R"({"a":2,"b":9})"};
-    CHECK(kept("(a ?? b) == 2", rs) == std::vector<int>{0, 2});
-    CHECK(kept("coalesce(a, b) == 2", rs) == std::vector<int>{0, 2});
-    CHECK(truth("(a ?? b) == 2", R"({})") == Truth::UNKNOWN);
+    const dstd::Vector<const char*> rs = {R"({"a":null,"b":2})", R"({"b":3})",
+                                          R"({"a":2,"b":9})"};
+    CHECK(kept("(a ?? b) == 2", rs) == dstd::Vector<int>{0, 2});
+    CHECK(kept("coalesce(a, b) == 2", rs) == dstd::Vector<int>{0, 2});
+    CHECK(truth("(a ?? b) == 2", R"({})") == Truth::Unknown);
 }
 
 TEST_CASE("expressions - between") {
-    const std::vector<const char*> rs = {R"({"x":1})", R"({"x":2})",
-                                         R"({"x":3})", R"({"x":4})", R"({})"};
-    CHECK(kept("x between 2 and 3", rs) == std::vector<int>{1, 2});
-    CHECK(kept("x not between 2 and 3", rs) == std::vector<int>{0, 3});
-    CHECK(kept("x between 2 and 3 and x != 3", rs) == std::vector<int>{1});
+    const dstd::Vector<const char*> rs = {R"({"x":1})", R"({"x":2})",
+                                          R"({"x":3})", R"({"x":4})", R"({})"};
+    CHECK(kept("x between 2 and 3", rs) == dstd::Vector<int>{1, 2});
+    CHECK(kept("x not between 2 and 3", rs) == dstd::Vector<int>{0, 3});
+    CHECK(kept("x between 2 and 3 and x != 3", rs) == dstd::Vector<int>{1});
 }
 
 TEST_CASE("expressions - in with expressions") {
-    const std::vector<const char*> rs = {R"({"x":1,"a":1})", R"({"x":2,"a":1})",
-                                         R"({"x":2})"};
-    CHECK(kept("x in [a, a + 5]", rs) == std::vector<int>{0});
-    CHECK(kept("x not in [a]", rs) == std::vector<int>{1});
+    const dstd::Vector<const char*> rs = {R"({"x":1,"a":1})",
+                                          R"({"x":2,"a":1})", R"({"x":2})"};
+    CHECK(kept("x in [a, a + 5]", rs) == dstd::Vector<int>{0});
+    CHECK(kept("x not in [a]", rs) == dstd::Vector<int>{1});
 }
 
 TEST_CASE("expressions - functions of the wrong input type are unknown") {
-    CHECK(truth(R"(lower(x) == "5")", R"({"x":5})") == Truth::UNKNOWN);
-    CHECK(truth(R"(not (lower(x) == "5"))", R"({"x":5})") == Truth::UNKNOWN);
-    CHECK(truth("len(x) > 0", R"({"x":5})") == Truth::UNKNOWN);
-    CHECK(truth("abs(x) > 0", R"({"x":"a"})") == Truth::UNKNOWN);
-    CHECK(truth("sum(x) > 0", R"({"x":[1,"a"]})") == Truth::UNKNOWN);
+    CHECK(truth(R"(lower(x) == "5")", R"({"x":5})") == Truth::Unknown);
+    CHECK(truth(R"(not (lower(x) == "5"))", R"({"x":5})") == Truth::Unknown);
+    CHECK(truth("len(x) > 0", R"({"x":5})") == Truth::Unknown);
+    CHECK(truth("abs(x) > 0", R"({"x":"a"})") == Truth::Unknown);
+    CHECK(truth("sum(x) > 0", R"({"x":[1,"a"]})") == Truth::Unknown);
 }
 
 TEST_CASE("expressions - array functions") {
@@ -425,7 +433,7 @@ TEST_CASE("expressions - array functions") {
     CHECK(eval(R"(first(tags) == "a" and last(tags) == "b")", r));
     CHECK(eval("sum(n) == 6.5 and min(n) == 1 and max(n) == 3", r));
     CHECK(eval("len(e) == 0 and sum(e) == 0", r));
-    CHECK(truth("first(e) == 1", r) == Truth::UNKNOWN);
+    CHECK(truth("first(e) == 1", r) == Truth::Unknown);
     CHECK_FALSE(eval(R"(contains(tags, "z"))", r));
     CHECK(eval(R"(len(o) == 2)", R"({"o":{"a":1,"b":2}})"));
 }
@@ -468,7 +476,7 @@ TEST_CASE("expressions - computed array index") {
         INFO(q);
         CHECK(eval(q, r));
     }
-    CHECK(truth("xs[i + 1] == 1", r) == Truth::UNKNOWN);
+    CHECK(truth("xs[i + 1] == 1", r) == Truth::Unknown);
 }
 
 TEST_CASE("expressions - array index parameters fold to a literal step") {
@@ -488,12 +496,12 @@ TEST_CASE("expressions - array index parameters fold to a literal step") {
     CHECK(at(R"(xs[$big] == "b")"));
     CHECK(at("o[$n] is missing"));
     CHECK_FALSE(at(R"(xs[$n] == "a")"));
-    p.emplace("bad", LiteralValue{std::string("1")});
+    p.emplace("bad", LiteralValue{dstd::String("1")});
     auto bad = parse("xs[$bad] == 1", p);
     REQUIRE_FALSE(bad.has_value());
     CHECK(
         bad.error().message.find("an array index parameter holds an integer") !=
-        std::string::npos);
+        dstd::String::npos);
 }
 
 TEST_CASE("expressions - list literals") {
@@ -565,21 +573,21 @@ TEST_CASE("expressions - join") {
     CHECK(eval(R"(join(n, ",") is null)", r));
     CHECK(eval(R"(join(s, ",") is null and join(missing, ",") is null)", r));
     Params p;
-    p.emplace("sep", LiteralValue{std::string("; ")});
+    p.emplace("sep", LiteralValue{dstd::String("; ")});
     auto ast = parse("join(tags, $sep) == \"b; a; b\"", p);
     REQUIRE(ast.has_value());
     JsonDoc doc(r);
     CHECK(evaluate(**ast, doc.root()));
     CHECK(compile_error("join(tags, sep) == \"x\"")
-              .find("join() takes a string separator") != std::string::npos);
+              .find("join() takes a string separator") != dstd::String::npos);
     CHECK(compile_error("join(tags, 1) == \"x\"")
-              .find("join() takes a string separator") != std::string::npos);
+              .find("join() takes a string separator") != dstd::String::npos);
 }
 
 TEST_CASE("expressions - sort is a stage keyword and a function") {
     CHECK(eval(R"(first(sort(xs)) == 1)", R"({"xs":[3,1,2]})"));
     CHECK(kept("first(sort(xs)) == 1", {R"({"xs":[3,1]})", R"({"xs":[2]})"}) ==
-          std::vector<int>{0});
+          dstd::Vector<int>{0});
 }
 
 TEST_CASE("expressions - string functions") {
@@ -595,7 +603,7 @@ TEST_CASE("expressions - string functions") {
     CHECK(eval(R"(contains(p, "b.t"))", r));
     CHECK(eval(R"(replace(p, "/", ":") == ":a:b.txt")", r));
     CHECK(eval(R"(concat(p, "#", 3) == "/a/b.txt#3")", r));
-    CHECK(truth(R"(concat(p, missing_field) == "x")", r) == Truth::UNKNOWN);
+    CHECK(truth(R"(concat(p, missing_field) == "x")", r) == Truth::Unknown);
 }
 
 TEST_CASE("expressions - number functions") {
@@ -605,7 +613,7 @@ TEST_CASE("expressions - number functions") {
     CHECK(eval("round(x) == -3 and round(2.345, 2) == 2.35", r));
     CHECK(eval("min(x, i) == -3 and max(x, i, 0) == 0", r));
     CHECK(eval("pow(2, 10) == 1024 and exp(0) == 1 and log(1) == 0", r));
-    CHECK(truth("log(i) > 0", r) == Truth::UNKNOWN);
+    CHECK(truth("log(i) > 0", r) == Truth::Unknown);
 }
 
 TEST_CASE("expressions - type conversions") {
@@ -618,7 +626,7 @@ TEST_CASE("expressions - type conversions") {
     CHECK(eval(R"(json(s) == '"42"' and json(z) == "null")", r));
     CHECK(eval(R"(type(o) == "object" and type(z) == "null")", r));
     CHECK(eval(R"(type(nope) == "missing" and type(d) == "number")", r));
-    CHECK(truth(R"(int(o) == 1)", r) == Truth::UNKNOWN);
+    CHECK(truth(R"(int(o) == 1)", r) == Truth::Unknown);
 }
 
 TEST_CASE("expressions - if and case") {
@@ -629,24 +637,24 @@ TEST_CASE("expressions - if and case") {
 }
 
 TEST_CASE("expressions - object against a string is unknown") {
-    CHECK(truth(R"(o == '{"a":1}')", R"({"o":{"a":1}})") == Truth::UNKNOWN);
+    CHECK(truth(R"(o == '{"a":1}')", R"({"o":{"a":1}})") == Truth::Unknown);
     CHECK(truth(R"(not (o == '{"a":1}'))", R"({"o":{"a":1}})") ==
-          Truth::UNKNOWN);
-    CHECK(truth(R"(o in ['{"a":1}'])", R"({"o":{"a":1}})") == Truth::UNKNOWN);
+          Truth::Unknown);
+    CHECK(truth(R"(o in ['{"a":1}'])", R"({"o":{"a":1}})") == Truth::Unknown);
 }
 
 TEST_CASE("expressions - compile errors") {
-    CHECK(compile_error("x == null").find("is null") != std::string::npos);
-    CHECK(compile_error("x != null").find("is null") != std::string::npos);
-    CHECK(compile_error("x in [1, null]").find("null") != std::string::npos);
-    CHECK(compile_error("lenn(x) > 1").find("lenn") != std::string::npos);
-    CHECK(compile_error("len(x, y) > 1").find("len") != std::string::npos);
-    CHECK(compile_error("case(a, 1) == 1").find("case") != std::string::npos);
-    CHECK(compile_error("exists(x + 1)").find("path") != std::string::npos);
-    CHECK(compile_error("dur > 1ms").find("as_time") != std::string::npos);
-    CHECK(compile_error("now() > 1").find("time roles") != std::string::npos);
+    CHECK(compile_error("x == null").find("is null") != dstd::String::npos);
+    CHECK(compile_error("x != null").find("is null") != dstd::String::npos);
+    CHECK(compile_error("x in [1, null]").find("null") != dstd::String::npos);
+    CHECK(compile_error("lenn(x) > 1").find("lenn") != dstd::String::npos);
+    CHECK(compile_error("len(x, y) > 1").find("len") != dstd::String::npos);
+    CHECK(compile_error("case(a, 1) == 1").find("case") != dstd::String::npos);
+    CHECK(compile_error("exists(x + 1)").find("path") != dstd::String::npos);
+    CHECK(compile_error("dur > 1ms").find("as_time") != dstd::String::npos);
+    CHECK(compile_error("now() > 1").find("time roles") != dstd::String::npos);
     CHECK(compile_error("date_part(ts, \"hour\") > 1").find("needs a time") !=
-          std::string::npos);
+          dstd::String::npos);
 }
 
 TEST_CASE("expressions - field maps agree with JSON records") {
@@ -660,8 +668,8 @@ TEST_CASE("expressions - field maps agree with JSON records") {
     CHECK(eval("len(tags) == 2", m));
     CHECK(eval(R"(tags[-1] == "y")", m));
     CHECK(eval(R"(json(o) == '{"k":1}')", m));
-    CHECK(truth("n == 1", m) == Truth::UNKNOWN);
-    CHECK(truth(R"(tags == "x")", m) == Truth::UNKNOWN);
+    CHECK(truth("n == 1", m) == Truth::Unknown);
+    CHECK(truth(R"(tags == "x")", m) == Truth::Unknown);
 }
 
 TEST_CASE("quantifiers - any and all truth tables") {
@@ -669,35 +677,35 @@ TEST_CASE("quantifiers - any and all truth tables") {
         R"({"e":[],"t":[true,true],"m":[true,false],"u":[null,true],)"
         R"("f":[false,null],"s":"x","n":null,"o":{"a":true},"cat":"io",)"
         R"("h":[{"up":false,"k":1},{"up":true,"k":2}],"g":[[1,2],[3]]})";
-    const std::vector<std::pair<const char*, Truth>> cases = {
-        {"any(e, .)", Truth::NO},
-        {"all(e, .)", Truth::YES},
-        {"any(t, .)", Truth::YES},
-        {"all(t, .)", Truth::YES},
-        {"any(m, .)", Truth::YES},
-        {"all(m, .)", Truth::NO},
-        {"any(u, .)", Truth::YES},
-        {"all(u, .)", Truth::UNKNOWN},
-        {"any(f, .)", Truth::UNKNOWN},
-        {"all(f, .)", Truth::NO},
-        {"any(s, .)", Truth::UNKNOWN},
-        {"all(n, .)", Truth::UNKNOWN},
-        {"any(nope, .)", Truth::UNKNOWN},
-        {"all(o, .)", Truth::UNKNOWN},
-        {"not all(e, .)", Truth::NO},
-        {"not any(f, .)", Truth::UNKNOWN},
-        {R"(any(h, .up and ^.cat == "io"))", Truth::YES},
-        {R"(all(h, .k > 0 and ^.cat == "io"))", Truth::YES},
-        {"all(h, .k > 1)", Truth::NO},
-        {"any(h, .nope == 1)", Truth::UNKNOWN},
-        {"any(g, .[0] == 3)", Truth::YES},
-        {"all(g, len(.) > 0)", Truth::YES},
-        {"any(h, .k == 2) and all(t, .)", Truth::YES},
-        {"all(t) == true", Truth::YES},
-        {"any(h) == 1", Truth::NO},
+    const dstd::Vector<dstd::Pair<const char*, Truth>> cases = {
+        {"any(e, .)", Truth::No},
+        {"all(e, .)", Truth::Yes},
+        {"any(t, .)", Truth::Yes},
+        {"all(t, .)", Truth::Yes},
+        {"any(m, .)", Truth::Yes},
+        {"all(m, .)", Truth::No},
+        {"any(u, .)", Truth::Yes},
+        {"all(u, .)", Truth::Unknown},
+        {"any(f, .)", Truth::Unknown},
+        {"all(f, .)", Truth::No},
+        {"any(s, .)", Truth::Unknown},
+        {"all(n, .)", Truth::Unknown},
+        {"any(nope, .)", Truth::Unknown},
+        {"all(o, .)", Truth::Unknown},
+        {"not all(e, .)", Truth::No},
+        {"not any(f, .)", Truth::Unknown},
+        {R"(any(h, .up and ^.cat == "io"))", Truth::Yes},
+        {R"(all(h, .k > 0 and ^.cat == "io"))", Truth::Yes},
+        {"all(h, .k > 1)", Truth::No},
+        {"any(h, .nope == 1)", Truth::Unknown},
+        {"any(g, .[0] == 3)", Truth::Yes},
+        {"all(g, len(.) > 0)", Truth::Yes},
+        {"any(h, .k == 2) and all(t, .)", Truth::Yes},
+        {"all(t) == true", Truth::Yes},
+        {"any(h) == 1", Truth::No},
     };
     for (const auto& [q, want] : cases) {
-        CAPTURE(std::string(q));
+        CAPTURE(dstd::String(q));
         CHECK(truth(q, rec) == want);
     }
 }
@@ -705,11 +713,11 @@ TEST_CASE("quantifiers - any and all truth tables") {
 TEST_CASE("quantifiers - a flattened record reads the array cell") {
     ValueMap m;
     m["h"] = Cell::json("[1,5]", true);
-    m["cat"] = Cell(std::string("io"));
-    CHECK(truth("any(h, . > 3)", m) == Truth::YES);
-    CHECK(truth("all(h, . > 3)", m) == Truth::NO);
-    CHECK(truth(R"(any(h, . == 1 and ^.cat == "io"))", m) == Truth::YES);
-    CHECK(truth("any(x, . > 3)", m) == Truth::UNKNOWN);
+    m["cat"] = Cell(dstd::String("io"));
+    CHECK(truth("any(h, . > 3)", m) == Truth::Yes);
+    CHECK(truth("all(h, . > 3)", m) == Truth::No);
+    CHECK(truth(R"(any(h, . == 1 and ^.cat == "io"))", m) == Truth::Yes);
+    CHECK(truth("any(x, . > 3)", m) == Truth::Unknown);
 }
 
 TEST_CASE("evaluate - regex_replace") {
@@ -724,35 +732,35 @@ TEST_CASE("evaluate - regex_replace") {
     CHECK(eval(R"(regex_replace(s, "z", "y") == "abc")", R"({"s":"abc"})"));
     CHECK(eval(R"(regex_replace(s, "a", "$$") == "$bc")", R"({"s":"abc"})"));
     CHECK(truth(R"(regex_replace(s, "a", "b") == "b")", R"({"s":null})") ==
-          Truth::UNKNOWN);
+          Truth::Unknown);
     CHECK(truth(R"(regex_replace(s, "a", "b") == "b")", R"({"s":5})") ==
-          Truth::UNKNOWN);
+          Truth::Unknown);
     CHECK(truth(R"(regex_replace(s, "a", "b") == "b")", R"({})") ==
-          Truth::UNKNOWN);
+          Truth::Unknown);
 }
 
 namespace {
 
-std::optional<Number> parse_number_with_strtod_only(std::string_view text) {
+dstd::Optional<Number> parse_number_with_strtod_only(dstd::StringView text) {
     const char* first = text.data();
     const char* last = first + text.size();
     if (std::int64_t i = 0;
-        std::from_chars(first, last, i).ptr == last && !text.empty())
+        dstd::from_chars(first, last, i).ptr == last && !text.empty())
         return Number{i};
     if (std::uint64_t u = 0;
-        std::from_chars(first, last, u).ptr == last && !text.empty())
+        dstd::from_chars(first, last, u).ptr == last && !text.empty())
         return Number{u};
-    const std::string copy(text);
+    const dstd::String copy(text);
     char* end = nullptr;
     const double d = std::strtod(copy.c_str(), &end);
     if (!copy.empty() && end == copy.c_str() + copy.size()) return Number{d};
-    return std::nullopt;
+    return dstd::nullopt;
 }
 
 }  // namespace
 
 TEST_CASE("parse_number - same results as strtod on every first character") {
-    const std::vector<std::string> inputs = {
+    const dstd::Vector<dstd::String> inputs = {
         "",
         "0",
         "007",
@@ -817,11 +825,11 @@ TEST_CASE("parse_number - same results as strtod on every first character") {
         }
     }
     for (int c = 1; c < 256; ++c) {
-        const std::string in(1, static_cast<char>(c));
+        const dstd::String in(1, static_cast<char>(c));
         CAPTURE(c);
         CHECK(parse_number_with_strtod_only(in).has_value() ==
               parse_number(in).has_value());
-        const std::string two = in + "5";
+        const dstd::String two = dstd::fmt<"{}5">(in);
         CHECK(parse_number_with_strtod_only(two).has_value() ==
               parse_number(two).has_value());
     }

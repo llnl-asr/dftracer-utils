@@ -10,7 +10,7 @@ The index is built once, queried many times
 --------------------------------------------------
 
 Indexing (``index/``) reads a ``.pfw.gz`` trace once and writes a
-per-directory RocksDB store (a ``.dftindex``) that later queries consult
+per-directory store (a ``.dftindex``) that later queries consult
 instead of re-reading the trace. It holds the **checkpoints** that mark
 where each compressed member of the gzip file starts, so a chunk can be
 decompressed on its own, and four kinds of pruning evidence, each kept per
@@ -41,7 +41,7 @@ duration, and the type each field reads as. Two are built in. ``dftracer``
 requires ``ph`` and ``name`` and keeps the tuned dftracer event decoder.
 ``generic`` declares nothing: its records are decoded to every scalar leaf
 by exact path, so any NDJSON can be indexed. Other formats extend one of
-them in a spec file, a Python class or a C++ class, so a new format needs no
+them in a spec file or a Python class, so a new format needs no
 decoder code; its records decode as its parent's do, with each declared
 field converted to its type and the role fields giving the time, duration
 and lane that trace operations read.
@@ -178,7 +178,7 @@ process names, ``PR``, ``CM``). A default View reads its source's ``data``,
 which for dftracer traces leaves the metadata records out. A scan of every
 record (``View::all()``) also reads every chunk that holds a metadata record.
 A
-``phase("metadata")`` query, and a ``TraceReader`` query, which matches
+``phase("metadata")`` query, and a raw-line query, which matches
 metadata lines as well as events, judge metadata by the record names and
 fields ``dft.metadata`` keeps per chunk: ``name == "rename"`` reads no chunk
 for its FH records, since no metadata record has that name, while

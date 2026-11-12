@@ -1,7 +1,9 @@
+// SPDX-License-Identifier: MIT
 /* A real C consumer of the dftu_svc_sketch ABI: create a quantile sketch, add
  * samples, read quantiles, and merge - all through the raw vtable from C. */
 #include <dftracer/utils/plugins/abi.h>
 #include <stdint.h>
+#include <utilities/plugins/abi_c_consumers.h>
 
 /* Add 1..100 (weight 1) and report the median and count. */
 int dftu_test_sketch(const dftu_plugin_host* h, double* out_p50,

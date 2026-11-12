@@ -1,0 +1,201 @@
+// SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/field_ref.h>
+#include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/coro/channel.h>
+#include <dftracer/utils/domains/server/http_request.h>
+#include <dftracer/utils/domains/server/http_response.h>
+#include <dftracer/utils/domains/server/json_builder.h>
+#include <dftracer/utils/domains/server/router.h>
+#include <dftracer/utils/domains/server/signal_handler.h>
+#include <dftracer/utils/domains/server/trace_index.h>
+#include <dftracer/utils/domains/server/viz/calltree.h>
+#include <dftracer/utils/domains/server/viz/density.h>
+#include <dftracer/utils/domains/server/viz/handlers.h>
+#include <dftracer/utils/domains/server/viz/internal.h>
+#include <dftracer/utils/domains/server/viz/record_event.h>
+#include <dftracer/utils/domains/server/viz/scan.h>
+#include <dftracer/utils/domains/server/viz/summary_build.h>
+#include <dftracer/utils/domains/server/viz_api.h>
+#include <dftracer/utils/dstd/fmt.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/transparent_string_hash.h>
+#include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/duql/query.h>
+#include <dftracer/utils/json/json_doc_guard.h>
+#include <dftracer/utils/json/json_value.h>
+#include <dftracer/utils/trace/views/view.h>
+#include <dftracer/utils/trace/views/view_aggregate.h>
+#include <dftracer/utils/trace/views/view_definition.h>
+#include <dftracer/utils/trace/views/view_planner_utility.h>
+#include <dftracer/utils/trace/views/view_scanner_utility.h>
+#include <simdjson.h>
+
+#include <algorithm>
+#include <cstddef>
+#include <cstdint>
+#include <cstdlib>
+#include <limits>
+#include <numeric>
+
+namespace dftracer::utils::domains::server {
+
+using namespace dftracer::utils::trace;
+using namespace dftracer::utils::trace::views;
+using dftracer::utils::json::json_number;
+
+static dstd::String serialize_counters_body(const dstd::Vector<double>& read,
+                                            const dstd::Vector<double>& write,
+                                            const dstd::Vector<double>& ops,
+                                            double original_begin,
+                                            double original_end, int buckets,
+                                            double bucket_us, bool truncated) {
+    auto& b = scratch_json_builder();
+    b.start_object();
+    b.append_key_value("begin", original_begin);
+    b.append_comma();
+    b.append_key_value("end", original_end);
+    b.append_comma();
+    b.append_key_value("buckets", static_cast<std::int64_t>(buckets));
+    b.append_comma();
+    b.append_key_value("bucket_us", bucket_us);
+    b.append_comma();
+    b.append_key_value("truncated", truncated);
+    b.append_comma();
+    b.append_key_value("read_bytes", read);
+    b.append_comma();
+    b.append_key_value("write_bytes", write);
+    b.append_comma();
+    b.append_key_value("ops", ops);
+    b.end_object();
+    return json_string(b);
+}
+
+// Re-aggregate the summary's finest counter buckets into `buckets` output
+// buckets over [begin_abs, end_abs] (absolute us).
+static dstd::String serve_counters_from_summary(
+    const VizSummary& s, const VizSummary::Level& level, double begin_abs,
+    double end_abs, double original_begin, double original_end, int buckets,
+    double bucket_us_out, TraceIndex::TimeMetric metric) {
+    dstd::Vector<double> read(buckets, 0.0), write(buckets, 0.0),
+        ops(buckets, 0.0);
+    std::int64_t fb0 = s.bucket_of(begin_abs, level.bucket_us, level.nbuckets);
+    std::int64_t fb1 = s.bucket_of(end_abs, level.bucket_us, level.nbuckets);
+    if (fb0 < 0) fb0 = 0;
+    if (fb1 < 0) fb1 = static_cast<std::int64_t>(level.nbuckets) - 1;
+    for (std::int64_t fb = fb0; fb <= fb1; ++fb) {
+        double center = static_cast<double>(s.t_begin) +
+                        (static_cast<double>(fb) + 0.5) * level.bucket_us;
+        long oi = static_cast<long>((center - begin_abs) / bucket_us_out);
+        if (oi < 0 || oi >= buckets) continue;
+        auto f = static_cast<std::size_t>(fb);
+        read[oi] += level.read_bytes[f];
+        write[oi] += level.write_bytes[f];
+        ops[oi] += level.ops[f];
+    }
+    return serialize_counters_body(
+        read, write, ops, original_begin, original_end, buckets,
+        bucket_us_out * dftracer::utils::trace::time_metric_us_scale(metric),
+        false);
+}
+
+// GET /api/viz/counters: per-bucket read/write bytes and I/O op counts over
+// a time range, for bandwidth/IOPS counter tracks. Aggregated server-side in
+// parallel (per-worker arrays merged after join).
+coro::CoroTask<HttpResponse> handle_viz_counters(const HttpRequest& req,
+                                                 const QueryParams& params,
+                                                 TraceIndex& index) {
+    if (!params.has("begin") || !params.has("end")) {
+        co_return HttpResponse::bad_request(
+            "Missing required parameters: begin, end");
+    }
+
+    int buckets = params.get_int("buckets", 800);
+    if (buckets < 16) buckets = 16;
+    if (buckets > 4000) buckets = 4000;
+
+    auto win = parse_viz_window(params, index, req.path);
+    if (!win) co_return std::move(win.error());
+    double begin = win->begin;
+    double end = win->end;
+    double original_begin = win->original_begin;
+    double original_end = win->original_end;
+
+    double bucket_us = (end - begin) / static_cast<double>(buckets);
+    if (bucket_us <= 0) bucket_us = 1;
+
+    const dstd::String cache_key =
+        dstd::fmt<"{}?{}">(req.path, params.canonical_key());
+    if (auto hit = index.viz_cache().get(cache_key))
+        co_return HttpResponse::ok(std::move(*hit));
+
+    // Zoomed-out, unfiltered counter tracks come from the activity summary.
+    const TraceFields fields(index.record_schema());
+    if (viz_summary_eligible(params, fields)) {
+        const auto ensured = co_await ensure_viz_summary(index);
+        if (!ensured) co_return HttpResponse::from_error(ensured.error());
+        const VizSummary* s = *ensured;
+        if (s != nullptr && s->t_end > s->t_begin) {
+            if (const VizSummary::Level* level = s->level_for(bucket_us)) {
+                co_return HttpResponse::ok(serve_counters_from_summary(
+                    *s, *level, begin, end, original_begin, original_end,
+                    buckets, bucket_us, index.time_metric()));
+            }
+        }
+    }
+
+    ViewDefinition view = build_viz_view(params, begin, end, 0, fields);
+    // No cap: only zoomed-in or filtered counter queries reach the live path.
+    int limit = params.get_int("limit", 0);
+    if (limit < 0) limit = 0;
+
+    const std::size_t nb = static_cast<std::size_t>(buckets);
+    std::size_t slots = std::max<std::size_t>(1, index.max_concurrent());
+    bool single_file = !params.get("file").empty();
+
+    // Fold per-bucket read/write bytes and op counts over the view's scan.
+    // Partials init lazily (an unused slot stays empty, the identity for merge
+    // below).
+    views::View v =
+        views::View::from_files(
+            to_view_files(select_viz_target_files(index, params, begin, end)))
+            .phase(views::Phase::Events)
+            .cancel_when([&req]() { return req.cancel_token.cancelled(); });
+    if (view.query) v = v.filter(*view.query);
+    if (!single_file || fields.by_path) v = v.time_range(begin, end);
+
+    auto fold_events = [begin, bucket_us, nb, &fields](
+                           CounterAcc& acc,
+                           const dstd::Vector<dstd::StringView>& events) {
+        if (acc.ops.empty()) acc.init(nb);
+        fields.for_each_event(events, [&](dstd::StringView ev) {
+            fold_counter(ev, begin, bucket_us, nb, acc);
+        });
+    };
+    auto mapped = co_await v.map_batches<CounterAcc>(
+        fold_events,
+        [](CounterAcc&& x, CounterAcc&& y) {
+            if (y.ops.empty()) return std::move(x);
+            if (x.ops.empty()) return std::move(y);
+            x.merge_from(y);
+            return std::move(x);
+        },
+        slots, limit > 0 ? static_cast<std::uint64_t>(limit) : 0);
+    if (!mapped) co_return HttpResponse::from_error(mapped.error());
+    auto& r = *mapped;
+
+    bool truncated = r.stats.truncated;
+    CounterAcc total = std::move(r.value);
+    if (total.ops.empty()) total.init(nb);
+
+    dstd::String body = serialize_counters_body(
+        total.read_bytes, total.write_bytes, total.ops, original_begin,
+        original_end, buckets,
+        bucket_us *
+            dftracer::utils::trace::time_metric_us_scale(index.time_metric()),
+        truncated);
+    if (!req.cancel_token.cancelled()) index.viz_cache().put(cache_key, body);
+    co_return HttpResponse::ok(std::move(body));
+}
+
+}  // namespace dftracer::utils::domains::server

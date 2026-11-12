@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_PLUGINS_PLUGIN_ASYNC_H
 #define DFTRACER_UTILS_PLUGINS_PLUGIN_ASYNC_H
 
@@ -69,7 +70,7 @@ struct AsyncOp {
     operator dftu_task*() const noexcept { return task; }
 };
 
-/// Thin typed wrapper over the io ext; each call returns an AsyncOp to
+/// Thin typed wrapper over the io ext; each call returns an @ref AsyncOp to
 /// `co_await`, a no-op if the host does not provide the io group.
 class Io {
    public:

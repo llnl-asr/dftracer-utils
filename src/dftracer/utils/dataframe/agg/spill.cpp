@@ -1,20 +1,22 @@
-#include <dftracer/utils/core/common/logging.h>
-#include <dftracer/utils/core/common/memory_budget.h>
+// SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dataframe/agg_spill.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/internal/spill.h>  // spill::Dir
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/result.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/memory/budget.h>
 
 #include <algorithm>
 #include <cstdint>
-#include <fstream>
 #include <limits>
 #include <memory>
 #include <numeric>
-#include <stdexcept>
-#include <string>
 #include <utility>
-#include <vector>
 
 namespace dftracer::utils::dataframe {
 namespace {
@@ -39,18 +41,26 @@ class GroupSource {
     virtual ~GroupSource() = default;
     virtual bool valid() const = 0;
     virtual const AggState& state() const = 0;
-    virtual void advance() = 0;
+    virtual dstd::Result<void> advance() = 0;
 };
 
 class RunSource : public GroupSource {
    public:
-    explicit RunSource(const std::string& path) : reader_(path) {}
-    bool valid() const override { return reader_.valid(); }
-    const AggState& state() const override { return reader_.state(); }
-    void advance() override { reader_.advance(); }
+    static dstd::Result<dstd::UniquePtr<GroupSource>> open(
+        const dstd::String& path) {
+        auto reader = spill::AggRunReader::open(path);
+        if (!reader) return reader.error();
+        return dstd::UniquePtr<GroupSource>(
+            dstd::make_unique<RunSource>(std::move(*reader)));
+    }
+    explicit RunSource(dstd::UniquePtr<spill::AggRunReader> reader)
+        : reader_(std::move(reader)) {}
+    bool valid() const override { return reader_->valid(); }
+    const AggState& state() const override { return reader_->state(); }
+    dstd::Result<void> advance() override { return reader_->advance(); }
 
    private:
-    spill::AggRunReader reader_;
+    dstd::UniquePtr<spill::AggRunReader> reader_;
 };
 
 // The still-live state, read in key order without mutating (and so without
@@ -58,17 +68,23 @@ class RunSource : public GroupSource {
 class LiveSource : public GroupSource {
    public:
     explicit LiveSource(const AggState& live) : live_(&live) {
-        order_.resize(static_cast<std::size_t>(agg_num_groups(live)));
+        order_.resize(static_cast<std::size_t>(agg_group_count(live)));
         std::iota(order_.begin(), order_.end(), std::int64_t{0});
         std::sort(order_.begin(), order_.end(),
                   [&](std::int64_t a, std::int64_t b) {
                       return agg_key_cmp(live, a, live, b) < 0;
                   });
-        advance();
+        step();
     }
     bool valid() const override { return valid_; }
     const AggState& state() const override { return *cur_; }
-    void advance() override {
+    dstd::Result<void> advance() override {
+        step();
+        return {};
+    }
+
+   private:
+    void step() {
         if (at_ >= order_.size()) {
             valid_ = false;
             return;
@@ -77,9 +93,8 @@ class LiveSource : public GroupSource {
         valid_ = true;
     }
 
-   private:
     const AggState* live_;
-    std::vector<std::int64_t> order_;
+    dstd::Vector<std::int64_t> order_;
     std::size_t at_ = 0;
     AggStatePtr cur_;
     bool valid_ = false;
@@ -89,19 +104,24 @@ class LiveSource : public GroupSource {
 
 struct AggSpiller::Impl {
     std::uint64_t budget = 0;
-    std::vector<std::shared_ptr<spill::Dir>> dirs;
-    std::vector<std::string> runs;
+    dstd::Vector<dstd::SharedPtr<spill::Dir>> dirs;
+    dstd::Vector<dstd::String> runs;
     int next_id = 0;
 
-    const std::string& new_run_path() {
-        if (dirs.empty()) dirs.push_back(std::make_shared<spill::Dir>());
+    dstd::Result<dstd::String> new_run_path() {
+        if (dirs.empty()) {
+            auto dir = spill::Dir::create();
+            if (!dir) return dir.error();
+            dirs.push_back(std::move(*dir));
+        }
         runs.push_back(dirs.back()->run_path(next_id++));
         return runs.back();
     }
 };
 
-AggSpiller::AggSpiller(std::uint64_t budget) : impl_(std::make_unique<Impl>()) {
-    impl_->budget = resolve_spill_budget(budget);
+AggSpiller::AggSpiller(std::uint64_t budget)
+    : impl_(dstd::make_unique<Impl>()) {
+    impl_->budget = memory::resolve_spill_budget(budget);
 }
 AggSpiller::~AggSpiller() = default;
 AggSpiller::AggSpiller(AggSpiller&&) noexcept = default;
@@ -109,14 +129,21 @@ AggSpiller& AggSpiller::operator=(AggSpiller&&) noexcept = default;
 
 std::size_t AggSpiller::runs() const { return impl_->runs.size(); }
 
-bool AggSpiller::maybe_spill(AggStatePtr& state) {
-    if (!state || impl_->budget == NO_SPILL_BUDGET) return false;
+dstd::Result<bool> AggSpiller::maybe_spill(AggStatePtr& state) {
+    if (!state || impl_->budget == memory::NO_SPILL_BUDGET) return false;
     if (agg_approx_bytes(*state) <= impl_->budget) return false;
-    std::vector<AggSpec> specs = agg_specs(*state);
-    spill::write_agg_run(*state, impl_->new_run_path());
+    dstd::Vector<AggSpec> specs = agg_specs(*state);
+    auto path = impl_->new_run_path();
+    if (!path) return path.error();
+    auto written = spill::write_agg_run(*state, *path);
+    if (!written) {
+        impl_->dirs.back()->remove_run(impl_->runs.back());
+        impl_->runs.pop_back();
+        return written.error();
+    }
     DFTRACER_UTILS_LOG_DEBUG(
-        "Aggregation spilled run %d (%lld groups) past the %llu byte budget",
-        impl_->next_id - 1, static_cast<long long>(agg_num_groups(*state)),
+        "Aggregation spilled run {} ({} groups) past the {} byte budget",
+        impl_->next_id - 1, static_cast<long long>(agg_group_count(*state)),
         static_cast<unsigned long long>(impl_->budget));
     state = agg_new(std::move(specs));
     return true;
@@ -131,24 +158,27 @@ void AggSpiller::adopt(AggSpiller& other) {
     impl_->next_id = static_cast<int>(impl_->runs.size());
 }
 
-DataFrame AggSpiller::drain(const AggState& live,
-                            const std::vector<std::string>& key_names) const {
+dstd::Result<DataFrame> AggSpiller::drain(
+    const AggState& live, const dstd::Vector<dstd::String>& key_names) const {
     if (impl_->runs.empty()) return agg_finalize(live, key_names);
 
-    const std::vector<AggSpec> specs = agg_specs(live);
+    const dstd::Vector<AggSpec> specs = agg_specs(live);
     const bool nested =
         std::any_of(specs.begin(), specs.end(),
                     [](const AggSpec& s) { return op_is_nested(s.op); });
     const std::int64_t chunk = nested ? std::numeric_limits<std::int64_t>::max()
                                       : AGG_SPILL_CHUNK_GROUPS;
 
-    std::vector<std::unique_ptr<GroupSource>> sources;
+    dstd::Vector<dstd::UniquePtr<GroupSource>> sources;
     sources.reserve(impl_->runs.size() + 1);
-    for (const std::string& path : impl_->runs)
-        sources.push_back(std::make_unique<RunSource>(path));
-    sources.push_back(std::make_unique<LiveSource>(live));
+    for (const dstd::String& path : impl_->runs) {
+        auto source = RunSource::open(path);
+        if (!source) return source.error();
+        sources.push_back(std::move(*source));
+    }
+    sources.push_back(dstd::make_unique<LiveSource>(live));
 
-    std::vector<DataFrame> parts;
+    dstd::Vector<DataFrame> parts;
     AggStatePtr merged = agg_new(specs);
     std::int64_t in_chunk = 0;
     for (;;) {
@@ -170,7 +200,8 @@ DataFrame AggSpiller::drain(const AggState& live,
             if (!src->valid()) continue;
             if (agg_key_cmp(src->state(), 0, *win, 0) != 0) continue;
             agg_merge(*merged, src->state());
-            src->advance();
+            auto advanced = src->advance();
+            if (!advanced) return advanced.error();
         }
         if (++in_chunk >= chunk) {
             parts.push_back(agg_finalize(*merged, key_names));
@@ -182,7 +213,7 @@ DataFrame AggSpiller::drain(const AggState& live,
         parts.push_back(agg_finalize(*merged, key_names));
     if (parts.size() == 1) return std::move(parts.front());
 
-    std::vector<const DataFrame*> refs;
+    dstd::Vector<const DataFrame*> refs;
     refs.reserve(parts.size());
     for (const DataFrame& p : parts) refs.push_back(&p);
     return concat(refs);

@@ -1,5 +1,11 @@
-#include <dftracer/utils/index/record_schema.h>
+// SPDX-License-Identifier: MIT
+#include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/json/json_escape.h>
+#include <dftracer/utils/trace/index/record_schema.h>
 #include <dftracer/utils/trace/schema.h>
 #include <dftracer/utils/trace/views/view_agg_engine.h>
 #include <dftracer/utils/trace/views/view_counter_format.h>
@@ -8,10 +14,6 @@
 
 #include <cmath>
 #include <cstdint>
-#include <optional>
-#include <set>
-#include <string>
-#include <vector>
 
 namespace dftracer::utils::trace::views::detail {
 
@@ -19,16 +21,17 @@ using json::append_json_escaped;
 
 namespace {
 
-void append_number(double v, std::string& out) {
+void append_number(double v, dstd::String& out) {
     if (v == static_cast<double>(static_cast<std::int64_t>(v)) && v < 9.0e15 &&
         v > -9.0e15) {
-        out += std::to_string(static_cast<std::int64_t>(v));
+        out += dstd::to_string(static_cast<std::int64_t>(v));
     } else {
-        out += std::to_string(v);
+        out += dstd::to_string(v);
     }
 }
 
-int col_index(const std::vector<std::string>& cols, const std::string& name) {
+int col_index(const dstd::Vector<dstd::String>& cols,
+              const dstd::String& name) {
     for (std::size_t i = 0; i < cols.size(); ++i)
         if (cols[i] == name) return static_cast<int>(i);
     return -1;
@@ -36,43 +39,43 @@ int col_index(const std::vector<std::string>& cols, const std::string& name) {
 
 }  // namespace
 
-std::string counter_line(const std::vector<std::string>& group_cols,
-                         const std::vector<std::optional<std::string>>& keys,
-                         const std::vector<std::string>& value_cols,
-                         const std::vector<double>& values,
-                         const std::string& entity_col,
-                         const std::string& lane_col) {
+dstd::String counter_line(
+    const dstd::Vector<dstd::String>& group_cols,
+    const dstd::Vector<dstd::Optional<dstd::String>>& keys,
+    const dstd::Vector<dstd::String>& value_cols,
+    const dstd::Vector<double>& values, const dstd::String& entity_col,
+    const dstd::String& lane_col) {
     const int i_bucket = col_index(group_cols, "time_bucket");
     const int i_name = col_index(group_cols, "name");
     const int i_cat = col_index(group_cols, "cat");
     const int i_pid = col_index(group_cols, entity_col);
     const int i_tid = col_index(group_cols, lane_col);
 
-    auto key = [&](int i) -> std::string {
-        return i >= 0 ? keys[i].value_or(std::string()) : std::string();
+    auto key = [&](int i) -> dstd::String {
+        return i >= 0 ? keys[i].value_or(dstd::String()) : dstd::String();
     };
-    const std::string name = i_name >= 0 ? key(i_name) : key(i_cat);
-    const std::string cat = key(i_cat);
-    const std::string pid = key(i_pid);
-    const std::string tid = key(i_tid);
-    const std::string bucket = key(i_bucket);
+    const dstd::String name = i_name >= 0 ? key(i_name) : key(i_cat);
+    const dstd::String cat = key(i_cat);
+    const dstd::String pid = key(i_pid);
+    const dstd::String tid = key(i_tid);
+    const dstd::String bucket = key(i_bucket);
 
-    std::string s = "{\"name\":\"";
+    dstd::String s = "{\"name\":\"";
     append_json_escaped(s, name);
     s += "\",\"cat\":\"";
     append_json_escaped(s, cat);
     s += "\",\"pid\":";
-    s += std::to_string(pid.empty() ? 0
-                                    : dftracer::utils::index::entity_id(pid));
+    s += dstd::to_string(
+        pid.empty() ? 0 : dftracer::utils::trace::index::entity_id(pid));
     s += ",\"tid\":";
-    s += std::to_string(tid.empty() ? 0
-                                    : dftracer::utils::index::entity_id(tid));
+    s += dstd::to_string(
+        tid.empty() ? 0 : dftracer::utils::trace::index::entity_id(tid));
     s += ",\"ts\":";
     s += bucket.empty() ? "0" : bucket;
     s += ",\"ph\":";
-    s += std::to_string(phase_to_int(RecordPhase::COUNTER));
+    s += dstd::to_string(phase_to_int(RecordPhase::Counter));
     s += ",\"type\":";
-    s += std::to_string(event_type_to_int(EventType::PSUTIL));
+    s += dstd::to_string(event_type_to_int(EventType::Psutil));
     s += ",\"args\":{";
 
     bool first = true;
@@ -125,43 +128,45 @@ double col_cell_double(const dftracer::utils::dataframe::Series& c,
 
 }  // namespace
 
-void emit_counters_from_state(const dftracer::utils::dataframe::AggState& state,
-                              const ViewPlan& plan, ExportSink& sink) {
-    namespace df = dftracer::utils::dataframe;
-    df::DataFrame f = finalize_engine_result(state, plan);
+dstd::Result<void> emit_counters_from_state(
+    const dftracer::utils::dataframe::AggState& state, const ViewPlan& plan,
+    ExportSink& sink) {
+    auto finalized = finalize_engine_result(state, plan);
+    if (!finalized) return finalized.error();
+    dataframe::DataFrame f = std::move(*finalized);
 
-    std::vector<std::string> group_cols;
+    dstd::Vector<dstd::String> group_cols;
     if (plan.time_bucket_us > 0) group_cols.push_back("time_bucket");
     for (const auto& gk : plan.group_by)
         group_cols.push_back(group_col_name(gk));
 
     // Columns that are group keys, spec values, or occupancy metadata are not
     // dyn args; the rest of the frame is the per-arg dyn columns.
-    std::set<std::string> non_dyn(group_cols.begin(), group_cols.end());
+    dstd::HashSet<dstd::String> non_dyn(group_cols.begin(), group_cols.end());
     non_dyn.insert("busy_cell_us");
-    std::vector<std::string> spec_cols;
+    dstd::Vector<dstd::String> spec_cols;
     if (plan.agg.empty()) {
         spec_cols.push_back("count");
         non_dyn.insert("count");
     } else {
         for (const auto& spec : plan.agg) {
-            const std::string nm = agg_col_name(spec);
+            const dstd::String nm = agg_col_name(spec);
             non_dyn.insert(nm);
             if (spec.op == AggOp::ArgMax) continue;  // counter args are numeric
             spec_cols.push_back(nm);
         }
     }
-    std::vector<std::string> dyn_cols;
-    for (const std::string& nm : f.names)
-        if (!non_dyn.count(nm)) dyn_cols.push_back(nm);
+    dstd::Vector<dstd::String> dyn_cols;
+    for (const auto& nm : f.names)
+        if (!non_dyn.count(dstd::StringView(nm))) dyn_cols.emplace_back(nm);
 
-    std::vector<int> gi(group_cols.size());
+    dstd::Vector<int> gi(group_cols.size());
     for (std::size_t k = 0; k < group_cols.size(); ++k)
         gi[k] = static_cast<int>(f.column_index(group_cols[k]));
-    std::vector<int> si(spec_cols.size());
+    dstd::Vector<int> si(spec_cols.size());
     for (std::size_t k = 0; k < spec_cols.size(); ++k)
         si[k] = static_cast<int>(f.column_index(spec_cols[k]));
-    std::vector<int> di(dyn_cols.size());
+    dstd::Vector<int> di(dyn_cols.size());
     for (std::size_t k = 0; k < dyn_cols.size(); ++k)
         di[k] = static_cast<int>(f.column_index(dyn_cols[k]));
 
@@ -169,19 +174,24 @@ void emit_counters_from_state(const dftracer::utils::dataframe::AggState& state,
     // also stay args, since their values may be text the ids only hash.
     const auto& roles = plan_record_schema(plan).roles;
     const bool by_path = plan_by_path(plan);
-    const std::string entity =
-        by_path && !roles.entity.empty() ? roles.entity : "pid";
-    const std::string lane =
-        by_path && !roles.lane.empty() ? roles.lane : "tid";
+    const dstd::String entity =
+        by_path && !roles.entity.empty()
+            ? dstd::String(roles.entity.data(), roles.entity.size())
+            : dstd::String("pid");
+    const dstd::String lane =
+        by_path && !roles.lane.empty()
+            ? dstd::String(roles.lane.data(), roles.lane.size())
+            : dstd::String("tid");
     const std::int64_t nrows = f.num_rows();
     for (std::int64_t r = 0; r < nrows; ++r) {
-        std::vector<std::optional<std::string>> keys(group_cols.size());
+        dstd::Vector<dstd::Optional<dstd::String>> keys(group_cols.size());
         for (std::size_t k = 0; k < group_cols.size(); ++k) {
-            const df::Series& c = f.columns[static_cast<std::size_t>(gi[k])];
-            if (!c.is_null(r)) keys[k] = std::string(c.string_at(r));
+            const dataframe::Series& c =
+                f.columns[static_cast<std::size_t>(gi[k])];
+            if (!c.is_null(r)) keys[k] = dstd::String(c.string_at(r));
         }
-        std::vector<std::string> value_cols;
-        std::vector<double> values;
+        dstd::Vector<dstd::String> value_cols;
+        dstd::Vector<double> values;
         for (std::size_t k = 0; k < spec_cols.size(); ++k) {
             value_cols.push_back(spec_cols[k]);
             values.push_back(
@@ -190,7 +200,8 @@ void emit_counters_from_state(const dftracer::utils::dataframe::AggState& state,
         // Sparse per group: emit only the args this group actually saw,
         // matching emit_group_counter iterating a.dyn.
         for (std::size_t k = 0; k < dyn_cols.size(); ++k) {
-            const df::Series& c = f.columns[static_cast<std::size_t>(di[k])];
+            const dataframe::Series& c =
+                f.columns[static_cast<std::size_t>(di[k])];
             if (c.is_null(r)) continue;
             const double v = col_cell_double(c, r);
             if (std::isnan(v)) continue;
@@ -201,6 +212,7 @@ void emit_counters_from_state(const dftracer::utils::dataframe::AggState& state,
             counter_line(group_cols, keys, value_cols, values, entity, lane));
         sink.write("\n");
     }
+    return {};
 }
 
 }  // namespace dftracer::utils::trace::views::detail

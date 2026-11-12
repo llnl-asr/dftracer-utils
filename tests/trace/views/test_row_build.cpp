@@ -1,10 +1,15 @@
+// SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/string_intern.h>
-#include <dftracer/utils/core/coro/async_semaphore.h>
-#include <dftracer/utils/core/coro/channel.h>
-#include <dftracer/utils/core/coro/task.h>
-#include <dftracer/utils/core/runtime.h>
+#include <dftracer/utils/coro/async_semaphore.h>
+#include <dftracer/utils/coro/channel.h>
+#include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/views/arg_type.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/trace/views/fold_event.h>
@@ -12,42 +17,29 @@
 #include <dftracer/utils/trace/views/stream_row_fold.h>
 #include <dftracer/utils/trace/views/view_scan.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <cstdint>
 #include <memory>
-#include <optional>
-#include <string>
 #include <utility>
-#include <vector>
 
-using dftracer::utils::StringIntern;
-using dftracer::utils::coro::Channel;
-using dftracer::utils::coro::CoroSemaphore;
-using dftracer::utils::coro::CoroTask;
-using dftracer::utils::trace::RecordPhase;
-using dftracer::utils::trace::views::detail::ArgKinds;
-using dftracer::utils::trace::views::detail::ArgType;
-using dftracer::utils::trace::views::detail::build_row_frame;
-using dftracer::utils::trace::views::detail::FoldBatch;
-using dftracer::utils::trace::views::detail::FoldEvent;
-using dftracer::utils::trace::views::detail::ScanUnit;
-using dftracer::utils::trace::views::detail::StreamRowFold;
+using namespace dftracer::utils;
 
-namespace df = dftracer::utils::dataframe;
+using namespace dftracer::utils::trace;
 
 namespace {
 
 constexpr int EVENTS = 40;
 
-std::vector<FoldEvent> make_events(StringIntern& intern) {
+dstd::Vector<views::detail::FoldEvent> make_events(dstd::StringIntern& intern) {
     const auto size = intern.get_or_insert("size");
     const auto lat = intern.get_or_insert("lat");
     const auto op = intern.get_or_insert("op");
     const auto tag = intern.get_or_insert("tag");
-    std::vector<FoldEvent> out;
+    dstd::Vector<views::detail::FoldEvent> out;
     for (int i = 0; i < EVENTS; ++i) {
-        FoldEvent ev;
-        ev.phase = RecordPhase::COMPLETE;
+        views::detail::FoldEvent ev;
+        ev.phase = RecordPhase::Complete;
         ev.by_path = true;
         ev.args.emplace_back(size, static_cast<std::int64_t>(i * 10));
         if (i % 3 != 0) ev.args.emplace_back(lat, i * 0.25);
@@ -61,24 +53,26 @@ std::vector<FoldEvent> make_events(StringIntern& intern) {
 }
 
 struct Built {
-    std::vector<std::string> names;
-    std::vector<df::Series> columns;
+    dstd::Vector<dstd::String> names;
+    dstd::Vector<dataframe::Series> columns;
 };
 
-CoroTask<Built> run_step(StringIntern& intern_ref,
-                         std::shared_ptr<StringIntern> intern,
-                         std::vector<FoldEvent> events) {
+coro::CoroTask<Built> run_step(dstd::StringIntern& intern_ref,
+                               dstd::SharedPtr<dstd::StringIntern> intern,
+                               dstd::Vector<views::detail::FoldEvent> events) {
     (void)intern_ref;
-    auto channel = std::make_shared<Channel<df::Morsel>>(4);
-    auto budget = std::make_shared<CoroSemaphore>(1ull << 30);
-    StreamRowFold fold(channel, budget, intern, {}, 1.0, false, false, nullptr,
-                       nullptr, true);
-    ScanUnit unit;
-    FoldBatch batch{std::span<const FoldEvent>(events), unit};
-    fold.step(batch);
+    auto channel =
+        dstd::make_shared<coro::UnboundedChannel<dataframe::Morsel>>();
+    auto budget = dstd::make_shared<coro::AsyncSemaphore>(1ull << 30);
+    views::detail::StreamRowFold fold(channel, budget, intern, {}, 1.0, false,
+                                      false, nullptr, nullptr, true);
+    views::detail::ScanUnit unit;
+    views::detail::FoldBatch batch{
+        dstd::Span<const views::detail::FoldEvent>(events), unit};
+    dftu_utils_test::ok(fold.step(batch));
     if (auto* t = fold.take_pending())
-        co_await *reinterpret_cast<CoroTask<void>*>(t);
-    df::Morsel m;
+        co_await *reinterpret_cast<coro::CoroTask<void>*>(t);
+    dataframe::Morsel m;
     Built out;
     if (!channel->try_receive(m)) co_return out;
     for (const auto id : m.name_ids())
@@ -87,37 +81,39 @@ CoroTask<Built> run_step(StringIntern& intern_ref,
     co_return out;
 }
 
-Built stepped(const std::shared_ptr<StringIntern>& intern,
-              std::vector<FoldEvent> events) {
-    return dftracer::utils::default_runtime()
-        .submit(run_step(*intern, intern, std::move(events)))
-        .get();
+Built stepped(const dstd::SharedPtr<dstd::StringIntern>& intern,
+              dstd::Vector<views::detail::FoldEvent> events) {
+    return dftu_utils_test::ok(
+        dftracer::utils::default_runtime()
+            .submit(run_step(*intern, intern, std::move(events)))
+            .get());
 }
 
-std::vector<FoldEvent> copy_events(const std::vector<FoldEvent>& events) {
+dstd::Vector<views::detail::FoldEvent> copy_events(
+    const dstd::Vector<views::detail::FoldEvent>& events) {
     return events;
 }
 
-void check_equal(const Built& got, const df::DataFrame& want) {
+void check_equal(const Built& got, const dataframe::DataFrame& want) {
     REQUIRE(got.names == want.names);
     REQUIRE(got.columns.size() == want.columns.size());
     for (std::size_t c = 0; c < want.columns.size(); ++c) {
         CAPTURE(want.names[c]);
-        const df::Series& g = got.columns[c];
-        const df::Series& w = want.columns[c];
+        const dataframe::Series& g = got.columns[c];
+        const dataframe::Series& w = want.columns[c];
         REQUIRE(g.type() == w.type());
         CHECK(g.encoding() == w.encoding());
         REQUIRE(g.length() == w.length());
         for (std::int64_t i = 0; i < w.length(); ++i) {
             REQUIRE(g.is_null(i) == w.is_null(i));
             if (w.is_null(i)) continue;
-            if (w.type() == df::TypeId::Int64)
+            if (w.type() == dataframe::TypeId::Int64)
                 CHECK(g.values<std::int64_t>()[i] ==
                       w.values<std::int64_t>()[i]);
-            else if (w.type() == df::TypeId::Uint64)
+            else if (w.type() == dataframe::TypeId::Uint64)
                 CHECK(g.values<std::uint64_t>()[i] ==
                       w.values<std::uint64_t>()[i]);
-            else if (w.type() == df::TypeId::Float64)
+            else if (w.type() == dataframe::TypeId::Float64)
                 CHECK(g.values<double>()[i] == w.values<double>()[i]);
             else
                 CHECK(g.string_at(i) == w.string_at(i));
@@ -129,27 +125,27 @@ void check_equal(const Built& got, const df::DataFrame& want) {
 
 TEST_SUITE("RowBuild") {
     TEST_CASE("a batch whose events are all kept builds the copied frame") {
-        auto intern = std::make_shared<StringIntern>();
+        auto intern = dstd::make_shared<dstd::StringIntern>();
         const auto events = make_events(*intern);
-        const df::DataFrame want = build_row_frame(copy_events(events), *intern,
-                                                   {}, 1.0, /*by_path=*/true);
+        const dataframe::DataFrame want = views::detail::build_row_frame(
+            copy_events(events), *intern, {}, 1.0, /*by_path=*/true);
         REQUIRE(want.columns.size() == 4);
         check_equal(stepped(intern, copy_events(events)), want);
     }
 
     TEST_CASE("a filtered batch builds exactly the kept events") {
-        auto intern = std::make_shared<StringIntern>();
+        auto intern = dstd::make_shared<dstd::StringIntern>();
         auto events = make_events(*intern);
-        std::vector<FoldEvent> kept;
+        dstd::Vector<views::detail::FoldEvent> kept;
         for (std::size_t i = 0; i < events.size(); ++i) {
             if (i % 4 == 1) {
-                events[i].phase = RecordPhase::UNKNOWN;
+                events[i].phase = RecordPhase::Unknown;
             } else {
                 kept.push_back(events[i]);
             }
         }
-        const df::DataFrame want =
-            build_row_frame(kept, *intern, {}, 1.0, /*by_path=*/true);
+        const dataframe::DataFrame want = views::detail::build_row_frame(
+            kept, *intern, {}, 1.0, /*by_path=*/true);
         const Built got = stepped(intern, std::move(events));
         REQUIRE(!got.columns.empty());
         CHECK(got.columns.front().length() ==
@@ -158,14 +154,14 @@ TEST_SUITE("RowBuild") {
     }
 
     TEST_CASE("a batch with no kept event sends nothing") {
-        auto intern = std::make_shared<StringIntern>();
+        auto intern = dstd::make_shared<dstd::StringIntern>();
         auto events = make_events(*intern);
-        for (auto& ev : events) ev.phase = RecordPhase::UNKNOWN;
+        for (auto& ev : events) ev.phase = RecordPhase::Unknown;
         CHECK(stepped(intern, std::move(events)).columns.empty());
     }
 
     TEST_CASE("the value-kind mask rule gives the sequential rule's type") {
-        const std::vector<FoldEvent::ArgValue> alphabet = {
+        const dstd::Vector<views::detail::FoldEvent::ArgValue> alphabet = {
             1.5, std::int64_t{-3}, std::int64_t{7}, std::uint64_t{1} << 63,
             std::uint32_t{5}};
         std::size_t checked = 0;
@@ -173,8 +169,8 @@ TEST_SUITE("RowBuild") {
             std::size_t total = 1;
             for (std::size_t i = 0; i < length; ++i) total *= alphabet.size();
             for (std::size_t code = 0; code < total; ++code) {
-                ArgType sequential;
-                ArgKinds kinds;
+                views::detail::ArgType sequential;
+                views::detail::ArgKinds kinds;
                 std::size_t rest = code;
                 for (std::size_t i = 0; i < length; ++i) {
                     const auto& v = alphabet[rest % alphabet.size()];

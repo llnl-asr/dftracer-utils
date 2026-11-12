@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Every lazy op must stay within a small multiple of its memory budget over an
 // input far larger than the budget, or be listed as known debt. The input is
 // generated on demand (it is never resident), the result is streamed and
@@ -10,57 +11,74 @@
 // baseline) instead of asserting.
 
 #define DOCTEST_CONFIG_IMPLEMENT
-#include <dftracer/utils/core/coro/async_generator.h>
-#include <dftracer/utils/core/coro/task.h>
-#include <dftracer/utils/core/runtime.h>
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/coro/async_generator.h>
+#include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/op.h>
+#include <dftracer/utils/dstd/fmt.h>
+#include <dftracer/utils/dstd/hash/fnv1a.h>
+#include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/thread.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <fcntl.h>
+#include <instrumentation.h>
 #include <poll.h>
 #include <signal.h>
 #include <sys/resource.h>
 #include <sys/wait.h>
+#include <task_result.h>
 #include <unistd.h>
 
+#include <algorithm>
+#include <atomic>
 #include <cerrno>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <functional>
-#include <map>
-#include <memory>
-#include <optional>
-#include <set>
-#include <string>
+#include <mutex>
 #include <utility>
-#include <vector>
 
-using dftracer::utils::coro::CoroTask;
+using namespace dftracer::utils;
 using namespace dftracer::utils::dataframe;
 
 namespace {
 
 // 1M rows against an 8 MiB budget keeps the input several times the budget and
-// runs in under 10 s. At 4M rows and 16 MiB it took 30 s alone, and the macOS
-// coverage job on three cores ran past its 300 s timeout.
+// runs fast. A larger input would be too slow, most of all under coverage.
+// The coverage build asserts no peak, only that every op finishes and spills,
+// on a tenth of rows.
+#if defined(DFTRACER_UTILS_COVERAGE_BUILD)
+constexpr std::int64_t DEFAULT_ROWS = 100'000;
+constexpr std::uint64_t DEFAULT_BUDGET_MB = 1;
+#else
+constexpr std::int64_t DEFAULT_ROWS = 1'000'000;
+constexpr std::uint64_t DEFAULT_BUDGET_MB = 8;
+#endif
 std::int64_t rows_count() {
     const char* v = std::getenv("DFTU_OP_PEAK_ROWS");
-    return v ? std::strtoll(v, nullptr, 10) : 1'000'000;
+    return v ? std::strtoll(v, nullptr, 10) : DEFAULT_ROWS;
 }
 const std::int64_t ROWS = rows_count();
 // DFTU_OP_PEAK_BUDGET_MB overrides the budget (child and parent both read it).
 std::uint64_t budget_bytes() {
     const char* v = std::getenv("DFTU_OP_PEAK_BUDGET_MB");
-    return (v ? std::strtoull(v, nullptr, 10) : 8ULL) << 20;
+    return (v ? std::strtoull(v, nullptr, 10) : DEFAULT_BUDGET_MB) << 20;
 }
 const std::uint64_t BUDGET = budget_bytes();
-constexpr std::int64_t MORSEL_ROWS = 8192;
+constexpr std::int64_t BATCH_SIZE = 8192;
 // An op may use this many budgets above the streaming baseline: its own state
 // of one budget, a morsel or two in flight and the allocator's slack.
 #if defined(__APPLE__)
@@ -69,14 +87,7 @@ constexpr std::uint64_t BOUND_BUDGETS = 5;  // macOS malloc keeps freed pages
 constexpr std::uint64_t BOUND_BUDGETS = 3;
 #endif
 
-std::uint64_t mix(std::uint64_t x) {
-    x ^= x >> 33;
-    x *= 0xff51afd7ed558ccdULL;
-    x ^= x >> 33;
-    x *= 0xc4ceb9fe1a85ec53ULL;
-    x ^= x >> 33;
-    return x;
-}
+std::uint64_t mix(std::uint64_t x) { return dstd::hash::fnv1a_mix(x); }
 
 // Columns: k (a key with about `keys` distinct values), t (increasing), v
 // (pseudo-random), s (a short string, or one of about `pad` more bytes, unique
@@ -87,11 +98,11 @@ class GenCursor : public Cursor {
               std::size_t pad)
         : rows_(rows), keys_(keys), seed_(seed), pad_(pad) {}
 
-    CoroTask<std::optional<Morsel>> next(std::int64_t) override {
-        if (at_ >= rows_) co_return std::nullopt;
-        const std::int64_t n = std::min(MORSEL_ROWS, rows_ - at_);
-        std::vector<std::int64_t> k(n), t(n), v(n), g(n);
-        std::vector<std::string> s(n);
+    coro::CoroTask<MorselResult> next(std::int64_t) override {
+        if (at_ >= rows_) co_return MorselResult(dstd::nullopt);
+        const std::int64_t n = std::min(BATCH_SIZE, rows_ - at_);
+        dstd::Vector<std::int64_t> k(n), t(n), v(n), g(n);
+        dstd::Vector<dstd::String> s(n);
         for (std::int64_t i = 0; i < n; ++i) {
             const std::uint64_t h =
                 mix(seed_ + static_cast<std::uint64_t>(at_ + i));
@@ -99,8 +110,8 @@ class GenCursor : public Cursor {
                                              static_cast<std::uint64_t>(keys_));
             t[i] = at_ + i;
             v[i] = static_cast<std::int64_t>(h >> 20) % 1000003;
-            s[i] = pad_ ? std::string(pad_, 'x') + std::to_string(h)
-                        : "s" + std::to_string(h % 977);
+            s[i] = pad_ ? dstd::fmt<"{}{}">(dstd::String(pad_, 'x'), h)
+                        : dstd::fmt<"s{}">(h % 977);
             g[i] = static_cast<std::int64_t>((h >> 40) % 64);
         }
         at_ += n;
@@ -111,7 +122,7 @@ class GenCursor : public Cursor {
         m.columns.push_back(Series::flat_i64(v.data(), n));
         m.columns.push_back(Series::strings(s));
         m.columns.push_back(Series::flat_i64(g.data(), n));
-        co_return m;
+        co_return MorselResult(std::move(m));
     }
 
    private:
@@ -131,7 +142,7 @@ class GenSource : public Source {
     Schema schema() const override {
         const std::int64_t zero = 0;
         const DataType i = Series::flat_i64(&zero, 1).data_type();
-        const std::vector<std::string> blank{""};
+        const dstd::Vector<dstd::String> blank{""};
         const DataType s = Series::strings(blank).data_type();
         Schema out;
         out.fields = {Field{"k", i, true}, Field{"t", i, true},
@@ -140,9 +151,9 @@ class GenSource : public Source {
         return out;
     }
 
-    ScanResult scan(const ScanRequest& req) const override {
+    dstd::Result<ScanResult> scan(const ScanRequest& req) const override {
         ScanResult r;
-        r.cursor = std::make_unique<GenCursor>(rows_, keys_, seed_, pad_);
+        r.cursor = dstd::make_unique<GenCursor>(rows_, keys_, seed_, pad_);
         r.filters.assign(req.filters.size(), Pushed::No);
         return r;
     }
@@ -157,19 +168,19 @@ class GenSource : public Source {
 // Columns: pid (increasing) and tk, a list of two {value, count} structs per
 // row.
 Series make_tk(std::int64_t n, std::int64_t at) {
-    std::vector<std::int32_t> offsets(static_cast<std::size_t>(n) + 1);
-    std::vector<std::string> value(static_cast<std::size_t>(2 * n));
-    std::vector<std::int64_t> count(static_cast<std::size_t>(2 * n));
+    dstd::Vector<std::int32_t> offsets(static_cast<std::size_t>(n) + 1);
+    dstd::Vector<dstd::String> value(static_cast<std::size_t>(2 * n));
+    dstd::Vector<std::int64_t> count(static_cast<std::size_t>(2 * n));
     for (std::int64_t i = 0; i < n; ++i) {
         offsets[static_cast<std::size_t>(i)] = static_cast<std::int32_t>(2 * i);
         for (std::int64_t j = 0; j < 2; ++j) {
             const auto e = static_cast<std::size_t>(2 * i + j);
-            value[e] = "v" + std::to_string((at + i + j) % 977);
+            value[e] = dstd::fmt<"v{}">((at + i + j) % 977);
             count[e] = at + i + j;
         }
     }
     offsets[static_cast<std::size_t>(n)] = static_cast<std::int32_t>(2 * n);
-    std::vector<Series> fields;
+    dstd::Vector<Series> fields;
     fields.push_back(Series::strings(value));
     fields.push_back(Series::flat_i64(count.data(), 2 * n));
     return Series::list(offsets,
@@ -180,10 +191,10 @@ class ListCursor : public Cursor {
    public:
     explicit ListCursor(std::int64_t rows) : rows_(rows) {}
 
-    CoroTask<std::optional<Morsel>> next(std::int64_t) override {
-        if (at_ >= rows_) co_return std::nullopt;
-        const std::int64_t n = std::min(MORSEL_ROWS, rows_ - at_);
-        std::vector<std::int64_t> pid(static_cast<std::size_t>(n));
+    coro::CoroTask<MorselResult> next(std::int64_t) override {
+        if (at_ >= rows_) co_return MorselResult(dstd::nullopt);
+        const std::int64_t n = std::min(BATCH_SIZE, rows_ - at_);
+        dstd::Vector<std::int64_t> pid(static_cast<std::size_t>(n));
         for (std::int64_t i = 0; i < n; ++i)
             pid[static_cast<std::size_t>(i)] = at_ + i;
         Morsel m;
@@ -191,7 +202,7 @@ class ListCursor : public Cursor {
         m.columns.push_back(Series::flat_i64(pid.data(), n));
         m.columns.push_back(make_tk(n, at_));
         at_ += n;
-        co_return m;
+        co_return MorselResult(std::move(m));
     }
 
    private:
@@ -212,9 +223,9 @@ class ListSource : public Source {
         return out;
     }
 
-    ScanResult scan(const ScanRequest& req) const override {
+    dstd::Result<ScanResult> scan(const ScanRequest& req) const override {
         ScanResult r;
-        r.cursor = std::make_unique<ListCursor>(rows_);
+        r.cursor = dstd::make_unique<ListCursor>(rows_);
         r.filters.assign(req.filters.size(), Pushed::No);
         return r;
     }
@@ -224,20 +235,20 @@ class ListSource : public Source {
 };
 
 LazyFrame gen_list(std::int64_t rows) {
-    return LazyFrame::scan(std::make_shared<ListSource>(rows));
+    return LazyFrame::scan(dstd::make_shared<ListSource>(rows));
 }
 
 LazyFrame gen(std::int64_t rows, std::int64_t keys, std::uint64_t seed = 1,
               std::size_t pad = 0) {
-    return LazyFrame::scan(std::make_shared<GenSource>(rows, keys, seed, pad));
+    return LazyFrame::scan(dstd::make_shared<GenSource>(rows, keys, seed, pad));
 }
 
-using Recipe = std::function<LazyFrame(const LazyFrame& base)>;
+using Recipe = LazyFrame (*)(const LazyFrame& base);
 
 // Keys are nearly unique (many groups) so a group-by or a distinct cannot fit
 // the budget; `few` has a handful of keys.
-const std::map<std::string, Recipe>& recipes() {
-    static const std::map<std::string, Recipe> r = {
+const dstd::Map<dstd::String, Recipe>& recipes() {
+    static const dstd::Map<dstd::String, Recipe> r = {
         {"select", [](const LazyFrame& b) { return b.select({"k", "v"}); }},
         {"drop", [](const LazyFrame& b) { return b.drop({"s"}); }},
         {"rename",
@@ -273,7 +284,7 @@ const std::map<std::string, Recipe>& recipes() {
          [](const LazyFrame& b) { return b.select({"k", "v"}).is_unique(); }},
         {"group_by",
          [](const LazyFrame& b) {
-             return b.group_by(std::vector<std::string>{"k", "v"},
+             return b.group_by(dstd::Vector<dstd::String>{"k", "v"},
                                {GroupAgg{Agg::Sum, "t", "t_sum"}});
          }},
         {"reduce",
@@ -282,7 +293,7 @@ const std::map<std::string, Recipe>& recipes() {
         {"group_by_dyn",
          [](const LazyFrame& b) {
              return b.rename_columns({"t", "v"}, {"arg.t", "arg.v"})
-                 .group_by(std::vector<std::string>{"k"},
+                 .group_by(dstd::Vector<dstd::String>{"k"},
                            {GroupAgg{Agg::Count, "", "n"}},
                            {AggDynSpec{AggOp::Sum, 0.0, "sum_"}}, "arg.");
          }},
@@ -315,7 +326,15 @@ const std::map<std::string, Recipe>& recipes() {
         {"pivot",
          [](const LazyFrame& b) { return b.pivot("k", "g", "v", "sum"); }},
         {"group_transform",
-         [](const LazyFrame& b) { return b.group_by({"s"}).cumsum(); }},
+         [](const LazyFrame& b) {
+             auto summed = b.group_by({"s"}).cumsum();
+             if (!summed.has_value()) {
+                 std::fprintf(stderr, "group_transform: %s\n",
+                              summed.error().c_str());
+                 std::abort();
+             }
+             return std::move(*summed);
+         }},
         // Strings of about 200 bytes, unique per row: 50 MB of keys.
         {"sort_by_long_strings",
          [](const LazyFrame&) {
@@ -343,9 +362,9 @@ const std::map<std::string, Recipe>& recipes() {
          [](const LazyFrame& b) {
              LazyFrame w = b.select({"k", "v"});
              for (int i = 0; i < 16; ++i)
-                 w = w.with_column("arg.c" + std::to_string(i),
+                 w = w.with_column(dstd::fmt<"arg.c{}">(i),
                                    col(1) + lit(std::int64_t{i}));
-             return w.group_by(std::vector<std::string>{"k"},
+             return w.group_by(dstd::Vector<dstd::String>{"k"},
                                {GroupAgg{Agg::Count, "", "n"}},
                                {AggDynSpec{AggOp::Sum, 0.0, "sum_"}}, "arg.");
          }},
@@ -418,11 +437,11 @@ const std::map<std::string, Recipe>& recipes() {
              last.func = DFTU_WINDOW_LAST_VALUE;
              last.value = "v";
              last.out = "last";
-             const std::vector<dftu_window_spec> specs{var, run, first, last};
+             const dstd::Vector<dftu_window_spec> specs{var, run, first, last};
              const char* order[] = {"t"};
              OpArgs args;
              args.strlist(1, nullptr, 0).strlist(2, order, 1).winlist(3, specs);
-             std::vector<std::string> names = b.schema();
+             dstd::Vector<dstd::String> names = b.schema();
              for (const dftu_window_spec& w : specs) names.emplace_back(w.out);
              return b.frame_op("dftu.frame.window", args, {}, names);
          }},
@@ -442,7 +461,7 @@ const std::map<std::string, Recipe>& recipes() {
                  return w;
              };
              const std::int64_t ALL = DFTU_WINDOW_UNBOUNDED;
-             const std::vector<dftu_window_spec> specs{
+             const dstd::Vector<dftu_window_spec> specs{
                  frame(DFTU_WINDOW_FRAME_VAR, "v", "var", ALL, ALL),
                  frame(DFTU_WINDOW_FRAME_SUM, "v", "rest", 3, ALL),
                  frame(DFTU_WINDOW_FRAME_COUNT, "v", "left", 0, ALL),
@@ -450,7 +469,7 @@ const std::map<std::string, Recipe>& recipes() {
              const char* order[] = {"t"};
              OpArgs args;
              args.strlist(1, nullptr, 0).strlist(2, order, 1).winlist(3, specs);
-             std::vector<std::string> names = b.schema();
+             dstd::Vector<dstd::String> names = b.schema();
              for (const dftu_window_spec& w : specs) names.emplace_back(w.out);
              return b.frame_op("dftu.frame.window", args, {}, names);
          }},
@@ -477,7 +496,7 @@ const std::map<std::string, Recipe>& recipes() {
                  return w;
              };
              const std::int64_t ALL = DFTU_WINDOW_UNBOUNDED;
-             const std::vector<dftu_window_spec> specs{
+             const dstd::Vector<dftu_window_spec> specs{
                  frame(DFTU_WINDOW_FRAME_MIN, "v", "lo", 3, ALL),
                  frame(DFTU_WINDOW_FRAME_MAX, "s", "hi", 2, ALL),
                  frame(DFTU_WINDOW_FRAME_VAR, "v", "var", 1, ALL),
@@ -487,14 +506,14 @@ const std::map<std::string, Recipe>& recipes() {
              const char* order[] = {"t"};
              OpArgs args;
              args.strlist(1, nullptr, 0).strlist(2, order, 1).winlist(3, specs);
-             std::vector<std::string> names = b.schema();
+             dstd::Vector<dstd::String> names = b.schema();
              for (const dftu_window_spec& w : specs) names.emplace_back(w.out);
              return b.frame_op("dftu.frame.window", args, {}, names);
          }},
         {"compare_agg",
          [](const LazyFrame& b) {
-             const std::vector<GroupAgg> aggs{GroupAgg{Agg::Sum, "v", "v"}};
-             const std::vector<std::string> by{"k"};
+             const dstd::Vector<GroupAgg> aggs{GroupAgg{Agg::Sum, "v", "v"}};
+             const dstd::Vector<dstd::String> by{"k"};
              return b.group_by(by, aggs).compare_agg(
                  gen(ROWS, ROWS, 2).group_by(by, aggs), 1);
          }},
@@ -524,7 +543,7 @@ const std::map<std::string, Recipe>& recipes() {
          }},
         {"filter_mask",
          [](const LazyFrame& b) {
-             std::vector<std::uint8_t> bits(
+             dstd::Vector<std::uint8_t> bits(
                  static_cast<std::size_t>((ROWS + 7) / 8), 0x55);
              return b.filter_mask(
                  Series::flat(TypeId::Bool, bits.data(), ROWS));
@@ -554,10 +573,10 @@ const std::map<std::string, Recipe>& recipes() {
 }
 
 enum class Kind {
-    STREAMING,     // holds about one morsel
-    SPILLS,        // holds rows but writes them to disk past the budget
-    DEBT,          // buffers more than its bound today; must shrink
-    NOT_MEASURED,  // the harness has no recipe yet (reason in the table)
+    Streaming,    // holds about one morsel
+    Spills,       // holds rows but writes them to disk past the budget
+    Debt,         // buffers more than its bound today; must shrink
+    NotMeasured,  // the harness has no recipe yet (reason in the table)
 };
 
 struct Expect {
@@ -569,91 +588,98 @@ struct Expect {
 };
 
 // Every op of exported_lazy_ops.def, in the table that says what it must do.
-const std::map<std::string, Expect>& expectations() {
-    static const std::map<std::string, Expect> e = {
-        {"auto_spill", {Kind::NOT_MEASURED, "plan only"}},
-        {"memory_budget", {Kind::NOT_MEASURED, "plan only"}},
-        {"describe", {Kind::STREAMING, ""}},
-        {"drop_nulls", {Kind::STREAMING, ""}},
-        {"null_count", {Kind::STREAMING, ""}},
-        {"with_row_index", {Kind::STREAMING, ""}},
-        {"head", {Kind::STREAMING, ""}},
-        {"slice", {Kind::STREAMING, ""}},
-        {"select", {Kind::STREAMING, ""}},
-        {"rename", {Kind::STREAMING, ""}},
-        {"drop", {Kind::STREAMING, ""}},
-        {"concat", {Kind::STREAMING, ""}},
-        {"reduce", {Kind::STREAMING, "one aggregate state"}},
-        {"tail", {Kind::STREAMING, "bounded by n"}},
-        {"sample", {Kind::STREAMING, "bounded by n"}},
-        {"topk", {Kind::STREAMING, "bounded by k"}},
-        {"topk_wide", {Kind::SPILLS, "k past the budget"}},
-        {"join", {Kind::SPILLS, ""}},
-        {"cross_join", {Kind::SPILLS, "the right side is spooled"}},
+const dstd::Map<dstd::String, Expect>& expectations() {
+    static const dstd::Map<dstd::String, Expect> e = {
+        {"auto_spill", {Kind::NotMeasured, "plan only"}},
+        {"memory_budget", {Kind::NotMeasured, "plan only"}},
+        {"describe", {Kind::Streaming, ""}},
+        {"drop_nulls", {Kind::Streaming, ""}},
+        {"null_count", {Kind::Streaming, ""}},
+        {"with_row_index", {Kind::Streaming, ""}},
+        {"head", {Kind::Streaming, ""}},
+        {"slice", {Kind::Streaming, ""}},
+        {"select", {Kind::Streaming, ""}},
+        {"rename", {Kind::Streaming, ""}},
+        {"drop", {Kind::Streaming, ""}},
+        {"concat", {Kind::Streaming, ""}},
+        {"reduce", {Kind::Streaming, "one aggregate state"}},
+        {"tail", {Kind::Streaming, "bounded by n"}},
+        {"sample", {Kind::Streaming, "bounded by n"}},
+        {"topk", {Kind::Streaming, "bounded by k"}},
+        {"topk_wide", {Kind::Spills, "k past the budget"}},
+        {"join", {Kind::Spills, ""}},
+        {"cross_join", {Kind::Spills, "the right side is spooled"}},
         // Spill triggers exist, but memory stays far above the budget.
-        {"sort_by", {Kind::SPILLS, ""}},
-        {"sort_by_multi", {Kind::SPILLS, ""}},
-        {"unique", {Kind::SPILLS, ""}},
-        {"drop_duplicates", {Kind::SPILLS, ""}},
-        {"unique_by", {Kind::SPILLS, ""}},
-        {"is_duplicated", {Kind::SPILLS, ""}},
-        {"is_unique", {Kind::SPILLS, ""}},
-        {"group_by", {Kind::SPILLS, ""}},
-        {"group_by_dyn", {Kind::SPILLS, ""}},
-        {"reverse", {Kind::SPILLS, ""}},
-        {"take", {Kind::STREAMING, "holds its result"}},
-        {"head_by", {Kind::SPILLS, ""}},
+        {"sort_by", {Kind::Spills, ""}},
+        {"sort_by_multi", {Kind::Spills, ""}},
+        {"unique", {Kind::Spills, ""}},
+        {"drop_duplicates", {Kind::Spills, ""}},
+        {"unique_by", {Kind::Spills, ""}},
+        {"is_duplicated", {Kind::Spills, ""}},
+        {"is_unique", {Kind::Spills, ""}},
+        {"group_by", {Kind::Spills, ""}},
+        {"group_by_dyn", {Kind::Spills, ""}},
+        {"reverse", {Kind::Spills, ""}},
+        {"take", {Kind::Streaming, "holds its result"}},
+        {"head_by", {Kind::Spills, ""}},
         // Needs operands the harness does not build yet.
-        {"explode", {Kind::STREAMING, ""}},
-        {"unnest", {Kind::STREAMING, ""}},
-        {"to_dummies", {Kind::STREAMING, "output is rows x distinct values"}},
-        {"filter_mask", {Kind::STREAMING, ""}},
-        {"fill_null", {Kind::STREAMING, ""}},
-        {"filter", {Kind::STREAMING, ""}},
-        {"with_column", {Kind::STREAMING, ""}},
-        {"unpivot", {Kind::STREAMING, ""}},
-        {"melt", {Kind::STREAMING, ""}},
-        {"pivot", {Kind::SPILLS, ""}},
-        {"group_by_dynamic", {Kind::STREAMING, "the open windows"}},
-        {"group_by_dynamic_many", {Kind::STREAMING, "the open windows"}},
-        {"sort_by_long_strings", {Kind::SPILLS, ""}},
-        {"join_skewed", {Kind::SPILLS, ""}},
-        {"join_lookup_skewed", {Kind::SPILLS, ""}},
-        {"group_by_dyn_wide", {Kind::SPILLS, ""}},
-        {"compare_agg", {Kind::SPILLS, "two group-bys, a join and a sort", 2}},
-        {"group_transform", {Kind::SPILLS, "two sorts and a window chunk", 2}},
-        {"window_whole", {Kind::SPILLS, "a sort, a spool and a window chunk"}},
-        {"window_end", {Kind::SPILLS, "a sort, two spool passes and a chunk"}},
+        {"explode", {Kind::Streaming, ""}},
+        {"unnest", {Kind::Streaming, ""}},
+        {"to_dummies", {Kind::Streaming, "output is rows x distinct values"}},
+        {"filter_mask", {Kind::Streaming, ""}},
+        {"fill_null", {Kind::Streaming, ""}},
+        {"filter", {Kind::Streaming, ""}},
+        {"with_column", {Kind::Streaming, ""}},
+        {"unpivot", {Kind::Streaming, ""}},
+        {"melt", {Kind::Streaming, ""}},
+        {"pivot", {Kind::Spills, ""}},
+        {"group_by_dynamic", {Kind::Streaming, "the open windows"}},
+        {"group_by_dynamic_many", {Kind::Streaming, "the open windows"}},
+        {"sort_by_long_strings", {Kind::Spills, ""}},
+        {"join_skewed", {Kind::Spills, ""}},
+        {"join_lookup_skewed", {Kind::Spills, ""}},
+        {"group_by_dyn_wide", {Kind::Spills, ""}},
+        {"compare_agg", {Kind::Spills, "two group-bys, a join and a sort", 2}},
+        {"group_transform", {Kind::Spills, "two sorts and a window chunk", 2}},
+        {"window_whole", {Kind::Spills, "a sort, a spool and a window chunk"}},
+        {"window_end", {Kind::Spills, "a sort, two spool passes and a chunk"}},
         {"window_suffix",
-         {Kind::SPILLS, "a sort, a spool read both ways and a chunk"}},
-        {"asof", {Kind::SPILLS, "two sorts and a merge window"}},
-        {"interval", {Kind::SPILLS, "two sorts and the open ranges"}},
+         {Kind::Spills, "a sort, a spool read both ways and a chunk"}},
+        {"asof", {Kind::Spills, "two sorts and a merge window"}},
+        {"interval", {Kind::Spills, "two sorts and the open ranges"}},
         // cumsum over an integer column runs one morsel at a time with the
         // running total carried over; no input or result is held whole.
-        {"column_op_whole", {Kind::STREAMING, ""}},
-        {"column_op_shift", {Kind::STREAMING, ""}},
-        {"sort_by_multi_per_col", {Kind::SPILLS, "the spilling sort"}},
-        {"rename_columns", {Kind::STREAMING, ""}},
+        {"column_op_whole", {Kind::Streaming, ""}},
+        {"column_op_shift", {Kind::Streaming, ""}},
+        {"sort_by_multi_per_col", {Kind::Spills, "the spilling sort"}},
+        {"rename_columns", {Kind::Streaming, ""}},
     };
     return e;
 }
 
-std::set<std::string> registry_ops() {
-    std::set<std::string> names;
+dstd::Set<dstd::String> registry_ops() {
+    dstd::Set<dstd::String> names;
 #define DFTU_LAZY_OP(name, fn, ret, o0, o1, o2, o3, o4, o5, o6) \
     names.insert(#name);
 #include <dftracer/utils/dataframe/exported_lazy_ops.def>
+
     return names;
 }
 
-CoroTask<std::int64_t> drain_count(LazyFrame lf) {
+coro::CoroTask<std::int64_t> drain_count(LazyFrame lf) {
     std::int64_t n = 0;
-    auto g = lf.stream(MORSEL_ROWS);
-    while (auto df = co_await g.next()) n += df->num_rows();
+    auto g = lf.stream(BATCH_SIZE);
+    while (auto df = co_await g.next()) {
+        if (!*df) {
+            std::fprintf(stderr, "stream failed: %s\n", df->error().c_str());
+            co_return -1;
+        }
+        n += (*df)->num_rows();
+    }
     co_return n;
 }
 
-int child_main(const std::string& op) {
+int child_main(const dstd::String& op) {
     LazyFrame base = gen(ROWS, ROWS).memory_budget(BUDGET);
     LazyFrame plan = base;
     if (op != "input_only") {
@@ -661,45 +687,60 @@ int child_main(const std::string& op) {
         if (it == recipes().end()) return 2;
         plan = it->second(base).memory_budget(BUDGET);
     }
-    const std::int64_t n =
+    const auto drained =
         dftracer::utils::default_runtime().submit(drain_count(plan)).get();
+    if (!drained.has_value()) {
+        std::fprintf(stderr, "%s\n", drained.error().c_str());
+        return 4;
+    }
+    const std::int64_t n = *drained;
+    if (n < 0) return 3;
     std::printf("rows=%lld\n", static_cast<long long>(n));
     return 0;
 }
 
-std::string g_self;
+dstd::String g_self;
 
 struct ChildResult {
+    bool piped = true;
+    bool forked = true;
     int status = -1;
     std::uint64_t peak_bytes = 0;
     double seconds = 0;
-    std::string out;
+    dstd::String out;
 };
 
 // A child that takes longer than this is killed and fails the test.
 constexpr std::chrono::seconds CHILD_TIMEOUT{300};
+constexpr std::size_t MAX_PARALLEL_CHILDREN = 4;
 
-// Peak RSS under a sanitizer or Valgrind is the tool's shadow memory, not the
-// engine's, so the bounds mean nothing there.
-bool under_instrumentation() {
-#if defined(__SANITIZE_ADDRESS__) || defined(__SANITIZE_THREAD__)
-    return true;
-#elif defined(__has_feature)
-#if __has_feature(address_sanitizer) || __has_feature(thread_sanitizer) || \
-    __has_feature(memory_sanitizer)
-    return true;
-#endif
-#endif
-    const char* preload = std::getenv("LD_PRELOAD");
-    return preload && std::strstr(preload, "vgpreload") != nullptr;
-}
-
-ChildResult run_child(const std::string& op) {
+// Runs on worker threads, so it makes no assertion. The caller checks `piped`
+// and `forked`.
+ChildResult run_child(const dstd::String& op) {
     const auto started = std::chrono::steady_clock::now();
+    ChildResult r;
     int fds[2];
-    REQUIRE(::pipe(fds) == 0);
-    const pid_t pid = ::fork();
-    REQUIRE(pid >= 0);
+    pid_t pid;
+    {
+        // A pipe end that another thread's child inherited would hold that
+        // pipe open after its own child exits, so each pipe is made close-on-
+        // exec and forked under one lock.
+        static std::mutex spawn_mutex;
+        const std::lock_guard<std::mutex> lock(spawn_mutex);
+        if (::pipe(fds) != 0) {
+            r.piped = false;
+            return r;
+        }
+        ::fcntl(fds[0], F_SETFD, FD_CLOEXEC);
+        ::fcntl(fds[1], F_SETFD, FD_CLOEXEC);
+        pid = ::fork();
+        if (pid < 0) {
+            ::close(fds[0]);
+            ::close(fds[1]);
+            r.forked = false;
+            return r;
+        }
+    }
     if (pid == 0) {
         ::dup2(fds[1], 1);
         ::close(fds[0]);
@@ -709,7 +750,6 @@ ChildResult run_child(const std::string& op) {
         ::_exit(127);
     }
     ::close(fds[1]);
-    ChildResult r;
     char buf[256];
     bool timed_out = false;
     for (;;) {
@@ -763,7 +803,7 @@ TEST_CASE("every lazy op is in the expectation table") {
         CHECK_MESSAGE(expectations().count(name) == 1,
                       "lazy op not classified in test_op_peak_memory: ", name);
     // A recipe that runs a registry op another way, to measure that way too.
-    const std::map<std::string, std::string> variants = {
+    const dstd::Map<dstd::String, dstd::String> variants = {
         {"cross_join", "join"},
         {"topk_wide", "topk"},
         {"group_by_dyn", "group_by"},
@@ -790,9 +830,11 @@ TEST_CASE("every lazy op is in the expectation table") {
 }
 
 TEST_CASE("each op stays within its bound at a small budget" *
-          doctest::skip(under_instrumentation())) {
+          doctest::skip(instrumentation::active())) {
     const bool report = std::getenv("DFTU_OP_PEAK_REPORT") != nullptr;
     const ChildResult base = run_child("input_only");
+    REQUIRE(base.piped);
+    REQUIRE(base.forked);
     REQUIRE(base.status == 0);
     const std::uint64_t bound = BOUND_BUDGETS * BUDGET;
     if (report)
@@ -800,9 +842,31 @@ TEST_CASE("each op stays within its bound at a small budget" *
                     static_cast<unsigned long long>(base.peak_bytes >> 20),
                     static_cast<unsigned long long>(BUDGET >> 20),
                     static_cast<unsigned long long>(bound >> 20));
+    // Each child has its own address space, so its peak does not depend on the
+    // others running, so they overlap to finish sooner.
+    dstd::Map<dstd::String, ChildResult> results;
+    {
+        dstd::Vector<dstd::String> names;
+        for (const auto& entry : recipes()) {
+            names.push_back(entry.first);
+            results[entry.first];
+        }
+        std::atomic<std::size_t> next{0};
+        dstd::Vector<dstd::Thread> workers;
+        const std::size_t width = std::clamp<std::size_t>(
+            dstd::Thread::hardware_concurrency(), 1, MAX_PARALLEL_CHILDREN);
+        for (std::size_t w = 0; w < width; ++w)
+            workers.emplace_back([&] {
+                for (std::size_t i; (i = next.fetch_add(1)) < names.size();)
+                    results.at(names[i]) = run_child(names[i]);
+            });
+        for (dstd::Thread& t : workers) t.join();
+    }
     for (const auto& [name, recipe] : recipes()) {
         const Expect& want = expectations().at(name);
-        const ChildResult r = run_child(name);
+        const ChildResult& r = results.at(name);
+        REQUIRE(r.piped);
+        REQUIRE(r.forked);
         REQUIRE_MESSAGE(r.status != -2, name, " ran past ",
                         CHILD_TIMEOUT.count(), " s");
         REQUIRE_MESSAGE(r.status == 0, name, " exited with ", r.status);
@@ -811,9 +875,9 @@ TEST_CASE("each op stays within its bound at a small budget" *
         if (report) {
             std::printf("%-18s %6llu MiB %6.2f s  %s %s\n", name.c_str(),
                         static_cast<unsigned long long>(extra >> 20), r.seconds,
-                        want.kind == Kind::DEBT        ? "DEBT"
-                        : want.kind == Kind::SPILLS    ? "SPILLS"
-                        : want.kind == Kind::STREAMING ? "STREAMING"
+                        want.kind == Kind::Debt        ? "DEBT"
+                        : want.kind == Kind::Spills    ? "SPILLS"
+                        : want.kind == Kind::Streaming ? "STREAMING"
                                                        : "NOT_MEASURED",
                         want.note);
             continue;
@@ -824,7 +888,7 @@ TEST_CASE("each op stays within its bound at a small budget" *
         // finish.
         (void)extra;
 #else
-        if (want.kind == Kind::DEBT) {
+        if (want.kind == Kind::Debt) {
             CHECK_MESSAGE(extra > bound, name,
                           " now meets its bound; remove it from the debt "
                           "table (",
@@ -840,7 +904,7 @@ TEST_CASE("each op stays within its bound at a small budget" *
 }
 
 int main(int argc, char** argv) {
-    if (argc >= 3 && std::string(argv[1]) == "--child")
+    if (argc >= 3 && dstd::String(argv[1]) == "--child")
         return child_main(argv[2]);
     char* resolved = ::realpath(argv[0], nullptr);
     g_self = resolved ? resolved : argv[0];

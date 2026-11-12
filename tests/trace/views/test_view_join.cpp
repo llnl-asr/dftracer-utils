@@ -1,24 +1,30 @@
+// SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dstd/string.h>
 #include <doctest/doctest.h>
+#include <trace/views/test_view_common.h>
 
-#include "test_view_common.h"
+using namespace dftracer::utils;
 
-namespace dataframe = dftracer::utils::dataframe;
+using namespace dftracer::utils::trace::internal;
+using namespace dftracer::utils::trace::views;
+using namespace dftu_utils_test;
+using namespace test_view_common;
 
 namespace {
 
-std::int64_t col_of(const dataframe::DataFrame& b, const std::string& name) {
+std::int64_t col_of(const dataframe::DataFrame& b, const dstd::String& name) {
     for (std::size_t i = 0; i < b.names.size(); ++i)
         if (b.names[i] == name) return static_cast<std::int64_t>(i);
     return -1;
 }
-std::int64_t row_of(const dataframe::DataFrame& b, const std::string& key) {
+std::int64_t row_of(const dataframe::DataFrame& b, const dstd::String& key) {
     for (std::int64_t i = 0; i < b.num_rows(); ++i)
         if (b.columns[0].string_at(i) == key) return i;
     return -1;
 }
-double num(const dataframe::DataFrame& b, const std::string& col,
+double num(const dataframe::DataFrame& b, const dstd::String& col,
            std::int64_t row) {
     const dataframe::Series& c =
         b.columns[static_cast<std::size_t>(col_of(b, col))];
@@ -31,7 +37,7 @@ double num(const dataframe::DataFrame& b, const std::string& col,
             return c.data<double>()[row];
     }
 }
-bool is_null(const dataframe::DataFrame& b, const std::string& col,
+bool is_null(const dataframe::DataFrame& b, const dstd::String& col,
              std::int64_t row) {
     return b.columns[static_cast<std::size_t>(col_of(b, col))].is_null(row);
 }
@@ -42,13 +48,14 @@ TEST_SUITE("ViewJoin") {
     TEST_CASE("LazyFrame join equi-joins two aggregated Views") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
-        std::string gz = create_mixed_trace(env, 30, 20);  // 30 posix, 20 stdio
-        std::string idx = determine_index_path(gz, "");
+        dstd::String gz =
+            create_mixed_trace(env, 30, 20);  // 30 posix, 20 stdio
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
-        auto left = View::from_file(gz, idx)
+        auto left = View::from_file(dstd::String(gz), dstd::String(idx))
                         .group_by({GroupKey::cat()})
                         .agg({{AggOp::Count, "", "n"}});
-        auto right = View::from_file(gz, idx)
+        auto right = View::from_file(dstd::String(gz), dstd::String(idx))
                          .duql(R"(cat == "POSIX")")
                          .group_by({GroupKey::cat()})
                          .agg({{AggOp::Sum, "dur", "s"}});
@@ -92,12 +99,15 @@ TEST_SUITE("ViewJoin") {
         }
 
         SUBCASE("a key absent from one side fails at collect") {
-            auto other = View::from_file(gz, idx)
+            auto other = View::from_file(dstd::String(gz), dstd::String(idx))
                              .group_by({GroupKey::pid()})
                              .agg({{AggOp::Count, "", "n"}});
             auto plan =
                 left.join(other.lazy(), {"cat"}, dataframe::JoinHow::Inner);
-            CHECK_THROWS(run(plan.collect()));
+            CHECK_FALSE(dftracer::utils::default_runtime()
+                            .submit(plan.collect())
+                            .get()
+                            .has_value());
         }
     }
 }

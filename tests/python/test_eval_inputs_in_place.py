@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Column expressions over chunked collect results equal the joined ones."""
 
 import pytest
@@ -24,7 +25,7 @@ def _frame():
 
 
 def _chunked(df):
-    out = df.lazy().collect(morsel_rows=MORSEL)
+    out = df.lazy().collect(batch_size=MORSEL)
     assert out["a"].encoding == 5
     return out
 

@@ -1,16 +1,25 @@
+// SPDX-License-Identifier: MIT
 // Exercises the additive C++-ergonomics layer over the plugin C ABI: the
 // Sketch RAII owner, co_await-able Io ops, the StrId interning view, the
 // AggCol / agg:: aggregate builders, and the owning Arrow helpers.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/string_intern.h>
-#include <dftracer/utils/core/runtime.h>
+#include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/domains/plugins/fold_adapter.h>
+#include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/plugins/abi.h>
-#include <dftracer/utils/plugins/fold_adapter.h>
+#include <dftracer/utils/runtime/runtime.h>
 // After fold_adapter.h so nanoarrow is set up before dataframe/abi.h's
 // arrow_abi.
+#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/agg_op_codes.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/plugin.h>
 #include <dftracer/utils/plugins/result_registry.h>
 #include <dftracer/utils/trace/schema.h>
@@ -18,37 +27,15 @@
 #include <dftracer/utils/trace/views/fold_event.h>
 #include <doctest/doctest.h>
 #include <fcntl.h>
+#include <task_result.h>
+#include <testing_utilities.h>
 
 #include <cstdint>
 #include <cstring>
-#include <fstream>
-#include <memory>
-#include <span>
-#include <string>
-#include <string_view>
 #include <utility>
 #include <variant>
-#include <vector>
 
-#include "testing_utilities.h"
-
-using dftracer::utils::CoroScope;
-using dftracer::utils::Runtime;
-using dftracer::utils::StringIntern;
-using dftracer::utils::plugins::AggCol;
-using dftracer::utils::plugins::AggOp;
-using dftracer::utils::plugins::NamedResultRegistry;
-using dftracer::utils::plugins::OwnedArrow;
-using dftracer::utils::plugins::OwnedDataFrame;
-using dftracer::utils::plugins::PluginFold;
-using dftracer::utils::plugins::SharedResultRegistry;
-namespace agg = dftracer::utils::plugins::agg;
-namespace views = dftracer::utils::trace::views;
-using views::detail::CoverageSet;
-using views::detail::FoldBatch;
-using views::detail::FoldEvent;
-using views::detail::ScanUnit;
-namespace coro = dftracer::utils::coro;
+using namespace dftracer::utils;
 
 namespace {
 
@@ -60,11 +47,11 @@ struct TrivialSlice {
 };
 
 struct HostFixture {
-    StringIntern intern;
+    dstd::StringIntern intern;
     dftu_plugin* plugin =
         dftracer::utils::plugins::make_plugin<TrivialSlice>(nullptr);
-    std::unique_ptr<PluginFold> fold =
-        std::make_unique<PluginFold>(plugin, intern);
+    dstd::UniquePtr<domains::plugins::PluginFold> fold =
+        dstd::make_unique<domains::plugins::PluginFold>(plugin, intern);
     dftu_plugin_host& host() { return fold->host(); }
     dftu_str intern_str(const char* s) {
         return host().intern(host().h, s,
@@ -79,11 +66,15 @@ struct HostFixture {
 template <class MakeTask>
 void drive_task(dftu_plugin_host& host, int workers, MakeTask make) {
     Runtime rt(workers);
-    rt.scope("caller", [&](CoroScope&) -> coro::CoroTask<void> {
-          dftu_task* driver =
-              dftracer::utils::plugins::detail::drive_coro<int>(&host, make());
-          co_await *reinterpret_cast<coro::CoroTask<void>*>(driver);
-      }).wait();
+    dftu_utils_test::ok(
+        rt.submit(coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+                      dftu_task* driver =
+                          dftracer::utils::plugins::detail::drive_coro<int>(
+                              &host, make());
+                      co_await *reinterpret_cast<coro::CoroTask<void>*>(driver);
+                  }),
+                  "caller")
+            .wait());
     rt.shutdown();
 }
 
@@ -134,11 +125,10 @@ TEST_CASE("plugin cxx: Sketch RAII adds, merges, and frees") {
 
 TEST_CASE("plugin cxx: Io ops are co_await-able directly") {
     dftu_utils_test::TestEnvironment env(0);
-    std::string path = env.get_dir() + "/probe.txt";
-    const std::string body = "alpha\nbeta\ngamma\n";
+    dstd::String path = env.dir() + "/probe.txt";
+    const dstd::String body = "alpha\nbeta\ngamma\n";
     {
-        std::ofstream f(path, std::ios::binary);
-        f << body;
+        dstd::fs::write_file(dstd::PathView(path), body).discard();
     }
 
     HostFixture fx;
@@ -168,51 +158,63 @@ TEST_CASE("plugin cxx: StrId hides the raw interned-id integer") {
 }
 
 TEST_CASE("plugin cxx: AggCol builds a dftu_agg_col without hand casts") {
-    const dftu_agg_col raw =
-        AggCol(AggOp::Pct).value("dur").out("p90_dur").param(0.9).raw();
+    const dftu_agg_col raw = plugins::AggCol(plugins::AggOp::Pct)
+                                 .value("dur")
+                                 .out("p90_dur")
+                                 .param(0.9)
+                                 .raw();
     CHECK(raw.op == DFTU_AGG_PCT);
-    CHECK(std::string(raw.value) == "dur");
-    CHECK(std::string(raw.out) == "p90_dur");
+    CHECK(dstd::String(raw.value) == "dur");
+    CHECK(dstd::String(raw.out) == "p90_dur");
     CHECK(raw.param == doctest::Approx(0.9));
     CHECK(raw.by == nullptr);
 
     // The op stays a named enum on both sides of the seam.
-    CHECK(static_cast<dftu_agg_op>(AggOp::Argmax) == DFTU_AGG_ARGMAX);
-    CHECK(static_cast<dftu_agg_op>(AggOp::SetUnion) == DFTU_AGG_SET_UNION);
+    CHECK(static_cast<dftu_agg_op>(plugins::AggOp::Argmax) == DFTU_AGG_ARGMAX);
+    CHECK(static_cast<dftu_agg_op>(plugins::AggOp::SetUnion) ==
+          DFTU_AGG_SET_UNION);
 }
 
 TEST_CASE("plugin cxx: agg:: factories fill only the fields their op takes") {
     // Single-input reductions: value + out, no param, no by.
-    for (const AggCol& c :
-         {agg::sumsq("dur", "sumsq_dur"), agg::var("dur", "var_dur"),
-          agg::std_dev("dur", "std_dur"), agg::skew("dur", "skew_dur"),
-          agg::kurt("dur", "kurt_dur"), agg::first("name", "first_name"),
-          agg::last("name", "last_name"), agg::set_union("name", "names"),
-          agg::hist("dur", "hist_dur"), agg::count_valid("dur", "n_dur")}) {
+    for (const plugins::AggCol& c :
+         {plugins::agg::sumsq("dur", "sumsq_dur"),
+          plugins::agg::var("dur", "var_dur"),
+          plugins::agg::std_dev("dur", "std_dur"),
+          plugins::agg::skew("dur", "skew_dur"),
+          plugins::agg::kurt("dur", "kurt_dur"),
+          plugins::agg::first("name", "first_name"),
+          plugins::agg::last("name", "last_name"),
+          plugins::agg::set_union("name", "names"),
+          plugins::agg::hist("dur", "hist_dur"),
+          plugins::agg::count_valid("dur", "n_dur")}) {
         const dftu_agg_col raw = c.raw();
         CHECK(raw.value != nullptr);
         CHECK(raw.out != nullptr);
         CHECK(raw.by == nullptr);
         CHECK(raw.param == doctest::Approx(0.0));
     }
-    CHECK(agg::sumsq("dur", "sumsq_dur").raw().op == DFTU_AGG_SUMSQ);
-    CHECK(agg::hist("dur", "hist_dur").raw().op == DFTU_AGG_HIST);
-    CHECK(agg::count_valid("dur", "n_dur").raw().op == DFTU_AGG_COUNT_VALID);
+    CHECK(plugins::agg::sumsq("dur", "sumsq_dur").raw().op == DFTU_AGG_SUMSQ);
+    CHECK(plugins::agg::hist("dur", "hist_dur").raw().op == DFTU_AGG_HIST);
+    CHECK(plugins::agg::count_valid("dur", "n_dur").raw().op ==
+          DFTU_AGG_COUNT_VALID);
 
     // The occupancy ops take the (ts, dur) pair plus the snap tolerance.
-    const dftu_agg_col conc = agg::concurrency("ts", "dur", "conc", 4.0).raw();
+    const dftu_agg_col conc =
+        plugins::agg::concurrency("ts", "dur", "conc", 4.0).raw();
     CHECK(conc.op == DFTU_AGG_CONCURRENCY);
-    CHECK(std::string(conc.value) == "ts");
-    CHECK(std::string(conc.by) == "dur");
+    CHECK(dstd::String(conc.value) == "ts");
+    CHECK(dstd::String(conc.by) == "dur");
     CHECK(conc.param == doctest::Approx(4.0));
 
-    const dftu_agg_col util = agg::utilization("ts", "dur", "util").raw();
+    const dftu_agg_col util =
+        plugins::agg::utilization("ts", "dur", "util").raw();
     CHECK(util.op == DFTU_AGG_UTILIZATION);
     CHECK(util.param == doctest::Approx(0.0));  // exact endpoints by default
 
-    const dftu_agg_col act = agg::active("ts", "dur", "peak").raw();
+    const dftu_agg_col act = plugins::agg::active("ts", "dur", "peak").raw();
     CHECK(act.op == DFTU_AGG_ACTIVE);
-    CHECK(std::string(act.by) == "dur");
+    CHECK(dstd::String(act.by) == "dur");
 }
 
 namespace {
@@ -257,37 +259,38 @@ struct BatchCheckSlice {
 }  // namespace
 
 TEST_CASE("plugin cxx: Batch view iterates typed Events") {
-    StringIntern intern;
+    dstd::StringIntern intern;
     dftu_plugin* p =
         dftracer::utils::plugins::make_plugin<BatchCheckSlice>(nullptr);
     {
         // fold must be destroyed (it calls plugin_->destroy_slice) before
         // p->destroy frees the plugin's own storage, which the vtable pointed
         // to by `p` lives inside of.
-        PluginFold fold(p, intern);
+        domains::plugins::PluginFold fold(p, intern);
 
         const std::uint32_t N = 3;
-        std::vector<FoldEvent> evs(N);
+        dstd::Vector<trace::views::detail::FoldEvent> evs(N);
         for (std::uint32_t i = 0; i < N; ++i) {
-            evs[i] = FoldEvent{};
+            evs[i] = trace::views::detail::FoldEvent{};
             evs[i].cat_id = intern.get_or_insert("POSIX");
             evs[i].name_id = intern.get_or_insert("read");
             evs[i].pid = 100 + i;
             evs[i].tid = 200 + i;
             evs[i].ts = 1000 + i;
             evs[i].dur = 10 * (i + 1);
-            evs[i].phase = dftracer::utils::trace::RecordPhase::COMPLETE;
+            evs[i].phase = dftracer::utils::trace::RecordPhase::Complete;
             evs[i].has_dur = true;
         }
-        ScanUnit unit{};
-        fold.step(FoldBatch{std::span<const FoldEvent>(evs), unit, {}});
+        trace::views::detail::ScanUnit unit{};
+        dftu_utils_test::ok(fold.step(trace::views::detail::FoldBatch{
+            dstd::Span<const trace::views::detail::FoldEvent>(evs), unit, {}}));
     }
 
     if (p->destroy) p->destroy(p->self);
 }
 
 TEST_CASE("plugin cxx: Event args expose typed values and dotted lookup") {
-    StringIntern intern;
+    dstd::StringIntern intern;
     struct ArgCheckSlice {
         explicit ArgCheckSlice(const dftracer::utils::plugins::Config&) {}
         void step(const dftracer::utils::plugins::Batch& b,
@@ -314,18 +317,19 @@ TEST_CASE("plugin cxx: Event args expose typed values and dotted lookup") {
         // fold must be destroyed (it calls plugin_->destroy_slice) before
         // p->destroy frees the plugin's own storage, which the vtable pointed
         // to by `p` lives inside of.
-        PluginFold fold(p, intern);
+        domains::plugins::PluginFold fold(p, intern);
 
-        FoldEvent fe;
+        trace::views::detail::FoldEvent fe;
         fe.pid = 7;
-        fe.phase = dftracer::utils::trace::RecordPhase::COMPLETE;
+        fe.phase = dftracer::utils::trace::RecordPhase::Complete;
         fe.args.emplace_back(intern.get_or_insert("ret"), std::int64_t{42});
         fe.args.emplace_back(intern.get_or_insert("fd"), 2.5);
         fe.args.emplace_back(intern.get_or_insert("path"),
                              intern.get_or_insert("/tmp/a"));
-        std::vector<FoldEvent> evs = {fe};
-        ScanUnit unit{};
-        fold.step(FoldBatch{std::span<const FoldEvent>(evs), unit, {}});
+        dstd::Vector<trace::views::detail::FoldEvent> evs = {fe};
+        trace::views::detail::ScanUnit unit{};
+        dftu_utils_test::ok(fold.step(trace::views::detail::FoldBatch{
+            dstd::Span<const trace::views::detail::FoldEvent>(evs), unit, {}}));
     }
 
     if (p->destroy) p->destroy(p->self);
@@ -365,7 +369,7 @@ TEST_CASE("plugin cxx: make_plugin dispatches a Batch-view step") {
     REQUIRE(slice != nullptr);
 
     const std::uint32_t N = 4;
-    std::vector<std::uint64_t> pid(N), ts(N);
+    dstd::Vector<std::uint64_t> pid(N), ts(N);
     for (std::uint32_t i = 0; i < N; ++i) {
         pid[i] = 10 + i;
         ts[i] = 500 + i;
@@ -391,13 +395,14 @@ TEST_CASE("plugin cxx: make_plugin dispatches a Batch-view step") {
 
 namespace {
 
-FoldEvent evt(std::uint64_t pid, std::uint64_t dur, std::uint64_t tid) {
-    FoldEvent e;
+trace::views::detail::FoldEvent evt(std::uint64_t pid, std::uint64_t dur,
+                                    std::uint64_t tid) {
+    trace::views::detail::FoldEvent e;
     e.pid = pid;
     e.dur = dur;
     e.has_dur = true;
     e.tid = tid;
-    e.phase = dftracer::utils::trace::RecordPhase::COMPLETE;
+    e.phase = dftracer::utils::trace::RecordPhase::Complete;
     return e;
 }
 
@@ -407,9 +412,9 @@ FoldEvent evt(std::uint64_t pid, std::uint64_t dur, std::uint64_t tid) {
 ::dftu_task* agg_facade_columns(void*, const dftu_dataframe* df,
                                 const dftu_plugin_host* host) {
     dftracer::utils::plugins::Host h{host};
-    const auto acc =
-        h.agg("by_pid", {"pid"},
-              {agg::count("hits"), agg::argmax("tid", "tid_at_max", "dur")});
+    const auto acc = h.agg("by_pid", {"pid"},
+                           {plugins::agg::count("hits"),
+                            plugins::agg::argmax("tid", "tid_at_max", "dur")});
     if (acc) acc.accumulate(df);
     return nullptr;
 }
@@ -432,12 +437,12 @@ dftu_plugin make_agg_facade_plugin() {
     return p;
 }
 
-std::string cell_str(const dftu_series* col, std::int64_t r) {
+dstd::String cell_str(const dftu_series* col, std::int64_t r) {
     dftu_series* flat = dftu_series_materialize(col);
     const std::int32_t* off = dftu_series_offsets(flat);
     const char* data = static_cast<const char*>(dftu_series_data(flat));
-    std::string out(data + off[r],
-                    static_cast<std::size_t>(off[r + 1] - off[r]));
+    dstd::String out(data + off[r],
+                     static_cast<std::size_t>(off[r + 1] - off[r]));
     dftu_series_free(flat);
     return out;
 }
@@ -466,33 +471,38 @@ double cell_num(const dftu_series* col, std::int64_t r) {
 }  // namespace
 
 TEST_CASE("plugin cxx: Host::agg merges a count and an argmax across slices") {
-    StringIntern intern;
+    dstd::StringIntern intern;
     dftu_plugin p = make_agg_facade_plugin();
-    NamedResultRegistry named;
-    PluginFold master(&p, intern, nullptr, &named);
+    plugins::NamedResultRegistry named;
+    domains::plugins::PluginFold master(&p, intern, nullptr, &named);
 
     // Merged counts: pid 1 -> 3, pid 2 -> 2. Argmax tid by duration: pid 1 at
     // dur 30 -> tid 300; pid 2 at dur 50 -> tid 500.
-    const std::vector<std::vector<FoldEvent>> slices = {
+    const dstd::Vector<dstd::Vector<trace::views::detail::FoldEvent>> slices = {
         {evt(1, 10, 100), evt(1, 30, 300), evt(2, 5, 50)},
         {evt(1, 20, 200), evt(2, 50, 500)}};
     for (const auto& evs : slices) {
         auto slice = master.slice();
-        auto* pf = static_cast<PluginFold*>(slice.get());
-        ScanUnit unit;
-        pf->step(FoldBatch{std::span<const FoldEvent>(evs), unit, {}});
-        master.merge(*pf);
+        auto* pf = static_cast<domains::plugins::PluginFold*>(slice.get());
+        trace::views::detail::ScanUnit unit;
+        dftu_utils_test::ok(pf->step(trace::views::detail::FoldBatch{
+            dstd::Span<const trace::views::detail::FoldEvent>(evs), unit, {}}));
+        dftu_utils_test::ok(master.merge(*pf));
     }
     Runtime rt(1);
-    rt.scope("fin", [&](CoroScope&) -> coro::CoroTask<void> {
-          co_await master.finalize(CoverageSet{});
-      }).wait();
+    dftu_utils_test::ok(
+        rt.submit(coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+                      co_await master.finalize(
+                          trace::views::detail::CoverageSet{});
+                  }),
+                  "fin")
+            .wait());
     rt.shutdown();
 
     auto it = named.results().find("by_pid");
     REQUIRE(it != named.results().end());
-    REQUIRE(std::holds_alternative<OwnedDataFrame>(it->second));
-    dftu_dataframe* out = std::get<OwnedDataFrame>(it->second).handle;
+    REQUIRE(std::holds_alternative<plugins::OwnedDataFrame>(it->second));
+    dftu_dataframe* out = std::get<plugins::OwnedDataFrame>(it->second).handle;
     REQUIRE(out != nullptr);
     REQUIRE(dftu_dataframe_num_rows(out) == 2);
 

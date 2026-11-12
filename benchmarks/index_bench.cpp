@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Benchmark: index build, index size, decode, pruning and a fixed query set
 // over real trace inputs, for comparing index changes against a recorded
 // baseline. Each input runs in its own child process so peak memory is per
@@ -11,26 +12,39 @@
 //   index_bench [--out F] [--baseline F] [--workdir D] [--build-runs N]
 //               [--runs N] [--warmups N] [--memory-budget BYTES]
 //               [--aggregation-interval-us US] INPUT...
+//   index_bench --smoke   (one tiny generated trace, one run, for ctest)
 //
 // --memory-budget bounds the index build (IndexerOptions::memory_budget);
 // build_peak_rss_bytes is the peak before any query runs.
-// --aggregation-interval-us also builds the aggregation tier at that interval.
+// --aggregation-interval-us sets the interval of the aggregation tier.
 //
 // An INPUT is a .pfw.gz file or a directory scanned recursively. A genesis
 // output file (long or wide format) runs three filter queries and no
 // group_by or flamegraph; a query with an arrow is not pruned, which only
 // reads one file's own columns.
 
-#include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/runtime.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
+#include <bench_ok.h>
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/function_ref.h>
+#include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
-#include <dftracer/utils/index/indexer.h>
-#include <dftracer/utils/index/plan/chunk_pruner.h>
-#include <dftracer/utils/index/store/index_database.h>
-#include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/fileio/compress/libdeflate_gzip.h>
+#include <dftracer/utils/fileio/file_helpers.h>
+#include <dftracer/utils/fileio/lines/sources/async_streaming_gz_line_generator.h>
+#include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/trace/index/indexer.h>
+#include <dftracer/utils/trace/index/plan/chunk_pruner.h>
+#include <dftracer/utils/trace/index/plan/prune.h>
+#include <dftracer/utils/trace/index/tables.h>
 #include <dftracer/utils/trace/views/view.h>
-#include <dftracer/utils/utilities/fileio/lines/sources/async_streaming_gz_line_generator.h>
 #include <simdjson.h>
 #include <sys/resource.h>
 #include <sys/wait.h>
@@ -41,71 +55,90 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
-#include <fstream>
-#include <functional>
-#include <map>
 #include <random>
-#include <sstream>
-#include <string>
-#include <unordered_set>
 #include <utility>
-#include <vector>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::trace::views;
 
 namespace {
 
+/// Prints the error and exits with 1 when a setup call failed.
+template <class T>
+void require_ok(const dftracer::utils::dstd::Expected<
+                    T, dftracer::utils::dstd::Error>& result,
+                const char* what) {
+    if (result.has_value()) return;
+    const auto& error = result.error();
+    std::fprintf(stderr, "%s failed: %.*s %.*s\n", what,
+                 static_cast<int>(error.name().size()), error.name().data(),
+                 static_cast<int>(error.message().size()),
+                 error.message().data());
+    std::exit(1);
+}
+
 constexpr double MAX_SLOWDOWN = 0.05;
 
 struct Options {
-    std::string out = "index_bench.json";
-    std::string baseline;
-    std::string workdir = (fs::temp_directory_path() / "index_bench").string();
+    dstd::String out = "index_bench.json";
+    dstd::String baseline;
+    dstd::String workdir =
+        dstd::String((dstd::fs::temp_directory() / "index_bench").str());
     int build_runs = 3;
     int runs = 10;
     int warmups = 2;
     std::uint64_t memory_budget = 0;
     std::uint64_t aggregation_interval_us = 0;
-    std::vector<std::string> inputs;
+    dstd::Vector<dstd::String> inputs;
 };
 
 template <class T>
 T run(coro::CoroTask<T> t) {
-    return default_runtime().submit(std::move(t)).get();
+    return dftu::bench::ok(default_runtime().submit(std::move(t)).get());
+}
+
+template <class T>
+T run(coro::CoroTask<dstd::Result<T>> t) {
+    return dftu::bench::ok(default_runtime().submit(std::move(t)).get());
 }
 
 template <class Fn>
 void run_scoped(Fn fn) {
-    default_runtime()
-        .submit(run_coro_scope(default_runtime().executor(), std::move(fn)))
-        .wait();
+    dftu::bench::ok(
+        default_runtime().submit(coro::with_scope(std::move(fn))).wait());
 }
 
-double seconds(const std::function<void()>& f) {
+double seconds(dstd::FunctionRef<void()> f) {
     const auto t0 = std::chrono::steady_clock::now();
     f();
     return std::chrono::duration<double>(std::chrono::steady_clock::now() - t0)
         .count();
 }
 
-double median(std::vector<double> v) {
+double median(dstd::Vector<double> v) {
     std::sort(v.begin(), v.end());
     return v[v.size() / 2];
 }
 
-std::vector<double> timed(const std::function<void()>& f, int warmups,
-                          int runs) {
+dstd::Vector<double> timed(dstd::FunctionRef<void()> f, int warmups, int runs) {
     for (int i = 0; i < warmups; ++i) f();
-    std::vector<double> t;
+    dstd::Vector<double> t;
     for (int i = 0; i < runs; ++i) t.push_back(seconds(f));
     return t;
 }
 
-std::uint64_t dir_bytes(const fs::path& p) {
+std::uint64_t dir_bytes(dstd::PathView p) {
     std::uint64_t n = 0;
-    for (const auto& e : fs::recursive_directory_iterator(p))
-        if (e.is_regular_file()) n += e.file_size();
+    require_ok(
+        dstd::fs::walk(p,
+                       [&](dstd::PathView path, dstd::fs::FileKind kind) {
+                           if (kind == dstd::fs::FileKind::File) {
+                               const auto st = dstd::fs::stat(path);
+                               if (st) n += st->size;
+                           }
+                           return dstd::fs::WalkAction::Continue;
+                       }),
+        "walk");
     return n;
 }
 
@@ -119,21 +152,25 @@ std::uint64_t peak_rss_bytes() {
 #endif
 }
 
-std::vector<std::string> trace_files(const std::string& input) {
-    std::vector<std::string> files;
-    if (fs::is_regular_file(input)) return {input};
-    for (const auto& e : fs::recursive_directory_iterator(input)) {
-        const std::string p = e.path().string();
-        if (e.is_regular_file() && p.size() > 7 &&
-            p.compare(p.size() - 7, 7, ".pfw.gz") == 0)
-            files.push_back(p);
-    }
+dstd::Vector<dstd::String> trace_files(const dstd::String& input) {
+    dstd::Vector<dstd::String> files;
+    if (dstd::fs::is_regular_file(input).value()) return {input};
+    require_ok(dstd::fs::walk(
+                   input,
+                   [&](dstd::PathView path, dstd::fs::FileKind kind) {
+                       const dstd::StringView p = path.str();
+                       if (kind == dstd::fs::FileKind::File && p.size() > 7 &&
+                           p.compare(p.size() - 7, 7, ".pfw.gz") == 0)
+                           files.emplace_back(p);
+                       return dstd::fs::WalkAction::Continue;
+                   }),
+               "walk");
     std::sort(files.begin(), files.end());
     return files;
 }
 
-std::string quote(std::string_view s) {
-    std::string out = "\"";
+dstd::String quote(dstd::StringView s) {
+    dstd::String out = "\"";
     for (char c : s) {
         if (c == '"' || c == '\\') out.push_back('\\');
         out.push_back(c);
@@ -145,30 +182,31 @@ std::string quote(std::string_view s) {
 // the first lines of the first file, so the query set adapts to any input
 // without timing the discovery.
 struct QuerySet {
-    std::string name;
-    std::string cat;
-    std::string args;
-    std::string ts;
+    dstd::String name;
+    dstd::String cat;
+    dstd::String args;
+    dstd::String ts;
 };
 
 bool is_metadata(simdjson::dom::object o) {
     simdjson::dom::element ph;
     if (o["ph"].get(ph) != simdjson::SUCCESS) return true;
-    std::string_view letter;
+    dstd::StringView letter;
     std::int64_t n = 0;
     if (ph.get(letter) == simdjson::SUCCESS) return letter == "M";
     return ph.get(n) == simdjson::SUCCESS && n == 4;
 }
 
-coro::CoroTask<QuerySet> sample_queries(std::string file) {
-    std::map<std::string, int> names, cats, args;
-    std::vector<std::int64_t> stamps;
+coro::CoroTask<QuerySet> sample_queries(dstd::String file) {
+    dstd::Map<dstd::String, int> names, cats, args;
+    dstd::Vector<std::int64_t> stamps;
     simdjson::dom::parser parser;
     auto gen =
-        utilities::fileio::lines::sources::async_streaming_gz_lines(file);
+        fileio::lines::sources::async_streaming_gz_lines(std::move(file));
     int seen = 0;
-    while (auto line = co_await gen.next()) {
-        std::string_view l = line->content;
+    while (auto next = co_await gen.next()) {
+        if (!*next) dftu::bench::fail(next->error());
+        dstd::StringView l = (*next)->content;
         while (!l.empty() && (l.back() == ',' || l.back() == ' '))
             l.remove_suffix(1);
         if (l.empty() || l.front() != '{') continue;
@@ -179,28 +217,28 @@ coro::CoroTask<QuerySet> sample_queries(std::string file) {
         std::int64_t ts = 0;
         if (o["ts"].get(ts) == simdjson::SUCCESS && ts > 0)
             stamps.push_back(ts);
-        std::string_view v;
-        if (o["name"].get(v) == simdjson::SUCCESS) ++names[std::string(v)];
-        if (o["cat"].get(v) == simdjson::SUCCESS) ++cats[std::string(v)];
+        dstd::StringView v;
+        if (o["name"].get(v) == simdjson::SUCCESS) ++names[dstd::String(v)];
+        if (o["cat"].get(v) == simdjson::SUCCESS) ++cats[dstd::String(v)];
         simdjson::dom::object a;
         if (o["args"].get(a) == simdjson::SUCCESS) {
             for (auto [k, x] : a) {
                 if (k == "hhash" || k == "fhash") continue;
                 if (x.is_string())
-                    ++args["args." + std::string(k) +
+                    ++args["args." + dstd::String(k) +
                            " == " + quote(x.get_string().value_unsafe())];
                 else if (x.is_int64())
-                    ++args["args." + std::string(k) + " == " +
-                           std::to_string(x.get_int64().value_unsafe())];
+                    ++args["args." + dstd::String(k) + " == " +
+                           dstd::to_string(x.get_int64().value_unsafe())];
                 else if (x.is_uint64())
-                    ++args["args." + std::string(k) + " == " +
-                           std::to_string(x.get_uint64().value_unsafe())];
+                    ++args["args." + dstd::String(k) + " == " +
+                           dstd::to_string(x.get_uint64().value_unsafe())];
             }
         }
         if (++seen == 2000) break;
     }
-    auto top = [](const std::map<std::string, int>& m) {
-        std::string best;
+    auto top = [](const dstd::Map<dstd::String, int>& m) {
+        dstd::String best;
         int n = -1;
         for (const auto& [k, c] : m)
             if (c > n) best = k, n = c;
@@ -216,13 +254,13 @@ coro::CoroTask<QuerySet> sample_queries(std::string file) {
         const std::int64_t hi = stamps[stamps.size() * 9 / 10];
         const std::int64_t mid = stamps[stamps.size() / 2];
         const std::int64_t width = std::max<std::int64_t>(1, (hi - lo) / 10);
-        q.ts = "ts >= " + std::to_string(mid) + " and ts < " +
-               std::to_string(mid + width);
+        q.ts = "ts >= " + dstd::to_string(mid) + " and ts < " +
+               dstd::to_string(mid + width);
     }
     co_return q;
 }
 
-std::string number_text(double d) {
+dstd::String number_text(double d) {
     char buf[40];
     std::snprintf(buf, sizeof(buf), "%.9g", d);
     return buf;
@@ -234,24 +272,25 @@ std::string number_text(double d) {
 // functions above the median duration p50, one counter above its median p50.
 // A metric with a zero median is passed over while another exists, so the
 // filter selects some rows. Empty when the first line is neither shape.
-coro::CoroTask<std::map<std::string, std::string>> sample_genesis(
-    std::string file) {
-    std::map<std::string, std::string> out;
-    std::string app, run_id;
-    std::vector<double> durs;
-    std::map<std::string, std::vector<double>> metrics;
+coro::CoroTask<dstd::Map<dstd::String, dstd::String>> sample_genesis(
+    dstd::String file) {
+    dstd::Map<dstd::String, dstd::String> out;
+    dstd::String app, run_id;
+    dstd::Vector<double> durs;
+    dstd::Map<dstd::String, dstd::Vector<double>> metrics;
     int shape = 0;  // 1 long, 2 wide
     simdjson::dom::parser parser;
     auto gen =
-        utilities::fileio::lines::sources::async_streaming_gz_lines(file);
+        fileio::lines::sources::async_streaming_gz_lines(std::move(file));
     int seen = 0;
-    while (auto line = co_await gen.next()) {
-        std::string_view l = line->content;
+    while (auto next = co_await gen.next()) {
+        if (!*next) dftu::bench::fail(next->error());
+        dstd::StringView l = (*next)->content;
         simdjson::dom::object o;
         if (l.empty() || l.front() != '{' ||
             parser.parse(l.data(), l.size()).get(o) != simdjson::SUCCESS)
             continue;
-        std::string_view v;
+        dstd::StringView v;
         double d = 0;
         if (shape == 0) {
             if (o["gtype"].get(v) == simdjson::SUCCESS &&
@@ -264,31 +303,31 @@ coro::CoroTask<std::map<std::string, std::string>> sample_genesis(
         }
         if (shape == 1) {
             if (o["gtype"].get(v) != simdjson::SUCCESS) continue;
-            const std::string type(v);
+            const dstd::String type(v);
             if (type == "run" && app.empty()) {
-                if (o["app"].get(v) == simdjson::SUCCESS) app = std::string(v);
+                if (o["app"].get(v) == simdjson::SUCCESS) app = dstd::String(v);
                 if (o["run"].get(v) == simdjson::SUCCESS)
-                    run_id = std::string(v);
+                    run_id = dstd::String(v);
             } else if (type == "func") {
                 if (o["dur"]["p50"].get(d) == simdjson::SUCCESS)
                     durs.push_back(d);
             } else if (type == "counter") {
-                std::string_view m;
+                dstd::StringView m;
                 if (o["metric"].get(m) == simdjson::SUCCESS &&
                     o["v"]["p50"].get(d) == simdjson::SUCCESS)
-                    metrics[std::string(m)].push_back(d);
+                    metrics[dstd::String(m)].push_back(d);
             }
         } else {
             simdjson::dom::object a;
             if (o["args"].get(a) != simdjson::SUCCESS) continue;
             if (run_id.empty() && a["run"].get(v) == simdjson::SUCCESS)
-                run_id = std::string(v);
+                run_id = dstd::String(v);
             if (a["dur"]["p50"].get(d) == simdjson::SUCCESS) durs.push_back(d);
             simdjson::dom::object c;
             if (a["counters"].get(c) == simdjson::SUCCESS)
                 for (auto [k, x] : c)
                     if (x["p50"].get(d) == simdjson::SUCCESS)
-                        metrics[std::string(k)].push_back(d);
+                        metrics[dstd::String(k)].push_back(d);
         }
         if (++seen == 20000) break;
     }
@@ -299,11 +338,11 @@ coro::CoroTask<std::map<std::string, std::string>> sample_genesis(
     if (lng && !app.empty())
         out["run_app"] = "run -> runs.app == " + quote(app);
     if (!durs.empty())
-        out["func"] = std::string(lng ? "gtype == \"func\" and dur.p50 > "
-                                      : "ph == 3 and args.dur.p50 > ") +
+        out["func"] = dstd::String(lng ? "gtype == \"func\" and dur.p50 > "
+                                       : "ph == 3 and args.dur.p50 > ") +
                       number_text(median(durs));
-    const std::vector<double>* best = nullptr;
-    std::string metric;
+    const dstd::Vector<double>* best = nullptr;
+    dstd::String metric;
     for (const auto& [m, vals] : metrics) {
         if (median(vals) <= 0) continue;
         if (!best || vals.size() > best->size()) best = &vals, metric = m;
@@ -312,8 +351,8 @@ coro::CoroTask<std::map<std::string, std::string>> sample_genesis(
         for (const auto& [m, vals] : metrics)
             if (!best || vals.size() > best->size()) best = &vals, metric = m;
     if (best) {
-        const std::string med = number_text(median(*best));
-        const std::string key = "`" + metric + "`";
+        const dstd::String med = number_text(median(*best));
+        const dstd::String key = "`" + metric + "`";
         out["counter"] =
             lng ? "gtype == \"counter\" and metric == " + quote(metric) +
                       " and v.p50 > " + med
@@ -322,7 +361,7 @@ coro::CoroTask<std::map<std::string, std::string>> sample_genesis(
     co_return out;
 }
 
-using Samples = std::vector<double>;
+using Samples = dstd::Vector<double>;
 
 struct Result {
     std::uint64_t files = 0;
@@ -335,53 +374,57 @@ struct Result {
     std::uint64_t build_peak_rss = 0;
     Samples build_s;
     Samples decode_s;
-    std::map<std::string, Samples> prune_us_per_file;
-    std::map<std::string, Samples> query_s;
-    std::map<std::string, std::string> queries;
-    std::map<std::string, std::int64_t> rows;
+    dstd::Map<dstd::String, Samples> prune_us_per_file;
+    dstd::Map<dstd::String, Samples> query_s;
+    dstd::Map<dstd::String, dstd::String> queries;
+    dstd::Map<dstd::String, std::int64_t> rows;
 };
 
-View open_view(const std::string& input, const std::string& index_dir) {
-    View v = fs::is_regular_file(input)
+View open_view(const dstd::String& input, const dstd::String& index_dir) {
+    View v = dstd::fs::is_regular_file(input).value()
                  ? View::from_file(input, index_dir)
                  : run(View::from_directory(input, index_dir));
     return v;
 }
 
-Result measure(const Options& opt, const std::string& input,
-               const std::string& index_dir) {
+Result measure(const Options& opt, const dstd::String& input,
+               const dstd::String& index_dir) {
     Result r;
     const auto files = trace_files(input);
     r.files = files.size();
-    for (const auto& f : files) r.compressed_bytes += fs::file_size(f);
+    for (const auto& f : files)
+        r.compressed_bytes += dstd::fs::file_size(f).value();
 
     for (int i = 0; i < opt.build_runs; ++i) {
-        std::error_code ec;
-        fs::remove_all(index_dir, ec);
-        fs::create_directories(index_dir);
+        dstd::fs::remove_all(index_dir).discard();
+        require_ok(dstd::fs::create_directories(index_dir),
+                   "create_directories");
         r.build_s.push_back(seconds([&] {
-            dftracer::utils::index::IndexerOptions options;
+            dftracer::utils::trace::index::IndexerOptions options;
             options.index_dir = index_dir;
             options.bloom->required = false;
             options.memory_budget = opt.memory_budget;
-            if (opt.aggregation_interval_us > 0) {
-                dftracer::utils::index::schemas::dft::agg::AggregationConfig
-                    agg;
-                agg.time_interval_us = opt.aggregation_interval_us;
-                options.aggregation = agg;
-            }
-            auto indexer =
-                dftracer::utils::index::Indexer::open(files, options);
-            run_scoped([&](CoroScope& scope) -> coro::CoroTask<void> {
-                co_await indexer.rebuild(scope);
+            if (opt.aggregation_interval_us > 0)
+                options.aggregation.time_interval_us =
+                    opt.aggregation_interval_us;
+            auto indexer = dftu::bench::ok(
+                dftracer::utils::trace::index::Indexer::open(files, options));
+            run_scoped([&](coro::Scope& scope) -> coro::CoroTask<void> {
+                dftu::bench::ok(co_await indexer.rebuild(scope));
             });
         }));
     }
     r.build_peak_rss = peak_rss_bytes();
-    std::string index_path;
-    for (const auto& e : fs::recursive_directory_iterator(index_dir))
-        if (e.is_directory() && e.path().filename() == ".dftindex")
-            index_path = e.path().string();
+    dstd::String index_path;
+    require_ok(
+        dstd::fs::walk(index_dir,
+                       [&](dstd::PathView path, dstd::fs::FileKind kind) {
+                           if (kind == dstd::fs::FileKind::Directory &&
+                               path.filename() == ".dftindex")
+                               index_path = dstd::String(path.str());
+                           return dstd::fs::WalkAction::Continue;
+                       }),
+        "walk");
     if (index_path.empty()) {
         std::fprintf(stderr, "no index built under %s\n", index_dir.c_str());
         std::exit(1);
@@ -392,21 +435,25 @@ Result measure(const Options& opt, const std::string& input,
     r.decode_s = timed(
         [&] {
             ExportStats s = run(view.for_each_batch(
-                [](std::size_t, const std::vector<std::string_view>&) {}, 1));
+                [](std::size_t, const dstd::Vector<dstd::StringView>&) {}, 1));
             r.events = s.events_scanned;
         },
         opt.warmups, opt.runs);
 
     {
-        dftracer::utils::index::store::IndexDatabase db(
-            index_path, dftracer::utils::index::store::IndexOpenMode::ReadOnly);
-        std::unordered_set<std::string> paths;
+        const auto snapshot = dftu::bench::ok(
+            dftracer::utils::trace::index::plan::open_snapshot(index_path));
+        dstd::HashSet<dstd::String> paths;
         for (const auto& f : files) {
-            const int fid = db.get_file_info_id(
-                dftracer::utils::index::store::internal::get_logical_path(f));
-            if (fid < 0) continue;
-            r.lines += db.get_num_lines(fid);
-            for (const auto& [p, stat] : db.catalog(fid)) paths.insert(p);
+            const auto file = snapshot.file(fileio::get_logical_path(f));
+            if (!file) continue;
+            if (auto meta = dftu::bench::ok(
+                    dftracer::utils::trace::index::file_metadata(snapshot,
+                                                                 *file)))
+                r.lines += meta->line_count;
+            for (const auto& [p, stat] : dftu::bench::ok(
+                     dftracer::utils::trace::index::catalog(snapshot, *file)))
+                paths.insert(dstd::String(p));
         }
         r.distinct_paths = paths.size();
     }
@@ -422,15 +469,17 @@ Result measure(const Options& opt, const std::string& input,
     }
 
     for (const auto& [key, text] : r.queries) {
-        if (text.find("->") == std::string::npos) {
-            const auto parsed = duql::parse_or_throw(text);
-            dftracer::utils::index::plan::ChunkPrunerBatchInput in;
+        if (text.find("->") == dstd::String::npos) {
+            const auto parsed = duql::Query::from_string(text);
+            if (!parsed) dftu::bench::fail(parsed.error());
+            dftracer::utils::trace::index::plan::ChunkPrunerBatchInput in;
             in.index_path = index_path;
-            for (const auto& f : files) in.items.push_back({f, parsed});
-            dftracer::utils::index::plan::ChunkPruner pruner;
+            for (const auto& f : files) in.items.push_back({f, *parsed});
+            dftracer::utils::trace::index::plan::ChunkPruner pruner;
             Samples per_file;
-            for (double s : timed([&] { pruner.process_batch(in); },
-                                  opt.warmups, opt.runs))
+            for (double s :
+                 timed([&] { dftu::bench::ok(pruner.process_batch(in)); },
+                       opt.warmups, opt.runs))
                 per_file.push_back(s * 1e6 / static_cast<double>(files.size()));
             r.prune_us_per_file[key] = std::move(per_file);
         }
@@ -459,7 +508,7 @@ Result measure(const Options& opt, const std::string& input,
 
         const dataframe::DataFrame frame =
             run(view.duql("where gtype == \"counter\"").collect());
-        const std::string metric(frame.column("metric").string_at(0));
+        const dstd::String metric(frame.column("metric").string_at(0));
         r.rows["frame"] = frame.num_rows();
         r.query_s["frame_filter"] =
             timed([&] { frame.filter(frame.column("metric").str_eq(metric)); },
@@ -469,16 +518,22 @@ Result measure(const Options& opt, const std::string& input,
                 frame.filter(frame.column("metric").str_starts_with("cpu"));
             },
             opt.warmups, opt.runs);
-        r.query_s["frame_sort"] =
-            timed([&] { frame.sort_by("metric"); }, opt.warmups, opt.runs);
+        r.query_s["frame_sort"] = timed([&] { (void)frame.sort_by("metric"); },
+                                        opt.warmups, opt.runs);
         r.query_s["frame_group"] = timed(
-            [&] { frame.group_by(std::vector<std::string>{"metric"}).size(); },
+            [&] {
+                (void)frame.group_by(dstd::Vector<dstd::String>{"metric"})
+                    .size();
+            },
             opt.warmups, opt.runs);
-        const dataframe::DataFrame runs =
-            frame.group_by(std::vector<std::string>{"run"}).size();
-        r.query_s["frame_join"] =
-            timed([&] { frame.join(runs, std::vector<std::string>{"run"}); },
-                  opt.warmups, opt.runs);
+        const dataframe::DataFrame runs = dftu::bench::ok(
+            frame.group_by(dstd::Vector<dstd::String>{"run"}).size());
+        r.query_s["frame_join"] = timed(
+            [&] {
+                dftu::bench::ok(
+                    frame.join(runs, dstd::Vector<dstd::String>{"run"}));
+            },
+            opt.warmups, opt.runs);
         r.peak_rss = peak_rss_bytes();
         return r;
     }
@@ -505,8 +560,8 @@ void put_samples(simdjson::builder::string_builder& sb, const Samples& s) {
     sb.end_array();
 }
 
-void put_map(simdjson::builder::string_builder& sb, std::string_view key,
-             const std::map<std::string, Samples>& m) {
+void put_map(simdjson::builder::string_builder& sb, dstd::StringView key,
+             const dstd::Map<dstd::String, Samples>& m) {
     sb.escape_and_append_with_quotes(key);
     sb.append_colon();
     sb.start_object();
@@ -521,7 +576,7 @@ void put_map(simdjson::builder::string_builder& sb, std::string_view key,
     sb.end_object();
 }
 
-std::string to_json(const Result& r) {
+dstd::String to_json(const Result& r) {
     simdjson::builder::string_builder sb;
     sb.start_object();
     sb.append_key_value("files", r.files);
@@ -559,7 +614,7 @@ std::string to_json(const Result& r) {
     for (const auto& [k, n] : r.rows) {
         if (!first_row) sb.append_comma();
         first_row = false;
-        sb.append_key_value(std::string_view(k), n);
+        sb.append_key_value(dstd::StringView(k), n);
     }
     sb.end_object();
     sb.append_comma();
@@ -570,19 +625,19 @@ std::string to_json(const Result& r) {
     for (const auto& [k, q] : r.queries) {
         if (!first) sb.append_comma();
         first = false;
-        sb.append_key_value(std::string_view(k), std::string_view(q));
+        sb.append_key_value(dstd::StringView(k), dstd::StringView(q));
     }
     sb.end_object();
     sb.end_object();
-    return std::string(sb);
+    return dstd::String(static_cast<dstd::StringView>(sb));
 }
 
 // 95% bootstrap interval of median(num) / median(den).
-std::pair<double, double> ratio_ci(const Samples& num, const Samples& den) {
+dstd::Pair<double, double> ratio_ci(const Samples& num, const Samples& den) {
     std::mt19937_64 rng(11);
     std::uniform_int_distribution<std::size_t> pn(0, num.size() - 1);
     std::uniform_int_distribution<std::size_t> pd(0, den.size() - 1);
-    std::vector<double> ratios;
+    dstd::Vector<double> ratios;
     for (int b = 0; b < 2000; ++b) {
         Samples n, d;
         for (std::size_t i = 0; i < num.size(); ++i) n.push_back(num[pn(rng)]);
@@ -607,7 +662,7 @@ Samples samples_of(simdjson::dom::element e) {
 // Prints one line per metric; returns true when any regressed.
 bool compare(simdjson::dom::object base, simdjson::dom::object cur) {
     bool regressed = false;
-    auto check_times = [&](const std::string& label, simdjson::dom::element b,
+    auto check_times = [&](const dstd::String& label, simdjson::dom::element b,
                            simdjson::dom::element c) {
         const Samples bs = samples_of(b);
         const Samples cs = samples_of(c);
@@ -639,7 +694,7 @@ bool compare(simdjson::dom::object base, simdjson::dom::object cur) {
         for (auto [k, v] : cg) {
             simdjson::dom::element bv;
             if (bg[k].get(bv) == simdjson::SUCCESS)
-                check_times(std::string(group) + "." + std::string(k), bv, v);
+                check_times(dstd::String(group) + "." + dstd::String(k), bv, v);
         }
     }
     check_value("index_bytes");
@@ -647,11 +702,59 @@ bool compare(simdjson::dom::object base, simdjson::dom::object cur) {
     return regressed;
 }
 
+dstd::String write_smoke_trace(const dstd::String& dir) {
+    require_ok(dstd::fs::create_directories(dir), "create_directories");
+    const dstd::String gz = dir + "/smoke.pfw.gz";
+    dstd::String lines;
+    const char* names[] = {"read", "write", "open", "close"};
+    for (int i = 0; i < 2000; ++i) {
+        lines += R"({"ph":"X","name":")";
+        lines += names[i % 4];
+        lines += R"(","cat":"POSIX","pid":)" + dstd::to_string(i % 4);
+        lines += R"(,"tid":1,"ts":)" + dstd::to_string(1000 + i * 10);
+        lines += R"(,"dur":)" + dstd::to_string(1 + i % 50);
+        lines +=
+            R"(,"args":{"fname":"/data/f)" + dstd::to_string(i % 8) + "\"}}\n";
+    }
+    dftracer::utils::fileio::compress::GzipMemberCompressor comp(6);
+    auto member = comp.compress_member(
+        reinterpret_cast<const std::uint8_t*>(lines.data()), lines.size());
+    if (!member) {
+        std::fprintf(stderr, "compress failed\n");
+        std::exit(1);
+    }
+    require_ok(
+        dstd::fs::write_file(
+            gz, dstd::StringView(reinterpret_cast<const char*>(member->data()),
+                                 member->size())),
+        "write_file");
+    return gz;
+}
+
+template <class T>
+T parse_number(dstd::StringView text, const char* flag) {
+    const auto value = dstd::from_chars<T>(text);
+    if (!value) {
+        std::fprintf(stderr, "invalid value for %s\n", flag);
+        std::exit(2);
+    }
+    return *value;
+}
+
 Options parse_args(int argc, char** argv) {
     Options o;
+    if (argc == 2 && dstd::StringView(argv[1]) == "--smoke") {
+        o.workdir = (dstd::fs::temp_directory() / "index_bench_smoke").str();
+        o.out = o.workdir + "/index_bench.json";
+        o.build_runs = 1;
+        o.runs = 1;
+        o.warmups = 0;
+        o.inputs.push_back(write_smoke_trace(o.workdir));
+        return o;
+    }
     for (int i = 1; i < argc; ++i) {
-        const std::string a = argv[i];
-        auto next = [&]() -> std::string {
+        const dstd::String a = argv[i];
+        auto next = [&]() -> dstd::String {
             if (i + 1 >= argc) {
                 std::fprintf(stderr, "missing value for %s\n", a.c_str());
                 std::exit(2);
@@ -665,15 +768,17 @@ Options parse_args(int argc, char** argv) {
         else if (a == "--workdir")
             o.workdir = next();
         else if (a == "--build-runs")
-            o.build_runs = std::stoi(next());
+            o.build_runs = parse_number<int>(next(), "--build-runs");
         else if (a == "--runs")
-            o.runs = std::stoi(next());
+            o.runs = parse_number<int>(next(), "--runs");
         else if (a == "--warmups")
-            o.warmups = std::stoi(next());
+            o.warmups = parse_number<int>(next(), "--warmups");
         else if (a == "--memory-budget")
-            o.memory_budget = std::stoull(next());
+            o.memory_budget =
+                parse_number<std::uint64_t>(next(), "--memory-budget");
         else if (a == "--aggregation-interval-us")
-            o.aggregation_interval_us = std::stoull(next());
+            o.aggregation_interval_us = parse_number<std::uint64_t>(
+                next(), "--aggregation-interval-us");
         else
             o.inputs.push_back(a);
     }
@@ -682,7 +787,8 @@ Options parse_args(int argc, char** argv) {
                      "usage: index_bench [--out F] [--baseline F] "
                      "[--workdir D] [--build-runs N] [--runs N] "
                      "[--warmups N] [--memory-budget BYTES] "
-                     "[--aggregation-interval-us US] INPUT...\n");
+                     "[--aggregation-interval-us US] INPUT...\n       "
+                     "index_bench --smoke\n");
         std::exit(2);
     }
     return o;
@@ -692,19 +798,22 @@ Options parse_args(int argc, char** argv) {
 
 int main(int argc, char** argv) {
     const Options opt = parse_args(argc, argv);
-    fs::create_directories(opt.workdir);
+    require_ok(dstd::fs::create_directories(opt.workdir), "create_directories");
 
-    std::string entries;
+    dstd::String entries;
     for (std::size_t i = 0; i < opt.inputs.size(); ++i) {
-        const std::string input = fs::absolute(opt.inputs[i]).string();
-        const std::string part =
-            opt.workdir + "/input_" + std::to_string(i) + ".json";
-        const std::string index_dir =
-            opt.workdir + "/index_" + std::to_string(i);
+        const dstd::String input(
+            dstd::fs::absolute(opt.inputs[i]).value().str());
+        const dstd::String part =
+            opt.workdir + "/input_" + dstd::to_string(i) + ".json";
+        const dstd::String index_dir =
+            opt.workdir + "/index_" + dstd::to_string(i);
         // No runtime threads exist before this fork; the child starts its own.
         const pid_t pid = fork();
         if (pid == 0) {
-            std::ofstream(part) << to_json(measure(opt, input, index_dir));
+            require_ok(dstd::fs::write_file(
+                           part, to_json(measure(opt, input, index_dir))),
+                       "write_file");
             std::_Exit(0);
         }
         int status = 0;
@@ -713,33 +822,35 @@ int main(int argc, char** argv) {
             std::fprintf(stderr, "input failed: %s\n", input.c_str());
             return 1;
         }
-        std::stringstream body;
-        body << std::ifstream(part).rdbuf();
+        const auto body = dstd::fs::read_file(part);
+        require_ok(body, "read_file");
         if (!entries.empty()) entries += ",";
-        entries += quote(input) + ":" + body.str();
+        entries += quote(input) + ":" + *body;
         std::printf("measured %s\n", input.c_str());
     }
 
     char host[256] = {};
     gethostname(host, sizeof(host) - 1);
-    std::string doc = "{\"meta\":{\"host\":" + quote(host) +
-                      ",\"compiler\":" + quote(__VERSION__) +
+    dstd::String doc = "{\"meta\":{\"host\":" + quote(host) +
+                       ",\"compiler\":" + quote(__VERSION__) +
 #ifdef NDEBUG
-                      ",\"build\":\"release\"" +
+                       ",\"build\":\"release\"" +
 #else
-                      ",\"build\":\"debug\"" +
+                       ",\"build\":\"debug\"" +
 #endif
-                      ",\"runs\":" + std::to_string(opt.runs) +
-                      ",\"build_runs\":" + std::to_string(opt.build_runs) +
-                      "},\"inputs\":{" + entries + "}}\n";
-    std::ofstream(opt.out) << doc;
+                       ",\"runs\":" + dstd::to_string(opt.runs) +
+                       ",\"build_runs\":" + dstd::to_string(opt.build_runs) +
+                       "},\"inputs\":{" + entries + "}}\n";
+    require_ok(dstd::fs::write_file(opt.out, doc), "write_file");
     std::printf("wrote %s\n", opt.out.c_str());
 
     if (opt.baseline.empty()) return 0;
     simdjson::dom::parser pb, pc;
     simdjson::dom::object base_inputs, cur_inputs;
-    if (pb.load(opt.baseline)["inputs"].get(base_inputs) != simdjson::SUCCESS ||
-        pc.parse(doc)["inputs"].get(cur_inputs) != simdjson::SUCCESS) {
+    if (pb.load(opt.baseline.c_str())["inputs"].get(base_inputs) !=
+            simdjson::SUCCESS ||
+        pc.parse(doc.data(), doc.size())["inputs"].get(cur_inputs) !=
+            simdjson::SUCCESS) {
         std::fprintf(stderr, "cannot read baseline %s\n", opt.baseline.c_str());
         return 1;
     }
@@ -747,11 +858,14 @@ int main(int argc, char** argv) {
     for (auto [input, cur] : cur_inputs) {
         simdjson::dom::object b, c;
         if (base_inputs[input].get(b) != simdjson::SUCCESS) {
-            std::printf("%s: no baseline\n", std::string(input).c_str());
+            std::printf("%s: no baseline\n", dstd::String(input).c_str());
             continue;
         }
-        (void)cur.get(c);
-        std::printf("%s\n", std::string(input).c_str());
+        if (cur.get(c) != simdjson::SUCCESS) {
+            std::printf("%s: no current result\n", dstd::String(input).c_str());
+            continue;
+        }
+        std::printf("%s\n", dstd::String(input).c_str());
         regressed = compare(b, c) || regressed;
     }
     return regressed ? 1 : 0;

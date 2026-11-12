@@ -1,8 +1,13 @@
+// SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/trace/comparator/comparison_config.h>
+#include <dftracer/utils/domains/analysis/comparator/comparison_config.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
 
-using namespace dftracer::utils::trace::comparator;
+using namespace dftracer::utils;
+
+using namespace dftracer::utils::domains::analysis::comparator;
 
 TEST_SUITE("ComparisonConfig") {
     TEST_CASE("from_cli - default query and group_by") {
@@ -68,7 +73,7 @@ TEST_SUITE("ComparisonConfig") {
         ComparisonNode node;
         node.name = "root";
         node.query = "cat == \"POSIX\"";
-        node.metrics = std::vector<std::string>{"count"};
+        node.metrics = dstd::Vector<dstd::String>{"count"};
         cfg.nodes.push_back(node);
 
         cfg.resolve();
@@ -95,9 +100,10 @@ TEST_SUITE("ComparisonConfig") {
 
         const auto& resolved_child = cfg.nodes[0].children[0];
         // composed = "(parent_query) AND (child_query)"
-        CHECK(resolved_child.composed_query.find("POSIX") != std::string::npos);
-        CHECK(resolved_child.composed_query.find("read") != std::string::npos);
-        CHECK(resolved_child.composed_query.find("AND") != std::string::npos);
+        CHECK(resolved_child.composed_query.find("POSIX") !=
+              dstd::String::npos);
+        CHECK(resolved_child.composed_query.find("read") != dstd::String::npos);
+        CHECK(resolved_child.composed_query.find("AND") != dstd::String::npos);
     }
 
     TEST_CASE("resolve - empty child query inherits parent") {
@@ -211,7 +217,7 @@ TEST_SUITE("ComparisonConfigPreset") {
         auto cfg = ComparisonConfig::from_preset("dlio", "b", "v");
         REQUIRE(cfg.has_value());
         const auto& q = cfg->nodes[5].query;
-        CHECK(q.find("POSIX") != std::string::npos);
-        CHECK(q.find("STDIO") != std::string::npos);
+        CHECK(q.find("POSIX") != dstd::String::npos);
+        CHECK(q.find("STDIO") != dstd::String::npos);
     }
 }

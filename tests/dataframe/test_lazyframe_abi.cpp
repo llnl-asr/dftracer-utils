@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // The dftu_lazyframe C ABI: wrap a materialized frame as a lazy plan, chain a
 // couple of builder ops, and collect back to the eager equivalent. Handles are
 // freed explicitly so asan flags any leak.
@@ -5,11 +6,13 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/expr.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
 
 #include <cstdint>
-#include <string>
-#include <vector>
+
+using namespace dftracer::utils;
 
 namespace {
 
@@ -29,8 +32,8 @@ dftu_scalar i64_scalar(std::int64_t v) {
 }
 
 // A two-column frame: "k" keys, "v" values.
-dftu_dataframe* make_frame(const std::vector<std::int64_t>& k,
-                           const std::vector<std::int64_t>& v) {
+dftu_dataframe* make_frame(const dstd::Vector<std::int64_t>& k,
+                           const dstd::Vector<std::int64_t>& v) {
     dftu_series* cols[2] = {
         i64_col(k.data(), static_cast<std::int64_t>(k.size())),
         i64_col(v.data(), static_cast<std::int64_t>(v.size()))};
@@ -136,7 +139,7 @@ TEST_SUITE("lazyframe_abi") {
         dftu_dataframe* out = dftu_lazyframe_collect(sliced, 0);
         REQUIRE(out != nullptr);
         CHECK(dftu_dataframe_num_rows(out) == 2);
-        CHECK(std::string(dftu_dataframe_column_name(out, 0)) == "key");
+        CHECK(dstd::String(dftu_dataframe_column_name(out, 0)) == "key");
         dftu_series* vc = dftu_dataframe_column(out, "val");
         REQUIRE(vc != nullptr);
         const std::int64_t* vd = i64_of(vc);

@@ -1,11 +1,12 @@
+// SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/server/cancel.h>
+#include <dftracer/utils/domains/server/cancel.h>
 #include <doctest/doctest.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
-using dftracer::utils::server::CancelRegistry;
-using dftracer::utils::server::CancelToken;
+using namespace dftracer::utils;
+using namespace dftracer::utils::domains::server;
 
 TEST_SUITE("CancelToken") {
     TEST_CASE("default token is never cancelled") {

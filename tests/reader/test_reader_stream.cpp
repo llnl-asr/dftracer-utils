@@ -1,20 +1,22 @@
+// SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
-#include <dftracer/utils/utilities/reader/internal/reader.h>
-#include <dftracer/utils/utilities/reader/internal/reader_factory.h>
-#include <dftracer/utils/utilities/reader/internal/stream.h>
-#include <dftracer/utils/utilities/reader/internal/stream_type.h>
+#include <checkpoint_indexer_helpers.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/trace/index/gzip/checkpoint_indexer_factory.h>
+#include <dftracer/utils/trace/reader/internal/reader.h>
+#include <dftracer/utils/trace/reader/internal/reader_factory.h>
+#include <dftracer/utils/trace/reader/internal/stream.h>
+#include <dftracer/utils/trace/reader/internal/stream_type.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
+#include <testing_utilities.h>
 
-#include <memory>
 #include <string>
-#include <vector>
-
-#include "testing_utilities.h"
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::index::gzip;
-using namespace dftracer::utils::utilities::reader::internal;
+using namespace dftracer::utils::trace::index::gzip;
+using namespace dftracer::utils::trace::reader::internal;
 using namespace dftu_utils_test;
 
 TEST_CASE("C++ Reader Streaming API - BYTES stream" *
@@ -22,37 +24,39 @@ TEST_CASE("C++ Reader Streaming API - BYTES stream" *
     TestEnvironment env(valgrind_scale(1000, 10));
     REQUIRE(env.is_valid());
 
-    std::string gz_file = env.create_test_gzip_file();
+    dstd::String gz_file = env.create_test_gzip_file();
     REQUIRE(!gz_file.empty());
 
-    std::string idx_file = env.get_index_path(gz_file);
+    dstd::String idx_file = env.get_index_path(gz_file);
 
     // Build index first
     {
         auto indexer =
-            CheckpointIndexerFactory::create(gz_file, idx_file, mb_to_b(0.5));
+            dftu_utils_test::create_indexer(gz_file, idx_file, mb_to_b(0.5));
         REQUIRE(indexer != nullptr);
-        indexer->build();
+        dftu_utils_test::build_indexer(*indexer);
     }
 
-    auto reader = ReaderFactory::create(gz_file, idx_file);
+    auto reader = dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
     REQUIRE(reader != nullptr);
     REQUIRE(reader->is_valid());
 
     SUBCASE("BYTES + BYTE_RANGE - Raw bytes in exact range") {
-        auto stream = reader->stream(StreamConfig()
-                                         .stream_type(StreamType::BYTES)
-                                         .range_type(RangeType::BYTE_RANGE)
-                                         .from(0)
-                                         .to(100));
+        auto stream = dftu_utils_test::ok(
+            reader->stream(StreamConfig()
+                               .stream_type(StreamType::Bytes)
+                               .range_type(RangeType::ByteRange)
+                               .from(0)
+                               .to(100)));
         REQUIRE(stream != nullptr);
 
         char buffer[1024];
-        std::string result;
+        dstd::String result;
 
         // Read in chunks
         while (!stream->done()) {
-            std::size_t bytes_read = stream->read(buffer, sizeof(buffer));
+            std::size_t bytes_read =
+                dftu_utils_test::ok(stream->read(buffer, sizeof(buffer)));
             if (bytes_read > 0) {
                 result.append(buffer, bytes_read);
             }
@@ -63,11 +67,12 @@ TEST_CASE("C++ Reader Streaming API - BYTES stream" *
     }
 
     SUBCASE("BYTES + BYTE_RANGE - Multiple reads") {
-        auto stream = reader->stream(StreamConfig()
-                                         .stream_type(StreamType::BYTES)
-                                         .range_type(RangeType::BYTE_RANGE)
-                                         .from(0)
-                                         .to(500));
+        auto stream = dftu_utils_test::ok(
+            reader->stream(StreamConfig()
+                               .stream_type(StreamType::Bytes)
+                               .range_type(RangeType::ByteRange)
+                               .from(0)
+                               .to(500)));
         REQUIRE(stream != nullptr);
 
         char buffer[128];
@@ -75,7 +80,8 @@ TEST_CASE("C++ Reader Streaming API - BYTES stream" *
         int read_count = 0;
 
         while (!stream->done()) {
-            std::size_t bytes_read = stream->read(buffer, sizeof(buffer));
+            std::size_t bytes_read =
+                dftu_utils_test::ok(stream->read(buffer, sizeof(buffer)));
             total_read += bytes_read;
             read_count++;
 
@@ -89,23 +95,25 @@ TEST_CASE("C++ Reader Streaming API - BYTES stream" *
     }
 
     SUBCASE("BYTES + LINE_RANGE - Raw bytes covering line range") {
-        if (reader->get_num_lines() == 0) {
+        if (reader->line_count() == 0) {
             MESSAGE("Skipping LINE_RANGE test - no line data available");
             return;
         }
 
-        auto stream = reader->stream(StreamConfig()
-                                         .stream_type(StreamType::BYTES)
-                                         .range_type(RangeType::LINE_RANGE)
-                                         .from(1)
-                                         .to(10));
+        auto stream = dftu_utils_test::ok(
+            reader->stream(StreamConfig()
+                               .stream_type(StreamType::Bytes)
+                               .range_type(RangeType::LineRange)
+                               .from(1)
+                               .to(10)));
         REQUIRE(stream != nullptr);
 
         char buffer[1024];
-        std::string result;
+        dstd::String result;
 
         while (!stream->done()) {
-            std::size_t bytes_read = stream->read(buffer, sizeof(buffer));
+            std::size_t bytes_read =
+                dftu_utils_test::ok(stream->read(buffer, sizeof(buffer)));
             if (bytes_read > 0) {
                 result.append(buffer, bytes_read);
             }
@@ -120,18 +128,20 @@ TEST_CASE("C++ Reader Streaming API - BYTES stream" *
         // to create a new stream instead of calling reset().
 
         char buffer[128];
-        std::string first_read;
+        dstd::String first_read;
 
         // First stream
         {
-            auto stream1 = reader->stream(StreamConfig()
-                                              .stream_type(StreamType::BYTES)
-                                              .range_type(RangeType::BYTE_RANGE)
-                                              .from(0)
-                                              .to(100));
+            auto stream1 = dftu_utils_test::ok(
+                reader->stream(StreamConfig()
+                                   .stream_type(StreamType::Bytes)
+                                   .range_type(RangeType::ByteRange)
+                                   .from(0)
+                                   .to(100)));
             REQUIRE(stream1 != nullptr);
 
-            std::size_t bytes = stream1->read(buffer, sizeof(buffer));
+            std::size_t bytes =
+                dftu_utils_test::ok(stream1->read(buffer, sizeof(buffer)));
             if (bytes > 0) {
                 first_read.append(buffer, bytes);
             }
@@ -139,15 +149,17 @@ TEST_CASE("C++ Reader Streaming API - BYTES stream" *
 
         // Second stream (equivalent to reset)
         {
-            auto stream2 = reader->stream(StreamConfig()
-                                              .stream_type(StreamType::BYTES)
-                                              .range_type(RangeType::BYTE_RANGE)
-                                              .from(0)
-                                              .to(100));
+            auto stream2 = dftu_utils_test::ok(
+                reader->stream(StreamConfig()
+                                   .stream_type(StreamType::Bytes)
+                                   .range_type(RangeType::ByteRange)
+                                   .from(0)
+                                   .to(100)));
             REQUIRE(stream2 != nullptr);
 
-            std::string second_read;
-            std::size_t bytes = stream2->read(buffer, sizeof(buffer));
+            dstd::String second_read;
+            std::size_t bytes =
+                dftu_utils_test::ok(stream2->read(buffer, sizeof(buffer)));
             if (bytes > 0) {
                 second_read.append(buffer, bytes);
             }
@@ -162,40 +174,42 @@ TEST_CASE("C++ Reader Streaming API - LINE_BYTES stream") {
     TestEnvironment env(valgrind_scale(1000, 10));
     REQUIRE(env.is_valid());
 
-    std::string gz_file = env.create_test_gzip_file();
+    dstd::String gz_file = env.create_test_gzip_file();
     REQUIRE(!gz_file.empty());
 
-    std::string idx_file = env.get_index_path(gz_file);
+    dstd::String idx_file = env.get_index_path(gz_file);
 
     // Build index first
     {
         auto indexer =
-            CheckpointIndexerFactory::create(gz_file, idx_file, mb_to_b(0.5));
+            dftu_utils_test::create_indexer(gz_file, idx_file, mb_to_b(0.5));
         REQUIRE(indexer != nullptr);
-        indexer->build();
+        dftu_utils_test::build_indexer(*indexer);
     }
 
-    auto reader = ReaderFactory::create(gz_file, idx_file);
+    auto reader = dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
     REQUIRE(reader != nullptr);
 
-    if (reader->get_num_lines() == 0) {
+    if (reader->line_count() == 0) {
         MESSAGE("Skipping LINE_BYTES tests - no line data available");
         return;
     }
 
     SUBCASE("LINE_BYTES + BYTE_RANGE - Single line-aligned bytes per read") {
-        auto stream = reader->stream(StreamConfig()
-                                         .stream_type(StreamType::LINE_BYTES)
-                                         .range_type(RangeType::BYTE_RANGE)
-                                         .from(0)
-                                         .to(500));
+        auto stream = dftu_utils_test::ok(
+            reader->stream(StreamConfig()
+                               .stream_type(StreamType::LineBytes)
+                               .range_type(RangeType::ByteRange)
+                               .from(0)
+                               .to(500)));
         REQUIRE(stream != nullptr);
 
         char buffer[1024];
         int line_count = 0;
 
         while (!stream->done()) {
-            std::size_t bytes_read = stream->read(buffer, sizeof(buffer));
+            std::size_t bytes_read =
+                dftu_utils_test::ok(stream->read(buffer, sizeof(buffer)));
             if (bytes_read > 0) {
                 line_count++;
                 // Each read should end with newline (except possibly last)
@@ -211,18 +225,20 @@ TEST_CASE("C++ Reader Streaming API - LINE_BYTES stream") {
     }
 
     SUBCASE("LINE_BYTES + LINE_RANGE - Single line per read in line range") {
-        auto stream = reader->stream(StreamConfig()
-                                         .stream_type(StreamType::LINE_BYTES)
-                                         .range_type(RangeType::LINE_RANGE)
-                                         .from(1)
-                                         .to(10));
+        auto stream = dftu_utils_test::ok(
+            reader->stream(StreamConfig()
+                               .stream_type(StreamType::LineBytes)
+                               .range_type(RangeType::LineRange)
+                               .from(1)
+                               .to(10)));
         REQUIRE(stream != nullptr);
 
         char buffer[1024];
         int line_count = 0;
 
         while (!stream->done() && line_count < 20) {
-            std::size_t bytes_read = stream->read(buffer, sizeof(buffer));
+            std::size_t bytes_read =
+                dftu_utils_test::ok(stream->read(buffer, sizeof(buffer)));
             if (bytes_read > 0) {
                 line_count++;
             } else {
@@ -241,34 +257,34 @@ TEST_CASE("C++ Reader Streaming API - MULTI_LINES_BYTES stream" *
     TestEnvironment env(valgrind_scale(1000, 10));
     REQUIRE(env.is_valid());
 
-    std::string gz_file = env.create_test_gzip_file();
+    dstd::String gz_file = env.create_test_gzip_file();
     REQUIRE(!gz_file.empty());
 
-    std::string idx_file = env.get_index_path(gz_file);
+    dstd::String idx_file = env.get_index_path(gz_file);
 
     // Build index first
     {
         auto indexer =
-            CheckpointIndexerFactory::create(gz_file, idx_file, mb_to_b(0.5));
+            dftu_utils_test::create_indexer(gz_file, idx_file, mb_to_b(0.5));
         REQUIRE(indexer != nullptr);
-        indexer->build();
+        dftu_utils_test::build_indexer(*indexer);
     }
 
-    auto reader = ReaderFactory::create(gz_file, idx_file);
+    auto reader = dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
     REQUIRE(reader != nullptr);
 
-    if (reader->get_num_lines() == 0) {
+    if (reader->line_count() == 0) {
         MESSAGE("Skipping MULTI_LINES_BYTES tests - no line data available");
         return;
     }
 
     SUBCASE("MULTI_LINES_BYTES + BYTE_RANGE - Multiple lines per read") {
-        auto stream =
+        auto stream = dftu_utils_test::ok(
             reader->stream(StreamConfig()
-                               .stream_type(StreamType::MULTI_LINES_BYTES)
-                               .range_type(RangeType::BYTE_RANGE)
+                               .stream_type(StreamType::MultiLinesBytes)
+                               .range_type(RangeType::ByteRange)
                                .from(0)
-                               .to(1000));
+                               .to(1000)));
         REQUIRE(stream != nullptr);
 
         char buffer[256];
@@ -276,7 +292,8 @@ TEST_CASE("C++ Reader Streaming API - MULTI_LINES_BYTES stream" *
         std::size_t total_bytes = 0;
 
         while (!stream->done()) {
-            std::size_t bytes_read = stream->read(buffer, sizeof(buffer));
+            std::size_t bytes_read =
+                dftu_utils_test::ok(stream->read(buffer, sizeof(buffer)));
             if (bytes_read > 0) {
                 read_count++;
                 total_bytes += bytes_read;
@@ -293,19 +310,20 @@ TEST_CASE("C++ Reader Streaming API - MULTI_LINES_BYTES stream" *
     SUBCASE(
         "MULTI_LINES_BYTES + LINE_RANGE - Multiple lines per read in line "
         "range") {
-        auto stream =
+        auto stream = dftu_utils_test::ok(
             reader->stream(StreamConfig()
-                               .stream_type(StreamType::MULTI_LINES_BYTES)
-                               .range_type(RangeType::LINE_RANGE)
+                               .stream_type(StreamType::MultiLinesBytes)
+                               .range_type(RangeType::LineRange)
                                .from(1)
-                               .to(20));
+                               .to(20)));
         REQUIRE(stream != nullptr);
 
         char buffer[512];
         std::size_t total_lines = 0;
 
         while (!stream->done()) {
-            std::size_t bytes_read = stream->read(buffer, sizeof(buffer));
+            std::size_t bytes_read =
+                dftu_utils_test::ok(stream->read(buffer, sizeof(buffer)));
             if (bytes_read > 0) {
                 // Count newlines
                 for (std::size_t i = 0; i < bytes_read; i++) {
@@ -329,41 +347,43 @@ TEST_CASE("C++ Reader Streaming API - LINE stream") {
     TestEnvironment env(valgrind_scale(1000, 10));
     REQUIRE(env.is_valid());
 
-    std::string gz_file = env.create_test_gzip_file();
+    dstd::String gz_file = env.create_test_gzip_file();
     REQUIRE(!gz_file.empty());
 
-    std::string idx_file = env.get_index_path(gz_file);
+    dstd::String idx_file = env.get_index_path(gz_file);
 
     // Build index first
     {
         auto indexer =
-            CheckpointIndexerFactory::create(gz_file, idx_file, mb_to_b(0.5));
+            dftu_utils_test::create_indexer(gz_file, idx_file, mb_to_b(0.5));
         REQUIRE(indexer != nullptr);
-        indexer->build();
+        dftu_utils_test::build_indexer(*indexer);
     }
 
-    auto reader = ReaderFactory::create(gz_file, idx_file);
+    auto reader = dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
     REQUIRE(reader != nullptr);
 
-    if (reader->get_num_lines() == 0) {
+    if (reader->line_count() == 0) {
         MESSAGE("Skipping LINE tests - no line data available");
         return;
     }
 
     SUBCASE("LINE + BYTE_RANGE - Single parsed line per read") {
-        auto stream = reader->stream(StreamConfig()
-                                         .stream_type(StreamType::LINE)
-                                         .range_type(RangeType::BYTE_RANGE)
-                                         .from(0)
-                                         .to(500));
+        auto stream = dftu_utils_test::ok(
+            reader->stream(StreamConfig()
+                               .stream_type(StreamType::Line)
+                               .range_type(RangeType::ByteRange)
+                               .from(0)
+                               .to(500)));
         REQUIRE(stream != nullptr);
 
         char buffer[1024];
         int line_count = 0;
-        std::vector<std::string> lines;
+        dstd::Vector<dstd::String> lines;
 
         while (!stream->done()) {
-            std::size_t bytes_read = stream->read(buffer, sizeof(buffer));
+            std::size_t bytes_read =
+                dftu_utils_test::ok(stream->read(buffer, sizeof(buffer)));
             if (bytes_read > 0) {
                 line_count++;
                 lines.emplace_back(buffer, bytes_read);
@@ -382,18 +402,20 @@ TEST_CASE("C++ Reader Streaming API - LINE stream") {
     }
 
     SUBCASE("LINE + LINE_RANGE - Single parsed line per read in line range") {
-        auto stream = reader->stream(StreamConfig()
-                                         .stream_type(StreamType::LINE)
-                                         .range_type(RangeType::LINE_RANGE)
-                                         .from(6)
-                                         .to(15));
+        auto stream = dftu_utils_test::ok(
+            reader->stream(StreamConfig()
+                               .stream_type(StreamType::Line)
+                               .range_type(RangeType::LineRange)
+                               .from(6)
+                               .to(15)));
         REQUIRE(stream != nullptr);
 
         char buffer[1024];
         int line_count = 0;
 
         while (!stream->done()) {
-            std::size_t bytes_read = stream->read(buffer, sizeof(buffer));
+            std::size_t bytes_read =
+                dftu_utils_test::ok(stream->read(buffer, sizeof(buffer)));
             if (bytes_read > 0) {
                 line_count++;
             } else {
@@ -412,33 +434,34 @@ TEST_CASE("C++ Reader Streaming API - MULTI_LINES stream" *
     TestEnvironment env(valgrind_scale(1000, 10));
     REQUIRE(env.is_valid());
 
-    std::string gz_file = env.create_test_gzip_file();
+    dstd::String gz_file = env.create_test_gzip_file();
     REQUIRE(!gz_file.empty());
 
-    std::string idx_file = env.get_index_path(gz_file);
+    dstd::String idx_file = env.get_index_path(gz_file);
 
     // Build index first
     {
         auto indexer =
-            CheckpointIndexerFactory::create(gz_file, idx_file, mb_to_b(0.5));
+            dftu_utils_test::create_indexer(gz_file, idx_file, mb_to_b(0.5));
         REQUIRE(indexer != nullptr);
-        indexer->build();
+        dftu_utils_test::build_indexer(*indexer);
     }
 
-    auto reader = ReaderFactory::create(gz_file, idx_file);
+    auto reader = dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
     REQUIRE(reader != nullptr);
 
-    if (reader->get_num_lines() == 0) {
+    if (reader->line_count() == 0) {
         MESSAGE("Skipping MULTI_LINES tests - no line data available");
         return;
     }
 
     SUBCASE("MULTI_LINES + BYTE_RANGE - Multiple parsed lines per read") {
-        auto stream = reader->stream(StreamConfig()
-                                         .stream_type(StreamType::MULTI_LINES)
-                                         .range_type(RangeType::BYTE_RANGE)
-                                         .from(0)
-                                         .to(1000));
+        auto stream = dftu_utils_test::ok(
+            reader->stream(StreamConfig()
+                               .stream_type(StreamType::MultiLines)
+                               .range_type(RangeType::ByteRange)
+                               .from(0)
+                               .to(1000)));
         REQUIRE(stream != nullptr);
 
         char buffer[512];
@@ -446,7 +469,8 @@ TEST_CASE("C++ Reader Streaming API - MULTI_LINES stream" *
         std::size_t total_line_count = 0;
 
         while (!stream->done()) {
-            std::size_t bytes_read = stream->read(buffer, sizeof(buffer));
+            std::size_t bytes_read =
+                dftu_utils_test::ok(stream->read(buffer, sizeof(buffer)));
             if (bytes_read > 0) {
                 read_count++;
                 // Buffer contains multiple lines separated by newlines
@@ -469,18 +493,20 @@ TEST_CASE("C++ Reader Streaming API - MULTI_LINES stream" *
     SUBCASE(
         "MULTI_LINES + LINE_RANGE - Multiple parsed lines per read in line "
         "range") {
-        auto stream = reader->stream(StreamConfig()
-                                         .stream_type(StreamType::MULTI_LINES)
-                                         .range_type(RangeType::LINE_RANGE)
-                                         .from(11)
-                                         .to(30));
+        auto stream = dftu_utils_test::ok(
+            reader->stream(StreamConfig()
+                               .stream_type(StreamType::MultiLines)
+                               .range_type(RangeType::LineRange)
+                               .from(11)
+                               .to(30)));
         REQUIRE(stream != nullptr);
 
         char buffer[512];
         std::size_t total_line_count = 0;
 
         while (!stream->done()) {
-            std::size_t bytes_read = stream->read(buffer, sizeof(buffer));
+            std::size_t bytes_read =
+                dftu_utils_test::ok(stream->read(buffer, sizeof(buffer)));
             if (bytes_read > 0) {
                 // Count newlines
                 for (std::size_t i = 0; i < bytes_read; i++) {
@@ -502,64 +528,70 @@ TEST_CASE("C++ Reader Streaming API - Edge cases") {
     TestEnvironment env(100);
     REQUIRE(env.is_valid());
 
-    std::string gz_file = env.create_test_gzip_file();
+    dstd::String gz_file = env.create_test_gzip_file();
     REQUIRE(!gz_file.empty());
 
-    std::string idx_file = env.get_index_path(gz_file);
+    dstd::String idx_file = env.get_index_path(gz_file);
 
     // Build index first
     {
         auto indexer =
-            CheckpointIndexerFactory::create(gz_file, idx_file, mb_to_b(0.5));
+            dftu_utils_test::create_indexer(gz_file, idx_file, mb_to_b(0.5));
         REQUIRE(indexer != nullptr);
-        indexer->build();
+        dftu_utils_test::build_indexer(*indexer);
     }
 
-    auto reader = ReaderFactory::create(gz_file, idx_file);
+    auto reader = dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
     REQUIRE(reader != nullptr);
 
     SUBCASE("Empty range - start equals end") {
-        auto stream = reader->stream(StreamConfig()
-                                         .stream_type(StreamType::BYTES)
-                                         .range_type(RangeType::BYTE_RANGE)
-                                         .from(100)
-                                         .to(100));
+        auto stream = dftu_utils_test::ok(
+            reader->stream(StreamConfig()
+                               .stream_type(StreamType::Bytes)
+                               .range_type(RangeType::ByteRange)
+                               .from(100)
+                               .to(100)));
         REQUIRE(stream != nullptr);
 
         char buffer[128];
-        std::size_t bytes_read = stream->read(buffer, sizeof(buffer));
+        std::size_t bytes_read =
+            dftu_utils_test::ok(stream->read(buffer, sizeof(buffer)));
         CHECK(bytes_read == 0);
         CHECK(stream->done());
     }
 
     SUBCASE("Range beyond file size") {
-        std::size_t max_bytes = reader->get_max_bytes();
-        auto stream = reader->stream(StreamConfig()
-                                         .stream_type(StreamType::BYTES)
-                                         .range_type(RangeType::BYTE_RANGE)
-                                         .from(max_bytes + 1000)
-                                         .to(max_bytes + 2000));
+        std::size_t max_bytes = reader->max_bytes();
+        auto stream = dftu_utils_test::ok(
+            reader->stream(StreamConfig()
+                               .stream_type(StreamType::Bytes)
+                               .range_type(RangeType::ByteRange)
+                               .from(max_bytes + 1000)
+                               .to(max_bytes + 2000)));
         REQUIRE(stream != nullptr);
 
         char buffer[128];
-        std::size_t bytes_read = stream->read(buffer, sizeof(buffer));
+        std::size_t bytes_read =
+            dftu_utils_test::ok(stream->read(buffer, sizeof(buffer)));
         CHECK(bytes_read == 0);
         CHECK(stream->done());
     }
 
     SUBCASE("Very small buffer") {
-        auto stream = reader->stream(StreamConfig()
-                                         .stream_type(StreamType::BYTES)
-                                         .range_type(RangeType::BYTE_RANGE)
-                                         .from(0)
-                                         .to(100));
+        auto stream = dftu_utils_test::ok(
+            reader->stream(StreamConfig()
+                               .stream_type(StreamType::Bytes)
+                               .range_type(RangeType::ByteRange)
+                               .from(0)
+                               .to(100)));
         REQUIRE(stream != nullptr);
 
         char buffer[1];
         std::size_t total = 0;
 
         while (!stream->done()) {
-            std::size_t bytes_read = stream->read(buffer, sizeof(buffer));
+            std::size_t bytes_read =
+                dftu_utils_test::ok(stream->read(buffer, sizeof(buffer)));
             total += bytes_read;
             if (bytes_read == 0) {
                 break;
@@ -578,27 +610,31 @@ TEST_CASE("C++ Reader Streaming API - Edge cases") {
 
         // First stream to establish baseline
         {
-            auto stream = reader->stream(StreamConfig()
-                                             .stream_type(StreamType::BYTES)
-                                             .range_type(RangeType::BYTE_RANGE)
-                                             .from(0)
-                                             .to(50));
+            auto stream = dftu_utils_test::ok(
+                reader->stream(StreamConfig()
+                                   .stream_type(StreamType::Bytes)
+                                   .range_type(RangeType::ByteRange)
+                                   .from(0)
+                                   .to(50)));
             REQUIRE(stream != nullptr);
-            first_bytes = stream->read(buffer, sizeof(buffer));
+            first_bytes =
+                dftu_utils_test::ok(stream->read(buffer, sizeof(buffer)));
             CHECK(first_bytes > 0);
         }
 
         // Recreate stream multiple times and verify consistency
         for (int i = 0; i < 5; i++) {
-            auto stream = reader->stream(StreamConfig()
-                                             .stream_type(StreamType::BYTES)
-                                             .range_type(RangeType::BYTE_RANGE)
-                                             .from(0)
-                                             .to(50));
+            auto stream = dftu_utils_test::ok(
+                reader->stream(StreamConfig()
+                                   .stream_type(StreamType::Bytes)
+                                   .range_type(RangeType::ByteRange)
+                                   .from(0)
+                                   .to(50)));
             REQUIRE(stream != nullptr);
             CHECK_FALSE(stream->done());
 
-            std::size_t bytes = stream->read(buffer, sizeof(buffer));
+            std::size_t bytes =
+                dftu_utils_test::ok(stream->read(buffer, sizeof(buffer)));
             CHECK(bytes == first_bytes);  // Should read same amount each time
         }
     }
@@ -608,32 +644,32 @@ TEST_CASE("C++ Reader Streaming API - Format identification") {
     TestEnvironment env;
     REQUIRE(env.is_valid());
 
-    std::string gz_file = env.create_test_gzip_file();
+    dstd::String gz_file = env.create_test_gzip_file();
     REQUIRE(!gz_file.empty());
 
-    std::string idx_file = env.get_index_path(gz_file);
+    dstd::String idx_file = env.get_index_path(gz_file);
 
     // Build index first
     {
         auto indexer =
-            CheckpointIndexerFactory::create(gz_file, idx_file, mb_to_b(0.5));
+            dftu_utils_test::create_indexer(gz_file, idx_file, mb_to_b(0.5));
         REQUIRE(indexer != nullptr);
-        indexer->build();
+        dftu_utils_test::build_indexer(*indexer);
     }
 
-    auto reader = ReaderFactory::create(gz_file, idx_file);
+    auto reader = dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
     REQUIRE(reader != nullptr);
 
     SUBCASE("Check format name") {
-        std::string format = reader->get_format_name();
+        dstd::String format = reader->format_name();
         CHECK(!format.empty());
         MESSAGE("Format: ", format);
     }
 
     SUBCASE("Verify metadata access") {
-        CHECK(reader->get_archive_path() == gz_file);
-        CHECK(reader->get_index_path() == idx_file);
-        CHECK(reader->get_max_bytes() > 0);
+        CHECK(dstd::StringView(reader->archive_path()) == gz_file);
+        CHECK(dstd::StringView(reader->index_path()) == idx_file);
+        CHECK(reader->max_bytes() > 0);
     }
 }
 
@@ -641,24 +677,24 @@ TEST_CASE("C++ Reader Streaming API - Buffer Size Tests") {
     TestEnvironment env;
     REQUIRE(env.is_valid());
 
-    std::string gz_file = env.create_test_gzip_file();
+    dstd::String gz_file = env.create_test_gzip_file();
     REQUIRE(!gz_file.empty());
 
-    std::string idx_file = env.get_index_path(gz_file);
+    dstd::String idx_file = env.get_index_path(gz_file);
 
     // Build index first
     {
         auto indexer =
-            CheckpointIndexerFactory::create(gz_file, idx_file, mb_to_b(0.5));
+            dftu_utils_test::create_indexer(gz_file, idx_file, mb_to_b(0.5));
         REQUIRE(indexer != nullptr);
-        indexer->build();
+        dftu_utils_test::build_indexer(*indexer);
     }
 
-    auto reader = ReaderFactory::create(gz_file, idx_file);
+    auto reader = dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
     REQUIRE(reader != nullptr);
-    std::size_t max_bytes = reader->get_max_bytes();
+    std::size_t max_bytes = reader->max_bytes();
 
-    std::vector<std::size_t> buffer_sizes = {
+    dstd::Vector<std::size_t> buffer_sizes = {
         32 * 1024,        // 32KB
         64 * 1024,        // 64KB (default)
         256 * 1024,       // 256KB
@@ -669,19 +705,20 @@ TEST_CASE("C++ Reader Streaming API - Buffer Size Tests") {
 
     SUBCASE("BYTES stream with different buffer sizes") {
         // Get reference data with default buffer
-        std::string reference_data;
+        dstd::String reference_data;
         {
-            auto stream = reader->stream(StreamConfig()
-                                             .stream_type(StreamType::BYTES)
-                                             .range_type(RangeType::BYTE_RANGE)
-                                             .from(0)
-                                             .to(max_bytes)
-                                             .buffer_size(0));
+            auto stream = dftu_utils_test::ok(
+                reader->stream(StreamConfig()
+                                   .stream_type(StreamType::Bytes)
+                                   .range_type(RangeType::ByteRange)
+                                   .from(0)
+                                   .to(max_bytes)
+                                   .buffer_size(0)));
 
-            std::vector<char> buffer(512 * 1024);
+            dstd::Vector<char> buffer(512 * 1024);
             while (!stream->done()) {
-                std::size_t bytes_read =
-                    stream->read(buffer.data(), buffer.size());
+                std::size_t bytes_read = dftu_utils_test::ok(
+                    stream->read(buffer.data(), buffer.size()));
                 if (bytes_read > 0) {
                     reference_data.append(buffer.data(), bytes_read);
                 }
@@ -691,18 +728,19 @@ TEST_CASE("C++ Reader Streaming API - Buffer Size Tests") {
         for (std::size_t buf_size : buffer_sizes) {
             INFO("Testing BYTES stream with buffer size: ", buf_size);
 
-            auto stream = reader->stream(StreamConfig()
-                                             .stream_type(StreamType::BYTES)
-                                             .range_type(RangeType::BYTE_RANGE)
-                                             .from(0)
-                                             .to(max_bytes)
-                                             .buffer_size(buf_size));
+            auto stream = dftu_utils_test::ok(
+                reader->stream(StreamConfig()
+                                   .stream_type(StreamType::Bytes)
+                                   .range_type(RangeType::ByteRange)
+                                   .from(0)
+                                   .to(max_bytes)
+                                   .buffer_size(buf_size)));
 
-            std::string data;
-            std::vector<char> buffer(512 * 1024);
+            dstd::String data;
+            dstd::Vector<char> buffer(512 * 1024);
             while (!stream->done()) {
-                std::size_t bytes_read =
-                    stream->read(buffer.data(), buffer.size());
+                std::size_t bytes_read = dftu_utils_test::ok(
+                    stream->read(buffer.data(), buffer.size()));
                 if (bytes_read > 0) {
                     data.append(buffer.data(), bytes_read);
                 }
@@ -715,22 +753,23 @@ TEST_CASE("C++ Reader Streaming API - Buffer Size Tests") {
 
     SUBCASE("LINE stream with different buffer sizes") {
         // Get reference lines with default buffer
-        std::vector<std::string> reference_lines;
+        dstd::Vector<dstd::String> reference_lines;
         {
-            auto stream = reader->stream(StreamConfig()
-                                             .stream_type(StreamType::LINE)
-                                             .range_type(RangeType::LINE_RANGE)
-                                             .from(1)
-                                             .to(50)
-                                             .buffer_size(0));
+            auto stream = dftu_utils_test::ok(
+                reader->stream(StreamConfig()
+                                   .stream_type(StreamType::Line)
+                                   .range_type(RangeType::LineRange)
+                                   .from(1)
+                                   .to(50)
+                                   .buffer_size(0)));
 
             char buffer[4096];
             while (!stream->done()) {
-                std::size_t bytes_read =
-                    stream->read(buffer, sizeof(buffer) - 1);
+                std::size_t bytes_read = dftu_utils_test::ok(
+                    stream->read(buffer, sizeof(buffer) - 1));
                 if (bytes_read > 0) {
                     buffer[bytes_read] = '\0';
-                    reference_lines.push_back(std::string(buffer, bytes_read));
+                    reference_lines.push_back(dstd::String(buffer, bytes_read));
                 }
             }
         }
@@ -738,21 +777,22 @@ TEST_CASE("C++ Reader Streaming API - Buffer Size Tests") {
         for (std::size_t buf_size : buffer_sizes) {
             INFO("Testing LINE stream with buffer size: ", buf_size);
 
-            auto stream = reader->stream(StreamConfig()
-                                             .stream_type(StreamType::LINE)
-                                             .range_type(RangeType::LINE_RANGE)
-                                             .from(1)
-                                             .to(50)
-                                             .buffer_size(buf_size));
+            auto stream = dftu_utils_test::ok(
+                reader->stream(StreamConfig()
+                                   .stream_type(StreamType::Line)
+                                   .range_type(RangeType::LineRange)
+                                   .from(1)
+                                   .to(50)
+                                   .buffer_size(buf_size)));
 
-            std::vector<std::string> lines;
+            dstd::Vector<dstd::String> lines;
             char buffer[4096];
             while (!stream->done()) {
-                std::size_t bytes_read =
-                    stream->read(buffer, sizeof(buffer) - 1);
+                std::size_t bytes_read = dftu_utils_test::ok(
+                    stream->read(buffer, sizeof(buffer) - 1));
                 if (bytes_read > 0) {
                     buffer[bytes_read] = '\0';
-                    lines.push_back(std::string(buffer, bytes_read));
+                    lines.push_back(dstd::String(buffer, bytes_read));
                 }
             }
 
@@ -763,29 +803,29 @@ TEST_CASE("C++ Reader Streaming API - Buffer Size Tests") {
 
     SUBCASE("MULTI_LINES stream with different buffer sizes") {
         // Get reference lines with default buffer
-        std::vector<std::string> reference_lines;
+        dstd::Vector<dstd::String> reference_lines;
         {
-            auto stream =
+            auto stream = dftu_utils_test::ok(
                 reader->stream(StreamConfig()
-                                   .stream_type(StreamType::MULTI_LINES)
-                                   .range_type(RangeType::LINE_RANGE)
+                                   .stream_type(StreamType::MultiLines)
+                                   .range_type(RangeType::LineRange)
                                    .from(1)
                                    .to(50)
-                                   .buffer_size(0));
+                                   .buffer_size(0)));
 
-            std::vector<char> buffer(64 * 1024);
-            std::string content;
+            dstd::Vector<char> buffer(64 * 1024);
+            dstd::String content;
             while (!stream->done()) {
-                std::size_t bytes_read =
-                    stream->read(buffer.data(), buffer.size());
+                std::size_t bytes_read = dftu_utils_test::ok(
+                    stream->read(buffer.data(), buffer.size()));
                 if (bytes_read > 0) {
                     content.append(buffer.data(), bytes_read);
                 }
             }
 
-            std::istringstream ss(content);
-            std::string line;
-            while (std::getline(ss, line)) {
+            dftu_utils_test::LineStream ss(content);
+            dstd::String line;
+            while (ss.next(line)) {
                 if (!line.empty()) {
                     reference_lines.push_back(line);
                 }
@@ -795,28 +835,28 @@ TEST_CASE("C++ Reader Streaming API - Buffer Size Tests") {
         for (std::size_t buf_size : buffer_sizes) {
             INFO("Testing MULTI_LINES stream with buffer size: ", buf_size);
 
-            auto stream =
+            auto stream = dftu_utils_test::ok(
                 reader->stream(StreamConfig()
-                                   .stream_type(StreamType::MULTI_LINES)
-                                   .range_type(RangeType::LINE_RANGE)
+                                   .stream_type(StreamType::MultiLines)
+                                   .range_type(RangeType::LineRange)
                                    .from(1)
                                    .to(50)
-                                   .buffer_size(buf_size));
+                                   .buffer_size(buf_size)));
 
-            std::vector<char> buffer(64 * 1024);
-            std::string content;
+            dstd::Vector<char> buffer(64 * 1024);
+            dstd::String content;
             while (!stream->done()) {
-                std::size_t bytes_read =
-                    stream->read(buffer.data(), buffer.size());
+                std::size_t bytes_read = dftu_utils_test::ok(
+                    stream->read(buffer.data(), buffer.size()));
                 if (bytes_read > 0) {
                     content.append(buffer.data(), bytes_read);
                 }
             }
 
-            std::vector<std::string> lines;
-            std::istringstream ss(content);
-            std::string line;
-            while (std::getline(ss, line)) {
+            dstd::Vector<dstd::String> lines;
+            dftu_utils_test::LineStream ss(content);
+            dstd::String line;
+            while (ss.next(line)) {
                 if (!line.empty()) {
                     lines.push_back(line);
                 }

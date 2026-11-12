@@ -1,13 +1,17 @@
+// SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/coro/async_generator.h>
-#include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/coro/async_generator.h>
+#include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 
 #include <chrono>
-#include <string>
 #include <thread>
-#include <vector>
+
+using namespace dftracer::utils;
 
 using namespace dftracer::utils::coro;
 
@@ -34,7 +38,7 @@ static AsyncGenerator<int> async_fibonacci(int n) {
     }
 }
 
-static AsyncGenerator<std::string> async_words() {
+static AsyncGenerator<dstd::String> async_words() {
     co_await async_delay(10);
     co_yield "hello";
     co_await async_delay(10);
@@ -43,18 +47,18 @@ static AsyncGenerator<std::string> async_words() {
     co_yield "world";
 }
 
-static CoroTask<std::vector<int>> consume_int_generator(
+static CoroTask<dstd::Vector<int>> consume_int_generator(
     AsyncGenerator<int> gen) {
-    std::vector<int> result;
+    dstd::Vector<int> result;
     while (auto value = co_await gen.next()) {
         result.push_back(*value);
     }
     co_return result;
 }
 
-static CoroTask<std::vector<std::string>> consume_string_generator(
-    AsyncGenerator<std::string> gen) {
-    std::vector<std::string> result;
+static CoroTask<dstd::Vector<dstd::String>> consume_string_generator(
+    AsyncGenerator<dstd::String> gen) {
+    dstd::Vector<dstd::String> result;
     while (auto value = co_await gen.next()) {
         result.push_back(*value);
     }
@@ -80,13 +84,13 @@ static CoroTask<long> sum_ready(int n) {
 // the stack long before the end.
 TEST_CASE("AsyncGenerator - awaits that end at once keep the stack flat") {
     const int n = static_cast<int>(DFTRACER_UTILS_VALGRIND_SCALE(1000000, 10));
-    CHECK(sum_ready(n).get() == n);
+    CHECK(dftu_utils_test::ok(sum_ready(n).get()) == n);
 }
 
 TEST_CASE("AsyncGenerator - Basic async range generation") {
     auto gen = async_range(0, 5);
     auto task = consume_int_generator(std::move(gen));
-    auto result = task.get();
+    auto result = dftu_utils_test::ok(task.get());
 
     CHECK(result.size() == 5);
     CHECK(result[0] == 0);
@@ -99,7 +103,7 @@ TEST_CASE("AsyncGenerator - Basic async range generation") {
 TEST_CASE("AsyncGenerator - Async fibonacci sequence") {
     auto gen = async_fibonacci(7);
     auto task = consume_int_generator(std::move(gen));
-    auto result = task.get();
+    auto result = dftu_utils_test::ok(task.get());
 
     CHECK(result.size() == 7);
     CHECK(result[0] == 0);
@@ -114,7 +118,7 @@ TEST_CASE("AsyncGenerator - Async fibonacci sequence") {
 TEST_CASE("AsyncGenerator - String generation with async delays") {
     auto gen = async_words();
     auto task = consume_string_generator(std::move(gen));
-    auto result = task.get();
+    auto result = dftu_utils_test::ok(task.get());
 
     CHECK(result.size() == 3);
     CHECK(result[0] == "hello");
@@ -125,7 +129,7 @@ TEST_CASE("AsyncGenerator - String generation with async delays") {
 TEST_CASE("AsyncGenerator - Empty generator") {
     auto gen = async_range(5, 5);  // Empty range
     auto task = consume_int_generator(std::move(gen));
-    auto result = task.get();
+    auto result = dftu_utils_test::ok(task.get());
 
     CHECK(result.empty());
 }
@@ -135,7 +139,7 @@ TEST_CASE("AsyncGenerator - Move semantics") {
     auto gen2 = std::move(gen1);  // Move construct
 
     auto task = consume_int_generator(std::move(gen2));
-    auto result = task.get();
+    auto result = dftu_utils_test::ok(task.get());
 
     CHECK(result.size() == 3);
     CHECK(result[0] == 0);
@@ -156,8 +160,8 @@ static AsyncGenerator<int> async_throwing_generator() {
 TEST_CASE("AsyncGenerator - Exception propagation") {
     auto gen = async_throwing_generator();
 
-    auto task = [](AsyncGenerator<int> g) -> CoroTask<std::vector<int>> {
-        std::vector<int> result;
+    auto task = [](AsyncGenerator<int> g) -> CoroTask<dstd::Vector<int>> {
+        dstd::Vector<int> result;
         try {
             while (auto value = co_await g.next()) {
                 result.push_back(*value);
@@ -169,7 +173,7 @@ TEST_CASE("AsyncGenerator - Exception propagation") {
         co_return result;
     }(std::move(gen));
 
-    auto result = task.get();
+    auto result = dftu_utils_test::ok(task.get());
 
     // Should have gotten first two values before exception
     CHECK(result.size() == 2);
@@ -190,7 +194,7 @@ TEST_CASE("AsyncGenerator - Large async sequence") {
         co_return sum;
     }(std::move(gen));
 
-    int sum = task.get();
+    int sum = dftu_utils_test::ok(task.get());
 
     CHECK(sum == (N * (N - 1)) / 2);  // Sum formula: n*(n-1)/2
 }
@@ -216,15 +220,15 @@ static AsyncGenerator<Point> async_points() {
 TEST_CASE("AsyncGenerator - Complex types with async operations") {
     auto gen = async_points();
 
-    auto task = [](AsyncGenerator<Point> g) -> CoroTask<std::vector<Point>> {
-        std::vector<Point> result;
+    auto task = [](AsyncGenerator<Point> g) -> CoroTask<dstd::Vector<Point>> {
+        dstd::Vector<Point> result;
         while (auto value = co_await g.next()) {
             result.push_back(*value);
         }
         co_return result;
     }(std::move(gen));
 
-    auto result = task.get();
+    auto result = dftu_utils_test::ok(task.get());
 
     CHECK(result.size() == 3);
     CHECK(result[0] == (Point{0, 0}));
@@ -255,7 +259,7 @@ TEST_CASE("AsyncGenerator - Manual next() calls") {
         co_return;
     }(std::move(gen));
 
-    task.get();
+    dftu_utils_test::ok(task.get());
 }
 
 TEST_CASE("AsyncGenerator - done() method") {
@@ -277,5 +281,5 @@ TEST_CASE("AsyncGenerator - done() method") {
         co_return;
     }(std::move(gen));
 
-    task.get();
+    dftu_utils_test::ok(task.get());
 }

@@ -1,54 +1,57 @@
+// SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/byte_view.h>
-#include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/coro/task.h>
-#include <dftracer/utils/core/runtime.h>
-#include <dftracer/utils/utilities/fileio/parallel/parallel_writer.h>
+#include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/byte_view.h>
+#include <dftracer/utils/dstd/fmt.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/fileio/parallel/parallel_writer.h>
+#include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 
 #include <cstdio>
-#include <fstream>
-#include <sstream>
-#include <string>
-#include <vector>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::coro;
-using namespace dftracer::utils::utilities::fileio::parallel;
+using namespace dftracer::utils::fileio::parallel;
 
 namespace {
 
-std::string tmp_path(const char* name) {
-    return dftu_utils_test::make_unique_test_path(name).string();
+dstd::String tmp_path(const char* name) {
+    return dstd::String(dftu_utils_test::make_unique_test_path(name).str());
 }
 
-std::string read_all(const std::string& path) {
-    std::ifstream f(path, std::ios::binary);
-    std::stringstream ss;
-    ss << f.rdbuf();
-    return ss.str();
+dstd::String read_all(const dstd::String& path) {
+    return dstd::fs::read_file(dstd::PathView(path)).value_or(dstd::String());
 }
 
-ByteView sv(const std::string& s) { return ByteView(s.data(), s.size()); }
+dstd::ByteView sv(const dstd::String& s) {
+    return dstd::ByteView(s.data(), s.size());
+}
 
-void cleanup(const std::vector<std::string>& paths) {
+void cleanup(const dstd::Vector<dstd::String>& paths) {
     for (const auto& p : paths) std::remove(p.c_str());
 }
 
 }  // namespace
 
 TEST_CASE("ShardedWriter - one shard per worker with header/footer placement") {
-    std::string base = tmp_path("test_sharded_basic");
-    std::vector<std::string> expected = {base + ".shard_0", base + ".shard_1",
-                                         base + ".shard_2"};
+    dstd::String base = tmp_path("test_sharded_basic");
+    dstd::Vector<dstd::String> expected = {dstd::fmt<"{}.shard_0">(base),
+                                           dstd::fmt<"{}.shard_1">(base),
+                                           dstd::fmt<"{}.shard_2">(base)};
     cleanup(expected);
 
     Runtime runtime(2);
-    std::vector<std::string> paths;
+    dstd::Vector<dstd::String> paths;
     auto task = [&]() -> CoroTask<int> {
         auto w = make_sharded_writer();
-        if (co_await w->open(base, 3, false, nullptr) != 0) co_return 1;
+        if (co_await w->open(dstd::String(base), 3, false, nullptr) != 0)
+            co_return 1;
         if (co_await w->write_header(sv("HDR\n")) != 0) co_return 2;
         if (co_await w->write_chunk(0, sv("A\n")) != 0) co_return 3;
         if (co_await w->write_chunk(1, sv("B\n")) != 0) co_return 4;
@@ -58,7 +61,8 @@ TEST_CASE("ShardedWriter - one shard per worker with header/footer placement") {
         if (co_await w->close() != 0) co_return 7;
         co_return 0;
     };
-    CHECK(runtime.submit(task(), "sharded_basic").get() == 0);
+    CHECK(dftu_utils_test::ok(runtime.submit(task(), "sharded_basic").get()) ==
+          0);
 
     REQUIRE(paths.size() == 3);
     CHECK(paths == expected);
@@ -71,40 +75,43 @@ TEST_CASE("ShardedWriter - one shard per worker with header/footer placement") {
 }
 
 TEST_CASE("ShardedWriter - gzip_extension appends .gz to shard names") {
-    std::string base = tmp_path("test_sharded_gz");
-    std::vector<std::string> expected = {base + ".shard_0.gz",
-                                         base + ".shard_1.gz"};
+    dstd::String base = tmp_path("test_sharded_gz");
+    dstd::Vector<dstd::String> expected = {dstd::fmt<"{}.shard_0.gz">(base),
+                                           dstd::fmt<"{}.shard_1.gz">(base)};
     cleanup(expected);
 
     Runtime runtime(2);
-    std::vector<std::string> paths;
+    dstd::Vector<dstd::String> paths;
     auto task = [&]() -> CoroTask<int> {
         auto w = make_sharded_writer();
-        if (co_await w->open(base, 2, true, nullptr) != 0) co_return 1;
+        if (co_await w->open(dstd::String(base), 2, true, nullptr) != 0)
+            co_return 1;
         if (co_await w->write_chunk(0, sv("X")) != 0) co_return 2;
         if (co_await w->write_chunk(1, sv("Y")) != 0) co_return 3;
         paths = w->output_paths();
         if (co_await w->close() != 0) co_return 4;
         co_return 0;
     };
-    CHECK(runtime.submit(task(), "sharded_gz").get() == 0);
+    CHECK(dftu_utils_test::ok(runtime.submit(task(), "sharded_gz").get()) == 0);
     CHECK(paths == expected);
-    for (const auto& p : expected) CHECK(fs::exists(p));
+    for (const auto& p : expected) CHECK(dstd::fs::exists(p).value());
     cleanup(expected);
 }
 
 TEST_CASE("ShardedWriter - out-of-range worker_idx fails") {
-    std::string base = tmp_path("test_sharded_oor");
-    cleanup({base + ".shard_0"});
+    dstd::String base = tmp_path("test_sharded_oor");
+    cleanup({dstd::fmt<"{}.shard_0">(base)});
 
     Runtime runtime(2);
     auto task = [&]() -> CoroTask<int> {
         auto w = make_sharded_writer();
-        if (co_await w->open(base, 1, false, nullptr) != 0) co_return 1;
+        if (co_await w->open(dstd::String(base), 1, false, nullptr) != 0)
+            co_return 1;
         auto rc = co_await w->write_chunk(5, sv("oops"));
         co_await w->close();
         co_return rc == 0 ? 99 : 0;
     };
-    CHECK(runtime.submit(task(), "sharded_oor").get() == 0);
-    cleanup({base + ".shard_0"});
+    CHECK(dftu_utils_test::ok(runtime.submit(task(), "sharded_oor").get()) ==
+          0);
+    cleanup({dstd::fmt<"{}.shard_0">(base)});
 }

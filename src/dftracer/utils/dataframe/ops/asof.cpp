@@ -1,10 +1,14 @@
+// SPDX-License-Identifier: MIT
 #include <dftracer/utils/dataframe/frame_ops.h>
+#include <dftracer/utils/dataframe/internal/errors.h>
 #include <dftracer/utils/dataframe/kernels/order.h>
+#include <dftracer/utils/dataframe/ops/ops_common.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <algorithm>
-#include <stdexcept>
-
-#include "ops_common.h"
+#include <utility>
 
 namespace dftracer::utils::dataframe {
 
@@ -18,41 +22,56 @@ struct RightPartition {
 
 }  // namespace
 
-DataFrame asof(const DataFrame& left, const DataFrame& right,
-               const std::string& on, const std::vector<std::string>& by,
-               AsofDirection direction, std::optional<double> tolerance) {
-    const std::size_t lt_at = ops::column_named(left, on, "asof");
-    const std::size_t rt_at = ops::column_named(right, on, "asof");
+dstd::Result<DataFrame> asof(const DataFrame& left, const DataFrame& right,
+                             const dstd::String& on,
+                             const dstd::Vector<dstd::String>& by,
+                             AsofDirection direction,
+                             dstd::Optional<double> tolerance) {
+    const dstd::Result<std::size_t> lt = ops::column_named(left, on, "asof");
+    if (!lt) return lt.error();
+    const dstd::Result<std::size_t> rt = ops::column_named(right, on, "asof");
+    if (!rt) return rt.error();
+    const std::size_t lt_at = *lt;
+    const std::size_t rt_at = *rt;
     if (left.columns[lt_at].type() != right.columns[rt_at].type())
-        throw std::invalid_argument("asof: ts column types differ");
-    std::vector<std::size_t> skip{rt_at};
-    for (const std::string& n : by) {
-        const std::size_t l = ops::column_named(left, n, "asof");
-        const std::size_t r = ops::column_named(right, n, "asof");
-        if (left.columns[l].type() != right.columns[r].type())
-            throw std::invalid_argument("asof: equi column types differ");
-        skip.push_back(r);
+        return invalid_argument<"asof: ts column types differ">();
+    dstd::Vector<std::size_t> skip{rt_at};
+    for (const dstd::String& n : by) {
+        const dstd::Result<std::size_t> lc = ops::column_named(left, n, "asof");
+        if (!lc) return lc.error();
+        const dstd::Result<std::size_t> rc =
+            ops::column_named(right, n, "asof");
+        if (!rc) return rc.error();
+        if (left.columns[*lc].type() != right.columns[*rc].type())
+            return invalid_argument<"asof: equi column types differ">();
+        skip.push_back(*rc);
     }
     if (!ColumnView::supports(left.columns[lt_at].type()))
-        throw std::invalid_argument("asof: ts column must be numeric");
+        return invalid_argument<"asof: ts column must be numeric">();
 
-    std::vector<ColumnView> lequi = ops::views_of(left, by, "asof");
-    std::vector<ColumnView> requi = ops::views_of(right, by, "asof");
-    std::vector<ColumnView> lkeys = lequi;
-    std::vector<ColumnView> rkeys = requi;
+    dstd::Result<dstd::Vector<ColumnView>> lviews =
+        ops::views_of(left, by, "asof");
+    if (!lviews) return lviews.error();
+    dstd::Result<dstd::Vector<ColumnView>> rviews =
+        ops::views_of(right, by, "asof");
+    if (!rviews) return rviews.error();
+    dstd::Vector<ColumnView> lequi = std::move(*lviews);
+    dstd::Vector<ColumnView> requi = std::move(*rviews);
+    dstd::Vector<ColumnView> lkeys = lequi;
+    dstd::Vector<ColumnView> rkeys = requi;
     lkeys.emplace_back(left.columns[lt_at]);
     rkeys.emplace_back(right.columns[rt_at]);
     const ColumnView& lts = lkeys.back();
     const ColumnView& rts = rkeys.back();
     if (lts.is_bytes())
-        throw std::invalid_argument("asof: ts column must be numeric");
+        return invalid_argument<"asof: ts column must be numeric">();
 
     const std::int64_t L = left.num_rows();
     const std::int64_t R = right.num_rows();
-    const std::vector<std::int64_t> lorder = order_rows(lkeys, L);
-    const std::vector<std::int64_t> rorder = order_rows(rkeys, R);
+    const dstd::Vector<std::int64_t> lorder = order_rows(lkeys, L);
+    const dstd::Vector<std::int64_t> rorder = order_rows(rkeys, R);
 
-    std::vector<RightPartition> rparts;
+    dstd::Vector<RightPartition> rparts;
     for (std::int64_t i = 0; i < R;) {
         const std::int64_t j = run_end(requi, rorder, i);
         std::int64_t te = i;
@@ -62,7 +81,7 @@ DataFrame asof(const DataFrame& left, const DataFrame& right,
         i = j;
     }
 
-    std::vector<std::int64_t> match(static_cast<std::size_t>(L), -1);
+    dstd::Vector<std::int64_t> match(static_cast<std::size_t>(L), -1);
     const bool has_tol = tolerance.has_value();
     std::size_t rp = 0;
     for (std::int64_t li = 0; li < L;) {
@@ -119,7 +138,7 @@ DataFrame asof(const DataFrame& left, const DataFrame& right,
         li = lj;
     }
 
-    std::vector<std::int64_t> right_rows(static_cast<std::size_t>(L));
+    dstd::Vector<std::int64_t> right_rows(static_cast<std::size_t>(L));
     for (std::size_t i = 0; i < right_rows.size(); ++i)
         right_rows[i] = match[static_cast<std::size_t>(lorder[i])];
     return ops::join_columns(left, right, skip, lorder, right_rows, "asof");

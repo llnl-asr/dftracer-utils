@@ -1,0 +1,629 @@
+// SPDX-License-Identifier: MIT
+#define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <checkpoint_indexer_helpers.h>
+#include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dstd/file.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/function.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/thread.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/fileio/compress/gzip_member_reader.h>
+#include <dftracer/utils/fileio/compress/libdeflate_gzip.h>
+#include <dftracer/utils/fileio/file_helpers.h>
+#include <dftracer/utils/fileio/lines/sources/async_streaming_gz_line_generator.h>
+#include <dftracer/utils/memory/detail/manager.h>
+#include <dftracer/utils/trace/index/gzip/gzip_indexer.h>
+#include <dftracer/utils/trace/internal/utils.h>
+#include <dftracer/utils/trace/reader/internal/gzip_reader.h>
+#include <dftracer/utils/trace/reader/internal/inflater.h>
+#include <dftracer/utils/trace/reader/internal/member_decode_cache.h>
+#include <dftracer/utils/trace/reader/internal/stream_config.h>
+#include <dftracer/utils/trace/views/view.h>
+#include <doctest/doctest.h>
+#include <fcntl.h>
+#include <task_result.h>
+#include <testing_runtime.h>
+#include <testing_utilities.h>
+#include <unistd.h>
+
+#include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <cstdint>
+#include <cstring>
+#include <random>
+#include <thread>
+
+using namespace dftracer::utils;
+
+namespace {
+
+constexpr std::uint64_t CKPT = 1u << 20;
+constexpr std::size_t SMALL_BYTES = std::size_t{8} << 20;
+constexpr std::size_t BIG_BYTES = SMALL_BYTES * 8;
+constexpr std::size_t PREFIX_LINES = 1000;
+constexpr std::size_t MEMBER_BYTES = std::size_t{256} << 10;
+// A member above the bound is streamed. A member below it costs the bound plus
+// its input.
+constexpr std::size_t BOUND_BYTES = std::size_t{4} << 20;
+constexpr std::size_t BUDGET_BYTES = std::size_t{24} << 20;
+constexpr std::size_t DEFAULT_BOUND_BUDGET_BYTES = std::size_t{72} << 20;
+
+struct Trace {
+    dstd::String text;
+    std::size_t lines = 0;
+    std::size_t reads = 0;
+};
+
+Trace make_trace(std::size_t bytes, std::uint32_t seed) {
+    static const char HEX[] = "0123456789abcdef";
+    std::mt19937 rng(seed);
+    Trace t;
+    t.text.reserve(bytes + 4096);
+    while (t.text.size() < bytes) {
+        const std::size_t i = t.lines++;
+        const bool read = i % 3 != 0;
+        t.reads += read;
+        dstd::String fh;
+        for (int k = 0; k < 32; ++k) fh += HEX[rng() & 15];
+        t.text += dstd::String("{\"id\":") + dstd::to_string(i) +
+                  ",\"name\":\"" + (read ? "read" : "write") +
+                  "\",\"cat\":\"POSIX\",\"pid\":" + dstd::to_string(1 + i % 4) +
+                  ",\"tid\":" + dstd::to_string(1 + i % 8) +
+                  ",\"ts\":" + dstd::to_string(1000 + i) +
+                  ",\"dur\":" + dstd::to_string(1 + i % 17) +
+                  ",\"ph\":\"X\",\"args\":{\"fh\":\"" + fh + "\"}}\n";
+    }
+    return t;
+}
+
+// Short lines, so a restart piece starts after a newline about one time in
+// four.
+Trace short_lines(std::size_t bytes, std::uint32_t seed) {
+    std::mt19937 rng(seed);
+    Trace t;
+    t.text.reserve(bytes + 16);
+    while (t.text.size() < bytes) {
+        ++t.lines;
+        for (auto n = static_cast<std::uint32_t>(1 + rng() % 6); n > 0; --n)
+            t.text += static_cast<char>('a' + rng() % 26);
+        t.text += '\n';
+    }
+    return t;
+}
+
+dstd::Vector<std::uint8_t> member(const dstd::String& text) {
+    fileio::compress::GzipMemberCompressor c;
+    dstd::Vector<std::uint8_t> out(c.bound(text.size()));
+    auto n = c.compress(text.data(), text.size(), out.data(), out.size());
+    REQUIRE(n.has_value());
+    out.resize(*n);
+    return out;
+}
+
+void append(dstd::Vector<std::uint8_t>& to, const dstd::String& text) {
+    const auto m = member(text);
+    to.insert(to.end(), m.begin(), m.end());
+}
+
+void write_file(const dstd::String& path,
+                const dstd::Vector<std::uint8_t>& bytes) {
+    dstd::fs::write_file(
+        dstd::PathView(path),
+        dstd::StringView(reinterpret_cast<const char*>(bytes.data()),
+                         bytes.size()))
+        .discard();
+}
+
+dstd::Vector<std::uint8_t> one_big_member(const Trace& t) {
+    std::size_t at = 0;
+    for (std::size_t i = 0; i < PREFIX_LINES; ++i)
+        at = t.text.find('\n', at) + 1;
+    dstd::Vector<std::uint8_t> bytes;
+    append(bytes, t.text.substr(0, at));
+    append(bytes, t.text.substr(at));
+    return bytes;
+}
+
+dstd::Vector<std::uint8_t> many_members(const Trace& t) {
+    dstd::Vector<std::uint8_t> bytes;
+    std::size_t from = 0;
+    while (from < t.text.size()) {
+        std::size_t to = std::min(t.text.size(), from + MEMBER_BYTES);
+        if (to < t.text.size()) to = t.text.find('\n', to) + 1;
+        append(bytes, t.text.substr(from, to - from));
+        from = to;
+    }
+    return bytes;
+}
+
+std::size_t peak_above_start(const dstd::Function<void()>& body) {
+    std::atomic<bool> done{false};
+    std::atomic<std::size_t> peak{0};
+    const std::size_t base = memory::detail::Manager::get().stats().live;
+    dstd::Thread sampler([&] {
+        while (!done.load(std::memory_order_relaxed)) {
+            const auto live = memory::detail::Manager::get().stats().live;
+            auto seen = peak.load(std::memory_order_relaxed);
+            while (live > seen && !peak.compare_exchange_weak(
+                                      seen, live, std::memory_order_relaxed)) {
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+    });
+    body();
+    done.store(true);
+    sampler.join();
+    const auto top = peak.load();
+    return top > base ? top - base : 0;
+}
+
+struct Files {
+    dstd::String dir;
+    dstd::String big;   // a small member, then one big member
+    dstd::String many;  // the same lines in small members
+    Trace trace;
+    explicit Files(std::size_t bytes, std::uint32_t seed, const char* tag) {
+        dir = dstd::String("/tmp/dftu_bigmember_") + tag + "_XXXXXX";
+        REQUIRE(::mkdtemp(dir.data()) != nullptr);
+        trace = make_trace(bytes, seed);
+        big = dir + "/big.pfw.gz";
+        many = dir + "/many.pfw.gz";
+        write_file(big, one_big_member(trace));
+        write_file(many, many_members(trace));
+    }
+    ~Files() { dstd::fs::remove_all(dir).discard(); }
+};
+
+std::size_t inflate_mismatches(
+    const dstd::String& path, const dstd::String& expected,
+    trace::reader::internal::MemberDecodeCache* cache = nullptr,
+    const dstd::Vector<std::uint64_t>* heads = nullptr) {
+    auto fd_file = dstd::File::open(path, {});
+    REQUIRE(fd_file);
+    const int fd = fd_file->native_handle();
+    std::size_t at = 0, bad = 0;
+    bool ok = false;
+    dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
+        trace::reader::internal::ReaderInflater inf;
+        inf.set_member_bound(BOUND_BYTES);
+        if (cache != nullptr) inf.set_cache(cache, 7);
+        if (heads != nullptr) inf.set_index_hint(*heads);
+        off_t offset = 0;
+        if (!co_await inf.initialize(fd, offset)) co_return;
+        dstd::Vector<unsigned char> buf(1 << 20);
+        while (true) {
+            std::size_t n = 0;
+            if (!co_await inf.read(fd, offset, buf.data(), buf.size(), n))
+                co_return;
+            if (n == 0) break;
+            if (at + n > expected.size() ||
+                std::memcmp(buf.data(), expected.data() + at, n) != 0)
+                ++bad;
+            at += n;
+        }
+        ok = true;
+    });
+    REQUIRE(ok);
+    return bad + (at == expected.size() ? 0 : 1);
+}
+
+std::size_t members_lines(const dstd::String& path) {
+    auto fd_file = dstd::File::open(path, {});
+    REQUIRE(fd_file);
+    const int fd = fd_file->native_handle();
+    const auto size = static_cast<std::uint64_t>(::lseek(fd, 0, SEEK_END));
+    std::size_t lines = 0;
+    dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
+        auto gen = fileio::compress::decode_gzip_members(fd, size, BOUND_BYTES);
+        while (auto part = co_await gen.next()) {
+            REQUIRE(*part);
+            lines += static_cast<std::size_t>(
+                std::count((*part)->begin(), (*part)->end(), '\n'));
+        }
+    });
+    return lines;
+}
+
+struct Indexed {
+    dstd::SharedPtr<trace::index::gzip::GzipIndexer> indexer;
+    Indexed(const dstd::String& path, const dstd::String& index_path,
+            std::uint64_t ckpt = CKPT) {
+        indexer = dstd::make_shared<trace::index::gzip::GzipIndexer>(
+            dstd::String(dstd::StringView(path)),
+            dstd::String(dstd::StringView(index_path)), ckpt, true);
+        dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
+            co_await dftu_utils_test::build_indexer_async(*indexer);
+        });
+    }
+    dstd::String read_lines(std::size_t first, std::size_t last) {
+        trace::reader::internal::GzipReader reader(indexer);
+        dstd::String out;
+        dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
+            out = dftu_utils_test::ok(
+                co_await reader.read_lines_async(first, last));
+        });
+        return out;
+    }
+};
+
+// 0 where /proc/self/io is absent.
+std::uint64_t bytes_read_by_process() {
+    const dstd::String io =
+        dstd::fs::read_file("/proc/self/io").value_or(dstd::String());
+    std::size_t at = io.find("rchar:");
+    if (at == dstd::String::npos) return 0;
+    at += 6;
+    while (at < io.size() && io[at] == ' ') ++at;
+    const dstd::StringView line = dstd::StringView(io).substr(at);
+    return dstd::from_chars<std::uint64_t>(line.substr(0, line.find('\n')))
+        .value_or(0);
+}
+
+std::size_t newlines_before(const dstd::String& text, std::size_t at);
+
+dstd::String read_line_bytes(
+    const dstd::SharedPtr<trace::index::gzip::GzipIndexer>& indexer,
+    std::size_t from) {
+    trace::reader::internal::GzipReader reader(indexer);
+    auto stream = dftu_utils_test::ok(reader.stream(
+        trace::reader::internal::StreamConfig()
+            .stream_type(trace::reader::internal::StreamType::LineBytes)
+            .range_type(trace::reader::internal::RangeType::ByteRange)
+            .from(from)
+            .to(reader.max_bytes())));
+    dstd::String out;
+    dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
+        dstd::Vector<char> buf(1u << 20);
+        while (true) {
+            const auto n = dftu_utils_test::ok(
+                co_await stream->read_async(buf.data(), buf.size()));
+            if (n == 0) break;
+            out.append(buf.data(), n);
+        }
+    });
+    return out;
+}
+
+dstd::String lines_of(const dstd::String& text, std::size_t first,
+                      std::size_t last) {
+    std::size_t at = 0;
+    for (std::size_t i = 1; i < first; ++i) at = text.find('\n', at) + 1;
+    std::size_t end = at;
+    for (std::size_t i = first; i <= last; ++i) end = text.find('\n', end) + 1;
+    return text.substr(at, end - at);
+}
+
+std::size_t newlines_before(const dstd::String& text, std::size_t at) {
+    return static_cast<std::size_t>(
+        std::count(text.begin(), text.begin() + static_cast<long>(at), '\n'));
+}
+
+trace::views::ViewFile view_file(const dstd::String& gz_path,
+                                 const dstd::String& dir) {
+    REQUIRE(dftu_utils_test::build_index(gz_path, dir, CKPT));
+    trace::views::ViewFile f;
+    f.file_path = gz_path;
+    f.index_path = trace::internal::determine_index_path(gz_path, dir);
+    f.checkpoint_size = CKPT;
+    return f;
+}
+
+std::size_t count_reads(const trace::views::ViewFile& f) {
+    auto df = dftu_utils_test::ok(dftu_utils_test::run_here(
+        trace::views::View::from_files({f})
+            .duql(R"(name == "read" | agg { n = count() })")
+            .lazy()
+            .collect()));
+    REQUIRE(df.num_rows() == 1);
+    return static_cast<std::size_t>(df.columns[0].data<std::uint64_t>()[0]);
+}
+
+}  // namespace
+
+TEST_SUITE("BigMemberReads") {
+    TEST_CASE(
+        "a member after a small one inflates with the memory of a small") {
+        Files small(SMALL_BYTES, 1, "a");
+        Files big(BIG_BYTES, 1, "b");
+        std::size_t bad_small = 1, bad_big = 1;
+        const auto p_small = peak_above_start([&] {
+            bad_small = inflate_mismatches(small.big, small.trace.text);
+        });
+        const auto p_big = peak_above_start(
+            [&] { bad_big = inflate_mismatches(big.big, big.trace.text); });
+        CHECK(bad_small == 0);
+        CHECK(bad_big == 0);
+        MESSAGE("inflater peak: " << p_small << " small, " << p_big << " big");
+        CHECK(p_big <= BUDGET_BYTES);
+    }
+
+    TEST_CASE("the member line reader holds a bounded part of a big member") {
+        Files small(SMALL_BYTES, 2, "c");
+        Files big(BIG_BYTES, 2, "d");
+        std::size_t lines_small = 0, lines_big = 0;
+        const auto p_small =
+            peak_above_start([&] { lines_small = members_lines(small.big); });
+        const auto p_big =
+            peak_above_start([&] { lines_big = members_lines(big.big); });
+        CHECK(lines_small == small.trace.lines);
+        CHECK(lines_big == big.trace.lines);
+        MESSAGE("member reader peak: " << p_small << " small, " << p_big
+                                       << " big");
+        CHECK(p_big <= BUDGET_BYTES);
+    }
+
+    TEST_CASE("the line reader serves lines from every piece of a big member") {
+        Files fx(BIG_BYTES, 3, "e");
+        Indexed big(fx.big, fx.dir + "/idx_big");
+        Indexed many(fx.many, fx.dir + "/idx_many");
+        const auto pieces = big.indexer->members();
+        REQUIRE(pieces.size() > 16);
+        std::size_t restarts = 0;
+        for (const auto& p : pieces)
+            restarts += p.kind == trace::index::gzip::GzipRecordKind::Restart;
+        CHECK(restarts > 16);
+        CHECK(big.indexer->line_count() == many.indexer->line_count());
+
+        const std::size_t total = fx.trace.lines;
+        std::mt19937 rng(11);
+        std::size_t compared = 0;
+        const auto before = peak_above_start([&] {
+            for (const auto& p : pieces) {
+                const std::size_t first = std::min<std::size_t>(
+                    static_cast<std::size_t>(p.first_line_num) + 3, total - 4);
+                const std::size_t last = first + 3;
+                CAPTURE(p.member_idx);
+                CHECK(big.read_lines(first, last) ==
+                      lines_of(fx.trace.text, first, last));
+                CHECK(many.read_lines(first, last) ==
+                      lines_of(fx.trace.text, first, last));
+                ++compared;
+            }
+            for (int i = 0; i < 20; ++i) {
+                const std::size_t first = 1 + rng() % (total - 8);
+                CHECK(big.read_lines(first, first + 7) ==
+                      lines_of(fx.trace.text, first, first + 7));
+            }
+        });
+        CHECK(compared == pieces.size());
+        MESSAGE("line reader peak: " << before);
+        CHECK(before <= BUDGET_BYTES + BOUND_BYTES * 4);
+    }
+
+    TEST_CASE("restart points past shipped pieces read back their lines") {
+        Files fx(BIG_BYTES, 9, "w");
+        // Wider than the pieces a streamed member ships in, so each restart
+        // window spans bytes already shipped.
+        constexpr std::uint64_t WIDE_CKPT = std::uint64_t{10} << 20;
+        Indexed big(fx.big, fx.dir + "/idx_wide", WIDE_CKPT);
+        const auto pieces = big.indexer->members();
+        std::size_t restarts = 0;
+        for (const auto& p : pieces)
+            restarts += p.kind == trace::index::gzip::GzipRecordKind::Restart;
+        REQUIRE(restarts >= 4);
+        CHECK(big.indexer->line_count() == fx.trace.lines);
+
+        const std::size_t total = fx.trace.lines;
+        for (const auto& p : pieces) {
+            const std::size_t first = std::min<std::size_t>(
+                static_cast<std::size_t>(p.first_line_num) + 3, total - 4);
+            CAPTURE(p.member_idx);
+            CHECK(big.read_lines(first, first + 3) ==
+                  lines_of(fx.trace.text, first, first + 3));
+        }
+    }
+
+    TEST_CASE(
+        "the lines the reader reports for a piece match the stored counts") {
+        // A piece almost always starts mid-line, so search seeds for a file
+        // with a piece that starts right after a newline too.
+        bool after_newline = false, mid_line = false;
+        for (std::uint32_t seed = 1; seed <= 80 && !(after_newline && mid_line);
+             ++seed) {
+            const Trace t = short_lines(std::size_t{6} << 20, 100 + seed);
+            const dstd::String dir =
+                "/tmp/dftu_bigmember_n_" + dstd::to_string(seed);
+            REQUIRE(dstd::fs::create_directories(dir).has_value());
+            dstd::Vector<std::uint8_t> bytes;
+            append(bytes, t.text);
+            write_file(dir + "/t.gz", bytes);
+            Indexed ix(dir + "/t.gz", dir + "/idx");
+            const auto pieces = ix.indexer->members();
+            for (const auto& p : pieces) {
+                if (p.kind != trace::index::gzip::GzipRecordKind::Restart)
+                    continue;
+                const std::size_t at = static_cast<std::size_t>(p.uc_offset);
+                const bool newline_before = t.text[at - 1] == '\n';
+                // The folds count a line in the piece where it ends.
+                CHECK(p.first_line_num == newlines_before(t.text, at) + 1);
+                const std::size_t first = static_cast<std::size_t>(
+                    p.first_line_num + (newline_before ? 0 : 1));
+                if (first + 2 > t.lines) continue;
+                CAPTURE(seed);
+                CAPTURE(p.member_idx);
+                CHECK(ix.read_lines(first, first + 2) ==
+                      lines_of(t.text, first, first + 2));
+                (newline_before ? after_newline : mid_line) = true;
+            }
+            dstd::fs::remove_all(dir).discard();
+        }
+        CHECK(mid_line);
+        CHECK(after_newline);
+    }
+
+    TEST_CASE("the unindexed line reader streams a big member") {
+        Files small(SMALL_BYTES, 4, "f");
+        Files big(BIG_BYTES, 4, "g");
+        auto count = [](const dstd::String& path) {
+            std::size_t n = 0;
+            dftu_utils_test::run_coro(
+                [&](coro::Scope&) -> coro::CoroTask<void> {
+                    auto lines =
+                        fileio::lines::sources::async_streaming_gz_lines(
+                            dstd::String(path));
+                    while (auto line = co_await lines.next()) {
+                        REQUIRE(*line);
+                        ++n;
+                    }
+                });
+            return n;
+        };
+        std::size_t n_small = 0, n_big = 0;
+        const auto p_small =
+            peak_above_start([&] { n_small = count(small.big); });
+        const auto p_big = peak_above_start([&] { n_big = count(big.big); });
+        CHECK(n_small == small.trace.lines);
+        CHECK(n_big == big.trace.lines);
+        MESSAGE("line generator peak: " << p_small << " small, " << p_big
+                                        << " big");
+        CHECK(p_big <= DEFAULT_BOUND_BUDGET_BYTES);
+    }
+
+    TEST_CASE("the view counts a big member like the same lines in members") {
+        Files fx(BIG_BYTES, 5, "h");
+        const auto big = view_file(fx.big, fx.dir + "/vidx_big");
+        const auto many = view_file(fx.many, fx.dir + "/vidx_many");
+        std::size_t from_big = 0;
+        const auto peak =
+            peak_above_start([&] { from_big = count_reads(big); });
+        const auto from_many = count_reads(many);
+        CHECK(from_big == fx.trace.reads);
+        CHECK(from_many == fx.trace.reads);
+        MESSAGE("view peak: " << peak);
+        CHECK(peak <= DEFAULT_BOUND_BUDGET_BYTES * 2);
+    }
+
+    TEST_CASE(
+        "cached members before a big one leave the stream at its offset") {
+        // The cache serves the small members without reading their input, so
+        // the stream of the big member must start from the member's offset.
+        const std::size_t small_bytes = std::size_t{300} << 10;
+        dstd::String dir = "/tmp/dftu_bigmember_cache_XXXXXX";
+        REQUIRE(::mkdtemp(dir.data()) != nullptr);
+        dstd::String text;
+        dstd::Vector<std::uint8_t> bytes;
+        std::uint64_t big_offset = 0;
+        auto add = [&](const Trace& t) {
+            text += t.text;
+            append(bytes, t.text);
+        };
+        for (std::uint32_t i = 0; i < 6; ++i)
+            add(make_trace(small_bytes, 20 + i));
+        big_offset = bytes.size();
+        add(make_trace(std::size_t{24} << 20, 30));
+        for (std::uint32_t i = 0; i < 4; ++i)
+            add(make_trace(small_bytes, 40 + i));
+        const dstd::String path = dir + "/mixed.pfw.gz";
+        write_file(path, bytes);
+
+        dstd::Vector<std::uint64_t> heads{big_offset};
+        for (const bool hinted : {false, true}) {
+            trace::reader::internal::MemberDecodeCache cache(std::size_t{64}
+                                                             << 20);
+            CAPTURE(hinted);
+            CHECK(inflate_mismatches(path, text, &cache,
+                                     hinted ? &heads : nullptr) == 0);
+            CHECK(inflate_mismatches(path, text, &cache,
+                                     hinted ? &heads : nullptr) == 0);
+        }
+        dstd::fs::remove_all(dir).discard();
+    }
+
+    TEST_CASE(
+        "a byte range inside the first partial line of a piece is aligned") {
+        bool mid = false, after_newline = false;
+        for (std::uint32_t seed = 1; seed <= 80 && !(mid && after_newline);
+             ++seed) {
+            const Trace t = short_lines(std::size_t{6} << 20, 300 + seed);
+            const dstd::String dir =
+                "/tmp/dftu_bigmember_b_" + dstd::to_string(seed);
+            REQUIRE(dstd::fs::create_directories(dir).has_value());
+            dstd::Vector<std::uint8_t> bytes;
+            append(bytes, t.text);
+            write_file(dir + "/t.gz", bytes);
+            Indexed ix(dir + "/t.gz", dir + "/idx");
+            for (const auto& p : ix.indexer->members()) {
+                if (p.kind != trace::index::gzip::GzipRecordKind::Restart)
+                    continue;
+                const std::size_t at = static_cast<std::size_t>(p.uc_offset);
+                const std::size_t nl = t.text.find('\n', at);
+                if (nl == dstd::String::npos || nl < at + 2) continue;
+                CAPTURE(seed);
+                CAPTURE(p.member_idx);
+                const bool newline_before = t.text[at - 1] == '\n';
+                // The line under the target, wherever it opens: the range that
+                // ends inside it left it to this one.
+                const std::size_t expect_from =
+                    t.text.rfind('\n', at) == dstd::String::npos
+                        ? 0
+                        : t.text.rfind('\n', at) + 1;
+                CHECK(read_line_bytes(ix.indexer, at + 1) ==
+                      t.text.substr(expect_from));
+                (newline_before ? after_newline : mid) = true;
+            }
+            dstd::fs::remove_all(dir).discard();
+        }
+        CHECK(mid);
+        CHECK(after_newline);
+    }
+
+    TEST_CASE(
+        "a line range reads the piece it starts in, not the whole member") {
+        Files fx(BIG_BYTES, 6, "i");
+        Indexed big(fx.big, fx.dir + "/idx_big");
+        if (bytes_read_by_process() == 0) {
+            MESSAGE("no /proc/self/io; the bytes read are not counted");
+            return;
+        }
+        const auto pieces = big.indexer->members();
+        REQUIRE(pieces.size() > 16);
+        const auto& last = pieces.back();
+        REQUIRE(last.kind == trace::index::gzip::GzipRecordKind::Restart);
+        const std::size_t first =
+            static_cast<std::size_t>(last.first_line_num) + 3;
+        REQUIRE(first + 3 < fx.trace.lines);
+        const std::uint64_t before = bytes_read_by_process();
+        const dstd::String got = big.read_lines(first, first + 2);
+        const std::uint64_t used = bytes_read_by_process() - before;
+        CHECK(got == lines_of(fx.trace.text, first, first + 2));
+        const std::uint64_t file_bytes = dstd::fs::file_size(fx.big).value();
+        MESSAGE("bytes read: " << used << " of a " << file_bytes << " file");
+        CHECK(used < file_bytes / 8);
+    }
+
+    TEST_CASE("a last piece without a trailing newline reads to the end") {
+        Trace t = short_lines(std::size_t{6} << 20, 77);
+        t.text.pop_back();
+        --t.lines;  // the last line has no newline, and the index counts none
+        const dstd::String dir = "/tmp/dftu_bigmember_nonl";
+        REQUIRE(dstd::fs::create_directories(dir).has_value());
+        dstd::Vector<std::uint8_t> bytes;
+        append(bytes, t.text);
+        write_file(dir + "/t.gz", bytes);
+        Indexed ix(dir + "/t.gz", dir + "/idx");
+        const auto pieces = ix.indexer->members();
+        REQUIRE(pieces.size() >= 3);
+        const auto& last = pieces.back();
+        CHECK(last.kind == trace::index::gzip::GzipRecordKind::Restart);
+        CHECK(ix.indexer->max_bytes() == t.text.size());
+        CHECK(ix.indexer->line_count() ==
+              newlines_before(t.text, t.text.size()));
+        const std::size_t at = static_cast<std::size_t>(last.uc_offset);
+        const bool newline_before = t.text[at - 1] == '\n';
+        const std::size_t from =
+            newline_before ? at : t.text.rfind('\n', at - 1) + 1;
+        // The last line has no newline, so the line-aligned stream omits it.
+        const std::size_t last_newline = t.text.rfind('\n');
+        CHECK(read_line_bytes(ix.indexer, at) ==
+              t.text.substr(from, last_newline + 1 - from));
+        const std::size_t numbered = ix.indexer->line_count();
+        CHECK(ix.read_lines(numbered - 2, numbered) ==
+              lines_of(t.text, numbered - 2, numbered));
+        dstd::fs::remove_all(dir).discard();
+    }
+}

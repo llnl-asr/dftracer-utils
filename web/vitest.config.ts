@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 import { defineConfig } from "vitest/config";
 
 // Unit tests cover pure modules (no DOM/JSX), so run them in the node

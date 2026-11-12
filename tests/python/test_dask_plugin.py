@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Test cases for DFTracerUtilsDaskWorkerPlugin."""
 
 import pytest
@@ -35,7 +36,6 @@ class TestDaskWorkerPlugin:
     def test_setup_creates_runtime(self):
         from dftracer.utils.dask import DFTracerUtilsDaskWorkerPlugin
 
-        original = dftu_utils.get_default_runtime()
         plugin = DFTracerUtilsDaskWorkerPlugin(threads=2)
 
         class MockWorker:
@@ -46,12 +46,10 @@ class TestDaskWorkerPlugin:
         assert hasattr(worker, "dftracer_utils_runtime")
         assert isinstance(worker.dftracer_utils_runtime, dftu_utils.Runtime)
         assert worker.dftracer_utils_runtime.threads == 2
-        dftu_utils.set_default_runtime(original)
 
     def test_teardown_is_idempotent(self):
         from dftracer.utils.dask import DFTracerUtilsDaskWorkerPlugin
 
-        original = dftu_utils.get_default_runtime()
         plugin = DFTracerUtilsDaskWorkerPlugin(threads=2)
 
         class MockWorker:
@@ -59,15 +57,13 @@ class TestDaskWorkerPlugin:
 
         worker = MockWorker()
         plugin.setup(worker)
-        dftu_utils.set_default_runtime(original)
         plugin.teardown(worker)
         plugin.teardown(worker)
 
     def test_setup_sets_default_runtime(self):
         from dftracer.utils.dask import DFTracerUtilsDaskWorkerPlugin
 
-        original = dftu_utils.get_default_runtime()
-        plugin = DFTracerUtilsDaskWorkerPlugin(threads=4)
+        plugin = DFTracerUtilsDaskWorkerPlugin(threads=2)
 
         class MockWorker:
             pass
@@ -75,8 +71,7 @@ class TestDaskWorkerPlugin:
         worker = MockWorker()
         plugin.setup(worker)
         default = dftu_utils.get_default_runtime()
-        assert default.threads == 4
-        dftu_utils.set_default_runtime(original)
+        assert default.threads == 2
 
 
 @pytest.mark.skipif(not DASK_DISTRIBUTED_AVAILABLE, reason="dask.distributed not available")

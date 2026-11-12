@@ -1,7 +1,16 @@
-#include <dftracer/utils/core/common/hash/splitmix64.h>
+// SPDX-License-Identifier: MIT
+#include <dftracer/utils/dataframe/internal/cell_ops.h>
 #include <dftracer/utils/dataframe/kernels/running.h>
 #include <dftracer/utils/dataframe/lazy/cursors.h>
 #include <dftracer/utils/dataframe/lazy/numeric.h>
+#include <dftracer/utils/dstd/fatal.h>
+#include <dftracer/utils/dstd/hash/splitmix64.h>
+#include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/memory/budget.h>
 
 #include <array>
 #include <atomic>
@@ -46,8 +55,8 @@ struct TransformCell {
 class GroupTransformCore {
    public:
     GroupTransformCore(GroupwiseOp kind, std::int64_t shift,
-                       std::vector<std::size_t> in,
-                       std::vector<TypeId> declared)
+                       dstd::Vector<std::size_t> in,
+                       dstd::Vector<TypeId> declared)
         : kind_(kind),
           shift_(shift),
           in_(std::move(in)),
@@ -55,13 +64,14 @@ class GroupTransformCore {
 
     // `gid[r]` is the group of row r; `starts[r]`, when given, restarts that
     // group's state before the row (a sorted stream reuses one group id).
-    std::vector<Series> run(const std::vector<Series>& cols, std::int64_t rows,
-                            const std::int32_t* gid,
-                            const std::uint8_t* starts) {
-        std::vector<Series> out;
+    dstd::Result<dstd::Vector<Series>> run(const dstd::Vector<Series>& cols,
+                                           std::int64_t rows,
+                                           const std::int32_t* gid,
+                                           const std::uint8_t* starts) {
+        dstd::Vector<Series> out;
         const auto n = static_cast<std::size_t>(rows);
         if (kind_ == GroupwiseOp::CumCount) {
-            std::vector<std::int64_t> v(n);
+            dstd::Vector<std::int64_t> v(n);
             for (std::size_t r = 0; r < n; ++r) {
                 const auto g = static_cast<std::size_t>(gid[r]);
                 ensure(g);
@@ -74,14 +84,15 @@ class GroupTransformCore {
         classes_.resize(in_.size());
         for (std::size_t c = 0; c < in_.size(); ++c) {
             if (!num_class(cols[in_[c]].type(), classes_[c]))
-                throw std::logic_error("group transform: a non-numeric column");
+                dstd::fatal("group transform: a non-numeric column");
         }
         for (std::size_t c = 0; c < in_.size(); ++c) {
             const NumClass cls = classes_[c];
             const NumCells cells = read_cells(cols[in_[c]]);
-            std::vector<std::uint64_t> ob(n);
-            std::vector<std::uint8_t> ook(n, 1);
+            dstd::Vector<std::uint64_t> ob(n);
+            dstd::Vector<std::uint8_t> ook(n, 1);
             NumClass produced = cls;
+            WindowOverflow overflow;
             for (std::size_t r = 0; r < n; ++r) {
                 const auto g = static_cast<std::size_t>(gid[r]);
                 ensure(g);
@@ -92,8 +103,9 @@ class GroupTransformCore {
                     if (shift_ > 0) ring_of(g, c) = steps::Lag<RingCell>{};
                 }
                 produced = step(st, g, c, cls, cells.bits[r], cells.ok[r] != 0,
-                                ob[r], ook[r]);
+                                ob[r], ook[r], overflow);
             }
+            if (overflow.hit()) return overflow.error();
             out.push_back(make_numeric(ob, ook, produced, declared_[c]));
         }
         return out;
@@ -128,9 +140,9 @@ class GroupTransformCore {
         TransformCell::Step& s = st.step;
         switch (kind_) {
             case GroupwiseOp::CumSum:
-                if (cls == NumClass::SIGNED)
+                if (cls == NumClass::Signed)
                     std::construct_at(&s.sum_i);
-                else if (cls == NumClass::UNSIGNED)
+                else if (cls == NumClass::Unsigned)
                     std::construct_at(&s.sum_u);
                 else
                     std::construct_at(&s.sum_f);
@@ -156,8 +168,8 @@ class GroupTransformCore {
     // `+ (x - x)` turns an infinite or NaN float into NaN.
     NumClass step(TransformCell& st, std::size_t g, std::size_t c, NumClass cls,
                   std::uint64_t b, bool ok, std::uint64_t& out,
-                  std::uint8_t& out_ok) {
-        const double x = cls == NumClass::FLOAT ? bits_double(b) : 0.0;
+                  std::uint8_t& out_ok, WindowOverflow& overflow) {
+        const double x = cls == NumClass::Float ? dstd::bits_double(b) : 0.0;
         TransformCell::Step& s = st.step;
         switch (kind_) {
             case GroupwiseOp::CumSum: {
@@ -165,33 +177,37 @@ class GroupTransformCore {
                     out_ok = 0;
                     return cls;
                 }
-                if (cls == NumClass::SIGNED) {
+                if (cls == NumClass::Signed) {
                     s.sum_i.add(static_cast<std::int64_t>(b));
+                    if (s.sum_i.overflowed)
+                        overflow.set("RUNNING_SUM", "int64");
                     out = static_cast<std::uint64_t>(s.sum_i.acc);
-                } else if (cls == NumClass::UNSIGNED) {
+                } else if (cls == NumClass::Unsigned) {
                     s.sum_u.add(b);
+                    if (s.sum_u.overflowed)
+                        overflow.set("RUNNING_SUM", "uint64");
                     out = s.sum_u.acc;
                 } else {
                     s.sum_f.add(x);
-                    out = double_bits(s.sum_f.acc + (x - x));
+                    out = dstd::double_bits(s.sum_f.acc + (x - x));
                 }
                 return cls;
             }
             case GroupwiseOp::CumProd: {
                 if (!ok) {
                     out_ok = 0;
-                    return NumClass::FLOAT;
+                    return NumClass::Float;
                 }
-                const double v = cls == NumClass::FLOAT
+                const double v = cls == NumClass::Float
                                      ? x
-                                     : (cls == NumClass::SIGNED
+                                     : (cls == NumClass::Signed
                                             ? static_cast<double>(
                                                   static_cast<std::int64_t>(b))
                                             : static_cast<double>(b));
                 s.prod.mul(v);
-                const double d = cls == NumClass::FLOAT ? (x - x) : 0.0;
-                out = double_bits(s.prod.acc + d);
-                return NumClass::FLOAT;
+                const double d = cls == NumClass::Float ? (x - x) : 0.0;
+                out = dstd::double_bits(s.prod.acc + d);
+                return NumClass::Float;
             }
             case GroupwiseOp::CumMax:
             case GroupwiseOp::CumMin: {
@@ -200,15 +216,15 @@ class GroupTransformCore {
                     return cls;
                 }
                 const bool smallest = kind_ == GroupwiseOp::CumMin;
-                if (cls == NumClass::SIGNED) {
+                if (cls == NumClass::Signed) {
                     s.ext.offer_i(static_cast<std::int64_t>(b), smallest);
                     out = static_cast<std::uint64_t>(s.ext.value.i);
-                } else if (cls == NumClass::UNSIGNED) {
+                } else if (cls == NumClass::Unsigned) {
                     s.ext.offer_u(b, smallest);
                     out = s.ext.value.u;
                 } else {
                     s.ext.offer_f(x, smallest);
-                    out = double_bits(s.ext.value.d + (x - x));
+                    out = dstd::double_bits(s.ext.value.d + (x - x));
                 }
                 return cls;
             }
@@ -234,46 +250,51 @@ class GroupTransformCore {
                 ++st.seen;
                 if (!have) {
                     out_ok = 0;
-                    return cls == NumClass::FLOAT ? NumClass::FLOAT
-                                                  : NumClass::SIGNED;
+                    return cls == NumClass::Float ? NumClass::Float
+                                                  : NumClass::Signed;
                 }
-                if (cls == NumClass::FLOAT) {
-                    out = double_bits(steps::delta_f64(x, bits_double(prev)));
-                    return NumClass::FLOAT;
+                if (cls == NumClass::Float) {
+                    out = dstd::double_bits(
+                        steps::delta_f64(x, dstd::bits_double(prev)));
+                    return NumClass::Float;
                 }
-                out = static_cast<std::uint64_t>(
-                    cls == NumClass::SIGNED
+                std::int64_t diff = 0;
+                const bool fits =
+                    cls == NumClass::Signed
                         ? steps::delta_i64(static_cast<std::int64_t>(b),
-                                           static_cast<std::int64_t>(prev))
-                        : steps::delta_u64(b, prev));
-                return NumClass::SIGNED;
+                                           static_cast<std::int64_t>(prev),
+                                           diff)
+                        : steps::delta_u64(b, prev, diff);
+                if (!fits) overflow.set("DELTA", "int64");
+                out = static_cast<std::uint64_t>(diff);
+                return NumClass::Signed;
             }
             case GroupwiseOp::FFill: {
                 if (!s.fill.step(ok, b, out)) out_ok = 0;
                 return cls;
             }
             default:
-                throw std::logic_error("group transform: an unsupported kind");
+                dstd::fatal("group transform: an unsupported kind");
         }
     }
 
     GroupwiseOp kind_;
     std::int64_t shift_;
-    std::vector<std::size_t> in_;
-    std::vector<TypeId> declared_;
-    std::vector<std::int64_t> counts_;
-    std::vector<NumClass> classes_;
-    std::vector<TransformCell> cells_;
-    std::vector<steps::Lag<RingCell>> rings_;
+    dstd::Vector<std::size_t> in_;
+    dstd::Vector<TypeId> declared_;
+    dstd::Vector<std::int64_t> counts_;
+    dstd::Vector<NumClass> classes_;
+    dstd::Vector<TransformCell> cells_;
+    dstd::Vector<steps::Lag<RingCell>> rings_;
 };
 
 // A float key groups by value: negative zero is zero and every NaN is one
 // value. `bits` are the bits of the double.
 inline std::uint64_t canonical_float_bits(std::uint64_t bits) {
-    double v = bits_double(bits);
+    double v = dstd::bits_double(bits);
     if (v == 0) v = 0.0;
     if (std::isnan(v)) v = std::numeric_limits<double>::quiet_NaN();
-    return double_bits(v);
+    return dstd::double_bits(v);
 }
 
 // Rows grouped on one numeric key column with no key string, for tests to see
@@ -293,8 +314,8 @@ class GroupKeys {
 
     // `gid` gets the id of each row (hash mode), `starts` a 1 for each row
     // that starts a run (sorted mode). Each has `rows` entries.
-    void add(const std::vector<Series>& cols, std::int64_t rows,
-             std::int32_t* gid, std::uint8_t* starts) {
+    dstd::Result<void> add(const dstd::Vector<Series>& cols, std::int64_t rows,
+                           std::int32_t* gid, std::uint8_t* starts) {
         const auto n = static_cast<std::size_t>(rows);
         if (cols.size() == 1 && numeric(cols))
             add_numeric1(cols[0], n, gid, starts);
@@ -304,7 +325,8 @@ class GroupKeys {
                  value_domain(cols[0].type()) == ValueDomain::Bytes)
             add_bytes(cols[0], n, gid, starts);
         else
-            add_text(cols, n, gid, starts);
+            return add_text(cols, n, gid, starts);
+        return {};
     }
 
    private:
@@ -318,13 +340,13 @@ class GroupKeys {
         using is_avalanching = void;
         std::size_t operator()(const Wide& k) const noexcept {
             std::uint64_t h = 0;
-            for (std::uint64_t x : k.w) h = hash::splitmix64(h ^ x);
+            for (std::uint64_t x : k.w) h = dstd::hash::splitmix64(h ^ x);
             return static_cast<std::size_t>(h);
         }
     };
 
-    static bool numeric(const std::vector<Series>& cols) {
-        NumClass cls = NumClass::SIGNED;
+    static bool numeric(const dstd::Vector<Series>& cols) {
+        NumClass cls = NumClass::Signed;
         for (const Series& c : cols)
             if (!num_class(c.type(), cls)) return false;
         return !cols.empty();
@@ -339,10 +361,10 @@ class GroupKeys {
     // null.
     void add_numeric1(const Series& col, std::size_t n, std::int32_t* gid,
                       std::uint8_t* starts) {
-        NumClass cls = NumClass::SIGNED;
+        NumClass cls = NumClass::Signed;
         num_class(col.type(), cls);
         const NumCells cells = read_cells(col);
-        const bool is_float = cls == NumClass::FLOAT;
+        const bool is_float = cls == NumClass::Float;
         g_single_numeric_key_rows.fetch_add(n, std::memory_order_relaxed);
         for (std::size_t r = 0; r < n; ++r) {
             const bool ok = cells.ok[r] != 0;
@@ -366,10 +388,10 @@ class GroupKeys {
         }
     }
 
-    void add_numeric(const std::vector<Series>& cols, std::size_t n,
+    void add_numeric(const dstd::Vector<Series>& cols, std::size_t n,
                      std::int32_t* gid, std::uint8_t* starts) {
-        std::vector<NumCells> cells;
-        std::vector<NumClass> cls(cols.size(), NumClass::SIGNED);
+        dstd::Vector<NumCells> cells;
+        dstd::Vector<NumClass> cls(cols.size(), NumClass::Signed);
         cells.reserve(cols.size());
         for (std::size_t c = 0; c < cols.size(); ++c) {
             num_class(cols[c].type(), cls[c]);
@@ -383,7 +405,7 @@ class GroupKeys {
                     continue;
                 }
                 std::uint64_t bits = cells[c].bits[r];
-                if (cls[c] == NumClass::FLOAT)
+                if (cls[c] == NumClass::Float)
                     bits = canonical_float_bits(bits);
                 k.w[c] = bits;
             }
@@ -404,8 +426,8 @@ class GroupKeys {
         for (std::size_t r = 0; r < n; ++r) {
             const auto i = static_cast<std::int64_t>(r);
             const bool null = col.is_null(i);
-            const std::string_view v =
-                null ? std::string_view() : read_bytes(col, i);
+            const dstd::StringView v =
+                null ? dstd::StringView() : read_bytes(col, i);
             if (sorted_) {
                 const bool same = have_last_ && null == last_null_ &&
                                   (null || v == last_bytes_);
@@ -418,16 +440,18 @@ class GroupKeys {
             } else {
                 auto it = byte_ids_.find(v);
                 if (it == byte_ids_.end())
-                    it = byte_ids_.emplace(std::string(v), groups_++).first;
+                    it = byte_ids_.emplace(dstd::String(v), groups_++).first;
                 gid[r] = it->second;
             }
         }
     }
 
-    void add_text(const std::vector<Series>& cols, std::size_t n,
-                  std::int32_t* gid, std::uint8_t* starts) {
+    dstd::Result<void> add_text(const dstd::Vector<Series>& cols, std::size_t n,
+                                std::int32_t* gid, std::uint8_t* starts) {
+        KeyRefusal refusal;
         for (std::size_t r = 0; r < n; ++r) {
-            std::string key = row_key(cols, static_cast<std::int64_t>(r));
+            dstd::String key =
+                row_key(cols, static_cast<std::int64_t>(r), refusal);
             if (sorted_) {
                 start(!have_last_ || key != last_text_, r, starts);
                 last_text_ = std::move(key);
@@ -438,6 +462,8 @@ class GroupKeys {
                 gid[r] = it->second;
             }
         }
+        if (refusal.refused()) return refusal.error();
+        return {};
     }
 
     bool sorted_;
@@ -448,12 +474,12 @@ class GroupKeys {
     bool last_ok_ = false;
     std::uint64_t last_bits_ = 0;
     Wide last_wide_;
-    std::string last_bytes_;
-    std::string last_text_;
-    ankerl::unordered_dense::map<std::uint64_t, std::int32_t> word_ids_;
-    ankerl::unordered_dense::map<Wide, std::int32_t, WideHash> wide_ids_;
-    StringViewMap<std::int32_t> byte_ids_;
-    ankerl::unordered_dense::map<std::string, std::int32_t> text_ids_;
+    dstd::String last_bytes_;
+    dstd::String last_text_;
+    dstd::HashMap<std::uint64_t, std::int32_t> word_ids_;
+    dstd::HashMap<Wide, std::int32_t, WideHash> wide_ids_;
+    dstd::StringViewMap<std::int32_t> byte_ids_;
+    dstd::HashMap<dstd::String, std::int32_t> text_ids_;
 };
 
 // Runs a GroupTransformCore over a stream. Rows are grouped by a hash of the
@@ -462,8 +488,8 @@ class GroupKeys {
 // number) follows the results.
 class TransformPassCursor : public Cursor {
    public:
-    TransformPassCursor(std::unique_ptr<Cursor> in,
-                        std::vector<std::size_t> keys, bool sorted,
+    TransformPassCursor(dstd::UniquePtr<Cursor> in,
+                        dstd::Vector<std::size_t> keys, bool sorted,
                         bool keep_row, GroupTransformCore core)
         : in_(std::move(in)),
           keys_(std::move(keys)),
@@ -472,32 +498,37 @@ class TransformPassCursor : public Cursor {
           core_(std::move(core)),
           keys_state_(sorted) {}
 
-    coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
+    coro::CoroTask<MorselResult> next(std::int64_t max_rows) override {
         while (true) {
-            auto m = co_await in_->next(max_rows);
-            if (!m) co_return std::nullopt;
+            auto task = in_->next(max_rows);
+            auto m = co_await std::move(task).or_fail();
+            if (!m) co_return MorselResult(dstd::nullopt);
             if (m->rows == 0) continue;
             const auto n = static_cast<std::size_t>(m->rows);
-            std::vector<std::int32_t> gid(n, 0);
-            std::vector<std::uint8_t> starts;
+            dstd::Vector<std::int32_t> gid(n, 0);
+            dstd::Vector<std::uint8_t> starts;
             if (!keys_.empty()) {
                 starts.assign(n, 0);
-                keys_state_.add(key_columns(m->columns, keys_), m->rows,
-                                gid.data(), starts.data());
+                auto grouped =
+                    keys_state_.add(key_columns(m->columns, keys_), m->rows,
+                                    gid.data(), starts.data());
+                if (!grouped) co_return grouped.error();
                 if (!sorted_) starts.clear();
             }
             Morsel out;
             out.rows = m->rows;
-            out.columns = core_.run(m->columns, m->rows, gid.data(),
-                                    starts.empty() ? nullptr : starts.data());
+            auto columns = core_.run(m->columns, m->rows, gid.data(),
+                                     starts.empty() ? nullptr : starts.data());
+            if (!columns) co_return columns.error();
+            out.columns = std::move(*columns);
             if (keep_row_) out.columns.push_back(m->columns.back().share());
-            co_return out;
+            co_return MorselResult(std::move(out));
         }
     }
 
    private:
-    std::unique_ptr<Cursor> in_;
-    std::vector<std::size_t> keys_;
+    dstd::UniquePtr<Cursor> in_;
+    dstd::Vector<std::size_t> keys_;
     bool sorted_;
     bool keep_row_;
     GroupTransformCore core_;
@@ -512,12 +543,12 @@ class TransformPassCursor : public Cursor {
 // sorted back by row, so memory is the budget however many groups there are.
 class NativeTransformCursor : public Cursor {
    public:
-    NativeTransformCursor(std::unique_ptr<Cursor> in,
-                          std::vector<std::string> sch,
-                          std::vector<std::size_t> keys, GroupwiseOp kind,
-                          std::int64_t shift, std::vector<std::size_t> value,
-                          std::vector<TypeId> declared,
-                          std::vector<std::string> out_names,
+    NativeTransformCursor(dstd::UniquePtr<Cursor> in,
+                          dstd::Vector<dstd::String> sch,
+                          dstd::Vector<std::size_t> keys, GroupwiseOp kind,
+                          std::int64_t shift, dstd::Vector<std::size_t> value,
+                          dstd::Vector<TypeId> declared,
+                          dstd::Vector<dstd::String> out_names,
                           std::uint64_t budget)
         : in_(std::move(in)),
           sch_(std::move(sch)),
@@ -529,12 +560,17 @@ class NativeTransformCursor : public Cursor {
           out_names_(std::move(out_names)),
           budget_(budget) {}
 
-    coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
-        if (!tail_) co_await build(max_rows);
-        co_return co_await tail_->next(max_rows);
+    coro::CoroTask<MorselResult> next(std::int64_t max_rows) override {
+        if (!tail_) {
+            auto building = build(max_rows);
+            auto built = co_await std::move(building);
+            if (!built) co_return built.error();
+        }
+        auto task = tail_->next(max_rows);
+        co_return co_await std::move(task);
     }
 
-    std::optional<std::vector<std::string>> out_names() const override {
+    dstd::Optional<dstd::Vector<dstd::String>> out_names() const override {
         return out_names_;
     }
 
@@ -543,12 +579,12 @@ class NativeTransformCursor : public Cursor {
         return GroupTransformCore(kind_, shift_, value_, declared_);
     }
 
-    coro::CoroTask<void> build(std::int64_t max_rows) {
-        const bool bounded = budget_ != NO_SPILL_BUDGET && budget_ > 0;
+    coro::CoroTask<dstd::Result<void>> build(std::int64_t max_rows) {
+        const bool bounded = budget_ != memory::NO_SPILL_BUDGET && budget_ > 0;
         if (!bounded || keys_.empty()) {
-            tail_ = std::make_unique<TransformPassCursor>(std::move(in_), keys_,
-                                                          false, false, core());
-            co_return;
+            tail_ = dstd::make_unique<TransformPassCursor>(
+                std::move(in_), keys_, false, false, core());
+            co_return dstd::Result<void>{};
         }
         // Per-group state: a cell per value column and a counter, and the
         // ring of a shift, doubled for the table around them.
@@ -559,67 +595,79 @@ class NativeTransformCursor : public Cursor {
              static_cast<std::uint64_t>(shift_) * 16 * value_.size() + 48);
         const std::uint64_t cap_groups =
             std::max<std::uint64_t>(1, (budget_ / share::CHUNK) / per_group);
-        spool_ = std::make_shared<spill::Spool>(budget_ / share::SPOOL);
+        spool_ = dstd::make_shared<spill::Spool>(budget_ / share::SPOOL);
         spill::Spool& spool = *spool_;
         GroupKeys groups(false);
         bool too_many = false;
         std::int64_t row = 0;
-        while (auto m = co_await in_->next(max_rows)) {
+        for (;;) {
+            auto task = in_->next(max_rows);
+            auto m = co_await std::move(task).or_fail();
+            if (!m) break;
             if (m->rows == 0) continue;
             if (!too_many && !spool.spilled()) {
-                std::vector<std::int32_t> scratch(
+                dstd::Vector<std::int32_t> scratch(
                     static_cast<std::size_t>(m->rows));
-                groups.add(key_columns(m->columns, keys_), m->rows,
-                           scratch.data(), nullptr);
+                auto grouped = groups.add(key_columns(m->columns, keys_),
+                                          m->rows, scratch.data(), nullptr);
+                if (!grouped) co_return grouped;
                 too_many = groups.groups() > cap_groups;
             }
-            std::vector<std::int64_t> idx(static_cast<std::size_t>(m->rows));
+            dstd::Vector<std::int64_t> idx(static_cast<std::size_t>(m->rows));
             std::iota(idx.begin(), idx.end(), row);
             row += m->rows;
-            std::vector<Series> cols = std::move(m->columns);
+            dstd::Vector<Series> cols = std::move(m->columns);
             cols.push_back(Series::flat_i64(idx.data(), m->rows));
-            spool.add(std::move(cols), m->rows);
+            auto added = spool.add(std::move(cols), m->rows);
+            if (!added) co_return added;
         }
         in_.reset();
         if (!spool.spilled() && !too_many) {
-            tail_ = std::make_unique<TransformPassCursor>(spool.reader(), keys_,
-                                                          false, false, core());
-            co_return;
+            auto reader = spool.reader();
+            if (!reader) co_return reader.error();
+            tail_ = dstd::make_unique<TransformPassCursor>(
+                std::move(*reader), keys_, false, false, core());
+            co_return dstd::Result<void>{};
         }
-        std::vector<std::string> names = sch_;
+        dstd::Vector<dstd::String> names = sch_;
         names.emplace_back(ROW_COLUMN);
-        std::vector<std::string> sort_keys;
+        dstd::Vector<dstd::String> sort_keys;
         for (std::size_t k : keys_) sort_keys.push_back(sch_[k]);
         sort_keys.emplace_back(ROW_COLUMN);
+        auto reader = spool.reader();
+        if (!reader) co_return reader.error();
         auto sorted = make_sort_merge(
-            spool.reader(), names, sort_keys,
-            std::vector<bool>(sort_keys.size(), false), budget_);
-        std::vector<std::string> pass_names = out_names_;
+            std::move(*reader), names, sort_keys,
+            dstd::Vector<bool>(sort_keys.size(), false), budget_);
+        if (!sorted) co_return sorted.error();
+        dstd::Vector<dstd::String> pass_names = out_names_;
         pass_names.emplace_back(ROW_COLUMN);
-        auto pass = std::make_unique<TransformPassCursor>(
-            std::move(sorted), keys_, true, true, core());
+        auto pass = dstd::make_unique<TransformPassCursor>(
+            std::move(*sorted), keys_, true, true, core());
         auto restored = make_sort_merge(std::move(pass), pass_names,
-                                        std::vector<std::string>{ROW_COLUMN},
-                                        std::vector<bool>{false}, budget_);
-        std::vector<std::size_t> pick(out_names_.size());
+                                        dstd::Vector<dstd::String>{ROW_COLUMN},
+                                        dstd::Vector<bool>{false}, budget_);
+        if (!restored) co_return restored.error();
+        dstd::Vector<std::size_t> pick(out_names_.size());
         std::iota(pick.begin(), pick.end(), std::size_t{0});
-        tail_ = std::make_unique<ProjectCursor>(std::move(restored),
-                                                std::move(pick));
+        tail_ = dstd::make_unique<ProjectCursor>(std::move(*restored),
+                                                 std::move(pick));
+        co_return dstd::Result<void>{};
     }
 
     static constexpr const char* ROW_COLUMN = "__dftu_trow__";
 
-    std::unique_ptr<Cursor> in_;
-    std::vector<std::string> sch_;
-    std::vector<std::size_t> keys_;
+    dstd::UniquePtr<Cursor> in_;
+    dstd::Vector<dstd::String> sch_;
+    dstd::Vector<std::size_t> keys_;
     GroupwiseOp kind_;
     std::int64_t shift_;
-    std::vector<std::size_t> value_;
-    std::vector<TypeId> declared_;
-    std::vector<std::string> out_names_;
+    dstd::Vector<std::size_t> value_;
+    dstd::Vector<TypeId> declared_;
+    dstd::Vector<dstd::String> out_names_;
     std::uint64_t budget_;
-    std::shared_ptr<spill::Spool> spool_;
-    std::unique_ptr<Cursor> tail_;
+    dstd::SharedPtr<spill::Spool> spool_;
+    dstd::UniquePtr<Cursor> tail_;
 };
 
 // ---- plan ops (tagged union) ------------------------------------------------
@@ -632,23 +680,28 @@ std::uint64_t native_transform_single_key_rows() {
 
 namespace lazy_internal {
 
-std::unique_ptr<Cursor> make_native_transform(
-    std::unique_ptr<Cursor> in, const std::vector<std::string>& sch,
-    const OwnedFrameOpArgs& args, const std::vector<std::string>& out_names,
-    const std::vector<DataType>& out_types, std::uint64_t budget) {
-    std::vector<std::size_t> keys, value;
-    for (const std::string& name : args.strings_at(1))
-        keys.push_back(
-            static_cast<std::size_t>(require_col(sch, name, "group_by")));
+CursorResult make_native_transform(dstd::UniquePtr<Cursor> in,
+                                   const dstd::Vector<dstd::String>& sch,
+                                   const OwnedFrameOpArgs& args,
+                                   const dstd::Vector<dstd::String>& out_names,
+                                   const dstd::Vector<DataType>& out_types,
+                                   std::uint64_t budget) {
+    dstd::Vector<std::size_t> keys, value;
+    for (const dstd::String& name : args.strings_at(1)) {
+        auto at = require_col(sch, name, "group_by");
+        if (!at) return at.error();
+        keys.push_back(static_cast<std::size_t>(*at));
+    }
     const auto kind = static_cast<GroupwiseOp>(args.i32_at(2));
-    std::vector<TypeId> declared;
+    dstd::Vector<TypeId> declared;
     for (std::size_t i = 0; i < out_names.size(); ++i) {
         declared.push_back(out_types[i].id);
         if (kind == GroupwiseOp::CumCount) continue;
-        value.push_back(static_cast<std::size_t>(
-            require_col(sch, out_names[i], "group_by")));
+        auto at = require_col(sch, out_names[i], "group_by");
+        if (!at) return at.error();
+        value.push_back(static_cast<std::size_t>(*at));
     }
-    return std::make_unique<NativeTransformCursor>(
+    return dstd::make_unique<NativeTransformCursor>(
         std::move(in), sch, std::move(keys), kind, args.i64_at(3),
         std::move(value), std::move(declared), out_names, budget);
 }

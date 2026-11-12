@@ -1,89 +1,94 @@
+// SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/common/str_format.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/json/json.h>
 #include <dftracer/utils/trace/internal/utils.h>
+#include <dftracer/utils/trace/reader/trace_reader.h>
 #include <dftracer/utils/trace/views/view_scan.h>
-#include <dftracer/utils/utilities/reader/trace_reader.h>
 #include <doctest/doctest.h>
+#include <duql/eval_json.h>
+#include <generator_ok.h>
 #include <simdjson.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 
 #include <cstdint>
-#include <fstream>
 #include <random>
-#include <string>
-#include <vector>
 
-namespace views = dftracer::utils::trace::views;
-namespace reader = dftracer::utils::utilities::reader;
-using dftracer::utils::duql::Query;
+using namespace dftracer::utils;
 
 namespace {
 
-const std::vector<std::string> NAMES = {
+const dstd::Vector<dstd::String> NAMES = {
     "read", "write", "open64", "MPI_Allreduce", "a-long-operation-name-xyz"};
-const std::vector<std::string> CATS = {"POSIX", "STDIO", "MPI"};
-const std::vector<std::int64_t> PIDS = {100, 1234, 98765};
-const std::vector<std::string> OPS = {"rd", "wr", "seek"};
+const dstd::Vector<dstd::String> CATS = {"POSIX", "STDIO", "MPI"};
+const dstd::Vector<std::int64_t> PIDS = {100, 1234, 98765};
+const dstd::Vector<dstd::String> OPS = {"rd", "wr", "seek"};
 
 // Optional args that are null, a bool, an empty or one-element array, or
 // absent.
-std::string extra_args(std::mt19937& rng, const char* c, const char* s) {
-    std::string out;
+dstd::String extra_args(std::mt19937& rng, const char* c, const char* s) {
+    dstd::String out;
     switch (rng() % 4) {
         case 0:
-            out += std::string(s) + "\"retry\"" + c + "null";
+            out += dstd::String(s) + "\"retry\"" + c + "null";
             break;
         case 1:
-            out += std::string(s) + "\"retry\"" + c + std::to_string(rng() % 3);
+            out +=
+                dstd::String(s) + "\"retry\"" + c + dstd::to_string(rng() % 3);
             break;
         default:
             break;
     }
     switch (rng() % 4) {
         case 0:
-            out += std::string(s) + "\"tags\"" + c + "[]";
+            out += dstd::String(s) + "\"tags\"" + c + "[]";
             break;
         case 1:
-            out += std::string(s) + "\"tags\"" + c + "[\"x\"]";
+            out += dstd::String(s) + "\"tags\"" + c + "[\"x\"]";
             break;
         case 2:
-            out += std::string(s) + "\"tags\"" + c + "null";
+            out += dstd::String(s) + "\"tags\"" + c + "null";
             break;
         default:
             break;
     }
     if (rng() % 2)
-        out += std::string(s) + "\"ok\"" + c + (rng() % 2 ? "true" : "false");
+        out += dstd::String(s) + "\"ok\"" + c + (rng() % 2 ? "true" : "false");
     return out;
 }
 
 // Data events and metadata records, half of them in spaced JSON, with file
 // names holding '/' (never a needle).
-std::vector<std::string> make_lines(std::mt19937& rng, int n) {
+dstd::Vector<dstd::String> make_lines(std::mt19937& rng, int n) {
     auto pick = [&](const auto& v) { return v[rng() % v.size()]; };
-    std::vector<std::string> out;
+    dstd::Vector<dstd::String> out;
     for (int i = 0; i < n; ++i) {
         const bool spaced = rng() % 2 == 0;
         const char* c = spaced ? ": " : ":";
         const char* s = spaced ? ", " : ",";
-        std::string l;
+        dstd::String l;
         if (i % 50 == 0) {
-            l = std::string("{\"name\"") + c + "\"thread_name\"" + s +
+            l = dstd::String("{\"name\"") + c + "\"thread_name\"" + s +
                 "\"ph\"" + c + "\"M\"" + s + "\"pid\"" + c +
-                std::to_string(pick(PIDS)) + s + "\"args\"" + c + "{\"name\"" +
+                dstd::to_string(pick(PIDS)) + s + "\"args\"" + c + "{\"name\"" +
                 c + "\"" + pick(NAMES) + "\"}}";
         } else {
-            l = std::string("{\"id\"") + c + std::to_string(i) + s +
+            l = dstd::String("{\"id\"") + c + dstd::to_string(i) + s +
                 "\"name\"" + c + "\"" + pick(NAMES) + "\"" + s + "\"cat\"" + c +
                 "\"" + pick(CATS) + "\"" + s + "\"pid\"" + c +
-                std::to_string(pick(PIDS)) + s + "\"tid\"" + c + "1" + s +
-                "\"ts\"" + c + std::to_string(1000 + i) + s + "\"dur\"" + c +
-                std::to_string(rng() % 100) + s + "\"ph\"" + c + "\"X\"" + s +
+                dstd::to_string(pick(PIDS)) + s + "\"tid\"" + c + "1" + s +
+                "\"ts\"" + c + dstd::to_string(1000 + i) + s + "\"dur\"" + c +
+                dstd::to_string(rng() % 100) + s + "\"ph\"" + c + "\"X\"" + s +
                 "\"args\"" + c + "{\"size\"" + c +
-                std::to_string(rng() % 5000) + s + "\"fname\"" + c +
-                "\"/data/file_" + std::to_string(rng() % 4) + "\"" + s +
+                dstd::to_string(rng() % 5000) + s + "\"fname\"" + c +
+                "\"/data/file_" + dstd::to_string(rng() % 4) + "\"" + s +
                 "\"op\"" + c + "\"" + pick(OPS) + "\"" + extra_args(rng, c, s) +
                 "}}";
         }
@@ -92,7 +97,7 @@ std::vector<std::string> make_lines(std::mt19937& rng, int n) {
     return out;
 }
 
-std::string random_leaf(std::mt19937& rng) {
+dstd::String random_leaf(std::mt19937& rng) {
     auto pick = [&](const auto& v) { return v[rng() % v.size()]; };
     switch (rng() % 27) {
         case 22:
@@ -100,14 +105,14 @@ std::string random_leaf(std::mt19937& rng) {
         case 23:
             return "name ~ \"^(read|write)$\"";
         case 24:
-            return "args.fname like \"%file_" + std::to_string(rng() % 4) +
+            return "args.fname like \"%file_" + dstd::to_string(rng() % 4) +
                    "\"";
         case 25:
             return "name ilike \"%READ%\"";
         case 26:
             return "name !~ \"open\"";
         case 13:
-            return "args.size * 2 > " + std::to_string(rng() % 10000);
+            return "args.size * 2 > " + dstd::to_string(rng() % 10000);
         case 14:
             return "exists(args.retry)";
         case 15:
@@ -123,40 +128,40 @@ std::string random_leaf(std::mt19937& rng) {
         case 20:
             return "exists(args.nothing)";
         case 21:
-            return "dur between " + std::to_string(rng() % 50) + " and " +
-                   std::to_string(50 + rng() % 50);
+            return "dur between " + dstd::to_string(rng() % 50) + " and " +
+                   dstd::to_string(50 + rng() % 50);
         case 0:
             return "name == \"" + pick(NAMES) + "\"";
         case 1:
             return "cat == \"" + pick(CATS) + "\"";
         case 2:
-            return "pid == " + std::to_string(pick(PIDS));
+            return "pid == " + dstd::to_string(pick(PIDS));
         case 3:
-            return "args.size == " + std::to_string(rng() % 5000);
+            return "args.size == " + dstd::to_string(rng() % 5000);
         case 4:
-            return "args.size > " + std::to_string(rng() % 5000);
+            return "args.size > " + dstd::to_string(rng() % 5000);
         case 5:
             return "name != \"" + pick(NAMES) + "\"";
         case 6:
             return "cat in [\"" + pick(CATS) + "\", \"" + pick(CATS) + "\"]";
         case 7:
-            return "pid in [" + std::to_string(pick(PIDS)) + ", " +
-                   std::to_string(pick(PIDS)) + "]";
+            return "pid in [" + dstd::to_string(pick(PIDS)) + ", " +
+                   dstd::to_string(pick(PIDS)) + "]";
         case 8:
-            return "args.fname == \"/data/file_" + std::to_string(rng() % 4) +
+            return "args.fname == \"/data/file_" + dstd::to_string(rng() % 4) +
                    "\"";
         case 9:
             return "name like \"%rea%\"";
         case 11:
-            return "ts >= " + std::to_string(1000 + rng() % 3000);
+            return "ts >= " + dstd::to_string(1000 + rng() % 3000);
         case 12:
-            return "dur < " + std::to_string(rng() % 100);
+            return "dur < " + dstd::to_string(rng() % 100);
         default:
             return "args.op == \"" + pick(OPS) + "\"";
     }
 }
 
-std::string random_query(std::mt19937& rng, int depth) {
+dstd::String random_query(std::mt19937& rng, int depth) {
     if (depth == 0 || rng() % 3 == 0) return random_leaf(rng);
     switch (rng() % 3) {
         case 0:
@@ -170,87 +175,103 @@ std::string random_query(std::mt19937& rng, int depth) {
     }
 }
 
-std::uint64_t view_count(const std::string& gz, const Query& q,
-                         bool prefilter) {
-    views::detail::ViewPlan vp;
+// Each member is a scan unit with a fixed stream setup per scan, so the line
+// counts stop a little past four members.
+constexpr std::size_t MEMBER_BYTES = 16 * 1024;
+constexpr int EVENT_LINES = 300;
+constexpr int GENERIC_LINES = 450;
+
+// The 4 MB default buffer would zero-fill per scan for no gain.
+constexpr std::size_t READ_BUFFER_BYTES = MEMBER_BYTES;
+
+struct ViewCounts {
+    std::uint64_t prefiltered = 0;
+    std::uint64_t plain = 0;
+};
+
+ViewCounts view_counts(const dstd::String& gz, const duql::Query& q) {
+    trace::views::detail::ViewPlan vp;
     vp.files.push_back(
-        {gz, dftracer::utils::trace::internal::determine_index_path(gz, "")});
+        {dstd::String(gz),
+         dftracer::utils::trace::internal::determine_index_path(gz, "")});
     vp.query = q;
-    auto vdef = views::detail::make_vdef(vp, false);
-    vdef.prefilter = prefilter;
-    return views::detail::for_each_scanned_batch(
-               vp, vdef, 1, 0,
-               [](std::size_t, const std::vector<std::string_view>&) {})
-        .get()
-        .events_matched;
+    auto vdef = dftu_utils_test::ok(trace::views::detail::make_vdef(vp, false));
+    auto run = [&]() -> dftracer::utils::coro::CoroTask<ViewCounts> {
+        std::uint64_t skipped = 0;
+        auto units = dftu_utils_test::ok(
+            co_await trace::views::detail::gather_units(vp, vdef, skipped));
+        ViewCounts out;
+        for (const bool prefilter : {true, false}) {
+            vdef.prefilter = prefilter;
+            std::uint64_t matched = 0;
+            for (const auto& u : units) {
+                auto sin = trace::views::detail::make_scanner_input(u, vdef,
+                                                                    vdef.query);
+                sin.with_batch_size(READ_BUFFER_BYTES);
+                trace::views::ViewScannerUtility scanner;
+                auto gen = dftu_utils_test::ok_items(scanner(sin));
+                while (auto b = co_await gen.next())
+                    matched += b->events_matched;
+            }
+            (prefilter ? out.prefiltered : out.plain) = matched;
+        }
+        co_return out;
+    };
+    return dftu_utils_test::ok(run().get());
 }
 
-std::size_t reader_count(const std::string& gz, const std::string& text) {
+std::size_t reader_count(dstd::StringView gz, const dstd::String& text) {
     auto run = [&]() -> dftracer::utils::coro::CoroTask<std::size_t> {
-        reader::TraceReader r({.file_path = gz});
-        reader::ReadConfig cfg;
+        trace::reader::TraceReader r({.file_path = dstd::String(gz)});
+        trace::reader::ReadConfig cfg;
         cfg.query = text;
-        auto gen = r.read_json(cfg);
+        cfg.buffer_size = READ_BUFFER_BYTES;
+        auto gen = dftu_utils_test::ok_items(r.read_json(cfg));
         std::size_t n = 0;
         while (auto line = co_await gen.next()) ++n;
         co_return n;
     };
-    return run().get();
+    return dftu_utils_test::ok(run().get());
 }
-
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
-std::int64_t arrow_count(const std::string& gz, const std::string& text) {
-    auto run = [&]() -> dftracer::utils::coro::CoroTask<std::int64_t> {
-        reader::TraceReader r({.file_path = gz});
-        reader::ReadConfig cfg;
-        cfg.query = text;
-        auto gen = r.read_arrow(cfg);
-        std::int64_t n = 0;
-        while (auto b = co_await gen.next()) n += b->num_rows();
-        co_return n;
-    };
-    return run().get();
-}
-#endif
 
 }  // namespace
 
 TEST_CASE("the pre-filter never drops a match") {
     dftu_utils_test::TestEnvironment env(10);
     std::mt19937 rng(20260925);
-    const auto lines = make_lines(rng, 3000);
-    const std::string plain = env.get_dir() + "/fuzz.pfw";
+    const auto lines = make_lines(rng, EVENT_LINES);
+    const dstd::String plain = env.dir() + "/fuzz.pfw";
     {
-        std::ofstream out(plain);
-        for (const auto& l : lines) out << l << "\n";
+        dstd::String out;
+        for (const auto& l : lines) out += common::str_cat(l, "\n");
+        dstd::fs::write_file(dstd::PathView(plain), out).discard();
     }
-    const std::string gz = plain + ".gz";
+    const dstd::String gz = plain + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
-                                                               16 * 1024));
-    fs::remove(plain);
+                                                               MEMBER_BYTES));
+    dstd::fs::remove(plain).discard();
     REQUIRE(dftu_utils_test::build_index(gz));
 
     simdjson::dom::parser parser;
-    std::vector<simdjson::padded_string> padded;
+    dstd::Vector<simdjson::padded_string> padded;
     for (const auto& l : lines) padded.emplace_back(l);
 
     for (int i = 0; i < 300; ++i) {
-        const std::string text = random_query(rng, 3);
+        const dstd::String text = random_query(rng, 3);
         CAPTURE(text);
-        const Query q = dftracer::utils::duql::parse_or_throw(text);
+        const duql::Query q = dftu_utils_test::ok(
+            dftracer::utils::duql::Query::from_string(text));
         std::uint64_t data = 0, all = 0;
         for (std::size_t k = 0; k < lines.size(); ++k) {
             auto root = parser.parse(padded[k]).value();
-            if (!q.evaluate(dftracer::utils::json::JsonValue(root))) continue;
+            if (!eval_json(q, dftracer::utils::json::JsonValue(root))) continue;
             ++all;
-            if (lines[k].find("\"M\"") == std::string::npos) ++data;
+            if (lines[k].find("\"M\"") == dstd::String::npos) ++data;
         }
-        CHECK(view_count(gz, q, true) == data);
-        CHECK(view_count(gz, q, false) == data);
+        const ViewCounts v = view_counts(gz, q);
+        CHECK(v.prefiltered == data);
+        CHECK(v.plain == data);
         CHECK(reader_count(gz, text) == all);
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
-        CHECK(arrow_count(gz, text) == static_cast<std::int64_t>(all));
-#endif
     }
 }
 
@@ -258,71 +279,71 @@ TEST_CASE("the pre-filter never drops a match on generic records") {
     dftu_utils_test::TestEnvironment env(10);
     std::mt19937 rng(7);
     auto pick = [&](const auto& v) { return v[rng() % v.size()]; };
-    std::vector<std::string> lines;
-    for (int i = 0; i < 3000; ++i) {
+    dstd::Vector<dstd::String> lines;
+    for (int i = 0; i < GENERIC_LINES; ++i) {
         const char* c = rng() % 2 ? ": " : ":";
         const char* sep = rng() % 2 ? ", " : ",";
-        lines.push_back(std::string("{\"op\"") + c + "\"" + pick(NAMES) +
-                        "\",\"lat\"" + c + std::to_string(rng() % 50) +
-                        ",\"io\"" + c + "{\"off\"" + c +
-                        std::to_string(pick(PIDS)) + "},\"tags\"" + c + "[\"" +
-                        pick(NAMES) + "\"" + sep + "\"" + pick(NAMES) +
-                        "\"],\"sizes\"" + c + "[" + std::to_string(rng() % 50) +
-                        sep + std::to_string(pick(PIDS)) + "]}");
+        lines.push_back(
+            dstd::String("{\"op\"") + c + "\"" + pick(NAMES) + "\",\"lat\"" +
+            c + dstd::to_string(rng() % 50) + ",\"io\"" + c + "{\"off\"" + c +
+            dstd::to_string(pick(PIDS)) + "},\"tags\"" + c + "[\"" +
+            pick(NAMES) + "\"" + sep + "\"" + pick(NAMES) + "\"],\"sizes\"" +
+            c + "[" + dstd::to_string(rng() % 50) + sep +
+            dstd::to_string(pick(PIDS)) + "]}");
     }
-    const std::string plain = env.get_dir() + "/fuzz.ndjson";
+    const dstd::String plain = env.dir() + "/fuzz.ndjson";
     {
-        std::ofstream out(plain);
-        for (const auto& l : lines) out << l << "\n";
+        dstd::String out;
+        for (const auto& l : lines) out += common::str_cat(l, "\n");
+        dstd::fs::write_file(dstd::PathView(plain), out).discard();
     }
-    const std::string gz = plain + ".gz";
+    const dstd::String gz = plain + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
-                                                               16 * 1024));
-    fs::remove(plain);
+                                                               MEMBER_BYTES));
+    dstd::fs::remove(plain).discard();
     REQUIRE(dftu_utils_test::build_index(gz));
 
-    auto leaf = [&]() -> std::string {
+    auto leaf = [&]() -> dstd::String {
         switch (rng() % 9) {
             case 6:
                 return "any(tags) == \"" + pick(NAMES) + "\"";
             case 7:
-                return "any(sizes) == " + std::to_string(pick(PIDS));
+                return "any(sizes) == " + dstd::to_string(pick(PIDS));
             case 8:
-                return "any(sizes) > " + std::to_string(rng() % 50);
+                return "any(sizes) > " + dstd::to_string(rng() % 50);
             case 4:
-                return "lat >= " + std::to_string(rng() % 50);
+                return "lat >= " + dstd::to_string(rng() % 50);
             case 5:
-                return "io.off < " + std::to_string(pick(PIDS));
+                return "io.off < " + dstd::to_string(pick(PIDS));
             case 0:
                 return "op == \"" + pick(NAMES) + "\"";
             case 1:
-                return "io.off == " + std::to_string(pick(PIDS));
+                return "io.off == " + dstd::to_string(pick(PIDS));
             case 2:
-                return "lat == " + std::to_string(rng() % 50);
+                return "lat == " + dstd::to_string(rng() % 50);
             default:
                 return "op in [\"" + pick(NAMES) + "\", \"" + pick(NAMES) +
                        "\"]";
         }
     };
     simdjson::dom::parser parser;
-    std::vector<simdjson::padded_string> padded;
+    dstd::Vector<simdjson::padded_string> padded;
     for (const auto& l : lines) padded.emplace_back(l);
     for (int i = 0; i < 100; ++i) {
-        const std::string text =
+        const dstd::String text =
             rng() % 2 ? leaf() : "(" + leaf() + ") and (" + leaf() + ")";
         CAPTURE(text);
-        const Query q = dftracer::utils::duql::parse_or_throw(text);
+        const duql::Query q = dftu_utils_test::ok(
+            dftracer::utils::duql::Query::from_string(text));
         std::uint64_t all = 0;
         for (auto& p : padded)
-            all += q.evaluate(dftracer::utils::json::JsonValue(
-                       parser.parse(p).value()))
+            all += eval_json(q, dftracer::utils::json::JsonValue(
+                                    parser.parse(p).value()))
                        ? 1
                        : 0;
-        CHECK(view_count(gz, q, true) == all);
-        CHECK(view_count(gz, q, false) == all);
+        const ViewCounts v = view_counts(gz, q);
+        CHECK(v.prefiltered == all);
+        CHECK(v.plain == all);
         CHECK(reader_count(gz, text) == all);
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
-        CHECK(arrow_count(gz, text) == static_cast<std::int64_t>(all));
-#endif
     }
 }

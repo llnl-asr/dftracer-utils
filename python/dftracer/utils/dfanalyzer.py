@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Helpers bridging the C++ aggregation index to dfanalyzer.
 
 These were previously vendored inside dfanalyzer; they belong here since they
@@ -12,6 +13,7 @@ freezes the set so a rename or removal is caught here. Everything else
 
 from __future__ import annotations
 
+import fnmatch
 import glob
 import json
 import os
@@ -40,14 +42,13 @@ from .dask import (
     DaskAggregatedTraceViewer,
     distributed_index,
     register_auto_thread_plugin,
-    resolve_local_staging,
 )
-from .dftracer_utils_ext import TRACE_FILE_PATTERNS
+from .dftracer_utils_ext import INPUT_FILE_PATTERNS
 from .indexer import AggregationConfig, _open_readonly_indexer
 
 if TYPE_CHECKING:
-    import dask.dataframe as dd  # ty: ignore[unresolved-import]
-    from dask.distributed import Client  # ty: ignore[unresolved-import]
+    import dask.dataframe as dd  # ty: ignore[import-not-found]
+    from dask.distributed import Client  # ty: ignore[import-not-found]
 
     from .dask import DaskTraceViewer
     from .trace_viewer import TraceViewer
@@ -190,7 +191,10 @@ def _typed_event_frame(
     if "hhash" in df.columns:
         out["host_hash"] = df["hhash"].astype("string")
     if {"pid", "tid"}.issubset(df.columns):
-        host = df["host_name"].astype("string") if "host_name" in df.columns else pd.NA
+        if "host_name" in df.columns:
+            host = df["host_name"].astype("string")
+        else:
+            host = pd.Series(pd.NA, index=df.index, dtype="string")
         if "hhash" in df.columns:
             host = host.mask(host.isna() | (host == ""), df["hhash"].astype("string"))
         host = host.fillna("unknown").replace("", "unknown")
@@ -477,7 +481,11 @@ def resolve_trace_inputs(
     """
     if not os.path.isdir(trace_path):
         matched = glob.glob(trace_path) if "*" in trace_path else [trace_path]
-        files = [f for f in matched if f.endswith(TRACE_FILE_PATTERNS)]
+        files = [
+            f
+            for f in matched
+            if any(fnmatch.fnmatchcase(os.path.basename(f), p) for p in INPUT_FILE_PATTERNS)
+        ]
         return "", files
 
     manifest_path = os.path.join(trace_path, "manifest.json")
@@ -505,8 +513,8 @@ def resolve_trace_inputs(
     files: List[str] = []
     for g in selected:
         subdir = os.path.join(trace_path, group_map[g])
-        for suffix in TRACE_FILE_PATTERNS:
-            files.extend(glob.glob(os.path.join(subdir, "*" + suffix)))
+        for pattern in INPUT_FILE_PATTERNS:
+            files.extend(glob.glob(os.path.join(subdir, pattern)))
     return "", files
 
 
@@ -888,17 +896,15 @@ def build_index_distributed(
     directory="",
     files=None,
     index_path="",
-    local_staging="",
-    shared_staging="",
     client=None,
     aggregation=None,
     progress: Optional[Callable[[int, int, str], None]] = None,
 ):
     """Build the dftracer index across a Dask cluster.
 
-    Workers build per-CF SSTs under `local_staging`, move them to
-    `shared_staging` for the coordinator to bulk-ingest. When `aggregation` is
-    given, the AGGREGATION + SYSTEM_METRICS tiers are filled in parallel.
+    Workers write their files straight into the index. Every build fills in the
+    aggregation tier; `aggregation` customizes its config and defaults to the
+    standard one.
 
     If `client` is None the active Dask client is looked up; if none exists
     (or `dask.distributed` is not installed), tasks run inline serially.
@@ -917,8 +923,6 @@ def build_index_distributed(
         directory=directory,
         files=files,
         index_path=index_path,
-        local_staging=local_staging,
-        shared_staging=shared_staging,
         client=client,
         aggregation_config=aggregation,
         progress=progress,
@@ -953,15 +957,10 @@ def ensure_index(
     if not directory and not files:
         return
     index_path = index_path_for(trace_path)
-    local_staging = (
-        resolve_local_staging(client) if client is not None else os.path.dirname(index_path)
-    )
     build_index_distributed(
         directory=directory,
         files=files,
         index_path=index_path,
-        local_staging=local_staging,
-        shared_staging=os.path.dirname(index_path),
         client=client,
         aggregation=AggregationConfig(
             time_interval_ms=time_interval_ms, group_by_file=group_by_file

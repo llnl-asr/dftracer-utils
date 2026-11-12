@@ -1,15 +1,16 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_PYTHON_PY_RUNTIME_MIXIN_H
 #define DFTRACER_UTILS_PYTHON_PY_RUNTIME_MIXIN_H
 
 #include <Python.h>
-#include <dftracer/utils/core/common/error.h>
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/python/py_errors.h>
 #include <dftracer/utils/python/runtime.h>
 
 #include <exception>
-#include <memory>
 #include <stdexcept>
-#include <string>
 
 // Shared implementation for utility objects whose layout is exactly:
 //     typedef struct { PyObject_HEAD PyObject *runtime_obj; } XObject;
@@ -63,17 +64,17 @@ int bind_runtime_arg(T *self, PyObject *runtime_arg) {
 // The Runtime a `runtime=` argument names: a Runtime, an object exposing a
 // `_native` Runtime, or None/NULL for the default. Null with a Python error set
 // on any other argument.
-inline std::shared_ptr<dftracer::utils::Runtime> runtime_from_arg(
-    PyObject *runtime_arg) {
+inline dftracer::utils::dstd::SharedPtr<dftracer::utils::Runtime>
+runtime_from_arg(PyObject *runtime_arg) {
     if (!runtime_arg || runtime_arg == Py_None)
-        return std::shared_ptr<dftracer::utils::Runtime>(
-            std::shared_ptr<void>(),
+        return dftracer::utils::dstd::SharedPtr<dftracer::utils::Runtime>(
+            dftracer::utils::dstd::SharedPtr<void>(),
             dftracer::utils::python::get_default_runtime());
     if (PyObject_TypeCheck(runtime_arg, &RuntimeType))
         return ((RuntimeObject *)runtime_arg)->runtime;
     PyObject *native = PyObject_GetAttrString(runtime_arg, "_native");
     if (native && PyObject_TypeCheck(native, &RuntimeType)) {
-        std::shared_ptr<dftracer::utils::Runtime> rt =
+        dftracer::utils::dstd::SharedPtr<dftracer::utils::Runtime> rt =
             ((RuntimeObject *)native)->runtime;
         Py_DECREF(native);
         return rt;
@@ -101,14 +102,14 @@ int runtime_backed_init(T *self, PyObject *args, PyObject *kwds) {
 template <typename F>
 bool run_blocking(F &&body) {
     bool failed = false;
-    std::string error_msg;
+    dftracer::utils::dstd::String error_msg;
     PyObject *exc_type = nullptr;  // pointer read only; no Python API off-GIL
     Py_BEGIN_ALLOW_THREADS try {
         body();
-    } catch (const dftracer::utils::DFTUtilsException &e) {
+    } catch (const dftracer::utils::python::PyErrorException &e) {
         failed = true;
         error_msg = e.what();
-        exc_type = dftracer::utils::python::py_error_type_for(e);
+        exc_type = dftracer::utils::python::py_error_type_for(e.error());
     } catch (const std::invalid_argument &e) {
         failed = true;
         error_msg = e.what();

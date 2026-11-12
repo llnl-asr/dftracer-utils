@@ -1,30 +1,40 @@
+// SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/error.h>
-#include <dftracer/utils/index/indexer.h>
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/function.h>
+#include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/trace/index/indexer.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
+#include <testing_utilities.h>
+#include <trace/views/test_view_common.h>
 
 #include <algorithm>
 #include <cstdlib>
 #include <fstream>
-#include <functional>
-#include <set>
 #include <string>
-#include <vector>
 
-#include "test_view_common.h"
-
-namespace df = dftracer::utils::dataframe;
+using namespace dftracer::utils;
+using namespace dftracer::utils::trace::internal;
+using namespace dftracer::utils::trace::views;
+using namespace dftu_utils_test;
+using namespace test_view_common;
 
 namespace {
 
 struct NullSink : ExportSink {
-    void write(std::string_view) override {}
+    void write(dstd::StringView) override {}
 };
 
 // Sets an environment variable for one scope.
 struct ScopedEnv {
-    std::string name;
-    ScopedEnv(std::string n, const std::string& v) : name(std::move(n)) {
+    dstd::String name;
+    ScopedEnv(dstd::String n, const dstd::String& v) : name(std::move(n)) {
         setenv(name.c_str(), v.c_str(), 1);
     }
     ~ScopedEnv() { unsetenv(name.c_str()); }
@@ -32,95 +42,128 @@ struct ScopedEnv {
 
 // `lines` as an indexed NDJSON trace; `member_bytes` > 0 frames it into
 // gzip members of about that size, so the index holds several chunks.
-std::string write_records(TestEnvironment& env, const std::string& name,
-                          const std::vector<std::string>& lines,
-                          std::size_t member_bytes = 0,
-                          std::size_t checkpoint_size = 0,
-                          std::vector<std::string> extensions = {}) {
-    const std::string plain = env.get_dir() + "/" + name + ".ndjson";
+dstd::String write_records(TestEnvironment& env, const dstd::String& name,
+                           const dstd::Vector<dstd::String>& lines,
+                           std::size_t member_bytes = 0,
+                           std::size_t checkpoint_size = 0,
+                           dstd::Vector<dstd::String> extensions = {}) {
+    const dstd::String plain = env.dir() + "/" + name + ".ndjson";
     {
-        std::ofstream o(plain);
+        dftu_utils_test::FileOut o(plain);
         for (const auto& l : lines) o << l << "\n";
     }
-    const std::string gz = plain + ".gz";
+    const dstd::String gz = plain + ".gz";
     if (member_bytes)
         REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(
             plain, gz, member_bytes));
     else
         dftu_utils_test::compress_file_to_gzip(plain, gz);
-    fs::remove(plain);
-    dftracer::utils::index::IndexerOptions o;
+    dstd::fs::remove(plain).discard();
+    dftracer::utils::trace::index::IndexerOptions o;
     if (checkpoint_size) o.checkpoint_size = checkpoint_size;
-    if (!extensions.empty()) o.extensions = std::move(extensions);
-    dftracer::utils::index::Indexer::open({gz}, o).build();
+    if (!extensions.empty()) {
+        o.extensions.clear();
+        for (const auto& extension : extensions)
+            o.extensions.emplace_back(extension);
+    }
+    dftu_utils_test::ok(
+        dftu_utils_test::ok(dftracer::utils::trace::index::Indexer::open(
+                                {dstd::String(dstd::StringView(gz))}, o))
+            .build());
     return gz;
 }
 
-View view_of(const std::string& gz) {
-    return View::from_file(gz, determine_index_path(gz, ""));
+View view_of(const dstd::String& gz) {
+    return View::from_file(
+        dstd::String(gz),
+        dstd::String(dstd::String(determine_index_path(gz, ""))));
 }
 
-df::DataFrame frame(const View& v) {
-    df::DataFrame f = run(v.lazy().collect());
+dataframe::DataFrame frame(const View& v) {
+    dataframe::DataFrame f = run(v.lazy().collect());
     for (auto& c : f.columns)
         if (!c.is_flat()) c = c.materialize();
     return f;
 }
 
 // Row `r` of column `name` as text: `null`, a string, or a number.
-std::string cell(const df::DataFrame& f, std::int64_t r,
-                 std::string_view name) {
+dstd::String cell(const dataframe::DataFrame& f, std::int64_t r,
+                  dstd::StringView name) {
     const auto i = bcol(f, name);
     REQUIRE(i >= 0);
     const auto& c = f.columns[static_cast<std::size_t>(i)];
     if (c.is_null(r)) return "null";
-    if (c.type() == df::TypeId::String) return bstr(f, r, name);
+    if (c.type() == dataframe::TypeId::String) return bstr(f, r, name);
     const double d = bnum(f, r, name);
     if (d == static_cast<double>(static_cast<long long>(d)))
-        return std::to_string(static_cast<long long>(d));
-    return std::to_string(d);
+        return dstd::to_string(static_cast<long long>(d));
+    return dstd::to_string(d);
 }
 
-std::vector<std::string> column(const df::DataFrame& f, std::string_view name) {
-    std::vector<std::string> out;
+dstd::Vector<dstd::String> column(const dataframe::DataFrame& f,
+                                  dstd::StringView name) {
+    dstd::Vector<dstd::String> out;
     for (std::int64_t r = 0; r < f.num_rows(); ++r)
         out.push_back(cell(f, r, name));
     return out;
 }
 
-std::vector<std::string> sorted(std::vector<std::string> v) {
+dstd::Vector<dstd::String> sorted(dstd::Vector<dstd::String> v) {
     std::sort(v.begin(), v.end());
     return v;
 }
 
-std::string error_of(const std::function<void()>& fn) {
+// The message of the error `fn` throws or the View, plan or result it returns
+// kept; empty when there is none.
+template <typename Fn>
+dstd::String error_of(Fn&& fn) {
+    if constexpr (std::is_void_v<std::invoke_result_t<Fn&>>) {
+        try {
+            fn();
+        } catch (const std::exception& e) {
+            return e.what();
+        }
+        return {};
+    } else {
+        const auto status = test_view_common::status_of(fn());
+        if (status.has_value()) return {};
+        return dstd::String(status.error().message());
+    }
+}
+
+// The message of the error a view fails with, from building it or from running
+// it; empty when it does not fail.
+dstd::String error_of_frame(const dstd::Function<View()>& make) {
     try {
-        fn();
+        const auto result = dftracer::utils::default_runtime()
+                                .submit(make().lazy().collect())
+                                .get();
+        if (!result.has_value()) return result.error().c_str();
     } catch (const std::exception& e) {
         return e.what();
     }
     return {};
 }
 
-bool has(const std::string& text, std::initializer_list<const char*> parts) {
+bool has(dstd::StringView text, std::initializer_list<const char*> parts) {
     for (const char* p : parts)
-        if (text.find(p) == std::string::npos) {
-            MESSAGE(text);
+        if (text.find(p) == dstd::StringView::npos) {
+            MESSAGE(dstd::String(text));
             return false;
         }
     return true;
 }
 
 // Runs 1 and 2, then events of runs 1, 2 and 3 in order.
-std::vector<std::string> runs_and_events() {
-    std::vector<std::string> out = {
+dstd::Vector<dstd::String> runs_and_events() {
+    dstd::Vector<dstd::String> out = {
         R"({"type":"run","run":1,"app":"laghos"})",
         R"({"type":"run","run":2,"app":"amg"})",
     };
     for (int i = 0; i < 9; ++i)
-        out.push_back(R"({"type":"ev","i":)" + std::to_string(i) +
-                      R"(,"run":)" + std::to_string(i % 3 + 1) + R"(,"dur":)" +
-                      std::to_string(10 * (i + 1)) + "}");
+        out.push_back(R"({"type":"ev","i":)" + dstd::to_string(i) +
+                      R"(,"run":)" + dstd::to_string(i % 3 + 1) + R"(,"dur":)" +
+                      dstd::to_string(10 * (i + 1)) + "}");
     return out;
 }
 
@@ -129,9 +172,9 @@ std::vector<std::string> runs_and_events() {
 TEST_SUITE("View duql joins") {
     TEST_CASE("a let reads data unless it says from all") {
         TestEnvironment env(10);
-        const std::string pfw = env.get_dir() + "/meta.pfw";
+        const dstd::String pfw = env.dir() + "/meta.pfw";
         {
-            std::ofstream o(pfw);
+            dftu_utils_test::FileOut o(pfw);
             for (int i = 0; i < 3; ++i)
                 o << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
                   << 100 * (i + 1) << R"(,"dur":5,"args":{}})" << "\n";
@@ -139,9 +182,9 @@ TEST_SUITE("View duql joins") {
                 o << R"({"ph":"M","name":"FH","pid":1,"tid":1,"args":{"name":"/f)"
                   << i << R"(","value":")" << i << R"("}})" << "\n";
         }
-        const std::string gz = pfw + ".gz";
+        const dstd::String gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        fs::remove(pfw);
+        dstd::fs::remove(pfw).discard();
         const View v = view_of(gz);
         const auto f = frame(v.duql(
             R"(let fh = from all | where ph == "M" and name == "FH"; from fh | agg { n = count() })"));
@@ -155,18 +198,18 @@ TEST_SUITE("View duql joins") {
     }
 
     TEST_CASE("a correlated sub-query on a trace with no index yet") {
-        const std::vector<std::string> outers = {
+        const dstd::Vector<dstd::String> outers = {
             "", "ph == \"X\" and ", "cat == \"POSIX\" and ", "pid == 1 and "};
         for (const auto& outer : outers) {
             CAPTURE(outer);
             TestEnvironment env(10);
-            const std::string pfw = env.get_dir() + "/fresh.pfw";
+            const dstd::String pfw = env.dir() + "/fresh.pfw";
             double sum[2] = {0, 0};
             int cnt[2] = {0, 0};
-            std::vector<int> name_of;
-            std::vector<int> dur_of;
+            dstd::Vector<int> name_of;
+            dstd::Vector<int> dur_of;
             {
-                std::ofstream o(pfw);
+                dftu_utils_test::FileOut o(pfw);
                 for (int i = 0; i < 60; ++i) {
                     const int k = (i * 7 + i / 3) % 2;
                     const int dur = (i * 37) % 101;
@@ -179,15 +222,17 @@ TEST_SUITE("View duql joins") {
                       << i << R"(,"dur":)" << dur << R"(,"args":{}})" << "\n";
                 }
             }
-            const std::string gz = pfw + ".gz";
+            const dstd::String gz = pfw + ".gz";
             dftu_utils_test::compress_file_to_gzip(pfw, gz);
-            fs::remove(pfw);
-            REQUIRE_FALSE(fs::exists(determine_index_path(gz, "")));
-            std::vector<std::string> want;
+            dstd::fs::remove(pfw).discard();
+            REQUIRE_FALSE(
+                dstd::fs::exists(dstd::String(determine_index_path(gz, "")))
+                    .value());
+            dstd::Vector<dstd::String> want;
             for (int i = 0; i < 60; ++i) {
                 const auto k = static_cast<std::size_t>(name_of[i]);
                 if (dur_of[i] > sum[k] / cnt[k])
-                    want.push_back(std::to_string(i));
+                    want.push_back(dstd::to_string(i));
             }
             REQUIRE_FALSE(want.empty());
             const auto f = frame(view_of(gz).duql(
@@ -204,22 +249,23 @@ TEST_SUITE("View duql joins") {
     TEST_CASE("unknown names, self and forward references fail to compile") {
         TestEnvironment env(10);
         const View v = view_of(write_records(env, "r", runs_and_events()));
-        CHECK(has(error_of([&] { (void)v.duql("from runs | take 1"); }),
+        CHECK(has(error_of([&] { return v.duql("from runs | take 1"); }),
                   {"runs", "not a let or a row set"}));
-        CHECK(has(error_of([&] { (void)v.duql("let a = from a; from a"); }),
+        CHECK(has(error_of([&] { return v.duql("let a = from a; from a"); }),
                   {"'a'", "itself"}));
         CHECK(has(error_of([&] {
-                      (void)v.duql(
+                      return v.duql(
                           "let a = from b; let b = where x > 1; from a");
                   }),
                   {"'b'", "declared after"}));
-        CHECK(has(error_of([&] { (void)v.duql("where run -> nope.app == 1"); }),
-                  {"nope", "not a let or a row set"}));
+        CHECK(
+            has(error_of([&] { return v.duql("where run -> nope.app == 1"); }),
+                {"nope", "not a let or a row set"}));
         CHECK(has(
-            error_of([&] { (void)v.duql("def f(a) = a; where f(1, 2) > 0"); }),
+            error_of([&] { return v.duql("def f(a) = a; where f(1, 2) > 0"); }),
             {"'f'", "argument"}));
         CHECK(has(error_of([&] {
-                      (void)v.duql(
+                      return v.duql(
                           "where dur > (from data | where ts < ^.ts + ts | "
                           "agg { m = max(dur) })");
                   }),
@@ -228,20 +274,20 @@ TEST_SUITE("View duql joins") {
 
     TEST_CASE("a semi-join equals the two-step query") {
         TestEnvironment env(10);
-        std::vector<std::string> lines;
+        dstd::Vector<dstd::String> lines;
         for (int i = 0; i < 200; ++i)
-            lines.push_back(R"({"i":)" + std::to_string(i) + R"(,"name":"n)" +
-                            std::to_string(i % 17) + R"(","dur":)" +
-                            std::to_string((i * 37) % 101) + "}");
+            lines.push_back(R"({"i":)" + dstd::to_string(i) + R"(,"name":"n)" +
+                            dstd::to_string(i % 17) + R"(","dur":)" +
+                            dstd::to_string((i * 37) % 101) + "}");
         const View v = view_of(write_records(env, "s", lines, 1024));
         const auto got = frame(
             v.duql("where name in (from data | where dur > 90 | select name)"));
         const auto names = frame(v.duql("where dur > 90 | select name"));
-        std::set<std::string> keys;
+        dstd::Set<dstd::String> keys;
         for (std::int64_t r = 0; r < names.num_rows(); ++r)
             keys.insert(bstr(names, r, "name"));
         REQUIRE(!keys.empty());
-        std::string list;
+        dstd::String list;
         for (const auto& k : keys)
             list += (list.empty() ? "" : ", ") + ("\"" + k + "\"");
         const auto want = frame(v.duql("where name in [" + list + "]"));
@@ -261,7 +307,7 @@ TEST_SUITE("View duql joins") {
             write_records(env, "k", {R"({"k":1})", R"({"k":2})", R"({})"}));
         const auto f = frame(
             v.duql("where k not in (from data | where k == 1 | select k)"));
-        CHECK(column(f, "k") == std::vector<std::string>{"2"});
+        CHECK(column(f, "k") == dstd::Vector<dstd::String>{"2"});
         CHECK(frame(v.duql("where k in (from data | where k == 1 | select k)"))
                   .num_rows() == 1);
     }
@@ -288,54 +334,64 @@ TEST_SUITE("View duql joins") {
         TestEnvironment env(10);
         const View v = view_of(write_records(env, "w", runs_and_events()));
         CHECK(has(error_of([&] {
-                      (void)v.duql(
+                      return v.duql(
                           "where run in (from data | select run, app)");
                   }),
                   {"2 columns", "compares 1"}));
         const auto t = frame(v.duql(
             "where type == \"ev\" and (run, i) in (from data | where i < 3 | "
             "select run, i)"));
-        CHECK(column(t, "i") == std::vector<std::string>{"0", "1", "2"});
+        CHECK(column(t, "i") == dstd::Vector<dstd::String>{"0", "1", "2"});
     }
 
     TEST_CASE("an arrow in a filter, under not, and with several matches") {
         TestEnvironment env(10);
         const View v = view_of(write_records(env, "a", runs_and_events()));
-        const std::string let = "let runs = where type == \"run\"; ";
+        const dstd::String let = "let runs = where type == \"run\"; ";
         const auto f = frame(v.duql(
             let + "where type == \"ev\" and run -> runs.app == \"laghos\""));
-        CHECK(column(f, "i") == std::vector<std::string>{"0", "3", "6"});
+        CHECK(column(f, "i") == dstd::Vector<dstd::String>{"0", "3", "6"});
 
         // Joined by hand: run 1 is laghos, run 2 amg, run 3 has no row.
         const auto n = frame(v.duql(
             let +
             "where type == \"ev\" and not (run -> runs.app == \"laghos\")"));
-        CHECK(column(n, "i") == std::vector<std::string>{"1", "4", "7"});
+        CHECK(column(n, "i") == dstd::Vector<dstd::String>{"1", "4", "7"});
         const auto o = frame(v.duql(
             let +
             "where type == \"ev\" and (run -> runs.app == \"amg\" or i == 2)"));
-        CHECK(column(o, "i") == std::vector<std::string>{"1", "2", "4", "7"});
+        CHECK(column(o, "i") == dstd::Vector<dstd::String>{"1", "2", "4", "7"});
 
         const auto d =
             frame(v.duql(
                 let + "where type == \"ev\" | derive app = run -> runs.app | "
                       "select i, app"));
-        CHECK(column(d, "app") ==
-              std::vector<std::string>{"laghos", "amg", "null", "laghos", "amg",
-                                       "null", "laghos", "amg", "null"});
+        CHECK(column(d, "app") == dstd::Vector<dstd::String>{
+                                      "laghos", "amg", "null", "laghos", "amg",
+                                      "null", "laghos", "amg", "null"});
 
         auto lines = runs_and_events();
         lines.push_back(R"({"type":"run","run":1,"app":"amg"})");
         const View dup = view_of(write_records(env, "dup", lines));
-        CHECK(has(error_of([&] {
-                      (void)frame(
-                          dup.duql(let + "derive app = run -> runs.app"));
+        CHECK(has(error_of_frame([&] {
+                      return dup.duql(let + "derive app = run -> runs.app");
                   }),
                   {"'runs'", "key 1"}));
+        CHECK(has(error_of_frame([&] {
+                      return dup.duql(
+                          let +
+                          "where type == \"ev\" and ((run -> runs.app) "
+                          "?? \"\") == \"amg\"");
+                  }),
+                  {"'runs'", "key 1"}));
+        CHECK(has(dftu_utils_test::ok(dup.explain_duql(
+                      let + "where type == \"ev\" and ((run -> "
+                            "runs.app) ?? \"\") == \"amg\"")),
+                  {"scan filter:", "(pushed)"}));
         const auto any = frame(dup.duql(
             let + "where type == \"ev\" and run -> runs.app == \"amg\""));
         CHECK(column(any, "i") ==
-              std::vector<std::string>{"0", "1", "3", "4", "6", "7"});
+              dstd::Vector<dstd::String>{"0", "1", "3", "4", "6", "7"});
     }
 
     TEST_CASE("arrow forms: a named key, a tuple and a chain") {
@@ -346,24 +402,24 @@ TEST_SUITE("View duql joins") {
                            R"({"type":"sys","sys":"x","cpu":"epyc"})",
                            R"({"type":"ev","run":1,"i":0})",
                            R"({"type":"ev","run":2,"i":1})"}));
-        const std::string lets =
+        const dstd::String lets =
             "let runs = where type == \"run\"; let systems = where type == "
             "\"sys\"; ";
         const auto a = frame(
             v.duql(lets +
                    "where type == \"ev\" | derive app = run -> runs(rid).app | "
                    "select i, app"));
-        CHECK(column(a, "app") == std::vector<std::string>{"laghos", "null"});
+        CHECK(column(a, "app") == dstd::Vector<dstd::String>{"laghos", "null"});
         const auto c = frame(v.duql(
             lets +
             "where type == \"ev\" | derive cpu = run -> runs(rid).sys -> "
             "systems.cpu | select i, cpu"));
-        CHECK(column(c, "cpu") == std::vector<std::string>{"epyc", "null"});
+        CHECK(column(c, "cpu") == dstd::Vector<dstd::String>{"epyc", "null"});
         const auto t = frame(v.duql(
             lets +
             "where type == \"run\" | derive app = (rid, sys) -> runs.app "
             "| select app"));
-        CHECK(column(t, "app") == std::vector<std::string>{"laghos"});
+        CHECK(column(t, "app") == dstd::Vector<dstd::String>{"laghos"});
     }
 
     TEST_CASE("a scalar sub-query") {
@@ -376,16 +432,16 @@ TEST_SUITE("View duql joins") {
         for (std::int64_t r = 0; r < f.num_rows(); ++r)
             total += bnum(f, r, "share");
         CHECK(total == doctest::Approx(1.0));
-        CHECK(has(error_of([&] {
-                      (void)frame(v.duql(
+        CHECK(has(error_of_frame([&] {
+                      return v.duql(
                           "derive x = (from data | where type == \"ev\" | "
-                          "select dur)"));
+                          "select dur)");
                   }),
                   {"__sub_0", "one row"}));
         const auto none = frame(v.duql(
             "where type == \"run\" | derive x = (from data | where type == "
             "\"none\" | agg { m = max(dur) }) | select x"));
-        CHECK(column(none, "x") == std::vector<std::string>{"null", "null"});
+        CHECK(column(none, "x") == dstd::Vector<dstd::String>{"null", "null"});
     }
 
     TEST_CASE("lookup attaches columns and into gathers every match") {
@@ -397,41 +453,41 @@ TEST_SUITE("View duql joins") {
         const auto f = frame(v.duql(
             "let runs = where type == \"run\" | select run, app; where type == "
             "\"ev\" | lookup runs on run | select i, app"));
-        CHECK(column(f, "i") == std::vector<std::string>{"0", "1", "2", "3",
-                                                         "4", "5", "6", "7",
-                                                         "8"});
-        CHECK(column(f, "app") ==
-              std::vector<std::string>{"laghos", "amg", "null", "laghos", "amg",
-                                       "null", "laghos", "amg", "null"});
+        CHECK(column(f, "i") == dstd::Vector<dstd::String>{"0", "1", "2", "3",
+                                                           "4", "5", "6", "7",
+                                                           "8"});
+        CHECK(column(f, "app") == dstd::Vector<dstd::String>{
+                                      "laghos", "amg", "null", "laghos", "amg",
+                                      "null", "laghos", "amg", "null"});
 
         const auto e = frame(v.duql(
             "let hosts = where type == \"host\" | select run, host; where type "
             "== \"ev\" and run == 1 | lookup hosts on run into hs | expand hs "
             "| select i, hs.host"));
         CHECK(column(e, "i") ==
-              std::vector<std::string>{"0", "0", "3", "3", "6", "6"});
+              dstd::Vector<dstd::String>{"0", "0", "3", "3", "6", "6"});
         CHECK(column(e, "hs.host") ==
-              std::vector<std::string>{"a", "b", "a", "b", "a", "b"});
+              dstd::Vector<dstd::String>{"a", "b", "a", "b", "a", "b"});
         const auto empty = frame(v.duql(
             "let hosts = where type == \"host\" | select run, host; where type "
             "== \"ev\" and run == 3 | lookup hosts on run into hs | derive n = "
             "len(hs) | select n"));
-        CHECK(column(empty, "n") == std::vector<std::string>{"0", "0", "0"});
+        CHECK(column(empty, "n") == dstd::Vector<dstd::String>{"0", "0", "0"});
 
-        CHECK(has(error_of([&] {
-                      (void)frame(v.duql(
+        CHECK(has(error_of_frame([&] {
+                      return v.duql(
                           "let hosts = where type == \"host\" | select run, "
-                          "host; where type == \"ev\" | lookup hosts on run"));
+                          "host; where type == \"ev\" | lookup hosts on run");
                   }),
                   {"hosts", "key 1"}));
-        CHECK(has(error_of([&] {
-                      (void)frame(v.duql(
+        CHECK(has(error_of_frame([&] {
+                      return v.duql(
                           "let runs = where type == \"run\" | select run, "
-                          "type; where type == \"ev\" | lookup runs on run"));
+                          "type; where type == \"ev\" | lookup runs on run");
                   }),
                   {"'type'", "already"}));
         CHECK(has(error_of([&] {
-                      (void)v.duql(
+                      return v.duql(
                           "let runs = where type == \"run\" | select run, "
                           "k = 1; where type == \"ev\" | derive k = 2 | "
                           "lookup runs on run");
@@ -441,32 +497,32 @@ TEST_SUITE("View duql joins") {
             "let runs = where type == \"run\" | select rid = run, app; where "
             "type == \"ev\" and i < 2 | lookup runs on run == rid | select "
             "app"));
-        CHECK(column(k2, "app") == std::vector<std::string>{"laghos", "amg"});
+        CHECK(column(k2, "app") == dstd::Vector<dstd::String>{"laghos", "amg"});
     }
 
     TEST_CASE("a lookup column is the needle of a string predicate") {
         TestEnvironment env(10);
-        std::vector<std::string> lines = {
+        dstd::Vector<dstd::String> lines = {
             R"({"type":"run","run":1,"prefix":"/pfs"})",
             R"({"type":"run","run":2,"prefix":"/ssd"})",
         };
         const char* const FN[] = {"/pfs/a", "/ssd/b", "/pfs/c", "/tmp/d"};
         for (int i = 0; i < 4; ++i)
-            lines.push_back(R"({"type":"ev","i":)" + std::to_string(i) +
-                            R"(,"run":)" + std::to_string(i % 3 + 1) +
+            lines.push_back(R"({"type":"ev","i":)" + dstd::to_string(i) +
+                            R"(,"run":)" + dstd::to_string(i % 3 + 1) +
                             R"(,"fname":")" + FN[i] + R"("})");
         lines.push_back(R"({"type":"ev","i":4,"run":1})");
         const View v = view_of(write_records(env, "pc", lines));
-        const std::string q =
+        const dstd::String q =
             "let runs = where type == \"run\" | select run, prefix; where "
             "type == \"ev\" | lookup runs on run | derive p = "
             "starts_with(fname, prefix) | ";
         CHECK(column(frame(v.duql(q + "where p | select i")), "i") ==
-              std::vector<std::string>{"0", "1"});
+              dstd::Vector<dstd::String>{"0", "1"});
         CHECK(column(frame(v.duql(q + "where not p | select i")), "i") ==
-              std::vector<std::string>{"3"});
+              dstd::Vector<dstd::String>{"3"});
         CHECK(column(frame(v.duql(q + "where p is null | select i")), "i") ==
-              std::vector<std::string>{"2", "4"});
+              dstd::Vector<dstd::String>{"2", "4"});
     }
 
     TEST_CASE("lookup inner and anti keep or drop the rows with a match") {
@@ -476,10 +532,10 @@ TEST_SUITE("View duql joins") {
         lines.push_back(R"({"type":"ev","i":9,"run":null})");
         lines.push_back(R"({"type":"ev","i":10,"run":4})");
         const View v = view_of(write_records(env, "ia", lines));
-        const std::string let =
+        const dstd::String let =
             "let runs = where type == \"run\" and run < 3 | select run, "
             "sapp = app; ";
-        const std::string ev = "where type == \"ev\" | ";
+        const dstd::String ev = "where type == \"ev\" | ";
 
         const auto left =
             frame(v.duql(let + ev +
@@ -494,12 +550,13 @@ TEST_SUITE("View duql joins") {
         const auto nullable = frame(v.duql(
             "let runs = where type == \"run\" | select run, sapp = app; " + ev +
             "lookup runs on run inner | select i, sapp"));
-        CHECK(column(nullable, "i") == std::vector<std::string>{"0", "1", "2",
-                                                                "3", "4", "5",
-                                                                "6", "7", "8"});
+        CHECK(column(nullable, "i") ==
+              dstd::Vector<dstd::String>{"0", "1", "2", "3", "4", "5", "6", "7",
+                                         "8"});
         CHECK(column(nullable, "sapp") ==
-              std::vector<std::string>{"laghos", "amg", "null", "laghos", "amg",
-                                       "null", "laghos", "amg", "null"});
+              dstd::Vector<dstd::String>{"laghos", "amg", "null", "laghos",
+                                         "amg", "null", "laghos", "amg",
+                                         "null"});
 
         const auto into = frame(
             v.duql(let + ev + "lookup runs on run inner into m | select i, m"));
@@ -508,20 +565,20 @@ TEST_SUITE("View duql joins") {
         const auto anti =
             frame(v.duql(let + ev + "lookup runs on run anti | select i"));
         CHECK(column(anti, "i") ==
-              std::vector<std::string>{"2", "5", "8", "9", "10"});
+              dstd::Vector<dstd::String>{"2", "5", "8", "9", "10"});
         const auto not_in = frame(v.duql(
             let + ev + "where run not in (from runs | select run) | select i"));
         CHECK(column(not_in, "i") ==
-              std::vector<std::string>{"2", "5", "8", "10"});
+              dstd::Vector<dstd::String>{"2", "5", "8", "10"});
         const auto all_cols =
             frame(v.duql(let + ev + "lookup runs on run anti"));
         CHECK(all_cols.column_index("sapp") < 0);
 
-        CHECK(has(error_of([&] {
-                      (void)frame(v.duql(
+        CHECK(has(error_of_frame([&] {
+                      return v.duql(
                           "let runs = where type == \"run\" | select run, "
                           "type; " +
-                          ev + "lookup runs on run inner"));
+                          ev + "lookup runs on run inner");
                   }),
                   {"'type'", "already"}));
     }
@@ -538,7 +595,7 @@ TEST_SUITE("View duql joins") {
         CHECK(column(b, "i") == column(a, "i"));
         CHECK(column(b, "app") == column(a, "app"));
         CHECK(has(error_of([&] {
-                      (void)v.duql(
+                      return v.duql(
                           "where type == \"ev\" | lookup (from data | where "
                           "run == ^.run | select run, app) on run");
                   }),
@@ -548,24 +605,24 @@ TEST_SUITE("View duql joins") {
     // Samples `{"type":"s","k":..,"t":..,"v":..}` and events
     // `{"type":"ev","i":..,"k":..,"ts":..}` with equal times, missing keys
     // and missing times; `expect` is the nested-loop answer per event.
-    static std::string text_of(const std::vector<std::string>& v) {
-        std::string out;
+    static dstd::String text_of(const dstd::Vector<dstd::String>& v) {
+        dstd::String out;
         for (const auto& x : v) out += x + ",";
         return out;
     }
 
-    static std::string first_diff(const std::vector<std::string>& got,
-                                  const std::vector<std::string>& want) {
+    static dstd::String first_diff(const dstd::Vector<dstd::String>& got,
+                                   const dstd::Vector<dstd::String>& want) {
         for (std::size_t r = 0; r < std::min(got.size(), want.size()); ++r)
             if (got[r] != want[r])
-                return "row " + std::to_string(r) + ": got " + got[r] +
+                return "row " + dstd::to_string(r) + ": got " + got[r] +
                        ", want " + want[r];
         return got.size() == want.size() ? "" : "sizes differ";
     }
 
     struct AsofData {
-        std::vector<std::string> lines;
-        std::vector<std::vector<std::string>> expect;
+        dstd::Vector<dstd::String> lines;
+        dstd::Vector<dstd::Vector<dstd::String>> expect;
     };
 
     static AsofData asof_data(int events, int samples, unsigned seed) {
@@ -573,8 +630,8 @@ TEST_SUITE("View duql joins") {
             int k, t, v;
             bool has_k, has_t;
         };
-        std::vector<Sample> smp;
-        std::vector<std::string> lines;
+        dstd::Vector<Sample> smp;
+        dstd::Vector<dstd::String> lines;
         unsigned x = seed;
         auto next = [&](unsigned m) {
             x = x * 1664525u + 1013904223u;
@@ -584,9 +641,9 @@ TEST_SUITE("View duql joins") {
             Sample s{static_cast<int>(next(3)), static_cast<int>(next(120)), j,
                      next(10) != 0, next(10) != 0};
             smp.push_back(s);
-            std::string l = R"({"type":"s","v":)" + std::to_string(j);
-            if (s.has_k) l += R"(,"k":)" + std::to_string(s.k);
-            if (s.has_t) l += R"(,"t":)" + std::to_string(s.t);
+            dstd::String l = R"({"type":"s","v":)" + dstd::to_string(j);
+            if (s.has_k) l += R"(,"k":)" + dstd::to_string(s.k);
+            if (s.has_t) l += R"(,"t":)" + dstd::to_string(s.t);
             lines.push_back(l + R"(,"pad":"xxxxxxxxxxxxxxxxxxxxxxxx"})");
         }
         AsofData d;
@@ -594,20 +651,20 @@ TEST_SUITE("View duql joins") {
             int i, k, ts;
             bool has_k, has_ts;
         };
-        std::vector<Ev> evs;
+        dstd::Vector<Ev> evs;
         for (int i = 0; i < events; ++i) {
             Ev e{i, static_cast<int>(next(3)), static_cast<int>(next(120)),
                  next(10) != 0, next(10) != 0};
             evs.push_back(e);
-            std::string l = R"({"type":"ev","i":)" + std::to_string(i);
-            if (e.has_k) l += R"(,"k":)" + std::to_string(e.k);
-            if (e.has_ts) l += R"(,"ts":)" + std::to_string(e.ts);
+            dstd::String l = R"({"type":"ev","i":)" + dstd::to_string(i);
+            if (e.has_k) l += R"(,"k":)" + dstd::to_string(e.k);
+            if (e.has_ts) l += R"(,"ts":)" + dstd::to_string(e.ts);
             lines.push_back(l + R"(,"pad":"xxxxxxxxxxxxxxxxxxxxxxxx"})");
         }
         d.lines = std::move(lines);
         // backward, forward, nearest, each without and with `within 4`.
         for (int mode = 0; mode < 6; ++mode) {
-            std::vector<std::string> col;
+            dstd::Vector<dstd::String> col;
             for (const Ev& e : evs) {
                 int back = -1;
                 int fwd = -1;
@@ -634,7 +691,7 @@ TEST_SUITE("View duql joins") {
                             ? fwd
                             : (fwd < 0 || dist(back) <= dist(fwd) ? back : fwd);
                 if (pick >= 0 && mode >= 3 && dist(pick) > 4) pick = -1;
-                col.push_back(pick < 0 ? "null" : std::to_string(pick));
+                col.push_back(pick < 0 ? "null" : dstd::to_string(pick));
             }
             d.expect.push_back(std::move(col));
         }
@@ -651,14 +708,14 @@ TEST_SUITE("View duql joins") {
         for (std::size_t m = 0; m < 6; ++m) {
             CAPTURE(clauses[m]);
             const auto f = frame(v.duql(
-                std::string("let s = where type == \"s\" | select k, t, v; "
-                            "where type == \"ev\" | lookup s on k asof ts == "
-                            "t ") +
+                dstd::String("let s = where type == \"s\" | select k, t, v; "
+                             "where type == \"ev\" | lookup s on k asof ts == "
+                             "t ") +
                 clauses[m] + " | select i, v"));
             REQUIRE(f.num_rows() == 300);
             CHECK(first_diff(column(f, "v"), d.expect[m]) == "");
-            std::vector<std::string> order;
-            for (int i = 0; i < 300; ++i) order.push_back(std::to_string(i));
+            dstd::Vector<dstd::String> order;
+            for (int i = 0; i < 300; ++i) order.push_back(dstd::to_string(i));
             CHECK(text_of(column(f, "i")) == text_of(order));
         }
     }
@@ -667,43 +724,47 @@ TEST_SUITE("View duql joins") {
         TestEnvironment env(10);
         const AsofData d = asof_data(300, 80, 11);
         const View v = view_of(write_records(env, "w", d.lines, 4096, 4096));
-        auto run_with = [&](const std::string& within,
+        auto query_with = [&](const dstd::String& within,
+                              const duql::Params& p = {}) {
+            return v.duql(
+                "let s = where type == \"s\" | select k, t, v; "
+                "where type == \"ev\" | lookup s on k asof ts "
+                "== t within " +
+                    within + " | select i, v",
+                p);
+        };
+        auto run_with = [&](const dstd::String& within,
                             const duql::Params& p = {}) {
-            return column(
-                frame(v.duql("let s = where type == \"s\" | select k, t, v; "
-                             "where type == \"ev\" | lookup s on k asof ts "
-                             "== t within " +
-                                 within + " | select i, v",
-                             p)),
-                "v");
+            return column(frame(query_with(within, p)), "v");
         };
         duql::Params p;
         p.emplace("w", duql::LiteralValue{std::uint64_t{4}});
-        for (const std::string w : {"4", "4.5", "$w"}) {
+        for (const dstd::String w : {"4", "4.5", "$w"}) {
             CAPTURE(w);
             CHECK(first_diff(run_with(w, p), d.expect[3]) == "");
         }
-        for (const std::string w : {"-1", "ts", "1 + 3", "4us"}) {
+        for (const dstd::String w : {"-1", "ts", "1 + 3", "4us"}) {
             CAPTURE(w);
-            CHECK(has(error_of([&] { (void)run_with(w); }), {"within"}));
+            CHECK(
+                has(error_of_frame([&] { return query_with(w); }), {"within"}));
         }
     }
 
     TEST_CASE("an as-of lookup does not depend on pushdown or layout") {
         TestEnvironment env(10);
         const AsofData d = asof_data(300, 80, 5);
-        std::vector<std::string> want;
+        dstd::Vector<dstd::String> want;
         for (const std::size_t checkpoint :
              {std::size_t{2048}, std::size_t{65536}}) {
-            const std::string gz =
-                write_records(env, "b" + std::to_string(checkpoint), d.lines,
+            const dstd::String gz =
+                write_records(env, "b" + dstd::to_string(checkpoint), d.lines,
                               4096, checkpoint);
             for (const char* where :
                  {"type == \"ev\"", "(type == \"ev\") or false"}) {
                 CAPTURE(where);
                 const auto f = frame(view_of(gz).duql(
-                    std::string("let s = where type == \"s\" | select k, t, "
-                                "v; where ") +
+                    dstd::String("let s = where type == \"s\" | select k, t, "
+                                 "v; where ") +
                     where +
                     " | lookup s on k asof ts == t nearest | select i, v"));
                 const auto got = column(f, "v");
@@ -717,10 +778,10 @@ TEST_SUITE("View duql joins") {
     TEST_CASE("as-of lookup errors and explain") {
         TestEnvironment env(10);
         const View v = view_of(write_records(env, "c", runs_and_events()));
-        const std::string plan = v.explain_duql(
+        const dstd::String plan = dftu_utils_test::ok(v.explain_duql(
             "let runs = where type == \"run\" | select run, when = run, app; "
             "where type == \"ev\" | lookup runs on run asof i == when "
-            "forward within 3");
+            "forward within 3"));
         CHECK(has(plan, {"lookup runs on run == run asof i forward within 3",
                          "dftu.frame.asof"}));
         const auto filled = frame(v.duql(
@@ -728,17 +789,18 @@ TEST_SUITE("View duql joins") {
             "where type == \"ev\" | lookup runs on run asof i == when | "
             "select i, app"));
         CHECK(column(filled, "app") ==
-              std::vector<std::string>{"null", "null", "null", "laghos", "amg",
-                                       "null", "laghos", "amg", "null"});
+              dstd::Vector<dstd::String>{"null", "null", "null", "laghos",
+                                         "amg", "null", "laghos", "amg",
+                                         "null"});
         CHECK(has(error_of([&] {
-                      (void)v.duql(
+                      return v.duql(
                           "let runs = where type == \"run\" | select run, "
                           "app; where type == \"ev\" | lookup runs on run "
                           "asof i == app");
                   }),
                   {"asof", "app", "string"}));
         CHECK(has(error_of([&] {
-                      (void)v.duql(
+                      return v.duql(
                           "let runs = where type == \"run\" | select run, "
                           "app; where type == \"ev\" | lookup runs on run "
                           "asof i == run into m");
@@ -747,9 +809,9 @@ TEST_SUITE("View duql joins") {
     }
 
     struct OverlapData {
-        std::vector<std::string> lines;
-        std::vector<std::string> pairs;
-        std::vector<std::string> nested;
+        dstd::Vector<dstd::String> lines;
+        dstd::Vector<dstd::String> pairs;
+        dstd::Vector<dstd::String> nested;
     };
 
     // dftracer events: phases and calls with a pid, a start and a duration;
@@ -764,14 +826,15 @@ TEST_SUITE("View duql joins") {
             x = x * 1664525u + 1013904223u;
             return (x >> 8) % m;
         };
-        std::vector<Span> ph;
-        std::vector<Span> cl;
+        dstd::Vector<Span> ph;
+        dstd::Vector<Span> cl;
         OverlapData d;
         auto line = [&](const char* name, int id, const Span& s) {
-            return std::string(R"({"ph":"X","name":")") + name +
-                   R"(","cat":"c","pid":)" + std::to_string(s.pid) +
-                   R"(,"tid":)" + std::to_string(id) + R"(,"ts":)" +
-                   std::to_string(s.ts) + R"(,"dur":)" + std::to_string(s.dur) +
+            return dstd::String(R"({"ph":"X","name":")") + name +
+                   R"(","cat":"c","pid":)" + dstd::to_string(s.pid) +
+                   R"(,"tid":)" + dstd::to_string(id) + R"(,"ts":)" +
+                   dstd::to_string(s.ts) + R"(,"dur":)" +
+                   dstd::to_string(s.dur) +
                    R"(,"pad":"xxxxxxxxxxxxxxxxxxxxxxxx"})";
         };
         for (int j = 0; j < phases; ++j) {
@@ -788,19 +851,19 @@ TEST_SUITE("View duql joins") {
         }
         for (int i = 0; i < calls; ++i) {
             const Span& c = cl[static_cast<std::size_t>(i)];
-            std::string list;
+            dstd::String list;
             int found = 0;
             for (int j = 0; j < phases; ++j) {
                 const Span& p = ph[static_cast<std::size_t>(j)];
                 if (p.pid != c.pid || !(p.ts < c.ts + c.dur) ||
                     !(c.ts < p.ts + p.dur))
                     continue;
-                d.pairs.push_back(std::to_string(1000 + i) + ":" +
-                                  std::to_string(j));
-                list += std::to_string(j) + ",";
+                d.pairs.push_back(dstd::to_string(1000 + i) + ":" +
+                                  dstd::to_string(j));
+                list += dstd::to_string(j) + ",";
                 ++found;
             }
-            if (!found) d.pairs.push_back(std::to_string(1000 + i) + ":null");
+            if (!found) d.pairs.push_back(dstd::to_string(1000 + i) + ":null");
             d.nested.push_back(list);
         }
         return d;
@@ -811,18 +874,18 @@ TEST_SUITE("View duql joins") {
         const OverlapData d = overlap_data(200, 60, 3);
         for (const std::size_t checkpoint :
              {std::size_t{2048}, std::size_t{65536}}) {
-            const std::string gz =
-                write_records(env, "o" + std::to_string(checkpoint), d.lines,
+            const dstd::String gz =
+                write_records(env, "o" + dstd::to_string(checkpoint), d.lines,
                               4096, checkpoint);
             for (const char* where :
                  {"name == \"call\"", "(name == \"call\") or false"}) {
                 CAPTURE(checkpoint);
                 CAPTURE(where);
                 const auto f = frame(view_of(gz).duql(
-                    std::string("let ph = where name == \"phase\" | select "
-                                "pid, ts, dur, ptid = tid; where ") +
+                    dstd::String("let ph = where name == \"phase\" | select "
+                                 "pid, ts, dur, ptid = tid; where ") +
                     where + " | lookup ph on pid overlap | select tid, ptid"));
-                std::vector<std::string> got;
+                dstd::Vector<dstd::String> got;
                 for (std::int64_t r = 0; r < f.num_rows(); ++r)
                     got.push_back(cell(f, r, "tid") + ":" + cell(f, r, "ptid"));
                 CHECK(text_of(got) == text_of(d.pairs));
@@ -839,11 +902,11 @@ TEST_SUITE("View duql joins") {
             "tid; where name == \"call\" | lookup ph on pid overlap into m "
             "| select tid, len(m) as n"));
         REQUIRE(f.num_rows() == 120);
-        std::vector<std::string> counts;
+        dstd::Vector<dstd::String> counts;
         for (const auto& l : d.nested) {
             int n = 0;
             for (const char c : l) n += c == ',';
-            counts.push_back(std::to_string(n));
+            counts.push_back(dstd::to_string(n));
         }
         CHECK(text_of(column(f, "n")) == text_of(counts));
     }
@@ -852,12 +915,12 @@ TEST_SUITE("View duql joins") {
         TestEnvironment env(10);
         const OverlapData d = overlap_data(20, 10, 1);
         const View v = view_of(write_records(env, "e2", d.lines));
-        const std::string plan = v.explain_duql(
+        const dstd::String plan = dftu_utils_test::ok(v.explain_duql(
             "let ph = where name == \"phase\" | select pid, ts, dur; where "
-            "name == \"call\" | lookup ph on pid overlap");
+            "name == \"call\" | lookup ph on pid overlap"));
         CHECK(has(plan, {"lookup ph on pid == pid overlap", "sweep over ph"}));
         CHECK(has(error_of([&] {
-                      (void)v.duql(
+                      return v.duql(
                           "let ph = where name == \"phase\" | select pid, "
                           "ts; where name == \"call\" | lookup ph on pid "
                           "overlap");
@@ -865,7 +928,7 @@ TEST_SUITE("View duql joins") {
                   {"overlap", "'dur'"}));
         const View plain = view_of(write_records(env, "e3", runs_and_events()));
         CHECK(has(error_of([&] {
-                      (void)plain.duql(
+                      return plain.duql(
                           "let runs = where type == \"run\" | select run; "
                           "where type == \"ev\" | lookup runs on run "
                           "overlap");
@@ -875,47 +938,48 @@ TEST_SUITE("View duql joins") {
 
     TEST_CASE("union and from a, b") {
         TestEnvironment env(10);
-        const std::string a = write_records(
+        const dstd::String a = write_records(
             env, "ua", {R"({"x":1,"y":"p"})", R"({"x":2,"y":"q"})"});
-        const std::string b =
+        const dstd::String b =
             write_records(env, "ub", {R"({"x":2.5,"z":true})"});
         const auto n = frame(view_of(a).duql("union (from \"" + b +
                                              "\") | agg { n = count() }"));
         CHECK(bnum(n, 0, "n") == 3);
         const auto u = frame(view_of(a).duql("select x, y | union (from \"" +
                                              b + "\" | select x, z)"));
-        CHECK(u.names == std::vector<std::string>{"x", "y", "z"});
-        CHECK(column(u, "x") == std::vector<std::string>{"1", "2", "2.500000"});
-        CHECK(column(u, "y") == std::vector<std::string>{"p", "q", "null"});
+        CHECK(u.names == dstd::Vector<dstd::String>{"x", "y", "z"});
+        CHECK(column(u, "x") ==
+              dstd::Vector<dstd::String>{"1", "2", "2.500000"});
+        CHECK(column(u, "y") == dstd::Vector<dstd::String>{"p", "q", "null"});
         const auto both =
             frame(view_of(a).duql("let one = where x == 1; let two = from \"" +
                                   b + "\"; from one, two | select x"));
-        CHECK(column(both, "x") == std::vector<std::string>{"1", "2.500000"});
+        CHECK(column(both, "x") == dstd::Vector<dstd::String>{"1", "2.500000"});
         CHECK(has(error_of([&] {
-                      (void)view_of(a).duql("select y | union (from \"" + b +
-                                            "\" | select y = z)");
+                      return view_of(a).duql("select y | union (from \"" + b +
+                                             "\" | select y = z)");
                   }),
                   {"'y'", "union"}));
     }
 
     TEST_CASE("caps fail loudly, only when the query runs") {
         TestEnvironment env(10);
-        std::vector<std::string> lines;
+        dstd::Vector<dstd::String> lines;
         for (int i = 0; i < 11; ++i)
-            lines.push_back(R"({"k":)" + std::to_string(i) + "}");
+            lines.push_back(R"({"k":)" + dstd::to_string(i) + "}");
         const View v = view_of(write_records(env, "cap", lines));
-        const std::string q =
+        const dstd::String q =
             "let ks = where k >= 0 | select k, v = k; where k -> ks.v >= 0";
         {
             ScopedEnv cap("DUQL_LOOKUP_MAX_ROWS", "10");
             const View planned = v.duql(q);
-            (void)v.explain_duql(q);
-            CHECK(has(error_of([&] { (void)frame(planned); }),
+            CHECK(v.explain_duql(q).has_value());
+            CHECK(has(error_of_frame([&] { return planned; }),
                       {"'ks'", "11", "10", "DUQL_LOOKUP_MAX_ROWS"}));
-            CHECK(has(error_of([&] {
-                          (void)frame(v.duql(
+            CHECK(has(error_of_frame([&] {
+                          return v.duql(
                               "derive m = (from data | where k < ^.k | agg { "
-                              "m = max(k) })"));
+                              "m = max(k) })");
                       }),
                       {"__sub_0", "DUQL_LOOKUP_MAX_ROWS"}));
             // Sub-queries under 'in' and ones keyed by '==' have no cap.
@@ -924,14 +988,17 @@ TEST_SUITE("View duql joins") {
                 11);
             CHECK(frame(v.duql("where not (k in (from data | select k))"))
                       .num_rows() == 0);
-            CHECK(has(v.explain_duql("where not (k in (from data | select "
-                                     "k)) and k > 1"),
+            CHECK(has(dftu_utils_test::ok(
+                          v.explain_duql("where not (k in (from data | select "
+                                         "k)) and k > 1")),
                       {"scan filter: k > 1", "lookup join __sub_0 on k"}));
-            CHECK(has(v.explain_duql("where k in (from data | select k)"),
+            CHECK(has(dftu_utils_test::ok(
+                          v.explain_duql("where k in (from data | select k)")),
                       {"reads the distinct rows of __sub_0",
                        "scan filter: k in (__sub_0)"}));
-            CHECK(has(v.explain_duql("derive n = (from data | where k == ^.k "
-                                     "| agg { c = count() })"),
+            CHECK(has(dftu_utils_test::ok(v.explain_duql(
+                          "derive n = (from data | where k == ^.k "
+                          "| agg { c = count() })")),
                       {"nest join __sub_0 on k"}));
             CHECK(frame(v.duql("derive n = (from data | where k == ^.k | agg "
                                "{ c = count() }) | where n == 1"))
@@ -939,7 +1006,7 @@ TEST_SUITE("View duql joins") {
         }
         {
             ScopedEnv cap("DUQL_LOOKUP_MAX_BYTES", "16");
-            CHECK(has(error_of([&] { (void)frame(v.duql(q)); }),
+            CHECK(has(error_of_frame([&] { return v.duql(q); }),
                       {"'ks'", "DUQL_LOOKUP_MAX_BYTES", "16"}));
         }
         CHECK(frame(v.duql(q)).num_rows() == 11);
@@ -947,18 +1014,20 @@ TEST_SUITE("View duql joins") {
 
     TEST_CASE("key-set pushdown prunes chunks and keeps the rows") {
         TestEnvironment env(10);
-        std::vector<std::string> lines;
+        dstd::Vector<dstd::String> lines;
         for (const char* name : {"a", "b", "c", "d"})
             for (int i = 0; i < 400; ++i)
-                lines.push_back(R"({"name":")" + std::string(name) +
-                                R"(","i":)" + std::to_string(i) +
+                lines.push_back(R"({"name":")" + dstd::String(name) +
+                                R"(","i":)" + dstd::to_string(i) +
                                 R"(,"pad":"xxxxxxxxxxxxxxxxxxxxxxxx"})");
         const View v = view_of(write_records(env, "p", lines, 4096, 4096));
-        const std::string sub =
+        const dstd::String sub =
             "name in (from data | where name == \"a\" | select name)";
         NullSink sink;
-        const auto pushed = v.duql("where " + sub).sink_json(sink).get();
-        const auto kept = v.duql("where name != \"z\"").sink_json(sink).get();
+        const auto pushed =
+            dftu_utils_test::ok(v.duql("where " + sub).sink_json(sink).get());
+        const auto kept = dftu_utils_test::ok(
+            v.duql("where name != \"z\"").sink_json(sink).get());
         CHECK(pushed.events_matched == 400);
         CHECK(kept.events_matched == 1600);
         CHECK(pushed.chunks_skipped > 0);
@@ -967,42 +1036,42 @@ TEST_SUITE("View duql joins") {
             sorted(column(frame(v.duql("where " + sub)), "i")) ==
             sorted(column(frame(v.duql("where (" + sub + ") or false")), "i")));
 
-        const std::string arrow =
+        const dstd::String arrow =
             "let first = where i == 0 | select name, tag = name; where name -> "
             "first.tag == \"b\"";
-        const auto a = v.duql(arrow).sink_json(sink).get();
+        const auto a = dftu_utils_test::ok(v.duql(arrow).sink_json(sink).get());
         CHECK(a.events_matched == 400);
         CHECK(a.chunks_skipped > 0);
     }
 
     TEST_CASE("a key set prunes on min and max alone") {
         TestEnvironment env(10);
-        std::vector<std::string> lines;
+        dstd::Vector<dstd::String> lines;
         for (int i = 0; i < 2000; ++i)
-            lines.push_back(R"({"blk":)" + std::to_string(i / 100) +
-                            R"(,"i":)" + std::to_string(i) +
+            lines.push_back(R"({"blk":)" + dstd::to_string(i / 100) +
+                            R"(,"i":)" + dstd::to_string(i) +
                             R"(,"pad":"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"})");
         const View v =
             view_of(write_records(env, "z", lines, 4096, 4096, {"zonemap"}));
         NullSink sink;
-        const auto listed = v.duql("where blk in [3, 4]").sink_json(sink).get();
+        const auto listed = dftu_utils_test::ok(
+            v.duql("where blk in [3, 4]").sink_json(sink).get());
         CHECK(listed.events_matched == 200);
         CHECK(listed.chunks_skipped > 0);
-        const auto joined =
-            v.duql(
-                 "where blk in (from data | where i == 350 or i == 450 | "
-                 "select blk)")
+        const auto joined = dftu_utils_test::ok(
+            v.duql("where blk in (from data | where i == 350 or i == 450 | "
+                   "select blk)")
                 .sink_json(sink)
-                .get();
+                .get());
         CHECK(joined.events_matched == 200);
         CHECK(joined.chunks_skipped == listed.chunks_skipped);
     }
 
     TEST_CASE("a semi-join over more keys than the pushdown cap") {
         TestEnvironment env(10);
-        std::vector<std::string> lines;
+        dstd::Vector<dstd::String> lines;
         for (int i = 0; i < 5000; ++i)
-            lines.push_back(R"({"k":)" + std::to_string(i) + "}");
+            lines.push_back(R"({"k":)" + dstd::to_string(i) + "}");
         const View v = view_of(write_records(env, "wide", lines, 8192));
         CHECK(frame(v.duql("where k in (from data | where k >= 10 | select k)"))
                   .num_rows() == 4990);
@@ -1014,65 +1083,65 @@ TEST_SUITE("View duql joins") {
     TEST_CASE("explain lists sides and pushed key sets without reading") {
         TestEnvironment env(10);
         const View v = view_of(write_records(env, "e", runs_and_events()));
-        const std::string plan = v.explain_duql(
+        const dstd::String plan = dftu_utils_test::ok(v.explain_duql(
             "let runs = where type == \"run\"; where run -> runs.app == "
-            "\"laghos\"");
+            "\"laghos\""));
         CHECK(has(plan, {"side runs: from data; not cached",
                          "run in (keys of runs) (pushed)"}));
-        const std::string not_pushed = v.explain_duql(
+        const dstd::String not_pushed = dftu_utils_test::ok(v.explain_duql(
             "let runs = where type == \"run\"; where not (run -> runs.app == "
-            "\"laghos\")");
-        CHECK(not_pushed.find("keys of runs") == std::string::npos);
-        const std::string stages = v.explain_duql(
+            "\"laghos\")"));
+        CHECK(not_pushed.find("keys of runs") == dstd::String::npos);
+        const dstd::String stages = dftu_utils_test::ok(v.explain_duql(
             "let runs = where type == \"run\" | select run, app; lookup runs "
-            "on run | union (from data)");
+            "on run | union (from data)"));
         CHECK(has(stages, {"lookup runs on run", "union from data"}));
     }
 
     TEST_CASE("lookup sides are cached and invalidated by a re-index") {
         TestEnvironment env(10);
         auto lines = runs_and_events();
-        const std::string gz = write_records(env, "c", lines);
-        const std::string q =
+        const dstd::String gz = write_records(env, "c", lines);
+        const dstd::String q =
             "let runs = where type == \"run\"; where type == \"ev\" and run "
             "-> runs.app == \"laghos\"";
-        CHECK(has(view_of(gz).explain_duql(q),
+        CHECK(has(dftu_utils_test::ok(view_of(gz).explain_duql(q)),
                   {"side runs: from data; not cached"}));
         const auto first = column(frame(view_of(gz).duql(q)), "i");
-        CHECK(first == std::vector<std::string>{"0", "3", "6"});
-        CHECK(has(view_of(gz).explain_duql(q),
+        CHECK(first == dstd::Vector<dstd::String>{"0", "3", "6"});
+        CHECK(has(dftu_utils_test::ok(view_of(gz).explain_duql(q)),
                   {"side runs: from data; cached, 2 rows"}));
         CHECK(column(frame(view_of(gz).duql(q)), "i") == first);
 
         lines.push_back(R"({"type":"run","run":3,"app":"laghos"})");
-        fs::remove(gz);
-        const std::string again = write_records(env, "c", lines);
+        dstd::fs::remove(gz).has_value();
+        const dstd::String again = write_records(env, "c", lines);
         REQUIRE(again == gz);
-        CHECK(has(view_of(gz).explain_duql(q), {"not cached"}));
+        CHECK(has(dftu_utils_test::ok(view_of(gz).explain_duql(q)),
+                  {"not cached"}));
         CHECK(column(frame(view_of(gz).duql(q)), "i") ==
-              std::vector<std::string>{"0", "2", "3", "5", "6", "8"});
+              dstd::Vector<dstd::String>{"0", "2", "3", "5", "6", "8"});
 
-        const fs::path cache =
-            fs::path(determine_index_path(gz, "")).parent_path() /
-            ".dftindex-cache";
-        REQUIRE(fs::exists(cache));
-        fs::remove_all(cache);
+        const dstd::String cache(dftracer::utils::trace::index::lookups_dir(
+            dstd::String(determine_index_path(gz, ""))));
+        REQUIRE(dstd::fs::exists(cache).value());
+        dstd::fs::remove_all(cache).has_value();
         CHECK(column(frame(view_of(gz).duql(q)), "i") ==
-              std::vector<std::string>{"0", "2", "3", "5", "6", "8"});
+              dstd::Vector<dstd::String>{"0", "2", "3", "5", "6", "8"});
     }
 
     TEST_CASE("results do not depend on checkpoint size or cache state") {
         TestEnvironment env(10);
-        std::vector<std::string> lines;
+        dstd::Vector<dstd::String> lines;
         for (int r = 1; r <= 4; ++r)
-            lines.push_back(R"({"type":"run","run":)" + std::to_string(r) +
-                            R"(,"app":"a)" + std::to_string(r % 2) + "\"}");
-        for (int i = 0; i < 600; ++i)
-            lines.push_back(R"({"type":"ev","i":)" + std::to_string(i) +
-                            R"(,"run":)" + std::to_string(i % 5 + 1) +
-                            R"(,"dur":)" + std::to_string((i * 13) % 97) +
+            lines.push_back(R"({"type":"run","run":)" + dstd::to_string(r) +
+                            R"(,"app":"a)" + dstd::to_string(r % 2) + "\"}");
+        for (int i = 0; i < 200; ++i)
+            lines.push_back(R"({"type":"ev","i":)" + dstd::to_string(i) +
+                            R"(,"run":)" + dstd::to_string(i % 5 + 1) +
+                            R"(,"dur":)" + dstd::to_string((i * 13) % 97) +
                             R"(,"pad":"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"})");
-        const std::vector<std::string> queries = {
+        const dstd::Vector<dstd::String> queries = {
             "let runs = where type == \"run\"; where type == \"ev\" and run "
             "-> runs.app == \"a1\" | select i",
             "let runs = where type == \"run\"; where type == \"ev\" and not "
@@ -1086,18 +1155,18 @@ TEST_SUITE("View duql joins") {
             "== \"ev\" | agg { m = min(dur) }) | derive k = concat(string(i), "
             "\"-\", string(s)) | select k",
         };
-        std::vector<std::vector<std::string>> want;
+        dstd::Vector<dstd::Vector<dstd::String>> want;
         for (const std::size_t checkpoint :
              {std::size_t{2048}, std::size_t{65536}}) {
             CAPTURE(checkpoint);
-            const std::string gz = write_records(
-                env, "d" + std::to_string(checkpoint), lines, 4096, checkpoint);
-            const fs::path cache =
-                fs::path(determine_index_path(gz, "")).parent_path() /
-                ".dftindex-cache";
+            const dstd::String gz =
+                write_records(env, "d" + dstd::to_string(checkpoint), lines,
+                              4096, checkpoint);
+            const dstd::String cache(dftracer::utils::trace::index::lookups_dir(
+                dstd::String(determine_index_path(gz, ""))));
             for (int pass = 0; pass < 3; ++pass) {
                 CAPTURE(pass);
-                if (pass == 2) fs::remove_all(cache);
+                if (pass == 2) dstd::fs::remove_all(cache).has_value();
                 for (std::size_t k = 0; k < queries.size(); ++k) {
                     CAPTURE(queries[k]);
                     const auto f = frame(view_of(gz).duql(queries[k]));
@@ -1120,15 +1189,19 @@ TEST_SUITE("View duql joins") {
         double dur;
     };
 
-    static std::string run_key(const Rec& r) {
-        if (r.run_kind == 2) return "s" + std::to_string(r.run);
-        if (r.run_kind == 3) return "i" + std::to_string(r.run);
+    static dstd::String run_key(const Rec& r) {
+        if (r.run_kind == 2) return "s" + dstd::to_string(r.run);
+        if (r.run_kind == 3) return "i" + dstd::to_string(r.run);
         return "";
     }
 
+    // Each lookup layout (checkpoint 2048, member 4096) splits this many rows
+    // into several chunks; a cap of 10 rows or 1 KiB is far below it.
+    constexpr int CORRELATED_ROWS = 120;
+
     struct CorrelatedData {
-        std::vector<std::string> lines;
-        std::vector<Rec> recs;
+        dstd::Vector<dstd::String> lines;
+        dstd::Vector<Rec> recs;
     };
 
     static CorrelatedData correlated_data(int n, unsigned seed) {
@@ -1146,18 +1219,18 @@ TEST_SUITE("View duql joins") {
                   next(10) != 0,
                   next(100) + (next(2) ? 0.5 : 0.0)};
             d.recs.push_back(r);
-            std::string l = R"({"i":)" + std::to_string(i) + R"(,"g":)" +
-                            std::to_string(i % 5) + R"(,"name":")" +
-                            std::string(1, static_cast<char>('a' + r.name)) +
-                            "\"";
+            dstd::String l = R"({"i":)" + dstd::to_string(i) + R"(,"g":)" +
+                             dstd::to_string(i % 5) + R"(,"name":")" +
+                             dstd::String(1, static_cast<char>('a' + r.name)) +
+                             "\"";
             if (r.run_kind == 1) l += R"(,"run":null)";
             if (r.run_kind == 2)
-                l += R"(,"run":")" + std::to_string(r.run) + "\"";
-            if (r.run_kind == 3) l += R"(,"run":)" + std::to_string(r.run);
+                l += R"(,"run":")" + dstd::to_string(r.run) + "\"";
+            if (r.run_kind == 3) l += R"(,"run":)" + dstd::to_string(r.run);
             if (r.has_dur) {
                 char buf[32];
                 std::snprintf(buf, sizeof buf, "%g", r.dur);
-                l += std::string(R"(,"dur":)") + buf;
+                l += dstd::String(R"(,"dur":)") + buf;
             }
             d.lines.push_back(l + R"(,"pad":"xxxxxxxxxxxxxxxxxxxxxxxx"})");
         }
@@ -1167,22 +1240,22 @@ TEST_SUITE("View duql joins") {
     // The queries of the correlated tests, over `where` as the outer filter,
     // with the rows they must give.
     struct CorrelatedCase {
-        std::string query;
-        std::string column;
-        std::vector<std::string> want;
+        dstd::String query;
+        dstd::String column;
+        dstd::Vector<dstd::String> want;
     };
 
-    static std::vector<CorrelatedCase> correlated_cases(
-        const CorrelatedData& d, const std::string& where,
-        const std::string& empty_sum) {
+    static dstd::Vector<CorrelatedCase> correlated_cases(
+        const CorrelatedData& d, const dstd::String& where,
+        const dstd::String& empty_sum) {
         const auto& rs = d.recs;
         auto count = [](double v) {
-            return std::to_string(static_cast<long long>(v));
+            return dstd::to_string(static_cast<long long>(v));
         };
-        std::vector<CorrelatedCase> out;
+        dstd::Vector<CorrelatedCase> out;
         {
-            std::vector<double> sum(4, 0);
-            std::vector<int> cnt(4, 0);
+            dstd::Vector<double> sum(4, 0);
+            dstd::Vector<int> cnt(4, 0);
             for (const Rec& r : rs)
                 if (r.has_dur) {
                     sum[static_cast<std::size_t>(r.name)] += r.dur;
@@ -1196,7 +1269,7 @@ TEST_SUITE("View duql joins") {
             for (const Rec& r : rs) {
                 const auto k = static_cast<std::size_t>(r.name);
                 if (r.has_dur && cnt[k] && r.dur > sum[k] / cnt[k])
-                    c.want.push_back(std::to_string(r.i));
+                    c.want.push_back(dstd::to_string(r.i));
             }
             out.push_back(std::move(c));
         }
@@ -1210,14 +1283,14 @@ TEST_SUITE("View duql joins") {
                 int n = 0;
                 if (!run_key(r).empty())
                     for (const Rec& o : rs) n += run_key(o) == run_key(r);
-                c.want.push_back(std::to_string(n));
+                c.want.push_back(dstd::to_string(n));
             }
             out.push_back(std::move(c));
         }
         for (const bool negated : {false, true}) {
             CorrelatedCase c{
                 "where " + where + " | where g " +
-                    std::string(negated ? "not " : "") +
+                    dstd::String(negated ? "not " : "") +
                     "in (from data | where run == ^.run and dur > 50 | "
                     "select g) | select i",
                 "i",
@@ -1228,7 +1301,7 @@ TEST_SUITE("View duql joins") {
                     for (const Rec& o : rs)
                         hit = hit || (run_key(o) == run_key(r) && o.has_dur &&
                                       o.dur > 50 && o.i % 5 == r.i % 5);
-                if (hit != negated) c.want.push_back(std::to_string(r.i));
+                if (hit != negated) c.want.push_back(dstd::to_string(r.i));
             }
             out.push_back(std::move(c));
         }
@@ -1242,14 +1315,20 @@ TEST_SUITE("View duql joins") {
             for (const Rec& r : rs) {
                 double t = 0;
                 bool any = false;
+                bool with_dur = false;
                 if (!run_key(r).empty())
                     for (const Rec& o : rs)
                         if (o.name == r.name && run_key(o) == run_key(r)) {
                             any = true;
-                            if (o.has_dur) t += o.dur;
+                            if (o.has_dur) {
+                                t += o.dur;
+                                with_dur = true;
+                            }
                         }
-                c.want.push_back(any ? "" : empty_sum);
-                if (any) {
+                // A sum over rows with no dur is null; over no rows it is
+                // `empty_sum`.
+                c.want.push_back(any ? "null" : empty_sum);
+                if (with_dur) {
                     char buf[32];
                     std::snprintf(buf, sizeof buf, "%g", t);
                     c.want.back() = buf;
@@ -1289,20 +1368,21 @@ TEST_SUITE("View duql joins") {
     }
 
     // Column `name` of `f` in the order of column `i`; `i` itself sorted.
-    static std::vector<std::string> by_i(const df::DataFrame& f,
-                                         const std::string& name) {
-        std::vector<std::pair<long, std::string>> rows;
+    static dstd::Vector<dstd::String> by_i(const dataframe::DataFrame& f,
+                                           const dstd::String& name) {
+        dstd::Vector<dstd::Pair<long, dstd::String>> rows;
         const auto ids = column(f, "i");
         const auto vals = column(f, name);
         for (std::size_t r = 0; r < ids.size(); ++r)
-            rows.emplace_back(std::stol(ids[r]), vals[r]);
+            rows.emplace_back(dftu_utils_test::to_number<long>(ids[r]),
+                              vals[r]);
         std::sort(rows.begin(), rows.end());
-        std::vector<std::string> out;
+        dstd::Vector<dstd::String> out;
         for (auto& [id, v] : rows) out.push_back(std::move(v));
         return out;
     }
 
-    static std::string as_number_text(const std::string& s) {
+    static dstd::String as_number_text(const dstd::String& s) {
         if (s == "null" || s.empty()) return s;
         char* end = nullptr;
         const double v = std::strtod(s.c_str(), &end);
@@ -1311,61 +1391,60 @@ TEST_SUITE("View duql joins") {
         return buf;
     }
 
-    TEST_CASE("a correlated sub-query equals the per-row reference") {
-        TestEnvironment env(10);
-        const CorrelatedData d = correlated_data(300, 7);
-        const View v = view_of(write_records(env, "cr", d.lines, 4096, 4096));
-        const auto none =
-            frame(v.duql("from data | where false | agg { t = sum(dur) }"));
-        REQUIRE(none.num_rows() == 1);
-        const std::string empty_sum = as_number_text(cell(none, 0, "t"));
-        for (const auto& c : correlated_cases(d, "i >= 0", empty_sum)) {
+    // Checks every query of `cases` against its per-row reference.
+    static void check_cases(const View& v,
+                            const dstd::Vector<CorrelatedCase>& cases) {
+        for (const auto& c : cases) {
             CAPTURE(c.query);
             const auto f = frame(v.duql(c.query));
-            std::vector<std::string> got;
-            for (const auto& x : by_i(f, c.column))
+            dstd::Vector<dstd::String> got;
+            for (const auto& x :
+                 c.column == "i" ? sorted(column(f, "i")) : by_i(f, c.column))
                 got.push_back(as_number_text(x));
-            std::vector<std::string> want;
+            dstd::Vector<dstd::String> want;
             for (const auto& x : c.want) want.push_back(as_number_text(x));
+            if (c.column == "i") want = sorted(want);
             CHECK(first_diff(got, want) == "");
         }
     }
 
-    TEST_CASE("a correlated sub-query does not depend on layout or pushdown") {
+    TEST_CASE(
+        "a correlated sub-query equals the per-row reference on every layout "
+        "and pushdown") {
         TestEnvironment env(10);
-        const CorrelatedData d = correlated_data(300, 21);
-        std::vector<std::vector<std::string>> first;
+        const CorrelatedData d = correlated_data(CORRELATED_ROWS, 21);
+        dstd::String empty_sum;
         for (const std::size_t checkpoint :
              {std::size_t{2048}, std::size_t{65536}}) {
-            const std::string gz =
-                write_records(env, "cl" + std::to_string(checkpoint), d.lines,
-                              4096, checkpoint);
+            CAPTURE(checkpoint);
+            const View v =
+                view_of(write_records(env, "cl" + dstd::to_string(checkpoint),
+                                      d.lines, 4096, checkpoint));
+            if (empty_sum.empty()) {
+                const auto none = frame(
+                    v.duql("from data | where false | agg { t = sum(dur) }"));
+                REQUIRE(none.num_rows() == 1);
+                empty_sum = as_number_text(cell(none, 0, "t"));
+            }
             for (const char* where : {"i >= 0", "(i >= 0) or false"}) {
                 CAPTURE(where);
-                std::size_t at = 0;
-                for (const auto& c : correlated_cases(d, where, "0")) {
-                    const auto got =
-                        by_i(frame(view_of(gz).duql(c.query)), c.column);
-                    if (first.size() <= at) first.push_back(got);
-                    CHECK(got == first[at]);
-                    ++at;
-                }
+                check_cases(v, correlated_cases(d, where, empty_sum));
             }
         }
     }
 
-    static std::string num_text(double v) {
+    static dstd::String num_text(double v) {
         char buf[32];
         std::snprintf(buf, sizeof buf, "%g", v);
         return buf;
     }
 
     // Range sub-queries over `where` with the per-row nested-loop answer.
-    static std::vector<CorrelatedCase> range_cases(const CorrelatedData& d,
-                                                   const std::string& where) {
+    static dstd::Vector<CorrelatedCase> range_cases(const CorrelatedData& d,
+                                                    const dstd::String& where) {
         const auto& rs = d.recs;
-        std::vector<CorrelatedCase> out;
-        auto add = [&](const std::string& body, const std::string& column,
+        dstd::Vector<CorrelatedCase> out;
+        auto add = [&](const dstd::String& body, const dstd::String& column,
                        auto&& per_row) {
             CorrelatedCase c{"where " + where + " | " + body, column, {}};
             for (const Rec& r : rs) c.want.push_back(per_row(r));
@@ -1383,7 +1462,7 @@ TEST_SUITE("View duql joins") {
                 sum += o.dur;
                 ++n;
             }
-            if (n == 0) return std::string("null");
+            if (n == 0) return dstd::String("null");
             if (fn[0] == 's') return num_text(sum);
             if (fn[0] == 'a') return num_text(sum / n);
             return num_text(best);
@@ -1436,7 +1515,7 @@ TEST_SUITE("View duql joins") {
                     for (const Rec& o : rs)
                         n += run_key(o) == run_key(r) && o.has_dur &&
                              o.dur >= r.dur - 10 && o.dur <= r.dur + 10;
-                return std::to_string(n);
+                return dstd::to_string(n);
             });
         add("derive n = (from data | where dur < ^.dur | agg { n = count(dur) "
             "}) | select i, n",
@@ -1444,7 +1523,7 @@ TEST_SUITE("View duql joins") {
                 int n = 0;
                 if (r.has_dur)
                     for (const Rec& o : rs) n += o.has_dur && o.dur < r.dur;
-                return std::to_string(n);
+                return dstd::to_string(n);
             });
         add("derive k = (from data | where name < ^.name and g == ^.g | agg { "
             "k = count_if(dur > 50) }) | select i, k",
@@ -1453,7 +1532,7 @@ TEST_SUITE("View duql joins") {
                 for (const Rec& o : rs)
                     n += name(o) < name(r) && o.i % 5 == r.i % 5 && o.has_dur &&
                          o.dur > 50;
-                return std::to_string(n);
+                return dstd::to_string(n);
             });
         add("derive c = (from data | where run <= ^.run | agg { c = count() "
             "}) | select i, c",
@@ -1462,12 +1541,12 @@ TEST_SUITE("View duql joins") {
                 if (r.run_kind >= 2)
                     for (const Rec& o : rs)
                         n += o.run_kind == r.run_kind && o.run <= r.run;
-                return std::to_string(n);
+                return dstd::to_string(n);
             });
         add("derive x = (from data | where i >= ^.i and i < ^.i + 1 | select "
             "dur) | select i, x",
             "x", [&](const Rec& r) {
-                return r.has_dur ? num_text(r.dur) : std::string("null");
+                return r.has_dur ? num_text(r.dur) : dstd::String("null");
             });
         for (const char* tail : {"select g", "group g {}"})
             for (const bool negated : {false, true}) {
@@ -1482,51 +1561,27 @@ TEST_SUITE("View duql joins") {
                     for (const Rec& o : rs)
                         hit = hit ||
                               (o.name == 0 && o.i < r.i && o.i % 5 == r.i % 5);
-                    if (hit != negated) c.want.push_back(std::to_string(r.i));
+                    if (hit != negated) c.want.push_back(dstd::to_string(r.i));
                 }
                 out.push_back(std::move(c));
             }
         return out;
     }
 
-    TEST_CASE("a range sub-query equals the per-row reference") {
+    TEST_CASE(
+        "a range sub-query equals the per-row reference on every layout and "
+        "pushdown") {
         TestEnvironment env(10);
-        const CorrelatedData d = correlated_data(300, 11);
-        const View v = view_of(write_records(env, "rr", d.lines, 4096, 4096));
-        for (const auto& c : range_cases(d, "i >= 0")) {
-            CAPTURE(c.query);
-            const auto f = frame(v.duql(c.query));
-            std::vector<std::string> got;
-            for (const auto& x :
-                 c.column == "i" ? sorted(column(f, "i")) : by_i(f, c.column))
-                got.push_back(as_number_text(x));
-            std::vector<std::string> want;
-            for (const auto& x : c.want) want.push_back(as_number_text(x));
-            if (c.column == "i") want = sorted(want);
-            CHECK(first_diff(got, want) == "");
-        }
-    }
-
-    TEST_CASE("a range sub-query does not depend on layout or pushdown") {
-        TestEnvironment env(10);
-        const CorrelatedData d = correlated_data(300, 29);
-        std::vector<std::vector<std::string>> first;
+        const CorrelatedData d = correlated_data(CORRELATED_ROWS, 29);
         for (const std::size_t checkpoint :
              {std::size_t{2048}, std::size_t{65536}}) {
-            const std::string gz =
-                write_records(env, "rl" + std::to_string(checkpoint), d.lines,
-                              4096, checkpoint);
+            CAPTURE(checkpoint);
+            const View v =
+                view_of(write_records(env, "rl" + dstd::to_string(checkpoint),
+                                      d.lines, 4096, checkpoint));
             for (const char* where : {"i >= 0", "(i >= 0) or false"}) {
                 CAPTURE(where);
-                std::size_t at = 0;
-                for (const auto& c : range_cases(d, where)) {
-                    CAPTURE(c.query);
-                    const auto got = sorted(
-                        by_i(frame(view_of(gz).duql(c.query)), c.column));
-                    if (first.size() <= at) first.push_back(got);
-                    CHECK(got == first[at]);
-                    ++at;
-                }
+                check_cases(v, range_cases(d, where));
             }
         }
     }
@@ -1535,71 +1590,73 @@ TEST_SUITE("View duql joins") {
         TestEnvironment env(10);
         const CorrelatedData d = correlated_data(60, 3);
         const View v = view_of(write_records(env, "ce", d.lines, 4096, 4096));
-        CHECK(has(error_of([&] {
-                      (void)frame(
-                          v.duql("derive x = (from data | where run == ^.run | "
-                                 "select dur)"));
+        CHECK(has(error_of_frame([&] {
+                      return v.duql(
+                          "derive x = (from data | where run == ^.run | "
+                          "select dur)");
                   }),
                   {"__sub_", "rows for key", "one row"}));
         CHECK(has(error_of([&] {
-                      (void)v.duql(
+                      return v.duql(
                           "where dur > (from data | where run == ^.run and "
                           "dur + ^.dur > 1 | agg { m = max(dur) })");
                   }),
                   {"dur + ^.dur > 1", "mixes"}));
         CHECK(has(error_of([&] {
-                      (void)v.duql(
+                      return v.duql(
                           "where dur > (from data | where i < ^.i and dur < "
                           "^.dur | agg { m = max(dur) })");
                   }),
                   {"dur < ^.dur", "overlap"}));
         CHECK(has(error_of([&] {
-                      (void)v.duql(
+                      return v.duql(
                           "where dur > (from data | where i < ^.i | agg { m "
                           "= first(dur) })");
                   }),
                   {"'first'", "count, count_if"}));
-        CHECK(has(error_of([&] {
-                      (void)frame(
-                          v.duql("derive x = (from data | where i < ^.i | "
-                                 "select dur)"));
+        CHECK(has(error_of_frame([&] {
+                      return v.duql(
+                          "derive x = (from data | where i < ^.i | "
+                          "select dur)");
                   }),
                   {"__sub_", "rows in the range", "one row"}));
-        CHECK(has(v.explain_duql("derive m = (from data | where run == ^.run "
-                                 "and i between ^.i - 5 and ^.i | agg { m = "
-                                 "max(dur) })"),
+        CHECK(has(dftu_utils_test::ok(v.explain_duql(
+                      "derive m = (from data | where run == ^.run "
+                      "and i between ^.i - 5 and ^.i | agg { m = "
+                      "max(dur) })")),
                   {"__sub_0 on run, range >= (i - 5), range <= i"}));
         CHECK(has(error_of([&] {
-                      (void)v.duql(
+                      return v.duql(
                           "where dur > (from data | where run == ^.run | "
                           "take 2 | agg { m = max(dur) })");
                   }),
                   {"take", "correlated"}));
         CHECK(has(error_of([&] {
-                      (void)v.duql(
+                      return v.duql(
                           "where dur > (from data | where run == ^.run | "
                           "derive z = ^.dur | agg { m = max(dur) })");
                   }),
                   {"^.dur", "other than 'where'"}));
         CHECK(has(error_of([&] {
-                      (void)v.duql(
+                      return v.duql(
                           "where dur > (from data | where run == ^.run)");
                   }),
                   {"select", "group", "agg"}));
         CHECK(has(error_of([&] {
-                      (void)v.duql(
+                      return v.duql(
                           "where dur > (from data | where run == ^.run | "
                           "group name { m = max(dur) })");
                   }),
                   {"not 'group'"}));
         CHECK(has(error_of([&] {
-                      (void)v.duql(
+                      return v.duql(
                           "where dur > (from data | where run == ^.run | "
                           "agg { m = max(dur), n = count() })");
                   }),
                   {"one column", "2"}));
-        CHECK(has(v.explain_duql("where dur > (from data | where name == "
-                                 "^.name | agg { m = mean(dur) })"),
+        CHECK(has(dftu_utils_test::ok(
+                      v.explain_duql("where dur > (from data | where name == "
+                                     "^.name | agg { m = mean(dur) })")),
                   {"__sub_0", "__ck0"}));
     }
 
@@ -1607,72 +1664,77 @@ TEST_SUITE("View duql joins") {
     // budget; the other sub-queries join theirs, which spills.
     TEST_CASE("sub-queries over the caps and the memory budget") {
         TestEnvironment env(10);
-        const CorrelatedData d = correlated_data(300, 13);
+        const CorrelatedData d = correlated_data(CORRELATED_ROWS, 13);
         ScopedEnv rows("DUQL_LOOKUP_MAX_ROWS", "10");
         ScopedEnv bytes("DUQL_LOOKUP_MAX_BYTES", "1024");
-        for (const std::size_t checkpoint :
-             {std::size_t{2048}, std::size_t{65536}}) {
-            const std::string gz =
-                write_records(env, "cs" + std::to_string(checkpoint), d.lines,
-                              4096, checkpoint);
-            for (const std::uint64_t budget :
-                 {std::uint64_t{1024}, std::uint64_t{0}}) {
-                const View v =
-                    budget ? view_of(gz).memory_budget(budget) : view_of(gz);
-                for (const char* where : {"i >= 0", "(i >= 0) or false"}) {
-                    CAPTURE(checkpoint);
-                    CAPTURE(budget);
-                    CAPTURE(where);
-                    auto cases = correlated_cases(d, where, "null");
-                    {
-                        CorrelatedCase c{
-                            std::string("where ") + where +
-                                " | where (g in (from data | where dur > 50 | "
-                                "select g)) or i < 0 | select i",
-                            "i",
-                            {}};
-                        for (const Rec& r : d.recs) {
-                            bool hit = false;
-                            for (const Rec& o : d.recs)
-                                hit = hit || (o.has_dur && o.dur > 50 &&
-                                              o.i % 5 == r.i % 5);
-                            if (hit) c.want.push_back(std::to_string(r.i));
-                        }
-                        cases.push_back(std::move(c));
-                    }
-                    for (const auto& c : cases) {
-                        CAPTURE(c.query);
-                        const bool key_set =
-                            c.query.find("| where g in") != std::string::npos;
-                        if (key_set && budget) {
-                            CHECK(has(
-                                error_of([&] { (void)frame(v.duql(c.query)); }),
-                                {"memory budget", "__sub_"}));
-                            continue;
-                        }
-                        const auto f = frame(v.duql(c.query));
-                        std::vector<std::string> got;
-                        for (const auto& x : by_i(f, c.column))
-                            got.push_back(as_number_text(x));
-                        std::vector<std::string> want;
-                        for (const auto& x : c.want)
-                            want.push_back(as_number_text(x));
-                        CHECK(first_diff(got, want) == "");
-                    }
+        // Layout and pushdown are covered on their own above; these four runs
+        // pair every value of checkpoint, budget and filter with every other.
+        struct Config {
+            std::size_t checkpoint;
+            std::uint64_t budget;
+            const char* where;
+        };
+        for (const Config& cfg : {Config{2048, 1024, "i >= 0"},
+                                  Config{2048, 0, "(i >= 0) or false"},
+                                  Config{65536, 1024, "(i >= 0) or false"},
+                                  Config{65536, 0, "i >= 0"}}) {
+            const dstd::String gz =
+                write_records(env, "cs" + dstd::to_string(cfg.checkpoint),
+                              d.lines, 4096, cfg.checkpoint);
+            const View v = cfg.budget ? view_of(gz).memory_budget(cfg.budget)
+                                      : view_of(gz);
+            CAPTURE(cfg.checkpoint);
+            CAPTURE(cfg.budget);
+            CAPTURE(cfg.where);
+            auto cases = correlated_cases(d, cfg.where, "null");
+            {
+                CorrelatedCase c{
+                    dstd::String("where ") + cfg.where +
+                        " | where (g in (from data | where dur > 50 | "
+                        "select g)) or i < 0 | select i",
+                    "i",
+                    {}};
+                for (const Rec& r : d.recs) {
+                    bool hit = false;
+                    for (const Rec& o : d.recs)
+                        hit = hit ||
+                              (o.has_dur && o.dur > 50 && o.i % 5 == r.i % 5);
+                    if (hit) c.want.push_back(dstd::to_string(r.i));
                 }
+                cases.push_back(std::move(c));
+            }
+            for (const auto& c : cases) {
+                CAPTURE(c.query);
+                const bool key_set =
+                    c.query.find("| where g in") != dstd::String::npos;
+                if (key_set && cfg.budget) {
+                    CHECK(has(error_of_frame([&] { return v.duql(c.query); }),
+                              {"memory budget", "__sub_"}));
+                    continue;
+                }
+                const auto f = frame(v.duql(c.query));
+                dstd::Vector<dstd::String> got;
+                for (const auto& x : by_i(f, c.column))
+                    got.push_back(as_number_text(x));
+                dstd::Vector<dstd::String> want;
+                for (const auto& x : c.want) want.push_back(as_number_text(x));
+                CHECK(first_diff(got, want) == "");
             }
         }
     }
 
     struct SpillData {
-        std::vector<std::string> lines;
-        std::vector<std::string> plain;
-        std::vector<std::string> sizes;
+        dstd::Vector<dstd::String> lines;
+        dstd::Vector<dstd::String> plain;
+        dstd::Vector<dstd::String> sizes;
     };
 
     // Events with a key that may be missing, null or a double, and a row set
-    // of keys 0..299 (a fifth of them written as doubles) with a value each,
-    // plus a second copy of some keys for `into`.
+    // of keys 0..SPILL_KEYS-1 (a fifth of them written as doubles) with a value
+    // each, plus a second copy of some keys for `into`.
+    constexpr int SPILL_KEYS = 60;
+    constexpr int SPILL_EVENTS = 600;
+
     static SpillData spill_data(int events, unsigned seed) {
         unsigned x = seed;
         auto next = [&](unsigned m) {
@@ -1680,33 +1742,33 @@ TEST_SUITE("View duql joins") {
             return static_cast<int>((x >> 8) % m);
         };
         SpillData d;
-        std::vector<int> copies(300, 1);
-        for (int j = 0; j < 300; ++j) {
+        dstd::Vector<int> copies(SPILL_KEYS, 1);
+        for (int j = 0; j < SPILL_KEYS; ++j) {
             const bool dup = next(4) == 0;
             for (int c = 0; c < 1 + dup; ++c) {
-                const std::string k =
-                    std::to_string(j) + (j % 5 == 0 ? ".0" : "");
+                const dstd::String k =
+                    dstd::to_string(j) + (j % 5 == 0 ? ".0" : "");
                 d.lines.push_back(R"({"type":"s","k":)" + k + R"(,"sv":)" +
-                                  std::to_string(j * 3) +
+                                  dstd::to_string(j * 3) +
                                   R"(,"pad":"xxxxxxxxxxxxxxxx"})");
             }
             copies[static_cast<std::size_t>(j)] = 1 + dup;
         }
         for (int i = 0; i < events; ++i) {
             const int kind = next(10);
-            const int k = next(400);
-            std::string l = R"({"type":"ev","i":)" + std::to_string(i);
+            const int k = next(SPILL_KEYS * 4 / 3);
+            dstd::String l = R"({"type":"ev","i":)" + dstd::to_string(i);
             if (kind == 0)
                 l += R"(,"k":null)";
             else if (kind != 1)
-                l += R"(,"k":)" + std::to_string(k) + (k % 2 == 0 ? ".0" : "");
+                l += R"(,"k":)" + dstd::to_string(k) + (k % 2 == 0 ? ".0" : "");
             d.lines.push_back(l + R"(,"pad":"xxxxxxxxxxxxxxxx"})");
             const bool keyed = kind >= 2;
-            d.plain.push_back(keyed && k < 300 ? std::to_string(k * 3)
-                                               : "null");
+            d.plain.push_back(keyed && k < SPILL_KEYS ? dstd::to_string(k * 3)
+                                                      : "null");
             d.sizes.push_back(
-                keyed && k < 300
-                    ? std::to_string(copies[static_cast<std::size_t>(k)])
+                keyed && k < SPILL_KEYS
+                    ? dstd::to_string(copies[static_cast<std::size_t>(k)])
                     : "0");
         }
         return d;
@@ -1714,12 +1776,12 @@ TEST_SUITE("View duql joins") {
 
     TEST_CASE("a lookup joins a side over the caps and the memory budget") {
         TestEnvironment env(10);
-        const SpillData d = spill_data(3000, 5);
-        std::vector<std::string> base;
+        const SpillData d = spill_data(SPILL_EVENTS, 5);
+        dstd::Vector<dstd::String> base;
         for (const std::size_t checkpoint :
              {std::size_t{2048}, std::size_t{65536}}) {
             const View v =
-                view_of(write_records(env, "sp" + std::to_string(checkpoint),
+                view_of(write_records(env, "sp" + dstd::to_string(checkpoint),
                                       d.lines, 4096, checkpoint));
             ScopedEnv rows("DUQL_LOOKUP_MAX_ROWS", "10");
             ScopedEnv bytes("DUQL_LOOKUP_MAX_BYTES", "1024");
@@ -1728,26 +1790,28 @@ TEST_SUITE("View duql joins") {
                 CAPTURE(checkpoint);
                 CAPTURE(budget);
                 const View b = budget ? v.memory_budget(budget) : v;
-                const std::string let =
+                const dstd::String let =
                     "let s = where type == \"s\" | select k, sv; ";
                 const auto f = frame(b.duql(
                     let +
                     "where type == \"ev\" | lookup s on k | select i, sv"));
-                REQUIRE(f.num_rows() == 3000);
-                std::vector<std::string> sv(3000);
+                REQUIRE(f.num_rows() == SPILL_EVENTS);
+                dstd::Vector<dstd::String> sv(SPILL_EVENTS);
                 const auto ids = column(f, "i");
                 const auto vals = column(f, "sv");
                 for (std::size_t r = 0; r < ids.size(); ++r)
-                    sv[static_cast<std::size_t>(std::stol(ids[r]))] = vals[r];
+                    sv[static_cast<std::size_t>(
+                        dftu_utils_test::to_number<long>(ids[r]))] = vals[r];
                 const auto n =
                     frame(b.duql(
                         let + "where type == \"ev\" | lookup s on k into m | "
                               "select i, len(m) as n"));
-                std::vector<std::string> sizes(3000);
+                dstd::Vector<dstd::String> sizes(SPILL_EVENTS);
                 const auto nid = column(n, "i");
                 const auto nn = column(n, "n");
                 for (std::size_t r = 0; r < nid.size(); ++r)
-                    sizes[static_cast<std::size_t>(std::stol(nid[r]))] = nn[r];
+                    sizes[static_cast<std::size_t>(
+                        dftu_utils_test::to_number<long>(nid[r]))] = nn[r];
                 CHECK(sizes == d.sizes);
                 if (base.empty()) base = sizes;
                 CHECK(sizes == base);

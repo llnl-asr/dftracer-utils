@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_PLUGINS_PRIMS_H
 #define DFTRACER_UTILS_PLUGINS_PRIMS_H
 
@@ -28,7 +29,17 @@ static inline int dftu_ctz_u64(uint64_t x) {
 
 /** Number of set bits in @p x. */
 static inline int dftu_popcount_u64(uint64_t x) {
+#if (defined(__x86_64__) || defined(__i386__)) && !defined(__POPCNT__)
+    /* x86 without POPCNT turns the builtin into a libgcc call. SWAR count from
+       Bit Twiddling Hacks, https://graphics.stanford.edu/~seander/bithacks.html
+       (public domain). */
+    x = x - ((x >> 1) & 0x5555555555555555ULL);
+    x = (x & 0x3333333333333333ULL) + ((x >> 2) & 0x3333333333333333ULL);
+    x = (x + (x >> 4)) & 0x0F0F0F0F0F0F0F0FULL;
+    return (int)((x * 0x0101010101010101ULL) >> 56);
+#else
     return __builtin_popcountll(x);
+#endif
 }
 
 /** Floor of log2(@p x): index of the highest set bit; 0 when @p x is 0. */
@@ -148,7 +159,8 @@ static inline uint64_t dftu_mix64(uint64_t x) {
 /** Map @p x uniformly into ``[0, n)`` without a modulo; 0 when @p n is 0.
  *
  * Daniel Lemire's multiply-shift range reduction ("A fast alternative to the
- * modulo reduction", 2016): https://lemire.me/blog/2016/06/30/
+ * modulo reduction", 2016):
+ * https://lemire.me/blog/2016/06/27/a-fast-alternative-to-the-modulo-reduction/
  */
 static inline uint64_t dftu_fastrange_u64(uint64_t x, uint64_t n) {
     return n == 0 ? 0 : dftu_mul_hi_u64(x, n);

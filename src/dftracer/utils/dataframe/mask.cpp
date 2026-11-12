@@ -1,26 +1,25 @@
-#include <dftracer/utils/core/common/error.h>
+// SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/string_reader.h>
 #include <dftracer/utils/dataframe/kernels/string_ops.h>
 #include <dftracer/utils/dataframe/mask.h>
+#include <dftracer/utils/dataframe/query/vectorize.h>
+#include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/result.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/errc.h>
 #include <dftracer/utils/duql/evaluator.h>
 #include <dftracer/utils/duql/fields.h>
-#include <dftracer/utils/duql/vectorize.h>
 
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
-#include <optional>
-#include <string>
-#include <string_view>
 #include <type_traits>
-#include <unordered_set>
 #include <variant>
-#include <vector>
-
-namespace dataframe = dftracer::utils::dataframe;
 
 namespace dftracer::utils::dataframe {
 
@@ -32,44 +31,38 @@ namespace {
 // collects them, with domain fields under `args.`.
 constexpr bool FRAME_ARGS_FALLBACK = true;
 
-[[noreturn]] void unsupported(const std::string& why) {
-    throw dftracer::utils::DFTUtilsException(
-        dftracer::utils::make_error(DuqlErrc::Unsupported, why));
+dstd::Unexpected<dstd::Error> unsupported(dstd::StringView why) {
+    return common::make_error(DuqlErrc::Unsupported, why);
 }
 
-bool is_string(const dataframe::Series& c) {
-    return dataframe::narrow_varwidth_type(c.type()) ==
-           dataframe::TypeId::String;
+bool is_string(const Series& c) {
+    return narrow_varwidth_type(c.type()) == TypeId::String;
 }
 
-bool is_bool(const dataframe::Series& c) {
-    return c.type() == dataframe::TypeId::Bool;
-}
+bool is_bool(const Series& c) { return c.type() == TypeId::Bool; }
 
-bool comparable(const dataframe::Series& col, const LiteralValue& v) {
-    if (is_string(col)) return std::holds_alternative<std::string>(v);
+bool comparable(const Series& col, const LiteralValue& v) {
+    if (is_string(col)) return std::holds_alternative<dstd::String>(v);
     if (is_bool(col)) return std::holds_alternative<bool>(v);
-    return !std::holds_alternative<std::string>(v) &&
+    return !std::holds_alternative<dstd::String>(v) &&
            !std::holds_alternative<bool>(v);
 }
 
-dataframe::Series unknown(std::int64_t rows) {
-    return dataframe::Series::nulls(dataframe::TypeId::Bool, rows);
-}
+Series unknown(std::int64_t rows) { return Series::nulls(TypeId::Bool, rows); }
 
 int cmp_code(CompareOp op) {
     switch (op) {
-        case CompareOp::GT:
+        case CompareOp::Gt:
             return DFTU_CMP_GT;
-        case CompareOp::GE:
+        case CompareOp::Ge:
             return DFTU_CMP_GE;
-        case CompareOp::LT:
+        case CompareOp::Lt:
             return DFTU_CMP_LT;
-        case CompareOp::LE:
+        case CompareOp::Le:
             return DFTU_CMP_LE;
-        case CompareOp::EQ:
+        case CompareOp::Eq:
             return DFTU_CMP_EQ;
-        case CompareOp::NE:
+        case CompareOp::Ne:
             return DFTU_CMP_NE;
     }
     return DFTU_CMP_EQ;
@@ -90,29 +83,27 @@ dftu_scalar numeric_scalar(const LiteralValue& v) {
     return s;
 }
 
-dataframe::Series negate(dataframe::Series s) {
-    return dataframe::Series{dftu_series_logical_not(s.handle())};
-}
+Series negate(Series s) { return Series{dftu_series_logical_not(s.handle())}; }
 
 // A type mismatch is UNKNOWN on every row, as in the row evaluator.
-dataframe::Series compare_mask(const dataframe::Series& col, CompareOp op,
-                               const LiteralValue& v) {
+dstd::Result<Series> compare_mask(const Series& col, CompareOp op,
+                                  const LiteralValue& v) {
     if (!comparable(col, v)) return unknown(col.length());
-    const bool eq = op == CompareOp::EQ || op == CompareOp::NE;
+    const bool eq = op == CompareOp::Eq || op == CompareOp::Ne;
     if (is_string(col)) {
-        const std::string& lit = std::get<std::string>(v);
+        const dstd::String& lit = std::get<dstd::String>(v);
         dftu_scalar rhs{};
         rhs.kind = DFTU_SCALAR_TAG_STR;
         rhs.len = static_cast<std::uint32_t>(lit.size());
         rhs.value.s = lit.data();
-        dataframe::Series m{dftu_series_compare(
+        Series m{dftu_series_compare(
             col.handle(), static_cast<dftu_cmp_op>(cmp_code(op)), rhs)};
         if (!m.handle())
-            unsupported("no comparison kernel for the column type");
+            return unsupported("no comparison kernel for the column type");
         return m;
     }
     if (is_bool(col) && eq) {
-        const bool want = (op == CompareOp::EQ) == std::get<bool>(v);
+        const bool want = (op == CompareOp::Eq) == std::get<bool>(v);
         return want ? col.share() : negate(col.share());
     }
     if (is_bool(col)) {
@@ -120,116 +111,131 @@ dataframe::Series compare_mask(const dataframe::Series& col, CompareOp op,
                                   expr_lit_bool(std::get<bool>(v))),
                     {&col});
     }
-    dataframe::Series m{dftu_series_compare(
-        col.handle(), static_cast<dftu_cmp_op>(cmp_code(op)),
-        numeric_scalar(v))};
-    if (!m.handle()) unsupported("no comparison kernel for the column type");
+    Series m{dftu_series_compare(col.handle(),
+                                 static_cast<dftu_cmp_op>(cmp_code(op)),
+                                 numeric_scalar(v))};
+    if (!m.handle())
+        return unsupported("no comparison kernel for the column type");
     return m;
 }
 
 // Kleene OR of the equalities with the comparable elements; UNKNOWN when no
 // element is comparable, as in the row evaluator.
-dataframe::Series in_mask(const dataframe::Series& col, const ArrayNode& arr,
-                          bool negated) {
+dstd::Result<Series> in_mask(const Series& col,
+                             const duql::detail::ArrayNode& arr, bool negated) {
     if (is_string(col)) {
-        std::unordered_set<std::string_view> set;
+        dstd::HashSet<dstd::StringView> set;
         for (const LiteralNode& e : arr.elements)
-            if (const auto* lit = std::get_if<std::string>(&e.value))
+            if (const auto* lit = std::get_if<dstd::String>(&e.value))
                 set.insert(*lit);
         if (set.empty()) return unknown(col.length());
-        dataframe::Series m{dataframe::string_mask(
-            col.handle(),
-            [&set](std::string_view s) { return set.contains(s); })};
+        Series m{string_mask(col.handle(), [&set](dstd::StringView s) {
+            return set.contains(s);
+        })};
         if (!m.handle())
-            unsupported("no comparison kernel for the column type");
+            return unsupported("no comparison kernel for the column type");
         return negated ? negate(std::move(m)) : std::move(m);
     }
-    std::optional<dataframe::Series> acc;
+    dstd::Optional<Series> acc;
     for (const LiteralNode& e : arr.elements) {
         if (!comparable(col, e.value)) continue;
-        dataframe::Series m = compare_mask(col, CompareOp::EQ, e.value);
-        acc = acc ? dataframe::Series{dftu_series_logical(
-                        acc->handle(), m.handle(), DFTU_LOGICAL_OR)}
-                  : std::move(m);
+        dstd::Result<Series> m = compare_mask(col, CompareOp::Eq, e.value);
+        if (!m) return m.error();
+        acc = acc ? Series{dftu_series_logical(acc->handle(), m->handle(),
+                                               DFTU_LOGICAL_OR)}
+                  : std::move(*m);
     }
     if (!acc) return unknown(col.length());
     return negated ? negate(std::move(*acc)) : std::move(*acc);
 }
 
 template <class Leaf>
-dataframe::Series field_mask(const dataframe::DataFrame& b,
-                             const FieldNode& field, Leaf&& leaf) {
-    if (field.any) unsupported("any() has no dataframe-mask lowering");
+dstd::Result<Series> field_mask(const DataFrame& b,
+                                const duql::detail::FieldNode& field,
+                                Leaf&& leaf) {
+    if (field.any) return unsupported("any() has no dataframe-mask lowering");
     const std::int64_t i = b.column_index(field.path);
     if (i < 0) return unknown(b.num_rows());
     return leaf(b.columns[static_cast<std::size_t>(i)]);
 }
 
-dataframe::Series leaf_mask(const ExprLeaf& leaf,
-                            const dataframe::DataFrame& b) {
-    std::vector<VectorColumn> cols;
-    std::vector<const dataframe::Series*> inputs;
+dstd::Result<Series> leaf_mask(const duql::detail::ExprLeaf& leaf,
+                               const DataFrame& b) {
+    dstd::Vector<query::VectorColumn> cols;
+    dstd::Vector<const Series*> inputs;
     cols.reserve(b.columns.size());
     inputs.reserve(b.columns.size());
     for (std::size_t i = 0; i < b.columns.size(); ++i) {
-        cols.push_back({b.names[i], b.columns[i].data_type(), false});
+        cols.push_back(
+            {dstd::String(b.names[i]), b.columns[i].data_type(), false});
         inputs.push_back(&b.columns[i]);
     }
-    std::vector<const TQuant*> quants;
+    dstd::Vector<const TQuant*> quants;
     for_each_term(*leaf.term, [&](const Term& t) {
         if (const auto* q = std::get_if<TQuant>(&t.node)) quants.push_back(q);
     });
-    std::vector<dataframe::Series> truths;
+    dstd::Vector<Series> truths;
     truths.reserve(quants.size());
     for (const TQuant* q : quants) {
         auto t = quantify(*q, inputs, cols, FRAME_ARGS_FALLBACK);
-        if (!t) unsupported(t.error().message);
+        if (!t) return unsupported(t.error().message());
         truths.push_back(std::move(*t));
     }
     for (std::size_t i = 0; i < quants.size(); ++i) {
-        cols.push_back({"", dataframe::scalar(dataframe::TypeId::Bool), false,
-                        false, quants[i]});
+        cols.push_back({"", scalar(TypeId::Bool), false, false, quants[i]});
         inputs.push_back(&truths[i]);
     }
     auto e = vectorize_condition(*leaf.term, cols, FRAME_ARGS_FALLBACK);
-    if (!e) unsupported(e.error().message);
-    return dataframe::eval(*e, inputs);
+    if (!e) return unsupported(e.error().message());
+    return eval(*e, inputs);
 }
 
-dataframe::Series lower(const QueryNode& node, const dataframe::DataFrame& b) {
+dstd::Result<Series> lower(const duql::detail::QueryNode& node,
+                           const DataFrame& b) {
     return std::visit(
-        [&](const auto& n) -> dataframe::Series {
+        [&](const auto& n) -> dstd::Result<Series> {
             using T = std::decay_t<decltype(n)>;
-            if constexpr (std::is_same_v<T, CompareNode>) {
-                return field_mask(b, n.field, [&](const dataframe::Series& c) {
+            if constexpr (std::is_same_v<T, duql::detail::CompareNode>) {
+                return field_mask(b, n.field, [&](const Series& c) {
                     return compare_mask(c, n.op, n.value.value);
                 });
-            } else if constexpr (std::is_same_v<T, InNode>) {
-                return field_mask(b, n.field, [&](const dataframe::Series& c) {
+            } else if constexpr (std::is_same_v<T, duql::detail::InNode>) {
+                return field_mask(b, n.field, [&](const Series& c) {
                     return in_mask(c, n.values, false);
                 });
-            } else if constexpr (std::is_same_v<T, NotInNode>) {
-                return field_mask(b, n.field, [&](const dataframe::Series& c) {
+            } else if constexpr (std::is_same_v<T, duql::detail::NotInNode>) {
+                return field_mask(b, n.field, [&](const Series& c) {
                     return in_mask(c, n.values, true);
                 });
-            } else if constexpr (std::is_same_v<T, MatchNode>) {
-                return field_mask(b, n.field, [&](const dataframe::Series& c) {
-                    if (!is_string(c) || !n.compiled)
-                        return unknown(c.length());
-                    dataframe::Series m =
-                        eval(expr_str_pattern(expr_col(0), n.compiled), {&c});
-                    return n.negated ? negate(std::move(m)) : std::move(m);
-                });
-            } else if constexpr (std::is_same_v<T, AndNode>) {
-                dataframe::Series a = lower(*n.left, b), c = lower(*n.right, b);
-                return dataframe::Series{dftu_series_logical(
-                    a.handle(), c.handle(), DFTU_LOGICAL_AND)};
-            } else if constexpr (std::is_same_v<T, OrNode>) {
-                dataframe::Series a = lower(*n.left, b), c = lower(*n.right, b);
-                return dataframe::Series{dftu_series_logical(
-                    a.handle(), c.handle(), DFTU_LOGICAL_OR)};
-            } else if constexpr (std::is_same_v<T, NotNode>) {
-                return negate(lower(*n.operand, b));
+            } else if constexpr (std::is_same_v<T, duql::detail::MatchNode>) {
+                return field_mask(
+                    b, n.field, [&](const Series& c) -> dstd::Result<Series> {
+                        if (!is_string(c) || !n.compiled)
+                            return unknown(c.length());
+                        dstd::Result<Series> m = eval(
+                            expr_str_pattern(expr_col(0), n.compiled), {&c});
+                        if (!m) return m.error();
+                        return n.negated ? negate(std::move(*m))
+                                         : std::move(*m);
+                    });
+            } else if constexpr (std::is_same_v<T, duql::detail::AndNode>) {
+                dstd::Result<Series> a = lower(*n.left, b);
+                if (!a) return a.error();
+                dstd::Result<Series> c = lower(*n.right, b);
+                if (!c) return c.error();
+                return Series{dftu_series_logical(a->handle(), c->handle(),
+                                                  DFTU_LOGICAL_AND)};
+            } else if constexpr (std::is_same_v<T, duql::detail::OrNode>) {
+                dstd::Result<Series> a = lower(*n.left, b);
+                if (!a) return a.error();
+                dstd::Result<Series> c = lower(*n.right, b);
+                if (!c) return c.error();
+                return Series{dftu_series_logical(a->handle(), c->handle(),
+                                                  DFTU_LOGICAL_OR)};
+            } else if constexpr (std::is_same_v<T, duql::detail::NotNode>) {
+                dstd::Result<Series> operand = lower(*n.operand, b);
+                if (!operand) return operand.error();
+                return negate(std::move(*operand));
             } else {
                 return leaf_mask(n, b);
             }
@@ -242,18 +248,20 @@ dataframe::Series lower(const QueryNode& node, const dataframe::DataFrame& b) {
 // An UNKNOWN row keeps its null and stores data 0, so a selection over the data
 // bits keeps only TRUE rows. The data buffer is replaced, not written, because
 // a leaf may share a caller's column.
-dataframe::Series evaluate_mask(const QueryNode& node,
-                                const dataframe::DataFrame& batch) {
-    dataframe::Series m = lower(node, batch);
-    if (m.handle() && m.handle()->encoding != dataframe::Encoding::Flat)
-        m = dataframe::Series{dftu_series_materialize(m.handle())};
+dstd::Result<Series> evaluate_mask(const duql::detail::QueryNode& node,
+                                   const DataFrame& batch) {
+    dstd::Result<Series> lowered = lower(node, batch);
+    if (!lowered) return lowered.error();
+    Series m = std::move(*lowered);
+    if (m.handle() && m.handle()->encoding != Encoding::Flat)
+        m = Series{dftu_series_materialize(m.handle())};
     dftu_series* s = m.handle();
-    if (!s || !s->validity) return m;
-    const std::size_t bytes = dataframe::buffer_bytes(s->type, s->length);
-    auto data = dataframe::Buffer::allocate(bytes);
-    const std::uint8_t* pd = s->data->data();
-    const std::uint8_t* pv = s->validity->data();
-    std::uint8_t* po = data->data();
+    if (!s || !s->validity.block()) return m;
+    const std::size_t bytes = buffer_bytes(s->type, s->length);
+    auto data = new_buffer(bytes);
+    const std::uint8_t* pd = s->data.data();
+    const std::uint8_t* pv = s->validity.data();
+    std::uint8_t* po = writable(data);
     for (std::size_t i = 0; i < bytes; ++i)
         po[i] = static_cast<std::uint8_t>(pd[i] & pv[i]);
     s->data = std::move(data);

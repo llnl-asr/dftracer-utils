@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """End-to-end tests for the compiled-plugin Plugins binding.
 
 These load a real compiled example plugin (event_counter.so, C ABI) and run it
@@ -22,8 +23,8 @@ def _find_plugin(name: str, env_var: str) -> str:
     return find_example_plugin(name, env_var, _REPO_ROOT)
 
 
-_PLUGIN = _find_plugin("event_counter", "DFTRACER_EVENT_COUNTER_PLUGIN_PATH")
-_RESULT_PLUGIN = _find_plugin("process_counts", "DFTRACER_PROCESS_COUNTS_PLUGIN_PATH")
+_PLUGIN = _find_plugin("event_counter", "DFTRACER_UTILS_EVENT_COUNTER_PLUGIN_PATH")
+_RESULT_PLUGIN = _find_plugin("process_counts", "DFTRACER_UTILS_PROCESS_COUNTS_PLUGIN_PATH")
 _skip = pytest.mark.skipif(
     not _PLUGIN, reason="no compiled event_counter plugin found in any build tree"
 )
@@ -62,6 +63,15 @@ class TestPlugins:
             plugins = Plugins([_PLUGIN])
             with pytest.raises(Exception):
                 plugins.run(empty)
+
+    def test_bad_config_json_raises_value_error(self):
+        from dftracer.utils import DFTUtilsValueError
+        from dftracer.utils.plugins import _NativePlugins
+
+        with pytest.raises(DFTUtilsValueError, match="failed to parse plugin config"):
+            _NativePlugins([(_PLUGIN, "{not json")], None, None)
+        with pytest.raises(DFTUtilsValueError, match="root must be a JSON object"):
+            _NativePlugins([(_PLUGIN, "[1, 2]")], None, None)
 
     def test_bad_path_raises_on_construction(self):
         # The set is built (dlopen included) at construction time.

@@ -1,0 +1,67 @@
+// SPDX-License-Identifier: MIT
+#ifndef DFTRACER_UTILS_COMMON_SPILL_FILE_H
+#define DFTRACER_UTILS_COMMON_SPILL_FILE_H
+
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/common/spill_dir.h>
+#include <dftracer/utils/dstd/file.h>
+#include <dftracer/utils/dstd/memory.h>
+
+#include <atomic>
+#include <cstddef>
+#include <cstdint>
+
+namespace dftracer::utils::common {
+
+/// One temp file in spill_dir(), unlinked at creation so a crash leaves
+/// nothing behind. append() and read() may be called from many threads; the
+/// bytes are in native endianness and never leave the machine. Its size is
+/// charged to the "spill" external slot until it is destroyed.
+class SpillFile {
+   public:
+    /// IO error naming the directory and the variable when the file cannot be
+    /// created.
+    static dstd::Result<dstd::UniquePtr<SpillFile>> create();
+
+    SpillFile(const SpillFile&) = delete;
+    SpillFile& operator=(const SpillFile&) = delete;
+
+    /// Writes `n` bytes at a fresh offset and returns it. IO error when the
+    /// write fails (a full disk included).
+    dstd::Result<std::uint64_t> append(const void* data, std::size_t n);
+
+    /// Takes `bytes` at an offset that is a multiple of `align` without
+    /// writing, for a caller that writes it with write_at() and maps it.
+    std::uint64_t reserve(std::size_t bytes, std::size_t align = 1);
+
+    /// Writes `n` bytes at `offset`, one taken by reserve(). IO error when the
+    /// write fails (a full disk included).
+    dstd::Result<void> write_at(std::uint64_t offset, const void* data,
+                                std::size_t n);
+
+    /// The open file, for a caller that resizes or maps it.
+    const dstd::File& file() const noexcept { return file_; }
+
+    /// Reads exactly `n` bytes at `offset`. IO error on a short read.
+    dstd::Result<void> read(std::uint64_t offset, void* out,
+                            std::size_t n) const;
+
+    std::uint64_t size() const noexcept {
+        return end_.load(std::memory_order_relaxed);
+    }
+
+   private:
+    struct Key {};
+
+   public:
+    SpillFile(Key, bool in_memory) : charge_(in_memory) {}
+
+   private:
+    dstd::File file_;
+    std::atomic<std::uint64_t> end_{0};
+    SpillCharge charge_;
+};
+
+}  // namespace dftracer::utils::common
+
+#endif  // DFTRACER_UTILS_COMMON_SPILL_FILE_H

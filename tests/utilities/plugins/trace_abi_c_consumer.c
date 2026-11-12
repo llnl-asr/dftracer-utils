@@ -1,8 +1,10 @@
+// SPDX-License-Identifier: MIT
 /* A real C consumer of the dftu_svc_trace ABI: open a .pfw.gz, append events,
  * close, then scan it back - all through the raw vtable from C. */
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <stdint.h>
+#include <utilities/plugins/abi_c_consumers.h>
 
 /* Each callback delivers one scanned batch as a dftu_dataframe*; sum its rows.
  */

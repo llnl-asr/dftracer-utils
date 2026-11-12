@@ -1,17 +1,12 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_DATAFRAME_LAZY_COMMON_H
 #define DFTRACER_UTILS_DATAFRAME_LAZY_COMMON_H
 
-#include <ankerl/unordered_dense.h>
-#include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/common/hash/hash.h>
-#include <dftracer/utils/core/common/hash/partition.h>
-#include <dftracer/utils/core/common/int128.h>
-#include <dftracer/utils/core/common/logging.h>
-#include <dftracer/utils/core/common/memory_budget.h>
-#include <dftracer/utils/core/common/transparent_string_hash.h>  // compute_memory_budget
-#include <dftracer/utils/core/coro/task_abi.h>                   // task_to_abi
-#include <dftracer/utils/core/coro/when_all.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/common/memory_budget.h>
+#include <dftracer/utils/coro/task_abi.h>        // task_to_abi
+#include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/dataframe/agg.h>        // streaming group-by state
 #include <dftracer/utils/dataframe/batch_ops.h>  // concat_columns, take, concat
 #include <dftracer/utils/dataframe/field_stat.h>  // FieldStat (describe)
@@ -28,7 +23,6 @@
 #include <dftracer/utils/dataframe/internal/lazy_plan.h>
 #include <dftracer/utils/dataframe/internal/native_transform.h>
 #include <dftracer/utils/dataframe/internal/node_registry.h>  // find_node
-#include <dftracer/utils/dataframe/internal/reclaim_registry.h>
 #include <dftracer/utils/dataframe/internal/rest_column.h>
 #include <dftracer/utils/dataframe/internal/schema_types.h>   // dftu_schema
 #include <dftracer/utils/dataframe/internal/spill.h>  // external-merge spill
@@ -37,13 +31,22 @@
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/parallel.h>  // parallel_for (parallel sinks)
 #include <dftracer/utils/dataframe/types.h>     // byte_width, buffer_bytes
+#include <dftracer/utils/dstd/hash/hash.h>
+#include <dftracer/utils/dstd/hash/partition.h>
+#include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/int128.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/result.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/transparent_string_hash.h>  // compute_memory_budget
+#include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/memory/budget.h>
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
-#include <deque>
-#include <fstream>
 #include <functional>
 #include <limits>
 #include <memory>
@@ -52,7 +55,6 @@
 #include <optional>
 #include <queue>
 #include <stdexcept>
-#include <string>
 #include <typeindex>
 #include <typeinfo>
 #include <unordered_map>
@@ -62,44 +64,54 @@
 
 namespace dftracer::utils::dataframe::lazy_internal {
 
-inline std::vector<const Series*> column_ptrs(const std::vector<Series>& cols) {
-    std::vector<const Series*> in;
+/// A cursor, or the error that stopped it from opening.
+using CursorResult = dstd::Result<dstd::UniquePtr<Cursor>>;
+
+/// The result of a factory that has no cursor to give and no error to report.
+inline CursorResult no_cursor() {
+    return CursorResult{dstd::UniquePtr<Cursor>{}};
+}
+
+inline dstd::Vector<const Series*> column_ptrs(
+    const dstd::Vector<Series>& cols) {
+    dstd::Vector<const Series*> in;
     in.reserve(cols.size());
     for (const Series& c : cols) in.push_back(&c);
     return in;
 }
 
-inline int column_index_of(const std::vector<std::string>& names,
-                           const std::string& name) {
+inline int column_index_of(const dstd::Vector<dstd::String>& names,
+                           const dstd::String& name) {
     auto it = std::find(names.begin(), names.end(), name);
     return it == names.end() ? -1 : static_cast<int>(it - names.begin());
 }
 
 // The index of column `name` of `sch`. A name that is not there is the error of
-// the op `op`: std::out_of_range "<op>: no column named <name>".
-inline int require_col(const std::vector<std::string>& sch,
-                       const std::string& name, const char* op) {
+// the op `op`: NotFound "<op>: no column named <name>".
+inline dstd::Result<int> require_col(const dstd::Vector<dstd::String>& sch,
+                                     const dstd::String& name, const char* op) {
     const int at = column_index_of(sch, name);
     if (at < 0)
-        throw std::out_of_range(std::string(op) + ": no column named " + name);
+        return common::make_error<"{}: no column named {}">(
+            common::ErrorCode::NotFound, op, name);
     return at;
 }
 
 // An all-null column of `rows` rows of the type of `f`, with the type's
 // parameters. Refuses a type it cannot rebuild rather than emit a column that
 // has silently lost them; `why` says what has no rows to take the type from.
-inline Series null_column_of(const Field& f, std::int64_t rows, const char* who,
-                             const char* why) {
+inline dstd::Result<Series> null_column_of(const Field& f, std::int64_t rows,
+                                           const char* who, const char* why) {
     const DataType& dt = f.type;
     const bool rebuildable =
         dt.fields.empty() &&
         (byte_width(dt.id).has_value() || dt.id == TypeId::String ||
          dt.id == TypeId::Binary);
     if (!rebuildable)
-        throw std::runtime_error(std::string(who) +
-                                 ": cannot build a null column of type " +
-                                 std::string(type_name(dt.id)) +
-                                 " for column '" + f.name + "' when " + why);
+        return common::make_error<
+            "{}: cannot build a null column of type {} for column '{}' when "
+            "{}">(common::ErrorCode::Internal, who, type_name(dt.id), f.name,
+                  why);
     Series s = Series::nulls(dt.id, rows);
     dftu_series* h = s.handle();
     h->set_time_unit(dt.time_unit());
@@ -110,10 +122,10 @@ inline Series null_column_of(const Field& f, std::int64_t rows, const char* who,
 }
 
 // A frame over the columns of a morsel, named `names` or, with none, unnamed.
-inline DataFrame frame_of(std::vector<Series>&& columns,
-                          std::vector<std::string> names = {}) {
+inline DataFrame frame_of(dstd::Vector<Series>&& columns,
+                          dstd::Vector<dstd::String> names = {}) {
     DataFrame out;
-    out.names = names.empty() ? std::vector<std::string>(columns.size())
+    out.names = names.empty() ? dstd::Vector<dstd::String>(columns.size())
                               : std::move(names);
     out.columns = std::move(columns);
     return out;
@@ -123,7 +135,7 @@ inline DataFrame frame_of(std::vector<Series>&& columns,
 inline Morsel slice_morsel(const Morsel& m, std::int64_t off,
                            std::int64_t len) {
     DataFrame tmp;
-    tmp.names.assign(m.columns.size(), std::string());
+    tmp.names.assign(m.columns.size(), dstd::String());
     for (const Series& c : m.columns) tmp.columns.push_back(c.share());
     DataFrame s = tmp.slice(off, len);
     Morsel out;
@@ -136,15 +148,15 @@ inline Morsel slice_morsel(const Morsel& m, std::int64_t off,
 // ---- output morsels within the budget ----
 
 // Whether `budget` limits anything: it does not when it is 0 (unset) or
-// NO_SPILL_BUDGET.
+// memory::NO_SPILL_BUDGET.
 inline bool has_cap(std::uint64_t budget) {
-    return budget != NO_SPILL_BUDGET && budget > 0;
+    return budget != memory::NO_SPILL_BUDGET && budget > 0;
 }
 
 // The bytes one output morsel may take of `budget`.
 inline std::uint64_t output_share(std::uint64_t budget) {
     return has_cap(budget) ? std::max<std::uint64_t>(budget / share::OUTPUT, 1)
-                           : NO_SPILL_BUDGET;
+                           : memory::NO_SPILL_BUDGET;
 }
 
 // How many rows of `bytes_per_row` bytes fit `byte_share`, between 1 and
@@ -152,7 +164,7 @@ inline std::uint64_t output_share(std::uint64_t budget) {
 inline std::int64_t rows_within(std::uint64_t byte_share,
                                 std::uint64_t bytes_per_row,
                                 std::int64_t max_rows) {
-    if (byte_share == NO_SPILL_BUDGET) return max_rows;
+    if (byte_share == memory::NO_SPILL_BUDGET) return max_rows;
     const std::uint64_t fit =
         byte_share / std::max<std::uint64_t>(bytes_per_row, 1);
     return std::clamp<std::int64_t>(
@@ -165,10 +177,11 @@ inline std::int64_t rows_within(std::uint64_t byte_share,
 class MorselFeed {
    public:
     // True when a row is left to take; reads the next morsel when the last
-    // one is used up.
-    coro::CoroTask<bool> fill(Cursor& in, std::int64_t max_rows) {
+    // one is used up. The error is the one the input ended its read with.
+    coro::CoroTask<dstd::Result<bool>> fill(Cursor& in, std::int64_t max_rows) {
         while (!cur_ || pos_ >= cur_->rows) {
-            cur_ = co_await in.next(max_rows);
+            auto next = in.next(max_rows);
+            cur_ = co_await std::move(next).or_fail();
             pos_ = 0;
             if (!cur_) co_return false;
         }
@@ -182,7 +195,7 @@ class MorselFeed {
     Morsel take(std::int64_t n) {
         n = std::min(n, remaining());
         Morsel out = slice_morsel(*cur_, pos_, n);
-        if (cur_->dyn) out.dyn = std::make_unique<MorselDyn>(*cur_->dyn);
+        if (cur_->dyn) out.dyn = dstd::make_unique<MorselDyn>(*cur_->dyn);
         out.ordering = cur_->ordering;
         out.ordered_column = cur_->ordered_column;
         out.ordered_descending = cur_->ordered_descending;
@@ -191,7 +204,7 @@ class MorselFeed {
     }
 
    private:
-    std::optional<Morsel> cur_;
+    dstd::Optional<Morsel> cur_;
     std::int64_t pos_ = 0;
 };
 
@@ -222,7 +235,7 @@ class ResultChunks {
         }
         Morsel out = slice_morsel(rest_, pos_, n);
         // The names of a dynamic schema and the order claim go with each slice.
-        if (rest_.dyn) out.dyn = std::make_unique<MorselDyn>(*rest_.dyn);
+        if (rest_.dyn) out.dyn = dstd::make_unique<MorselDyn>(*rest_.dyn);
         out.ordering = rest_.ordering;
         out.ordered_column = rest_.ordered_column;
         out.ordered_descending = rest_.ordered_descending;
@@ -247,7 +260,7 @@ class ExpansionGovernor {
     explicit ExpansionGovernor(std::uint64_t byte_share) : share_(byte_share) {}
 
     std::int64_t rows(std::int64_t max_rows) const {
-        if (share_ == NO_SPILL_BUDGET) return max_rows;
+        if (share_ == memory::NO_SPILL_BUDGET) return max_rows;
         const double out_rows =
             static_cast<double>(share_) / static_cast<double>(row_bytes_);
         const double in_rows = out_rows / std::max(expansion_, 1.0);
@@ -286,9 +299,9 @@ class ExpansionGovernor {
 };
 
 // The columns `idx` of `cols`, flat, for row keys and comparisons.
-inline std::vector<Series> key_columns(const std::vector<Series>& cols,
-                                       const std::vector<std::size_t>& idx) {
-    std::vector<Series> out;
+inline dstd::Vector<Series> key_columns(const dstd::Vector<Series>& cols,
+                                        const dstd::Vector<std::size_t>& idx) {
+    dstd::Vector<Series> out;
     out.reserve(idx.size());
     for (std::size_t c : idx)
         out.push_back(cols[c].is_flat() ? cols[c].share()
@@ -296,10 +309,10 @@ inline std::vector<Series> key_columns(const std::vector<Series>& cols,
     return out;
 }
 
-// Default scan chunk when the caller does not set one (morsel_rows <= 0).
-inline constexpr std::int64_t DEFAULT_MORSEL_ROWS = 65536;
+// Default scan chunk when the caller does not set one (batch_size <= 0).
+inline constexpr std::int64_t DEFAULT_BATCH_SIZE = 65536;
 
-inline bool has_rest(const std::vector<std::string>& sch) {
+inline bool has_rest(const dstd::Vector<dstd::String>& sch) {
     return !sch.empty() && sch.back() == REST_COLUMN;
 }
 
@@ -319,7 +332,7 @@ inline DataFrame rest_fields(const Series& rest) {
 // which one the caller means.
 // Moves the rest column of `f`, if any, after the others.
 inline DataFrame rest_to_back(DataFrame f) {
-    const int at = column_index_of(f.names, std::string(REST_COLUMN));
+    const int at = column_index_of(f.names, dstd::String(REST_COLUMN));
     if (at < 0 || static_cast<std::size_t>(at) + 1 == f.names.size()) return f;
     std::rotate(f.names.begin() + at, f.names.begin() + at + 1, f.names.end());
     std::rotate(f.columns.begin() + at, f.columns.begin() + at + 1,
@@ -335,6 +348,15 @@ inline Morsel morsel_of(DataFrame&& f) {
     return out;
 }
 
+// The answer of a try_next that holds `in`, with `fn` run over its morsel. An
+// end of stream or an error passes through unchanged; `fn` returns a Morsel or
+// the MorselResult of a step that can fail.
+template <class Fn>
+inline MorselResult map_morsel(MorselResult&& in, Fn&& fn) {
+    if (!in || !*in) return std::move(in);
+    return MorselResult(fn(std::move(**in)));
+}
+
 // ---- cursors ----------------------------------------------------------------
 
 inline constexpr std::size_t MAX_ACCUMULATE_BATCH = 32;
@@ -346,7 +368,7 @@ inline constexpr std::size_t MAX_ACCUMULATE_BATCH = 32;
 inline std::size_t accumulate_batch(std::uint64_t budget,
                                     std::uint64_t partial_bytes) {
     if (partial_bytes == 0) return 2;
-    if (budget == NO_SPILL_BUDGET) return MAX_ACCUMULATE_BATCH;
+    if (budget == memory::NO_SPILL_BUDGET) return MAX_ACCUMULATE_BATCH;
     return std::clamp<std::size_t>(budget / share::CHUNK / (2 * partial_bytes),
                                    1, MAX_ACCUMULATE_BATCH);
 }
@@ -356,28 +378,31 @@ inline std::size_t accumulate_batch(std::uint64_t budget,
 // straight into `state`; a larger one is folded morsel by morsel into partial
 // states in parallel (the mergeable agg IR) that are then merged, so the batch
 // size follows the size of a partial and memory stays near the budget.
-// `accumulate(state, morsel, row_base)` folds one morsel, `make()` makes a
-// fresh state, and `active()` says whether folding is still wanted (a caller
-// that gave up on `state` only wants its batches).
-template <class Make, class Accumulate, class After, class Active>
-inline coro::CoroTask<void> accumulate_batches(
+// `accumulate(state, morsel, row_base)` folds one morsel and returns a
+// dstd::Result<void>, as does `after`; `make()` makes a
+// fresh state, `active()` says whether folding is still wanted and
+// `cut(batch)`, called per morsel taken, ends the batch early when true.
+template <class Make, class Accumulate, class After, class Active, class Cut>
+inline coro::CoroTask<dstd::Result<void>> accumulate_batches(
     Cursor& in, std::int64_t max_rows, std::uint64_t budget, AggStatePtr& state,
-    Make make, Accumulate accumulate, After after, Active active) {
+    Make make, Accumulate accumulate, After after, Active active, Cut cut) {
     std::size_t cap = accumulate_batch(budget, 0);
-    std::vector<Morsel> batch;
+    dstd::Vector<Morsel> batch;
     batch.reserve(MAX_ACCUMULATE_BATCH);
-    std::vector<std::int64_t> row_base;
+    dstd::Vector<std::int64_t> row_base;
     std::int64_t rows_seen = 0;
     bool eof = false;
     while (!eof) {
         batch.clear();
         for (std::size_t b = 0; b < cap; ++b) {
-            auto m = co_await in.next(max_rows);
+            auto next = in.next(max_rows);
+            auto m = co_await std::move(next).or_fail();
             if (!m) {
                 eof = true;
                 break;
             }
             batch.push_back(std::move(*m));
+            if (cut(batch)) break;
         }
         if (batch.empty()) break;
         row_base.clear();
@@ -387,18 +412,24 @@ inline coro::CoroTask<void> accumulate_batches(
         }
         if (active()) {
             if (batch.size() == 1) {
-                accumulate(*state, batch[0], row_base[0]);
+                auto folded = accumulate(*state, batch[0], row_base[0]);
+                if (!folded) co_return folded.error();
             } else {
-                std::vector<AggStatePtr> partials(batch.size());
+                dstd::Vector<AggStatePtr> partials(batch.size());
+                dstd::Vector<dstd::Optional<dstd::Error>> failed(batch.size());
                 parallel_for(static_cast<std::int64_t>(batch.size()), 1,
                              [&](std::int64_t bi, std::int64_t ei) {
                                  for (std::int64_t j = bi; j < ei; ++j) {
                                      const auto z = static_cast<std::size_t>(j);
                                      AggStatePtr st = make();
-                                     accumulate(*st, batch[z], row_base[z]);
+                                     auto folded =
+                                         accumulate(*st, batch[z], row_base[z]);
+                                     if (!folded) failed[z] = folded.error();
                                      partials[z] = std::move(st);
                                  }
                              });
+                for (auto& f : failed)
+                    if (f) co_return *f;
                 std::uint64_t partial_bytes = 0;
                 for (auto& p : partials)
                     if (p) partial_bytes += agg_approx_bytes(*p);
@@ -407,19 +438,39 @@ inline coro::CoroTask<void> accumulate_batches(
                     if (p) agg_merge(*state, *p);
             }
         }
-        after(batch, state);
+        auto after_ok = after(batch, state);
+        if (!after_ok) co_return after_ok;
     }
+    co_return dstd::Result<void>{};
 }
+
+// A cursor that gives one error and then nothing, for a Source::scan that
+// cannot fail any other way.
+class ErrorCursor final : public Cursor {
+   public:
+    explicit ErrorCursor(dstd::Error error) : error_(std::move(error)) {}
+
+    coro::CoroTask<MorselResult> next(std::int64_t) override {
+        if (done_) co_return MorselResult(dstd::nullopt);
+        done_ = true;
+        co_return error_;
+    }
+
+   private:
+    dstd::Error error_;
+    bool done_ = false;
+};
 
 // The columns of `in` picked by index, in that order.
 class ProjectCursor : public Cursor {
    public:
-    ProjectCursor(std::unique_ptr<Cursor> in, std::vector<std::size_t> pick)
+    ProjectCursor(dstd::UniquePtr<Cursor> in, dstd::Vector<std::size_t> pick)
         : in_(std::move(in)), pick_(std::move(pick)) {}
 
-    coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
-        auto m = co_await in_->next(max_rows);
-        if (!m) co_return std::nullopt;
+    coro::CoroTask<MorselResult> next(std::int64_t max_rows) override {
+        auto task = in_->next(max_rows);
+        auto m = co_await std::move(task).or_fail();
+        if (!m) co_return dstd::nullopt;
         Morsel out;
         out.rows = m->rows;
         for (std::size_t i : pick_)
@@ -428,31 +479,33 @@ class ProjectCursor : public Cursor {
     }
 
    private:
-    std::unique_ptr<Cursor> in_;
-    std::vector<std::size_t> pick_;
+    dstd::UniquePtr<Cursor> in_;
+    dstd::Vector<std::size_t> pick_;
 };
 
 // Reads contiguous chunks off an in-memory frame as zero-copy offset views.
 class InMemoryCursor : public Cursor {
    public:
-    explicit InMemoryCursor(std::shared_ptr<const DataFrame> frame)
+    explicit InMemoryCursor(dstd::SharedPtr<const DataFrame> frame)
         : frame_(std::move(frame)), n_(frame_->num_rows()) {}
 
-    coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
-        std::optional<Morsel> out;
+    coro::CoroTask<MorselResult> next(std::int64_t max_rows) override {
+        dstd::Optional<Morsel> out;
         fill(max_rows, out);
         co_return out;
     }
 
-    bool try_next(std::int64_t max_rows, std::optional<Morsel>& out) override {
-        fill(max_rows, out);
+    bool try_next(std::int64_t max_rows, MorselResult& out) override {
+        dstd::Optional<Morsel> m;
+        fill(max_rows, m);
+        out = std::move(m);
         return true;
     }
 
    private:
     // Never suspends: the whole frame is already resident, so next() and
     // try_next() share this synchronous slice logic.
-    void fill(std::int64_t max_rows, std::optional<Morsel>& out) {
+    void fill(std::int64_t max_rows, dstd::Optional<Morsel>& out) {
         if (off_ >= n_) {
             out.reset();
             return;
@@ -470,7 +523,7 @@ class InMemoryCursor : public Cursor {
         out = std::move(m);
     }
 
-    std::shared_ptr<const DataFrame> frame_;
+    dstd::SharedPtr<const DataFrame> frame_;
     std::int64_t n_;
     std::int64_t off_ = 0;
     std::int64_t next_index_ = 0;

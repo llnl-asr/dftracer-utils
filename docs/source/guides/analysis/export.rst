@@ -129,7 +129,7 @@ to get ``to_pandas`` / ``to_polars``:
 
 This function is built only when Arrow IPC support is compiled in
 (``DFTRACER_UTILS_ENABLE_ARROW_IPC``); there is no Python-level write path for
-IPC files. To write one, use the C++ ``IpcWriter`` below, or convert through
+IPC files. To write one, convert through
 pyarrow (``pa.ipc.new_file(...).write_table(df.to_arrow())``).
 
 The Arrow C Data Interface (C++)
@@ -159,28 +159,6 @@ definitions itself, so a consumer needs no Arrow library to include it.
    OwnedArrow col = df.column("dur").to_arrow();
    Series s = Series::from_arrow(col.schema(), col.array());
 
-Write an Arrow IPC file (C++)
------------------------------
-
-To persist columnar data as a ``.arrow`` file readable by pyarrow / polars, use
-the async ``IpcWriter`` (``dftracer/utils/utilities/common/arrow/ipc_writer.h``,
-namespace ``dftracer::utils::utilities::common::arrow``, built when
-``DFTRACER_UTILS_ENABLE_ARROW_IPC`` is set). It consumes finished record batches
-(``ArrowExportResult``) and supports buffer-level zstd compression; the sequence
-is ``open`` then ``write_batch`` (one or more) then ``close``, and it runs on the
-executor.
-
-.. code-block:: cpp
-
-   #include <dftracer/utils/utilities/common/arrow/ipc_writer.h>
-
-   using namespace dftracer::utils::utilities::common::arrow;
-
-   IpcWriter writer;
-   co_await writer.open("out.arrow");         // DEFAULT_ARROW_IPC_COMPRESSION
-   co_await writer.write_batch(batch);        // ArrowExportResult
-   co_await writer.close();
-
 Write a new trace
 -----------------
 
@@ -195,4 +173,3 @@ See also
 - :doc:`../data/dataframe` and :doc:`../data/series` for the ops that run before
   you convert.
 - :doc:`../../columnar-engine` for how the Arrow bridge and encodings work.
-- :doc:`../../cpp_api/arrow` for the generated Arrow utility reference.

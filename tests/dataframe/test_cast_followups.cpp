@@ -1,15 +1,16 @@
+// SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
 
 #include <cmath>
 #include <cstdint>
 #include <limits>
 #include <random>
-#include <vector>
 
-using dftracer::utils::dataframe::Series;
-using dftracer::utils::dataframe::TypeId;
+using namespace dftracer::utils;
+using namespace dftracer::utils::dataframe;
 
 namespace {
 
@@ -18,8 +19,8 @@ bool bit(const Series& s, std::int64_t i) {
 }
 
 template <class T>
-void check_to_bool(const std::vector<T>& x, TypeId type,
-                   const std::vector<std::uint8_t>& valid = {}) {
+void check_to_bool(const dstd::Vector<T>& x, TypeId type,
+                   const dstd::Vector<std::uint8_t>& valid = {}) {
     const auto n = static_cast<std::int64_t>(x.size());
     Series s =
         Series::flat(type, x.data(), n, valid.empty() ? nullptr : valid.data());
@@ -45,10 +46,10 @@ void check_to_bool(const std::vector<T>& x, TypeId type,
 TEST_CASE("SIMD and scalar number-to-bool agree on every width and length") {
     std::mt19937_64 gen(12345);
     for (std::size_t n : {0, 1, 7, 8, 63, 64, 65, 127, 128, 129, 1000, 4097}) {
-        std::vector<std::int32_t> a(n);
-        std::vector<std::int64_t> b(n);
-        std::vector<float> c(n);
-        std::vector<double> d(n);
+        dstd::Vector<std::int32_t> a(n);
+        dstd::Vector<std::int64_t> b(n);
+        dstd::Vector<float> c(n);
+        dstd::Vector<double> d(n);
         for (std::size_t i = 0; i < n; ++i) {
             const auto r = gen() % 6;
             a[i] = r < 2 ? 0 : static_cast<std::int32_t>(gen());
@@ -67,28 +68,28 @@ TEST_CASE("SIMD and scalar number-to-bool agree on every width and length") {
         check_to_bool(c, TypeId::Float32);
         check_to_bool(d, TypeId::Float64);
         // with input nulls the scalar path runs; it must give the same answers
-        std::vector<std::uint8_t> valid((n + 7) / 8, 0xA5);
+        dstd::Vector<std::uint8_t> valid((n + 7) / 8, 0xA5);
         check_to_bool(a, TypeId::Int32, valid);
         check_to_bool(d, TypeId::Float64, valid);
     }
 }
 
 TEST_CASE("a column without NaN or nulls has no validity after the cast") {
-    std::vector<std::int64_t> x{1, 0, 3};
+    dstd::Vector<std::int64_t> x{1, 0, 3};
     Series r = Series::flat_i64(x.data(), 3).cast(TypeId::Bool);
     REQUIRE(r.valid());
     CHECK(r.null_count() == 0);
 }
 
 TEST_CASE("NaN and infinity cast to fixed text") {
-    std::vector<double> d{1.5, std::nan(""), HUGE_VAL, -HUGE_VAL};
+    dstd::Vector<double> d{1.5, std::nan(""), HUGE_VAL, -HUGE_VAL};
     Series t = Series::flat_f64(d.data(), 4).cast(TypeId::String);
     REQUIRE(t.valid());
     CHECK(t.string_at(0) == "1.5");
     CHECK(t.string_at(1) == "nan");
     CHECK(t.string_at(2) == "inf");
     CHECK(t.string_at(3) == "-inf");
-    std::vector<float> f{std::nanf(""), INFINITY};
+    dstd::Vector<float> f{std::nanf(""), INFINITY};
     Series tf = Series::flat(TypeId::Float32, f.data(), 2).cast(TypeId::String);
     REQUIRE(tf.valid());
     CHECK(tf.string_at(0) == "nan");

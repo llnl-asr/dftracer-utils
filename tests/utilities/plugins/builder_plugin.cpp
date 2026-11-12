@@ -1,15 +1,18 @@
+// SPDX-License-Identifier: MIT
 /* Test-only plugin authored through the fluent C++ builder: a fold, an op and
  * a mergeable state type registered from one factory, which is the shape a
  * single make_plugin<Slice> cannot express.
  */
 
 #include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/plugins/plugin.h>
 
 #include <cstdint>
 #include <cstdlib>
-#include <string>
-#include <string_view>
+
+using namespace dftracer::utils;
 
 using namespace dftracer::utils::plugins;
 
@@ -23,7 +26,7 @@ extern "C" std::int64_t double_rows(const dftu_series* v) {
 }
 
 const dftu_op_desc OP = {OP_NAME, DFTU_OP_SIG(I64, SERIES, NONE, NONE),
-                         reinterpret_cast<const void*>(&double_rows)};
+                         reinterpret_cast<dftu_op_generic_fn>(&double_rows)};
 
 // Nothing but a running total, so the test can compare the state's answer
 // against the fold's and see both halves of one factory work.
@@ -44,13 +47,13 @@ struct TotalDur {
 
     void merge(TotalDur& other) { total += other.total; }
     std::uint64_t bytes() const { return sizeof(TotalDur); }
-    std::string serialize() const { return std::to_string(total); }
-    static TotalDur* deserialize(std::string_view b) {
+    dstd::String serialize() const { return dstd::to_string(total); }
+    static TotalDur* deserialize(dstd::StringView b) {
         auto* s = new TotalDur();
-        s->total = std::strtoull(std::string(b).c_str(), nullptr, 10);
+        s->total = std::strtoull(dstd::String(b).c_str(), nullptr, 10);
         return s;
     }
-    std::string finalize() { return std::to_string(total); }
+    dstd::String finalize() { return dstd::to_string(total); }
 };
 
 struct RowCount {
@@ -63,7 +66,7 @@ struct RowCount {
     }
     void merge(RowCount& other) { rows += other.rows; }
     void finalize(Host h) {
-        const std::string s = std::to_string(rows);
+        const dstd::String s = dstd::to_string(rows);
         h.emit_result("builder_plugin.rows", s);
     }
 };

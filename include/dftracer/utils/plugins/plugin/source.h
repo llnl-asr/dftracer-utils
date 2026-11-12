@@ -1,18 +1,18 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_PLUGINS_PLUGIN_SOURCE_H
 #define DFTRACER_UTILS_PLUGINS_PLUGIN_SOURCE_H
 
 #include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <algorithm>
 #include <concepts>
 #include <cstdint>
 #include <exception>
-#include <memory>
-#include <optional>
-#include <string>
-#include <string_view>
 #include <utility>
-#include <vector>
 
 /* A LazyFrame source written as a C++ class. source_vtable<S>() adapts S to
  * dftu_source_vt; register it with PluginBuilder::source<S>() (or
@@ -21,25 +21,25 @@
  * is freed through its own vtable.
  *
  * S provides:
- *   std::vector<std::string> names() const;
+ *   dstd::Vector<dstd::String> names() const;
  *   ScanResult<C> scan(const ScanView&) const;
  * where C is a cursor type with
- *   std::optional<OwnedFrame> next(std::int64_t max_rows);
+ *   dstd::Optional<OwnedFrame> next(std::int64_t max_rows);
  * and optionally, each wired only when present,
  *   bool narrow(ExprView predicate);          // advisory, see dftu_cursor_vt
  *   std::uint64_t resident_bytes();
  *   std::uint64_t reclaim(std::uint64_t want);
  * and optionally
  *   void schema(SchemaBuilder&) const;               // column types
- *   std::optional<Applied<S>> apply_filter(ExprView) const;
- *   std::optional<Applied<S>> apply_projection(const std::vector<NamedExpr>&)
- * const; std::optional<Applied<S>> apply_aggregation(const AggregationView&)
- * const; std::optional<Applied<S>> apply_sort(const SortView&) const;
- *   std::optional<Applied<S>> apply_topn(const SortView&, std::int64_t k)
- * const; std::optional<Applied<S>> apply_limit(std::int64_t offset,
- * std::int64_t n) const; std::optional<Applied<S>> apply_tail(std::int64_t n)
- * const; std::optional<Applied<S>> apply_join(const JoinView<S>&) const; The
- * apply_* contract is dftu_source_vt::apply's: std::nullopt for unsupported or
+ *   dstd::Optional<Applied<S>> apply_filter(ExprView) const;
+ *   dstd::Optional<Applied<S>> apply_projection(const dstd::Vector<NamedExpr>&)
+ * const; dstd::Optional<Applied<S>> apply_aggregation(const AggregationView&)
+ * const; dstd::Optional<Applied<S>> apply_sort(const SortView&) const;
+ *   dstd::Optional<Applied<S>> apply_topn(const SortView&, std::int64_t k)
+ * const; dstd::Optional<Applied<S>> apply_limit(std::int64_t offset,
+ * std::int64_t n) const; dstd::Optional<Applied<S>> apply_tail(std::int64_t n)
+ * const; dstd::Optional<Applied<S>> apply_join(const JoinView<S>&) const; The
+ * apply_* contract is dftu_source_vt::apply's: dstd::nullopt for unsupported or
  * no change, a new S otherwise, projection / aggregation / join only as
  * Apply::Exact. A cursor error is a thrown std::exception; a throwing apply_*
  * reads as no change and a throwing scan() as a failed scan. */
@@ -114,9 +114,9 @@ class ExprView {
     explicit operator bool() const noexcept { return e_ != nullptr; }
 
     /// The column when this is a bare column reference.
-    std::optional<std::int32_t> column() const {
+    dstd::Optional<std::int32_t> column() const {
         const std::int32_t c = e_ ? dftu_expr_col_index(e_) : -1;
-        if (c < 0) return std::nullopt;
+        if (c < 0) return dstd::nullopt;
         return c;
     }
 
@@ -125,46 +125,46 @@ class ExprView {
         dftu_cmp_op op;
         dftu_scalar rhs;  ///< a string borrows from this expression
     };
-    std::optional<Compare> as_compare() const {
+    dstd::Optional<Compare> as_compare() const {
         std::int32_t col = -1, op = 0;
         dftu_scalar rhs{};
         if (!e_ || !dftu_expr_as_col_cmp(e_, &col, &op, &rhs))
-            return std::nullopt;
+            return dstd::nullopt;
         return Compare{col, static_cast<dftu_cmp_op>(op), rhs};
     }
 
     struct Logical;
-    std::optional<Logical> as_logical() const;
-    std::optional<OwnedExpr> as_not() const;
+    dstd::Optional<Logical> as_logical() const;
+    dstd::Optional<OwnedExpr> as_not() const;
 
     struct StrPred {
         std::int32_t column;
         dftu_str_pred_op op;
-        std::string_view pattern;  ///< borrows from this expression
+        dstd::StringView pattern;  ///< borrows from this expression
     };
-    std::optional<StrPred> as_str_pred() const {
+    dstd::Optional<StrPred> as_str_pred() const {
         std::int32_t col = -1, op = 0, len = 0;
         const char* pat = nullptr;
         if (!e_ || !dftu_expr_as_col_str_pred(e_, &col, &op, &pat, &len))
-            return std::nullopt;
+            return dstd::nullopt;
         return StrPred{col, static_cast<dftu_str_pred_op>(op),
-                       std::string_view(pat, static_cast<std::size_t>(len))};
+                       dstd::StringView(pat, static_cast<std::size_t>(len))};
     }
 
     struct IsIn {
         std::int32_t column;
         OwnedSeries values;
     };
-    std::optional<IsIn> as_is_in() const {
+    dstd::Optional<IsIn> as_is_in() const {
         std::int32_t col = -1;
         dftu_series* values = nullptr;
         if (!e_ || !dftu_expr_as_col_is_in(e_, &col, &values))
-            return std::nullopt;
+            return dstd::nullopt;
         return IsIn{col, OwnedSeries(values)};
     }
 
     /// Evaluate over `inputs`; an empty result on a malformed expression.
-    OwnedSeries eval(const std::vector<const dftu_series*>& inputs) const {
+    OwnedSeries eval(const dstd::Vector<const dftu_series*>& inputs) const {
         if (!e_) return {};
         return OwnedSeries(dftu_expr_eval(
             e_, inputs.data(), static_cast<std::int32_t>(inputs.size())));
@@ -206,72 +206,72 @@ struct ExprView::Logical {
     OwnedExpr rhs;
 };
 
-inline std::optional<ExprView::Logical> ExprView::as_logical() const {
+inline dstd::Optional<ExprView::Logical> ExprView::as_logical() const {
     std::int32_t op = 0;
     dftu_expr* a = nullptr;
     dftu_expr* b = nullptr;
-    if (!e_ || !dftu_expr_as_logical(e_, &op, &a, &b)) return std::nullopt;
+    if (!e_ || !dftu_expr_as_logical(e_, &op, &a, &b)) return dstd::nullopt;
     return Logical{static_cast<dftu_logical_op>(op), OwnedExpr(a),
                    OwnedExpr(b)};
 }
 
-inline std::optional<OwnedExpr> ExprView::as_not() const {
+inline dstd::Optional<OwnedExpr> ExprView::as_not() const {
     dftu_expr* a = nullptr;
-    if (!e_ || !dftu_expr_as_not(e_, &a)) return std::nullopt;
+    if (!e_ || !dftu_expr_as_not(e_, &a)) return dstd::nullopt;
     return OwnedExpr(a);
 }
 
 struct NamedExpr {
-    std::string_view name;
+    dstd::StringView name;
     ExprView expr;
 };
 
 struct AggView {
-    std::string_view op;  ///< canonical aggregate name, e.g. "sum"
+    dstd::StringView op;  ///< canonical aggregate name, e.g. "sum"
     ExprView input;       ///< empty for count
     ExprView by;          ///< set only for ops that read a second column
     double param = 0.0;
-    std::string_view out;
+    dstd::StringView out;
 };
 
 struct AggregationView {
-    std::vector<NamedExpr> keys;
-    std::vector<AggView> aggs;
+    dstd::Vector<NamedExpr> keys;
+    dstd::Vector<AggView> aggs;
 };
 
 struct SortView {
-    std::vector<std::string_view> by;
-    std::vector<bool> descending;
+    dstd::Vector<dstd::StringView> by;
+    dstd::Vector<bool> descending;
 };
 
 template <class S>
 struct JoinView {
     const S& other;  ///< the right side, fully absorbed into its own source
-    std::vector<std::string_view> left_on;
-    std::vector<std::string_view> right_on;
+    dstd::Vector<dstd::StringView> left_on;
+    dstd::Vector<dstd::StringView> right_on;
     dftu_join_how how;
-    std::string_view suffix;
+    dstd::StringView suffix;
 };
 
 struct ScanView {
-    std::vector<std::string_view> projection;  ///< empty: every column
-    std::vector<ExprView> filters;  ///< positional against the projection
-    std::int64_t limit = -1;        ///< -1: none
+    dstd::Vector<dstd::StringView> projection;  ///< empty: every column
+    dstd::Vector<ExprView> filters;  ///< positional against the projection
+    std::int64_t limit = -1;         ///< -1: none
     std::uint64_t memory_budget = 0;
 };
 
 template <class Cursor>
 struct ScanResult {
-    std::unique_ptr<Cursor> cursor;
+    dstd::UniquePtr<Cursor> cursor;
     /// One entry per ScanView::filters; missing entries read as NO.
-    std::vector<dftu_pushed> filters;
+    dstd::Vector<dftu_pushed> filters;
 };
 
 enum class Apply { Exact, Inexact };
 
 template <class S>
 struct Applied {
-    std::unique_ptr<S> source;
+    dstd::UniquePtr<S> source;
     Apply status = Apply::Exact;
 };
 
@@ -293,16 +293,16 @@ namespace detail {
 
 template <class S>
 struct SourceBox {
-    std::unique_ptr<S> source;
-    std::vector<std::string> names;
-    std::vector<const char*> name_ptrs;
+    dstd::UniquePtr<S> source;
+    dstd::Vector<dstd::String> names;
+    dstd::Vector<const char*> name_ptrs;
     bool named = false;
 };
 
 template <class C>
 struct CursorBox {
-    std::unique_ptr<C> cursor;
-    std::string error;
+    dstd::UniquePtr<C> cursor;
+    dstd::String error;
 };
 
 template <class C>
@@ -311,7 +311,7 @@ struct CursorVt {
                            dftu_result_frame* out) {
         auto* box = static_cast<CursorBox<C>*>(self);
         try {
-            std::optional<OwnedFrame> f = box->cursor->next(max_rows);
+            dstd::Optional<OwnedFrame> f = box->cursor->next(max_rows);
             out->ok = 1;
             out->u.value = f ? f->release() : nullptr;
         } catch (const std::exception& e) {
@@ -353,7 +353,7 @@ struct CursorVt {
         }
     }
     static const dftu_cursor_vt* vt() {
-        static const dftu_cursor_vt v = [] {
+        static const dftu_cursor_vt VT = [] {
             dftu_cursor_vt t{};
             t.next = next;
             t.destroy = destroy;
@@ -375,7 +375,7 @@ struct CursorVt {
                 t.reclaim = reclaim;
             return t;
         }();
-        return &v;
+        return &VT;
     }
 };
 
@@ -385,7 +385,7 @@ concept HasSchema = requires(const S& s, SchemaBuilder& b) { s.schema(b); };
 template <class S>
 concept HasApply =
     requires(const S& s) { s.apply_filter(ExprView{}); } ||
-    requires(const S& s, const std::vector<NamedExpr>& v) {
+    requires(const S& s, const dstd::Vector<NamedExpr>& v) {
         s.apply_projection(v);
     } ||
     requires(const S& s, const AggregationView& v) {
@@ -398,9 +398,9 @@ concept HasApply =
     requires(const S& s) { s.apply_tail(std::int64_t{}); } ||
     requires(const S& s, const JoinView<S>& v) { s.apply_join(v); };
 
-inline std::vector<std::string_view> string_views(const char* const* p,
-                                                  std::int32_t n) {
-    std::vector<std::string_view> out;
+inline dstd::Vector<dstd::StringView> string_views(const char* const* p,
+                                                   std::int32_t n) {
+    dstd::Vector<dstd::StringView> out;
     out.reserve(static_cast<std::size_t>(n > 0 ? n : 0));
     for (std::int32_t i = 0; i < n; ++i) out.emplace_back(p[i] ? p[i] : "");
     return out;
@@ -416,7 +416,7 @@ struct SourceVt {
             if (!box->named) {
                 box->names = box->source->names();
                 box->name_ptrs.clear();
-                for (const std::string& n : box->names)
+                for (const dstd::String& n : box->names)
                     box->name_ptrs.push_back(n.c_str());
                 box->named = true;
             }
@@ -468,18 +468,18 @@ struct SourceVt {
         }
     }
 
-    static std::optional<Applied<S>> dispatch(const S& s,
-                                              const dftu_apply_request& req) {
+    static dstd::Optional<Applied<S>> dispatch(const S& s,
+                                               const dftu_apply_request& req) {
         switch (req.kind) {
             case DFTU_APPLY_FILTER:
                 if constexpr (requires { s.apply_filter(ExprView{}); })
                     return s.apply_filter(ExprView(req.u.filter.predicate));
                 break;
             case DFTU_APPLY_PROJECTION:
-                if constexpr (requires(const std::vector<NamedExpr>& v) {
+                if constexpr (requires(const dstd::Vector<NamedExpr>& v) {
                                   s.apply_projection(v);
                               }) {
-                    std::vector<NamedExpr> exprs;
+                    dstd::Vector<NamedExpr> exprs;
                     for (std::int32_t i = 0; i < req.u.projection.n_exprs; ++i)
                         exprs.push_back(
                             {req.u.projection.exprs[i].name,
@@ -544,7 +544,7 @@ struct SourceVt {
             default:
                 break;
         }
-        return std::nullopt;
+        return dstd::nullopt;
     }
 
     static SortView sort_view(const dftu_apply_sort_args& a) {
@@ -559,7 +559,7 @@ struct SourceVt {
                       dftu_apply_result* out) {
         auto* box = static_cast<Box*>(self);
         try {
-            std::optional<Applied<S>> r = dispatch(*box->source, *req);
+            dstd::Optional<Applied<S>> r = dispatch(*box->source, *req);
             if (!r || !r->source) return;
             auto* next = new Box{std::move(r->source), {}, {}, false};
             out->status = r->status == Apply::Exact ? DFTU_APPLY_EXACT
@@ -572,7 +572,7 @@ struct SourceVt {
     }
 
     static const dftu_source_vt* vt() {
-        static const dftu_source_vt v = [] {
+        static const dftu_source_vt VT = [] {
             dftu_source_vt t{};
             t.schema = schema;
             t.scan = scan;
@@ -581,7 +581,7 @@ struct SourceVt {
             if constexpr (HasApply<S>) t.apply = apply;
             return t;
         }();
-        return &v;
+        return &VT;
     }
 };
 
@@ -596,7 +596,7 @@ const dftu_source_vt* source_vtable() {
 /// Wrap `source` as the `self` its vtable expects. Ownership passes to whoever
 /// calls the vtable's destroy() on it.
 template <class S>
-void* make_source_self(std::unique_ptr<S> source) {
+void* make_source_self(dstd::UniquePtr<S> source) {
     return new detail::SourceBox<S>{std::move(source), {}, {}, false};
 }
 

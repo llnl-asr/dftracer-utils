@@ -1,8 +1,16 @@
+// SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/parallel.h>
+#include <dftracer/utils/dstd/fmt.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 
 #include <algorithm>
@@ -11,99 +19,121 @@
 #include <cstdlib>
 #include <cstring>
 #include <random>
-#include <string>
-#include <string_view>
-#include <vector>
 
-using dftracer::utils::dataframe::AggOp;
-using dftracer::utils::dataframe::AggSpec;
-using dftracer::utils::dataframe::DataFrame;
-using dftracer::utils::dataframe::Series;
-using dftracer::utils::dataframe::TypeId;
-
-namespace df = dftracer::utils::dataframe;
+using namespace dftracer::utils;
+using namespace dftracer::utils::dataframe;
 
 namespace {
 
-// Above the partitioned drivers' row floor; a quarter under Valgrind.
-const std::int64_t ROWS =
-    static_cast<std::int64_t>(DFTRACER_UTILS_VALGRIND_SCALE(1'200'000, 4));
-const std::int64_t GROUPS =
-    static_cast<std::int64_t>(DFTRACER_UTILS_VALGRIND_SCALE(150'000, 4));
-// Repeats of one group-by that must give the same bits. The point is the
-// scheduling, which Valgrind does not check, so it runs only two.
+// The library folds a frame in morsels of this many rows (AGG_GRAIN in
+// agg/group.cpp). The by-key and batched drivers take more than four morsels,
+// the partitioned driver more than sixteen. The cases that reach it use
+// PACKED_ROWS and the rest stop a sixteenth of a morsel past four.
+constexpr std::int64_t MORSEL = std::int64_t{1} << 16;
+// Not scaled down under Valgrind. Each is the smallest size that crosses its
+// driver's threshold, so a smaller input would test another path.
+constexpr std::int64_t ROWS = 4 * MORSEL + MORSEL / 16;
+constexpr std::int64_t PACKED_ROWS = 17 * MORSEL;
+// Eight rows per group, so nearly every row opens or extends a small group.
+constexpr std::int64_t ROWS_PER_GROUP = 8;
+// Repeats of one group-by that must give the same bits, to look for a race.
+// Valgrind does not check scheduling, so it runs two. A coverage build reaches
+// the same lines with two and runs the kernels many times slower.
+#if defined(DFTRACER_UTILS_COVERAGE_BUILD)
 const int REPEATS =
-    static_cast<int>(DFTRACER_UTILS_VALGRIND_SCALE_MIN(20, 10, 2));
+    static_cast<int>(DFTRACER_UTILS_VALGRIND_SCALE_MIN(2, 10, 2));
+#else
+const int REPEATS =
+    static_cast<int>(DFTRACER_UTILS_VALGRIND_SCALE_MIN(4, 10, 2));
+#endif
 
 // Value columns, by index in `values`.
 enum : std::int32_t { X = 0, Y = 1, S = 2, U = 3 };
 
 struct Input {
-    std::vector<std::string> key_text;
-    std::vector<std::string_view> key_views;
-    std::vector<std::uint8_t> key_valid;
-    std::vector<std::int64_t> time;
-    std::vector<std::int64_t> bigkey;
-    std::vector<double> x, u;
-    std::vector<std::uint8_t> x_valid;
-    std::vector<std::int64_t> y;
-    std::vector<std::string> sval;
-    std::vector<std::string_view> sval_views;
-    Series skey, tkey, bkey, xs, ys, ss, us;
-    bool null_keys = false;
+    std::int64_t rows;
+    std::int64_t groups;
+    dstd::Vector<dstd::String> key_text;
+    dstd::Vector<dstd::StringView> key_views;
+    dstd::Vector<std::uint8_t> key_valid;
+    dstd::Vector<std::int64_t> time;
+    dstd::Vector<std::int64_t> bigkey;
+    dstd::Vector<double> x, u;
+    dstd::Vector<std::uint8_t> x_valid;
+    dstd::Vector<std::int64_t> y;
+    dstd::Vector<dstd::String> sval;
+    dstd::Vector<dstd::StringView> sval_views;
+    dstd::Vector<dstd::String> short_text;
+    dstd::Vector<dstd::StringView> short_views;
+    Series skey, nkey, tkey, bkey, xs, ys, ss, us, shortkey;
 
-    // A string key longer than 16 bytes (the packed driver's limit), a small
+    // A string key longer than 16 bytes (the packed driver's limit) once with
+    // no nulls (skey) and once with nulls (nkey), a short string key, a small
     // integer key, and four value columns: a float with nulls, an integer, a
     // string, and a float no two rows share (for ArgMax).
-    explicit Input(bool with_null_keys) : null_keys(with_null_keys) {
+    explicit Input(std::int64_t row_count)
+        : rows(row_count), groups(row_count / ROWS_PER_GROUP) {
         std::mt19937_64 rng(7);
-        const std::int64_t procs = GROUPS / 10;
-        key_text.resize(ROWS);
-        time.resize(ROWS);
-        bigkey.resize(ROWS);
-        x.resize(ROWS);
-        u.resize(ROWS);
-        y.resize(ROWS);
-        sval.resize(ROWS);
-        x_valid.assign(static_cast<std::size_t>((ROWS + 7) / 8), 0);
-        key_valid.assign(static_cast<std::size_t>((ROWS + 7) / 8), 0);
-        for (std::int64_t i = 0; i < ROWS; ++i) {
+        const std::int64_t procs = groups / 10;
+        key_text.resize(rows);
+        short_text.resize(rows);
+        time.resize(rows);
+        bigkey.resize(rows);
+        x.resize(rows);
+        u.resize(rows);
+        y.resize(rows);
+        sval.resize(rows);
+        x_valid.assign(static_cast<std::size_t>((rows + 7) / 8), 0);
+        key_valid.assign(static_cast<std::size_t>((rows + 7) / 8), 0);
+        for (std::int64_t i = 0; i < rows; ++i) {
             const auto p = static_cast<std::int64_t>(rng() % procs);
-            key_text[i] =
-                "app#host#" + std::to_string(p) + "#" + std::to_string(p);
+            key_text[i] = dstd::fmt<"app#host#{}#{}">(p, p);
+            short_text[i] = dstd::fmt<"k{}">((i * 7919) % groups);
             time[i] = static_cast<std::int64_t>(rng() % 10);
-            bigkey[i] = static_cast<std::int64_t>(rng() % GROUPS) * 1000003;
+            bigkey[i] = static_cast<std::int64_t>(rng() % groups) * 1000003;
             x[i] = static_cast<double>(rng() % 100000) / 7.0;
             if (rng() % 20 != 0)
                 x_valid[i >> 3] |= static_cast<std::uint8_t>(1U << (i & 7));
             u[i] = static_cast<double>(i);
             y[i] = static_cast<std::int64_t>(rng() % 1000) - 500;
-            sval[i] = "v" + std::to_string(rng() % 50);
-            if (!with_null_keys || rng() % 20 != 0)
+            sval[i] = dstd::fmt<"v{}">(rng() % 50);
+            if (rng() % 20 != 0)
                 key_valid[i >> 3] |= static_cast<std::uint8_t>(1U << (i & 7));
         }
         for (const auto& s : key_text) key_views.push_back(s);
+        for (const auto& s : short_text) short_views.push_back(s);
         for (const auto& s : sval) sval_views.push_back(s);
-        skey =
-            with_null_keys
-                ? Series::strings(std::span<const std::string_view>(key_views),
-                                  key_valid.data())
-                : Series::strings(std::span<const std::string_view>(key_views));
-        tkey = Series::flat(TypeId::Int64, time.data(), ROWS);
-        bkey = Series::flat(TypeId::Int64, bigkey.data(), ROWS);
-        xs = Series::flat_f64(x.data(), ROWS, x_valid.data());
-        ys = Series::flat_i64(y.data(), ROWS);
-        ss = Series::strings(std::span<const std::string_view>(sval_views));
-        us = Series::flat_f64(u.data(), ROWS);
+        skey = Series::strings(dstd::Span<const dstd::StringView>(key_views));
+        nkey = Series::strings(dstd::Span<const dstd::StringView>(key_views),
+                               key_valid.data());
+        shortkey =
+            Series::strings(dstd::Span<const dstd::StringView>(short_views));
+        tkey = Series::flat(TypeId::Int64, time.data(), rows);
+        bkey = Series::flat(TypeId::Int64, bigkey.data(), rows);
+        xs = Series::flat_f64(x.data(), rows, x_valid.data());
+        ys = Series::flat_i64(y.data(), rows);
+        ss = Series::strings(dstd::Span<const dstd::StringView>(sval_views));
+        us = Series::flat_f64(u.data(), rows);
     }
 
-    std::vector<const Series*> values() const { return {&xs, &ys, &ss, &us}; }
+    dstd::Vector<const Series*> values() const { return {&xs, &ys, &ss, &us}; }
 };
+
+// Built once for the binary. A case reads them and changes nothing.
+const Input& input() {
+    static const Input in(ROWS);
+    return in;
+}
+
+const Input& packed_input() {
+    static const Input in(PACKED_ROWS);
+    return in;
+}
 
 // The aggregates every many-group driver takes. arg_max is not here: its
 // result depends on the order rows reach a group, and the driver that streams
 // blocks refuses it (specs_with_arg_max).
-std::vector<AggSpec> specs() {
+dstd::Vector<AggSpec> specs() {
     auto s = [](AggOp op, std::int32_t col, const char* out, double param = 0.0,
                 std::int32_t by = -1) {
         AggSpec sp;
@@ -133,8 +163,8 @@ std::vector<AggSpec> specs() {
             s(AggOp::Distinct, S, "distinct_s", 1024.0)};
 }
 
-std::vector<AggSpec> specs_with_arg_max() {
-    std::vector<AggSpec> all = specs();
+dstd::Vector<AggSpec> specs_with_arg_max() {
+    dstd::Vector<AggSpec> all = specs();
     AggSpec sp;
     sp.op = AggOp::ArgMax;
     sp.value_col = X;
@@ -146,12 +176,12 @@ std::vector<AggSpec> specs_with_arg_max() {
 
 // A single-threaded fold of the whole frame: the reference every driver must
 // equal.
-DataFrame reference(const std::vector<const Series*>& keys, const Input& in,
-                    const std::vector<std::string>& key_names,
-                    std::vector<AggSpec> with = specs()) {
-    df::AggStatePtr st = df::agg_new(std::move(with));
-    df::agg_accumulate(*st, keys, in.values());
-    return df::agg_finalize(*st, key_names);
+DataFrame reference(const dstd::Vector<const Series*>& keys, const Input& in,
+                    const dstd::Vector<dstd::String>& key_names,
+                    dstd::Vector<AggSpec> with = specs()) {
+    dataframe::AggStatePtr st = dataframe::agg_new(std::move(with));
+    dftu_utils_test::ok(dataframe::agg_accumulate(*st, keys, in.values()));
+    return dataframe::agg_finalize(*st, key_names);
 }
 
 // Every column equal to the fold (floats to 1e-9 relative, the order of float
@@ -160,7 +190,7 @@ DataFrame reference(const std::vector<const Series*>& keys, const Input& in,
 // sketch built from rows in another order differ from the fold in the tail
 // bins.
 void expect_equal(const DataFrame& a, const DataFrame& b,
-                  const std::vector<std::string>& skip = {}) {
+                  const dstd::Vector<dstd::String>& skip = {}) {
     REQUIRE(a.num_rows() == b.num_rows());
     REQUIRE(a.columns.size() == b.columns.size());
     for (std::size_t c = 0; c < a.columns.size(); ++c) {
@@ -214,7 +244,7 @@ void expect_equal(const DataFrame& a, const DataFrame& b,
 
 // Bits, not tolerances: every output column of two frames identical, the float
 // sums and the sketch included.
-bool bit_equal(const DataFrame& a, const DataFrame& b, std::string* why) {
+bool bit_equal(const DataFrame& a, const DataFrame& b, dstd::String* why) {
     if (a.num_rows() != b.num_rows() || a.columns.size() != b.columns.size()) {
         *why = "shape";
         return false;
@@ -223,12 +253,12 @@ bool bit_equal(const DataFrame& a, const DataFrame& b, std::string* why) {
         const Series& p = a.columns[c];
         const Series& q = b.columns[c];
         if (p.type() != q.type()) {
-            *why = a.names[c] + " type";
+            *why = dstd::fmt<"{} type">(a.names[c]);
             return false;
         }
         for (std::int64_t i = 0; i < p.length(); ++i) {
             if (p.is_null(i) != q.is_null(i)) {
-                *why = a.names[c] + " validity at " + std::to_string(i);
+                *why = dstd::fmt<"{} validity at {}">(a.names[c], i);
                 return false;
             }
             if (p.is_null(i)) continue;
@@ -254,7 +284,7 @@ bool bit_equal(const DataFrame& a, const DataFrame& b, std::string* why) {
                     break;
             }
             if (!same) {
-                *why = a.names[c] + " at row " + std::to_string(i);
+                *why = dstd::fmt<"{} at row {}">(a.names[c], i);
                 return false;
             }
         }
@@ -264,50 +294,56 @@ bool bit_equal(const DataFrame& a, const DataFrame& b, std::string* why) {
 
 // The same group-by REPEATS times on the thread pool and once serial: the bits
 // must not change with the scheduling or with the number of threads.
-void expect_deterministic(const std::vector<const Series*>& keys,
-                          const Input& in, const std::vector<AggSpec>& with,
-                          const std::vector<std::string>& names) {
-    const DataFrame first = df::group_agg(keys, in.values(), with, names);
-    std::string why;
+void expect_deterministic(const dstd::Vector<const Series*>& keys,
+                          const Input& in, const dstd::Vector<AggSpec>& with,
+                          const dstd::Vector<dstd::String>& names) {
+    const DataFrame first = dftu_utils_test::ok(
+        dataframe::group_agg(keys, in.values(), with, names));
+    dstd::String why;
     for (int run = 0; run < REPEATS; ++run) {
-        const DataFrame again = df::group_agg(keys, in.values(), with, names);
+        const DataFrame again = dftu_utils_test::ok(
+            dataframe::group_agg(keys, in.values(), with, names));
         INFO("run " << run << ": " << why);
         REQUIRE(bit_equal(first, again, &why));
     }
-    df::set_parallel_backend(nullptr, nullptr);  // serial
-    const DataFrame serial = df::group_agg(keys, in.values(), with, names);
-    df::install_runtime_parallel_backend();
+    dataframe::set_parallel_backend(nullptr, nullptr);  // serial
+    const DataFrame serial = dftu_utils_test::ok(
+        dataframe::group_agg(keys, in.values(), with, names));
+    dataframe::install_runtime_parallel_backend();
     INFO("serial: " << why);
     REQUIRE(bit_equal(first, serial, &why));
 }
 
 struct Backend {
-    Backend() { df::install_runtime_parallel_backend(); }
+    Backend() { dataframe::install_runtime_parallel_backend(); }
 } backend;
 
 }  // namespace
 
 TEST_CASE("many groups on a long string key equal the one-thread fold") {
-    Input in(false);
-    const std::vector<const Series*> keys{&in.skey, &in.tkey};
-    DataFrame got = df::group_agg(keys, in.values(), specs(), {"proc", "t"});
-    REQUIRE(df::parallel_backend_installed());
-    CHECK(got.num_rows() > GROUPS * 2 / 3);
+    const Input& in = input();
+    const dstd::Vector<const Series*> keys{&in.skey, &in.tkey};
+    DataFrame got = dftu_utils_test::ok(
+        dataframe::group_agg(keys, in.values(), specs(), {"proc", "t"}));
+    REQUIRE(dataframe::parallel_backend_installed());
+    CHECK(got.num_rows() > in.groups * 2 / 3);
     expect_equal(got, reference(keys, in, {"proc", "t"}), {"p50_x"});
 }
 
 TEST_CASE("many groups on an integer key equal the one-thread fold") {
-    Input in(false);
-    const std::vector<const Series*> keys{&in.bkey, &in.tkey};
-    DataFrame got = df::group_agg(keys, in.values(), specs(), {"big", "t"});
-    CHECK(got.num_rows() > GROUPS * 2 / 3);
+    const Input& in = input();
+    const dstd::Vector<const Series*> keys{&in.bkey, &in.tkey};
+    DataFrame got = dftu_utils_test::ok(
+        dataframe::group_agg(keys, in.values(), specs(), {"big", "t"}));
+    CHECK(got.num_rows() > in.groups * 2 / 3);
     expect_equal(got, reference(keys, in, {"big", "t"}), {"p50_x"});
 }
 
 TEST_CASE("null keys form one group and equal the one-thread fold") {
-    Input in(true);
-    const std::vector<const Series*> keys{&in.skey, &in.tkey};
-    DataFrame got = df::group_agg(keys, in.values(), specs(), {"proc", "t"});
+    const Input& in = input();
+    const dstd::Vector<const Series*> keys{&in.nkey, &in.tkey};
+    DataFrame got = dftu_utils_test::ok(
+        dataframe::group_agg(keys, in.values(), specs(), {"proc", "t"}));
     expect_equal(got, reference(keys, in, {"proc", "t"}), {"p50_x"});
     // the null string key is one group per time bucket, not one per partition
     std::int64_t nulls = 0;
@@ -317,13 +353,14 @@ TEST_CASE("null keys form one group and equal the one-thread fold") {
 }
 
 TEST_CASE("a float key keeps the existing path and still equals the fold") {
-    Input in(false);
-    std::vector<double> fk(ROWS);
-    for (std::int64_t i = 0; i < ROWS; ++i)
-        fk[i] = static_cast<double>(i % 50000) * 0.25;
-    Series fkey = Series::flat_f64(fk.data(), ROWS);  // 50,000 groups
-    const std::vector<const Series*> keys{&fkey};
-    DataFrame got = df::group_agg(keys, in.values(), specs(), {"f"});
+    const Input& in = input();
+    dstd::Vector<double> fk(in.rows);
+    for (std::int64_t i = 0; i < in.rows; ++i)
+        fk[i] = static_cast<double>(i % (in.groups / 3)) * 0.25;
+    Series fkey = Series::flat_f64(fk.data(), in.rows);
+    const dstd::Vector<const Series*> keys{&fkey};
+    DataFrame got = dftu_utils_test::ok(
+        dataframe::group_agg(keys, in.values(), specs(), {"f"}));
     // The quantile sketch is left out: its 128 collapsing bins make a merge of
     // per-thread partial sketches differ from one sketch run to run (a
     // separate, existing limitation).
@@ -331,61 +368,56 @@ TEST_CASE("a float key keeps the existing path and still equals the fold") {
 }
 
 TEST_CASE("arg_max over many groups equals the fold, the first row on a tie") {
-    Input in(false);
-    const std::vector<const Series*> keys{&in.skey, &in.tkey};
-    DataFrame got =
-        df::group_agg(keys, in.values(), specs_with_arg_max(), {"proc", "t"});
+    const Input& in = input();
+    const dstd::Vector<const Series*> keys{&in.skey, &in.tkey};
+    DataFrame got = dftu_utils_test::ok(dataframe::group_agg(
+        keys, in.values(), specs_with_arg_max(), {"proc", "t"}));
     // The sketch quantile is left out for the reason given above.
     expect_equal(got, reference(keys, in, {"proc", "t"}, specs_with_arg_max()),
                  {"p50_x"});
 }
 
 TEST_CASE("many groups give the same bits on every run and thread count") {
-    Input in(true);
-    std::vector<std::string> short_text(ROWS);
-    std::vector<std::string_view> short_views;
-    for (std::int64_t i = 0; i < ROWS; ++i)
-        short_text[i] = "k" + std::to_string((i * 7919) % GROUPS);
-    for (const auto& t : short_text) short_views.push_back(t);
-    Series shortkey =
-        Series::strings(std::span<const std::string_view>(short_views));
+    const Input& in = input();
     SUBCASE("long string key") {
-        expect_deterministic({&in.skey, &in.tkey}, in, specs(), {"proc", "t"});
+        expect_deterministic({&in.nkey, &in.tkey}, in, specs(), {"proc", "t"});
     }
     SUBCASE("integer key") {
         expect_deterministic({&in.bkey, &in.tkey}, in, specs(), {"big", "t"});
     }
     SUBCASE("short string key, float sums") {
-        expect_deterministic({&shortkey}, in, specs(), {"k"});
+        expect_deterministic({&in.shortkey}, in, specs(), {"k"});
     }
     SUBCASE("short string key, order-free aggregates (the packed driver)") {
-        std::vector<AggSpec> sp;
+        const Input& big = packed_input();
+        dstd::Vector<AggSpec> sp;
         for (const AggSpec& a : specs())
             if (a.op == AggOp::Count || a.op == AggOp::Min ||
                 a.op == AggOp::Max || (a.op == AggOp::Sum && a.value_col == Y))
                 sp.push_back(a);
-        expect_deterministic({&shortkey}, in, sp, {"k"});
+        expect_deterministic({&big.shortkey}, big, sp, {"k"});
     }
 }
 
 TEST_CASE("few groups give the same bits on every run and thread count") {
-    Input in(false);
+    const Input& in = input();
     expect_deterministic({&in.tkey}, in, specs(), {"t"});
 }
 
 TEST_CASE("the group-by of many groups equals the serial one-pass sum") {
     // A sum in row order per group is what the serial fold computes; the
     // by-key driver keeps that order, so its sums are the fold's bits.
-    Input in(false);
-    const std::vector<const Series*> keys{&in.bkey};
-    DataFrame got = df::group_agg(keys, in.values(), specs(), {"big"});
+    const Input& in = input();
+    const dstd::Vector<const Series*> keys{&in.bkey};
+    DataFrame got = dftu_utils_test::ok(
+        dataframe::group_agg(keys, in.values(), specs(), {"big"}));
     DataFrame ref = reference(keys, in, {"big"});
-    std::string why;
+    dstd::String why;
     // Only the columns whose bits do not depend on how partials merge.
-    const std::vector<std::string> same{"n",     "nx",      "sum_y",
-                                        "min_x", "max_x",   "min_y",
-                                        "max_y", "first_x", "last_x"};
-    for (const std::string& name : same) {
+    const dstd::Vector<dstd::String> same{"n",     "nx",      "sum_y",
+                                          "min_x", "max_x",   "min_y",
+                                          "max_y", "first_x", "last_x"};
+    for (const dstd::String& name : same) {
         std::size_t c = 0;
         while (got.names[c] != name) ++c;
         DataFrame a, b;
@@ -404,8 +436,8 @@ namespace {
 
 // The aggregates the in-place finalize writes: light cells over a float with
 // nulls and an integer, the row count and the count of present values.
-std::vector<AggSpec> light_specs() {
-    std::vector<AggSpec> out;
+dstd::Vector<AggSpec> light_specs() {
+    dstd::Vector<AggSpec> out;
     for (const AggSpec& a : specs()) {
         switch (a.op) {
             case AggOp::Count:
@@ -428,21 +460,23 @@ std::vector<AggSpec> light_specs() {
 
 // The group-by once in place and once with the stitch path forced (the test
 // switch), bit for bit: values, null masks, key columns, group order.
-void expect_in_place_equals_stitch(const std::vector<const Series*>& keys,
+void expect_in_place_equals_stitch(const dstd::Vector<const Series*>& keys,
                                    const Input& in,
-                                   const std::vector<AggSpec>& with,
-                                   const std::vector<std::string>& names,
+                                   const dstd::Vector<AggSpec>& with,
+                                   const dstd::Vector<dstd::String>& names,
                                    bool in_place) {
-    const std::uint64_t before = df::agg_in_place_finalizes();
-    const DataFrame got = df::group_agg(keys, in.values(), with, names);
-    CHECK((df::agg_in_place_finalizes() > before) == in_place);
+    const std::uint64_t before = dataframe::agg_in_place_finalizes();
+    const DataFrame got = dftu_utils_test::ok(
+        dataframe::group_agg(keys, in.values(), with, names));
+    CHECK((dataframe::agg_in_place_finalizes() > before) == in_place);
     REQUIRE(setenv("DFTRACER_UTILS_GROUPBY_STITCH", "1", 1) == 0);
-    const std::uint64_t mid = df::agg_in_place_finalizes();
-    const DataFrame ref = df::group_agg(keys, in.values(), with, names);
+    const std::uint64_t mid = dataframe::agg_in_place_finalizes();
+    const DataFrame ref = dftu_utils_test::ok(
+        dataframe::group_agg(keys, in.values(), with, names));
     unsetenv("DFTRACER_UTILS_GROUPBY_STITCH");
-    CHECK(df::agg_in_place_finalizes() == mid);
+    CHECK(dataframe::agg_in_place_finalizes() == mid);
     CHECK(got.num_rows() > 1000);
-    std::string why;
+    dstd::String why;
     INFO(why);
     REQUIRE(bit_equal(got, ref, &why));
     REQUIRE(got.names == ref.names);
@@ -453,7 +487,7 @@ void expect_in_place_equals_stitch(const std::vector<const Series*>& keys,
 }  // namespace
 
 TEST_CASE("the in-place finalize writes the bits of the stitch path") {
-    Input in(false);
+    const Input& in = input();
     SUBCASE("long string key and an integer key") {
         expect_in_place_equals_stitch({&in.skey, &in.tkey}, in, light_specs(),
                                       {"proc", "t"}, true);
@@ -479,24 +513,17 @@ TEST_CASE("the in-place finalize writes the bits of the stitch path") {
 
 TEST_CASE(
     "the in-place finalize keeps the null key groups and the null cells") {
-    Input in(true);
-    expect_in_place_equals_stitch({&in.skey, &in.tkey}, in, light_specs(),
+    const Input& in = input();
+    expect_in_place_equals_stitch({&in.nkey, &in.tkey}, in, light_specs(),
                                   {"proc", "t"}, true);
 }
 
 TEST_CASE("the in-place finalize handles the packed driver's short keys") {
-    Input in(false);
-    std::vector<std::string> short_text(ROWS);
-    std::vector<std::string_view> short_views;
-    for (std::int64_t i = 0; i < ROWS; ++i)
-        short_text[i] = "k" + std::to_string((i * 7919) % GROUPS);
-    for (const auto& t : short_text) short_views.push_back(t);
-    Series shortkey =
-        Series::strings(std::span<const std::string_view>(short_views));
-    std::vector<AggSpec> order_free;  // count, min, max, an integer sum
+    const Input& in = packed_input();
+    dstd::Vector<AggSpec> order_free;  // count, min, max, an integer sum
     for (const AggSpec& a : specs())
         if (a.op == AggOp::Count || a.op == AggOp::Min || a.op == AggOp::Max ||
             (a.op == AggOp::Sum && a.value_col == Y))
             order_free.push_back(a);
-    expect_in_place_equals_stitch({&shortkey}, in, order_free, {"k"}, true);
+    expect_in_place_equals_stitch({&in.shortkey}, in, order_free, {"k"}, true);
 }

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Collected chunked columns give the same values through every conversion."""
 
 import numpy as np
@@ -20,7 +21,7 @@ def _frame(nulls=False):
 
 
 def _chunked(df):
-    out = df.lazy().collect(morsel_rows=MORSEL)
+    out = df.lazy().collect(batch_size=MORSEL)
     assert out["a"].encoding == 5
     return out
 
@@ -62,7 +63,7 @@ def test_arrow_stream_one_batch_per_chunk():
 def test_arrow_stream_mismatched_bounds_is_one_batch():
     df = _frame()
     ch = _chunked(df)
-    other = df.lazy().collect(morsel_rows=3)
+    other = df.lazy().collect(batch_size=3)
     mixed = DataFrame({"a": ch["a"], "s": other["s"]})
     batches = _batches(mixed)
     assert len(batches) == 1

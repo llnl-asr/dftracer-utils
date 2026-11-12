@@ -19,7 +19,7 @@ RECURSIVE              = YES
 # Input configuration
 INPUT                  = ../include
 FILE_PATTERNS          = *.h *.hpp *.cpp
-EXCLUDE_PATTERNS       = */test/* */tests/*
+EXCLUDE_PATTERNS       = */test/* */tests/* */detail/*
 # Include-guard macros that let several ABI headers declare one typedef.
 EXCLUDE_SYMBOLS        = DFTU_TYPEDEF_*
 STRIP_FROM_INC_PATH    = ../include

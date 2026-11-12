@@ -1,9 +1,11 @@
+// SPDX-License-Identifier: MIT
 // Gathers keep a string column's layout: a view stays a view over the same
 // blobs, a dictionary stays a dictionary over the same child, and the values
 // and nulls equal the flat path.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
@@ -12,27 +14,33 @@
 #include <dftracer/utils/dataframe/kernels/filter.h>
 #include <dftracer/utils/dataframe/mask.h>
 #include <dftracer/utils/dataframe/parallel.h>
+#include <dftracer/utils/dstd/algorithm.h>
+#include <dftracer/utils/dstd/fmt.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
 #include <limits>
-#include <memory>
-#include <optional>
 #include <stdexcept>
-#include <string>
-#include <string_view>
-#include <vector>
+
+using namespace dftracer::utils;
 
 using namespace dftracer::utils::dataframe;
 
 namespace {
 
-using Row = std::optional<std::string>;
-using Rows = std::vector<Row>;
-using Idx = std::vector<std::int64_t>;
+using Row = dstd::Optional<dstd::String>;
+using Rows = dstd::Vector<Row>;
+using Idx = dstd::Vector<std::int64_t>;
 
 const Rows POOL = {Row("read"),
                    Row("write"),
@@ -49,12 +57,12 @@ Rows pool_rows(std::size_t n) {
 }
 
 Series flat_of(const Rows& rows) {
-    std::vector<std::string_view> v;
-    std::vector<std::uint8_t> valid((rows.size() + 7) / 8, 0);
+    dstd::Vector<dstd::StringView> v;
+    dstd::Vector<std::uint8_t> valid((rows.size() + 7) / 8, 0);
     bool any_null = false;
     for (std::size_t i = 0; i < rows.size(); ++i) {
-        v.emplace_back(rows[i] ? std::string_view(*rows[i])
-                               : std::string_view());
+        v.emplace_back(rows[i] ? dstd::StringView(*rows[i])
+                               : dstd::StringView());
         if (rows[i])
             valid[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
         else
@@ -75,16 +83,17 @@ Series selection_over(const Series& base, const Idx& idx) {
     adopt_type_from(*o, *base.handle());
     o->encoding = Encoding::Selection;
     o->length = static_cast<std::int64_t>(idx.size());
-    o->data = Buffer::allocate(idx.size() * sizeof(std::int64_t));
-    std::memcpy(o->data->data(), idx.data(), idx.size() * sizeof(std::int64_t));
-    o->set_child(std::make_shared<dftu_series>(*base.handle()));
+    o->data = new_buffer(idx.size() * sizeof(std::int64_t));
+    std::memcpy(writable(o->data), idx.data(),
+                idx.size() * sizeof(std::int64_t));
+    o->set_child(dstd::make_shared<dftu_series>(*base.handle()));
     return Series{o};
 }
 
 Rows rows_of(const Series& s) {
     Rows r;
     for (std::int64_t i = 0; i < s.length(); ++i)
-        r.push_back(s.is_null(i) ? Row() : Row(std::string(s.string_at(i))));
+        r.push_back(s.is_null(i) ? Row() : Row(dstd::String(s.string_at(i))));
     return r;
 }
 
@@ -95,8 +104,8 @@ Rows pick(const Rows& rows, const Idx& idx) {
     return r;
 }
 
-Series mask_of(const std::vector<bool>& v) {
-    std::vector<std::uint8_t> bits((v.size() + 7) / 8, 0);
+Series mask_of(const dstd::Vector<bool>& v) {
+    dstd::Vector<std::uint8_t> bits((v.size() + 7) / 8, 0);
     for (std::size_t i = 0; i < v.size(); ++i)
         if (v[i]) bits[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
     return Series::flat(TypeId::Bool, bits.data(),
@@ -115,13 +124,13 @@ struct Case {
 
 const void* blobs_of(const Series& s) { return s.handle()->blobs.get(); }
 const void* child_data_of(const Series& s) {
-    return s.handle()->child()->data->data();
+    return s.handle()->child()->data.data();
 }
 
-std::vector<Case> cases() {
+dstd::Vector<Case> cases() {
     const Rows base = pool_rows(120);
     const Idx sel = {5, 5, -1, 17, 0, 119, 64, 3, 3, 99, 40, 41, 42, 7};
-    std::vector<Case> out;
+    dstd::Vector<Case> out;
     out.push_back({"flat", Kind::Flat, flat_of(base), base, nullptr});
     Series v = view_of(base);
     out.push_back({"view", Kind::View, view_of(base), base, nullptr});
@@ -134,8 +143,7 @@ std::vector<Case> cases() {
     {
         Series values{dftu_series_share(dv.handle()->child().get())};
         const_cast<dftu_series*>(dv.handle())
-            ->set_child(std::shared_ptr<dftu_series>(
-                view_of(rows_of(values)).release()));
+            ->set_child(adopt_series(view_of(rows_of(values)).release()));
     }
     out.push_back(
         {"dict over view", Kind::DictView, std::move(dv), base, nullptr});
@@ -177,8 +185,8 @@ void check_layout(const Case& c, const Series& got) {
 
 Idx gather_idx() { return {7, 7, -1, 0, 13, 11, -1, 6, 2, 2, 10}; }
 
-std::string truth_of(const Series& m) {
-    std::string out;
+dstd::String truth_of(const Series& m) {
+    dstd::String out;
     for (std::int64_t i = 0; i < m.length(); ++i) {
         if (m.is_null(i))
             out += 'N';
@@ -189,12 +197,12 @@ std::string truth_of(const Series& m) {
     return out;
 }
 
-std::string ints_of(const Series& m) {
-    std::string out;
+dstd::String ints_of(const Series& m) {
+    dstd::String out;
     for (std::int64_t i = 0; i < m.length(); ++i)
-        out += (m.is_null(i) ? std::string("N")
-                             : std::to_string(m.data<std::int64_t>()[i])) +
-               ",";
+        out += dstd::fmt<"{},">(
+            (m.is_null(i) ? dstd::String("N")
+                          : dstd::to_string(m.data<std::int64_t>()[i])));
     return out;
 }
 
@@ -231,7 +239,7 @@ Series run(StrFn fn, const Series& col, const char* arg) {
         fn(col.handle(), arg, static_cast<std::int32_t>(std::strlen(arg)))};
 }
 
-Series cmp_str(const Series& col, dftu_cmp_op op, const std::string& lit) {
+Series cmp_str(const Series& col, dftu_cmp_op op, const dstd::String& lit) {
     dftu_scalar rhs{};
     rhs.kind = DFTU_SCALAR_TAG_STR;
     rhs.len = static_cast<std::uint32_t>(lit.size());
@@ -239,24 +247,25 @@ Series cmp_str(const Series& col, dftu_cmp_op op, const std::string& lit) {
     return Series{dftu_series_compare(col.handle(), op, rhs)};
 }
 
-std::string in_truth(const Series& col, const std::string& query) {
+dstd::String in_truth(const Series& col, const dstd::String& query) {
     DataFrame f;
     f.names = {"name"};
     f.columns.push_back(col.share());
     auto q = dftracer::utils::duql::Query::from_string(query);
     REQUIRE(q.has_value());
-    return truth_of(evaluate_mask(q->root(), f));
+    return truth_of(dftu_utils_test::ok(
+        evaluate_mask(duql::detail::QueryAccess::root(*q), f)));
 }
 
 }  // namespace
 
 TEST_SUITE("kernels keep layouts") {
     TEST_CASE("filter of a 3-value dictionary keeps the dictionary") {
-        std::vector<std::string> cats;
+        dstd::Vector<dstd::String> cats;
         for (int i = 0; i < 1000; ++i)
             cats.push_back(i % 3 == 0 ? "read" : i % 3 == 1 ? "write" : "open");
-        std::vector<std::int64_t> ids;
-        std::vector<bool> keep;
+        dstd::Vector<std::int64_t> ids;
+        dstd::Vector<bool> keep;
         for (int i = 0; i < 1000; ++i) {
             ids.push_back(i);
             keep.push_back(i % 10 == 3);
@@ -302,7 +311,7 @@ TEST_SUITE("kernels keep layouts") {
             check_layout(c, ts);
             CHECK(rows_of(ts) == pick(c.rows, tl));
 
-            std::vector<bool> keep;
+            dstd::Vector<bool> keep;
             Idx kept;
             for (std::int64_t i = 0; i < n; ++i) {
                 keep.push_back(i % 4 == 1);
@@ -319,12 +328,12 @@ TEST_SUITE("kernels keep layouts") {
         for (const Case& c : cases()) {
             CAPTURE(c.name);
             const Idx idx = gather_idx();
-            std::vector<std::int32_t> idx32(idx.begin(), idx.end());
+            dstd::Vector<std::int32_t> idx32(idx.begin(), idx.end());
             Series t = take32(c.col, idx32);
             check_layout(c, t);
             CHECK(rows_of(t) == pick(c.rows, idx));
 
-            std::vector<Series> cols;
+            dstd::Vector<Series> cols;
             cols.push_back(c.col.share());
             cols.push_back(c.col.share());
             auto out = take_all(cols, idx.data(),
@@ -370,7 +379,7 @@ TEST_SUITE("kernels keep layouts") {
 
     TEST_CASE("DataFrame gathers, sort and join payload keep layout") {
         const Rows base = pool_rows(120);
-        std::vector<std::int64_t> id(120), key(120);
+        dstd::Vector<std::int64_t> id(120), key(120);
         for (int i = 0; i < 120; ++i) {
             id[static_cast<std::size_t>(i)] = (i * 37) % 120;
             key[static_cast<std::size_t>(i)] = i % 7;
@@ -383,7 +392,7 @@ TEST_SUITE("kernels keep layouts") {
             df.columns.push_back(Series::flat_i64(key.data(), 120));
             return df;
         };
-        std::vector<bool> keep;
+        dstd::Vector<bool> keep;
         for (int i = 0; i < 120; ++i) keep.push_back(i % 5 == 0);
         for (const Case& c : cases()) {
             if (c.kind == Kind::Flat || c.kind == Kind::SelFlat) continue;
@@ -401,18 +410,20 @@ TEST_SUITE("kernels keep layouts") {
             same(df.tail(10), flat.tail(10));
             same(df.slice(20, 30), flat.slice(20, 30));
             same(df.take({3, -1, 3, 80}), flat.take({3, -1, 3, 80}));
-            same(df.sort_by("id"), flat.sort_by("id"));
-            same(df.sort_by_multi({"key", "id"}, true),
-                 flat.sort_by_multi({"key", "id"}, true));
+            same(dftu_utils_test::ok(df.sort_by("id")),
+                 dftu_utils_test::ok(flat.sort_by("id")));
+            same(dftu_utils_test::ok(df.sort_by_multi({"key", "id"}, true)),
+                 dftu_utils_test::ok(flat.sort_by_multi({"key", "id"}, true)));
 
             DataFrame right;
             right.names = {"key", "w"};
-            std::vector<std::int64_t> rk = {1, 2, 2, 9}, rw = {10, 20, 21, 90};
+            dstd::Vector<std::int64_t> rk = {1, 2, 2, 9}, rw = {10, 20, 21, 90};
             right.columns.push_back(Series::flat_i64(rk.data(), 4));
             right.columns.push_back(Series::flat_i64(rw.data(), 4));
             for (JoinHow how : {JoinHow::Inner, JoinHow::Left}) {
-                DataFrame j = df.join(right, {"key"}, how);
-                DataFrame jf = flat.join(right, {"key"}, how);
+                DataFrame j = dftu_utils_test::ok(df.join(right, {"key"}, how));
+                DataFrame jf =
+                    dftu_utils_test::ok(flat.join(right, {"key"}, how));
                 REQUIRE(j.num_rows() == jf.num_rows());
                 CHECK(rows_of(j.columns[0]) == rows_of(jf.columns[0]));
                 check_layout(c, j.columns[0]);
@@ -421,12 +432,12 @@ TEST_SUITE("kernels keep layouts") {
     }
 
     TEST_CASE("a dictionary entry that is null makes its rows null") {
-        const std::vector<std::string_view> vals{"a", "", "c"};
+        const dstd::Vector<dstd::StringView> vals{"a", "", "c"};
         const std::uint8_t child_valid = 0b101;
-        const std::vector<std::int32_t> codes{0, 1, 0, 2};
+        const dstd::Vector<std::int32_t> codes{0, 1, 0, 2};
         Series d = dictionary_from_codes(
             codes,
-            Series::strings(std::span<const std::string_view>(vals),
+            Series::strings(dstd::Span<const dstd::StringView>(vals),
                             &child_valid),
             nullptr);
         REQUIRE(d.encoding() == Encoding::Dictionary);
@@ -469,10 +480,10 @@ TEST_SUITE("kernels keep layouts") {
     }
 
     TEST_CASE("starts_with over a 3-entry dictionary equals the flat mask") {
-        std::vector<std::string> cats;
+        dstd::Vector<dstd::String> cats;
         for (int i = 0; i < 1000; ++i)
             cats.push_back(i % 3 == 0 ? "POSIX" : i % 3 == 1 ? "STDIO" : "PO");
-        std::vector<std::string_view> views(cats.begin(), cats.end());
+        dstd::Vector<dstd::StringView> views(cats.begin(), cats.end());
         const Series flat = Series::strings(views);
         const Series dict = flat.dictionary_encode();
         REQUIRE(dict.encoding() == Encoding::Dictionary);
@@ -483,12 +494,12 @@ TEST_SUITE("kernels keep layouts") {
     }
 
     TEST_CASE("a null dictionary entry gives null predicate rows") {
-        const std::vector<std::string_view> vals{"apple", "", "pear"};
+        const dstd::Vector<dstd::StringView> vals{"apple", "", "pear"};
         const std::uint8_t child_valid = 0b101;
-        const std::vector<std::int32_t> codes{0, 1, 2, 0, 1};
+        const dstd::Vector<std::int32_t> codes{0, 1, 2, 0, 1};
         const Series d = dictionary_from_codes(
             codes,
-            Series::strings(std::span<const std::string_view>(vals),
+            Series::strings(dstd::Span<const dstd::StringView>(vals),
                             &child_valid),
             nullptr);
         CHECK(truth_of(run(dftu_series_str_starts_with, d, "a")) == "TNFTN");
@@ -524,22 +535,23 @@ TEST_SUITE("kernels keep layouts") {
     }
 
     TEST_CASE("in over every layout equals the flat path") {
-        std::vector<std::string> lits;
-        for (int i = 0; i < 18; ++i) lits.push_back("lit" + std::to_string(i));
+        dstd::Vector<dstd::String> lits;
+        for (int i = 0; i < 18; ++i) lits.push_back(dstd::fmt<"lit{}">(i));
         lits.push_back("read");
         lits.push_back("a name of exactly 16");
         for (const std::size_t n :
              {std::size_t{1}, std::size_t{2}, lits.size()}) {
-            std::string list = "\"" + lits[lits.size() - 1] + "\"";
+            dstd::String list = dstd::fmt<"\"{}\"">(lits[lits.size() - 1]);
             if (n == 1) list = "\"read\"";
             if (n == 2) list = "\"read\", \"write\"";
             if (n == lits.size()) {
                 list.clear();
-                for (const std::string& l : lits)
-                    list += (list.empty() ? "" : ", ") + ("\"" + l + "\"");
+                for (const dstd::String& l : lits)
+                    list +=
+                        (list.empty() ? "" : ", ") + (dstd::fmt<"\"{}\"">(l));
             }
             for (const char* head : {"name in [", "name not in ["}) {
-                const std::string q = std::string(head) + list + "]";
+                const dstd::String q = dstd::fmt<"{}{}]">(head, list);
                 CAPTURE(q);
                 for (const Case& c : cases()) {
                     CAPTURE(c.name);
@@ -566,8 +578,8 @@ struct Backend {
 } backend;
 
 struct Frame {
-    std::vector<Row> keys;
-    std::vector<std::int64_t> a, b, c;
+    dstd::Vector<Row> keys;
+    dstd::Vector<std::int64_t> a, b, c;
 };
 
 Frame scale_frame(bool long_keys) {
@@ -577,9 +589,9 @@ Frame scale_frame(bool long_keys) {
         if (g % 97 == 0)
             f.keys.emplace_back();
         else
-            f.keys.emplace_back(
-                (long_keys ? "a group key longer than sixteen bytes " : "k") +
-                std::to_string(g));
+            f.keys.emplace_back(dstd::fmt<"{}{}">(
+                (long_keys ? "a group key longer than sixteen bytes " : "k"),
+                g));
         f.a.push_back(i % 1000);
         f.b.push_back((i * 31) % 977);
         f.c.push_back(i % 13);
@@ -587,8 +599,8 @@ Frame scale_frame(bool long_keys) {
     return f;
 }
 
-std::vector<std::string> int_cells(const DataFrame& df) {
-    std::vector<std::string> out;
+dstd::Vector<dstd::String> int_cells(const DataFrame& df) {
+    dstd::Vector<dstd::String> out;
     for (const Series& col : df.columns)
         for (std::int64_t i = 0; i < col.length(); ++i) {
             if (col.is_null(i))
@@ -596,12 +608,12 @@ std::vector<std::string> int_cells(const DataFrame& df) {
             else if (col.type() == TypeId::String)
                 out.emplace_back(col.string_at(i));
             else if (col.type() == TypeId::Int64)
-                out.push_back(std::to_string(col.data<std::int64_t>()[i]));
+                out.push_back(dstd::to_string(col.data<std::int64_t>()[i]));
         }
     return out;
 }
 
-std::vector<AggSpec> scale_specs() {
+dstd::Vector<AggSpec> scale_specs() {
     auto s = [](AggOp op, std::int32_t col, const char* out) {
         AggSpec sp;
         sp.op = op;
@@ -621,9 +633,10 @@ void scale_case(bool long_keys) {
     const Series a = Series::flat_i64(f.a.data(), SCALE_ROWS);
     const Series b = Series::flat_i64(f.b.data(), SCALE_ROWS);
     const Series c = Series::flat_i64(f.c.data(), SCALE_ROWS);
-    const std::vector<const Series*> values{&a, &b, &c};
-    const auto names = std::vector<std::string>{"k"};
-    const DataFrame want = group_agg({&flat}, values, scale_specs(), names);
+    const dstd::Vector<const Series*> values{&a, &b, &c};
+    const auto names = dstd::Vector<dstd::String>{"k"};
+    const DataFrame want =
+        dftu_utils_test::ok(group_agg({&flat}, values, scale_specs(), names));
     REQUIRE(want.num_rows() > 2048);
     ViewBuilder vb;
     vb.append_column(*flat.handle());
@@ -632,7 +645,8 @@ void scale_case(bool long_keys) {
     REQUIRE(view.encoding() == Encoding::View);
     REQUIRE(dict.encoding() == Encoding::Dictionary);
     for (const Series* key : {&view, &dict}) {
-        const DataFrame got = group_agg({key}, values, scale_specs(), names);
+        const DataFrame got =
+            dftu_utils_test::ok(group_agg({key}, values, scale_specs(), names));
         CHECK(int_cells(got) == int_cells(want));
     }
 }
@@ -653,19 +667,18 @@ TEST_SUITE("kernels keep layouts: group-by drivers and size checks") {
         CHECK(fits_int32_offsets(0));
         CHECK(fits_int32_offsets(MAX));
         CHECK_FALSE(fits_int32_offsets(MAX + 1));
-        CHECK_NOTHROW(Series::check_string_bytes(MAX));
-        CHECK_THROWS_AS(Series::check_string_bytes(MAX + 1), std::length_error);
+        Series::check_string_bytes(MAX);
     }
 
     TEST_CASE("offsets from lengths refuse a total past the offset width") {
         constexpr std::int32_t MAX = std::numeric_limits<std::int32_t>::max();
-        std::vector<std::int32_t> fits = {0, MAX / 2, MAX / 2, 1};
+        dstd::Vector<std::int32_t> fits = {0, MAX / 2, MAX / 2, 1};
         REQUIRE(offsets_from_lengths(fits.data(), 3));
         CHECK(fits[3] == MAX);
         CHECK(fits[1] == MAX / 2);
-        std::vector<std::int32_t> over = {0, MAX / 2, MAX / 2, 2};
+        dstd::Vector<std::int32_t> over = {0, MAX / 2, MAX / 2, 2};
         CHECK_FALSE(offsets_from_lengths(over.data(), 3));
-        std::vector<std::int64_t> wide = {0, MAX, MAX, MAX};
+        dstd::Vector<std::int64_t> wide = {0, MAX, MAX, MAX};
         REQUIRE(offsets_from_lengths(wide.data(), 3));
         CHECK(wide[3] == std::int64_t{MAX} * 3);
     }
@@ -673,25 +686,25 @@ TEST_SUITE("kernels keep layouts: group-by drivers and size checks") {
         constexpr std::size_t N = 100000;
         constexpr std::size_t DISTINCT = 37;
         auto text = [](std::size_t j) {
-            std::string t = "name_" + std::to_string((j * 7919) % 1000);
+            dstd::String t = dstd::fmt<"name_{}">((j * 7919) % 1000);
             if (j % 5 == 0) t += " with a tail longer than twelve bytes";
             return t;
         };
-        std::vector<std::string> child;
+        dstd::Vector<dstd::String> child;
         for (std::size_t j = 0; j < DISTINCT; ++j) child.push_back(text(j));
         child.push_back(child[3]);
         child.push_back(child[11]);
         child.push_back("");
         const std::size_t null_entry = child.size();
         child.push_back("never read");
-        std::vector<std::uint8_t> child_valid((child.size() + 7) / 8, 0xFF);
+        dstd::Vector<std::uint8_t> child_valid((child.size() + 7) / 8, 0xFF);
         child_valid[null_entry >> 3] &=
             static_cast<std::uint8_t>(~(1u << (null_entry & 7)));
-        std::vector<std::string_view> views(child.begin(), child.end());
+        dstd::Vector<dstd::StringView> views(child.begin(), child.end());
 
-        std::vector<std::int32_t> codes(N);
-        std::vector<std::uint8_t> row_valid((N + 7) / 8, 0xFF);
-        std::vector<std::int64_t> ids(N), other(N);
+        dstd::Vector<std::int32_t> codes(N);
+        dstd::Vector<std::uint8_t> row_valid((N + 7) / 8, 0xFF);
+        dstd::Vector<std::int64_t> ids(N), other(N);
         Rows rows(N);
         for (std::size_t i = 0; i < N; ++i) {
             codes[i] = static_cast<std::int32_t>((i * 2654435761u >> 7) %
@@ -708,7 +721,7 @@ TEST_SUITE("kernels keep layouts: group-by drivers and size checks") {
         }
         Series dict = dictionary_from_codes(
             codes,
-            Series::strings(std::span<const std::string_view>(views),
+            Series::strings(dstd::Span<const dstd::StringView>(views),
                             child_valid.data()),
             row_valid.data());
         REQUIRE(dict.encoding() == Encoding::Dictionary);
@@ -723,16 +736,15 @@ TEST_SUITE("kernels keep layouts: group-by drivers and size checks") {
             Series col;
             Rows rows;
         };
-        std::vector<Key> keys;
+        dstd::Vector<Key> keys;
         keys.push_back({"dictionary", dict.share(), rows});
         keys.push_back({"flat", flat_of(rows), rows});
         keys.push_back({"view", view_of(rows), rows});
         Rows unique(N);
         for (std::size_t i = 0; i < N; ++i)
-            unique[i] = i % 13 == 0 ? Row()
-                        : i % 50 == 0
-                            ? Row("duplicated")
-                            : Row("u" + std::to_string((i * 7919) % N));
+            unique[i] = i % 13 == 0   ? Row()
+                        : i % 50 == 0 ? Row("duplicated")
+                                      : Row(dstd::fmt<"u{}">((i * 7919) % N));
         keys.push_back({"view mostly unique", view_of(unique), unique});
         keys.push_back({"selection over flat",
                         selection_over(flat_of(rows), sel), pick(rows, sel)});
@@ -743,7 +755,7 @@ TEST_SUITE("kernels keep layouts: group-by drivers and size checks") {
             Idx idx(N);
             for (std::size_t i = 0; i < N; ++i)
                 idx[i] = static_cast<std::int64_t>(i);
-            std::stable_sort(
+            dstd::stable_sort(
                 idx.begin(), idx.end(), [&](std::int64_t a, std::int64_t b) {
                     const Row& x = r[static_cast<std::size_t>(a)];
                     const Row& y = r[static_cast<std::size_t>(b)];
@@ -772,31 +784,33 @@ TEST_SUITE("kernels keep layouts: group-by drivers and size checks") {
             for (bool desc : {false, true}) {
                 CAPTURE(desc);
                 const Idx one = expected(k.rows, desc, false);
-                CHECK(ids_of(df.sort_by("s", desc).columns[1]) == one);
-                CHECK(ids_of(df.sort_by_multi({"s"}, desc).columns[1]) == one);
+                CHECK(ids_of(dftu_utils_test::ok(df.sort_by("s", desc))
+                                 .columns[1]) == one);
+                CHECK(ids_of(dftu_utils_test::ok(df.sort_by_multi({"s"}, desc))
+                                 .columns[1]) == one);
                 CHECK(ids_of(k.col.argsort(desc)) == one);
-                CHECK(ids_of(df.sort_by_multi({"s", "o"}, desc).columns[1]) ==
-                      expected(k.rows, desc, true));
+                CHECK(ids_of(dftu_utils_test::ok(
+                                 df.sort_by_multi({"s", "o"}, desc))
+                                 .columns[1]) == expected(k.rows, desc, true));
             }
         }
     }
 
     TEST_CASE("materialize and argsort read nested selection and dictionary") {
-        const std::vector<std::string_view> vals{"a", "b", "c"};
-        const std::vector<std::int32_t> codes{0, 1, 0, 2};
+        const dstd::Vector<dstd::StringView> vals{"a", "b", "c"};
+        const dstd::Vector<std::int32_t> codes{0, 1, 0, 2};
         const Series dict = dictionary_from_codes(
-            codes, Series::strings(std::span<const std::string_view>(vals)),
+            codes, Series::strings(dstd::Span<const dstd::StringView>(vals)),
             nullptr);
 
         auto* sel = new dftu_series();
         sel->type = TypeId::String;
         sel->encoding = Encoding::Selection;
         sel->length = 3;
-        sel->data = Buffer::allocate(3 * sizeof(std::int64_t));
+        sel->data = new_buffer(3 * sizeof(std::int64_t));
         const std::int64_t idx[3] = {3, 0, -1};
-        std::memcpy(sel->data->data(), idx, sizeof idx);
-        sel->set_child(
-            std::shared_ptr<dftu_series>(dftu_series_share(dict.handle())));
+        std::memcpy(writable(sel->data), idx, sizeof idx);
+        sel->set_child(adopt_series(dftu_series_share(dict.handle())));
         const Series over_dict{sel};
 
         const Series flat = over_dict.materialize();
@@ -810,11 +824,10 @@ TEST_SUITE("kernels keep layouts: group-by drivers and size checks") {
         outer->type = TypeId::String;
         outer->encoding = Encoding::Dictionary;
         outer->length = 2;
-        outer->data = Buffer::allocate(2 * sizeof(std::int32_t));
+        outer->data = new_buffer(2 * sizeof(std::int32_t));
         const std::int32_t outer_codes[2] = {1, 0};
-        std::memcpy(outer->data->data(), outer_codes, sizeof outer_codes);
-        outer->set_child(std::shared_ptr<dftu_series>(
-            dftu_series_share(over_dict.handle())));
+        std::memcpy(writable(outer->data), outer_codes, sizeof outer_codes);
+        outer->set_child(adopt_series(dftu_series_share(over_dict.handle())));
         const Series dict_over_sel{outer};
         const Series flat2 = dict_over_sel.materialize();
         REQUIRE(flat2.valid());

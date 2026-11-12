@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Build and run compiled DFTracer analysis plugins from Python.
 
 A plugin is a compiled shared library exporting the ``dftracer_plugin`` ABI
@@ -27,7 +28,7 @@ from .dftracer_utils_ext import Plugins as _NativePlugins
 from .dftracer_utils_ext import _DataFrame
 
 if TYPE_CHECKING:
-    import pyarrow as pa  # ty: ignore[unresolved-import]
+    import pyarrow as pa  # ty: ignore[import-not-found]
 
     from .lazyframe import LazyFrame
     from .runtime import Runtime

@@ -1,0 +1,254 @@
+// SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/env.h>
+#include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/common/symbolize.h>
+#include <dftracer/utils/common/timer.h>
+#include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/ptr_hash.h>
+#include <unistd.h>
+
+#include <chrono>
+#include <cstring>
+#include <ctime>
+
+namespace dftracer::utils::common::logger {
+
+namespace detail {
+std::atomic<int> g_level{static_cast<int>(Level::Info)};
+}  // namespace detail
+
+namespace {
+
+constexpr std::size_t LINE_CAP = 2048;
+
+std::FILE* g_sink = stderr;
+std::atomic<bool> g_use_color{false};
+bool g_show_location = true;
+
+struct LevelStyle {
+    const char* name;   // padded to width 5
+    const char* color;  // ANSI SGR sequence
+};
+
+LevelStyle level_style(Level lvl) {
+    switch (lvl) {
+        case Level::Trace:
+            return {"TRACE", "\x1b[90m"};    // bright black
+        case Level::Debug:
+            return {"DEBUG", "\x1b[36m"};    // cyan
+        case Level::Info:
+            return {"INFO ", "\x1b[32m"};    // green
+        case Level::Warn:
+            return {"WARN ", "\x1b[33m"};    // yellow
+        case Level::Error:
+            return {"ERROR", "\x1b[1;31m"};  // bold red
+        case Level::Off:
+            return {"OFF  ", ""};
+    }
+    return {"?????", ""};
+}
+
+Level parse_level(dstd::Optional<dstd::StringView> env, Level fallback) {
+    if (!env) return fallback;
+    if (auto lvl = level_from_name(*env)) return *lvl;
+    return fallback;
+}
+
+ColorMode parse_color_mode(dstd::Optional<dstd::StringView> env,
+                           ColorMode fallback) {
+    if (!env) return fallback;
+    const dstd::StringView s = *env;
+    if (s == "always" || s == "1" || s == "on") return ColorMode::Always;
+    if (s == "never" || s == "0" || s == "off") return ColorMode::Never;
+    if (s == "auto") return ColorMode::Auto;
+    return fallback;
+}
+
+bool resolve_color(ColorMode mode, std::FILE* sink) {
+    if (mode == ColorMode::Always) return true;
+    if (mode == ColorMode::Never) return false;
+    // Auto: honor the common conventions, then fall back to TTY detection.
+    if (Env::get<dstd::StringView>("NO_COLOR")) return false;
+    if (Env::get<dstd::StringView>("FORCE_COLOR") ||
+        Env::get<dstd::StringView>("CLICOLOR_FORCE"))
+        return true;
+    if (!isatty(fileno(sink))) return false;
+    const auto term = Env::get<dstd::StringView>("TERM");
+    if (term && *term == "dumb") return false;
+    return true;
+}
+
+const char* base_name(const char* path) {
+    const char* slash = std::strrchr(path, '/');
+    return slash ? slash + 1 : path;
+}
+
+dstd::StringView make_timestamp(char* out, std::size_t n) {
+    auto now = std::chrono::system_clock::now();
+    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                  now.time_since_epoch())
+                  .count() %
+              1000;
+    std::time_t t = std::chrono::system_clock::to_time_t(now);
+    std::tm tm;
+    localtime_r(&t, &tm);
+    const dstd::FmtResult r =
+        dstd::fmt_to<"{:04}-{:02}-{:02} {:02}:{:02}:{:02}.{:03}">(
+            out, n, tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour,
+            tm.tm_min, tm.tm_sec, static_cast<int>(ms));
+    return dstd::StringView(out, r.size);
+}
+
+// Per-scope state, heap-allocated so it follows a coroutine across threads.
+struct ScopeFrame : dstd::HeapObject {
+    dstd::String label;
+    const char* file;
+    int line;
+    long long start_ns;
+};
+
+}  // namespace
+
+void init(Config cfg) {
+    // Environment overrides the programmatic config.
+    cfg.level = parse_level(
+        Env::get<dstd::StringView>("DFTRACER_UTILS_LOG_LEVEL"), cfg.level);
+    cfg.color = parse_color_mode(
+        Env::get<dstd::StringView>("DFTRACER_UTILS_LOG_COLOR"), cfg.color);
+
+    std::FILE* sink = cfg.sink ? cfg.sink : stderr;
+    if (const auto path = Env::get<dstd::StringView>("DFTRACER_UTILS_LOG_FILE");
+        path && !path->empty()) {
+        const dstd::String p(*path);
+        if (std::FILE* fp = std::fopen(p.c_str(), "a")) sink = fp;
+    }
+
+    g_sink = sink;
+    g_show_location = cfg.show_location;
+    g_use_color.store(resolve_color(cfg.color, g_sink),
+                      std::memory_order_relaxed);
+    detail::g_level.store(static_cast<int>(cfg.level),
+                          std::memory_order_relaxed);
+}
+
+void set_level(Level level) {
+    detail::g_level.store(static_cast<int>(level), std::memory_order_relaxed);
+}
+
+Level level() {
+    return static_cast<Level>(detail::g_level.load(std::memory_order_relaxed));
+}
+
+void set_color(ColorMode mode) {
+    g_use_color.store(resolve_color(mode, g_sink), std::memory_order_relaxed);
+}
+
+dstd::Optional<Level> level_from_name(dstd::StringView name) {
+    if (name == "trace") return Level::Trace;
+    if (name == "debug") return Level::Debug;
+    if (name == "info") return Level::Info;
+    if (name == "warn" || name == "warning") return Level::Warn;
+    if (name == "error") return Level::Error;
+    if (name == "off" || name == "none") return Level::Off;
+    return dstd::nullopt;
+}
+
+const char* level_name(Level level) {
+    switch (level) {
+        case Level::Trace:
+            return "trace";
+        case Level::Debug:
+            return "debug";
+        case Level::Info:
+            return "info";
+        case Level::Warn:
+            return "warn";
+        case Level::Error:
+            return "error";
+        case Level::Off:
+            return "off";
+    }
+    return "unknown";
+}
+
+namespace detail {
+
+void emit(Level lvl, const char* file, int line, dstd::StringView msg) {
+    char ts[64];
+    const dstd::StringView stamp = make_timestamp(ts, sizeof(ts));
+
+    const LevelStyle style = level_style(lvl);
+    const bool color = g_use_color.load(std::memory_order_relaxed);
+
+    // No source location for coroutine traces (file == nullptr).
+    const bool loc = g_show_location && file != nullptr;
+    // The last byte is kept for the newline.
+    char out[LINE_CAP];
+    dstd::FmtResult r;
+    if (color) {
+        if (loc) {
+            r = dstd::fmt_to<
+                "\x1b[2m[{}]\x1b[0m {}{}\x1b[0m {} \x1b[2m({}:{})\x1b[0m">(
+                out, sizeof(out) - 1, stamp, style.color, style.name, msg,
+                base_name(file), line);
+        } else {
+            r = dstd::fmt_to<"\x1b[2m[{}]\x1b[0m {}{}\x1b[0m {}">(
+                out, sizeof(out) - 1, stamp, style.color, style.name, msg);
+        }
+    } else {
+        if (loc) {
+            r = dstd::fmt_to<"[{}] {} {} ({}:{})">(out, sizeof(out) - 1, stamp,
+                                                   style.name, msg,
+                                                   base_name(file), line);
+        } else {
+            r = dstd::fmt_to<"[{}] {} {}">(out, sizeof(out) - 1, stamp,
+                                           style.name, msg);
+        }
+    }
+    out[r.size] = '\n';
+    std::fwrite(out, 1, r.size + 1, g_sink);
+    if (lvl == Level::Error) std::fflush(g_sink);  // survive a crash
+}
+
+void* scope_open(const char* file, int line, dstd::StringView label) {
+    write<"-> {}">(Level::Trace, file, line, label);
+    return new ScopeFrame{{}, dstd::String(label), file, line, steady_now_ns()};
+}
+
+void scope_close(void* handle) {
+    auto* frame = static_cast<ScopeFrame*>(handle);
+    const double ms =
+        static_cast<double>(steady_now_ns() - frame->start_ns) / 1e6;
+    write<"<- {} [{:.2f} ms]">(Level::Trace, frame->file, frame->line,
+                               frame->label, ms);
+    delete frame;
+}
+
+namespace {
+
+// Per-thread cache: many coroutine instances share one resume function, so the
+// dladdr + demangle runs once per function per thread.
+const dstd::String& ct_name(const void* fn) {
+    static thread_local dstd::HashMap<const void*, dstd::String, dstd::PtrHash>
+        cache;
+    auto it = cache.find(fn);
+    if (it != cache.end()) return it->second;
+    return cache.emplace(fn, symbolize_function(fn)).first->second;
+}
+
+}  // namespace
+
+void* coro_trace_enter(const void* handle, const char* file, int line) {
+    if (!enabled(Level::Trace) || handle == nullptr) return nullptr;
+    // The resume-function pointer sits at frame offset 0 (coroutine ABI).
+    const void* resume_fn = *reinterpret_cast<const void* const*>(handle);
+    return scope_open(file, line, ct_name(resume_fn));
+}
+
+void coro_trace_leave(void* handle) {
+    if (handle) scope_close(handle);
+}
+
+}  // namespace detail
+}  // namespace dftracer::utils::common::logger

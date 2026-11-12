@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Runtime config. When served by dftracer_server the page uses relative API
 // paths and reads file/token from its URL. When hosted in the VS Code webview
 // the extension injects window.__DFTRACER__ with an absolute API base (or "" if

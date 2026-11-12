@@ -1,18 +1,19 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_DATAFRAME_INTERNAL_STRING_READER_H
 #define DFTRACER_UTILS_DATAFRAME_INTERNAL_STRING_READER_H
 
-#include <ankerl/unordered_dense.h>
-#include <dftracer/utils/dataframe/buffer.h>
+#include <dftracer/utils/dataframe/internal/buffers.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/parallel.h>
 #include <dftracer/utils/dataframe/types.h>
+#include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
 #include <numeric>
-#include <string_view>
-#include <vector>
 
 namespace dftracer::utils::dataframe {
 
@@ -26,37 +27,39 @@ inline bool is_string_column(const dftu_series& v) {
 /// a null entry below a Dictionary or Selection). `out` points into the
 /// column's buffers.
 inline bool str_at(const dftu_series* c, std::int64_t i,
-                   std::string_view& out) {
+                   dstd::StringView& out) {
     for (;;) {
-        if (c->validity && !((c->validity->data()[i >> 3] >> (i & 7)) & 1))
+        if (c->validity.block() &&
+            !((c->validity.data()[i >> 3] >> (i & 7)) & 1))
             return false;
         switch (c->encoding) {
             case Encoding::Flat: {
                 const char* d =
-                    c->data ? reinterpret_cast<const char*>(c->data->data())
-                            : nullptr;
-                if (!c->offsets) return false;
+                    c->data.block()
+                        ? reinterpret_cast<const char*>(c->data.data())
+                        : nullptr;
+                if (!c->offsets.block()) return false;
                 if (c->wide_offsets()) {
                     const auto* off = reinterpret_cast<const std::int64_t*>(
-                        c->offsets->data());
-                    out = std::string_view(
+                        c->offsets.data());
+                    out = dstd::StringView(
                         d + off[i],
                         static_cast<std::size_t>(off[i + 1] - off[i]));
                 } else {
                     const auto* off = reinterpret_cast<const std::int32_t*>(
-                        c->offsets->data());
-                    out = std::string_view(
+                        c->offsets.data());
+                    out = dstd::StringView(
                         d + off[i],
                         static_cast<std::size_t>(off[i + 1] - off[i]));
                 }
                 return true;
             }
             case Encoding::View: {
-                const std::uint8_t* view = c->data->data() + i * 16;
+                const std::uint8_t* view = c->data.data() + i * 16;
                 std::int32_t size;
                 std::memcpy(&size, view, sizeof(size));
                 if (size <= 12) {
-                    out = std::string_view(
+                    out = dstd::StringView(
                         reinterpret_cast<const char*>(view + 4),
                         static_cast<std::size_t>(size));
                     return true;
@@ -64,20 +67,20 @@ inline bool str_at(const dftu_series* c, std::int64_t i,
                 std::int32_t index, offset;
                 std::memcpy(&index, view + 8, sizeof(index));
                 std::memcpy(&offset, view + 12, sizeof(offset));
-                out = std::string_view(
+                out = dstd::StringView(
                     reinterpret_cast<const char*>(
-                        (*c->blobs)[static_cast<std::size_t>(index)]->data() +
+                        (*c->blobs)[static_cast<std::size_t>(index)].data() +
                         offset),
                     static_cast<std::size_t>(size));
                 return true;
             }
             case Encoding::Dictionary:
-                i = reinterpret_cast<const std::int32_t*>(c->data->data())[i];
+                i = reinterpret_cast<const std::int32_t*>(c->data.data())[i];
                 c = c->child().get();
                 break;
             case Encoding::Selection: {
                 const std::int64_t idx =
-                    reinterpret_cast<const std::int64_t*>(c->data->data())[i];
+                    reinterpret_cast<const std::int64_t*>(c->data.data())[i];
                 if (idx < 0) return false;
                 i = idx;
                 c = c->child().get();
@@ -100,13 +103,13 @@ inline bool str_at(const dftu_series* c, std::int64_t i,
 /// `nranks` is the number of distinct values. False when `v` is not a
 /// Dictionary with a child.
 inline bool dictionary_ranks(const dftu_series* v,
-                             std::vector<std::int32_t>& per_row,
+                             dstd::Vector<std::int32_t>& per_row,
                              std::int32_t& nranks) {
     if (v->encoding != Encoding::Dictionary || !v->child()) return false;
     const dftu_series* dict = v->child().get();
     const auto k = static_cast<std::size_t>(dict->length);
-    std::vector<std::string_view> vals(k);
-    std::vector<std::int32_t> live;
+    dstd::Vector<dstd::StringView> vals(k);
+    dstd::Vector<std::int32_t> live;
     live.reserve(k);
     for (std::size_t j = 0; j < k; ++j)
         if (str_at(dict, static_cast<std::int64_t>(j), vals[j]))
@@ -115,7 +118,7 @@ inline bool dictionary_ranks(const dftu_series* v,
         return vals[static_cast<std::size_t>(a)] <
                vals[static_cast<std::size_t>(b)];
     });
-    std::vector<std::int32_t> code_rank(k, -1);
+    dstd::Vector<std::int32_t> code_rank(k, -1);
     nranks = 0;
     for (std::size_t j = 0; j < live.size(); ++j) {
         if (j > 0 && vals[static_cast<std::size_t>(live[j])] !=
@@ -124,11 +127,11 @@ inline bool dictionary_ranks(const dftu_series* v,
         code_rank[static_cast<std::size_t>(live[j])] = nranks;
     }
     if (!live.empty()) ++nranks;
-    const auto* codes = reinterpret_cast<const std::int32_t*>(v->data->data());
+    const auto* codes = reinterpret_cast<const std::int32_t*>(v->data.data());
     per_row.resize(static_cast<std::size_t>(v->length));
     for (std::int64_t i = 0; i < v->length; ++i) {
-        const bool valid =
-            !v->validity || ((v->validity->data()[i >> 3] >> (i & 7)) & 1);
+        const bool valid = !v->validity.block() ||
+                           ((v->validity.data()[i >> 3] >> (i & 7)) & 1);
         per_row[static_cast<std::size_t>(i)] =
             valid && static_cast<std::uint32_t>(codes[i]) < k
                 ? code_rank[static_cast<std::size_t>(codes[i])]
@@ -142,16 +145,16 @@ inline bool dictionary_ranks(const dftu_series* v,
 /// returned once the distinct values pass a quarter of the rows, where a
 /// compare sort is the better path.
 inline bool string_ranks(const dftu_series* v,
-                         std::vector<std::int32_t>& per_row,
+                         dstd::Vector<std::int32_t>& per_row,
                          std::int32_t& nranks) {
     if (v->encoding == Encoding::Dictionary && v->child())
         return dictionary_ranks(v, per_row, nranks);
     const std::int64_t n = v->length;
     const std::int64_t cap = n / 4;
-    ankerl::unordered_dense::map<std::string_view, std::int32_t> seen;
-    std::vector<std::string_view> vals;
+    dstd::HashMap<dstd::StringView, std::int32_t> seen;
+    dstd::Vector<dstd::StringView> vals;
     per_row.resize(static_cast<std::size_t>(n));
-    std::string_view s;
+    dstd::StringView s;
     for (std::int64_t i = 0; i < n; ++i) {
         if (!str_at(v, i, s)) {
             per_row[static_cast<std::size_t>(i)] = -1;
@@ -168,14 +171,14 @@ inline bool string_ranks(const dftu_series* v,
         }
         per_row[static_cast<std::size_t>(i)] = it->second;
     }
-    std::vector<std::int32_t> by_bytes(vals.size());
+    dstd::Vector<std::int32_t> by_bytes(vals.size());
     std::iota(by_bytes.begin(), by_bytes.end(), 0);
     std::sort(by_bytes.begin(), by_bytes.end(),
               [&](std::int32_t a, std::int32_t b) {
                   return vals[static_cast<std::size_t>(a)] <
                          vals[static_cast<std::size_t>(b)];
               });
-    std::vector<std::int32_t> code_rank(vals.size());
+    dstd::Vector<std::int32_t> code_rank(vals.size());
     for (std::size_t j = 0; j < by_bytes.size(); ++j)
         code_rank[static_cast<std::size_t>(by_bytes[j])] =
             static_cast<std::int32_t>(j);
@@ -187,11 +190,11 @@ inline bool string_ranks(const dftu_series* v,
 
 /// Stable row order by `ranks` (-1 sorts last in both directions): one
 /// histogram pass and one placement pass.
-inline void counting_order(const std::vector<std::int32_t>& ranks,
+inline void counting_order(const dstd::Vector<std::int32_t>& ranks,
                            std::int32_t nranks, bool descending,
                            std::int64_t* order) {
     const auto k = static_cast<std::size_t>(nranks);
-    std::vector<std::int64_t> start(k + 2, 0);
+    dstd::Vector<std::int64_t> start(k + 2, 0);
     auto bucket = [&](std::int32_t r) -> std::size_t {
         return r < 0
                    ? k
@@ -213,17 +216,17 @@ inline void adopt_string_nulls(dftu_series& out, const dftu_series& v) {
         return;
     }
     const std::size_t bytes = buffer_bytes(TypeId::Bool, v.length);
-    auto valid = Buffer::allocate(bytes);
-    std::memset(valid->data(), 0, bytes);
+    auto valid = new_buffer(bytes);
+    std::memset(writable(valid), 0, bytes);
     std::int64_t nulls = 0;
-    std::string_view s;
+    dstd::StringView s;
     for (std::int64_t i = 0; i < v.length; ++i) {
         if (str_at(&v, i, s))
-            valid->data()[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
+            writable(valid)[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
         else
             ++nulls;
     }
-    out.validity = nulls ? std::move(valid) : nullptr;
+    out.validity = nulls ? std::move(valid) : BufferView{};
     out.null_count = nulls;
 }
 
@@ -239,49 +242,50 @@ dftu_series* string_mask(const dftu_series* v, Pred pred) {
     out->encoding = Encoding::Flat;
     out->length = v->length;
     const std::size_t bytes = buffer_bytes(TypeId::Bool, v->length);
-    out->data = Buffer::allocate(bytes);
-    std::memset(out->data->data(), 0, bytes);
-    std::uint8_t* bits = out->data->data();
+    out->data = new_buffer(bytes);
+    std::memset(writable(out->data), 0, bytes);
+    std::uint8_t* bits = writable(out->data);
     auto set = [&](std::int64_t i) {
         bits[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
     };
     constexpr std::int64_t GRAIN = std::int64_t{1} << 15;
     if (v->encoding == Encoding::Dictionary && v->child()) {
         const dftu_series* dict = v->child().get();
-        std::vector<char> hit(static_cast<std::size_t>(dict->length), 0);
-        std::string_view s;
+        dstd::Vector<char> hit(static_cast<std::size_t>(dict->length), 0);
+        dstd::StringView s;
         for (std::int64_t k = 0; k < dict->length; ++k)
             hit[static_cast<std::size_t>(k)] = str_at(dict, k, s) && pred(s);
         const auto* codes =
-            reinterpret_cast<const std::int32_t*>(v->data->data());
+            reinterpret_cast<const std::int32_t*>(v->data.data());
         for (std::int64_t i = 0; i < v->length; ++i)
             if (static_cast<std::uint32_t>(codes[i]) < hit.size() &&
                 hit[static_cast<std::size_t>(codes[i])])
                 set(i);
-    } else if (v->encoding == Encoding::Flat && v->offsets &&
+    } else if (v->encoding == Encoding::Flat && v->offsets.block() &&
                !v->wide_offsets()) {
         const auto* off =
-            reinterpret_cast<const std::int32_t*>(v->offsets->data());
-        const char* d =
-            v->data ? reinterpret_cast<const char*>(v->data->data()) : nullptr;
+            reinterpret_cast<const std::int32_t*>(v->offsets.data());
+        const char* d = v->data.block()
+                            ? reinterpret_cast<const char*>(v->data.data())
+                            : nullptr;
         parallel_for(v->length, GRAIN, [&](std::int64_t b, std::int64_t e) {
             for (std::int64_t i = b; i < e; ++i)
-                if (pred(std::string_view(
+                if (pred(dstd::StringView(
                         d + off[i],
                         static_cast<std::size_t>(off[i + 1] - off[i]))))
                     set(i);
         });
     } else {
         parallel_for(v->length, GRAIN, [&](std::int64_t b, std::int64_t e) {
-            std::string_view s;
+            dstd::StringView s;
             for (std::int64_t i = b; i < e; ++i)
                 if (str_at(v, i, s) && pred(s)) set(i);
         });
     }
     adopt_string_nulls(*out, *v);
-    if (out->validity)
+    if (out->validity.block())
         for (std::size_t k = 0; k < bytes; ++k)
-            bits[k] &= out->validity->data()[k];
+            bits[k] &= out->validity.data()[k];
     return out;
 }
 
@@ -295,17 +299,17 @@ dftu_series* string_int64(const dftu_series* v, Fn fn) {
     out->type = TypeId::Int64;
     out->encoding = Encoding::Flat;
     out->length = v->length;
-    out->data = Buffer::allocate(buffer_bytes(TypeId::Int64, v->length));
-    auto* vals = reinterpret_cast<std::int64_t*>(out->data->data());
-    std::string_view s;
+    out->data = new_buffer(buffer_bytes(TypeId::Int64, v->length));
+    auto* vals = reinterpret_cast<std::int64_t*>(writable(out->data));
+    dstd::StringView s;
     if (v->encoding == Encoding::Dictionary && v->child()) {
         const dftu_series* dict = v->child().get();
-        std::vector<std::int64_t> per(static_cast<std::size_t>(dict->length),
-                                      0);
+        dstd::Vector<std::int64_t> per(static_cast<std::size_t>(dict->length),
+                                       0);
         for (std::int64_t k = 0; k < dict->length; ++k)
             if (str_at(dict, k, s)) per[static_cast<std::size_t>(k)] = fn(s);
         const auto* codes =
-            reinterpret_cast<const std::int32_t*>(v->data->data());
+            reinterpret_cast<const std::int32_t*>(v->data.data());
         for (std::int64_t i = 0; i < v->length; ++i)
             vals[i] = static_cast<std::uint32_t>(codes[i]) < per.size()
                           ? per[static_cast<std::size_t>(codes[i])]

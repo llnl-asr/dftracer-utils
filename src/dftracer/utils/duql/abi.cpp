@@ -1,3 +1,8 @@
+// SPDX-License-Identifier: MIT
+#include <dftracer/utils/dstd/fmt.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/abi.h>
 #include <dftracer/utils/duql/builder.h>
 #include <dftracer/utils/duql/internal/duql_handle.h>
@@ -5,10 +10,8 @@
 
 #include <cstdlib>
 #include <cstring>
-#include <string>
-#include <vector>
 
-struct dftu_duql {
+struct dftu_duql : dftracer::utils::dstd::HeapObject {
     dftracer::utils::duql::Query q;
 };
 
@@ -26,19 +29,19 @@ using dftracer::utils::duql::Query;
 dftu_duql* wrap_expr(const Expr& e) {
     auto q = e.build();
     if (!q) return nullptr;
-    return new dftu_duql{std::move(*q)};
+    return new dftu_duql{{}, std::move(*q)};
 }
 
-dftu_duql* wrap_string(const std::string& s) {
+dftu_duql* wrap_string(const dftracer::utils::dstd::String& s) {
     auto q = Query::from_string(s);
     if (!q) return nullptr;
-    return new dftu_duql{std::move(*q)};
+    return new dftu_duql{{}, std::move(*q)};
 }
 
 dftu_duql* build_in_i64(const char* field, const int64_t* values, int32_t n,
                         bool negate) {
     if (!field || (n > 0 && !values)) return nullptr;
-    std::vector<std::int64_t> vals;
+    dftracer::utils::dstd::Vector<std::int64_t> vals;
     for (int32_t i = 0; i < n; ++i) vals.push_back(values[i]);
     auto e = negate ? dftracer::utils::duql::field_not_in(field, vals)
                     : dftracer::utils::duql::field_in(field, vals);
@@ -48,7 +51,7 @@ dftu_duql* build_in_i64(const char* field, const int64_t* values, int32_t n,
 dftu_duql* build_in_str(const char* field, const char* const* values, int32_t n,
                         bool negate) {
     if (!field || (n > 0 && !values)) return nullptr;
-    std::vector<std::string> vals;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> vals;
     for (int32_t i = 0; i < n; ++i) {
         if (!values[i]) return nullptr;
         vals.emplace_back(values[i]);
@@ -66,14 +69,14 @@ dftu_duql* dftu_duql_parse(const char* text) {
     if (!text) return nullptr;
     auto r = dftracer::utils::duql::Query::from_string(text);
     if (!r) return nullptr;
-    return new dftu_duql{std::move(*r)};
+    return new dftu_duql{{}, std::move(*r)};
 }
 
 void dftu_duql_free(dftu_duql* q) { delete q; }
 
 char* dftu_duql_to_string(const dftu_duql* q) {
     if (!q) return nullptr;
-    std::string s = q->q.to_string();
+    dftracer::utils::dstd::String s = q->q.to_string();
     char* out = static_cast<char*>(std::malloc(s.size() + 1));
     if (!out) return nullptr;
     std::memcpy(out, s.c_str(), s.size() + 1);
@@ -104,7 +107,8 @@ dftu_duql* dftu_duql_cmp_str(const char* field, dftu_duql_cmp_op op,
     if (!field || !value) return nullptr;
     return wrap_expr(dftracer::utils::duql::field_cmp(
         field, static_cast<CompareOp>(op),
-        dftracer::utils::duql::detail::literal(std::string_view(value))));
+        dftracer::utils::duql::detail::literal(
+            dftracer::utils::dstd::StringView(value))));
 }
 
 dftu_duql* dftu_duql_in_i64(const char* field, const int64_t* values,
@@ -140,7 +144,8 @@ dftu_duql* dftu_duql_and(dftu_duql* a, dftu_duql* b) {
         dftu_duql_free(b);
         return nullptr;
     }
-    std::string s = "(" + a->q.to_string() + " and " + b->q.to_string() + ")";
+    dftracer::utils::dstd::String s = dftracer::utils::dstd::fmt<"({} and {})">(
+        a->q.to_string(), b->q.to_string());
     dftu_duql_free(a);
     dftu_duql_free(b);
     return wrap_string(s);
@@ -152,7 +157,8 @@ dftu_duql* dftu_duql_or(dftu_duql* a, dftu_duql* b) {
         dftu_duql_free(b);
         return nullptr;
     }
-    std::string s = "(" + a->q.to_string() + " or " + b->q.to_string() + ")";
+    dftracer::utils::dstd::String s = dftracer::utils::dstd::fmt<"({} or {})">(
+        a->q.to_string(), b->q.to_string());
     dftu_duql_free(a);
     dftu_duql_free(b);
     return wrap_string(s);
@@ -160,7 +166,8 @@ dftu_duql* dftu_duql_or(dftu_duql* a, dftu_duql* b) {
 
 dftu_duql* dftu_duql_not(dftu_duql* a) {
     if (!a) return nullptr;
-    std::string s = "not (" + a->q.to_string() + ")";
+    dftracer::utils::dstd::String s =
+        dftracer::utils::dstd::fmt<"not ({})">(a->q.to_string());
     dftu_duql_free(a);
     return wrap_string(s);
 }

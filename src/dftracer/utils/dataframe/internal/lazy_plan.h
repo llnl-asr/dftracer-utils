@@ -1,14 +1,21 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_DATAFRAME_INTERNAL_LAZY_PLAN_H
 #define DFTRACER_UTILS_DATAFRAME_INTERNAL_LAZY_PLAN_H
 
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/function.h>
+#include <dftracer/utils/dstd/function_ref.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/result.h>
+#include <dftracer/utils/dstd/string.h>
 
 #include <array>
 #include <cstdint>
 #include <functional>
 #include <memory>
 #include <optional>
-#include <string>
 #include <utility>
 
 namespace dftracer::utils::dataframe::detail {
@@ -39,43 +46,47 @@ LazyFrame optimize_plan(const LazyFrame& lf);
 std::uint64_t plan_fingerprint(const LazyFrame& lf);
 
 // The C++ callbacks of one run of a tap: `rows` on each morsel (its columns
-// under their names), `end` once when the input is drained. Either may throw,
-// which fails the run.
+// under their names), `end` once when the input is drained. An error from
+// either fails the run.
 struct TapRun {
-    std::function<void(const DataFrame&)> rows;
-    std::function<void()> end;
+    dstd::Function<dstd::Result<void>(const DataFrame&)> rows;
+    dstd::Function<dstd::Result<void>()> end;
 };
 
 // A tap: `open` gives the callbacks of each run of the plan. A tap is an
 // optimizer barrier.
 struct Tap {
-    std::function<TapRun()> open;
+    dstd::Function<TapRun()> open;
 };
 
 // `lf` with every morsel shown to `tap` and passed on unchanged.
-LazyFrame tap(const LazyFrame& lf, std::shared_ptr<const Tap> tap);
+LazyFrame tap(const LazyFrame& lf, dstd::SharedPtr<const Tap> tap);
 
 // The plan's leaf source.
-const std::shared_ptr<const Source>& plan_source(const LazyFrame& lf);
+const dstd::SharedPtr<const Source>& plan_source(const LazyFrame& lf);
+
+// `lf` with `error` kept as its first error, unless it holds one: what a
+// builder of a type that wraps a LazyFrame returns when it refuses.
+LazyFrame fail_plan(const LazyFrame& lf, dstd::Error error);
 
 // `lf`'s ops and memory budget over `source` instead of its own source.
-LazyFrame rebase(const LazyFrame& lf, std::shared_ptr<const Source> source);
+LazyFrame rebase(const LazyFrame& lf, dstd::SharedPtr<const Source> source);
 
 // explain()'s description of the first op in `lf` that is not a filter, or
 // nullopt when every op is a filter.
-std::optional<std::string> first_non_filter_op(const LazyFrame& lf);
+dstd::Optional<dstd::String> first_non_filter_op(const LazyFrame& lf);
 
 // explain()'s description of the first op in `lf`, or nullopt when it has none.
-std::optional<std::string> first_op(const LazyFrame& lf);
+dstd::Optional<dstd::String> first_op(const LazyFrame& lf);
 
 // (offset, len) when `lf`'s only op is a row window (head / slice / limit).
-std::optional<std::pair<std::int64_t, std::int64_t>> sole_slice(
+dstd::Optional<dstd::Pair<std::int64_t, std::int64_t>> sole_slice(
     const LazyFrame& lf);
 
 // Calls `f` on `lf`, then depth first on every child plan: the other side of a
 // join or concat and each frame operand of a frame op.
 void visit_plan(const LazyFrame& lf,
-                const std::function<void(const LazyFrame&, int depth)>& f);
+                dstd::FunctionRef<void(const LazyFrame&, int depth)> f);
 
 }  // namespace dftracer::utils::dataframe::detail
 

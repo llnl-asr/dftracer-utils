@@ -1,31 +1,34 @@
+// SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/runtime.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
-#include <dftracer/utils/index/build/batch_builder.h>
+#include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/trace/index/build/batch_builder.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 #include <unistd.h>
 
-#include <fstream>
 #include <memory>
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::index::build;
+using namespace dftracer::utils::trace::index::build;
 using namespace dftracer::utils::trace::internal;
 using namespace dftu_utils_test;
 
 // `success` == indexed; the batch builder has no skip (a caller concern).
 struct BuildResult {
-    std::string file_path;
-    std::string index_path;
+    dstd::String file_path;
+    dstd::String index_path;
     bool success = false;
     bool index_created = false;
 };
 
-static BuildResult run_builder(const std::string& gz,
-                               const std::string& index_dir = "",
+static BuildResult run_builder(const dstd::String& gz,
+                               const dstd::String& index_dir = "",
                                bool force = false,
                                std::size_t checkpoint_size = 0) {
     Runtime rt(4);
@@ -33,17 +36,16 @@ static BuildResult run_builder(const std::string& gz,
     out.file_path = gz;
     auto* out_ptr = &out;
 
-    auto task = run_coro_scope(
-        rt.executor(),
-        [gz, index_dir, force, checkpoint_size,
-         out_ptr](CoroScope& scope) -> coro::CoroTask<void> {
-            auto cfg = std::make_shared<IndexBuildBatchConfig>();
-            cfg->file_paths = {gz};
+    auto task =
+        coro::with_scope([gz, index_dir, force, checkpoint_size,
+                          out_ptr](coro::Scope&) -> coro::CoroTask<void> {
+            auto cfg = dstd::make_shared<IndexBuildBatchConfig>();
+            cfg->file_paths = {dstd::String(dstd::StringView(gz))};
             cfg->index_dir = index_dir;
             cfg->force_rebuild = force;
             if (checkpoint_size > 0) cfg->checkpoint_size = checkpoint_size;
             try {
-                auto r = co_await BatchBuilder::process(&scope, std::move(cfg));
+                auto r = co_await BatchBuilder::process(std::move(cfg));
                 out_ptr->success = r.indexed >= 1 && r.failed == 0;
                 if (!r.results.empty()) {
                     out_ptr->index_path = r.results[0].index_path;
@@ -54,7 +56,7 @@ static BuildResult run_builder(const std::string& gz,
             }
         });
 
-    rt.submit(std::move(task), "index-build").wait();
+    dftu_utils_test::ok(rt.submit(std::move(task), "index-build").wait());
     rt.shutdown();
     return out;
 }
@@ -64,8 +66,9 @@ TEST_SUITE("IndexBuilder") {
         TestEnvironment env(100);
 
         SUBCASE("Build index for gzip file") {
-            std::string gz_file = env.create_dft_test_gzip_file(50);
-            std::string db_root = determine_index_path(gz_file, "");
+            dstd::String gz_file = env.create_dft_test_gzip_file(50);
+            dstd::String db_root =
+                dstd::String(determine_index_path(gz_file, ""));
 
             auto output = run_builder(gz_file, /*index_dir=*/"",
                                       /*force=*/false, /*checkpoint_size=*/10);
@@ -74,11 +77,11 @@ TEST_SUITE("IndexBuilder") {
             CHECK(output.index_path == db_root);
             CHECK(output.success == true);
 
-            CHECK(fs::exists(db_root));
+            CHECK(dstd::fs::exists(db_root).value());
         }
 
         SUBCASE("Repeat build re-indexes") {
-            std::string gz_file = env.create_dft_test_gzip_file(20);
+            dstd::String gz_file = env.create_dft_test_gzip_file(20);
 
             auto output1 = run_builder(gz_file);
             CHECK(output1.success == true);
@@ -91,7 +94,7 @@ TEST_SUITE("IndexBuilder") {
     TEST_CASE("IndexBuilder - Force rebuild") {
         TestEnvironment env(100);
 
-        std::string gz_file = env.create_dft_test_gzip_file(30);
+        dstd::String gz_file = env.create_dft_test_gzip_file(30);
 
         auto output1 = run_builder(gz_file, /*index_dir=*/"", /*force=*/true);
         CHECK(output1.success == true);

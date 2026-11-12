@@ -1,0 +1,241 @@
+// SPDX-License-Identifier: MIT
+#define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <coro/stopped.h>
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/coro/when_all.h>
+#include <dftracer/utils/coro/when_any.h>
+#include <dftracer/utils/coro/yield.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/runtime/runtime.h>
+#include <doctest/doctest.h>
+#include <task_result.h>
+
+#include <atomic>
+#include <coroutine>
+#include <cstddef>
+#include <stdexcept>
+
+using namespace dftracer::utils;
+using namespace dftracer::utils::coro;
+
+namespace {
+
+CoroTask<int> ready_value(int value) { co_return value; }
+
+CoroTask<int> yielded_value(int value) {
+    co_await yield();
+    co_return value;
+}
+
+CoroTask<int> failing_value(int) {
+    throw std::runtime_error("child failed");
+    co_return 0;
+}
+
+CoroTask<bool> ready_flag(bool value) { co_return value; }
+
+CoroTask<bool> yielded_flag(bool value) {
+    co_await yield();
+    co_return value;
+}
+
+CoroTask<int> record_run(std::atomic<int>* ran, int value) {
+    ran->fetch_add(1);
+    co_return value;
+}
+
+CoroTask<void> count_ready(std::atomic<int>* ran) {
+    ran->fetch_add(1);
+    co_return;
+}
+
+CoroTask<void> count_yielded(std::atomic<int>* ran) {
+    co_await yield();
+    ran->fetch_add(1);
+    co_return;
+}
+
+CoroTask<int> stopped_at_once() {
+    co_await stop_here();
+    co_return 0;
+}
+
+template <typename Body>
+void run_on_pool(Body& body) {
+    Runtime rt(4);
+    dftu_utils_test::ok(rt.block_on(body()));
+}
+
+}  // namespace
+
+TEST_CASE("when_all vector - ready and yielding children keep their order") {
+    constexpr int ROUNDS = 200;
+    constexpr int CHILDREN = 17;
+    std::atomic<int> wrong{0};
+    auto body = [&wrong]() -> CoroTask<void> {
+        for (int round = 0; round < ROUNDS; ++round) {
+            dstd::Vector<CoroTask<int>> children;
+            for (int i = 0; i < CHILDREN; ++i) {
+                children.push_back(i % 3 == 1 ? yielded_value(i)
+                                              : ready_value(i));
+            }
+            auto values = co_await when_all(std::move(children));
+            if (values.size() != CHILDREN) wrong.fetch_add(1);
+            for (int i = 0; i < static_cast<int>(values.size()); ++i) {
+                if (values[static_cast<std::size_t>(i)] != i)
+                    wrong.fetch_add(1);
+            }
+        }
+    };
+    run_on_pool(body);
+    CHECK(wrong.load() == 0);
+}
+
+TEST_CASE("a when_all of bool tasks keeps every result") {
+    constexpr int ROUNDS = 300;
+    constexpr int CHILDREN = 64;
+    std::atomic<int> wrong{0};
+    auto body = [&wrong]() -> CoroTask<void> {
+        for (int round = 0; round < ROUNDS; ++round) {
+            dstd::Vector<CoroTask<bool>> children;
+            for (int i = 0; i < CHILDREN; ++i) {
+                const bool value = (i + round) % 2 == 0;
+                children.push_back(i % 3 == 1 ? yielded_flag(value)
+                                              : ready_flag(value));
+            }
+            auto values = co_await when_all(std::move(children));
+            if (values.size() != CHILDREN) wrong.fetch_add(1);
+            for (int i = 0; i < static_cast<int>(values.size()); ++i) {
+                const bool expected = (i + round) % 2 == 0;
+                if (values[static_cast<std::size_t>(i)] != expected) {
+                    wrong.fetch_add(1);
+                }
+            }
+        }
+    };
+    run_on_pool(body);
+    CHECK(wrong.load() == 0);
+}
+
+TEST_CASE("when_all vector - a failing child does not stop the others") {
+    std::atomic<int> ran{0};
+    std::atomic<int> caught{0};
+    auto body = [&ran, &caught]() -> CoroTask<void> {
+        dstd::Vector<CoroTask<int>> valued;
+        valued.push_back(ready_value(1));
+        valued.push_back(failing_value(2));
+        valued.push_back(yielded_value(3));
+        valued.push_back(ready_value(4));
+        try {
+            co_await when_all(std::move(valued));
+        } catch (const std::runtime_error&) {
+            caught.fetch_add(1);
+        }
+        dstd::Vector<CoroTask<void>> children;
+        children.push_back(count_ready(&ran));
+        children.push_back(count_yielded(&ran));
+        children.push_back(count_ready(&ran));
+        children.push_back(count_yielded(&ran));
+        co_await when_all(std::move(children));
+        if (ran.load() != 4) caught.fetch_add(100);
+    };
+    run_on_pool(body);
+    CHECK(caught.load() == 1);
+    CHECK(ran.load() == 4);
+}
+
+TEST_CASE("when_all vector - the awaiter resumes after every child ended") {
+    constexpr int ROUNDS = 200;
+    constexpr int CHILDREN = 9;
+    std::atomic<int> ran{0};
+    std::atomic<int> early{0};
+    auto body = [&ran, &early]() -> CoroTask<void> {
+        for (int round = 0; round < ROUNDS; ++round) {
+            const int before = ran.load();
+            dstd::Vector<CoroTask<void>> children;
+            for (int i = 0; i < CHILDREN; ++i) {
+                children.push_back(i % 2 == 0 ? count_ready(&ran)
+                                              : count_yielded(&ran));
+            }
+            co_await when_all(std::move(children));
+            if (ran.load() - before != CHILDREN) early.fetch_add(1);
+        }
+    };
+    run_on_pool(body);
+    CHECK(early.load() == 0);
+    CHECK(ran.load() == ROUNDS * CHILDREN);
+}
+
+TEST_CASE("when_any vector - the first child to end wins") {
+    std::atomic<int> wrong{0};
+    auto body = [&wrong]() -> CoroTask<void> {
+        for (int round = 0; round < 100; ++round) {
+            dstd::Vector<CoroTask<int>> ready;
+            for (int i = 0; i < 5; ++i) ready.push_back(ready_value(i + 10));
+            auto first = co_await when_any(std::move(ready));
+            if (first.index != 0 || first.result != 10) wrong.fetch_add(1);
+
+            dstd::Vector<CoroTask<int>> mixed;
+            mixed.push_back(yielded_value(20));
+            mixed.push_back(ready_value(21));
+            mixed.push_back(yielded_value(22));
+            auto second = co_await when_any(std::move(mixed));
+            if (second.result != 20 + static_cast<int>(second.index)) {
+                wrong.fetch_add(1);
+            }
+        }
+    };
+    run_on_pool(body);
+    CHECK(wrong.load() == 0);
+}
+
+TEST_CASE("when_any drops a loser that never started") {
+    std::atomic<int> ran{0};
+    std::atomic<std::size_t> winner{99};
+    auto body = [&ran, &winner]() -> CoroTask<void> {
+        dstd::Vector<CoroTask<int>> children;
+        children.push_back(ready_value(1));
+        for (int i = 0; i < 4; ++i) children.push_back(record_run(&ran, 2));
+        auto result = co_await when_any(std::move(children));
+        winner.store(result.index);
+    };
+    run_on_pool(body);
+    CHECK(winner.load() == 0);
+    CHECK(ran.load() == 0);
+}
+
+TEST_CASE("when_any delivers the exception of a winner that threw") {
+    std::atomic<int> caught{0};
+    std::atomic<int> other{0};
+    auto body = [&caught, &other]() -> CoroTask<void> {
+        dstd::Vector<CoroTask<int>> children;
+        children.push_back(failing_value(1));
+        children.push_back(ready_value(2));
+        try {
+            co_await when_any(std::move(children));
+        } catch (const std::runtime_error& e) {
+            if (dstd::String(e.what()) == "child failed") caught.fetch_add(1);
+        } catch (...) {
+            other.fetch_add(1);
+        }
+    };
+    run_on_pool(body);
+    CHECK(caught.load() == 1);
+    CHECK(other.load() == 0);
+}
+
+TEST_CASE("when_any stops its task when the winner stopped") {
+    Runtime rt(4);
+    std::atomic<int> resumed{0};
+    auto body = [&resumed]() -> CoroTask<void> {
+        dstd::Vector<CoroTask<int>> children;
+        children.push_back(stopped_at_once());
+        children.push_back(stopped_at_once());
+        co_await when_any(std::move(children));
+        resumed.fetch_add(1);
+    };
+    CHECK(dftu_utils_test::ok(rt.block_on(coro_test::ended_stopped(body()))));
+    CHECK(resumed.load() == 0);
+}

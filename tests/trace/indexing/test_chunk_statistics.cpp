@@ -1,11 +1,13 @@
+// SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/index/schemas/dft/chunk_statistics.h>
+#include <dftracer/utils/trace/index/schemas/dft/chunk_statistics.h>
 #include <doctest/doctest.h>
 
 #include <cmath>
+#include <limits>
 #include <string>
 
-using namespace dftracer::utils::index::schemas::dft;
+using namespace dftracer::utils::trace::index::schemas::dft;
 
 TEST_SUITE("ChunkStatistics") {
     TEST_CASE("ChunkStatistics - Single event update") {
@@ -107,5 +109,70 @@ TEST_SUITE("ChunkStatistics") {
         a.merge_from(b);
         CHECK(a.min_timestamp_us == 0);
         CHECK(a.min_nonzero_timestamp_us == 3000);
+    }
+
+    TEST_CASE("ChunkStatistics - A duration sum past INT64_MAX saturates") {
+        const std::uint64_t big = std::numeric_limits<std::uint64_t>::max();
+        ChunkStatistics one;
+        one.update_from_event("read", "POSIX", 1, 1, 0, big);
+        CHECK(one.duration_count == 1);
+        CHECK(one.duration_sum_us == std::numeric_limits<std::int64_t>::max());
+        CHECK(one.duration_max_us == big);
+        CHECK(one.duration_mean() == doctest::Approx(static_cast<double>(big)));
+
+        ChunkStatistics many;
+        const std::uint64_t half = static_cast<std::uint64_t>(
+            std::numeric_limits<std::int64_t>::max());
+        many.update_from_event("read", "POSIX", 1, 1, 0, half);
+        many.update_from_event("read", "POSIX", 1, 1, 0, half);
+        many.update_from_event("read", "POSIX", 1, 1, 0, half);
+        CHECK(many.duration_sum_us == std::numeric_limits<std::int64_t>::max());
+        CHECK(many.duration_mean() ==
+              doctest::Approx(static_cast<double>(half)));
+        CHECK(many.duration_variance() == doctest::Approx(0.0).epsilon(1e-6));
+
+        ChunkStatistics merged;
+        merged.merge_from(many);
+        merged.merge_from(one);
+        CHECK(merged.duration_sum_us ==
+              std::numeric_limits<std::int64_t>::max());
+        CHECK(merged.duration_count == 4);
+        CHECK(merged.duration_mean() > static_cast<double>(half));
+    }
+
+    TEST_CASE(
+        "ChunkStatistics - A saturated merge gives one mean in any order") {
+        const std::uint64_t half = static_cast<std::uint64_t>(
+            std::numeric_limits<std::int64_t>::max());
+        ChunkStatistics saturated;
+        saturated.update_from_event("read", "POSIX", 1, 1, 0, half);
+        saturated.update_from_event("read", "POSIX", 1, 1, 0, half);
+        ChunkStatistics small;
+        small.update_from_event("read", "POSIX", 1, 1, 0, 10);
+        small.update_from_event("read", "POSIX", 1, 1, 0, 30);
+
+        ChunkStatistics first = saturated;
+        first.merge_from(small);
+        ChunkStatistics second = small;
+        second.merge_from(saturated);
+        const double expected = static_cast<double>(half) / 2.0;
+        CHECK(first.duration_sum_us ==
+              std::numeric_limits<std::int64_t>::max());
+        CHECK(second.duration_sum_us ==
+              std::numeric_limits<std::int64_t>::max());
+        CHECK(first.duration_mean() == doctest::Approx(expected));
+        CHECK(second.duration_mean() == doctest::Approx(expected));
+        CHECK(first.duration_variance() ==
+              doctest::Approx(second.duration_variance()));
+    }
+
+    TEST_CASE(
+        "ChunkStatistics - A reloaded saturated sum reads as a lower bound") {
+        ChunkStatistics reloaded;
+        reloaded.duration_count = 2;
+        reloaded.duration_sum_us = std::numeric_limits<std::int64_t>::max();
+        CHECK(reloaded.duration_mean() ==
+              doctest::Approx(static_cast<double>(reloaded.duration_sum_us) /
+                              2.0));
     }
 }

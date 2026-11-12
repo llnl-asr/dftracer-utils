@@ -1,17 +1,24 @@
+// SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
 #include <fcntl.h>
+#include <instrumentation.h>
 #include <simdjson.h>
+#include <sys/resource.h>
 #include <sys/wait.h>
 #include <testing_utilities.h>
 #include <unistd.h>
 
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
-#include <string>
-#include <vector>
+
+using namespace dftracer::utils;
 
 // ============================================================================
 // Helpers
@@ -19,40 +26,40 @@
 
 namespace {
 
-std::string find_gen_binary() {
-    return dftu_utils_test::find_binary_by_name("DFTRACER_GEN_FAKE_TRACE_PATH",
-                                                "dftracer_gen_fake_trace");
+dstd::String find_gen_binary() {
+    return dftu_utils_test::find_binary_by_name(
+        "DFTRACER_UTILS_GEN_FAKE_TRACE_PATH", "dftracer_gen_fake_trace");
 }
 
-std::string create_pfw_gz(dftu_utils_test::TestEnvironment& env,
-                          int /* num_events */, int id) {
+dstd::String create_pfw_gz(dftu_utils_test::TestEnvironment& env,
+                           int /* event_count */, int id) {
     auto gen = find_gen_binary();
     if (gen.empty()) return "";
 
-    std::string out_dir = env.get_dir() + "/gen_" + std::to_string(id);
+    dstd::String out_dir = env.dir() + "/gen_" + dstd::to_string(id);
     // Generate a tiny trace: 1 rank, 1 epoch, 2 steps
-    std::string cmd = gen + " -o '" + out_dir +
-                      "' -p 1 -e 1 -s 2 --num-train-files 1"
-                      " --num-val-files 1 --seed 42 2>/dev/null";
+    dstd::String cmd = gen + " -o '" + out_dir +
+                       "' --num-processes 1 --num-epochs 1 --steps-per-epoch 2 "
+                       "--num-train-files 1"
+                       " --num-val-files 1 --seed 42 2>/dev/null";
     if (std::system(cmd.c_str()) != 0) return "";
 
-    std::string src = out_dir + "/rank_0.pfw.gz";
-    std::string dst =
-        env.get_dir() + "/trace_" + std::to_string(id) + ".pfw.gz";
-    if (!fs::exists(src)) return "";
-    fs::rename(src, dst);
+    dstd::String src = out_dir + "/rank_0.pfw.gz";
+    dstd::String dst = env.dir() + "/trace_" + dstd::to_string(id) + ".pfw.gz";
+    if (!dstd::fs::exists(src).value()) return "";
+    REQUIRE(dstd::fs::rename(src, dst).has_value());
     return dst;
 }
 
-std::string find_comparator_binary() {
-    return dftu_utils_test::find_binary_by_name("DFTRACER_COMPARATOR_PATH",
-                                                "dftracer_comparator");
+dstd::String find_comparator_binary() {
+    return dftu_utils_test::find_binary_by_name(
+        "DFTRACER_UTILS_COMPARATOR_PATH", "dftracer_comparator");
 }
 
-int run_comparator(const std::string& binary,
-                   const std::vector<std::string>& args,
-                   const std::string& stdout_file = "") {
-    std::vector<const char*> argv;
+int run_comparator(const dstd::String& binary,
+                   const dstd::Vector<dstd::String>& args,
+                   const dstd::String& stdout_file = "") {
+    dstd::Vector<const char*> argv;
     argv.push_back(binary.c_str());
     for (const auto& arg : args) argv.push_back(arg.c_str());
     argv.push_back(nullptr);
@@ -76,15 +83,205 @@ int run_comparator(const std::string& binary,
     return -1;
 }
 
-std::string read_file(const std::string& path) {
-    std::ifstream ifs(path);
-    if (!ifs.is_open()) return "";
-    return std::string(std::istreambuf_iterator<char>(ifs),
-                       std::istreambuf_iterator<char>());
+dstd::String read_file(const dstd::String& path) {
+    return dftu_utils_test::read_text(path);
 }
 
-bool contains(const std::string& haystack, const std::string& needle) {
-    return haystack.find(needle) != std::string::npos;
+bool contains(const dstd::String& haystack, const dstd::String& needle) {
+    return haystack.find(needle) != dstd::String::npos;
+}
+
+// Peak resident set of the child, from wait4. Returns 0 on a failed run.
+std::uint64_t run_comparator_peak_rss(const dstd::String& binary,
+                                      const dstd::Vector<dstd::String>& args,
+                                      const dstd::String& stdout_file) {
+    dstd::Vector<const char*> argv;
+    argv.push_back(binary.c_str());
+    for (const auto& arg : args) argv.push_back(arg.c_str());
+    argv.push_back(nullptr);
+    pid_t pid = ::fork();
+    if (pid < 0) return 0;
+    if (pid == 0) {
+        int fd =
+            ::open(stdout_file.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (fd >= 0) {
+            ::dup2(fd, STDOUT_FILENO);
+            ::close(fd);
+        }
+        ::execv(binary.c_str(), const_cast<char* const*>(argv.data()));
+        ::_exit(127);
+    }
+    int status = 0;
+    struct rusage ru{};
+    ::wait4(pid, &status, 0, &ru);
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) return 0;
+#if defined(__APPLE__)
+    return static_cast<std::uint64_t>(ru.ru_maxrss);
+#else
+    return static_cast<std::uint64_t>(ru.ru_maxrss) * 1024;
+#endif
+}
+
+// `files` small traces, one pid per file, so the number of (pid, tid, file,
+// window) groups grows with the file count the way a real run's does.
+void write_scale_set(const dstd::String& dir, int files, bool variant) {
+    REQUIRE(dstd::fs::create_directories(dir).has_value());
+    const char* names[] = {"read", "write", "open"};
+    for (int f = 0; f < files; ++f) {
+        dstd::String text = "[\n";
+        const std::uint64_t pid = 1000 + static_cast<std::uint64_t>(f);
+        for (int i = 0; i < 60; ++i) {
+            const std::uint64_t ts =
+                1000000000ULL + static_cast<std::uint64_t>(i) * 190000ULL;
+            const std::uint64_t dur = 100 +
+                                      static_cast<std::uint64_t>(i % 7) * 40 +
+                                      (variant ? 30 : 0);
+            text +=
+                R"({"id":)" + dstd::to_string(i) + R"(,"ph":"X","pid":)" +
+                dstd::to_string(pid) + R"(,"tid":)" +
+                dstd::to_string(pid * 10 + static_cast<std::uint64_t>(i % 2)) +
+                R"(,"name":")" + names[i % 3] + R"(","cat":"POSIX","ts":)" +
+                dstd::to_string(ts) + R"(,"dur":)" + dstd::to_string(dur) +
+                R"(,"args":{"fhash":"f)" + dstd::to_string(i % 4) +
+                R"(","size":)" + dstd::to_string(4096 * (1 + i % 5)) +
+                R"(,"level":)" + dstd::to_string(i % 11) + R"(,"epoch":)" +
+                dstd::to_string(i % 3) + R"(,"step":)" + dstd::to_string(i) +
+                R"(,"batch":)" + dstd::to_string(i % 17) + R"(,"rank":)" +
+                dstd::to_string(f) + R"(,"hops":)" + dstd::to_string(i % 5) +
+                "}}\n";
+        }
+        text += "]\n";
+        char name[32];
+        std::snprintf(name, sizeof(name), "/trace_%04d.pfw.gz", f);
+        REQUIRE(!dftu_utils_test::write_gz_trace(dir + name, text).empty());
+    }
+}
+
+constexpr std::uint64_t MB = 1024 * 1024;
+constexpr std::uint64_t WARM_BUDGET_BYTES = 160 * MB;
+constexpr std::uint64_t WARM_GROWTH_BYTES = 64 * MB;
+constexpr std::uint64_t COLD_BUDGET_BYTES = 1024 * MB;
+
+// A build whose instrumentation adds a fixed memory cost of its own, which
+// the budgets measured on a release build do not hold.
+bool fixed_cost_build() {
+#if defined(DFTRACER_UTILS_COVERAGE_BUILD) || \
+    defined(DFTRACER_UTILS_VALGRIND_MODE)
+    return true;
+#else
+    return false;
+#endif
+}
+
+struct ScaleRss {
+    /// The run that builds the indexes and then compares.
+    std::uint64_t cold = 0;
+    /// The run on the indexes the first run left: the comparison alone.
+    std::uint64_t warm = 0;
+};
+
+// Peak RSS in bytes of comparing two `files`-file sets.
+ScaleRss scale_run_rss(const dstd::String& binary, const dstd::String& work_dir,
+                       int files) {
+    const dstd::String base = work_dir + "/base_" + dstd::to_string(files);
+    const dstd::String var = work_dir + "/var_" + dstd::to_string(files);
+    write_scale_set(base, files, false);
+    write_scale_set(var, files, true);
+    const dstd::Vector<dstd::String> args{
+        "--baseline", base, "--variant", var, "--format", "json", "--no-color"};
+    ScaleRss rss;
+    rss.cold = run_comparator_peak_rss(
+        binary, args, work_dir + "/cold_" + dstd::to_string(files) + ".json");
+    rss.warm = run_comparator_peak_rss(
+        binary, args, work_dir + "/warm_" + dstd::to_string(files) + ".json");
+    REQUIRE(rss.cold > 0);
+    REQUIRE(rss.warm > 0);
+    return rss;
+}
+
+// One trace with a known number of events per kind: 6 POSIX reads, 4 POSIX
+// writes, 3 STDIO fwrites, 2 COMPUTE steps and 5 dataloader fetches whose
+// level arg is 1 to 5. 20 events in all.
+dstd::String write_filter_trace(const dstd::String& dir) {
+    REQUIRE(dstd::fs::create_directories(dir).has_value());
+    struct Kind {
+        const char* cat;
+        const char* name;
+        int count;
+        bool level;
+    };
+    const Kind kinds[] = {{"POSIX", "read", 6, false},
+                          {"POSIX", "write", 4, false},
+                          {"STDIO", "fwrite", 3, false},
+                          {"COMPUTE", "step", 2, false},
+                          {"dataloader", "fetch", 5, true}};
+    dstd::String text = "[\n";
+    int id = 0;
+    for (const Kind& k : kinds) {
+        for (int i = 0; i < k.count; ++i, ++id) {
+            text += R"({"id":)" + dstd::to_string(id) +
+                    R"(,"ph":"X","pid":7,"tid":8,"name":")" + k.name +
+                    R"(","cat":")" + k.cat + R"(","ts":)" +
+                    dstd::to_string(1000000000ULL + id * 1000ULL) +
+                    R"(,"dur":100,"args":{"fhash":"f1")" +
+                    (k.level ? R"(,"level":)" + dstd::to_string(i + 1)
+                             : dstd::String()) +
+                    "}}\n";
+        }
+    }
+    text += "]\n";
+    const dstd::String path = dir + "/filters.pfw.gz";
+    REQUIRE(!dftu_utils_test::write_gz_trace(path, text).empty());
+    return path;
+}
+
+// The events the root node counted for `query`.
+std::uint64_t counted_events(const dstd::String& binary,
+                             const dstd::String& trace,
+                             const dstd::String& out_dir,
+                             const dstd::String& query) {
+    const dstd::String out = out_dir + "/count.json";
+    REQUIRE(run_comparator(binary,
+                           {"--baseline", trace, "--variant", trace, "--format",
+                            "json", "-q", query},
+                           out) == 0);
+    const dstd::String content = read_file(out);
+    simdjson::dom::parser parser;
+    auto doc = parser.parse(simdjson::padded_string(content));
+    REQUIRE(!doc.error());
+    for (auto m : doc["nodes"].at(0)["summary"]["metrics"]) {
+        dstd::StringView name;
+        if (m["name"].get(name) == simdjson::SUCCESS && name == "count") {
+            double v = 0;
+            REQUIRE(m["baseline"].get(v) == simdjson::SUCCESS);
+            return static_cast<std::uint64_t>(v);
+        }
+    }
+    return UINT64_MAX;
+}
+
+// Counts, in a parsed comparator JSON, the metrics, those with a nonzero
+// delta and those marked as a regression.
+void count_changes(simdjson::dom::element e, std::size_t& metrics,
+                   std::size_t& changed, std::size_t& regressions) {
+    if (e.is_object()) {
+        double delta = 0;
+        if (e["delta"].get(delta) == simdjson::SUCCESS) {
+            ++metrics;
+            if (delta != 0.0) ++changed;
+        }
+        bool regression = false;
+        if (e["is_regression"].get(regression) == simdjson::SUCCESS &&
+            regression)
+            ++regressions;
+        const simdjson::dom::object object = e.get_object().value();
+        for (auto field : object)
+            count_changes(field.value, metrics, changed, regressions);
+    } else if (e.is_array()) {
+        const simdjson::dom::array array = e.get_array().value();
+        for (auto item : array)
+            count_changes(item, metrics, changed, regressions);
+    }
 }
 
 }  // namespace
@@ -99,7 +296,7 @@ TEST_SUITE("DFTracerComparator") {
         if (binary.empty()) {
             MESSAGE(
                 "dftracer_comparator binary not found, skipping. "
-                "Set DFTRACER_COMPARATOR_PATH env to specify location.");
+                "Set DFTRACER_UTILS_COMPARATOR_PATH env to specify location.");
             return;
         }
         CHECK(!binary.empty());
@@ -125,6 +322,61 @@ TEST_SUITE("DFTracerComparator") {
         CHECK(rc != 0);
     }
 
+    TEST_CASE("a trace compared with itself shows no change") {
+        auto binary = find_comparator_binary();
+        if (binary.empty()) {
+            MESSAGE("dftracer_comparator binary not found, skipping.");
+            return;
+        }
+        dftu_utils_test::TestEnvironment env(100);
+        REQUIRE(env.is_valid());
+        const dstd::String traces = env.dir() + "/traces";
+        REQUIRE(dstd::fs::create_directories(traces).has_value());
+        // Durations near 2^50 make a floating point sum depend on the order
+        // of its adds, and many files with two threads each spread the
+        // events over the workers, which merge in no fixed order.
+        constexpr int FILES = 160;
+        constexpr int EVENTS = 64;
+        for (int f = 0; f < FILES; ++f) {
+            dstd::String text = "[\n";
+            for (int i = 0; i < EVENTS; ++i) {
+                const std::uint64_t dur =
+                    (std::uint64_t{1} << 50) +
+                    static_cast<std::uint64_t>((f * 7919 + i * 104729) % 9973);
+                text += R"({"id":)" + dstd::to_string(i) +
+                        R"(,"ph":"X","pid":)" + dstd::to_string(100 + f) +
+                        R"(,"tid":)" + dstd::to_string(i % 2) + R"(,"name":")" +
+                        (i % 3 == 0 ? "read" : "write") +
+                        R"(","cat":"POSIX","ts":)" +
+                        dstd::to_string(1000000000ULL + i * 400000ULL) +
+                        R"(,"dur":)" + dstd::to_string(dur) +
+                        R"(,"args":{"fhash":"f1","ret":)" +
+                        dstd::to_string(4096 + i) + "}}\n";
+            }
+            text += "]\n";
+            REQUIRE(
+                !dftu_utils_test::write_gz_trace(
+                     traces + "/rank_" + dstd::to_string(f) + ".pfw.gz", text)
+                     .empty());
+        }
+        const dstd::String out = env.dir() + "/self.json";
+        REQUIRE(run_comparator(binary,
+                               {"--baseline", traces, "--variant", traces,
+                                "--baseline-index-dir", env.dir() + "/idx_base",
+                                "--variant-index-dir", env.dir() + "/idx_var",
+                                "--format", "json", "--executor-threads", "16"},
+                               out) == 0);
+        const dstd::String content = read_file(out);
+        simdjson::dom::parser parser;
+        auto doc = parser.parse(simdjson::padded_string(content));
+        REQUIRE(!doc.error());
+        std::size_t metrics = 0, changed = 0, regressions = 0;
+        count_changes(doc.value(), metrics, changed, regressions);
+        CHECK(metrics > 0);
+        CHECK(changed == 0);
+        CHECK(regressions == 0);
+    }
+
     TEST_CASE("basic comparison - same file") {
         auto binary = find_comparator_binary();
         if (binary.empty()) {
@@ -138,10 +390,10 @@ TEST_SUITE("DFTracerComparator") {
         auto f = create_pfw_gz(env, 100, 0);
         REQUIRE(!f.empty());
 
-        std::string output = env.get_dir() + "/cmp_output.txt";
+        dstd::String output = env.dir() + "/cmp_output.txt";
         int rc = run_comparator(binary,
                                 {"--baseline", f, "--variant", f, "--no-color",
-                                 "--duql", R"(cat == "POSIX")"},
+                                 "-q", R"(cat == "POSIX")"},
                                 output);
         CHECK(rc == 0);
 
@@ -168,10 +420,10 @@ TEST_SUITE("DFTracerComparator") {
         REQUIRE(!baseline.empty());
         REQUIRE(!variant.empty());
 
-        std::string output = env.get_dir() + "/cmp_diff.txt";
+        dstd::String output = env.dir() + "/cmp_diff.txt";
         int rc = run_comparator(binary,
                                 {"--baseline", baseline, "--variant", variant,
-                                 "--no-color", "--duql", R"(cat == "POSIX")"},
+                                 "--no-color", "-q", R"(cat == "POSIX")"},
                                 output);
         CHECK(rc == 0);
 
@@ -192,28 +444,30 @@ TEST_SUITE("DFTracerComparator") {
         dftu_utils_test::TestEnvironment env(100);
         REQUIRE(env.is_valid());
 
-        std::string base_dir = env.get_dir() + "/baseline";
-        std::string var_dir = env.get_dir() + "/variant";
-        fs::create_directories(base_dir);
-        fs::create_directories(var_dir);
+        dstd::String base_dir = env.dir() + "/baseline";
+        dstd::String var_dir = env.dir() + "/variant";
+        REQUIRE(dstd::fs::create_directories(base_dir).has_value());
+        REQUIRE(dstd::fs::create_directories(var_dir).has_value());
 
         {
             dftu_utils_test::TestEnvironment base_env(100);
             auto f = base_env.create_dft_test_gzip_file(50);
             REQUIRE(!f.empty());
-            fs::rename(f, base_dir + "/trace_0.pfw.gz");
+            REQUIRE(
+                dstd::fs::rename(f, base_dir + "/trace_0.pfw.gz").has_value());
         }
         {
             dftu_utils_test::TestEnvironment var_env(100);
             auto f = var_env.create_dft_test_gzip_file(80);
             REQUIRE(!f.empty());
-            fs::rename(f, var_dir + "/trace_0.pfw.gz");
+            REQUIRE(
+                dstd::fs::rename(f, var_dir + "/trace_0.pfw.gz").has_value());
         }
 
-        std::string output = env.get_dir() + "/cmp_dir.txt";
+        dstd::String output = env.dir() + "/cmp_dir.txt";
         int rc = run_comparator(binary,
                                 {"--baseline", base_dir, "--variant", var_dir,
-                                 "--no-color", "--duql", R"(cat == "POSIX")"},
+                                 "--no-color", "-q", R"(cat == "POSIX")"},
                                 output);
         CHECK(rc == 0);
 
@@ -236,10 +490,10 @@ TEST_SUITE("DFTracerComparator") {
         auto f = create_pfw_gz(env, 50, 0);
         REQUIRE(!f.empty());
 
-        std::string output = env.get_dir() + "/cmp_json.txt";
+        dstd::String output = env.dir() + "/cmp_json.txt";
         int rc = run_comparator(binary,
                                 {"--baseline", f, "--variant", f, "--format",
-                                 "json", "--duql", R"(cat == "POSIX")"},
+                                 "json", "-q", R"(cat == "POSIX")"},
                                 output);
         CHECK(rc == 0);
 
@@ -248,7 +502,7 @@ TEST_SUITE("DFTracerComparator") {
 
         // Parse JSON
         simdjson::dom::parser parser;
-        auto result = parser.parse(content);
+        auto result = parser.parse(simdjson::padded_string(content));
         REQUIRE(!result.error());
         auto root = result.value_unsafe();
         REQUIRE(root.is_object());
@@ -331,10 +585,10 @@ TEST_SUITE("DFTracerComparator") {
         auto f = create_pfw_gz(env, 50, 0);
         REQUIRE(!f.empty());
 
-        std::string output = env.get_dir() + "/cmp_json_zero.txt";
+        dstd::String output = env.dir() + "/cmp_json_zero.txt";
         int rc = run_comparator(binary,
                                 {"--baseline", f, "--variant", f, "--format",
-                                 "json", "--duql", R"(cat == "POSIX")"},
+                                 "json", "-q", R"(cat == "POSIX")"},
                                 output);
         CHECK(rc == 0);
 
@@ -342,7 +596,7 @@ TEST_SUITE("DFTracerComparator") {
         REQUIRE(!content.empty());
 
         simdjson::dom::parser parser;
-        auto result = parser.parse(content);
+        auto result = parser.parse(simdjson::padded_string(content));
         REQUIRE(!result.error());
         auto root = result.value_unsafe();
         auto nodes_arr = root["nodes"].get_array().value_unsafe();
@@ -371,10 +625,10 @@ TEST_SUITE("DFTracerComparator") {
         auto f = create_pfw_gz(env, 50, 0);
         REQUIRE(!f.empty());
 
-        std::string output = env.get_dir() + "/cmp_interval.txt";
+        dstd::String output = env.dir() + "/cmp_interval.txt";
         int rc = run_comparator(binary,
                                 {"--baseline", f, "--variant", f, "--no-color",
-                                 "-t", "1000", "--duql", R"(cat == "POSIX")"},
+                                 "-t", "1000", "-q", R"(cat == "POSIX")"},
                                 output);
         CHECK(rc == 0);
     }
@@ -395,5 +649,112 @@ TEST_SUITE("DFTracerComparator") {
         int rc = run_comparator(binary, {"--baseline", "/nonexistent/path",
                                          "--variant", f, "--no-color"});
         CHECK(rc != 0);
+    }
+
+    TEST_CASE("peak memory does not grow with the file count") {
+        auto binary = find_comparator_binary();
+        if (binary.empty()) {
+            MESSAGE("dftracer_comparator binary not found, skipping.");
+            return;
+        }
+        dftu_utils_test::ScopedTestDir dir("comparator_scale");
+        const dstd::String work = dstd::String(dir.path().str());
+
+        const ScaleRss small = scale_run_rss(binary, work, 100);
+        const ScaleRss large = scale_run_rss(binary, work, 400);
+        MESSAGE("peak rss, 100 files: cold "
+                << small.cold << " warm " << small.warm << "; 400 files: cold "
+                << large.cold << " warm " << large.warm);
+        if (instrumentation::active()) return;
+
+        // The warm peak grows slowly with the file count. The comparator
+        // before the index queries grew much faster. The budget and the
+        // margin sit between the two.
+        CHECK(large.warm < small.warm + WARM_GROWTH_BYTES);
+        if (fixed_cost_build()) return;
+        CHECK(large.warm < WARM_BUDGET_BYTES);
+        // The cold run also builds the indexes, and the allocator keeps up to
+        // IDLE_BACKED_CAP (1 GiB) of freed pages for reuse.
+        CHECK(large.cold < COLD_BUDGET_BYTES);
+    }
+
+    TEST_CASE("the report counts the processes, threads and files") {
+        auto binary = find_comparator_binary();
+        if (binary.empty()) {
+            MESSAGE("dftracer_comparator binary not found, skipping.");
+            return;
+        }
+        dftu_utils_test::ScopedTestDir dir("comparator_meta");
+        const dstd::String work = dstd::String(dir.path().str());
+        write_scale_set(work + "/base", 3, false);
+        write_scale_set(work + "/var", 3, true);
+        const dstd::String out = work + "/meta.json";
+        REQUIRE(run_comparator(binary,
+                               {"--baseline", work + "/base", "--variant",
+                                work + "/var", "--format", "json"},
+                               out) == 0);
+        simdjson::dom::parser parser;
+        auto doc = parser.parse(simdjson::padded_string(read_file(out)));
+        REQUIRE(!doc.error());
+        for (const char* side : {"baseline_meta", "variant_meta"}) {
+            INFO("side: ", dstd::String(side));
+            // The four file hashes of the events, not the three trace files.
+            CHECK(doc[side]["files"].get_uint64().value() == 4);
+            CHECK(doc[side]["processes"].get_uint64().value() == 3);
+            CHECK(doc[side]["threads"].get_uint64().value() == 6);
+        }
+        std::uint64_t base_count = 0;
+        std::uint64_t var_count = 0;
+        double dur_delta = 0;
+        for (auto m : doc["nodes"].at(0)["summary"]["metrics"]) {
+            dstd::StringView name;
+            if (m["name"].get(name) != simdjson::SUCCESS) continue;
+            if (name == "count") {
+                base_count = static_cast<std::uint64_t>(
+                    m["baseline"].get_double().value());
+                var_count = static_cast<std::uint64_t>(
+                    m["variant"].get_double().value());
+            } else if (name == "dur_mean") {
+                dur_delta = m["delta"].get_double().value();
+            }
+        }
+        CHECK(base_count == 180);
+        CHECK(var_count == 180);
+        CHECK(dur_delta == doctest::Approx(30.0));
+    }
+
+    TEST_CASE("node queries count the events a hand count says") {
+        auto binary = find_comparator_binary();
+        if (binary.empty()) {
+            MESSAGE("dftracer_comparator binary not found, skipping.");
+            return;
+        }
+        dftu_utils_test::ScopedTestDir dir("comparator_filters");
+        const dstd::String work = dstd::String(dir.path().str());
+        const dstd::String trace = write_filter_trace(work + "/data");
+
+        struct Case {
+            const char* what;
+            const char* query;
+            std::uint64_t events;
+        };
+        const Case cases[] = {
+            {"all events", "", 20},
+            {"category equality, either case", R"(cat == "posix")", 10},
+            {"category equality, other case", R"(cat == "Compute")", 2},
+            {"category in a list", R"(cat in ["PoSiX", "stdio"])", 13},
+            {"name in a list", R"(name in ["read", "step"])", 8},
+            {"like", R"(name like "%rit%")", 7},
+            {"!=", R"(cat != "POSIX")", 10},
+            {"not", R"(not (name == "read"))", 14},
+            {"arg", "level > 2", 3},
+            {"or across fields", R"(cat == "STDIO" or name == "read")", 9},
+            {"pattern on cat", R"(cat ~ "^pos")", 10},
+            {"set and expression", R"(cat == "POSIX" and name != "read")", 4}};
+        for (const Case& c : cases) {
+            SUBCASE(c.what) {
+                CHECK(counted_events(binary, trace, work, c.query) == c.events);
+            }
+        }
     }
 }

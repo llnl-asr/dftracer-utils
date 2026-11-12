@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 # Configuration file for the Sphinx documentation builder.
 #
 # For the full list of built-in configuration values, see the documentation:
@@ -236,7 +237,7 @@ version = ".".join(release.split(".")[:2])
 
 extensions = [
     "sphinx.ext.autodoc",
-    # "sphinx.ext.autosummary",  # Disabled: manual docs in api/reader.rst and api/indexer.rst
+    # "sphinx.ext.autosummary",  # Disabled: manual docs in api/indexer.rst
     "sphinx.ext.napoleon",
     "sphinx.ext.viewcode",
     "sphinx.ext.intersphinx",

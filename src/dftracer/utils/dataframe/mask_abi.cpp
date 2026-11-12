@@ -1,28 +1,30 @@
+// SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/mask.h>
 #include <dftracer/utils/duql/abi.h>
+#include <dftracer/utils/duql/errc.h>
 #include <dftracer/utils/duql/internal/duql_handle.h>
 
 #include <cstdint>
-#include <exception>
-#include <stdexcept>
-#include <vector>
+#include <utility>
 
-namespace dataframe = dftracer::utils::dataframe;
+using namespace dftracer::utils;
 
 namespace {}  // namespace
 
 namespace dftracer::utils::dataframe {
 
-Series DataFrame::mask(const duql::Query& q) const {
-    try {
-        return evaluate_mask(q.root(), *this);
-    } catch (const std::exception&) {
-        throw std::runtime_error(
+dstd::Result<Series> DataFrame::mask(const duql::Query& q) const {
+    dstd::Result<Series> out =
+        evaluate_mask(duql::detail::QueryAccess::root(q), *this);
+    if (!out)
+        return common::make_error(
+            duql::DuqlErrc::Unsupported,
             "DataFrame::mask: predicate has no columnar lowering for this "
             "frame");
-    }
+    return out;
 }
 
 }  // namespace dftracer::utils::dataframe
@@ -41,13 +43,11 @@ dftu_series* dftu_dataframe_mask(const dftu_duql* q,
         b.columns.emplace_back(const_cast<dftu_series*>(columns[i]));
     }
     dftu_series* out = nullptr;
-    try {
-        const auto& query = dftracer::utils::duql::duql_handle_unwrap(q);
-        out = dftracer::utils::dataframe::evaluate_mask(query.root(), b)
-                  .release();
-    } catch (const std::exception&) {
-        out = nullptr;
-    }
+    const auto& query = dftracer::utils::duql::duql_handle_unwrap(q);
+    dstd::Result<dataframe::Series> mask =
+        dftracer::utils::dataframe::evaluate_mask(
+            duql::detail::QueryAccess::root(query), b);
+    if (mask) out = mask->release();
     for (dataframe::Series& c : b.columns)
         c.release();  // borrowed, do not free
     return out;

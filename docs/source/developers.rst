@@ -5,7 +5,7 @@ Developer's Guide
 
 This guide contains information for developers contributing to dftracer utilities.
 
-For more detailed development information, see the `DEVELOPERS_GUIDE.md <https://github.com/llnl-asr/dftracer-utils/blob/main/DEVELOPERS_GUIDE.md>`_ in the repository.
+For more detailed development information, see the `DEVELOPERS_GUIDE.md <https://github.com/llnl-asr/dftracer-utils/blob/develop/DEVELOPERS_GUIDE.md>`_ in the repository.
 
 Development Setup
 -----------------
@@ -223,23 +223,25 @@ Conventions beyond formatting (checked in review):
 Logging and Tracing
 ~~~~~~~~~~~~~~~~~~~~
 
-The library has its own small logger (namespace ``dftracer::utils::logger``).
+The library has its own small logger (namespace ``dftracer::utils::common::logger``).
 Configure it once at startup with functions; emit with macros:
 
 .. code-block:: cpp
 
-   #include <dftracer/utils/core/common/logging.h>
-   namespace logger = dftracer::utils::logger;
+   #include <dftracer/utils/common/logging.h>
 
-   logger::init();  // reads env, defaults to Info + auto color
-   // or: logger::init({.level = logger::Level::Debug,
-   //                   .color = logger::ColorMode::Never});
+   dftracer::utils::common::logger::init();  // reads env, defaults to Info
+                                             // + auto color
 
-   DFTRACER_UTILS_LOG_ERROR("cannot open %s: errno=%d", path, e);
-   DFTRACER_UTILS_LOG_INFO("processed %zu files", n);
-   DFTRACER_UTILS_LOG_DEBUG("resolved %d checkpoints", k);
+   DFTRACER_UTILS_LOG_ERROR("cannot open {}: errno={}", path, e);
+   DFTRACER_UTILS_LOG_INFO("processed {} files", n);
+   DFTRACER_UTILS_LOG_DEBUG("resolved {} checkpoints", k);
 
-   logger::set_level(logger::Level::Debug);  // change verbosity at runtime
+   // the first argument is a string literal in the dstd::fmt syntax; a wrong
+   // hole count or argument type does not compile, in every build
+   // change verbosity at runtime
+   dftracer::utils::common::logger::set_level(
+       dftracer::utils::common::logger::Level::Debug);
 
 Levels are ``Trace < Debug < Info < Warn < Error < Off``. Each level is
 **compile-gated** by the build (``LOGGER_LEVEL_*``) and **runtime-gated** by the
@@ -254,12 +256,12 @@ runtime level without a rebuild via ``DFTRACER_UTILS_LOG_LEVEL`` (see
 
 **Scope tracing.** ``DFTRACER_UTILS_TRACE_SCOPE`` logs ``-> label`` on entry and
 ``<- label [ms]`` on exit, only when Trace is enabled. With no argument the label
-is the function name; extra arguments are printf-formatted and appended:
+is the function name; extra arguments are formatted and appended:
 
 .. code-block:: cpp
 
    coro::CoroTask<int> read_chunk(std::size_t off, std::size_t len) {
-       DFTRACER_UTILS_TRACE_SCOPE("off=%zu len=%zu", off, len);
+       DFTRACER_UTILS_TRACE_SCOPE("off={} len={}", off, len);
        ...  // "-> read_chunk: off=... len=..." now, "<- ... [x ms]" on return
    }
 
@@ -295,6 +297,17 @@ The pre-commit hook runs:
 Python checks require ``uvx`` or ``ruff`` in PATH; web checks require Node/``npm``
 and ``web/node_modules``. Both are skipped gracefully if their tools are not
 available, so the C++ workflow is unaffected.
+
+To keep ``git blame`` pointing at the real authors, turn on the list of
+formatting-only commits:
+
+.. code-block:: bash
+
+   git config blame.ignoreRevsFile .git-blame-ignore-revs
+
+Append the full hash of a commit that only moves or reformats code to
+``.git-blame-ignore-revs``. The ``blame_ignore_revs`` test rejects a hash
+that changes more than whitespace or file names.
 
 Web UI
 ~~~~~~
@@ -350,27 +363,47 @@ are heap-allocated and may outlive the caller's stack.
 Capture Rules for Coroutine Lambdas
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
+The captures of a lambda coroutine live in the closure, not in the coroutine frame.
+The closure must stay alive until the task ends.
+``scope.spawn(fn)`` moves the closure into the frame of the child, so its captures live as long as the task.
+Do not call the lambda yourself and pass the task it returns to ``scope.spawn(task)`` or ``co_await`` it from a temporary closure.
+The closure then dies at the end of that statement, while the task still reads its captures.
+
+.. code-block:: cpp
+
+    // Right: spawn(fn) owns the closure for the life of the child.
+    scope.spawn([filename]() -> coro::CoroTask<void> {
+        co_await process(filename);
+    });
+
+    // Wrong: the temporary closure dies at the semicolon.
+    // scope.spawn([filename]() -> coro::CoroTask<void> {
+    //     co_await process(filename);
+    // }());
+
+The samples below show the lambda that is passed to ``scope.spawn``.
+
 **Scalars (int, bool, size_t, enum): capture by value**
 
-Cheap and always safe. The scalar value is copied into the coroutine frame.
+Cheap and always safe. The scalar value is copied into the closure.
 
 .. code-block:: cpp
 
     int event_id = 42;
-    auto task = [event_id](CoroScope& scope) -> coro::CoroTask<void> {
-        // Safe: event_id is copied into the coroutine frame
+    auto task = [event_id]() -> coro::CoroTask<void> {
+        // Safe: event_id is copied into the closure
         co_await channel.send(event_id);
     };
 
 **Owning types (std::string, shared_ptr, unique_ptr): capture by value**
 
-Safe because the coroutine owns a copy. Automatic cleanup on coroutine destruction.
+Safe because the closure owns a copy. Automatic cleanup when the child ends.
 
 .. code-block:: cpp
 
     std::string filename = "trace.pfw.gz";
-    auto task = [filename](CoroScope& scope) -> coro::CoroTask<void> {
-        // Safe: coroutine owns a copy of the string
+    auto task = [filename]() -> coro::CoroTask<void> {
+        // Safe: the closure owns a copy of the string
         std::cout << "Processing " << filename << "\n";
         co_await something_async();
     };
@@ -383,7 +416,7 @@ Avoid expensive deep copies. Use pointer-by-value (`auto* ptr = &vec; [ptr](...)
 
     std::vector<Event> events = load_events();
     auto* events_ptr = &events;
-    auto task = [events_ptr](CoroScope& scope) -> coro::CoroTask<void> {
+    auto task = [events_ptr]() -> coro::CoroTask<void> {
         // Safe: events_ptr points to the vector in the caller's scope
         for (const auto& e : *events_ptr) {
             co_await process_event(e);
@@ -391,7 +424,7 @@ Avoid expensive deep copies. Use pointer-by-value (`auto* ptr = &vec; [ptr](...)
     };
     
     // WRONG: Do NOT capture the entire vector
-    // auto task = [events](CoroScope& scope) -> coro::CoroTask<void> { // BAD!
+    // auto task = [events]() -> coro::CoroTask<void> { // BAD!
     //     for (const auto& e : events) { ... }
     // };
 
@@ -407,13 +440,13 @@ Use pointer-by-value instead.
     std::string_view view = data;
     
     // WRONG: view points to freed memory
-    // auto task = [view](CoroScope& scope) -> coro::CoroTask<void> {
+    // auto task = [view]() -> coro::CoroTask<void> {
     //     std::cout << view << "\n";  // Use-after-free!
     // };
     
     // CORRECT: use pointer-by-value
     auto* data_ptr = &data;
-    auto task = [data_ptr](CoroScope& scope) -> coro::CoroTask<void> {
+    auto task = [data_ptr]() -> coro::CoroTask<void> {
         std::string_view safe_view(*data_ptr);
         std::cout << safe_view << "\n";  // Safe
     };
@@ -427,13 +460,13 @@ References in coroutine lambdas dangle immediately. Use pointer-by-value or valu
     int counter = 0;
     
     // WRONG: reference dangles
-    // auto task = [&counter](CoroScope& scope) -> coro::CoroTask<void> {
+    // auto task = [&counter]() -> coro::CoroTask<void> {
     //     counter++;  // Undefined behavior!
     // };
     
     // CORRECT: use pointer-by-value
     auto* counter_ptr = &counter;
-    auto task = [counter_ptr](CoroScope& scope) -> coro::CoroTask<void> {
+    auto task = [counter_ptr]() -> coro::CoroTask<void> {
         (*counter_ptr)++;  // Safe
     };
 
@@ -448,27 +481,29 @@ Always use explicit capture lists.
     std::string name = "event";
     
     // WRONG: all variables captured by reference
-    // auto task = [&](CoroScope& scope) -> coro::CoroTask<void> { ... };
+    // auto task = [&]() -> coro::CoroTask<void> { ... };
     
     // CORRECT: explicit captures by value or pointer
     auto* name_ptr = &name;
-    auto task = [event_id, name_ptr](CoroScope& scope) -> coro::CoroTask<void> {
+    auto task = [event_id, name_ptr]() -> coro::CoroTask<void> {
         co_await channel.send(event_id);
         std::cout << *name_ptr << "\n";
     };
 
-CoroScope Lifetime Rules
+Scope Lifetime Rules
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Always ensure the ``CoroScope`` outlives all spawned tasks and channels.
+Always ensure the ``coro::Scope`` outlives all spawned tasks and channels.
+``coro::with_scope`` does this: it joins the scope before it returns, also when its body raises.
+A channel that a child uses is declared outside the body of ``with_scope`` or is awaited out before the body can raise, since the locals of the body die when it raises.
 
 .. code-block:: cpp
 
-    auto task = make_task([](CoroScope& scope) -> coro::CoroTask<void> {
+    auto task = coro::with_scope([](coro::Scope& scope) -> coro::CoroTask<void> {
         auto channel = coro::make_channel<Event>(100);
 
         // Spawn producer -- producer() pre-registers the slot eagerly
-        scope.spawn([ch = channel->producer()](CoroScope& s) mutable
+        scope.spawn([ch = channel->producer()]() mutable
                         -> coro::CoroTask<void> {
             auto guard = ch.guard();
             for (int i = 0; i < 100; ++i) {
@@ -479,12 +514,17 @@ Always ensure the ``CoroScope`` outlives all spawned tasks and channels.
         });
 
         // Consumer reads until channel closes
-        while (auto event = co_await channel->receive()) {
+        while (true) {
+            auto event = co_await channel->receive();
+            if (!event) break;
             process(*event);
         }
 
         co_return;
     });
+
+    // Blocks the caller until the scope is joined.
+    runtime.block_on(std::move(task));
 
 Channel Patterns
 ~~~~~~~~~~~~~~~~
@@ -497,7 +537,7 @@ Use bounded channels for backpressure control:
     coro::Channel<Event> bounded_ch(1000);
     
     // Unbounded channel: send() never blocks (use carefully)
-    coro::Channel<Event> unbounded_ch(0);
+    auto unbounded_ch = coro::make_unbounded_channel<Event>();
 
 HasherUtility Pattern
 ~~~~~~~~~~~~~~~~~~~~~
@@ -512,7 +552,7 @@ For hot loops, reuse a single ``HasherUtility`` instance with ``reset()``:
     for (const auto& event : events) {
         hasher.reset();  // Clear state before each hash
         hasher.update(event.data);
-        auto hash = hasher.get_hash();
+        auto hash = hasher.hash();
         // ... use hash ...
     }
 
@@ -520,7 +560,7 @@ For hot loops, reuse a single ``HasherUtility`` instance with ``reset()``:
     // for (const auto& event : events) {
     //     HasherUtility temp_hasher;  // BAD!
     //     temp_hasher.update(event.data);
-    //     auto hash = temp_hasher.get_hash();
+    //     auto hash = temp_hasher.hash();
     // }
 
 Anti-Patterns to Avoid
@@ -557,7 +597,7 @@ Never store it across the parser's or the input buffer's lifetime.
 
 **Instantiating Executor directly**
 
-``Executor`` (``core/pipeline/executor.h``) is internal to the Pipeline. Never create it directly; use ``Pipeline`` or the task framework instead.
+``Executor`` (``coro/executor.h``) is internal to the runtime and is not installed. Never create an ``Executor`` directly; use ``Runtime`` instead.
 
 **Per-event SQL indexing**
 

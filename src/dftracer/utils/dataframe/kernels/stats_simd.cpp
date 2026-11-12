@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // SIMD companions to the stats kernels: is_between (two lane compares + And,
 // packed into a bool bitmap, mirroring compare_simd) and dot (a fused-multiply
 // accumulate then a horizontal ReduceSum, like the reduce_simd sum). The
@@ -20,27 +21,29 @@
 HWY_BEFORE_NAMESPACE();
 namespace dftracer::utils::dataframe {
 namespace HWY_NAMESPACE {
-namespace hn = hwy::HWY_NAMESPACE;
 
 // Vectorized lo <= x <= hi, packed into `out`. Bits are built 64 at a time so
 // every block store lands on a byte boundary regardless of the lane count; the
 // tail is packed scalar. Mirrors compare_simd's compare_bits.
 template <class T>
 void between_bits(const T* p, std::int64_t n, T lo, T hi, std::uint8_t* out) {
-    const hn::ScalableTag<T> d;
-    const std::size_t lanes = hn::Lanes(d);
-    const auto vlo = hn::Set(d, lo);
-    const auto vhi = hn::Set(d, hi);
+    const hwy::HWY_NAMESPACE::ScalableTag<T> d;
+    const std::size_t lanes = hwy::HWY_NAMESPACE::Lanes(d);
+    const auto vlo = hwy::HWY_NAMESPACE::Set(d, lo);
+    const auto vhi = hwy::HWY_NAMESPACE::Set(d, hi);
     const std::uint64_t lane_mask =
         lanes >= 64 ? ~std::uint64_t{0} : ((std::uint64_t{1} << lanes) - 1);
     std::int64_t i = 0;
     for (; i + 64 <= n; i += 64) {
         std::uint64_t bits = 0;
         for (std::size_t c = 0; c < 64; c += lanes) {
-            const auto v = hn::LoadU(d, p + i + static_cast<std::int64_t>(c));
-            const auto m = hn::And(hn::Ge(v, vlo), hn::Le(v, vhi));
+            const auto v = hwy::HWY_NAMESPACE::LoadU(
+                d, p + i + static_cast<std::int64_t>(c));
+            const auto m = hwy::HWY_NAMESPACE::And(
+                hwy::HWY_NAMESPACE::Ge(v, vlo), hwy::HWY_NAMESPACE::Le(v, vhi));
             std::uint64_t cb = 0;
-            hn::StoreMaskBits(d, m, reinterpret_cast<std::uint8_t*>(&cb));
+            hwy::HWY_NAMESPACE::StoreMaskBits(
+                d, m, reinterpret_cast<std::uint8_t*>(&cb));
             bits |= (cb & lane_mask) << c;
         }
         std::memcpy(out + (i >> 3), &bits, 8);
@@ -112,19 +115,26 @@ void BetweenU8(const void* p, std::int64_t n, dftu_scalar lo, dftu_scalar hi,
 // Two accumulators over a fused multiply-add break the serial dependency of the
 // scalar dot loop; the horizontal ReduceSum folds them at the end.
 double dot_f64(const double* a, const double* b, std::int64_t n) {
-    const hn::ScalableTag<double> d;
-    const std::int64_t lanes = static_cast<std::int64_t>(hn::Lanes(d));
-    auto acc0 = hn::Zero(d);
-    auto acc1 = hn::Zero(d);
+    const hwy::HWY_NAMESPACE::ScalableTag<double> d;
+    const std::int64_t lanes =
+        static_cast<std::int64_t>(hwy::HWY_NAMESPACE::Lanes(d));
+    auto acc0 = hwy::HWY_NAMESPACE::Zero(d);
+    auto acc1 = hwy::HWY_NAMESPACE::Zero(d);
     std::int64_t i = 0;
     for (; i + 2 * lanes <= n; i += 2 * lanes) {
-        acc0 = hn::MulAdd(hn::LoadU(d, a + i), hn::LoadU(d, b + i), acc0);
-        acc1 = hn::MulAdd(hn::LoadU(d, a + i + lanes),
-                          hn::LoadU(d, b + i + lanes), acc1);
+        acc0 = hwy::HWY_NAMESPACE::MulAdd(hwy::HWY_NAMESPACE::LoadU(d, a + i),
+                                          hwy::HWY_NAMESPACE::LoadU(d, b + i),
+                                          acc0);
+        acc1 = hwy::HWY_NAMESPACE::MulAdd(
+            hwy::HWY_NAMESPACE::LoadU(d, a + i + lanes),
+            hwy::HWY_NAMESPACE::LoadU(d, b + i + lanes), acc1);
     }
     for (; i + lanes <= n; i += lanes)
-        acc0 = hn::MulAdd(hn::LoadU(d, a + i), hn::LoadU(d, b + i), acc0);
-    double s = hn::ReduceSum(d, hn::Add(acc0, acc1));
+        acc0 = hwy::HWY_NAMESPACE::MulAdd(hwy::HWY_NAMESPACE::LoadU(d, a + i),
+                                          hwy::HWY_NAMESPACE::LoadU(d, b + i),
+                                          acc0);
+    double s =
+        hwy::HWY_NAMESPACE::ReduceSum(d, hwy::HWY_NAMESPACE::Add(acc0, acc1));
     for (; i < n; ++i) s += a[i] * b[i];
     return s;
 }
@@ -173,10 +183,10 @@ dftu_series* dftu_series_is_between(const dftu_series* v, dftu_scalar lo,
     out->null_count = v->null_count;
     out->validity = v->validity;  // shared: nulls propagate
     std::size_t bytes = buffer_bytes(TypeId::Bool, v->length);
-    out->data = Buffer::allocate(bytes == 0 ? 1 : bytes);
-    std::memset(out->data->data(), 0, out->data->size());
-    const void* p = v->data->data();
-    std::uint8_t* bits = out->data->data();
+    out->data = new_buffer(bytes == 0 ? 1 : bytes);
+    std::memset(writable(out->data), 0, out->data.size());
+    const void* p = v->data.data();
+    std::uint8_t* bits = writable(out->data);
     const std::int64_t n = v->length;
     switch (v->type) {
         case TypeId::Int64:
@@ -248,10 +258,10 @@ dftu_scalar dftu_series_dot(const dftu_series* v, const dftu_series* other) {
     }
     if (v->encoding == Encoding::Flat && other->encoding == Encoding::Flat &&
         v->type == TypeId::Float64 && other->type == TypeId::Float64 &&
-        !v->validity && !other->validity) {
+        !v->validity.block() && !other->validity.block()) {
         out.value.d = HWY_DYNAMIC_DISPATCH(dot_f64)(
-            reinterpret_cast<const double*>(v->data->data()),
-            reinterpret_cast<const double*>(other->data->data()), v->length);
+            reinterpret_cast<const double*>(v->data.data()),
+            reinterpret_cast<const double*>(other->data.data()), v->length);
         return out;
     }
     Series a{const_cast<dftu_series*>(v)};

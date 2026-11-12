@@ -1,4 +1,4 @@
-:description: Re-execute the I/O recorded in a trace, doing real I/O or sleeping per op, with dftracer_replay or the C++ ReplayEngine.
+:description: Re-execute the I/O recorded in a trace, doing real I/O or sleeping per op, with dftracer_replay.
 
 Replay a trace
 ==============
@@ -8,10 +8,9 @@ Replay a trace
 
    Re-execute the I/O operations recorded in a trace - either doing the real
    I/O or sleeping for each operation's duration - to reproduce a workload's timing
-   and load. Use the ``dftracer_replay`` binary for the common case, or the C++
-   ``ReplayEngine`` when you want to drive it from your own code.
+   and load. Use the ``dftracer_replay`` binary.
 
-This is C++ and CLI. There is no Python binding.
+This is a CLI tool. There is no Python binding.
 
 Command line
 ------------
@@ -19,15 +18,17 @@ Command line
 .. code-block:: bash
 
    # Replay a directory, honoring the original timing
-   dftracer_replay ./traces -r
+   dftracer_replay ./traces
 
    # Sleep-based replay (no real I/O), as fast as possible
-   dftracer_replay ./traces -r --dftracer-mode --no-sleep
+   dftracer_replay ./traces --dftracer-mode --no-sleep
 
    # Analyze only, do no I/O
    dftracer_replay ./traces --dry-run
 
-The inputs are one or more ``.pfw`` or ``.pfw.gz`` files or directories.
+The inputs are one or more ``.pfw`` or ``.pfw.gz`` files or directories; a directory is read with all its subfolders.
+The files replay in parallel, as many at once as ``--executor-threads``, and each file keeps its own timeline.
+A directory is read with all of its subfolders.
 
 Selected flags
 ~~~~~~~~~~~~~~
@@ -42,9 +43,6 @@ Selected flags
    * - ``inputs``
      - (required)
      - Trace files or directories.
-   * - ``-r``, ``--recursive``
-     - off
-     - Recurse into directories.
    * - ``--no-timing``
      - off
      - Ignore original timing; run as fast as possible.
@@ -84,39 +82,6 @@ Some flags require others: ``--no-sleep`` needs ``--dftracer-mode``;
 needs ``--hierarchical-replay``. The process exits ``0`` when at least one event
 executed and none failed, ``1`` when nothing executed, and ``2`` when any event
 failed.
-
-The ReplayEngine C++ API
-------------------------
-
-``ReplayEngine`` (header ``dftracer/utils/utilities/replay/replay.h``, namespace
-``dftracer::utils::utilities::replay``) is configured with a ``ReplayConfig`` and
-returns a ``ReplayResult``.
-
-.. code-block:: cpp
-
-   #include <dftracer/utils/utilities/replay/replay.h>
-   using namespace dftracer::utils::utilities::replay;
-
-   ReplayConfig cfg;
-   cfg.maintain_timing = true;          // honor recorded gaps
-   cfg.dftracer_mode   = true;          // sleep instead of real I/O
-   cfg.filter_categories = {"POSIX"};
-   cfg.sampling_rate   = 0.1;
-
-   ReplayEngine engine(cfg);
-   ReplayResult result = engine.replay("trace-0.pfw.gz");
-   result.print_summary();
-
-``ReplayConfig`` exposes the same knobs as the CLI and more, including
-``timing_scale``, ``start_time_offset``, ``max_open_files``, ``min_level`` /
-``max_level``, and an ``on_dispatch`` callback invoked per event. ``ReplayResult``
-reports ``total_events``, ``executed_events``, ``filtered_events``,
-``failed_events``, per-function and per-category counts, and byte totals.
-
-Replay dispatches through pluggable executors: a ``PosixExecutor`` does real I/O
-and a ``DFTracerExecutor`` does the sleep-based replay. Add your own with
-``engine.add_executor(...)``. To replay respecting the call hierarchy, use
-``replay_with_call_tree(trace_dir, pattern)``.
 
 See also
 --------

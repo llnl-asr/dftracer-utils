@@ -1,10 +1,10 @@
+// SPDX-License-Identifier: MIT
 // Example dftracer-utils plugin: counts events matching a predicate built with
 // the ergonomic F/Field builder, e.g. `F("dur") > 300`. The plugin includes
 // only plugin.h and links nothing; the host parses the rendered DSL string.
 //
-// Build: c++ -std=c++20 -shared -fPIC -I<repo>/include \
-//            -o query_filter.so query_filter.cpp
-// Run:   dftracer_run -d ./traces --plugin ./query_filter.so
+// Build: c++ -std=c++20 -shared -fPIC -I<repo>/include -o query_filter.so
+// query_filter.cpp Run:   dftracer_run ./traces --plugin ./query_filter.so
 
 #include <dftracer/utils/plugins/plugin.h>
 
@@ -39,12 +39,13 @@ struct QueryFilter {
                               static_cast<unsigned long long>(matched),
                               static_cast<unsigned long long>(total));
         if (n > 0)
-            h.log(DFTU_LOG_INFO,
-                  std::string_view(line, static_cast<std::size_t>(n)));
+            h.log(DFTU_LOG_INFO, dftracer::utils::dstd::StringView(
+                                     line, static_cast<std::size_t>(n)));
     }
 };
 
-extern "C" DFTU_PLUGIN_EXPORT dftu_plugin* dftracer_plugin(dftu_plugin_host* h, const dftu_value* config) {
+extern "C" DFTU_PLUGIN_EXPORT dftu_plugin* dftracer_plugin(
+    dftu_plugin_host* h, const dftu_value* config) {
     (void)h;
     return make_plugin<QueryFilter>(config);
 }

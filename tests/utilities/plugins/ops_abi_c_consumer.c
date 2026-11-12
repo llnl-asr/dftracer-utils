@@ -1,9 +1,11 @@
+// SPDX-License-Identifier: MIT
 /* A real C consumer of the dftu_svc_ops ABI: call a host utility that is now a
  * named op (dftu.hash.fnv1a) on a column the consumer builds itself - the same
  * path a C plugin uses to reach the host's call-host registry. */
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <stdint.h>
+#include <utilities/plugins/abi_c_consumers.h>
 
 /* Hash `data` with the host's dftu.hash.fnv1a op; 0 ok, -1 on failure. */
 int dftu_test_ops_fnv1a(const dftu_plugin_host* h, const char* data,

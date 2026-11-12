@@ -1,133 +1,157 @@
+// SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/index/indexer.h>
-#include <dftracer/utils/index/store/index_database.h>
-#include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/fileio/file_helpers.h>
+#include <dftracer/utils/trace/index/indexer.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
+#include <testing_utilities.h>
+#include <trace/views/test_view_common.h>
 
 #include <algorithm>
 #include <memory>
-#include <string>
-#include <vector>
 
-#include "test_view_common.h"
+using namespace dftracer::utils;
+using namespace dftracer::utils::trace::internal;
+using namespace dftracer::utils::trace::views;
+using namespace dftu_utils_test;
+using namespace test_view_common;
 
 namespace {
 
 constexpr int RECORDS = 3000;
 
-std::string gzip_of(TestEnvironment& env, const std::string& stem,
-                    const std::string& body) {
-    const std::string plain = env.get_dir() + "/" + stem + ".ndjson";
+dstd::String gzip_of(TestEnvironment& env, const dstd::String& stem,
+                     const dstd::String& body) {
+    const dstd::String plain = env.dir() + "/" + stem + ".ndjson";
     {
-        std::ofstream out(plain);
+        dftu_utils_test::FileOut out(plain);
         out << body;
     }
-    const std::string gz = plain + ".gz";
+    const dstd::String gz = plain + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                16 * 1024));
-    fs::remove(plain);
+    dstd::fs::remove(plain).discard();
     return gz;
 }
 
-std::string genesis_trace(TestEnvironment& env) {
-    std::string body;
+dstd::String genesis_trace(TestEnvironment& env) {
+    dstd::String body;
     for (int i = 0; i < RECORDS; ++i)
-        body += R"({"gtype":"func","run":"ab","ts":)" + std::to_string(i) +
-                R"(,"v":{"p50":)" + std::to_string(i / 30) + R"(,"p99":)" +
-                std::to_string(i / 30 + 5) + R"(},"count":)" +
-                std::to_string(i % 7) + "}\n";
+        body += R"({"gtype":"func","run":"ab","ts":)" + dstd::to_string(i) +
+                R"(,"v":{"p50":)" + dstd::to_string(i / 30) + R"(,"p99":)" +
+                dstd::to_string(i / 30 + 5) + R"(},"count":)" +
+                dstd::to_string(i % 7) + "}\n";
     return gzip_of(env, "genesis", body);
 }
 
 // A field of text, one that is an int in the first half of the trace and a
 // float in the second, and a timestamp-like int.
-std::string shapes_trace(TestEnvironment& env) {
-    std::string body;
+dstd::String shapes_trace(TestEnvironment& env) {
+    dstd::String body;
     for (int i = 0; i < RECORDS; ++i) {
-        const std::string mix = i < RECORDS / 2 ? std::to_string(i % 40)
-                                                : std::to_string(i % 40) + ".5";
-        body += R"({"gtype":"func","run":"ab","ts":)" + std::to_string(i) +
-                R"(,"sv":"s)" + std::to_string(i % 9) + R"(","mix":)" + mix +
-                R"(,"t0":)" + std::to_string(1700000000000000LL + i * 1000) +
+        const dstd::String mix = i < RECORDS / 2
+                                     ? dstd::to_string(i % 40)
+                                     : dstd::to_string(i % 40) + ".5";
+        body += R"({"gtype":"func","run":"ab","ts":)" + dstd::to_string(i) +
+                R"(,"sv":"s)" + dstd::to_string(i % 9) + R"(","mix":)" + mix +
+                R"(,"t0":)" + dstd::to_string(1700000000000000LL + i * 1000) +
                 "}\n";
     }
     return gzip_of(env, "shapes", body);
 }
 
-std::string dft_trace(TestEnvironment& env) {
-    std::string body;
+dstd::String dft_trace(TestEnvironment& env) {
+    dstd::String body;
     for (int i = 0; i < RECORDS; ++i)
         body +=
             R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)" +
-            std::to_string(1000 + i * 100) + R"(,"dur":)" +
-            std::to_string(10 + i) + R"(,"args":{"size":)" +
-            std::to_string(i % 13) + R"(,"offset":)" + std::to_string(i) +
+            dstd::to_string(1000 + i * 100) + R"(,"dur":)" +
+            dstd::to_string(10 + i) + R"(,"args":{"size":)" +
+            dstd::to_string(i % 13) + R"(,"offset":)" + dstd::to_string(i) +
             R"(}})" + "\n";
     return gzip_of(env, "dft", body);
 }
 
-View query_indexed(const std::string& gz, const std::string& schema) {
-    return View::from_file(gz).record_schema(schema);
+View query_indexed(const dstd::String& gz, const dstd::String& schema) {
+    return View::from_file(dstd::String(gz))
+        .record_schema(dstd::String(schema));
 }
 
-View full_index(const std::string& gz, const std::string& schema) {
-    dftracer::utils::index::Indexer::open({gz}).build();
-    return View::from_file(gz, determine_index_path(gz, ""))
-        .record_schema(schema);
+View full_index(const dstd::String& gz, const dstd::String& schema) {
+    dftu_utils_test::ok(
+        dftu_utils_test::ok(dftracer::utils::trace::index::Indexer::open(
+                                {dstd::String(dstd::StringView(gz))}))
+            .build());
+    return View::from_file(
+               dstd::String(gz),
+               dstd::String(dstd::String(determine_index_path(gz, ""))))
+        .record_schema(dstd::String(schema));
 }
 
-dataframe::DataFrame frame(const View& v, const std::string& q) {
-    return v.duql(q).collect().get();
+// The query's rows, or its error: from building the view, which throws, or
+// from running it.
+dstd::Result<dataframe::DataFrame> frame_result(const View& v,
+                                                const dstd::String& q) {
+    try {
+        return v.duql(q).collect().get();
+    } catch (const std::exception&) {
+        return dftracer::utils::common::error_of_exception(
+            std::current_exception());
+    }
 }
 
-bool has(const dataframe::DataFrame& f, const std::string& n) {
+dataframe::DataFrame frame(const View& v, const dstd::String& q) {
+    return dftu_utils_test::ok(frame_result(v, q));
+}
+
+bool has(const dataframe::DataFrame& f, const dstd::String& n) {
     return std::find(f.names.begin(), f.names.end(), n) != f.names.end();
 }
 
 // Reads the catalog as it is: schema_tree() would build a missing one.
-bool declares(const View& v, const std::string& path) {
-    for (const auto& leaf :
-         dftracer::utils::trace::views::detail::catalog_leaves(v))
-        if (leaf.path == path) return true;
+bool declares(const View& v, const dstd::String& path) {
+    for (const auto& leaf : dftu_utils_test::ok(
+             dftracer::utils::trace::views::detail::catalog_leaves(v)))
+        if (dstd::String(leaf.path) == path) return true;
     return false;
 }
 
-std::vector<std::string> sorted(std::vector<std::string> n) {
+dstd::Vector<dstd::String> sorted(dstd::Vector<dstd::String> n) {
     std::sort(n.begin(), n.end());
     return n;
 }
 
-void same_column(const dataframe::DataFrame& a, const dataframe::DataFrame& b,
-                 const std::string& n) {
+void same_rows(const dataframe::DataFrame& a, const dataframe::DataFrame& b,
+               const dstd::Vector<dstd::String>& cols) {
     REQUIRE(a.num_rows() == b.num_rows());
-    const auto& ca = a.columns[static_cast<std::size_t>(bcol(a, n))];
-    const auto& cb = b.columns[static_cast<std::size_t>(bcol(b, n))];
-    for (std::int64_t r = 0; r < a.num_rows(); ++r) {
-        REQUIRE(ca.is_null(r) == cb.is_null(r));
-        if (ca.is_null(r)) continue;
-        if (ca.type() == dataframe::TypeId::String)
-            CHECK(bstr(a, r, n) == bstr(b, r, n));
-        else
-            CHECK(bnum(a, r, n) == bnum(b, r, n));
-    }
+    CHECK(sorted_row_keys(a, cols) == sorted_row_keys(b, cols));
 }
 
-std::string join_names(const dataframe::DataFrame& f) {
-    std::string out;
+void same_rows(const dataframe::DataFrame& a, const dataframe::DataFrame& b) {
+    REQUIRE(a.num_rows() == b.num_rows());
+    CHECK(sorted_row_keys(a) == sorted_row_keys(b));
+}
+
+dstd::String join_names(const dataframe::DataFrame& f) {
+    dstd::String out;
     for (const auto& n : sorted(f.names)) out += n + " ";
     return out;
 }
 
-namespace st = dftracer::utils::index::store;
-
-bool has_catalog(const std::string& gz) {
+bool has_catalog(const dstd::String& gz) {
     try {
-        st::IndexDatabase db(determine_index_path(gz, ""),
-                             st::IndexOpenMode::ReadOnly);
-        const int fid = db.get_file_info_id(st::internal::get_logical_path(gz));
-        return fid >= 0 &&
-               db.extension_current(fid, st::IndexExtension::CATALOG);
+        const auto snapshot = dftu_utils_test::index_snapshot(
+            dstd::String(determine_index_path(gz, "")));
+        const auto file = dftu_utils_test::find_indexed_file(snapshot, gz);
+        return file && dftracer::utils::trace::index::extension_current(
+                           snapshot, *file,
+                           trace::index::store::IndexExtension::Catalog);
     } catch (...) {
         return false;
     }
@@ -136,16 +160,16 @@ bool has_catalog(const std::string& gz) {
 // A trace whose index holds no catalog: a full scan writes one, so each
 // query gets its own copy.
 struct Fresh {
-    std::unique_ptr<TestEnvironment> env;
-    std::string gz;
+    dstd::UniquePtr<TestEnvironment> env;
+    dstd::String gz;
     View view;
 };
 
-using Gen = std::string (*)(TestEnvironment&);
+using Gen = dstd::String (*)(TestEnvironment&);
 
-Fresh fresh(Gen gen, const std::string& schema) {
+Fresh fresh(Gen gen, const dstd::String& schema) {
     Fresh f;
-    f.env = std::make_unique<TestEnvironment>(10);
+    f.env = dstd::make_unique<TestEnvironment>(10);
     f.gz = gen(*f.env);
     REQUIRE_FALSE(has_catalog(f.gz));
     f.view = query_indexed(f.gz, schema);
@@ -154,27 +178,31 @@ Fresh fresh(Gen gen, const std::string& schema) {
 
 // The query on a fresh catalog-less view equals the full-index result; an
 // error on one must be the same error on the other.
-void same_as_full(Gen gen, const std::string& schema, const std::string& q) {
+void same_as_full(Gen gen, const dstd::String& schema, const dstd::String& q) {
     TestEnvironment full_env(10);
     const View f = full_index(gen(full_env), schema);
     const Fresh p = fresh(gen, schema);
-    std::string want_error;
+    dstd::String want_error;
     dataframe::DataFrame want;
-    try {
-        want = frame(f, q);
-    } catch (const std::exception& e) {
-        want_error = e.what();
+    {
+        auto result = frame_result(f, q);
+        if (result.has_value())
+            want = std::move(*result);
+        else
+            want_error = result.error().c_str();
     }
     if (!want_error.empty()) {
         INFO(q);
-        CHECK_THROWS_WITH(frame(p.view, q), want_error.c_str());
+        const auto got = frame_result(p.view, q);
+        REQUIRE_FALSE(got.has_value());
+        CHECK(dstd::String(got.error().c_str()) == want_error);
         return;
     }
     const auto got = frame(p.view, q);
     INFO(q);
     INFO("got " << join_names(got) << " want " << join_names(want));
     REQUIRE(sorted(got.names) == sorted(want.names));
-    for (const auto& n : got.names) same_column(got, want, n);
+    same_rows(got, want);
 }
 
 struct Case {
@@ -214,7 +242,7 @@ TEST_SUITE("DropRenameViews") {
         REQUIRE_FALSE(declares(q, "v.p50"));
         REQUIRE(declares(f, "v.p50"));
 
-        const std::string base = "gtype == \"func\"";
+        const dstd::String base = "gtype == \"func\"";
         const auto all = frame(q, base);
         REQUIRE(has(all, "v.p50"));
         REQUIRE(has(all, "count"));
@@ -225,10 +253,9 @@ TEST_SUITE("DropRenameViews") {
         CHECK(dropped.names.size() == all.names.size() - 1);
         const auto dropped_full = frame(f, base + " | drop v.p50");
         REQUIRE(sorted(dropped.names) == sorted(dropped_full.names));
-        for (const auto& n : dropped.names)
-            same_column(dropped, dropped_full, n);
+        same_rows(dropped, dropped_full);
 
-        const std::string rename = base + " | rename cnt = count, p = v.p99";
+        const dstd::String rename = base + " | rename cnt = count, p = v.p99";
         const auto renamed = frame(q, rename);
         CHECK_FALSE(has(renamed, "count"));
         CHECK_FALSE(has(renamed, "v.p99"));
@@ -237,8 +264,7 @@ TEST_SUITE("DropRenameViews") {
         CHECK(renamed.names.size() == all.names.size());
         const auto renamed_full = frame(f, rename);
         REQUIRE(sorted(renamed.names) == sorted(renamed_full.names));
-        for (const auto& n : renamed.names)
-            same_column(renamed, renamed_full, n);
+        same_rows(renamed, renamed_full);
     }
 
     TEST_CASE("dftracer trace without a catalog") {
@@ -249,15 +275,14 @@ TEST_SUITE("DropRenameViews") {
         REQUIRE_FALSE(declares(q, "args.offset"));
         REQUIRE(declares(f, "args.offset"));
 
-        const std::string base = "ph == \"X\"";
+        const dstd::String base = "ph == \"X\"";
         const auto renamed = frame(q, base + " | rename off = args.offset");
         const auto renamed_full =
             frame(f, base + " | rename off = args.offset");
         CHECK(has(renamed, "off"));
         CHECK_FALSE(has(renamed, "args.offset"));
         CHECK(has(renamed, "dur"));
-        same_column(renamed, renamed_full, "off");
-        same_column(renamed, renamed_full, "dur");
+        same_rows(renamed, renamed_full, {"off", "dur"});
 
         const auto dropped = frame(q, base + " | drop dur");
         CHECK_FALSE(has(dropped, "dur"));
@@ -286,11 +311,11 @@ TEST_SUITE("DropRenameViews") {
     }
 
     TEST_CASE("lookup keeps every left and right column") {
-        const std::string g =
+        const dstd::String g =
             "let r = where gtype == \"func\" | select ts, rc = count; where "
             "count "
             "> 1 | lookup r on ts | sort ts";
-        const std::string d =
+        const dstd::String d =
             "let r = where ph == \"X\" | select ts, rd = dur; where dur > 20 | "
             "lookup r on ts | sort ts";
         same_as_full(genesis_trace, "genesis", g);
@@ -301,24 +326,32 @@ TEST_SUITE("DropRenameViews") {
         // The rows and `r` share gtype, run and count: a lookup that fills a
         // column the rows already hold is the query's error, with or
         // without a catalog.
-        const std::string g =
+        const dstd::String g =
             "let r = where gtype == \"func\"; where count > 1 | lookup r on "
             "ts | sort ts";
         TestEnvironment full_env(10);
         const View f = full_index(genesis_trace(full_env), "genesis");
-        CHECK_THROWS_WITH(frame(f, g), doctest::Contains("lookup fills"));
+        const auto full = frame_result(f, g);
+        REQUIRE_FALSE(full.has_value());
+        CHECK(dstd::String(full.error().c_str()).find("lookup fills") !=
+              dstd::String::npos);
         const Fresh p = fresh(genesis_trace, "genesis");
-        CHECK_THROWS_WITH(frame(p.view, g), doctest::Contains("lookup fills"));
+        const auto fresh_result = frame_result(p.view, g);
+        REQUIRE_FALSE(fresh_result.has_value());
+        CHECK(dstd::String(fresh_result.error().c_str()).find("lookup fills") !=
+              dstd::String::npos);
     }
 
     TEST_CASE("fill_null keeps the undeclared columns") {
         TestEnvironment full_env(10);
         const View f = full_index(genesis_trace(full_env), "genesis");
-        const auto want = f.lazy().fill_null(0).collect().get();
+        const auto want =
+            dftu_utils_test::ok(f.lazy().fill_null(0).collect().get());
         const Fresh p = fresh(genesis_trace, "genesis");
-        const auto got = p.view.lazy().fill_null(0).collect().get();
+        const auto got =
+            dftu_utils_test::ok(p.view.lazy().fill_null(0).collect().get());
         REQUIRE(sorted(got.names) == sorted(want.names));
         CHECK(has(got, "v.p50"));
-        for (const auto& n : got.names) same_column(got, want, n);
+        same_rows(got, want);
     }
 }

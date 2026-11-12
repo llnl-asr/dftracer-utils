@@ -1,0 +1,524 @@
+// SPDX-License-Identifier: MIT
+#include <dftracer/utils/coro/completion_latch.h>
+#include <dftracer/utils/coro/executor.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/scope_exit.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/memory/detail/manager.h>
+#include <dftracer/utils/store/committer.h>
+#include <dftracer/utils/store/io_fault.h>
+
+#include <cstddef>
+#include <utility>
+
+namespace dftracer::utils::store::engine {
+
+namespace {
+
+std::atomic<std::uint64_t>& sync_calls() {
+    static std::atomic<std::uint64_t> calls{0};
+    return calls;
+}
+
+std::atomic<bool>& record_failure_armed() {
+    static std::atomic<bool> armed{false};
+    return armed;
+}
+
+std::atomic<std::uint64_t>& batch_count() {
+    static std::atomic<std::uint64_t> count{0};
+    return count;
+}
+
+dstd::Error io_error(const char* message) {
+    return dstd::Error(dstd::Condition::Io, message);
+}
+
+/// True when `id` had not been announced yet. Ids are dense from 1, so one
+/// grown byte vector answers this without hashing.
+bool announce(dstd::Vector<std::uint8_t>& announced, std::uint32_t id) {
+    if (id >= announced.size()) {
+        announced.resize(static_cast<std::size_t>(id) + 1U, 0);
+    }
+    if (announced[id] != 0) return false;
+    announced[id] = 1;
+    return true;
+}
+
+}  // namespace
+
+PendingBatch::PendingBatch() {
+    batch_count().fetch_add(1, std::memory_order_relaxed);
+}
+
+PendingBatch::~PendingBatch() {
+    batch_count().fetch_sub(1, std::memory_order_relaxed);
+}
+
+/// One suspended committer task: the latch makes exactly one of the wake and
+/// the timer resume it.
+struct Committer::WakeState {
+    coro::CompletionLatch latch;
+    /// One wait has two completion sources, the write that reaches
+    /// `commit_bytes` and the interval. Only the first may resume, or the
+    /// coroutine would run twice on one frame.
+    std::atomic<bool> claimed{false};
+    std::coroutine_handle<> handle;
+    coro::Executor* executor = nullptr;
+    coro::TimerService* timers = nullptr;
+    std::atomic<coro::TimerService::TimerId> timer{0};
+
+    void cancel_timer() {
+        const coro::TimerService::TimerId id =
+            timer.exchange(0, std::memory_order_acq_rel);
+        if (id != 0 && timers != nullptr) timers->cancel_timeout(id);
+    }
+
+    void on_wake() { finish(); }
+    void on_fire() { finish(); }
+
+    void finish() {
+        if (claimed.exchange(true, std::memory_order_acq_rel)) return;
+        if (latch.on_completed()) coro::resume_continuation(executor, handle);
+    }
+};
+
+/// Waits until `commit_bytes` of extent bytes are pending or `commit_interval`
+/// passed. The threshold is read under the queue lock that the producer adds
+/// the counter under, so a wake that arrives first is not lost.
+struct Committer::WaitForWork {
+    Committer& committer;
+    // A timer can hold the state after the writer's pool closed, so it is
+    // charged to the general pool.
+    dstd::SharedPtr<WakeState> state = [] {
+        memory::detail::Scope general(memory::detail::Manager::get().general());
+        return dstd::make_shared<WakeState>();
+    }();
+
+    bool await_ready() const {
+        std::lock_guard<std::mutex> lock(committer.queue_mutex_);
+        return committer.stopping_ ||
+               committer.pending_bytes_ >= committer.commit_bytes_;
+    }
+
+    bool await_suspend(std::coroutine_handle<> handle) {
+        Committer& self = committer;
+        state->handle = handle;
+        state->executor = &self.executor_;
+        coro::TimerService* timers = self.executor_.timers() != nullptr
+                                         ? self.executor_.timers()
+                                         : &coro::process_timers();
+        state->timers = timers;
+        state->timer.store(
+            timers->register_timeout(self.commit_interval_,
+                                     [wake = state] { wake->on_fire(); }),
+            std::memory_order_release);
+        {
+            std::lock_guard<std::mutex> lock(self.queue_mutex_);
+            if (self.stopping_ || self.pending_bytes_ >= self.commit_bytes_) {
+                return false;
+            }
+            self.wake_state_ = state;
+        }
+        const std::uint8_t before = state->latch.on_suspended();
+        return (before & (coro::CompletionLatch::BIT_COMPLETED |
+                          coro::CompletionLatch::BIT_CANCELLED)) == 0;
+    }
+
+    void await_resume() {
+        state->cancel_timer();
+        std::lock_guard<std::mutex> lock(committer.queue_mutex_);
+        if (committer.wake_state_ == state) committer.wake_state_.reset();
+    }
+};
+
+/// Parks on the executor it waits on, so a coro::RunLoop driving the close
+/// knows the loop's end still resumes it, and is resumed through that executor.
+struct Committer::StopWait {
+    Committer& committer;
+    coro::Executor* executor = nullptr;
+    coro::detail::ParkNode* park = nullptr;
+
+    bool await_ready() const {
+        std::lock_guard<std::mutex> lock(committer.queue_mutex_);
+        return committer.loop_done_;
+    }
+
+    bool await_suspend(std::coroutine_handle<> handle) {
+        std::lock_guard<std::mutex> lock(committer.queue_mutex_);
+        if (committer.loop_done_) return false;
+        executor = coro::Executor::current();
+        if (executor == nullptr) executor = &committer.executor_;
+        committer.stop_waiter_ = handle;
+        committer.stop_executor_ = executor;
+        coro::detail::ParkOwnerScope no_owner({});
+        park = executor->park(this, &StopWait::ignore_cancel);
+        return true;
+    }
+
+    // The committer loop ends on its own and resumes the waiter.
+    static void ignore_cancel(void*) noexcept {}
+
+    void await_resume() {
+        if (park != nullptr) {
+            executor->unpark(park);
+            park = nullptr;
+        }
+    }
+};
+
+Committer::Committer(DataFileWriter& file, coro::Executor& executor,
+                     std::uint64_t commit_bytes,
+                     std::chrono::milliseconds commit_interval)
+    : file_(file),
+      executor_(executor),
+      commit_bytes_(commit_bytes),
+      commit_interval_(commit_interval) {}
+
+Committer::~Committer() {
+    bool wait = false;
+    {
+        std::lock_guard<std::mutex> lock(queue_mutex_);
+        if (started_ && !loop_done_) {
+            stopping_ = true;
+            wait = true;
+        } else {
+            loop_done_ = true;
+        }
+    }
+    if (wait) {
+        wake();
+        coro::BlockingRegion block;
+        std::unique_lock<std::mutex> lock(queue_mutex_);
+        done_cv_.wait(lock, [this] { return loop_done_; });
+    }
+    dstd::Vector<PendingEntry> leftover;
+    drain(leftover);
+    free_entries(leftover);
+}
+
+void Committer::start() {
+    {
+        std::lock_guard<std::mutex> lock(queue_mutex_);
+        if (started_) return;
+        started_ = true;
+    }
+    coro::detail::Coro loop = run();
+    auto handle = loop.release();
+    handle.promise().executor = &executor_;
+    handle.resume();
+}
+
+coro::detail::Coro Committer::run() {
+    for (;;) {
+        {
+            std::lock_guard<std::mutex> lock(queue_mutex_);
+            if (stopping_) break;
+        }
+        // A named awaitable: GCC 12.1 destroys a co_await temporary that has
+        // a non-trivial destructor twice.
+        WaitForWork wait{*this};
+        co_await wait;
+        {
+            std::lock_guard<std::mutex> lock(queue_mutex_);
+            if (stopping_) break;
+        }
+        {
+            coro::BlockingRegion blocking;
+            // A failure latches; the next flush or close reports it.
+            commit_pending().discard();
+        }
+    }
+    finish_loop();
+}
+
+void Committer::finish_loop() {
+    std::coroutine_handle<> waiter;
+    coro::Executor* resume_on = &executor_;
+    {
+        std::lock_guard<std::mutex> lock(queue_mutex_);
+        loop_done_ = true;
+        wake_state_.reset();
+        waiter = stop_waiter_;
+        stop_waiter_ = nullptr;
+        resume_on = stop_executor_ != nullptr ? stop_executor_ : &executor_;
+        stop_executor_ = nullptr;
+        // Notified under the lock: the destructor returns as soon as it sees
+        // loop_done_, so it must not read the flag before the notify that
+        // wakes its wait on the condition variable is under way.
+        done_cv_.notify_all();
+    }
+    if (waiter) coro::resume_continuation(resume_on, waiter);
+}
+
+coro::CoroTask<dstd::Expected<void, dstd::Error>> Committer::stop() {
+    {
+        std::lock_guard<std::mutex> lock(queue_mutex_);
+        stopping_ = true;
+        if (!started_) loop_done_ = true;
+    }
+    wake();
+    StopWait stop{*this, nullptr, nullptr};
+    co_await stop;
+    if (failed()) co_return dstd::Unexpected<dstd::Error>(error());
+    co_return {};
+}
+
+void Committer::wake() {
+    dstd::SharedPtr<WakeState> state;
+    {
+        std::lock_guard<std::mutex> lock(queue_mutex_);
+        state = wake_state_;
+    }
+    if (state) state->on_wake();
+}
+
+void Committer::add_entry(PendingEntry&& entry) {
+    // Raw segment bytes, as the writer quota counts them: the stored length of
+    // a compressed extent says little about how much data waits.
+    std::uint64_t bytes = 0;
+    if (entry.has_extent) {
+        for (const ExtentSegment& segment : entry.extent.segments) {
+            bytes += segment.length;
+        }
+    }
+    bool wake_now = false;
+    {
+        std::lock_guard<std::mutex> lock(queue_mutex_);
+        entries_.push_back(std::move(entry));
+        pending_bytes_ += bytes;
+        wake_now = pending_bytes_ >= commit_bytes_;
+    }
+    if (wake_now) wake();
+}
+
+void Committer::on_extent(WrittenExtent&& extent) {
+    PendingEntry entry;
+    entry.extent = std::move(extent);
+    entry.has_extent = true;
+    add_entry(std::move(entry));
+}
+
+void Committer::on_drop(PendingBatch* batch, dstd::Vector<std::uint8_t>&& begin,
+                        dstd::Vector<std::uint8_t>&& end) {
+    PendingEntry entry;
+    entry.batch = batch;
+    entry.emit_drop = true;
+    entry.begin_key = std::move(begin);
+    entry.end_key = std::move(end);
+    add_entry(std::move(entry));
+}
+
+void Committer::on_erase(PendingBatch* batch, dstd::Vector<EraseItem>&& items) {
+    PendingEntry entry;
+    entry.batch = batch;
+    entry.erases = std::move(items);
+    add_entry(std::move(entry));
+}
+
+void Committer::on_changes(dstd::Span<const QueuedChange> changes) {
+    bool wake_now = false;
+    {
+        std::lock_guard<std::mutex> lock(queue_mutex_);
+        for (const QueuedChange& change : changes) {
+            PendingEntry entry;
+            entry.batch = change.batch;
+            entry.emit_drop = change.drop;
+            entries_.push_back(std::move(entry));
+        }
+        wake_now = pending_bytes_ >= commit_bytes_;
+    }
+    if (wake_now) wake();
+}
+
+void Committer::drain(dstd::Vector<PendingEntry>& out) {
+    std::lock_guard<std::mutex> lock(queue_mutex_);
+    out.swap(entries_);
+    entries_.clear();
+    pending_bytes_ = 0;
+}
+
+void Committer::free_entries(dstd::Vector<PendingEntry>& entries) noexcept {
+    for (PendingEntry& entry : entries) {
+        if (entry.has_extent) {
+            for (void* context : entry.extent.contexts) {
+                delete static_cast<PendingBatch*>(context);
+            }
+            entry.extent.contexts.clear();
+        }
+        delete entry.batch;
+        entry.batch = nullptr;
+    }
+}
+
+dstd::Expected<void, dstd::Error> Committer::sync_file() {
+    const dstd::File& file = file_.file();
+    if (!file.is_open()) {
+        return dstd::Unexpected<dstd::Error>(
+            io_error("store group commit sync on a closed file"));
+    }
+    sync_calls().fetch_add(1, std::memory_order_relaxed);
+    if (!file.sync(dstd::SyncMode::Data)) {
+        return dstd::Unexpected<dstd::Error>(
+            io_error("store group commit sync failed"));
+    }
+    io_fault::on_sync(file.native_handle());
+    return {};
+}
+
+void Committer::latch(const dstd::Error& error) {
+    {
+        std::lock_guard<std::mutex> lock(error_mutex_);
+        if (!latched_error_) latched_error_ = error;
+    }
+    failed_.store(true, std::memory_order_release);
+}
+
+dstd::Error Committer::error() const {
+    std::lock_guard<std::mutex> lock(error_mutex_);
+    if (latched_error_) return *latched_error_;
+    return io_error("store group commit failed");
+}
+
+dstd::Expected<void, dstd::Error> Committer::commit_pending() {
+    std::lock_guard<std::mutex> commit_lock(commit_mutex_);
+    dstd::Vector<PendingEntry> drained;
+    auto free_on_exit = dstd::defer([&] { free_entries(drained); });
+    drain(drained);
+
+    if (drained.empty()) {
+        if (failed()) return dstd::Unexpected<dstd::Error>(error());
+        return {};
+    }
+    if (failed()) return dstd::Unexpected<dstd::Error>(error());
+
+    bool durable = false;
+    for (const PendingEntry& entry : drained) {
+        if (entry.has_extent) {
+            for (void* context : entry.extent.contexts) {
+                const auto* batch = static_cast<const PendingBatch*>(context);
+                if (batch != nullptr && batch->durable) durable = true;
+            }
+        } else if (entry.batch != nullptr && entry.batch->durable) {
+            durable = true;
+        }
+    }
+
+    if (durable) {
+        auto synced = sync_file();
+        if (!synced) {
+            latch(synced.error());
+            return synced;
+        }
+    }
+
+    const std::uint64_t sequence = next_sequence_;
+    for (PendingEntry& entry : drained) {
+        if (entry.has_extent) {
+            for (void* context : entry.extent.contexts) {
+                auto* batch = static_cast<PendingBatch*>(context);
+                if (batch == nullptr) continue;
+                if (announce(announced_namespaces_, batch->namespace_id)) {
+                    file_.add(std::move(batch->namespace_item));
+                }
+                if (announce(announced_scopes_, batch->scope_id)) {
+                    file_.add(std::move(batch->scope_item));
+                }
+                if (batch->copy_item.local_id != 0 &&
+                    announce(announced_copies_, batch->copy_item.local_id)) {
+                    file_.add(std::move(batch->copy_item));
+                }
+            }
+            for (void* context : entry.extent.contexts) {
+                auto* batch = static_cast<PendingBatch*>(context);
+                if (batch == nullptr) continue;
+                for (EraseItem& erase : batch->erases) {
+                    file_.add(std::move(erase));
+                }
+                for (const ExtentRef& run : batch->big_runs) {
+                    ExtentRefItem big;
+                    big.offset = run.offset;
+                    big.length = run.length;
+                    big.crc = run.crc;
+                    big.sequence = sequence;
+                    big.synced = durable ? 1 : 0;
+                    file_.add(std::move(big));
+                }
+            }
+            ExtentRefItem reference;
+            reference.offset = entry.extent.offset;
+            reference.length = entry.extent.length;
+            reference.crc = entry.extent.crc;
+            reference.sequence = sequence;
+            reference.synced = durable ? 1 : 0;
+            reference.segments = std::move(entry.extent.segments);
+            file_.add(std::move(reference));
+            continue;
+        }
+
+        PendingBatch& batch = *entry.batch;
+        if (announce(announced_namespaces_, batch.namespace_id)) {
+            file_.add(std::move(batch.namespace_item));
+        }
+        if (announce(announced_scopes_, batch.scope_id)) {
+            file_.add(std::move(batch.scope_item));
+        }
+        if (batch.copy_item.local_id != 0 &&
+            (announce(announced_copies_, batch.copy_item.local_id) ||
+             batch.publish)) {
+            file_.add(std::move(batch.copy_item));
+        }
+        if (entry.emit_drop) {
+            DropItem item;
+            item.namespace_id = batch.namespace_id;
+            item.scope_id = batch.scope_id;
+            item.generation = batch.copy_item.generation;
+            item.begin_key = std::move(entry.begin_key);
+            item.end_key = std::move(entry.end_key);
+            file_.add(std::move(item));
+        }
+        for (EraseItem& erase : entry.erases) file_.add(std::move(erase));
+    }
+
+    dstd::Expected<void, dstd::Error> recorded;
+    if (record_failure_armed().exchange(false, std::memory_order_acq_rel)) {
+        recorded = dstd::Unexpected<dstd::Error>(
+            io_error("store group commit record write failed"));
+    } else {
+        recorded = file_.commit();
+    }
+    if (!recorded) {
+        latch(recorded.error());
+        return recorded;
+    }
+    if (durable) {
+        auto synced = sync_file();
+        if (!synced) {
+            latch(synced.error());
+            return synced;
+        }
+    }
+    ++next_sequence_;
+    records_.fetch_add(1, std::memory_order_release);
+    return {};
+}
+
+void CommitterTestHook::reset() {
+    sync_calls().store(0, std::memory_order_relaxed);
+    record_failure_armed().store(false, std::memory_order_relaxed);
+}
+
+std::uint64_t CommitterTestHook::syncs() {
+    return sync_calls().load(std::memory_order_relaxed);
+}
+
+void CommitterTestHook::fail_next_record(bool fail) {
+    record_failure_armed().store(fail, std::memory_order_relaxed);
+}
+
+std::uint64_t CommitterTestHook::live_batches() {
+    return batch_count().load(std::memory_order_relaxed);
+}
+
+}  // namespace dftracer::utils::store::engine

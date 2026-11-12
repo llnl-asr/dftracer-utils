@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_PLUGINS_ABI_AGG_H
 #define DFTRACER_UTILS_PLUGINS_ABI_AGG_H
 
@@ -93,10 +94,10 @@ typedef struct dftu_svc_agg {
     /** Get-or-create a named accumulator grouping by the `key_n` columns named
        in `key_names` and computing each of `spec_n` aggregates. Returns a
        stable handle owned by the host (freed at fold teardown, never by the
-       plugin); NULL on a bad op code, a missing output name, or allocation
-       failure, or a `name` in the host's own "dftu." namespace, which is
-       refused to plugins. A name seen before returns the existing handle and
-       ignores the new spec. Safe from any slice thread on that slice's host. */
+       plugin); NULL on a bad op code, a missing output name, or a `name` in the
+       host's own "dftu." namespace, which is refused to plugins. A name seen
+       before returns the existing handle and ignores the new spec. Safe from
+       any slice thread on that slice's host. */
     dftu_agg* (*agg_new)(void* h, const char* name,
                          const char* const* key_names, uint32_t key_n,
                          const dftu_agg_col* specs, uint32_t spec_n);

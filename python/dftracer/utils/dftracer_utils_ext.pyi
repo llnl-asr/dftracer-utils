@@ -1,5 +1,7 @@
+# SPDX-License-Identifier: MIT
 """Type stubs for dftracer_utils_ext module."""
 
+import os
 from types import TracebackType
 from typing import (
     TYPE_CHECKING,
@@ -7,7 +9,6 @@ from typing import (
     Callable,
     Dict,
     Generic,
-    Iterable,
     Iterator,
     List,
     Literal,
@@ -22,15 +23,14 @@ from typing import (
 )
 
 if TYPE_CHECKING:
-    import numpy as np  # ty: ignore[unresolved-import]
-    import pyarrow as pa  # ty: ignore[unresolved-import]
-    from pandas._libs.missing import NAType  # ty: ignore[unresolved-import]
+    import numpy as np  # ty: ignore[import-not-found]
+    import pyarrow as pa  # ty: ignore[import-not-found]
+    from pandas._libs.missing import NAType  # ty: ignore[import-not-found]
 
 _T = TypeVar("_T")
 
-# The suffixes directory discovery lists as traces: .pfw, .jsonl and
-# .ndjson, plain or gzip.
-TRACE_FILE_PATTERNS: Tuple[str, ...]
+# The file name patterns directory discovery lists as input traces: gzip files.
+INPUT_FILE_PATTERNS: Tuple[str, ...]
 # The plugin ABI version this extension accepts: (major << 16) | (minor << 8) | patch.
 PLUGIN_ABI_VERSION: int
 
@@ -75,22 +75,6 @@ class _ArrowBatchStream:
 
     def __arrow_c_stream__(self, requested_schema: object = None) -> object: ...
 
-class JsonDictValue:
-    """Zero-copy wrapper over a parsed DFTracer JSON event.
-
-    Supports dict-like access: ``event['name']``, ``event['args']['ret']``.
-    Call ``.to_dict()`` to materialize a regular Python dict.
-    """
-
-    def __getitem__(self, key: str) -> object: ...
-    def __len__(self) -> int: ...
-    def __contains__(self, key: str) -> bool: ...
-    def keys(self) -> List[str]: ...
-    def values(self) -> List[object]: ...
-    def items(self) -> List[Tuple[str, object]]: ...
-    def get(self, key: str, default: object = None) -> object: ...
-    def to_dict(self) -> Dict[str, object]: ...
-
 class Indexer:
     """Indexer with resolve/build pattern for tiered indexing."""
 
@@ -102,11 +86,9 @@ class Indexer:
         require_checkpoint: bool = True,
         require_bloom: bool = True,
         build_bloom: bool = True,
-        require_aggregation: bool = False,
-        time_interval_ms: float = 5000.0,
+        time_interval_ms: float = 1000.0,
         group_keys: Optional[List[str]] = None,
-        custom_metric_fields: Optional[List[str]] = None,
-        compute_percentiles: bool = False,
+        compute_percentiles: bool = True,
         group_by_file: bool = True,
         checkpoint_size: int = 32 * 1024 * 1024,
         parallelism: int = 0,
@@ -133,10 +115,9 @@ class Indexer:
                 directory-local paths.
             require_checkpoint: If True, build checkpoint index (tier 1).
             require_bloom: If True, build bloom filter data (tier 2).
-            require_aggregation: If True, build aggregation data (tier 3).
-            time_interval_ms: Time interval for aggregation in milliseconds.
+            time_interval_ms: Time interval for the aggregation tier, which
+                every build makes, in milliseconds.
             group_keys: Keys to group by for aggregation.
-            custom_metric_fields: Custom metric fields for aggregation.
             compute_percentiles: If True, compute percentiles during aggregation.
             parallelism: Number of parallel indexers. 0 = auto.
             force_rebuild: If True, rebuild indices even if they exist.
@@ -220,30 +201,31 @@ class Indexer:
         """
         ...
 
-    def query_file_pids(self, file_id: int) -> set:
+    def query_file_pids(self, path: str) -> set:
         """Query PIDs observed in a specific file.
 
         Args:
-            file_id: File identifier (0-based index).
+            path: Path of the trace file, as given to the indexer.
 
         Returns:
-            Set of PIDs (int) observed in the file.
+            Set of PIDs (int) observed in the file, empty when the index
+            holds no entry for the file.
         """
         ...
 
-    def query_all_file_pids(self) -> Dict[int, set]:
+    def query_all_file_pids(self) -> Dict[str, set]:
         """Query all file-to-PIDs mappings.
 
         Returns:
-            Dict mapping file_id to set of PIDs observed in that file.
+            Dict mapping trace path to set of PIDs observed in that file.
         """
         ...
 
-    def query_file_info(self) -> Tuple[Dict[int, str], Dict[int, set]]:
-        """Query file ID to path mapping and per-file PIDs in one call.
+    def query_file_info(self) -> Dict[str, set]:
+        """Query every indexed file with its PIDs in one call.
 
         Returns:
-            Tuple of (file_id_to_path, file_pids).
+            Dict mapping trace path to set of PIDs observed in that file.
         """
         ...
 
@@ -294,11 +276,7 @@ class CheckpointIndexer:
         ...
 
     def close(self) -> None:
-        """Release this Python wrapper's native indexer handle.
-
-        This does not force-close the shared RocksDB instance for the same
-        ``.dftindex`` path.
-        """
+        """Release this Python wrapper's native indexer handle."""
         ...
 
     @property
@@ -331,11 +309,7 @@ class CheckpointIndexer:
         exc_val: Optional[BaseException],
         exc_tb: Optional[TracebackType],
     ) -> None:
-        """Release this Python wrapper on context exit.
-
-        This does not force-close the shared RocksDB instance for the same
-        ``.dftindex`` path.
-        """
+        """Release this Python wrapper on context exit."""
         ...
 
 class TaskHandle(Generic[_T]):
@@ -371,7 +345,6 @@ class Runtime:
     """
 
     def __init__(self, threads: int = 0, io_threads: int = 0) -> None: ...
-    def shutdown(self) -> None: ...
     def wait_all(self) -> None: ...
     def get_progress(self) -> Dict[str, object]: ...
     def is_responsive(self) -> bool: ...
@@ -391,92 +364,114 @@ class Runtime:
 
 def get_default_runtime() -> Runtime: ...
 def peek_default_runtime() -> Optional[Runtime]: ...
-def set_default_runtime(runtime: Optional[Runtime]) -> None: ...
 
-class IndexDatabase:
-    """Handle to a .dftindex RocksDB store.
+_StoreBytes = Union[bytes, bytearray, memoryview]
+_StorePath = Union[str, "os.PathLike[str]"]
+_StoreScope = Union[None, _StorePath, Sequence[_StorePath]]
 
-    Used by the distributed indexer coordinator to assign file ids,
-    reserve file_id ranges and bulk-ingest worker-produced SSTs.
+class StoreNamespace:
+    """A namespace registered with :meth:`Store.namespace`."""
+
+    @property
+    def name(self) -> str: ...
+    @property
+    def format_version(self) -> int: ...
+    @property
+    def fold(self) -> int: ...
+    @property
+    def durable(self) -> bool: ...
+    @property
+    def shared(self) -> bool: ...
+
+class StoreBatch:
+    def put(self, key: _StoreBytes, value: _StoreBytes) -> None: ...
+    def fold(self, key: _StoreBytes, value: _StoreBytes) -> None: ...
+    def erase(self, key: _StoreBytes) -> None: ...
+    def erase_range(self, begin: _StoreBytes, end: Optional[_StoreBytes] = None) -> None: ...
+    def commit(self) -> None: ...
+    def discard(self) -> None: ...
+
+class StoreCursor:
+    def __iter__(self) -> "StoreCursor": ...
+    def __next__(self) -> Tuple[bytes, bytes]: ...
+
+class StoreSnapshot:
+    def get(self, ns: StoreNamespace, scope: _StoreScope, key: _StoreBytes) -> Optional[bytes]: ...
+    def multi_get(
+        self, ns: StoreNamespace, scope: _StoreScope, keys: Sequence[_StoreBytes]
+    ) -> List[Optional[bytes]]: ...
+    def scan(
+        self, ns: StoreNamespace, scope: _StoreScope, prefix: _StoreBytes = b""
+    ) -> StoreCursor: ...
+    def copy_info(
+        self, ns: StoreNamespace, scope: _StoreScope
+    ) -> Tuple[int, int, int, List[Tuple[int, int, int]]]: ...
+
+class Store:
+    def __init__(self, path: _StorePath) -> None: ...
+    def namespace(
+        self,
+        name: str,
+        format_version: int = 0,
+        fold: int = 0,
+        durable: bool = False,
+        shared: bool = False,
+    ) -> StoreNamespace: ...
+    def batch(
+        self,
+        ns: StoreNamespace,
+        scope: _StoreScope,
+        params_hash: int = 0,
+        sources: Optional[Sequence[Tuple[int, int, int]]] = None,
+    ) -> StoreBatch: ...
+    def flush(self) -> None: ...
+    def refresh(self) -> None: ...
+    def close(self) -> None: ...
+    def drop(self, ns: StoreNamespace, scope: _StoreScope) -> None: ...
+    def pack(
+        self,
+        small_file_bytes: Optional[int] = None,
+        dead_ratio: Optional[float] = None,
+        keep_seconds: Optional[int] = None,
+    ) -> Tuple[int, int, int, int, int]: ...
+    def snapshot(self) -> StoreSnapshot: ...
+
+class Index:
+    """Handle to a .dftindex index root.
+
+    Used by the distributed indexer coordinator to check staleness and to
+    record the aggregation of a distributed build.
     """
 
     def __init__(self, index_path: str) -> None: ...
-    def init_schema(self) -> None: ...
-    def assign_file_ids(self, paths: List[str]) -> List[int]:
-        """The file_id of each path (parallel to `paths`): its registered id,
-        or a newly reserved one. The file record is written with the file's
-        index data."""
-        ...
-
     def find_stale_files(self, paths: List[str]) -> dict:
         """Stat-only (mtime + size) staleness check of `paths` against the
         index. Returns a dict with keys `changed`, `added`, `removed`
-        (lists of paths), `format_outdated` (bool) and `stale` (bool)."""
-        ...
-
-    def reserve_file_id_range(self, count: int) -> int:
-        """Atomically reserve `count` contiguous file_ids; return first."""
-        ...
-
-    def bulk_ingest(
-        self,
-        registry: "SstArtifactRegistry",
-        skip_cfs: Optional[Iterable[str]] = None,
-    ) -> None:
-        """Ingest all SSTs collected in the registry.
-
-        skip_cfs is an optional iterable of CF names whose SSTs are left
-        outside the unified DB. Distributed builds pass
-        {"aggregation", "system_metrics"} to keep per-worker AGG/SYS SSTs
-        addressable via `agg_manifest.json` for parallel reads at analyze
-        time. See `dftracer.utils.dask.consolidate_index` to fold them
-        back into the unified DB later.
-        """
+        (lists of paths) and `stale` (bool)."""
         ...
 
     def write_agg_config(self, aggregation_config: Any) -> None:
         """Record the aggregation config a distributed build aggregated its
         files with (a ``dftracer.utils.indexer.AggregationConfig``). Each
-        file's ``dftracer.agg`` entry comes with its SSTs."""
+        file's ``dftracer.agg`` entry comes with its data."""
         ...
 
-    def write_aggregation_tracker(self, blobs: List[bytes]) -> None:
-        """Merge serialized AssociationTracker blobs and write the result
-        to the aggregation tier."""
-        ...
-
-class SstArtifactRegistry:
-    """Thread-safe collector for SST artifact paths produced by workers."""
-
-    def __init__(self) -> None: ...
-    def append(self, artifacts_dict: Dict[str, Optional[str]]) -> None:
-        """Add a per-batch Artifacts dict as returned by `build_sst_batch`."""
-        ...
-
-def build_sst_batch(
+def build_index_batch(
     files: List[str],
-    file_ids: List[int],
-    staging_dir: str,
-    batch_id: str,
-    index_dir: str = "",
+    index_dir: str,
     checkpoint_size: int = 33554432,
     force_rebuild: bool = False,
     build_bloom: bool = True,
     bloom_dimensions: Optional[List[str]] = None,
     parallelism: int = 0,
-    flush_every_files: int = 0,
     runtime: Optional[Union[Runtime, object]] = None,
     aggregation_config: Optional[object] = None,
-    file_slices: Optional[List[Optional[Tuple[int, int, bool, List[Tuple[int, int]]]]]] = None,
     progress: Optional[Callable[[int, int], None]] = None,
-) -> Tuple[List[Dict[str, Optional[str]]], bytes]:
-    """Run the indexer pipeline with an SST sink. Returns
-    `(artifact_dicts, tracker_blob)`. `tracker_blob` is the serialized
-    merged AssociationTracker for the batch (empty bytes when
-    `aggregation_config` is None). `file_slices` enables intra-file
-    parallelism; entries are `None` (whole file) or
-    `(member_begin, member_end, checkpoint_idx_base,
-    skip_file_scoped_writes, members)`."""
+) -> None:
+    """Run the indexer pipeline on `files` into the index at `index_dir`,
+    which this worker writes directly and numbers its own files in. Its
+    aggregation folds are always created; `aggregation_config` customizes
+    them and defaults to the standard config."""
     ...
 
 def plan_lpt_partition(
@@ -805,11 +800,11 @@ class _LazyFrame:
         statically is 0 (unknown)."""
         ...
     def explain(self) -> str: ...
-    def collect(self, morsel_rows: int = 0, runtime: Optional[object] = None) -> "_DataFrame": ...
+    def collect(self, batch_size: int = 0, runtime: Optional[object] = None) -> "_DataFrame": ...
     def stream(
-        self, morsel_rows: int = 0, runtime: Optional[object] = None
+        self, batch_size: int = 0, runtime: Optional[object] = None
     ) -> Iterator["_DataFrame"]:
-        """The rows as _DataFrame chunks of about ``morsel_rows`` rows (0 is
+        """The rows as _DataFrame chunks of about ``batch_size`` rows (0 is
         auto); starts on the first pull."""
         ...
 
@@ -1035,7 +1030,9 @@ def scan_files(
     runtime: Optional[Union[Runtime, object]] = None,
 ) -> List[Tuple[str, int]]:
     """Parallel directory scan returning (path, size) tuples for regular
-    files matching the patterns."""
+    files whose name matches one of the patterns: ``*`` is any run of
+    characters and ``?`` is one character. A pattern that starts with ``.`` is
+    a suffix, as ``*`` plus the pattern. No patterns lists every file."""
     ...
 
 def enable_aggregation_deterministic_ids() -> None:
@@ -1043,27 +1040,16 @@ def enable_aggregation_deterministic_ids() -> None:
     so the same string maps to the same 32-bit id in every worker process."""
     ...
 
-def move_artifacts(artifacts: Dict[str, Optional[str]], dest_dir: str) -> Dict[str, Optional[str]]:
-    """Move every populated SST in `artifacts` into `dest_dir` via the
-    C++ rename/copy helper, returning a fresh dict with the new paths."""
+def write_shard_set(index_root: str, shard_dirs: Sequence[str]) -> None:
+    """Catalog ``shard_dirs`` as the shards of the index root, in the root's
+    ``shards.json``. A shard under the root is stored relative to it."""
     ...
 
-def enumerate_gzip_members(
-    files: List[str],
-    runtime: Optional[Union[Runtime, object]] = None,
-) -> List[List[Tuple[int, int]]]:
-    """Cooperative async scan of gzip member offsets. Returns lists of
-    `(c_offset, c_size)` parallel to `files`; empty for non-gzip files."""
-    ...
-
-def plan_work_units(
-    member_map: List[List[Tuple[int, int]]],
-    num_workers: int,
-    target_c_size: int = 0,
-) -> List[List[Tuple[int, int, int, int]]]:
-    """Deterministic LPT assignment of intra-file gzip-member slices across
-    workers. Returns per-worker lists of
-    `(file_idx, member_begin, member_end, c_size)`."""
+def consolidate_shard_set(index_root: str) -> int:
+    """Merge the shards the root's ``shards.json`` names into the root's own
+    store by moving their data files, then remove the manifest and the shard
+    directories. Returns the number of trace files the shards indexed. A failed
+    move keeps the manifest and the shards for a retry."""
     ...
 
 def set_log_level(
@@ -1079,14 +1065,16 @@ class _LiveTraceViewer:
         self,
         files: Sequence[str],
         index_path: Optional[str] = ...,
-        snapshot_dir: Optional[str] = ...,
     ) -> None: ...
-    def refresh(self) -> "_TraceViewer":
-        """Walk the files again; a _TraceViewer of what is whole now."""
+    def snapshot(self) -> "_TraceViewer":
+        """Index what was written since the last call; a _TraceViewer of every whole member."""
         ...
-    def verified_bytes(self) -> int: ...
-    def skipped_tail_bytes(self) -> int: ...
-    def holes(self) -> List[Tuple[str, int, int]]: ...
+    def new_rows(self) -> Optional["_TraceViewer"]:
+        """As snapshot; a _TraceViewer of the rows no earlier call returned, or None."""
+        ...
+    def status(self) -> List[Tuple[str, str, int, int, int]]:
+        """(path, state, verified_bytes, skipped_bytes, hole_bytes) per file."""
+        ...
 
 class _TraceViewer:
     """A trace scan and the plan over it. Builders return a new _TraceViewer;

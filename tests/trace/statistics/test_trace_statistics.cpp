@@ -1,28 +1,31 @@
+// SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/trace/statistics/trace_statistics.h>
+#include <dftracer/utils/domains/analysis/statistics/trace_statistics.h>
+#include <dftracer/utils/dstd/string.h>
 #include <doctest/doctest.h>
 #include <simdjson.h>
 
 #include <cmath>
 #include <limits>
-#include <string>
 
-using namespace dftracer::utils::trace::statistics;
+using namespace dftracer::utils;
+
+using namespace dftracer::utils::domains::analysis::statistics;
 
 TEST_SUITE("TraceStatistics") {
     TEST_CASE("TraceStatistics - Convenience accessors") {
         TraceStatistics ts;
         ts.success = true;
-        ts.num_chunks = 3;
+        ts.chunk_count = 3;
 
         ts.merged.update_from_event("read", "POSIX", 1, 1, 1000000, 100);
         ts.merged.update_from_event("write", "POSIX", 1, 2, 2000000, 200);
         ts.merged.update_from_event("open", "storage", 2, 1, 3000000, 300);
 
         CHECK(ts.total_events() == 3);
-        CHECK(ts.num_categories() == 2);
-        CHECK(ts.num_unique_names() == 3);
-        CHECK(ts.num_pid_tids() == 3);
+        CHECK(ts.category_count() == 2);
+        CHECK(ts.unique_name_count() == 3);
+        CHECK(ts.pid_tid_count() == 3);
 
         // Time span: (3000300 - 1000000) / 1e6 = 2.0003 seconds
         CHECK(ts.time_span_seconds() == doctest::Approx(2.0003));
@@ -38,15 +41,15 @@ TEST_SUITE("TraceStatistics") {
     TEST_CASE("TraceStatistics - Zero events") {
         TraceStatistics ts;
         ts.success = true;
-        ts.num_chunks = 0;
+        ts.chunk_count = 0;
 
         CHECK(ts.total_events() == 0);
         CHECK(ts.time_span_seconds() == 0.0);
         CHECK(ts.duration_mean_us() == 0.0);
         CHECK(ts.duration_stddev_us() == 0.0);
-        CHECK(ts.num_categories() == 0);
-        CHECK(ts.num_unique_names() == 0);
-        CHECK(ts.num_pid_tids() == 0);
+        CHECK(ts.category_count() == 0);
+        CHECK(ts.unique_name_count() == 0);
+        CHECK(ts.pid_tid_count() == 0);
     }
 
     TEST_CASE("TraceStatistics - to_json produces valid JSON") {
@@ -54,22 +57,22 @@ TEST_SUITE("TraceStatistics") {
         ts.file_path = "/test/file.pfw.gz";
         ts.index_path = "/test/file.pfw.gz.idx";
         ts.success = true;
-        ts.num_chunks = 2;
+        ts.chunk_count = 2;
 
         ts.merged.update_from_event("read", "POSIX", 1, 1, 1000, 100);
         ts.merged.update_from_event("write", "storage", 2, 2, 2000, 200);
 
-        std::string json = ts.to_json();
+        dstd::String json = dstd::String(ts.to_json());
 
         // Parse and validate the JSON
         simdjson::dom::parser parser;
-        auto result = parser.parse(json);
+        auto result = parser.parse(simdjson::padded_string(json));
         REQUIRE(!result.error());
 
         auto root = result.value_unsafe();
         REQUIRE(root.is_object());
 
-        CHECK(std::string(root["file_path"].get_string().value()) ==
+        CHECK(dstd::String(root["file_path"].get_string().value()) ==
               "/test/file.pfw.gz");
         CHECK(root["success"].get_bool().value() == true);
         CHECK(root["total_events"].get_uint64().value() == 2);
@@ -101,15 +104,15 @@ TEST_SUITE("TraceStatistics") {
         ts.success = false;
         ts.error_message = "File not found";
 
-        std::string json = ts.to_json();
+        dstd::String json = dstd::String(ts.to_json());
 
         simdjson::dom::parser parser;
-        auto result = parser.parse(json);
+        auto result = parser.parse(simdjson::padded_string(json));
         REQUIRE(!result.error());
 
         auto root = result.value_unsafe();
         CHECK(root["success"].get_bool().value() == false);
-        CHECK(std::string(root["error"].get_string().value()) ==
+        CHECK(dstd::String(root["error"].get_string().value()) ==
               "File not found");
     }
 }

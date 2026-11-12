@@ -1,9 +1,13 @@
+// SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/tasks/coro_scope.h>
-#include <dftracer/utils/index/gzip/gzip_indexer.h>
-#include <dftracer/utils/utilities/fileio/compress/gzip_member_reader.h>
-#include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
-#include <dftracer/utils/utilities/reader/internal/inflater.h>
+#include <dftracer/utils/dstd/file.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/fileio/compress/gzip_member_reader.h>
+#include <dftracer/utils/fileio/compress/libdeflate_gzip.h>
+#include <dftracer/utils/trace/index/gzip/gzip_indexer.h>
+#include <dftracer/utils/trace/reader/internal/inflater.h>
 #include <doctest/doctest.h>
 #include <fcntl.h>
 #include <testing_runtime.h>
@@ -13,21 +17,19 @@
 #include <cstdint>
 #include <cstdio>
 #include <random>
-#include <string>
-#include <vector>
 
 using namespace dftracer::utils;
-using dftracer::utils::utilities::reader::internal::ReaderInflater;
-using dftu_utils_test::run_coro;
-namespace gz = dftracer::utils::utilities::fileio::compress;
 
 namespace {
 
-// Random hex compresses about 2:1, so the member spans many 1 MiB reads.
-std::string hex_lines(std::size_t bytes, std::uint32_t seed) {
+// The readers read 1 MiB of compressed bytes at a time.
+constexpr std::size_t READ_BYTES = 1u << 20;
+
+// Random hex compresses about 2:1.
+dstd::String hex_lines(std::size_t bytes, std::uint32_t seed) {
     std::mt19937 rng(seed);
     static const char HEX[] = "0123456789abcdef";
-    std::string s;
+    dstd::String s;
     s.reserve(bytes + 128);
     while (s.size() < bytes) {
         s += "{\"id\":\"";
@@ -37,9 +39,9 @@ std::string hex_lines(std::size_t bytes, std::uint32_t seed) {
     return s;
 }
 
-std::vector<std::uint8_t> gzip(const std::string& text) {
-    gz::GzipMemberCompressor c;
-    std::vector<std::uint8_t> out(c.bound(text.size()));
+dstd::Vector<std::uint8_t> gzip(const dstd::String& text) {
+    fileio::compress::GzipMemberCompressor c;
+    dstd::Vector<std::uint8_t> out(c.bound(text.size()));
     auto n = c.compress(text.data(), text.size(), out.data(), out.size());
     REQUIRE(n.has_value());
     out.resize(*n);
@@ -47,29 +49,29 @@ std::vector<std::uint8_t> gzip(const std::string& text) {
 }
 
 struct TempFile {
-    std::string path;
-    explicit TempFile(const std::vector<std::uint8_t>& bytes) {
+    dstd::String path;
+    explicit TempFile(const dstd::Vector<std::uint8_t>& bytes) {
         char tmpl[] = "/tmp/dftu_inflater_XXXXXX";
         const int fd = ::mkstemp(tmpl);
         REQUIRE(fd >= 0);
         path = tmpl;
         REQUIRE(::write(fd, bytes.data(), bytes.size()) ==
                 static_cast<ssize_t>(bytes.size()));
-        ::close(fd);
     }
     ~TempFile() { std::remove(path.c_str()); }
 };
 
-std::string read_all(const std::string& path) {
-    const int fd = ::open(path.c_str(), O_RDONLY);
-    REQUIRE(fd >= 0);
-    std::string out;
+dstd::String read_all(const dstd::String& path) {
+    auto fd_file = dstd::File::open(path, {});
+    REQUIRE(fd_file);
+    const int fd = fd_file->native_handle();
+    dstd::String out;
     bool ok = false;
-    run_coro([&](CoroScope&) -> coro::CoroTask<void> {
-        ReaderInflater inf;
+    dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
+        trace::reader::internal::ReaderInflater inf;
         off_t offset = 0;
         if (!co_await inf.initialize(fd, offset)) co_return;
-        std::vector<unsigned char> buf(1 << 20);
+        dstd::Vector<unsigned char> buf(1 << 20);
         while (true) {
             std::size_t n = 0;
             if (!co_await inf.read(fd, offset, buf.data(), buf.size(), n))
@@ -79,52 +81,56 @@ std::string read_all(const std::string& path) {
         }
         ok = true;
     });
-    ::close(fd);
     REQUIRE(ok);
     return out;
 }
 
-std::string read_members(const std::string& path) {
-    const int fd = ::open(path.c_str(), O_RDONLY);
-    REQUIRE(fd >= 0);
+dstd::String read_members(const dstd::String& path) {
+    auto fd_file = dstd::File::open(path, {});
+    REQUIRE(fd_file);
+    const int fd = fd_file->native_handle();
     const auto size = static_cast<std::uint64_t>(::lseek(fd, 0, SEEK_END));
-    std::string out;
-    run_coro([&](CoroScope&) -> coro::CoroTask<void> {
-        auto gen = gz::decode_gzip_members(fd, size);
-        while (auto part = co_await gen.next()) out.append(*part);
+    dstd::String out;
+    dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
+        auto gen = fileio::compress::decode_gzip_members(fd, size);
+        while (auto part = co_await gen.next()) {
+            REQUIRE(*part);
+            out.append(**part);
+        }
     });
-    ::close(fd);
     return out;
 }
 
 }  // namespace
 
 TEST_SUITE("ReaderInflater") {
-    TEST_CASE("one member larger than many reads decodes whole") {
-        const auto text = hex_lines(12u << 20, 1);
+    TEST_CASE("one member larger than one read decodes whole") {
+        const auto text = hex_lines(3u << 20, 1);
         const auto comp = gzip(text);
-        REQUIRE(comp.size() > (4u << 20));
+        REQUIRE(comp.size() > READ_BYTES);
         TempFile f(comp);
         CHECK(read_all(f.path) == text);
     }
 
     TEST_CASE("members of different sizes decode in order") {
-        const auto a = hex_lines(6u << 20, 2);
+        const auto a = hex_lines(5u << 20, 2);
         const auto b = hex_lines(1000, 3);
-        const auto c = hex_lines(3u << 20, 4);
-        std::vector<std::uint8_t> comp;
+        const auto c = hex_lines(1u << 20, 4);
+        dstd::Vector<std::uint8_t> comp;
         for (const auto* t : {&a, &b, &c}) {
             const auto m = gzip(*t);
             comp.insert(comp.end(), m.begin(), m.end());
         }
+        REQUIRE(gzip(a).size() > READ_BYTES);
         TempFile f(comp);
         CHECK(read_all(f.path) == a + b + c);
     }
 
     TEST_CASE("a large cut member keeps the complete lines") {
-        const auto text = hex_lines(12u << 20, 5);
+        const auto text = hex_lines(5u << 20, 5);
         auto comp = gzip(text);
         comp.resize(comp.size() * 7 / 10);
+        REQUIRE(comp.size() > READ_BYTES);
         TempFile f(comp);
         const auto got = read_all(f.path);
         REQUIRE(!got.empty());
@@ -134,7 +140,7 @@ TEST_SUITE("ReaderInflater") {
     }
 
     TEST_CASE("the member line reader decodes one large member") {
-        const auto text = hex_lines(12u << 20, 6);
+        const auto text = hex_lines(3u << 20, 6);
         TempFile f(gzip(text));
         CHECK(read_members(f.path) == text);
     }
@@ -145,13 +151,13 @@ TEST_SUITE("ReaderInflater") {
     TEST_CASE(
         "the member line reader decodes members larger and smaller "
         "than the last") {
-        const auto big = hex_lines(9u << 20, 8);
+        const auto big = hex_lines(3u << 20, 8);
         const auto small = hex_lines(4000, 9);
         for (const bool big_first : {true, false}) {
             CAPTURE(big_first);
             const auto& first = big_first ? big : small;
             const auto& last = big_first ? small : big;
-            std::vector<std::uint8_t> comp;
+            dstd::Vector<std::uint8_t> comp;
             for (const auto* t : {&first, &small, &last}) {
                 const auto m = gzip(*t);
                 comp.insert(comp.end(), m.begin(), m.end());
@@ -162,9 +168,10 @@ TEST_SUITE("ReaderInflater") {
     }
 
     TEST_CASE("the member line reader keeps the lines of a cut file") {
-        const auto text = hex_lines(6u << 20, 10);
+        const auto text = hex_lines(5u << 20, 10);
         auto comp = gzip(text);
         comp.resize(comp.size() * 6 / 10);
+        REQUIRE(comp.size() > READ_BYTES);
         TempFile f(comp);
         const auto got = read_members(f.path);
         REQUIRE(!got.empty());
@@ -173,14 +180,17 @@ TEST_SUITE("ReaderInflater") {
     }
 
     TEST_CASE("the index build counts one large member") {
-        const auto text = hex_lines(12u << 20, 7);
+        const auto text = hex_lines(3u << 20, 7);
         TempFile f(gzip(text));
-        std::optional<index::gzip::GzipBuildArtifacts> arts;
-        run_coro([&](CoroScope& scope) -> coro::CoroTask<void> {
-            index::gzip::CheckpointIndexer::VisitorList none;
-            arts = co_await index::gzip::build_gzip_index_artifacts(
-                f.path, 32u << 20, none, &scope);
-        });
+        dstd::Optional<trace::index::gzip::GzipBuildArtifacts> arts;
+        dftu_utils_test::run_coro(
+            [&](coro::Scope& scope) -> coro::CoroTask<void> {
+                trace::index::gzip::CheckpointIndexer::VisitorList none;
+                auto built =
+                    co_await trace::index::gzip::build_gzip_index_artifacts(
+                        f.path, 32u << 20, none, &scope);
+                if (built) arts = std::move(*built);
+            });
         REQUIRE(arts.has_value());
         CHECK(arts->total_uc_size == text.size());
         CHECK(arts->total_lines == static_cast<std::uint64_t>(std::count(

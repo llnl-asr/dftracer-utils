@@ -70,8 +70,8 @@ last indexed, so explicit indexing only warms it.
 
       .. code-block:: cpp
 
-         #include <dftracer/utils/index/indexer.h>
-         using namespace dftracer::utils::index;
+         #include <dftracer/utils/trace/index/indexer.h>
+         using namespace dftracer::utils::trace::index;
 
          Indexer indexer = Indexer::open({"traces/"});
          indexer.build();  // no-op if already built
@@ -168,7 +168,7 @@ skip the local script entirely and serve queries over HTTP.
 
       .. code-block:: console
 
-         $ dftracer_server -d traces/
+         $ dftracer_server traces/
          # then query the REST API, or open http://127.0.0.1:8080/
 
 Full detail: :doc:`analysis/export` (pandas/polars/Arrow), :doc:`serving/http-server`

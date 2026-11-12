@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Compile a small Python function into a columnar ``Expr``, control flow
 included.
 

@@ -1,0 +1,80 @@
+// SPDX-License-Identifier: MIT
+#ifndef DFTRACER_UTILS_DOMAINS_PLUGINS_FOLD_ADAPTER_EXT_H
+#define DFTRACER_UTILS_DOMAINS_PLUGINS_FOLD_ADAPTER_EXT_H
+
+#include <dftracer/utils/dataframe/agg.h>
+#include <dftracer/utils/dataframe/agg_spill.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/plugins/abi.h>
+
+#include <string>
+#include <vector>
+
+// Private seam shared by the fold_adapter extension translation units
+// (fold_adapter.cpp core plus fold_adapter/{agg,result,ops}.cpp). Each ext TU
+// defines its own file-static g_* vtable and exposes it through the detail::
+// accessor below; host_get_service in the core TU calls the accessors. The
+// remaining declarations are the free helpers referenced across more than one
+// of those TUs.
+namespace dftracer::utils::domains::plugins {
+
+// Per-slice engine-backed aggregation accumulator (dft.ext.agg). value_names
+// are the distinct value/by columns the specs reference, ordered so each spec's
+// value_col/by_col indexes into it. `spiller` bounds the live group map to the
+// scan's memory budget, so a high-cardinality key does not grow `state`
+// without limit; it holds the spilled runs and drains them at finalize.
+struct AggAccum {
+    dstd::String name;
+    dstd::Vector<dstd::String> key_names;
+    dstd::Vector<dstd::String> value_names;
+    dataframe::AggStatePtr state;
+    dataframe::AggSpiller spiller;
+};
+
+inline dstd::StringView resolve_id(dftracer::utils::dstd::StringIntern& intern,
+                                   dftu_str id) {
+    if (id == DFTU_STR_NONE ||
+        id >= dftracer::utils::dstd::StringIntern::FAST_CAPACITY)
+        return {};
+    return intern.resolve(id);
+}
+
+namespace detail {
+
+// Each returns its extension's stateless host vtable, owned file-static by the
+// TU that implements that extension's trampolines.
+const void* agg_ext_vtable();
+const void* result_ext_vtable();
+const void* ops_ext_vtable();
+const void* providers_ext_vtable();
+const void* nodes_ext_vtable();
+const void* index_ext_vtable();
+
+/// dftu_svc_ops::register_op with the plugin-name gate applied. Shared with
+/// the build-phase host, whose op registration is the same call.
+int register_plugin_op(const ::dftu_op_desc* desc);
+
+/// dftu_svc_providers::register_provider with the same plugin-name gate,
+/// forwarding into the process-lifetime provider_registry. Shared with the
+/// build-phase host, whose provider registration is the same call.
+int register_plugin_provider(const char* name, const ::dftu_source_vt* vt,
+                             void* self);
+
+/// dftu_svc_nodes::register_node with the same plugin-name gate, forwarding
+/// into the process-lifetime node registry.
+int register_plugin_node(const char* name, const ::dftu_node_vt* vt,
+                         void* self);
+
+/// dftu_svc_index::register_extension with the same plugin-name gate,
+/// forwarding into the process index extension registry.
+int register_plugin_index_extension(const char* name,
+                                    const ::dftu_index_extension* vt,
+                                    void* self);
+
+}  // namespace detail
+
+}  // namespace dftracer::utils::domains::plugins
+
+#endif  // DFTRACER_UTILS_DOMAINS_PLUGINS_FOLD_ADAPTER_EXT_H

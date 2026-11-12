@@ -1,14 +1,22 @@
-#include "testing_utilities.h"
-
-#include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/common/logging.h>
-#include <dftracer/utils/core/runtime.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
-#include <dftracer/utils/index/build/batch_builder.h>
+// SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/fileio/compress/libdeflate_gzip.h>
+#include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/trace/index/build/batch_builder.h>
 #include <dftracer/utils/trace/internal/utils.h>
-#include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
+#include <testing_utilities.h>
+#include <unistd.h>
 #include <zlib.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -16,42 +24,81 @@
 #include <fstream>
 #include <iomanip>
 #include <memory>
-#include <sstream>
+#include <mutex>
 #include <string>
 #include <vector>
+
+using namespace dftracer::utils;
+
+namespace {
+
+// Test bookkeeping kept out of the memory budget, since it lives until after
+// the memory exit check.
+struct RememberedPaths {
+    std::mutex mutex;
+    std::vector<std::string> paths;
+    pid_t owner = ::getpid();
+};
+
+RememberedPaths& remembered() {
+    static RememberedPaths r;
+    return r;
+}
+
+void remove_remembered_paths() {
+    RememberedPaths& r = remembered();
+    std::lock_guard<std::mutex> lock(r.mutex);
+    if (::getpid() != r.owner) return;
+    for (const auto& p : r.paths)
+        (void)dstd::fs::remove_all(dstd::PathView(p)).has_value();
+    r.paths.clear();
+}
+
+}  // namespace
+
+void dftu_utils_test::remember_test_path(const dstd::Path& path) {
+    RememberedPaths& r = remembered();
+    // Registered after `remembered()` is built, so it runs before that object
+    // is destroyed.
+    static const bool registered = [] {
+        std::atexit(remove_remembered_paths);
+        return true;
+    }();
+    (void)registered;
+    std::lock_guard<std::mutex> lock(r.mutex);
+    r.paths.emplace_back(path.str());
+}
 
 extern "C" {
 size_t mb_to_b(double mb) { return static_cast<std::size_t>(mb * 1024 * 1024); }
 }  // extern "C"
 
 namespace dftu_utils_test {
-bool build_index(const std::string& gz, const std::string& index_dir,
+bool build_index(const dstd::String& gz, const dstd::String& index_dir,
                  std::size_t checkpoint_size) {
-    using dftracer::utils::CoroScope;
-    using dftracer::utils::Runtime;
     bool ok = false;
     Runtime rt(4);
-    auto task = dftracer::utils::run_coro_scope(
-        rt.executor(),
-        [&](CoroScope& scope) -> dftracer::utils::coro::CoroTask<void> {
-            auto config = std::make_shared<
-                dftracer::utils::index::build::IndexBuildBatchConfig>();
-            config->file_paths = {gz};
+    auto task = dftracer::utils::coro::with_scope(
+        [&](dftracer::utils::coro::Scope&)
+            -> dftracer::utils::coro::CoroTask<void> {
+            auto config = dstd::make_shared<
+                dftracer::utils::trace::index::build::IndexBuildBatchConfig>();
+            config->file_paths = {dstd::String(dstd::StringView(gz))};
             config->index_dir = index_dir;
             if (checkpoint_size > 0) config->checkpoint_size = checkpoint_size;
-            auto r =
-                co_await dftracer::utils::index::build::BatchBuilder::process(
-                    &scope, std::move(config));
+            auto r = co_await dftracer::utils::trace::index::build::
+                BatchBuilder::process(std::move(config));
             ok = (r.indexed + r.skipped) >= 1 && r.failed == 0;
             co_return;
         });
-    rt.submit(std::move(task), "test-build-index").wait();
+    if (!rt.submit(std::move(task), "test-build-index").wait().has_value())
+        ok = false;
     rt.shutdown();
     return ok;
 }
 
-std::string write_gz_trace(const std::string& path,
-                           const std::string& content) {
+dstd::String write_gz_trace(const dstd::String& path,
+                            const dstd::String& content) {
     gzFile f = gzopen(path.c_str(), "wb");
     if (f == nullptr) return "";
     if (!content.empty()) {
@@ -61,10 +108,42 @@ std::string write_gz_trace(const std::string& path,
     return path;
 }
 
-bool compress_file_to_gzip(const std::string& input_file,
-                           const std::string& output_file) {
-    std::ifstream input(input_file, std::ios::binary);
-    if (!input.is_open()) {
+dstd::String write_stored_gz_trace(const dstd::String& path,
+                                   const dstd::String& content) {
+    constexpr std::size_t STORED_MAX = 65535;
+    dstd::String out = {'\x1f', '\x8b', '\x08', '\x00', '\x00',
+                        '\x00', '\x00', '\x00', '\x00', '\xff'};
+    const auto put16 = [&out](std::size_t v) {
+        out += static_cast<char>(v & 0xFF);
+        out += static_cast<char>((v >> 8) & 0xFF);
+    };
+    const auto put32 = [&out](std::uint32_t v) {
+        for (int i = 0; i < 4; ++i)
+            out += static_cast<char>((v >> (8 * i)) & 0xFF);
+    };
+    std::size_t at = 0;
+    do {
+        const std::size_t n = std::min(STORED_MAX, content.size() - at);
+        const bool last = at + n == content.size();
+        out += static_cast<char>(last ? 1 : 0);
+        put16(n);
+        put16(~n & 0xFFFF);
+        out.append(content, at, n);
+        at += n;
+    } while (at < content.size());
+    put32(dftracer::utils::fileio::compress::gzip_crc32(0, content.data(),
+                                                        content.size()));
+    put32(static_cast<std::uint32_t>(content.size()));
+    dftu_utils_test::FileOut file(path);
+    if (!file.write(out.data(), static_cast<std::streamsize>(out.size())))
+        return "";
+    return path;
+}
+
+bool compress_file_to_gzip(const dstd::String& input_file,
+                           const dstd::String& output_file) {
+    auto input = dstd::fs::read_file(input_file);
+    if (!input.has_value()) {
         return false;
     }
 
@@ -74,11 +153,10 @@ bool compress_file_to_gzip(const std::string& input_file,
     }
 
     const std::size_t buffer_size = 8192;
-    std::vector<char> buffer(buffer_size);
-
-    while (input.read(buffer.data(), buffer_size) || input.gcount() > 0) {
-        unsigned int bytes_read = static_cast<unsigned int>(input.gcount());
-        if (gzwrite(gz_output, buffer.data(), bytes_read) !=
+    for (std::size_t at = 0; at < input->size(); at += buffer_size) {
+        const unsigned int bytes_read = static_cast<unsigned int>(
+            std::min(buffer_size, input->size() - at));
+        if (gzwrite(gz_output, input->data() + at, bytes_read) !=
             static_cast<int>(bytes_read)) {
             gzclose(gz_output);
             return false;
@@ -89,97 +167,94 @@ bool compress_file_to_gzip(const std::string& input_file,
     return true;
 }
 
-bool compress_file_to_gzip_multimember(const std::string& input_file,
-                                       const std::string& output_file,
+bool compress_file_to_gzip_multimember(const dstd::String& input_file,
+                                       const dstd::String& output_file,
                                        std::size_t member_bytes) {
-    using dftracer::utils::utilities::fileio::compress::GzipMemberCompressor;
     if (member_bytes == 0) member_bytes = 4 * 1024 * 1024;
 
-    std::ifstream input(input_file, std::ios::binary);
-    if (!input.is_open()) return false;
-    std::ofstream output(output_file, std::ios::binary);
+    auto text = dstd::fs::read_file(input_file);
+    if (!text.has_value()) return false;
+    dftu_utils_test::LineStream input(*text);
+    dftu_utils_test::FileOut output(output_file);
     if (!output.is_open()) return false;
 
-    GzipMemberCompressor comp;
+    fileio::compress::GzipMemberCompressor comp;
     if (!comp.valid()) return false;
 
     // Accumulate whole lines so member boundaries land on newlines, matching
     // how the real writer emits line-aligned members.
-    auto flush = [&](std::string& buf) -> bool {
+    auto flush = [&](dstd::String& buf) -> bool {
         if (buf.empty()) return true;
         auto member = comp.compress_member(buf.data(), buf.size());
         if (!member.has_value()) return false;
         output.write(reinterpret_cast<const char*>(member->data()),
                      static_cast<std::streamsize>(member->size()));
         buf.clear();
-        return static_cast<bool>(output);
+        return true;
     };
 
-    std::string buf;
+    dstd::String buf;
     buf.reserve(member_bytes + 65536);
-    std::string line;
-    while (std::getline(input, line)) {
+    dstd::String line;
+    while (input.next(line)) {
         buf += line;
         buf += '\n';
         if (buf.size() >= member_bytes && !flush(buf)) return false;
     }
-    return flush(buf);
+    return flush(buf) && output.close();
 }
 
 TestEnvironment::TestEnvironment(std::size_t lines, Format format)
-    : num_lines(lines), format_(format) {
+    : line_count_(lines), format_(format) {
     // @note: enable this for debugging
     // dftracer::utils::logger::init();
-    fs::path test_path = make_unique_test_path("dftracer_test");
+    const dstd::Path test_path = make_unique_test_path("dftracer_test");
 
-    try {
-        if (fs::create_directories(test_path) ||
-            (fs::exists(test_path) && fs::is_directory(test_path))) {
-            test_dir = test_path.string();
-        }
-    } catch (const std::exception& e) {
-        // Leave test_dir empty to indicate failure
-    }
+    // Leave test_dir empty to indicate failure
+    const bool made = dstd::fs::create_directories(test_path).has_value();
+    const auto is_dir = dstd::fs::is_directory(test_path);
+    if (made && is_dir.has_value() && *is_dir)
+        test_dir_ = dstd::String(test_path.str());
 }
 
 TestEnvironment::~TestEnvironment() {
-    if (!test_dir.empty()) {
-        fs::remove_all(test_dir);
+    if (!test_dir_.empty()) {
+        (void)dstd::fs::remove_all(dstd::PathView(test_dir_)).has_value();
     }
 }
 
-const std::string& TestEnvironment::get_dir() const { return test_dir; }
-bool TestEnvironment::is_valid() const { return !test_dir.empty(); }
+const dstd::String& TestEnvironment::dir() const { return test_dir_; }
+bool TestEnvironment::is_valid() const { return !test_dir_.empty(); }
 
-std::string TestEnvironment::create_test_file() {
+dstd::String TestEnvironment::create_test_file() {
     switch (format_) {
-        case Format::GZIP:
+        case Format::Gzip:
             return create_test_gzip_file_impl();
         default:
             return "";
     }
 }
 
-std::string TestEnvironment::create_test_gzip_file() {
+dstd::String TestEnvironment::create_test_gzip_file() {
     return create_test_gzip_file_impl();
 }
 
-std::string TestEnvironment::create_test_gzip_file_impl() {
-    if (test_dir.empty()) {
+dstd::String TestEnvironment::create_test_gzip_file_impl() {
+    if (test_dir_.empty()) {
         return "";
     }
 
     // Create test file in the unique directory
-    std::string gz_file = test_dir + "/test_data.gz";
-    std::string txt_file = test_dir + "/test_data.txt";
+    dstd::String gz_file = test_dir_ + "/test_data.gz";
+    dstd::String txt_file = test_dir_ + "/test_data.txt";
 
     // Write test data to text file
-    std::ofstream f(txt_file);
+    dftu_utils_test::FileOut f(txt_file);
     if (!f.is_open()) {
         return "";
     }
 
-    for (std::size_t i = 1; i <= num_lines; ++i) {
+    for (std::size_t i = 1; i <= line_count_; ++i) {
         f << "{\"id\": " << i << ", \"message\": \"Test message " << i
           << "\"}\n";
     }
@@ -187,7 +262,7 @@ std::string TestEnvironment::create_test_gzip_file_impl() {
 
     bool success = compress_file_to_gzip(txt_file, gz_file);
 
-    fs::remove(txt_file);
+    (void)dstd::fs::remove(txt_file).has_value();
 
     if (success) {
         return gz_file;
@@ -196,16 +271,17 @@ std::string TestEnvironment::create_test_gzip_file_impl() {
     return "";
 }
 
-std::string TestEnvironment::get_index_path(const std::string& gz_file) {
-    return dftracer::utils::trace::internal::determine_index_path(gz_file, "");
+dstd::String TestEnvironment::get_index_path(const dstd::String& gz_file) {
+    return dstd::String(
+        dftracer::utils::trace::internal::determine_index_path(gz_file, ""));
 }
 
-std::string TestEnvironment::create_dft_test_file(int num_events) {
+dstd::String TestEnvironment::create_dft_test_file(int event_count) {
     static std::size_t file_counter = 0;
-    std::string file_path =
-        test_dir + "/dftu_trace_" + std::to_string(file_counter++) + ".trace";
+    dstd::String file_path =
+        test_dir_ + "/dftu_trace_" + dstd::to_string(file_counter++) + ".trace";
 
-    std::ofstream ofs(file_path);
+    dftu_utils_test::FileOut ofs(file_path);
     if (!ofs.is_open()) {
         return "";
     }
@@ -214,15 +290,15 @@ std::string TestEnvironment::create_dft_test_file(int num_events) {
                               "fread", "fwrite", "open", "close"};
     const char* io_cats[] = {"POSIX", "POSIX", "POSIX", "POSIX",
                              "STDIO", "STDIO", "POSIX", "POSIX"};
-    const int num_names = sizeof(io_names) / sizeof(io_names[0]);
+    const int name_count = sizeof(io_names) / sizeof(io_names[0]);
 
     ofs << "[\n";
-    for (int i = 1; i <= num_events; ++i) {
+    for (int i = 1; i <= event_count; ++i) {
         uint64_t timestamp_us =
             1000000000ULL + static_cast<uint64_t>(i * 100000);
         int size = 1024 * i;
-        const char* op_name = io_names[i % num_names];
-        const char* op_cat = io_cats[i % num_names];
+        const char* op_name = io_names[i % name_count];
+        const char* op_cat = io_cats[i % name_count];
 
         ofs << R"({"id":)" << i << R"(,"pid":)" << (1000 + i) << R"(,"tid":)"
             << (2000 + i) << R"(,"name":")" << op_name << R"(")"
@@ -238,23 +314,23 @@ std::string TestEnvironment::create_dft_test_file(int num_events) {
     return file_path;
 }
 
-std::string TestEnvironment::create_dft_multirun_gzip_file(
-    int num_runs, std::uint64_t run_us, std::uint64_t gap_us) {
+dstd::String TestEnvironment::create_dft_multirun_gzip_file(
+    int run_count, std::uint64_t run_us, std::uint64_t gap_us) {
     static std::size_t multirun_counter = 0;
-    std::string plain_file = test_dir + "/dftu_multirun_" +
-                             std::to_string(multirun_counter++) + ".trace";
-    std::ofstream ofs(plain_file);
+    dstd::String plain_file = test_dir_ + "/dftu_multirun_" +
+                              dstd::to_string(multirun_counter++) + ".trace";
+    dftu_utils_test::FileOut ofs(plain_file);
     if (!ofs.is_open()) return "";
 
     const std::uint64_t base = 1000000000ULL;
     ofs << "[\n";
-    for (int r = 0; r < num_runs; ++r) {
+    for (int r = 0; r < run_count; ++r) {
         const std::int64_t pid = 100 + r;
         const std::uint64_t start =
             base + static_cast<std::uint64_t>(r) * (run_us + gap_us);
         const std::uint64_t end = start + run_us;
         auto emit = [&](const char* name, const char* cat, std::uint64_t ts,
-                        const std::string& extra) {
+                        const dstd::String& extra) {
             ofs << R"({"id":1,"pid":)" << pid << R"(,"tid":)" << (pid * 10)
                 << R"(,"name":")" << name << R"(","cat":")" << cat
                 << R"(","ph":"X","ts":)" << ts << R"(,"dur":1,"args":{)"
@@ -273,51 +349,54 @@ std::string TestEnvironment::create_dft_multirun_gzip_file(
     ofs << "]\n";
     ofs.close();
 
-    std::string gz_file = plain_file + ".gz";
+    dstd::String gz_file = plain_file + ".gz";
     if (!compress_file_to_gzip(plain_file, gz_file)) {
-        fs::remove(plain_file);
+        (void)dstd::fs::remove(plain_file).has_value();
         return "";
     }
-    fs::remove(plain_file);
+    (void)dstd::fs::remove(plain_file).has_value();
     return gz_file;
 }
 
-std::string TestEnvironment::create_dft_test_gzip_file(int num_events) {
+dstd::String TestEnvironment::create_dft_test_gzip_file(int event_count) {
     // First create a plain DFTracer trace file
-    std::string plain_file = create_dft_test_file(num_events);
+    dstd::String plain_file = create_dft_test_file(event_count);
     if (plain_file.empty()) {
         return "";
     }
 
     // Compress to gzip
-    std::string gz_file = plain_file + ".gz";
+    dstd::String gz_file = plain_file + ".gz";
     if (!compress_file_to_gzip(plain_file, gz_file)) {
-        fs::remove(plain_file);
+        (void)dstd::fs::remove(plain_file).has_value();
         return "";
     }
 
     // Remove the plain file after compression
-    fs::remove(plain_file);
+    (void)dstd::fs::remove(plain_file).has_value();
 
     return gz_file;
 }
 
-void set_test_library_path(const std::string& binary) {
-    const fs::path build_root =
-        fs::absolute(binary).parent_path().parent_path();
-    const std::string libs = (build_root / "lib").string() + ":" +
-                             (build_root / "_deps" / "rocksdb-build").string();
+void set_test_library_path(const dstd::String& binary) {
+    auto resolved = dstd::fs::absolute(dstd::PathView(binary));
+    if (!resolved) {
+        ::setenv("LD_LIBRARY_PATH", "", 1);
+        return;
+    }
+    const dstd::PathView parent = resolved->view().parent();
+    const dstd::String libs = dstd::String((parent.parent() / "lib").str());
     ::setenv("LD_LIBRARY_PATH", libs.c_str(), 1);
 }
 
-std::string run_process_capture(const std::string& binary,
-                                const std::vector<std::string>& args,
-                                bool capture_stderr, int* exit_code) {
+dstd::String run_process_capture(const dstd::String& binary,
+                                 const dstd::Vector<dstd::String>& args,
+                                 bool capture_stderr, int* exit_code) {
     if (exit_code) *exit_code = -1;
     int fds[2];
     if (::pipe(fds) != 0) return "";
 
-    std::vector<const char*> argv;
+    dstd::Vector<const char*> argv;
     argv.push_back(binary.c_str());
     for (const auto& a : args) argv.push_back(a.c_str());
     argv.push_back(nullptr);
@@ -340,7 +419,7 @@ std::string run_process_capture(const std::string& binary,
     ::close(fds[1]);
     // Drain to EOF before waiting: a child writing more than one pipe buffer
     // blocks until it is read, so waiting first would deadlock.
-    std::string out;
+    dstd::String out;
     char buf[4096];
     ssize_t n;
     while ((n = ::read(fds[0], buf, sizeof(buf))) > 0)
@@ -353,10 +432,10 @@ std::string run_process_capture(const std::string& binary,
     return out;
 }
 
-std::string gz_first_line(const std::string& gz_path) {
+dstd::String gz_first_line(const dstd::String& gz_path) {
     gzFile f = ::gzopen(gz_path.c_str(), "rb");
     if (!f) return "";
-    std::string line;
+    dstd::String line;
     char buf[65536];
     while (::gzgets(f, buf, sizeof(buf)) != nullptr) {
         line = buf;
@@ -380,7 +459,7 @@ test_environment_handle_t test_environment_create_with_lines(
     std::size_t lines) {
     try {
         auto* env = new dftu_utils_test::TestEnvironment(
-            lines, dftu_utils_test::Format::GZIP);
+            lines, dftu_utils_test::Format::Gzip);
         if (env->is_valid()) {
             return reinterpret_cast<test_environment_handle_t>(env);
         } else {
@@ -409,12 +488,13 @@ int test_environment_is_valid(test_environment_handle_t env) {
 const char* test_environment_get_dir(test_environment_handle_t env) {
     if (!env) return nullptr;
     auto* cpp_env = reinterpret_cast<dftu_utils_test::TestEnvironment*>(env);
-    return cpp_env->get_dir().c_str();
+    return cpp_env->dir().c_str();
 }
 
 char* test_make_unique_test_path(const char* name) {
     if (!name) return nullptr;
-    std::string path = dftu_utils_test::make_unique_test_path(name).string();
+    dstd::String path =
+        dstd::String(dftu_utils_test::make_unique_test_path(name).str());
     char* result = static_cast<char*>(malloc(path.length() + 1));
     if (result) {
         std::memcpy(result, path.c_str(), path.length() + 1);
@@ -423,10 +503,10 @@ char* test_make_unique_test_path(const char* name) {
 }
 
 char* test_environment_create_dft_gzip_file(test_environment_handle_t env,
-                                            int num_events) {
+                                            int event_count) {
     if (!env) return nullptr;
     auto* cpp_env = reinterpret_cast<dftu_utils_test::TestEnvironment*>(env);
-    std::string gz_file = cpp_env->create_dft_test_gzip_file(num_events);
+    dstd::String gz_file = cpp_env->create_dft_test_gzip_file(event_count);
     if (gz_file.empty()) return nullptr;
     char* result = static_cast<char*>(malloc(gz_file.length() + 1));
     if (result) strcpy(result, gz_file.c_str());
@@ -436,7 +516,7 @@ char* test_environment_create_dft_gzip_file(test_environment_handle_t env,
 char* test_environment_create_test_gzip_file(test_environment_handle_t env) {
     if (!env) return nullptr;
     auto* cpp_env = reinterpret_cast<dftu_utils_test::TestEnvironment*>(env);
-    std::string gz_file = cpp_env->create_test_gzip_file();
+    dstd::String gz_file = cpp_env->create_test_gzip_file();
     if (gz_file.empty()) {
         return nullptr;
     }
@@ -451,7 +531,7 @@ char* test_environment_get_index_path(test_environment_handle_t env,
                                       const char* gz_file) {
     if (!env || !gz_file) return nullptr;
     auto* cpp_env = reinterpret_cast<dftu_utils_test::TestEnvironment*>(env);
-    std::string index_path = cpp_env->get_index_path(gz_file);
+    dstd::String index_path = cpp_env->get_index_path(gz_file);
     char* result = static_cast<char*>(malloc(index_path.length() + 1));
     if (result) {
         strcpy(result, index_path.c_str());
@@ -464,12 +544,11 @@ char* test_environment_create_test_file_with_format(
     if (!env) return nullptr;
     auto* cpp_env = reinterpret_cast<dftu_utils_test::TestEnvironment*>(env);
 
-    dftu_utils_test::Format cpp_format = dftu_utils_test::Format::GZIP;
+    dftu_utils_test::Format cpp_format = dftu_utils_test::Format::Gzip;
 
     try {
-        dftu_utils_test::TestEnvironment temp_env(
-            cpp_env->get_dir().empty() ? 100 : 100, cpp_format);
-        std::string file_path;
+        dftu_utils_test::TestEnvironment temp_env(100, cpp_format);
+        dstd::String file_path;
 
         file_path = cpp_env->create_test_gzip_file();
 
@@ -498,3 +577,53 @@ int compress_file_to_gzip_c(const char* input_file, const char* output_file) {
     }
 }
 }
+
+namespace dftu_utils_test {
+
+dstd::Vector<ListedEntry> list_dir(dstd::PathView dir) {
+    dstd::Vector<ListedEntry> out;
+    auto handle = dstd::fs::Dir::open(dir);
+    if (!handle) return out;
+    auto entries = handle->entries();
+    if (!entries) return out;
+    for (const auto& e : *entries) {
+        ListedEntry item;
+        item.path = dstd::Path(dir) / e.name;
+        auto st = handle->stat(e.name);
+        if (!st) continue;
+        item.kind = st->kind;
+        item.size = st->size;
+        out.push_back(std::move(item));
+    }
+    return out;
+}
+
+dstd::Vector<ListedEntry> walk_dir(dstd::PathView dir) {
+    dstd::Vector<ListedEntry> out;
+    bool at_root = true;
+    auto walked =
+        dstd::fs::walk(dir, [&](dstd::PathView p, dstd::fs::FileKind kind) {
+            if (at_root) {
+                at_root = false;
+                return dstd::fs::WalkAction::Continue;
+            }
+            ListedEntry item;
+            item.path = dstd::Path(p);
+            item.kind = kind;
+            if (kind == dstd::fs::FileKind::File) {
+                auto st = dstd::fs::stat(p);
+                if (!st) return dstd::fs::WalkAction::Continue;
+                item.size = st->size;
+            }
+            out.push_back(std::move(item));
+            return dstd::fs::WalkAction::Continue;
+        });
+    if (!walked) out.clear();
+    std::sort(out.begin(), out.end(),
+              [](const ListedEntry& a, const ListedEntry& b) {
+                  return a.path.str() < b.path.str();
+              });
+    return out;
+}
+
+}  // namespace dftu_utils_test

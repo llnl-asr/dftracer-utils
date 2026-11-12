@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Property-based tests (Hypothesis): random typed arrays with nulls at any
 length, three invariants that reach the engine's C entries.
 

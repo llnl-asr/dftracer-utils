@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """End-to-end @jit.vfold: a per-batch column reduction, folded to a scalar and
 materialized like any other jit plugin result."""
 

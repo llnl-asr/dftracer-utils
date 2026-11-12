@@ -1,14 +1,15 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_DATAFRAME_INTERNAL_COLUMN_READ_H
 #define DFTRACER_UTILS_DATAFRAME_INTERNAL_COLUMN_READ_H
 
-#include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/decimal.h>
 #include <dftracer/utils/dataframe/internal/float16.h>
+#include <dftracer/utils/dstd/string.h>
 
 #include <cstdint>
-#include <string_view>
 
 // Read one FLAT numeric cell widened to a common type, dispatching on the
 // column's TypeId. Shared by every kernel that needs a domain-agnostic value
@@ -113,7 +114,7 @@ inline double read_f64(const Series& c, std::int64_t i) {
 /// Byte view of cell `i` for a ValueDomain::Bytes column, valid while `c`
 /// lives. Empty for any other column, and, like Series::string_at, for a
 /// non-FLAT one.
-inline std::string_view read_bytes(const Series& c, std::int64_t i) {
+inline dstd::StringView read_bytes(const Series& c, std::int64_t i) {
     if (c.handle()->is_chunked())
         return at_chunk(c, i, [](const Series& k, std::int64_t j) {
             return read_bytes(k, j);
@@ -131,7 +132,7 @@ inline std::string_view read_bytes(const Series& c, std::int64_t i) {
         return {};
     const char* d = static_cast<const char*>(dftu_series_data(c.handle()));
     if (d == nullptr || width == 0) return {};
-    return std::string_view(d + static_cast<std::size_t>(i) * width, width);
+    return dstd::StringView(d + static_cast<std::size_t>(i) * width, width);
 }
 
 /// True when `t` is nested and so has no per-row value for `op` to work on,
@@ -139,7 +140,7 @@ inline std::string_view read_bytes(const Series& c, std::int64_t i) {
 /// value instead of computing over a zero it never read.
 inline bool refuse_nested_value(const char* op, TypeId t) {
     if (value_domain(t) != ValueDomain::None) return false;
-    DFTRACER_UTILS_LOG_ERROR("%s: no per-row value for nested type '%s'", op,
+    DFTRACER_UTILS_LOG_ERROR("{}: no per-row value for nested type '{}'", op,
                              type_name(t));
     return true;
 }

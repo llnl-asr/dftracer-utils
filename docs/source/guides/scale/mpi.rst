@@ -37,7 +37,7 @@ the rank count:
 
 .. code-block:: bash
 
-   mpirun -n 32 dftracer_view --flamegraph --files ./traces/*.pfw.gz -o flamegraph.ndjson
+   mpirun -n 32 dftracer_view --flamegraph ./traces/*.pfw.gz -o flamegraph.ndjson
 
 Each rank indexes and folds its slice of the input into a partial; rank 0
 gathers the partials and merges them into the final folded flamegraph (NDJSON).

@@ -1,11 +1,36 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_DATAFRAME_LAZY_NUMERIC_H
 #define DFTRACER_UTILS_DATAFRAME_LAZY_NUMERIC_H
 
+#include <dftracer/utils/dataframe/kernels/running.h>
 #include <dftracer/utils/dataframe/lazy/common.h>
+#include <dftracer/utils/dstd/fatal.h>
+#include <dftracer/utils/dstd/little_endian.h>
+#include <dftracer/utils/dstd/vector.h>
 
 namespace dftracer::utils::dataframe::lazy_internal {
 
-enum class NumClass { SIGNED, UNSIGNED, FLOAT };
+enum class NumClass { Signed, Unsigned, Float };
+
+// The first window step of one call that overflowed its type. The call reads
+// it once after its row loop and fails with @ref error, so the loop itself
+// carries no result.
+struct WindowOverflow {
+    const char* func = nullptr;
+    const char* type = nullptr;
+
+    void set(const char* f, const char* t) noexcept {
+        if (!func) {
+            func = f;
+            type = t;
+        }
+    }
+    bool hit() const noexcept { return func != nullptr; }
+    dstd::Unexpected<dstd::Error> error() const {
+        return common::make_error(common::ErrorCode::InvalidArgument,
+                                  steps::overflow_message(func, type));
+    }
+};
 
 inline bool num_class(TypeId t, NumClass& cls) {
     switch (t) {
@@ -13,39 +38,28 @@ inline bool num_class(TypeId t, NumClass& cls) {
         case TypeId::Int16:
         case TypeId::Int32:
         case TypeId::Int64:
-            cls = NumClass::SIGNED;
+            cls = NumClass::Signed;
             return true;
         case TypeId::Uint8:
         case TypeId::Uint16:
         case TypeId::Uint32:
         case TypeId::Uint64:
-            cls = NumClass::UNSIGNED;
+            cls = NumClass::Unsigned;
             return true;
         case TypeId::Float32:
         case TypeId::Float64:
-            cls = NumClass::FLOAT;
+            cls = NumClass::Float;
             return true;
         default:
             return false;
     }
 }
 
-inline std::uint64_t double_bits(double d) {
-    std::uint64_t u;
-    std::memcpy(&u, &d, sizeof u);
-    return u;
-}
-inline double bits_double(std::uint64_t u) {
-    double d;
-    std::memcpy(&d, &u, sizeof d);
-    return d;
-}
-
 // The cells of a numeric column as 64-bit patterns (an int64, a uint64 or a
 // double by the column's class) and whether each is present.
 struct NumCells {
-    std::vector<std::uint64_t> bits;
-    std::vector<std::uint8_t> ok;
+    dstd::Vector<std::uint64_t> bits;
+    dstd::Vector<std::uint8_t> ok;
 };
 
 inline NumCells read_cells(const Series& col) {
@@ -102,16 +116,17 @@ inline NumCells read_cells(const Series& col) {
             break;
         case TypeId::Float32:
             fill([&](std::int64_t i) {
-                return double_bits(static_cast<double>(s.data<float>()[i]));
+                return dstd::double_bits(
+                    static_cast<double>(s.data<float>()[i]));
             });
             break;
         case TypeId::Float64:
             fill([&](std::int64_t i) {
-                return double_bits(s.data<double>()[i]);
+                return dstd::double_bits(s.data<double>()[i]);
             });
             break;
         default:
-            throw std::logic_error("group transform: a non-numeric column");
+            dstd::fatal("group transform: a non-numeric column");
     }
     if (s.null_count() > 0)
         for (std::int64_t i = 0; i < n; ++i)
@@ -121,12 +136,12 @@ inline NumCells read_cells(const Series& col) {
 
 // A column of 64-bit patterns of class `cls`, narrowed or widened to the type
 // the plan declares, with a null where `ok` is zero.
-inline Series make_numeric(const std::vector<std::uint64_t>& bits,
-                           const std::vector<std::uint8_t>& ok, NumClass cls,
+inline Series make_numeric(const dstd::Vector<std::uint64_t>& bits,
+                           const dstd::Vector<std::uint8_t>& ok, NumClass cls,
                            TypeId out) {
     const auto n = static_cast<std::int64_t>(bits.size());
     bool any_null = false;
-    std::vector<std::uint8_t> bitmap((bits.size() + 7) / 8, 0);
+    dstd::Vector<std::uint8_t> bitmap((bits.size() + 7) / 8, 0);
     for (std::size_t i = 0; i < bits.size(); ++i) {
         if (ok[i])
             bitmap[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
@@ -136,17 +151,17 @@ inline Series make_numeric(const std::vector<std::uint64_t>& bits,
     const std::uint8_t* validity = any_null ? bitmap.data() : nullptr;
     auto as = [&](auto tag) {
         using T = decltype(tag);
-        std::vector<T> v(bits.size());
+        dstd::Vector<T> v(bits.size());
         for (std::size_t i = 0; i < bits.size(); ++i) {
             switch (cls) {
-                case NumClass::SIGNED:
+                case NumClass::Signed:
                     v[i] = static_cast<T>(static_cast<std::int64_t>(bits[i]));
                     break;
-                case NumClass::UNSIGNED:
+                case NumClass::Unsigned:
                     v[i] = static_cast<T>(bits[i]);
                     break;
-                case NumClass::FLOAT:
-                    v[i] = static_cast<T>(bits_double(bits[i]));
+                case NumClass::Float:
+                    v[i] = static_cast<T>(dstd::bits_double(bits[i]));
                     break;
             }
         }
@@ -174,7 +189,7 @@ inline Series make_numeric(const std::vector<std::uint64_t>& bits,
         case TypeId::Float64:
             return as(double{});
         default:
-            throw std::logic_error("group transform: a non-numeric output");
+            dstd::fatal("group transform: a non-numeric output");
     }
 }
 

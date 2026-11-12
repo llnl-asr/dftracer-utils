@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 SECONDS=0
 
 if [ "$#" -lt 2 ]; then

@@ -1,16 +1,21 @@
+// SPDX-License-Identifier: MIT
 #include <dftracer/utils/dataframe/frame_ops.h>
+#include <dftracer/utils/dataframe/internal/errors.h>
 #include <dftracer/utils/dataframe/kernels/order.h>
 #include <dftracer/utils/dataframe/kernels/running.h>
+#include <dftracer/utils/dataframe/ops/ops_common.h>
+#include <dftracer/utils/dstd/fatal.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/result.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <algorithm>
 #include <cmath>
-#include <deque>
 #include <limits>
 #include <optional>
-#include <stdexcept>
-#include <string>
-
-#include "ops_common.h"
+#include <utility>
 
 namespace dftracer::utils::dataframe {
 
@@ -21,9 +26,9 @@ using Kind = ColumnView::Kind;
 // The rows in (partition, order) sorted order and the partitions in it.
 struct Layout {
     std::int64_t n = 0;
-    std::vector<std::int64_t> idx;
-    std::vector<std::pair<std::int64_t, std::int64_t>> parts;
-    const std::vector<ColumnView>* order_keys = nullptr;
+    dstd::Vector<std::int64_t> idx;
+    dstd::Vector<dstd::Pair<std::int64_t, std::int64_t>> parts;
+    const dstd::Vector<ColumnView>* order_keys = nullptr;
 
     // Whether the rows at sorted positions `a` and `b` tie on the order keys.
     bool tie(std::int64_t a, std::int64_t b) const {
@@ -38,8 +43,8 @@ struct Layout {
 // A nullable output column built by position.
 template <class T>
 struct Column {
-    std::vector<T> value;
-    std::vector<std::uint8_t> valid;
+    dstd::Vector<T> value;
+    dstd::Vector<std::uint8_t> valid;
 
     explicit Column(std::int64_t n)
         : value(static_cast<std::size_t>(n)),
@@ -57,42 +62,49 @@ struct Column {
 };
 
 Series pass_through(const Series& column,
-                    const std::vector<std::int64_t>& source) {
+                    const dstd::Vector<std::int64_t>& source) {
     return column.take(source);
 }
 
-using steps::overflow;
-using steps::to_int64;
-using steps::to_uint64;
-using steps::Wide;
-
-const ColumnView& numeric(const ColumnView& v, const char* what) {
+dstd::Result<void> numeric(const ColumnView& v, const char* what) {
     if (v.is_bytes())
-        throw std::invalid_argument(std::string("window: ") + what +
-                                    " over a non-numeric column");
-    return v;
+        return invalid_argument<"window: {} over a non-numeric column">(what);
+    return {};
 }
 
-ColumnView view_of(const Series& column, const char* what) {
+dstd::Result<ColumnView> view_of(const Series& column, const char* what) {
     if (!ColumnView::supports(column.type()))
-        throw std::invalid_argument(std::string("window: ") + what +
-                                    " over an unsupported column type");
+        return invalid_argument<"window: {} over an unsupported column type">(
+            what);
     return ColumnView(column);
 }
 
-const Series& value_column(const DataFrame& df, const WindowColumn& w) {
+dstd::Result<const Series*> value_column(const DataFrame& df,
+                                         const WindowColumn& w) {
     if (!w.value())
-        throw std::invalid_argument("window: '" + w.out +
-                                    "' needs a value column");
-    return df.columns[ops::column_named(df, *w.value(), "window")];
+        return invalid_argument<"window: '{}' needs a value column">(w.out);
+    const dstd::Result<std::size_t> at =
+        ops::column_named(df, *w.value(), "window");
+    if (!at) return at.error();
+    return &df.columns[*at];
 }
 
-const Series& named_column(const DataFrame& df, const std::string* name,
-                           const WindowColumn& w, const char* role) {
+dstd::Result<const Series*> named_column(const DataFrame& df,
+                                         const dstd::String* name,
+                                         const WindowColumn& w,
+                                         const char* role) {
     if (!name)
-        throw std::invalid_argument("window: '" + w.out + "' needs a " + role +
-                                    " column");
-    return df.columns[ops::column_named(df, *name, "window")];
+        return invalid_argument<"window: '{}' needs a {} column">(w.out, role);
+    const dstd::Result<std::size_t> at = ops::column_named(df, *name, "window");
+    if (!at) return at.error();
+    return &df.columns[*at];
+}
+
+// The error a running or frame sum reports when `step` overflowed `type`.
+dstd::Unexpected<dstd::Error> overflow_error(const char* func,
+                                             const char* type) {
+    return common::make_error(common::ErrorCode::InvalidArgument,
+                              steps::overflow_message(func, type));
 }
 
 // The extreme (min when `smallest`) present row of a running or frame scan.
@@ -179,7 +191,7 @@ Series ntile(const Layout& lay, std::int64_t buckets) {
 // another row of the partition, so the output is a gather of the column.
 Series positional(const Layout& lay, const Series& column,
                   const WindowColumn& w) {
-    std::vector<std::int64_t> source(static_cast<std::size_t>(lay.n), -1);
+    dstd::Vector<std::int64_t> source(static_cast<std::size_t>(lay.n), -1);
     for (const auto& [p, q] : lay.parts) {
         steps::FillForward<std::int64_t> fill;
         steps::Lag<std::int64_t> lag;
@@ -227,11 +239,15 @@ Series positional(const Layout& lay, const Series& column,
     return pass_through(column, source);
 }
 
-Series running(const Layout& lay, const Series& column, const WindowColumn& w) {
-    const ColumnView v = view_of(column, "running aggregate");
+dstd::Result<Series> running(const Layout& lay, const Series& column,
+                             const WindowColumn& w) {
+    const dstd::Result<ColumnView> view = view_of(column, "running aggregate");
+    if (!view) return view.error();
+    const ColumnView& v = *view;
     switch (w.func) {
         case WindowFunc::RunningSum: {
-            numeric(v, "running aggregate");
+            if (auto ok = numeric(v, "running aggregate"); !ok)
+                return ok.error();
             if (v.kind() == Kind::Float) {
                 Column<double> out(lay.n);
                 for (const auto& [p, q] : lay.parts) {
@@ -246,6 +262,7 @@ Series running(const Layout& lay, const Series& column, const WindowColumn& w) {
             }
             if (v.kind() == Kind::Unsigned) {
                 Column<std::uint64_t> out(lay.n);
+                bool overflowed = false;
                 for (const auto& [p, q] : lay.parts) {
                     steps::SumU64 sum;
                     for (std::int64_t r = p; r < q; ++r) {
@@ -253,10 +270,13 @@ Series running(const Layout& lay, const Series& column, const WindowColumn& w) {
                         if (!v.is_null(g)) sum.add(v.get_uint(g));
                         out.set(r, sum.acc);
                     }
+                    overflowed |= sum.overflowed;
                 }
+                if (overflowed) return overflow_error("RUNNING_SUM", "uint64");
                 return out.series(TypeId::Uint64);
             }
             Column<std::int64_t> out(lay.n);
+            bool overflowed = false;
             for (const auto& [p, q] : lay.parts) {
                 steps::SumI64 sum;
                 for (std::int64_t r = p; r < q; ++r) {
@@ -264,11 +284,14 @@ Series running(const Layout& lay, const Series& column, const WindowColumn& w) {
                     if (!v.is_null(g)) sum.add(v.get_int(g));
                     out.set(r, sum.acc);
                 }
+                overflowed |= sum.overflowed;
             }
+            if (overflowed) return overflow_error("RUNNING_SUM", "int64");
             return out.series(TypeId::Int64);
         }
         case WindowFunc::RunningProd: {
-            numeric(v, "running aggregate");
+            if (auto ok = numeric(v, "running aggregate"); !ok)
+                return ok.error();
             Column<double> out(lay.n);
             for (const auto& [p, q] : lay.parts) {
                 steps::Prod prod;
@@ -281,8 +304,8 @@ Series running(const Layout& lay, const Series& column, const WindowColumn& w) {
             return out.series(TypeId::Float64);
         }
         default: {  // RunningMin, RunningMax
-            std::vector<std::int64_t> source(static_cast<std::size_t>(lay.n),
-                                             -1);
+            dstd::Vector<std::int64_t> source(static_cast<std::size_t>(lay.n),
+                                              -1);
             const bool smallest = w.func == WindowFunc::RunningMin;
             // The kind of the column is chosen once; each row is then one call.
             const auto scan = [&](auto&& offer) {
@@ -324,12 +347,15 @@ Series running(const Layout& lay, const Series& column, const WindowColumn& w) {
     }
 }
 
-Series delta(const Layout& lay, const Series& column) {
-    const ColumnView v = view_of(column, "DELTA/RATE");
-    numeric(v, "DELTA/RATE");
+dstd::Result<Series> delta(const Layout& lay, const Series& column) {
+    const dstd::Result<ColumnView> view = view_of(column, "DELTA/RATE");
+    if (!view) return view.error();
+    const ColumnView& v = *view;
+    if (auto ok = numeric(v, "DELTA/RATE"); !ok) return ok.error();
     const bool floating = v.kind() == Kind::Float;
     Column<double> fout(floating ? lay.n : 0);
     Column<std::int64_t> iout(floating ? 0 : lay.n);
+    bool overflowed = false;
     for (const auto& [p, q] : lay.parts) {
         for (std::int64_t r = p; r < q; ++r) {
             const std::int64_t g = lay.row(r);
@@ -341,26 +367,36 @@ Series delta(const Layout& lay, const Series& column) {
                     iout.null(r);
                 continue;
             }
-            if (floating)
+            if (floating) {
                 fout.set(r,
                          steps::delta_f64(v.get_double(g), v.get_double(prev)));
-            else if (v.kind() == Kind::Unsigned)
-                iout.set(r, steps::delta_u64(v.get_uint(g), v.get_uint(prev)));
-            else
-                iout.set(r, steps::delta_i64(v.get_int(g), v.get_int(prev)));
+                continue;
+            }
+            std::int64_t diff = 0;
+            const bool fits =
+                v.kind() == Kind::Unsigned
+                    ? steps::delta_u64(v.get_uint(g), v.get_uint(prev), diff)
+                    : steps::delta_i64(v.get_int(g), v.get_int(prev), diff);
+            if (!fits) overflowed = true;
+            iout.set(r, diff);
         }
     }
+    if (overflowed) return overflow_error("DELTA", "int64");
     return floating ? fout.series(TypeId::Float64) : iout.series(TypeId::Int64);
 }
 
-Series rate(const Layout& lay, const Series& column, const Series& time,
-            bool counter) {
-    const ColumnView v = view_of(column, "DELTA/RATE");
-    numeric(v, "DELTA/RATE");
-    const ColumnView t = view_of(time, "RATE/SESSIONIZE");
+dstd::Result<Series> rate(const Layout& lay, const Series& column,
+                          const Series& time, bool counter) {
+    const dstd::Result<ColumnView> value_view = view_of(column, "DELTA/RATE");
+    if (!value_view) return value_view.error();
+    const ColumnView& v = *value_view;
+    if (auto ok = numeric(v, "DELTA/RATE"); !ok) return ok.error();
+    const dstd::Result<ColumnView> time_view = view_of(time, "RATE/SESSIONIZE");
+    if (!time_view) return time_view.error();
+    const ColumnView& t = *time_view;
     if (t.is_bytes())
-        throw std::invalid_argument(
-            "window: RATE/SESSIONIZE over a non-numeric time column");
+        return invalid_argument<
+            "window: RATE/SESSIONIZE over a non-numeric time column">();
     Column<double> out(lay.n);
     for (const auto& [p, q] : lay.parts) {
         for (std::int64_t r = p; r < q; ++r) {
@@ -385,21 +421,26 @@ Series rate(const Layout& lay, const Series& column, const Series& time,
     return out.series(TypeId::Float64);
 }
 
-Series sessionize(const Layout& lay, const Series& time,
-                  const Series* end_column, double gap, double span) {
+dstd::Result<Series> sessionize(const Layout& lay, const Series& time,
+                                const Series* end_column, double gap,
+                                double span) {
     if (!(gap >= 0.0) || !(span >= 0.0))
-        throw std::invalid_argument(
-            "window: SESSIONIZE gap and span must not be negative");
-    const ColumnView t = view_of(time, "RATE/SESSIONIZE");
+        return invalid_argument<
+            "window: SESSIONIZE gap and span must not be negative">();
+    const dstd::Result<ColumnView> time_view = view_of(time, "RATE/SESSIONIZE");
+    if (!time_view) return time_view.error();
+    const ColumnView& t = *time_view;
     if (t.is_bytes())
-        throw std::invalid_argument(
-            "window: RATE/SESSIONIZE over a non-numeric time column");
-    std::optional<ColumnView> e;
+        return invalid_argument<
+            "window: RATE/SESSIONIZE over a non-numeric time column">();
+    dstd::Optional<ColumnView> e;
     if (end_column != nullptr) {
-        e.emplace(view_of(*end_column, "SESSIONIZE"));
+        dstd::Result<ColumnView> end_view = view_of(*end_column, "SESSIONIZE");
+        if (!end_view) return end_view.error();
+        e.emplace(std::move(*end_view));
         if (e->is_bytes())
-            throw std::invalid_argument(
-                "window: SESSIONIZE over a non-numeric end column");
+            return invalid_argument<
+                "window: SESSIONIZE over a non-numeric end column">();
     }
     Column<std::int64_t> out(lay.n);
     for (const auto& [p, q] : lay.parts) {
@@ -435,27 +476,31 @@ struct FrameBounds {
     bool range;
 };
 
-Series frame(const Layout& lay, const Series& column, const WindowColumn& w) {
+dstd::Result<Series> frame(const Layout& lay, const Series& column,
+                           const WindowColumn& w) {
     const WindowParams::Frame& f = w.params.frame;
     if ((f.preceding < 0 && f.preceding != WINDOW_UNBOUNDED) ||
         (f.following < 0 && f.following != WINDOW_UNBOUNDED) || f.min_count < 0)
-        throw std::invalid_argument(
-            "window: frame bounds and min_count must not be negative");
+        return invalid_argument<
+            "window: frame bounds and min_count must not be negative">();
     const bool range = f.mode == WindowFrameMode::Range;
-    const std::vector<ColumnView>& order = *lay.order_keys;
+    const dstd::Vector<ColumnView>& order = *lay.order_keys;
     if (range && (order.size() != 1 || order[0].is_bytes()))
-        throw std::invalid_argument(
-            "window: RANGE frame needs exactly one numeric order column");
+        return invalid_argument<
+            "window: RANGE frame needs exactly one numeric order column">();
 
     const bool counting = w.func == WindowFunc::FrameCount;
-    std::optional<ColumnView> vv;
+    dstd::Optional<ColumnView> vv;
     if (!counting) {
-        vv.emplace(view_of(column, "frame aggregate"));
+        dstd::Result<ColumnView> value_view =
+            view_of(column, "frame aggregate");
+        if (!value_view) return value_view.error();
+        vv.emplace(std::move(*value_view));
         if ((w.func == WindowFunc::FrameSum ||
              w.func == WindowFunc::FrameMean) &&
             vv->is_bytes())
-            throw std::invalid_argument(
-                "window: FRAME_SUM/FRAME_MEAN over a non-numeric column");
+            return invalid_argument<
+                "window: FRAME_SUM/FRAME_MEAN over a non-numeric column">();
     }
     const bool min_max =
         w.func == WindowFunc::FrameMin || w.func == WindowFunc::FrameMax;
@@ -468,12 +513,13 @@ Series frame(const Layout& lay, const Series& column, const WindowColumn& w) {
 
     Column<std::int64_t> ints(lay.n);
     Column<double> doubles(lay.n);
-    std::vector<std::int64_t> source(
+    dstd::Vector<std::int64_t> source(
         min_max ? static_cast<std::size_t>(lay.n) : 0, -1);
     const bool as_double = w.func == WindowFunc::FrameMean || sum_double;
     const bool unsigned_sum =
         w.func == WindowFunc::FrameSum && vv->kind() == Kind::Unsigned;
     Column<std::uint64_t> uints(unsigned_sum ? lay.n : 0);
+    bool overflowed = false;
 
     for (const auto& [p, q] : lay.parts) {
         const std::int64_t sz = q - p;
@@ -586,12 +632,16 @@ Series frame(const Layout& lay, const Series& column, const WindowColumn& w) {
             } else if (sum_double) {
                 doubles.set(r, sum_d.sum);
             } else if (unsigned_sum) {
+                if (!sum_i.fits_u64()) overflowed = true;
                 uints.set(r, sum_i.u64());
             } else {
+                if (!sum_i.fits_i64()) overflowed = true;
                 ints.set(r, sum_i.i64());
             }
         }
     }
+    if (overflowed)
+        return overflow_error("FRAME_SUM", unsigned_sum ? "uint64" : "int64");
     if (min_max) return pass_through(column, source);
     if (unsigned_sum) return uints.series(TypeId::Uint64);
     return as_double ? doubles.series(TypeId::Float64)
@@ -606,18 +656,18 @@ struct FrameCtx {
     bool range;
 };
 
-FrameCtx frame_context(const Layout& lay, const WindowColumn& w) {
+dstd::Result<FrameCtx> frame_context(const Layout& lay, const WindowColumn& w) {
     const WindowParams::Frame& f = w.params.frame;
     if ((f.preceding < 0 && f.preceding != WINDOW_UNBOUNDED) ||
         (f.following < 0 && f.following != WINDOW_UNBOUNDED) || f.min_count < 0)
-        throw std::invalid_argument(
-            "window: frame bounds and min_count must not be negative");
+        return invalid_argument<
+            "window: frame bounds and min_count must not be negative">();
     const bool range = f.mode == WindowFrameMode::Range;
-    const std::vector<ColumnView>& order = *lay.order_keys;
+    const dstd::Vector<ColumnView>& order = *lay.order_keys;
     if (range && (order.size() != 1 || order[0].is_bytes()))
-        throw std::invalid_argument(
-            "window: RANGE frame needs exactly one numeric order column");
-    return {lay, f, range};
+        return invalid_argument<
+            "window: RANGE frame needs exactly one numeric order column">();
+    return FrameCtx{lay, f, range};
 }
 
 // Visits each row of the partition [p, q) with its frame [lo, hi] (partition
@@ -628,7 +678,7 @@ void walk_frame(const FrameCtx& c, std::int64_t p, std::int64_t q,
                 Enter&& enter, Leave&& leave, Emit&& emit) {
     const Layout& lay = c.lay;
     const WindowParams::Frame& f = c.f;
-    const std::vector<ColumnView>& order = *lay.order_keys;
+    const dstd::Vector<ColumnView>& order = *lay.order_keys;
     const std::int64_t sz = q - p;
     std::int64_t win_lo = 0, win_hi = -1, first_missing = -1;
     for (std::int64_t r = p; r < q; ++r) {
@@ -681,9 +731,9 @@ void walk_frame(const FrameCtx& c, std::int64_t p, std::int64_t q,
 
 // Dense ranks of a partition's present values: equal values share a rank.
 struct Ranks {
-    std::vector<std::int32_t> of;
-    std::vector<std::int32_t> scratch;
-    std::vector<double> value;
+    dstd::Vector<std::int32_t> of;
+    dstd::Vector<std::int32_t> scratch;
+    dstd::Vector<double> value;
     std::int32_t count = 0;
 
     void build(const Layout& lay, const ColumnView& v, std::int64_t p,
@@ -712,7 +762,7 @@ struct Ranks {
 };
 
 struct Fenwick {
-    std::vector<std::int32_t> tree;
+    dstd::Vector<std::int32_t> tree;
     std::int32_t n = 0;
 
     void reset(std::int32_t size) {
@@ -739,12 +789,15 @@ struct Fenwick {
     }
 };
 
-Series frame_variance(const FrameCtx& c, const Series& column, bool root,
-                      std::int64_t min_count) {
-    const ColumnView v = view_of(column, "FRAME_VAR/FRAME_STD");
-    numeric(v, "FRAME_VAR/FRAME_STD");
+dstd::Result<Series> frame_variance(const FrameCtx& c, const Series& column,
+                                    bool root, std::int64_t min_count) {
+    const dstd::Result<ColumnView> view =
+        view_of(column, "FRAME_VAR/FRAME_STD");
+    if (!view) return view.error();
+    const ColumnView& v = *view;
+    if (auto ok = numeric(v, "FRAME_VAR/FRAME_STD"); !ok) return ok.error();
     Column<double> out(c.lay.n);
-    std::vector<std::int64_t> next_present, prev_present, run_start;
+    dstd::Vector<std::int64_t> next_present, prev_present, run_start;
     for (const auto& [p, q] : c.lay.parts) {
         std::int64_t n = 0;
         double mean = 0.0, m2 = 0.0;
@@ -821,13 +874,15 @@ Series frame_variance(const FrameCtx& c, const Series& column, bool root,
     return out.series(TypeId::Float64);
 }
 
-Series frame_quantile(const FrameCtx& c, const Series& column, double level,
-                      std::int64_t min_count) {
+dstd::Result<Series> frame_quantile(const FrameCtx& c, const Series& column,
+                                    double level, std::int64_t min_count) {
     if (!(level >= 0.0 && level <= 1.0))
-        throw std::invalid_argument(
-            "window: FRAME_QUANTILE level must be in [0, 1]");
-    const ColumnView v = view_of(column, "FRAME_QUANTILE");
-    numeric(v, "FRAME_QUANTILE");
+        return invalid_argument<
+            "window: FRAME_QUANTILE level must be in [0, 1]">();
+    const dstd::Result<ColumnView> view = view_of(column, "FRAME_QUANTILE");
+    if (!view) return view.error();
+    const ColumnView& v = *view;
+    if (auto ok = numeric(v, "FRAME_QUANTILE"); !ok) return ok.error();
     Column<double> out(c.lay.n);
     Ranks ranks;
     Fenwick fen;
@@ -874,11 +929,15 @@ Series frame_quantile(const FrameCtx& c, const Series& column, double level,
     return out.series(TypeId::Float64);
 }
 
-Series frame_count_distinct(const FrameCtx& c, const Series& column) {
-    const ColumnView v = view_of(column, "FRAME_COUNT_DISTINCT");
+dstd::Result<Series> frame_count_distinct(const FrameCtx& c,
+                                          const Series& column) {
+    const dstd::Result<ColumnView> view =
+        view_of(column, "FRAME_COUNT_DISTINCT");
+    if (!view) return view.error();
+    const ColumnView& v = *view;
     Column<std::int64_t> out(c.lay.n);
     Ranks ranks;
-    std::vector<std::int32_t> freq;
+    dstd::Vector<std::int32_t> freq;
     for (const auto& [p, q] : c.lay.parts) {
         ranks.build(c.lay, v, p, q, false);
         freq.assign(static_cast<std::size_t>(ranks.count), 0);
@@ -902,10 +961,14 @@ Series frame_count_distinct(const FrameCtx& c, const Series& column) {
     return out.series(TypeId::Int64);
 }
 
-Series frame_arg(const FrameCtx& c, const Series& column, const Series& by,
-                 bool smallest, std::int64_t min_count) {
-    const ColumnView b = view_of(by, "FRAME_ARG_MAX/FRAME_ARG_MIN");
-    std::vector<std::int64_t> source(static_cast<std::size_t>(c.lay.n), -1);
+dstd::Result<Series> frame_arg(const FrameCtx& c, const Series& column,
+                               const Series& by, bool smallest,
+                               std::int64_t min_count) {
+    const dstd::Result<ColumnView> by_view =
+        view_of(by, "FRAME_ARG_MAX/FRAME_ARG_MIN");
+    if (!by_view) return by_view.error();
+    const ColumnView& b = *by_view;
+    dstd::Vector<std::int64_t> source(static_cast<std::size_t>(c.lay.n), -1);
     steps::SlidingExtreme dq;
     for (const auto& [p, q] : c.lay.parts) {
         dq.candidates.clear();
@@ -934,10 +997,11 @@ Series frame_arg(const FrameCtx& c, const Series& column, const Series& by,
     return pass_through(column, source);
 }
 
-Series frame_collect(const FrameCtx& c, const Series& column) {
+dstd::Result<Series> frame_collect(const FrameCtx& c, const Series& column) {
     const std::size_t n = static_cast<std::size_t>(c.lay.n);
-    std::vector<std::int64_t> lows(n), highs(n);
+    dstd::Vector<std::int64_t> lows(n), highs(n);
     std::int64_t total = 0;
+    bool too_many = false;
     for (const auto& [p, q] : c.lay.parts) {
         std::int64_t count = 0;
         walk_frame(
@@ -950,16 +1014,17 @@ Series frame_collect(const FrameCtx& c, const Series& column) {
             },
             [&](std::int64_t r, std::int64_t lo, std::int64_t hi) {
                 total += count;
-                if (total > WINDOW_COLLECT_MAX_ELEMENTS)
-                    throw std::length_error(
-                        "window: FRAME_COLLECT frames hold more than 2^27 "
-                        "values in all");
+                if (total > WINDOW_COLLECT_MAX_ELEMENTS) too_many = true;
                 lows[static_cast<std::size_t>(r)] = p + lo;
                 highs[static_cast<std::size_t>(r)] = p + hi;
             });
     }
-    std::vector<std::int32_t> offsets(n + 1, 0);
-    std::vector<std::int64_t> source;
+    if (too_many)
+        return common::make_error<
+            "window: FRAME_COLLECT frames hold more than 2^27 values in all">(
+            common::ErrorCode::InvalidArgument);
+    dstd::Vector<std::int32_t> offsets(n + 1, 0);
+    dstd::Vector<std::int64_t> source;
     source.reserve(static_cast<std::size_t>(total));
     for (std::size_t r = 0; r < n; ++r) {
         for (std::int64_t pos = lows[r]; pos <= highs[r]; ++pos) {
@@ -971,9 +1036,11 @@ Series frame_collect(const FrameCtx& c, const Series& column) {
     return Series::list(offsets, pass_through(column, source));
 }
 
-Series frame_stats(const Layout& lay, const Series& column, const Series* by,
-                   const WindowColumn& w) {
-    const FrameCtx c = frame_context(lay, w);
+dstd::Result<Series> frame_stats(const Layout& lay, const Series& column,
+                                 const Series* by, const WindowColumn& w) {
+    const dstd::Result<FrameCtx> ctx = frame_context(lay, w);
+    if (!ctx) return ctx.error();
+    const FrameCtx& c = *ctx;
     const std::int64_t min_count = w.params.frame.min_count;
     switch (w.func) {
         case WindowFunc::FrameVar:
@@ -1019,13 +1086,19 @@ WindowColumn window_column(const dftu_window_spec& s) {
     return c;
 }
 
-DataFrame window(const DataFrame& df,
-                 const std::vector<std::string>& partition_by,
-                 const std::vector<std::string>& order_by,
-                 const std::vector<WindowColumn>& specs) {
-    std::vector<ColumnView> parts = ops::views_of(df, partition_by, "window");
-    std::vector<ColumnView> order = ops::views_of(df, order_by, "window");
-    std::vector<ColumnView> keys = parts;
+dstd::Result<DataFrame> window(const DataFrame& df,
+                               const dstd::Vector<dstd::String>& partition_by,
+                               const dstd::Vector<dstd::String>& order_by,
+                               const dstd::Vector<WindowColumn>& specs) {
+    dstd::Result<dstd::Vector<ColumnView>> part_views =
+        ops::views_of(df, partition_by, "window");
+    if (!part_views) return part_views.error();
+    dstd::Result<dstd::Vector<ColumnView>> order_views =
+        ops::views_of(df, order_by, "window");
+    if (!order_views) return order_views.error();
+    dstd::Vector<ColumnView> parts = std::move(*part_views);
+    dstd::Vector<ColumnView> order = std::move(*order_views);
+    dstd::Vector<ColumnView> keys = parts;
     keys.insert(keys.end(), order.begin(), order.end());
 
     Layout lay;
@@ -1045,7 +1118,7 @@ DataFrame window(const DataFrame& df,
         out.columns.push_back(df.columns[c].take(lay.idx));
     }
     for (const WindowColumn& w : specs) {
-        Series column;
+        dstd::Result<Series> column = Series{};
         switch (w.func) {
             case WindowFunc::RowNumber:
             case WindowFunc::Rank:
@@ -1063,54 +1136,85 @@ DataFrame window(const DataFrame& df,
             case WindowFunc::FirstValue:
             case WindowFunc::LastValue:
             case WindowFunc::NthValue:
-            case WindowFunc::FillForward:
-                column = positional(lay, value_column(df, w), w);
+            case WindowFunc::FillForward: {
+                const dstd::Result<const Series*> value = value_column(df, w);
+                if (!value) return value.error();
+                column = positional(lay, **value, w);
                 break;
+            }
             case WindowFunc::RunningSum:
             case WindowFunc::RunningMin:
             case WindowFunc::RunningMax:
-            case WindowFunc::RunningProd:
-                column = running(lay, value_column(df, w), w);
+            case WindowFunc::RunningProd: {
+                const dstd::Result<const Series*> value = value_column(df, w);
+                if (!value) return value.error();
+                column = running(lay, **value, w);
                 break;
-            case WindowFunc::Delta:
-                column = delta(lay, value_column(df, w));
+            }
+            case WindowFunc::Delta: {
+                const dstd::Result<const Series*> value = value_column(df, w);
+                if (!value) return value.error();
+                column = delta(lay, **value);
                 break;
-            case WindowFunc::Rate:
-                column = rate(lay, value_column(df, w),
-                              named_column(df, w.time(), w, "time"),
-                              w.params.rate.counter);
+            }
+            case WindowFunc::Rate: {
+                const dstd::Result<const Series*> value = value_column(df, w);
+                if (!value) return value.error();
+                const dstd::Result<const Series*> time =
+                    named_column(df, w.time(), w, "time");
+                if (!time) return time.error();
+                column = rate(lay, **value, **time, w.params.rate.counter);
                 break;
+            }
             case WindowFunc::Sessionize: {
-                const Series* end =
-                    w.end() ? &named_column(df, w.end(), w, "end") : nullptr;
-                column =
-                    sessionize(lay, named_column(df, w.time(), w, "time"), end,
-                               w.params.session.gap, w.params.session.span);
+                const Series* end = nullptr;
+                if (w.end()) {
+                    const dstd::Result<const Series*> end_column =
+                        named_column(df, w.end(), w, "end");
+                    if (!end_column) return end_column.error();
+                    end = *end_column;
+                }
+                const dstd::Result<const Series*> time =
+                    named_column(df, w.time(), w, "time");
+                if (!time) return time.error();
+                column = sessionize(lay, **time, end, w.params.session.gap,
+                                    w.params.session.span);
                 break;
             }
             case WindowFunc::FrameSum:
             case WindowFunc::FrameMin:
             case WindowFunc::FrameMax:
             case WindowFunc::FrameCount:
-            case WindowFunc::FrameMean:
-                column = frame(lay, value_column(df, w), w);
+            case WindowFunc::FrameMean: {
+                const dstd::Result<const Series*> value = value_column(df, w);
+                if (!value) return value.error();
+                column = frame(lay, **value, w);
                 break;
+            }
             case WindowFunc::FrameVar:
             case WindowFunc::FrameStd:
             case WindowFunc::FrameQuantile:
             case WindowFunc::FrameCountDistinct:
-            case WindowFunc::FrameCollect:
-                column = frame_stats(lay, value_column(df, w), nullptr, w);
+            case WindowFunc::FrameCollect: {
+                const dstd::Result<const Series*> value = value_column(df, w);
+                if (!value) return value.error();
+                column = frame_stats(lay, **value, nullptr, w);
                 break;
+            }
             case WindowFunc::FrameArgMax:
             case WindowFunc::FrameArgMin: {
-                const Series& by = named_column(df, w.by(), w, "by");
-                column = frame_stats(lay, value_column(df, w), &by, w);
+                const dstd::Result<const Series*> by =
+                    named_column(df, w.by(), w, "by");
+                if (!by) return by.error();
+                const dstd::Result<const Series*> value = value_column(df, w);
+                if (!value) return value.error();
+                column = frame_stats(lay, **value, *by, w);
                 break;
             }
         }
+        if (!column) return column.error();
         out.names.push_back(w.out);
-        out.columns.push_back(std::move(column));
+        out.columns.push_back(std::move(*column));
     }
     return out;
 }

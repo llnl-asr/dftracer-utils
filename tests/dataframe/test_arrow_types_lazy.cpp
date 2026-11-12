@@ -1,54 +1,53 @@
+// SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/config.h>
+#include <dataframe/expr_ok.h>
+#include <dftracer/utils/common/config.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <cstdint>
 #include <cstring>
 #include <stdexcept>
-#include <string>
-#include <vector>
 
 // Lazy engine, spill and Expr coverage for the 15 Arrow logical types: the
 // eager sweep (6d2859fc..95f09311) never touched lazy/streaming or spill, so
 // a divergence found here is a lazy or spill bug, not eager's.
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
-// clang-format off
-#include <nanoarrow/nanoarrow.h>
+#include <dataframe/builders_arrow_types.h>
+#include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dataframe/arrow.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/expr.h>
-#include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/internal/spill.h>
+#include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/scalar.h>
-#include <dftracer/utils/core/coro/task.h>
-#include <dftracer/utils/core/runtime.h>
-// clang-format on
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/runtime/runtime.h>
+#include <nanoarrow/nanoarrow.h>
 
-#include "builders_arrow_types.h"
+using namespace dftracer::utils;
 
 using namespace dftracer::utils::dataframe;
 using namespace dftracer::utils::dataframe::test_types;
-namespace spill = dftracer::utils::dataframe::spill;
 
 namespace {
 
-DataFrame run(dftracer::utils::coro::CoroTask<DataFrame> t) {
-    return dftracer::utils::default_runtime().submit(std::move(t)).get();
+template <class T>
+T run(dftracer::utils::coro::CoroTask<dstd::Result<T>> t) {
+    return dftu_utils_test::ok(
+        dftracer::utils::default_runtime().submit(std::move(t)).get());
 }
 
-std::optional<Morsel> run(
-    dftracer::utils::coro::CoroTask<std::optional<Morsel>> t) {
-    return dftracer::utils::default_runtime().submit(std::move(t)).get();
-}
-
-std::vector<const Series*> ptrs(const DataFrame& df) {
-    std::vector<const Series*> in;
+dstd::Vector<const Series*> ptrs(const DataFrame& df) {
+    dstd::Vector<const Series*> in;
     for (const Series& c : df.columns) in.push_back(&c);
     return in;
 }
 
 DataFrame keyed(const Series& v) {
-    std::vector<std::int64_t> k{1, 2, 3, 4};
+    dstd::Vector<std::int64_t> k{1, 2, 3, 4};
     DataFrame df;
     df.names = {"k", "v"};
     df.columns.push_back(Series::flat_i64(k.data(), 4));
@@ -97,7 +96,7 @@ void check_v_equal(const Series& lazy_v, const Series& eager_v) {
 
 // No shared builder header covers the temporal family, so this file defines
 // its own.
-Series make_timestamp(const std::vector<std::int64_t>& values) {
+Series make_timestamp(const dstd::Vector<std::int64_t>& values) {
     BuiltArrow b;
     ArrowSchemaInit(&b.schema);
     REQUIRE(ArrowSchemaSetTypeDateTime(&b.schema, NANOARROW_TYPE_TIMESTAMP,
@@ -112,7 +111,7 @@ Series make_timestamp(const std::vector<std::int64_t>& values) {
     return Series::from_arrow(&b.schema, &b.array);
 }
 
-Series make_date32(const std::vector<std::int32_t>& values) {
+Series make_date32(const dstd::Vector<std::int32_t>& values) {
     BuiltArrow b;
     ArrowSchemaInit(&b.schema);
     REQUIRE(ArrowSchemaSetType(&b.schema, NANOARROW_TYPE_DATE32) ==
@@ -126,7 +125,7 @@ Series make_date32(const std::vector<std::int32_t>& values) {
     return Series::from_arrow(&b.schema, &b.array);
 }
 
-Series make_date64(const std::vector<std::int64_t>& values) {
+Series make_date64(const dstd::Vector<std::int64_t>& values) {
     BuiltArrow b;
     ArrowSchemaInit(&b.schema);
     REQUIRE(ArrowSchemaSetType(&b.schema, NANOARROW_TYPE_DATE64) ==
@@ -140,7 +139,7 @@ Series make_date64(const std::vector<std::int64_t>& values) {
     return Series::from_arrow(&b.schema, &b.array);
 }
 
-Series make_time32(const std::vector<std::int32_t>& values) {
+Series make_time32(const dstd::Vector<std::int32_t>& values) {
     BuiltArrow b;
     ArrowSchemaInit(&b.schema);
     REQUIRE(ArrowSchemaSetTypeDateTime(&b.schema, NANOARROW_TYPE_TIME32,
@@ -155,7 +154,7 @@ Series make_time32(const std::vector<std::int32_t>& values) {
     return Series::from_arrow(&b.schema, &b.array);
 }
 
-Series make_time64(const std::vector<std::int64_t>& values) {
+Series make_time64(const dstd::Vector<std::int64_t>& values) {
     BuiltArrow b;
     ArrowSchemaInit(&b.schema);
     REQUIRE(ArrowSchemaSetTypeDateTime(&b.schema, NANOARROW_TYPE_TIME64,
@@ -170,7 +169,7 @@ Series make_time64(const std::vector<std::int64_t>& values) {
     return Series::from_arrow(&b.schema, &b.array);
 }
 
-Series make_duration(const std::vector<std::int64_t>& values) {
+Series make_duration(const dstd::Vector<std::int64_t>& values) {
     BuiltArrow b;
     ArrowSchemaInit(&b.schema);
     REQUIRE(ArrowSchemaSetTypeDateTime(&b.schema, NANOARROW_TYPE_DURATION,
@@ -187,7 +186,7 @@ Series make_duration(const std::vector<std::int64_t>& values) {
 
 // builders_arrow_types.h's make_decimal128 always uses scale 0, which cannot
 // catch a lost decimal_scale; this one uses a non-zero scale instead.
-Series make_decimal128_scaled(const std::vector<std::int64_t>& unscaled,
+Series make_decimal128_scaled(const dstd::Vector<std::int64_t>& unscaled,
                               std::int32_t scale) {
     BuiltArrow b;
     ArrowSchemaInit(&b.schema);
@@ -209,23 +208,24 @@ Series make_decimal128_scaled(const std::vector<std::int64_t>& unscaled,
 enum class SpillExpect { RoundTrips, Refuses };
 
 // Spills `col` alone in a one-column morsel and reads it back.
-std::optional<Morsel> spill_round_trip(const Series& col, spill::Dir& dir,
-                                       int id) {
-    std::vector<Series> cols;
+dstd::Optional<Morsel> spill_round_trip(const Series& col, spill::Dir& dir,
+                                        int id) {
+    dstd::Vector<Series> cols;
     cols.push_back(col.share());
-    const std::string path = dir.run_path(id);
-    spill::Writer w(path);
-    w.write(cols, col.length());
-    w.close();
-    spill::Reader r(path);
-    return run(r.next(0));
+    const dstd::String path = dir.run_path(id);
+    auto w = dftu_utils_test::ok(spill::Writer::open(path));
+    dftu_utils_test::ok(w.write(cols, col.length()));
+    dftu_utils_test::ok(w.close());
+    auto r = dftu_utils_test::ok(spill::Reader::open(path));
+    return run(r->next(0));
 }
 
 }  // namespace
 
 TEST_SUITE("dataframe_arrow_types_lazy") {
     TEST_CASE("spill round-trips Float16, Decimal128/256 and FixedSizeBinary") {
-        spill::Dir dir;
+        const auto dir_owner = dftu_utils_test::ok(spill::Dir::create());
+        spill::Dir& dir = *dir_owner;
 
         {
             INFO("Float16");
@@ -251,8 +251,9 @@ TEST_SUITE("dataframe_arrow_types_lazy") {
                               4 * 16) == 0);
             // The scale must actually be used downstream: min() reads the
             // scaled value, so it only matches if decimal_scale survived.
-            CHECK(scalar_value<double>(back.min()) ==
-                  doctest::Approx(scalar_value<double>(s.min())));
+            CHECK(scalar_value<double>(dftu_utils_test::ok(back.min())) ==
+                  doctest::Approx(
+                      scalar_value<double>(dftu_utils_test::ok(s.min()))));
         }
         {
             INFO("Decimal256");
@@ -283,7 +284,8 @@ TEST_SUITE("dataframe_arrow_types_lazy") {
     TEST_CASE(
         "spill round-trips LargeString, LargeBinary and the temporal "
         "family") {
-        spill::Dir dir;
+        const auto dir_owner = dftu_utils_test::ok(spill::Dir::create());
+        spill::Dir& dir = *dir_owner;
         {
             INFO("LargeString");
             Series s = make_large_utf8({"hello", "", "world", "dftracer"});
@@ -369,7 +371,8 @@ TEST_SUITE("dataframe_arrow_types_lazy") {
     }
 
     TEST_CASE("spill round-trips a LargeList") {
-        spill::Dir dir;
+        const auto dir_owner = dftu_utils_test::ok(spill::Dir::create());
+        spill::Dir& dir = *dir_owner;
         Series large_list = make_large_list_i64({{3}, {1, 2}, {}, {1}});
         auto m = spill_round_trip(large_list, dir, 0);
         REQUIRE(m.has_value());
@@ -382,7 +385,8 @@ TEST_SUITE("dataframe_arrow_types_lazy") {
     }
 
     TEST_CASE("spill round-trips FixedSizeList and Map") {
-        spill::Dir dir;
+        const auto dir_owner = dftu_utils_test::ok(spill::Dir::create());
+        spill::Dir& dir = *dir_owner;
         Series fixed_list =
             make_fixed_size_list_i64({{3, 3}, {1, 1}, {2, 2}, {1, 1}});
         auto f = spill_round_trip(fixed_list, dir, 0);
@@ -405,7 +409,7 @@ TEST_SUITE("dataframe_arrow_types_lazy") {
     TEST_CASE(
         "lazy filter/select/head/with_column match eager for the "
         "opaque-value types") {
-        std::vector<Series> values;
+        dstd::Vector<Series> values;
         values.push_back(make_float16({10.0f, 20.0f, 30.0f, 40.0f}));
         values.push_back(make_decimal128_scaled({100, 200, 300, 400}, 2));
         values.push_back(make_decimal256({100, 200, 300, 400}));
@@ -414,14 +418,15 @@ TEST_SUITE("dataframe_arrow_types_lazy") {
         values.push_back(make_large_utf8({"a", "b", "c", "d"}));
         values.push_back(make_large_binary({"a", "b", "c", "d"}));
         for (Series& v : values) {
-            INFO(std::string(type_name(v.type())));
+            INFO(dstd::String(type_name(v.type())));
             DataFrame src = keyed(v);
 
             // filter: k > 2
             {
                 LazyFrame lf = src.lazy().filter(col(0) > std::int64_t{2});
                 DataFrame lazy_r = run(lf.collect());
-                Series mask = eval(col(0) > std::int64_t{2}, ptrs(src));
+                Series mask = dftu_utils_test::eval_ok(col(0) > std::int64_t{2},
+                                                       ptrs(src));
                 DataFrame eager_r = src.filter(mask);
                 REQUIRE(lazy_r.num_rows() == eager_r.num_rows());
                 REQUIRE(lazy_r.num_rows() == 2);
@@ -431,7 +436,7 @@ TEST_SUITE("dataframe_arrow_types_lazy") {
             {
                 LazyFrame lf = src.lazy().select({"v"});
                 DataFrame lazy_r = run(lf.collect());
-                DataFrame eager_r = src.select({"v"});
+                DataFrame eager_r = dftu_utils_test::ok(src.select({"v"}));
                 REQUIRE(lazy_r.columns.size() == 1);
                 check_v_equal(lazy_r.columns[0], eager_r.columns[0]);
             }
@@ -447,8 +452,8 @@ TEST_SUITE("dataframe_arrow_types_lazy") {
             {
                 LazyFrame lf = src.lazy().with_column("v2", col(1));
                 DataFrame lazy_r = run(lf.collect());
-                DataFrame eager_r =
-                    src.with_column("v2", eval(col(1), ptrs(src)));
+                DataFrame eager_r = src.with_column(
+                    "v2", dftu_utils_test::eval_ok(col(1), ptrs(src)));
                 REQUIRE(lazy_r.columns.size() == 3);
                 check_v_equal(lazy_r.columns[2], eager_r.columns[2]);
             }
@@ -456,7 +461,7 @@ TEST_SUITE("dataframe_arrow_types_lazy") {
     }
 
     TEST_CASE("lazy sort_by on the value column matches eager") {
-        std::vector<Series> values;
+        dstd::Vector<Series> values;
         values.push_back(make_float16({30.0f, 10.0f, 20.0f, 10.0f}));
         values.push_back(make_decimal128_scaled({300, 100, 200, 100}, 1));
         values.push_back(make_decimal256({300, 100, 200, 100}));
@@ -465,11 +470,11 @@ TEST_SUITE("dataframe_arrow_types_lazy") {
         values.push_back(make_large_utf8({"c", "a", "b", "a"}));
         values.push_back(make_large_binary({"c", "a", "b", "a"}));
         for (Series& v : values) {
-            INFO(std::string(type_name(v.type())));
+            INFO(dstd::String(type_name(v.type())));
             DataFrame src = keyed(v);
             LazyFrame lf = src.lazy().sort_by("v", false);
             DataFrame lazy_r = run(lf.collect());
-            DataFrame eager_r = src.sort_by("v", false);
+            DataFrame eager_r = dftu_utils_test::ok(src.sort_by("v", false));
             REQUIRE(lazy_r.num_rows() == eager_r.num_rows());
             check_v_equal(lazy_r.columns[1], eager_r.columns[1]);
             // sort_by must reorder `k` in lockstep with `v`.
@@ -481,16 +486,16 @@ TEST_SUITE("dataframe_arrow_types_lazy") {
     }
 
     TEST_CASE("lazy group_by(Count) on an opaque value column matches eager") {
-        std::vector<std::int64_t> k{1, 1, 2, 2};
+        dstd::Vector<std::int64_t> k{1, 1, 2, 2};
         Series vals = make_large_utf8({"p", "q", "r", "s"});
         DataFrame df;
         df.names = {"k", "v"};
         df.columns.push_back(Series::flat_i64(k.data(), 4));
         df.columns.push_back(vals.share());
 
-        std::vector<GroupAgg> aggs = {{Agg::Count, "v", "v_count"}};
+        dstd::Vector<GroupAgg> aggs = {{Agg::Count, "v", "v_count"}};
         DataFrame lazy_r = run(df.lazy().group_by("k", aggs).collect(2));
-        DataFrame eager_r = df.group_by("k", aggs);
+        DataFrame eager_r = dftu_utils_test::ok(df.group_by("k", aggs));
         REQUIRE(lazy_r.num_rows() == eager_r.num_rows());
         REQUIRE(lazy_r.num_rows() == 2);
         const std::int64_t* lc = lazy_r.columns[1].data<std::int64_t>();

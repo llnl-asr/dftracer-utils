@@ -1,7 +1,12 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_PLUGINS_PLUGIN_MAP_H
 #define DFTRACER_UTILS_PLUGINS_PLUGIN_MAP_H
 
 #include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <dftracer/utils/plugins/arrow_abi.h>
 #include <dftracer/utils/plugins/owned_arrow.h>
@@ -10,18 +15,34 @@
 #include <dftracer/utils/plugins/result_registry.h>
 
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
+#include <exception>
 #include <initializer_list>
 #include <iterator>
-#include <memory>
-#include <optional>
-#include <string>
-#include <string_view>
 #include <type_traits>
 #include <utility>
-#include <vector>
 
 namespace dftracer::utils::plugins {
+
+namespace detail {
+/// Runs a plugin callable the host calls through a C function pointer. The
+/// host cannot catch, so an exception stops here and is reported on stderr.
+template <class Fn>
+void run_guarded(Fn& fn) noexcept {
+#if defined(__cpp_exceptions)
+    try {
+        fn();
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "plugin callback threw: %s\n", e.what());
+    } catch (...) {
+        std::fputs("plugin callback threw\n", stderr);
+    }
+#else
+    fn();
+#endif
+}
+}  // namespace detail
 
 class Writer;
 class Agg;
@@ -36,21 +57,21 @@ class Host {
    public:
     explicit Host(const dftu_plugin_host* h) : h_(h) {}
 
-    std::string_view str(StrId id) const {
+    dstd::StringView str(StrId id) const {
         if (id.absent()) return {};
         std::uint32_t n = 0;
         const char* p = h_->resolve(h_->h, id.raw(), &n);
-        return p ? std::string_view{p, n} : std::string_view{};
+        return p ? dstd::StringView{p, n} : dstd::StringView{};
     }
-    StrId intern(std::string_view s) const {
+    StrId intern(dstd::StringView s) const {
         return StrId{
             h_->intern(h_->h, s.data(), static_cast<std::uint32_t>(s.size()))};
     }
-    void log(dftu_log_level level, std::string_view msg) const {
+    void log(dftu_log_level level, dstd::StringView msg) const {
         h_->log(h_->h, static_cast<std::uint8_t>(level), msg.data(),
                 static_cast<std::uint32_t>(msg.size()));
     }
-    void log(LogLevel level, std::string_view msg) const {
+    void log(LogLevel level, dstd::StringView msg) const {
         log(static_cast<dftu_log_level>(level), msg);
     }
 
@@ -71,8 +92,9 @@ class Host {
                            : nullptr};
     }
 
-    /// Spawn `fn(arg)` onto a pool worker and get an AsyncOp to co_await (or
-    /// feed to all()/any()); `arg` is plugin-owned and must outlive the await.
+    /// Spawn `fn(arg)` onto a pool worker and get an @ref AsyncOp to co_await
+    /// (or feed to all()/any()); `arg` is plugin-owned and must outlive the
+    /// await.
     AsyncOp spawn(dftu_work_fn fn, void* arg) const {
         const dftu_svc_coro* c = ext(DFTU_SVC_CORO, coro_ext_);
         return AsyncOp{c && c->spawn ? c->spawn(h_->h, fn, arg) : nullptr};
@@ -81,9 +103,10 @@ class Host {
     /// so it must outlive it (a coroutine local naturally does).
     template <class Fn>
     AsyncOp spawn(Fn& fn) const {
-        return spawn([](void* p) { (*static_cast<Fn*>(p))(); }, &fn);
+        return spawn([](void* p) { detail::run_guarded(*static_cast<Fn*>(p)); },
+                     &fn);
     }
-    /// Sequence: run `fn(arg)` after `t` completes; returns an AsyncOp to
+    /// Sequence: run `fn(arg)` after `t` completes; returns an @ref AsyncOp to
     /// co_await. `arg` is plugin-owned and must outlive the await.
     AsyncOp then(dftu_task* t, dftu_work_fn fn, void* arg) const {
         const dftu_svc_coro* c = ext(DFTU_SVC_CORO, coro_ext_);
@@ -92,7 +115,8 @@ class Host {
     /// Sequence a callable after `t`; `fn` is borrowed for the await.
     template <class Fn>
     AsyncOp then(dftu_task* t, Fn& fn) const {
-        return then(t, [](void* p) { (*static_cast<Fn*>(p))(); }, &fn);
+        return then(
+            t, [](void* p) { detail::run_guarded(*static_cast<Fn*>(p)); }, &fn);
     }
 
     /// Run a synchronous blocking call while releasing the worker's run-permit,
@@ -104,13 +128,15 @@ class Host {
         const dftu_svc_coro* c = ext(DFTU_SVC_CORO, coro_ext_);
         if (c && c->run_blocking)
             c->run_blocking(
-                h_->h, [](void* p) { (*static_cast<Fn*>(p))(); }, &fn);
+                h_->h,
+                [](void* p) { detail::run_guarded(*static_cast<Fn*>(p)); },
+                &fn);
         else
             fn();
     }
 
     /// Valid for the whole scan; null on parse error. Do not free.
-    dftu_duql* duql_compile(std::string_view src) const {
+    dftu_duql* duql_compile(dstd::StringView src) const {
         const dftu_svc_duql* e = ext(DFTU_SVC_DUQL, query_ext_);
         return e && e->duql_compile
                    ? e->duql_compile(h_->h, src.data(),
@@ -132,7 +158,7 @@ class Host {
     }
     /// Compile and wrap as a non-owning Query bound to this host; see
     /// duql_compile for lifetime.
-    class Query compile(std::string_view src) const;
+    class Query compile(dstd::StringView src) const;
     /// compile() for a predicate built with `F`/`Field`.
     class Query compile(const Expr& e) const;
 
@@ -218,13 +244,14 @@ class Host {
     /// host lacks the trace group.
     class TraceWriter trace_writer(const char* path) const;
 
-    /// Get a host-owned parallel Writer for `path` with `num_workers` lanes
+    /// Get a host-owned parallel Writer for `path` with `worker_count` lanes
     /// (`gzip` != 0 compresses). The Writer is host-owned and scan-lifetime;
     /// open it, write chunks per worker, then close it - all co_await forms. An
     /// empty result (`!writer`) means the host lacks the writer group.
-    Writer writer(const char* path, std::uint32_t num_workers,
+    Writer writer(const char* path, std::uint32_t worker_count,
                   bool gzip = false) const;
-    /// Merge worker shard files into `target`; co_await the returned AsyncOp.
+    /// Merge worker shard files into `target`; co_await the returned @ref
+    /// AsyncOp.
     AsyncOp merge_shards(const char* target,
                          std::initializer_list<const char*> shards) const {
         const dftu_svc_writer* e = ext(DFTU_SVC_WRITER, writer_ext_);
@@ -247,9 +274,9 @@ class Host {
         const dftu_svc_ports* e = ext(DFTU_SVC_PORTS, ports_ext_);
         if (e && e->publish) e->publish(h_->h, key, data, len);
     }
-    const void* consume(std::uint64_t key, std::uint32_t* out_len) const {
+    const void* consume(std::uint64_t key, std::uint32_t* out_size) const {
         const dftu_svc_ports* e = ext(DFTU_SVC_PORTS, ports_ext_);
-        return e && e->consume ? e->consume(h_->h, key, out_len) : nullptr;
+        return e && e->consume ? e->consume(h_->h, key, out_size) : nullptr;
     }
     dftu_agg* agg_new(const char* name, const char* const* key_names,
                       std::uint32_t key_n, const dftu_agg_col* specs,
@@ -286,7 +313,7 @@ class Host {
                         const dftu_op_arg* args = nullptr) const {
         const dftu_svc_ops* e = ext(DFTU_SVC_OPS, ops_ext_);
         if (!e || !e->run) return nullptr;
-        std::vector<const dftu_series*> vin(in);
+        dstd::Vector<const dftu_series*> vin(in);
         dftu_result_series res =
             e->run(h_->h, name, vin.data(),
                    static_cast<std::uint32_t>(vin.size()), args);
@@ -299,7 +326,7 @@ class Host {
         const dftu_op_arg* args = nullptr) const {
         const dftu_svc_ops* e = ext(DFTU_SVC_OPS, ops_ext_);
         if (!e || !e->run_frame) return nullptr;
-        std::vector<const dftu_dataframe*> vin(in);
+        dstd::Vector<const dftu_dataframe*> vin(in);
         dftu_result_frame res =
             e->run_frame(h_->h, name, vin.data(),
                          static_cast<std::uint32_t>(vin.size()), args);
@@ -345,7 +372,7 @@ class Host {
         v.u.bytes.len = len;
         emit(name, &v);
     }
-    void emit_result(const char* name, std::string_view data) const {
+    void emit_result(const char* name, dstd::StringView data) const {
         emit_result(name, data.data(), data.size());
     }
     /// Moves *a and *s into the host; -1 if the host lacks the result channel.
@@ -378,8 +405,8 @@ class Host {
         v.u.lazyframe = lf;
         return emit(name, &v);
     }
-    /// OwnedLazyFrame overload of emit_result_lazyframe; -1 leaves `lf` intact
-    /// so it frees normally.
+    /// @ref OwnedLazyFrame overload of emit_result_lazyframe; -1 leaves `lf`
+    /// intact so it frees normally.
     int emit_result_lazyframe(const char* name, OwnedLazyFrame&& lf) const {
         int rc = emit_result_lazyframe(name, lf.handle);
         if (rc == 0) lf.release();
@@ -496,8 +523,8 @@ class Agg {
 inline Agg Host::agg(const char* name,
                      std::initializer_list<const char*> key_names,
                      std::initializer_list<AggCol> cols) const {
-    std::vector<const char*> keys(key_names.begin(), key_names.end());
-    std::vector<dftu_agg_col> specs;
+    dstd::Vector<const char*> keys(key_names.begin(), key_names.end());
+    dstd::Vector<dftu_agg_col> specs;
     specs.reserve(cols.size());
     for (const AggCol& c : cols) specs.push_back(c.raw());
     dftu_agg* a =
@@ -515,7 +542,7 @@ inline OwnedDataFrame Host::agg_result(const char* name) const {
 /// Typed, non-owning view over a host-owned parallel Writer (see Host::writer).
 /// The writer is host-owned and scan-lifetime, so there is nothing to free; the
 /// lifecycle is open() once, chunk() per worker lane, then close(), each a
-/// co_await-able AsyncOp. Worker lanes write concurrently, so chunks for
+/// co_await-able @ref AsyncOp. Worker lanes write concurrently, so chunks for
 /// distinct `worker` indices may be in flight at once.
 class Writer {
    public:
@@ -533,7 +560,7 @@ class Writer {
                            ? e_->writer_chunk(h(), w_, worker, data, len)
                            : nullptr};
     }
-    AsyncOp chunk(std::uint32_t worker, std::string_view data) const {
+    AsyncOp chunk(std::uint32_t worker, dstd::StringView data) const {
         return chunk(worker, data.data(), data.size());
     }
     /// Flush and finalize; co_await after all chunks are written.
@@ -557,12 +584,12 @@ class Writer {
     dftu_writer* w_ = nullptr;
 };
 
-inline Writer Host::writer(const char* path, std::uint32_t num_workers,
+inline Writer Host::writer(const char* path, std::uint32_t worker_count,
                            bool gzip) const {
     const dftu_svc_writer* e = ext(DFTU_SVC_WRITER, writer_ext_);
     dftu_writer* w =
         e && e->writer_create
-            ? e->writer_create(h_->h, path, num_workers, gzip ? 1 : 0)
+            ? e->writer_create(h_->h, path, worker_count, gzip ? 1 : 0)
             : nullptr;
     return Writer{*this, e, w};
 }
@@ -605,11 +632,11 @@ class InPort {
     /// The value a producer published this batch, or nullopt if none was
     /// published or its length did not match sizeof(T). The read is a copy, so
     /// the result outlives the borrowed port buffer.
-    std::optional<T> recv() const {
-        if (key_ == 0) return std::nullopt;
+    dstd::Optional<T> recv() const {
+        if (key_ == 0) return dstd::nullopt;
         std::uint32_t len = 0;
         const void* p = host_.consume(key_, &len);
-        if (!p || len != sizeof(T)) return std::nullopt;
+        if (!p || len != sizeof(T)) return dstd::nullopt;
         T out;
         std::memcpy(&out, p, sizeof(T));
         return out;
@@ -687,20 +714,20 @@ class Event {
     bool has_hhash() const noexcept;
 
     /// Zero-copy views into the frame's string buffers; empty when absent.
-    std::string_view cat() const noexcept;
-    std::string_view name() const noexcept;
-    std::string_view fhash() const noexcept;
-    std::string_view hhash() const noexcept;
+    dstd::StringView cat() const noexcept;
+    dstd::StringView name() const noexcept;
+    dstd::StringView fhash() const noexcept;
+    dstd::StringView hhash() const noexcept;
 
     /// A dyn (per-key) arg column, present when any event in the batch carried
     /// that flattened dotted key ("args.ret", or the bare key "ret").
-    bool has_arg(std::string_view key) const noexcept;
-    bool arg_is_i64(std::string_view key) const noexcept;
-    bool arg_is_f64(std::string_view key) const noexcept;
-    bool arg_is_str(std::string_view key) const noexcept;
-    std::int64_t arg_i64(std::string_view key) const noexcept;
-    double arg_f64(std::string_view key) const noexcept;
-    std::string_view arg_str(std::string_view key) const noexcept;
+    bool has_arg(dstd::StringView key) const noexcept;
+    bool arg_is_i64(dstd::StringView key) const noexcept;
+    bool arg_is_f64(dstd::StringView key) const noexcept;
+    bool arg_is_str(dstd::StringView key) const noexcept;
+    std::int64_t arg_i64(dstd::StringView key) const noexcept;
+    double arg_f64(dstd::StringView key) const noexcept;
+    dstd::StringView arg_str(dstd::StringView key) const noexcept;
 
    private:
     const Batch* b_ = nullptr;
@@ -737,28 +764,28 @@ class Batch {
     static bool is_str(const detail::ColBuf& c) noexcept {
         return c.type == DFTU_TYPE_STRING;
     }
-    static std::string_view str_at(const detail::ColBuf& c,
+    static dstd::StringView str_at(const detail::ColBuf& c,
                                    std::int64_t row) noexcept {
         if (!c.data || !c.offsets) {
             if (c.type != DFTU_TYPE_STRING) return {};
             std::int64_t n = 0;
             const char* p = dftu_series_string_at(c.handle, row, &n);
-            return p ? std::string_view{p, static_cast<std::size_t>(n)}
-                     : std::string_view{};
+            return p ? dstd::StringView{p, static_cast<std::size_t>(n)}
+                     : dstd::StringView{};
         }
         if (dftu_series_is_null(c.handle, row)) return {};
         const char* base = static_cast<const char*>(c.data);
         return {base + c.offsets[row],
                 static_cast<std::size_t>(c.offsets[row + 1] - c.offsets[row])};
     }
-    const detail::ColBuf* find_dyn(std::string_view key) const noexcept;
+    const detail::ColBuf* find_dyn(dstd::StringView key) const noexcept;
 
     void reset() noexcept;
 
     const dftu_dataframe* df_ = nullptr;
     std::int64_t n_ = 0;
     detail::ColBuf cat_, name_, fhash_, hhash_, pid_, tid_, ts_, dur_, ph_;
-    std::vector<std::pair<std::string, detail::ColBuf>> dyn_;
+    dstd::Vector<dstd::Pair<dstd::String, detail::ColBuf>> dyn_;
 };
 
 inline const dftu_dataframe* Event::frame() const noexcept { return b_->raw(); }
@@ -799,50 +826,50 @@ inline bool Event::has_fhash() const noexcept {
 inline bool Event::has_hhash() const noexcept {
     return b_->hhash_.data != nullptr;
 }
-inline std::string_view Event::cat() const noexcept {
+inline dstd::StringView Event::cat() const noexcept {
     return Batch::str_at(b_->cat_, row_);
 }
-inline std::string_view Event::name() const noexcept {
+inline dstd::StringView Event::name() const noexcept {
     return Batch::str_at(b_->name_, row_);
 }
-inline std::string_view Event::fhash() const noexcept {
+inline dstd::StringView Event::fhash() const noexcept {
     return Batch::str_at(b_->fhash_, row_);
 }
-inline std::string_view Event::hhash() const noexcept {
+inline dstd::StringView Event::hhash() const noexcept {
     return Batch::str_at(b_->hhash_, row_);
 }
-inline bool Event::has_arg(std::string_view key) const noexcept {
+inline bool Event::has_arg(dstd::StringView key) const noexcept {
     return b_->find_dyn(key) != nullptr;
 }
-inline bool Event::arg_is_i64(std::string_view key) const noexcept {
+inline bool Event::arg_is_i64(dstd::StringView key) const noexcept {
     const detail::ColBuf* c = b_->find_dyn(key);
     return c && c->type == DFTU_TYPE_INT64;
 }
-inline bool Event::arg_is_f64(std::string_view key) const noexcept {
+inline bool Event::arg_is_f64(dstd::StringView key) const noexcept {
     const detail::ColBuf* c = b_->find_dyn(key);
     return c && c->type == DFTU_TYPE_FLOAT64;
 }
-inline bool Event::arg_is_str(std::string_view key) const noexcept {
+inline bool Event::arg_is_str(dstd::StringView key) const noexcept {
     const detail::ColBuf* c = b_->find_dyn(key);
     return c && c->type == DFTU_TYPE_STRING;
 }
-inline std::int64_t Event::arg_i64(std::string_view key) const noexcept {
+inline std::int64_t Event::arg_i64(dstd::StringView key) const noexcept {
     const detail::ColBuf* c = b_->find_dyn(key);
     if (!c || c->type != DFTU_TYPE_INT64 || !c->data ||
         dftu_series_is_null(c->handle, row_))
         return 0;
     return static_cast<const std::int64_t*>(c->data)[row_];
 }
-inline double Event::arg_f64(std::string_view key) const noexcept {
+inline double Event::arg_f64(dstd::StringView key) const noexcept {
     const detail::ColBuf* c = b_->find_dyn(key);
     if (!c || c->type != DFTU_TYPE_FLOAT64 || !c->data ||
         dftu_series_is_null(c->handle, row_))
         return 0.0;
     return static_cast<const double*>(c->data)[row_];
 }
-inline std::string_view Event::arg_str(std::string_view key) const noexcept {
+inline dstd::StringView Event::arg_str(dstd::StringView key) const noexcept {
     const detail::ColBuf* c = b_->find_dyn(key);
-    return c ? Batch::str_at(*c, row_) : std::string_view{};
+    return c ? Batch::str_at(*c, row_) : dstd::StringView{};
 }
 
 inline detail::ColBuf Batch::resolve(const dftu_dataframe* df,
@@ -870,13 +897,13 @@ inline Batch::Batch(const dftu_dataframe* df) noexcept
     dur_ = resolve(df_, "dur");
     ph_ = resolve(df_, "ph");
     const std::int32_t ncols = dftu_dataframe_num_columns(df_);
-    static constexpr std::string_view ARGS_PREFIX = "args.";
+    static constexpr dstd::StringView ARGS_PREFIX = "args.";
     for (std::int32_t i = 0; i < ncols; ++i) {
         const char* n = dftu_dataframe_column_name(df_, i);
         if (!n) continue;
-        std::string_view nv{n};
+        dstd::StringView nv{n};
         if (nv.substr(0, ARGS_PREFIX.size()) != ARGS_PREFIX) continue;
-        std::string bare(nv.substr(ARGS_PREFIX.size()));
+        dstd::String bare(nv.substr(ARGS_PREFIX.size()));
         dyn_.emplace_back(std::move(bare), resolve(df_, n));
     }
 }
@@ -938,7 +965,7 @@ inline Batch& Batch::operator=(Batch&& o) noexcept {
 }
 
 inline const detail::ColBuf* Batch::find_dyn(
-    std::string_view key) const noexcept {
+    dstd::StringView key) const noexcept {
     for (const auto& [name, c] : dyn_)
         if (name == key) return &c;
     return nullptr;
@@ -946,17 +973,29 @@ inline const detail::ColBuf* Batch::find_dyn(
 
 template <class Fn>
 inline int Host::trace_read(const char* path, Fn&& fn) const {
+    struct State {
+        std::decay_t<Fn>* f;
+        bool failed;
+    } state{const_cast<std::decay_t<Fn>*>(std::addressof(fn)), false};
     auto thunk = [](const void* item, void* ud) {
         const auto* df = static_cast<const dftu_dataframe*>(item);
-        auto& f = *static_cast<std::decay_t<Fn>*>(ud);
-        if constexpr (std::is_invocable_v<std::decay_t<Fn>&, const Batch&>)
-            f(Batch{df});
-        else
-            f(df);
+        auto& st = *static_cast<State*>(ud);
+        if (st.failed) return;
+#if defined(__cpp_exceptions)
+        try {
+#endif
+            if constexpr (std::is_invocable_v<std::decay_t<Fn>&, const Batch&>)
+                (*st.f)(Batch{df});
+            else
+                (*st.f)(df);
+#if defined(__cpp_exceptions)
+        } catch (...) {
+            st.failed = true;
+        }
+#endif
     };
-    return trace_read(
-        path, thunk,
-        const_cast<void*>(static_cast<const void*>(std::addressof(fn))));
+    const int rc = trace_read(path, thunk, &state);
+    return state.failed ? -1 : rc;
 }
 
 /// Non-owning view over a compiled dftu_duql (see Host::compile). Host-owned
@@ -983,7 +1022,7 @@ class Query {
     dftu_duql* q_ = nullptr;
 };
 
-inline Query Host::compile(std::string_view src) const {
+inline Query Host::compile(dstd::StringView src) const {
     return Query{*this, duql_compile(src)};
 }
 inline Query Host::compile(const Expr& e) const {

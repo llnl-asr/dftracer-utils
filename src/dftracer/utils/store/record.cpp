@@ -1,0 +1,631 @@
+// SPDX-License-Identifier: MIT
+#include <dftracer/utils/dstd/little_endian.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/store/crc.h>
+#include <dftracer/utils/store/extent_codec.h>
+#include <dftracer/utils/store/record.h>
+#include <dftracer/utils/store/varint.h>
+
+#include <algorithm>
+#include <cstring>
+#include <limits>
+#include <string_view>
+
+namespace dftracer::utils::store::engine {
+
+namespace {
+
+constexpr dstd::StringView RECORD_MAGIC = "DFTUREC0";
+constexpr std::size_t RECORD_HEADER_BYTES = 40;
+constexpr std::size_t MIN_SCOPE_PATH_BYTES = 1;
+constexpr std::size_t MIN_EXTENT_SEGMENT_BYTES = 30;
+constexpr std::size_t MIN_COMMIT_COPY_BYTES = 6;
+
+dstd::Unexpected<dstd::Error> parse_error() {
+    return dstd::Unexpected<dstd::Error>(dstd::Error(dstd::Condition::Parse));
+}
+
+dstd::Unexpected<dstd::Error> invalid_error() {
+    return dstd::Unexpected<dstd::Error>(
+        dstd::Error(dstd::Condition::InvalidArgument));
+}
+
+void append_magic(dstd::Vector<std::uint8_t>& out, dstd::StringView magic) {
+    const auto* begin = reinterpret_cast<const std::uint8_t*>(magic.data());
+    out.insert(out.end(), begin, begin + magic.size());
+}
+
+void append_byte_string(dstd::Vector<std::uint8_t>& out,
+                        const dstd::String& value) {
+    encode_varint(out, value.size());
+    const auto* begin = reinterpret_cast<const std::uint8_t*>(value.data());
+    out.insert(out.end(), begin, begin + value.size());
+}
+
+void append_byte_vector(dstd::Vector<std::uint8_t>& out,
+                        const dstd::Vector<std::uint8_t>& value) {
+    encode_varint(out, value.size());
+    out.insert(out.end(), value.begin(), value.end());
+}
+
+void append_item(dstd::Vector<std::uint8_t>& out, std::uint64_t tag,
+                 const dstd::Vector<std::uint8_t>& payload) {
+    encode_varint(out, tag);
+    encode_varint(out, payload.size());
+    out.insert(out.end(), payload.begin(), payload.end());
+}
+
+bool read_u8(dstd::ByteView bytes, std::size_t& at, std::uint8_t& out) {
+    if (bytes.size() - at < 1) return false;
+    out = static_cast<std::uint8_t>(
+        reinterpret_cast<const std::uint8_t*>(bytes.data())[at]);
+    ++at;
+    return true;
+}
+
+bool read_u32(dstd::ByteView bytes, std::size_t& at, std::uint32_t& out) {
+    if (bytes.size() - at < 4) return false;
+    out = dstd::read_u32_le(
+        reinterpret_cast<const std::uint8_t*>(bytes.data()) + at);
+    at += 4;
+    return true;
+}
+
+bool read_u64(dstd::ByteView bytes, std::size_t& at, std::uint64_t& out) {
+    if (bytes.size() - at < 8) return false;
+    out = dstd::read_u64_le(
+        reinterpret_cast<const std::uint8_t*>(bytes.data()) + at);
+    at += 8;
+    return true;
+}
+
+bool count_fits(std::size_t remaining, std::uint64_t count,
+                std::size_t min_entry_bytes) {
+    return count <= remaining / min_entry_bytes;
+}
+
+bool read_bytes(dstd::ByteView bytes, std::size_t& at,
+                dstd::Vector<std::uint8_t>& out) {
+    auto length = decode_varint(bytes, at);
+    if (!length) return false;
+    if (*length > bytes.size() - at) return false;
+    const auto* begin =
+        reinterpret_cast<const std::uint8_t*>(bytes.data()) + at;
+    out.assign(begin, begin + *length);
+    at += static_cast<std::size_t>(*length);
+    return true;
+}
+
+bool read_string(dstd::ByteView bytes, std::size_t& at, dstd::String& out) {
+    dstd::Vector<std::uint8_t> raw;
+    if (!read_bytes(bytes, at, raw)) return false;
+    out.assign(reinterpret_cast<const char*>(raw.data()), raw.size());
+    return true;
+}
+
+dstd::Expected<NamespaceItem, dstd::Error> decode_namespace(
+    dstd::ByteView bytes) {
+    NamespaceItem item;
+    std::size_t at = 0;
+    if (!read_u32(bytes, at, item.local_id) ||
+        !read_string(bytes, at, item.name) ||
+        !read_u32(bytes, at, item.format_version) ||
+        !read_u8(bytes, at, item.fold_kind) ||
+        !read_u8(bytes, at, item.codec) || !read_u8(bytes, at, item.durable) ||
+        !read_u8(bytes, at, item.shared) || at != bytes.size()) {
+        return parse_error();
+    }
+    return item;
+}
+
+dstd::Expected<ScopeItem, dstd::Error> decode_scope(dstd::ByteView bytes) {
+    ScopeItem item;
+    std::uint32_t path_count = 0;
+    std::uint8_t kind = 0;
+    std::size_t at = 0;
+    if (!read_u32(bytes, at, item.local_id) || !read_u8(bytes, at, kind) ||
+        !read_u32(bytes, at, path_count) || kind > 2) {
+        return parse_error();
+    }
+    item.kind = static_cast<ScopeKind>(kind);
+    if (!count_fits(bytes.size() - at, path_count, MIN_SCOPE_PATH_BYTES)) {
+        return parse_error();
+    }
+    item.paths.reserve(path_count);
+    for (std::uint32_t i = 0; i < path_count; ++i) {
+        dstd::String path;
+        if (!read_string(bytes, at, path)) return parse_error();
+        item.paths.push_back(std::move(path));
+    }
+    if (at != bytes.size()) return parse_error();
+    return item;
+}
+
+dstd::Expected<CopyItem, dstd::Error> decode_copy(dstd::ByteView bytes) {
+    CopyItem item;
+    std::uint8_t state = 0;
+    std::uint32_t source_count = 0;
+    std::size_t at = 0;
+    if (!read_u32(bytes, at, item.local_id) ||
+        !read_u32(bytes, at, item.namespace_id) ||
+        !read_u32(bytes, at, item.scope_id) ||
+        !read_u64(bytes, at, item.params_hash) ||
+        !read_u64(bytes, at, item.generation) || !read_u8(bytes, at, state) ||
+        state > static_cast<std::uint8_t>(CopyState::Building) ||
+        !read_u32(bytes, at, source_count)) {
+        return parse_error();
+    }
+    item.state = static_cast<CopyState>(state);
+    if (!count_fits(bytes.size() - at, source_count, SOURCE_STAT_BYTES)) {
+        return parse_error();
+    }
+    item.sources.reserve(source_count);
+    for (std::uint32_t i = 0; i < source_count; ++i) {
+        SourceStat source;
+        if (!read_u64(bytes, at, source.mtime) ||
+            !read_u64(bytes, at, source.size) ||
+            !read_u64(bytes, at, source.hash)) {
+            return parse_error();
+        }
+        item.sources.push_back(source);
+    }
+    if (at != bytes.size()) return parse_error();
+    return item;
+}
+
+dstd::Expected<DropItem, dstd::Error> decode_drop(dstd::ByteView bytes) {
+    DropItem item;
+    std::size_t at = 0;
+    if (!read_u32(bytes, at, item.namespace_id) ||
+        !read_u32(bytes, at, item.scope_id) ||
+        !read_u64(bytes, at, item.generation) ||
+        !read_bytes(bytes, at, item.begin_key) ||
+        !read_bytes(bytes, at, item.end_key) || at != bytes.size()) {
+        return parse_error();
+    }
+    return item;
+}
+
+dstd::Expected<EraseItem, dstd::Error> decode_erase(dstd::ByteView bytes) {
+    EraseItem item;
+    std::size_t at = 0;
+    if (!read_u32(bytes, at, item.copy_id) ||
+        !read_u64(bytes, at, item.ordinal) ||
+        !read_bytes(bytes, at, item.begin_key) ||
+        !read_bytes(bytes, at, item.end_key) || at != bytes.size()) {
+        return parse_error();
+    }
+    if (item.copy_id == 0 || item.ordinal == 0) return parse_error();
+    return item;
+}
+
+dstd::Expected<ExtentRefItem, dstd::Error> decode_extent_ref(
+    dstd::ByteView bytes) {
+    ExtentRefItem item;
+    std::uint32_t segment_count = 0;
+    std::size_t at = 0;
+    if (!read_u64(bytes, at, item.offset) ||
+        !read_u32(bytes, at, item.length) || !read_u32(bytes, at, item.crc) ||
+        !read_u64(bytes, at, item.sequence) ||
+        !read_u8(bytes, at, item.synced) ||
+        !read_u32(bytes, at, segment_count)) {
+        return parse_error();
+    }
+    if (item.sequence == 0 || item.synced > 1) return parse_error();
+    if (!count_fits(bytes.size() - at, segment_count,
+                    MIN_EXTENT_SEGMENT_BYTES)) {
+        return parse_error();
+    }
+    item.segments.reserve(segment_count);
+    for (std::uint32_t i = 0; i < segment_count; ++i) {
+        ExtentSegment segment;
+        if (!read_u32(bytes, at, segment.copy_id) ||
+            !read_u32(bytes, at, segment.offset_in_extent) ||
+            !read_u32(bytes, at, segment.length) ||
+            !read_u64(bytes, at, segment.entry_count) ||
+            !read_u64(bytes, at, segment.ordinal) ||
+            !read_bytes(bytes, at, segment.first_key) ||
+            !read_bytes(bytes, at, segment.last_key)) {
+            return parse_error();
+        }
+        item.segments.push_back(std::move(segment));
+    }
+    if (at != bytes.size()) return parse_error();
+    return item;
+}
+
+dstd::Expected<CommitRefItem, dstd::Error> decode_commit_ref(
+    dstd::ByteView bytes) {
+    CommitRefItem item;
+    std::uint32_t copy_count = 0;
+    std::size_t at = 0;
+    if (!read_u64(bytes, at, item.sequence) ||
+        !read_u64(bytes, at, item.record_offset) ||
+        !read_u32(bytes, at, item.record_crc) ||
+        !read_u8(bytes, at, item.synced) || !read_u32(bytes, at, copy_count)) {
+        return parse_error();
+    }
+    if (item.sequence == 0 || item.synced > 1 ||
+        item.record_offset < RECORD_BYTES ||
+        item.record_offset % RECORD_BYTES != 0) {
+        return parse_error();
+    }
+    if (!count_fits(bytes.size() - at, copy_count, MIN_COMMIT_COPY_BYTES)) {
+        return parse_error();
+    }
+    item.copies.reserve(copy_count);
+    for (std::uint32_t i = 0; i < copy_count; ++i) {
+        CommitCopy copy;
+        if (!read_u32(bytes, at, copy.copy_id) ||
+            !read_bytes(bytes, at, copy.first_key) ||
+            !read_bytes(bytes, at, copy.last_key)) {
+            return parse_error();
+        }
+        item.copies.push_back(std::move(copy));
+    }
+    if (at != bytes.size()) return parse_error();
+    return item;
+}
+
+void encode_namespace(dstd::Vector<std::uint8_t>& payload,
+                      const NamespaceItem& item) {
+    dstd::append_u32_le(payload, item.local_id);
+    append_byte_string(payload, item.name);
+    dstd::append_u32_le(payload, item.format_version);
+    payload.push_back(item.fold_kind);
+    payload.push_back(item.codec);
+    payload.push_back(item.durable);
+    payload.push_back(item.shared);
+}
+
+void encode_scope(dstd::Vector<std::uint8_t>& payload, const ScopeItem& item) {
+    dstd::append_u32_le(payload, item.local_id);
+    payload.push_back(static_cast<std::uint8_t>(item.kind));
+    dstd::append_u32_le(payload, static_cast<std::uint32_t>(item.paths.size()));
+    for (const dstd::String& path : item.paths) {
+        append_byte_string(payload, path);
+    }
+}
+
+void encode_copy(dstd::Vector<std::uint8_t>& payload, const CopyItem& item) {
+    dstd::append_u32_le(payload, item.local_id);
+    dstd::append_u32_le(payload, item.namespace_id);
+    dstd::append_u32_le(payload, item.scope_id);
+    dstd::append_u64_le(payload, item.params_hash);
+    dstd::append_u64_le(payload, item.generation);
+    payload.push_back(static_cast<std::uint8_t>(item.state));
+    dstd::append_u32_le(payload,
+                        static_cast<std::uint32_t>(item.sources.size()));
+    for (const SourceStat& source : item.sources) {
+        dstd::append_u64_le(payload, source.mtime);
+        dstd::append_u64_le(payload, source.size);
+        dstd::append_u64_le(payload, source.hash);
+    }
+}
+
+void encode_drop(dstd::Vector<std::uint8_t>& payload, const DropItem& item) {
+    dstd::append_u32_le(payload, item.namespace_id);
+    dstd::append_u32_le(payload, item.scope_id);
+    dstd::append_u64_le(payload, item.generation);
+    append_byte_vector(payload, item.begin_key);
+    append_byte_vector(payload, item.end_key);
+}
+
+void encode_erase(dstd::Vector<std::uint8_t>& payload, const EraseItem& item) {
+    dstd::append_u32_le(payload, item.copy_id);
+    dstd::append_u64_le(payload, item.ordinal);
+    append_byte_vector(payload, item.begin_key);
+    append_byte_vector(payload, item.end_key);
+}
+
+void encode_commit_ref(dstd::Vector<std::uint8_t>& payload,
+                       const CommitRefItem& item) {
+    dstd::append_u64_le(payload, item.sequence);
+    dstd::append_u64_le(payload, item.record_offset);
+    dstd::append_u32_le(payload, item.record_crc);
+    payload.push_back(item.synced);
+    dstd::append_u32_le(payload,
+                        static_cast<std::uint32_t>(item.copies.size()));
+    for (const CommitCopy& copy : item.copies) {
+        dstd::append_u32_le(payload, copy.copy_id);
+        append_byte_vector(payload, copy.first_key);
+        append_byte_vector(payload, copy.last_key);
+    }
+}
+
+void encode_extent_ref(dstd::Vector<std::uint8_t>& payload,
+                       const ExtentRefItem& item) {
+    dstd::append_u64_le(payload, item.offset);
+    dstd::append_u32_le(payload, item.length);
+    dstd::append_u32_le(payload, item.crc);
+    dstd::append_u64_le(payload, item.sequence);
+    payload.push_back(item.synced);
+    dstd::append_u32_le(payload,
+                        static_cast<std::uint32_t>(item.segments.size()));
+    for (const ExtentSegment& segment : item.segments) {
+        dstd::append_u32_le(payload, segment.copy_id);
+        dstd::append_u32_le(payload, segment.offset_in_extent);
+        dstd::append_u32_le(payload, segment.length);
+        dstd::append_u64_le(payload, segment.entry_count);
+        dstd::append_u64_le(payload, segment.ordinal);
+        append_byte_vector(payload, segment.first_key);
+        append_byte_vector(payload, segment.last_key);
+    }
+}
+
+void encode_file_tail(dstd::Vector<std::uint8_t>& payload,
+                      const FileTail& item) {
+    dstd::append_u32_le(payload, item.format_version);
+    dstd::append_u32_le(payload, item.extent_size);
+    dstd::append_u64_le(payload, item.writer_random);
+    dstd::append_u32_le(payload, item.pid);
+    append_byte_string(payload, item.host);
+    append_byte_string(payload, item.label);
+    dstd::append_u64_le(payload, item.creation_time);
+    append_block_handle(payload, item.items);
+    dstd::append_u32_le(payload, item.extent_count);
+    dstd::append_u32_le(payload, item.directory_levels);
+    append_byte_vector(payload, item.top_table);
+    append_byte_vector(payload, item.scope_filter);
+}
+
+dstd::Expected<FileTail, dstd::Error> decode_file_tail(dstd::ByteView bytes) {
+    FileTail item;
+    std::size_t at = 0;
+    if (!read_u32(bytes, at, item.format_version) ||
+        !read_u32(bytes, at, item.extent_size) ||
+        !read_u64(bytes, at, item.writer_random) ||
+        !read_u32(bytes, at, item.pid) || !read_string(bytes, at, item.host) ||
+        !read_string(bytes, at, item.label) ||
+        !read_u64(bytes, at, item.creation_time) ||
+        !read_block_handle(bytes, at, item.items) ||
+        !read_u32(bytes, at, item.extent_count) ||
+        !read_u32(bytes, at, item.directory_levels) ||
+        !read_bytes(bytes, at, item.top_table) ||
+        !read_bytes(bytes, at, item.scope_filter) || at != bytes.size()) {
+        return parse_error();
+    }
+    // One level at least, so the top table names leaves or middle blocks.
+    if (item.extent_size == 0 || item.directory_levels == 0 ||
+        item.directory_levels > 8) {
+        return parse_error();
+    }
+    return item;
+}
+
+}  // namespace
+
+void append_block_handle(dstd::Vector<std::uint8_t>& out,
+                         const BlockHandle& handle) {
+    dstd::append_u64_le(out, handle.offset);
+    dstd::append_u32_le(out, handle.length);
+    dstd::append_u32_le(out, handle.crc);
+}
+
+bool read_block_handle(dstd::ByteView bytes, std::size_t& at,
+                       BlockHandle& out) {
+    return read_u64(bytes, at, out.offset) && read_u32(bytes, at, out.length) &&
+           read_u32(bytes, at, out.crc);
+}
+
+namespace {
+
+bool item_is_valid(const RecordItem& item) {
+    if (const auto* extent = std::get_if<ExtentRefItem>(&item)) {
+        return extent->sequence != 0;
+    }
+    if (const auto* erase = std::get_if<EraseItem>(&item)) {
+        return erase->copy_id != 0 && erase->ordinal != 0;
+    }
+    if (const auto* commit = std::get_if<CommitRefItem>(&item)) {
+        return commit->sequence != 0 && commit->synced <= 1 &&
+               commit->record_offset >= RECORD_BYTES &&
+               commit->record_offset % RECORD_BYTES == 0;
+    }
+    return true;
+}
+
+}  // namespace
+
+dstd::Vector<std::uint8_t> encode_items(const RecordItems& items) {
+    dstd::Vector<std::uint8_t> body;
+    for (const RecordItem& item : items) {
+        dstd::Vector<std::uint8_t> payload;
+        if (const auto* namespace_item = std::get_if<NamespaceItem>(&item)) {
+            encode_namespace(payload, *namespace_item);
+            append_item(body, 1, payload);
+        } else if (const auto* scope_item = std::get_if<ScopeItem>(&item)) {
+            encode_scope(payload, *scope_item);
+            append_item(body, 2, payload);
+        } else if (const auto* copy_item = std::get_if<CopyItem>(&item)) {
+            encode_copy(payload, *copy_item);
+            append_item(body, 3, payload);
+        } else if (const auto* drop_item = std::get_if<DropItem>(&item)) {
+            encode_drop(payload, *drop_item);
+            append_item(body, 4, payload);
+        } else if (const auto* erase_item = std::get_if<EraseItem>(&item)) {
+            encode_erase(payload, *erase_item);
+            append_item(body, 7, payload);
+        } else if (const auto* extent_ref_item =
+                       std::get_if<ExtentRefItem>(&item)) {
+            encode_extent_ref(payload, *extent_ref_item);
+            append_item(body, 5, payload);
+        } else if (const auto* commit_ref_item =
+                       std::get_if<CommitRefItem>(&item)) {
+            encode_commit_ref(payload, *commit_ref_item);
+            append_item(body, 6, payload);
+        } else {
+            encode_file_tail(payload, *std::get<FileTailPtr>(item));
+            append_item(body, 8, payload);
+        }
+    }
+    return body;
+}
+
+dstd::Expected<RecordItems, dstd::Error> decode_items(dstd::ByteView body) {
+    RecordItems items;
+    std::size_t at = 0;
+    while (at < body.size()) {
+        auto tag = decode_varint(body, at);
+        if (!tag) return parse_error();
+        auto item_size = decode_varint(body, at);
+        if (!item_size || *item_size > body.size() - at) return parse_error();
+        const dstd::ByteView item_bytes = body.subspan(at, *item_size);
+        at += static_cast<std::size_t>(*item_size);
+
+        switch (*tag) {
+            case 1: {
+                auto item = decode_namespace(item_bytes);
+                if (!item) return parse_error();
+                items.push_back(std::move(*item));
+                break;
+            }
+            case 2: {
+                auto item = decode_scope(item_bytes);
+                if (!item) return parse_error();
+                items.push_back(std::move(*item));
+                break;
+            }
+            case 3: {
+                auto item = decode_copy(item_bytes);
+                if (!item) return parse_error();
+                items.push_back(std::move(*item));
+                break;
+            }
+            case 4: {
+                auto item = decode_drop(item_bytes);
+                if (!item) return parse_error();
+                items.push_back(std::move(*item));
+                break;
+            }
+            case 5: {
+                auto item = decode_extent_ref(item_bytes);
+                if (!item) return parse_error();
+                items.push_back(std::move(*item));
+                break;
+            }
+            case 6: {
+                auto item = decode_commit_ref(item_bytes);
+                if (!item) return parse_error();
+                items.push_back(std::move(*item));
+                break;
+            }
+            case 7: {
+                auto item = decode_erase(item_bytes);
+                if (!item) return parse_error();
+                items.push_back(std::move(*item));
+                break;
+            }
+            case 8: {
+                auto item = decode_file_tail(item_bytes);
+                if (!item) return parse_error();
+                items.push_back(dstd::make_shared<FileTail>(std::move(*item)));
+                break;
+            }
+            default:
+                return parse_error();
+        }
+    }
+    return items;
+}
+
+dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> encode_record(
+    RecordKind kind, std::uint64_t sequence, std::uint64_t prev_offset,
+    std::uint64_t offset, const RecordItems& items) {
+    if (sequence == 0 || offset < RECORD_BYTES || offset % RECORD_BYTES != 0) {
+        return invalid_error();
+    }
+    if (static_cast<std::uint32_t>(kind) < 1 ||
+        static_cast<std::uint32_t>(kind) > 3) {
+        return invalid_error();
+    }
+
+    for (const RecordItem& item : items) {
+        if (!item_is_valid(item)) return invalid_error();
+    }
+
+    const dstd::Vector<std::uint8_t> raw_body = encode_items(items);
+    const dstd::Vector<std::uint8_t> body = encode_meta(
+        dstd::ByteView{reinterpret_cast<const std::byte*>(raw_body.data()),
+                       raw_body.size()},
+        RECORD_ZSTD_LEVEL);
+    if (body.size() > std::numeric_limits<std::uint32_t>::max()) {
+        return invalid_error();
+    }
+
+    dstd::Vector<std::uint8_t> out;
+    out.reserve(RECORD_BYTES);
+    append_magic(out, RECORD_MAGIC);
+    dstd::append_u32_le(out, static_cast<std::uint32_t>(kind));
+    dstd::append_u32_le(out, static_cast<std::uint32_t>(body.size()));
+    dstd::append_u64_le(out, sequence);
+    dstd::append_u64_le(out, prev_offset);
+    dstd::append_u64_le(out, offset);
+    out.insert(out.end(), body.begin(), body.end());
+    const std::uint32_t crc = crc32(0, out.data(), out.size());
+    dstd::append_u32_le(out, crc);
+    const std::size_t padded_size =
+        (out.size() + RECORD_BYTES - 1) / RECORD_BYTES * RECORD_BYTES;
+    out.resize(padded_size, 0);
+    return out;
+}
+
+dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> encode_record(
+    RecordKind kind, std::uint64_t sequence, std::uint64_t prev_offset,
+    std::uint64_t offset, std::initializer_list<RecordItem> items) {
+    RecordItems owned;
+    owned.reserve(items.size());
+    for (const RecordItem& item : items) owned.push_back(item);
+    return encode_record(kind, sequence, prev_offset, offset, owned);
+}
+
+void set_record_offset(dstd::Vector<std::uint8_t>& encoded,
+                       std::uint64_t offset) {
+    std::uint8_t* data = encoded.data();
+    dstd::write_u64_le(data + 32, offset);
+    const std::size_t body_end =
+        RECORD_HEADER_BYTES + dstd::read_u32_le(data + 12);
+    dstd::write_u32_le(data + body_end, crc32(0, data, body_end));
+}
+
+dstd::Expected<Record, dstd::Error> decode_record(dstd::ByteView bytes) {
+    if (bytes.size() < RECORD_HEADER_BYTES + 4) return parse_error();
+    const auto* data = reinterpret_cast<const std::uint8_t*>(bytes.data());
+    if (std::memcmp(data, RECORD_MAGIC.data(), RECORD_MAGIC.size()) != 0) {
+        return parse_error();
+    }
+
+    const std::uint32_t kind_raw = dstd::read_u32_le(data + 8);
+    if (kind_raw < 1 || kind_raw > 3) return parse_error();
+    const std::uint32_t body_size = dstd::read_u32_le(data + 12);
+    const std::uint64_t sequence = dstd::read_u64_le(data + 16);
+    if (sequence == 0) return parse_error();
+    const std::uint64_t prev_offset = dstd::read_u64_le(data + 24);
+    const std::uint64_t offset = dstd::read_u64_le(data + 32);
+
+    const std::uint64_t body_end =
+        static_cast<std::uint64_t>(RECORD_HEADER_BYTES) + body_size;
+    if (body_end + 4 > bytes.size()) return parse_error();
+    const std::uint32_t stored_crc = dstd::read_u32_le(data + body_end);
+    const std::uint32_t crc =
+        crc32(0, data, static_cast<std::size_t>(body_end));
+    if (stored_crc != crc) return parse_error();
+
+    Record record;
+    record.kind = static_cast<RecordKind>(kind_raw);
+    record.sequence = sequence;
+    record.prev_offset = prev_offset;
+    record.offset = offset;
+    record.crc = stored_crc;
+
+    auto raw_body = decode_meta(bytes.subspan(RECORD_HEADER_BYTES, body_size));
+    if (!raw_body) return dstd::Unexpected<dstd::Error>(raw_body.error());
+    auto decoded = decode_items(
+        dstd::ByteView{reinterpret_cast<const std::byte*>(raw_body->data()),
+                       raw_body->size()});
+    if (!decoded) return dstd::Unexpected<dstd::Error>(decoded.error());
+    record.items = std::move(*decoded);
+    return record;
+}
+
+}  // namespace dftracer::utils::store::engine

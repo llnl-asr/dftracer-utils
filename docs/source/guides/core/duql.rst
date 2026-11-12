@@ -211,8 +211,8 @@ files)`` on the scan, so the index still skips chunks. Arrows also work in
 
       .. code-block:: bash
 
-         dftracer_view --files trace.pfw.gz \
-             --duql 'where fhash -> files.path like "%/scratch/%"'
+         dftracer_view trace.pfw.gz \
+             -q 'where fhash -> files.path like "%/scratch/%"'
 
 The dftracer source declares these row sets:
 
@@ -261,14 +261,14 @@ filter pushes down like the expression it stands for.
    where slow(250us) and scratch(fhash -> files.path)
 
 To share macros, put ``def`` lines in ``.duql`` files and list the files or
-their directories in ``$DFTRACER_DUQL_PATH``, separated by ``:``. The CLI
+their directories in ``$DFTRACER_UTILS_DUQL_PATH``, separated by ``:``. The CLI
 tools also take ``--duql-path PATH`` (repeatable).
 
 .. code-block:: bash
 
    echo 'def slow(t) = dur > t;' > ~/duql/io.duql
-   export DFTRACER_DUQL_PATH=~/duql
-   dftracer_view --files trace.pfw.gz --duql 'where slow(250us)'
+   export DFTRACER_UTILS_DUQL_PATH=~/duql
+   dftracer_view trace.pfw.gz -q 'where slow(250us)'
 
 A macro of the query hides one of the record schema's source, which hides one
 from a path file. The rules are in :doc:`../../reference/duql`.
@@ -286,7 +286,7 @@ A body that starts with a stage word, or with an expression followed by
 
 The call expands before planning, so a leading call pushes its ``where`` into
 the scan. A pipeline macro goes in a query, a source or a ``.duql`` file on
-``$DFTRACER_DUQL_PATH`` or ``--duql-path``, like an expression macro. Call it
+``$DFTRACER_UTILS_DUQL_PATH`` or ``--duql-path``, like an expression macro. Call it
 at a stage position: ``where io_rate(1ms)`` is an error.
 
 Shape the result with a pipeline
@@ -326,8 +326,8 @@ instead of formatting values into the text.
 
       .. code-block:: bash
 
-         dftracer_view --files trace.pfw.gz \
-             --duql 'where cat == $cat and dur > 250us | derive ms = dur / 1000 | sort -ms | take $n' \
+         dftracer_view trace.pfw.gz \
+             -q 'where cat == $cat and dur > 250us | derive ms = dur / 1000 | sort -ms | take $n' \
              --param cat='"POSIX"' --param n=5
 
 ``250us`` takes the unit of ``dur`` from the record schema. Add
@@ -341,7 +341,7 @@ Aggregate with a pipeline
 
 ``group`` and ``agg`` summarize the rows, and the trace stages cut them by
 time. Each recipe below is one query for ``TraceViewer.duql``,
-``View::duql`` or ``dftracer_view --duql``.
+``View::duql`` or ``dftracer_view -q``.
 
 Time per function
 ~~~~~~~~~~~~~~~~~
@@ -375,7 +375,7 @@ Time per function
 
       .. code-block:: bash
 
-         dftracer_view --files trace.pfw.gz --duql 'where cat == "POSIX"
+         dftracer_view trace.pfw.gz -q 'where cat == "POSIX"
              | group name { calls = count(), total = sum(dur), p99 = quantile(dur, 0.99) }
              | sort -total | take 10'
 
@@ -713,6 +713,48 @@ keep it alive while the query runs.
 
 ``| call myplug.head(3)`` runs a table function as the last stage. See
 :ref:`duql-plugin-functions` for the argument rules and the limits.
+
+
+Filter raw JSON events without an index
+---------------------------------------
+
+Where there is no index, such as a live trace, a socket or a plugin, check one
+JSON line at a time with ``Query::matches``. ``json::Document`` reads a line on
+demand, and ``matches`` applies the same filter text that ``View`` and the CLI
+accept, with the same answer.
+
+.. code-block:: cpp
+
+   #include <dftracer/utils/duql/query.h>
+   #include <dftracer/utils/json/value.h>
+
+   using namespace dftracer::utils;
+
+   auto q = duql::Query::from_string("cat == \"POSIX\" and dur > 1000");
+   json::Document doc;                  // one per reader, reused for every line
+   std::string line;
+   while (std::getline(std::cin, line)) {
+       auto ev = doc.parse(line);       // an object or array; else an error
+       if (!ev) continue;
+       if (q->matches(*ev)) forward(line);
+   }
+
+Given these three lines::
+
+   {"name":"read","cat":"POSIX","dur":2000}
+   {"name":"write","cat":"POSIX","dur":10}
+   {"name":"MPI_Send","cat":"MPI","dur":5000}
+
+the loop forwards only the first. Built against the installed headers and
+run with those lines on its input, the program prints::
+
+   {"name":"read","cat":"POSIX","dur":2000}
+
+``matches`` reads the line once, from the parse that ``Document::parse``
+made, and looks up only the fields the filter names. It does not build a tree.
+To read a few fields yourself, call ``find`` and ``as_int`` or ``as_double`` on
+the value, which decodes only what you read. For files on disk, use ``View``,
+the fast path, which reads through the index and never parses a line twice.
 
 
 How it runs

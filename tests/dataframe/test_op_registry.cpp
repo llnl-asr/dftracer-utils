@@ -1,20 +1,18 @@
+// SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/op.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/abi.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <cstdint>
-#include <vector>
 
-using dftracer::utils::dataframe::Agg;
-using dftracer::utils::dataframe::DataFrame;
-using dftracer::utils::dataframe::find_op;
-using dftracer::utils::dataframe::GroupAgg;
-using dftracer::utils::dataframe::OpArgs;
-using dftracer::utils::dataframe::OpKind;
-using dftracer::utils::dataframe::Series;
+using namespace dftracer::utils;
+using namespace dftracer::utils::dataframe;
 
 namespace {
 
@@ -150,9 +148,6 @@ TEST_SUITE("op_registry") {
             CHECK(dftu_op_find(name) != nullptr);
         CHECK(dftu_op_find("no_such_op") == nullptr);
 
-        using dftracer::utils::dataframe::op_at;
-        using dftracer::utils::dataframe::op_count;
-
         uint32_t n = op_count();
         REQUIRE(n >= 120);  // ~100 column ops + ~23 frame ops
         bool saw_add = false, saw_frame = false;
@@ -266,8 +261,9 @@ TEST_SUITE("op_registry") {
     }
 
     TEST_CASE("a user op registers under a module prefix and runs") {
-        dftu_op_desc copy{"mymod.copy", DFTU_OP_SIG(SERIES, SERIES, NONE, NONE),
-                          reinterpret_cast<const void*>(&dftu_series_share)};
+        dftu_op_desc copy{
+            "mymod.copy", DFTU_OP_SIG(SERIES, SERIES, NONE, NONE),
+            reinterpret_cast<dftu_op_generic_fn>(&dftu_series_share)};
         REQUIRE(dftu_op_register(&copy) == 0);
         std::int64_t v[2] = {7, 9};
         dftu_series* src = i64_col(v, 2);
@@ -282,20 +278,20 @@ TEST_SUITE("op_registry") {
 
     TEST_CASE("registration rejects a clash and run rejects a mismatch") {
         CHECK(dftu_op_register(nullptr) != 0);
-        dftu_op_desc dup{"dftu.series.add",
-                         DFTU_OP_SIG(SERIES, SERIES, SERIES, NONE),
-                         reinterpret_cast<const void*>(&dftu_series_add)};
+        dftu_op_desc dup{
+            "dftu.series.add", DFTU_OP_SIG(SERIES, SERIES, SERIES, NONE),
+            reinterpret_cast<dftu_op_generic_fn>(&dftu_series_add)};
         CHECK(dftu_op_register(&dup) != 0);
 
         // A name is a stable public key, so a second registration of one
         // already taken fails instead of shadowing it.
-        dftu_op_desc first{"mymod.once",
-                           DFTU_OP_SIG(SERIES, SERIES, NONE, NONE),
-                           reinterpret_cast<const void*>(&dftu_series_share)};
+        dftu_op_desc first{
+            "mymod.once", DFTU_OP_SIG(SERIES, SERIES, NONE, NONE),
+            reinterpret_cast<dftu_op_generic_fn>(&dftu_series_share)};
         REQUIRE(dftu_op_register(&first) == 0);
-        dftu_op_desc second{"mymod.once",
-                            DFTU_OP_SIG(SERIES, SERIES, NONE, NONE),
-                            reinterpret_cast<const void*>(&dftu_series_abs)};
+        dftu_op_desc second{
+            "mymod.once", DFTU_OP_SIG(SERIES, SERIES, NONE, NONE),
+            reinterpret_cast<dftu_op_generic_fn>(&dftu_series_abs)};
         CHECK(dftu_op_register(&second) != 0);
         CHECK(dftu_op_find("mymod.once")->fn == first.fn);
         std::int64_t v[1] = {1};
@@ -314,61 +310,62 @@ TEST_SUITE("op_registry") {
         const dftu_series* in1[1] = {c};
 
         // dftu.series.slice
-        OpArgs sliceArg;
-        sliceArg.i64(1, 1).i64(2, 3);
+        OpArgs slice_arg;
+        slice_arg.i64(1, 1).i64(2, 3);
         dftu_series* sliced =
-            dftu_op_run(dftu_op_find("dftu.series.slice"), in1, 1, sliceArg);
-        dftu_series* slicedDirect = dftu_series_slice(c, 1, 3);
+            dftu_op_run(dftu_op_find("dftu.series.slice"), in1, 1, slice_arg);
+        dftu_series* sliced_direct = dftu_series_slice(c, 1, 3);
         REQUIRE(sliced != nullptr);
-        REQUIRE(slicedDirect != nullptr);
-        REQUIRE(dftu_series_length(sliced) == dftu_series_length(slicedDirect));
+        REQUIRE(sliced_direct != nullptr);
+        REQUIRE(dftu_series_length(sliced) ==
+                dftu_series_length(sliced_direct));
         for (std::int64_t i = 0; i < dftu_series_length(sliced); ++i)
-            CHECK(i64_of(sliced)[i] == i64_of(slicedDirect)[i]);
+            CHECK(i64_of(sliced)[i] == i64_of(sliced_direct)[i]);
         dftu_series_free(sliced);
-        dftu_series_free(slicedDirect);
+        dftu_series_free(sliced_direct);
 
         // dftu.series.materialize
         dftu_series* mat = dftu_op_run(dftu_op_find("dftu.series.materialize"),
                                        in1, 1, nullptr);
-        dftu_series* matDirect = dftu_series_materialize(c);
+        dftu_series* mat_direct = dftu_series_materialize(c);
         REQUIRE(mat != nullptr);
-        REQUIRE(matDirect != nullptr);
-        REQUIRE(dftu_series_length(mat) == dftu_series_length(matDirect));
+        REQUIRE(mat_direct != nullptr);
+        REQUIRE(dftu_series_length(mat) == dftu_series_length(mat_direct));
         for (std::int64_t i = 0; i < dftu_series_length(mat); ++i)
-            CHECK(i64_of(mat)[i] == i64_of(matDirect)[i]);
+            CHECK(i64_of(mat)[i] == i64_of(mat_direct)[i]);
         dftu_series_free(mat);
-        dftu_series_free(matDirect);
+        dftu_series_free(mat_direct);
 
         // dftu.series.take
         std::int64_t idx[3] = {3, 0, 4};
-        OpArgs takeArg;
-        takeArg.i64list(1, idx);
+        OpArgs take_arg;
+        take_arg.i64list(1, idx);
         dftu_series* taken =
-            dftu_op_run(dftu_op_find("dftu.series.take"), in1, 1, takeArg);
-        dftu_series* takenDirect = dftu_series_take(c, idx, 3);
+            dftu_op_run(dftu_op_find("dftu.series.take"), in1, 1, take_arg);
+        dftu_series* taken_direct = dftu_series_take(c, idx, 3);
         REQUIRE(taken != nullptr);
-        REQUIRE(takenDirect != nullptr);
-        REQUIRE(dftu_series_length(taken) == dftu_series_length(takenDirect));
+        REQUIRE(taken_direct != nullptr);
+        REQUIRE(dftu_series_length(taken) == dftu_series_length(taken_direct));
         for (std::int64_t i = 0; i < dftu_series_length(taken); ++i)
-            CHECK(i64_of(taken)[i] == i64_of(takenDirect)[i]);
+            CHECK(i64_of(taken)[i] == i64_of(taken_direct)[i]);
         dftu_series_free(taken);
-        dftu_series_free(takenDirect);
+        dftu_series_free(taken_direct);
 
         // dftu.series.sample: deterministic (mix64 hash), so a fixed seed
         // matches the direct call bit-for-bit.
-        OpArgs sampleArg;
-        sampleArg.i64(1, 2).u64(2, 42);
+        OpArgs sample_arg;
+        sample_arg.i64(1, 2).u64(2, 42);
         dftu_series* sampled =
-            dftu_op_run(dftu_op_find("dftu.series.sample"), in1, 1, sampleArg);
-        dftu_series* sampledDirect = dftu_series_sample(c, 2, 42);
+            dftu_op_run(dftu_op_find("dftu.series.sample"), in1, 1, sample_arg);
+        dftu_series* sampled_direct = dftu_series_sample(c, 2, 42);
         REQUIRE(sampled != nullptr);
-        REQUIRE(sampledDirect != nullptr);
+        REQUIRE(sampled_direct != nullptr);
         REQUIRE(dftu_series_length(sampled) ==
-                dftu_series_length(sampledDirect));
+                dftu_series_length(sampled_direct));
         for (std::int64_t i = 0; i < dftu_series_length(sampled); ++i)
-            CHECK(i64_of(sampled)[i] == i64_of(sampledDirect)[i]);
+            CHECK(i64_of(sampled)[i] == i64_of(sampled_direct)[i]);
         dftu_series_free(sampled);
-        dftu_series_free(sampledDirect);
+        dftu_series_free(sampled_direct);
 
         dftu_series_free(c);
     }
@@ -386,61 +383,63 @@ TEST_SUITE("op_registry") {
 
         // dftu.frame.take
         std::int64_t idx[2] = {4, 1};
-        OpArgs takeArg;
-        takeArg.i64list(1, idx);
-        dftu_dataframe* taken =
-            dftu_op_run_frame(dftu_op_find("dftu.frame.take"), fin, 1, takeArg);
-        dftu_dataframe* takenDirect = dftu_dataframe_take(df, idx, 2);
+        OpArgs take_arg;
+        take_arg.i64list(1, idx);
+        dftu_dataframe* taken = dftu_op_run_frame(
+            dftu_op_find("dftu.frame.take"), fin, 1, take_arg);
+        dftu_dataframe* taken_direct = dftu_dataframe_take(df, idx, 2);
         REQUIRE(taken != nullptr);
-        REQUIRE(takenDirect != nullptr);
+        REQUIRE(taken_direct != nullptr);
         CHECK(dftu_dataframe_num_rows(taken) ==
-              dftu_dataframe_num_rows(takenDirect));
-        dftu_series* takenCol = dftu_dataframe_column(taken, "a");
-        dftu_series* takenDirectCol = dftu_dataframe_column(takenDirect, "a");
-        for (std::int64_t i = 0; i < dftu_series_length(takenCol); ++i)
-            CHECK(i64_of(takenCol)[i] == i64_of(takenDirectCol)[i]);
-        dftu_series_free(takenCol);
-        dftu_series_free(takenDirectCol);
+              dftu_dataframe_num_rows(taken_direct));
+        dftu_series* taken_col = dftu_dataframe_column(taken, "a");
+        dftu_series* taken_direct_col =
+            dftu_dataframe_column(taken_direct, "a");
+        for (std::int64_t i = 0; i < dftu_series_length(taken_col); ++i)
+            CHECK(i64_of(taken_col)[i] == i64_of(taken_direct_col)[i]);
+        dftu_series_free(taken_col);
+        dftu_series_free(taken_direct_col);
         dftu_dataframe_free(taken);
-        dftu_dataframe_free(takenDirect);
+        dftu_dataframe_free(taken_direct);
 
         // dftu.frame.sample: deterministic, same seed matches bit-for-bit.
-        OpArgs sampleArg;
-        sampleArg.i64(1, 2).u64(2, 7);
+        OpArgs sample_arg;
+        sample_arg.i64(1, 2).u64(2, 7);
         dftu_dataframe* sampled = dftu_op_run_frame(
-            dftu_op_find("dftu.frame.sample"), fin, 1, sampleArg);
-        dftu_dataframe* sampledDirect = dftu_dataframe_sample(df, 2, 7);
+            dftu_op_find("dftu.frame.sample"), fin, 1, sample_arg);
+        dftu_dataframe* sampled_direct = dftu_dataframe_sample(df, 2, 7);
         REQUIRE(sampled != nullptr);
-        REQUIRE(sampledDirect != nullptr);
+        REQUIRE(sampled_direct != nullptr);
         CHECK(dftu_dataframe_num_rows(sampled) ==
-              dftu_dataframe_num_rows(sampledDirect));
+              dftu_dataframe_num_rows(sampled_direct));
         dftu_dataframe_free(sampled);
-        dftu_dataframe_free(sampledDirect);
+        dftu_dataframe_free(sampled_direct);
 
         // dftu.frame.group_by_dynamic
         dftu_group_agg aggs[1] = {{"sum", "a", "asum"}};
-        OpArgs gbdArg;
-        gbdArg.str(1, "t").i64(2, 5).i64(3, -1).agglist(4, aggs);
+        OpArgs gbd_arg;
+        gbd_arg.str(1, "t").i64(2, 5).i64(3, -1).agglist(4, aggs);
         dftu_dataframe* windowed = dftu_op_run_frame(
-            dftu_op_find("dftu.frame.group_by_dynamic"), fin, 1, gbdArg);
-        dftu_dataframe* windowedDirect =
+            dftu_op_find("dftu.frame.group_by_dynamic"), fin, 1, gbd_arg);
+        dftu_dataframe* windowed_direct =
             dftu_dataframe_group_by_dynamic(df, "t", 5, -1, aggs, 1);
         REQUIRE(windowed != nullptr);
-        REQUIRE(windowedDirect != nullptr);
+        REQUIRE(windowed_direct != nullptr);
         CHECK(dftu_dataframe_num_rows(windowed) ==
-              dftu_dataframe_num_rows(windowedDirect));
+              dftu_dataframe_num_rows(windowed_direct));
         CHECK(dftu_dataframe_num_columns(windowed) ==
-              dftu_dataframe_num_columns(windowedDirect));
+              dftu_dataframe_num_columns(windowed_direct));
         dftu_series* wsum = dftu_dataframe_column(windowed, "asum");
-        dftu_series* wsumDirect = dftu_dataframe_column(windowedDirect, "asum");
+        dftu_series* wsum_direct =
+            dftu_dataframe_column(windowed_direct, "asum");
         REQUIRE(wsum != nullptr);
-        REQUIRE(wsumDirect != nullptr);
+        REQUIRE(wsum_direct != nullptr);
         for (std::int64_t i = 0; i < dftu_series_length(wsum); ++i)
-            CHECK(i64_of(wsum)[i] == i64_of(wsumDirect)[i]);
+            CHECK(i64_of(wsum)[i] == i64_of(wsum_direct)[i]);
         dftu_series_free(wsum);
-        dftu_series_free(wsumDirect);
+        dftu_series_free(wsum_direct);
         dftu_dataframe_free(windowed);
-        dftu_dataframe_free(windowedDirect);
+        dftu_dataframe_free(windowed_direct);
 
         dftu_dataframe_free(df);
     }
@@ -459,34 +458,35 @@ TEST_SUITE("op_registry") {
         const char* keys[1] = {"k"};
         dftu_group_agg aggs[1] = {{"sum", "v", "total"}};
 
-        OpArgs gbArg;
-        gbArg.strlist(1, keys, 1).agglist(2, aggs);
-        dftu_dataframe* viaRegistry = dftu_op_run_frame(
-            dftu_op_find("dftu.frame.group_by"), fin, 1, gbArg);
-        dftu_dataframe* viaDirect =
+        OpArgs gb_arg;
+        gb_arg.strlist(1, keys, 1).agglist(2, aggs);
+        dftu_dataframe* via_registry = dftu_op_run_frame(
+            dftu_op_find("dftu.frame.group_by"), fin, 1, gb_arg);
+        dftu_dataframe* via_direct =
             dftu_dataframe_group_by(df, keys, 1, aggs, 1);
-        REQUIRE(viaRegistry != nullptr);
-        REQUIRE(viaDirect != nullptr);
-        REQUIRE(dftu_dataframe_num_rows(viaRegistry) ==
-                dftu_dataframe_num_rows(viaDirect));
+        REQUIRE(via_registry != nullptr);
+        REQUIRE(via_direct != nullptr);
+        REQUIRE(dftu_dataframe_num_rows(via_registry) ==
+                dftu_dataframe_num_rows(via_direct));
 
-        dftu_series* kCol = dftu_dataframe_column(df, "k");
-        dftu_series* vCol = dftu_dataframe_column(df, "v");
-        DataFrame cppDf;
-        cppDf.names = {"k", "v"};
-        cppDf.columns.emplace_back(kCol);
-        cppDf.columns.emplace_back(vCol);
-        DataFrame viaCpp = cppDf.group_by(std::vector<std::string>{"k"},
-                                          {GroupAgg{Agg::Sum, "v", "total"}});
-        REQUIRE(static_cast<std::int64_t>(viaCpp.num_rows()) ==
-                dftu_dataframe_num_rows(viaRegistry));
+        dftu_series* k_col = dftu_dataframe_column(df, "k");
+        dftu_series* v_col = dftu_dataframe_column(df, "v");
+        DataFrame cpp_df;
+        cpp_df.names = {"k", "v"};
+        cpp_df.columns.emplace_back(k_col);
+        cpp_df.columns.emplace_back(v_col);
+        DataFrame via_cpp = dftu_utils_test::ok(
+            cpp_df.group_by(dstd::Vector<dstd::String>{"k"},
+                            {GroupAgg{Agg::Sum, "v", "total"}}));
+        REQUIRE(static_cast<std::int64_t>(via_cpp.num_rows()) ==
+                dftu_dataframe_num_rows(via_registry));
 
-        dftu_series* rk = dftu_dataframe_column(viaRegistry, "k");
-        dftu_series* rt = dftu_dataframe_column(viaRegistry, "total");
-        dftu_series* dk = dftu_dataframe_column(viaDirect, "k");
-        dftu_series* dt = dftu_dataframe_column(viaDirect, "total");
-        Series ck = viaCpp.column("k");
-        Series ct = viaCpp.column("total");
+        dftu_series* rk = dftu_dataframe_column(via_registry, "k");
+        dftu_series* rt = dftu_dataframe_column(via_registry, "total");
+        dftu_series* dk = dftu_dataframe_column(via_direct, "k");
+        dftu_series* dt = dftu_dataframe_column(via_direct, "total");
+        Series ck = via_cpp.column("k");
+        Series ct = via_cpp.column("total");
         for (std::int64_t i = 0; i < dftu_series_length(rk); ++i) {
             CHECK(i64_of(rk)[i] == i64_of(dk)[i]);
             CHECK(i64_of(rt)[i] == i64_of(dt)[i]);
@@ -497,8 +497,8 @@ TEST_SUITE("op_registry") {
         dftu_series_free(rt);
         dftu_series_free(dk);
         dftu_series_free(dt);
-        dftu_dataframe_free(viaRegistry);
-        dftu_dataframe_free(viaDirect);
+        dftu_dataframe_free(via_registry);
+        dftu_dataframe_free(via_direct);
         dftu_dataframe_free(df);
     }
 
@@ -515,33 +515,33 @@ TEST_SUITE("op_registry") {
         REQUIRE(is_dup.has_value());
         CHECK(is_dup->sig().kind() == OpKind::Series);
         CHECK(is_dup->sig().arity() == 0);
-        OpArgs dupArg;
-        dupArg.frame(0, df);
+        OpArgs dup_arg;
+        dup_arg.frame(0, df);
         dftu_series* dup = dftu_op_run(dftu_op_find("dftu.frame.is_duplicated"),
-                                       nullptr, 0, dupArg);
-        dftu_series* dupDirect = dftu_dataframe_is_duplicated(df);
+                                       nullptr, 0, dup_arg);
+        dftu_series* dup_direct = dftu_dataframe_is_duplicated(df);
         REQUIRE(dup != nullptr);
-        REQUIRE(dupDirect != nullptr);
+        REQUIRE(dup_direct != nullptr);
         for (std::int64_t i = 0; i < dftu_series_length(dup); ++i)
-            CHECK(bit_of(dup, i) == bit_of(dupDirect, i));
+            CHECK(bit_of(dup, i) == bit_of(dup_direct, i));
         dftu_series_free(dup);
-        dftu_series_free(dupDirect);
+        dftu_series_free(dup_direct);
 
         auto is_uniq = find_op("dftu.frame.is_unique");
         REQUIRE(is_uniq.has_value());
         CHECK(is_uniq->sig().kind() == OpKind::Series);
         CHECK(is_uniq->sig().arity() == 0);
-        OpArgs uniqArg;
-        uniqArg.frame(0, df);
+        OpArgs uniq_arg;
+        uniq_arg.frame(0, df);
         dftu_series* uniq = dftu_op_run(dftu_op_find("dftu.frame.is_unique"),
-                                        nullptr, 0, uniqArg);
-        dftu_series* uniqDirect = dftu_dataframe_is_unique(df);
+                                        nullptr, 0, uniq_arg);
+        dftu_series* uniq_direct = dftu_dataframe_is_unique(df);
         REQUIRE(uniq != nullptr);
-        REQUIRE(uniqDirect != nullptr);
+        REQUIRE(uniq_direct != nullptr);
         for (std::int64_t i = 0; i < dftu_series_length(uniq); ++i)
-            CHECK(bit_of(uniq, i) == bit_of(uniqDirect, i));
+            CHECK(bit_of(uniq, i) == bit_of(uniq_direct, i));
         dftu_series_free(uniq);
-        dftu_series_free(uniqDirect);
+        dftu_series_free(uniq_direct);
 
         auto mask = find_op("dftu.frame.mask");
         REQUIRE(mask.has_value());
@@ -549,17 +549,17 @@ TEST_SUITE("op_registry") {
         CHECK(mask->sig().arity() == 0);
         dftu_duql* q = dftu_duql_parse("a > 1");
         REQUIRE(q != nullptr);
-        OpArgs maskArg;
-        maskArg.frame(0, df).duql(1, q);
+        OpArgs mask_arg;
+        mask_arg.frame(0, df).duql(1, q);
         dftu_series* m =
-            dftu_op_run(dftu_op_find("dftu.frame.mask"), nullptr, 0, maskArg);
-        dftu_series* mDirect = dftu_dataframe_mask_frame(df, q);
+            dftu_op_run(dftu_op_find("dftu.frame.mask"), nullptr, 0, mask_arg);
+        dftu_series* m_direct = dftu_dataframe_mask_frame(df, q);
         REQUIRE(m != nullptr);
-        REQUIRE(mDirect != nullptr);
+        REQUIRE(m_direct != nullptr);
         for (std::int64_t i = 0; i < dftu_series_length(m); ++i)
-            CHECK(bit_of(m, i) == bit_of(mDirect, i));
+            CHECK(bit_of(m, i) == bit_of(m_direct, i));
         dftu_series_free(m);
-        dftu_series_free(mDirect);
+        dftu_series_free(m_direct);
         dftu_duql_free(q);
 
         dftu_dataframe_free(df);

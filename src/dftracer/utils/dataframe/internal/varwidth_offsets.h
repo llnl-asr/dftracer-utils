@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_DATAFRAME_INTERNAL_VARWIDTH_OFFSETS_H
 #define DFTRACER_UTILS_DATAFRAME_INTERNAL_VARWIDTH_OFFSETS_H
 
@@ -15,11 +16,11 @@ namespace dftracer::utils::dataframe {
 
 /// The offsets buffer of `c`, read at width `Off`.
 template <class Off>
-inline const std::shared_ptr<Buffer>& offsets_of(const dftu_series& c) {
+inline const BufferView& offsets_of(const dftu_series& c) {
     return c.offsets;
 }
 template <class Off>
-inline std::shared_ptr<Buffer>& offsets_of(dftu_series& c) {
+inline BufferView& offsets_of(dftu_series& c) {
     return c.offsets;
 }
 

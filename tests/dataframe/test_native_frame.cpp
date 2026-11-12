@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // A DataFrame round-trips through the native byte format, with or without
 // Arrow, and foreign bytes read as no frame.
 
@@ -6,17 +7,21 @@
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/frame_native.h>
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dstd/fmt.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <cstdint>
-#include <string>
-#include <vector>
+
+using namespace dftracer::utils;
 
 using namespace dftracer::utils::dataframe;
 
 namespace {
 
-Series strings(std::vector<std::string> v) { return Series::strings(v); }
+Series strings(dstd::Vector<dstd::String> v) { return Series::strings(v); }
 
 DataFrame sample() {
     DataFrame f;
@@ -49,20 +54,22 @@ DataFrame sample() {
     f.columns.push_back(
         Series::list({0, 2, 2, 3, 6}, strings({"a", "b", "c", "d", "e", "f"})));
 
-    std::vector<Series> fields;
+    dstd::Vector<Series> fields;
     fields.push_back(Series::flat_i64(ints, 4));
     fields.push_back(strings({"w", "x", "y", "z"}));
     f.columns.push_back(Series::structs({"n", "name"}, std::move(fields)));
 
     // List<Struct{n}> with a list offset that does not start at zero.
-    std::vector<Series> inner;
+    dstd::Vector<Series> inner;
     inner.push_back(Series::flat_i64(ints, 4));
     f.columns.push_back(Series::list({0, 1, 3, 3, 4},
                                      Series::structs({"n"}, std::move(inner))));
     return f;
 }
 
-std::string bytes_of(const DataFrame& f) { return frame_to_native(f); }
+dstd::String bytes_of(const DataFrame& f) {
+    return dftu_utils_test::ok(frame_to_native(f));
+}
 
 }  // namespace
 
@@ -73,7 +80,7 @@ TEST_SUITE("native frame") {
             CAPTURE(f.names[c]);
             REQUIRE(f.columns[c].valid());
         }
-        const std::string bytes = bytes_of(f);
+        const dstd::String bytes = bytes_of(f);
         const auto back = frame_from_native(bytes);
         REQUIRE(back);
         CHECK(back->names == f.names);
@@ -130,13 +137,13 @@ TEST_SUITE("native frame") {
     }
 
     TEST_CASE("bytes of another format are no frame") {
-        const std::string ipc("\xff\xff\xff\xff\x10\x00\x00\x00", 8);
+        const dstd::String ipc("\xff\xff\xff\xff\x10\x00\x00\x00", 8);
         CHECK_FALSE(frame_from_native(ipc));
         CHECK_FALSE(frame_from_native(""));
-        const std::string good = bytes_of(sample());
+        const dstd::String good = bytes_of(sample());
         CHECK_FALSE(frame_from_native(good.substr(0, good.size() / 2)));
-        CHECK_FALSE(frame_from_native(good + "x"));
-        std::string other_version = good;
+        CHECK_FALSE(frame_from_native(dstd::fmt<"{}x">(good)));
+        dstd::String other_version = good;
         other_version[4] = 9;
         CHECK_FALSE(frame_from_native(other_version));
     }
@@ -146,7 +153,7 @@ TEST_SUITE("native frame") {
         f.names = {"m", "fl"};
         Series m =
             Series::list({0, 1, 1}, Series::structs({"key", "value"}, [] {
-                             std::vector<Series> c;
+                             dstd::Vector<Series> c;
                              c.push_back(strings({"a"}));
                              const std::int64_t v[] = {7};
                              c.push_back(Series::flat_i64(v, 1));
@@ -157,9 +164,10 @@ TEST_SUITE("native frame") {
         Series fl = Series::list({0, 2, 4}, strings({"a", "b", "c", "d"}));
         fl.handle()->type = TypeId::FixedSizeList;
         fl.handle()->set_fixed_size(2);
-        fl.handle()->offsets.reset();
+        fl.handle()->offsets = {};
         f.columns.push_back(std::move(fl));
-        const auto back = frame_from_native(frame_to_native(f));
+        const auto back =
+            frame_from_native(dftu_utils_test::ok(frame_to_native(f)));
         REQUIRE(back);
         CHECK(back->columns[0].type() == TypeId::Map);
         CHECK(back->columns[1].type() == TypeId::FixedSizeList);
@@ -173,11 +181,12 @@ TEST_SUITE("native frame") {
         f.columns.push_back(strings({"1", "\"1\"", "1", "\"1\""}).as_json());
         const std::int64_t v[] = {1, 2, 3, 4};
         f.columns.push_back(Series::flat_i64(v, 4));
-        const DataFrame g =
-            f.group_by(std::string("k"), {GroupAgg{Agg::Sum, "v", "s"}});
+        const DataFrame g = dftu_utils_test::ok(
+            f.group_by(dstd::String("k"), {GroupAgg{Agg::Sum, "v", "s"}}));
         REQUIRE(g.num_rows() == 2);
         CHECK(g.column("k").is_json());
-        const auto back = frame_from_native(frame_to_native(g));
+        const auto back =
+            frame_from_native(dftu_utils_test::ok(frame_to_native(g)));
         REQUIRE(back);
         CHECK(back->column("k").is_json());
     }

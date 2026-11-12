@@ -1,17 +1,40 @@
-#include <ankerl/unordered_dense.h>
-#include <dftracer/utils/core/common/memory_budget.h>
-#include <dftracer/utils/core/common/string_intern.h>
-#include <dftracer/utils/core/runtime.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
-#include <dftracer/utils/index/build/resolve_and_build.h>
-#include <dftracer/utils/index/cache/mv_store.h>
-#include <dftracer/utils/index/record_schema.h>
-#include <dftracer/utils/index/source.h>
-#include <dftracer/utils/index/store/index_database.h>
-#include <dftracer/utils/index/store/internal/helpers.h>
+// SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/common/input_stat.h>
+#include <dftracer/utils/coro/named.h>
+#include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dataframe/internal/lazy_plan.h>
+#include <dftracer/utils/dstd/fatal.h>
+#include <dftracer/utils/dstd/function.h>
+#include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/shutdown.h>
+#include <dftracer/utils/dstd/singleton.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/fileio/file_helpers.h>
 #include <dftracer/utils/json/parser.h>
+#include <dftracer/utils/memory/budget.h>
+#include <dftracer/utils/runtime/fs/fs.h>
+#include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/trace/index/build/resolve_and_build.h>
+#include <dftracer/utils/trace/index/cache/mv_store.h>
+#include <dftracer/utils/trace/index/extensions/catalog_fold.h>
+#include <dftracer/utils/trace/index/plan/prune.h>
+#include <dftracer/utils/trace/index/record_schema.h>
+#include <dftracer/utils/trace/index/source.h>
+#include <dftracer/utils/trace/index/store/root_layout.h>
+#include <dftracer/utils/trace/index/tables.h>
 #include <dftracer/utils/trace/internal/utils.h>
-#include <dftracer/utils/trace/time_metric.h>
+#include <dftracer/utils/trace/time_metric_event.h>
 #include <dftracer/utils/trace/views/containment_fold.h>
 #include <dftracer/utils/trace/views/native_row_fold.h>
 #include <dftracer/utils/trace/views/view_agg_engine.h>
@@ -21,19 +44,12 @@
 #include <dftracer/utils/trace/views/view_plan_ops.h>
 #include <dftracer/utils/trace/views/view_scan.h>
 #include <dftracer/utils/trace/views/view_source.h>
-#include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
 
 #include <algorithm>
 #include <cstdint>
-#include <functional>
 #include <limits>
-#include <map>
-#include <memory>
 #include <mutex>
-#include <optional>
-#include <string>
 #include <tuple>
-#include <unordered_set>
 #include <utility>
 
 namespace dftracer::utils::trace::views::detail {
@@ -45,14 +61,43 @@ ExportStats counted(const ViewPlan& plan, ExportStats st) {
 
 }  // namespace dftracer::utils::trace::views::detail
 
+namespace dftracer::utils::trace::views::detail {
+
+bool has_pin(const ViewPlan& plan) {
+    for (const auto& f : plan.files)
+        if (f.pinned_c_end > 0) return true;
+    return false;
+}
+
+dstd::Result<trace::index::Snapshot> snapshot_of(const ViewPlan& plan,
+                                                 dstd::StringView index_path) {
+    for (const auto& [path, snapshot] : plan.index_snapshots)
+        if (path == index_path) return *snapshot;
+    return trace::index::plan::open_snapshot(index_path);
+}
+
+dstd::Result<bool> is_past_pin(const ViewPlan& plan) {
+    for (const auto& f : plan.files) {
+        if (f.pinned_c_end == 0) continue;
+        if (f.pinned_uc_begin > 0) return true;
+        const auto snapshot = snapshot_of(plan, f.index_path);
+        if (!snapshot) return snapshot.error();
+        const auto file = snapshot->file(fileio::get_logical_path(f.file_path));
+        if (file && file->stat().size != f.pinned_c_end) return true;
+    }
+    return false;
+}
+
+}  // namespace dftracer::utils::trace::views::detail
+
 namespace dftracer::utils::trace::views::detail::scan {
 
 namespace {
 // A mutable copy of a plan (or a fresh one), ready for one op to mutate.
-std::shared_ptr<detail::ViewPlan> clone(
-    const std::shared_ptr<const detail::ViewPlan>& base) {
-    return base ? std::make_shared<detail::ViewPlan>(*base)
-                : std::make_shared<detail::ViewPlan>();
+dstd::SharedPtr<detail::ViewPlan> clone(
+    const dstd::SharedPtr<const detail::ViewPlan>& base) {
+    return base ? dstd::make_shared<detail::ViewPlan>(*base)
+                : dstd::make_shared<detail::ViewPlan>();
 }
 
 // time_bucket() adds the bucket as an implicit leading group key, so listing
@@ -70,12 +115,13 @@ void strip_redundant_time_bucket(detail::ViewPlan& p) {
 }
 // Whether `schema`'s source indexes row set `rowset` with columns `key` and
 // `value`.
-bool has_rowset(const dftracer::utils::index::RecordSchema& schema,
-                const std::string& rowset, const std::string& key,
-                const std::string& value) {
-    for (const auto& r : dftracer::utils::index::indexed_rowsets(schema)) {
+bool has_rowset(const dftracer::utils::trace::index::RecordSchema& schema,
+                dstd::StringView rowset, dstd::StringView key,
+                dstd::StringView value) {
+    for (const auto& r :
+         dftracer::utils::trace::index::indexed_rowsets(schema)) {
         if (r.name != rowset) continue;
-        auto has = [&](const std::string& c) {
+        auto has = [&](dstd::StringView c) {
             return std::any_of(r.columns.begin(), r.columns.end(),
                                [&](const auto& col) { return col.first == c; });
         };
@@ -89,12 +135,14 @@ bool has_rowset(const dftracer::utils::index::RecordSchema& schema,
 // like-named field), file and host keys on the `fhash` and `hhash` fields,
 // rank on the entity role, and the keys only dftracer events have are
 // rejected. A key relabeled through a row set needs the source to define it.
-void check_keys(const detail::ViewPlan& p, std::vector<GroupKey>& keys) {
-    if (!detail::plan_by_path(p)) return;
+dstd::Result<void> check_keys(const detail::ViewPlan& p,
+                              dstd::Vector<GroupKey>& keys) {
+    if (!detail::plan_by_path(p)) return {};
     const auto& schema = detail::plan_record_schema(p);
     const auto& roles = schema.roles;
-    auto role = [](const std::string& path, const char* field) {
-        return path.empty() ? std::string(field) : path;
+    auto role = [](const dstd::String& path, const char* field) {
+        return path.empty() ? dstd::String(field)
+                            : dstd::String(path.data(), path.size());
     };
     for (auto& k : keys) {
         bool field = true;
@@ -134,35 +182,80 @@ void check_keys(const detail::ViewPlan& p, std::vector<GroupKey>& keys) {
                 break;
             case GroupKey::Kind::IoCat:
             case GroupKey::Kind::AccPat:
-                throw DFTUtilsException::cat(
-                    ErrorCode::INVALID_ARGUMENT, "group key ",
-                    detail::group_col_name(k),
-                    " needs dftracer events; schema ", schema.id,
-                    " records have paths only");
+                return common::make_error<
+                    "group key {} needs dftracer events; schema {} records "
+                    "have paths only">(common::ErrorCode::InvalidArgument,
+                                       detail::group_col_name(k), schema.id);
         }
         if (auto c = detail::resolver_column(k.kind);
             c && !has_rowset(schema, c->rowset, c->key, c->value))
-            throw DFTUtilsException::cat(
-                ErrorCode::INVALID_ARGUMENT, "group key ",
-                detail::group_col_name(k), " needs row set ", c->rowset, " (",
-                c->key, ", ", c->value, "); schema ", schema.id,
-                " defines none");
+            return common::make_error<
+                "group key {} needs row set {} ({}, {}); schema {} defines "
+                "none">(common::ErrorCode::InvalidArgument,
+                        detail::group_col_name(k), c->rowset, c->key, c->value,
+                        schema.id);
         if (field) k.kind = GroupKey::Kind::Field;
     }
+    return {};
+}
+
+// `plan` with `error`, which every terminal on it returns.
+ScanPlan failed_plan(const ScanPlan& plan, dstd::Error error) {
+    auto next = clone(plan);
+    if (!next->error)
+        next->error = dstd::make_shared<const dstd::Error>(std::move(error));
+    return next;
 }
 
 }  // namespace
 
 namespace {
 
+using Snapshots =
+    dstd::HashMap<dstd::String, dftracer::utils::trace::index::Snapshot>;
+
+struct FileIndex {
+    const dftracer::utils::trace::index::Snapshot* snapshot = nullptr;
+    dstd::Optional<dftracer::utils::trace::index::FileRef> file;
+};
+
+// One snapshot per index root. A root with no store opens empty and holds no
+// file, so the file is read whole. A damaged index is an error.
+dstd::Result<FileIndex> find_file_index(const ViewPlan* plan,
+                                        Snapshots& snapshots,
+                                        const ViewFile& f) {
+    auto at = snapshots.find(f.index_path);
+    if (at == snapshots.end()) {
+        auto opened = plan ? snapshot_of(*plan, f.index_path)
+                           : trace::index::plan::open_snapshot(f.index_path);
+        if (!opened) return opened.error();
+        at = snapshots.emplace(f.index_path, std::move(*opened)).first;
+    }
+    return FileIndex{&at->second,
+                     at->second.file(fileio::get_logical_path(f.file_path))};
+}
+
 struct ConfirmedFiles {
     std::mutex mu;
-    std::unordered_set<std::string> keys;
+    dstd::Optional<dstd::HashSet<dstd::String>> slot;
+
+    dstd::HashSet<dstd::String>& keys() {
+        if (!slot) slot.emplace();
+        return *slot;
+    }
 };
 
 ConfirmedFiles& confirmed_files() {
-    static ConfirmedFiles c;
-    return c;
+    ConfirmedFiles& files = dstd::Singleton<ConfirmedFiles>::get();
+    [[maybe_unused]] static const bool hooked = [] {
+        dstd::add_shutdown_hook(dstd::ShutdownStage::FreeCaches, []() noexcept {
+            ConfirmedFiles& confirmed = dstd::Singleton<ConfirmedFiles>::get();
+            const std::lock_guard<std::mutex> lock(confirmed.mu);
+            confirmed.slot.reset();
+        });
+        return true;
+    }();
+    return files;
 }
 
 // Brings every index the files read fresh through the resolver, which clears
@@ -172,140 +265,158 @@ ConfirmedFiles& confirmed_files() {
 // that does not exist yet holds no evidence, so its first build is left to
 // the first read. Concurrent callers may both rebuild one file; the index
 // writes serialize.
-void ensure_indexes_fresh(const std::vector<ViewFile>& files) {
-    namespace ib = dftracer::utils::index::build;
-    namespace st = dftracer::utils::index::store;
+dstd::Result<void> ensure_indexes_fresh(const dstd::Vector<ViewFile>& files) {
     struct Pending {
-        std::string key;
-        std::string file;
+        dstd::String key;
+        dstd::String file;
     };
     struct Group {
-        std::string root;
+        dstd::String root;
         std::size_t checkpoint_size;
-        std::string schema;
+        dstd::String schema;
         bool operator<(const Group& o) const {
             return std::tie(root, checkpoint_size, schema) <
                    std::tie(o.root, o.checkpoint_size, o.schema);
         }
     };
-    std::map<Group, std::vector<Pending>> groups;
-    std::vector<std::string> confirmed;
+    dstd::Map<Group, dstd::Vector<Pending>> groups;
+    dstd::Vector<dstd::String> confirmed;
     {
-        std::map<std::string, std::optional<st::IndexDatabase>> dbs;
+        Snapshots snapshots;
+        dstd::HashSet<dstd::String> missing_roots;
         std::lock_guard<std::mutex> lock(confirmed_files().mu);
         for (const auto& f : files) {
-            if (f.index_path.empty()) continue;
-            std::error_code ec;
-            const auto mtime = fs::last_write_time(f.file_path, ec);
-            if (ec) continue;
-            const auto size = fs::file_size(f.file_path, ec);
-            if (ec) continue;
-            const std::string logical =
-                st::internal::get_logical_path(f.file_path);
-            std::string key = logical;
+            if (f.index_path.empty() || f.pinned_c_end > 0) continue;
+            dftracer::utils::common::InputFileStat file_stat;
+            if (!dftracer::utils::common::stat_input(f.file_path, file_stat))
+                continue;
+            const dstd::String logical = fileio::get_logical_path(f.file_path);
+            dstd::String key(logical.data(), logical.size());
             key += '\n';
-            key += std::to_string(
-                static_cast<long long>(mtime.time_since_epoch().count()));
+            key += dstd::to_string(static_cast<long long>(file_stat.mtime_ns));
             key += '\n';
-            key += std::to_string(size);
+            key += dstd::to_string(file_stat.size);
             key += '\n';
             key += f.index_path;
             key += '\n';
-            key += std::to_string(f.checkpoint_size);
-            if (confirmed_files().keys.contains(key)) continue;
+            key += dstd::to_string(f.checkpoint_size);
+            if (confirmed_files().keys().contains(key)) continue;
 
-            auto [it, opened] = dbs.try_emplace(f.index_path);
-            if (opened && fs::exists(f.index_path)) {
-                try {
-                    it->second.emplace(f.index_path,
-                                       st::IndexOpenMode::ReadOnly);
-                } catch (const DFTUtilsException&) {
-                }
+            if (missing_roots.contains(dstd::StringView(f.index_path)))
+                continue;
+            if (!snapshots.contains(f.index_path) &&
+                !common::input_exists(trace::index::store_of(f.index_path))) {
+                missing_roots.insert(dstd::String(f.index_path));
+                continue;
             }
-            if (!it->second) continue;
-            const st::IndexDatabase& db = *it->second;
-            const int id = db.get_file_info_id(logical);
-            std::string schema;
-            if (id >= 0) {
-                const bool same_ckpt =
-                    f.checkpoint_size == 0 || db.get_checkpoint_size(id) == 0 ||
-                    db.get_checkpoint_size(id) == f.checkpoint_size;
-                if (same_ckpt && db.check_freshness(f.file_path) ==
-                                     st::IndexDatabase::Freshness::Fresh) {
+            const auto opened = find_file_index(nullptr, snapshots, f);
+            if (!opened) continue;
+            const FileIndex& found = *opened;
+            dstd::String schema;
+            if (found.file) {
+                const auto described =
+                    trace::index::file_metadata(*found.snapshot, *found.file);
+                if (!described) return described.error();
+                const auto& meta = *described;
+                const std::uint64_t recorded = meta ? meta->checkpoint_size : 0;
+                const bool same_ckpt = f.checkpoint_size == 0 ||
+                                       recorded == 0 ||
+                                       recorded == f.checkpoint_size;
+                if (same_ckpt &&
+                    found.snapshot->freshness(
+                        logical,
+                        trace::index::SourceStat{
+                            static_cast<std::uint64_t>(file_stat.mtime),
+                            file_stat.size}) ==
+                        trace::index::Freshness::Current) {
                     confirmed.push_back(std::move(key));
                     continue;
                 }
-                if (const auto recorded = db.file_schema(id)) {
-                    dftracer::utils::index::get_schema(*recorded);
-                    schema = *recorded;
+                const auto named =
+                    trace::index::schema(*found.snapshot, *found.file);
+                if (!named) return named.error();
+                if (const auto& recorded_schema = *named) {
+                    const auto registered =
+                        trace::index::get_schema(*recorded_schema);
+                    if (!registered) return registered.error();
+                    schema.assign(recorded_schema->data(),
+                                  recorded_schema->size());
                 }
             }
             groups[{f.index_path, f.checkpoint_size, std::move(schema)}]
                 .push_back({std::move(key), f.file_path});
         }
-        for (auto& k : confirmed) confirmed_files().keys.insert(std::move(k));
+        for (auto& k : confirmed) confirmed_files().keys().insert(std::move(k));
     }
     for (auto& [group, pending] : groups) {
-        ib::ResolveAndBuildInput in;
+        trace::index::build::ResolveAndBuildInput in;
         in.index_dir = group.root;
         in.checkpoint_size = group.checkpoint_size;
         in.schema = group.schema;
         in.require_checkpoints = true;
-        for (const auto& p : pending) in.files.push_back(p.file);
-        ib::ResolverResult result;
-        default_runtime().run_blocking(
+        for (const auto& p : pending)
+            in.files.emplace_back(dstd::StringView(p.file));
+        auto built = default_runtime().block_on(coro::named(
             "view_index_freshness",
-            [&](CoroScope& scope) -> coro::CoroTask<void> {
-                result =
-                    co_await ib::resolve_and_build_index(&scope, std::move(in));
-            });
+            trace::index::build::resolve_and_build_index(std::move(in))));
+        if (!built) return built.error();
+        const trace::index::build::ResolverResult& result = *built;
         if (!result.failures.empty())
-            throw DFTUtilsException::cat(ErrorCode::IO, "index of ",
-                                         result.failures.front().file_path,
-                                         " is stale and its rebuild failed: ",
-                                         result.failures.front().message);
+            return common::make_error<
+                "index of {} is stale and its rebuild failed: {}">(
+                common::ErrorCode::Io, result.failures.front().file_path,
+                result.failures.front().message);
         std::lock_guard<std::mutex> lock(confirmed_files().mu);
-        for (auto& p : pending) confirmed_files().keys.insert(std::move(p.key));
+        for (auto& p : pending)
+            confirmed_files().keys().insert(std::move(p.key));
     }
+    return {};
 }
 
 }  // namespace
 
-ScanPlan from_files(std::vector<ViewFile> files) {
+ScanPlan from_files(dstd::Vector<ViewFile> files) {
     for (auto& f : files)
         if (f.index_path.empty())
             f.index_path = internal::determine_index_path(f.file_path, "");
-    ensure_indexes_fresh(files);
-    auto plan = std::make_shared<detail::ViewPlan>();
+    auto fresh = ensure_indexes_fresh(files);
+    auto plan = dstd::make_shared<detail::ViewPlan>();
     plan->files = std::move(files);
+    if (!fresh) return failed_plan(plan, fresh.error());
     return plan;
 }
 
-ScanPlan from_file(std::string file_path, std::string index_path) {
-    std::vector<ViewFile> files;
+ScanPlan from_file(dstd::String file_path, dstd::String index_path) {
+    dstd::Vector<ViewFile> files;
     files.push_back(ViewFile{std::move(file_path), std::move(index_path)});
     return from_files(std::move(files));
 }
 
-coro::CoroTask<ScanPlan> from_directory(std::string dir,
-                                        std::string index_path) {
-    utilities::filesystem::PatternDirectoryScannerUtility scanner;
-    utilities::filesystem::PatternDirectoryScannerUtilityInput input(
-        std::move(dir), utilities::filesystem::trace_file_patterns(),
-        /*recursive=*/true,
-        /*populate_size=*/false);
+coro::CoroTask<ScanPlan> from_directory(dstd::String dir,
+                                        dstd::String index_path) {
+    runtime::fs::FindOptions options;
+    options.patterns =
+        runtime::fs::names_of(common::constants::indexer::INPUT_FILE_PATTERNS);
+    options.skip_dirs =
+        runtime::fs::names_of(common::constants::indexer::SCAN_SKIP_DIRS);
+    options.with_stat = false;
+    options.skip_unreadable = true;
 
-    std::vector<utilities::filesystem::FileEntry> entries;
-    co_await run_coro_scope([&](CoroScope& scope) -> coro::CoroTask<void> {
-        entries = co_await scanner(scope, input);
+    auto scoped = coro::with_scope([&](coro::Scope& scope) {
+        return runtime::fs::find_all(scope, dstd::PathView(dir), options);
     });
+    auto found = co_await std::move(scoped);
+    if (!found)
+        co_return failed_plan(dstd::make_shared<detail::ViewPlan>(),
+                              found.error());
 
-    std::vector<ViewFile> files;
-    files.reserve(entries.size());
-    for (auto& e : entries) {
-        std::string fp = e.path.string();
-        files.push_back(
-            ViewFile{fp, internal::determine_index_path(fp, index_path)});
+    dstd::Vector<ViewFile> files;
+    files.reserve(found->size());
+    for (auto& e : *found) {
+        dstd::String fp(e.path.str());
+        const dstd::String index =
+            internal::determine_index_path(fp, index_path);
+        files.push_back(ViewFile{fp, dstd::String(index.data(), index.size())});
     }
     std::sort(files.begin(), files.end(),
               [](const ViewFile& a, const ViewFile& b) {
@@ -314,9 +425,10 @@ coro::CoroTask<ScanPlan> from_directory(std::string dir,
     co_return from_files(std::move(files));
 }
 
-std::vector<TraceConfig> config(const ScanPlan& plan_) {
-    std::vector<TraceConfig> out;
-    for (const auto& f : plan_->files) {
+dstd::Result<dstd::Vector<TraceConfig>> config(const ScanPlan& plan) {
+    if (plan->error) return *plan->error;
+    dstd::Vector<TraceConfig> out;
+    for (const auto& f : plan->files) {
         auto tail = read_trace_config(f.file_path);
         if (!tail.empty()) {
             for (auto& c : tail) out.push_back(std::move(c));
@@ -325,19 +437,22 @@ std::vector<TraceConfig> config(const ScanPlan& plan_) {
         if (f.index_path.empty()) continue;
 
         struct Sink : ExportSink {
-            std::string buf;
-            void write(std::string_view d) override { buf.append(d); }
+            dstd::String buf;
+            void write(dstd::StringView d) override { buf.append(d); }
         } sink;
-        export_json(filter(from_file(f.file_path, f.index_path),
-                           duql::parse_or_throw(R"(name == "end")")),
-                    sink)
-            .get();
+        auto end_query = duql::Query::from_string(R"(name == "end")");
+        if (!end_query) dstd::fatal("the end-event query does not parse");
+        auto exported = export_json(filter(from_file(f.file_path, f.index_path),
+                                           std::move(*end_query)),
+                                    sink)
+                            .get();
+        if (!exported) return exported.error();
         std::size_t pos = 0;
         while (pos < sink.buf.size()) {
             std::size_t nl = sink.buf.find('\n', pos);
-            if (nl == std::string::npos) nl = sink.buf.size();
+            if (nl == dstd::String::npos) nl = sink.buf.size();
             if (auto c = parse_end_event(
-                    std::string_view(sink.buf).substr(pos, nl - pos)))
+                    dstd::StringView(sink.buf).substr(pos, nl - pos)))
                 out.push_back(std::move(*c));
             pos = nl + 1;
         }
@@ -347,79 +462,113 @@ std::vector<TraceConfig> config(const ScanPlan& plan_) {
 
 namespace {
 
-using ColTypeMap =
-    dftracer::utils::StringViewMap<dftracer::utils::index::store::ColumnType>;
+using ColTypeMap = dftracer::utils::dstd::StringViewMap<
+    dftracer::utils::trace::index::store::ColumnType>;
 
 void fold_col_map(ColTypeMap& into, const ColTypeMap& from) {
     for (const auto& [name, t] : from) {
         auto [pos, inserted] = into.emplace(name, t);
         if (!inserted)
-            pos->second = dftracer::utils::index::store::merge_column_type(
-                pos->second, t);
+            pos->second =
+                dftracer::utils::trace::index::store::merge_column_type(
+                    pos->second, t);
     }
 }
 
 // Path-decoded files: the union of each file's catalog paths as written.
-ColTypeMap harvest_path_types(const std::vector<ViewFile>& files) {
-    namespace st = dftracer::utils::index::store;
+dstd::Result<ColTypeMap> harvest_path_types(const ViewPlan& plan) {
     ColTypeMap merged;
-    ankerl::unordered_dense::map<std::string, std::optional<st::IndexDatabase>>
-        dbs;
-    for (const auto& f : files) {
+    Snapshots snapshots;
+    for (const auto& f : plan.files) {
         if (f.index_path.empty()) continue;
-        try {
-            auto [it, fresh] = dbs.try_emplace(f.index_path);
-            if (fresh)
-                it->second.emplace(f.index_path, st::IndexOpenMode::ReadOnly);
-            if (!it->second) continue;
-            const int fid = it->second->get_file_info_id(
-                st::internal::get_logical_path(f.file_path));
-            if (fid < 0) continue;
-            ColTypeMap one;
-            for (auto& [path, t] : it->second->file_column_types(fid))
-                one.emplace(std::move(path), t);
-            fold_col_map(merged, one);
-        } catch (...) {
-            // A missing or unreadable index contributes nothing.
-        }
+        const auto found = find_file_index(&plan, snapshots, f);
+        if (!found) return found.error();
+        if (!found->file) continue;
+        auto types = dftracer::utils::trace::index::file_column_types(
+            *found->snapshot, *found->file);
+        if (!types) return types.error();
+        ColTypeMap one;
+        for (auto& [path, t] : *types)
+            one.emplace(dstd::String(path.data(), path.size()), t);
+        fold_col_map(merged, one);
     }
     return merged;
 }
 
-// Union the harvested column types across the view's distinct index roots,
-// reading each index's metadata in parallel. Seeds the base axis fields.
-ColTypeMap harvest_column_types(const std::vector<ViewFile>& files) {
-    // Distinct index roots (many files often share one index).
-    std::vector<std::string> roots;
+// Union the column types of the view's own files, reading each distinct index
+// root in parallel. An index root also holds files the view does not read, so
+// only the view's files contribute. Seeds the base axis fields.
+dstd::Result<ColTypeMap> harvest_column_types(const ViewPlan& plan) {
+    const dstd::Vector<ViewFile>& files = plan.files;
+    // Distinct index roots (many files often share one index), each with the
+    // logical paths of the view's files in it.
+    dstd::Vector<dstd::String> roots;
+    dstd::Vector<dstd::Vector<dstd::String>> root_files;
     for (const auto& f : files) {
         if (f.index_path.empty()) continue;
-        if (std::find(roots.begin(), roots.end(), f.index_path) == roots.end())
+        auto pos = std::find(roots.begin(), roots.end(), f.index_path);
+        if (pos == roots.end()) {
             roots.push_back(f.index_path);
+            root_files.emplace_back();
+            pos = roots.end() - 1;
+        }
+        root_files[static_cast<std::size_t>(pos - roots.begin())].push_back(
+            fileio::get_logical_path(f.file_path));
     }
 
     ColTypeMap merged;
     // Base axis fields are always present and not harvested as columns.
-    merged.emplace("pid", dftracer::utils::index::store::ColumnType::Int64);
-    merged.emplace("tid", dftracer::utils::index::store::ColumnType::Int64);
-    merged.emplace("ts", dftracer::utils::index::store::ColumnType::Int64);
-    merged.emplace("dur", dftracer::utils::index::store::ColumnType::Int64);
+    merged.emplace("pid",
+                   dftracer::utils::trace::index::store::ColumnType::Int64);
+    merged.emplace("tid",
+                   dftracer::utils::trace::index::store::ColumnType::Int64);
+    merged.emplace("ts",
+                   dftracer::utils::trace::index::store::ColumnType::Int64);
+    merged.emplace("dur",
+                   dftracer::utils::trace::index::store::ColumnType::Int64);
 
     if (!roots.empty()) {
         const auto n = static_cast<std::int64_t>(roots.size());
-        ColTypeMap harvested = default_runtime().parallel_reduce<ColTypeMap>(
+        std::mutex failure_mu;
+        dstd::Optional<dstd::Error> failure;
+        auto reduced = default_runtime().parallel_reduce<ColTypeMap>(
             n, 1, ColTypeMap{},
             [&](std::int64_t begin, std::int64_t end) {
                 ColTypeMap local;
+                auto fail = [&](dstd::Error error) {
+                    std::lock_guard<std::mutex> lock(failure_mu);
+                    if (!failure) failure = std::move(error);
+                };
                 for (std::int64_t i = begin; i < end; ++i) {
-                    try {
-                        dftracer::utils::index::store::IndexDatabase db(
-                            roots[static_cast<std::size_t>(i)],
-                            dftracer::utils::index::store::IndexOpenMode::
-                                ReadOnly);
-                        for (auto& [name, t] : db.query_all_column_types())
-                            local.emplace(std::move(name), t);
-                    } catch (...) {
-                        // A missing or unreadable index contributes nothing.
+                    const auto snapshot =
+                        snapshot_of(plan, roots[static_cast<std::size_t>(i)]);
+                    if (!snapshot) {
+                        fail(snapshot.error());
+                        return local;
+                    }
+                    for (const dstd::String& logical :
+                         root_files[static_cast<std::size_t>(i)]) {
+                        const auto file = snapshot->file(logical);
+                        if (!file) continue;
+                        auto types =
+                            trace::index::file_column_types(*snapshot, *file);
+                        if (!types) {
+                            fail(types.error());
+                            return local;
+                        }
+                        ColTypeMap one;
+                        for (auto& [path, t] : *types) {
+                            dstd::StringView name(path.data(), path.size());
+                            if (name.starts_with("args."))
+                                name.remove_prefix(5);
+                            auto [at, fresh] =
+                                one.emplace(dstd::String(name), t);
+                            if (!fresh)
+                                at->second =
+                                    trace::index::store::merge_column_type(
+                                        at->second, t);
+                        }
+                        fold_col_map(local, one);
                     }
                 }
                 return local;
@@ -428,31 +577,32 @@ ColTypeMap harvest_column_types(const std::vector<ViewFile>& files) {
                 fold_col_map(a, b);
                 return a;
             });
-        fold_col_map(merged, harvested);
+        if (failure) return *failure;
+        if (!reduced) return reduced.error();
+        fold_col_map(merged, *reduced);
     }
     return merged;
 }
 
 // Declared fields override the observed types of their paths and are columns
 // even before an index has seen them; an ISO-8601 time is its microseconds.
-void overlay_declared(ColTypeMap& m,
-                      const dftracer::utils::index::RecordSchema& schema) {
-    namespace ix = dftracer::utils::index;
-    using CT = ix::store::ColumnType;
+void overlay_declared(
+    ColTypeMap& m, const dftracer::utils::trace::index::RecordSchema& schema) {
+    using CT = trace::index::store::ColumnType;
     for (const auto& f : schema.fields) {
         CT t = CT::String;
         switch (f.type) {
-            case ix::FieldType::BOOL:
-            case ix::FieldType::INT:
+            case trace::index::FieldType::Bool:
+            case trace::index::FieldType::Int:
                 t = CT::Int64;
                 break;
-            case ix::FieldType::FLOAT:
+            case trace::index::FieldType::Float:
                 t = CT::Float64;
                 break;
-            case ix::FieldType::STRING:
-                t = f.role == ix::Role::TIME ? CT::Int64 : CT::String;
+            case trace::index::FieldType::String:
+                t = f.role == trace::index::Role::Time ? CT::Int64 : CT::String;
                 break;
-            case ix::FieldType::JSON:
+            case trace::index::FieldType::Json:
                 t = CT::Json;
                 break;
         }
@@ -460,47 +610,50 @@ void overlay_declared(ColTypeMap& m,
     }
 }
 
-ColTypeMap harvest_plan_types(const ScanPlan& plan_) {
-    if (!detail::plan_by_path(*plan_))
-        return harvest_column_types(plan_->files);
-    ColTypeMap m = harvest_path_types(plan_->files);
-    overlay_declared(m, detail::plan_record_schema(*plan_));
+dstd::Result<ColTypeMap> harvest_plan_types(const ScanPlan& plan) {
+    if (auto resolved = detail::resolve_record_schema(*plan); !resolved)
+        return resolved.error();
+    if (!detail::plan_by_path(*plan)) return harvest_column_types(*plan);
+    auto m = harvest_path_types(*plan);
+    if (!m) return m;
+    overlay_declared(*m, detail::plan_record_schema(*plan));
     return m;
 }
 
 }  // namespace
 
-std::vector<std::string> columns(const ScanPlan& plan_) {
-    ColTypeMap m = harvest_plan_types(plan_);
-    std::vector<std::string> out;
-    out.reserve(m.size());
-    for (auto& [name, t] : m) out.push_back(name);
+dstd::Result<dstd::Vector<dstd::String>> columns(const ScanPlan& plan) {
+    auto m = harvest_plan_types(plan);
+    if (!m) return m.error();
+    dstd::Vector<dstd::String> out;
+    out.reserve(m->size());
+    for (auto& [name, t] : *m) out.emplace_back(name);
     std::sort(out.begin(), out.end());
     return out;
 }
 
 namespace {
 
-const char* path_type_name(dftracer::utils::index::store::PathType t) {
-    using PT = dftracer::utils::index::store::PathType;
+const char* path_type_name(dftracer::utils::trace::index::store::PathType t) {
+    using PT = dftracer::utils::trace::index::store::PathType;
     switch (t) {
-        case PT::NULL_VALUE:
+        case PT::NullValue:
             return "null";
-        case PT::BOOL:
+        case PT::Bool:
             return "bool";
-        case PT::INT:
+        case PT::Int:
             return "int";
-        case PT::UINT:
+        case PT::Uint:
             return "uint";
-        case PT::DOUBLE:
+        case PT::Double:
             return "float";
-        case PT::STRING:
+        case PT::String:
             return "string";
-        case PT::MIXED:
+        case PT::Mixed:
             return "mixed";
-        case PT::OBJECT:
+        case PT::Object:
             return "object";
-        case PT::ARRAY:
+        case PT::Array:
             return "array";
     }
     return "mixed";
@@ -508,134 +661,153 @@ const char* path_type_name(dftracer::utils::index::store::PathType t) {
 
 }  // namespace
 
-std::optional<std::string> file_without_catalog(const ScanPlan& plan_) {
-    namespace st = dftracer::utils::index::store;
-    ankerl::unordered_dense::map<std::string, std::optional<st::IndexDatabase>>
-        dbs;
-    for (const auto& f : plan_->files) {
-        if (f.index_path.empty()) return f.file_path;
-        try {
-            auto [it, fresh] = dbs.try_emplace(f.index_path);
-            if (fresh)
-                it->second.emplace(f.index_path, st::IndexOpenMode::ReadOnly);
-            if (!it->second) return f.file_path;
-            const int fid = it->second->get_file_info_id(
-                st::internal::get_logical_path(f.file_path));
-            if (fid < 0 ||
-                !it->second->extension_state(fid, st::IndexExtension::CATALOG))
-                return f.file_path;
-        } catch (...) {
-            return f.file_path;
-        }
+dstd::Result<dstd::Optional<dstd::String>> file_without_catalog(
+    const ScanPlan& plan) {
+    Snapshots snapshots;
+    for (const auto& f : plan->files) {
+        if (f.index_path.empty())
+            return dstd::Optional<dstd::String>(f.file_path);
+        const auto found = find_file_index(plan.get(), snapshots, f);
+        if (!found) return found.error();
+        if (!found->file || !dftracer::utils::trace::index::extension_state(
+                                *found->snapshot, *found->file,
+                                trace::index::store::IndexExtension::Catalog))
+            return dstd::Optional<dstd::String>(f.file_path);
     }
-    return std::nullopt;
+    return dstd::Optional<dstd::String>();
 }
 
-void ensure_catalog(const ScanPlan& plan_) {
-    namespace st = dftracer::utils::index::store;
-    ankerl::unordered_dense::map<std::string, std::optional<st::IndexDatabase>>
-        dbs;
-    auto only = std::make_shared<detail::ViewPlan>();
-    for (const auto& f : plan_->files) {
-        if (f.index_path.empty()) continue;
-        bool missing = true;
-        try {
-            auto [it, fresh] = dbs.try_emplace(f.index_path);
-            if (fresh)
-                it->second.emplace(f.index_path, st::IndexOpenMode::ReadOnly);
-            if (it->second) {
-                const int fid = it->second->get_file_info_id(
-                    st::internal::get_logical_path(f.file_path));
-                missing = fid < 0 || !it->second->extension_current(
-                                         fid, st::IndexExtension::CATALOG);
-            }
-        } catch (...) {
-        }
-        if (missing) only->files.push_back(f);
-    }
-    dbs.clear();
-    if (only->files.empty()) return;
-    only->record_schema = plan_->record_schema;
+namespace {
+
+// The plan of a scan that reads only records and no ops of `plan`.
+dstd::SharedPtr<detail::ViewPlan> catalog_scan_plan(const ScanPlan& plan) {
+    auto only = dstd::make_shared<detail::ViewPlan>();
+    only->record_schema = plan->record_schema;
     only->all_records = true;
-    only->rollup_root = plan_->rollup_root;
-    only->views_root = plan_->views_root;
-    only->memory_budget = plan_->memory_budget;
-    only->cancelled = plan_->cancelled;
-    dftracer::utils::StringIntern intern;
-    default_runtime().run_blocking(
-        "view_ensure_catalog", [&](CoroScope&) -> coro::CoroTask<void> {
-            co_await detail::run_folds(*only, {}, intern, nullptr, nullptr);
-        });
+    only->rollup_root = plan->rollup_root;
+    only->views_root = plan->views_root;
+    only->memory_budget = plan->memory_budget;
+    only->cancelled = plan->cancelled;
+    return only;
 }
 
-std::vector<SchemaLeaf> schema_tree(const ScanPlan& plan_) {
-    ensure_catalog(plan_);
-    return catalog_tree(plan_);
+bool is_file_past_pin(const ViewFile& f, const trace::index::FileRef& file) {
+    return f.pinned_c_end > 0 &&
+           (f.pinned_uc_begin > 0 || file.stat().size != f.pinned_c_end);
 }
 
-std::vector<SchemaLeaf> catalog_tree(const ScanPlan& plan_) {
-    namespace st = dftracer::utils::index::store;
-    std::map<std::string, st::PathStat> merged;
-    ankerl::unordered_dense::map<std::string, std::optional<st::IndexDatabase>>
-        dbs;
-    for (const auto& f : plan_->files) {
+}  // namespace
+
+dstd::Result<void> ensure_catalog(const ScanPlan& plan) {
+    if (plan->error) return *plan->error;
+    Snapshots snapshots;
+    auto only = catalog_scan_plan(plan);
+    for (const auto& f : plan->files) {
         if (f.index_path.empty()) continue;
-        try {
-            auto [it, fresh] = dbs.try_emplace(f.index_path);
-            if (fresh)
-                it->second.emplace(f.index_path, st::IndexOpenMode::ReadOnly);
-            // An index that failed to open stays empty for the other files.
-            if (!it->second) continue;
-            const int fid = it->second->get_file_info_id(
-                st::internal::get_logical_path(f.file_path));
-            if (fid < 0) continue;
-            for (auto& [path, stat] : it->second->catalog(fid)) {
-                auto [pos, inserted] = merged.try_emplace(path, stat);
-                if (inserted) continue;
-                pos->second.type = st::join(pos->second.type, stat.type);
-                pos->second.count += stat.count;
-            }
-        } catch (...) {
-            // A missing or unreadable index contributes nothing.
-        }
+        const auto found = find_file_index(plan.get(), snapshots, f);
+        if (!found) return found.error();
+        if (found->file && is_file_past_pin(f, *found->file)) continue;
+        if (!found->file || !dftracer::utils::trace::index::extension_current(
+                                *found->snapshot, *found->file,
+                                trace::index::store::IndexExtension::Catalog))
+            only->files.push_back(f);
     }
-    std::map<std::string, SchemaLeaf> leaves;
+    snapshots.clear();
+    if (only->files.empty()) return {};
+    dftracer::utils::dstd::StringIntern intern;
+    auto ran = default_runtime().block_on(
+        coro::named("view_ensure_catalog",
+                    [&]() -> coro::CoroTask<dstd::Result<ExportStats>> {
+                        co_return co_await detail::run_folds(*only, {}, intern,
+                                                             nullptr, nullptr);
+                    }()));
+    if (!ran) return ran.error();
+    return {};
+}
+
+dstd::Result<dstd::Vector<SchemaLeaf>> schema_tree(const ScanPlan& plan) {
+    if (auto ensured = ensure_catalog(plan); !ensured) return ensured.error();
+    return catalog_tree(plan);
+}
+
+dstd::Result<dstd::Vector<SchemaLeaf>> catalog_tree(const ScanPlan& plan) {
+    if (auto resolved = detail::resolve_record_schema(*plan); !resolved)
+        return resolved.error();
+    dstd::HashMap<dstd::String, trace::index::store::PathStat> merged;
+    Snapshots snapshots;
+    auto past_pin = catalog_scan_plan(plan);
+    for (const auto& f : plan->files) {
+        if (f.index_path.empty()) continue;
+        const auto found = find_file_index(plan.get(), snapshots, f);
+        if (!found) return found.error();
+        if (!found->file) continue;
+        if (is_file_past_pin(f, *found->file)) {
+            past_pin->files.push_back(f);
+            continue;
+        }
+        auto cataloged = dftracer::utils::trace::index::catalog(
+            *found->snapshot, *found->file);
+        if (!cataloged) return cataloged.error();
+        for (auto& [path, stat] : *cataloged)
+            trace::index::extensions::add_path_stat(merged, path, stat);
+    }
+    if (!past_pin->files.empty()) {
+        // The stored catalog also counts the rows after the pin.
+        dftracer::utils::dstd::StringIntern intern;
+        trace::index::extensions::CatalogFold fold(intern, 0, false);
+        const dstd::Vector<detail::Fold*> folds{&fold};
+        auto ran = default_runtime().block_on(
+            coro::named("view_scan_catalog",
+                        [&]() -> coro::CoroTask<dstd::Result<ExportStats>> {
+                            co_return co_await detail::run_folds(
+                                *past_pin, folds, intern, nullptr, nullptr);
+                        }()));
+        if (!ran) return ran.error();
+        for (const auto& [path, stat] : fold.paths())
+            trace::index::extensions::add_path_stat(merged, path, stat);
+    }
+    dstd::Map<dstd::String, SchemaLeaf> leaves;
     for (auto& [path, stat] : merged)
-        if (stat.type != st::PathType::OBJECT &&
-            stat.type != st::PathType::ARRAY)
+        if (stat.type != trace::index::store::PathType::Object &&
+            stat.type != trace::index::store::PathType::Array)
             leaves[path] =
                 SchemaLeaf{path, path_type_name(stat.type), stat.count, {}, {}};
-    namespace ix = dftracer::utils::index;
-    const ix::RecordSchema& schema = detail::plan_record_schema(*plan_);
+    const trace::index::RecordSchema& schema =
+        detail::plan_record_schema(*plan);
     for (const auto& f : schema.fields) {
-        auto [pos, inserted] = leaves.try_emplace(f.path);
+        auto [pos, inserted] =
+            leaves.try_emplace(dstd::String(f.path.data(), f.path.size()));
         SchemaLeaf& leaf = pos->second;
         if (inserted) {
             leaf.path = f.path;
-            const std::string below = f.path + ".";
+            const dstd::String below = f.path + ".";
             const bool has_leaves =
-                f.type == ix::FieldType::JSON &&
+                f.type == trace::index::FieldType::Json &&
                 std::any_of(merged.begin(), merged.end(), [&](const auto& kv) {
                     return kv.first.starts_with(below);
                 });
             if (!has_leaves) leaf.count = 0;
         }
         leaf.field = f.name;
-        leaf.declared_type = std::string(ix::field_type_name(f.type));
+        leaf.declared_type =
+            dstd::String(trace::index::field_type_name(f.type));
     }
-    std::vector<SchemaLeaf> out;
+    dstd::Vector<SchemaLeaf> out;
     out.reserve(leaves.size());
     for (auto& [path, leaf] : leaves) out.push_back(std::move(leaf));
     return out;
 }
 
-std::vector<ColumnInfo> schema(const ScanPlan& plan_) {
-    ColTypeMap m = harvest_plan_types(plan_);
-    std::vector<ColumnInfo> out;
-    out.reserve(m.size());
-    for (auto& [name, t] : m)
+dstd::Result<dstd::Vector<ColumnInfo>> schema(const ScanPlan& plan) {
+    auto harvested = harvest_plan_types(plan);
+    if (!harvested) return harvested.error();
+    dstd::Vector<ColumnInfo> out;
+    out.reserve(harvested->size());
+    for (auto& [name, t] : *harvested)
         out.push_back(ColumnInfo{
-            name, dftracer::utils::index::store::column_type_name(t)});
+            dstd::String(name),
+            dstd::String(
+                dftracer::utils::trace::index::store::column_type_name(t))});
     std::sort(out.begin(), out.end(),
               [](const ColumnInfo& a, const ColumnInfo& b) {
                   return a.name < b.name;
@@ -643,53 +815,60 @@ std::vector<ColumnInfo> schema(const ScanPlan& plan_) {
     return out;
 }
 
-std::shared_ptr<const detail::JsonColumns> json_columns(
+dstd::Result<dstd::SharedPtr<const detail::JsonColumns>> json_columns(
     const detail::ViewPlan& plan) {
-    using CT = dftracer::utils::index::store::ColumnType;
+    using CT = dftracer::utils::trace::index::store::ColumnType;
+    if (auto resolved = detail::resolve_record_schema(plan); !resolved)
+        return resolved.error();
     const bool by_path = detail::plan_by_path(plan);
     const auto& schema = detail::plan_record_schema(plan);
-    ColTypeMap m = by_path ? harvest_path_types(plan.files)
-                           : harvest_column_types(plan.files);
+    auto harvested =
+        by_path ? harvest_path_types(plan) : harvest_column_types(plan);
+    if (!harvested) return harvested.error();
+    ColTypeMap& m = *harvested;
     if (by_path) overlay_declared(m, schema);
-    auto out = std::make_shared<detail::JsonColumns>();
+    auto out = dstd::make_shared<detail::JsonColumns>();
     for (const auto& [name, t] : m) {
         if (t != CT::Json) continue;
         const auto* field = schema.field_at(name);
         const bool text =
-            field && field->type == dftracer::utils::index::FieldType::JSON;
+            field &&
+            field->type == dftracer::utils::trace::index::FieldType::Json;
         // A dftracer catalog names args bare, so a top-level field of the
         // same name merges in; only the args column is JSON.
         if (by_path)
             out->emplace(name, text);
         else
-            out->emplace(std::string(dftracer::utils::ARGS_PREFIX) + name,
-                         text);
+            out->emplace(
+                dstd::String(dftracer::utils::common::ARGS_PREFIX).append(name),
+                text);
     }
-    if (out->empty()) return nullptr;
-    return out;
+    if (out->empty()) return dstd::SharedPtr<const detail::JsonColumns>();
+    return dstd::SharedPtr<const detail::JsonColumns>(std::move(out));
 }
 
-std::unordered_map<std::string, dataframe::DataType> column_types(
-    const ScanPlan& plan_) {
-    namespace df = dftracer::utils::dataframe;
-    using CT = dftracer::utils::index::store::ColumnType;
-    ColTypeMap m = harvest_plan_types(plan_);
-    std::unordered_map<std::string, df::DataType> out;
-    out.reserve(m.size());
-    for (auto& [name, t] : m) {
-        df::DataType type = df::scalar(df::TypeId::Unknown);
+dstd::Result<dstd::HashMap<dstd::String, dataframe::DataType>> column_types(
+    const ScanPlan& plan) {
+    using CT = dftracer::utils::trace::index::store::ColumnType;
+    auto harvested = harvest_plan_types(plan);
+    if (!harvested) return harvested.error();
+    dstd::HashMap<dstd::String, dataframe::DataType> out;
+    out.reserve(harvested->size());
+    for (auto& [name, t] : *harvested) {
+        dataframe::DataType type =
+            dataframe::scalar(dataframe::TypeId::Unknown);
         switch (t) {
             case CT::Int64:
-                type.id = df::TypeId::Int64;
+                type.id = dataframe::TypeId::Int64;
                 break;
             case CT::Float64:
-                type.id = df::TypeId::Float64;
+                type.id = dataframe::TypeId::Float64;
                 break;
             case CT::String:
-                type.id = df::TypeId::String;
+                type.id = dataframe::TypeId::String;
                 break;
             case CT::Json:
-                type.id = df::TypeId::String;
+                type.id = dataframe::TypeId::String;
                 type.set_json(true);
                 break;
             case CT::Unknown:
@@ -700,13 +879,13 @@ std::unordered_map<std::string, dataframe::DataType> column_types(
     return out;
 }
 
-TimeMetric time_metric(const ScanPlan& plan_) {
-    if (plan_->files.empty()) return TimeMetric::US;
-    return trace::read_time_metric(plan_->files.front().file_path);
+TimeMetric time_metric(const ScanPlan& plan) {
+    if (plan->files.empty()) return TimeMetric::Us;
+    return trace::read_time_metric(plan->files.front().file_path);
 }
 
-ScanPlan filter(const ScanPlan& plan_, Query q) {
-    auto next = clone(plan_);
+ScanPlan filter(const ScanPlan& plan, Query q) {
+    auto next = clone(plan);
     if (next->query) {
         next->query = duql::conjoin(*next->query, q);
     } else {
@@ -715,34 +894,37 @@ ScanPlan filter(const ScanPlan& plan_, Query q) {
     return next;
 }
 
-ScanPlan phase(const ScanPlan& plan_, Phase p) {
-    auto next = clone(plan_);
+ScanPlan phase(const ScanPlan& plan, Phase p) {
+    auto next = clone(plan);
     next->phase = p;
     next->all_records = p == Phase::Any;
     return next;
 }
 
-ScanPlan time_range(const ScanPlan& plan_, double begin, double end) {
-    detail::require_role(*plan_, "time_range");
-    auto next = clone(plan_);
+ScanPlan time_range(const ScanPlan& plan, double begin, double end) {
+    if (auto role = detail::require_role(*plan, "time_range"); !role)
+        return failed_plan(plan, role.error());
+    auto next = clone(plan);
     next->timed = true;
-    next->time_range = std::make_pair(begin, end);
+    next->time_range = dstd::make_pair(begin, end);
     return next;
 }
 
-ScanPlan time_bucket(const ScanPlan& plan_, std::uint64_t interval_us) {
-    detail::require_role(*plan_, "time_bucket");
-    auto next = clone(plan_);
+ScanPlan time_bucket(const ScanPlan& plan, std::uint64_t interval_us) {
+    if (auto role = detail::require_role(*plan, "time_bucket"); !role)
+        return failed_plan(plan, role.error());
+    auto next = clone(plan);
     next->timed = true;
     next->time_bucket_us = interval_us;
     strip_redundant_time_bucket(*next);
     return next;
 }
 
-ScanPlan time_bucket(const ScanPlan& plan_, std::uint64_t interval_us,
+ScanPlan time_bucket(const ScanPlan& plan, std::uint64_t interval_us,
                      std::uint64_t origin_us) {
-    detail::require_role(*plan_, "time_bucket");
-    auto next = clone(plan_);
+    if (auto role = detail::require_role(*plan, "time_bucket"); !role)
+        return failed_plan(plan, role.error());
+    auto next = clone(plan);
     next->timed = true;
     next->time_bucket_us = interval_us;
     next->bucket_origin_us = origin_us;
@@ -751,9 +933,10 @@ ScanPlan time_bucket(const ScanPlan& plan_, std::uint64_t interval_us,
     return next;
 }
 
-ScanPlan time_bucket_min(const ScanPlan& plan_, std::uint64_t interval_us) {
-    detail::require_role(*plan_, "time_bucket");
-    auto next = clone(plan_);
+ScanPlan time_bucket_min(const ScanPlan& plan, std::uint64_t interval_us) {
+    if (auto role = detail::require_role(*plan, "time_bucket"); !role)
+        return failed_plan(plan, role.error());
+    auto next = clone(plan);
     next->timed = true;
     next->time_bucket_us = interval_us;
     next->bucket_origin_min = true;
@@ -761,41 +944,47 @@ ScanPlan time_bucket_min(const ScanPlan& plan_, std::uint64_t interval_us) {
     return next;
 }
 
-ScanPlan occ_cell(const ScanPlan& plan_, std::uint64_t cell_us) {
-    auto next = clone(plan_);
+ScanPlan occ_cell(const ScanPlan& plan, std::uint64_t cell_us) {
+    auto next = clone(plan);
     next->occ_cell_us = cell_us;
     return next;
 }
 
-ScanPlan time_scale(const ScanPlan& plan_, double ns_ratio) {
-    if (ns_ratio != 1.0 && detail::plan_by_path(*plan_))
-        throw DFTUtilsException::cat(
-            ErrorCode::INVALID_ARGUMENT,
-            "time_scale scales dftracer ts and dur; schema ",
-            detail::plan_record_schema(*plan_).id,
-            " gives its time units on its time and duration fields");
-    auto next = clone(plan_);
+ScanPlan time_scale(const ScanPlan& plan, double ns_ratio) {
+    if (ns_ratio != 1.0 && detail::plan_by_path(*plan))
+        return failed_plan(
+            plan,
+            dstd::Error::from_format<
+                "time_scale scales dftracer ts and dur; schema {} gives its "
+                "time units on its time and duration fields">(
+                common::ErrorCode::InvalidArgument,
+                detail::plan_record_schema(*plan).id));
+    auto next = clone(plan);
     next->time_scale = ns_ratio;
     return next;
 }
 
-ScanPlan group_by(const ScanPlan& plan_, std::vector<GroupKey> keys) {
-    check_keys(*plan_, keys);
-    auto next = clone(plan_);
+ScanPlan group_by(const ScanPlan& plan, dstd::Vector<GroupKey> keys) {
+    if (auto checked = check_keys(*plan, keys); !checked)
+        return failed_plan(plan, checked.error());
+    auto next = clone(plan);
     next->group_by = std::move(keys);
     strip_redundant_time_bucket(*next);
     return next;
 }
 
-ScanPlan agg(const ScanPlan& plan_, std::vector<AggSpec> specs) {
-    bool timed = plan_->timed;
+ScanPlan agg(const ScanPlan& plan, dstd::Vector<AggSpec> specs) {
+    bool timed = plan->timed;
     for (const AggSpec& s : specs)
         if (is_occupancy_op(s.op)) {
-            detail::require_role(*plan_, "an occupancy aggregate",
-                                 detail::TraceRole::DURATION);
+            if (auto role =
+                    detail::require_role(*plan, "an occupancy aggregate",
+                                         detail::TraceRole::Duration);
+                !role)
+                return failed_plan(plan, role.error());
             timed = true;
         }
-    auto next = clone(plan_);
+    auto next = clone(plan);
     next->timed = timed;
     next->agg = std::move(specs);
     return next;
@@ -810,40 +999,40 @@ AggSpec lower_field_agg(const FieldAggExpr& e) {
     using dftracer::utils::dataframe::field::AggFn;
     switch (e.fn()) {
         case AggFn::Count:
-            return AggSpec(AggOp::Count, e.field());
+            return AggSpec(AggOp::Count, dstd::String(e.field()));
         case AggFn::Sum:
-            return AggSpec(AggOp::Sum, e.field());
+            return AggSpec(AggOp::Sum, dstd::String(e.field()));
         case AggFn::Min:
-            return AggSpec(AggOp::Min, e.field());
+            return AggSpec(AggOp::Min, dstd::String(e.field()));
         case AggFn::Max:
-            return AggSpec(AggOp::Max, e.field());
+            return AggSpec(AggOp::Max, dstd::String(e.field()));
         case AggFn::Mean:
-            return AggSpec(AggOp::Mean, e.field());
+            return AggSpec(AggOp::Mean, dstd::String(e.field()));
         case AggFn::Var:
-            return AggSpec(AggOp::Var, e.field());
+            return AggSpec(AggOp::Var, dstd::String(e.field()));
         case AggFn::Std:
-            return AggSpec(AggOp::Std, e.field());
+            return AggSpec(AggOp::Std, dstd::String(e.field()));
         case AggFn::Skew:
-            return AggSpec(AggOp::Skew, e.field());
+            return AggSpec(AggOp::Skew, dstd::String(e.field()));
         case AggFn::Kurt:
-            return AggSpec(AggOp::Kurt, e.field());
+            return AggSpec(AggOp::Kurt, dstd::String(e.field()));
         case AggFn::ArgMax:
-            return AggSpec(AggOp::ArgMax, e.field(), "", e.by());
+            return AggSpec(AggOp::ArgMax, dstd::String(e.field()), "",
+                           dstd::String(e.by()));
     }
-    throw DFTUtilsException::cat(ErrorCode::INVALID_ARGUMENT,
-                                 "unhandled aggregate function");
+    dstd::fatal("unhandled aggregate function");
 }
 
 }  // namespace
 
-ScanPlan agg(const ScanPlan& plan_, std::vector<FieldAggExpr> exprs) {
+ScanPlan agg(const ScanPlan& plan, dstd::Vector<FieldAggExpr> exprs) {
     using dftracer::utils::dataframe::field::AggFn;
-    std::vector<AggSpec> specs;
+    dstd::Vector<AggSpec> specs;
     specs.reserve(exprs.size());
     // Wildcard (F.any) reductions run over every discovered numeric arg. Mean
     // alone keeps the legacy bare column; other reductions (and mean alongside
     // them) emit `<op>_<arg>` columns via numeric_arg_aggs.
-    std::vector<AggSpec> num_args;
+    dstd::Vector<AggSpec> num_args;
     bool wildcard_mean = false;
     for (const auto& e : exprs) {
         if (e.wildcard()) {
@@ -876,18 +1065,20 @@ ScanPlan agg(const ScanPlan& plan_, std::vector<FieldAggExpr> exprs) {
                     num_args.push_back(AggSpec(AggOp::Kurt));
                     break;
                 default:
-                    throw DFTUtilsException::cat(
-                        ErrorCode::INVALID_ARGUMENT,
-                        "F.any supports .count()/.mean()/.sum()/.min()/.max()/"
-                        ".var()/.std()/.skew()/.kurt(); name a field for "
-                        "argmax "
-                        "or percentile, e.g. F(\"args.level\").pct(0.9)");
+                    return failed_plan(
+                        plan,
+                        dstd::Error{
+                            common::ErrorCode::InvalidArgument,
+                            "F.any supports .count()/.mean()/.sum()/.min()/"
+                            ".max()/.var()/.std()/.skew()/.kurt(); name a "
+                            "field for argmax or percentile, e.g. "
+                            "F(\"args.level\").pct(0.9)"});
             }
             continue;
         }
         specs.push_back(lower_field_agg(e));
     }
-    ScanPlan v = plan_;
+    ScanPlan v = plan;
     if (!specs.empty()) v = agg(v, std::move(specs));
     if (wildcard_mean && num_args.empty()) {
         v = agg_numeric_args(v);
@@ -898,168 +1089,185 @@ ScanPlan agg(const ScanPlan& plan_, std::vector<FieldAggExpr> exprs) {
     return v;
 }
 
-ScanPlan agg_numeric_args(const ScanPlan& plan_) {
-    auto next = clone(plan_);
+ScanPlan agg_numeric_args(const ScanPlan& plan) {
+    auto next = clone(plan);
     next->auto_numeric_metrics = true;
     return next;
 }
 
-ScanPlan agg_numeric_args(const ScanPlan& plan_,
-                          std::vector<AggSpec> reductions) {
+ScanPlan agg_numeric_args(const ScanPlan& plan,
+                          dstd::Vector<AggSpec> reductions) {
     for (const auto& s : reductions)
         if (!is_dyn_reduction(s.op))
-            throw DFTUtilsException::cat(
-                ErrorCode::INVALID_ARGUMENT,
-                "agg_numeric_args supports only Count/Sum/Min/Max/SumSq/Mean/"
-                "Var/Std/Skew/Kurt over numeric args; Pct/Hist/ArgMax need a "
-                "named field");
-    auto next = clone(plan_);
+            return failed_plan(
+                plan, dstd::Error{common::ErrorCode::InvalidArgument,
+                                  "agg_numeric_args supports only "
+                                  "Count/Sum/Min/Max/SumSq/Mean/Var/Std/Skew/"
+                                  "Kurt over numeric args; Pct/Hist/ArgMax "
+                                  "need a named field"});
+    auto next = clone(plan);
     next->auto_numeric_metrics = true;
     next->numeric_arg_aggs = std::move(reductions);
     return next;
 }
 
-ScanPlan memory_budget(const ScanPlan& plan_, std::uint64_t bytes) {
-    auto next = clone(plan_);
+ScanPlan memory_budget(const ScanPlan& plan, std::uint64_t bytes) {
+    auto next = clone(plan);
     next->memory_budget = bytes;
     return next;
 }
 
-ScanPlan count_scans(const ScanPlan& plan_,
-                     std::shared_ptr<ScanCounter> counter) {
-    auto next = clone(plan_);
+ScanPlan count_scans(const ScanPlan& plan,
+                     dstd::SharedPtr<ScanCounter> counter) {
+    auto next = clone(plan);
     next->scan_counter = std::move(counter);
     return next;
 }
 
-ScanPlan auto_spill(const ScanPlan& plan_) {
+ScanPlan auto_spill(const ScanPlan& plan) {
     // ~1/3 of available memory, floored so tiny machines still get a workable
     // in-core window before spilling.
     std::uint64_t budget =
-        static_cast<std::uint64_t>(detect_available_memory() / 3);
-    if (budget < MIN_MEMORY_BUDGET_BYTES) budget = MIN_MEMORY_BUDGET_BYTES;
-    return memory_budget(plan_, budget);
+        static_cast<std::uint64_t>(memory::detect_available_memory() / 3);
+    if (budget < memory::MIN_MEMORY_BUDGET_BYTES)
+        budget = memory::MIN_MEMORY_BUDGET_BYTES;
+    return memory_budget(plan, budget);
 }
 
-ScanPlan select(const ScanPlan& plan_, std::vector<std::string> cols) {
-    auto next = clone(plan_);
+ScanPlan select(const ScanPlan& plan, dstd::Vector<dstd::String> cols) {
+    auto next = clone(plan);
     next->select = std::move(cols);
     return next;
 }
 
-ScanPlan name_columns(const ScanPlan& plan_,
-                      std::vector<dataframe::Field> columns) {
-    auto next = clone(plan_);
+ScanPlan name_columns(const ScanPlan& plan,
+                      dstd::Vector<dataframe::Field> columns) {
+    auto next = clone(plan);
     next->named_columns = std::move(columns);
     return next;
 }
 
-ScanPlan limit(const ScanPlan& plan_, std::uint64_t n) {
-    auto next = clone(plan_);
+ScanPlan limit(const ScanPlan& plan, std::uint64_t n) {
+    auto next = clone(plan);
     next->limit = n;
     return next;
 }
 
-ScanPlan offset(const ScanPlan& plan_, std::uint64_t n) {
-    auto next = clone(plan_);
+ScanPlan offset(const ScanPlan& plan, std::uint64_t n) {
+    auto next = clone(plan);
     next->offset = n;
     return next;
 }
 
-ScanPlan sort_by(const ScanPlan& plan_, std::string column, bool descending) {
-    auto next = clone(plan_);
+ScanPlan sort_by(const ScanPlan& plan, dstd::String column, bool descending) {
+    auto next = clone(plan);
     next->sort_col = std::move(column);
     next->sort_desc = descending;
     return next;
 }
 
-ScanPlan topk(const ScanPlan& plan_, std::string column, std::int64_t k,
+ScanPlan topk(const ScanPlan& plan, dstd::String column, std::int64_t k,
               bool largest) {
-    auto next = clone(plan_);
+    auto next = clone(plan);
     next->topk_col = std::move(column);
     next->topk_k = k;
     next->topk_largest = largest;
     return next;
 }
 
-ScanPlan materialize(const ScanPlan& plan_, std::uint64_t checkpoint_size,
+ScanPlan materialize(const ScanPlan& plan, std::uint64_t checkpoint_size,
                      std::uint64_t part_size) {
-    auto next = clone(plan_);
+    auto next = clone(plan);
     next->materialize = true;
     next->mv_checkpoint_size = checkpoint_size;
     next->mv_part_size = part_size;
     return next;
 }
 
-ScanPlan timed(const ScanPlan& plan_) {
-    auto next = clone(plan_);
+ScanPlan timed(const ScanPlan& plan) {
+    auto next = clone(plan);
     next->timed = true;
     return next;
 }
 
-ScanPlan record_schema(const ScanPlan& plan_, const std::string& id) {
-    const auto& p = dftracer::utils::index::get_schema(id);
-    auto next = clone(plan_);
+ScanPlan record_schema(const ScanPlan& plan, const dstd::String& id) {
+    const auto found = dftracer::utils::trace::index::get_schema(id);
+    if (!found) return failed_plan(plan, found.error());
+    const auto& p = **found;
+    auto next = clone(plan);
     // Registered record_schemas live until the process exits.
     next->record_schema =
-        std::shared_ptr<const dftracer::utils::index::RecordSchema>(
-            std::shared_ptr<void>(), &p);
+        dstd::SharedPtr<const dftracer::utils::trace::index::RecordSchema>(
+            dstd::SharedPtr<void>(), &p);
+    next->record_schema_error.reset();
     next->schema.reset();
     next->resolver.reset();
     return next;
 }
 
-ScanPlan cancel_when(const ScanPlan& plan_, std::function<bool()> pred) {
-    auto next = clone(plan_);
-    next->cancelled = std::move(pred);
+ScanPlan cancel_when(const ScanPlan& plan, dstd::Function<bool()> pred) {
+    auto next = clone(plan);
+    next->cancelled =
+        dstd::make_shared<dstd::Function<bool()>>(std::move(pred));
     return next;
 }
 
-ScanPlan ordered(const ScanPlan& plan_) {
-    auto next = clone(plan_);
+ScanPlan ordered(const ScanPlan& plan) {
+    auto next = clone(plan);
     next->ordered = true;
     return next;
 }
 
-ScanPlan rollup_root(const ScanPlan& plan_, std::string dir) {
-    auto next = clone(plan_);
+ScanPlan rollup_root(const ScanPlan& plan, dstd::String dir) {
+    auto next = clone(plan);
     next->rollup_root = std::move(dir);
     return next;
 }
 
-ScanPlan views_root(const ScanPlan& plan_, std::string dir) {
-    auto next = clone(plan_);
+ScanPlan views_root(const ScanPlan& plan, dstd::String dir) {
+    auto next = clone(plan);
     next->views_root = std::move(dir);
     return next;
 }
 
-coro::CoroTask<ExportStats> for_each_batch(
-    ScanPlan plan_,
-    std::function<void(std::size_t, const std::vector<std::string_view>&)>
+coro::CoroTask<dstd::Result<ExportStats>> for_each_batch(
+    ScanPlan plan,
+    dstd::Function<void(std::size_t, const dstd::Vector<dstd::StringView>&)>
         on_batch,
-    std::size_t num_slots, std::uint64_t limit) {
-    co_return co_await detail::run_scan_batches(plan_, num_slots, limit,
+    std::size_t slot_count, std::uint64_t limit) {
+    if (auto resolved = detail::resolve_record_schema(*plan); !resolved)
+        co_return resolved.error();
+    co_return co_await detail::run_scan_batches(plan, slot_count, limit,
                                                 on_batch);
 }
 
-bool export_would_bootstrap(const ScanPlan& plan_) {
-    return detail::export_bootstrap_eligible(*plan_);
+dstd::Result<bool> export_would_bootstrap(const ScanPlan& plan) {
+    if (auto resolved = detail::resolve_record_schema(*plan); !resolved)
+        return resolved.error();
+    return detail::export_bootstrap_eligible(*plan);
 }
 
-bool collect_would_bootstrap(const ScanPlan& plan_) {
-    return detail::collect_bootstrap_eligible(*plan_);
+dstd::Result<bool> collect_would_bootstrap(const ScanPlan& plan) {
+    if (auto resolved = detail::resolve_record_schema(*plan); !resolved)
+        return resolved.error();
+    return detail::collect_bootstrap_eligible(*plan);
 }
 
-coro::CoroTask<ExportStats> export_json(ScanPlan plan_, ExportSink& sink) {
-    co_return co_await detail::run_export(*plan_, sink);
+coro::CoroTask<dstd::Result<ExportStats>> export_json(ScanPlan plan,
+                                                      ExportSink& sink) {
+    if (auto resolved = detail::resolve_record_schema(*plan); !resolved)
+        co_return resolved.error();
+    co_return co_await detail::run_export(*plan, sink);
 }
 
-coro::CoroTask<ExportStats> export_trace(ScanPlan plan_,
-                                         TraceWriteOptions opts) {
-    co_return co_await detail::run_export_trace(*plan_, opts);
+coro::CoroTask<dstd::Result<ExportStats>> export_trace(ScanPlan plan,
+                                                       TraceWriteOptions opts) {
+    if (auto resolved = detail::resolve_record_schema(*plan); !resolved)
+        co_return resolved.error();
+    co_return co_await detail::run_export_trace(*plan, opts);
 }
 
-dataframe::LazyFrame collect(const ScanPlan& plan_) {
+dataframe::LazyFrame collect(const ScanPlan& plan) {
     // A row-query select is built by the scan producer itself (NativeRowFold /
     // StreamRowFold, via build_row_frame's select branch), which emits exactly
     // the selected columns. Keep it in the scan plan rather than stripping it
@@ -1067,10 +1275,10 @@ dataframe::LazyFrame collect(const ScanPlan& plan_) {
     // data-dependent (its arg columns are discovered at scan time), so a
     // LazyFrame projection resolved against the source's index-derived schema
     // would miss an un-indexed arg column and index the morsel out of bounds.
-    const bool row_query = detail::is_row_query(*plan_);
-    const bool select_in_scan = row_query && !plan_->select.empty();
+    const bool row_query = detail::is_row_query(*plan);
+    const bool select_in_scan = row_query && !plan->select.empty();
 
-    std::shared_ptr<detail::ViewPlan> stripped = clone(plan_);
+    dstd::SharedPtr<detail::ViewPlan> stripped = clone(plan);
     if (!select_in_scan) stripped->select.clear();
     stripped->sort_col.clear();
     stripped->sort_desc = false;
@@ -1082,159 +1290,203 @@ dataframe::LazyFrame collect(const ScanPlan& plan_) {
 
     dataframe::LazyFrame lf =
         dataframe::LazyFrame::scan(
-            std::make_shared<ViewSource>(ScanPlan(std::move(stripped))))
-            .memory_budget(plan_->memory_budget);
+            dstd::make_shared<ViewSource>(ScanPlan(std::move(stripped))))
+            .memory_budget(plan->memory_budget);
+    if (plan->error) return dataframe::detail::fail_plan(lf, *plan->error);
 
     // A row query's scan producer canonicalizes arg column names to
     // "args.<key>" (see build_row_frame); sort/topk on a bare arg name must
     // resolve to that same column.
-    if (!plan_->sort_col.empty())
+    if (!plan->sort_col.empty())
         lf = lf.sort_by(row_query
                             ? detail::canonical_row_column_name(
-                                  plan_->sort_col, detail::plan_by_path(*plan_))
-                            : plan_->sort_col,
-                        plan_->sort_desc);
-    if (!plan_->topk_col.empty())
-        lf = lf.topk(row_query
-                         ? detail::canonical_row_column_name(
-                               plan_->topk_col, detail::plan_by_path(*plan_))
-                         : plan_->topk_col,
-                     plan_->topk_k, plan_->topk_largest);
-    if (plan_->offset || plan_->limit) {
-        const std::int64_t off = static_cast<std::int64_t>(plan_->offset);
-        const std::int64_t len = plan_->limit
-                                     ? static_cast<std::int64_t>(plan_->limit)
+                                  plan->sort_col, detail::plan_by_path(*plan))
+                            : dstd::String(plan->sort_col),
+                        plan->sort_desc);
+    if (!plan->topk_col.empty())
+        lf =
+            lf.topk(row_query ? detail::canonical_row_column_name(
+                                    plan->topk_col, detail::plan_by_path(*plan))
+                              : dstd::String(plan->topk_col),
+                    plan->topk_k, plan->topk_largest);
+    if (plan->offset || plan->limit) {
+        const std::int64_t off = static_cast<std::int64_t>(plan->offset);
+        const std::int64_t len = plan->limit
+                                     ? static_cast<std::int64_t>(plan->limit)
                                      : std::numeric_limits<std::int64_t>::max();
         lf = lf.slice(off, len);
     }
-    if (!select_in_scan && !plan_->select.empty())
-        lf = lf.select(plan_->select);
+    if (!select_in_scan && !plan->select.empty())
+        lf = lf.select(dstd::Vector<dstd::String>(plan->select.begin(),
+                                                  plan->select.end()));
     return lf;
 }
 
-coro::AsyncGenerator<dataframe::DataFrame> stream(ScanPlan plan_,
-                                                  std::int64_t morsel_rows) {
-    dataframe::LazyFrame lf = collect(plan_);
-    auto gen = lf.stream(morsel_rows);
-    while (auto df = co_await gen.next()) co_yield std::move(*df);
+coro::AsyncGenerator<dstd::Result<dataframe::DataFrame>> stream(
+    ScanPlan plan, std::int64_t batch_size) {
+    dataframe::LazyFrame lf = collect(plan);
+    auto gen = lf.stream(batch_size);
+    for (;;) {
+        auto df = co_await gen.next();
+        if (!df) break;
+        co_yield std::move(*df);
+    }
 }
 
-coro::CoroTask<dataframe::DataFrame> collect_frame(ScanPlan plan_) {
+coro::CoroTask<dstd::Result<dataframe::DataFrame>> collect_frame(
+    ScanPlan plan) {
+    if (auto resolved = detail::resolve_record_schema(*plan); !resolved)
+        co_return resolved.error();
     // A row query (no group_by/agg) returns the matching events, not a count.
-    if (detail::is_row_query(*plan_))
-        co_return co_await detail::run_collect_rows(*plan_);
+    if (detail::is_row_query(*plan))
+        co_return co_await detail::run_collect_rows(*plan);
     // Every aggregation runs through the dataframe engine; materialize() opts
     // in to persisting its AggState partials as the rollup in the same pass.
-    co_return detail::apply_agg_post_ops(
-        co_await detail::run_collect_via_engine(*plan_), *plan_);
+    auto engine = detail::run_collect_via_engine(*plan);
+    auto collected = co_await std::move(engine);
+    if (!collected) co_return collected.error();
+    co_return detail::apply_agg_post_ops(std::move(*collected), *plan);
 }
 
-bool is_row_query(const ScanPlan& plan_) {
-    return detail::is_row_query(*plan_);
-}
+bool is_row_query(const ScanPlan& plan) { return detail::is_row_query(*plan); }
 
-coro::CoroTask<dataframe::DataFrame> call_tree(
-    ScanPlan plan_, std::vector<std::string> partition, std::string ts,
-    std::string dur, std::string name) {
-    co_return co_await detail::run_call_tree(*plan_, std::move(partition),
+coro::CoroTask<dstd::Result<dataframe::DataFrame>> call_tree(
+    ScanPlan plan, dstd::Vector<dstd::String> partition, dstd::String ts,
+    dstd::String dur, dstd::String name) {
+    if (auto resolved = detail::resolve_record_schema(*plan); !resolved)
+        co_return resolved.error();
+    co_return co_await detail::run_call_tree(*plan, std::move(partition),
                                              std::move(ts), std::move(dur),
                                              std::move(name));
 }
 
-coro::CoroTask<dataframe::DataFrame> flamegraph(
-    ScanPlan plan_, std::vector<std::string> partition, std::string ts,
-    std::string dur, std::string name, std::vector<std::string> group) {
+coro::CoroTask<dstd::Result<dataframe::DataFrame>> flamegraph(
+    ScanPlan plan, dstd::Vector<dstd::String> partition, dstd::String ts,
+    dstd::String dur, dstd::String name, dstd::Vector<dstd::String> group) {
+    if (auto resolved = detail::resolve_record_schema(*plan); !resolved)
+        co_return resolved.error();
     co_return co_await detail::run_flamegraph(
-        *plan_, std::move(partition), std::move(ts), std::move(dur),
+        *plan, std::move(partition), std::move(ts), std::move(dur),
         std::move(name), std::move(group));
 }
 
-coro::CoroTask<std::pair<dataframe::DataFrame, dataframe::DataFrame>>
-containment(ScanPlan plan_, std::vector<std::string> partition, std::string ts,
-            std::string dur, std::string name, std::vector<std::string> group) {
+coro::CoroTask<
+    dstd::Result<dstd::Pair<dataframe::DataFrame, dataframe::DataFrame>>>
+containment(ScanPlan plan, dstd::Vector<dstd::String> partition,
+            dstd::String ts, dstd::String dur, dstd::String name,
+            dstd::Vector<dstd::String> group) {
+    if (auto resolved = detail::resolve_record_schema(*plan); !resolved)
+        co_return resolved.error();
     co_return co_await detail::run_containment(
-        *plan_, std::move(partition), std::move(ts), std::move(dur),
+        *plan, std::move(partition), std::move(ts), std::move(dur),
         std::move(name), std::move(group));
 }
 
-coro::CoroTask<std::string> flamegraph_partial(
-    ScanPlan plan_, std::vector<std::string> partition, std::string ts,
-    std::string dur, std::string name, std::vector<std::string> group) {
+coro::CoroTask<dstd::Result<dstd::String>> flamegraph_partial(
+    ScanPlan plan, dstd::Vector<dstd::String> partition, dstd::String ts,
+    dstd::String dur, dstd::String name, dstd::Vector<dstd::String> group) {
+    if (auto resolved = detail::resolve_record_schema(*plan); !resolved)
+        co_return resolved.error();
     co_return co_await detail::run_flamegraph_partial(
-        *plan_, std::move(partition), std::move(ts), std::move(dur),
+        *plan, std::move(partition), std::move(ts), std::move(dur),
         std::move(name), std::move(group));
 }
 
 dataframe::DataFrame merge_flamegraph_partials(
-    const std::vector<std::string_view>& partials) {
+    const dstd::Vector<dstd::StringView>& partials) {
     return detail::merge_flamegraph_partials(partials);
 }
 
-coro::CoroTask<ExportStats> run_folds(ScanPlan plan_,
-                                      std::span<detail::Fold* const> folds,
-                                      dftracer::utils::StringIntern& intern,
-                                      detail::DynamicPrune* dyn_prune,
-                                      coro::CoroSemaphore* gate) {
-    co_return co_await detail::run_folds(*plan_, folds, intern, dyn_prune,
-                                         gate);
+coro::CoroTask<dstd::Result<ExportStats>> run_folds(
+    ScanPlan plan, dstd::Span<detail::Fold* const> folds,
+    dftracer::utils::dstd::StringIntern& intern,
+    detail::DynamicPrune* dyn_prune, coro::AsyncSemaphore* gate) {
+    if (auto resolved = detail::resolve_record_schema(*plan); !resolved)
+        co_return resolved.error();
+    co_return co_await detail::run_folds(*plan, folds, intern, dyn_prune, gate);
 }
 
-coro::CoroTask<ExportStats> run(ScanPlan plan_, const ProgressFn* progress) {
-    co_return co_await detail::run_materialize(*plan_, progress);
+coro::CoroTask<dstd::Result<ExportStats>> run(ScanPlan plan,
+                                              const ProgressFn* progress) {
+    if (auto resolved = detail::resolve_record_schema(*plan); !resolved)
+        co_return resolved.error();
+    co_return co_await detail::run_materialize(*plan, progress);
 }
 
-std::string materialize_dir(const ScanPlan& plan_) {
-    detail::plan_record_schema(*plan_);
-    return dftracer::utils::index::cache::materialize_view_dir(*plan_);
+dstd::Result<dstd::String> materialize_dir(const ScanPlan& plan) {
+    if (auto resolved = detail::resolve_record_schema(*plan); !resolved)
+        return resolved.error();
+    const dstd::String dir =
+        dftracer::utils::trace::index::cache::materialize_view_dir(*plan);
+    return dstd::String(dir.data(), dir.size());
 }
 
-void register_materialized(const ScanPlan& plan_, const std::string& dir) {
-    detail::plan_record_schema(*plan_);
-    dftracer::utils::index::cache::register_view(dir, *plan_);
+dstd::Result<void> register_materialized(const ScanPlan& plan,
+                                         const dstd::String& dir) {
+    if (auto resolved = detail::resolve_record_schema(*plan); !resolved)
+        return resolved.error();
+    dftracer::utils::trace::index::cache::register_view(dir, *plan);
+    return {};
 }
 
-std::vector<std::string> mv_source(const ScanPlan& plan_) {
-    std::vector<std::string> out;
-    detail::plan_record_schema(*plan_);
-    if (auto mv = dftracer::utils::index::cache::find_subsuming_view(*plan_))
+dstd::Result<dstd::Vector<dstd::String>> mv_source(const ScanPlan& plan) {
+    if (auto resolved = detail::resolve_record_schema(*plan); !resolved)
+        return resolved.error();
+    dstd::Vector<dstd::String> out;
+    if (auto mv =
+            dftracer::utils::trace::index::cache::find_subsuming_view(*plan))
         for (const auto& f : *mv) out.push_back(f.file_path);
     return out;
 }
 
-coro::CoroTask<TypedResult> collect_typed(ScanPlan plan_, int shard_begin,
-                                          int shard_end,
-                                          const ProgressFn* progress) {
-    co_return co_await detail::run_collect_typed(*plan_, shard_begin, shard_end,
+coro::CoroTask<dstd::Result<TypedResult>> collect_typed(
+    ScanPlan plan, int shard_begin, int shard_end, const ProgressFn* progress) {
+    if (auto resolved = detail::resolve_record_schema(*plan); !resolved)
+        co_return resolved.error();
+    co_return co_await detail::run_collect_typed(*plan, shard_begin, shard_end,
                                                  progress);
 }
 
-coro::CoroTask<ExportStats> export_counters(ScanPlan plan_, ExportSink& sink) {
-    co_return co_await detail::run_export_counters(*plan_, sink);
+coro::CoroTask<dstd::Result<ExportStats>> export_counters(ScanPlan plan,
+                                                          ExportSink& sink) {
+    if (auto resolved = detail::resolve_record_schema(*plan); !resolved)
+        co_return resolved.error();
+    co_return co_await detail::run_export_counters(*plan, sink);
 }
 
-coro::CoroTask<void> materialize_partials(
-    ScanPlan plan_, const std::vector<std::string_view>& partials) {
-    co_return co_await detail::run_materialize_partials(*plan_, partials);
+coro::CoroTask<dstd::Result<void>> materialize_partials(
+    ScanPlan plan, const dstd::Vector<dstd::StringView>& partials) {
+    if (auto resolved = detail::resolve_record_schema(*plan); !resolved)
+        co_return resolved.error();
+    co_return co_await detail::run_materialize_partials(*plan, partials);
 }
 
-std::optional<dataframe::DataFrame> reconstruct_if_cached(
-    const ScanPlan& plan_) {
-    return detail::run_reconstruct_if_cached(*plan_);
+dstd::Result<dstd::Optional<dataframe::DataFrame>> reconstruct_if_cached(
+    const ScanPlan& plan) {
+    if (auto resolved = detail::resolve_record_schema(*plan); !resolved)
+        return resolved.error();
+    return detail::run_reconstruct_if_cached(*plan);
 }
 
-coro::CoroTask<std::string> aggregate_partial(ScanPlan plan_) {
-    co_return co_await detail::run_aggregate_partial(*plan_);
+coro::CoroTask<dstd::Result<dstd::String>> aggregate_partial(ScanPlan plan) {
+    if (auto resolved = detail::resolve_record_schema(*plan); !resolved)
+        co_return resolved.error();
+    co_return co_await detail::run_aggregate_partial(*plan);
 }
 
-dataframe::DataFrame merge_partials_to_table(
-    const ScanPlan& plan_, const std::vector<std::string_view>& partials) {
-    return detail::merge_partials_to_table(*plan_, partials);
+dstd::Result<dataframe::DataFrame> merge_partials_to_table(
+    const ScanPlan& plan, const dstd::Vector<dstd::StringView>& partials) {
+    if (auto resolved = detail::resolve_record_schema(*plan); !resolved)
+        return resolved.error();
+    return detail::merge_partials_to_table(*plan, partials);
 }
 
-ExportStats merge_counter_partials(
-    const ScanPlan& plan_, const std::vector<std::string_view>& partials,
+dstd::Result<ExportStats> merge_counter_partials(
+    const ScanPlan& plan, const dstd::Vector<dstd::StringView>& partials,
     ExportSink& sink) {
-    return detail::merge_counters_partials(*plan_, partials, sink);
+    if (auto resolved = detail::resolve_record_schema(*plan); !resolved)
+        return resolved.error();
+    return detail::merge_counters_partials(*plan, partials, sink);
 }
 
 }  // namespace dftracer::utils::trace::views::detail::scan

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // VIEW columns: 16-byte Arrow views over buffers the column keeps alive,
 // their constructor, readers, kernels and the spill, native and IPC writers.
 
@@ -12,38 +13,42 @@
 #include <dftracer/utils/dataframe/kernels/dictionary.h>
 #include <dftracer/utils/dataframe/scalar.h>
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <cstdint>
 #include <cstring>
-#include <memory>
-#include <optional>
-#include <string>
-#include <vector>
+
+using namespace dftracer::utils;
 
 using namespace dftracer::utils::dataframe;
 
 namespace {
 
-using Row = std::optional<std::string>;
-using Rows = std::vector<Row>;
+using Row = dstd::Optional<dstd::String>;
+using Rows = dstd::Vector<Row>;
 
 constexpr std::int32_t INLINE_MAX = 12;
 
 struct Owner {
-    std::vector<std::uint8_t> views;
-    std::vector<std::string> blobs;
-    std::vector<std::uint8_t> validity;
+    dstd::Vector<std::uint8_t> views;
+    dstd::Vector<dstd::String> blobs;
+    dstd::Vector<std::uint8_t> validity;
     int* released = nullptr;
 };
 
 void on_release(void* ctx) {
     auto* o = static_cast<Owner*>(ctx);
     ++*o->released;
-    delete o;
+    dstd::Delete<Owner>{}(o);
 }
 
-void put_view(std::uint8_t* v, const std::string& s, std::int32_t index,
+void put_view(std::uint8_t* v, const dstd::String& s, std::int32_t index,
               std::int32_t offset) {
     const auto size = static_cast<std::int32_t>(s.size());
     std::memset(v, 0, 16);
@@ -58,10 +63,10 @@ void put_view(std::uint8_t* v, const std::string& s, std::int32_t index,
 }
 
 // Long values go to blob (i % 2), so two buffers are in use.
-std::unique_ptr<Owner> build_owner(const Rows& rows, int* released) {
-    auto o = std::make_unique<Owner>();
+dstd::UniquePtr<Owner> build_owner(const Rows& rows, int* released) {
+    auto o = dstd::make_unique<Owner>();
     o->released = released;
-    o->blobs.assign(2, std::string());
+    o->blobs.assign(2, dstd::String());
     o->views.assign(rows.size() * 16, 0);
     bool any_null = false;
     o->validity.assign((rows.size() + 7) / 8, 0);
@@ -71,7 +76,7 @@ std::unique_ptr<Owner> build_owner(const Rows& rows, int* released) {
             continue;
         }
         o->validity[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
-        const std::string& s = *rows[i];
+        const dstd::String& s = *rows[i];
         std::int32_t offset = 0;
         const std::int32_t index = static_cast<std::int32_t>(i % 2);
         if (s.size() > static_cast<std::size_t>(INLINE_MAX)) {
@@ -106,12 +111,12 @@ Series make_view(const Rows& rows, int* released) {
 }
 
 Series make_flat(const Rows& rows) {
-    std::vector<std::string_view> v;
-    std::vector<std::uint8_t> valid((rows.size() + 7) / 8, 0);
+    dstd::Vector<dstd::StringView> v;
+    dstd::Vector<std::uint8_t> valid((rows.size() + 7) / 8, 0);
     bool any_null = false;
     for (std::size_t i = 0; i < rows.size(); ++i) {
-        v.emplace_back(rows[i] ? std::string_view(*rows[i])
-                               : std::string_view());
+        v.emplace_back(rows[i] ? dstd::StringView(*rows[i])
+                               : dstd::StringView());
         if (rows[i])
             valid[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
         else
@@ -123,18 +128,18 @@ Series make_flat(const Rows& rows) {
 Rows rows_of(const Series& s) {
     Rows out;
     for (std::int64_t i = 0; i < s.length(); ++i)
-        out.push_back(s.is_null(i) ? Row() : Row(std::string(s.string_at(i))));
+        out.push_back(s.is_null(i) ? Row() : Row(dstd::String(s.string_at(i))));
     return out;
 }
 
-std::vector<int> bits_of(const Series& mask) {
+dstd::Vector<int> bits_of(const Series& mask) {
     const Series m = mask.materialize();
-    std::vector<int> out;
+    dstd::Vector<int> out;
     for (std::int64_t i = 0; i < m.length(); ++i) {
         if (m.is_null(i))
             out.push_back(2);
         else
-            out.push_back((m.handle()->data->data()[i >> 3] >> (i & 7)) & 1);
+            out.push_back((m.handle()->data.data()[i >> 3] >> (i & 7)) & 1);
     }
     return out;
 }
@@ -192,7 +197,7 @@ TEST_SUITE("string view") {
     }
 
     TEST_CASE("the constructor rejects a bad column and releases once") {
-        const std::string blob(40, 'q');
+        const dstd::String blob(40, 'q');
         std::uint8_t view[16];
         const void* bufs[1] = {blob.data()};
         const std::int64_t sizes[1] = {40};
@@ -204,32 +209,32 @@ TEST_SUITE("string view") {
                 type, view, n, nullptr, bufs, sz, nb,
                 [](void* c) { ++*static_cast<int*>(c); }, &released);
             if (s != nullptr) dftu_series_free(s);
-            return std::make_pair(s != nullptr, released);
+            return dstd::Pair<bool, int>{s != nullptr, released};
         };
         const auto S = static_cast<dftu_dtype>(TypeId::String);
 
         put_view(view, blob.substr(0, 20), 0, 0);
-        CHECK(run(S, 1, 1, sizes) == std::make_pair(true, 1));
+        CHECK(run(S, 1, 1, sizes) == dstd::Pair<bool, int>{true, 1});
         CHECK(run(static_cast<dftu_dtype>(TypeId::Int64), 1, 1, sizes) ==
-              std::make_pair(false, 1));
-        CHECK(run(S, -1, 1, sizes) == std::make_pair(false, 1));
-        CHECK(run(S, 1, -1, sizes) == std::make_pair(false, 1));
+              dstd::Pair<bool, int>{false, 1});
+        CHECK(run(S, -1, 1, sizes) == dstd::Pair<bool, int>{false, 1});
+        CHECK(run(S, 1, -1, sizes) == dstd::Pair<bool, int>{false, 1});
         const std::int64_t negative[1] = {-1};
-        CHECK(run(S, 1, 1, negative) == std::make_pair(false, 1));
-        CHECK(run(S, 1, 0, sizes) == std::make_pair(false, 1));
+        CHECK(run(S, 1, 1, negative) == dstd::Pair<bool, int>{false, 1});
+        CHECK(run(S, 1, 0, sizes) == dstd::Pair<bool, int>{false, 1});
 
         put_view(view, blob.substr(0, 20), 2, 0);
-        CHECK(run(S, 1, 1, sizes) == std::make_pair(false, 1));
+        CHECK(run(S, 1, 1, sizes) == dstd::Pair<bool, int>{false, 1});
         put_view(view, blob.substr(0, 20), -1, 0);
-        CHECK(run(S, 1, 1, sizes) == std::make_pair(false, 1));
+        CHECK(run(S, 1, 1, sizes) == dstd::Pair<bool, int>{false, 1});
         put_view(view, blob.substr(0, 20), 0, 21);
-        CHECK(run(S, 1, 1, sizes) == std::make_pair(false, 1));
+        CHECK(run(S, 1, 1, sizes) == dstd::Pair<bool, int>{false, 1});
         put_view(view, blob.substr(0, 20), 0, -1);
-        CHECK(run(S, 1, 1, sizes) == std::make_pair(false, 1));
+        CHECK(run(S, 1, 1, sizes) == dstd::Pair<bool, int>{false, 1});
         const std::int32_t negative_size = -5;
         put_view(view, blob.substr(0, 20), 0, 0);
         std::memcpy(view, &negative_size, 4);
-        CHECK(run(S, 1, 1, sizes) == std::make_pair(false, 1));
+        CHECK(run(S, 1, 1, sizes) == dstd::Pair<bool, int>{false, 1});
     }
 
     TEST_CASE("a null row's view is not checked") {
@@ -275,7 +280,7 @@ TEST_SUITE("string view") {
         const Series s = make_view(SAMPLE, &released);
         std::int64_t expected = 10 * 16 + 2;
         for (const auto& b : *s.handle()->blobs)
-            expected += static_cast<std::int64_t>(b->size());
+            expected += static_cast<std::int64_t>(b.size());
         CHECK(dftu_series_buffer_bytes(s.handle()) == expected);
         const Series filtered = s.filter(s.str_contains("long"));
         CHECK(dftu_series_buffer_bytes(filtered.handle()) ==
@@ -292,17 +297,17 @@ TEST_SUITE("string view") {
         d->type = TypeId::String;
         d->encoding = Encoding::Dictionary;
         d->length = 5;
-        d->data = Buffer::allocate(sizeof(codes));
-        std::memcpy(d->data->data(), codes, sizeof(codes));
-        d->set_child(std::make_shared<dftu_series>(*base.handle()));
+        d->data = new_buffer(sizeof(codes));
+        std::memcpy(writable(d->data), codes, sizeof(codes));
+        d->set_child(dstd::make_shared<dftu_series>(*base.handle()));
         Series dict{d};
         const Rows expected = {values[1], values[0], values[2], values[1],
                                values[1]};
         CHECK(rows_of(dict) == expected);
         CHECK(rows_of(dict.materialize()) == expected);
         CHECK(bits_of(dict.str_contains("long")) ==
-              std::vector<int>{1, 0, 0, 1, 1});
-        CHECK(bits_of(dict.str_eq("pear")) == std::vector<int>{0, 0, 1, 0, 0});
+              dstd::Vector<int>{1, 0, 0, 1, 1});
+        CHECK(bits_of(dict.str_eq("pear")) == dstd::Vector<int>{0, 0, 1, 0, 0});
     }
 
     TEST_CASE("normalize, translate and wrap read a view and a dictionary") {
@@ -316,9 +321,9 @@ TEST_SUITE("string view") {
         d->type = TypeId::String;
         d->encoding = Encoding::Dictionary;
         d->length = 5;
-        d->data = Buffer::allocate(sizeof(codes));
-        std::memcpy(d->data->data(), codes, sizeof(codes));
-        d->set_child(std::make_shared<dftu_series>(*view.handle()));
+        d->data = new_buffer(sizeof(codes));
+        std::memcpy(writable(d->data), codes, sizeof(codes));
+        d->set_child(dstd::make_shared<dftu_series>(*view.handle()));
         const Series dict{d};
         const Series from = Series::strings({"a", "\xC3\xA9"});
         const Series to = Series::strings({"A", "e"});
@@ -344,9 +349,9 @@ TEST_SUITE("string view") {
         s->type = TypeId::String;
         s->encoding = Encoding::Selection;
         s->length = 4;
-        s->data = Buffer::allocate(sizeof(idx));
-        std::memcpy(s->data->data(), idx, sizeof(idx));
-        s->set_child(std::make_shared<dftu_series>(*base.handle()));
+        s->data = new_buffer(sizeof(idx));
+        std::memcpy(writable(s->data), idx, sizeof(idx));
+        s->set_child(dstd::make_shared<dftu_series>(*base.handle()));
         Series sel{s};
         const Rows expected = {SAMPLE[8], Row(), SAMPLE[3], SAMPLE[1]};
         CHECK(rows_of(sel) == expected);
@@ -387,9 +392,9 @@ TEST_SUITE("string view kernels match the flat column") {
               bits_of(p.flat.str_eq("exactly13byte")));
         const Series mask = p.flat.str_contains("e");
         CHECK(rows_of(p.view.filter(mask)) == rows_of(p.flat.filter(mask)));
-        const std::vector<std::int64_t> idx = {9, 1, 2, 2, 0, 8};
+        const dstd::Vector<std::int64_t> idx = {9, 1, 2, 2, 0, 8};
         CHECK(rows_of(p.view.take(idx)) == rows_of(p.flat.take(idx)));
-        const std::vector<std::int64_t> with_null = {3, -1, 1};
+        const dstd::Vector<std::int64_t> with_null = {3, -1, 1};
         CHECK(rows_of(p.view.take(with_null)) ==
               rows_of(p.flat.take(with_null)));
     }
@@ -398,7 +403,7 @@ TEST_SUITE("string view kernels match the flat column") {
         Pair p;
         CHECK(rows_of(p.view.sort()) == rows_of(p.flat.sort()));
         CHECK(rows_of(p.view.sort(true)) == rows_of(p.flat.sort(true)));
-        std::vector<std::int64_t> order;
+        dstd::Vector<std::int64_t> order;
         const Series a = p.view.argsort();
         for (std::int64_t i = 0; i < a.length(); ++i)
             order.push_back(a.data<std::int64_t>()[i]);
@@ -409,7 +414,7 @@ TEST_SUITE("string view kernels match the flat column") {
 
     TEST_CASE("group_by count and join on the string key") {
         Pair p;
-        std::vector<std::int64_t> v(10);
+        dstd::Vector<std::int64_t> v(10);
         for (std::int64_t i = 0; i < 10; ++i)
             v[static_cast<std::size_t>(i)] = i;
         auto frame = [&](const Series& key) {
@@ -420,10 +425,10 @@ TEST_SUITE("string view kernels match the flat column") {
             return f;
         };
         auto counts = [&](const Series& key) {
-            DataFrame g = frame(key).group_by(std::string("k"),
-                                              {GroupAgg{Agg::Count, "v", "n"}});
-            g = g.sort_by("k");
-            std::vector<std::pair<Row, std::int64_t>> out;
+            DataFrame g = dftu_utils_test::ok(frame(key).group_by(
+                dstd::String("k"), {GroupAgg{Agg::Count, "v", "n"}}));
+            g = dftu_utils_test::ok(g.sort_by("k"));
+            dstd::Vector<dstd::Pair<Row, std::int64_t>> out;
             const Series k = g.column("k");
             const Series n = g.column("n").materialize();
             for (std::int64_t i = 0; i < g.num_rows(); ++i)
@@ -439,8 +444,10 @@ TEST_SUITE("string view kernels match the flat column") {
             Series::strings({"pear", "short", "zz another long value here"}));
         const std::int64_t w[3] = {10, 20, 30};
         right.columns.push_back(Series::flat_i64(w, 3));
-        const DataFrame jv = frame(p.view).join(right, {"k"});
-        const DataFrame jf = frame(p.flat).join(right, {"k"});
+        const DataFrame jv =
+            dftu_utils_test::ok(frame(p.view).join(right, {"k"}));
+        const DataFrame jf =
+            dftu_utils_test::ok(frame(p.flat).join(right, {"k"}));
         REQUIRE(jv.num_rows() == jf.num_rows());
         CHECK(jv.num_rows() == 4);
         for (std::int64_t i = 0; i < jv.num_rows(); ++i) {
@@ -459,7 +466,8 @@ TEST_SUITE("string view kernels match the flat column") {
         right_view.columns[0] = make_view(
             {Row("pear"), Row("short"), Row("zz another long value here")},
             &released);
-        const DataFrame jw = left_flat.join(right_view, {"k"});
+        const DataFrame jw =
+            dftu_utils_test::ok(left_flat.join(right_view, {"k"}));
         CHECK(rows_of(jw.column("k")) == rows_of(jf.column("k")));
         CHECK(jw.num_rows() == 4);
     }
@@ -473,10 +481,14 @@ TEST_SUITE("string view kernels match the flat column") {
         Rows both = SAMPLE;
         both.insert(both.end(), other.begin(), other.end());
 
-        CHECK(rows_of(concat_columns({&p.view, &other_view})) == both);
-        CHECK(rows_of(concat_columns({&p.view, &other_flat})) == both);
-        CHECK(rows_of(concat_columns({&p.flat, &other_view})) == both);
-        CHECK(rows_of(concat_columns({&p.flat, &other_flat})) == both);
+        CHECK(rows_of(dftu_utils_test::ok(
+                  concat_columns({&p.view, &other_view}))) == both);
+        CHECK(rows_of(dftu_utils_test::ok(
+                  concat_columns({&p.view, &other_flat}))) == both);
+        CHECK(rows_of(dftu_utils_test::ok(
+                  concat_columns({&p.flat, &other_view}))) == both);
+        CHECK(rows_of(dftu_utils_test::ok(
+                  concat_columns({&p.flat, &other_flat}))) == both);
     }
 }
 
@@ -484,14 +496,15 @@ TEST_SUITE("string view writers") {
     TEST_CASE("spill writes a view column as values") {
         int released = 0;
         const Series s = make_view(SAMPLE, &released);
-        std::string bytes;
-        spill::put_series(bytes, s);
+        dstd::String bytes;
+        dftu_utils_test::ok(spill::put_series(bytes, s));
         const auto* p = reinterpret_cast<const std::uint8_t*>(bytes.data());
-        const Series back = spill::get_series(p, p + bytes.size());
+        const Series back =
+            dftu_utils_test::ok(spill::get_series(p, p + bytes.size()));
         REQUIRE(back.valid());
         CHECK(back.encoding() == Encoding::Flat);
         CHECK(rows_of(back) == SAMPLE);
-        std::vector<Series> cols;
+        dstd::Vector<Series> cols;
         cols.push_back(s.share());
         CHECK(spill::columns_bytes(cols) > 10 * 16);
     }
@@ -501,7 +514,8 @@ TEST_SUITE("string view writers") {
         DataFrame f;
         f.names = {"s"};
         f.columns.push_back(make_view(SAMPLE, &released));
-        const auto back = frame_from_native(frame_to_native(f));
+        const auto back =
+            frame_from_native(dftu_utils_test::ok(frame_to_native(f)));
         REQUIRE(back);
         CHECK(back->columns[0].encoding() == Encoding::Flat);
         CHECK(back->columns[0].type() == TypeId::String);
@@ -514,11 +528,12 @@ TEST_SUITE("string view writers") {
         DataFrame f;
         f.names = {"s"};
         f.columns.push_back(make_view(SAMPLE, &released));
-        std::vector<std::uint8_t> bytes;
-        REQUIRE_NOTHROW(bytes = f.to_ipc());
-        const std::string text(bytes.begin(), bytes.end());
-        CHECK(text.find("a value longer than twelve") != std::string::npos);
-        CHECK(text.find("zz another long value here") != std::string::npos);
+        auto ipc = f.to_ipc();
+        REQUIRE(ipc.has_value());
+        const dstd::Vector<std::uint8_t>& bytes = *ipc;
+        const dstd::String text(bytes.begin(), bytes.end());
+        CHECK(text.find("a value longer than twelve") != dstd::String::npos);
+        CHECK(text.find("zz another long value here") != dstd::String::npos);
     }
 #endif
 }
@@ -530,10 +545,10 @@ Series make_large(const Rows& rows, bool binary = false) {
     w->type = binary ? TypeId::LargeBinary : TypeId::LargeString;
     w->encoding = Encoding::Flat;
     w->length = static_cast<std::int64_t>(rows.size());
-    w->offsets = Buffer::allocate((rows.size() + 1) * sizeof(std::int64_t));
-    std::string bytes;
-    std::vector<std::uint8_t> valid((rows.size() + 7) / 8, 0);
-    auto* off = reinterpret_cast<std::int64_t*>(w->offsets->data());
+    w->offsets = new_buffer((rows.size() + 1) * sizeof(std::int64_t));
+    dstd::String bytes;
+    dstd::Vector<std::uint8_t> valid((rows.size() + 7) / 8, 0);
+    auto* off = reinterpret_cast<std::int64_t*>(writable(w->offsets));
     off[0] = 0;
     for (std::size_t i = 0; i < rows.size(); ++i) {
         if (rows[i]) {
@@ -544,31 +559,32 @@ Series make_large(const Rows& rows, bool binary = false) {
         }
         off[i + 1] = static_cast<std::int64_t>(bytes.size());
     }
-    w->data = Buffer::allocate(bytes.size());
+    w->data = new_buffer(bytes.size());
     if (!bytes.empty())
-        std::memcpy(w->data->data(), bytes.data(), bytes.size());
+        std::memcpy(writable(w->data), bytes.data(), bytes.size());
     if (w->null_count > 0) {
-        w->validity = Buffer::allocate(valid.size());
-        std::memcpy(w->validity->data(), valid.data(), valid.size());
+        w->validity = new_buffer(valid.size());
+        std::memcpy(writable(w->validity), valid.data(), valid.size());
     }
     return Series{w};
 }
 
 Series make_selection(const Series& base,
-                      const std::vector<std::int64_t>& idx) {
+                      const dstd::Vector<std::int64_t>& idx) {
     auto* s = new dftu_series();
     s->type = base.type();
     s->encoding = Encoding::Selection;
     s->length = static_cast<std::int64_t>(idx.size());
-    s->data = Buffer::allocate(idx.size() * sizeof(std::int64_t));
-    std::memcpy(s->data->data(), idx.data(), idx.size() * sizeof(std::int64_t));
-    s->set_child(std::make_shared<dftu_series>(*base.handle()));
+    s->data = new_buffer(idx.size() * sizeof(std::int64_t));
+    std::memcpy(writable(s->data), idx.data(),
+                idx.size() * sizeof(std::int64_t));
+    s->set_child(dstd::make_shared<dftu_series>(*base.handle()));
     return Series{s};
 }
 
-bool blobs_hold(const Series& s, const std::shared_ptr<Buffer>& b) {
+bool blobs_hold(const Series& s, const BufferView& b) {
     for (const auto& x : *s.handle()->blobs)
-        if (x->data() == b->data()) return true;
+        if (x.data() == b.data()) return true;
     return false;
 }
 
@@ -591,7 +607,7 @@ TEST_SUITE("string view concat") {
         Series v = make_view(SAMPLE, &released);
         Series d = make_flat(dict_rows).dictionary_encode();
         REQUIRE(d.encoding() == Encoding::Dictionary);
-        Series out = concat_columns({&f, &v, &d});
+        Series out = dftu_utils_test::ok(concat_columns({&f, &v, &d}));
         CHECK(out.encoding() == Encoding::View);
         CHECK(out.type() == TypeId::String);
         CHECK(out.length() == 16);
@@ -611,7 +627,7 @@ TEST_SUITE("string view concat") {
         int r1 = 0, r2 = 0;
         Series a = make_view(SAMPLE, &r1);
         Series b = make_view(SAMPLE, &r2);
-        Series out = concat_columns({&a, &b, &a});
+        Series out = dftu_utils_test::ok(concat_columns({&a, &b, &a}));
         CHECK(out.handle()->blobs->size() == 4);
         CHECK(rows_of(out) == join({SAMPLE, SAMPLE, SAMPLE}));
         CHECK(rows_of(out.materialize()) == join({SAMPLE, SAMPLE, SAMPLE}));
@@ -622,7 +638,7 @@ TEST_SUITE("string view concat") {
         Series base = make_view(SAMPLE, &released);
         Series sel = make_selection(base, {8, -1, 3, 1});
         Series f = make_flat({Row("tail")});
-        Series out = concat_columns({&sel, &f});
+        Series out = dftu_utils_test::ok(concat_columns({&sel, &f}));
         CHECK(out.encoding() == Encoding::View);
         CHECK(rows_of(out) ==
               Rows{SAMPLE[8], Row(), SAMPLE[3], SAMPLE[1], Row("tail")});
@@ -636,7 +652,7 @@ TEST_SUITE("string view concat") {
         Series fa = make_flat(a);
         Series vb = make_view(b, &released);
         Series dc = make_flat({Row("p"), Row()}).dictionary_encode();
-        Series out = concat_columns({&fa, &vb, &dc});
+        Series out = dftu_utils_test::ok(concat_columns({&fa, &vb, &dc}));
         CHECK(rows_of(out) == join({a, b, rows_of(dc)}));
         CHECK(out.null_count() == 4);
     }
@@ -651,7 +667,7 @@ TEST_SUITE("string view concat") {
         Series d2 = make_flat({Row("beta"), Row("a long distinct value"),
                                Row("gamma"), Row("beta")})
                         .dictionary_encode();
-        Series out = concat_columns({&d1, &d2});
+        Series out = dftu_utils_test::ok(concat_columns({&d1, &d2}));
         CHECK(out.encoding() == Encoding::Dictionary);
         CHECK(out.handle()->child()->encoding == Encoding::View);
         CHECK(out.handle()->child()->length == 4);
@@ -668,7 +684,7 @@ TEST_SUITE("string view concat") {
             codes, make_flat({Row("p"), Row("a long value past twelve")}),
             &valid);
         Series v = make_flat({Row("q")}).dictionary_encode();
-        Series out = concat_columns({&a, &v});
+        Series out = dftu_utils_test::ok(concat_columns({&a, &v}));
         CHECK(out.encoding() == Encoding::Dictionary);
         CHECK(rows_of(out) == Rows{Row("p"), Row(), Row("p"), Row("q")});
     }
@@ -680,7 +696,7 @@ TEST_SUITE("string view concat") {
         Series b =
             make_view({Row("{\"k\":\"a long json object value\"}")}, &released)
                 .as_json();
-        Series out = concat_columns({&a, &b});
+        Series out = dftu_utils_test::ok(concat_columns({&a, &b}));
         CHECK(out.is_json());
         CHECK(out.encoding() == Encoding::View);
         CHECK(rows_of(out) ==
@@ -694,39 +710,39 @@ TEST_SUITE("string view concat") {
                            Row("w")};
         Series w = make_large(rows);
         Series f = make_flat({Row("narrow")});
-        Series out = concat_columns({&w, &f});
+        Series out = dftu_utils_test::ok(concat_columns({&w, &f}));
         CHECK(out.type() == TypeId::String);
         CHECK(out.encoding() == Encoding::View);
         CHECK(blobs_hold(out, w.handle()->data));
         CHECK(rows_of(out) == join({rows, Rows{Row("narrow")}}));
 
         Series wb = make_large(rows, true);
-        Series bin = concat_columns({&wb, &wb});
+        Series bin = dftu_utils_test::ok(concat_columns({&wb, &wb}));
         CHECK(bin.type() == TypeId::Binary);
         CHECK(bin.encoding() == Encoding::View);
         CHECK(bin.length() == 6);
         CHECK(bin.null_count() == 2);
-        CHECK(std::string(bin.string_at(3)) == *rows[0]);
+        CHECK(dstd::String(bin.string_at(3)) == *rows[0]);
     }
 
     TEST_CASE("empty and single parts") {
         Series e = make_flat({});
         Series a = make_flat({Row("one"), Row("a value over twelve bytes")});
-        Series out = concat_columns({&e, &a, &e});
+        Series out = dftu_utils_test::ok(concat_columns({&e, &a, &e}));
         CHECK(out.encoding() == Encoding::View);
         CHECK(rows_of(out) == rows_of(a));
-        Series none = concat_columns({&e, &e});
+        Series none = dftu_utils_test::ok(concat_columns({&e, &e}));
         CHECK(none.length() == 0);
         CHECK(none.null_count() == 0);
-        Series one = concat_columns({&a});
+        Series one = dftu_utils_test::ok(concat_columns({&a}));
         CHECK(rows_of(one) == rows_of(a));
     }
 
     TEST_CASE("a concat result filters and concatenates again") {
         Series a = make_flat({Row("keep this long value"), Row("drop")});
         Series b = make_flat({Row("keep that long value")});
-        Series once = concat_columns({&a, &b});
-        Series twice = concat_columns({&once, &a});
+        Series once = dftu_utils_test::ok(concat_columns({&a, &b}));
+        Series twice = dftu_utils_test::ok(concat_columns({&once, &a}));
         CHECK(rows_of(twice) == Rows{Row("keep this long value"), Row("drop"),
                                      Row("keep that long value"),
                                      Row("keep this long value"), Row("drop")});

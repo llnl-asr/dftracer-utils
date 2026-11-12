@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Tests for the distributed-build path producing a unified-shape index.
 
 Covers per-file AGG markers, ensure_indexed no-op after build, and end-to-end
@@ -36,13 +37,9 @@ def _build_distributed(env, pids, num_events=100):
     index_dir = os.path.join(env.temp_dir, "idx")
     os.makedirs(index_dir, exist_ok=True)
     index_path = os.path.join(index_dir, ".dftindex")
-    staging = os.path.join(env.temp_dir, "stage")
-    os.makedirs(staging, exist_ok=True)
     result = distributed_index(
         files=files,
         index_path=index_path,
-        local_staging=staging,
-        shared_staging=staging,
         client=None,
         aggregation_config=AGG_CFG,
     )
@@ -70,7 +67,7 @@ class TestDistributedIndexUnified:
             uni_indexer = Indexer(
                 files=files_dist,
                 index_dir=uni_index_dir,
-                require_aggregation=AGG_CFG,
+                aggregation_config=AGG_CFG,
                 force_rebuild=True,
             )
             uni_indexer.ensure_indexed()
@@ -81,33 +78,6 @@ class TestDistributedIndexUnified:
                 f"event count mismatch: unified={uni_count} distributed={dist_count}"
             )
             assert uni_count > 0
-
-    def test_move_artifacts_preserves_per_file_agg_ssts(self):
-        """With cross-FS staging, per-file `aggregation.sst` must not collapse."""
-        with Environment(lines=120) as env:
-            files = [
-                env.create_dft_trace_file_with_pid(f"trace_p{p}.pfw.gz", p, 120)
-                for p in [1, 2, 3, 4]
-            ]
-            local_staging = os.path.join(env.temp_dir, "local_stage")
-            shared_staging = os.path.join(env.temp_dir, "lustre_stage")
-            os.makedirs(local_staging, exist_ok=True)
-            os.makedirs(shared_staging, exist_ok=True)
-            index_dir = os.path.join(env.temp_dir, "idx")
-            os.makedirs(index_dir, exist_ok=True)
-            index_path = os.path.join(index_dir, ".dftindex")
-
-            distributed_index(
-                files=files,
-                index_path=index_path,
-                local_staging=local_staging,
-                shared_staging=shared_staging,
-                client=None,
-                aggregation_config=AGG_CFG,
-            )
-
-            total = _agg_event_count(files, os.path.dirname(index_path))
-            assert total > 0, "no events: per-file SSTs likely clobbered each other"
 
     def test_ensure_indexed_is_noop_after_distributed_build(self):
         import time as _time
@@ -121,7 +91,7 @@ class TestDistributedIndexUnified:
                 index_dir=os.path.dirname(index_path),
                 require_checkpoint=True,
                 require_bloom=True,
-                require_aggregation=AGG_CFG,
+                aggregation_config=AGG_CFG,
                 force_rebuild=False,
             )
             status = indexer.ensure_indexed()
@@ -155,31 +125,96 @@ class TestDistributedWithDask:
                 index_dir = os.path.join(env.temp_dir, "idx")
                 os.makedirs(index_dir, exist_ok=True)
                 index_path = os.path.join(index_dir, ".dftindex")
-                staging = os.path.join(env.temp_dir, "stage")
-                os.makedirs(staging, exist_ok=True)
                 result = distributed_index(
                     files=files,
                     index_path=index_path,
-                    local_staging=staging,
-                    shared_staging=staging,
                     client=client,
                     aggregation_config=AGG_CFG,
                 )
                 assert result["total_files"] == len(files)
-                assert result["artifact_batches"] > 0
                 assert not os.path.exists(os.path.join(index_path, "agg_manifest.json"))
+
+                # The coordinator process reads back what the worker processes
+                # wrote, and it matches a serial build.
+                status = Indexer(
+                    files=files,
+                    index_dir=index_dir,
+                    require_checkpoint=True,
+                    require_bloom=True,
+                    aggregation_config=AGG_CFG,
+                    force_rebuild=False,
+                ).ensure_indexed()
+                assert len(status.ready) == len(files)
+                assert len(status.needs_work) == 0
+
+                serial_dir = os.path.join(env.temp_dir, "idx_serial")
+                os.makedirs(serial_dir, exist_ok=True)
+                Indexer(
+                    files=files,
+                    index_dir=serial_dir,
+                    aggregation_config=AGG_CFG,
+                    force_rebuild=True,
+                ).ensure_indexed()
+                serial_count = _agg_event_count(files, serial_dir)
+                assert serial_count > 0
+                assert _agg_event_count(files, index_dir) == serial_count
+
+
+@pytest.mark.skipif(not DASK_AVAILABLE, reason="Dask not available")
+class TestDistributedWholeFiles:
+    def test_a_multi_member_file_keeps_every_event(self):
+        """A file larger than its share of the work is built whole by one
+        worker, so no member of it is left out of the index."""
+        from dask.distributed import Client, LocalCluster
+
+        with LocalCluster(
+            n_workers=2, threads_per_worker=1, dashboard_address=None, processes=True
+        ) as cluster, Client(cluster) as client:
+            with Environment(lines=40) as env:
+                parts = [
+                    env.create_dft_trace_file_with_pid(f"part{i}.pfw.gz", 1, 400) for i in range(4)
+                ]
+                big = os.path.join(env.temp_dir, "big.pfw.gz")
+                with open(big, "wb") as out:
+                    for part in parts:
+                        with open(part, "rb") as member:
+                            out.write(member.read())
+                for part in parts:
+                    os.remove(part)
+                small = env.create_dft_trace_file_with_pid("small.pfw.gz", 2, 5)
+                files = [big, small]
+
+                index_dir = os.path.join(env.temp_dir, "idx")
+                os.makedirs(index_dir, exist_ok=True)
+                result = distributed_index(
+                    files=files,
+                    index_path=os.path.join(index_dir, ".dftindex"),
+                    client=client,
+                    aggregation_config=AGG_CFG,
+                )
+                assert sorted(result["per_worker"]) == [1, 1]
+
+                serial_dir = os.path.join(env.temp_dir, "idx_serial")
+                os.makedirs(serial_dir, exist_ok=True)
+                Indexer(
+                    files=files,
+                    index_dir=serial_dir,
+                    aggregation_config=AGG_CFG,
+                    force_rebuild=True,
+                ).ensure_indexed()
+                serial_count = _agg_event_count(files, serial_dir)
+                assert serial_count > 1600
+                assert _agg_event_count(files, index_dir) == serial_count
 
 
 @pytest.mark.skipif(not DASK_AVAILABLE, reason="Dask not available")
 class TestDistributedIndexIdempotent:
     """distributed_index skips the parse fan-out for already-indexed files."""
 
-    def _run(self, files, index_path, staging, **kw):
+    def _run(self, files, index_path, **kw):
         return distributed_index(
             files=files,
             index_path=index_path,
-            local_staging=staging,
-            shared_staging=staging,
             client=None,
             aggregation_config=AGG_CFG,
             **kw,
@@ -188,32 +223,72 @@ class TestDistributedIndexIdempotent:
     def _setup(self, env, pids):
         files = [env.create_dft_trace_file_with_pid(f"t{p}.pfw.gz", p, 100) for p in pids]
         index_path = os.path.join(env.temp_dir, ".dftindex")
-        staging = os.path.join(env.temp_dir, "stage")
-        os.makedirs(staging, exist_ok=True)
-        return files, index_path, staging
+        return files, index_path
 
     def test_warm_call_skips_reparse(self):
         with Environment(lines=50) as env:
-            files, index_path, staging = self._setup(env, [1, 2])
-            cold = self._run(files, index_path, staging)
-            assert cold["artifact_batches"] > 0
-            warm = self._run(files, index_path, staging)
-            assert warm["artifact_batches"] == 0
+            files, index_path = self._setup(env, [1, 2])
+            cold = self._run(files, index_path)
+            assert sum(cold["per_worker"]) == 2
+            warm = self._run(files, index_path)
             assert warm["per_worker"] == []
             assert warm["total_files"] == 2
 
     def test_partial_builds_only_new_file(self):
         with Environment(lines=50) as env:
-            files, index_path, staging = self._setup(env, [1, 2])
-            self._run(files, index_path, staging)
+            files, index_path = self._setup(env, [1, 2])
+            self._run(files, index_path)
             files.append(env.create_dft_trace_file_with_pid("t3.pfw.gz", 3, 100))
-            part = self._run(files, index_path, staging)
+            part = self._run(files, index_path)
             assert part["total_files"] == 3
             assert sum(part["per_worker"]) == 1
 
     def test_force_rebuild_reparses_all(self):
         with Environment(lines=50) as env:
-            files, index_path, staging = self._setup(env, [1, 2])
-            self._run(files, index_path, staging)
-            forced = self._run(files, index_path, staging, force_rebuild=True)
+            files, index_path = self._setup(env, [1, 2])
+            self._run(files, index_path)
+            forced = self._run(files, index_path, force_rebuild=True)
             assert sum(forced["per_worker"]) == 2
+
+
+class TestStoreSeesOtherProcesses:
+    def test_long_lived_process_sees_another_process_write(self):
+        import subprocess
+        import sys
+        import textwrap
+        import time
+
+        with Environment(lines=50) as env:
+            first = env.create_dft_trace_file_with_pid("a.pfw.gz", 1, 100)
+            second = env.create_dft_trace_file_with_pid("b.pfw.gz", 2, 100)
+            index_dir = os.path.join(env.temp_dir, "idx")
+            os.makedirs(index_dir, exist_ok=True)
+
+            def resolve(files):
+                return Indexer(
+                    files=files,
+                    index_dir=index_dir,
+                    require_checkpoint=True,
+                    require_bloom=True,
+                    force_rebuild=False,
+                ).resolve()
+
+            Indexer(
+                files=[first], index_dir=index_dir, require_checkpoint=True, require_bloom=True
+            ).ensure_indexed()
+            # This process now holds the index, and sees the second file as new.
+            assert second in resolve([first, second]).needs_work
+
+            child = textwrap.dedent(
+                f"""
+                from dftracer.utils import Indexer
+                Indexer(files=[{second!r}], index_dir={index_dir!r},
+                        require_checkpoint=True, require_bloom=True).ensure_indexed()
+                """
+            )
+            subprocess.run([sys.executable, "-c", child], check=True)
+
+            # Past the check interval the held index sees the other process's
+            # file without a refresh() call.
+            time.sleep(1.2)
+            assert resolve([first, second]).needs_work == []

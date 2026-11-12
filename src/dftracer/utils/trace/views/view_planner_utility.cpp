@@ -1,31 +1,33 @@
-#include <dftracer/utils/core/common/logging.h>
-#include <dftracer/utils/index/plan/prune.h>
-#include <dftracer/utils/index/store/index_database.h>
-#include <dftracer/utils/index/store/internal/helpers.h>
+// SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/fileio/file_helpers.h>
+#include <dftracer/utils/trace/index/index.h>
+#include <dftracer/utils/trace/index/plan/prune.h>
+#include <dftracer/utils/trace/index/tables.h>
 #include <dftracer/utils/trace/views/view_definition.h>
 #include <dftracer/utils/trace/views/view_planner_utility.h>
 
 #include <cstdint>
-#include <string>
-#include <vector>
 
 namespace dftracer::utils::trace::views {
 
-namespace plan = dftracer::utils::index::plan;
-using dftracer::utils::index::store::IndexDatabase;
-using dftracer::utils::index::store::internal::get_logical_path;
+using fileio::get_logical_path;
 
 ViewPlannerInput& ViewPlannerInput::with_view(const ViewDefinition& v) {
     view = v;
     return *this;
 }
 
-ViewPlannerInput& ViewPlannerInput::with_file_path(const std::string& path) {
+ViewPlannerInput& ViewPlannerInput::with_file_path(const dstd::String& path) {
     file_path = path;
     return *this;
 }
 
-ViewPlannerInput& ViewPlannerInput::with_index_path(const std::string& path) {
+ViewPlannerInput& ViewPlannerInput::with_index_path(const dstd::String& path) {
     index_path = path;
     return *this;
 }
@@ -35,8 +37,8 @@ ViewPlannerInput& ViewPlannerInput::with_uncompressed_size(std::size_t s) {
     return *this;
 }
 
-ViewPlannerInput& ViewPlannerInput::with_num_checkpoints(std::size_t n) {
-    num_checkpoints = n;
+ViewPlannerInput& ViewPlannerInput::with_checkpoint_count(std::size_t n) {
+    checkpoint_count = n;
     return *this;
 }
 
@@ -50,77 +52,88 @@ ViewPlannerInput& ViewPlannerInput::with_scan_all_chunks(bool v) {
     return *this;
 }
 
-coro::CoroTask<Result<ViewPlannerOutput>> ViewPlannerUtility::operator()(
+ViewPlannerInput& ViewPlannerInput::with_snapshot(
+    const trace::index::Snapshot* s) {
+    snapshot = s;
+    return *this;
+}
+
+coro::CoroTask<dstd::Result<ViewPlannerOutput>> ViewPlannerUtility::operator()(
     const ViewPlannerInput& input) {
     DFTRACER_UTILS_TRACE_SCOPE("build view");
     ViewPlannerOutput output;
 
     std::uint64_t total_checkpoints =
-        (input.num_checkpoints == 0) ? 1 : input.num_checkpoints;
+        (input.checkpoint_count == 0) ? 1 : input.checkpoint_count;
     output.total_checkpoints = total_checkpoints;
 
     // Real per-chunk offsets are required: gzip members are non-uniformly
     // sized, so a uniform ckpt_idx*bytes_per estimate decodes the wrong bytes.
-    std::vector<std::uint64_t> candidate_checkpoints;
-    std::vector<dftracer::utils::index::gzip::ChunkSpan> chunk_spans;
+    dstd::Vector<std::uint64_t> candidate_checkpoints;
+    dstd::Vector<dftracer::utils::trace::index::gzip::ChunkSpan> chunk_spans;
     const bool indexed = !input.index_path.empty();
     if (indexed) {
-        try {
-            // Read-only: TraceIndex already holds the shared index open
-            // read-only; a read-write open would fail to upgrade.
-            IndexDatabase idx_db(
-                input.index_path,
-                dftracer::utils::index::store::IndexOpenMode::ReadOnly);
-            if (!input.scan_all_chunks) {
-                // The query and window describe data events; metadata the
-                // scan returns lives in chunks of its own.
-                const auto metadata =
-                    input.view.filter_metadata    ? plan::MetadataUse::RECORDS
-                    : input.view.metadata_records ? plan::MetadataUse::ALL
-                    : input.view.include_metadata ? plan::MetadataUse::EVERY
-                                                  : plan::MetadataUse::NONE;
-                // Named, not built inside co_await: GCC 12 destroys such a
-                // temporary twice.
-                plan::PruneRequest request{
-                    input.index_path,
-                    input.file_path,
-                    input.view.query ? &*input.view.query : nullptr,
-                    &idx_db,
-                    input.time_range,
-                    total_checkpoints,
-                    !input.view.window_overlap,
-                    metadata};
-                auto pruned = co_await plan::prune_file(std::move(request));
-                if (!pruned)
-                    co_return unexpected<DFTUtilsError>(pruned.error());
-                if (pruned->total_chunks > 0) {
-                    total_checkpoints = pruned->total_chunks;
-                    output.total_checkpoints = total_checkpoints;
-                }
-                if (!pruned->file_may_match) {
-                    output.file_may_match = false;
-                    output.skipped_checkpoints = total_checkpoints;
-                    co_return output;
-                }
-                if (pruned->all_chunks) {
-                    for (std::uint64_t i = 0; i < total_checkpoints; ++i)
-                        candidate_checkpoints.push_back(i);
-                } else {
-                    candidate_checkpoints = std::move(pruned->candidates);
-                }
+        // Fail loudly: swallowing this leaves chunk_spans empty, which reads
+        // downstream as a prune and silently drops the file.
+        const auto read_failed = [&](const dstd::Error& error) {
+            return common::make_error<
+                "ViewPlanner: index read failed for {}: {}">(
+                common::ErrorCode::Indexer, input.file_path, error.message());
+        };
+        dstd::Optional<dftracer::utils::trace::index::Snapshot> owned;
+        if (input.snapshot == nullptr) {
+            auto opened = trace::index::plan::open_snapshot(input.index_path);
+            if (!opened) co_return read_failed(opened.error());
+            owned.emplace(std::move(*opened));
+        }
+        const dftracer::utils::trace::index::Snapshot& snapshot =
+            input.snapshot != nullptr ? *input.snapshot : *owned;
+        if (!input.scan_all_chunks) {
+            // The query and window describe data events; metadata the
+            // scan returns lives in chunks of its own.
+            const auto metadata = input.view.filter_metadata
+                                      ? trace::index::plan::MetadataUse::Records
+                                  : input.view.metadata_records
+                                      ? trace::index::plan::MetadataUse::All
+                                  : input.view.include_metadata
+                                      ? trace::index::plan::MetadataUse::Every
+                                      : trace::index::plan::MetadataUse::None;
+            // Named, not built inside co_await: GCC 12 destroys such a
+            // temporary twice.
+            trace::index::plan::PruneRequest request{
+                dstd::String(dstd::StringView(input.index_path)),
+                dstd::String(dstd::StringView(input.file_path)),
+                input.view.query ? &*input.view.query : nullptr,
+                &snapshot,
+                input.time_range,
+                total_checkpoints,
+                !input.view.window_overlap,
+                metadata};
+            auto pruned =
+                co_await trace::index::plan::prune_file(std::move(request));
+            if (!pruned) co_return dstd::Unexpected(std::move(pruned).error());
+            if (pruned->total_chunks > 0) {
+                total_checkpoints = pruned->total_chunks;
+                output.total_checkpoints = total_checkpoints;
             }
-            int fid =
-                idx_db.get_file_info_id(get_logical_path(input.file_path));
-            if (fid >= 0 &&
-                (!candidate_checkpoints.empty() || input.scan_all_chunks))
-                chunk_spans = idx_db.query_chunk_spans(fid);
-        } catch (const std::exception& e) {
-            // Fail loudly: swallowing this leaves chunk_spans empty, which
-            // reads downstream as a prune and silently drops the file.
-            co_return make_error(
-                ErrorCode::INDEXER,
-                std::string("ViewPlanner: index read failed for ") +
-                    input.file_path + ": " + e.what());
+            if (!pruned->file_may_match) {
+                output.file_may_match = false;
+                output.skipped_checkpoints = total_checkpoints;
+                co_return output;
+            }
+            if (pruned->all_chunks) {
+                for (std::uint64_t i = 0; i < total_checkpoints; ++i)
+                    candidate_checkpoints.push_back(i);
+            } else {
+                candidate_checkpoints.assign(pruned->candidates.begin(),
+                                             pruned->candidates.end());
+            }
+        }
+        const auto file = snapshot.file(get_logical_path(input.file_path));
+        if (file && (!candidate_checkpoints.empty() || input.scan_all_chunks)) {
+            auto listed = dftracer::utils::trace::index::spans(snapshot, *file);
+            if (!listed) co_return read_failed(listed.error());
+            chunk_spans = std::move(*listed);
         }
         if (input.scan_all_chunks) {
             for (std::uint64_t i = 0; i < chunk_spans.size(); ++i)
@@ -138,8 +151,8 @@ coro::CoroTask<Result<ViewPlannerOutput>> ViewPlannerUtility::operator()(
             candidate_checkpoints.push_back(i);
     }
 
-    // Compute byte ranges from real chunk offsets; fall back to a uniform
-    // estimate only when the chunk table is unavailable.
+    // Byte ranges come from real chunk offsets. A uniform cut of several chunks
+    // would decode the wrong bytes, so a missing table is an error.
     for (auto ckpt_idx : candidate_checkpoints) {
         ViewChunkCandidate candidate;
         candidate.checkpoint_idx = ckpt_idx;
@@ -156,16 +169,21 @@ coro::CoroTask<Result<ViewPlannerOutput>> ViewPlannerUtility::operator()(
             candidate.end_byte = input.uncompressed_size;
             output.candidates.push_back(candidate);
             break;
-        } else if (input.num_checkpoints > 0) {
-            std::size_t bytes_per =
-                input.uncompressed_size / input.num_checkpoints;
-            candidate.start_byte = ckpt_idx * bytes_per;
-            candidate.end_byte = (ckpt_idx + 1 == input.num_checkpoints)
-                                     ? input.uncompressed_size
-                                     : (ckpt_idx + 1) * bytes_per;
-        } else {
+        } else if (total_checkpoints == 1) {
+            // One chunk is the whole file, so no byte cut can misplace it.
+            DFTRACER_UTILS_LOG_DEBUG(
+                "ViewPlanner: {} has no chunk table entry; read it whole",
+                input.file_path);
             candidate.start_byte = 0;
             candidate.end_byte = input.uncompressed_size;
+        } else {
+            co_return common::make_error(
+                common::ErrorCode::Indexer,
+                dstd::String("ViewPlanner: the chunk table of ") +
+                    input.file_path + " has " +
+                    dstd::to_string(chunk_spans.size()) +
+                    " chunks and cannot place chunk " +
+                    dstd::to_string(ckpt_idx));
         }
 
         output.candidates.push_back(candidate);

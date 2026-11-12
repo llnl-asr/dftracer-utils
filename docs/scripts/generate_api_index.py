@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Generate comprehensive C++ API reference pages from Doxygen XML output.
 
 Auto-discovers all public classes/structs from Doxygen XML, groups them
@@ -23,7 +24,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import subprocess
 import xml.etree.ElementTree as ET
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -36,7 +36,11 @@ ROOT_NS = "dftracer::utils"
 SKIP_SEGMENTS = {"detail", "internal", "impl"}
 
 # Skip items from these file paths
-SKIP_PATHS = ["/cpmsource/", "/third_party/", "/test/", "/tests/"]
+SKIP_PATHS = ["/cpmsource/", "/third_party/", "/test/", "/tests/", "/detail/"]
+
+# Types with anonymous unions: breathe cannot parse their unnamed members, so
+# these show their description and no member list.
+NO_MEMBER_LIST = {"dftracer::utils::runtime::io::IoOp"}
 
 # Only include items from files matching this
 INCLUDE_ROOT = "dftracer/utils"
@@ -44,11 +48,8 @@ INCLUDE_ROOT = "dftracer/utils"
 # Map namespace prefixes to related guide pages (for cross-references)
 GUIDE_PAGES: dict[str, str] = {
     "coro": "coro",
-    "io": "io",
-    "task_graph": "task_graph",
-    "utilities.common.arrow": "arrow",
-    "index": "indexer",
-    "utilities.reader": "reader",
+    "runtime.io": "io",
+    "trace.index": "indexer",
     "utilities.composites.dft.aggregators": "dft_aggregators",
     "utilities.composites.dft.indexing": "dft_indexing",
 }
@@ -66,12 +67,11 @@ TITLE_OVERRIDES: dict[str, str] = {
     "json": "JSON",
     "hash": "Hashing",
     "coro": "Coroutine Primitives",
-    "io": "Async I/O",
-    "task_graph": "Task Graph",
+    "runtime.io": "Async I/O",
     "server": "HTTP Server",
     "mpi": "MPI Utilities",
     "utilities.common.statistics": "Statistics (DDSketch, Histogram)",
-    "utilities.common.arrow": "Arrow Data Interchange",
+    "utilities.arrow": "Arrow Data Interchange",
     "utilities.common.json": "JSON Utilities",
     "utilities.common.query": "Query DSL",
     "utilities.compression.zlib": "Compression (Zlib)",
@@ -259,7 +259,7 @@ def parse_doxygen_xml(xml_dir: Path) -> list[APIItem]:
 
 
 def _ns_suffix_from_full(ns_full: str) -> str:
-    """Namespace suffix after ROOT_NS, dotted. ``dftracer::utils::io`` -> ``io``."""
+    """Namespace suffix after ROOT_NS, dotted. ``dftracer::utils::runtime::io`` -> ``runtime.io``."""
     if ns_full == ROOT_NS:
         return ""
     suffix = ns_full[len(ROOT_NS) :]
@@ -370,6 +370,9 @@ def parse_namespace_functions(xml_dir: Path) -> list[APIItem]:
 # merged into their parent namespace.
 MIN_MODULE_SIZE = 3
 
+# Namespaces that keep their own page below MIN_MODULE_SIZE.
+KEEP_SMALL_MODULES = {"json"}
+
 
 def discover_modules(items: list[APIItem]) -> list[Module]:
     """Auto-discover modules from the namespace hierarchy of API items.
@@ -407,7 +410,11 @@ def discover_modules(items: list[APIItem]) -> list[Module]:
     merged: dict[str, list[APIItem]] = {}
     for ns_suffix in sorted(ns_items.keys(), key=lambda s: (-s.count("."), s)):
         items_list = ns_items[ns_suffix]
-        if len(items_list) < MIN_MODULE_SIZE and ns_suffix:
+        if (
+            len(items_list) < MIN_MODULE_SIZE
+            and ns_suffix
+            and ns_suffix not in KEEP_SMALL_MODULES
+        ):
             # Find parent namespace
             parent = ns_suffix.rsplit(".", 1)[0] if "." in ns_suffix else ""
             ns_items[parent].extend(items_list)
@@ -476,10 +483,10 @@ def detect_repo_url(repo_root: Path) -> str:
 
     Resolves to the canonical LLNL repo by default. A contributor's local
     fork remote must never leak into published source links, so `git remote`
-    is deliberately not consulted; set DFTRACER_DOCS_REPO_URL (or run under
+    is deliberately not consulted; set DFTRACER_UTILS_DOCS_REPO_URL (or run under
     ReadTheDocs / GitHub Actions) to point elsewhere.
     """
-    override = os.environ.get("DFTRACER_DOCS_REPO_URL")
+    override = os.environ.get("DFTRACER_UTILS_DOCS_REPO_URL")
     if override:
         return override.removesuffix(".git")
 
@@ -502,7 +509,7 @@ def detect_repo_url(repo_root: Path) -> str:
 
 def detect_source_ref(repo_root: Path) -> str:
     """Detect the git ref used for source links."""
-    override = os.environ.get("DFTRACER_DOCS_SOURCE_REF")
+    override = os.environ.get("DFTRACER_UTILS_DOCS_SOURCE_REF")
     if override:
         return override
 
@@ -659,8 +666,9 @@ def generate_module_rst(
         emit_source_block(lines, rst_dir, repo_root, repo_url, source_ref, item)
         lines.append(f".. {directive}:: {item.name}")
         lines.append("   :project: dftracer-utils")
-        lines.append("   :members:")
-        lines.append("   :undoc-members:")
+        if item.name not in NO_MEMBER_LIST:
+            lines.append("   :members:")
+            lines.append("   :undoc-members:")
         lines.append("")
 
     functions = sorted(
@@ -700,7 +708,12 @@ def generate(xml_dir: Path, output_dir: Path) -> None:
     repo_url = detect_repo_url(repo_root)
     source_ref = detect_source_ref(repo_root)
     items = parse_doxygen_xml(xml_dir)
-    functions = parse_namespace_functions(xml_dir)
+    # A deduction guide is listed as a function with the name of its class,
+    # and the class entry already covers it.
+    class_names = {i.name for i in items}
+    functions = [
+        f for f in parse_namespace_functions(xml_dir) if f.name not in class_names
+    ]
     items.extend(functions)
     print(
         f"  Found {len(items)} public API items "

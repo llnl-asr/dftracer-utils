@@ -1,56 +1,44 @@
+// SPDX-License-Identifier: MIT
 // DFTU_SVC_AGG: a columnar fold accumulates each batch's key + value columns
 // into the dataframe engine's cross-batch AggState, merged across worker slices
 // and finalized to a native dataframe result (no Arrow hop).
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/string_intern.h>
-#include <dftracer/utils/core/runtime.h>
-#include <dftracer/utils/plugins/fold_adapter.h>
+#include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/domains/plugins/fold_adapter.h>
+#include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/runtime/runtime.h>
 
-#include <memory>
 // After fold_adapter.h so nanoarrow is set up before dataframe/abi.h's
 // arrow_abi.
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/agg_op_codes.h>
+#include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/plugin.h>
 #include <dftracer/utils/trace/schema.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/trace/views/fold_event.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <cstdint>
-#include <map>
-#include <span>
-#include <string>
 #include <utility>
 #include <variant>
-#include <vector>
 
-using dftracer::utils::CoroScope;
-using dftracer::utils::Runtime;
-using dftracer::utils::StringIntern;
-using dftracer::utils::plugins::AggCol;
-using dftracer::utils::plugins::Host;
-using dftracer::utils::plugins::NamedResultRegistry;
-using dftracer::utils::plugins::OwnedDataFrame;
-using dftracer::utils::plugins::PluginFold;
-using dftracer::utils::plugins::SharedResultRegistry;
-using dftracer::utils::trace::RecordPhase;
-namespace agg = dftracer::utils::plugins::agg;
-namespace coro = dftracer::utils::coro;
-namespace views = dftracer::utils::trace::views;
-using views::detail::FoldBatch;
-using views::detail::FoldEvent;
-using views::detail::ScanUnit;
+using namespace dftracer::utils;
 
 namespace {
 
-FoldEvent evt(StringIntern& intern, const char* cat, const char* name,
-              std::uint64_t dur) {
-    FoldEvent fe;
+trace::views::detail::FoldEvent evt(dstd::StringIntern& intern, const char* cat,
+                                    const char* name, std::uint64_t dur) {
+    trace::views::detail::FoldEvent fe;
     fe.cat_id = intern.get_or_insert(cat);
     fe.name_id = intern.get_or_insert(name);
-    fe.phase = RecordPhase::COMPLETE;
+    fe.phase = trace::RecordPhase::Complete;
     fe.ts = 1;
     fe.dur = dur;
     fe.has_dur = true;
@@ -81,10 +69,10 @@ FoldEvent evt(StringIntern& intern, const char* cat, const char* name,
 // raw dftu_agg_col structs, proving each factory produces the same wire spec.
 ::dftu_task* agg_factory_on_batch(void*, const dftu_dataframe* df,
                                   const dftu_plugin_host* host) {
-    Host h(host);
-    const auto acc =
-        h.agg("by_cat_factory", {"cat"},
-              {agg::mean("dur", "mean_dur"), agg::pct("dur", "p50_dur", 0.5)});
+    plugins::Host h(host);
+    const auto acc = h.agg("by_cat_factory", {"cat"},
+                           {plugins::agg::mean("dur", "mean_dur"),
+                            plugins::agg::pct("dur", "p50_dur", 0.5)});
     if (acc) acc.accumulate(df);
     return nullptr;
 }
@@ -128,11 +116,14 @@ dftu_plugin make_agg_plugin() {
     return p;
 }
 
-void finalize_now(PluginFold& f) {
+void finalize_now(domains::plugins::PluginFold& f) {
     Runtime rt(1);
-    rt.scope("fin", [&](CoroScope&) -> coro::CoroTask<void> {
-          co_await f.finalize(views::detail::CoverageSet{});
-      }).wait();
+    dftu_utils_test::ok(
+        rt.submit(coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+                      co_await f.finalize(trace::views::detail::CoverageSet{});
+                  }),
+                  "fin")
+            .wait());
     rt.shutdown();
 }
 
@@ -158,20 +149,20 @@ double num_at(const dftu_series* col, std::int64_t r) {
     return out;
 }
 
-std::string str_at(const dftu_series* col, std::int64_t r) {
+dstd::String str_at(const dftu_series* col, std::int64_t r) {
     dftu_series* flat = dftu_series_materialize(col);
     const std::int32_t* off = dftu_series_offsets(flat);
     const char* data = static_cast<const char*>(dftu_series_data(flat));
-    std::string out(data + off[r],
-                    static_cast<std::size_t>(off[r + 1] - off[r]));
+    dstd::String out(data + off[r],
+                     static_cast<std::size_t>(off[r + 1] - off[r]));
     dftu_series_free(flat);
     return out;
 }
 
 // The elements of row `r` of a list<string> result column (LIST_SORTED, TOPK,
 // BOTTOMK, SAMPLE): the list offsets index the flattened child column.
-std::vector<std::string> list_at(const dftu_series* col, std::int64_t r) {
-    std::vector<std::string> out;
+dstd::Vector<dstd::String> list_at(const dftu_series* col, std::int64_t r) {
+    dstd::Vector<dstd::String> out;
     const std::int32_t* lo = dftu_series_offsets(col);
     dftu_series* vals = dftu_series_child(col, 0);
     if (!lo || !vals) {
@@ -191,9 +182,9 @@ std::vector<std::string> list_at(const dftu_series* col, std::int64_t r) {
 
 // Row `r` of an APPROX_TOPK result column: a list<struct{value, count}>, so the
 // list child is a struct whose two fields are read side by side.
-std::vector<std::pair<std::string, double>> heavy_at(const dftu_series* col,
-                                                     std::int64_t r) {
-    std::vector<std::pair<std::string, double>> out;
+dstd::Vector<dstd::Pair<dstd::String, double>> heavy_at(const dftu_series* col,
+                                                        std::int64_t r) {
+    dstd::Vector<dstd::Pair<dstd::String, double>> out;
     const std::int32_t* lo = dftu_series_offsets(col);
     dftu_series* rows = dftu_series_child(col, 0);
     if (!lo || !rows) {
@@ -212,16 +203,18 @@ std::vector<std::pair<std::string, double>> heavy_at(const dftu_series* col,
 }
 
 // The finalized frame a plugin's accumulator was emitted under, or null.
-dftu_dataframe* result_frame(NamedResultRegistry& named, const char* name) {
+dftu_dataframe* result_frame(plugins::NamedResultRegistry& named,
+                             const char* name) {
     auto it = named.results().find(name);
     if (it == named.results().end()) return nullptr;
-    if (!std::holds_alternative<OwnedDataFrame>(it->second)) return nullptr;
-    return std::get<OwnedDataFrame>(it->second).handle;
+    if (!std::holds_alternative<plugins::OwnedDataFrame>(it->second))
+        return nullptr;
+    return std::get<plugins::OwnedDataFrame>(it->second).handle;
 }
 
 // Group rows come back in accumulate order, not key order, so every assertion
 // looks its group up by key.
-std::int64_t row_of(const dftu_series* keycol, const std::string& key) {
+std::int64_t row_of(const dftu_series* keycol, const dstd::String& key) {
     for (std::int64_t r = 0; r < dftu_series_length(keycol); ++r)
         if (str_at(keycol, r) == key) return r;
     return -1;
@@ -229,13 +222,14 @@ std::int64_t row_of(const dftu_series* keycol, const std::string& key) {
 
 // The columnar seam materializes cat/name/pid/tid/ts/dur, so every op's value
 // and `by` column comes straight off the batch frame.
-FoldEvent evt_full(StringIntern& intern, const char* cat, const char* name,
-                   std::uint64_t pid, std::uint64_t tid, std::uint64_t ts,
-                   std::uint64_t dur) {
-    FoldEvent fe;
+trace::views::detail::FoldEvent evt_full(dstd::StringIntern& intern,
+                                         const char* cat, const char* name,
+                                         std::uint64_t pid, std::uint64_t tid,
+                                         std::uint64_t ts, std::uint64_t dur) {
+    trace::views::detail::FoldEvent fe;
     fe.cat_id = intern.get_or_insert(cat);
     fe.name_id = intern.get_or_insert(name);
-    fe.phase = RecordPhase::COMPLETE;
+    fe.phase = trace::RecordPhase::Complete;
     fe.pid = pid;
     fe.tid = tid;
     fe.ts = ts;
@@ -247,7 +241,8 @@ FoldEvent evt_full(StringIntern& intern, const char* cat, const char* name,
 // Two worker slices over one dataset, so every case below also exercises the
 // cross-slice merge. POSIX/pid 1: (ts, dur) = (1,10) (2,20) (3,30), an exact
 // line dur = 10*ts. STDIO/pid 2: (1,5) (2,7), the line dur = 2*ts + 3.
-std::vector<std::vector<FoldEvent>> sample_slices(StringIntern& intern) {
+dstd::Vector<dstd::Vector<trace::views::detail::FoldEvent>> sample_slices(
+    dstd::StringIntern& intern) {
     return {
         {evt_full(intern, "POSIX", "read", 1, 100, 1, 10),
          evt_full(intern, "POSIX", "write", 1, 200, 2, 20),
@@ -281,26 +276,30 @@ dftu_plugin make_columns_plugin(
     return p;
 }
 
-void run_slices(PluginFold& master,
-                const std::vector<std::vector<FoldEvent>>& slices) {
+void run_slices(
+    domains::plugins::PluginFold& master,
+    const dstd::Vector<dstd::Vector<trace::views::detail::FoldEvent>>& slices) {
     for (const auto& evs : slices) {
         auto slice = master.slice();
-        auto* pf = static_cast<PluginFold*>(slice.get());
-        ScanUnit unit{};
-        pf->step(FoldBatch{std::span<const FoldEvent>(evs), unit, {}});
-        master.merge(*pf);
+        auto* pf = static_cast<domains::plugins::PluginFold*>(slice.get());
+        trace::views::detail::ScanUnit unit{};
+        dftu_utils_test::ok(pf->step(trace::views::detail::FoldBatch{
+            dstd::Span<const trace::views::detail::FoldEvent>(evs), unit, {}}));
+        dftu_utils_test::ok(master.merge(*pf));
     }
 }
 
 // A keyed accumulator with two key columns and six aggregates.
 ::dftu_task* multi_key_columns(void*, const dftu_dataframe* df,
                                const dftu_plugin_host* host) {
-    Host h(host);
+    plugins::Host h(host);
     const auto acc =
         h.agg("by_cat_pid", {"cat", "pid"},
-              {agg::count("n"), agg::sum("dur", "sum_dur"),
-               agg::min("dur", "min_dur"), agg::max("dur", "max_dur"),
-               agg::mean("dur", "mean_dur"), agg::count_valid("dur", "n_dur")});
+              {plugins::agg::count("n"), plugins::agg::sum("dur", "sum_dur"),
+               plugins::agg::min("dur", "min_dur"),
+               plugins::agg::max("dur", "max_dur"),
+               plugins::agg::mean("dur", "mean_dur"),
+               plugins::agg::count_valid("dur", "n_dur")});
     if (acc) acc.accumulate(df);
     return nullptr;
 }
@@ -308,11 +307,12 @@ void run_slices(PluginFold& master,
 // Zero key columns: the scalar-handle case, one whole-scan row.
 ::dftu_task* scalar_columns(void*, const dftu_dataframe* df,
                             const dftu_plugin_host* host) {
-    Host h(host);
+    plugins::Host h(host);
     const auto acc =
         h.agg("whole_scan", {},
-              {agg::count("n"), agg::sum("dur", "sum_dur"),
-               agg::min("dur", "min_dur"), agg::max("dur", "max_dur")});
+              {plugins::agg::count("n"), plugins::agg::sum("dur", "sum_dur"),
+               plugins::agg::min("dur", "min_dur"),
+               plugins::agg::max("dur", "max_dur")});
     if (acc) acc.accumulate(df);
     return nullptr;
 }
@@ -356,8 +356,8 @@ double g_seen_sum = -1.0;
 bool g_unknown_is_null = false;
 
 ::dftu_task* read_other_agg(void*, const dftu_plugin_host* host) {
-    Host h(host);
-    const OwnedDataFrame other = h.agg_result("whole_scan");
+    plugins::Host h(host);
+    const plugins::OwnedDataFrame other = h.agg_result("whole_scan");
     if (other.handle) {
         g_seen_rows = dftu_dataframe_num_rows(other.handle);
         if (dftu_series* s = dftu_dataframe_column(other.handle, "sum_dur")) {
@@ -372,30 +372,31 @@ bool g_unknown_is_null = false;
 }  // namespace
 
 TEST_CASE("DFTU_SVC_AGG: cross-batch grouped aggregation, engine-backed") {
-    StringIntern intern;
+    dstd::StringIntern intern;
     dftu_plugin p = make_agg_plugin();
-    NamedResultRegistry named;
-    PluginFold master(&p, intern, nullptr, &named);
+    plugins::NamedResultRegistry named;
+    domains::plugins::PluginFold master(&p, intern, nullptr, &named);
 
     // Two slices (two workers), each one batch, merged into the master.
-    std::vector<std::vector<FoldEvent>> slices = {
+    dstd::Vector<dstd::Vector<trace::views::detail::FoldEvent>> slices = {
         {evt(intern, "POSIX", "read", 10), evt(intern, "POSIX", "write", 20),
          evt(intern, "STDIO", "open", 5)},
         {evt(intern, "POSIX", "read", 30), evt(intern, "STDIO", "close", 7)},
     };
     for (const auto& evs : slices) {
         auto slice = master.slice();
-        auto* pf = static_cast<PluginFold*>(slice.get());
-        ScanUnit unit{};
-        pf->step(FoldBatch{std::span<const FoldEvent>(evs), unit, {}});
-        master.merge(*pf);
+        auto* pf = static_cast<domains::plugins::PluginFold*>(slice.get());
+        trace::views::detail::ScanUnit unit{};
+        dftu_utils_test::ok(pf->step(trace::views::detail::FoldBatch{
+            dstd::Span<const trace::views::detail::FoldEvent>(evs), unit, {}}));
+        dftu_utils_test::ok(master.merge(*pf));
     }
     finalize_now(master);
 
     auto it = named.results().find("by_cat");
     REQUIRE(it != named.results().end());
-    REQUIRE(std::holds_alternative<OwnedDataFrame>(it->second));
-    dftu_dataframe* out = std::get<OwnedDataFrame>(it->second).handle;
+    REQUIRE(std::holds_alternative<plugins::OwnedDataFrame>(it->second));
+    dftu_dataframe* out = std::get<plugins::OwnedDataFrame>(it->second).handle;
     REQUIRE(out != nullptr);
     const std::int64_t n = dftu_dataframe_num_rows(out);
     REQUIRE(n == 2);
@@ -409,11 +410,11 @@ TEST_CASE("DFTU_SVC_AGG: cross-batch grouped aggregation, engine-backed") {
     REQUIRE(p50);
     REQUIRE(names);
 
-    std::map<std::string, double> got_sum;
-    std::map<std::string, double> got_p50;
-    std::map<std::string, std::string> got_names;
+    dstd::Map<dstd::String, double> got_sum;
+    dstd::Map<dstd::String, double> got_p50;
+    dstd::Map<dstd::String, dstd::String> got_names;
     for (std::int64_t r = 0; r < n; ++r) {
-        std::string k = str_at(cat, r);
+        dstd::String k = str_at(cat, r);
         got_sum[k] = num_at(sum, r);
         got_p50[k] = num_at(p50, r);
         got_names[k] = str_at(names, r);
@@ -430,10 +431,10 @@ TEST_CASE("DFTU_SVC_AGG: cross-batch grouped aggregation, engine-backed") {
     CHECK(got_p50["STDIO"] <= 7.0);
 
     // SetUnion is the distinct value set the map path could not express.
-    CHECK(got_names["POSIX"].find("read") != std::string::npos);
-    CHECK(got_names["POSIX"].find("write") != std::string::npos);
-    CHECK(got_names["STDIO"].find("open") != std::string::npos);
-    CHECK(got_names["STDIO"].find("close") != std::string::npos);
+    CHECK(got_names["POSIX"].find("read") != dstd::String::npos);
+    CHECK(got_names["POSIX"].find("write") != dstd::String::npos);
+    CHECK(got_names["STDIO"].find("open") != dstd::String::npos);
+    CHECK(got_names["STDIO"].find("close") != dstd::String::npos);
 
     dftu_series_free(cat);
     dftu_series_free(sum);
@@ -444,8 +445,8 @@ TEST_CASE("DFTU_SVC_AGG: cross-batch grouped aggregation, engine-backed") {
     // over the concatenated rows.
     const char* cats[] = {"POSIX", "POSIX", "STDIO", "POSIX", "STDIO"};
     const std::uint64_t durs[] = {10, 20, 5, 30, 7};
-    std::vector<std::int32_t> offs;
-    std::string blob;
+    dstd::Vector<std::int32_t> offs;
+    dstd::String blob;
     offs.push_back(0);
     for (const char* c : cats) {
         blob += c;
@@ -462,7 +463,7 @@ TEST_CASE("DFTU_SVC_AGG: cross-batch grouped aggregation, engine-backed") {
     REQUIRE(nout == 1);
     REQUIRE(gk);
     REQUIRE(gv[0]);
-    std::map<std::string, double> ref_sum;
+    dstd::Map<dstd::String, double> ref_sum;
     for (std::int64_t r = 0; r < dftu_series_length(gk); ++r)
         ref_sum[str_at(gk, r)] = num_at(gv[0], r);
     CHECK(ref_sum["POSIX"] == doctest::Approx(got_sum["POSIX"]));
@@ -477,63 +478,65 @@ TEST_CASE("DFTU_SVC_AGG: cross-batch grouped aggregation, engine-backed") {
 TEST_CASE(
     "agg:: factories build the same dftu_agg_col wire fields as the raw "
     "builder") {
-    const AggCol mean_c = agg::mean("dur", "mean_dur");
+    const plugins::AggCol mean_c = plugins::agg::mean("dur", "mean_dur");
     const dftu_agg_col mean_raw = mean_c.raw();
     CHECK(mean_raw.op == DFTU_AGG_MEAN);
-    CHECK(std::string(mean_raw.value) == "dur");
-    CHECK(std::string(mean_raw.out) == "mean_dur");
+    CHECK(dstd::String(mean_raw.value) == "dur");
+    CHECK(dstd::String(mean_raw.out) == "mean_dur");
     CHECK(mean_raw.by == nullptr);
 
-    const dftu_agg_col pct_raw = agg::pct("dur", "p50_dur", 0.5).raw();
+    const dftu_agg_col pct_raw = plugins::agg::pct("dur", "p50_dur", 0.5).raw();
     CHECK(pct_raw.op == DFTU_AGG_PCT);
-    CHECK(std::string(pct_raw.value) == "dur");
+    CHECK(dstd::String(pct_raw.value) == "dur");
     CHECK(pct_raw.param == doctest::Approx(0.5));
     CHECK(pct_raw.by == nullptr);
 
-    const dftu_agg_col count_raw = agg::count("n").raw();
+    const dftu_agg_col count_raw = plugins::agg::count("n").raw();
     CHECK(count_raw.op == DFTU_AGG_COUNT);
     CHECK(count_raw.value == nullptr);
-    CHECK(std::string(count_raw.out) == "n");
+    CHECK(dstd::String(count_raw.out) == "n");
 
     const dftu_agg_col argmax_raw =
-        agg::argmax("name", "name_at_max", "dur").raw();
+        plugins::agg::argmax("name", "name_at_max", "dur").raw();
     CHECK(argmax_raw.op == DFTU_AGG_ARGMAX);
-    CHECK(std::string(argmax_raw.value) == "name");
-    CHECK(std::string(argmax_raw.by) == "dur");
+    CHECK(dstd::String(argmax_raw.value) == "name");
+    CHECK(dstd::String(argmax_raw.by) == "dur");
 
-    const dftu_agg_col busy_raw = agg::busy("ts", "dur", "busy_us", 2.0).raw();
+    const dftu_agg_col busy_raw =
+        plugins::agg::busy("ts", "dur", "busy_us", 2.0).raw();
     CHECK(busy_raw.op == DFTU_AGG_BUSY);
-    CHECK(std::string(busy_raw.value) == "ts");
-    CHECK(std::string(busy_raw.by) == "dur");
+    CHECK(dstd::String(busy_raw.value) == "ts");
+    CHECK(dstd::String(busy_raw.by) == "dur");
     CHECK(busy_raw.param == doctest::Approx(2.0));
 }
 
 TEST_CASE(
     "agg:: factories through Host::agg accumulate the same as raw dftu_agg_col "
     "specs") {
-    StringIntern intern;
+    dstd::StringIntern intern;
     dftu_plugin p = make_agg_factory_plugin();
-    NamedResultRegistry named;
-    PluginFold master(&p, intern, nullptr, &named);
+    plugins::NamedResultRegistry named;
+    domains::plugins::PluginFold master(&p, intern, nullptr, &named);
 
-    std::vector<std::vector<FoldEvent>> slices = {
+    dstd::Vector<dstd::Vector<trace::views::detail::FoldEvent>> slices = {
         {evt(intern, "POSIX", "read", 10), evt(intern, "POSIX", "write", 20),
          evt(intern, "STDIO", "open", 5)},
         {evt(intern, "POSIX", "read", 30), evt(intern, "STDIO", "close", 7)},
     };
     for (const auto& evs : slices) {
         auto slice = master.slice();
-        auto* pf = static_cast<PluginFold*>(slice.get());
-        ScanUnit unit{};
-        pf->step(FoldBatch{std::span<const FoldEvent>(evs), unit, {}});
-        master.merge(*pf);
+        auto* pf = static_cast<domains::plugins::PluginFold*>(slice.get());
+        trace::views::detail::ScanUnit unit{};
+        dftu_utils_test::ok(pf->step(trace::views::detail::FoldBatch{
+            dstd::Span<const trace::views::detail::FoldEvent>(evs), unit, {}}));
+        dftu_utils_test::ok(master.merge(*pf));
     }
     finalize_now(master);
 
     auto it = named.results().find("by_cat_factory");
     REQUIRE(it != named.results().end());
-    REQUIRE(std::holds_alternative<OwnedDataFrame>(it->second));
-    dftu_dataframe* out = std::get<OwnedDataFrame>(it->second).handle;
+    REQUIRE(std::holds_alternative<plugins::OwnedDataFrame>(it->second));
+    dftu_dataframe* out = std::get<plugins::OwnedDataFrame>(it->second).handle;
     REQUIRE(out != nullptr);
     const std::int64_t n = dftu_dataframe_num_rows(out);
     REQUIRE(n == 2);
@@ -545,10 +548,10 @@ TEST_CASE(
     REQUIRE(mean_dur);
     REQUIRE(p50_dur);
 
-    std::map<std::string, double> got_mean;
-    std::map<std::string, double> got_p50;
+    dstd::Map<dstd::String, double> got_mean;
+    dstd::Map<dstd::String, double> got_p50;
     for (std::int64_t r = 0; r < n; ++r) {
-        std::string k = str_at(cat, r);
+        dstd::String k = str_at(cat, r);
         got_mean[k] = num_at(mean_dur, r);
         got_p50[k] = num_at(p50_dur, r);
     }
@@ -566,10 +569,10 @@ TEST_CASE(
 }
 
 TEST_CASE("DFTU_SVC_AGG: several key columns and several aggregates") {
-    StringIntern intern;
+    dstd::StringIntern intern;
     dftu_plugin p = make_columns_plugin(multi_key_columns);
-    NamedResultRegistry named;
-    PluginFold master(&p, intern, nullptr, &named);
+    plugins::NamedResultRegistry named;
+    domains::plugins::PluginFold master(&p, intern, nullptr, &named);
     run_slices(master, sample_slices(intern));
     finalize_now(master);
 
@@ -627,10 +630,10 @@ TEST_CASE("DFTU_SVC_AGG: several key columns and several aggregates") {
 }
 
 TEST_CASE("DFTU_SVC_AGG: a zero-key accumulator is one whole-scan row") {
-    StringIntern intern;
+    dstd::StringIntern intern;
     dftu_plugin p = make_columns_plugin(scalar_columns);
-    NamedResultRegistry named;
-    PluginFold master(&p, intern, nullptr, &named);
+    plugins::NamedResultRegistry named;
+    domains::plugins::PluginFold master(&p, intern, nullptr, &named);
     run_slices(master, sample_slices(intern));
     finalize_now(master);
 
@@ -660,10 +663,10 @@ TEST_CASE("DFTU_SVC_AGG: a zero-key accumulator is one whole-scan row") {
 }
 
 TEST_CASE("DFTU_SVC_AGG: the appended op codes reduce across merged slices") {
-    StringIntern intern;
+    dstd::StringIntern intern;
     dftu_plugin p = make_columns_plugin(appended_ops_columns);
-    NamedResultRegistry named;
-    PluginFold master(&p, intern, nullptr, &named);
+    plugins::NamedResultRegistry named;
+    domains::plugins::PluginFold master(&p, intern, nullptr, &named);
     run_slices(master, sample_slices(intern));
     finalize_now(master);
 
@@ -730,14 +733,17 @@ TEST_CASE("DFTU_SVC_AGG: the appended op codes reduce across merged slices") {
     // LIST_SORTED keeps every repr ordered by `by` ascending, duplicates
     // included.
     CHECK(list_at(by_dur, posix) ==
-          std::vector<std::string>{"read", "write", "read"});
-    CHECK(list_at(by_dur, stdio) == std::vector<std::string>{"open", "close"});
+          dstd::Vector<dstd::String>{"read", "write", "read"});
+    CHECK(list_at(by_dur, stdio) ==
+          dstd::Vector<dstd::String>{"open", "close"});
 
     // TOPK is descending by `by`, BOTTOMK ascending, both capped at k = 2.
-    CHECK(list_at(top2, posix) == std::vector<std::string>{"read", "write"});
-    CHECK(list_at(top2, stdio) == std::vector<std::string>{"close", "open"});
-    CHECK(list_at(bottom2, posix) == std::vector<std::string>{"read", "write"});
-    CHECK(list_at(bottom2, stdio) == std::vector<std::string>{"open", "close"});
+    CHECK(list_at(top2, posix) == dstd::Vector<dstd::String>{"read", "write"});
+    CHECK(list_at(top2, stdio) == dstd::Vector<dstd::String>{"close", "open"});
+    CHECK(list_at(bottom2, posix) ==
+          dstd::Vector<dstd::String>{"read", "write"});
+    CHECK(list_at(bottom2, stdio) ==
+          dstd::Vector<dstd::String>{"open", "close"});
 
     // APPROX_TOPK is exact while the distinct count stays under the counter
     // capacity; POSIX saw "read" twice and "write" once.
@@ -750,8 +756,10 @@ TEST_CASE("DFTU_SVC_AGG: the appended op codes reduce across merged slices") {
     CHECK(heavy_at(heavy, stdio).size() == 2);
 
     // SAMPLE is the sorted distinct repr set once k exceeds the distinct count.
-    CHECK(list_at(sample, posix) == std::vector<std::string>{"read", "write"});
-    CHECK(list_at(sample, stdio) == std::vector<std::string>{"close", "open"});
+    CHECK(list_at(sample, posix) ==
+          dstd::Vector<dstd::String>{"read", "write"});
+    CHECK(list_at(sample, stdio) ==
+          dstd::Vector<dstd::String>{"close", "open"});
 
     // Co-moments over (x = ts, y = dur). POSIX is dur = 10*ts, STDIO is
     // dur = 2*ts + 3, so both correlate perfectly.
@@ -788,14 +796,14 @@ TEST_CASE("DFTU_SVC_AGG: the appended op codes reduce across merged slices") {
 }
 
 TEST_CASE("DFTU_SVC_AGG: agg_result reads another plugin's merged result") {
-    StringIntern intern;
-    SharedResultRegistry shared;
-    NamedResultRegistry named;
+    dstd::StringIntern intern;
+    domains::plugins::SharedResultRegistry shared;
+    plugins::NamedResultRegistry named;
 
     dftu_plugin producer = make_columns_plugin(scalar_columns);
     dftu_plugin consumer = make_columns_plugin(no_columns, read_other_agg);
-    PluginFold prod(&producer, intern, &shared, &named);
-    PluginFold cons(&consumer, intern, &shared, &named);
+    domains::plugins::PluginFold prod(&producer, intern, &shared, &named);
+    domains::plugins::PluginFold cons(&consumer, intern, &shared, &named);
 
     g_seen_rows = -1;
     g_seen_sum = -1.0;

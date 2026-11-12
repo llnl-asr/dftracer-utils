@@ -1,23 +1,23 @@
+// SPDX-License-Identifier: MIT
 #include <dftracer/utils/dataframe/agg/detail.h>
+#include <dftracer/utils/dstd/fatal.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <algorithm>
 #include <cstdint>
 #include <numeric>
-#include <stdexcept>
-#include <string>
-#include <string_view>
 #include <utility>
-#include <vector>
 
 namespace dftracer::utils::dataframe {
 
 namespace {
 // Reorders `v` (blocks of `stride` elements per group) into `perm` order.
-template <class T>
-void permute_blocks(std::vector<T>& v, const std::vector<std::int64_t>& perm,
+template <class Vec>
+void permute_blocks(Vec& v, const dstd::Vector<std::int64_t>& perm,
                     std::size_t stride) {
     if (stride == 0 || v.empty()) return;
-    std::vector<T> tmp(v.size());
+    Vec tmp(v.size());
     for (std::size_t g = 0; g < perm.size(); ++g) {
         const std::size_t src = static_cast<std::size_t>(perm[g]) * stride;
         for (std::size_t j = 0; j < stride; ++j)
@@ -30,7 +30,7 @@ void permute_blocks(std::vector<T>& v, const std::vector<std::int64_t>& perm,
 void agg_sort_groups(AggState& st) {
     const std::int64_t ng = st.ngroups();
     if (ng <= 1) return;
-    std::vector<std::int64_t> perm(static_cast<std::size_t>(ng));
+    dstd::Vector<std::int64_t> perm(static_cast<std::size_t>(ng));
     std::iota(perm.begin(), perm.end(), std::int64_t{0});
     std::sort(perm.begin(), perm.end(), [&](std::int64_t x, std::int64_t y) {
         return agg_key_cmp(st, x, st, y) < 0;
@@ -38,7 +38,7 @@ void agg_sort_groups(AggState& st) {
     agg_permute_groups(st, perm);
 }
 
-void agg_permute_groups(AggState& st, const std::vector<std::int64_t>& perm) {
+void agg_permute_groups(AggState& st, const dstd::Vector<std::int64_t>& perm) {
     st.settle_light();
     const std::int64_t ng = st.ngroups();
     for (std::size_t k = 0; k < st.nkeys; ++k) {
@@ -80,7 +80,10 @@ void agg_permute_groups(AggState& st, const std::vector<std::int64_t>& perm) {
         permute_blocks(st.occ_te, perm, st.n_occ);
     }
     if (st.has_dyn) {
-        permute_blocks(st.dyn_fs, perm, 1);
+        if (st.dyn_light_on)
+            permute_blocks(st.dyn_light, perm, 1);
+        else
+            permute_blocks(st.dyn_fs, perm, 1);
         if (st.dyn_has_sketch) permute_blocks(st.dyn_sketch, perm, 1);
     }
     // The caches in front of key_buckets go; the hash chains keep their
@@ -91,14 +94,14 @@ void agg_permute_groups(AggState& st, const std::vector<std::int64_t>& perm) {
     st.fast_slots.clear();
     st.fast_words.clear();
     st.fast_hash.clear();
-    std::vector<std::int64_t> at(static_cast<std::size_t>(ng));
+    dstd::Vector<std::int64_t> at(static_cast<std::size_t>(ng));
     for (std::size_t i = 0; i < at.size(); ++i)
         at[static_cast<std::size_t>(perm[i])] = static_cast<std::int64_t>(i);
     auto renumber = [&](std::int64_t g) {
         return g < 0 ? g : at[static_cast<std::size_t>(g)];
     };
     for (auto& [h, g] : st.key_buckets) g = renumber(g);
-    std::vector<std::int64_t> next(at.size());
+    dstd::Vector<std::int64_t> next(at.size());
     for (std::size_t i = 0; i < at.size(); ++i)
         next[i] =
             renumber(st.next_in_bucket[static_cast<std::size_t>(perm[i])]);
@@ -106,13 +109,17 @@ void agg_permute_groups(AggState& st, const std::vector<std::int64_t>& perm) {
 }
 
 AggStatePtr agg_extract_groups(const AggState& st_in,
-                               const std::vector<std::int64_t>& groups) {
+                               const dstd::Vector<std::int64_t>& groups) {
     const AggState& st = settled(st_in);
     AggStatePtr out(new AggState());
     out->specs = st.specs;
     out->dyn_specs = st.dyn_specs;
+    // The name table comes along, so a copied cell keeps its group's id.
+    out->dyn_names = st.dyn_names;
+    out->dyn_ids = st.dyn_ids;
     out->dyn_domain = st.dyn_domain;
     out->init_layout();
+    out->dyn_light_on = st.dyn_light_on;
     out->nkeys = st.nkeys;
     out->key_is_bytes = st.key_is_bytes;
     out->key_domain = st.key_domain;
@@ -224,7 +231,10 @@ AggStatePtr agg_extract_groups(const AggState& st_in,
             }
         }
         if (st.has_dyn) {
-            out->dyn_fs[o] = st.dyn_fs[static_cast<std::size_t>(g)];
+            if (st.dyn_light_on)
+                out->dyn_light[o] = st.dyn_light[static_cast<std::size_t>(g)];
+            else
+                out->dyn_fs[o] = st.dyn_fs[static_cast<std::size_t>(g)];
             if (st.dyn_has_sketch)
                 out->dyn_sketch[o] = st.dyn_sketch[static_cast<std::size_t>(g)];
         }
@@ -298,20 +308,20 @@ void agg_seed_begin(AggState& st, std::size_t nkeys) {
     st.inited = true;
 }
 
-void agg_seed_group(AggState& st, const std::vector<std::string>& str_keys,
-                    std::uint64_t count,
-                    const std::vector<AggSeedValue>& values) {
+void agg_seed_group(AggState& st, const dstd::Vector<dstd::String>& str_keys,
+                    const dstd::Vector<bool>& null_keys, std::uint64_t count,
+                    const dstd::Vector<AggSeedValue>& values) {
     if (!st.inited) agg_seed_begin(st, str_keys.size());
     for (const AggSpec& sp : st.specs)
         if (!agg_op_seedable(sp.op))
-            throw std::logic_error(
+            dstd::fatal(
                 "agg_seed_group: an aggregate op has no FieldStat/sketch seed "
                 "representation (First/Last, the extremum/list/sketch ops, "
                 "SetUnion, the co-moments, occupancy)");
     const std::int64_t g = st.find_or_add_group(
         [](std::size_t) -> std::int64_t { return 0; },
-        [&](std::size_t k) -> std::string_view { return str_keys[k]; },
-        [](std::size_t) { return false; });
+        [&](std::size_t k) -> dstd::StringView { return str_keys[k]; },
+        [&](std::size_t k) { return k < null_keys.size() && null_keys[k]; });
     st.counts[static_cast<std::size_t>(g)] += count;
     for (const AggSeedValue& v : values) {
         int fj = -1;

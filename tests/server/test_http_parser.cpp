@@ -1,18 +1,21 @@
+// SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/server/http_parser.h>
+#include <dftracer/utils/domains/server/http_parser.h>
+#include <dftracer/utils/dstd/string.h>
 #include <doctest/doctest.h>
 
 #include <cstring>
-#include <string>
 
-using namespace dftracer::utils::server::parser;
+using namespace dftracer::utils;
+
+using namespace dftracer::utils::domains::server::parser;
 
 // ============================================================================
 // Valid GET requests
 // ============================================================================
 
 TEST_CASE("HttpParser - simple GET request") {
-    std::string raw =
+    dstd::String raw =
         "GET /api/files HTTP/1.1\r\n"
         "Host: localhost\r\n"
         "\r\n";
@@ -31,7 +34,7 @@ TEST_CASE("HttpParser - simple GET request") {
 }
 
 TEST_CASE("HttpParser - GET with query string") {
-    std::string raw =
+    dstd::String raw =
         "GET /api/events?limit=100&file=test.pfw.gz HTTP/1.1\r\n"
         "Host: localhost:8080\r\n"
         "Accept: application/json\r\n"
@@ -52,7 +55,7 @@ TEST_CASE("HttpParser - GET with query string") {
 }
 
 TEST_CASE("HttpParser - multiple headers") {
-    std::string raw =
+    dstd::String raw =
         "GET / HTTP/1.1\r\n"
         "Host: example.com\r\n"
         "User-Agent: test/1.0\r\n"
@@ -75,7 +78,7 @@ TEST_CASE("HttpParser - multiple headers") {
 }
 
 TEST_CASE("HttpParser - HTTP/1.0") {
-    std::string raw =
+    dstd::String raw =
         "GET /index.html HTTP/1.0\r\n"
         "Host: localhost\r\n"
         "\r\n";
@@ -90,7 +93,7 @@ TEST_CASE("HttpParser - HTTP/1.0") {
 }
 
 TEST_CASE("HttpParser - no headers") {
-    std::string raw =
+    dstd::String raw =
         "GET /path HTTP/1.1\r\n"
         "\r\n";
 
@@ -108,7 +111,7 @@ TEST_CASE("HttpParser - no headers") {
 // ============================================================================
 
 TEST_CASE("HttpParser - POST request with body indication") {
-    std::string raw =
+    dstd::String raw =
         "POST /api/data HTTP/1.1\r\n"
         "Host: localhost\r\n"
         "Content-Length: 13\r\n"
@@ -134,7 +137,7 @@ TEST_CASE("HttpParser - POST request with body indication") {
 // ============================================================================
 
 TEST_CASE("HttpParser - bare LF line endings") {
-    std::string raw =
+    dstd::String raw =
         "GET /path HTTP/1.1\n"
         "Host: localhost\n"
         "\n";
@@ -154,7 +157,7 @@ TEST_CASE("HttpParser - bare LF line endings") {
 // ============================================================================
 
 TEST_CASE("HttpParser - header value with leading/trailing whitespace") {
-    std::string raw =
+    dstd::String raw =
         "GET / HTTP/1.1\r\n"
         "Host:   localhost   \r\n"
         "\r\n";
@@ -174,7 +177,7 @@ TEST_CASE("HttpParser - header value with leading/trailing whitespace") {
 // ============================================================================
 
 TEST_CASE("HttpParser - incomplete request (no terminating CRLF)") {
-    std::string raw =
+    dstd::String raw =
         "GET /api/files HTTP/1.1\r\n"
         "Host: localhost\r\n";
 
@@ -190,7 +193,7 @@ TEST_CASE("HttpParser - empty buffer") {
 }
 
 TEST_CASE("HttpParser - partial request line") {
-    std::string raw = "GET /path";
+    dstd::String raw = "GET /path";
 
     ParsedRequest req;
     int result = parse_request(raw.data(), raw.size(), req);
@@ -202,7 +205,7 @@ TEST_CASE("HttpParser - partial request line") {
 // ============================================================================
 
 TEST_CASE("HttpParser - missing HTTP version") {
-    std::string raw =
+    dstd::String raw =
         "GET /path\r\n"
         "\r\n";
 
@@ -212,7 +215,7 @@ TEST_CASE("HttpParser - missing HTTP version") {
 }
 
 TEST_CASE("HttpParser - bad HTTP version string") {
-    std::string raw =
+    dstd::String raw =
         "GET /path HTPP/1.1\r\n"
         "\r\n";
 
@@ -222,7 +225,7 @@ TEST_CASE("HttpParser - bad HTTP version string") {
 }
 
 TEST_CASE("HttpParser - control character in path") {
-    std::string raw =
+    dstd::String raw =
         "GET /path\x01more HTTP/1.1\r\n"
         "\r\n";
 
@@ -238,7 +241,7 @@ TEST_CASE("HttpParser - control character in path") {
 TEST_CASE("HttpParser - leading CRLF before request") {
     // Some clients send a leading CRLF after POST body.
     // Parser should tolerate it.
-    std::string raw =
+    dstd::String raw =
         "\r\n"
         "GET /api HTTP/1.1\r\n"
         "Host: localhost\r\n"
@@ -253,7 +256,7 @@ TEST_CASE("HttpParser - leading CRLF before request") {
 }
 
 TEST_CASE("HttpParser - path with encoded characters") {
-    std::string raw =
+    dstd::String raw =
         "GET /api/files/info?file=%2Ftmp%2Ftest.pfw.gz HTTP/1.1\r\n"
         "Host: localhost\r\n"
         "\r\n";
@@ -268,7 +271,7 @@ TEST_CASE("HttpParser - path with encoded characters") {
 }
 
 TEST_CASE("HttpParser - extra data after headers is not consumed") {
-    std::string raw =
+    dstd::String raw =
         "GET / HTTP/1.1\r\n"
         "Host: localhost\r\n"
         "\r\n"

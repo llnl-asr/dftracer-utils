@@ -1,20 +1,24 @@
+// SPDX-License-Identifier: MIT
 // Exercises the host services a plugin calls synchronously: Arrow batch export,
 // Arrow IPC write, the DDSketch handle, and the dftracer trace write/read
 // round-trip. Drives them through a real PluginFold-wired dftu_plugin_host, the
 // way a loaded plugin would.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/config.h>
-#include <dftracer/utils/core/common/constants.h>
-#include <dftracer/utils/core/common/string_intern.h>
+#include <dftracer/utils/common/config.h>
+#include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi.h>
 // fold_adapter.h transitively pulls nanoarrow (ArrowArray/ArrowSchema); it must
 // precede plugin.h so arrow_abi.h no-ops rather than tripping nanoarrow's outer
 // ARROW_FLAG_DICTIONARY_ORDERED sentinel.
-#include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/dataframe/abi.h>
-#include <dftracer/utils/plugins/fold_adapter.h>
+#include <dftracer/utils/domains/plugins/fold_adapter.h>
 #include <dftracer/utils/plugins/plugin.h>
+#include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dirent.h>
 #include <doctest/doctest.h>
@@ -29,24 +33,22 @@
 #include <dftracer/utils/dataframe/arrow.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #endif
 
+#include <testing_utilities.h>
+
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <cstring>
-#include <fstream>
-#include <memory>
-#include <string>
-#include <string_view>
-#include <vector>
+#include <stdexcept>
 
-#include "testing_utilities.h"
-
-using dftracer::utils::CoroScope;
-using dftracer::utils::Runtime;
-using dftracer::utils::StringIntern;
-using dftracer::utils::plugins::PluginFold;
-namespace coro = dftracer::utils::coro;
+using namespace dftracer::utils;
 
 namespace {
 
@@ -60,11 +62,11 @@ struct TrivialSlice {
 // Owns a PluginFold plus its trivial backing plugin, exposing the wired host.
 // The fold references the plugin, so it must be destroyed before the plugin.
 struct HostFixture {
-    StringIntern intern;
+    dstd::StringIntern intern;
     dftu_plugin* plugin =
         dftracer::utils::plugins::make_plugin<TrivialSlice>(nullptr);
-    std::unique_ptr<PluginFold> fold =
-        std::make_unique<PluginFold>(plugin, intern);
+    dstd::UniquePtr<domains::plugins::PluginFold> fold =
+        dstd::make_unique<domains::plugins::PluginFold>(plugin, intern);
     dftu_plugin_host& host() { return fold->host(); }
     dftu_str intern_str(const char* s) {
         return host().intern(host().h, s,
@@ -76,14 +78,12 @@ struct HostFixture {
     }
 };
 
-std::uint64_t file_size(const std::string& path) {
+std::uint64_t file_size(const dstd::String& path) {
     struct stat st{};
     return ::stat(path.c_str(), &st) == 0
                ? static_cast<std::uint64_t>(st.st_size)
                : 0;
 }
-
-namespace dfti = dftracer::utils::trace::internal;
 
 }  // namespace
 
@@ -93,21 +93,23 @@ TEST_CASE("plugin host: arrow_write_ipc writes a non-empty IPC file") {
     HostFixture fx;
     dftu_plugin_host& host = fx.host();
 
-    namespace dfd = dftracer::utils::dataframe;
     const std::uint64_t ts0[3] = {500, 501, 502};
-    dfd::DataFrame df;
+    dataframe::DataFrame df;
     df.names = {"cat", "name", "ts"};
-    df.columns.push_back(dfd::Series::strings({"STDIO", "STDIO", "STDIO"}));
-    df.columns.push_back(dfd::Series::strings({"fwrite", "fwrite", "fwrite"}));
-    df.columns.push_back(dfd::Series::flat(dfd::TypeId::Uint64, ts0, 3));
-    dfd::OwnedArrow owned = df.to_arrow();
+    df.columns.push_back(
+        dataframe::Series::strings({"STDIO", "STDIO", "STDIO"}));
+    df.columns.push_back(
+        dataframe::Series::strings({"fwrite", "fwrite", "fwrite"}));
+    df.columns.push_back(
+        dataframe::Series::flat(dataframe::TypeId::Uint64, ts0, 3));
+    dataframe::OwnedArrow owned = df.to_arrow();
     REQUIRE(owned);
 
     const auto* arrow = static_cast<const dftu_svc_arrow*>(
         host.get_service(host.h, DFTU_SVC_ARROW));
     REQUIRE(arrow != nullptr);
 
-    std::string ipc = env.get_dir() + "/x.arrow";
+    dstd::String ipc = env.dir() + "/x.arrow";
     int wr = arrow->arrow_write_ipc(host.h, owned.array(), owned.schema(),
                                     ipc.c_str());
     CHECK(wr == 0);
@@ -182,19 +184,20 @@ TEST_CASE("plugin host: trace write then read round-trips events") {
         host.get_service(host.h, DFTU_SVC_TRACE));
     REQUIRE(tr != nullptr);
 
-    std::string trace = env.get_dir() + "/out.pfw.gz";
+    dstd::String trace = env.dir() + "/out.pfw.gz";
     dftu_trace_writer* w = tr->trace_open_write(host.h, trace.c_str());
     REQUIRE(w != nullptr);
 
     const std::uint32_t N = 50;
-    std::vector<std::string> cats(N, "POSIX"), names(N, "write");
-    std::vector<std::uint64_t> pid(N, 7), tid(N, 9), ts(N), dur(N, 3);
-    std::vector<std::int64_t> ph(N, DFTU_PH_COMPLETE);
+    dstd::Vector<dstd::String> cats(N, "POSIX"), names(N, "write");
+    dstd::Vector<std::uint64_t> pid(N, 7), tid(N, 9), ts(N), dur(N, 3);
+    dstd::Vector<std::int64_t> ph(N, DFTU_PH_COMPLETE);
     for (std::uint32_t i = 0; i < N; ++i) ts[i] = 1000000 + i * 100;
 
-    auto string_col = [](const std::vector<std::string>& vals) -> dftu_series* {
-        std::vector<std::int32_t> offsets(vals.size() + 1, 0);
-        std::string data;
+    auto string_col =
+        [](const dstd::Vector<dstd::String>& vals) -> dftu_series* {
+        dstd::Vector<std::int32_t> offsets(vals.size() + 1, 0);
+        dstd::String data;
         for (std::size_t i = 0; i < vals.size(); ++i) {
             data += vals[i];
             offsets[i + 1] = static_cast<std::int32_t>(data.size());
@@ -243,9 +246,9 @@ TEST_CASE("plugin host: trace write then read round-trips events") {
                 static_cast<const std::uint64_t*>(dftu_series_data(ts_col));
             std::int64_t len = 0;
             const char* p = dftu_series_string_at(name_col, 0, &len);
-            const std::string_view nm =
-                p ? std::string_view(p, static_cast<std::size_t>(len))
-                  : std::string_view();
+            const dstd::StringView nm =
+                p ? dstd::StringView(p, static_cast<std::size_t>(len))
+                  : dstd::StringView();
             s->first_ok = ts_data[0] == 1000000 && nm == "write";
         }
         s->count += static_cast<std::uint64_t>(n);
@@ -260,6 +263,59 @@ TEST_CASE("plugin host: trace write then read round-trips events") {
     MESSAGE("trace round-trip: wrote=" << N << " read=" << sink.count);
 }
 
+TEST_CASE(
+    "plugin host: trace read keeps lines with a huge number, a bad escape or "
+    "bad bytes") {
+    dftu_utils_test::TestEnvironment env(0);
+    HostFixture fx;
+    dftu_plugin_host& host = fx.host();
+    const auto* tr = static_cast<const dftu_svc_trace*>(
+        host.get_service(host.h, DFTU_SVC_TRACE));
+    REQUIRE(tr != nullptr);
+
+    const dstd::String pfw = env.dir() + "/refused.pfw";
+    {
+        dftu_utils_test::FileOut ofs(pfw);
+        ofs << R"({"ph":"X","name":"a","cat":"P","pid":1,"tid":1,"ts":100,"dur":5,"args":{"x":1e400}})"
+            << "\n"
+            << R"({"ph":"X","name":"b\q","cat":"P","pid":1,"tid":1,"ts":110,"dur":5})"
+            << "\n"
+            << dstd::String(
+                   "{\"ph\":\"X\",\"name\":\"c\xff"
+                   "d\",\"cat\":\"P\",\"pid\":1,\"tid\":1,\"ts\":120,"
+                   "\"dur\":5}")
+            << "\n"
+            << R"({"ph":"X","name":"d","cat":"P","pid":1,"tid":1,"ts":130,"dur":5,"args":{"n":123456789012345678901234567890}})"
+            << "\n"
+            << R"({"ph":"X","name":"e","cat":"P","pid":1,"tid":1,"ts":140,"dur":5})"
+            << "\n";
+    }
+    const dstd::String gz = pfw + ".gz";
+    dftu_utils_test::compress_file_to_gzip(pfw, gz);
+    dstd::fs::remove(pfw).discard();
+
+    struct Sink {
+        dstd::Vector<dstd::String> names;
+    };
+    Sink sink;
+    auto on_batch = [](const void* item, void* ud) {
+        const auto* batch_df = static_cast<const dftu_dataframe*>(item);
+        auto* s = static_cast<Sink*>(ud);
+        dftu_series* name_col = dftu_dataframe_column(batch_df, "name");
+        const std::int64_t n = dftu_dataframe_num_rows(batch_df);
+        for (std::int64_t i = 0; i < n; ++i) {
+            std::int64_t len = 0;
+            const char* p = dftu_series_string_at(name_col, i, &len);
+            s->names.emplace_back(p, static_cast<std::size_t>(len));
+        }
+        if (name_col) dftu_series_free(name_col);
+    };
+    REQUIRE(tr->trace_read(host.h, gz.c_str(), on_batch, &sink) == 0);
+    std::sort(sink.names.begin(), sink.names.end());
+    CHECK(sink.names ==
+          dstd::Vector<dstd::String>{"a", R"(b\q)", "c?d", "d", "e"});
+}
+
 TEST_CASE("plugin host: trace close writes line-ended members and the tail") {
     dftu_utils_test::TestEnvironment env(0);
     HostFixture fx;
@@ -268,34 +324,33 @@ TEST_CASE("plugin host: trace close writes line-ended members and the tail") {
         host.get_service(host.h, DFTU_SVC_TRACE));
     REQUIRE(tr != nullptr);
 
-    const std::string dir = env.get_dir() + "/tw";
+    const dstd::String dir = env.dir() + "/tw";
     ::mkdir(dir.c_str(), 0755);
-    const std::string trace = dir + "/big.pfw.gz";
+    const dstd::String trace = dir + "/big.pfw.gz";
     dftu_trace_writer* w = tr->trace_open_write(host.h, trace.c_str());
     REQUIRE(w != nullptr);
 
-    std::string expected;
-    const std::string line(999, 'x');
-    while (expected.size() <
-           2 * dftracer::utils::constants::indexer::DEFAULT_CHECKPOINT_SIZE +
-               1024) {
+    dstd::String expected;
+    const dstd::String line(999, 'x');
+    while (expected.size() < 2 * dftracer::utils::common::constants::indexer::
+                                         DEFAULT_CHECKPOINT_SIZE +
+                                 1024) {
         expected += line + "\n";
     }
     expected += "{\"tail\":true}";
-    reinterpret_cast<dftracer::utils::plugins::PluginTraceWriter*>(w)->buffer =
+    reinterpret_cast<domains::plugins::PluginTraceWriter*>(w)->buffer =
         expected;
     REQUIRE(tr->trace_close(host.h, w) == 0);
 
-    std::string decoded, last;
+    dstd::String decoded, last;
     {
-        std::ifstream in(trace, std::ios::binary);
-        std::string gz((std::istreambuf_iterator<char>(in)),
-                       std::istreambuf_iterator<char>());
+        dstd::String gz =
+            dstd::fs::read_file(dstd::PathView(trace)).value_or(dstd::String());
         z_stream zs{};
         REQUIRE(inflateInit2(&zs, 15 + 16) == Z_OK);
         zs.next_in = reinterpret_cast<Bytef*>(gz.data());
         zs.avail_in = static_cast<uInt>(gz.size());
-        std::vector<char> buf(1 << 16);
+        dstd::Vector<char> buf(1 << 16);
         while (zs.avail_in > 0) {
             zs.next_out = reinterpret_cast<Bytef*>(buf.data());
             zs.avail_out = static_cast<uInt>(buf.size());
@@ -321,4 +376,54 @@ TEST_CASE("plugin host: trace close writes line-ended members and the tail") {
         break;
     }
     CHECK(files == 1);
+}
+
+TEST_CASE("plugin host: trace write prints a float arg with 17 digits") {
+    dftu_utils_test::TestEnvironment env(0);
+    HostFixture fx;
+    dftu_plugin_host& host = fx.host();
+    const auto* tr = static_cast<const dftu_svc_trace*>(
+        host.get_service(host.h, DFTU_SVC_TRACE));
+    REQUIRE(tr != nullptr);
+
+    dftu_trace_writer* w =
+        tr->trace_open_write(host.h, (env.dir() + "/f.pfw.gz").c_str());
+    REQUIRE(w != nullptr);
+    const double values[3] = {0.1, 100.0, 1e20};
+    const char* col_names[1] = {"args.v"};
+    dftu_series* cols[1] = {
+        dftu_series_new_flat(DFTU_TYPE_FLOAT64, values, 3, nullptr)};
+    dftu_dataframe* df = dftu_dataframe_new(col_names, cols, 1);
+    REQUIRE(df != nullptr);
+    CHECK(tr->trace_write(host.h, w, df) == 0);
+    dftu_dataframe_free(df);
+    const dstd::String& buffer =
+        reinterpret_cast<domains::plugins::PluginTraceWriter*>(w)->buffer;
+    CHECK(buffer.find("\"v\":0.10000000000000001}") != dstd::String::npos);
+    CHECK(buffer.find("\"v\":100}") != dstd::String::npos);
+    CHECK(buffer.find("\"v\":1e+20}") != dstd::String::npos);
+    CHECK(tr->trace_close(host.h, w) == 0);
+}
+
+TEST_CASE("plugin host: a trace_read callback that throws fails the read") {
+    dftu_utils_test::TestEnvironment env(0);
+    HostFixture fx;
+    const dstd::String pfw = env.dir() + "/throw.pfw";
+    {
+        dftu_utils_test::FileOut ofs(pfw);
+        ofs << R"({"ph":"X","name":"a","cat":"P","pid":1,"tid":1,"ts":100,"dur":5})"
+            << "\n";
+    }
+    const dstd::String gz = pfw + ".gz";
+    dftu_utils_test::compress_file_to_gzip(pfw, gz);
+    dstd::fs::remove(pfw).discard();
+
+    dftracer::utils::plugins::Host h{&fx.host()};
+    int calls = 0;
+    CHECK(h.trace_read(gz.c_str(), [&](const dftu_dataframe*) {
+        ++calls;
+        throw std::runtime_error("boom");
+    }) == -1);
+    CHECK(calls == 1);
+    CHECK(h.trace_read(gz.c_str(), [&](const dftu_dataframe*) {}) == 0);
 }

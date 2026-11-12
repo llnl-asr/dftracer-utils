@@ -1,15 +1,16 @@
-#include <dftracer/utils/core/common/logging.h>
+// SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/numeric_dispatch.h>
 #include <dftracer/utils/dataframe/internal/varwidth_offsets.h>
 #include <dftracer/utils/dataframe/kernels/group_by.h>
+#include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <cstring>
-#include <string>
 #include <type_traits>
-#include <unordered_map>
-#include <vector>
 
 namespace {
 
@@ -19,10 +20,11 @@ using dftracer::utils::dataframe::is_wide_offset_type;
 using dftracer::utils::dataframe::narrow_varwidth_type;
 using dftracer::utils::dataframe::offsets_of;
 using dftracer::utils::dataframe::TypeId;
+using dftracer::utils::dataframe::writable;
 
 bool is_valid(const dftu_series& v, std::int64_t i) {
-    if (!v.validity) return true;
-    return (v.validity->data()[i >> 3] & (1u << (i & 7))) != 0;
+    if (!v.validity.block()) return true;
+    return (v.validity.data()[i >> 3] & (1u << (i & 7))) != 0;
 }
 
 template <class X>
@@ -50,30 +52,33 @@ constexpr TypeId typeid_of() {
 }
 
 template <class X>
-dftu_series* flat_from(const std::vector<X>& vals) {
+dftu_series* flat_from(const dftracer::utils::dstd::Vector<X>& vals) {
     return dftu_series_new_flat(
         static_cast<dftu_dtype>(typeid_of<X>()), vals.data(),
         static_cast<std::int64_t>(vals.size()), nullptr);
 }
 
 struct Groups {
-    std::vector<std::int32_t> group_of;
-    std::int32_t num_groups = 0;
+    dftracer::utils::dstd::Vector<std::int32_t> group_of;
+    std::int32_t group_count = 0;
     dftu_series* keys = nullptr;
 };
 
 // String/Binary(/Large) key hashing at offset width `Off`: assigns each row
 // its first-seen distinct-value group index.
 template <class Off>
-void hash_string_keys(const dftu_series& k, std::vector<std::int32_t>& group_of,
-                      std::vector<std::string>& distinct) {
+void hash_string_keys(
+    const dftu_series& k, dftracer::utils::dstd::Vector<std::int32_t>& group_of,
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>& distinct) {
     const Off* offsets =
-        reinterpret_cast<const Off*>(offsets_of<Off>(k)->data());
-    const char* data = reinterpret_cast<const char*>(k.data->data());
-    std::unordered_map<std::string, std::int32_t> idx;
+        reinterpret_cast<const Off*>(offsets_of<Off>(k).data());
+    const char* data = reinterpret_cast<const char*>(k.data.data());
+    dftracer::utils::dstd::HashMap<dftracer::utils::dstd::String, std::int32_t>
+        idx;
     for (std::int64_t i = 0; i < k.length; ++i) {
-        std::string key(data + offsets[i],
-                        static_cast<std::size_t>(offsets[i + 1] - offsets[i]));
+        dftracer::utils::dstd::String key(
+            data + offsets[i],
+            static_cast<std::size_t>(offsets[i + 1] - offsets[i]));
         auto [it, ins] = idx.try_emplace(
             std::move(key), static_cast<std::int32_t>(distinct.size()));
         if (ins) distinct.push_back(it->first);
@@ -100,7 +105,7 @@ Groups build_groups(const dftu_series* keys_in) {
     std::size_t width =
         str ? 0 : byte_width(k->type, k->fixed_size()).value_or(0);
 
-    std::vector<std::string> distinct;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> distinct;
     Groups g;
     g.group_of.resize(static_cast<std::size_t>(k->length));
     if (str) {
@@ -109,22 +114,25 @@ Groups build_groups(const dftu_series* keys_in) {
         else
             hash_string_keys<std::int32_t>(*k, g.group_of, distinct);
     } else {
-        std::unordered_map<std::string, std::int32_t> idx;
-        const char* data = reinterpret_cast<const char*>(k->data->data());
+        dftracer::utils::dstd::HashMap<dftracer::utils::dstd::String,
+                                       std::int32_t>
+            idx;
+        const char* data = reinterpret_cast<const char*>(k->data.data());
         for (std::int64_t i = 0; i < k->length; ++i) {
-            std::string key(data + static_cast<std::size_t>(i) * width, width);
+            dftracer::utils::dstd::String key(
+                data + static_cast<std::size_t>(i) * width, width);
             auto [it, ins] = idx.try_emplace(
                 std::move(key), static_cast<std::int32_t>(distinct.size()));
             if (ins) distinct.push_back(it->first);
             g.group_of[static_cast<std::size_t>(i)] = it->second;
         }
     }
-    g.num_groups = static_cast<std::int32_t>(distinct.size());
+    g.group_count = static_cast<std::int32_t>(distinct.size());
 
     if (str) {
-        std::vector<std::int32_t> off{0};
-        std::string bytes;
-        for (const std::string& s : distinct) {
+        dftracer::utils::dstd::Vector<std::int32_t> off{0};
+        dftracer::utils::dstd::String bytes;
+        for (const dftracer::utils::dstd::String& s : distinct) {
             bytes += s;
             if (!fits_int32_offsets(bytes.size())) {
                 if (materialized) dftu_series_free(materialized);
@@ -133,7 +141,7 @@ Groups build_groups(const dftu_series* keys_in) {
             off.push_back(static_cast<std::int32_t>(bytes.size()));
         }
         g.keys = dftu_series_new_string(static_cast<dftu_dtype>(key_kind),
-                                        off.data(), bytes.data(), g.num_groups,
+                                        off.data(), bytes.data(), g.group_count,
                                         nullptr);
     } else if (k->type == TypeId::FixedSizeBinary) {
         // dftu_series_new_flat validates via byte_width(type), which is 0 for
@@ -142,23 +150,23 @@ Groups build_groups(const dftu_series* keys_in) {
         auto* out = new dftu_series();
         out->type = TypeId::FixedSizeBinary;
         out->encoding = Encoding::Flat;
-        out->length = g.num_groups;
+        out->length = g.group_count;
         out->set_fixed_size(k->fixed_size());
-        std::string bytes;
-        for (const std::string& s : distinct) bytes += s;
-        out->data = dftracer::utils::dataframe::Buffer::allocate(bytes.size());
-        std::memcpy(out->data->data(), bytes.data(), bytes.size());
+        dftracer::utils::dstd::String bytes;
+        for (const dftracer::utils::dstd::String& s : distinct) bytes += s;
+        out->data = dftracer::utils::dataframe::new_buffer(bytes.size());
+        std::memcpy(writable(out->data), bytes.data(), bytes.size());
         g.keys = out;
     } else {
-        std::string bytes;
-        for (const std::string& s : distinct) bytes += s;
+        dftracer::utils::dstd::String bytes;
+        for (const dftracer::utils::dstd::String& s : distinct) bytes += s;
         auto* out = new dftu_series();
         dftracer::utils::dataframe::adopt_type_from(*out, *k);
         out->encoding = Encoding::Flat;
-        out->length = g.num_groups;
-        out->data = dftracer::utils::dataframe::Buffer::allocate(bytes.size());
+        out->length = g.group_count;
+        out->data = dftracer::utils::dataframe::new_buffer(bytes.size());
         if (!bytes.empty())
-            std::memcpy(out->data->data(), bytes.data(), bytes.size());
+            std::memcpy(writable(out->data), bytes.data(), bytes.size());
         g.keys = out;
     }
     if (materialized) dftu_series_free(materialized);
@@ -168,18 +176,19 @@ Groups build_groups(const dftu_series* keys_in) {
 // Accumulate sum/count/min/max per group in one scan, then emit one column per
 // set flag in flag order (sum, min, max, count, mean).
 template <class T>
-void aggregate(const dftu_series& v, const std::vector<std::int32_t>& group_of,
+void aggregate(const dftu_series& v,
+               const dftracer::utils::dstd::Vector<std::int32_t>& group_of,
                std::int32_t ng, std::int32_t op_mask, dftu_series** out,
                std::int32_t max_values, std::int32_t& out_n) {
     using W = std::conditional_t<
         std::is_floating_point_v<T>, double,
         std::conditional_t<std::is_unsigned_v<T>, std::uint64_t, std::int64_t>>;
     std::size_t g_count = static_cast<std::size_t>(ng);
-    std::vector<W> sums(g_count, W{});
-    std::vector<std::int64_t> cnts(g_count, 0);
-    std::vector<T> mins(g_count, T{});
-    std::vector<T> maxs(g_count, T{});
-    const T* p = reinterpret_cast<const T*>(v.data->data());
+    dftracer::utils::dstd::Vector<W> sums(g_count, W{});
+    dftracer::utils::dstd::Vector<std::int64_t> cnts(g_count, 0);
+    dftracer::utils::dstd::Vector<T> mins(g_count, T{});
+    dftracer::utils::dstd::Vector<T> maxs(g_count, T{});
+    const T* p = reinterpret_cast<const T*>(v.data.data());
     for (std::int64_t i = 0; i < v.length; ++i) {
         if (!is_valid(v, i)) continue;
         std::size_t g =
@@ -203,7 +212,7 @@ void aggregate(const dftu_series& v, const std::vector<std::int32_t>& group_of,
     if (op_mask & DFTU_REDUCE_MAX) emit(flat_from(maxs));
     if (op_mask & DFTU_REDUCE_COUNT) emit(flat_from(cnts));
     if (op_mask & DFTU_REDUCE_MEAN) {
-        std::vector<double> means(g_count, 0.0);
+        dftracer::utils::dstd::Vector<double> means(g_count, 0.0);
         for (std::size_t g = 0; g < g_count; ++g)
             means[g] = cnts[g] ? static_cast<double>(sums[g]) /
                                      static_cast<double>(cnts[g])
@@ -232,7 +241,7 @@ int32_t dftu_series_group_by(const dftu_series* keys, const dftu_series* values,
         return 0;
     if (!dftracer::utils::dataframe::is_orderable_type(keys->type)) {
         DFTRACER_UTILS_LOG_ERROR(
-            "group_by: key type '%s' has no per-row value to group on",
+            "group_by: key type '{}' has no per-row value to group on",
             dftracer::utils::dataframe::type_name(keys->type));
         return 0;
     }
@@ -241,8 +250,9 @@ int32_t dftu_series_group_by(const dftu_series* keys, const dftu_series* values,
     if (!g.keys) return 0;
     *out_keys = g.keys;
     std::int32_t n = 0;
-    DF_NUMERIC_DISPATCH(values->type, aggregate, *values, g.group_of,
-                        g.num_groups, op_mask, out_values, max_values, n)
+    DFTRACER_UTILS_NUMERIC_DISPATCH(values->type, aggregate, *values,
+                                    g.group_of, g.group_count, op_mask,
+                                    out_values, max_values, n)
     return n;
 }
 

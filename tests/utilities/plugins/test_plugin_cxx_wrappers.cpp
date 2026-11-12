@@ -1,16 +1,25 @@
+// SPDX-License-Identifier: MIT
 // Exercises the additive C++ wrappers layered over the plugin C ABI: the typed
 // Agg accumulator (Host::agg, the agg:: factories, Host::agg_result), the
 // Config array accessors, and the typed publish/consume ports. Each keeps the
 // raw Host method it wraps.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/string_intern.h>
-#include <dftracer/utils/core/runtime.h>
+#include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/domains/plugins/fold_adapter.h>
+#include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/plugins/abi.h>
-#include <dftracer/utils/plugins/fold_adapter.h>
+#include <dftracer/utils/runtime/runtime.h>
 // After fold_adapter.h so nanoarrow is set up before dataframe/abi.h's
 // arrow_abi.
 #include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/plugin.h>
 #include <dftracer/utils/plugins/result_registry.h>
 #include <dftracer/utils/trace/schema.h>
@@ -18,46 +27,26 @@
 #include <dftracer/utils/trace/views/fold_event.h>
 #include <dftracer/utils/trace/views/view_scan.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <cstdint>
 #include <cstring>
-#include <map>
-#include <memory>
-#include <optional>
-#include <span>
-#include <string>
-#include <string_view>
 #include <tuple>
 #include <variant>
-#include <vector>
 
-namespace views = dftracer::utils::trace::views;
-using dftracer::utils::Runtime;
-using dftracer::utils::StringIntern;
-using dftracer::utils::plugins::Host;
-using dftracer::utils::plugins::NamedResultRegistry;
-using dftracer::utils::plugins::OwnedDataFrame;
-using dftracer::utils::plugins::PluginFold;
-using dftracer::utils::plugins::SharedResultRegistry;
-using dftracer::utils::trace::RecordPhase;
-using views::detail::CoverageSet;
-using views::detail::FoldBatch;
-using views::detail::FoldEvent;
-using views::detail::FoldPortBus;
-using views::detail::ScanUnit;
-namespace agg = dftracer::utils::plugins::agg;
-namespace coro = dftracer::utils::coro;
+using namespace dftracer::utils;
 
 namespace {
 
-FoldEvent evt(StringIntern& intern, std::uint64_t pid, std::uint64_t dur,
-              const char* name = "read") {
-    FoldEvent e;
+trace::views::detail::FoldEvent evt(dstd::StringIntern& intern,
+                                    std::uint64_t pid, std::uint64_t dur,
+                                    const char* name = "read") {
+    trace::views::detail::FoldEvent e;
     e.pid = pid;
     e.dur = dur;
     e.has_dur = true;
     e.name_id = intern.get_or_insert(name);
-    e.phase = RecordPhase::COMPLETE;
+    e.phase = trace::RecordPhase::Complete;
     return e;
 }
 
@@ -67,19 +56,21 @@ FoldEvent evt(StringIntern& intern, std::uint64_t pid, std::uint64_t dur,
 // agg:: factories, so no case names a raw DFTU_AGG_* code.
 ::dftu_task* wrappers_columns(void*, const dftu_dataframe* df,
                               const dftu_plugin_host* host) {
-    Host h{host};
-    if (const auto a = h.agg("wrap_scalar", {},
-                             {agg::count("n"), agg::sum("dur", "sum_dur")}))
+    plugins::Host h{host};
+    if (const auto a = h.agg(
+            "wrap_scalar", {},
+            {plugins::agg::count("n"), plugins::agg::sum("dur", "sum_dur")}))
         a.accumulate(df);
-    if (const auto a = h.agg("wrap_by_pid", {"pid"},
-                             {agg::count("hits"), agg::sum("dur", "sum_dur"),
-                              agg::mean("dur", "mean_dur")}))
+    if (const auto a = h.agg(
+            "wrap_by_pid", {"pid"},
+            {plugins::agg::count("hits"), plugins::agg::sum("dur", "sum_dur"),
+             plugins::agg::mean("dur", "mean_dur")}))
         a.accumulate(df);
-    if (const auto a =
-            h.agg("wrap_by_pid_name", {"pid", "name"}, {agg::count("n")}))
+    if (const auto a = h.agg("wrap_by_pid_name", {"pid", "name"},
+                             {plugins::agg::count("n")}))
         a.accumulate(df);
-    if (const auto a =
-            h.agg("wrap_names", {"pid"}, {agg::set_union("name", "names")}))
+    if (const auto a = h.agg("wrap_names", {"pid"},
+                             {plugins::agg::set_union("name", "names")}))
         a.accumulate(df);
     return nullptr;
 }
@@ -104,31 +95,39 @@ dftu_plugin make_wrappers_plugin() {
 
 // Two worker slices merged into a master. pid 1: durs {10, 20, 5}, names
 // {read, read, write}; pid 2: dur 7, name write.
-void run_wrappers(StringIntern& intern, NamedResultRegistry& named) {
+void run_wrappers(dstd::StringIntern& intern,
+                  plugins::NamedResultRegistry& named) {
     dftu_plugin p = make_wrappers_plugin();
-    PluginFold master(&p, intern, nullptr, &named);
-    const std::vector<std::vector<FoldEvent>> slices = {
+    domains::plugins::PluginFold master(&p, intern, nullptr, &named);
+    const dstd::Vector<dstd::Vector<trace::views::detail::FoldEvent>> slices = {
         {evt(intern, 1, 10, "read"), evt(intern, 1, 20, "read")},
         {evt(intern, 1, 5, "write"), evt(intern, 2, 7, "write")}};
     for (const auto& evs : slices) {
         auto slice = master.slice();
-        auto* pf = static_cast<PluginFold*>(slice.get());
-        ScanUnit unit;
-        pf->step(FoldBatch{std::span<const FoldEvent>(evs), unit, {}});
-        master.merge(*pf);
+        auto* pf = static_cast<domains::plugins::PluginFold*>(slice.get());
+        trace::views::detail::ScanUnit unit;
+        dftu_utils_test::ok(pf->step(trace::views::detail::FoldBatch{
+            dstd::Span<const trace::views::detail::FoldEvent>(evs), unit, {}}));
+        dftu_utils_test::ok(master.merge(*pf));
     }
     Runtime rt(1);
-    rt.scope("fin", [&](dftracer::utils::CoroScope&) -> coro::CoroTask<void> {
-          co_await master.finalize(CoverageSet{});
-      }).wait();
+    dftu_utils_test::ok(
+        rt.submit(coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+                      co_await master.finalize(
+                          trace::views::detail::CoverageSet{});
+                  }),
+                  "fin")
+            .wait());
     rt.shutdown();
 }
 
-dftu_dataframe* result_frame(NamedResultRegistry& named, const char* name) {
+dftu_dataframe* result_frame(plugins::NamedResultRegistry& named,
+                             const char* name) {
     auto it = named.results().find(name);
     if (it == named.results().end()) return nullptr;
-    if (!std::holds_alternative<OwnedDataFrame>(it->second)) return nullptr;
-    return std::get<OwnedDataFrame>(it->second).handle;
+    if (!std::holds_alternative<plugins::OwnedDataFrame>(it->second))
+        return nullptr;
+    return std::get<plugins::OwnedDataFrame>(it->second).handle;
 }
 
 double num_at(const dftu_series* col, std::int64_t r) {
@@ -152,12 +151,12 @@ double num_at(const dftu_series* col, std::int64_t r) {
     return out;
 }
 
-std::string str_at(const dftu_series* col, std::int64_t r) {
+dstd::String str_at(const dftu_series* col, std::int64_t r) {
     dftu_series* flat = dftu_series_materialize(col);
     const std::int32_t* off = dftu_series_offsets(flat);
     const char* data = static_cast<const char*>(dftu_series_data(flat));
-    std::string out(data + off[r],
-                    static_cast<std::size_t>(off[r + 1] - off[r]));
+    dstd::String out(data + off[r],
+                     static_cast<std::size_t>(off[r + 1] - off[r]));
     dftu_series_free(flat);
     return out;
 }
@@ -166,8 +165,8 @@ std::string str_at(const dftu_series* col, std::int64_t r) {
 
 TEST_SUITE("PluginCxxWrappers") {
     TEST_CASE("a zero-key Agg reduces the whole scan to one row") {
-        StringIntern intern;
-        NamedResultRegistry named;
+        dstd::StringIntern intern;
+        plugins::NamedResultRegistry named;
         run_wrappers(intern, named);
 
         dftu_dataframe* out = result_frame(named, "wrap_scalar");
@@ -185,8 +184,8 @@ TEST_SUITE("PluginCxxWrappers") {
     }
 
     TEST_CASE("a keyed Agg merges several reductions per key") {
-        StringIntern intern;
-        NamedResultRegistry named;
+        dstd::StringIntern intern;
+        plugins::NamedResultRegistry named;
         run_wrappers(intern, named);
 
         dftu_dataframe* out = result_frame(named, "wrap_by_pid");
@@ -226,8 +225,8 @@ TEST_SUITE("PluginCxxWrappers") {
     }
 
     TEST_CASE("a String key column materializes as text, not a raw id") {
-        StringIntern intern;
-        NamedResultRegistry named;
+        dstd::StringIntern intern;
+        plugins::NamedResultRegistry named;
         run_wrappers(intern, named);
 
         dftu_dataframe* out = result_frame(named, "wrap_by_pid_name");
@@ -243,9 +242,9 @@ TEST_SUITE("PluginCxxWrappers") {
 
         // Each key column keeps its own type: pid stays numeric, name resolves
         // to the interned bytes.
-        std::map<std::string, double> counts;
+        dstd::Map<dstd::String, double> counts;
         for (std::int64_t r = 0; r < dftu_dataframe_num_rows(out); ++r)
-            counts[std::to_string(static_cast<int>(num_at(pid, r))) + "/" +
+            counts[dstd::to_string(static_cast<int>(num_at(pid, r))) + "/" +
                    str_at(name, r)] = num_at(n, r);
         CHECK(counts["1/read"] == doctest::Approx(2.0));
         CHECK(counts["1/write"] == doctest::Approx(1.0));
@@ -257,8 +256,8 @@ TEST_SUITE("PluginCxxWrappers") {
     }
 
     TEST_CASE("set_union collapses each key's distinct values") {
-        StringIntern intern;
-        NamedResultRegistry named;
+        dstd::StringIntern intern;
+        plugins::NamedResultRegistry named;
         run_wrappers(intern, named);
 
         dftu_dataframe* out = result_frame(named, "wrap_names");
@@ -271,13 +270,13 @@ TEST_SUITE("PluginCxxWrappers") {
         REQUIRE(names);
 
         for (std::int64_t r = 0; r < dftu_dataframe_num_rows(out); ++r) {
-            const std::string v = str_at(names, r);
+            const dstd::String v = str_at(names, r);
             if (num_at(pid, r) == doctest::Approx(1.0)) {
-                CHECK(v.find("read") != std::string::npos);
-                CHECK(v.find("write") != std::string::npos);
+                CHECK(v.find("read") != dstd::String::npos);
+                CHECK(v.find("write") != dstd::String::npos);
             } else {
-                CHECK(v.find("write") != std::string::npos);
-                CHECK(v.find("read") == std::string::npos);
+                CHECK(v.find("write") != dstd::String::npos);
+                CHECK(v.find("read") == dstd::String::npos);
             }
         }
 
@@ -286,11 +285,12 @@ TEST_SUITE("PluginCxxWrappers") {
     }
 
     TEST_CASE("Host::agg_result yields an empty frame for an unknown name") {
-        StringIntern intern;
+        dstd::StringIntern intern;
         dftu_plugin p = make_wrappers_plugin();
-        auto fold = std::make_unique<PluginFold>(&p, intern);
-        Host h{&fold->host()};
-        const OwnedDataFrame miss = h.agg_result("no_such_accumulator");
+        auto fold = dstd::make_unique<domains::plugins::PluginFold>(&p, intern);
+        plugins::Host h{&fold->host()};
+        const plugins::OwnedDataFrame miss =
+            h.agg_result("no_such_accumulator");
         CHECK(miss.handle == nullptr);
         fold.reset();
     }
@@ -341,8 +341,8 @@ TEST_SUITE("PluginCxxConfigArrays") {
 
         dftracer::utils::plugins::Config cfg{&root};
         CHECK(cfg.get_int_array("nums") ==
-              std::vector<std::int64_t>{10, 20, 30});
-        CHECK(cfg.get_double_array("reals") == std::vector<double>{1.5, 3.0});
+              dstd::Vector<std::int64_t>{10, 20, 30});
+        CHECK(cfg.get_double_array("reals") == dstd::Vector<double>{1.5, 3.0});
         auto ws = cfg.get_string_array("words");
         REQUIRE(ws.size() == 2);
         CHECK(ws[0] == "alpha");
@@ -388,7 +388,7 @@ struct PortConsumer {
     void step(const dftracer::utils::plugins::Batch&,
               dftracer::utils::plugins::Host h) {
         auto in = h.consume_port<Edge>(PORT_CAP);
-        std::optional<Edge> v = in.recv();
+        dstd::Optional<Edge> v = in.recv();
         g_present = v.has_value();
         g_count = g_present ? v->count : 0;
         g_sum = g_present ? v->sum : 0.0;
@@ -399,9 +399,11 @@ struct PortConsumer {
 
 struct PortHolder {
     dftu_plugin* plugin;
-    std::unique_ptr<PluginFold> fold;
-    PortHolder(dftu_plugin* p, StringIntern& intern, FoldPortBus* bus)
-        : plugin(p), fold(std::make_unique<PluginFold>(p, intern)) {
+    dstd::UniquePtr<domains::plugins::PluginFold> fold;
+    PortHolder(dftu_plugin* p, dstd::StringIntern& intern,
+               trace::views::detail::FoldPortBus* bus)
+        : plugin(p),
+          fold(dstd::make_unique<domains::plugins::PluginFold>(p, intern)) {
         fold->bind_port_bus(bus);
     }
     ~PortHolder() {
@@ -414,8 +416,8 @@ struct PortHolder {
 
 TEST_SUITE("PluginCxxPorts") {
     TEST_CASE("typed publish_port/consume_port round-trip a struct value") {
-        StringIntern intern;
-        FoldPortBus bus;
+        dstd::StringIntern intern;
+        trace::views::detail::FoldPortBus bus;
         PortHolder prod(
             dftracer::utils::plugins::make_plugin<PortProducer>(nullptr),
             intern, &bus);
@@ -423,17 +425,18 @@ TEST_SUITE("PluginCxxPorts") {
             dftracer::utils::plugins::make_plugin<PortConsumer>(nullptr),
             intern, &bus);
 
-        std::vector<FoldEvent> evs = {evt(intern, 1, 10), evt(intern, 1, 20),
-                                      evt(intern, 2, 30)};
-        ScanUnit unit;
-        FoldBatch fb{std::span<const FoldEvent>(evs), unit};
+        dstd::Vector<trace::views::detail::FoldEvent> evs = {
+            evt(intern, 1, 10), evt(intern, 1, 20), evt(intern, 2, 30)};
+        trace::views::detail::ScanUnit unit;
+        trace::views::detail::FoldBatch fb{
+            dstd::Span<const trace::views::detail::FoldEvent>(evs), unit};
 
         g_present = false;
         g_count = 0;
         g_sum = 0;
         bus.clear();
-        prod.fold->step(fb);
-        cons.fold->step(fb);
+        dftu_utils_test::ok(prod.fold->step(fb));
+        dftu_utils_test::ok(cons.fold->step(fb));
         CHECK(g_present);
         CHECK(g_count == 3);
         CHECK(g_sum == doctest::Approx(60.0));
@@ -441,7 +444,7 @@ TEST_SUITE("PluginCxxPorts") {
         // Consumer before producer sees nothing (the ordering rule).
         bus.clear();
         g_present = true;
-        cons.fold->step(fb);
+        dftu_utils_test::ok(cons.fold->step(fb));
         CHECK_FALSE(g_present);
     }
 }

@@ -1,8 +1,9 @@
+// SPDX-License-Identifier: MIT
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/duql/errc.h>
 #include <dftracer/utils/python/py_errors.h>
 
 #include <stdexcept>
-#include <string>
 
 namespace dftracer::utils::python {
 
@@ -18,16 +19,14 @@ PyObject *g_dft_indexer_error = nullptr;
 PyObject *g_dft_pipeline_error = nullptr;
 PyObject *g_dft_aggregation_error = nullptr;
 
-using dftracer::utils::ErrorCode;
-
 namespace {
 
 // Create exception "dftracer_utils_ext.<short_name>", register it on m, and
 // keep a strong ref in *slot.
 int add_exc(PyObject *m, const char *short_name, PyObject *base,
             PyObject **slot) {
-    const std::string qualified =
-        std::string("dftracer_utils_ext.") + short_name;
+    dstd::String qualified("dftracer_utils_ext.");
+    qualified.append(short_name);
     PyObject *exc = PyErr_NewException(qualified.c_str(), base, nullptr);
     if (exc == nullptr) return -1;
     Py_INCREF(exc);  // keep one strong ref in *slot in addition to the module's
@@ -73,46 +72,46 @@ int init_py_errors(PyObject *m) {
     return 0;
 }
 
-PyObject *py_error_type_for(ErrorCode code) {
+PyObject *py_error_type_for(common::ErrorCode code) {
     switch (code) {
-        case ErrorCode::INVALID_ARGUMENT:
+        case common::ErrorCode::InvalidArgument:
             return g_dft_value_error;
-        case ErrorCode::NOT_FOUND:
+        case common::ErrorCode::NotFound:
             return g_dft_not_found_error;
-        case ErrorCode::IO:
+        case common::ErrorCode::Io:
             return g_dft_io_error;
-        case ErrorCode::PARSE:
+        case common::ErrorCode::Parse:
             return g_dft_parse_error;
-        case ErrorCode::COMPRESSION:
+        case common::ErrorCode::Compression:
             return g_dft_compression_error;
-        case ErrorCode::DUQL:
+        case common::ErrorCode::Duql:
             return g_dft_duql_error;
-        case ErrorCode::READER:
+        case common::ErrorCode::Reader:
             return g_dft_reader_error;
-        case ErrorCode::INDEXER:
+        case common::ErrorCode::Indexer:
             return g_dft_indexer_error;
-        case ErrorCode::PIPELINE:
+        case common::ErrorCode::Pipeline:
             return g_dft_pipeline_error;
-        case ErrorCode::AGGREGATION:
+        case common::ErrorCode::Aggregation:
             return g_dft_aggregation_error;
-        case ErrorCode::UNKNOWN:
-        case ErrorCode::INTERNAL:
+        case common::ErrorCode::Unknown:
+        case common::ErrorCode::Internal:
+        case common::ErrorCode::MemoryBudgetExceeded:
             return g_dft_error;
     }
     return g_dft_error;
 }
 
-PyObject *py_error_type_for(const dftracer::utils::DFTUtilsException &e) {
+PyObject *py_error_type_for(const dftracer::utils::dstd::Error &error) {
     // Domain-specific types take precedence over the portable-condition map.
-    if (e.domain() == dftracer::utils::duql::ERROR_DOMAIN.id)
+    if (error.domain().id == dftracer::utils::duql::ERROR_DOMAIN.id)
         return g_dft_duql_error;
-    return py_error_type_for(e.code());
+    return py_error_type_for(common::errorcode_of(error));
 }
 
 void set_typed_py_error(const std::exception &e) {
-    if (const auto *de =
-            dynamic_cast<const dftracer::utils::DFTUtilsException *>(&e)) {
-        PyErr_SetString(py_error_type_for(*de), e.what());
+    if (const auto *de = dynamic_cast<const PyErrorException *>(&e)) {
+        PyErr_SetString(py_error_type_for(de->error()), e.what());
     } else if (dynamic_cast<const std::invalid_argument *>(&e)) {
         PyErr_SetString(g_dft_value_error, e.what());
     } else {

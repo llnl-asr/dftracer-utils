@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: MIT
 # Usage: parallel-phases.sh <phase>...
 # Runs each phase in its own podman container, concurrently inside the one
 # allocation: GitHub gets a runner per job, here the container is the unit.

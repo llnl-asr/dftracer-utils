@@ -1,11 +1,16 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_TRACE_VIEWS_STREAM_ROW_FOLD_H
 #define DFTRACER_UTILS_TRACE_VIEWS_STREAM_ROW_FOLD_H
 
-#include <dftracer/utils/core/common/string_intern.h>
-#include <dftracer/utils/core/coro/async_semaphore.h>
-#include <dftracer/utils/core/coro/channel.h>
-#include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/coro/async_semaphore.h>
+#include <dftracer/utils/coro/channel.h>
+#include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/trace/views/batch_bridge.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/trace/views/fold_event.h>
@@ -14,14 +19,10 @@
 
 #include <atomic>
 #include <cstdint>
-#include <memory>
-#include <optional>
-#include <string>
-#include <vector>
 
-namespace dftracer::utils::index::plan {
+namespace dftracer::utils::trace::index::plan {
 class GroupResolver;
-}  // namespace dftracer::utils::index::plan
+}  // namespace dftracer::utils::trace::index::plan
 
 namespace dftracer::utils::trace::views::detail {
 
@@ -42,15 +43,16 @@ std::uint64_t morsel_bytes(const dataframe::Morsel& m);
 /// that seq, so the consumer can hand rows out in unit order.
 class StreamRowFold : public Fold {
    public:
-    StreamRowFold(std::shared_ptr<coro::Channel<dataframe::Morsel>> channel,
-                  std::shared_ptr<coro::CoroSemaphore> budget,
-                  std::shared_ptr<dftracer::utils::StringIntern> intern,
-                  std::vector<std::string> select, double time_scale = 1.0,
-                  bool keep_metadata = false, bool emit_dyn = false,
-                  std::shared_ptr<const ViewPlan> branch = nullptr,
-                  std::shared_ptr<const std::atomic<bool>> dropped = nullptr,
-                  bool by_path = false, bool ordered = false,
-                  std::shared_ptr<const JsonColumns> json = nullptr)
+    StreamRowFold(
+        dstd::SharedPtr<coro::UnboundedChannel<dataframe::Morsel>> channel,
+        dstd::SharedPtr<coro::AsyncSemaphore> budget,
+        dstd::SharedPtr<dftracer::utils::dstd::StringIntern> intern,
+        dstd::Vector<dstd::String> select, double time_scale = 1.0,
+        bool keep_metadata = false, bool emit_dyn = false,
+        dstd::SharedPtr<const ViewPlan> branch = nullptr,
+        dstd::SharedPtr<const std::atomic<bool>> dropped = nullptr,
+        bool by_path = false, bool ordered = false,
+        dstd::SharedPtr<const JsonColumns> json = nullptr)
         : channel_(std::move(channel)),
           budget_(std::move(budget)),
           intern_(std::move(intern)),
@@ -66,29 +68,37 @@ class StreamRowFold : public Fold {
           guard_(channel_.get()) {}
 
     bool accepts(const ScanShape&) const override { return true; }
-    bool needs_args() const override { return true; }
+    bool needs_args() const override {
+        if (keep_metadata_ || emit_dyn_ || by_path_ || json_ ||
+            !row_select_is_arg_free(select_))
+            return true;
+        if (branch_ && branch_->query)
+            for (dstd::StringView f : branch_->query->fields())
+                if (!query_field_is_arg_free(f)) return true;
+        return false;
+    }
     bool wants_metadata() const override { return keep_metadata_; }
 
-    std::vector<std::string> extra_captures() const override {
-        std::vector<std::string> fields = select_;
+    dstd::Vector<dstd::String> extra_captures() const override {
+        dstd::Vector<dstd::String> fields = select_;
         if (branch_ && branch_->query)
-            for (std::string_view f : branch_->query->fields())
+            for (dstd::StringView f : branch_->query->fields())
                 fields.emplace_back(f);
         return row_fold_extra_captures(fields);
     }
 
-    std::unique_ptr<Fold> slice() const override {
-        return std::make_unique<StreamRowFold>(
+    dstd::UniquePtr<Fold> slice() const override {
+        return dstd::make_unique<StreamRowFold>(
             channel_, budget_, intern_, select_, time_scale_, keep_metadata_,
             emit_dyn_, branch_, dropped_, by_path_, ordered_, json_);
     }
 
-    void step(const FoldBatch& batch) override;
+    dstd::Result<void> step(const FoldBatch& batch) override;
 
     void seal_unit(const ScanUnit& unit) override { end_unit(unit); }
     void drop_unit(const ScanUnit& unit) override { end_unit(unit); }
     void skip_unit(const ScanUnit& unit) override { end_unit(unit); }
-    void merge(Fold&) override {}
+    dstd::Result<void> merge(Fold&) override { return {}; }
 
     coro::CoroTask<bool> finalize(const CoverageSet&) override {
         co_return true;
@@ -105,32 +115,35 @@ class StreamRowFold : public Fold {
 
     coro::CoroTask<void> send(dataframe::Morsel m, std::uint64_t bytes) {
         co_await budget_->acquire(bytes);
-        co_await channel_->send(std::move(m));
+        // A closed channel never gives the permits back through a receive;
+        // return them so the senders still waiting on this budget wake too.
+        const bool sent = co_await channel_->send(std::move(m));
+        if (!sent) budget_->release(bytes);
     }
 
-    std::shared_ptr<coro::Channel<dataframe::Morsel>> channel_;
-    std::shared_ptr<coro::CoroSemaphore> budget_;
-    std::shared_ptr<dftracer::utils::StringIntern> intern_;
-    std::vector<std::string> select_;
+    dstd::SharedPtr<coro::UnboundedChannel<dataframe::Morsel>> channel_;
+    dstd::SharedPtr<coro::AsyncSemaphore> budget_;
+    dstd::SharedPtr<dftracer::utils::dstd::StringIntern> intern_;
+    dstd::Vector<dstd::String> select_;
     double time_scale_;
     bool keep_metadata_;  // phase("metadata"): keep ph=M records
     bool emit_dyn_;       // auto_numeric_metrics: emit per-batch dyn columns
-    std::shared_ptr<const ViewPlan> branch_;
+    dstd::SharedPtr<const ViewPlan> branch_;
     // Set once the consumer let go; the fold then stops sending to it.
-    std::shared_ptr<const std::atomic<bool>> dropped_;
+    dstd::SharedPtr<const std::atomic<bool>> dropped_;
     bool by_path_;
     bool ordered_;
-    std::shared_ptr<const JsonColumns> json_;
+    dstd::SharedPtr<const JsonColumns> json_;
     duql::ValueMap qmap_;
-    coro::Channel<dataframe::Morsel>::ProducerGuard guard_;
+    coro::UnboundedChannel<dataframe::Morsel>::ProducerGuard guard_;
 
     // Indices of the batch events the filter keeps, reused across step() calls
     // so a batch costs no vector allocation and no FoldEvent copy.
-    std::vector<std::uint32_t> kept_;
+    dstd::Vector<std::uint32_t> kept_;
 
     // fuse() awaits take_pending()'s task right after step() and before the
     // next step() on this fold, so one reused slot is enough.
-    std::optional<coro::CoroTask<void>> pending_task_;
+    dstd::Optional<coro::CoroTask<void>> pending_task_;
     ::dftu_task* pending_ = nullptr;
 };
 

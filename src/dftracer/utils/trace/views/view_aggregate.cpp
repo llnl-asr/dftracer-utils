@@ -1,17 +1,19 @@
+// SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/dataframe/dataframe.h>
-#include <dftracer/utils/index/plan/view_resolver.h>
+#include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/trace/index/plan/view_resolver.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view_aggregate.h>
 #include <dftracer/utils/trace/views/view_scan.h>
 
 #include <algorithm>
-#include <cctype>
-#include <set>
-#include <string>
 #include <utility>
-#include <vector>
-
-namespace dataframe = dftracer::utils::dataframe;
 
 namespace dftracer::utils::trace::views::detail {
 
@@ -20,7 +22,7 @@ AggSchema make_agg_schema(const ViewPlan& plan) {
     s.spec_field.assign(plan.agg.size(), -1);
     s.spec_argmax.assign(plan.agg.size(), -1);
     s.spec_set.assign(plan.agg.size(), -1);
-    auto field_index = [&](const std::string& f) -> int {
+    auto field_index = [&](const dstd::String& f) -> int {
         for (std::size_t i = 0; i < s.fields.size(); ++i)
             if (s.fields[i] == f) return static_cast<int>(i);
         s.fields.push_back(f);
@@ -70,96 +72,101 @@ AggSchema make_agg_schema(const ViewPlan& plan) {
 
 const AggSchema& ensure_schema(const ViewPlan& plan) {
     if (!plan.schema)
-        plan.schema = std::make_shared<AggSchema>(make_agg_schema(plan));
+        plan.schema = dstd::make_shared<AggSchema>(make_agg_schema(plan));
     return *plan.schema;
 }
 
 namespace {
 
-constexpr std::string_view FILE_PATH = "file.path";
-constexpr std::string_view HOST_NAME = "host.name";
-constexpr std::string_view RANK = "rank";
+constexpr dstd::StringView FILE_PATH = "file.path";
+constexpr dstd::StringView HOST_NAME = "host.name";
+constexpr dstd::StringView RANK = "rank";
 
 }  // namespace
 
-std::optional<dftracer::utils::index::plan::GroupResolver::Column>
+dstd::Optional<dftracer::utils::trace::index::plan::GroupResolver::Column>
 resolver_column(GroupKey::Kind kind) {
     switch (kind) {
         case GroupKey::Kind::FilePath:
         case GroupKey::Kind::FileName:
-            return {{std::string(FILE_PATH), "files", "fhash", "path"}};
+            return {{dstd::String(FILE_PATH), "files", "fhash", "path"}};
         case GroupKey::Kind::HostName:
-            return {{std::string(HOST_NAME), "hosts", "hhash", "name"}};
+            return {{dstd::String(HOST_NAME), "hosts", "hhash", "name"}};
         case GroupKey::Kind::Rank:
-            return {{std::string(RANK), "ranks", "pid", "rank"}};
+            return {{dstd::String(RANK), "ranks", "pid", "rank"}};
         default:
-            return std::nullopt;
+            return dstd::nullopt;
     }
 }
 
-const dftracer::utils::index::plan::GroupResolver* ensure_resolver(
+const dftracer::utils::trace::index::plan::GroupResolver* ensure_resolver(
     const ViewPlan& plan) {
     if (plan.resolver) return plan.resolver.get();
-    std::vector<dftracer::utils::index::plan::GroupResolver::Column> columns;
+    dstd::Vector<dftracer::utils::trace::index::plan::GroupResolver::Column>
+        columns;
     for (const auto& gk : plan.group_by)
         if (auto c = resolver_column(gk.kind)) columns.push_back(std::move(*c));
     if (columns.empty()) return nullptr;
-    std::vector<dftracer::utils::index::plan::RowSetFile> files;
+    dstd::Vector<dftracer::utils::trace::index::plan::RowSetFile> files;
     for (const auto& f : plan.files) {
-        std::string index = f.index_path;
+        dstd::String index{dstd::StringView(f.index_path)};
         if (index.empty())
             index = trace::internal::determine_index_path(f.file_path, "");
-        files.push_back({f.file_path, std::move(index)});
+        files.push_back(
+            {dstd::String(dstd::StringView(f.file_path)), std::move(index)});
     }
     plan.resolver =
-        std::make_shared<dftracer::utils::index::plan::GroupResolver>(files,
-                                                                      columns);
+        dstd::make_shared<dftracer::utils::trace::index::plan::GroupResolver>(
+            files, columns);
     return plan.resolver.get();
 }
 
-std::string resolve_group_value(
-    const dftracer::utils::index::plan::GroupResolver& r, const GroupKey& gk,
-    const std::string& hash) {
+dstd::String resolve_group_value(
+    const dftracer::utils::trace::index::plan::GroupResolver& r,
+    const GroupKey& gk, const dstd::String& hash) {
     const GroupKey::Kind kind = gk.kind;
-    if (kind == GroupKey::Kind::FilePath) return r.value(FILE_PATH, hash);
+    auto text = [](const dstd::String& v) {
+        return dstd::String(v.data(), v.size());
+    };
+    if (kind == GroupKey::Kind::FilePath) return text(r.value(FILE_PATH, hash));
     if (kind == GroupKey::Kind::FileName) {
-        const std::string& p = r.value(FILE_PATH, hash);
+        const dstd::String& p = r.value(FILE_PATH, hash);
         const std::size_t slash = p.find_last_of('/');
-        return slash == std::string::npos ? p : p.substr(slash + 1);
+        return slash == dstd::String::npos
+                   ? text(p)
+                   : dstd::String(p.data() + slash + 1, p.size() - slash - 1);
     }
-    if (kind == GroupKey::Kind::HostName) return r.value(HOST_NAME, hash);
-    if (kind == GroupKey::Kind::Rank) return r.value(RANK, hash);
+    if (kind == GroupKey::Kind::HostName) return text(r.value(HOST_NAME, hash));
+    if (kind == GroupKey::Kind::Rank) return text(r.value(RANK, hash));
     return hash;
 }
 
-std::string apply_group_transform(const GroupKey& gk, std::string v) {
+dstd::String apply_group_transform(const GroupKey& gk, dstd::String v) {
     switch (gk.transform) {
         case GroupKey::Transform::None:
             return v;
         case GroupKey::Transform::Dirname: {
             const auto slash = v.find_last_of('/');
-            if (slash == std::string::npos) return std::string();
+            if (slash == dstd::String::npos) return dstd::String();
             return v.substr(0, slash);
         }
         case GroupKey::Transform::Basename: {
             const auto slash = v.find_last_of('/');
-            return slash == std::string::npos ? v : v.substr(slash + 1);
+            return slash == dstd::String::npos ? v : v.substr(slash + 1);
         }
         case GroupKey::Transform::Lower: {
-            for (auto& ch : v)
-                ch = static_cast<char>(
-                    ::tolower(static_cast<unsigned char>(ch)));
+            ::dftracer::utils::common::detail::lower_ascii(v);
             return v;
         }
         case GroupKey::Transform::Bucket:
             for (const auto& b : gk.transform_args)
-                if (v.find(b) != std::string::npos) return b;
-            return std::string();
+                if (v.find(b) != dstd::String::npos) return b;
+            return dstd::String();
     }
     return v;
 }
 
-std::string group_col_name(const GroupKey& gk) {
+dstd::String group_col_name(const GroupKey& gk) {
     switch (gk.kind) {
         case GroupKey::Kind::Name:
             return "name";
@@ -197,7 +204,7 @@ std::string group_col_name(const GroupKey& gk) {
 // convention (sum_field). The legacy mean path keeps the bare arg name. Pct
 // uses the spec's out_name prefix (e.g. "p90_" from the pNN shorthand) so the
 // quantile is legible; otherwise it falls back to "pct_".
-std::string dyn_col_name(const AggSpec& spec, const std::string& key) {
+dstd::String dyn_col_name(const AggSpec& spec, const dstd::String& key) {
     switch (spec.op) {
         case AggOp::Count:
             return "count_" + key;
@@ -220,7 +227,7 @@ std::string dyn_col_name(const AggSpec& spec, const std::string& key) {
         case AggOp::Kurt:
             return "kurt_" + key;
         case AggOp::Pct: {
-            std::string pfx = spec.out_name.empty() ? "pct_" : spec.out_name;
+            dstd::String pfx = spec.out_name.empty() ? "pct_" : spec.out_name;
             if (pfx.back() != '_') pfx += '_';
             return pfx + key;
         }
@@ -229,7 +236,7 @@ std::string dyn_col_name(const AggSpec& spec, const std::string& key) {
     }
 }
 
-std::string agg_col_name(const AggSpec& spec) {
+dstd::String agg_col_name(const AggSpec& spec) {
     if (!spec.out_name.empty()) return spec.out_name;
     switch (spec.op) {
         case AggOp::Count:
@@ -273,13 +280,13 @@ std::string agg_col_name(const AggSpec& spec) {
 }
 
 void project_columns(dftracer::utils::dataframe::DataFrame& batch,
-                     const std::vector<std::string>& select) {
+                     const dstd::Vector<dstd::String>& select) {
     if (select.empty()) return;
-    const std::set<std::string> keep(select.begin(), select.end());
-    std::vector<std::string> names;
-    std::vector<dftracer::utils::dataframe::Series> columns;
+    const dstd::HashSet<dstd::String> keep(select.begin(), select.end());
+    dstd::Vector<dstd::String> names;
+    dstd::Vector<dftracer::utils::dataframe::Series> columns;
     for (std::size_t i = 0; i < batch.names.size(); ++i) {
-        if (keep.count(batch.names[i])) {
+        if (keep.count(dstd::StringView(batch.names[i]))) {
             names.push_back(std::move(batch.names[i]));
             columns.push_back(std::move(batch.columns[i]));
         }
@@ -288,12 +295,20 @@ void project_columns(dftracer::utils::dataframe::DataFrame& batch,
     batch.columns = std::move(columns);
 }
 
-dataframe::DataFrame apply_agg_post_ops(dataframe::DataFrame batch,
-                                        const ViewPlan& plan) {
-    if (!plan.sort_col.empty())
-        batch = batch.sort_by(plan.sort_col, plan.sort_desc);
-    if (!plan.topk_col.empty())
-        batch = batch.topk(plan.topk_col, plan.topk_k, plan.topk_largest);
+dstd::Result<dataframe::DataFrame> apply_agg_post_ops(
+    dataframe::DataFrame batch, const ViewPlan& plan) {
+    if (!plan.sort_col.empty()) {
+        auto sorted =
+            batch.sort_by(dstd::String(plan.sort_col), plan.sort_desc);
+        if (!sorted) return sorted.error();
+        batch = std::move(*sorted);
+    }
+    if (!plan.topk_col.empty()) {
+        auto top = batch.topk(dstd::String(plan.topk_col), plan.topk_k,
+                              plan.topk_largest);
+        if (!top) return top.error();
+        batch = std::move(*top);
+    }
     if (plan.offset || plan.limit) {
         const std::int64_t off = static_cast<std::int64_t>(plan.offset);
         const std::int64_t len = plan.limit

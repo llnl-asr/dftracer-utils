@@ -1,7 +1,8 @@
+# SPDX-License-Identifier: MIT
 """Dask distributed integration for dftracer-utils."""
 
 import os
-import shutil
+import zlib
 from collections import defaultdict, namedtuple
 from dataclasses import dataclass, replace
 from typing import (
@@ -22,9 +23,9 @@ from typing import (
 # imports name the true types for annotations while the runtime `else` branch
 # provides real values (or None fallbacks for the optional deps).
 if TYPE_CHECKING:
-    import pyarrow as pa  # ty: ignore[unresolved-import]
-    from dask.distributed import Client, WorkerPlugin, get_client  # ty: ignore[unresolved-import]
-    from distributed import Future, Worker  # ty: ignore[unresolved-import]
+    import pyarrow as pa  # ty: ignore[import-not-found]
+    from dask.distributed import Client, WorkerPlugin, get_client  # ty: ignore[import-not-found]
+    from distributed import Future, Worker  # ty: ignore[import-not-found]
 
     from .indexer import AggregationConfig
 else:
@@ -47,19 +48,11 @@ except ImportError:
     dask = None  # type: ignore[assignment]  # ty: ignore[invalid-assignment]
     dd = None  # type: ignore[assignment]  # ty: ignore[invalid-assignment]
 
-from dftracer.utils import (
-    Runtime,
-    peek_default_runtime,
-    set_default_runtime,
-)
+from dftracer.utils import Runtime
 from dftracer.utils._units import coerce_bytes, coerce_duration
 from dftracer.utils.dask_frame import DaskFrame
 from dftracer.utils.dataframe import DataFrame, PhaseArg, TimeUnitArg
 from dftracer.utils.trace_viewer import TraceViewer
-
-# One intra-file work slice: (member_begin, member_end, is_partial, members),
-# members being (offset, size) pairs. Matches build_sst_batch's file_slices.
-_FileSlice = Tuple[int, int, bool, List[Tuple[int, int]]]
 
 __all__ = [
     "DaskFrame",
@@ -74,24 +67,18 @@ __all__ = [
 if WorkerPlugin is not None:
 
     class DFTracerUtilsDaskWorkerPlugin(WorkerPlugin):  # ty: ignore[unsupported-base]
-        """Creates a persistent Runtime per Dask worker."""
+        """Configures the process runtime of each Dask worker."""
 
         def __init__(self, threads=0, io_threads=0):
             self.threads = threads
             self.io_threads = io_threads
 
         def setup(self, worker):
-            # peek (do not create): forcing get_default_runtime here would
-            # spin up an unused hardware_concurrency-thread runtime per worker.
-            worker._dftracer_prev_runtime = peek_default_runtime()
-            rt = Runtime(threads=self.threads, io_threads=self.io_threads)
-            worker.dftracer_utils_runtime = rt
-            set_default_runtime(rt)
+            worker.dftracer_utils_runtime = Runtime(
+                threads=self.threads, io_threads=self.io_threads
+            )
 
         def teardown(self, worker):
-            if hasattr(worker, "_dftracer_prev_runtime"):
-                set_default_runtime(worker._dftracer_prev_runtime)
-                del worker._dftracer_prev_runtime
             if hasattr(worker, "dftracer_utils_runtime"):
                 # wait=False: don't block on pending tasks during teardown.
                 # Dask may be tearing down because of timeout/cancel, and a
@@ -128,7 +115,6 @@ class DistributedIndexResult(TypedDict):
     total_files: int
     per_worker: List[int]
     index_path: str
-    artifact_batches: int
 
 
 def _worker_progress_forwarder(phase: str, batch: str) -> Callable[[int, int], None]:
@@ -201,26 +187,6 @@ class ProgressAggregator:
             except Exception:
                 pass
         return False
-
-
-def resolve_local_staging(client: "Client") -> str:
-    """Derive node-local SST scratch from each Dask worker's own scratch.
-
-    Workers share the path *string* (e.g. ``/scratch/$USER``) but each resolves
-    it to its own node-local storage; falls back to ``/tmp`` when nothing is
-    reported.
-    """
-    workers = client.scheduler_info().get("workers", {}) or {}
-    if workers:
-        worker_local_dir = next(iter(workers.values())).get("local_directory") or "/tmp"
-    else:
-        worker_local_dir = "/tmp"
-    return os.path.join(worker_local_dir, "dftracer-sst-staging")
-
-
-def _rmtree_quiet(path: str) -> None:
-    """Best-effort recursive remove; submitted to workers for staging cleanup."""
-    shutil.rmtree(path, ignore_errors=True)
 
 
 def _runtime_threads(worker: "Worker", host_worker_counts: Dict[str, int], total_cpus: int) -> int:
@@ -455,8 +421,8 @@ def _dv_materialize_shard_task(
     checkpoint_size: int,
     part_size: int,
 ) -> str:
-    """Worker: materialize this shard's filtered events into its own MV subdir
-    (a self-contained part + index), for a distributed row-MV build."""
+    """Worker: materialize this shard's filtered events into a rank subdir of
+    the view's parts dir, indexed in the view root that holds them all."""
     os.makedirs(subdir, exist_ok=True)
     _make_viewer(files, index_dir, plan).export_trace(
         os.path.join(subdir, "part.pfw.gz"),
@@ -712,7 +678,7 @@ class DaskTraceViewer:
 
     def collect_typed(self):
         """Distributed one-pass typed read -> {regular, aggregated, counters}
-        pyarrow Tables, fanning disjoint aggregation-CF shard ranges across
+        pyarrow Tables, fanning disjoint group ranges (hash shards) of the partials across
         workers (the index-wide tier can't be file-sharded)."""
         import pyarrow as pa
 
@@ -900,7 +866,7 @@ class DaskTraceViewer:
                 s,
                 self._index_dir,
                 self._plan,
-                os.path.join(mv_dir, f"shard-{n}"),
+                os.path.join(mv_dir, "parts", f"shard-{n}"),
                 checkpoint_size,
                 part_size,
                 pure=False,
@@ -960,135 +926,101 @@ def distributed_write_trace(
 
 
 def assign_files_by_pid(
-    file_pids: Dict[int, Set[int]],
+    file_pids: Dict[str, Set[int]],
     n_workers: int,
-) -> Dict[int, List[int]]:
+) -> Dict[int, List[str]]:
     """Assign files to workers based on majority PID affinity.
 
     Files with overlapping PIDs are assigned to the same worker to minimize
-    cross-worker aggregation during the merge phase.
+    cross-worker aggregation during the merge phase. A file with no recorded
+    PID goes to the worker its path hashes to, so separate processes agree on
+    the assignment.
 
     Args:
-        file_pids: Dict mapping file_id to set of PIDs in that file.
+        file_pids: Dict mapping trace path to set of PIDs in that file.
         n_workers: Number of workers to distribute to.
 
     Returns:
-        Dict mapping worker_id to list of file_ids.
+        Dict mapping worker_id to list of trace paths.
     """
     if n_workers <= 0:
         n_workers = 1
 
-    worker_assignments: Dict[int, List[int]] = defaultdict(list)
+    worker_assignments: Dict[int, List[str]] = defaultdict(list)
 
-    for file_id, pids in file_pids.items():
+    for path, pids in file_pids.items():
         if not pids:
-            worker_id = file_id % n_workers
+            # crc32, not hash(): a str hash is salted per process.
+            worker_id = zlib.crc32(path.encode()) % n_workers
         else:
             # Files with same PIDs go to same worker.
             majority_pid = min(pids)  # min for determinism
             worker_id = hash(majority_pid) % n_workers
-        worker_assignments[worker_id].append(file_id)
+        worker_assignments[worker_id].append(path)
 
     return dict(worker_assignments)
 
 
-def _build_sst_task(
+def _build_index_task(
     files: List[str],
-    file_ids: List[int],
-    file_slices: Optional[List[Optional[_FileSlice]]],
-    local_staging: str,
-    shared_staging: str,
     batch_id: str,
-    index_dir: str,
+    shard_root: str,
     checkpoint_size: int,
     bloom_dimensions: Optional[List[str]],
     force_rebuild: bool,
     parallelism: int,
-    flush_every_files: int,
     build_bloom: bool = True,
-    # Opaque native aggregation-config object, forwarded straight to build_sst_batch.
-    aggregation_config: "Optional[Union[bool, AggregationConfig]]" = None,
-    enable_det_ids: bool = False,
-) -> Tuple[List[Dict[str, Optional[str]]], bytes]:
-    """Dask worker task: build per-worker SSTs and relocate to shared FS.
+    aggregation_config: "Optional[AggregationConfig]" = None,
+) -> None:
+    """Dask worker task: index `files` as the shard at `shard_root`.
 
-    Returns ``(artifact_dicts, tracker_blob)``."""
+    The shard is a complete index root of its own. The coordinator catalogs the
+    shards and merges them into the index root once every task finished.
+    """
     import logging as _logging
     import socket as _socket
     import time as _time
 
-    from .dftracer_utils_ext import build_sst_batch, move_artifacts
+    from .dftracer_utils_ext import (
+        build_index_batch,
+        enable_aggregation_deterministic_ids,
+    )
 
-    _log = _logging.getLogger("dftracer.utils.dask._build_sst_task")
+    _log = _logging.getLogger("dftracer.utils.dask._build_index_task")
     _host = _socket.gethostname()
 
     _progress_cb = _worker_progress_forwarder("Indexing", batch_id)
 
     t0 = _time.monotonic()
-    if enable_det_ids:
-        from .dftracer_utils_ext import enable_aggregation_deterministic_ids
+    # Every shard numbers its aggregation dictionary by content, so the shards
+    # of one root agree on the ids their data files carry.
+    enable_aggregation_deterministic_ids()
 
-        enable_aggregation_deterministic_ids()
-
-    artifact_dicts, tracker_blob = build_sst_batch(
+    build_index_batch(
         files,
-        file_ids,
-        local_staging,
-        batch_id,
-        index_dir,
+        shard_root,
         checkpoint_size,
         force_rebuild,
         build_bloom,
         bloom_dimensions,
         parallelism,
-        flush_every_files,
         None,
         aggregation_config,
-        file_slices,
         progress=_progress_cb,
     )
-    t_build = _time.monotonic()
-
-    n_moved = 0
-    if shared_staging and shared_staging != local_staging:
-        # Keep per-sink subdir to avoid aggregation.sst collisions.
-        base = os.path.join(shared_staging, batch_id)
-        relocated: List[Dict[str, Optional[str]]] = []
-        for i, d in enumerate(artifact_dicts):
-            relocated.append(move_artifacts(d, os.path.join(base, f"sub_{i}")))
-        artifact_dicts = relocated
-        n_moved = len(relocated)
-    t_move = _time.monotonic()
-
     _log.info(
-        "build host=%s batch=%s n_files=%d n_slices=%d n_artifacts=%d "
-        "build=%.2fs move=%.2fs(n=%d) total=%.2fs",
+        "build host=%s batch=%s n_files=%d total=%.2fs",
         _host,
         batch_id,
-        len(set(file_ids)),
         len(files),
-        len(artifact_dicts),
-        t_build - t0,
-        t_move - t_build,
-        n_moved,
-        t_move - t0,
+        _time.monotonic() - t0,
     )
-    return artifact_dicts, tracker_blob
-
-
-def _scan_gzip_members_task(paths: List[str]) -> List[List[Tuple[int, int]]]:
-    """Worker task: scan gzip member offsets for its file subset."""
-    from .dftracer_utils_ext import enumerate_gzip_members
-
-    return enumerate_gzip_members(paths, None)
 
 
 def distributed_index(
     directory: str = "",
     files: Optional[List[str]] = None,
     index_path: str = "",
-    local_staging: str = "",
-    shared_staging: str = "",
     client: "Optional[Client]" = None,
     checkpoint_size: Union[int, str] = 32 * 1024 * 1024,
     bloom_dimensions: Optional[List[str]] = None,
@@ -1096,68 +1028,57 @@ def distributed_index(
     build_bloom: bool = True,
     partition: Literal["lpt", "round_robin"] = "lpt",
     parallelism_per_worker: int = 0,
-    flush_every_files: int = 0,
-    aggregation_config: "Optional[Union[bool, AggregationConfig]]" = None,
+    aggregation_config: "Optional[AggregationConfig]" = None,
     progress: Optional[Callable[[int, int, str], None]] = None,
 ) -> DistributedIndexResult:
-    """Index a set of trace files using Dask workers writing SSTs in parallel.
+    """Index a set of trace files using Dask workers that write in parallel.
 
     Steps (all O(1) on the coordinator except the fan-out):
       1. Enumerate files + sizes via parallel scan.
-      2. LPT bin-pack files into one bucket per Dask worker.
-      3. Assign file ids on the coordinator's IndexDatabase; each worker
-         writes its files' records with their index data.
-      4. Submit one Dask task per non-empty worker that runs the existing
-         indexer pipeline with an SST sink, writing SSTs to `local_staging`
-         and (if different) moving them to `shared_staging`.
-      5. Collect artifact dicts into an SstArtifactRegistry; the coordinator
-         ingests them in one atomic bulk_ingest.
+      2. LPT bin-pack whole files into one bucket per Dask worker. A file is
+         never split across workers: every part of its index is built from the
+         whole file, by one worker with its own threads.
+      3. Submit one Dask task per non-empty worker. Each task builds its files
+         as the shard `<index_path>/shards/<worker>`, a complete index root of
+         its own, on node-local scratch when the destination warrants it.
+      4. The coordinator catalogs the arrived shards in `<index_path>/shards.json`
+         and merges them into `<index_path>/store` by moving their data files,
+         which leaves the manifest and the shard directories gone. A failed task
+         fails the build and leaves the arrived shards in place, so a later call
+         retries the merge without a rebuild.
+      5. The coordinator writes the aggregation config and refreshes its view of
+         the index.
 
     Args:
         directory: Directory containing trace files.
         files: Explicit file list (alternative to directory).
         index_path: Target .dftindex path (coordinator-writable).
-        local_staging: Per-worker SST build dir. If equal to shared_staging,
-            no post-build move.
-        shared_staging: Shared FS dir the coordinator reads SSTs from during
-            ingest. Must be on the same filesystem as index_path for the
-            cheapest ingest.
         client: Dask distributed Client. None -> run tasks inline.
         partition: "lpt" (greedy longest-processing-time bin-pack) or
             "round_robin".
         parallelism_per_worker: 0 -> let the plugin/default Runtime choose
             (one coroutine thread per core).
-        flush_every_files: 0 -> build SSTs once per worker; >0 -> flush
-            mid-batch to bound peak memory.
 
     Returns:
-        dict with total_files, per_worker sizes, index_path, artifact_count.
+        dict with total_files, per_worker sizes and index_path.
     """
     if dask is None:
         raise ImportError("dask is required for distributed_index")
     checkpoint_size = coerce_bytes(checkpoint_size, "checkpoint_size")
     if not index_path:
         raise ValueError("index_path is required")
-    if not local_staging:
-        raise ValueError("local_staging is required")
-    if not shared_staging:
-        shared_staging = local_staging
+    from .indexer import AggregationConfig as _AggregationConfig
 
+    agg_config = aggregation_config if aggregation_config is not None else _AggregationConfig()
     import logging as _logging
     import time as _time
 
-    from .dftracer_utils_ext import TRACE_FILE_PATTERNS
+    from .dftracer_utils_ext import INPUT_FILE_PATTERNS
     from .dftracer_utils_ext import (
-        IndexDatabase as _IndexDatabase,
+        Index as _Index,
     )
     from .dftracer_utils_ext import (
-        SstArtifactRegistry as _SstArtifactRegistry,
-    )
-    from .dftracer_utils_ext import (
-        enumerate_gzip_members as _enumerate_gzip_members,
-    )
-    from .dftracer_utils_ext import (
-        plan_work_units as _plan_work_units,
+        plan_lpt_partition as _plan_lpt_partition,
     )
     from .dftracer_utils_ext import (
         scan_files as _scan_files,
@@ -1173,7 +1094,7 @@ def distributed_index(
         if not directory:
             raise ValueError("either directory or files is required")
         _log.info("distributed_index: scan_files(%s)", directory)
-        entries = _scan_files(directory, list(TRACE_FILE_PATTERNS), True, None)
+        entries = _scan_files(directory, list(INPUT_FILE_PATTERNS), True, None)
     else:
         _log.info("distributed_index: sizing %d pre-listed files", len(files))
         entries = [(p, os.path.getsize(p)) for p in files]
@@ -1184,7 +1105,6 @@ def distributed_index(
             "total_files": 0,
             "per_worker": [],
             "index_path": index_path,
-            "artifact_batches": 0,
         }
 
     n_workers = 1
@@ -1203,7 +1123,7 @@ def distributed_index(
             index_dir=index_path,
             require_checkpoint=True,
             require_bloom=True,
-            require_aggregation=aggregation_config,
+            aggregation_config=agg_config,
             force_rebuild=False,
         ) as _resolver:
             _status = _resolver.resolve()
@@ -1218,259 +1138,114 @@ def distributed_index(
                 "total_files": n_total_files,
                 "per_worker": [],
                 "index_path": index_path,
-                "artifact_batches": 0,
             }
         if len(_needs) < len(entries):
             entries = [(p, s) for (p, s) in entries if p in _needs]
             all_paths = [p for (p, _) in entries]
 
-    # 2. Assign every file an id once on the coordinator (file_ids are then
-    #    parallel to `entries`).
-    _t1 = _time.monotonic()
-    _log.info("distributed_index: opening IndexDatabase at %s", index_path)
-    db = _IndexDatabase(index_path)
-    db.init_schema()
-    all_file_ids = db.assign_file_ids(all_paths)
-    _log.info(
-        "distributed_index: assign_file_ids done (%d files, %.1fs)",
-        len(all_paths),
-        _time.monotonic() - _t1,
-    )
-
-    # 3. SCAN: distribute gzip-member scan across workers (round-robin
-    #    per file_idx). Each worker sends back only its 1/N member maps;
-    #    coordinator stitches into the full map.
-    _t2 = _time.monotonic()
-    member_map: List[List[Tuple[int, int]]] = [[] for _ in range(len(entries))]
-    if client is None:
-        member_map = list(_enumerate_gzip_members(all_paths, None))
-    else:
-        worker_addrs = list(client.nthreads().keys())
-        scan_buckets: List[List[int]] = [[] for _ in range(n_workers)]
-        for i in range(len(all_paths)):
-            scan_buckets[i % n_workers].append(i)
-        scan_futs = []
-        scan_idx_lists: List[List[int]] = []
-        for w, idxs in enumerate(scan_buckets):
-            if not idxs:
-                continue
-            sub_paths = [all_paths[i] for i in idxs]
-            target = [worker_addrs[w % len(worker_addrs)]] if worker_addrs else None
-            scan_idx_lists.append(idxs)
-            scan_futs.append(
-                client.submit(_scan_gzip_members_task, sub_paths, workers=target, pure=False)
-            )
-        scan_results = client.gather(scan_futs)
-        for idxs, res in zip(scan_idx_lists, scan_results):
-            for i, members in zip(idxs, res):
-                member_map[i] = list(members)
-    _log.info(
-        "distributed_index: gzip-member scan done in %.1fs",
-        _time.monotonic() - _t2,
-    )
-
-    # 4. PLAN: deterministic LPT of work units across workers (mirrors MPI).
+    # A file is never split across workers, since each part of its index is
+    # built from the whole file.
     _t3 = _time.monotonic()
     if partition == "lpt":
-        per_worker_units = _plan_work_units(member_map, n_workers, 0)
+        path_index = {p: i for i, p in enumerate(all_paths)}
+        per_worker_files = [
+            [path_index[p] for (p, _sz) in bucket]
+            for bucket in _plan_lpt_partition(list(entries), n_workers)
+        ]
     elif partition == "round_robin":
-        # Whole-file fallback for round_robin (no intra-file slicing).
-        per_worker_units = [[] for _ in range(n_workers)]
-        for i, mv in enumerate(member_map):
-            mlen = max(1, len(mv))
-            per_worker_units[i % n_workers].append((i, 0, mlen, 0))
+        per_worker_files = [[] for _ in range(n_workers)]
+        for i in range(len(all_paths)):
+            per_worker_files[i % n_workers].append(i)
     else:
         raise ValueError(f"unknown partition={partition}")
     _log.info(
-        "distributed_index: planned in %.2fs (per-worker units=%s)",
+        "distributed_index: planned in %.2fs (per-worker files=%s)",
         _time.monotonic() - _t3,
-        [len(u) for u in per_worker_units],
+        [len(u) for u in per_worker_files],
     )
 
-    # 5. BUILD: each worker receives its (paths, file_ids, file_slices)
-    #    parallel lists. A file split across workers appears once per slice.
-    index_dir = os.path.dirname(index_path.rstrip("/"))
-    os.makedirs(local_staging, exist_ok=True)
-    os.makedirs(shared_staging, exist_ok=True)
-
-    worker_file_lists: List[List[str]] = []
-    worker_file_ids: List[List[int]] = []
-    worker_slices: List[List[Optional[_FileSlice]]] = []
-    for w, units in enumerate(per_worker_units):
-        paths_w: List[str] = []
-        ids_w: List[int] = []
-        slices_w: List[Optional[_FileSlice]] = []
-        for file_idx, mb, me, _csz in units:
-            paths_w.append(all_paths[file_idx])
-            ids_w.append(int(all_file_ids[file_idx]))
-            members = member_map[file_idx] or [(0, 0)]
-            # Clamp [mb, me) into the actual member vector. plan_work_units
-            # may have synthesised a single (0, 0) for a non-gzip file; in
-            # that case mb=0, me=1 and the slice is "whole file".
-            if me > len(members):
-                me = len(members)
-            if mb > me:
-                mb = me
-            slices_w.append(
-                (
-                    int(mb),
-                    int(me),
-                    bool(mb != 0),
-                    [(int(mo), int(ms)) for (mo, ms) in members],
-                )
-            )
-        worker_file_lists.append(paths_w)
-        worker_file_ids.append(ids_w)
-        worker_slices.append(slices_w)
+    index_root = index_path.rstrip("/")
+    worker_file_lists: List[List[str]] = [
+        [all_paths[i] for i in files_w] for files_w in per_worker_files
+    ]
+    shard_dirs = [os.path.join(index_root, "shards", str(w)) for w in range(len(worker_file_lists))]
 
     _t_build = _time.monotonic()
     worker_ids: List[int] = []
-    worker_addrs: List[str] = []
-    # Each entry is (artifact_dicts, tracker_blob) returned by _build_sst_task.
-    worker_results: List[Tuple[List[Dict[str, Optional[str]]], bytes]] = []
     if client is None:
-        for w, (paths_w, ids_w, slices_w) in enumerate(
-            zip(worker_file_lists, worker_file_ids, worker_slices)
-        ):
+        for w, paths_w in enumerate(worker_file_lists):
             if not paths_w:
                 continue
             worker_ids.append(w)
-            worker_results.append(
-                _build_sst_task(
-                    paths_w,
-                    ids_w,
-                    slices_w,
-                    local_staging,
-                    shared_staging,
-                    f"worker_{w}",
-                    index_dir,
-                    checkpoint_size,
-                    bloom_dimensions,
-                    force_rebuild,
-                    parallelism_per_worker,
-                    flush_every_files,
-                    build_bloom,
-                    aggregation_config,
-                    False,
-                )
+            _build_index_task(
+                paths_w,
+                f"worker_{w}",
+                shard_dirs[w],
+                checkpoint_size,
+                bloom_dimensions,
+                force_rebuild,
+                parallelism_per_worker,
+                build_bloom,
+                agg_config,
             )
     else:
         worker_addrs = list(client.nthreads().keys())
         with ProgressAggregator(client, progress):
             futures = []
-            for w, (paths_w, ids_w, slices_w) in enumerate(
-                zip(worker_file_lists, worker_file_ids, worker_slices)
-            ):
+            for w, paths_w in enumerate(worker_file_lists):
                 if not paths_w:
                     continue
                 target = [worker_addrs[w % len(worker_addrs)]] if worker_addrs else None
                 worker_ids.append(w)
                 futures.append(
                     client.submit(
-                        _build_sst_task,
+                        _build_index_task,
                         paths_w,
-                        ids_w,
-                        slices_w,
-                        local_staging,
-                        shared_staging,
                         f"worker_{w}",
-                        index_dir,
+                        shard_dirs[w],
                         checkpoint_size,
                         bloom_dimensions,
                         force_rebuild,
                         parallelism_per_worker,
-                        flush_every_files,
                         build_bloom,
-                        aggregation_config,
-                        True,
+                        agg_config,
                         workers=target,
                         pure=False,
                     )
                 )
-            worker_results = client.gather(futures)
+            client.gather(futures)
     _log.info(
         "distributed_index: build dispatch+gather done in %.1fs (%d workers)",
         _time.monotonic() - _t_build,
         len(worker_ids),
     )
 
-    # 5. Bulk-ingest on coordinator (all CFs).
-    _t_collect = _time.monotonic()
-    registry = _SstArtifactRegistry()
-    total_artifacts = 0
-    tracker_blobs: List[bytes] = []
-    has_aggregation = False
-    for wres in worker_results:
-        if isinstance(wres, tuple) and len(wres) == 2:
-            dicts, tracker_blob = wres
-        else:
-            dicts, tracker_blob = wres, b""
-        if tracker_blob:
-            tracker_blobs.append(tracker_blob)
-        for d in dicts:
-            registry.append(d)
-            total_artifacts += 1
-            if isinstance(d, dict) and (d.get("aggregation_sst") or d.get("system_metrics_sst")):
-                has_aggregation = True
-    _log.info(
-        "distributed_index: collected %d artifacts in %.2fs",
-        total_artifacts,
-        _time.monotonic() - _t_collect,
-    )
+    built = bool(worker_ids)
+    if built:
+        _t_merge = _time.monotonic()
+        from .dftracer_utils_ext import consolidate_shard_set, write_shard_set
 
-    # bulk_ingest is a single coordinator call with no granular counter yet, so
-    # report it as an indeterminate labelled phase.
-    _t_ingest = _time.monotonic()
-    if progress is not None:
-        progress(0, 0, "Ingesting SSTs")
-    db.bulk_ingest(registry)
-    if progress is not None:
-        progress(1, 1, "Ingesting SSTs")
-    _log.info(
-        "distributed_index: bulk_ingest done in %.1fs (%d artifacts)",
-        _time.monotonic() - _t_ingest,
-        total_artifacts,
-    )
-    if aggregation_config is not None and has_aggregation:
-        _t_meta = _time.monotonic()
-        db.write_agg_config(aggregation_config)
-        if tracker_blobs:
-            db.write_aggregation_tracker(tracker_blobs)
+        arrived = [shard_dirs[w] for w in worker_ids if os.path.isdir(shard_dirs[w])]
+        write_shard_set(index_root, arrived)
+        consolidate_shard_set(index_root)
         _log.info(
-            "distributed_index: agg meta writes done in %.2fs (trackers=%d)",
-            _time.monotonic() - _t_meta,
-            len(tracker_blobs),
+            "distributed_index: merged %d shards into %s in %.1fs",
+            len(arrived),
+            index_root,
+            _time.monotonic() - _t_merge,
         )
 
-    stale = []
-    for w in worker_ids:
-        stale.append((w, os.path.join(local_staging, f"worker_{w}")))
-        if shared_staging and shared_staging != local_staging:
-            stale.append((w, os.path.join(shared_staging, f"worker_{w}")))
-    if client is not None and worker_addrs:
-        try:
-            client.gather(
-                [
-                    client.submit(
-                        _rmtree_quiet,
-                        path,
-                        workers=[worker_addrs[w % len(worker_addrs)]],
-                        allow_other_workers=True,
-                        pure=False,
-                    )
-                    for w, path in stale
-                ]
-            )
-        except Exception:
-            _log.warning("distributed_index: staging cleanup failed", exc_info=True)
-    else:
-        for _w, path in stale:
-            _rmtree_quiet(path)
+        _t_meta = _time.monotonic()
+        db = _Index(index_path)
+        db.write_agg_config(agg_config)
+        _log.info(
+            "distributed_index: agg meta writes done in %.2fs",
+            _time.monotonic() - _t_meta,
+        )
 
-    per_worker_file_counts = [len(set(ids)) for ids in worker_file_ids]
+    per_worker_file_counts = [len(set(paths)) for paths in worker_file_lists]
     return {
         "total_files": n_total_files,
         "per_worker": per_worker_file_counts,
         "index_path": index_path,
-        "artifact_batches": total_artifacts,
     }

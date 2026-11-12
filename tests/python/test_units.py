@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Human-readable byte/duration parsing (dftracer.utils._units)."""
 
 import pytest

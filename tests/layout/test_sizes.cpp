@@ -1,21 +1,30 @@
+// SPDX-License-Identifier: MIT
 // The size and alignment budgets of the structs that carry type- or
 // function-specific parameters (openspec memory-layout). A change that grows
 // one past its budget raises the budget and says why in its design.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/frame_ops.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/types.h>
+#include <dftracer/utils/dstd/error.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/duql/term.h>
+#include <dftracer/utils/runtime/io/backend.h>
+#include <dftracer/utils/store/record.h>
 #include <dftracer/utils/trace/views/fold_event.h>
+#include <dftracer/utils/yaml/document.h>
+#include <dftracer/utils/yaml/line_index.h>
+#include <dftracer/utils/yaml/tape.h>
 #include <doctest/doctest.h>
 
 #include <cstddef>
-#include <string>
 
-namespace df = dftracer::utils::dataframe;
+using namespace dftracer::utils;
 
 namespace {
 
@@ -26,38 +35,75 @@ constexpr bool within() {
     return true;
 }
 
-constexpr std::size_t SERIES_BUDGET = 120;
+// 3 BufferViews of 24 B replace 3 shared_ptrs of 16 B.
+constexpr std::size_t SERIES_BUDGET = 144;
 constexpr std::size_t DATA_TYPE_BUDGET = 40;
-// std::string is 24 bytes in libc++ and 32 in libstdc++, so a budget counts
+// dstd::String is 24 bytes in libc++ and 32 in libstdc++, so a budget counts
 // its strings by sizeof and stays tight on both.
-constexpr std::size_t STR = sizeof(std::string);
+constexpr std::size_t STR = sizeof(dstd::String);
 constexpr std::size_t FIELD_BUDGET = 48 + 1 * STR;
 constexpr std::size_t MORSEL_BUDGET = 56;
 constexpr std::size_t AGG_SPEC_BUDGET = 24 + 1 * STR;
 constexpr std::size_t WINDOW_COLUMN_BUDGET = 48 + 3 * STR;
 constexpr std::size_t FOLD_EVENT_BUDGET = 152;
 constexpr std::size_t LOOKUP_BUDGET = 112 + 2 * STR;
+constexpr std::size_t ERROR_BUDGET = 16;
+constexpr std::size_t RESULT_VOID_BUDGET = 24;
+// A store data file writer keeps every item of a file until its footer, so the
+// largest item that is not the once-per-file tail sets the size.
+constexpr std::size_t RECORD_ITEM_BUDGET = 72;
+// Four counts, a mode and a kind, laid out by decreasing alignment.
+constexpr std::size_t FILE_STAT_BUDGET = 40;
+// Lives in the frame of each task that awaits I/O.
+constexpr std::size_t IO_OP_BUDGET = 80;
+// A flow collection of a YAML text holds one entry per scalar and container,
+// so the entry stays at 12 bytes: a 32-bit offset or skip index, a 32-bit
+// length and a kind with its flags.
+constexpr std::size_t TAPE_ENTRY_BUDGET = 12;
+// A line index entry holds the start, the indent, the kind and the flags of a
+// line. A value is a cursor over a YAML text: a storage pointer, a packed
+// range or a tape index, a column and a tag.
+constexpr std::size_t LINE_ENTRY_BUDGET = 8;
+constexpr std::size_t YAML_VALUE_BUDGET = 24;
 
 static_assert(within<dftu_series, SERIES_BUDGET, 8>());
-static_assert(within<df::DataType, DATA_TYPE_BUDGET, 8>());
-static_assert(within<df::Field, FIELD_BUDGET, 8>());
-static_assert(within<df::Morsel, MORSEL_BUDGET, 8>());
-static_assert(within<df::AggSpec, AGG_SPEC_BUDGET, 8>());
-static_assert(within<df::WindowColumn, WINDOW_COLUMN_BUDGET, 8>());
+static_assert(within<runtime::io::IoOp, IO_OP_BUDGET, 8>());
+static_assert(within<dataframe::DataType, DATA_TYPE_BUDGET, 8>());
+static_assert(within<dataframe::Field, FIELD_BUDGET, 8>());
+static_assert(within<dataframe::Morsel, MORSEL_BUDGET, 8>());
+static_assert(within<dataframe::AggSpec, AGG_SPEC_BUDGET, 8>());
+static_assert(within<dataframe::WindowColumn, WINDOW_COLUMN_BUDGET, 8>());
 static_assert(within<dftracer::utils::trace::views::detail::FoldEvent,
                      FOLD_EVENT_BUDGET, 8>());
 static_assert(within<dftracer::utils::duql::TLookup, LOOKUP_BUDGET, 8>());
+static_assert(within<dstd::Error, ERROR_BUDGET, alignof(void*)>());
+static_assert(within<dftracer::utils::dstd::Result<void>, RESULT_VOID_BUDGET,
+                     alignof(void*)>());
+static_assert(within<dftracer::utils::store::engine::RecordItem,
+                     RECORD_ITEM_BUDGET, 8>());
+static_assert(within<dstd::fs::FileStat, FILE_STAT_BUDGET, 8>());
+static_assert(within<yaml::TapeEntry, TAPE_ENTRY_BUDGET, 8>());
+static_assert(within<yaml::LineEntry, LINE_ENTRY_BUDGET, 4>());
+static_assert(within<yaml::Value, YAML_VALUE_BUDGET, 8>());
 
 }  // namespace
 
 TEST_CASE("the layout budgets hold") {
     CHECK(sizeof(dftu_series) <= SERIES_BUDGET);
-    CHECK(sizeof(df::DataType) <= DATA_TYPE_BUDGET);
-    CHECK(sizeof(df::Field) <= FIELD_BUDGET);
-    CHECK(sizeof(df::Morsel) <= MORSEL_BUDGET);
-    CHECK(sizeof(df::AggSpec) <= AGG_SPEC_BUDGET);
-    CHECK(sizeof(df::WindowColumn) <= WINDOW_COLUMN_BUDGET);
+    CHECK(sizeof(dataframe::DataType) <= DATA_TYPE_BUDGET);
+    CHECK(sizeof(dataframe::Field) <= FIELD_BUDGET);
+    CHECK(sizeof(dataframe::Morsel) <= MORSEL_BUDGET);
+    CHECK(sizeof(dataframe::AggSpec) <= AGG_SPEC_BUDGET);
+    CHECK(sizeof(dataframe::WindowColumn) <= WINDOW_COLUMN_BUDGET);
     CHECK(sizeof(dftracer::utils::trace::views::detail::FoldEvent) <=
           FOLD_EVENT_BUDGET);
     CHECK(sizeof(dftracer::utils::duql::TLookup) <= LOOKUP_BUDGET);
+    CHECK(sizeof(dstd::Error) <= ERROR_BUDGET);
+    CHECK(sizeof(dftracer::utils::dstd::Result<void>) <= RESULT_VOID_BUDGET);
+    CHECK(sizeof(dftracer::utils::store::engine::RecordItem) <=
+          RECORD_ITEM_BUDGET);
+    CHECK(sizeof(dstd::fs::FileStat) <= FILE_STAT_BUDGET);
+    CHECK(sizeof(yaml::TapeEntry) <= TAPE_ENTRY_BUDGET);
+    CHECK(sizeof(yaml::LineEntry) <= LINE_ENTRY_BUDGET);
+    CHECK(sizeof(yaml::Value) <= YAML_VALUE_BUDGET);
 }

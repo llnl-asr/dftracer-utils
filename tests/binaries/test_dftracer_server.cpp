@@ -1,6 +1,12 @@
+// SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <arpa/inet.h>
-#include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/domains/server/trace_index.h>
+#include <dftracer/utils/dstd/ascii.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <doctest/doctest.h>
 #include <netinet/in.h>
 #include <signal.h>
@@ -18,8 +24,8 @@
 #include <cstring>
 #include <string>
 #include <thread>
-#include <utility>
-#include <vector>
+
+using namespace dftracer::utils;
 
 // ============================================================================
 // Helpers
@@ -37,22 +43,22 @@ int valgrind_timeout_scale() {
 
 /// Create a DFTracer gzip file with .pfw.gz extension
 /// (the server scans for .pfw and .pfw.gz patterns).
-std::string create_pfw_gz(dftu_utils_test::TestEnvironment& env, int num_events,
-                          int id) {
-    auto trace_gz = env.create_dft_test_gzip_file(num_events);
+dstd::String create_pfw_gz(dftu_utils_test::TestEnvironment& env,
+                           int event_count, int id) {
+    auto trace_gz = env.create_dft_test_gzip_file(event_count);
     if (trace_gz.empty()) return "";
 
-    std::string pfw_path =
-        env.get_dir() + "/trace_" + std::to_string(id) + ".pfw.gz";
-    fs::rename(trace_gz, pfw_path);
+    dstd::String pfw_path =
+        env.dir() + "/trace_" + dstd::to_string(id) + ".pfw.gz";
+    REQUIRE(dstd::fs::rename(trace_gz, pfw_path).has_value());
     return pfw_path;
 }
 
 /// Write a gzipped .pfw trace declaring time_metric=NS into `dir`. Events span
 /// ts 5000100000..5020000000 ns (=> 5000100..5020000 us) with durations
 /// 50000..250000 ns (=> 50..250 us), so scaling is observable in the response.
-std::string create_ns_pfw_gz(const std::string& dir) {
-    std::string path = dir + "/ns_trace.pfw.gz";
+dstd::String create_ns_pfw_gz(const dstd::String& dir) {
+    dstd::String path = dir + "/ns_trace.pfw.gz";
     gzFile f = gzopen(path.c_str(), "wb");
     if (f == nullptr) return "";
     gzputs(f, "[\n");
@@ -77,10 +83,10 @@ std::string create_ns_pfw_gz(const std::string& dir) {
     return path;
 }
 
-/// Find the dftracer_server binary. Checks DFTRACER_SERVER_PATH env first,
-/// then common build paths relative to the test binary.
-std::string find_server_binary() {
-    return dftu_utils_test::find_binary_by_name("DFTRACER_SERVER_PATH",
+/// Find the dftracer_server binary. Checks DFTRACER_UTILS_SERVER_PATH env
+/// first, then common build paths relative to the test binary.
+dstd::String find_server_binary() {
+    return dftu_utils_test::find_binary_by_name("DFTRACER_UTILS_SERVER_PATH",
                                                 "dftracer_server");
 }
 
@@ -143,8 +149,8 @@ bool wait_for_port(int port, int timeout_s = 10) {
 /// latency assertion. Failures say which way they failed, since an empty
 /// response otherwise cannot distinguish a server that never came up from
 /// one that was too slow.
-std::string http_request(int port, const std::string& request,
-                         int recv_timeout_s = 60) {
+dstd::String http_request(int port, const dstd::String& request,
+                          int recv_timeout_s = 60) {
     int sock = ::socket(AF_INET, SOCK_STREAM, 0);
     if (sock < 0) {
         MESSAGE("http_request: socket() failed");
@@ -175,7 +181,7 @@ std::string http_request(int port, const std::string& request,
     tv.tv_usec = 0;
     ::setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
-    std::string response;
+    dstd::String response;
     char buf[4096];
     while (true) {
         ssize_t n = ::recv(sock, buf, sizeof(buf), 0);
@@ -184,9 +190,9 @@ std::string http_request(int port, const std::string& request,
 
         // Check if we have a complete response (headers + full body)
         auto hdr_end = response.find("\r\n\r\n");
-        if (hdr_end != std::string::npos) {
+        if (hdr_end != dstd::String::npos) {
             auto cl_pos = response.find("Content-Length: ");
-            if (cl_pos != std::string::npos) {
+            if (cl_pos != dstd::String::npos) {
                 auto cl_end = response.find("\r\n", cl_pos);
                 auto cl_str =
                     response.substr(cl_pos + 16, cl_end - cl_pos - 16);
@@ -206,31 +212,41 @@ std::string http_request(int port, const std::string& request,
 }
 
 /// Extract HTTP status code from response.
-int extract_status_code(const std::string& response) {
+int extract_status_code(const dstd::String& response) {
     auto space = response.find(' ');
-    if (space == std::string::npos) return -1;
+    if (space == dstd::String::npos) return -1;
     return std::atoi(response.c_str() + space + 1);
 }
 
 /// Extract body from HTTP response.
-std::string extract_body(const std::string& response) {
+dstd::String extract_body(const dstd::String& response) {
     auto pos = response.find("\r\n\r\n");
-    if (pos == std::string::npos) return "";
-    std::string raw = response.substr(pos + 4);
+    if (pos == dstd::String::npos) return "";
+    dstd::String raw = response.substr(pos + 4);
 
     // Decode chunked transfer encoding if present
-    if (response.find("Transfer-Encoding: chunked") != std::string::npos) {
-        std::string decoded;
+    if (response.find("Transfer-Encoding: chunked") != dstd::String::npos) {
+        dstd::String decoded;
         std::size_t i = 0;
         while (i < raw.size()) {
             auto crlf = raw.find("\r\n", i);
-            if (crlf == std::string::npos) break;
+            if (crlf == dstd::String::npos) break;
             std::size_t chunk_size = 0;
-            try {
-                chunk_size = std::stoul(raw.substr(i, crlf - i), nullptr, 16);
-            } catch (...) {
-                break;
+            bool valid = crlf > i;
+            for (std::size_t k = i; k < crlf && valid; ++k) {
+                const char c = raw[k];
+                std::size_t digit = 0;
+                if (dstd::is_ascii_digit(c)) {
+                    digit = static_cast<std::size_t>(c - '0');
+                } else if (dstd::is_ascii_xdigit(c)) {
+                    digit = static_cast<std::size_t>(dstd::to_ascii_lower(c) -
+                                                     'a' + 10);
+                } else {
+                    valid = false;
+                }
+                chunk_size = chunk_size * 16 + digit;
             }
+            if (!valid) break;
             if (chunk_size == 0) break;
             i = crlf + 2;
             if (i + chunk_size > raw.size()) break;
@@ -299,7 +315,7 @@ struct ServerProcess {
     // load another process can claim it in the long gap before the child (which
     // indexes first) binds. Retry on a fresh port rather than fail; `port` is
     // updated to the port the server actually came up on.
-    bool start(const std::string& binary, const std::string& data_dir,
+    bool start(const dstd::String& binary, const dstd::String& data_dir,
                int& port_io) {
         for (int attempt = 0; attempt < 5; ++attempt) {
             if (attempt > 0) port_io = pick_port();
@@ -309,24 +325,24 @@ struct ServerProcess {
         return false;
     }
 
-    bool start_once(const std::string& binary, const std::string& data_dir,
+    bool start_once(const dstd::String& binary, const dstd::String& data_dir,
                     int p) {
         port = p;
         // Build before fork: the child may only call async-signal-safe
-        // functions until execl, and std::to_string allocates.
-        auto port_str = std::to_string(port);
+        // functions until execl, and dstd::to_string allocates.
+        auto port_str = dstd::to_string(port);
         pid = ::fork();
         if (pid < 0) return false;
 
         if (pid == 0) {
-            ::execl(binary.c_str(), binary.c_str(), "-d", data_dir.c_str(),
-                    "-p", port_str.c_str(), "--bind", "127.0.0.1",
-                    "--executor-threads", "2", nullptr);
+            ::execl(binary.c_str(), binary.c_str(), data_dir.c_str(), "-p",
+                    port_str.c_str(), "--bind", "127.0.0.1",
+                    "--executor-threads", "2", "--io-threads", "2", nullptr);
             ::_exit(127);
         }
 
-        // The server indexes its trace directory before binding, which has
-        // taken ~17s on a loaded arm64 runner.
+        // The server indexes its trace directory before binding, which can
+        // take long on a loaded runner.
         return wait_for_port(port, 60) && wait_for_http(port, 30);
     }
 
@@ -359,7 +375,7 @@ TEST_CASE("DFTracer Server - binary exists") {
     if (binary.empty()) {
         MESSAGE(
             "dftracer_server binary not found, skipping integration "
-            "tests. Set DFTRACER_SERVER_PATH env to specify location.");
+            "tests. Set DFTRACER_UTILS_SERVER_PATH env to specify location.");
         return;
     }
     CHECK(!binary.empty());
@@ -388,7 +404,7 @@ TEST_CASE("DFTracer Server - start and respond to endpoints") {
 
     int port = pick_port();
     ServerProcess server;
-    REQUIRE(server.start(binary, env.get_dir(), port));
+    REQUIRE(server.start(binary, env.dir(), port));
 
     // -- GET /api/files returns 200 with JSON object --
     {
@@ -404,8 +420,8 @@ TEST_CASE("DFTracer Server - start and respond to endpoints") {
         auto body = extract_body(resp);
         CHECK(!body.empty());
         CHECK(body.front() == '{');
-        CHECK(body.find("\"files\"") != std::string::npos);
-        CHECK(body.find("\"count\"") != std::string::npos);
+        CHECK(body.find("\"files\"") != dstd::String::npos);
+        CHECK(body.find("\"count\"") != dstd::String::npos);
     }
 
     // -- GET /api/files/info returns file metadata --
@@ -422,10 +438,10 @@ TEST_CASE("DFTracer Server - start and respond to endpoints") {
         // Extract a file path from the response
         auto list_body = extract_body(list_resp);
         auto path_pos = list_body.find("\"path\":\"");
-        REQUIRE(path_pos != std::string::npos);
+        REQUIRE(path_pos != dstd::String::npos);
         auto path_start = path_pos + 8;  // skip '"path":"'
         auto path_end = list_body.find('"', path_start);
-        REQUIRE(path_end != std::string::npos);
+        REQUIRE(path_end != dstd::String::npos);
         auto file_path = list_body.substr(path_start, path_end - path_start);
 
         // Now query file info
@@ -441,8 +457,8 @@ TEST_CASE("DFTracer Server - start and respond to endpoints") {
         auto body = extract_body(resp);
         CHECK(!body.empty());
         CHECK(body.front() == '{');
-        CHECK(body.find("\"path\"") != std::string::npos);
-        CHECK(body.find("\"has_bloom_data\"") != std::string::npos);
+        CHECK(body.find("\"path\"") != dstd::String::npos);
+        CHECK(body.find("\"has_bloom_data\"") != dstd::String::npos);
     }
 
     // -- GET /api/files/info returns 400 without file param --
@@ -473,8 +489,8 @@ TEST_CASE("DFTracer Server - start and respond to endpoints") {
         auto body = extract_body(resp);
         CHECK(!body.empty());
         CHECK(body.front() == '{');
-        CHECK(body.find("\"events\"") != std::string::npos);
-        CHECK(body.find("\"metadata\"") != std::string::npos);
+        CHECK(body.find("\"events\"") != dstd::String::npos);
+        CHECK(body.find("\"metadata\"") != dstd::String::npos);
     }
 
     // -- GET /api/viz/events with lanes param (JSON array) --
@@ -494,7 +510,7 @@ TEST_CASE("DFTracer Server - start and respond to endpoints") {
         auto body = extract_body(resp);
         CHECK(!body.empty());
         CHECK(body.front() == '{');
-        CHECK(body.find("\"events\"") != std::string::npos);
+        CHECK(body.find("\"events\"") != dstd::String::npos);
     }
 
     // -- GET /api/viz/events with filters param (JSON array) --
@@ -516,7 +532,7 @@ TEST_CASE("DFTracer Server - start and respond to endpoints") {
         auto body = extract_body(resp);
         CHECK(!body.empty());
         CHECK(body.front() == '{');
-        CHECK(body.find("\"events\"") != std::string::npos);
+        CHECK(body.find("\"events\"") != dstd::String::npos);
     }
 
     // -- GET /api/viz/events with duration filter --
@@ -562,8 +578,8 @@ TEST_CASE("DFTracer Server - start and respond to endpoints") {
         auto body = extract_body(resp);
         CHECK(!body.empty());
         CHECK(body.front() == '{');
-        CHECK(body.find("\"file_count\"") != std::string::npos);
-        CHECK(body.find("\"files\"") != std::string::npos);
+        CHECK(body.find("\"file_count\"") != dstd::String::npos);
+        CHECK(body.find("\"files\"") != dstd::String::npos);
     }
 
     // -- GET /api/viz/breaks reports idle gaps + multi-run detection --
@@ -579,8 +595,8 @@ TEST_CASE("DFTracer Server - start and respond to endpoints") {
 
         auto body = extract_body(resp);
         CHECK(body.front() == '{');
-        CHECK(body.find("\"gaps\"") != std::string::npos);
-        CHECK(body.find("\"multi_run\"") != std::string::npos);
+        CHECK(body.find("\"gaps\"") != dstd::String::npos);
+        CHECK(body.find("\"multi_run\"") != dstd::String::npos);
     }
 
     // -- GET /api/viz/events returns normalized ts by default --
@@ -599,8 +615,8 @@ TEST_CASE("DFTracer Server - start and respond to endpoints") {
         auto body = extract_body(resp);
         CHECK(!body.empty());
         // Default: ts_normalized should be true (when time bounds exist)
-        CHECK(body.find("\"ts_normalized\"") != std::string::npos);
-        CHECK(body.find("\"global_min_timestamp_us\"") != std::string::npos);
+        CHECK(body.find("\"ts_normalized\"") != dstd::String::npos);
+        CHECK(body.find("\"global_min_timestamp_us\"") != dstd::String::npos);
     }
 
     // -- GET /api/viz/events?ts_normalize=0 returns raw timestamps --
@@ -620,8 +636,8 @@ TEST_CASE("DFTracer Server - start and respond to endpoints") {
         auto body = extract_body(resp);
         CHECK(!body.empty());
         // ts_normalize=0: should report ts_normalized:false
-        CHECK(body.find("\"ts_normalized\":false") != std::string::npos);
-        CHECK(body.find("\"global_min_timestamp_us\"") != std::string::npos);
+        CHECK(body.find("\"ts_normalized\":false") != dstd::String::npos);
+        CHECK(body.find("\"global_min_timestamp_us\"") != dstd::String::npos);
     }
 
     // -- GET /api/viz/density returns aggregated density blocks --
@@ -634,7 +650,7 @@ TEST_CASE("DFTracer Server - start and respond to endpoints") {
         CHECK(extract_status_code(resp) == 200);
         auto body = extract_body(resp);
         CHECK(body.front() == '{');
-        CHECK(body.find("\"density\"") != std::string::npos);
+        CHECK(body.find("\"density\"") != dstd::String::npos);
     }
 
     // -- GET /api/viz/counters returns bandwidth/IOPS buckets --
@@ -645,7 +661,7 @@ TEST_CASE("DFTracer Server - start and respond to endpoints") {
             " HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
         REQUIRE(!resp.empty());
         CHECK(extract_status_code(resp) == 200);
-        CHECK(extract_body(resp).find("\"buckets\"") != std::string::npos);
+        CHECK(extract_body(resp).find("\"buckets\"") != dstd::String::npos);
     }
 
     // -- /viz/counters live path (a cat filter makes it summary-ineligible, so
@@ -658,9 +674,9 @@ TEST_CASE("DFTracer Server - start and respond to endpoints") {
         REQUIRE(!resp.empty());
         CHECK(extract_status_code(resp) == 200);
         auto body = extract_body(resp);
-        CHECK(body.find("\"read_bytes\"") != std::string::npos);
-        CHECK(body.find("\"write_bytes\"") != std::string::npos);
-        CHECK(body.find("\"ops\"") != std::string::npos);
+        CHECK(body.find("\"read_bytes\"") != dstd::String::npos);
+        CHECK(body.find("\"write_bytes\"") != dstd::String::npos);
+        CHECK(body.find("\"ops\"") != dstd::String::npos);
     }
 
     // -- GET /api/viz/stats returns per-name aggregation --
@@ -671,7 +687,7 @@ TEST_CASE("DFTracer Server - start and respond to endpoints") {
             " HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
         REQUIRE(!resp.empty());
         CHECK(extract_status_code(resp) == 200);
-        CHECK(extract_body(resp).find("\"names\"") != std::string::npos);
+        CHECK(extract_body(resp).find("\"names\"") != dstd::String::npos);
     }
 
     // -- GET /api/viz/proctree returns the inferred process tree --
@@ -682,7 +698,7 @@ TEST_CASE("DFTracer Server - start and respond to endpoints") {
                          "Host: localhost\r\nConnection: close\r\n\r\n");
         REQUIRE(!resp.empty());
         CHECK(extract_status_code(resp) == 200);
-        CHECK(extract_body(resp).find("\"nodes\"") != std::string::npos);
+        CHECK(extract_body(resp).find("\"nodes\"") != dstd::String::npos);
     }
 
     // -- GET /api/viz/calltree returns a merged flamegraph tree --
@@ -693,7 +709,7 @@ TEST_CASE("DFTracer Server - start and respond to endpoints") {
             " HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
         REQUIRE(!resp.empty());
         CHECK(extract_status_code(resp) == 200);
-        CHECK(extract_body(resp).find("\"children\"") != std::string::npos);
+        CHECK(extract_body(resp).find("\"children\"") != dstd::String::npos);
     }
 
     // -- GET /api/viz/histogram returns a duration distribution --
@@ -704,7 +720,7 @@ TEST_CASE("DFTracer Server - start and respond to endpoints") {
             " HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
         REQUIRE(!resp.empty());
         CHECK(extract_status_code(resp) == 200);
-        CHECK(extract_body(resp).find("\"buckets\"") != std::string::npos);
+        CHECK(extract_body(resp).find("\"buckets\"") != dstd::String::npos);
     }
 
     // -- GET /api/viz/layers returns name->category + file counts --
@@ -716,9 +732,9 @@ TEST_CASE("DFTracer Server - start and respond to endpoints") {
         REQUIRE(!resp.empty());
         CHECK(extract_status_code(resp) == 200);
         auto body = extract_body(resp);
-        CHECK(body.find("\"layers\"") != std::string::npos);
-        CHECK(body.find("\"total_files\"") != std::string::npos);
-        CHECK(body.find("\"io_files\"") != std::string::npos);
+        CHECK(body.find("\"layers\"") != dstd::String::npos);
+        CHECK(body.find("\"total_files\"") != dstd::String::npos);
+        CHECK(body.find("\"io_files\"") != dstd::String::npos);
     }
 
     // -- GET / serves the embedded viewer page --
@@ -729,7 +745,7 @@ TEST_CASE("DFTracer Server - start and respond to endpoints") {
                          "Host: localhost\r\nConnection: close\r\n\r\n");
         REQUIRE(!resp.empty());
         CHECK(extract_status_code(resp) == 200);
-        CHECK(resp.find("text/html") != std::string::npos);
+        CHECK(resp.find("text/html") != dstd::String::npos);
     }
 
     // -- responses carry an open CORS header (for the webview client) --
@@ -739,7 +755,8 @@ TEST_CASE("DFTracer Server - start and respond to endpoints") {
                          "GET /api/viz/layers HTTP/1.1\r\n"
                          "Host: localhost\r\nConnection: close\r\n\r\n");
         REQUIRE(!resp.empty());
-        CHECK(resp.find("Access-Control-Allow-Origin: *") != std::string::npos);
+        CHECK(resp.find("Access-Control-Allow-Origin: *") !=
+              dstd::String::npos);
     }
 
     // -- CORS preflight is answered (browsers omit Authorization from it) --
@@ -752,8 +769,8 @@ TEST_CASE("DFTracer Server - start and respond to endpoints") {
                                  "Connection: close\r\n\r\n");
         REQUIRE(!resp.empty());
         CHECK(extract_status_code(resp) == 204);
-        CHECK(resp.find("Access-Control-Allow-Methods") != std::string::npos);
-        CHECK(resp.find("Access-Control-Allow-Headers") != std::string::npos);
+        CHECK(resp.find("Access-Control-Allow-Methods") != dstd::String::npos);
+        CHECK(resp.find("Access-Control-Allow-Headers") != dstd::String::npos);
     }
 
     // -- /viz/density honors `limit` (it used to overshoot by whole batches) --
@@ -766,12 +783,12 @@ TEST_CASE("DFTracer Server - start and respond to endpoints") {
         REQUIRE(!resp.empty());
         CHECK(extract_status_code(resp) == 200);
         auto body = extract_body(resp);
-        CHECK(body.find("\"limit\":3") != std::string::npos);
+        CHECK(body.find("\"limit\":3") != dstd::String::npos);
         // Only events carry "ph"; density blocks do not. This fixture's events
         // all fold, so the bound holds trivially here - it guards traces whose
         // events outlive the fold cutoff.
         std::size_t events = 0;
-        for (std::size_t p = body.find("\"ph\":"); p != std::string::npos;
+        for (std::size_t p = body.find("\"ph\":"); p != dstd::String::npos;
              p = body.find("\"ph\":", p + 1))
             ++events;
         CHECK(events <= 3);
@@ -809,7 +826,7 @@ TEST_CASE("DFTracer Server - graceful shutdown via SIGTERM") {
 
     int port = pick_port();
     ServerProcess server;
-    REQUIRE(server.start(binary, env.get_dir(), port));
+    REQUIRE(server.start(binary, env.dir(), port));
 
     CHECK(port_is_listening(port));
 
@@ -818,8 +835,8 @@ TEST_CASE("DFTracer Server - graceful shutdown via SIGTERM") {
     int status = 0;
     bool exited = false;
     // A generous exit budget: the graceful teardown (close listen fd, drain the
-    // async runtime + RocksDB) can be CPU-starved when the full suite runs many
-    // process-spawning tests unbounded-parallel, so 15s occasionally flaked.
+    // async runtime + index store) can be CPU-starved when the full suite runs
+    // many process-spawning tests unbounded-parallel.
     for (int i = 0; i < 600; ++i) {
         if (::waitpid(server.pid, &status, WNOHANG) > 0) {
             exited = true;
@@ -857,12 +874,12 @@ TEST_CASE("DFTracer Server - multi-run break detection") {
     // 2%).
     auto raw = env.create_dft_multirun_gzip_file(3, 1000000, 10000);
     REQUIRE(!raw.empty());
-    std::string pfw = env.get_dir() + "/multirun.pfw.gz";
-    fs::rename(raw, pfw);
+    dstd::String pfw = env.dir() + "/multirun.pfw.gz";
+    REQUIRE(dstd::fs::rename(raw, pfw).has_value());
 
     int port = pick_port();
     ServerProcess server;
-    REQUIRE(server.start(binary, env.get_dir(), port));
+    REQUIRE(server.start(binary, env.dir(), port));
     REQUIRE(wait_for_http(port));
 
     auto resp = http_request(port,
@@ -872,10 +889,10 @@ TEST_CASE("DFTracer Server - multi-run break detection") {
     CHECK(extract_status_code(resp) == 200);
 
     auto body = extract_body(resp);
-    CHECK(body.find("\"multi_run\":true") != std::string::npos);
+    CHECK(body.find("\"multi_run\":true") != dstd::String::npos);
     // Two gaps, normalized to the global min timestamp.
-    CHECK(body.find("\"begin\":1000000,\"end\":1010000") != std::string::npos);
-    CHECK(body.find("\"begin\":2010000,\"end\":2020000") != std::string::npos);
+    CHECK(body.find("\"begin\":1000000,\"end\":1010000") != dstd::String::npos);
+    CHECK(body.find("\"begin\":2010000,\"end\":2020000") != dstd::String::npos);
 }
 
 // A changed source under an existing index must be re-indexed on startup, not
@@ -893,43 +910,43 @@ TEST_CASE("DFTracer Server - rebuilds stale index on changed source") {
 
     dftu_utils_test::TestEnvironment env(1);
     REQUIRE(env.is_valid());
-    std::string pfw = env.get_dir() + "/mr.pfw.gz";
+    dstd::String pfw = env.dir() + "/mr.pfw.gz";
 
     auto v1 = env.create_dft_multirun_gzip_file(2, 1000000, 10000);
     REQUIRE(!v1.empty());
-    fs::rename(v1, pfw);
+    REQUIRE(dstd::fs::rename(v1, pfw).has_value());
     {
         int port = pick_port();
         ServerProcess server;
-        REQUIRE(server.start(binary, env.get_dir(), port));
+        REQUIRE(server.start(binary, env.dir(), port));
         REQUIRE(wait_for_http(port));
         auto body = extract_body(
             http_request(port,
                          "GET /api/viz/breaks HTTP/1.1\r\n"
                          "Host: localhost\r\nConnection: close\r\n\r\n"));
         CHECK(body.find("\"begin\":1000000,\"end\":1010000") !=
-              std::string::npos);
-        CHECK(body.find("\"begin\":2010000") == std::string::npos);
+              dstd::String::npos);
+        CHECK(body.find("\"begin\":2010000") == dstd::String::npos);
     }
 
     // Third run added; the on-disk index is now stale.
     auto v2 = env.create_dft_multirun_gzip_file(3, 1000000, 10000);
     REQUIRE(!v2.empty());
-    fs::remove(pfw);
-    fs::rename(v2, pfw);
+    dstd::fs::remove(pfw).discard();
+    REQUIRE(dstd::fs::rename(v2, pfw).has_value());
     {
         int port = pick_port();
         ServerProcess server;
-        REQUIRE(server.start(binary, env.get_dir(), port));
+        REQUIRE(server.start(binary, env.dir(), port));
         REQUIRE(wait_for_http(port));
         auto body = extract_body(
             http_request(port,
                          "GET /api/viz/breaks HTTP/1.1\r\n"
                          "Host: localhost\r\nConnection: close\r\n\r\n"));
         CHECK(body.find("\"begin\":1000000,\"end\":1010000") !=
-              std::string::npos);
+              dstd::String::npos);
         CHECK(body.find("\"begin\":2010000,\"end\":2020000") !=
-              std::string::npos);
+              dstd::String::npos);
     }
 }
 
@@ -949,26 +966,26 @@ TEST_CASE("DFTracer Server - density surfaces ph=C counters as blocks") {
 
     dftu_utils_test::TestEnvironment env(1);
     REQUIRE(env.is_valid());
-    std::string path = env.get_dir() + "/ctr.pfw.gz";
+    dstd::String path = env.dir() + "/ctr.pfw.gz";
     gzFile f = gzopen(path.c_str(), "wb");
     REQUIRE(f != nullptr);
     gzputs(f, "[\n");
     for (int i = 0; i < 10; ++i) {
-        std::string ev =
+        dstd::String ev =
             "{\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,\"tid\":1,\"ts\":" +
-            std::to_string(1000 + i * 1000) +
+            dstd::to_string(1000 + i * 1000) +
             ",\"dur\":10,\"ph\":\"X\",\"args\":{}}\n";
         gzputs(f, ev.c_str());
     }
     // Counter events: cpu utilization with two numeric args -> two series.
     for (int i = 0; i < 5; ++i) {
-        std::string ev =
+        dstd::String ev =
             "{\"name\":\"cpu\",\"cat\":\"sys\",\"pid\":0,\"tid\":0,\"ts\":" +
-            std::to_string(1000 + i * 2000) +
+            dstd::to_string(1000 + i * 2000) +
             ",\"ph\":\"C\",\"args\":{"
             "\"user_pct\":" +
-            std::to_string(40 + i) + ",\"idle_pct\":" + std::to_string(60 - i) +
-            "}}\n";
+            dstd::to_string(40 + i) +
+            ",\"idle_pct\":" + dstd::to_string(60 - i) + "}}\n";
         gzputs(f, ev.c_str());
     }
     gzputs(f, "]\n");
@@ -976,7 +993,7 @@ TEST_CASE("DFTracer Server - density surfaces ph=C counters as blocks") {
 
     int port = pick_port();
     ServerProcess server;
-    REQUIRE(server.start(binary, env.get_dir(), port));
+    REQUIRE(server.start(binary, env.dir(), port));
     REQUIRE(wait_for_http(port));
 
     auto resp = http_request(
@@ -988,10 +1005,10 @@ TEST_CASE("DFTracer Server - density surfaces ph=C counters as blocks") {
     auto body = extract_body(resp);
     // ph="C" counters are aggregated into ordinary density blocks: one series
     // per (name.arg), flagged counter with the mean reading as value.
-    CHECK(body.find("\"cpu.user_pct\"") != std::string::npos);
-    CHECK(body.find("\"cpu.idle_pct\"") != std::string::npos);
-    CHECK(body.find("\"counter\":true") != std::string::npos);
-    CHECK(body.find("\"value\":") != std::string::npos);
+    CHECK(body.find("\"cpu.user_pct\"") != dstd::String::npos);
+    CHECK(body.find("\"cpu.idle_pct\"") != dstd::String::npos);
+    CHECK(body.find("\"counter\":true") != dstd::String::npos);
+    CHECK(body.find("\"value\":") != dstd::String::npos);
 }
 
 // Events without a clock (ts 0, such as CUDA activity) must not pull the
@@ -1011,14 +1028,14 @@ TEST_CASE(
 
     dftu_utils_test::TestEnvironment env(1);
     REQUIRE(env.is_valid());
-    std::string path = env.get_dir() + "/untimed.pfw.gz";
+    dstd::String path = env.dir() + "/untimed.pfw.gz";
     gzFile f = gzopen(path.c_str(), "wb");
     REQUIRE(f != nullptr);
     gzputs(f, "[\n");
     for (int i = 0; i < 10; ++i) {
-        std::string ev =
+        dstd::String ev =
             "{\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,\"tid\":1,\"ts\":" +
-            std::to_string(5000 + i * 1000) +
+            dstd::to_string(5000 + i * 1000) +
             ",\"dur\":10,\"ph\":\"X\",\"args\":{}}\n";
         gzputs(f, ev.c_str());
     }
@@ -1034,10 +1051,10 @@ TEST_CASE(
 
     int port = pick_port();
     ServerProcess server;
-    REQUIRE(server.start(binary, env.get_dir(), port));
+    REQUIRE(server.start(binary, env.dir(), port));
     REQUIRE(wait_for_http(port));
 
-    auto get = [&](const std::string& target) {
+    auto get = [&](const dstd::String& target) {
         auto resp = http_request(port, "GET " + target +
                                            " HTTP/1.1\r\nHost: localhost\r\n"
                                            "Connection: close\r\n\r\n");
@@ -1046,20 +1063,20 @@ TEST_CASE(
         return extract_body(resp);
     };
     CHECK(get("/api/info").find("\"min_timestamp_us\":5000") !=
-          std::string::npos);
+          dstd::String::npos);
     auto all = get("/api/viz/untimed");
-    CHECK(all.find("\"count\":4") != std::string::npos);
-    CHECK(all.find("cudaLaunchKernel") != std::string::npos);
-    CHECK(all.find("\"ph\":3") != std::string::npos);
-    CHECK(all.find("\"read\"") == std::string::npos);
+    CHECK(all.find("\"count\":4") != dstd::String::npos);
+    CHECK(all.find("cudaLaunchKernel") != dstd::String::npos);
+    CHECK(all.find("\"ph\":3") != dstd::String::npos);
+    CHECK(all.find("\"read\"") == dstd::String::npos);
     // Longest first: the aggregated kernel (dur 9) leads, so page 2 holds
     // only the dur 7 events.
     auto page = get("/api/viz/untimed?limit=2&offset=2");
-    CHECK(page.find("\"offset\":2") != std::string::npos);
-    CHECK(page.find("\"dur\":7") != std::string::npos);
-    CHECK(page.find("\"dur\":9") == std::string::npos);
+    CHECK(page.find("\"offset\":2") != dstd::String::npos);
+    CHECK(page.find("\"dur\":7") != dstd::String::npos);
+    CHECK(page.find("\"dur\":9") == dstd::String::npos);
     CHECK(get("/api/viz/untimed?duql=cat%20%3D%3D%20%22POSIX%22")
-              .find("\"count\":0") != std::string::npos);
+              .find("\"count\":0") != dstd::String::npos);
 }
 
 // A page of many untimed records is cut from the sorted stream: count stays
@@ -1075,13 +1092,22 @@ TEST_CASE("DFTracer Server - untimed pages of many records") {
         return;
     }
 
-    // 300 records stay in the cached text of every match; 400000 (about
-    // 24 MB of rows) pass its limit, so each page is streamed and cached alone.
-    for (const int UNTIMED : {300, 400000}) {
+    // 300 records stay in the cached text of every match. The other count is
+    // the fewest whose rows, each at least NAME_BYTES long, pass its limit
+    // (a sixteenth of the result cache), so each page is streamed and cached
+    // alone.
+    constexpr std::size_t NAME_BYTES = 8192;
+    const dstd::String name(NAME_BYTES, 'k');
+    constexpr int PAST_LIMIT =
+        static_cast<int>(
+            dftracer::utils::domains::server::VIZ_RESULT_CACHE_BYTES / 16 /
+            NAME_BYTES) +
+        1;
+    for (const int UNTIMED : {300, PAST_LIMIT}) {
         CAPTURE(UNTIMED);
         dftu_utils_test::TestEnvironment env(1);
         REQUIRE(env.is_valid());
-        std::string path = env.get_dir() + "/many_untimed.pfw.gz";
+        dstd::String path = env.dir() + "/many_untimed.pfw.gz";
         gzFile f = gzopen(path.c_str(), "wb");
         REQUIRE(f != nullptr);
         gzputs(f, "[\n");
@@ -1089,10 +1115,11 @@ TEST_CASE("DFTracer Server - untimed pages of many records") {
                "{\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,\"tid\":1,"
                "\"ts\":5000,\"dur\":10,\"ph\":\"X\",\"args\":{}}\n");
         for (int i = 1; i <= UNTIMED; ++i) {
-            std::string ev =
-                "{\"name\":\"k\",\"cat\":\"CUDA\",\"pid\":1,\"tid\":2,"
-                "\"ts\":0,\"dur\":" +
-                std::to_string(i) + ",\"ph\":\"X\",\"args\":{}}\n";
+            dstd::String ev = "{\"name\":\"" + name +
+                              "\",\"cat\":\"CUDA\",\"pid\":1,\"tid\":2,"
+                              "\"ts\":0,\"dur\":" +
+                              dstd::to_string(i) +
+                              ",\"ph\":\"X\",\"args\":{}}\n";
             gzputs(f, ev.c_str());
         }
         gzputs(f, "]\n");
@@ -1100,10 +1127,10 @@ TEST_CASE("DFTracer Server - untimed pages of many records") {
 
         int port = pick_port();
         ServerProcess server;
-        REQUIRE(server.start(binary, env.get_dir(), port));
+        REQUIRE(server.start(binary, env.dir(), port));
         REQUIRE(wait_for_http(port));
 
-        auto get = [&](const std::string& target) {
+        auto get = [&](const dstd::String& target) {
             auto resp =
                 http_request(port, "GET " + target +
                                        " HTTP/1.1\r\nHost: localhost\r\n"
@@ -1112,38 +1139,38 @@ TEST_CASE("DFTracer Server - untimed pages of many records") {
             CHECK(extract_status_code(resp) == 200);
             return extract_body(resp);
         };
-        const std::string count = "\"count\":" + std::to_string(UNTIMED);
-        auto dur = [](int d) { return "\"dur\":" + std::to_string(d) + ","; };
+        const dstd::String count = "\"count\":" + dstd::to_string(UNTIMED);
+        auto dur = [](int d) { return "\"dur\":" + dstd::to_string(d) + ","; };
 
         // Longest first: row i of the sorted order has dur UNTIMED - i.
-        for (auto [offset, limit] : {std::pair<int, int>{0, 3},
+        for (auto [offset, limit] : {dstd::Pair<int, int>{0, 3},
                                      {5, 3},
                                      {UNTIMED - 2, 10},
                                      {UNTIMED + 5, 10},
                                      {0, 0}}) {
             const auto url =
-                "/api/viz/untimed?offset=" + std::to_string(offset) +
-                "&limit=" + std::to_string(limit);
+                "/api/viz/untimed?offset=" + dstd::to_string(offset) +
+                "&limit=" + dstd::to_string(limit);
             const auto page = get(url);
-            CHECK(page.find(count) != std::string::npos);
-            CHECK(page.find("\"offset\":" + std::to_string(offset)) !=
-                  std::string::npos);
+            CHECK(page.find(count) != dstd::String::npos);
+            CHECK(page.find("\"offset\":" + dstd::to_string(offset)) !=
+                  dstd::String::npos);
             std::size_t at = 0;
             int rows = 0;
             for (int i = offset; i < std::min(offset + limit, UNTIMED); ++i) {
                 const auto hit = page.find(dur(UNTIMED - i), at);
-                REQUIRE(hit != std::string::npos);
+                REQUIRE(hit != dstd::String::npos);
                 at = hit;
                 ++rows;
             }
             std::size_t objects = 0;
-            for (std::size_t p = page.find("\"name\""); p != std::string::npos;
+            for (std::size_t p = page.find("\"name\""); p != dstd::String::npos;
                  p = page.find("\"name\"", p + 1))
                 ++objects;
             CHECK(objects == static_cast<std::size_t>(rows));
-            CHECK(page.find(",,") == std::string::npos);
-            CHECK(page.find("[,") == std::string::npos);
-            CHECK(page.find(",]") == std::string::npos);
+            CHECK(page.find(",,") == dstd::String::npos);
+            CHECK(page.find("[,") == dstd::String::npos);
+            CHECK(page.find(",]") == dstd::String::npos);
             CHECK(get(url) == page);
         }
     }
@@ -1164,53 +1191,59 @@ TEST_CASE("DFTracer Server - viz summary cache persists and invalidates") {
 
     dftu_utils_test::TestEnvironment env(1);
     REQUIRE(env.is_valid());
-    std::string pfw = env.get_dir() + "/mr.pfw.gz";
-    std::string cache = env.get_dir() + "/.dftviz_summary";
-    const std::string breaks_req =
+    dstd::String pfw = env.dir() + "/mr.pfw.gz";
+    dstd::String cache = env.dir() + "/.dftviz_summary";
+    const dstd::String breaks_req =
         "GET /api/viz/breaks HTTP/1.1\r\n"
         "Host: localhost\r\nConnection: close\r\n\r\n";
 
     auto v1 = env.create_dft_multirun_gzip_file(2, 1000000, 10000);
     REQUIRE(!v1.empty());
-    fs::rename(v1, pfw);
+    REQUIRE(dstd::fs::rename(v1, pfw).has_value());
 
     // First run builds the summary (a /viz request) and writes the cache.
     {
         int port = pick_port();
         ServerProcess server;
-        REQUIRE(server.start(binary, env.get_dir(), port));
+        REQUIRE(server.start(binary, env.dir(), port));
         REQUIRE(wait_for_http(port));
         auto body = extract_body(http_request(port, breaks_req));
         CHECK(body.find("\"begin\":1000000,\"end\":1010000") !=
-              std::string::npos);
+              dstd::String::npos);
     }
-    CHECK(fs::exists(cache));
+    REQUIRE(dstd::fs::exists(cache).value());
+    const auto cache_time = dstd::fs::mtime_ns(cache).value();
+    const auto cache_size = dstd::fs::file_size(cache).value();
 
-    // Second run reuses the cache; the result is unchanged.
+    // Second run reuses the cache; the result is unchanged. A rejected cache
+    // is rebuilt and rewritten, so an untouched file shows the load worked.
     {
         int port = pick_port();
         ServerProcess server;
-        REQUIRE(server.start(binary, env.get_dir(), port));
+        REQUIRE(server.start(binary, env.dir(), port));
         REQUIRE(wait_for_http(port));
         auto body = extract_body(http_request(port, breaks_req));
         CHECK(body.find("\"begin\":1000000,\"end\":1010000") !=
-              std::string::npos);
-        CHECK(body.find("\"begin\":2010000") == std::string::npos);
+              dstd::String::npos);
+        CHECK(body.find("\"begin\":2010000") == dstd::String::npos);
     }
+
+    CHECK(dstd::fs::mtime_ns(cache).value() == cache_time);
+    CHECK(dstd::fs::file_size(cache).value() == cache_size);
 
     // A changed source invalidates the cache: the new run's gap must appear.
     auto v2 = env.create_dft_multirun_gzip_file(3, 1000000, 10000);
     REQUIRE(!v2.empty());
-    fs::remove(pfw);
-    fs::rename(v2, pfw);
+    dstd::fs::remove(pfw).discard();
+    REQUIRE(dstd::fs::rename(v2, pfw).has_value());
     {
         int port = pick_port();
         ServerProcess server;
-        REQUIRE(server.start(binary, env.get_dir(), port));
+        REQUIRE(server.start(binary, env.dir(), port));
         REQUIRE(wait_for_http(port));
         auto body = extract_body(http_request(port, breaks_req));
         CHECK(body.find("\"begin\":2010000,\"end\":2020000") !=
-              std::string::npos);
+              dstd::String::npos);
     }
 }
 
@@ -1236,15 +1269,15 @@ TEST_CASE("DFTracer Server - calltree endpoint") {
 
     int port = pick_port();
     ServerProcess server;
-    REQUIRE(server.start(binary, env.get_dir(), port));
+    REQUIRE(server.start(binary, env.dir(), port));
     REQUIRE(wait_for_http(port));
 
     // Root fields come right after `"tree":{` in serialization order.
-    auto root_field = [](const std::string& body, const char* key) -> double {
+    auto root_field = [](const dstd::String& body, const char* key) -> double {
         auto tpos = body.find("\"tree\":{");
-        REQUIRE(tpos != std::string::npos);
-        auto kpos = body.find("\"" + std::string(key) + "\":", tpos);
-        REQUIRE(kpos != std::string::npos);
+        REQUIRE(tpos != dstd::String::npos);
+        auto kpos = body.find("\"" + dstd::String(key) + "\":", tpos);
+        REQUIRE(kpos != dstd::String::npos);
         return std::strtod(body.c_str() + kpos + std::strlen(key) + 3, nullptr);
     };
 
@@ -1258,8 +1291,8 @@ TEST_CASE("DFTracer Server - calltree endpoint") {
     REQUIRE(!flat.empty());
     CHECK(extract_status_code(flat) == 200);
     auto fbody = extract_body(flat);
-    CHECK(fbody.find("\"truncated\":false") != std::string::npos);
-    CHECK(fbody.find("\"name\":\"all\"") != std::string::npos);
+    CHECK(fbody.find("\"truncated\":false") != dstd::String::npos);
+    CHECK(fbody.find("\"name\":\"all\"") != dstd::String::npos);
     double f_total = root_field(fbody, "total");
     double f_count = root_field(fbody, "count");
     CHECK(f_total > 0);
@@ -1279,7 +1312,7 @@ TEST_CASE("DFTracer Server - calltree endpoint") {
     CHECK(extract_status_code(grouped) == 200);
     auto gbody = extract_body(grouped);
     // A process node named by its pid value (the generator uses pid 1000+i).
-    CHECK(gbody.find("\"name\":\"100") != std::string::npos);
+    CHECK(gbody.find("\"name\":\"100") != dstd::String::npos);
     CHECK(root_field(gbody, "total") == doctest::Approx(f_total));
     CHECK(root_field(gbody, "count") == doctest::Approx(f_count));
 
@@ -1306,7 +1339,7 @@ TEST_CASE("DFTracer Server - calltree endpoint") {
     REQUIRE(!cancel.empty());
     CHECK(extract_status_code(cancel) == 200);
     CHECK(extract_body(cancel).find("\"cancelled\":false") !=
-          std::string::npos);
+          dstd::String::npos);
 
     // -- GET /api/viz/columns lists groupable columns (incl. args keys) --
     {
@@ -1318,16 +1351,16 @@ TEST_CASE("DFTracer Server - calltree endpoint") {
         REQUIRE(!resp.empty());
         CHECK(extract_status_code(resp) == 200);
         auto body = extract_body(resp);
-        CHECK(body.find("\"columns\"") != std::string::npos);
-        CHECK(body.find("\"ready\":true") != std::string::npos);
+        CHECK(body.find("\"columns\"") != dstd::String::npos);
+        CHECK(body.find("\"ready\":true") != dstd::String::npos);
         // The test events carry cat/name and an args.ret key.
-        CHECK(body.find("\"cat\"") != std::string::npos);
-        CHECK(body.find("\"ret\"") != std::string::npos);
+        CHECK(body.find("\"cat\"") != dstd::String::npos);
+        CHECK(body.find("\"ret\"") != dstd::String::npos);
         // Lane-level / bookkeeping fields are not offered as columns.
-        CHECK(body.find("\"pid\"") == std::string::npos);
+        CHECK(body.find("\"pid\"") == dstd::String::npos);
         // The response also carries a per-column type map
         // (View::column_info()).
-        CHECK(body.find("\"types\"") != std::string::npos);
+        CHECK(body.find("\"types\"") != dstd::String::npos);
     }
 
     // -- GET /api/viz/density with group_by --
@@ -1343,9 +1376,9 @@ TEST_CASE("DFTracer Server - calltree endpoint") {
         REQUIRE(!resp.empty());
         CHECK(extract_status_code(resp) == 200);
         auto body = extract_body(resp);
-        CHECK(body.find("\"density\"") != std::string::npos);
+        CHECK(body.find("\"density\"") != dstd::String::npos);
         // Every test event has a cat, so grouped blocks echo it.
-        CHECK(body.find("\"group\":\"") != std::string::npos);
+        CHECK(body.find("\"group\":\"") != dstd::String::npos);
     }
     {
         // A column no event has: still 200, blocks just carry no group (the
@@ -1360,8 +1393,8 @@ TEST_CASE("DFTracer Server - calltree endpoint") {
         REQUIRE(!resp.empty());
         CHECK(extract_status_code(resp) == 200);
         auto body = extract_body(resp);
-        CHECK(body.find("\"density\"") != std::string::npos);
-        CHECK(body.find("\"group\":\"") == std::string::npos);
+        CHECK(body.find("\"density\"") != dstd::String::npos);
+        CHECK(body.find("\"group\":\"") == dstd::String::npos);
     }
     {
         // Malformed column names are rejected.
@@ -1392,12 +1425,12 @@ TEST_CASE("DFTracer Server - CM time_metric scales viz to microseconds") {
 
     dftu_utils_test::TestEnvironment env(1);
     REQUIRE(env.is_valid());
-    auto ns_file = create_ns_pfw_gz(env.get_dir());
+    auto ns_file = create_ns_pfw_gz(env.dir());
     REQUIRE(!ns_file.empty());
 
     int port = pick_port();
     ServerProcess server;
-    REQUIRE(server.start(binary, env.get_dir(), port));
+    REQUIRE(server.start(binary, env.dir(), port));
 
     // /info bounds are microseconds (5000100..5020000), not native ns.
     {
@@ -1409,11 +1442,11 @@ TEST_CASE("DFTracer Server - CM time_metric scales viz to microseconds") {
         REQUIRE(!resp.empty());
         CHECK(extract_status_code(resp) == 200);
         auto body = extract_body(resp);
-        CHECK(body.find("\"min_timestamp_us\":5000100") != std::string::npos);
+        CHECK(body.find("\"min_timestamp_us\":5000100") != dstd::String::npos);
         // Max is max(ts+dur): event 199 ends at 5020150000 ns => 5020150 us.
-        CHECK(body.find("\"max_timestamp_us\":5020150") != std::string::npos);
+        CHECK(body.find("\"max_timestamp_us\":5020150") != dstd::String::npos);
         // The unscaled native magnitude must not leak through.
-        CHECK(body.find("5000100000") == std::string::npos);
+        CHECK(body.find("5000100000") == dstd::String::npos);
     }
 
     // /viz/events durations are microseconds (50..250), not native ns.
@@ -1427,10 +1460,10 @@ TEST_CASE("DFTracer Server - CM time_metric scales viz to microseconds") {
         REQUIRE(!resp.empty());
         CHECK(extract_status_code(resp) == 200);
         auto body = extract_body(resp);
-        CHECK(body.find("\"dur\":250,") != std::string::npos);
-        CHECK(body.find("\"dur\":250000") == std::string::npos);
+        CHECK(body.find("\"dur\":250,") != dstd::String::npos);
+        CHECK(body.find("\"dur\":250000") == dstd::String::npos);
         CHECK(body.find("\"global_min_timestamp_us\":5000100") !=
-              std::string::npos);
+              dstd::String::npos);
     }
 
     // /viz/stats aggregates durations in microseconds.
@@ -1444,7 +1477,7 @@ TEST_CASE("DFTracer Server - CM time_metric scales viz to microseconds") {
         REQUIRE(!resp.empty());
         CHECK(extract_status_code(resp) == 200);
         auto body = extract_body(resp);
-        CHECK(body.find("\"max\":250") != std::string::npos);
-        CHECK(body.find("\"max\":250000") == std::string::npos);
+        CHECK(body.find("\"max\":250") != dstd::String::npos);
+        CHECK(body.find("\"max\":250000") == dstd::String::npos);
     }
 }

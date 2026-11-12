@@ -1,11 +1,14 @@
+// SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/config.h>
+#include <dftracer/utils/common/config.h>
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <cstdint>
 #include <cstring>
-#include <string>
-#include <vector>
 
 // Confirms LargeString/LargeBinary/LargeList compute, not just round-trip:
 // they keep their own 64-bit-offset physical layout end to end (no narrowing
@@ -13,24 +16,13 @@
 // works on them directly - equality, comparison, sort, group_by, a string op,
 // is_in, and take/gather (which sort's reordering relies on).
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
-// clang-format off
-#include <nanoarrow/nanoarrow.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/arrow.h>
-// clang-format on
+#include <nanoarrow/nanoarrow.h>
 
-namespace df = dftracer::utils::dataframe;
-
-using dftracer::utils::dataframe::AggOp;
-using dftracer::utils::dataframe::AggSpec;
-using dftracer::utils::dataframe::AggStatePtr;
-using dftracer::utils::dataframe::DataFrame;
-using dftracer::utils::dataframe::is_wide_offset_type;
-using dftracer::utils::dataframe::narrow_varwidth_type;
-using dftracer::utils::dataframe::OwnedArrow;
-using dftracer::utils::dataframe::Series;
-using dftracer::utils::dataframe::TypeId;
+using namespace dftracer::utils;
+using namespace dftracer::utils::dataframe;
 
 namespace {
 
@@ -48,7 +40,7 @@ void finish(ArrowArray* a) {
     REQUIRE(ArrowArrayFinishBuildingDefault(a, &err) == NANOARROW_OK);
 }
 
-Series make_large_utf8(const std::vector<std::string>& values) {
+Series make_large_utf8(const dstd::Vector<dstd::String>& values) {
     BuiltArrow b;
     ArrowSchemaInit(&b.schema);
     REQUIRE(ArrowSchemaSetType(&b.schema, NANOARROW_TYPE_LARGE_STRING) ==
@@ -56,7 +48,7 @@ Series make_large_utf8(const std::vector<std::string>& values) {
     REQUIRE(ArrowArrayInitFromSchema(&b.array, &b.schema, nullptr) ==
             NANOARROW_OK);
     REQUIRE(ArrowArrayStartAppending(&b.array) == NANOARROW_OK);
-    for (const std::string& v : values) {
+    for (const dstd::String& v : values) {
         ArrowStringView sv{v.data(), static_cast<int64_t>(v.size())};
         REQUIRE(ArrowArrayAppendString(&b.array, sv) == NANOARROW_OK);
     }
@@ -64,7 +56,7 @@ Series make_large_utf8(const std::vector<std::string>& values) {
     return Series::from_arrow(&b.schema, &b.array);
 }
 
-Series make_large_binary(const std::vector<std::string>& values) {
+Series make_large_binary(const dstd::Vector<dstd::String>& values) {
     BuiltArrow b;
     ArrowSchemaInit(&b.schema);
     REQUIRE(ArrowSchemaSetType(&b.schema, NANOARROW_TYPE_LARGE_BINARY) ==
@@ -72,7 +64,7 @@ Series make_large_binary(const std::vector<std::string>& values) {
     REQUIRE(ArrowArrayInitFromSchema(&b.array, &b.schema, nullptr) ==
             NANOARROW_OK);
     REQUIRE(ArrowArrayStartAppending(&b.array) == NANOARROW_OK);
-    for (const std::string& v : values) {
+    for (const dstd::String& v : values) {
         ArrowBufferView bv;
         bv.data.data = v.data();
         bv.size_bytes = static_cast<int64_t>(v.size());
@@ -83,7 +75,8 @@ Series make_large_binary(const std::vector<std::string>& values) {
 }
 
 // large_list<int64>: rows = lists of int64 values.
-Series make_large_list_i64(const std::vector<std::vector<std::int64_t>>& rows) {
+Series make_large_list_i64(
+    const dstd::Vector<dstd::Vector<std::int64_t>>& rows) {
     BuiltArrow b;
     ArrowSchemaInit(&b.schema);
     REQUIRE(ArrowSchemaSetType(&b.schema, NANOARROW_TYPE_LARGE_LIST) ==
@@ -105,7 +98,7 @@ Series make_large_list_i64(const std::vector<std::vector<std::int64_t>>& rows) {
 
 // large_list<large_utf8>: rows = lists of strings, nested Large both levels.
 Series make_large_list_large_utf8(
-    const std::vector<std::vector<std::string>>& rows) {
+    const dstd::Vector<dstd::Vector<dstd::String>>& rows) {
     BuiltArrow b;
     ArrowSchemaInit(&b.schema);
     REQUIRE(ArrowSchemaSetType(&b.schema, NANOARROW_TYPE_LARGE_LIST) ==
@@ -116,7 +109,7 @@ Series make_large_list_large_utf8(
             NANOARROW_OK);
     REQUIRE(ArrowArrayStartAppending(&b.array) == NANOARROW_OK);
     for (const auto& row : rows) {
-        for (const std::string& s : row) {
+        for (const dstd::String& s : row) {
             ArrowStringView sv{s.data(), static_cast<int64_t>(s.size())};
             REQUIRE(ArrowArrayAppendString(b.array.children[0], sv) ==
                     NANOARROW_OK);
@@ -254,7 +247,7 @@ TEST_SUITE("dataframe_arrow_large_types_compute") {
 
     TEST_CASE("LargeString: dftu_series_group_by groups correctly") {
         Series keys = make_large_utf8({"x", "y", "x", "z", "y", "x"});
-        std::vector<std::int64_t> ones(6, 1);
+        dstd::Vector<std::int64_t> ones(6, 1);
         Series values = Series::flat_i64(ones.data(), 6);
         REQUIRE(keys.valid());
         REQUIRE(values.valid());
@@ -281,14 +274,14 @@ TEST_SUITE("dataframe_arrow_large_types_compute") {
     TEST_CASE(
         "LargeBinary: element data survives take/gather at 64-bit "
         "offsets") {
-        std::string b0(3, '\x00');
+        dstd::String b0(3, '\x00');
         b0[1] = '\x01';
         Series s = make_large_binary({b0, "abc", "de"});
         REQUIRE(s.valid());
         CHECK(s.type() == TypeId::LargeBinary);
         CHECK(is_wide_offset_type(s.type()));
 
-        Series taken = s.take(std::vector<std::int64_t>{2, 0, 1});
+        Series taken = s.take(dstd::Vector<std::int64_t>{2, 0, 1});
         REQUIRE(taken.valid());
         CHECK(taken.type() == TypeId::LargeBinary);
         REQUIRE(taken.offsets64() != nullptr);
@@ -308,7 +301,7 @@ TEST_SUITE("dataframe_arrow_large_types_compute") {
         REQUIRE(s.offsets64() != nullptr);
         REQUIRE(s.length() == 3);
 
-        Series taken = s.take(std::vector<std::int64_t>{2, 0});
+        Series taken = s.take(dstd::Vector<std::int64_t>{2, 0});
         REQUIRE(taken.valid());
         CHECK(taken.type() == TypeId::LargeList);
         REQUIRE(taken.offsets64() != nullptr);
@@ -348,7 +341,7 @@ TEST_SUITE("dataframe_arrow_large_types_compute") {
 
         // take/gather on the outer LargeList recurses into the LargeString
         // child, exercising the nested wide-offset gather path.
-        Series taken = s.take(std::vector<std::int64_t>{1, 0});
+        Series taken = s.take(dstd::Vector<std::int64_t>{1, 0});
         REQUIRE(taken.valid());
         CHECK(taken.type() == TypeId::LargeList);
         Series tchild = taken.child(0);
@@ -391,16 +384,15 @@ TEST_SUITE("dataframe_arrow_large_types_compute") {
     TEST_CASE(
         "DataFrame::group_by groups a LargeString key by exact value, "
         "keeping the wide-offset layout") {
-        using dftracer::utils::dataframe::Agg;
-        using dftracer::utils::dataframe::GroupAgg;
         Series keys = make_large_utf8({"x", "y", "x", "z", "y", "x"});
-        std::vector<std::int64_t> ones(6, 1);
+        dstd::Vector<std::int64_t> ones(6, 1);
         Series values = Series::flat_i64(ones.data(), 6);
         DataFrame df;
         df.names = {"k", "v"};
         df.columns.push_back(keys.share());
         df.columns.push_back(values.share());
-        DataFrame grouped = df.group_by("k", {GroupAgg{Agg::Count, "v", "n"}});
+        DataFrame grouped = dftu_utils_test::ok(
+            df.group_by("k", {GroupAgg{Agg::Count, "v", "n"}}));
         REQUIRE(grouped.num_rows() == 3);
         Series gk = grouped.column("k");
         REQUIRE(gk.type() == TypeId::LargeString);
@@ -408,7 +400,7 @@ TEST_SUITE("dataframe_arrow_large_types_compute") {
         const std::int64_t* n = grouped.column("n").data<std::int64_t>();
         REQUIRE(n != nullptr);
         for (std::int64_t r = 0; r < 3; ++r) {
-            const std::string key(gk.string_at(r));
+            const dstd::String key(gk.string_at(r));
             if (key == "x")
                 CHECK(n[r] == 3);
             else if (key == "y")
@@ -425,31 +417,35 @@ TEST_SUITE("dataframe_arrow_large_types_compute") {
         "AggStates and survive a spill round trip") {
         Series k1 = make_large_utf8({"x", "y", "x"});
         Series k2 = make_large_utf8({"z", "y", "x"});
-        std::vector<std::int64_t> ones3(3, 1);
+        dstd::Vector<std::int64_t> ones3(3, 1);
         Series v1 = Series::flat_i64(ones3.data(), 3);
         Series v2 = Series::flat_i64(ones3.data(), 3);
 
-        AggStatePtr st1 = df::agg_new({AggSpec{AggOp::Count, -1, "n"}});
-        df::agg_accumulate(*st1, std::vector<const Series*>{&k1},
-                           std::vector<const Series*>{&v1});
-        AggStatePtr st2 = df::agg_new({AggSpec{AggOp::Count, -1, "n"}});
-        df::agg_accumulate(*st2, std::vector<const Series*>{&k2},
-                           std::vector<const Series*>{&v2});
-        df::agg_merge(*st1, *st2);
-        REQUIRE(df::agg_num_groups(*st1) == 3);
+        AggStatePtr st1 = dataframe::agg_new({AggSpec{AggOp::Count, -1, "n"}});
+        dftu_utils_test::ok(
+            dataframe::agg_accumulate(*st1, dstd::Vector<const Series*>{&k1},
+                                      dstd::Vector<const Series*>{&v1}));
+        AggStatePtr st2 = dataframe::agg_new({AggSpec{AggOp::Count, -1, "n"}});
+        dftu_utils_test::ok(
+            dataframe::agg_accumulate(*st2, dstd::Vector<const Series*>{&k2},
+                                      dstd::Vector<const Series*>{&v2}));
+        dataframe::agg_merge(*st1, *st2);
+        REQUIRE(dataframe::agg_group_count(*st1) == 3);
 
         // Round-trip the merged partial through the spill blob before
         // finalizing, exercising the same path agg/serialize.cpp writes.
-        const std::string blob = df::agg_serialize(*st1);
-        AggStatePtr back = df::agg_deserialize(blob);
-        REQUIRE(df::agg_num_groups(*back) == 3);
+        const dstd::String blob = dataframe::agg_serialize(*st1);
+        AggStatePtr back =
+            dftu_utils_test::ok(dataframe::agg_deserialize(blob));
+        REQUIRE(dataframe::agg_group_count(*back) == 3);
 
-        DataFrame out = df::agg_finalize(*back, "k");
+        DataFrame out = dataframe::agg_finalize(*back, "k");
         REQUIRE(out.num_rows() == 3);
         CHECK(out.column("k").type() == TypeId::LargeString);
         const std::int64_t* n = out.column("n").data<std::int64_t>();
-        for (std::int64_t g = 0; g < df::agg_num_groups(*st1); ++g) {
-            const std::vector<std::string> key = df::agg_group_key(*st1, g);
+        for (std::int64_t g = 0; g < dataframe::agg_group_count(*st1); ++g) {
+            const dstd::Vector<dstd::String> key =
+                dataframe::agg_group_key(*st1, g);
             REQUIRE(key.size() == 1);
             if (key[0] == "x")
                 CHECK(n[g] == 3);

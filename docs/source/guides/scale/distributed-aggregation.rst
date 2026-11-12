@@ -13,7 +13,7 @@ Combine aggregations across ranks
 
 This is the fan-out/fan-in pattern behind ``dftracer_view``'s distributed
 ``--group-by``/``--agg``/``--counters`` modes (see
-``src/dftracer/utils/binaries/dftracer_view.cpp``). ``View`` carries no MPI (or
+``src/dftracer/utils/cli/dftracer_view.cpp``). ``View`` carries no MPI (or
 any transport) dependency itself - moving the partial bytes between ranks is
 the caller's job.
 
@@ -190,8 +190,8 @@ See also
 - :doc:`../analysis/views` - the ``View`` builder and terminal reference this
   guide's fan-in pattern sits on top of.
 - :doc:`distributed-index` - build and query an index across ranks/workers;
-  ``ShardedView::aggregate`` is the in-process form of this same partial
-  fan-in, run over immutable index shards.
+  a shard-set query is the in-process form of this same partial fan-in,
+  run over immutable index shards.
 - :doc:`mpi` - the distributed CLI modes of ``dftracer_view`` (``--flamegraph``,
   ``--counters``, ``--group-by``/``--agg``); this guide's pattern is
   transport-agnostic and not tied to it.

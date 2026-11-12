@@ -1,17 +1,22 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_DATAFRAME_SERIES_H
 #define DFTRACER_UTILS_DATAFRAME_SERIES_H
 
-#include <dftracer/utils/core/common/config.h>
+#include <dftracer/utils/common/config.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/scalar.h>
 #include <dftracer/utils/dataframe/types.h>
+#include <dftracer/utils/dstd/fatal.h>
+#include <dftracer/utils/dstd/result.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <cstdint>
 #include <limits>
 #include <span>
 #include <stdexcept>
 #include <string>
-#include <string_view>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -111,22 +116,22 @@ class Series {
             [](void* ctx) { delete static_cast<Held*>(ctx); }, held)};
     }
 
-    /// Throws std::length_error when `total` bytes do not fit the int32
-    /// offsets of a String column.
+    /// Ends the process when `total` bytes do not fit the int32 offsets of a
+    /// String column.
     static void check_string_bytes(std::size_t total) {
         if (total >
             static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max()))
-            throw std::length_error("String column exceeds INT32_MAX bytes");
+            dstd::fatal("String column exceeds INT32_MAX bytes");
     }
 
     /// Build a FLAT String column from `values` (offsets + concatenated bytes).
-    /// Throws std::length_error when the total bytes pass INT32_MAX.
-    static Series strings(const std::vector<std::string>& values) {
-        std::vector<std::int32_t> offsets(values.size() + 1, 0);
+    /// Ends the process when the total bytes pass INT32_MAX.
+    static Series strings(const dstd::Vector<dstd::String>& values) {
+        dstd::Vector<std::int32_t> offsets(values.size() + 1, 0);
         std::size_t total = 0;
         for (const auto& v : values) total += v.size();
         check_string_bytes(total);
-        std::string data;
+        dstd::String data;
         for (std::size_t i = 0; i < values.size(); ++i) {
             data += values[i];
             offsets[i + 1] = static_cast<std::int32_t>(data.size());
@@ -139,12 +144,12 @@ class Series {
     /// Build a FLAT String column from `values`. Copies the bytes once into the
     /// contiguous Arrow buffer, without the intermediate std::string vector the
     /// overload above builds.
-    static Series strings(std::span<const std::string_view> values) {
-        std::vector<std::int32_t> offsets(values.size() + 1, 0);
+    static Series strings(dstd::Span<const dstd::StringView> values) {
+        dstd::Vector<std::int32_t> offsets(values.size() + 1, 0);
         std::size_t total = 0;
         for (const auto& v : values) total += v.size();
         check_string_bytes(total);
-        std::string data;
+        dstd::String data;
         data.reserve(total);
         for (std::size_t i = 0; i < values.size(); ++i) {
             data.append(values[i].data(), values[i].size());
@@ -157,13 +162,13 @@ class Series {
 
     /// Build a FLAT String column with a validity bitmap (Arrow layout, 1 =
     /// valid). A null slot contributes no bytes (its offset repeats the prior).
-    static Series strings(std::span<const std::string_view> values,
+    static Series strings(dstd::Span<const dstd::StringView> values,
                           const std::uint8_t* validity) {
-        std::vector<std::int32_t> offsets(values.size() + 1, 0);
+        dstd::Vector<std::int32_t> offsets(values.size() + 1, 0);
         std::size_t total = 0;
         for (const auto& v : values) total += v.size();
         check_string_bytes(total);
-        std::string data;
+        dstd::String data;
         data.reserve(total);
         for (std::size_t i = 0; i < values.size(); ++i) {
             data.append(values[i].data(), values[i].size());
@@ -178,16 +183,16 @@ class Series {
     /// fill a column absent from one part of a schema-union concat.
     static Series nulls(TypeId type, std::int64_t n) {
         if (n < 0) n = 0;
-        std::vector<std::uint8_t> validity(
+        dstd::Vector<std::uint8_t> validity(
             static_cast<std::size_t>((n + 7) / 8), 0);  // every row null
         if (type == TypeId::String || type == TypeId::Binary) {
-            std::vector<std::int32_t> offsets(static_cast<std::size_t>(n) + 1,
-                                              0);
+            dstd::Vector<std::int32_t> offsets(static_cast<std::size_t>(n) + 1,
+                                               0);
             return Series{dftu_series_new_string(static_cast<dftu_dtype>(type),
                                                  offsets.data(), "", n,
                                                  validity.data())};
         }
-        std::vector<std::uint8_t> data(buffer_bytes(type, n), 0);
+        dstd::Vector<std::uint8_t> data(buffer_bytes(type, n), 0);
         return Series{dftu_series_new_flat(static_cast<dftu_dtype>(type),
                                            data.data(), n, validity.data())};
     }
@@ -195,14 +200,14 @@ class Series {
     /// Build a STRUCT column from field `names` and `columns` (each the same
     /// length, aligned to names); takes ownership of the field columns. The
     /// columns are move-only, so pass them in a vector built by move.
-    static Series structs(std::vector<std::string> names,
-                          std::vector<Series> columns) {
-        std::vector<dftu_series*> handles;
-        std::vector<const char*> cnames;
+    static Series structs(dstd::Vector<dstd::String> names,
+                          dstd::Vector<Series> columns) {
+        dstd::Vector<dftu_series*> handles;
+        dstd::Vector<const char*> cnames;
         handles.reserve(columns.size());
         cnames.reserve(names.size());
         for (Series& c : columns) handles.push_back(c.release());
-        for (const std::string& s : names) cnames.push_back(s.c_str());
+        for (const dstd::String& s : names) cnames.push_back(s.c_str());
         return Series{
             dftu_series_new_struct(handles.data(), cnames.data(),
                                    static_cast<std::int32_t>(handles.size()))};
@@ -210,7 +215,7 @@ class Series {
 
     /// Build a LIST column: `offsets` (n+1 entries) index into `values`; takes
     /// ownership of `values`.
-    static Series list(const std::vector<std::int32_t>& offsets,
+    static Series list(const dstd::Vector<std::int32_t>& offsets,
                        Series values) {
         return Series{dftu_series_new_list(
             offsets.data(), static_cast<std::int64_t>(offsets.size()) - 1,
@@ -250,36 +255,36 @@ class Series {
 
     /// FLAT value buffer as a span of `length()` elements; empty unless FLAT.
     template <class T>
-    std::span<const T> values() const noexcept {
+    dstd::Span<const T> values() const noexcept {
         const T* p = data<T>();
         return p != nullptr
-                   ? std::span<const T>(p, static_cast<std::size_t>(length()))
-                   : std::span<const T>();
+                   ? dstd::Span<const T>(p, static_cast<std::size_t>(length()))
+                   : dstd::Span<const T>();
     }
 
     /// Value of a String/Binary/LargeString/LargeBinary column at `i`, valid
     /// while this column lives. Reads FLAT, DICTIONARY, SELECTION and VIEW
     /// columns;
     /// empty for a null or out-of-range row or a non-string column.
-    std::string_view string_at(std::int64_t i) const noexcept {
+    dstd::StringView string_at(std::int64_t i) const noexcept {
         if (!is_flat()) {
             std::int64_t n = 0;
             const char* p = dftu_series_string_at(handle_, i, &n);
             return p != nullptr
-                       ? std::string_view(p, static_cast<std::size_t>(n))
-                       : std::string_view();
+                       ? dstd::StringView(p, static_cast<std::size_t>(n))
+                       : dstd::StringView();
         }
         const char* d = static_cast<const char*>(dftu_series_data(handle_));
         if (d == nullptr) return {};
         if (is_wide_offset_type(type())) {
             const std::int64_t* off = dftu_series_offsets64(handle_);
             if (off == nullptr) return {};
-            return std::string_view(
+            return dstd::StringView(
                 d + off[i], static_cast<std::size_t>(off[i + 1] - off[i]));
         }
         const std::int32_t* off = dftu_series_offsets(handle_);
         if (off == nullptr) return {};
-        return std::string_view(d + off[i],
+        return dstd::StringView(d + off[i],
                                 static_cast<std::size_t>(off[i + 1] - off[i]));
     }
 
@@ -297,11 +302,11 @@ class Series {
 
     /// int32 offset buffer as a span of `length()+1` entries; empty for
     /// fixed-width types and for a Large* column.
-    std::span<const std::int32_t> offsets_span() const noexcept {
+    dstd::Span<const std::int32_t> offsets_span() const noexcept {
         const std::int32_t* off = offsets();
-        return off != nullptr ? std::span<const std::int32_t>(
+        return off != nullptr ? dstd::Span<const std::int32_t>(
                                     off, static_cast<std::size_t>(length()) + 1)
-                              : std::span<const std::int32_t>();
+                              : dstd::Span<const std::int32_t>();
     }
 
     /// int64 offset buffer (length+1 entries) of a LargeString/LargeBinary/
@@ -312,11 +317,11 @@ class Series {
 
     /// int64 offset buffer as a span of `length()+1` entries; empty unless
     /// this is a Large* column.
-    std::span<const std::int64_t> offsets64_span() const noexcept {
+    dstd::Span<const std::int64_t> offsets64_span() const noexcept {
         const std::int64_t* off = offsets64();
-        return off != nullptr ? std::span<const std::int64_t>(
+        return off != nullptr ? dstd::Span<const std::int64_t>(
                                     off, static_cast<std::size_t>(length()) + 1)
-                              : std::span<const std::int64_t>();
+                              : dstd::Span<const std::int64_t>();
     }
 
     /// Child count: 1 for a List, the field count for a Struct, else 0.
@@ -331,14 +336,14 @@ class Series {
     }
 
     /// Name of Struct field `i`; empty for a List's element or out of range.
-    std::string field_name(std::int64_t i) const {
+    dstd::String field_name(std::int64_t i) const {
         const char* s =
             dftu_series_field_name(handle_, static_cast<std::int32_t>(i));
-        return s ? std::string(s) : std::string();
+        return s ? dstd::String(s) : dstd::String();
     }
 
-    /// The full nested DataType, walking `num_children()`/`child()` and each
-    /// Struct field's name. A List's single child becomes its (unnamed)
+    /// The full nested @ref DataType, walking `num_children()`/`child()` and
+    /// each Struct field's name. A List's single child becomes its (unnamed)
     /// element Field; a Struct's children become named Fields in order.
     DataType data_type() const;
 
@@ -382,11 +387,11 @@ class Series {
     /// Reductions over the valid values. A bool column counts true as 1; min
     /// and max of a string column give a STR scalar borrowing the column. A
     /// reduction the engine does not define for the column type (sum of a
-    /// string, sum of a timestamp) throws DFTUtilsException (INVALID_ARGUMENT)
-    /// naming the operation and the type; it never returns 0 for a refusal.
-    Scalar sum() const;
-    Scalar min() const;
-    Scalar max() const;
+    /// string, sum of a timestamp) returns an InvalidArgument error naming the
+    /// operation and the type; it never returns 0 for a refusal.
+    dstd::Result<Scalar> sum() const;
+    dstd::Result<Scalar> min() const;
+    dstd::Result<Scalar> max() const;
     Scalar product() const;
     Scalar mode() const;           ///< most frequent non-null value (hash)
     bool all() const;              ///< every non-null Bool bit set
@@ -394,7 +399,8 @@ class Series {
     std::int64_t arg_min() const;  ///< index of min non-null value (-1 if none)
     std::int64_t arg_max() const;  ///< index of max non-null value (-1 if none)
     std::int64_t count() const;    ///< non-null row count
-    double mean() const;           ///< throws like sum() for a type with no sum
+    /// The mean; the error of sum() for a type with no sum.
+    dstd::Result<double> mean() const;
     double variance(bool sample = true) const;
     double stddev(bool sample = true) const;
     double skewness() const;
@@ -403,10 +409,11 @@ class Series {
     double median() const;
     std::int64_t nunique() const;
 
-    /// The distinct values of this column and their counts, as a DataFrame with
-    /// columns `value` (this column's type) and `count` (Int64), most-frequent
-    /// first.
-    DataFrame value_counts() const;
+    /// The distinct values of this column and their counts, as a @ref DataFrame
+    /// with columns `value` (this column's type) and `count` (Int64),
+    /// most-frequent first. An InvalidArgument error for a type with no
+    /// per-row value to count.
+    dstd::Result<DataFrame> value_counts() const;
 
     /// Rank of each row (`method` selects the tie-break), ascending unless
     /// `descending`, as a Float64 column; a null and a float NaN are unranked:
@@ -457,7 +464,7 @@ class Series {
               class = std::enable_if_t<std::is_arithmetic_v<Lo> &&
                                        std::is_arithmetic_v<Hi>>>
     Series clip(Lo lo, Hi hi) const {
-        return clip(to_scalar_(lo), to_scalar_(hi));
+        return clip(as_scalar(lo), as_scalar(hi));
     }
     Series round() const;
     Series fillna(Scalar fill) const;
@@ -465,7 +472,7 @@ class Series {
     /// fill converts to this column's element type.
     template <class T, class = std::enable_if_t<std::is_arithmetic_v<T>>>
     Series fillna(T fill) const {
-        return fillna(to_scalar_(fill));
+        return fillna(as_scalar(fill));
     }
     Series cumsum() const;
     Series cummax() const;
@@ -527,8 +534,8 @@ class Series {
 #endif
 
     Series argsort(bool descending = false) const;
-    Series take(const std::vector<std::int64_t>& indices) const;
-    Series take(std::span<const std::int64_t> indices) const;
+    Series take(const dstd::Vector<std::int64_t>& indices) const;
+    Series take(dstd::Span<const std::int64_t> indices) const;
     Series materialize() const;
     /// Keep the rows where the bit-packed Bool `mask` (same length) is true.
     Series filter(const Series& mask) const;
@@ -536,23 +543,23 @@ class Series {
     /// (`mask ? this : other`); both must share a type and length.
     Series where(const Series& mask, const Series& other) const;
 
-    Series str_eq(std::string_view rhs) const;
-    Series str_contains(std::string_view needle) const;
-    Series str_starts_with(std::string_view prefix) const;
-    Series str_ends_with(std::string_view suffix) const;
+    Series str_eq(dstd::StringView rhs) const;
+    Series str_contains(dstd::StringView needle) const;
+    Series str_starts_with(dstd::StringView prefix) const;
+    Series str_ends_with(dstd::StringView suffix) const;
     /// Bool mask: the whole string matches the duql regex `pattern`.
-    Series str_matches(std::string_view pattern) const;
+    Series str_matches(dstd::StringView pattern) const;
     /// Bool mask: the duql regex `pattern` matches anywhere in the
     /// string.
-    Series str_search(std::string_view pattern) const;
+    Series str_search(dstd::StringView pattern) const;
     /// Bool mask: the string matches the SQL LIKE / glob `pattern` (`%` any
     /// run,
     /// `_` one char, `\` escapes a literal `%`/`_`/`\`).
-    Series str_like(std::string_view pattern) const;
+    Series str_like(dstd::StringView pattern) const;
     Series str_len_bytes() const;  ///< Int64 per-row byte length.
     Series str_len_chars() const;  ///< Int64 per-row UTF-8 codepoint count.
     /// Int64 byte index of the first `needle`, or -1.
-    Series str_find(std::string_view needle) const;
+    Series str_find(dstd::StringView needle) const;
     Series fnv1a() const;  ///< UInt64 FNV-1a 64 of each row's bytes.
     /// UInt64 parse of each row as dftracer's 16-hex-digit hash form;
     /// a row not in that form is null.
@@ -566,8 +573,8 @@ class Series {
     Series str_lstrip() const;    ///< Trim ASCII whitespace left.
     Series str_rstrip() const;    ///< Trim ASCII whitespace right.
     /// Replace the first / all literal `pat` with `repl` (empty `pat` = no-op).
-    Series str_replace(std::string_view pat, std::string_view repl) const;
-    Series str_replace_all(std::string_view pat, std::string_view repl) const;
+    Series str_replace(dstd::StringView pat, dstd::StringView repl) const;
+    Series str_replace_all(dstd::StringView pat, dstd::StringView repl) const;
     /// Substring by byte offset (negative `start` from end; negative `length`
     /// to end; clamped).
     Series str_slice(std::int64_t start, std::int64_t length) const;
@@ -577,35 +584,35 @@ class Series {
     /// Left-pad with '0' to `width` after an optional sign (Python zfill).
     Series str_zfill(std::int64_t width) const;
     /// Split each row on literal `sep` -> List<String> column.
-    Series str_split(std::string_view sep) const;
+    Series str_split(dstd::StringView sep) const;
     /// The capture `group` of the first regex `pattern` match per row; null
     /// where there is no match.
-    Series str_extract(std::string_view pattern, std::int64_t group = 1) const;
+    Series str_extract(dstd::StringView pattern, std::int64_t group = 1) const;
     /// Replace every non-overlapping regex `pattern` match per row with `to`
     /// (`$n`, `${n}`, `${name}` insert a group, `$$` a dollar sign). Null rows
     /// stay null. An invalid pattern or `to` yields an invalid Series.
-    Series str_regex_replace(std::string_view pattern,
-                             std::string_view to) const;
+    Series str_regex_replace(dstd::StringView pattern,
+                             dstd::StringView to) const;
     /// Per-row element count of a List column (Int64).
-    Series list_len() const;
+    Series list_size() const;
     /// The element at `index` (negative from the end) of each row's list,
     /// null where the list is too short.
     Series list_get(std::int64_t index) const;
     /// Each row's List<String> joined with `sep`.
-    Series list_join(std::string_view sep) const;
+    Series list_join(dstd::StringView sep) const;
     /// The pandas .str batch over ASCII (dataframe/abi.h documents each):
     /// case forms by dftu_str_case, character classes by dftu_str_class.
     Series str_case(std::int32_t op) const;
     Series str_is(std::int32_t cls) const;
-    Series str_count(std::string_view pat) const;
-    Series str_rfind(std::string_view needle) const;
-    Series str_remove_prefix(std::string_view prefix) const;
-    Series str_remove_suffix(std::string_view suffix) const;
+    Series str_count(dstd::StringView pat) const;
+    Series str_rfind(dstd::StringView needle) const;
+    Series str_remove_prefix(dstd::StringView prefix) const;
+    Series str_remove_suffix(dstd::StringView suffix) const;
     Series str_repeat(std::int64_t n) const;
     Series str_center(std::int64_t width, char fill = ' ') const;
     Series str_cat(const Series& other) const;
-    Series str_findall(std::string_view pattern) const;
-    Series str_partition(std::string_view sep, bool from_right = false) const;
+    Series str_findall(dstd::StringView pattern) const;
+    Series str_partition(dstd::StringView sep, bool from_right = false) const;
     /// Unicode normalization (dftu_norm_form), the codepoint table of
     /// `from` -> `to` (see dftu_series_str_translate) and textwrap by
     /// `width` codepoints with dftu_wrap_flag bits; a row that is not valid
@@ -623,11 +630,11 @@ class Series {
     /// %M %S %f %j %a %A %b %B %p %F %T %s %z %Z %%); `unit` is the unit of an
     /// Int64 input. Invalid (not valid()) for an unknown directive, a
     /// trailing '%' or an input that is not a time or Int64 column.
-    Series dt_format(std::string_view fmt,
+    Series dt_format(dstd::StringView fmt,
                      TimeUnit unit = TimeUnit::Micro) const;
     /// dftu_series_with_timezone: this Timestamp column under zone `tz`
     /// (empty for naive), buffers shared.
-    Series with_timezone(std::string_view tz) const;
+    Series with_timezone(dstd::StringView tz) const;
 
     Series logical_and(const Series& other) const;
     Series logical_or(const Series& other) const;
@@ -637,27 +644,27 @@ class Series {
     /// is converted to this column's element type (exact for i64).
     template <class T>
     Series gt(T v) const {
-        return compare_(DFTU_CMP_GT, v);
+        return compare_to(DFTU_CMP_GT, v);
     }
     template <class T>
     Series ge(T v) const {
-        return compare_(DFTU_CMP_GE, v);
+        return compare_to(DFTU_CMP_GE, v);
     }
     template <class T>
     Series lt(T v) const {
-        return compare_(DFTU_CMP_LT, v);
+        return compare_to(DFTU_CMP_LT, v);
     }
     template <class T>
     Series le(T v) const {
-        return compare_(DFTU_CMP_LE, v);
+        return compare_to(DFTU_CMP_LE, v);
     }
     template <class T>
     Series eq(T v) const {
-        return compare_(DFTU_CMP_EQ, v);
+        return compare_to(DFTU_CMP_EQ, v);
     }
     template <class T>
     Series ne(T v) const {
-        return compare_(DFTU_CMP_NE, v);
+        return compare_to(DFTU_CMP_NE, v);
     }
 
     /// Bit-packed Bool mask, true where lo <= value <= hi (inclusive); the
@@ -665,7 +672,7 @@ class Series {
     template <class T>
     Series is_between(T lo, T hi) const {
         return Series{
-            dftu_series_is_between(handle_, to_scalar_(lo), to_scalar_(hi))};
+            dftu_series_is_between(handle_, as_scalar(lo), as_scalar(hi))};
     }
 
     // Comparison operators return a mask (columnar convention), so equality
@@ -680,19 +687,19 @@ class Series {
     // type. A Series right operand takes the non-template overloads above.
     template <class T, class = std::enable_if_t<std::is_arithmetic_v<T>>>
     Series operator+(T v) const {
-        return Series{dftu_series_add_scalar(handle_, to_scalar_(v))};
+        return Series{dftu_series_add_scalar(handle_, as_scalar(v))};
     }
     template <class T, class = std::enable_if_t<std::is_arithmetic_v<T>>>
     Series operator-(T v) const {
-        return Series{dftu_series_sub_scalar(handle_, to_scalar_(v))};
+        return Series{dftu_series_sub_scalar(handle_, as_scalar(v))};
     }
     template <class T, class = std::enable_if_t<std::is_arithmetic_v<T>>>
     Series operator*(T v) const {
-        return Series{dftu_series_mul_scalar(handle_, to_scalar_(v))};
+        return Series{dftu_series_mul_scalar(handle_, as_scalar(v))};
     }
     template <class T, class = std::enable_if_t<std::is_arithmetic_v<T>>>
     Series operator/(T v) const {
-        return Series{dftu_series_div_scalar(handle_, to_scalar_(v))};
+        return Series{dftu_series_div_scalar(handle_, as_scalar(v))};
     }
     Series operator&(const Series& o) const { return logical_and(o); }
     Series operator|(const Series& o) const { return logical_or(o); }
@@ -723,14 +730,14 @@ class Series {
 
    private:
     template <class T>
-    static dftu_scalar to_scalar_(T v) {
+    static dftu_scalar as_scalar(T v) {
         return to_scalar(v);
     }
 
     template <class T>
-    Series compare_(std::int32_t op, T v) const {
+    Series compare_to(std::int32_t op, T v) const {
         return Series{dftu_series_compare(handle_, static_cast<dftu_cmp_op>(op),
-                                          to_scalar_(v))};
+                                          as_scalar(v))};
     }
 
     dftu_series* handle_ = nullptr;

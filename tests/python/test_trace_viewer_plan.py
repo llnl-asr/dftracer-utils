@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """TraceViewer as a LazyFrame: one collect, absorbed ops, lazy indexing,
 lazy results, collect_all and sessions."""
 

@@ -1,0 +1,256 @@
+// SPDX-License-Identifier: MIT
+#ifndef DFTRACER_UTILS_CORO_SPAWN_FUTURE_H
+#define DFTRACER_UTILS_CORO_SPAWN_FUTURE_H
+
+#include <dftracer/utils/common/exception_helpers.h>
+#include <dftracer/utils/coro/detail/parked.h>
+#include <dftracer/utils/coro/detail/resumption_helper.h>
+#include <dftracer/utils/coro/executor.h>
+#include <dftracer/utils/dstd/expected.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/variant.h>
+
+#include <atomic>
+#include <coroutine>
+#include <cstdint>
+#include <exception>
+#include <type_traits>
+#include <utility>
+
+namespace dftracer::utils::coro {
+
+/// Lock-free shared state for SpawnFuture<T>.
+///
+/// Encodes a 3-state machine in a single atomic uintptr_t:
+///   0 = EMPTY  -- neither result nor waiter yet
+///   1 = DONE   -- result stored, no waiter was registered
+///   2 = CANCELLED -- the waiter was woken early by shutdown
+///   other      -- WAITING -- value is the waiter's coroutine_handle address
+///
+/// Completion path (producer):
+///   Store result, then exchange(DONE). If prev was a handle address,
+///   schedule that handle for resumption via the executor.
+///
+/// Await path (consumer):
+///   CAS(EMPTY -> handle_addr). If CAS fails, state is DONE -- don't suspend.
+///
+/// One heap allocation per typed spawn (shared_ptr<SharedState<T>>).
+/// `result` is stored only for non-void T; the void case uses a zero-size
+/// dstd::Monostate so a single template serves both. The complete() overloads
+/// are constrained on void-ness; both share notify_done() for the
+/// exchange-and-resume tail.
+template <typename T>
+struct SharedState {
+    static constexpr std::uintptr_t EMPTY = 0;
+    static constexpr std::uintptr_t DONE = 1;
+    /// A waiter that shutdown woke early. Not an address, so no frame matches.
+    static constexpr std::uintptr_t CANCELLED = 2;
+
+    std::atomic<std::uintptr_t> flag{EMPTY};
+    [[no_unique_address]] std::conditional_t<std::is_void_v<T>, dstd::Monostate,
+                                             dstd::Optional<T>> result;
+    std::exception_ptr exception;
+    /// The spawned task stopped and gave no result. Written before DONE.
+    bool stopped{false};
+    /// The task that waits, so a stop of the spawn can stop it. Written before
+    /// the waiter publishes itself.
+    detail::ParkOwner waiter_owner;
+    /// The registry entry of the waiter and the executor that holds it.
+    /// Written before the waiter publishes itself. The side that wakes the
+    /// waiter owns them from then on.
+    detail::ParkNode* waiter_park{nullptr};
+    Executor* waiter_executor{nullptr};
+    Executor* executor{nullptr};
+    dstd::SharedPtr<std::atomic<bool>> cancel_token;
+    /// Cancels a task spawned by a @ref Scope, which reads it at its waits.
+    std::atomic<bool> cancel_flag{false};
+
+    // A result no future read, as when the future is dropped, goes with the
+    // state.
+    ~SharedState() {
+        if constexpr (!std::is_void_v<T>) dstd::discard_unread(result);
+    }
+
+    /// Called by the spawned coroutine on completion (non-void result).
+    template <typename U = T>
+        requires(!std::is_void_v<U>)
+    void complete(U value) {
+        result.emplace(std::move(value));
+        notify_done();
+    }
+
+    /// Called by the spawned coroutine on completion (void result).
+    template <typename U = T>
+        requires std::is_void_v<U>
+    void complete() {
+        notify_done();
+    }
+
+    /// Called by the spawned coroutine on exception.
+    void complete_with_exception(std::exception_ptr e) {
+        exception = std::move(e);
+        notify_done();
+    }
+
+    /// Called by the spawned coroutine when it stopped.
+    void complete_stopped() {
+        stopped = true;
+        notify_done();
+    }
+
+    /// Check if result is ready without blocking.
+    bool is_done() const {
+        return flag.load(std::memory_order_acquire) == DONE;
+    }
+
+   private:
+    /// Transition to DONE and resume a registered waiter, if any.
+    void notify_done() {
+        auto prev = flag.exchange(DONE, std::memory_order_acq_rel);
+        if (prev != EMPTY && prev != DONE && prev != CANCELLED) {
+            // prev is a waiting coroutine handle address.
+            auto waiter = std::coroutine_handle<>::from_address(
+                reinterpret_cast<void*>(prev));
+            if (stopped) {
+                // The entry names the waiter's frame, which the stop can free
+                // while this future still lives.
+                if (waiter_park) {
+                    waiter_executor->unpark(waiter_park);
+                    waiter_park = nullptr;
+                }
+                detail::stop_or_continue(executor, waiter_owner, waiter);
+            } else {
+                detail::post_resumption(executor, waiter);
+            }
+        }
+    }
+};
+
+/// Future returned by @ref Scope::spawn_future for both void and typed
+/// coroutines (await_resume yields void when T is void).
+///
+/// Awaitable: co_await on a SpawnFuture<T> suspends the caller until
+/// the spawned coroutine completes, then returns the typed result.
+///
+/// Usage:
+/// @code
+/// SpawnFuture<int> future = scope.spawn_future([]() -> CoroTask<int> {
+///     co_return 42;
+/// });
+/// int result = co_await future;  // suspends until spawn completes
+/// @endcode
+template <typename T>
+class SpawnFuture {
+   public:
+    using result_type = T;
+
+    explicit SpawnFuture(dstd::SharedPtr<SharedState<T>> state)
+        : state_(std::move(state)) {}
+
+    SpawnFuture(SpawnFuture&& other) noexcept
+        : state_(std::move(other.state_)) {}
+    SpawnFuture& operator=(SpawnFuture&& other) noexcept {
+        state_ = std::move(other.state_);
+        return *this;
+    }
+    SpawnFuture(const SpawnFuture&) = delete;
+    SpawnFuture& operator=(const SpawnFuture&) = delete;
+
+    ~SpawnFuture() {
+        if (state_ && state_->waiter_park) {
+            state_->waiter_executor->unpark(state_->waiter_park);
+        }
+    }
+
+    // ====================================================================
+    // Awaitable interface
+    // ====================================================================
+
+    bool await_ready() const noexcept {
+        return state_->is_done() && !state_->stopped;
+    }
+
+    /// The awaiting task stops when the spawn stops, and when the executor
+    /// shuts down while the spawn is still running. The spawn is not stopped
+    /// by shutdown, and its scope still joins it.
+    bool await_suspend(std::coroutine_handle<> awaiting) noexcept {
+        handle_ = awaiting;
+        state_->waiter_owner = detail::current_park_owner();
+        executor_ = detail::resume_executor_for(state_->executor);
+        // Registered before the flag publishes the waiter: once it does, the
+        // spawn may resume the frame on another thread at any moment.
+        state_->waiter_executor = executor_;
+        if (executor_) {
+            state_->waiter_park =
+                executor_->park(this, &SpawnFuture::cancel_thunk);
+        }
+        auto addr = reinterpret_cast<std::uintptr_t>(awaiting.address());
+        auto expected = SharedState<T>::EMPTY;
+        // If the CAS fails the state is already DONE: do not suspend.
+        if (state_->flag.compare_exchange_strong(expected, addr,
+                                                 std::memory_order_acq_rel,
+                                                 std::memory_order_acquire)) {
+            return true;
+        }
+        if (state_->waiter_park) executor_->unpark(state_->waiter_park);
+        state_->waiter_park = nullptr;
+        if (state_->stopped) {
+            return detail::stop_task(executor_, nullptr, state_->waiter_owner);
+        }
+        return false;
+    }
+
+    static void cancel_thunk(void* self) noexcept {
+        static_cast<SpawnFuture*>(self)->cancel_parked();
+    }
+
+    void cancel_parked() noexcept {
+        auto expected = reinterpret_cast<std::uintptr_t>(handle_.address());
+        if (state_->flag.compare_exchange_strong(
+                expected, SharedState<T>::CANCELLED, std::memory_order_acq_rel,
+                std::memory_order_acquire)) {
+            cancelled_ = true;
+            detail::stop_or_resume(executor_, state_->waiter_park, handle_);
+        }
+    }
+
+    T await_resume() {
+        if (state_->waiter_park) {
+            executor_->unpark(state_->waiter_park);
+            state_->waiter_park = nullptr;
+        }
+        if (cancelled_) detail::cancelled_unstoppable("future wait");
+        if (state_->stopped) detail::cancelled_unstoppable("a stopped future");
+        if (state_->exception) {
+            common::rethrow_and_clear(state_->exception);
+        }
+        if constexpr (!std::is_void_v<T>) {
+            return std::move(*state_->result);
+        }
+    }
+
+    /// Check if the spawned coroutine has completed.
+    bool is_done() const { return state_->is_done(); }
+
+    /// Asks the spawned coroutine to stop. A @ref Scope child ends cancelled
+    /// at its next wait. Thread-safe, idempotent.
+    void cancel() noexcept {
+        if (!state_) return;
+        state_->cancel_flag.store(true, std::memory_order_release);
+        if (state_->cancel_token) {
+            state_->cancel_token->store(true, std::memory_order_release);
+        }
+        if (state_->executor) state_->executor->wake_cancelled();
+    }
+
+   private:
+    dstd::SharedPtr<SharedState<T>> state_;
+    std::coroutine_handle<> handle_{};
+    Executor* executor_ = nullptr;
+    bool cancelled_ = false;
+};
+
+}  // namespace dftracer::utils::coro
+
+#endif  // DFTRACER_UTILS_CORO_SPAWN_FUTURE_H

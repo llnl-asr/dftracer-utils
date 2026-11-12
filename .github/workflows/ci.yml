@@ -23,14 +23,10 @@ jobs:
       code: ${{ (github.event_name == 'workflow_dispatch' && inputs.run_all && 'true') || steps.filter.outputs.code }}
       coverage: ${{ (github.event_name == 'workflow_dispatch' && inputs.run_all && 'true') || steps.filter.outputs.coverage }}
       web: ${{ (github.event_name == 'workflow_dispatch' && inputs.run_all && 'true') || steps.filter.outputs.web }}
-      rocksdb_version: ${{ steps.rocksdb.outputs.version }}
     steps:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-      - name: Resolve the pinned RocksDB version
-        id: rocksdb
-        run: echo "version=$(./scripts/ci/rocksdb_version.sh)" >> "$GITHUB_OUTPUT"
       - uses: dorny/paths-filter@v4
         id: filter
         if: github.event_name != 'workflow_dispatch' || !inputs.run_all
@@ -71,7 +67,6 @@ jobs:
     secrets: inherit
     with:
       os: ubuntu-22.04
-      rocksdb_version: ${{ needs.changes.outputs.rocksdb_version }}
 
   deps-ubuntu-22-04-arm:
     needs: changes
@@ -82,7 +77,6 @@ jobs:
     secrets: inherit
     with:
       os: ubuntu-22.04-arm
-      rocksdb_version: ${{ needs.changes.outputs.rocksdb_version }}
 
   deps-ubuntu-24-04:
     needs: changes
@@ -93,7 +87,6 @@ jobs:
     secrets: inherit
     with:
       os: ubuntu-24.04
-      rocksdb_version: ${{ needs.changes.outputs.rocksdb_version }}
 
   deps-macos:
     needs: changes
@@ -104,7 +97,6 @@ jobs:
     secrets: inherit
     with:
       os: macos-latest
-      rocksdb_version: ${{ needs.changes.outputs.rocksdb_version }}
 
   test-ubuntu-22-04:
     needs: [changes, deps-ubuntu-22-04]
@@ -118,7 +110,64 @@ jobs:
       os: ubuntu-22.04
       shard_list: "[1,2,3,4]"
       shards: 4
-      rocksdb_version: ${{ needs.changes.outputs.rocksdb_version }}
+
+  test-single-ubuntu-22-04:
+    needs: [changes, deps-ubuntu-22-04]
+    if: needs.changes.outputs.code == 'true' || needs.changes.outputs.coverage == 'true'
+    permissions:
+      contents: read
+      actions: write
+    runs-on: ubuntu-22.04
+    env:
+      CMAKE_POLICY_VERSION_MINIMUM: 3.5
+      CMAKE_C_COMPILER_LAUNCHER: sccache
+      CMAKE_CXX_COMPILER_LAUNCHER: sccache
+      CMAKE_ASM_COMPILER_LAUNCHER: sccache
+      DFTRACER_UTILS_DEPS_PREFIX: ${{ github.workspace }}/.deps
+      SCCACHE_BUCKET: ${{ secrets.SCCACHE_BUCKET }}
+      SCCACHE_ENDPOINT: ${{ secrets.SCCACHE_ENDPOINT }}
+      SCCACHE_REGION: auto
+      SCCACHE_IDLE_TIMEOUT: "0"
+      SCCACHE_S3_USE_SSL: "true"
+      AWS_ACCESS_KEY_ID: ${{ secrets.SCCACHE_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.SCCACHE_SECRET_ACCESS_KEY }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6.1.0
+        with:
+          python-version: "3.12"
+
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@v0.0.11
+
+      - name: Restore dependency installs
+        run: scripts/ci/deps_cache.sh restore "ci-RelWithDebInfo" "$DFTRACER_UTILS_DEPS_PREFIX"
+
+      - name: Cache CPM dependency sources
+        uses: actions/cache@v5
+        with:
+          path: ${{ github.workspace }}/.cpmsource
+          key: cpmsource-lite-v1-${{ hashFiles('cmake/modules/Dependencies.cmake') }}
+          restore-keys: |
+            cpmsource-lite-v1-
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake zlib1g-dev libsqlite3-dev pkg-config ninja-build
+          # The project needs GCC 12 or later; Ubuntu 22.04 ships GCC 11.
+          if [ "$(gcc -dumpversion | cut -d. -f1)" -lt 12 ]; then
+            sudo apt-get install -y gcc-12 g++-12
+            echo "CC=gcc-12" >> "$GITHUB_ENV"
+            echo "CXX=g++-12" >> "$GITHUB_ENV"
+          fi
+
+      - name: Run single library tests
+        run: |
+          ulimit -c unlimited || true
+          make test-single
 
   test-ubuntu-22-04-arm:
     needs: [changes, deps-ubuntu-22-04-arm]
@@ -132,7 +181,6 @@ jobs:
       os: ubuntu-22.04-arm
       shard_list: "[1,2,3]"
       shards: 3
-      rocksdb_version: ${{ needs.changes.outputs.rocksdb_version }}
 
   test-ubuntu-24-04:
     needs: [changes, deps-ubuntu-24-04]
@@ -146,7 +194,6 @@ jobs:
       os: ubuntu-24.04
       shard_list: "[1,2,3]"
       shards: 3
-      rocksdb_version: ${{ needs.changes.outputs.rocksdb_version }}
 
   test-macos:
     needs: [changes, deps-macos]
@@ -160,7 +207,6 @@ jobs:
       os: macos-latest
       shard_list: "[1,2,3,4]"
       shards: 4
-      rocksdb_version: ${{ needs.changes.outputs.rocksdb_version }}
 
   valgrind:
     needs: [changes, deps-ubuntu-24-04]
@@ -170,8 +216,6 @@ jobs:
       actions: write
     uses: ./.github/workflows/valgrind.yml
     secrets: inherit
-    with:
-      rocksdb_version: ${{ needs.changes.outputs.rocksdb_version }}
 
   coverage-finish:
     needs: [test-ubuntu-22-04, test-ubuntu-22-04-arm, test-ubuntu-24-04, test-macos]
@@ -218,6 +262,7 @@ jobs:
         with:
           name: web-dist
           path: web/dist/index.html
+          retention-days: 1
 
 
 
@@ -251,5 +296,5 @@ jobs:
     if: needs.changes.outputs.code == 'true'
     uses: ./.github/workflows/wheel.yml
     with:
-      os: macos-14
+      os: macos-15
     secrets: inherit

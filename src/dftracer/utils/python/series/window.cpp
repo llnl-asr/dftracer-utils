@@ -1,7 +1,8 @@
+// SPDX-License-Identifier: MIT
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/python/series_detail.h>
 
 #include <cstdint>
-#include <string>
 
 namespace dftracer::utils::python::series_detail {
 
@@ -14,7 +15,7 @@ PyObject* Series_rolling(PyObject* self, PyObject* args, PyObject* kwds) {
     if (!PyArg_ParseTupleAndKeywords(args, kwds, "n|s",
                                      const_cast<char**>(kwlist), &window, &op))
         return nullptr;
-    const std::string o(op);
+    const dstd::StringView o(op);
     int code = 0;
     if (o == "sum")
         code = 0;

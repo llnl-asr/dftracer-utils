@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Pytest configuration for dftracer-utils tests."""
 
 import os

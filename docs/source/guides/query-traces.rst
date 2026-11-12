@@ -38,12 +38,6 @@ Open traces, filter them with duql, keep an index fresh and run many reads over 
 
       Find where the time goes and pick the knob that fixes it.
 
-   .. grid-item-card:: Stream lines from a trace
-      :link: io/reading-files
-      :link-type: doc
-
-      Read a gzip trace line by line at the lowest C++ level.
-
    .. grid-item-card:: Explore in the web UI
       :link: ../trace-viewer
       :link-type: doc
@@ -58,5 +52,4 @@ Open traces, filter them with duql, keep an index fresh and run many reads over 
    analysis/views
    analysis/sessions
    analysis/diagnosing-slow-queries
-   io/reading-files
    ../trace-viewer

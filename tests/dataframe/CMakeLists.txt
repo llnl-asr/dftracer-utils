@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 # ##############################################################################
 # DataFrame Library Tests
 # ##############################################################################
@@ -10,7 +11,7 @@ set(DATAFRAME_TEST_SOURCES test_mask.cpp test_series.cpp test_methods.cpp
                            test_arrow_types_windowed.cpp test_arrow_types_reshape.cpp
                            test_field.cpp test_op_registry.cpp test_op_parity.cpp test_op_peak_memory.cpp
                            test_lazyframe.cpp test_join.cpp test_concat.cpp test_lazy_frame_ops.cpp
-                           test_lazyframe_abi.cpp test_drop_rename_by_name.cpp test_lazy_ops.cpp test_lazy_plan.cpp test_source_hooks.cpp test_plugin_sdk.cpp test_spill.cpp test_native_frame.cpp test_join_spill.cpp test_agg_state.cpp
+                           test_lazyframe_abi.cpp test_drop_rename_by_name.cpp test_lazy_ops.cpp test_lazy_plan.cpp test_source_hooks.cpp test_plugin_sdk.cpp test_spill.cpp test_native_frame.cpp test_native_frame_alignment.cpp test_join_spill.cpp test_agg_state.cpp
                            test_agg_extended_ops.cpp test_sketch_quantile.cpp test_host_ops.cpp
                            test_host_ops_autoregister.cpp test_expr_string.cpp test_expr_string_ops.cpp test_expr_duql.cpp
                            test_expr_infer_type.cpp
@@ -27,22 +28,25 @@ set(DATAFRAME_TEST_SOURCES test_mask.cpp test_series.cpp test_methods.cpp
                            test_where_null.cpp test_constant_column.cpp
                            test_variance_stable.cpp
                            test_covariance_stable.cpp
-                           test_join_null_keys.cpp
+                           test_join_null_keys.cpp test_join_contract.cpp
                            test_concat_large_string.cpp
                            test_groupby_scale.cpp
-                           test_string_simd.cpp test_expr_string_methods.cpp
+                           test_string_simd.cpp test_string_match.cpp test_expr_string_methods.cpp
                            test_concat_text.cpp test_struct_concat_by_name.cpp
                            test_rest_column.cpp
                            test_string_view.cpp
                            test_groupby_string_encodings.cpp
                            test_kernels_keep_layouts.cpp
+                           test_parallel_region.cpp
                            test_collect_concat.cpp
                            test_slice_views.cpp
                            test_chunked_columns.cpp
                            test_collect_spill.cpp
+                           test_spill_external.cpp
                            test_eval_inputs_in_place.cpp
                            test_distinct_on_ids.cpp
-                           test_hash_arena.cpp)
+                           test_hash_arena.cpp
+                           test_governor.cpp)
 
 foreach(test_file ${DATAFRAME_TEST_SOURCES})
   string(REPLACE ".cpp" "" bin_exec ${test_file})
@@ -74,7 +78,6 @@ foreach(test_file ${DATAFRAME_TEST_SOURCES})
     target_compile_options(${target_name} PRIVATE --coverage -fprofile-arcs
                                                    -ftest-coverage)
     target_link_libraries(${target_name} PRIVATE --coverage)
-    target_compile_definitions(${target_name} PRIVATE DFTRACER_UTILS_COVERAGE_BUILD)
   endif()
 
   set(test_working_directory
@@ -84,8 +87,8 @@ foreach(test_file ${DATAFRAME_TEST_SOURCES})
   add_test(NAME dataframe/${bin_exec} COMMAND ${target_name})
   set_tests_properties(dataframe/${bin_exec} PROPERTIES
                        WORKING_DIRECTORY "${test_working_directory}")
-  # 1.2M rows folded per case on every thread count: about 200 s alone on a
-  # laptop, twice that on a 4-core runner and more under coverage.
+  # 1.2M rows folded per case on every thread count, which is slower still
+  # under coverage.
   if(bin_exec STREQUAL "test_groupby_scale")
     set(scale_timeout 900)
     if(DFTRACER_UTILS_COVERAGE OR DFTRACER_UTILS_ENABLE_TSAN
@@ -94,15 +97,17 @@ foreach(test_file ${DATAFRAME_TEST_SOURCES})
     endif()
     set_tests_properties(dataframe/${bin_exec} PROPERTIES TIMEOUT ${scale_timeout})
   endif()
-  # Runs every op in a child process at several budgets: about 30 s alone, 65 s
-  # under coverage, and it is CPU-bound, so a loaded machine multiplies that.
+  # Runs every op in a child process at several budgets.
+  # It is CPU-bound and reads peak memory, so it runs serially.
+  # Under the full suite it can time out.
   if(bin_exec STREQUAL "test_op_peak_memory")
     set(peak_timeout 300)
     if(DFTRACER_UTILS_COVERAGE OR DFTRACER_UTILS_ENABLE_TSAN
        OR DFTRACER_UTILS_ENABLE_ASAN)
       set(peak_timeout 900)
     endif()
-    set_tests_properties(dataframe/${bin_exec} PROPERTIES TIMEOUT ${peak_timeout})
+    set_tests_properties(dataframe/${bin_exec} PROPERTIES TIMEOUT ${peak_timeout}
+                                                          RUN_SERIAL TRUE)
   endif()
 endforeach()
 
@@ -113,5 +118,6 @@ endforeach()
 add_executable(dataframe_test_scalar_macros_c test_scalar_macros_c.c)
 target_include_directories(dataframe_test_scalar_macros_c PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
 target_link_libraries(dataframe_test_scalar_macros_c PRIVATE dftracer_utils)
+target_set_warnings(dataframe_test_scalar_macros_c)
 set_target_properties(dataframe_test_scalar_macros_c PROPERTIES OUTPUT_NAME test_scalar_macros_c)
 add_test(NAME dataframe/test_scalar_macros_c COMMAND dataframe_test_scalar_macros_c)

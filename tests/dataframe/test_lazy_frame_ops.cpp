@@ -1,61 +1,58 @@
+// SPDX-License-Identifier: MIT
 // Lazy unnest, compare_agg and the generic frame_op plan step: schema, explain,
 // parity with the eager op under morsels, the C ABI and the registry rows.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 
-#include <dftracer/utils/core/coro/task.h>
-#include <dftracer/utils/core/runtime.h>
+#include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/frame_ops.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/op.h>
+#include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <limits>
-#include <map>
-#include <memory>
-#include <optional>
 #include <stdexcept>
-#include <string>
 #include <utility>
-#include <vector>
 
-using dftracer::utils::coro::CoroTask;
-using dftracer::utils::dataframe::col;
-using dftracer::utils::dataframe::DataFrame;
-using dftracer::utils::dataframe::InMemorySource;
-using dftracer::utils::dataframe::LazyFrame;
-using dftracer::utils::dataframe::OpArgs;
-using dftracer::utils::dataframe::Schema;
-using dftracer::utils::dataframe::Series;
-using dftracer::utils::dataframe::TypeId;
+using namespace dftracer::utils;
+using namespace dftracer::utils::dataframe;
 
 namespace {
 
-DataFrame run(CoroTask<DataFrame> t) {
-    return dftracer::utils::default_runtime().submit(std::move(t)).get();
+DataFrame run(coro::CoroTask<dstd::Result<DataFrame>> t) {
+    return dftu_utils_test::ok(
+        dftracer::utils::default_runtime().submit(std::move(t)).get());
 }
 
-Series i64s(const std::vector<std::int64_t>& v) {
+Series i64s(const dstd::Vector<std::int64_t>& v) {
     return Series::flat_i64(v.data(), static_cast<std::int64_t>(v.size()));
 }
 
-using I = std::optional<std::int64_t>;
-const I NI = std::nullopt;
+using I = dstd::Optional<std::int64_t>;
+const I NI = dstd::nullopt;
 
-std::vector<I> i64_col(const DataFrame& df, const std::string& name) {
+dstd::Vector<I> i64_col(const DataFrame& df, const dstd::String& name) {
     Series c = df.column(name);
     REQUIRE(c.valid());
     c = c.materialize();
-    std::vector<I> out;
+    dstd::Vector<I> out;
     for (std::int64_t i = 0; i < c.length(); ++i) {
         if (c.is_null(i))
-            out.emplace_back(std::nullopt);
+            out.emplace_back(dstd::nullopt);
         else
             out.emplace_back(c.data<std::int64_t>()[i]);
     }
@@ -65,7 +62,7 @@ std::vector<I> i64_col(const DataFrame& df, const std::string& name) {
 // pid = [1, 2, 3], tk = [[{read, 5}, {write, 7}], [], [{open, 9}]]
 DataFrame make_nested() {
     std::int64_t counts[3] = {5, 7, 9};
-    std::vector<Series> fields;
+    dstd::Vector<Series> fields;
     fields.push_back(Series::strings({"read", "write", "open"}));
     fields.push_back(Series::flat_i64(counts, 3));
     DataFrame df;
@@ -93,14 +90,14 @@ DataFrame make_variant() {
 }
 
 LazyFrame scan(DataFrame df) {
-    return LazyFrame::scan(std::make_shared<InMemorySource>(std::move(df)));
+    return LazyFrame::scan(dstd::make_shared<InMemorySource>(std::move(df)));
 }
 
 // A plan step whose columns are only known once it runs: a registry op with no
 // native lazy twin (a frame op that has one runs as that op, with a schema).
 // It adds the column "rn", the row number.
 LazyFrame row_numbered(DataFrame df) {
-    std::vector<dftu_window_spec> specs(1);
+    dstd::Vector<dftu_window_spec> specs(1);
     specs[0] = dftu_window_spec{};
     specs[0].func = DFTU_WINDOW_ROW_NUMBER;
     specs[0].out = "rn";
@@ -113,12 +110,13 @@ DataFrame row_numbered_eager(const DataFrame& df) {
     dftracer::utils::dataframe::WindowColumn w{};
     w.func = dftracer::utils::dataframe::WindowFunc::RowNumber;
     w.out = "rn";
-    return dftracer::utils::dataframe::window(df, {}, {}, {w});
+    return dftu_utils_test::ok(
+        dftracer::utils::dataframe::window(df, {}, {}, {w}));
 }
 
 dftu_dataframe* to_abi(const DataFrame& df) {
-    std::vector<const char*> names;
-    std::vector<dftu_series*> cols;
+    dstd::Vector<const char*> names;
+    dstd::Vector<dftu_series*> cols;
     for (std::size_t i = 0; i < df.names.size(); ++i) {
         names.push_back(df.names[i].c_str());
         cols.push_back(df.columns[i].share().release());
@@ -133,14 +131,14 @@ TEST_SUITE("lazy frame ops") {
     TEST_CASE("unnest: schema names the struct fields, streams per morsel") {
         LazyFrame plan = scan(make_nested()).unnest("tk");
         CHECK(plan.schema() ==
-              std::vector<std::string>{"pid", "value", "count"});
+              dstd::Vector<dstd::String>{"pid", "value", "count"});
         Schema s = plan.output_schema();
         REQUIRE(s.fields.size() == 3);
         CHECK(s.fields[1].type.id == TypeId::String);
         CHECK(s.fields[2].type.id == TypeId::Int64);
-        CHECK(plan.explain().find("unnest tk") != std::string::npos);
-        DataFrame eager = make_nested().unnest("tk");
-        for (std::int64_t morsel : std::vector<std::int64_t>{0, 1}) {
+        CHECK(plan.explain().find("unnest tk") != dstd::String::npos);
+        DataFrame eager = dftu_utils_test::ok(make_nested().unnest("tk"));
+        for (std::int64_t morsel : dstd::Vector<std::int64_t>{0, 1}) {
             DataFrame out =
                 run(scan(make_nested()).unnest("tk").collect(morsel));
             CHECK(out.names == eager.names);
@@ -148,31 +146,35 @@ TEST_SUITE("lazy frame ops") {
             CHECK(i64_col(out, "count") == i64_col(eager, "count"));
         }
         DataFrame kept = run(scan(make_nested()).unnest("tk", true).collect(1));
-        CHECK(i64_col(kept, "pid") == std::vector<I>{1, 1, 2, 3});
-        CHECK(i64_col(kept, "count") == std::vector<I>{5, 7, NI, 9});
+        CHECK(i64_col(kept, "pid") == dstd::Vector<I>{1, 1, 2, 3});
+        CHECK(i64_col(kept, "count") == dstd::Vector<I>{5, 7, NI, 9});
         // A filter on a flattened field resolves by the unnest's schema.
         DataFrame big = run(scan(make_nested())
                                 .unnest("tk")
                                 .filter(col(2) > std::int64_t{6})
                                 .collect());
-        CHECK(i64_col(big, "count") == std::vector<I>{7, 9});
-        CHECK_THROWS_AS(scan(make_nested()).unnest("nope"), std::out_of_range);
-        CHECK_THROWS_AS(scan(make_nested()).unnest("pid"),
-                        std::invalid_argument);
+        CHECK(i64_col(big, "count") == dstd::Vector<I>{7, 9});
+        dftu_utils_test::expect_error(
+            scan(make_nested()).unnest("nope").status(),
+            dftracer::utils::common::ErrorCode::NotFound);
+        dftu_utils_test::expect_error(
+            scan(make_nested()).unnest("pid").status(),
+            dftracer::utils::common::ErrorCode::InvalidArgument);
     }
 
     TEST_CASE(
         "compare_agg: a typed plan joins, sorts and matches the eager op") {
         LazyFrame plan = scan(make_base()).compare_agg(scan(make_variant()), 1);
-        CHECK(plan.schema() ==
-              std::vector<std::string>{"k", "l_n", "r_n", "delta_n", "pct_n"});
-        CHECK(plan.explain().find("frame_op") == std::string::npos);
-        DataFrame eager = make_base().compare_agg(make_variant(), 1);
-        for (std::int64_t morsel : std::vector<std::int64_t>{0, 1}) {
+        CHECK(plan.schema() == dstd::Vector<dstd::String>{"k", "l_n", "r_n",
+                                                          "delta_n", "pct_n"});
+        CHECK(plan.explain().find("frame_op") == dstd::String::npos);
+        DataFrame eager =
+            dftu_utils_test::ok(make_base().compare_agg(make_variant(), 1));
+        for (std::int64_t morsel : dstd::Vector<std::int64_t>{0, 1}) {
             DataFrame out = run(plan.collect(morsel));
             CHECK(out.names == eager.names);
-            CHECK(i64_col(out, "k") == std::vector<I>{1, 2, 3});
-            CHECK(i64_col(out, "delta_n") == std::vector<I>{-5, NI, NI});
+            CHECK(i64_col(out, "k") == dstd::Vector<I>{1, 2, 3});
+            CHECK(i64_col(out, "delta_n") == dstd::Vector<I>{-5, NI, NI});
             const Series pct = out.column("pct_n").materialize();
             const Series want = eager.column("pct_n").materialize();
             REQUIRE(pct.length() == want.length());
@@ -184,13 +186,17 @@ TEST_SUITE("lazy frame ops") {
         }
         DataFrame spilled = run(plan.memory_budget(1).collect(1));
         CHECK(spilled.names == eager.names);
-        CHECK(i64_col(spilled, "delta_n") == std::vector<I>{-5, NI, NI});
-        CHECK_THROWS_AS(scan(make_base()).compare_agg(scan(make_variant()), 0),
-                        std::invalid_argument);
-        CHECK_THROWS_AS(
+        CHECK(i64_col(spilled, "delta_n") == dstd::Vector<I>{-5, NI, NI});
+        dftu_utils_test::expect_error(
+            scan(make_base()).compare_agg(scan(make_variant()), 0).status(),
+            dftracer::utils::common::ErrorCode::InvalidArgument);
+        dftu_utils_test::expect_error(
             scan(make_base())
-                .compare_agg(scan(make_variant().rename({"j", "n"})), 1),
-            std::invalid_argument);
+                .compare_agg(scan(dftu_utils_test::ok(
+                                 make_variant().rename({"j", "n"}))),
+                             1)
+                .status(),
+            dftracer::utils::common::ErrorCode::InvalidArgument);
     }
 
     TEST_CASE("compare_agg: a plan with unknown columns is collected") {
@@ -199,11 +205,11 @@ TEST_SUITE("lazy frame ops") {
         LazyFrame plan = wide.compare_agg(row_numbered(make_variant()), 1);
         CHECK(plan.schema().empty());
         CHECK(plan.explain().find("frame_op dftu.frame.compare_agg") !=
-              std::string::npos);
+              dstd::String::npos);
         DataFrame out = run(plan.collect(1));
-        DataFrame eager =
+        DataFrame eager = dftu_utils_test::ok(
             row_numbered_eager(make_base())
-                .compare_agg(row_numbered_eager(make_variant()), 1);
+                .compare_agg(row_numbered_eager(make_variant()), 1));
         CHECK(out.names == eager.names);
         CHECK(i64_col(out, "k") == i64_col(eager, "k"));
         CHECK(i64_col(out, "delta_n") == i64_col(eager, "delta_n"));
@@ -231,12 +237,12 @@ TEST_SUITE("lazy frame ops") {
         // The operands go out of scope before the plan runs: the plan must
         // hold its own copies.
         LazyFrame plan = [] {
-            std::string out = "rn";
-            std::vector<dftu_window_spec> specs(1);
+            dstd::String out = "rn";
+            dstd::Vector<dftu_window_spec> specs(1);
             specs[0] = dftu_window_spec{};
             specs[0].func = DFTU_WINDOW_ROW_NUMBER;
             specs[0].out = out.c_str();
-            std::vector<const char*> order = {"n"};
+            dstd::Vector<const char*> order = {"n"};
             OpArgs args;
             args.strlist(1, nullptr, 0)
                 .strlist(2, order.data(), 1)
@@ -244,34 +250,37 @@ TEST_SUITE("lazy frame ops") {
             return scan(make_base()).frame_op("dftu.frame.window", args);
         }();
         CHECK(plan.explain().find("frame_op dftu.frame.window") !=
-              std::string::npos);
+              dstd::String::npos);
         DataFrame out = run(plan.collect(1));
-        std::vector<I> rn = i64_col(out, "rn");
+        dstd::Vector<I> rn = i64_col(out, "rn");
         std::sort(rn.begin(), rn.end());
-        CHECK(rn == std::vector<I>{1, 2});
+        CHECK(rn == dstd::Vector<I>{1, 2});
 
         // A frame op that has a native lazy twin runs as that op.
         OpArgs topk;
         topk.str(1, "n").i64(2, 1).i32(3, 1);
         LazyFrame native = scan(make_base()).frame_op("dftu.frame.topk", topk);
-        CHECK(native.explain().find("frame_op") == std::string::npos);
-        CHECK(i64_col(run(native.collect(1)), "n") == std::vector<I>{20});
+        CHECK(native.explain().find("frame_op") == dstd::String::npos);
+        CHECK(i64_col(run(native.collect(1)), "n") == dstd::Vector<I>{20});
 
         OpArgs none;
-        CHECK_THROWS_WITH_AS(
-            scan(make_base()).frame_op("dftu.frame.nope", none),
+        dftu_utils_test::expect_error(
+            scan(make_base()).frame_op("dftu.frame.nope", none).status(),
+            dftracer::utils::common::ErrorCode::InvalidArgument,
             "lazy frame op 'dftu.frame.nope': no op "
-            "registered under this name",
-            std::invalid_argument);
-        CHECK_THROWS_AS(scan(make_base()).frame_op("dftu.series.add", none),
-                        std::invalid_argument);
-        CHECK_THROWS_AS(scan(make_base()).frame_op("dftu.frame.union", none),
-                        std::invalid_argument);
-        CHECK_THROWS_AS(
+            "registered under this name");
+        dftu_utils_test::expect_error(
+            scan(make_base()).frame_op("dftu.series.add", none).status(),
+            dftracer::utils::common::ErrorCode::InvalidArgument);
+        dftu_utils_test::expect_error(
+            scan(make_base()).frame_op("dftu.frame.union", none).status(),
+            dftracer::utils::common::ErrorCode::InvalidArgument);
+        dftu_utils_test::expect_error(
             scan(make_base())
                 .frame_op("dftu.frame.union", none,
-                          {scan(make_variant()), scan(make_variant())}),
-            std::invalid_argument);
+                          {scan(make_variant()), scan(make_variant())})
+                .status(),
+            dftracer::utils::common::ErrorCode::InvalidArgument);
         DataFrame u =
             run(scan(make_base())
                     .frame_op("dftu.frame.union", none, {scan(make_variant())})
@@ -282,8 +291,6 @@ TEST_SUITE("lazy frame ops") {
     TEST_CASE(
         "reduce: one aggregate over every eligible column, whole frame "
         "or per key") {
-        using dftracer::utils::dataframe::Agg;
-        using dftracer::utils::dataframe::GroupAgg;
         DataFrame df;
         df.names = {"k", "s", "a", "b"};
         double b[4] = {2.0, 4.0, 6.5, 1.5};
@@ -292,37 +299,43 @@ TEST_SUITE("lazy frame ops") {
         df.columns.push_back(i64s({1, 2, 3, 4}));
         df.columns.push_back(Series::flat_f64(b, 4));
 
-        DataFrame sum = df.reduce(Agg::Sum);
-        CHECK(sum.names == std::vector<std::string>{"a", "b"});
+        DataFrame sum = dftu_utils_test::ok(df.reduce(Agg::Sum));
+        CHECK(sum.names == dstd::Vector<dstd::String>{"a", "b"});
         REQUIRE(sum.num_rows() == 1);
-        CHECK(i64_col(sum, "a") == std::vector<I>{10});
+        CHECK(i64_col(sum, "a") == dstd::Vector<I>{10});
         CHECK(sum.column("b").materialize().data<double>()[0] ==
               doctest::Approx(14.0));
-        DataFrame present = df.reduce(Agg::CountValid);
-        CHECK(present.names == std::vector<std::string>{"k", "s", "a", "b"});
-        CHECK(i64_col(present, "s") == std::vector<I>{4});
+        DataFrame present = dftu_utils_test::ok(df.reduce(Agg::CountValid));
+        CHECK(present.names == dstd::Vector<dstd::String>{"k", "s", "a", "b"});
+        CHECK(i64_col(present, "s") == dstd::Vector<I>{4});
         // The grouped broadcast lives on the group-by object.
-        DataFrame by_k = df.group_by({"k"}).max();
-        CHECK(by_k.names == std::vector<std::string>{"k", "a", "b"});
-        CHECK(i64_col(by_k, "a") == std::vector<I>{3, 4});
-        DataFrame size = df.group_by({"k"}).size();
-        CHECK(size.names == std::vector<std::string>{"k", "size"});
-        CHECK(i64_col(size, "size") == std::vector<I>{2, 2});
-        CHECK_THROWS_AS(df.reduce(Agg::Corr), std::invalid_argument);
-        CHECK_THROWS_AS(df.group_by({"k"}).reduce(Agg::Corr),
-                        std::invalid_argument);
-        CHECK_THROWS_AS(df.group_by({"nope"}), std::out_of_range);
+        DataFrame by_k = dftu_utils_test::ok(df.group_by({"k"}).max());
+        CHECK(by_k.names == dstd::Vector<dstd::String>{"k", "a", "b"});
+        CHECK(i64_col(by_k, "a") == dstd::Vector<I>{3, 4});
+        DataFrame size = dftu_utils_test::ok(df.group_by({"k"}).size());
+        CHECK(size.names == dstd::Vector<dstd::String>{"k", "size"});
+        CHECK(i64_col(size, "size") == dstd::Vector<I>{2, 2});
+        dftu_utils_test::expect_error(
+            df.reduce(Agg::Corr),
+            dftracer::utils::common::ErrorCode::InvalidArgument);
+        dftu_utils_test::expect_error(
+            df.group_by({"k"}).reduce(Agg::Corr),
+            dftracer::utils::common::ErrorCode::InvalidArgument);
+        dftu_utils_test::expect_error(
+            df.group_by({"nope"}).size(),
+            dftracer::utils::common::ErrorCode::NotFound);
 
         // The general form: any spec, one row, or per group.
-        std::vector<GroupAgg> specs;
+        dstd::Vector<GroupAgg> specs;
         specs.push_back(GroupAgg{Agg::Corr, "b", "c", 0.0, "a"});
         specs.push_back(GroupAgg{Agg::Count, "", "n"});
-        DataFrame gen = df.reduce(specs);
-        CHECK(gen.names == std::vector<std::string>{"c", "n"});
-        CHECK(i64_col(gen, "n") == std::vector<I>{4});
-        CHECK(i64_col(df.group_by().agg(specs), "n") == std::vector<I>{4});
-        CHECK(i64_col(df.group_by({"k"}).agg(specs), "n") ==
-              std::vector<I>{2, 2});
+        DataFrame gen = dftu_utils_test::ok(df.reduce(specs));
+        CHECK(gen.names == dstd::Vector<dstd::String>{"c", "n"});
+        CHECK(i64_col(gen, "n") == dstd::Vector<I>{4});
+        CHECK(i64_col(dftu_utils_test::ok(df.group_by().agg(specs)), "n") ==
+              dstd::Vector<I>{4});
+        CHECK(i64_col(dftu_utils_test::ok(df.group_by({"k"}).agg(specs)),
+                      "n") == dstd::Vector<I>{2, 2});
 
         // Lazy: a streaming group-by with the same broadcast.
         auto scan_df = [&] {
@@ -332,18 +345,21 @@ TEST_SUITE("lazy frame ops") {
             return scan(std::move(c));
         };
         LazyFrame plan = scan_df().reduce(Agg::Sum);
-        CHECK(plan.schema() == std::vector<std::string>{"a", "b"});
-        CHECK(plan.explain().find("group_by") != std::string::npos);
+        CHECK(plan.schema() == dstd::Vector<dstd::String>{"a", "b"});
+        CHECK(plan.explain().find("group_by") != dstd::String::npos);
         DataFrame lz = run(plan.collect(1));
-        CHECK(i64_col(lz, "a") == std::vector<I>{10});
+        CHECK(i64_col(lz, "a") == dstd::Vector<I>{10});
         DataFrame lz_k = run(scan_df().group_by({"k"}).max().collect(1));
-        CHECK(lz_k.names == std::vector<std::string>{"k", "a", "b"});
-        CHECK(i64_col(lz_k, "a") == std::vector<I>{3, 4});
+        CHECK(lz_k.names == dstd::Vector<dstd::String>{"k", "a", "b"});
+        CHECK(i64_col(lz_k, "a") == dstd::Vector<I>{3, 4});
         DataFrame lz_size = run(scan_df().group_by({"k"}).size().collect(1));
-        CHECK(i64_col(lz_size, "size") == std::vector<I>{2, 2});
-        CHECK_THROWS_AS(scan_df().group_by({"nope"}), std::out_of_range);
-        CHECK_THROWS_AS(scan_df().reduce_specs(Agg::Sum, {"nope"}),
-                        std::out_of_range);
+        CHECK(i64_col(lz_size, "size") == dstd::Vector<I>{2, 2});
+        dftu_utils_test::expect_error(
+            scan_df().group_by({"nope"}).sum().status(),
+            dftracer::utils::common::ErrorCode::NotFound);
+        dftu_utils_test::expect_error(
+            scan_df().reduce_specs(Agg::Sum, {"nope"}),
+            dftracer::utils::common::ErrorCode::NotFound);
 
         dftu_dataframe* h = to_abi(df);
         REQUIRE(h);
@@ -381,7 +397,6 @@ TEST_SUITE("lazy frame ops") {
     }
 
     TEST_CASE("a group with no present value has no min, max or moment") {
-        using dftracer::utils::dataframe::Agg;
         // k = [x, y, x], a = [1, null, 3]: group y has no value of a.
         const std::int64_t av[3] = {1, 0, 3};
         const std::uint8_t valid[1] = {0x05};
@@ -389,15 +404,23 @@ TEST_SUITE("lazy frame ops") {
         df.names = {"k", "a"};
         df.columns.push_back(Series::strings({"x", "y", "x"}));
         df.columns.push_back(Series::flat_i64(av, 3, valid));
-        CHECK(i64_col(df.group_by({"k"}).min(), "a") == std::vector<I>{1, NI});
-        CHECK(i64_col(df.group_by({"k"}).max(), "a") == std::vector<I>{3, NI});
-        CHECK(i64_col(df.group_by({"k"}).sum(), "a") == std::vector<I>{4, 0});
-        CHECK(i64_col(df.group_by({"k"}).count(), "a") == std::vector<I>{2, 0});
-        Series mean = df.group_by({"k"}).mean().column("a").materialize();
+        CHECK(i64_col(dftu_utils_test::ok(df.group_by({"k"}).min()), "a") ==
+              dstd::Vector<I>{1, NI});
+        CHECK(i64_col(dftu_utils_test::ok(df.group_by({"k"}).max()), "a") ==
+              dstd::Vector<I>{3, NI});
+        CHECK(i64_col(dftu_utils_test::ok(df.group_by({"k"}).sum()), "a") ==
+              dstd::Vector<I>{4, 0});
+        CHECK(i64_col(dftu_utils_test::ok(df.group_by({"k"}).count()), "a") ==
+              dstd::Vector<I>{2, 0});
+        Series mean = dftu_utils_test::ok(df.group_by({"k"}).mean())
+                          .column("a")
+                          .materialize();
         CHECK(mean.data<double>()[0] == doctest::Approx(2.0));
         CHECK(mean.is_null(1));
         // A sample variance needs two values: x has them, y has none.
-        Series var = df.group_by({"k"}).var().column("a").materialize();
+        Series var = dftu_utils_test::ok(df.group_by({"k"}).var())
+                         .column("a")
+                         .materialize();
         CHECK(var.data<double>()[0] == doctest::Approx(2.0));
         CHECK(var.is_null(1));
         // A Bool column casts to 0 / 1.
@@ -407,11 +430,11 @@ TEST_SUITE("lazy frame ops") {
         REQUIRE(ones.valid());
         CHECK(i64_col(DataFrame{{"o"},
                                 [&] {
-                                    std::vector<Series> c;
+                                    dstd::Vector<Series> c;
                                     c.push_back(std::move(ones));
                                     return c;
                                 }()},
-                      "o") == std::vector<I>{1, 0, 1});
+                      "o") == dstd::Vector<I>{1, 0, 1});
     }
 
     TEST_CASE("unique(subset): keyed on the named columns, first row kept") {
@@ -419,12 +442,13 @@ TEST_SUITE("lazy frame ops") {
         df.names = {"k", "v"};
         df.columns.push_back(i64s({1, 1, 2, 2, 3}));
         df.columns.push_back(i64s({1, 2, 3, 3, 4}));
-        DataFrame all = df.unique();
-        CHECK(i64_col(all, "v") == std::vector<I>{1, 2, 3, 4});
-        DataFrame by_k = df.unique({"k"});
-        CHECK(i64_col(by_k, "k") == std::vector<I>{1, 2, 3});
-        CHECK(i64_col(by_k, "v") == std::vector<I>{1, 3, 4});
-        CHECK_THROWS_AS(df.unique({"nope"}), std::out_of_range);
+        DataFrame all = dftu_utils_test::ok(df.unique());
+        CHECK(i64_col(all, "v") == dstd::Vector<I>{1, 2, 3, 4});
+        DataFrame by_k = dftu_utils_test::ok(df.unique({"k"}));
+        CHECK(i64_col(by_k, "k") == dstd::Vector<I>{1, 2, 3});
+        CHECK(i64_col(by_k, "v") == dstd::Vector<I>{1, 3, 4});
+        dftu_utils_test::expect_error(
+            df.unique({"nope"}), dftracer::utils::common::ErrorCode::NotFound);
 
         auto scan_df = [&] {
             DataFrame c;
@@ -433,19 +457,21 @@ TEST_SUITE("lazy frame ops") {
             return scan(std::move(c));
         };
         LazyFrame plan = scan_df().unique({"k"});
-        CHECK(plan.explain().find("unique [k]") != std::string::npos);
-        for (std::int64_t morsel : std::vector<std::int64_t>{0, 1, 2}) {
+        CHECK(plan.explain().find("unique [k]") != dstd::String::npos);
+        for (std::int64_t morsel : dstd::Vector<std::int64_t>{0, 1, 2}) {
             DataFrame out = run(scan_df().unique({"k"}).collect(morsel));
-            CHECK(i64_col(out, "k") == std::vector<I>{1, 2, 3});
-            CHECK(i64_col(out, "v") == std::vector<I>{1, 3, 4});
+            CHECK(i64_col(out, "k") == dstd::Vector<I>{1, 2, 3});
+            CHECK(i64_col(out, "v") == dstd::Vector<I>{1, 3, 4});
         }
         // A tiny budget forces the spill path; the keys still honour the
         // subset.
         DataFrame spilled =
             run(scan_df().memory_budget(1).unique({"k"}).collect(1));
-        CHECK(i64_col(spilled, "k") == std::vector<I>{1, 2, 3});
-        CHECK(i64_col(spilled, "v") == std::vector<I>{1, 3, 4});
-        CHECK_THROWS_AS(scan_df().unique({"nope"}), std::out_of_range);
+        CHECK(i64_col(spilled, "k") == dstd::Vector<I>{1, 2, 3});
+        CHECK(i64_col(spilled, "v") == dstd::Vector<I>{1, 3, 4});
+        dftu_utils_test::expect_error(
+            scan_df().unique({"nope"}).status(),
+            dftracer::utils::common::ErrorCode::NotFound);
 
         dftu_dataframe* h = to_abi(df);
         REQUIRE(h);
@@ -481,8 +507,6 @@ TEST_SUITE("lazy frame ops") {
     }
 
     TEST_CASE("an Int64 sum that overflows is null, in Int64") {
-        using dftracer::utils::dataframe::Agg;
-        using dftracer::utils::dataframe::GroupAgg;
         constexpr std::int64_t BIG = std::numeric_limits<std::int64_t>::max();
         // Group x overflows upward and y downward; z wraps and wraps back, so
         // its sum fits.
@@ -495,26 +519,26 @@ TEST_SUITE("lazy frame ops") {
             df.columns.push_back(Series::flat_i64(v, 7));
             return df;
         };
-        const std::vector<I> want{NI, NI, BIG};
-        DataFrame eager = frame().group_by({"k"}).sum();
+        const dstd::Vector<I> want{NI, NI, BIG};
+        DataFrame eager = dftu_utils_test::ok(frame().group_by({"k"}).sum());
         CHECK(eager.column("v").type() == TypeId::Int64);
         CHECK(i64_col(eager, "v") == want);
-        const std::vector<GroupAgg> aggs{GroupAgg{Agg::Sum, "v", "s"},
-                                         GroupAgg{Agg::Max, "v", "m"}};
-        for (std::int64_t morsel : std::vector<std::int64_t>{0, 1, 2}) {
+        const dstd::Vector<GroupAgg> aggs{GroupAgg{Agg::Sum, "v", "s"},
+                                          GroupAgg{Agg::Max, "v", "m"}};
+        for (std::int64_t morsel : dstd::Vector<std::int64_t>{0, 1, 2}) {
             DataFrame out =
                 run(scan(frame())
-                        .group_by(std::vector<std::string>{"k"}, aggs)
+                        .group_by(dstd::Vector<dstd::String>{"k"}, aggs)
                         .sort_by("k")
                         .collect(morsel));
             CHECK(out.column("s").type() == TypeId::Int64);
             CHECK(i64_col(out, "s") == want);
-            CHECK(i64_col(out, "m") == std::vector<I>{BIG, -2, BIG});
+            CHECK(i64_col(out, "m") == dstd::Vector<I>{BIG, -2, BIG});
         }
         DataFrame spilled =
             run(scan(frame())
                     .memory_budget(1)
-                    .group_by(std::vector<std::string>{"k"}, aggs)
+                    .group_by(dstd::Vector<dstd::String>{"k"}, aggs)
                     .sort_by("k")
                     .collect(1));
         CHECK(i64_col(spilled, "s") == want);
@@ -522,8 +546,8 @@ TEST_SUITE("lazy frame ops") {
 
     TEST_CASE("head_by and unique give the same rows past the budget") {
         constexpr int N = 3000;
-        std::vector<std::int64_t> k(N), j(N), v(N);
-        std::vector<std::uint8_t> valid((N + 7) / 8, 0xFF);
+        dstd::Vector<std::int64_t> k(N), j(N), v(N);
+        dstd::Vector<std::uint8_t> valid((N + 7) / 8, 0xFF);
         for (int i = 0; i < N; ++i) {
             k[i] = (i * 7919) % 211;
             j[i] = i % 3;
@@ -540,17 +564,17 @@ TEST_SUITE("lazy frame ops") {
             return df;
         };
         auto reference = [&](bool use_j, int keep) {
-            std::map<std::pair<std::int64_t, std::int64_t>, int> seen;
-            std::vector<I> out;
+            dstd::Map<dstd::Pair<std::int64_t, std::int64_t>, int> seen;
+            dstd::Vector<I> out;
             for (int i = 0; i < N; ++i) {
                 const bool null = i % 11 == 0;
-                const auto key = std::make_pair(null ? -1 : k[i],
-                                                use_j ? j[i] : std::int64_t{0});
+                const dstd::Pair<std::int64_t, std::int64_t> key{
+                    null ? -1 : k[i], use_j ? j[i] : std::int64_t{0}};
                 if (seen[key]++ < keep) out.push_back(v[i]);
             }
             return out;
         };
-        for (std::int64_t morsel : std::vector<std::int64_t>{7, 64, 1000}) {
+        for (std::int64_t morsel : dstd::Vector<std::int64_t>{7, 64, 1000}) {
             CAPTURE(morsel);
             for (int keep : {1, 3}) {
                 CAPTURE(keep);
@@ -586,25 +610,27 @@ TEST_SUITE("lazy frame ops") {
             return df;
         };
         CHECK(scan(frame()).head_by({"k"}, 2).explain().find("head_by [k] 2") !=
-              std::string::npos);
-        for (std::int64_t morsel : std::vector<std::int64_t>{0, 1, 3}) {
+              dstd::String::npos);
+        for (std::int64_t morsel : dstd::Vector<std::int64_t>{0, 1, 3}) {
             CAPTURE(morsel);
             DataFrame two =
                 run(scan(frame()).head_by({"k"}, 2).collect(morsel));
-            CHECK(i64_col(two, "v") == std::vector<I>{0, 1, 2, 3, 5, 6, 7});
-            CHECK(i64_col(two, "k") == std::vector<I>{1, 2, 1, NI, 2, NI, 3});
+            CHECK(i64_col(two, "v") == dstd::Vector<I>{0, 1, 2, 3, 5, 6, 7});
+            CHECK(i64_col(two, "k") == dstd::Vector<I>{1, 2, 1, NI, 2, NI, 3});
             DataFrame one =
                 run(scan(frame()).head_by({"k"}, 1).collect(morsel));
-            CHECK(i64_col(one, "v") == std::vector<I>{0, 1, 3, 7});
+            CHECK(i64_col(one, "v") == dstd::Vector<I>{0, 1, 3, 7});
             DataFrame multi =
                 run(scan(frame()).head_by({"k", "j"}, 1).collect(morsel));
-            CHECK(i64_col(multi, "v") == std::vector<I>{0, 1, 2, 3, 5, 7});
+            CHECK(i64_col(multi, "v") == dstd::Vector<I>{0, 1, 2, 3, 5, 7});
             CHECK(run(scan(frame()).head_by({"k"}, 0).collect(morsel))
                       .num_rows() == 0);
             CHECK(i64_col(run(scan(frame()).head_by({}, 3).collect(morsel)),
-                          "v") == std::vector<I>{0, 1, 2});
+                          "v") == dstd::Vector<I>{0, 1, 2});
         }
-        CHECK_THROWS_AS(scan(frame()).head_by({"nope"}, 1), std::out_of_range);
+        dftu_utils_test::expect_error(
+            scan(frame()).head_by({"nope"}, 1).status(),
+            dftracer::utils::common::ErrorCode::NotFound);
 
         // Equal numbers are one key: 0.0 and -0.0, and every NaN.
         const double fv[5] = {0.0, -0.0, std::nan(""), -std::nan(""), 1.5};
@@ -613,7 +639,7 @@ TEST_SUITE("lazy frame ops") {
         fdf.columns.push_back(Series::flat_f64(fv, 5));
         fdf.columns.push_back(i64s({0, 1, 2, 3, 4}));
         CHECK(i64_col(run(scan(std::move(fdf)).head_by({"f"}, 1).collect(1)),
-                      "v") == std::vector<I>{0, 2, 4});
+                      "v") == dstd::Vector<I>{0, 2, 4});
 
         dftu_dataframe* h = to_abi(frame());
         REQUIRE(h);
@@ -672,7 +698,7 @@ TEST_SUITE("lazy frame ops") {
         dftu_dataframe* ca_out = dftu_lazyframe_collect(ca, 0);
         REQUIRE(ca_out);
         CHECK(dftu_dataframe_num_rows(ca_out) == 3);
-        CHECK(std::string(dftu_dataframe_column_name(ca_out, 4)) == "pct_n");
+        CHECK(dstd::String(dftu_dataframe_column_name(ca_out, 4)) == "pct_n");
         CHECK(dftu_lazyframe_compare_agg(lb, lv, 0) == nullptr);
         dftu_dataframe_free(ca_out);
         dftu_lazyframe_free(ca);
@@ -691,7 +717,7 @@ TEST_SUITE("lazy frame ops") {
         dftu_dataframe* fo_out = dftu_lazyframe_collect(sorted, 0);
         REQUIRE(fo_out);
         CHECK(dftu_dataframe_num_rows(fo_out) == 4);
-        CHECK(std::string(dftu_dataframe_column_name(fo_out, 1)) == "n");
+        CHECK(dstd::String(dftu_dataframe_column_name(fo_out, 1)) == "n");
         dftu_lazyframe_free(sorted);
         CHECK(dftu_lazyframe_frame_op(lb, "dftu.frame.union", nullptr, 0,
                                       nullptr, nullptr, 0) == nullptr);
@@ -745,19 +771,19 @@ TEST_SUITE("lazy frame ops") {
         return df;
     }
 
-    using D = std::optional<double>;
-    const D ND = std::nullopt;
+    using D = dstd::Optional<double>;
+    const D ND = dstd::nullopt;
 
-    static std::vector<D> f64_col(const DataFrame& df,
-                                  const std::string& name) {
+    static dstd::Vector<D> f64_col(const DataFrame& df,
+                                   const dstd::String& name) {
         Series c = df.column(name);
         REQUIRE(c.valid());
         c = c.materialize();
         REQUIRE(c.type() == TypeId::Float64);
-        std::vector<D> out;
+        dstd::Vector<D> out;
         for (std::int64_t i = 0; i < c.length(); ++i) {
             if (c.is_null(i))
-                out.emplace_back(std::nullopt);
+                out.emplace_back(dstd::nullopt);
             else
                 out.emplace_back(c.data<double>()[i]);
         }
@@ -765,81 +791,90 @@ TEST_SUITE("lazy frame ops") {
     }
 
     TEST_CASE("group-wise transforms: eager and lazy, pandas values") {
-        using dftracer::utils::dataframe::GroupBy;
-        using dftracer::utils::dataframe::GroupwiseOp;
-        using dftracer::utils::dataframe::LazyGroupBy;
-        using dftracer::utils::dataframe::RankMethod;
         const DataFrame df = make_groups();
         GroupBy g = df.group_by({"k"});
 
-        DataFrame cs = g.cumsum();
-        CHECK(cs.names == std::vector<std::string>{"a", "b"});
-        CHECK(i64_col(cs, "a") == std::vector<I>{3, 1, NI, 3, 6});
-        CHECK(f64_col(cs, "b") == std::vector<D>{1.0, 5.0, 3.0, 10.0, 3.5});
-        CHECK(i64_col(g.cummax(), "a") == std::vector<I>{3, 1, NI, 2, 3});
-        CHECK(f64_col(g.cummax(), "b") ==
-              std::vector<D>{1.0, 5.0, 2.0, 5.0, 2.0});
-        CHECK(i64_col(g.cummin(), "a") == std::vector<I>{3, 1, NI, 1, 3});
-        CHECK(f64_col(g.cummin(), "b") ==
-              std::vector<D>{1.0, 5.0, 1.0, 5.0, 0.5});
-        DataFrame cc = g.cumcount();
-        CHECK(cc.names == std::vector<std::string>{"cumcount"});
-        CHECK(i64_col(cc, "cumcount") == std::vector<I>{0, 0, 1, 1, 2});
-        CHECK(i64_col(g.ngroup(), "ngroup") == std::vector<I>{0, 1, 0, 1, 0});
+        DataFrame cs = dftu_utils_test::ok(g.cumsum());
+        CHECK(cs.names == dstd::Vector<dstd::String>{"a", "b"});
+        CHECK(i64_col(cs, "a") == dstd::Vector<I>{3, 1, NI, 3, 6});
+        CHECK(f64_col(cs, "b") == dstd::Vector<D>{1.0, 5.0, 3.0, 10.0, 3.5});
+        CHECK(i64_col(dftu_utils_test::ok(g.cummax()), "a") ==
+              dstd::Vector<I>{3, 1, NI, 2, 3});
+        CHECK(f64_col(dftu_utils_test::ok(g.cummax()), "b") ==
+              dstd::Vector<D>{1.0, 5.0, 2.0, 5.0, 2.0});
+        CHECK(i64_col(dftu_utils_test::ok(g.cummin()), "a") ==
+              dstd::Vector<I>{3, 1, NI, 1, 3});
+        CHECK(f64_col(dftu_utils_test::ok(g.cummin()), "b") ==
+              dstd::Vector<D>{1.0, 5.0, 1.0, 5.0, 0.5});
+        DataFrame cc = dftu_utils_test::ok(g.cumcount());
+        CHECK(cc.names == dstd::Vector<dstd::String>{"cumcount"});
+        CHECK(i64_col(cc, "cumcount") == dstd::Vector<I>{0, 0, 1, 1, 2});
+        CHECK(i64_col(dftu_utils_test::ok(g.ngroup()), "ngroup") ==
+              dstd::Vector<I>{0, 1, 0, 1, 0});
 
-        DataFrame sh = g.shift();
-        CHECK(sh.names == std::vector<std::string>{"a", "b"});
-        CHECK(i64_col(sh, "a") == std::vector<I>{NI, NI, 3, 1, NI});
-        CHECK(f64_col(sh, "b") == std::vector<D>{ND, ND, 1.0, 5.0, 2.0});
-        CHECK(i64_col(g.shift(-1), "a") == std::vector<I>{NI, 2, 3, NI, NI});
-        CHECK(f64_col(g.shift(-1), "b") ==
-              std::vector<D>{2.0, 5.0, 0.5, ND, ND});
-        CHECK(i64_col(g.diff(), "a") == std::vector<I>{NI, NI, NI, 1, NI});
-        CHECK(f64_col(g.diff(), "b") == std::vector<D>{ND, ND, 1.0, 0.0, -1.5});
-        CHECK(f64_col(g.pct_change(), "b") ==
-              std::vector<D>{ND, ND, 1.0, 0.0, -0.75});
+        DataFrame sh = dftu_utils_test::ok(g.shift());
+        CHECK(sh.names == dstd::Vector<dstd::String>{"a", "b"});
+        CHECK(i64_col(sh, "a") == dstd::Vector<I>{NI, NI, 3, 1, NI});
+        CHECK(f64_col(sh, "b") == dstd::Vector<D>{ND, ND, 1.0, 5.0, 2.0});
+        CHECK(i64_col(dftu_utils_test::ok(g.shift(-1)), "a") ==
+              dstd::Vector<I>{NI, 2, 3, NI, NI});
+        CHECK(f64_col(dftu_utils_test::ok(g.shift(-1)), "b") ==
+              dstd::Vector<D>{2.0, 5.0, 0.5, ND, ND});
+        CHECK(i64_col(dftu_utils_test::ok(g.diff()), "a") ==
+              dstd::Vector<I>{NI, NI, NI, 1, NI});
+        CHECK(f64_col(dftu_utils_test::ok(g.diff()), "b") ==
+              dstd::Vector<D>{ND, ND, 1.0, 0.0, -1.5});
+        CHECK(f64_col(dftu_utils_test::ok(g.pct_change()), "b") ==
+              dstd::Vector<D>{ND, ND, 1.0, 0.0, -0.75});
 
-        CHECK(f64_col(g.rank(), "a") == std::vector<D>{1.5, 1.0, ND, 2.0, 1.5});
-        CHECK(f64_col(g.rank(), "b") ==
-              std::vector<D>{2.0, 1.5, 3.0, 1.5, 1.0});
-        CHECK(f64_col(g.rank(RankMethod::Average, false), "b") ==
-              std::vector<D>{2.0, 1.5, 1.0, 1.5, 3.0});
-        CHECK(f64_col(g.rank(RankMethod::Min), "b") ==
-              std::vector<D>{2.0, 1.0, 3.0, 1.0, 1.0});
-        CHECK(f64_col(g.rank(RankMethod::Dense), "a") ==
-              std::vector<D>{1.0, 1.0, ND, 2.0, 1.0});
-        CHECK(f64_col(g.rank(RankMethod::Ordinal), "a") ==
-              std::vector<D>{1.0, 1.0, ND, 2.0, 2.0});
-        CHECK(f64_col(g.rank(RankMethod::Ordinal, false), "b") ==
-              std::vector<D>{2.0, 1.0, 1.0, 2.0, 3.0});
-        CHECK(f64_col(g.rank(RankMethod::Max), "b") ==
-              std::vector<D>{2.0, 2.0, 3.0, 2.0, 1.0});
-        CHECK(f64_col(g.rank(RankMethod::Max, false), "b") ==
-              std::vector<D>{2.0, 2.0, 1.0, 2.0, 3.0});
-        CHECK(f64_col(g.rank(RankMethod::Max), "a") ==
-              std::vector<D>{2.0, 1.0, ND, 2.0, 2.0});
+        CHECK(f64_col(dftu_utils_test::ok(g.rank()), "a") ==
+              dstd::Vector<D>{1.5, 1.0, ND, 2.0, 1.5});
+        CHECK(f64_col(dftu_utils_test::ok(g.rank()), "b") ==
+              dstd::Vector<D>{2.0, 1.5, 3.0, 1.5, 1.0});
+        CHECK(f64_col(dftu_utils_test::ok(g.rank(RankMethod::Average, false)),
+                      "b") == dstd::Vector<D>{2.0, 1.5, 1.0, 1.5, 3.0});
+        CHECK(f64_col(dftu_utils_test::ok(g.rank(RankMethod::Min)), "b") ==
+              dstd::Vector<D>{2.0, 1.0, 3.0, 1.0, 1.0});
+        CHECK(f64_col(dftu_utils_test::ok(g.rank(RankMethod::Dense)), "a") ==
+              dstd::Vector<D>{1.0, 1.0, ND, 2.0, 1.0});
+        CHECK(f64_col(dftu_utils_test::ok(g.rank(RankMethod::Ordinal)), "a") ==
+              dstd::Vector<D>{1.0, 1.0, ND, 2.0, 2.0});
+        CHECK(f64_col(dftu_utils_test::ok(g.rank(RankMethod::Ordinal, false)),
+                      "b") == dstd::Vector<D>{2.0, 1.0, 1.0, 2.0, 3.0});
+        CHECK(f64_col(dftu_utils_test::ok(g.rank(RankMethod::Max)), "b") ==
+              dstd::Vector<D>{2.0, 2.0, 3.0, 2.0, 1.0});
+        CHECK(f64_col(dftu_utils_test::ok(g.rank(RankMethod::Max, false)),
+                      "b") == dstd::Vector<D>{2.0, 2.0, 1.0, 2.0, 3.0});
+        CHECK(f64_col(dftu_utils_test::ok(g.rank(RankMethod::Max)), "a") ==
+              dstd::Vector<D>{2.0, 1.0, ND, 2.0, 2.0});
 
-        DataFrame h2 = g.head(2);
-        CHECK(h2.names == std::vector<std::string>{"k", "a", "b"});
-        CHECK(f64_col(h2, "b") == std::vector<D>{1.0, 5.0, 2.0, 5.0});
-        CHECK(f64_col(g.tail(1), "b") == std::vector<D>{5.0, 0.5});
-        CHECK(f64_col(g.nth(1), "b") == std::vector<D>{2.0, 5.0});
-        CHECK(f64_col(g.nth(-1), "b") == std::vector<D>{5.0, 0.5});
+        DataFrame h2 = dftu_utils_test::ok(g.head(2));
+        CHECK(h2.names == dstd::Vector<dstd::String>{"k", "a", "b"});
+        CHECK(f64_col(h2, "b") == dstd::Vector<D>{1.0, 5.0, 2.0, 5.0});
+        CHECK(f64_col(dftu_utils_test::ok(g.tail(1)), "b") ==
+              dstd::Vector<D>{5.0, 0.5});
+        CHECK(f64_col(dftu_utils_test::ok(g.nth(1)), "b") ==
+              dstd::Vector<D>{2.0, 5.0});
+        CHECK(f64_col(dftu_utils_test::ok(g.nth(-1)), "b") ==
+              dstd::Vector<D>{5.0, 0.5});
 
         // A trailing window within the group, null until it holds `n`
         // present values (a null inside the window counts for nothing).
-        CHECK(f64_col(g.rolling_sum(2), "b") ==
-              std::vector<D>{ND, ND, 3.0, 10.0, 2.5});
-        CHECK(i64_col(g.rolling_sum(2), "a") ==
-              std::vector<I>{NI, NI, NI, 3, NI});
-        CHECK(f64_col(g.rolling_mean(2), "b") ==
-              std::vector<D>{ND, ND, 1.5, 5.0, 1.25});
-        CHECK(f64_col(g.rolling_max(2), "b") ==
-              std::vector<D>{ND, ND, 2.0, 5.0, 2.0});
-        CHECK(f64_col(g.rolling_min(2), "b") ==
-              std::vector<D>{ND, ND, 1.0, 5.0, 0.5});
-        CHECK(i64_col(g.rolling_sum(1), "a") == std::vector<I>{3, 1, NI, 2, 3});
-        CHECK_THROWS_AS(g.rolling_sum(0), std::invalid_argument);
+        CHECK(f64_col(dftu_utils_test::ok(g.rolling_sum(2)), "b") ==
+              dstd::Vector<D>{ND, ND, 3.0, 10.0, 2.5});
+        CHECK(i64_col(dftu_utils_test::ok(g.rolling_sum(2)), "a") ==
+              dstd::Vector<I>{NI, NI, NI, 3, NI});
+        CHECK(f64_col(dftu_utils_test::ok(g.rolling_mean(2)), "b") ==
+              dstd::Vector<D>{ND, ND, 1.5, 5.0, 1.25});
+        CHECK(f64_col(dftu_utils_test::ok(g.rolling_max(2)), "b") ==
+              dstd::Vector<D>{ND, ND, 2.0, 5.0, 2.0});
+        CHECK(f64_col(dftu_utils_test::ok(g.rolling_min(2)), "b") ==
+              dstd::Vector<D>{ND, ND, 1.0, 5.0, 0.5});
+        CHECK(i64_col(dftu_utils_test::ok(g.rolling_sum(1)), "a") ==
+              dstd::Vector<I>{3, 1, NI, 2, 3});
+        dftu_utils_test::expect_error(
+            g.rolling_sum(0),
+            dftracer::utils::common::ErrorCode::InvalidArgument);
 
         // The group-wise fills: a null before the group's first present value
         // stays null under ffill, after its last under bfill.
@@ -850,37 +885,44 @@ TEST_SUITE("lazy frame ops") {
         const std::uint8_t hvalid[1] = {0x06};
         holes.columns.push_back(Series::flat_i64(hv, 5, hvalid));
         GroupBy hg = holes.group_by({"k"});
-        CHECK(i64_col(hg.ffill(), "a") == std::vector<I>{NI, 1, 2, 2, 1});
-        CHECK(i64_col(hg.bfill(), "a") == std::vector<I>{2, 1, 2, NI, NI});
+        CHECK(i64_col(dftu_utils_test::ok(hg.ffill()), "a") ==
+              dstd::Vector<I>{NI, 1, 2, 2, 1});
+        CHECK(i64_col(dftu_utils_test::ok(hg.bfill()), "a") ==
+              dstd::Vector<I>{2, 1, 2, NI, NI});
 
         // The lazy object builds the same plan; the eager one collects it.
         LazyGroupBy lg = df.lazy().group_by({"k"});
-        CHECK(i64_col(run(lg.cumsum().collect()), "a") ==
-              std::vector<I>{3, 1, NI, 3, 6});
-        CHECK(f64_col(run(lg.rolling_mean(2).collect()), "b") ==
-              std::vector<D>{ND, ND, 1.5, 5.0, 1.25});
-        CHECK(i64_col(run(holes.lazy().group_by({"k"}).ffill().collect()),
-                      "a") == std::vector<I>{NI, 1, 2, 2, 1});
-        CHECK(f64_col(run(lg.rank().collect()), "a") ==
-              std::vector<D>{1.5, 1.0, ND, 2.0, 1.5});
-        CHECK(f64_col(run(lg.tail(1).collect()), "b") ==
-              std::vector<D>{5.0, 0.5});
-        CHECK(run(lg.transform(GroupwiseOp::Head, 2).collect()).num_rows() ==
-              4);
+        CHECK(i64_col(run(dftu_utils_test::ok(lg.cumsum()).collect()), "a") ==
+              dstd::Vector<I>{3, 1, NI, 3, 6});
+        CHECK(f64_col(run(dftu_utils_test::ok(lg.rolling_mean(2)).collect()),
+                      "b") == dstd::Vector<D>{ND, ND, 1.5, 5.0, 1.25});
+        CHECK(i64_col(
+                  run(dftu_utils_test::ok(holes.lazy().group_by({"k"}).ffill())
+                          .collect()),
+                  "a") == dstd::Vector<I>{NI, 1, 2, 2, 1});
+        CHECK(f64_col(run(dftu_utils_test::ok(lg.rank()).collect()), "a") ==
+              dstd::Vector<D>{1.5, 1.0, ND, 2.0, 1.5});
+        CHECK(f64_col(run(dftu_utils_test::ok(lg.tail(1)).collect()), "b") ==
+              dstd::Vector<D>{5.0, 0.5});
+        CHECK(run(dftu_utils_test::ok(lg.transform(GroupwiseOp::Head, 2))
+                      .collect())
+                  .num_rows() == 4);
 
         // No keys: the whole frame is one group; ngroup has nothing to number.
-        CHECK(i64_col(df.group_by({}).cumsum(), "a") ==
-              std::vector<I>{3, 4, NI, 6, 9});
-        CHECK_THROWS_AS(df.group_by({}).ngroup(), std::invalid_argument);
+        CHECK(i64_col(dftu_utils_test::ok(df.group_by({}).cumsum()), "a") ==
+              dstd::Vector<I>{3, 4, NI, 6, 9});
+        dftu_utils_test::expect_error(
+            df.group_by({}).ngroup(),
+            dftracer::utils::common::ErrorCode::InvalidArgument);
         DataFrame keys_only;
         keys_only.names = {"k"};
         keys_only.columns.push_back(Series::strings({"x", "y"}));
-        CHECK_THROWS_AS(keys_only.group_by({"k"}).cumsum(),
-                        std::invalid_argument);
+        dftu_utils_test::expect_error(
+            keys_only.group_by({"k"}).cumsum(),
+            dftracer::utils::common::ErrorCode::InvalidArgument);
     }
 
     TEST_CASE("column_op: a registered column op over one column") {
-        using dftracer::utils::dataframe::OpArgs;
         const DataFrame df = make_groups();
         dftu_dataframe* h = to_abi(df);
         REQUIRE(h);
@@ -942,7 +984,7 @@ TEST_SUITE("lazy frame ops") {
         LazyFrame lazy =
             df.lazy().frame_op("dftu.frame.column_op", a, {}, df.names);
         DataFrame out = run(lazy.collect());
-        CHECK(f64_col(out, "b") == std::vector<D>{1.0, 6.0, 8.0, 13.0, 13.5});
+        CHECK(f64_col(out, "b") == dstd::Vector<D>{1.0, 6.0, 8.0, 13.0, 13.5});
     }
 
     TEST_CASE("group-wise transforms: C ABI and registry rows") {
@@ -970,7 +1012,7 @@ TEST_SUITE("lazy frame ops") {
         dftu_dataframe* sh_out = dftu_lazyframe_collect(sh, 0);
         REQUIRE(sh_out);
         CHECK(dftu_dataframe_num_rows(sh_out) == 5);
-        CHECK(std::string(dftu_dataframe_column_name(sh_out, 0)) == "a");
+        CHECK(dstd::String(dftu_dataframe_column_name(sh_out, 0)) == "a");
         dftu_dataframe_free(sh_out);
         dftu_lazyframe_free(sh);
         CHECK(dftu_lazyframe_group_transform(lf, keys, 1, -1, 0, 0, 1) ==

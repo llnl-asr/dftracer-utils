@@ -1,37 +1,43 @@
+// SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/error.h>
-#include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/runtime.h>
-#include <dftracer/utils/index/indexer.h>
-#include <dftracer/utils/index/store/database.h>
-#include <dftracer/utils/index/store/db_manager.h>
-#include <dftracer/utils/index/store/index_database.h>
-#include <dftracer/utils/index/store/internal/helpers.h>
-#include <dftracer/utils/index/store/layout.h>
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/common/str_format.h>
+#include <dftracer/utils/coro/named.h>
+#include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dstd/file.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/fileio/file_helpers.h>
+#include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/trace/index/indexer.h>
 #include <dftracer/utils/trace/internal/utils.h>
+#include <dftracer/utils/trace/reader/trace_reader.h>
 #include <dftracer/utils/trace/views/view.h>
-#include <dftracer/utils/utilities/reader/trace_reader.h>
 #include <doctest/doctest.h>
+#include <generator_ok.h>
+#include <index_test_helpers.h>
+#include <instrumentation.h>
 #include <sys/resource.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 #include <unistd.h>
 #include <zlib.h>
 
 #include <algorithm>
 #include <chrono>
-#include <fstream>
+#include <initializer_list>
 #include <iterator>
-#include <string>
-#include <vector>
 
 using namespace dftracer::utils;
-using dftracer::utils::index::IndexedFile;
-using dftracer::utils::index::Indexer;
-using dftracer::utils::index::IndexerOptions;
-using dftracer::utils::index::IndexStatus;
-using dftu_utils_test::TestEnvironment;
+using namespace dftracer::utils::trace::index;
 
 namespace {
+
+constexpr dstd::OpenOptions WRITE_EXISTING{dstd::Access::Write,
+                                           dstd::Creation::OpenExisting};
 
 IndexerOptions with_runtime(Runtime& rt) {
     IndexerOptions o;
@@ -39,18 +45,27 @@ IndexerOptions with_runtime(Runtime& rt) {
     return o;
 }
 
-std::string index_of(const std::string& trace) {
-    return trace::internal::determine_index_path(trace, "");
+dstd::String index_of(dstd::StringView trace) {
+    return trace::internal::determine_index_path(dstd::String(trace), "");
 }
 
-std::vector<std::string> sorted(std::vector<std::string> v) {
+dstd::Vector<dstd::String> names_of(
+    std::initializer_list<dstd::StringView> names) {
+    dstd::Vector<dstd::String> out;
+    for (const auto& name : names) out.emplace_back(name);
+    return out;
+}
+
+dstd::Vector<dstd::String> sorted(dstd::Vector<dstd::String> v) {
     std::sort(v.begin(), v.end());
     return v;
 }
 
-void touch_later(const std::string& path) {
-    fs::last_write_time(path,
-                        fs::last_write_time(path) + std::chrono::seconds(10));
+void touch_later(dstd::PathView path) {
+    constexpr std::uint64_t TEN_SECONDS_NS = 10'000'000'000ULL;
+    REQUIRE(dstd::fs::set_mtime_ns(
+                path, dstd::fs::mtime_ns(path).value() + TEN_SECONDS_NS)
+                .has_value());
 }
 
 }  // namespace
@@ -58,97 +73,160 @@ void touch_later(const std::string& path) {
 TEST_SUITE("Indexer") {
     TEST_CASE("open expands a directory to its trace files") {
         Runtime rt(2);
-        TestEnvironment env(10);
-        const fs::path dir = fs::path(env.get_dir()) / "traces";
-        fs::create_directories(dir);
-        std::ofstream(dir / "a.pfw.gz") << "x";
-        std::ofstream(dir / "b.pfw") << "x";
-        std::ofstream(dir / "notes.txt") << "x";
+        dftu_utils_test::TestEnvironment env(10);
+        const dstd::Path dir = dstd::Path(env.dir()) / "traces";
+        REQUIRE(dstd::fs::create_directories(dir).has_value());
+        dstd::fs::write_file(dstd::PathView(dir / "a.pfw.gz"), "x").discard();
+        dstd::fs::write_file(dstd::PathView(dir / "b.ndjson.gz"), "x")
+            .discard();
+        dstd::fs::write_file(dstd::PathView(dir / "plain.pfw"), "x").discard();
+        dstd::fs::write_file(dstd::PathView(dir / "notes.txt"), "x").discard();
 
-        auto ix = Indexer::open({dir.string()}, with_runtime(rt));
-        std::vector<std::string> names;
+        auto ix = dftu_utils_test::ok(
+            Indexer::open({dstd::String(dir.str())}, with_runtime(rt)));
+        dstd::Vector<dstd::String> names;
         for (const auto& p : ix.paths())
-            names.push_back(fs::path(p).filename().string());
-        CHECK(sorted(names) == std::vector<std::string>{"a.pfw.gz", "b.pfw"});
+            names.emplace_back(dstd::PathView(p).filename());
+        CHECK(sorted(names) == names_of({"a.pfw.gz", "b.ndjson.gz"}));
         rt.shutdown();
     }
 
     TEST_CASE("open rejects an empty list and a missing path") {
-        try {
-            Indexer::open({});
-            FAIL("expected an error");
-        } catch (const DFTUtilsException& e) {
-            CHECK(e.code() == ErrorCode::INVALID_ARGUMENT);
-        }
-        const std::string missing = "/no/such/dir/trace.pfw.gz";
-        try {
-            Indexer::open({missing});
-            FAIL("expected an error");
-        } catch (const DFTUtilsException& e) {
-            CHECK(e.code() == ErrorCode::NOT_FOUND);
-            CHECK(std::string(e.what()).find(missing) != std::string::npos);
-        }
+        dftu_utils_test::expect_error(Indexer::open({}),
+                                      common::ErrorCode::InvalidArgument);
+        const dstd::String missing = "/no/such/dir/trace.pfw.gz";
+        const auto absent =
+            Indexer::open({dstd::String(dstd::StringView(missing))});
+        dftu_utils_test::expect_error(absent, common::ErrorCode::NotFound);
+        CHECK(dstd::String(absent.error().message()).find(missing) !=
+              dstd::String::npos);
     }
 
     TEST_CASE("open and status write nothing") {
         Runtime rt(2);
-        TestEnvironment env(10);
+        dftu_utils_test::TestEnvironment env(10);
         const auto trace = env.create_dft_test_gzip_file(20);
-        auto ix = Indexer::open({trace}, with_runtime(rt));
-        auto st = ix.status();
+        auto ix = dftu_utils_test::ok(Indexer::open(
+            {dstd::String(dstd::StringView(trace))}, with_runtime(rt)));
+        auto st = dftu_utils_test::ok(ix.status());
         CHECK(st.total == 1);
         CHECK(st.ready.empty());
-        CHECK(st.needs_work == std::vector<std::string>{trace});
+        CHECK(st.needs_work == names_of({trace}));
         CHECK(st.indexed == 0);
-        CHECK_FALSE(fs::exists(index_of(trace)));
+        CHECK_FALSE(dstd::fs::exists(index_of(trace)).value());
+        rt.shutdown();
+    }
+
+    TEST_CASE("a root holding only caches is no index") {
+        Runtime rt(2);
+        dftu_utils_test::TestEnvironment env(10);
+        const auto trace = env.create_dft_test_gzip_file(30);
+        CHECK(dftu_utils_test::ok(
+                  dftu_utils_test::ok(
+                      Indexer::open({dstd::String(dstd::StringView(trace))},
+                                    with_runtime(rt)))
+                      .build())
+                  .indexed == 1);
+
+        // A cache survives where the store does not, so the root stays.
+        const dstd::Path root(index_of(trace));
+        REQUIRE(dstd::fs::create_directories(root / "rollups" / "store")
+                    .has_value());
+        dstd::fs::write_file(dstd::PathView(root / "rollups" / "marker"), "r")
+            .discard();
+        dstd::fs::remove_all(root / "store").discard();
+        REQUIRE(dstd::fs::exists(root).value());
+        REQUIRE_FALSE(dstd::fs::exists(root / "store").value());
+
+        auto ix = dftu_utils_test::ok(Indexer::open(
+            {dstd::String(dstd::StringView(trace))}, with_runtime(rt)));
+        CHECK(dftu_utils_test::ok(ix.status()).needs_work == names_of({trace}));
+        CHECK(dftu_utils_test::ok(ix.build()).indexed == 1);
+        CHECK(dstd::fs::exists(root / "store").value());
+        CHECK(dstd::fs::exists(root / "rollups" / "marker").value());
         rt.shutdown();
     }
 
     TEST_CASE("build indexes only what is missing or stale") {
         Runtime rt(4);
-        TestEnvironment env(10);
+        dftu_utils_test::TestEnvironment env(10);
         const auto a = env.create_dft_test_gzip_file(30);
         const auto b = env.create_dft_test_gzip_file(40);
-        auto ix = Indexer::open({a, b}, with_runtime(rt));
+        auto ix = dftu_utils_test::ok(
+            Indexer::open({dstd::String(dstd::StringView(a)),
+                           dstd::String(dstd::StringView(b))},
+                          with_runtime(rt)));
 
-        auto first = ix.build();
+        auto first = dftu_utils_test::ok(ix.build());
         CHECK(first.indexed == 2);
         CHECK(first.needs_work.empty());
-        CHECK(sorted(first.ready) == sorted({a, b}));
-        CHECK(fs::exists(first.index_path));
+        CHECK(sorted(first.ready) == sorted(names_of({a, b})));
+        CHECK(dstd::fs::exists(first.index_path).value());
 
-        auto second = ix.build();
+        auto second = dftu_utils_test::ok(ix.build());
         CHECK(second.indexed == 0);
-        CHECK(sorted(second.ready) == sorted({a, b}));
+        CHECK(sorted(second.ready) == sorted(names_of({a, b})));
 
         const auto replacement = env.create_dft_test_gzip_file(55);
-        fs::copy_file(replacement, a, fs::copy_options::overwrite_existing);
+        REQUIRE(
+            dstd::fs::copy_file(replacement, a, dstd::fs::CopyMode::Overwrite)
+                .has_value());
         touch_later(a);
-        auto third = ix.build();
+        auto third = dftu_utils_test::ok(ix.build());
         CHECK(third.indexed == 1);
         CHECK(third.needs_work.empty());
 
-        auto files = ix.files();
+        auto files = dftu_utils_test::ok(ix.files());
         REQUIRE(files.size() == 2);
         for (const auto& f : files) {
-            CHECK(f.size_bytes == fs::file_size(f.path));
-            CHECK(f.file_id >= 0);
+            CHECK(f.size_bytes == dstd::fs::file_size(f.path).value());
+            CHECK(f.size_bytes > 0);
             CHECK(f.index_path == index_of(f.path));
         }
         rt.shutdown();
     }
 
+    TEST_CASE("status stats the files when it runs, not when open ran") {
+        Runtime rt(4);
+        dftu_utils_test::TestEnvironment env(10);
+        const auto a = env.create_dft_test_gzip_file(30);
+        CHECK(dftu_utils_test::ok(
+                  dftu_utils_test::ok(
+                      Indexer::open({dstd::String(dstd::StringView(a))},
+                                    with_runtime(rt)))
+                      .build())
+                  .indexed == 1);
+
+        auto ix = dftu_utils_test::ok(Indexer::open(
+            {dstd::String(dstd::StringView(a))}, with_runtime(rt)));
+        const auto replacement = env.create_dft_test_gzip_file(55);
+        REQUIRE(
+            dstd::fs::copy_file(replacement, a, dstd::fs::CopyMode::Overwrite)
+                .has_value());
+        touch_later(a);
+        CHECK(dftu_utils_test::ok(ix.status()).needs_work == names_of({a}));
+        CHECK(dftu_utils_test::ok(ix.build()).indexed == 1);
+        CHECK(dftu_utils_test::ok(ix.status()).needs_work.empty());
+        rt.shutdown();
+    }
+
     TEST_CASE("a missing bloom tier is added") {
         Runtime rt(4);
-        TestEnvironment env(10);
+        dftu_utils_test::TestEnvironment env(10);
         const auto a = env.create_dft_test_gzip_file(30);
         auto no_bloom = with_runtime(rt);
         no_bloom.bloom.reset();
-        CHECK(Indexer::open({a}, no_bloom).build().indexed == 1);
+        CHECK(dftu_utils_test::ok(
+                  dftu_utils_test::ok(
+                      Indexer::open({dstd::String(dstd::StringView(a))},
+                                    no_bloom))
+                      .build())
+                  .indexed == 1);
 
-        auto ix = Indexer::open({a}, with_runtime(rt));
-        CHECK(ix.status().needs_work == std::vector<std::string>{a});
-        auto st = ix.build();
+        auto ix = dftu_utils_test::ok(Indexer::open(
+            {dstd::String(dstd::StringView(a))}, with_runtime(rt)));
+        CHECK(dftu_utils_test::ok(ix.status()).needs_work == names_of({a}));
+        auto st = dftu_utils_test::ok(ix.build());
         CHECK(st.indexed == 1);
         CHECK(st.needs_work.empty());
         rt.shutdown();
@@ -156,66 +234,85 @@ TEST_SUITE("Indexer") {
 
     TEST_CASE("a changed bloom setting rebuilds the tier") {
         Runtime rt(4);
-        TestEnvironment env(10);
+        dftu_utils_test::TestEnvironment env(10);
         const auto a = env.create_dft_test_gzip_file(30);
         auto first = with_runtime(rt);
         first.bloom->fields = {"size"};
-        CHECK(Indexer::open({a}, first).build().indexed == 1);
+        CHECK(dftu_utils_test::ok(
+                  dftu_utils_test::ok(
+                      Indexer::open({dstd::String(dstd::StringView(a))}, first))
+                      .build())
+                  .indexed == 1);
 
         auto fewer = with_runtime(rt);
         fewer.bloom->fields = {};
-        CHECK(Indexer::open({a}, fewer).status().needs_work.empty());
+        CHECK(dftu_utils_test::ok(
+                  dftu_utils_test::ok(
+                      Indexer::open({dstd::String(dstd::StringView(a))}, fewer))
+                      .status())
+                  .needs_work.empty());
 
         auto other_rate = first;
         other_rate.bloom->false_positive_rate = 0.05;
-        auto ix = Indexer::open({a}, other_rate);
-        CHECK(ix.status().needs_work == std::vector<std::string>{a});
-        CHECK(ix.build().indexed == 1);
-        CHECK(ix.status().needs_work.empty());
+        auto ix = dftu_utils_test::ok(
+            Indexer::open({dstd::String(dstd::StringView(a))}, other_rate));
+        CHECK(dftu_utils_test::ok(ix.status()).needs_work == names_of({a}));
+        CHECK(dftu_utils_test::ok(ix.build()).indexed == 1);
+        CHECK(dftu_utils_test::ok(ix.status()).needs_work.empty());
         rt.shutdown();
     }
 
     TEST_CASE("rebuild re-indexes every file") {
         Runtime rt(4);
-        TestEnvironment env(10);
+        dftu_utils_test::TestEnvironment env(10);
         const auto a = env.create_dft_test_gzip_file(30);
         const auto b = env.create_dft_test_gzip_file(30);
-        auto ix = Indexer::open({a, b}, with_runtime(rt));
-        ix.build();
-        auto st = ix.rebuild();
+        auto ix = dftu_utils_test::ok(
+            Indexer::open({dstd::String(dstd::StringView(a)),
+                           dstd::String(dstd::StringView(b))},
+                          with_runtime(rt)));
+        dftu_utils_test::ok(ix.build());
+        auto st = dftu_utils_test::ok(ix.rebuild());
         CHECK(st.indexed == 2);
-        CHECK(sorted(st.ready) == sorted({a, b}));
+        CHECK(sorted(st.ready) == sorted(names_of({a, b})));
         rt.shutdown();
     }
 
     TEST_CASE("async and blocking forms agree") {
         Runtime rt(4);
-        TestEnvironment env_a(10);
-        TestEnvironment env_b(10);
+        dftu_utils_test::TestEnvironment env_a(10);
+        dftu_utils_test::TestEnvironment env_b(10);
         const auto a = env_a.create_dft_test_gzip_file(25);
-        const auto b = fs::path(env_b.get_dir()) / fs::path(a).filename();
-        fs::copy_file(a, b);
-        fs::last_write_time(b, fs::last_write_time(a));
+        const auto b = dstd::Path(env_b.dir()) / dstd::PathView(a).filename();
+        REQUIRE(dstd::fs::copy_file(a, b, dstd::fs::CopyMode::FailIfExists)
+                    .has_value());
+        REQUIRE(dstd::fs::set_mtime_ns(b, dstd::fs::mtime_ns(a).value())
+                    .has_value());
 
-        auto blocking = Indexer::open({a}, with_runtime(rt));
-        const IndexStatus by_block = blocking.build();
-        const auto files_block = blocking.files();
+        auto blocking = dftu_utils_test::ok(Indexer::open(
+            {dstd::String(dstd::StringView(a))}, with_runtime(rt)));
+        const IndexStatus by_block = dftu_utils_test::ok(blocking.build());
+        const auto files_block = dftu_utils_test::ok(blocking.files());
 
-        auto async = Indexer::open({b.string()}, with_runtime(rt));
+        auto async = dftu_utils_test::ok(Indexer::open(
+            {dstd::String(dstd::StringView(dstd::String(b.str())))},
+            with_runtime(rt)));
         IndexStatus by_async;
-        std::vector<IndexedFile> files_async;
-        rt.run_blocking("indexer-test",
-                        [&](CoroScope& scope) -> coro::CoroTask<void> {
-                            by_async = co_await async.build(scope);
-                            files_async = co_await async.files(scope);
-                        });
+        dstd::Vector<IndexedFile> files_async;
+        dftu_utils_test::ok(rt.block_on(coro::named(
+            "indexer-test",
+            coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
+                by_async = dftu_utils_test::ok(co_await async.build(scope));
+                files_async = dftu_utils_test::ok(co_await async.files(scope));
+            }))));
 
         CHECK(by_async.total == by_block.total);
         CHECK(by_async.indexed == by_block.indexed);
         CHECK(by_async.ready.size() == by_block.ready.size());
         CHECK(by_async.needs_work == by_block.needs_work);
         REQUIRE(files_async.size() == files_block.size());
-        CHECK(files_async[0].file_id == files_block[0].file_id);
+        CHECK(dstd::Path(files_async[0].path).view().filename() ==
+              dstd::Path(files_block[0].path).view().filename());
         CHECK(files_async[0].size_bytes == files_block[0].size_bytes);
         CHECK(files_async[0].mtime == files_block[0].mtime);
         rt.shutdown();
@@ -224,38 +321,42 @@ TEST_SUITE("Indexer") {
     TEST_CASE("an unreadable trace fails the build and names the file") {
         if (geteuid() == 0) return;  // root reads every file
         Runtime rt(4);
-        TestEnvironment env(10);
+        dftu_utils_test::TestEnvironment env(10);
         const auto good = env.create_dft_test_gzip_file(30);
         const auto locked = env.create_dft_test_gzip_file(30);
-        fs::permissions(locked, fs::perms::none);
+        REQUIRE(dstd::fs::set_permissions(locked, 0).has_value());
 
-        auto ix = Indexer::open({good, locked}, with_runtime(rt));
-        bool threw = false;
-        try {
-            ix.build();
-        } catch (const DFTUtilsException& e) {
-            threw = true;
-            CHECK(std::string(e.what()).find(locked) != std::string::npos);
-        }
-        fs::permissions(locked, fs::perms::owner_all);
-        CHECK(threw);
-        auto st = Indexer::open({good}, with_runtime(rt)).status();
-        CHECK(st.ready == std::vector<std::string>{good});
+        auto ix = dftu_utils_test::ok(
+            Indexer::open({dstd::String(dstd::StringView(good)),
+                           dstd::String(dstd::StringView(locked))},
+                          with_runtime(rt)));
+        const auto built = ix.build();
+        REQUIRE(dstd::fs::set_permissions(locked, 0700).has_value());
+        REQUIRE_FALSE(built.has_value());
+        CHECK(dstd::String(built.error().message()).find(locked) !=
+              dstd::String::npos);
+        auto st = dftu_utils_test::ok(
+            dftu_utils_test::ok(
+                Indexer::open({dstd::String(dstd::StringView(good))},
+                              with_runtime(rt)))
+                .status());
+        CHECK(st.ready == names_of({good}));
         rt.shutdown();
     }
 
     TEST_CASE("the indexing guide example runs") {
-        TestEnvironment env(10);
+        dftu_utils_test::TestEnvironment env(10);
         const auto trace = env.create_dft_test_gzip_file(20);
-        using namespace dftracer::utils::index;
+        using namespace dftracer::utils::trace::index;
 
         IndexerOptions options;
         options.bloom->fields = {"io.off"};
 
-        Indexer indexer = Indexer::open({trace}, options);
-        IndexStatus status = indexer.build();
+        Indexer indexer = dftu_utils_test::ok(
+            Indexer::open({dstd::String(dstd::StringView(trace))}, options));
+        IndexStatus status = dftu_utils_test::ok(indexer.build());
         CHECK(status.indexed == 1);
-        CHECK(indexer.build().indexed == 0);
+        CHECK(dftu_utils_test::ok(indexer.build()).indexed == 0);
     }
 }
 
@@ -267,17 +368,17 @@ struct ZlibPrefix {
     std::size_t lines = 0;
     std::size_t events = 0;  // complete lines that start with '{'
     std::size_t complete_members = 0;
-    std::vector<std::size_t> member_starts;
+    dstd::Vector<std::size_t> member_starts;
 };
 
-ZlibPrefix zlib_prefix(const std::string& path) {
-    std::ifstream in(path, std::ios::binary);
-    std::vector<unsigned char> data((std::istreambuf_iterator<char>(in)),
-                                    std::istreambuf_iterator<char>());
+ZlibPrefix zlib_prefix(const dstd::String& path) {
+    const dstd::String data_raw =
+        dstd::fs::read_file(dstd::PathView(path)).value_or(dstd::String());
+    dstd::Vector<unsigned char> data(data_raw.begin(), data_raw.end());
     ZlibPrefix r;
     std::size_t off = 0;
-    std::string out;
-    std::vector<unsigned char> buf(1 << 16);
+    dstd::String out;
+    dstd::Vector<unsigned char> buf(1 << 16);
     while (off < data.size()) {
         r.member_starts.push_back(off);
         z_stream zs{};
@@ -301,19 +402,21 @@ ZlibPrefix zlib_prefix(const std::string& path) {
     r.lines =
         static_cast<std::size_t>(std::count(out.begin(), out.end(), '\n'));
     std::size_t pos = 0;
-    for (std::size_t nl; (nl = out.find('\n', pos)) != std::string::npos;
+    for (std::size_t nl; (nl = out.find('\n', pos)) != dstd::String::npos;
          pos = nl + 1)
         if (out[pos] == '{') ++r.events;
     return r;
 }
 
-std::string write_prefix(const std::string& src, const std::string& dst,
-                         double frac) {
-    std::ifstream in(src, std::ios::binary);
-    std::string bytes((std::istreambuf_iterator<char>(in)),
-                      std::istreambuf_iterator<char>());
-    std::ofstream(dst, std::ios::binary) << bytes.substr(
-        0, static_cast<std::size_t>(static_cast<double>(bytes.size()) * frac));
+dstd::String write_prefix(const dstd::String& src, const dstd::String& dst,
+                          double frac) {
+    dstd::String bytes =
+        dstd::fs::read_file(dstd::PathView(src)).value_or(dstd::String());
+    dstd::fs::write_file(dstd::PathView(dst),
+                         common::str_cat(bytes.substr(
+                             0, static_cast<std::size_t>(
+                                    static_cast<double>(bytes.size()) * frac))))
+        .discard();
     return dst;
 }
 
@@ -324,31 +427,30 @@ struct Indexed {
     std::uint64_t members_end = 0;
 };
 
-Indexed indexed(const std::string& trace) {
-    dftracer::utils::index::store::IndexDatabase db(
-        index_of(trace),
-        dftracer::utils::index::store::IndexOpenMode::ReadOnly);
-    const int fid = db.get_file_info_id(
-        dftracer::utils::index::store::internal::get_logical_path(trace));
-    REQUIRE(fid >= 0);
+Indexed indexed(const dstd::String& trace) {
+    const auto snapshot = dftu_utils_test::index_snapshot(index_of(trace));
+    const auto file = dftu_utils_test::require_indexed_file(snapshot, trace);
     Indexed r;
-    auto meta = db.query_file_metadata_batch({fid});
-    r.lines = meta[fid].num_lines;
-    r.truncated = meta[fid].truncated;
-    auto members = db.query_gzip_members(fid);
+    const auto meta = dftu_utils_test::index_take(
+        dftracer::utils::trace::index::file_metadata(snapshot, file));
+    REQUIRE(meta.has_value());
+    r.lines = meta->line_count;
+    r.truncated = meta->truncated;
+    auto members = dftu_utils_test::index_take(
+        dftracer::utils::trace::index::members(snapshot, file));
     r.members = members.size();
     if (!members.empty())
         r.members_end = members.back().c_offset + members.back().c_size;
     return r;
 }
 
-std::string multimember_trace(TestEnvironment& env, int events,
-                              const std::string& name) {
+dstd::String multimember_trace(dftu_utils_test::TestEnvironment& env,
+                               int events, const dstd::String& name) {
     const auto plain = env.create_dft_test_file(events);
-    const auto gz = (fs::path(env.get_dir()) / name).string();
+    const dstd::String gz((dstd::Path(env.dir()) / name).str());
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                16 * 1024));
-    fs::remove(plain);
+    dstd::fs::remove(plain).discard();
     return gz;
 }
 
@@ -357,41 +459,51 @@ std::string multimember_trace(TestEnvironment& env, int events,
 TEST_SUITE("Truncated") {
     TEST_CASE("a cut trace keeps the complete lines of its cut member") {
         Runtime rt(4);
-        TestEnvironment env(10);
+        dftu_utils_test::TestEnvironment env(10);
         const auto full = multimember_trace(env, 4000, "full.pfw.gz");
         for (double frac : {0.05, 0.5, 0.9, 0.99}) {
             CAPTURE(frac);
             const auto cut = write_prefix(
                 full,
-                (fs::path(env.get_dir()) /
-                 ("cut" + std::to_string(static_cast<int>(frac * 100)) +
-                  ".pfw.gz"))
-                    .string(),
+                dstd::String(
+                    (dstd::Path(env.dir()) /
+                     ("cut" + dstd::to_string(static_cast<int>(frac * 100)) +
+                      ".pfw.gz"))
+                        .str()),
                 frac);
-            auto st = Indexer::open({cut}, with_runtime(rt)).build();
-            CHECK(st.ready == std::vector<std::string>{cut});
+            auto st = dftu_utils_test::ok(
+                dftu_utils_test::ok(
+                    Indexer::open({dstd::String(dstd::StringView(cut))},
+                                  with_runtime(rt)))
+                    .build());
+            CHECK(st.ready == names_of({cut}));
             const auto got = indexed(cut);
             const auto ref = zlib_prefix(cut);
             CHECK(got.lines == ref.lines);
             CHECK(got.truncated);
-            CHECK(got.members_end == fs::file_size(cut));
+            CHECK(got.members_end == dstd::fs::file_size(cut).value());
         }
         rt.shutdown();
     }
 
     TEST_CASE("a cut trace whose tail reads as a 4 GiB ISIZE stays small") {
         Runtime rt(4);
-        TestEnvironment env(10);
+        dftu_utils_test::TestEnvironment env(10);
         const auto full = multimember_trace(env, 4000, "full.pfw.gz");
         const auto cut = write_prefix(
-            full, (fs::path(env.get_dir()) / "cut.pfw.gz").string(), 0.5);
+            full, dstd::String((dstd::Path(env.dir()) / "cut.pfw.gz").str()),
+            0.5);
         {
-            std::fstream f(cut,
-                           std::ios::in | std::ios::out | std::ios::binary);
-            f.seekp(-4, std::ios::end);
-            f.write("\xfe\xff\xff\xff", 4);
+            auto f = dstd::File::open(cut, WRITE_EXISTING);
+            REQUIRE(f);
+            REQUIRE(f->write_all_at(f->size().value() - 4,
+                                    dstd::ByteView("\xfe\xff\xff\xff", 4)));
         }
-        Indexer::open({cut}, with_runtime(rt)).build();
+        dftu_utils_test::ok(
+            dftu_utils_test::ok(
+                Indexer::open({dstd::String(dstd::StringView(cut))},
+                              with_runtime(rt)))
+                .build());
         rusage ru{};
         getrusage(RUSAGE_SELF, &ru);
 #if defined(__APPLE__)
@@ -399,7 +511,7 @@ TEST_SUITE("Truncated") {
 #else
         const auto peak = static_cast<std::uint64_t>(ru.ru_maxrss) * 1024;
 #endif
-        CHECK(peak < (std::uint64_t{1} << 30));
+        if (!instrumentation::active()) CHECK(peak < (std::uint64_t{1} << 30));
         const auto got = indexed(cut);
         CHECK(got.lines == zlib_prefix(cut).lines);
         CHECK(got.truncated);
@@ -408,11 +520,16 @@ TEST_SUITE("Truncated") {
 
     TEST_CASE("a cut single-member trace is not empty") {
         Runtime rt(2);
-        TestEnvironment env(10);
+        dftu_utils_test::TestEnvironment env(10);
         const auto full = env.create_dft_test_gzip_file(3000);
         const auto cut = write_prefix(
-            full, (fs::path(env.get_dir()) / "cut.pfw.gz").string(), 0.5);
-        Indexer::open({cut}, with_runtime(rt)).build();
+            full, dstd::String((dstd::Path(env.dir()) / "cut.pfw.gz").str()),
+            0.5);
+        dftu_utils_test::ok(
+            dftu_utils_test::ok(
+                Indexer::open({dstd::String(dstd::StringView(cut))},
+                              with_runtime(rt)))
+                .build());
         const auto got = indexed(cut);
         CHECK(got.lines == zlib_prefix(cut).lines);
         CHECK(got.lines > 0);
@@ -422,9 +539,13 @@ TEST_SUITE("Truncated") {
 
     TEST_CASE("a complete trace is unchanged") {
         Runtime rt(4);
-        TestEnvironment env(10);
+        dftu_utils_test::TestEnvironment env(10);
         const auto full = multimember_trace(env, 4000, "full.pfw.gz");
-        Indexer::open({full}, with_runtime(rt)).build();
+        dftu_utils_test::ok(
+            dftu_utils_test::ok(
+                Indexer::open({dstd::String(dstd::StringView(full))},
+                              with_runtime(rt)))
+                .build());
         const auto got = indexed(full);
         const auto ref = zlib_prefix(full);
         CHECK(got.lines == ref.lines);
@@ -435,20 +556,24 @@ TEST_SUITE("Truncated") {
 
     TEST_CASE("a corrupt last member is neither recovered nor reported") {
         Runtime rt(4);
-        TestEnvironment env(10);
+        dftu_utils_test::TestEnvironment env(10);
         const auto full = multimember_trace(env, 4000, "full.pfw.gz");
         const auto ref = zlib_prefix(full);
         REQUIRE(ref.member_starts.size() > 1);
         const std::size_t last = ref.member_starts.back();
         {
-            std::fstream f(full,
-                           std::ios::in | std::ios::out | std::ios::binary);
-            f.seekp(static_cast<std::streamoff>(last + 10));
-            const std::size_t n = fs::file_size(full) - last - 10;
-            std::string noise(n, static_cast<char>(0xFF));
-            f.write(noise.data(), static_cast<std::streamsize>(n));
+            auto f = dstd::File::open(full, WRITE_EXISTING);
+            REQUIRE(f);
+            const std::size_t n = f->size().value() - last - 10;
+            dstd::String noise(n, static_cast<char>(0xFF));
+            REQUIRE(
+                f->write_all_at(last + 10, dstd::ByteView(noise.data(), n)));
         }
-        Indexer::open({full}, with_runtime(rt)).build();
+        dftu_utils_test::ok(
+            dftu_utils_test::ok(
+                Indexer::open({dstd::String(dstd::StringView(full))},
+                              with_runtime(rt)))
+                .build());
         const auto got = indexed(full);
         CHECK(got.lines == zlib_prefix(full).lines);
         CHECK(got.members == ref.complete_members - 1);
@@ -458,82 +583,80 @@ TEST_SUITE("Truncated") {
 
     TEST_CASE("a cut trace completed later is re-indexed and cleared") {
         Runtime rt(4);
-        TestEnvironment env(10);
+        dftu_utils_test::TestEnvironment env(10);
         const auto full = multimember_trace(env, 4000, "full.pfw.gz");
-        const auto path = (fs::path(env.get_dir()) / "live.pfw.gz").string();
+        const dstd::String path((dstd::Path(env.dir()) / "live.pfw.gz").str());
         write_prefix(full, path, 0.6);
-        auto ix = Indexer::open({path}, with_runtime(rt));
-        ix.build();
+        auto ix = dftu_utils_test::ok(Indexer::open(
+            {dstd::String(dstd::StringView(path))}, with_runtime(rt)));
+        dftu_utils_test::ok(ix.build());
         REQUIRE(indexed(path).truncated);
-        fs::copy_file(full, path, fs::copy_options::overwrite_existing);
+        REQUIRE(dstd::fs::copy_file(full, path, dstd::fs::CopyMode::Overwrite)
+                    .has_value());
         touch_later(path);
-        CHECK(ix.build().indexed == 1);
+        CHECK(dftu_utils_test::ok(ix.build()).indexed == 1);
         const auto got = indexed(path);
         CHECK_FALSE(got.truncated);
         CHECK(got.lines == zlib_prefix(full).lines);
         rt.shutdown();
     }
 
-    TEST_CASE("an index in another format is rebuilt") {
-        Runtime rt(4);
-        TestEnvironment env(10);
-        const auto trace = env.create_dft_test_gzip_file(50);
-        auto ix = Indexer::open({trace}, with_runtime(rt));
-        ix.build();
-        dftracer::utils::index::store::RocksDBManager::instance().reset(
-            index_of(trace));
-        {
-            dftracer::utils::index::store::RocksDatabase db(index_of(trace));
-            namespace layout = dftracer::utils::index::store::layout;
-            REQUIRE(db.del(layout::format_key()).ok());
-        }
-        CHECK(ix.status().needs_work == std::vector<std::string>{trace});
-        CHECK(ix.build().indexed == 1);
-        CHECK(ix.status().needs_work.empty());
-        rt.shutdown();
-    }
-
     TEST_CASE("readers return the recovered lines of a cut trace") {
         Runtime rt(4);
-        TestEnvironment env(10);
+        dftu_utils_test::TestEnvironment env(10);
         const auto full = multimember_trace(env, 4000, "full.pfw.gz");
         const auto cut = write_prefix(
-            full, (fs::path(env.get_dir()) / "cut90.pfw.gz").string(), 0.9);
+            full, dstd::String((dstd::Path(env.dir()) / "cut90.pfw.gz").str()),
+            0.9);
         const auto ref = zlib_prefix(cut);
         REQUIRE(ref.events > 0);
 
-        const auto count_lines = [](const std::string& path)
+        const auto count_lines = [](const dstd::String& path)
             -> dftracer::utils::coro::CoroTask<std::size_t> {
-            dftracer::utils::utilities::reader::TraceReader reader(
-                {.file_path = path});
-            auto gen = reader.read_lines();
+            dftracer::utils::trace::reader::TraceReader reader(
+                {.file_path = dstd::String(path)});
+            auto gen = dftu_utils_test::ok_items(reader.read_lines());
             std::size_t n = 0;
             while (auto line = co_await gen.next()) ++n;
             co_return n;
         };
-        CHECK(count_lines(cut).get() == ref.lines);  // sequential, no index
+        CHECK(dftu_utils_test::ok(count_lines(cut).get()) ==
+              ref.lines);  // sequential, no index
 
-        Indexer::open({cut}, with_runtime(rt)).build();
-        CHECK(count_lines(cut).get() == ref.lines);  // indexed
+        dftu_utils_test::ok(
+            dftu_utils_test::ok(
+                Indexer::open({dstd::String(dstd::StringView(cut))},
+                              with_runtime(rt)))
+                .build());
+        CHECK(dftu_utils_test::ok(count_lines(cut).get()) ==
+              ref.lines);  // indexed
 
-        auto df =
-            dftracer::utils::trace::views::View::from_file(cut).collect().get();
+        auto df = dftu_utils_test::ok(
+            dftracer::utils::trace::views::View::from_file(dstd::String(cut))
+                .collect()
+                .get());
         CHECK(static_cast<std::size_t>(df.num_rows()) == ref.events);
         rt.shutdown();
     }
 
     TEST_CASE("status and files report the cut trace") {
         Runtime rt(4);
-        TestEnvironment env(10);
+        dftu_utils_test::TestEnvironment env(10);
         const auto full = multimember_trace(env, 4000, "full.pfw.gz");
         const auto cut = write_prefix(
-            full, (fs::path(env.get_dir()) / "cut.pfw.gz").string(), 0.7);
-        auto ix = Indexer::open({full, cut}, with_runtime(rt));
-        ix.build();
-        auto st = ix.status();
-        CHECK(sorted(st.ready) == sorted({full, cut}));
-        CHECK(st.truncated == std::vector<std::string>{cut});
-        for (const auto& f : ix.files()) CHECK(f.truncated == (f.path == cut));
+            full, dstd::String((dstd::Path(env.dir()) / "cut.pfw.gz").str()),
+            0.7);
+        auto ix = dftu_utils_test::ok(
+            Indexer::open({dstd::String(dstd::StringView(full)),
+                           dstd::String(dstd::StringView(cut))},
+                          with_runtime(rt)));
+        dftu_utils_test::ok(ix.build());
+        auto st = dftu_utils_test::ok(ix.status());
+        CHECK(sorted(st.ready) == sorted(names_of({full, cut})));
+        CHECK(st.truncated == names_of({cut}));
+        for (const auto& f : dftu_utils_test::ok(ix.files()))
+            CHECK(f.truncated ==
+                  (dstd::StringView(f.path) == dstd::StringView(cut)));
         rt.shutdown();
     }
 }

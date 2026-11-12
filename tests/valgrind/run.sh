@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
 #
 # Valgrind test runner for dftracer-utils, executed inside the Linux container
 # defined by tests/valgrind/Dockerfile. Invoked by the `valgrind*` Makefile
@@ -59,6 +60,39 @@ DEFAULT_PYTEST_FILES=(tests/python)
 log() { printf '\033[1;34m[valgrind]\033[0m %s\n' "$*"; }
 err() { printf '\033[1;31m[valgrind]\033[0m %s\n' "$*" >&2; }
 
+# Print a failed test's logs as soon as it ends, so CI shows why it failed
+# while the shard still runs. On GitHub Actions the logs fold into a group and
+# the test gets an error annotation on the run page.
+show_failure() {
+  # Parallel tests fail at once: hold a lock so their logs do not interleave.
+  if command -v flock >/dev/null 2>&1; then
+    mkdir -p "$LOG_DIR"
+    (
+      flock 9
+      print_failure "$@"
+    ) 9>"$LOG_DIR/.print.lock"
+  else
+    print_failure "$@"
+  fi
+}
+
+print_failure() {
+  local title="$1"
+  shift
+  if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
+    printf '::error title=Valgrind::%s\n' "$title"
+    printf '::group::%s\n' "$title"
+  fi
+  local f
+  for f in "$@"; do
+    [[ -e "$f" ]] || continue
+    printf '===== %s =====\n' "$(basename "$f")"
+    sed -n '1,200p' "$f" || true
+  done
+  [[ -n "${GITHUB_ACTIONS:-}" ]] && printf '::endgroup::\n'
+  return 0
+}
+
 # Seconds since the epoch, sub-second where available. BSD date has no %N.
 now_s() {
   local t
@@ -100,7 +134,6 @@ configure_and_build_cpp() {
     -DDFTRACER_UTILS_BUILD_BINARIES=ON \
     -DDFTRACER_UTILS_BUILD_PYTHON=OFF \
     -DDFTRACER_UTILS_BUILD_STATIC=OFF \
-    -DDFTRACER_UTILS_ROCKSDB_PREFIX="${DFTRACER_UTILS_ROCKSDB_PREFIX:-}" \
     -DDFTRACER_UTILS_VALGRIND_MODE=ON \
     -DCMAKE_C_COMPILER_LAUNCHER=$COMPILER_LAUNCHER \
     -DCMAKE_CXX_COMPILER_LAUNCHER=$COMPILER_LAUNCHER
@@ -126,7 +159,9 @@ run_cpp() {
   # workers / spawn handoff threads in tight loops and livelock under it (they
   # exist for the tsan/asan presets, which cover their threading). Their memory
   # paths are still exercised by the other pipeline tests that do run here.
-  local default_exclude="test_reader_robustness|test_blocking_handoff|test_dynamic_workers|test_view_duql_joins"
+  # memory/test_global_new checks that the executable's operator new is our
+  # heap, and Valgrind replaces operator new with its own.
+  local default_exclude="test_reader_robustness|test_blocking_handoff|test_dynamic_workers|test_view_duql_joins|memory/test_global_new"
   local exclude_pat="${VALGRIND_CTEST_EXCLUDE:-$default_exclude}"
 
   local selector
@@ -330,6 +365,21 @@ PY
     err "C++ Valgrind failures: ${failed_names[*]}"
     return 1
   fi
+  run_direct_tests
+}
+
+# Tests labelled valgrind_direct run Valgrind themselves, with a planted bug
+# that they expect it to report. They run as plain ctest tests, once per run
+# (shard 1), and are never wrapped in a second Valgrind.
+run_direct_tests() {
+  [[ "${VALGRIND_SHARD:-1/1}" == 1/* ]] || return 0
+  log "Running the tests that call Valgrind themselves"
+  ctest --test-dir "$BUILD_DIR" -L valgrind_direct \
+    -R "${VALGRIND_CTEST_FILTER:-.}" --no-tests=ignore --output-on-failure \
+    2>&1 | tee "$LOG_DIR/cpp/direct.log" || {
+    err "A test that calls Valgrind itself failed"
+    return 1
+  }
 }
 
 # Concurrency for parallel valgrind runs
@@ -363,7 +413,7 @@ run_cpp_one() {
   local -a test_env=()
   if [[ -n "$env_b64" ]]; then
     local line
-    while IFS= read -r line; do
+    while IFS= read -r line || [[ -n "$line" ]]; do
       [[ -n "$line" ]] && test_env+=("$line")
     done < <(printf '%s' "$env_b64" | base64 -d)
   fi
@@ -380,14 +430,24 @@ run_cpp_one() {
     fi
   fi
 
+  # A forked child ends with blocks that its parent's threads own. Those threads
+  # do not exist in the child, so Valgrind reports the blocks as lost and each
+  # child exits with the error code. Memory errors in the child still fail.
+  # The same holds for a child that starts its own runtime and ends with _exit
+  # while those threads run.
+  local -a leak_errors=(--errors-for-leak-kinds=definite,indirect)
+  case "$name" in
+  store/test_store_fork | runtime/test_process_runtime | \
+    pipeline/test_runtime_elasticity | runtime/test_io_op)
+    leak_errors=(--errors-for-leak-kinds=none)
+    ;;
+  esac
+
   local -a doctest_args=()
   case "${name##*/}" in
   test_channel | test_reader | test_reader_stream | \
     test_reader_line_byte_stream | test_reader_multi_lines_byte_stream | \
-    test_reader_formats | test_indexed_file_line_iterator | \
-    test_indexed_file_bytes_iterator | \
-    test_async_indexed_file_line_generator | \
-    test_async_indexed_file_bytes_generator)
+    test_reader_formats | test_async_indexed_file_line_generator)
     doctest_args=(--test-suite=vg)
     ;;
   esac
@@ -402,10 +462,10 @@ run_cpp_one() {
     valgrind "${COMMON_OPTS[@]}" "${CPP_OPTS[@]}" "${extra[@]}" \
     --leak-check=full \
     --show-leak-kinds=definite,indirect \
-    --errors-for-leak-kinds=definite,indirect \
+    "${leak_errors[@]}" \
     --suppressions="$SUPP_DIR/valgrind-cpp.supp" \
     --log-file="${logf}.%p" \
-    "$exe" "${doctest_args[@]}" >/dev/null 2>&1) || rc=$?
+    "$exe" "${doctest_args[@]}" >"${logf}.out" 2>&1) || rc=$?
   printf '%s\t%s\n' "$rc" "$name" >"$rdir/${name//\//_}.rc"
   printf '%s\t%s\n' "$name" \
     "$(awk -v a="$start_ts" -v b="$(now_s)" 'BEGIN { printf "%.1f", b - a }')" \
@@ -419,6 +479,7 @@ run_cpp_one() {
   else
     err "C++  ✗ FAILED (exit $rc): $name"
   fi
+  ((rc == 0)) || show_failure "C++ $name (exit $rc)" "$logf" "$logf".*
 }
 
 run_mpi() {
@@ -440,7 +501,6 @@ run_mpi() {
     -DDFTRACER_UTILS_BUILD_BINARIES=ON \
     -DDFTRACER_UTILS_BUILD_PYTHON=OFF \
     -DDFTRACER_UTILS_BUILD_STATIC=OFF \
-    -DDFTRACER_UTILS_ROCKSDB_PREFIX="${DFTRACER_UTILS_ROCKSDB_PREFIX:-}" \
     -DDFTRACER_UTILS_VALGRIND_MODE=ON \
     -DMPIEXEC_EXECUTABLE="$wrapper" \
     -DCMAKE_C_COMPILER_LAUNCHER=$COMPILER_LAUNCHER \
@@ -483,6 +543,9 @@ run_py_one() {
   fname="$(basename "$file" .py)"
   local logf="$LOG_DIR/python-${fname}.log"
 
+  # A test that forks and ends the child with os._exit leaves it holding the
+  # parent threads' memory with no pointer to it, so the child's report is
+  # silenced. A child that execs is still traced with --trace-children.
   local -a tc_opts=()
   [[ "${VALGRIND_PY_TRACE_CHILDREN:-0}" == "1" ]] && tc_opts+=(--trace-children=yes)
 
@@ -495,6 +558,7 @@ run_py_one() {
   (PYTHONMALLOC=malloc PYTHONDONTWRITEBYTECODE=1 \
     "${py_tmo_cmd[@]}" \
     valgrind --tool=memcheck --num-callers=20 --fair-sched=yes "${tc_opts[@]}" ${VALGRIND_EXTRA_OPTS:-} \
+    --child-silent-after-fork=yes \
     --leak-check=full \
     --show-leak-kinds=definite,indirect \
     --suppressions="$SUPP_DIR/valgrind-python.supp" \
@@ -516,7 +580,18 @@ run_py_one() {
     err "Python ✗ TIMEOUT/KILLED ${py_timeout}s: $fname"
   else
     err "Python ✗ FAILED (exit $rc): $fname"
-    sed -n '1,30p' "$logf" >&2 || true
+    show_failure "Python $fname (exit $rc)" "$logf"
+  fi
+  # Report this file's Valgrind findings in our code now, not only in the
+  # summary at the end of the shard.
+  if ((rc == 0 || rc == 5)) && compgen -G "$xmldir/p.*.${fname}.xml" >/dev/null; then
+    local found
+    if ! found="$(python3 "$SUPP_DIR/ours_only.py" --match "${VALGRIND_OURS_MATCH:-dftracer}" "$xmldir"/p.*."${fname}".xml 2>&1)"; then
+      err "Python ✗ Valgrind findings in our code: $fname"
+      local tmpf="$LOG_DIR/python-${fname}.findings.txt"
+      printf '%s\n' "$found" >"$tmpf"
+      show_failure "Python $fname: Valgrind findings in our code" "$tmpf"
+    fi
   fi
 }
 

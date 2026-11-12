@@ -1,35 +1,39 @@
+// SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_DATAFRAME_LAZY_OPS_H
 #define DFTRACER_UTILS_DATAFRAME_LAZY_OPS_H
 
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <cstdint>
 #include <memory>
-#include <string>
 #include <type_traits>
 #include <utility>
-#include <vector>
 
 namespace dftracer::utils::dataframe {
 
-/// The LazyFrame builder surface for a type that wraps a LazyFrame and wants
-/// its chain to keep its own type (a View stays a View through
+/// The @ref LazyFrame builder surface for a type that wraps a @ref LazyFrame
+/// and wants its chain to keep its own type (a View stays a View through
 /// filter/select/sort). `Derived` provides `const LazyFrame& lazy() const` and
 /// `Derived with_lazy(LazyFrame) const`. Builders whose result the wrapped
-/// source can still own return `Derived`; the rest return a plain LazyFrame.
+/// source can still own return `Derived`; the rest return a plain @ref
+/// LazyFrame.
 template <class Derived>
 class LazyOps {
    public:
-    Derived select(std::vector<std::string> names) const {
+    Derived select(dstd::Vector<dstd::String> names) const {
         return wrap(lf().select(std::move(names)));
     }
     Derived filter(Expr predicate) const {
         return wrap(lf().filter(std::move(predicate)));
     }
-    Derived with_column(std::string name, Expr expr) const {
+    Derived with_column(dstd::String name, Expr expr) const {
         return wrap(lf().with_column(std::move(name), std::move(expr)));
     }
-    Derived rename(std::vector<std::string> names) const {
+    Derived rename(dstd::Vector<dstd::String> names) const {
         return wrap(lf().rename(std::move(names)));
     }
     Derived slice(std::int64_t offset, std::int64_t len) const {
@@ -37,34 +41,35 @@ class LazyOps {
     }
     Derived head(std::int64_t n) const { return wrap(lf().head(n)); }
     Derived tail(std::int64_t n) const { return wrap(lf().tail(n)); }
-    Derived topk(std::string name, std::int64_t k, bool largest = true) const {
+    Derived topk(dstd::String name, std::int64_t k, bool largest = true) const {
         return wrap(lf().topk(std::move(name), k, largest));
     }
-    Derived sort_by(std::string name, bool descending = false) const {
+    Derived sort_by(dstd::String name, bool descending = false) const {
         return wrap(lf().sort_by(std::move(name), descending));
     }
-    Derived sort_by_multi(std::vector<std::string> by,
+    Derived sort_by_multi(dstd::Vector<dstd::String> by,
                           bool descending = false) const {
         return wrap(lf().sort_by_multi(std::move(by), descending));
     }
-    Derived sort_by_multi(std::vector<std::string> by,
-                          std::vector<bool> descending) const {
+    Derived sort_by_multi(dstd::Vector<dstd::String> by,
+                          dstd::Vector<bool> descending) const {
         return wrap(lf().sort_by_multi(std::move(by), std::move(descending)));
     }
-    Derived group_by(std::string key, std::vector<GroupAgg> aggs) const {
+    Derived group_by(dstd::String key, dstd::Vector<GroupAgg> aggs) const {
         return wrap(lf().group_by(std::move(key), std::move(aggs)));
     }
-    Derived group_by(std::vector<std::string> keys, std::vector<GroupAgg> aggs,
-                     std::vector<AggDynSpec> dyn = {},
-                     std::string dyn_prefix = {}) const {
+    Derived group_by(dstd::Vector<dstd::String> keys,
+                     dstd::Vector<GroupAgg> aggs,
+                     dstd::Vector<AggDynSpec> dyn = {},
+                     dstd::String dyn_prefix = {}) const {
         return wrap(lf().group_by(std::move(keys), std::move(aggs),
                                   std::move(dyn), std::move(dyn_prefix)));
     }
-    Derived group_by(Expr key, std::vector<AggExprSpec> aggs) const {
+    Derived group_by(Expr key, dstd::Vector<AggExprSpec> aggs) const {
         return wrap(lf().group_by(std::move(key), std::move(aggs)));
     }
-    Derived group_by(std::vector<Expr> keys,
-                     std::vector<AggExprSpec> aggs) const {
+    Derived group_by(dstd::Vector<Expr> keys,
+                     dstd::Vector<AggExprSpec> aggs) const {
         return wrap(lf().group_by(std::move(keys), std::move(aggs)));
     }
     Derived reduce(Agg agg) const { return wrap(lf().reduce(agg)); }
@@ -73,7 +78,7 @@ class LazyOps {
     }
     Derived auto_spill() const { return wrap(lf().auto_spill()); }
 
-    LazyGroupBy group_by(std::vector<std::string> keys) const {
+    LazyGroupBy group_by(dstd::Vector<dstd::String> keys) const {
         return lf().group_by(std::move(keys));
     }
     LazyFrame drop_nulls() const { return lf().drop_nulls(); }
@@ -82,62 +87,62 @@ class LazyOps {
     LazyFrame fill_null(T value) const {
         return lf().fill_null(value);
     }
-    LazyFrame take(std::vector<std::int64_t> indices) const {
+    LazyFrame take(dstd::Vector<std::int64_t> indices) const {
         return lf().take(std::move(indices));
     }
     LazyFrame filter_mask(Series mask) const {
         return lf().filter_mask(std::move(mask));
     }
     LazyFrame reverse() const { return lf().reverse(); }
-    LazyFrame with_row_index(std::string name) const {
+    LazyFrame with_row_index(dstd::String name) const {
         return lf().with_row_index(std::move(name));
     }
     LazyFrame null_count() const { return lf().null_count(); }
-    LazyFrame explode(std::string column) const {
+    LazyFrame explode(dstd::String column) const {
         return lf().explode(std::move(column));
     }
-    LazyFrame unnest(std::string column, bool keep_empty = false) const {
+    LazyFrame unnest(dstd::String column, bool keep_empty = false) const {
         return lf().unnest(std::move(column), keep_empty);
     }
-    LazyFrame unpivot(std::vector<std::string> id_vars,
-                      std::vector<std::string> value_vars) const {
+    LazyFrame unpivot(dstd::Vector<dstd::String> id_vars,
+                      dstd::Vector<dstd::String> value_vars) const {
         return lf().unpivot(std::move(id_vars), std::move(value_vars));
     }
-    LazyFrame melt(std::vector<std::string> id_vars,
-                   std::vector<std::string> value_vars) const {
+    LazyFrame melt(dstd::Vector<dstd::String> id_vars,
+                   dstd::Vector<dstd::String> value_vars) const {
         return lf().melt(std::move(id_vars), std::move(value_vars));
     }
-    LazyFrame unique(std::vector<std::string> subset = {}) const {
+    LazyFrame unique(dstd::Vector<dstd::String> subset = {}) const {
         return lf().unique(std::move(subset));
     }
-    LazyFrame drop_duplicates(std::vector<std::string> subset = {}) const {
+    LazyFrame drop_duplicates(dstd::Vector<dstd::String> subset = {}) const {
         return lf().drop_duplicates(std::move(subset));
     }
     LazyFrame sample(std::int64_t n, std::uint64_t seed = 0) const {
         return lf().sample(n, seed);
     }
-    LazyFrame head_by(std::vector<std::string> keys, std::int64_t n) const {
+    LazyFrame head_by(dstd::Vector<dstd::String> keys, std::int64_t n) const {
         return lf().head_by(std::move(keys), n);
     }
     LazyFrame is_duplicated() const { return lf().is_duplicated(); }
     LazyFrame is_unique() const { return lf().is_unique(); }
-    LazyFrame group_by_dynamic(std::string time_col, std::int64_t every,
-                               std::int64_t period, std::vector<GroupAgg> aggs,
+    LazyFrame group_by_dynamic(dstd::String time_col, std::int64_t every,
+                               std::int64_t period, dstd::Vector<GroupAgg> aggs,
                                std::int64_t origin = 0,
                                bool origin_min = false) const {
         return lf().group_by_dynamic(std::move(time_col), every, period,
                                      std::move(aggs), origin, origin_min);
     }
-    LazyFrame join(LazyFrame other, std::vector<std::string> left_on,
-                   std::vector<std::string> right_on,
-                   JoinHow how = JoinHow::Inner, std::string suffix = "_right",
+    LazyFrame join(LazyFrame other, dstd::Vector<dstd::String> left_on,
+                   dstd::Vector<dstd::String> right_on,
+                   JoinHow how = JoinHow::Inner, dstd::String suffix = "_right",
                    bool nulls_equal = false) const {
         return lf().join(std::move(other), std::move(left_on),
                          std::move(right_on), how, std::move(suffix),
                          nulls_equal);
     }
-    LazyFrame join(LazyFrame other, std::vector<std::string> on,
-                   JoinHow how = JoinHow::Inner, std::string suffix = "_right",
+    LazyFrame join(LazyFrame other, dstd::Vector<dstd::String> on,
+                   JoinHow how = JoinHow::Inner, dstd::String suffix = "_right",
                    bool nulls_equal = false) const {
         return lf().join(std::move(other), std::move(on), how,
                          std::move(suffix), nulls_equal);
@@ -148,49 +153,55 @@ class LazyOps {
     LazyFrame compare_agg(LazyFrame variant, std::int64_t n_key) const {
         return lf().compare_agg(std::move(variant), n_key);
     }
-    LazyFrame asof(LazyFrame other, std::string on, std::vector<std::string> by,
-                   AsofDirection direction,
-                   std::optional<double> tolerance = std::nullopt) const {
+    LazyFrame asof(LazyFrame other, dstd::String on,
+                   dstd::Vector<dstd::String> by, AsofDirection direction,
+                   dstd::Optional<double> tolerance = dstd::nullopt) const {
         return lf().asof(std::move(other), std::move(on), std::move(by),
                          direction, tolerance);
     }
-    LazyFrame interval(LazyFrame other, std::string point, std::string lo,
-                       std::string hi, std::vector<std::string> by,
+    LazyFrame interval(LazyFrame other, dstd::String point, dstd::String lo,
+                       dstd::String hi, dstd::Vector<dstd::String> by,
                        bool outer = false) const {
         return lf().interval(std::move(other), std::move(point), std::move(lo),
                              std::move(hi), std::move(by), outer);
     }
-    LazyFrame frame_op(std::string name, OpArgs args,
-                       std::vector<LazyFrame> others = {},
-                       std::vector<std::string> out_names = {}) const {
+    LazyFrame frame_op(dstd::String name, OpArgs args,
+                       dstd::Vector<LazyFrame> others = {},
+                       dstd::Vector<dstd::String> out_names = {}) const {
         return lf().frame_op(std::move(name), std::move(args),
                              std::move(others), std::move(out_names));
     }
-    LazyFrame pivot(std::string index, std::string on, std::string values,
-                    std::string agg = "first") const {
+    LazyFrame pivot(dstd::String index, dstd::String on, dstd::String values,
+                    dstd::String agg = "first") const {
         return lf().pivot(std::move(index), std::move(on), std::move(values),
                           std::move(agg));
     }
-    LazyFrame to_dummies(std::string column) const {
+    LazyFrame to_dummies(dstd::String column) const {
         return lf().to_dummies(std::move(column));
     }
     LazyFrame describe() const { return lf().describe(); }
-    LazyFrame op(std::string name, OpArgs args) const {
+    LazyFrame op(dstd::String name, OpArgs args) const {
         return lf().op(std::move(name), std::move(args));
     }
 
-    std::vector<std::string> schema() const { return lf().schema(); }
+    dstd::Vector<dstd::String> schema() const { return lf().schema(); }
     Schema output_schema() const { return lf().output_schema(); }
-    std::string explain() const { return lf().explain(); }
-    coro::AsyncGenerator<DataFrame> stream(std::int64_t morsel_rows = 0) const {
-        return lf().stream(morsel_rows);
+    dstd::String explain() const { return lf().explain(); }
+    dstd::Result<void> status() const { return lf().status(); }
+    coro::AsyncGenerator<dstd::Result<DataFrame>> stream(
+        std::int64_t batch_size = 0) const {
+        return lf().stream(batch_size);
     }
-    std::unique_ptr<Cursor> open_cursor() const { return lf().open_cursor(); }
-    coro::CoroTask<DataFrame> collect(std::int64_t morsel_rows = 0) const {
-        return lf().collect(morsel_rows);
+    dstd::Result<dstd::UniquePtr<Cursor>> open_cursor() const {
+        return lf().open_cursor();
+    }
+    coro::CoroTask<dstd::Result<DataFrame>> collect(
+        std::int64_t batch_size = 0) const {
+        return lf().collect(batch_size);
     }
 
-    /// The wrapped plan, for passing this chain where a LazyFrame is taken.
+    /// The wrapped plan, for passing this chain where a @ref LazyFrame is
+    /// taken.
     operator LazyFrame() const { return lf(); }
 
    protected:

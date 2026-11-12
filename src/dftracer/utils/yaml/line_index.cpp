@@ -837,6 +837,9 @@ class Builder {
                          const PlainLine& pl);
     bool plain_key_value(std::uint32_t j, std::uint32_t line_start,
                          const PlainLine& pl, std::uint32_t n);
+    DFTRACER_UTILS_NOINLINE bool duplicate_key(std::uint32_t j,
+                                               std::uint32_t at,
+                                               dstd::StringView key);
     const Batch* batch_ = nullptr;
     bool structure(std::uint32_t j, const LineParts& pt);
     DFTRACER_UTILS_NOINLINE bool marker(std::uint32_t j);
@@ -1692,7 +1695,7 @@ inline bool Builder::plain_key_value(std::uint32_t j, std::uint32_t line_start,
                        [&](std::uint32_t other, dstd::StringView text) {
                            return same_key(other, text);
                        })) [[unlikely]]
-            return fail(j, pl.key_s, dstd::fmt<"duplicate key '{}'">(key));
+            return duplicate_key(j, pl.key_s, key);
     }
     if ((pl.flags & line_flag::VAL_EMPTY) != 0) {
         pending_ = j;
@@ -1707,6 +1710,11 @@ inline bool Builder::plain_key_value(std::uint32_t j, std::uint32_t line_start,
         plain_pending_ = true;
     }
     return true;
+}
+
+bool Builder::duplicate_key(std::uint32_t j, std::uint32_t at,
+                            dstd::StringView key) {
+    return fail(j, at, dstd::fmt<"duplicate key '{}'">(key));
 }
 
 // Reads a line of any kind: open scalars, TABs, escapes, roots, markers and

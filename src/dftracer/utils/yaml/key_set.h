@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_YAML_KEY_SET_H
 #define DFTRACER_UTILS_YAML_KEY_SET_H
 
+#include <dftracer/utils/common/export.h>
 #include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/raw_buffer.h>
 #include <dftracer/utils/dstd/string.h>
@@ -82,14 +83,9 @@ class KeySet {
         } else {
             std::uint64_t& word = level.bloom[(hash >> 6) & 3];
             const std::uint64_t bit = std::uint64_t{1} << (hash & 63);
-            if ((word & bit) != 0) {
-                for (std::uint32_t i = 0; i < index; ++i) {
-                    const std::uint64_t entry = keys_[level.base + i];
-                    if (static_cast<std::uint32_t>(entry >> 32) == hash &&
-                        same(static_cast<std::uint32_t>(entry), key))
-                        return false;
-                }
-            }
+            if ((word & bit) != 0 && has_key(level, hash, key, same))
+                [[unlikely]]
+                return false;
             word |= bit;
         }
         ++level.count;
@@ -105,10 +101,23 @@ class KeySet {
    private:
     static constexpr std::size_t LINEAR_KEY_LIMIT = 64;
 
+    // Out of line, as each is rare: the hot add stays small enough to inline.
     template <class Same>
-    bool table_insert(Level& level, std::size_t slot_of_level,
-                      std::uint32_t hash, std::uint32_t id,
-                      dstd::StringView key, Same&& same) {
+    DFTRACER_UTILS_NOINLINE bool has_key(const Level& level, std::uint32_t hash,
+                                         dstd::StringView key, Same& same) {
+        for (std::uint32_t i = 0; i < level.count; ++i) {
+            const std::uint64_t entry = keys_[level.base + i];
+            if (static_cast<std::uint32_t>(entry >> 32) == hash &&
+                same(static_cast<std::uint32_t>(entry), key))
+                return true;
+        }
+        return false;
+    }
+
+    template <class Same>
+    DFTRACER_UTILS_NOINLINE bool table_insert(
+        Level& level, std::size_t slot_of_level, std::uint32_t hash,
+        std::uint32_t id, dstd::StringView key, Same&& same) {
         dstd::Vector<std::uint64_t>& table = tables_[slot_of_level];
         const std::size_t want =
             (static_cast<std::size_t>(level.count) + 1) * 2;

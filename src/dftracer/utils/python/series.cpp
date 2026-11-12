@@ -12,6 +12,7 @@
 #include <dftracer/utils/common/config.h>  // DFTRACER_UTILS_ENABLE_ARROW
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/python/py_method.h>
 #include <dftracer/utils/python/py_type_helpers.h>
 #include <dftracer/utils/python/series.h>
@@ -33,6 +34,18 @@ void Series_dealloc(SeriesObject* self) {
 }
 
 }  // namespace
+
+Series named_like(Series out, const Series& source) {
+    if (out.valid() && source.valid())
+        out.handle()->name = source.handle()->name;
+    return out;
+}
+
+Series named_like(Series out, const Series& a, const Series& b) {
+    if (!out.valid()) return out;
+    out.handle()->name = a.name() == b.name() ? a.handle()->name : nullptr;
+    return out;
+}
 
 PyObject* make_series(Series&& col) {
     if (!col.valid()) {
@@ -204,6 +217,26 @@ PyObject* Series_get_is_json(PyObject* self, void*) {
     Series* a = as_series(self);
     if (!a) return nullptr;
     return PyBool_FromLong(dftu_series_is_json(a->handle()));
+}
+
+PyObject* Series_get_name(PyObject* self, void*) {
+    Series* a = as_series(self);
+    if (!a) return nullptr;
+    const dstd::StringView name = a->name();
+    if (name.empty()) Py_RETURN_NONE;
+    return PyUnicode_FromStringAndSize(name.data(),
+                                       static_cast<Py_ssize_t>(name.size()));
+}
+
+PyObject* Series_rename(PyObject* self, PyObject* arg) {
+    Series* a = as_series(self);
+    if (!a) return nullptr;
+    if (arg == Py_None) return make_series(a->rename({}));
+    Py_ssize_t n = 0;
+    const char* p = PyUnicode_AsUTF8AndSize(arg, &n);
+    if (!p) return nullptr;
+    return make_series(
+        a->rename(dstd::StringView(p, static_cast<std::size_t>(n))));
 }
 
 PyMethodDef Series_methods[] = {
@@ -412,6 +445,9 @@ PyMethodDef Series_methods[] = {
      "item(i) -> the value at row i as a Python object (None for null)."},
     {"materialize", Series_materialize, METH_NOARGS,
      "Materialize any encoding to a new FLAT Series (gather)."},
+    {"rename", Series_rename, METH_O,
+     "rename(name) -> a new Series sharing this column's buffers, named name "
+     "(a str) or unnamed (None)."},
     {"share", Series_share, METH_NOARGS,
      "A new owned Series sharing this column's buffers zero-copy."},
     {"slice", Series_slice, METH_VARARGS,
@@ -561,6 +597,8 @@ PyGetSetDef Series_getset[] = {
     {"timezone", Series_get_timezone, nullptr,
      "Zone name of a Timestamp column; '' for a naive one or another type.",
      nullptr},
+    {"name", Series_get_name, nullptr,
+     "The series name, or None when it has none.", nullptr},
     {"nbytes", Series_get_nbytes, nullptr,
      "Bytes held by the column's buffers, children included.", nullptr},
     {"is_json", Series_get_is_json, nullptr,

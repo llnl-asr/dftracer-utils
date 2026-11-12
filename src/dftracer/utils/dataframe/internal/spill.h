@@ -30,8 +30,9 @@ namespace dftracer::utils::dataframe::spill {
 
 /// Append a Series to `out` (materialized FLAT first). Supports fixed-width,
 /// String and Binary columns and list, large list, fixed-size list, map and
-/// struct columns of those, and keeps a column's JSON flag, time unit and time
-/// zone. An InvalidArgument error for a list child that cannot be gathered.
+/// struct columns of those, and keeps a column's JSON flag, time unit, time
+/// zone and name. An InvalidArgument error for a list child that cannot be
+/// gathered.
 dstd::Result<void> put_series(dstd::String& out, const Series& s);
 
 /// Read one Series written by put_series, advancing `p` toward `end`. A Parse

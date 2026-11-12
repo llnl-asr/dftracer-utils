@@ -76,6 +76,40 @@ Or build one from data you already have.
       invalid ``Series`` (and running the release once). Pass a null ``release``
       to borrow static or otherwise-owned memory.
 
+Names
+-----
+
+A Series can carry a name, as a pandas Series does. A column of a frame has the
+name of its column, so ``df["dur"].name`` is ``"dur"``. ``from_pandas`` and
+``from_polars`` keep the name (a pandas name that is not a ``str`` is dropped, and
+polars' default name ``""`` means no name), and ``to_pandas`` and ``to_polars``
+give it back.
+
+An op that makes a Series from one Series (``abs``, ``cast``, ``fillna``,
+``cumsum``, ``rolling``, a string op, ``sort``, ``filter``, a slice) gives the
+result the same name. A binary op between two Series (``+``, ``-``, ``*``, ``/``,
+a comparison, ``&``, ``|``) keeps the name only when both names are equal. A
+reduction returns a scalar, so it has no name, and the index array of
+``argsort`` or ``search_sorted`` has none.
+
+.. tab-set::
+
+   .. tab-item:: Python
+
+      .. code-block:: python
+
+         s = Series([1, 2, 3], name="dur")
+         s.name = "latency"          # set
+         t = s.rename("lat2")         # a new Series, same values
+         s.to_frame().columns         # ["latency"]
+
+   .. tab-item:: C++
+
+      .. code-block:: cpp
+
+         Series named = s.rename("dur");  // shares the buffers, zero-copy
+         dstd::StringView n = named.name();  // empty when there is no name
+
 Arithmetic and the numpy-like protocol
 ----------------------------------------
 

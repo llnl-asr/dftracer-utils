@@ -76,8 +76,8 @@ PyObject* Series_is_in(PyObject* self, PyObject* other) {
     if (!a) return nullptr;
     Series* values = as_series(other);
     if (!values) return nullptr;
-    return make_series(
-        Series{dftu_series_is_in(a->handle(), values->handle())});
+    return make_series(named_like(
+        Series{dftu_series_is_in(a->handle(), values->handle())}, *a));
 }
 PyObject* Series_sort(PyObject* self, PyObject* args, PyObject* kwds) {
     Series* a = as_series(self);
@@ -87,47 +87,53 @@ PyObject* Series_sort(PyObject* self, PyObject* args, PyObject* kwds) {
     if (!PyArg_ParseTupleAndKeywords(args, kwds, "|p",
                                      const_cast<char**>(kwlist), &descending))
         return nullptr;
-    return make_series(Series{dftu_series_sort(a->handle(), descending)});
+    return make_series(
+        named_like(Series{dftu_series_sort(a->handle(), descending)}, *a));
 }
 PyObject* Series_head(PyObject* self, PyObject* arg) {
     Series* a = as_series(self);
     if (!a) return nullptr;
     long long n = PyLong_AsLongLong(arg);
     if (n == -1 && PyErr_Occurred()) return nullptr;
-    return make_series(
-        Series{dftu_series_head(a->handle(), static_cast<std::int64_t>(n))});
+    return make_series(named_like(
+        Series{dftu_series_head(a->handle(), static_cast<std::int64_t>(n))},
+        *a));
 }
 PyObject* Series_tail(PyObject* self, PyObject* arg) {
     Series* a = as_series(self);
     if (!a) return nullptr;
     long long n = PyLong_AsLongLong(arg);
     if (n == -1 && PyErr_Occurred()) return nullptr;
-    return make_series(
-        Series{dftu_series_tail(a->handle(), static_cast<std::int64_t>(n))});
+    return make_series(named_like(
+        Series{dftu_series_tail(a->handle(), static_cast<std::int64_t>(n))},
+        *a));
 }
 PyObject* Series_shift(PyObject* self, PyObject* arg) {
     Series* a = as_series(self);
     if (!a) return nullptr;
     long long n = PyLong_AsLongLong(arg);
     if (n == -1 && PyErr_Occurred()) return nullptr;
-    return make_series(
-        Series{dftu_series_shift(a->handle(), static_cast<std::int64_t>(n))});
+    return make_series(named_like(
+        Series{dftu_series_shift(a->handle(), static_cast<std::int64_t>(n))},
+        *a));
 }
 PyObject* Series_top_k(PyObject* self, PyObject* arg) {
     Series* a = as_series(self);
     if (!a) return nullptr;
     long long k = PyLong_AsLongLong(arg);
     if (k == -1 && PyErr_Occurred()) return nullptr;
-    return make_series(
-        Series{dftu_series_top_k(a->handle(), static_cast<std::int64_t>(k))});
+    return make_series(named_like(
+        Series{dftu_series_top_k(a->handle(), static_cast<std::int64_t>(k))},
+        *a));
 }
 PyObject* Series_bottom_k(PyObject* self, PyObject* arg) {
     Series* a = as_series(self);
     if (!a) return nullptr;
     long long k = PyLong_AsLongLong(arg);
     if (k == -1 && PyErr_Occurred()) return nullptr;
-    return make_series(Series{
-        dftu_series_bottom_k(a->handle(), static_cast<std::int64_t>(k))});
+    return make_series(named_like(
+        Series{dftu_series_bottom_k(a->handle(), static_cast<std::int64_t>(k))},
+        *a));
 }
 PyObject* Series_sample(PyObject* self, PyObject* args, PyObject* kwds) {
     Series* a = as_series(self);
@@ -138,9 +144,10 @@ PyObject* Series_sample(PyObject* self, PyObject* args, PyObject* kwds) {
     if (!PyArg_ParseTupleAndKeywords(args, kwds, "L|K",
                                      const_cast<char**>(kwlist), &n, &seed))
         return nullptr;
-    return make_series(
+    return make_series(named_like(
         Series{dftu_series_sample(a->handle(), static_cast<std::int64_t>(n),
-                                  static_cast<std::uint64_t>(seed))});
+                                  static_cast<std::uint64_t>(seed))},
+        *a));
 }
 PyObject* Series_rank(PyObject* self, PyObject* args, PyObject* kwds) {
     Series* a = as_series(self);
@@ -158,7 +165,8 @@ PyObject* Series_rank(PyObject* self, PyObject* args, PyObject* kwds) {
         return nullptr;
     const int flags = (descending ? DFTU_RANK_FLAG_DESCENDING : 0) |
                       (pct ? DFTU_RANK_FLAG_PCT : 0);
-    return make_series(Series{dftu_series_rank(a->handle(), code, flags)});
+    return make_series(
+        named_like(Series{dftu_series_rank(a->handle(), code, flags)}, *a));
 }
 PyObject* Series_search_sorted(PyObject* self, PyObject* other) {
     Series* a = as_series(self);

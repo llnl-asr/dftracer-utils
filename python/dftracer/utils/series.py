@@ -631,9 +631,13 @@ class Series(_SeriesPandasMixin, _Wrapper["_ext._Series"]):
     ``Series([1, 2, 3])`` builds one from a Python sequence, the pandas / polars
     constructor; an Arrow array (anything with ``__arrow_c_array__``) imports
     zero-copy with its own type, so an empty or all-null one keeps it;
-    ``Series(native)`` wraps a native handle."""
+    ``Series(native)`` wraps a native handle. ``name=`` names the Series
+    (see :attr:`name`); without it a Series or native handle keeps its own
+    name."""
 
-    def __init__(self, data: "Union[_ext._Series, Sequence[object]]") -> None:
+    def __init__(
+        self, data: "Union[_ext._Series, Sequence[object]]", name: Optional[str] = None
+    ) -> None:
         if isinstance(data, Series):
             data = data._native
         elif not isinstance(data, _ext._Series):
@@ -642,6 +646,8 @@ class Series(_SeriesPandasMixin, _Wrapper["_ext._Series"]):
             else:
                 data = _unwrap(Series.from_list(list(data)))
         super().__init__(data)
+        if name is not None:
+            self.name = name
 
     @classmethod
     def from_arrow(cls, arr: "pa.Array") -> "Series":
@@ -654,24 +660,32 @@ class Series(_SeriesPandasMixin, _Wrapper["_ext._Series"]):
         """Import a ``pandas.Series`` through NumPy, with no pyarrow: a NaN in a
         float column and a ``NaT`` or ``NA`` read as null, a categorical as its
         values, a zoned ``datetime64`` as a zoned timestamp. An Arrow-backed
-        column imports through pyarrow."""
+        column imports through pyarrow. The name is ``s.name`` when that is a
+        ``str``; any other name (``None``, an int, a tuple) is dropped."""
         from ._import import NeedsArrow, pandas_to_native
 
         try:
-            return Series(pandas_to_native(s))
+            out = Series(pandas_to_native(s))
         except NeedsArrow:
-            return _series_from_arrow(_require_pyarrow().Array.from_pandas(s))
+            out = _series_from_arrow(_require_pyarrow().Array.from_pandas(s))
+        if isinstance(s.name, str):
+            out.name = s.name
+        return out
 
     @classmethod
     def from_polars(cls, s: "pl.Series") -> "Series":
-        """Import a ``polars.Series`` with no pyarrow."""
+        """Import a ``polars.Series`` with no pyarrow. The name is ``s.name``;
+        polars' default name ``""`` means no name."""
         from ._import import NeedsArrow, polars_to_native
 
         try:
-            return Series(polars_to_native(s))
+            out = Series(polars_to_native(s))
         except NeedsArrow:
             _require_pyarrow()
-            return _series_from_arrow(s.to_arrow())
+            out = _series_from_arrow(s.to_arrow())
+        if s.name:
+            out.name = s.name
+        return out
 
     @classmethod
     def from_numpy(cls, a: "np.ndarray") -> "Series":
@@ -740,17 +754,20 @@ class Series(_SeriesPandasMixin, _Wrapper["_ext._Series"]):
         converts as without the option. A dictionary column uses pyarrow, where
         installed, to read its codes without building a string per row, and
         keeps the dictionary order of its used values; without pyarrow the
-        categories come out sorted."""
+        categories come out sorted. The pandas Series takes this name."""
         if arrow and nullable:
             raise ValueError("to_pandas: pass either arrow=True or nullable=True, not both")
         if arrow:
-            return _to_pandas(self.to_arrow(), arrow)
-        import pandas as pd  # ty: ignore[import-not-found]
+            out = _to_pandas(self.to_arrow(), arrow)
+        else:
+            import pandas as pd  # ty: ignore[import-not-found]
 
-        values = _pandas_nullable(self._native) if nullable else None
-        if values is None:
-            values = _pandas_default(self._native)
-        return values if isinstance(values, pd.Series) else pd.Series(values)
+            values = _pandas_nullable(self._native) if nullable else None
+            if values is None:
+                values = _pandas_default(self._native)
+            out = values if isinstance(values, pd.Series) else pd.Series(values)
+        out.name = self.name
+        return out
 
     def to_numpy(self) -> "np.ndarray":
         """This column as a NumPy array, built natively with no pyarrow.
@@ -771,7 +788,8 @@ class Series(_SeriesPandasMixin, _Wrapper["_ext._Series"]):
         comes through the Arrow PyCapsule interface (polars >= 1.3; an older
         polars raises its own error), without pyarrow; those, and builds
         without Arrow, use the native conversion (Float16 becomes Float32, a
-        decimal gets precision 38, a dictionary becomes String)."""
+        decimal gets precision 38, a dictionary becomes String). The polars
+        Series takes this name, ``""`` when there is none."""
         try:
             import polars as pl  # ty: ignore[import-not-found]
         except ImportError:
@@ -779,8 +797,10 @@ class Series(_SeriesPandasMixin, _Wrapper["_ext._Series"]):
                 "polars is required for to_polars(). Install with: pip install polars"
             ) from None
         if _polars_via_arrow(self._native):
-            return pl.Series(self)  # type: ignore[arg-type]
-        return _polars_native(self._native, pl)
+            out = pl.Series(self)  # type: ignore[arg-type]
+        else:
+            out = _polars_native(self._native, pl)
+        return out.alias(self.name or "")
 
     def __array__(
         self, dtype: "Optional[np.dtype]" = None, copy: Optional[bool] = None

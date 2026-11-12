@@ -347,6 +347,25 @@ class Series {
     /// element Field; a Struct's children become named Fields in order.
     DataType data_type() const;
 
+    /// The series name, valid while this column lives; empty when it has none.
+    /// @ref share, @ref slice and @ref as_json keep it. A method that derives a
+    /// column from this one elementwise or as a transform (a unary op, cast,
+    /// fillna, rolling, str ops, filter, take, sort, argsort) gives the result
+    /// this name, as pandas does. A binary op between two columns keeps it only
+    /// when both names are equal. A search_sorted and a @ref value_counts
+    /// result have no name.
+    dstd::StringView name() const noexcept {
+        std::size_t n = 0;
+        const char* p = dftu_series_name(handle_, &n);
+        return p != nullptr ? dstd::StringView(p, n) : dstd::StringView();
+    }
+
+    /// A new owned column sharing this column's buffers zero-copy, named
+    /// @p name; an empty @p name clears the name. Invalid if this column is.
+    Series rename(dstd::StringView name) const {
+        return Series{dftu_series_rename(handle_, name.data(), name.size())};
+    }
+
     /// A new owned column sharing this column's buffers zero-copy (refcount
     /// bump, no data copy).
     Series share() const noexcept { return Series{dftu_series_share(handle_)}; }
@@ -671,8 +690,8 @@ class Series {
     /// bounds convert to this column's element type.
     template <class T>
     Series is_between(T lo, T hi) const {
-        return Series{
-            dftu_series_is_between(handle_, as_scalar(lo), as_scalar(hi))};
+        return derived(
+            dftu_series_is_between(handle_, as_scalar(lo), as_scalar(hi)));
     }
 
     // Comparison operators return a mask (columnar convention), so equality
@@ -687,19 +706,19 @@ class Series {
     // type. A Series right operand takes the non-template overloads above.
     template <class T, class = std::enable_if_t<std::is_arithmetic_v<T>>>
     Series operator+(T v) const {
-        return Series{dftu_series_add_scalar(handle_, as_scalar(v))};
+        return derived(dftu_series_add_scalar(handle_, as_scalar(v)));
     }
     template <class T, class = std::enable_if_t<std::is_arithmetic_v<T>>>
     Series operator-(T v) const {
-        return Series{dftu_series_sub_scalar(handle_, as_scalar(v))};
+        return derived(dftu_series_sub_scalar(handle_, as_scalar(v)));
     }
     template <class T, class = std::enable_if_t<std::is_arithmetic_v<T>>>
     Series operator*(T v) const {
-        return Series{dftu_series_mul_scalar(handle_, as_scalar(v))};
+        return derived(dftu_series_mul_scalar(handle_, as_scalar(v)));
     }
     template <class T, class = std::enable_if_t<std::is_arithmetic_v<T>>>
     Series operator/(T v) const {
-        return Series{dftu_series_div_scalar(handle_, as_scalar(v))};
+        return derived(dftu_series_div_scalar(handle_, as_scalar(v)));
     }
     Series operator&(const Series& o) const { return logical_and(o); }
     Series operator|(const Series& o) const { return logical_or(o); }
@@ -724,8 +743,8 @@ class Series {
     /// Compare against a scalar with a runtime op code, producing a Bool mask.
     /// For a planner holding op and rhs as values.
     Series compare(CmpOp op, Scalar rhs) const {
-        return Series{
-            dftu_series_compare(handle_, static_cast<dftu_cmp_op>(op), rhs)};
+        return derived(
+            dftu_series_compare(handle_, static_cast<dftu_cmp_op>(op), rhs));
     }
 
    private:
@@ -736,9 +755,15 @@ class Series {
 
     template <class T>
     Series compare_to(std::int32_t op, T v) const {
-        return Series{dftu_series_compare(handle_, static_cast<dftu_cmp_op>(op),
-                                          as_scalar(v))};
+        return derived(dftu_series_compare(
+            handle_, static_cast<dftu_cmp_op>(op), as_scalar(v)));
     }
+
+    /// Wraps @p result, a column derived from this one, with this column's
+    /// name.
+    Series derived(dftu_series* result) const;
+    /// Same for a binary op: the name is kept only when @p other has the same.
+    Series derived(dftu_series* result, const Series& other) const;
 
     dftu_series* handle_ = nullptr;
 };

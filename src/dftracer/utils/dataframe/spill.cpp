@@ -246,13 +246,24 @@ dstd::Result<Series> list_values(Series child, std::int64_t base,
     return out;
 }
 
+// The first byte holds the JSON flag in bit 0 and, in bit 1, that a name
+// follows the time zone, so an unnamed column keeps its bytes.
+constexpr std::uint8_t TRAILER_JSON = 1;
+constexpr std::uint8_t TRAILER_NAMED = 2;
+
 void put_series_trailer(dstd::String& out, const Series& s) {
     const dftu_series& h = *s.handle();
-    put_pod<std::uint8_t>(out, h.json() ? 1 : 0);
+    const dstd::StringView name = s.name();
+    put_pod<std::uint8_t>(
+        out, static_cast<std::uint8_t>((h.json() ? TRAILER_JSON : 0) |
+                                       (name.empty() ? 0 : TRAILER_NAMED)));
     put_pod<std::int32_t>(out, static_cast<std::int32_t>(h.time_unit()));
     put_pod<std::uint32_t>(out,
                            static_cast<std::uint32_t>(h.timezone().size()));
     put_bytes(out, h.timezone().data(), h.timezone().size());
+    if (name.empty()) return;
+    put_pod<std::uint32_t>(out, static_cast<std::uint32_t>(name.size()));
+    put_bytes(out, name.data(), name.size());
 }
 
 }  // namespace
@@ -358,12 +369,22 @@ dstd::Result<Series> get_series_in(In& in) {
     auto data = get_series_data(in);
     if (!data) return data;
     Series s = std::move(*data);
-    const bool json = get_pod<std::uint8_t>(in) != 0;
+    const std::uint8_t flags = get_pod<std::uint8_t>(in);
+    const bool json = (flags & TRAILER_JSON) != 0;
     const auto unit = static_cast<TimeUnit>(get_pod<std::int32_t>(in));
     const auto zone_bytes = get_pod<std::uint32_t>(in);
     const auto* zone = take_bytes(in, zone_bytes);
+    std::uint32_t name_bytes = 0;
+    const std::uint8_t* name = nullptr;
+    if ((flags & TRAILER_NAMED) != 0) {
+        name_bytes = get_pod<std::uint32_t>(in);
+        name = take_bytes(in, name_bytes);
+    }
     if (in.bad) return truncated_read();
     dftu_series* h = s.handle();
+    if (name_bytes > 0)
+        h->name = dstd::make_shared<dstd::String>(
+            reinterpret_cast<const char*>(name), name_bytes);
     h->set_json(json);
     h->set_time_unit(unit);
     h->set_timezone(

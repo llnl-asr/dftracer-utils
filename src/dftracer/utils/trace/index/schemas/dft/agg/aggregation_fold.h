@@ -44,6 +44,9 @@ inline std::atomic<std::uint64_t> g_agg_run_bytes{
 #if DFTRACER_UTILS_TEST_PROBES
 /// Runs staged so far by folds that write through. For tests.
 inline std::atomic<std::uint64_t> g_agg_runs_staged{0};
+/// When not 0, the process ends with exit code 0 as soon as that many runs are
+/// staged, so no later write commits. For tests that kill a build.
+inline std::atomic<std::uint64_t> g_agg_exit_after_runs{0};
 #endif
 
 /// The aggregation core's Accessor over an owned FoldEvent. hhash and fhash

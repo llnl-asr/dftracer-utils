@@ -9,6 +9,7 @@
 #include <dftracer/utils/trace/internal/utils.h>
 
 #include <algorithm>
+#include <cstdlib>
 #include <utility>
 
 namespace dftracer::utils::trace::index::schemas::dft::agg {
@@ -253,7 +254,11 @@ coro::CoroTask<void> AggregationFold::drain() {
     if (!staged) co_return;
     ++through_runs_;
 #if DFTRACER_UTILS_TEST_PROBES
-    g_agg_runs_staged.fetch_add(1, std::memory_order_relaxed);
+    const std::uint64_t staged_runs =
+        g_agg_runs_staged.fetch_add(1, std::memory_order_relaxed) + 1;
+    const std::uint64_t exit_after =
+        g_agg_exit_after_runs.load(std::memory_order_relaxed);
+    if (exit_after != 0 && staged_runs >= exit_after) std::_Exit(0);
 #endif
 }
 

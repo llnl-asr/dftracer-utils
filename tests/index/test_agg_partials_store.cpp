@@ -10,7 +10,6 @@
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
-#include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/fileio/file_helpers.h>
@@ -39,7 +38,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
-#include <thread>
+#include <cstdlib>
 #include <utility>
 
 using namespace dftracer::utils;
@@ -743,8 +742,9 @@ TEST_SUITE("AggPartialsStore") {
             check_rows(agg_rows(f, index_dir), agg_rows(f, fresh));
     }
 
-    // Run by the case above in a new process, which it ends with _exit once a
-    // fold has staged runs, so no write commits after that.
+    // Run by the case above in a new process. The fold ends the process with
+    // exit code 0 once it has staged CRASH_RUNS runs, so no write commits after
+    // that; a build that ends first exits with 1.
     TEST_CASE("a build killed after runs" * doctest::skip()) {
         fresh_process::announce();
         const auto env_dir = common::Env::get<dstd::StringView>(CRASH_DIR_ENV);
@@ -752,15 +752,9 @@ TEST_SUITE("AggPartialsStore") {
         const dstd::String dir(*env_dir);
         const auto files = crash_files(dir);
         schemas::dft::agg::g_agg_run_bytes.store(1);
-        std::atomic<bool> done{false};
-        dstd::Thread build([&] {
-            build_seconds(files, dir + "/idx");
-            done.store(true);
-        });
-        while (schemas::dft::agg::g_agg_runs_staged.load() < CRASH_RUNS &&
-               !done.load())
-            std::this_thread::yield();
-        ::_exit(done.load() ? 1 : 0);
+        schemas::dft::agg::g_agg_exit_after_runs.store(CRASH_RUNS);
+        build_seconds(files, dir + "/idx");
+        std::_Exit(1);
     }
 
     TEST_CASE("an aggregation fold with no file aborts when written") {

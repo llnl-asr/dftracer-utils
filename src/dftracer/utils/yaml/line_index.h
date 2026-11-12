@@ -7,6 +7,7 @@
 #include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/yaml/run_jobs.h>
 #include <dftracer/utils/yaml/tape.h>
 
 #include <cstddef>
@@ -185,10 +186,19 @@ struct LineIndex {
     std::uint32_t line_count = 0;
     /// True when the text holds a `---` or `...` marker.
     bool has_markers = false;
+    /// The chunks that @ref build_parallel joined, or 1 for one pass.
+    std::uint32_t chunk_count = 1;
 
     /// Indexes `size` bytes at `text`. The index keeps the pointer, so the
     /// text outlives it. When the text is invalid, the index is unusable.
     BuildResult build(const char* text, std::size_t size);
+
+    /// As @ref build, with chunks of about `piece_bytes` of the text indexed
+    /// through `run_jobs` and joined. The index is the one that @ref build
+    /// gives.
+    BuildResult build_parallel(const char* text, std::size_t size,
+                               RunJobs run_jobs,
+                               std::size_t piece_bytes = std::size_t{1} << 20);
 
     /// Set by a build that gives Invalid.
     LineProblem problem;

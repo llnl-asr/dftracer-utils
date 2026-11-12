@@ -4,6 +4,7 @@
 #include <dftracer/utils/dstd/ascii.h>
 #include <dftracer/utils/dstd/bits.h>
 #include <dftracer/utils/dstd/fmt.h>
+#include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/yaml/flow_parser.h>
 #include <dftracer/utils/yaml/key_set.h>
 #include <dftracer/utils/yaml/line_index.h>
@@ -843,9 +844,52 @@ bool is_seq_kind(LineKind kind) {
            kind == LineKind::NestItem || kind == LineKind::NestMap;
 }
 
+// A level that a chunk of a parallel build opens with no parent in the chunk:
+// its parent lies in an earlier chunk, and the merge finds it.
+struct VirtualLevel {
+    /// The hash and the line of each key of a map, as `hash << 32 | line`.
+    dstd::Vector<std::uint64_t> keys;
+    std::uint32_t first = 0;
+    /// The line of the level when it closed in the chunk.
+    std::uint32_t last = NONE;
+    std::uint16_t col = 0;
+    bool is_seq = false;
+    bool is_open = true;
+};
+
+struct EndLevel {
+    dstd::Vector<std::uint64_t> keys;
+    std::uint32_t cur = NONE;
+    std::uint16_t col = 0;
+    bool is_seq = false;
+    bool inline_seq = false;
+};
+
+/// What a chunk of a parallel build leaves for the merge. Lines are counted in
+/// the chunk.
+struct Fragment {
+    bool starts_cut = false;
+    dstd::Vector<VirtualLevel> virtuals;
+    dstd::Vector<EndLevel> levels;
+    std::uint32_t pending = NONE;
+    std::uint32_t pending_col = 0;
+    bool cont_active = false;
+    std::uint32_t cont_limit = 0;
+    /// The scalar that was open at the end, before the end closed it.
+    Open open = Open::None;
+    std::int32_t limit = -1;
+    bool is_block_indent_known = false;
+    bool is_block_explicit = false;
+    bool block_has_text = false;
+    std::uint32_t block_indent = 0;
+    bool after_end = false;
+    std::size_t max_depth = 0;
+};
+
 class Builder {
    public:
-    explicit Builder(LineIndex& ix) : ix_(ix), t_(ix.text), flow_(ix) {}
+    explicit Builder(LineIndex& ix, Fragment* frag = nullptr)
+        : ix_(ix), t_(ix.text), flow_(ix), frag_(frag) {}
 
     bool build(std::size_t size);
 
@@ -865,6 +909,12 @@ class Builder {
     DFTRACER_UTILS_NOINLINE bool marker(std::uint32_t j);
     bool push_level(std::uint32_t col, std::uint32_t j, bool is_seq);
     void pop_level(std::uint32_t at);
+    bool starts_cut() const { return frag_ != nullptr && frag_->starts_cut; }
+    DFTRACER_UTILS_NOINLINE bool open_virtual(std::uint32_t j,
+                                              std::uint32_t col, bool is_seq);
+    DFTRACER_UTILS_NOINLINE void close_virtual(const Level& level);
+    void note_end_open();
+    void note_end_state();
     bool note_key(std::uint32_t line, dstd::StringView key);
     DFTRACER_UTILS_NOINLINE bool same_key(std::uint32_t line,
                                           dstd::StringView key) const;
@@ -972,6 +1022,7 @@ class Builder {
     KeySet::Level level_keys_[MAX_DEPTH];
     KeySet keys_;
     FlowParser flow_;
+    Fragment* frag_;
 };
 
 dstd::StringView Builder::key_view(std::uint32_t line,
@@ -1076,6 +1127,8 @@ bool Builder::push_level(std::uint32_t col, std::uint32_t j, bool is_seq) {
     }
     if (!is_seq) keys_.open(level_keys_[depth_]);
     Level& level = levels_[depth_++];
+    if (frag_ != nullptr && depth_ > frag_->max_depth)
+        frag_->max_depth = depth_;
     level.cur = j;
     level.col = static_cast<std::uint16_t>(col);
     level.is_seq = is_seq;
@@ -1086,33 +1139,89 @@ bool Builder::push_level(std::uint32_t col, std::uint32_t j, bool is_seq) {
 void Builder::pop_level(std::uint32_t at) {
     Level& level = levels_[depth_ - 1];
     if (level.cur != NONE) ix_.next[level.cur] = at;
+    if (depth_ == 1 && starts_cut()) [[unlikely]]
+        close_virtual(level);
     if (!level.is_seq) keys_.close(level_keys_[depth_ - 1], depth_ - 1);
     --depth_;
+}
+
+bool Builder::open_virtual(std::uint32_t j, std::uint32_t col, bool is_seq) {
+    if (!push_level(col, j, is_seq)) return false;
+    VirtualLevel level;
+    level.first = j;
+    level.col = static_cast<std::uint16_t>(col);
+    level.is_seq = is_seq;
+    frag_->virtuals.push_back(std::move(level));
+    return true;
+}
+
+void Builder::close_virtual(const Level& level) {
+    VirtualLevel& v = frag_->virtuals.back();
+    v.last = level.cur;
+    v.is_open = false;
+    if (!level.is_seq)
+        keys_.for_each_key(
+            level_keys_[0], [&](std::uint32_t hash, std::uint32_t id) {
+                v.keys.push_back((static_cast<std::uint64_t>(hash) << 32) | id);
+            });
+}
+
+void Builder::note_end_open() {
+    frag_->open = open_;
+    frag_->limit = limit_;
+    frag_->is_block_indent_known = block_.is_indent_known;
+    frag_->is_block_explicit = is_explicit_indent_;
+    frag_->block_has_text = has_text_;
+    frag_->block_indent = block_.indent;
+}
+
+void Builder::note_end_state() {
+    frag_->pending = pending_;
+    frag_->pending_col = pending_col_;
+    frag_->cont_active = cont_active_;
+    frag_->cont_limit = cont_limit_;
+    frag_->after_end = after_end_;
+    for (std::size_t d = 0; d < depth_; ++d) {
+        const Level& level = levels_[d];
+        EndLevel end;
+        end.cur = level.cur;
+        end.col = level.col;
+        end.is_seq = level.is_seq;
+        end.inline_seq = level.inline_seq;
+        if (!level.is_seq)
+            keys_.for_each_key(
+                level_keys_[d], [&](std::uint32_t hash, std::uint32_t id) {
+                    end.keys.push_back(
+                        (static_cast<std::uint64_t>(hash) << 32) | id);
+                });
+        frag_->levels.push_back(std::move(end));
+    }
+}
+
+// The kind of an entry or item with no inline value once a block is found
+// under it.
+LineKind open_kind(LineKind kind) {
+    switch (kind) {
+        case LineKind::MapEntry:
+            return LineKind::MapOpen;
+        case LineKind::SeqItem:
+            return LineKind::SeqOpen;
+        case LineKind::SeqMap:
+            return LineKind::SeqMapOpen;
+        case LineKind::NestItem:
+            return LineKind::NestItemOpen;
+        case LineKind::NestMap:
+            return LineKind::NestMapOpen;
+        default:
+            return kind;
+    }
 }
 
 void Builder::resolve_pending(bool child) {
     if (pending_ == NONE) return;
     if (child) {
         LineEntry& e = ix_.entries[pending_];
-        switch (e.kind) {
-            case LineKind::MapEntry:
-                e.kind = LineKind::MapOpen;
-                break;
-            case LineKind::SeqItem:
-                e.kind = LineKind::SeqOpen;
-                break;
-            case LineKind::SeqMap:
-                e.kind = LineKind::SeqMapOpen;
-                break;
-            case LineKind::NestItem:
-                e.kind = LineKind::NestItemOpen;
-                break;
-            case LineKind::NestMap:
-                e.kind = LineKind::NestMapOpen;
-                break;
-            default:
-                break;
-        }
+        e.kind = open_kind(e.kind);
     }
     pending_ = NONE;
 }
@@ -1516,7 +1625,7 @@ bool Builder::structure(std::uint32_t j, const LineParts& pt) {
     cont_active_ = false;
     plain_pending_ = false;
     if (is_root) [[unlikely]] {
-        if (depth_ != 0 || had_content)
+        if (depth_ != 0 || had_content || starts_cut())
             return fail(j, line_start + n,
                         "a scalar line needs a mapping key or a sequence "
                         "entry");
@@ -1534,7 +1643,9 @@ bool Builder::structure(std::uint32_t j, const LineParts& pt) {
     }
     resolve_pending(child || inline_seq);
     if (depth_ == 0) {
-        if (!push_level(n, j, is_seq)) return false;
+        if (!(starts_cut() ? open_virtual(j, n, is_seq)
+                           : push_level(n, j, is_seq)))
+            return false;
     } else if (child) {
         if (!push_level(n, j, is_seq)) return false;
     } else if (inline_seq) {
@@ -1545,18 +1656,27 @@ bool Builder::structure(std::uint32_t j, const LineParts& pt) {
         if (depth_ > 1 && levels_[depth_ - 1].inline_seq &&
             levels_[depth_ - 1].col == n && !is_seq)
             pop_level(j);
-        if (depth_ == 0 || levels_[depth_ - 1].col != n) [[unlikely]]
-            return fail(j, line_start + n,
-                        "indentation does not match any open block");
-        Level& top = levels_[depth_ - 1];
-        if (top.is_seq != is_seq) [[unlikely]]
-            return fail(j, line_start + n,
-                        is_seq ? "a sequence item cannot follow mapping keys "
-                                 "at the same indentation"
-                               : "a mapping key cannot follow sequence items "
-                                 "at the same indentation");
-        if (top.cur != NONE) ix_.next[top.cur] = j;
-        top.cur = j;
+        // A chunk of a parallel build leaves a line with no parent in it to
+        // the merge.
+        if (starts_cut() && depth_ == 1 && levels_[0].col == n &&
+            levels_[0].is_seq != is_seq) [[unlikely]]
+            pop_level(j);
+        if (depth_ == 0 && starts_cut()) [[unlikely]] {
+            if (!open_virtual(j, n, is_seq)) return false;
+        } else {
+            if (depth_ == 0 || levels_[depth_ - 1].col != n) [[unlikely]]
+                return fail(j, line_start + n,
+                            "indentation does not match any open block");
+            Level& top = levels_[depth_ - 1];
+            if (top.is_seq != is_seq) [[unlikely]]
+                return fail(j, line_start + n,
+                            is_seq ? "a sequence item cannot follow mapping "
+                                     "keys at the same indentation"
+                                   : "a mapping key cannot follow sequence "
+                                     "items at the same indentation");
+            if (top.cur != NONE) ix_.next[top.cur] = j;
+            top.cur = j;
+        }
     }
     std::uint32_t limit = n;
     if (pt.nest != 0) [[unlikely]] {
@@ -1686,16 +1806,25 @@ DFTRACER_UTILS_ALWAYS_INLINE inline bool Builder::structure_plain(
     if (depth_ > 1 && levels_[depth_ - 1].inline_seq &&
         levels_[depth_ - 1].col == n && !is_seq)
         pop_level(j);
-    if (depth_ == 0 || levels_[depth_ - 1].col != n) [[unlikely]]
-        return fail(j, line_start + n,
-                    "indentation does not match any open block");
-    Level& top = levels_[depth_ - 1];
-    if (top.is_seq != is_seq) [[unlikely]]
+    if (depth_ == 0 || levels_[depth_ - 1].col != n ||
+        levels_[depth_ - 1].is_seq != is_seq) [[unlikely]] {
+        if (starts_cut() && depth_ <= 1) {
+            if (depth_ == 1 && levels_[0].col == n) pop_level(j);
+            if (depth_ == 0) {
+                if (!open_virtual(j, n, is_seq)) return false;
+                return plain_key_value(j, line_start, pl, n);
+            }
+        }
+        if (depth_ == 0 || levels_[depth_ - 1].col != n)
+            return fail(j, line_start + n,
+                        "indentation does not match any open block");
         return fail(j, line_start + n,
                     is_seq ? "a sequence item cannot follow mapping keys at "
                              "the same indentation"
                            : "a mapping key cannot follow sequence items at "
                              "the same indentation");
+    }
+    Level& top = levels_[depth_ - 1];
     if (top.cur != NONE) ix_.next[top.cur] = j;
     top.cur = j;
     return plain_key_value(j, line_start, pl, n);
@@ -1942,7 +2071,9 @@ bool Builder::build(std::size_t size) {
     if (line_start < text_size) {
         if (!process_line(line_start, text_size)) return false;
     }
+    if (frag_ != nullptr) note_end_open();
     if (!finish_open()) return false;
+    if (frag_ != nullptr) note_end_state();
     resolve_pending(false);
     ix_.entries[line_count_].indent = 0;
     ix_.entries[line_count_].kind = LineKind::Blank;
@@ -1998,34 +2129,437 @@ bool fail_at(LineIndex& ix, std::uint32_t offset, dstd::String reason) {
 
 }  // namespace detail
 
-BuildResult LineIndex::build(const char* text_in, std::size_t size_in) {
-    text = text_in;
-    size = 0;
-    line_count = 0;
-    has_markers = false;
-    arena.clear();
-    escapes.clear();
-    entries.clear();
-    tape.clear();
-    next.clear();
-    problem = LineProblem{};
+namespace {
+
+BuildResult build_index(LineIndex& ix, const char* text_in, std::size_t size_in,
+                        Fragment* frag) {
+    ix.text = text_in;
+    ix.size = 0;
+    ix.line_count = 0;
+    ix.has_markers = false;
+    ix.chunk_count = 1;
+    ix.arena.clear();
+    ix.escapes.clear();
+    ix.entries.clear();
+    ix.tape.clear();
+    ix.next.clear();
+    ix.problem = LineProblem{};
     if (size_in >= TEXT_SIZE_LIMIT) {
-        problem.line = 1;
-        problem.col = 1;
-        problem.reason = "a text of 4 GiB or more is not supported";
+        ix.problem.line = 1;
+        ix.problem.col = 1;
+        ix.problem.reason = "a text of 4 GiB or more is not supported";
         return BuildResult::Invalid;
     }
-    size = static_cast<std::uint32_t>(size_in);
+    ix.size = static_cast<std::uint32_t>(size_in);
     if (size_in == 0) {
-        entries.resize(1);
-        next.resize(1);
-        entries[0] = LineEntry{0, 0, LineKind::Blank, 0};
-        next[0] = 0;
+        ix.entries.resize(1);
+        ix.next.resize(1);
+        ix.entries[0] = LineEntry{0, 0, LineKind::Blank, 0};
+        ix.next[0] = 0;
         return BuildResult::Accepted;
     }
-    Builder builder(*this);
+    Builder builder(ix, frag);
     return builder.build(size_in) ? BuildResult::Accepted
                                   : BuildResult::Invalid;
+}
+
+}  // namespace
+
+BuildResult LineIndex::build(const char* text_in, std::size_t size_in) {
+    return build_index(*this, text_in, size_in, nullptr);
+}
+
+namespace {
+
+// At most how many chunks a text is cut into, how many times chunks are joined
+// with their neighbours and built again, and how far a cut looks for a line
+// that can start a chunk.
+constexpr std::size_t MAX_PIECES = 256;
+constexpr std::size_t MAX_ROUNDS = 3;
+constexpr std::size_t CUT_SEARCH_BYTES = std::size_t{64} << 10;
+
+// Whether the line `[s, e)` may start a chunk: a sequence item, or a plain key
+// and its `:`. The text before it may still make the line part of a scalar;
+// the merge then refuses the cut.
+bool is_cut_line(const char* t, std::size_t s, std::size_t e) {
+    std::size_t i = s;
+    while (i < e && t[i] == ' ') ++i;
+    if (i == e || i - s > INDENT_LIMIT) return false;
+    bool has_colon = false;
+    for (std::size_t k = i + 1; k < e; ++k) {
+        const char c = t[k];
+        if (c == '#' || c == '"' || c == '\'' || c == '{' || c == '[' ||
+            c == '}' || c == ']' || c == ',' || c == '\t' || c == '&' ||
+            c == '*' || c == '!' || c == '|' || c == '>')
+            return false;
+        if (c == ':' && (k + 1 == e || t[k + 1] == ' ' || t[k + 1] == '\r'))
+            has_colon = true;
+    }
+    if (t[i] == '-') return i + 1 < e && t[i + 1] == ' ';
+    return has_colon && (dstd::is_ascii_alnum(t[i]) || t[i] == '_');
+}
+
+// The starts of the chunks after the first, in order.
+dstd::Vector<std::size_t> find_cuts(const char* t, std::size_t size,
+                                    std::size_t pieces) {
+    dstd::Vector<std::size_t> cuts;
+    std::size_t previous = 0;
+    for (std::size_t i = 1; i < pieces; ++i) {
+        const std::size_t at = size / pieces * i;
+        if (at <= previous) continue;
+        const void* nl = std::memchr(t + at, '\n', size - at);
+        if (nl == nullptr) break;
+        std::size_t s =
+            static_cast<std::size_t>(static_cast<const char*>(nl) - t) + 1;
+        const std::size_t limit = std::min(size, s + CUT_SEARCH_BYTES);
+        while (s < limit) {
+            const void* end = std::memchr(t + s, '\n', size - s);
+            const std::size_t e = end == nullptr
+                                      ? size
+                                      : static_cast<std::size_t>(
+                                            static_cast<const char*>(end) - t);
+            if (e == size) break;
+            if (is_cut_line(t, s, e)) {
+                cuts.push_back(s);
+                previous = s;
+                break;
+            }
+            s = e + 1;
+        }
+    }
+    return cuts;
+}
+
+struct Piece {
+    LineIndex ix;
+    Fragment frag;
+    std::size_t begin = 0;
+    std::size_t size = 0;
+    std::uint32_t line_base = 0;
+    std::uint32_t escape_base = 0;
+    std::uint32_t tape_base = 0;
+    std::uint32_t arena_base = 0;
+    bool is_ok = false;
+};
+
+dstd::StringView key_text(const LineIndex& ix, std::uint32_t line) {
+    LineParts pt;
+    classify_line(ix.text, ix.entries[line].start, ix.line_end(line), pt);
+    if ((pt.flags & line_flag::KEY_ESC) != 0) {
+        const auto it = std::lower_bound(
+            ix.escapes.begin(), ix.escapes.end(), line * 2,
+            [](const EscapeEntry& e, std::uint32_t k) { return e.key < k; });
+        return dstd::StringView(ix.arena.data() + it->off, it->len);
+    }
+    return dstd::StringView(ix.text + pt.key_s, pt.key_e - pt.key_s);
+}
+
+// An open level of the merge, with the lines of its keys by hash.
+struct MergeLevel {
+    dstd::HashMap<std::uint32_t, dstd::Vector<std::uint32_t>> keys;
+    std::uint32_t cur = NONE;
+    std::uint16_t col = 0;
+    bool is_seq = false;
+    bool inline_seq = false;
+};
+
+// False when the map holds the key already.
+bool add_key(const LineIndex& ix, MergeLevel& level, std::uint64_t entry,
+             std::uint32_t line_base) {
+    const auto hash = static_cast<std::uint32_t>(entry >> 32);
+    const std::uint32_t line = static_cast<std::uint32_t>(entry) + line_base;
+    dstd::Vector<std::uint32_t>& lines = level.keys[hash];
+    if (!lines.empty()) {
+        const dstd::StringView key = key_text(ix, line);
+        for (const std::uint32_t other : lines)
+            if (key_text(ix, other) == key) return false;
+    }
+    lines.push_back(line);
+    return true;
+}
+
+bool push_end_levels(const LineIndex& ix, dstd::Vector<MergeLevel>& stack,
+                     const Fragment& frag, std::size_t from,
+                     std::uint32_t line_base) {
+    for (std::size_t d = from; d < frag.levels.size(); ++d) {
+        const EndLevel& end = frag.levels[d];
+        MergeLevel level;
+        level.cur = end.cur == NONE ? NONE : end.cur + line_base;
+        level.col = end.col;
+        level.is_seq = end.is_seq;
+        level.inline_seq = end.inline_seq;
+        for (const std::uint64_t key : end.keys)
+            if (!add_key(ix, level, key, line_base)) return false;
+        stack.push_back(std::move(level));
+    }
+    return true;
+}
+
+// Whether the end of `prev` lets a chunk start with a line at `col`, as the
+// one pass would read it.
+bool may_follow(const Fragment& prev, std::uint32_t col) {
+    switch (prev.open) {
+        case Open::None:
+            break;
+        case Open::Plain:
+            if (prev.limit < 0 || static_cast<std::int64_t>(col) > prev.limit)
+                return false;
+            break;
+        case Open::Block:
+            if (!prev.is_block_indent_known || col >= prev.block_indent)
+                return false;
+            if (prev.is_block_explicit && !prev.block_has_text &&
+                static_cast<std::int64_t>(col) > prev.limit)
+                return false;
+            break;
+        default:
+            return false;
+    }
+    return !(prev.cont_active && col > prev.cont_limit) && !prev.after_end;
+}
+
+// Joins the levels of the chunks as the one pass would: the lines that end a
+// level in a later chunk, the entries that a later chunk opens and the keys
+// of maps that go on over a cut. Gives the first chunk that does not fit, or
+// 0 when all do.
+std::size_t merge_levels(LineIndex& ix, dstd::Vector<Piece>& pieces) {
+    dstd::Vector<MergeLevel> stack;
+    if (!push_end_levels(ix, stack, pieces[0].frag, 0, 0)) return 1;
+    for (std::size_t k = 1; k < pieces.size(); ++k) {
+        const Fragment& prev = pieces[k - 1].frag;
+        const Fragment& frag = pieces[k].frag;
+        const std::uint32_t base = pieces[k].line_base;
+        if (frag.virtuals.empty() || frag.levels.empty() ||
+            !may_follow(prev, frag.virtuals[0].col) ||
+            stack.size() + frag.max_depth > MAX_DEPTH)
+            return k;
+        std::uint32_t pending = prev.pending == NONE
+                                    ? NONE
+                                    : prev.pending + pieces[k - 1].line_base;
+        const std::uint32_t pending_col = prev.pending_col;
+        for (std::size_t i = 0; i < frag.virtuals.size(); ++i) {
+            const VirtualLevel& v = frag.virtuals[i];
+            if (v.is_open != (i + 1 == frag.virtuals.size())) return k;
+            const std::uint32_t first = v.first + base;
+            const bool child = pending != NONE && v.col > pending_col;
+            bool inline_seq = false;
+            if (pending != NONE && v.col == pending_col && v.is_seq) {
+                const LineKind kind = ix.entries[pending].kind;
+                inline_seq = kind == LineKind::MapEntry ||
+                             kind == LineKind::SeqMap ||
+                             kind == LineKind::NestMap;
+            }
+            if (child || inline_seq) {
+                ix.entries[pending].kind = open_kind(ix.entries[pending].kind);
+                MergeLevel level;
+                level.cur = first;
+                level.col = v.col;
+                level.is_seq = v.is_seq;
+                level.inline_seq = inline_seq;
+                stack.push_back(std::move(level));
+            } else {
+                while (!stack.empty() && stack.back().col > v.col) {
+                    if (stack.back().cur != NONE)
+                        ix.next[stack.back().cur] = first;
+                    stack.pop_back();
+                }
+                if (stack.size() > 1 && stack.back().inline_seq &&
+                    stack.back().col == v.col && !v.is_seq) {
+                    if (stack.back().cur != NONE)
+                        ix.next[stack.back().cur] = first;
+                    stack.pop_back();
+                }
+                if (stack.empty() || stack.back().col != v.col ||
+                    stack.back().is_seq != v.is_seq)
+                    return k;
+                if (stack.back().cur != NONE) ix.next[stack.back().cur] = first;
+            }
+            pending = NONE;
+            MergeLevel& top = stack.back();
+            const dstd::Vector<std::uint64_t>& keys =
+                v.is_open ? frag.levels[0].keys : v.keys;
+            for (const std::uint64_t key : keys)
+                if (!add_key(ix, top, key, base)) return k;
+            top.cur = (v.is_open ? frag.levels[0].cur : v.last) + base;
+            if (stack.size() > MAX_DEPTH) return k;
+        }
+        if (!push_end_levels(ix, stack, frag, 1, base)) return k;
+    }
+    return 0;
+}
+
+void join_piece(LineIndex& ix, const Piece& piece, bool is_last,
+                std::uint32_t total_lines) {
+    const LineIndex& src = piece.ix;
+    const auto text_base = static_cast<std::uint32_t>(piece.begin);
+    const std::uint32_t lines = src.line_count;
+    for (std::uint32_t i = 0; i < lines; ++i) {
+        LineEntry entry = src.entries[i];
+        entry.start += text_base;
+        ix.entries[piece.line_base + i] = entry;
+        std::uint32_t next = src.next[i];
+        if (entry.kind == LineKind::Cont && i > 0 &&
+            src.entries[i - 1].kind != LineKind::Cont)
+            next += piece.escape_base;
+        else if (next == lines)
+            next = total_lines;
+        else
+            next += piece.line_base;
+        ix.next[piece.line_base + i] = next;
+    }
+    if (is_last) {
+        LineEntry entry = src.entries[lines];
+        entry.start += text_base;
+        ix.entries[total_lines] = entry;
+        ix.next[total_lines] = total_lines;
+    }
+    for (std::size_t i = 0; i < src.escapes.size(); ++i) {
+        EscapeEntry e = src.escapes[i];
+        const std::uint32_t line = e.key / 2;
+        if ((e.key & 1) != 0 &&
+            (src.entries[line].flags & line_flag::FLOW) != 0)
+            e.off += piece.tape_base;
+        else if ((e.end & ESCAPE_IN_TEXT) != 0)
+            e.off += text_base;
+        else
+            e.off += piece.arena_base;
+        if ((e.end & ~ESCAPE_IN_TEXT) != 0) e.end += piece.line_base;
+        e.key += piece.line_base * 2;
+        ix.escapes[piece.escape_base + i] = e;
+    }
+    for (std::size_t i = 0; i < src.tape.size(); ++i) {
+        TapeEntry t = src.tape[i];
+        if (t.is_container())
+            t.pos += piece.tape_base;
+        else if (t.kind == TapeKind::Scalar || t.size != 0)
+            t.pos += (t.flags & tape_flag::ARENA) != 0 ? piece.arena_base
+                                                       : text_base;
+        ix.tape[piece.tape_base + i] = t;
+    }
+    if (!src.arena.empty())
+        std::memcpy(ix.arena.data() + piece.arena_base, src.arena.data(),
+                    src.arena.size());
+}
+
+}  // namespace
+
+namespace {
+
+// Joins the indexes of the chunks into `ix`. Gives the first chunk that the
+// merge refuses, or 0.
+std::size_t join_pieces(LineIndex& ix, dstd::Vector<Piece>& pieces,
+                        RunJobs run_jobs, const char* text, std::size_t size) {
+    std::uint32_t lines = 0;
+    std::uint32_t escape_count = 0;
+    std::uint32_t tape_size = 0;
+    std::uint32_t arena_size = 0;
+    for (Piece& piece : pieces) {
+        piece.line_base = lines;
+        piece.escape_base = escape_count;
+        piece.tape_base = tape_size;
+        piece.arena_base = arena_size;
+        lines += piece.ix.line_count;
+        escape_count += static_cast<std::uint32_t>(piece.ix.escapes.size());
+        tape_size += static_cast<std::uint32_t>(piece.ix.tape.size());
+        arena_size += static_cast<std::uint32_t>(piece.ix.arena.size());
+    }
+    ix.text = text;
+    ix.size = static_cast<std::uint32_t>(size);
+    ix.line_count = lines;
+    ix.has_markers = false;
+    ix.problem = LineProblem{};
+    ix.entries.clear();
+    ix.entries.resize(lines + 1);
+    ix.next.clear();
+    ix.next.resize(lines + 1);
+    ix.escapes.clear();
+    ix.escapes.resize(escape_count);
+    ix.tape.clear();
+    ix.tape.resize(tape_size);
+    ix.arena.clear();
+    ix.arena.resize(arena_size);
+    run_jobs(pieces.size(), [&](std::size_t begin, std::size_t end) {
+        for (std::size_t i = begin; i < end; ++i)
+            join_piece(ix, pieces[i], i + 1 == pieces.size(), lines);
+    });
+    return merge_levels(ix, pieces);
+}
+
+}  // namespace
+
+BuildResult LineIndex::build_parallel(const char* text_in, std::size_t size_in,
+                                      RunJobs run_jobs,
+                                      std::size_t piece_bytes) {
+    const std::size_t count =
+        std::min(MAX_PIECES, size_in / std::max<std::size_t>(piece_bytes, 1));
+    if (count < 2 || size_in >= TEXT_SIZE_LIMIT) return build(text_in, size_in);
+    dstd::Vector<std::size_t> starts = find_cuts(text_in, size_in, count);
+    starts.insert(starts.begin(), 0);
+    dstd::Vector<Piece> pieces;
+    // A chunk that fails, or that the merge refuses, is joined with its
+    // neighbours and built again, as the cut fell inside a scalar or a flow
+    // collection. Past a few rounds the error is likely real, and one pass
+    // names it at the cost of one more build, where more rounds could cost a
+    // build for each chunk.
+    for (std::size_t round = 0; round < MAX_ROUNDS && starts.size() > 1;
+         ++round) {
+        dstd::Vector<Piece> built(starts.size());
+        dstd::Vector<std::size_t> todo;
+        std::size_t kept = 0;
+        for (std::size_t i = 0; i < starts.size(); ++i) {
+            Piece& piece = built[i];
+            piece.begin = starts[i];
+            piece.size =
+                (i + 1 < starts.size() ? starts[i + 1] : size_in) - piece.begin;
+            while (kept < pieces.size() && pieces[kept].begin < piece.begin)
+                ++kept;
+            if (kept < pieces.size() && pieces[kept].begin == piece.begin &&
+                pieces[kept].size == piece.size && pieces[kept].is_ok) {
+                piece = std::move(pieces[kept]);
+                continue;
+            }
+            piece.frag = Fragment{};
+            piece.frag.starts_cut = i > 0;
+            todo.push_back(i);
+        }
+        pieces = std::move(built);
+        run_jobs(todo.size(), [&](std::size_t begin, std::size_t end) {
+            for (std::size_t t = begin; t < end; ++t) {
+                Piece& piece = pieces[todo[t]];
+                piece.is_ok =
+                    build_index(piece.ix, text_in + piece.begin, piece.size,
+                                &piece.frag) == BuildResult::Accepted &&
+                    !piece.ix.has_markers;
+            }
+        });
+        dstd::Vector<std::size_t> drop;
+        for (std::size_t i = 0; i < pieces.size(); ++i) {
+            if (pieces[i].is_ok) continue;
+            if (i > 0) drop.push_back(i);
+            if (i + 1 < pieces.size()) drop.push_back(i + 1);
+        }
+        if (drop.empty()) {
+            const std::size_t refused =
+                join_pieces(*this, pieces, run_jobs, text_in, size_in);
+            if (refused == 0) {
+                chunk_count = static_cast<std::uint32_t>(pieces.size());
+                return BuildResult::Accepted;
+            }
+            pieces[refused - 1].is_ok = false;
+            pieces[refused].is_ok = false;
+            drop.push_back(refused);
+        }
+        dstd::Vector<std::size_t> next_starts;
+        std::size_t d = 0;
+        std::sort(drop.begin(), drop.end());
+        for (std::size_t i = 0; i < starts.size(); ++i) {
+            while (d < drop.size() && drop[d] < i) ++d;
+            if (d < drop.size() && drop[d] == i) continue;
+            next_starts.push_back(starts[i]);
+        }
+        starts = std::move(next_starts);
+    }
+    return build(text_in, size_in);
 }
 
 }  // namespace dftracer::utils::yaml

@@ -143,6 +143,21 @@ class KeySet {
         for (auto& table : tables_) table.clear();
     }
 
+    /// Calls `fn(hash, id)` for each key of the open map `level`, with the
+    /// hash of @ref hash_key.
+    template <class Fn>
+    void for_each_key(const Level& level, Fn&& fn) const {
+        for (std::uint32_t i = 0; i < level.count; ++i) {
+            if (level.is_small) {
+                fn(hash_short_word(level.small[i]), level.small_ids[i]);
+            } else {
+                const std::uint64_t entry = keys_[level.base + i];
+                fn(static_cast<std::uint32_t>(entry >> 32),
+                   static_cast<std::uint32_t>(entry));
+            }
+        }
+    }
+
    private:
     static constexpr std::size_t LINEAR_KEY_LIMIT = 64;
 

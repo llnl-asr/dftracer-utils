@@ -2,6 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/yaml/document.h>
 #include <dftracer/utils/yaml/line_index.h>
@@ -18,6 +19,8 @@ using namespace dftracer::utils;
 using dftu_yaml_test::dump;
 using dftu_yaml_test::Gen;
 using dftu_yaml_test::matches;
+using dftu_yaml_test::mutate;
+using dftu_yaml_test::Rng;
 using dftu_yaml_test::Tree;
 using yaml::Document;
 using yaml::LineIndex;
@@ -55,6 +58,53 @@ void check_same_index(const LineIndex& a, const LineIndex& b) {
         CHECK((x.pos == y.pos && x.size == y.size && x.kind == y.kind &&
                x.flags == y.flags));
     }
+}
+
+void check_same_escapes(const LineIndex& a, const LineIndex& b) {
+    REQUIRE(a.escapes.size() == b.escapes.size());
+    for (std::size_t i = 0; i < a.escapes.size(); ++i) {
+        const yaml::EscapeEntry& x = a.escapes[i];
+        const yaml::EscapeEntry& y = b.escapes[i];
+        CHECK((x.key == y.key && x.off == y.off && x.len == y.len &&
+               x.end == y.end));
+    }
+}
+
+// Runs the ranges on the calling thread, last to first.
+void run_backward(std::size_t n,
+                  dstd::FunctionRef<void(std::size_t, std::size_t)> body) {
+    for (std::size_t i = n; i-- > 0;) body(i, i + 1);
+}
+
+// Runs each range on a thread of its own.
+void run_on_threads(std::size_t n,
+                    dstd::FunctionRef<void(std::size_t, std::size_t)> body) {
+    dstd::Vector<dstd::Thread> threads;
+    for (std::size_t i = 0; i < n; ++i)
+        threads.emplace_back([&body, i] { body(i, i + 1); });
+    for (auto& thread : threads) thread.join();
+}
+
+// Builds `text` in one pass and in chunks of about `piece` bytes, and checks
+// that both give the same index or the same problem. True when the chunks
+// were joined.
+bool check_chunked_build(const dstd::String& text, std::size_t piece,
+                         yaml::RunJobs run_jobs) {
+    LineIndex whole;
+    const auto whole_ok = whole.build(text.data(), text.size());
+    LineIndex chunked;
+    const auto chunked_ok =
+        chunked.build_parallel(text.data(), text.size(), run_jobs, piece);
+    REQUIRE(whole_ok == chunked_ok);
+    if (whole_ok != yaml::BuildResult::Accepted) {
+        CHECK(whole.problem.line == chunked.problem.line);
+        CHECK(whole.problem.col == chunked.problem.col);
+        CHECK(whole.problem.reason == chunked.problem.reason);
+        return false;
+    }
+    check_same_index(whole, chunked);
+    check_same_escapes(whole, chunked);
+    return chunked.chunk_count > 1;
 }
 
 }  // namespace
@@ -932,4 +982,89 @@ TEST_CASE("line index: every escape of a double quoted scalar") {
         CHECK(dstd::String(got) == want);
     }
     CHECK(Document::parse("a: \"\xF0\x9F\x98\x80\"\n", "n.yaml").has_value());
+}
+
+TEST_CASE("line index: a build in chunks gives the index of one pass") {
+    std::size_t joined = 0;
+    std::size_t texts = 0;
+    for (std::size_t seed = 1; seed <= 6000; ++seed) {
+        CAPTURE(seed);
+        Gen gen(seed);
+        const Tree tree = gen.tree();
+        const dstd::String text = gen.text(tree);
+        Rng rng{seed * 7919 + 1};
+        const dstd::String mutated = mutate(text, rng);
+        for (const std::size_t piece : {16u, 48u, 200u}) {
+            CAPTURE(piece);
+            joined += check_chunked_build(text, piece, run_backward) ? 1 : 0;
+            joined += check_chunked_build(mutated, piece, run_backward) ? 1 : 0;
+            texts += 2;
+        }
+    }
+    CHECK(joined > 1000);
+    CHECK(texts == 36000);
+}
+
+TEST_CASE("line index: a large text of generated values joins as one pass") {
+    std::size_t joined = 0;
+    std::size_t valid = 0;
+    std::size_t seed = 1;
+    for (std::size_t round = 0; round < 300; ++round) {
+        CAPTURE(round);
+        dstd::String text;
+        for (std::size_t k = 0; k < 40;) {
+            Gen gen(seed++);
+            const Tree tree = gen.tree();
+            const dstd::String value = gen.text(tree);
+            dstd::String entry = dstd::fmt<"key_{}:\n">(k);
+            std::size_t at = 0;
+            while (at < value.size()) {
+                const std::size_t nl = value.find('\n', at);
+                const std::size_t end =
+                    nl == dstd::String::npos ? value.size() : nl + 1;
+                entry += "  ";
+                entry.append(value.data() + at, end - at);
+                at = end;
+            }
+            if (!value.empty() && value.back() != '\n') entry += '\n';
+            LineIndex alone;
+            if (alone.build(entry.data(), entry.size()) !=
+                yaml::BuildResult::Accepted)
+                continue;
+            text += entry;
+            ++k;
+        }
+        LineIndex whole;
+        if (whole.build(text.data(), text.size()) ==
+            yaml::BuildResult::Accepted)
+            ++valid;
+        for (const std::size_t piece : {64u, 300u, 2000u})
+            joined += check_chunked_build(text, piece, run_backward) ? 1 : 0;
+    }
+    CHECK(valid > 250);
+    CHECK(joined * 2 > valid * 3);
+}
+
+TEST_CASE("line index: chunks built on their own threads join the same") {
+    dstd::String text;
+    for (int t = 0; t < 6; ++t) {
+        text += dstd::fmt<"top{}:\n">(t);
+        for (int g = 0; g < 40; ++g) {
+            text += dstd::fmt<"  grp_{}:\n    list:\n">(g);
+            for (int i = 0; i < 5; ++i)
+                text += dstd::fmt<
+                    "      - id: {}\n        note: |\n          "
+                    "x {}\n        s: \"a\\tb\"\n">(i, g);
+            text +=
+                "    flow: {a: [1, 2],\n      b: c}\n    plain: one\n"
+                "      two\n";
+        }
+    }
+    std::size_t joined = 0;
+    for (const std::size_t piece : {64u, 500u, 4000u})
+        joined += check_chunked_build(text, piece, run_on_threads) ? 1 : 0;
+    CHECK(joined == 3);
+    dstd::String duplicate = text;
+    duplicate += "top3:\n  again: 1\n";
+    CHECK_FALSE(check_chunked_build(duplicate, 64, run_on_threads));
 }

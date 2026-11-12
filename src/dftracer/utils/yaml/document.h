@@ -7,6 +7,7 @@
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/yaml/run_jobs.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -108,6 +109,14 @@ class Document {
     /// InvalidArgument errors too.
     static dstd::Result<Document> parse(dstd::String text,
                                         dstd::StringView source_name);
+
+    /// As @ref parse, with the text cut into chunks that `run_jobs` indexes at
+    /// the same time, then joined. The result and every error are those of
+    /// @ref parse: a text that the chunks cannot show to be the same is
+    /// parsed again on the calling thread.
+    static dstd::Result<Document> parse(dstd::String text,
+                                        dstd::StringView source_name,
+                                        RunJobs run_jobs);
 
     /// The top node. Empty text gives a null node.
     Value root() const;

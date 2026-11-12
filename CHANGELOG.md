@@ -14,6 +14,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   The yaml library reads no files.
   Each chunk of about 64 MiB (`RecordsOptions::chunk_bytes`) is parsed on its own and its buffers are reused, so memory follows the chunk and not the text.
   `Records::next_chunks` gives a batch of `RecordsOptions::batch_chunks` chunks, which the caller can parse and read on its own threads.
+- Add `yaml::Document::parse` with a `yaml::RunJobs` hook that indexes one large text in chunks on the caller's threads and joins them, with the same result and errors as the one-thread parse.
+  A 200 MB text parsed 5 to 7 times faster on 14 threads and 7 to 9 times faster on 48.
 
 ### Changed
 

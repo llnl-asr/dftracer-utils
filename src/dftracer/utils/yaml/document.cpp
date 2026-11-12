@@ -32,6 +32,21 @@ dstd::Result<Document> Document::parse(dstd::String text,
     return Document(std::move(storage));
 }
 
+dstd::Result<Document> Document::parse(dstd::String text,
+                                       dstd::StringView source_name,
+                                       RunJobs run_jobs) {
+    auto storage = dstd::make_unique<DocumentStorage>();
+    storage->text = std::move(text);
+    const std::size_t bom =
+        bom_size(storage->text.data(), storage->text.size());
+    storage->base = storage->text.data() + bom;
+    storage->size = storage->text.size() - bom;
+    if (storage->lines.build_parallel(storage->base, storage->size, run_jobs) ==
+        BuildResult::Invalid)
+        return line_problem_error(storage->lines.problem, source_name, 1);
+    return Document(std::move(storage));
+}
+
 Value Document::root() const { return LineAccess::root(storage_.get()); }
 
 bool Value::is_object() const { return LineAccess::is_object(*this); }

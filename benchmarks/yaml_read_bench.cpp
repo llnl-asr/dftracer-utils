@@ -14,9 +14,12 @@
 //   records   yaml::Records over a file of the text, read in 1 MiB blocks,
 //             chunks of --chunk MiB
 //   records1  the same, chunks of 1 MiB
-//   parallel  the same, with batches of two chunks of --pchunk MiB per thread
-//             of a Runtime, the text read in 1 MiB blocks and each chunk
-//             parsed and walked in parallel_for
+//   parse_par yaml::Document::parse with its chunks indexed on the threads
+//             of a Runtime, no walk
+//   doc_par   the same, then the walk
+//   parallel  the same as records, with batches of two chunks of --pchunk
+//             MiB per thread of a Runtime, the text read in 1 MiB blocks and
+//             each chunk parsed and walked in parallel_for
 //
 // The walk of records sums `dur` and counts the POSIX records whose
 // args.size is above 1024; the walk of nested sums every leaf. The document
@@ -33,7 +36,8 @@
 //
 //   yaml_read_bench [--mb N] [--rounds N] [--chunk MiB] [--dir PATH]
 //                   [--pchunk MiB] [--threads N]
-//                   [--only parse|document|records|records1|parallel]
+//                   [--only
+//                   parse|document|records|records1|parallel|parse_par|doc_par]
 //                   [--shape records|nested|multiline]
 //   yaml_read_bench --smoke
 
@@ -271,6 +275,27 @@ Outcome run_document(const dstd::String& text, Shape shape, bool walks) {
     });
 }
 
+// Document::parse with its chunks indexed on the threads of `runtime`.
+Outcome run_document_parallel(const dstd::String& text, Shape shape, bool walks,
+                              Runtime& runtime) {
+    dstd::String copy = text;
+    const auto run_jobs =
+        [&](std::size_t n,
+            dstd::FunctionRef<void(std::size_t, std::size_t)> body) {
+            dftu::bench::ok(
+                runtime.parallel_for(static_cast<std::int64_t>(n), 1,
+                                     [&](std::int64_t begin, std::int64_t end) {
+                                         body(static_cast<std::size_t>(begin),
+                                              static_cast<std::size_t>(end));
+                                     }));
+        };
+    return measure([&](Answer& answer) {
+        auto doc = dftu::bench::ok(
+            yaml::Document::parse(std::move(copy), "bench", run_jobs));
+        if (walks) walk(doc.root(), shape, answer);
+    });
+}
+
 constexpr std::size_t READ_BLOCK = std::size_t{1} << 20;
 
 Outcome run_records(const dstd::Path& path, Shape shape,
@@ -468,9 +493,10 @@ int main(int argc, char** argv) {
         dftu::bench::ok(dstd::fs::write_file(file, text));
         const double input_mb = static_cast<double>(text.size()) / 1e6;
 
-        constexpr int CASES = 5;
-        static const char* const NAMES[CASES] = {"parse", "document", "records",
-                                                 "records1", "parallel"};
+        constexpr int CASES = 7;
+        static const char* const NAMES[CASES] = {
+            "parse",    "document",  "records", "records1",
+            "parallel", "parse_par", "doc_par"};
         dstd::Vector<double> seconds[CASES];
         Outcome outcomes[CASES];
         for (int round = 0; round < rounds; ++round) {
@@ -492,15 +518,23 @@ int main(int argc, char** argv) {
                         outcome =
                             run_records(file, shape, std::size_t{1} << 20);
                         break;
-                    default:
+                    case 4:
                         outcome = run_parallel(file, shape,
                                                parallel_chunk_bytes, runtime);
+                        break;
+                    case 5:
+                        outcome =
+                            run_document_parallel(text, shape, false, runtime);
+                        break;
+                    default:
+                        outcome =
+                            run_document_parallel(text, shape, true, runtime);
                         break;
                 }
                 seconds[which].push_back(outcome.seconds);
             }
         }
-        for (const int which : {1, 2, 3, 4}) {
+        for (const int which : {1, 2, 3, 4, 6}) {
             if (!seconds[which].empty() && !(outcomes[which].answer == truth)) {
                 std::fprintf(stderr, "%s: %s answer is not the generated one\n",
                              shape_name, NAMES[which]);

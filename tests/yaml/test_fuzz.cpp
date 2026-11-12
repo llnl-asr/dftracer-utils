@@ -18,6 +18,7 @@
 using namespace dftracer::utils;
 using dftu_yaml_test::Gen;
 using dftu_yaml_test::matches;
+using dftu_yaml_test::mutate;
 using dftu_yaml_test::Rng;
 using dftu_yaml_test::Tree;
 using yaml::Document;
@@ -103,54 +104,6 @@ bool is_well_formed(dstd::StringView message, dstd::StringView name,
         message.remove_prefix(1);
     }
     return line <= line_count + 1 && message.size() > 2 && message[0] == ' ';
-}
-
-dstd::String mutate(dstd::String text, Rng& rng) {
-    static const char SPECIAL[] = "&*!?|>%@`[]{},:#-'\"\\ \t\n.~\r";
-    const std::size_t rounds = 1 + rng.below(4);
-    for (std::size_t r = 0; r < rounds && !text.empty(); ++r) {
-        const std::size_t at = rng.below(text.size());
-        switch (rng.below(9)) {
-            case 0:
-                text.insert(at, 1, SPECIAL[rng.below(sizeof(SPECIAL) - 1)]);
-                break;
-            case 1:
-                text.erase(at, 1 + rng.below(4));
-                break;
-            case 2:
-                text[at] = static_cast<char>(rng.below(256));
-                break;
-            case 3:
-                text.resize(at);
-                break;
-            case 4: {
-                const std::size_t start = text.rfind('\n', at);
-                const std::size_t from =
-                    start == dstd::String::npos ? 0 : start + 1;
-                const std::size_t end = text.find('\n', at);
-                const std::size_t to =
-                    end == dstd::String::npos ? text.size() : end + 1;
-                text.insert(from, text.substr(from, to - from));
-                break;
-            }
-            case 5:
-                text.insert(at, rng.chance(50) ? "\n---\n" : "\n...\n");
-                break;
-            case 6: {
-                const std::size_t start = text.rfind('\n', at);
-                text.insert(start == dstd::String::npos ? 0 : start + 1,
-                            rng.chance(50) ? "\t" : "  ");
-                break;
-            }
-            case 7:
-                text.insert(at, rng.chance(50) ? "[" : "{");
-                break;
-            default:
-                text.insert(at, "\n");
-                break;
-        }
-    }
-    return text;
 }
 
 }  // namespace

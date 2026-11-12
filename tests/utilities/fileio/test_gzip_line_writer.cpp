@@ -975,7 +975,8 @@ namespace {
 // Appends under a stop token until a stop or an error ends the loop. Waits
 // until the output file exists, runs `before_stop`, stops the task, then runs
 // `after_stop`. With `close_after` the task appends that many lines and closes
-// the writer. Gives how the task ended.
+// the writer, and the wait also lasts until the task is about to close. Gives
+// how the task ended.
 struct StopRun {
     bool stopped = false;
     bool errored = false;
@@ -989,6 +990,7 @@ StopRun write_until_stopped(const dstd::String& path, GzipWriterOptions options,
     StopRun run;
     Runtime rt(4);
     coro::StopSource source;
+    std::atomic<bool> closing{false};
     dftu_utils_test::ok(rt.block_on([&]() -> coro::CoroTask<void> {
         coro::Scope scope;
         auto writing = [&]() -> coro::CoroTask<void> {
@@ -1003,6 +1005,7 @@ StopRun write_until_stopped(const dstd::String& path, GzipWriterOptions options,
                 }
             }
             if (close_after) {
+                closing = true;
                 auto closed = co_await wr->close();
                 if (!closed) run.errored = true;
             }
@@ -1011,7 +1014,8 @@ StopRun write_until_stopped(const dstd::String& path, GzipWriterOptions options,
             coro::with_stop_token(writing(), source.token()));
         const auto deadline =
             std::chrono::steady_clock::now() + std::chrono::seconds(10);
-        while (!has_output(path) && std::chrono::steady_clock::now() < deadline)
+        while ((!has_output(path) || (close_after && !closing)) &&
+               std::chrono::steady_clock::now() < deadline)
             co_await coro::sleep(std::chrono::milliseconds(5));
         run.existed = has_output(path);
         if (before_stop) before_stop();
@@ -1094,16 +1098,27 @@ TEST_CASE("GzipLineWriter - a stop during close ends the task stopped") {
     GzipWriterOptions o;
     o.member_size = 200;
     o.workers = 2;
-    o.fold = [](const MemberRef&, dstd::StringView) -> dstd::Result<void> {
-        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    std::atomic<bool> held{false}, release{false};
+    o.fold = [&](const MemberRef&, dstd::StringView) -> dstd::Result<void> {
+        held = true;
+        const auto deadline =
+            std::chrono::steady_clock::now() + std::chrono::seconds(20);
+        while (!release && std::chrono::steady_clock::now() < deadline)
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
         return {};
     };
     // Few lines, so every append returns at once and the task sits in close()
-    // while queued members wait for a compute slot.
+    // while the folds are held until the stop is sent.
     const StopRun run = write_until_stopped(
         dstd::String(path.str()), std::move(o),
-        [] { std::this_thread::sleep_for(std::chrono::milliseconds(100)); }, {},
-        7);
+        [&] {
+            const auto deadline =
+                std::chrono::steady_clock::now() + std::chrono::seconds(10);
+            while (!held && std::chrono::steady_clock::now() < deadline)
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        },
+        [&] { release = true; }, 7);
+    CHECK(held.load());
     CHECK(run.existed);
     CHECK(run.stopped);
     CHECK(!run.errored);

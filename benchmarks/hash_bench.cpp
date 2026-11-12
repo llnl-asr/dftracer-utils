@@ -11,6 +11,7 @@
 //   hash_bench --reps R       (R reps per case)
 
 #include <dftracer/utils/dstd/fmt.h>
+#include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/hash/fnv1a.h>
 #include <dftracer/utils/dstd/hash/xxh3.h>
 #include <dftracer/utils/dstd/string.h>
@@ -63,7 +64,7 @@ struct KeySet {
 KeySet fixed_size(std::size_t len) {
     KeySet set;
     set.label = dstd::fmt<"len {}">(len);
-    std::uint64_t x = 0x9E3779B97F4A7C15ULL ^ len;
+    std::uint64_t x = dstd::hash::GOLDEN_RATIO ^ len;
     for (std::size_t i = 0; i < POOL; ++i) {
         dstd::String key(len, '\0');
         for (std::size_t j = 0; j < len; ++j) {

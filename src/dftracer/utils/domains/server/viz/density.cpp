@@ -17,6 +17,7 @@
 #include <dftracer/utils/domains/server/viz/scan.h>
 #include <dftracer/utils/domains/server/viz/summary_build.h>
 #include <dftracer/utils/domains/server/viz_api.h>
+#include <dftracer/utils/dstd/ascii.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/hash_map.h>
@@ -474,8 +475,8 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
     if (group_col.size() > 128)
         co_return HttpResponse::bad_request("group_by too long");
     for (char c : group_col) {
-        if (!std::isalnum(static_cast<unsigned char>(c)) && c != '_' &&
-            c != '.' && c != '-' && c != ',')
+        if (!dstd::is_ascii_alnum(c) && c != '_' && c != '.' && c != '-' &&
+            c != ',')
             co_return HttpResponse::bad_request("Invalid group_by column");
     }
 

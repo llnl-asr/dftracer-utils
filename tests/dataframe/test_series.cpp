@@ -10,6 +10,7 @@
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/field_stat.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
+#include <dftracer/utils/dataframe/internal/spill.h>
 #include <dftracer/utils/dataframe/kernels/elementwise.h>
 #include <dftracer/utils/dataframe/kernels/field_stat.h>
 #include <dftracer/utils/dataframe/kernels/kernels.h>
@@ -1173,6 +1174,23 @@ TEST_SUITE("vec") {
         for (int k = 0; k < 10; ++k) longs += "\xC3\xA9";
         Series lc = Series::strings({longs}).str_len_chars();
         CHECK(lc.data<std::int64_t>()[0] == 50);
+
+        // Many short rows: each is counted with one masked vector while the
+        // load stays inside the buffer, and the last rows byte by byte.
+        dstd::Vector<dstd::String> rows;
+        const char* parts[] = {"a", "\xC3\xA9", "\xE6\x97\xA5", "xyz", ""};
+        for (int r = 0; r < 500; ++r) {
+            dstd::String row;
+            for (int k = 0; k < r % 23; ++k) row += parts[(r + k) % 5];
+            rows.push_back(row);
+        }
+        Series many = Series::strings(rows).str_len_chars();
+        for (std::size_t r = 0; r < rows.size(); ++r) {
+            std::int64_t want = 0;
+            for (const char c : rows[r])
+                if ((static_cast<unsigned char>(c) & 0xC0) != 0x80) ++want;
+            CHECK(many.data<std::int64_t>()[r] == want);
+        }
 
         Series find = Series::strings({"hello/world", "nope"}).str_find("/");
         CHECK(find.data<std::int64_t>()[0] == 5);
@@ -3299,4 +3317,104 @@ TEST_CASE("dftu_series_new_string rejects wrapped offsets") {
     const std::int32_t offsets[2] = {0, -5};
     CHECK(dftu_series_new_string(DFTU_TYPE_STRING, offsets, "abc", 1,
                                  nullptr) == nullptr);
+}
+
+TEST_CASE("a Series has no name until it is given one") {
+    const std::int64_t v[3] = {1, 2, 3};
+    Series s = Series::flat_i64(v, 3);
+    CHECK(s.name().empty());
+    std::size_t len = 7;
+    CHECK(dftu_series_name(s.handle(), &len) == nullptr);
+    CHECK(len == 0);
+    CHECK(dftu_series_name(nullptr, &len) == nullptr);
+    CHECK(len == 0);
+    CHECK(dftu_series_rename(nullptr, "x", 1) == nullptr);
+}
+
+TEST_CASE("rename gives a new handle sharing the buffers") {
+    const std::int64_t v[3] = {1, 2, 3};
+    Series s = Series::flat_i64(v, 3);
+    Series named = s.rename("latency");
+    CHECK(named.name() == "latency");
+    CHECK(s.name().empty());
+    CHECK(named.data<std::int64_t>() == s.data<std::int64_t>());
+
+    std::size_t len = 0;
+    const char* p = dftu_series_name(named.handle(), &len);
+    CHECK(dstd::StringView(p, len) == "latency");
+
+    CHECK(named.rename("").name().empty());
+    dftu_series* cleared = dftu_series_rename(named.handle(), nullptr, 4);
+    CHECK(dftu_series_name(cleared, nullptr) == nullptr);
+    dftu_series_free(cleared);
+    CHECK(named.rename("other").name() == "other");
+    CHECK(named.name() == "latency");
+}
+
+TEST_CASE("share and slice keep the name") {
+    const std::int64_t v[4] = {1, 2, 3, 4};
+    Series s = Series::flat_i64(v, 4).rename("x");
+    CHECK(s.share().name() == "x");
+    CHECK(s.slice(1, 2).name() == "x");
+    CHECK(s.as_json().name().empty());
+    Series text =
+        Series::strings(dstd::Vector<dstd::String>{"1", "2"}).rename("t");
+    CHECK(text.as_json().name() == "t");
+}
+
+TEST_CASE("an unary op keeps the name and a binary op keeps a common one") {
+    const std::int64_t v[3] = {-1, 2, -3};
+    Series a = Series::flat_i64(v, 3).rename("x");
+    Series same = Series::flat_i64(v, 3).rename("x");
+    Series other = Series::flat_i64(v, 3).rename("y");
+    Series bare = Series::flat_i64(v, 3);
+
+    CHECK(a.abs().name() == "x");
+    CHECK(a.cumsum().name() == "x");
+    CHECK(a.gt(0).name() == "x");
+    CHECK((a + 1).name() == "x");
+    CHECK(a.rolling(RollingOp::Sum, 2).name() == "x");
+    CHECK(a.sort().name() == "x");
+    CHECK(a.head(2).name() == "x");
+    CHECK(a.filter(a.gt(0)).name() == "x");
+    CHECK(a.argsort().name() == "x");
+    CHECK(bare.abs().name().empty());
+
+    CHECK(a.add(same).name() == "x");
+    CHECK((a - same).name() == "x");
+    CHECK(a.floordiv(same).name() == "x");
+    CHECK(a.add(other).name().empty());
+    CHECK(a.add(bare).name().empty());
+    CHECK(bare.add(a).name().empty());
+    CHECK(bare.add(bare).name().empty());
+}
+
+TEST_CASE("DataFrame::column names the series with the column name") {
+    const std::int64_t v[2] = {1, 2};
+    DataFrame f;
+    f.names.emplace_back("a");
+    f.columns.push_back(Series::flat_i64(v, 2));
+    f.names.emplace_back("b");
+    f.columns.push_back(Series::flat_i64(v, 2).rename("other"));
+    CHECK(f.column("a").name() == "a");
+    CHECK(f.column("b").name() == "b");
+    CHECK(!f.column("missing").valid());
+}
+
+TEST_CASE("the name survives the native byte form") {
+    const std::int64_t v[2] = {1, 2};
+    Series s = Series::flat_i64(v, 2).rename("kept");
+    dstd::String bytes;
+    REQUIRE(spill::put_series(bytes, s));
+    const auto* p = reinterpret_cast<const std::uint8_t*>(bytes.data());
+    auto back = spill::get_series(p, p + bytes.size());
+    REQUIRE(back);
+    CHECK(back->name() == "kept");
+
+    dstd::String plain;
+    REQUIRE(spill::put_series(plain, Series::flat_i64(v, 2)));
+    p = reinterpret_cast<const std::uint8_t*>(plain.data());
+    auto bare = spill::get_series(p, p + plain.size());
+    REQUIRE(bare);
+    CHECK(bare->name().empty());
 }

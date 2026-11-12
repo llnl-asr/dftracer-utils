@@ -19,6 +19,10 @@ inline constexpr std::size_t LARGE_MAX = std::size_t{64} << 20;
 /// decay runs only when a heap maps or frees a large run. 2 and 4 MiB slow the
 /// mixed heap_bench case.
 inline constexpr std::size_t LARGE_PURGE_SIZE = std::size_t{8} << 20;
+/// A mapped run of at least this size asks Linux for transparent huge pages,
+/// so that a large buffer faults in 2 MiB pages, not 4 KiB ones. Smaller runs
+/// and the spans of small blocks do not, so their resident size stays exact.
+inline constexpr std::size_t HUGE_PAGE_RUN_MIN = std::size_t{2} << 20;
 /// Freed but still backed bytes past which a heap purges its idle pages on
 /// free, so retention does not grow with the free rate or the thread count.
 /// 64 MiB made an index build fault its buffers back far more often and

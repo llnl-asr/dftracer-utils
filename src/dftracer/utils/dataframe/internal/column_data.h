@@ -80,6 +80,9 @@ struct dftu_series : dftracer::utils::dstd::HeapObject {
     /// otherwise at most one entry, the base of a SELECTION or DICTIONARY or
     /// the values of a list-like column.
     dftracer::utils::dstd::Vector<dftu_nested> nested;
+    /// The series name; null when the series has none. Shared by every handle
+    /// that copies this one.
+    dftracer::utils::dstd::SharedPtr<const dftracer::utils::dstd::String> name;
     dftracer::utils::dataframe::TypeParams params;
 
     /// Whether `nested` holds Struct fields.

@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_DUQL_NUMBERS_H
 #define DFTRACER_UTILS_DUQL_NUMBERS_H
 
+#include <dftracer/utils/dstd/ascii.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
@@ -112,7 +113,7 @@ inline bool may_start_double(char c) {
         case 'N':
             return true;
         default:
-            return c >= '0' && c <= '9';
+            return dstd::is_ascii_digit(c);
     }
 }
 

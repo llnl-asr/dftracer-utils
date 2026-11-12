@@ -283,7 +283,7 @@ Convert out (only at the edge)
 .. code-block:: python
 
    df.to_arrow()             # pyarrow.Table (zero-copy)
-   df.to_pandas()            # pandas DataFrame (NumPy dtypes: a copy)
+   df.to_pandas()            # pandas DataFrame (NumPy dtypes, nullable dtypes for nulls: a copy)
    df.to_pandas(arrow=True)  # pandas DataFrame over Arrow buffers (no copy)
    df.to_polars()            # polars DataFrame (numbers shared, strings copied)
 

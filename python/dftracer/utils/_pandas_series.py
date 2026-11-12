@@ -190,7 +190,7 @@ class _SeriesPandasMixin:
         agg = f"{'min' if keep == 'first' else 'max'}:r:r"
         kept = Series(GroupBy(rows, ["v"]).agg(agg)._native["r"])
         first = Series(rows._native["r"]).is_in(kept)
-        return every.logical(0, first.logical_not())
+        return every.logical(0, first.logical_not()).rename(s.name)
 
     @property
     def is_monotonic_increasing(self) -> bool:
@@ -226,9 +226,27 @@ class _SeriesPandasMixin:
 
     @property
     def name(self) -> Optional[str]:
-        """A Series carries no name; it takes one from the frame column it
-        is set into."""
-        return None
+        """The name of the Series, ``None`` when it has none. Ops keep it as
+        pandas does: an elementwise or transform op gives the result this name,
+        a binary op between two Series keeps it only when both names are equal.
+        A frame column holds the name of its column."""
+        return self._native.name
+
+    @name.setter
+    def name(self, value: Optional[str]) -> None:
+        if value is not None and not isinstance(value, str):
+            raise TypeError(f"a Series name must be a str or None, not {type(value).__name__}")
+        self._native = self._native.rename(value)
+
+    def rename(self, name: Optional[str]) -> "Series":
+        """A new Series sharing this one's values under ``name`` (``None``
+        clears the name). Only the scalar form of pandas' ``rename`` is
+        supported."""
+        if name is not None and not isinstance(name, str):
+            raise TypeError(f"rename: the name must be a str or None, not {type(name).__name__}")
+        from .series import Series
+
+        return Series(self._native.rename(name))
 
     def item(self) -> object:
         s = self._s()
@@ -289,17 +307,23 @@ class _SeriesPandasMixin:
         nothing. Bool, list and temporal columns raise ``TypeError``."""
         return _replace_in(self._s(), _replace_pairs(to_replace, value), None, True)
 
-    def to_frame(self, name: str = "0") -> "DataFrame":
+    def to_frame(self, name: Optional[str] = None) -> "DataFrame":
+        """A one-column frame; the column is ``name``, else this Series' name,
+        else ``"0"``."""
         from .dataframe import DataFrame
 
+        if name is None:
+            name = self.name if self.name is not None else "0"
         return DataFrame({name: self._s()})
 
     def to_dict(self) -> Dict[int, object]:
         return dict(enumerate(self._s().to_list()))
 
-    def reset_index(self, drop: bool = False, name: str = "0") -> Union["Series", "DataFrame"]:
-        """A frame of ``index`` (positions) and the values under ``name``;
-        with ``drop`` the Series itself."""
+    def reset_index(
+        self, drop: bool = False, name: Optional[str] = None
+    ) -> Union["Series", "DataFrame"]:
+        """A frame of ``index`` (positions) and the values under ``name``
+        (default as :meth:`to_frame`); with ``drop`` the Series itself."""
         if drop:
             return self._s()
         return self.to_frame(name).with_row_index("index")

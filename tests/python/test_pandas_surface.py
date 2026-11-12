@@ -64,7 +64,7 @@ def _same(ours, ref, cols=None):
 
 def test_frame_arithmetic_and_comparisons():
     df = _frame()
-    p = df.to_pandas()
+    p = df.to_pandas().astype({"a": "float64"})
     num = p[["a", "b"]]
     _same(df + 1, num + 1)
     _same(df * 2, num * 2)
@@ -189,7 +189,7 @@ def test_frame_conveniences():
         "a": [1, 3],
         "b": [2, 4],
     }
-    assert df.to_csv().startswith("a,b,s\n1.0,1.5,x")
+    assert df.to_csv().startswith("a,b,s\n1,1.5,x")
     assert '"a"' in df.to_json() and "1.5" in df.to_string()
     assert (
         df.pipe(len) == 4

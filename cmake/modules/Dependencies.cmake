@@ -126,7 +126,7 @@ function(install_private_static_deps)
   set(deps_targets)
   foreach(target hwy hwy_contrib utf8proc_static)
     if(TARGET ${target})
-      set_target_properties(${target} PROPERTIES OUTPUT_NAME dftracer_${target})
+      set_target_properties(${target} PROPERTIES OUTPUT_NAME dftracer_utils_${target})
       list(APPEND deps_targets ${target})
     endif()
   endforeach()
@@ -145,7 +145,7 @@ function(install_private_static_deps)
 
   if(TARGET dftracer_utils_vectorscan::hs)
     get_target_property(hs_lib dftracer_utils_vectorscan::hs IMPORTED_LOCATION)
-    set(hs_name ${CMAKE_STATIC_LIBRARY_PREFIX}dftracer_hs${CMAKE_STATIC_LIBRARY_SUFFIX})
+    set(hs_name ${CMAKE_STATIC_LIBRARY_PREFIX}dftracer_utils_hs${CMAKE_STATIC_LIBRARY_SUFFIX})
     install(FILES "${hs_lib}" DESTINATION ${CMAKE_INSTALL_LIBDIR}
             RENAME ${hs_name})
     set(hs_config ${CMAKE_BINARY_DIR}/dftracer_utils_vectorscan/dftracer_utils_vectorscanConfig.cmake)
@@ -361,7 +361,7 @@ function(need_zlib)
   endif()
   set_target_properties(
     ${_zng}
-    PROPERTIES OUTPUT_NAME dftracer_zlib
+    PROPERTIES OUTPUT_NAME dftracer_utils_zlib
                ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib
                POSITION_INDEPENDENT_CODE ON
                C_VISIBILITY_PRESET hidden
@@ -1111,52 +1111,6 @@ function(link_boost_math TARGET_NAME)
                              PRIVATE ${boost_math_SOURCE_DIR}/include)
   target_compile_definitions(${TARGET_NAME} PRIVATE BOOST_MATH_STANDALONE)
   dftracer_utils_ok("Linked ${TARGET_NAME} to Boost.Math (standalone)")
-endfunction()
-
-# ==============================================================================
-# yaml-cpp - YAML emit/parse for DLIO config generation
-# ==============================================================================
-
-function(need_yaml_cpp)
-  if(NOT yaml-cpp_ADDED)
-    cpmaddpackage(
-      NAME
-      yaml-cpp
-      GITHUB_REPOSITORY
-      jbeder/yaml-cpp
-      GIT_TAG
-      yaml-cpp-0.9.0
-      OPTIONS
-      "YAML_CPP_BUILD_TESTS OFF"
-      "YAML_CPP_BUILD_TOOLS OFF"
-      "YAML_CPP_BUILD_CONTRIB OFF"
-      "YAML_BUILD_SHARED_LIBS OFF"
-      "YAML_CPP_INSTALL OFF"
-      FORCE
-      YES)
-    # Libs.private names -lyaml-cpp in every build type.
-    set_target_properties(yaml-cpp PROPERTIES DEBUG_POSTFIX "")
-    install_dependency_archive(yaml-cpp yaml-cpp:: TARGETS yaml-cpp)
-  endif()
-endfunction()
-
-# Link yaml-cpp PRIVATE so the static library is bundled into the consumer and
-# the header path stays out of the installed/exported target set.
-function(link_yaml_cpp TARGET_NAME)
-  if(NOT TARGET_NAME)
-    message(FATAL_ERROR "link_yaml_cpp: TARGET_NAME is required")
-  endif()
-  if(NOT TARGET ${TARGET_NAME})
-    message(FATAL_ERROR "link_yaml_cpp: target '${TARGET_NAME}' does not exist")
-  endif()
-  if(NOT TARGET yaml-cpp::yaml-cpp)
-    message(
-      FATAL_ERROR
-        "link_yaml_cpp: yaml-cpp::yaml-cpp target missing; call need_yaml_cpp() first"
-    )
-  endif()
-  target_link_libraries(${TARGET_NAME} PRIVATE yaml-cpp::yaml-cpp)
-  dftracer_utils_ok("Linked ${TARGET_NAME} to yaml-cpp")
 endfunction()
 
 # ==============================================================================

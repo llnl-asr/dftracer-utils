@@ -112,7 +112,9 @@ def test_dictionary_encoded_strings_materialize():
     s = pd.Series(["x", "y", "x", None, "z", "y"] * 50)
     col = DataFrame.from_pandas(pd.DataFrame({"s": s}))["s"].dictionary_encode()
     assert col.to_list() == [None if pd.isna(v) else v for v in s.tolist()]
-    assert col.to_pandas(nullable=True).equals(pd.Series(pd.array(s.tolist(), dtype="string")))
+    got = col.to_pandas(nullable=True)
+    assert isinstance(got.dtype, pd.CategoricalDtype)
+    assert got.astype("string").equals(pd.Series(pd.array(s.tolist(), dtype="string")))
 
 
 def test_frame_round_trips_every_column_kind():

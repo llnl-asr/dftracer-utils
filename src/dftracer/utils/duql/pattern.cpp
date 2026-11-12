@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/config.h>
+#include <dftracer/utils/dstd/ascii.h>
 #include <dftracer/utils/dstd/big_endian.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/function.h>
@@ -11,7 +12,6 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/pattern_engine.h>
 #include <dftracer/utils/duql/substr_simd.h>
-#include <hwy/highway.h>
 #include <pcre2.h>
 
 #ifdef DFTRACER_UTILS_ENABLE_VECTORSCAN
@@ -159,7 +159,7 @@ class DialectScan {
             if (close == dstd::StringView::npos) return 1;
             const dstd::StringView body = p_.substr(i_ + 1, close - i_ - 1);
             if (body.empty() ||
-                !((body[0] >= '0' && body[0] <= '9') || body[0] == ','))
+                !(dstd::is_ascii_digit(body[0]) || body[0] == ','))
                 return 1;
             q = body[0] == ',' ||
                         (body[0] == '0' && (body.size() == 1 || body[1] == ','))
@@ -247,9 +247,7 @@ class DialectScan {
                 break;
         }
         i_ += 2;
-        if ((e >= 'a' && e <= 'z') || (e >= 'A' && e <= 'Z') ||
-            (e >= '0' && e <= '9'))
-            return false;
+        if (dstd::is_ascii_alnum(e)) return false;
         lit.assign(1, e);
         return true;
     }
@@ -332,7 +330,7 @@ class DialectScan {
             fail("atomic group");
             return false;
         }
-        if (c == 'R' || c == '&' || c == '+' || (c >= '0' && c <= '9') ||
+        if (c == 'R' || c == '&' || c == '+' || dstd::is_ascii_digit(c) ||
             (c == 'P' && i_ + 1 < p_.size() &&
              (p_[i_ + 1] == '>' || p_[i_ + 1] == '='))) {
             i_ = open;
@@ -693,32 +691,11 @@ PatternResult compile_regex(dstd::StringView pattern, bool icase, bool whole) {
 
 namespace {
 
-// Offset of the first vector block holding a byte at or above 0x80, or the
-// start of the tail shorter than a block.
-std::size_t ascii_prefix(const unsigned char* d, std::size_t n) {
-    const hwy::HWY_NAMESPACE::ScalableTag<std::uint8_t> v8;
-    const std::size_t lanes = hwy::HWY_NAMESPACE::Lanes(v8);
-    const auto high = hwy::HWY_NAMESPACE::Set(v8, std::uint8_t{0x80});
-    std::size_t i = 0;
-    for (; i + 4 * lanes <= n; i += 4 * lanes) {
-        const auto a = hwy::HWY_NAMESPACE::Or(
-            hwy::HWY_NAMESPACE::LoadU(v8, d + i),
-            hwy::HWY_NAMESPACE::LoadU(v8, d + i + lanes));
-        const auto b = hwy::HWY_NAMESPACE::Or(
-            hwy::HWY_NAMESPACE::LoadU(v8, d + i + 2 * lanes),
-            hwy::HWY_NAMESPACE::LoadU(v8, d + i + 3 * lanes));
-        if (!hwy::HWY_NAMESPACE::AllTrue(
-                v8, hwy::HWY_NAMESPACE::Lt(hwy::HWY_NAMESPACE::Or(a, b), high)))
-            break;
-    }
-    return i;
-}
-
 bool scan_utf8(dstd::StringView s, bool& wide) {
     wide = false;
     const auto* d = reinterpret_cast<const unsigned char*>(s.data());
     const std::size_t n = s.size();
-    std::size_t i = ascii_prefix(d, n);
+    std::size_t i = detail::ascii_prefix(d, n);
     while (i < n) {
         if (i + 8 <= n) {
             std::uint64_t w;
@@ -889,7 +866,6 @@ compile_substitution(const CompiledPattern& p, dstd::StringView to) {
         sub.pieces.push_back({dstd::String(), g, true});
         return dstd::nullopt;
     };
-    auto digit = [](char c) { return c >= '0' && c <= '9'; };
     constexpr const char* BAD_DOLLAR =
         "'$' must be followed by a group number, {group} or $";
     for (std::size_t i = 0; i < to.size(); ++i) {
@@ -903,9 +879,9 @@ compile_substitution(const CompiledPattern& p, dstd::StringView to) {
         if (c == '$') {
             lit += '$';
             ++i;
-        } else if (digit(c)) {
+        } else if (dstd::is_ascii_digit(c)) {
             std::size_t g = 0, j = i + 1;
-            for (; j < to.size() && digit(to[j]); ++j)
+            for (; j < to.size() && dstd::is_ascii_digit(to[j]); ++j)
                 g = std::min<std::size_t>(g * 10 + (to[j] - '0'), 1u << 30);
             if (auto e = group(g, at))
                 return dftracer::utils::dstd::Unexpected(*e);
@@ -915,7 +891,8 @@ compile_substitution(const CompiledPattern& p, dstd::StringView to) {
             if (close == dstd::StringView::npos || close == i + 2)
                 return fail(BAD_DOLLAR, at);
             const dstd::StringView ref = to.substr(i + 2, close - i - 2);
-            const bool numeric = std::all_of(ref.begin(), ref.end(), digit);
+            const bool numeric =
+                std::all_of(ref.begin(), ref.end(), dstd::is_ascii_digit);
             std::size_t g = 0;
             if (numeric) {
                 for (const char d : ref)

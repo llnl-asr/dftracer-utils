@@ -8,9 +8,14 @@
 namespace dftracer::utils::json {
 
 /// Escape policy for dstd::fmt_with: string arguments are JSON-escaped (no
-/// quotes added); worst case is 6 bytes a byte.
+/// quotes added). The bound is the worst case of 6 bytes a byte for a string
+/// under LONG_STRING bytes, and the exact escaped size, counted in one pass,
+/// from there on, so a long string does not reserve up to 6 times its size.
 struct JsonEscape {
-    static std::size_t bound(dstd::StringView s) { return 6 * s.size(); }
+    static constexpr std::size_t LONG_STRING = 64;
+    static std::size_t bound(dstd::StringView s) {
+        return s.size() < LONG_STRING ? 6 * s.size() : escaped_json_size(s);
+    }
     static char* write(char* d, dstd::StringView s) {
         return escape_json_to(d, s);
     }

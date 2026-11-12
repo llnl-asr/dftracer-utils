@@ -10,6 +10,7 @@
 #include <dftracer/utils/dataframe/lazy/hash_arena.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dstd/fmt.h>
+#include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
@@ -187,7 +188,7 @@ TEST_SUITE("hash arena") {
         lazy_internal::HashArena a(*pool);
         for (std::uint64_t i = 0; i < 57000; ++i) {
             const dstd::String key = dstd::to_string(i * 2654435761u);
-            REQUIRE(put(a, i * 0x9e3779b97f4a7c15ULL, key));
+            REQUIRE(put(a, i * dstd::hash::GOLDEN_RATIO, key));
         }
         CHECK(a.bytes() < (std::uint64_t{5} << 20));
         CHECK(pool->live() >= a.bytes());

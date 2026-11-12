@@ -24,7 +24,7 @@ set(RANK_cache 4)
 # Modules below the index; the trace format headers move into the dftracer
 # decoder in stage 5. plugins/abi/ is the plugin C ABI: declarations only.
 set(BASE_PREFIXES
-    memory/ dstd/ common/ coro/ runtime/ json/ dataframe/ plugins/abi/ duql/ trace/arrow/ fileio/
+    memory/ dstd/ common/ coro/ runtime/ json/ dataframe/ plugins/abi/ duql/ trace/arrow/ fileio/ yaml/
     trace/args_map.h trace/event.h
     trace/internal/ trace/parse_inflated.h trace/schema.h)
 

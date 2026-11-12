@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/ascii.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
@@ -54,8 +55,7 @@ constexpr std::size_t MAX_ANY_POSITIONS = 256;
 
 bool is_position(dstd::StringView digits) {
     return !digits.empty() &&
-           std::all_of(digits.begin(), digits.end(),
-                       [](char c) { return c >= '0' && c <= '9'; });
+           std::all_of(digits.begin(), digits.end(), dstd::is_ascii_digit);
 }
 
 using Positions = dstd::HashMap<dstd::String, dstd::Vector<dstd::String>>;

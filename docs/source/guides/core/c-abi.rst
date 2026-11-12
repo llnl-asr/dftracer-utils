@@ -86,6 +86,13 @@ reference drops. The element type is the named ``dftu_dtype`` enum, whose values
 match the ``dataframe::TypeId`` C++ enum ordinals; the encoding code returned by
 ``dftu_series_encoding`` mirrors ``dataframe::Encoding``.
 
+``dftu_series_name`` gives the name of a column, or ``NULL`` when it has none,
+as bytes that are not NUL-terminated and stay valid while the column lives.
+``dftu_series_rename`` returns a new owned column that shares the buffers of the
+first and has the given name; a ``NULL`` name or a zero length clears it. Free
+the result with ``dftu_series_free``. ``dftu_series_share`` and
+``dftu_series_slice`` keep the name; the other functions do not promise one.
+
 Evaluate a mask
 ---------------
 

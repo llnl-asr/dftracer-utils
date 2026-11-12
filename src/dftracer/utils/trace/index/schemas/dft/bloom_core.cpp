@@ -612,10 +612,8 @@ BloomCore::EventCache::NameSlot& BloomCore::EventCache::name_slot(
 
 BloomCore::EventCache::PidSlot& BloomCore::EventCache::pid_slot(
     std::uint64_t pid, std::uint64_t tid) {
-    // 0xC2B2AE3D27D4EB4F is xxHash's PRIME64_2 (Yann Collet, BSD-2-Clause,
-    // https://github.com/Cyan4973/xxHash).
     PidSlot& slot = pids_[((pid * dstd::hash::GOLDEN_RATIO) ^
-                           (tid * 0xC2B2AE3D27D4EB4FULL)) >>
+                           (tid * dstd::hash::XXH64_PRIME2)) >>
                           56];
     if (slot.epoch != epoch_ || slot.pid != pid || slot.tid != tid) {
         slot = PidSlot{};

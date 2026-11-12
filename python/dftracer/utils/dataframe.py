@@ -39,8 +39,8 @@ from .series import (
     _apply_index,
     _arrow_native,
     _indices,
+    _pandas_default,
     _pandas_nullable,
-    _pandas_values,
     _polars_via_arrow,
     _register,
     _require_pyarrow,
@@ -611,13 +611,22 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
         index: "Union[str, Sequence[str], None]" = None,
     ) -> "pd.DataFrame":
         """This frame as a pandas DataFrame. By default the columns are NumPy
-        dtypes, which copies (pyarrow packs them into blocks); ``arrow=True``
-        keeps them Arrow-backed (``int64[pyarrow]``, ``string[pyarrow]``, ...),
-        sharing this frame's buffers with no copy; ``nullable=True`` gives
-        pandas' own nullable dtypes (``Int8`` .. ``UInt64``, ``Float32``,
-        ``Float64``, ``boolean``, ``string``) so a null is ``pd.NA`` and a float
-        NaN stays NaN; a column of another type converts as usual. The NumPy and
-        nullable forms are built natively, with no pyarrow.
+        dtypes, which copies (pyarrow packs them into blocks), except that a
+        dictionary-encoded string column becomes ``category`` and an integer,
+        bool or string column that holds nulls becomes pandas' own nullable
+        dtype (``Int8`` .. ``UInt64``, ``boolean``, ``string``), so
+        ``DataFrame.from_pandas(df).to_pandas()`` keeps those dtypes. On pandas 3
+        a string column with nulls is the default ``str`` dtype, which holds
+        missing values already. Float columns keep NaN. ``arrow=True``
+        keeps the columns Arrow-backed (``int64[pyarrow]``, ``string[pyarrow]``,
+        ...), sharing this frame's buffers with no copy; ``nullable=True`` gives
+        the nullable dtypes (``Int8`` .. ``UInt64``, ``Float32``, ``Float64``,
+        ``boolean``, ``string``) even for a column with no nulls, so a null is
+        ``pd.NA`` and a float NaN stays NaN; a column of another type converts
+        as usual. The NumPy and nullable forms are built natively. A dictionary
+        column uses pyarrow, where installed, to read its codes without building
+        a string per row, and keeps the dictionary order of its used values;
+        without pyarrow the categories come out sorted.
 
         ``index`` names the columns to move into the pandas index, in the order
         given: a flat index for one name, a MultiIndex for several. An unknown
@@ -632,7 +641,7 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
             def one(name: str) -> "Union[pd.Series, np.ndarray, ExtensionArray]":
                 col = self._native[name]
                 values = _pandas_nullable(col) if nullable else None
-                return values if values is not None else _pandas_values(col)
+                return values if values is not None else _pandas_default(col)
 
             out = pd.DataFrame({name: one(name) for name in self.columns})
         return out if index is None else _apply_index(out, index)

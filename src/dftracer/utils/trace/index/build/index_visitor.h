@@ -35,6 +35,15 @@ class IndexVisitor {
     virtual coro::CoroTask<dstd::Result<void>> on_chunk(
         const char* data, std::size_t len, std::size_t checkpoint_idx) = 0;
 
+    /// The chunks so far end in a line that no later chunk completes, since
+    /// the member they came from is damaged there. A consumer that carries a
+    /// partial tail reads it as a line of its own, so it does not join the
+    /// first line of the next member. Default: ignored.
+    virtual coro::CoroTask<dstd::Result<void>> on_line_cut(
+        std::size_t /*checkpoint_idx*/) {
+        co_return dstd::Result<void>{};
+    }
+
     virtual coro::CoroTask<dstd::Result<void>> flush() {
         co_return dstd::Result<void>{};
     }

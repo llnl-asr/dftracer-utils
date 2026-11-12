@@ -53,6 +53,7 @@ still import and export every column type:
   becomes columns after the data columns. Polars list, array and struct
   columns import as list and struct columns. A pandas Arrow-backed column
   needs pyarrow (pandas itself needs it to hold one).
+  A pandas ``category`` column whose categories are strings becomes a dictionary-encoded string column, without its unused categories or their order; other categories keep their values.
 - ``from_parquet`` reads through ``pyarrow.parquet``.
 - ``from_dict`` builds the frame natively from Series, lists of scalars, NumPy
   arrays and pandas or polars Series; a mapping with anything else (a pyarrow
@@ -102,8 +103,10 @@ Get data out
 ``to_arrow()`` is the zero-copy exit on both classes and needs pyarrow.
 ``to_pandas()``, ``to_polars()``, ``to_numpy()`` and ``to_list()`` are built
 natively, with no pyarrow, for every column type: a flat, non-null,
-fixed-width numeric column is read straight from the native buffer; nulls in
-an integer column become NaN (float64); dates and timestamps are
+fixed-width numeric column is read straight from the native buffer; in
+``to_pandas()`` an integer or bool column with nulls gives pandas' nullable dtype
+(``Int64``, ``boolean``) and a dictionary-encoded string column gives ``category``;
+in ``to_numpy()`` nulls in an integer column become NaN (float64); dates and timestamps are
 ``datetime64`` (UTC values for a zoned timestamp, which pandas and polars
 show in their zone), durations ``timedelta64``, with ``NaT`` for null; text,
 bytes, decimals, times, lists, structs and maps are object arrays of Python

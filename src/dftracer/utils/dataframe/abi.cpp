@@ -483,6 +483,25 @@ dftu_series* dftu_series_share(const dftu_series* col) {
     return new dftu_series(*col);
 }
 
+const char* dftu_series_name(const dftu_series* s, size_t* len) {
+    const bool named = s && s->name && !s->name->empty();
+    if (len) *len = named ? s->name->size() : 0;
+    return named ? s->name->data() : nullptr;
+}
+
+dftu_series* dftu_series_rename(const dftu_series* s, const char* name,
+                                size_t len) {
+    if (!s) return nullptr;
+    auto* out = new dftu_series(*s);
+    if (name && len > 0)
+        out->name =
+            dftracer::utils::dstd::make_shared<dftracer::utils::dstd::String>(
+                name, len);
+    else
+        out->name = nullptr;
+    return out;
+}
+
 namespace {
 
 BufferView window(const BufferView& parent, std::size_t at, std::size_t bytes) {
@@ -525,10 +544,8 @@ BufferView rebased_offsets(const dftu_series& col, std::int64_t offset,
     return out;
 }
 
-}  // namespace
-
-dftu_series* dftu_series_slice(const dftu_series* col, int64_t offset,
-                               int64_t len) {
+dftu_series* slice_unnamed(const dftu_series* col, int64_t offset,
+                           int64_t len) {
     if (!col) return nullptr;
     if (offset < 0) offset = 0;
     if (offset > col->length) offset = col->length;
@@ -543,13 +560,13 @@ dftu_series* dftu_series_slice(const dftu_series* col, int64_t offset,
             const std::int64_t lo = std::max(offset, starts[k]);
             const std::int64_t hi = std::min(offset + len, starts[k + 1]);
             if (hi <= lo) continue;
-            dftu_series* part = dftu_series_slice(col->nested[k].series.get(),
-                                                  lo - starts[k], hi - lo);
+            dftu_series* part = slice_unnamed(col->nested[k].series.get(),
+                                              lo - starts[k], hi - lo);
             if (!part) return nullptr;
             parts.push_back(adopt_series(part));
         }
         if (parts.empty())
-            return dftu_series_slice(col->nested.front().series.get(), 0, 0);
+            return slice_unnamed(col->nested.front().series.get(), 0, 0);
         if (parts.size() == 1) return new dftu_series(*parts.front());
         return dftracer::utils::dataframe::make_chunked(std::move(parts));
     }
@@ -617,5 +634,14 @@ dftu_series* dftu_series_slice(const dftu_series* col, int64_t offset,
         out->validity = window_bits(col->validity, offset, len, false);
         out->null_count = count_nulls(out->validity.data(), len);
     }
+    return out;
+}
+
+}  // namespace
+
+dftu_series* dftu_series_slice(const dftu_series* col, int64_t offset,
+                               int64_t len) {
+    dftu_series* out = slice_unnamed(col, offset, len);
+    if (out) out->name = col->name;
     return out;
 }

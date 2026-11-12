@@ -736,11 +736,9 @@ inline std::uint64_t quick_hash(const char* p, std::size_t n) {
             (static_cast<std::uint64_t>(static_cast<std::uint8_t>(p[n - 1]))
              << 16);
     }
-    // 0xFF51AFD7ED558CCD is the MurmurHash3 fmix64 multiplier (Austin Appleby,
-    // public domain, https://github.com/aappleby/smhasher).
     std::uint64_t h =
         (a ^ (b * dftracer::utils::dstd::hash::GOLDEN_RATIO) ^ n) *
-        0xFF51AFD7ED558CCDULL;
+        dftracer::utils::dstd::hash::MURMUR3_FMIX64_MUL1;
     return h ^ (h >> 32);
 }
 

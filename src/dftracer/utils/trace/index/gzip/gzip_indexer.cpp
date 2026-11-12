@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/common/env.h>
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/common/logging.h>
@@ -80,9 +81,42 @@ struct ParallelInflateMsg {
     bool restart = false;
     std::uint8_t bits = 0;
     dstd::String window;
+    // The first message of a range that found its own start: member_c_end is
+    // the offset of its first header.
+    bool range_start = false;
+    // The member ended where it could not be inflated further: a record that a
+    // reader streams from the header and stops reading in, not one it decodes
+    // whole.
+    bool damaged = false;
+    // With damaged: the deflate data was whole and its trailer did not match.
+    bool checksum_failed = false;
 };
 
 using ParallelChan = dftracer::utils::coro::Channel<ParallelInflateMsg>;
+
+// The bytes a message holds against the budget of its range.
+static std::uint64_t message_charge(const ParallelInflateMsg& msg,
+                                    std::uint64_t cap) noexcept {
+    return msg.data ? std::min<std::uint64_t>(msg.data_size, cap) : 0;
+}
+
+// A worker's end of its range's channel. With a budget, a message that carries
+// text waits until the dispatcher has consumed enough earlier text of the
+// range, so the plaintext a range holds is bounded by bytes, not by messages.
+struct Outbox {
+    dftracer::utils::coro::ChannelProducer<ParallelInflateMsg> producer;
+    dstd::SharedPtr<dftracer::utils::coro::AsyncSemaphore> budget;
+    std::uint64_t cap = 0;
+
+    auto guard() { return producer.guard(); }
+
+    dftracer::utils::coro::CoroTask<bool> send(ParallelInflateMsg msg) {
+        const std::uint64_t charge = budget ? message_charge(msg, cap) : 0;
+        if (charge > 0) co_await budget->acquire(charge);
+        const auto ok = co_await producer.send(std::move(msg));
+        co_return static_cast<bool>(ok);
+    }
+};
 
 using Bytes = dftracer::utils::dstd::RawBuffer<unsigned char>;
 
@@ -92,30 +126,96 @@ static void drop_front(Bytes& b, std::size_t n) noexcept {
     b.resize(b.size() - n);
 }
 
+// Compressed bytes of the file held by one worker: the file bytes
+// [off, off + data.size()), of which the first `pos` are consumed. A member
+// that ends inside the buffer leaves the bytes after it for the next member,
+// so no input byte is read twice by one worker.
+struct ReadBuf {
+    Bytes data;
+    std::uint64_t off = 0;
+    std::size_t pos = 0;
+
+    std::size_t avail() const noexcept { return data.size() - pos; }
+    const unsigned char* cur() const noexcept { return data.data() + pos; }
+    std::uint64_t end_off() const noexcept { return off + data.size(); }
+
+    // Moves to file offset `c`, keeping the held bytes from there on.
+    void seek(std::uint64_t c) {
+        if (c >= off && c <= end_off()) {
+            pos = static_cast<std::size_t>(c - off);
+        } else {
+            data.clear();
+            off = c;
+            pos = 0;
+        }
+    }
+
+    void compact() {
+        if (pos == 0) return;
+        std::memmove(data.data(), data.data() + pos, avail());
+        data.resize(avail());
+        off += pos;
+        pos = 0;
+    }
+};
+
+// Appends up to `want` bytes that follow the held bytes. Returns the bytes
+// read, 0 at end of file, -1 on a read error.
+static dftracer::utils::coro::CoroTask<ssize_t> read_more(
+    int fd, ReadBuf& in, std::uint64_t file_size, std::size_t want) {
+    const std::uint64_t at = in.end_off();
+    if (at >= file_size) co_return 0;
+    want =
+        static_cast<std::size_t>(std::min<std::uint64_t>(want, file_size - at));
+    in.compact();
+    const std::size_t old = in.data.size();
+    in.data.resize(old + want);
+    const ssize_t n = co_await dftracer::utils::runtime::io::pread(
+        fd, in.data.data() + old, want, at);
+    if (n <= 0) {
+        in.data.resize(old);
+        co_return -1;
+    }
+    in.data.resize(old + static_cast<std::size_t>(n));
+    co_return n;
+}
+
+// A member that crosses its range end is read past it in steps that double
+// from the first to the last size, so the bytes read past its end, which the
+// next range's worker reads too, stay few.
+constexpr std::size_t PAST_END_FIRST_STEP = std::size_t{8} << 10;
+constexpr std::size_t PAST_END_LAST_STEP = std::size_t{64} << 10;
+
 // Decode the gzip member at compressed offset `c_off` into `out`, reading it
-// through `comp`, which the caller reuses. Neither buffer is zeroed. Returns
-// the compressed bytes the member consumed, or nullopt on read/decode failure.
+// through `in`, which the caller reuses. Neither buffer is zeroed. Returns
+// the compressed bytes the member consumed, or nullopt on read/decode failure
+// or when `stream` is set: the member inflates past `max_out`, or past the
+// output held when `stream_input` bytes of it are buffered, or it is not whole
+// in the bytes before `read_limit`, or its data is invalid at the end of the
+// file, so the caller streams it from `in` and keeps what precedes the damage.
 // Peak memory is one member.
 static dftracer::utils::coro::CoroTask<dstd::Optional<std::uint64_t>>
 decode_member_at(int fd, std::uint64_t c_off, std::uint64_t file_size,
+                 std::uint64_t read_limit,
                  const fileio::compress::GzipMemberDecompressor& dec,
-                 Bytes& out, Bytes& comp, std::size_t& out_size,
-                 bool& truncated, std::size_t max_out, bool& too_big) {
+                 Bytes& out, ReadBuf& in, std::size_t& out_size,
+                 bool& truncated, std::size_t max_out, std::size_t stream_input,
+                 bool& stream) {
     truncated = false;
-    too_big = false;
+    stream = false;
     constexpr std::size_t READ_CHUNK = 1u << 20;
     if (out.size() < (1u << 20)) out.resize(1u << 20);
-    comp.clear();
-    std::uint64_t next_read = c_off;
+    in.seek(c_off);
     fileio::compress::DecompressResult res{};
     while (true) {
-        if (!comp.empty()) {
+        if (in.avail() > 0) {
+            const std::size_t out_cap = std::min(out.size(), max_out);
             const fileio::compress::GzipDecode status = dec.decompress_status(
-                comp.data(), comp.size(), out.data(), out.size(), res);
+                in.cur(), in.avail(), out.data(), out_cap, res);
             if (status == fileio::compress::GzipDecode::Ok) break;
             if (status == fileio::compress::GzipDecode::InsufficientSpace) {
-                if (out.size() >= max_out) {
-                    too_big = true;
+                if (out_cap >= max_out || in.avail() >= stream_input) {
+                    stream = true;
                     co_return dstd::nullopt;
                 }
                 out.resize(std::min(out.size() * 2, max_out));
@@ -123,32 +223,38 @@ decode_member_at(int fd, std::uint64_t c_off, std::uint64_t file_size,
             }
             // BadData may just mean the member is not fully buffered yet.
         }
-        if (next_read >= file_size) {
-            if (comp.empty()) co_return dstd::nullopt;
+        const std::uint64_t at = in.end_off();
+        if (at >= file_size) {
+            if (in.avail() == 0) co_return dstd::nullopt;
             dstd::Vector<std::uint8_t> cut;
             auto keep = fileio::compress::decode_truncated_member(
-                comp.data(), comp.size(), cut);
-            if (!keep) co_return dstd::nullopt;
+                in.cur(), in.avail(), cut);
+            if (!keep) {
+                stream = true;
+                co_return dstd::nullopt;
+            }
             out.resize(cut.size());
             std::memcpy(out.data(), cut.data(), cut.size());
             out_size = *keep;
             truncated = true;
-            co_return static_cast<std::uint64_t>(comp.size());
+            const std::uint64_t used = in.avail();
+            in.pos = in.data.size();
+            co_return used;
+        }
+        if (at >= read_limit) {
+            stream = true;
+            co_return dstd::nullopt;
         }
         // libdeflate restarts the member on each retry, so at least double
         // the buffered input per retry to keep a large member linear.
         const std::size_t want =
             static_cast<std::size_t>(std::min<std::uint64_t>(
-                std::max(READ_CHUNK, comp.size()), file_size - next_read));
-        const std::size_t old = comp.size();
-        comp.resize(old + want);
-        const ssize_t n = co_await dftracer::utils::runtime::io::pread(
-            fd, comp.data() + old, want, next_read);
-        if (n <= 0) co_return dstd::nullopt;
-        comp.resize(old + static_cast<std::size_t>(n));
-        next_read += static_cast<std::uint64_t>(n);
+                std::max(READ_CHUNK, in.avail()), read_limit - at));
+        const ssize_t got = co_await read_more(fd, in, file_size, want);
+        if (got <= 0) co_return dstd::nullopt;
     }
     out_size = res.out_bytes;
+    in.pos += static_cast<std::size_t>(res.in_bytes);
     co_return res.in_bytes;
 }
 
@@ -178,6 +284,10 @@ constexpr std::size_t SHIP_BYTES = std::size_t{1} << 20;
 // A member that inflates past this is streamed rather than decoded whole, so a
 // file in flight does not hold several whole members at once.
 constexpr std::size_t WHOLE_MEMBER_BYTES = std::size_t{8} << 20;
+// A member that has this much compressed input buffered and still does not fit
+// the output is streamed too, so a worker does not grow its output to the
+// bound for each large member.
+constexpr std::size_t STREAM_INPUT_BYTES = std::size_t{256} << 10;
 
 // No deflate stream expands past 1032 output bytes per input byte.
 constexpr std::uint64_t MAX_DEFLATE_RATIO = 1032;
@@ -209,6 +319,44 @@ static dftracer::utils::coro::CoroTask<std::uint64_t> next_member_start(
     for (std::size_t i = 0; i < len; ++i)
         if (gap[i] != 0) co_return end;
     co_return to;
+}
+
+// The same for a worker that has no candidate list: past a short run of zero
+// bytes that reaches a valid member header or the end of the file. The bytes
+// come from `in` when it holds them, and a short read stands in when it does
+// not.
+static dftracer::utils::coro::CoroTask<std::uint64_t> next_member_start(
+    int fd, ReadBuf& in, std::uint64_t file_size, std::uint64_t end) {
+    if (end >= file_size) co_return end;
+    in.seek(end);
+    unsigned char peek[MAX_ZERO_GAP + 10];
+    const unsigned char* p = in.cur();
+    std::size_t n = in.avail();
+    if (n < sizeof peek && in.end_off() < file_size) {
+        if (n > 0 && p[0] != 0) co_return end;
+        n = static_cast<std::size_t>(
+            std::min<std::uint64_t>(sizeof peek, file_size - end));
+        const ssize_t got =
+            co_await dftracer::utils::runtime::io::pread(fd, peek, n, end);
+        if (got != static_cast<ssize_t>(n)) co_return end;
+        p = peek;
+    }
+    std::size_t zeros = 0;
+    while (zeros < n && zeros <= MAX_ZERO_GAP && p[zeros] == 0) ++zeros;
+    if (zeros == 0 || zeros > MAX_ZERO_GAP) co_return end;
+    if (end + zeros == file_size) co_return end + zeros;
+    if (n >= zeros + 10 && gzip_header_looks_valid(p + zeros))
+        co_return end + zeros;
+    co_return end;
+}
+
+static dftracer::utils::coro::CoroTask<std::uint64_t> following_member_start(
+    int fd, ReadBuf& in, std::uint64_t file_size,
+    const dstd::Vector<GzipMember>* candidates, std::uint64_t range_c_end,
+    std::uint64_t end) {
+    if (candidates != nullptr)
+        co_return co_await next_member_start(fd, *candidates, end, range_c_end);
+    co_return co_await next_member_start(fd, in, file_size, end);
 }
 
 using InflateBuffer = dstd::UniquePtr<Bytes>;
@@ -247,14 +395,19 @@ class InflateBuffers {
 // a restart point is taken at the first block boundary once the piece holds
 // `ckpt_size` output bytes. A member that stays under that is one message.
 // `in_bytes` is the compressed size consumed. `stop` is set when the consumer
-// is gone or the member was cut with nothing to keep.
+// is gone or the member was cut with nothing to keep. `corrupt` is set when the
+// member could not be inflated to its end: the text it gave is kept as
+// records, the last of which a reader serves before the damage is reported, and
+// nothing is sent when it gave nothing. The input starts with the
+// bytes `in` holds at `c_off`, and `in` holds what follows the member on
+// return.
 static dftracer::utils::coro::CoroTask<bool> stream_member(
     int fd, std::uint64_t c_off, std::uint64_t file_size,
-    std::uint64_t ckpt_size, const dstd::Vector<GzipMember>& candidates,
-    std::uint64_t range_c_end, bool strip_leading_partial, bool ship_bytes,
-    InflateBuffers& buffers,
-    dftracer::utils::coro::ChannelProducer<ParallelInflateMsg>& producer,
-    std::uint64_t& in_bytes, bool& stop) {
+    std::uint64_t read_limit, std::uint64_t ckpt_size,
+    const dstd::Vector<GzipMember>* candidates, std::uint64_t range_c_end,
+    bool strip_leading_partial, bool ship_bytes, InflateBuffers& buffers,
+    Outbox& producer, ReadBuf& in, std::uint64_t& in_bytes, bool& stop,
+    bool& corrupt) {
     constexpr std::size_t READ_CHUNK = 1u << 20;
     constexpr std::size_t OUT_STEP = 1u << 20;
     const std::size_t split_at = static_cast<std::size_t>(
@@ -263,20 +416,27 @@ static dftracer::utils::coro::CoroTask<bool> stream_member(
     fileio::compress::GzipStreamInflater gz;
     if (!gz.init(31)) co_return false;
 
-    Bytes in(READ_CHUNK);
+    in.seek(c_off);
     InflateBuffer buf = buffers.take();
     buf->clear();
     // Growing a piece by doubling would leave a buffer twice the piece.
     buf->reserve(SHIP_BYTES + OUT_STEP);
-    std::uint64_t next_read = c_off;
+    std::uint64_t next_read = in.end_off();
+    std::size_t past_step = PAST_END_FIRST_STEP;
+    if (in.avail() > 0) gz.set_input(in.cur(), in.avail());
     bool strip = strip_leading_partial;
     bool cut = false;
+    bool broken = false;
+    // Text of this member was sent that no record holds yet.
+    bool uncommitted = false;
+    bool has_record = false;
     std::uint64_t since_newline = 0;
     std::uint64_t since_restart = 0;
     // The last RESTART_WINDOW bytes of output already shipped, for the window
     // of a restart point whose piece holds less than that.
     dstd::String shipped_tail;
     stop = false;
+    corrupt = false;
 
     auto remember = [&](const Bytes& data) {
         const char* bytes = reinterpret_cast<const char*>(data.data());
@@ -321,12 +481,21 @@ static dftracer::utils::coro::CoroTask<bool> stream_member(
 
     while (true) {
         if (gz.avail_in() == 0 && next_read < file_size) {
-            const std::size_t want = static_cast<std::size_t>(
-                std::min<std::uint64_t>(READ_CHUNK, file_size - next_read));
-            const ssize_t n = co_await dftracer::utils::runtime::io::pread(
-                fd, in.data(), want, next_read);
+            std::uint64_t want =
+                std::min<std::uint64_t>(READ_CHUNK, file_size - next_read);
+            if (next_read < read_limit) {
+                want = std::min(want, read_limit - next_read);
+            } else {
+                want = std::min<std::uint64_t>(want, past_step);
+                past_step = std::min(past_step * 2, PAST_END_LAST_STEP);
+            }
+            in.data.clear();
+            in.off = next_read;
+            in.pos = 0;
+            const ssize_t n = co_await read_more(
+                fd, in, file_size, static_cast<std::size_t>(want));
             if (n <= 0) co_return false;
-            gz.set_input(in.data(), static_cast<std::size_t>(n));
+            gz.set_input(in.cur(), in.avail());
             next_read += static_cast<std::uint64_t>(n);
         }
 
@@ -342,7 +511,8 @@ static dftracer::utils::coro::CoroTask<bool> stream_member(
         if (rc == fileio::compress::InflateStatus::StreamEnd) break;
         if (rc != fileio::compress::InflateStatus::Ok &&
             rc != fileio::compress::InflateStatus::BufError) {
-            co_return false;
+            broken = true;
+            break;
         }
         if (gz.avail_in() == 0 && next_read >= file_size &&
             gz.avail_out() != 0) {
@@ -374,6 +544,8 @@ static dftracer::utils::coro::CoroTask<bool> stream_member(
                 stop = true;
                 co_return true;
             }
+            uncommitted = false;
+            has_record = true;
         } else if (piece.size() >= SHIP_BYTES) {
             ParallelInflateMsg msg;
             emit(msg);
@@ -382,6 +554,7 @@ static dftracer::utils::coro::CoroTask<bool> stream_member(
                 stop = true;
                 co_return true;
             }
+            uncommitted = true;
         }
     }
 
@@ -400,17 +573,83 @@ static dftracer::utils::coro::CoroTask<bool> stream_member(
         piece.resize(keep);
         msg.truncated = true;
         in_bytes = file_size - c_off;
+    } else if (broken) {
+        if (piece.empty() && !uncommitted && !has_record) {
+            buffers.give(std::move(buf));
+            corrupt = true;
+            co_return true;
+        }
+        msg.truncated = true;
+        msg.damaged = true;
+        msg.checksum_failed = gz.trailer_mismatch();
+        in_bytes = gz.total_in();
+        corrupt = true;
     } else {
         in_bytes = gz.total_in();
+        in.pos = in.data.size() - gz.avail_in();
     }
     emit(msg);
     buffers.give(std::move(buf));
     msg.member_ended = true;
-    msg.has_open_line = since_newline > 0;
-    msg.member_c_end = co_await next_member_start(
-        fd, candidates, c_off + in_bytes, range_c_end);
+    // A damaged member's text ends where the damage is, with or without a
+    // newline, and the next record starts a line of its own.
+    msg.has_open_line = since_newline > 0 && !broken;
+    msg.member_c_end = c_off + in_bytes;
+    if (!corrupt) {
+        msg.member_c_end = co_await following_member_start(
+            fd, in, file_size, candidates, range_c_end, c_off + in_bytes);
+    }
     const auto send_ok = co_await producer.send(std::move(msg));
     if (!send_ok) stop = true;
+    co_return true;
+}
+
+// Looks for the first gzip header that starts in [from, limit) and leaves `in`
+// positioned at it with the bytes read, so the decode that follows does not
+// read them again. `found` is false when there is none. False when a read
+// fails.
+static dftracer::utils::coro::CoroTask<bool> find_range_start(
+    int fd, std::uint64_t file_size, std::uint64_t from, std::uint64_t limit,
+    ReadBuf& in, std::uint64_t& start, bool& found) {
+    constexpr std::size_t SEARCH_WINDOW = std::size_t{1} << 20;
+    constexpr std::size_t HEADER_BYTES = 10;
+    found = false;
+    in.data.clear();
+    in.off = from;
+    in.pos = 0;
+    const std::uint64_t target_end = std::min(file_size, limit + 9);
+    std::uint64_t at = from;
+    while (at < limit && at + HEADER_BYTES <= file_size) {
+        in.seek(at);
+        if (in.avail() < HEADER_BYTES) {
+            const std::uint64_t have = in.end_off();
+            if (have >= target_end) break;
+            const ssize_t n = co_await read_more(
+                fd, in, file_size,
+                static_cast<std::size_t>(
+                    std::min<std::uint64_t>(SEARCH_WINDOW, target_end - have)));
+            if (n <= 0) co_return false;
+            continue;
+        }
+        const unsigned char* base = in.cur();
+        const std::uint64_t last =
+            std::min<std::uint64_t>(limit, at + in.avail() - 9);
+        const unsigned char* p = base;
+        const unsigned char* stop = base + (last - at);
+        while (p < stop) {
+            p = static_cast<const unsigned char*>(
+                std::memchr(p, 0x1F, static_cast<std::size_t>(stop - p)));
+            if (!p) break;
+            if (gzip_header_looks_valid(p)) {
+                start = at + static_cast<std::uint64_t>(p - base);
+                found = true;
+                in.seek(start);
+                co_return true;
+            }
+            ++p;
+        }
+        at = last;
+    }
     co_return true;
 }
 
@@ -419,32 +658,117 @@ static dftracer::utils::coro::CoroTask<bool> stream_member(
 // extend handle lines that straddle a slice boundary in the distributed
 // (member_begin > 0) case; single-process workers use neither and rely on the
 // dispatcher accumulator to reassemble lines across worker boundaries.
+//
+// With `candidates` the range starts at a known header. Without them
+// (`candidates` null) the range starts at `range_c_start`, and with
+// `search_to` set the worker first looks for the first header in
+// [range_c_start, search_to) and reports where it is in a range_start message;
+// when there is none it ends the range with no message.
 static dftracer::utils::coro::CoroTask<bool> parallel_worker(
     int fd, std::uint64_t file_size, std::uint64_t range_c_start,
-    std::uint64_t range_c_end, std::uint64_t ckpt_size,
-    const dstd::Vector<GzipMember>& candidates, bool strip_leading_partial,
+    std::uint64_t range_c_end, std::uint64_t search_to, std::uint64_t ckpt_size,
+    const dstd::Vector<GzipMember>* candidates, bool strip_leading_partial,
     bool extend_to_newline_past_end, bool ship_bytes, InflateBuffers& buffers,
-    dftracer::utils::coro::ChannelProducer<ParallelInflateMsg> producer) {
+    std::atomic<std::uint64_t>* member_hint, Outbox producer) {
     auto guard = producer.guard();
 
     fileio::compress::GzipMemberDecompressor dec;
     if (!dec.valid()) co_return false;
 
     InflateBuffer buf = buffers.take();
-    Bytes comp;
+    ReadBuf in;
     std::uint64_t c_off = range_c_start;
     bool first = true;
+    // Past a range end only a member that began before it is read to its end.
+    const std::uint64_t read_limit =
+        candidates != nullptr ? file_size : range_c_end;
+
+    if (search_to > 0) {
+        std::uint64_t start = 0;
+        bool found = false;
+        // The first range may look past its end, but only after its own bytes.
+        const std::uint64_t own_to = std::min(search_to, range_c_end);
+        bool searched = co_await find_range_start(fd, file_size, range_c_start,
+                                                  own_to, in, start, found);
+        if (searched && !found && search_to > own_to)
+            searched = co_await find_range_start(fd, file_size, own_to,
+                                                 search_to, in, start, found);
+        if (!searched) co_return false;
+        // The file start is the start of the first range, whatever is there.
+        if (!found && range_c_start == 0) {
+            start = 0;
+            found = true;
+            in.seek(0);
+        }
+        if (!found) co_return true;
+        ParallelInflateMsg msg;
+        msg.range_start = true;
+        msg.member_c_end = start;
+        const bool send_ok = co_await producer.send(std::move(msg));
+        if (!send_ok) co_return true;
+        c_off = start;
+    }
+
+    auto note_member = [&](std::uint64_t compressed) {
+        if (member_hint == nullptr) return;
+        std::uint64_t seen = member_hint->load(std::memory_order_relaxed);
+        while (seen < compressed &&
+               !member_hint->compare_exchange_weak(seen, compressed,
+                                                   std::memory_order_relaxed)) {
+        }
+    };
+
+    // After a member that cannot be read, looks for the next header in the
+    // range and tells the dispatcher where it is, since the bytes between are
+    // in no record. False when a read fails. `c_off` is at the range end when
+    // there is no header left.
+    auto resync =
+        [&](std::uint64_t bad) -> dftracer::utils::coro::CoroTask<bool> {
+        std::uint64_t start = 0;
+        bool found = false;
+        const bool searched = co_await find_range_start(
+            fd, file_size, bad + 1, range_c_end, in, start, found);
+        if (!searched) co_return false;
+        if (!found) {
+            DFTRACER_UTILS_LOG_WARN(
+                "Indexer: {} bytes from offset {} are not a gzip member and "
+                "no member follows in this range; they are not indexed.",
+                static_cast<unsigned long long>(range_c_end - bad),
+                static_cast<unsigned long long>(bad));
+            c_off = range_c_end;
+            co_return true;
+        }
+        DFTRACER_UTILS_LOG_WARN(
+            "Indexer: skipped {} bytes at offset {} that no readable gzip "
+            "member covers.",
+            static_cast<unsigned long long>(start - bad),
+            static_cast<unsigned long long>(bad));
+        ParallelInflateMsg msg;
+        msg.range_start = true;
+        msg.member_c_end = start;
+        const bool sent = co_await producer.send(std::move(msg));
+        c_off = sent ? start : range_c_end;
+        co_return true;
+    };
 
     while (c_off < range_c_end) {
-        const auto next =
-            std::upper_bound(candidates.begin(), candidates.end(), c_off,
-                             [](std::uint64_t v, const GzipMember& m) {
-                                 return v < m.c_offset;
-                             });
-        const std::uint64_t span =
-            (next != candidates.end() ? std::min(next->c_offset, range_c_end)
-                                      : range_c_end) -
-            c_off;
+        const GzipMember* known = nullptr;
+        std::uint64_t span = 0;
+        if (candidates != nullptr) {
+            const auto next =
+                std::upper_bound(candidates->begin(), candidates->end(), c_off,
+                                 [](std::uint64_t v, const GzipMember& m) {
+                                     return v < m.c_offset;
+                                 });
+            span = (next != candidates->end()
+                        ? std::min(next->c_offset, range_c_end)
+                        : range_c_end) -
+                   c_off;
+            known = next != candidates->begin() && next != candidates->end() &&
+                            std::prev(next)->c_offset == c_off
+                        ? &*std::prev(next)
+                        : nullptr;
+        }
         // A member larger than a piece is streamed. The header scan gives its
         // size (ISIZE) when the trailer can be trusted. Otherwise the decode
         // below stops at the bound and the member is streamed from its start.
@@ -452,16 +776,12 @@ static dftracer::utils::coro::CoroTask<bool> parallel_worker(
             std::min(static_cast<std::size_t>(
                          std::max<std::uint64_t>(ckpt_size, RESTART_WINDOW)),
                      WHOLE_MEMBER_BYTES);
-        const GzipMember* known = next != candidates.begin() &&
-                                          next != candidates.end() &&
-                                          std::prev(next)->c_offset == c_off
-                                      ? &*std::prev(next)
-                                      : nullptr;
         const bool size_known =
             known != nullptr &&
             known->isize <= known->c_size * MAX_DEFLATE_RATIO;
         bool stream_it =
-            span >= ckpt_size / 8 || (size_known && known->isize > bound);
+            candidates != nullptr &&
+            (span >= ckpt_size / 8 || (size_known && known->isize > bound));
         std::size_t out_size = 0;
         bool truncated = false;
         Bytes& out = *buf;
@@ -472,30 +792,47 @@ static dftracer::utils::coro::CoroTask<bool> parallel_worker(
             // can end it anywhere.
             if (size_known && out.size() <= known->isize)
                 out.resize(std::size_t{known->isize} + 1);
-            bool too_big = false;
-            in_bytes =
-                co_await decode_member_at(fd, c_off, file_size, dec, out, comp,
-                                          out_size, truncated, bound, too_big);
-            if (too_big) {
+            bool needs_stream = false;
+            in_bytes = co_await decode_member_at(
+                fd, c_off, file_size, read_limit, dec, out, in, out_size,
+                truncated, bound, STREAM_INPUT_BYTES, needs_stream);
+            if (needs_stream) {
                 stream_it = true;
             } else if (!in_bytes) {
-                co_return false;
+                if (candidates != nullptr) co_return false;
+                const bool resynced = co_await resync(c_off);
+                if (!resynced) co_return false;
+                if (c_off >= range_c_end) break;
+                continue;
             }
         }
         if (stream_it) {
             std::uint64_t consumed = 0;
             bool stop = false;
+            bool corrupt = false;
             const auto stream_member_ok = co_await stream_member(
-                fd, c_off, file_size, ckpt_size, candidates, range_c_end,
-                strip_leading_partial && first, ship_bytes, buffers, producer,
-                consumed, stop);
+                fd, c_off, file_size, read_limit, ckpt_size, candidates,
+                range_c_end, strip_leading_partial && first, ship_bytes,
+                buffers, producer, in, consumed, stop, corrupt);
             if (!stream_member_ok) {
-                co_return false;
+                if (candidates != nullptr) co_return false;
+                const bool resynced = co_await resync(c_off);
+                if (!resynced) co_return false;
+                if (c_off >= range_c_end) break;
+                continue;
             }
             if (stop) co_return true;
             first = false;
-            c_off = co_await next_member_start(fd, candidates, c_off + consumed,
-                                               range_c_end);
+            if (corrupt) {
+                if (candidates != nullptr) co_return false;
+                const bool resynced = co_await resync(c_off);
+                if (!resynced) co_return false;
+                if (c_off >= range_c_end) break;
+                continue;
+            }
+            note_member(consumed);
+            c_off = co_await following_member_start(
+                fd, in, file_size, candidates, range_c_end, c_off + consumed);
             continue;
         }
         if (truncated && out_size == 0) {
@@ -532,8 +869,9 @@ static dftracer::utils::coro::CoroTask<bool> parallel_worker(
         }
         msg.member_ended = true;
         msg.has_open_line = out_size > 0 && out[out_size - 1] != '\n';
-        msg.member_c_end = co_await next_member_start(
-            fd, candidates, c_off + *in_bytes, range_c_end);
+        note_member(*in_bytes);
+        msg.member_c_end = co_await following_member_start(
+            fd, in, file_size, candidates, range_c_end, c_off + *in_bytes);
         msg.truncated = truncated;
         c_off = msg.member_c_end;
         const auto send_ok = co_await producer.send(std::move(msg));
@@ -547,10 +885,11 @@ static dftracer::utils::coro::CoroTask<bool> parallel_worker(
     if (extend_to_newline_past_end && range_c_end < file_size) {
         std::size_t out_size = 0;
         bool truncated = false;
-        bool too_big = false;
+        bool needs_stream = false;
         auto in_bytes = co_await decode_member_at(
-            fd, range_c_end, file_size, dec, out, comp, out_size, truncated,
-            std::numeric_limits<std::size_t>::max(), too_big);
+            fd, range_c_end, file_size, file_size, dec, out, in, out_size,
+            truncated, std::numeric_limits<std::size_t>::max(),
+            std::numeric_limits<std::size_t>::max(), needs_stream);
         if (!in_bytes) co_return false;
         std::size_t take = out_size;
         for (std::size_t i = 0; i < out_size; ++i) {
@@ -602,12 +941,47 @@ static dstd::Vector<InflateRange> plan_ranges(
     return ranges;
 }
 
+// Ranges of `range_bytes` compressed bytes cut without looking at the file;
+// each worker finds the first header at or after its range start.
+static dstd::Vector<InflateRange> cut_ranges(std::uint64_t file_size,
+                                             std::uint64_t range_bytes) {
+    dstd::Vector<InflateRange> ranges;
+    std::uint64_t at = 0;
+    do {
+        const std::uint64_t end = std::min(at + range_bytes, file_size);
+        ranges.push_back({at, end, 0});
+        at = end;
+    } while (at < file_size);
+    return ranges;
+}
+
+// A range holds a few members' worth of compressed bytes. A later range
+// looks for its first header in its own bytes; what it passes over is the end
+// of a member that the range before reads too. While no member is known it
+// looks a quarter of a range in, and when the members are longer than a range
+// only a short way (a member then hides the headers of the ranges inside it,
+// and the dispatcher inflates the rest of those ranges after the member).
+constexpr std::uint64_t RANGE_CKPT_DIVISOR = 2;
+constexpr std::uint64_t MIN_RANGE_BYTES = std::uint64_t{64} << 10;
+constexpr std::uint64_t PROBE_RANGE_DIVISOR = 64;
+constexpr std::uint64_t MIN_PROBE_BYTES = std::uint64_t{4} << 10;
+constexpr std::uint64_t MIN_BYTE_CAP = std::uint64_t{4} << 20;
+
+static std::uint64_t lazy_range_bytes(std::uint64_t ckpt_size) {
+    const auto set = common::Env::get<std::uint64_t>(
+        common::constants::indexer::INDEX_RANGE_BYTES_ENV);
+    if (set && *set > 0) return std::max(*set, MIN_RANGE_BYTES);
+    return std::max(ckpt_size / RANGE_CKPT_DIVISOR,
+                    common::constants::indexer::INDEX_RANGE_MIN_BYTES);
+}
+
 // A message without bytes is small, so a worker may run far ahead of the
 // dispatcher when nothing reads the text.
 constexpr std::size_t UNSHIPPED_MESSAGES = 1024;
 
 struct RangeSlot {
     dstd::SharedPtr<ParallelChan> chan;
+    dstd::SharedPtr<dftracer::utils::coro::AsyncSemaphore> budget;
     dstd::Optional<dftracer::utils::coro::ChannelProducer<ParallelInflateMsg>>
         producer;
 };
@@ -626,20 +1000,57 @@ struct InflatePlan {
     bool ship_bytes = false;
     bool strip_first = false;
     bool extend_last = false;
+    // The headers the ranges start at; empty when the ranges are cut by
+    // compressed size and each worker finds its first header (lazy).
     dstd::Vector<GzipMember> members;
+    bool lazy = false;
+    std::uint64_t range_bytes = 0;
+    // The text of one range that the dispatcher has not consumed, at most (a
+    // message above it goes alone), as the ranges cut by ISIZE hold.
+    std::uint64_t byte_cap = 0;
+    // Compressed size of the longest member a worker finished, for how far a
+    // later range looks for its first header.
+    std::atomic<std::uint64_t> member_hint{0};
     dstd::Vector<InflateRange> ranges;
     dftracer::utils::coro::AsyncSemaphore permits;
     dstd::Vector<RangeSlot> ring;
     InflateBuffers buffers;
     std::atomic<std::size_t> next{0};
 
+    const dstd::Vector<GzipMember>* candidates() const {
+        return lazy ? nullptr : &members;
+    }
+    // How far into range `r` its worker looks for a first header: all the way
+    // for the first range, which must start at the first one. The bytes a
+    // later range passes over before it finds one are the end of a member that
+    // the range before reads too, so a range looks only a short way when the
+    // members are longer than a range (it would pass over a whole range of
+    // one), and a quarter of a range until a member is known.
+    std::uint64_t search_to(std::size_t r) const {
+        if (!lazy) return 0;
+        if (r == 0) return file_size;
+        const std::uint64_t hint = member_hint.load(std::memory_order_relaxed);
+        std::uint64_t reach = range_bytes / 4;
+        if (hint > 0)
+            reach = hint <= range_bytes
+                        ? range_bytes
+                        : std::max(range_bytes / PROBE_RANGE_DIVISOR,
+                                   MIN_PROBE_BYTES);
+        return std::min(ranges[r].c_start + reach, ranges[r].c_end);
+    }
+    dstd::SharedPtr<dftracer::utils::coro::AsyncSemaphore> make_budget() const {
+        if (!lazy || !ship_bytes) return nullptr;
+        return dstd::make_shared<dftracer::utils::coro::AsyncSemaphore>(
+            byte_cap);
+    }
     dstd::SharedPtr<ParallelChan> channel(std::size_t r) const {
         return dftracer::utils::coro::make_channel<ParallelInflateMsg>(
-            ship_bytes ? ranges[r].messages + 1 : UNSHIPPED_MESSAGES);
+            ship_bytes && !lazy ? ranges[r].messages + 1 : UNSHIPPED_MESSAGES);
     }
     void open(std::size_t r) {
         RangeSlot& slot = ring[r % ring.size()];
         slot.chan = channel(r);
+        slot.budget = make_budget();
         slot.producer.emplace(slot.chan->producer());
     }
     bool extend(std::size_t r) const {
@@ -647,11 +1058,15 @@ struct InflatePlan {
     }
     // Ends every worker when the dispatcher stops early: a send to a closed
     // channel fails, and a worker woken by the permits finds no range left.
-    void abandon(ParallelChan* redo) {
+    void abandon(ParallelChan* redo,
+                 dftracer::utils::coro::AsyncSemaphore* redo_budget) {
         next.store(ranges.size());
-        for (RangeSlot& slot : ring)
+        for (RangeSlot& slot : ring) {
             if (slot.chan) slot.chan->close();
+            if (slot.budget) slot.budget->release(byte_cap);
+        }
         if (redo) redo->close();
+        if (redo_budget) redo_budget->release(byte_cap);
         permits.release(ring.size());
     }
 };
@@ -665,14 +1080,14 @@ static dftracer::utils::coro::CoroTask<void> range_worker(InflatePlan* plan) {
             co_return;
         }
         RangeSlot& slot = plan->ring[r % plan->ring.size()];
-        auto producer = std::move(*slot.producer);
+        Outbox outbox{std::move(*slot.producer), slot.budget, plan->byte_cap};
         slot.producer.reset();
         const InflateRange& range = plan->ranges[r];
-        co_await parallel_worker(plan->fd, plan->file_size, range.c_start,
-                                 range.c_end, plan->ckpt_size, plan->members,
-                                 plan->strip_first && r == 0, plan->extend(r),
-                                 plan->ship_bytes, plan->buffers,
-                                 std::move(producer));
+        co_await parallel_worker(
+            plan->fd, plan->file_size, range.c_start, range.c_end,
+            plan->search_to(r), plan->ckpt_size, plan->candidates(),
+            plan->strip_first && r == 0, plan->extend(r), plan->ship_bytes,
+            plan->buffers, &plan->member_hint, std::move(outbox));
     }
 }
 
@@ -682,7 +1097,8 @@ static dftracer::utils::coro::CoroTask<dstd::Result<bool>> parallel_dispatcher(
     dstd::Vector<GzipMemberRecord>& members,
     dstd::Vector<dstd::Pair<std::uint64_t, dstd::String>>& restart_windows,
     const CheckpointIndexer::VisitorList& visitors, bool& truncated,
-    std::uint64_t& recovered_bytes, bool& has_open_line) {
+    bool& checksum_failed, std::uint64_t& recovered_bytes,
+    bool& has_open_line) {
     const bool has_visitors = !visitors.empty();
     std::uint64_t global_uc = 0;
 
@@ -694,19 +1110,31 @@ static dftracer::utils::coro::CoroTask<dstd::Result<bool>> parallel_dispatcher(
     std::uint8_t piece_bits = 0;
     bool piece_opens_mid_line = false;
     dstd::String piece_window;
+    std::uint64_t member_text_start = 0;
 
     std::uint64_t total_chunks_received = 0;
 
     auto process_msg = [&](ParallelInflateMsg& msg)
         -> dftracer::utils::coro::CoroTask<dstd::Result<void>> {
+        if (msg.range_start) {
+            // Bytes that are in no member lie before this header.
+            member_c_start = msg.member_c_end;
+            piece_kind = GzipRecordKind::Member;
+            piece_bits = 0;
+            piece_window.clear();
+            member_text_start = global_uc;
+            co_return dstd::Result<void>{};
+        }
         const std::size_t data_size = static_cast<std::size_t>(msg.data_size);
         ++total_chunks_received;
-        if (msg.truncated) {
-            truncated = true;
-            recovered_bytes += data_size;
-        }
         if (msg.drop_tail > 0) {
+            // The partial line is first in the text no record holds yet.
             std::uint64_t left = msg.drop_tail;
+            const std::uint64_t pending =
+                std::min(left, global_uc - member_uc_start);
+            global_uc -= pending;
+            left -= pending;
+            const std::uint64_t from_records = left;
             while (left > 0 && !members.empty()) {
                 auto& last = members.back();
                 const std::uint64_t cut = std::min(left, last.uc_size);
@@ -721,8 +1149,8 @@ static dftracer::utils::coro::CoroTask<dstd::Result<bool>> parallel_dispatcher(
                     --member_idx;
                 }
             }
-            global_uc -= msg.drop_tail - left;
-            member_uc_start = global_uc;
+            global_uc -= from_records - left;
+            member_uc_start = std::min(member_uc_start, global_uc);
         }
 
         if (has_visitors && data_size > 0) {
@@ -734,13 +1162,28 @@ static dftracer::utils::coro::CoroTask<dstd::Result<bool>> parallel_dispatcher(
             }
         }
 
+        if (has_visitors && msg.damaged) {
+            for (auto& v : visitors) {
+                auto cut = co_await v.get().on_line_cut(member_idx);
+                if (!cut) co_return cut;
+            }
+        }
+
         global_uc += data_size;
         total_lines += msg.lines;
+        if (msg.truncated) {
+            truncated = true;
+            if (msg.checksum_failed) checksum_failed = true;
+            recovered_bytes += global_uc > member_text_start
+                                   ? global_uc - member_text_start
+                                   : 0;
+        }
 
         if (msg.member_ended) has_open_line = msg.has_open_line;
         if (msg.member_ended || msg.restart) {
             GzipRecordKind kind = piece_kind;
-            if (msg.restart && kind == GzipRecordKind::Member) {
+            if ((msg.restart || msg.damaged) &&
+                kind == GzipRecordKind::Member) {
                 kind = GzipRecordKind::Head;
             }
             members.push_back(GzipMemberRecord{
@@ -772,6 +1215,7 @@ static dftracer::utils::coro::CoroTask<dstd::Result<bool>> parallel_dispatcher(
             }
             member_c_start = msg.member_c_end;
             member_uc_start = global_uc;
+            if (msg.member_ended) member_text_start = global_uc;
             member_first_line = total_lines + 1;
 
             if (has_visitors) {
@@ -797,60 +1241,111 @@ static dftracer::utils::coro::CoroTask<dstd::Result<bool>> parallel_dispatcher(
         co_return dstd::Result<void>{};
     };
 
-    auto consume = [&](ParallelChan& chan)
+    using Budget = dftracer::utils::coro::AsyncSemaphore;
+    auto consume = [&](ParallelChan& chan, Budget* budget)
         -> dftracer::utils::coro::CoroTask<dstd::Result<void>> {
         for (;;) {
             auto msg_opt = co_await chan.receive();
             if (!msg_opt) break;
+            const std::uint64_t charge =
+                budget ? message_charge(*msg_opt, plan->byte_cap) : 0;
             auto processed = co_await process_msg(*msg_opt);
             if (!processed) co_return processed;
             plan->buffers.give(std::move(msg_opt->data));
+            if (charge > 0) budget->release(charge);
             auto drained = co_await drain_visitors();
             if (!drained) co_return drained;
         }
         co_return dstd::Result<void>{};
     };
     auto discard =
-        [&](ParallelChan& chan) -> dftracer::utils::coro::CoroTask<void> {
+        [&](ParallelChan& chan,
+            Budget* budget) -> dftracer::utils::coro::CoroTask<void> {
         while (true) {
             auto msg_opt = co_await chan.receive();
             if (!msg_opt) co_return;
+            const std::uint64_t charge =
+                budget ? message_charge(*msg_opt, plan->byte_cap) : 0;
             plan->buffers.give(std::move(msg_opt->data));
+            if (charge > 0) budget->release(charge);
         }
     };
 
     dstd::SharedPtr<ParallelChan> redo;
+    dstd::SharedPtr<Budget> redo_budget;
+    // Inflates the rest of range `r` from `start`: the end of the member
+    // before when the range's own start was not that, or, with `search`, the
+    // first header of the range when nothing before reached it.
+    auto redo_range = [&](std::size_t r, std::uint64_t start, bool search)
+        -> dftracer::utils::coro::CoroTask<dstd::Result<void>> {
+        redo = plan->channel(r);
+        redo_budget = plan->make_budget();
+        scope->spawn_future([plan, r, start, search,
+                             outbox = Outbox{redo->producer(), redo_budget,
+                                             plan->byte_cap}]() mutable {
+            const InflateRange& rg = plan->ranges[r];
+            return parallel_worker(plan->fd, plan->file_size, start, rg.c_end,
+                                   search ? rg.c_end : 0, plan->ckpt_size,
+                                   plan->candidates(), false, plan->extend(r),
+                                   plan->ship_bytes, plan->buffers,
+                                   &plan->member_hint, std::move(outbox));
+        });
+        auto consumed = co_await consume(*redo, redo_budget.get());
+        if (!consumed) co_return consumed;
+        redo.reset();
+        redo_budget.reset();
+        co_return dstd::Result<void>{};
+    };
     auto run_ranges =
         [&]() -> dftracer::utils::coro::CoroTask<dstd::Result<void>> {
         for (std::size_t r = 0; r < plan->ranges.size(); ++r) {
             const InflateRange& range = plan->ranges[r];
-            auto chan = plan->ring[r % plan->ring.size()].chan;
-            if (member_c_start > range.c_start) {
+            RangeSlot& slot = plan->ring[r % plan->ring.size()];
+            auto chan = slot.chan;
+            auto budget = slot.budget;
+            if (plan->lazy) {
+                // The worker names where its first header is. The range is
+                // used when that is where the member before ended, or when
+                // nothing before reached it. Otherwise the header is false or
+                // the range has none, and the rest of the range is inflated
+                // from the end of that member. When the member before ended
+                // short of the range (a member that could not be read), and
+                // this range found no header, the range is searched in full.
+                auto first = co_await chan->receive();
+                const bool found = first.has_value() && first->range_start;
+                const std::uint64_t start = found ? first->member_c_end : 0;
+                if (found && (r == 0 || member_c_start < range.c_start ||
+                              member_c_start == start)) {
+                    member_c_start = start;
+                    auto consumed = co_await consume(*chan, budget.get());
+                    if (!consumed) co_return consumed;
+                } else {
+                    co_await discard(*chan, budget.get());
+                    if (r > 0 && member_c_start >= range.c_start &&
+                        member_c_start < range.c_end) {
+                        auto redone =
+                            co_await redo_range(r, member_c_start, false);
+                        if (!redone) co_return redone;
+                    } else if (r > 0 && member_c_start < range.c_start) {
+                        auto redone =
+                            co_await redo_range(r, range.c_start, true);
+                        if (!redone) co_return redone;
+                    }
+                }
+            } else if (member_c_start > range.c_start) {
                 // The member before runs past this range's start, so the start
                 // is a false candidate: inflate the rest of the range from the
                 // end of that member instead.
-                co_await discard(*chan);
+                co_await discard(*chan, nullptr);
                 if (member_c_start < range.c_end) {
-                    redo = plan->channel(r);
-                    scope->spawn_future(
-                        [plan, r, start = member_c_start,
-                         producer = redo->producer()]() mutable {
-                            const InflateRange& rg = plan->ranges[r];
-                            return parallel_worker(
-                                plan->fd, plan->file_size, start, rg.c_end,
-                                plan->ckpt_size, plan->members, false,
-                                plan->extend(r), plan->ship_bytes,
-                                plan->buffers, std::move(producer));
-                        });
-                    auto consumed = co_await consume(*redo);
-                    if (!consumed) co_return consumed;
-                    redo.reset();
+                    auto redone = co_await redo_range(r, member_c_start, false);
+                    if (!redone) co_return redone;
                 }
             } else {
                 // A range after one that stopped at a bad member starts at its
                 // own first member.
                 member_c_start = range.c_start;
-                auto consumed = co_await consume(*chan);
+                auto consumed = co_await consume(*chan, nullptr);
                 if (!consumed) co_return consumed;
             }
             if (r + plan->ring.size() < plan->ranges.size())
@@ -861,7 +1356,7 @@ static dftracer::utils::coro::CoroTask<dstd::Result<bool>> parallel_dispatcher(
     };
     auto ran = co_await run_ranges();
     if (!ran) {
-        plan->abandon(redo.get());
+        plan->abandon(redo.get(), redo_budget.get());
         // Visitors finish their own tasks, which may hold their state.
         for (auto& v : visitors) {
             auto flushed = co_await v.get().flush();
@@ -889,19 +1384,18 @@ static dftracer::utils::coro::CoroTask<dstd::Result<bool>>
 process_chunks_parallel(
     int fd, std::uint64_t slice_c_end, std::uint64_t file_size,
     std::uint64_t ckpt_size, std::size_t ways,
-    dstd::Vector<GzipMember> scanned_members, std::uint64_t member_idx_base,
-    bool strip_slice_leading_partial, std::uint64_t& total_lines,
-    std::uint64_t& total_uc_size, dstd::Vector<GzipMemberRecord>& members,
+    dstd::Vector<GzipMember> scanned_members, dstd::Vector<InflateRange> ranges,
+    std::uint64_t member_idx_base, bool strip_slice_leading_partial,
+    std::uint64_t& total_lines, std::uint64_t& total_uc_size,
+    dstd::Vector<GzipMemberRecord>& members,
     dstd::Vector<dstd::Pair<std::uint64_t, dstd::String>>& restart_windows,
     const CheckpointIndexer::VisitorList& visitors, bool& truncated,
-    std::uint64_t& recovered_bytes, bool& has_open_line) {
+    bool& checksum_failed, std::uint64_t& recovered_bytes,
+    bool& has_open_line) {
     // Fanning out past the thread count only adds channel and scheduling
     // overhead; on a single-threaded drive (coro::RunLoop, the no-executor
     // .get() path) it collapses to one worker.
     constexpr std::size_t DEFAULT_MAX_WORKERS = 16;
-    dstd::Vector<InflateRange> ranges =
-        plan_ranges(scanned_members, slice_c_end,
-                    std::max<std::uint64_t>(ckpt_size / 4, 1));
     const std::size_t hw =
         std::max<std::size_t>(1, common::available_parallelism());
     const std::size_t worker_count = std::min<std::size_t>(
@@ -921,6 +1415,9 @@ process_chunks_parallel(
     // capture the line that straddles the slice boundary.
     plan.extend_last = slice_c_end < file_size;
     plan.members = std::move(scanned_members);
+    plan.lazy = plan.members.empty();
+    plan.range_bytes = lazy_range_bytes(ckpt_size);
+    plan.byte_cap = std::max(ckpt_size / 4, MIN_BYTE_CAP);
     plan.ranges = std::move(ranges);
     for (std::size_t r = 0; r < plan.ring.size(); ++r) plan.open(r);
 
@@ -934,8 +1431,8 @@ process_chunks_parallel(
             // workers are joined.
             dispatched = co_await parallel_dispatcher(
                 &child, plan_ptr, member_idx_base, total_lines, total_uc_size,
-                members, restart_windows, visitors, truncated, recovered_bytes,
-                has_open_line);
+                members, restart_windows, visitors, truncated, checksum_failed,
+                recovered_bytes, has_open_line);
         });
 
     co_return dispatched;
@@ -947,7 +1444,8 @@ static dftracer::utils::coro::CoroTask<dstd::Result<bool>> process_chunks(
     dstd::Vector<GzipMemberRecord>& members,
     dstd::Vector<dstd::Pair<std::uint64_t, dstd::String>>& restart_windows,
     const CheckpointIndexer::VisitorList& visitors, bool& truncated,
-    std::uint64_t& recovered_bytes, bool& has_open_line) {
+    bool& checksum_failed, std::uint64_t& recovered_bytes,
+    bool& has_open_line) {
     struct stat st;
     const ssize_t stat_result = co_await runtime::io::fstat(fd, &st);
     if (stat_result != 0) co_return false;
@@ -970,30 +1468,28 @@ static dftracer::utils::coro::CoroTask<dstd::Result<bool>> process_chunks(
                                           : (me < all.size()) ? all[me].c_offset
                                                               : file_size;
         dstd::Vector<GzipMember> sliced(all.begin() + mb, all.begin() + me);
+        dstd::Vector<InflateRange> ranges = plan_ranges(
+            sliced, slice_c_end, std::max<std::uint64_t>(ckpt_size / 4, 1));
         co_return co_await process_chunks_parallel(
             fd, slice_c_end, slice->c_end != 0 ? slice->c_end : file_size,
-            ckpt_size, ways, std::move(sliced),
+            ckpt_size, ways, std::move(sliced), std::move(ranges),
             /*member_idx_base=*/slice->idx_base + mb,
             /*strip_slice_leading_partial=*/mb > 0, total_lines, total_uc_size,
-            members, restart_windows, visitors, truncated, recovered_bytes,
-            has_open_line);
+            members, restart_windows, visitors, truncated, checksum_failed,
+            recovered_bytes, has_open_line);
     }
 
-    // Discover member boundaries so the inflate pass can fan out. The scan
-    // is zero-copy, sequential, and fast relative to inflate. A file whose
-    // members cannot be enumerated is processed as one member spanning the
-    // whole file, which the same path handles with a single worker.
-    dstd::Vector<GzipMember> scanned;
-    if (file_size >= 18) {
-        co_await enumerate_gzip_member_candidates(fd, file_size, scanned);
-    }
-    if (scanned.empty()) scanned.push_back(GzipMember{0, file_size});
-
+    // The inflate pass fans out over ranges of compressed bytes, and each
+    // worker finds its first member header in the bytes it reads to inflate.
+    dstd::Vector<GzipMember> no_candidates;
+    dstd::Vector<InflateRange> ranges =
+        cut_ranges(file_size, lazy_range_bytes(ckpt_size));
     co_return co_await process_chunks_parallel(
-        fd, file_size, file_size, ckpt_size, ways, std::move(scanned),
+        fd, file_size, file_size, ckpt_size, ways, std::move(no_candidates),
+        std::move(ranges),
         /*member_idx_base=*/0, /*strip_slice_leading_partial=*/false,
         total_lines, total_uc_size, members, restart_windows, visitors,
-        truncated, recovered_bytes, has_open_line);
+        truncated, checksum_failed, recovered_bytes, has_open_line);
 }
 
 }  // namespace
@@ -1042,11 +1538,13 @@ build_gzip_index_artifacts(int fd, dstd::CStringView gz_path,
     dstd::Vector<dstd::Pair<std::uint64_t, dstd::String>> restart_windows;
 
     bool truncated = false;
+    bool checksum_failed = false;
     std::uint64_t recovered_bytes = 0;
     bool has_open_line = false;
     const auto processed = co_await process_chunks(
         fd, slice, ckpt_size, ways, total_lines, total_uc_size, members,
-        restart_windows, visitors, truncated, recovered_bytes, has_open_line);
+        restart_windows, visitors, truncated, checksum_failed, recovered_bytes,
+        has_open_line);
     if (!processed.has_value()) co_return processed.error();
 
     if (!*processed) {
@@ -1056,10 +1554,15 @@ build_gzip_index_artifacts(int fd, dstd::CStringView gz_path,
             common::ErrorCode::Compression);
     }
 
-    if (truncated) {
+    if (checksum_failed) {
         DFTRACER_UTILS_LOG_WARN(
-            "Indexer: {} ends in a truncated gzip member; recovered {} bytes "
-            "up to its last complete line (not checksum-verified).",
+            "Indexer: {} has a gzip member whose checksum does not match; its "
+            "text, {} bytes in all, is indexed but may be corrupt.",
+            gz_path, static_cast<unsigned long long>(recovered_bytes));
+    } else if (truncated) {
+        DFTRACER_UTILS_LOG_WARN(
+            "Indexer: {} has a truncated or damaged gzip member; recovered {} "
+            "bytes up to the cut or the damage (not checksum-verified).",
             gz_path, static_cast<unsigned long long>(recovered_bytes));
     } else if (slice == nullptr && members.empty() && compressed_bytes > 0) {
         unsigned char magic[2] = {0, 0};
@@ -1417,6 +1920,13 @@ std::uint64_t GzipIndexer::checkpoint_size() const {
 std::uint64_t GzipIndexer::line_count() const {
     ensure_loaded();
     return cached_line_count_.load(std::memory_order_relaxed);
+}
+
+bool GzipIndexer::has_damage() const {
+    ensure_loaded();
+    if (!file_ref_) return false;
+    const auto stored = trace::index::file_metadata(*snapshot_, *file_ref_);
+    return stored && *stored && (*stored)->truncated;
 }
 
 bool GzipIndexer::find_member(std::size_t target_offset,

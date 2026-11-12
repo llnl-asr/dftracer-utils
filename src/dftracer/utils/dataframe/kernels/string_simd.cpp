@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/env.h>
 #include <dftracer/utils/dataframe/internal/string_simd.h>
+#include <dftracer/utils/dstd/ascii.h>
 
 #include <algorithm>
 #include <atomic>
@@ -226,9 +227,9 @@ void case_blocks(const hn_u8* in, hn_u8* out, std::size_t n) {
         for (; i < n; ++i) {
             const hn_u8 c = in[i];
             const hn_u8 p = i != 0 ? in[i - 1] : hn_u8{0};
-            const bool prev_cased = ((p | 0x20) >= 'a' && (p | 0x20) <= 'z');
-            const bool upper = c >= 'A' && c <= 'Z';
-            const bool lower = c >= 'a' && c <= 'z';
+            const bool prev_cased = dstd::is_ascii_alpha(static_cast<char>(p));
+            const bool upper = dstd::is_ascii_upper(static_cast<char>(c));
+            const bool lower = dstd::is_ascii_lower(static_cast<char>(c));
             out[i] = ((upper && prev_cased) || (lower && !prev_cased))
                          ? static_cast<hn_u8>(c ^ 0x20)
                          : c;
@@ -247,8 +248,8 @@ void case_blocks(const hn_u8* in, hn_u8* out, std::size_t n) {
         for (; i < n; ++i) {
             const hn_u8 c = in[i];
             const bool hit = K == static_cast<int>(CaseKind::Swapcase)
-                                 ? ((c | 0x20) >= 'a' && (c | 0x20) <= 'z')
-                                 : (c >= 'A' && c <= 'Z');
+                                 ? dstd::is_ascii_alpha(static_cast<char>(c))
+                                 : dstd::is_ascii_upper(static_cast<char>(c));
             out[i] = hit ? static_cast<hn_u8>(c ^ 0x20) : c;
         }
     }
@@ -274,33 +275,27 @@ void CaseMap(int kind, const hn_u8* in, hn_u8* out, std::size_t n) {
 // holds a bad byte. The whole-buffer pass above reads every byte of the
 // column; this one reads only what it needs, and needs no bit arrays.
 
-HWY_INLINE bool sb_alpha(hn_u8 c) {
-    const hn_u8 f = static_cast<hn_u8>(c | 0x20);
-    return f >= 'a' && f <= 'z';
-}
-HWY_INLINE bool sb_upper(hn_u8 c) { return c >= 'A' && c <= 'Z'; }
-HWY_INLINE bool sb_lower(hn_u8 c) { return c >= 'a' && c <= 'z'; }
-HWY_INLINE bool sb_digit(hn_u8 c) { return c >= '0' && c <= '9'; }
-HWY_INLINE bool sb_space(hn_u8 c) { return c == ' ' || (c >= 9 && c <= 13); }
-
 template <int K>
 HWY_INLINE bool sb_bad(hn_u8 c, hn_u8 prev) {
     using strsimd::BitKind;
     if constexpr (K == static_cast<int>(BitKind::Alnum))
-        return !(sb_alpha(c) || sb_digit(c));
+        return !(dstd::is_ascii_alpha(static_cast<char>(c)) ||
+                 dstd::is_ascii_digit(static_cast<char>(c)));
     else if constexpr (K == static_cast<int>(BitKind::Alpha))
-        return !sb_alpha(c);
+        return !dstd::is_ascii_alpha(static_cast<char>(c));
     else if constexpr (K == static_cast<int>(BitKind::Digit))
-        return !sb_digit(c);
+        return !dstd::is_ascii_digit(static_cast<char>(c));
     else if constexpr (K == static_cast<int>(BitKind::Space))
-        return !sb_space(c);
+        return !dstd::is_ascii_space(static_cast<char>(c));
     else if constexpr (K == static_cast<int>(BitKind::Lower))
-        return sb_upper(c);
+        return dstd::is_ascii_upper(static_cast<char>(c));
     else if constexpr (K == static_cast<int>(BitKind::Upper))
-        return sb_lower(c);
+        return dstd::is_ascii_lower(static_cast<char>(c));
     else if constexpr (K == static_cast<int>(BitKind::Title))
-        return (sb_upper(c) && sb_alpha(prev)) ||
-               (sb_lower(c) && !sb_alpha(prev));
+        return (dstd::is_ascii_upper(static_cast<char>(c)) &&
+                dstd::is_ascii_alpha(static_cast<char>(prev))) ||
+               (dstd::is_ascii_lower(static_cast<char>(c)) &&
+                !dstd::is_ascii_alpha(static_cast<char>(prev)));
     else
         return false;
 }
@@ -309,11 +304,11 @@ template <int K>
 HWY_INLINE bool sb_aux(hn_u8 c) {
     using strsimd::BitKind;
     if constexpr (K == static_cast<int>(BitKind::Lower))
-        return sb_lower(c);
+        return dstd::is_ascii_lower(static_cast<char>(c));
     else if constexpr (K == static_cast<int>(BitKind::Upper))
-        return sb_upper(c);
+        return dstd::is_ascii_upper(static_cast<char>(c));
     else
-        return sb_alpha(c);  // Title
+        return dstd::is_ascii_alpha(static_cast<char>(c));  // Title
 }
 
 // Rows [r0, r1) of a flat string column whose bytes start at data + lo: sets
@@ -340,8 +335,8 @@ void rows_range(const hn_u8* data, const Off* off, std::int64_t lo,
         if constexpr (is_title) {
             // The first byte has no previous byte: it breaks the rule when
             // lower.
-            if (sb_lower(p[s])) continue;
-            cased = sb_alpha(p[s]);
+            if (dstd::is_ascii_lower(static_cast<char>(p[s]))) continue;
+            cased = dstd::is_ascii_alpha(static_cast<char>(p[s]));
             pos = s + 1;
         }
         std::size_t j = pos;
@@ -474,6 +469,82 @@ void ClassRows64(int kind, const hn_u8* data, const std::int64_t* off,
     class_rows_dispatch(kind, data, off, lo, r0, r1, res);
 }
 
+void LenBytes32(const std::int32_t* off, std::int64_t* out, std::size_t n) {
+    const hwy::HWY_NAMESPACE::ScalableTag<std::int64_t> d64;
+    const hwy::HWY_NAMESPACE::Rebind<std::int32_t, decltype(d64)> d32;
+    const std::size_t lanes = hwy::HWY_NAMESPACE::Lanes(d64);
+    std::size_t i = 0;
+    for (; i + lanes <= n; i += lanes) {
+        const auto a = hwy::HWY_NAMESPACE::LoadU(d32, off + i + 1);
+        const auto b = hwy::HWY_NAMESPACE::LoadU(d32, off + i);
+        hwy::HWY_NAMESPACE::StoreU(
+            hwy::HWY_NAMESPACE::PromoteTo(d64, hwy::HWY_NAMESPACE::Sub(a, b)),
+            d64, out + i);
+    }
+    for (; i < n; ++i) out[i] = static_cast<std::int64_t>(off[i + 1] - off[i]);
+}
+
+// Rows lie end to end in the buffer, so a row shorter than a vector still
+// takes one vector load while the load stays before `end`, with the bytes past
+// the row masked off. Only the rows at the end of the buffer count by byte.
+void CharCounts32(const hn_u8* data, const std::int32_t* off, std::int64_t n,
+                  std::int64_t* out) {
+    const hwy::HWY_NAMESPACE::ScalableTag<hn_u8> d;
+    const auto vc0 = hwy::HWY_NAMESPACE::Set(d, hn_u8{0xC0});
+    const auto v80 = hwy::HWY_NAMESPACE::Set(d, hn_u8{0x80});
+    const std::size_t lanes = hwy::HWY_NAMESPACE::Lanes(d);
+    const hn_u8* end = data + off[n];
+    const auto starts = [&](const hn_u8* at) {
+        return hwy::HWY_NAMESPACE::Ne(
+            hwy::HWY_NAMESPACE::And(hwy::HWY_NAMESPACE::LoadU(d, at), vc0),
+            v80);
+    };
+    for (std::int64_t r = 0; r < n; ++r) {
+        const hn_u8* p = data + off[r];
+        const std::size_t len = static_cast<std::size_t>(off[r + 1] - off[r]);
+        std::int64_t count = 0;
+        std::size_t i = 0;
+        for (; i + lanes <= len; i += lanes) {
+            count += static_cast<std::int64_t>(
+                hwy::HWY_NAMESPACE::CountTrue(d, starts(p + i)));
+        }
+        if (i < len) {
+            if (p + i + lanes <= end) {
+                const auto m = hwy::HWY_NAMESPACE::And(
+                    starts(p + i), hwy::HWY_NAMESPACE::FirstN(d, len - i));
+                count += static_cast<std::int64_t>(
+                    hwy::HWY_NAMESPACE::CountTrue(d, m));
+            } else {
+                for (; i < len; ++i)
+                    if ((p[i] & 0xC0) != 0x80) ++count;
+            }
+        }
+        out[r] = count;
+    }
+}
+
+void AsciiFold(const hn_u8* in, hn_u8* out, std::size_t n, hn_u8 lo, hn_u8 hi,
+               int add) {
+    const hwy::HWY_NAMESPACE::ScalableTag<hn_u8> d;
+    const auto vlo = hwy::HWY_NAMESPACE::Set(d, lo);
+    const auto vhi = hwy::HWY_NAMESPACE::Set(d, hi);
+    const auto vadd = hwy::HWY_NAMESPACE::Set(d, static_cast<hn_u8>(add));
+    const std::size_t lanes = hwy::HWY_NAMESPACE::Lanes(d);
+    std::size_t i = 0;
+    for (; i + lanes <= n; i += lanes) {
+        const auto v = hwy::HWY_NAMESPACE::LoadU(d, in + i);
+        const auto m = hwy::HWY_NAMESPACE::And(hwy::HWY_NAMESPACE::Ge(v, vlo),
+                                               hwy::HWY_NAMESPACE::Le(v, vhi));
+        hwy::HWY_NAMESPACE::StoreU(hwy::HWY_NAMESPACE::IfThenElse(
+                                       m, hwy::HWY_NAMESPACE::Add(v, vadd), v),
+                                   d, out + i);
+    }
+    for (; i < n; ++i) {
+        const hn_u8 c = in[i];
+        out[i] = (c >= lo && c <= hi) ? static_cast<hn_u8>(c + add) : c;
+    }
+}
+
 const char* TargetNameFn() { return hwy::TargetName(HWY_TARGET); }
 
 }  // namespace HWY_NAMESPACE
@@ -488,18 +559,12 @@ HWY_EXPORT(CaseMap);
 HWY_EXPORT(ClassRows32);
 HWY_EXPORT(ClassRows64);
 HWY_EXPORT(TargetNameFn);
+HWY_EXPORT(LenBytes32);
+HWY_EXPORT(CharCounts32);
+HWY_EXPORT(AsciiFold);
 
 namespace strsimd {
 namespace {
-
-bool is_alpha_b(std::uint8_t c) {
-    const std::uint8_t f = static_cast<std::uint8_t>(c | 0x20);
-    return f >= 'a' && f <= 'z';
-}
-bool is_upper_b(std::uint8_t c) { return c >= 'A' && c <= 'Z'; }
-bool is_lower_b(std::uint8_t c) { return c >= 'a' && c <= 'z'; }
-bool is_digit_b(std::uint8_t c) { return c >= '0' && c <= '9'; }
-bool is_space_b(std::uint8_t c) { return c == ' ' || (c >= 9 && c <= 13); }
 
 // The byte-at-a-time reference of class_bits: one bit per byte, the same
 // definitions the vector kernels use.
@@ -515,30 +580,35 @@ void class_bits_scalar(BitKind kind, const std::uint8_t* p, std::size_t n,
             bool is_bad = false, is_aux = false;
             switch (kind) {
                 case BitKind::Alnum:
-                    is_bad = !(is_alpha_b(x) || is_digit_b(x));
+                    is_bad = !(dstd::is_ascii_alpha(static_cast<char>(x)) ||
+                               dstd::is_ascii_digit(static_cast<char>(x)));
                     break;
                 case BitKind::Alpha:
-                    is_bad = !is_alpha_b(x);
+                    is_bad = !dstd::is_ascii_alpha(static_cast<char>(x));
                     break;
                 case BitKind::Digit:
-                    is_bad = !is_digit_b(x);
+                    is_bad = !dstd::is_ascii_digit(static_cast<char>(x));
                     break;
                 case BitKind::Space:
-                    is_bad = !is_space_b(x);
+                    is_bad = !dstd::is_ascii_space(static_cast<char>(x));
                     break;
                 case BitKind::Lower:
-                    is_bad = is_upper_b(x);
-                    is_aux = is_lower_b(x);
+                    is_bad = dstd::is_ascii_upper(static_cast<char>(x));
+                    is_aux = dstd::is_ascii_lower(static_cast<char>(x));
                     break;
                 case BitKind::Upper:
-                    is_bad = is_lower_b(x);
-                    is_aux = is_upper_b(x);
+                    is_bad = dstd::is_ascii_lower(static_cast<char>(x));
+                    is_aux = dstd::is_ascii_upper(static_cast<char>(x));
                     break;
                 case BitKind::Title: {
-                    const bool prev_cased = i != 0 && is_alpha_b(p[i - 1]);
-                    is_bad = (is_upper_b(x) && prev_cased) ||
-                             (is_lower_b(x) && !prev_cased);
-                    is_aux = is_alpha_b(x);
+                    const bool prev_cased =
+                        i != 0 &&
+                        dstd::is_ascii_alpha(static_cast<char>(p[i - 1]));
+                    is_bad = (dstd::is_ascii_upper(static_cast<char>(x)) &&
+                              prev_cased) ||
+                             (dstd::is_ascii_lower(static_cast<char>(x)) &&
+                              !prev_cased);
+                    is_aux = dstd::is_ascii_alpha(static_cast<char>(x));
                     break;
                 }
                 case BitKind::Eq:
@@ -560,15 +630,19 @@ void case_map_scalar(CaseKind kind, const std::uint8_t* in, std::uint8_t* out,
         bool flip = false;
         switch (kind) {
             case CaseKind::Swapcase:
-                flip = is_alpha_b(c);
+                flip = dstd::is_ascii_alpha(static_cast<char>(c));
                 break;
             case CaseKind::Lower:
-                flip = is_upper_b(c);
+                flip = dstd::is_ascii_upper(static_cast<char>(c));
                 break;
             case CaseKind::Title: {
-                const bool prev_cased = i != 0 && is_alpha_b(in[i - 1]);
-                flip = (is_upper_b(c) && prev_cased) ||
-                       (is_lower_b(c) && !prev_cased);
+                const bool prev_cased =
+                    i != 0 &&
+                    dstd::is_ascii_alpha(static_cast<char>(in[i - 1]));
+                flip =
+                    (dstd::is_ascii_upper(static_cast<char>(c)) &&
+                     prev_cased) ||
+                    (dstd::is_ascii_lower(static_cast<char>(c)) && !prev_cased);
                 break;
             }
         }
@@ -631,30 +705,35 @@ void class_rows_scalar(BitKind kind, const std::uint8_t* data, const Off* off,
             const std::uint8_t x = p[j];
             switch (kind) {
                 case BitKind::Alnum:
-                    bad_any |= !(is_alpha_b(x) || is_digit_b(x));
+                    bad_any |= !(dstd::is_ascii_alpha(static_cast<char>(x)) ||
+                                 dstd::is_ascii_digit(static_cast<char>(x)));
                     break;
                 case BitKind::Alpha:
-                    bad_any |= !is_alpha_b(x);
+                    bad_any |= !dstd::is_ascii_alpha(static_cast<char>(x));
                     break;
                 case BitKind::Digit:
-                    bad_any |= !is_digit_b(x);
+                    bad_any |= !dstd::is_ascii_digit(static_cast<char>(x));
                     break;
                 case BitKind::Space:
-                    bad_any |= !is_space_b(x);
+                    bad_any |= !dstd::is_ascii_space(static_cast<char>(x));
                     break;
                 case BitKind::Lower:
-                    bad_any |= is_upper_b(x);
-                    aux_any |= is_lower_b(x);
+                    bad_any |= dstd::is_ascii_upper(static_cast<char>(x));
+                    aux_any |= dstd::is_ascii_lower(static_cast<char>(x));
                     break;
                 case BitKind::Upper:
-                    bad_any |= is_lower_b(x);
-                    aux_any |= is_upper_b(x);
+                    bad_any |= dstd::is_ascii_lower(static_cast<char>(x));
+                    aux_any |= dstd::is_ascii_upper(static_cast<char>(x));
                     break;
                 case BitKind::Title: {
-                    const bool prev_cased = j != s && is_alpha_b(p[j - 1]);
-                    bad_any |= (is_upper_b(x) && prev_cased) ||
-                               (is_lower_b(x) && !prev_cased);
-                    aux_any |= is_alpha_b(x);
+                    const bool prev_cased =
+                        j != s &&
+                        dstd::is_ascii_alpha(static_cast<char>(p[j - 1]));
+                    bad_any |= (dstd::is_ascii_upper(static_cast<char>(x)) &&
+                                prev_cased) ||
+                               (dstd::is_ascii_lower(static_cast<char>(x)) &&
+                                !prev_cased);
+                    aux_any |= dstd::is_ascii_alpha(static_cast<char>(x));
                     break;
                 }
                 case BitKind::Eq:
@@ -705,6 +784,22 @@ void class_rows(BitKind kind, const std::uint8_t* data, const std::int64_t* off,
 }
 
 const char* target_name() { return HWY_DYNAMIC_DISPATCH(TargetNameFn)(); }
+
+void len_bytes(const std::int32_t* off, std::int64_t* out, std::size_t n) {
+    HWY_DYNAMIC_DISPATCH(LenBytes32)(off, out, n);
+}
+
+void char_counts(const std::uint8_t* data, const std::int32_t* off,
+                 std::int64_t n, std::int64_t* out) {
+    // An empty column may have no offsets at all, as from an empty Arrow array.
+    if (n <= 0) return;
+    HWY_DYNAMIC_DISPATCH(CharCounts32)(data, off, n, out);
+}
+
+void ascii_fold(const std::uint8_t* in, std::uint8_t* out, std::size_t n,
+                std::uint8_t lo, std::uint8_t hi, int add) {
+    HWY_DYNAMIC_DISPATCH(AsciiFold)(in, out, n, lo, hi, add);
+}
 
 }  // namespace strsimd
 }  // namespace dftracer::utils::dataframe

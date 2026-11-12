@@ -225,6 +225,15 @@ class IndexFoldDriver : public trace::index::build::IndexVisitor {
         co_return dstd::Result<void>{};
     }
 
+    coro::CoroTask<dstd::Result<void>> on_line_cut(
+        std::size_t checkpoint_idx) override {
+        if (partial_.empty()) co_return dstd::Result<void>{};
+        static constexpr char NEWLINE = '\n';
+        auto parsed = co_await on_chunk(&NEWLINE, 1, checkpoint_idx);
+        plain_offset_ -= 1;
+        co_return parsed;
+    }
+
     coro::CoroTask<dstd::Result<void>> on_chunk(
         const char* data, std::size_t len,
         std::size_t checkpoint_idx) override {

@@ -17,6 +17,9 @@
 #include <dftracer/utils/runtime/io/backend.h>
 #include <dftracer/utils/store/record.h>
 #include <dftracer/utils/trace/views/fold_event.h>
+#include <dftracer/utils/yaml/document.h>
+#include <dftracer/utils/yaml/line_index.h>
+#include <dftracer/utils/yaml/tape.h>
 #include <doctest/doctest.h>
 
 #include <cstddef>
@@ -32,8 +35,8 @@ constexpr bool within() {
     return true;
 }
 
-// 3 BufferViews of 24 B replace 3 shared_ptrs of 16 B.
-constexpr std::size_t SERIES_BUDGET = 144;
+// 3 BufferViews of 24 B replace 3 shared_ptrs of 16 B; the name is one more.
+constexpr std::size_t SERIES_BUDGET = 160;
 constexpr std::size_t DATA_TYPE_BUDGET = 40;
 // dstd::String is 24 bytes in libc++ and 32 in libstdc++, so a budget counts
 // its strings by sizeof and stays tight on both.
@@ -53,6 +56,15 @@ constexpr std::size_t RECORD_ITEM_BUDGET = 72;
 constexpr std::size_t FILE_STAT_BUDGET = 40;
 // Lives in the frame of each task that awaits I/O.
 constexpr std::size_t IO_OP_BUDGET = 80;
+// A flow collection of a YAML text holds one entry per scalar and container,
+// so the entry stays at 12 bytes: a 32-bit offset or skip index, a 32-bit
+// length and a kind with its flags.
+constexpr std::size_t TAPE_ENTRY_BUDGET = 12;
+// A line index entry holds the start, the indent, the kind and the flags of a
+// line. A value is a cursor over a YAML text: a storage pointer, a packed
+// range or a tape index, a column and a tag.
+constexpr std::size_t LINE_ENTRY_BUDGET = 8;
+constexpr std::size_t YAML_VALUE_BUDGET = 24;
 
 static_assert(within<dftu_series, SERIES_BUDGET, 8>());
 static_assert(within<runtime::io::IoOp, IO_OP_BUDGET, 8>());
@@ -70,6 +82,9 @@ static_assert(within<dftracer::utils::dstd::Result<void>, RESULT_VOID_BUDGET,
 static_assert(within<dftracer::utils::store::engine::RecordItem,
                      RECORD_ITEM_BUDGET, 8>());
 static_assert(within<dstd::fs::FileStat, FILE_STAT_BUDGET, 8>());
+static_assert(within<yaml::TapeEntry, TAPE_ENTRY_BUDGET, 8>());
+static_assert(within<yaml::LineEntry, LINE_ENTRY_BUDGET, 4>());
+static_assert(within<yaml::Value, YAML_VALUE_BUDGET, 8>());
 
 }  // namespace
 
@@ -88,4 +103,7 @@ TEST_CASE("the layout budgets hold") {
     CHECK(sizeof(dftracer::utils::store::engine::RecordItem) <=
           RECORD_ITEM_BUDGET);
     CHECK(sizeof(dstd::fs::FileStat) <= FILE_STAT_BUDGET);
+    CHECK(sizeof(yaml::TapeEntry) <= TAPE_ENTRY_BUDGET);
+    CHECK(sizeof(yaml::LineEntry) <= LINE_ENTRY_BUDGET);
+    CHECK(sizeof(yaml::Value) <= YAML_VALUE_BUDGET);
 }

@@ -23,6 +23,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/json/fmt.h>
 #include <dftracer/utils/memory/detail/manager.h>
 
 #include <algorithm>
@@ -195,6 +196,95 @@ void print(const dstd::Vector<Row>& rows) {
     std::printf(
         "\nfmt<S>: live memory-manager blocks per result. chain, str_cat: "
         "operator new calls per call on std::string.\n");
+}
+
+// The escape policy before the exact count: 6 bytes a byte as the bound and a
+// byte-at-a-time write. Kept here as the reference the new policy is
+// measured against.
+struct OldJsonEscape {
+    static std::size_t bound(dstd::StringView s) { return 6 * s.size(); }
+    static char* write(char* d, dstd::StringView s) {
+        static constexpr char HEX[] = "0123456789abcdef";
+        for (const char c : s) {
+            const unsigned char u = static_cast<unsigned char>(c);
+            switch (c) {
+                case '"':
+                    *d++ = '\\';
+                    *d++ = '"';
+                    break;
+                case '\\':
+                    *d++ = '\\';
+                    *d++ = '\\';
+                    break;
+                case '\n':
+                    *d++ = '\\';
+                    *d++ = 'n';
+                    break;
+                default:
+                    if (u < 0x20) {
+                        *d++ = '\\';
+                        *d++ = 'u';
+                        *d++ = '0';
+                        *d++ = '0';
+                        *d++ = HEX[u >> 4];
+                        *d++ = HEX[u & 15];
+                    } else {
+                        *d++ = c;
+                    }
+            }
+        }
+        return d;
+    }
+};
+
+dstd::String make_text(std::size_t size, bool dirty) {
+    dstd::String s;
+    s.reserve(size);
+    while (s.size() < size) {
+        s += "ab/cd.ef";
+        if (dirty) s += s.size() % 3 == 0 ? "\"" : "\n";
+    }
+    s.resize(size);
+    return s;
+}
+
+struct EscapeCase {
+    const char* name;
+    std::size_t size;
+    bool dirty;
+};
+
+void json_escape_section(bool smoke) {
+    const EscapeCase cases[] = {
+        {"32 B clean", 32, false},
+        {"32 B with escapes", 32, true},
+        {"1 MB clean", std::size_t{1} << 20, false},
+        {"1 MB with escapes", std::size_t{1} << 20, true},
+    };
+    std::printf("\n%-20s | %-26s | %-26s\n", "json escape",
+                "old: ns, capacity bytes", "new: ns, capacity bytes");
+    for (const EscapeCase& c : cases) {
+        const dstd::String text = make_text(c.size, c.dirty);
+        const std::size_t iterations =
+            smoke ? 4 : (c.size > 1000 ? 100 : 200000);
+        std::size_t old_capacity = 0;
+        std::size_t new_capacity = 0;
+        dstd::String old_text;
+        dstd::String new_text;
+        const Metric old_m = measure(iterations, [&] {
+            old_text = dstd::fmt_with<OldJsonEscape, "{}">(text);
+            old_capacity = old_text.capacity();
+            sink(old_text);
+        });
+        const Metric new_m = measure(iterations, [&] {
+            new_text = dstd::fmt_with<json::JsonEscape, "{}">(text);
+            new_capacity = new_text.capacity();
+            sink(new_text);
+        });
+        if (old_text != new_text) g_mismatch.push_back("json escape differs");
+        std::printf("%-20s | %10.1f %14zu | %10.1f %14zu\n", c.name, old_m.ns,
+                    old_capacity, new_m.ns, new_capacity);
+    }
 }
 
 }  // namespace
@@ -620,6 +710,7 @@ int main(int argc, char** argv) {
     }
 
     print(rows);
+    json_escape_section(smoke);
     if (!g_mismatch.empty()) {
         for (const std::string& m : g_mismatch)
             std::fprintf(stderr, "mismatch: %s\n", m.c_str());

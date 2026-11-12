@@ -9,7 +9,7 @@ other one is fetched at configure time (via CPM; see
 ``cmake/modules/Dependencies.cmake``, the source of truth for pinned versions)
 and linked into the libraries, CLI binaries, and the Python extension. Each
 remains under its own license, reproduced in full in its source tree
-(``.cpmsource/<name>/.../LICENSE`` after a build, and in the vendored header
+(``.cpmsource/<name>/.../LICENSE`` after a build, in the vendored header
 itself). dftracer-utils itself is under the terms in ``LICENSE``; this page
 covers only the third-party components.
 
@@ -47,9 +47,6 @@ Runtime dependencies
    * - Boost.Math
      - ``BSL-1.0``
      - https://github.com/boostorg/math
-   * - yaml-cpp
-     - ``MIT``
-     - https://github.com/jbeder/yaml-cpp
    * - moodycamel concurrentqueue
      - ``BSD-2-Clause``
      - https://github.com/cameron314/concurrentqueue

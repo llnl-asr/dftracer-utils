@@ -26,6 +26,13 @@ static variant (``src/CMakeLists.txt``), aggregated behind
   runtime and the JSON library and knows nothing about traces.
 - ``dftracer_utils_json`` is the simdjson-backed JSON layer: parsing and
   the JSON value type.
+- ``dftracer_utils_yaml`` is the YAML layer: a reader with a line index for
+  block YAML and a flow parser that keeps a flat tape of 12-byte entries and
+  no tree, reports errors without exceptions, refuses anchors, aliases, tags,
+  complex keys, directives and null keys, and reads a text too large for
+  memory in chunks (``Records``), and a block-style writer. It parses and writes
+  buffers and does no I/O. It links only memory, dstd and common, and the trace
+  and domains libraries link it.
 - ``dftracer_utils_duql`` is the duql filter language: the predicate IR, the string
   codec, and the evaluator.
 - ``dftracer_utils_dataframe`` is the columnar SIMD engine: ``Series`` /
@@ -59,6 +66,7 @@ active.
        Store["dftracer_utils_store<br/>key-value store engine"]
        Io["dftracer_utils_fileio<br/>gzip, line streams, writers"]
        Json["dftracer_utils_json<br/>simdjson-backed parsing"]
+       Yaml["dftracer_utils_yaml<br/>YAML reader and writer"]
        Query["dftracer_utils_duql<br/>predicate IR, evaluator"]
        DF["dftracer_utils_dataframe<br/>Series/DataFrame, SIMD kernels"]
        Trace["dftracer_utils_trace<br/>index, views, trace reader"]
@@ -75,9 +83,11 @@ active.
        Trace --> Store
        Trace --> Io
        Trace --> Json
+       Trace --> Yaml
        Trace --> Query
        Trace --> DF
        Util --> Trace
+       Util --> Yaml
 
 The domain logic itself is grouped by what it does rather than by a shared
 base class: readers and the fused scan under ``trace/``, the index under

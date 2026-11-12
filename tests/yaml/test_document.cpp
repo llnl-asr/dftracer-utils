@@ -151,8 +151,8 @@ TEST_CASE("yaml: a duplicate key is found in a large map too") {
 // A map keeps its first 8 short keys apart from the rest, so a key is
 // repeated on each side of that border, and after a long key.
 TEST_CASE("yaml: a duplicate key is found before and after the 8th key") {
-    for (const int size : {2, 8, 9, 30}) {
-        for (int first = 0; first < size; first += 3) {
+    for (const int size : {1, 2, 3, 4, 5, 6, 7, 8, 9, 30}) {
+        for (int first = 0; first < size; first += size <= 9 ? 1 : 3) {
             for (const bool long_key : {false, true}) {
                 CAPTURE(size);
                 CAPTURE(first);

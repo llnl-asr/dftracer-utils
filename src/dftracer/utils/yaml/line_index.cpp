@@ -809,8 +809,9 @@ DFTRACER_UTILS_ALWAYS_INLINE inline bool classify_plain(const Batch& b,
 
 std::atomic<bool> g_slow_lines{false};
 
+// The keys of a level are in a separate array, so that the fields that each
+// line reads stay small.
 struct Level {
-    KeySet::Level keys;
     std::uint32_t cur;
     std::uint16_t col;
     bool is_seq;
@@ -864,7 +865,7 @@ class Builder {
     DFTRACER_UTILS_NOINLINE bool marker(std::uint32_t j);
     bool push_level(std::uint32_t col, std::uint32_t j, bool is_seq);
     void pop_level(std::uint32_t at);
-    bool note_key(Level& level, std::uint32_t line, dstd::StringView key);
+    bool note_key(std::uint32_t line, dstd::StringView key);
     DFTRACER_UTILS_NOINLINE bool same_key(std::uint32_t line,
                                           dstd::StringView key) const;
     bool decode_into(std::uint32_t line, bool is_value, std::uint32_t s,
@@ -968,6 +969,7 @@ class Builder {
     std::uint32_t flow_index_ = 0;
     std::uint32_t flow_next_line_ = NONE;
     Level levels_[MAX_DEPTH];
+    KeySet::Level level_keys_[MAX_DEPTH];
     KeySet keys_;
     FlowParser flow_;
 };
@@ -1055,11 +1057,12 @@ bool Builder::note_bad(std::uint32_t line, std::uint32_t offset,
     return true;
 }
 
-// False when the map holds the key already. The set holds the keys before it.
-bool Builder::note_key(Level& level, std::uint32_t line, dstd::StringView key) {
+// False when the innermost map holds the key already. The set holds the keys
+// before it.
+bool Builder::note_key(std::uint32_t line, dstd::StringView key) {
     const bool in_text = key.data() >= t_ && key.data() < t_ + ix_.size;
-    return keys_.add(level.keys, static_cast<std::size_t>(&level - levels_),
-                     line, key, in_text ? t_ + ix_.size : key.data(),
+    return keys_.add(level_keys_[depth_ - 1], depth_ - 1, line, key,
+                     in_text ? t_ + ix_.size : key.data(),
                      [&](std::uint32_t other, dstd::StringView text) {
                          return same_key(other, text);
                      });
@@ -1071,8 +1074,8 @@ bool Builder::push_level(std::uint32_t col, std::uint32_t j, bool is_seq) {
         return fail(line, ix_.entries[line].start + col,
                     "blocks nested deeper than 128 levels are not supported");
     }
+    if (!is_seq) keys_.open(level_keys_[depth_]);
     Level& level = levels_[depth_++];
-    if (!is_seq) keys_.open(level.keys);
     level.cur = j;
     level.col = static_cast<std::uint16_t>(col);
     level.is_seq = is_seq;
@@ -1083,7 +1086,7 @@ bool Builder::push_level(std::uint32_t col, std::uint32_t j, bool is_seq) {
 void Builder::pop_level(std::uint32_t at) {
     Level& level = levels_[depth_ - 1];
     if (level.cur != NONE) ix_.next[level.cur] = at;
-    if (!level.is_seq) keys_.close(level.keys, depth_ - 1);
+    if (!level.is_seq) keys_.close(level_keys_[depth_ - 1], depth_ - 1);
     --depth_;
 }
 
@@ -1581,9 +1584,8 @@ bool Builder::structure(std::uint32_t j, const LineParts& pt) {
     }
     if (pt.kind == LineKind::MapEntry || pt.kind == LineKind::SeqMap ||
         pt.kind == LineKind::NestMap) {
-        Level& level = levels_[depth_ - 1];
         const dstd::StringView key = key_view(j, pt);
-        if (!note_key(level, j, key)) [[unlikely]] {
+        if (!note_key(j, key)) [[unlikely]] {
             const std::uint32_t quoted =
                 (pt.flags & line_flag::KEY_QUOTED) != 0 ? 1u : 0u;
             return fail(j, pt.key_s - quoted,
@@ -1710,9 +1712,9 @@ DFTRACER_UTILS_ALWAYS_INLINE inline bool Builder::plain_key_value(
         if (!push_level(limit, NONE, false)) return false;
     }
     if (pl.kind != LineKind::SeqItem) {
-        Level& level = levels_[depth_ - 1];
         const dstd::StringView key(t_ + pl.key_s, pl.key_e - pl.key_s);
-        if (!keys_.add(level.keys, depth_ - 1, j, key, t_ + ix_.size,
+        if (!keys_.add(level_keys_[depth_ - 1], depth_ - 1, j, key,
+                       t_ + ix_.size,
                        [&](std::uint32_t other, dstd::StringView text) {
                            return same_key(other, text);
                        })) [[unlikely]]

@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_YAML_KEY_SET_H
 
 #include <dftracer/utils/common/export.h>
+#include <dftracer/utils/dstd/bits.h>
 #include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/raw_buffer.h>
 #include <dftracer/utils/dstd/string.h>
@@ -53,7 +54,8 @@ inline std::uint32_t hash_key(const char* p, std::size_t n, const char* limit) {
 
 /// The keys of the open maps of one reader, so that a repeated key is found as
 /// it is added. A map keeps its first SMALL_KEYS keys of under 8 bytes as
-/// words and compares a new one with all of them. Past that, or at the first
+/// words, each with a one-byte tag, and compares a new one with the words whose
+/// tag is the same. Past that, or at the first
 /// longer key, it keeps a 32-bit hash for each key and a set of bits over them,
 /// and looks at the earlier keys only when the bit of a new key is set; a map
 /// with more than LINEAR_KEY_LIMIT keys uses a hash table.
@@ -64,8 +66,10 @@ class KeySet {
     /// The state of one open map. `slot` of a call is the depth of the map,
     /// below MAX_DEPTH.
     struct Level {
-        /// While `is_small`: the words of the keys, NO_WORD past `count`.
+        /// While `is_small`: the words of the first `count` keys.
         std::uint64_t small[SMALL_KEYS];
+        /// While `is_small`: byte i is the tag of word i, 0 past `count`.
+        std::uint64_t tags;
         std::uint64_t bloom[4];
         std::uint32_t small_ids[SMALL_KEYS];
         std::uint32_t base;
@@ -75,7 +79,7 @@ class KeySet {
     };
 
     void open(Level& level) {
-        for (auto& word : level.small) word = NO_WORD;
+        level.tags = 0;
         level.base = static_cast<std::uint32_t>(keys_.size());
         level.count = 0;
         level.is_small = true;
@@ -99,10 +103,18 @@ class KeySet {
         if (level.is_small && key.size() < 8 && level.count < SMALL_KEYS) {
             const std::uint64_t word =
                 short_key_word(key.data(), key.size(), limit);
-            bool seen = false;
-            for (std::size_t i = 0; i < SMALL_KEYS; ++i)
-                seen |= level.small[i] == word;
-            if (seen) return false;
+            // The bytes of `tags` equal to the tag of `word`, as the zero
+            // bytes of their XOR, with a false hit only above a true one.
+            const std::uint64_t tag = (word * dstd::hash::GOLDEN_RATIO) >> 56;
+            const std::uint64_t x = level.tags ^ (tag * LOW_BYTES);
+            std::uint64_t hits = (x - LOW_BYTES) & ~x & HIGH_BITS &
+                                 ((std::uint64_t{1} << (8 * level.count)) - 1);
+            while (hits != 0) [[unlikely]] {
+                if (level.small[dstd::bits::ctz_u64(hits) >> 3] == word)
+                    return false;
+                hits &= hits - 1;
+            }
+            level.tags |= tag << (8 * level.count);
             level.small[level.count] = word;
             level.small_ids[level.count] = id;
             ++level.count;
@@ -134,9 +146,8 @@ class KeySet {
    private:
     static constexpr std::size_t LINEAR_KEY_LIMIT = 64;
 
-    /// The word of no key: a short key has its length, below 8, in the top
-    /// byte.
-    static constexpr std::uint64_t NO_WORD = ~std::uint64_t{0};
+    static constexpr std::uint64_t LOW_BYTES = 0x0101010101010101ULL;
+    static constexpr std::uint64_t HIGH_BITS = 0x8080808080808080ULL;
 
     // Out of line, as each is rare: the hot add stays small enough to inline.
     // Moves the words of a small map to the hashes and the set of bits.

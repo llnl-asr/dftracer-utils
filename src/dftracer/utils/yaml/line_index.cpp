@@ -868,6 +868,11 @@ struct EndLevel {
 /// What a chunk of a parallel build leaves for the merge. Lines are counted in
 /// the chunk.
 struct Fragment {
+    /// The window of the final arrays that the chunk writes, with room for
+    /// `line_count` lines and the end line.
+    LineEntry* entries = nullptr;
+    std::uint32_t* next = nullptr;
+    std::uint32_t line_count = 0;
     bool starts_cut = false;
     dstd::Vector<VirtualLevel> virtuals;
     dstd::Vector<EndLevel> levels;
@@ -1972,10 +1977,15 @@ bool Builder::build(std::size_t size) {
     const bool ends_in_newline = t_[size - 1] == '\n';
     line_count_ = static_cast<std::uint32_t>(detail::count_newlines(t_, size) +
                                              (ends_in_newline ? 0 : 1));
-    ix_.entries.reserve(line_count_ + 1);
-    ix_.entries.resize(line_count_ + 1);
-    ix_.next.reserve(line_count_ + 1);
-    ix_.next.resize(line_count_ + 1);
+    if (frag_ != nullptr && frag_->entries != nullptr) {
+        if (frag_->line_count != line_count_)
+            return fail_at(0, "the chunk does not end a line");
+        ix_.entries.view(frag_->entries, line_count_ + 1);
+        ix_.next.view(frag_->next, line_count_ + 1);
+    } else {
+        ix_.entries.resize(line_count_ + 1);
+        ix_.next.resize(line_count_ + 1);
+    }
     ix_.line_count = line_count_;
     ix_.next[line_count_] = line_count_;
     std::uint32_t line_start = 0;
@@ -2239,6 +2249,13 @@ struct Piece {
     std::uint32_t escape_base = 0;
     std::uint32_t tape_base = 0;
     std::uint32_t arena_base = 0;
+    // The chunk writes its lines `shift` slots past `line_base`, so that its
+    // end line is not the first line of the next. The join moves them back.
+    std::uint32_t shift = 0;
+    // The lines that the join of a later chunk overwrites before this chunk
+    // reads them.
+    dstd::Vector<LineEntry> tail_entries;
+    dstd::Vector<std::uint32_t> tail_next;
     bool is_ok = false;
 };
 
@@ -2393,31 +2410,39 @@ void join_piece(LineIndex& ix, const Piece& piece, bool is_last,
     const LineIndex& src = piece.ix;
     const auto text_base = static_cast<std::uint32_t>(piece.begin);
     const std::uint32_t lines = src.line_count;
-    for (std::uint32_t i = 0; i < lines; ++i) {
-        LineEntry entry = src.entries[i];
-        entry.start += text_base;
-        ix.entries[piece.line_base + i] = entry;
-        std::uint32_t next = src.next[i];
-        if (entry.kind == LineKind::Cont && i > 0 &&
-            src.entries[i - 1].kind != LineKind::Cont)
-            next += piece.escape_base;
-        else if (next == lines)
-            next = total_lines;
+    const auto tail = static_cast<std::uint32_t>(piece.tail_entries.size());
+    LineEntry* entries = ix.entries.data() + piece.line_base;
+    std::uint32_t* next = ix.next.data() + piece.line_base;
+    // In text order, so a line is read before a lower line of the same chunk
+    // overwrites it.
+    LineKind prev = LineKind::Blank;
+    const auto put = [&](std::uint32_t i, LineEntry entry, std::uint32_t n) {
+        if (entry.kind == LineKind::Cont && i > 0 && prev != LineKind::Cont)
+            n += piece.escape_base;
+        else if (n == lines)
+            n = total_lines;
         else
-            next += piece.line_base;
-        ix.next[piece.line_base + i] = next;
-    }
-    if (is_last) {
-        LineEntry entry = src.entries[lines];
+            n += piece.line_base;
+        prev = entry.kind;
         entry.start += text_base;
-        ix.entries[total_lines] = entry;
-        ix.next[total_lines] = total_lines;
+        entries[i] = entry;
+        next[i] = n;
+    };
+    for (std::uint32_t i = 0; i < lines - tail; ++i)
+        put(i, entries[i + piece.shift], next[i + piece.shift]);
+    for (std::uint32_t i = lines - tail; i < lines; ++i)
+        put(i, piece.tail_entries[i - (lines - tail)],
+            piece.tail_next[i - (lines - tail)]);
+    if (is_last) {
+        LineEntry entry = entries[lines + piece.shift];
+        entry.start += text_base;
+        entries[lines] = entry;
+        next[lines] = total_lines;
     }
     for (std::size_t i = 0; i < src.escapes.size(); ++i) {
         EscapeEntry e = src.escapes[i];
         const std::uint32_t line = e.key / 2;
-        if ((e.key & 1) != 0 &&
-            (src.entries[line].flags & line_flag::FLOW) != 0)
+        if ((e.key & 1) != 0 && (entries[line].flags & line_flag::FLOW) != 0)
             e.off += piece.tape_base;
         else if ((e.end & ESCAPE_IN_TEXT) != 0)
             e.off += text_base;
@@ -2445,8 +2470,8 @@ void join_piece(LineIndex& ix, const Piece& piece, bool is_last,
 
 namespace {
 
-// Joins the indexes of the chunks into `ix`. Gives the first chunk that the
-// merge refuses, or 0.
+// Joins the indexes of the chunks into `ix`, whose lines they wrote in place.
+// Gives the first chunk that the merge refuses, or 0.
 std::size_t join_pieces(LineIndex& ix, dstd::Vector<Piece>& pieces,
                         RunJobs run_jobs, const char* text, std::size_t size) {
     std::uint32_t lines = 0;
@@ -2468,16 +2493,24 @@ std::size_t join_pieces(LineIndex& ix, dstd::Vector<Piece>& pieces,
     ix.line_count = lines;
     ix.has_markers = false;
     ix.problem = LineProblem{};
-    ix.entries.clear();
-    ix.entries.resize(lines + 1);
-    ix.next.clear();
-    ix.next.resize(lines + 1);
     ix.escapes.clear();
     ix.escapes.resize(escape_count);
     ix.tape.clear();
     ix.tape.resize(tape_size);
     ix.arena.clear();
     ix.arena.resize(arena_size);
+    run_jobs(pieces.size(), [&](std::size_t begin, std::size_t end) {
+        for (std::size_t i = begin; i < end; ++i) {
+            Piece& piece = pieces[i];
+            const std::uint32_t n = piece.ix.line_count;
+            const std::uint32_t from = n - std::min(n, piece.shift);
+            const std::size_t at = piece.line_base + piece.shift;
+            piece.tail_entries.assign(ix.entries.data() + at + from,
+                                      ix.entries.data() + at + n);
+            piece.tail_next.assign(ix.next.data() + at + from,
+                                   ix.next.data() + at + n);
+        }
+    });
     run_jobs(pieces.size(), [&](std::size_t begin, std::size_t end) {
         for (std::size_t i = begin; i < end; ++i)
             join_piece(ix, pieces[i], i + 1 == pieces.size(), lines);
@@ -2494,7 +2527,29 @@ BuildResult LineIndex::build_parallel(const char* text_in, std::size_t size_in,
         std::min(MAX_PIECES, size_in / std::max<std::size_t>(piece_bytes, 1));
     if (count < 2 || size_in >= TEXT_SIZE_LIMIT) return build(text_in, size_in);
     dstd::Vector<std::size_t> starts = find_cuts(text_in, size_in, count);
+    if (starts.empty()) return build(text_in, size_in);
     starts.insert(starts.begin(), 0);
+    // The lines before each chunk, so that each writes its lines in place.
+    dstd::Vector<std::uint32_t> line_at(starts.size() + 1, 0);
+    run_jobs(starts.size(), [&](std::size_t begin, std::size_t end) {
+        for (std::size_t i = begin; i < end; ++i) {
+            const std::size_t to =
+                i + 1 < starts.size() ? starts[i + 1] : size_in;
+            line_at[i + 1] = static_cast<std::uint32_t>(
+                detail::count_newlines(text_in + starts[i], to - starts[i]));
+        }
+    });
+    for (std::size_t i = 0; i < starts.size(); ++i)
+        line_at[i + 1] += line_at[i];
+    const std::uint32_t total_lines =
+        line_at.back() + (text_in[size_in - 1] == '\n' ? 0 : 1);
+    line_at.back() = total_lines;
+    // A slot past the lines for each cut, which a chunk shifts its lines by.
+    dstd::Vector<std::uint32_t> shift_at(starts.size());
+    for (std::size_t i = 0; i < starts.size(); ++i)
+        shift_at[i] = static_cast<std::uint32_t>(i);
+    entries.resize(total_lines + starts.size());
+    next.resize(total_lines + starts.size());
     dstd::Vector<Piece> pieces;
     // A chunk that fails, or that the merge refuses, is joined with its
     // neighbours and built again, as the cut fell inside a scalar or a flow
@@ -2511,6 +2566,7 @@ BuildResult LineIndex::build_parallel(const char* text_in, std::size_t size_in,
             piece.begin = starts[i];
             piece.size =
                 (i + 1 < starts.size() ? starts[i + 1] : size_in) - piece.begin;
+            piece.line_base = line_at[i];
             while (kept < pieces.size() && pieces[kept].begin < piece.begin)
                 ++kept;
             if (kept < pieces.size() && pieces[kept].begin == piece.begin &&
@@ -2518,7 +2574,11 @@ BuildResult LineIndex::build_parallel(const char* text_in, std::size_t size_in,
                 piece = std::move(pieces[kept]);
                 continue;
             }
+            piece.shift = shift_at[i];
             piece.frag = Fragment{};
+            piece.frag.entries = entries.data() + piece.line_base + piece.shift;
+            piece.frag.next = next.data() + piece.line_base + piece.shift;
+            piece.frag.line_count = line_at[i + 1] - piece.line_base;
             piece.frag.starts_cut = i > 0;
             todo.push_back(i);
         }
@@ -2542,22 +2602,32 @@ BuildResult LineIndex::build_parallel(const char* text_in, std::size_t size_in,
             const std::size_t refused =
                 join_pieces(*this, pieces, run_jobs, text_in, size_in);
             if (refused == 0) {
+                entries.resize(total_lines + 1);
+                next.resize(total_lines + 1);
                 chunk_count = static_cast<std::uint32_t>(pieces.size());
                 return BuildResult::Accepted;
             }
-            pieces[refused - 1].is_ok = false;
-            pieces[refused].is_ok = false;
+            // The join changed the lines in place, so each chunk is built
+            // again.
+            for (Piece& piece : pieces) piece.is_ok = false;
             drop.push_back(refused);
         }
         dstd::Vector<std::size_t> next_starts;
+        dstd::Vector<std::uint32_t> next_line_at;
+        dstd::Vector<std::uint32_t> next_shift_at;
         std::size_t d = 0;
         std::sort(drop.begin(), drop.end());
         for (std::size_t i = 0; i < starts.size(); ++i) {
             while (d < drop.size() && drop[d] < i) ++d;
             if (d < drop.size() && drop[d] == i) continue;
             next_starts.push_back(starts[i]);
+            next_line_at.push_back(line_at[i]);
+            next_shift_at.push_back(shift_at[i]);
         }
+        next_line_at.push_back(total_lines);
         starts = std::move(next_starts);
+        line_at = std::move(next_line_at);
+        shift_at = std::move(next_shift_at);
     }
     return build(text_in, size_in);
 }

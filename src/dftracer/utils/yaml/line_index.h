@@ -12,6 +12,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <utility>
 
 namespace dftracer::utils::yaml {
 
@@ -164,11 +165,70 @@ inline std::size_t bom_size(const char* text, std::size_t size) {
                : 0;
 }
 
+/// An array of a @ref LineIndex: its own buffer, or a window of a larger array
+/// that a parallel build gives each chunk to write in place.
+template <class T>
+class LineArray {
+   public:
+    LineArray() noexcept = default;
+    LineArray(LineArray&& other) noexcept
+        : data_(std::exchange(other.data_, nullptr)),
+          size_(std::exchange(other.size_, 0)),
+          own_(std::move(other.own_)) {}
+    LineArray& operator=(LineArray&& other) noexcept {
+        if (this != &other) {
+            own_ = std::move(other.own_);
+            data_ = std::exchange(other.data_, nullptr);
+            size_ = std::exchange(other.size_, 0);
+        }
+        return *this;
+    }
+    LineArray(const LineArray&) = delete;
+    LineArray& operator=(const LineArray&) = delete;
+
+    T& operator[](std::size_t i) noexcept { return data_[i]; }
+    const T& operator[](std::size_t i) const noexcept { return data_[i]; }
+    T* data() noexcept { return data_; }
+    const T* data() const noexcept { return data_; }
+    std::size_t size() const noexcept { return size_; }
+    bool empty() const noexcept { return size_ == 0; }
+
+    /// Sizes the own buffer to `n` elements, as @ref dstd::RawBuffer::resize,
+    /// and ends a window.
+    void resize(std::size_t n) {
+        own_.reserve(n);
+        own_.resize(n);
+        data_ = own_.data();
+        size_ = n;
+    }
+    void clear() noexcept {
+        own_.clear();
+        data_ = own_.data();
+        size_ = 0;
+    }
+    void release() noexcept {
+        own_.release();
+        data_ = nullptr;
+        size_ = 0;
+    }
+    /// Uses the `n` elements at `data` until the next resize, clear or
+    /// release. The caller keeps them alive that long.
+    void view(T* data, std::size_t n) noexcept {
+        data_ = data;
+        size_ = n;
+    }
+
+   private:
+    T* data_ = nullptr;
+    std::size_t size_ = 0;
+    dstd::RawBuffer<T> own_;
+};
+
 /// The line index of a text: a line for each line of the text, the end of the
 /// subtree of each content line, the decoded text of the scalars that the text
 /// does not hold as they are, and the tape of each flow collection.
 struct LineIndex {
-    dstd::RawBuffer<LineEntry> entries;
+    LineArray<LineEntry> entries;
     /// The nodes of the flow collections of the text, in text order.
     dstd::RawBuffer<TapeEntry> tape;
     /// The index of the first content line after the subtree of a line: the
@@ -176,7 +236,7 @@ struct LineIndex {
     /// the whole item.
     /// For the first Cont line of a scalar of several lines: the index of its
     /// entry in `escapes`.
-    dstd::RawBuffer<std::uint32_t> next;
+    LineArray<std::uint32_t> next;
     dstd::RawBuffer<char> arena;
     dstd::Vector<EscapeEntry> escapes;
     const char* text = nullptr;

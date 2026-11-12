@@ -387,6 +387,16 @@ void* map_aligned(std::size_t bytes) noexcept {
     return reinterpret_cast<void*>(base);
 }
 
+// With transparent huge pages set to "madvise", the common default, Linux
+// backs a range with 2 MiB pages only when asked. The advice is a hint: a
+// kernel without it, or a full huge page pool, leaves 4 KiB pages.
+void advise_huge_pages([[maybe_unused]] void* base,
+                       [[maybe_unused]] std::size_t bytes) noexcept {
+#if defined(__linux__) && defined(MADV_HUGEPAGE)
+    os_madvise(base, bytes, MADV_HUGEPAGE);
+#endif
+}
+
 // Only the thread that holds a heap writes its counters, so a relaxed load and
 // store replaces a read-modify-write.
 void bump(std::atomic<std::ptrdiff_t>& counter, std::size_t n,
@@ -1282,6 +1292,7 @@ void free_medium_run(Heap& h, SpanHeader* s, std::size_t index) noexcept {
         if (!before_map(bytes)) return nullptr;
         void* base = map_aligned(bytes);
         if (base == nullptr) return nullptr;
+        if (run >= HUGE_PAGE_RUN_MIN) advise_huge_pages(base, bytes);
         s = new (base) SpanHeader{};
         s->map_bytes = bytes;
         bump(h.reserved, bytes, true);

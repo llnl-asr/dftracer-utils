@@ -22,6 +22,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   The memory of a build is bounded by the plaintext of a range (a quarter of the checkpoint size, at least 4 MiB) and is no higher than before at 8, 16 and 32 MB checkpoints.
   A member that cannot be read, or bytes that are no gzip between members, now lose only those bytes: the build warns, looks for the next member header and goes on, where it dropped the rest of the range before.
   A read or a view of a damaged file skips the text that the damage cut, so the line count of its index can be a few lines higher than the lines a read returns.
+- Back blocks of 2 MiB and more with transparent huge pages on Linux, where the system gives them on request (`transparent_hugepage` set to `madvise`).
+  A large new buffer then faults in 2 MiB pages, not 4 KiB ones: a YAML read bench made 13 times fewer page faults and ran 15 to 22% faster.
+  Smaller blocks keep 4 KiB pages, so their resident size does not change.
 - Read YAML with our own reader and drop rapidyaml, with its c4core, fast_float and debugbreak.
   A line index built with Highway reads block YAML (maps, sequences, quoted and plain scalars, block scalars `|` and `>`, scalars of several lines, top-level scalar documents, comments, `---` and `...` markers), and a recursive parser reads flow collections (`[...]`, `{...}` and JSON) into a flat tape of 12-byte entries, with no tree.
   Every text goes through the line index, so no text is left to a second reader.

@@ -934,9 +934,7 @@ class TestTraceViewer:
         assert jdf.loc["posix", "count"] == 3 and jdf.loc["posix", "count_right"] == 3
         cdf = c.result().to_pandas().set_index("cat")
         assert {"l_count", "r_count", "delta_count", "pct_count"} <= set(cdf.columns)
-        assert (
-            cdf.loc["stdio", "r_count"] != cdf.loc["stdio", "r_count"]
-        )  # NaN: stdio absent in variant
+        assert cdf["r_count"].isna().loc["stdio"]  # stdio absent in variant
 
         # default (inner) join drops stdio (absent on the posix-filtered side).
         with tv.session() as s7:

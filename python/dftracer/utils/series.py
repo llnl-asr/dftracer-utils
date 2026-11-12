@@ -381,6 +381,64 @@ def _pandas_values(native: "_ext._Series") -> "Union[pd.Series, np.ndarray]":
     return pd.Series(values).dt.tz_localize("UTC").dt.tz_convert(native.timezone)
 
 
+def _pandas_categorical(native: "_ext._Series") -> "pd.Categorical":
+    """A dictionary-encoded string column as ``pd.Categorical``. With pyarrow the
+    codes and the dictionary are taken as they are, so no string is built per
+    row, and the categories keep the dictionary order without its unused
+    entries. Without pyarrow the codes are not reachable, so the strings are
+    built once and the categories come out sorted."""
+    import numpy as np  # ty: ignore[import-not-found]
+    import pandas as pd  # ty: ignore[import-not-found]
+
+    if hasattr(native, "__arrow_c_array__"):
+        try:
+            import pyarrow as pa  # ty: ignore[import-not-found]
+        except ImportError:
+            pass
+        else:
+            arr = pa.array(native)
+            if pa.types.is_dictionary(arr.type):
+                # pandas refuses repeated or null categories, which Arrow allows.
+                if arr.dictionary.null_count or len(arr.dictionary.unique()) != len(arr.dictionary):
+                    arr = arr.dictionary_decode().dictionary_encode()
+                codes = arr.indices.fill_null(-1).to_numpy(zero_copy_only=False)
+                categories = arr.dictionary.to_pandas()
+                out = pd.Categorical.from_codes(codes, categories=pd.Index(categories))
+                return out.remove_unused_categories()
+    values = np.empty(native.length, dtype=object)
+    native.str_into(values, None)
+    return pd.Categorical(values)
+
+
+def _pandas_default(native: "_ext._Series") -> "Union[pd.Series, np.ndarray, ExtensionArray]":
+    """The default ``to_pandas`` column: ``pd.Categorical`` for a dictionary
+    column, pandas' nullable dtype for an integer, bool or (where the default
+    string dtype is ``object``) string column that holds nulls, and the NumPy
+    form for the rest."""
+    if native.encoding == 2 and DType(native.type) in (DType.STRING, DType.LARGE_STRING):
+        return _pandas_categorical(native)
+    if native.null_count:
+        dtype = DType(native.type)
+        if (
+            dtype in _INTEGERS
+            or dtype == DType.BOOL
+            or (dtype in (DType.STRING, DType.LARGE_STRING) and not _default_string_dtype())
+        ):
+            values = _pandas_nullable(native)
+            if values is not None:
+                return values
+    return _pandas_values(native)
+
+
+def _default_string_dtype() -> bool:
+    """Whether pandas already stores strings in a ``StringDtype`` that holds
+    missing values (pandas 3)."""
+    import numpy as np  # ty: ignore[import-not-found]
+    import pandas as pd  # ty: ignore[import-not-found]
+
+    return isinstance(pd.Series(np.array(["x"], dtype=object)).dtype, pd.StringDtype)
+
+
 def _pandas_nullable(native: "_ext._Series") -> "Optional[ExtensionArray]":
     """The column as pandas' own nullable extension array (``Int8`` .. ``UInt64``,
     ``Float32``, ``Float64``, ``boolean``, ``string``), built without pyarrow; a
@@ -390,6 +448,8 @@ def _pandas_nullable(native: "_ext._Series") -> "Optional[ExtensionArray]":
     import pandas as pd  # ty: ignore[import-not-found]
 
     dtype = DType(native.type)
+    if native.encoding == 2 and dtype in (DType.STRING, DType.LARGE_STRING):
+        return _pandas_categorical(native)
     if dtype in (DType.STRING, DType.LARGE_STRING):
         out = np.empty(native.length, dtype=object)
         native.str_into(out, pd.NA)
@@ -667,12 +727,20 @@ class Series(_SeriesPandasMixin, _Wrapper["_ext._Series"]):
 
     def to_pandas(self, *, arrow: bool = False, nullable: bool = False) -> "pd.Series":
         """This column as a pandas Series: a NumPy dtype by default (a copy,
-        built natively with no pyarrow), with ``arrow=True`` Arrow-backed,
-        sharing this column's buffers, or with ``nullable=True`` pandas' own
-        nullable dtype (``Int64``, ``Float64``, ``boolean``, ``string``, ...)
-        where the column type has one, a null being ``pd.NA`` and a float NaN
-        staying NaN (built without pyarrow). A type with no nullable dtype
-        converts as without the option."""
+        built natively with no pyarrow), except that a dictionary-encoded string
+        column is ``category`` and an integer, bool or string column that holds
+        nulls is pandas' own nullable dtype (``Int64``, ``boolean``, ``string``).
+        On pandas 3 a string column with nulls is the default ``str`` dtype,
+        which holds missing values already. A float column keeps NaN. With
+        ``arrow=True`` the Series is Arrow-backed, sharing this column's
+        buffers, and with ``nullable=True`` it is pandas' own nullable dtype
+        (``Int64``, ``Float64``, ``boolean``, ``string``, ...) even without
+        nulls, where the column type has one, a null being ``pd.NA`` and a float
+        NaN staying NaN (built without pyarrow). A type with no nullable dtype
+        converts as without the option. A dictionary column uses pyarrow, where
+        installed, to read its codes without building a string per row, and
+        keeps the dictionary order of its used values; without pyarrow the
+        categories come out sorted."""
         if arrow and nullable:
             raise ValueError("to_pandas: pass either arrow=True or nullable=True, not both")
         if arrow:
@@ -681,7 +749,7 @@ class Series(_SeriesPandasMixin, _Wrapper["_ext._Series"]):
 
         values = _pandas_nullable(self._native) if nullable else None
         if values is None:
-            values = _pandas_values(self._native)
+            values = _pandas_default(self._native)
         return values if isinstance(values, pd.Series) else pd.Series(values)
 
     def to_numpy(self) -> "np.ndarray":

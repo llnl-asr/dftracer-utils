@@ -412,7 +412,7 @@ Convert out (only at the edge)
 .. code-block:: python
 
    dur.to_arrow()     # pyarrow.Array (zero-copy)
-   dur.to_pandas()     # pandas Series
+   dur.to_pandas()     # pandas Series (nullable dtype for ints and bools with nulls)
    dur.to_numpy()      # NumPy array (zero-copy for flat, non-null, fixed-width numeric)
    dur.to_polars()     # polars Series
 

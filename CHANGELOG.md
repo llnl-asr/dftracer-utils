@@ -621,6 +621,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Fixed
 
+- Fix a read of freed memory when a task that waits in `with_timeout` or `when_any` on a timeout is cancelled, which a later cancel on the same executor could hit.
 - Write every float of the DLIO config with a decimal point (`mean: 1.0`, `max_bound: 1.0`), where a whole number was written as `1`, so a YAML reader such as PyYAML reads it as a float and not as an int.
 - Fix `dftu_task_when_all` and `dftu_task_when_any` ending the process when an input task raises an exception.
   The combined task now reports the exception.

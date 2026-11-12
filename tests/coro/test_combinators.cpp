@@ -22,6 +22,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <stdexcept>
+#include <thread>
 #include <utility>
 
 using namespace dftracer::utils;
@@ -187,6 +188,29 @@ TEST_CASE("a cancel that lands before the wait parks is not lost") {
         CHECK(timed_out(
             runtime.block_on(with_timeout(std::move(tasks[0]), 1us))));
     }
+}
+
+TEST_CASE("a cancelled timeout leaves no wait that names its freed frame") {
+    Runtime runtime(4);
+    // Busy past the cancels, so the when_any state and its timeout outlive
+    // the frame that waited on the timeout.
+    auto busy = []() -> CoroTask<int> {
+        co_await sleep(1ms);
+        std::this_thread::sleep_for(400ms);
+        co_return 1;
+    };
+    dftu_utils_test::ok(runtime.block_on([&]() -> CoroTask<void> {
+        Scope scope;
+        auto waiting = scope.spawn_future(with_timeout(busy(), 60s));
+        co_await sleep(100ms);
+        waiting.cancel();
+        co_await sleep(100ms);
+        // Sweeps the parked waits again while the timeout is still alive.
+        waiting.cancel();
+        auto settled = co_await settle_in_place(waiting);
+        CHECK(!settled.exception);
+        co_await scope.join();
+    }()));
 }
 
 TEST_CASE("with_deadline in the past times out a waiting task") {

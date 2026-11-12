@@ -2,6 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/path.h>
@@ -253,7 +254,7 @@ TEST_SUITE("IndexBuilder") {
         // Hex text compresses to about half, so the members span several
         // scan windows and many headers sit near a window edge.
         dstd::Vector<dstd::String> texts;
-        std::uint64_t state = 0x9E3779B97F4A7C15ULL;
+        std::uint64_t state = dstd::hash::GOLDEN_RATIO;
         while (texts.size() < 400) {
             dstd::String t;
             const std::size_t lines = 600 + texts.size() % 97;

@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_TESTS_YAML_GEN_H
 
 #include <dftracer/utils/dstd/fmt.h>
+#include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <yaml/yaml_tree.h>
@@ -63,7 +64,8 @@ class Gen {
     const Stats& stats() const { return stats_; }
 
     explicit Gen(std::uint64_t seed)
-        : rng_{seed * 0x9E3779B97F4A7C15ull + 88172645463325252ull} {
+        : rng_{seed * dftracer::utils::dstd::hash::GOLDEN_RATIO +
+               88172645463325252ull} {
         for (int i = 0; i < 4; ++i) rng_.next();
     }
 

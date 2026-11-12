@@ -40,9 +40,9 @@ inline constexpr std::uint64_t fnv1a_hash(StringView data) {
 /// https://github.com/aappleby/smhasher
 inline std::uint64_t fnv1a_mix(std::uint64_t h) {
     h ^= h >> 33;
-    h *= 0xff51afd7ed558ccdULL;
+    h *= MURMUR3_FMIX64_MUL1;
     h ^= h >> 33;
-    h *= 0xc4ceb9fe1a85ec53ULL;
+    h *= MURMUR3_FMIX64_MUL2;
     h ^= h >> 33;
     return h;
 }

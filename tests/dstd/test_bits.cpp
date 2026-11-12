@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/bits.h>
+#include <dftracer/utils/dstd/hash/constants.h>
+#include <dftracer/utils/dstd/hash/splitmix64.h>
 #include <dftracer/utils/plugins/prims.h>
 #include <doctest/doctest.h>
 
@@ -35,7 +37,7 @@ TEST_CASE("popcount_u64 counts every bit") {
         CHECK(dstd::bits::popcount_u64(one) == 1);
         CHECK(dstd::bits::popcount_u64(~one) == 63);
     }
-    std::uint64_t state = 0x9E3779B97F4A7C15ULL;
+    std::uint64_t state = dstd::hash::GOLDEN_RATIO;
     for (int i = 0; i < 100000; ++i) {
         const std::uint64_t x = next_value(state);
         const int expected = count_by_bit(x);
@@ -56,5 +58,18 @@ TEST_CASE("popcount_bytes counts whole words and the tail") {
                     static_cast<std::size_t>(count_by_bit(data[off + i]));
             REQUIRE(dstd::bits::popcount_bytes(data + off, n) == expected);
         }
+    }
+}
+
+// prims.h keeps its own copy of the SplitMix64 numbers, so plugins need no
+// dstd header; the two must agree.
+TEST_CASE("dftu_mix64 of the plugin ABI is dstd splitmix64") {
+    CHECK(dftu_mix64(0) == dstd::hash::splitmix64(0));
+    CHECK(dftu_mix64(~std::uint64_t{0}) ==
+          dstd::hash::splitmix64(~std::uint64_t{0}));
+    std::uint64_t state = dstd::hash::GOLDEN_RATIO;
+    for (int i = 0; i < 10000; ++i) {
+        const std::uint64_t x = next_value(state);
+        REQUIRE(dftu_mix64(x) == dstd::hash::splitmix64(x));
     }
 }

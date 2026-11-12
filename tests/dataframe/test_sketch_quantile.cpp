@@ -13,6 +13,7 @@
 #include <dftracer/utils/dataframe/sketch.h>
 #include <dftracer/utils/dstd/base64.h>
 #include <dftracer/utils/dstd/fmt.h>
+#include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
@@ -325,7 +326,7 @@ TEST_CASE("DDSketch::deserialize rejects truncated and hostile bytes") {
 TEST_CASE("DDSketch survives random mutations of a serialized sketch") {
     const dstd::Vector<std::uint8_t> bytes =
         sketch_of({0.5, 1, 2, 3, 40, 500, 7000}).serialize();
-    std::uint64_t x = 0x9e3779b97f4a7c15ULL;
+    std::uint64_t x = dstd::hash::GOLDEN_RATIO;
     auto next = [&]() {
         x ^= x << 13;
         x ^= x >> 7;

@@ -9,6 +9,7 @@
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -82,12 +83,13 @@ Row scan_with_find_all(dstd::StringView root, std::size_t threads,
 
 std::uint64_t hash_paths(dstd::Vector<dstd::String>& paths) {
     std::sort(paths.begin(), paths.end());
-    std::uint64_t hash = 14695981039346656037ULL;
+    std::uint64_t hash = dstd::hash::FNV1A_OFFSET_BASIS;
     for (const dstd::String& path : paths) {
         for (const char c : path) {
-            hash = (hash ^ static_cast<unsigned char>(c)) * 1099511628211ULL;
+            hash = (hash ^ static_cast<unsigned char>(c)) *
+                   dstd::hash::FNV1A_PRIME;
         }
-        hash = (hash ^ 0xff) * 1099511628211ULL;
+        hash = (hash ^ 0xff) * dstd::hash::FNV1A_PRIME;
     }
     return hash;
 }

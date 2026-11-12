@@ -5,6 +5,7 @@
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
@@ -590,7 +591,7 @@ class FoldVisitor : public trace::index::build::IndexVisitor {
         for (std::size_t i = 0; i < len; ++i) {
             out_.seen_hash =
                 (out_.seen_hash ^ static_cast<unsigned char>(data[i])) *
-                1099511628211ULL;
+                dstd::hash::FNV1A_PRIME;
             out_.seen_lines += data[i] == '\n';
         }
         out_.seen_bytes += len;
@@ -606,7 +607,7 @@ class FoldVisitor : public trace::index::build::IndexVisitor {
 Built build_artifacts(const dstd::String& path, std::uint64_t ckpt,
                       std::size_t ways, bool scanned) {
     Built b;
-    b.seen_hash = 14695981039346656037ULL;
+    b.seen_hash = dstd::hash::FNV1A_OFFSET_BASIS;
     dftu_utils_test::run_coro([&](coro::Scope& scope) -> coro::CoroTask<void> {
         FoldVisitor fold(b);
         trace::index::gzip::CheckpointIndexer::VisitorList visitors;

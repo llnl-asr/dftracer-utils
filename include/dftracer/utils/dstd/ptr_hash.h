@@ -2,6 +2,8 @@
 #ifndef DFTRACER_UTILS_DSTD_PTR_HASH_H
 #define DFTRACER_UTILS_DSTD_PTR_HASH_H
 
+#include <dftracer/utils/dstd/hash/constants.h>
+
 #include <cstddef>
 #include <cstdint>
 
@@ -17,7 +19,7 @@ struct PtrHash {
     std::size_t operator()(const void* p) const noexcept {
         std::uint64_t x = reinterpret_cast<std::uintptr_t>(p);
         x ^= x >> 33;
-        x *= 0xff51afd7ed558ccdULL;
+        x *= hash::MURMUR3_FMIX64_MUL1;
         x ^= x >> 33;
         return static_cast<std::size_t>(x);
     }

@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_YAML_KEY_SET_H
 #define DFTRACER_UTILS_YAML_KEY_SET_H
 
+#include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/raw_buffer.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -34,8 +35,8 @@ inline std::uint32_t hash_key(const char* p, std::size_t n, const char* limit) {
         }
         last = first;
     }
-    std::uint64_t h = first * 0x9E3779B97F4A7C15ull;
-    h ^= (last + n) * 0xC2B2AE3D27D4EB4Full;
+    std::uint64_t h = first * dstd::hash::GOLDEN_RATIO;
+    h ^= (last + n) * dstd::hash::XXH64_PRIME2;
     h ^= h >> 32;
     return static_cast<std::uint32_t>(h);
 }

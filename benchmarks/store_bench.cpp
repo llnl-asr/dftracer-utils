@@ -1436,7 +1436,7 @@ QueryPlan Bench::make_query_plan(const Workload& workload) const {
 
     dstd::Vector<std::size_t> every_scope(scopes);
     std::iota(every_scope.begin(), every_scope.end(), std::size_t{0});
-    std::mt19937_64 scan_random(QUERY_SEED ^ 0x9E3779B97F4A7C15ULL);
+    std::mt19937_64 scan_random(QUERY_SEED ^ dstd::hash::GOLDEN_RATIO);
     std::shuffle(every_scope.begin(), every_scope.end(), scan_random);
     if (every_scope.size() > SCAN_SCOPES) {
         every_scope.resize(static_cast<std::size_t>(SCAN_SCOPES));
@@ -2055,7 +2055,7 @@ bool Bench::grow_reads(const dstd::String& label, const char* state,
             std::min<std::uint64_t>(GROW_SCAN_KEYS, total);
         const std::uint64_t scans =
             std::max<std::uint64_t>(1, opt.gets / GETS_PER_GROW_SCAN);
-        std::mt19937_64 random(QUERY_SEED ^ 0x9E3779B97F4A7C15ULL);
+        std::mt19937_64 random(QUERY_SEED ^ dstd::hash::GOLDEN_RATIO);
         const auto started = std::chrono::steady_clock::now();
         for (std::uint64_t at = 0; at < scans; ++at) {
             const std::uint64_t first = random() % (total - span + 1);

@@ -22,6 +22,7 @@
 #include <bench_counters.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -185,9 +186,9 @@ dstd::Vector<dataframe::LazyFrame> make_plans(const View& tv,
 
 std::uint64_t mix(std::uint64_t h) {
     h ^= h >> 33;
-    h *= 0xff51afd7ed558ccdULL;
+    h *= dstd::hash::MURMUR3_FMIX64_MUL1;
     h ^= h >> 33;
-    h *= 0xc4ceb9fe1a85ec53ULL;
+    h *= dstd::hash::MURMUR3_FMIX64_MUL2;
     h ^= h >> 33;
     return h;
 }

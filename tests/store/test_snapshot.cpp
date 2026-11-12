@@ -4,6 +4,7 @@
 #include <dftracer/utils/dstd/expected.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/little_endian.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -1173,7 +1174,7 @@ TEST_SUITE("index store snapshot") {
         const NamespaceSpec spec = put_spec("dftu.test.put");
 
         dstd::String big(2 * 1024 * 1024, '\0');
-        std::uint64_t state = 0x9E3779B97F4A7C15ULL;
+        std::uint64_t state = dstd::hash::GOLDEN_RATIO;
         for (char& c : big) {
             state ^= state << 13U;
             state ^= state >> 7U;

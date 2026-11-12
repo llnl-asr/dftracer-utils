@@ -18,12 +18,36 @@ struct RecordsOptions {
     /// first record boundary at or after this many bytes, so a record larger
     /// than this is parsed whole.
     std::size_t chunk_bytes = std::size_t{64} << 20;
+    /// The most chunks that one @ref Records::next_chunks gives. The text of
+    /// all of them is held at once.
+    std::size_t batch_chunks = 1;
 };
 
 struct RecordsImpl;
+struct RecordChunkImpl;
+
+/// A chunk of the text of a @ref Records, cut at record boundaries. Each chunk
+/// is parsed on its own, so the chunks of one batch can be read on different
+/// threads at the same time; one chunk is read by one thread at a time.
+class RecordChunk {
+   public:
+    /// The next record of the chunk, or nothing after the last one. The first
+    /// call parses the chunk. The value and every view of it stay valid until
+    /// the chunk is given again by @ref Records::next_chunks. A syntax error is
+    /// an InvalidArgument error like that of @ref Document::parse, with the
+    /// line counted from the start of the text, and the chunk then gives
+    /// nothing.
+    dstd::Result<dstd::Optional<Value>> next();
+
+   private:
+    friend struct RecordsImpl;
+    explicit RecordChunk(RecordChunkImpl* impl) : impl_(impl) {}
+
+    RecordChunkImpl* impl_;
+};
 
 /// The records of a large YAML text, one @ref Value at a time, with memory
-/// bounded by the chunk and not by the text. The records are:
+/// bounded by the batch of chunks and not by the text. The records are:
 ///
 ///  - the elements of a top-level block sequence, when the first content line
 ///    of the text starts with `- ` at column 0;
@@ -32,7 +56,9 @@ struct RecordsImpl;
 ///    text with no content.
 ///
 /// The text is cut into chunks, and each chunk is parsed on its own, where it
-/// lies, with its own line index, whose buffers the next chunk reuses. A cut
+/// lies, with its own line index, whose buffers a later chunk reuses. @ref next
+/// reads the chunks in order on the calling thread. @ref next_chunks gives a
+/// batch of chunks to the caller, which can read them on its own threads. A cut
 /// falls only where it cannot split a construct:
 ///
 ///  - A line that starts at column 0 with `- ` (or a lone `-`) in a text that
@@ -55,7 +81,7 @@ struct RecordsImpl;
 ///
 /// The text is not changed and not copied for a parse. Text that the caller
 /// gives in blocks (@ref from_blocks) is held only from the start of the
-/// chunk, so only a chunk and the blocks after it are in memory. Records reads
+/// batch, so only a batch and the blocks after it are in memory. Records reads
 /// no file: the caller reads the blocks.
 class Records {
    public:
@@ -74,8 +100,9 @@ class Records {
                                RecordsOptions options = {});
 
     /// Space for at least `size` more bytes of text, after the text given so
-    /// far. The space and every record view stay valid until the next call of
-    /// this, @ref commit_input or @ref next.
+    /// far. The space stays valid until the next call of this, @ref
+    /// commit_input, @ref next or @ref next_chunks. Call it only when
+    /// @ref needs_input: it can move the text of the chunks given before.
     dstd::Span<char> input_space(std::size_t size);
 
     /// Adds the first `size` bytes written to the last @ref input_space.
@@ -84,15 +111,23 @@ class Records {
     /// Says that no more text follows.
     void end_input();
 
-    /// True when @ref next gave nothing because it needs more text, before
-    /// @ref end_input.
+    /// True when @ref next or @ref next_chunks gave nothing because it needs
+    /// more text, before @ref end_input.
     bool needs_input() const;
 
     /// The next record, or nothing after the last one or when @ref
     /// needs_input. The value and every view of it stay valid until the next
-    /// call. A syntax error in a chunk is an InvalidArgument error like that of
+    /// call of this or of @ref input_space. A syntax error in a chunk is an
+    /// InvalidArgument error like that of
     /// @ref Document::parse, and the records after the chunk are not read.
     dstd::Result<dstd::Optional<Value>> next();
+
+    /// The next batch: up to @ref RecordsOptions::batch_chunks chunks, in text
+    /// order, fewer only at the end of the text. Empty after the last chunk or
+    /// when @ref needs_input. The chunks stay valid until the next call of
+    /// this or of @ref input_space. Use this or @ref next on one Records, not
+    /// both.
+    dstd::Result<dstd::Span<RecordChunk>> next_chunks();
 
    private:
     explicit Records(dstd::UniquePtr<RecordsImpl> impl);

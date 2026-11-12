@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dstd/raw_buffer.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/yaml/line_index.h>
 #include <dftracer/utils/yaml/line_value.h>
 #include <dftracer/utils/yaml/records.h>
@@ -64,18 +65,43 @@ bool has_content(dstd::StringView text) {
 
 }  // namespace
 
+struct RecordChunkImpl {
+    const RecordsImpl* owner = nullptr;
+    DocumentStorage storage;
+    /// The chunk, from its start in the text, with the byte order mark.
+    const char* begin = nullptr;
+    std::size_t size = 0;
+    /// The start of the batch in the text, and the lines before it, to count
+    /// the line of an error.
+    const char* batch_begin = nullptr;
+    std::uint64_t batch_lines = 0;
+    std::uint64_t line_count = 0;
+    bool is_first = false;
+    bool is_parsed = false;
+    bool is_failed = false;
+    /// The walk: the next line of the top sequence in Seq mode, the line after
+    /// the last document otherwise.
+    std::uint32_t line_cursor = 0;
+    std::uint32_t line_limit = 0;
+
+    dstd::Result<void> parse();
+    dstd::Optional<Value> next_record();
+};
+
 struct RecordsImpl {
     dstd::String name;
     RecordsOptions options;
     /// The text of a string source.
     dstd::String owned;
-    /// The text given in blocks, from the start of the chunk, which skips the
+    /// The text given in blocks, from the start of the batch, which skips the
     /// zero fill of a string. A chunk is parsed where it lies in it, and the
     /// unparsed rest follows. Bytes past `filled` are input space.
     dstd::RawBuffer<char> raw;
     std::size_t filled = 0;
-    /// The start of the chunk, or of the next one, in the text.
+    /// The start of the batch, or of the next one, in the text.
     std::size_t begin = 0;
+    /// The start of the chunk that find_chunk_end looks for the end of.
+    std::size_t chunk_begin = 0;
     std::size_t chunk_end = 0;
     /// Where the search for the end of the chunk goes on when more text comes,
     /// or 0 before it starts.
@@ -85,23 +111,24 @@ struct RecordsImpl {
     bool is_ended = true;
     bool needs_input = false;
     Mode mode = Mode::Unknown;
-    bool chunk_loaded = false;
     bool is_done = false;
+    bool at_text_start = true;
     std::uint64_t lines_before = 0;
-    DocumentStorage storage;
-    /// The walk of a chunk: the next line of the top sequence in Seq mode, the
-    /// line after the last document otherwise.
-    std::uint32_t line_cursor = 0;
-    std::uint32_t line_limit = 0;
-    std::uint64_t chunk_lines = 0;
+    /// The ends of the chunks of the batch found so far.
+    dstd::Vector<std::size_t> cuts;
+    dstd::Vector<dstd::UniquePtr<RecordChunkImpl>> chunks;
+    dstd::Vector<RecordChunk> handles;
+    /// The chunks given in the batch, and the one that @ref Records::next
+    /// reads.
+    std::size_t given = 0;
+    std::size_t serial = 0;
 
     char* chars() { return is_blocks ? raw.data() : owned.data(); }
     std::size_t chars_size() const { return is_blocks ? filled : owned.size(); }
     dstd::StringView text() { return dstd::StringView(chars(), chars_size()); }
 
-    dstd::Result<Load> load_chunk();
+    Load load_batch();
     bool find_chunk_end();
-    dstd::Result<void> start_chunk();
 };
 
 namespace {
@@ -117,8 +144,9 @@ bool starts_chunk(Mode mode, dstd::StringView line) {
 // Sets `chunk_end` to the first line start at or after the chunk size that
 // starts a record, or to the end of the text. False when that needs more text.
 bool RecordsImpl::find_chunk_end() {
+    const std::size_t from = chunk_begin;
     if (scan_from == 0)
-        scan_from = begin + std::max<std::size_t>(options.chunk_bytes, 1);
+        scan_from = from + std::max<std::size_t>(options.chunk_bytes, 1);
     const dstd::StringView text = this->text();
     if (scan_from > text.size() && !is_ended) return false;
     std::size_t pos = std::min(scan_from, text.size());
@@ -134,16 +162,16 @@ bool RecordsImpl::find_chunk_end() {
         if (after_end_marker || starts_chunk(mode, line)) {
             // A directive belongs to the document that follows it.
             std::size_t cut = pos;
-            while (mode == Mode::Docs && cut > begin + 1) {
+            while (mode == Mode::Docs && cut > from + 1) {
                 const std::size_t previous = text.rfind('\n', cut - 2);
                 const std::size_t start =
                     previous == dstd::StringView::npos ? 0 : previous + 1;
-                if (start <= begin || text[start] != '%') break;
+                if (start <= from || text[start] != '%') break;
                 cut = start;
             }
             // Directives and comments alone are not a document.
             if (mode != Mode::Docs ||
-                has_content(text.substr(begin, cut - begin))) {
+                has_content(text.substr(from, cut - from))) {
                 chunk_end = cut;
                 scan_from = 0;
                 after_end_marker = false;
@@ -168,22 +196,29 @@ bool RecordsImpl::find_chunk_end() {
     return false;
 }
 
-dstd::Result<void> RecordsImpl::start_chunk() {
-    const std::size_t bom =
-        lines_before == 0 ? bom_size(chars() + begin, chunk_end - begin) : 0;
-    storage.base = chars() + begin + bom;
-    storage.size = chunk_end - begin - bom;
-    chunk_lines = static_cast<std::uint64_t>(
-        std::count(chars() + begin, chars() + chunk_end, '\n'));
+dstd::Result<void> RecordChunkImpl::parse() {
+    is_parsed = true;
+    line_count = detail::count_newlines(begin, size);
+    const std::size_t bom = is_first ? bom_size(begin, size) : 0;
+    storage.base = begin + bom;
+    storage.size = size - bom;
+    const auto fail = [&](const LineProblem& problem) {
+        is_failed = true;
+        const std::uint64_t first_line =
+            batch_lines +
+            detail::count_newlines(
+                batch_begin, static_cast<std::size_t>(begin - batch_begin));
+        return line_problem_error(problem, owner->name, first_line + 1);
+    };
     if (storage.lines.build(storage.base, storage.size) == BuildResult::Invalid)
-        return line_problem_error(storage.lines.problem, name,
-                                  lines_before + 1);
+        return fail(storage.lines.problem);
     std::uint32_t pos = 0;
     std::uint32_t first = 0;
     std::uint32_t limit = 0;
     bool is_empty = false;
     const bool has_document =
         LineAccess::next_document(&storage, pos, first, limit, is_empty);
+    const Mode mode = owner->mode;
     if (mode == Mode::Seq && has_document) {
         const LineKind kind =
             is_empty ? LineKind::Blank : storage.lines.entries[first].kind;
@@ -203,7 +238,7 @@ dstd::Result<void> RecordsImpl::start_chunk() {
             problem.line = (has_more ? limit : first) + 1;
             problem.col = 1;
             problem.reason = "a document marker inside a top-level sequence";
-            return line_problem_error(problem, name, lines_before + 1);
+            return fail(problem);
         }
         line_cursor = first;
     } else if (mode == Mode::Seq) {
@@ -213,16 +248,55 @@ dstd::Result<void> RecordsImpl::start_chunk() {
         line_cursor = 0;
     }
     line_limit = limit;
-    chunk_loaded = true;
     return {};
 }
 
-// Loads the next chunk.
-dstd::Result<Load> RecordsImpl::load_chunk() {
+dstd::Optional<Value> RecordChunkImpl::next_record() {
+    if (is_failed) return dstd::nullopt;
+    const LineIndex& ix = storage.lines;
+    if (owner->mode == Mode::Seq) {
+        if (line_cursor < line_limit && ix.entries[line_cursor].indent == 0) {
+            const std::uint32_t line = line_cursor;
+            line_cursor = ix.next[line];
+            return LineAccess::element(&storage, line);
+        }
+        return dstd::nullopt;
+    }
+    std::uint32_t first = 0;
+    std::uint32_t limit = 0;
+    bool is_empty = false;
+    if (LineAccess::next_document(&storage, line_cursor, first, limit,
+                                  is_empty))
+        return is_empty ? LineAccess::null(&storage)
+                        : LineAccess::container(&storage, first, limit);
+    return dstd::nullopt;
+}
+
+dstd::Result<dstd::Optional<Value>> RecordChunk::next() {
+    if (!impl_->is_parsed) {
+        if (auto parsed = impl_->parse(); !parsed) return parsed.error();
+    }
+    return impl_->next_record();
+}
+
+// Ends the batch that was given and loads the next one.
+Load RecordsImpl::load_batch() {
+    if (given > 0) {
+        for (std::size_t i = 0; i < given; ++i) {
+            RecordChunkImpl& chunk = *chunks[i];
+            lines_before += chunk.is_parsed ? chunk.line_count
+                                            : detail::count_newlines(
+                                                  chunk.begin, chunk.size);
+        }
+        begin = cuts[given - 1];
+        cuts.clear();
+        given = 0;
+        serial = 0;
+        at_text_start = false;
+    }
     if (is_blocks && begin > 0) {
         std::memmove(raw.data(), raw.data() + begin, filled - begin);
         filled -= begin;
-        chunk_end -= begin;
         begin = 0;
     }
     if (mode == Mode::Unknown) {
@@ -244,14 +318,40 @@ dstd::Result<Load> RecordsImpl::load_chunk() {
         }
     }
     if (mode == Mode::Empty) return Load::End;
-    if (chars_size() == begin) return is_ended ? Load::End : Load::NeedInput;
-    if (mode == Mode::Single) {
-        if (!is_ended) return Load::NeedInput;
-        chunk_end = chars_size();
-    } else if (!find_chunk_end()) {
-        return Load::NeedInput;
+    const std::size_t batch = std::max<std::size_t>(options.batch_chunks, 1);
+    while (cuts.size() < batch) {
+        chunk_begin = cuts.empty() ? begin : cuts.back();
+        if (chunk_begin == chars_size()) {
+            if (!is_ended) return Load::NeedInput;
+            break;
+        }
+        if (mode == Mode::Single) {
+            if (!is_ended) return Load::NeedInput;
+            chunk_end = chars_size();
+        } else if (!find_chunk_end()) {
+            return Load::NeedInput;
+        }
+        cuts.push_back(chunk_end);
     }
-    if (auto started = start_chunk(); !started) return started.error();
+    if (cuts.empty()) return Load::End;
+    while (chunks.size() < cuts.size()) {
+        chunks.push_back(dstd::make_unique<RecordChunkImpl>());
+        chunks.back()->owner = this;
+        handles.push_back(RecordChunk(chunks.back().get()));
+    }
+    std::size_t start = begin;
+    for (std::size_t i = 0; i < cuts.size(); ++i) {
+        RecordChunkImpl& chunk = *chunks[i];
+        chunk.begin = chars() + start;
+        chunk.size = cuts[i] - start;
+        chunk.batch_begin = chars() + begin;
+        chunk.batch_lines = lines_before;
+        chunk.is_first = at_text_start && i == 0;
+        chunk.is_parsed = false;
+        chunk.is_failed = false;
+        start = cuts[i];
+    }
+    given = cuts.size();
     return Load::Chunk;
 }
 
@@ -282,11 +382,15 @@ Records Records::from_blocks(dstd::StringView source_name,
 dstd::Span<char> Records::input_space(std::size_t size) {
     RecordsImpl& impl = *impl_;
     const std::size_t need = impl.filled + size;
-    // Room for a whole chunk at once, so the text of a chunk is not copied
-    // as the buffer grows block by block; past that, it doubles.
+    // Room for a whole batch at once, so the text of a batch is not copied
+    // as the buffer grows block by block; past that, it grows by half.
+    const std::size_t batch_bytes =
+        impl.options.chunk_bytes *
+        std::max<std::size_t>(impl.options.batch_chunks, 1);
     if (need > impl.raw.capacity())
-        impl.raw.reserve(std::max(
-            {need, impl.options.chunk_bytes + size, impl.raw.capacity() * 2}));
+        impl.raw.reserve(
+            std::max({need, batch_bytes + size,
+                      impl.raw.capacity() + impl.raw.capacity() / 2}));
     impl.raw.resize(need);
     return dstd::Span<char>(impl.raw.data() + impl.filled, size);
 }
@@ -309,45 +413,41 @@ dstd::Result<dstd::Optional<Value>> Records::next() {
     RecordsImpl& impl = *impl_;
     for (;;) {
         if (impl.is_done) return dstd::Optional<Value>{};
-        if (impl.chunk_loaded) {
-            const LineIndex& ix = impl.storage.lines;
-            if (impl.mode == Mode::Seq) {
-                if (impl.line_cursor < impl.line_limit &&
-                    ix.entries[impl.line_cursor].indent == 0) {
-                    const std::uint32_t line = impl.line_cursor;
-                    impl.line_cursor = ix.next[line];
-                    return dstd::Optional<Value>(
-                        LineAccess::element(&impl.storage, line));
-                }
-            } else {
-                std::uint32_t first = 0;
-                std::uint32_t limit = 0;
-                bool is_empty = false;
-                if (LineAccess::next_document(&impl.storage, impl.line_cursor,
-                                              first, limit, is_empty))
-                    return dstd::Optional<Value>(
-                        is_empty ? LineAccess::null(&impl.storage)
-                                 : LineAccess::container(&impl.storage, first,
-                                                         limit));
+        if (impl.serial < impl.given) {
+            auto record = impl.handles[impl.serial].next();
+            if (!record.has_value()) {
+                impl.is_done = true;
+                return record.error();
             }
-            impl.lines_before += impl.chunk_lines;
-            impl.begin = impl.chunk_end;
-            impl.chunk_loaded = false;
+            if (*record) return record;
+            ++impl.serial;
+            continue;
         }
-        auto loaded = impl.load_chunk();
-        if (!loaded.has_value()) {
-            impl.is_done = true;
-            return loaded.error();
-        }
-        if (*loaded == Load::NeedInput) {
+        const Load loaded = impl.load_batch();
+        if (loaded == Load::NeedInput) {
             impl.needs_input = true;
             return dstd::Optional<Value>{};
         }
-        if (*loaded == Load::End) {
+        if (loaded == Load::End) {
             impl.is_done = true;
             return dstd::Optional<Value>{};
         }
     }
+}
+
+dstd::Result<dstd::Span<RecordChunk>> Records::next_chunks() {
+    RecordsImpl& impl = *impl_;
+    if (impl.is_done) return dstd::Span<RecordChunk>{};
+    const Load loaded = impl.load_batch();
+    if (loaded == Load::NeedInput) {
+        impl.needs_input = true;
+        return dstd::Span<RecordChunk>{};
+    }
+    if (loaded == Load::End) {
+        impl.is_done = true;
+        return dstd::Span<RecordChunk>{};
+    }
+    return dstd::Span<RecordChunk>(impl.handles.data(), impl.given);
 }
 
 }  // namespace dftracer::utils::yaml

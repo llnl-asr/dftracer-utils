@@ -4,6 +4,7 @@
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/yaml/document.h>
 #include <dftracer/utils/yaml/records.h>
@@ -25,10 +26,11 @@ namespace {
 
 // Every record of `text`, as dump text, cut into chunks of about `chunk`
 // bytes.
-dstd::Vector<dstd::String> records_of(dstd::StringView text,
-                                      std::size_t chunk) {
+dstd::Vector<dstd::String> records_of(dstd::StringView text, std::size_t chunk,
+                                      std::size_t batch = 1) {
     RecordsOptions options;
     options.chunk_bytes = chunk;
+    options.batch_chunks = batch;
     Records records = Records::from_text(dstd::String(text), "r.yaml", options);
     dstd::Vector<dstd::String> out;
     for (;;) {
@@ -59,9 +61,11 @@ void feed(Records& records, dstd::StringView text, std::size_t& at,
 // As records_of, with the text given in blocks of `block` bytes.
 dstd::Vector<dstd::String> records_in_blocks(dstd::StringView text,
                                              std::size_t chunk,
-                                             std::size_t block) {
+                                             std::size_t block,
+                                             std::size_t batch = 1) {
     RecordsOptions options;
     options.chunk_bytes = chunk;
+    options.batch_chunks = batch;
     Records records = Records::from_blocks("r.yaml", options);
     dstd::Vector<dstd::String> out;
     std::size_t at = 0;
@@ -79,6 +83,67 @@ dstd::Vector<dstd::String> records_in_blocks(dstd::StringView text,
 }
 
 // The elements of the top-level sequence, or the documents, of a whole parse.
+// As records_in_blocks, read with next_chunks in batches of `batch` chunks.
+// The chunks of a batch are read last to first, or each on its own thread,
+// and their records are put back in text order. The first error, in text
+// order, goes to `error`. The chunks of the first `skipped` batches are not
+// read.
+dstd::Vector<dstd::String> records_in_batches(
+    dstd::StringView text, std::size_t chunk, std::size_t block,
+    std::size_t batch, bool on_threads, dstd::String* error = nullptr,
+    std::size_t skipped = 0) {
+    RecordsOptions options;
+    options.chunk_bytes = chunk;
+    options.batch_chunks = batch;
+    Records records = Records::from_blocks("r.yaml", options);
+    dstd::Vector<dstd::String> out;
+    std::size_t at = 0;
+    for (;;) {
+        auto chunks = records.next_chunks();
+        REQUIRE(chunks.has_value());
+        if (chunks->empty()) {
+            if (!records.needs_input()) break;
+            feed(records, text, at, block);
+            continue;
+        }
+        CHECK(chunks->size() <= batch);
+        if (skipped > 0) {
+            --skipped;
+            continue;
+        }
+        dstd::Vector<dstd::Vector<dstd::String>> parts(chunks->size());
+        dstd::Vector<dstd::String> errors(chunks->size());
+        const auto read = [&](std::size_t i) {
+            for (;;) {
+                auto next = (*chunks)[i].next();
+                if (!next.has_value()) {
+                    errors[i] = dstd::String(next.error().message());
+                    return;
+                }
+                if (!next->has_value()) return;
+                parts[i].push_back(dump(**next));
+            }
+        };
+        if (on_threads) {
+            dstd::Vector<dstd::Thread> threads;
+            for (std::size_t i = 0; i < chunks->size(); ++i)
+                threads.emplace_back([&read, i] { read(i); });
+            for (auto& thread : threads) thread.join();
+        } else {
+            for (std::size_t i = chunks->size(); i-- > 0;) read(i);
+        }
+        for (std::size_t i = 0; i < chunks->size(); ++i) {
+            for (auto& record : parts[i]) out.push_back(std::move(record));
+            if (!errors[i].empty()) {
+                REQUIRE(error != nullptr);
+                *error = errors[i];
+                return out;
+            }
+        }
+    }
+    return out;
+}
+
 dstd::Vector<dstd::String> whole_elements(dstd::StringView text) {
     auto doc = Document::parse(dstd::String(text), "");
     if (!doc.has_value()) FAIL(dstd::String(doc.error().message()));
@@ -298,6 +363,14 @@ TEST_CASE("yaml records: text given in blocks gives the records of the whole") {
                 CAPTURE(chunk);
                 CAPTURE(block);
                 CHECK(records_in_blocks(text, chunk, block) == expected);
+                for (const std::size_t batch :
+                     {std::size_t{1}, std::size_t{3}, std::size_t{8}}) {
+                    CHECK(records_in_batches(text, chunk, block, batch,
+                                             false) == expected);
+                    CHECK(records_in_blocks(text, chunk, block, batch) ==
+                          expected);
+                    CHECK(records_of(text, chunk, batch) == expected);
+                }
             }
         }
     }
@@ -323,6 +396,38 @@ TEST_CASE("yaml records: an error in text given in blocks") {
         }
         CHECK(message == error_after_records(text, 100000));
         CHECK(message.find("document marker") != dstd::String::npos);
+    }
+}
+
+TEST_CASE("yaml records: the chunks of a batch are read on their own threads") {
+    dstd::String seq;
+    for (int i = 0; i < 4000; ++i)
+        seq += dstd::fmt<"- id: {}\n  text: \"a\\tb {}\"\n  more: |\n    x\n">(
+            i, i);
+    const auto expected = records_of(seq, 40000);
+    for (const std::size_t batch : {std::size_t{2}, std::size_t{8}})
+        CHECK(records_in_batches(seq, 3000, 4096, batch, true) == expected);
+}
+
+TEST_CASE("yaml records: an error in a later chunk of a batch names its line") {
+    dstd::String seq;
+    for (int i = 0; i < 200; ++i) {
+        seq += dstd::fmt<"- id: {}\n  name: n\n">(i);
+        if (i == 137) seq += "  id: again\n";
+    }
+    const dstd::String expected = error_after_records(seq, 50);
+    CHECK(expected.find("duplicate key 'id'") != dstd::String::npos);
+    for (const std::size_t batch : {std::size_t{1}, std::size_t{4}}) {
+        for (const bool on_threads : {false, true}) {
+            CAPTURE(batch);
+            CAPTURE(on_threads);
+            dstd::String message;
+            records_in_batches(seq, 50, 7, batch, on_threads, &message);
+            CHECK(message == expected);
+            dstd::String after_skip;
+            records_in_batches(seq, 50, 7, batch, on_threads, &after_skip, 3);
+            CHECK(after_skip == expected);
+        }
     }
 }
 

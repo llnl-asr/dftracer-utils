@@ -14,6 +14,9 @@
 //   records   yaml::Records over a file of the text, read in 1 MiB blocks,
 //             chunks of --chunk MiB
 //   records1  the same, chunks of 1 MiB
+//   parallel  the same, with batches of two chunks of --pchunk MiB per thread
+//             of a Runtime, the text read in 1 MiB blocks and each chunk
+//             parsed and walked in parallel_for
 //
 // The walk of records sums `dur` and counts the POSIX records whose
 // args.size is above 1024; the walk of nested sums every leaf. The document
@@ -29,7 +32,8 @@
 // Built only with DFTRACER_UTILS_BUILD_BENCHMARKS=ON and run manually.
 //
 //   yaml_read_bench [--mb N] [--rounds N] [--chunk MiB] [--dir PATH]
-//                   [--only parse|document|records|records1]
+//                   [--pchunk MiB] [--threads N]
+//                   [--only parse|document|records|records1|parallel]
 //                   [--shape records|nested|multiline]
 //   yaml_read_bench --smoke
 
@@ -43,6 +47,7 @@
 #include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/memory/detail/manager.h>
+#include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/yaml/document.h>
 #include <dftracer/utils/yaml/records.h>
 #include <unistd.h>
@@ -304,6 +309,88 @@ Outcome run_records(const dstd::Path& path, Shape shape,
     });
 }
 
+void walk_one(yaml::Value record, Shape shape, Answer& answer) {
+    if (shape == Shape::Multiline)
+        walk_multiline(record, answer);
+    else if (shape == Shape::Records)
+        walk_record(record, answer);
+    else
+        walk_leaves(record, answer);
+}
+
+void read_full(const dstd::File& file, std::uint64_t offset, char* out,
+               std::size_t size) {
+    while (size > 0) {
+        const std::size_t got = dftu::bench::ok(file.read_at(
+            offset, dstd::Span<std::uint8_t>(
+                        reinterpret_cast<std::uint8_t*>(out), size)));
+        if (got == 0) dstd::fatal("bench: the file got shorter");
+        offset += got;
+        out += got;
+        size -= got;
+    }
+}
+
+Outcome run_parallel(const dstd::Path& path, Shape shape,
+                     std::size_t chunk_bytes, Runtime& runtime) {
+    yaml::RecordsOptions options;
+    options.chunk_bytes = chunk_bytes;
+    options.batch_chunks = 2 * runtime.threads();
+    return measure([&](Answer& answer) {
+        auto file =
+            dftu::bench::ok(dstd::File::open(path, dstd::OpenOptions{}));
+        auto records = yaml::Records::from_blocks(path.str(), options);
+        const std::uint64_t file_size = dftu::bench::ok(file.size());
+        // A quarter of a batch at a time keeps the buffer near one batch.
+        const std::size_t read_bytes =
+            std::max(chunk_bytes * options.batch_chunks / 4, READ_BLOCK);
+        dstd::Vector<Answer> parts(options.batch_chunks);
+        std::uint64_t offset = 0;
+        for (;;) {
+            const auto chunks = dftu::bench::ok(records.next_chunks());
+            if (chunks.empty()) {
+                if (!records.needs_input()) break;
+                // The next part of the batch, in blocks read in parallel.
+                const std::size_t size = static_cast<std::size_t>(
+                    std::min<std::uint64_t>(read_bytes, file_size - offset));
+                if (size == 0) {
+                    records.end_input();
+                    continue;
+                }
+                dstd::Span<char> space = records.input_space(size);
+                const auto blocks = static_cast<std::int64_t>(
+                    (size + READ_BLOCK - 1) / READ_BLOCK);
+                dftu::bench::ok(runtime.parallel_for(
+                    blocks, 1, [&](std::int64_t begin, std::int64_t end) {
+                        for (auto b = begin; b < end; ++b) {
+                            const auto at =
+                                static_cast<std::size_t>(b) * READ_BLOCK;
+                            read_full(file, offset + at, space.data() + at,
+                                      std::min(READ_BLOCK, size - at));
+                        }
+                    }));
+                records.commit_input(size);
+                offset += size;
+                continue;
+            }
+            dftu::bench::ok(runtime.parallel_for(
+                static_cast<std::int64_t>(chunks.size()), 1,
+                [&](std::int64_t begin, std::int64_t end) {
+                    for (auto i = static_cast<std::size_t>(begin);
+                         i < static_cast<std::size_t>(end); ++i) {
+                        while (auto record = dftu::bench::ok(chunks[i].next()))
+                            walk_one(*record, shape, parts[i]);
+                    }
+                }));
+            for (std::size_t i = 0; i < chunks.size(); ++i) {
+                answer.sum += parts[i].sum;
+                answer.count += parts[i].count;
+                parts[i] = Answer{};
+            }
+        }
+    });
+}
+
 double median(dstd::Vector<double> values) {
     std::sort(values.begin(), values.end());
     return values[values.size() / 2];
@@ -315,6 +402,8 @@ int main(int argc, char** argv) {
     std::size_t megabytes = 100;
     int rounds = 5;
     std::size_t chunk_mib = 64;
+    std::size_t parallel_chunk_mib = 2;
+    std::size_t threads = 0;
     dstd::String dir = "/tmp";
     dstd::StringView only;
     dstd::StringView only_shape;
@@ -329,6 +418,10 @@ int main(int argc, char** argv) {
             rounds = std::atoi(argv[++i]);
         } else if (arg == "--chunk" && i + 1 < argc) {
             chunk_mib = std::strtoull(argv[++i], nullptr, 10);
+        } else if (arg == "--pchunk" && i + 1 < argc) {
+            parallel_chunk_mib = std::strtoull(argv[++i], nullptr, 10);
+        } else if (arg == "--threads" && i + 1 < argc) {
+            threads = std::strtoull(argv[++i], nullptr, 10);
         } else if (arg == "--dir" && i + 1 < argc) {
             dir = argv[++i];
         } else if (arg == "--only" && i + 1 < argc) {
@@ -339,17 +432,22 @@ int main(int argc, char** argv) {
             std::fprintf(
                 stderr,
                 "usage: yaml_read_bench [--mb N] [--rounds N] "
-                "[--chunk MiB] [--dir PATH] [--only CASE] [--shape SHAPE] | "
+                "[--chunk MiB] [--pchunk MiB] [--threads N] [--dir PATH] "
+                "[--only CASE] [--shape SHAPE] | "
                 "--smoke\n");
             return 2;
         }
     }
     std::size_t chunk_bytes = chunk_mib << 20;
+    std::size_t parallel_chunk_bytes = parallel_chunk_mib << 20;
     if (smoke) {
         megabytes = 2;
         rounds = 1;
         chunk_bytes = std::size_t{256} << 10;
+        parallel_chunk_bytes = std::size_t{64} << 10;
+        threads = 2;
     }
+    Runtime runtime(threads);
 
     const dstd::Path file(dstd::fmt<"{}/yaml_read_bench_{}.yaml">(
         dir, static_cast<long>(getpid())));
@@ -370,9 +468,9 @@ int main(int argc, char** argv) {
         dftu::bench::ok(dstd::fs::write_file(file, text));
         const double input_mb = static_cast<double>(text.size()) / 1e6;
 
-        constexpr int CASES = 4;
+        constexpr int CASES = 5;
         static const char* const NAMES[CASES] = {"parse", "document", "records",
-                                                 "records1"};
+                                                 "records1", "parallel"};
         dstd::Vector<double> seconds[CASES];
         Outcome outcomes[CASES];
         for (int round = 0; round < rounds; ++round) {
@@ -390,25 +488,29 @@ int main(int argc, char** argv) {
                     case 2:
                         outcome = run_records(file, shape, chunk_bytes);
                         break;
-                    default:
+                    case 3:
                         outcome =
                             run_records(file, shape, std::size_t{1} << 20);
+                        break;
+                    default:
+                        outcome = run_parallel(file, shape,
+                                               parallel_chunk_bytes, runtime);
                         break;
                 }
                 seconds[which].push_back(outcome.seconds);
             }
         }
-        for (const int which : {1, 2, 3}) {
+        for (const int which : {1, 2, 3, 4}) {
             if (!seconds[which].empty() && !(outcomes[which].answer == truth)) {
                 std::fprintf(stderr, "%s: %s answer is not the generated one\n",
                              shape_name, NAMES[which]);
                 ++failures;
             }
         }
-        const auto row = [&](const char* name, double seconds,
+        const auto row = [&](const char* name, double median_seconds,
                              const Outcome& outcome) {
             std::printf("%-9s %-9s %9.0f %10.1f %9.2f\n", shape_name, name,
-                        input_mb / seconds,
+                        input_mb / median_seconds,
                         static_cast<double>(outcome.extra_bytes) / 1e6,
                         static_cast<double>(outcome.extra_bytes) /
                             static_cast<double>(text.size()));

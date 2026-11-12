@@ -86,6 +86,11 @@ int Series_getbuffer(PyObject* self, Py_buffer* view, int flags) {
                         "Series is not a flat, non-null column");
         return -1;
     }
+    // numpy gives its fixed-width int64 types the C long code where long is 64
+    // bits. With "q" and "Q" it makes longlong and ulonglong, which pandas
+    // cannot factorize, so a merge on such a key fails.
+    constexpr const char* INT64_FORMAT = sizeof(long) == 8 ? "l" : "q";
+    constexpr const char* UINT64_FORMAT = sizeof(long) == 8 ? "L" : "Q";
     const char* fmt = nullptr;
     Py_ssize_t itemsize = 0;
     switch (static_cast<TypeId>(dftu_series_type(h))) {
@@ -102,7 +107,7 @@ int Series_getbuffer(PyObject* self, Py_buffer* view, int flags) {
             itemsize = 4;
             break;
         case TypeId::Int64:
-            fmt = "q";
+            fmt = INT64_FORMAT;
             itemsize = 8;
             break;
         case TypeId::Uint8:
@@ -118,7 +123,7 @@ int Series_getbuffer(PyObject* self, Py_buffer* view, int flags) {
             itemsize = 4;
             break;
         case TypeId::Uint64:
-            fmt = "Q";
+            fmt = UINT64_FORMAT;
             itemsize = 8;
             break;
         case TypeId::Float32:

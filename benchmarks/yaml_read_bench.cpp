@@ -29,6 +29,7 @@
 //
 //   yaml_read_bench [--mb N] [--rounds N] [--chunk MiB] [--dir PATH]
 //                   [--only parse|document|records|records1]
+//                   [--shape records|nested|multiline]
 //   yaml_read_bench --smoke
 
 #include <bench_ok.h>
@@ -295,6 +296,7 @@ int main(int argc, char** argv) {
     std::size_t chunk_mib = 64;
     dstd::String dir = "/tmp";
     dstd::StringView only;
+    dstd::StringView only_shape;
     bool smoke = false;
     for (int i = 1; i < argc; ++i) {
         const dstd::StringView arg = argv[i];
@@ -310,11 +312,14 @@ int main(int argc, char** argv) {
             dir = argv[++i];
         } else if (arg == "--only" && i + 1 < argc) {
             only = argv[++i];
+        } else if (arg == "--shape" && i + 1 < argc) {
+            only_shape = argv[++i];
         } else {
             std::fprintf(
                 stderr,
                 "usage: yaml_read_bench [--mb N] [--rounds N] "
-                "[--chunk MiB] [--dir PATH] [--only CASE] | --smoke\n");
+                "[--chunk MiB] [--dir PATH] [--only CASE] [--shape SHAPE] | "
+                "--smoke\n");
             return 2;
         }
     }
@@ -335,6 +340,7 @@ int main(int argc, char** argv) {
         const char* shape_name = shape == Shape::Records  ? "records"
                                  : shape == Shape::Nested ? "nested"
                                                           : "multiline";
+        if (!only_shape.empty() && only_shape != shape_name) continue;
         Answer truth;
         const dstd::String text =
             shape == Shape::Records  ? make_records(megabytes, truth)

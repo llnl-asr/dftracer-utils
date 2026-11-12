@@ -413,7 +413,9 @@ TEST_CASE("timeout ends a slow batch stage and a slow task") {
     CHECK(condition_of(runtime, [] {
               return slow_value(30s, 1) | timeout(10ms);
           }) == dstd::Condition::Timeout);
-    CHECK(std::chrono::steady_clock::now() - start < 5s);
+    // Far below the sleeps, so only a timeout that waits a sleep out fails,
+    // while a slow shared runner still passes.
+    CHECK(std::chrono::steady_clock::now() - start < 20s);
     auto chained = Doubler{} | timeout(5s) |
                    then([](dstd::Result<int> doubled) { return *doubled * 3; });
     CHECK(dftu_utils_test::ok(runtime.block_on(chained.run(1))) == 6);

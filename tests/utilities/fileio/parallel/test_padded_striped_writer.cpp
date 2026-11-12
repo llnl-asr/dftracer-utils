@@ -461,6 +461,7 @@ TEST_CASE(
     const dstd::String payload = "{\"stopped\":1}\n";
     const auto member = gzip_member(payload);
     bool stopped = false;
+    std::atomic<bool> wrote{false};
     Runtime runtime(4);
     coro::StopSource source;
     dftu_utils_test::ok(runtime.block_on([&]() -> CoroTask<void> {
@@ -471,12 +472,16 @@ TEST_CASE(
             REQUIRE(co_await w->open(dstd::String(path), 2, true, jobs.get()) ==
                     0);
             REQUIRE(co_await w->write_chunk(0, as_bv(member)) == 0);
+            wrote = true;
             co_await coro::sleep(std::chrono::seconds(30));
             co_await jobs->join();
         };
         auto waiting = scope.spawn_future(
             coro::with_stop_token(writing(), source.token()));
-        co_await coro::sleep(std::chrono::milliseconds(100));
+        // A stop before the write ends would drop the chunk, so wait for it.
+        for (int i = 0; i < 30000 && !wrote.load(); ++i)
+            co_await coro::sleep(std::chrono::milliseconds(1));
+        REQUIRE(wrote.load());
         source.request_stop();
         auto settled = co_await coro::settle_in_place(waiting);
         stopped = settled.stopped;

@@ -617,11 +617,11 @@ inline std::uint32_t next_clear(const std::uint64_t* a, std::uint32_t limit,
     return limit;
 }
 
-// The line `[start, end)` when it holds none of the bytes that set a line
-// apart from a plain one: the same facts as classify_line, read from the bit
-// arrays. False means the line goes to classify_line, whatever it holds.
-bool classify_plain(const Batch& b, const char* t, std::uint32_t start,
-                    std::uint32_t end, LineParts& pt) {
+// classify_plain for a line of 64 bytes or more.
+DFTRACER_UTILS_NOINLINE bool classify_plain_long(const Batch& b, const char* t,
+                                                 std::uint32_t start,
+                                                 std::uint32_t end,
+                                                 LineParts& pt) {
     const std::uint32_t rs = start - b.base;
     const std::uint32_t re = end - b.base;
     if (next_set(b.special, re, rs) < re) return false;
@@ -690,6 +690,104 @@ bool classify_plain(const Batch& b, const char* t, std::uint32_t start,
     return true;
 }
 
+// One past the highest set bit of `x`, which is not 0.
+inline std::uint32_t top_end(std::uint64_t x) {
+    return 64u - static_cast<std::uint32_t>(dstd::bits::clz_u64(x));
+}
+
+inline std::uint32_t low_bit(std::uint64_t x) {
+    return static_cast<std::uint32_t>(dstd::bits::ctz_u64(x));
+}
+
+// The facts of a plain line that the structure of the index needs.
+struct PlainLine {
+    std::uint32_t indent;
+    std::uint32_t content;
+    std::uint32_t key_s;
+    std::uint32_t key_e;
+    LineKind kind;
+    std::uint8_t flags;
+};
+
+// The line `[start, end)` when it holds none of the bytes that set a line
+// apart from a plain one: the same facts as classify_line, read from the bit
+// arrays. False means the line goes to classify_line, whatever it holds. A
+// line under 64 bytes is one window of each array, so each search is one bit
+// operation.
+inline bool classify_plain(const Batch& b, const char* t, std::uint32_t start,
+                           std::uint32_t end, PlainLine& pl) {
+    const std::uint32_t rs = start - b.base;
+    const std::uint32_t len = end - start;
+    if (len >= 64) [[unlikely]] {
+        LineParts pt;
+        if (!classify_plain_long(b, t, start, end, pt)) return false;
+        pl.indent = pt.indent;
+        pl.content = pt.content;
+        pl.key_s = pt.key_s;
+        pl.key_e = pt.key_e;
+        pl.kind = pt.kind;
+        pl.flags = pt.flags;
+        return true;
+    }
+    const std::uint64_t in_line = (std::uint64_t{1} << len) - 1;
+    if ((window(b.special, rs) & in_line) != 0) return false;
+    const std::uint64_t solid = ~window(b.space, rs) & in_line;
+    pl.flags = 0;
+    if (solid == 0) {
+        pl.indent = len;
+        pl.kind = LineKind::Blank;
+        return true;
+    }
+    const std::uint32_t ri = low_bit(solid);
+    const std::uint32_t i = start + ri;
+    pl.indent = ri;
+    const char c = t[i];
+    if (c == ':') return false;
+    if (ri == 0 && (c == '-' || c == '.') && len >= 3 && t[i + 1] == c &&
+        t[i + 2] == c)
+        return false;
+    bool seq = false;
+    std::uint32_t rp = ri;
+    if (c == '-' && (ri + 1 == len || t[i + 1] == ' ')) {
+        seq = true;
+        pl.kind = LineKind::SeqItem;
+        const std::uint64_t after = solid & ~((std::uint64_t{2} << ri) - 1);
+        if (after == 0) {
+            pl.content = end;
+            pl.flags = line_flag::VAL_EMPTY;
+            return true;
+        }
+        rp = low_bit(after);
+        const std::uint32_t p = start + rp;
+        if (t[p] == ':') return false;
+        if (t[p] == '-' && (rp + 1 == len || t[p + 1] == ' ')) return false;
+    }
+    const std::uint32_t p = start + rp;
+    pl.content = p;
+    const std::uint64_t seps =
+        window(b.sep, rs) & in_line & ~((std::uint64_t{1} << rp) - 1);
+    if (seps == 0) return seq;
+    const std::uint32_t rsep = low_bit(seps);
+    // t[p] is no ':', so the key holds a byte that is no space.
+    const std::uint32_t ke =
+        start + top_end(solid & ((std::uint64_t{1} << rsep) - 1));
+    if (ke - p <= 4 && is_null_key(dstd::StringView(t + p, ke - p)))
+        return false;
+    pl.key_s = p;
+    pl.key_e = ke;
+    pl.kind = seq ? LineKind::SeqMap : LineKind::MapEntry;
+    const std::uint64_t value = solid & ~((std::uint64_t{2} << rsep) - 1);
+    if (value == 0) {
+        pl.flags = line_flag::VAL_EMPTY;
+        return true;
+    }
+    const std::uint32_t rv = low_bit(value);
+    const std::uint32_t v = start + rv;
+    if (t[v] == ':' || (t[v] == '-' && (rv + 1 == len || t[v + 1] == ' ')))
+        return false;
+    return (seps & ~((std::uint64_t{1} << rv) - 1)) == 0;
+}
+
 std::atomic<bool> g_slow_lines{false};
 
 struct Level {
@@ -733,6 +831,12 @@ class Builder {
 
    private:
     bool process_line(std::uint32_t start, std::uint32_t nl_pos);
+    DFTRACER_UTILS_NOINLINE bool process_any_line(std::uint32_t start,
+                                                  std::uint32_t nl_pos);
+    bool structure_plain(std::uint32_t j, std::uint32_t line_start,
+                         const PlainLine& pl);
+    bool plain_key_value(std::uint32_t j, std::uint32_t line_start,
+                         const PlainLine& pl, std::uint32_t n);
     const Batch* batch_ = nullptr;
     bool structure(std::uint32_t j, const LineParts& pt);
     DFTRACER_UTILS_NOINLINE bool marker(std::uint32_t j);
@@ -1489,7 +1593,125 @@ bool Builder::structure(std::uint32_t j, const LineParts& pt) {
     return true;
 }
 
-bool Builder::process_line(std::uint32_t start, std::uint32_t nl_pos) {
+// The line ends at `nl_pos`. A plain line in an open block goes the short way;
+// every other line, and every error, goes to process_any_line.
+inline bool Builder::process_line(std::uint32_t start, std::uint32_t nl_pos) {
+    if ((static_cast<unsigned>(open_) | static_cast<unsigned>(has_tab_)) != 0 ||
+        batch_ == nullptr || start < batch_->base) [[unlikely]]
+        return process_any_line(start, nl_pos);
+    std::uint32_t end = nl_pos;
+    std::uint8_t cr = 0;
+    if (end > start && t_[end - 1] == '\r') {
+        --end;
+        cr = line_flag::CR;
+    }
+    PlainLine pl;
+    if (!classify_plain(*batch_, t_, start, end, pl)) [[unlikely]]
+        return process_any_line(start, nl_pos);
+    if (pl.kind == LineKind::Blank) {
+        if (plain_pending_) [[unlikely]]
+            return process_any_line(start, nl_pos);
+    } else if ((cont_active_ && pl.indent > cont_limit_) || after_end_ ||
+               depth_ == 0) [[unlikely]] {
+        return process_any_line(start, nl_pos);
+    }
+    const std::uint32_t j = line_++;
+    LineEntry& entry = ix_.entries[j];
+    entry.start = start;
+    entry.indent = static_cast<std::uint16_t>(pl.indent);
+    entry.kind = pl.kind;
+    entry.flags = static_cast<std::uint8_t>(cr | pl.flags);
+    ix_.entries[j + 1].start = nl_pos + 1;
+    ix_.next[j] = line_count_;
+    if (pl.kind == LineKind::Blank) return true;
+    return structure_plain(j, start, pl);
+}
+
+// structure for a line that classify_plain read, in a block that is open: no
+// root, no escape, no nested dash, and a value that is empty or plain.
+inline bool Builder::structure_plain(std::uint32_t j, std::uint32_t line_start,
+                                     const PlainLine& pl) {
+    const std::uint32_t n = pl.indent;
+    has_content_ = true;
+    cont_active_ = false;
+    plain_pending_ = false;
+    const bool is_seq =
+        pl.kind == LineKind::SeqItem || pl.kind == LineKind::SeqMap;
+    if (pending_ != NONE) {
+        const bool child = n > pending_col_;
+        bool inline_seq = false;
+        if (n == pending_col_ && is_seq) {
+            const LineKind pending_kind = ix_.entries[pending_].kind;
+            inline_seq = pending_kind == LineKind::MapEntry ||
+                         pending_kind == LineKind::SeqMap ||
+                         pending_kind == LineKind::NestMap;
+        }
+        resolve_pending(child || inline_seq);
+        if (child) {
+            if (!push_level(n, j, is_seq)) return false;
+            return plain_key_value(j, line_start, pl, n);
+        }
+        if (inline_seq) {
+            if (!push_level(n, j, true)) return false;
+            levels_[depth_ - 1].inline_seq = true;
+            return plain_key_value(j, line_start, pl, n);
+        }
+    }
+    while (depth_ > 0 && levels_[depth_ - 1].col > n) pop_level(j);
+    if (depth_ > 1 && levels_[depth_ - 1].inline_seq &&
+        levels_[depth_ - 1].col == n && !is_seq)
+        pop_level(j);
+    if (depth_ == 0 || levels_[depth_ - 1].col != n) [[unlikely]]
+        return fail(j, line_start + n,
+                    "indentation does not match any open block");
+    Level& top = levels_[depth_ - 1];
+    if (top.is_seq != is_seq) [[unlikely]]
+        return fail(j, line_start + n,
+                    is_seq ? "a sequence item cannot follow mapping keys at "
+                             "the same indentation"
+                           : "a mapping key cannot follow sequence items at "
+                             "the same indentation");
+    if (top.cur != NONE) ix_.next[top.cur] = j;
+    top.cur = j;
+    return plain_key_value(j, line_start, pl, n);
+}
+
+// The map of a `- k: v` item, the key and the value of a plain line, whose
+// block starts at column `n`.
+inline bool Builder::plain_key_value(std::uint32_t j, std::uint32_t line_start,
+                                     const PlainLine& pl, std::uint32_t n) {
+    std::uint32_t limit = n;
+    if (pl.kind == LineKind::SeqMap) {
+        limit = pl.content - line_start;
+        if (!push_level(limit, NONE, false)) return false;
+    }
+    if (pl.kind != LineKind::SeqItem) {
+        Level& level = levels_[depth_ - 1];
+        const dstd::StringView key(t_ + pl.key_s, pl.key_e - pl.key_s);
+        if (!keys_.add(level.keys, depth_ - 1, j, key, t_ + ix_.size,
+                       [&](std::uint32_t other, dstd::StringView text) {
+                           return same_key(other, text);
+                       })) [[unlikely]]
+            return fail(j, pl.key_s, dstd::fmt<"duplicate key '{}'">(key));
+    }
+    if ((pl.flags & line_flag::VAL_EMPTY) != 0) {
+        pending_ = j;
+        pending_col_ = limit;
+    } else {
+        // A plain value: a deeper line may go on in it, and the scalar opens
+        // there.
+        owner_ = j;
+        cont_active_ = true;
+        cont_limit_ = limit;
+        cont_strict_ = pl.kind != LineKind::SeqItem;
+        plain_pending_ = true;
+    }
+    return true;
+}
+
+// Reads a line of any kind: open scalars, TABs, escapes, roots, markers and
+// errors.
+bool Builder::process_any_line(std::uint32_t start, std::uint32_t nl_pos) {
     const std::uint32_t j = line_++;
     std::uint32_t end = nl_pos;
     std::uint8_t flags = 0;
@@ -1513,8 +1735,17 @@ bool Builder::process_line(std::uint32_t start, std::uint32_t nl_pos) {
             has_tab_ && std::memchr(t_ + start, '\t', end - start) != nullptr;
     }
     LineParts pt;
+    PlainLine pl;
     const bool plain = !has_tab && batch_ != nullptr && start >= batch_->base &&
-                       classify_plain(*batch_, t_, start, end, pt);
+                       classify_plain(*batch_, t_, start, end, pl);
+    if (plain) {
+        pt.indent = pl.indent;
+        pt.content = pl.content;
+        pt.key_s = pl.key_s;
+        pt.key_e = pl.key_e;
+        pt.kind = pl.kind;
+        pt.flags = pl.flags;
+    }
     if (!plain && !classify_line(t_, start, end, pt)) {
         if (plain_pending_ && pt.indent > cont_limit_) {
             const Step step = continue_plain(j, start, end, flags);

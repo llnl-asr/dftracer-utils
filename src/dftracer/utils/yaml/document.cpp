@@ -4,168 +4,20 @@
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/yaml/document.h>
-#include <dftracer/utils/yaml/document_test.h>
 #include <dftracer/utils/yaml/line_value.h>
 #include <dftracer/utils/yaml/scalar.h>
-#include <dftracer/utils/yaml/tape.h>
 
-#include <atomic>
 #include <cstddef>
 #include <limits>
 #include <utility>
 
 namespace dftracer::utils::yaml {
 
-namespace {
-
-constexpr std::size_t NONE = static_cast<std::size_t>(-1);
-/// How many merge keys a lookup follows, one inside the other.
-constexpr std::size_t MERGE_DEPTH_LIMIT = 64;
-
-const TapeEntry& entry_at(const DocumentStorage* storage, std::size_t id) {
-    return storage->tape[id];
-}
-
-// An alias reads as the node it names.
-std::size_t resolve(const DocumentStorage* storage, std::size_t id) {
-    if (id != NONE && storage->tape[id].kind == TapeKind::Alias)
-        return storage->tape[id].pos;
-    return id;
-}
-
-TapeKind kind_of(const DocumentStorage* storage, std::size_t id) {
-    if (id == NONE) return TapeKind::Null;
-    return entry_at(storage, resolve(storage, id)).kind;
-}
-
-// The tape index after the node at `id`.
-std::size_t skip(const DocumentStorage* storage, std::size_t id) {
-    const TapeEntry& entry = entry_at(storage, id);
-    return entry.is_container() ? entry.pos : id + 1;
-}
-
-// The value index of the key `key` among the own members of the map at
-// `map`, and the index of its merge value in `merge`.
-struct MapScan {
-    std::size_t found = NONE;
-    std::size_t merge = NONE;
-};
-
-MapScan scan_map(const DocumentStorage* storage, std::size_t map,
-                 dstd::StringView key) {
-    MapScan scan;
-    const std::size_t end = entry_at(storage, map).pos;
-    for (std::size_t i = map + 1; i < end;) {
-        const TapeEntry& entry = entry_at(storage, i);
-        const std::size_t value = i + 1;
-        if ((entry.flags & tape_flag::MERGE) != 0) {
-            scan.merge = value;
-        } else if (key_text(*storage, i) == key) {
-            scan.found = value;
-            return scan;
-        }
-        i = skip(storage, value);
-    }
-    return scan;
-}
-
-std::size_t find_in(const DocumentStorage* storage, std::size_t map,
-                    dstd::StringView key, std::size_t depth);
-
-// The merge value is a map, an alias of one or a sequence of them; the first
-// map of a sequence that has the key wins.
-std::size_t find_merged(const DocumentStorage* storage, std::size_t merge,
-                        dstd::StringView key, std::size_t depth) {
-    if (depth >= MERGE_DEPTH_LIMIT) return NONE;
-    const std::size_t node = resolve(storage, merge);
-    const TapeEntry& entry = entry_at(storage, node);
-    if (entry.kind == TapeKind::Map) return find_in(storage, node, key, depth);
-    if (entry.kind != TapeKind::Seq) return NONE;
-    for (std::size_t i = node + 1; i < entry.pos; i = skip(storage, i)) {
-        const std::size_t element = resolve(storage, i);
-        if (entry_at(storage, element).kind != TapeKind::Map) continue;
-        const std::size_t found = find_in(storage, element, key, depth);
-        if (found != NONE) return found;
-    }
-    return NONE;
-}
-
-std::size_t find_in(const DocumentStorage* storage, std::size_t map,
-                    dstd::StringView key, std::size_t depth) {
-    const MapScan scan = scan_map(storage, map, key);
-    if (scan.found != NONE || scan.merge == NONE) return scan.found;
-    return find_merged(storage, scan.merge, key, depth + 1);
-}
-
-// Calls `fn` with every member the map shows: its own, and those of its merge
-// values that no earlier member overrides. `root` is the map the lookup that
-// decides which member wins starts from.
-template <class Fn>
-void each_member(const DocumentStorage* storage, std::size_t root,
-                 std::size_t map, std::size_t depth, Fn& fn);
-
-template <class Fn>
-void each_merged_member(const DocumentStorage* storage, std::size_t root,
-                        std::size_t merge, std::size_t depth, Fn& fn) {
-    if (depth >= MERGE_DEPTH_LIMIT) return;
-    const std::size_t node = resolve(storage, merge);
-    const TapeEntry& entry = entry_at(storage, node);
-    if (entry.kind == TapeKind::Map) {
-        each_member(storage, root, node, depth + 1, fn);
-    } else if (entry.kind == TapeKind::Seq) {
-        for (std::size_t i = node + 1; i < entry.pos; i = skip(storage, i)) {
-            const std::size_t element = resolve(storage, i);
-            if (entry_at(storage, element).kind == TapeKind::Map)
-                each_member(storage, root, element, depth + 1, fn);
-        }
-    }
-}
-
-template <class Fn>
-void each_member(const DocumentStorage* storage, std::size_t root,
-                 std::size_t map, std::size_t depth, Fn& fn) {
-    const TapeEntry& begin = entry_at(storage, map);
-    const bool merges = (begin.flags & tape_flag::MERGE) != 0;
-    for (std::size_t i = map + 1; i < begin.pos;) {
-        const TapeEntry& entry = entry_at(storage, i);
-        const std::size_t value = i + 1;
-        if ((entry.flags & tape_flag::MERGE) != 0) {
-            each_merged_member(storage, root, value, depth, fn);
-        } else {
-            const dstd::StringView key = key_text(*storage, i);
-            // Without a merge key nothing overrides a member.
-            if (!merges && depth == 0) {
-                fn(key, value);
-            } else if (find_in(storage, root, key, 0) == value) {
-                fn(key, value);
-            }
-        }
-        i = skip(storage, value);
-    }
-}
-
-}  // namespace
-
 Document::Document(dstd::UniquePtr<DocumentStorage> storage)
     : storage_(std::move(storage)) {}
 Document::Document(Document&&) noexcept = default;
 Document& Document::operator=(Document&&) noexcept = default;
 Document::~Document() = default;
-
-namespace detail {
-
-namespace {
-std::atomic<bool> g_force_tape{false};
-}  // namespace
-
-void set_force_tape_for_test(bool force) { g_force_tape.store(force); }
-bool is_force_tape() { return g_force_tape.load(); }
-
-}  // namespace detail
-
-bool DocumentTestAccess::is_line_backed(const Document& doc) {
-    return doc.storage_->is_lines;
-}
 
 dstd::Result<Document> Document::parse(dstd::String text,
                                        dstd::StringView source_name) {
@@ -175,21 +27,9 @@ dstd::Result<Document> Document::parse(dstd::String text,
         bom_size(storage->text.data(), storage->text.size());
     storage->base = storage->text.data() + bom;
     storage->size = storage->text.size() - bom;
-    if (!detail::is_force_tape()) {
-        const BuildResult built =
-            storage->lines.build(storage->base, storage->size);
-        if (built == BuildResult::Accepted) {
-            storage->is_lines = true;
-            return Document(std::move(storage));
-        }
-        if (built == BuildResult::Invalid) {
-            return line_problem_error(storage->lines.problem, source_name, 1);
-        }
-        storage->lines.release();
-    }
-    TapeParser parser;
-    if (auto parsed = parser.parse(*storage, source_name); !parsed)
-        return parsed.error();
+    if (storage->lines.build(storage->base, storage->size) ==
+        BuildResult::Invalid)
+        return line_problem_error(storage->lines.problem, source_name, 1);
     return Document(std::move(storage));
 }
 
@@ -199,65 +39,30 @@ dstd::Result<Document> Document::load_file(dstd::PathView path) {
     return parse(std::move(*text), path.str());
 }
 
-Value Document::root() const {
-    if (storage_->is_lines) return LineAccess::root(storage_.get());
-    return Value(storage_.get(), storage_->tape.empty() ? NONE : 0);
-}
+Value Document::root() const { return LineAccess::root(storage_.get()); }
 
-bool Value::is_object() const {
-    if (storage_->is_lines) return LineAccess::is_object(*this);
-    return kind_of(storage_, id_) == TapeKind::Map;
-}
+bool Value::is_object() const { return LineAccess::is_object(*this); }
 
-bool Value::is_array() const {
-    if (storage_->is_lines) return LineAccess::is_array(*this);
-    return kind_of(storage_, id_) == TapeKind::Seq;
-}
+bool Value::is_array() const { return LineAccess::is_array(*this); }
 
-bool Value::is_string() const {
-    if (storage_->is_lines) return LineAccess::is_string(*this);
-    return kind_of(storage_, id_) == TapeKind::Scalar;
-}
+bool Value::is_string() const { return LineAccess::is_string(*this); }
 
-bool Value::is_null() const {
-    if (storage_->is_lines) return LineAccess::is_null(*this);
-    return kind_of(storage_, id_) == TapeKind::Null;
-}
+bool Value::is_null() const { return LineAccess::is_null(*this); }
 
 dstd::Optional<Value> Value::find(dstd::StringView key) const {
-    if (storage_->is_lines) return LineAccess::find(*this, key);
-    if (!is_object()) return dstd::nullopt;
-    const std::size_t found = find_in(storage_, resolve(storage_, id_), key, 0);
-    if (found == NONE) return dstd::nullopt;
-    return Value(storage_, found);
+    return LineAccess::find(*this, key);
 }
 
 void Value::for_each_member(
     dstd::FunctionRef<void(dstd::StringView, Value)> fn) const {
-    if (storage_->is_lines) return LineAccess::for_each_member(*this, fn);
-    if (!is_object()) return;
-    const DocumentStorage* storage = storage_;
-    auto emit = [&](dstd::StringView key, std::size_t value) {
-        fn(key, Value(storage, value));
-    };
-    const std::size_t map = resolve(storage, id_);
-    each_member(storage, map, map, 0, emit);
+    LineAccess::for_each_member(*this, fn);
 }
 
 void Value::for_each_element(dstd::FunctionRef<void(Value)> fn) const {
-    if (storage_->is_lines) return LineAccess::for_each_element(*this, fn);
-    if (!is_array()) return;
-    const std::size_t seq = resolve(storage_, id_);
-    const std::size_t end = entry_at(storage_, seq).pos;
-    for (std::size_t i = seq + 1; i < end; i = skip(storage_, i))
-        fn(Value(storage_, i));
+    LineAccess::for_each_element(*this, fn);
 }
 
-dstd::StringView Value::raw() const {
-    if (storage_->is_lines) return LineAccess::raw(*this);
-    if (!is_string()) return {};
-    return entry_text(*storage_, entry_at(storage_, resolve(storage_, id_)));
-}
+dstd::StringView Value::raw() const { return LineAccess::raw(*this); }
 
 dstd::Optional<dstd::StringView> Value::as_string() const {
     if (!is_string()) return dstd::nullopt;

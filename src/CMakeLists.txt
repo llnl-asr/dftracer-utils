@@ -10,7 +10,6 @@ need_libdeflate()
 need_zstd()
 need_simdjson()
 need_boost_math()
-need_rapidyaml()
 
 if(DFTRACER_UTILS_ENABLE_ARROW)
   need_nanoarrow()
@@ -1060,18 +1059,18 @@ endforeach()
 use_precompiled_header(dftracer_utils_json_objects MIN_COUNT 1)
 
 # +++++++++++++++++++++++++++++++++++++++++
-# YAML Library (rapidyaml-backed reader and block-style writer)
+# YAML Library (reader and block-style writer)
 # +++++++++++++++++++++++++++++++++++++++++
 
 set(DFTRACER_UTILS_YAML_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/yaml/document.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/yaml/escape.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/yaml/flow_parser.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/yaml/line_index.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/yaml/line_index_simd.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/yaml/line_scalar.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/yaml/line_value.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/yaml/records.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/yaml/tape_parser.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/yaml/writer.cpp)
 
 # Highway per-target dispatch functions are referenced only within their TU.
@@ -1089,7 +1088,7 @@ create_library(
   VERSION
   ${PROJECT_VERSION}
   DESCRIPTION
-  "DFTracer utils yaml library (rapidyaml-backed reader and block-style writer)"
+  "DFTracer utils yaml library (reader and block-style writer)"
   URL
   "https://github.com/llnl-asr/dftracer-utils"
   BUILD_SHARED
@@ -1127,7 +1126,6 @@ foreach(variant objects shared static)
       target_link_libraries(${VARIANT_TARGET} PRIVATE hwy)
     endif()
     if(variant STREQUAL "objects")
-      use_rapidyaml(dftracer_utils_yaml_objects)
       target_set_warnings(dftracer_utils_yaml_objects)
       target_compile_options(dftracer_utils_yaml_objects
                              PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions>)
@@ -2657,7 +2655,6 @@ if(DFTRACER_UTILS_BUILD_BENCHMARKS)
   endforeach()
 
   target_link_libraries(gzip_crc_bench PRIVATE dftracer::zlib)
-  use_rapidyaml(yaml_read_bench)
 
   # `--smoke` runs one tiny case. ctest sees these only when
   # DFTRACER_UTILS_TESTS is ON, which the `bench` preset sets.

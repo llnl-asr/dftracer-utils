@@ -7,19 +7,23 @@
 #include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/yaml/tape.h>
 
 #include <cstddef>
 #include <cstdint>
 
 namespace dftracer::utils::yaml {
 
-/// What a line of the accepted YAML subset is. The Open kinds are an entry or
-/// an item with no inline value that has a deeper block under it.
+/// What a line of a YAML text is. The Open kinds are an entry or an item with
+/// no inline value that has a deeper block under it.
 ///
 /// A scalar that goes on in later lines (a block scalar, a plain or quoted
 /// scalar of several lines) belongs to the line that holds its start, whose
-/// `VAL_ESC` flag says that its text is in the side table. The lines after it
-/// are Cont, up to the end the table entry names.
+/// `VAL_ESC` flag says that its text is in the side table. A flow collection
+/// belongs to the line that holds its start in the same way, with the `FLOW`
+/// flag, and its entry in the table names the first tape entry of the
+/// collection. The lines after it are Cont, up to the end the table entry
+/// names.
 enum class LineKind : std::uint8_t {
     Blank,
     Comment,
@@ -30,6 +34,14 @@ enum class LineKind : std::uint8_t {
     /// `- k: v`: an item that starts a map on its own line.
     SeqMap,
     SeqMapOpen,
+    /// `- - x`: an item that holds a sequence that starts on its own line. The
+    /// dashes are read from the text, and the kind is that of the last piece
+    /// of the line: an item, an item with a block under it, a map or a map with
+    /// a block under it.
+    NestItem,
+    NestItemOpen,
+    NestMap,
+    NestMapOpen,
     DocStart,
     DocEnd,
     /// A line inside a scalar of several lines.
@@ -50,8 +62,8 @@ constexpr std::uint8_t VAL_ESC = 4;
 constexpr std::uint8_t VAL_EMPTY = 8;
 /// The line ends in CR LF.
 constexpr std::uint8_t CR = 16;
-/// The value is `{}` or `[]`.
-constexpr std::uint8_t FLOW_EMPTY = 32;
+/// The value is a flow collection, whose tape index is in the side table.
+constexpr std::uint8_t FLOW = 32;
 constexpr std::uint8_t KEY_QUOTED = 64;
 constexpr std::uint8_t VAL_QUOTED = 128;
 }  // namespace line_flag
@@ -81,19 +93,6 @@ static_assert(sizeof(EscapeEntry) == 16, "an escape entry is 16 bytes");
 
 constexpr std::uint32_t ESCAPE_IN_TEXT = 0x80000000u;
 
-/// What makes a line invalid inside the subset, as classify_line finds it.
-namespace LineError {
-constexpr std::uint8_t NONE = 0;
-/// A quoted scalar that nothing in the text closes.
-constexpr std::uint8_t Unclosed = 1;
-/// Text after a quoted scalar that is not a comment.
-constexpr std::uint8_t TrailingText = 2;
-/// A `: ` inside a plain value.
-constexpr std::uint8_t MapValue = 3;
-/// A block scalar header with text that is not an indicator or a comment.
-constexpr std::uint8_t BlockHeader = 4;
-}  // namespace LineError
-
 /// What goes on after the first line of a scalar, as classify_line finds it.
 namespace LineOpen {
 constexpr std::uint8_t NONE = 0;
@@ -101,13 +100,14 @@ constexpr std::uint8_t NONE = 0;
 constexpr std::uint8_t Quoted = 1;
 /// A block scalar: the line holds its header.
 constexpr std::uint8_t Block = 2;
+/// A flow collection that starts at `open_at`, and may go on in later lines.
+constexpr std::uint8_t Flow = 3;
 }  // namespace LineOpen
 
 /// The facts of one line, read from its text.
 struct LineParts {
-    /// Set when classify_line fails on a line that is invalid, not only
-    /// outside the subset: a @ref LineError, at the offset `error_at`.
-    std::uint8_t error = LineError::NONE;
+    /// Set when classify_line fails: the reason, and the offset it is at.
+    const char* reason = nullptr;
     std::uint32_t error_at = 0;
     LineKind kind = LineKind::Blank;
     std::uint8_t flags = 0;
@@ -117,28 +117,32 @@ struct LineParts {
     /// Where the key starts, or the item value for a SeqItem.
     std::uint32_t content = 0;
     /// The key text without quotes, then the value text without quotes. The
-    /// value of a flow `{}` or `[]` is its two characters.
+    /// value of a flow collection starts at `val_s`.
     std::uint32_t key_s = 0;
     std::uint32_t key_e = 0;
     std::uint32_t val_s = 0;
     std::uint32_t val_e = 0;
-    /// A @ref LineOpen, and the offset of the quote or of the `|` or `>`.
+    /// A @ref LineOpen, and the offset of the quote, of the `|` or `>`, or of
+    /// the `[` or `{`.
     std::uint8_t open = LineOpen::NONE;
     std::uint32_t open_at = 0;
+    /// The dashes after the first one of a NestItem or NestMap line.
+    std::uint32_t nest = 0;
+    /// A TAB follows the spaces of the line and then comes its content, as
+    /// white space: `error_at` is the offset of the TAB.
+    bool has_tab_lead = false;
 };
 
 /// Reads the facts of the line that holds `[start, end)`, with the CR cut.
-/// False when the line is outside the accepted subset, or invalid: then
-/// `parts.error` says which.
+/// False when the line is invalid or holds a feature that is not supported:
+/// then `parts.reason` says which.
 bool classify_line(const char* text, std::uint32_t start, std::uint32_t end,
                    LineParts& parts);
 
 /// What the line index made of a text.
 enum class BuildResult : std::uint8_t {
     Accepted,
-    /// Outside the subset: the tape reader reads it.
-    Declined,
-    /// Inside the subset and invalid: `problem` says where and why.
+    /// `problem` says where and why.
     Invalid,
 };
 
@@ -149,8 +153,8 @@ struct LineProblem {
     dstd::String reason;
 };
 
-/// The bytes of a UTF-8 byte order mark at the start of a text, else 0. Both
-/// readers skip it, so it is no part of the first line.
+/// The bytes of a UTF-8 byte order mark at the start of a text, else 0. The
+/// reader skips it, so it is no part of the first line.
 inline std::size_t bom_size(const char* text, std::size_t size) {
     return size >= 3 && static_cast<unsigned char>(text[0]) == 0xEF &&
                    static_cast<unsigned char>(text[1]) == 0xBB &&
@@ -159,11 +163,13 @@ inline std::size_t bom_size(const char* text, std::size_t size) {
                : 0;
 }
 
-/// The line index of a text in the accepted subset: a line for each line of
-/// the text, the end of the subtree of each content line, and the decoded text
-/// of the scalars that the text does not hold as they are.
+/// The line index of a text: a line for each line of the text, the end of the
+/// subtree of each content line, the decoded text of the scalars that the text
+/// does not hold as they are, and the tape of each flow collection.
 struct LineIndex {
     dstd::RawBuffer<LineEntry> entries;
+    /// The nodes of the flow collections of the text, in text order.
+    dstd::RawBuffer<TapeEntry> tape;
     /// The index of the first content line after the subtree of a line: the
     /// first one whose indent is not deeper. For a SeqMap line the subtree is
     /// the whole item.
@@ -181,8 +187,7 @@ struct LineIndex {
     bool has_markers = false;
 
     /// Indexes `size` bytes at `text`. The index keeps the pointer, so the
-    /// text outlives it. When the text is outside the accepted subset, or
-    /// invalid, the index is unusable.
+    /// text outlives it. When the text is invalid, the index is unusable.
     BuildResult build(const char* text, std::size_t size);
 
     /// Set by a build that gives Invalid.
@@ -199,14 +204,19 @@ struct LineIndex {
     }
 };
 
-/// The InvalidArgument error of a problem, as the tape reader words its own:
-/// `name:line:col: reason`, or `line:col: reason` for an empty `name`. The line
-/// is counted from `first_line`, the line of the text in a larger one.
+/// The InvalidArgument error of a problem: `name:line:col: reason`, or
+/// `line:col: reason` for an empty `name`. The line is counted from
+/// `first_line`, the line of the text in a larger one.
 dstd::Unexpected<dstd::Error> line_problem_error(const LineProblem& problem,
                                                  dstd::StringView name,
                                                  std::uint64_t first_line);
 
 namespace detail {
+
+/// Sets `ix.problem` to the line and column of the byte at `offset` of its text
+/// and to `reason`, and returns false. The line is found by counting, so only
+/// an error pays for it.
+bool fail_at(LineIndex& ix, std::uint32_t offset, dstd::String reason);
 
 /// Forces the scalar Highway target, or the best one again. Tests only.
 void set_scalar_line_masks_for_test(bool scalar);

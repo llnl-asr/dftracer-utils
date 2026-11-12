@@ -64,24 +64,30 @@ class Value {
     friend class Records;
     friend struct LineAccess;
 
-    Value(const DocumentStorage* storage, std::size_t id)
-        : storage_(storage), id_(id) {}
     Value(const DocumentStorage* storage, std::uint64_t id, std::uint32_t col,
           std::uint8_t tag)
         : storage_(storage), id_(id), col_(col), tag_(tag) {}
 
-    // A tape value: `id_` is the tape index. A line value: `id_` holds the
-    // first line and the limit of a container, or the start and end of a
-    // scalar; `col_` is the column of a container; `tag_` is its kind.
+    // A line value: `id_` holds the first line and the limit of a container,
+    // or the start and end of a scalar; `col_` is the column of a container;
+    // `tag_` is its kind. A value inside a flow collection is a tape value: a
+    // bit of `tag_` says so, and `id_` is its tape index.
     const DocumentStorage* storage_ = nullptr;
     std::uint64_t id_ = 0;
     std::uint32_t col_ = 0;
     std::uint8_t tag_ = 0;
 };
 
-/// A parsed YAML or JSON text. It owns the text and the tape built over it, so
+/// A parsed YAML or JSON text. It owns the text and the index built over it, so
 /// the strings of its values are views into that text, or into the arena of
-/// the document for a string that grew while it was read.
+/// the document for a string that grew while it was read. The text is never
+/// changed.
+///
+/// The reader supports YAML 1.2.2 block and flow collections, scalars of every
+/// style, comments, several documents and JSON. It refuses what it does not
+/// support with an error that names the feature: anchors (`&`), aliases (`*`),
+/// tags (`!`), complex keys (`?`), directives (`%YAML`, `%TAG`) and a null key
+/// (`~` or `null`). A `<<` key is a plain key: there is no merge.
 class Document {
    public:
     Document(Document&&) noexcept;
@@ -90,17 +96,17 @@ class Document {
 
     /// Parses the first document of `text`, which the document keeps: a string
     /// moved in is not copied. A text of several documents is read whole, and
-    /// the root is the first. A syntax error is an InvalidArgument error whose
-    /// message is `source_name:line:column: reason`, or `line:column: reason`
-    /// when `source_name` is empty. Nothing throws, and a failed parse leaves
-    /// no state behind. A mapping that holds a key twice, by the text of the
-    /// key (`"a"` and `a` are the same key, and so are two aliases of one
-    /// scalar), is an InvalidArgument error `source_name:line:column:
-    /// duplicate key 'k'`, as YAML 1.2.2 requires unique keys. A container as
-    /// a key, an alias to a node that holds it and aliases that expand to
-    /// more than 2^27 nodes are InvalidArgument errors too. An alias reads as
-    /// the node it names, with no copy; a `<<` key reads as the members of
-    /// its maps, and a key of the map itself wins.
+    /// the root is the first. A syntax error, and a feature that the reader
+    /// does not support, is an InvalidArgument error whose message is
+    /// `source_name:line:column: reason`, or `line:column: reason` when
+    /// `source_name` is empty. Nothing throws, and a failed parse leaves no
+    /// state behind. A mapping that holds a key twice, by the text of the key
+    /// (`"a"` and `a` are the same key), is an InvalidArgument error
+    /// `source_name:line:column: duplicate key 'k'`, as YAML 1.2.2 requires
+    /// unique keys. A collection as a key, a text of 4 GiB or more, a block
+    /// that is more than 128 levels deep, a flow collection that is more than
+    /// 128 levels deep and a line indented by more than 65534 columns are
+    /// InvalidArgument errors too.
     static dstd::Result<Document> parse(dstd::String text,
                                         dstd::StringView source_name);
 
@@ -112,8 +118,6 @@ class Document {
     Value root() const;
 
    private:
-    friend struct DocumentTestAccess;
-
     explicit Document(dstd::UniquePtr<DocumentStorage> storage);
 
     dstd::UniquePtr<DocumentStorage> storage_;

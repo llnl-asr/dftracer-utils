@@ -348,7 +348,7 @@ ARCHITECTURE_MMD = """graph BT
     query["dftracer_utils_duql<br/><i>predicate IR, string codec, evaluator</i>"]
     io["dftracer_utils_fileio<br/><i>gzip, file I/O, hashing</i>"]
     json["dftracer_utils_json<br/><i>simdjson-backed parsing</i>"]
-    yaml["dftracer_utils_yaml<br/><i>rapidyaml-backed reader, YAML writer</i>"]
+    yaml["dftracer_utils_yaml<br/><i>line-index reader, YAML writer</i>"]
     store["dftracer_utils_store<br/><i>key-value store engine</i>"]
     runtime["dftracer_utils_runtime<br/><i>coroutines, tasks, task graph, io backend,<br/>pipelines, primitives</i>"]
 

@@ -6,7 +6,6 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/yaml/document.h>
-#include <dftracer/utils/yaml/document_test.h>
 #include <dftracer/utils/yaml/records.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
@@ -127,16 +126,14 @@ TEST_CASE("yaml records: a block scalar line that starts with a dash stays") {
     CHECK(got[1] == "'x'");
 }
 
-TEST_CASE("yaml records: documents of a stream, with directives and markers") {
+TEST_CASE("yaml records: documents of a stream, with markers") {
     const dstd::String text =
-        "%YAML 1.2\n"
         "---\n"
         "a: 1\n"
         "t: |\n"
         "  --- in a block scalar\n"
         "  ... too\n"
         "...\n"
-        "%YAML 1.2\n"
         "---\n"
         "b: 2\n"
         "---\n"
@@ -210,10 +207,19 @@ TEST_CASE("yaml records: a duplicate key names the line of the whole text") {
     CHECK(error_after_records(text, 32) == "r.yaml:42:3: duplicate key 'k'");
 }
 
-TEST_CASE("yaml records: an alias is read inside its chunk only") {
-    CHECK(error_after_records("- &x 1\n- *x\n", 100000).empty());
-    CHECK(error_after_records("- &x 1\n- *x\n", 1).find("undefined alias") !=
-          dstd::String::npos);
+TEST_CASE("yaml records: an anchor, an alias and a tag are refused") {
+    for (const std::size_t chunk : {std::size_t{1}, std::size_t{100000}}) {
+        CAPTURE(chunk);
+        CHECK(error_after_records("- &x 1\n- *x\n", chunk)
+                  .find("anchors are not supported") != dstd::String::npos);
+        CHECK(error_after_records("- 1\n- *x\n", chunk)
+                  .find("aliases are not supported") != dstd::String::npos);
+        CHECK(error_after_records("- 1\n- !!str x\n", chunk)
+                  .find("tags are not supported") != dstd::String::npos);
+        CHECK(
+            error_after_records("---\na: 1\n---\n%YAML 1.2\n---\nb: 2\n", chunk)
+                .find("directives are not supported") != dstd::String::npos);
+    }
 }
 
 TEST_CASE("yaml records: a document marker inside a sequence is refused") {
@@ -292,43 +298,8 @@ TEST_CASE("yaml records: next after the end and after an error is empty") {
     CHECK_FALSE(again->has_value());
 }
 
-TEST_CASE("yaml records: an anchor does not cross a document at any chunk") {
-    const dstd::StringView text = "---\na: &x 1\n---\nb: *x\n";
-    CHECK_FALSE(Document::parse(dstd::String(text), "").has_value());
-    for (const std::size_t chunk : {std::size_t{1}, std::size_t{100000}}) {
-        RecordsOptions options;
-        options.chunk_bytes = chunk;
-        Records records =
-            Records::from_text(dstd::String(text), "r.yaml", options);
-        bool failed = false;
-        for (int i = 0; i < 3 && !failed; ++i) {
-            auto next = records.next();
-            if (!next.has_value())
-                failed = true;
-            else if (!next->has_value())
-                break;
-        }
-        CHECK(failed);
-    }
-}
-
-namespace {
-
-// The records of `text` with the tape reader forced, or not.
-dstd::Vector<dstd::String> records_with(dstd::StringView text,
-                                        std::size_t chunk, bool tape) {
-    yaml::detail::set_force_tape_for_test(tape);
-    dstd::Vector<dstd::String> out = records_of(text, chunk);
-    yaml::detail::set_force_tape_for_test(false);
-    return out;
-}
-
-}  // namespace
-
 TEST_CASE(
-    "yaml records: block and multi-line scalars go through the line index") {
-    // The hard items without the flow collection, which the line index leaves
-    // to the tape reader.
+    "yaml records: block, multi-line and quoted scalars read as a whole") {
     const dstd::String items =
         "# a comment at column 0\n"
         "- name: first\n"
@@ -356,15 +327,11 @@ TEST_CASE(
         "  - looks like an item\n"
         "- last: 1\n"
         "# trailing comment\n";
-    auto whole = Document::parse(items, "");
-    REQUIRE(whole.has_value());
-    CHECK(yaml::DocumentTestAccess::is_line_backed(*whole));
     const dstd::Vector<dstd::String> expected = whole_elements(items);
     REQUIRE(expected.size() == 5);
     for (std::size_t chunk : {1u, 7u, 100000u}) {
         CAPTURE(chunk);
-        CHECK(records_with(items, chunk, false) == expected);
-        CHECK(records_with(items, chunk, true) == expected);
+        CHECK(records_of(items, chunk) == expected);
     }
 }
 
@@ -383,27 +350,74 @@ TEST_CASE("yaml records: documents that are top-level scalars") {
         "---\n"
         "bare\n"
         "---\n"
-        "a: 1\n";
-    auto whole = Document::parse(text, "");
-    REQUIRE(whole.has_value());
-    CHECK(yaml::DocumentTestAccess::is_line_backed(*whole));
-    const dstd::Vector<dstd::String> expected =
-        records_with(text, 100000, true);
-    REQUIRE(expected.size() == 6);
+        "a: 1\n"
+        "--- [x, {y: 1}]\n"
+        "--- {z: [1,\n  2]}\n";
+    const dstd::Vector<dstd::String> expected = records_of(text, 100000);
+    REQUIRE(expected.size() == 8);
     CHECK(expected[0] == "'literal\n text\n'");
     CHECK(expected[1] == "'plain scalar'");
     CHECK(expected[2] == "'quoted scalar'");
     CHECK(expected[3] == "'folded text'");
+    CHECK(expected[4] == "'bare'");
+    CHECK(expected[5] == "{a:'1',}");
+    CHECK(expected[6] == "['x',{y:'1',},]");
+    CHECK(expected[7] == "{z:['1','2',],}");
     for (std::size_t chunk : {1u, 7u, 100000u}) {
         CAPTURE(chunk);
-        CHECK(records_with(text, chunk, false) == expected);
+        CHECK(records_of(text, chunk) == expected);
     }
     // A text that is one scalar is one record.
     for (const char* single : {"|\n x\n y\n", "a\nb\n", "\"a\n b\"\n"}) {
-        for (std::size_t chunk : {1u, 7u, 100000u}) {
-            CHECK(records_with(single, chunk, false) ==
-                  records_with(single, chunk, true));
-            CHECK(records_with(single, chunk, false).size() == 1);
-        }
+        for (std::size_t chunk : {1u, 7u, 100000u})
+            CHECK(records_of(single, chunk).size() == 1);
+    }
+}
+
+TEST_CASE("yaml records: a cut never lands inside a multi-line flow value") {
+    // A line inside a flow collection can start with a dash or three, where a
+    // cut could take it for an item or a document.
+    dstd::String items;
+    for (int i = 0; i < 30; ++i)
+        items += dstd::fmt<
+            "- id: {}\n  v: [a,\n    -1,\n    {k: {{}},\n     "
+            "---x: {}}]\n">(i, i);
+    const dstd::Vector<dstd::String> expected = whole_elements(items);
+    REQUIRE(expected.size() == 30);
+    for (std::size_t chunk : {1u, 3u, 40u, 90u, 100000u}) {
+        CAPTURE(chunk);
+        CHECK(records_of(items, chunk) == expected);
+    }
+    dstd::String docs;
+    for (int i = 0; i < 30; ++i)
+        docs +=
+            dstd::fmt<"---\nid: {}\nk: {a: {{}},\n   b: [1,\n     2]}\n">(i);
+    const dstd::Vector<dstd::String> docs_expected = records_of(docs, 100000);
+    REQUIRE(docs_expected.size() == 30);
+    for (std::size_t chunk : {1u, 3u, 40u, 90u})
+        CHECK(records_of(docs, chunk) == docs_expected);
+}
+
+TEST_CASE("yaml records: a JSON text is one record, however long") {
+    dstd::String json = "{\"items\": [";
+    for (int i = 0; i < 5000; ++i) {
+        if (i != 0) json += ",\n";
+        json += dstd::fmt<"{\"id\": {}, \"tags\": [\"a\", \"b\"]}">(i);
+    }
+    json += "]}\n";
+    for (std::size_t chunk : {1u, 100u, 100000000u}) {
+        RecordsOptions options;
+        options.chunk_bytes = chunk;
+        Records records = Records::from_text(json, "j.json", options);
+        auto first = records.next();
+        INFO("chunk ", chunk, ": ",
+             first.has_value() ? dstd::String()
+                               : dstd::String(first.error().message()));
+        REQUIRE(first.has_value());
+        REQUIRE(first->has_value());
+        CHECK((*first)->find("items")->is_array());
+        auto second = records.next();
+        REQUIRE(second.has_value());
+        CHECK_FALSE(second->has_value());
     }
 }

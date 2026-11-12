@@ -35,12 +35,9 @@ struct WriterOptions {
 /// A string is written plain only when no YAML 1.1 or 1.2 reader can take it
 /// for a null, a bool, a number, a timestamp or markup; otherwise it is
 /// double-quoted with the escapes of @ref escape_yaml_to. Keys follow the same
-/// rule, so the key `1` or `yes` comes back as a string. YAML limits an
-/// implicit key to 1024 characters, so a key whose written form is over 1024
-/// bytes is written as an explicit key: `? key` on its own line, then `:` and
-/// the value at the same indent. A double always has a
-/// decimal point (`1.0`, `1.0e+20`) so it reads back as a float; the
-/// non-finite ones are `.nan`, `.inf` and `-.inf`.
+/// rule, so the key `1` or `yes` comes back as a string. A double always has a
+/// decimal point (`1.0`, `1.0e+20`) so it reads back as a float; the non-finite
+/// ones are `.nan`, `.inf` and `-.inf`.
 ///
 /// A call that breaks the grammar (a value in an object without a key, a key
 /// in an array, an end with nothing open, a second root, a document that
@@ -58,7 +55,10 @@ class Writer {
     void begin_array();
     void end_array();
 
-    /// The key of the next member of an object.
+    /// The key of the next member of an object. YAML 1.2.2 limits an implicit
+    /// key to 1024 characters, so a key whose written form is over 1024 bytes
+    /// is a caller bug: it ends the process in a build with
+    /// DFTRACER_UTILS_DEBUG and is written as it is in a release build.
     void key(dstd::StringView k);
 
     void value(dstd::StringView v);
@@ -100,7 +100,6 @@ class Writer {
         std::size_t count;   // items written
         bool is_array;
         bool key_pending;
-        bool explicit_key;   // the pending key is written as `? key`
     };
 
     void begin(bool is_array);

@@ -6,17 +6,30 @@
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/yaml/document.h>
-#include <dftracer/utils/yaml/tape.h>
+#include <dftracer/utils/yaml/line_index.h>
 
 #include <cstdint>
 
 namespace dftracer::utils::yaml {
 
-/// What a @ref Value over a line index is.
+/// What a parse leaves: the text it read, which it never changes, and the line
+/// index over it. The index holds the decoded scalars and the tape of the flow
+/// collections.
+struct DocumentStorage {
+    /// The buffer a Document owns. Empty when the text lives elsewhere.
+    dstd::String text;
+    /// The parsed text: `text`, or a buffer a Records object holds.
+    const char* base = nullptr;
+    std::size_t size = 0;
+    LineIndex lines;
+};
+
+/// What a @ref Value is.
 enum class LineTag : std::uint8_t { Null, Map, Seq, Scalar };
 
-/// The @ref Value operations over a @ref LineIndex. A value is a position in
-/// the index: nothing here keeps state, so a value is a plain copy.
+/// The @ref Value operations over a @ref DocumentStorage. A value is a position
+/// in the line index, or in its tape for a flow collection: nothing here keeps
+/// state, so a value is a plain copy.
 struct LineAccess {
     static Value make(const DocumentStorage* storage, LineTag tag,
                       std::uint64_t id, std::uint32_t col, bool arena = false);
@@ -25,10 +38,18 @@ struct LineAccess {
     static Value root(const DocumentStorage* storage);
 
     /// The next document after line `pos`, which moves past it. False after
-    /// the last one.
+    /// the last one. A document with no content, as `---` and then another
+    /// marker, sets `is_empty`, and its value is null.
     static bool next_document(const DocumentStorage* storage,
                               std::uint32_t& pos, std::uint32_t& first,
-                              std::uint32_t& limit);
+                              std::uint32_t& limit, bool& is_empty);
+
+    /// The value of the tape entry `index` of the flow collections.
+    static Value make_tape(const DocumentStorage* storage, LineTag tag,
+                           std::uint32_t index);
+
+    /// The null value of an empty document.
+    static Value null(const DocumentStorage* storage);
 
     /// The container that starts at the content line `first`, to `limit`.
     static Value container(const DocumentStorage* storage, std::uint32_t first,

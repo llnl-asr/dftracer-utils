@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-foreach(name test_document test_tape test_records test_writer test_line_index)
+foreach(name test_document test_flow test_records test_writer test_line_index test_suite test_fuzz)
   set(target yaml_${name})
   add_executable(${target} ${name}.cpp)
   target_link_libraries(${target} PRIVATE doctest::doctest dftracer_utils testing_utilities)
@@ -28,5 +28,5 @@ cpmaddpackage(
   DOWNLOAD_ONLY
   YES)
 target_compile_definitions(
-  yaml_test_line_index
+  yaml_test_suite
   PRIVATE DFTRACER_UTILS_YAML_TEST_SUITE_DIR="${yaml_test_suite_SOURCE_DIR}")

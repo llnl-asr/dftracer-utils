@@ -22,10 +22,6 @@ namespace dftracer::utils::yaml {
 
 namespace {
 
-// The longest implicit key YAML allows is 1024 characters; the check counts
-// bytes of the written form, which is never fewer.
-constexpr std::size_t MAX_IMPLICIT_KEY = 1024;
-
 bool starts_with(dstd::StringView s, dstd::StringView prefix) {
     return s.size() >= prefix.size() && s.substr(0, prefix.size()) == prefix;
 }
@@ -203,12 +199,8 @@ void Writer::begin(bool is_array) {
         DFTRACER_UTILS_YAML_CHECK(frames_.back().key_pending,
                                   "yaml::Writer: an object member needs a key");
         column = frames_.back().column + indent_;
-        if (frames_.back().explicit_key) {
-            newline_indent(frames_.back().column);
-            out_ += ':';
-        }
     }
-    frames_.push_back({column, 0, is_array, false, false});
+    frames_.push_back({column, 0, is_array, false});
 }
 
 void Writer::end(bool is_array) {
@@ -246,15 +238,15 @@ void Writer::key(dstd::StringView k) {
                               "yaml::Writer: a key outside an object");
     DFTRACER_UTILS_YAML_CHECK(!frames_.back().key_pending,
                               "yaml::Writer: two keys in a row");
+    // The longest implicit key YAML allows is 1024 characters; the check
+    // counts bytes of the written form, which is never fewer.
+    DFTRACER_UTILS_YAML_CHECK(
+        (needs_quotes(k) ? escaped_yaml_size(k) + 2 : k.size()) <= 1024,
+        "yaml::Writer: a key of more than 1024 bytes");
     start_item();
-    const std::size_t written =
-        needs_quotes(k) ? escaped_yaml_size(k) + 2 : k.size();
-    const bool is_explicit = written > MAX_IMPLICIT_KEY;
-    if (is_explicit) out_ += "? ";
     write_string(k);
-    if (!is_explicit) out_ += ':';
+    out_ += ':';
     frames_.back().key_pending = true;
-    frames_.back().explicit_key = is_explicit;
 }
 
 void Writer::scalar_token_begin() {
@@ -266,12 +258,7 @@ void Writer::scalar_token_begin() {
     } else {
         DFTRACER_UTILS_YAML_CHECK(frames_.back().key_pending,
                                   "yaml::Writer: a value without a key");
-        if (frames_.back().explicit_key) {
-            newline_indent(frames_.back().column);
-            out_ += ": ";
-        } else {
-            out_ += ' ';
-        }
+        out_ += ' ';
     }
 }
 
@@ -283,7 +270,6 @@ void Writer::scalar_done() {
     }
     Frame& top = frames_.back();
     top.key_pending = false;
-    top.explicit_key = false;
     ++top.count;
 }
 

@@ -26,10 +26,11 @@ static variant (``src/CMakeLists.txt``), aggregated behind
   runtime and the JSON library and knows nothing about traces.
 - ``dftracer_utils_json`` is the simdjson-backed JSON layer: parsing and
   the JSON value type.
-- ``dftracer_utils_yaml`` is the YAML layer: a reader over the rapidyaml
-  parse events that keeps a flat tape of 16-byte entries and no tree, reports
-  errors without exceptions, and reads a text too large for memory in chunks
-  (``Records``), and a block-style writer. It links only memory, dstd and
+- ``dftracer_utils_yaml`` is the YAML layer: a reader with a line index for
+  block YAML and a flow parser that keeps a flat tape of 12-byte entries and
+  no tree, reports errors without exceptions, refuses anchors, aliases, tags,
+  complex keys, directives and null keys, and reads a text too large for
+  memory in chunks (``Records``), and a block-style writer. It links only memory, dstd and
   common, and the trace and domains libraries link it.
 - ``dftracer_utils_duql`` is the duql filter language: the predicate IR, the string
   codec, and the evaluator.

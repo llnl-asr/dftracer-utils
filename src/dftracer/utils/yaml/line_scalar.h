@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_YAML_LINE_SCALAR_H
 #define DFTRACER_UTILS_YAML_LINE_SCALAR_H
 
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/yaml/line_index.h>
 
 #include <cstdint>
@@ -10,19 +11,20 @@ namespace dftracer::utils::yaml::detail {
 
 enum class Decoded : std::uint8_t {
     Ok,
-    /// Valid text that the line index leaves to the tape reader.
-    Decline,
     /// Invalid: `EscapeProblem` says how.
     Invalid,
 };
 
 struct EscapeProblem {
     enum Kind : std::uint8_t { None, Unknown, Digits, Hex, Range } kind = None;
+    /// The offset of the backslash in the text.
     std::uint32_t at = 0;
-    std::uint32_t line = 0;
     char ch = 0;
     std::uint32_t count = 0;
 };
+
+/// The reason that an escape is invalid, for an error message.
+dstd::String escape_reason(const EscapeProblem& problem);
 
 /// Where the text of a decoded scalar is: in the arena of the index, or in
 /// its text when `in_text`.
@@ -32,22 +34,21 @@ struct ScalarText {
     bool in_text = false;
 };
 
-/// Decodes the inner bytes `[s, e)` of a quoted scalar that one line holds,
-/// and appends the text to the arena.
+/// Decodes the inner bytes `[s, e)` of a quoted scalar, which may hold line
+/// breaks, and appends the text to the arena.
 Decoded decode_quoted(LineIndex& ix, std::uint32_t s, std::uint32_t e,
                       bool double_quoted, EscapeProblem& problem,
                       ScalarText& out);
 
-/// A quoted scalar of several lines: its opening quote is at `quote_at` on
-/// line `first`, its closing quote at `close_at` on line `last`.
-Decoded decode_quoted_lines(LineIndex& ix, std::uint32_t first,
-                            std::uint32_t last, std::uint32_t quote_at,
-                            std::uint32_t close_at, EscapeProblem& problem,
-                            ScalarText& out);
+/// Appends the text of the plain scalar that lies in `[s, e)` of the text,
+/// which may hold line breaks, to the arena. `e` is the end of its last line of
+/// text.
+void decode_plain(LineIndex& ix, std::uint32_t s, std::uint32_t e,
+                  ScalarText& out);
 
-/// A plain scalar of several lines: its first line `first` holds
-/// `[first_s, first_e)`, the lines after it up to `last` hold the rest, and
-/// the text of `last` ends at `last_e`.
+/// @ref decode_plain for the lines `first` to `last` of the line index. The
+/// first text of the first line is `[first_s, first_e)`; the last line ends its
+/// text at `last_e`.
 void decode_plain_lines(LineIndex& ix, std::uint32_t first, std::uint32_t last,
                         std::uint32_t first_s, std::uint32_t first_e,
                         std::uint32_t last_e, ScalarText& out);

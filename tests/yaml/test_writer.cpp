@@ -394,48 +394,25 @@ TEST_CASE("writer: every trap string round-trips as an array element") {
     CHECK(i == TRAP_COUNT);
 }
 
-TEST_CASE("writer: a key over 1024 bytes is an explicit key") {
-    const dstd::String long_key(1100, 'k');
+TEST_CASE("writer: a key of 1024 bytes is the longest implicit key") {
     const dstd::String edge_key(1024, 'e');
     {
         dstd::String out;
         Writer w(out);
         w.begin_object();
         w.member(edge_key, 1);
-        w.member(long_key, "v");
-        w.key(long_key + "2");
-        w.begin_object();
-        w.member("a", 1);
-        w.member("b", 2);
-        w.end_object();
-        w.key(long_key + "3");
-        w.begin_object();
-        w.end_object();
-        w.key(long_key + "4");
-        w.begin_array();
-        w.value("x");
-        w.end_array();
         w.member("after", true);
         w.end_object();
         CHECK(out.find(edge_key + ": 1") == 0);
-        CHECK(out.find("\n? " + long_key + "\n: v\n") != dstd::String::npos);
-        CHECK(out.find("\n? " + long_key + "2\n:\n  a: 1\n  b: 2\n") !=
-              dstd::String::npos);
-        CHECK(out.find("\n? " + long_key + "3\n: {}\n") != dstd::String::npos);
-        CHECK(out.find("\n? " + long_key + "4\n:\n  - x\n") !=
-              dstd::String::npos);
         auto doc = Document::parse(out, "");
         REQUIRE(doc.has_value());
         CHECK(doc->root().find(edge_key)->as_int() == 1);
-        CHECK(doc->root().find(long_key)->raw() == "v");
-        CHECK(doc->root().find(long_key + "2")->find("b")->as_int() == 2);
-        CHECK(doc->root().find(long_key + "3")->is_object());
-        CHECK(doc->root().find(long_key + "4")->is_array());
         CHECK(doc->root().find("after")->as_bool() == true);
     }
     {
-        // A key that needs quotes counts its written form.
-        const dstd::String quoted_key(1030, '\n');
+        // A key that needs quotes counts its written form: 511 line feeds
+        // are 1022 bytes of escapes and two quotes.
+        const dstd::String quoted_key(511, '\n');
         dstd::String out;
         Writer w(out);
         w.begin_array();

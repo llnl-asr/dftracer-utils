@@ -22,17 +22,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   The memory of a build is bounded by the plaintext of a range (a quarter of the checkpoint size, at least 4 MiB) and is no higher than before at 8, 16 and 32 MB checkpoints.
   A member that cannot be read, or bytes that are no gzip between members, now lose only those bytes: the build warns, looks for the next member header and goes on, where it dropped the rest of the range before.
   A read or a view of a damaged file skips the text that the damage cut, so the line count of its index can be a few lines higher than the lines a read returns.
-- Read plain block YAML (maps, sequences, quoted and plain scalars, block scalars `|` and `>`, scalars of several lines, top-level scalar documents, comments, `---` and `...` markers) through a line index built with Highway, with no rapidyaml parse.
-  A parsed text holds its own bytes plus 0.82 times its size for a list of short records and 0.58 times for a deeply nested map (measured on 100 MB inputs), and a text outside that subset (flow collections that are not empty, anchors, aliases, tags, `?` keys, directives, tabs in the indent) is read by the tape reader as before.
-  A leading byte order mark is skipped by both readers, so it is no longer read as part of the first key by the tape reader.
-  The line index gives the same values as the tape reader, and reports its own errors (a duplicate key, an indent that matches no open level, an unclosed quote, a bad escape, a map key and a sequence item at one level) as `file:line:col: reason` with the line counted over the whole text, also in `yaml::Records`.
-  Its reasons are worded differently from rapidyaml and name the line the fault is on, where rapidyaml often names the next one.
-  Where rapidyaml 0.16.0 departs from the YAML 1.2.2 spec, the line index follows the spec: an escaped line break before an empty line in a double quoted scalar, the final line feed of a block scalar at the end of a text with no line break, and a block scalar with no line before a document marker.
-- Read YAML from the events of rapidyaml into a flat tape of 16-byte entries, with no tree.
-  A parsed text now holds its own bytes plus a tape of about 2.3 times its size for a list of small records and 1.8 times for a deeply nested map (measured on 100 MB inputs), where the rapidyaml tree held 17 to 23 times.
-  The reader behaves as before, except that a duplicate key error names the line and column (`file:3:1: duplicate key 'a'`), two aliases that name the same key are a duplicate key, and an own key now overrides a key of every map in a `<<: [*a, *b]` merge.
-  A mapping with a container as a key (`? [a, b]`) is refused.
-  An alias that expands past 2^27 nodes is refused.
+- Read YAML with our own reader and drop rapidyaml, with its c4core, fast_float and debugbreak.
+  A line index built with Highway reads block YAML (maps, sequences, quoted and plain scalars, block scalars `|` and `>`, scalars of several lines, top-level scalar documents, comments, `---` and `...` markers), and a recursive parser reads flow collections (`[...]`, `{...}` and JSON) into a flat tape of 12-byte entries, with no tree.
+  Every text goes through the line index, so no text is left to a second reader.
+  A flow collection may go over several lines, and `yaml::Records` never cuts inside one.
+  A parsed text holds its own bytes plus 0.82 times its size for a list of short records and 0.58 times for a deeply nested map (measured on 100 MB inputs).
+  A leading byte order mark is skipped.
+  An error is `file:line:col: reason`, with the line counted over the whole text, also in `yaml::Records`.
+  The reader is checked against the cases of the YAML test suite and a fuzz that writes random trees as text and reads them back.
+- Refuse anchors (`&`), aliases (`*`), tags (`!`), complex keys (`?`), directives (`%YAML`, `%TAG`) and null keys in YAML, with an error that names the feature.
+  A `<<` key is a plain key: there is no merge.
+  A mapping with a container as a key is refused.
+  `yaml::Writer` no longer writes an explicit `? key` for a key of more than 1024 bytes: such a key is now a caller bug, fatal in a debug build, as YAML limits an implicit key to 1024 characters.
 - Rename the library `libdftracer_utils_io` to `libdftracer_utils_fileio` and `libdftracer_utils_utilities` to `libdftracer_utils_domains`, with their pkg-config files.
   A program that links the `dftracer_utils` target needs no change.
 - Move the public index headers from `dftracer/utils/index/` to `dftracer/utils/trace/index/` and their namespace from `dftracer::utils::index` to `dftracer::utils::trace::index`.
@@ -431,7 +432,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   A public header now reaches no CPM package, so a plugin built from a source checkout and a plugin built against an install prefix compile the same, and the vendored headers install with the rest of `include/`.
   `cmake/patches/concurrentqueue-thread-exit.patch` is removed: its change is in the vendored header.
 - Add the ctest `public_third_party_headers`, which fails on an include under `include/` that is not ours, standard, system, `<mpi.h>` or vendored; simdjson and nanoarrow are its known exceptions until the API cut moves them out of `include/`.
-- Parse YAML with rapidyaml in place of yaml-cpp, for record schema specs and the `--event-map` file of `dftracer_gen_dlio_config`, in the new library `libdftracer_utils_yaml`, which also holds a block-style YAML writer that the DLIO config uses.
+- Parse YAML with the reader of `libdftracer_utils_yaml` in place of yaml-cpp, for record schema specs and the `--event-map` file of `dftracer_gen_dlio_config`, in the new library `libdftracer_utils_yaml`, which also holds a block-style YAML writer that the DLIO config uses.
   No yaml-cpp archive is in the link line or the install any more, and the same input is accepted, except that a mapping with a duplicate key is now an error, as YAML 1.2.2 requires.
   No source of ours except `common/error.cpp` builds with exceptions now.
 

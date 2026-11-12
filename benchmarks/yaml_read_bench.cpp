@@ -11,11 +11,8 @@
 //
 //   parse     yaml::Document::parse over the whole text, no walk
 //   document  yaml::Document::parse over the whole text, then the walk
-//   tape      the same, with the tape reader forced instead of the line index
 //   records   yaml::Records over a file of the text, chunks of --chunk MiB
 //   records1  the same, chunks of 1 MiB
-//   floor     the rapidyaml parse engine with a handler that does nothing,
-//             the speed no reader of this parser can pass; no walk
 //
 // The walk of records sums `dur` and counts the POSIX records whose
 // args.size is above 1024; the walk of nested sums every leaf. The document
@@ -31,7 +28,7 @@
 // Built only with DFTRACER_UTILS_BUILD_BENCHMARKS=ON and run manually.
 //
 //   yaml_read_bench [--mb N] [--rounds N] [--chunk MiB] [--dir PATH]
-//                   [--only parse|document|tape|records|records1|floor]
+//                   [--only parse|document|records|records1]
 //   yaml_read_bench --smoke
 
 #include <bench_ok.h>
@@ -44,7 +41,6 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/memory/detail/manager.h>
 #include <dftracer/utils/yaml/document.h>
-#include <dftracer/utils/yaml/document_test.h>
 #include <dftracer/utils/yaml/records.h>
 #include <unistd.h>
 
@@ -55,142 +51,12 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <rapidyaml.v0.16.0.singlesrc.hpp>
 
 using namespace dftracer::utils;
 
 namespace {
 
 using Clock = std::chrono::steady_clock;
-
-struct NoopState : ryml::ParserState {
-    ryml::type_bits bits;
-};
-
-// A handler that ignores every event: the cost of the parse engine alone.
-struct NoopHandler : ryml::EventHandlerStack<NoopHandler, NoopState> {
-    using state = NoopState;
-    static constexpr bool requires_strings_on_buffers = false;
-
-    NoopHandler() : EventHandlerStack(ryml::Callbacks()) {
-        _stack_reset_root();
-        m_curr->bits = 0;
-        m_curr->flags |= ryml::RUNK | ryml::RTOP;
-    }
-    ryml::Callbacks const& callbacks() const { return m_stack.m_callbacks; }
-    ryml::TagDirectives& tag_directives() { return tag_directives_; }
-    ryml::TagCache& tag_cache() { return tag_cache_; }
-    template <ryml::type_bits B>
-    bool has_any_() const noexcept {
-        return (m_curr->bits & B) != 0;
-    }
-    void start_parse(const char* filename, ryml::substr src) {
-        _stack_start_parse(filename, src);
-    }
-    void finish_parse() {}
-    void cancel_parse() {}
-    void begin_stream() const noexcept {}
-    void end_stream() const noexcept {}
-    void begin_doc() {
-        if (_stack_should_push_on_begin_doc()) push_doc();
-    }
-    void end_doc() {
-        if (_stack_should_pop_on_end_doc()) _pop();
-    }
-    void begin_doc_expl() { push_doc(); }
-    void end_doc_expl() {
-        if (_stack_should_pop_on_end_doc()) _pop();
-    }
-    void begin_map_key_flow() { _push(); }
-    void begin_map_key_block() { _push(); }
-    void begin_seq_key_flow() { _push(); }
-    void begin_seq_key_block() { _push(); }
-    void begin_map_val_flow() { begin(ryml::MAP); }
-    void begin_map_val_block() { begin(ryml::MAP); }
-    void begin_seq_val_flow() { begin(ryml::SEQ); }
-    void begin_seq_val_block() { begin(ryml::SEQ); }
-    void end_map_block() { _pop(); }
-    void end_map_flow(bool, ryml::type_bits = ryml::FLOW_ML1) { _pop(); }
-    void end_seq_block() { _pop(); }
-    void end_seq_flow(bool, ryml::type_bits = ryml::FLOW_ML1) { _pop(); }
-    void add_sibling() {}
-    void actually_val_is_first_key_of_new_map_flow() { _push(); }
-    void actually_val_is_first_key_of_new_map_block() {}
-    void set_key_scalar_plain_empty() noexcept {}
-    void set_val_scalar_plain_empty() noexcept { m_curr->bits |= ryml::VAL; }
-    void set_key_scalar_plain(ryml::csubstr) noexcept {}
-    void set_key_scalar_dquoted(ryml::csubstr) noexcept {}
-    void set_key_scalar_squoted(ryml::csubstr) noexcept {}
-    void set_key_scalar_literal(ryml::csubstr) noexcept {}
-    void set_key_scalar_folded(ryml::csubstr) noexcept {}
-    void set_val_scalar_plain(ryml::csubstr) noexcept {
-        m_curr->bits |= ryml::VAL;
-    }
-    void set_val_scalar_dquoted(ryml::csubstr) noexcept {
-        m_curr->bits |= ryml::VAL;
-    }
-    void set_val_scalar_squoted(ryml::csubstr) noexcept {
-        m_curr->bits |= ryml::VAL;
-    }
-    void set_val_scalar_literal(ryml::csubstr) noexcept {
-        m_curr->bits |= ryml::VAL;
-    }
-    void set_val_scalar_folded(ryml::csubstr) noexcept {
-        m_curr->bits |= ryml::VAL;
-    }
-    void mark_key_scalar_unfiltered() noexcept {}
-    void mark_val_scalar_unfiltered() noexcept {}
-    void set_key_anchor(ryml::csubstr) {}
-    void set_val_anchor(ryml::csubstr) {}
-    void set_key_ref(ryml::csubstr) {}
-    void set_val_ref(ryml::csubstr) {}
-    void set_key_tag(ryml::csubstr) {}
-    void set_val_tag(ryml::csubstr) {}
-    void add_directive_yaml(ryml::csubstr) {}
-    void add_directive_tag(ryml::csubstr, ryml::csubstr) {}
-    ryml::substr arena() { return ryml::substr(arena_, arena_used_); }
-    ryml::substr arena_rem() {
-        return ryml::substr(arena_ + arena_used_, sizeof(arena_) - arena_used_);
-    }
-    ryml::substr alloc_arena(std::size_t len) {
-        if (arena_used_ + len > sizeof(arena_)) std::abort();
-        ryml::substr out(arena_ + arena_used_, len);
-        arena_used_ += len;
-        return out;
-    }
-    void _push() {
-        _stack_push();
-        m_curr->bits = 0;
-    }
-    void _pop() { _stack_pop(); }
-
-    ryml::id_type m_curr_doc = 0;
-
-   private:
-    void begin(ryml::type_bits kind) {
-        m_curr->bits |= kind;
-        _push();
-    }
-    void push_doc() {
-        _push();
-        m_curr->bits = ryml::DOC;
-    }
-
-    ryml::TagDirectives tag_directives_;
-    ryml::TagCache tag_cache_;
-    char arena_[1 << 12];
-    std::size_t arena_used_ = 0;
-};
-
-}  // namespace
-
-#include <rapidyaml_impl.hpp>
-
-namespace c4::yml {
-template class ParseEngine<NoopHandler>;
-}  // namespace c4::yml
-
-namespace {
 
 struct Rng {
     std::uint64_t s = 88172645463325252ull;
@@ -388,17 +254,13 @@ Outcome measure(Fn&& fn) {
     return outcome;
 }
 
-Outcome run_document(const dstd::String& text, Shape shape, bool walks,
-                     bool force_tape = false) {
+Outcome run_document(const dstd::String& text, Shape shape, bool walks) {
     dstd::String copy = text;
-    yaml::detail::set_force_tape_for_test(force_tape);
-    const Outcome outcome = measure([&](Answer& answer) {
+    return measure([&](Answer& answer) {
         auto doc =
             dftu::bench::ok(yaml::Document::parse(std::move(copy), "bench"));
         if (walks) walk(doc.root(), shape, answer);
     });
-    yaml::detail::set_force_tape_for_test(false);
-    return outcome;
 }
 
 Outcome run_records(const dstd::Path& path, Shape shape,
@@ -417,16 +279,6 @@ Outcome run_records(const dstd::Path& path, Shape shape,
             else
                 walk_leaves(*next, answer);
         }
-    });
-}
-
-Outcome run_floor(const dstd::String& text) {
-    dstd::String copy = text;
-    return measure([&](Answer&) {
-        NoopHandler handler;
-        ryml::ParseEngine<NoopHandler> engine(
-            &handler, ryml::ParserOptions().detect_flow_ml(false));
-        engine.parse_in_place_ev({}, ryml::substr(copy.data(), copy.size()));
     });
 }
 
@@ -491,9 +343,9 @@ int main(int argc, char** argv) {
         dftu::bench::ok(dstd::fs::write_file(file, text));
         const double input_mb = static_cast<double>(text.size()) / 1e6;
 
-        constexpr int CASES = 6;
-        static const char* const NAMES[CASES] = {
-            "parse", "document", "tape", "records", "records1", "floor"};
+        constexpr int CASES = 4;
+        static const char* const NAMES[CASES] = {"parse", "document", "records",
+                                                 "records1"};
         dstd::Vector<double> seconds[CASES];
         Outcome outcomes[CASES];
         for (int round = 0; round < rounds; ++round) {
@@ -509,23 +361,17 @@ int main(int argc, char** argv) {
                         outcome = run_document(text, shape, true);
                         break;
                     case 2:
-                        outcome = run_document(text, shape, true, true);
-                        break;
-                    case 3:
                         outcome = run_records(file, shape, chunk_bytes);
                         break;
-                    case 4:
+                    default:
                         outcome =
                             run_records(file, shape, std::size_t{1} << 20);
-                        break;
-                    default:
-                        outcome = run_floor(text);
                         break;
                 }
                 seconds[which].push_back(outcome.seconds);
             }
         }
-        for (const int which : {1, 2, 3, 4}) {
+        for (const int which : {1, 2, 3}) {
             if (!seconds[which].empty() && !(outcomes[which].answer == truth)) {
                 std::fprintf(stderr, "%s: %s answer is not the generated one\n",
                              shape_name, NAMES[which]);

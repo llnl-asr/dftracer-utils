@@ -1,12 +1,9 @@
 // SPDX-License-Identifier: MIT
-#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/raw_buffer.h>
-#include <dftracer/utils/yaml/document_test.h>
 #include <dftracer/utils/yaml/line_index.h>
 #include <dftracer/utils/yaml/line_value.h>
 #include <dftracer/utils/yaml/records.h>
-#include <dftracer/utils/yaml/tape.h>
 
 #include <algorithm>
 #include <cstring>
@@ -71,10 +68,10 @@ bool has_content(dstd::StringView text) {
 struct RecordsImpl {
     dstd::String name;
     RecordsOptions options;
-    /// The text of a string source, parsed in place.
+    /// The text of a string source.
     dstd::String owned;
     /// The text of a file read so far, which skips the zero fill of a string.
-    /// A chunk is parsed in place in it, and the unparsed rest follows.
+    /// A chunk is parsed where it lies in it, and the unparsed rest follows.
     dstd::RawBuffer<char> raw;
     /// The start of the chunk, or of the next one, in `buffer`.
     std::size_t begin = 0;
@@ -88,14 +85,10 @@ struct RecordsImpl {
     bool failed = false;
     std::uint64_t lines_before = 0;
     DocumentStorage storage;
-    TapeParser parser;
-    std::size_t cursor = 0;
-    std::size_t cursor_end = 0;
-    /// The walk of a chunk that the line index holds: the next line of the
-    /// top sequence in Seq mode, the line after the last document otherwise.
+    /// The walk of a chunk: the next line of the top sequence in Seq mode, the
+    /// line after the last document otherwise.
     std::uint32_t line_cursor = 0;
     std::uint32_t line_limit = 0;
-    /// The lines of the chunk, counted before a tape parse rewrites its text.
     std::uint64_t chunk_lines = 0;
 
     char* chars() { return is_file ? raw.data() : owned.data(); }
@@ -199,48 +192,46 @@ dstd::Result<void> RecordsImpl::start_chunk() {
         lines_before == 0 ? bom_size(chars() + begin, chunk_end - begin) : 0;
     storage.base = chars() + begin + bom;
     storage.size = chunk_end - begin - bom;
-    storage.is_lines = false;
     chunk_lines = static_cast<std::uint64_t>(
         std::count(chars() + begin, chars() + chunk_end, '\n'));
-    if (!detail::is_force_tape()) {
-        const BuildResult built =
-            storage.lines.build(storage.base, storage.size);
-        if (built == BuildResult::Invalid) {
-            return line_problem_error(storage.lines.problem, name,
-                                      lines_before + 1);
+    if (storage.lines.build(storage.base, storage.size) == BuildResult::Invalid)
+        return line_problem_error(storage.lines.problem, name,
+                                  lines_before + 1);
+    std::uint32_t pos = 0;
+    std::uint32_t first = 0;
+    std::uint32_t limit = 0;
+    bool is_empty = false;
+    const bool has_document =
+        LineAccess::next_document(&storage, pos, first, limit, is_empty);
+    if (mode == Mode::Seq && has_document) {
+        const LineKind kind =
+            is_empty ? LineKind::Blank : storage.lines.entries[first].kind;
+        const bool is_seq =
+            kind == LineKind::SeqItem || kind == LineKind::SeqOpen ||
+            kind == LineKind::SeqMap || kind == LineKind::SeqMapOpen ||
+            kind == LineKind::NestItem || kind == LineKind::NestItemOpen ||
+            kind == LineKind::NestMap || kind == LineKind::NestMapOpen;
+        std::uint32_t more_pos = pos;
+        std::uint32_t more_first = 0;
+        std::uint32_t more_limit = 0;
+        bool more_empty = false;
+        const bool has_more = LineAccess::next_document(
+            &storage, more_pos, more_first, more_limit, more_empty);
+        if (!is_seq || has_more) {
+            LineProblem problem;
+            problem.line = (has_more ? limit : first) + 1;
+            problem.col = 1;
+            problem.reason = "a document marker inside a top-level sequence";
+            return line_problem_error(problem, name, lines_before + 1);
         }
-        if (built == BuildResult::Accepted) {
-            std::uint32_t pos = 0;
-            std::uint32_t first = 0;
-            std::uint32_t limit = 0;
-            LineAccess::next_document(&storage, pos, first, limit);
-            const LineKind kind = storage.lines.entries[first].kind;
-            const bool is_seq =
-                kind == LineKind::SeqItem || kind == LineKind::SeqOpen ||
-                kind == LineKind::SeqMap || kind == LineKind::SeqMapOpen;
-            if (mode != Mode::Seq || (is_seq && !storage.lines.has_markers)) {
-                storage.is_lines = true;
-                storage.reset_tape();
-                line_cursor = mode == Mode::Seq ? first : 0;
-                line_limit = limit;
-                chunk_loaded = true;
-                return {};
-            }
-        }
+        line_cursor = first;
+    } else if (mode == Mode::Seq) {
+        line_cursor = 0;
+        limit = 0;
+    } else {
+        line_cursor = 0;
     }
-    if (auto parsed = parser.parse(storage, name, lines_before + 1); !parsed)
-        return parsed;
-    cursor = 0;
-    cursor_end = storage.tape.size();
-    if (mode == Mode::Seq && !storage.tape.empty()) {
-        const TapeEntry& root = storage.tape[0];
-        if (root.kind != TapeKind::Seq || root.pos != storage.tape.size())
-            return common::make_error<
-                "{}: a document marker inside a top-level sequence">(
-                common::ErrorCode::InvalidArgument, name);
-        cursor = 1;
-        cursor_end = root.pos;
-    }
+    line_limit = limit;
     chunk_loaded = true;
     return {};
 }
@@ -323,7 +314,7 @@ dstd::Result<dstd::Optional<Value>> Records::next() {
     RecordsImpl& impl = *impl_;
     for (;;) {
         if (impl.failed) return dstd::Optional<Value>{};
-        if (impl.chunk_loaded && impl.storage.is_lines) {
+        if (impl.chunk_loaded) {
             const LineIndex& ix = impl.storage.lines;
             if (impl.mode == Mode::Seq) {
                 if (impl.line_cursor < impl.line_limit &&
@@ -336,26 +327,17 @@ dstd::Result<dstd::Optional<Value>> Records::next() {
             } else {
                 std::uint32_t first = 0;
                 std::uint32_t limit = 0;
+                bool is_empty = false;
                 if (LineAccess::next_document(&impl.storage, impl.line_cursor,
-                                              first, limit))
+                                              first, limit, is_empty))
                     return dstd::Optional<Value>(
-                        LineAccess::container(&impl.storage, first, limit));
+                        is_empty ? LineAccess::null(&impl.storage)
+                                 : LineAccess::container(&impl.storage, first,
+                                                         limit));
             }
             impl.lines_before += impl.chunk_lines;
             impl.begin = impl.chunk_end;
             impl.chunk_loaded = false;
-            impl.storage.is_lines = false;
-        } else if (impl.chunk_loaded) {
-            if (impl.cursor < impl.cursor_end) {
-                const std::size_t id = impl.cursor;
-                const TapeEntry& entry = impl.storage.tape[id];
-                impl.cursor = entry.is_container() ? entry.pos : id + 1;
-                return dstd::Optional<Value>(Value(&impl.storage, id));
-            }
-            impl.lines_before += impl.chunk_lines;
-            impl.begin = impl.chunk_end;
-            impl.chunk_loaded = false;
-            impl.storage.reset_tape();
         }
         auto loaded = impl.load_chunk();
         if (!loaded.has_value()) {

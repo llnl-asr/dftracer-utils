@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dstd/ascii.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/yaml/line_scalar.h>
 
 #include <cstring>
@@ -98,12 +99,26 @@ Decoded decode_double(const char* t, std::uint32_t s, std::uint32_t e, char*& w,
                 barrier = w;
                 continue;
             case '0':
+                *w++ = '\0';
+                barrier = w;
+                continue;
             case ' ':
+            case '\t':
+                *w++ = t[i];
+                barrier = w;
+                continue;
             case '_':
+                cp = 0xA0;
+                break;
             case 'N':
+                cp = 0x85;
+                break;
             case 'L':
+                cp = 0x2028;
+                break;
             case 'P':
-                return Decoded::Decline;
+                cp = 0x2029;
+                break;
             case 'x':
             case 'u':
             case 'U': {
@@ -128,21 +143,27 @@ Decoded decode_double(const char* t, std::uint32_t s, std::uint32_t e, char*& w,
                     cp = (cp << 4) | static_cast<std::uint32_t>(h);
                 }
                 i += digits;
-                if (cp > 0x10FFFF) {
+                if (cp >= 0xD800 && cp < 0xDC00 && digits == 4 && i + 6 < e &&
+                    t[i + 1] == '\\' && t[i + 2] == 'u') {
+                    std::uint32_t low = 0;
+                    bool is_low = true;
+                    for (std::uint32_t d = 0; d < 4 && is_low; ++d) {
+                        const int h = hex_value(t[i + 3 + d]);
+                        is_low = h >= 0;
+                        low = (low << 4) | static_cast<std::uint32_t>(h);
+                    }
+                    if (is_low && low >= 0xDC00 && low < 0xE000) {
+                        cp = 0x10000 + ((cp - 0xD800) << 10) + (low - 0xDC00);
+                        i += 6;
+                    }
+                }
+                if (cp > 0x10FFFF || (cp >= 0xD800 && cp < 0xE000)) {
                     problem.kind = EscapeProblem::Range;
                     problem.at = at;
-                    problem.ch = t[i - digits];
+                    problem.ch = t[at + 1];
                     problem.count = digits;
                     return Decoded::Invalid;
                 }
-                // A surrogate, NUL, and the code points a YAML reader takes
-                // for a line break or refuses, which the tape reader folds in
-                // its own way.
-                if (cp == 0 || (cp >= 0xD800 && cp < 0xE000) || cp == 0x7F ||
-                    (cp >= 0x80 && cp <= 0xA0) || cp == 0x2028 ||
-                    cp == 0x2029 || cp == 0xFEFF || cp == 0xFFFE ||
-                    cp == 0xFFFF)
-                    return Decoded::Decline;
                 break;
             }
             default:
@@ -170,64 +191,70 @@ void line_bounds(const LineIndex& ix, std::uint32_t line, std::uint32_t& s,
     e = ix.line_end(line);
 }
 
+bool is_white(char c) { return c == ' ' || c == '\t'; }
+
 }  // namespace
 
-Decoded decode_quoted(LineIndex& ix, std::uint32_t s, std::uint32_t e,
-                      bool double_quoted, EscapeProblem& problem,
-                      ScalarText& out) {
-    const std::uint32_t old = static_cast<std::uint32_t>(ix.arena.size());
-    char* base = grow(ix, e - s);
-    char* w = base;
-    if (double_quoted) {
-        char* barrier = w;
-        bool escaped_break = false;
-        const Decoded decoded =
-            decode_double(ix.text, s, e, w, barrier, escaped_break, problem);
-        if (decoded != Decoded::Ok) {
-            ix.arena.resize(old);
-            return decoded;
-        }
-    } else {
-        decode_single(ix.text, s, e, w);
+dstd::String escape_reason(const EscapeProblem& problem) {
+    switch (problem.kind) {
+        case EscapeProblem::Unknown:
+            return dstd::fmt<"unknown escape character '{}'">(
+                dstd::StringView(&problem.ch, 1));
+        case EscapeProblem::Digits:
+            return dstd::fmt<"escape '\\{}' needs {} hex digits">(
+                dstd::StringView(&problem.ch, 1), problem.count);
+        case EscapeProblem::Hex:
+            return dstd::fmt<
+                "escape '\\{}' has a character that is not a hex digit">(
+                dstd::StringView(&problem.ch, 1));
+        default:
+            return "escape is not a code point";
     }
-    out.off = old;
-    out.len = static_cast<std::uint32_t>(w - base);
-    out.in_text = false;
-    ix.arena.resize(old + out.len);
-    return Decoded::Ok;
+}
+
+// The offset of the first line feed in `[pos, e)`, or `e`. A line is short, so
+// a few bytes are looked at before a call is worth it.
+inline std::uint32_t find_newline(const char* t, std::uint32_t pos,
+                                  std::uint32_t e) {
+    const std::uint32_t near_end = e - pos < 24 ? e : pos + 24;
+    for (std::uint32_t i = pos; i < near_end; ++i)
+        if (t[i] == '\n') return i;
+    if (near_end == e) return e;
+    const void* found = std::memchr(t + near_end, '\n', e - near_end);
+    return found == nullptr ? e
+                            : static_cast<std::uint32_t>(
+                                  static_cast<const char*>(found) - t);
 }
 
 // Folds the lines of a quoted scalar: trailing white space before a break and
 // leading white space after it go, one break is a space, each empty line is a
 // line feed, and an escaped break joins the lines (YAML 1.2.2, 6.5 line
 // folding and 7.3.1 and 7.3.2, https://yaml.org/spec/1.2.2/).
-Decoded decode_quoted_lines(LineIndex& ix, std::uint32_t first,
-                            std::uint32_t last, std::uint32_t quote_at,
-                            std::uint32_t close_at, EscapeProblem& problem,
-                            ScalarText& out) {
+Decoded decode_quoted(LineIndex& ix, std::uint32_t s, std::uint32_t e,
+                      bool double_quoted, EscapeProblem& problem,
+                      ScalarText& out) {
     const char* t = ix.text;
-    const bool is_double = t[quote_at] == '"';
     const std::uint32_t old = static_cast<std::uint32_t>(ix.arena.size());
-    char* base = grow(ix, close_at - quote_at);
+    const std::size_t room = static_cast<std::size_t>(e - s) * 3 / 2 + 4;
+    char* base = grow(ix, room);
     char* w = base;
-    char* barrier = w;
+    std::uint32_t pos = s;
     std::uint32_t empties = 0;
     bool after_escaped = false;
-    for (std::uint32_t line = first; line <= last; ++line) {
-        std::uint32_t s = 0;
-        std::uint32_t e = 0;
-        line_bounds(ix, line, s, e);
-        std::uint32_t from = quote_at + 1;
-        if (line != first) {
-            from = s;
-            while (from < e && t[from] == ' ') ++from;
-        }
-        const bool is_last = line == last;
-        if (line != first && !is_last && from == e) {
-            ++empties;
-            continue;
-        }
-        if (line != first) {
+    bool is_first = true;
+    for (;;) {
+        const std::uint32_t line_to = find_newline(t, pos, e);
+        const bool is_last = line_to == e;
+        std::uint32_t from = pos;
+        std::uint32_t to = line_to;
+        if (!is_last && to > from && t[to - 1] == '\r') --to;
+        if (!is_first) {
+            while (from < to && is_white(t[from])) ++from;
+            if (!is_last && from == to) {
+                ++empties;
+                pos = line_to + 1;
+                continue;
+            }
             if (empties != 0) {
                 std::memset(w, '\n', empties);
                 w += empties;
@@ -237,27 +264,26 @@ Decoded decode_quoted_lines(LineIndex& ix, std::uint32_t first,
             empties = 0;
             after_escaped = false;
         }
-        barrier = w;
+        char* barrier = w;
         bool escaped_break = false;
-        const std::uint32_t to = is_last ? close_at : e;
-        if (is_double) {
+        if (double_quoted) {
             const Decoded decoded =
                 decode_double(t, from, to, w, barrier, escaped_break, problem);
             if (decoded != Decoded::Ok) {
-                problem.line = line;
                 ix.arena.resize(old);
                 return decoded;
             }
         } else {
             decode_single(t, from, to, w);
         }
-        if (!is_last) {
-            if (escaped_break) {
-                after_escaped = true;
-            } else {
-                while (w > barrier && w[-1] == ' ') --w;
-            }
+        if (is_last) break;
+        if (escaped_break) {
+            after_escaped = true;
+        } else {
+            while (w > barrier && is_white(w[-1])) --w;
         }
+        pos = line_to + 1;
+        is_first = false;
     }
     out.off = old;
     out.len = static_cast<std::uint32_t>(w - base);
@@ -266,8 +292,10 @@ Decoded decode_quoted_lines(LineIndex& ix, std::uint32_t first,
     return Decoded::Ok;
 }
 
-// Folds the lines of a plain scalar as 7.3.3 and 6.5 of YAML 1.2.2 say
-// (https://yaml.org/spec/1.2.2/).
+// The same as @ref decode_plain for a scalar of the lines `first` to `last` of
+// the line index: the first text of the first line is `[first_s, first_e)` and
+// the last line ends its text at `last_e`. The lines are read from the line
+// table, so no line feed is looked for.
 void decode_plain_lines(LineIndex& ix, std::uint32_t first, std::uint32_t last,
                         std::uint32_t first_s, std::uint32_t first_e,
                         std::uint32_t last_e, ScalarText& out) {
@@ -282,14 +310,14 @@ void decode_plain_lines(LineIndex& ix, std::uint32_t first, std::uint32_t last,
         std::uint32_t s = 0;
         std::uint32_t e = 0;
         line_bounds(ix, line, s, e);
-        while (s < e && t[s] == ' ') ++s;
+        while (s < e && is_white(t[s])) ++s;
         if (s == e) {
             ++empties;
             continue;
         }
         std::uint32_t te = line == last ? last_e : e;
         if (line != last) {
-            while (te > s && t[te - 1] == ' ') --te;
+            while (te > s && is_white(t[te - 1])) --te;
         }
         if (empties != 0) {
             std::memset(w, '\n', empties);
@@ -300,6 +328,54 @@ void decode_plain_lines(LineIndex& ix, std::uint32_t first, std::uint32_t last,
         }
         std::memcpy(w, t + s, te - s);
         w += te - s;
+    }
+    out.off = old;
+    out.len = static_cast<std::uint32_t>(w - base);
+    out.in_text = false;
+    ix.arena.resize(old + out.len);
+}
+
+// Folds the lines of a plain scalar as 7.3.3 and 6.5 of YAML 1.2.2 say
+// (https://yaml.org/spec/1.2.2/).
+void decode_plain(LineIndex& ix, std::uint32_t s, std::uint32_t e,
+                  ScalarText& out) {
+    const char* t = ix.text;
+    const std::uint32_t old = static_cast<std::uint32_t>(ix.arena.size());
+    char* base = grow(ix, e - s);
+    char* w = base;
+    std::uint32_t pos = s;
+    std::uint32_t empties = 0;
+    bool is_first = true;
+    for (;;) {
+        const std::uint32_t line_to = find_newline(t, pos, e);
+        const bool is_last = line_to == e;
+        std::uint32_t from = pos;
+        std::uint32_t to = line_to;
+        if (!is_first) {
+            while (from < to && is_white(t[from])) ++from;
+        }
+        if (!is_last) {
+            while (to > from && (is_white(t[to - 1]) || t[to - 1] == '\r'))
+                --to;
+        }
+        if (!is_first && from == to) {
+            ++empties;
+        } else {
+            if (!is_first) {
+                if (empties != 0) {
+                    std::memset(w, '\n', empties);
+                    w += empties;
+                    empties = 0;
+                } else {
+                    *w++ = ' ';
+                }
+            }
+            std::memcpy(w, t + from, to - from);
+            w += to - from;
+        }
+        if (is_last) break;
+        pos = line_to + 1;
+        is_first = false;
     }
     out.off = old;
     out.len = static_cast<std::uint32_t>(w - base);
@@ -329,6 +405,9 @@ Decoded decode_block(LineIndex& ix, const BlockSpec& spec, std::uint32_t first,
     std::uint32_t pending = 0;
     bool have = false;
     bool prev_spaced = false;
+    // The last line has text that is not only spaces: a text that ends there
+    // has no line feed to keep (YAML 1.2.2, b-chomped-last).
+    bool ends_in_text = false;
     std::uint32_t first_text = 0;
     for (std::uint32_t line = first; line < end; ++line) {
         std::uint32_t s = 0;
@@ -340,8 +419,10 @@ Decoded decode_block(LineIndex& ix, const BlockSpec& spec, std::uint32_t first,
         const bool is_blank = i == e;
         if (is_blank && !(spec.is_indent_known && spaces > ci)) {
             ++pending;
+            ends_in_text = false;
             continue;
         }
+        ends_in_text = !is_blank;
         const std::uint32_t text_at = s + ci;
         const bool is_spaced =
             text_at < e && (t[text_at] == ' ' || t[text_at] == '\t');
@@ -366,12 +447,8 @@ Decoded decode_block(LineIndex& ix, const BlockSpec& spec, std::uint32_t first,
         have = true;
         prev_spaced = is_spaced;
     }
-    if (is_unterminated && pending != 0 && spec.chomp > 0) {
-        ix.arena.resize(old);
-        return Decoded::Decline;
-    }
     if (have) {
-        if (spec.chomp >= 0 && !is_unterminated) *w++ = '\n';
+        if (spec.chomp >= 0 && !(is_unterminated && ends_in_text)) *w++ = '\n';
         if (spec.chomp > 0 && pending != 0) {
             std::memset(w, '\n', pending);
             w += pending;

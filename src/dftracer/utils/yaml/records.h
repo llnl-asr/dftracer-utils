@@ -31,9 +31,9 @@ struct RecordsImpl;
 ///  - the whole text, as one record, for anything else, and no record for a
 ///    text with no content.
 ///
-/// The text is cut into chunks, and each chunk is parsed on its own, in
-/// place, with its own tape, whose buffers the next chunk reuses. A cut falls
-/// only where it cannot split a construct:
+/// The text is cut into chunks, and each chunk is parsed on its own, where it
+/// lies, with its own line index, whose buffers the next chunk reuses. A cut
+/// falls only where it cannot split a construct:
 ///
 ///  - A line that starts at column 0 with `- ` (or a lone `-`) in a text that
 ///    is a top-level block sequence starts an element. Every line of a block
@@ -41,8 +41,7 @@ struct RecordsImpl;
 ///    collection that belongs to an element is indented by at least one
 ///    column, because the content of a sequence entry at column 0 sits
 ///    deeper than that column (YAML 1.2.2, 8.2.1 and 7.3). A comment starts
-///    with `#`, and an alias, an anchor or a tag cannot start a line of a
-///    sequence at column 0 either. So a column-0 `- ` is always an entry.
+///    with `#`. So a column-0 `- ` is always an entry.
 ///  - A line that starts with `---` followed by a blank or the end of the
 ///    line, and the line after a `...` line, start a document: a document
 ///    marker at column 0 ends every scalar, whatever its style (YAML 1.2.2,
@@ -50,12 +49,11 @@ struct RecordsImpl;
 ///    goes with it.
 ///
 /// A text that has no such line after the chunk size is one large chunk. A
-/// chunk is parsed with no state from the one before, so an alias must name
-/// an anchor of its own chunk, and a failed parse reports its line counted
-/// from the start of the text. A document marker inside a top-level sequence
-/// is an error, as an anchor shared across a cut is.
+/// chunk is parsed with no state from the one before, and a failed parse
+/// reports its line counted from the start of the text. A document marker
+/// inside a top-level sequence is an error.
 ///
-/// The text is parsed in place: a string moved in is rewritten. A file is read
+/// The text is not changed and not copied for a parse. A file is read
 /// in blocks, so only a chunk and one block of the text are in memory.
 class Records {
    public:

@@ -10,8 +10,7 @@ other one is fetched at configure time (via CPM; see
 and linked into the libraries, CLI binaries, and the Python extension. Each
 remains under its own license, reproduced in full in its source tree
 (``.cpmsource/<name>/.../LICENSE`` after a build, in the vendored header
-itself, and for rapidyaml with c4core, fast_float and debugbreak at the top of
-each part of its single-source files under ``.cpmsource/rapidyaml_*/``). dftracer-utils itself is under the terms in ``LICENSE``; this page
+itself). dftracer-utils itself is under the terms in ``LICENSE``; this page
 covers only the third-party components.
 
 Dual-licensed components (Highway, simdjson, Zstandard) are used under
@@ -48,18 +47,6 @@ Runtime dependencies
    * - Boost.Math
      - ``BSL-1.0``
      - https://github.com/boostorg/math
-   * - rapidyaml
-     - ``MIT``
-     - https://github.com/biojppm/rapidyaml
-   * - c4core (in rapidyaml)
-     - ``MIT``
-     - https://github.com/biojppm/c4core
-   * - fast_float (in c4core)
-     - ``Apache-2.0 OR MIT OR BSL-1.0``
-     - https://github.com/fastfloat/fast_float
-   * - debugbreak (in c4core)
-     - ``BSD-2-Clause``
-     - https://github.com/scottt/debugbreak
    * - moodycamel concurrentqueue
      - ``BSD-2-Clause``
      - https://github.com/cameron314/concurrentqueue

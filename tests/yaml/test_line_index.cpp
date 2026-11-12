@@ -1,27 +1,25 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/fmt.h>
-#include <dftracer/utils/dstd/fs.h>
-#include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/yaml/document.h>
-#include <dftracer/utils/yaml/document_test.h>
 #include <dftracer/utils/yaml/line_index.h>
 #include <dftracer/utils/yaml/records.h>
 #include <doctest/doctest.h>
-#include <testing_utilities.h>
 #include <yaml/yaml_dump.h>
-#include <yaml/yaml_equal.h>
+#include <yaml/yaml_gen.h>
 
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 
 using namespace dftracer::utils;
-using dftu_yaml_test::parse_both;
+using dftu_yaml_test::dump;
+using dftu_yaml_test::Gen;
+using dftu_yaml_test::matches;
+using dftu_yaml_test::Tree;
 using yaml::Document;
-using yaml::DocumentTestAccess;
 using yaml::LineIndex;
 using yaml::Records;
 using yaml::RecordsOptions;
@@ -29,805 +27,273 @@ using yaml::Value;
 
 namespace {
 
-// The reasons of the line index and of the tape reader for the same text, as
-// pairs with the numbers and the quoted names cut out, and how often each
-// came up.
-dstd::Map<dstd::String, std::size_t>& reason_log() {
-    static dstd::Map<dstd::String, std::size_t> log;
-    return log;
+dstd::String error_of(dstd::StringView text) {
+    auto doc = Document::parse(dstd::String(text), "n.yaml");
+    REQUIRE_FALSE(doc.has_value());
+    return dstd::String(doc.error().message());
 }
 
-dstd::String shape_of(dstd::StringView reason) {
-    dstd::String out;
-    bool in_quote = false;
-    for (char c : reason) {
-        if (c == '\'') {
-            in_quote = !in_quote;
-            out += c;
-        } else if (!in_quote && (c < '0' || c > '9')) {
-            out += c;
-        } else if (!in_quote && (out.empty() || out.back() != 'N')) {
-            out += 'N';
-        }
-    }
-    return out;
+Document must_parse(dstd::StringView text) {
+    auto doc = Document::parse(dstd::String(text), "");
+    REQUIRE(doc.has_value());
+    return std::move(*doc);
 }
 
-// rapidyaml checks in a debug build that no line holds a CR before other
-// text, and aborts on one. The tests leave such a text out of a debug build.
-bool has_inner_cr(dstd::StringView text) {
-#ifndef NDEBUG
-    for (std::size_t i = 0; i < text.size(); ++i) {
-        if (text[i] != '\r') continue;
-        std::size_t j = i;
-        while (j < text.size() && text[j] == '\r') ++j;
-        if (j < text.size() && text[j] != '\n') return true;
-        i = j;
+void check_same_index(const LineIndex& a, const LineIndex& b) {
+    REQUIRE(a.line_count == b.line_count);
+    CHECK(std::memcmp(a.entries.data(), b.entries.data(),
+                      (a.line_count + 1) * sizeof(yaml::LineEntry)) == 0);
+    CHECK(std::memcmp(a.next.data(), b.next.data(),
+                      (a.line_count + 1) * sizeof(std::uint32_t)) == 0);
+    CHECK(a.escapes.size() == b.escapes.size());
+    REQUIRE(a.arena.size() == b.arena.size());
+    CHECK(std::memcmp(a.arena.data(), b.arena.data(), a.arena.size()) == 0);
+    REQUIRE(a.tape.size() == b.tape.size());
+    for (std::size_t i = 0; i < a.tape.size(); ++i) {
+        const yaml::TapeEntry& x = a.tape[i];
+        const yaml::TapeEntry& y = b.tape[i];
+        CHECK((x.pos == y.pos && x.size == y.size && x.kind == y.kind &&
+               x.flags == y.flags));
     }
-#else
-    (void)text;
-#endif
-    return false;
-}
-
-// Each error the line index reports, by the start of its reason, with an
-// example. The tape reader names the line of the cause for a duplicate key
-// that it finds too. For every other class it stops on the line after the
-// cause, or further on (an unterminated quote is found at the end of the
-// file), so its line is the same or later, and the test allows that.
-struct ErrorClass {
-    const char* reason;
-    const char* example;
-    bool is_exact;
-};
-
-const ErrorClass ERROR_CLASSES[] = {
-    {"duplicate key", "a: 1\na: 2\n", true},
-    {"a complete value cannot go on in a deeper line", "a: \"x\"\n  y\n",
-     false},
-    {"a mapping key cannot follow sequence items", "- a\nb: 1\n", false},
-    {"a sequence item cannot follow mapping keys", "a: 1\n- b\n", false},
-    {"escape ", "a: \"\\xZZ\"\n", false},
-    {"unknown escape character", "a: \"\\q\"\n", false},
-    {"indentation does not match any open block", "a:\n    b: 1\n  c: 2\n",
-     false},
-    {"mapping values are not allowed in a multi-line plain scalar",
-     "a: b\n  c: d\n", false},
-    {"mapping values are not allowed in this context", "a: b: c\n", false},
-    {"unexpected text after a quoted scalar", "a: \"x\" y\n", false},
-    {"unterminated quoted scalar", "a: \"x\nb: 1\n", false},
-    {"a block scalar header holds text", "a: |x\n  y\n", false},
-    {"an empty line of a block scalar is more indented", "a: |\n    \n  x\n",
-     false},
-    {"a block scalar is less indented than its indentation indicator",
-     "a: |2\n x\n", false},
-    {"a quoted scalar is not indented enough", "a: \"x\ny\"\n", false},
-    {"a document marker inside a quoted scalar", "--- \"a\n... x\nb\"\n",
-     false},
-};
-
-const ErrorClass* error_class_of(dstd::StringView reason) {
-    for (const ErrorClass& c : ERROR_CLASSES)
-        if (reason.substr(0, std::strlen(c.reason)) == c.reason) return &c;
-    return nullptr;
-}
-
-// The line index must give the tape result, or decline, or find an error that
-// the tape reader finds too, on the line that ERROR_CLASSES says.
-// Returns whether it took the text.
-bool same_as_tape(dstd::StringView text) {
-    if (has_inner_cr(text) || dftu_yaml_test::is_known_difference(text))
-        return false;
-    const auto both = parse_both(text);
-    if (both.line_invalid) {
-        if (both.tape_ok) {
-            FAIL_CHECK(
-                "the line index fails a text that the tape reads\nline: ",
-                dstd::String(both.line_error.data(), both.line_error.size()),
-                "\ntext: ", dstd::String(text.data(), text.size()));
-            return false;
-        }
-        const std::uint64_t ours = dftu_yaml_test::error_line(both.line_error);
-        const std::uint64_t theirs =
-            dftu_yaml_test::error_line(both.tape_error);
-        const dstd::StringView reason =
-            dftu_yaml_test::error_reason(both.line_error);
-        const ErrorClass* error_class = error_class_of(reason);
-        if (error_class == nullptr) {
-            FAIL_CHECK("an error class that the test does not list: ",
-                       dstd::String(reason.data(), reason.size()));
-        }
-        const bool is_same_error =
-            error_class != nullptr && error_class->is_exact &&
-            dftu_yaml_test::error_reason(both.tape_error)
-                    .substr(0, std::strlen(error_class->reason)) ==
-                error_class->reason;
-        if (theirs < ours || (is_same_error && theirs != ours)) {
-            FAIL_CHECK(
-                "the error lines differ\nline: ",
-                dstd::String(both.line_error.data(), both.line_error.size()),
-                "\ntape: ",
-                dstd::String(both.tape_error.data(), both.tape_error.size()),
-                "\ntext: ", dstd::String(text.data(), text.size()));
-        }
-        ++reason_log()[shape_of(reason) + "  <=>  " +
-                       shape_of(dftu_yaml_test::error_reason(both.tape_error)) +
-                       (theirs == ours       ? "  [same line]"
-                        : theirs == ours + 1 ? "  [tape +1 line]"
-                                             : "  [tape later]")];
-        return false;
-    }
-    if (both.line_dump != both.tape_dump) {
-        std::size_t at = 0;
-        while (at < both.line_dump.size() && at < both.tape_dump.size() &&
-               both.line_dump[at] == both.tape_dump[at])
-            ++at;
-        const std::size_t from = at > 60 ? at - 60 : 0;
-        FAIL_CHECK(
-            "text: ", dstd::String(text.data(), text.size()), "\nline: ...",
-            dstd::String(
-                both.line_dump.data() + from,
-                std::min<std::size_t>(160, both.line_dump.size() - from)),
-            "\ntape: ...",
-            dstd::String(
-                both.tape_dump.data() + from,
-                std::min<std::size_t>(160, both.tape_dump.size() - from)),
-            "\ntape error: ",
-            dstd::String(both.tape_error.data(), both.tape_error.size()));
-    }
-    return both.line_accepted;
-}
-
-struct Rng {
-    std::uint64_t s;
-    std::uint64_t next() {
-        s ^= s << 13;
-        s ^= s >> 7;
-        s ^= s << 17;
-        return s;
-    }
-    std::size_t below(std::size_t n) {
-        return static_cast<std::size_t>(next() % n);
-    }
-    bool chance(std::size_t percent) { return below(100) < percent; }
-};
-
-const char* const WORDS[] = {"alpha",
-                             "beta",
-                             "gamma",
-                             "x",
-                             "key",
-                             "a b",
-                             "k1",
-                             "k2",
-                             "k3",
-                             "-5",
-                             "a:b",
-                             "a#b",
-                             "1,2",
-                             "a[0]",
-                             "it's",
-                             "q\"q",
-                             "42",
-                             "1.5",
-                             "true",
-                             "No",
-                             "ON",
-                             "~",
-                             "null",
-                             "Null",
-                             "0x1F",
-                             "1e3",
-                             ".inf",
-                             "-.NaN",
-                             "+7",
-                             "9007199254740993",
-                             "18446744073709551615",
-                             "-9223372036854775808"};
-const char* const KEYS[] = {"a",   "b",  "c",    "id", "name", "k 1", "x-y",
-                            "z_z", "10", "true", "A",  "ab",   "abc", "a.b"};
-
-class Gen {
-   public:
-    Gen(std::uint64_t seed) : rng_{seed * 0x9E3779B97F4A7C15ull + 12345} {}
-
-    dstd::String text() {
-        out_.clear();
-        crlf_ = rng_.chance(8);
-        step_ = 1 + rng_.below(4);
-        if (rng_.chance(3)) out_ += "\xEF\xBB\xBF";
-        std::size_t docs = rng_.chance(10) ? 1 + rng_.below(3) : 0;
-        if (rng_.chance(8)) {
-            const std::size_t roots = rng_.chance(30) ? 2 : 1;
-            for (std::size_t d = 0; d < roots; ++d) {
-                const dstd::String s = rng_.chance(70) ? multi(-1) : scalar(-1);
-                if (roots > 1 || rng_.chance(50)) {
-                    out_ += "---";
-                    out_ += rng_.chance(60) ? " " + s + "\n" : "\n" + s + "\n";
-                } else {
-                    out_ += s + "\n";
-                }
-                if (rng_.chance(20)) line(0, "...");
-            }
-        } else if (docs == 0) {
-            block(0, rng_.chance(40));
-        } else {
-            for (std::size_t d = 0; d < docs; ++d) {
-                line(0, "---");
-                block(0, rng_.chance(40));
-                if (rng_.chance(20)) line(0, "...");
-            }
-        }
-        dstd::String text;
-        for (char c : out_) {
-            if (c == '\n' && crlf_) text += '\r';
-            text += c;
-        }
-        return text;
-    }
-
-   private:
-    void line(std::size_t indent, dstd::StringView body) {
-        noise(indent);
-        out_ += dstd::String(indent, ' ');
-        out_ += body;
-        if (rng_.chance(5)) out_ += "  ";
-        out_ += '\n';
-    }
-
-    void noise(std::size_t indent) {
-        if (rng_.chance(6)) out_ += "\n";
-        if (rng_.chance(6)) {
-            out_ += dstd::String(rng_.below(indent + 3), ' ');
-            out_ += "# note: a comment\n";
-        }
-    }
-
-    dstd::String base_key() {
-        dstd::String k = KEYS[rng_.below(sizeof(KEYS) / sizeof(KEYS[0]))];
-        if (rng_.chance(30)) k += dstd::fmt<"{}">(rng_.below(40));
-        return k;
-    }
-
-    dstd::String decorate(const dstd::String& k) {
-        if (rng_.chance(8)) return "\"" + k + "\"";
-        if (rng_.chance(5)) return "'" + k + "'";
-        return k;
-    }
-
-    dstd::String key() { return decorate(base_key()); }
-
-    // A key that the map has not got, most of the time.
-    dstd::String fresh_key(dstd::Vector<dstd::String>& used) {
-        dstd::String base = base_key();
-        for (int tries = 0; tries < 8 && !rng_.chance(3); ++tries) {
-            bool seen = false;
-            for (const auto& u : used) seen = seen || u == base;
-            if (!seen) break;
-            base = base_key();
-        }
-        used.push_back(base);
-        return decorate(base);
-    }
-
-    // A scalar that goes on in later lines: its text from the first line on,
-    // with no final newline. `limit` is the indent that its later lines must
-    // exceed, -1 at the top level.
-    dstd::String multi(int limit) {
-        const std::size_t kind = rng_.below(10);
-        if (kind < 4) return block_text(limit);
-        if (kind < 7) return plain_text(limit);
-        return quoted_text(limit);
-    }
-
-    dstd::String body_indent(int limit, std::size_t extra) {
-        const int base = limit < 0 ? 0 : limit + 1;
-        return dstd::String(static_cast<std::size_t>(base) + extra, ' ');
-    }
-
-    static const char* line_word(Rng& rng) {
-        static const char* const LINES[] = {
-            "text",   "more text", "a: b",    "- item", "# not a comment",
-            "'q'",    "\"d\"",     "x: y: z", "k:",     "- - a",
-            "{a: b}", "[1, 2]",    "&x y",    "*z",     "!tag",
-            "|",      ">",         "...x",    "---x",   "? k",
-            "a:b",    "a #b",      "50% off"};
-        return LINES[rng.below(sizeof(LINES) / sizeof(LINES[0]))];
-    }
-
-    dstd::String block_text(int limit) {
-        dstd::String out = rng_.chance(50) ? "|" : ">";
-        std::size_t digit = rng_.chance(25) ? 1 + rng_.below(3) : 0;
-        dstd::String chomp;
-        const std::size_t c = rng_.below(3);
-        if (c == 1) chomp = "-";
-        if (c == 2) chomp = "+";
-        if (rng_.chance(50)) {
-            if (digit != 0) out += dstd::fmt<"{}">(digit);
-            out += chomp;
-        } else {
-            out += chomp;
-            if (digit != 0) out += dstd::fmt<"{}">(digit);
-        }
-        if (rng_.chance(3)) out += rng_.chance(50) ? "x" : "0";
-        if (rng_.chance(12)) out += " # c";
-        const std::size_t base =
-            limit < 0 ? 0 : static_cast<std::size_t>(limit) + 1;
-        std::size_t indent = digit != 0 ? base - (limit < 0 ? 0 : 1) + digit
-                                        : base + rng_.below(3);
-        if (rng_.chance(5) && indent > 0) --indent;
-        const std::size_t lines = rng_.below(7);
-        for (std::size_t i = 0; i < lines; ++i) {
-            out += '\n';
-            const std::size_t kind = rng_.below(10);
-            if (kind < 2) {
-                if (rng_.chance(30))
-                    out += dstd::String(rng_.below(indent + 3), ' ');
-            } else {
-                out += dstd::String(
-                    indent + (rng_.chance(20) ? 1 + rng_.below(2) : 0), ' ');
-                out += line_word(rng_);
-                if (rng_.chance(8)) out += "\tt";
-                if (rng_.chance(8)) out += "  ";
-            }
-        }
-        return out;
-    }
-
-    dstd::String plain_text(int limit) {
-        dstd::String out = WORDS[rng_.below(sizeof(WORDS) / sizeof(WORDS[0]))];
-        const std::size_t lines = 1 + rng_.below(3);
-        for (std::size_t i = 0; i < lines; ++i) {
-            while (rng_.chance(25)) out += rng_.chance(50) ? "\n" : "\n  ";
-            out += '\n';
-            const std::size_t extra = rng_.chance(5) ? 0 : rng_.below(3);
-            out += body_indent(limit, extra);
-            out += line_word(rng_);
-            if (rng_.chance(6)) out += " # tail";
-        }
-        return out;
-    }
-
-    dstd::String quoted_text(int limit) {
-        const bool is_double = rng_.chance(60);
-        const char q = is_double ? '"' : '\'';
-        dstd::String out(1, q);
-        const std::size_t lines = 1 + rng_.below(3);
-        for (std::size_t i = 0; i <= lines; ++i) {
-            if (i != 0) {
-                while (rng_.chance(25)) out += rng_.chance(50) ? "\n" : "\n  ";
-                out += '\n';
-                const std::size_t extra = rng_.chance(5) ? 0 : rng_.below(3);
-                out += body_indent(limit, extra);
-            }
-            out += is_double ? escaped_dq() : escaped_sq();
-            if (i != lines && is_double && rng_.chance(15)) out += "\\";
-            if (i != lines && rng_.chance(15)) out += " ";
-        }
-        out += q;
-        if (rng_.chance(8)) out += " # tail";
-        if (rng_.chance(2)) out += " z";
-        return out;
-    }
-
-    dstd::String scalar(int limit = 0) {
-        if (limit >= -1 && rng_.chance(25)) return multi(limit);
-        const std::size_t kind = rng_.below(10);
-        dstd::String s;
-        if (kind < 5) {
-            s = WORDS[rng_.below(sizeof(WORDS) / sizeof(WORDS[0]))];
-        } else if (kind == 5) {
-            s = "\"" + escaped_dq() + "\"";
-        } else if (kind == 6) {
-            s = "'" + escaped_sq() + "'";
-        } else if (kind == 7) {
-            s = dstd::fmt<"{}">(static_cast<std::int64_t>(rng_.next() >> 20) -
-                                (1ll << 42));
-        } else if (kind == 8) {
-            s = rng_.chance(50) ? "{}" : "[]";
-        } else {
-            s = "";
-        }
-        if (!s.empty() && rng_.chance(10)) s += " # trailing";
-        return s;
-    }
-
-    dstd::String escaped_dq() {
-        static const char* const PARTS[] = {
-            "a",       "b c",     "\\n",  "\\t", "\\\\", "\\\"",        "\\x41",
-            "\\u00e9", "\\u2028", "it's", ": ",  " #x",  "\\/",         "\\0",
-            "\\e",     "\\_",     "\\N",  "\\L", "\\P",  "\\U0001F600", "{}"};
-        dstd::String s;
-        const std::size_t n = rng_.below(5);
-        for (std::size_t i = 0; i < n; ++i)
-            s += PARTS[rng_.below(sizeof(PARTS) / sizeof(PARTS[0]))];
-        return s;
-    }
-
-    dstd::String escaped_sq() {
-        static const char* const PARTS[] = {"a",   "b c", "''",  "\"",
-                                            "\\n", ": ",  " #x", "[]"};
-        dstd::String s;
-        const std::size_t n = rng_.below(5);
-        for (std::size_t i = 0; i < n; ++i)
-            s += PARTS[rng_.below(sizeof(PARTS) / sizeof(PARTS[0]))];
-        return s;
-    }
-
-    // One map or sequence at `indent`.
-    void block(std::size_t indent, bool is_seq, std::size_t depth = 0) {
-        const std::size_t n = 1 + rng_.below(depth == 0 ? 6 : 4);
-        dstd::Vector<dstd::String> used;
-        for (std::size_t i = 0; i < n; ++i) {
-            if (is_seq) {
-                item(indent, depth);
-            } else {
-                entry(indent, fresh_key(used), depth, dstd::String());
-            }
-        }
-    }
-
-    void entry(std::size_t indent, const dstd::String& k, std::size_t depth,
-               dstd::String prefix) {
-        const std::size_t kind = rng_.below(10);
-        const std::size_t child = indent + step_ + (rng_.chance(10) ? 1 : 0);
-        if (kind < 6 || depth >= 4) {
-            noise(indent);
-            const dstd::String s = scalar(static_cast<int>(indent));
-            if (!s.empty() && s[0] != '|' && s[0] != '>' && rng_.chance(15)) {
-                out_ += dstd::String(indent, ' ') + prefix + k + ":\n" +
-                        dstd::String(indent + 1 + rng_.below(2), ' ') + s +
-                        "\n";
-                return;
-            }
-            out_ += dstd::String(indent, ' ') + prefix + k + ":" +
-                    (s.empty() ? dstd::String() : " " + s);
-            if (s.empty() && rng_.chance(10)) out_ += " # c";
-            out_ += '\n';
-        } else {
-            line(indent, prefix + k + ":");
-            block(kind == 9 && rng_.chance(40) ? indent : child, kind == 9,
-                  depth + 1);
-        }
-    }
-
-    void item(std::size_t indent, std::size_t depth) {
-        const std::size_t kind = rng_.below(10);
-        const std::size_t child = indent + step_ + (rng_.chance(10) ? 1 : 0);
-        if (kind < 4 || depth >= 4) {
-            const dstd::String s = scalar(static_cast<int>(indent));
-            if (!s.empty() && s[0] != '|' && s[0] != '>' && rng_.chance(15))
-                line(indent, "-\n" + dstd::String(indent + 1, ' ') + s);
-            else
-                line(indent, s.empty() ? "-" : "- " + s);
-        } else if (kind < 8) {
-            // A compact map: `- k: v` and its next members.
-            noise(indent);
-            const std::size_t gap = 1 + (rng_.chance(10) ? rng_.below(3) : 0);
-            const std::size_t col = indent + 1 + gap;
-            dstd::String body =
-                dstd::String(indent, ' ') + "-" + dstd::String(gap, ' ');
-            const std::size_t members = 1 + rng_.below(3);
-            dstd::Vector<dstd::String> used;
-            for (std::size_t m = 0; m < members; ++m) {
-                if (m == 0) {
-                    out_ += body;
-                    entry_at_col(col, fresh_key(used), depth);
-                } else {
-                    entry_at_col(col, fresh_key(used), depth, true);
-                }
-            }
-        } else if (kind == 8) {
-            line(indent, "-");
-            block(child, rng_.chance(50), depth + 1);
-        } else {
-            line(indent, "- " + dstd::String(rng_.chance(50) ? "- a" : "[a]"));
-        }
-    }
-
-    // The rest of a map entry whose indent is already written (first) or not.
-    void entry_at_col(std::size_t col, const dstd::String& k, std::size_t depth,
-                      bool indent = false) {
-        if (indent) out_ += dstd::String(col, ' ');
-        const std::size_t kind = rng_.below(10);
-        if (kind < 7 || depth >= 3) {
-            const dstd::String s = scalar(static_cast<int>(col));
-            out_ += k + ":" + (s.empty() ? dstd::String() : " " + s) + "\n";
-        } else {
-            out_ += k + ":\n";
-            block(kind == 9 && rng_.chance(40) ? col : col + step_, kind == 9,
-                  depth + 1);
-        }
-    }
-
-    Rng rng_;
-    dstd::String out_;
-    bool crlf_ = false;
-    std::size_t step_ = 2;
-};
-
-dstd::String mutate(dstd::String text, Rng& rng) {
-    static const char ALPHABET[] = ": -#'\"\\[]{}&*!|>%@`\t\n\r,?~abc19";
-    const std::size_t n = 1 + rng.below(3);
-    for (std::size_t i = 0; i < n && !text.empty(); ++i) {
-        const std::size_t at = rng.below(text.size());
-        const std::size_t op = rng.below(5);
-        const char c = ALPHABET[rng.below(sizeof(ALPHABET) - 1)];
-        if (op == 0) {
-            text.erase(at, 1);
-        } else if (op == 1) {
-            text.insert(at, 1, c);
-        } else if (op == 2) {
-            text[at] = c;
-        } else if (op == 3) {
-            text.insert(at, dstd::String(1 + rng.below(3), ' '));
-        } else {
-            const std::size_t eol = text.find('\n', at);
-            if (eol != dstd::String::npos) text.erase(eol, 1);
-        }
-    }
-    return text;
-}
-
-// Changes the shape of the text a line at a time: the indent of a line, a
-// repeated line, a dropped line, two swapped lines.
-dstd::String mutate_lines(const dstd::String& text, Rng& rng) {
-    dstd::Vector<dstd::String> lines;
-    std::size_t at = 0;
-    while (at < text.size()) {
-        std::size_t eol = text.find('\n', at);
-        if (eol == dstd::String::npos) eol = text.size() - 1;
-        lines.push_back(text.substr(at, eol - at + 1));
-        at = eol + 1;
-    }
-    if (lines.empty()) return text;
-    const std::size_t n = 1 + rng.below(3);
-    for (std::size_t i = 0; i < n && !lines.empty(); ++i) {
-        const std::size_t k = rng.below(lines.size());
-        const std::size_t op = rng.below(5);
-        if (op == 0) {
-            lines[k].insert(0, dstd::String(1 + rng.below(3), ' '));
-        } else if (op == 1) {
-            const std::size_t gone = std::min<std::size_t>(
-                1 + rng.below(3), lines[k].find_first_not_of(' '));
-            if (gone != dstd::String::npos) lines[k].erase(0, gone);
-        } else if (op == 2) {
-            lines.insert(lines.begin() + static_cast<std::ptrdiff_t>(k),
-                         lines[k]);
-        } else if (op == 3) {
-            lines.erase(lines.begin() + static_cast<std::ptrdiff_t>(k));
-        } else if (k + 1 < lines.size()) {
-            std::swap(lines[k], lines[k + 1]);
-        }
-    }
-    dstd::String out;
-    for (const auto& line : lines) out += line;
-    return out;
 }
 
 }  // namespace
 
-TEST_CASE("line index: accepted subset reads as the tape reader does") {
-    const char* const ACCEPTED[] = {
-        "a: 1\nb: 2\n",
-        "a: 1\nb: 2",
-        "a: 1\r\nb: 2\r\n",
-        "a:\n  b: 1\n  c:\n    - x\n    - y\n",
-        "- a\n- b: 1\n  c: 2\n-\n",
-        "- a: 1\n  b: 2\n- c: 3\n",
-        "-   a: 1\n    b: 2\n",
-        "a: 'it''s'\nb: \"x\\ty\\u00e9\"\nc: \"\"\nd: ''\n",
-        "\"a b\": 1\n'c': 2\n\"\": 3\n",
-        "a: 1 # c\n# full\n\nb: 2  # d\n",
-        "foo:\n- 42\nbar:\n  - 44\n",
-        "one:\n- 2\n- 3\nfour: 5\n",
-        "- k:\n  - a\n  - b\n  z: 1\n- k:\n  - c\n",
-        "a:\n- x: 1\n  y:\n  - q\nb: 2\n",
-        "a: {}\nb: []\nc:\n",
-        "- {}\n- []\n- ~\n- null\n-\n",
-        "a: ~\nb: null\nc: Null\nd: NULL\ne:\n",
-        "a: -5\nb: a:b\nc: a#b\nd: 1,2\ne: it's\nf: q\"q\n",
-        "---\na: 1\n---\nb: 2\n",
-        "---\na: 1\n...\n---\nb: 2\n...\n",
-        "a:\n  - b: 1\n    c:\n      d: 2\n  - e\n",
-        "k: v   \n",
-        "k:    v\n",
-        "a : 1\n",
-        "a: \"q\" # c\n",
-        "  # leading comment\na: 1\n",
-        "a: 18446744073709551615\nb: -9223372036854775808\nc: 1e3\nd: .inf\n",
-    };
-    for (const char* text : ACCEPTED) {
+TEST_CASE("line index: every text builds, and a fault is an error") {
+    LineIndex ix;
+    for (const char* text :
+         {"a: 1\n", "[a, b]\n", "{a: [1,\n 2]}\n", "- - a\n  - b\n",
+          "--- |\n x\n", "", "\n\n", "# c\n", "a: \"x\n y\"\n"}) {
         INFO("text: ", dstd::String(text));
-        CHECK(same_as_tape(text));
+        CHECK(ix.build(text, std::strlen(text)) == yaml::BuildResult::Accepted);
+    }
+    for (const char* text :
+         {"a: &x 1\n", "a: [1\n", "a: 1\na: 2\n", "- a\nb: 1\n"}) {
+        INFO("text: ", dstd::String(text));
+        CHECK(ix.build(text, std::strlen(text)) == yaml::BuildResult::Invalid);
     }
 }
 
-TEST_CASE("line index: declined text still reads as the tape reader does") {
-    const char* const DECLINED[] = {
-        "a: 1\na: 2\n",
-        "a: 1\n  b\n",
-        "a: b: c\n",
-        "a: |\n  text\n",
-        "a: >\n  text\n",
-        "a: &x 1\nb: *x\n",
-        "a: !!str 1\n",
-        "? a\n: b\n",
-        "%YAML 1.2\n---\na: 1\n",
-        "a: [1, 2]\n",
-        "a: {b: 1}\n",
-        "a: 'multi\n  line'\n",
-        "a: \"multi\n  line\"\n",
-        "a: 1\n\tb: 2\n",
-        "<<: {a: 1}\n",
-        "~: 1\n",
-        "null: 1\n",
-        "   a: 1\n",
-        "a: 1\n b: 2\n",
-        "a:\n    b: 1\n  c: 2\n",
-        "just text\n",
-        "---\n---\na: 1\n",
-        "a: 1\n...\n",
-        "a: 1\n---\n",
-        "\n",
-        "# only a comment\n",
-        "",
-        "a: 1\xEF\xBB\xBF\n",
-        "a: \"\\q\"\n",
-        "a: \"\\x4\"\n",
-        "- - a\n",
-        "a: 1\r",
+TEST_CASE("line index: each kind of error, with its message") {
+    struct Case {
+        const char* what;
+        const char* text;
+        const char* message;
     };
-    for (const char* text : DECLINED) {
-        INFO("text: ", text);
-        same_as_tape(text);
-    }
-    // The ones that must be declined.
-    for (const char* text : {"a: 1\na: 2\n", "a: b: c\n", "a: &x 1\nb: *x\n",
-                             "~: 1\n", "<<: {a: 1}\n"}) {
-        const auto both = parse_both(text);
-        CHECK_FALSE(both.line_accepted);
-    }
-}
-
-TEST_CASE("line index: a leading byte order mark is no part of the text") {
-    const char* const TEXTS[] = {
-        "\xEF\xBB\xBF"
-        "a: 1\nb: 2\n",
-        "\xEF\xBB\xBF"
-        "- a\n- b: 1\n  c: 2\n",
-        "\xEF\xBB\xBF"
-        "---\na: 1\n",
-        "\xEF\xBB\xBF"
-        "# c\na: 1\n",
-        "\xEF\xBB\xBF"
-        "\"a\": \"x\"\nb:\n  - 1\n",
-        "\xEF\xBB\xBF"
-        "a: 1\na: 2\n",
-        "\xEF\xBB\xBF"
-        "x-y: 1\nz_z26:\n\n- 10: +7\n  x-y: 69\n  name: No- \"\\P #x: "
-        "\"\n\"abc\":\n",
-        "\xEF\xBB\xBF"
-        "\n",
-        "\xEF\xBB\xBF",
+    const Case CASES[] = {
+        {"duplicate key", "a: 1\nb: 2\na: 3\n",
+         "n.yaml:3:1: duplicate key 'a'"},
+        {"duplicate key, quoted", "\"a\": 1\n'a': 2\n",
+         "n.yaml:2:1: duplicate key 'a'"},
+        {"duplicate key in a compact map", "- a: 1\n  b: 2\n  a: 3\n",
+         "n.yaml:3:3: duplicate key 'a'"},
+        {"duplicate key in a flow map", "{a: 1, b: 2, a: 3}\n",
+         "n.yaml:1:14: duplicate key 'a'"},
+        {"indent matches no level", "a:\n    b: 1\n  c: 2\n",
+         "n.yaml:3:3: indentation does not match any open block"},
+        {"item after keys", "a: 1\n- b\n",
+         "n.yaml:2:1: a sequence item cannot follow mapping keys at the same "
+         "indentation"},
+        {"key after items", "- a\nb: 1\n",
+         "n.yaml:2:1: a mapping key cannot follow sequence items at the same "
+         "indentation"},
+        {"unterminated double quote", "a: \"abc\n",
+         "n.yaml:1:4: unterminated quoted scalar"},
+        {"text after a quoted value", "a: \"x\" y\n",
+         "n.yaml:1:8: unexpected text after a quoted scalar"},
+        {"unknown escape", "a: \"\\q\"\n",
+         "n.yaml:1:5: unknown escape character 'q'"},
+        {"deeper line after a quoted value", "a: \"x\"\n  y\n",
+         "n.yaml:2:3: a complete value cannot go on in a deeper line"},
+        {"key in a plain value that goes on", "a: b\n  c: d\n",
+         "n.yaml:2:4: mapping values are not allowed in a multi-line plain "
+         "scalar"},
+        {"colon in a plain value", "a: b: c\n",
+         "n.yaml:1:5: mapping values are not allowed in this context"},
+        {"text after a flow value", "a: [1] x\n",
+         "n.yaml:1:8: unexpected text after a flow collection"},
+        {"unterminated flow", "a: [1, 2\n",
+         "n.yaml:1:4: unterminated flow sequence"},
     };
-    for (const char* text : TEXTS) {
-        INFO("text: ", text);
-        same_as_tape(text);
+    for (const Case& c : CASES) {
+        INFO("kind: ", dstd::String(c.what));
+        LineIndex probe;
+        CHECK(probe.build(c.text, std::strlen(c.text)) ==
+              yaml::BuildResult::Invalid);
+        CHECK(error_of(c.text) == dstd::String(c.message));
     }
-    const auto both = parse_both(
-        "\xEF\xBB\xBF"
-        "a: 1\nb: 2\n");
-    CHECK(both.line_accepted);
-    CHECK(both.line_dump == parse_both("a: 1\nb: 2\n").line_dump);
-    // A byte order mark inside the text stays a character of the key.
-    const auto inside = parse_both(
-        "a: 1\n\xEF\xBB\xBF"
-        "b: 2\n");
-    CHECK_FALSE(inside.line_accepted);
 }
 
-TEST_CASE(
-    "line index: a column past the 16-bit limit declines or errors as the tape "
-    "does") {
-    const dstd::String wide(70000, ' ');
-    const dstd::String edge(65535, ' ');
-    const dstd::String drop(4465, ' ');
-    const dstd::String texts[] = {
-        dstd::String("-") + wide + "a: 1\n" + drop + "b: 2\n",
-        dstd::String("-") + edge + "a: 1\nb: 2\n",
-        dstd::String("- a: 1\n-") + edge + "a: 1\nb: 2\n",
-        edge + "a: 1\n",
-        dstd::String("a: 1\n") + edge + "\nb: 2\n",
-        dstd::String("a: 1\n") + dstd::String(65534, ' ') + "\nb: 2\n",
+TEST_CASE("line index: a refused feature, at every position, with its column") {
+    struct Where {
+        const char* head;
+        const char* tail;
+        std::size_t column;
     };
-    for (const auto& text : texts) {
-        same_as_tape(text);
-        CHECK(parse_both(text).line_accepted ==
-              (text.find("a: 1\n" + dstd::String(65534, ' ') + "\n") == 0));
+    struct Feature {
+        const char* text;
+        const char* reason;
+    };
+    const Feature FEATURES[] = {{"&x v", "anchors are not supported"},
+                                {"*x", "aliases are not supported"},
+                                {"!!str v", "tags are not supported"}};
+    const Where WHERES[] = {
+        {"k: ", "\n", 4},   {"- ", "\n", 3},       {"", "\n", 1},
+        {"k: [", "]\n", 5}, {"k: {a: ", "}\n", 8}, {"- k: ", "\n", 6},
+        {"{", ": 1}\n", 2},
+    };
+    for (const Feature& f : FEATURES) {
+        for (const Where& w : WHERES) {
+            const dstd::String text =
+                dstd::String(w.head) + f.text + dstd::String(w.tail);
+            INFO("text: ", text);
+            const dstd::String message = error_of(text);
+            const dstd::String expected =
+                dstd::fmt<"n.yaml:1:{}: {}">(w.column, f.reason);
+            CHECK(message == expected);
+        }
     }
+    CHECK(error_of("? a\n: b\n") ==
+          "n.yaml:1:1: complex keys are not supported");
+    CHECK(error_of("{? a: b}\n") ==
+          "n.yaml:1:2: complex keys are not supported");
+    CHECK(error_of("~: 1\n") == "n.yaml:1:1: a null key is not supported");
+    CHECK(error_of("{null: 1}\n") == "n.yaml:1:2: a null key is not supported");
+    CHECK(error_of("[a]: 1\n") == "n.yaml:1:4: a collection cannot be a key");
+    CHECK(error_of("%YAML 1.2\n---\na: 1\n") ==
+          "n.yaml:1:1: directives are not supported");
 }
 
-TEST_CASE("line index: every escape reads as the tape reader does") {
-    for (const char* escape :
-         {"\\\\",    "\\\"",    "\\/",         "\\n",         "\\t",
-          "\\r",     "\\b",     "\\f",         "\\a",         "\\e",
-          "\\v",     "\\0",     "\\_",         "\\N",         "\\L",
-          "\\P",     "\\x41",   "\\xe9",       "\\u00e9",     "\\u20ac",
-          "\\u2028", "\\uD83D", "\\U0001F600", "\\U00110000", "\\ ",
-          "\\q",     "\\x00",   "\\u0000"}) {
-        dstd::String text = "a: \"x";
-        text += escape;
-        text += "y\"\n";
-        INFO("escape: ", escape);
-        same_as_tape(text);
-        dstd::String key = "\"k";
-        key += escape;
-        key += "\": 1\nk: 2\n";
-        same_as_tape(key);
-    }
+TEST_CASE("line index: a tab in indentation and a tab in a value") {
+    const Document doc = must_parse("a:\t1\nb: x\ty\nc:\t[1,\t2]\n");
+    CHECK(doc.root().find("a")->raw() == "1");
+    CHECK(doc.root().find("b")->raw() == "x\ty");
+    CHECK(doc.root().find("c")->is_array());
+    CHECK(error_of("a:\n\tb: 1\n").find("n.yaml:2:") == 0);
+    CHECK(error_of("a:\n  \tb: 1\n").find("n.yaml:2:") == 0);
+    CHECK(error_of("- \t- a\n").find("n.yaml:1:") == 0);
+    CHECK(must_parse("\t[a, b]\n").root().is_array());
 }
 
-TEST_CASE("line index: a differential fuzz of generated and mutated text") {
-    std::size_t accepted = 0;
-    std::size_t pure_accepted = 0;
-    std::size_t SEEDS = 4000;
-    if (const char* more = std::getenv("YAML_FUZZ_SEEDS"))
-        SEEDS = std::strtoul(more, nullptr, 10);
-    std::size_t skipped = 0;
-    for (std::size_t seed = 1; seed <= SEEDS; ++seed) {
-        Gen gen(seed);
-        const dstd::String text = gen.text();
-        skipped += dftu_yaml_test::is_known_difference(text) ? 1 : 0;
-        const bool took = same_as_tape(text);
-        pure_accepted += took ? 1 : 0;
-        Rng rng{seed * 7919 + 1};
-        const dstd::String mutated = mutate(text, rng);
-        accepted += same_as_tape(mutated) ? 1 : 0;
-        same_as_tape(mutate_lines(text, rng));
+TEST_CASE("line index: a nested sequence on the line of its dash") {
+    const Document doc = must_parse("- - a\n  - b\n- - - c\n    - d\n- e\n");
+    CHECK(dump(doc.root()) == "[['a','b',],[['c','d',],],'e',]");
+    const Document in_map = must_parse("k:\n  - - a\n    - b\n  - c\n");
+    CHECK(dump(in_map.root()) == "{k:[['a','b',],'c',],}");
+    const Document mixed = must_parse("- - k: 1\n    m: 2\n  - x\n");
+    CHECK(dump(mixed.root()) == "[[{k:'1',m:'2',},'x',],]");
+}
+
+TEST_CASE("line index: multi-line flow values and a flow value then text") {
+    const Document doc = must_parse(
+        "a: [1,\n  [2,\n   3],\n  {k: v,\n   l: w}]\nb: {x: 1,\n  y: [2,\n "
+        "3]}\nc: end\n");
+    CHECK(dump(doc.root()) ==
+          "{a:['1',['2','3',],{k:'v',l:'w',},],b:{x:'1',y:['2','3',],},c:'end',"
+          "}");
+    CHECK(error_of("a: [1,\n  2] x\n").find("n.yaml:2:") == 0);
+    CHECK(error_of("a: {k: 1}\n  more\n").find("n.yaml:2:") == 0);
+    CHECK(error_of("a: [1,\n2]\n").find("n.yaml:") == 0);
+}
+
+TEST_CASE("line index: a JSON text of many megabytes on one line") {
+    dstd::String json = "[";
+    for (int i = 0; json.size() < (std::size_t{50} << 20); ++i) {
+        if (i != 0) json += ',';
+        json +=
+            dstd::fmt<"{\"id\":{},\"tags\":[\"a\",\"b\"],\"v\":\"s{}\"}">(i, i);
     }
-    MESSAGE("accepted: ", pure_accepted, " of ", SEEDS, " generated, ",
-            accepted, " of ", SEEDS, " mutated");
-    CHECK(pure_accepted > SEEDS / 4);
-    MESSAGE("skipped as a known difference: ", skipped, " of ", SEEDS);
-    CHECK(skipped < SEEDS / 10);
-    for (const auto& [pair, count] : reason_log())
-        MESSAGE("error reasons ", count, "x: ", pair);
+    json += "]\n";
+    const Document doc = must_parse(json);
+    REQUIRE(doc.root().is_array());
+    std::size_t count = 0;
+    doc.root().for_each_element([&](Value element) {
+        CHECK(element.find("id")->as_uint() == count);
+        ++count;
+    });
+    CHECK(count > 1000000);
 }
 
 TEST_CASE("line index: lines and quotes across 64-byte blocks") {
     for (std::size_t pad = 0; pad < 200; ++pad) {
-        const dstd::String padding(pad, 'p');
-        const dstd::String texts[] = {
-            "# " + padding + "\na: 'q''q'\nb: \"x\\ny\"\nc: 1\n",
-            "a: " + padding + "\nb: 'q''q'\nc: \"x\\ny\" # trailing\n",
-            "k" + padding + ": v\n- x\n",
-            "- " + padding + ": 1\n  b: 2\n",
-            "a: 1\r\nb: \"" + padding + "\"\r\nc: '" + padding + "'\r\n",
-            dstd::String(pad, '\n') + "a: 1\n",
-            dstd::String(pad, ' ') + "# c\na: 1\n",
-            "a:\n" + dstd::String(pad % 8, ' ') + " b: " + padding + "\n",
-            "k: " + padding + ":\n",
-            "k: " + padding + " # c\n",
-        };
-        for (const auto& text : texts) same_as_tape(text);
+        INFO("pad: ", pad);
+        const dstd::String p(pad + 1, 'p');
+        const dstd::String key = "k" + p;
+        const Document block = must_parse(key + ": |\n  one\n  two\nz: 1\n");
+        CHECK(block.root().find(key)->raw() == "one\ntwo\n");
+        CHECK(block.root().find("z")->as_uint() == 1);
+        const Document folded =
+            must_parse("k: >\n  " + p + "\n  two\n\n  three\nz: 1\n");
+        CHECK(folded.root().find("k")->raw() == p + " two\nthree\n");
+        const Document dq =
+            must_parse("k: \"" + p + "\n  two\n  \\x41 three\"\nz: 1\n");
+        CHECK(dq.root().find("k")->raw() == p + " two A three");
+        const Document sq =
+            must_parse("k: '" + p + "\n\n  it''s\n  three'\nz: 1\n");
+        CHECK(sq.root().find("k")->raw() == p + "\nit's three");
+        const Document plain =
+            must_parse("k: " + p + "\n  two\n  three\nz: 1\n");
+        CHECK(plain.root().find("k")->raw() == p + " two three");
+        const Document crlf =
+            must_parse("a: 1\r\nb: \"" + p + "\"\r\nc: '" + p + "'\r\n");
+        CHECK(crlf.root().find("b")->raw() == p);
+        CHECK(crlf.root().find("c")->raw() == p);
+        const Document comment = must_parse(dstd::String(pad, ' ') +
+                                            "# c\na: 'q''q'\nb: \"x\\ny\"\n");
+        CHECK(comment.root().find("a")->raw() == "q'q");
+        CHECK(comment.root().find("b")->raw() == "x\ny");
+        const Document lead =
+            must_parse(dstd::String(pad, '\n') + "a: |\n  x\n  y\nb: 1\n");
+        CHECK(lead.root().find("a")->raw() == "x\ny\n");
+        const Document keep = must_parse("- |+\n  " + p + "\n\n\n- b\n");
+        CHECK(dump(keep.root()) == "['" + p + "\n\n\n','b',]");
     }
-    for (std::size_t pad = 0; pad < 64; ++pad) {
-        dstd::String text = dstd::String(pad, ' ');
-        text += "# x\n";
-        text += "key: \"value with : and # inside\"\nother: 'it''s'\n";
-        const auto both = parse_both(text);
-        CHECK(both.line_dump == both.tape_dump);
-        CHECK(both.line_accepted);
+}
+
+TEST_CASE("line index: scalars across the 4096-byte batches of stage 1") {
+    for (std::size_t base : {4096, 8192}) {
+        for (std::size_t pad = base - 80; pad < base + 70; ++pad) {
+            INFO("pad: ", pad);
+            const dstd::String filler =
+                "# " + dstd::String(pad > 2 ? pad - 2 : 0, 'p') + "\n";
+            CHECK(must_parse(filler + "a: |\n  one\n  two\n\n  three\nb: 1\n")
+                      .root()
+                      .find("a")
+                      ->raw() == "one\ntwo\n\nthree\n");
+            CHECK(must_parse(filler +
+                             "a: >-\n  one\n  two\n\n   more\n  end\nb: 1\n")
+                      .root()
+                      .find("a")
+                      ->raw() == "one two\n\n more\nend");
+            CHECK(must_parse(filler + "a: \"one\n  two\n\n  three\"\nb: 1\n")
+                      .root()
+                      .find("a")
+                      ->raw() == "one two\nthree");
+            CHECK(must_parse(filler + "a: 'one\n  two\n\n  three'\nb: 1\n")
+                      .root()
+                      .find("a")
+                      ->raw() == "one two\nthree");
+            CHECK(must_parse(filler + "a: one\n  two\n\n  three\nb: 1\n")
+                      .root()
+                      .find("a")
+                      ->raw() == "one two\nthree");
+            CHECK(must_parse(filler + "a: [1,\n  2]\nb: 1\n")
+                      .root()
+                      .find("a")
+                      ->is_array());
+            CHECK(must_parse(filler + "--- |\n x\n y\n...\n").root().raw() ==
+                  "x\ny\n");
+        }
     }
 }
 
 TEST_CASE("line index: the scalar Highway target builds the same index") {
     dstd::String text;
     for (std::size_t i = 0; i < 3000; ++i) {
-        Gen gen(i + 1);
-        text += "- id: " + dstd::fmt<"{}">(i) + "\n  name: \"n" +
-                dstd::fmt<"{}">(i * 7) + "\"\n  list:\n    - a\n    - 'b''c'\n";
+        text += "- id: " + dstd::fmt<"{}">(i) + "\n  name: \"n\\t" +
+                dstd::fmt<"{}">(i * 7) +
+                "\"\n  list:\n    - a\n    - 'b''c'\n  f: [1,\n    {k: v}]\n  "
+                "d: |\n    x\n";
         if (i % 7 == 0) text += "  # comment\n\n";
     }
     LineIndex best;
@@ -839,21 +305,15 @@ TEST_CASE("line index: the scalar Highway target builds the same index") {
         scalar.build(text.data(), text.size()) == yaml::BuildResult::Accepted;
     yaml::detail::set_scalar_line_masks_for_test(false);
     REQUIRE(ok);
-    REQUIRE(best.line_count == scalar.line_count);
-    CHECK(std::memcmp(best.entries.data(), scalar.entries.data(),
-                      (best.line_count + 1) * sizeof(yaml::LineEntry)) == 0);
-    CHECK(std::memcmp(best.next.data(), scalar.next.data(),
-                      (best.line_count + 1) * sizeof(std::uint32_t)) == 0);
-    CHECK(best.escapes.size() == scalar.escapes.size());
+    check_same_index(best, scalar);
 }
 
 TEST_CASE("line index: the plain-line path and the byte classifier agree") {
     std::size_t built = 0;
     for (std::size_t seed = 1; seed <= 20000; ++seed) {
         Gen gen(seed);
-        Rng rng{seed * 31 + 7};
-        dstd::String text = gen.text();
-        if (seed % 2 == 0) text = mutate(text, rng);
+        const Tree tree = gen.tree();
+        const dstd::String text = gen.text(tree);
         LineIndex plain;
         const auto plain_ok = plain.build(text.data(), text.size());
         yaml::detail::set_slow_lines_for_test(true);
@@ -863,14 +323,9 @@ TEST_CASE("line index: the plain-line path and the byte classifier agree") {
         REQUIRE(plain_ok == slow_ok);
         if (plain_ok != yaml::BuildResult::Accepted) continue;
         ++built;
-        REQUIRE(plain.line_count == slow.line_count);
-        CHECK(std::memcmp(plain.entries.data(), slow.entries.data(),
-                          (plain.line_count + 1) * sizeof(yaml::LineEntry)) ==
-              0);
-        CHECK(std::memcmp(plain.next.data(), slow.next.data(),
-                          (plain.line_count + 1) * sizeof(std::uint32_t)) == 0);
+        check_same_index(plain, slow);
     }
-    CHECK(built > 4000);
+    CHECK(built > 19000);
     // Lines of more than 65534 spaces, blank or not.
     for (const std::size_t spaces : {65533u, 65534u, 65535u, 65536u, 70000u}) {
         const dstd::String pad(spaces, ' ');
@@ -888,73 +343,25 @@ TEST_CASE("line index: the plain-line path and the byte classifier agree") {
             const auto slow_ok = slow.build(text.data(), text.size());
             yaml::detail::set_slow_lines_for_test(false);
             CHECK(plain_ok == slow_ok);
-            same_as_tape(text);
+            if (plain_ok == yaml::BuildResult::Accepted)
+                check_same_index(plain, slow);
         }
     }
 }
 
-TEST_CASE("line index: each kind of error, with its message") {
-    struct Case {
-        const char* what;
-        const char* text;
-        const char* message;
-    };
-    const Case CASES[] = {
-        {"duplicate key", "a: 1\nb: 2\na: 3\n",
-         "n.yaml:3:1: duplicate key 'a'"},
-        {"duplicate key, quoted", "\"a\": 1\n'a': 2\n",
-         "n.yaml:2:1: duplicate key 'a'"},
-        {"duplicate key in a compact map", "- a: 1\n  b: 2\n  a: 3\n",
-         "n.yaml:3:3: duplicate key 'a'"},
-        {"indent matches no level", "a:\n    b: 1\n  c: 2\n",
-         "n.yaml:3:3: indentation does not match any open block"},
-        {"item after keys", "a: 1\n- b\n",
-         "n.yaml:2:1: a sequence item cannot follow mapping keys at the same "
-         "indentation"},
-        {"key after items", "- a\nb: 1\n",
-         "n.yaml:2:1: a mapping key cannot follow sequence items at the same "
-         "indentation"},
-        {"unterminated double quote", "a: \"abc\n",
-         "n.yaml:1:4: unterminated quoted scalar"},
-        {"unterminated single quote", "a: 'abc\nb: 1\n",
-         "n.yaml:1:4: unterminated quoted scalar"},
-        {"text after a quoted value", "a: \"x\" y\n",
-         "n.yaml:1:8: unexpected text after a quoted scalar"},
-        {"unknown escape", "a: \"\\q\"\n",
-         "n.yaml:1:5: unknown escape character 'q'"},
-        {"short hex escape", "a: \"\\x4\"\n",
-         "n.yaml:1:5: escape '\\x' needs 2 hex digits"},
-        {"bad hex digit", "a: \"\\xZZ\"\n",
-         "n.yaml:1:5: escape '\\x' has a character that is not a hex digit"},
-        {"code point out of range", "a: \"\\U00110000\"\n",
-         "n.yaml:1:5: escape is not a code point"},
-        {"deeper line after a quoted value", "a: \"x\"\n  y\n",
-         "n.yaml:2:3: a complete value cannot go on in a deeper line"},
-        {"deeper line after an empty flow", "a: {}\n  y\n",
-         "n.yaml:2:3: a complete value cannot go on in a deeper line"},
-        {"key in a plain value that goes on", "a: b\n  c: d\n",
-         "n.yaml:2:3: mapping values are not allowed in a multi-line plain "
-         "scalar"},
-        {"colon in a plain value", "a: b: c\n",
-         "n.yaml:1:5: mapping values are not allowed in this context"},
-    };
-    for (const Case& c : CASES) {
-        INFO("kind: ", dstd::String(c.what));
-        auto line = Document::parse(dstd::String(c.text), "n.yaml");
-        REQUIRE_FALSE(line.has_value());
-        {
-            yaml::LineIndex probe;
-            CHECK(probe.build(c.text, std::strlen(c.text)) ==
-                  yaml::BuildResult::Invalid);
-        }
-        CHECK(dstd::String(line.error().message()) == dstd::String(c.message));
-        yaml::detail::set_force_tape_for_test(true);
-        auto tape = Document::parse(dstd::String(c.text), "n.yaml");
-        yaml::detail::set_force_tape_for_test(false);
-        REQUIRE_FALSE(tape.has_value());
-        MESSAGE("error kind '", dstd::String(c.what),
-                "'\n  line index: ", dstd::String(line.error().message()),
-                "\n  tape reader: ", dstd::String(tape.error().message()));
+TEST_CASE("line index: a generated text reads as its tree on every target") {
+    for (std::size_t seed = 1; seed <= 2000; ++seed) {
+        Gen gen(seed);
+        const Tree tree = gen.tree();
+        const dstd::String text = gen.text(tree);
+        yaml::detail::set_scalar_line_masks_for_test(true);
+        yaml::detail::set_slow_lines_for_test(true);
+        auto doc = Document::parse(text, "g");
+        yaml::detail::set_slow_lines_for_test(false);
+        yaml::detail::set_scalar_line_masks_for_test(false);
+        REQUIRE(doc.has_value());
+        dstd::String why;
+        CHECK_MESSAGE(matches(tree, doc->root(), why), why);
     }
 }
 
@@ -964,189 +371,117 @@ TEST_CASE("line index: an error in Records names the line of the whole text") {
         dstd::String text;
         for (std::size_t i = 0; i < 50; ++i)
             text += "- id: " + dstd::fmt<"{}">(i) + "\n  name: \"n\\t\"\n";
-        // The line of the whole text that holds the first fault is 101.
         text += "- id: 50\n  id: 51\n- id: 52\n";
-        std::size_t seen_by_line = 0;
-        for (int pass = 0; pass < 2; ++pass) {
-            yaml::detail::set_force_tape_for_test(pass == 1);
-            RecordsOptions options;
-            options.chunk_bytes = chunk;
-            Records records = Records::from_text(text, "r.yaml", options);
-            std::size_t seen = 0;
-            dstd::String error;
-            for (;;) {
-                auto next = records.next();
-                if (!next.has_value()) {
-                    error = dstd::String(next.error().message());
-                    break;
-                }
-                if (!next->has_value()) break;
-                ++seen;
+        RecordsOptions options;
+        options.chunk_bytes = chunk;
+        Records records = Records::from_text(text, "r.yaml", options);
+        dstd::String error;
+        for (;;) {
+            auto next = records.next();
+            if (!next.has_value()) {
+                error = dstd::String(next.error().message());
+                break;
             }
-            REQUIRE_FALSE(error.empty());
-            if (pass == 0) seen_by_line = seen;
-            CHECK(seen == seen_by_line);
-            if (pass == 0)
-                CHECK(dstd::String(error.data(), error.size()) ==
-                      "r.yaml:102:3: duplicate key 'id'");
-            else
-                CHECK(dftu_yaml_test::error_line(error) >= 102);
-            MESSAGE(
-                "chunk ", chunk,
-                (pass == 0 ? " bytes, line index: " : " bytes, tape reader: "),
-                dstd::String(error.data(), error.size()));
+            if (!next->has_value()) break;
         }
-        yaml::detail::set_force_tape_for_test(false);
+        CHECK(error == "r.yaml:102:3: duplicate key 'id'");
     }
 }
 
 TEST_CASE("line index: records from a sequence and from documents") {
-    dstd::String seq_text;
-    dstd::String docs_text;
+    dstd::String seq;
+    dstd::String docs;
     for (std::size_t i = 0; i < 400; ++i) {
-        seq_text +=
-            "- id: " + dstd::fmt<"{}">(i) + "\n  tag: 'x'\n  n:\n    a: 1\n";
-        docs_text += "---\nid: " + dstd::fmt<"{}">(i) + "\nname: \"d\\t" +
-                     dstd::fmt<"{}">(i) + "\"\n";
+        seq += "- id: " + dstd::fmt<"{}">(i) +
+               "\n  tag: 'x'\n  n:\n    a: 1\n  f: [1,\n    2]\n";
+        docs += "---\nid: " + dstd::fmt<"{}">(i) + "\nname: \"d\\t" +
+                dstd::fmt<"{}">(i) + "\"\nf: {a: 1,\n  b: 2}\n";
     }
-    const dstd::String seq = seq_text;
-    const dstd::String docs = docs_text;
-    const dstd::String seq_bom = dstd::String("\xEF\xBB\xBF") + seq_text;
-    const dstd::String docs_bom = dstd::String("\xEF\xBB\xBF") + docs_text;
-    for (const dstd::String* text : {&seq, &docs, &seq_bom, &docs_bom}) {
+    const dstd::String seq_bom = dstd::String("\xEF\xBB\xBF") + seq;
+    const dstd::String docs_bom = dstd::String("\xEF\xBB\xBF") + docs;
+    const dstd::String* const all[] = {&seq, &docs, &seq_bom, &docs_bom};
+    for (const dstd::String* text : all) {
         for (std::size_t chunk : {std::size_t{1}, std::size_t{64},
                                   std::size_t{1000}, std::size_t{1} << 20}) {
-            dstd::Vector<dstd::String> both[2];
-            for (int pass = 0; pass < 2; ++pass) {
-                yaml::detail::set_force_tape_for_test(pass == 1);
-                RecordsOptions options;
-                options.chunk_bytes = chunk;
-                Records records = Records::from_text(*text, "r.yaml", options);
-                for (;;) {
-                    auto next = records.next();
-                    REQUIRE(next.has_value());
-                    if (!next->has_value()) break;
-                    both[pass].push_back(dftu_yaml_test::full_dump(**next));
-                }
-            }
-            yaml::detail::set_force_tape_for_test(false);
-            REQUIRE(both[0].size() > 0);
-            REQUIRE(both[0].size() == both[1].size());
-            for (std::size_t i = 0; i < both[0].size(); ++i)
-                CHECK(both[0][i] == both[1][i]);
-        }
-    }
-}
-
-TEST_CASE("line index: records equal the tape for generated documents") {
-    for (std::size_t seed = 1; seed <= 600; ++seed) {
-        Gen gen(seed);
-        dstd::String text = gen.text();
-        if (seed % 2 == 0) {
-            Rng rng{seed};
-            text = mutate(text, rng);
-        }
-        if (has_inner_cr(text)) continue;
-        dstd::String out[2];
-        dstd::String error[2];
-        for (int pass = 0; pass < 2; ++pass) {
-            yaml::detail::set_force_tape_for_test(pass == 1);
             RecordsOptions options;
-            options.chunk_bytes = 1 + seed % 50;
-            Records records = Records::from_text(text, "r.yaml", options);
+            options.chunk_bytes = chunk;
+            Records records = Records::from_text(*text, "r.yaml", options);
+            std::size_t count = 0;
             for (;;) {
                 auto next = records.next();
-                if (!next.has_value()) {
-                    error[pass] = dstd::String(next.error().message());
-                    break;
-                }
+                REQUIRE(next.has_value());
                 if (!next->has_value()) break;
-                out[pass] += dftu_yaml_test::full_dump(**next);
-                out[pass] += '\n';
+                CHECK((*next)->find("id")->as_uint() == count);
+                CHECK((*next)->find("f")->is_array() ==
+                      (text == &seq || text == &seq_bom));
+                ++count;
             }
+            CHECK(count == 400);
         }
-        yaml::detail::set_force_tape_for_test(false);
-        CHECK_MESSAGE(out[0] == out[1], "text: ", text.c_str());
-        CHECK(error[0].empty() == error[1].empty());
-        if (!error[0].empty() && !error[1].empty())
-            CHECK_MESSAGE(
-                dftu_yaml_test::error_line(error[1]) >=
-                    dftu_yaml_test::error_line(error[0]),
-                "line: ", dstd::String(error[0].data(), error[0].size()),
-                " tape: ", dstd::String(error[1].data(), error[1].size()), "\n",
-                dstd::String(text.data(), text.size()));
-    }
-}
-
-TEST_CASE("line index: every case of the YAML test suite") {
-    std::size_t cases = 0;
-    std::size_t tape_valid = 0;
-    std::size_t accepted = 0;
-    std::size_t error_cases = 0;
-    std::size_t invalid = 0;
-    std::size_t skipped = 0;
-    auto walked = dstd::fs::walk(
-        DFTRACER_UTILS_YAML_TEST_SUITE_DIR,
-        [&](dstd::PathView path, dstd::fs::FileKind kind) {
-            if (kind != dstd::fs::FileKind::File ||
-                path.filename() != "in.yaml")
-                return dstd::fs::WalkAction::Continue;
-            const dstd::String name(path.str());
-            auto text = dstd::fs::read_file(path);
-            REQUIRE(text.has_value());
-            const bool is_error_case =
-                dstd::fs::exists(dstd::Path(path.parent()) / "error")
-                    .value_or(false);
-            if (dftu_yaml_test::is_known_difference(*text)) {
-                ++skipped;
-                return dstd::fs::WalkAction::Continue;
-            }
-            const auto both = parse_both(*text);
-            ++cases;
-            error_cases += is_error_case ? 1 : 0;
-            tape_valid += both.tape_ok ? 1 : 0;
-            accepted += both.line_accepted ? 1 : 0;
-            invalid += both.line_invalid ? 1 : 0;
-            CHECK_MESSAGE(both.line_dump == both.tape_dump, name);
-            if (!both.tape_ok) CHECK_MESSAGE(!both.line_accepted, name);
-            if (is_error_case) CHECK_MESSAGE(!both.line_accepted, name);
-            if (both.line_invalid && !both.tape_ok)
-                CHECK_MESSAGE(dftu_yaml_test::error_line(both.tape_error) >=
-                                  dftu_yaml_test::error_line(both.line_error),
-                              name);
-            return dstd::fs::WalkAction::Continue;
-        });
-    REQUIRE(walked.has_value());
-    MESSAGE("suite cases: ", cases, ", error cases: ", error_cases,
-            ", tape reads: ", tape_valid, ", line index accepts: ", accepted,
-            ", line index finds an error: ", invalid,
-            ", left out for a known difference with rapidyaml: ", skipped);
-    CHECK(cases > 300);
-    for (const auto& [pair, count] : reason_log())
-        MESSAGE("error reasons ", count, "x: ", pair);
-}
-
-TEST_CASE("line index: each listed error class has an example that gives it") {
-    for (const ErrorClass& c : ERROR_CLASSES) {
-        INFO("class: ", c.reason);
-        const auto both = parse_both(c.example);
-        REQUIRE(both.line_invalid);
-        CHECK(error_class_of(dftu_yaml_test::error_reason(both.line_error)) ==
-              &c);
-        const std::uint64_t ours = dftu_yaml_test::error_line(both.line_error);
-        const std::uint64_t theirs =
-            dftu_yaml_test::error_line(both.tape_error);
-        if (c.is_exact)
-            CHECK(theirs == ours);
-        else
-            CHECK(theirs >= ours);
     }
 }
 
 TEST_CASE(
-    "line index: scalars of several lines, as the tape reader reads them") {
-    // 'A' is accepted, 'E' is an error, 'D' is left to the tape reader or an
-    // error.
+    "line index: a value on a later line, after blank and comment lines") {
+    struct Value {
+        const char* what;
+        dstd::Vector<dstd::String> lines;
+        const char* dump;
+    };
+    const Value VALUES[] = {
+        {"plain", {"p"}, "'p'"},
+        {"plain over lines", {"p", "q"}, "'p q'"},
+        {"double quoted", {"\"q\""}, "'q'"},
+        {"quoted over lines", {"\"a", "b\""}, "'a b'"},
+        {"flow", {"[x, y]"}, "['x','y',]"},
+        {"flow over lines", {"{a: [1,", " 2]}"}, "{a:['1','2',],}"},
+        {"literal", {"|", "x"}, "'x\n'"},
+        {"folded", {">", "x", "y"}, "'x y\n'"},
+    };
+    struct Context {
+        const char* what;
+        const char* head;
+        std::size_t indent;
+        const char* tail;
+        const char* before;
+        const char* after;
+    };
+    const Context CONTEXTS[] = {
+        {"top key", "k:", 2, "z: 1\n", "{k:", ",z:'1',}"},
+        {"map in a seq item", "- k:", 4, "  z: 1\n", "[{k:", ",z:'1',},]"},
+        {"map in a nested item", "- - k:", 6, "    z: 1\n",
+         "[[{k:", ",z:'1',},],]"},
+        {"seq item", "-", 2, "- 1\n", "[", ",'1',]"},
+        {"nested seq item", "- -", 4, "  - 1\n", "[[", ",'1',],]"},
+        {"map in a map", "m:\n  k:", 4, "  z: 1\ny: 2\n",
+         "{m:{k:", ",z:'1',},y:'2',}"},
+        {"map in a seq in a map", "m:\n  - k:", 6, "    z: 1\n  - 2\ny: 3\n",
+         "{m:[{k:", ",z:'1',},'2',],y:'3',}"},
+    };
+    const char* const GAPS[] = {"\n", "# c\n", "\n# c\n\n", "  # c\n\n"};
+    for (const Context& c : CONTEXTS) {
+        for (const Value& v : VALUES) {
+            for (const char* gap : GAPS) {
+                const dstd::String pad(c.indent, ' ');
+                dstd::String text = dstd::String(c.head) + "\n" + gap;
+                for (std::size_t i = 0; i < v.lines.size(); ++i) {
+                    text += pad + v.lines[i];
+                    text += "\n";
+                }
+                text += c.tail;
+                INFO("context: ", dstd::String(c.what),
+                     ", value: ", dstd::String(v.what), "\n", text);
+                auto doc = Document::parse(text, "g");
+                REQUIRE(doc.has_value());
+                CHECK(dump(doc->root()) ==
+                      dstd::String(c.before) + v.dump + c.after);
+            }
+        }
+    }
+}
+
+TEST_CASE("line index: scalars of several lines, accepted or refused") {
+    // 'A' is read, 'E' is an error.
     struct Case {
         const char* text;
         char want;
@@ -1174,9 +509,9 @@ TEST_CASE(
         {"a: |\n  x\n # c\n", 'A'},
         {"a: |\n  x\n # c\n  y\n", 'E'},
         {"a: |\n  x\n  # not comment\n", 'A'},
-        {"a: |\n    x\n  y\n", 'D'},
+        {"a: |\n    x\n  y\n", 'E'},
         {"a: |\n    \n  x\n", 'E'},
-        {"a: |\n\tx\n", 'D'},
+        {"a: |\n\tx\n", 'E'},
         {"a: |\n  x\ty\n", 'A'},
         {"a: |\n  x\n  \ty\n", 'A'},
         {"a: >\n  a\n  \tb\n  c\n", 'A'},
@@ -1189,8 +524,8 @@ TEST_CASE(
         {"a:\n- |\n x\n", 'A'},
         {"- k: |\n    x\n  j: 1\n", 'A'},
         {"- k: |\n   x\n", 'A'},
-        {"- k: |\n  x\n", 'D'},
-        {"a:\n  b: |\n  x\n", 'D'},
+        {"- k: |\n  x\n", 'E'},
+        {"a:\n  b: |\n  x\n", 'E'},
         {"a:\n b: |\n  x\n", 'A'},
         {"|\n x\n", 'A'},
         {"|\nx\n", 'A'},
@@ -1205,8 +540,8 @@ TEST_CASE(
         {"a: b  \n  c\n", 'A'},
         {"a: b\n   \nc: d\n", 'A'},
         {"- a\n  b\n- c\n", 'A'},
-        {"- a\nb\n", 'D'},
-        {"- a: b\n  c\n", 'D'},
+        {"- a\nb\n", 'E'},
+        {"- a: b\n  c\n", 'E'},
         {"- a: b\n   c\n", 'A'},
         {"a: b\n  # c\n  d\n", 'E'},
         {"a: b # c\n  d\n", 'E'},
@@ -1216,7 +551,6 @@ TEST_CASE(
         {"a: b\n  : c\n", 'E'},
         {"a: b:c\n  d:e\n", 'A'},
         {"a: b\n  - c\n", 'A'},
-        {"a: b\n  ? c\n", 'A'},
         {"a: b\n  [c]\n", 'A'},
         {"a: b\n  ---\n", 'A'},
         {"a: b#c\n  d\n", 'A'},
@@ -1224,7 +558,7 @@ TEST_CASE(
         {"top\nlevel\n", 'A'},
         {"a:\n  b\n  c\n", 'A'},
         {"a:\n- b\n c\n", 'A'},
-        {"a:\n  - b\n  c\n", 'D'},
+        {"a:\n  - b\n  c\n", 'E'},
         {"a: b\r\n  c\r\n", 'A'},
         {"a: \"x\n  y\"\n", 'A'},
         {"a: \"x\n\n  y\"\n", 'A'},
@@ -1245,7 +579,7 @@ TEST_CASE(
         {"a: \"x\n---\n  y\"\n", 'E'},
         {"a: \"x\n  ---\n  y\"\n", 'A'},
         {"--- \"a\n...x\nb\"\n", 'A'},
-        {"\"a\n b\": 1\n", 'D'},
+        {"\"a\n b\": 1\n", 'E'},
         {"a: \" x\n y \"\n", 'A'},
         {"a: \"\n  x\"\n", 'A'},
         {"a: \"x\n  \"\n", 'A'},
@@ -1260,125 +594,288 @@ TEST_CASE(
     };
     for (const Case& c : CASES) {
         INFO("text: ", dstd::String(c.text));
-        if (dftu_yaml_test::is_known_difference(c.text)) continue;
-        const auto both = parse_both(c.text);
-        same_as_tape(c.text);
-        if (c.want == 'A') CHECK(both.line_accepted);
-        if (c.want == 'E') CHECK(both.line_invalid);
+        auto doc = Document::parse(dstd::String(c.text), "n.yaml");
+        CHECK(doc.has_value() == (c.want == 'A'));
+    }
+}
+
+TEST_CASE("line index: the value or the reason of a scalar of several lines") {
+    struct Case {
+        const char* text;
+        const char* result;
+    };
+    const Case CASES[] = {
+        {"a: |x\n  y\n",
+         "n.yaml:1:5: a block scalar header holds text that is not an "
+         "indicator or a comment"},
+        {"a: |0\n x\n",
+         "n.yaml:1:5: a block scalar header holds text that is not an "
+         "indicator or a comment"},
+        {"a: |10\n x\n",
+         "n.yaml:1:6: a block scalar header holds text that is not an "
+         "indicator or a comment"},
+        {"a: |#c\n  x\n",
+         "n.yaml:1:5: a block scalar header holds text that is not an "
+         "indicator or a comment"},
+        {"a: b # c\n  d\n",
+         "n.yaml:2:3: a complete value cannot go on in a deeper line"},
+        {"a: |\n    \n  x\n",
+         "n.yaml:2:3: an empty line of a block scalar is more indented than "
+         "its first line of text"},
+        {"a: \"x\ny\"\n", "n.yaml:2:1: a quoted scalar is not indented enough"},
+        {"- \"x\ny\"\n", "n.yaml:2:1: a quoted scalar is not indented enough"},
+        {"a: |\n    x\n  y\n",
+         "n.yaml:3:3: a complete value cannot go on in a deeper line"},
+        {"a: |\n  x\n # c\n  y\n",
+         "n.yaml:4:3: a complete value cannot go on in a deeper line"},
+        {"\"a\n b\": 1\n", "n.yaml:2:4: unexpected text after a quoted scalar"},
+        {"a: |\n  x", "{a:'x',}"},
+        {"a: >\n  x", "{a:'x',}"},
+        {"a: |+\n  x", "{a:'x',}"},
+        {"a: |-\n  x", "{a:'x',}"},
+        {"a: |\n  x\n\n", "{a:'x\n',}"},
+        {"a: |+\n  x\n\n", "{a:'x\n\n',}"},
+        {"a: \"x\\\n\n  y\"\n", "{a:'x\ny',}"},
+        {"a: \"x\\\n\n\n  y\"\n", "{a:'x\n\ny',}"},
+        {"--- |\n--- key\n", "''"},
+        {"--- >+\n...\n", "''"},
+    };
+    for (const Case& c : CASES) {
+        INFO("text: ", dstd::String(c.text));
+        auto doc = Document::parse(dstd::String(c.text), "n.yaml");
+        if (doc.has_value())
+            CHECK(dump(doc->root()) == dstd::String(c.result));
+        else
+            CHECK(dstd::String(doc.error().message()) ==
+                  dstd::String(c.result));
+    }
+}
+
+TEST_CASE("line index: a block scalar at the end of a text with no line feed") {
+    for (const char* header : {"|", ">", "|+", "|-"}) {
+        INFO("header: ", dstd::String(header));
+        const dstd::String h(header);
+        CHECK(dump(must_parse("a: " + h + "\n  x").root()) == "{a:'x',}");
+        CHECK(dump(must_parse("- " + h + "\n  x").root()) == "['x',]");
+        CHECK(dump(must_parse(h + "\n  x").root()) == "'x'");
+        CHECK(dump(must_parse("- " + h + "\n  x\n- " + h + "\n  y").root()) ==
+              "['x" + dstd::String(h == "|-" ? "" : "\n") + "','y',]");
+    }
+    // A last line that is only spaces is a line, so its line feed is kept.
+    CHECK(dump(must_parse("a: |\n x\n   ").root()) == "{a:'x\n  \n',}");
+    CHECK(dump(must_parse("- |+\n   ").root()) == "['\n',]");
+    // In Records, the chunk that ends the text is the same.
+    for (std::size_t chunk : {std::size_t{1}, std::size_t{100000}}) {
+        RecordsOptions options;
+        options.chunk_bytes = chunk;
+        Records seq = Records::from_text("- |\n  x\n- |\n  y", "r", options);
+        dstd::Vector<dstd::String> got;
+        for (;;) {
+            auto next = seq.next();
+            REQUIRE(next.has_value());
+            if (!next->has_value()) break;
+            got.push_back(dump(**next));
+        }
+        REQUIRE(got.size() == 2);
+        CHECK(got[0] == "'x\n'");
+        CHECK(got[1] == "'y'");
+        Records docs =
+            Records::from_text("--- |\n  x\n--- >\n  y", "r", options);
+        got.clear();
+        for (;;) {
+            auto next = docs.next();
+            REQUIRE(next.has_value());
+            if (!next->has_value()) break;
+            got.push_back(dump(**next));
+        }
+        REQUIRE(got.size() == 2);
+        CHECK(got[0] == "'x\n'");
+        CHECK(got[1] == "'y'");
     }
 }
 
 TEST_CASE(
-    "line index: where rapidyaml differs from the spec, the line index follows "
-    "the spec") {
-    auto dump_of = [](const char* text) {
-        auto doc = Document::parse(dstd::String(text), "");
-        REQUIRE(doc.has_value());
-        REQUIRE(DocumentTestAccess::is_line_backed(*doc));
-        return dftu_yaml_test::dump(doc->root());
+    "line index: plain scalars that start like an indicator or hold one") {
+    const Document doc = must_parse(
+        "a: -5\nb: a:b\nc: a#b\nd: 1,2\ne: it's\nf: q\"q\ng: a]b\nh: ~x\n"
+        "i: -x\nj: ?x\nk: :x\nl: <<\nm: x{y}\nn: caf\xC3\xA9\no: a\tb\n");
+    const char* const EXPECTED[][2] = {
+        {"a", "-5"},   {"b", "a:b"},         {"c", "a#b"}, {"d", "1,2"},
+        {"e", "it's"}, {"f", "q\"q"},        {"g", "a]b"}, {"h", "~x"},
+        {"i", "-x"},   {"j", "?x"},          {"k", ":x"},  {"l", "<<"},
+        {"m", "x{y}"}, {"n", "caf\xC3\xA9"}, {"o", "a\tb"}};
+    for (const auto& e : EXPECTED) {
+        INFO("key: ", dstd::String(e[0]));
+        auto v = doc.root().find(e[0]);
+        REQUIRE(v.has_value());
+        CHECK(v->is_string());
+        CHECK(v->raw() == dstd::StringView(e[1]));
+    }
+    // The same as items of a sequence and in a flow collection.
+    const Document seq = must_parse("- -5\n- a:b\n- 1,2\n- it's\n- q\"q\n");
+    CHECK(dump(seq.root()) == "['-5','a:b','1,2','it's','q\"q',]");
+    const Document flow =
+        must_parse("[-5, a:b, it's, q\"q, a#b, ~x, ?x, <<]\n");
+    CHECK(dump(flow.root()) ==
+          "['-5','a:b','it's','q\"q','a#b','~x','?x','<<',]");
+    // `<<` is a plain key: there is no merge.
+    const Document merge = must_parse("<<: 1\nb: 2\n");
+    CHECK(dump(merge.root()) == "{<<:'1',b:'2',}");
+    CHECK(merge.root().find("<<")->as_uint() == 1);
+    Records records = Records::from_text("<<: 1\nb: 2\n", "r", {});
+    auto first = records.next();
+    REQUIRE(first.has_value());
+    REQUIRE(first->has_value());
+    CHECK(dump(**first) == "{<<:'1',b:'2',}");
+    Records items = Records::from_text("- <<: 1\n  b: 2\n- c\n", "r", {});
+    auto item = items.next();
+    REQUIRE(item.has_value());
+    REQUIRE(item->has_value());
+    CHECK(dump(**item) == "{<<:'1',b:'2',}");
+}
+
+TEST_CASE("line index: more errors, each with its message") {
+    struct Case {
+        const char* text;
+        const char* message;
     };
-    // An escaped line break and empty lines: each empty line is a line feed.
-    CHECK(dump_of("a: \"x\\\n\n  y\"\n") == "{a:'x\ny',}");
-    CHECK(dump_of("a: \"x\\\n\n\n  y\"\n") == "{a:'x\n\ny',}");
-    // A block scalar at the end of a text that has no final line break.
-    CHECK(dump_of("a: |\n  x") == "{a:'x',}");
-    CHECK(dump_of("a: >\n  x") == "{a:'x',}");
-    CHECK(dump_of("a: |+\n  x") == "{a:'x',}");
-    CHECK(dump_of("a: |-\n  x") == "{a:'x',}");
-    // A block scalar with no line, before a marker, is empty.
-    CHECK(dump_of("--- |\n--- key\n") == "''");
-    CHECK(dump_of("--- >+\n...\n") == "''");
-    // The tape reader is the one that differs.
-    yaml::detail::set_force_tape_for_test(true);
-    auto tape = Document::parse(dstd::String("a: \"x\\\n\n  y\"\n"), "");
-    yaml::detail::set_force_tape_for_test(false);
-    REQUIRE(tape.has_value());
-    CHECK(dftu_yaml_test::dump(tape->root()) == "{a:'x y',}");
-}
-
-TEST_CASE("line index: block and quoted scalars across 64-byte blocks") {
-    for (std::size_t pad = 0; pad < 200; ++pad) {
-        const dstd::String padding(pad, 'p');
-        const dstd::String texts[] = {
-            "k" + padding + ": |\n  one\n  two\n  three\nz: 1\n",
-            "k: >\n  " + padding + "\n  two\n\n  three\nz: 1\n",
-            "k: \"" + padding + "\n  two\n  \\x41 three\"\nz: 1\n",
-            "k: '" + padding + "\n\n  it''s\n  three'\nz: 1\n",
-            "k: " + padding + "\n  two\n  three\nz: 1\n",
-            "- |+\n  " + padding + "\n\n\n- b\n",
-            dstd::String(pad, '\n') + "a: |\n  x\n  y\nb: 1\n",
-            "a: |\r\n  " + padding + "\r\n  y\r\nb: 1\r\n",
-        };
-        for (const auto& text : texts) {
-            INFO("pad: ", pad);
-            CHECK(same_as_tape(text));
-        }
+    const Case CASES[] = {
+        {"a: 'abc\nb: 1\n", "n.yaml:1:4: unterminated quoted scalar"},
+        {"a: 'abc\n", "n.yaml:1:4: unterminated quoted scalar"},
+        {"a: \"\\x4\"\n", "n.yaml:1:5: escape '\\x' needs 2 hex digits"},
+        {"a: \"\\u00\"\n", "n.yaml:1:5: escape '\\u' needs 4 hex digits"},
+        {"a: \"\\xZZ\"\n",
+         "n.yaml:1:5: escape '\\x' has a character that is not a hex digit"},
+        {"a: \"\\U00110000\"\n", "n.yaml:1:5: escape is not a code point"},
+        {"a: \"\\uD83D\"\n", "n.yaml:1:5: escape is not a code point"},
+        {"a: \"\\uDE00\"\n", "n.yaml:1:5: escape is not a code point"},
+        {"a: {}\n  y\n",
+         "n.yaml:2:3: a complete value cannot go on in a deeper line"},
+        {"a: []\n  y\n",
+         "n.yaml:2:3: a complete value cannot go on in a deeper line"},
+        {"a: \"x\"\n  y\n",
+         "n.yaml:2:3: a complete value cannot go on in a deeper line"},
+        {"a: 1\x01\n", "n.yaml:1:5: a control character is not allowed"},
+        {"a: \x01\n", "n.yaml:1:4: a control character is not allowed"},
+        {"a: 1\x7F\n", "n.yaml:1:5: a control character is not allowed"},
+        {"a: \xFF\n",
+         "n.yaml:1:4: invalid UTF-8 or a character that YAML does not print"},
+        {"a: \xC3\n",
+         "n.yaml:1:4: invalid UTF-8 or a character that YAML does not print"},
+        {"a: \xC3(\n",
+         "n.yaml:1:4: invalid UTF-8 or a character that YAML does not print"},
+        {"b: 1\na: \xE2\x82\n",
+         "n.yaml:2:4: invalid UTF-8 or a character that YAML does not print"},
+    };
+    for (const Case& c : CASES) {
+        INFO("text: ", dstd::String(c.text));
+        CHECK(error_of(c.text) == dstd::String(c.message));
     }
-    dstd::String text;
-    for (std::size_t i = 0; i < 400; ++i)
-        text += "- id: " + dstd::fmt<"{}">(i) + "\n  d: |\n    line " +
-                dstd::fmt<"{}">(i) +
-                "\n\n    more\n  p: a\n    b\n  q: \"x\n    y\"\n";
-    LineIndex best;
-    REQUIRE(best.build(text.data(), text.size()) ==
-            yaml::BuildResult::Accepted);
-    yaml::detail::set_scalar_line_masks_for_test(true);
-    LineIndex scalar;
-    const bool ok =
-        scalar.build(text.data(), text.size()) == yaml::BuildResult::Accepted;
-    yaml::detail::set_scalar_line_masks_for_test(false);
-    REQUIRE(ok);
-    REQUIRE(best.line_count == scalar.line_count);
-    CHECK(std::memcmp(best.entries.data(), scalar.entries.data(),
-                      (best.line_count + 1) * sizeof(yaml::LineEntry)) == 0);
-    CHECK(std::memcmp(best.next.data(), scalar.next.data(),
-                      (best.line_count + 1) * sizeof(std::uint32_t)) == 0);
-    REQUIRE(best.arena.size() == scalar.arena.size());
-    CHECK(std::memcmp(best.arena.data(), scalar.arena.data(),
-                      best.arena.size()) == 0);
 }
 
-TEST_CASE("line index: the known differences are matched by their shape") {
-    using dftu_yaml_test::is_known_difference;
-    // One text for each clause.
-    CHECK(is_known_difference("a: \"x\\\n\ny\"\n"));
-    CHECK(is_known_difference("a: |\n  x"));
-    CHECK(is_known_difference("- >-\n  x\n  y"));
-    CHECK(is_known_difference("--- |\nx"));
-    CHECK(is_known_difference("a: |\n\n---\n"));
-    CHECK(is_known_difference("a: >2+\n...\n"));
-    // Near misses that the comparison must keep.
-    CHECK_FALSE(is_known_difference("a: \"x|y\""));
-    CHECK_FALSE(is_known_difference("a: x>y"));
-    CHECK_FALSE(is_known_difference("a: >b\nc: 1\n---\n"));
-    CHECK_FALSE(is_known_difference("a: 'p>q'\n---\nb: 1\n"));
-    CHECK_FALSE(is_known_difference("a: |\n  x\nb: 1"));
-    CHECK_FALSE(is_known_difference("a: |\n  x\n---\n"));
-    CHECK_FALSE(is_known_difference("a: \"x\\\ny\"\n"));
-    CHECK_FALSE(is_known_difference("a: x\\\n\nb: 1\n"));
-    CHECK_FALSE(is_known_difference("a:\t1\nb: 2\t\n"));
-}
-
-TEST_CASE("line index: scalars across the 4096-byte batches of stage 1") {
-    for (std::size_t base : {4096, 8192}) {
-        for (std::size_t pad = base - 80; pad < base + 70; ++pad) {
-            const dstd::String filler =
-                "# " + dstd::String(pad > 2 ? pad - 2 : 0, 'p') + "\n";
-            const dstd::String texts[] = {
-                filler + "a: |\n  one\n  two\n\n  three\nb: 1\n",
-                filler + "a: >-\n  one\n  two\n\n   more\n  end\nb: 1\n",
-                filler + "a: \"one\n  two\n\n  three\"\nb: 1\n",
-                filler + "a: 'one\n  two\n\n  three'\nb: 1\n",
-                filler + "a: one\n  two\n\n  three\nb: 1\n",
-                filler + "- |+\n  x\n\n- k: >\n    y\n    z\n",
-                filler + "--- |\n x\n y\n...\n",
-            };
-            for (const auto& text : texts) {
-                INFO("pad: ", pad);
-                same_as_tape(text);
-                const auto both = parse_both(text);
-                CHECK(both.line_accepted == both.tape_ok);
-            }
-        }
+TEST_CASE("line index: the limits of indentation and nesting") {
+    const dstd::String over =
+        "n.yaml:2:65536: indentation deeper than 65534 columns is not "
+        "supported";
+    for (const std::size_t n : {std::size_t{65533}, std::size_t{65534}}) {
+        const dstd::String pad(n, ' ');
+        CHECK(
+            must_parse("a:\n" + pad + "b: 1\n").root().find("a")->is_object());
+        CHECK(must_parse("a:\n" + pad + "- 1\n").root().find("a")->is_array());
+        CHECK(must_parse(pad + "a: 1\n").root().find("a")->as_uint() == 1);
     }
+    const dstd::String pad(65535, ' ');
+    CHECK(error_of("a:\n" + pad + "b: 1\n") == over);
+    CHECK(error_of("a:\n" + pad + "- 1\n") == over);
+    CHECK(error_of("a: 1\n" + pad + "# c\n") == over);
+    CHECK(error_of(pad + "a: 1\n") ==
+          "n.yaml:1:65536: indentation deeper than 65534 columns is not "
+          "supported");
+    const auto nested_map = [](int levels) {
+        dstd::String s;
+        for (int i = 0; i < levels - 1; ++i)
+            s += dstd::String(static_cast<std::size_t>(i), ' ') + "k:\n";
+        s += dstd::String(static_cast<std::size_t>(levels - 1), ' ') + "v: 1\n";
+        return s;
+    };
+    const auto nested_seq = [](int levels) {
+        dstd::String s;
+        for (int i = 0; i < levels - 1; ++i)
+            s += dstd::String(static_cast<std::size_t>(i), ' ') + "-\n";
+        s += dstd::String(static_cast<std::size_t>(levels - 1), ' ') + "- 1\n";
+        return s;
+    };
+    CHECK(Document::parse(nested_map(128), "n.yaml").has_value());
+    CHECK(Document::parse(nested_seq(128), "n.yaml").has_value());
+    const dstd::String deep =
+        "n.yaml:129:129: blocks nested deeper than 128 levels are not "
+        "supported";
+    CHECK(error_of(nested_map(129)) == deep);
+    CHECK(error_of(nested_seq(129)) == deep);
+    const dstd::String ok_flow =
+        dstd::String(128, '[') + "x" + dstd::String(128, ']') + "\n";
+    CHECK(Document::parse(ok_flow, "n.yaml").has_value());
+    const dstd::String deep_flow =
+        dstd::String(129, '[') + "x" + dstd::String(129, ']') + "\n";
+    CHECK(error_of(deep_flow) ==
+          "n.yaml:1:129: flow collections nested deeper than 128 levels are "
+          "not supported");
+}
+
+TEST_CASE("line index: a byte order mark") {
+    const dstd::String bom = "\xEF\xBB\xBF";
+    const Document doc = must_parse(bom + "a: 1\nb: 2\n");
+    CHECK(doc.root().find("a")->as_uint() == 1);
+    CHECK_FALSE(doc.root().find(bom + "a").has_value());
+    CHECK(error_of(bom + "a: 1\na: 2\n") == "n.yaml:2:1: duplicate key 'a'");
+    const Document seq = must_parse(bom + "- a\n- b\n");
+    CHECK(dump(seq.root()) == "['a','b',]");
+    // Inside the text it is a character like any other.
+    const Document inner = must_parse("a" + bom + "b: 1\nc: x" + bom + "y\n");
+    CHECK(inner.root().find("a" + bom + "b")->as_uint() == 1);
+    CHECK(inner.root().find("c")->raw() == "x" + bom + "y");
+    CHECK(must_parse("a: " + bom + "b\n").root().find("a")->raw() == bom + "b");
+}
+
+TEST_CASE("line index: every escape of a double quoted scalar") {
+    struct Case {
+        const char* escape;
+        const char* text;
+        std::size_t size;
+    };
+    const Case CASES[] = {
+        {"\\0", "\0", 1},
+        {"\\a", "\x07", 1},
+        {"\\b", "\x08", 1},
+        {"\\t", "\t", 1},
+        {"\\\t", "\t", 1},
+        {"\\n", "\n", 1},
+        {"\\v", "\x0B", 1},
+        {"\\f", "\x0C", 1},
+        {"\\r", "\r", 1},
+        {"\\e", "\x1B", 1},
+        {"\\ ", " ", 1},
+        {"\\\"", "\"", 1},
+        {"\\/", "/", 1},
+        {"\\\\", "\\", 1},
+        {"\\N", "\xC2\x85", 2},
+        {"\\_", "\xC2\xA0", 2},
+        {"\\L", "\xE2\x80\xA8", 3},
+        {"\\P", "\xE2\x80\xA9", 3},
+        {"\\x41", "A", 1},
+        {"\\u00e9", "\xC3\xA9", 2},
+        {"\\u65E5", "\xE6\x97\xA5", 3},
+        {"\\U0001F600", "\xF0\x9F\x98\x80", 4},
+        {"\\uD83D\\uDE00", "\xF0\x9F\x98\x80", 4},
+        {"\\U0010FFFF", "\xF4\x8F\xBF\xBF", 4},
+    };
+    for (const Case& c : CASES) {
+        INFO("escape: ", dstd::String(c.escape));
+        const Document doc =
+            must_parse("a: \"<" + dstd::String(c.escape) + ">\"\n");
+        const dstd::String want = "<" + dstd::String(c.text, c.size) + ">";
+        const dstd::StringView got = doc.root().find("a")->raw();
+        CHECK(dstd::String(got) == want);
+    }
+    CHECK(Document::parse("a: \"\xF0\x9F\x98\x80\"\n", "n.yaml").has_value());
 }

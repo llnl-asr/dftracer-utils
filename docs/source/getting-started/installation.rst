@@ -55,7 +55,7 @@ The build produces nine layered component libraries, each as shared and static:
 - ``dftracer_utils_fileio``, file formats (gzip readers and writers, line
   streams, parallel writers, hashing).
 - ``dftracer_utils_json``, JSON parsing (simdjson-backed).
-- ``dftracer_utils_yaml``, YAML reading (rapidyaml-backed) and writing.
+- ``dftracer_utils_yaml``, YAML reading and writing.
 - ``dftracer_utils_duql``, the duql filter language (predicate IR, string codec, evaluator).
 - ``dftracer_utils_dataframe``, the columnar SIMD engine (``Series`` /
   ``DataFrame``, Highway kernels, the Arrow bridge, query execution / masking).

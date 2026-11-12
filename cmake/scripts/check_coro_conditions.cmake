@@ -80,8 +80,6 @@ FNR == 1 { in_block = 0; depth = 0; pending = 0; braces = 0 }
 END { exit hits > 0 ? 1 : 0 }
 ]=])
 
-set(_awk_file "${CMAKE_CURRENT_BINARY_DIR}/check_coro_conditions.awk")
-file(WRITE "${_awk_file}" "${_program}")
 
 file(GLOB_RECURSE _files
      "${SOURCE_DIR}/src/*.h" "${SOURCE_DIR}/src/*.cpp" "${SOURCE_DIR}/src/*.inc"
@@ -104,7 +102,7 @@ if(_count EQUAL 0)
 endif()
 
 execute_process(
-  COMMAND ${_awk} -f "${_awk_file}" ${_candidates}
+  COMMAND ${_awk} "${_program}" ${_candidates}
   RESULT_VARIABLE _rc
   OUTPUT_VARIABLE _out
   ERROR_VARIABLE _err)

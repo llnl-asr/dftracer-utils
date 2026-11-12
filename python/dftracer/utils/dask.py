@@ -228,7 +228,7 @@ def register_auto_thread_plugin() -> None:
         import time
         from collections import Counter
 
-        client = get_client()  # pyright: ignore[reportOptionalCall]  # ty: ignore[call-non-callable]
+        client = get_client()  # pyright: ignore[reportOptionalCall]  # ty: ignore[not-callable]
         sched_addr = getattr(client.scheduler, "address", None) or ""
         if sched_addr in _plugin_registered_schedulers:
             return
@@ -628,7 +628,7 @@ class DaskTraceViewer:
         return [self._files[i : i + step] for i in range(0, len(self._files), step)]
 
     def _resolve_client(self) -> "Client":
-        return self._client or get_client()  # pyright: ignore[reportOptionalCall]  # ty: ignore[call-non-callable]
+        return self._client or get_client()  # pyright: ignore[reportOptionalCall]  # ty: ignore[not-callable]
 
     def collect(self):
         """Distributed group_by+agg -> one native DataFrame.

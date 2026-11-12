@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: MIT
-#include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/raw_buffer.h>
 #include <dftracer/utils/yaml/line_index.h>
 #include <dftracer/utils/yaml/line_value.h>
@@ -13,11 +12,11 @@ namespace dftracer::utils::yaml {
 
 namespace {
 
-constexpr std::size_t READ_BLOCK = std::size_t{1} << 20;
-
 enum class Mode : std::uint8_t { Unknown, Empty, Seq, Docs, Single };
 
 enum class Head : std::uint8_t { NeedMore, Empty, Seq, Docs, Single };
+
+enum class Load : std::uint8_t { Chunk, End, NeedInput };
 
 bool is_blank(char c) { return c == ' ' || c == '\t'; }
 
@@ -31,11 +30,11 @@ bool starts_with_marker(dstd::StringView line, dstd::StringView marker) {
 }
 
 // What the first content line of `text` says the text is.
-Head detect_head(dstd::StringView text, bool eof) {
+Head detect_head(dstd::StringView text, bool is_ended) {
     if (text.substr(0, 3) == "\xEF\xBB\xBF") text.remove_prefix(3);
     while (!text.empty()) {
         const std::size_t end = text.find('\n');
-        if (end == dstd::StringView::npos && !eof) return Head::NeedMore;
+        if (end == dstd::StringView::npos && !is_ended) return Head::NeedMore;
         dstd::StringView line = text.substr(0, end);
         text = end == dstd::StringView::npos ? dstd::StringView{}
                                              : text.substr(end + 1);
@@ -46,7 +45,7 @@ Head detect_head(dstd::StringView text, bool eof) {
         if (starts_with_marker(line, "-")) return Head::Seq;
         return Head::Single;
     }
-    return eof ? Head::Empty : Head::NeedMore;
+    return is_ended ? Head::Empty : Head::NeedMore;
 }
 
 // Whether a line of `text` is anything but a blank, a comment or a directive.
@@ -70,19 +69,24 @@ struct RecordsImpl {
     RecordsOptions options;
     /// The text of a string source.
     dstd::String owned;
-    /// The text of a file read so far, which skips the zero fill of a string.
-    /// A chunk is parsed where it lies in it, and the unparsed rest follows.
+    /// The text given in blocks, from the start of the chunk, which skips the
+    /// zero fill of a string. A chunk is parsed where it lies in it, and the
+    /// unparsed rest follows. Bytes past `filled` are input space.
     dstd::RawBuffer<char> raw;
-    /// The start of the chunk, or of the next one, in `buffer`.
+    std::size_t filled = 0;
+    /// The start of the chunk, or of the next one, in the text.
     std::size_t begin = 0;
     std::size_t chunk_end = 0;
-    dstd::File file;
-    std::uint64_t file_offset = 0;
-    bool is_file = false;
-    bool eof = true;
+    /// Where the search for the end of the chunk goes on when more text comes,
+    /// or 0 before it starts.
+    std::size_t scan_from = 0;
+    bool after_end_marker = false;
+    bool is_blocks = false;
+    bool is_ended = true;
+    bool needs_input = false;
     Mode mode = Mode::Unknown;
     bool chunk_loaded = false;
-    bool failed = false;
+    bool is_done = false;
     std::uint64_t lines_before = 0;
     DocumentStorage storage;
     /// The walk of a chunk: the next line of the top sequence in Seq mode, the
@@ -91,36 +95,14 @@ struct RecordsImpl {
     std::uint32_t line_limit = 0;
     std::uint64_t chunk_lines = 0;
 
-    char* chars() { return is_file ? raw.data() : owned.data(); }
-    std::size_t chars_size() const {
-        return is_file ? raw.size() : owned.size();
-    }
+    char* chars() { return is_blocks ? raw.data() : owned.data(); }
+    std::size_t chars_size() const { return is_blocks ? filled : owned.size(); }
     dstd::StringView text() { return dstd::StringView(chars(), chars_size()); }
 
-    dstd::Result<void> read_more(std::size_t at_least);
-    dstd::Result<bool> load_chunk();
-    dstd::Result<void> find_chunk_end();
+    dstd::Result<Load> load_chunk();
+    bool find_chunk_end();
     dstd::Result<void> start_chunk();
 };
-
-dstd::Result<void> RecordsImpl::read_more(std::size_t at_least) {
-    if (eof) return {};
-    const std::size_t want = std::max(at_least, READ_BLOCK);
-    const std::size_t old_size = raw.size();
-    raw.resize(old_size + want);
-    auto got = file.read_at(
-        file_offset,
-        dstd::Span<std::uint8_t>(
-            reinterpret_cast<std::uint8_t*>(raw.data()) + old_size, want));
-    if (!got) {
-        raw.resize(old_size);
-        return got.error();
-    }
-    raw.resize(old_size + *got);
-    file_offset += *got;
-    if (*got == 0) eof = true;
-    return {};
-}
 
 namespace {
 
@@ -133,58 +115,57 @@ bool starts_chunk(Mode mode, dstd::StringView line) {
 }  // namespace
 
 // Sets `chunk_end` to the first line start at or after the chunk size that
-// starts a record, or to the end of the text.
-dstd::Result<void> RecordsImpl::find_chunk_end() {
-    std::size_t from = begin + std::max<std::size_t>(options.chunk_bytes, 1);
-    bool after_end_marker = false;
-    for (;;) {
-        while (!eof && chars_size() < from + READ_BLOCK) {
-            if (auto more = read_more(from + READ_BLOCK - chars_size()); !more)
-                return more;
-        }
-        const dstd::StringView text = this->text();
-        std::size_t pos = std::min(from, text.size());
-        if (pos < text.size() && text[pos - 1] != '\n') {
-            const std::size_t newline = text.find('\n', pos);
-            pos = newline == dstd::StringView::npos ? text.size() : newline + 1;
-        }
-        while (pos < text.size()) {
-            const std::size_t newline = text.find('\n', pos);
-            if (newline == dstd::StringView::npos && !eof) break;
-            const dstd::StringView line = text.substr(
-                pos,
-                newline == dstd::StringView::npos ? newline : newline - pos);
-            if (after_end_marker || starts_chunk(mode, line)) {
-                // A directive belongs to the document that follows it.
-                std::size_t cut = pos;
-                while (mode == Mode::Docs && cut > begin + 1) {
-                    const std::size_t previous = text.rfind('\n', cut - 2);
-                    const std::size_t start =
-                        previous == dstd::StringView::npos ? 0 : previous + 1;
-                    if (start <= begin || text[start] != '%') break;
-                    cut = start;
-                }
-                // Directives and comments alone are not a document.
-                if (mode != Mode::Docs ||
-                    has_content(text.substr(begin, cut - begin))) {
-                    chunk_end = cut;
-                    return {};
-                }
-            }
-            after_end_marker =
-                mode == Mode::Docs && starts_with_marker(line, "...");
-            if (newline == dstd::StringView::npos) {
-                pos = text.size();
-                break;
-            }
-            pos = newline + 1;
-        }
-        if (eof) {
-            chunk_end = text.size();
-            return {};
-        }
-        from = pos;
+// starts a record, or to the end of the text. False when that needs more text.
+bool RecordsImpl::find_chunk_end() {
+    if (scan_from == 0)
+        scan_from = begin + std::max<std::size_t>(options.chunk_bytes, 1);
+    const dstd::StringView text = this->text();
+    if (scan_from > text.size() && !is_ended) return false;
+    std::size_t pos = std::min(scan_from, text.size());
+    if (pos < text.size() && text[pos - 1] != '\n') {
+        const std::size_t newline = text.find('\n', pos);
+        pos = newline == dstd::StringView::npos ? text.size() : newline + 1;
     }
+    while (pos < text.size()) {
+        const std::size_t newline = text.find('\n', pos);
+        if (newline == dstd::StringView::npos && !is_ended) break;
+        const dstd::StringView line = text.substr(
+            pos, newline == dstd::StringView::npos ? newline : newline - pos);
+        if (after_end_marker || starts_chunk(mode, line)) {
+            // A directive belongs to the document that follows it.
+            std::size_t cut = pos;
+            while (mode == Mode::Docs && cut > begin + 1) {
+                const std::size_t previous = text.rfind('\n', cut - 2);
+                const std::size_t start =
+                    previous == dstd::StringView::npos ? 0 : previous + 1;
+                if (start <= begin || text[start] != '%') break;
+                cut = start;
+            }
+            // Directives and comments alone are not a document.
+            if (mode != Mode::Docs ||
+                has_content(text.substr(begin, cut - begin))) {
+                chunk_end = cut;
+                scan_from = 0;
+                after_end_marker = false;
+                return true;
+            }
+        }
+        after_end_marker =
+            mode == Mode::Docs && starts_with_marker(line, "...");
+        if (newline == dstd::StringView::npos) {
+            pos = text.size();
+            break;
+        }
+        pos = newline + 1;
+    }
+    if (is_ended) {
+        chunk_end = text.size();
+        scan_from = 0;
+        after_end_marker = false;
+        return true;
+    }
+    scan_from = pos;
+    return false;
 }
 
 dstd::Result<void> RecordsImpl::start_chunk() {
@@ -236,22 +217,18 @@ dstd::Result<void> RecordsImpl::start_chunk() {
     return {};
 }
 
-// Loads the next chunk. False when the text has no more.
-dstd::Result<bool> RecordsImpl::load_chunk() {
-    if (is_file && begin > 0) {
-        std::memmove(raw.data(), raw.data() + begin, raw.size() - begin);
-        raw.resize(raw.size() - begin);
+// Loads the next chunk.
+dstd::Result<Load> RecordsImpl::load_chunk() {
+    if (is_blocks && begin > 0) {
+        std::memmove(raw.data(), raw.data() + begin, filled - begin);
+        filled -= begin;
         chunk_end -= begin;
         begin = 0;
     }
     if (mode == Mode::Unknown) {
-        Head head = Head::NeedMore;
-        for (;;) {
-            head = detect_head(text().substr(begin), eof);
-            if (head != Head::NeedMore) break;
-            if (auto more = read_more(READ_BLOCK); !more) return more.error();
-        }
-        switch (head) {
+        switch (detect_head(text().substr(begin), is_ended)) {
+            case Head::NeedMore:
+                return Load::NeedInput;
             case Head::Seq:
                 mode = Mode::Seq;
                 break;
@@ -261,26 +238,21 @@ dstd::Result<bool> RecordsImpl::load_chunk() {
             case Head::Single:
                 mode = Mode::Single;
                 break;
-            default:
+            case Head::Empty:
                 mode = Mode::Empty;
                 break;
         }
     }
-    if (mode == Mode::Empty) return false;
-    while (!eof && chars_size() == begin) {
-        if (auto more = read_more(READ_BLOCK); !more) return more.error();
-    }
-    if (chars_size() == begin) return false;
+    if (mode == Mode::Empty) return Load::End;
+    if (chars_size() == begin) return is_ended ? Load::End : Load::NeedInput;
     if (mode == Mode::Single) {
-        while (!eof) {
-            if (auto more = read_more(READ_BLOCK); !more) return more.error();
-        }
+        if (!is_ended) return Load::NeedInput;
         chunk_end = chars_size();
-    } else if (auto found = find_chunk_end(); !found) {
-        return found.error();
+    } else if (!find_chunk_end()) {
+        return Load::NeedInput;
     }
     if (auto started = start_chunk(); !started) return started.error();
-    return true;
+    return Load::Chunk;
 }
 
 Records::Records(dstd::UniquePtr<RecordsImpl> impl) : impl_(std::move(impl)) {}
@@ -297,23 +269,46 @@ Records Records::from_text(dstd::String text, dstd::StringView source_name,
     return Records(std::move(impl));
 }
 
-dstd::Result<Records> Records::open(dstd::PathView path,
-                                    RecordsOptions options) {
-    auto file = dstd::File::open(path, dstd::OpenOptions{});
-    if (!file) return file.error();
+Records Records::from_blocks(dstd::StringView source_name,
+                             RecordsOptions options) {
     auto impl = dstd::make_unique<RecordsImpl>();
-    impl->name = dstd::String(path.str());
+    impl->name = dstd::String(source_name);
     impl->options = options;
-    impl->file = std::move(*file);
-    impl->is_file = true;
-    impl->eof = false;
+    impl->is_blocks = true;
+    impl->is_ended = false;
     return Records(std::move(impl));
 }
+
+dstd::Span<char> Records::input_space(std::size_t size) {
+    RecordsImpl& impl = *impl_;
+    const std::size_t need = impl.filled + size;
+    // Room for a whole chunk at once, so the text of a chunk is not copied
+    // as the buffer grows block by block; past that, it doubles.
+    if (need > impl.raw.capacity())
+        impl.raw.reserve(std::max(
+            {need, impl.options.chunk_bytes + size, impl.raw.capacity() * 2}));
+    impl.raw.resize(need);
+    return dstd::Span<char>(impl.raw.data() + impl.filled, size);
+}
+
+void Records::commit_input(std::size_t size) {
+    RecordsImpl& impl = *impl_;
+    impl.filled += size;
+    impl.raw.resize(impl.filled);
+    impl.needs_input = false;
+}
+
+void Records::end_input() {
+    impl_->is_ended = true;
+    impl_->needs_input = false;
+}
+
+bool Records::needs_input() const { return impl_->needs_input; }
 
 dstd::Result<dstd::Optional<Value>> Records::next() {
     RecordsImpl& impl = *impl_;
     for (;;) {
-        if (impl.failed) return dstd::Optional<Value>{};
+        if (impl.is_done) return dstd::Optional<Value>{};
         if (impl.chunk_loaded) {
             const LineIndex& ix = impl.storage.lines;
             if (impl.mode == Mode::Seq) {
@@ -341,11 +336,15 @@ dstd::Result<dstd::Optional<Value>> Records::next() {
         }
         auto loaded = impl.load_chunk();
         if (!loaded.has_value()) {
-            impl.failed = true;
+            impl.is_done = true;
             return loaded.error();
         }
-        if (!*loaded) {
-            impl.failed = true;
+        if (*loaded == Load::NeedInput) {
+            impl.needs_input = true;
+            return dstd::Optional<Value>{};
+        }
+        if (*loaded == Load::End) {
+            impl.is_done = true;
             return dstd::Optional<Value>{};
         }
     }

@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/ascii.h>
-#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/yaml/document.h>
 #include <dftracer/utils/yaml/line_value.h>
@@ -31,12 +30,6 @@ dstd::Result<Document> Document::parse(dstd::String text,
         BuildResult::Invalid)
         return line_problem_error(storage->lines.problem, source_name, 1);
     return Document(std::move(storage));
-}
-
-dstd::Result<Document> Document::load_file(dstd::PathView path) {
-    auto text = dstd::fs::read_file(path);
-    if (!text) return text.error();
-    return parse(std::move(*text), path.str());
 }
 
 Value Document::root() const { return LineAccess::root(storage_.get()); }

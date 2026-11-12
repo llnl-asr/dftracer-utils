@@ -2,12 +2,9 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/fmt.h>
-#include <dftracer/utils/dstd/fs.h>
-#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/yaml/document.h>
 #include <doctest/doctest.h>
-#include <testing_utilities.h>
 
 #include <cmath>
 #include <cstdint>
@@ -270,23 +267,4 @@ TEST_CASE("yaml: a string moved in is the buffer of the document") {
     const dstd::StringView value = *doc->root().find("k")->as_string();
     CHECK(value.data() > data);
     CHECK(value.data() < data + 1010);
-}
-
-TEST_CASE("yaml: load_file reads a file and names it in an error") {
-    const dstd::Path path =
-        dftu_utils_test::make_unique_test_path("yaml_load_file");
-    const dstd::String name(path.str());
-    REQUIRE(dstd::fs::write_file(path, "k: [1\n").has_value());
-    auto bad = Document::load_file(name);
-    REQUIRE_FALSE(bad.has_value());
-    CHECK(bad.error().is_code(common::ErrorCode::InvalidArgument));
-    CHECK(dstd::String(bad.error().message()).find(name) == 0);
-
-    REQUIRE(dstd::fs::write_file(path, "k: v\n").has_value());
-    auto good = Document::load_file(name);
-    REQUIRE(good.has_value());
-    CHECK(good->root().find("k")->raw() == "v");
-    REQUIRE(dstd::fs::remove(path).has_value());
-
-    CHECK_FALSE(Document::load_file(name).has_value());
 }

@@ -11,7 +11,8 @@
 //
 //   parse     yaml::Document::parse over the whole text, no walk
 //   document  yaml::Document::parse over the whole text, then the walk
-//   records   yaml::Records over a file of the text, chunks of --chunk MiB
+//   records   yaml::Records over a file of the text, read in 1 MiB blocks,
+//             chunks of --chunk MiB
 //   records1  the same, chunks of 1 MiB
 //
 // The walk of records sums `dur` and counts the POSIX records whose
@@ -37,6 +38,7 @@
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -264,15 +266,34 @@ Outcome run_document(const dstd::String& text, Shape shape, bool walks) {
     });
 }
 
+constexpr std::size_t READ_BLOCK = std::size_t{1} << 20;
+
 Outcome run_records(const dstd::Path& path, Shape shape,
                     std::size_t chunk_bytes) {
     yaml::RecordsOptions options;
     options.chunk_bytes = chunk_bytes;
     return measure([&](Answer& answer) {
-        auto records = dftu::bench::ok(yaml::Records::open(path, options));
+        auto file =
+            dftu::bench::ok(dstd::File::open(path, dstd::OpenOptions{}));
+        auto records = yaml::Records::from_blocks(path.str(), options);
+        std::uint64_t offset = 0;
         for (;;) {
             auto next = dftu::bench::ok(records.next());
-            if (!next) break;
+            if (!next) {
+                if (!records.needs_input()) break;
+                dstd::Span<char> space = records.input_space(READ_BLOCK);
+                const std::size_t got = dftu::bench::ok(file.read_at(
+                    offset, dstd::Span<std::uint8_t>(
+                                reinterpret_cast<std::uint8_t*>(space.data()),
+                                space.size())));
+                if (got == 0) {
+                    records.end_input();
+                } else {
+                    records.commit_input(got);
+                    offset += got;
+                }
+                continue;
+            }
             if (shape == Shape::Multiline)
                 walk_multiline(*next, answer);
             else if (shape == Shape::Records)

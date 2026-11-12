@@ -10,7 +10,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 ### Added
 
 - Add `yaml::Records` for a YAML text too large for memory.
-  It yields the elements of a top-level block sequence, or the documents of a `---` stream, one at a time, from a string or a file read in blocks.
+  It yields the elements of a top-level block sequence, or the documents of a `---` stream, one at a time, from a string or from blocks that the caller reads and gives it.
+  The yaml library reads no files.
   Each chunk of about 64 MiB (`RecordsOptions::chunk_bytes`) is parsed on its own and its buffers are reused, so memory follows the chunk and not the text.
 
 ### Changed

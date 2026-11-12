@@ -5,7 +5,6 @@
 #include <dftracer/utils/dstd/function_ref.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
-#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
 
@@ -109,10 +108,6 @@ class Document {
     /// InvalidArgument errors too.
     static dstd::Result<Document> parse(dstd::String text,
                                         dstd::StringView source_name);
-
-    /// Reads the file at `path` into the buffer the document owns and parses
-    /// it, naming the file in an error.
-    static dstd::Result<Document> load_file(dstd::PathView path);
 
     /// The top node. Empty text gives a null node.
     Value root() const;

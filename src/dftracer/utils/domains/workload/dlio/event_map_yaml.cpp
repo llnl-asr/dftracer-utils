@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/domains/workload/dlio/trace_loader.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/yaml/document.h>
+
+#include <utility>
 
 namespace dftracer::utils::domains::workload::dlio {
 
@@ -38,7 +41,9 @@ dstd::Result<void> overlay_selector(const Value& root, const char* key,
 
 dstd::Result<void> load_event_map(dstd::StringView path,
                                   TraceLoaderOptions& options) {
-    const auto document = Document::load_file(path);
+    auto text = dstd::fs::read_file(path);
+    if (!text) return text.error();
+    const auto document = Document::parse(std::move(*text), path);
     if (!document) return document.error();
     const Value root = document->root();
     if (!root.is_object()) {

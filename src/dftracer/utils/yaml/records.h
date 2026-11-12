@@ -4,8 +4,8 @@
 
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
-#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/result.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/yaml/document.h>
 
@@ -53,8 +53,10 @@ struct RecordsImpl;
 /// reports its line counted from the start of the text. A document marker
 /// inside a top-level sequence is an error.
 ///
-/// The text is not changed and not copied for a parse. A file is read
-/// in blocks, so only a chunk and one block of the text are in memory.
+/// The text is not changed and not copied for a parse. Text that the caller
+/// gives in blocks (@ref from_blocks) is held only from the start of the
+/// chunk, so only a chunk and the blocks after it are in memory. Records reads
+/// no file: the caller reads the blocks.
 class Records {
    public:
     Records(Records&&) noexcept;
@@ -66,14 +68,30 @@ class Records {
     static Records from_text(dstd::String text, dstd::StringView source_name,
                              RecordsOptions options = {});
 
-    /// Reads the file at `path` as it goes.
-    static dstd::Result<Records> open(dstd::PathView path,
-                                      RecordsOptions options = {});
+    /// Takes the text in blocks that the caller writes with @ref input_space
+    /// and @ref commit_input, and ends with @ref end_input.
+    static Records from_blocks(dstd::StringView source_name,
+                               RecordsOptions options = {});
 
-    /// The next record, or nothing after the last one. The value and every
-    /// view of it stay valid until the next call. A syntax error in a chunk
-    /// is an InvalidArgument error like that of @ref Document::parse, and the
-    /// records after the chunk are not read.
+    /// Space for at least `size` more bytes of text, after the text given so
+    /// far. The space and every record view stay valid until the next call of
+    /// this, @ref commit_input or @ref next.
+    dstd::Span<char> input_space(std::size_t size);
+
+    /// Adds the first `size` bytes written to the last @ref input_space.
+    void commit_input(std::size_t size);
+
+    /// Says that no more text follows.
+    void end_input();
+
+    /// True when @ref next gave nothing because it needs more text, before
+    /// @ref end_input.
+    bool needs_input() const;
+
+    /// The next record, or nothing after the last one or when @ref
+    /// needs_input. The value and every view of it stay valid until the next
+    /// call. A syntax error in a chunk is an InvalidArgument error like that of
+    /// @ref Document::parse, and the records after the chunk are not read.
     dstd::Result<dstd::Optional<Value>> next();
 
    private:

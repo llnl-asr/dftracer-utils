@@ -30,8 +30,9 @@ static variant (``src/CMakeLists.txt``), aggregated behind
   block YAML and a flow parser that keeps a flat tape of 12-byte entries and
   no tree, reports errors without exceptions, refuses anchors, aliases, tags,
   complex keys, directives and null keys, and reads a text too large for
-  memory in chunks (``Records``), and a block-style writer. It links only memory, dstd and
-  common, and the trace and domains libraries link it.
+  memory in chunks (``Records``), and a block-style writer. It parses and writes
+  buffers and does no I/O. It links only memory, dstd and common, and the trace
+  and domains libraries link it.
 - ``dftracer_utils_duql`` is the duql filter language: the predicate IR, the string
   codec, and the evaluator.
 - ``dftracer_utils_dataframe`` is the columnar SIMD engine: ``Series`` /

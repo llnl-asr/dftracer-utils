@@ -2,16 +2,17 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/fmt.h>
-#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/yaml/document.h>
 #include <dftracer/utils/yaml/records.h>
 #include <doctest/doctest.h>
-#include <testing_utilities.h>
 #include <yaml/yaml_dump.h>
 
+#include <algorithm>
 #include <cstddef>
+#include <cstring>
 
 using namespace dftracer::utils;
 using dftu_yaml_test::dump;
@@ -35,6 +36,44 @@ dstd::Vector<dstd::String> records_of(dstd::StringView text,
         REQUIRE(next.has_value());
         if (!next->has_value()) break;
         out.push_back(dump(**next));
+    }
+    return out;
+}
+
+// Gives `records` the next block of at most `block` bytes of `text` from `at`,
+// or ends the input.
+void feed(Records& records, dstd::StringView text, std::size_t& at,
+          std::size_t block) {
+    const std::size_t size = std::min(block, text.size() - at);
+    if (size == 0) {
+        records.end_input();
+        return;
+    }
+    dstd::Span<char> space = records.input_space(block);
+    REQUIRE(space.size() >= size);
+    std::memcpy(space.data(), text.data() + at, size);
+    records.commit_input(size);
+    at += size;
+}
+
+// As records_of, with the text given in blocks of `block` bytes.
+dstd::Vector<dstd::String> records_in_blocks(dstd::StringView text,
+                                             std::size_t chunk,
+                                             std::size_t block) {
+    RecordsOptions options;
+    options.chunk_bytes = chunk;
+    Records records = Records::from_blocks("r.yaml", options);
+    dstd::Vector<dstd::String> out;
+    std::size_t at = 0;
+    for (;;) {
+        auto next = records.next();
+        REQUIRE(next.has_value());
+        if (next->has_value()) {
+            out.push_back(dump(**next));
+            continue;
+        }
+        if (!records.needs_input()) break;
+        feed(records, text, at, block);
     }
     return out;
 }
@@ -227,66 +266,64 @@ TEST_CASE("yaml records: a document marker inside a sequence is refused") {
               .find("document marker") != dstd::String::npos);
 }
 
-TEST_CASE("yaml records: a file is read in blocks and cut by size") {
-    const dstd::Path path =
-        dftu_utils_test::make_unique_test_path("yaml_records_file");
-    dstd::String text;
-    constexpr int COUNT = 60000;
-    for (int i = 0; i < COUNT; ++i)
-        text += dstd::fmt<"- id: {}\n  name: item number {}\n  tags: [a, b]\n">(
+TEST_CASE("yaml records: text given in blocks gives the records of the whole") {
+    dstd::String seq;
+    for (int i = 0; i < 3000; ++i)
+        seq += dstd::fmt<"- id: {}\n  name: item number {}\n  tags: [a, b]\n">(
             i, i);
-    REQUIRE(dstd::fs::write_file(path, text).has_value());
-    RecordsOptions options;
-    options.chunk_bytes = 100000;
-    auto opened = Records::open(path, options);
-    REQUIRE(opened.has_value());
-    int count = 0;
-    for (;;) {
-        auto next = opened->next();
-        REQUIRE(next.has_value());
-        if (!next->has_value()) break;
-        CHECK((*next)->find("id")->as_int() == count);
-        ++count;
+    dstd::String docs;
+    for (int i = 0; i < 2000; ++i)
+        docs += dstd::fmt<"---\nid: {}\nbody: |\n  line\n  more\n">(i);
+    dstd::String map;
+    for (int i = 0; i < 500; ++i) map += dstd::fmt<"k{}: {}\n">(i, i);
+    const dstd::String texts[] = {
+        seq,
+        docs,
+        map,
+        "",
+        "# only a comment\n",
+        "# c\n---\na: 1\n...\n# d\n---\nb: 2\n...\nc: 3\n",
+        "- a\r\n- b: [1,\r\n    2]\r\n- c",
+        "--- 1\n--- 2\n---\n",
+        "---\n----\n---\nx\n",
+        "\xEF\xBB\xBF- a\n- b\n",
+        "\xEF\xBB\xBF---\na: 1\n---\nb: 2\n",
+    };
+    for (const dstd::String& text : texts) {
+        CAPTURE(text.substr(0, 40));
+        for (const std::size_t chunk : {std::size_t{1}, std::size_t{40000}}) {
+            const auto expected = records_of(text, chunk);
+            for (const std::size_t block :
+                 {std::size_t{1}, std::size_t{7}, std::size_t{4096}}) {
+                CAPTURE(chunk);
+                CAPTURE(block);
+                CHECK(records_in_blocks(text, chunk, block) == expected);
+            }
+        }
     }
-    CHECK(count == COUNT);
-    REQUIRE(dstd::fs::remove(path).has_value());
-    CHECK_FALSE(Records::open(path, options).has_value());
 }
 
-TEST_CASE("yaml records: a file of documents, and a single large map") {
-    const dstd::Path path =
-        dftu_utils_test::make_unique_test_path("yaml_records_docs");
-    dstd::String text;
-    for (int i = 0; i < 20000; ++i)
-        text += dstd::fmt<"---\nid: {}\nbody: |\n  line\n  more\n">(i);
-    REQUIRE(dstd::fs::write_file(path, text).has_value());
-    RecordsOptions options;
-    options.chunk_bytes = 50000;
-    auto opened = Records::open(path, options);
-    REQUIRE(opened.has_value());
-    int count = 0;
-    for (;;) {
-        auto next = opened->next();
-        REQUIRE(next.has_value());
-        if (!next->has_value()) break;
-        CHECK((*next)->find("id")->as_int() == count);
-        ++count;
+TEST_CASE("yaml records: an error in text given in blocks") {
+    const dstd::String text = "- a\n- b\n---\n- c\n";
+    for (const std::size_t block : {std::size_t{1}, std::size_t{5}}) {
+        RecordsOptions options;
+        options.chunk_bytes = 100000;
+        Records records = Records::from_blocks("r.yaml", options);
+        std::size_t at = 0;
+        dstd::String message;
+        for (;;) {
+            auto next = records.next();
+            if (!next.has_value()) {
+                message = dstd::String(next.error().message());
+                break;
+            }
+            if (next->has_value()) continue;
+            if (!records.needs_input()) break;
+            feed(records, text, at, block);
+        }
+        CHECK(message == error_after_records(text, 100000));
+        CHECK(message.find("document marker") != dstd::String::npos);
     }
-    CHECK(count == 20000);
-
-    dstd::String map;
-    for (int i = 0; i < 5000; ++i) map += dstd::fmt<"k{}: {}\n">(i, i);
-    REQUIRE(dstd::fs::write_file(path, map).has_value());
-    auto single = Records::open(path, options);
-    REQUIRE(single.has_value());
-    auto first = single->next();
-    REQUIRE(first.has_value());
-    REQUIRE(first->has_value());
-    CHECK((*first)->find("k4999")->as_int() == 4999);
-    auto second = single->next();
-    REQUIRE(second.has_value());
-    CHECK_FALSE(second->has_value());
-    REQUIRE(dstd::fs::remove(path).has_value());
 }
 
 TEST_CASE("yaml records: next after the end and after an error is empty") {

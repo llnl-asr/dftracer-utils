@@ -33,12 +33,6 @@
 #include <string>
 #include <type_traits>
 
-// Highway static dispatch (baseline target): only the two
-// naturally-vectorizable string ops use it - str_len_bytes (adjacent int32
-// offset difference) and the ASCII case folds (byte compare + conditional add).
-// Every other op is variable-length per row and is legitimately scalar.
-#include <hwy/highway.h>
-
 using namespace dftracer::utils;
 
 using duql::detail::substr_find;
@@ -215,71 +209,6 @@ dftu_series* make_string(
     return out;
 }
 
-// ---- SIMD helpers --------------------------------------------------------
-
-// out[i] = off[i+1] - off[i], widened to int64. Highway over the int32 offsets.
-void len_bytes_simd(const std::int32_t* off, std::int64_t* out, std::size_t n) {
-    const hwy::HWY_NAMESPACE::ScalableTag<std::int64_t> d64;
-    const hwy::HWY_NAMESPACE::Rebind<std::int32_t, decltype(d64)> d32;
-    const std::size_t lanes = hwy::HWY_NAMESPACE::Lanes(d64);
-    std::size_t i = 0;
-    for (; i + lanes <= n; i += lanes) {
-        const auto a = hwy::HWY_NAMESPACE::LoadU(d32, off + i + 1);
-        const auto b = hwy::HWY_NAMESPACE::LoadU(d32, off + i);
-        hwy::HWY_NAMESPACE::StoreU(
-            hwy::HWY_NAMESPACE::PromoteTo(d64, hwy::HWY_NAMESPACE::Sub(a, b)),
-            d64, out + i);
-    }
-    for (; i < n; ++i) out[i] = static_cast<std::int64_t>(off[i + 1] - off[i]);
-}
-
-// UTF-8 character count of a byte range: every byte that is not a continuation
-// byte ((c & 0xC0) != 0x80) starts a character. Highway compares a block and
-// folds the mask with CountTrue.
-std::int64_t count_char_starts(const std::uint8_t* p, std::size_t len) {
-    const hwy::HWY_NAMESPACE::ScalableTag<std::uint8_t> d;
-    const auto vc0 = hwy::HWY_NAMESPACE::Set(d, 0xC0);
-    const auto v80 = hwy::HWY_NAMESPACE::Set(d, 0x80);
-    const std::size_t lanes = hwy::HWY_NAMESPACE::Lanes(d);
-    std::int64_t count = 0;
-    std::size_t i = 0;
-    for (; i + lanes <= len; i += lanes) {
-        const auto m = hwy::HWY_NAMESPACE::Ne(
-            hwy::HWY_NAMESPACE::And(hwy::HWY_NAMESPACE::LoadU(d, p + i), vc0),
-            v80);
-        count += static_cast<std::int64_t>(hwy::HWY_NAMESPACE::CountTrue(d, m));
-    }
-    for (; i < len; ++i)
-        if ((p[i] & 0xC0) != 0x80) ++count;
-    return count;
-}
-
-// ASCII case fold of a byte buffer: `add` is +32 (upper->lower) or -32
-// (lower->upper); `lo`/`hi` bound the source case. Non-matching bytes pass
-// through unchanged (ASCII-only fold).
-void ascii_fold_simd(const std::uint8_t* in, std::uint8_t* out, std::size_t n,
-                     std::uint8_t lo, std::uint8_t hi, int add) {
-    const hwy::HWY_NAMESPACE::ScalableTag<std::uint8_t> d;
-    const auto vlo = hwy::HWY_NAMESPACE::Set(d, lo);
-    const auto vhi = hwy::HWY_NAMESPACE::Set(d, hi);
-    const auto vadd =
-        hwy::HWY_NAMESPACE::Set(d, static_cast<std::uint8_t>(add));
-    const std::size_t lanes = hwy::HWY_NAMESPACE::Lanes(d);
-    std::size_t i = 0;
-    for (; i + lanes <= n; i += lanes) {
-        const auto v = hwy::HWY_NAMESPACE::LoadU(d, in + i);
-        const auto m = hwy::HWY_NAMESPACE::And(hwy::HWY_NAMESPACE::Ge(v, vlo),
-                                               hwy::HWY_NAMESPACE::Le(v, vhi));
-        hwy::HWY_NAMESPACE::StoreU(hwy::HWY_NAMESPACE::IfThenElse(
-                                       m, hwy::HWY_NAMESPACE::Add(v, vadd), v),
-                                   d, out + i);
-    }
-    for (; i < n; ++i) {
-        const std::uint8_t c = in[i];
-        out[i] = (c >= lo && c <= hi) ? static_cast<std::uint8_t>(c + add) : c;
-    }
-}
-
 // Fold that keeps offsets/validity and rewrites only the (byte-length
 // preserving) data buffer. Fast path SIMD for a FLAT input, preserving the
 // source's own offset width and buffer (no copy of the offsets); a
@@ -300,8 +229,8 @@ dftu_series* ascii_fold_w(const dftu_series* v, std::uint8_t lo,
         const std::size_t data_size = v->data.block() ? v->data.size() : 0;
         out->data = new_buffer(data_size);
         if (data_size != 0)
-            ascii_fold_simd(v->data.data(), writable(out->data), data_size, lo,
-                            hi, add);
+            dataframe::strsimd::ascii_fold(v->data.data(), writable(out->data),
+                                           data_size, lo, hi, add);
         return out;
     }
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> parts(
@@ -596,7 +525,7 @@ dftu_series* dftu_series_str_len_bytes(const dftu_series* v) {
         dftracer::utils::dstd::Vector<std::int64_t> vals(
             static_cast<std::size_t>(v->length), 0);
         if (v->length > 0)
-            len_bytes_simd(
+            dataframe::strsimd::len_bytes(
                 reinterpret_cast<const std::int32_t*>(v->offsets.data()),
                 vals.data(), static_cast<std::size_t>(v->length));
         // Null rows keep 0 length regardless; validity marks them null.
@@ -618,9 +547,7 @@ dftu_series* dftu_series_str_len_chars(const dftu_series* v) {
         const std::uint8_t* data = v->data.data();
         dftracer::utils::dstd::Vector<std::int64_t> vals(
             static_cast<std::size_t>(v->length), 0);
-        for (std::int64_t i = 0; i < v->length; ++i)
-            vals[static_cast<std::size_t>(i)] = count_char_starts(
-                data + off[i], static_cast<std::size_t>(off[i + 1] - off[i]));
+        dataframe::strsimd::char_counts(data, off, v->length, vals.data());
         return make_i64(v, vals);
     }
     return string_int64(v, [](dftracer::utils::dstd::StringView s) {

@@ -469,6 +469,82 @@ void ClassRows64(int kind, const hn_u8* data, const std::int64_t* off,
     class_rows_dispatch(kind, data, off, lo, r0, r1, res);
 }
 
+void LenBytes32(const std::int32_t* off, std::int64_t* out, std::size_t n) {
+    const hwy::HWY_NAMESPACE::ScalableTag<std::int64_t> d64;
+    const hwy::HWY_NAMESPACE::Rebind<std::int32_t, decltype(d64)> d32;
+    const std::size_t lanes = hwy::HWY_NAMESPACE::Lanes(d64);
+    std::size_t i = 0;
+    for (; i + lanes <= n; i += lanes) {
+        const auto a = hwy::HWY_NAMESPACE::LoadU(d32, off + i + 1);
+        const auto b = hwy::HWY_NAMESPACE::LoadU(d32, off + i);
+        hwy::HWY_NAMESPACE::StoreU(
+            hwy::HWY_NAMESPACE::PromoteTo(d64, hwy::HWY_NAMESPACE::Sub(a, b)),
+            d64, out + i);
+    }
+    for (; i < n; ++i) out[i] = static_cast<std::int64_t>(off[i + 1] - off[i]);
+}
+
+// Rows lie end to end in the buffer, so a row shorter than a vector still
+// takes one vector load while the load stays before `end`, with the bytes past
+// the row masked off. Only the rows at the end of the buffer count by byte.
+void CharCounts32(const hn_u8* data, const std::int32_t* off, std::int64_t n,
+                  std::int64_t* out) {
+    const hwy::HWY_NAMESPACE::ScalableTag<hn_u8> d;
+    const auto vc0 = hwy::HWY_NAMESPACE::Set(d, hn_u8{0xC0});
+    const auto v80 = hwy::HWY_NAMESPACE::Set(d, hn_u8{0x80});
+    const std::size_t lanes = hwy::HWY_NAMESPACE::Lanes(d);
+    const hn_u8* end = data + off[n];
+    const auto starts = [&](const hn_u8* at) {
+        return hwy::HWY_NAMESPACE::Ne(
+            hwy::HWY_NAMESPACE::And(hwy::HWY_NAMESPACE::LoadU(d, at), vc0),
+            v80);
+    };
+    for (std::int64_t r = 0; r < n; ++r) {
+        const hn_u8* p = data + off[r];
+        const std::size_t len = static_cast<std::size_t>(off[r + 1] - off[r]);
+        std::int64_t count = 0;
+        std::size_t i = 0;
+        for (; i + lanes <= len; i += lanes) {
+            count += static_cast<std::int64_t>(
+                hwy::HWY_NAMESPACE::CountTrue(d, starts(p + i)));
+        }
+        if (i < len) {
+            if (p + i + lanes <= end) {
+                const auto m = hwy::HWY_NAMESPACE::And(
+                    starts(p + i), hwy::HWY_NAMESPACE::FirstN(d, len - i));
+                count += static_cast<std::int64_t>(
+                    hwy::HWY_NAMESPACE::CountTrue(d, m));
+            } else {
+                for (; i < len; ++i)
+                    if ((p[i] & 0xC0) != 0x80) ++count;
+            }
+        }
+        out[r] = count;
+    }
+}
+
+void AsciiFold(const hn_u8* in, hn_u8* out, std::size_t n, hn_u8 lo, hn_u8 hi,
+               int add) {
+    const hwy::HWY_NAMESPACE::ScalableTag<hn_u8> d;
+    const auto vlo = hwy::HWY_NAMESPACE::Set(d, lo);
+    const auto vhi = hwy::HWY_NAMESPACE::Set(d, hi);
+    const auto vadd = hwy::HWY_NAMESPACE::Set(d, static_cast<hn_u8>(add));
+    const std::size_t lanes = hwy::HWY_NAMESPACE::Lanes(d);
+    std::size_t i = 0;
+    for (; i + lanes <= n; i += lanes) {
+        const auto v = hwy::HWY_NAMESPACE::LoadU(d, in + i);
+        const auto m = hwy::HWY_NAMESPACE::And(hwy::HWY_NAMESPACE::Ge(v, vlo),
+                                               hwy::HWY_NAMESPACE::Le(v, vhi));
+        hwy::HWY_NAMESPACE::StoreU(hwy::HWY_NAMESPACE::IfThenElse(
+                                       m, hwy::HWY_NAMESPACE::Add(v, vadd), v),
+                                   d, out + i);
+    }
+    for (; i < n; ++i) {
+        const hn_u8 c = in[i];
+        out[i] = (c >= lo && c <= hi) ? static_cast<hn_u8>(c + add) : c;
+    }
+}
+
 const char* TargetNameFn() { return hwy::TargetName(HWY_TARGET); }
 
 }  // namespace HWY_NAMESPACE
@@ -483,6 +559,9 @@ HWY_EXPORT(CaseMap);
 HWY_EXPORT(ClassRows32);
 HWY_EXPORT(ClassRows64);
 HWY_EXPORT(TargetNameFn);
+HWY_EXPORT(LenBytes32);
+HWY_EXPORT(CharCounts32);
+HWY_EXPORT(AsciiFold);
 
 namespace strsimd {
 namespace {
@@ -705,6 +784,22 @@ void class_rows(BitKind kind, const std::uint8_t* data, const std::int64_t* off,
 }
 
 const char* target_name() { return HWY_DYNAMIC_DISPATCH(TargetNameFn)(); }
+
+void len_bytes(const std::int32_t* off, std::int64_t* out, std::size_t n) {
+    HWY_DYNAMIC_DISPATCH(LenBytes32)(off, out, n);
+}
+
+void char_counts(const std::uint8_t* data, const std::int32_t* off,
+                 std::int64_t n, std::int64_t* out) {
+    // An empty column may have no offsets at all, as from an empty Arrow array.
+    if (n <= 0) return;
+    HWY_DYNAMIC_DISPATCH(CharCounts32)(data, off, n, out);
+}
+
+void ascii_fold(const std::uint8_t* in, std::uint8_t* out, std::size_t n,
+                std::uint8_t lo, std::uint8_t hi, int add) {
+    HWY_DYNAMIC_DISPATCH(AsciiFold)(in, out, n, lo, hi, add);
+}
 
 }  // namespace strsimd
 }  // namespace dftracer::utils::dataframe

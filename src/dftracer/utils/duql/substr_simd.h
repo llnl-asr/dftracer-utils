@@ -4,6 +4,7 @@
 
 #include <dftracer/utils/dstd/string.h>
 
+#include <cstddef>
 #include <cstdint>
 
 namespace dftracer::utils::duql::detail {
@@ -20,6 +21,11 @@ std::int64_t substr_find(const char* hay, std::int64_t hay_size,
 /// lowercase ASCII-folded already.
 std::int64_t substr_find_icase(const char* hay, std::int64_t hay_size,
                                const char* needle, std::int64_t needle_size);
+
+/// Offset of the first vector block of `d` that holds a byte at or above
+/// 0x80, or the start of the tail shorter than a block. The vector width
+/// depends on the target, so a caller scans on from there byte by byte.
+std::size_t ascii_prefix(const unsigned char* d, std::size_t n);
 
 }  // namespace dftracer::utils::duql::detail
 

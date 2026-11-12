@@ -19,6 +19,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Pick the best vector instructions of the CPU at run time for `str_len_chars`, `str_len_bytes`, `to_lowercase`, `to_uppercase` and the UTF-8 check of duql patterns, which were built for SSE2 only on x86.
+  `str_len_chars` of 1M short rows takes 2.2 ms where it took 12.9 ms on an AVX-512 x86 CPU, and the other three are 10 to 15% faster.
 - Read only the parts of the index store that a query needs.
   A query no longer reads each 16 MiB window of a store file that holds two of its extents, and it reads 4 KiB for the page table of an extent where it read the whole extent.
   On Lustre, with an index of 14,117 traces (318 MB), a no-op `dftracer_index` reads 20 MB where it read 349 MB, `dftracer_view -q 'take 20'` 15 MB where it read 202 MB and a group-by 105 MB where it read 654 MB, cold and warm, with the same or a shorter run time.

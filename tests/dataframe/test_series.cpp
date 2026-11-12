@@ -1174,6 +1174,23 @@ TEST_SUITE("vec") {
         Series lc = Series::strings({longs}).str_len_chars();
         CHECK(lc.data<std::int64_t>()[0] == 50);
 
+        // Many short rows: each is counted with one masked vector while the
+        // load stays inside the buffer, and the last rows byte by byte.
+        dstd::Vector<dstd::String> rows;
+        const char* parts[] = {"a", "\xC3\xA9", "\xE6\x97\xA5", "xyz", ""};
+        for (int r = 0; r < 500; ++r) {
+            dstd::String row;
+            for (int k = 0; k < r % 23; ++k) row += parts[(r + k) % 5];
+            rows.push_back(row);
+        }
+        Series many = Series::strings(rows).str_len_chars();
+        for (std::size_t r = 0; r < rows.size(); ++r) {
+            std::int64_t want = 0;
+            for (const char c : rows[r])
+                if ((static_cast<unsigned char>(c) & 0xC0) != 0x80) ++want;
+            CHECK(many.data<std::int64_t>()[r] == want);
+        }
+
         Series find = Series::strings({"hello/world", "nope"}).str_find("/");
         CHECK(find.data<std::int64_t>()[0] == 5);
         CHECK(find.data<std::int64_t>()[1] == -1);

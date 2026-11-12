@@ -78,6 +78,19 @@ void case_map(CaseKind kind, const std::uint8_t* in, std::uint8_t* out,
 /// Name of the Highway target the dispatcher chose (for the benchmark).
 const char* target_name();
 
+/// out[i] = off[i + 1] - off[i] for i in [0, n): the byte length of each row.
+void len_bytes(const std::int32_t* off, std::int64_t* out, std::size_t n);
+
+/// out[i] = the UTF-8 characters of row i of a flat String column, counted as
+/// the bytes that are not continuation bytes, for i in [0, n).
+void char_counts(const std::uint8_t* data, const std::int32_t* off,
+                 std::int64_t n, std::int64_t* out);
+
+/// out[i] = in[i] + add when in[i] is in [lo, hi], else in[i], for i in
+/// [0, n): an ASCII case fold that keeps byte lengths.
+void ascii_fold(const std::uint8_t* in, std::uint8_t* out, std::size_t n,
+                std::uint8_t lo, std::uint8_t hi, int add);
+
 /// Run the byte-at-a-time reference instead of the vector kernels. Read once
 /// from the environment variable DFTRACER_UTILS_STRING_SCALAR (any value);
 /// set_force_scalar overrides it. A test and benchmark hook, never a fallback.

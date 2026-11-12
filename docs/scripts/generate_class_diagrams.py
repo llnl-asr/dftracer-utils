@@ -165,7 +165,7 @@ COMPONENT_GROUPS = [
         ["dftracer::utils::trace::"],
         "Trace Domain",
     ),
-    ("index", ["dftracer::utils::index::"], "Index"),
+    ("index", ["dftracer::utils::trace::index::"], "Index"),
     (
         "utilities",
         [

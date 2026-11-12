@@ -280,6 +280,8 @@ using OpenAtFn = int (*)(int, const char*, int, ...);
 using FopenFn = FILE* (*)(const char*, const char*);
 using PreadFn = ssize_t (*)(int, void*, size_t, off_t);
 using ReadFn = ssize_t (*)(int, void*, size_t);
+using PreadChkFn = ssize_t (*)(int, void*, size_t, off_t, size_t);
+using ReadChkFn = ssize_t (*)(int, void*, size_t, size_t);
 using CloseFn = int (*)(int);
 
 mode_t fetch_mode(int flags, va_list& ap) {
@@ -436,6 +438,34 @@ extern "C" ssize_t dftu_read(int fd, void* b, size_t n) {
     const ssize_t fail = -1;
     DFTU_NEXT(ReadFn, "read")
     const ssize_t got = fn(fd, b, n);
+    count_bytes(fd, got);
+    return got;
+}
+
+// With _FORTIFY_SOURCE, which Ubuntu's GCC turns on when it optimizes, a read
+// into a buffer of known size calls these, and glibc then reads without its
+// own pread or read symbol.
+#define DFTU_PREAD_CHK_HOOK(hook, sym)                            \
+    extern "C" ssize_t hook(int fd, void* b, size_t n, off_t off, \
+                            size_t cap) __asm__(sym);             \
+    extern "C" ssize_t hook(int fd, void* b, size_t n, off_t off, \
+                            size_t cap) {                         \
+        const ssize_t fail = -1;                                  \
+        DFTU_NEXT(PreadChkFn, sym)                                \
+        const ssize_t got = fn(fd, b, n, off, cap);               \
+        count_bytes(fd, got);                                     \
+        return got;                                               \
+    }
+
+DFTU_PREAD_CHK_HOOK(dftu_pread_chk, "__pread_chk")
+DFTU_PREAD_CHK_HOOK(dftu_pread64_chk, "__pread64_chk")
+
+extern "C" ssize_t dftu_read_chk(int fd, void* b, size_t n,
+                                 size_t cap) __asm__("__read_chk");
+extern "C" ssize_t dftu_read_chk(int fd, void* b, size_t n, size_t cap) {
+    const ssize_t fail = -1;
+    DFTU_NEXT(ReadChkFn, "__read_chk")
+    const ssize_t got = fn(fd, b, n, cap);
     count_bytes(fd, got);
     return got;
 }

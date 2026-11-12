@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_TRACE_INTERNAL_UTILS_H
 #define DFTRACER_UTILS_TRACE_INTERNAL_UTILS_H
 
+#include <dftracer/utils/dstd/ascii.h>
 #include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
@@ -145,28 +146,15 @@ inline dstd::Optional<std::int64_t> derive_io_size(
     dstd::Optional<std::int64_t> size_sum, dstd::Optional<std::int64_t> ret,
     dstd::Optional<std::int64_t> image_size) {
     if (size_sum) return size_sum;
-    auto ieq = [](dstd::StringView a, dstd::StringView b) {
-        if (a.size() != b.size()) return false;
-        for (std::size_t i = 0; i < a.size(); ++i) {
-            char x = a[i], y = b[i];
-            if (x >= 'A' && x <= 'Z') x = static_cast<char>(x + 32);
-            if (y >= 'A' && y <= 'Z') y = static_cast<char>(y + 32);
-            if (x != y) return false;
-        }
-        return true;
-    };
-    if (ieq(cat, "posix") || ieq(cat, "stdio")) {
+    if (dstd::ascii_iequals(cat, "posix") ||
+        dstd::ascii_iequals(cat, "stdio")) {
         if (ret && *ret > 0 && is_read_or_write(name)) return ret;
         return dstd::nullopt;
     }
     if (image_size && *image_size > 0) {
         bool has_open = false;  // case-insensitive substring "open"
         for (std::size_t i = 0; i + 4 <= name.size(); ++i) {
-            auto lc = [](char c) {
-                return (c >= 'A' && c <= 'Z') ? static_cast<char>(c + 32) : c;
-            };
-            if (lc(name[i]) == 'o' && lc(name[i + 1]) == 'p' &&
-                lc(name[i + 2]) == 'e' && lc(name[i + 3]) == 'n') {
+            if (dstd::ascii_iequals(name.substr(i, 4), "open")) {
                 has_open = true;
                 break;
             }
@@ -179,8 +167,6 @@ inline dstd::Optional<std::int64_t> derive_io_size(
 // Lowercase `s`; returns a view over `s` when already lowercase (no copy),
 // else lowercases into `storage` (which must outlive the returned view).
 dstd::StringView to_lower_ascii(dstd::StringView s, dstd::String& storage);
-
-bool ascii_iequals(dstd::StringView a, dstd::StringView b);
 
 // True when the event's return value represents bytes transferred.
 bool is_data_transfer_op(dstd::StringView cat, dstd::StringView name);

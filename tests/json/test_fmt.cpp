@@ -55,3 +55,44 @@ TEST_CASE("json::fmt_to truncates a number hole like dstd::fmt_to") {
     CHECK(cut.truncated);
     CHECK(dstd::StringView(small, cut.size) == "x12");
 }
+
+TEST_CASE("escaped_json_size is the exact size of the escaped text") {
+    for (const char* text :
+         {"", "plain", "a\"b\\c\n", "\x01\x02\x1f", "caf\xc3\xa9\t"}) {
+        const dstd::String s(text);
+        CHECK(json::escaped_json_size(s) == json::escape_json_string(s).size());
+    }
+    dstd::String mixed;
+    for (int i = 0; i < 300; ++i) mixed += static_cast<char>(i % 128);
+    CHECK(json::escaped_json_size(mixed) ==
+          json::escape_json_string(mixed).size());
+}
+
+TEST_CASE("a long string reserves its exact escaped size") {
+    const dstd::String clean(100000, 'a');
+    CHECK(json::JsonEscape::bound(clean) == clean.size());
+    dstd::String dirty;
+    for (int i = 0; i < 1000; ++i) dirty += "ab\"cd\x01 ef\n";
+    const std::size_t exact = json::escape_json_string(dirty).size();
+    CHECK(json::JsonEscape::bound(dirty) == exact);
+    CHECK(exact == dirty.size() + 1000 * (1 + 5 + 1));
+    CHECK(json::fmt<"[{}]">(dirty).size() == exact + 2);
+    CHECK(json::JsonEscape::bound(dstd::StringView("\x01\x01")) == 12);
+    const dstd::String edge(json::JsonEscape::LONG_STRING - 1, '\x01');
+    CHECK(json::JsonEscape::bound(edge) == 6 * edge.size());
+    const dstd::String at(json::JsonEscape::LONG_STRING, '\x01');
+    CHECK(json::JsonEscape::bound(at) == 6 * at.size());
+    const dstd::String at_n(json::JsonEscape::LONG_STRING, '\n');
+    CHECK(json::JsonEscape::bound(at_n) == 2 * at_n.size());
+}
+
+TEST_CASE("the escaped text of a long string with runs is correct") {
+    dstd::String s(200, 'x');
+    s[0] = '"';
+    s[100] = '\\';
+    s[199] = '\n';
+    const dstd::String out = json::fmt<"{}">(s);
+    CHECK(out.size() == 203);
+    CHECK(out.substr(0, 3) == "\\\"x");
+    CHECK(out.substr(out.size() - 3) == "x\\n");
+}

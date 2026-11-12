@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_TRACE_INDEX_SCHEMAS_DFT_AGG_AGGREGATION_CORE_H
 #define DFTRACER_UTILS_TRACE_INDEX_SCHEMAS_DFT_AGG_AGGREGATION_CORE_H
 
+#include <dftracer/utils/dstd/ascii.h>
 #include <dftracer/utils/dstd/hash/xxh3.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
@@ -30,12 +31,10 @@ inline std::uint64_t agg_hash_of_hex(dstd::StringView sv) {
     std::uint64_t v = 0;
     for (char c : sv) {
         std::uint64_t d;
-        if (c >= '0' && c <= '9')
+        if (dstd::is_ascii_digit(c))
             d = static_cast<std::uint64_t>(c - '0');
-        else if (c >= 'a' && c <= 'f')
-            d = static_cast<std::uint64_t>(c - 'a' + 10);
-        else if (c >= 'A' && c <= 'F')
-            d = static_cast<std::uint64_t>(c - 'A' + 10);
+        else if (dstd::is_ascii_xdigit(c))
+            d = static_cast<std::uint64_t>(dstd::to_ascii_lower(c) - 'a' + 10);
         else
             return dstd::hash::xxh3_64(sv);
         v = (v << 4) | d;

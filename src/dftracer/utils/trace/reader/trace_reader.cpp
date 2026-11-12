@@ -719,10 +719,13 @@ coro::AsyncGenerator<dstd::Result<JsonLine>> TraceReader::read_json(
             co_return;
         }
         auto reader = std::move(*made);
+        const bool check_whole_lines = reader->has_damage();
         auto chunk_gen = read_chunks_indexed(reader, index_path_,
                                              config_.file_path, config, query);
 
         simdjson::ondemand::parser bulk_parser;
+        simdjson::dom::parser dom_parser;
+        json::Document whole_document;
         json::JsonParser yield_parser;
         // An expression may read a whole object or array, which the field map
         // cannot hold, so it runs on the record's DOM.
@@ -750,6 +753,11 @@ coro::AsyncGenerator<dstd::Result<JsonLine>> TraceReader::read_json(
             dstd::StringView src;
             dstd::StringView text;
             while (docs.next(doc, src, text)) {
+                if (check_whole_lines && !internal::is_whole_record(
+                                             dom_parser, whole_document, src)) {
+                    count_dropped(dropped);
+                    continue;
+                }
                 if (query && config.chunk_prune_only) {
                     bool all_present = true;
                     for (const auto& path : presence_check_paths) {

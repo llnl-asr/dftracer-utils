@@ -56,6 +56,11 @@ struct SharedState {
     /// The task that waits, so a stop of the spawn can stop it. Written before
     /// the waiter publishes itself.
     detail::ParkOwner waiter_owner;
+    /// The registry entry of the waiter and the executor that holds it.
+    /// Written before the waiter publishes itself. The side that wakes the
+    /// waiter owns them from then on.
+    detail::ParkNode* waiter_park{nullptr};
+    Executor* waiter_executor{nullptr};
     Executor* executor{nullptr};
     dstd::SharedPtr<std::atomic<bool>> cancel_token;
     /// Cancels a task spawned by a @ref Scope, which reads it at its waits.
@@ -108,6 +113,12 @@ struct SharedState {
             auto waiter = std::coroutine_handle<>::from_address(
                 reinterpret_cast<void*>(prev));
             if (stopped) {
+                // The entry names the waiter's frame, which the stop can free
+                // while this future still lives.
+                if (waiter_park) {
+                    waiter_executor->unpark(waiter_park);
+                    waiter_park = nullptr;
+                }
                 detail::stop_or_continue(executor, waiter_owner, waiter);
             } else {
                 detail::post_resumption(executor, waiter);
@@ -147,7 +158,9 @@ class SpawnFuture {
     SpawnFuture& operator=(const SpawnFuture&) = delete;
 
     ~SpawnFuture() {
-        if (park_) executor_->unpark(park_);
+        if (state_ && state_->waiter_park) {
+            state_->waiter_executor->unpark(state_->waiter_park);
+        }
     }
 
     // ====================================================================
@@ -167,8 +180,10 @@ class SpawnFuture {
         executor_ = detail::resume_executor_for(state_->executor);
         // Registered before the flag publishes the waiter: once it does, the
         // spawn may resume the frame on another thread at any moment.
+        state_->waiter_executor = executor_;
         if (executor_) {
-            park_ = executor_->park(this, &SpawnFuture::cancel_thunk);
+            state_->waiter_park =
+                executor_->park(this, &SpawnFuture::cancel_thunk);
         }
         auto addr = reinterpret_cast<std::uintptr_t>(awaiting.address());
         auto expected = SharedState<T>::EMPTY;
@@ -178,8 +193,8 @@ class SpawnFuture {
                                                  std::memory_order_acquire)) {
             return true;
         }
-        if (park_) executor_->unpark(park_);
-        park_ = nullptr;
+        if (state_->waiter_park) executor_->unpark(state_->waiter_park);
+        state_->waiter_park = nullptr;
         if (state_->stopped) {
             return detail::stop_task(executor_, nullptr, state_->waiter_owner);
         }
@@ -196,14 +211,14 @@ class SpawnFuture {
                 expected, SharedState<T>::CANCELLED, std::memory_order_acq_rel,
                 std::memory_order_acquire)) {
             cancelled_ = true;
-            detail::stop_or_resume(executor_, park_, handle_);
+            detail::stop_or_resume(executor_, state_->waiter_park, handle_);
         }
     }
 
     T await_resume() {
-        if (park_) {
-            executor_->unpark(park_);
-            park_ = nullptr;
+        if (state_->waiter_park) {
+            executor_->unpark(state_->waiter_park);
+            state_->waiter_park = nullptr;
         }
         if (cancelled_) detail::cancelled_unstoppable("future wait");
         if (state_->stopped) detail::cancelled_unstoppable("a stopped future");
@@ -233,7 +248,6 @@ class SpawnFuture {
     dstd::SharedPtr<SharedState<T>> state_;
     std::coroutine_handle<> handle_{};
     Executor* executor_ = nullptr;
-    detail::ParkNode* park_ = nullptr;
     bool cancelled_ = false;
 };
 

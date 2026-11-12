@@ -169,7 +169,8 @@ PyObject* DataFrame_subscript(PyObject* self, PyObject* key) {
         PyErr_Format(PyExc_KeyError, "no column named '%s'", name);
         return nullptr;
     }
-    return dftracer::utils::python::wrap_vec_column(b->st.child(i));
+    return dftracer::utils::python::wrap_vec_column(
+        b->st.child(i).rename(name));
 }
 
 int DataFrame_contains(PyObject* self, PyObject* key) {

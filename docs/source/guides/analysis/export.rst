@@ -22,8 +22,14 @@ A collected ``DataFrame`` (or a single ``Series``) converts on demand:
    arr = df["dur"].to_arrow()    # pyarrow.Array
    np_arr = df["dur"].to_numpy() # NumPy (zero-copy for flat non-null numeric)
 
-By default ``to_pandas()`` gives NumPy dtypes, so an integer column with nulls
-becomes ``float64`` with NaN. Two options change that, neither needs pyarrow:
+By default ``to_pandas()`` gives NumPy dtypes for columns without nulls.
+An integer, bool or string column that holds nulls gives pandas' own nullable dtype (``Int64``, ``boolean``, ``string``), so ``DataFrame.from_pandas(df).to_pandas()`` keeps those dtypes.
+On pandas 3 a string column with nulls is the default ``str`` dtype, which holds missing values already.
+A float column keeps NaN, and dates and times keep their NumPy types.
+A dictionary-encoded string column gives ``category``.
+``from_pandas`` stores a ``category`` column with string categories as a dictionary-encoded column, without its unused categories or their order.
+With pyarrow installed the categories keep the dictionary order and no string is built per row; without it the categories come out sorted.
+Two options change the result further, and neither needs pyarrow:
 
 .. code-block:: python
 
@@ -32,7 +38,7 @@ becomes ``float64`` with NaN. Two options change that, neither needs pyarrow:
 
 ``nullable=True`` gives pandas' own nullable dtypes for integer, float, bool and
 string columns (``Int8`` to ``Int64``, ``UInt8`` to ``UInt64``, ``Float32``,
-``Float64``, ``boolean``, ``string``); a float NaN stays NaN and only a null is
+``Float64``, ``boolean``, ``string``) even when the column holds no nulls, and ``category`` for a dictionary column; a float NaN stays NaN and only a null is
 ``pd.NA``. A column of another type converts as usual. ``index`` moves the named
 columns into the pandas index in the order given (a flat index for one name, a
 MultiIndex for several); an unknown name raises ``KeyError`` and a repeated one
@@ -50,7 +56,7 @@ with the same text share one ``str``, so a column of repeated names allocates
 once per distinct name. A dictionary-encoded column keeps its nulls.
 ``to_arrow`` exports a dictionary-encoded column as an Arrow dictionary array,
 which pandas and polars read through Arrow as a categorical column;
-``to_list``, ``to_numpy``, ``to_pandas`` and ``to_polars`` give plain strings.
+``to_pandas`` gives ``category``, and ``to_list``, ``to_numpy`` and ``to_polars`` give plain strings.
 ``to_ipc`` writes a dictionary-encoded column as its values.
 A view column exports as an Arrow ``string_view`` or ``binary_view`` array
 with zero copy (pyarrow 16 or later), and ``from_arrow`` imports such arrays

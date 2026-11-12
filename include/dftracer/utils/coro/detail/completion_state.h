@@ -53,6 +53,12 @@ struct CompletionState {
     /// resumes it.
     void continue_awaiter() noexcept {
         if (stop_wanted()) {
+            // The entry names the awaiter's frame, which the stop can free
+            // while the children still hold this state.
+            if (park_) {
+                executor->unpark(park_);
+                park_ = nullptr;
+            }
             stop_or_continue(executor, owner, awaiting_coroutine);
             return;
         }

@@ -4,6 +4,7 @@
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/query/vectorize.h>
+#include <dftracer/utils/dstd/ascii.h>
 #include <dftracer/utils/dstd/hash/splitmix64.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/to_chars.h>
@@ -380,9 +381,7 @@ dataframe::DataType letter_type(char c) {
 }
 
 bool digits(dstd::StringView s) {
-    return !s.empty() && std::all_of(s.begin(), s.end(), [](char c) {
-        return c >= '0' && c <= '9';
-    });
+    return !s.empty() && std::all_of(s.begin(), s.end(), dstd::is_ascii_digit);
 }
 
 }  // namespace

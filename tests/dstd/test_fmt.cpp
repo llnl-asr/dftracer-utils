@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/ascii.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/to_chars.h>
@@ -126,6 +127,38 @@ TEST_CASE("long strings") {
     CHECK(out.size() == 10000 + 4);
     CHECK(out.front() == '<');
     CHECK(out.substr(out.size() - 3) == "|7>");
+}
+
+namespace {
+
+struct UpperEscape {
+    static std::size_t bound(dstd::StringView s) { return s.size(); }
+    static char* write(char* d, dstd::StringView s) {
+        for (char c : s) *d++ = dstd::to_ascii_upper(c);
+        return d;
+    }
+};
+
+}  // namespace
+
+TEST_CASE("fmt_append keeps the old text and adds the formatted one") {
+    dstd::String out = "head:";
+    dstd::fmt_append<"{}-{}">(out, "a", 12);
+    CHECK(out == "head:a-12");
+    dstd::fmt_append(out, "|{:04}"_f, 7);
+    CHECK(out == "head:a-12|0007");
+    dstd::fmt_append<"">(out);
+    CHECK(out == "head:a-12|0007");
+    dstd::String empty;
+    dstd::fmt_append<"{}">(empty, std::int64_t{-5});
+    CHECK(empty == "-5");
+}
+
+TEST_CASE("fmt_append_with applies the escape policy and trims to the text") {
+    dstd::String out = "x";
+    dstd::fmt_append_with<UpperEscape, "<{}>">(out, "abc");
+    CHECK(out == "x<ABC>");
+    CHECK(out.size() == 6);
 }
 
 TEST_CASE("both call forms give the same text") {

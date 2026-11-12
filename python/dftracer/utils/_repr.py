@@ -150,13 +150,14 @@ def frame_html(frame: Any) -> str:
 def series_repr(series: Any) -> str:
     n = len(series)
     dtype = str(series.dtype.name).lower()
+    name = f"Name: {series.name}, " if series.name is not None else ""
     if n == 0:
-        return f"Series([], dtype: {dtype})"
+        return f"Series([], {name}dtype: {dtype})"
     cut, _ = _shown(n)
     labels = _row_labels(n, cut)
     cells = _column(series, cut)
     lw = max(len(s) for s in labels)
     vw = max(len(s) for s in cells)
     lines = [f"{a.ljust(lw)}    {b.rjust(vw)}" for a, b in zip(labels, cells)]
-    footer = f"Length: {n}, dtype: {dtype}" if cut else f"dtype: {dtype}"
+    footer = f"{name}Length: {n}, dtype: {dtype}" if cut else f"{name}dtype: {dtype}"
     return "\n".join(lines + [footer])

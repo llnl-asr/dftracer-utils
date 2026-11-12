@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_DSTD_HASH_HEX64_H
 #define DFTRACER_UTILS_DSTD_HASH_HEX64_H
 
+#include <dftracer/utils/dstd/ascii.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
 
@@ -22,7 +23,7 @@ inline Optional<std::uint64_t> parse_hex64(StringView sv) {
     std::uint64_t v = 0;
     for (char c : sv) {
         std::uint64_t d;
-        if (c >= '0' && c <= '9')
+        if (is_ascii_digit(c))
             d = static_cast<std::uint64_t>(c - '0');
         else if (c >= 'a' && c <= 'f')
             d = static_cast<std::uint64_t>(c - 'a' + 10);

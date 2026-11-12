@@ -2,8 +2,8 @@
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/kernels/logical.h>
+#include <dftracer/utils/dstd/bits.h>
 
-#include <bit>
 #include <cstddef>
 #include <cstdint>
 
@@ -95,9 +95,8 @@ void set_validity(dftu_series* out,
                   dftracer::utils::dataframe::BufferView valid,
                   std::size_t bytes) {
     mask_tail(dftracer::utils::dataframe::writable(valid), out->length);
-    std::int64_t set = 0;
-    const std::uint8_t* pv = valid.data();
-    for (std::size_t i = 0; i < bytes; ++i) set += std::popcount(pv[i]);
+    const auto set = static_cast<std::int64_t>(
+        dftracer::utils::dstd::bits::popcount_bytes(valid.data(), bytes));
     out->null_count = out->length - set;
     if (out->null_count != 0) out->validity = std::move(valid);
 }

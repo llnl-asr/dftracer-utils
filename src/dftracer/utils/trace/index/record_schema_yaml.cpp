@@ -2,16 +2,18 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/trace/index/record_schema_yaml.h>
-#include <yaml-cpp/yaml.h>
+#include <dftracer/utils/yaml/document.h>
 
 #include <algorithm>
 #include <initializer_list>
-#include <string>
+#include <limits>
 
 namespace dftracer::utils::trace::index {
 
 namespace {
 
+using yaml::Document;
+using yaml::Value;
 using Fail = dstd::Unexpected<dstd::Error>;
 
 Fail spec_error(const dstd::String& source, dstd::StringView what) {
@@ -19,43 +21,41 @@ Fail spec_error(const dstd::String& source, dstd::StringView what) {
         common::ErrorCode::InvalidArgument, source, what);
 }
 
-dstd::Result<void> check_keys(const YAML::Node& map,
+dstd::Result<void> check_keys(const Value& map,
                               std::initializer_list<const char*> keys,
                               const dstd::String& where,
                               const dstd::String& source) {
-    if (!map.IsMap())
+    if (!map.is_object())
         return spec_error(source, dstd::fmt<"{} must be a mapping">(where));
-    for (const auto& kv : map) {
-        const auto text = kv.first.as<std::string>();
-        const dstd::String key(text.data(), text.size());
+    dstd::Result<void> status;
+    map.for_each_member([&](dstd::StringView key, Value) {
+        if (!status) return;
         if (std::none_of(keys.begin(), keys.end(),
                          [&](const char* k) { return key == k; }))
-            return spec_error(source,
-                              dstd::fmt<"unknown key {}{}">(where, key));
-    }
-    return {};
+            status =
+                spec_error(source, dstd::fmt<"unknown key {}{}">(where, key));
+    });
+    return status;
 }
 
-dstd::Result<dstd::String> text_of(const YAML::Node& n, const dstd::String& key,
+dstd::Result<dstd::String> text_of(const Value& n, dstd::StringView key,
                                    const dstd::String& source) {
-    if (!n.IsScalar())
-        return spec_error(source, dstd::fmt<"{} must be a string">(key));
-    const auto text = n.as<std::string>();
-    return dstd::String(text.data(), text.size());
+    const auto text = n.as_string();
+    if (!text) return spec_error(source, dstd::fmt<"{} must be a string">(key));
+    return dstd::String(*text);
 }
 
-dstd::Result<bool> flag_of(const YAML::Node& n, const dstd::String& key,
+dstd::Result<bool> flag_of(const Value& n, dstd::StringView key,
                            const dstd::String& source) {
-    try {
-        return n.as<bool>();
-    } catch (const YAML::Exception&) {
+    const auto flag = n.as_bool();
+    if (!flag)
         return spec_error(source, dstd::fmt<"{} must be true or false">(key));
-    }
+    return *flag;
 }
 
 template <typename E, std::size_t N>
 dstd::Result<E> choice_of(
-    const YAML::Node& n, const dstd::String& key,
+    const Value& n, const dstd::String& key,
     const std::array<dstd::Pair<const char*, E>, N>& names,
     const dstd::String& source) {
     const auto v = text_of(n, key, source);
@@ -71,125 +71,127 @@ dstd::Result<E> choice_of(
                       dstd::fmt<"{} is {}; expected one of {}">(key, *v, all));
 }
 
-dstd::Result<SchemaSpec> parse_spec(const YAML::Node& spec,
+dstd::Result<FieldSpec> parse_field(dstd::StringView name, const Value& n,
+                                    const dstd::String& source) {
+    FieldSpec f;
+    f.name = dstd::String(name);
+    const dstd::String where = dstd::fmt<"fields.{}">(f.name);
+    if (auto ok = check_keys(
+            n, {"type", "path", "optional", "role", "unit", "always_index"},
+            dstd::fmt<"{}.">(where), source);
+        !ok)
+        return ok.error();
+    const dstd::String type_key = dstd::fmt<"{}.type">(where);
+    const auto type_node = n.find("type");
+    if (!type_node)
+        return spec_error(source, dstd::fmt<"{} is required">(type_key));
+    const auto type = choice_of(*type_node, type_key, TYPE_NAMES, source);
+    if (!type) return type.error();
+    f.type = *type;
+    if (const auto path_node = n.find("path")) {
+        auto path = text_of(*path_node, dstd::fmt<"{}.path">(where), source);
+        if (!path) return path.error();
+        f.path = std::move(*path);
+    }
+    if (const auto optional_node = n.find("optional")) {
+        const auto optional =
+            flag_of(*optional_node, dstd::fmt<"{}.optional">(where), source);
+        if (!optional.has_value()) return optional.error();
+        f.optional = *optional;
+    }
+    if (const auto role_node = n.find("role")) {
+        const auto role = choice_of(*role_node, dstd::fmt<"{}.role">(where),
+                                    ROLE_NAMES, source);
+        if (!role) return role.error();
+        f.role = *role;
+    }
+    if (const auto unit_node = n.find("unit")) {
+        const auto unit = choice_of(*unit_node, dstd::fmt<"{}.unit">(where),
+                                    UNIT_NAMES, source);
+        if (!unit) return unit.error();
+        f.unit = *unit;
+    }
+    if (const auto always_node = n.find("always_index")) {
+        const auto always =
+            flag_of(*always_node, dstd::fmt<"{}.always_index">(where), source);
+        if (!always.has_value()) return always.error();
+        f.always_index = *always;
+    }
+    return f;
+}
+
+dstd::Result<SchemaSpec> parse_spec(const Value& spec,
                                     const dstd::String& source) {
     if (auto ok = check_keys(
             spec, {"id", "extends", "fields", "index", "source"}, "", source);
         !ok)
         return ok.error();
     SchemaSpec out;
-    if (!spec["id"]) return spec_error(source, "missing id");
+    const auto id_node = spec.find("id");
+    if (!id_node) return spec_error(source, "missing id");
     {
-        auto id = text_of(spec["id"], "id", source);
+        auto id = text_of(*id_node, "id", source);
         if (!id) return id.error();
         out.id = std::move(*id);
     }
-    if (spec["extends"]) {
-        auto extends = text_of(spec["extends"], "extends", source);
+    if (const auto extends_node = spec.find("extends")) {
+        auto extends = text_of(*extends_node, "extends", source);
         if (!extends) return extends.error();
         out.extends = std::move(*extends);
     }
-    if (const auto fs = spec["fields"]) {
-        if (!fs.IsMap())
+    if (const auto fs = spec.find("fields")) {
+        if (!fs->is_object())
             return spec_error(source,
                               "fields must map field names to settings");
-        for (const auto& kv : fs) {
-            FieldSpec f;
-            auto name = text_of(kv.first, "fields", source);
-            if (!name) return name.error();
-            f.name = std::move(*name);
-            const dstd::String where = dstd::fmt<"fields.{}">(f.name);
-            const YAML::Node n = kv.second;
-            if (auto ok = check_keys(n,
-                                     {"type", "path", "optional", "role",
-                                      "unit", "always_index"},
-                                     dstd::fmt<"{}.">(where), source);
-                !ok)
-                return ok.error();
-            const dstd::String type_key = dstd::fmt<"{}.type">(where);
-            if (!n["type"])
-                return spec_error(source,
-                                  dstd::fmt<"{} is required">(type_key));
-            const auto type =
-                choice_of(n["type"], type_key, TYPE_NAMES, source);
-            if (!type) return type.error();
-            f.type = *type;
-            if (n["path"]) {
-                auto path =
-                    text_of(n["path"], dstd::fmt<"{}.path">(where), source);
-                if (!path) return path.error();
-                f.path = std::move(*path);
-            }
-            if (n["optional"]) {
-                const auto optional = flag_of(
-                    n["optional"], dstd::fmt<"{}.optional">(where), source);
-                if (!optional.has_value()) return optional.error();
-                f.optional = *optional;
-            }
-            if (n["role"]) {
-                const auto role = choice_of(
-                    n["role"], dstd::fmt<"{}.role">(where), ROLE_NAMES, source);
-                if (!role) return role.error();
-                f.role = *role;
-            }
-            if (n["unit"]) {
-                const auto unit = choice_of(
-                    n["unit"], dstd::fmt<"{}.unit">(where), UNIT_NAMES, source);
-                if (!unit) return unit.error();
-                f.unit = *unit;
-            }
-            if (n["always_index"]) {
-                const auto always =
-                    flag_of(n["always_index"],
-                            dstd::fmt<"{}.always_index">(where), source);
-                if (!always.has_value()) return always.error();
-                f.always_index = *always;
-            }
-            out.fields.push_back(std::move(f));
-        }
+        dstd::Result<void> status;
+        fs->for_each_member([&](dstd::StringView name, Value n) {
+            if (!status) return;
+            auto field = parse_field(name, n, source);
+            if (!field)
+                status = field.error();
+            else
+                out.fields.push_back(std::move(*field));
+        });
+        if (!status) return status.error();
     }
-    if (const auto ix = spec["index"]) {
+    if (const auto ix = spec.find("index")) {
         if (auto ok =
-                check_keys(ix, {"path_budget", "stats_share", "never_index"},
+                check_keys(*ix, {"path_budget", "stats_share", "never_index"},
                            "index.", source);
             !ok)
             return ok.error();
-        if (ix["never_index"]) {
-            const auto list = ix["never_index"];
-            if (!list.IsSequence())
+        if (const auto list = ix->find("never_index")) {
+            if (!list->is_array())
                 return spec_error(source,
                                   "index.never_index must be a list of paths");
-            for (const auto& item : list) {
-                if (!item.IsScalar() || item.Scalar().empty())
-                    return spec_error(
+            dstd::Result<void> status;
+            list->for_each_element([&](Value item) {
+                if (!status) return;
+                const auto path = item.as_string();
+                if (!path || path->empty())
+                    status = spec_error(
                         source, "index.never_index must be a list of paths");
-                const auto& path = item.Scalar();
-                out.never_index.emplace_back(path.data(), path.size());
-            }
+                else
+                    out.never_index.emplace_back(*path);
+            });
+            if (!status) return status.error();
         }
-        if (ix["path_budget"]) {
-            try {
-                out.path_budget = ix["path_budget"].as<std::size_t>();
-            } catch (const YAML::Exception&) {
+        if (const auto budget = ix->find("path_budget")) {
+            const auto count = budget->as_uint();
+            if (!count || *count > std::numeric_limits<std::size_t>::max())
                 return spec_error(source, "index.path_budget must be a count");
-            }
+            out.path_budget = static_cast<std::size_t>(*count);
         }
-        if (ix["stats_share"]) {
-            double share = 0;
-            try {
-                share = ix["stats_share"].as<double>();
-            } catch (const YAML::Exception&) {
+        if (const auto stats = ix->find("stats_share")) {
+            const auto share = stats->as_double();
+            if (!share || !(*share > 0 && *share <= 1))
                 return spec_error(source,
                                   "index.stats_share must be in (0, 1]");
-            }
-            if (!(share > 0 && share <= 1))
-                return spec_error(source,
-                                  "index.stats_share must be in (0, 1]");
-            out.stats_share = share;
+            out.stats_share = *share;
         }
     }
-    if (spec["source"]) {
-        auto text = text_of(spec["source"], "source", source);
+    if (const auto source_node = spec.find("source")) {
+        auto text = text_of(*source_node, "source", source);
         if (!text) return text.error();
         out.source = std::move(*text);
     }
@@ -200,12 +202,9 @@ dstd::Result<SchemaSpec> parse_spec(const YAML::Node& spec,
 
 dstd::Result<SchemaSpec> parse_schema_spec(dstd::StringView text,
                                            const dstd::String& source) {
-    try {
-        const YAML::Node spec = YAML::Load(std::string(text));
-        return parse_spec(spec, source);
-    } catch (const YAML::Exception& e) {
-        return spec_error(source, e.what());
-    }
+    auto document = Document::parse(dstd::String(text), "");
+    if (!document) return spec_error(source, document.error().message());
+    return parse_spec(document->root(), source);
 }
 
 }  // namespace dftracer::utils::trace::index

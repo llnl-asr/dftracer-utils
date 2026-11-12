@@ -28,7 +28,7 @@ std::int64_t DataFrame::column_index(dstd::StringView name) const {
 
 Series DataFrame::column(dstd::StringView name) const {
     const std::int64_t i = column_index(name);
-    return i < 0 ? Series{} : columns[static_cast<std::size_t>(i)].share();
+    return i < 0 ? Series{} : columns[static_cast<std::size_t>(i)].rename(name);
 }
 
 DataFrame DataFrame::take(const dstd::Vector<std::int64_t>& indices) const {

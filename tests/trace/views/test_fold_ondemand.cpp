@@ -2,6 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/str_format.h>
+#include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/intern_cache.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
@@ -281,7 +282,7 @@ dstd::Vector<String> generated_lines(std::size_t count) {
         R"("a.b":1,"a":{"b":2})",
     };
     dstd::Vector<String> lines;
-    std::uint64_t state = 0x9E3779B97F4A7C15ULL;
+    std::uint64_t state = dstd::hash::GOLDEN_RATIO;
     for (std::size_t i = 0; i < count; ++i) {
         const std::uint64_t r = next_random(state);
         String line = common::str_cat(

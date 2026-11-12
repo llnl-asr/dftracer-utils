@@ -214,10 +214,13 @@ dstd::Expected<ByteView, dstd::Error> decode_covering(
     return ByteView{owned.data() + (offset - base), length};
 }
 
+/// The first read of a page table. It holds the table of an extent of up to
+/// 5 MiB of raw pages; a larger table takes a second read.
+constexpr std::size_t TABLE_HEAD_BYTES = 4096;
+
 /// Reads the page table of the extent at `ref` into `slot`: Good, Bad when the
 /// extent lies outside the file or its table does not open, Failed with
-/// `slot.error` when a read fails. The read takes the whole extent, up to
-/// READ_RUN_BYTES, to warm the operating system cache.
+/// `slot.error` when a read fails.
 detail::LoadState read_table(const DataFileReader& reader, const ExtentRef& ref,
                              detail::ExtentSlot& slot, BlockReads& reads) {
     const auto state_of = [&](const dstd::Error& error) {
@@ -227,7 +230,7 @@ detail::LoadState read_table(const DataFileReader& reader, const ExtentRef& ref,
     };
     dstd::RawBuffer<std::uint8_t> head;
     auto read = reader.read_range(
-        ref.offset, std::min<std::size_t>(ref.length, READ_RUN_BYTES), head,
+        ref.offset, std::min<std::size_t>(ref.length, TABLE_HEAD_BYTES), head,
         &reads);
     if (!read) return state_of(read.error());
     const std::size_t table = ExtentPages::table_size(bytes_of(head));
@@ -688,12 +691,6 @@ dstd::Expected<void, dstd::Error> Snapshot::load(dstd::StringView dir) {
         kept.push_back(std::move(file));
     }
     files_ = std::move(kept);
-    for (detail::FileData& file : files_) {
-        const std::uint64_t size = file.reader.file_size();
-        file.windows =
-            dstd::Vector<std::atomic<std::uint32_t>>(static_cast<std::size_t>(
-                (size + READ_RUN_BYTES - 1) / READ_RUN_BYTES));
-    }
     for (std::size_t index = 0; index < files_.size(); ++index) {
         for (const dstd::UniquePtr<detail::Commit>& commit :
              files_[index].commits) {
@@ -2091,9 +2088,6 @@ detail::LoadStatus Snapshot::load_extent(detail::Commit& commit,
     const detail::LoadState state =
         read_table(file.reader, commit.blocks[block].ref, slot, reads);
     reads_->add(0, 1, 0, reads);
-    if (state == detail::LoadState::Good) {
-        warm_window(file, commit.blocks[block].ref.offset);
-    }
     slot.state.store(static_cast<std::uint8_t>(state),
                      std::memory_order_release);
     return state_of(state);
@@ -2123,7 +2117,6 @@ detail::LoadStatus Snapshot::load_extent(const detail::FileData& file,
     BlockReads reads;
     const detail::LoadState state = read_table(file.reader, ref, slot, reads);
     reads_->add(0, 1, 0, reads);
-    if (state == detail::LoadState::Good) warm_window(file, ref.offset);
     slot.state.store(static_cast<std::uint8_t>(state),
                      std::memory_order_release);
     return state_of(state);
@@ -2152,22 +2145,6 @@ Snapshot::page_dict(const detail::FileData& file, const DictRef& ref) const {
     if (!dict) return bad_extent_error();
     cache.dicts.push_back(*dict);
     return std::move(*dict);
-}
-
-void Snapshot::warm_window(const detail::FileData& file,
-                           std::uint64_t offset) const {
-    const std::uint64_t window = offset / READ_RUN_BYTES;
-    if (window >= file.windows.size()) return;
-    if (file.windows[window].fetch_add(1, std::memory_order_relaxed) != 1) {
-        return;
-    }
-    // A failed read here costs only the cache: the query reads its pages.
-    BlockReads reads;
-    file.reader.warm_range(window * READ_RUN_BYTES, READ_RUN_BYTES, &reads)
-        .discard();
-    // A reader with direct reads warms nothing.
-    if (reads.calls == 0) return;
-    reads_->add_window(reads);
 }
 
 dstd::Expected<ByteView, dstd::Error> Snapshot::read_raw(

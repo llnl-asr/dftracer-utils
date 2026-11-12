@@ -2,6 +2,7 @@
 #include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/domains/server/http_parser.h>
 #include <dftracer/utils/domains/server/http_request.h>
+#include <dftracer/utils/dstd/ascii.h>
 #include <dftracer/utils/dstd/string.h>
 
 #include <algorithm>
@@ -11,7 +12,7 @@ namespace dftracer::utils::domains::server {
 namespace {
 
 bool icase_equal(dstd::StringView a, dstd::StringView b) {
-    return ::dftracer::utils::common::detail::iequals(a, b);
+    return ::dftracer::utils::dstd::ascii_iequals(a, b);
 }
 
 }  // namespace

@@ -60,10 +60,15 @@ def test_float32_keeps_its_width():
     assert str(s.to_pandas(nullable=True).dtype) == "Float32"
 
 
-def test_default_is_unchanged():
+def test_default_gives_nullable_integers_with_nulls():
     out = DataFrame.from_dict({"i": [1, None, 3]}).to_pandas()
-    assert str(out["i"].dtype) == "float64"
-    assert math.isnan(out["i"][1])
+    assert str(out["i"].dtype) == "Int64"
+    assert out["i"][1] is pd.NA
+
+
+def test_default_keeps_numpy_without_nulls():
+    out = DataFrame.from_dict({"i": [1, 2, 3]}).to_pandas()
+    assert out["i"].dtype == np.dtype("int64")
 
 
 def test_column_without_a_nullable_dtype_converts_as_before():

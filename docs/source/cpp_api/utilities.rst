@@ -8,6 +8,7 @@ the on-demand JSON reader.
 
 .. include:: /cpp_api/_generated/dstd.rst.inc
 .. include:: /cpp_api/_generated/dstd.bits.rst.inc
+.. include:: /cpp_api/_generated/dstd.fmt_detail.rst.inc
 .. include:: /cpp_api/_generated/dstd.fs.rst.inc
 .. include:: /cpp_api/_generated/dstd.hash.rst.inc
 .. include:: /cpp_api/_generated/dstd.path_detail.rst.inc

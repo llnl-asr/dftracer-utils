@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_COMMON_STR_FORMAT_H
 
 #include <dftracer/utils/common/platform_compat.h>
+#include <dftracer/utils/dstd/ascii.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
@@ -85,33 +86,17 @@ inline dstd::String human_bytes(double value, const char* per_suffix = "",
 
 namespace detail {
 
-constexpr bool is_ascii_space(char c) {
-    return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' ||
-           c == '\v';
-}
-
-constexpr char to_lower_ascii(char c) {
-    return (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c;
-}
-
 // Lowers ASCII letters of s[from..] in place. Bytes >= 0x80 stay unchanged.
 template <class String>
 inline void lower_ascii(String& s, std::size_t from = 0) {
-    for (std::size_t i = from; i < s.size(); ++i) s[i] = to_lower_ascii(s[i]);
+    for (std::size_t i = from; i < s.size(); ++i)
+        s[i] = dstd::to_ascii_lower(s[i]);
 }
 
 constexpr dstd::StringView trim_ws(dstd::StringView s) {
-    while (!s.empty() && is_ascii_space(s.front())) s.remove_prefix(1);
-    while (!s.empty() && is_ascii_space(s.back())) s.remove_suffix(1);
+    while (!s.empty() && dstd::is_ascii_space(s.front())) s.remove_prefix(1);
+    while (!s.empty() && dstd::is_ascii_space(s.back())) s.remove_suffix(1);
     return s;
-}
-
-constexpr bool iequals(dstd::StringView a, dstd::StringView b) {
-    if (a.size() != b.size()) return false;
-    for (std::size_t i = 0; i < a.size(); ++i) {
-        if (to_lower_ascii(a[i]) != to_lower_ascii(b[i])) return false;
-    }
-    return true;
 }
 
 // Parse a leading decimal number and return {value, byte offset past it}, or
@@ -125,16 +110,16 @@ constexpr dstd::Optional<dstd::Pair<double, std::size_t>> parse_leading_number(
         std::size_t n = 0;
         if (n < s.size() && (s[n] == '+' || s[n] == '-')) ++n;
         std::size_t digits = 0;
-        while (n < s.size() && s[n] >= '0' && s[n] <= '9') ++n, ++digits;
+        while (n < s.size() && dstd::is_ascii_digit(s[n])) ++n, ++digits;
         if (n < s.size() && s[n] == '.') {
             ++n;
-            while (n < s.size() && s[n] >= '0' && s[n] <= '9') ++n, ++digits;
+            while (n < s.size() && dstd::is_ascii_digit(s[n])) ++n, ++digits;
         }
         if (n < s.size() && (s[n] == 'e' || s[n] == 'E')) {
             std::size_t e = n + 1;
             if (e < s.size() && (s[e] == '+' || s[e] == '-')) ++e;
             std::size_t exp_digits = 0;
-            while (e < s.size() && s[e] >= '0' && s[e] <= '9')
+            while (e < s.size() && dstd::is_ascii_digit(s[e]))
                 ++e, ++exp_digits;
             if (exp_digits > 0) n = e;
         }
@@ -157,14 +142,14 @@ constexpr dstd::Optional<dstd::Pair<double, std::size_t>> parse_leading_number(
     }
     double value = 0.0;
     bool any_digit = false;
-    for (; i < s.size() && s[i] >= '0' && s[i] <= '9'; ++i) {
+    for (; i < s.size() && dstd::is_ascii_digit(s[i]); ++i) {
         value = value * 10.0 + (s[i] - '0');
         any_digit = true;
     }
     if (i < s.size() && s[i] == '.') {
         ++i;
         double scale = 0.1;
-        for (; i < s.size() && s[i] >= '0' && s[i] <= '9'; ++i) {
+        for (; i < s.size() && dstd::is_ascii_digit(s[i]); ++i) {
             value += (s[i] - '0') * scale;
             scale *= 0.1;
             any_digit = true;
@@ -214,7 +199,7 @@ constexpr dstd::Optional<std::uint64_t> parse_bytes(dstd::StringView s) {
     if (unit.empty()) {
         power = 0;
     } else if (unit.size() == 1) {
-        switch (detail::to_lower_ascii(unit.front())) {
+        switch (dstd::to_ascii_lower(unit.front())) {
             case 'k':
                 power = 1;
                 break;
@@ -253,20 +238,20 @@ constexpr dstd::Optional<double> parse_duration_seconds(dstd::StringView s) {
     double value = parsed->first;
     dstd::StringView unit = parsed->second;
     if (value < 0.0) return dstd::nullopt;
-    if (unit.empty() || detail::iequals(unit, "s") ||
-        detail::iequals(unit, "sec") || detail::iequals(unit, "secs"))
+    if (unit.empty() || dstd::ascii_iequals(unit, "s") ||
+        dstd::ascii_iequals(unit, "sec") || dstd::ascii_iequals(unit, "secs"))
         return value;
-    if (detail::iequals(unit, "ns")) return value / 1e9;
-    if (detail::iequals(unit, "us")) return value / 1e6;
-    if (detail::iequals(unit, "ms")) return value / 1e3;
-    if (detail::iequals(unit, "m") || detail::iequals(unit, "min") ||
-        detail::iequals(unit, "mins"))
+    if (dstd::ascii_iequals(unit, "ns")) return value / 1e9;
+    if (dstd::ascii_iequals(unit, "us")) return value / 1e6;
+    if (dstd::ascii_iequals(unit, "ms")) return value / 1e3;
+    if (dstd::ascii_iequals(unit, "m") || dstd::ascii_iequals(unit, "min") ||
+        dstd::ascii_iequals(unit, "mins"))
         return value * 60.0;
-    if (detail::iequals(unit, "h") || detail::iequals(unit, "hr") ||
-        detail::iequals(unit, "hrs"))
+    if (dstd::ascii_iequals(unit, "h") || dstd::ascii_iequals(unit, "hr") ||
+        dstd::ascii_iequals(unit, "hrs"))
         return value * 3600.0;
-    if (detail::iequals(unit, "d") || detail::iequals(unit, "day") ||
-        detail::iequals(unit, "days"))
+    if (dstd::ascii_iequals(unit, "d") || dstd::ascii_iequals(unit, "day") ||
+        dstd::ascii_iequals(unit, "days"))
         return value * 86400.0;
     return dstd::nullopt;
 }

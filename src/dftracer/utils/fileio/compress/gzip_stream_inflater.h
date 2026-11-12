@@ -58,6 +58,10 @@ class GzipStreamInflater {
 
     InflateStatus inflate(InflateFlush flush = InflateFlush::None);
 
+    /// True after inflate() returned DataError because the trailer did not
+    /// match, so the deflate data itself was whole.
+    bool trailer_mismatch() const;
+
     /// Insert `bits` bits of `value` before the next input, for a raw stream
     /// that starts inside a byte.
     bool prime(int bits, int value);

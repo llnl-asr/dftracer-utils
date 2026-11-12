@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import subprocess
 import xml.etree.ElementTree as ET
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -39,6 +38,10 @@ SKIP_SEGMENTS = {"detail", "internal", "impl"}
 # Skip items from these file paths
 SKIP_PATHS = ["/cpmsource/", "/third_party/", "/test/", "/tests/", "/detail/"]
 
+# Types with anonymous unions: breathe cannot parse their unnamed members, so
+# these show their description and no member list.
+NO_MEMBER_LIST = {"dftracer::utils::runtime::io::IoOp"}
+
 # Only include items from files matching this
 INCLUDE_ROOT = "dftracer/utils"
 
@@ -46,7 +49,7 @@ INCLUDE_ROOT = "dftracer/utils"
 GUIDE_PAGES: dict[str, str] = {
     "coro": "coro",
     "runtime.io": "io",
-    "index": "indexer",
+    "trace.index": "indexer",
     "utilities.composites.dft.aggregators": "dft_aggregators",
     "utilities.composites.dft.indexing": "dft_indexing",
 }
@@ -663,8 +666,9 @@ def generate_module_rst(
         emit_source_block(lines, rst_dir, repo_root, repo_url, source_ref, item)
         lines.append(f".. {directive}:: {item.name}")
         lines.append("   :project: dftracer-utils")
-        lines.append("   :members:")
-        lines.append("   :undoc-members:")
+        if item.name not in NO_MEMBER_LIST:
+            lines.append("   :members:")
+            lines.append("   :undoc-members:")
         lines.append("")
 
     functions = sorted(

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/dstd/ascii.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -27,9 +28,7 @@ using Fail = dstd::Unexpected<DuqlError>;
 using Segments = dstd::Vector<dstd::String>;
 
 bool all_digits(dstd::StringView s) {
-    return !s.empty() && std::all_of(s.begin(), s.end(), [](char c) {
-        return c >= '0' && c <= '9';
-    });
+    return !s.empty() && std::all_of(s.begin(), s.end(), dstd::is_ascii_digit);
 }
 
 Segments split(dstd::StringView s) {
@@ -66,8 +65,7 @@ bool has_wildcard(const Path& p) {
 bool is_ident(dstd::StringView s) {
     if (s.empty() || all_digits(s.substr(0, 1))) return false;
     return std::all_of(s.begin(), s.end(), [](char c) {
-        return c == '_' || (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') ||
-               (c >= 'A' && c <= 'Z');
+        return c == '_' || dstd::is_ascii_alnum(c);
     });
 }
 

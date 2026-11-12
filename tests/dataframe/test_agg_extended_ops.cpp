@@ -6,6 +6,7 @@
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dstd/fmt.h>
+#include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -408,7 +409,7 @@ TEST_CASE("agg_deserialize survives mutated and truncated blobs") {
     dftu_utils_test::ok(dataframe::agg_accumulate(*st, s.keys, s.values));
     const dstd::String blob = dataframe::agg_serialize(*st);
     REQUIRE(blob.size() > 64);
-    std::uint64_t x = 0x9e3779b97f4a7c15ULL;
+    std::uint64_t x = dstd::hash::GOLDEN_RATIO;
     auto next = [&]() {
         x ^= x << 13;
         x ^= x >> 7;

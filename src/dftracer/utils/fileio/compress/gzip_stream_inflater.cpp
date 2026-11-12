@@ -341,6 +341,10 @@ InflateStatus GzipStreamInflater::inflate(InflateFlush flush) {
     return impl_->inflate(flush);
 }
 
+bool GzipStreamInflater::trailer_mismatch() const {
+    return impl_ && impl_->phase == Impl::Phase::Done;
+}
+
 bool GzipStreamInflater::prime(int bits, int value) {
     return zng_inflatePrime(&impl_->zs, bits, value) == Z_OK;
 }

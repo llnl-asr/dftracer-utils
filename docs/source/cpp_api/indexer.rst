@@ -20,5 +20,5 @@ Composition among the indexer types:
 
 .. mermaid:: /_generated/index.mmd
 
-.. include:: /cpp_api/_generated/index.rst.inc
-.. include:: /cpp_api/_generated/index.schemas.dft.agg.rst.inc
+.. include:: /cpp_api/_generated/trace.index.rst.inc
+.. include:: /cpp_api/_generated/trace.index.schemas.dft.agg.rst.inc

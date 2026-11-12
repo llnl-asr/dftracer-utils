@@ -8,6 +8,7 @@
 #include <dftracer/utils/dataframe/internal/varwidth_offsets.h>
 #include <dftracer/utils/dataframe/kernels/filter.h>
 #include <dftracer/utils/dataframe/parallel.h>
+#include <dftracer/utils/dstd/bits.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -146,7 +147,7 @@ BufferView mask_to_indices(const std::uint8_t* bits, std::int64_t n,
         for (std::int64_t w = b; w < e; ++w) {
             std::uint64_t x;
             std::memcpy(&x, bits + w * 8, sizeof(x));
-            c += __builtin_popcountll(x);
+            c += dstd::bits::popcount_u64(x);
         }
         counts[static_cast<std::size_t>(b / GRAIN) + 1] = c;
     });

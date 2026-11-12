@@ -381,6 +381,64 @@ def _pandas_values(native: "_ext._Series") -> "Union[pd.Series, np.ndarray]":
     return pd.Series(values).dt.tz_localize("UTC").dt.tz_convert(native.timezone)
 
 
+def _pandas_categorical(native: "_ext._Series") -> "pd.Categorical":
+    """A dictionary-encoded string column as ``pd.Categorical``. With pyarrow the
+    codes and the dictionary are taken as they are, so no string is built per
+    row, and the categories keep the dictionary order without its unused
+    entries. Without pyarrow the codes are not reachable, so the strings are
+    built once and the categories come out sorted."""
+    import numpy as np  # ty: ignore[import-not-found]
+    import pandas as pd  # ty: ignore[import-not-found]
+
+    if hasattr(native, "__arrow_c_array__"):
+        try:
+            import pyarrow as pa  # ty: ignore[import-not-found]
+        except ImportError:
+            pass
+        else:
+            arr = pa.array(native)
+            if pa.types.is_dictionary(arr.type):
+                # pandas refuses repeated or null categories, which Arrow allows.
+                if arr.dictionary.null_count or len(arr.dictionary.unique()) != len(arr.dictionary):
+                    arr = arr.dictionary_decode().dictionary_encode()
+                codes = arr.indices.fill_null(-1).to_numpy(zero_copy_only=False)
+                categories = arr.dictionary.to_pandas()
+                out = pd.Categorical.from_codes(codes, categories=pd.Index(categories))
+                return out.remove_unused_categories()
+    values = np.empty(native.length, dtype=object)
+    native.str_into(values, None)
+    return pd.Categorical(values)
+
+
+def _pandas_default(native: "_ext._Series") -> "Union[pd.Series, np.ndarray, ExtensionArray]":
+    """The default ``to_pandas`` column: ``pd.Categorical`` for a dictionary
+    column, pandas' nullable dtype for an integer, bool or (where the default
+    string dtype is ``object``) string column that holds nulls, and the NumPy
+    form for the rest."""
+    if native.encoding == 2 and DType(native.type) in (DType.STRING, DType.LARGE_STRING):
+        return _pandas_categorical(native)
+    if native.null_count:
+        dtype = DType(native.type)
+        if (
+            dtype in _INTEGERS
+            or dtype == DType.BOOL
+            or (dtype in (DType.STRING, DType.LARGE_STRING) and not _default_string_dtype())
+        ):
+            values = _pandas_nullable(native)
+            if values is not None:
+                return values
+    return _pandas_values(native)
+
+
+def _default_string_dtype() -> bool:
+    """Whether pandas already stores strings in a ``StringDtype`` that holds
+    missing values (pandas 3)."""
+    import numpy as np  # ty: ignore[import-not-found]
+    import pandas as pd  # ty: ignore[import-not-found]
+
+    return isinstance(pd.Series(np.array(["x"], dtype=object)).dtype, pd.StringDtype)
+
+
 def _pandas_nullable(native: "_ext._Series") -> "Optional[ExtensionArray]":
     """The column as pandas' own nullable extension array (``Int8`` .. ``UInt64``,
     ``Float32``, ``Float64``, ``boolean``, ``string``), built without pyarrow; a
@@ -390,6 +448,8 @@ def _pandas_nullable(native: "_ext._Series") -> "Optional[ExtensionArray]":
     import pandas as pd  # ty: ignore[import-not-found]
 
     dtype = DType(native.type)
+    if native.encoding == 2 and dtype in (DType.STRING, DType.LARGE_STRING):
+        return _pandas_categorical(native)
     if dtype in (DType.STRING, DType.LARGE_STRING):
         out = np.empty(native.length, dtype=object)
         native.str_into(out, pd.NA)
@@ -571,9 +631,13 @@ class Series(_SeriesPandasMixin, _Wrapper["_ext._Series"]):
     ``Series([1, 2, 3])`` builds one from a Python sequence, the pandas / polars
     constructor; an Arrow array (anything with ``__arrow_c_array__``) imports
     zero-copy with its own type, so an empty or all-null one keeps it;
-    ``Series(native)`` wraps a native handle."""
+    ``Series(native)`` wraps a native handle. ``name=`` names the Series
+    (see :attr:`name`); without it a Series or native handle keeps its own
+    name."""
 
-    def __init__(self, data: "Union[_ext._Series, Sequence[object]]") -> None:
+    def __init__(
+        self, data: "Union[_ext._Series, Sequence[object]]", name: Optional[str] = None
+    ) -> None:
         if isinstance(data, Series):
             data = data._native
         elif not isinstance(data, _ext._Series):
@@ -582,6 +646,8 @@ class Series(_SeriesPandasMixin, _Wrapper["_ext._Series"]):
             else:
                 data = _unwrap(Series.from_list(list(data)))
         super().__init__(data)
+        if name is not None:
+            self.name = name
 
     @classmethod
     def from_arrow(cls, arr: "pa.Array") -> "Series":
@@ -594,24 +660,32 @@ class Series(_SeriesPandasMixin, _Wrapper["_ext._Series"]):
         """Import a ``pandas.Series`` through NumPy, with no pyarrow: a NaN in a
         float column and a ``NaT`` or ``NA`` read as null, a categorical as its
         values, a zoned ``datetime64`` as a zoned timestamp. An Arrow-backed
-        column imports through pyarrow."""
+        column imports through pyarrow. The name is ``s.name`` when that is a
+        ``str``; any other name (``None``, an int, a tuple) is dropped."""
         from ._import import NeedsArrow, pandas_to_native
 
         try:
-            return Series(pandas_to_native(s))
+            out = Series(pandas_to_native(s))
         except NeedsArrow:
-            return _series_from_arrow(_require_pyarrow().Array.from_pandas(s))
+            out = _series_from_arrow(_require_pyarrow().Array.from_pandas(s))
+        if isinstance(s.name, str):
+            out.name = s.name
+        return out
 
     @classmethod
     def from_polars(cls, s: "pl.Series") -> "Series":
-        """Import a ``polars.Series`` with no pyarrow."""
+        """Import a ``polars.Series`` with no pyarrow. The name is ``s.name``;
+        polars' default name ``""`` means no name."""
         from ._import import NeedsArrow, polars_to_native
 
         try:
-            return Series(polars_to_native(s))
+            out = Series(polars_to_native(s))
         except NeedsArrow:
             _require_pyarrow()
-            return _series_from_arrow(s.to_arrow())
+            out = _series_from_arrow(s.to_arrow())
+        if s.name:
+            out.name = s.name
+        return out
 
     @classmethod
     def from_numpy(cls, a: "np.ndarray") -> "Series":
@@ -667,22 +741,33 @@ class Series(_SeriesPandasMixin, _Wrapper["_ext._Series"]):
 
     def to_pandas(self, *, arrow: bool = False, nullable: bool = False) -> "pd.Series":
         """This column as a pandas Series: a NumPy dtype by default (a copy,
-        built natively with no pyarrow), with ``arrow=True`` Arrow-backed,
-        sharing this column's buffers, or with ``nullable=True`` pandas' own
-        nullable dtype (``Int64``, ``Float64``, ``boolean``, ``string``, ...)
-        where the column type has one, a null being ``pd.NA`` and a float NaN
-        staying NaN (built without pyarrow). A type with no nullable dtype
-        converts as without the option."""
+        built natively with no pyarrow), except that a dictionary-encoded string
+        column is ``category`` and an integer, bool or string column that holds
+        nulls is pandas' own nullable dtype (``Int64``, ``boolean``, ``string``).
+        On pandas 3 a string column with nulls is the default ``str`` dtype,
+        which holds missing values already. A float column keeps NaN. With
+        ``arrow=True`` the Series is Arrow-backed, sharing this column's
+        buffers, and with ``nullable=True`` it is pandas' own nullable dtype
+        (``Int64``, ``Float64``, ``boolean``, ``string``, ...) even without
+        nulls, where the column type has one, a null being ``pd.NA`` and a float
+        NaN staying NaN (built without pyarrow). A type with no nullable dtype
+        converts as without the option. A dictionary column uses pyarrow, where
+        installed, to read its codes without building a string per row, and
+        keeps the dictionary order of its used values; without pyarrow the
+        categories come out sorted. The pandas Series takes this name."""
         if arrow and nullable:
             raise ValueError("to_pandas: pass either arrow=True or nullable=True, not both")
         if arrow:
-            return _to_pandas(self.to_arrow(), arrow)
-        import pandas as pd  # ty: ignore[import-not-found]
+            out = _to_pandas(self.to_arrow(), arrow)
+        else:
+            import pandas as pd  # ty: ignore[import-not-found]
 
-        values = _pandas_nullable(self._native) if nullable else None
-        if values is None:
-            values = _pandas_values(self._native)
-        return values if isinstance(values, pd.Series) else pd.Series(values)
+            values = _pandas_nullable(self._native) if nullable else None
+            if values is None:
+                values = _pandas_default(self._native)
+            out = values if isinstance(values, pd.Series) else pd.Series(values)
+        out.name = self.name
+        return out
 
     def to_numpy(self) -> "np.ndarray":
         """This column as a NumPy array, built natively with no pyarrow.
@@ -703,7 +788,8 @@ class Series(_SeriesPandasMixin, _Wrapper["_ext._Series"]):
         comes through the Arrow PyCapsule interface (polars >= 1.3; an older
         polars raises its own error), without pyarrow; those, and builds
         without Arrow, use the native conversion (Float16 becomes Float32, a
-        decimal gets precision 38, a dictionary becomes String)."""
+        decimal gets precision 38, a dictionary becomes String). The polars
+        Series takes this name, ``""`` when there is none."""
         try:
             import polars as pl  # ty: ignore[import-not-found]
         except ImportError:
@@ -711,8 +797,10 @@ class Series(_SeriesPandasMixin, _Wrapper["_ext._Series"]):
                 "polars is required for to_polars(). Install with: pip install polars"
             ) from None
         if _polars_via_arrow(self._native):
-            return pl.Series(self)  # type: ignore[arg-type]
-        return _polars_native(self._native, pl)
+            out = pl.Series(self)  # type: ignore[arg-type]
+        else:
+            out = _polars_native(self._native, pl)
+        return out.alias(self.name or "")
 
     def __array__(
         self, dtype: "Optional[np.dtype]" = None, copy: Optional[bool] = None

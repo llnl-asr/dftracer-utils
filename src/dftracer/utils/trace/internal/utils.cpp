@@ -2,6 +2,7 @@
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/common/str_format.h>
+#include <dftracer/utils/dstd/ascii.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
@@ -52,7 +53,7 @@ dstd::String determine_index_path(dstd::CStringView cpath,
 dstd::StringView to_lower_ascii(dstd::StringView s, dstd::String& storage) {
     bool has_upper = false;
     for (char c : s) {
-        if (c >= 'A' && c <= 'Z') {
+        if (dstd::is_ascii_upper(c)) {
             has_upper = true;
             break;
         }
@@ -64,8 +65,8 @@ dstd::StringView to_lower_ascii(dstd::StringView s, dstd::String& storage) {
 }
 
 bool is_data_transfer_op(dstd::StringView cat, dstd::StringView name) {
-    if (!::dftracer::utils::common::detail::iequals(cat, "posix") &&
-        !::dftracer::utils::common::detail::iequals(cat, "stdio")) {
+    if (!dstd::ascii_iequals(cat, "posix") &&
+        !dstd::ascii_iequals(cat, "stdio")) {
         return false;
     }
     auto eq = [](dstd::StringView a, dstd::StringView b) { return a == b; };

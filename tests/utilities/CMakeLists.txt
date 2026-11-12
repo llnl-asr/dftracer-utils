@@ -23,6 +23,7 @@ set(UTILITIES_TEST_SOURCES
     # DLIO config generation
     dlio/test_barrier_simulator.cpp
     dlio/test_trace_loader.cpp
+    dlio/test_yaml_emit.cpp
 
     # Sketches
     statistics/test_ddsketch.cpp

@@ -414,11 +414,11 @@ dstd::String format_ms(std::uint64_t nanos) {
 dstd::String format_read_stats(const store::engine::ReadStats& reads) {
     return dstd::fmt<
         "commits_read={} extents_read={} pages_decoded={} "
-        "page_hits={} page_reads={} windows_warmed={} files_filtered={} "
+        "page_hits={} page_reads={} files_filtered={} "
         "metadata_blocks_read={} read_calls={} mib_read={}">(
         reads.commits_verified, reads.extents_read, reads.pages_decoded,
-        reads.page_hits, reads.page_reads, reads.windows_warmed,
-        reads.files_filtered, reads.metadata_blocks_read, reads.read_calls,
+        reads.page_hits, reads.page_reads, reads.files_filtered,
+        reads.metadata_blocks_read, reads.read_calls,
         fixed(static_cast<double>(reads.bytes_read) /
                   static_cast<double>(MIB_BYTES),
               1));
@@ -994,8 +994,7 @@ struct Bench {
                       " eighth)"
                     : "none")
             << "; Snapshot::open reads only the metadata, and a query reads"
-               " an extent whole once for its page table, a 16 MiB window"
-               " of the file once it loads a second extent there, and the"
+               " the head of an extent once for its page table and the"
                " pages it needs through a page cache of "
             << (dftracer::utils::common::constants::store::
                     STORE_DEFAULT_PAGE_CACHE_BYTES >>
@@ -1436,7 +1435,7 @@ QueryPlan Bench::make_query_plan(const Workload& workload) const {
 
     dstd::Vector<std::size_t> every_scope(scopes);
     std::iota(every_scope.begin(), every_scope.end(), std::size_t{0});
-    std::mt19937_64 scan_random(QUERY_SEED ^ 0x9E3779B97F4A7C15ULL);
+    std::mt19937_64 scan_random(QUERY_SEED ^ dstd::hash::GOLDEN_RATIO);
     std::shuffle(every_scope.begin(), every_scope.end(), scan_random);
     if (every_scope.size() > SCAN_SCOPES) {
         every_scope.resize(static_cast<std::size_t>(SCAN_SCOPES));
@@ -2055,7 +2054,7 @@ bool Bench::grow_reads(const dstd::String& label, const char* state,
             std::min<std::uint64_t>(GROW_SCAN_KEYS, total);
         const std::uint64_t scans =
             std::max<std::uint64_t>(1, opt.gets / GETS_PER_GROW_SCAN);
-        std::mt19937_64 random(QUERY_SEED ^ 0x9E3779B97F4A7C15ULL);
+        std::mt19937_64 random(QUERY_SEED ^ dstd::hash::GOLDEN_RATIO);
         const auto started = std::chrono::steady_clock::now();
         for (std::uint64_t at = 0; at < scans; ++at) {
             const std::uint64_t first = random() % (total - span + 1);

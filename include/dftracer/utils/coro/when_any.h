@@ -711,7 +711,13 @@ class TimeoutAwaitable {
             if (latch.on_cancelled()) {
                 outcome = Outcome::Cancelled;
                 cancel_timer();
-                detail::stop_or_continue(executor, owner, handle);
+                // The entry names the waiter's frame, which the stop can free
+                // while this state lives on in a when_any.
+                if (park != nullptr) {
+                    detail::stop_or_resume(executor, park, handle);
+                } else {
+                    detail::stop_or_continue(executor, owner, handle);
+                }
             }
         }
 
@@ -789,7 +795,11 @@ class TimeoutAwaitable {
         if (before & CompletionLatch::BIT_CANCELLED) {
             st.outcome = Outcome::Cancelled;
             st.cancel_timer();
-            return detail::stop_task(st.executor, nullptr, st.owner);
+            detail::ParkNode* node = st.park;
+            st.park = nullptr;
+            if (detail::stop_task(st.executor, node, st.owner)) return true;
+            st.park = node;
+            return false;
         }
         return true;
     }

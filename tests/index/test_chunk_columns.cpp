@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/str_format.h>
+#include <dftracer/utils/dstd/ascii.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/little_endian.h>
 #include <dftracer/utils/dstd/map.h>
@@ -27,7 +28,6 @@
 #include <testing_utilities.h>
 
 #include <algorithm>
-#include <cctype>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -234,11 +234,8 @@ Num classify(const dstd::String& text) {
 dstd::String trimmed(const dstd::String& text) {
     std::size_t begin = 0;
     std::size_t end = text.size();
-    while (begin < end && std::isspace(static_cast<unsigned char>(text[begin])))
-        ++begin;
-    while (end > begin &&
-           std::isspace(static_cast<unsigned char>(text[end - 1])))
-        --end;
+    while (begin < end && dstd::is_ascii_space(text[begin])) ++begin;
+    while (end > begin && dstd::is_ascii_space(text[end - 1])) --end;
     return text.substr(begin, end - begin);
 }
 

@@ -353,13 +353,8 @@ int main(int argc, char** argv) {
                                          out_path);
                 return 1;
             }
-            auto rendered = domains::workload::dlio::render_dlio_yaml(
+            dstd::String yaml = domains::workload::dlio::render_dlio_yaml(
                 &comp_block, prep_block_ptr);
-            if (!rendered) {
-                DFTRACER_UTILS_LOG_ERROR("{}", rendered.error().message());
-                return 1;
-            }
-            dstd::String yaml = std::move(*rendered);
             yaml += "\n";
             const bool wrote = std::fwrite(yaml.data(), 1, yaml.size(),
                                            out.get()) == yaml.size();

@@ -106,13 +106,19 @@ def _zone_name(tz: Any) -> str:
 
 def pandas_to_native(s: Any) -> "_ext._Series":
     """A ``pandas.Series`` as a native column: a NaN in a float column and a
-    ``NaT`` or ``NA`` anywhere read as null."""
+    ``NaT`` or ``NA`` anywhere read as null. A ``category`` column whose
+    categories are strings becomes a dictionary-encoded string column, without
+    its unused categories or their order; other categories keep their values."""
     import pandas as pd
 
     dtype = s.dtype
     if hasattr(pd, "ArrowDtype") and isinstance(dtype, pd.ArrowDtype):
         raise NeedsArrow(f"a pandas column of dtype {dtype} needs pyarrow")
     if isinstance(dtype, pd.CategoricalDtype):
+        if all(isinstance(c, str) for c in dtype.categories):
+            return _objects(
+                s.astype(object).where(s.notna(), None).tolist(), None
+            ).dictionary_encode()
         s = s.astype(object)
         dtype = s.dtype
     mask = s.isna().to_numpy()

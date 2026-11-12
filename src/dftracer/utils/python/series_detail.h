@@ -32,6 +32,12 @@ Series* as_series(PyObject* o);
 // The Series behind `o`, or nullptr with no error set when it is not one.
 Series* as_series_or_null(PyObject* o);
 
+// @p out under the name of @p source, as the Series methods give it; @p out
+// unchanged when it is invalid.
+Series named_like(Series out, const Series& source);
+// @p out under the name @p a and @p b share, else unnamed (the pandas rule).
+Series named_like(Series out, const Series& a, const Series& b);
+
 // Defined in series/reduce.cpp.
 PyObject* scalar_to_py(dftu_scalar v);
 
@@ -42,7 +48,7 @@ template <dftu_series* (*Fn)(const dftu_series*)>
 PyObject* series_unary(PyObject* self, PyObject*) {
     Series* a = as_series(self);
     if (!a) return nullptr;
-    return make_series(Series{Fn(a->handle())});
+    return make_series(named_like(Series{Fn(a->handle())}, *a));
 }
 
 // No-argument reducers that call a Series member and wrap the result. Method is

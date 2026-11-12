@@ -7,8 +7,49 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+### Added
+
+- Add `Series.name`, kept through `from_pandas`, `to_pandas`, Polars, ops, `df["x"]` and pickle, with `dftu_series_name` and `dftu_series_rename` in the C ABI.
+  A binary op keeps the name only when both names are equal, as pandas does, and `Series.rename` and `Series(data, name=...)` set it.
+- Add `yaml::Records` for a YAML text too large for memory.
+  It yields the elements of a top-level block sequence, or the documents of a `---` stream, one at a time, from a string or from blocks that the caller reads and gives it.
+  The yaml library reads no files.
+  Each chunk of about 64 MiB (`RecordsOptions::chunk_bytes`) is parsed on its own and its buffers are reused, so memory follows the chunk and not the text.
+  `Records::next_chunks` gives a batch of `RecordsOptions::batch_chunks` chunks, which the caller can parse and read on its own threads.
+- Add `yaml::Document::parse` with a `yaml::RunJobs` hook that indexes one large text in chunks on the caller's threads and joins them, with the same result and errors as the one-thread parse.
+  A 200 MB text parsed 5 to 7 times faster on 14 threads and 7 to 9 times faster on 48.
+
 ### Changed
 
+- Make `to_pandas()` give pandas' nullable dtypes (`Int64`, `boolean`, `string`) for integer, bool and string columns that hold nulls, and `category` for a dictionary column, so `DataFrame.from_pandas(df).to_pandas()` keeps those dtypes.
+  `from_pandas` keeps a `category` column with string categories as a dictionary column, without its unused categories or their order.
+- Pick the best vector instructions of the CPU at run time for `str_len_chars`, `str_len_bytes`, `to_lowercase`, `to_uppercase` and the UTF-8 check of duql patterns, which were built for SSE2 only on x86.
+  `str_len_chars` of 1M short rows takes 2.2 ms where it took 12.9 ms on an AVX-512 x86 CPU, and the other three are 10 to 15% faster.
+- Read only the parts of the index store that a query needs.
+  A query no longer reads each 16 MiB window of a store file that holds two of its extents, and it reads 4 KiB for the page table of an extent where it read the whole extent.
+  On Lustre, with an index of 14,117 traces (318 MB), a no-op `dftracer_index` reads 20 MB where it read 349 MB, `dftracer_view -q 'take 20'` 15 MB where it read 202 MB and a group-by 105 MB where it read 654 MB, cold and warm, with the same or a shorter run time.
+- Read each gzip trace once when it is indexed.
+  The index build no longer scans a file for member headers before it inflates it: each worker takes a range of the file (half the checkpoint size in compressed bytes, at least 4 MiB; `DFTRACER_UTILS_INDEX_RANGE_BYTES` sets it) and finds its first member header in the bytes it reads to inflate.
+  A build of 97 DFTracer traces (343 MB) read 803 MB of them before and reads 366 MB now, with the same index.
+  A range that starts inside a member reads the end of that member a second time, up to half a member per range, so a file of 2 MB members reads about 9% more than its size; members longer than a range are read once and inflated one after another.
+  The memory of a build is bounded by the plaintext of a range (a quarter of the checkpoint size, at least 4 MiB) and is no higher than before at 8, 16 and 32 MB checkpoints.
+  A member that cannot be read, or bytes that are no gzip between members, now lose only those bytes: the build warns, looks for the next member header and goes on, where it dropped the rest of the range before.
+  A read or a view of a damaged file skips the text that the damage cut, so the line count of its index can be a few lines higher than the lines a read returns.
+- Back blocks of 2 MiB and more with transparent huge pages on Linux, where the system gives them on request (`transparent_hugepage` set to `madvise`).
+  A large new buffer then faults in 2 MiB pages, not 4 KiB ones: a YAML read bench made 13 times fewer page faults and ran 15 to 22% faster.
+  Smaller blocks keep 4 KiB pages, so their resident size does not change.
+- Read YAML with our own reader and drop rapidyaml, with its c4core, fast_float and debugbreak.
+  A line index built with Highway reads block YAML (maps, sequences, quoted and plain scalars, block scalars `|` and `>`, scalars of several lines, top-level scalar documents, comments, `---` and `...` markers), and a recursive parser reads flow collections (`[...]`, `{...}` and JSON) into a flat tape of 12-byte entries, with no tree.
+  Every text goes through the line index, so no text is left to a second reader.
+  A flow collection may go over several lines, and `yaml::Records` never cuts inside one.
+  A parsed text holds its own bytes plus 0.82 times its size for a list of short records and 0.58 times for a deeply nested map (measured on 100 MB inputs).
+  A leading byte order mark is skipped.
+  An error is `file:line:col: reason`, with the line counted over the whole text, also in `yaml::Records`.
+  The reader is checked against the cases of the YAML test suite and a fuzz that writes random trees as text and reads them back.
+- Refuse anchors (`&`), aliases (`*`), tags (`!`), complex keys (`?`), directives (`%YAML`, `%TAG`) and null keys in YAML, with an error that names the feature.
+  A `<<` key is a plain key: there is no merge.
+  A mapping with a container as a key is refused.
+  `yaml::Writer` no longer writes an explicit `? key` for a key of more than 1024 bytes: such a key is now a caller bug, fatal in a debug build, as YAML limits an implicit key to 1024 characters.
 - Rename the library `libdftracer_utils_io` to `libdftracer_utils_fileio` and `libdftracer_utils_utilities` to `libdftracer_utils_domains`, with their pkg-config files.
   A program that links the `dftracer_utils` target needs no change.
 - Move the public index headers from `dftracer/utils/index/` to `dftracer/utils/trace/index/` and their namespace from `dftracer::utils::index` to `dftracer::utils::trace::index`.
@@ -27,10 +68,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 - Build the json and duql libraries without exceptions.
 - Build the io library without exceptions.
 - Build the trace library without exceptions.
-  Only the file that reads YAML keeps exceptions, to catch the ones of yaml-cpp.
   Python keeps its exception types.
 - Build the utilities library and the command line tools without exceptions.
-  Only the two files that call yaml-cpp keep exceptions, to catch the ones of yaml-cpp.
 - Make the viz server answer 400 for a bad query, such as an invalid argument or a duql parse error, and 500 for I/O and internal errors, where every failure answered 500 before.
 - Make a command line tool that fails print `Error: <message>` and exit with 1 in cases where it aborted before, such as an index folder that cannot be written.
 - Make `dftracer_stats` in detailed mode stop at the first error and exit with 1.
@@ -409,6 +448,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   A public header now reaches no CPM package, so a plugin built from a source checkout and a plugin built against an install prefix compile the same, and the vendored headers install with the rest of `include/`.
   `cmake/patches/concurrentqueue-thread-exit.patch` is removed: its change is in the vendored header.
 - Add the ctest `public_third_party_headers`, which fails on an include under `include/` that is not ours, standard, system, `<mpi.h>` or vendored; simdjson and nanoarrow are its known exceptions until the API cut moves them out of `include/`.
+- Parse YAML with the reader of `libdftracer_utils_yaml` in place of yaml-cpp, for record schema specs and the `--event-map` file of `dftracer_gen_dlio_config`, in the new library `libdftracer_utils_yaml`, which also holds a block-style YAML writer that the DLIO config uses.
+  No yaml-cpp archive is in the link line or the install any more, and the same input is accepted, except that a mapping with a duplicate key is now an error, as YAML 1.2.2 requires.
+  No source of ours except `common/error.cpp` builds with exceptions now.
 
 ### Added
 
@@ -585,6 +627,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Fixed
 
+- Fix `to_pandas()` giving `int64` and `uint64` columns the numpy types `longlong` and `ulonglong`, so a pandas `merge` on a repeated `uint64` key raised `KeyError`.
+  The columns are now numpy's own `int64` and `uint64`.
+- Fix a read of freed memory when a task that waits in `with_timeout` or `when_any` on a timeout is cancelled, which a later cancel on the same executor could hit.
+- Write every float of the DLIO config with a decimal point (`mean: 1.0`, `max_bound: 1.0`), where a whole number was written as `1`, so a YAML reader such as PyYAML reads it as a float and not as an int.
 - Fix `dftu_task_when_all` and `dftu_task_when_any` ending the process when an input task raises an exception.
   The combined task now reports the exception.
 - Fix `Store::commit` accepting a batch made before a `close()` when the next writer got the address of the closed one.
@@ -614,7 +660,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   Fix a hang when one plan of a streamed `collect_all` or session stopped early (`head(1)`) while a small memory budget held the others: the senders still waiting on its budget never woke.
   The cost: each ordered row plan in a batch now reads on its own, and a join or concat child reads apart from the streamed roots, so those cost one more scan than before.
 - Fix `find_package` for the installed shared and static libraries: a project that links one now finds Threads, simdjson, nanoarrow, pcre2, highway, utf8proc, vectorscan, zlib-ng, zstd and libdeflate from the same prefix with no extra flags.
-  The private static archives install as `libdftracer_hs.a`, `libdftracer_hwy.a`, `libdftracer_hwy_contrib.a` and `libdftracer_utf8proc_static.a`, and the `zlib` package is now `dftracer_utils_zlib`.
+  The private static archives install as `libdftracer_utils_hs.a`, `libdftracer_utils_hwy.a`, `libdftracer_utils_hwy_contrib.a`, `libdftracer_utils_utf8proc_static.a` and `libdftracer_utils_zlib.a`, and the `zlib` package is now `dftracer_utils_zlib`.
 - Read a line of any size: a line longer than the read buffer no longer fails the read of its file.
   The buffer doubles for that line and stays that size for the lines after it.
 - Index every line the DOM parser refuses, with a number too large for a double, an invalid escape, a 20-digit integer, bad UTF-8, a raw control byte in a string or a nesting deeper than 1024 levels.

@@ -35,4 +35,14 @@
 #define DFTRACER_UTILS_NOINLINE
 #endif
 
+/// For a small function on a hot path whose callers the compiler would not
+/// inline it into. Use with an `inline` function.
+#if defined(_MSC_VER)
+#define DFTRACER_UTILS_ALWAYS_INLINE __forceinline
+#elif defined(__GNUC__) || defined(__clang__)
+#define DFTRACER_UTILS_ALWAYS_INLINE __attribute__((always_inline))
+#else
+#define DFTRACER_UTILS_ALWAYS_INLINE
+#endif
+
 #endif  // DFTRACER_UTILS_COMMON_EXPORT_H

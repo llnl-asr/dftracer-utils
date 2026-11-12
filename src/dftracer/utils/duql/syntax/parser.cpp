@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/str_format.h>
+#include <dftracer/utils/dstd/ascii.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -11,7 +12,6 @@
 #include <dftracer/utils/duql/syntax/parser.h>
 
 #include <algorithm>
-#include <cctype>
 #include <charconv>
 #include <system_error>
 
@@ -19,7 +19,7 @@ namespace dftracer::utils::duql::syntax {
 
 namespace {
 
-using ::dftracer::utils::common::detail::iequals;
+using ::dftracer::utils::dstd::ascii_iequals;
 
 constexpr dstd::StringView RESERVED[] = {"and",    "or",    "not",     "in",
                                          "like",   "ilike", "between", "is",
@@ -33,13 +33,13 @@ constexpr dstd::StringView STAGES[] = {
 
 bool reserved(dstd::StringView word) {
     for (auto r : RESERVED)
-        if (iequals(word, r)) return true;
+        if (ascii_iequals(word, r)) return true;
     return false;
 }
 
 bool stage_word(dstd::StringView word) {
     for (auto s : STAGES)
-        if (iequals(word, s)) return true;
+        if (ascii_iequals(word, s)) return true;
     return false;
 }
 
@@ -151,7 +151,7 @@ class Parser {
         return true;
     }
     bool word(dstd::StringView w) const {
-        return at(Tok::Name) && iequals(cur().text, w);
+        return at(Tok::Name) && ascii_iequals(cur().text, w);
     }
     bool accept_word(dstd::StringView w) {
         if (!word(w)) return false;
@@ -171,10 +171,10 @@ class Parser {
             long v = 0;
             for (std::size_t k = at; k < at + 4; ++k) {
                 const char h = s[k];
-                const int d = h >= '0' && h <= '9'   ? h - '0'
-                              : h >= 'a' && h <= 'f' ? h - 'a' + 10
-                              : h >= 'A' && h <= 'F' ? h - 'A' + 10
-                                                     : -1;
+                const int d = dstd::is_ascii_digit(h) ? h - '0'
+                              : dstd::is_ascii_xdigit(h)
+                                  ? dstd::to_ascii_lower(h) - 'a' + 10
+                                  : -1;
                 if (d < 0) return -1;
                 v = v * 16 + d;
             }
@@ -499,16 +499,16 @@ class Parser {
     // one '_', trimmed at both ends; a leading digit or a keyword gets '_'.
     static dstd::String implicit_name(dstd::StringView text) {
         dstd::String out;
-        for (unsigned char c : text) {
-            if (std::isalnum(c) || c == '_')
-                out += static_cast<char>(c);
+        for (char c : text) {
+            if (dstd::is_ascii_alnum(c) || c == '_')
+                out += c;
             else if (!out.empty() && out.back() != '_')
                 out += '_';
         }
         const auto first = out.find_first_not_of('_');
         if (first == dstd::String::npos) return {};
         out = out.substr(first, out.find_last_not_of('_') - first + 1);
-        if (std::isdigit(static_cast<unsigned char>(out[0])) || reserved(out))
+        if (dstd::is_ascii_digit(out[0]) || reserved(out))
             out.insert(out.begin(), '_');
         return out;
     }
@@ -1105,8 +1105,9 @@ class Parser {
     bool legacy_contains() const {
         if (!at(Tok::String)) return false;
         std::size_t k = 1;
-        if (peek(k).kind == Tok::Name && iequals(peek(k).text, "not")) ++k;
-        if (peek(k).kind != Tok::Name || !iequals(peek(k).text, "in"))
+        if (peek(k).kind == Tok::Name && ascii_iequals(peek(k).text, "not"))
+            ++k;
+        if (peek(k).kind != Tok::Name || !ascii_iequals(peek(k).text, "in"))
             return false;
         const Tok after = peek(k + 1).kind;
         return after == Tok::Name || after == Tok::Qname;
@@ -1183,10 +1184,11 @@ class Parser {
     }
 
     Res<ExprPtr> keyword_comparison(ExprPtr left, const Token& first) {
-        const bool negated =
-            word("not") && peek(1).kind == Tok::Name &&
-            (iequals(peek(1).text, "in") || iequals(peek(1).text, "between") ||
-             iequals(peek(1).text, "like") || iequals(peek(1).text, "ilike"));
+        const bool negated = word("not") && peek(1).kind == Tok::Name &&
+                             (ascii_iequals(peek(1).text, "in") ||
+                              ascii_iequals(peek(1).text, "between") ||
+                              ascii_iequals(peek(1).text, "like") ||
+                              ascii_iequals(peek(1).text, "ilike"));
         if (negated) advance();
         if (accept_word("in")) {
             In in;
@@ -1202,7 +1204,7 @@ class Parser {
                 auto close = expect(Tok::Rbracket, "']' or ','");
                 if (!close) return dstd::Unexpected(close.error());
             } else if (at(Tok::Lparen) && peek(1).kind == Tok::Name &&
-                       iequals(peek(1).text, "from")) {
+                       ascii_iequals(peek(1).text, "from")) {
                 auto sub = from_pipeline("A sub-query");
                 if (!sub) return dstd::Unexpected(sub.error());
                 in.subquery = std::move(*sub);
@@ -1230,7 +1232,7 @@ class Parser {
         }
         if (word("like") || word("ilike")) {
             Like l;
-            l.icase = iequals(advance().text, "ilike");
+            l.icase = ascii_iequals(advance().text, "ilike");
             l.subject = std::move(left);
             l.negated = negated;
             if (at(Tok::Param)) {
@@ -1559,9 +1561,8 @@ class Parser {
             case Tok::Duration: {
                 std::size_t i = 0;
                 while (i < t.text.size() &&
-                       (std::isdigit(static_cast<unsigned char>(t.text[i])) ||
-                        t.text[i] == '.' || t.text[i] == 'e' ||
-                        t.text[i] == 'E' ||
+                       (dstd::is_ascii_digit(t.text[i]) || t.text[i] == '.' ||
+                        t.text[i] == 'e' || t.text[i] == 'E' ||
                         ((t.text[i] == '+' || t.text[i] == '-') && i > 0 &&
                          (t.text[i - 1] == 'e' || t.text[i - 1] == 'E'))))
                     ++i;
@@ -1581,7 +1582,7 @@ class Parser {
                 return make(Param{dstd::String(t.text)}, t);
             case Tok::Lparen: {
                 if (peek(1).kind == Tok::Name &&
-                    iequals(peek(1).text, "from")) {
+                    ascii_iequals(peek(1).text, "from")) {
                     auto sub = from_pipeline("A sub-query");
                     if (!sub) return dstd::Unexpected(sub.error());
                     return make(Subquery{std::move(*sub)}, t);
@@ -1622,15 +1623,17 @@ class Parser {
             case Tok::Qname:
                 return path_expr(t);
             case Tok::Name: {
-                if (iequals(t.text, "null")) {
+                if (ascii_iequals(t.text, "null")) {
                     advance();
                     return make(Literal{Null{}, {}}, t);
                 }
-                if (iequals(t.text, "true") || iequals(t.text, "false")) {
+                if (ascii_iequals(t.text, "true") ||
+                    ascii_iequals(t.text, "false")) {
                     advance();
-                    return make(Literal{iequals(t.text, "true"), {}}, t);
+                    return make(Literal{ascii_iequals(t.text, "true"), {}}, t);
                 }
-                if (iequals(t.text, "case") && peek(1).kind == Tok::Lbrace) {
+                if (ascii_iequals(t.text, "case") &&
+                    peek(1).kind == Tok::Lbrace) {
                     auto c = case_block();
                     if (!c) return dstd::Unexpected(c.error());
                     return make(std::move(*c), t);

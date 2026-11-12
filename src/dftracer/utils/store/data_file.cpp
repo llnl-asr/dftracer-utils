@@ -3,6 +3,7 @@
 #include <dftracer/utils/common/env.h>
 #include <dftracer/utils/common/timer.h>
 #include <dftracer/utils/dstd/algorithm.h>
+#include <dftracer/utils/dstd/ascii.h>
 #include <dftracer/utils/dstd/bits.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
@@ -437,8 +438,7 @@ void apply_chain(FileIndex& index, const dstd::Vector<Record>& chain) {
 dstd::String data_file_name(dstd::StringView host, std::uint32_t pid,
                             std::uint64_t random, dstd::StringView label) {
     const auto keep = [](char c) {
-        return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
-               (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-';
+        return dstd::is_ascii_alnum(c) || c == '.' || c == '_' || c == '-';
     };
 
     dstd::String out;
@@ -1711,35 +1711,6 @@ dstd::Expected<void, dstd::Error> DataFileReader::read_range(
     }
     out.resize(length);
     return read_at(**file, offset, length, out.data(), reads);
-}
-
-dstd::Expected<void, dstd::Error> DataFileReader::warm_range(
-    std::uint64_t offset, std::uint64_t length, BlockReads* reads) const {
-    // Direct reads skip the page cache, so warming it buys nothing.
-    auto direct = direct_align();
-    if (!direct) return dstd::Unexpected<dstd::Error>(direct.error());
-    if (*direct != 0) return {};
-    auto file = descriptor();
-    if (!file) return dstd::Unexpected<dstd::Error>(file.error());
-    if (offset >= file_size_) return {};
-    const std::uint64_t end = offset + std::min(length, file_size_ - offset);
-    dstd::Vector<std::uint8_t> chunk(static_cast<std::size_t>(
-        std::min<std::uint64_t>(VERIFY_CHUNK_BYTES, end - offset)));
-    std::uint64_t at = offset;
-    while (at < end) {
-        const std::size_t want = static_cast<std::size_t>(
-            std::min<std::uint64_t>(chunk.size(), end - at));
-        auto got =
-            (*file)->read_at(at, dstd::Span<std::uint8_t>(chunk.data(), want));
-        if (!got) return io_error();
-        if (*got == 0) break;
-        if (reads != nullptr) {
-            ++reads->calls;
-            reads->bytes += static_cast<std::uint64_t>(*got);
-        }
-        at += static_cast<std::uint64_t>(*got);
-    }
-    return {};
 }
 
 dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error>

@@ -115,8 +115,6 @@ FNR == 1 { in_block = 0; nscan = 0; prev = "" }
 END { exit hits > 0 ? 1 : 0 }
 ]=])
 
-set(_awk_file "${CMAKE_CURRENT_BINARY_DIR}/check_coro_lambdas.awk")
-file(WRITE "${_awk_file}" "${_program}")
 
 if(SELF_TEST)
   set(_dir "${SOURCE_DIR}/tests/cmake/coro_lambdas")
@@ -127,7 +125,7 @@ if(SELF_TEST)
   foreach(_case ${_cases})
     get_filename_component(_name "${_case}" NAME)
     execute_process(
-      COMMAND ${_awk} -f "${_awk_file}" "${_case}"
+      COMMAND ${_awk} "${_program}" "${_case}"
       RESULT_VARIABLE _rc
       OUTPUT_VARIABLE _out
       ERROR_VARIABLE _err)
@@ -182,7 +180,7 @@ if(_count EQUAL 0)
 endif()
 
 execute_process(
-  COMMAND ${_awk} -f "${_awk_file}" ${_candidates}
+  COMMAND ${_awk} "${_program}" ${_candidates}
   RESULT_VARIABLE _rc
   OUTPUT_VARIABLE _out
   ERROR_VARIABLE _err)

@@ -6,6 +6,7 @@
 #include <dftracer/utils/common/export.h>
 #include <dftracer/utils/coro/abi.h>
 #include <dftracer/utils/duql/abi.h>
+#include <stddef.h>
 #include <stdint.h>
 
 /*
@@ -282,6 +283,21 @@ DFTU_EXPORT dftu_series* dftu_series_share(const dftu_series* col);
  * LIST, MAP, STRUCT or CONSTANT column. */
 DFTU_EXPORT dftu_series* dftu_series_slice(const dftu_series* col,
                                            int64_t offset, int64_t len);
+
+/** The name of `s`, or NULL when it has none or `s` is NULL (then `*len` is 0;
+ * `len` may be NULL). The bytes are not NUL-terminated and are borrowed: they
+ * stay valid until `s` is freed. Only dftu_series_share, dftu_series_slice,
+ * dftu_series_mark_json and dftu_series_rename carry the name; the result of
+ * any other function does not promise one. */
+DFTU_EXPORT const char* dftu_series_name(const dftu_series* s, size_t* len);
+
+/** A new owned column sharing `s`'s buffers zero-copy (as dftu_series_share)
+ * and named by the `len` bytes at `name`, which are copied. A NULL `name` or a
+ * zero `len` gives a column with no name. Free the result with
+ * dftu_series_free; it keeps the buffers alive after `s` is freed. NULL for a
+ * NULL `s` and on allocation failure. */
+DFTU_EXPORT dftu_series* dftu_series_rename(const dftu_series* s,
+                                            const char* name, size_t len);
 
 /** Elementwise binary arithmetic (same numeric type, same length). */
 DFTU_EXPORT dftu_series* dftu_series_add(const dftu_series* a,

@@ -3,6 +3,7 @@
 #include <dftracer/utils/domains/server/http_request.h>
 #include <dftracer/utils/domains/server/http_response.h>
 #include <dftracer/utils/domains/server/router.h>
+#include <dftracer/utils/dstd/ascii.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
@@ -139,8 +140,8 @@ namespace {
 bool strip_bearer_prefix(dstd::StringView h, dstd::StringView& token) {
     constexpr dstd::StringView BEARER = "Bearer ";
     if (h.size() <= BEARER.size()) return false;
-    if (!::dftracer::utils::common::detail::iequals(h.substr(0, BEARER.size()),
-                                                    BEARER))
+    if (!::dftracer::utils::dstd::ascii_iequals(h.substr(0, BEARER.size()),
+                                                BEARER))
         return false;
     token = h.substr(BEARER.size());
     return true;

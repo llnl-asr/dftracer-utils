@@ -50,6 +50,7 @@
 //   fold_read_bench --smoke
 
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/intern_cache.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
@@ -81,12 +82,12 @@ constexpr const char* SMOKE_LINES =
 )";
 
 struct Hash {
-    std::uint64_t value = 1469598103934665603ULL;
+    std::uint64_t value = dstd::hash::FNV1A_OFFSET_BASIS_LEGACY;
     void bytes(const void* data, std::size_t n) {
         const auto* p = static_cast<const unsigned char*>(data);
         for (std::size_t i = 0; i < n; ++i) {
             value ^= p[i];
-            value *= 1099511628211ULL;
+            value *= dstd::hash::FNV1A_PRIME;
         }
     }
     template <class T>

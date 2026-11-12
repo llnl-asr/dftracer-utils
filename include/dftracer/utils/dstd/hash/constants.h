@@ -17,6 +17,15 @@ inline constexpr std::uint64_t GOLDEN_RATIO = 0x9e3779b97f4a7c15ULL;
 inline constexpr std::uint64_t SPLITMIX64_MUL1 = 0xbf58476d1ce4e5b9ULL;
 inline constexpr std::uint64_t SPLITMIX64_MUL2 = 0x94d049bb133111ebULL;
 
+/// PRIME64_2 of xxHash, by Yann Collet (BSD-2-Clause,
+/// https://github.com/Cyan4973/xxHash).
+inline constexpr std::uint64_t XXH64_PRIME2 = 0xc2b2ae3d27d4eb4fULL;
+
+/// MurmurHash3's fmix64 finalizer multipliers, by Austin Appleby (public
+/// domain, https://github.com/aappleby/smhasher).
+inline constexpr std::uint64_t MURMUR3_FMIX64_MUL1 = 0xff51afd7ed558ccdULL;
+inline constexpr std::uint64_t MURMUR3_FMIX64_MUL2 = 0xc4ceb9fe1a85ec53ULL;
+
 /// FNV-1a, 64-bit, by Glenn Fowler, Landon Curt Noll, and Phong Vo (public
 /// domain): http://www.isthe.com/chongo/tech/comp/fnv/
 inline constexpr std::uint64_t FNV1A_OFFSET_BASIS = 0xcbf29ce484222325ULL;

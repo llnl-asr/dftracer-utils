@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/ascii.h>
 #include <dftracer/utils/dstd/bits.h>
 #include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/file.h>
@@ -99,12 +100,9 @@ static dstd::String read_gzip_fname(const dstd::File& file) {
 
 // Estimate compression ratio based on file extension
 static double guess_text_ratio_from_ext(const dstd::String& fname) {
-    auto lower = [](char c) {
-        return (c >= 'A' && c <= 'Z') ? char(c - 'A' + 'a') : c;
-    };
     dstd::String s;
     s.reserve(fname.size());
-    for (char c : fname) s.push_back(lower(c));
+    for (char c : fname) s.push_back(dstd::to_ascii_lower(c));
     auto has = [&](const char* ext) {
         auto p = s.rfind(ext);
         return p != dstd::String::npos && p + std::strlen(ext) == s.size();

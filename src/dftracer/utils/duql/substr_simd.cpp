@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/dstd/ascii.h>
 #include <dftracer/utils/duql/substr_simd.h>
 
 #include <cstddef>
@@ -21,7 +22,8 @@ namespace HWY_NAMESPACE {
 constexpr std::int64_t SUBSTR_SIMD_MAX_NEEDLE = 64;
 
 inline std::uint8_t fold(std::uint8_t c) {
-    return c >= 'A' && c <= 'Z' ? static_cast<std::uint8_t>(c | 0x20) : c;
+    return static_cast<std::uint8_t>(
+        dstd::to_ascii_lower(static_cast<char>(c)));
 }
 
 // Whether the `m` bytes at `h` equal `needle`, ASCII letters folded when
@@ -109,6 +111,25 @@ std::int64_t SubstrFindIcase(const char* hay, std::int64_t hay_size,
     return Find<true>(hay, hay_size, needle, needle_size);
 }
 
+std::size_t AsciiPrefix(const unsigned char* d, std::size_t n) {
+    const hwy::HWY_NAMESPACE::ScalableTag<std::uint8_t> v8;
+    const std::size_t lanes = hwy::HWY_NAMESPACE::Lanes(v8);
+    const auto high = hwy::HWY_NAMESPACE::Set(v8, std::uint8_t{0x80});
+    std::size_t i = 0;
+    for (; i + 4 * lanes <= n; i += 4 * lanes) {
+        const auto a = hwy::HWY_NAMESPACE::Or(
+            hwy::HWY_NAMESPACE::LoadU(v8, d + i),
+            hwy::HWY_NAMESPACE::LoadU(v8, d + i + lanes));
+        const auto b = hwy::HWY_NAMESPACE::Or(
+            hwy::HWY_NAMESPACE::LoadU(v8, d + i + 2 * lanes),
+            hwy::HWY_NAMESPACE::LoadU(v8, d + i + 3 * lanes));
+        if (!hwy::HWY_NAMESPACE::AllTrue(
+                v8, hwy::HWY_NAMESPACE::Lt(hwy::HWY_NAMESPACE::Or(a, b), high)))
+            break;
+    }
+    return i;
+}
+
 }  // namespace HWY_NAMESPACE
 }  // namespace dftracer::utils::duql::detail
 HWY_AFTER_NAMESPACE();
@@ -118,6 +139,7 @@ namespace dftracer::utils::duql::detail {
 
 HWY_EXPORT(SubstrFind);
 HWY_EXPORT(SubstrFindIcase);
+HWY_EXPORT(AsciiPrefix);
 
 std::int64_t substr_find(const char* hay, std::int64_t hay_size,
                          const char* needle, std::int64_t needle_size) {
@@ -133,6 +155,10 @@ std::int64_t substr_find_icase(const char* hay, std::int64_t hay_size,
     if (needle_size > hay_size) return -1;
     return HWY_DYNAMIC_DISPATCH(SubstrFindIcase)(hay, hay_size, needle,
                                                  needle_size);
+}
+
+std::size_t ascii_prefix(const unsigned char* d, std::size_t n) {
+    return HWY_DYNAMIC_DISPATCH(AsciiPrefix)(d, n);
 }
 
 }  // namespace dftracer::utils::duql::detail

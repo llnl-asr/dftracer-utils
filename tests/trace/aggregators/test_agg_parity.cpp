@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/ascii.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/hash/splitmix64.h>
 #include <dftracer/utils/dstd/map.h>
@@ -370,8 +371,7 @@ double column_tolerance(dstd::StringView name, bool& known) {
         starts_with(name, "kurt") || starts_with(name, "concurrency") ||
         starts_with(name, "utilization"))
         return TOL_MOMENT;
-    if (name.size() > 1 && name[0] == 'p' &&
-        std::isdigit(static_cast<unsigned char>(name[1])))
+    if (name.size() > 1 && name[0] == 'p' && dstd::is_ascii_digit(name[1]))
         return TOL_QUANTILE;
     known = false;
     return TOL_EXACT;
@@ -601,9 +601,8 @@ dstd::String normalize_report(dstd::String text) {
         while (b < text.size() && text[b] == ' ') ++b;
         std::size_t e = b;
         while (e < text.size() &&
-               (std::isdigit(static_cast<unsigned char>(text[e])) ||
-                text[e] == '.' || text[e] == '-' || text[e] == 'e' ||
-                text[e] == '+'))
+               (dstd::is_ascii_digit(text[e]) || text[e] == '.' ||
+                text[e] == '-' || text[e] == 'e' || text[e] == '+'))
             ++e;
         text.replace(b, e - b, "0");
     }
@@ -647,7 +646,7 @@ MetricKind metric_kind(dstd::StringView name, bool& known) {
         return MetricKind::Moment;
     const auto p = name.rfind("_p");
     if (p != dstd::StringView::npos && p + 2 < name.size() &&
-        std::isdigit(static_cast<unsigned char>(name[p + 2])))
+        dstd::is_ascii_digit(name[p + 2]))
         return MetricKind::Quantile;
     known = false;
     return MetricKind::Exact;

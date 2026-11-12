@@ -202,8 +202,10 @@ PathResult indexer_stream(const dstd::String& path) {
             trace::index::gzip::CheckpointIndexer::VisitorList{}, &scope);
         if (built) art = std::move(*built);
     });
-    // A corrupt member ends the build at that member, short of the full text.
-    if (!art || art->total_uc_size != FULL_TEXT_SIZE) return dstd::nullopt;
+    // A corrupt member is flagged as damaged, and what it gave before the
+    // damage is all that is indexed of it.
+    if (!art || art->truncated || art->total_uc_size != FULL_TEXT_SIZE)
+        return dstd::nullopt;
     return dstd::String(art->total_uc_size, 'x');
 }
 

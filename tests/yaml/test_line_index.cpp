@@ -805,6 +805,28 @@ TEST_CASE("line index: more errors, each with its message") {
     }
 }
 
+// Each control byte and each lone byte of 0x80 and above, at each offset of a
+// 64-byte block, is an error at its column.
+TEST_CASE("line index: every byte that is not allowed, at every offset") {
+    for (unsigned c = 0; c < 256; ++c) {
+        const bool control = (c < 0x20 && c != '\t' && c != '\n') || c == 0x7F;
+        if (!control && c < 0x80) continue;
+        for (std::size_t pad = 0; pad < 70; ++pad) {
+            const dstd::String text =
+                "a: " + dstd::String(pad, 'x') + static_cast<char>(c) + "y\n";
+            INFO("byte: ", c, " pad: ", pad);
+            const dstd::String expected =
+                control ? dstd::fmt<
+                              "n.yaml:1:{}: a control character is not "
+                              "allowed">(pad + 4)
+                        : dstd::fmt<
+                              "n.yaml:1:{}: invalid UTF-8 or a character "
+                              "that YAML does not print">(pad + 4);
+            REQUIRE(error_of(text) == expected);
+        }
+    }
+}
+
 TEST_CASE("line index: the limits of indentation and nesting") {
     const dstd::String over =
         "n.yaml:2:65536: indentation deeper than 65534 columns is not "

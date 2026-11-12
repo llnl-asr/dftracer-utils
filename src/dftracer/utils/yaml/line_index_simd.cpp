@@ -29,6 +29,36 @@ inline std::uint64_t Bits(Tag d, hwy::HWY_NAMESPACE::Mask<Tag> m) {
 #endif
 }
 
+alignas(16) constexpr std::uint8_t LANE_BITS[16] = {
+    1, 2, 4, 8, 16, 32, 64, 128, 1, 2, 4, 8, 16, 32, 64, 128};
+
+// The 64 bits of the masks of four 16-byte vectors, lane i of `m3` at bit
+// 48 + i, from rounds of pairwise sums of weighted lanes: the movemask of the
+// NEON first stage of simdjson (Apache-2.0 OR MIT,
+// https://github.com/simdjson/simdjson). Add of ConcatEven and ConcatOdd is a
+// pairwise add, one instruction on NEON.
+template <class D, class M>
+std::uint64_t Bits64(D d, M m0, M m1, M m2, M m3) {
+    const auto weights = hwy::HWY_NAMESPACE::LoadDup128(d, LANE_BITS);
+    const auto pair = [&](auto lo, auto hi) {
+        return hwy::HWY_NAMESPACE::Add(
+            hwy::HWY_NAMESPACE::ConcatEven(d, hi, lo),
+            hwy::HWY_NAMESPACE::ConcatOdd(d, hi, lo));
+    };
+    const auto s0 = pair(hwy::HWY_NAMESPACE::And(
+                             hwy::HWY_NAMESPACE::VecFromMask(d, m0), weights),
+                         hwy::HWY_NAMESPACE::And(
+                             hwy::HWY_NAMESPACE::VecFromMask(d, m1), weights));
+    const auto s1 = pair(hwy::HWY_NAMESPACE::And(
+                             hwy::HWY_NAMESPACE::VecFromMask(d, m2), weights),
+                         hwy::HWY_NAMESPACE::And(
+                             hwy::HWY_NAMESPACE::VecFromMask(d, m3), weights));
+    const auto s2 = pair(s0, s1);
+    const auto s3 = pair(s2, s2);
+    return hwy::HWY_NAMESPACE::GetLane(hwy::HWY_NAMESPACE::BitCast(
+        hwy::HWY_NAMESPACE::Repartition<std::uint64_t, D>(), s3));
+}
+
 std::size_t CountNewlines(const char* text, std::size_t size) {
     const Tag d;
     const std::size_t n = hwy::HWY_NAMESPACE::Lanes(d);
@@ -43,18 +73,22 @@ std::size_t CountNewlines(const char* text, std::size_t size) {
     return total;
 }
 
-// The nibble tables of the bytes that set a line apart from a plain one:
-// `# ' " & * ! ? | > % @ ` [ ] { } ,` and 0x80 and above. A byte is one when
-// the entries of its low and its high nibble share a bit. The method is the
-// byte classification of simdjson (Apache-2.0 OR MIT,
-// https://github.com/simdjson/simdjson; Langdale and Lemire, "Parsing
-// Gigabytes of JSON per Second", https://arxiv.org/abs/1902.08318).
-alignas(16) constexpr std::uint8_t SPECIAL_LO[16] = {
-    0x84, 0x81, 0x81, 0x81, 0x80, 0x81, 0x81, 0x81,
-    0x80, 0x80, 0x81, 0x88, 0x91, 0x88, 0x82, 0x82};
-alignas(16) constexpr std::uint8_t SPECIAL_HI[16] = {
-    0x00, 0x00, 0x01, 0x02, 0x04, 0x08, 0x04, 0x18,
+// The nibble tables of the classes of a byte: the bytes that set a line apart
+// from a plain one (`# ' " & * ! ? | > % @ ` [ ] { } ,`, SPECIAL_BITS), the
+// control bytes other than LF (0x20 and 0x40) and 0x80 and above (0x80, which
+// is also special). A byte is in a class when the entries of its low and its
+// high nibble share its bit. The method is the byte classification of simdjson
+// (Apache-2.0 OR MIT, https://github.com/simdjson/simdjson; Langdale and
+// Lemire, "Parsing Gigabytes of JSON per Second",
+// https://arxiv.org/abs/1902.08318).
+alignas(16) constexpr std::uint8_t CLASS_LO[16] = {
+    0xE4, 0xE1, 0xE1, 0xE1, 0xE0, 0xE1, 0xE1, 0xE1,
+    0xE0, 0xE0, 0xC1, 0xE8, 0xF1, 0xE8, 0xE2, 0xE2};
+alignas(16) constexpr std::uint8_t CLASS_HI[16] = {
+    0x20, 0x40, 0x01, 0x02, 0x04, 0x08, 0x04, 0x18,
     0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80};
+constexpr std::uint8_t SPECIAL_BITS = 0x9F;
+constexpr std::uint8_t RARE_BITS = 0xE0;
 
 // A 64-bit mask for each byte class of each 64-byte block, built from vector
 // compares: the structure of the first stage of simdjson (as above). The
@@ -69,17 +103,20 @@ void LineMasks(const char* text, std::size_t block_count,
     const auto space = hwy::HWY_NAMESPACE::Set(d, ' ');
     const auto colon = hwy::HWY_NAMESPACE::Set(d, ':');
     const auto del = hwy::HWY_NAMESPACE::Set(d, 0x7F);
-    const auto before_del = hwy::HWY_NAMESPACE::Set(d, 0x7E);
     const auto low_nibble = hwy::HWY_NAMESPACE::Set(d, 0x0F);
-    const auto lo_table = hwy::HWY_NAMESPACE::LoadDup128(d, SPECIAL_LO);
-    const auto hi_table = hwy::HWY_NAMESPACE::LoadDup128(d, SPECIAL_HI);
-    // Not 0 for a byte that sets a line apart from a plain one.
-    const auto special_class = [&](auto v) {
+    const auto lo_table = hwy::HWY_NAMESPACE::LoadDup128(d, CLASS_LO);
+    const auto hi_table = hwy::HWY_NAMESPACE::LoadDup128(d, CLASS_HI);
+    // The class bits of each byte.
+    const auto byte_class = [&](auto v) {
         return hwy::HWY_NAMESPACE::And(
             hwy::HWY_NAMESPACE::TableLookupBytes(
                 lo_table, hwy::HWY_NAMESPACE::And(v, low_nibble)),
             hwy::HWY_NAMESPACE::TableLookupBytes(
                 hi_table, hwy::HWY_NAMESPACE::ShiftRight<4>(v)));
+    };
+    const auto any_set = [&](auto x) {
+        return !hwy::HWY_NAMESPACE::AllTrue(
+            d, hwy::HWY_NAMESPACE::Eq(x, hwy::HWY_NAMESPACE::Zero(d)));
     };
     const auto* p = reinterpret_cast<const std::uint8_t*>(text);
     for (std::size_t b = 0; b < block_count; ++b) {
@@ -87,37 +124,58 @@ void LineMasks(const char* text, std::size_t block_count,
         std::uint64_t nlm = 0;
         std::uint64_t spm = 0;
         std::uint64_t colm = 0;
-        auto specials = hwy::HWY_NAMESPACE::Zero(d);
-        auto rare = hwy::HWY_NAMESPACE::Zero(d);
+        auto classes = hwy::HWY_NAMESPACE::Zero(d);
+        auto dels = hwy::HWY_NAMESPACE::Zero(d);
+        if constexpr (hwy::HWY_NAMESPACE::MaxLanes(Tag()) == 16 &&
+                      HWY_TARGET != HWY_SCALAR) {
+            const auto v0 = hwy::HWY_NAMESPACE::LoadU(d, q);
+            const auto v1 = hwy::HWY_NAMESPACE::LoadU(d, q + 16);
+            const auto v2 = hwy::HWY_NAMESPACE::LoadU(d, q + 32);
+            const auto v3 = hwy::HWY_NAMESPACE::LoadU(d, q + 48);
+            nlm = Bits64(d, hwy::HWY_NAMESPACE::Eq(v0, lf),
+                         hwy::HWY_NAMESPACE::Eq(v1, lf),
+                         hwy::HWY_NAMESPACE::Eq(v2, lf),
+                         hwy::HWY_NAMESPACE::Eq(v3, lf));
+            spm = Bits64(d, hwy::HWY_NAMESPACE::Eq(v0, space),
+                         hwy::HWY_NAMESPACE::Eq(v1, space),
+                         hwy::HWY_NAMESPACE::Eq(v2, space),
+                         hwy::HWY_NAMESPACE::Eq(v3, space));
+            colm = Bits64(d, hwy::HWY_NAMESPACE::Eq(v0, colon),
+                          hwy::HWY_NAMESPACE::Eq(v1, colon),
+                          hwy::HWY_NAMESPACE::Eq(v2, colon),
+                          hwy::HWY_NAMESPACE::Eq(v3, colon));
+        }
         for (std::size_t k = 0; k < 64; k += n) {
             const auto v = hwy::HWY_NAMESPACE::LoadU(d, q + k);
             const auto is_lf = hwy::HWY_NAMESPACE::Eq(v, lf);
-            nlm |= Bits(d, is_lf) << k;
-            spm |= Bits(d, hwy::HWY_NAMESPACE::Eq(v, space)) << k;
-            colm |= Bits(d, hwy::HWY_NAMESPACE::Eq(v, colon)) << k;
-            specials = hwy::HWY_NAMESPACE::Or(specials, special_class(v));
-            // Below ' ' but not LF, or DEL and above.
-            rare = hwy::HWY_NAMESPACE::Or(
-                rare, hwy::HWY_NAMESPACE::VecFromMask(
-                          d, hwy::HWY_NAMESPACE::Or(
-                                 hwy::HWY_NAMESPACE::AndNot(
-                                     is_lf, hwy::HWY_NAMESPACE::Lt(v, space)),
-                                 hwy::HWY_NAMESPACE::Gt(v, before_del))));
+            if constexpr (hwy::HWY_NAMESPACE::MaxLanes(Tag()) != 16 ||
+                          HWY_TARGET == HWY_SCALAR) {
+                nlm |= Bits(d, is_lf) << k;
+                spm |= Bits(d, hwy::HWY_NAMESPACE::Eq(v, space)) << k;
+                colm |= Bits(d, hwy::HWY_NAMESPACE::Eq(v, colon)) << k;
+            }
+            classes = hwy::HWY_NAMESPACE::Or(classes, byte_class(v));
+            dels = hwy::HWY_NAMESPACE::Or(
+                dels, hwy::HWY_NAMESPACE::VecFromMask(
+                          d, hwy::HWY_NAMESPACE::Eq(v, del)));
         }
+        const auto special_bits = hwy::HWY_NAMESPACE::Set(d, SPECIAL_BITS);
         std::uint64_t spec = 0;
-        if (!hwy::HWY_NAMESPACE::AllTrue(
-                d, hwy::HWY_NAMESPACE::Eq(
-                       specials, hwy::HWY_NAMESPACE::Zero(d)))) [[unlikely]] {
+        if (any_set(hwy::HWY_NAMESPACE::And(classes, special_bits)))
+            [[unlikely]] {
             for (std::size_t k = 0; k < 64; k += n) {
                 const auto v = hwy::HWY_NAMESPACE::LoadU(d, q + k);
-                spec |=
-                    Bits(d, hwy::HWY_NAMESPACE::Ne(special_class(v),
-                                                   hwy::HWY_NAMESPACE::Zero(d)))
-                    << k;
+                spec |= Bits(d, hwy::HWY_NAMESPACE::Ne(
+                                    hwy::HWY_NAMESPACE::And(byte_class(v),
+                                                            special_bits),
+                                    hwy::HWY_NAMESPACE::Zero(d)))
+                        << k;
             }
         }
-        const bool has_rare = !hwy::HWY_NAMESPACE::AllFalse(
-            d, hwy::HWY_NAMESPACE::MaskFromVec(rare));
+        const bool has_rare = any_set(hwy::HWY_NAMESPACE::Or(
+            hwy::HWY_NAMESPACE::And(classes,
+                                    hwy::HWY_NAMESPACE::Set(d, RARE_BITS)),
+            dels));
         std::uint64_t crm = 0;
         std::uint64_t ctl = 0;
         std::uint64_t hi = 0;

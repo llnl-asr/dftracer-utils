@@ -5,11 +5,11 @@
 #include <dftracer/utils/common/typedefs.h>
 #include <dftracer/utils/coro/detail/frame.h>
 #include <dftracer/utils/coro/detail/pool_resume.h>
+#include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/memory/detail/manager.h>
 
 #include <atomic>
 #include <coroutine>
-#include <exception>
 #include <utility>
 
 namespace dftracer::utils::coro {
@@ -81,8 +81,6 @@ struct TaskTracking {
 };
 
 struct CoroPromise : FrameAllocation {
-    std::exception_ptr exception{nullptr};
-
     /// Join group: points to @ref JoinHandle's atomic counter.
     /// FinalAwaiter decrements on completion.
     std::atomic<std::size_t>* join_counter{nullptr};
@@ -141,18 +139,9 @@ struct CoroPromise : FrameAllocation {
 
     FinalAwaiter final_suspend() noexcept { return {}; }
     void return_void() noexcept {}
-    /// Told of an exception that ends the frame, in place of holding it. Set
-    /// by whoever reports the failures of the frame, such as a @ref Scope.
-    void (*exception_sink)(void* owner,
-                           std::exception_ptr error) noexcept {nullptr};
-    void* sink_owner{nullptr};
 
-    void unhandled_exception() {
-        exception = std::current_exception();
-        if (exception_sink != nullptr) {
-            exception_sink(sink_owner, std::move(exception));
-            exception = nullptr;
-        }
+    void unhandled_exception() noexcept {
+        dstd::fatal("coro: an exception escaped a coroutine");
     }
 };
 

@@ -159,10 +159,12 @@ TaskHandle Runtime::submit(coro::CoroTask<void> task, dstd::StringView name) {
         -> coro::detail::Coro {
         exec->mark_coro_started(task_id->load(std::memory_order_acquire));
         auto settled = co_await coro::settle(std::move(t));
-        if (settled.exception) {
+        if (settled.error) {
             mark_coro_failed(*exec, task_id->load(std::memory_order_acquire),
-                             common::error_of_exception(settled.exception));
-            p->set_exception(std::move(settled.exception));
+                             *settled.error);
+            detail::fulfill(
+                *p, f,
+                dstd::Unexpected<dstd::Error>(std::move(*settled.error)));
             co_return;
         }
         if (settled.stopped) {
@@ -442,7 +444,7 @@ bool spawn_detached(coro::Executor* executor, coro::CoroTask<void> task) {
                         coro::Executor* exec) -> coro::detail::Coro {
         t.handle().promise().set_executor(exec);
         auto settled = co_await coro::settle(std::move(t));
-        if (settled.exception) {
+        if (settled.error) {
             DFTRACER_UTILS_LOG_ERROR("detached task failed");
         }
     };

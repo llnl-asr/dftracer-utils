@@ -494,8 +494,8 @@ Scope Lifetime Rules
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Always ensure the ``coro::Scope`` outlives all spawned tasks and channels.
-``coro::with_scope`` does this: it joins the scope before it returns, also when its body raises.
-A channel that a child uses is declared outside the body of ``with_scope`` or is awaited out before the body can raise, since the locals of the body die when it raises.
+``coro::with_scope`` does this: it joins the scope before it returns, also when its body ends with an error.
+A channel that a child uses is declared outside the body of ``with_scope`` or is awaited out before the body can fail, since the locals of the body die when it ends with an error.
 
 .. code-block:: cpp
 

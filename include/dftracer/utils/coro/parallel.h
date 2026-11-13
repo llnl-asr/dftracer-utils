@@ -99,8 +99,7 @@ CoroTask<void> run_chunks(const ChunkPlan& plan, F& fn) {
  *
  * `body` runs at the same time on separate parts and does not wait, so a long
  * part holds its worker. A stop or a cancel starts no more parts and stops this
- * task. The first error is raised after the running parts end. A grain below 1
- * is misuse and ends the process.
+ * task. A grain below 1 is misuse and ends the process.
  */
 template <class Body>
 CoroTask<void> parallel_for(std::int64_t size, Body body,
@@ -118,7 +117,7 @@ CoroTask<void> parallel_for(std::int64_t size, Body body,
  * @brief Folds `map(begin, end)` of parts of [0, @p size) with `combine`, in
  * range order, so `combine` must be associative and need not be commutative.
  *
- * Stop and error behavior are those of @ref parallel_for. Gives @p identity on
+ * Stop behavior is that of @ref parallel_for. Gives @p identity on
  * an empty range.
  */
 template <class T, class Map, class Combine>
@@ -146,8 +145,8 @@ CoroTask<T> parallel_reduce(std::int64_t size, T identity, Map map,
  * `scan(begin, end, start, is_final)` folds a part from `start` and returns the
  * sum. It runs twice per part: first with @p identity and `is_final` false to
  * learn the part's sum, then with the sum of all earlier parts and `is_final`
- * true, when it writes its output. `combine` is associative. Stop and error
- * behavior are those of @ref parallel_for.
+ * true, when it writes its output. `combine` is associative. Stop
+ * behavior is that of @ref parallel_for.
  */
 template <class T, class Scan, class Combine>
 CoroTask<T> parallel_scan(std::int64_t size, T identity, Scan scan,

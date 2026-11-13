@@ -18,10 +18,9 @@ template <typename Impl>
 coro::CoroTask<void> join_and_delete(Impl* impl) {
     auto joining = impl->join_and_clean();
     auto settled = co_await coro::settle(std::move(joining));
-    if (settled.exception) {
-        const dstd::Error error = common::error_of_exception(settled.exception);
+    if (settled.error) {
         DFTRACER_UTILS_LOG_ERROR("long-lived scope cleanup failed: {}",
-                                 dstd::String(error.message()));
+                                 dstd::String(settled.error->message()));
     }
     dstd::UniquePtr<Impl> owner(impl);
 }

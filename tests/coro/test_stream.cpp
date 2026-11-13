@@ -15,7 +15,6 @@
 #include <atomic>
 #include <chrono>
 #include <cstddef>
-#include <stdexcept>
 #include <utility>
 
 using namespace dftracer::utils;
@@ -38,7 +37,9 @@ AsyncGenerator<int> slow_numbers(int first, int count,
 
 AsyncGenerator<int> fails_after(int count) {
     for (int i = 0; i < count; ++i) co_yield i;
-    throw std::runtime_error("planned failure");
+    dstd::Error error{dstd::Condition::Unknown, "planned failure"};
+    auto failure = fail_with(std::move(error));
+    co_await failure;
 }
 
 AsyncGenerator<int> counted_numbers(std::atomic<int>* produced) {
@@ -52,7 +53,9 @@ AsyncGenerator<int> counted_numbers(std::atomic<int>* produced) {
 AsyncGenerator<int> one_then_fails(std::chrono::milliseconds delay) {
     co_yield 0;
     co_await sleep(delay);
-    throw std::runtime_error("planned failure");
+    dstd::Error error{dstd::Condition::Unknown, "planned failure"};
+    auto failure = fail_with(std::move(error));
+    co_await failure;
 }
 
 AsyncGenerator<int> reports_closure(dstd::WeakPtr<int> closure,
@@ -153,19 +156,14 @@ TEST_CASE("merge yields every item and keeps the order of one source") {
     CHECK(none.empty());
 }
 
-TEST_CASE("merge raises a source error from the next read") {
+TEST_CASE("merge ends the reader with a source error from the next read") {
     Runtime runtime(2);
     dstd::Vector<AsyncGenerator<int>> sources;
     sources.push_back(fails_after(2));
     sources.push_back(numbers(0, 2));
-    dstd::String raised;
-    try {
-        dftu_utils_test::ok(
-            runtime.block_on(collect(merge(std::move(sources)))));
-    } catch (const std::runtime_error& e) {
-        raised = e.what();
-    }
-    CHECK(raised == "planned failure");
+    const auto result = runtime.block_on(collect(merge(std::move(sources))));
+    REQUIRE_FALSE(result.has_value());
+    CHECK(dstd::String(result.error().message()) == "planned failure");
 }
 
 TEST_CASE("buffer keeps order, reads ahead and survives an early drop") {
@@ -211,12 +209,13 @@ TEST_CASE("flat_map_merge yields every item within its limit") {
     CHECK(running.load() == 0);
 }
 
-TEST_CASE("flat_map_merge raises an inner error and takes an empty source") {
+TEST_CASE("flat_map_merge gives an inner error and takes an empty source") {
     Runtime runtime(2);
     auto failing = [](int) { return fails_after(1); };
-    CHECK_THROWS_AS(dftu_utils_test::ok(runtime.block_on(
-                        collect(flat_map_merge(numbers(0, 4), failing, 2)))),
-                    std::runtime_error);
+    const auto failed =
+        runtime.block_on(collect(flat_map_merge(numbers(0, 4), failing, 2)));
+    REQUIRE_FALSE(failed.has_value());
+    CHECK(dstd::String(failed.error().message()) == "planned failure");
     auto empty_source = [](int v) { return numbers(v, 1); };
     auto none = dftu_utils_test::ok(runtime.block_on(
         collect(flat_map_merge(numbers(0, 0), empty_source, 2))));
@@ -240,25 +239,21 @@ TEST_CASE("flat_map_merge keeps its function alive for the last generators") {
 TEST_CASE("flat_map_merge reports an outer error when the channel is full") {
     Runtime runtime(2);
     auto inner = [](int v) { return numbers(v, 3); };
-    dstd::String raised;
     int seen = 0;
-    try {
-        dftu_utils_test::ok(runtime.block_on([&]() -> CoroTask<void> {
-            auto stream = flat_map_merge(one_then_fails(5ms), inner, 1);
-            auto first = co_await stream.next();
-            if (first) ++seen;
-            co_await sleep(50ms);
-            for (;;) {
-                auto value = co_await stream.next();
-                if (!value) break;
-                ++seen;
-            }
-        }()));
-    } catch (const std::runtime_error& e) {
-        raised = e.what();
-    }
+    const auto result = runtime.block_on([&]() -> CoroTask<void> {
+        auto stream = flat_map_merge(one_then_fails(5ms), inner, 1);
+        auto first = co_await stream.next();
+        if (first) ++seen;
+        co_await sleep(50ms);
+        for (;;) {
+            auto value = co_await stream.next();
+            if (!value) break;
+            ++seen;
+        }
+    }());
+    REQUIRE_FALSE(result.has_value());
     CHECK(seen == 3);
-    CHECK(raised == "planned failure");
+    CHECK(dstd::String(result.error().message()) == "planned failure");
 }
 
 TEST_CASE("a dropped stream stops its background sources") {

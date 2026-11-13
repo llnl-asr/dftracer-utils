@@ -8,8 +8,10 @@
 #include <dftracer/utils/runtime/task_handle.h>
 
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
+#include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/future.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/trace/arrow/arrow_export.h>
 
 typedef struct {
@@ -32,15 +34,15 @@ struct ArrowIteratorState {
     dftracer::utils::dstd::SharedPtr<dftracer::utils::coro::Channel<BatchType>>
         channel;
     std::mutex error_mtx;
-    std::exception_ptr error;
+    dftracer::utils::dstd::Optional<dftracer::utils::dstd::Error> error;
     std::atomic<bool> cancelled{false};
     std::size_t memory_budget_bytes = 0;
     std::atomic<std::size_t> bytes_in_queue{0};
     dftracer::utils::dstd::SharedFuture<void> task_future;
 
-    void set_error(std::exception_ptr e) {
+    void set_error(dftracer::utils::dstd::Error e) {
         std::lock_guard<std::mutex> lock(error_mtx);
-        if (!error) error = e;
+        if (!error) error.emplace(std::move(e));
     }
 };
 #endif

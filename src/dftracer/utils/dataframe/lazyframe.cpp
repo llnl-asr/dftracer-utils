@@ -5572,10 +5572,10 @@ struct CursorChain {
     dstd::Vector<dstd::String> schema;
 };
 
-// A cursor a source handed out, which may throw from next(), narrow() or
-// reclaim(): a throw through a frame built without exceptions aborts, so each
-// task is awaited through coro::settle. A throw becomes an error result (or
-// nothing done, for the advisory calls) and a stop ends the caller as stopped.
+// A cursor a source handed out, which may end with an error from next(),
+// narrow() or reclaim(): each task is awaited through coro::settle, so an
+// error becomes an error result (or nothing done, for the advisory calls) and a
+// stop ends the caller as stopped.
 class GuardCursor final : public Cursor {
    public:
     explicit GuardCursor(dstd::UniquePtr<Cursor> in) : in_(std::move(in)) {}
@@ -5584,8 +5584,7 @@ class GuardCursor final : public Cursor {
         auto task = in_->next(max_rows);
         auto settled = co_await coro::settle(std::move(task));
         if (settled.stopped) co_await coro::stop_here();
-        if (settled.exception)
-            co_return common::error_of_exception(settled.exception);
+        if (settled.error) co_return std::move(*settled.error);
         co_return std::move(*settled.value);
     }
 
@@ -5601,10 +5600,9 @@ class GuardCursor final : public Cursor {
         auto task = in_->narrow(predicate);
         auto settled = co_await coro::settle(std::move(task));
         if (settled.stopped) co_await coro::stop_here();
-        if (settled.exception)
-            DFTRACER_UTILS_LOG_WARN(
-                "source narrow failed: {}",
-                common::error_of_exception(settled.exception).c_str());
+        if (settled.error)
+            DFTRACER_UTILS_LOG_WARN("source narrow failed: {}",
+                                    settled.error->c_str());
         co_return settled.value.has_value() && *settled.value;
     }
 
@@ -5616,10 +5614,9 @@ class GuardCursor final : public Cursor {
         auto task = in_->reclaim(want);
         auto settled = co_await coro::settle(std::move(task));
         if (settled.stopped) co_await coro::stop_here();
-        if (settled.exception)
-            DFTRACER_UTILS_LOG_WARN(
-                "source reclaim failed: {}",
-                common::error_of_exception(settled.exception).c_str());
+        if (settled.error)
+            DFTRACER_UTILS_LOG_WARN("source reclaim failed: {}",
+                                    settled.error->c_str());
         co_return settled.value.has_value() ? *settled.value : 0;
     }
 
@@ -6148,8 +6145,7 @@ coro::CoroTask<dstd::Result<void>> batch_leaves(
         auto collecting = sources.front()->collect_batch(sources);
         auto settled = co_await coro::settle(std::move(collecting));
         if (settled.stopped) co_await coro::stop_here();
-        if (settled.exception)
-            co_return common::error_of_exception(settled.exception);
+        if (settled.error) co_return std::move(*settled.error);
         if (!*settled.value) co_return settled.value->error();
         dstd::Vector<DataFrame> frames = std::move(**settled.value);
         if (frames.size() != members.size())

@@ -16,7 +16,6 @@
 #include <chrono>
 #include <cstdint>
 #include <mutex>
-#include <stdexcept>
 #include <thread>
 
 using namespace dftracer::utils;
@@ -67,20 +66,6 @@ TEST_CASE("a static partition gives the same chunks on each run") {
     CHECK(first[0].second - first[0].first == 334);
     CHECK(first[1].second - first[1].first == 333);
     CHECK(first == chunks_of());
-}
-
-TEST_CASE("parallel_for raises the first error") {
-    Runtime runtime(2);
-    dstd::String raised;
-    try {
-        dftu_utils_test::ok(
-            runtime.block_on(parallel_for(100, [](std::int64_t, std::int64_t) {
-                throw std::runtime_error("planned failure");
-            })));
-    } catch (const std::runtime_error& e) {
-        raised = e.what();
-    }
-    CHECK(raised == "planned failure");
 }
 
 TEST_CASE("a cancelled parallel_for starts no more parts and reports it") {

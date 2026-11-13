@@ -17,10 +17,9 @@ coro::CoroTask<dftu_status> run_abi_task(AbiTask* task) {
     if (!task->awaited) {
         task->awaited = true;
         auto settled = co_await coro::settle(std::move(*task->body));
-        if (settled.exception) {
-            const dstd::Error error =
-                common::error_of_exception(settled.exception);
-            task->fail(common::to_status(error.condition()), error.message());
+        if (settled.error) {
+            task->fail(common::to_status(settled.error->condition()),
+                       settled.error->message());
         } else if (settled.stopped && task->status >= 0) {
             task->stopped = true;
             task->fail(DFTU_E_CANCELLED, "task cancelled");

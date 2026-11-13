@@ -17,7 +17,6 @@
 
 #include <chrono>
 #include <cstddef>
-#include <exception>
 #include <type_traits>
 #include <utility>
 
@@ -72,9 +71,8 @@ class JoinReport {
 template <class T>
 CoroTask<void> join_set_child(CoroTask<T> task, JoinReport<T> report) {
     auto settled = co_await settle(std::move(task));
-    if (settled.exception) {
-        report.send(
-            dstd::Unexpected(common::error_of_exception(settled.exception)));
+    if (settled.error) {
+        report.send(dstd::Unexpected(std::move(*settled.error)));
     } else if (settled.stopped) {
         // The report sends the cancelled outcome when the frame ends.
         co_await stop_here();
@@ -88,9 +86,8 @@ CoroTask<void> join_set_child(CoroTask<T> task, JoinReport<T> report) {
 template <class T>
 CoroTask<dstd::Expected<T, dstd::Error>> settle_task(CoroTask<T> task) {
     auto settled = co_await settle(std::move(task));
-    if (settled.exception) {
-        co_return dstd::Unexpected(
-            common::error_of_exception(settled.exception));
+    if (settled.error) {
+        co_return dstd::Unexpected(std::move(*settled.error));
     }
     if (settled.stopped) {
         co_return dstd::Unexpected(

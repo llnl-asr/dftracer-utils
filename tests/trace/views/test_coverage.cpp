@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <coro/failing.h>
 #include <dftracer/utils/trace/views/coverage.h>
 #include <doctest/doctest.h>
 
@@ -60,14 +61,17 @@ TEST_SUITE("Coverage") {
         CHECK_FALSE(cov.covers("a.pfw.gz", 0));
     }
 
-    TEST_CASE("an exception between marking and sealing publishes nothing") {
+    TEST_CASE("an error between marking and sealing publishes nothing") {
         CoverageSet cov;
-        try {
+        auto scan = [&cov]() -> dftracer::utils::coro::CoroTask<void> {
             PendingCoverage p(cov);
             p.mark_complete("a.pfw.gz", 0);
-            throw std::runtime_error("scan failed");
-        } catch (const std::runtime_error&) {
-        }
+            co_await coro_test::failing_task("scan failed");
+        };
+        const auto result = scan().get();
+        REQUIRE_FALSE(result.has_value());
+        CHECK(dftracer::utils::dstd::String(result.error().message()) ==
+              "scan failed");
         CHECK(cov.empty());
     }
 

@@ -52,21 +52,6 @@ TEST_CASE("make_error carries the code and the message") {
           "PARSE");
 }
 
-TEST_CASE("error_of_exception reads a std exception as an Unknown error") {
-    const dstd::Error err = common::error_of_exception(
-        std::make_exception_ptr(std::runtime_error("disk gone")));
-    CHECK(err.condition() == dstd::Condition::Unknown);
-    CHECK(dstd::String(err.c_str()) == "disk gone");
-    CHECK(common::errorcode_of(err) == common::ErrorCode::Unknown);
-}
-
-TEST_CASE("error_of_exception gives a fixed text for a non-std exception") {
-    const dstd::Error err =
-        common::error_of_exception(std::make_exception_ptr(7));
-    CHECK(err.condition() == dstd::Condition::Unknown);
-    CHECK(dstd::String(err.c_str()) == "unknown error");
-}
-
 TEST_CASE("a refused reservation reaches the C ABI as DFTU_E_NO_MEMORY") {
     for (const memory::Status status :
          {memory::Status::OverBudget, memory::Status::OverCap,

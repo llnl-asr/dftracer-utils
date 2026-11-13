@@ -14,6 +14,7 @@
 #include <dftracer/utils/dataframe/internal/native_transform.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/op.h>
+#include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -1758,7 +1759,7 @@ TEST_SUITE("lazyframe") {
                 case TypeId::Float64:
                     return s.data<double>()[i];
                 default:
-                    throw std::runtime_error("unexpected result type");
+                    dstd::fatal("unexpected result type");
             }
         };
         // The reference: walk each group's rows in input order.

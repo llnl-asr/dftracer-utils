@@ -3,6 +3,7 @@
 // Source::apply_*. A C++ fake exercises the planner contract.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <coro/failing.h>
 #include <dataframe/expr_ok.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dataframe/abi.h>
@@ -24,7 +25,6 @@
 
 #include <cstdint>
 #include <memory>
-#include <stdexcept>
 #include <utility>
 
 using namespace dftracer::utils;
@@ -478,7 +478,7 @@ TEST_SUITE("source_hooks") {
 namespace {
 
 struct BatchLog {
-    bool throw_batch = false;
+    bool fail_batch = false;
     bool fail_open = false;
     int opened = 0;
     int scans = 0;
@@ -525,7 +525,7 @@ class KeyedSource final : public Source {
     coro::CoroTask<dstd::Result<dstd::Vector<DataFrame>>> collect_batch(
         dstd::Vector<dstd::SharedPtr<const Source>> members) const override {
         ++log_->batches;
-        if (log_->throw_batch) throw std::runtime_error("batch boom");
+        if (log_->fail_batch) co_await coro_test::failing_task("batch boom");
         log_->last_members = members.size();
         dstd::Vector<DataFrame> out;
         for (const auto& m : members)
@@ -764,14 +764,14 @@ TEST_SUITE("batch contract") {
 
 namespace {
 
-enum class SourceFault { Throw, Stop, ScanFails };
+enum class SourceFault { Fail, Stop, ScanFails };
 
 class FaultyCursor final : public dftracer::utils::dataframe::Cursor {
    public:
     explicit FaultyCursor(SourceFault fault) : fault_(fault) {}
     coro::CoroTask<MorselResult> next(std::int64_t) override {
-        if (fault_ == SourceFault::Throw)
-            throw std::runtime_error("source boom");
+        if (fault_ == SourceFault::Fail)
+            co_await coro_test::failing_task("source boom");
         co_await coro::stop_here();
         co_return MorselResult(dstd::nullopt);
     }
@@ -812,7 +812,7 @@ LazyFrame faulty(SourceFault fault) {
 TEST_SUITE("source that fails") {
     TEST_CASE("a source whose task throws ends the collect with an error") {
         const auto collected = dftracer::utils::default_runtime()
-                                   .submit(faulty(SourceFault::Throw).collect())
+                                   .submit(faulty(SourceFault::Fail).collect())
                                    .get();
         REQUIRE_FALSE(collected.has_value());
         CHECK(dstd::String(collected.error().c_str()).find("source boom") !=
@@ -821,7 +821,7 @@ TEST_SUITE("source that fails") {
 
     TEST_CASE("a source whose task throws fails the ops over it the same way") {
         const auto filtered = dftracer::utils::default_runtime()
-                                  .submit(faulty(SourceFault::Throw)
+                                  .submit(faulty(SourceFault::Fail)
                                               .filter(col(0) > std::int64_t{1})
                                               .head(3)
                                               .collect())
@@ -830,7 +830,7 @@ TEST_SUITE("source that fails") {
         CHECK(dstd::String(filtered.error().c_str()).find("source boom") !=
               dstd::String::npos);
         const auto joined = dftracer::utils::default_runtime()
-                                .submit(faulty(SourceFault::Throw)
+                                .submit(faulty(SourceFault::Fail)
                                             .join(make_df().lazy(), {"a"})
                                             .collect())
                                 .get();
@@ -847,10 +847,9 @@ TEST_SUITE("source that fails") {
                 if (!*df) co_return df->error();
             co_return dstd::Result<void>();
         };
-        const auto result =
-            dftracer::utils::default_runtime()
-                .submit(stream_error(faulty(SourceFault::Throw)))
-                .get();
+        const auto result = dftracer::utils::default_runtime()
+                                .submit(stream_error(faulty(SourceFault::Fail)))
+                                .get();
         REQUIRE_FALSE(result.has_value());
         CHECK(dstd::String(result.error().c_str()).find("source boom") !=
               dstd::String::npos);
@@ -881,7 +880,7 @@ TEST_SUITE("source that fails") {
 
     TEST_CASE("a collect_batch that throws ends the collect with an error") {
         auto log = dstd::make_shared<BatchLog>();
-        log->throw_batch = true;
+        log->fail_batch = true;
         const auto collected =
             dftracer::utils::default_runtime()
                 .submit(keyed("k", log)

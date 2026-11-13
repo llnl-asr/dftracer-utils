@@ -190,8 +190,9 @@ you await it:
        co_return dstd::Result<void>{};
    }
 
-An exception that code built with exceptions throws in a task still reaches the
-caller of ``block_on`` as that exception.
+A task that ends with ``co_await coro::fail_with(error)`` reaches the caller of
+``block_on`` as the error of its ``dstd::Result``, and a task that awaits it ends
+with the same error.
 
 On a channel, check the values of ``send()`` and ``receive()``. Both are falsy
 on a closed channel, which means the other side exited or failed:
@@ -295,7 +296,7 @@ Retry a failing task:
    auto data = co_await coro::retry([&]() { return fetch(path); }, std::move(policy));
 
 ``retry`` takes a function, since a task runs once.
-It retries a task that raised an exception, and gives a result as it is.
+It retries a task that ended with an error, and gives a result as it is.
 It never retries a stopped task.
 
 Run many jobs with a limit:
@@ -331,7 +332,7 @@ A task that is cancelled at a wait is not resumed. Its frame is destroyed, and t
    });
 
 Pass ``coro::ScopeMode::Supervisor`` to ``with_scope`` when a failure must not stop the siblings.
-``join`` then waits for all of them and raises the first error.
+``join`` then waits for all of them and ends the awaiting task with the first error.
 
 Use a ``coro::StopSource`` to stop work from code that holds no scope:
 

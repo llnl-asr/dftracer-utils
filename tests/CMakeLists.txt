@@ -295,14 +295,9 @@ add_test(NAME coro_lambdas_self
 add_test(NAME no_exceptions_self
          COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -DSELF_TEST=ON -P
                  ${CMAKE_SOURCE_DIR}/cmake/scripts/check_no_exceptions.cmake)
-# Fails until the coroutine library and the tests no longer use exceptions.
-option(DFTRACER_UTILS_CHECK_NO_EXCEPTIONS
-       "Register the no_exceptions ctest" OFF)
-if(DFTRACER_UTILS_CHECK_NO_EXCEPTIONS)
-  add_test(NAME no_exceptions
-           COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -P
-                   ${CMAKE_SOURCE_DIR}/cmake/scripts/check_no_exceptions.cmake)
-endif()
+add_test(NAME no_exceptions
+         COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -P
+                 ${CMAKE_SOURCE_DIR}/cmake/scripts/check_no_exceptions.cmake)
 add_test(NAME enum_style
          COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -P
                  ${CMAKE_SOURCE_DIR}/cmake/scripts/check_enum_style.cmake)

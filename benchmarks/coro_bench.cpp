@@ -25,6 +25,8 @@
 //                          cancelled and awaited, so this also pays for the
 //                          cancelled losers, which code that lets a loser run
 //                          on does not. One op is one when_any (K children).
+//   parallel_for_small     parallel_for over 64 items in 4 chunks, one after
+//                          the other in one coroutine. One op is one call.
 //   read_loop              pread of a 4 KiB block of a regular file, one after
 //                          the other in one coroutine. One op is one read.
 //
@@ -45,6 +47,7 @@
 #include <bench_counters.h>
 #include <dftracer/utils/coro/async_mutex.h>
 #include <dftracer/utils/coro/async_semaphore.h>
+#include <dftracer/utils/coro/parallel.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/coro/when_any.h>
@@ -62,6 +65,7 @@
 #endif
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -278,6 +282,23 @@ Result when_any_loser_yield(std::size_t n) {
     });
 }
 
+Result parallel_for_small(std::size_t n) {
+    return run_on_executor([n](Result &r) -> coro::CoroTask<void> {
+        std::atomic<std::int64_t> sum{0};
+        Meter start = begin_meter();
+        for (std::size_t i = 0; i < n; ++i) {
+            co_await coro::parallel_for(
+                64,
+                [&sum](std::int64_t begin, std::int64_t end) {
+                    sum.fetch_add(end - begin, std::memory_order_relaxed);
+                },
+                coro::ParallelForOptions{.grain = 16, .max_in_flight = 4});
+        }
+        finish_meter(start, r);
+        r.correct = sum.load() == static_cast<std::int64_t>(n) * 64;
+    });
+}
+
 Result read_loop(std::size_t n) {
     char path[] = "/tmp/dftracer_coro_bench_XXXXXX";
     int fd = ::mkstemp(path);
@@ -334,6 +355,7 @@ dstd::Vector<Case> make_cases() {
     add("when_all_yield", 200000, when_all_yield, exact);
     add("when_any_ready", 1000000, when_any_ready, exact);
     add("when_any_loser_yield", 4000, when_any_loser_yield, exact);
+    add("parallel_for_small", 200000, parallel_for_small, exact);
     add("read_loop", 40000, read_loop, exact);
     return cases;
 }

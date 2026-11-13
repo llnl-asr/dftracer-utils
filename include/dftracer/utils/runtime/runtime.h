@@ -102,7 +102,7 @@ class Runtime {
 
     /// Runs `task` as a tracked task and blocks until it ends. Gives its value
     /// as a @ref coro::TaskResult, which holds dstd::Condition::Cancelled when
-    /// the task was stopped. An exception the task raised is rethrown. Called
+    /// the task was stopped, or the error the task ended with. Called
     /// from one of this runtime's own workers it hands off the
     /// worker's run slot for the wait, so the pool keeps its capacity.
     template <typename T>
@@ -296,10 +296,13 @@ TypedTaskHandle<T> Runtime::submit(coro::CoroTask<T> task,
         -> coro::detail::Coro {
         exec->mark_coro_started(task_id->load(std::memory_order_acquire));
         auto settled = co_await coro::settle(std::move(t));
-        if (settled.exception) {
+        if (settled.error) {
             mark_coro_failed(*exec, task_id->load(std::memory_order_acquire),
-                             common::error_of_exception(settled.exception));
-            tp->set_exception(std::move(settled.exception));
+                             *settled.error);
+            auto failed = dstd::make_shared<R>(
+                dstd::Unexpected<dstd::Error>(std::move(*settled.error)));
+            failed->discard();
+            tp->set_value(std::move(failed));
             vp->set_value(dstd::Result<void>{});
             co_return;
         }

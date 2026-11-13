@@ -85,10 +85,10 @@ using MorselResult = dstd::Result<dstd::Optional<Morsel>>;
 /// nullopt at end, or the error that ended the read; `max_rows` is a size
 /// hint. The engine pulls it async (co_await), so a producer can suspend on
 /// real I/O inside next() instead of blocking a worker thread. A cursor that
-/// a source hands out may still throw from next(), narrow() or reclaim(): the
-/// engine awaits those through @ref coro::settle and turns an exception into
-/// an error result (a failed narrow() or reclaim() counts as nothing done).
-/// try_next(), out_names() and resident_bytes() must not throw.
+/// a source hands out may still end next(), narrow() or reclaim() with an
+/// error (@ref coro::fail_with): the engine awaits those through
+/// @ref coro::settle and turns the error into an error result (a failed
+/// narrow() or reclaim() counts as nothing done).
 class Cursor {
    public:
     virtual ~Cursor();
@@ -248,8 +248,7 @@ class Source {
     /// Open a Cursor honoring `req`. When req.projection is non-empty the
     /// cursor's morsels carry exactly those columns in that order; the returned
     /// ScanResult.filters reports, per req.filter, how completely it was
-    /// applied. A scan that cannot open returns the error; it must not throw,
-    /// so a source built with exceptions catches at its own edge.
+    /// applied. A scan that cannot open returns the error.
     virtual dstd::Result<ScanResult> scan(const ScanRequest& req) const = 0;
     /// The resident frame when this source is already in memory, else nullptr
     /// (rows produced only by streaming). collect() runs a resident source
@@ -314,8 +313,8 @@ class Source {
     /// would return. Called on members.front(); every member shares its
     /// batch_key(). The default is fatal: a source that returns a batch_key()
     /// must override it. An error result fails the collect. An override may
-    /// also throw, as next() of a cursor may: the engine awaits it through
-    /// @ref coro::settle and turns an exception into an error result.
+    /// also end with an error, as next() of a cursor may: the engine awaits it
+    /// through @ref coro::settle and turns the error into an error result.
     virtual coro::CoroTask<dstd::Result<dstd::Vector<DataFrame>>> collect_batch(
         dstd::Vector<dstd::SharedPtr<const Source>> members) const;
     /// One cursor per member, in order, over one shared read that runs in the
@@ -669,7 +668,7 @@ class LazyFrame {
     /// the first one a builder kept (@ref status()) or the one that ended the
     /// run: a column the data lacks, a type a kernel refuses, a spill file
     /// that cannot be written or read, a failed plugin node, or a cursor that
-    /// threw (as an error of the exception's message).
+    /// ended with an error.
     coro::CoroTask<dstd::Result<DataFrame>> collect(
         std::int64_t batch_size = 0) const;
 

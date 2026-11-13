@@ -53,18 +53,9 @@ static PyObject* next_batch(ArrowStreamingIteratorObject* self) {
     if (!result.has_value()) {
         // Check for error
         if (self->cpp_state->get_error) {
-            auto ex = self->cpp_state->get_error();
-            if (ex) {
-                try {
-                    std::rethrow_exception(ex);
-                } catch (const std::exception& e) {
-                    core::set_typed_py_error(e);
-                    return NULL;
-                } catch (...) {
-                    PyErr_SetString(PyExc_RuntimeError,
-                                    "Unknown error in streaming iterator");
-                    return NULL;
-                }
+            if (auto error = self->cpp_state->get_error()) {
+                core::set_py_error(*error);
+                return NULL;
             }
         }
         // Normal completion
@@ -99,17 +90,9 @@ static PyObject* ArrowStreamingIterator_next(
         return NULL;
     if (!df.has_value()) {
         if (self->cpp_state->get_error) {
-            if (auto ex = self->cpp_state->get_error()) {
-                try {
-                    std::rethrow_exception(ex);
-                } catch (const std::exception& e) {
-                    core::set_typed_py_error(e);
-                    return NULL;
-                } catch (...) {
-                    PyErr_SetString(PyExc_RuntimeError,
-                                    "Unknown error in streaming iterator");
-                    return NULL;
-                }
+            if (auto error = self->cpp_state->get_error()) {
+                core::set_py_error(*error);
+                return NULL;
             }
         }
         return NULL;  // StopIteration

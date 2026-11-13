@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <coro/failing.h>
 #include <dftracer/utils/coro/named.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -12,7 +13,6 @@
 
 #include <atomic>
 #include <cstdlib>
-#include <stdexcept>
 
 using namespace dftracer::utils;
 
@@ -59,20 +59,18 @@ TEST_CASE("a joined scope is destroyed without terminating") {
     CHECK(WEXITSTATUS(status) == 0);
 }
 
-TEST_CASE("with_scope joins when its body throws") {
+TEST_CASE("with_scope joins when its body fails") {
     Runtime rt(ExecutorConfig{.thread_count = 2}, false);
     std::atomic<int> done{0};
-    CHECK_THROWS_AS(
-        dftu_utils_test::ok(rt.block_on(coro::named(
-            "throws",
-            coro::with_scope([&](coro::Scope& s) -> coro::CoroTask<void> {
-                s.spawn([&]() -> coro::CoroTask<void> {
-                    ++done;
-                    co_return;
-                });
-                throw std::runtime_error("body failed");
+    const auto result = rt.block_on(coro::named(
+        "fails", coro::with_scope([&](coro::Scope& s) -> coro::CoroTask<void> {
+            s.spawn([&]() -> coro::CoroTask<void> {
+                ++done;
                 co_return;
-            })))),
-        std::runtime_error);
+            });
+            co_await coro_test::failing_task("body failed");
+        })));
+    REQUIRE_FALSE(result.has_value());
+    CHECK(dstd::String(result.error().message()) == "body failed");
     CHECK(done.load() == 1);
 }

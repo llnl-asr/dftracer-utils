@@ -111,6 +111,10 @@ PyObject *py_error_type_for(const dftracer::utils::dstd::Error &error) {
     return py_error_type_for(common::errorcode_of(error));
 }
 
+void set_py_error(const dftracer::utils::dstd::Error &error) {
+    PyErr_SetString(py_error_type_for(error), error.c_str());
+}
+
 void set_typed_py_error(const std::exception &e) {
     if (const auto *de = dynamic_cast<const PyErrorException *>(&e)) {
         PyErr_SetString(py_error_type_for(de->error()), e.what());

@@ -2,6 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/domains/analysis/statistics/stats_view.h>
+#include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/map.h>
@@ -43,7 +44,7 @@ namespace {
 std::size_t col(const dataframe::DataFrame& b, const dstd::String& name) {
     for (std::size_t i = 0; i < b.names.size(); ++i)
         if (b.names[i] == name) return i;
-    throw std::runtime_error(("no column: " + name).c_str());
+    dstd::fatal("no column", name.c_str());
 }
 
 // Sum an integer count column regardless of its stored width.

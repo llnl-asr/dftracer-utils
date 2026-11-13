@@ -94,16 +94,10 @@ View full_index(const dstd::String& gz, const dstd::String& schema) {
         .record_schema(dstd::String(schema));
 }
 
-// The query's rows, or its error: from building the view, which throws, or
-// from running it.
+// The query's rows, or its error.
 dstd::Result<dataframe::DataFrame> frame_result(const View& v,
                                                 const dstd::String& q) {
-    try {
-        return v.duql(q).collect().get();
-    } catch (const std::exception&) {
-        return dftracer::utils::common::error_of_exception(
-            std::current_exception());
-    }
+    return v.duql(q).collect().get();
 }
 
 dataframe::DataFrame frame(const View& v, const dstd::String& q) {
@@ -145,16 +139,16 @@ dstd::String join_names(const dataframe::DataFrame& f) {
 }
 
 bool has_catalog(const dstd::String& gz) {
-    try {
-        const auto snapshot = dftu_utils_test::index_snapshot(
-            dstd::String(determine_index_path(gz, "")));
-        const auto file = dftu_utils_test::find_indexed_file(snapshot, gz);
-        return file && dftracer::utils::trace::index::extension_current(
-                           snapshot, *file,
-                           trace::index::store::IndexExtension::Catalog);
-    } catch (...) {
-        return false;
-    }
+    auto index = dftracer::utils::trace::index::Index::open(
+        dftracer::utils::trace::index::normalize_index_root(
+            dstd::String(determine_index_path(gz, ""))));
+    if (!index) return false;
+    auto snapshot = index->snapshot();
+    if (!snapshot) return false;
+    const auto file = dftu_utils_test::find_indexed_file(*snapshot, gz);
+    return file &&
+           dftracer::utils::trace::index::extension_current(
+               *snapshot, *file, trace::index::store::IndexExtension::Catalog);
 }
 
 // A trace whose index holds no catalog: a full scan writes one, so each

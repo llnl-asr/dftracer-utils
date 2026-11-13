@@ -58,13 +58,7 @@ static int initialize_stream(StreamPrivate *p) {
             // End-of-stream or producer error before discovery converged.
             std::lock_guard<std::mutex> lock(astate->error_mtx);
             if (astate->error) {
-                try {
-                    std::rethrow_exception(astate->error);
-                } catch (const std::exception &e) {
-                    mark_error(p, e.what());
-                } catch (...) {
-                    mark_error(p, "unknown error in Arrow stream");
-                }
+                mark_error(p, astate->error->c_str());
                 return EIO;
             }
             break;  // clean early EOS; finalize with whatever we have
@@ -126,13 +120,7 @@ static int stream_get_next(struct ArrowArrayStream *s, struct ArrowArray *out) {
         if (!batch.has_value()) {
             std::lock_guard<std::mutex> lock(astate->error_mtx);
             if (astate->error) {
-                try {
-                    std::rethrow_exception(astate->error);
-                } catch (const std::exception &e) {
-                    mark_error(p, e.what());
-                } catch (...) {
-                    mark_error(p, "unknown error in Arrow stream");
-                }
+                mark_error(p, astate->error->c_str());
                 return EIO;
             }
             // End of stream per Arrow C spec: return success with

@@ -2,13 +2,13 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/detail/coro.h>
 #include <dftracer/utils/coro/join_handle.h>
+#include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/coro/yield.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
 
 #include <coroutine>
-#include <stdexcept>
 
 using namespace dftracer::utils;
 
@@ -48,27 +48,25 @@ TEST_CASE("Coro - Resume manually, completes") {
     CHECK(c.handle().done() == true);
 }
 
-TEST_CASE("Coro - Exception captured in promise") {
-    auto make = []() -> Coro {
-        throw std::runtime_error("coro error");
-        co_return;
+TEST_CASE("Coro - a task that failed settles with its status and message") {
+    bool seen = false;
+    auto* seen_ptr = &seen;
+    auto make = [seen_ptr]() -> Coro {
+        auto failing = []() -> CoroTask<void> {
+            dstd::Error error{dstd::Condition::Unknown, "coro error"};
+            auto failure = fail_with(std::move(error));
+            co_await failure;
+        };
+        auto settled = co_await settle(failing());
+        *seen_ptr = settled.error.has_value() &&
+                    settled.error->condition() == dstd::Condition::Unknown &&
+                    dstd::String(settled.error->message()) == "coro error";
     };
     auto c = make();
 
     c.handle().resume();
     CHECK(c.handle().done() == true);
-
-    auto& promise = c.handle().promise();
-    CHECK(promise.exception != nullptr);
-
-    bool caught = false;
-    try {
-        std::rethrow_exception(promise.exception);
-    } catch (const std::runtime_error& e) {
-        caught = true;
-        CHECK(dstd::String(e.what()) == "coro error");
-    }
-    CHECK(caught == true);
+    CHECK(seen == true);
 }
 
 TEST_CASE("Coro - Move semantics") {
@@ -117,7 +115,6 @@ TEST_CASE("Coro - FinalAwaiter returns noop when no join group") {
 
     auto& promise = c.handle().promise();
     CHECK(promise.join_counter == nullptr);
-    CHECK(promise.exception == nullptr);
 }
 
 TEST_CASE("Coro - Multiple suspension points") {
@@ -205,23 +202,27 @@ TEST_CASE("JoinHandle - N coros, completes when last finishes") {
     CHECK(jh.pending() == 1);  // joiner's slot remains
 }
 
-TEST_CASE("JoinHandle - Coro with exception, join still completes") {
+TEST_CASE("JoinHandle - Coro whose task failed, join still completes") {
     JoinHandle jh;
+    bool failed = false;
+    auto* failed_ptr = &failed;
 
-    auto make = []() -> Coro {
-        throw std::runtime_error("error");
-        co_return;
+    auto make = [failed_ptr]() -> Coro {
+        auto failing = []() -> CoroTask<void> {
+            dstd::Error error{dstd::Condition::Unknown, "error"};
+            auto failure = fail_with(std::move(error));
+            co_await failure;
+        };
+        auto settled = co_await settle(failing());
+        *failed_ptr = settled.error.has_value();
     };
     auto c = make();
     jh.track(c);
 
     CHECK(jh.pending() == 2);  // 1 coro + 1 joiner slot
-    c.handle().resume();       // Throws, caught by promise
+    c.handle().resume();
     CHECK(jh.pending() == 1);  // joiner's slot remains
-
-    // Exception stored in coro, not propagated to join
-    auto& promise = c.handle().promise();
-    CHECK(promise.exception != nullptr);
+    CHECK(failed == true);
 }
 
 TEST_CASE("JoinHandle - FinalAwaiter resumes continuation on last coro") {

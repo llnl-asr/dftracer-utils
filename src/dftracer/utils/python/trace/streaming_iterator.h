@@ -5,6 +5,7 @@
 #include <Python.h>
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/future.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -65,10 +66,10 @@ class StreamingState {
         cv_consumer_.notify_all();
     }
 
-    void fail(std::exception_ptr ex) {
+    void fail(dftracer::utils::dstd::Error ex) {
         {
             std::lock_guard<std::mutex> lock(mtx_);
-            error_ = std::move(ex);
+            error_.emplace(std::move(ex));
             done_.store(true, std::memory_order_release);
         }
         cv_consumer_.notify_all();
@@ -104,7 +105,10 @@ class StreamingState {
         return std::move(item);
     }
 
-    std::exception_ptr error() const { return error_; }
+    dftracer::utils::dstd::Optional<dftracer::utils::dstd::Error> error()
+        const {
+        return error_;
+    }
 
     bool cancelled() const {
         return cancelled_.load(std::memory_order_acquire);
@@ -125,7 +129,7 @@ class StreamingState {
     std::mutex mtx_;
     std::condition_variable cv_producer_;
     std::condition_variable cv_consumer_;
-    std::exception_ptr error_;
+    dftracer::utils::dstd::Optional<dftracer::utils::dstd::Error> error_;
     std::atomic<bool> cancelled_{false};
     std::atomic<bool> done_{false};
     std::size_t memory_budget_bytes_;
@@ -148,7 +152,7 @@ struct ArrowStreamingIteratorState : dstd::HeapObject {
     // batches (pull_next is then unused). Keeps Arrow off the streaming path.
     dstd::Function<dstd::Optional<dftracer::utils::dataframe::DataFrame>()>
         pull_df;
-    dstd::Function<std::exception_ptr()> get_error;
+    dstd::Function<dstd::Optional<dstd::Error>()> get_error;
     dstd::Function<void()> cancel;
 };
 

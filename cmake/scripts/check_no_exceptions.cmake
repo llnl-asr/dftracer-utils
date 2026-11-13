@@ -59,8 +59,11 @@ function(_check_tree root excluded out_hits)
     endforeach()
   endforeach()
 
-  file(GLOB_RECURSE cmake_files "${root}/CMakeLists.txt" "${root}/src/*.txt"
-       "${root}/tests/*.txt" "${root}/benchmarks/*.txt" "${root}/cmake/*.cmake")
+  file(GLOB_RECURSE cmake_files "${root}/src/*.txt" "${root}/tests/*.txt"
+       "${root}/benchmarks/*.txt" "${root}/cmake/*.cmake")
+  if(EXISTS "${root}/CMakeLists.txt")
+    list(APPEND cmake_files "${root}/CMakeLists.txt")
+  endif()
   foreach(file IN LISTS cmake_files)
     string(FIND "${file}" "${root}/cmake/scripts/check_no_exceptions.cmake" at)
     if(NOT at EQUAL -1)

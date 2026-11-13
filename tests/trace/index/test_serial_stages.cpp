@@ -121,8 +121,8 @@ dstd::String view_index_root(const dstd::String& file,
     return dstd::String(trace::internal::determine_index_path(file, index_dir));
 }
 
-void cold_count(const dstd::Vector<dstd::String>& files,
-                const dstd::String& index_dir) {
+dstd::Result<void> cold_count(const dstd::Vector<dstd::String>& files,
+                              const dstd::String& index_dir) {
     dstd::Vector<trace::views::ViewFile> view_files;
     for (const auto& f : files) {
         trace::views::ViewFile vf;
@@ -133,9 +133,9 @@ void cold_count(const dstd::Vector<dstd::String>& files,
     const auto view = trace::views::View::from_files(std::move(view_files))
                           .group_by({trace::views::GroupKey::name()})
                           .agg({{trace::views::AggOp::Count, "", "n"}});
-    dftu_utils_test::ok(default_runtime().block_on(coro::named(
+    return default_runtime().block_on(coro::named(
         "serial-stages-view",
-        [&]() -> coro::CoroTask<void> { (void)co_await view.collect(); }())));
+        [&]() -> coro::CoroTask<void> { (void)co_await view.collect(); }()));
 }
 
 // Written once and shared by the cases that read it.
@@ -219,10 +219,7 @@ TEST_SUITE("SerialStages") {
         files.push_back(write_corrupt_trace(run.env.dir(), VIEW_FILES));
         const auto index_dir = run.env.dir() + "/failed";
         configure_default_runtime({.threads = 2, .eager = true});
-        try {
-            cold_count(files, index_dir);
-        } catch (const std::exception&) {
-        }
+        cold_count(files, index_dir).discard();
 
         const auto root = view_index_root(files.front(), index_dir);
         const auto snapshot = dftu_utils_test::index_snapshot(root);

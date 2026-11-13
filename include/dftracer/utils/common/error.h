@@ -162,12 +162,6 @@ dstd::Unexpected<dstd::Error> make_error(E code, dstd::Format<S> f,
         dstd::Error::from_format(code, f, a...));
 }
 
-/// The error an exception stands for: the what() of a std::exception as
-/// dstd::Condition::Unknown, and "unknown error" for anything else. Defined in
-/// a source built with exceptions, so code that cannot catch can still read an
-/// exception.
-dstd::Error error_of_exception(const std::exception_ptr& error) noexcept;
-
 }  // namespace dftracer::utils::common
 
 #endif  // DFTRACER_UTILS_COMMON_ERROR_H

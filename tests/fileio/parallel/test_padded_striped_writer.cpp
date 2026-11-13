@@ -485,7 +485,7 @@ TEST_CASE(
         source.request_stop();
         auto settled = co_await coro::settle_in_place(waiting);
         stopped = settled.stopped;
-        CHECK(!settled.exception);
+        CHECK(!settled.error);
         co_await scope.join();
     }()));
     CHECK(stopped);

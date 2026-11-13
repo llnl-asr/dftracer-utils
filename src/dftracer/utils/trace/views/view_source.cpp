@@ -362,11 +362,10 @@ coro::detail::Coro run_detached(
     dstd::SharedPtr<dstd::Promise<dstd::Result<void>>> done,
     dstd::SharedFuture<dstd::Result<void>> fut) {
     auto settled = co_await coro::settle(std::move(task));
-    if (settled.exception) {
+    if (settled.error) {
         dftracer::utils::detail::fulfill(
             *done, fut,
-            dstd::Unexpected<dstd::Error>(
-                common::error_of_exception(settled.exception)));
+            dstd::Unexpected<dstd::Error>(std::move(*settled.error)));
     } else if (settled.stopped) {
         dftracer::utils::detail::fulfill(
             *done, fut,

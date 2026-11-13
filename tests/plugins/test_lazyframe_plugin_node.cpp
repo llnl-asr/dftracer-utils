@@ -6,6 +6,7 @@
 // test_provider_schema_types.cpp uses for dftu_source_vt.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <coro/failing.h>
 #include <dftracer/utils/common/abi_error.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/coro/yield.h>
@@ -27,7 +28,6 @@
 
 #include <algorithm>
 #include <cstdint>
-#include <stdexcept>
 
 using namespace dftracer::utils;
 
@@ -591,13 +591,13 @@ class ThrowingHooksCursor : public dataframe::Cursor {
     }
     coro::CoroTask<bool> narrow(const dataframe::Expr&) override {
         ++faults_->narrows;
-        throw std::runtime_error("narrow boom");
+        co_await coro_test::failing_task("narrow boom");
         co_return false;
     }
     std::uint64_t resident_bytes() const override { return 1; }
     coro::CoroTask<std::uint64_t> reclaim(std::uint64_t) override {
         ++faults_->reclaims;
-        throw std::runtime_error("reclaim boom");
+        co_await coro_test::failing_task("reclaim boom");
         co_return 0;
     }
 
@@ -666,7 +666,8 @@ class ThrowingAsyncCursor : public dataframe::Cursor {
     coro::CoroTask<dataframe::MorselResult> next(std::int64_t) override {
         co_await dftracer::utils::coro::yield();
         ++calls_;
-        if (calls_ == throw_on_call_) throw std::runtime_error("async boom");
+        if (calls_ == throw_on_call_)
+            co_await coro_test::failing_task("async boom");
         if (calls_ > 1) co_return dataframe::MorselResult(dstd::nullopt);
         dstd::Vector<std::int64_t> v{9};
         dataframe::Morsel m;

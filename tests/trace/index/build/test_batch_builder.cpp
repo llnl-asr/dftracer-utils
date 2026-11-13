@@ -44,15 +44,17 @@ static BuildResult run_builder(const dstd::String& gz,
             cfg->index_dir = index_dir;
             cfg->force_rebuild = force;
             if (checkpoint_size > 0) cfg->checkpoint_size = checkpoint_size;
-            try {
-                auto r = co_await BatchBuilder::process(std::move(cfg));
+            auto settled =
+                co_await coro::settle(BatchBuilder::process(std::move(cfg)));
+            if (settled.error) {
+                out_ptr->success = false;
+            } else {
+                const auto& r = *settled.value;
                 out_ptr->success = r.indexed >= 1 && r.failed == 0;
                 if (!r.results.empty()) {
                     out_ptr->index_path = r.results[0].index_path;
                     out_ptr->index_created = r.results[0].index_created;
                 }
-            } catch (const std::exception&) {
-                out_ptr->success = false;
             }
         });
 

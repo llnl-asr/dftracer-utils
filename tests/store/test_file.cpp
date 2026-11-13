@@ -1231,24 +1231,17 @@ TEST_SUITE("index store file") {
                 capped.hard_cap = live + (1U << 20U);
                 if (capped.hard_cap < live) capped.hard_cap = 0;
                 memory::configure(capped);
-                bool over_cap = false;
                 {
+                    // An allocation past the cap ends the process.
                     memory::detail::Scope scope(*pool);
-                    try {
-                        auto decoded =
-                            store::engine::decode_record(view_of(record));
-                        CHECK_FALSE(decoded.has_value());
-                        if (!decoded.has_value()) {
-                            CHECK(decoded.error().is(dstd::Condition::Parse));
-                        }
-                    } catch (const std::exception&) {
-                        over_cap = true;
+                    auto decoded =
+                        store::engine::decode_record(view_of(record));
+                    CHECK_FALSE(decoded.has_value());
+                    if (!decoded.has_value()) {
+                        CHECK(decoded.error().is(dstd::Condition::Parse));
                     }
                 }
                 memory::configure(saved);
-                if (over_cap) {
-                    FAIL("decode_record allocated past its bounded count");
-                }
                 CHECK(pool->peak() < (1U << 20U));
             };
 

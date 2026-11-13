@@ -125,19 +125,20 @@ coro::CoroTask<void> run_host_scan(
             options.skip_unreadable = true;
             auto found = co_await dftracer::utils::runtime::fs::find_all(
                 scope, dftracer::utils::dstd::PathView(p), std::move(options));
-            if (!found)
-                throw dftracer::utils::python::core::PyErrorException(
-                    found.error());
-            for (auto& e : *found) files.emplace_back(e.path.str());
+            auto entries = co_await std::move(found);
+            for (auto& e : entries) files.emplace_back(e.path.str());
         } else {
             files.push_back(p);
         }
     }
     std::sort(files.begin(), files.end());
-    if (files.empty())
-        throw dftracer::utils::python::core::PyErrorException(
-            dftracer::utils::common::ErrorCode::NotFound,
-            "no trace files found");
+    if (files.empty()) {
+        auto failure =
+            dftracer::utils::coro::fail_with(dftracer::utils::dstd::Error(
+                dftracer::utils::common::ErrorCode::NotFound,
+                "no trace files found"));
+        co_await failure;
+    }
 
     if (auto_index) {
         dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> to_check;
@@ -146,9 +147,10 @@ coro::CoroTask<void> run_host_scan(
             to_check.emplace_back(dftracer::utils::dstd::StringView(file));
         dftracer::utils::dstd::String index_dir_arg{
             dftracer::utils::dstd::StringView(index_dir)};
-        dftracer::utils::python::core::py_unwrap(
+        auto fresh =
             co_await dftracer::utils::trace::index::build::ensure_indexes_fresh(
-                "", std::move(to_check), std::move(index_dir_arg)));
+                "", std::move(to_check), std::move(index_dir_arg));
+        co_await std::move(fresh);
     }
 
     dftracer::utils::dstd::Vector<trace::views::ViewFile> view_files;
@@ -162,9 +164,7 @@ coro::CoroTask<void> run_host_scan(
     trace::views::View view =
         trace::views::View::from_files(std::move(view_files));
     auto run = co_await plugins->run(view);
-    if (!run)
-        throw dftracer::utils::python::core::PyErrorException(run.error());
-    *out = std::move(*run);
+    *out = co_await std::move(run);
 }
 
 bool collect_inputs(

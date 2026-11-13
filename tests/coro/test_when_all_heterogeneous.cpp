@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <coro/failing.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/dstd/string.h>
@@ -9,7 +10,6 @@
 #include <task_result.h>
 
 #include <atomic>
-#include <stdexcept>
 #include <tuple>
 #include <variant>
 
@@ -136,31 +136,22 @@ TEST_CASE("when_all - All void types") {
     CHECK(counter.load() == 2);
 }
 
-TEST_CASE("when_all - Exception propagation from one task") {
+TEST_CASE("when_all - Error propagation from one task") {
     Runtime rt(4);
 
-    std::atomic<bool> exception_caught{false};
-    auto* caught_ptr = &exception_caught;
-
-    dftu_utils_test::ok(rt.block_on(
-        coro::with_scope([caught_ptr](coro::Scope& scope) -> CoroTask<void> {
+    const auto result =
+        rt.block_on(coro::with_scope([](coro::Scope& scope) -> CoroTask<void> {
             auto f1 = scope.spawn_future([]() -> CoroTask<void> {
-                throw std::runtime_error("boom");
-                co_return;
+                co_await coro_test::failing_task("boom");
             });
             auto f2 =
                 scope.spawn_future([]() -> CoroTask<int> { co_return 7; });
 
-            try {
-                co_await when_all(std::move(f1), std::move(f2));
-            } catch (const std::runtime_error& e) {
-                caught_ptr->store(dstd::String(e.what()) == "boom",
-                                  std::memory_order_relaxed);
-            }
-            co_return;
-        })));
+            co_await when_all(std::move(f1), std::move(f2));
+        }));
 
-    CHECK(exception_caught.load() == true);
+    REQUIRE_FALSE(result.has_value());
+    CHECK(dstd::String(result.error().message()) == "boom");
 }
 
 TEST_CASE("when_all - Homogeneous types still work with variadic overload") {

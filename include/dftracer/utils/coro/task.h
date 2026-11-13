@@ -3,7 +3,6 @@
 #define DFTRACER_UTILS_CORO_TASK_H
 
 #include <dftracer/utils/common/error.h>
-#include <dftracer/utils/common/exception_helpers.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/platform_compat.h>
 #include <dftracer/utils/common/typedefs.h>
@@ -24,8 +23,6 @@
 #include <coroutine>
 #include <cstdint>
 #include <cstdlib>
-#include <exception>
-#include <stdexcept>
 #include <tuple>
 #include <type_traits>
 #include <utility>
@@ -117,6 +114,8 @@ inline constexpr bool is_coro_task_v = is_coro_task<T>::value;
 
 template <typename V, typename E>
 struct OrFailValue;
+template <typename V>
+struct ResultValue;
 template <typename V, typename E>
 struct OrFailTask;
 template <typename T, typename Task>
@@ -176,8 +175,15 @@ struct PromiseBase : detail::FrameAllocation {
     /// A cancelled child does not end a frame that holds a scope, which must
     /// reach its join.
     bool owns_scope{false};
-    /// The task returned an error result and threw nothing.
+    /// The task returned an error result.
     bool failed{false};
+    /// Set when the task ended with an error through @ref fail_with, a
+    /// `co_await` on an error, or a task it awaited that ended so. The awaiter
+    /// takes it.
+    dstd::Optional<dstd::Error> error;
+    /// Set on the task of @ref Scope::join, whose error ends a frame that holds
+    /// the scope too, since the scope is joined by then.
+    bool after_join{false};
     detail::ParentEnd parent_end{nullptr};
     PromiseBase* root_promise{nullptr};
     detail::RunContext context;
@@ -208,7 +214,7 @@ struct PromiseBase : detail::FrameAllocation {
     void complete() noexcept {
         std::coroutine_handle<> next = continuation;
         Executor* const home = continuation_executor;
-        const bool ends_parent = cancelled || failed;
+        const bool ends_parent = cancelled || failed || error.has_value();
         const detail::ParentEnd parent_end_fn = parent_end;
         finished.store(true, std::memory_order_release);
         if (!next) {
@@ -227,7 +233,7 @@ struct PromiseBase : detail::FrameAllocation {
         }
     }
 
-    /// Ends this task as cancelled too, with no exception, when it holds no
+    /// Ends this task as cancelled too, with no error, when it holds no
     /// scope and is cancelled, and returns true then. Call only while suspended
     /// on that child.
     bool propagate_cancel() noexcept {
@@ -240,11 +246,27 @@ struct PromiseBase : detail::FrameAllocation {
     /// wait.
     bool refuses_stop() const noexcept { return owns_scope; }
 
-    /// Ends the task as cancelled with no exception. The owner destroys the
+    /// Ends the task as cancelled with no error. The owner destroys the
     /// frame. Call only from the await_suspend of this task's own frame.
     void finish_cancelled() noexcept {
         cancelled = true;
         complete();
+    }
+
+    /// Ends the task with @p e. The owner destroys the frame. Call only from
+    /// the await_suspend of this task's own frame.
+    void finish_failed(dstd::Error e) noexcept {
+        error.emplace(std::move(e));
+        complete();
+    }
+
+    /// Ends this task with @p e too, as its awaiter, and returns true, unless
+    /// it holds a scope, which must reach its join. Call only while suspended
+    /// on that child.
+    bool propagate_error(dstd::Error&& e, bool joined = false) noexcept {
+        if (owns_scope && !joined) return false;
+        finish_failed(std::move(e));
+        return true;
     }
 };
 
@@ -295,15 +317,16 @@ inline detail::StopHere stop_here() noexcept { return {}; }
 namespace detail {
 struct FailWith {
     static constexpr bool CANCEL_EXEMPT = true;
-    std::exception_ptr exception;
+    dstd::Error error;
 
     bool await_ready() const noexcept { return false; }
 
     template <typename Promise>
     void await_suspend(std::coroutine_handle<Promise> h) noexcept {
-        if constexpr (requires { h.promise().exception; }) {
-            h.promise().exception = std::move(exception);
-            h.promise().complete();
+        if constexpr (requires {
+                          h.promise().finish_failed(std::move(error));
+                      }) {
+            h.promise().finish_failed(std::move(error));
         } else {
             dstd::fatal("coro: fail_with in a frame that cannot fail");
         }
@@ -314,33 +337,35 @@ struct FailWith {
 }  // namespace detail
 
 /**
- * @brief Ends the calling task with @p exception: `co_await fail_with(e)`.
+ * @brief Ends the calling task with @p error: `co_await fail_with(e)`.
  *
- * For a frame built without exceptions that holds an exception from a task
- * that code with exceptions ran. The task is not resumed, its frame is
- * destroyed by its owner, and its awaiter sees @p exception as if the task had
- * thrown it.
+ * Bind the result to a local before the `co_await`. The task is not resumed
+ * and its frame is destroyed by its owner. A task that awaits it with
+ * `co_await` ends with the same error, and @ref settle gives the error to the
+ * awaiter without ending it.
  */
-inline detail::FailWith fail_with(std::exception_ptr exception) noexcept {
-    return {std::move(exception)};
+inline detail::FailWith fail_with(dstd::Error error) noexcept {
+    return {std::move(error)};
 }
 
 namespace detail {
 
 template <typename Promise>
-bool end_cancelled(std::coroutine_handle<> awaiter,
-                   PromiseBase& child) noexcept {
-    return child.cancelled &&
-           std::coroutine_handle<Promise>::from_address(awaiter.address())
-               .promise()
-               .propagate_cancel();
+bool end_child(std::coroutine_handle<> awaiter, PromiseBase& child) noexcept {
+    Promise& parent =
+        std::coroutine_handle<Promise>::from_address(awaiter.address())
+            .promise();
+    if (child.cancelled) return parent.propagate_cancel();
+    return child.error.has_value() &&
+           parent.propagate_error(std::move(*child.error), child.after_join);
 }
 
-/// The @ref ParentEnd of an awaiter that ends when its child is cancelled.
+/// The @ref ParentEnd of an awaiter that ends when its child is cancelled or
+/// ended with an error.
 template <typename Promise>
 constexpr ParentEnd cancel_end_for() noexcept {
     if constexpr (requires(Promise& p) { p.propagate_cancel(); }) {
-        return &end_cancelled<Promise>;
+        return &end_child<Promise>;
     } else {
         return nullptr;
     }
@@ -348,6 +373,8 @@ constexpr ParentEnd cancel_end_for() noexcept {
 
 struct OwnsScopeTag {};
 inline constexpr OwnsScopeTag OWNS_SCOPE{};
+struct AfterJoinTag {};
+inline constexpr AfterJoinTag AFTER_JOIN{};
 
 /// Result storage for the promise. Non-void stores the value and provides
 /// return_value; void provides return_void instead.
@@ -421,7 +448,6 @@ class CoroTask {
    public:
     struct promise_type : PromiseBase, detail::ResultHolder<T> {
         using result_type = T;
-        std::exception_ptr exception;
 
         CoroTask<T> get_return_object(
 #if DFTRACER_UTILS_LOGGER_TRACE_ENABLED
@@ -447,7 +473,6 @@ class CoroTask {
                 if constexpr (detail::is_expected_v<T>) {
                     auto& p = h.promise();
                     p.failed =
-                        !p.exception &&
                         !dstd::detail::ExpectedAccess::holds_value(p.stored());
                 }
                 detail::report_finish(h.address());
@@ -458,7 +483,9 @@ class CoroTask {
 
         FinalAwaiter final_suspend() noexcept { return {}; }
 
-        void unhandled_exception() { exception = std::current_exception(); }
+        void unhandled_exception() noexcept {
+            dstd::fatal("coro: an exception escaped a coroutine");
+        }
 
         /// Awaiting a task or a join is not a cancel point. A scope must always
         /// reach its join.
@@ -483,6 +510,12 @@ class CoroTask {
         }
 
         detail::ValueQuery<bool> await_transform(
+            detail::AfterJoinTag) noexcept {
+            this->after_join = true;
+            return {true};
+        }
+
+        detail::ValueQuery<bool> await_transform(
             this_coro::StopRequestedTag) noexcept {
             return {this->cancel_requested()};
         }
@@ -504,6 +537,19 @@ class CoroTask {
             static_assert(!std::is_void_v<L> && !std::is_void_v<R>,
                           "an Either of tasks needs a value from each side");
             return await_transform(detail::either_task(std::move(pair)));
+        }
+
+        /// `co_await error` ends the task with the error.
+        detail::FailWith await_transform(dstd::Error&& e) noexcept {
+            return {std::move(e)};
+        }
+
+        /// `co_await result` gives its value, or ends the task with its
+        /// error.
+        template <typename V>
+        detail::ResultValue<V> await_transform(
+            dstd::Expected<V, dstd::Error>&& result) noexcept {
+            return {std::move(result)};
         }
 
         template <typename V, typename E>
@@ -687,6 +733,9 @@ class CoroTask {
                       }) {
             if (p.cancelled && awaiting_coro.promise().propagate_cancel())
                 return true;
+            if (p.error && awaiting_coro.promise().propagate_error(
+                               std::move(*p.error), p.after_join))
+                return true;
         }
         return false;
     }
@@ -703,8 +752,10 @@ class CoroTask {
                 "a stopped task awaited by a frame that cannot stop; await "
                 "it through settle");
         }
-        if (coro_handle_.promise().exception) {
-            common::rethrow_and_clear(coro_handle_.promise().exception);
+        if (coro_handle_.promise().error) {
+            dstd::fatal(
+                "coro: a failed task was awaited by a frame that cannot fail",
+                "await it through settle");
         }
         if constexpr (!std::is_void_v<T>) {
             return coro_handle_.promise().take_result();
@@ -718,8 +769,8 @@ class CoroTask {
     /**
      * Asks the task to stop. Thread-safe and idempotent. At its next wait, or
      * that of a task it awaits, it ends as cancelled. Call it on the task
-     * handed to its awaiter, not one it awaits. await_resume() throws
-     * dstd::Condition::Cancelled, so test cancelled() first to avoid it.
+     * handed to its awaiter, not one it awaits. await_resume() ends
+     * the process when it cannot end its awaiter, so test cancelled() first.
      */
     void cancel() noexcept {
         if (coro_handle_) {
@@ -760,14 +811,16 @@ class CoroTask {
      * Resumes coroutine until completion
      *
      * @return The value, or an error with dstd::Condition::Cancelled when the
-     *         task was stopped. An exception that the task raised is rethrown.
+     *         task was stopped, or the error the task ended with.
      */
     TaskResult<T> get() {
         drive_to_completion(coro_handle_, coro_handle_.promise().finished);
         auto& p = coro_handle_.promise();
         report_await_end(p);
         if (p.cancelled) return detail::stopped_result<T>();
-        if (p.exception) common::rethrow_and_clear(p.exception);
+        if (p.error) {
+            return dstd::Unexpected<dstd::Error>(std::move(*p.error));
+        }
         if constexpr (std::is_void_v<T>) {
             return {};
         } else {
@@ -776,10 +829,10 @@ class CoroTask {
     }
 
     /**
-     * Check if coroutine has pending exception
+     * Check if the task ended with an error
      */
-    bool has_exception() const noexcept {
-        return coro_handle_ && coro_handle_.promise().exception != nullptr;
+    bool has_error() const noexcept {
+        return coro_handle_ && coro_handle_.promise().error.has_value();
     }
 
     /**
@@ -936,7 +989,7 @@ class CoroTask {
     }
 
     /**
-     * or_else - OR/fallback composition: run this task, and if it throws, run
+     * or_else - OR/fallback composition: run this task, and if it fails, run
      * the fallback instead. Yields whichever succeeds.
      *
      * @param fallback Fallback task to run if this task fails
@@ -952,7 +1005,7 @@ class CoroTask {
         return [](CoroTask<T> prim, CoroTask<T> fall) -> CoroTask<T> {
             auto settled = co_await settle(std::move(prim));
             if (settled.stopped) co_await stop_here();
-            if (!settled.exception) {
+            if (!settled.error) {
                 if constexpr (std::is_void_v<T>) {
                     co_return;
                 } else {
@@ -999,6 +1052,23 @@ void finish_with_error(std::coroutine_handle<Promise> h, E&& error) noexcept {
     p.complete();
 }
 
+template <typename V>
+struct ResultValue {
+    dstd::Expected<V, dstd::Error> result;
+
+    bool await_ready() const noexcept { return result.has_value(); }
+
+    template <typename Promise>
+    void await_suspend(std::coroutine_handle<Promise> h) noexcept {
+        h.promise().finish_failed(std::move(result).error());
+    }
+
+    V await_resume() noexcept(std::is_void_v<V> ||
+                              std::is_nothrow_move_constructible_v<V>) {
+        if constexpr (!std::is_void_v<V>) return *std::move(result);
+    }
+};
+
 template <typename V, typename E>
 struct OrFailValue {
     dstd::Expected<V, E> result;
@@ -1030,6 +1100,9 @@ struct OrFailTask {
         auto& p = task.coro_handle_.promise();
         if (!p.handoff.exchange(true, std::memory_order_acq_rel)) return true;
         if (p.cancelled && h.promise().propagate_cancel()) return true;
+        if (p.error &&
+            h.promise().propagate_error(std::move(*p.error), p.after_join))
+            return true;
         return end_now(h);
     }
 
@@ -1045,6 +1118,10 @@ struct OrFailTask {
         const auto parent =
             std::coroutine_handle<Promise>::from_address(awaiter.address());
         if (child.cancelled) return parent.promise().propagate_cancel();
+        if (child.error) {
+            return parent.promise().propagate_error(std::move(*child.error),
+                                                    child.after_join);
+        }
         auto& failed = static_cast<typename Task::promise_type&>(child);
         Task::report_await_end(failed);
         finish_with_error(parent, std::move(failed.stored()).error());
@@ -1062,20 +1139,20 @@ struct OrFailTask {
         return true;
     }
 };
-/// The outcome of a task awaited through @ref settle: a value, a stop, or an
-/// exception that code with exceptions on threw in it. Exactly one is set.
+/// The outcome of a task awaited through @ref settle: a value, a stop, or the
+/// error it ended with. Exactly one is set.
 template <typename T>
 struct Settled {
     dstd::Optional<T> value;
     bool stopped = false;
-    std::exception_ptr exception;
+    dstd::Optional<dstd::Error> error;
 };
 
 template <>
 struct Settled<void> {
     bool done = false;
     bool stopped = false;
-    std::exception_ptr exception;
+    dstd::Optional<dstd::Error> error;
 };
 
 /// `Task` is a @ref CoroTask held by value, or a reference to one that lives
@@ -1101,9 +1178,9 @@ struct SettleTask {
         Settled<T> out;
         if (p.cancelled) {
             out.stopped = true;
-        } else if (p.exception) {
-            out.exception = std::move(p.exception);
-            p.exception = nullptr;
+        } else if (p.error) {
+            out.error = std::move(p.error);
+            p.error.reset();
         } else if constexpr (std::is_void_v<T>) {
             out.done = true;
         } else {
@@ -1114,8 +1191,8 @@ struct SettleTask {
 };
 
 /// The body of @ref settle_in_place for an awaitable that is not a task: a
-/// frame that holds the await, so a stop or an exception ends that frame and
-/// not the caller.
+/// frame that holds the await, so a stop or an error ends that frame and not
+/// the caller.
 template <typename A>
 CoroTask<typename A::result_type> await_in_place(A& awaitable) {
     if constexpr (std::is_void_v<typename A::result_type>) {
@@ -1170,8 +1247,8 @@ dstd::OrFail<V, E> or_fail(dstd::Expected<V, E>&& result) noexcept(
 }
 
 /// The same for a task: awaits it, then gives its value or ends the calling
-/// task with its error. An exception or a cancel of the task acts as for a
-/// plain `co_await`.
+/// task with its error. An error that ended the task or a cancel of it acts as
+/// for a plain `co_await`.
 template <typename V, typename E>
 detail::OrFailTask<V, E> or_fail(
     CoroTask<dstd::Expected<V, E>>&& task) noexcept {

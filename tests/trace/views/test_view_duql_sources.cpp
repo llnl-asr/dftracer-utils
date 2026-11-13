@@ -96,22 +96,12 @@ dstd::Vector<dstd::String> dftracer_lines() {
             event(30, R"("fhash":"h1","hhash":"n1")", 3)};
 }
 
-// The message of the exception `fn` throws, or of the error the View, plan or
-// result it returns kept.
+// The message of the error the View, plan or result `fn` returns kept.
 template <typename Fn>
 dstd::String error_of(Fn&& fn) {
-    if constexpr (std::is_void_v<std::invoke_result_t<Fn&>>) {
-        try {
-            fn();
-        } catch (const std::exception& e) {
-            return e.what();
-        }
-        return {};
-    } else {
-        const auto status = test_view_common::status_of(fn());
-        if (status.has_value()) return {};
-        return dstd::String(status.error().message());
-    }
+    const auto status = test_view_common::status_of(fn());
+    if (status.has_value()) return {};
+    return dstd::String(status.error().message());
 }
 
 }  // namespace

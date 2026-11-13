@@ -29,6 +29,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Make the coroutine library throw and catch nothing.
+  A task ends with a `dstd::Error` by `co_await coro::fail_with(error)`, or by `co_await` on a `dstd::Error` or an error `dstd::Result`.
+  `co_await` on a task that ended with an error ends the awaiting task with the same error, and `Scope::join`, `when_all`, `when_any` and `SpawnFuture` do the same for the first error of their children.
+  `coro::settle` gives the error as `Settled::error` without ending the caller, and `RetryPolicy::should_retry` takes a `const dstd::Error&`.
+  `Runtime::block_on`, `sync_wait` and `TaskHandle::get` give the error as a `dstd::Result`.
+  An exception that escapes a coroutine ends the process.
+  `common::error_of_exception`, `common/exception_helpers.h`, `Generator::has_exception` and `AsyncGenerator::rethrow_if_exception` are removed, and the ctest `no_exceptions` always runs.
 - Make the plugin SDK throw and catch nothing, and compile its headers with `-fno-exceptions`.
   `plugins::Error` and `AsyncOp::nothrow` are removed.
   A call that can fail returns a `dstd::Result`, and the callbacks of a Slice, source, cursor or node return one too, or `void` where they cannot fail.

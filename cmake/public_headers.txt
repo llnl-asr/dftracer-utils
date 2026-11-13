@@ -2,7 +2,6 @@ dftracer/utils/common/abi.h
 dftracer/utils/common/constants.h
 dftracer/utils/common/env.h
 dftracer/utils/common/error.h
-dftracer/utils/common/exception_helpers.h
 dftracer/utils/common/export.h
 dftracer/utils/common/logging.h
 dftracer/utils/common/platform_compat.h

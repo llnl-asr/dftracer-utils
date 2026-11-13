@@ -430,7 +430,7 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Parallel/Threaded Tests" *
         // Each thread creates its own reader to avoid sharing indexer
         for (int i = 0; i < thread_count; ++i) {
             threads.emplace_back([&, i]() {
-                try {
+                {
                     // Create separate reader per thread
                     auto reader = dftu_utils_test::ok(
                         ReaderFactory::create(gz_file, idx_file));
@@ -465,8 +465,6 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Parallel/Threaded Tests" *
                             chunk.append(buffer.data(), bytes_read);
                         }
                     }
-                } catch (...) {
-                    error_occurred = true;
                 }
             });
         }
@@ -543,7 +541,7 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Parallel/Threaded Tests" *
 
         for (int i = 0; i < thread_count; ++i) {
             threads.emplace_back([&, i]() {
-                try {
+                {
                     // Create separate reader per thread
                     auto reader = dftu_utils_test::ok(
                         ReaderFactory::create(gz_file, idx_file));
@@ -580,8 +578,6 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Parallel/Threaded Tests" *
                     }
 
                     completed++;
-                } catch (...) {
-                    errors++;
                 }
             });
         }

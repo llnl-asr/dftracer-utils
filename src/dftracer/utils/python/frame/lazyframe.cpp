@@ -862,23 +862,28 @@ dftracer::utils::coro::CoroTask<void> drain_stream(
         dftracer::utils::python::trace::StreamingState<dataframe::DataFrame>>
         state,
     LazyFrame lf, std::int64_t batch_size) {
-    try {
-        auto gen = lf.stream(batch_size);
-        for (;;) {
-            auto next_frame = co_await gen.next();
-            if (!next_frame) break;
-            if (state->cancelled()) break;
-            dataframe::DataFrame df = dftracer::utils::python::core::py_unwrap(
-                std::move(*next_frame));
-            const std::size_t bytes =
-                static_cast<std::size_t>(df.num_rows()) *
-                static_cast<std::size_t>(df.num_columns() + 1) * 16;
-            if (!state->push(std::move(df), bytes)) break;
+    auto gen = lf.stream(batch_size);
+    for (;;) {
+        auto settled = co_await gen.settled_next();
+        if (settled.stopped) co_await dftracer::utils::coro::stop_here();
+        if (settled.error) {
+            state->fail(std::move(*settled.error));
+            co_return;
         }
-        state->complete();
-    } catch (...) {
-        state->fail(std::current_exception());
+        if (!*settled.value) break;
+        if (state->cancelled()) break;
+        auto& next_frame = **settled.value;
+        if (!next_frame) {
+            state->fail(next_frame.error());
+            co_return;
+        }
+        dataframe::DataFrame df = std::move(*next_frame);
+        const std::size_t bytes =
+            static_cast<std::size_t>(df.num_rows()) *
+            static_cast<std::size_t>(df.num_columns() + 1) * 16;
+        if (!state->push(std::move(df), bytes)) break;
     }
+    state->complete();
 }
 
 PyObject* LazyFrame_stream(PyObject* self, PyObject* args, PyObject* kwds) {

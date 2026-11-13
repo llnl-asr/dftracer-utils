@@ -2,7 +2,6 @@
 #ifndef DFTRACER_UTILS_CORO_WHEN_ALL_H
 #define DFTRACER_UTILS_CORO_WHEN_ALL_H
 
-#include <dftracer/utils/common/exception_helpers.h>
 #include <dftracer/utils/coro/detail/completion_state.h>
 #include <dftracer/utils/coro/detail/frame.h>
 #include <dftracer/utils/coro/detail/pool_resume.h>
@@ -19,7 +18,6 @@
 #include <atomic>
 #include <coroutine>
 #include <cstddef>
-#include <exception>
 #include <memory>
 #include <tuple>
 #include <utility>
@@ -45,7 +43,9 @@ struct FireAndForget {
         std::suspend_never initial_suspend() { return {}; }
         std::suspend_never final_suspend() noexcept { return {}; }
         void return_void() {}
-        void unhandled_exception() { std::terminate(); }
+        void unhandled_exception() noexcept {
+            dstd::fatal("coro: an exception escaped a coroutine");
+        }
     };
 };
 
@@ -73,7 +73,7 @@ struct WhenAllVectorState : detail::WhenAllCompletionState {
         : awaitables(std::move(items)), results(awaitables.size()) {
         total = awaitables.size();
     }
-    // Results an exception kept from the caller go with the state.
+    // Results an error kept from the caller go with the state.
     ~WhenAllVectorState() {
         for (const auto& result : results) dstd::discard_unread(result);
     }
@@ -129,7 +129,7 @@ class WhenAllVectorAwaitable {
         // Check if all completed synchronously
         if (state_->completed_count.load(std::memory_order_acquire) ==
             state_->total) {
-            return state_->end_stopped();  // Stays suspended only to stop
+            return state_->end_early();  // Stays suspended only to stop
         }
 
         if constexpr (std::is_base_of_v<PromiseBase, Promise>) {
@@ -146,9 +146,6 @@ class WhenAllVectorAwaitable {
 
     result_type await_resume() {
         state_->finish_wait();
-        if (state_->exception) {
-            common::rethrow_and_clear(state_->exception);
-        }
         if constexpr (std::is_same_v<typename Awaitable::result_type, bool>) {
             return result_type(state_->results.begin(), state_->results.end());
         } else {
@@ -163,8 +160,8 @@ class WhenAllVectorAwaitable {
                 const std::size_t index = s->claims.claim();
                 if (index >= s->total) co_return;
                 auto outcome = co_await settle_in_place(s->awaitables[index]);
-                if (outcome.exception) {
-                    s->on_exception(std::move(outcome.exception));
+                if (outcome.error) {
+                    s->on_error(std::move(*outcome.error));
                 } else if (outcome.stopped) {
                     s->on_stopped();
                 } else {
@@ -268,7 +265,7 @@ class WhenAllVectorAwaitable<Awaitable> {
         // Check if all tasks completed synchronously during launch_wrapper
         if (state_->completed_count.load(std::memory_order_acquire) ==
             state_->total) {
-            return state_->end_stopped();  // Stays suspended only to stop
+            return state_->end_early();  // Stays suspended only to stop
         }
 
         if constexpr (std::is_base_of_v<PromiseBase, Promise>) {
@@ -283,12 +280,7 @@ class WhenAllVectorAwaitable<Awaitable> {
         return true;
     }
 
-    void await_resume() {
-        state_->finish_wait();
-        if (state_->exception) {
-            common::rethrow_and_clear(state_->exception);
-        }
-    }
+    void await_resume() { state_->finish_wait(); }
 
    private:
     void launch_wrapper() {
@@ -297,8 +289,8 @@ class WhenAllVectorAwaitable<Awaitable> {
                 const std::size_t index = s->claims.claim();
                 if (index >= s->total) co_return;
                 auto outcome = co_await settle_in_place(s->awaitables[index]);
-                if (outcome.exception) {
-                    s->on_exception(std::move(outcome.exception));
+                if (outcome.error) {
+                    s->on_error(std::move(*outcome.error));
                 } else if (outcome.stopped) {
                     s->on_stopped();
                 } else {
@@ -337,7 +329,7 @@ struct WhenAllTupleState : detail::WhenAllCompletionState {
         : awaitables(std::forward<Awaitables>(items)...) {
         total = sizeof...(Awaitables);
     }
-    // Results an exception kept from the caller go with the state.
+    // Results an error kept from the caller go with the state.
     ~WhenAllTupleState() {
         std::apply(
             [](const auto&... result) { (dstd::discard_unread(result), ...); },
@@ -389,7 +381,7 @@ class WhenAllTupleAwaitable {
         // Check if all completed synchronously during launch
         if (state_->completed_count.load(std::memory_order_acquire) ==
             state_->total) {
-            return state_->end_stopped();  // Stays suspended only to stop
+            return state_->end_early();  // Stays suspended only to stop
         }
 
         if constexpr (std::is_base_of_v<PromiseBase, Promise>) {
@@ -406,9 +398,6 @@ class WhenAllTupleAwaitable {
 
     result_type await_resume() {
         state_->finish_wait();
-        if (state_->exception) {
-            common::rethrow_and_clear(state_->exception);
-        }
         return build_result(std::index_sequence_for<Awaitables...>{});
     }
 
@@ -428,8 +417,8 @@ class WhenAllTupleAwaitable {
         [](dstd::SharedPtr<WhenAllTupleState<Awaitables...>> s)
             -> FireAndForget {
             auto outcome = co_await settle_in_place(std::get<I>(s->awaitables));
-            if (outcome.exception) {
-                s->on_exception(std::move(outcome.exception));
+            if (outcome.error) {
+                s->on_error(std::move(*outcome.error));
             } else if (outcome.stopped) {
                 s->on_stopped();
             } else {

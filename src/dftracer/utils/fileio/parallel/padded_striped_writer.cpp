@@ -138,10 +138,16 @@ struct PaddedStripedImpl {
                 packer_future.reset();
                 co_await packer_scope->join_quietly();
                 packer_drained = true;
-                if (std::exception_ptr error = packer_scope->take_error())
-                    co_await coro::fail_with(std::move(error));
-                if (settled.exception)
-                    co_await coro::fail_with(std::move(settled.exception));
+                dstd::Optional<dstd::Error> scope_error =
+                    packer_scope->take_error();
+                if (scope_error) {
+                    auto failure = coro::fail_with(std::move(*scope_error));
+                    co_await failure;
+                }
+                if (settled.error) {
+                    auto failure = coro::fail_with(std::move(*settled.error));
+                    co_await failure;
+                }
                 if (settled.stopped) co_await coro::stop_here();
                 if (*settled.value != 0) co_return *settled.value;
             }

@@ -5,8 +5,10 @@
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
 #include <dftracer/utils/coro/channel.h>
+#include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/future.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/vector.h>
 
 #include <atomic>
@@ -36,15 +38,15 @@ struct MemoryViewBatchIteratorState {
     dstd::SharedPtr<dftracer::utils::coro::Channel<MemoryViewBatchData>>
         channel;
     std::mutex error_mtx;
-    std::exception_ptr error;
+    dstd::Optional<dstd::Error> error;
     std::atomic<bool> cancelled{false};
     std::size_t memory_budget_bytes = 0;
     std::atomic<std::size_t> bytes_in_queue{0};
     dstd::SharedFuture<void> task_future;
 
-    void set_error(std::exception_ptr e) {
+    void set_error(dstd::Error e) {
         std::lock_guard<std::mutex> lock(error_mtx);
-        if (!error) error = e;
+        if (!error) error.emplace(std::move(e));
     }
 };
 

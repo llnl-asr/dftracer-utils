@@ -430,7 +430,7 @@ TEST_CASE("LINE_BYTES Stream - Parallel/Threaded Read Tests" *
         // Each thread creates its own reader to avoid sharing indexer
         for (int i = 0; i < thread_count; ++i) {
             threads.emplace_back([&, i]() {
-                try {
+                {
                     // Create separate reader per thread
                     auto reader = dftu_utils_test::ok(
                         ReaderFactory::create(gz_file, idx_file));
@@ -465,8 +465,6 @@ TEST_CASE("LINE_BYTES Stream - Parallel/Threaded Read Tests" *
                             chunk.append(buffer.data(), bytes_read);
                         }
                     }
-                } catch (...) {
-                    error_occurred = true;
                 }
             });
         }
@@ -543,7 +541,7 @@ TEST_CASE("LINE_BYTES Stream - Parallel/Threaded Read Tests" *
 
         for (int i = 0; i < thread_count; ++i) {
             threads.emplace_back([&, i]() {
-                try {
+                {
                     // Create separate reader per thread
                     auto reader = dftu_utils_test::ok(
                         ReaderFactory::create(gz_file, idx_file));
@@ -580,8 +578,6 @@ TEST_CASE("LINE_BYTES Stream - Parallel/Threaded Read Tests" *
                     }
 
                     completed++;
-                } catch (...) {
-                    errors++;
                 }
             });
         }
@@ -649,7 +645,7 @@ TEST_CASE("LINE_BYTES Stream - Parallel/Threaded Read Tests" *
         // All threads read the SAME range (but with separate reader instances)
         for (int i = 0; i < thread_count; ++i) {
             threads.emplace_back([&, i]() {
-                try {
+                {
                     // Create separate reader per thread
                     auto reader = dftu_utils_test::ok(
                         ReaderFactory::create(gz_file, idx_file));
@@ -679,8 +675,6 @@ TEST_CASE("LINE_BYTES Stream - Parallel/Threaded Read Tests" *
                             result.append(buffer.data(), bytes_read);
                         }
                     }
-                } catch (...) {
-                    error_occurred = true;
                 }
             });
         }

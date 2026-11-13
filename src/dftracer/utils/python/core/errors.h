@@ -41,6 +41,10 @@ PyObject *py_error_type_for(const dftracer::utils::dstd::Error &error);
 // else to the DFTUtilsError base, as run_blocking does for inline bindings.
 void set_typed_py_error(const std::exception &e);
 
+// Set the current Python error from an error value, with the Python type
+// py_error_type_for chooses for it.
+void set_py_error(const dftracer::utils::dstd::Error &error);
+
 }  // namespace dftracer::utils::python::core
 
 #endif  // DFTRACER_UTILS_PYTHON_CORE_ERRORS_H

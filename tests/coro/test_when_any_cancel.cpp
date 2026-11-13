@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <coro/failing.h>
 #include <dftracer/utils/coro/channel.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/when_any.h>
@@ -16,7 +17,6 @@
 #include <atomic>
 #include <chrono>
 #include <memory>
-#include <stdexcept>
 #include <thread>
 
 using namespace dftracer::utils;
@@ -65,11 +65,9 @@ class Racer {
    public:
     using result_type = int;
 
-    Racer(dstd::SharedPtr<Race> race, std::size_t slot,
-          bool throw_on_cancel = false)
+    Racer(dstd::SharedPtr<Race> race, std::size_t slot)
         : race_(std::move(race)),
           slot_(slot),
-          throw_on_cancel_(throw_on_cancel),
           token_(dstd::make_shared<std::atomic<bool>>(false)),
           task_(receive_and_record(race_, token_, slot_)) {}
 
@@ -84,15 +82,11 @@ class Racer {
 
     TokenPtr cancellation_token() const { return token_; }
 
-    void cancel() {
-        race_->channels[slot_]->close();
-        if (throw_on_cancel_) throw std::runtime_error("cancel failed");
-    }
+    void cancel() { race_->channels[slot_]->close(); }
 
    private:
     dstd::SharedPtr<Race> race_;
     std::size_t slot_;
-    bool throw_on_cancel_;
     TokenPtr token_;
     coro::CoroTask<int> task_;
 };
@@ -248,35 +242,34 @@ TEST_CASE("when_any - a spawned loser stops when cancelled") {
               .count());
 }
 
-TEST_CASE("when_any - a winner that throws after it won delivers its error") {
+TEST_CASE(
+    "when_any - a winner that fails delivers its error after the losers") {
     Runtime rt(4);
 
     auto race = dstd::make_shared<Race>();
-    std::atomic<bool> threw{false};
+    std::atomic<bool> failed{false};
     std::atomic<bool> returned{false};
     std::atomic<int> returned_at{NOT_STOPPED};
 
     auto body = [&]() -> coro::CoroTask<void> {
-        try {
-            // Loser 0 throws from cancel() once slot 1 has won. Loser 2
-            // must still be cancelled and awaited.
-            co_await coro::when_any(Racer<0>(race, 0, true), Racer<0>(race, 1),
-                                    Racer<0>(race, 2));
-        } catch (const std::runtime_error&) {
-            threw.store(true);
-        }
+        // The failing task wins at once. Racers 0 and 2 must still be
+        // cancelled and awaited.
+        auto any = coro::when_any(Racer<0>(race, 0),
+                                  coro_test::failing_task<int>("winner failed"),
+                                  Racer<0>(race, 2));
+        auto settled = co_await coro::settle_in_place(any);
+        failed.store(settled.error.has_value() &&
+                     dstd::String(settled.error->message()) == "winner failed");
         returned_at.store(race->clock.fetch_add(1));
         returned.store(true);
         co_return;
     };
 
-    auto feeder = feed_winner_later(race, 1);
     dftu_utils_test::ok(rt.block_on(body()));
-    feeder.join();
 
     CHECK(returned.load());
-    CHECK(threw.load());
-    for (std::size_t i = 0; i < race->stopped_at.size(); ++i) {
+    CHECK(failed.load());
+    for (const std::size_t i : {std::size_t{0}, std::size_t{2}}) {
         CAPTURE(i);
         CHECK(race->stopped_at[i].load() != NOT_STOPPED);
         CHECK(race->stopped_at[i].load() < returned_at.load());
@@ -341,12 +334,12 @@ TEST_CASE("when_any with a timeout loser returns when the winner does") {
 
 namespace {
 
-// A throw would resume a frame into its catch block, which records it. A
-// cancelled frame instead ends at its wait without resuming, so the record
-// stays empty, and the destructor of a local shows the frame was destroyed.
+// A cancelled frame ends at its wait without resuming, so the record of a
+// resume stays empty, and the destructor of a local shows the frame was
+// destroyed.
 struct Seen {
     std::atomic<bool> started{false};
-    std::atomic<bool> threw{false};
+    std::atomic<bool> resumed{false};
     std::atomic<int> destroyed{0};
 };
 
@@ -357,23 +350,15 @@ struct Guard {
 
 coro::CoroTask<int> spins_at_a_wait(dstd::SharedPtr<Seen> seen) {
     Guard guard{seen};
-    try {
-        seen->started.store(true);
-        for (;;) co_await coro::yield();
-    } catch (...) {
-        seen->threw.store(true);
-        throw;
-    }
+    seen->started.store(true);
+    for (;;) co_await coro::yield();
 }
 
 coro::CoroTask<int> awaits_a_spinner(dstd::SharedPtr<Seen> seen) {
     Guard guard{seen};
-    try {
-        co_return co_await spins_at_a_wait(seen);
-    } catch (...) {
-        seen->threw.store(true);
-        throw;
-    }
+    const int value = co_await spins_at_a_wait(seen);
+    seen->resumed.store(true);
+    co_return value;
 }
 
 coro::CoroTask<int> finishes_after(std::chrono::milliseconds time) {
@@ -383,7 +368,7 @@ coro::CoroTask<int> finishes_after(std::chrono::milliseconds time) {
 
 }  // namespace
 
-TEST_CASE("when_any - a cancelled CoroTask loser stops without throwing") {
+TEST_CASE("when_any - a cancelled CoroTask loser stops without resuming") {
     Runtime rt(4);
 
     auto seen = dstd::make_shared<Seen>();
@@ -415,7 +400,7 @@ TEST_CASE("when_any - a cancelled CoroTask loser stops without throwing") {
 
     CHECK(winner_index.load() == 1);
     CHECK(seen->started.load());
-    CHECK_FALSE(seen->threw.load());
+    CHECK_FALSE(seen->resumed.load());
     CHECK(seen->destroyed.load() == frames);
     CHECK(elapsed_ms.load() <
           std::chrono::duration_cast<std::chrono::milliseconds>(CANCEL_BOUND)

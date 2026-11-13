@@ -1023,7 +1023,7 @@ StopRun write_until_stopped(const dstd::String& path, GzipWriterOptions options,
         if (after_stop) after_stop();
         auto settled = co_await coro::settle_in_place(waiting);
         run.stopped = settled.stopped;
-        CHECK(!settled.exception);
+        CHECK(!settled.error);
         co_await scope.join();
     }()));
     // The dropped writer joins its jobs and removes its files in the

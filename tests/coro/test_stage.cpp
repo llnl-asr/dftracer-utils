@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <coro/failing.h>
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/async_generator.h>
 #include <dftracer/utils/coro/scope.h>
@@ -19,7 +20,6 @@
 #include <atomic>
 #include <chrono>
 #include <cstddef>
-#include <stdexcept>
 #include <type_traits>
 #include <utility>
 
@@ -52,8 +52,7 @@ CoroTask<int> value_task(int v) { co_return v; }
 
 CoroTask<int> failing_task() {
     co_await sleep(1ms);
-    throw std::runtime_error("planned failure");
-    co_return 0;
+    co_return co_await coro_test::failing_task<int>("planned failure");
 }
 
 CoroTask<int> slow_value(std::chrono::milliseconds delay, int v) {
@@ -175,22 +174,13 @@ CoroTask<int> fan(S stage, int count) {
     co_return sum;
 }
 
-// The condition of the error a task raised, or of the error it gave as a
+// The condition of the error a task ended with, or of the error it gave as a
 // value; nullopt when the task did not fail.
 template <typename F>
 dstd::Optional<dstd::Condition> condition_of(Runtime& runtime, F&& make_task) {
-    using R = decltype(runtime.block_on(make_task()));
-    try {
-        if constexpr (std::is_void_v<R>) {
-            runtime.block_on(make_task());
-        } else {
-            auto result = runtime.block_on(make_task());
-            if constexpr (requires { result.error().condition(); }) {
-                if (!result) return result.error().condition();
-            }
-        }
-    } catch (const std::runtime_error&) {
-        return dstd::Condition::Unknown;
+    auto result = runtime.block_on(make_task());
+    if constexpr (requires { result.error().condition(); }) {
+        if (!result) return result.error().condition();
     }
     return dstd::nullopt;
 }

@@ -3,6 +3,7 @@
 // same condition in expression form, gives the same result on each record.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/string.h>
@@ -57,7 +58,7 @@ const duql::detail::FieldNode& field_of(const duql::detail::QueryNode& leaf) {
                           std::is_same_v<T, duql::detail::MatchNode>)
                 return n.field;
             else
-                throw std::logic_error("not a literal leaf");
+                dstd::fatal("not a literal leaf");
         },
         leaf.data);
 }

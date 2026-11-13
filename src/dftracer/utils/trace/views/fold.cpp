@@ -3173,10 +3173,11 @@ coro::CoroTask<dstd::Result<void>> fuse_worker_guarded(
     std::atomic<bool>& failed) {
     auto task = fuse_worker(ctx, w);
     auto settled = co_await coro::settle(std::move(task));
-    if (settled.exception) {
+    if (settled.error) {
         failed.store(true, std::memory_order_relaxed);
         scope.request_stop();
-        co_await coro::fail_with(std::move(settled.exception));
+        auto failure = coro::fail_with(std::move(*settled.error));
+        co_await failure;
     }
     if (settled.stopped) {
         if (failed.load(std::memory_order_relaxed))

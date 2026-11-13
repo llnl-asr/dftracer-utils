@@ -163,16 +163,8 @@ static PyObject *TraceReaderIterator_next(TraceReaderIteratorObject *self) {
             if (!batch.has_value()) {
             std::lock_guard<std::mutex> lock(astate->error_mtx);
             if (astate->error) {
-                try {
-                    std::rethrow_exception(astate->error);
-                } catch (const std::exception &e) {
-                    dftracer::utils::python::core::set_typed_py_error(e);
-                    return NULL;
-                } catch (...) {
-                    PyErr_SetString(PyExc_RuntimeError,
-                                    "Unknown error in Arrow iterator");
-                    return NULL;
-                }
+                dftracer::utils::python::core::set_py_error(*astate->error);
+                return NULL;
             }
             return NULL;
         }
@@ -218,16 +210,8 @@ static PyObject *TraceReaderIterator_next(TraceReaderIteratorObject *self) {
             if (!batch_data.has_value()) {
             std::lock_guard<std::mutex> lock(bs->error_mtx);
             if (bs->error) {
-                try {
-                    std::rethrow_exception(bs->error);
-                } catch (const std::exception &e) {
-                    dftracer::utils::python::core::set_typed_py_error(e);
-                    return NULL;
-                } catch (...) {
-                    PyErr_SetString(PyExc_RuntimeError,
-                                    "Unknown error in batch iterator");
-                    return NULL;
-                }
+                dftracer::utils::python::core::set_py_error(*bs->error);
+                return NULL;
             }
             return NULL;
         }

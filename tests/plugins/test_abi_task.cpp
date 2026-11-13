@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <coro/failing.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/plugins/task_abi.h>
 #include <doctest/doctest.h>
 #include <plugins/test_abi_ctx.h>
 
 #include <atomic>
-#include <stdexcept>
 
 using namespace dftracer::utils;
 using test_plugin_common::run_task;
@@ -18,10 +18,7 @@ coro::CoroTask<void> set_flag(std::atomic<int>* n) {
     co_return;
 }
 
-coro::CoroTask<void> throw_boom() {
-    throw std::runtime_error("boom");
-    co_return;
-}
+coro::CoroTask<void> fail_boom() { co_await coro_test::failing_task("boom"); }
 
 }  // namespace
 
@@ -33,10 +30,10 @@ TEST_SUITE("plugin task ABI") {
         CHECK(ran.load() == 1);
     }
 
-    TEST_CASE("the task service run reports a thrown task with its message") {
-        dftu_task* t = plugins::task_to_abi(throw_boom());
+    TEST_CASE("the task service run reports a failed task with its message") {
+        dftu_task* t = plugins::task_to_abi(fail_boom());
         dstd::String message;
-        CHECK(run_task(t, &message) < 0);
+        CHECK(run_task(t, &message) == DFTU_E_UNKNOWN);
         CHECK(message.find("boom") != dstd::String::npos);
     }
 

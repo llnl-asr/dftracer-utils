@@ -296,15 +296,13 @@ TEST_CASE_TEMPLATE("Line-based reading", FormatType, GZIPFormat) {
         for (std::size_t line = 1;
              line <= std::min(total_lines, static_cast<std::uint64_t>(10));
              ++line) {
-            try {
+            {
                 dstd::String line_content =
                     dftu_utils_test::ok(reader->read_lines(line, line));
                 if (!line_content.empty()) {
                     line_count++;
                     CHECK(line_content.size() > 0);
                 }
-            } catch (...) {
-                // Skip lines that can't be read
             }
         }
 
@@ -324,15 +322,13 @@ TEST_CASE_TEMPLATE("Line-based reading", FormatType, GZIPFormat) {
             const std::size_t buffer_size = 1024;
             dstd::Vector<char> buffer(buffer_size);
 
-            try {
+            {
                 // Convert to 1-based indexing
                 dstd::String line_content = dftu_utils_test::ok(
                     reader->read_lines(line_num + 1, line_num + 1));
                 CHECK(!line_content.empty());
                 CHECK(line_content.find("\"id\":") != dstd::String::npos);
                 CHECK(line_content.find("\"message\":") != dstd::String::npos);
-            } catch (...) {
-                // Skip lines that can't be read
             }
         }
     }

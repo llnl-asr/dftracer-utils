@@ -59,12 +59,9 @@ class LargeTestEnvironment {
     }
 
     ~LargeTestEnvironment() {
-        try {
-            if (dstd::fs::exists(temp_dir_).value()) {
-                dstd::fs::remove_all(temp_dir_).discard();
-            }
-        } catch (...) {
-            // Ignore cleanup errors
+        const auto exists = dstd::fs::exists(temp_dir_);
+        if (exists.has_value() && *exists) {
+            dstd::fs::remove_all(temp_dir_).discard();
         }
     }
 
@@ -194,11 +191,7 @@ std::size_t extract_id_from_json(const dstd::String& line) {
     dstd::String id_str = line.substr(name_pos, end_pos - name_pos);
     if (id_str.empty()) return 0;
 
-    try {
-        return dftu_utils_test::to_number<unsigned long long>(id_str);
-    } catch (const std::exception&) {
-        return 0;
-    }
+    return dftu_utils_test::to_number<unsigned long long>(id_str);
 }
 
 // A file and its index, built once per binary and shared by the cases that ask
@@ -1385,7 +1378,7 @@ TEST_CASE("Robustness - Line-based reading stress tests") {
                 std::min(std::size_t(100), total_lines - start_line + 1);
             std::size_t end_line = start_line + range_size - 1;
 
-            try {
+            {
                 dstd::String result = dftu_utils_test::ok(
                     reader->read_lines(start_line, end_line));
 
@@ -1416,12 +1409,6 @@ TEST_CASE("Robustness - Line-based reading stress tests") {
                 }
 
                 results.push_back(result);
-
-            } catch (const std::exception& e) {
-                // If line reading fails, it's acceptable for robustness tests
-                // Just log and continue
-                INFO("Line reading failed for range ["
-                     << start_line << ", " << end_line << "]: " << e.what());
             }
         }
 
@@ -1459,7 +1446,7 @@ TEST_CASE("Robustness - Line-based reading stress tests") {
 
         for (auto range : large_ranges) {
             if (range.first <= range.second && range.second <= total_lines) {
-                try {
+                {
                     dstd::String result = dftu_utils_test::ok(
                         reader->read_lines(range.first, range.second));
 
@@ -1490,11 +1477,6 @@ TEST_CASE("Robustness - Line-based reading stress tests") {
                     if (range.first != range.second) {
                         CHECK(result.find(end_expected) != dstd::String::npos);
                     }
-
-                } catch (const std::exception& e) {
-                    INFO("Large line reading failed for range ["
-                         << range.first << ", " << range.second
-                         << "]: " << e.what());
                 }
             }
         }
@@ -1528,7 +1510,7 @@ TEST_CASE("Robustness - Line-based reading stress tests") {
 
         for (std::size_t line_num : test_lines) {
             if (line_num <= total_lines && line_num > 0) {
-                try {
+                {
                     dstd::String result = dftu_utils_test::ok(
                         reader->read_lines(line_num, line_num));
 
@@ -1548,10 +1530,6 @@ TEST_CASE("Robustness - Line-based reading stress tests") {
                     CHECK(result.front() == '{');
                     CHECK(result.find('}') != dstd::String::npos);
                     CHECK(result.back() == '\n');
-
-                } catch (const std::exception& e) {
-                    INFO("Single line reading failed for line "
-                         << line_num << ": " << e.what());
                 }
             }
         }
@@ -1574,7 +1552,7 @@ TEST_CASE("Robustness - Line-based reading stress tests") {
         }
 
         // Test boundary conditions
-        try {
+        {
             // First line
             dstd::String first = dftu_utils_test::ok(reader->read_lines(1, 1));
             CHECK(first.find("\"name\":\"name_1\"") != dstd::String::npos);
@@ -1610,9 +1588,6 @@ TEST_CASE("Robustness - Line-based reading stress tests") {
                 }
                 CHECK(line_count == 5);
             }
-
-        } catch (const std::exception& e) {
-            INFO("Boundary condition tests failed: " << e.what());
         }
     }
 
@@ -1654,13 +1629,10 @@ TEST_CASE("Robustness - Line-based reading stress tests") {
 
         // Very large range (should handle gracefully)
         if (total_lines > 0) {
-            try {
+            {
                 // This might succeed or fail depending on memory, but shouldn't
                 // crash
                 dftu_utils_test::ok(reader->read_lines(1, total_lines));
-            } catch (const std::exception& e) {
-                // Acceptable to fail with large ranges
-                INFO("Large range failed (acceptable): " << e.what());
             }
         }
     }
@@ -1696,15 +1668,10 @@ TEST_CASE("Robustness - Line reading consistency across multiple readers") {
 
                 // Read same range with all readers
                 for (auto& reader : readers) {
-                    try {
+                    {
                         dstd::String result = dftu_utils_test::ok(
                             reader->read_lines(range.first, range.second));
                         results.push_back(result);
-                    } catch (const std::exception& e) {
-                        INFO("Reader failed for range [" << range.first << ", "
-                                                         << range.second
-                                                         << "]: " << e.what());
-                        results.push_back("");  // Mark as failed
                     }
                 }
 
@@ -1741,7 +1708,7 @@ TEST_CASE("Robustness - Line reading consistency across multiple readers") {
                     thread_start + 5);  // Much smaller range for JSON lines
 
                 if (thread_start <= thread_end && thread_start > 0) {
-                    try {
+                    {
                         dstd::String result =
                             dftu_utils_test::ok(thread_reader->read_lines(
                                 thread_start, thread_end));
@@ -1757,15 +1724,6 @@ TEST_CASE("Robustness - Line reading consistency across multiple readers") {
                         } else {
                             failed_reads++;
                         }
-
-                    } catch (const std::exception& e) {
-                        failed_reads++;
-                        // Skip this test if line reading doesn't work with
-                        // current data format
-                        INFO("Thread "
-                             << i
-                             << " failed (expected with large JSON lines): "
-                             << e.what());
                     }
                 }
             });
@@ -1803,14 +1761,10 @@ TEST_CASE("Robustness - Line reading consistency across multiple readers") {
         for (std::size_t start = 1; start <= total_lines; start += chunk_size) {
             std::size_t end = std::min(start + chunk_size - 1, total_lines);
 
-            try {
+            {
                 dstd::String result =
                     dftu_utils_test::ok(reader->read_lines(start, end));
                 sequential_results.push_back(result);
-            } catch (const std::exception& e) {
-                sequential_results.push_back("");  // Mark failed
-                INFO("Sequential read failed for [" << start << ", " << end
-                                                    << "]: " << e.what());
             }
 
             // Limit test to first few chunks for performance
@@ -1836,14 +1790,10 @@ TEST_CASE("Robustness - Line reading consistency across multiple readers") {
             std::size_t start = (idx * chunk_size) + 1;
             std::size_t end = std::min(start + chunk_size - 1, total_lines);
 
-            try {
+            {
                 dstd::String result =
                     dftu_utils_test::ok(random_reader->read_lines(start, end));
                 random_results.push_back(result);
-            } catch (const std::exception& e) {
-                random_results.push_back("");  // Mark failed
-                INFO("Random read failed for [" << start << ", " << end
-                                                << "]: " << e.what());
             }
         }
 

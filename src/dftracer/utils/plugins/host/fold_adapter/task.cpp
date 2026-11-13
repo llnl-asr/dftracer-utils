@@ -65,8 +65,8 @@ void take_message(const plugins::AbiContext& ctx, const char* what,
 coro::CoroTask<dftu_status> eval(PluginFold* fold, Job* job, const void* in,
                                  void* out, dstd::String* message);
 
-coro::CoroTask<dftu_status> run_leaf(PluginFold* fold, Job* job, const void* in,
-                                     void* out, dstd::String* message) {
+coro::CoroTask<dftu_status> run_leaf(Job* job, const void* in, void* out,
+                                     dstd::String* message) {
     if (job->where != DFTU_JOB_INLINE) co_await coro::yield();
     const coro::CancelView cancel = co_await coro::this_coro::cancel_view;
     if (cancel.requested()) {
@@ -238,7 +238,7 @@ coro::CoroTask<dftu_status> eval(PluginFold* fold, Job* job, const void* in,
     dftu_status status = DFTU_OK;
     switch (job->kind) {
         case Job::Kind::Leaf:
-            status = co_await run_leaf(fold, job, in, out, message);
+            status = co_await run_leaf(job, in, out, message);
             break;
         case Job::Kind::Sleep:
             status = co_await run_sleep(job, message);

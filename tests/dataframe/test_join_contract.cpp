@@ -69,7 +69,8 @@ TEST_SUITE("join contract") {
               doctest::skip()) {
         fresh_process::announce_abort();
         HashJoin join = make_join(JoinHow::Right);
-        (void)join.flush({"k", "v"}, dstd::Vector<Series>{});
+        (void)join.flush(dstd::Vector<dstd::String>{"k", "v"},
+                         dstd::Vector<Series>{});
     }
 
     TEST_CASE("left templates of the wrong count are fatal") {

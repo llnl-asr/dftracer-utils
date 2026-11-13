@@ -407,13 +407,13 @@ dftu_plugin* make_plugin(const dftu_value* config) {
     vt.make_slice = [](dftu_ctx* ctx, void* self,
                        void** out) noexcept -> dftu_status {
         return detail::to_status(ctx, [&]() -> dftu_status {
-            const Config& config = detail::holder_of<Slice>(self)->config;
+            const Config& cfg = detail::holder_of<Slice>(self)->config;
             if constexpr (detail::FromConfigSlice<Slice>) {
-                dstd::Result<Slice> made = Slice::from_config(config);
+                dstd::Result<Slice> made = Slice::from_config(cfg);
                 if (!made.has_value()) return report(ctx, made.error());
                 *out = new Slice(std::move(*made));
             } else {
-                *out = new Slice(config);
+                *out = new Slice(cfg);
             }
             return DFTU_OK;
         });

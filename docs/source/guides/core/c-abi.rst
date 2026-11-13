@@ -169,13 +169,35 @@ list the registry, ``dftu_op_signature`` spells a signature
 Errors and results
 ------------------
 
-A call that can fail in more than one way returns a tagged result
-(``DFTU_RESULT_DECL``): ``DFTU_RESULT_OK(r)`` says which half of the union is
-live, ``DFTU_RESULT_VALUE(r)`` is the owned handle, ``DFTU_RESULT_ERROR(r)``
-a ``dftu_error`` with a ``(domain, code)`` identity, a portable
-``condition`` (``DFTU_COND_NOT_FOUND``, ``INVALID_ARGUMENT``, ...) and a
-borrowed ``message``. No exception ever crosses the C boundary. The simpler
-``dftu_series_*`` calls return NULL on failure.
+A call that can fail returns a ``dftu_status``: a negative value is an error
+(``DFTU_E_NOT_FOUND``, ``DFTU_E_INVALID``, ...), ``DFTU_OK`` is success and a
+positive value is a non-error outcome, such as ``DFTU_END`` when a cursor has no
+more items. The result goes through an out-parameter after the inputs, and the
+last parameter is a ``dftu_error* err`` that may be NULL. A failing call
+fills ``err`` with a ``(domain, code)`` identity, the portable ``status`` and an
+owned ``message``, and leaves the other out-parameters unchanged, except an
+out pointer, which it sets to NULL. A successful call leaves ``err`` as it was.
+Start ``err`` with ``DFTU_ERROR_INIT`` and call ``dftu_error_release`` when you
+are done with it.
+
+.. code-block:: c
+
+   dftu_store_t* store = NULL;
+   dftu_error err = DFTU_ERROR_INIT;
+   if (dftu_store_open("/tmp/store", &store, &err) != DFTU_OK) {
+       fprintf(stderr, "%s\n", err.message);
+       dftu_error_release(&err);
+   }
+
+A callback that the host calls, such as a plugin op, reports an error
+through the host-owned ``dftu_ctx`` it receives first: it returns
+``dftu_fail(ctx, code, message)`` and calls ``dftu_check(ctx)`` in long loops.
+No exception ever crosses the C boundary. The simpler ``dftu_series_*`` calls
+return NULL on failure.
+
+A struct that you pass in as options starts with a ``uint32_t struct_size``
+that you set to its ``sizeof``. A library that is newer than your code reads
+zero for the fields your struct does not have.
 
 Plans from C
 ------------

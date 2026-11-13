@@ -11,16 +11,18 @@ namespace dftracer::utils::domains::plugins {
 namespace {
 
 ::dftu_error not_found_error() {
-    return ::dftu_error{dftracer::utils::dstd::CORE_ERROR_DOMAIN.id,
-                        static_cast<std::int32_t>(DFTU_COND_NOT_FOUND),
-                        DFTU_COND_NOT_FOUND, "no such op"};
+    return ::dftu_error{
+        dftracer::utils::dstd::CORE_ERROR_DOMAIN.id,
+        static_cast<std::int32_t>(dftracer::utils::dstd::Condition::NotFound),
+        DFTU_E_NOT_FOUND, "no such op", nullptr};
 }
 
 ::dftu_error rejected_error() {
     return ::dftu_error{dftracer::utils::dstd::CORE_ERROR_DOMAIN.id,
-                        static_cast<std::int32_t>(DFTU_COND_INVALID_ARGUMENT),
-                        DFTU_COND_INVALID_ARGUMENT,
-                        "op rejected: kind/arity/shape mismatch"};
+                        static_cast<std::int32_t>(
+                            dftracer::utils::dstd::Condition::InvalidArgument),
+                        DFTU_E_INVALID,
+                        "op rejected: kind/arity/shape mismatch", nullptr};
 }
 
 ::dftu_result_series host_ops_run(void*, const char* name,

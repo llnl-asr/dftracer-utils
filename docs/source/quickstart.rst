@@ -398,15 +398,17 @@ caller and freed with its ``_free`` call.
        const char* paths[] = {"trace.pfw.gz"};
 
        /* Build the checkpoint and bloom tiers; fresh files are skipped. */
-       dftu_indexer_open_result opened = dftu_indexer_open(paths, 1, NULL);
-       if (!DFTU_RESULT_OK(opened)) {
-           fprintf(stderr, "%s\n", DFTU_RESULT_ERROR(opened).message);
+       dftu_indexer* indexer = NULL;
+       dftu_error err = DFTU_ERROR_INIT;
+       if (dftu_indexer_open(paths, 1, NULL, &indexer, &err) != DFTU_OK) {
+           fprintf(stderr, "%s\n", err.message);
+           dftu_error_release(&err);
            return 1;
        }
-       dftu_indexer* indexer = DFTU_RESULT_VALUE(opened);
-       dftu_indexer_status_result built = dftu_indexer_build(indexer);
-       if (!DFTU_RESULT_OK(built)) {
-           fprintf(stderr, "%s\n", DFTU_RESULT_ERROR(built).message);
+       dftu_indexer_report report;
+       if (dftu_indexer_build(indexer, &report, &err) != DFTU_OK) {
+           fprintf(stderr, "%s\n", err.message);
+           dftu_error_release(&err);
            dftu_indexer_free(indexer);
            return 1;
        }

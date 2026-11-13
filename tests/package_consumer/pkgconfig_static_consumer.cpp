@@ -61,15 +61,16 @@ int check_index(const std::filesystem::path& dir) {
     dftu_indexer_options options;
     dftu_indexer_options_init(&options);
     const char* paths[] = {trace.c_str()};
-    auto opened = dftu_indexer_open(paths, 1, &options);
-    if (!DFTU_RESULT_OK(opened)) return 10;
-    auto built = dftu_indexer_build(DFTU_RESULT_VALUE(opened));
-    const int rc = DFTU_RESULT_OK(built) &&
-                           DFTU_RESULT_VALUE(built).total == 1 &&
-                           DFTU_RESULT_VALUE(built).needs_work == 0
-                       ? 0
-                       : 11;
-    dftu_indexer_free(DFTU_RESULT_VALUE(opened));
+    dftu_indexer* indexer = nullptr;
+    if (dftu_indexer_open(paths, 1, &options, &indexer, nullptr) != DFTU_OK) {
+        return 10;
+    }
+    dftu_indexer_report report;
+    const dftu_status built = dftu_indexer_build(indexer, &report, nullptr);
+    const int rc =
+        built == DFTU_OK && report.total == 1 && report.needs_work == 0 ? 0
+                                                                        : 11;
+    dftu_indexer_free(indexer);
     return rc;
 }
 

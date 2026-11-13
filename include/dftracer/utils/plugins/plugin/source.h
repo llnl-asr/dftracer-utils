@@ -318,12 +318,12 @@ struct CursorVt {
             box->error = e.what();
             out->ok = 0;
             out->u.err =
-                dftu_error{0, 0, DFTU_COND_UNKNOWN, box->error.c_str()};
+                dftu_error{0, 0, DFTU_E_UNKNOWN, box->error.c_str(), nullptr};
         } catch (...) {
             box->error = "source cursor failed";
             out->ok = 0;
             out->u.err =
-                dftu_error{0, 0, DFTU_COND_UNKNOWN, box->error.c_str()};
+                dftu_error{0, 0, DFTU_E_UNKNOWN, box->error.c_str(), nullptr};
         }
         return nullptr;
     }

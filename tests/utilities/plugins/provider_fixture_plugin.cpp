@@ -131,8 +131,9 @@ int32_t failing_schema(void*, const char* const** out_names) {
 dftu_task* failing_next(void*, int64_t, ::dftu_result_frame* out) {
     g_failing_next_calls.fetch_add(1);
     out->ok = 0;
-    out->u.err = ::dftu_error{0, 0, DFTU_COND_IO,
-                              "provider_fixture: injected mid-stream failure"};
+    out->u.err =
+        ::dftu_error{0, 0, DFTU_E_IO,
+                     "provider_fixture: injected mid-stream failure", nullptr};
     return nullptr;
 }
 

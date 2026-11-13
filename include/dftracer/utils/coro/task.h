@@ -65,6 +65,10 @@ struct StopRequestedTag {};
 /// `co_await this_coro::stop_requested` is true when the next wait of this task
 /// would end it as cancelled, for a loop that computes without waits.
 inline constexpr StopRequestedTag stop_requested{};
+struct CancelViewTag {};
+/// `co_await this_coro::cancel_view` gives a @ref CancelView of this task, for
+/// synchronous code it calls that polls the cancel without a wait.
+inline constexpr CancelViewTag cancel_view{};
 }  // namespace this_coro
 
 namespace detail {
@@ -98,6 +102,7 @@ template <typename T>
 struct TaskResultOf {
     using type = dstd::Result<T>;
 };
+
 template <typename V>
 struct TaskResultOf<dstd::Expected<V, dstd::Error>> {
     using type = dstd::Expected<V, dstd::Error>;
@@ -241,6 +246,22 @@ struct PromiseBase : detail::FrameAllocation {
         cancelled = true;
         complete();
     }
+};
+
+/// Reads whether a task is cancelled, from code that runs while the task's
+/// frame is alive. An empty view never reports a cancel. Thread-safe.
+class CancelView {
+   public:
+    CancelView() = default;
+    explicit CancelView(const PromiseBase* promise) noexcept
+        : promise_(promise) {}
+
+    bool requested() const noexcept {
+        return promise_ != nullptr && promise_->cancel_requested();
+    }
+
+   private:
+    const PromiseBase* promise_{nullptr};
 };
 
 namespace detail {
@@ -464,6 +485,11 @@ class CoroTask {
         detail::ValueQuery<bool> await_transform(
             this_coro::StopRequestedTag) noexcept {
             return {this->cancel_requested()};
+        }
+
+        detail::ValueQuery<CancelView> await_transform(
+            this_coro::CancelViewTag) noexcept {
+            return {CancelView(this)};
         }
 
         detail::ExecutorQuery await_transform(this_coro::ExecutorTag) noexcept {

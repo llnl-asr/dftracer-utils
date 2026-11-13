@@ -94,7 +94,7 @@ TEST_CASE("plugin ops: unknown op and a failed op are distinguishable") {
     dftu_result_series unknown =
         ops->run(fx.host().h, "dftu.test.nonexistent_op", nullptr, 0, nullptr);
     CHECK_FALSE(DFTU_RESULT_OK(unknown));
-    CHECK(DFTU_RESULT_ERROR(unknown).condition == DFTU_COND_NOT_FOUND);
+    CHECK(DFTU_RESULT_ERROR(unknown).status == DFTU_E_NOT_FOUND);
 
     const std::int64_t a_vals[] = {1, 2, 3};
     dftu_series* a = dftu_series_new_flat(DFTU_TYPE_INT64, a_vals, 3, nullptr);
@@ -104,9 +104,9 @@ TEST_CASE("plugin ops: unknown op and a failed op are distinguishable") {
     dftu_result_series failed =
         ops->run(fx.host().h, "dftu.series.add", in, 1, nullptr);
     CHECK_FALSE(DFTU_RESULT_OK(failed));
-    CHECK(DFTU_RESULT_ERROR(failed).condition == DFTU_COND_INVALID_ARGUMENT);
-    CHECK(DFTU_RESULT_ERROR(failed).condition !=
-          DFTU_RESULT_ERROR(unknown).condition);
+    CHECK(DFTU_RESULT_ERROR(failed).status == DFTU_E_INVALID);
+    CHECK(DFTU_RESULT_ERROR(failed).status !=
+          DFTU_RESULT_ERROR(unknown).status);
     dftu_series_free(a);
 }
 

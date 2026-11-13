@@ -21,6 +21,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Make the store and index C functions return a `dftu_status`, give results through out-parameters and take a caller-owned `dftu_error` as the last parameter.
+  The error message is owned by the caller and freed with `dftu_error_release`, the enums are `int32_t` typedefs, and `dftu_store_pack_options` and `dftu_indexer_options` start with `struct_size`.
 - Make `to_pandas()` give pandas' nullable dtypes (`Int64`, `boolean`, `string`) for integer, bool and string columns that hold nulls, and `category` for a dictionary column, so `DataFrame.from_pandas(df).to_pandas()` keeps those dtypes.
   `from_pandas` keeps a `category` column with string categories as a dictionary column, in category order where pyarrow is installed, and `to_pandas` gives back only the categories that are used.
 - Make `to_polars()` give `Categorical` for a dictionary column and `from_polars` read a `Categorical` or `Enum` column as a dictionary column, where both were plain strings.

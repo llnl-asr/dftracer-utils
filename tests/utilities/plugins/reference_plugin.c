@@ -249,8 +249,8 @@ static dftu_task* node_next(void* self, int64_t max_rows,
     if (t && dftu_task_run(dftu_default_runtime(), t) != 0) {
         out->ok = 0;
         out->u.err =
-            (dftu_error){0, 0, DFTU_COND_INTERNAL,
-                         "reference_plugin.node: upstream task failed"};
+            (dftu_error){0, 0, DFTU_E_INTERNAL,
+                         "reference_plugin.node: upstream task failed", NULL};
         return NULL;
     }
     if (!DFTU_RESULT_OK(*out)) return NULL;

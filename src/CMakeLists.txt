@@ -128,6 +128,7 @@ set(DFTRACER_UTILS_DSTD_SOURCES
 # -----------------------------------------
 
 set(DFTRACER_UTILS_COMMON_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/abi_error.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/error.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/logging.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/symbolize.cpp
@@ -160,6 +161,7 @@ set(DFTRACER_UTILS_CORO_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/coro/combinators.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/coro/scope.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/coro/stop_token.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/coro/abi_context.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/coro/yield.cpp)
 
 # -----------------------------------------

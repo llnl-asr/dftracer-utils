@@ -2,6 +2,7 @@
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/types.h>
+#include <dftracer/utils/dstd/error.h>
 
 namespace dftracer::utils::dataframe {
 namespace {
@@ -13,6 +14,19 @@ constexpr std::int32_t code(E e) {
 
 static_assert(code(Encoding::View) == 4);
 static_assert(code(Encoding::Chunked) == 5);
+
+static_assert(-(code(dstd::Condition::Unknown) + 1) == DFTU_E_UNKNOWN);
+static_assert(-(code(dstd::Condition::Internal) + 1) == DFTU_E_INTERNAL);
+static_assert(-(code(dstd::Condition::InvalidArgument) + 1) == DFTU_E_INVALID);
+static_assert(-(code(dstd::Condition::NotFound) + 1) == DFTU_E_NOT_FOUND);
+static_assert(-(code(dstd::Condition::Io) + 1) == DFTU_E_IO);
+static_assert(-(code(dstd::Condition::Parse) + 1) == DFTU_E_PARSE);
+static_assert(-(code(dstd::Condition::Compression) + 1) == DFTU_E_COMPRESSION);
+static_assert(-(code(dstd::Condition::Timeout) + 1) == DFTU_E_TIMEOUT);
+static_assert(-(code(dstd::Condition::Unsupported) + 1) == DFTU_E_UNSUPPORTED);
+static_assert(-(code(dstd::Condition::Cancelled) + 1) == DFTU_E_CANCELLED);
+static_assert(-(code(dstd::Condition::ForkedHandle) + 1) ==
+              DFTU_E_FORKED_HANDLE);
 
 static_assert(code(CmpOp::Gt) == DFTU_CMP_GT);
 static_assert(code(CmpOp::Ge) == DFTU_CMP_GE);

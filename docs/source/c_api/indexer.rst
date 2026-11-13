@@ -9,8 +9,8 @@ Indexer
    :doc:`../guides/core/indexing` for the indexing model.
 
 The flat C interface to the indexer. Include ``dftracer/utils/trace/index/abi.h``.
-Calls block until done and return a ``DFTU_RESULT`` value-or-error; an
-error message is borrowed until the next call on the same indexer. Every
+Calls block until done and return a ``dftu_status``, give the result through an
+out-parameter and fill a caller-owned ``dftu_error`` on failure. Every
 build makes the aggregation tier, and the indexer options set its interval and
 percentiles. Bloom tuning, a caller-chosen runtime and the async forms are C++
 only.

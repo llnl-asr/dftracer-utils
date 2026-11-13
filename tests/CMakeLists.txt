@@ -414,6 +414,7 @@ set(TEST_CPP_SOURCES
     store/test_segment.cpp
     store/test_file.cpp
     store/test_snapshot.cpp
+    store/test_store_abi_errors.cpp
     store/test_extent_codec.cpp
     store/test_page_cache.cpp
     store/test_scope_filter.cpp

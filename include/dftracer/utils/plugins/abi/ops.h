@@ -37,8 +37,8 @@ typedef struct dftu_svc_ops {
     /** find(name) then dftu_op_run: `in` are `n_in` borrowed input columns,
        `args` supplies the op's other operands (NULL if none). On success
        carries a new owned column (free with dftu_series_free); on failure
-       carries a dftu_error - DFTU_COND_NOT_FOUND for an unknown `name`,
-       DFTU_COND_INVALID_ARGUMENT when the call mismatches the op's
+       carries a dftu_error - DFTU_E_NOT_FOUND for an unknown `name`,
+       DFTU_E_INVALID when the call mismatches the op's
        kind/arity/shape. */
     DFTU_RESULT_MUST_CHECK dftu_result_series (*run)(
         void* h, const char* name, const dftu_series* const* in, uint32_t n_in,

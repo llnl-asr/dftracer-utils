@@ -9,7 +9,9 @@
 /*
  * Stable C ABI for the key-value store; mirrors dftracer::utils::store::Store
  * and the types around it (see store/store.h). No C++ type or exception
- * crosses this boundary: a failure comes back as a dftu_error in the result.
+ * crosses this boundary. A fallible function returns a dftu_status, gives its
+ * result through an out-parameter and takes a caller-owned dftu_error as its
+ * last parameter; see common/abi.h.
  *
  * Blocking: each call that wraps a coroutine (commit, publish, flush, close,
  * pack) runs it to the end on the default runtime and returns when it is done.
@@ -17,10 +19,10 @@
  * worker's run slot to the pool for the wait, as dftracer::utils::Runtime
  * block_on does. Every other call returns without waiting for the runtime.
  *
- * Errors: the message of a dftu_error is BORROWED. It stays valid until the
- * next dftu_store_* call on the same thread; copy it if it must live longer.
- * The one exception is dftu_store_cursor_error, whose message lives as long as
- * its cursor.
+ * Errors: a failing call fills `err` (which may be NULL) and leaves its other
+ * out-parameters unchanged, except that an out pointer is set to NULL. A
+ * successful call leaves `err` as it was. The caller releases a filled `err`
+ * with dftu_error_release.
  *
  * Ownership: a handle a function returns is owned by the caller, who frees it
  * with the matching *_free call. Every *_free call takes NULL. A handle stays
@@ -31,7 +33,7 @@
  * where its size or count is 0, or where a function says so.
  *
  * Fork: a store handle that a fork child inherited makes every call fail with
- * DFTU_COND_FORKED_HANDLE. The child calls dftu_store_open for a handle of its
+ * DFTU_E_FORKED_HANDLE. The child calls dftu_store_open for a handle of its
  * own.
  *
  * C++ only: the codec of a namespace, put_ref, Store::erase, the multi-scope
@@ -51,7 +53,8 @@ typedef struct dftu_store_value_s dftu_store_value_t;
 typedef struct dftu_store_value_list_s dftu_store_value_list_t;
 
 /** Matches dftracer::utils::store::FoldKind. Append only. */
-typedef enum {
+typedef int32_t dftu_store_fold_kind;
+enum {
     DFTU_STORE_FOLD_NONE = 0,
     DFTU_STORE_FOLD_SUM_I64 = 1,
     DFTU_STORE_FOLD_SUM_F64 = 2,
@@ -62,29 +65,32 @@ typedef enum {
     DFTU_STORE_FOLD_COUNT = 7,
     DFTU_STORE_FOLD_LAST = 8,
     DFTU_STORE_FOLD_CONCAT = 9
-} dftu_store_fold_kind;
+};
 
 /** Matches dftracer::utils::store::ScopeKind. */
-typedef enum {
+typedef int32_t dftu_store_scope_kind;
+enum {
     DFTU_STORE_SCOPE_ROOT = 0, /**< no paths */
     DFTU_STORE_SCOPE_FILE = 1, /**< exactly one path */
     DFTU_STORE_SCOPE_FILES = 2 /**< one or more paths; sorted, deduplicated */
-} dftu_store_scope_kind;
+};
 
 /** Matches dftracer::utils::store::ScopeState. */
-typedef enum {
+typedef int32_t dftu_store_scope_state;
+enum {
     DFTU_STORE_STATE_ABSENT = 0,
     DFTU_STORE_STATE_READY = 1,
     DFTU_STORE_STATE_FAILED = 2,
     DFTU_STORE_STATE_BAD = 3
-} dftu_store_scope_state;
+};
 
 /** The change of one dftu_store_publish_target. */
-typedef enum {
+typedef int32_t dftu_store_publish_change;
+enum {
     DFTU_STORE_PUBLISH_READY = 0,  /**< the building copy becomes current */
     DFTU_STORE_PUBLISH_FAILED = 1, /**< record a Failed copy */
     DFTU_STORE_PUBLISH_DROPPED = 2 /**< hide the whole scope */
-} dftu_store_publish_change;
+};
 
 /** A scope: a kind and its paths. `paths` and each path are read during the
  * call only. */
@@ -123,8 +129,12 @@ typedef struct dftu_store_publish_target {
     int32_t replaces_older;
 } dftu_store_publish_target;
 
-/** Fill with dftu_store_pack_options_init before setting fields. */
+/** Fill with dftu_store_pack_options_init before setting fields. A caller
+ * that builds one by hand sets `struct_size` to its sizeof; a library newer
+ * than the caller uses the defaults for the fields the caller does not
+ * have. */
 typedef struct dftu_store_pack_options {
+    uint32_t struct_size;
     uint64_t small_file_bytes; /**< closed files below this merge into one */
     double dead_ratio;         /**< rewrite a file past this dead share */
     uint64_t keep_seconds;     /**< age before a replaced file is deleted */
@@ -148,42 +158,30 @@ typedef struct dftu_store_copy {
     uint64_t source_count;
 } dftu_store_copy;
 
-/** `value` is 0 and carries nothing when a call has no result of its own. */
-DFTU_RESULT_DECL(dftu_store_void_result, int32_t);
-DFTU_RESULT_DECL(dftu_store_open_result, dftu_store_t*);
-DFTU_RESULT_DECL(dftu_store_ns_result, dftu_store_ns_t*);
-DFTU_RESULT_DECL(dftu_store_batch_result, dftu_store_batch_t*);
-DFTU_RESULT_DECL(dftu_store_snapshot_result, dftu_store_snapshot_t*);
-DFTU_RESULT_DECL(dftu_store_cursor_result, dftu_store_cursor_t*);
-DFTU_RESULT_DECL(dftu_store_value_result, dftu_store_value_t*);
-DFTU_RESULT_DECL(dftu_store_value_list_result, dftu_store_value_list_t*);
-DFTU_RESULT_DECL(dftu_store_bytes_result, dftu_store_bytes);
-DFTU_RESULT_DECL(dftu_store_pack_result, dftu_store_pack_report);
-DFTU_RESULT_DECL(dftu_store_copy_result, dftu_store_copy);
-
 /** Open the store in directory `dir`, creating it when it does not exist.
  * Every handle to one directory in this process shares its state. On success
- * the caller owns the handle; free it with dftu_store_free. A NULL `dir` fails
- * with DFTU_COND_INVALID_ARGUMENT. Freeing the last handle to a directory
- * closes its writer but drops a failure: call dftu_store_close first to learn
- * of one. The first call also applies the memory settings from the
+ * `*out` is a handle the caller owns; free it with dftu_store_free. A NULL
+ * `dir` or `out` fails with DFTU_E_INVALID. Freeing the last handle to a
+ * directory closes its writer but drops a failure: call dftu_store_close first
+ * to learn of one. The first call also applies the memory settings from the
  * environment, as the command line tools do at start. */
-DFTU_EXPORT DFTU_RESULT_MUST_CHECK dftu_store_open_result
-dftu_store_open(const char* dir);
+DFTU_EXPORT dftu_status dftu_store_open(const char* dir, dftu_store_t** out,
+                                        dftu_error* err);
 
 /** NULL is a no-op. */
 DFTU_EXPORT void dftu_store_free(dftu_store_t* store);
 
 /** Register a namespace with this process's writer. The same name and
  * settings twice return an equal handle; the same name with other settings
- * fails with DFTU_COND_INVALID_ARGUMENT. `name` must not be empty. `fold` is a
+ * fails with DFTU_E_INVALID. `name` must not be empty. `fold` is a
  * dftu_store_fold_kind value; `durable` and `shared` are bools. In a shared
  * namespace each scope holds the keys of every writer; it needs
- * DFTU_STORE_FOLD_NONE and refuses erases. On success the caller owns the
- * handle; free it with dftu_store_ns_free. */
-DFTU_EXPORT DFTU_RESULT_MUST_CHECK dftu_store_ns_result
-dftu_store_ns(dftu_store_t* store, const char* name, uint32_t format_version,
-              int32_t fold, int32_t durable, int32_t shared);
+ * DFTU_STORE_FOLD_NONE and refuses erases. On success `*out` is a handle the
+ * caller owns; free it with dftu_store_ns_free. */
+DFTU_EXPORT dftu_status dftu_store_ns(dftu_store_t* store, const char* name,
+                                      uint32_t format_version, int32_t fold,
+                                      int32_t durable, int32_t shared,
+                                      dftu_store_ns_t** out, dftu_error* err);
 
 /** NULL is a no-op. */
 DFTU_EXPORT void dftu_store_ns_free(dftu_store_ns_t* ns);
@@ -192,130 +190,137 @@ DFTU_EXPORT void dftu_store_ns_free(dftu_store_ns_t* ns);
  * NULL or `source_count` entries, one per path of the scope in its path order.
  * The batch copies what it is given. A write error of the batch, such as a put
  * into a fold namespace, is reported by dftu_store_batch_commit. On success
- * the caller owns the batch; commit it with dftu_store_batch_commit, which
- * consumes it, or free it with dftu_store_batch_free to discard it. */
-DFTU_EXPORT DFTU_RESULT_MUST_CHECK dftu_store_batch_result
+ * `*out` is a batch the caller owns; commit it with dftu_store_batch_commit,
+ * which consumes it, or free it with dftu_store_batch_free to discard it. */
+DFTU_EXPORT dftu_status
 dftu_store_batch(dftu_store_t* store, const dftu_store_ns_t* ns,
                  const dftu_store_scope* scope, uint64_t params_hash,
-                 const dftu_store_source_stat* sources, uint64_t source_count);
+                 const dftu_store_source_stat* sources, uint64_t source_count,
+                 dftu_store_batch_t** out, dftu_error* err);
 
 /** A batch of a new copy of `scope` that no reader sees until
  * dftu_store_publish. Ownership as dftu_store_batch. */
-DFTU_EXPORT DFTU_RESULT_MUST_CHECK dftu_store_batch_result
-dftu_store_building_batch(dftu_store_t* store, const dftu_store_ns_t* ns,
-                          const dftu_store_scope* scope);
+DFTU_EXPORT dftu_status dftu_store_building_batch(dftu_store_t* store,
+                                                  const dftu_store_ns_t* ns,
+                                                  const dftu_store_scope* scope,
+                                                  dftu_store_batch_t** out,
+                                                  dftu_error* err);
 
 /** Add a key and value. The bytes are copied. A fold namespace rejects it at
  * commit. A NULL `batch`, or a NULL pointer with a size above 0, fails with
- * DFTU_COND_INVALID_ARGUMENT. */
-DFTU_EXPORT DFTU_RESULT_MUST_CHECK dftu_store_void_result dftu_store_batch_put(
+ * DFTU_E_INVALID. */
+DFTU_EXPORT dftu_status dftu_store_batch_put(
     dftu_store_batch_t* batch, const uint8_t* key, uint64_t key_size,
-    const uint8_t* value, uint64_t value_size);
+    const uint8_t* value, uint64_t value_size, dftu_error* err);
 
 /** Add a fold input to `key`. A numeric fold needs an 8 byte value; a
  * namespace without a fold rejects it at commit. Arguments as
  * dftu_store_batch_put. */
-DFTU_EXPORT DFTU_RESULT_MUST_CHECK dftu_store_void_result dftu_store_batch_fold(
+DFTU_EXPORT dftu_status dftu_store_batch_fold(
     dftu_store_batch_t* batch, const uint8_t* key, uint64_t key_size,
-    const uint8_t* value, uint64_t value_size);
+    const uint8_t* value, uint64_t value_size, dftu_error* err);
 
 /** Hide `key` in the copy of this batch's scope. The erases of a batch apply
- * before its puts. Commit reports DFTU_COND_UNSUPPORTED when another data file
+ * before its puts. Commit reports DFTU_E_UNSUPPORTED when another data file
  * holds the current copy. */
-DFTU_EXPORT DFTU_RESULT_MUST_CHECK dftu_store_void_result
-dftu_store_batch_erase(dftu_store_batch_t* batch, const uint8_t* key,
-                       uint64_t key_size);
+DFTU_EXPORT dftu_status dftu_store_batch_erase(dftu_store_batch_t* batch,
+                                               const uint8_t* key,
+                                               uint64_t key_size,
+                                               dftu_error* err);
 
 /** Hide every key in [begin, end). `end_size` 0 means to the last key. */
-DFTU_EXPORT DFTU_RESULT_MUST_CHECK dftu_store_void_result
-dftu_store_batch_erase_range(dftu_store_batch_t* batch, const uint8_t* begin,
-                             uint64_t begin_size, const uint8_t* end,
-                             uint64_t end_size);
+DFTU_EXPORT dftu_status dftu_store_batch_erase_range(
+    dftu_store_batch_t* batch, const uint8_t* begin, uint64_t begin_size,
+    const uint8_t* end, uint64_t end_size, dftu_error* err);
 
 /** Commit and consume the batch: the handle is freed whether the call
  * succeeds or fails, so do not use or free it afterward. Waits for writer
  * space when the writer is busy. A reader sees the batch after
  * dftu_store_flush, dftu_store_publish or dftu_store_close, or once its extent
- * fills. A NULL batch fails with DFTU_COND_INVALID_ARGUMENT. */
-DFTU_EXPORT DFTU_RESULT_MUST_CHECK dftu_store_void_result
-dftu_store_batch_commit(dftu_store_batch_t* batch);
+ * fills. A NULL batch fails with DFTU_E_INVALID. */
+DFTU_EXPORT dftu_status dftu_store_batch_commit(dftu_store_batch_t* batch,
+                                                dftu_error* err);
 
 /** Discard a batch that was not committed. NULL is a no-op. */
 DFTU_EXPORT void dftu_store_batch_free(dftu_store_batch_t* batch);
 
 /** Flush, then apply every change of `targets` in one record: a reader sees
  * all of them or none. A bad target changes nothing. `n` 0 only flushes. */
-DFTU_EXPORT DFTU_RESULT_MUST_CHECK dftu_store_void_result dftu_store_publish(
-    dftu_store_t* store, const dftu_store_publish_target* targets, uint64_t n);
+DFTU_EXPORT dftu_status dftu_store_publish(
+    dftu_store_t* store, const dftu_store_publish_target* targets, uint64_t n,
+    dftu_error* err);
 
 /** Record a Failed copy of `scope` with `params_hash`. */
-DFTU_EXPORT DFTU_RESULT_MUST_CHECK dftu_store_void_result
-dftu_store_fail(dftu_store_t* store, const dftu_store_ns_t* ns,
-                const dftu_store_scope* scope, uint64_t params_hash);
+DFTU_EXPORT dftu_status dftu_store_fail(dftu_store_t* store,
+                                        const dftu_store_ns_t* ns,
+                                        const dftu_store_scope* scope,
+                                        uint64_t params_hash, dftu_error* err);
 
 /** Hide the whole scope. */
-DFTU_EXPORT DFTU_RESULT_MUST_CHECK dftu_store_void_result
-dftu_store_drop(dftu_store_t* store, const dftu_store_ns_t* ns,
-                const dftu_store_scope* scope);
+DFTU_EXPORT dftu_status dftu_store_drop(dftu_store_t* store,
+                                        const dftu_store_ns_t* ns,
+                                        const dftu_store_scope* scope,
+                                        dftu_error* err);
 
 /** Make the committed batches visible to readers. */
-DFTU_EXPORT DFTU_RESULT_MUST_CHECK dftu_store_void_result
-dftu_store_flush(dftu_store_t* store);
+DFTU_EXPORT dftu_status dftu_store_flush(dftu_store_t* store, dftu_error* err);
 
 /** Look for new data of other processes now. dftu_store_snapshot looks at most
  * once per second, so a reader that must see what another process just flushed
  * calls this first. */
-DFTU_EXPORT DFTU_RESULT_MUST_CHECK dftu_store_void_result
-dftu_store_refresh(dftu_store_t* store);
+DFTU_EXPORT dftu_status dftu_store_refresh(dftu_store_t* store,
+                                           dftu_error* err);
 
 /** Flush and close this process's writer. A later write opens a new one. */
-DFTU_EXPORT DFTU_RESULT_MUST_CHECK dftu_store_void_result
-dftu_store_close(dftu_store_t* store);
+DFTU_EXPORT dftu_status dftu_store_close(dftu_store_t* store, dftu_error* err);
 
-/** The defaults of @ref dftracer::utils::store::PackOptions "PackOptions". */
+/** The defaults of @ref dftracer::utils::store::PackOptions "PackOptions",
+ * with `struct_size` set. */
 DFTU_EXPORT void dftu_store_pack_options_init(dftu_store_pack_options* out);
 
 /** Close this process's writer, rewrite the current copies of the chosen files
  * into one new file and delete the files `options` lets go; see
  * dftracer::utils::store::Store::pack. Run it with no other writer active in
- * the directory. `options` NULL = defaults; it is read during the call. */
-DFTU_EXPORT DFTU_RESULT_MUST_CHECK dftu_store_pack_result
-dftu_store_pack(dftu_store_t* store, const dftu_store_pack_options* options);
+ * the directory. `options` NULL = defaults; it is read during the call, and a
+ * `struct_size` that does not reach the first field fails with DFTU_E_INVALID.
+ * On success `*out` holds the report. */
+DFTU_EXPORT dftu_status dftu_store_pack(dftu_store_t* store,
+                                        const dftu_store_pack_options* options,
+                                        dftu_store_pack_report* out,
+                                        dftu_error* err);
 
-/** A point-in-time view of every data file of the store. On success the
- * caller owns it; free it with dftu_store_snapshot_free. Values and cursors
- * taken from it keep it alive. */
-DFTU_EXPORT DFTU_RESULT_MUST_CHECK dftu_store_snapshot_result
-dftu_store_snapshot(dftu_store_t* store);
+/** A point-in-time view of every data file of the store. On success `*out` is
+ * a snapshot the caller owns; free it with dftu_store_snapshot_free. Values and
+ * cursors taken from it keep it alive. */
+DFTU_EXPORT dftu_status dftu_store_snapshot(dftu_store_t* store,
+                                            dftu_store_snapshot_t** out,
+                                            dftu_error* err);
 
 /** NULL is a no-op. */
 DFTU_EXPORT void dftu_store_snapshot_free(dftu_store_snapshot_t* snapshot);
 
-/** The current copy of `scope`. Fills `out`. When `sources` is not NULL, up to
+/** The current copy of `scope`. Fills `*out`. When `sources` is not NULL, up to
  * `capacity` source signatures are copied to it; `out->source_count` is the
  * full count, so call with `sources` NULL and `capacity` 0 to size an array. */
-DFTU_EXPORT DFTU_RESULT_MUST_CHECK dftu_store_copy_result
-dftu_store_snapshot_copy_info(const dftu_store_snapshot_t* snapshot,
-                              const dftu_store_ns_t* ns,
-                              const dftu_store_scope* scope,
-                              dftu_store_source_stat* sources,
-                              uint64_t capacity);
+DFTU_EXPORT dftu_status dftu_store_snapshot_copy_info(
+    const dftu_store_snapshot_t* snapshot, const dftu_store_ns_t* ns,
+    const dftu_store_scope* scope, dftu_store_source_stat* sources,
+    uint64_t capacity, dftu_store_copy* out, dftu_error* err);
 
-/** The value of `key`. A missing key succeeds with a NULL value. Otherwise the
+/** The value of `key`. A missing key succeeds with `*out` NULL. Otherwise the
  * caller owns the value; free it with dftu_store_value_free. */
-DFTU_EXPORT DFTU_RESULT_MUST_CHECK dftu_store_value_result
-dftu_store_snapshot_get(const dftu_store_snapshot_t* snapshot,
-                        const dftu_store_ns_t* ns,
-                        const dftu_store_scope* scope, const uint8_t* key,
-                        uint64_t key_size);
+DFTU_EXPORT dftu_status dftu_store_snapshot_get(
+    const dftu_store_snapshot_t* snapshot, const dftu_store_ns_t* ns,
+    const dftu_store_scope* scope, const uint8_t* key, uint64_t key_size,
+    dftu_store_value_t** out, dftu_error* err);
 
 /** One result per key in `n` keys, in order. `keys` is read during the call.
- * The caller owns the list; free it with dftu_store_value_list_free. */
-DFTU_EXPORT DFTU_RESULT_MUST_CHECK dftu_store_value_list_result
-dftu_store_snapshot_multi_get(const dftu_store_snapshot_t* snapshot,
-                              const dftu_store_ns_t* ns,
-                              const dftu_store_scope* scope,
-                              const dftu_store_bytes* keys, uint64_t n);
+ * The caller owns the list in `*out`; free it with dftu_store_value_list_free.
+ */
+DFTU_EXPORT dftu_status dftu_store_snapshot_multi_get(
+    const dftu_store_snapshot_t* snapshot, const dftu_store_ns_t* ns,
+    const dftu_store_scope* scope, const dftu_store_bytes* keys, uint64_t n,
+    dftu_store_value_list_t** out, dftu_error* err);
 
 /** The bytes of a value, valid until the value is freed. A NULL value gives
  * {NULL, 0}. */
@@ -340,27 +345,26 @@ DFTU_EXPORT void dftu_store_value_list_free(dftu_store_value_list_t* list);
 
 /** A scan of the keys that start with `prefix`, in key order. The cursor
  * starts before the first entry: call dftu_store_cursor_next to reach it. The
- * caller owns the cursor; free it with dftu_store_cursor_free. */
-DFTU_EXPORT DFTU_RESULT_MUST_CHECK dftu_store_cursor_result
-dftu_store_snapshot_scan_prefix(const dftu_store_snapshot_t* snapshot,
-                                const dftu_store_ns_t* ns,
-                                const dftu_store_scope* scope,
-                                const uint8_t* prefix, uint64_t prefix_size);
+ * caller owns the cursor in `*out`; free it with dftu_store_cursor_free. */
+DFTU_EXPORT dftu_status dftu_store_snapshot_scan_prefix(
+    const dftu_store_snapshot_t* snapshot, const dftu_store_ns_t* ns,
+    const dftu_store_scope* scope, const uint8_t* prefix, uint64_t prefix_size,
+    dftu_store_cursor_t** out, dftu_error* err);
 
 /** A scan of the keys in [begin, end). `end_size` 0 means to the last key.
  * Ownership as dftu_store_snapshot_scan_prefix. */
-DFTU_EXPORT DFTU_RESULT_MUST_CHECK dftu_store_cursor_result
-dftu_store_snapshot_scan_range(const dftu_store_snapshot_t* snapshot,
-                               const dftu_store_ns_t* ns,
-                               const dftu_store_scope* scope,
-                               const uint8_t* begin, uint64_t begin_size,
-                               const uint8_t* end, uint64_t end_size);
+DFTU_EXPORT dftu_status dftu_store_snapshot_scan_range(
+    const dftu_store_snapshot_t* snapshot, const dftu_store_ns_t* ns,
+    const dftu_store_scope* scope, const uint8_t* begin, uint64_t begin_size,
+    const uint8_t* end, uint64_t end_size, dftu_store_cursor_t** out,
+    dftu_error* err);
 
-/** Move to the next entry. Returns 1 when the cursor is on an entry, 0 at the
- * end (check dftu_store_cursor_error to tell the end from a failure) and -1 for
- * a NULL cursor. A failure while moving ends the cursor and is reported by
- * dftu_store_cursor_error. */
-DFTU_EXPORT int32_t dftu_store_cursor_next(dftu_store_cursor_t* cursor);
+/** Move to the next entry. Returns DFTU_OK when the cursor is on an entry and
+ * DFTU_END at a clean end. A cursor that stopped on a failure returns that
+ * failure, with its message in `err`, on this call and on every later one. A
+ * NULL cursor fails with DFTU_E_INVALID. */
+DFTU_EXPORT dftu_status dftu_store_cursor_next(dftu_store_cursor_t* cursor,
+                                               dftu_error* err);
 
 /** The key of the current entry, valid until the next dftu_store_cursor_next
  * or dftu_store_cursor_free. {NULL, 0} when the cursor is NULL, not yet moved
@@ -368,15 +372,12 @@ DFTU_EXPORT int32_t dftu_store_cursor_next(dftu_store_cursor_t* cursor);
 DFTU_EXPORT dftu_store_bytes
 dftu_store_cursor_key(const dftu_store_cursor_t* cursor);
 
-/** The value of the current entry, valid as the key is. A cursor that is NULL,
- * not yet moved or at its end, or a block that cannot be read, fails. */
-DFTU_EXPORT DFTU_RESULT_MUST_CHECK dftu_store_bytes_result
-dftu_store_cursor_value(dftu_store_cursor_t* cursor);
-
-/** Returns 1 and fills `out` when the cursor stopped on a failure, else
- * 0. The message in `out` lives as long as the cursor. */
-DFTU_EXPORT int32_t dftu_store_cursor_error(const dftu_store_cursor_t* cursor,
-                                            dftu_error* out);
+/** The value of the current entry in `*out`, valid as the key is. A cursor
+ * that is NULL, not yet moved or at its end, or a block that cannot be read,
+ * fails. */
+DFTU_EXPORT dftu_status dftu_store_cursor_value(dftu_store_cursor_t* cursor,
+                                                dftu_store_bytes* out,
+                                                dftu_error* err);
 
 /** NULL is a no-op. */
 DFTU_EXPORT void dftu_store_cursor_free(dftu_store_cursor_t* cursor);

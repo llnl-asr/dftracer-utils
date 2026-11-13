@@ -1662,7 +1662,7 @@ class HostCursorBridge {
         last_error_ = error.c_str();
         out->ok = 0;
         out->u.err =
-            ::dftu_error{0, 0, DFTU_COND_INTERNAL, last_error_.c_str()};
+            ::dftu_error{0, 0, DFTU_E_INTERNAL, last_error_.c_str(), nullptr};
     }
 
     // Writes one read of cursor_ into *out: a frame, end of stream or error.

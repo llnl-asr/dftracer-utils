@@ -18,10 +18,12 @@ BuildHost& self_of(void* h) { return *static_cast<BuildHost*>(h); }
 
 ::dftu_error denied_error() {
     return ::dftu_error{dftracer::utils::dstd::CORE_ERROR_DOMAIN.id,
-                        static_cast<std::int32_t>(DFTU_COND_UNSUPPORTED),
-                        DFTU_COND_UNSUPPORTED,
+                        static_cast<std::int32_t>(
+                            dftracer::utils::dstd::Condition::Unsupported),
+                        DFTU_E_UNSUPPORTED,
                         "not available at load: the factory host offers "
-                        "registration only"};
+                        "registration only",
+                        nullptr};
 }
 
 ::dftu_result_series build_ops_run(void* h, const char*,

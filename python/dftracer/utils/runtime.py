@@ -14,6 +14,7 @@ from typing import (
     Generic,
     List,
     Optional,
+    Tuple,
     TypedDict,
     TypeVar,
     Union,
@@ -122,7 +123,7 @@ class TaskHandle(Generic[T_co]):
         assert h.done()
     """
 
-    __slots__ = ("_native", "_get", "_future", "_name", "_task_id", "_exception")
+    __slots__ = ("_native", "_get", "_future", "_name", "_task_id", "_exception", "_finished")
 
     @overload
     def __init__(
@@ -170,11 +171,17 @@ class TaskHandle(Generic[T_co]):
         self._name = name
         self._task_id = task_id
         self._exception: Optional[BaseException] = None
+        self._finished: "Optional[Tuple[T_co]]" = None
 
     def get(self) -> T_co:
-        """Block until task completes and return result. Raises on error."""
+        """Block until task completes and return result. Raises on error.
+
+        A native task converts its result once, so every get() returns the
+        same object."""
         if self._get is not None:
-            return self._get()
+            if self._finished is None:
+                self._finished = (self._get(),)
+            return self._finished[0]
         if self._future is not None:
             return self._future.result()
         return None  # type: ignore[return-value]  # ty: ignore[invalid-explicit-return]  # no backing future

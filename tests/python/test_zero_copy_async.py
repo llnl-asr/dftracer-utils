@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Collecting a frame through the async handle keeps the column buffers."""
 
 import asyncio

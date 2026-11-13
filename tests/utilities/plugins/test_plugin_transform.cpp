@@ -39,15 +39,21 @@ namespace {
 
 constexpr int EVENTS = 40;  // pid 1 and 2 alternate; dur = 10 + i
 
-void* make_empty_slice(void*) { return new int(0); }
+dftu_status make_empty_slice(dftu_ctx*, void*, void** out) {
+    *out = new int(0);
+    return DFTU_OK;
+}
 void destroy_empty_slice(void* slice) { delete static_cast<int*>(slice); }
-void no_merge(void*, void*) {}
+dftu_status no_merge(dftu_ctx*, void*, void*) { return DFTU_OK; }
 void no_destroy(void*) {}
-dftu_task* no_finalize(void*, const dftu_plugin_host*) { return nullptr; }
+dftu_status no_finalize(dftu_ctx*, void*, const dftu_plugin_host*,
+                        dftu_task**) {
+    return DFTU_OK;
+}
 
 dftu_plugin make_bare_plugin() {
     dftu_plugin p{};
-    p.abi_version = DFTRACER_UTILS_PLUGIN_ABI_VERSION;
+    p.struct_size = sizeof(p);
     p.make_slice = make_empty_slice;
     p.merge = no_merge;
     p.on_finalize = no_finalize;
@@ -96,10 +102,10 @@ void record(Seen& seen, const dftu_dataframe* df) {
 // ---- "before": ordered ahead of the transform; sees the scan as it is.
 const char* const g_before_provides[2] = {"t.before", nullptr};
 const char* const* before_provides(void*) { return g_before_provides; }
-dftu_task* before_on_batch(void*, const dftu_dataframe* df,
-                           const dftu_plugin_host*) {
+dftu_status before_on_batch(dftu_ctx*, void*, const dftu_dataframe* df,
+                            const dftu_plugin_host*) {
     record(g_before, df);
-    return nullptr;
+    return DFTU_OK;
 }
 dftu_plugin make_before() {
     dftu_plugin p = make_bare_plugin();
@@ -117,8 +123,8 @@ const char* const* xform_provides(void*) { return g_xform_provides; }
 const char* const g_xform_reads[2] = {"dur", nullptr};
 const char* const* xform_reads(void*) { return g_xform_reads; }
 
-dftu_dataframe* xform_transform(void*, const dftu_dataframe* df,
-                                const dftu_plugin_host*) {
+dftu_status xform_transform(dftu_ctx*, void*, const dftu_dataframe* df,
+                            const dftu_plugin_host*, dftu_dataframe** out) {
     dftu_series* pid = dftu_dataframe_column(df, "pid");
     dftu_series* dur = dftu_dataframe_column(df, "dur");
     REQUIRE(pid);  // reads declared dur only; a transform still sees pid
@@ -144,7 +150,8 @@ dftu_dataframe* xform_transform(void*, const dftu_dataframe* df,
         dftu_series_new_flat(DFTU_TYPE_UINT64, pids.data(), n, nullptr),
         dftu_series_new_flat(DFTU_TYPE_UINT64, durs.data(), n, nullptr),
         dftu_series_new_flat(DFTU_TYPE_UINT64, twice.data(), n, nullptr)};
-    return dftu_dataframe_new(names, cols, 3);
+    *out = dftu_dataframe_new(names, cols, 3);
+    return DFTU_OK;
 }
 
 dftu_plugin make_xform() {
@@ -161,10 +168,10 @@ const char* const g_after_consumes[2] = {"t.rewritten", nullptr};
 const char* const* after_consumes(void*) { return g_after_consumes; }
 const char* const g_after_reads[3] = {"dur", "twice", nullptr};
 const char* const* after_reads(void*) { return g_after_reads; }
-dftu_task* after_on_batch(void*, const dftu_dataframe* df,
-                          const dftu_plugin_host*) {
+dftu_status after_on_batch(dftu_ctx*, void*, const dftu_dataframe* df,
+                           const dftu_plugin_host*) {
     record(g_after, df);
-    return nullptr;
+    return DFTU_OK;
 }
 dftu_plugin make_after() {
     dftu_plugin p = make_bare_plugin();
@@ -178,10 +185,10 @@ dftu_plugin make_after() {
 // re-apply to the rewritten rows (dur is doubled there, so the bound selects
 // against the rewritten values, not the scanned ones).
 const char* after_query_plan_duql(void*) { return "dur > 60"; }
-dftu_task* after_query_on_batch(void*, const dftu_dataframe* df,
-                                const dftu_plugin_host*) {
+dftu_status after_query_on_batch(dftu_ctx*, void*, const dftu_dataframe* df,
+                                 const dftu_plugin_host*) {
     record(g_after_query, df);
-    return nullptr;
+    return DFTU_OK;
 }
 dftu_plugin make_after_query() {
     dftu_plugin p = make_bare_plugin();

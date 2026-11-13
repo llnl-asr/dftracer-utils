@@ -146,11 +146,20 @@ PyMODINIT_FUNC PyInit_dftracer_utils_ext(void) {
     PyModule_AddIntConstant(
         m, "NUM_SHARDS",
         dftracer::utils::trace::index::schemas::dft::agg::AGG_KEY_NUM_SHARDS);
-    // A JIT plugin built in a source tree stamps this version, so it matches
-    // the host it is loaded into.
+    // A JIT plugin built in a source tree stamps this version and the header
+    // hash, so it matches the host it is loaded into.
     if (PyModule_AddIntConstant(m, "PLUGIN_ABI_VERSION",
                                 DFTRACER_UTILS_PLUGIN_ABI_VERSION) < 0)
         return NULL;
+    {
+        PyObject* hash = PyLong_FromUnsignedLongLong(
+            static_cast<unsigned long long>(DFTRACER_UTILS_PLUGIN_ABI_HASH));
+        if (!hash) return NULL;
+        if (PyModule_AddObject(m, "PLUGIN_ABI_HASH", hash) < 0) {
+            Py_DECREF(hash);
+            return NULL;
+        }
+    }
     {
         const auto& patterns =
             dftracer::utils::common::constants::indexer::INPUT_FILE_PATTERNS;

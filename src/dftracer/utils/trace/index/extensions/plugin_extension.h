@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_TRACE_INDEX_EXTENSIONS_PLUGIN_EXTENSION_H
 #define DFTRACER_UTILS_TRACE_INDEX_EXTENSIONS_PLUGIN_EXTENSION_H
 
+#include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
@@ -36,10 +37,11 @@ struct PluginExtension {
 
 using PluginExtensionPtr = dstd::SharedPtr<const PluginExtension>;
 
-/// Adds `vt`/`self` under `name`. Returns false, logging why, when `vt` or a
-/// required callback is NULL or the name is taken.
-bool register_plugin_extension(dstd::StringView name,
-                               const ::dftu_index_extension* vt, void* self);
+/// Adds `vt`/`self` under `name`. Fails when `vt` has a wrong struct_size or a
+/// required callback is NULL, or the name is taken.
+dstd::Result<void> register_plugin_extension(dstd::StringView name,
+                                             const ::dftu_index_extension* vt,
+                                             void* self);
 void unregister_plugin_extension(dstd::StringView name);
 /// The registered extensions, sorted by name. The entries stay valid after
 /// unregistration, but their callbacks only while the plugin is loaded.
@@ -67,10 +69,14 @@ class PluginBuilders {
         PluginExtensionPtr ext;
         void* builder = nullptr;
         bool chunk_failed = false;
+        bool step_failed = false;
+        bool reported = false;
         dstd::Vector<dstd::Pair<std::uint64_t, dstd::String>> granules;
         dstd::Optional<dstd::String> file;
     };
     void end_granule();
+    static void report(Built& built, const char* callback, dftu_status status,
+                       dstd::StringView message);
 
     dstd::Vector<Built> built_;
     dstd::Optional<std::uint64_t> granule_;

@@ -20,11 +20,11 @@ Add your own analysis that rides the fused scan, from C, C++ or Python.
 
       Write a plugin as a Python class that compiles to native code.
 
-   .. grid-item-card:: Author a compose op
+   .. grid-item-card:: Author a job
       :link: plugins/compose-ops
       :link-type: doc
 
-      Write a small async transform and pipe it with | && ||.
+      Write a small async transform and pipe it, fan it out or race it.
 
    .. grid-item-card:: Share data between plugins
       :link: plugins/inter-plugin-comms

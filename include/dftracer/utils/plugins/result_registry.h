@@ -337,9 +337,18 @@ struct OwnedLazyFrame {
         for (std::uint32_t i = 0; i < n; ++i)
             if (!in[i]) return OwnedLazyFrame{};
         if (!ops_ || !ops_->run_lazy) return OwnedLazyFrame{};
-        dftu_result_lazyframe res = ops_->run_lazy(host_, name, in, n, args);
-        if (!DFTU_RESULT_OK(res)) return OwnedLazyFrame{};
-        return OwnedLazyFrame{DFTU_RESULT_VALUE(res), ops_, host_};
+        // A plugin-side context: the reason a rejected call reports is dropped
+        // and an empty plan is the answer, as before.
+        static const dftu_ctx_vt VT = {
+            sizeof(dftu_ctx_vt),
+            [](dftu_ctx*, dftu_status code, const char*,
+               std::uint32_t) -> dftu_status { return code; },
+            [](dftu_ctx*) -> dftu_status { return DFTU_OK; }};
+        dftu_ctx ctx{sizeof(dftu_ctx), 0, &VT, nullptr};
+        dftu_lazyframe* made = nullptr;
+        if (ops_->run_lazy(&ctx, host_, name, in, n, args, &made) < 0 || !made)
+            return OwnedLazyFrame{};
+        return OwnedLazyFrame{made, ops_, host_};
     }
 
     const dftu_svc_ops* ops_ = nullptr;

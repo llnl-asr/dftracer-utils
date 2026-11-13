@@ -1,74 +1,90 @@
 // SPDX-License-Identifier: MIT
-#include <dftracer/utils/common/error.h>
-#include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/domains/plugins/fold_adapter/ext.h>
 #include <dftracer/utils/domains/plugins/reserved_names.h>
+#include <dftracer/utils/dstd/fmt.h>
 
 #include <cstdint>
 
 namespace dftracer::utils::domains::plugins {
 namespace {
 
-::dftu_error not_found_error() {
-    return ::dftu_error{
-        dftracer::utils::dstd::CORE_ERROR_DOMAIN.id,
-        static_cast<std::int32_t>(dftracer::utils::dstd::Condition::NotFound),
-        DFTU_E_NOT_FOUND, "no such op", nullptr};
+dftu_status find_op(::dftu_ctx* ctx, const char* name,
+                    const ::dftu_op_desc** op) {
+    *op = name ? ::dftu_op_find(name) : nullptr;
+    if (*op != nullptr) return DFTU_OK;
+    return host_fail(ctx, DFTU_E_NOT_FOUND,
+                     dstd::fmt<"no op named '{}'">(
+                         dstd::StringView(name ? name : "(null)")));
 }
 
-::dftu_error rejected_error() {
-    return ::dftu_error{dftracer::utils::dstd::CORE_ERROR_DOMAIN.id,
-                        static_cast<std::int32_t>(
-                            dftracer::utils::dstd::Condition::InvalidArgument),
-                        DFTU_E_INVALID,
-                        "op rejected: kind/arity/shape mismatch", nullptr};
+dftu_status rejected(::dftu_ctx* ctx, const char* name) {
+    return host_fail(ctx, DFTU_E_INVALID,
+                     dstd::fmt<"op '{}' rejected: kind/arity/shape mismatch">(
+                         dstd::StringView(name)));
 }
 
-::dftu_result_series host_ops_run(void*, const char* name,
-                                  const ::dftu_series* const* in,
-                                  std::uint32_t n_in,
-                                  const ::dftu_op_arg* args) {
-    const ::dftu_op_desc* op = name ? ::dftu_op_find(name) : nullptr;
-    if (!op) return ::dftu_result_series{0, {.err = not_found_error()}};
+dftu_status host_ops_run(::dftu_ctx* ctx, void*, const char* name,
+                         const ::dftu_series* const* in, std::uint32_t n_in,
+                         const ::dftu_op_arg* args, ::dftu_series** out) {
+    if (out == nullptr)
+        return host_fail(ctx, DFTU_E_INVALID, "run: out is NULL");
+    const ::dftu_op_desc* op = nullptr;
+    if (const dftu_status found = find_op(ctx, name, &op); found < 0)
+        return found;
     ::dftu_series* result = ::dftu_op_run(op, in, n_in, args);
-    if (!result) return ::dftu_result_series{0, {.err = rejected_error()}};
-    return ::dftu_result_series{1, {.value = result}};
+    if (result == nullptr) return rejected(ctx, name);
+    *out = result;
+    return DFTU_OK;
 }
 
-::dftu_result_scalar host_ops_run_aggregate(void*, const char* name,
-                                            const ::dftu_series* const* in,
-                                            std::uint32_t n_in,
-                                            const ::dftu_op_arg* args) {
-    const ::dftu_op_desc* op = name ? ::dftu_op_find(name) : nullptr;
-    if (!op) return ::dftu_result_scalar{0, {.err = not_found_error()}};
-    if (n_in != 1) return ::dftu_result_scalar{0, {.err = rejected_error()}};
+dftu_status host_ops_run_aggregate(::dftu_ctx* ctx, void*, const char* name,
+                                   const ::dftu_series* const* in,
+                                   std::uint32_t n_in,
+                                   const ::dftu_op_arg* args,
+                                   ::dftu_scalar* out) {
+    if (out == nullptr)
+        return host_fail(ctx, DFTU_E_INVALID, "run_aggregate: out is NULL");
+    const ::dftu_op_desc* op = nullptr;
+    if (const dftu_status found = find_op(ctx, name, &op); found < 0)
+        return found;
+    if (n_in != 1) return rejected(ctx, name);
     int run_ok = 0;
-    ::dftu_scalar result = ::dftu_op_run_aggregate(op, in[0], args, &run_ok);
-    if (!run_ok) return ::dftu_result_scalar{0, {.err = rejected_error()}};
-    return ::dftu_result_scalar{1, {.value = result}};
+    const ::dftu_scalar result =
+        ::dftu_op_run_aggregate(op, in[0], args, &run_ok);
+    if (!run_ok) return rejected(ctx, name);
+    *out = result;
+    return DFTU_OK;
 }
 
-::dftu_result_frame host_ops_run_frame(void*, const char* name,
-                                       const ::dftu_dataframe* const* in,
-                                       std::uint32_t n_in,
-                                       const ::dftu_op_arg* args) {
-    const ::dftu_op_desc* op = name ? ::dftu_op_find(name) : nullptr;
-    if (!op) return ::dftu_result_frame{0, {.err = not_found_error()}};
-    ::dftu_dataframe* result = ::dftu_op_run_frame(op, in, n_in, args);
-    if (!result) return ::dftu_result_frame{0, {.err = rejected_error()}};
-    return ::dftu_result_frame{1, {.value = result}};
+dftu_status host_ops_run_frame(::dftu_ctx* ctx, void*, const char* name,
+                               const ::dftu_dataframe* const* frames,
+                               std::uint32_t n_in, const ::dftu_op_arg* args,
+                               ::dftu_dataframe** out) {
+    if (out == nullptr)
+        return host_fail(ctx, DFTU_E_INVALID, "run_frame: out is NULL");
+    const ::dftu_op_desc* op = nullptr;
+    if (const dftu_status found = find_op(ctx, name, &op); found < 0)
+        return found;
+    ::dftu_dataframe* result = ::dftu_op_run_frame(op, frames, n_in, args);
+    if (result == nullptr) return rejected(ctx, name);
+    *out = result;
+    return DFTU_OK;
 }
 
-::dftu_result_lazyframe host_ops_run_lazy(void*, const char* name,
-                                          const ::dftu_lazyframe* const* in,
-                                          std::uint32_t n_in,
-                                          const ::dftu_op_arg* args) {
-    const ::dftu_op_desc* op = name ? ::dftu_op_find(name) : nullptr;
-    if (!op) return ::dftu_result_lazyframe{0, {.err = not_found_error()}};
+dftu_status host_ops_run_lazy(::dftu_ctx* ctx, void*, const char* name,
+                              const ::dftu_lazyframe* const* in,
+                              std::uint32_t n_in, const ::dftu_op_arg* args,
+                              ::dftu_lazyframe** out) {
+    if (out == nullptr)
+        return host_fail(ctx, DFTU_E_INVALID, "run_lazy: out is NULL");
+    const ::dftu_op_desc* op = nullptr;
+    if (const dftu_status found = find_op(ctx, name, &op); found < 0)
+        return found;
     ::dftu_lazyframe* result = ::dftu_op_run_lazy(op, in, n_in, args);
-    if (!result) return ::dftu_result_lazyframe{0, {.err = rejected_error()}};
-    return ::dftu_result_lazyframe{1, {.value = result}};
+    if (result == nullptr) return rejected(ctx, name);
+    *out = result;
+    return DFTU_OK;
 }
 
 const ::dftu_op_desc* host_ops_find(void*, const char* name) {
@@ -79,29 +95,42 @@ const ::dftu_op_desc* host_ops_find(void*, const char* name) {
 // settle_order, settle_prune and the planner, so it cannot be ordered, pruned
 // or planned, and whether a peer sees it depends on which worker claimed which
 // morsel first. Talk to a peer during the scan through ports instead.
-int host_ops_register(void*, const ::dftu_op_desc* desc) {
-    DFTRACER_UTILS_LOG_ERROR(
-        "Plugin op '{}' refused: register from the plugin factory, which runs "
-        "before the scan; the scan-time host does not register ops",
-        desc && desc->name ? desc->name : "(null)");
-    return -1;
+dftu_status host_ops_register(::dftu_ctx* ctx, void*,
+                              const ::dftu_op_desc* desc) {
+    return host_fail(
+        ctx, DFTU_E_UNSUPPORTED,
+        dstd::fmt<"op '{}' refused: register from the plugin factory, which "
+                  "runs before the scan; the scan-time host does not register "
+                  "ops">(
+            dstd::StringView(desc && desc->name ? desc->name : "(null)")));
 }
 
-const ::dftu_svc_ops g_ops = {host_ops_run,       host_ops_run_aggregate,
-                              host_ops_run_frame, host_ops_find,
-                              host_ops_register,  host_ops_run_lazy};
+const ::dftu_svc_ops g_ops = {sizeof(::dftu_svc_ops), host_ops_run,
+                              host_ops_run_aggregate, host_ops_run_frame,
+                              host_ops_find,          host_ops_register,
+                              host_ops_run_lazy};
 
 }  // namespace
 
-int detail::register_plugin_op(const ::dftu_op_desc* desc) {
-    if (desc && refuse_plugin_op_name(desc->name)) {
-        DFTRACER_UTILS_LOG_ERROR(
-            "Plugin op '{}' refused: the bare and 'dftu.' namespaces hold the "
-            "host's built-in ops, so a plugin op must be '<plugin>.<name>'",
-            desc->name ? desc->name : "(null)");
-        return -1;
+dftu_status detail::register_plugin_op(::dftu_ctx* ctx,
+                                       const ::dftu_op_desc* desc) {
+    if (desc == nullptr)
+        return host_fail(ctx, DFTU_E_INVALID, "register_op: desc is NULL");
+    if (refuse_plugin_op_name(desc->name)) {
+        return host_fail(
+            ctx, DFTU_E_INVALID,
+            dstd::fmt<"op '{}' refused: the bare and 'dftu.' namespaces hold "
+                      "the host's built-in ops, so a plugin op must be "
+                      "'<plugin>.<name>'">(
+                dstd::StringView(desc->name ? desc->name : "(null)")));
     }
-    return ::dftu_op_register(desc);
+    if (::dftu_op_register(desc) != 0) {
+        return host_fail(
+            ctx, DFTU_E_INVALID,
+            dstd::fmt<"op '{}' refused: the name is already registered">(
+                dstd::StringView(desc->name)));
+    }
+    return DFTU_OK;
 }
 
 const void* detail::ops_ext_vtable() { return &g_ops; }

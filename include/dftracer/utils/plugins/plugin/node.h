@@ -8,9 +8,11 @@
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/plugins/plugin/source.h>
+#include <dftracer/utils/plugins/plugin/types.h>
 
 #include <cstdint>
 #include <stdexcept>
+#include <string>
 #include <utility>
 
 /* A LazyFrame plan node written as a C++ class. node_vtable<N>() adapts N to
@@ -26,7 +28,8 @@
  * narrow / resident_bytes / reclaim). The cursor owns `in` and pulls it with
  * in.next(). `memory_budget` is the plan's budget in bytes, never 0. A throwing
  * or empty open() leaves the upstream cursor with the host, as
- * dftu_node_vt::open requires; a throwing next() surfaces as a scan error. */
+ * dftu_node_vt::open requires; a throwing next() fails the scan with its
+ * what() text. */
 
 namespace dftracer::utils::plugins {
 
@@ -76,6 +79,28 @@ struct InputOwnership {
     bool dropped = false;
 };
 
+// The ctx InputCursor hands its upstream: it keeps the message the upstream
+// sets, which InputCursor then throws, so the node's own callback reports it.
+struct LocalCtx {
+    dftu_ctx base;
+    dstd::String message;
+
+    static dftu_status set_error(dftu_ctx* c, dftu_status code, const char* msg,
+                                 std::uint32_t len) {
+        static_cast<LocalCtx*>(c->h)->message.assign(msg, len);
+        return code;
+    }
+    static dftu_status check(dftu_ctx*) { return DFTU_OK; }
+    static const dftu_ctx_vt* vt() {
+        static const dftu_ctx_vt VT = {sizeof(dftu_ctx_vt), set_error, check};
+        return &VT;
+    }
+
+    LocalCtx() : base{sizeof(dftu_ctx), 0, vt(), this} {}
+    LocalCtx(const LocalCtx&) = delete;
+    LocalCtx& operator=(const LocalCtx&) = delete;
+};
+
 }  // namespace detail
 
 /// The node's upstream cursor. Pulling it may run a task to completion on the
@@ -102,27 +127,39 @@ class InputCursor {
     }
 
     /// The next upstream frame, or dstd::nullopt at the end of the stream.
-    /// Throws std::runtime_error when the upstream fails.
+    /// Throws @ref Error with the upstream's status and message when it fails.
     dstd::Optional<OwnedFrame> next(std::int64_t max_rows) {
-        dftu_result_frame out{};
-        dftu_task* t = vt_->next(self_, max_rows, &out);
-        if (t && dftu_task_run(dftu_default_runtime(), t) != 0)
-            throw std::runtime_error("upstream task failed");
-        if (!DFTU_RESULT_OK(out))
-            throw std::runtime_error(out.u.err.message ? out.u.err.message
-                                                       : "upstream failed");
-        if (!out.u.value) return dstd::nullopt;
-        return OwnedFrame(out.u.value);
+        detail::LocalCtx ctx;
+        dftu_dataframe* out = nullptr;
+        dftu_task* pending = nullptr;
+        dftu_status st = vt_->next(&ctx.base, self_, max_rows, &out, &pending);
+        if (st >= 0 && pending) {
+            dftu_error err = DFTU_ERROR_INIT;
+            st = dftu_task_run(dftu_default_runtime(), pending, &err);
+            if (st < 0 && err.message) ctx.message = err.message;
+            dftu_error_release(&err);
+        }
+        if (st < 0) {
+            if (out) dftu_dataframe_free(out);
+            throw Error(st,
+                        ctx.message.empty() ? "upstream failed" : ctx.message);
+        }
+        if (st == DFTU_END || !out) return dstd::nullopt;
+        return OwnedFrame(out);
     }
 
     /// Offer `predicate` upstream. Only sound when it is positional against
     /// the upstream's columns too (a node that keeps every column in place).
     bool narrow(ExprView predicate) {
         if (!vt_->narrow) return false;
+        detail::LocalCtx ctx;
         std::int32_t applied = 0;
-        dftu_task* t = vt_->narrow(self_, predicate.raw(), &applied);
-        if (t && dftu_task_run(dftu_default_runtime(), t) != 0) return false;
-        return applied != 0;
+        dftu_task* pending = nullptr;
+        dftu_status st =
+            vt_->narrow(&ctx.base, self_, predicate.raw(), &applied, &pending);
+        if (st >= 0 && pending)
+            st = dftu_task_run(dftu_default_runtime(), pending, nullptr);
+        return st >= 0 && applied != 0;
     }
 
    private:
@@ -140,42 +177,47 @@ struct NodeBox {
 
 template <class N>
 struct NodeVt {
-    static void output_schema(void* self, const dftu_schema* in,
-                              const dftu_op_arg* args, dftu_schema* out) {
-        try {
+    static dftu_status output_schema(dftu_ctx* ctx, void* self,
+                                     const dftu_schema* in,
+                                     const dftu_op_arg* args,
+                                     dftu_schema* out) {
+        return guard(ctx, [&]() -> dftu_status {
             SchemaBuilder b(out);
             static_cast<NodeBox<N>*>(self)->node->output_schema(
                 SchemaView(in), OpArgs(args), b);
-        } catch (...) {
-        }
+            return DFTU_OK;
+        });
     }
 
-    static void* open(void* self, void* in_self, const dftu_cursor_vt* in_vt,
-                      const dftu_op_arg* args, std::uint64_t memory_budget,
-                      void** out_cursor_self, const dftu_cursor_vt** out_vt) {
+    static dftu_status open(dftu_ctx* ctx, void* self, void* in_self,
+                            const dftu_cursor_vt* in_vt,
+                            const dftu_op_arg* args,
+                            std::uint64_t memory_budget, void** out_cursor_self,
+                            const dftu_cursor_vt** out_vt) {
         auto own = dstd::make_shared<InputOwnership>();
-        try {
+        return guard(ctx, [&]() -> dftu_status {
             auto cursor = static_cast<NodeBox<N>*>(self)->node->open(
                 InputCursor(in_self, in_vt, own), OpArgs(args), memory_budget);
-            if (!cursor) return nullptr;
+            if (!cursor)
+                return dftu_fail(ctx, DFTU_E_INTERNAL,
+                                 "open returned no cursor");
             using C = typename decltype(cursor)::element_type;
-            auto* box = new CursorBox<C>{std::move(cursor), {}};
+            auto* box = new CursorBox<C>{std::move(cursor)};
             // Nothing below throws, so the upstream changes hands only once
             // open() is certain to succeed.
             own->committed = true;
             if (own->dropped && in_vt->destroy) in_vt->destroy(in_self);
             *out_cursor_self = box;
             *out_vt = CursorVt<C>::vt();
-            return box;
-        } catch (...) {
-            return nullptr;
-        }
+            return DFTU_OK;
+        });
     }
 
     static void destroy(void* self) { delete static_cast<NodeBox<N>*>(self); }
 
     static const dftu_node_vt* vt() {
-        static const dftu_node_vt VT = {output_schema, open, destroy};
+        static const dftu_node_vt VT = {sizeof(dftu_node_vt), output_schema,
+                                        open, destroy};
         return &VT;
     }
 };

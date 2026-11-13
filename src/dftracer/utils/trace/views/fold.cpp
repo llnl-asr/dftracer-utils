@@ -3044,8 +3044,7 @@ coro::CoroTask<void> for_slices(dstd::Vector<dstd::UniquePtr<Fold>>& slices,
                                 Hook hook) {
     for (auto& s : slices) {
         hook(*s);
-        if (auto* t = s->take_pending())
-            co_await *reinterpret_cast<coro::CoroTask<void>*>(t);
+        if (auto* t = s->take_pending()) co_await *t;
     }
 }
 
@@ -3151,8 +3150,7 @@ coro::CoroTask<dstd::Result<void>> fuse_worker(FuseWorkerCtx ctx,
                 }
                 // Await an async plugin fold's task before the next step
                 // recycles the batch; null for sync folds.
-                if (auto* t = s->take_pending())
-                    co_await *reinterpret_cast<coro::CoroTask<void>*>(t);
+                if (auto* t = s->take_pending()) co_await *t;
             }
         }
         if (!complete) {
@@ -3225,7 +3223,10 @@ coro::CoroTask<dstd::Result<ExportStats>> fuse(
     if (units.empty() || folds.empty()) {
         st.chunks_skipped = skipped;
         const CoverageSet none;
-        for (auto* f : folds) co_await f->finalize(none);
+        for (auto* f : folds) {
+            auto finished = co_await f->finalize(none);
+            if (!finished.has_value()) co_return finished.error();
+        }
         co_return counted(plan, st);
     }
 
@@ -3345,7 +3346,10 @@ coro::CoroTask<dstd::Result<ExportStats>> fuse(
             if (c.first == c.second) scanned.add_file(file);
     }
 
-    for (auto* f : folds) co_await f->finalize(scanned);
+    for (auto* f : folds) {
+        auto finished = co_await f->finalize(scanned);
+        if (!finished.has_value()) co_return finished.error();
+    }
 
     for (const auto& c : counts_v) c.add_to(st);
     st.truncated = produced.load(std::memory_order_relaxed) >= cap;

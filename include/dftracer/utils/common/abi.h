@@ -102,26 +102,6 @@ static inline dftu_status dftu_fail(dftu_ctx* c, dftu_status code,
 
 static inline dftu_status dftu_check(dftu_ctx* c) { return c->vt->check(c); }
 
-/* Old value-or-error union; removed once every C ABI returns dftu_status. */
-#define DFTU_RESULT_DECL(name, T) \
-    typedef struct name {         \
-        int32_t ok;               \
-        union {                   \
-            T value;              \
-            dftu_error err;       \
-        } u;                      \
-    } name
-
-#define DFTU_RESULT_OK(r) ((r).ok != 0)
-#define DFTU_RESULT_VALUE(r) ((r).u.value)
-#define DFTU_RESULT_ERROR(r) ((r).u.err)
-
-#if defined(__GNUC__) || defined(__clang__)
-#define DFTU_RESULT_MUST_CHECK __attribute__((warn_unused_result))
-#else
-#define DFTU_RESULT_MUST_CHECK
-#endif
-
 #ifdef __cplusplus
 }
 #endif

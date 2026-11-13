@@ -6,6 +6,7 @@
 // same style test_provider_schema_types.cpp uses for dftu_source_vt.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/coro/abi_context.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/coro/task_abi.h>
 #include <dftracer/utils/coro/yield.h>
@@ -31,6 +32,14 @@ using namespace dftracer::utils::dataframe;
 
 namespace {
 
+dftu_status register_node(const char* name, const dftu_node_vt* vt,
+                          void* self) {
+    dftu_error err = DFTU_ERROR_INIT;
+    const dftu_status status = dftu_node_register(name, vt, self, &err);
+    dftu_error_release(&err);
+    return status;
+}
+
 DataFrame run(coro::CoroTask<dstd::Result<DataFrame>> t) {
     DataFrame out = dftu_utils_test::ok(
         dftracer::utils::default_runtime().submit(std::move(t)).get());
@@ -45,13 +54,15 @@ struct IntSource {
     dstd::Vector<std::int64_t> col0;
 };
 
-int32_t src_schema(void* self, const char* const** out_names) {
+dftu_status src_schema(dftu_ctx*, void* self, const char* const** out_names,
+                       int32_t* out_count) {
     auto* s = static_cast<IntSource*>(self);
     static thread_local dstd::Vector<const char*> storage;
     storage.clear();
     for (const dstd::String& n : s->names) storage.push_back(n.c_str());
     *out_names = storage.data();
-    return static_cast<int32_t>(storage.size());
+    *out_count = static_cast<int32_t>(storage.size());
+    return DFTU_OK;
 }
 
 struct SrcCursorState {
@@ -59,17 +70,18 @@ struct SrcCursorState {
     bool done = false;
 };
 
-dftu_task* src_cursor_next(void* self, std::int64_t, dftu_result_frame* out) {
+dftu_status src_cursor_next(dftu_ctx*, void* self, std::int64_t,
+                            dftu_dataframe** out, dftu_task** pending) {
     auto* cs = static_cast<SrcCursorState*>(self);
-    out->ok = 1;
+    *pending = nullptr;
     if (cs->done) {
-        out->u.value = nullptr;
-    } else {
-        out->u.value = cs->frame;
-        cs->frame = nullptr;
-        cs->done = true;
+        *out = nullptr;
+        return DFTU_END;
     }
-    return nullptr;
+    *out = cs->frame;
+    cs->frame = nullptr;
+    cs->done = true;
+    return DFTU_OK;
 }
 
 void src_cursor_destroy(void* self) {
@@ -78,11 +90,15 @@ void src_cursor_destroy(void* self) {
     delete cs;
 }
 
-const dftu_cursor_vt SRC_CURSOR_VT = {src_cursor_next, src_cursor_destroy,
-                                      nullptr, nullptr, nullptr};
+const dftu_cursor_vt SRC_CURSOR_VT = {sizeof(dftu_cursor_vt),
+                                      src_cursor_next,
+                                      src_cursor_destroy,
+                                      nullptr,
+                                      nullptr,
+                                      nullptr};
 
-void* src_scan(void* self, const dftu_scan_request*, int32_t*,
-               void** out_cursor_self, const dftu_cursor_vt** out_vt) {
+dftu_status src_scan(dftu_ctx*, void* self, const dftu_scan_request*, int32_t*,
+                     void** out_cursor_self, const dftu_cursor_vt** out_vt) {
     auto* s = static_cast<IntSource*>(self);
     dftu_series* c = dftu_series_new_flat(
         DFTU_TYPE_INT64, s->col0.data(),
@@ -92,22 +108,24 @@ void* src_scan(void* self, const dftu_scan_request*, int32_t*,
     auto* cs = new SrcCursorState{dftu_dataframe_new(names, cols, 1)};
     *out_cursor_self = cs;
     *out_vt = &SRC_CURSOR_VT;
-    return cs;
+    return DFTU_OK;
 }
 
 void src_destroy(void*) {}
 
 // The Timestamp column carries a timezone (a parameterized type) so a node
 // declaring it via dftu_schema_copy_field must preserve it, not just the id.
-void src_schema_types(void*, dftu_schema* out) {
+dftu_status src_schema_types(dftu_ctx*, void*, dftu_schema* out) {
     dftu_schema_add_field(out, "val", DFTU_TYPE_INT64, 0, DFTU_TIME_UNIT_MICRO,
                           nullptr, 0, 0, 0);
     dftu_schema_add_field(out, "ts", DFTU_TYPE_TIMESTAMP, 1,
                           DFTU_TIME_UNIT_MILLI, "UTC", 0, 0, 0);
+    return DFTU_OK;
 }
 
 dstd::SharedPtr<Source> make_int_source(IntSource& fx, bool typed) {
     dftu_source_vt vt{};
+    vt.struct_size = sizeof(vt);
     vt.schema = src_schema;
     vt.scan = src_scan;
     vt.destroy = src_destroy;
@@ -117,25 +135,47 @@ dstd::SharedPtr<Source> make_int_source(IntSource& fx, bool typed) {
 
 // ---- "test.double": a streaming node doubling column 0. --------------------
 
-coro::CoroTask<void> pull_and_double(void* in_self, const dftu_cursor_vt* in_vt,
+// The upstream's answer to one next(): its status and message, after awaiting
+// the task it handed back, if any.
+struct Pulled {
+    dftu_status status = DFTU_OK;
+    dstd::String message;
+    dftu_dataframe* frame = nullptr;
+};
+
+coro::CoroTask<Pulled> pull(void* in_self, const dftu_cursor_vt* in_vt,
+                            std::int64_t max_rows) {
+    Pulled pulled;
+    coro::AbiContext ctx;
+    dftu_task* t = nullptr;
+    pulled.status =
+        in_vt->next(ctx.get(), in_self, max_rows, &pulled.frame, &t);
+    pulled.message = dstd::String(ctx.message());
+    if (t) {
+        coro::AbiTask* at = coro::abi_task(t);
+        auto running = coro::run_abi_task(at);
+        pulled.status = co_await std::move(running);
+        pulled.message = at->message;
+        coro::free_abi_task(t);
+    }
+    co_return std::move(pulled);
+}
+
+coro::CoroTask<void> pull_and_double(coro::AbiTask* task, void* in_self,
+                                     const dftu_cursor_vt* in_vt,
                                      std::int64_t max_rows,
-                                     dftu_result_frame* out) {
-    dftu_result_frame in_out{};
-    if (dftu_task* t = in_vt->next(in_self, max_rows, &in_out)) {
-        auto* task = reinterpret_cast<coro::CoroTask<void>*>(t);
-        co_await *task;
-        delete task;
-    }
-    if (!DFTU_RESULT_OK(in_out)) {
-        *out = in_out;
+                                     dftu_dataframe** out) {
+    auto pulling = pull(in_self, in_vt, max_rows);
+    Pulled in = co_await std::move(pulling);
+    if (in.status == DFTU_END) {
+        task->status = DFTU_END;
         co_return;
     }
-    dftu_dataframe* frame = DFTU_RESULT_VALUE(in_out);
-    if (!frame) {
-        out->ok = 1;
-        out->u.value = nullptr;
+    if (in.status < 0) {
+        task->fail(in.status, in.message);
         co_return;
     }
+    dftu_dataframe* frame = in.frame;
     dftu_series* c0 = dftu_dataframe_column(frame, "val");
     const std::int64_t n = dftu_series_length(c0);
     const auto* data = static_cast<const std::int64_t*>(dftu_series_data(c0));
@@ -148,8 +188,7 @@ coro::CoroTask<void> pull_and_double(void* in_self, const dftu_cursor_vt* in_vt,
     dftu_series* cols[1] = {new_col};
     dftu_dataframe* result = dftu_dataframe_new(names, cols, 1);
     dftu_dataframe_free(frame);
-    out->ok = 1;
-    out->u.value = result;
+    *out = result;
 }
 
 struct DoubleCursorState {
@@ -157,11 +196,14 @@ struct DoubleCursorState {
     const dftu_cursor_vt* in_vt;
 };
 
-dftu_task* double_cursor_next(void* self, std::int64_t max_rows,
-                              dftu_result_frame* out) {
+dftu_status double_cursor_next(dftu_ctx*, void* self, std::int64_t max_rows,
+                               dftu_dataframe** out, dftu_task** pending) {
     auto* st = static_cast<DoubleCursorState*>(self);
-    return dftracer::utils::task_to_abi(
-        pull_and_double(st->in_self, st->in_vt, max_rows, out));
+    *out = nullptr;
+    *pending = coro::make_abi_task([=](coro::AbiTask* task) {
+        return pull_and_double(task, st->in_self, st->in_vt, max_rows, out);
+    });
+    return DFTU_OK;
 }
 
 void double_cursor_destroy(void* self) {
@@ -170,46 +212,55 @@ void double_cursor_destroy(void* self) {
     delete st;
 }
 
-const dftu_cursor_vt DOUBLE_CURSOR_VT = {
-    double_cursor_next, double_cursor_destroy, nullptr, nullptr, nullptr};
+const dftu_cursor_vt DOUBLE_CURSOR_VT = {sizeof(dftu_cursor_vt),
+                                         double_cursor_next,
+                                         double_cursor_destroy,
+                                         nullptr,
+                                         nullptr,
+                                         nullptr};
 
-void* double_node_open(void*, void* in_self, const dftu_cursor_vt* in_vt,
-                       const dftu_op_arg*, std::uint64_t, void** out_self,
-                       const dftu_cursor_vt** out_vt) {
+dftu_status double_node_open(dftu_ctx*, void*, void* in_self,
+                             const dftu_cursor_vt* in_vt, const dftu_op_arg*,
+                             std::uint64_t, void** out_self,
+                             const dftu_cursor_vt** out_vt) {
     auto* st = new DoubleCursorState{in_self, in_vt};
     *out_self = st;
     *out_vt = &DOUBLE_CURSOR_VT;
-    return st;
+    return DFTU_OK;
 }
 
 // Pass every input field through unchanged - doubling a value never changes
 // its declared type, including a parameterized one (Timestamp + timezone).
-void double_node_schema(void*, const dftu_schema* in, const dftu_op_arg*,
-                        dftu_schema* out) {
+dftu_status double_node_schema(dftu_ctx*, void*, const dftu_schema* in,
+                               const dftu_op_arg*, dftu_schema* out) {
     const int32_t n = dftu_schema_field_count(in);
     for (int32_t i = 0; i < n; ++i) dftu_schema_copy_field(out, in, i);
+    return DFTU_OK;
 }
 
 void double_node_destroy(void*) {}
 
 dftu_node_vt make_double_vt() {
     dftu_node_vt vt{};
+    vt.struct_size = sizeof(vt);
     vt.output_schema = double_node_schema;
     vt.open = double_node_open;
     vt.destroy = double_node_destroy;
     return vt;
 }
 
-// ---- "test.open_fails": open() always returns the NULL sentinel. ----------
+// ---- "test.open_fails": open() always fails with a message. ----------
 
-void*  // NOLINT(readability-non-const-parameter)
-failing_node_open(void*, void*, const dftu_cursor_vt*, const dftu_op_arg*,
-                  std::uint64_t, void**, const dftu_cursor_vt**) {
-    return nullptr;
+dftu_status failing_node_open(dftu_ctx* ctx, void*, void*,
+                              const dftu_cursor_vt*, const dftu_op_arg*,
+                              std::uint64_t, void**, const dftu_cursor_vt**) {
+    return dftu_fail(ctx, DFTU_E_INVALID, "node refused to open");
 }
 
-void failing_node_schema(void*, const dftu_schema*, const dftu_op_arg*,
-                         dftu_schema*) {}
+dftu_status failing_node_schema(dftu_ctx*, void*, const dftu_schema*,
+                                const dftu_op_arg*, dftu_schema*) {
+    return DFTU_OK;
+}
 
 // ---- A node recording only whether it was ever opened. ---------------------
 
@@ -218,25 +269,26 @@ struct RecordingNode {
     std::uint64_t budget = 0;
 };
 
-void recording_node_schema(void*, const dftu_schema* in, const dftu_op_arg*,
-                           dftu_schema* out) {
+dftu_status recording_node_schema(dftu_ctx*, void*, const dftu_schema* in,
+                                  const dftu_op_arg*, dftu_schema* out) {
     const int32_t n = dftu_schema_field_count(in);
     for (int32_t i = 0; i < n; ++i) dftu_schema_copy_field(out, in, i);
+    return DFTU_OK;
 }
 
 // Reuses the doubler's cursor machinery (values end up doubled); the test
 // below only checks that open() ran and where the node sits in explain(),
 // not the values.
-void* recording_node_open(void* self, void* in_self,
-                          const dftu_cursor_vt* in_vt, const dftu_op_arg*,
-                          std::uint64_t memory_budget, void** out_self,
-                          const dftu_cursor_vt** out_vt) {
+dftu_status recording_node_open(dftu_ctx*, void* self, void* in_self,
+                                const dftu_cursor_vt* in_vt, const dftu_op_arg*,
+                                std::uint64_t memory_budget, void** out_self,
+                                const dftu_cursor_vt** out_vt) {
     static_cast<RecordingNode*>(self)->opened = true;
     static_cast<RecordingNode*>(self)->budget = memory_budget;
     auto* st = new DoubleCursorState{in_self, in_vt};
     *out_self = st;
     *out_vt = &DOUBLE_CURSOR_VT;
-    return st;
+    return DFTU_OK;
 }
 
 // ---- "test.sync_probe.*": a transparent node that forwards in_vt->next
@@ -251,12 +303,13 @@ struct ProbeCursorState {
     dstd::Vector<bool>* sync_flags;
 };
 
-dftu_task* probe_cursor_next(void* self, std::int64_t max_rows,
-                             dftu_result_frame* out) {
+dftu_status probe_cursor_next(dftu_ctx* ctx, void* self, std::int64_t max_rows,
+                              dftu_dataframe** out, dftu_task** pending) {
     auto* st = static_cast<ProbeCursorState*>(self);
-    dftu_task* t = st->in_vt->next(st->in_self, max_rows, out);
-    st->sync_flags->push_back(t == nullptr);
-    return t;
+    const dftu_status status =
+        st->in_vt->next(ctx, st->in_self, max_rows, out, pending);
+    st->sync_flags->push_back(*pending == nullptr);
+    return status;
 }
 
 void probe_cursor_destroy(void* self) {
@@ -265,27 +318,34 @@ void probe_cursor_destroy(void* self) {
     delete st;
 }
 
-const dftu_cursor_vt PROBE_CURSOR_VT = {probe_cursor_next, probe_cursor_destroy,
-                                        nullptr, nullptr, nullptr};
+const dftu_cursor_vt PROBE_CURSOR_VT = {sizeof(dftu_cursor_vt),
+                                        probe_cursor_next,
+                                        probe_cursor_destroy,
+                                        nullptr,
+                                        nullptr,
+                                        nullptr};
 
-void probe_node_schema(void*, const dftu_schema* in, const dftu_op_arg*,
-                       dftu_schema* out) {
+dftu_status probe_node_schema(dftu_ctx*, void*, const dftu_schema* in,
+                              const dftu_op_arg*, dftu_schema* out) {
     const int32_t n = dftu_schema_field_count(in);
     for (int32_t i = 0; i < n; ++i) dftu_schema_copy_field(out, in, i);
+    return DFTU_OK;
 }
 
-void* probe_node_open(void* self, void* in_self, const dftu_cursor_vt* in_vt,
-                      const dftu_op_arg*, std::uint64_t, void** out_self,
-                      const dftu_cursor_vt** out_vt) {
+dftu_status probe_node_open(dftu_ctx*, void* self, void* in_self,
+                            const dftu_cursor_vt* in_vt, const dftu_op_arg*,
+                            std::uint64_t, void** out_self,
+                            const dftu_cursor_vt** out_vt) {
     auto* flags = static_cast<dstd::Vector<bool>*>(self);
     auto* st = new ProbeCursorState{in_self, in_vt, flags};
     *out_self = st;
     *out_vt = &PROBE_CURSOR_VT;
-    return st;
+    return DFTU_OK;
 }
 
 dftu_node_vt make_probe_vt() {
     dftu_node_vt vt{};
+    vt.struct_size = sizeof(vt);
     vt.output_schema = probe_node_schema;
     vt.open = probe_node_open;
     return vt;
@@ -311,10 +371,10 @@ struct NarrowCursorState {
     NarrowSource* owner;
 };
 
-dftu_task* narrow_cursor_next(void* self, std::int64_t max_rows,
-                              dftu_result_frame* out) {
-    return src_cursor_next(&static_cast<NarrowCursorState*>(self)->base,
-                           max_rows, out);
+dftu_status narrow_cursor_next(dftu_ctx* ctx, void* self, std::int64_t max_rows,
+                               dftu_dataframe** out, dftu_task** pending) {
+    return src_cursor_next(ctx, &static_cast<NarrowCursorState*>(self)->base,
+                           max_rows, out, pending);
 }
 
 void narrow_cursor_destroy(void* self) {
@@ -323,8 +383,10 @@ void narrow_cursor_destroy(void* self) {
     delete cs;
 }
 
-dftu_task* narrow_cursor_narrow(void* self, const dftu_expr* predicate,
-                                std::int32_t* out_applied) {
+dftu_status narrow_cursor_narrow(dftu_ctx*, void* self,
+                                 const dftu_expr* predicate,
+                                 std::int32_t* out_applied,
+                                 dftu_task** pending) {
     auto* cs = static_cast<NarrowCursorState*>(self);
     const dstd::Vector<std::int64_t>& v = cs->owner->src.col0;
     Series column =
@@ -336,7 +398,8 @@ dftu_task* narrow_cursor_narrow(void* self, const dftu_expr* predicate,
         bits.push_back((mask.data<std::uint8_t>()[i >> 3] >> (i & 7)) & 1);
     cs->owner->log->masks.push_back(std::move(bits));
     *out_applied = 1;
-    return nullptr;
+    *pending = nullptr;
+    return DFTU_OK;
 }
 
 std::uint64_t narrow_cursor_bytes(void* self) {
@@ -352,15 +415,19 @@ std::uint64_t narrow_cursor_reclaim(void* self, std::uint64_t want) {
 }
 
 const dftu_cursor_vt NARROW_CURSOR_VT = {
-    narrow_cursor_next, narrow_cursor_destroy, narrow_cursor_narrow,
-    narrow_cursor_bytes, narrow_cursor_reclaim};
+    sizeof(dftu_cursor_vt), narrow_cursor_next,  narrow_cursor_destroy,
+    narrow_cursor_narrow,   narrow_cursor_bytes, narrow_cursor_reclaim};
 
-int32_t narrow_src_schema(void* self, const char* const** out_names) {
-    return src_schema(&static_cast<NarrowSource*>(self)->src, out_names);
+dftu_status narrow_src_schema(dftu_ctx* ctx, void* self,
+                              const char* const** out_names,
+                              int32_t* out_count) {
+    return src_schema(ctx, &static_cast<NarrowSource*>(self)->src, out_names,
+                      out_count);
 }
 
-void* narrow_src_scan(void* self, const dftu_scan_request*, int32_t*,
-                      void** out_cursor_self, const dftu_cursor_vt** out_vt) {
+dftu_status narrow_src_scan(dftu_ctx*, void* self, const dftu_scan_request*,
+                            int32_t*, void** out_cursor_self,
+                            const dftu_cursor_vt** out_vt) {
     auto* s = static_cast<NarrowSource*>(self);
     dftu_series* c = dftu_series_new_flat(
         DFTU_TYPE_INT64, s->src.col0.data(),
@@ -370,11 +437,12 @@ void* narrow_src_scan(void* self, const dftu_scan_request*, int32_t*,
     auto* cs = new NarrowCursorState{{dftu_dataframe_new(names, cols, 1)}, s};
     *out_cursor_self = cs;
     *out_vt = &NARROW_CURSOR_VT;
-    return cs;
+    return DFTU_OK;
 }
 
 dstd::SharedPtr<Source> make_narrow_source(NarrowSource& fx) {
     dftu_source_vt vt{};
+    vt.struct_size = sizeof(vt);
     vt.schema = narrow_src_schema;
     vt.scan = narrow_src_scan;
     vt.destroy = src_destroy;
@@ -396,10 +464,11 @@ struct ForwardCursorState {
     ForwardLog* log;
 };
 
-dftu_task* forward_cursor_next(void* self, std::int64_t max_rows,
-                               dftu_result_frame* out) {
+dftu_status forward_cursor_next(dftu_ctx* ctx, void* self,
+                                std::int64_t max_rows, dftu_dataframe** out,
+                                dftu_task** pending) {
     auto* st = static_cast<ForwardCursorState*>(self);
-    return st->in_vt->next(st->in_self, max_rows, out);
+    return st->in_vt->next(ctx, st->in_self, max_rows, out, pending);
 }
 
 void forward_cursor_destroy(void* self) {
@@ -408,14 +477,17 @@ void forward_cursor_destroy(void* self) {
     delete st;
 }
 
-dftu_task* forward_cursor_narrow(void* self, const dftu_expr* predicate,
-                                 std::int32_t* out_applied) {
+dftu_status forward_cursor_narrow(dftu_ctx* ctx, void* self,
+                                  const dftu_expr* predicate,
+                                  std::int32_t* out_applied,
+                                  dftu_task** pending) {
     auto* st = static_cast<ForwardCursorState*>(self);
     if (!st->in_vt->narrow) {
         *out_applied = 0;
-        return nullptr;
+        *pending = nullptr;
+        return DFTU_OK;
     }
-    return st->in_vt->narrow(st->in_self, predicate, out_applied);
+    return st->in_vt->narrow(ctx, st->in_self, predicate, out_applied, pending);
 }
 
 std::uint64_t forward_cursor_bytes(void* self) {
@@ -433,27 +505,30 @@ std::uint64_t forward_cursor_reclaim(void* self, std::uint64_t want) {
 }
 
 const dftu_cursor_vt FORWARD_CURSOR_VT = {
-    forward_cursor_next, forward_cursor_destroy, forward_cursor_narrow,
-    forward_cursor_bytes, forward_cursor_reclaim};
+    sizeof(dftu_cursor_vt), forward_cursor_next,  forward_cursor_destroy,
+    forward_cursor_narrow,  forward_cursor_bytes, forward_cursor_reclaim};
 
-void forward_node_schema(void*, const dftu_schema* in, const dftu_op_arg*,
-                         dftu_schema* out) {
+dftu_status forward_node_schema(dftu_ctx*, void*, const dftu_schema* in,
+                                const dftu_op_arg*, dftu_schema* out) {
     const int32_t n = dftu_schema_field_count(in);
     for (int32_t i = 0; i < n; ++i) dftu_schema_copy_field(out, in, i);
+    return DFTU_OK;
 }
 
-void* forward_node_open(void* self, void* in_self, const dftu_cursor_vt* in_vt,
-                        const dftu_op_arg*, std::uint64_t, void** out_self,
-                        const dftu_cursor_vt** out_vt) {
+dftu_status forward_node_open(dftu_ctx*, void* self, void* in_self,
+                              const dftu_cursor_vt* in_vt, const dftu_op_arg*,
+                              std::uint64_t, void** out_self,
+                              const dftu_cursor_vt** out_vt) {
     auto* st =
         new ForwardCursorState{in_self, in_vt, static_cast<ForwardLog*>(self)};
     *out_self = st;
     *out_vt = &FORWARD_CURSOR_VT;
-    return st;
+    return DFTU_OK;
 }
 
 dftu_node_vt make_forward_vt() {
     dftu_node_vt vt{};
+    vt.struct_size = sizeof(vt);
     vt.output_schema = forward_node_schema;
     vt.open = forward_node_open;
     return vt;
@@ -744,9 +819,9 @@ void check_multi_morsel_output(const DataFrame& out) {
 
 TEST_SUITE("lazyframe plugin node") {
     TEST_CASE("a streaming node doubles values through the pull chain") {
-        REQUIRE(dftu_node_register("test.double", nullptr, nullptr) != 0);
+        REQUIRE(register_node("test.double", nullptr, nullptr) != 0);
         dftu_node_vt vt = make_double_vt();
-        REQUIRE(dftu_node_register("test.double.a", &vt, nullptr) == 0);
+        REQUIRE(register_node("test.double.a", &vt, nullptr) == 0);
 
         IntSource fx{{"val"}, {1, 2, 3, 4}};
         LazyFrame lf = LazyFrame::scan(make_int_source(fx, false))
@@ -767,10 +842,10 @@ TEST_SUITE("lazyframe plugin node") {
         "re-registering the same name is refused; unregister then "
         "re-register works") {
         dftu_node_vt vt = make_double_vt();
-        REQUIRE(dftu_node_register("test.double.b", &vt, nullptr) == 0);
-        CHECK(dftu_node_register("test.double.b", &vt, nullptr) != 0);
+        REQUIRE(register_node("test.double.b", &vt, nullptr) == 0);
+        CHECK(register_node("test.double.b", &vt, nullptr) != 0);
         REQUIRE(dftu_node_unregister("test.double.b") == 0);
-        CHECK(dftu_node_register("test.double.b", &vt, nullptr) == 0);
+        CHECK(register_node("test.double.b", &vt, nullptr) == 0);
         CHECK(dftu_node_unregister("test.double.b") == 0);
     }
 
@@ -778,7 +853,7 @@ TEST_SUITE("lazyframe plugin node") {
         "output_schema over a plan reports the node's declared types, "
         "including a parameterized type") {
         dftu_node_vt vt = make_double_vt();
-        REQUIRE(dftu_node_register("test.double.c", &vt, nullptr) == 0);
+        REQUIRE(register_node("test.double.c", &vt, nullptr) == 0);
 
         // Schema-only: output_schema() never scans, so the source need not
         // actually carry a "ts" column, only declare it.
@@ -799,7 +874,7 @@ TEST_SUITE("lazyframe plugin node") {
 
     TEST_CASE("explain names the node") {
         dftu_node_vt vt = make_double_vt();
-        REQUIRE(dftu_node_register("test.double.d", &vt, nullptr) == 0);
+        REQUIRE(register_node("test.double.d", &vt, nullptr) == 0);
 
         IntSource fx{{"val"}, {1}};
         LazyFrame lf = LazyFrame::scan(make_int_source(fx, false))
@@ -823,27 +898,30 @@ TEST_SUITE("lazyframe plugin node") {
     }
 
     TEST_CASE(
-        "a node whose open() returns NULL is a clear error at drive "
+        "a node whose open() fails is a clear error at drive "
         "time") {
         dftu_node_vt vt{};
+        vt.struct_size = sizeof(vt);
         vt.output_schema = failing_node_schema;
         vt.open = failing_node_open;
-        REQUIRE(dftu_node_register("test.fails", &vt, nullptr) == 0);
+        REQUIRE(register_node("test.fails", &vt, nullptr) == 0);
 
         IntSource fx{{"val"}, {1, 2}};
         LazyFrame lf = LazyFrame::scan(make_int_source(fx, false))
                            .op("test.fails", OpArgs());
-        CHECK_FALSE(dftracer::utils::default_runtime()
-                        .submit(lf.collect())
-                        .get()
-                        .has_value());
+        const auto result =
+            dftracer::utils::default_runtime().submit(lf.collect()).get();
+        REQUIRE_FALSE(result.has_value());
+        CHECK(
+            dstd::String(result.error().c_str()).find("node refused to open") !=
+            dstd::String::npos);
 
         CHECK(dftu_node_unregister("test.fails") == 0);
     }
 
     TEST_CASE("a filter placed after a node is not pushed through it") {
         dftu_node_vt vt = make_double_vt();
-        REQUIRE(dftu_node_register("test.double.e", &vt, nullptr) == 0);
+        REQUIRE(register_node("test.double.e", &vt, nullptr) == 0);
 
         IntSource fx{{"val"}, {1, 2, 3, 4, 5}};
         LazyFrame lf = LazyFrame::scan(make_int_source(fx, false))
@@ -874,9 +952,10 @@ TEST_SUITE("lazyframe plugin node") {
         "across it") {
         RecordingNode rec;
         dftu_node_vt vt{};
+        vt.struct_size = sizeof(vt);
         vt.output_schema = recording_node_schema;
         vt.open = recording_node_open;
-        REQUIRE(dftu_node_register("test.double.f", &vt, &rec) == 0);
+        REQUIRE(register_node("test.double.f", &vt, &rec) == 0);
 
         IntSource fx{{"val"}, {10, 20}};
         LazyFrame lf = LazyFrame::scan(make_int_source(fx, false))
@@ -904,9 +983,10 @@ TEST_SUITE("lazyframe plugin node") {
     TEST_CASE("a node's open gets the plan's memory budget") {
         RecordingNode rec;
         dftu_node_vt vt{};
+        vt.struct_size = sizeof(vt);
         vt.output_schema = recording_node_schema;
         vt.open = recording_node_open;
-        REQUIRE(dftu_node_register("test.double.budget", &vt, &rec) == 0);
+        REQUIRE(register_node("test.double.budget", &vt, &rec) == 0);
 
         IntSource fx{{"val"}, {10, 20}};
         LazyFrame base = LazyFrame::scan(make_int_source(fx, false))
@@ -931,44 +1011,39 @@ TEST_SUITE("lazyframe plugin node") {
         };
 
         struct Impl {
-            static coro::CoroTask<void> drain_and_count(
-                CountState* st, dftu_result_frame* out) {
+            static coro::CoroTask<void> drain_and_count(coro::AbiTask* task,
+                                                        CountState* st,
+                                                        dftu_dataframe** out) {
                 std::int64_t total = 0;
                 for (;;) {
-                    dftu_result_frame in_out{};
-                    if (dftu_task* t =
-                            st->in_vt->next(st->in_self, 1 << 20, &in_out)) {
-                        auto* task = reinterpret_cast<coro::CoroTask<void>*>(t);
-                        co_await *task;
-                        delete task;
-                    }
-                    if (!DFTU_RESULT_OK(in_out)) {
-                        *out = in_out;
+                    auto pulling = pull(st->in_self, st->in_vt, 1 << 20);
+                    Pulled in = co_await std::move(pulling);
+                    if (in.status == DFTU_END) break;
+                    if (in.status < 0) {
+                        task->fail(in.status, in.message);
                         co_return;
                     }
-                    dftu_dataframe* frame = DFTU_RESULT_VALUE(in_out);
-                    if (!frame) break;
-                    total += dftu_dataframe_num_rows(frame);
-                    dftu_dataframe_free(frame);
+                    total += dftu_dataframe_num_rows(in.frame);
+                    dftu_dataframe_free(in.frame);
                 }
                 dftu_series* c =
                     dftu_series_new_flat(DFTU_TYPE_INT64, &total, 1, nullptr);
                 const char* names[1] = {"count"};
                 dftu_series* cols[1] = {c};
-                out->ok = 1;
-                out->u.value = dftu_dataframe_new(names, cols, 1);
+                *out = dftu_dataframe_new(names, cols, 1);
             }
 
-            static dftu_task* next(void* self, std::int64_t,
-                                   dftu_result_frame* out) {
+            static dftu_status next(dftu_ctx*, void* self, std::int64_t,
+                                    dftu_dataframe** out, dftu_task** pending) {
                 auto* st = static_cast<CountState*>(self);
-                if (st->done) {
-                    out->ok = 1;
-                    out->u.value = nullptr;
-                    return nullptr;
-                }
+                *out = nullptr;
+                *pending = nullptr;
+                if (st->done) return DFTU_END;
                 st->done = true;
-                return dftracer::utils::task_to_abi(drain_and_count(st, out));
+                *pending = coro::make_abi_task([=](coro::AbiTask* task) {
+                    return drain_and_count(task, st, out);
+                });
+                return DFTU_OK;
             }
             static void destroy(void* self) {
                 auto* st = static_cast<CountState*>(self);
@@ -977,29 +1052,37 @@ TEST_SUITE("lazyframe plugin node") {
             }
         };
 
-        static const dftu_cursor_vt COUNT_VT = {Impl::next, Impl::destroy,
-                                                nullptr, nullptr, nullptr};
+        static const dftu_cursor_vt COUNT_VT = {sizeof(dftu_cursor_vt),
+                                                Impl::next,
+                                                Impl::destroy,
+                                                nullptr,
+                                                nullptr,
+                                                nullptr};
 
         struct NodeImpl {
-            static void schema(void*, const dftu_schema*, const dftu_op_arg*,
-                               dftu_schema* out) {
+            static dftu_status schema(dftu_ctx*, void*, const dftu_schema*,
+                                      const dftu_op_arg*, dftu_schema* out) {
                 dftu_schema_add_field(out, "count", DFTU_TYPE_INT64, 0,
                                       DFTU_TIME_UNIT_MICRO, nullptr, 0, 0, 0);
+                return DFTU_OK;
             }
-            static void* open(void*, void* in_self, const dftu_cursor_vt* in_vt,
-                              const dftu_op_arg*, std::uint64_t,
-                              void** out_self, const dftu_cursor_vt** out_vt) {
+            static dftu_status open(dftu_ctx*, void*, void* in_self,
+                                    const dftu_cursor_vt* in_vt,
+                                    const dftu_op_arg*, std::uint64_t,
+                                    void** out_self,
+                                    const dftu_cursor_vt** out_vt) {
                 auto* st = new CountState{in_self, in_vt};
                 *out_self = st;
                 *out_vt = &COUNT_VT;
-                return st;
+                return DFTU_OK;
             }
         };
 
         dftu_node_vt vt{};
+        vt.struct_size = sizeof(vt);
         vt.output_schema = NodeImpl::schema;
         vt.open = NodeImpl::open;
-        REQUIRE(dftu_node_register("test.count_breaker", &vt, nullptr) == 0);
+        REQUIRE(register_node("test.count_breaker", &vt, nullptr) == 0);
 
         IntSource fx{{"val"}, {1, 2, 3, 4, 5, 6, 7}};
         LazyFrame lf = LazyFrame::scan(make_int_source(fx, false))
@@ -1016,8 +1099,8 @@ TEST_SUITE("lazyframe plugin node") {
         "(sync path)") {
         dstd::Vector<bool> sync_flags;
         dftu_node_vt vt = make_probe_vt();
-        REQUIRE(dftu_node_register("test.sync_probe.resident", &vt,
-                                   &sync_flags) == 0);
+        REQUIRE(register_node("test.sync_probe.resident", &vt, &sync_flags) ==
+                0);
 
         DataFrame df;
         df.names = dstd::make_shared_strings({"val"});
@@ -1047,8 +1130,7 @@ TEST_SUITE("lazyframe plugin node") {
         "the right values") {
         dstd::Vector<bool> sync_flags;
         dftu_node_vt vt = make_probe_vt();
-        REQUIRE(dftu_node_register("test.sync_probe.async", &vt, &sync_flags) ==
-                0);
+        REQUIRE(register_node("test.sync_probe.async", &vt, &sync_flags) == 0);
 
         auto src = dstd::make_shared<CursorSource>(
             [] { return dstd::make_unique<ThrowingAsyncCursor>(); });
@@ -1074,8 +1156,7 @@ TEST_SUITE("lazyframe plugin node") {
         // not nullptr.
         dstd::Vector<bool> sync_flags;
         dftu_node_vt vt = make_probe_vt();
-        REQUIRE(dftu_node_register("test.sync_probe.err", &vt, &sync_flags) ==
-                0);
+        REQUIRE(register_node("test.sync_probe.err", &vt, &sync_flags) == 0);
 
         {
             auto src = dstd::make_shared<CursorSource>(
@@ -1108,8 +1189,8 @@ TEST_SUITE("lazyframe plugin node") {
         "sync path for every call") {
         dstd::Vector<bool> sync_flags;
         dftu_node_vt vt = make_probe_vt();
-        REQUIRE(dftu_node_register("test.sync_probe.chain.resident", &vt,
-                                   &sync_flags) == 0);
+        REQUIRE(register_node("test.sync_probe.chain.resident", &vt,
+                              &sync_flags) == 0);
 
         auto src = dstd::make_shared<CursorSource>([] {
             return dstd::make_unique<MultiSyncCursor>(multi_morsel_data(), 3);
@@ -1129,8 +1210,8 @@ TEST_SUITE("lazyframe plugin node") {
         "throughout and produces identical values") {
         dstd::Vector<bool> sync_flags;
         dftu_node_vt vt = make_probe_vt();
-        REQUIRE(dftu_node_register("test.sync_probe.chain.async", &vt,
-                                   &sync_flags) == 0);
+        REQUIRE(register_node("test.sync_probe.chain.async", &vt,
+                              &sync_flags) == 0);
 
         auto src = dstd::make_shared<CursorSource>([] {
             return dstd::make_unique<MultiAsyncCursor>(multi_morsel_data(), 3);
@@ -1150,8 +1231,8 @@ TEST_SUITE("lazyframe plugin node") {
         "SpoolReader shape) produces correct values across the transition") {
         dstd::Vector<bool> sync_flags;
         dftu_node_vt vt = make_probe_vt();
-        REQUIRE(dftu_node_register("test.sync_probe.chain.hybrid", &vt,
-                                   &sync_flags) == 0);
+        REQUIRE(register_node("test.sync_probe.chain.hybrid", &vt,
+                              &sync_flags) == 0);
 
         auto src = dstd::make_shared<CursorSource>([] {
             return dstd::make_unique<SyncThenAsyncCursor>(multi_morsel_data(),
@@ -1177,8 +1258,8 @@ TEST_SUITE("lazyframe plugin node") {
         "reported identically on the sync and async paths") {
         dstd::Vector<bool> sync_flags;
         dftu_node_vt vt = make_probe_vt();
-        REQUIRE(dftu_node_register("test.sync_probe.chain.err", &vt,
-                                   &sync_flags) == 0);
+        REQUIRE(register_node("test.sync_probe.chain.err", &vt, &sync_flags) ==
+                0);
 
         {
             auto src = dstd::make_shared<CursorSource>(
@@ -1269,7 +1350,7 @@ TEST_SUITE("lazyframe plugin node") {
         ForwardLog flog;
         flog.bytes = std::uint64_t{1} << 40;
         dftu_node_vt vt = make_forward_vt();
-        REQUIRE(dftu_node_register("test.forward", &vt, &flog) == 0);
+        REQUIRE(register_node("test.forward", &vt, &flog) == 0);
 
         NarrowLog log;
         NarrowSource fx{{{"val"}, {1, 2, 3, 4, 5, 6}}, &log};
@@ -1303,7 +1384,7 @@ TEST_SUITE("lazyframe plugin node") {
         constexpr std::uint64_t BUDGET = 64 * 1024 * 1024;
         ForwardLog flog;  // the node itself holds nothing
         dftu_node_vt vt = make_forward_vt();
-        REQUIRE(dftu_node_register("test.forward.under", &vt, &flog) == 0);
+        REQUIRE(register_node("test.forward.under", &vt, &flog) == 0);
 
         NarrowLog log;
         log.bytes = std::uint64_t{1} << 40;
@@ -1341,7 +1422,7 @@ TEST_SUITE("lazyframe plugin node") {
         flog.reclaim_input = true;
         flog.bytes = std::uint64_t{1} << 40;
         dftu_node_vt vt = make_forward_vt();
-        REQUIRE(dftu_node_register("test.forward.throwing", &vt, &flog) == 0);
+        REQUIRE(register_node("test.forward.throwing", &vt, &flog) == 0);
 
         LazyFrame lf = throwing_hooks_source(faults)
                            .op("test.forward.throwing", OpArgs())

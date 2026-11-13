@@ -469,7 +469,7 @@ def test_jit_cse_applies_across_all_op_kinds():
 def _body(cls):
     s = cls._jit_plugin.source
     i = s.index("for (int64_t i = 0; i < n; ++i)")
-    return s[i : s.index("return NULL;", i)]
+    return s[i : s.index("return _st;", i)]
 
 
 def test_jit_cse_shares_a_value_expression():
@@ -608,7 +608,7 @@ def test_jit_each_map_gets_its_own_accumulator():
     # Each declared map is its own named DFTU_SVC_AGG accumulator, fed by its own
     # per-batch row buffer.
     for name, op in (("n", "DFTU_AGG_SUM"), ("tot", "DFTU_AGG_SUM"), ("avg", "DFTU_AGG_MEAN")):
-        assert f'agg_new(host->h, "{wire[name]}"' in src
+        assert f'agg_new(ctx, host->h, "{wire[name]}"' in src
         assert f"{{{op}, " in src
         assert f"_n_{name}++" in b
 

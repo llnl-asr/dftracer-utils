@@ -909,7 +909,8 @@ class OracleAggFold : public dftracer::utils::trace::views::detail::Fold {
         o.maps_.host.clear();
         return {};
     }
-    dftracer::utils::coro::CoroTask<bool> finalize(
+    dftracer::utils::coro::CoroTask<dftracer::utils::dstd::Result<bool>>
+    finalize(
         const dftracer::utils::trace::views::detail::CoverageSet&) override {
         co_return true;
     }

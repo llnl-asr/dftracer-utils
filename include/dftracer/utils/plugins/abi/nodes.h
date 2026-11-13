@@ -20,20 +20,21 @@
 extern "C" {
 #endif
 
-#define DFTU_SVC_NODES "dftu.svc.nodes@0"
+#define DFTU_SVC_NODES "dftu.svc.nodes"
 
 /** Build-phase registry of named plan nodes. Fetched via
    dftu_plugin_host::get_service(DFTU_SVC_NODES); the run-time host answers
    it but refuses register_node, as it does register_provider. */
 typedef struct dftu_svc_nodes {
+    uint32_t struct_size; /**< sizeof(dftu_svc_nodes) */
     /** Register `vt`/`self` under `name`, which must be `<plugin>.<name>`.
        `vt` is copied; `self` must outlive every cursor the host opens against
        it, and the host calls vt->destroy(self) once the node is
-       unregistered. Returns 0 on success, non-zero if `name`/`vt` is NULL,
+       unregistered. Fails with DFTU_E_INVALID if `name`/`vt` is NULL,
        `vt->output_schema` or `vt->open` is NULL, `name` fails the namespace
        rule, or the name is already registered. */
-    int (*register_node)(void* h, const char* name, const dftu_node_vt* vt,
-                         void* self);
+    dftu_status (*register_node)(dftu_ctx* ctx, void* h, const char* name,
+                                 const dftu_node_vt* vt, void* self);
 } dftu_svc_nodes;
 
 #ifdef __cplusplus

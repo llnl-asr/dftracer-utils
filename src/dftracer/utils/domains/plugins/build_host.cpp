@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: MIT
-#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/domains/plugins/build_host.h>
@@ -16,36 +15,29 @@ namespace {
 
 BuildHost& self_of(void* h) { return *static_cast<BuildHost*>(h); }
 
-::dftu_error denied_error() {
-    return ::dftu_error{dftracer::utils::dstd::CORE_ERROR_DOMAIN.id,
-                        static_cast<std::int32_t>(
-                            dftracer::utils::dstd::Condition::Unsupported),
-                        DFTU_E_UNSUPPORTED,
-                        "not available at load: the factory host offers "
-                        "registration only",
-                        nullptr};
+dftu_status denied(::dftu_ctx* ctx, BuildHost& host, const char* what) {
+    host.deny(what);
+    return host_fail(ctx, DFTU_E_UNSUPPORTED,
+                     "not available at load: the factory host offers "
+                     "registration only");
 }
 
-::dftu_result_series build_ops_run(void* h, const char*,
-                                   const ::dftu_series* const*, std::uint32_t,
-                                   const ::dftu_op_arg*) {
-    self_of(h).deny(DFTU_SVC_OPS "::run");
-    return ::dftu_result_series{0, {.err = denied_error()}};
+dftu_status build_ops_run(::dftu_ctx* ctx, void* h, const char*,
+                          const ::dftu_series* const*, std::uint32_t,
+                          const ::dftu_op_arg*, ::dftu_series**) {
+    return denied(ctx, self_of(h), DFTU_SVC_OPS "::run");
 }
 
-::dftu_result_scalar build_ops_run_aggregate(void* h, const char*,
-                                             const ::dftu_series* const*,
-                                             std::uint32_t,
-                                             const ::dftu_op_arg*) {
-    self_of(h).deny(DFTU_SVC_OPS "::run_aggregate");
-    return ::dftu_result_scalar{0, {.err = denied_error()}};
+dftu_status build_ops_run_aggregate(::dftu_ctx* ctx, void* h, const char*,
+                                    const ::dftu_series* const*, std::uint32_t,
+                                    const ::dftu_op_arg*, ::dftu_scalar*) {
+    return denied(ctx, self_of(h), DFTU_SVC_OPS "::run_aggregate");
 }
 
-::dftu_result_frame build_ops_run_frame(void* h, const char*,
-                                        const ::dftu_dataframe* const*,
-                                        std::uint32_t, const ::dftu_op_arg*) {
-    self_of(h).deny(DFTU_SVC_OPS "::run_frame");
-    return ::dftu_result_frame{0, {.err = denied_error()}};
+dftu_status build_ops_run_frame(::dftu_ctx* ctx, void* h, const char*,
+                                const ::dftu_dataframe* const*, std::uint32_t,
+                                const ::dftu_op_arg*, ::dftu_dataframe**) {
+    return denied(ctx, self_of(h), DFTU_SVC_OPS "::run_frame");
 }
 
 // Registering an op means checking the name is free, so find() is part of the
@@ -54,46 +46,48 @@ const ::dftu_op_desc* build_ops_find(void*, const char* name) {
     return ::dftu_op_find(name);
 }
 
-int build_ops_register(void* h, const ::dftu_op_desc* desc) {
-    int rc = detail::register_plugin_op(desc);
-    if (rc == 0) self_of(h).registered_ops().emplace_back(desc->name);
-    return rc;
+dftu_status build_ops_register(::dftu_ctx* ctx, void* h,
+                               const ::dftu_op_desc* desc) {
+    const dftu_status status = detail::register_plugin_op(ctx, desc);
+    if (status >= 0) self_of(h).registered_ops().emplace_back(desc->name);
+    return status;
 }
 
-::dftu_result_lazyframe build_ops_run_lazy(void* h, const char*,
-                                           const ::dftu_lazyframe* const*,
-                                           std::uint32_t,
-                                           const ::dftu_op_arg*) {
-    self_of(h).deny(DFTU_SVC_OPS "::run_lazy");
-    return ::dftu_result_lazyframe{0, {.err = denied_error()}};
+dftu_status build_ops_run_lazy(::dftu_ctx* ctx, void* h, const char*,
+                               const ::dftu_lazyframe* const*, std::uint32_t,
+                               const ::dftu_op_arg*, ::dftu_lazyframe**) {
+    return denied(ctx, self_of(h), DFTU_SVC_OPS "::run_lazy");
 }
 
 const ::dftu_svc_ops g_build_ops = {
-    build_ops_run,  build_ops_run_aggregate, build_ops_run_frame,
-    build_ops_find, build_ops_register,      build_ops_run_lazy};
+    sizeof(::dftu_svc_ops), build_ops_run,  build_ops_run_aggregate,
+    build_ops_run_frame,    build_ops_find, build_ops_register,
+    build_ops_run_lazy};
 
-::dftu_agg* build_agg_new(void* h, const char*, const char* const*,
-                          std::uint32_t, const ::dftu_agg_col*, std::uint32_t) {
-    self_of(h).deny(DFTU_SVC_AGG "::agg_new");
-    return nullptr;
+dftu_status build_agg_new(::dftu_ctx* ctx, void* h, const char*,
+                          const char* const*, std::uint32_t,
+                          const ::dftu_agg_col*, std::uint32_t, ::dftu_agg**) {
+    return denied(ctx, self_of(h), DFTU_SVC_AGG "::agg_new");
 }
 
-void build_agg_accumulate(void* h, ::dftu_agg*, const ::dftu_dataframe*) {
-    self_of(h).deny(DFTU_SVC_AGG "::agg_accumulate");
+dftu_status build_agg_accumulate(::dftu_ctx* ctx, void* h, ::dftu_agg*,
+                                 const ::dftu_dataframe*) {
+    return denied(ctx, self_of(h), DFTU_SVC_AGG "::agg_accumulate");
 }
 
-::dftu_dataframe* build_agg_result(void* h, const char*) {
-    self_of(h).deny(DFTU_SVC_AGG "::agg_result");
-    return nullptr;
+dftu_status build_agg_result(::dftu_ctx* ctx, void* h, const char*,
+                             ::dftu_dataframe**) {
+    return denied(ctx, self_of(h), DFTU_SVC_AGG "::agg_result");
 }
 
-int build_register_state(void* h, const ::dftu_state_desc* desc, void* self) {
-    BuildHost& bh = self_of(h);
-    return register_state_into(bh.states(), desc, self, bh.plugin_name());
+dftu_status build_register_state(::dftu_ctx* ctx, void* h,
+                                 const ::dftu_state_desc* desc, void* self) {
+    return register_state_into(self_of(h).states(), ctx, desc, self);
 }
 
-const ::dftu_svc_agg g_build_agg = {build_agg_new, build_agg_accumulate,
-                                    build_agg_result, build_register_state};
+const ::dftu_svc_agg g_build_agg = {sizeof(::dftu_svc_agg), build_agg_new,
+                                    build_agg_accumulate, build_agg_result,
+                                    build_register_state};
 
 // A port key is a pure hash of the name, so wiring a port up is available at
 // load; moving bytes through one needs a batch that does not exist yet.
@@ -112,38 +106,45 @@ const void* build_port_consume(void* h, std::uint64_t,
     return nullptr;
 }
 
-const ::dftu_svc_ports g_build_ports = {build_port_key, build_port_publish,
+const ::dftu_svc_ports g_build_ports = {sizeof(::dftu_svc_ports),
+                                        build_port_key, build_port_publish,
                                         build_port_consume};
 
-int build_register_provider(void* h, const char* name,
-                            const ::dftu_source_vt* vt, void* self) {
+dftu_status build_register_provider(::dftu_ctx* ctx, void* h, const char* name,
+                                    const ::dftu_source_vt* vt, void* self) {
     BuildHost& bh = self_of(h);
-    int rc = detail::register_plugin_provider(name, vt, self);
-    if (rc == 0) bh.registered_providers().emplace_back(name);
-    return rc;
+    const dftu_status status =
+        detail::register_plugin_provider(ctx, name, vt, self);
+    if (status >= 0) bh.registered_providers().emplace_back(name);
+    return status;
 }
 
-const ::dftu_svc_providers g_build_providers = {build_register_provider};
+const ::dftu_svc_providers g_build_providers = {sizeof(::dftu_svc_providers),
+                                                build_register_provider};
 
-int build_register_node(void* h, const char* name, const ::dftu_node_vt* vt,
-                        void* self) {
+dftu_status build_register_node(::dftu_ctx* ctx, void* h, const char* name,
+                                const ::dftu_node_vt* vt, void* self) {
     BuildHost& bh = self_of(h);
-    int rc = detail::register_plugin_node(name, vt, self);
-    if (rc == 0) bh.registered_nodes().emplace_back(name);
-    return rc;
+    const dftu_status status =
+        detail::register_plugin_node(ctx, name, vt, self);
+    if (status >= 0) bh.registered_nodes().emplace_back(name);
+    return status;
 }
 
-const ::dftu_svc_nodes g_build_nodes = {build_register_node};
+const ::dftu_svc_nodes g_build_nodes = {sizeof(::dftu_svc_nodes),
+                                        build_register_node};
 
-int build_register_index(void* h, const char* name,
-                         const ::dftu_index_extension* vt, void* self) {
+dftu_status build_register_index(::dftu_ctx* ctx, void* h, const char* name,
+                                 const ::dftu_index_extension* vt, void* self) {
     BuildHost& bh = self_of(h);
-    int rc = detail::register_plugin_index_extension(name, vt, self);
-    if (rc == 0) bh.registered_index_extensions().emplace_back(name);
-    return rc;
+    const dftu_status status =
+        detail::register_plugin_index_extension(ctx, name, vt, self);
+    if (status >= 0) bh.registered_index_extensions().emplace_back(name);
+    return status;
 }
 
-const ::dftu_svc_index g_build_index = {build_register_index};
+const ::dftu_svc_index g_build_index = {sizeof(::dftu_svc_index),
+                                        build_register_index};
 
 const void* build_get_service(void* h, const char* ext_id) {
     if (!ext_id) return nullptr;
@@ -200,7 +201,7 @@ void build_log(void* h, std::uint8_t level, const char* s, std::uint32_t n) {
 
 BuildHost::BuildHost(dstd::String plugin_name)
     : plugin_name_(plugin_name.empty() ? "plugin" : std::move(plugin_name)) {
-    host_.abi_version = DFTRACER_UTILS_PLUGIN_ABI_VERSION;
+    host_.struct_size = sizeof(dftu_plugin_host);
     host_.h = this;
     host_.get_service = build_get_service;
     host_.resolve = build_resolve;

@@ -4,6 +4,7 @@
 
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/agg_spill.h>
+#include <dftracer/utils/domains/plugins/host_status.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -51,27 +52,28 @@ const void* ops_ext_vtable();
 const void* providers_ext_vtable();
 const void* nodes_ext_vtable();
 const void* index_ext_vtable();
+const void* task_ext_vtable();
 
 /// dftu_svc_ops::register_op with the plugin-name gate applied. Shared with
 /// the build-phase host, whose op registration is the same call.
-int register_plugin_op(const ::dftu_op_desc* desc);
+dftu_status register_plugin_op(::dftu_ctx* ctx, const ::dftu_op_desc* desc);
 
 /// dftu_svc_providers::register_provider with the same plugin-name gate,
 /// forwarding into the process-lifetime provider_registry. Shared with the
 /// build-phase host, whose provider registration is the same call.
-int register_plugin_provider(const char* name, const ::dftu_source_vt* vt,
-                             void* self);
+dftu_status register_plugin_provider(::dftu_ctx* ctx, const char* name,
+                                     const ::dftu_source_vt* vt, void* self);
 
 /// dftu_svc_nodes::register_node with the same plugin-name gate, forwarding
 /// into the process-lifetime node registry.
-int register_plugin_node(const char* name, const ::dftu_node_vt* vt,
-                         void* self);
+dftu_status register_plugin_node(::dftu_ctx* ctx, const char* name,
+                                 const ::dftu_node_vt* vt, void* self);
 
 /// dftu_svc_index::register_extension with the same plugin-name gate,
 /// forwarding into the process index extension registry.
-int register_plugin_index_extension(const char* name,
-                                    const ::dftu_index_extension* vt,
-                                    void* self);
+dftu_status register_plugin_index_extension(::dftu_ctx* ctx, const char* name,
+                                            const ::dftu_index_extension* vt,
+                                            void* self);
 
 }  // namespace detail
 

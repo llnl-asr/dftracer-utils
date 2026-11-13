@@ -21,6 +21,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Redesign the plugin C ABI around a status and a call context.
+  Every plugin callback takes a host-owned `dftu_ctx*` first and returns a `dftu_status`; a callback reports an error with `dftu_fail` and polls `dftu_check` in a long loop.
+  Every host service call takes the caller's `ctx` first and gives results through out-parameters.
+  Every table starts with `struct_size`, and service ids carry no `@N` suffix.
+  The host names the plugin and the callback in the error the caller sees.
+- Make the plugin loader read a `dftracer_plugin_info` record before it runs any plugin code.
+  A plugin defines it with `DFTU_PLUGIN_INFO`; the loader refuses a plugin that exports none, or that was built against another ABI version or other ABI headers, and names the plugin in the message.
+  `PLUGIN_ABI_HASH` in the Python extension gives the header hash that a JIT plugin stamps.
+- Replace `dftu.svc.coro` and `dftu.svc.compose` with `dftu.svc.task`: jobs (`job`, `sleep`, `then`, `all`, `any`, `map`) with typed values, and tasks (`start`, `spawn`, `drive`, `status`, `discard`).
+  `drive` takes a `release` callback that the host calls once when the drive ends, and `discard` gives back a started task that the plugin will not hand to the host.
+  `DFTU_JOB_BLOCKING` gives the run permit back while a leaf blocks, and the first error of `all` or `map` cancels the rest.
+  The C++ SDK has typed `Job<In, Out>` in `plugin/job.h` in place of `Op`.
+- Make the C++ plugin SDK catch every exception at the ABI boundary and give it to the host as an error with its `what()` text.
+  A call the host refuses throws `plugins::Error` out of the plugin code, `Host` carries the call context, and `make_plugin` and `plugin(...).build` take the context and give the descriptor through an out-parameter.
+- Make a plugin index extension whose `step` fails store nothing for the file, where it stored a file payload built from the chunks it did see and pruned matching rows.
 - Make the store and index C functions return a `dftu_status`, give results through out-parameters and take a caller-owned `dftu_error` as the last parameter.
   The error message is owned by the caller and freed with `dftu_error_release`, the enums are `int32_t` typedefs, and `dftu_store_pack_options` and `dftu_indexer_options` start with `struct_size`.
 - Make `to_pandas()` give pandas' nullable dtypes (`Int64`, `boolean`, `string`) for integer, bool and string columns that hold nulls, and `category` for a dictionary column, so `DataFrame.from_pandas(df).to_pandas()` keeps those dtypes.

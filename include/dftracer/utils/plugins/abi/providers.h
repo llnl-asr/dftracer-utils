@@ -35,7 +35,7 @@
 extern "C" {
 #endif
 
-#define DFTU_SVC_PROVIDERS "dftu.svc.providers@0"
+#define DFTU_SVC_PROVIDERS "dftu.svc.providers"
 
 /** Build-phase registry of named sources. Fetched via
    dftu_plugin_host::get_service(DFTU_SVC_PROVIDERS); the run-time host
@@ -44,16 +44,17 @@ extern "C" {
    time a scan runs, the set of providers a plan can name is already
    settled. */
 typedef struct dftu_svc_providers {
+    uint32_t struct_size; /**< sizeof(dftu_svc_providers) */
     /** Register `vt`/`self` under `name`. `name` must be `<plugin>.<name>`
        (the bare and "dftu." namespaces are host-reserved, the same rule
        dftu_svc_ops::register_op enforces); `vt` is copied, so it need not
        outlive the call, but `self` must outlive every scan the host later
-       opens against it. Returns 0 on success, non-zero if `name`/`vt` is
+       opens against it. Fails with DFTU_E_INVALID if `name`/`vt` is
        NULL, `name` fails the namespace rule, or the name is already
        registered - a second registration under the same name is refused,
        never a silent replace. */
-    int (*register_provider)(void* h, const char* name,
-                             const dftu_source_vt* vt, void* self);
+    dftu_status (*register_provider)(dftu_ctx* ctx, void* h, const char* name,
+                                     const dftu_source_vt* vt, void* self);
 } dftu_svc_providers;
 
 #ifdef __cplusplus

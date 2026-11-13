@@ -5,6 +5,7 @@
 // vt/self once, at the .op() call, and drives every later cursor open()
 // straight against that captured pair rather than re-querying this registry.
 
+#include <dftracer/utils/common/abi_error.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/internal/node_registry.h>
 #include <dftracer/utils/dstd/hash_map.h>
@@ -58,15 +59,34 @@ dstd::Optional<NodeEntry> find_node(const char* name) {
 
 extern "C" {
 
-int dftu_node_register(const char* name, const dftu_node_vt* vt, void* self) {
-    if (!name || !vt || !vt->output_schema || !vt->open) return 1;
+dftu_status dftu_node_register(const char* name, const dftu_node_vt* vt,
+                               void* self, dftu_error* err) {
+    using dftracer::utils::common::fill_error;
     using dftracer::utils::dataframe::NodeEntry;
+    using dftracer::utils::dstd::Condition;
+    using dftracer::utils::dstd::Error;
+    if (!name || !vt || !vt->output_schema || !vt->open) {
+        return fill_error(
+            err, Error::from_format<"node register: the name, output_schema "
+                                    "and open must be set">(
+                     Condition::InvalidArgument));
+    }
+    if (vt->struct_size != sizeof(dftu_node_vt)) {
+        return fill_error(err,
+                          Error::from_format<"node '{}': struct_size is not "
+                                             "sizeof(dftu_node_vt)">(
+                              Condition::InvalidArgument, name));
+    }
     std::lock_guard<std::mutex> lock(
         dftracer::utils::dataframe::registry_mutex());
     auto& reg = dftracer::utils::dataframe::nodes();
-    if (reg.find(name) != reg.end()) return 1;
+    if (reg.find(name) != reg.end()) {
+        return fill_error(err,
+                          Error::from_format<"node '{}' is already registered">(
+                              Condition::InvalidArgument, name));
+    }
     reg.emplace(name, NodeEntry{*vt, self});
-    return 0;
+    return DFTU_OK;
 }
 
 int dftu_node_unregister(const char* name) {

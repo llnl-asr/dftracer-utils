@@ -43,7 +43,7 @@ class IndexRuleFold : public Fold {
 
     dstd::Result<void> merge(Fold& other) override;
 
-    coro::CoroTask<bool> finalize(const CoverageSet&) override;
+    coro::CoroTask<dstd::Result<bool>> finalize(const CoverageSet&) override;
 
     /// The merged state, valid after finalize.
     dftracer::utils::dataframe::AggState& state() { return *state_; }

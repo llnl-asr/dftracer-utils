@@ -29,6 +29,7 @@
 #include <fcntl.h>
 #include <task_result.h>
 #include <testing_utilities.h>
+#include <utilities/plugins/test_abi_ctx.h>
 
 #include <cstdint>
 #include <cstring>
@@ -63,23 +64,17 @@ struct HostFixture {
     }
 };
 
+// Drives `make(host)` to completion through the host's task service and gives
+// the status it ends with.
 template <class MakeTask>
-void drive_task(dftu_plugin_host& host, int workers, MakeTask make) {
-    Runtime rt(workers);
-    dftu_utils_test::ok(
-        rt.submit(coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-                      dftu_task* driver =
-                          dftracer::utils::plugins::detail::drive_coro<int>(
-                              &host, make());
-                      co_await *reinterpret_cast<coro::CoroTask<void>*>(driver);
-                  }),
-                  "caller")
-            .wait());
-    rt.shutdown();
+dftu_status drive_task(dftu_plugin_host& host, MakeTask make,
+                       dstd::String* message = nullptr) {
+    test_plugin_common::TaskDriver driver(host);
+    return driver.run(make(driver.host()), message);
 }
 
 // co_awaits the Io ops directly, and once through Host::await to prove the
-// AsyncOp->dftu_task* decay still composes with the old call site.
+// AsyncOp->dftu_task* decay still composes.
 dftracer::utils::plugins::Task read_probe(dftracer::utils::plugins::Host h,
                                           const char* path,
                                           std::int64_t* bytes) {
@@ -91,15 +86,15 @@ dftracer::utils::plugins::Task read_probe(dftracer::utils::plugins::Host h,
     std::int64_t n = 0;
     co_await io.read(fd, buf, sizeof(buf), &n);
     if (n > 0) *bytes += n;
-    int rc = 0;
-    co_await h.await(io.close(fd, &rc));
+    co_await h.await(io.close(fd).release());
 }
 
 }  // namespace
 
 TEST_CASE("plugin cxx: Sketch RAII adds, merges, and frees") {
     HostFixture fx;
-    dftracer::utils::plugins::Host h{&fx.host()};
+    test_plugin_common::Ctx ctx_;
+    dftracer::utils::plugins::Host h{&fx.host(), ctx_.get()};
 
     dftracer::utils::plugins::Sketch a = h.make_sketch();
     dftracer::utils::plugins::Sketch b{h};
@@ -133,16 +128,16 @@ TEST_CASE("plugin cxx: Io ops are co_await-able directly") {
 
     HostFixture fx;
     std::int64_t bytes = 0;
-    drive_task(fx.host(), 1, [&] {
-        return read_probe(dftracer::utils::plugins::Host{&fx.host()},
-                          path.c_str(), &bytes);
-    });
+    CHECK(drive_task(fx.host(), [&](dftracer::utils::plugins::Host h) {
+              return read_probe(h, path.c_str(), &bytes);
+          }) == DFTU_OK);
     CHECK(bytes == static_cast<std::int64_t>(body.size()));
 }
 
 TEST_CASE("plugin cxx: StrId hides the raw interned-id integer") {
     HostFixture fx;
-    dftracer::utils::plugins::Host h{&fx.host()};
+    test_plugin_common::Ctx ctx_;
+    dftracer::utils::plugins::Host h{&fx.host(), ctx_.get()};
 
     const dftracer::utils::plugins::StrId id = h.intern("POSIX");
     CHECK_FALSE(id.absent());
@@ -365,7 +360,10 @@ struct ViewSlice {
 TEST_CASE("plugin cxx: make_plugin dispatches a Batch-view step") {
     HostFixture fx;
     dftu_plugin* p = dftracer::utils::plugins::make_plugin<ViewSlice>(nullptr);
-    auto* slice = static_cast<ViewSlice*>(p->make_slice(p->self));
+    test_plugin_common::Ctx c;
+    void* made = nullptr;
+    REQUIRE(p->make_slice(c.get(), p->self, &made) == DFTU_OK);
+    auto* slice = static_cast<ViewSlice*>(made);
     REQUIRE(slice != nullptr);
 
     const std::uint32_t N = 4;
@@ -382,9 +380,8 @@ TEST_CASE("plugin cxx: make_plugin dispatches a Batch-view step") {
     dftu_dataframe* df = dftu_dataframe_new(col_names, cols, 2);
     REQUIRE(df != nullptr);
 
-    dftu_task* t = p->on_batch(slice, df, &fx.host());
+    CHECK(p->on_batch(c.get(), slice, df, &fx.host()) == DFTU_OK);
     dftu_dataframe_free(df);
-    CHECK(t == nullptr);  // synchronous step returns no task
     CHECK(slice->count == N);
     CHECK(slice->pid_sum == 10 + 11 + 12 + 13);
     CHECK(slice->ts_max == 503);
@@ -409,28 +406,28 @@ trace::views::detail::FoldEvent evt(std::uint64_t pid, std::uint64_t dur,
 // One accumulator keyed on pid built through the ergonomic Host::agg + agg::
 // factories: a per-key row count and the tid at the largest duration. Neither
 // names a raw DFTU_AGG_* code nor fills a dftu_agg_col by hand.
-::dftu_task* agg_facade_columns(void*, const dftu_dataframe* df,
-                                const dftu_plugin_host* host) {
-    dftracer::utils::plugins::Host h{host};
+dftu_status agg_facade_columns(dftu_ctx* ctx, void*, const dftu_dataframe* df,
+                               const dftu_plugin_host* host) {
+    dftracer::utils::plugins::Host h{host, ctx};
     const auto acc = h.agg("by_pid", {"pid"},
                            {plugins::agg::count("hits"),
                             plugins::agg::argmax("tid", "tid_at_max", "dur")});
     if (acc) acc.accumulate(df);
-    return nullptr;
+    return DFTU_OK;
 }
 
 dftu_plugin make_agg_facade_plugin() {
     dftu_plugin p{};
-    p.abi_version = DFTRACER_UTILS_PLUGIN_ABI_VERSION;
+    p.struct_size = sizeof(p);
     p.plan_duql = [](void*) -> const char* { return nullptr; };
-    p.make_slice = [](void*) -> void* {
+    p.make_slice = [](dftu_ctx*, void*, void** out) -> dftu_status {
         static int sentinel;
-        return &sentinel;
+        *out = &sentinel;
+        return DFTU_OK;
     };
-    p.merge = [](void*, void*) {};
-    p.on_finalize = [](void*, const dftu_plugin_host*) -> ::dftu_task* {
-        return nullptr;
-    };
+    p.merge = [](dftu_ctx*, void*, void*) -> dftu_status { return DFTU_OK; };
+    p.on_finalize = [](dftu_ctx*, void*, const dftu_plugin_host*,
+                       dftu_task**) -> dftu_status { return DFTU_OK; };
     p.destroy_slice = [](void*) {};
     p.destroy = [](void*) {};
     p.on_batch = agg_facade_columns;
@@ -492,8 +489,9 @@ TEST_CASE("plugin cxx: Host::agg merges a count and an argmax across slices") {
     Runtime rt(1);
     dftu_utils_test::ok(
         rt.submit(coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-                      co_await master.finalize(
+                      auto finalized = co_await master.finalize(
                           trace::views::detail::CoverageSet{});
+                      CHECK(finalized.has_value());
                   }),
                   "fin")
             .wait());

@@ -10,6 +10,7 @@
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <dftracer/utils/runtime/runtime.h>
+#include <utilities/plugins/test_abi_ctx.h>
 // After fold_adapter.h so nanoarrow is set up before dataframe/abi.h's
 // arrow_abi.
 #include <dftracer/utils/dataframe/abi.h>
@@ -54,9 +55,9 @@ trace::views::detail::FoldEvent evt(dstd::StringIntern& intern,
 // zero-key scalar form, a pid-keyed pair of reductions, a two-key
 // (pid, name) count, and a per-pid name set. All through Host::agg + the
 // agg:: factories, so no case names a raw DFTU_AGG_* code.
-::dftu_task* wrappers_columns(void*, const dftu_dataframe* df,
-                              const dftu_plugin_host* host) {
-    plugins::Host h{host};
+dftu_status wrappers_columns(dftu_ctx* ctx, void*, const dftu_dataframe* df,
+                             const dftu_plugin_host* host) {
+    plugins::Host h{host, ctx};
     if (const auto a = h.agg(
             "wrap_scalar", {},
             {plugins::agg::count("n"), plugins::agg::sum("dur", "sum_dur")}))
@@ -72,20 +73,23 @@ trace::views::detail::FoldEvent evt(dstd::StringIntern& intern,
     if (const auto a = h.agg("wrap_names", {"pid"},
                              {plugins::agg::set_union("name", "names")}))
         a.accumulate(df);
-    return nullptr;
+    return DFTU_OK;
 }
 
 dftu_plugin make_wrappers_plugin() {
     dftu_plugin p{};
-    p.abi_version = DFTRACER_UTILS_PLUGIN_ABI_VERSION;
+    p.struct_size = sizeof(p);
     p.plan_duql = [](void*) -> const char* { return nullptr; };
-    p.make_slice = [](void*) -> void* {
+    p.make_slice = [](dftu_ctx*, void*, void** out) -> dftu_status {
         static int sentinel;
-        return &sentinel;
+        *out = &sentinel;
+        return DFTU_OK;
     };
-    p.merge = [](void*, void*) {};
-    p.on_finalize = [](void*, const dftu_plugin_host*) -> ::dftu_task* {
-        return nullptr;
+    p.merge = [](dftu_ctx*, void*, void*) -> dftu_status { return DFTU_OK; };
+    p.on_finalize = [](dftu_ctx*, void*, const dftu_plugin_host*,
+                       dftu_task** pending) -> dftu_status {
+        *pending = nullptr;
+        return DFTU_OK;
     };
     p.destroy_slice = [](void*) {};
     p.destroy = [](void*) {};
@@ -113,8 +117,9 @@ void run_wrappers(dstd::StringIntern& intern,
     Runtime rt(1);
     dftu_utils_test::ok(
         rt.submit(coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-                      co_await master.finalize(
+                      auto finalized = co_await master.finalize(
                           trace::views::detail::CoverageSet{});
+                      CHECK(finalized.has_value());
                   }),
                   "fin")
             .wait());
@@ -288,7 +293,8 @@ TEST_SUITE("PluginCxxWrappers") {
         dstd::StringIntern intern;
         dftu_plugin p = make_wrappers_plugin();
         auto fold = dstd::make_unique<domains::plugins::PluginFold>(&p, intern);
-        plugins::Host h{&fold->host()};
+        test_plugin_common::Ctx c;
+        plugins::Host h{&fold->host(), c.get()};
         const plugins::OwnedDataFrame miss =
             h.agg_result("no_such_accumulator");
         CHECK(miss.handle == nullptr);

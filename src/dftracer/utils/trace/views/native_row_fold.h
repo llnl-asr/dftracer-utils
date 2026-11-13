@@ -233,7 +233,7 @@ class NativeRowFold : public Fold {
         return {};
     }
 
-    coro::CoroTask<bool> finalize(const CoverageSet&) override {
+    coro::CoroTask<dstd::Result<bool>> finalize(const CoverageSet&) override {
         co_return true;
     }
 

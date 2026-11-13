@@ -89,7 +89,7 @@ class VectorizedFold : public Fold {
         return {};
     }
 
-    coro::CoroTask<bool> finalize(const CoverageSet&) override {
+    coro::CoroTask<dstd::Result<bool>> finalize(const CoverageSet&) override {
         co_return false;  // pulls a result via result(), persists nothing
     }
 

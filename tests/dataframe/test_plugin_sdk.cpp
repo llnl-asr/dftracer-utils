@@ -49,6 +49,9 @@ struct Counters {
     int cursors_destroyed = 0;
 };
 
+// A filter on `id` against this value makes RangeSource::apply_filter throw.
+constexpr std::int64_t APPLY_THROWS = 424242;
+
 // Rows id = lo..hi-1, val = id * 10, kept in memory.
 class RangeSource {
    public:
@@ -121,6 +124,8 @@ class RangeSource {
         auto cmp = pred.as_compare();
         if (!cmp || cmp->column != 0 || cmp->rhs.kind != DFTU_SCALAR_TAG_I64)
             return dstd::nullopt;
+        if (cmp->rhs.value.i == APPLY_THROWS)
+            throw std::runtime_error("range apply broke");
         std::int64_t lo = lo_;
         if (cmp->op == DFTU_CMP_GT)
             lo = cmp->rhs.value.i + 1;
@@ -250,6 +255,16 @@ TEST_SUITE("plugin SDK source") {
         CHECK(dstd::String(collected.error().c_str())
                   .find("range cursor broke") != dstd::String::npos);
     }
+
+    TEST_CASE("a throwing apply_filter leaves the filter to the engine") {
+        auto c = dstd::make_shared<Counters>();
+        Root r(c, 0, 4);
+        dataframe::LazyFrame lf = dataframe::LazyFrame::scan(r.source).filter(
+            dataframe::col(0) > APPLY_THROWS);
+        dataframe::DataFrame f = run(lf.collect());
+        CHECK(f.num_rows() == 0);
+        CHECK(c->filters_absorbed == 0);
+    }
 }
 
 namespace {
@@ -308,10 +323,12 @@ class DoubleVal {
 struct RegisteredNode {
     dstd::String name;
     RegisteredNode(dstd::String n, OpenMode mode) : name(std::move(n)) {
-        REQUIRE(
-            dftu_node_register(name.c_str(), plugins::node_vtable<DoubleVal>(),
-                               plugins::make_node_self(
-                                   dstd::make_unique<DoubleVal>(mode))) == 0);
+        dftu_error err = DFTU_ERROR_INIT;
+        REQUIRE(dftu_node_register(
+                    name.c_str(), plugins::node_vtable<DoubleVal>(),
+                    plugins::make_node_self(dstd::make_unique<DoubleVal>(mode)),
+                    &err) == DFTU_OK);
+        dftu_error_release(&err);
     }
     ~RegisteredNode() { dftu_node_unregister(name.c_str()); }
 };

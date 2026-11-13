@@ -61,9 +61,9 @@ def test_jit_scalar_accumulator_emits_keyless_agg():
     wire = {attr: wid for wid, attr in rn.items()}
     assert "DFTU_SVC_AGG" in src
     # A keyed accumulator passes its key columns; a scalar one passes none.
-    assert f'agg_new(host->h, "{wire["per_pid"]}", _keys, 1u,' in src
-    assert f'agg_new(host->h, "{wire["total_dur"]}", NULL, 0u,' in src
-    assert f'agg_new(host->h, "{wire["n_events"]}", NULL, 0u,' in src
+    assert f'agg_new(ctx, host->h, "{wire["per_pid"]}", _keys, 1u,' in src
+    assert f'agg_new(ctx, host->h, "{wire["total_dur"]}", NULL, 0u,' in src
+    assert f'agg_new(ctx, host->h, "{wire["n_events"]}", NULL, 0u,' in src
     assert '{DFTU_AGG_MAX, "v0", "value", 0.0, NULL}' in src
     # The per-event contribution lands in that accumulator's row buffer.
     assert "_v0_total_dur[_r] = (double)(dftu_jit_u64(&_col_dur, i));" in src

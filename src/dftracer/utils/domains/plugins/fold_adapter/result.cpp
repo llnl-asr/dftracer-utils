@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/domains/plugins/fold_adapter.h>
 #include <dftracer/utils/domains/plugins/fold_adapter/ext.h>
@@ -8,33 +9,54 @@
 namespace dftracer::utils::domains::plugins {
 namespace {
 
-int host_result_emit(void* h, const char* name, ::dftu_result_value* v) {
-    return static_cast<PluginFold*>(h)->result_emit(name, v);
+dftu_status host_result_emit(::dftu_ctx* ctx, void* h, const char* name,
+                             ::dftu_result_value* v) {
+    const dstd::Result<void> emitted =
+        static_cast<PluginFold*>(h)->emit_result(name, v);
+    if (!emitted) return host_fail(ctx, emitted.error());
+    return DFTU_OK;
 }
 
-const dftu_svc_result g_result = {host_result_emit};
+const dftu_svc_result g_result = {sizeof(dftu_svc_result), host_result_emit};
 
 }  // namespace
 
 const void* detail::result_ext_vtable() { return &g_result; }
 
-int PluginFold::result_emit(const char* name, ::dftu_result_value* v) {
-    if (!named_results_ || !name || !v) return -1;
+dstd::Result<void> PluginFold::emit_result(const char* name,
+                                           ::dftu_result_value* v) {
+    if (!name || !v) {
+        return common::make_error<
+            "plugin '{}' emit: name and value must be "
+            "set">(common::ErrorCode::InvalidArgument, plugin_label());
+    }
+    if (!named_results_) {
+        return common::make_error<
+            "plugin '{}' emit '{}': this run keeps no named results">(
+            dstd::Condition::Unsupported, plugin_label(), name);
+    }
     switch (static_cast<dftu_result_kind>(v->kind)) {
         case DFTU_RESULT_KIND_BYTES:
             named_results_->emit_blob(name, v->u.bytes.data, v->u.bytes.len);
-            return 0;
+            return {};
         case DFTU_RESULT_KIND_ARROW:
-            return named_results_->emit_arrow(name, v->u.arrow.array,
-                                              v->u.arrow.schema);
+            if (named_results_->emit_arrow(name, v->u.arrow.array,
+                                           v->u.arrow.schema) != 0) {
+                return common::make_error<
+                    "plugin '{}' emit '{}': the Arrow array or schema is not "
+                    "valid">(common::ErrorCode::InvalidArgument, plugin_label(),
+                             name);
+            }
+            return {};
         case DFTU_RESULT_KIND_FRAME:
             named_results_->emit_frame(name, v->u.frame);
-            return 0;
+            return {};
         case DFTU_RESULT_KIND_LAZYFRAME:
             named_results_->emit_lazyframe(name, v->u.lazyframe);
-            return 0;
+            return {};
     }
-    return -1;
+    return common::make_error<"plugin '{}' emit '{}': unknown result kind {}">(
+        common::ErrorCode::InvalidArgument, plugin_label(), name, v->kind);
 }
 
 }  // namespace dftracer::utils::domains::plugins

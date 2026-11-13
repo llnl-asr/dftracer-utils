@@ -66,10 +66,12 @@ struct FixtureConfig {
     bool apply_limit = false;
 };
 
-int32_t fixture_schema(void*, const char* const** out_names) {
+dftu_status fixture_schema(dftu_ctx*, void*, const char* const** out_names,
+                           int32_t* out_count) {
     static const char* names[] = {"id", "val"};
     *out_names = names;
-    return 2;
+    *out_count = 2;
+    return DFTU_OK;
 }
 
 struct CursorState {
@@ -77,17 +79,18 @@ struct CursorState {
     bool done = false;
 };
 
-dftu_task* fixture_cursor_next(void* self, int64_t, dftu_result_frame* out) {
+dftu_status fixture_cursor_next(dftu_ctx*, void* self, int64_t,
+                                dftu_dataframe** out, dftu_task** pending) {
     auto* cs = static_cast<CursorState*>(self);
-    out->ok = 1;
+    *pending = nullptr;
     if (cs->done) {
-        out->u.value = nullptr;
-    } else {
-        out->u.value = cs->frame;
-        cs->frame = nullptr;
-        cs->done = true;
+        *out = nullptr;
+        return DFTU_END;
     }
-    return nullptr;
+    *out = cs->frame;
+    cs->frame = nullptr;
+    cs->done = true;
+    return DFTU_OK;
 }
 
 void fixture_cursor_destroy(void* self) {
@@ -96,8 +99,12 @@ void fixture_cursor_destroy(void* self) {
     delete cs;
 }
 
-const dftu_cursor_vt FIXTURE_CURSOR_VT = {
-    fixture_cursor_next, fixture_cursor_destroy, nullptr, nullptr, nullptr};
+const dftu_cursor_vt FIXTURE_CURSOR_VT = {sizeof(dftu_cursor_vt),
+                                          fixture_cursor_next,
+                                          fixture_cursor_destroy,
+                                          nullptr,
+                                          nullptr,
+                                          nullptr};
 
 dftu_dataframe* make_base_frame() {
     std::int64_t ids[10];
@@ -118,9 +125,9 @@ dftu_dataframe* make_base_frame() {
 // 10 rows: id 0..9, val = id*10. Honors/ignores projection and applies its
 // one filter per cfg->filter_behavior, so a single vtable drives every test
 // below by varying `self`.
-void* fixture_scan(void* self, const dftu_scan_request* req,
-                   int32_t* out_pushed, void** out_cursor_self,
-                   const dftu_cursor_vt** out_vt) {
+dftu_status fixture_scan(dftu_ctx*, void* self, const dftu_scan_request* req,
+                         int32_t* out_pushed, void** out_cursor_self,
+                         const dftu_cursor_vt** out_vt) {
     auto* cfg = static_cast<FixtureConfig*>(self);
     dftu_dataframe* df = make_base_frame();
 
@@ -193,25 +200,34 @@ void* fixture_scan(void* self, const dftu_scan_request* req,
     auto* cs = new CursorState{df};
     *out_cursor_self = cs;
     *out_vt = &FIXTURE_CURSOR_VT;
-    return cs;
+    return DFTU_OK;
 }
 
 void fixture_destroy(void*) {}
 
 dstd::SharedPtr<Source> make_fixture_source(FixtureConfig& cfg) {
-    static const dftu_source_vt vt = {fixture_schema, fixture_scan,
-                                      fixture_destroy, nullptr, nullptr};
+    static const dftu_source_vt vt = {
+        sizeof(dftu_source_vt), fixture_schema, fixture_scan,
+        fixture_destroy,        nullptr,        nullptr};
     return make_provider_source(vt, &cfg);
 }
 
-void* refusing_scan(void*, const dftu_scan_request*, int32_t*, void**,
-                    const dftu_cursor_vt**) {
-    return nullptr;
+dftu_status no_cursor_scan(dftu_ctx*, void*, const dftu_scan_request*, int32_t*,
+                           void**, const dftu_cursor_vt**) {
+    return DFTU_OK;
 }
 
-dstd::SharedPtr<Source> make_refusing_source(FixtureConfig& cfg) {
-    static const dftu_source_vt vt = {fixture_schema, refusing_scan,
-                                      fixture_destroy, nullptr, nullptr};
+dftu_status failing_scan(dftu_ctx* ctx, void*, const dftu_scan_request*,
+                         int32_t*, void**, const dftu_cursor_vt**) {
+    return dftu_fail(ctx, DFTU_E_INVALID, "scan refused by the provider");
+}
+
+dstd::SharedPtr<Source> make_scan_source(
+    FixtureConfig& cfg,
+    dftu_status (*scan)(dftu_ctx*, void*, const dftu_scan_request*, int32_t*,
+                        void**, const dftu_cursor_vt**)) {
+    const dftu_source_vt vt = {sizeof(dftu_source_vt), fixture_schema, scan,
+                               fixture_destroy,        nullptr,        nullptr};
     return make_provider_source(vt, &cfg);
 }
 
@@ -222,10 +238,26 @@ TEST_SUITE("provider pushdown") {
         FixtureConfig cfg;
         dftu_utils_test::expect_error(
             dftracer::utils::default_runtime()
-                .submit(LazyFrame::scan(make_refusing_source(cfg)).collect())
+                .submit(LazyFrame::scan(make_scan_source(cfg, no_cursor_scan))
+                            .collect())
                 .get(),
             dftracer::utils::common::ErrorCode::Internal,
-            "provider scan: the provider opened no cursor");
+            "provider scan: the provider gave no valid cursor vtable");
+    }
+
+    TEST_CASE("a provider whose scan fails reports its message") {
+        FixtureConfig cfg;
+        const auto result =
+            dftracer::utils::default_runtime()
+                .submit(LazyFrame::scan(make_scan_source(cfg, failing_scan))
+                            .collect())
+                .get();
+        REQUIRE_FALSE(result.has_value());
+        CHECK(dftracer::utils::common::errorcode_of(result.error()) ==
+              dftracer::utils::common::ErrorCode::InvalidArgument);
+        const dstd::String text(result.error().c_str());
+        CHECK(text.find("provider scan") != dstd::String::npos);
+        CHECK(text.find("scan refused by the provider") != dstd::String::npos);
     }
 
     TEST_CASE("Exact and No give the same rows (engine re-applies No)") {

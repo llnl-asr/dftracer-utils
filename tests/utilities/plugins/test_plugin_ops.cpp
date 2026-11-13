@@ -16,6 +16,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/plugin.h>
 #include <doctest/doctest.h>
+#include <utilities/plugins/test_abi_ctx.h>
 
 #include <cstdint>
 
@@ -47,7 +48,8 @@ struct HostFixture {
 
 TEST_CASE("plugin ops: run_op runs a registered column op by name") {
     HostFixture fx;
-    plugins::Host h{&fx.host()};
+    test_plugin_common::Ctx c;
+    plugins::Host h{&fx.host(), c.get()};
 
     const std::int64_t a_vals[] = {1, 2, 3};
     const std::int64_t b_vals[] = {10, 20, 30};
@@ -72,15 +74,26 @@ TEST_CASE("plugin ops: run_op runs a registered column op by name") {
 
 TEST_CASE("plugin ops: run_op reports unknown names and bad arity") {
     HostFixture fx;
-    plugins::Host h{&fx.host()};
+    test_plugin_common::Ctx c;
+    plugins::Host h{&fx.host(), c.get()};
 
-    CHECK(h.run_op("dftu.test.nonexistent_op", {}) == nullptr);
+    try {
+        h.run_op("dftu.test.nonexistent_op", {});
+        FAIL("run_op of an unknown name must throw");
+    } catch (const plugins::Error& e) {
+        // The host's message is on the call's ctx; the Error carries the
+        // status.
+        CHECK(e.status() == DFTU_E_NOT_FOUND);
+        CHECK(e.reported());
+        CHECK(c.message().find("dftu.test.nonexistent_op") !=
+              dstd::String::npos);
+    }
 
     const std::int64_t a_vals[] = {1, 2, 3};
     dftu_series* a = dftu_series_new_flat(DFTU_TYPE_INT64, a_vals, 3, nullptr);
     REQUIRE(a);
     // "dftu.series.add" takes two series operands; one is an arity mismatch.
-    CHECK(h.run_op("dftu.series.add", {a}) == nullptr);
+    CHECK_THROWS_AS(h.run_op("dftu.series.add", {a}), plugins::Error);
     dftu_series_free(a);
 }
 
@@ -91,28 +104,31 @@ TEST_CASE("plugin ops: unknown op and a failed op are distinguishable") {
     REQUIRE(ops);
     REQUIRE(ops->run);
 
-    dftu_result_series unknown =
-        ops->run(fx.host().h, "dftu.test.nonexistent_op", nullptr, 0, nullptr);
-    CHECK_FALSE(DFTU_RESULT_OK(unknown));
-    CHECK(DFTU_RESULT_ERROR(unknown).status == DFTU_E_NOT_FOUND);
+    test_plugin_common::Ctx c;
+    dftu_series* out = nullptr;
+    const dftu_status unknown =
+        ops->run(c.get(), fx.host().h, "dftu.test.nonexistent_op", nullptr, 0,
+                 nullptr, &out);
+    CHECK(unknown == DFTU_E_NOT_FOUND);
+    CHECK(c.message().find("dftu.test.nonexistent_op") != dstd::String::npos);
+    CHECK(out == nullptr);
 
     const std::int64_t a_vals[] = {1, 2, 3};
     dftu_series* a = dftu_series_new_flat(DFTU_TYPE_INT64, a_vals, 3, nullptr);
     REQUIRE(a);
     const dftu_series* in[1] = {a};
     // "dftu.series.add" is a real op, but this call gives it the wrong arity.
-    dftu_result_series failed =
-        ops->run(fx.host().h, "dftu.series.add", in, 1, nullptr);
-    CHECK_FALSE(DFTU_RESULT_OK(failed));
-    CHECK(DFTU_RESULT_ERROR(failed).status == DFTU_E_INVALID);
-    CHECK(DFTU_RESULT_ERROR(failed).status !=
-          DFTU_RESULT_ERROR(unknown).status);
+    const dftu_status failed =
+        ops->run(c.get(), fx.host().h, "dftu.series.add", in, 1, nullptr, &out);
+    CHECK(failed == DFTU_E_INVALID);
+    CHECK(failed != unknown);
     dftu_series_free(a);
 }
 
 TEST_CASE("plugin ops: find_op resolves a built-in by name") {
     HostFixture fx;
-    plugins::Host h{&fx.host()};
+    test_plugin_common::Ctx c;
+    plugins::Host h{&fx.host(), c.get()};
 
     const dftu_op_desc* desc = h.find_op("dftu.series.add");
     REQUIRE(desc);
@@ -134,12 +150,13 @@ TEST_CASE("plugin ops: a dftu. op name is refused") {
     REQUIRE(host_op);
     dftu_op_desc shadow{};
     shadow.name = "dftu.hash.fnv1a";
-    CHECK(ops->register_op(fx.host().h, &shadow) != 0);
+    test_plugin_common::Ctx c;
+    CHECK(ops->register_op(c.get(), fx.host().h, &shadow) < 0);
     CHECK(ops->find(fx.host().h, "dftu.hash.fnv1a") == host_op);
 
     dftu_op_desc fresh{};
     fresh.name = "dftu.test.plugin_shadow";
-    CHECK(ops->register_op(fx.host().h, &fresh) != 0);
+    CHECK(ops->register_op(c.get(), fx.host().h, &fresh) < 0);
     CHECK(ops->find(fx.host().h, "dftu.test.plugin_shadow") == nullptr);
 }
 
@@ -154,7 +171,8 @@ TEST_CASE("plugin ops: a bare op name is refused") {
     // host currently populates it).
     dftu_op_desc bare{};
     bare.name = "my_op";
-    CHECK(ops->register_op(fx.host().h, &bare) != 0);
+    test_plugin_common::Ctx c;
+    CHECK(ops->register_op(c.get(), fx.host().h, &bare) < 0);
     CHECK(ops->find(fx.host().h, "my_op") == nullptr);
 }
 
@@ -166,10 +184,15 @@ TEST_CASE("plugin agg: a dftu. accumulator name is refused") {
 
     const dftu_agg_col specs[1] = {
         {DFTU_AGG_COUNT, nullptr, "count", 0.0, nullptr}};
-    CHECK(agg->agg_new(fx.host().h, "dftu.scan.count", nullptr, 0, specs, 1) ==
-          nullptr);
-    CHECK(agg->agg_new(fx.host().h, "com.example.count", nullptr, 0, specs,
-                       1) != nullptr);
+    test_plugin_common::Ctx c;
+    dftu_agg* refused = nullptr;
+    dftu_agg* accepted = nullptr;
+    CHECK(agg->agg_new(c.get(), fx.host().h, "dftu.scan.count", nullptr, 0,
+                       specs, 1, &refused) == DFTU_E_INVALID);
+    CHECK(refused == nullptr);
+    CHECK(agg->agg_new(c.get(), fx.host().h, "com.example.count", nullptr, 0,
+                       specs, 1, &accepted) == DFTU_OK);
+    CHECK(accepted != nullptr);
 }
 
 namespace {
@@ -226,23 +249,21 @@ TEST_CASE("plugin ops: a plugin op over a chunked column equals the joined") {
     const dftu_series* in_c[1] = {chunked.handle()};
     const dftu_series* in_j[1] = {joined.handle()};
 
-    dftu_result_scalar sc =
-        ops->run_aggregate(fx.host().h, sum_op.name, in_c, 1, nullptr);
-    dftu_result_scalar sj =
-        ops->run_aggregate(fx.host().h, sum_op.name, in_j, 1, nullptr);
-    REQUIRE(DFTU_RESULT_OK(sc));
-    REQUIRE(DFTU_RESULT_OK(sj));
-    CHECK(DFTU_RESULT_VALUE(sc).value.i == 36);
-    CHECK(DFTU_RESULT_VALUE(sc).value.i == DFTU_RESULT_VALUE(sj).value.i);
+    test_plugin_common::Ctx c;
+    dftu_scalar sc{}, sj{};
+    REQUIRE(ops->run_aggregate(c.get(), fx.host().h, sum_op.name, in_c, 1,
+                               nullptr, &sc) == DFTU_OK);
+    REQUIRE(ops->run_aggregate(c.get(), fx.host().h, sum_op.name, in_j, 1,
+                               nullptr, &sj) == DFTU_OK);
+    CHECK(sc.value.i == 36);
+    CHECK(sc.value.i == sj.value.i);
 
-    dftu_result_series rc =
-        ops->run(fx.host().h, dbl_op.name, in_c, 1, nullptr);
-    dftu_result_series rj =
-        ops->run(fx.host().h, dbl_op.name, in_j, 1, nullptr);
-    REQUIRE(DFTU_RESULT_OK(rc));
-    REQUIRE(DFTU_RESULT_OK(rj));
-    dftu_series* oc = DFTU_RESULT_VALUE(rc);
-    dftu_series* oj = DFTU_RESULT_VALUE(rj);
+    dftu_series* oc = nullptr;
+    dftu_series* oj = nullptr;
+    REQUIRE(ops->run(c.get(), fx.host().h, dbl_op.name, in_c, 1, nullptr,
+                     &oc) == DFTU_OK);
+    REQUIRE(ops->run(c.get(), fx.host().h, dbl_op.name, in_j, 1, nullptr,
+                     &oj) == DFTU_OK);
     REQUIRE(dftu_series_length(oc) == 8);
     REQUIRE(dftu_series_length(oj) == 8);
     const auto* dc = static_cast<const std::int64_t*>(dftu_series_data(oc));

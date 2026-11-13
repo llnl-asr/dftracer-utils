@@ -15,13 +15,17 @@
 
 #define PERBATCH_PORT "com.example.perbatch_dur"
 
-static void* make_slice(void* self) {
+static dftu_status make_slice(dftu_ctx* ctx, void* self, void** out) {
     (void)self;
-    return calloc(1, 1);
+    *out = calloc(1, 1);
+    if (!*out) return dftu_fail(ctx, DFTU_E_INTERNAL, "out of memory");
+    return DFTU_OK;
 }
 
-static dftu_task* on_batch(void* slice, const dftu_dataframe* df,
-                           const dftu_plugin_host* host) {
+static dftu_status on_batch(dftu_ctx* ctx, void* slice,
+                            const dftu_dataframe* df,
+                            const dftu_plugin_host* host) {
+    (void)ctx;
     (void)slice;
     const dftu_svc_ports* p =
         (const dftu_svc_ports*)host->get_service(host->h, DFTU_SVC_PORTS);
@@ -42,18 +46,24 @@ static dftu_task* on_batch(void* slice, const dftu_dataframe* df,
         p->publish(host->h, p->port_key(host->h, PERBATCH_PORT), &with_dur,
                    (uint32_t)sizeof with_dur);
     }
-    return NULL;
+    return DFTU_OK;
 }
 
-static void merge(void* into, void* other) {
+static dftu_status merge(dftu_ctx* ctx, void* into, void* other) {
+    (void)ctx;
     (void)into;
     (void)other;
+    return DFTU_OK;
 }
 
-static dftu_task* on_finalize(void* slice, const dftu_plugin_host* host) {
+static dftu_status on_finalize(dftu_ctx* ctx, void* slice,
+                               const dftu_plugin_host* host,
+                               dftu_task** pending) {
+    (void)ctx;
+    (void)pending;
     (void)slice;
     (void)host;
-    return NULL;
+    return DFTU_OK;
 }
 
 static void destroy_slice(void* slice) { free(slice); }
@@ -68,11 +78,16 @@ static const char* const* provides(void* self) {
 
 static dftu_plugin g_plugin;
 
-DFTU_PLUGIN_EXPORT dftu_plugin* dftracer_plugin(dftu_plugin_host* h,
-                                                const dftu_value* config) {
+DFTU_PLUGIN_INFO("perbatch_producer", "1.0")
+
+DFTU_PLUGIN_EXPORT dftu_status dftracer_plugin(dftu_ctx* ctx,
+                                               dftu_plugin_host* h,
+                                               const dftu_value* config,
+                                               dftu_plugin** out) {
+    (void)ctx;
     (void)h;
     (void)config;
-    g_plugin.abi_version = DFTRACER_UTILS_PLUGIN_ABI_VERSION;
+    g_plugin.struct_size = sizeof(dftu_plugin);
     g_plugin.self = NULL;
     g_plugin.plan_duql = NULL;
     g_plugin.make_slice = make_slice;
@@ -82,5 +97,6 @@ DFTU_PLUGIN_EXPORT dftu_plugin* dftracer_plugin(dftu_plugin_host* h,
     g_plugin.destroy_slice = destroy_slice;
     g_plugin.destroy = destroy;
     g_plugin.provides = provides;
-    return &g_plugin;
+    *out = &g_plugin;
+    return DFTU_OK;
 }

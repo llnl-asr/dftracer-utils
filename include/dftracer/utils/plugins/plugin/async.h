@@ -2,22 +2,62 @@
 #ifndef DFTRACER_UTILS_PLUGINS_PLUGIN_ASYNC_H
 #define DFTRACER_UTILS_PLUGINS_PLUGIN_ASYNC_H
 
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi.h>
+#include <dftracer/utils/plugins/plugin/types.h>
 
 #include <coroutine>
 #include <cstdint>
 #include <exception>
+#include <initializer_list>
+#include <string>
 
 namespace dftracer::utils::plugins {
 
-/// A lazy coroutine that yields, at each co_await, the next dftu_task the host
-/// should await; the host drives it to completion (see
-/// dftu_plugin_host::drive).
+namespace detail {
+
+/// A dftu_ctx that forwards to the ctx of the step the host is running. A
+/// coroutine outlives the callback that created it, so the Host it holds points
+/// at this stable ctx instead of the callback's own.
+struct ProxyCtx {
+    dftu_ctx base;
+    dftu_ctx* real;
+
+    static dftu_status set_error(dftu_ctx* c, dftu_status code, const char* msg,
+                                 std::uint32_t len) {
+        dftu_ctx* r = static_cast<ProxyCtx*>(c->h)->real;
+        return r->vt->set_error(r, code, msg, len);
+    }
+    static dftu_status check(dftu_ctx* c) {
+        dftu_ctx* r = static_cast<ProxyCtx*>(c->h)->real;
+        return r->vt->check(r);
+    }
+    static const dftu_ctx_vt* vt() {
+        static const dftu_ctx_vt VT = {sizeof(dftu_ctx_vt), set_error, check};
+        return &VT;
+    }
+
+    explicit ProxyCtx(dftu_ctx* r)
+        : base{sizeof(dftu_ctx), 0, vt(), this}, real(r) {}
+    ProxyCtx(const ProxyCtx&) = delete;
+    ProxyCtx& operator=(const ProxyCtx&) = delete;
+};
+
+}  // namespace detail
+
+/// A lazy coroutine whose co_awaits hand the host the tasks to wait for: each
+/// step of the driven coroutine runs to its next co_await, the host awaits
+/// those tasks, then resumes it (see dftu_svc_task::drive). An error thrown in
+/// the body, or a failed awaited task, ends it with that error.
 class Task {
    public:
     struct promise_type {
-        dftu_task* pending = nullptr;
+        dftu_task* const* wait = nullptr;
+        std::uint32_t n_wait = 0;
+        const dftu_svc_task* svc = nullptr;
         const dftu_plugin_host* host = nullptr;
+        dstd::UniquePtr<detail::ProxyCtx> proxy;
         std::exception_ptr exc;
 
         Task get_return_object() {
@@ -57,132 +97,290 @@ class Task {
     std::coroutine_handle<promise_type> h_;
 };
 
-/// Suspends the Task and hands `task` to the host as the next thing to await.
-/// Decays to dftu_task* so it also passes where a raw task is expected.
-struct AsyncOp {
-    dftu_task* task;
-    bool await_ready() const noexcept { return false; }
-    void await_suspend(
-        std::coroutine_handle<Task::promise_type> h) const noexcept {
-        h.promise().pending = task;
+namespace detail {
+
+/// The task service of `host`, or NULL when it has none.
+inline const dftu_svc_task* task_service(
+    const dftu_plugin_host* host) noexcept {
+    return host && host->get_service
+               ? static_cast<const dftu_svc_task*>(
+                     host->get_service(host->h, DFTU_SVC_TASK))
+               : nullptr;
+}
+
+/// What a co_await returns once the host resumed: the status of the first
+/// failed task, read through the service so its message lands on the ctx.
+/// Throws it unless `nothrow`.
+inline dftu_status settle(const Task::promise_type& p, dftu_task* const* tasks,
+                          std::uint32_t n, bool nothrow) {
+    dftu_status first = DFTU_OK;
+    for (std::uint32_t i = 0; i < n && first >= 0; ++i)
+        first = p.svc->status(&p.proxy->base, p.host->h, tasks[i]);
+    if (first < 0 && !nothrow) throw Error(first, "awaited task failed", true);
+    return first;
+}
+
+}  // namespace detail
+
+/// Owns a started task until it is awaited or released. `co_await op` hands it
+/// to the host and throws the task's error if it failed; `co_await
+/// op.nothrow()` returns its status instead. An op dropped without either, for
+/// example while an exception unwinds, gives its task back to the host.
+class AsyncOp {
+   public:
+    AsyncOp(dftu_task* t, const dftu_plugin_host* host) noexcept
+        : task_(t),
+          svc_(detail::task_service(host)),
+          h_(host ? host->h : nullptr) {}
+    AsyncOp(AsyncOp&& other) noexcept
+        : task_(other.task_),
+          svc_(other.svc_),
+          h_(other.h_),
+          nothrow_(other.nothrow_) {
+        other.task_ = nullptr;
     }
-    void await_resume() const noexcept {}
-    operator dftu_task*() const noexcept { return task; }
+    AsyncOp(const AsyncOp&) = delete;
+    AsyncOp& operator=(const AsyncOp&) = delete;
+    AsyncOp& operator=(AsyncOp&&) = delete;
+    ~AsyncOp() {
+        if (task_ && !handed_ && svc_ && svc_->discard)
+            svc_->discard(h_, task_);
+    }
+
+    AsyncOp& nothrow() & noexcept {
+        nothrow_ = true;
+        return *this;
+    }
+    AsyncOp&& nothrow() && noexcept {
+        nothrow_ = true;
+        return static_cast<AsyncOp&&>(*this);
+    }
+
+    /// Hand the task over raw, for @ref AsyncAll or a `pending` slot; the
+    /// caller then owns it.
+    dftu_task* release() noexcept {
+        handed_ = true;
+        return task_;
+    }
+
+    bool await_ready() const noexcept { return false; }
+    void await_suspend(std::coroutine_handle<Task::promise_type> h) noexcept {
+        handed_ = true;
+        p_ = &h.promise();
+        p_->wait = &task_;
+        p_->n_wait = 1;
+    }
+    dftu_status await_resume() {
+        return detail::settle(*p_, &task_, 1, nothrow_);
+    }
+
+   private:
+    dftu_task* task_;
+    const dftu_svc_task* svc_;
+    void* h_;
+    Task::promise_type* p_ = nullptr;
+    bool nothrow_ = false;
+    bool handed_ = false;
 };
 
-/// Thin typed wrapper over the io ext; each call returns an @ref AsyncOp to
-/// `co_await`, a no-op if the host does not provide the io group.
+/// Several tasks awaited together: the host resumes the Task when all of them
+/// finished. `co_await` throws the first error unless `nothrow()`. Owns the
+/// tasks until awaited and gives them back to the host when dropped unawaited.
+class AsyncAll {
+   public:
+    AsyncAll(std::initializer_list<dftu_task*> ts,
+             const dftu_plugin_host* host) noexcept
+        : tasks_(ts), svc_(detail::task_service(host)), h_(host_h(host)) {}
+    AsyncAll(dstd::Vector<dftu_task*> ts, const dftu_plugin_host* host) noexcept
+        : tasks_(std::move(ts)),
+          svc_(detail::task_service(host)),
+          h_(host_h(host)) {}
+    AsyncAll(AsyncAll&& other) noexcept
+        : tasks_(std::move(other.tasks_)),
+          svc_(other.svc_),
+          h_(other.h_),
+          nothrow_(other.nothrow_) {
+        other.tasks_.clear();
+    }
+    AsyncAll(const AsyncAll&) = delete;
+    AsyncAll& operator=(const AsyncAll&) = delete;
+    AsyncAll& operator=(AsyncAll&&) = delete;
+    ~AsyncAll() {
+        if (handed_ || !svc_ || !svc_->discard) return;
+        for (dftu_task* t : tasks_) {
+            if (t) svc_->discard(h_, t);
+        }
+    }
+
+    AsyncAll& nothrow() & noexcept {
+        nothrow_ = true;
+        return *this;
+    }
+    AsyncAll&& nothrow() && noexcept {
+        nothrow_ = true;
+        return static_cast<AsyncAll&&>(*this);
+    }
+
+    bool await_ready() const noexcept { return tasks_.empty(); }
+    void await_suspend(std::coroutine_handle<Task::promise_type> h) noexcept {
+        handed_ = true;
+        p_ = &h.promise();
+        p_->wait = tasks_.data();
+        p_->n_wait = static_cast<std::uint32_t>(tasks_.size());
+    }
+    dftu_status await_resume() {
+        return tasks_.empty()
+                   ? DFTU_OK
+                   : detail::settle(*p_, tasks_.data(),
+                                    static_cast<std::uint32_t>(tasks_.size()),
+                                    nothrow_);
+    }
+
+   private:
+    static void* host_h(const dftu_plugin_host* host) noexcept {
+        return host ? host->h : nullptr;
+    }
+
+    dstd::Vector<dftu_task*> tasks_;
+    const dftu_svc_task* svc_;
+    void* h_;
+    Task::promise_type* p_ = nullptr;
+    bool nothrow_ = false;
+    bool handed_ = false;
+};
+
+/// Thin typed wrapper over the io service; each call starts the operation and
+/// returns an @ref AsyncOp to `co_await`. A call the host refuses, or a host
+/// without the io group, throws @ref Error. A failed operation surfaces when
+/// the AsyncOp is awaited: DFTU_E_NOT_FOUND for a missing file, DFTU_E_IO or
+/// DFTU_E_INVALID otherwise, with the system message.
 class Io {
    public:
-    explicit Io(const dftu_plugin_host* h)
+    Io(const dftu_plugin_host* h, dftu_ctx* ctx)
         : h_(h),
+          ctx_(ctx),
           io_(h && h->get_service ? static_cast<const dftu_io*>(
                                         h->get_service(h->h, DFTU_SVC_IO))
                                   : nullptr) {}
+
     AsyncOp open(const char* path, int flags, int mode, int* out_fd) const {
-        return AsyncOp{io_ ? io_->open(h_->h, path, flags, mode, out_fd)
-                           : nullptr};
+        dftu_task* t = nullptr;
+        return done(need().open(ctx_, h_->h, path, flags, mode, out_fd, &t), t);
     }
-    AsyncOp close(int fd, int* out_rc) const {
-        return AsyncOp{io_ ? io_->close(h_->h, fd, out_rc) : nullptr};
+    AsyncOp close(int fd) const {
+        dftu_task* t = nullptr;
+        return done(need().close(ctx_, h_->h, fd, &t), t);
     }
     AsyncOp read(int fd, void* buf, std::uint64_t len,
                  std::int64_t* out_n) const {
-        return AsyncOp{io_ ? io_->read(h_->h, fd, buf, len, out_n) : nullptr};
+        dftu_task* t = nullptr;
+        return done(need().read(ctx_, h_->h, fd, buf, len, out_n, &t), t);
     }
     AsyncOp write(int fd, const void* buf, std::uint64_t len,
                   std::int64_t* out_n) const {
-        return AsyncOp{io_ ? io_->write(h_->h, fd, buf, len, out_n) : nullptr};
+        dftu_task* t = nullptr;
+        return done(need().write(ctx_, h_->h, fd, buf, len, out_n, &t), t);
     }
     AsyncOp pread(int fd, void* buf, std::uint64_t len, std::uint64_t off,
                   std::int64_t* out_n) const {
-        return AsyncOp{io_ ? io_->pread(h_->h, fd, buf, len, off, out_n)
-                           : nullptr};
+        dftu_task* t = nullptr;
+        return done(need().pread(ctx_, h_->h, fd, buf, len, off, out_n, &t), t);
     }
     AsyncOp pwrite(int fd, const void* buf, std::uint64_t len,
                    std::uint64_t off, std::int64_t* out_n) const {
-        return AsyncOp{io_ ? io_->pwrite(h_->h, fd, buf, len, off, out_n)
-                           : nullptr};
+        dftu_task* t = nullptr;
+        return done(need().pwrite(ctx_, h_->h, fd, buf, len, off, out_n, &t),
+                    t);
     }
-    AsyncOp fsync(int fd, int* out_rc) const {
-        return AsyncOp{io_ ? io_->fsync(h_->h, fd, out_rc) : nullptr};
+    AsyncOp fsync(int fd) const {
+        dftu_task* t = nullptr;
+        return done(need().fsync(ctx_, h_->h, fd, &t), t);
     }
-    AsyncOp ftruncate(int fd, std::uint64_t len, int* out_rc) const {
-        return AsyncOp{io_ ? io_->ftruncate(h_->h, fd, len, out_rc) : nullptr};
+    AsyncOp ftruncate(int fd, std::uint64_t len) const {
+        dftu_task* t = nullptr;
+        return done(need().ftruncate(ctx_, h_->h, fd, len, &t), t);
     }
     AsyncOp fstat(int fd, dftu_stat* out) const {
-        return AsyncOp{io_ ? io_->fstat(h_->h, fd, out) : nullptr};
+        dftu_task* t = nullptr;
+        return done(need().fstat(ctx_, h_->h, fd, out, &t), t);
     }
     /// Scatter-gather sequential read; `iov`/`iovcnt` borrowed for the await.
     AsyncOp readv(int fd, const struct iovec* iov, int iovcnt,
                   std::int64_t* out_n) const {
-        return AsyncOp{io_ && io_->readv
-                           ? io_->readv(h_->h, fd, iov, iovcnt, out_n)
-                           : nullptr};
+        dftu_task* t = nullptr;
+        return done(need().readv(ctx_, h_->h, fd, iov, iovcnt, out_n, &t), t);
     }
     /// Scatter-gather sequential write; `iov`/`iovcnt` borrowed for the await.
     AsyncOp writev(int fd, const struct iovec* iov, int iovcnt,
                    std::int64_t* out_n) const {
-        return AsyncOp{io_ && io_->writev
-                           ? io_->writev(h_->h, fd, iov, iovcnt, out_n)
-                           : nullptr};
+        dftu_task* t = nullptr;
+        return done(need().writev(ctx_, h_->h, fd, iov, iovcnt, out_n, &t), t);
     }
     /// Scatter-gather positional read (seekable fds only).
     AsyncOp preadv(int fd, const struct iovec* iov, int iovcnt,
                    std::uint64_t off, std::int64_t* out_n) const {
-        return AsyncOp{io_ && io_->preadv
-                           ? io_->preadv(h_->h, fd, iov, iovcnt, off, out_n)
-                           : nullptr};
+        dftu_task* t = nullptr;
+        return done(need().preadv(ctx_, h_->h, fd, iov, iovcnt, off, out_n, &t),
+                    t);
     }
     /// Scatter-gather positional write (seekable fds only).
     AsyncOp pwritev(int fd, const struct iovec* iov, int iovcnt,
                     std::uint64_t off, std::int64_t* out_n) const {
-        return AsyncOp{io_ && io_->pwritev
-                           ? io_->pwritev(h_->h, fd, iov, iovcnt, off, out_n)
-                           : nullptr};
+        dftu_task* t = nullptr;
+        return done(
+            need().pwritev(ctx_, h_->h, fd, iov, iovcnt, off, out_n, &t), t);
     }
     /// Reposition the file offset; `whence` is SEEK_SET/CUR/END. `out_off`
     /// receives the resulting absolute offset.
     AsyncOp lseek(int fd, std::int64_t off, int whence,
                   std::int64_t* out_off) const {
-        return AsyncOp{io_ && io_->lseek
-                           ? io_->lseek(h_->h, fd, off, whence, out_off)
-                           : nullptr};
+        dftu_task* t = nullptr;
+        return done(need().lseek(ctx_, h_->h, fd, off, whence, out_off, &t), t);
     }
     /// Zero-copy transfer of `count` bytes from `in_fd` (a regular file) to
     /// `out_fd` starting at `off`; `out_n` receives the bytes sent.
     AsyncOp sendfile(int out_fd, int in_fd, std::uint64_t off,
                      std::uint64_t count, std::int64_t* out_n) const {
-        return AsyncOp{
-            io_ && io_->sendfile
-                ? io_->sendfile(h_->h, out_fd, in_fd, off, count, out_n)
-                : nullptr};
+        dftu_task* t = nullptr;
+        return done(
+            need().sendfile(ctx_, h_->h, out_fd, in_fd, off, count, out_n, &t),
+            t);
     }
     /// Accept a connection on a listening socket; `addr`/`addrlen` may be null.
     /// `out_fd` receives the client fd.
     AsyncOp accept(int fd, struct sockaddr* addr, socklen_t* addrlen,
                    int* out_fd) const {
-        return AsyncOp{io_ && io_->accept
-                           ? io_->accept(h_->h, fd, addr, addrlen, out_fd)
-                           : nullptr};
+        dftu_task* t = nullptr;
+        return done(need().accept(ctx_, h_->h, fd, addr, addrlen, out_fd, &t),
+                    t);
     }
     /// Socket receive; `flags` are the recv(2) flags.
     AsyncOp recv(int fd, void* buf, std::uint64_t len, int flags,
                  std::int64_t* out_n) const {
-        return AsyncOp{io_ && io_->recv
-                           ? io_->recv(h_->h, fd, buf, len, flags, out_n)
-                           : nullptr};
+        dftu_task* t = nullptr;
+        return done(need().recv(ctx_, h_->h, fd, buf, len, flags, out_n, &t),
+                    t);
     }
     /// Socket send; `flags` are the send(2) flags.
     AsyncOp send(int fd, const void* buf, std::uint64_t len, int flags,
                  std::int64_t* out_n) const {
-        return AsyncOp{io_ && io_->send
-                           ? io_->send(h_->h, fd, buf, len, flags, out_n)
-                           : nullptr};
+        dftu_task* t = nullptr;
+        return done(need().send(ctx_, h_->h, fd, buf, len, flags, out_n, &t),
+                    t);
     }
 
    private:
+    const dftu_io& need() const {
+        if (!io_) throw Error(DFTU_E_UNSUPPORTED, "host lacks dftu.svc.io");
+        return *io_;
+    }
+    AsyncOp done(dftu_status st, dftu_task* t) const {
+        if (st < 0) throw Error(st, "io call failed", true);
+        return AsyncOp{t, h_};
+    }
+
     const dftu_plugin_host* h_;
+    dftu_ctx* ctx_;
     const dftu_io* io_;
 };
 

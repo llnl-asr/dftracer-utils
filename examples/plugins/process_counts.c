@@ -45,14 +45,18 @@ static void counts_add(Counts* c, uint64_t pid, uint64_t n) {
     ++c->size;
 }
 
-static void* make_slice(void* self) {
+static dftu_status make_slice(dftu_ctx* ctx, void* self, void** out) {
     (void)self;
-    return calloc(1, sizeof(Counts));
+    *out = calloc(1, sizeof(Counts));
+    if (!*out) return dftu_fail(ctx, DFTU_E_INTERNAL, "out of memory");
+    return DFTU_OK;
 }
 
-static dftu_task* on_batch(void* slice, const dftu_dataframe* df,
-                           const dftu_plugin_host* host) {
+static dftu_status on_batch(dftu_ctx* ctx, void* slice,
+                            const dftu_dataframe* df,
+                            const dftu_plugin_host* host) {
     Counts* c = (Counts*)slice;
+    (void)ctx;
     int64_t n = dftu_dataframe_num_rows(df);
     dftu_series* pid_col = dftu_dataframe_column(df, "pid");
     const uint64_t* pid = NULL;
@@ -63,25 +67,32 @@ static dftu_task* on_batch(void* slice, const dftu_dataframe* df,
     if (pid)
         for (i = 0; i < n; ++i) counts_add(c, pid[i], 1);
     if (pid_col) dftu_series_free(pid_col);
-    return NULL;
+    return DFTU_OK;
 }
 
-static void merge(void* into, void* other) {
+static dftu_status merge(dftu_ctx* ctx, void* into, void* other) {
+    (void)ctx;
     Counts* a = (Counts*)into;
     const Counts* o = (const Counts*)other;
     for (size_t i = 0; i < o->size; ++i)
         counts_add(a, o->entries[i].pid, o->entries[i].count);
+    return DFTU_OK;
 }
 
 /* Serialize the merged map to TSV and hand the bytes to the host. Sorted by pid
  * so the output is deterministic regardless of worker interleaving. */
-static dftu_task* on_finalize(void* slice, const dftu_plugin_host* host) {
+static dftu_status on_finalize(dftu_ctx* ctx, void* slice,
+                               const dftu_plugin_host* host,
+                               dftu_task** pending) {
+    (void)pending;
     Counts* c = (Counts*)slice;
     const dftu_svc_result* res =
         (const dftu_svc_result*)host->get_service(host->h, DFTU_SVC_RESULT);
     char* buf;
     size_t cap, len;
-    if (!res || !res->emit) return NULL;
+    dftu_status st;
+    if (!res || !res->emit)
+        return dftu_fail(ctx, DFTU_E_UNSUPPORTED, "host lacks dftu.svc.result");
 
     for (size_t i = 0; i + 1 < c->size; ++i)
         for (size_t j = i + 1; j < c->size; ++j)
@@ -93,7 +104,7 @@ static dftu_task* on_finalize(void* slice, const dftu_plugin_host* host) {
 
     cap = c->size * 32 + 1;
     buf = (char*)malloc(cap);
-    if (!buf) return NULL;
+    if (!buf) return dftu_fail(ctx, DFTU_E_INTERNAL, "out of memory");
     len = 0;
     for (size_t i = 0; i < c->size; ++i) {
         int n = snprintf(buf + len, cap - len, "%llu\t%llu\n",
@@ -106,10 +117,10 @@ static dftu_task* on_finalize(void* slice, const dftu_plugin_host* host) {
         v.kind = DFTU_RESULT_KIND_BYTES;
         v.u.bytes.data = buf;
         v.u.bytes.len = (uint64_t)len;
-        res->emit(host->h, "process_counts", &v);
+        st = res->emit(ctx, host->h, "process_counts", &v);
     }
     free(buf);
-    return NULL;
+    return st;
 }
 
 static void destroy_slice(void* slice) {
@@ -122,11 +133,16 @@ static void destroy(void* self) { (void)self; }
 
 static dftu_plugin g_plugin;
 
-DFTU_PLUGIN_EXPORT dftu_plugin* dftracer_plugin(dftu_plugin_host* h,
-                                                const dftu_value* config) {
+DFTU_PLUGIN_INFO("process_counts", "1.0")
+
+DFTU_PLUGIN_EXPORT dftu_status dftracer_plugin(dftu_ctx* ctx,
+                                               dftu_plugin_host* h,
+                                               const dftu_value* config,
+                                               dftu_plugin** out) {
+    (void)ctx;
     (void)h;
     (void)config;
-    g_plugin.abi_version = DFTRACER_UTILS_PLUGIN_ABI_VERSION;
+    g_plugin.struct_size = sizeof(dftu_plugin);
     g_plugin.self = NULL;
     g_plugin.plan_duql = NULL;
     g_plugin.make_slice = make_slice;
@@ -135,5 +151,6 @@ DFTU_PLUGIN_EXPORT dftu_plugin* dftracer_plugin(dftu_plugin_host* h,
     g_plugin.on_finalize = on_finalize;
     g_plugin.destroy_slice = destroy_slice;
     g_plugin.destroy = destroy;
-    return &g_plugin;
+    *out = &g_plugin;
+    return DFTU_OK;
 }

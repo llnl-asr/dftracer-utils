@@ -15,16 +15,17 @@
 extern "C" {
 #endif
 
-#define DFTU_SVC_RESULT "dftu.svc.result@1"
+#define DFTU_SVC_RESULT "dftu.svc.result"
 
 /** The alternative a dftu_result_value carries; matches the host's own
    NamedResult variant one for one. */
-typedef enum {
+typedef int32_t dftu_result_kind;
+enum {
     DFTU_RESULT_KIND_BYTES = 0,
-    DFTU_RESULT_KIND_ARROW,
-    DFTU_RESULT_KIND_FRAME,
-    DFTU_RESULT_KIND_LAZYFRAME
-} dftu_result_kind;
+    DFTU_RESULT_KIND_ARROW = 1,
+    DFTU_RESULT_KIND_FRAME = 2,
+    DFTU_RESULT_KIND_LAZYFRAME = 3
+};
 
 /** A tagged named-result value: exactly one of `bytes`/`arrow`/`frame`/
    `lazyframe` is live, selected by `kind`. See dftu_svc_result::emit for
@@ -49,6 +50,7 @@ typedef struct dftu_result_value {
    copies bytes, never interpreting any of them; Plugins::run returns the
    collected results to the caller keyed by name. */
 typedef struct dftu_svc_result {
+    uint32_t struct_size; /**< sizeof(dftu_svc_result) */
     /** Emit a named result carrying `v`. DFTU_RESULT_KIND_BYTES is COPIED
        (`v->u.bytes.len` bytes); ARROW/FRAME/LAZYFRAME are MOVED - the host
        takes ownership of the array/schema or handle (do not use or free it
@@ -58,9 +60,10 @@ typedef struct dftu_svc_result {
        referencing the plugin's per-scan/executor state, which dies at
        finalize, is a plugin bug. Intended for on_finalize (called on the
        merged master fold); if called concurrently from on_batch the host
-       serializes writes, last-writer-wins on a name. Returns 0 ok, -1 on a
-       NULL name/v or an unrecognized kind. */
-    int (*emit)(void* h, const char* name, dftu_result_value* v);
+       serializes writes, last-writer-wins on a name. Fails with DFTU_E_INVALID
+       on a NULL name/v or an unrecognized kind. */
+    dftu_status (*emit)(dftu_ctx* ctx, void* h, const char* name,
+                        dftu_result_value* v);
 } dftu_svc_result;
 
 #ifdef __cplusplus

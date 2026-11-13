@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: MIT
 // dftu_provider_register/unregister and dftu_lazyframe_from_provider: a
 // process-lifetime, name-keyed registry of Source vtables, mirroring the op
-// registry in op_registry.cpp. dftu.svc.providers@0 (plugins/abi/providers.h)
+// registry in op_registry.cpp. dftu.svc.providers (plugins/abi/providers.h)
 // is a thin gated forwarder into this registry, but the registry itself is
 // not plugin-scoped: a non-plugin C caller, or a future language binding,
 // registers and reads it the same way a plugin does.
 
+#include <dftracer/utils/common/abi_error.h>
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/coro/abi_context.h>
 #include <dftracer/utils/coro/task_abi.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/expr.h>
@@ -77,10 +79,6 @@ dftracer::utils::dstd::Optional<ProviderEntry> find_provider(const char* name) {
     auto it = providers().find(name);
     if (it == providers().end()) return dftracer::utils::dstd::nullopt;
     return it->second;
-}
-
-dstd::String describe(const ::dftu_error& err) {
-    return err.message && *err.message ? err.message : "provider cursor failed";
 }
 
 // Any dftu_pushed value the host has not defined is untrusted and treated as
@@ -186,10 +184,9 @@ dftracer::utils::dstd::Optional<Schema> to_schema(
     return s;
 }
 
-// Adapts a registered dftu_cursor_vt as a Cursor. next() follows the same
-// dftu_task convention as dftu_plugin::on_batch/on_finalize: a returned task
-// is awaited and freed here, the driving side, exactly as dftu_task_run does
-// for a task crossing the ABI the same way.
+// Adapts a registered dftu_cursor_vt as a Cursor. A task a callback hands back
+// through `pending` is awaited and freed here, the driving side, exactly as
+// dftu_task_run does for a task crossing the ABI the same way.
 class ProviderCursor final : public Cursor {
    public:
     ProviderCursor(const ::dftu_cursor_vt* vt, void* self,
@@ -204,6 +201,8 @@ class ProviderCursor final : public Cursor {
           expected_types_(std::move(expected_types)) {}
 
     ~ProviderCursor() override {
+        if (pending_task_) coro::free_abi_task(pending_task_);
+        if (pending_frame_) ::dftu_dataframe_free(pending_frame_);
         if (vt_->destroy) vt_->destroy(self_);
     }
 
@@ -211,43 +210,52 @@ class ProviderCursor final : public Cursor {
     ProviderCursor& operator=(const ProviderCursor&) = delete;
 
     coro::CoroTask<MorselResult> next(std::int64_t max_rows) override {
-        MorselResult out;
-        if (try_next(max_rows, out)) co_return std::move(out);
+        if (pending_task_ == nullptr) {
+            const coro::CancelView cancel =
+                co_await coro::this_coro::cancel_view;
+            MorselResult out;
+            if (call_next(cancel, max_rows, out)) co_return std::move(out);
+        }
         ::dftu_task* pending = pending_task_;
         pending_task_ = nullptr;
         auto awaiting = await_plugin_task(pending);
         auto awaited = co_await std::move(awaiting);
-        if (!awaited) co_return awaited.error();
-        co_return finish(pending_result_);
+        ::dftu_dataframe* frame = pending_frame_;
+        pending_frame_ = nullptr;
+        if (!awaited) {
+            if (frame) ::dftu_dataframe_free(frame);
+            co_return awaited.error();
+        }
+        co_return finish(frame, *awaited);
     }
 
-    // Calls the provider's next() exactly once. A NULL returned task is the
-    // documented dftu_cursor_vt::next contract for "answered without
-    // suspending": *pending_result_* is already filled, so it can be
-    // finished and returned here. A non-NULL task means the provider began a
-    // genuinely async operation; that call cannot be repeated (it already
-    // ran), so the task and its still-pending result are stashed in members
-    // for next() to await and finish. Callers must fall back to next()
-    // immediately on a false return rather than calling try_next again,
-    // exactly as the Cursor::try_next contract requires.
+    // Calls the provider's next() exactly once. Without a pending task the
+    // frame is already there and is finished and returned here. A pending
+    // task means the provider began a genuinely async operation; that call
+    // cannot be repeated (it already ran), so the task and its frame slot are
+    // stashed in members for next() to await and finish. Callers must fall
+    // back to next() immediately on a false return rather than calling
+    // try_next again, exactly as the Cursor::try_next contract requires.
     bool try_next(std::int64_t max_rows, MorselResult& out) override {
-        pending_result_ = ::dftu_result_frame{};
-        if (::dftu_task* t = vt_->next(self_, max_rows, &pending_result_)) {
-            pending_task_ = t;
-            return false;
-        }
-        out = finish(pending_result_);
-        return true;
+        return call_next(coro::CancelView{}, max_rows, out);
     }
 
     // The three optional slots, each absent when the provider left it NULL.
     coro::CoroTask<bool> narrow(const Expr& predicate) override {
         if (!vt_->narrow) co_return false;
         std::int32_t applied = 0;
-        ::dftu_expr* h = expr_handle_wrap(predicate);
-        ::dftu_task* t = vt_->narrow(self_, h, &applied);
-        bool awaited_ok = true;
-        if (t) {
+        AbiHandle<::dftu_expr, ::dftu_expr_free> h(expr_handle_wrap(predicate));
+        const coro::CancelView cancel = co_await coro::this_coro::cancel_view;
+        coro::AbiContext ctx(cancel);
+        ::dftu_task* t = nullptr;
+        const dftu_status status =
+            vt_->narrow(ctx.get(), self_, h.get(), &applied, &t);
+        bool awaited_ok = status >= 0;
+        if (status < 0) {
+            if (t) coro::free_abi_task(t);
+            DFTRACER_UTILS_LOG_WARN(
+                "{}", plugin_error(ctx, status, "provider narrow").format());
+        } else if (t) {
             auto awaiting = await_plugin_task(t);
             auto awaited = co_await std::move(awaiting);
             awaited_ok = awaited.has_value();
@@ -255,7 +263,6 @@ class ProviderCursor final : public Cursor {
                 DFTRACER_UTILS_LOG_WARN("provider narrow failed: {}",
                                         awaited.error().c_str());
         }
-        ::dftu_expr_free(h);
         const bool narrowed = awaited_ok && applied != 0;
         co_return narrowed;
     }
@@ -267,13 +274,41 @@ class ProviderCursor final : public Cursor {
     }
 
    private:
-    MorselResult finish(const ::dftu_result_frame& out) {
-        if (!DFTU_RESULT_OK(out))
-            return common::make_error<"{}">(common::ErrorCode::Internal,
-                                            describe(DFTU_RESULT_ERROR(out)));
+    // true when `out` holds the result; false when the call left a task to
+    // await.
+    bool call_next(coro::CancelView cancel, std::int64_t max_rows,
+                   MorselResult& out) {
+        coro::AbiContext ctx(cancel);
+        // The member is the out slot: a pending task writes it after this
+        // call returns, so it must outlive the task.
+        ::dftu_task* pending = nullptr;
+        const dftu_status status =
+            vt_->next(ctx.get(), self_, max_rows, &pending_frame_, &pending);
+        if (pending != nullptr && status >= 0) {
+            pending_task_ = pending;
+            return false;
+        }
+        ::dftu_dataframe* frame = pending_frame_;
+        pending_frame_ = nullptr;
+        if (status < 0) {
+            if (pending) coro::free_abi_task(pending);
+            if (frame) ::dftu_dataframe_free(frame);
+            out = plugin_error(ctx, status, "provider next");
+            return true;
+        }
+        out = finish(frame, status);
+        return true;
+    }
 
-        ::dftu_dataframe* frame = DFTU_RESULT_VALUE(out);
-        if (!frame) return MorselResult(dftracer::utils::dstd::nullopt);
+    MorselResult finish(::dftu_dataframe* frame, dftu_status status) {
+        if (status == DFTU_END) {
+            if (frame) ::dftu_dataframe_free(frame);
+            return MorselResult(dftracer::utils::dstd::nullopt);
+        }
+        if (!frame)
+            return common::make_error<
+                "provider next: it returned no frame and not DFTU_END">(
+                common::ErrorCode::Internal);
 
         DataFrame df = dataframe_handle_take(frame);
         // Checked on every morsel, not just the first: the check is
@@ -317,7 +352,7 @@ class ProviderCursor final : public Cursor {
     PluginGovernor gov_;
     dstd::Vector<dstd::String> expected_projection_;
     dstd::Vector<TypeId> expected_types_;
-    ::dftu_result_frame pending_result_{};
+    ::dftu_dataframe* pending_frame_ = nullptr;
     ::dftu_task* pending_task_ = nullptr;
 };
 
@@ -470,29 +505,15 @@ class ProviderSource final
         return offer(req, true, spec.other);
     }
 
+    // Source::schema has no error channel, so a failing provider is logged and
+    // reads as no columns; scan() reports the same failure as its error.
     Schema schema() const override {
-        Schema s;
-        const char* const* names = nullptr;
-        const std::int32_t n = entry_.vt.schema(entry_.self, &names);
-        if (n <= 0 || !names) return s;
-
-        dstd::Vector<dstd::String> name_strs;
-        name_strs.reserve(static_cast<std::size_t>(n));
-        for (std::int32_t i = 0; i < n; ++i)
-            name_strs.push_back(names[i] ? names[i] : "");
-
-        if (entry_.vt.schema_types) {
-            ::dftu_schema built;
-            entry_.vt.schema_types(entry_.self, &built);
-            if (dftracer::utils::dstd::Optional<Schema> typed =
-                    to_schema(built, name_strs))
-                return *typed;
+        auto read = read_schema();
+        if (!read) {
+            DFTRACER_UTILS_LOG_ERROR("{}", read.error().format());
+            return Schema{};
         }
-
-        s.fields.reserve(name_strs.size());
-        for (const dstd::String& name : name_strs)
-            s.fields.push_back(Field{name, scalar(TypeId::Unknown), true});
-        return s;
+        return std::move(*read);
     }
 
     dstd::Result<ScanResult> scan(const ScanRequest& req) const override {
@@ -529,19 +550,24 @@ class ProviderSource final
 
         void* cursor_self = nullptr;
         const ::dftu_cursor_vt* vt = nullptr;
-        void* ok = entry_.vt.scan(entry_.self, &creq, out_pushed.data(),
-                                  &cursor_self, &vt);
+        coro::AbiContext ctx;
+        const dftu_status status =
+            entry_.vt.scan(ctx.get(), entry_.self, &creq, out_pushed.data(),
+                           &cursor_self, &vt);
 
         for (dftu_expr* h : owned_filters) dftu_expr_free(h);
 
-        if (!ok || !vt)
+        if (status < 0) return plugin_error(ctx, status, "provider scan");
+        if (!vt || vt->struct_size != sizeof(::dftu_cursor_vt) || !vt->next)
             return common::make_error<
-                "provider scan: the provider opened no "
-                "cursor">(common::ErrorCode::Internal);
+                "provider scan: the provider gave no valid cursor vtable">(
+                common::ErrorCode::Internal);
 
         for (std::size_t i = 0; i < r.filters.size(); ++i)
             r.filters[i] = to_pushed(out_pushed[i]);
-        const Schema declared = schema();
+        auto read = read_schema();
+        if (!read) return read.error();
+        const Schema& declared = *read;
         dstd::Vector<TypeId> expected_types;
         if (req.projection.empty()) {
             for (const Field& f : declared.fields)
@@ -561,6 +587,40 @@ class ProviderSource final
     }
 
    private:
+    dstd::Result<Schema> read_schema() const {
+        Schema s;
+        const char* const* names = nullptr;
+        std::int32_t n = 0;
+        coro::AbiContext ctx;
+        const dftu_status status =
+            entry_.vt.schema(ctx.get(), entry_.self, &names, &n);
+        if (status < 0) return plugin_error(ctx, status, "provider schema");
+        if (n <= 0 || !names) return s;
+
+        dstd::Vector<dstd::String> name_strs;
+        name_strs.reserve(static_cast<std::size_t>(n));
+        for (std::int32_t i = 0; i < n; ++i)
+            name_strs.push_back(names[i] ? names[i] : "");
+
+        if (entry_.vt.schema_types) {
+            ::dftu_schema built;
+            coro::AbiContext types_ctx;
+            const dftu_status typed_status =
+                entry_.vt.schema_types(types_ctx.get(), entry_.self, &built);
+            if (typed_status < 0)
+                return plugin_error(types_ctx, typed_status,
+                                    "provider schema_types");
+            if (dftracer::utils::dstd::Optional<Schema> typed =
+                    to_schema(built, name_strs))
+                return *typed;
+        }
+
+        s.fields.reserve(name_strs.size());
+        for (const dstd::String& name : name_strs)
+            s.fields.push_back(Field{name, scalar(TypeId::Unknown), true});
+        return s;
+    }
+
     dftracer::utils::dstd::Optional<SourceApplication> offer_sort(
         ::dftu_apply_kind kind, const SortSpec& spec, std::int64_t k) const {
         dstd::Vector<const char*> by;
@@ -586,12 +646,26 @@ class ProviderSource final
         if (!entry_.vt.apply) return dftracer::utils::dstd::nullopt;
         ::dftu_apply_result out{};
         out.status = DFTU_APPLY_NO_CHANGE;
-        entry_.vt.apply(entry_.self, &req, &out);
+        coro::AbiContext ctx;
+        const dftu_status applied =
+            entry_.vt.apply(ctx.get(), entry_.self, &req, &out);
+        if (applied < 0) {
+            DFTRACER_UTILS_LOG_ERROR(
+                "{}; the engine applies the operation itself",
+                plugin_error(ctx, applied, "provider apply").format());
+            return dftracer::utils::dstd::nullopt;
+        }
         if (out.status == DFTU_APPLY_NO_CHANGE)
             return dftracer::utils::dstd::nullopt;
         dftracer::utils::dstd::Optional<ApplyStatus> status =
             to_apply_status(out.status);
         if (!out.vt) return dftracer::utils::dstd::nullopt;
+        if (out.vt->struct_size != sizeof(::dftu_source_vt)) {
+            DFTRACER_UTILS_LOG_ERROR(
+                "provider apply: the derived source's vtable has a wrong "
+                "struct_size; the engine applies the operation itself");
+            return dftracer::utils::dstd::nullopt;
+        }
         dstd::Vector<dftracer::utils::dstd::SharedPtr<const Source>> inputs{
             shared_from_this()};
         if (other) inputs.push_back(std::move(other));
@@ -677,16 +751,33 @@ int32_t dftu_schema_copy_field(dftu_schema* out, const dftu_schema* schema,
     return idx;
 }
 
-int dftu_provider_register(const char* name, const dftu_source_vt* vt,
-                           void* self) {
-    if (!name || !vt) return 1;
+dftu_status dftu_provider_register(const char* name, const dftu_source_vt* vt,
+                                   void* self, dftu_error* err) {
     using dftracer::utils::dataframe::ProviderEntry;
+    if (!name || !vt) {
+        return dftracer::utils::common::fill_error(
+            err, dftracer::utils::dstd::Error::from_format<
+                     "provider register: the name and the vtable must be "
+                     "set">(dftracer::utils::dstd::Condition::InvalidArgument));
+    }
+    if (vt->struct_size != sizeof(dftu_source_vt)) {
+        return dftracer::utils::common::fill_error(
+            err, dftracer::utils::dstd::Error::from_format<
+                     "provider '{}': struct_size is not "
+                     "sizeof(dftu_source_vt)">(
+                     dftracer::utils::dstd::Condition::InvalidArgument, name));
+    }
     std::lock_guard<std::mutex> lock(
         dftracer::utils::dataframe::registry_mutex());
     auto& reg = dftracer::utils::dataframe::providers();
-    if (reg.find(name) != reg.end()) return 1;
+    if (reg.find(name) != reg.end()) {
+        return dftracer::utils::common::fill_error(
+            err, dftracer::utils::dstd::Error::from_format<
+                     "provider '{}' is already registered">(
+                     dftracer::utils::dstd::Condition::InvalidArgument, name));
+    }
     reg.emplace(name, ProviderEntry{*vt, self});
-    return 0;
+    return DFTU_OK;
 }
 
 int dftu_provider_unregister(const char* name) {

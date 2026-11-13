@@ -183,3 +183,17 @@ TEST_CASE("a second registration of the same name fails to load") {
                     .add(INDEX_MINMAX_PLUGIN_PATH)
                     .build());
 }
+
+TEST_CASE("a failing extension step stores nothing and prunes nothing") {
+    dftu_utils_test::TestEnvironment env(10);
+    const auto gz = write_records(env, "e");
+    domains::plugins::Plugins set = load(R"({"fail_step": true})");
+    auto ix = open(gz);
+    dftu_utils_test::ok(ix.build());
+    const auto ex = dftu_utils_test::ok(ix.explain("v > 2990")).at(0);
+    const auto* p = pruned(ex);
+    CHECK((p == nullptr || p->removed.empty()));
+    CHECK(ex.read.size() == ex.chunks);
+    CHECK(dftu_utils_test::ok(view_of(gz).duql("v > 2990").collect().get())
+              .num_rows() == 9);
+}

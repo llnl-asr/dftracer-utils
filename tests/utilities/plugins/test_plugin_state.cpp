@@ -26,6 +26,7 @@
 #include <dftracer/utils/trace/views/fold_event.h>
 #include <doctest/doctest.h>
 #include <task_result.h>
+#include <utilities/plugins/test_abi_ctx.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -79,7 +80,10 @@ Totals decode(const char* p, std::size_t n) {
 
 /* ---- the plugin's state type, behind the C descriptor ------------------- */
 
-void* state_init(void*) { return new Totals(); }
+dftu_status state_init(dftu_ctx*, void*, void** out) {
+    *out = new Totals();
+    return DFTU_OK;
+}
 
 dstd::StringView str_at(const dftu_series* col, std::int64_t r) {
     const std::int32_t* off = dftu_series_offsets(col);
@@ -88,14 +92,13 @@ dstd::StringView str_at(const dftu_series* col, std::int64_t r) {
     return {base + off[r], static_cast<std::size_t>(off[r + 1] - off[r])};
 }
 
-int state_update(void* state, const dftu_dataframe* df, dftu_error* err) {
+dftu_status state_update(dftu_ctx* ctx, void* state, const dftu_dataframe* df) {
     dftu_series* name = dftu_dataframe_column(df, "name");
     dftu_series* dur = dftu_dataframe_column(df, "dur");
     if (!name || !dur) {
         if (name) dftu_series_free(name);
         if (dur) dftu_series_free(dur);
-        if (err) err->message = "batch has no name/dur column";
-        return -1;
+        return dftu_fail(ctx, DFTU_E_NOT_FOUND, "batch has no name/dur column");
     }
     dftu_series* flat_name = dftu_series_materialize(name);
     dftu_series* flat_dur = dftu_series_materialize(dur);
@@ -108,13 +111,13 @@ int state_update(void* state, const dftu_dataframe* df, dftu_error* err) {
     dftu_series_free(flat_dur);
     dftu_series_free(name);
     dftu_series_free(dur);
-    return 0;
+    return DFTU_OK;
 }
 
-int state_merge(void* into, void* other, dftu_error*) {
+dftu_status state_merge(dftu_ctx*, void* into, void* other) {
     auto& a = *static_cast<Totals*>(into);
     for (const auto& [k, v] : *static_cast<Totals*>(other)) a[k] += v;
-    return 0;
+    return DFTU_OK;
 }
 
 std::uint64_t state_bytes(const void* state) {
@@ -123,7 +126,7 @@ std::uint64_t state_bytes(const void* state) {
 
 void free_buffer(void* data, void*) { delete[] static_cast<char*>(data); }
 
-int state_serialize(const void* state, dftu_bytes* out, dftu_error*) {
+dftu_status state_serialize(dftu_ctx*, const void* state, dftu_bytes* out) {
     const dstd::String enc = encode(*static_cast<const Totals*>(state));
     char* buf = new char[enc.size() ? enc.size() : 1];
     std::memcpy(buf, enc.data(), enc.size());
@@ -131,15 +134,16 @@ int state_serialize(const void* state, dftu_bytes* out, dftu_error*) {
     out->len = enc.size();
     out->free_fn = free_buffer;
     out->ud = nullptr;
-    return 0;
+    return DFTU_OK;
 }
 
-void* state_deserialize(void*, dftu_bytes in, dftu_error*) {
-    return new Totals(decode(static_cast<const char*>(in.data),
+dftu_status state_deserialize(dftu_ctx*, void*, dftu_bytes in, void** out) {
+    *out = new Totals(decode(static_cast<const char*>(in.data),
                              static_cast<std::size_t>(in.len)));
+    return DFTU_OK;
 }
 
-int state_finalize(void* state, dftu_result_value* out, dftu_error*) {
+dftu_status state_finalize(dftu_ctx*, void* state, dftu_result_value* out) {
     // Held past the call: the host copies BYTES results, but not until it
     // returns from here.
     static thread_local dstd::String enc;
@@ -147,13 +151,14 @@ int state_finalize(void* state, dftu_result_value* out, dftu_error*) {
     out->kind = DFTU_RESULT_KIND_BYTES;
     out->u.bytes.data = enc.data();
     out->u.bytes.len = enc.size();
-    return 0;
+    return DFTU_OK;
 }
 
 void state_destroy(void* state) { delete static_cast<Totals*>(state); }
 
 dftu_state_desc make_desc(bool spillable) {
     dftu_state_desc d{};
+    d.struct_size = sizeof(d);
     d.name = STATE_NAME;
     d.init = state_init;
     d.update = state_update;
@@ -174,15 +179,15 @@ dftu_state_desc make_desc(bool spillable) {
 // run produces came through the tier-2 path.
 dftu_plugin state_only_plugin() {
     dftu_plugin p{};
-    p.abi_version = DFTRACER_UTILS_PLUGIN_ABI_VERSION;
-    p.make_slice = [](void*) -> void* {
+    p.struct_size = sizeof(p);
+    p.make_slice = [](dftu_ctx*, void*, void** out) -> dftu_status {
         static int sentinel;
-        return &sentinel;
+        *out = &sentinel;
+        return DFTU_OK;
     };
-    p.merge = [](void*, void*) {};
-    p.on_finalize = [](void*, const dftu_plugin_host*) -> dftu_task* {
-        return nullptr;
-    };
+    p.merge = [](dftu_ctx*, void*, void*) -> dftu_status { return DFTU_OK; };
+    p.on_finalize = [](dftu_ctx*, void*, const dftu_plugin_host*,
+                       dftu_task**) -> dftu_status { return DFTU_OK; };
     p.destroy_slice = [](void*) {};
     p.destroy = [](void*) {};
     return p;
@@ -221,7 +226,9 @@ void finalize_now(domains::plugins::PluginFold& f) {
     Runtime rt(1);
     dftu_utils_test::ok(
         rt.submit(coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-                      co_await f.finalize(trace::views::detail::CoverageSet{});
+                      auto finalized = co_await f.finalize(
+                          trace::views::detail::CoverageSet{});
+                      CHECK(finalized.has_value());
                   }),
                   "fin")
             .wait());
@@ -292,28 +299,33 @@ SliceRun* g_slice_sink = nullptr;
 
 dftu_plugin growing_plugin(bool reclaimable) {
     dftu_plugin p{};
-    p.abi_version = DFTRACER_UTILS_PLUGIN_ABI_VERSION;
-    p.make_slice = [](void*) -> void* { return new GrowingSlice{}; };
-    p.on_batch = [](void* slice, const dftu_dataframe* df,
-                    const dftu_plugin_host*) -> dftu_task* {
+    p.struct_size = sizeof(p);
+    p.make_slice = [](dftu_ctx*, void*, void** out) -> dftu_status {
+        *out = new GrowingSlice{};
+        return DFTU_OK;
+    };
+    p.on_batch = [](dftu_ctx*, void* slice, const dftu_dataframe* df,
+                    const dftu_plugin_host*) -> dftu_status {
         auto* s = static_cast<GrowingSlice*>(slice);
         s->events += static_cast<std::uint64_t>(dftu_dataframe_num_rows(df));
         s->held += BYTES_PER_ENTRY * static_cast<std::uint64_t>(BATCH);
-        return nullptr;
+        return DFTU_OK;
     };
-    p.merge = [](void* into, void* other) {
+    p.merge = [](dftu_ctx*, void* into, void* other) -> dftu_status {
         auto* a = static_cast<GrowingSlice*>(into);
         auto* b = static_cast<GrowingSlice*>(other);
         a->events += b->events;
         a->held += b->held;
+        return DFTU_OK;
     };
-    p.on_finalize = [](void* slice, const dftu_plugin_host*) -> dftu_task* {
+    p.on_finalize = [](dftu_ctx*, void* slice, const dftu_plugin_host*,
+                       dftu_task**) -> dftu_status {
         auto* s = static_cast<GrowingSlice*>(slice);
         if (g_slice_sink) {
             g_slice_sink->events = s->events;
             g_slice_sink->held = s->held;
         }
-        return nullptr;
+        return DFTU_OK;
     };
     p.destroy_slice = [](void* slice) {
         delete static_cast<GrowingSlice*>(slice);
@@ -462,7 +474,9 @@ TEST_CASE("make_plugin wires bytes and reclaim when the Slice has them") {
         dftracer::utils::plugins::make_plugin<FacadeSlice>(nullptr);
     REQUIRE(with->bytes);
     REQUIRE(with->reclaim);
-    void* s = with->make_slice(with->self);
+    test_plugin_common::Ctx c;
+    void* s = nullptr;
+    REQUIRE(with->make_slice(c.get(), with->self, &s) == DFTU_OK);
     CHECK(with->bytes(s) == 12);
     CHECK(with->reclaim(s, 100) == 12);
     CHECK(with->reclaim(s, 5) == 5);

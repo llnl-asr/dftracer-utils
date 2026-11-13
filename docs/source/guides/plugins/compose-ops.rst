@@ -1,15 +1,15 @@
-:description: Write a small reusable async transform and compose it with stages and | adaptors in C++, or as a Python op.
+:description: Write a small reusable async transform and compose it with stages in C++, as a typed job over dftu.svc.task in a plugin, or as a Python op.
 
-Author a compose op
+Author a job
 =====================
 
 .. admonition:: Goal
    :class: goal
 
-   Write a small, reusable async transform and pipe it with others, either
-   inside the core library (a C++ stage) or in Python (``@jit.op``). This
-   is the how-to for the model :doc:`../../concepts/compose` explains; read that
-   first for why the model looks like this.
+   Write a small, reusable async transform and pipe it with others: inside the
+   core library (a C++ stage), in a plugin (a job over ``dftu.svc.task``), or in
+   Python (``@jit.op``). The stage model is the one :doc:`../../concepts/compose`
+   explains; read that first for why it looks like this.
 
 In the core library: a stage
 -----------------------------
@@ -42,10 +42,45 @@ A callable works as the next step of ``then``, so a small step needs no type.
 Use ``coro::when_all`` to run two things at once and ``coro::when_any`` to race them.
 See :doc:`../../concepts/compose` for every adaptor, ``either`` and ``erase``.
 
-In a plugin: a host op
------------------------
+In a plugin: a job over ``dftu.svc.task``
+------------------------------------------
 
-A host-provided utility is a named op: run it through
+A job is a typed recipe, an input value in and an output value out. A task is
+one run of a job. The plugin builds jobs through the task service
+(``dftu.svc.task``, ``abi/task.h``): ``job`` makes a leaf, ``then`` pipes two
+jobs (the output type and size of the first must match the input of the second,
+else ``DFTU_E_INVALID``), ``all`` runs several on the same input and
+concatenates their outputs, ``any`` races them and takes the first to finish,
+and ``map`` runs one body per item with a ceiling on how many run at once. A
+``sleep`` job beside the others under ``any`` is a deadline: it fails with
+``DFTU_E_TIMEOUT``. The first error in ``all`` or ``map`` cancels the rest, and
+a leaf polls ``dftu_check(ctx)`` to stop early.
+
+The C++ SDK (``dftracer/utils/plugins/plugin/job.h``) types this layer, so a
+mismatched pipe does not compile. Values must be trivially copyable, since they
+cross the ABI as bytes:
+
+.. code-block:: cpp
+
+   #include <dftracer/utils/plugins/plugin.h>
+   using namespace dftracer::utils::plugins;
+
+   Task scale(Host h, std::int64_t* result) {
+       auto twice = make_job<std::int64_t, std::int64_t>(
+           h, [](std::int64_t x) { return x * 2; });
+       auto plus10 = make_job<std::int64_t, std::int64_t>(
+           h, [](std::int64_t x) { return x + 10; });
+       std::int64_t in = 5, out = 0;
+       co_await run(twice | plus10, in, out);   // out == 20
+       *result = out;
+   }
+
+``when_all(a, b)`` and ``when_any(a, b)`` build the fan-out and the race. A
+leaf takes ``DFTU_JOB_BLOCKING`` as its ``where`` when it blocks, so its worker
+gives back its run permit while it runs. ``Host::spawn`` is the short form of a
+leaf with no input and no output.
+
+A host-provided utility is a named op instead: run it through
 ``DFTU_SVC_OPS`` (``Host::run_op("dftu.hash.fnv1a", {column})``) on a column the
 plugin already holds. See :doc:`../../plugins` for the plugin lifecycle.
 
@@ -53,7 +88,7 @@ In Python: ``@jit.op``
 ------------------------
 
 ``jit.op`` (``dftracer.utils.jit``) turns a single-argument, single-expression
-Python function into the ``In -> Out`` compose leaf. The body must be one ``return`` of arithmetic on the
+Python function into the ``In -> Out`` job leaf. The body must be one ``return`` of arithmetic on the
 argument; anything else raises ``JitOpError`` at decoration time.
 
 .. code-block:: python
@@ -71,7 +106,7 @@ argument; anything else raises ``JitOpError`` at decoration time.
    pipeline = double | plus10       # i64 -> i64; a mismatched pipe raises JitOpError
    result = pipeline(5)             # 20
 
-Calling a piped op JIT-compiles it and runs it on a standalone compose host
+Calling a piped op JIT-compiles it and runs it on a standalone task host
 (no plugin, no scan needed) - useful for testing the op's logic in isolation.
 The same op referenced from inside a ``@jit.each_event`` body is inlined into
 the compiled plugin as a static C function instead, with no host round-trip;
@@ -119,8 +154,8 @@ See also
 - :doc:`../../concepts/compose` for the stage contract and the full adaptor
   set (``then``, ``recover``, ``named``, ``timeout``, ``limit``, ``maybe``).
 - :doc:`../../plugins` for the plugin lifecycle (``step``/``merge``/``finalize``)
-  a compose op runs inside.
+  a job runs inside.
 - :doc:`../../jit` for ``@jit.plugin`` and ``@jit.each_event``, the Python
   plugin-authoring surface ``@jit.op`` complements.
 - :doc:`inter-plugin-comms` for the ports model when two plugins need to
-  share a value, a different problem from composing one op with another.
+  share a value, a different problem from composing one job with another.

@@ -10,13 +10,14 @@
 
 /* Compile `src` and match row `row` of `df`: 1 match, 0 no-match, -1 on compile
  * failure. */
-int dftu_test_query_match(const dftu_plugin_host* h, const char* src,
-                          uint32_t len, const dftu_dataframe* df, int64_t row) {
+int dftu_test_query_match(dftu_ctx* ctx, const dftu_plugin_host* h,
+                          const char* src, uint32_t len,
+                          const dftu_dataframe* df, int64_t row) {
     const dftu_svc_duql* q =
         (const dftu_svc_duql*)h->get_service(h->h, DFTU_SVC_DUQL);
     if (!q) return -1;
-    dftu_duql* compiled = q->duql_compile(h->h, src, len);
-    if (!compiled) return -1;
+    dftu_duql* compiled = NULL;
+    if (q->duql_compile(ctx, h->h, src, len, &compiled) < 0) return -1;
     return q->duql_matches(h->h, compiled, df, row);
 }
 

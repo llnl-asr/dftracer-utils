@@ -41,6 +41,7 @@
 #endif
 
 #include <testing_utilities.h>
+#include <utilities/plugins/test_abi_ctx.h>
 
 #include <algorithm>
 #include <chrono>
@@ -68,6 +69,8 @@ struct HostFixture {
     dstd::UniquePtr<domains::plugins::PluginFold> fold =
         dstd::make_unique<domains::plugins::PluginFold>(plugin, intern);
     dftu_plugin_host& host() { return fold->host(); }
+    dftu_ctx* ctx() { return ctx_.get(); }
+    test_plugin_common::Ctx ctx_;
     dftu_str intern_str(const char* s) {
         return host().intern(host().h, s,
                              static_cast<std::uint32_t>(strlen(s)));
@@ -110,9 +113,9 @@ TEST_CASE("plugin host: arrow_write_ipc writes a non-empty IPC file") {
     REQUIRE(arrow != nullptr);
 
     dstd::String ipc = env.dir() + "/x.arrow";
-    int wr = arrow->arrow_write_ipc(host.h, owned.array(), owned.schema(),
-                                    ipc.c_str());
-    CHECK(wr == 0);
+    int wr = arrow->arrow_write_ipc(fx.ctx(), host.h, owned.array(),
+                                    owned.schema(), ipc.c_str());
+    CHECK(wr == DFTU_OK);
     CHECK(file_size(ipc) > 0);
     MESSAGE("arrow ipc: " << ipc << " size=" << file_size(ipc));
 
@@ -120,8 +123,9 @@ TEST_CASE("plugin host: arrow_write_ipc writes a non-empty IPC file") {
 
     ArrowArray back{};
     ArrowSchema back_sch{};
-    int rd = arrow->arrow_read_ipc(host.h, ipc.c_str(), &back, &back_sch);
-    CHECK(rd == 0);
+    int rd =
+        arrow->arrow_read_ipc(fx.ctx(), host.h, ipc.c_str(), &back, &back_sch);
+    CHECK(rd == DFTU_OK);
     REQUIRE(back.release != nullptr);
     REQUIRE(back_sch.release != nullptr);
     CHECK(back.length == 3);  // rows survive the write/read round-trip
@@ -185,7 +189,9 @@ TEST_CASE("plugin host: trace write then read round-trips events") {
     REQUIRE(tr != nullptr);
 
     dstd::String trace = env.dir() + "/out.pfw.gz";
-    dftu_trace_writer* w = tr->trace_open_write(host.h, trace.c_str());
+    dftu_trace_writer* w = nullptr;
+    REQUIRE(tr->trace_open_write(fx.ctx(), host.h, trace.c_str(), &w) ==
+            DFTU_OK);
     REQUIRE(w != nullptr);
 
     const std::uint32_t N = 50;
@@ -223,9 +229,9 @@ TEST_CASE("plugin host: trace write then read round-trips events") {
     dftu_dataframe* df = dftu_dataframe_new(col_names, cols, 7);
     REQUIRE(df != nullptr);
 
-    CHECK(tr->trace_write(host.h, w, df) == 0);
+    CHECK(tr->trace_write(fx.ctx(), host.h, w, df) == DFTU_OK);
     dftu_dataframe_free(df);
-    CHECK(tr->trace_close(host.h, w) == 0);
+    CHECK(tr->trace_close(fx.ctx(), host.h, w) == DFTU_OK);
     REQUIRE(file_size(trace) > 0);
 
     struct Sink {
@@ -233,7 +239,7 @@ TEST_CASE("plugin host: trace write then read round-trips events") {
         bool first_ok = false;
     };
     Sink sink{};
-    auto on_batch = [](const void* item, void* ud) {
+    auto on_batch = [](dftu_ctx*, const void* item, void* ud) -> dftu_status {
         const auto* batch_df = static_cast<const dftu_dataframe*>(item);
         auto* s = static_cast<Sink*>(ud);
         dftu_series* ts_col = dftu_dataframe_column(batch_df, "ts");
@@ -254,10 +260,11 @@ TEST_CASE("plugin host: trace write then read round-trips events") {
         s->count += static_cast<std::uint64_t>(n);
         if (ts_col) dftu_series_free(ts_col);
         if (name_col) dftu_series_free(name_col);
+        return DFTU_OK;
     };
 
-    int rr = tr->trace_read(host.h, trace.c_str(), on_batch, &sink);
-    CHECK(rr == 0);
+    int rr = tr->trace_read(fx.ctx(), host.h, trace.c_str(), on_batch, &sink);
+    CHECK(rr == DFTU_OK);
     CHECK(sink.count == N);
     CHECK(sink.first_ok);
     MESSAGE("trace round-trip: wrote=" << N << " read=" << sink.count);
@@ -298,7 +305,7 @@ TEST_CASE(
         dstd::Vector<dstd::String> names;
     };
     Sink sink;
-    auto on_batch = [](const void* item, void* ud) {
+    auto on_batch = [](dftu_ctx*, const void* item, void* ud) -> dftu_status {
         const auto* batch_df = static_cast<const dftu_dataframe*>(item);
         auto* s = static_cast<Sink*>(ud);
         dftu_series* name_col = dftu_dataframe_column(batch_df, "name");
@@ -309,8 +316,10 @@ TEST_CASE(
             s->names.emplace_back(p, static_cast<std::size_t>(len));
         }
         if (name_col) dftu_series_free(name_col);
+        return DFTU_OK;
     };
-    REQUIRE(tr->trace_read(host.h, gz.c_str(), on_batch, &sink) == 0);
+    REQUIRE(tr->trace_read(fx.ctx(), host.h, gz.c_str(), on_batch, &sink) ==
+            DFTU_OK);
     std::sort(sink.names.begin(), sink.names.end());
     CHECK(sink.names ==
           dstd::Vector<dstd::String>{"a", R"(b\q)", "c?d", "d", "e"});
@@ -327,7 +336,9 @@ TEST_CASE("plugin host: trace close writes line-ended members and the tail") {
     const dstd::String dir = env.dir() + "/tw";
     ::mkdir(dir.c_str(), 0755);
     const dstd::String trace = dir + "/big.pfw.gz";
-    dftu_trace_writer* w = tr->trace_open_write(host.h, trace.c_str());
+    dftu_trace_writer* w = nullptr;
+    REQUIRE(tr->trace_open_write(fx.ctx(), host.h, trace.c_str(), &w) ==
+            DFTU_OK);
     REQUIRE(w != nullptr);
 
     dstd::String expected;
@@ -340,7 +351,7 @@ TEST_CASE("plugin host: trace close writes line-ended members and the tail") {
     expected += "{\"tail\":true}";
     reinterpret_cast<domains::plugins::PluginTraceWriter*>(w)->buffer =
         expected;
-    REQUIRE(tr->trace_close(host.h, w) == 0);
+    REQUIRE(tr->trace_close(fx.ctx(), host.h, w) == DFTU_OK);
 
     dstd::String decoded, last;
     {
@@ -386,8 +397,10 @@ TEST_CASE("plugin host: trace write prints a float arg with 17 digits") {
         host.get_service(host.h, DFTU_SVC_TRACE));
     REQUIRE(tr != nullptr);
 
-    dftu_trace_writer* w =
-        tr->trace_open_write(host.h, (env.dir() + "/f.pfw.gz").c_str());
+    dftu_trace_writer* w = nullptr;
+    REQUIRE(tr->trace_open_write(fx.ctx(), host.h,
+                                 (env.dir() + "/f.pfw.gz").c_str(),
+                                 &w) == DFTU_OK);
     REQUIRE(w != nullptr);
     const double values[3] = {0.1, 100.0, 1e20};
     const char* col_names[1] = {"args.v"};
@@ -395,14 +408,14 @@ TEST_CASE("plugin host: trace write prints a float arg with 17 digits") {
         dftu_series_new_flat(DFTU_TYPE_FLOAT64, values, 3, nullptr)};
     dftu_dataframe* df = dftu_dataframe_new(col_names, cols, 1);
     REQUIRE(df != nullptr);
-    CHECK(tr->trace_write(host.h, w, df) == 0);
+    CHECK(tr->trace_write(fx.ctx(), host.h, w, df) == DFTU_OK);
     dftu_dataframe_free(df);
     const dstd::String& buffer =
         reinterpret_cast<domains::plugins::PluginTraceWriter*>(w)->buffer;
     CHECK(buffer.find("\"v\":0.10000000000000001}") != dstd::String::npos);
     CHECK(buffer.find("\"v\":100}") != dstd::String::npos);
     CHECK(buffer.find("\"v\":1e+20}") != dstd::String::npos);
-    CHECK(tr->trace_close(host.h, w) == 0);
+    CHECK(tr->trace_close(fx.ctx(), host.h, w) == DFTU_OK);
 }
 
 TEST_CASE("plugin host: a trace_read callback that throws fails the read") {
@@ -418,12 +431,20 @@ TEST_CASE("plugin host: a trace_read callback that throws fails the read") {
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
     dstd::fs::remove(pfw).discard();
 
-    dftracer::utils::plugins::Host h{&fx.host()};
+    dftracer::utils::plugins::Host h{&fx.host(), fx.ctx()};
     int calls = 0;
-    CHECK(h.trace_read(gz.c_str(), [&](const dftu_dataframe*) {
-        ++calls;
-        throw std::runtime_error("boom");
-    }) == -1);
+    bool threw = false;
+    try {
+        h.trace_read(gz.c_str(), [&](const dftu_dataframe*) {
+            ++calls;
+            throw std::runtime_error("boom");
+        });
+    } catch (const dftracer::utils::plugins::Error& e) {
+        threw = true;
+        CHECK(e.status() < 0);
+        CHECK(fx.ctx_.message().find("boom") != dstd::String::npos);
+    }
+    CHECK(threw);
     CHECK(calls == 1);
-    CHECK(h.trace_read(gz.c_str(), [&](const dftu_dataframe*) {}) == 0);
+    CHECK_NOTHROW(h.trace_read(gz.c_str(), [&](const dftu_dataframe*) {}));
 }

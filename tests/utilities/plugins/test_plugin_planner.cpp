@@ -52,24 +52,27 @@ struct CountSlice {
 const char* count_plan_duql(void* self) {
     return static_cast<CountState*>(self)->query;
 }
-void* count_make_slice(void* self) {
+dftu_status count_make_slice(dftu_ctx*, void* self, void** out) {
     auto* s = new CountSlice();
     s->st = static_cast<CountState*>(self);
-    return s;
+    *out = s;
+    return DFTU_OK;
 }
-dftu_task* count_on_batch(void* slice, const dftu_dataframe* df,
-                          const dftu_plugin_host*) {
+dftu_status count_on_batch(dftu_ctx*, void* slice, const dftu_dataframe* df,
+                           const dftu_plugin_host*) {
     static_cast<CountSlice*>(slice)->n +=
         static_cast<std::uint64_t>(dftu_dataframe_num_rows(df));
-    return nullptr;
+    return DFTU_OK;
 }
-void count_merge(void* into, void* other) {
+dftu_status count_merge(dftu_ctx*, void* into, void* other) {
     static_cast<CountSlice*>(into)->n += static_cast<CountSlice*>(other)->n;
+    return DFTU_OK;
 }
-dftu_task* count_on_finalize(void* slice, const dftu_plugin_host*) {
+dftu_status count_on_finalize(dftu_ctx*, void* slice, const dftu_plugin_host*,
+                              dftu_task**) {
     auto* s = static_cast<CountSlice*>(slice);
     s->st->total.store(s->n);
-    return nullptr;
+    return DFTU_OK;
 }
 void count_destroy_slice(void* slice) {
     delete static_cast<CountSlice*>(slice);
@@ -78,7 +81,7 @@ void count_destroy(void*) {}
 
 dftu_plugin make_count_plugin(CountState* st) {
     dftu_plugin p{};
-    p.abi_version = DFTRACER_UTILS_PLUGIN_ABI_VERSION;
+    p.struct_size = sizeof(p);
     p.self = st;
     p.plan_duql = count_plan_duql;
     p.make_slice = count_make_slice;

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 /* Test-only plugin exercising rung 2 of the plugin ladder: a plugin
- * registering itself as a named LazyFrame source (dftu.svc.providers@0)
+ * registering itself as a named LazyFrame source (dftu.svc.providers)
  * rather than only consuming rows.
  *
  * Registers two providers:
@@ -63,41 +63,42 @@ const char* FAILING_NAMES[] = {"x"};
 
 /* ---- provider_fixture.rows: sync frame 1, async frame 2, then EOS ---- */
 
-int32_t rows_schema(void*, const char* const** out_names) {
+dftu_status rows_schema(dftu_ctx*, void*, const char* const** out_names,
+                        int32_t* out_count) {
     *out_names = ROWS_NAMES;
-    return 2;
+    *out_count = 2;
+    return DFTU_OK;
 }
 
 struct RowsCursor {
     int call = 0;
 };
 
-dftu_task* rows_next(void* self, int64_t, ::dftu_result_frame* out) {
+dftu_status rows_next(dftu_ctx*, void* self, int64_t, ::dftu_dataframe** out,
+                      dftu_task** pending) {
     auto* cur = static_cast<RowsCursor*>(self);
     const int call = cur->call++;
     if (call == 0) {
         const int64_t ids[] = {1, 2, 3};
         const int64_t vals[] = {10, 20, 30};
-        out->ok = 1;
-        out->u.value = make_rows_frame(ids, vals, 3);
-        return nullptr;  // synchronous
+        *out = make_rows_frame(ids, vals, 3);
+        return DFTU_OK;  // synchronous
     }
     if (call == 1) {
         // Asynchronous: a real coroutine task the host must co_await before
         // *out is valid.
-        auto fill = [](::dftu_result_frame* o)
-            -> dftracer::utils::coro::CoroTask<void> {
+        auto fill =
+            [](::dftu_dataframe** o) -> dftracer::utils::coro::CoroTask<void> {
             const int64_t ids[] = {4, 5};
             const int64_t vals[] = {40, 50};
-            o->ok = 1;
-            o->u.value = make_rows_frame(ids, vals, 2);
+            *o = make_rows_frame(ids, vals, 2);
             co_return;
         };
-        return dftracer::utils::task_to_abi(fill(out));
+        *pending = dftracer::utils::coro::task_to_abi(fill(out));
+        return DFTU_OK;
     }
-    out->ok = 1;
-    out->u.value = nullptr;  // end of stream
-    return nullptr;
+    *out = nullptr;
+    return DFTU_END;
 }
 
 void rows_cursor_destroy(void* self) {
@@ -105,62 +106,74 @@ void rows_cursor_destroy(void* self) {
     g_rows_cursor_destroy.fetch_add(1);
 }
 
-const ::dftu_cursor_vt ROWS_CURSOR_VT = {.next = rows_next,
+const ::dftu_cursor_vt ROWS_CURSOR_VT = {.struct_size = sizeof(dftu_cursor_vt),
+                                         .next = rows_next,
                                          .destroy = rows_cursor_destroy};
 
-void* rows_scan(void*, const ::dftu_scan_request*, int32_t*,
-                void** out_cursor_self, const ::dftu_cursor_vt** out_vt) {
+dftu_status rows_scan(dftu_ctx*, void*, const ::dftu_scan_request*, int32_t*,
+                      void** out_cursor_self, const ::dftu_cursor_vt** out_vt) {
     auto* cur = new RowsCursor();
     *out_cursor_self = cur;
     *out_vt = &ROWS_CURSOR_VT;
-    return cur;  // non-NULL sentinel; the real self is *out_cursor_self
+    return DFTU_OK;
 }
 
 void rows_source_destroy(void*) { g_rows_source_destroy.fetch_add(1); }
 
-const ::dftu_source_vt ROWS_SOURCE_VT = {
-    .schema = rows_schema, .scan = rows_scan, .destroy = rows_source_destroy};
+const ::dftu_source_vt ROWS_SOURCE_VT = {.struct_size = sizeof(dftu_source_vt),
+                                         .schema = rows_schema,
+                                         .scan = rows_scan,
+                                         .destroy = rows_source_destroy};
 
 /* ---- provider_fixture.failing: next() fails on the first call ---- */
 
-int32_t failing_schema(void*, const char* const** out_names) {
+dftu_status failing_schema(dftu_ctx*, void*, const char* const** out_names,
+                           int32_t* out_count) {
     *out_names = FAILING_NAMES;
-    return 1;
+    *out_count = 1;
+    return DFTU_OK;
 }
 
-dftu_task* failing_next(void*, int64_t, ::dftu_result_frame* out) {
+dftu_status failing_next(dftu_ctx* ctx, void*, int64_t, ::dftu_dataframe**,
+                         dftu_task**) {
     g_failing_next_calls.fetch_add(1);
-    out->ok = 0;
-    out->u.err =
-        ::dftu_error{0, 0, DFTU_E_IO,
-                     "provider_fixture: injected mid-stream failure", nullptr};
-    return nullptr;
+    return dftu_fail(ctx, DFTU_E_IO,
+                     "provider_fixture: injected mid-stream failure");
 }
 
 void failing_cursor_destroy(void*) { g_failing_cursor_destroy.fetch_add(1); }
 
-const ::dftu_cursor_vt FAILING_CURSOR_VT = {.next = failing_next,
-                                            .destroy = failing_cursor_destroy};
+const ::dftu_cursor_vt FAILING_CURSOR_VT = {
+    .struct_size = sizeof(dftu_cursor_vt),
+    .next = failing_next,
+    .destroy = failing_cursor_destroy};
 
-void* failing_scan(void*, const ::dftu_scan_request*, int32_t*,
-                   void** out_cursor_self, const ::dftu_cursor_vt** out_vt) {
+dftu_status failing_scan(dftu_ctx*, void*, const ::dftu_scan_request*, int32_t*,
+                         void** out_cursor_self,
+                         const ::dftu_cursor_vt** out_vt) {
     static int dummy = 0;
     *out_cursor_self = &dummy;
     *out_vt = &FAILING_CURSOR_VT;
-    return &dummy;
+    return DFTU_OK;
 }
 
 void failing_source_destroy(void*) {}
 
-const ::dftu_source_vt FAILING_SOURCE_VT = {.schema = failing_schema,
-                                            .scan = failing_scan,
-                                            .destroy = failing_source_destroy};
+const ::dftu_source_vt FAILING_SOURCE_VT = {
+    .struct_size = sizeof(dftu_source_vt),
+    .schema = failing_schema,
+    .scan = failing_scan,
+    .destroy = failing_source_destroy};
 
 /* ---- fold side: never exercised (the test never calls Plugins::run) ---- */
 
-void* make_slice(void*) { return nullptr; }
-dftu_task* on_batch(void*, const dftu_dataframe*, const dftu_plugin_host*) {
-    return nullptr;
+dftu_status make_slice(dftu_ctx*, void*, void** out) {
+    *out = nullptr;
+    return DFTU_OK;
+}
+dftu_status on_batch(dftu_ctx*, void*, const dftu_dataframe*,
+                     const dftu_plugin_host*) {
+    return DFTU_OK;
 }
 /* ---- provider_fixture.sdk: the C++ source SDK ---- */
 
@@ -259,7 +272,7 @@ class DoubleVal {
     }
 };
 
-void merge(void*, void*) {}
+dftu_status merge(dftu_ctx*, void*, void*) { return DFTU_OK; }
 void destroy_slice(void*) {}
 void destroy(void*) {}
 
@@ -301,48 +314,60 @@ DFTU_PLUGIN_EXPORT int provider_fixture_sdk_filters(void) {
     return g_sdk_filters.load();
 }
 
-DFTU_PLUGIN_EXPORT dftu_plugin* dftracer_plugin(dftu_plugin_host* h,
-                                                const dftu_value*) {
+DFTU_PLUGIN_INFO("provider_fixture", "1.0")
+
+DFTU_PLUGIN_EXPORT dftu_status dftracer_plugin(dftu_ctx* ctx,
+                                               dftu_plugin_host* h,
+                                               const dftu_value*,
+                                               dftu_plugin** out) {
     const auto* providers = static_cast<const dftu_svc_providers*>(
         h->get_service(h->h, DFTU_SVC_PROVIDERS));
-    if (!providers || !providers->register_provider) return nullptr;
+    if (!providers || !providers->register_provider)
+        return dftu_fail(ctx, DFTU_E_UNSUPPORTED, "no provider registry");
 
     bool ok = true;
-    ok = providers->register_provider(h->h, "provider_fixture.rows",
-                                      &ROWS_SOURCE_VT, nullptr) == 0 &&
+    ok = providers->register_provider(ctx, h->h, "provider_fixture.rows",
+                                      &ROWS_SOURCE_VT, nullptr) >= 0 &&
          ok;
-    ok = providers->register_provider(h->h, "provider_fixture.failing",
-                                      &FAILING_SOURCE_VT, nullptr) == 0 &&
+    ok = providers->register_provider(ctx, h->h, "provider_fixture.failing",
+                                      &FAILING_SOURCE_VT, nullptr) >= 0 &&
          ok;
     // Host-reserved namespace: must be refused.
-    ok = providers->register_provider(h->h, "dftu.reserved", &ROWS_SOURCE_VT,
-                                      nullptr) != 0 &&
+    ok = providers->register_provider(ctx, h->h, "dftu.reserved",
+                                      &ROWS_SOURCE_VT, nullptr) < 0 &&
          ok;
     // Unqualified (no "<plugin>." prefix): must be refused.
-    ok = providers->register_provider(h->h, "bareword", &ROWS_SOURCE_VT,
-                                      nullptr) != 0 &&
+    ok = providers->register_provider(ctx, h->h, "bareword", &ROWS_SOURCE_VT,
+                                      nullptr) < 0 &&
          ok;
     // Duplicate of an already-registered name: must be refused, not silently
     // replaced.
-    ok = providers->register_provider(h->h, "provider_fixture.rows",
-                                      &ROWS_SOURCE_VT, nullptr) != 0 &&
+    ok = providers->register_provider(ctx, h->h, "provider_fixture.rows",
+                                      &ROWS_SOURCE_VT, nullptr) < 0 &&
          ok;
     g_gate_ok.store(ok ? 1 : 0);
 
-    dftracer::utils::plugins::plugin(h, nullptr)
-        .source<SdkRange>("provider_fixture.sdk",
-                          dstd::make_unique<SdkRange>(0, 10))
-        .node<DoubleVal>("provider_fixture.double",
-                         dstd::make_unique<DoubleVal>());
+    // The builder only registers here; the fold is this file's own plugin.
+    dftu_plugin* unused = nullptr;
+    const dftu_status st =
+        dftracer::utils::plugins::plugin(ctx, h, nullptr)
+            .source<SdkRange>("provider_fixture.sdk",
+                              dstd::make_unique<SdkRange>(0, 10))
+            .node<DoubleVal>("provider_fixture.double",
+                             dstd::make_unique<DoubleVal>())
+            .build(&unused);
+    if (st < 0) return st;
+    unused->destroy(unused->self);
 
     std::memset(&g_plugin, 0, sizeof(g_plugin));
-    g_plugin.abi_version = DFTRACER_UTILS_PLUGIN_ABI_VERSION;
+    g_plugin.struct_size = sizeof(g_plugin);
     g_plugin.make_slice = make_slice;
     g_plugin.on_batch = on_batch;
     g_plugin.merge = merge;
     g_plugin.destroy_slice = destroy_slice;
     g_plugin.destroy = destroy;
-    return &g_plugin;
+    *out = &g_plugin;
+    return DFTU_OK;
 }
 
 }  // extern "C"

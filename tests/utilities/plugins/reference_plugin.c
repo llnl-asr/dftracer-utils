@@ -30,8 +30,6 @@
 typedef enum {
     REF_SVC_AGG = 0,
     REF_SVC_ARROW,
-    REF_SVC_COMPOSE,
-    REF_SVC_CORO,
     REF_SVC_IO,
     REF_SVC_NODES,
     REF_SVC_OPS,
@@ -40,6 +38,7 @@ typedef enum {
     REF_SVC_DUQL,
     REF_SVC_RESULT,
     REF_SVC_SKETCH,
+    REF_SVC_TASK,
     REF_SVC_TRACE,
     REF_SVC_WRITER,
     REF_SVC_COUNT
@@ -58,10 +57,6 @@ static const char* ref_svc_name(ref_svc_id id) {
             return "agg";
         case REF_SVC_ARROW:
             return "arrow";
-        case REF_SVC_COMPOSE:
-            return "compose";
-        case REF_SVC_CORO:
-            return "coro";
         case REF_SVC_IO:
             return "io";
         case REF_SVC_NODES:
@@ -78,6 +73,8 @@ static const char* ref_svc_name(ref_svc_id id) {
             return "result";
         case REF_SVC_SKETCH:
             return "sketch";
+        case REF_SVC_TASK:
+            return "task";
         case REF_SVC_TRACE:
             return "trace";
         case REF_SVC_WRITER:
@@ -94,10 +91,6 @@ static const char* ref_svc_ext_id(ref_svc_id id) {
             return DFTU_SVC_AGG;
         case REF_SVC_ARROW:
             return DFTU_SVC_ARROW;
-        case REF_SVC_COMPOSE:
-            return DFTU_SVC_COMPOSE;
-        case REF_SVC_CORO:
-            return DFTU_SVC_CORO;
         case REF_SVC_IO:
             return DFTU_SVC_IO;
         case REF_SVC_NODES:
@@ -114,6 +107,8 @@ static const char* ref_svc_ext_id(ref_svc_id id) {
             return DFTU_SVC_RESULT;
         case REF_SVC_SKETCH:
             return DFTU_SVC_SKETCH;
+        case REF_SVC_TASK:
+            return DFTU_SVC_TASK;
         case REF_SVC_TRACE:
             return DFTU_SVC_TRACE;
         case REF_SVC_WRITER:
@@ -157,34 +152,40 @@ static const void* ref_get_service(const dftu_plugin_host* host,
 
 static const char* SRC_NAMES[2] = {"n", "amount"};
 
-static int32_t src_schema(void* self, const char* const** out_names) {
+static dftu_status src_schema(dftu_ctx* ctx, void* self,
+                              const char* const** out_names,
+                              int32_t* out_count) {
+    (void)ctx;
     (void)self;
     *out_names = SRC_NAMES;
-    return 2;
+    *out_count = 2;
+    return DFTU_OK;
 }
 
-static void src_schema_types(void* self, dftu_schema* out) {
+static dftu_status src_schema_types(dftu_ctx* ctx, void* self,
+                                    dftu_schema* out) {
+    (void)ctx;
     (void)self;
     dftu_schema_add_field(out, "n", DFTU_TYPE_INT64, 0, DFTU_TIME_UNIT_SECOND,
                           NULL, 0, 0, 0);
     g_decimal_field_index =
         dftu_schema_add_field(out, "amount", DFTU_TYPE_DECIMAL128, 0,
                               DFTU_TIME_UNIT_SECOND, NULL, 10, 2, 0);
+    return DFTU_OK;
 }
 
 typedef struct {
     int done;
 } SrcCursor;
 
-static dftu_task* src_next(void* self, int64_t max_rows,
-                           dftu_result_frame* out) {
+static dftu_status src_next(dftu_ctx* ctx, void* self, int64_t max_rows,
+                            dftu_dataframe** out, dftu_task** pending) {
     SrcCursor* cur = (SrcCursor*)self;
+    (void)ctx;
     (void)max_rows;
-    out->ok = 1;
-    if (cur->done) {
-        out->u.value = NULL;
-        return NULL;
-    }
+    (void)pending;
+    *out = NULL;
+    if (cur->done) return DFTU_END;
     cur->done = 1;
     {
         static const int64_t n_vals[3] = {1, 2, 3};
@@ -197,33 +198,36 @@ static dftu_task* src_next(void* self, int64_t max_rows,
         dftu_series* cols[2];
         cols[0] = n_col;
         cols[1] = amount_col;
-        out->u.value = dftu_dataframe_new(SRC_NAMES, cols, 2);
+        *out = dftu_dataframe_new(SRC_NAMES, cols, 2);
     }
-    return NULL;
+    return DFTU_OK;
 }
 
 static void src_cursor_destroy(void* self) { free(self); }
 
-static const dftu_cursor_vt SRC_CURSOR_VT = {src_next, src_cursor_destroy, NULL,
-                                             NULL, NULL};
+static const dftu_cursor_vt SRC_CURSOR_VT = {
+    sizeof(dftu_cursor_vt), src_next, src_cursor_destroy, NULL, NULL, NULL};
 
-static void* src_scan(void* self, const dftu_scan_request* req,
-                      int32_t* out_pushed, void** out_cursor_self,
-                      const dftu_cursor_vt** out_vt) {
+static dftu_status src_scan(dftu_ctx* ctx, void* self,
+                            const dftu_scan_request* req, int32_t* out_pushed,
+                            void** out_cursor_self,
+                            const dftu_cursor_vt** out_vt) {
     SrcCursor* cur;
     (void)self;
     (void)req;
     (void)out_pushed;
     cur = (SrcCursor*)calloc(1, sizeof(SrcCursor));
+    if (!cur) return dftu_fail(ctx, DFTU_E_INTERNAL, "out of memory");
     *out_cursor_self = cur;
     *out_vt = &SRC_CURSOR_VT;
-    return cur;
+    return DFTU_OK;
 }
 
 static void src_destroy(void* self) { (void)self; }
 
-static const dftu_source_vt SRC_VT = {src_schema, src_scan, src_destroy,
-                                      src_schema_types, NULL};
+static const dftu_source_vt SRC_VT = {
+    sizeof(dftu_source_vt), src_schema, src_scan, src_destroy,
+    src_schema_types,       NULL};
 
 /* ---- Node: "reference_plugin.node", doubles column "n", passes "amount"
  * through unchanged.
@@ -242,44 +246,51 @@ typedef struct {
     const dftu_cursor_vt* in_vt;
 } NodeCursor;
 
-static dftu_task* node_next(void* self, int64_t max_rows,
-                            dftu_result_frame* out) {
+static dftu_status node_next(dftu_ctx* ctx, void* self, int64_t max_rows,
+                             dftu_dataframe** out, dftu_task** pending) {
     NodeCursor* nc = (NodeCursor*)self;
-    dftu_task* t = nc->in_vt->next(nc->in_self, max_rows, out);
-    if (t && dftu_task_run(dftu_default_runtime(), t) != 0) {
-        out->ok = 0;
-        out->u.err =
-            (dftu_error){0, 0, DFTU_E_INTERNAL,
-                         "reference_plugin.node: upstream task failed", NULL};
-        return NULL;
-    }
-    if (!DFTU_RESULT_OK(*out)) return NULL;
-    {
-        dftu_dataframe* frame = DFTU_RESULT_VALUE(*out);
-        if (!frame) return NULL; /* end of stream */
-        {
-            dftu_series* n_col = dftu_dataframe_column(frame, "n");
-            dftu_series* amount_col = dftu_dataframe_column(frame, "amount");
-            const int64_t rows = dftu_series_length(n_col);
-            const int64_t* n_data = (const int64_t*)dftu_series_data(n_col);
-            int64_t* doubled = (int64_t*)malloc(sizeof(int64_t) * (size_t)rows);
-            int64_t i;
-            for (i = 0; i < rows; ++i) doubled[i] = n_data[i] * 2;
-            {
-                dftu_series* doubled_col =
-                    dftu_series_new_flat(DFTU_TYPE_INT64, doubled, rows, NULL);
-                dftu_series* cols[2];
-                cols[0] = doubled_col;
-                cols[1] = amount_col;
-                out->u.value = dftu_dataframe_new(SRC_NAMES, cols, 2);
-            }
-            free(doubled);
-            dftu_series_free(n_col);
-            dftu_dataframe_free(frame);
-            out->ok = 1;
+    dftu_task* t = NULL;
+    dftu_dataframe* frame = NULL;
+    dftu_status st = nc->in_vt->next(ctx, nc->in_self, max_rows, &frame, &t);
+    (void)pending;
+    *out = NULL;
+    if (st >= 0 && t) {
+        dftu_error err = DFTU_ERROR_INIT;
+        st = dftu_task_run(dftu_default_runtime(), t, &err);
+        if (st < 0) {
+            st = dftu_fail(ctx, st,
+                           err.message
+                               ? err.message
+                               : "reference_plugin.node: upstream task failed");
+            dftu_error_release(&err);
+            if (frame) dftu_dataframe_free(frame);
+            return st;
         }
+        dftu_error_release(&err);
     }
-    return NULL;
+    if (st < 0) return st;
+    if (st == DFTU_END || !frame) return DFTU_END;
+    {
+        dftu_series* n_col = dftu_dataframe_column(frame, "n");
+        dftu_series* amount_col = dftu_dataframe_column(frame, "amount");
+        const int64_t rows = dftu_series_length(n_col);
+        const int64_t* n_data = (const int64_t*)dftu_series_data(n_col);
+        int64_t* doubled = (int64_t*)malloc(sizeof(int64_t) * (size_t)rows);
+        int64_t i;
+        for (i = 0; i < rows; ++i) doubled[i] = n_data[i] * 2;
+        {
+            dftu_series* doubled_col =
+                dftu_series_new_flat(DFTU_TYPE_INT64, doubled, rows, NULL);
+            dftu_series* cols[2];
+            cols[0] = doubled_col;
+            cols[1] = amount_col;
+            *out = dftu_dataframe_new(SRC_NAMES, cols, 2);
+        }
+        free(doubled);
+        dftu_series_free(n_col);
+        dftu_dataframe_free(frame);
+    }
+    return DFTU_OK;
 }
 
 static void node_cursor_destroy(void* self) {
@@ -293,14 +304,15 @@ static void node_cursor_destroy(void* self) {
  * goes straight up; a node that dropped or reordered columns would remap or
  * refuse. The node holds nothing beyond the frame in flight, so it reports
  * no resident bytes and has nothing to reclaim. */
-static dftu_task* node_narrow(void* self, const dftu_expr* predicate,
-                              int32_t* out_applied) {
+static dftu_status node_narrow(dftu_ctx* ctx, void* self,
+                               const dftu_expr* predicate, int32_t* out_applied,
+                               dftu_task** pending) {
     NodeCursor* nc = (NodeCursor*)self;
     if (!nc->in_vt->narrow) {
         *out_applied = 0;
-        return NULL;
+        return DFTU_OK;
     }
-    return nc->in_vt->narrow(nc->in_self, predicate, out_applied);
+    return nc->in_vt->narrow(ctx, nc->in_self, predicate, out_applied, pending);
 }
 
 static uint64_t node_bytes(void* self) {
@@ -314,38 +326,48 @@ static uint64_t node_reclaim(void* self, uint64_t want) {
     return 0;
 }
 
-static const dftu_cursor_vt NODE_CURSOR_VT = {
-    node_next, node_cursor_destroy, node_narrow, node_bytes, node_reclaim};
+static const dftu_cursor_vt NODE_CURSOR_VT = {sizeof(dftu_cursor_vt),
+                                              node_next,
+                                              node_cursor_destroy,
+                                              node_narrow,
+                                              node_bytes,
+                                              node_reclaim};
 
-static void node_output_schema(void* self, const dftu_schema* in,
-                               const dftu_op_arg* args, dftu_schema* out) {
+static dftu_status node_output_schema(dftu_ctx* ctx, void* self,
+                                      const dftu_schema* in,
+                                      const dftu_op_arg* args,
+                                      dftu_schema* out) {
     int32_t n, i;
+    (void)ctx;
     (void)self;
     (void)args;
     n = dftu_schema_field_count(in);
     for (i = 0; i < n; ++i) dftu_schema_copy_field(out, in, i);
+    return DFTU_OK;
 }
 
-static void* node_open(void* self, void* in_cursor_self,
-                       const dftu_cursor_vt* in_vt, const dftu_op_arg* args,
-                       uint64_t memory_budget, void** out_cursor_self,
-                       const dftu_cursor_vt** out_vt) {
+static dftu_status node_open(dftu_ctx* ctx, void* self, void* in_cursor_self,
+                             const dftu_cursor_vt* in_vt,
+                             const dftu_op_arg* args, uint64_t memory_budget,
+                             void** out_cursor_self,
+                             const dftu_cursor_vt** out_vt) {
     NodeCursor* nc;
     (void)self;
     (void)args;
     (void)memory_budget;
     nc = (NodeCursor*)malloc(sizeof(NodeCursor));
+    if (!nc) return dftu_fail(ctx, DFTU_E_INTERNAL, "out of memory");
     nc->in_self = in_cursor_self;
     nc->in_vt = in_vt;
     *out_cursor_self = nc;
     *out_vt = &NODE_CURSOR_VT;
-    return nc;
+    return DFTU_OK;
 }
 
 static void node_destroy(void* self) { (void)self; }
 
-static const dftu_node_vt NODE_VT = {node_output_schema, node_open,
-                                     node_destroy};
+static const dftu_node_vt NODE_VT = {sizeof(dftu_node_vt), node_output_schema,
+                                     node_open, node_destroy};
 
 /* ---- A registered op: "reference_plugin.count_rows" (series -> i64). */
 
@@ -357,13 +379,15 @@ static const dftu_op_desc COUNT_ROWS_OP = {"reference_plugin.count_rows",
                                            DFTU_OP_SIG(I64, SERIES, NONE, NONE),
                                            (dftu_op_generic_fn)&count_rows};
 
-/* ---- Compose leaf op: doubles an int64 value, inline. */
+/* ---- Task leaf job: doubles an int64 value, inline. */
 
-static dftu_task* double_fn(void* state, const void* in, void* out, int* rc) {
+static dftu_status double_fn(dftu_ctx* ctx, void* state, const void* in,
+                             void* out, dftu_task** pending) {
+    (void)ctx;
     (void)state;
+    (void)pending;
     *(int64_t*)out = *(const int64_t*)in * 2;
-    *rc = 0;
-    return NULL;
+    return DFTU_OK;
 }
 
 /* ---- A registered mergeable state (dftu_svc_agg::register_state, tier 2 of
@@ -378,19 +402,20 @@ typedef struct {
     uint64_t sum;
 } DurSumState;
 
-static void* dur_sum_init(void* self) {
+static dftu_status dur_sum_init(dftu_ctx* ctx, void* self, void** out) {
     (void)self;
-    return calloc(1, sizeof(DurSumState));
+    *out = calloc(1, sizeof(DurSumState));
+    if (!*out) return dftu_fail(ctx, DFTU_E_INTERNAL, "out of memory");
+    return DFTU_OK;
 }
 
-static int dur_sum_update(void* state, const dftu_dataframe* df,
-                          dftu_error* err) {
+static dftu_status dur_sum_update(dftu_ctx* ctx, void* state,
+                                  const dftu_dataframe* df) {
     DurSumState* s = (DurSumState*)state;
     dftu_series* dur = dftu_dataframe_column(df, "dur");
-    if (!dur) {
-        if (err) err->message = "reference_plugin.dur_sum: no dur column";
-        return -1;
-    }
+    if (!dur)
+        return dftu_fail(ctx, DFTU_E_NOT_FOUND,
+                         "reference_plugin.dur_sum: no dur column");
     {
         const int64_t rows = dftu_series_length(dur);
         const uint64_t* vals = (const uint64_t*)dftu_series_data(dur);
@@ -398,13 +423,13 @@ static int dur_sum_update(void* state, const dftu_dataframe* df,
         for (i = 0; i < rows; ++i) s->sum += vals[i];
     }
     dftu_series_free(dur);
-    return 0;
+    return DFTU_OK;
 }
 
-static int dur_sum_merge(void* into, void* other, dftu_error* err) {
-    (void)err;
+static dftu_status dur_sum_merge(dftu_ctx* ctx, void* into, void* other) {
+    (void)ctx;
     ((DurSumState*)into)->sum += ((DurSumState*)other)->sum;
-    return 0;
+    return DFTU_OK;
 }
 
 static uint64_t dur_sum_bytes(const void* state) {
@@ -417,46 +442,51 @@ static void dur_sum_free_buf(void* data, void* ud) {
     free(data);
 }
 
-static int dur_sum_serialize(const void* state, dftu_bytes* out,
-                             dftu_error* err) {
-    uint64_t* buf;
-    (void)err;
-    buf = (uint64_t*)malloc(sizeof(uint64_t));
+static dftu_status dur_sum_serialize(dftu_ctx* ctx, const void* state,
+                                     dftu_bytes* out) {
+    uint64_t* buf = (uint64_t*)malloc(sizeof(uint64_t));
+    if (!buf) return dftu_fail(ctx, DFTU_E_INTERNAL, "out of memory");
     *buf = ((const DurSumState*)state)->sum;
     out->data = buf;
     out->len = sizeof(uint64_t);
     out->free_fn = dur_sum_free_buf;
     out->ud = NULL;
-    return 0;
+    return DFTU_OK;
 }
 
-static void* dur_sum_deserialize(void* self, dftu_bytes in, dftu_error* err) {
+static dftu_status dur_sum_deserialize(dftu_ctx* ctx, void* self, dftu_bytes in,
+                                       void** out) {
     DurSumState* s;
     (void)self;
-    (void)err;
     s = (DurSumState*)calloc(1, sizeof(DurSumState));
+    if (!s) return dftu_fail(ctx, DFTU_E_INTERNAL, "out of memory");
     if (in.data && in.len == sizeof(uint64_t))
         memcpy(&s->sum, in.data, sizeof(uint64_t));
-    return s;
+    *out = s;
+    return DFTU_OK;
 }
 
 static uint64_t g_dur_sum_result;
 
-static int dur_sum_finalize(void* state, dftu_result_value* out,
-                            dftu_error* err) {
-    (void)err;
+static dftu_status dur_sum_finalize(dftu_ctx* ctx, void* state,
+                                    dftu_result_value* out) {
+    (void)ctx;
     g_dur_sum_result = ((DurSumState*)state)->sum;
     out->kind = DFTU_RESULT_KIND_BYTES;
     out->u.bytes.data = &g_dur_sum_result;
     out->u.bytes.len = sizeof(g_dur_sum_result);
-    return 0;
+    return DFTU_OK;
 }
 
 static void dur_sum_destroy(void* state) { free(state); }
 
-/* ---- coro run_blocking probe. */
+/* ---- task spawn probe: runs as a blocking job. */
 
-static void bump_fn(void* arg) { *(int64_t*)arg += 1; }
+static dftu_status bump_fn(dftu_ctx* ctx, void* arg) {
+    (void)ctx;
+    *(int64_t*)arg += 1;
+    return DFTU_OK;
+}
 
 /* ---- A small trace frame (cat/name/ph/pid/tid/ts/dur) for the trace
    round-trip check. */
@@ -514,9 +544,11 @@ static dftu_dataframe* build_trace_frame(void) {
     return dftu_dataframe_new(col_names, cols, 7);
 }
 
-static void trace_read_cb(const void* item, void* ud) {
+static dftu_status trace_read_cb(dftu_ctx* ctx, const void* item, void* ud) {
     const dftu_dataframe* df = (const dftu_dataframe*)item;
+    (void)ctx;
     *(int64_t*)ud += dftu_dataframe_num_rows(df);
+    return DFTU_OK;
 }
 
 /* ---- Per-worker slice and the batch-time services (agg, query, ops, ports,
@@ -534,15 +566,18 @@ typedef struct {
     int started;
 } RefSlice;
 
-static void* make_slice(void* self) {
+static dftu_status make_slice(dftu_ctx* ctx, void* self, void** out) {
     RefSlice* s = (RefSlice*)calloc(1, sizeof(RefSlice));
+    if (!s) return dftu_fail(ctx, DFTU_E_INTERNAL, "out of memory");
     s->cfg = (const RefConfig*)self;
-    return s;
+    *out = s;
+    return DFTU_OK;
 }
 
-static void merge(void* into, void* other) {
+static dftu_status merge(dftu_ctx* ctx, void* into, void* other) {
     RefSlice* a = (RefSlice*)into;
     RefSlice* b = (RefSlice*)other;
+    (void)ctx;
     a->rows_seen += b->rows_seen;
     /* merge() gets no host, so a raw handle like dftu_sketch* cannot be
        folded with sketch_merge here; move it instead. The master fold's own
@@ -556,6 +591,7 @@ static void merge(void* into, void* other) {
         b->sketch = NULL;
     }
     if (!a->agg) a->agg = b->agg;
+    return DFTU_OK;
 }
 
 static void destroy_slice(void* slice) { free(slice); }
@@ -575,8 +611,9 @@ static uint64_t slice_reclaim(void* slice, uint64_t want) {
     return 0;
 }
 
-static dftu_task* on_batch(void* slice, const dftu_dataframe* df,
-                           const dftu_plugin_host* host) {
+static dftu_status on_batch(dftu_ctx* ctx, void* slice,
+                            const dftu_dataframe* df,
+                            const dftu_plugin_host* host) {
     RefSlice* s = (RefSlice*)slice;
     const int64_t rows = dftu_dataframe_num_rows(df);
     s->rows_seen += rows;
@@ -597,9 +634,11 @@ static dftu_task* on_batch(void* slice, const dftu_dataframe* df,
                 const char* key_names[1] = {"cat"};
                 const dftu_agg_col specs[1] = {
                     {DFTU_AGG_COUNT, NULL, "n", 0.0, NULL}};
-                s->agg = agg->agg_new(host->h, "reference_plugin.agg",
-                                      key_names, 1, specs, 1);
-                g_status[REF_SVC_AGG] = s->agg ? REF_OK : REF_FAIL;
+                g_status[REF_SVC_AGG] =
+                    agg->agg_new(ctx, host->h, "reference_plugin.agg",
+                                 key_names, 1, specs, 1, &s->agg) >= 0
+                        ? REF_OK
+                        : REF_FAIL;
             }
         }
 
@@ -608,10 +647,12 @@ static dftu_task* on_batch(void* slice, const dftu_dataframe* df,
                 (const dftu_svc_duql*)ref_get_service(host, REF_SVC_DUQL);
             if (q) {
                 const char src[] = "cat == \"POSIX\"";
-                dftu_duql* compiled =
-                    q->duql_compile(host->h, src, (uint32_t)(sizeof(src) - 1));
-                int matched =
-                    compiled ? q->duql_matches(host->h, compiled, df, 0) : -1;
+                dftu_duql* compiled = NULL;
+                int matched = -1;
+                if (q->duql_compile(ctx, host->h, src,
+                                    (uint32_t)(sizeof(src) - 1),
+                                    &compiled) >= 0)
+                    matched = q->duql_matches(host->h, compiled, df, 0);
                 g_status[REF_SVC_DUQL] = matched == 1 ? REF_OK : REF_FAIL;
             }
         }
@@ -622,22 +663,24 @@ static dftu_task* on_batch(void* slice, const dftu_dataframe* df,
             if (ops) {
                 dftu_series* cat = dftu_dataframe_column(df, "cat");
                 int ops_ok;
-                dftu_result_series hashed =
-                    ops->run(host->h, "dftu.hash.fnv1a",
-                             (const dftu_series* const*)&cat, 1, NULL);
-                ops_ok = DFTU_RESULT_OK(hashed);
-                if (ops_ok) dftu_series_free(DFTU_RESULT_VALUE(hashed));
+                dftu_series* hashed = NULL;
+                ops_ok = ops->run(ctx, host->h, "dftu.hash.fnv1a",
+                                  (const dftu_series* const*)&cat, 1, NULL,
+                                  &hashed) >= 0;
+                if (ops_ok) dftu_series_free(hashed);
 
                 ops_ok =
                     ops_ok &&
                     (ops->find(host->h, "reference_plugin.count_rows") != NULL);
 
                 {
-                    dftu_result_scalar counted = ops->run_aggregate(
-                        host->h, "reference_plugin.count_rows",
-                        (const dftu_series* const*)&cat, 1, NULL);
-                    ops_ok = ops_ok && DFTU_RESULT_OK(counted) &&
-                             DFTU_RESULT_VALUE(counted).value.i == rows;
+                    dftu_scalar counted;
+                    ops_ok = ops_ok &&
+                             ops->run_aggregate(ctx, host->h,
+                                                "reference_plugin.count_rows",
+                                                (const dftu_series* const*)&cat,
+                                                1, NULL, &counted) >= 0 &&
+                             counted.value.i == rows;
                 }
 
                 dftu_series_free(cat);
@@ -672,9 +715,9 @@ static dftu_task* on_batch(void* slice, const dftu_dataframe* df,
                 (const dftu_svc_providers*)ref_get_service(host,
                                                            REF_SVC_PROVIDERS);
             if (pr) {
-                int rc = pr->register_provider(
-                    host->h, "reference_plugin.rejected", &SRC_VT, NULL);
-                g_status[REF_SVC_PROVIDERS] = (rc != 0) ? REF_OK : REF_FAIL;
+                dftu_status rc = pr->register_provider(
+                    ctx, host->h, "reference_plugin.rejected", &SRC_VT, NULL);
+                g_status[REF_SVC_PROVIDERS] = (rc < 0) ? REF_OK : REF_FAIL;
             }
         }
 
@@ -683,9 +726,9 @@ static dftu_task* on_batch(void* slice, const dftu_dataframe* df,
             const dftu_svc_nodes* nd =
                 (const dftu_svc_nodes*)ref_get_service(host, REF_SVC_NODES);
             if (nd) {
-                int rc = nd->register_node(host->h, "reference_plugin.rejected",
-                                           &NODE_VT, NULL);
-                g_status[REF_SVC_NODES] = (rc != 0) ? REF_OK : REF_FAIL;
+                dftu_status rc = nd->register_node(
+                    ctx, host->h, "reference_plugin.rejected", &NODE_VT, NULL);
+                g_status[REF_SVC_NODES] = (rc < 0) ? REF_OK : REF_FAIL;
             }
         }
     }
@@ -703,48 +746,41 @@ static dftu_task* on_batch(void* slice, const dftu_dataframe* df,
     if (s->agg) {
         const dftu_svc_agg* agg =
             (const dftu_svc_agg*)ref_get_service(host, REF_SVC_AGG);
-        agg->agg_accumulate(host->h, s->agg, df);
+        const dftu_status st = agg->agg_accumulate(ctx, host->h, s->agg, df);
+        if (st < 0) return st;
     }
 
-    return NULL;
+    return DFTU_OK;
 }
 
-/* ---- on_finalize: the async services (io, writer, compose) need something
-   to sequence them, which C has no native coroutine for, so
-   dftu_svc_coro::drive plays that role - it calls `step` after every task it
-   awaits, and `step` treats `state` as a program counter. */
+/* ---- on_finalize: the async services (io, writer, task) need something to
+   sequence them, which C has no native coroutine for, so dftu_svc_task::drive
+   plays that role - it calls `step` after every round of tasks it awaits, and
+   `step` treats `state` as a program counter. A step reads the status of the
+   task it just waited for, then starts the next one. */
 
 typedef struct {
     int state;
     const dftu_plugin_host* host;
     RefSlice* slice;
 
+    dftu_task* last;
+    ref_svc_id stage;
+
     int fd;
     int64_t io_wn, io_rn;
-    int io_rc;
     char io_buf[32];
 
     dftu_writer* writer;
 
-    dftu_op* op;
-    int64_t compose_in, compose_out;
-    int compose_rc;
+    int64_t spawned;
+    dftu_job* job;
+    int64_t job_in, job_out;
 } FinalizeCtx;
 
-static void finalize_tail(FinalizeCtx* ctx) {
-    const dftu_plugin_host* host = ctx->host;
-    const char* workdir = ctx->slice->cfg->workdir;
-
-    /* coro: run_blocking is the one synchronous slot. */
-    {
-        const dftu_svc_coro* coro =
-            (const dftu_svc_coro*)ref_get_service(host, REF_SVC_CORO);
-        if (coro) {
-            int64_t counter = 0;
-            coro->run_blocking(host->h, bump_fn, &counter);
-            g_status[REF_SVC_CORO] = (counter == 1) ? REF_OK : REF_FAIL;
-        }
-    }
+static void finalize_tail(dftu_ctx* ctx, FinalizeCtx* fc) {
+    const dftu_plugin_host* host = fc->host;
+    const char* workdir = fc->slice->cfg->workdir;
 
     /* trace: write TRACE_N events, close, then read them back. */
     {
@@ -755,18 +791,18 @@ static void finalize_tail(FinalizeCtx* ctx) {
             dftu_trace_writer* tw;
             int trace_ok = 0;
             snprintf(path, sizeof(path), "%s/reference_trace.pfw.gz", workdir);
-            tw = tr->trace_open_write(host->h, path);
-            if (tw) {
+            tw = NULL;
+            if (tr->trace_open_write(ctx, host->h, path, &tw) >= 0 && tw) {
                 dftu_dataframe* frame = build_trace_frame();
-                int wrc = tr->trace_write(host->h, tw, frame);
-                int crc;
+                dftu_status wrc = tr->trace_write(ctx, host->h, tw, frame);
+                dftu_status crc;
                 dftu_dataframe_free(frame);
-                crc = tr->trace_close(host->h, tw);
-                if (wrc == 0 && crc == 0) {
+                crc = tr->trace_close(ctx, host->h, tw);
+                if (wrc >= 0 && crc >= 0) {
                     int64_t read_rows = 0;
-                    int rrc = tr->trace_read(host->h, path, trace_read_cb,
-                                             &read_rows);
-                    trace_ok = (rrc == 0) && (read_rows == TRACE_N);
+                    dftu_status rrc = tr->trace_read(ctx, host->h, path,
+                                                     trace_read_cb, &read_rows);
+                    trace_ok = (rrc >= 0) && (read_rows == TRACE_N);
                 }
             }
             g_status[REF_SVC_TRACE] = trace_ok ? REF_OK : REF_FAIL;
@@ -802,18 +838,18 @@ static void finalize_tail(FinalizeCtx* ctx) {
                 array.length = 2;
                 array.null_count = 0;
                 char path[600];
-                int wrc;
+                dftu_status wrc;
                 snprintf(path, sizeof(path), "%s/reference_arrow.ipc", workdir);
-                wrc = ar->arrow_write_ipc(host->h, &array, &schema, path);
-                if (wrc == 0) {
+                wrc = ar->arrow_write_ipc(ctx, host->h, &array, &schema, path);
+                if (wrc >= 0) {
                     struct ArrowArray in_array;
                     struct ArrowSchema in_schema;
-                    int rrc;
+                    dftu_status rrc;
                     memset(&in_array, 0, sizeof(in_array));
                     memset(&in_schema, 0, sizeof(in_schema));
-                    rrc = ar->arrow_read_ipc(host->h, path, &in_array,
+                    rrc = ar->arrow_read_ipc(ctx, host->h, path, &in_array,
                                              &in_schema);
-                    if (rrc == 0) {
+                    if (rrc >= 0) {
                         if (in_array.length == 2 && in_array.n_children == 1) {
                             struct ArrowArrayView view;
                             ArrowArrayViewInitFromSchema(&view, &in_schema,
@@ -878,10 +914,11 @@ static void finalize_tail(FinalizeCtx* ctx) {
     {
         const dftu_svc_agg* agg =
             (const dftu_svc_agg*)ref_get_service(host, REF_SVC_AGG);
-        if (agg && ctx->slice->agg) {
-            dftu_dataframe* result =
-                agg->agg_result(host->h, "reference_plugin.agg");
-            int agg_ok = result && dftu_dataframe_num_rows(result) >= 1;
+        if (agg && fc->slice->agg) {
+            dftu_dataframe* result = NULL;
+            int agg_ok = agg->agg_result(ctx, host->h, "reference_plugin.agg",
+                                         &result) >= 0 &&
+                         result && dftu_dataframe_num_rows(result) >= 1;
             if (result) dftu_dataframe_free(result);
             if (g_status[REF_SVC_AGG] == REF_OK)
                 g_status[REF_SVC_AGG] = agg_ok ? REF_OK : REF_FAIL;
@@ -890,11 +927,11 @@ static void finalize_tail(FinalizeCtx* ctx) {
     {
         const dftu_svc_sketch* sk =
             (const dftu_svc_sketch*)ref_get_service(host, REF_SVC_SKETCH);
-        if (sk && ctx->slice->sketch) {
-            dftu_quantiles q = sk->sketch_result(host->h, ctx->slice->sketch);
+        if (sk && fc->slice->sketch) {
+            dftu_quantiles q = sk->sketch_result(host->h, fc->slice->sketch);
             int sketch_ok =
-                q.count > 0 && q.count == (uint64_t)ctx->slice->rows_seen;
-            sk->sketch_free(host->h, ctx->slice->sketch);
+                q.count > 0 && q.count == (uint64_t)fc->slice->rows_seen;
+            sk->sketch_free(host->h, fc->slice->sketch);
             g_status[REF_SVC_SKETCH] = sketch_ok ? REF_OK : REF_FAIL;
         }
     }
@@ -934,135 +971,220 @@ static void finalize_tail(FinalizeCtx* ctx) {
             v.kind = DFTU_RESULT_KIND_BYTES;
             v.u.bytes.data = &all_ok;
             v.u.bytes.len = sizeof(all_ok);
-            res->emit(host->h, "reference_ok", &v);
+            res->emit(ctx, host->h, "reference_ok", &v);
 
             memset(&v, 0, sizeof(v));
             v.kind = DFTU_RESULT_KIND_BYTES;
             v.u.bytes.data = report;
             v.u.bytes.len = (uint64_t)off;
-            res->emit(host->h, "reference_report", &v);
+            res->emit(ctx, host->h, "reference_report", &v);
         }
     }
 }
 
-static dftu_task* finalize_step(void* self) {
-    FinalizeCtx* ctx = (FinalizeCtx*)self;
-    const dftu_plugin_host* host = ctx->host;
-    const char* workdir = ctx->slice->cfg->workdir;
-    char path[600];
+static dftu_status wait_for(FinalizeCtx* fc, dftu_task* task, dftu_task** wait,
+                            uint32_t* n_wait) {
+    fc->last = task;
+    wait[0] = task;
+    *n_wait = 1;
+    return DFTU_OK;
+}
 
-    switch (ctx->state++) {
+/* Runs the stages in order; every start hands its task to the host, and the
+   next step reads its status before it goes on. A failed task marks its
+   service FAIL and ends the sequence. */
+static dftu_status finalize_step(dftu_ctx* ctx, void* self, dftu_task** wait,
+                                 uint32_t cap, uint32_t* n_wait) {
+    FinalizeCtx* fc = (FinalizeCtx*)self;
+    const dftu_plugin_host* host = fc->host;
+    const char* workdir = fc->slice->cfg->workdir;
+    const dftu_svc_task* tk =
+        (const dftu_svc_task*)ref_get_service(host, REF_SVC_TASK);
+    dftu_task* t = NULL;
+    char path[600];
+    (void)cap;
+
+    if (!tk) return DFTU_END;
+    if (fc->last) {
+        const dftu_status st = tk->status(ctx, host->h, fc->last);
+        fc->last = NULL;
+        if (st < 0) {
+            g_status[fc->stage] = REF_FAIL;
+            fc->state = 9;
+        }
+    }
+
+    switch (fc->state++) {
         case 0: {
             const dftu_io* io =
                 (const dftu_io*)ref_get_service(host, REF_SVC_IO);
-            if (!io) return NULL;
+            if (!io) break;
+            fc->stage = REF_SVC_IO;
             snprintf(path, sizeof(path), "%s/reference_io.bin", workdir);
-            return io->open(host->h, path, O_CREAT | O_RDWR | O_TRUNC, 0644,
-                            &ctx->fd);
+            {
+                const dftu_status started =
+                    io->open(ctx, host->h, path, O_CREAT | O_RDWR | O_TRUNC,
+                             0644, &fc->fd, &t);
+                if (started < 0) return started;
+            }
+            return wait_for(fc, t, wait, n_wait);
         }
         case 1: {
             const dftu_io* io =
                 (const dftu_io*)ref_get_service(host, REF_SVC_IO);
             static const char data[] = "reference-io";
-            if (!io || ctx->fd < 0) return NULL;
-            return io->write(host->h, ctx->fd, data, sizeof(data), &ctx->io_wn);
+            if (!io || fc->fd < 0) break;
+            {
+                const dftu_status started = io->write(
+                    ctx, host->h, fc->fd, data, sizeof(data), &fc->io_wn, &t);
+                if (started < 0) return started;
+            }
+            return wait_for(fc, t, wait, n_wait);
         }
         case 2: {
             const dftu_io* io =
                 (const dftu_io*)ref_get_service(host, REF_SVC_IO);
-            if (!io || ctx->fd < 0) return NULL;
-            return io->pread(host->h, ctx->fd, ctx->io_buf, sizeof(ctx->io_buf),
-                             0, &ctx->io_rn);
+            if (!io || fc->fd < 0) break;
+            {
+                const dftu_status started =
+                    io->pread(ctx, host->h, fc->fd, fc->io_buf,
+                              sizeof(fc->io_buf), 0, &fc->io_rn, &t);
+                if (started < 0) return started;
+            }
+            return wait_for(fc, t, wait, n_wait);
         }
         case 3: {
             const dftu_io* io =
                 (const dftu_io*)ref_get_service(host, REF_SVC_IO);
-            if (!io || ctx->fd < 0) return NULL;
-            return io->close(host->h, ctx->fd, &ctx->io_rc);
+            if (!io || fc->fd < 0) break;
+            if (io->close(ctx, host->h, fc->fd, &t) < 0) return DFTU_E_IO;
+            return wait_for(fc, t, wait, n_wait);
         }
         case 4: {
             static const char data[] = "reference-io";
             const dftu_svc_writer* w;
-            int io_ok = ctx->fd >= 0 && ctx->io_wn == (int64_t)sizeof(data) &&
-                        ctx->io_rn == (int64_t)sizeof(data) &&
-                        memcmp(ctx->io_buf, data, sizeof(data)) == 0 &&
-                        ctx->io_rc == 0;
+            int io_ok = fc->fd >= 0 && fc->io_wn == (int64_t)sizeof(data) &&
+                        fc->io_rn == (int64_t)sizeof(data) &&
+                        memcmp(fc->io_buf, data, sizeof(data)) == 0;
             g_status[REF_SVC_IO] = io_ok ? REF_OK : REF_FAIL;
 
             w = (const dftu_svc_writer*)ref_get_service(host, REF_SVC_WRITER);
-            if (!w) return NULL;
+            if (!w) break;
+            fc->stage = REF_SVC_WRITER;
             snprintf(path, sizeof(path), "%s/reference_writer.out", workdir);
-            ctx->writer = w->writer_create(host->h, path, 1, 0);
-            if (!ctx->writer) {
+            if (w->writer_create(ctx, host->h, path, 1, 0, &fc->writer) < 0 ||
+                !fc->writer) {
                 g_status[REF_SVC_WRITER] = REF_FAIL;
-                return NULL;
+                break;
             }
-            return w->writer_open(host->h, ctx->writer);
+            {
+                const dftu_status started =
+                    w->writer_open(ctx, host->h, fc->writer, &t);
+                if (started < 0) return started;
+            }
+            return wait_for(fc, t, wait, n_wait);
         }
         case 5: {
             const dftu_svc_writer* w =
                 (const dftu_svc_writer*)ref_get_service(host, REF_SVC_WRITER);
             static const char chunk[] = "reference-writer-chunk";
-            if (!w || !ctx->writer) return NULL;
-            return w->writer_chunk(host->h, ctx->writer, 0, chunk,
-                                   sizeof(chunk));
+            if (!w || !fc->writer) break;
+            {
+                const dftu_status started = w->writer_chunk(
+                    ctx, host->h, fc->writer, 0, chunk, sizeof(chunk), &t);
+                if (started < 0) return started;
+            }
+            return wait_for(fc, t, wait, n_wait);
         }
         case 6: {
             const dftu_svc_writer* w =
                 (const dftu_svc_writer*)ref_get_service(host, REF_SVC_WRITER);
-            if (!w || !ctx->writer) return NULL;
-            return w->writer_close(host->h, ctx->writer);
+            if (!w || !fc->writer) break;
+            {
+                const dftu_status started =
+                    w->writer_close(ctx, host->h, fc->writer, &t);
+                if (started < 0) return started;
+            }
+            return wait_for(fc, t, wait, n_wait);
         }
         case 7: {
-            const dftu_svc_compose* c;
             struct stat st;
             snprintf(path, sizeof(path), "%s/reference_writer.out.shard_0",
                      workdir);
             g_status[REF_SVC_WRITER] =
-                (ctx->writer && stat(path, &st) == 0 && st.st_size > 0)
+                (fc->writer && stat(path, &st) == 0 && st.st_size > 0)
                     ? REF_OK
                     : REF_FAIL;
 
-            c = (const dftu_svc_compose*)ref_get_service(host, REF_SVC_COMPOSE);
-            if (!c) return NULL;
-            ctx->op = c->make_op(host->h, double_fn, NULL, NULL, DFTU_T_I64,
-                                 sizeof(int64_t), DFTU_T_I64, sizeof(int64_t));
-            if (!ctx->op) {
-                g_status[REF_SVC_COMPOSE] = REF_FAIL;
-                return NULL;
+            /* A blocking spawn: the one task slot that runs a plain C
+               function. */
+            fc->stage = REF_SVC_TASK;
+            {
+                const dftu_status started = tk->spawn(
+                    ctx, host->h, bump_fn, &fc->spawned, DFTU_JOB_BLOCKING, &t);
+                if (started < 0) return started;
             }
-            ctx->compose_in = 21;
-            return c->run(host->h, ctx->op, &ctx->compose_in, &ctx->compose_out,
-                          &ctx->compose_rc);
+            return wait_for(fc, t, wait, n_wait);
+        }
+        case 8: {
+            dftu_job_desc desc;
+            int spawn_ok = fc->spawned == 1;
+            if (!spawn_ok) g_status[REF_SVC_TASK] = REF_FAIL;
+            memset(&desc, 0, sizeof(desc));
+            desc.struct_size = sizeof(desc);
+            desc.where = DFTU_JOB_INLINE;
+            desc.fn = double_fn;
+            desc.in_ty = DFTU_T_I64;
+            desc.in_size = sizeof(int64_t);
+            desc.out_ty = DFTU_T_I64;
+            desc.out_size = sizeof(int64_t);
+            if (tk->job(ctx, host->h, &desc, &fc->job) < 0) {
+                g_status[REF_SVC_TASK] = REF_FAIL;
+                break;
+            }
+            fc->job_in = 21;
+            if (tk->start(ctx, host->h, fc->job, &fc->job_in, &fc->job_out,
+                          &t) < 0) {
+                g_status[REF_SVC_TASK] = REF_FAIL;
+                break;
+            }
+            return wait_for(fc, t, wait, n_wait);
         }
         default: {
-            const dftu_svc_compose* c =
-                (const dftu_svc_compose*)ref_get_service(host, REF_SVC_COMPOSE);
-            int compose_ok = ctx->op && ctx->compose_rc == 0 &&
-                             ctx->compose_out == ctx->compose_in * 2;
-            g_status[REF_SVC_COMPOSE] = compose_ok ? REF_OK : REF_FAIL;
-            if (c && ctx->op) c->free_op(host->h, ctx->op);
-
-            finalize_tail(ctx);
-            free(ctx);
-            return NULL;
+            int task_ok =
+                fc->spawned == 1 && fc->job && fc->job_out == fc->job_in * 2;
+            g_status[REF_SVC_TASK] = task_ok ? REF_OK : REF_FAIL;
+            break;
         }
     }
+
+    finalize_tail(ctx, fc);
+    return DFTU_END;
 }
 
-static dftu_task* on_finalize(void* slice, const dftu_plugin_host* host) {
-    RefSlice* s = (RefSlice*)slice;
-    const dftu_svc_coro* coro;
-    FinalizeCtx* ctx = (FinalizeCtx*)calloc(1, sizeof(FinalizeCtx));
-    ctx->host = host;
-    ctx->slice = s;
+static void finalize_release(void* coro) { free(coro); }
 
-    coro = (const dftu_svc_coro*)ref_get_service(host, REF_SVC_CORO);
-    if (!coro) {
-        free(ctx);
-        return NULL;
+static dftu_status on_finalize(dftu_ctx* ctx, void* slice,
+                               const dftu_plugin_host* host,
+                               dftu_task** pending) {
+    RefSlice* s = (RefSlice*)slice;
+    const dftu_svc_task* tk;
+    FinalizeCtx* fc = (FinalizeCtx*)calloc(1, sizeof(FinalizeCtx));
+    if (!fc) return dftu_fail(ctx, DFTU_E_INTERNAL, "out of memory");
+    fc->host = host;
+    fc->slice = s;
+
+    tk = (const dftu_svc_task*)ref_get_service(host, REF_SVC_TASK);
+    if (!tk) {
+        free(fc);
+        return DFTU_OK;
     }
-    return coro->drive(host->h, finalize_step, ctx);
+    {
+        const dftu_status st = tk->drive(ctx, host->h, finalize_step, fc,
+                                         finalize_release, pending);
+        if (st < 0) free(fc);
+        return st;
+    }
 }
 
 static const char* READS[] = {"cat", "dur", NULL};
@@ -1099,8 +1221,12 @@ static void destroy(void* self) {
 
 static dftu_plugin g_plugin;
 
-DFTU_PLUGIN_EXPORT dftu_plugin* dftracer_plugin(dftu_plugin_host* h,
-                                                const dftu_value* config) {
+DFTU_PLUGIN_INFO("reference_plugin", "1.0")
+
+DFTU_PLUGIN_EXPORT dftu_status dftracer_plugin(dftu_ctx* ctx,
+                                               dftu_plugin_host* h,
+                                               const dftu_value* config,
+                                               dftu_plugin** out) {
     RefConfig* cfg;
     const dftu_value* workdir_v;
     const char* workdir_s;
@@ -1110,9 +1236,11 @@ DFTU_PLUGIN_EXPORT dftu_plugin* dftracer_plugin(dftu_plugin_host* h,
 
     workdir_v = dftu_obj_get(config, "workdir");
     workdir_s = dftu_as_str(workdir_v, &workdir_len);
-    if (!workdir_s || workdir_len == 0 || workdir_len >= 500) return NULL;
+    if (!workdir_s || workdir_len == 0 || workdir_len >= 500)
+        return dftu_fail(ctx, DFTU_E_INVALID, "workdir is missing or too long");
 
     cfg = (RefConfig*)calloc(1, sizeof(RefConfig));
+    if (!cfg) return dftu_fail(ctx, DFTU_E_INTERNAL, "out of memory");
     memcpy(cfg->workdir, workdir_s, workdir_len);
     cfg->workdir[workdir_len] = '\0';
 
@@ -1129,12 +1257,12 @@ DFTU_PLUGIN_EXPORT dftu_plugin* dftracer_plugin(dftu_plugin_host* h,
     }
 
     ops = (const dftu_svc_ops*)h->get_service(h->h, DFTU_SVC_OPS);
-    if (ops && ops->register_op) ops->register_op(h->h, &COUNT_ROWS_OP);
+    if (ops && ops->register_op) ops->register_op(ctx, h->h, &COUNT_ROWS_OP);
 
     providers =
         (const dftu_svc_providers*)h->get_service(h->h, DFTU_SVC_PROVIDERS);
     if (providers && providers->register_provider)
-        providers->register_provider(h->h, "reference_plugin.src", &SRC_VT,
+        providers->register_provider(ctx, h->h, "reference_plugin.src", &SRC_VT,
                                      NULL);
 
     /* register_state is callable only from the factory: by run time the
@@ -1145,6 +1273,7 @@ DFTU_PLUGIN_EXPORT dftu_plugin* dftracer_plugin(dftu_plugin_host* h,
         if (agg_reg && agg_reg->register_state) {
             dftu_state_desc desc;
             memset(&desc, 0, sizeof(desc));
+            desc.struct_size = sizeof(desc);
             desc.name = DUR_SUM_STATE_NAME;
             desc.init = dur_sum_init;
             desc.update = dur_sum_update;
@@ -1154,7 +1283,7 @@ DFTU_PLUGIN_EXPORT dftu_plugin* dftracer_plugin(dftu_plugin_host* h,
             desc.deserialize = dur_sum_deserialize;
             desc.finalize = dur_sum_finalize;
             desc.destroy = dur_sum_destroy;
-            g_state_ok = agg_reg->register_state(h->h, &desc, NULL) == 0
+            g_state_ok = agg_reg->register_state(ctx, h->h, &desc, NULL) >= 0
                              ? REF_OK
                              : REF_FAIL;
         } else if (!agg_reg) {
@@ -1168,11 +1297,12 @@ DFTU_PLUGIN_EXPORT dftu_plugin* dftracer_plugin(dftu_plugin_host* h,
         const dftu_svc_nodes* nodes =
             (const dftu_svc_nodes*)h->get_service(h->h, DFTU_SVC_NODES);
         if (nodes && nodes->register_node)
-            nodes->register_node(h->h, "reference_plugin.node", &NODE_VT, NULL);
+            nodes->register_node(ctx, h->h, "reference_plugin.node", &NODE_VT,
+                                 NULL);
     }
 
     memset(&g_plugin, 0, sizeof(g_plugin));
-    g_plugin.abi_version = DFTRACER_UTILS_PLUGIN_ABI_VERSION;
+    g_plugin.struct_size = sizeof(g_plugin);
     g_plugin.self = cfg;
     g_plugin.make_slice = make_slice;
     g_plugin.on_batch = on_batch;
@@ -1184,5 +1314,6 @@ DFTU_PLUGIN_EXPORT dftu_plugin* dftracer_plugin(dftu_plugin_host* h,
     g_plugin.reads = reads;
     g_plugin.bytes = slice_bytes;
     g_plugin.reclaim = slice_reclaim;
-    return &g_plugin;
+    *out = &g_plugin;
+    return DFTU_OK;
 }

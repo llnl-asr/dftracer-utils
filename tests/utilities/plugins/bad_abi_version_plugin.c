@@ -1,18 +1,26 @@
 // SPDX-License-Identifier: MIT
-/* Test-only plugin that stamps a deliberately wrong ABI version, so
- * test_plugin_abi_gate.cpp can exercise the host's version gate through a real
- * dlopen instead of the build_injected_plugins() seam, which skips it.
+/* Test-only plugin that stamps a deliberately wrong ABI version in its info
+ * record, so test_plugin_abi_gate.cpp can exercise the host's version gate
+ * through a real dlopen instead of the build_injected_plugins() seam, which
+ * skips it.
  */
 
 #include <dftracer/utils/plugins/abi.h>
-#include <string.h>
 
-static dftu_plugin g_plugin;
+DFTU_PLUGIN_EXPORT const dftu_plugin_info* dftracer_plugin_info(void) {
+    static const dftu_plugin_info info = {
+        sizeof(dftu_plugin_info),
+        DFTRACER_UTILS_PLUGIN_ABI_VERSION ^ 0xFFFFFFFFu,
+        DFTRACER_UTILS_PLUGIN_ABI_HASH, "bad_abi_version", "1.0"};
+    return &info;
+}
 
-dftu_plugin* dftracer_plugin(dftu_plugin_host* h, const dftu_value* config) {
+DFTU_PLUGIN_EXPORT dftu_status dftracer_plugin(dftu_ctx* ctx,
+                                               dftu_plugin_host* h,
+                                               const dftu_value* config,
+                                               dftu_plugin** out) {
     (void)h;
     (void)config;
-    memset(&g_plugin, 0, sizeof(g_plugin));
-    g_plugin.abi_version = DFTRACER_UTILS_PLUGIN_ABI_VERSION ^ 0xFFFFFFFFu;
-    return &g_plugin;
+    (void)out;
+    return dftu_fail(ctx, DFTU_E_INTERNAL, "the loader must not get here");
 }

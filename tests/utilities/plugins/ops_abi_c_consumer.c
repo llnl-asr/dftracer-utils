@@ -8,25 +8,25 @@
 #include <utilities/plugins/abi_c_consumers.h>
 
 /* Hash `data` with the host's dftu.hash.fnv1a op; 0 ok, -1 on failure. */
-int dftu_test_ops_fnv1a(const dftu_plugin_host* h, const char* data,
-                        uint32_t len, uint64_t* out) {
+int dftu_test_ops_fnv1a(dftu_ctx* ctx, const dftu_plugin_host* h,
+                        const char* data, uint32_t len, uint64_t* out) {
     const dftu_svc_ops* ops =
         (const dftu_svc_ops*)h->get_service(h->h, DFTU_SVC_OPS);
     int32_t offsets[2];
     dftu_series* in;
     dftu_series* hashed;
-    dftu_result_series res;
     const uint64_t* vals;
     if (!ops || !ops->run) return -1;
     offsets[0] = 0;
     offsets[1] = (int32_t)len;
     in = dftu_series_new_string(DFTU_TYPE_STRING, offsets, data, 1, NULL);
     if (!in) return -1;
-    res = ops->run(h->h, "dftu.hash.fnv1a", (const dftu_series* const*)&in, 1,
-                   NULL);
+    if (ops->run(ctx, h->h, "dftu.hash.fnv1a", (const dftu_series* const*)&in,
+                 1, NULL, &hashed) < 0) {
+        dftu_series_free(in);
+        return -1;
+    }
     dftu_series_free(in);
-    if (!DFTU_RESULT_OK(res)) return -1;
-    hashed = DFTU_RESULT_VALUE(res);
     vals = (const uint64_t*)dftu_series_data(hashed);
     if (vals) *out = vals[0];
     dftu_series_free(hashed);

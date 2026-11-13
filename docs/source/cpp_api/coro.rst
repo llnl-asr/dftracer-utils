@@ -22,3 +22,7 @@ Composition and inheritance among the coroutine primitives:
 .. mermaid:: /_generated/coro.mmd
 
 .. include:: /cpp_api/_generated/coro.rst.inc
+
+The tags a task awaits to read its own context (``co_await this_coro::executor``, ``stop_requested`` and ``cancel_view``):
+
+.. include:: /cpp_api/_generated/coro.this_coro.rst.inc

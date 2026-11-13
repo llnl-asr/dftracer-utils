@@ -22,10 +22,10 @@ struct RegisteredState {
 /// Plugins::Builder::build() and read by every PluginFold slice.
 using StateRegistry = dstd::Vector<RegisteredState>;
 
-/// Copy `desc` into `out` under the ABI's registration rules; returns 0 on
-/// success and non-zero (having logged the reason) otherwise.
-int register_state_into(StateRegistry& out, const dftu_state_desc* desc,
-                        void* self, const dstd::String& plugin_name);
+/// Copy `desc` into `out` under the ABI's registration rules; on failure the
+/// negative status comes back with the reason set on @p ctx.
+dftu_status register_state_into(StateRegistry& out, ::dftu_ctx* ctx,
+                                const dftu_state_desc* desc, void* self);
 
 }  // namespace dftracer::utils::domains::plugins
 

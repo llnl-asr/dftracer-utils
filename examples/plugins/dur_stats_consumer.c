@@ -24,14 +24,18 @@
 
 #define DUR_STATS_PORT "com.example.dur_stats"
 
-static void* make_slice(void* self) {
+static dftu_status make_slice(dftu_ctx* ctx, void* self, void** out) {
     (void)self;
-    return calloc(1, 1);
+    *out = calloc(1, 1);
+    if (!*out) return dftu_fail(ctx, DFTU_E_INTERNAL, "out of memory");
+    return DFTU_OK;
 }
 
-static void merge(void* into, void* other) {
+static dftu_status merge(dftu_ctx* ctx, void* into, void* other) {
+    (void)ctx;
     (void)into;
     (void)other;
+    return DFTU_OK;
 }
 
 /* Row 0 of `name` as a double; *ok stays untouched on success and is cleared
@@ -74,14 +78,20 @@ static double cell(const dftu_dataframe* df, const char* name, int* ok) {
     return out;
 }
 
-static dftu_task* on_finalize(void* slice, const dftu_plugin_host* host) {
+static dftu_status on_finalize(dftu_ctx* ctx, void* slice,
+                               const dftu_plugin_host* host,
+                               dftu_task** pending) {
+    (void)pending;
     (void)slice;
     const dftu_svc_agg* agg =
         (const dftu_svc_agg*)host->get_service(host->h, DFTU_SVC_AGG);
     dftu_dataframe* res = NULL;
     char line[192];
     int n = 0;
-    if (agg && agg->agg_result) res = agg->agg_result(host->h, DUR_STATS_PORT);
+    if (agg && agg->agg_result) {
+        dftu_status st = agg->agg_result(ctx, host->h, DUR_STATS_PORT, &res);
+        if (st < 0) return st;
+    }
     if (res) {
         int ok = 1;
         double count = cell(res, "count", &ok);
@@ -99,7 +109,7 @@ static dftu_task* on_finalize(void* slice, const dftu_plugin_host* host) {
         n = snprintf(line, sizeof line,
                      "dur_stats_consumer: STANDALONE no producer");
     if (n > 0) host->log(host->h, DFTU_LOG_INFO, line, (uint32_t)n);
-    return NULL;
+    return DFTU_OK;
 }
 
 static void destroy_slice(void* slice) { free(slice); }
@@ -114,11 +124,16 @@ static const char* const* consumes(void* self) {
 
 static dftu_plugin g_plugin;
 
-DFTU_PLUGIN_EXPORT dftu_plugin* dftracer_plugin(dftu_plugin_host* h,
-                                                const dftu_value* config) {
+DFTU_PLUGIN_INFO("dur_stats_consumer", "1.0")
+
+DFTU_PLUGIN_EXPORT dftu_status dftracer_plugin(dftu_ctx* ctx,
+                                               dftu_plugin_host* h,
+                                               const dftu_value* config,
+                                               dftu_plugin** out) {
+    (void)ctx;
     (void)h;
     (void)config;
-    g_plugin.abi_version = DFTRACER_UTILS_PLUGIN_ABI_VERSION;
+    g_plugin.struct_size = sizeof(dftu_plugin);
     g_plugin.self = NULL;
     g_plugin.plan_duql = NULL;
     g_plugin.make_slice = make_slice;
@@ -128,5 +143,6 @@ DFTU_PLUGIN_EXPORT dftu_plugin* dftracer_plugin(dftu_plugin_host* h,
     g_plugin.destroy_slice = destroy_slice;
     g_plugin.destroy = destroy;
     g_plugin.consumes = consumes;
-    return &g_plugin;
+    *out = &g_plugin;
+    return DFTU_OK;
 }

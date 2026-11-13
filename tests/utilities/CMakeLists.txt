@@ -88,6 +88,7 @@ set(UTILITIES_TEST_SOURCES
     plugins/test_plugin_order.cpp
     plugins/test_plugin_transform.cpp
     plugins/test_plugin_abi_gate.cpp
+    plugins/test_plugin_callback_errors.cpp
     plugins/test_plugin_index_extension.cpp
     plugins/test_plugin_factory_host.cpp
     plugins/test_plugin_config.cpp
@@ -253,7 +254,7 @@ endforeach()
 
 set(cabi_target utilities_plugins_test_plugin_c_abi)
 set(cabi_sources plugins/test_plugin_c_abi.cpp
-                 plugins/compose_abi_c_consumer.c
+                 plugins/task_abi_c_consumer.c
                  plugins/duql_abi_c_consumer.c
                  plugins/sketch_abi_c_consumer.c
                  plugins/ops_abi_c_consumer.c
@@ -271,31 +272,36 @@ set_target_properties(${cabi_target} PROPERTIES OUTPUT_NAME test_plugin_c_abi
 add_test(NAME utilities/plugins/test_plugin_c_abi COMMAND ${cabi_target})
 
 # +++++++++++++++++++++++++++++++++++++++++
-# ABI version gate: a real .so stamped with a wrong DFTRACER_UTILS_PLUGIN_ABI_VERSION,
+# ABI gate: real .so files the loader must refuse - a wrong
+# DFTRACER_UTILS_PLUGIN_ABI_VERSION, a wrong header hash, and no info symbol -
 # loaded by utilities/plugins/test_plugin_abi_gate through a real dlopen.
 # +++++++++++++++++++++++++++++++++++++++++
 
-add_library(bad_abi_version_plugin MODULE plugins/bad_abi_version_plugin.c)
-target_set_warnings(bad_abi_version_plugin)
-set_target_properties(
-  bad_abi_version_plugin
-  PROPERTIES OUTPUT_NAME bad_abi_version_plugin
-             PREFIX ""
-             POSITION_INDEPENDENT_CODE ON
-             C_STANDARD 11
-             C_STANDARD_REQUIRED ON
-             RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/plugins"
-             LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/plugins")
-target_include_directories(bad_abi_version_plugin
-                           PRIVATE ${CMAKE_SOURCE_DIR}/include
-                                   ${CMAKE_BINARY_DIR}/include)
+foreach(gate_plugin bad_abi_version_plugin bad_abi_hash_plugin no_info_plugin)
+  add_library(${gate_plugin} MODULE plugins/${gate_plugin}.c)
+  target_set_warnings(${gate_plugin})
+  set_target_properties(
+    ${gate_plugin}
+    PROPERTIES OUTPUT_NAME ${gate_plugin}
+               PREFIX ""
+               POSITION_INDEPENDENT_CODE ON
+               C_STANDARD 11
+               C_STANDARD_REQUIRED ON
+               RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/plugins"
+               LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/plugins")
+  target_include_directories(${gate_plugin}
+                             PRIVATE ${CMAKE_SOURCE_DIR}/include
+                                     ${CMAKE_BINARY_DIR}/include)
+endforeach()
 
 if(TARGET utilities_plugins_test_plugin_abi_gate)
   target_compile_definitions(
-    utilities_plugins_test_plugin_abi_gate PRIVATE
-    BAD_ABI_VERSION_PLUGIN_PATH="$<TARGET_FILE:bad_abi_version_plugin>")
+    utilities_plugins_test_plugin_abi_gate
+    PRIVATE BAD_ABI_VERSION_PLUGIN_PATH="$<TARGET_FILE:bad_abi_version_plugin>"
+            BAD_ABI_HASH_PLUGIN_PATH="$<TARGET_FILE:bad_abi_hash_plugin>"
+            NO_INFO_PLUGIN_PATH="$<TARGET_FILE:no_info_plugin>")
   add_dependencies(utilities_plugins_test_plugin_abi_gate
-                   bad_abi_version_plugin)
+                   bad_abi_version_plugin bad_abi_hash_plugin no_info_plugin)
 endif()
 
 if(TARGET utilities_plugins_test_plugin_index_extension)

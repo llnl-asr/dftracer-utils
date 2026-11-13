@@ -25,8 +25,7 @@
 #include <vector>
 
 // Adapts a loaded C-ABI plugin to the internal fold interface so N plugins ride
-// one fused scan. A non-null dftu_task from on_batch/on_finalize is a lazy
-// CoroTask<void> the fuse worker awaits.
+// one fused scan. A task on_finalize hands back is awaited by finalize.
 namespace dftracer::utils::domains::plugins {
 
 // Host-owned parallel writer handed to the plugin as an opaque dftu_writer*;
@@ -46,27 +45,30 @@ struct PluginTraceWriter {
     std::uint64_t next_id = 0;
 };
 
-// Host definition of the opaque dftu_op handle: a node in a plugin's compose
-// graph. Leaf nodes carry the plugin callback + owned state; combinator nodes
-// carry their children. Arena-owned by PluginFold (scan-lifetime).
-struct ComposeOp {
-    enum class Kind { Leaf, Then, WhenAll, WhenAny };
-    Kind kind = Kind::Leaf;
-    dftu_op_fn fn = nullptr;
+// The host side of a dftu_job: a leaf runs a plugin body, the rest combine
+// children. Arena-owned by PluginFold (scan-lifetime).
+struct Job {
+    enum class Kind { Leaf, Sleep, Then, All, Any, Map };
+
+    explicit Job(Kind k) : kind(k) {}
+    Job(const Job&) = delete;
+    Job& operator=(const Job&) = delete;
+    ~Job() {
+        if (free_state) free_state(state);
+    }
+
+    dstd::Vector<Job*> children;
+    dftu_job_fn fn = nullptr;
     void* state = nullptr;
     void (*free_state)(void*) = nullptr;
+    std::uint64_t sleep_ns = 0;
+    Kind kind;
+    dftu_job_where where = DFTU_JOB_CPU;
     dftu_type in_ty = DFTU_T_VOID;
     dftu_type out_ty = DFTU_T_VOID;
     std::uint32_t in_size = 0;
     std::uint32_t out_size = 0;
-    dstd::Vector<ComposeOp*> children;
-
-    ComposeOp() = default;
-    ComposeOp(const ComposeOp&) = delete;
-    ComposeOp& operator=(const ComposeOp&) = delete;
-    ~ComposeOp() {
-        if (free_state) free_state(state);
-    }
+    std::uint32_t max_parallel = 0;
 };
 
 // dft.ext.agg accumulator; defined in the .cpp to keep agg.h (and its Arrow
@@ -182,14 +184,8 @@ class PluginFold : public trace::views::detail::Fold {
     void seal_unit(const ScanUnit&) override {}
     void drop_unit(const ScanUnit&) override {}
     dstd::Result<void> merge(Fold& other) override;
-    coro::CoroTask<bool> finalize(const CoverageSet& covered) override;
-
-    // The fuse worker awaits this after step(); consumed once, then null.
-    ::dftu_task* take_pending() override {
-        ::dftu_task* t = pending_;
-        pending_ = nullptr;
-        return t;
-    }
+    coro::CoroTask<dstd::Result<bool>> finalize(
+        const CoverageSet& covered) override;
 
     void bind_port_bus(FoldPortBus* bus) override { port_bus_ = bus; }
 
@@ -204,22 +200,24 @@ class PluginFold : public trace::views::detail::Fold {
     }
 
     // Emit a named, kind-tagged result into the host registry; moves the
-    // Arrow/frame/lazyframe handle carried in `v` (bytes are copied). -1 on a
-    // NULL name/v/registry or an unrecognized kind.
-    int result_emit(const char* name, dftu_result_value* v);
+    // Arrow/frame/lazyframe handle carried in `v` (bytes are copied). Fails on
+    // a NULL name/v/registry or an unrecognized kind.
+    dstd::Result<void> emit_result(const char* name, dftu_result_value* v);
 
-    // Get-or-create this slice's named dft.ext.agg accumulator; null on a bad
-    // op code or a missing output name. A name seen
-    // before keeps its creation-time specs. agg_accumulate skips a batch
-    // missing any referenced column.
-    dftu_agg* agg_new(const char* name, const char* const* key_names,
-                      std::uint32_t key_n, const dftu_agg_col* specs,
-                      std::uint32_t spec_n);
-    void agg_accumulate(dftu_agg* a, const dftu_dataframe* df);
+    // Get-or-create this slice's named dft.svc.agg accumulator; fails on a bad
+    // op code or a missing output name. A name seen before keeps its
+    // creation-time specs. agg_accumulate skips a batch missing any referenced
+    // column.
+    dstd::Result<dftu_agg*> agg_new(const char* name,
+                                    const char* const* key_names,
+                                    std::uint32_t key_n,
+                                    const dftu_agg_col* specs,
+                                    std::uint32_t spec_n);
+    dstd::Result<void> agg_accumulate(dftu_agg* a, const dftu_dataframe* df);
     // The merged, finalized accumulator named `name` from any plugin in the
     // fuse, as a new owned handle the caller frees; null when no plugin has
     // published that name yet. Finalize-time read (see SharedResultRegistry).
-    dftu_dataframe* agg_result(const char* name) const;
+    dstd::Result<dftu_dataframe*> agg_result(const char* name) const;
     /// Spill runs written by the accumulator named `name` (0 when it stayed in
     /// memory, or when there is no such accumulator). The observable signal
     /// that the memory budget engaged.
@@ -240,35 +238,26 @@ class PluginFold : public trace::views::detail::Fold {
     /// budget, or the plugin measures its slice but declares no reclaim.
     bool slice_reclaim_refused() const { return reclaim_refused_; }
 
-    // Allocate a lazy CoroTask into this step's arena, returning its stable
-    // address as an opaque dftu_task*.
-    ::dftu_task* emplace_task(coro::CoroTask<void>&& task);
-
-    // dftu_svc_compose backing. Ops are arena-owned (scan-lifetime); the
-    // combinators validate value sizes and return null on a mismatch.
-    ::dftu_op* compose_make(dftu_op_fn fn, void* state,
-                            void (*free_state)(void*), dftu_type in_ty,
-                            std::uint32_t in_size, dftu_type out_ty,
-                            std::uint32_t out_size);
-    ::dftu_op* compose_then(::dftu_op* a, ::dftu_op* b);
-    ::dftu_op* compose_when_all(::dftu_op* const* ops, std::uint32_t n);
-    ::dftu_op* compose_when_any(::dftu_op* const* ops, std::uint32_t n);
-    ::dftu_task* compose_run(::dftu_op* op, const void* in, void* out, int* rc);
-    // A compose leaf wrapping registered host utility `util_id` (single-value
-    // only); null for a stream-only or unknown id. Lets then()/when_all pipe
-    // host utilities through the dftu_op engine.
+    Job& new_job(Job::Kind kind) { return jobs_.emplace_back(kind); }
 
     dftracer::utils::dstd::StringIntern& intern_table() { return *intern_; }
     ::dftu_writer* make_writer(const char* path, std::uint32_t worker_count,
                                int gzip);
     ::dftu_trace_writer* make_trace_writer(const char* path);
-    int close_trace_writer(::dftu_trace_writer* w);
+    dstd::Result<void> close_trace_writer(::dftu_trace_writer* w);
+
+    /// The plugin's name for an error message.
+    dstd::StringView plugin_label() const {
+        return plugin_name_.empty() ? dstd::StringView("plugin")
+                                    : dstd::StringView(plugin_name_);
+    }
 
     // The fully wired host service table.
     ::dftu_plugin_host& host() { return host_; }
 
-    // Valid until this PluginFold is destroyed; null on parse error.
-    ::dftu_duql* compile_query(const char* src, std::uint32_t len);
+    // Valid until this PluginFold is destroyed; fails on a parse error.
+    dstd::Result<::dftu_duql*> compile_query(const char* src,
+                                             std::uint32_t len);
     int match_query(const duql::Query& q, const dftu_dataframe* df,
                     std::int64_t row);
 
@@ -284,20 +273,21 @@ class PluginFold : public trace::views::detail::Fold {
     // later plugin's agg_result can find them.
     void publish_aggs();
     // Finalize each merged accumulator to a frame and emit it under its name.
-    void materialize_aggs();
+    dstd::Result<void> materialize_aggs();
 
     // The registered-state half of step/merge/finalize; see
     // fold_adapter/state.cpp.
-    void states_update(const dftu_dataframe* df);
-    void states_merge(PluginFold& other);
-    void states_finalize();
+    dstd::Result<void> states_update(const dftu_dataframe* df);
+    dstd::Result<void> states_merge(PluginFold& other);
+    dstd::Result<void> states_finalize();
 
     const dftu_plugin* plugin_;
     dstd::String plugin_name_;
     dftracer::utils::dstd::StringIntern* intern_;
-    void* slice_;
+    void* slice_ = nullptr;
+    // What make_slice reported; returned by the first step and by finalize.
+    dstd::Optional<dstd::Error> slice_error_;
     dftu_plugin_host host_{};
-    ::dftu_task* pending_ = nullptr;
     FoldPortBus* port_bus_ = nullptr;
     SharedResultRegistry* results_ = nullptr;
     utils::plugins::NamedResultRegistry* named_results_ = nullptr;
@@ -322,11 +312,8 @@ class PluginFold : public trace::views::detail::Fold {
     const StateRegistry* states_ = nullptr;
     dstd::Vector<dstd::UniquePtr<StateAccum>> state_accums_;
 
-    // unique_ptr keeps each CoroTask address stable so when_all/then can
-    // reference them; cleared once the awaited root completes.
-    dstd::Vector<dstd::UniquePtr<coro::CoroTask<void>>> task_arena_;
-    // deque keeps op node addresses stable as combinators reference children.
-    dstd::Deque<ComposeOp> compose_ops_;
+    // Keeps job addresses stable; jobs live for the scan.
+    dstd::Deque<Job> jobs_;
     dstd::Vector<dstd::UniquePtr<PluginWriter>> writers_;
     dstd::Vector<dstd::UniquePtr<PluginTraceWriter>> trace_writers_;
 

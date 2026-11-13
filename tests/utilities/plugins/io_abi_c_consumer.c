@@ -12,26 +12,36 @@ static const dftu_io* io_of(const dftu_plugin_host* h) {
     return (const dftu_io*)h->get_service(h->h, DFTU_SVC_IO);
 }
 
-dftu_task* dftu_test_io_open(const dftu_plugin_host* h, const char* path,
-                             int* fd) {
+dftu_status dftu_test_io_open(dftu_ctx* ctx, const dftu_plugin_host* h,
+                              const char* path, int* fd, dftu_task** t) {
     const dftu_io* io = io_of(h);
     if (!io) {
         *fd = -1;
-        return NULL;
+        return dftu_fail(ctx, DFTU_E_UNSUPPORTED, "no io service");
     }
-    return io->open(h->h, path, O_CREAT | O_RDWR | O_TRUNC, 0644, fd);
+    return io->open(ctx, h->h, path, O_CREAT | O_RDWR | O_TRUNC, 0644, fd, t);
 }
 
-dftu_task* dftu_test_io_write(const dftu_plugin_host* h, int fd,
-                              const void* buf, uint64_t len, int64_t* n) {
-    return io_of(h)->write(h->h, fd, buf, len, n);
+/* Opens read-only, so a missing path fails the task with DFTU_E_NOT_FOUND. */
+dftu_status dftu_test_io_open_existing(dftu_ctx* ctx, const dftu_plugin_host* h,
+                                       const char* path, int* fd,
+                                       dftu_task** t) {
+    return io_of(h)->open(ctx, h->h, path, O_RDONLY, 0, fd, t);
 }
 
-dftu_task* dftu_test_io_pread(const dftu_plugin_host* h, int fd, void* buf,
-                              uint64_t len, uint64_t off, int64_t* n) {
-    return io_of(h)->pread(h->h, fd, buf, len, off, n);
+dftu_status dftu_test_io_write(dftu_ctx* ctx, const dftu_plugin_host* h, int fd,
+                               const void* buf, uint64_t len, int64_t* n,
+                               dftu_task** t) {
+    return io_of(h)->write(ctx, h->h, fd, buf, len, n, t);
 }
 
-dftu_task* dftu_test_io_close(const dftu_plugin_host* h, int fd, int* rc) {
-    return io_of(h)->close(h->h, fd, rc);
+dftu_status dftu_test_io_pread(dftu_ctx* ctx, const dftu_plugin_host* h, int fd,
+                               void* buf, uint64_t len, uint64_t off,
+                               int64_t* n, dftu_task** t) {
+    return io_of(h)->pread(ctx, h->h, fd, buf, len, off, n, t);
+}
+
+dftu_status dftu_test_io_close(dftu_ctx* ctx, const dftu_plugin_host* h, int fd,
+                               dftu_task** t) {
+    return io_of(h)->close(ctx, h->h, fd, t);
 }

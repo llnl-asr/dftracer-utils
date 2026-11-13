@@ -797,7 +797,8 @@ coro::CoroTask<dstd::Result<ExportStats>> for_each_scanned_batch(
     st.truncated = produced.load(std::memory_order_relaxed) >= cap;
     for (auto* f : folds) {
         const auto committed = co_await f->finalize(covered);
-        if (committed) st.artifacts_committed = true;
+        if (!committed.has_value()) co_return committed.error();
+        if (*committed) st.artifacts_committed = true;
     }
     co_return counted(plan, st);
 }

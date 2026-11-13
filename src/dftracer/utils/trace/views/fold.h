@@ -20,10 +20,6 @@
 #include <cstdint>
 #include <mutex>
 
-// A plugin fold stashes the dftu_task* its on_batch returned for the async
-// driver to await; forward-declared to keep the C ABI out of this header.
-struct dftu_task;
-
 // The fold-fusion scan core; see the project_fold_fuse_architecture memory.
 namespace dftracer::utils::trace::views::detail {
 
@@ -116,11 +112,12 @@ class Fold {
 
     /// `covered` bounds what a fold may claim. Returns false to persist
     /// nothing.
-    virtual coro::CoroTask<bool> finalize(const CoverageSet& covered) = 0;
+    virtual coro::CoroTask<dstd::Result<bool>> finalize(
+        const CoverageSet& covered) = 0;
 
     /// The async task the last `step` produced, or null when synchronous; the
-    /// driver awaits it. Only a plugin fold returns non-null.
-    virtual ::dftu_task* take_pending() { return nullptr; }
+    /// driver awaits it before the next step. The fold keeps owning it.
+    virtual coro::CoroTask<void>* take_pending() { return nullptr; }
 
     /// The fuse driver binds its per-worker bus so a fold may publish/consume
     /// per-batch values; folds that do not communicate ignore it.

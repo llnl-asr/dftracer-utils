@@ -2477,9 +2477,11 @@ def _emit_flush(attr: str, decl: _MapDecl, wire_name: str) -> List[str]:
     spec_rows = ", ".join("{" + ", ".join(s) + "}" for s in specs)
     out += [
         f"        const dftu_agg_col _specs[{len(specs)}] = {{{spec_rows}}};",
-        f"        dftu_agg* _a = _agg->agg_new(host->h, {_c_str_literal(wire_name)}, "
-        f"{keys_arg}, {n_keys}u, _specs, {len(specs)}u);",
-        f"        if (_a && _n_{attr} > 0) {{",
+        "        dftu_agg* _a = NULL;",
+        f"        dftu_status _as = _agg->agg_new(ctx, host->h, {_c_str_literal(wire_name)}, "
+        f"{keys_arg}, {n_keys}u, _specs, {len(specs)}u, &_a);",
+        "        if (_as < 0 && _st >= 0) _st = _as;",
+        f"        if (_as >= 0 && _a && _n_{attr} > 0) {{",
         f"            dftu_series* _cols[{n_cols}];",
         f"            const char* _cnames[{n_cols}];",
     ]
@@ -2503,7 +2505,8 @@ def _emit_flush(attr: str, decl: _MapDecl, wire_name: str) -> List[str]:
         "            if (_cok) {",
         f"                dftu_dataframe* _df = dftu_dataframe_new(_cnames, _cols, {n_cols});",
         "                if (_df) {",
-        "                    _agg->agg_accumulate(host->h, _a, _df);",
+        "                    _as = _agg->agg_accumulate(ctx, host->h, _a, _df);",
+        "                    if (_as < 0 && _st >= 0) _st = _as;",
         "                    dftu_dataframe_free(_df);",
         "                }",
         "            } else {",
@@ -2646,19 +2649,25 @@ def _emit(
     )
     out += name_defs
     out += [
-        "static void* make_slice(void* self) {",
+        "static dftu_status make_slice(dftu_ctx* ctx, void* self, void** out) {",
         "    (void)self;",
-        "    return calloc(1, 1);",
+        "    *out = calloc(1, 1);",
+        '    return *out ? DFTU_OK : dftu_fail(ctx, DFTU_E_INTERNAL, "out of memory");',
         "}",
         "",
-        "static dftu_task* on_batch(void* slice, const dftu_dataframe* df,",
-        "                          const dftu_plugin_host* host) {",
+        "static dftu_status on_batch(dftu_ctx* ctx, void* slice, const dftu_dataframe* df,",
+        "                            const dftu_plugin_host* host) {",
         "    (void)slice;",
+        "    (void)ctx;",
+        "    dftu_status _st = DFTU_OK;",
         "    const dftu_svc_agg* _agg =",
         "        (const dftu_svc_agg*)host->get_service(host->h, DFTU_SVC_AGG);",
     ]
     if maps:
-        out.append("    if (!_agg || !_agg->agg_new || !_agg->agg_accumulate) return NULL;")
+        out.append(
+            "    if (!_agg || !_agg->agg_new || !_agg->agg_accumulate)"
+            ' return dftu_fail(ctx, DFTU_E_UNSUPPORTED, "the host has no aggregation service");'
+        )
     else:
         out.append("    (void)_agg;")
     out.append("    int64_t n = dftu_dataframe_num_rows(df);")
@@ -2695,6 +2704,7 @@ def _emit(
         inner += _emit_flush(attr, decl, map_ids[attr])
     out += ["    " + ln for ln in inner]
     out.append("    }")
+    out.append('    if (!_alloc_ok) _st = dftu_fail(ctx, DFTU_E_INTERNAL, "out of memory");')
     for attr, decl in maps.items():
         out += _emit_frees(attr, decl)
     for field in sorted(fields_used):
@@ -2703,18 +2713,23 @@ def _emit(
         out.append(f"    dftu_series_free(_argcol{idx}.handle);")
     out.extend(
         [
-            "    return NULL;",
+            "    return _st;",
             "}",
             "",
-            "static void merge(void* into, void* other) {",
+            "static dftu_status merge(dftu_ctx* ctx, void* into, void* other) {",
+            "    (void)ctx;",
             "    (void)into;",
             "    (void)other;",
+            "    return DFTU_OK;",
             "}",
             "",
-            "static dftu_task* on_finalize(void* slice, const dftu_plugin_host* host) {",
+            "static dftu_status on_finalize(dftu_ctx* ctx, void* slice,",
+            "                               const dftu_plugin_host* host, dftu_task** pending) {",
+            "    (void)ctx;",
             "    (void)slice;",
             "    (void)host;",
-            "    return NULL;",
+            "    *pending = NULL;",
+            "    return DFTU_OK;",
             "}",
             "",
             "static void destroy_slice(void* slice) { free(slice); }",
@@ -2723,13 +2738,15 @@ def _emit(
             "",
             "static dftu_plugin g_plugin;",
             "",
-            "#ifdef __cplusplus",
-            'extern "C"',
-            "#endif",
-            "dftu_plugin* dftracer_plugin(dftu_plugin_host* h, const dftu_value* config) {",
+            'DFTU_PLUGIN_INFO("dftracer.jit", NULL)',
+            "",
+            "DFTU_PLUGIN_EXPORT dftu_status dftracer_plugin(dftu_ctx* ctx, dftu_plugin_host* h,",
+            "                                               const dftu_value* config,",
+            "                                               dftu_plugin** out) {",
+            "    (void)ctx;",
             "    (void)h;",
             cfg_reads,
-            "    g_plugin.abi_version = DFTRACER_UTILS_PLUGIN_ABI_VERSION;",
+            "    g_plugin.struct_size = sizeof(g_plugin);",
             "    g_plugin.self = NULL;",
             f"    g_plugin.plan_duql = {plan_duql_field};",
             "    g_plugin.make_slice = make_slice;",
@@ -2745,7 +2762,8 @@ def _emit(
     )
     out.extend(
         [
-            "    return &g_plugin;",
+            "    *out = &g_plugin;",
+            "    return DFTU_OK;",
             "}",
             "",
         ]
@@ -3066,18 +3084,20 @@ def _emit_vfold(
     name_defs, name_assigns = _emit_name_lists(sorted({cast(str, opd["attr"]) for opd in ops}), [])
     out += name_defs
     out += [
-        "static void* make_slice(void* self) {",
+        "static dftu_status make_slice(dftu_ctx* ctx, void* self, void** out) {",
         "    (void)self;",
-        "    return calloc(1, 1);",
+        "    *out = calloc(1, 1);",
+        '    return *out ? DFTU_OK : dftu_fail(ctx, DFTU_E_INTERNAL, "out of memory");',
         "}",
         "",
-        "static dftu_task* on_batch(void* slice,",
-        "                          const dftu_dataframe* df,",
-        "                          const dftu_plugin_host* host) {",
+        "static dftu_status on_batch(dftu_ctx* ctx, void* slice,",
+        "                            const dftu_dataframe* df,",
+        "                            const dftu_plugin_host* host) {",
         "    (void)slice;",
         "    const dftu_svc_agg* agg =",
         "        (const dftu_svc_agg*)host->get_service(host->h, DFTU_SVC_AGG);",
-        "    if (!agg || !agg->agg_new || !agg->agg_accumulate) return NULL;",
+        "    if (!agg || !agg->agg_new || !agg->agg_accumulate)",
+        '        return dftu_fail(ctx, DFTU_E_UNSUPPORTED, "the host has no aggregation service");',
     ]
     for opd in ops:
         attr = cast(str, opd["attr"])
@@ -3095,21 +3115,34 @@ def _emit_vfold(
         else:
             keys_arg = "NULL"
         out += [
-            f"        dftu_agg* a = agg->agg_new(host->h, {_c_str_literal(attr)}, "
-            f"{keys_arg}, {len(keyfields)}u, specs, {len(specs)}u);",
-            "        if (a) agg->agg_accumulate(host->h, a, df);",
+            "        dftu_agg* a = NULL;",
+            f"        dftu_status s = agg->agg_new(ctx, host->h, {_c_str_literal(attr)}, "
+            f"{keys_arg}, {len(keyfields)}u, specs, {len(specs)}u, &a);",
+            "        if (s < 0) return s;",
+            "        if (a) {",
+            "            s = agg->agg_accumulate(ctx, host->h, a, df);",
+            "            if (s < 0) return s;",
+            "        }",
             "    }",
         ]
     out += [
-        "    return NULL;",
+        "    return DFTU_OK;",
         "}",
         "",
-        "static void merge(void* into, void* other) { (void)into; (void)other; }",
+        "static dftu_status merge(dftu_ctx* ctx, void* into, void* other) {",
+        "    (void)ctx;",
+        "    (void)into;",
+        "    (void)other;",
+        "    return DFTU_OK;",
+        "}",
         "",
-        "static dftu_task* on_finalize(void* slice, const dftu_plugin_host* host) {",
+        "static dftu_status on_finalize(dftu_ctx* ctx, void* slice,",
+        "                               const dftu_plugin_host* host, dftu_task** pending) {",
+        "    (void)ctx;",
         "    (void)slice;",
         "    (void)host;",
-        "    return NULL;",
+        "    *pending = NULL;",
+        "    return DFTU_OK;",
         "}",
         "",
         "static void destroy_slice(void* slice) { free(slice); }",
@@ -3117,13 +3150,15 @@ def _emit_vfold(
         "",
         "static dftu_plugin g_plugin;",
         "",
-        "#ifdef __cplusplus",
-        'extern "C"',
-        "#endif",
-        "dftu_plugin* dftracer_plugin(dftu_plugin_host* h, const dftu_value* config) {",
+        'DFTU_PLUGIN_INFO("dftracer.jit", NULL)',
+        "",
+        "DFTU_PLUGIN_EXPORT dftu_status dftracer_plugin(dftu_ctx* ctx, dftu_plugin_host* h,",
+        "                                               const dftu_value* config,",
+        "                                               dftu_plugin** out) {",
+        "    (void)ctx;",
         "    (void)h;",
         "    (void)config;",
-        "    g_plugin.abi_version = DFTRACER_UTILS_PLUGIN_ABI_VERSION;",
+        "    g_plugin.struct_size = sizeof(g_plugin);",
         "    g_plugin.self = NULL;",
         f"    g_plugin.plan_duql = {plan_duql_field};",
         "    g_plugin.make_slice = make_slice;",
@@ -3135,7 +3170,8 @@ def _emit_vfold(
     ]
     out += name_assigns
     out += [
-        "    return &g_plugin;",
+        "    *out = &g_plugin;",
+        "    return DFTU_OK;",
         "}",
         "",
     ]

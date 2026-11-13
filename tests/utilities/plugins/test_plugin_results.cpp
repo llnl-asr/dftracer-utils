@@ -75,7 +75,9 @@ void finalize_now(domains::plugins::PluginFold& f) {
     Runtime rt(1);
     dftu_utils_test::ok(
         rt.submit(coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-                      co_await f.finalize(trace::views::detail::CoverageSet{});
+                      auto finalized = co_await f.finalize(
+                          trace::views::detail::CoverageSet{});
+                      CHECK(finalized.has_value());
                   }),
                   "fin")
             .wait());

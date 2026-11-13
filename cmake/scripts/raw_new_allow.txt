@@ -45,7 +45,6 @@ ParkNode | derives dstd::HeapObject
 src/dftracer/utils/memory/* | the heap
 include/dftracer/utils/memory/* | the heap
 include/dftracer/utils/plugins/plugin/* | compiles in the plugin
-src/dftracer/utils/domains/plugins/compose.h | compiles in the plugin
 include/dftracer/utils/dataframe/series.h | from_borrowed: new and delete both compile in the plugin
 include/dftracer/utils/dstd/vendor/* | vendored upstream text
 

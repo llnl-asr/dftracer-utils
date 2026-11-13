@@ -13,6 +13,7 @@
 #include <dftracer/utils/plugins/plugin/async.h>
 #include <dftracer/utils/plugins/plugin/types.h>
 #include <dftracer/utils/plugins/plugin/map.h>
+#include <dftracer/utils/plugins/plugin/job.h>
 #include <dftracer/utils/plugins/plugin/register.h>
 #include <dftracer/utils/plugins/plugin/source.h>
 #include <dftracer/utils/plugins/plugin/node.h>

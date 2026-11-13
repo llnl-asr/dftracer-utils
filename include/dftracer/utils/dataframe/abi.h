@@ -28,13 +28,14 @@ typedef struct dftu_series dftu_series;
 #endif
 
 /** The domain a dftu_scalar carries (its `kind`). */
-typedef enum {
+typedef int32_t dftu_scalar_tag;
+enum {
     DFTU_SCALAR_TAG_I64 = 0,
     DFTU_SCALAR_TAG_U64 = 1,
     DFTU_SCALAR_TAG_F64 = 2,
     DFTU_SCALAR_TAG_STR = 3,
     DFTU_SCALAR_TAG_ERR = 4
-} dftu_scalar_tag;
+};
 
 /** A scalar operand, tagged by its domain so a kernel converts it to the
  * column's element type. Pass a signed integer as I64, an unsigned integer as
@@ -69,7 +70,8 @@ struct dftu_scalar {
 };
 
 /** Element type of a dftu_series (mirrors dataframe::TypeId ordinals). */
-typedef enum {
+typedef int32_t dftu_dtype;
+enum {
     /** Schema-only marker (mirrors TypeId::Unknown): a type not knowable
      * without scanning, or an unset/zero-initialized dftu_dtype. Never the
      * type of a real dftu_series. */
@@ -104,16 +106,17 @@ typedef enum {
     DFTU_TYPE_LARGE_LIST = 28,
     DFTU_TYPE_FIXED_SIZE_LIST = 29,
     DFTU_TYPE_MAP = 30
-} dftu_dtype;
+};
 
 /** Second/Milli/Micro/Nano granularity (mirrors dataframe::TimeUnit), for
  * Timestamp, Time32, Time64, and Duration columns. */
-typedef enum {
+typedef int32_t dftu_time_unit;
+enum {
     DFTU_TIME_UNIT_SECOND = 0,
     DFTU_TIME_UNIT_MILLI = 1,
     DFTU_TIME_UNIT_MICRO = 2,
     DFTU_TIME_UNIT_NANO = 3
-} dftu_time_unit;
+};
 
 /** Create a FLAT column copying `n` values of `type` from `data`. `validity` is
  * an Arrow-layout bitmap (1 = valid) or NULL for no nulls. */
@@ -347,14 +350,15 @@ DFTU_EXPORT dftu_series* dftu_series_ffill(const dftu_series* v);
 DFTU_EXPORT dftu_series* dftu_series_bfill(const dftu_series* v);
 
 /** Comparison ops for dftu_series_compare. */
-typedef enum {
+typedef int32_t dftu_cmp_op;
+enum {
     DFTU_CMP_GT = 0,
     DFTU_CMP_GE = 1,
     DFTU_CMP_LT = 2,
     DFTU_CMP_LE = 3,
     DFTU_CMP_EQ = 4,
     DFTU_CMP_NE = 5
-} dftu_cmp_op;
+};
 
 /** Compare each numeric value of `v` against `rhs` (op is a dftu_cmp_op
  * code); returns a Bool column (bit-packed), carrying v's validity. The scalar
@@ -401,14 +405,15 @@ DFTU_EXPORT dftu_series* dftu_series_cast(const dftu_series* v,
 
 /** Unary numeric primitives for dftu_series_prim (mirrors dataframe::PrimOp).
  */
-typedef enum {
+typedef int32_t dftu_prim_op;
+enum {
     DFTU_PRIM_ILOG2 = 0,
     DFTU_PRIM_BIT_WIDTH = 1,
     DFTU_PRIM_POPCOUNT = 2,
     DFTU_PRIM_CLZ = 3,
     DFTU_PRIM_CTZ = 4,
     DFTU_PRIM_MIX64 = 5
-} dftu_prim_op;
+};
 
 /** Unary numeric primitive over a FLAT Int64/Uint64 column, producing an Int64
  * column (`op` is a dftu_prim_op). Null if the input is not a 64-bit integer
@@ -420,7 +425,8 @@ DFTU_EXPORT dftu_series* dftu_series_prim(const dftu_series* v,
  * row follows Kleene logic: AND is false when either side is false, OR is
  * true when either side is true, NOT keeps it null, and any other null input
  * gives a null row. */
-typedef enum { DFTU_LOGICAL_AND = 0, DFTU_LOGICAL_OR = 1 } dftu_logical_op;
+typedef int32_t dftu_logical_op;
+enum { DFTU_LOGICAL_AND = 0, DFTU_LOGICAL_OR = 1 };
 DFTU_EXPORT dftu_series* dftu_series_logical(const dftu_series* a,
                                              const dftu_series* b,
                                              dftu_logical_op op);
@@ -573,11 +579,12 @@ DFTU_EXPORT dftu_series* dftu_series_list_get(const dftu_series* v,
  * the rest lower (CAPITALIZE), each run of letters so (TITLE_CASE), every
  * letter's case flipped (SWAPCASE). Bytes outside ASCII are left as they are.
  */
-typedef enum {
+typedef int32_t dftu_str_case;
+enum {
     DFTU_STR_CAPITALIZE = 0,
     DFTU_STR_TITLE_CASE = 1,
     DFTU_STR_SWAPCASE = 2
-} dftu_str_case;
+};
 /** `op` is a dftu_str_case. */
 DFTU_EXPORT dftu_series* dftu_series_str_case(const dftu_series* v, int32_t op);
 
@@ -585,7 +592,8 @@ DFTU_EXPORT dftu_series* dftu_series_str_case(const dftu_series* v, int32_t op);
  * isalpha / isdigit / isdecimal / isnumeric / isspace / islower / isupper /
  * istitle over ASCII (DIGIT, DECIMAL and NUMERIC coincide there): a Bool
  * column, false for an empty string, null where the row is. */
-typedef enum {
+typedef int32_t dftu_str_class;
+enum {
     DFTU_STR_ALNUM = 0,
     DFTU_STR_ALPHA = 1,
     DFTU_STR_DIGIT = 2,
@@ -595,7 +603,7 @@ typedef enum {
     DFTU_STR_LOWER = 6,
     DFTU_STR_UPPER = 7,
     DFTU_STR_TITLE = 8
-} dftu_str_class;
+};
 /** `cls` is a dftu_str_class. */
 DFTU_EXPORT dftu_series* dftu_series_str_is(const dftu_series* v, int32_t cls);
 
@@ -643,12 +651,13 @@ DFTU_EXPORT dftu_series* dftu_series_str_partition(const dftu_series* v,
 
 /** The Unicode normalization forms of dftu_series_str_normalize (Python's
  * unicodedata.normalize). */
-typedef enum {
+typedef int32_t dftu_norm_form;
+enum {
     DFTU_NORM_NFC = 0,
     DFTU_NORM_NFKC = 1,
     DFTU_NORM_NFD = 2,
     DFTU_NORM_NFKD = 3
-} dftu_norm_form;
+};
 /** Each row of a String column in the normalization `form` (a
  * dftu_norm_form). A row that is not valid UTF-8 is null, as a null row stays.
  * NULL for another input type or a bad `form`. */
@@ -666,13 +675,14 @@ DFTU_EXPORT dftu_series* dftu_series_str_translate(const dftu_series* v,
                                                    const dftu_series* to);
 /** The flag bits of dftu_series_str_wrap, the keyword arguments of Python's
  * textwrap.TextWrapper. */
-typedef enum {
+typedef int32_t dftu_wrap_flag;
+enum {
     DFTU_WRAP_EXPAND_TABS = 1,
     DFTU_WRAP_REPLACE_WHITESPACE = 2,
     DFTU_WRAP_DROP_WHITESPACE = 4,
     DFTU_WRAP_BREAK_LONG_WORDS = 8,
     DFTU_WRAP_BREAK_ON_HYPHENS = 16
-} dftu_wrap_flag;
+};
 /** Each row of a String column as "\n".join(textwrap.wrap(row, width)) of
  * CPython 3.13.10, 3.14.1 and later, with the options in `flags` (an OR of
  * dftu_wrap_flag); `width` counts codepoints.
@@ -683,7 +693,8 @@ DFTU_EXPORT dftu_series* dftu_series_str_wrap(const dftu_series* v,
 /** The calendar parts of dftu_series_dt_part (the pandas .dt accessor):
  * DAY_OF_WEEK is Monday = 0, DAY_OF_YEAR and ISO_WEEK are 1-based, IS_LEAP_YEAR
  * is 0 / 1, EPOCH_DAYS the day number since 1970-01-01. */
-typedef enum {
+typedef int32_t dftu_dt_part;
+enum {
     DFTU_DT_YEAR = 0,
     DFTU_DT_MONTH = 1,
     DFTU_DT_DAY = 2,
@@ -701,7 +712,7 @@ typedef enum {
     DFTU_DT_ISO_WEEK = 14,
     DFTU_DT_ISO_YEAR = 15,
     DFTU_DT_EPOCH_DAYS = 16
-} dftu_dt_part;
+};
 /** One calendar `part` (a dftu_dt_part) per row as Int64, of a Timestamp /
  * Date32 / Date64 / Duration column in its own unit, or of an Int64 column
  * read in `unit` (a dftu_time_unit). Naive: a timezone is ignored, every part
@@ -720,11 +731,8 @@ DFTU_EXPORT dftu_series* dftu_series_dt_format(const dftu_series* v,
                                                const char* fmt, int32_t fmt_len,
                                                int32_t unit);
 /** How dftu_series_dt_round rounds to a bucket. */
-typedef enum {
-    DFTU_DT_FLOOR = 0,
-    DFTU_DT_CEIL = 1,
-    DFTU_DT_ROUND = 2
-} dftu_dt_round_mode;
+typedef int32_t dftu_dt_round_mode;
+enum { DFTU_DT_FLOOR = 0, DFTU_DT_CEIL = 1, DFTU_DT_ROUND = 2 };
 /** Each instant rounded to a multiple of `every` (in the column's own unit;
  * an Int64 column is taken as it is) by `mode` (a dftu_dt_round_mode; ROUND
  * is half to even, as pandas). The result keeps the input's type. NULL for a
@@ -761,13 +769,14 @@ DFTU_EXPORT dftu_series* dftu_series_list_join(const dftu_series* v,
  * valid value reduces to 0, as before. */
 /** Aggregation ops. A bitmask (power-of-two values) so group_by can compute
  * several in one pass; dftu_series_reduce takes a single flag (SUM/MIN/MAX). */
-typedef enum {
+typedef int32_t dftu_reduce_op;
+enum {
     DFTU_REDUCE_SUM = 1,
     DFTU_REDUCE_MIN = 2,
     DFTU_REDUCE_MAX = 4,
     DFTU_REDUCE_COUNT = 8,
     DFTU_REDUCE_MEAN = 16
-} dftu_reduce_op;
+};
 DFTU_EXPORT dftu_scalar dftu_series_reduce(const dftu_series* v,
                                            dftu_reduce_op op);
 
@@ -935,19 +944,21 @@ DFTU_EXPORT dftu_series* dftu_series_sample(const dftu_series* v, int64_t n,
                                             uint64_t seed);
 
 /** Tie-breaking method for dftu_series_rank. */
-typedef enum {
+typedef int32_t dftu_rank_method;
+enum {
     DFTU_RANK_AVERAGE = 0,
     DFTU_RANK_MIN = 1,
     DFTU_RANK_DENSE = 2,
     DFTU_RANK_ORDINAL = 3,
     DFTU_RANK_MAX = 4
-} dftu_rank_method;
+};
 
 /** Bit flags for dftu_series_rank's `flags`. */
-typedef enum {
+typedef int32_t dftu_rank_flags;
+enum {
     DFTU_RANK_FLAG_DESCENDING = 1, /**< rank from the largest value down */
     DFTU_RANK_FLAG_PCT = 2 /**< divide each rank by the non-null count */
-} dftu_rank_flags;
+};
 
 /** Rank of each row (`method` is a dftu_rank_method:
  * DFTU_RANK_AVERAGE/MIN/DENSE/ORDINAL/MAX), ascending unless `flags` has
@@ -962,25 +973,28 @@ DFTU_EXPORT dftu_series* dftu_series_rank(const dftu_series* v,
                                           int32_t flags);
 
 /** Reduction for dftu_series_rolling. */
-typedef enum {
+typedef int32_t dftu_rolling_op;
+enum {
     DFTU_ROLLING_SUM = 0,
     DFTU_ROLLING_MEAN = 1,
     DFTU_ROLLING_MIN = 2,
     DFTU_ROLLING_MAX = 3
-} dftu_rolling_op;
+};
 
 /** A string predicate against one literal pattern (dftu_expr_str_pred). */
-typedef enum {
+typedef int32_t dftu_str_pred_op;
+enum {
     DFTU_STR_PRED_CONTAINS = 0,
     DFTU_STR_PRED_STARTS_WITH = 1,
     DFTU_STR_PRED_ENDS_WITH = 2,
     DFTU_STR_PRED_LIKE = 3,
     DFTU_STR_PRED_MATCHES = 4,
     DFTU_STR_PRED_SEARCH = 5
-} dftu_str_pred_op;
+};
 
 /** A String -> String map with no argument (dftu_expr_str_map). */
-typedef enum {
+typedef int32_t dftu_str_map_op;
+enum {
     DFTU_STR_MAP_LOWER = 0,
     DFTU_STR_MAP_UPPER = 1,
     DFTU_STR_MAP_STRIP = 2,
@@ -989,7 +1003,7 @@ typedef enum {
     DFTU_STR_MAP_CAPITALIZE = 5,
     DFTU_STR_MAP_TITLE = 6,
     DFTU_STR_MAP_SWAPCASE = 7
-} dftu_str_map_op;
+};
 
 /** A string method with text, integer or second-column operands, evaluated
  * by the Series function the eager Series.str method of the same name calls
@@ -999,7 +1013,8 @@ typedef enum {
  * one codepoint each, and `text2` holds one entry per key, a codepoint L and
  * then the value's codepoints (L is 1 + their count, or 0 to delete the key).
  */
-typedef enum {
+typedef int32_t dftu_str_fn;
+enum {
     DFTU_STR_FN_ISALNUM = 0,
     DFTU_STR_FN_ISALPHA = 1,
     DFTU_STR_FN_ISDIGIT = 2,
@@ -1032,7 +1047,7 @@ typedef enum {
     DFTU_STR_FN_NORMALIZE = 29,
     DFTU_STR_FN_TRANSLATE = 30,
     DFTU_STR_FN_WRAP = 31
-} dftu_str_fn;
+};
 
 /** Rolling-window reduction (`op` is a dftu_rolling_op:
  * DFTU_ROLLING_SUM/MEAN/MIN/MAX) over `window` trailing rows; the first
@@ -1068,10 +1083,11 @@ DFTU_EXPORT dftu_series* dftu_series_ewm_std(const dftu_series* v,
                                              double alpha);
 
 /** Flags of dftu_series_cut. */
-typedef enum dftu_cut_flag {
+typedef int32_t dftu_cut_flag;
+enum {
     DFTU_CUT_RIGHT = 1, /**< close each interval on the right: (a, b] */
     DFTU_CUT_INNER = 2  /**< null outside the interior intervals, bins from 0 */
-} dftu_cut_flag;
+};
 
 /** Bin each value into the intervals defined by the ascending numeric `breaks`
  * column. With `flags` 0 the intervals are [a, b) and the bin index is the
@@ -1258,7 +1274,8 @@ DFTU_EXPORT dftu_dataframe* dftu_dataframe_reduce(const dftu_dataframe* df,
                                                   int32_t agg);
 /** The group-wise transforms of a group-by (pandas `groupby(k).cumsum()` and
  * kin): one value per input row, rows in input order. */
-typedef enum {
+typedef int32_t dftu_groupwise_op;
+enum {
     DFTU_GROUPWISE_CUMSUM = 0,
     DFTU_GROUPWISE_CUMMAX = 1,
     DFTU_GROUPWISE_CUMMIN = 2,
@@ -1278,7 +1295,7 @@ typedef enum {
     DFTU_GROUPWISE_ROLLING_MIN = 16,
     DFTU_GROUPWISE_ROLLING_MAX = 17,
     DFTU_GROUPWISE_CUMPROD = 18
-} dftu_groupwise_op;
+};
 /** `kind` (a dftu_groupwise_op) over the groups of the `n_keys` `keys`
  * columns. CUMSUM / CUMPROD (Float64) / CUMMAX / CUMMIN / DIFF / PCT_CHANGE /
  * RANK take every numeric non-key column, SHIFT every non-key column, each
@@ -1410,10 +1427,8 @@ DFTU_EXPORT dftu_dataframe* dftu_dataframe_group_by(const dftu_dataframe* df,
 /** How dftu_dataframe_concat aligns its parts' columns. VERTICAL needs one
  * shared schema (same names, types and order); DIAGONAL unions the columns,
  * null-filling a column a part lacks and promoting a mixed-numeric column. */
-typedef enum {
-    DFTU_CONCAT_VERTICAL = 0,
-    DFTU_CONCAT_DIAGONAL = 1
-} dftu_concat_how;
+typedef int32_t dftu_concat_how;
+enum { DFTU_CONCAT_VERTICAL = 0, DFTU_CONCAT_DIAGONAL = 1 };
 
 /** Vertically concatenate `n` frames (UNION ALL). NULL if `n` is 0, a part
  * is NULL, `how` is not a dftu_concat_how, or the schemas cannot align. */
@@ -1442,7 +1457,8 @@ DFTU_EXPORT dftu_dataframe* dftu_dataframe_union(const dftu_dataframe* a,
  * struct of all its columns, empty when none. Both compare keys by value:
  * integers equal floats of the same value, strings by their bytes, other
  * types never across; key pairs need not share a type. */
-typedef enum {
+typedef int32_t dftu_join_how;
+enum {
     DFTU_JOIN_INNER = 0,
     DFTU_JOIN_LEFT = 1,
     DFTU_JOIN_RIGHT = 2,
@@ -1452,7 +1468,7 @@ typedef enum {
     DFTU_JOIN_CROSS = 6,
     DFTU_JOIN_LOOKUP = 7,
     DFTU_JOIN_NEST = 8
-} dftu_join_how;
+};
 
 /** Hash join `df` (left) with `other` (right) on the `n` key pairs
  * `left_on[i]` = `right_on[i]`, compared exactly (a null key never matches
@@ -1963,7 +1979,8 @@ DFTU_EXPORT dftu_lazyframe* dftu_lazyframe_concat(const dftu_lazyframe* lf,
  * live here so the op runner can unpack them. */
 
 /** One window function; mirrors the utilities WindowFunc. */
-typedef enum {
+typedef int32_t dftu_window_func;
+enum {
     DFTU_WINDOW_ROW_NUMBER = 0,
     DFTU_WINDOW_RANK = 1,
     DFTU_WINDOW_DENSE_RANK = 2,
@@ -1996,13 +2013,11 @@ typedef enum {
     DFTU_WINDOW_FRAME_ARG_MAX = 29,
     DFTU_WINDOW_FRAME_ARG_MIN = 30,
     DFTU_WINDOW_FRAME_COLLECT = 31
-} dftu_window_func;
+};
 
 /** How a FRAME_* bound reads; mirrors the utilities WindowFrameMode. */
-typedef enum {
-    DFTU_WINDOW_FRAME_ROWS = 0,
-    DFTU_WINDOW_FRAME_RANGE = 1
-} dftu_window_frame_mode;
+typedef int32_t dftu_window_frame_mode;
+enum { DFTU_WINDOW_FRAME_ROWS = 0, DFTU_WINDOW_FRAME_RANGE = 1 };
 
 /** A FRAME_* bound that is unbounded on its side. */
 #define DFTU_WINDOW_UNBOUNDED INT64_MAX
@@ -2062,19 +2077,17 @@ typedef struct dftu_window_spec {
 
 /** How a generated gap-fill row fills its value columns; mirrors the
  * utilities GapFillMode. */
-typedef enum {
+typedef int32_t dftu_gap_fill_mode;
+enum {
     DFTU_GAP_FILL_NONE = 0,
     DFTU_GAP_FILL_LOCF = 1,
     DFTU_GAP_FILL_LINEAR = 2
-} dftu_gap_fill_mode;
+};
 
 /** Which right row an as-of join picks; mirrors the utilities AsofDirection.
  */
-typedef enum {
-    DFTU_ASOF_BACKWARD = 0,
-    DFTU_ASOF_FORWARD = 1,
-    DFTU_ASOF_NEAREST = 2
-} dftu_asof_direction;
+typedef int32_t dftu_asof_direction;
+enum { DFTU_ASOF_BACKWARD = 0, DFTU_ASOF_FORWARD = 1, DFTU_ASOF_NEAREST = 2 };
 
 /** SQL window functions over `df`: PARTITION BY `partition_by` (n_part
  * names), ORDER BY `order_by` (n_order names), one appended column per spec.
@@ -2141,27 +2154,26 @@ DFTU_EXPORT dftu_lazyframe* dftu_lazyframe_interval(
 /* ---- Provider registry --------------------------------------------------- */
 /* One name-keyed registry of Source vtables, so a LazyFrame can be built by
  * name over a provider registered from anywhere in the process - a plugin
- * (dftu.svc.providers@0 forwards here), a non-plugin C caller, or a future
+ * (dftu.svc.providers forwards here), a non-plugin C caller, or a future
  * language binding. Mirrors the op registry below: process-lifetime,
  * name-keyed, and a name already taken is refused rather than replaced. */
 
-DFTU_RESULT_DECL(dftu_result_frame, dftu_dataframe*);
-
 /** A pull cursor over one open scan of a registered source. Exactly one
    thread drives a given cursor at a time; the host never calls next() again
-   before a prior call's task (if any) has completed. */
+   before a prior call's task (if any) has completed. Every callback that can
+   fail takes the host's @ref dftu_ctx first and returns a @ref dftu_status; a
+   negative status is an error with the ctx message, never the end of the
+   stream. */
 typedef struct dftu_cursor_vt {
-    /** Pull up to max_rows rows.
-       Returns NULL when answered synchronously - *out is valid immediately.
-       Otherwise returns a task the host awaits (see dftu_task) BEFORE reading
-       *out; the task follows the same ownership as one returned from
-       dftu_plugin::on_batch: freed once the host has driven it to
-       completion.
-       On success, DFTU_RESULT_VALUE(*out) is a NEW dftu_dataframe the host
-       frees with dftu_dataframe_free, or NULL for end of stream. On failure
-       *out carries a dftu_error and the host surfaces it rather than treating
-       the call as end of stream. */
-    dftu_task* (*next)(void* self, int64_t max_rows, dftu_result_frame* out);
+    uint32_t struct_size; /**< sizeof(dftu_cursor_vt) */
+    /** Pull up to max_rows rows. DFTU_OK with `*out` a NEW dftu_dataframe the
+       host frees with dftu_dataframe_free, DFTU_END (and `*out` NULL) at the
+       end of the stream, or an error. With `*pending` set to a task the
+       host awaits (see dftu_task), the host reads `*out` and the task's status
+       only after it completes; the task follows the ownership rules of
+       dftu_task. */
+    dftu_status (*next)(dftu_ctx* ctx, void* self, int64_t max_rows,
+                        dftu_dataframe** out, dftu_task** pending);
     /** Release a cursor from source_vt::scan; exactly one call per scan(). */
     void (*destroy)(void* self);
     /** Optional (may be NULL). Offer `predicate` (positional against this
@@ -2173,12 +2185,11 @@ typedef struct dftu_cursor_vt {
        changes only the work done, never the result. A node that holds an
        input cursor forwards it to in_vt->narrow when the predicate is
        positional against its input as well (a node that only adds or keeps
-       columns), remapping or refusing otherwise. Same task convention as
-       next(): NULL when answered inline, else a task the host awaits before
-       reading *out_applied (nonzero when the cursor did anything with it,
-       for diagnostics). */
-    dftu_task* (*narrow)(void* self, const dftu_expr* predicate,
-                         int32_t* out_applied);
+       columns), remapping or refusing otherwise. Same pending convention as
+       next(): the host awaits `*pending` before reading *out_applied
+       (nonzero when the cursor did anything with it, for diagnostics). */
+    dftu_status (*narrow)(dftu_ctx* ctx, void* self, const dftu_expr* predicate,
+                          int32_t* out_applied, dftu_task** pending);
     /** Optional (may be NULL). Bytes this cursor holds resident beyond one
        in-flight frame: a build table, a spool, a cache. The host sums it
        over the plan against the memory budget; without it the cursor is
@@ -2198,11 +2209,12 @@ typedef struct dftu_cursor_vt {
    this set as DFTU_PUSHED_NO rather than trusting it - a source has no way to
    prove an Exact claim, so a wrong one silently drops rows and must never be
    taken on faith. */
-typedef enum {
+typedef int32_t dftu_pushed;
+enum {
     DFTU_PUSHED_NO = 0,      /**< Not applied; the host applies it. */
     DFTU_PUSHED_INEXACT = 1, /**< Pruned I/O but did not filter survivors. */
     DFTU_PUSHED_EXACT = 2,   /**< Fully applied; the host drops it. */
-} dftu_pushed;
+};
 
 /** A pushdown request passed to dftu_source_vt::scan (mirrors
    @ref dftracer::utils::dataframe::ScanRequest "ScanRequest", lazyframe.h). */
@@ -2269,7 +2281,8 @@ DFTU_EXPORT int32_t dftu_schema_copy_field(dftu_schema* out,
 
 /** Which op a dftu_apply_request offers (mirrors the Source::apply_* hooks,
    lazyframe.h). */
-typedef enum {
+typedef int32_t dftu_apply_kind;
+enum {
     DFTU_APPLY_FILTER = 0,
     DFTU_APPLY_PROJECTION = 1,
     DFTU_APPLY_AGGREGATION = 2,
@@ -2278,16 +2291,17 @@ typedef enum {
     DFTU_APPLY_LIMIT = 5,
     DFTU_APPLY_TAIL = 6,
     DFTU_APPLY_JOIN = 7,
-} dftu_apply_kind;
+};
 
 /** How a source took an offered op (mirrors dataframe::ApplyStatus). The host
    pre-fills DFTU_APPLY_NO_CHANGE and treats any value outside this set as
    DFTU_APPLY_NO_CHANGE. */
-typedef enum {
+typedef int32_t dftu_apply_status;
+enum {
     DFTU_APPLY_NO_CHANGE = 0, /**< Unsupported or no change; no new source. */
     DFTU_APPLY_EXACT = 1,     /**< Fully applied; the host drops the op. */
     DFTU_APPLY_INEXACT = 2,   /**< Rows narrowed only; the host keeps the op. */
-} dftu_apply_status;
+};
 
 /** One projection output column: `expr` is positional against the offering
    source's schema(). */
@@ -2406,23 +2420,24 @@ typedef struct dftu_apply_result {
    times to open independent cursors, so one registered source can back many
    @ref dftracer::utils::dataframe::LazyFrame "LazyFrame" collects. */
 typedef struct dftu_source_vt {
+    uint32_t struct_size; /**< sizeof(dftu_source_vt) */
     /** Column names, as a NUL-terminated array owned by the source and valid
-       for its lifetime (until destroy()). Returns the count, or -1 on
-       failure. */
-    int32_t (*schema)(void* self, const char* const** out_names);
+       for its lifetime (until destroy()); `*out_count` is their number. */
+    dftu_status (*schema)(dftu_ctx* ctx, void* self,
+                          const char* const** out_names, int32_t* out_count);
     /** Open a cursor honoring `req`. `out_pushed` has req->n_filters entries,
        pre-filled DFTU_PUSHED_NO by the host; write one dftu_pushed per
        req->filters entry, leaving an untranslated filter DFTU_PUSHED_NO.
-       Returns non-NULL on success or NULL on failure; the returned pointer is
-       only a status sentinel, since a stateless cursor's own `self` may
-       legitimately be NULL. On success, *out_cursor_self receives the
-       cursor's `self` and *out_vt its vtable, which must outlive the cursor.
+       On success, *out_cursor_self receives the cursor's `self` (it may be
+       NULL for a stateless cursor) and *out_vt its vtable, which must outlive
+       the cursor.
        When req->projection is non-empty, every dftu_dataframe the cursor
        produces (sync or via the awaited task) MUST carry exactly those
        columns, in that order; the host verifies this and surfaces a scan
        error rather than passing a mismatched frame downstream. */
-    void* (*scan)(void* self, const dftu_scan_request* req, int32_t* out_pushed,
-                  void** out_cursor_self, const dftu_cursor_vt** out_vt);
+    dftu_status (*scan)(dftu_ctx* ctx, void* self, const dftu_scan_request* req,
+                        int32_t* out_pushed, void** out_cursor_self,
+                        const dftu_cursor_vt** out_vt);
     /** Release the source; called once, after every cursor it opened has
        been destroyed. */
     void (*destroy)(void* self);
@@ -2431,7 +2446,8 @@ typedef struct dftu_source_vt {
        `out_schema` - an empty dftu_schema the host allocates and frees
        around this one call. A count or name mismatch is discarded: every
        column reports Unknown, the same as if this were NULL. */
-    void (*schema_types)(void* self, dftu_schema* out_schema);
+    dftu_status (*schema_types)(dftu_ctx* ctx, void* self,
+                                dftu_schema* out_schema);
     /** Optional (NULL means no planning hooks): absorb the op `req` offers at
        plan time, before scan(). `out` is pre-filled DFTU_APPLY_NO_CHANGE.
        Accepting yields a new derived source (see dftu_apply_result); offering
@@ -2440,17 +2456,20 @@ typedef struct dftu_source_vt {
        schema and may only be DFTU_APPLY_EXACT; the host refuses an INEXACT
        answer to them. The derived source's schema/schema_types report its
        output. */
-    void (*apply)(void* self, const dftu_apply_request* req,
-                  dftu_apply_result* out);
+    dftu_status (*apply)(dftu_ctx* ctx, void* self,
+                         const dftu_apply_request* req, dftu_apply_result* out);
 } dftu_source_vt;
 
 /** Register `vt`/`self` as a named provider. `vt` is copied, so it need not
  * outlive the call, but `self` must outlive every scan opened against the
- * provider until dftu_provider_unregister removes it. Returns 0 on success,
- * non-zero if `name`/`vt` is NULL or `name` is already registered - a second
- * registration under the same name is refused, never a silent replace. */
-DFTU_EXPORT int dftu_provider_register(const char* name,
-                                       const dftu_source_vt* vt, void* self);
+ * provider until dftu_provider_unregister removes it. Fails with
+ * DFTU_E_INVALID, and the reason in `err`, if `name`/`vt` is NULL, `vt`
+ * has a wrong struct_size, or `name` is already registered - a second
+ * registration under the same name is refused, never a silent replace. `err`
+ * may be NULL. */
+DFTU_EXPORT dftu_status dftu_provider_register(const char* name,
+                                               const dftu_source_vt* vt,
+                                               void* self, dftu_error* err);
 
 /** Remove a provider added with dftu_provider_register. A caller that can
  * unload (a plugin's shared object) must call this before unloading, the same
@@ -2475,55 +2494,60 @@ DFTU_EXPORT dftu_lazyframe* dftu_lazyframe_from_provider(const char* name);
  * (`mymod.zscore`) so it never shadows a built-in. */
 
 /** Coarse category, for filtering/listing (== dftu_op_kind_of(sig)). */
-typedef enum {
-    DFTU_OP_KIND_SERIES = 0, /**< column(s) -> column */
-    DFTU_OP_KIND_AGGREGATE,  /**< column -> scalar (a reducer) */
-    DFTU_OP_KIND_FRAME,      /**< table(s) -> table */
-    DFTU_OP_KIND_LAZY        /**< lazy plan -> lazy plan (a plan node) */
-} dftu_op_kind;
+typedef int32_t dftu_op_kind;
+enum {
+    DFTU_OP_KIND_SERIES = 0,    /**< column(s) -> column */
+    DFTU_OP_KIND_AGGREGATE = 1, /**< column -> scalar (a reducer) */
+    DFTU_OP_KIND_FRAME = 2,     /**< table(s) -> table */
+    DFTU_OP_KIND_LAZY = 3       /**< lazy plan -> lazy plan (a plan node) */
+};
 
 /** Operand/return tokens, one 5-bit field each, so 32 values exist in total. A
  * signature packs a return token plus up to DFTU_OP_MAX_ARGS operand tokens
  * into one integer (DFTU_OP_SIG6), the way a Linux ioctl number packs
  * direction/type/nr/size. APPEND ONLY - a token's value is ABI-stable, and a
  * value past 31 would silently corrupt every signature it appears in. */
-typedef enum {
-    DFTU_TOK_NONE = 0, /**< empty slot */
-    DFTU_TOK_SERIES,   /**< a column operand, or a column return */
-    DFTU_TOK_SCALAR,   /**< dftu_scalar operand, or a dftu_scalar return */
-    DFTU_TOK_I64,      /**< int64 operand, or an int64 return */
-    DFTU_TOK_BOOL,     /**< int32 0/1 return */
-    DFTU_TOK_CMP,      /**< dftu_cmp_op operand */
-    DFTU_TOK_PRIM,     /**< dftu_prim_op operand */
-    DFTU_TOK_LOGICAL,  /**< dftu_logical_op operand */
-    DFTU_TOK_DTYPE,    /**< dftu_dtype operand */
-    DFTU_TOK_REDUCE,   /**< dftu_reduce_op operand */
-    DFTU_TOK_STR,      /**< (const char*, int32 length) operand */
-    DFTU_TOK_CHAR,     /**< char operand */
-    DFTU_TOK_F64,      /**< double operand, or a double return */
-    DFTU_TOK_I32,      /**< int32 flag operand (e.g. a `descending` flag) */
-    DFTU_TOK_RANK,     /**< dftu_rank_method operand */
-    DFTU_TOK_ROLLING,  /**< dftu_rolling_op operand */
-    DFTU_TOK_FRAME, /**< a dftu_dataframe operand, or a dftu_dataframe return */
-    DFTU_TOK_STRLIST, /**< a (const char* const*, int32 count) string-list
+typedef int32_t dftu_op_tok;
+enum {
+    DFTU_TOK_NONE = 0,     /**< empty slot */
+    DFTU_TOK_SERIES = 1,   /**< a column operand, or a column return */
+    DFTU_TOK_SCALAR = 2,   /**< dftu_scalar operand, or a dftu_scalar return */
+    DFTU_TOK_I64 = 3,      /**< int64 operand, or an int64 return */
+    DFTU_TOK_BOOL = 4,     /**< int32 0/1 return */
+    DFTU_TOK_CMP = 5,      /**< dftu_cmp_op operand */
+    DFTU_TOK_PRIM = 6,     /**< dftu_prim_op operand */
+    DFTU_TOK_LOGICAL = 7,  /**< dftu_logical_op operand */
+    DFTU_TOK_DTYPE = 8,    /**< dftu_dtype operand */
+    DFTU_TOK_REDUCE = 9,   /**< dftu_reduce_op operand */
+    DFTU_TOK_STR = 10,     /**< (const char*, int32 length) operand */
+    DFTU_TOK_CHAR = 11,    /**< char operand */
+    DFTU_TOK_F64 = 12,     /**< double operand, or a double return */
+    DFTU_TOK_I32 = 13,     /**< int32 flag operand (e.g. a `descending` flag) */
+    DFTU_TOK_RANK = 14,    /**< dftu_rank_method operand */
+    DFTU_TOK_ROLLING = 15, /**< dftu_rolling_op operand */
+    DFTU_TOK_FRAME =
+        16, /**< a dftu_dataframe operand, or a dftu_dataframe return */
+    DFTU_TOK_STRLIST = 17, /**< a (const char* const*, int32 count) string-list
                          operand */
-    DFTU_TOK_I32LIST, /**< a (const int32_t*, int32 count) int32-list operand */
-    DFTU_TOK_LAZY,    /**< a dftu_lazyframe operand, or a dftu_lazyframe return
-                       */
-    DFTU_TOK_EXPR,    /**< a const dftu_expr* operand (a predicate or a
+    DFTU_TOK_I32LIST =
+        18, /**< a (const int32_t*, int32 count) int32-list operand */
+    DFTU_TOK_LAZY =
+        19, /**< a dftu_lazyframe operand, or a dftu_lazyframe return
+             */
+    DFTU_TOK_EXPR = 20,    /**< a const dftu_expr* operand (a predicate or a
                          projection), borrowed for the call */
-    DFTU_TOK_AGGLIST, /**< a (const dftu_group_agg*, int32 count) aggregate-spec
-                         list operand */
-    DFTU_TOK_U64,     /**< uint64 operand (a byte count, a seed), distinct from
-                         I64 so a signature describes the real parameter type
-                         and cannot collide with a signed-shaped op */
-    DFTU_TOK_I64LIST, /**< a (const int64_t*, int32 count) int64-list operand
-                         (e.g. LazyFrame::take's row indices) */
-    DFTU_TOK_DUQL,    /**< a const dftu_duql* operand (a compiled predicate),
-                          borrowed for the call */
-    DFTU_TOK_WINLIST  /**< a (const dftu_window_spec*, int32 count) window-spec
-                         list operand */
-} dftu_op_tok;
+    DFTU_TOK_AGGLIST = 21, /**< a (const dftu_group_agg*, int32 count)
+                         aggregate-spec list operand */
+    DFTU_TOK_U64 = 22, /**< uint64 operand (a byte count, a seed), distinct from
+                     I64 so a signature describes the real parameter type
+                     and cannot collide with a signed-shaped op */
+    DFTU_TOK_I64LIST = 23, /**< a (const int64_t*, int32 count) int64-list
+                         operand (e.g. LazyFrame::take's row indices) */
+    DFTU_TOK_DUQL = 24, /**< a const dftu_duql* operand (a compiled predicate),
+                       borrowed for the call */
+    DFTU_TOK_WINLIST = 25 /**< a (const dftu_window_spec*, int32 count)
+                        window-spec list operand */
+};
 
 /** One past the last token; a macro, so it does not become a case every switch
  * over dftu_op_tok has to answer for. Update alongside the last token. */
@@ -2756,6 +2780,7 @@ DFTU_EXPORT dftu_lazyframe* dftu_op_run_lazy(const dftu_op_desc* op,
  * one frame - both are ordinary Cursor implementations on the plugin side, so
  * one protocol covers both shapes. */
 typedef struct dftu_node_vt {
+    uint32_t struct_size; /**< sizeof(dftu_node_vt) */
     /** Declare the node's output schema given the plan's input schema and
        `args`, without running: append to `out` with the dftu_schema builders,
        the same convention as dftu_source_vt::schema_types. Required (unlike a
@@ -2763,26 +2788,27 @@ typedef struct dftu_node_vt {
        schema() call, so this is the only way the plan learns what columns it
        produces. A column whose type the node cannot determine statically is
        appended with DFTU_TYPE_UNKNOWN rather than guessed. */
-    void (*output_schema)(void* self, const dftu_schema* in,
-                          const dftu_op_arg* args, dftu_schema* out);
+    dftu_status (*output_schema)(dftu_ctx* ctx, void* self,
+                                 const dftu_schema* in, const dftu_op_arg* args,
+                                 dftu_schema* out);
     /** Open an output cursor over an already-open input cursor. Same
-       convention as dftu_source_vt::scan: returns non-NULL on success (a
-       status sentinel, since a stateless cursor's own `self` may legitimately
-       be NULL) and writes *out_cursor_self and *out_vt, which must outlive
-       the cursor. `in_cursor_self`/`in_vt` is the upstream stage, already
-       open:
-       pull it with in_vt->next(in_cursor_self, ...) the same way the engine
-       pulls any cursor. On success the node takes ownership of the input
-       cursor and must call in_vt->destroy(in_cursor_self) exactly once,
-       whenever the node's own output cursor is destroyed (or earlier, once
-       fully drained); on failure (returning the NULL sentinel) the node must
-       not have taken that ownership - the caller still owns and destroys the
-       input cursor. `memory_budget` is the plan's memory budget in bytes,
-       already resolved, so never 0: a node that holds state sizes its spill
-       threshold and its output frames from it. */
-    void* (*open)(void* self, void* in_cursor_self, const dftu_cursor_vt* in_vt,
-                  const dftu_op_arg* args, uint64_t memory_budget,
-                  void** out_cursor_self, const dftu_cursor_vt** out_vt);
+       convention as dftu_source_vt::scan: writes *out_cursor_self (it may be
+       NULL for a stateless cursor) and *out_vt, which must outlive the
+       cursor. `in_cursor_self`/`in_vt` is the upstream stage, already open:
+       pull it with in_vt->next(ctx, in_cursor_self, ...), passing the node's
+       own ctx, the same way the engine pulls any cursor. On success the node
+       takes ownership of the input cursor and must call
+       in_vt->destroy(in_cursor_self) exactly once, whenever the node's own
+       output cursor is destroyed (or earlier, once fully drained); on failure
+       (a negative status) the node must not have taken that ownership - the
+       caller still owns and destroys the input cursor. `memory_budget` is the
+       plan's memory budget in bytes, already resolved, so never 0: a node
+       that holds state sizes its spill threshold and its output frames from
+       it. */
+    dftu_status (*open)(dftu_ctx* ctx, void* self, void* in_cursor_self,
+                        const dftu_cursor_vt* in_vt, const dftu_op_arg* args,
+                        uint64_t memory_budget, void** out_cursor_self,
+                        const dftu_cursor_vt** out_vt);
     /** Release the node; called once, after every cursor opened against it
        has been destroyed. May be NULL for a stateless node. */
     void (*destroy)(void* self);
@@ -2791,12 +2817,14 @@ typedef struct dftu_node_vt {
 /** Register `vt`/`self` as a named plan node. Same contract as
  * dftu_provider_register: `vt` is copied so it need not outlive the call, but
  * `self` must outlive every cursor opened against the node until
- * dftu_node_unregister removes it. Returns 0 on success, non-zero if
- * `name`/`vt` is NULL, `vt->output_schema` or `vt->open` is NULL, or `name` is
+ * dftu_node_unregister removes it. Fails with DFTU_E_INVALID, and the reason
+ * in `err` (which may be NULL), if `name`/`vt` is NULL, `vt` has a wrong
+ * struct_size, `vt->output_schema` or `vt->open` is NULL, or `name` is
  * already registered - a second registration under the same name is refused,
  * never a silent replace. */
-DFTU_EXPORT int dftu_node_register(const char* name, const dftu_node_vt* vt,
-                                   void* self);
+DFTU_EXPORT dftu_status dftu_node_register(const char* name,
+                                           const dftu_node_vt* vt, void* self,
+                                           dftu_error* err);
 
 /** Remove a node added with dftu_node_register. A caller that can unload (a
  * plugin's shared object) must call this before unloading, the same
@@ -2817,7 +2845,7 @@ DFTU_EXPORT int dftu_node_unregister(const char* name);
  * plan that fails later. A node is an optimization barrier: the engine never
  * pushes a filter or a projection through it and never reorders around it,
  * since it has no way to know whether that is safe for an opaque node. An
- * open() that returns the NULL sentinel, or a node whose produced frame does
+ * open() that fails, or a node whose produced frame does
  * not match the column count output_schema() declared, surfaces as an error the
  * first time the plan is driven (collect() or stream()), naming the node. */
 DFTU_EXPORT dftu_lazyframe* dftu_lazyframe_op(const dftu_lazyframe* lf,

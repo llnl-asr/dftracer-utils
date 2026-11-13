@@ -48,8 +48,9 @@ That is 100 events for ``pid`` 2 (every third event) and 200 for ``pid`` 1.
 The generated file already compiles and links: a struct with a constructor
 taking ``const Config&``, a ``step(const dftu_dataframe*, Host)`` that counts
 events by ``pid`` into a host accumulator, an empty ``merge`` (the host owns
-and merges the accumulator for you), and the ``dftracer_plugin`` factory that
-``make_plugin`` fills in. The rest of this lesson
+and merges the accumulator for you), the ``DFTU_PLUGIN_INFO`` record the loader checks, and the
+``dftracer_plugin`` factory that ``plugin(...).fold<...>().build(out)`` fills in.
+An exception a ``step`` throws becomes an error with its ``what()`` text. The rest of this lesson
 rewrites its ``step`` with your own accumulator name and output column.
 
 3. Write the fold
@@ -78,10 +79,12 @@ Replace ``events_per_pid.cpp`` with:
        void finalize(Host) {}
    };
 
-   extern "C" dftu_plugin* dftracer_plugin(dftu_plugin_host* h,
-                                           const dftu_value* config) {
-       (void)h;
-       return make_plugin<EventsPerPid>(config);
+   DFTU_PLUGIN_INFO("events_per_pid", "1.0")
+
+   extern "C" DFTU_PLUGIN_EXPORT dftu_status dftracer_plugin(
+       dftu_ctx* ctx, dftu_plugin_host* h, const dftu_value* config,
+       dftu_plugin** out) {
+       return plugin(ctx, h, config).fold<EventsPerPid>().build(out);
    }
 
 A ``step`` taking a ``const dftu_dataframe*`` reads straight off the columns:
@@ -102,7 +105,7 @@ links against it.
 ``dftracer_plugin cflags`` prints the exact flags the CLI's own build step
 uses. They select C++20, position-independent code and a shared library. They
 add the include directories it resolved, the headers and the generated plugin
-ABI version. On macOS they add ``-undefined dynamic_lookup``, since a plugin
+ABI version and header hash. On macOS they add ``-undefined dynamic_lookup``, since a plugin
 ``.so`` is loaded into a host process rather than pre-linked against one:
 
 .. code-block:: console

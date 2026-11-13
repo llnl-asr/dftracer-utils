@@ -6,20 +6,17 @@
 // loaded plugin would.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/domains/plugins/fold_adapter.h>
-#include <dftracer/utils/dstd/string_intern.h>
-#include <dftracer/utils/plugins/abi.h>
-#include <dftracer/utils/plugins/plugin.h>
-#include <dftracer/utils/runtime/runtime.h>
-// compose.h pulls plugin.h/arrow_abi.h; keep it after fold_adapter.h so
-// nanoarrow's full definitions win over arrow_abi.h's fallback structs.
-#include <dftracer/utils/common/str_format.h>
-#include <dftracer/utils/domains/plugins/compose.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/plugins/abi.h>
+#include <dftracer/utils/plugins/plugin.h>
+#include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 #include <fcntl.h>
 #include <sys/socket.h>
@@ -28,7 +25,9 @@
 #include <task_result.h>
 #include <testing_utilities.h>
 #include <unistd.h>
+#include <utilities/plugins/test_abi_ctx.h>
 
+#include <array>
 #include <cstdint>
 #include <cstring>
 
@@ -67,21 +66,14 @@ dstd::String read_all(const dstd::String& path) {
     return dstd::fs::read_file(dstd::PathView(path)).value_or(dstd::String());
 }
 
-// Drive a plugin Task to completion on a fresh Runtime, exactly as the fuse
-// worker drives a plugin coroutine.
+// Drive a plugin Task to completion the way the fold drives a plugin
+// coroutine, and check it ends with DFTU_OK.
 template <class MakeTask>
-void drive_task(dftu_plugin_host& host, int workers, MakeTask make) {
-    Runtime rt(workers);
-    dftu_utils_test::ok(
-        rt.submit(coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-                      dftu_task* driver =
-                          dftracer::utils::plugins::detail::drive_coro<int>(
-                              &host, make());
-                      co_await *reinterpret_cast<coro::CoroTask<void>*>(driver);
-                  }),
-                  "caller")
-            .wait());
-    rt.shutdown();
+void drive_task(dftu_plugin_host& host, MakeTask make) {
+    test_plugin_common::TaskDriver driver(host);
+    dstd::String message;
+    CHECK(driver.run(make(driver.host()), &message) == DFTU_OK);
+    CHECK(message.empty());
 }
 
 // Vectored write then vectored positional read back, with an lseek in between.
@@ -117,8 +109,7 @@ dftracer::utils::plugins::Task vectored_roundtrip(
     got->assign(buf0, 6);
     got->append(buf1, 14);
 
-    int rc = 0;
-    co_await io.close(fd, &rc);
+    co_await io.close(fd);
 }
 
 // sendfile the whole of src into an already-open destination fd (a socket, so
@@ -132,8 +123,7 @@ dftracer::utils::plugins::Task sendfile_to_fd(dftracer::utils::plugins::Host h,
     co_await io.open(src, O_RDONLY, 0, &in);
     if (in < 0) co_return;
     co_await io.sendfile(out_fd, in, 0, count, sent);
-    int rc = 0;
-    co_await io.close(in, &rc);
+    co_await io.close(in);
 }
 
 // pwrite a payload, then pwritev-append after it, and pread the whole back.
@@ -157,57 +147,51 @@ dftracer::utils::plugins::Task positional_vectored(
     char buf[8] = {};
     co_await io.pread(fd, buf, 8, 0, &n);
     got->assign(buf, 8);
-    int rc = 0;
-    co_await io.close(fd, &rc);
+    co_await io.close(fd);
 }
 
-// Two spawns joined with all(), then a then() runs after a spawn completes.
+// Two spawns joined with all(), then a spawn that runs after both completed.
 dftracer::utils::plugins::Task spawn_then(dftracer::utils::plugins::Host h,
                                           int* order) {
     int a_done = 0, b_done = 0, after = 0;
     auto fa = [&] { a_done = 1; };
     auto fb = [&] { b_done = 1; };
-    dftu_task* ta = h.spawn(fa);
-    dftu_task* tb = h.spawn(fb);
+    auto ta = h.spawn(fa);
+    auto tb = h.spawn(fb);
     // GCC 12.1 rejects a braced list inside a co_await expression ("array used
     // as initializer"), so the op is built in its own statement.
-    auto both = h.all({ta, tb});
+    auto both = h.all({ta.release(), tb.release()});
     co_await both;
     *order = (a_done && b_done) ? 1 : 0;
 
     auto fc = [&] { after = a_done + b_done; };  // sees both prior spawns
-    dftu_task* tc = h.spawn(fc);
-    auto seal = [&] { *order += (after == 2) ? 10 : 0; };
-    co_await h.then(tc, seal);
+    co_await h.spawn(fc);
+    *order += (after == 2) ? 10 : 0;
 }
 
-// Typed compose: a piped op, an op-level when_all (concatenated outputs), and
-// an op-level when_any (first to finish).
-dftracer::utils::plugins::Task compose_ops(dftracer::utils::plugins::Host h,
-                                           std::int64_t* piped,
-                                           std::int64_t* all0,
-                                           std::int64_t* all1,
-                                           std::int64_t* raced) {
-    auto a = domains::plugins::make_op<std::int64_t, std::int64_t>(
+// Typed jobs: a piped job, a job-level when_all (concatenated outputs), and a
+// job-level when_any (first to finish).
+dftracer::utils::plugins::Task job_ops(dftracer::utils::plugins::Host h,
+                                       std::int64_t* piped, std::int64_t* all0,
+                                       std::int64_t* all1,
+                                       std::int64_t* raced) {
+    auto a = plugins::make_job<std::int64_t, std::int64_t>(
         h, [](std::int64_t x) { return x * 2; });
-    auto b = domains::plugins::make_op<std::int64_t, std::int64_t>(
+    auto b = plugins::make_job<std::int64_t, std::int64_t>(
         h, [](std::int64_t x) { return x + 1; });
 
     std::int64_t in = 5;
-    int rc = 0;
     std::int64_t p = 0;
-    co_await domains::plugins::run(a | b, in, p, rc);  // (5*2)+1 == 11
+    co_await plugins::run(a | b, in, p);  // (5*2)+1 == 11
     *piped = p;
 
     std::array<std::int64_t, 2> both{};
-    co_await domains::plugins::run(domains::plugins::when_all(a, b), in, both,
-                                   rc);
+    co_await plugins::run(plugins::when_all(a, b), in, both);
     *all0 = both[0];  // 10
     *all1 = both[1];  // 6
 
     std::int64_t one = 0;
-    co_await domains::plugins::run(domains::plugins::when_any(a, b), in, one,
-                                   rc);
+    co_await plugins::run(plugins::when_any(a, b), in, one);
     *raced = one;  // 10 or 6
 }
 
@@ -230,9 +214,8 @@ TEST_CASE("plugin cxx: vectored io writev/preadv and lseek round-trip") {
     HostFixture fx;
     std::int64_t wrote = 0, off = 0;
     dstd::String got;
-    drive_task(fx.host(), 1, [&] {
-        return vectored_roundtrip(dftracer::utils::plugins::Host{&fx.host()},
-                                  path.c_str(), &wrote, &off, &got);
+    drive_task(fx.host(), [&](dftracer::utils::plugins::Host h) {
+        return vectored_roundtrip(h, path.c_str(), &wrote, &off, &got);
     });
 
     CHECK(wrote == 20);
@@ -245,9 +228,8 @@ TEST_CASE("plugin cxx: positional vectored pwritev/pwrite round-trip") {
     dstd::String path = env.dir() + "/posvec.bin";
     HostFixture fx;
     dstd::String got;
-    drive_task(fx.host(), 1, [&] {
-        return positional_vectored(dftracer::utils::plugins::Host{&fx.host()},
-                                   path.c_str(), &got);
+    drive_task(fx.host(), [&](dftracer::utils::plugins::Host h) {
+        return positional_vectored(h, path.c_str(), &got);
     });
     CHECK(got == "AAAABBCC");
 }
@@ -265,9 +247,8 @@ TEST_CASE("plugin cxx: sendfile transfers a file into a socket") {
 
     HostFixture fx;
     std::int64_t sent = 0;
-    drive_task(fx.host(), 1, [&] {
-        return sendfile_to_fd(dftracer::utils::plugins::Host{&fx.host()},
-                              src.c_str(), sv[1], body.size(), &sent);
+    drive_task(fx.host(), [&](dftracer::utils::plugins::Host h) {
+        return sendfile_to_fd(h, src.c_str(), sv[1], body.size(), &sent);
     });
 
     CHECK(sent == static_cast<std::int64_t>(body.size()));
@@ -279,13 +260,15 @@ TEST_CASE("plugin cxx: sendfile transfers a file into a socket") {
     ::close(sv[1]);
 }
 
-TEST_CASE("plugin cxx: spawn joined with all() and then() sequences work") {
+TEST_CASE(
+    "plugin cxx: spawn joined with all() and a later spawn sequence work") {
     HostFixture fx;
     int order = 0;
-    drive_task(fx.host(), 2, [&] {
-        return spawn_then(dftracer::utils::plugins::Host{&fx.host()}, &order);
+    drive_task(fx.host(), [&](dftracer::utils::plugins::Host h) {
+        return spawn_then(h, &order);
     });
-    CHECK(order == 11);  // both spawns ran (1) and then() observed both (+10)
+    CHECK(order ==
+          11);  // both spawns ran (1) and the later spawn observed both (+10)
 }
 
 TEST_CASE("plugin cxx: Writer open/chunk/close writes a non-empty file") {
@@ -293,9 +276,8 @@ TEST_CASE("plugin cxx: Writer open/chunk/close writes a non-empty file") {
     dstd::String path = env.dir() + "/writer_out.dat";
 
     HostFixture fx;
-    drive_task(fx.host(), 1, [&] {
-        return write_via_writer(dftracer::utils::plugins::Host{&fx.host()},
-                                path.c_str());
+    drive_task(fx.host(), [&](dftracer::utils::plugins::Host h) {
+        return write_via_writer(h, path.c_str());
     });
 
     // The sharded writer emits per-worker shard files ("<path>.shard_<N>").
@@ -311,12 +293,11 @@ static dftracer::utils::plugins::Task merge_two(
     co_await merge;
 }
 
-TEST_CASE("plugin cxx: typed compose pipe/when_all/when_any run") {
+TEST_CASE("plugin cxx: typed job pipe/when_all/when_any run") {
     HostFixture fx;
     std::int64_t piped = 0, all0 = 0, all1 = 0, raced = 0;
-    drive_task(fx.host(), 2, [&] {
-        return compose_ops(dftracer::utils::plugins::Host{&fx.host()}, &piped,
-                           &all0, &all1, &raced);
+    drive_task(fx.host(), [&](dftracer::utils::plugins::Host h) {
+        return job_ops(h, &piped, &all0, &all1, &raced);
     });
     CHECK(piped == 11);  // (5*2)+1
     CHECK(all0 == 10);   // 5*2
@@ -339,9 +320,8 @@ TEST_CASE("plugin cxx: merge_shards concatenates shard files into a target") {
     }
 
     HostFixture fx;
-    drive_task(fx.host(), 1, [&] {
-        return merge_two(dftracer::utils::plugins::Host{&fx.host()},
-                         target.c_str(), a.c_str(), b.c_str());
+    drive_task(fx.host(), [&](dftracer::utils::plugins::Host h) {
+        return merge_two(h, target.c_str(), a.c_str(), b.c_str());
     });
 
     CHECK(read_all(target) == "AAAABBBB");

@@ -11,9 +11,22 @@ Plugins
 The stable plugin C ABI. A plugin includes only ``abi.h`` (an umbrella over
 one header per service group under ``abi/``) and fills a ``dftu_plugin``
 struct; host services are reached through ``dftu_plugin_host::get_service``
-by string id, each answering a versioned ``dftu_svc_*`` struct or NULL.
-``abi_version`` is a hash of these headers, computed at build time: a plugin
-built against different headers is refused at load.
+by string id (for example ``dftu.svc.agg``), each answering a
+``dftu_svc_*`` struct or NULL. Every table starts with ``struct_size``.
+
+Every callback takes the host-owned ``dftu_ctx*`` first and returns a
+``dftu_status``: negative is an error, which the callback reports with
+``dftu_fail(ctx, code, message)``, and a long loop polls ``dftu_check(ctx)``
+and returns what it gives. Every host service call takes the caller's ``ctx``
+first and returns a ``dftu_status`` with results in out-parameters. The host
+copies the message, and it names the plugin and the callback in the error the
+caller sees.
+
+A plugin library exports two symbols. ``dftracer_plugin_info`` returns a
+``dftu_plugin_info`` with the ABI version and header hash the plugin was built
+against; define it with ``DFTU_PLUGIN_INFO(name, version)``. The loader reads it
+before it runs any plugin code and refuses a plugin that has none, or whose
+version or hash differs from the host's. ``dftracer_plugin`` is the factory.
 
 .. code-block:: c
 
@@ -79,13 +92,12 @@ lazy plan) the caller reads back after the scan.
 .. doxygenfile:: dftracer/utils/plugins/abi/ports.h
    :project: dftracer-utils
 
-``dftu.svc.coro`` and ``dftu.svc.compose``: tasks the host drives, and
-value-typed async ops composed as handles.
+``dftu.svc.task``: async work. A job is a typed recipe (an input value in, an
+output value out) that can be piped, fanned out and raced; a task is one run of
+a job. ``spawn`` runs a function on a pool worker, and ``drive`` runs a step in
+rounds for a fan-in whose count is known only at run time.
 
-.. doxygenfile:: dftracer/utils/plugins/abi/coro.h
-   :project: dftracer-utils
-
-.. doxygenfile:: dftracer/utils/plugins/abi/compose.h
+.. doxygenfile:: dftracer/utils/plugins/abi/task.h
    :project: dftracer-utils
 
 ``dftu.svc.io``, ``dftu.svc.writer``, ``dftu.svc.trace``, ``dftu.svc.arrow``:

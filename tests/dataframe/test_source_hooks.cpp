@@ -526,18 +526,21 @@ dftu_dataframe* make_rows(std::int64_t offset, std::int64_t n) {
     return sliced;
 }
 
-std::int32_t c_schema(void*, const char* const** out_names) {
+dftu_status c_schema(dftu_ctx*, void*, const char* const** out_names,
+                     std::int32_t* out_count) {
     static const char* names[] = {"id", "val"};
     *out_names = names;
-    return 2;
+    *out_count = 2;
+    return DFTU_OK;
 }
 
-dftu_task* c_next(void* self, std::int64_t, dftu_result_frame* out) {
+dftu_status c_next(dftu_ctx*, void* self, std::int64_t, dftu_dataframe** out,
+                   dftu_task** pending) {
     auto* cs = static_cast<CursorState*>(self);
-    out->ok = 1;
-    out->u.value = cs->frame;
+    *pending = nullptr;
+    *out = cs->frame;
     cs->frame = nullptr;
-    return nullptr;
+    return *out ? DFTU_OK : DFTU_END;
 }
 
 void c_cursor_destroy(void* self) {
@@ -546,24 +549,30 @@ void c_cursor_destroy(void* self) {
     delete cs;
 }
 
-const dftu_cursor_vt C_CURSOR_VT = {c_next, c_cursor_destroy, nullptr, nullptr,
+const dftu_cursor_vt C_CURSOR_VT = {sizeof(dftu_cursor_vt),
+                                    c_next,
+                                    c_cursor_destroy,
+                                    nullptr,
+                                    nullptr,
                                     nullptr};
 
-void* open_cursor(dftu_dataframe* df, void** out_cursor_self,
-                  const dftu_cursor_vt** out_vt) {
+dftu_status open_cursor(dftu_dataframe* df, void** out_cursor_self,
+                        const dftu_cursor_vt** out_vt) {
     auto* cs = new CursorState{df};
     *out_cursor_self = cs;
     *out_vt = &C_CURSOR_VT;
-    return cs;
+    return DFTU_OK;
 }
 
-void* c_root_scan(void*, const dftu_scan_request*, std::int32_t*,
-                  void** out_cursor_self, const dftu_cursor_vt** out_vt) {
+dftu_status c_root_scan(dftu_ctx*, void*, const dftu_scan_request*,
+                        std::int32_t*, void** out_cursor_self,
+                        const dftu_cursor_vt** out_vt) {
     return open_cursor(make_rows(0, -1), out_cursor_self, out_vt);
 }
 
-void* c_derived_scan(void* self, const dftu_scan_request*, std::int32_t*,
-                     void** out_cursor_self, const dftu_cursor_vt** out_vt) {
+dftu_status c_derived_scan(dftu_ctx*, void* self, const dftu_scan_request*,
+                           std::int32_t*, void** out_cursor_self,
+                           const dftu_cursor_vt** out_vt) {
     auto* d = static_cast<Derived*>(self);
     return open_cursor(make_rows(d->offset, d->n), out_cursor_self, out_vt);
 }
@@ -577,13 +586,15 @@ void c_derived_destroy(void* self) {
 
 void c_root_destroy(void*) {}
 
-void c_apply(void* self, const dftu_apply_request* req, dftu_apply_result* out);
+dftu_status c_apply(dftu_ctx*, void* self, const dftu_apply_request* req,
+                    dftu_apply_result* out);
 
-const dftu_source_vt DERIVED_VT = {c_schema, c_derived_scan, c_derived_destroy,
-                                   nullptr, nullptr};
+const dftu_source_vt DERIVED_VT = {
+    sizeof(dftu_source_vt), c_schema, c_derived_scan,
+    c_derived_destroy,      nullptr,  nullptr};
 
-void c_apply(void* self, const dftu_apply_request* req,
-             dftu_apply_result* out) {
+dftu_status c_apply(dftu_ctx*, void* self, const dftu_apply_request* req,
+                    dftu_apply_result* out) {
     auto* fx = static_cast<ApplyFixture*>(self);
     fx->requests.push_back(*req);
     if (req->kind == DFTU_APPLY_AGGREGATION) {
@@ -604,7 +615,7 @@ void c_apply(void* self, const dftu_apply_request* req,
         fx->join_how = j.how;
         fx->join_suffix = j.suffix;
     }
-    if (fx->answer == DFTU_APPLY_NO_CHANGE) return;
+    if (fx->answer == DFTU_APPLY_NO_CHANGE) return DFTU_OK;
     const bool limit = req->kind == DFTU_APPLY_LIMIT;
     auto* d = new Derived{fx, limit ? req->u.limit.offset : 0,
                           limit ? req->u.limit.n : -1};
@@ -612,10 +623,11 @@ void c_apply(void* self, const dftu_apply_request* req,
     out->status = fx->answer;
     out->self = d;
     out->vt = &DERIVED_VT;
+    return DFTU_OK;
 }
 
-const dftu_source_vt ROOT_VT = {c_schema, c_root_scan, c_root_destroy, nullptr,
-                                c_apply};
+const dftu_source_vt ROOT_VT = {sizeof(dftu_source_vt), c_schema, c_root_scan,
+                                c_root_destroy,         nullptr,  c_apply};
 
 LazyFrame c_frame(ApplyFixture& fx) {
     return LazyFrame::scan(make_provider_source(ROOT_VT, &fx));
@@ -712,8 +724,9 @@ TEST_SUITE("source_hooks_c_abi") {
 
     TEST_CASE("a source without apply keeps the ScanRequest path") {
         ApplyFixture fx;
-        const dftu_source_vt vt = {c_schema, c_root_scan, c_root_destroy,
-                                   nullptr, nullptr};
+        const dftu_source_vt vt = {
+            sizeof(dftu_source_vt), c_schema, c_root_scan,
+            c_root_destroy,         nullptr,  nullptr};
         LazyFrame lf =
             LazyFrame::scan(make_provider_source(vt, &fx)).slice(1, 2);
         CHECK(lf.explain().find("slice") != dstd::String::npos);

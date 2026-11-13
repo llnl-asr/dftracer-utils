@@ -44,9 +44,9 @@ constexpr std::uint64_t TINY_BUDGET = 4096;
 // One key column (the per-event name, so the key cardinality is the event
 // count) and a spread of ops: FieldStat-derived, sketch-derived, and a
 // String-repr op, all of which have to survive a serialize/merge round trip.
-::dftu_task* spill_columns(void*, const dftu_dataframe* df,
-                           const dftu_plugin_host* host) {
-    plugins::Host h(host);
+dftu_status spill_columns(dftu_ctx* ctx, void*, const dftu_dataframe* df,
+                          const dftu_plugin_host* host) {
+    plugins::Host h(host, ctx);
     const auto acc =
         h.agg(ACC_NAME, {"name"},
               {plugins::agg::count("n"), plugins::agg::sum("dur", "sum_dur"),
@@ -54,40 +54,43 @@ constexpr std::uint64_t TINY_BUDGET = 4096;
                plugins::agg::pct("dur", "p50_dur", 0.5),
                plugins::agg::argmax("cat", "cat_at_max", "dur")});
     if (acc) acc.accumulate(df);
-    return nullptr;
+    return DFTU_OK;
 }
 
 // A nested-output op (list<string>) alongside a flat one: drain cannot
 // vertically concat a List column, so this exercises the single-finalize path
 // through the same spilled runs.
-::dftu_task* spill_nested_columns(void*, const dftu_dataframe* df,
-                                  const dftu_plugin_host* host) {
+dftu_status spill_nested_columns(dftu_ctx* ctx, void*, const dftu_dataframe* df,
+                                 const dftu_plugin_host* host) {
     const auto* ext = static_cast<const dftu_svc_agg*>(
         host->get_service(host->h, DFTU_SVC_AGG));
-    if (!ext) return nullptr;
+    if (!ext) return DFTU_OK;
     const dftu_agg_col specs[] = {
         {DFTU_AGG_SUM, "dur", "sum_dur", 0.0, nullptr},
         {DFTU_AGG_TOPK, "cat", "top_cat", 2.0, "dur"},
     };
     const char* keys[] = {"name"};
-    dftu_agg* a = ext->agg_new(host->h, ACC_NAME, keys, 1, specs, 2);
-    if (a) ext->agg_accumulate(host->h, a, df);
-    return nullptr;
+    dftu_agg* a = nullptr;
+    const dftu_status st =
+        ext->agg_new(ctx, host->h, ACC_NAME, keys, 1, specs, 2, &a);
+    if (st < 0) return st;
+    return ext->agg_accumulate(ctx, host->h, a, df);
 }
 
-dftu_plugin make_plugin(::dftu_task* (*on_columns)(void*, const dftu_dataframe*,
-                                                   const dftu_plugin_host*)) {
+dftu_plugin make_plugin(dftu_status (*on_columns)(dftu_ctx*, void*,
+                                                  const dftu_dataframe*,
+                                                  const dftu_plugin_host*)) {
     dftu_plugin p{};
-    p.abi_version = DFTRACER_UTILS_PLUGIN_ABI_VERSION;
+    p.struct_size = sizeof(p);
     p.plan_duql = [](void*) -> const char* { return nullptr; };
-    p.make_slice = [](void*) -> void* {
+    p.make_slice = [](dftu_ctx*, void*, void** out) -> dftu_status {
         static int sentinel;
-        return &sentinel;
+        *out = &sentinel;
+        return DFTU_OK;
     };
-    p.merge = [](void*, void*) {};
-    p.on_finalize = [](void*, const dftu_plugin_host*) -> ::dftu_task* {
-        return nullptr;
-    };
+    p.merge = [](dftu_ctx*, void*, void*) -> dftu_status { return DFTU_OK; };
+    p.on_finalize = [](dftu_ctx*, void*, const dftu_plugin_host*,
+                       dftu_task**) -> dftu_status { return DFTU_OK; };
     p.destroy_slice = [](void*) {};
     p.destroy = [](void*) {};
     p.on_batch = on_columns;
@@ -131,7 +134,9 @@ void finalize_now(domains::plugins::PluginFold& f) {
     Runtime rt(1);
     dftu_utils_test::ok(
         rt.submit(coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-                      co_await f.finalize(trace::views::detail::CoverageSet{});
+                      auto finalized = co_await f.finalize(
+                          trace::views::detail::CoverageSet{});
+                      CHECK(finalized.has_value());
                   }),
                   "fin")
             .wait());

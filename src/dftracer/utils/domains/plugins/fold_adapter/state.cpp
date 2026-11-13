@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/spill_dir.h>
+#include <dftracer/utils/coro/abi_context.h>
 #include <dftracer/utils/domains/plugins/fold_adapter.h>
 #include <dftracer/utils/domains/plugins/fold_adapter/state.h>
+#include <dftracer/utils/domains/plugins/host_status.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -24,13 +27,6 @@
 // spilled past the scan's memory budget, finalized once. Nothing here is a
 // second execution path: PluginFold::step/merge/finalize call in.
 namespace dftracer::utils::domains::plugins {
-namespace {
-
-const char* err_text(const ::dftu_error& e) {
-    return e.message ? e.message : "(no message)";
-}
-
-}  // namespace
 
 const dstd::Path& SpillDir::path() {
     if (!dir_) {
@@ -55,36 +51,57 @@ const dstd::Path& StateAccum::dir_path() {
     return dir_->path();
 }
 
-StateAccum::StateAccum(const RegisteredState& reg, std::uint64_t budget)
+dstd::Error StateAccum::error_of(const coro::AbiContext& ctx,
+                                 dftu_status status,
+                                 const char* callback) const {
+    return callback_error(plugin_,
+                          dstd::fmt<"state '{}' {}">(reg_->name, callback),
+                          status, ctx.message());
+}
+
+StateAccum::StateAccum(const RegisteredState& reg, std::uint64_t budget,
+                       dstd::StringView plugin)
     : reg_(&reg),
+      plugin_(plugin),
       budget_(dftracer::utils::memory::resolve_spill_budget(budget)) {
-    state_ = reg.desc.init(reg.self);
-    if (!state_)
-        DFTRACER_UTILS_LOG_ERROR("Plugin state '{}' init returned null",
-                                 reg.name);
+    if (auto started = init_state(); !started) init_error_ = started.error();
 }
 
 StateAccum::~StateAccum() {
     if (state_) reg_->desc.destroy(state_);
 }
 
-void StateAccum::update(const ::dftu_dataframe* df) {
-    if (!state_ || !df) return;
-    ::dftu_error err{};
-    if (reg_->desc.update(state_, df, &err) != 0) {
-        DFTRACER_UTILS_LOG_ERROR("Plugin state '{}' update failed: {}",
-                                 reg_->name, err_text(err));
-        return;
+dstd::Result<void> StateAccum::init_state() {
+    coro::AbiContext ctx;
+    void* fresh = nullptr;
+    const dftu_status status = reg_->desc.init(ctx.get(), reg_->self, &fresh);
+    if (status < 0) return error_of(ctx, status, "init");
+    if (fresh == nullptr) {
+        return common::make_error<
+            "plugin '{}' state '{}' init: it returned "
+            "no state">(common::ErrorCode::InvalidArgument, plugin_,
+                        reg_->name);
     }
-    maybe_spill();
+    state_ = fresh;
+    return {};
 }
 
-void StateAccum::maybe_spill() {
-    if (!state_ || budget_ == dftracer::utils::memory::NO_SPILL_BUDGET) return;
+dstd::Result<void> StateAccum::update(const ::dftu_dataframe* df) {
+    if (init_error_) return *init_error_;
+    if (!state_ || !df) return {};
+    coro::AbiContext ctx;
+    const dftu_status status = reg_->desc.update(ctx.get(), state_, df);
+    if (status < 0) return error_of(ctx, status, "update");
+    return maybe_spill();
+}
+
+dstd::Result<void> StateAccum::maybe_spill() {
+    if (!state_ || budget_ == dftracer::utils::memory::NO_SPILL_BUDGET)
+        return {};
     // Without a size hook the host has no measure of the state at all, so it
     // cannot claim the state is over budget, let alone bound it.
-    if (!reg_->desc.bytes) return;
-    if (reg_->desc.bytes(state_) <= budget_) return;
+    if (!reg_->desc.bytes) return {};
+    if (reg_->desc.bytes(state_) <= budget_) return {};
 
     if (!reg_->desc.serialize) {
         if (!spill_refused_) {
@@ -95,16 +112,19 @@ void StateAccum::maybe_spill() {
                 "spill it; it stays in memory and the budget is not honoured",
                 reg_->name, static_cast<unsigned long long>(budget_));
         }
-        return;
+        return {};
     }
 
     ::dftu_bytes out{};
-    ::dftu_error err{};
-    if (reg_->desc.serialize(state_, &out, &err) != 0 || !out.data) {
+    coro::AbiContext ctx;
+    const dftu_status status = reg_->desc.serialize(ctx.get(), state_, &out);
+    if (status < 0 || !out.data) {
         if (out.free_fn) out.free_fn(const_cast<void*>(out.data), out.ud);
-        DFTRACER_UTILS_LOG_ERROR("Plugin state '{}' serialize failed: {}",
-                                 reg_->name, err_text(err));
-        return;
+        if (status < 0) return error_of(ctx, status, "serialize");
+        return common::make_error<
+            "plugin '{}' state '{}' serialize: it gave "
+            "no bytes">(common::ErrorCode::InvalidArgument, plugin_,
+                        reg_->name);
     }
 
     const dstd::Path& dir = dir_path();
@@ -122,27 +142,30 @@ void StateAccum::maybe_spill() {
     }
     if (out.free_fn) out.free_fn(const_cast<void*>(out.data), out.ud);
     if (!written) {
-        DFTRACER_UTILS_LOG_ERROR("Plugin state '{}' could not write a run",
-                                 reg_->name);
-        return;
+        return common::make_error<
+            "plugin '{}' state '{}': the host could not "
+            "write a spill run">(common::ErrorCode::Io, plugin_, reg_->name);
     }
 
     DFTRACER_UTILS_LOG_DEBUG(
         "Plugin state '{}' spilled run {} past the {} byte budget", reg_->name,
         runs_.size() - 1, static_cast<unsigned long long>(budget_));
     reg_->desc.destroy(state_);
-    state_ = reg_->desc.init(reg_->self);
+    state_ = nullptr;
+    return init_state();
 }
 
-void StateAccum::merge(StateAccum& other) {
-    if (!state_ || !other.state_) return;
-    ::dftu_error err{};
-    if (reg_->desc.merge(state_, other.state_, &err) != 0)
-        DFTRACER_UTILS_LOG_ERROR("Plugin state '{}' merge failed: {}",
-                                 reg_->name, err_text(err));
+dstd::Result<void> StateAccum::merge(StateAccum& other) {
+    if (init_error_) return *init_error_;
+    if (other.init_error_) return *other.init_error_;
+    if (!state_ || !other.state_) return {};
+    coro::AbiContext ctx;
+    const dftu_status status =
+        reg_->desc.merge(ctx.get(), state_, other.state_);
+    if (status < 0) return error_of(ctx, status, "merge");
     spill_refused_ = spill_refused_ || other.spill_refused_;
     adopt_runs(other);
-    maybe_spill();
+    return maybe_spill();
 }
 
 void StateAccum::adopt_runs(StateAccum& other) {
@@ -155,61 +178,76 @@ void StateAccum::adopt_runs(StateAccum& other) {
     other.runs_.clear();
 }
 
-void StateAccum::drain_runs() {
-    if (!state_ || runs_.empty() || !reg_->desc.deserialize) return;
+dstd::Result<void> StateAccum::drain_runs() {
+    if (!state_ || runs_.empty() || !reg_->desc.deserialize) return {};
     for (const dstd::Path& path : runs_) {
         const auto read = dstd::fs::read_file(path.view());
         if (!read) {
-            DFTRACER_UTILS_LOG_ERROR(
-                "Plugin state '{}' could not read run '{}'", reg_->name, path);
-            continue;
+            return common::make_error<
+                "plugin '{}' state '{}': the host could "
+                "not read spill run '{}'">(common::ErrorCode::Io, plugin_,
+                                           reg_->name, path);
         }
         const dstd::String& buf = *read;
         ::dftu_bytes in{buf.data(), static_cast<std::uint64_t>(buf.size()),
                         nullptr, nullptr};
-        ::dftu_error err{};
-        void* run_state = reg_->desc.deserialize(reg_->self, in, &err);
-        if (!run_state) {
-            DFTRACER_UTILS_LOG_ERROR("Plugin state '{}' deserialize failed: {}",
-                                     reg_->name, err_text(err));
-            continue;
+        coro::AbiContext ctx;
+        void* run_state = nullptr;
+        const dftu_status loaded =
+            reg_->desc.deserialize(ctx.get(), reg_->self, in, &run_state);
+        if (loaded < 0) return error_of(ctx, loaded, "deserialize");
+        if (run_state == nullptr) {
+            return common::make_error<
+                "plugin '{}' state '{}' deserialize: it gave no state">(
+                common::ErrorCode::InvalidArgument, plugin_, reg_->name);
         }
-        if (reg_->desc.merge(state_, run_state, &err) != 0)
-            DFTRACER_UTILS_LOG_ERROR("Plugin state '{}' run merge failed: {}",
-                                     reg_->name, err_text(err));
+        const dftu_status merged =
+            reg_->desc.merge(ctx.get(), state_, run_state);
         reg_->desc.destroy(run_state);
+        if (merged < 0) return error_of(ctx, merged, "merge of a spill run");
     }
     runs_.clear();
+    return {};
 }
 
-bool StateAccum::finalize(::dftu_result_value* out) {
+dstd::Result<bool> StateAccum::finalize(::dftu_result_value* out) {
+    if (init_error_) return *init_error_;
     if (!state_ || !out) return false;
-    drain_runs();
-    ::dftu_error err{};
-    if (reg_->desc.finalize(state_, out, &err) != 0) {
-        DFTRACER_UTILS_LOG_ERROR("Plugin state '{}' finalize failed: {}",
-                                 reg_->name, err_text(err));
-        return false;
-    }
+    if (auto drained = drain_runs(); !drained) return drained.error();
+    coro::AbiContext ctx;
+    const dftu_status status = reg_->desc.finalize(ctx.get(), state_, out);
+    if (status < 0) return error_of(ctx, status, "finalize");
     return true;
 }
 
-void PluginFold::states_update(const ::dftu_dataframe* df) {
-    for (dstd::UniquePtr<StateAccum>& s : state_accums_) s->update(df);
+dstd::Result<void> PluginFold::states_update(const ::dftu_dataframe* df) {
+    for (dstd::UniquePtr<StateAccum>& s : state_accums_) {
+        auto updated = s->update(df);
+        if (!updated) return updated.error();
+    }
+    return {};
 }
 
-void PluginFold::states_merge(PluginFold& other) {
+dstd::Result<void> PluginFold::states_merge(PluginFold& other) {
     const std::size_t n =
         std::min(state_accums_.size(), other.state_accums_.size());
-    for (std::size_t i = 0; i < n; ++i)
-        state_accums_[i]->merge(*other.state_accums_[i]);
+    for (std::size_t i = 0; i < n; ++i) {
+        auto merged = state_accums_[i]->merge(*other.state_accums_[i]);
+        if (!merged) return merged.error();
+    }
+    return {};
 }
 
-void PluginFold::states_finalize() {
+dstd::Result<void> PluginFold::states_finalize() {
     for (dstd::UniquePtr<StateAccum>& s : state_accums_) {
         ::dftu_result_value v{};
-        if (s->finalize(&v)) result_emit(s->name().c_str(), &v);
+        auto produced = s->finalize(&v);
+        if (!produced.has_value()) return produced.error();
+        if (!*produced) continue;
+        auto emitted = emit_result(s->name().c_str(), &v);
+        if (!emitted) return emitted.error();
     }
+    return {};
 }
 
 std::size_t PluginFold::state_spill_runs(const char* name) const {

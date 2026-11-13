@@ -138,7 +138,7 @@ TEST_CASE("reference_plugin: a forced-missing service fails loudly") {
     auto set = domains::plugins::Plugins::builder()
                    .add(REFERENCE_PLUGIN_PATH,
                         config_of(R"({"workdir": ")" + env.dir() +
-                                  R"(", "force_missing": "dftu.svc.agg@1"})"))
+                                  R"(", "force_missing": "dftu.svc.agg"})"))
                    .build();
     INFO((set.has_value() ? dstd::String{}
                           : dstd::String(set.error().message())));

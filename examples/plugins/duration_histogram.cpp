@@ -42,7 +42,10 @@ struct DurationHistogram {
     }
 };
 
-extern "C" DFTU_PLUGIN_EXPORT dftu_plugin* dftracer_plugin(
-    dftu_plugin_host* h, const dftu_value* config) {
-    return plugin(h, config).fold<DurationHistogram>().build();
+DFTU_PLUGIN_INFO("duration_histogram", "1.0")
+
+extern "C" DFTU_PLUGIN_EXPORT dftu_status
+dftracer_plugin(dftu_ctx* ctx, dftu_plugin_host* h, const dftu_value* config,
+                dftu_plugin** out) {
+    return plugin(ctx, h, config).fold<DurationHistogram>().build(out);
 }

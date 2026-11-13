@@ -18,13 +18,16 @@ typedef struct {
     uint64_t max_dur;
 } Counter;
 
-static void* make_slice(void* self) {
+static dftu_status make_slice(dftu_ctx* ctx, void* self, void** out) {
     (void)self;
-    return calloc(1, sizeof(Counter));
+    *out = calloc(1, sizeof(Counter));
+    if (!*out) return dftu_fail(ctx, DFTU_E_INTERNAL, "out of memory");
+    return DFTU_OK;
 }
 
-static dftu_task* on_batch(void* slice, const dftu_dataframe* df,
-                           const dftu_plugin_host* host) {
+static dftu_status on_batch(dftu_ctx* ctx, void* slice,
+                            const dftu_dataframe* df,
+                            const dftu_plugin_host* host) {
     Counter* c = (Counter*)slice;
     int64_t n = dftu_dataframe_num_rows(df);
     dftu_series* dur_col = dftu_dataframe_column(df, "dur");
@@ -32,6 +35,7 @@ static dftu_task* on_batch(void* slice, const dftu_dataframe* df,
     const uint64_t* dur = NULL;
     const int64_t* ph = NULL;
     int64_t i;
+    (void)ctx;
     (void)host;
     if (dur_col && dftu_series_type(dur_col) == DFTU_TYPE_UINT64)
         dur = (const uint64_t*)dftu_series_data(dur_col);
@@ -49,18 +53,24 @@ static dftu_task* on_batch(void* slice, const dftu_dataframe* df,
     }
     if (dur_col) dftu_series_free(dur_col);
     if (ph_col) dftu_series_free(ph_col);
-    return NULL; /* synchronous */
+    return DFTU_OK; /* synchronous */
 }
 
-static void merge(void* into, void* other) {
+static dftu_status merge(dftu_ctx* ctx, void* into, void* other) {
+    (void)ctx;
     Counter* a = (Counter*)into;
     const Counter* o = (const Counter*)other;
     a->events += o->events;
     a->with_dur += o->with_dur;
     if (o->max_dur > a->max_dur) a->max_dur = o->max_dur;
+    return DFTU_OK;
 }
 
-static dftu_task* on_finalize(void* slice, const dftu_plugin_host* host) {
+static dftu_status on_finalize(dftu_ctx* ctx, void* slice,
+                               const dftu_plugin_host* host,
+                               dftu_task** pending) {
+    (void)ctx;
+    (void)pending;
     const Counter* c = (const Counter*)slice;
     char line[128];
     int n =
@@ -68,7 +78,7 @@ static dftu_task* on_finalize(void* slice, const dftu_plugin_host* host) {
                  (unsigned long long)c->events, (unsigned long long)c->with_dur,
                  (unsigned long long)c->max_dur);
     if (n > 0) host->log(host->h, DFTU_LOG_INFO, line, (uint32_t)n);
-    return NULL;
+    return DFTU_OK;
 }
 
 static void destroy_slice(void* slice) { free(slice); }
@@ -77,11 +87,16 @@ static void destroy(void* self) { (void)self; }
 
 static dftu_plugin g_plugin;
 
-DFTU_PLUGIN_EXPORT dftu_plugin* dftracer_plugin(dftu_plugin_host* h,
-                                                const dftu_value* config) {
+DFTU_PLUGIN_INFO("event_counter", "1.0")
+
+DFTU_PLUGIN_EXPORT dftu_status dftracer_plugin(dftu_ctx* ctx,
+                                               dftu_plugin_host* h,
+                                               const dftu_value* config,
+                                               dftu_plugin** out) {
+    (void)ctx;
     (void)h;
     (void)config;
-    g_plugin.abi_version = DFTRACER_UTILS_PLUGIN_ABI_VERSION;
+    g_plugin.struct_size = sizeof(dftu_plugin);
     g_plugin.self = NULL;
     g_plugin.plan_duql = NULL;
     g_plugin.make_slice = make_slice;
@@ -90,5 +105,6 @@ DFTU_PLUGIN_EXPORT dftu_plugin* dftracer_plugin(dftu_plugin_host* h,
     g_plugin.on_finalize = on_finalize;
     g_plugin.destroy_slice = destroy_slice;
     g_plugin.destroy = destroy;
-    return &g_plugin;
+    *out = &g_plugin;
+    return DFTU_OK;
 }

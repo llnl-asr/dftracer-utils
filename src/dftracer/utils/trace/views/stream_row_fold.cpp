@@ -61,7 +61,7 @@ dstd::Result<void> StreamRowFold::step(const FoldBatch& batch) {
 
     const std::uint64_t bytes = morsel_bytes(m);
     pending_task_.emplace(send(std::move(m), bytes));
-    pending_ = reinterpret_cast<::dftu_task*>(&*pending_task_);
+    pending_ = &*pending_task_;
     return {};
 }
 
@@ -71,7 +71,7 @@ void StreamRowFold::end_unit(const ScanUnit& unit) {
     dataframe::Morsel end;
     end.batch_index = static_cast<std::int64_t>(unit.seq);
     pending_task_.emplace(send(std::move(end), 0));
-    pending_ = reinterpret_cast<::dftu_task*>(&*pending_task_);
+    pending_ = &*pending_task_;
 }
 
 }  // namespace dftracer::utils::trace::views::detail

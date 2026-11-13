@@ -18,7 +18,7 @@
 extern "C" {
 #endif
 
-#define DFTU_SVC_AGG "dftu.svc.agg@1"
+#define DFTU_SVC_AGG "dftu.svc.agg"
 
 /** Host-owned cross-batch aggregation accumulator. This is the ONE
    accumulator a plugin gets: it wraps the dataframe engine's mergeable
@@ -31,7 +31,7 @@ typedef struct dftu_agg dftu_agg;
 
 /** One aggregate for a dftu_svc_agg accumulator. `op` is a DFTU_AGG_* code (the
    dftu_agg_op enum, kept a fixed-width int at the seam for ABI stability); a
-   code outside the DFTU_AGG_* range makes agg_new return NULL. `value` names
+   code outside the DFTU_AGG_* range makes agg_new fail. `value` names
    the value column in each accumulated batch dataframe (NULL for
    DFTU_AGG_COUNT, the group row count); `out` names the result column; `param`
    is the op's scalar parameter (a quantile in [0,1] for DFTU_AGG_PCT, k for
@@ -55,23 +55,23 @@ typedef struct dftu_agg_col {
    fan-in, serialize to spill when the slice runs past the scan's memory budget,
    finalize once on the merged state, destroy for every state it created.
 
-   These callbacks run INTO the plugin, the opposite direction from
-   dftu_svc_ops::run*, so update/merge/serialize/finalize report failure as 0 ok
-   / non-zero with `err` filled rather than as a value-or-error union: they
-   produce no value, so the success side would be empty. `err`'s message is
-   borrowed by the host for the duration of the call only. */
+   Each callback takes the host's @ref dftu_ctx first and returns a
+   @ref dftu_status; a negative status fails the scan with the message the
+   plugin set through @ref dftu_fail. */
 typedef struct dftu_state_desc {
+    uint32_t struct_size; /**< sizeof(dftu_state_desc) */
     /** Registry key; must be `<plugin>.<name>` and outlive the registration.
        The host emits the finalized result under this name. */
     const char* name;
-    /** A fresh empty state; `self` is the pointer given to register_state. A
-       NULL return fails the slice. */
-    void* (*init)(void* self);
+    /** A fresh empty state into `*out_state`; `self` is the pointer given to
+       register_state. */
+    dftu_status (*init)(dftu_ctx* ctx, void* self, void** out_state);
     /** Fold one batch in. `batch` is host-owned and borrowed for the call. */
-    int (*update)(void* state, const dftu_dataframe* batch, dftu_error* err);
+    dftu_status (*update)(dftu_ctx* ctx, void* state,
+                          const dftu_dataframe* batch);
     /** Fold `other` into `into`; must be associative. `other` stays valid and
        is destroyed by the host. */
-    int (*merge)(void* into, void* other, dftu_error* err);
+    dftu_status (*merge)(dftu_ctx* ctx, void* into, void* other);
     /** Live size in bytes. The host's ONLY measure of the state against the
        scan's memory budget; NULL means unmeasurable, and the host then never
        spills the state however large it grows. */
@@ -81,48 +81,54 @@ typedef struct dftu_state_desc {
        budget is REFUSED a spill with an error rather than silently kept.
        serialize fills `out`; the host releases it through out->free_fn.
        deserialize returns a new state the host owns. */
-    int (*serialize)(const void* state, dftu_bytes* out, dftu_error* err);
-    void* (*deserialize)(void* self, dftu_bytes in, dftu_error* err);
+    dftu_status (*serialize)(dftu_ctx* ctx, const void* state, dftu_bytes* out);
+    dftu_status (*deserialize)(dftu_ctx* ctx, void* self, dftu_bytes in,
+                               void** out_state);
     /** The whole-scan result, filled into `out` (see dftu_svc_result::emit for
        ownership per kind). Called once, on the merged state. */
-    int (*finalize)(void* state, dftu_result_value* out, dftu_error* err);
+    dftu_status (*finalize)(dftu_ctx* ctx, void* state, dftu_result_value* out);
     /** Release a state from init or deserialize; one call per state. */
     void (*destroy)(void* state);
 } dftu_state_desc;
 
 typedef struct dftu_svc_agg {
+    uint32_t struct_size; /**< sizeof(dftu_svc_agg) */
     /** Get-or-create a named accumulator grouping by the `key_n` columns named
-       in `key_names` and computing each of `spec_n` aggregates. Returns a
+       in `key_names` and computing each of `spec_n` aggregates. `*out` is a
        stable handle owned by the host (freed at fold teardown, never by the
-       plugin); NULL on a bad op code, a missing output name, or a `name` in the
-       host's own "dftu." namespace, which is refused to plugins. A name seen
-       before returns the existing handle and ignores the new spec. Safe from
-       any slice thread on that slice's host. */
-    dftu_agg* (*agg_new)(void* h, const char* name,
-                         const char* const* key_names, uint32_t key_n,
-                         const dftu_agg_col* specs, uint32_t spec_n);
+       plugin). Fails with DFTU_E_INVALID on a bad op code, a missing output
+       name, or a `name` in the host's own "dftu." namespace, which is refused
+       to plugins. A name seen before returns the existing handle and ignores
+       the new spec. Safe from any slice thread on that slice's host. */
+    dftu_status (*agg_new)(dftu_ctx* ctx, void* h, const char* name,
+                           const char* const* key_names, uint32_t key_n,
+                           const dftu_agg_col* specs, uint32_t spec_n,
+                           dftu_agg** out);
     /** Fold one batch into `a`: each key and value column is looked up by name
        in `df` (host-owned, borrowed for the call) and accumulated. A batch
        missing any referenced column is skipped. Serial per accumulator; one
        slice's accumulator is touched by one thread. */
-    void (*agg_accumulate)(void* h, dftu_agg* a, const dftu_dataframe* df);
+    dftu_status (*agg_accumulate)(dftu_ctx* ctx, void* h, dftu_agg* a,
+                                  const dftu_dataframe* df);
     /** The cross-worker-merged, finalized result of the accumulator named
        `name` - any plugin's, which is how one plugin reads another's whole-scan
        aggregate. Call at on_finalize; the host finalizes the producer first,
        from the plugins' declared dftu_plugin::provides / dftu_plugin::consumes
        rather than registration order. Returns a NEW owned dataframe the caller
-       frees with dftu_dataframe_free, or NULL if the producer created no such
-       accumulator (an empty scan). */
-    dftu_dataframe* (*agg_result)(void* h, const char* name);
+       frees with dftu_dataframe_free. DFTU_OK with `*out` NULL says the
+       producer created no such accumulator (an empty scan). */
+    dftu_status (*agg_result)(dftu_ctx* ctx, void* h, const char* name,
+                              dftu_dataframe** out);
     /** Register a mergeable state type; `self` is handed back to init and
        deserialize and must outlive the plugin. Callable ONLY from the factory:
        by the time a fold runs, the registry the host plans from is settled, so
        the run-time host refuses it. The descriptor is COPIED, so it need not
-       outlive the call. Returns 0 on success, non-zero on a NULL desc, a name
+       outlive the call. Fails with DFTU_E_INVALID on a NULL desc, a name
        that is NULL, in the host's "dftu." namespace, not `<plugin>.<name>`, or
        already registered, a missing init/update/merge/finalize/destroy, or a
        serialize/deserialize pair given only half. */
-    int (*register_state)(void* h, const dftu_state_desc* desc, void* self);
+    dftu_status (*register_state)(dftu_ctx* ctx, void* h,
+                                  const dftu_state_desc* desc, void* self);
 } dftu_svc_agg;
 
 #ifdef __cplusplus

@@ -16,7 +16,6 @@
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/scalar.h>
 #include <dftracer/utils/dataframe/types.h>
-#include <dftracer/utils/domains/plugins/compose.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/path.h>
@@ -30,7 +29,9 @@
 #include <doctest/doctest.h>
 #include <task_result.h>
 #include <testing_utilities.h>
+#include <utilities/plugins/test_abi_ctx.h>
 
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <cstring>
@@ -38,10 +39,6 @@
 using namespace dftracer::utils;
 
 namespace {
-
-coro::CoroTask<void>* as_coro(::dftu_task* t) {
-    return reinterpret_cast<coro::CoroTask<void>*>(t);
-}
 
 struct ConfigSlice {
     std::int64_t threshold = 0;
@@ -105,181 +102,132 @@ trace::views::detail::FoldEvent make_event(dstd::StringIntern& intern,
     return fe;
 }
 
-void inc_fn(void* p) { static_cast<std::atomic<int>*>(p)->fetch_add(1); }
-void append1_fn(void* p) { static_cast<dstd::Vector<int>*>(p)->push_back(1); }
-void append2_fn(void* p) { static_cast<dstd::Vector<int>*>(p)->push_back(2); }
-
-const dftu_svc_coro* coro_ext(dftracer::utils::plugins::Host h) {
-    return static_cast<const dftu_svc_coro*>(
-        h.raw()->get_service(h.raw()->h, DFTU_SVC_CORO));
+dftu_status inc_fn(dftu_ctx*, void* p) {
+    static_cast<std::atomic<int>*>(p)->fetch_add(1);
+    return DFTU_OK;
+}
+dftu_status append1_fn(dftu_ctx*, void* p) {
+    static_cast<dstd::Vector<int>*>(p)->push_back(1);
+    return DFTU_OK;
+}
+dftu_status append2_fn(dftu_ctx*, void* p) {
+    static_cast<dstd::Vector<int>*>(p)->push_back(2);
+    return DFTU_OK;
 }
 
-dftracer::utils::plugins::Task fanout_all(dftracer::utils::plugins::Host h,
-                                          std::atomic<int>* ran, int n) {
-    const dftu_svc_coro* c = coro_ext(h);
-    dstd::Vector<::dftu_task*> kids;
-    for (int i = 0; i < n; ++i)
-        kids.push_back(c->spawn(h.raw()->h, inc_fn, ran));
-    ::dftu_task* all =
-        c->when_all(h.raw()->h, kids.data(), static_cast<std::uint32_t>(n));
-    co_await h.await(all);
+plugins::Task fanout_all(plugins::Host h, std::atomic<int>* ran, int n) {
+    dstd::Vector<dftu_task*> kids;
+    for (int i = 0; i < n; ++i) kids.push_back(h.spawn(inc_fn, ran).release());
+    plugins::AsyncAll all(std::move(kids), h.raw());
+    co_await all;
 }
 
-dftracer::utils::plugins::Task fanout_any(dftracer::utils::plugins::Host h,
-                                          std::atomic<int>* ran) {
-    const dftu_svc_coro* c = coro_ext(h);
-    ::dftu_task* a = c->spawn(h.raw()->h, inc_fn, ran);
-    ::dftu_task* b = c->spawn(h.raw()->h, inc_fn, ran);
-    ::dftu_task* kids[2] = {a, b};
-    co_await h.await(c->when_any(h.raw()->h, kids, 2));
+plugins::Task drop_then_throw(plugins::Host h, std::atomic<int>* ran) {
+    plugins::AsyncOp dropped = h.spawn(inc_fn, ran);
+    if (ran != nullptr) throw plugins::Error(DFTU_E_IO, "gave up");
+    co_await std::move(dropped);
 }
 
-dftracer::utils::plugins::Task chain(dftracer::utils::plugins::Host h,
-                                     dstd::Vector<int>* order) {
-    const dftu_svc_coro* c = coro_ext(h);
-    ::dftu_task* t = c->spawn(h.raw()->h, append1_fn, order);
-    co_await h.await(c->then(h.raw()->h, t, append2_fn, order));
+plugins::Task chain(plugins::Host h, dstd::Vector<int>* order) {
+    co_await h.spawn(append1_fn, order);
+    co_await h.spawn(append2_fn, order);
 }
 
-dftracer::utils::plugins::Task compose_all(dftracer::utils::plugins::Host h,
-                                           std::atomic<int>* ran) {
-    const dftu_svc_coro* c = coro_ext(h);
-    ::dftu_task* a = c->spawn(h.raw()->h, inc_fn, ran);
-    ::dftu_task* b = c->spawn(h.raw()->h, inc_fn, ran);
-    co_await (domains::plugins::compose(h.raw(), a) &&
-              domains::plugins::compose(h.raw(), b));
+using I64 = std::int64_t;
+
+// (in*2) then (+10): a value threaded through the pipe.
+plugins::Task typed_pipe(plugins::Host h, I64* result) {
+    auto a = plugins::make_job<I64, I64>(h, [](I64 x) { return x * 2; });
+    auto b = plugins::make_job<I64, I64>(h, [](I64 x) { return x + 10; });
+    I64 in = 5, out = 0;
+    co_await plugins::run(a | b, in, out);
+    *result = out;
 }
 
-dftracer::utils::plugins::Task compose_any(dftracer::utils::plugins::Host h,
-                                           std::atomic<int>* ran) {
-    const dftu_svc_coro* c = coro_ext(h);
-    ::dftu_task* a = c->spawn(h.raw()->h, inc_fn, ran);
-    ::dftu_task* b = c->spawn(h.raw()->h, inc_fn, ran);
-    co_await (domains::plugins::compose(h.raw(), a) ||
-              domains::plugins::compose(h.raw(), b));
+// when_all: both leaves see the same input; the output is their values
+// concatenated.
+plugins::Task jobs_all(plugins::Host h, std::array<I64, 2>* out) {
+    auto a = plugins::make_job<I64, I64>(h, [](I64 x) { return x * 2; });
+    auto b = plugins::make_job<I64, I64>(h, [](I64 x) { return x + 10; });
+    I64 in = 5;
+    co_await plugins::run(plugins::when_all(a, b), in, *out);
 }
 
-dftracer::utils::plugins::Task compose_map(dftracer::utils::plugins::Host h,
-                                           std::atomic<int>* ran) {
-    const dftu_svc_coro* c = coro_ext(h);
-    dstd::Vector<int> items = {0, 1, 2, 3};
-    co_await domains::plugins::map(
-        h.raw(), items, [&](int) { return c->spawn(h.raw()->h, inc_fn, ran); });
+// when_any: both racers compute the same value, so the winner is
+// deterministic.
+plugins::Task jobs_any(plugins::Host h, I64* result) {
+    auto a = plugins::make_job<I64, I64>(h, [](I64 x) { return x + 10; });
+    auto b = plugins::make_job<I64, I64>(h, [](I64 x) { return x + 10; });
+    I64 in = 5;
+    co_await plugins::run(plugins::when_any(a, b), in, *result);
 }
 
-// dftu_op / dftu_svc_compose: leaf value transforms (int64 -> int64), run
-// inline.
-const dftu_svc_compose* compose_ext(dftracer::utils::plugins::Host h) {
-    return static_cast<const dftu_svc_compose*>(
-        h.raw()->get_service(h.raw()->h, DFTU_SVC_COMPOSE));
-}
-::dftu_task* op_double(void*, const void* in, void* out, int* rc) {
-    *static_cast<std::int64_t*>(out) =
-        *static_cast<const std::int64_t*>(in) * 2;
-    if (rc) *rc = 0;
-    return nullptr;
-}
-::dftu_task* op_plus10(void*, const void* in, void* out, int* rc) {
-    *static_cast<std::int64_t*>(out) =
-        *static_cast<const std::int64_t*>(in) + 10;
-    if (rc) *rc = 0;
-    return nullptr;
+// map: one body run per item, outputs in item order.
+plugins::Task jobs_map(plugins::Host h, dstd::Vector<I64>* out) {
+    auto body = plugins::make_job<I64, I64>(h, [](I64 x) { return x * x; });
+    dstd::Vector<I64> items = {1, 2, 3, 4};
+    out->assign(items.size(), 0);
+    dftu_job_items in{items.data(), items.size()};
+    dftu_job_slots slots{out->data(), out->size()};
+    dftu_job* m = nullptr;
+    plugins::detail::ok(h.tasks().map(h.ctx(), h.raw()->h, body.raw(), 2, &m));
+    dftu_task* t = nullptr;
+    plugins::detail::ok(
+        h.tasks().start(h.ctx(), h.raw()->h, m, &in, &slots, &t));
+    co_await h.await(t);
 }
 
-// (in*2) then (+10): value threaded through the pipe.
-dftracer::utils::plugins::Task op_pipe(dftracer::utils::plugins::Host h,
-                                       std::int64_t* result) {
-    const dftu_svc_compose* c = compose_ext(h);
-    void* hh = h.raw()->h;
-    ::dftu_op* a = c->make_op(hh, op_double, nullptr, nullptr, DFTU_T_I64, 8,
-                              DFTU_T_I64, 8);
-    ::dftu_op* b = c->make_op(hh, op_plus10, nullptr, nullptr, DFTU_T_I64, 8,
-                              DFTU_T_I64, 8);
-    ::dftu_op* pipe = c->then(hh, a, b);
-    std::int64_t in = 5, out = 0;
-    int rc = -1;
-    co_await h.await(c->run(hh, pipe, &in, &out, &rc));
-    *result = (rc == 0) ? out : -1;
-}
-
-// Typed compose: compile-time type safety. A matching pipe is well-formed; a
-// mismatched one is not (this is the value over the raw runtime null check).
-template <class A, class B>
-concept Pipeable = requires(A a, B b) { a | b; };
-using OpII = domains::plugins::Op<std::int64_t, std::int64_t>;
-using OpDD = domains::plugins::Op<double, double>;
-static_assert(Pipeable<OpII, OpII>, "i64->i64 | i64->i64 must pipe");
-static_assert(!Pipeable<OpII, OpDD>, "i64->i64 | f64->f64 must not pipe");
-
-dftracer::utils::plugins::Task typed_pipe(dftracer::utils::plugins::Host h,
-                                          std::int64_t* result) {
-    OpII a = domains::plugins::make_op<std::int64_t, std::int64_t>(
-        h, [](std::int64_t x) { return x * 2; });
-    OpII b = domains::plugins::make_op<std::int64_t, std::int64_t>(
-        h, [](std::int64_t x) { return x + 10; });
-    std::int64_t in = 5, out = 0;
-    int rc = -1;
-    co_await domains::plugins::run(a | b, in, out, rc);
-    *result = (rc == 0) ? out : -1;
-}
-
-// A real column rides the pipe as a first-class DFTU_T_SERIES value: the source
+// A column rides the pipe as a first-class DFTU_T_SERIES value: the source
 // [1,2,3,4] is doubled twice via a real SIMD add, so the output is [4,8,12,16].
-// Only the `dftu_series*` handle crosses each op (zero-copy); `a` borrows its
+// Only the `dftu_series*` handle crosses each job (zero-copy); `a` borrows its
 // input (the caller keeps `src`), `b` consumes the intermediate.
-dftracer::utils::plugins::Task series_pipe(dftracer::utils::plugins::Host h,
-                                           dftu_series** result) {
-    using SOp = domains::plugins::Op<dftu_series*, dftu_series*>;
-    std::int64_t vals[4] = {1, 2, 3, 4};
+plugins::Task series_pipe(plugins::Host h, dftu_series** result) {
+    I64 vals[4] = {1, 2, 3, 4};
     dftu_series* src = dftu_series_new_flat(DFTU_TYPE_INT64, vals, 4, nullptr);
-    SOp a = domains::plugins::make_op<dftu_series*, dftu_series*>(
+    auto a = plugins::make_job<dftu_series*, dftu_series*>(
         h, [](dftu_series* s) { return dftu_series_add(s, s); });
-    SOp b = domains::plugins::make_op<dftu_series*, dftu_series*>(
-        h, [](dftu_series* s) {
+    auto b =
+        plugins::make_job<dftu_series*, dftu_series*>(h, [](dftu_series* s) {
             dftu_series* r = dftu_series_add(s, s);
             dftu_series_free(s);
             return r;
         });
     dftu_series* out = nullptr;
-    int rc = -1;
-    co_await domains::plugins::run(a | b, src, out, rc);
+    co_await plugins::run(a | b, src, out);
     dftu_series_free(src);
-    *result = (rc == 0) ? out : nullptr;
-}
-
-// when_any: both racers compute the same value, so the winner is deterministic.
-dftracer::utils::plugins::Task op_any(dftracer::utils::plugins::Host h,
-                                      std::int64_t* result) {
-    const dftu_svc_compose* c = compose_ext(h);
-    void* hh = h.raw()->h;
-    ::dftu_op* ops[2] = {c->make_op(hh, op_plus10, nullptr, nullptr, DFTU_T_I64,
-                                    8, DFTU_T_I64, 8),
-                         c->make_op(hh, op_plus10, nullptr, nullptr, DFTU_T_I64,
-                                    8, DFTU_T_I64, 8)};
-    ::dftu_op* any = c->when_any(hh, ops, 2);
-    std::int64_t in = 5, out = 0;
-    int rc = -1;
-    co_await h.await(c->run(hh, any, &in, &out, &rc));
     *result = out;
 }
 
-// when_all: both leaves fan the same input; output is their values
-// concatenated.
-dftracer::utils::plugins::Task op_all(dftracer::utils::plugins::Host h,
-                                      std::int64_t* out0, std::int64_t* out1) {
-    const dftu_svc_compose* c = compose_ext(h);
-    void* hh = h.raw()->h;
-    ::dftu_op* ops[2] = {c->make_op(hh, op_double, nullptr, nullptr, DFTU_T_I64,
-                                    8, DFTU_T_I64, 8),
-                         c->make_op(hh, op_plus10, nullptr, nullptr, DFTU_T_I64,
-                                    8, DFTU_T_I64, 8)};
-    ::dftu_op* all = c->when_all(hh, ops, 2);
-    std::int64_t in = 5;
-    std::int64_t out[2] = {0, 0};
-    int rc = -1;
-    co_await h.await(c->run(hh, all, &in, out, &rc));
-    *out0 = out[0];
-    *out1 = out[1];
+// Typed pipes are checked at compile time: a matching pipe is well-formed, a
+// mismatched one is not.
+template <class A, class B>
+concept Pipeable = requires(A a, B b) { a | b; };
+using JobII = plugins::Job<I64, I64>;
+using JobDD = plugins::Job<double, double>;
+static_assert(Pipeable<JobII, JobII>, "i64->i64 | i64->i64 must pipe");
+static_assert(!Pipeable<JobII, JobDD>, "i64->i64 | f64->f64 must not pipe");
+
+dftu_status job_noop(dftu_ctx*, void*, const void*, void*, dftu_task**) {
+    return DFTU_OK;
+}
+
+dftu_status make_raw_job(plugins::Host h, dftu_type in_ty, dftu_type out_ty,
+                         dftu_job** out) {
+    dftu_job_desc d{};
+    d.struct_size = sizeof(d);
+    d.fn = job_noop;
+    d.in_ty = in_ty;
+    d.in_size = 8;
+    d.out_ty = out_ty;
+    d.out_size = 8;
+    return h.tasks().job(h.ctx(), h.raw()->h, &d, out);
+}
+
+template <class MakeTask>
+dftu_status drive_task(dftu_plugin_host& host, MakeTask make,
+                       dstd::String* message = nullptr) {
+    test_plugin_common::TaskDriver driver(host);
+    return driver.run(make(driver.host()), message);
 }
 
 // Owns a PluginFold plus its backing plugin; the fold references the plugin, so
@@ -308,17 +256,24 @@ struct ColState {
 };
 ColState g_col_state;
 
-void* col_make_slice(void*) { return new ColState(); }
+dftu_status col_make_slice(dftu_ctx*, void*, void** out) {
+    *out = new ColState();
+    return DFTU_OK;
+}
 void col_destroy_slice(void* s) { delete static_cast<ColState*>(s); }
 void col_destroy(void*) {}
-void col_merge(void* into, void* other) {
+dftu_status col_merge(dftu_ctx*, void* into, void* other) {
     static_cast<ColState*>(into)->dur_sum +=
         static_cast<ColState*>(other)->dur_sum;
+    return DFTU_OK;
 }
 const char* col_plan_duql(void*) { return nullptr; }
-::dftu_task* col_on_finalize(void*, const dftu_plugin_host*) { return nullptr; }
-::dftu_task* col_on_batch(void* slice, const dftu_dataframe* df,
-                          const dftu_plugin_host*) {
+dftu_status col_on_finalize(dftu_ctx*, void*, const dftu_plugin_host*,
+                            dftu_task**) {
+    return DFTU_OK;
+}
+dftu_status col_on_batch(dftu_ctx*, void* slice, const dftu_dataframe* df,
+                         const dftu_plugin_host*) {
     dftu_series* col = dftu_dataframe_column(df, "dur");
     if (col) {
         dftu_scalar s = dftu_series_reduce(col, DFTU_REDUCE_SUM);
@@ -329,7 +284,7 @@ const char* col_plan_duql(void*) { return nullptr; }
         g_col_state.dur_sum = st->dur_sum;
         dftu_series_free(col);
     }
-    return nullptr;
+    return DFTU_OK;
 }
 
 // Owning wrapper for a hand-built [cat, name] test dataframe (freed on scope
@@ -366,12 +321,24 @@ QueryFrame cat_name_frame(const dstd::Vector<dstd::String>& cats,
     return f;
 }
 
+dftu_duql* compile_query(const dftu_svc_duql* qx, void* h,
+                         const dstd::String& src, dftu_status* status = nullptr,
+                         dstd::String* message = nullptr) {
+    test_plugin_common::Ctx c;
+    dftu_duql* q = nullptr;
+    const dftu_status st = qx->duql_compile(
+        c.get(), h, src.data(), static_cast<std::uint32_t>(src.size()), &q);
+    if (status) *status = st;
+    if (message) *message = c.message();
+    return st < 0 ? nullptr : q;
+}
+
 }  // namespace
 
 TEST_CASE("plugin ABI: on_batch hands the batch as columns") {
     g_col_state = {};
     dftu_plugin p{};
-    p.abi_version = DFTRACER_UTILS_PLUGIN_ABI_VERSION;
+    p.struct_size = sizeof(p);
     p.plan_duql = col_plan_duql;
     p.make_slice = col_make_slice;
     p.merge = col_merge;
@@ -408,7 +375,10 @@ TEST_CASE("plugin ABI: config tree reads scalars, nested, array, and default") {
     domains::plugins::ConfigTree tree = std::move(*loaded);
     dftu_plugin* p =
         dftracer::utils::plugins::make_plugin<ConfigSlice>(tree.root());
-    auto* slice = static_cast<ConfigSlice*>(p->make_slice(p->self));
+    test_plugin_common::Ctx slice_ctx;
+    void* made = nullptr;
+    REQUIRE(p->make_slice(slice_ctx.get(), p->self, &made) == DFTU_OK);
+    auto* slice = static_cast<ConfigSlice*>(made);
     REQUIRE(slice != nullptr);
 
     CHECK(slice->threshold == 42);
@@ -434,8 +404,7 @@ TEST_CASE("plugin ABI: duql_compile then duql_matches on known events") {
     REQUIRE(qx != nullptr);
 
     dstd::String src = "cat == \"POSIX\"";
-    dftu_duql* q = qx->duql_compile(host.h, src.data(),
-                                    static_cast<std::uint32_t>(src.size()));
+    dftu_duql* q = compile_query(qx, host.h, src);
     REQUIRE(q != nullptr);
 
     // Row 0 is the hit (cat=POSIX), row 1 the miss (cat=STDIO); both name
@@ -446,9 +415,12 @@ TEST_CASE("plugin ABI: duql_compile then duql_matches on known events") {
 
     SUBCASE("malformed query source does not compile and match is safe") {
         dstd::String bad = "cat ==";
-        dftu_duql* bq = qx->duql_compile(
-            host.h, bad.data(), static_cast<std::uint32_t>(bad.size()));
+        dftu_status st = DFTU_OK;
+        dstd::String message;
+        dftu_duql* bq = compile_query(qx, host.h, bad, &st, &message);
         CHECK(bq == nullptr);
+        CHECK(st == DFTU_E_PARSE);
+        CHECK_FALSE(message.empty());
         // A null query must yield a defined 0, never a throw across the ABI.
         CHECK(qx->duql_matches(host.h, nullptr, frame.df, 0) == 0);
     }
@@ -463,10 +435,8 @@ TEST_CASE("plugin ABI: duql_matches sees each new frame, not cached columns") {
 
     dstd::String cat_src = "cat == \"POSIX\"";
     dstd::String name_src = "name == \"write\"";
-    dftu_duql* by_cat = qx->duql_compile(
-        host.h, cat_src.data(), static_cast<std::uint32_t>(cat_src.size()));
-    dftu_duql* by_name = qx->duql_compile(
-        host.h, name_src.data(), static_cast<std::uint32_t>(name_src.size()));
+    dftu_duql* by_cat = compile_query(qx, host.h, cat_src);
+    dftu_duql* by_name = compile_query(qx, host.h, name_src);
     REQUIRE(by_cat != nullptr);
     REQUIRE(by_name != nullptr);
 
@@ -496,8 +466,7 @@ TEST_CASE("plugin ABI: duql_matches reads a non-flat number column") {
         host.get_service(host.h, DFTU_SVC_DUQL));
     REQUIRE(qx != nullptr);
     dstd::String src = "dur > 600";
-    dftu_duql* q = qx->duql_compile(host.h, src.data(),
-                                    static_cast<std::uint32_t>(src.size()));
+    dftu_duql* q = compile_query(qx, host.h, src);
     REQUIRE(q != nullptr);
 
     const std::int64_t durs[] = {1, 500, 700, 3};
@@ -568,219 +537,114 @@ TEST_CASE("plugin ABI: plan_duql on fhash delivers only matching events") {
     }
 }
 
-TEST_CASE("plugin ABI: spawn fan-out joined by when_all runs every child") {
+TEST_CASE("plugin ABI: spawn fan-out joined by all runs every child") {
     FoldFixture<CountSlice> fx(nullptr);
-    dftu_plugin_host& host = fx.host();
-
-    Runtime rt(1);
     std::atomic<int> ran{0};
-    dftu_utils_test::ok(
-        rt.submit(coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-                      ::dftu_task* d =
-                          dftracer::utils::plugins::detail::drive_coro<int>(
-                              &host,
-                              fanout_all(dftracer::utils::plugins::Host{&host},
-                                         &ran, 4));
-                      co_await *as_coro(d);
-                  }),
-                  "caller")
-            .wait());
-    rt.shutdown();
+    CHECK(drive_task(fx.host(), [&](plugins::Host h) {
+              return fanout_all(h, &ran, 4);
+          }) == DFTU_OK);
     CHECK(ran.load() == 4);
 }
 
-TEST_CASE("plugin ABI: when_any returns after the first child") {
+TEST_CASE("plugin ABI: a started task dropped on a throw never runs") {
     FoldFixture<CountSlice> fx(nullptr);
-    dftu_plugin_host& host = fx.host();
-
-    Runtime rt(1);
     std::atomic<int> ran{0};
-    dftu_utils_test::ok(
-        rt.submit(coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-                      ::dftu_task* d =
-                          dftracer::utils::plugins::detail::drive_coro<int>(
-                              &host,
-                              fanout_any(dftracer::utils::plugins::Host{&host},
-                                         &ran));
-                      co_await *as_coro(d);
-                  }),
-                  "caller")
-            .wait());
-    rt.shutdown();
-    CHECK(ran.load() >= 1);
+    CHECK(drive_task(fx.host(), [&](plugins::Host h) {
+              return drop_then_throw(h, &ran);
+          }) == DFTU_E_IO);
+    CHECK(ran.load() == 0);
 }
 
-TEST_CASE("plugin ABI: compose && joins both tasks (when_all)") {
-    FoldFixture<CountSlice> fx(nullptr);
-    dftu_plugin_host& host = fx.host();
-
-    Runtime rt(1);
-    std::atomic<int> ran{0};
-    dftu_utils_test::ok(
-        rt.submit(coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-                      ::dftu_task* d =
-                          dftracer::utils::plugins::detail::drive_coro<int>(
-                              &host,
-                              compose_all(dftracer::utils::plugins::Host{&host},
-                                          &ran));
-                      co_await *as_coro(d);
-                  }),
-                  "caller")
-            .wait());
-    rt.shutdown();
-    CHECK(ran.load() == 2);
+TEST_CASE("plugin SDK: an AsyncOp dropped unawaited discards its task") {
+    static int discarded = 0;
+    static dftu_task* seen = nullptr;
+    dftu_svc_task svc{};
+    svc.struct_size = sizeof(svc);
+    svc.discard = [](void*, dftu_task* t) {
+        ++discarded;
+        seen = t;
+    };
+    dftu_plugin_host host{};
+    host.struct_size = sizeof(host);
+    host.h = &svc;
+    host.get_service = [](void* h, const char* id) -> const void* {
+        return std::strcmp(id, DFTU_SVC_TASK) == 0 ? h : nullptr;
+    };
+    auto* fake = reinterpret_cast<dftu_task*>(&host);
+    {
+        plugins::AsyncOp dropped(fake, &host);
+    }
+    CHECK(discarded == 1);
+    CHECK(seen == fake);
+    {
+        plugins::AsyncOp handed(fake, &host);
+        CHECK(handed.release() == fake);
+    }
+    CHECK(discarded == 1);
 }
 
-TEST_CASE("plugin ABI: compose || races the tasks (when_any)") {
+TEST_CASE("plugin ABI: awaited spawns run in order") {
     FoldFixture<CountSlice> fx(nullptr);
-    dftu_plugin_host& host = fx.host();
-
-    Runtime rt(1);
-    std::atomic<int> ran{0};
-    dftu_utils_test::ok(
-        rt.submit(coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-                      ::dftu_task* d =
-                          dftracer::utils::plugins::detail::drive_coro<int>(
-                              &host,
-                              compose_any(dftracer::utils::plugins::Host{&host},
-                                          &ran));
-                      co_await *as_coro(d);
-                  }),
-                  "caller")
-            .wait());
-    rt.shutdown();
-    CHECK(ran.load() >= 1);
+    dstd::Vector<int> order;
+    CHECK(drive_task(fx.host(), [&](plugins::Host h) {
+              return chain(h, &order);
+          }) == DFTU_OK);
+    REQUIRE(order.size() == 2);
+    CHECK(order[0] == 1);
+    CHECK(order[1] == 2);
 }
 
-TEST_CASE("plugin ABI: compose map joins one task per item (when_all)") {
+TEST_CASE("plugin ABI: job then threads a value through the pipe") {
     FoldFixture<CountSlice> fx(nullptr);
-    dftu_plugin_host& host = fx.host();
-
-    Runtime rt(1);
-    std::atomic<int> ran{0};
-    dftu_utils_test::ok(
-        rt.submit(coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-                      ::dftu_task* d =
-                          dftracer::utils::plugins::detail::drive_coro<int>(
-                              &host,
-                              compose_map(dftracer::utils::plugins::Host{&host},
-                                          &ran));
-                      co_await *as_coro(d);
-                  }),
-                  "caller")
-            .wait());
-    rt.shutdown();
-    CHECK(ran.load() == 4);
-}
-
-TEST_CASE("plugin ABI: compose dftu_op then threads a value through the pipe") {
-    FoldFixture<CountSlice> fx(nullptr);
-    dftu_plugin_host& host = fx.host();
-
-    Runtime rt(1);
-    std::int64_t result = 0;
-    dftu_utils_test::ok(
-        rt.submit(coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-                      ::dftu_task* d =
-                          dftracer::utils::plugins::detail::drive_coro<int>(
-                              &host,
-                              op_pipe(dftracer::utils::plugins::Host{&host},
-                                      &result));
-                      co_await *as_coro(d);
-                  }),
-                  "caller")
-            .wait());
-    rt.shutdown();
+    I64 result = 0;
+    CHECK(drive_task(fx.host(), [&](plugins::Host h) {
+              return typed_pipe(h, &result);
+          }) == DFTU_OK);
     CHECK(result == 20);  // (5*2)+10
 }
 
-TEST_CASE("plugin ABI: compose dftu_op when_all concatenates outputs") {
+TEST_CASE("plugin ABI: job all concatenates outputs") {
     FoldFixture<CountSlice> fx(nullptr);
-    dftu_plugin_host& host = fx.host();
-
-    Runtime rt(1);
-    std::int64_t a = 0, b = 0;
-    dftu_utils_test::ok(
-        rt.submit(coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-                      ::dftu_task* d =
-                          dftracer::utils::plugins::detail::drive_coro<int>(
-                              &host,
-                              op_all(dftracer::utils::plugins::Host{&host}, &a,
-                                     &b));
-                      co_await *as_coro(d);
-                  }),
-                  "caller")
-            .wait());
-    rt.shutdown();
-    CHECK(a == 10);  // 5*2
-    CHECK(b == 15);  // 5+10
+    std::array<I64, 2> out{0, 0};
+    CHECK(drive_task(fx.host(), [&](plugins::Host h) {
+              return jobs_all(h, &out);
+          }) == DFTU_OK);
+    CHECK(out[0] == 10);  // 5*2
+    CHECK(out[1] == 15);  // 5+10
 }
 
-TEST_CASE("plugin ABI: compose dftu_op when_any yields the winner's value") {
+TEST_CASE("plugin ABI: job any yields the winner's value") {
     FoldFixture<CountSlice> fx(nullptr);
-    dftu_plugin_host& host = fx.host();
-
-    Runtime rt(1);
-    std::int64_t result = 0;
-    dftu_utils_test::ok(
-        rt.submit(coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-                      ::dftu_task* d =
-                          dftracer::utils::plugins::detail::drive_coro<int>(
-                              &host,
-                              op_any(dftracer::utils::plugins::Host{&host},
-                                     &result));
-                      co_await *as_coro(d);
-                  }),
-                  "caller")
-            .wait());
-    rt.shutdown();
+    I64 result = 0;
+    CHECK(drive_task(fx.host(), [&](plugins::Host h) {
+              return jobs_any(h, &result);
+          }) == DFTU_OK);
     CHECK(result == 15);  // both racers compute 5+10
 }
 
-TEST_CASE("plugin ABI: typed compose Op pipes real values") {
+TEST_CASE("plugin ABI: job map runs the body once per item in order") {
     FoldFixture<CountSlice> fx(nullptr);
-    dftu_plugin_host& host = fx.host();
-
-    Runtime rt(1);
-    std::int64_t result = 0;
-    dftu_utils_test::ok(
-        rt.submit(coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-                      ::dftu_task* d =
-                          dftracer::utils::plugins::detail::drive_coro<int>(
-                              &host,
-                              typed_pipe(dftracer::utils::plugins::Host{&host},
-                                         &result));
-                      co_await *as_coro(d);
-                  }),
-                  "caller")
-            .wait());
-    rt.shutdown();
-    CHECK(result == 20);  // (5*2)+10, fully typed
+    dstd::Vector<I64> out;
+    CHECK(drive_task(fx.host(), [&](plugins::Host h) {
+              return jobs_map(h, &out);
+          }) == DFTU_OK);
+    REQUIRE(out.size() == 4);
+    CHECK(out[0] == 1);
+    CHECK(out[1] == 4);
+    CHECK(out[2] == 9);
+    CHECK(out[3] == 16);
 }
 
-TEST_CASE(
-    "plugin ABI: a column rides the compose pipe as a DFTU_T_SERIES value") {
-    static_assert(domains::plugins::type_tag<dftu_series*>() == DFTU_T_SERIES,
+TEST_CASE("plugin ABI: a column rides the job pipe as a DFTU_T_SERIES value") {
+    static_assert(plugins::type_tag<dftu_series*>() == DFTU_T_SERIES,
                   "a dftu_series* handle tags as DFTU_T_SERIES");
-    static_assert(domains::plugins::type_tag<dftu_dataframe*>() == DFTU_T_TABLE,
+    static_assert(plugins::type_tag<dftu_dataframe*>() == DFTU_T_TABLE,
                   "a dftu_dataframe* handle tags as DFTU_T_TABLE");
     FoldFixture<CountSlice> fx(nullptr);
-    dftu_plugin_host& host = fx.host();
-
-    Runtime rt(1);
     dftu_series* out = nullptr;
-    dftu_utils_test::ok(
-        rt.submit(coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-                      ::dftu_task* d =
-                          dftracer::utils::plugins::detail::drive_coro<int>(
-                              &host,
-                              series_pipe(dftracer::utils::plugins::Host{&host},
-                                          &out));
-                      co_await *as_coro(d);
-                  }),
-                  "caller")
-            .wait());
-    rt.shutdown();
+    CHECK(drive_task(fx.host(), [&](plugins::Host h) {
+              return series_pipe(h, &out);
+          }) == DFTU_OK);
 
     REQUIRE(out != nullptr);
     REQUIRE(dftu_series_length(out) == 4);
@@ -796,66 +660,41 @@ TEST_CASE(
 TEST_CASE(
     "plugin ABI: DFTU_T_SERIES and DFTU_T_TABLE are distinct handle tags") {
     FoldFixture<CountSlice> fx(nullptr);
-    dftracer::utils::plugins::Host h{&fx.host()};
-    const dftu_svc_compose* c = compose_ext(h);
-    void* hh = h.raw()->h;
+    test_plugin_common::Ctx c;
+    plugins::Host h{&fx.host(), c.get()};
     // Both are 8-byte handle values; as opaque DFTU_T_BYTES they would have
     // piped. A distinct tag makes a column-out reject a table-in, and accept a
     // column-in. (Bodies never run; `then` only checks the type + size seam.)
-    ::dftu_op* col_out = c->make_op(hh, op_double, nullptr, nullptr, DFTU_T_I64,
-                                    8, DFTU_T_SERIES, 8);
-    ::dftu_op* tbl_in = c->make_op(hh, op_double, nullptr, nullptr,
-                                   DFTU_T_TABLE, 8, DFTU_T_I64, 8);
-    CHECK(c->then(hh, col_out, tbl_in) == nullptr);  // SERIES out != TABLE in
-    ::dftu_op* col_in = c->make_op(hh, op_double, nullptr, nullptr,
-                                   DFTU_T_SERIES, 8, DFTU_T_I64, 8);
-    CHECK(c->then(hh, col_out, col_in) != nullptr);  // SERIES out -> SERIES in
+    dftu_job *col_out = nullptr, *tbl_in = nullptr, *col_in = nullptr,
+             *piped = nullptr;
+    REQUIRE(make_raw_job(h, DFTU_T_I64, DFTU_T_SERIES, &col_out) == DFTU_OK);
+    REQUIRE(make_raw_job(h, DFTU_T_TABLE, DFTU_T_I64, &tbl_in) == DFTU_OK);
+    REQUIRE(make_raw_job(h, DFTU_T_SERIES, DFTU_T_I64, &col_in) == DFTU_OK);
+    CHECK(h.tasks().then(c.get(), h.raw()->h, col_out, tbl_in, &piped) ==
+          DFTU_E_INVALID);  // SERIES out != TABLE in
+    CHECK(h.tasks().then(c.get(), h.raw()->h, col_out, col_in, &piped) ==
+          DFTU_OK);         // SERIES out -> SERIES in
 }
 
-TEST_CASE("plugin ABI: compose dftu_op then rejects a type mismatch") {
+TEST_CASE("plugin ABI: job then rejects a type mismatch") {
     FoldFixture<CountSlice> fx(nullptr);
-    dftracer::utils::plugins::Host h{&fx.host()};
-    const dftu_svc_compose* c = compose_ext(h);
-    void* hh = h.raw()->h;
-    ::dftu_op* a = c->make_op(hh, op_double, nullptr, nullptr, DFTU_T_I64, 8,
-                              DFTU_T_I64, 8);
+    test_plugin_common::Ctx c;
+    plugins::Host h{&fx.host(), c.get()};
+    dftu_job *a = nullptr, *f = nullptr, *i = nullptr, *piped = nullptr;
+    REQUIRE(make_raw_job(h, DFTU_T_I64, DFTU_T_I64, &a) == DFTU_OK);
     // Same byte size (8) but a different type must not pipe.
-    ::dftu_op* f = c->make_op(hh, op_plus10, nullptr, nullptr, DFTU_T_F64, 8,
-                              DFTU_T_F64, 8);
-    CHECK(c->then(hh, a, f) == nullptr);
-    // Matching type pipes fine.
-    ::dftu_op* i = c->make_op(hh, op_plus10, nullptr, nullptr, DFTU_T_I64, 8,
-                              DFTU_T_I64, 8);
-    CHECK(c->then(hh, a, i) != nullptr);
-}
-
-TEST_CASE("plugin ABI: then chains a continuation after its task") {
-    FoldFixture<CountSlice> fx(nullptr);
-    dftu_plugin_host& host = fx.host();
-
-    Runtime rt(1);
-    dstd::Vector<int> order;
-    dftu_utils_test::ok(
-        rt.submit(coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-                      ::dftu_task* d =
-                          dftracer::utils::plugins::detail::drive_coro<int>(
-                              &host,
-                              chain(dftracer::utils::plugins::Host{&host},
-                                    &order));
-                      co_await *as_coro(d);
-                  }),
-                  "caller")
-            .wait());
-    rt.shutdown();
-    REQUIRE(order.size() == 2);
-    CHECK(order[0] == 1);
-    CHECK(order[1] == 2);
+    REQUIRE(make_raw_job(h, DFTU_T_F64, DFTU_T_F64, &f) == DFTU_OK);
+    REQUIRE(make_raw_job(h, DFTU_T_I64, DFTU_T_I64, &i) == DFTU_OK);
+    CHECK(h.tasks().then(c.get(), h.raw()->h, a, f, &piped) == DFTU_E_INVALID);
+    CHECK_FALSE(c.message().empty());
+    CHECK(h.tasks().then(c.get(), h.raw()->h, a, i, &piped) == DFTU_OK);
 }
 
 TEST_CASE("plugin ABI: host utility ops fnv1a and hex64_parse") {
     FoldFixture<CountSlice> fx(nullptr);
     dftu_plugin_host& host = fx.host();
-    dftracer::utils::plugins::Host h{&host};
+    test_plugin_common::Ctx c;
+    dftracer::utils::plugins::Host h{&host, c.get()};
 
     const char data[] = "POSIXabc0123456789abcdefnothexnothex1234";
     const std::int32_t offsets[] = {0, 5, 8, 24, 40};

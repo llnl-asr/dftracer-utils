@@ -12,33 +12,76 @@
 extern "C" {
 #endif
 
-dftu_task* dftu_test_compose_pipe(const dftu_plugin_host*, const int64_t*,
-                                  int64_t*, int*);
-dftu_task* dftu_test_compose_all(const dftu_plugin_host*, const int64_t*,
-                                 int64_t*, int*);
-int dftu_test_compose_typecheck(const dftu_plugin_host*);
-int dftu_test_query_match(const dftu_plugin_host*, const char*, uint32_t,
-                          const dftu_dataframe*, int64_t);
+/* Task service consumers; each builds jobs, starts one task and hands it back
+ * through the last argument. */
+dftu_status dftu_test_task_pipe(dftu_ctx*, const dftu_plugin_host*,
+                                const int64_t*, int64_t*, dftu_task**);
+dftu_status dftu_test_task_all(dftu_ctx*, const dftu_plugin_host*,
+                               const int64_t*, int64_t*, dftu_task**);
+dftu_status dftu_test_task_typecheck(dftu_ctx*, const dftu_plugin_host*,
+                                     dftu_status*);
+dftu_status dftu_test_task_all_error(dftu_ctx*, const dftu_plugin_host*,
+                                     const int64_t*, int64_t*, int*,
+                                     dftu_task**);
+dftu_status dftu_test_task_any_first(dftu_ctx*, const dftu_plugin_host*,
+                                     const int64_t*, int64_t*, int*,
+                                     dftu_task**);
+dftu_status dftu_test_task_any_deadline(dftu_ctx*, const dftu_plugin_host*,
+                                        int*, dftu_task**);
+dftu_status dftu_test_task_map(dftu_ctx*, const dftu_plugin_host*,
+                               const int64_t*, int64_t*, uint64_t, uint32_t,
+                               int64_t, int*, dftu_task**);
+int dftu_test_task_map_max_seen(void);
+
+typedef struct dftu_spawn_probe {
+    int64_t ran;
+    dftu_status fail_with; /* a negative status the function returns */
+} dftu_spawn_probe;
+dftu_status dftu_test_task_spawn(dftu_ctx*, const dftu_plugin_host*,
+                                 dftu_spawn_probe*, dftu_job_where,
+                                 dftu_task**);
+
+typedef struct dftu_drive_report {
+    int steps;
+    int propagate;   /* the last step returns the failed task's status */
+    dftu_status first_status;
+    dftu_status second_status;
+    int released;    /* times the host called the drive release */
+    int empty_round; /* the first step returns OK with nothing to wait for */
+} dftu_drive_report;
+dftu_status dftu_test_task_drive(dftu_ctx*, const dftu_plugin_host*,
+                                 dftu_drive_report*, dftu_task**);
+
+int dftu_test_query_match(dftu_ctx*, const dftu_plugin_host*, const char*,
+                          uint32_t, const dftu_dataframe*, int64_t);
 int dftu_test_query_null_is_safe(const dftu_plugin_host*, const dftu_dataframe*,
                                  int64_t);
 int dftu_test_sketch(const dftu_plugin_host*, double*, uint64_t*);
 int dftu_test_sketch_merge(const dftu_plugin_host*, uint64_t*);
-int dftu_test_ops_fnv1a(const dftu_plugin_host*, const char*, uint32_t,
-                        uint64_t*);
+int dftu_test_ops_fnv1a(dftu_ctx*, const dftu_plugin_host*, const char*,
+                        uint32_t, uint64_t*);
 int dftu_test_ops_find(const dftu_plugin_host*);
-int dftu_test_trace_roundtrip(const dftu_plugin_host*, const char*,
+int dftu_test_trace_roundtrip(dftu_ctx*, const dftu_plugin_host*, const char*,
                               const dftu_dataframe*, int*);
-dftu_task* dftu_test_io_open(const dftu_plugin_host*, const char*, int*);
-dftu_task* dftu_test_io_write(const dftu_plugin_host*, int, const void*,
-                              uint64_t, int64_t*);
-dftu_task* dftu_test_io_pread(const dftu_plugin_host*, int, void*, uint64_t,
-                              uint64_t, int64_t*);
-dftu_task* dftu_test_io_close(const dftu_plugin_host*, int, int*);
-dftu_writer* dftu_test_writer_create(const dftu_plugin_host*, const char*);
-dftu_task* dftu_test_writer_open(const dftu_plugin_host*, dftu_writer*);
-dftu_task* dftu_test_writer_chunk(const dftu_plugin_host*, dftu_writer*,
-                                  const void*, uint64_t);
-dftu_task* dftu_test_writer_close(const dftu_plugin_host*, dftu_writer*);
+dftu_status dftu_test_io_open(dftu_ctx*, const dftu_plugin_host*, const char*,
+                              int*, dftu_task**);
+dftu_status dftu_test_io_open_existing(dftu_ctx*, const dftu_plugin_host*,
+                                       const char*, int*, dftu_task**);
+dftu_status dftu_test_io_write(dftu_ctx*, const dftu_plugin_host*, int,
+                               const void*, uint64_t, int64_t*, dftu_task**);
+dftu_status dftu_test_io_pread(dftu_ctx*, const dftu_plugin_host*, int, void*,
+                               uint64_t, uint64_t, int64_t*, dftu_task**);
+dftu_status dftu_test_io_close(dftu_ctx*, const dftu_plugin_host*, int,
+                               dftu_task**);
+dftu_status dftu_test_writer_create(dftu_ctx*, const dftu_plugin_host*,
+                                    const char*, dftu_writer**);
+dftu_status dftu_test_writer_open(dftu_ctx*, const dftu_plugin_host*,
+                                  dftu_writer*, dftu_task**);
+dftu_status dftu_test_writer_chunk(dftu_ctx*, const dftu_plugin_host*,
+                                   dftu_writer*, const void*, uint64_t,
+                                   dftu_task**);
+dftu_status dftu_test_writer_close(dftu_ctx*, const dftu_plugin_host*,
+                                   dftu_writer*, dftu_task**);
 
 #ifdef __cplusplus
 }

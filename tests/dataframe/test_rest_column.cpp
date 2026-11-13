@@ -251,11 +251,15 @@ LazyFrame lookup_side() {
         dstd::make_shared<dataframe::InMemorySource>(std::move(side)));
 }
 
-void node_schema(void*, const dftu_schema*, const dftu_op_arg*, dftu_schema*) {}
+dftu_status node_schema(dftu_ctx*, void*, const dftu_schema*,
+                        const dftu_op_arg*, dftu_schema*) {
+    return DFTU_OK;
+}
 
-void* node_open(void*, void*, const dftu_cursor_vt*, const dftu_op_arg*,
-                std::uint64_t, void**, const dftu_cursor_vt**) {
-    return nullptr;
+dftu_status node_open(dftu_ctx* ctx, void*, void*, const dftu_cursor_vt*,
+                      const dftu_op_arg*, std::uint64_t, void**,
+                      const dftu_cursor_vt**) {
+    return dftu_fail(ctx, DFTU_E_INVALID, "node_open must not run");
 }
 
 }  // namespace
@@ -476,9 +480,13 @@ TEST_SUITE("rest column") {
 
     TEST_CASE("an op without a rule refuses the plan") {
         dftu_node_vt vt{};
+        vt.struct_size = sizeof(vt);
         vt.output_schema = node_schema;
         vt.open = node_open;
-        REQUIRE(dftu_node_register("test.rest.node", &vt, nullptr) == 0);
+        dftu_error err = DFTU_ERROR_INIT;
+        REQUIRE(dftu_node_register("test.rest.node", &vt, nullptr, &err) ==
+                DFTU_OK);
+        dftu_error_release(&err);
         const auto collected =
             dftracer::utils::default_runtime()
                 .submit(rest_scan()

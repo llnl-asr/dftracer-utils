@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_CORO_ABI_H
 #define DFTRACER_UTILS_CORO_ABI_H
 
+#include <dftracer/utils/common/abi.h>
 #include <dftracer/utils/common/export.h>
 #include <stdint.h>
 
@@ -28,17 +29,10 @@ DFTU_EXPORT dftu_runtime* dftu_runtime_new(int32_t threads, int32_t io_threads);
 DFTU_EXPORT void dftu_runtime_free(dftu_runtime* rt);
 
 /* Drive t to completion on rt, blocking the caller (pool-safe when reentrant).
-   A NULL rt runs on the default runtime, as elsewhere in this ABI. Consumes t.
-   0 on success, -1 if it threw or t is NULL. */
-int dftu_task_run(dftu_runtime* rt, dftu_task* t);
-
-/* Combine n tasks into one; consumes the inputs. NULL if n == 0. */
-dftu_task* dftu_task_when_all(dftu_task* const* ts, uint32_t n);
-/* Like when_all, but the combined task finishes with the first input to
-   finish. The other inputs are cancelled and awaited before it finishes, so
-   none runs after it; an input that cannot be cancelled runs to its end
-   first. */
-dftu_task* dftu_task_when_any(dftu_task* const* ts, uint32_t n);
+   A NULL rt runs on the default runtime, as elsewhere in this ABI. Consumes
+   t. Returns the task's status; on failure fills `err` (may be NULL). */
+DFTU_EXPORT dftu_status dftu_task_run(dftu_runtime* rt, dftu_task* t,
+                                      dftu_error* err);
 
 #ifdef __cplusplus
 }

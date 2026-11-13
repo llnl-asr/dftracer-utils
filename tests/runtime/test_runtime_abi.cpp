@@ -21,8 +21,8 @@ coro::CoroTask<void> set_flag(std::atomic<int>* n) {
 // access (ASan catches it), not just a pointer comparison.
 bool exercise(dftu_runtime* rt) {
     std::atomic<int> ran{0};
-    dftu_task* t = task_to_abi(set_flag(&ran));
-    return dftu_task_run(rt, t) == 0 && ran.load() == 1;
+    dftu_task* t = coro::task_to_abi(set_flag(&ran));
+    return dftu_task_run(rt, t, nullptr) == DFTU_OK && ran.load() == 1;
 }
 
 }  // namespace

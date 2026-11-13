@@ -13,9 +13,6 @@
 
 #include <cstdint>
 #include <cstring>
-#include <fstream>
-#include <iterator>
-#include <string>
 
 using namespace dftracer::utils;
 
@@ -36,17 +33,15 @@ dstd::String data_file_of(const char* dir) {
 void drop_footer(const char* dir) {
     const dstd::String path = data_file_of(dir);
     REQUIRE_FALSE(path.empty());
-    std::ifstream in(path.c_str(), std::ios::binary);
-    std::string bytes((std::istreambuf_iterator<char>(in)),
-                      std::istreambuf_iterator<char>());
-    namespace engine = store::engine;
-    REQUIRE(bytes.size() >= engine::FILE_TRAILER_BYTES);
-    const std::uint64_t footer =
-        dstd::read_u64_le(reinterpret_cast<const std::uint8_t*>(bytes.data()) +
-                          bytes.size() - engine::FILE_TRAILER_BYTES + 8U);
+    const dstd::String bytes = dftu_utils_test::read_text(path);
+    REQUIRE(bytes.size() >= store::engine::FILE_TRAILER_BYTES);
+    const std::uint64_t footer = dstd::read_u64_le(
+        reinterpret_cast<const std::uint8_t*>(bytes.data()) + bytes.size() -
+        store::engine::FILE_TRAILER_BYTES + 8U);
     REQUIRE(footer < bytes.size());
     REQUIRE(::truncate(path.c_str(), static_cast<off_t>(footer)) == 0);
-    ::unlink((dstd::String(dir) + "/" + dstd::String(engine::SUMMARY_FILE_NAME))
+    ::unlink((dstd::String(dir) + "/" +
+              dstd::String(store::engine::SUMMARY_FILE_NAME))
                  .c_str());
 }
 

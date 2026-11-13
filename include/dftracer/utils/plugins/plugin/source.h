@@ -7,6 +7,7 @@
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/plugins/plugin/types.h>
 
 #include <algorithm>
 #include <concepts>
@@ -41,8 +42,9 @@
  * const; dstd::Optional<Applied<S>> apply_join(const JoinView<S>&) const; The
  * apply_* contract is dftu_source_vt::apply's: dstd::nullopt for unsupported or
  * no change, a new S otherwise, projection / aggregation / join only as
- * Apply::Exact. A cursor error is a thrown std::exception; a throwing apply_*
- * reads as no change and a throwing scan() as a failed scan. */
+ * Apply::Exact. A cursor error is a thrown std::exception, which fails the
+ * call with its what() text as the message; so does a throwing apply_*,
+ * scan() or schema(). */
 
 namespace dftracer::utils::plugins {
 
@@ -302,41 +304,32 @@ struct SourceBox {
 template <class C>
 struct CursorBox {
     dstd::UniquePtr<C> cursor;
-    dstd::String error;
 };
 
 template <class C>
 struct CursorVt {
-    static dftu_task* next(void* self, std::int64_t max_rows,
-                           dftu_result_frame* out) {
+    static dftu_status next(dftu_ctx* ctx, void* self, std::int64_t max_rows,
+                            dftu_dataframe** out, dftu_task**) {
         auto* box = static_cast<CursorBox<C>*>(self);
-        try {
+        return guard(ctx, [&]() -> dftu_status {
             dstd::Optional<OwnedFrame> f = box->cursor->next(max_rows);
-            out->ok = 1;
-            out->u.value = f ? f->release() : nullptr;
-        } catch (const std::exception& e) {
-            box->error = e.what();
-            out->ok = 0;
-            out->u.err =
-                dftu_error{0, 0, DFTU_E_UNKNOWN, box->error.c_str(), nullptr};
-        } catch (...) {
-            box->error = "source cursor failed";
-            out->ok = 0;
-            out->u.err =
-                dftu_error{0, 0, DFTU_E_UNKNOWN, box->error.c_str(), nullptr};
-        }
-        return nullptr;
+            if (!f) {
+                *out = nullptr;
+                return DFTU_END;
+            }
+            *out = f->release();
+            return DFTU_OK;
+        });
     }
     static void destroy(void* self) { delete static_cast<CursorBox<C>*>(self); }
-    static dftu_task* narrow(void* self, const dftu_expr* predicate,
-                             std::int32_t* out_applied) {
+    static dftu_status narrow(dftu_ctx* ctx, void* self,
+                              const dftu_expr* predicate,
+                              std::int32_t* out_applied, dftu_task**) {
         auto* box = static_cast<CursorBox<C>*>(self);
-        try {
+        return guard(ctx, [&]() -> dftu_status {
             *out_applied = box->cursor->narrow(ExprView(predicate)) ? 1 : 0;
-        } catch (...) {
-            *out_applied = 0;
-        }
-        return nullptr;
+            return DFTU_OK;
+        });
     }
     static std::uint64_t bytes(void* self) {
         try {
@@ -355,6 +348,7 @@ struct CursorVt {
     static const dftu_cursor_vt* vt() {
         static const dftu_cursor_vt VT = [] {
             dftu_cursor_vt t{};
+            t.struct_size = sizeof(dftu_cursor_vt);
             t.next = next;
             t.destroy = destroy;
             if constexpr (requires(C& c) {
@@ -410,9 +404,11 @@ template <class S>
 struct SourceVt {
     using Box = SourceBox<S>;
 
-    static std::int32_t schema(void* self, const char* const** out_names) {
+    static dftu_status schema(dftu_ctx* ctx, void* self,
+                              const char* const** out_names,
+                              std::int32_t* out_count) {
         auto* box = static_cast<Box*>(self);
-        try {
+        return guard(ctx, [&]() -> dftu_status {
             if (!box->named) {
                 box->names = box->source->names();
                 box->name_ptrs.clear();
@@ -420,18 +416,18 @@ struct SourceVt {
                     box->name_ptrs.push_back(n.c_str());
                 box->named = true;
             }
-        } catch (...) {
-            return -1;
-        }
-        *out_names = box->name_ptrs.data();
-        return static_cast<std::int32_t>(box->name_ptrs.size());
+            *out_names = box->name_ptrs.data();
+            *out_count = static_cast<std::int32_t>(box->name_ptrs.size());
+            return DFTU_OK;
+        });
     }
 
-    static void* scan(void* self, const dftu_scan_request* req,
-                      std::int32_t* out_pushed, void** out_cursor_self,
-                      const dftu_cursor_vt** out_vt) {
+    static dftu_status scan(dftu_ctx* ctx, void* self,
+                            const dftu_scan_request* req,
+                            std::int32_t* out_pushed, void** out_cursor_self,
+                            const dftu_cursor_vt** out_vt) {
         auto* box = static_cast<Box*>(self);
-        try {
+        return guard(ctx, [&]() -> dftu_status {
             ScanView view;
             view.projection = string_views(req->projection, req->n_projection);
             for (std::int32_t i = 0; i < req->n_filters; ++i)
@@ -440,32 +436,32 @@ struct SourceVt {
             view.memory_budget = req->memory_budget;
             auto result = box->source->scan(view);
             using C = typename decltype(result.cursor)::element_type;
-            if (!result.cursor) return nullptr;
+            if (!result.cursor)
+                return dftu_fail(ctx, DFTU_E_INTERNAL,
+                                 "scan returned no cursor");
             const std::size_t n =
                 std::min<std::size_t>(result.filters.size(),
                                       static_cast<std::size_t>(req->n_filters));
             for (std::size_t i = 0; i < n; ++i)
                 out_pushed[i] = static_cast<std::int32_t>(result.filters[i]);
-            auto* cbox = new CursorBox<C>{std::move(result.cursor), {}};
+            auto* cbox = new CursorBox<C>{std::move(result.cursor)};
             *out_cursor_self = cbox;
             *out_vt = CursorVt<C>::vt();
-            return cbox;
-        } catch (...) {
-            return nullptr;
-        }
+            return DFTU_OK;
+        });
     }
 
     static void destroy(void* self) { delete static_cast<Box*>(self); }
 
-    static void schema_types(void* self, dftu_schema* out)
+    static dftu_status schema_types(dftu_ctx* ctx, void* self, dftu_schema* out)
         requires HasSchema<S>
     {
         auto* box = static_cast<Box*>(self);
-        try {
+        return guard(ctx, [&]() -> dftu_status {
             SchemaBuilder b(out);
             box->source->schema(b);
-        } catch (...) {
-        }
+            return DFTU_OK;
+        });
     }
 
     static dstd::Optional<Applied<S>> dispatch(const S& s,
@@ -555,25 +551,26 @@ struct SourceVt {
         return v;
     }
 
-    static void apply(void* self, const dftu_apply_request* req,
-                      dftu_apply_result* out) {
+    static dftu_status apply(dftu_ctx* ctx, void* self,
+                             const dftu_apply_request* req,
+                             dftu_apply_result* out) {
         auto* box = static_cast<Box*>(self);
-        try {
+        return guard(ctx, [&]() -> dftu_status {
             dstd::Optional<Applied<S>> r = dispatch(*box->source, *req);
-            if (!r || !r->source) return;
+            if (!r || !r->source) return DFTU_OK;
             auto* next = new Box{std::move(r->source), {}, {}, false};
             out->status = r->status == Apply::Exact ? DFTU_APPLY_EXACT
                                                     : DFTU_APPLY_INEXACT;
             out->self = next;
             out->vt = vt();
-        } catch (...) {
-            out->status = DFTU_APPLY_NO_CHANGE;
-        }
+            return DFTU_OK;
+        });
     }
 
     static const dftu_source_vt* vt() {
         static const dftu_source_vt VT = [] {
             dftu_source_vt t{};
+            t.struct_size = sizeof(dftu_source_vt);
             t.schema = schema;
             t.scan = scan;
             t.destroy = destroy;

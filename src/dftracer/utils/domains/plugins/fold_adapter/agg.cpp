@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/agg_expr.h>
@@ -6,6 +7,7 @@
 #include <dftracer/utils/domains/plugins/fold_adapter.h>
 #include <dftracer/utils/domains/plugins/fold_adapter/ext.h>
 #include <dftracer/utils/domains/plugins/reserved_names.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/hash/fnv1a.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
@@ -18,43 +20,57 @@
 namespace dftracer::utils::domains::plugins {
 namespace {
 
-::dftu_agg* host_agg_new(void* h, const char* name,
+dftu_status host_agg_new(::dftu_ctx* ctx, void* h, const char* name,
                          const char* const* key_names, std::uint32_t key_n,
-                         const ::dftu_agg_col* specs, std::uint32_t spec_n) {
-    return static_cast<PluginFold*>(h)->agg_new(name, key_names, key_n, specs,
-                                                spec_n);
+                         const ::dftu_agg_col* specs, std::uint32_t spec_n,
+                         ::dftu_agg** out) {
+    if (!out) return host_fail(ctx, DFTU_E_INVALID, "agg_new: out is NULL");
+    auto made = static_cast<PluginFold*>(h)->agg_new(name, key_names, key_n,
+                                                     specs, spec_n);
+    if (!made) return host_fail(ctx, made.error());
+    *out = *made;
+    return DFTU_OK;
 }
 
-void host_agg_accumulate(void* h, ::dftu_agg* a, const ::dftu_dataframe* df) {
-    static_cast<PluginFold*>(h)->agg_accumulate(a, df);
+dftu_status host_agg_accumulate(::dftu_ctx* ctx, void* h, ::dftu_agg* a,
+                                const ::dftu_dataframe* df) {
+    auto accumulated = static_cast<PluginFold*>(h)->agg_accumulate(a, df);
+    if (!accumulated) return host_fail(ctx, accumulated.error());
+    return DFTU_OK;
 }
 
-::dftu_dataframe* host_agg_result(void* h, const char* name) {
-    return static_cast<PluginFold*>(h)->agg_result(name);
+dftu_status host_agg_result(::dftu_ctx* ctx, void* h, const char* name,
+                            ::dftu_dataframe** out) {
+    if (!out) return host_fail(ctx, DFTU_E_INVALID, "agg_result: out is NULL");
+    auto found = static_cast<PluginFold*>(h)->agg_result(name);
+    if (!found) return host_fail(ctx, found.error());
+    *out = *found;
+    return DFTU_OK;
 }
 
 // Registration is a build-phase call: by the time a fold runs, the registry
 // the host builds its slices from is already settled.
-int host_register_state(void* h, const ::dftu_state_desc* desc, void*) {
-    DFTRACER_UTILS_LOG_ERROR(
-        "[plugin:{}] register_state('{}') refused: a state type is registered "
-        "from the factory, not during the scan",
-        static_cast<PluginFold*>(h)->plugin_name(),
-        desc && desc->name ? desc->name : "(null)");
-    return -1;
+dftu_status host_register_state(::dftu_ctx* ctx, void*,
+                                const ::dftu_state_desc* desc, void*) {
+    return host_fail(
+        ctx, DFTU_E_UNSUPPORTED,
+        dstd::fmt<"register_state('{}') refused: a state type is registered "
+                  "from the factory, not during the scan">(
+            dstd::StringView(desc && desc->name ? desc->name : "(null)")));
 }
 
-const dftu_svc_agg g_agg = {host_agg_new, host_agg_accumulate, host_agg_result,
+const dftu_svc_agg g_agg = {sizeof(dftu_svc_agg), host_agg_new,
+                            host_agg_accumulate, host_agg_result,
                             host_register_state};
 
 // Finalize `acc` and move its columns into a dftu_dataframe handle (the
 // engine's own ABI boundary type) so the result crosses as our DataFrame, no
 // Arrow round-trip. agg_finalize reads the state, so this may run more than
-// once for the same accumulator. Null if it has no state or finalize fails.
-::dftu_dataframe* finalize_to_frame(const AggAccum& acc) {
+// once for the same accumulator. Null if it has no state.
+dstd::Result<::dftu_dataframe*> finalize_to_frame(const AggAccum& acc) {
     if (!acc.state) return nullptr;
     auto drained = acc.spiller.drain(*acc.state, acc.key_names);
-    if (!drained) return nullptr;
+    if (!drained) return drained.error();
     dataframe::DataFrame& out = *drained;
     dstd::Vector<dftu_series*> handles;
     handles.reserve(out.columns.size());
@@ -70,17 +86,22 @@ const dftu_svc_agg g_agg = {host_agg_new, host_agg_accumulate, host_agg_result,
 
 const void* detail::agg_ext_vtable() { return &g_agg; }
 
-::dftu_agg* PluginFold::agg_new(const char* name, const char* const* key_names,
-                                std::uint32_t key_n,
-                                const ::dftu_agg_col* specs,
-                                std::uint32_t spec_n) {
-    if (!name || (key_n && !key_names) || spec_n == 0 || !specs) return nullptr;
+dstd::Result<::dftu_agg*> PluginFold::agg_new(const char* name,
+                                              const char* const* key_names,
+                                              std::uint32_t key_n,
+                                              const ::dftu_agg_col* specs,
+                                              std::uint32_t spec_n) {
+    if (!name || (key_n && !key_names) || spec_n == 0 || !specs) {
+        return common::make_error<
+            "plugin '{}' agg_new: a name, at least one aggregate and the key "
+            "names are required">(common::ErrorCode::InvalidArgument,
+                                  plugin_label());
+    }
     if (is_host_namespace(name)) {
-        DFTRACER_UTILS_LOG_ERROR(
-            "Plugin agg '{}' refused: the 'dftu.' namespace belongs to the "
-            "host",
-            name);
-        return nullptr;
+        return common::make_error<
+            "plugin '{}' agg '{}' refused: the 'dftu.' namespace belongs to "
+            "the host">(common::ErrorCode::InvalidArgument, plugin_label(),
+                        name);
     }
     std::uint64_t key = dftracer::utils::dstd::hash::fnv1a_hash(name);
     if (dstd::UniquePtr<AggAccum>* slot = aggs_.find(key))
@@ -99,16 +120,16 @@ const void* detail::agg_ext_vtable() { return &g_agg; }
     aspecs.reserve(spec_n);
     for (std::uint32_t i = 0; i < spec_n; ++i) {
         if (specs[i].op < DFTU_AGG_COUNT || specs[i].op > DFTU_AGG_REGR_R2) {
-            DFTRACER_UTILS_LOG_ERROR(
-                "Plugin agg '{}' aggregate {} has an out-of-range op code {}",
-                name, i, specs[i].op);
-            return nullptr;
+            return common::make_error<
+                "plugin '{}' agg '{}' aggregate {} has an out-of-range op "
+                "code {}">(common::ErrorCode::InvalidArgument, plugin_label(),
+                           name, i, specs[i].op);
         }
         if (!specs[i].out || !specs[i].out[0]) {
-            DFTRACER_UTILS_LOG_ERROR(
-                "Plugin agg '{}' aggregate {} is missing an output name", name,
-                i);
-            return nullptr;
+            return common::make_error<
+                "plugin '{}' agg '{}' aggregate {} is missing an output "
+                "name">(common::ErrorCode::InvalidArgument, plugin_label(),
+                        name, i);
         }
         dataframe::AggSpec s;
         s.op = static_cast<dataframe::AggOp>(specs[i].op);
@@ -133,10 +154,15 @@ const void* detail::agg_ext_vtable() { return &g_agg; }
     return reinterpret_cast<::dftu_agg*>(slot->get());
 }
 
-void PluginFold::agg_accumulate(::dftu_agg* a, const ::dftu_dataframe* df) {
-    if (!a || !df) return;
+dstd::Result<void> PluginFold::agg_accumulate(::dftu_agg* a,
+                                              const ::dftu_dataframe* df) {
+    if (!a || !df) {
+        return common::make_error<
+            "plugin '{}' agg_accumulate: the accumulator and the frame are "
+            "required">(common::ErrorCode::InvalidArgument, plugin_label());
+    }
     AggAccum& acc = *reinterpret_cast<AggAccum*>(a);
-    if (!acc.state) return;
+    if (!acc.state) return {};
 
     // Series wraps and frees each shared handle; a missing column yields a null
     // handle, so skip the whole batch rather than accumulate a partial key.
@@ -153,14 +179,14 @@ void PluginFold::agg_accumulate(::dftu_agg* a, const ::dftu_dataframe* df) {
     keys.reserve(acc.key_names.size());
     for (const dstd::String& n : acc.key_names) {
         const dataframe::Series* c = column(n);
-        if (!c) return;
+        if (!c) return {};
         keys.push_back(c);
     }
     dstd::Vector<const dataframe::Series*> values;
     values.reserve(acc.value_names.size());
     for (const dstd::String& n : acc.value_names) {
         const dataframe::Series* c = column(n);
-        if (!c) return;
+        if (!c) return {};
         values.push_back(c);
     }
 
@@ -169,25 +195,35 @@ void PluginFold::agg_accumulate(::dftu_agg* a, const ::dftu_dataframe* df) {
     const auto accumulated = dataframe::agg_accumulate(
         *acc.state, keys, values, 0, dftu_dataframe_num_rows(df));
     if (!accumulated) {
-        DFTRACER_UTILS_LOG_ERROR("Plugin agg '{}' accumulate failed", acc.name);
-        return;
+        return dstd::Error::from_format<"plugin '{}' agg '{}' accumulate: {}">(
+            accumulated.error().condition(), plugin_label(), acc.name,
+            accumulated.error().message());
     }
     const auto spilled = acc.spiller.maybe_spill(acc.state);
-    if (!spilled.has_value())
-        DFTRACER_UTILS_LOG_ERROR("Plugin agg '{}' spill failed: {}", acc.name,
-                                 spilled.error().c_str());
+    if (!spilled.has_value()) {
+        return dstd::Error::from_format<"plugin '{}' agg '{}' spill: {}">(
+            spilled.error().condition(), plugin_label(), acc.name,
+            spilled.error().message());
+    }
+    return {};
 }
 
 // Cross-plugin reads see only what a plugin that already finalized published.
 // The fold order puts every provider before its consumers, so a declared name
 // is always there; an undeclared one reads back null rather than this fold's
 // own partial state.
-::dftu_dataframe* PluginFold::agg_result(const char* name) const {
+dstd::Result<::dftu_dataframe*> PluginFold::agg_result(const char* name) const {
     if (!name || !results_) return nullptr;
     auto it =
         results_->aggs.find(dftracer::utils::dstd::hash::fnv1a_hash(name));
     if (it == results_->aggs.end() || !it->second) return nullptr;
-    return finalize_to_frame(*it->second);
+    auto frame = finalize_to_frame(*it->second);
+    if (!frame) {
+        return dstd::Error::from_format<"plugin '{}' agg_result '{}': {}">(
+            frame.error().condition(), plugin_label(), name,
+            frame.error().message());
+    }
+    return *frame;
 }
 
 std::size_t PluginFold::agg_spill_runs(const char* name) const {
@@ -219,13 +255,21 @@ void PluginFold::publish_aggs() {
     }
 }
 
-void PluginFold::materialize_aggs() {
-    if (!named_results_) return;
+dstd::Result<void> PluginFold::materialize_aggs() {
+    if (!named_results_) return {};
     for (dstd::UniquePtr<AggAccum>& acc : aggs_) {
         if (!acc) continue;
-        if (::dftu_dataframe* h = finalize_to_frame(*acc))
-            named_results_->emit_frame(acc->name.c_str(), h);
+        auto frame = finalize_to_frame(*acc);
+        if (!frame) {
+            return dstd::Error::from_format<
+                "plugin '{}' agg '{}' finalize: {}">(frame.error().condition(),
+                                                     plugin_label(), acc->name,
+                                                     frame.error().message());
+        }
+        if (*frame != nullptr)
+            named_results_->emit_frame(acc->name.c_str(), *frame);
     }
+    return {};
 }
 
 }  // namespace dftracer::utils::domains::plugins

@@ -49,46 +49,48 @@ trace::views::detail::FoldEvent evt(dstd::StringIntern& intern, const char* cat,
 // keyed by "cat" with sum(dur), p50(dur) and set_union(name), and folds each
 // batch's columns into it. The host merges and finalizes it to a native
 // dataframe named "by_cat".
-::dftu_task* agg_on_batch(void*, const dftu_dataframe* df,
-                          const dftu_plugin_host* host) {
+dftu_status agg_on_batch(dftu_ctx* ctx, void*, const dftu_dataframe* df,
+                         const dftu_plugin_host* host) {
     const auto* agg = static_cast<const dftu_svc_agg*>(
         host->get_service(host->h, DFTU_SVC_AGG));
-    if (!agg) return nullptr;
+    if (!agg) return DFTU_OK;
     const dftu_agg_col specs[] = {
         {DFTU_AGG_SUM, "dur", "sum_dur", 0.0, nullptr},
         {DFTU_AGG_PCT, "dur", "p50_dur", 0.5, nullptr},
         {DFTU_AGG_SET_UNION, "name", "names", 0.0, nullptr},
     };
     const char* keys[] = {"cat"};
-    dftu_agg* a = agg->agg_new(host->h, "by_cat", keys, 1, specs, 3);
-    if (a) agg->agg_accumulate(host->h, a, df);
-    return nullptr;
+    dftu_agg* a = nullptr;
+    const dftu_status st =
+        agg->agg_new(ctx, host->h, "by_cat", keys, 1, specs, 3, &a);
+    if (st < 0) return st;
+    return agg->agg_accumulate(ctx, host->h, a, df);
 }
 
 // Same accumulator, built through the agg:: factories + Host::agg instead of
 // raw dftu_agg_col structs, proving each factory produces the same wire spec.
-::dftu_task* agg_factory_on_batch(void*, const dftu_dataframe* df,
-                                  const dftu_plugin_host* host) {
-    plugins::Host h(host);
+dftu_status agg_factory_on_batch(dftu_ctx* ctx, void*, const dftu_dataframe* df,
+                                 const dftu_plugin_host* host) {
+    plugins::Host h(host, ctx);
     const auto acc = h.agg("by_cat_factory", {"cat"},
                            {plugins::agg::mean("dur", "mean_dur"),
                             plugins::agg::pct("dur", "p50_dur", 0.5)});
     if (acc) acc.accumulate(df);
-    return nullptr;
+    return DFTU_OK;
 }
 
 dftu_plugin make_agg_factory_plugin() {
     dftu_plugin p{};
-    p.abi_version = DFTRACER_UTILS_PLUGIN_ABI_VERSION;
+    p.struct_size = sizeof(p);
     p.plan_duql = [](void*) -> const char* { return nullptr; };
-    p.make_slice = [](void*) -> void* {
+    p.make_slice = [](dftu_ctx*, void*, void** out) -> dftu_status {
         static int sentinel;
-        return &sentinel;
+        *out = &sentinel;
+        return DFTU_OK;
     };
-    p.merge = [](void*, void*) {};
-    p.on_finalize = [](void*, const dftu_plugin_host*) -> ::dftu_task* {
-        return nullptr;
-    };
+    p.merge = [](dftu_ctx*, void*, void*) -> dftu_status { return DFTU_OK; };
+    p.on_finalize = [](dftu_ctx*, void*, const dftu_plugin_host*,
+                       dftu_task**) -> dftu_status { return DFTU_OK; };
     p.destroy_slice = [](void*) {};
     p.destroy = [](void*) {};
     p.on_batch = agg_factory_on_batch;
@@ -97,19 +99,19 @@ dftu_plugin make_agg_factory_plugin() {
 
 dftu_plugin make_agg_plugin() {
     dftu_plugin p{};
-    p.abi_version = DFTRACER_UTILS_PLUGIN_ABI_VERSION;
+    p.struct_size = sizeof(p);
     p.plan_duql = [](void*) -> const char* { return nullptr; };
     // This plugin holds no per-slice state (the accumulator lives in the host's
     // PluginFold), so a non-null sentinel is all PluginFold::step needs - no
     // per-slice allocation.
-    p.make_slice = [](void*) -> void* {
+    p.make_slice = [](dftu_ctx*, void*, void** out) -> dftu_status {
         static int sentinel;
-        return &sentinel;
+        *out = &sentinel;
+        return DFTU_OK;
     };
-    p.merge = [](void*, void*) {};
-    p.on_finalize = [](void*, const dftu_plugin_host*) -> ::dftu_task* {
-        return nullptr;
-    };
+    p.merge = [](dftu_ctx*, void*, void*) -> dftu_status { return DFTU_OK; };
+    p.on_finalize = [](dftu_ctx*, void*, const dftu_plugin_host*,
+                       dftu_task**) -> dftu_status { return DFTU_OK; };
     p.destroy_slice = [](void*) {};
     p.destroy = [](void*) {};
     p.on_batch = agg_on_batch;
@@ -120,7 +122,9 @@ void finalize_now(domains::plugins::PluginFold& f) {
     Runtime rt(1);
     dftu_utils_test::ok(
         rt.submit(coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-                      co_await f.finalize(trace::views::detail::CoverageSet{});
+                      auto finalized = co_await f.finalize(
+                          trace::views::detail::CoverageSet{});
+                      CHECK(finalized.has_value());
                   }),
                   "fin")
             .wait());
@@ -252,23 +256,29 @@ dstd::Vector<dstd::Vector<trace::views::detail::FoldEvent>> sample_slices(
     };
 }
 
-::dftu_task* no_finalize(void*, const dftu_plugin_host*) { return nullptr; }
-::dftu_task* no_columns(void*, const dftu_dataframe*, const dftu_plugin_host*) {
-    return nullptr;
+dftu_status no_finalize(dftu_ctx*, void*, const dftu_plugin_host*,
+                        dftu_task**) {
+    return DFTU_OK;
+}
+dftu_status no_columns(dftu_ctx*, void*, const dftu_dataframe*,
+                       const dftu_plugin_host*) {
+    return DFTU_OK;
 }
 
 dftu_plugin make_columns_plugin(
-    ::dftu_task* (*on_columns)(void*, const dftu_dataframe*,
-                               const dftu_plugin_host*),
-    ::dftu_task* (*on_final)(void*, const dftu_plugin_host*) = no_finalize) {
+    dftu_status (*on_columns)(dftu_ctx*, void*, const dftu_dataframe*,
+                              const dftu_plugin_host*),
+    dftu_status (*on_final)(dftu_ctx*, void*, const dftu_plugin_host*,
+                            dftu_task**) = no_finalize) {
     dftu_plugin p{};
-    p.abi_version = DFTRACER_UTILS_PLUGIN_ABI_VERSION;
+    p.struct_size = sizeof(p);
     p.plan_duql = [](void*) -> const char* { return nullptr; };
-    p.make_slice = [](void*) -> void* {
+    p.make_slice = [](dftu_ctx*, void*, void** out) -> dftu_status {
         static int sentinel;
-        return &sentinel;
+        *out = &sentinel;
+        return DFTU_OK;
     };
-    p.merge = [](void*, void*) {};
+    p.merge = [](dftu_ctx*, void*, void*) -> dftu_status { return DFTU_OK; };
     p.on_finalize = on_final;
     p.destroy_slice = [](void*) {};
     p.destroy = [](void*) {};
@@ -290,9 +300,9 @@ void run_slices(
 }
 
 // A keyed accumulator with two key columns and six aggregates.
-::dftu_task* multi_key_columns(void*, const dftu_dataframe* df,
-                               const dftu_plugin_host* host) {
-    plugins::Host h(host);
+dftu_status multi_key_columns(dftu_ctx* ctx, void*, const dftu_dataframe* df,
+                              const dftu_plugin_host* host) {
+    plugins::Host h(host, ctx);
     const auto acc =
         h.agg("by_cat_pid", {"cat", "pid"},
               {plugins::agg::count("n"), plugins::agg::sum("dur", "sum_dur"),
@@ -301,30 +311,30 @@ void run_slices(
                plugins::agg::mean("dur", "mean_dur"),
                plugins::agg::count_valid("dur", "n_dur")});
     if (acc) acc.accumulate(df);
-    return nullptr;
+    return DFTU_OK;
 }
 
 // Zero key columns: the scalar-handle case, one whole-scan row.
-::dftu_task* scalar_columns(void*, const dftu_dataframe* df,
-                            const dftu_plugin_host* host) {
-    plugins::Host h(host);
+dftu_status scalar_columns(dftu_ctx* ctx, void*, const dftu_dataframe* df,
+                           const dftu_plugin_host* host) {
+    plugins::Host h(host, ctx);
     const auto acc =
         h.agg("whole_scan", {},
               {plugins::agg::count("n"), plugins::agg::sum("dur", "sum_dur"),
                plugins::agg::min("dur", "min_dur"),
                plugins::agg::max("dur", "max_dur")});
     if (acc) acc.accumulate(df);
-    return nullptr;
+    return DFTU_OK;
 }
 
 // Every op appended after DFTU_AGG_COUNT_VALID, built as raw dftu_agg_col
 // structs so the test binds the DFTU_AGG_* codes themselves. The two ARGMIN
 // specs share the `dur` ordering column, so they must resolve to one row.
-::dftu_task* appended_ops_columns(void*, const dftu_dataframe* df,
-                                  const dftu_plugin_host* host) {
+dftu_status appended_ops_columns(dftu_ctx* ctx, void*, const dftu_dataframe* df,
+                                 const dftu_plugin_host* host) {
     const auto* ext = static_cast<const dftu_svc_agg*>(
         host->get_service(host->h, DFTU_SVC_AGG));
-    if (!ext) return nullptr;
+    if (!ext) return DFTU_OK;
     const dftu_agg_col specs[] = {
         {DFTU_AGG_ARGMIN, "name", "name_at_min", 0.0, "dur"},
         {DFTU_AGG_ARGMIN, "tid", "tid_at_min", 0.0, "dur"},
@@ -343,11 +353,12 @@ void run_slices(
         {DFTU_AGG_REGR_R2, "dur", "r2", 0.0, "ts"},
     };
     const char* keys[] = {"cat"};
-    dftu_agg* a = ext->agg_new(
-        host->h, "appended_ops", keys, 1, specs,
-        static_cast<std::uint32_t>(sizeof(specs) / sizeof(specs[0])));
-    if (a) ext->agg_accumulate(host->h, a, df);
-    return nullptr;
+    dftu_agg* a = nullptr;
+    const dftu_status st = ext->agg_new(
+        ctx, host->h, "appended_ops", keys, 1, specs,
+        static_cast<std::uint32_t>(sizeof(specs) / sizeof(specs[0])), &a);
+    if (st < 0) return st;
+    return ext->agg_accumulate(ctx, host->h, a, df);
 }
 
 // What the consumer plugin below saw when it read the producer's accumulator.
@@ -355,8 +366,9 @@ std::int64_t g_seen_rows = -1;
 double g_seen_sum = -1.0;
 bool g_unknown_is_null = false;
 
-::dftu_task* read_other_agg(void*, const dftu_plugin_host* host) {
-    plugins::Host h(host);
+dftu_status read_other_agg(dftu_ctx* ctx, void*, const dftu_plugin_host* host,
+                           dftu_task**) {
+    plugins::Host h(host, ctx);
     const plugins::OwnedDataFrame other = h.agg_result("whole_scan");
     if (other.handle) {
         g_seen_rows = dftu_dataframe_num_rows(other.handle);
@@ -366,7 +378,7 @@ bool g_unknown_is_null = false;
         }
     }
     g_unknown_is_null = h.agg_result("no_such_accumulator").handle == nullptr;
-    return nullptr;
+    return DFTU_OK;
 }
 
 }  // namespace

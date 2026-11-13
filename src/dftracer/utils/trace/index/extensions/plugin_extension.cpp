@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/coro/abi_context.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/shutdown.h>
@@ -43,8 +45,8 @@ struct Out {
     bool over = false;
 };
 
-void append_out(void* ctx, const void* data, std::uint64_t len) {
-    auto& out = *static_cast<Out*>(ctx);
+void append_out(void* self, const void* data, std::uint64_t len) {
+    auto& out = *static_cast<Out*>(self);
     if (out.over || !data) return;
     if (len > out.cap - out.bytes.size()) {
         out.over = true;
@@ -59,26 +61,32 @@ std::uint64_t PluginExtension::max_payload() const {
     return vt.max_payload ? vt.max_payload : DEFAULT_MAX_PAYLOAD;
 }
 
-bool register_plugin_extension(dstd::StringView name,
-                               const ::dftu_index_extension* vt, void* self) {
-    if (!vt || !vt->make_builder || !vt->step || !vt->finish_granule ||
+dstd::Result<void> register_plugin_extension(dstd::StringView name,
+                                             const ::dftu_index_extension* vt,
+                                             void* self) {
+    if (!vt || vt->struct_size != sizeof(::dftu_index_extension)) {
+        return common::make_error<
+            "index extension '{}' refused: its struct_size is not "
+            "sizeof(dftu_index_extension)">(common::ErrorCode::InvalidArgument,
+                                            name);
+    }
+    if (!vt->make_builder || !vt->step || !vt->finish_granule ||
         !vt->destroy_builder || !vt->compile || !vt->may_match ||
         !vt->release) {
-        DFTRACER_UTILS_LOG_ERROR(
-            "Index extension '{}' refused: a required callback is NULL", name);
-        return false;
+        return common::make_error<
+            "index extension '{}' refused: a required callback is NULL">(
+            common::ErrorCode::InvalidArgument, name);
     }
     auto ext = dstd::make_shared<PluginExtension>(
         PluginExtension{dstd::String(name), *vt, self});
     auto& r = registry();
     std::unique_lock lock(r.mutex);
     if (!r.by_name.emplace(ext->name, std::move(ext)).second) {
-        DFTRACER_UTILS_LOG_ERROR(
-            "Index extension '{}' refused: that name is already registered",
-            name);
-        return false;
+        return common::make_error<
+            "index extension '{}' refused: that name is already registered">(
+            common::ErrorCode::InvalidArgument, name);
     }
-    return true;
+    return {};
 }
 
 void unregister_plugin_extension(dstd::StringView name) {
@@ -107,12 +115,17 @@ PluginExtensionPtr find_plugin_extension(dstd::StringView name) {
 PluginBuilders::PluginBuilders(dstd::Vector<PluginExtensionPtr> extensions) {
     built_.reserve(extensions.size());
     for (auto& ext : extensions) {
-        void* b = ext->vt.make_builder(ext->self);
-        if (!b)
+        coro::AbiContext ctx;
+        void* b = nullptr;
+        const dftu_status status =
+            ext->vt.make_builder(ctx.get(), ext->self, &b);
+        if (status < 0 || !b) {
             DFTRACER_UTILS_LOG_WARN(
-                "Index extension '{}' built nothing: make_builder failed",
-                ext->name);
-        built_.push_back({std::move(ext), b, false, {}, {}});
+                "Index extension '{}' built nothing: make_builder failed: {}",
+                ext->name, ctx.message());
+            b = nullptr;
+        }
+        built_.push_back({std::move(ext), b, false, false, false, {}, {}});
     }
 }
 
@@ -121,14 +134,28 @@ PluginBuilders::~PluginBuilders() {
         if (b.builder) b.ext->vt.destroy_builder(b.builder);
 }
 
+void PluginBuilders::report(Built& built, const char* callback,
+                            dftu_status status, dstd::StringView message) {
+    if (built.reported) return;
+    built.reported = true;
+    DFTRACER_UTILS_LOG_WARN(
+        "Index extension '{}' {} failed with status {}: {}; nothing is "
+        "stored for that chunk or file",
+        built.ext->name, callback, status,
+        message.empty() ? dstd::StringView("no message") : message);
+}
+
 void PluginBuilders::end_granule() {
     if (!granule_) return;
     for (auto& b : built_) {
         if (!b.builder) continue;
         Out out{{}, b.ext->max_payload(), false};
-        const ::dftu_index_out sink{&out, append_out};
-        const int rc = b.ext->vt.finish_granule(b.builder, *granule_, &sink);
-        if (rc == 0 && !b.chunk_failed && !out.over && !out.bytes.empty())
+        const ::dftu_index_out sink{sizeof(::dftu_index_out), &out, append_out};
+        coro::AbiContext ctx;
+        const dftu_status status =
+            b.ext->vt.finish_granule(ctx.get(), b.builder, *granule_, &sink);
+        if (status < 0) report(b, "finish_granule", status, ctx.message());
+        if (status >= 0 && !b.chunk_failed && !out.over && !out.bytes.empty())
             b.granules.emplace_back(*granule_, std::move(out.bytes));
         b.chunk_failed = false;
     }
@@ -143,20 +170,30 @@ void PluginBuilders::step(std::uint64_t granule,
     lines_.reserve(lines.size());
     for (dstd::StringView l : lines)
         lines_.push_back({l.data(), l.size(), nullptr, nullptr});
-    for (auto& b : built_)
-        if (b.builder && !b.chunk_failed &&
-            b.ext->vt.step(b.builder, lines_.data(), lines_.size()) != 0)
+    for (auto& b : built_) {
+        if (!b.builder || b.chunk_failed) continue;
+        coro::AbiContext ctx;
+        const dftu_status status =
+            b.ext->vt.step(ctx.get(), b.builder, lines_.data(), lines_.size());
+        if (status < 0) {
             b.chunk_failed = true;
+            b.step_failed = true;
+            report(b, "step", status, ctx.message());
+        }
+    }
 }
 
 void PluginBuilders::finish() {
     end_granule();
     for (auto& b : built_) {
-        if (!b.builder || !b.ext->vt.finish_file) continue;
+        if (!b.builder || !b.ext->vt.finish_file || b.step_failed) continue;
         Out out{{}, b.ext->max_payload(), false};
-        const ::dftu_index_out sink{&out, append_out};
-        if (b.ext->vt.finish_file(b.builder, &sink) == 0 && !out.over &&
-            !out.bytes.empty())
+        const ::dftu_index_out sink{sizeof(::dftu_index_out), &out, append_out};
+        coro::AbiContext ctx;
+        const dftu_status status =
+            b.ext->vt.finish_file(ctx.get(), b.builder, &sink);
+        if (status < 0) report(b, "finish_file", status, ctx.message());
+        if (status >= 0 && !out.over && !out.bytes.empty())
             b.file = std::move(out.bytes);
     }
 }

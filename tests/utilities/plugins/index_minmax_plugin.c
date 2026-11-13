@@ -32,13 +32,22 @@ static void add(range* r, double v) {
     ++r->n;
 }
 
-static void* make_builder(void* self) {
+/* Set from the config "fail_step": step then fails, to show the host reports
+   a failed step with the plugin's message. */
+static int g_fail_step;
+
+static dftu_status make_builder(dftu_ctx* ctx, void* self, void** out) {
     (void)self;
-    return calloc(1, sizeof(builder));
+    *out = calloc(1, sizeof(builder));
+    if (!*out) return dftu_fail(ctx, DFTU_E_INTERNAL, "out of memory");
+    return DFTU_OK;
 }
 
-static int step(void* b, const dftu_bytes* lines, uint64_t n) {
+static dftu_status step(dftu_ctx* ctx, void* b, const dftu_bytes* lines,
+                        uint64_t n) {
     builder* bl = (builder*)b;
+    if (g_fail_step)
+        return dftu_fail(ctx, DFTU_E_PARSE, "index_minmax: refused a chunk");
     static const char KEY[] = "\"v\":";
     for (uint64_t i = 0; i < n; ++i) {
         const char* p = (const char*)lines[i].data;
@@ -54,40 +63,46 @@ static int step(void* b, const dftu_bytes* lines, uint64_t n) {
             break;
         }
     }
-    return 0;
+    return DFTU_OK;
 }
 
-static int finish_granule(void* b, uint64_t granule,
-                          const dftu_index_out* out) {
+static dftu_status finish_granule(dftu_ctx* ctx, void* b, uint64_t granule,
+                                  const dftu_index_out* out) {
     builder* bl = (builder*)b;
+    (void)ctx;
     (void)granule;
-    out->append(out->ctx, &bl->chunk, sizeof(range));
+    out->append(out->self, &bl->chunk, sizeof(range));
     memset(&bl->chunk, 0, sizeof(range));
-    return 0;
+    return DFTU_OK;
 }
 
-static int finish_file(void* b, const dftu_index_out* out) {
-    out->append(out->ctx, &((builder*)b)->file, sizeof(range));
-    return 0;
+static dftu_status finish_file(dftu_ctx* ctx, void* b,
+                               const dftu_index_out* out) {
+    (void)ctx;
+    out->append(out->self, &((builder*)b)->file, sizeof(range));
+    return DFTU_OK;
 }
 
 static void destroy_builder(void* b) { free(b); }
 
-static void* compile(void* self, const dftu_index_leaf* leaf) {
+static dftu_status compile(dftu_ctx* ctx, void* self,
+                           const dftu_index_leaf* leaf, void** out) {
     compiled* c;
     (void)self;
-    if (leaf->any || strcmp(leaf->path, "v") != 0) return NULL;
+    *out = NULL;
+    if (leaf->any || strcmp(leaf->path, "v") != 0) return DFTU_OK;
     if (leaf->op != DFTU_INDEX_EQ && leaf->op != DFTU_INDEX_LT &&
         leaf->op != DFTU_INDEX_LE && leaf->op != DFTU_INDEX_GT &&
         leaf->op != DFTU_INDEX_GE)
-        return NULL;
+        return DFTU_OK;
     if (leaf->value->kind != DFTU_VAL_I64 && leaf->value->kind != DFTU_VAL_F64)
-        return NULL;
+        return DFTU_OK;
     c = (compiled*)malloc(sizeof(compiled));
-    if (!c) return NULL;
+    if (!c) return dftu_fail(ctx, DFTU_E_INTERNAL, "out of memory");
     c->op = leaf->op;
     c->value = dftu_as_f64(leaf->value, 0);
-    return c;
+    *out = c;
+    return DFTU_OK;
 }
 
 static int judge(void* h, const uint8_t* p, uint64_t n) {
@@ -116,38 +131,56 @@ static void release(void* h) { free(h); }
 
 static dftu_index_extension g_ext;
 
-static void* make_slice(void* self) {
+static dftu_status make_slice(dftu_ctx* ctx, void* self, void** out) {
     (void)self;
-    return calloc(1, 1);
+    *out = calloc(1, 1);
+    if (!*out) return dftu_fail(ctx, DFTU_E_INTERNAL, "out of memory");
+    return DFTU_OK;
 }
-static dftu_task* on_batch(void* slice, const dftu_dataframe* df,
-                           const dftu_plugin_host* host) {
+static dftu_status on_batch(dftu_ctx* ctx, void* slice,
+                            const dftu_dataframe* df,
+                            const dftu_plugin_host* host) {
+    (void)ctx;
     (void)slice;
     (void)df;
     (void)host;
-    return NULL;
+    return DFTU_OK;
 }
-static void merge(void* into, void* other) {
+static dftu_status merge(dftu_ctx* ctx, void* into, void* other) {
+    (void)ctx;
     (void)into;
     (void)other;
+    return DFTU_OK;
 }
-static dftu_task* on_finalize(void* slice, const dftu_plugin_host* host) {
+static dftu_status on_finalize(dftu_ctx* ctx, void* slice,
+                               const dftu_plugin_host* host,
+                               dftu_task** pending) {
+    (void)ctx;
     (void)slice;
     (void)host;
-    return NULL;
+    (void)pending;
+    return DFTU_OK;
 }
 static void destroy_slice(void* slice) { free(slice); }
 static void destroy(void* self) { (void)self; }
 
 static dftu_plugin g_plugin;
 
-DFTU_PLUGIN_EXPORT dftu_plugin* dftracer_plugin(dftu_plugin_host* h,
-                                                const dftu_value* config) {
+DFTU_PLUGIN_INFO("index_minmax", "1.0")
+
+DFTU_PLUGIN_EXPORT dftu_status dftracer_plugin(dftu_ctx* ctx,
+                                               dftu_plugin_host* h,
+                                               const dftu_value* config,
+                                               dftu_plugin** out) {
     const dftu_svc_index* index =
         (const dftu_svc_index*)h->get_service(h->h, DFTU_SVC_INDEX);
-    if (!index) return NULL;
+    dftu_status st;
+    if (!index)
+        return dftu_fail(ctx, DFTU_E_UNSUPPORTED, "no index service at load");
     memset(&g_ext, 0, sizeof(g_ext));
+    g_ext.struct_size = sizeof(g_ext);
     g_ext.version = (uint32_t)dftu_as_i64(dftu_obj_get(config, "version"), 1);
+    g_fail_step = dftu_as_bool(dftu_obj_get(config, "fail_step"), 0);
     g_ext.make_builder = make_builder;
     g_ext.step = step;
     g_ext.finish_granule = finish_granule;
@@ -157,17 +190,18 @@ DFTU_PLUGIN_EXPORT dftu_plugin* dftracer_plugin(dftu_plugin_host* h,
     g_ext.may_match = judge;
     g_ext.file_may_match = judge;
     g_ext.release = release;
-    if (index->register_extension(h->h, "index_minmax.range", &g_ext, NULL) !=
-        0)
-        return NULL;
+    st = index->register_extension(ctx, h->h, "index_minmax.range", &g_ext,
+                                   NULL);
+    if (st < 0) return st;
 
     memset(&g_plugin, 0, sizeof(g_plugin));
-    g_plugin.abi_version = DFTRACER_UTILS_PLUGIN_ABI_VERSION;
+    g_plugin.struct_size = sizeof(g_plugin);
     g_plugin.make_slice = make_slice;
     g_plugin.on_batch = on_batch;
     g_plugin.merge = merge;
     g_plugin.on_finalize = on_finalize;
     g_plugin.destroy_slice = destroy_slice;
     g_plugin.destroy = destroy;
-    return &g_plugin;
+    *out = &g_plugin;
+    return DFTU_OK;
 }

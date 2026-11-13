@@ -81,7 +81,29 @@ def test_new_scaffolds_cpp_source(tmp_path):
     assert plugin_cli.main(["new", "mycount", "--cpp", "-o", str(tmp_path)]) == 0
     src = tmp_path / "mycount.cpp"
     assert src.is_file()
-    assert "make_plugin" in src.read_text()
+    assert "DFTU_PLUGIN_INFO" in src.read_text()
+    assert ".fold<mycount>().build(out)" in src.read_text()
+
+
+def test_generated_abi_version_header_carries_the_host_hash(tmp_path, monkeypatch):
+    from dftracer.utils import _plugin_build
+    from dftracer.utils.dftracer_utils_ext import PLUGIN_ABI_HASH, PLUGIN_ABI_VERSION
+
+    assert isinstance(PLUGIN_ABI_HASH, int) and PLUGIN_ABI_HASH > 0
+    monkeypatch.setenv("DFTRACER_UTILS_JIT_CACHE", str(tmp_path / "cache"))
+    overlay = _plugin_build._ensure_abi_version_header(str(tmp_path / "no_include"))
+    assert overlay is not None
+    text = (
+        tmp_path
+        / "cache"
+        / "abi_version_include"
+        / "dftracer"
+        / "utils"
+        / "plugins"
+        / "abi_version.h"
+    ).read_text()
+    assert f"#define DFTRACER_UTILS_PLUGIN_ABI_HASH 0x{PLUGIN_ABI_HASH:X}ULL" in text
+    assert f"#define DFTRACER_UTILS_PLUGIN_ABI_VERSION 0x{PLUGIN_ABI_VERSION:X}u" in text
 
 
 def test_build_missing_source_errors(tmp_path):

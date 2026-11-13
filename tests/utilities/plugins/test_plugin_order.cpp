@@ -33,15 +33,21 @@ namespace {
 
 constexpr const char* STATS_NAME = "com.example.order_stats";
 
-void* make_empty_slice(void*) { return new int(0); }
+dftu_status make_empty_slice(dftu_ctx*, void*, void** out) {
+    *out = new int(0);
+    return DFTU_OK;
+}
 void destroy_empty_slice(void* slice) { delete static_cast<int*>(slice); }
-void no_merge(void*, void*) {}
+dftu_status no_merge(dftu_ctx*, void*, void*) { return DFTU_OK; }
 void no_destroy(void*) {}
-dftu_task* no_finalize(void*, const dftu_plugin_host*) { return nullptr; }
+dftu_status no_finalize(dftu_ctx*, void*, const dftu_plugin_host*,
+                        dftu_task**) {
+    return DFTU_OK;
+}
 
 dftu_plugin make_bare_plugin(void* self) {
     dftu_plugin p{};
-    p.abi_version = DFTRACER_UTILS_PLUGIN_ABI_VERSION;
+    p.struct_size = sizeof(p);
     p.self = self;
     p.make_slice = make_empty_slice;
     p.merge = no_merge;
@@ -73,16 +79,18 @@ dftu_plugin make_graph_plugin(NameLists* st) {
 
 // The producer: one zero-key accumulator over the whole scan, named
 // STATS_NAME, which the consumer reads back by that name.
-dftu_task* producer_on_batch(void*, const dftu_dataframe* df,
-                             const dftu_plugin_host* host) {
+dftu_status producer_on_batch(dftu_ctx* ctx, void*, const dftu_dataframe* df,
+                              const dftu_plugin_host* host) {
     const auto* agg = static_cast<const dftu_svc_agg*>(
         host->get_service(host->h, DFTU_SVC_AGG));
-    if (!agg || !agg->agg_new) return nullptr;
+    if (!agg || !agg->agg_new) return DFTU_OK;
     const dftu_agg_col specs[1] = {
         {DFTU_AGG_COUNT, nullptr, "count", 0.0, nullptr}};
-    if (dftu_agg* a = agg->agg_new(host->h, STATS_NAME, nullptr, 0, specs, 1))
-        agg->agg_accumulate(host->h, a, df);
-    return nullptr;
+    dftu_agg* a = nullptr;
+    const dftu_status st =
+        agg->agg_new(ctx, host->h, STATS_NAME, nullptr, 0, specs, 1, &a);
+    if (st < 0) return st;
+    return agg->agg_accumulate(ctx, host->h, a, df);
 }
 
 const char* const g_produced[2] = {STATS_NAME, nullptr};
@@ -99,20 +107,24 @@ dftu_plugin make_producer() {
 // records the row count it found. Zero means it ran first and saw nothing.
 std::atomic<std::int64_t> g_seen_rows{-1};
 
-dftu_task* consumer_on_finalize(void*, const dftu_plugin_host* host) {
+dftu_status consumer_on_finalize(dftu_ctx* ctx, void*,
+                                 const dftu_plugin_host* host, dftu_task**) {
     const auto* agg = static_cast<const dftu_svc_agg*>(
         host->get_service(host->h, DFTU_SVC_AGG));
-    dftu_dataframe* res =
-        agg && agg->agg_result ? agg->agg_result(host->h, STATS_NAME) : nullptr;
+    dftu_dataframe* res = nullptr;
+    if (agg && agg->agg_result) {
+        const dftu_status st = agg->agg_result(ctx, host->h, STATS_NAME, &res);
+        if (st < 0) return st;
+    }
     g_seen_rows.store(
         res ? static_cast<std::int64_t>(dftu_dataframe_num_rows(res)) : 0);
     if (res) dftu_dataframe_free(res);
-    return nullptr;
+    return DFTU_OK;
 }
 
-dftu_task* consumer_on_batch(void*, const dftu_dataframe*,
-                             const dftu_plugin_host*) {
-    return nullptr;
+dftu_status consumer_on_batch(dftu_ctx*, void*, const dftu_dataframe*,
+                              const dftu_plugin_host*) {
+    return DFTU_OK;
 }
 
 const char* const g_consumed[2] = {STATS_NAME, nullptr};

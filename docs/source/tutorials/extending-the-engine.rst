@@ -93,10 +93,13 @@ reduce or threading code.
              void finalize(Host) {}
          };
 
-         extern "C" dftu_plugin* dftracer_plugin(dftu_plugin_host* h,
-                                                 const dftu_value* config) {
+         DFTU_PLUGIN_INFO("events_per_pid", "1.0")
+
+         extern "C" DFTU_PLUGIN_EXPORT dftu_status dftracer_plugin(
+             dftu_ctx* ctx, dftu_plugin_host* h, const dftu_value* config,
+             dftu_plugin** out) {
              (void)h;
-             return make_plugin<EventsPerPid>(config);
+             return make_plugin<EventsPerPid>(ctx, config, out);
          }
 
       ``Host::agg`` names the accumulator, its key columns, and its aggregates;

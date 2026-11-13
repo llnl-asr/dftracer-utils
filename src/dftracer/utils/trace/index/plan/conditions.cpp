@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/coro/abi_context.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -1092,7 +1094,20 @@ class PluginCondition final : public Condition {
         l.path_len = static_cast<std::uint32_t>(field->path.size());
         l.any = field->any ? 1 : 0;
         l.value = &value;
-        return ext_->vt.compile(ext_->self, &l);
+        coro::AbiContext ctx;
+        void* compiled = nullptr;
+        const dftu_status status =
+            ext_->vt.compile(ctx.get(), ext_->self, &l, &compiled);
+        if (status < 0) {
+            DFTRACER_UTILS_LOG_WARN(
+                "Index extension '{}' compile failed with status {}: {}; the "
+                "leaf prunes nothing",
+                ext_->name, status,
+                ctx.message().empty() ? dstd::StringView("no message")
+                                      : ctx.message());
+            return nullptr;
+        }
+        return compiled;
     }
 
     FileIndexData& d_;

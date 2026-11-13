@@ -65,9 +65,13 @@ consumer reads it back during the same batch.
              void finalize(dftracer::utils::plugins::Host) {}
          };
 
-         dftu_plugin* dftracer_plugin(dftu_plugin_host* h, const dftu_value* config) {
-             (void)h;
-             return dftracer::utils::plugins::make_plugin<ProducerSlice>(config);
+         DFTU_PLUGIN_INFO("producer", "1.0")
+
+         extern "C" DFTU_PLUGIN_EXPORT dftu_status dftracer_plugin(
+             dftu_ctx* ctx, dftu_plugin_host* h, const dftu_value* config,
+             dftu_plugin** out) {
+             return dftracer::utils::plugins::make_plugin<ProducerSlice>(
+                 ctx, config, out);
          }
 
       A consumer reads it back with the same port name, named in its own
@@ -112,11 +116,13 @@ consumer reads it back during the same batch.
 
       .. code-block:: c
 
-         static dftu_task* on_batch(void* slice, const dftu_dataframe* df,
-                                    const dftu_plugin_host* host) {
+         static dftu_status on_batch(dftu_ctx* ctx, void* slice,
+                                     const dftu_dataframe* df,
+                                     const dftu_plugin_host* host) {
              MyState* s = (MyState*)slice;
              const dftu_svc_ports* ports =
                  (const dftu_svc_ports*)host->get_service(host->h, DFTU_SVC_PORTS);
+             (void)ctx;
              if (!s->port_key) s->port_key = ports->port_key(host->h, "com.example.perbatch");
 
              int64_t n = dftu_dataframe_num_rows(df);
@@ -130,18 +136,20 @@ consumer reads it back during the same batch.
                      if (ph[i] == DFTU_PH_COMPLETE) ++with_dur;
              if (ph_col) dftu_series_free(ph_col);
              ports->publish(host->h, s->port_key, &with_dur, sizeof(with_dur));
-             return NULL;  /* synchronous */
+             return DFTU_OK;  /* synchronous */
          }
 
       and a consumer reads it back with the same key:
 
       .. code-block:: c
 
-         static dftu_task* on_batch(void* slice, const dftu_dataframe* df,
-                                    const dftu_plugin_host* host) {
+         static dftu_status on_batch(dftu_ctx* ctx, void* slice,
+                                     const dftu_dataframe* df,
+                                     const dftu_plugin_host* host) {
              MyState* s = (MyState*)slice;
              const dftu_svc_ports* ports =
                  (const dftu_svc_ports*)host->get_service(host->h, DFTU_SVC_PORTS);
+             (void)ctx;
              if (!s->port_key) s->port_key = ports->port_key(host->h, "com.example.perbatch");
 
              (void)df;
@@ -151,7 +159,7 @@ consumer reads it back during the same batch.
                  uint64_t with_dur; memcpy(&with_dur, v, sizeof(with_dur));
                  /* ... use with_dur for this batch */
              }
-             return NULL;
+             return DFTU_OK;
          }
 
    .. tab-item:: Python (JIT)
@@ -244,7 +252,9 @@ give the plugin a ``transform`` in place of ``on_batch``:
 
       .. code-block:: c
 
-         g_plugin.transform = sessionize;   /* dftu_dataframe* (slice, df, host) */
+         /* dftu_status (ctx, slice, df, host, dftu_dataframe** out); NULL in *out
+            means "unchanged" */
+         g_plugin.transform = sessionize;
 
 The rewrite may drop rows, add rows, and add, drop or change columns. A
 transform sees the whole batch (its ``reads`` is ignored); a plugin after it

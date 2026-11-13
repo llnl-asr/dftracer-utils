@@ -43,17 +43,18 @@ struct CursorState {
     bool done = false;
 };
 
-dftu_task* cursor_next(void* self, std::int64_t, dftu_result_frame* out) {
+dftu_status cursor_next(dftu_ctx*, void* self, std::int64_t,
+                        dftu_dataframe** out, dftu_task** pending) {
     auto* cs = static_cast<CursorState*>(self);
-    out->ok = 1;
+    *pending = nullptr;
     if (cs->done) {
-        out->u.value = nullptr;
-    } else {
-        out->u.value = cs->frame;
-        cs->frame = nullptr;
-        cs->done = true;
+        *out = nullptr;
+        return DFTU_END;
     }
-    return nullptr;
+    *out = cs->frame;
+    cs->frame = nullptr;
+    cs->done = true;
+    return DFTU_OK;
 }
 
 void cursor_destroy(void* self) {
@@ -62,7 +63,11 @@ void cursor_destroy(void* self) {
     delete cs;
 }
 
-const dftu_cursor_vt CURSOR_VT = {cursor_next, cursor_destroy, nullptr, nullptr,
+const dftu_cursor_vt CURSOR_VT = {sizeof(dftu_cursor_vt),
+                                  cursor_next,
+                                  cursor_destroy,
+                                  nullptr,
+                                  nullptr,
                                   nullptr};
 
 // A source over the given names, whose scan() always returns one empty
@@ -70,31 +75,35 @@ const dftu_cursor_vt CURSOR_VT = {cursor_next, cursor_destroy, nullptr, nullptr,
 // pass nullptr for a provider that declares nothing.
 struct Fixture {
     dstd::Vector<dstd::String> names;
-    void (*schema_types)(void*, dftu_schema*);
+    dftu_status (*schema_types)(dftu_ctx*, void*, dftu_schema*);
 };
 
-int32_t fixture_schema(void* self, const char* const** out_names) {
+dftu_status fixture_schema(dftu_ctx*, void* self, const char* const** out_names,
+                           int32_t* out_count) {
     auto* fx = static_cast<Fixture*>(self);
     static thread_local dstd::Vector<const char*> storage;
     storage.clear();
     for (const dstd::String& n : fx->names) storage.push_back(n.c_str());
     *out_names = storage.data();
-    return static_cast<int32_t>(storage.size());
+    *out_count = static_cast<int32_t>(storage.size());
+    return DFTU_OK;
 }
 
-void* fixture_scan(void* self, const dftu_scan_request*, int32_t*,
-                   void** out_cursor_self, const dftu_cursor_vt** out_vt) {
+dftu_status fixture_scan(dftu_ctx*, void* self, const dftu_scan_request*,
+                         int32_t*, void** out_cursor_self,
+                         const dftu_cursor_vt** out_vt) {
     auto* fx = static_cast<Fixture*>(self);
     auto* cs = new CursorState{empty_frame(fx->names)};
     *out_cursor_self = cs;
     *out_vt = &CURSOR_VT;
-    return cs;
+    return DFTU_OK;
 }
 
 void fixture_destroy(void*) {}
 
 dstd::SharedPtr<Source> make_fixture(Fixture& fx) {
     dftu_source_vt vt{};
+    vt.struct_size = sizeof(vt);
     vt.schema = fixture_schema;
     vt.scan = fixture_scan;
     vt.destroy = fixture_destroy;
@@ -102,23 +111,25 @@ dstd::SharedPtr<Source> make_fixture(Fixture& fx) {
     return make_provider_source(vt, &fx);
 }
 
-void plain_scalars(void*, dftu_schema* s) {
+dftu_status plain_scalars(dftu_ctx*, void*, dftu_schema* s) {
     dftu_schema_add_field(s, "id", DFTU_TYPE_INT64, 0, DFTU_TIME_UNIT_MICRO,
                           nullptr, 0, 0, 0);
     dftu_schema_add_field(s, "val", DFTU_TYPE_FLOAT64, 1, DFTU_TIME_UNIT_MICRO,
                           nullptr, 0, 0, 0);
+    return DFTU_OK;
 }
 
-void parameterized(void*, dftu_schema* s) {
+dftu_status parameterized(dftu_ctx*, void*, dftu_schema* s) {
     dftu_schema_add_field(s, "ts", DFTU_TYPE_TIMESTAMP, 1, DFTU_TIME_UNIT_NANO,
                           "UTC", 0, 0, 0);
     dftu_schema_add_field(s, "amount", DFTU_TYPE_DECIMAL128, 1,
                           DFTU_TIME_UNIT_MICRO, nullptr, 38, 9, 0);
     dftu_schema_add_field(s, "digest", DFTU_TYPE_FIXED_SIZE_BINARY, 1,
                           DFTU_TIME_UNIT_MICRO, nullptr, 0, 0, 7);
+    return DFTU_OK;
 }
 
-void nested(void*, dftu_schema* s) {
+dftu_status nested(dftu_ctx*, void*, dftu_schema* s) {
     int32_t list_idx = dftu_schema_add_field(
         s, "tags", DFTU_TYPE_LIST, 1, DFTU_TIME_UNIT_MICRO, nullptr, 0, 0, 0);
     dftu_schema_add_child_field(s, list_idx, "item", DFTU_TYPE_INT64, 1,
@@ -131,6 +142,7 @@ void nested(void*, dftu_schema* s) {
                                 DFTU_TIME_UNIT_MICRO, nullptr, 0, 0, 0);
     dftu_schema_add_child_field(s, struct_idx, "y", DFTU_TYPE_STRING, 1,
                                 DFTU_TIME_UNIT_MICRO, nullptr, 0, 0, 0);
+    return DFTU_OK;
 }
 
 // A List holds exactly one element type, so the second child is refused at
@@ -138,7 +150,7 @@ void nested(void*, dftu_schema* s) {
 // happens there rather than being discovered when the schema is converted.
 std::int32_t g_second_child_result = 0;
 
-void malformed_list(void*, dftu_schema* s) {
+dftu_status malformed_list(dftu_ctx*, void*, dftu_schema* s) {
     int32_t list_idx = dftu_schema_add_field(
         s, "tags", DFTU_TYPE_LIST, 1, DFTU_TIME_UNIT_MICRO, nullptr, 0, 0, 0);
     dftu_schema_add_child_field(s, list_idx, "a", DFTU_TYPE_INT64, 1,
@@ -146,6 +158,7 @@ void malformed_list(void*, dftu_schema* s) {
     g_second_child_result =
         dftu_schema_add_child_field(s, list_idx, "b", DFTU_TYPE_INT64, 1,
                                     DFTU_TIME_UNIT_MICRO, nullptr, 0, 0, 0);
+    return DFTU_OK;
 }
 
 }  // namespace
@@ -229,13 +242,15 @@ TEST_SUITE("provider schema types") {
     TEST_CASE(
         "LazyFrame::output_schema is typed end to end over a provider plan") {
         Fixture fx{
-            {"id", "val", "ts"}, [](void*, dftu_schema* s) {
+            {"id", "val", "ts"},
+            [](dftu_ctx*, void*, dftu_schema* s) -> dftu_status {
                 dftu_schema_add_field(s, "id", DFTU_TYPE_INT64, 0,
                                       DFTU_TIME_UNIT_MICRO, nullptr, 0, 0, 0);
                 dftu_schema_add_field(s, "val", DFTU_TYPE_FLOAT64, 1,
                                       DFTU_TIME_UNIT_MICRO, nullptr, 0, 0, 0);
                 dftu_schema_add_field(s, "ts", DFTU_TYPE_TIMESTAMP, 1,
                                       DFTU_TIME_UNIT_MILLI, "UTC", 0, 0, 0);
+                return DFTU_OK;
             }};
         LazyFrame lf = LazyFrame::scan(make_fixture(fx))
                            .filter(col(0) > std::int64_t{0})

@@ -16,7 +16,7 @@
 extern "C" {
 #endif
 
-#define DFTU_SVC_PORTS "dftu.svc.ports@1"
+#define DFTU_SVC_PORTS "dftu.svc.ports"
 
 /** Batch-scoped ports for intra-batch producer -> consumer communication. A
    port is a name; a producer and a consumer are wired by naming the same one,
@@ -28,6 +28,7 @@ extern "C" {
    dftu_plugin::consumes, not from registration order.
  */
 typedef struct dftu_svc_ports {
+    uint32_t struct_size; /**< sizeof(dftu_svc_ports) */
     /** Stable key for the port named `name` (lowercase ASCII [a-z0-9._/-]).
        The "dftu." namespace belongs to the host and is refused to plugins. */
     uint64_t (*port_key)(void* h, const char* name);

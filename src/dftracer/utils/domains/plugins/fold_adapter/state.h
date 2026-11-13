@@ -3,7 +3,9 @@
 #define DFTRACER_UTILS_DOMAINS_PLUGINS_FOLD_ADAPTER_STATE_H
 
 #include <dftracer/utils/common/spill_dir.h>
+#include <dftracer/utils/coro/abi_context.h>
 #include <dftracer/utils/domains/plugins/state_registry.h>
+#include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/path.h>
@@ -40,8 +42,11 @@ class StateAccum {
    public:
     /// `budget` is the scan's out-of-core budget in bytes, resolved through
     /// memory::resolve_spill_budget: 0 means auto and memory::NO_SPILL_BUDGET
-    /// disables spilling.
-    StateAccum(const RegisteredState& reg, std::uint64_t budget);
+    /// disables spilling. `plugin` names the plugin in error messages. A
+    /// failed init is kept and returned by the first update, merge or
+    /// finalize.
+    StateAccum(const RegisteredState& reg, std::uint64_t budget,
+               dstd::StringView plugin);
     ~StateAccum();
     StateAccum(const StateAccum&) = delete;
     StateAccum& operator=(const StateAccum&) = delete;
@@ -53,21 +58,26 @@ class StateAccum {
     /// pair, so the host refused it a spill instead of bounding it.
     bool spill_refused() const { return spill_refused_; }
 
-    void update(const dftu_dataframe* df);
+    dstd::Result<void> update(const dftu_dataframe* df);
     /// Fold `other` in, taking over its runs; `other` keeps its state, which
     /// its own destructor releases.
-    void merge(StateAccum& other);
+    dstd::Result<void> merge(StateAccum& other);
     /// Merge every run back and finalize; false when there is nothing to
-    /// finalize or the plugin reported failure.
-    bool finalize(dftu_result_value* out);
+    /// finalize, an error when the plugin reported failure.
+    dstd::Result<bool> finalize(dftu_result_value* out);
 
    private:
-    void maybe_spill();
+    dstd::Result<void> init_state();
+    dstd::Result<void> maybe_spill();
     void adopt_runs(StateAccum& other);
-    void drain_runs();
+    dstd::Result<void> drain_runs();
     const dstd::Path& dir_path();
+    dstd::Error error_of(const coro::AbiContext& ctx, dftu_status status,
+                         const char* callback) const;
 
     const RegisteredState* reg_;
+    dstd::String plugin_;
+    dstd::Optional<dstd::Error> init_error_;
     std::uint64_t budget_;
     void* state_ = nullptr;
     bool spill_refused_ = false;

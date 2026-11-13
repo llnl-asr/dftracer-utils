@@ -162,6 +162,7 @@ set(DFTRACER_UTILS_CORO_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/coro/scope.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/coro/stop_token.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/coro/abi_context.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/coro/task_abi.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/coro/yield.cpp)
 
 # -----------------------------------------
@@ -315,6 +316,7 @@ list(APPEND DFTRACER_UTILS_DOMAINS_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/domains/plugins/fold_adapter/result.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/domains/plugins/fold_adapter/ops.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/domains/plugins/fold_adapter/state.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/domains/plugins/fold_adapter/task.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/domains/plugins/fold_adapter/providers.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/domains/plugins/fold_adapter/index.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/domains/plugins/fold_adapter/nodes.cpp

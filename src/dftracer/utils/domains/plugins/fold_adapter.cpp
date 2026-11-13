@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/abi_error.h>
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/field_ref.h>
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/coro/abi_context.h>
 #include <dftracer/utils/coro/named.h>
-#include <dftracer/utils/coro/when_all.h>
-#include <dftracer/utils/coro/when_any.h>
-#include <dftracer/utils/coro/yield.h>
+#include <dftracer/utils/coro/task_abi.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/agg_expr.h>
 #include <dftracer/utils/dataframe/dataframe.h>
@@ -28,7 +28,6 @@
 #include <dftracer/utils/json/value.h>
 #include <dftracer/utils/json/value_access.h>
 #include <dftracer/utils/memory/budget.h>
-#include <dftracer/utils/plugins/plugin/map.h>
 #include <dftracer/utils/runtime/io/ops.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/index/record_schema.h>
@@ -52,6 +51,7 @@
 #include <dftracer/utils/trace/arrow/ipc_writer.h>
 #endif
 
+#include <cerrno>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -68,10 +68,6 @@ namespace {
 
 using duql::Query;
 using trace::RecordPhase;
-
-coro::CoroTask<void>* as_task(::dftu_task* t) {
-    return reinterpret_cast<coro::CoroTask<void>*>(t);
-}
 
 const char* host_resolve(void* h, dftu_str id, std::uint32_t* out_size) {
     if (out_size) *out_size = 0;
@@ -123,337 +119,301 @@ void host_log(void* h, std::uint8_t level, const char* s, std::uint32_t n) {
     }
 }
 
-// Each op builds a lazy CoroTask; the caller's out-slot must outlive the task.
-// The path is copied into the task: the plugin's buffer need not outlive it.
-::dftu_task* io_open(void* h, const char* path, int flags, int mode,
-                     int* out_fd) {
-    return static_cast<PluginFold*>(h)->emplace_task(
-        [](dstd::String p, int fl, int md, int* ofd) -> coro::CoroTask<void> {
-            int fd = static_cast<int>(co_await runtime::io::open(
-                p.c_str(), fl, static_cast<mode_t>(md)));
-            if (ofd) *ofd = fd;
-        }(dstd::String(path ? path : ""), flags, mode, out_fd));
+// A negative result is -errno from the I/O layer; it fails the task as
+// DFTU_E_IO (DFTU_E_NOT_FOUND for ENOENT, DFTU_E_INVALID for EINVAL and EBADF).
+bool io_ok(coro::AbiTask* task, const char* op, std::int64_t result) {
+    if (result >= 0) return true;
+    const int err = static_cast<int>(-result);
+    dftu_status status = DFTU_E_IO;
+    if (err == ENOENT) {
+        status = DFTU_E_NOT_FOUND;
+    } else if (err == EINVAL || err == EBADF) {
+        status = DFTU_E_INVALID;
+    }
+    const dstd::String text = dstd::fmt<"{}: {} (errno {})">(
+        dstd::StringView(op), dstd::StringView(std::strerror(err)), err);
+    task->fail(status, text);
+    return false;
 }
 
-::dftu_task* io_close(void* h, int fd, int* out_rc) {
-    return static_cast<PluginFold*>(h)->emplace_task(
-        [](int f, int* orc) -> coro::CoroTask<void> {
-            int rc = static_cast<int>(co_await runtime::io::close(f));
-            if (orc) *orc = rc;
-        }(fd, out_rc));
+// Runs one I/O call and stores its non-negative result in `slot`, if any.
+template <class Slot, class Make>
+coro::CoroTask<void> io_body(coro::AbiTask* task, const char* op, Slot* slot,
+                             Make make) {
+    const std::int64_t result = static_cast<std::int64_t>(co_await make());
+    if (io_ok(task, op, result) && slot != nullptr)
+        *slot = static_cast<Slot>(result);
 }
 
-::dftu_task* io_read(void* h, int fd, void* buf, std::uint64_t len,
-                     std::int64_t* out_n) {
-    return static_cast<PluginFold*>(h)->emplace_task(
-        [](int f, void* b, std::uint64_t l,
-           std::int64_t* on) -> coro::CoroTask<void> {
-            ssize_t n =
-                co_await runtime::io::read(f, b, static_cast<std::size_t>(l));
-            if (on) *on = n;
-        }(fd, buf, len, out_n));
+template <class Make>
+dftu_status start_task(::dftu_ctx* ctx, ::dftu_task** out, Make&& make) {
+    if (out == nullptr)
+        return host_fail(ctx, DFTU_E_INVALID, "the task slot is NULL");
+    *out = coro::make_abi_task(std::forward<Make>(make));
+    return DFTU_OK;
 }
 
-::dftu_task* io_write(void* h, int fd, const void* buf, std::uint64_t len,
-                      std::int64_t* out_n) {
-    return static_cast<PluginFold*>(h)->emplace_task(
-        [](int f, const void* b, std::uint64_t l,
-           std::int64_t* on) -> coro::CoroTask<void> {
-            ssize_t n =
-                co_await runtime::io::write(f, b, static_cast<std::size_t>(l));
-            if (on) *on = n;
-        }(fd, buf, len, out_n));
+// The caller's result slot must outlive the task.
+template <class Slot, class Make>
+dftu_status io_start(::dftu_ctx* ctx, ::dftu_task** out, const char* op,
+                     Slot* slot, Make make) {
+    return start_task(ctx, out, [=](coro::AbiTask* task) {
+        return io_body<Slot>(task, op, slot, make);
+    });
 }
 
-::dftu_task* io_pread(void* h, int fd, void* buf, std::uint64_t len,
-                      std::uint64_t off, std::int64_t* out_n) {
-    return static_cast<PluginFold*>(h)->emplace_task(
-        [](int f, void* b, std::uint64_t l, std::uint64_t o,
-           std::int64_t* on) -> coro::CoroTask<void> {
-            ssize_t n = co_await runtime::io::pread(
-                f, b, static_cast<std::size_t>(l), o);
-            if (on) *on = n;
-        }(fd, buf, len, off, out_n));
+dftu_status io_open(::dftu_ctx* ctx, void*, const char* path,
+                    std::int32_t flags, std::int32_t mode, std::int32_t* out_fd,
+                    ::dftu_task** out) {
+    if (path == nullptr)
+        return host_fail(ctx, DFTU_E_INVALID, "open: path is NULL");
+    // The path is copied into the task: the plugin's buffer need not outlive
+    // the call.
+    const dstd::String copy(path);
+    return io_start(ctx, out, "open", out_fd, [=] {
+        return runtime::io::open(copy.c_str(), flags,
+                                 static_cast<mode_t>(mode));
+    });
 }
 
-::dftu_task* io_pwrite(void* h, int fd, const void* buf, std::uint64_t len,
-                       std::uint64_t off, std::int64_t* out_n) {
-    return static_cast<PluginFold*>(h)->emplace_task(
-        [](int f, const void* b, std::uint64_t l, std::uint64_t o,
-           std::int64_t* on) -> coro::CoroTask<void> {
-            ssize_t n = co_await runtime::io::pwrite(
-                f, b, static_cast<std::size_t>(l), o);
-            if (on) *on = n;
-        }(fd, buf, len, off, out_n));
+dftu_status io_close(::dftu_ctx* ctx, void*, std::int32_t fd,
+                     ::dftu_task** out) {
+    return io_start(ctx, out, "close", static_cast<std::int64_t*>(nullptr),
+                    [=] { return runtime::io::close(fd); });
 }
 
-::dftu_task* io_fsync(void* h, int fd, int* out_rc) {
-    return static_cast<PluginFold*>(h)->emplace_task(
-        [](int f, int* orc) -> coro::CoroTask<void> {
-            int rc = static_cast<int>(co_await runtime::io::fsync(f));
-            if (orc) *orc = rc;
-        }(fd, out_rc));
+dftu_status io_read(::dftu_ctx* ctx, void*, std::int32_t fd, void* buf,
+                    std::uint64_t len, std::int64_t* out_n, ::dftu_task** out) {
+    return io_start(ctx, out, "read", out_n, [=] {
+        return runtime::io::read(fd, buf, static_cast<std::size_t>(len));
+    });
 }
 
-::dftu_task* io_ftruncate(void* h, int fd, std::uint64_t len, int* out_rc) {
-    return static_cast<PluginFold*>(h)->emplace_task(
-        [](int f, std::uint64_t l, int* orc) -> coro::CoroTask<void> {
-            int rc = static_cast<int>(co_await runtime::io::ftruncate(f, l));
-            if (orc) *orc = rc;
-        }(fd, len, out_rc));
+dftu_status io_write(::dftu_ctx* ctx, void*, std::int32_t fd, const void* buf,
+                     std::uint64_t len, std::int64_t* out_n,
+                     ::dftu_task** out) {
+    return io_start(ctx, out, "write", out_n, [=] {
+        return runtime::io::write(fd, buf, static_cast<std::size_t>(len));
+    });
 }
 
-::dftu_task* io_fstat(void* h, int fd, dftu_stat* out) {
-    return static_cast<PluginFold*>(h)->emplace_task(
-        [](int f, dftu_stat* o) -> coro::CoroTask<void> {
-            struct stat st{};
-            ssize_t rc = co_await runtime::io::fstat(f, &st);
-            if (o && rc == 0) {
-                o->size = static_cast<std::uint64_t>(st.st_size);
+dftu_status io_pread(::dftu_ctx* ctx, void*, std::int32_t fd, void* buf,
+                     std::uint64_t len, std::uint64_t off, std::int64_t* out_n,
+                     ::dftu_task** out) {
+    return io_start(ctx, out, "pread", out_n, [=] {
+        return runtime::io::pread(fd, buf, static_cast<std::size_t>(len), off);
+    });
+}
+
+dftu_status io_pwrite(::dftu_ctx* ctx, void*, std::int32_t fd, const void* buf,
+                      std::uint64_t len, std::uint64_t off, std::int64_t* out_n,
+                      ::dftu_task** out) {
+    return io_start(ctx, out, "pwrite", out_n, [=] {
+        return runtime::io::pwrite(fd, buf, static_cast<std::size_t>(len), off);
+    });
+}
+
+dftu_status io_fsync(::dftu_ctx* ctx, void*, std::int32_t fd,
+                     ::dftu_task** out) {
+    return io_start(ctx, out, "fsync", static_cast<std::int64_t*>(nullptr),
+                    [=] { return runtime::io::fsync(fd); });
+}
+
+dftu_status io_ftruncate(::dftu_ctx* ctx, void*, std::int32_t fd,
+                         std::uint64_t len, ::dftu_task** out) {
+    return io_start(ctx, out, "ftruncate", static_cast<std::int64_t*>(nullptr),
+                    [=] { return runtime::io::ftruncate(fd, len); });
+}
+
+coro::CoroTask<void> fstat_body(coro::AbiTask* task, std::int32_t fd,
+                                dftu_stat* out) {
+    struct stat st{};
+    const ssize_t rc = co_await runtime::io::fstat(fd, &st);
+    if (!io_ok(task, "fstat", rc) || out == nullptr) co_return;
+    out->size = static_cast<std::uint64_t>(st.st_size);
 #if defined(__APPLE__)
-                const struct timespec& mt = st.st_mtimespec;
+    const struct timespec& mt = st.st_mtimespec;
 #else
-                const struct timespec& mt = st.st_mtim;
+    const struct timespec& mt = st.st_mtim;
 #endif
-                o->mtime_ns =
-                    static_cast<std::uint64_t>(mt.tv_sec) * 1000000000ull +
+    out->mtime_ns = static_cast<std::uint64_t>(mt.tv_sec) * 1000000000ull +
                     static_cast<std::uint64_t>(mt.tv_nsec);
-                o->mode = static_cast<std::uint32_t>(st.st_mode);
-            }
-        }(fd, out));
+    out->mode = static_cast<std::uint32_t>(st.st_mode);
 }
 
-::dftu_task* io_readv(void* h, int fd, const struct iovec* iov, int iovcnt,
-                      std::int64_t* out_n) {
-    return static_cast<PluginFold*>(h)->emplace_task(
-        [](int f, const struct iovec* v, int c,
-           std::int64_t* on) -> coro::CoroTask<void> {
-            ssize_t n = co_await runtime::io::readv(f, v, c);
-            if (on) *on = n;
-        }(fd, iov, iovcnt, out_n));
+dftu_status io_fstat(::dftu_ctx* ctx, void*, std::int32_t fd, dftu_stat* out_st,
+                     ::dftu_task** out) {
+    return start_task(ctx, out, [=](coro::AbiTask* task) {
+        return fstat_body(task, fd, out_st);
+    });
 }
 
-::dftu_task* io_writev(void* h, int fd, const struct iovec* iov, int iovcnt,
-                       std::int64_t* out_n) {
-    return static_cast<PluginFold*>(h)->emplace_task(
-        [](int f, const struct iovec* v, int c,
-           std::int64_t* on) -> coro::CoroTask<void> {
-            ssize_t n = co_await runtime::io::writev(f, v, c);
-            if (on) *on = n;
-        }(fd, iov, iovcnt, out_n));
+dftu_status io_readv(::dftu_ctx* ctx, void*, std::int32_t fd,
+                     const struct iovec* iov, std::int32_t iovcnt,
+                     std::int64_t* out_n, ::dftu_task** out) {
+    return io_start(ctx, out, "readv", out_n,
+                    [=] { return runtime::io::readv(fd, iov, iovcnt); });
 }
 
-::dftu_task* io_preadv(void* h, int fd, const struct iovec* iov, int iovcnt,
-                       std::uint64_t off, std::int64_t* out_n) {
-    return static_cast<PluginFold*>(h)->emplace_task(
-        [](int f, const struct iovec* v, int c, std::uint64_t o,
-           std::int64_t* on) -> coro::CoroTask<void> {
-            ssize_t n = co_await runtime::io::preadv(f, v, c, o);
-            if (on) *on = n;
-        }(fd, iov, iovcnt, off, out_n));
+dftu_status io_writev(::dftu_ctx* ctx, void*, std::int32_t fd,
+                      const struct iovec* iov, std::int32_t iovcnt,
+                      std::int64_t* out_n, ::dftu_task** out) {
+    return io_start(ctx, out, "writev", out_n,
+                    [=] { return runtime::io::writev(fd, iov, iovcnt); });
 }
 
-::dftu_task* io_pwritev(void* h, int fd, const struct iovec* iov, int iovcnt,
-                        std::uint64_t off, std::int64_t* out_n) {
-    return static_cast<PluginFold*>(h)->emplace_task(
-        [](int f, const struct iovec* v, int c, std::uint64_t o,
-           std::int64_t* on) -> coro::CoroTask<void> {
-            ssize_t n = co_await runtime::io::pwritev(f, v, c, o);
-            if (on) *on = n;
-        }(fd, iov, iovcnt, off, out_n));
+dftu_status io_preadv(::dftu_ctx* ctx, void*, std::int32_t fd,
+                      const struct iovec* iov, std::int32_t iovcnt,
+                      std::uint64_t off, std::int64_t* out_n,
+                      ::dftu_task** out) {
+    return io_start(ctx, out, "preadv", out_n,
+                    [=] { return runtime::io::preadv(fd, iov, iovcnt, off); });
 }
 
-::dftu_task* io_lseek(void* h, int fd, std::int64_t off, int whence,
-                      std::int64_t* out_off) {
-    return static_cast<PluginFold*>(h)->emplace_task(
-        [](int f, std::int64_t o, int w,
-           std::int64_t* oo) -> coro::CoroTask<void> {
-            off_t r = co_await runtime::io::lseek(f, o, w);
-            if (oo) *oo = static_cast<std::int64_t>(r);
-        }(fd, off, whence, out_off));
+dftu_status io_pwritev(::dftu_ctx* ctx, void*, std::int32_t fd,
+                       const struct iovec* iov, std::int32_t iovcnt,
+                       std::uint64_t off, std::int64_t* out_n,
+                       ::dftu_task** out) {
+    return io_start(ctx, out, "pwritev", out_n,
+                    [=] { return runtime::io::pwritev(fd, iov, iovcnt, off); });
 }
 
-::dftu_task* io_sendfile(void* h, int out_fd, int in_fd, std::uint64_t off,
-                         std::uint64_t count, std::int64_t* out_n) {
-    return static_cast<PluginFold*>(h)->emplace_task(
-        [](int ofd, int ifd, std::uint64_t o, std::uint64_t c,
-           std::int64_t* on) -> coro::CoroTask<void> {
-            ssize_t n = co_await runtime::io::sendfile(
-                ofd, ifd, o, static_cast<std::size_t>(c));
-            if (on) *on = n;
-        }(out_fd, in_fd, off, count, out_n));
+dftu_status io_lseek(::dftu_ctx* ctx, void*, std::int32_t fd, std::int64_t off,
+                     std::int32_t whence, std::int64_t* out_off,
+                     ::dftu_task** out) {
+    return io_start(ctx, out, "lseek", out_off,
+                    [=] { return runtime::io::lseek(fd, off, whence); });
 }
 
-::dftu_task* io_accept(void* h, int fd, struct sockaddr* addr,
-                       socklen_t* addrlen, int* out_fd) {
-    return static_cast<PluginFold*>(h)->emplace_task(
-        [](int f, struct sockaddr* a, socklen_t* al,
-           int* ofd) -> coro::CoroTask<void> {
-            int cfd = static_cast<int>(co_await runtime::io::accept(f, a, al));
-            if (ofd) *ofd = cfd;
-        }(fd, addr, addrlen, out_fd));
+dftu_status io_sendfile(::dftu_ctx* ctx, void*, std::int32_t out_fd,
+                        std::int32_t in_fd, std::uint64_t off,
+                        std::uint64_t count, std::int64_t* out_n,
+                        ::dftu_task** out) {
+    return io_start(ctx, out, "sendfile", out_n, [=] {
+        return runtime::io::sendfile(out_fd, in_fd, off,
+                                     static_cast<std::size_t>(count));
+    });
 }
 
-::dftu_task* io_recv(void* h, int fd, void* buf, std::uint64_t len, int flags,
-                     std::int64_t* out_n) {
-    return static_cast<PluginFold*>(h)->emplace_task(
-        [](int f, void* b, std::uint64_t l, int fl,
-           std::int64_t* on) -> coro::CoroTask<void> {
-            ssize_t n = co_await runtime::io::recv(
-                f, b, static_cast<std::size_t>(l), fl);
-            if (on) *on = n;
-        }(fd, buf, len, flags, out_n));
+dftu_status io_accept(::dftu_ctx* ctx, void*, std::int32_t fd,
+                      struct sockaddr* addr, socklen_t* addrlen,
+                      std::int32_t* out_fd, ::dftu_task** out) {
+    return io_start(ctx, out, "accept", out_fd,
+                    [=] { return runtime::io::accept(fd, addr, addrlen); });
 }
 
-::dftu_task* io_send(void* h, int fd, const void* buf, std::uint64_t len,
-                     int flags, std::int64_t* out_n) {
-    return static_cast<PluginFold*>(h)->emplace_task(
-        [](int f, const void* b, std::uint64_t l, int fl,
-           std::int64_t* on) -> coro::CoroTask<void> {
-            ssize_t n = co_await runtime::io::send(
-                f, b, static_cast<std::size_t>(l), fl);
-            if (on) *on = n;
-        }(fd, buf, len, flags, out_n));
+dftu_status io_recv(::dftu_ctx* ctx, void*, std::int32_t fd, void* buf,
+                    std::uint64_t len, std::int32_t flags, std::int64_t* out_n,
+                    ::dftu_task** out) {
+    return io_start(ctx, out, "recv", out_n, [=] {
+        return runtime::io::recv(fd, buf, static_cast<std::size_t>(len), flags);
+    });
 }
 
-const dftu_io g_io = {io_open,   io_close,  io_read,      io_write, io_pread,
-                      io_pwrite, io_fsync,  io_ftruncate, io_fstat, io_readv,
-                      io_writev, io_preadv, io_pwritev,   io_lseek, io_sendfile,
-                      io_accept, io_recv,   io_send};
-
-// yield() reschedules fn onto a pool worker, so when_all over several spawns
-// runs them concurrently instead of inline and serial.
-::dftu_task* host_spawn(void* h, dftu_work_fn fn, void* arg) {
-    return static_cast<PluginFold*>(h)->emplace_task(
-        [](dftu_work_fn f, void* a) -> coro::CoroTask<void> {
-            co_await coro::yield();
-            if (f) f(a);
-        }(fn, arg));
+dftu_status io_send(::dftu_ctx* ctx, void*, std::int32_t fd, const void* buf,
+                    std::uint64_t len, std::int32_t flags, std::int64_t* out_n,
+                    ::dftu_task** out) {
+    return io_start(ctx, out, "send", out_n, [=] {
+        return runtime::io::send(fd, buf, static_cast<std::size_t>(len), flags);
+    });
 }
 
-::dftu_task* host_when_all(void* h, ::dftu_task* const* ts, std::uint32_t n) {
-    dstd::Vector<coro::CoroTask<void>*> kids;
-    kids.reserve(n);
-    for (std::uint32_t i = 0; i < n; ++i) kids.push_back(as_task(ts[i]));
-    return static_cast<PluginFold*>(h)->emplace_task(
-        [](dstd::Vector<coro::CoroTask<void>*> ks) -> coro::CoroTask<void> {
-            dstd::Vector<coro::CoroTask<void>> v;
-            v.reserve(ks.size());
-            for (auto* k : ks) v.push_back(std::move(*k));
-            co_await coro::when_all(std::move(v));
-        }(std::move(kids)));
+const dftu_io g_io = {sizeof(dftu_io), io_open,    io_close,  io_read,
+                      io_write,        io_pread,   io_pwrite, io_fsync,
+                      io_ftruncate,    io_fstat,   io_readv,  io_writev,
+                      io_preadv,       io_pwritev, io_lseek,  io_sendfile,
+                      io_accept,       io_recv,    io_send};
+
+coro::CoroTask<void> merge_shards_body(coro::AbiTask* task, dstd::String target,
+                                       dstd::Vector<dstd::String> shards) {
+    const int rc = co_await fileio::parallel::merge_shards(target, shards);
+    if (rc != 0) {
+        task->fail(DFTU_E_IO,
+                   dstd::fmt<"merge_shards: could not merge into '{}'">(
+                       dstd::StringView(target)));
+    }
 }
 
-::dftu_task* host_when_any(void* h, ::dftu_task* const* ts, std::uint32_t n) {
-    dstd::Vector<coro::CoroTask<void>*> kids;
-    kids.reserve(n);
-    for (std::uint32_t i = 0; i < n; ++i) kids.push_back(as_task(ts[i]));
-    return static_cast<PluginFold*>(h)->emplace_task(
-        [](dstd::Vector<coro::CoroTask<void>*> ks) -> coro::CoroTask<void> {
-            // when_any needs a non-void result, so wrap each void child.
-            dstd::Vector<coro::CoroTask<int>> v;
-            v.reserve(ks.size());
-            for (auto* k : ks)
-                v.push_back(
-                    [](coro::CoroTask<void>* kk) -> coro::CoroTask<int> {
-                        co_await std::move(*kk);
-                        co_return 0;
-                    }(k));
-            co_await coro::when_any(std::move(v));
-        }(std::move(kids)));
+dftu_status host_merge_shards(::dftu_ctx* ctx, void*, const char* target,
+                              const char* const* shards, std::uint32_t n,
+                              ::dftu_task** out) {
+    if (target == nullptr)
+        return host_fail(ctx, DFTU_E_INVALID, "merge_shards: target is NULL");
+    dstd::Vector<dstd::String> names;
+    names.reserve(n);
+    for (std::uint32_t i = 0; i < n; ++i) {
+        if (shards[i] == nullptr)
+            return host_fail(ctx, DFTU_E_INVALID,
+                             "merge_shards: a shard path is NULL");
+        names.emplace_back(shards[i]);
+    }
+    return start_task(ctx, out,
+                      [path = dstd::String(target),
+                       names = std::move(names)](coro::AbiTask* task) mutable {
+                          return merge_shards_body(task, std::move(path),
+                                                   std::move(names));
+                      });
 }
 
-::dftu_task* host_drive(void* h, ::dftu_task* (*step)(void*), void* coro) {
-    return static_cast<PluginFold*>(h)->emplace_task(
-        [](::dftu_task* (*s)(void*), void* c) -> coro::CoroTask<void> {
-            while (::dftu_task* t = s(c)) co_await *as_task(t);
-        }(step, coro));
+dftu_status host_writer_create(::dftu_ctx* ctx, void* h, const char* path,
+                               std::uint32_t worker_count, std::int32_t gzip,
+                               ::dftu_writer** out) {
+    if (path == nullptr || out == nullptr) {
+        return host_fail(ctx, DFTU_E_INVALID,
+                         "writer_create: path and out must be set");
+    }
+    *out = static_cast<PluginFold*>(h)->make_writer(path, worker_count, gzip);
+    return DFTU_OK;
 }
 
-::dftu_task* host_then(void* h, ::dftu_task* t, dftu_work_fn fn, void* arg) {
-    return static_cast<PluginFold*>(h)->emplace_task(
-        [](coro::CoroTask<void>* pre, dftu_work_fn f,
-           void* a) -> coro::CoroTask<void> {
-            coro::CoroTask<void> p = std::move(*pre);
-            co_await p;
-            if (f) f(a);
-        }(as_task(t), fn, arg));
+// Runs one writer call; a nonzero result fails the task.
+template <class Call>
+coro::CoroTask<void> writer_body(coro::AbiTask* task, const char* op,
+                                 PluginWriter* writer, Call call) {
+    const int rc = co_await call(writer);
+    if (rc != 0) {
+        task->fail(DFTU_E_IO,
+                   dstd::fmt<"{}: could not write '{}'">(
+                       dstd::StringView(op), dstd::StringView(writer->path)));
+    }
 }
 
-void host_run_blocking(void* /*h*/, dftu_work_fn fn, void* arg) {
-    if (!fn) return;
-    coro::BlockingRegion block;
-    fn(arg);
+template <class Call>
+dftu_status writer_start(::dftu_ctx* ctx, ::dftu_writer* w, ::dftu_task** out,
+                         const char* op, Call call) {
+    if (w == nullptr) {
+        return host_fail(
+            ctx, DFTU_E_INVALID,
+            dstd::fmt<"{}: the writer is NULL">(dstd::StringView(op)));
+    }
+    PluginWriter* writer = reinterpret_cast<PluginWriter*>(w);
+    return start_task(ctx, out, [=](coro::AbiTask* task) {
+        return writer_body(task, op, writer, call);
+    });
 }
 
-::dftu_op* host_compose_make(void* h, dftu_op_fn fn, void* state,
-                             void (*free_state)(void*), dftu_type in_ty,
-                             std::uint32_t in_size, dftu_type out_ty,
-                             std::uint32_t out_size) {
-    return static_cast<PluginFold*>(h)->compose_make(
-        fn, state, free_state, in_ty, in_size, out_ty, out_size);
-}
-::dftu_op* host_compose_then(void* h, ::dftu_op* a, ::dftu_op* b) {
-    return static_cast<PluginFold*>(h)->compose_then(a, b);
-}
-::dftu_op* host_compose_when_all(void* h, ::dftu_op* const* ops,
-                                 std::uint32_t n) {
-    return static_cast<PluginFold*>(h)->compose_when_all(ops, n);
-}
-::dftu_op* host_compose_when_any(void* h, ::dftu_op* const* ops,
-                                 std::uint32_t n) {
-    return static_cast<PluginFold*>(h)->compose_when_any(ops, n);
-}
-::dftu_task* host_compose_run(void* h, ::dftu_op* op, const void* in, void* out,
-                              int* rc) {
-    return static_cast<PluginFold*>(h)->compose_run(op, in, out, rc);
-}
-// Ops are arena-owned (scan-lifetime); early release is a no-op.
-void host_compose_free_op(void* /*h*/, ::dftu_op* /*op*/) {}
-
-::dftu_task* host_merge_shards(void* h, const char* target,
-                               const char* const* shards, std::uint32_t n) {
-    dstd::String tgt(target ? target : "");
-    dstd::Vector<dstd::String> sv;
-    sv.reserve(n);
-    for (std::uint32_t i = 0; i < n; ++i)
-        sv.emplace_back(shards[i] ? shards[i] : "");
-    return static_cast<PluginFold*>(h)->emplace_task(
-        [](dstd::String t,
-           dstd::Vector<dstd::String> s) -> coro::CoroTask<void> {
-            co_await fileio::parallel::merge_shards(t, s);
-        }(std::move(tgt), std::move(sv)));
+dftu_status host_writer_open(::dftu_ctx* ctx, void*, ::dftu_writer* w,
+                             ::dftu_task** out) {
+    return writer_start(ctx, w, out, "writer_open", [](PluginWriter* pw) {
+        return pw->writer->open(pw->path, pw->worker_count, pw->gzip, nullptr);
+    });
 }
 
-::dftu_writer* host_writer_create(void* h, const char* path,
-                                  std::uint32_t worker_count, int gzip) {
-    return static_cast<PluginFold*>(h)->make_writer(path, worker_count, gzip);
+dftu_status host_writer_chunk(::dftu_ctx* ctx, void*, ::dftu_writer* w,
+                              std::uint32_t worker, const void* data,
+                              std::uint64_t len, ::dftu_task** out) {
+    return writer_start(ctx, w, out, "writer_chunk", [=](PluginWriter* pw) {
+        return pw->writer->write_chunk(
+            static_cast<std::size_t>(worker),
+            dstd::ByteView(static_cast<const unsigned char*>(data),
+                           static_cast<std::size_t>(len)));
+    });
 }
 
-::dftu_task* host_writer_open(void* h, ::dftu_writer* w) {
-    return static_cast<PluginFold*>(h)->emplace_task(
-        [](PluginWriter* pw) -> coro::CoroTask<void> {
-            co_await pw->writer->open(pw->path, pw->worker_count, pw->gzip,
-                                      nullptr);
-        }(reinterpret_cast<PluginWriter*>(w)));
-}
-
-::dftu_task* host_writer_chunk(void* h, ::dftu_writer* w, std::uint32_t worker,
-                               const void* data, std::uint64_t len) {
-    return static_cast<PluginFold*>(h)->emplace_task(
-        [](PluginWriter* pw, std::uint32_t wk, const void* d,
-           std::uint64_t l) -> coro::CoroTask<void> {
-            dstd::ByteView bv(static_cast<const unsigned char*>(d),
-                              static_cast<std::size_t>(l));
-            co_await pw->writer->write_chunk(static_cast<std::size_t>(wk), bv);
-        }(reinterpret_cast<PluginWriter*>(w), worker, data, len));
-}
-
-::dftu_task* host_writer_close(void* h, ::dftu_writer* w) {
-    return static_cast<PluginFold*>(h)->emplace_task(
-        [](PluginWriter* pw) -> coro::CoroTask<void> {
-            co_await pw->writer->close();
-        }(reinterpret_cast<PluginWriter*>(w)));
+dftu_status host_writer_close(::dftu_ctx* ctx, void*, ::dftu_writer* w,
+                              ::dftu_task** out) {
+    return writer_start(ctx, w, out, "writer_close",
+                        [](PluginWriter* pw) { return pw->writer->close(); });
 }
 
 // DDSketch lacks a mean, so the box tracks the running weighted sum.
@@ -664,92 +624,143 @@ void serialize_row(dstd::String& out, const dftu_dataframe* df,
     out += "}\n";
 }
 
-int host_arrow_write_ipc(void*, [[maybe_unused]] ::ArrowArray* a,
-                         [[maybe_unused]] ::ArrowSchema* s,
-                         [[maybe_unused]] const char* path) {
+dftu_status host_arrow_write_ipc(::dftu_ctx* ctx, void*,
+                                 [[maybe_unused]] ::ArrowArray* a,
+                                 [[maybe_unused]] ::ArrowSchema* s,
+                                 [[maybe_unused]] const char* path) {
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
-    if (!a || !s || !path || !a->release || !s->release) return -1;
+    if (!a || !s || !path || !a->release || !s->release) {
+        return host_fail(ctx, DFTU_E_INVALID,
+                         "arrow_write_ipc: the array, the schema and the path "
+                         "must be set and not released");
+    }
     nanoarrow::UniqueSchema schema;
     ArrowSchemaMove(s, schema.get());
     nanoarrow::UniqueArray array;
     ArrowArrayMove(a, array.get());
     trace::arrow::ArrowExportResult res(std::move(schema), std::move(array));
-    int rc = -1;
+    const char* failed = nullptr;
     const auto ran = dftracer::utils::default_runtime().block_on(
         coro::named("dft-plugin-ipc", [&]() -> coro::CoroTask<void> {
             trace::arrow::IpcWriter writer;
             const auto open_rc = co_await writer.open(path);
-            if (open_rc != 0) co_return;
+            if (open_rc != 0) {
+                failed = "open";
+                co_return;
+            }
             const auto write_rc = co_await writer.write_batch(res);
-            if (write_rc != 0) co_return;
+            if (write_rc != 0) {
+                failed = "write";
+                co_return;
+            }
             const auto close_rc = co_await writer.close();
-            if (close_rc != 0) co_return;
-            rc = 0;
+            if (close_rc != 0) failed = "close";
         }()));
-    if (!ran) return -1;
+    if (!ran) return host_fail(ctx, ran.error());
     ArrowSchemaMove(res.schema(), s);
     ArrowArrayMove(res.array(), a);
-    return rc;
+    if (failed != nullptr) {
+        return host_fail(ctx, DFTU_E_IO,
+                         dstd::fmt<"arrow_write_ipc: {} of '{}' failed">(
+                             dstd::StringView(failed), dstd::StringView(path)));
+    }
+    return DFTU_OK;
 #else
-    return -1;
+    return host_fail(ctx, DFTU_E_UNSUPPORTED,
+                     "arrow_write_ipc: this build has no Arrow IPC support");
 #endif
 }
 
 // Read the first record batch of an IPC file into out/out_schema; the caller
 // must release both.
-int host_arrow_read_ipc(void*, [[maybe_unused]] const char* path,
-                        [[maybe_unused]] ::ArrowArray* out,
-                        [[maybe_unused]] ::ArrowSchema* out_schema) {
+dftu_status host_arrow_read_ipc(::dftu_ctx* ctx, void*,
+                                [[maybe_unused]] const char* path,
+                                [[maybe_unused]] ::ArrowArray* out,
+                                [[maybe_unused]] ::ArrowSchema* out_schema) {
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
-    if (!path || !out || !out_schema) return -1;
+    if (!path || !out || !out_schema) {
+        return host_fail(ctx, DFTU_E_INVALID,
+                         "arrow_read_ipc: the path and both outputs must be "
+                         "set");
+    }
     trace::arrow::IpcReader reader;
-    if (reader.open(path) != 0) return -1;
-    if (reader.batch_count() == 0) return -1;
+    if (reader.open(path) != 0) {
+        return host_fail(ctx, DFTU_E_IO,
+                         dstd::fmt<"arrow_read_ipc: cannot open '{}'">(
+                             dstd::StringView(path)));
+    }
+    if (reader.batch_count() == 0) {
+        return host_fail(ctx, DFTU_E_PARSE,
+                         dstd::fmt<"arrow_read_ipc: '{}' has no record batch">(
+                             dstd::StringView(path)));
+    }
     trace::arrow::ArrowExportResult res = reader.read_batch(0);
     if (!res.array() || !res.schema() || !res.array()->release ||
-        !res.schema()->release)
-        return -1;
+        !res.schema()->release) {
+        return host_fail(ctx, DFTU_E_PARSE,
+                         dstd::fmt<"arrow_read_ipc: cannot read the first "
+                                   "batch of '{}'">(dstd::StringView(path)));
+    }
     ArrowArrayMove(res.array(), out);
     ArrowSchemaMove(res.schema(), out_schema);
-    return 0;
+    return DFTU_OK;
 #else
-    return -1;
+    return host_fail(ctx, DFTU_E_UNSUPPORTED,
+                     "arrow_read_ipc: this build has no Arrow IPC support");
 #endif
 }
 
-::dftu_trace_writer* host_trace_open_write(void* h, const char* path) {
-    return static_cast<PluginFold*>(h)->make_trace_writer(path);
+dftu_status host_trace_open_write(::dftu_ctx* ctx, void* h, const char* path,
+                                  ::dftu_trace_writer** out) {
+    if (!path || !out) {
+        return host_fail(ctx, DFTU_E_INVALID,
+                         "trace_open_write: the path and out must be set");
+    }
+    *out = static_cast<PluginFold*>(h)->make_trace_writer(path);
+    return DFTU_OK;
 }
 
-int host_trace_write(void*, ::dftu_trace_writer* w, const dftu_dataframe* df) {
-    if (!w || !df) return -1;
+dftu_status host_trace_write(::dftu_ctx* ctx, void*, ::dftu_trace_writer* w,
+                             const dftu_dataframe* df) {
+    if (!w || !df) {
+        return host_fail(ctx, DFTU_E_INVALID,
+                         "trace_write: the writer and the frame must be set");
+    }
     auto* tw = reinterpret_cast<PluginTraceWriter*>(w);
     DynCols dyn(df);
     const std::int64_t n = dftu_dataframe_num_rows(df);
     for (std::int64_t i = 0; i < n; ++i)
         serialize_row(tw->buffer, df, dyn, i, tw->next_id++);
-    return 0;
+    return DFTU_OK;
 }
 
-int host_trace_close(void* h, ::dftu_trace_writer* w) {
-    return static_cast<PluginFold*>(h)->close_trace_writer(w);
+dftu_status host_trace_close(::dftu_ctx* ctx, void* h, ::dftu_trace_writer* w) {
+    const dstd::Result<void> closed =
+        static_cast<PluginFold*>(h)->close_trace_writer(w);
+    if (!closed) return host_fail(ctx, closed.error());
+    return DFTU_OK;
 }
 
-const dftu_svc_writer g_writer = {host_merge_shards, host_writer_create,
-                                  host_writer_open, host_writer_chunk,
-                                  host_writer_close};
+const dftu_svc_writer g_writer = {sizeof(dftu_svc_writer), host_merge_shards,
+                                  host_writer_create,      host_writer_open,
+                                  host_writer_chunk,       host_writer_close};
 
-const dftu_svc_sketch g_sketch = {host_sketch_create, host_sketch_add,
-                                  host_sketch_merge, host_sketch_result,
-                                  host_sketch_free};
+const dftu_svc_sketch g_sketch = {sizeof(dftu_svc_sketch), host_sketch_create,
+                                  host_sketch_add,         host_sketch_merge,
+                                  host_sketch_result,      host_sketch_free};
 
-const dftu_svc_arrow g_arrow = {host_arrow_write_ipc, host_arrow_read_ipc};
+const dftu_svc_arrow g_arrow = {sizeof(dftu_svc_arrow), host_arrow_write_ipc,
+                                host_arrow_read_ipc};
 
-int host_trace_read(void* h, const char* path, dftu_stream_item_fn on_batch,
-                    void* ud) {
-    if (!path || !on_batch) return -1;
+dftu_status host_trace_read(::dftu_ctx* ctx, void* h, const char* path,
+                            dftu_stream_item_fn on_batch, void* ud) {
+    if (!path || !on_batch) {
+        return host_fail(ctx, DFTU_E_INVALID,
+                         "trace_read: the path and on_batch must be set");
+    }
     auto& intern = static_cast<PluginFold*>(h)->intern_table();
     dstd::String p(path);
+    dftu_status failed = DFTU_OK;
     const auto ran = dftracer::utils::default_runtime().block_on(coro::named(
         "dft-plugin-trace-read", [&]() -> coro::CoroTask<dstd::Result<void>> {
             dftracer::utils::json::Document document;
@@ -764,6 +775,7 @@ int host_trace_read(void* h, const char* path, dftu_stream_item_fn on_batch,
             trace::views::View v = trace::views::View::from_file(p);
             auto scanned = co_await v.for_each_batch(
                 [&](std::size_t, const dstd::Vector<dstd::StringView>& events) {
+                    if (failed != DFTU_OK) return;
                     batch_events.clear();
                     for (dstd::StringView ev : events) {
                         auto parsed = document.parse(ev);
@@ -797,25 +809,37 @@ int host_trace_read(void* h, const char* path, dftu_stream_item_fn on_batch,
                     dftu_dataframe* cdf = dftu_dataframe_new(
                         names.data(), handles.data(),
                         static_cast<std::int32_t>(handles.size()));
-                    on_batch(cdf, ud);
+                    failed = on_batch(ctx, cdf, ud);
                     dftu_dataframe_free(cdf);
                 },
                 /*slot_count=*/1, /*limit=*/0);
             if (!scanned) co_return scanned.error();
             co_return dstd::Result<void>{};
         }()));
-    return ran ? 0 : -1;
+    if (!ran) return host_fail(ctx, ran.error());
+    return failed;
 }
 
-const dftu_svc_trace g_trace = {host_trace_open_write, host_trace_write,
-                                host_trace_close, host_trace_read};
+const dftu_svc_trace g_trace = {sizeof(dftu_svc_trace), host_trace_open_write,
+                                host_trace_write, host_trace_close,
+                                host_trace_read};
 
-dftu_duql* host_query_compile(void* h, const char* src, std::uint32_t len) {
-    return static_cast<PluginFold*>(h)->compile_query(src, len);
+dftu_status host_query_compile(::dftu_ctx* ctx, void* h, const char* src,
+                               std::uint32_t len, dftu_duql** out) {
+    if (!src || !out) {
+        return host_fail(ctx, DFTU_E_INVALID,
+                         "duql_compile: the source and out must be set");
+    }
+    auto compiled = static_cast<PluginFold*>(h)->compile_query(src, len);
+    if (!compiled) {
+        return host_fail(ctx, DFTU_E_PARSE, compiled.error().message());
+    }
+    *out = *compiled;
+    return DFTU_OK;
 }
 
-int host_query_matches(void* h, const dftu_duql* q, const dftu_dataframe* df,
-                       std::int64_t row) {
+std::int32_t host_query_matches(void* h, const dftu_duql* q,
+                                const dftu_dataframe* df, std::int64_t row) {
     if (!q || !df) return 0;
     return static_cast<PluginFold*>(h)->match_query(
         *reinterpret_cast<const Query*>(q), df, row);
@@ -835,25 +859,19 @@ const void* host_port_consume(void* h, std::uint64_t key,
     return static_cast<PluginFold*>(h)->port_consume(key, out_size);
 }
 
-const dftu_svc_ports g_ports = {host_port_key, host_port_publish,
-                                host_port_consume};
+const dftu_svc_ports g_ports = {sizeof(dftu_svc_ports), host_port_key,
+                                host_port_publish, host_port_consume};
 
-const dftu_svc_coro g_coro = {host_spawn, host_when_all, host_when_any,
-                              host_then,  host_drive,    host_run_blocking};
-
-const dftu_svc_duql g_query = {host_query_compile, host_query_matches};
-
-const dftu_svc_compose g_compose = {
-    host_compose_make,     host_compose_then, host_compose_when_all,
-    host_compose_when_any, host_compose_run,  host_compose_free_op};
+const dftu_svc_duql g_query = {sizeof(dftu_svc_duql), host_query_compile,
+                               host_query_matches};
 
 // Stateless ext tables share one instance across all folds (each fn takes h).
 const void* host_get_service(void*, const char* ext_id) {
     if (!ext_id) return nullptr;
     if (std::strcmp(ext_id, DFTU_SVC_IO) == 0) return &g_io;
-    if (std::strcmp(ext_id, DFTU_SVC_CORO) == 0) return &g_coro;
+    if (std::strcmp(ext_id, DFTU_SVC_TASK) == 0)
+        return detail::task_ext_vtable();
     if (std::strcmp(ext_id, DFTU_SVC_DUQL) == 0) return &g_query;
-    if (std::strcmp(ext_id, DFTU_SVC_COMPOSE) == 0) return &g_compose;
     if (std::strcmp(ext_id, DFTU_SVC_WRITER) == 0) return &g_writer;
     if (std::strcmp(ext_id, DFTU_SVC_SKETCH) == 0) return &g_sketch;
     if (std::strcmp(ext_id, DFTU_SVC_ARROW) == 0) return &g_arrow;
@@ -873,178 +891,6 @@ const void* host_get_service(void*, const char* ext_id) {
 }
 
 }  // namespace
-
-::dftu_task* PluginFold::emplace_task(coro::CoroTask<void>&& task) {
-    task_arena_.push_back(
-        dstd::make_unique<coro::CoroTask<void>>(std::move(task)));
-    return reinterpret_cast<::dftu_task*>(task_arena_.back().get());
-}
-
-namespace {
-// Evaluate a compose graph over `in`, writing `out`; returns the leaf rc, with
-// the first non-zero short-circuiting a pipe. Intermediate/child buffers are
-// sized by the ops' declared value sizes.
-coro::CoroTask<int> eval_compose(PluginFold* self, ComposeOp* op,
-                                 const void* in, void* out) {
-    using Kind = ComposeOp::Kind;
-    if (op->kind == Kind::Leaf) {
-        int rc = 0;
-        ::dftu_task* t = op->fn ? op->fn(op->state, in, out, &rc) : nullptr;
-        if (t) co_await *as_task(t);
-        co_return rc;
-    }
-    if (op->kind == Kind::Then) {
-        ComposeOp* a = op->children[0];
-        ComposeOp* b = op->children[1];
-        dstd::Vector<char> mid(a->out_size);
-        int rc = co_await eval_compose(self, a, in, mid.data());
-        if (rc != 0) co_return rc;
-        co_return co_await eval_compose(self, b, mid.data(), out);
-    }
-    if (op->kind == Kind::WhenAll) {
-        // Each child writes its own disjoint slice of the concatenated output.
-        dstd::Vector<coro::CoroTask<int>> kids;
-        kids.reserve(op->children.size());
-        std::size_t off = 0;
-        for (ComposeOp* c : op->children) {
-            char* slot = static_cast<char*>(out) + off;
-            kids.push_back(eval_compose(self, c, in, slot));
-            off += c->out_size;
-        }
-        auto rcs = co_await coro::when_all(std::move(kids));
-        for (int r : rcs)
-            if (r != 0) co_return r;
-        co_return 0;
-    }
-    // WHEN_ANY: each child writes its own buffer; copy the winner into out.
-    dstd::Vector<dstd::Vector<char>> bufs(op->children.size());
-    dstd::Vector<coro::CoroTask<int>> kids;
-    kids.reserve(op->children.size());
-    for (std::size_t i = 0; i < op->children.size(); ++i) {
-        bufs[i].resize(op->children[i]->out_size);
-        kids.push_back(eval_compose(self, op->children[i], in, bufs[i].data()));
-    }
-    auto winner = co_await coro::when_any(std::move(kids));
-    if (op->out_size) std::memcpy(out, bufs[winner.index].data(), op->out_size);
-    co_return winner.result;
-}
-
-}  // namespace
-
-::dftu_op* PluginFold::compose_make(dftu_op_fn fn, void* state,
-                                    void (*free_state)(void*), dftu_type in_ty,
-                                    std::uint32_t in_size, dftu_type out_ty,
-                                    std::uint32_t out_size) {
-    compose_ops_.emplace_back();
-    ComposeOp& op = compose_ops_.back();
-    op.kind = ComposeOp::Kind::Leaf;
-    op.fn = fn;
-    op.state = state;
-    op.free_state = free_state;
-    op.in_ty = in_ty;
-    op.out_ty = out_ty;
-    op.in_size = in_size;
-    op.out_size = out_size;
-    return reinterpret_cast<::dftu_op*>(&op);
-}
-
-::dftu_op* PluginFold::compose_then(::dftu_op* a, ::dftu_op* b) {
-    if (!a || !b) return nullptr;
-    ComposeOp* oa = reinterpret_cast<ComposeOp*>(a);
-    ComposeOp* ob = reinterpret_cast<ComposeOp*>(b);
-    if (oa->out_ty != ob->in_ty || oa->out_size != ob->in_size) {
-        // Return null per the C ABI, but log so a mistyped pipe is not silent.
-        DFTRACER_UTILS_LOG_WARN(
-            "compose then: cannot pipe, value mismatch (a out ty={}/{}B -> b "
-            "in ty={}/{}B)",
-            static_cast<int>(oa->out_ty), oa->out_size,
-            static_cast<int>(ob->in_ty), ob->in_size);
-        return nullptr;
-    }
-    compose_ops_.emplace_back();
-    ComposeOp& op = compose_ops_.back();
-    op.kind = ComposeOp::Kind::Then;
-    op.in_ty = oa->in_ty;
-    op.out_ty = ob->out_ty;
-    op.in_size = oa->in_size;
-    op.out_size = ob->out_size;
-    op.children = {oa, ob};
-    return reinterpret_cast<::dftu_op*>(&op);
-}
-
-::dftu_op* PluginFold::compose_when_all(::dftu_op* const* ops,
-                                        std::uint32_t n) {
-    if (!ops || n == 0) return nullptr;
-    dstd::Vector<ComposeOp*> kids;
-    kids.reserve(n);
-    ComposeOp* first = reinterpret_cast<ComposeOp*>(ops[0]);
-    std::uint32_t out_total = 0;
-    for (std::uint32_t i = 0; i < n; ++i) {
-        ComposeOp* c = reinterpret_cast<ComposeOp*>(ops[i]);
-        // All fan the same input; the concatenated output is an opaque blob.
-        if (!c || c->in_ty != first->in_ty || c->in_size != first->in_size) {
-            DFTRACER_UTILS_LOG_WARN(
-                "compose when_all: op {} does not share the input type/size "
-                "(want ty={}/{}B)",
-                i, static_cast<int>(first->in_ty), first->in_size);
-            return nullptr;
-        }
-        kids.push_back(c);
-        out_total += c->out_size;
-    }
-    compose_ops_.emplace_back();
-    ComposeOp& op = compose_ops_.back();
-    op.kind = ComposeOp::Kind::WhenAll;
-    op.in_ty = first->in_ty;
-    op.out_ty = DFTU_T_BYTES;
-    op.in_size = first->in_size;
-    op.out_size = out_total;
-    op.children = std::move(kids);
-    return reinterpret_cast<::dftu_op*>(&op);
-}
-
-::dftu_op* PluginFold::compose_when_any(::dftu_op* const* ops,
-                                        std::uint32_t n) {
-    if (!ops || n == 0) return nullptr;
-    ComposeOp* first = reinterpret_cast<ComposeOp*>(ops[0]);
-    dstd::Vector<ComposeOp*> kids;
-    kids.reserve(n);
-    for (std::uint32_t i = 0; i < n; ++i) {
-        ComposeOp* c = reinterpret_cast<ComposeOp*>(ops[i]);
-        if (!c || c->in_ty != first->in_ty || c->in_size != first->in_size ||
-            c->out_ty != first->out_ty || c->out_size != first->out_size) {
-            DFTRACER_UTILS_LOG_WARN(
-                "compose when_any: op {} does not share the input+output "
-                "type/size of the racers",
-                i);
-            return nullptr;  // racers must share one input and output type/size
-        }
-        kids.push_back(c);
-    }
-    compose_ops_.emplace_back();
-    ComposeOp& op = compose_ops_.back();
-    op.kind = ComposeOp::Kind::WhenAny;
-    op.in_ty = first->in_ty;
-    op.out_ty = first->out_ty;
-    op.in_size = first->in_size;
-    op.out_size = first->out_size;
-    op.children = std::move(kids);
-    return reinterpret_cast<::dftu_op*>(&op);
-}
-
-::dftu_task* PluginFold::compose_run(::dftu_op* op, const void* in, void* out,
-                                     int* rc) {
-    if (!op) {
-        if (rc) *rc = -1;
-        return nullptr;
-    }
-    ComposeOp* graph = reinterpret_cast<ComposeOp*>(op);
-    return emplace_task([](PluginFold* self, ComposeOp* g, const void* i,
-                           void* o, int* r) -> coro::CoroTask<void> {
-        int res = co_await eval_compose(self, g, i, o);
-        if (r) *r = res;
-    }(this, graph, in, out, rc));
-}
 
 ::dftu_writer* PluginFold::make_writer(const char* path,
                                        std::uint32_t worker_count, int gzip) {
@@ -1068,13 +914,16 @@ coro::CoroTask<int> eval_compose(PluginFold* self, ComposeOp* op,
 namespace {
 // Compress the buffered NDJSON into whole-line gzip members and write a
 // re-indexable .pfw.gz. The index is built lazily on first read, not here.
-int write_trace_file(const PluginTraceWriter& tw) {
+dstd::Result<void> write_trace_file(const PluginTraceWriter& tw) {
     fileio::GzipWriterOptions opts;
     opts.member_size = common::constants::indexer::DEFAULT_CHECKPOINT_SIZE;
     const std::size_t member_size = opts.member_size;
     auto opened =
         fileio::GzipLineWriterBlocking::open(tw.path, std::move(opts));
-    if (!opened) return -1;
+    if (!opened) {
+        return common::make_error<"trace_close: cannot open '{}': {}">(
+            common::ErrorCode::Io, tw.path, opened.error().message());
+    }
     auto& writer = *opened;
     const dstd::StringView buf = tw.buffer;
     const std::size_t end = buf.rfind('\n') + 1;
@@ -1082,17 +931,27 @@ int write_trace_file(const PluginTraceWriter& tw) {
     while (pos < end) {
         std::size_t cut = buf.find('\n', pos + member_size);
         cut = cut == dstd::StringView::npos || cut >= end ? end : cut + 1;
-        if (!writer.append(buf.substr(pos, cut - pos))) return -1;
+        if (!writer.append(buf.substr(pos, cut - pos))) {
+            return common::make_error<"trace_close: cannot write '{}'">(
+                common::ErrorCode::Io, tw.path);
+        }
         pos = cut;
     }
-    return writer.close(buf.substr(end)) ? 0 : -1;
+    if (!writer.close(buf.substr(end))) {
+        return common::make_error<"trace_close: cannot finish '{}'">(
+            common::ErrorCode::Io, tw.path);
+    }
+    return {};
 }
 }  // namespace
 
-int PluginFold::close_trace_writer(::dftu_trace_writer* w) {
+dstd::Result<void> PluginFold::close_trace_writer(::dftu_trace_writer* w) {
     auto* tw = reinterpret_cast<PluginTraceWriter*>(w);
-    if (!tw) return -1;
-    const int result = write_trace_file(*tw);
+    if (!tw) {
+        return common::make_error<"trace_close: the writer is NULL">(
+            common::ErrorCode::InvalidArgument);
+    }
+    dstd::Result<void> result = write_trace_file(*tw);
     for (auto it = trace_writers_.begin(); it != trace_writers_.end(); ++it) {
         if (it->get() == tw) {
             trace_writers_.erase(it);
@@ -1111,7 +970,6 @@ PluginFold::PluginFold(const dftu_plugin* plugin,
     : plugin_(plugin),
       plugin_name_(std::move(plugin_name)),
       intern_(&intern),
-      slice_(plugin->make_slice(plugin->self)),
       results_(results),
       named_results_(named_results),
       memory_budget_(memory_budget),
@@ -1119,11 +977,24 @@ PluginFold::PluginFold(const dftu_plugin* plugin,
     if (states_) {
         state_accums_.reserve(states_->size());
         for (const RegisteredState& reg : *states_)
-            state_accums_.push_back(
-                dstd::make_unique<StateAccum>(reg, memory_budget_));
+            state_accums_.push_back(dstd::make_unique<StateAccum>(
+                reg, memory_budget_, plugin_label()));
     }
 
-    host_.abi_version = DFTRACER_UTILS_PLUGIN_ABI_VERSION;
+    if (plugin_->make_slice) {
+        coro::AbiContext ctx;
+        void* made = nullptr;
+        const dftu_status status =
+            plugin_->make_slice(ctx.get(), plugin_->self, &made);
+        if (status < 0) {
+            slice_error_ = callback_error(plugin_label(), "make_slice", status,
+                                          ctx.message());
+        } else {
+            slice_ = made;
+        }
+    }
+
+    host_.struct_size = sizeof(dftu_plugin_host);
     host_.h = this;
     host_.get_service = host_get_service;
     host_.resolve = host_resolve;
@@ -1157,10 +1028,16 @@ PluginFold::~PluginFold() {
     if (slice_) plugin_->destroy_slice(slice_);
 }
 
-::dftu_duql* PluginFold::compile_query(const char* src, std::uint32_t len) {
-    if (!src) return nullptr;
+dstd::Result<::dftu_duql*> PluginFold::compile_query(const char* src,
+                                                     std::uint32_t len) {
+    if (!src) {
+        return common::make_error<
+            "plugin '{}' duql_compile: the source is "
+            "NULL">(common::ErrorCode::InvalidArgument, plugin_label());
+    }
     auto r = Query::from_string(dstd::StringView{src, len});
-    if (!r) return nullptr;
+    if (!r)
+        return common::make_error(common::ErrorCode::Duql, r.error().message);
     compiled_queries_.push_back(std::move(*r));
     return reinterpret_cast<::dftu_duql*>(&compiled_queries_.back());
 }
@@ -1238,15 +1115,12 @@ bool PluginFold::passes_query(const FoldEvent& ev) {
 // plugin runs SIMD column ops instead of a per-event loop. build_row_frame is
 // the same columnar materializer NativeRowFold uses.
 dstd::Result<void> PluginFold::step(const FoldBatch& batch) {
+    if (slice_error_) return *slice_error_;
     // A transform steps by rewriting the batch; on_batch is not called
     // beside it (the transform accumulates inside its own call).
     const bool has_transform = slice_ && plugin_->transform;
     const bool has_on_batch = slice_ && plugin_->on_batch && !has_transform;
     if (!has_on_batch && !has_transform && state_accums_.empty()) return {};
-
-    // The previous step's tasks were awaited by the fuse worker before this
-    // call, so freeing them now is safe.
-    task_arena_.clear();
 
     // A transform sees the whole batch, whatever it declared in reads.
     const dstd::Vector<dstd::String> every_column;
@@ -1287,12 +1161,17 @@ dstd::Result<void> PluginFold::step(const FoldBatch& batch) {
     dftu_dataframe* cdf =
         dftu_dataframe_new(names.data(), handles.data(),
                            static_cast<std::int32_t>(handles.size()));
-    states_update(cdf);
-    // The seam is contractually synchronous (abi.h: must return NULL); a
-    // returned task would reference the now-freed cdf and cannot be driven.
-    ::dftu_task* t = nullptr;
-    if (has_transform) {
-        if (dftu_dataframe* out = plugin_->transform(slice_, cdf, &host_)) {
+    dstd::Result<void> stepped = states_update(cdf);
+    if (stepped && has_transform) {
+        coro::AbiContext ctx;
+        ::dftu_dataframe* out = nullptr;
+        const dftu_status status =
+            plugin_->transform(ctx.get(), slice_, cdf, &host_, &out);
+        if (status < 0) {
+            stepped = callback_error(plugin_label(), "transform", status,
+                                     ctx.message());
+            if (out) dftu_dataframe_free(out);
+        } else if (out) {
             // Every fold after this one in the batch reads the rewrite; with
             // no bus (a fold driven alone) there is no one to hand it to.
             if (port_bus_)
@@ -1300,16 +1179,17 @@ dstd::Result<void> PluginFold::step(const FoldBatch& batch) {
             else
                 dftu_dataframe_free(out);
         }
-    } else if (has_on_batch) {
-        t = plugin_->on_batch(slice_, cdf, &host_);
+    } else if (stepped && has_on_batch) {
+        coro::AbiContext ctx;
+        const dftu_status status =
+            plugin_->on_batch(ctx.get(), slice_, cdf, &host_);
+        if (status < 0) {
+            stepped = callback_error(plugin_label(), "on_batch", status,
+                                     ctx.message());
+        }
     }
     dftu_dataframe_free(cdf);
-    if (t)
-        DFTRACER_UTILS_LOG_ERROR(
-            "[plugin:{}] on_batch returned a non-null task; the seam is "
-            "synchronous, dropping it",
-            plugin_name().empty() ? "plugin" : plugin_name());
-    pending_ = nullptr;
+    if (!stepped) return stepped;
     reclaim_slice();
     return {};
 }
@@ -1376,9 +1256,15 @@ void PluginFold::reclaim_slice() {
 
 dstd::Result<void> PluginFold::merge(Fold& other) {
     auto& o = static_cast<PluginFold&>(other);
-    states_merge(o);
+    if (auto states = states_merge(o); !states) return states.error();
     if (!slice_) return {};
-    if (o.slice_) plugin_->merge(slice_, o.slice_);
+    if (o.slice_) {
+        coro::AbiContext ctx;
+        const dftu_status status = plugin_->merge(ctx.get(), slice_, o.slice_);
+        if (status < 0)
+            return callback_error(plugin_label(), "merge", status,
+                                  ctx.message());
+    }
     slice_reclaims_ += o.slice_reclaims_;
     reclaim_refused_ = reclaim_refused_ || o.reclaim_refused_;
     reclaim_slice();
@@ -1405,16 +1291,43 @@ dstd::Result<void> PluginFold::merge(Fold& other) {
     return {};
 }
 
-coro::CoroTask<bool> PluginFold::finalize(const CoverageSet&) {
+coro::CoroTask<dstd::Result<bool>> PluginFold::finalize(const CoverageSet&) {
+    if (slice_error_) co_return *slice_error_;
     // Publish before on_finalize so a plugin finalizing later in fold order can
     // read this one's merged accumulators via agg_result().
     publish_aggs();
-    materialize_aggs();
-    states_finalize();
-    if (slice_) {
-        if (::dftu_task* t = plugin_->on_finalize(slice_, &host_))
-            co_await *as_task(t);
-        task_arena_.clear();
+    auto materialized = materialize_aggs();
+    if (!materialized) co_return materialized.error();
+    auto states = states_finalize();
+    if (!states) co_return states.error();
+    if (slice_ && plugin_->on_finalize) {
+        const coro::CancelView cancel = co_await coro::this_coro::cancel_view;
+        coro::AbiContext ctx(cancel);
+        ::dftu_task* pending = nullptr;
+        const dftu_status status =
+            plugin_->on_finalize(ctx.get(), slice_, &host_, &pending);
+        if (status < 0) {
+            if (pending) coro::free_abi_task(pending);
+            co_return callback_error(plugin_label(), "on_finalize", status,
+                                     ctx.message());
+        }
+        if (pending && coro::abi_task(pending)->awaited) {
+            co_return callback_error(plugin_label(), "on_finalize",
+                                     DFTU_E_INVALID,
+                                     "pending is a task that was already "
+                                     "awaited");
+        }
+        if (pending) {
+            coro::AbiTask* task = coro::abi_task(pending);
+            const dftu_status done = co_await coro::run_abi_task(task);
+            const dstd::Error failure =
+                done < 0 ? coro::abi_task_error(*task) : dstd::Error();
+            coro::free_abi_task(pending);
+            if (done < 0) {
+                co_return callback_error(plugin_label(), "on_finalize", done,
+                                         failure.message());
+            }
+        }
     }
     co_return false;
 }

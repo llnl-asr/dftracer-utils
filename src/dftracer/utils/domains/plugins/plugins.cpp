@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/coro/abi_context.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/domains/plugins/build_host.h>
 #include <dftracer/utils/domains/plugins/config.h>
@@ -276,6 +277,36 @@ dstd::Result<Plugins::Impl::Loaded> load_plugin(const dstd::String& path,
             common::ErrorCode::Io, path, why ? why : "unknown dlopen error");
     }
 
+    using InfoFn = const dftu_plugin_info* (*)();
+    auto info_fn = reinterpret_cast<InfoFn>(
+        dlsym(handle, DFTRACER_UTILS_PLUGIN_INFO_SYMBOL));
+    if (!info_fn) {
+        dlclose(handle);
+        return common::make_error<
+            "plugin '{}' exports no '{}' symbol; define it with "
+            "DFTU_PLUGIN_INFO">(common::ErrorCode::NotFound, path,
+                                DFTRACER_UTILS_PLUGIN_INFO_SYMBOL);
+    }
+    const dftu_plugin_info* info = info_fn();
+    if (!info || info->struct_size != sizeof(dftu_plugin_info)) {
+        dlclose(handle);
+        return common::make_error<
+            "plugin '{}' has no valid dftu_plugin_info (NULL or wrong "
+            "struct_size)">(common::ErrorCode::InvalidArgument, path);
+    }
+    if (info->abi_version != DFTRACER_UTILS_PLUGIN_ABI_VERSION ||
+        info->abi_hash != DFTRACER_UTILS_PLUGIN_ABI_HASH) {
+        const std::uint32_t got_version = info->abi_version;
+        const std::uint64_t got_hash = info->abi_hash;
+        dlclose(handle);
+        return common::make_error<
+            "plugin '{}' was built against other plugin ABI headers (version "
+            "{}, hash {:x}; this host has version {}, hash {:x}); rebuild it">(
+            common::ErrorCode::InvalidArgument, path, got_version, got_hash,
+            static_cast<std::uint32_t>(DFTRACER_UTILS_PLUGIN_ABI_VERSION),
+            static_cast<std::uint64_t>(DFTRACER_UTILS_PLUGIN_ABI_HASH));
+    }
+
     auto factory = reinterpret_cast<dftu_plugin_factory>(
         dlsym(handle, DFTRACER_UTILS_PLUGIN_FACTORY_SYMBOL));
     if (!factory) {
@@ -286,7 +317,10 @@ dstd::Result<Plugins::Impl::Loaded> load_plugin(const dstd::String& path,
     }
 
     BuildHost build_host(plugin_name_from_path(path));
-    dftu_plugin* plugin = factory(build_host.host(), config);
+    coro::AbiContext factory_ctx;
+    dftu_plugin* plugin = nullptr;
+    const dftu_status built =
+        factory(factory_ctx.get(), build_host.host(), config, &plugin);
 
     // A rejected load never reaches Loaded, so nothing will later walk
     // registered_ops()/registered_providers() and unregister them: a factory
@@ -319,23 +353,32 @@ dstd::Result<Plugins::Impl::Loaded> load_plugin(const dstd::String& path,
             common::ErrorCode::InvalidArgument, path, build_host.denied());
     }
 
+    if (built < 0) {
+        if (plugin && plugin->destroy) plugin->destroy(plugin->self);
+        unregister_all();
+        dlclose(handle);
+        const dstd::Error why = factory_ctx.error(built, "factory");
+        return common::make_error<"plugin '{}' factory failed: {}">(
+            common::ErrorCode::InvalidArgument, path, why.message());
+    }
+
     if (!plugin) {
         unregister_all();
         dlclose(handle);
-        return common::make_error<"plugin '{}' factory returned null">(
+        return common::make_error<"plugin '{}' factory gave no descriptor">(
             common::ErrorCode::InvalidArgument, path);
     }
 
-    if (plugin->abi_version != DFTRACER_UTILS_PLUGIN_ABI_VERSION) {
-        const std::uint32_t got = plugin->abi_version;
+    if (plugin->struct_size != sizeof(dftu_plugin)) {
+        const std::uint32_t got = plugin->struct_size;
         if (plugin->destroy) plugin->destroy(plugin->self);
         unregister_all();
         dlclose(handle);
         return common::make_error<
-            "plugin '{}' ABI version {} does not match "
-            "host {}">(
+            "plugin '{}' descriptor struct_size {} is not {}; set it to "
+            "sizeof(dftu_plugin)">(
             common::ErrorCode::InvalidArgument, path, got,
-            static_cast<std::uint32_t>(DFTRACER_UTILS_PLUGIN_ABI_VERSION));
+            static_cast<std::uint32_t>(sizeof(dftu_plugin)));
     }
 
     if (dstd::String bad = config_violation(plugin, config); !bad.empty()) {
@@ -593,7 +636,7 @@ dstd::Vector<Plugins::PluginInfo> Plugins::describe() const {
     for (const auto& p : impl_->plugins) {
         PluginInfo info;
         info.path = p.path;
-        info.abi_version = p.plugin->abi_version;
+        info.abi_version = DFTRACER_UTILS_PLUGIN_ABI_VERSION;
         info.has_plan_duql = p.plugin->plan_duql != nullptr;
         info.provides = name_list(p.plugin->provides, p.plugin->self);
         info.consumes = name_list(p.plugin->consumes, p.plugin->self);

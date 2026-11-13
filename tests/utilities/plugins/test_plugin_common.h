@@ -10,6 +10,7 @@
 #include <dftracer/utils/trace/views/view.h>
 #include <doctest/doctest.h>
 #include <task_result.h>
+#include <utilities/plugins/test_abi_ctx.h>
 
 #include <variant>
 

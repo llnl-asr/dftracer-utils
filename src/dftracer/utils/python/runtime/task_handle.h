@@ -110,28 +110,12 @@ class TypedAsyncState final : public AsyncState {
     dstd::Optional<coro::TaskResult<T>> result_;
 };
 
-/// Ends `state` as cancelled when it goes out of scope before the state ended.
-template <typename State>
-struct StateGuard {
-    dstd::SharedPtr<State> state;
-    StateGuard(dstd::SharedPtr<State> s) : state(std::move(s)) {}
-    StateGuard(const StateGuard &) = delete;
-    StateGuard &operator=(const StateGuard &) = delete;
-    ~StateGuard() {
-        state->refuse(dstd::Error{dstd::Condition::Cancelled,
-                                  "task dropped before it ended"});
-    }
-};
-
 /// Runs `task` linked to `token` and stores how it ended in `state`. It never
 /// throws, so an error or a stop reaches the state as a value.
 template <typename T, typename Convert>
 coro::CoroTask<void> run_into_state(
     dstd::SharedPtr<TypedAsyncState<T, Convert>> state, coro::CoroTask<T> task,
     coro::StopToken token) {
-    // A frame destroyed before it ends, as at runtime shutdown, still ends the
-    // state, so no get() waits for ever.
-    StateGuard<TypedAsyncState<T, Convert>> guard{state};
     auto linked = coro::with_stop_token(std::move(task), std::move(token));
     auto settled = co_await coro::settle(std::move(linked));
     if (settled.error) {

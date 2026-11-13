@@ -66,6 +66,20 @@ struct [[nodiscard]] FailAwait {
 template <class T>
 struct ResultAwait;
 
+/// Forwards to an awaitable by address. GCC 12 copies the reference that
+/// await_transform returns, which a move-only awaitable rejects.
+template <class A>
+struct [[nodiscard]] RefAwait {
+    A* a;
+
+    bool await_ready() { return a->await_ready(); }
+    template <class H>
+    decltype(auto) await_suspend(H h) {
+        return a->await_suspend(h);
+    }
+    decltype(auto) await_resume() { return a->await_resume(); }
+};
+
 }  // namespace detail
 
 /// A lazy coroutine whose co_awaits hand the host the tasks to wait for: each
@@ -116,8 +130,9 @@ class Task {
             return detail::ResultAwait<T>{std::move(result)};
         }
         template <class A>
-        A&& await_transform(A&& awaitable) noexcept {
-            return std::forward<A>(awaitable);
+        detail::RefAwait<std::remove_reference_t<A>> await_transform(
+            A&& awaitable) noexcept {
+            return {&awaitable};
         }
     };
 

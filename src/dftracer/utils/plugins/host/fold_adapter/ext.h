@@ -57,6 +57,8 @@ const void* index_ext_vtable();
 const void* task_ext_vtable();
 const void* fs_ext_vtable();
 const void* fileio_ext_vtable();
+const void* json_ext_vtable();
+const void* yaml_ext_vtable();
 
 /// dftu_svc_ops::register_op with the plugin-name gate applied. Shared with
 /// the build-phase host, whose op registration is the same call. The record

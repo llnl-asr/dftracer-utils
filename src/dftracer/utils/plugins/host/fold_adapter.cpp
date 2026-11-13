@@ -1273,6 +1273,10 @@ const void* host_get_service(void*, const char* ext_id) {
     if (std::strcmp(ext_id, DFTU_SVC_INDEX) == 0)
         return detail::index_ext_vtable();
     if (std::strcmp(ext_id, DFTU_SVC_FS) == 0) return detail::fs_ext_vtable();
+    if (std::strcmp(ext_id, DFTU_SVC_JSON) == 0)
+        return detail::json_ext_vtable();
+    if (std::strcmp(ext_id, DFTU_SVC_YAML) == 0)
+        return detail::yaml_ext_vtable();
     return nullptr;
 }
 

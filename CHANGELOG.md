@@ -9,6 +9,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Added
 
+- Add the plugin services `dftu.svc.json` and `dftu.svc.yaml` (`abi/format.h`), one `dftu_svc_format` table served under both ids.
+  A plugin parses a text into a `dftu_value` tree, gets `DFTU_E_PARSE` with a `line:column: reason` message for a bad text, and writes a document with a streaming writer that returns `DFTU_E_INVALID` for a misuse.
+  The SDK has `Host::json()` and `Host::yaml()`, with `Doc` and `FormatWriter`.
+  The new `json::Writer` writes compact JSON the way `yaml::Writer` writes YAML.
 - Add `Indexer.build_async()` and `LazyFrame.collect_async()`, which start the work on the native pool and return a `TaskHandle` at once.
   `get()` releases the GIL while it waits and raises the error that `build()` or `collect()` raises.
   A handle can be awaited from `asyncio` or `uvloop`, takes `add_done_callback` and `cancel`, and a cancelled await asks the native task to stop.

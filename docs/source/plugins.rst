@@ -938,6 +938,21 @@ freed with ``list_free`` (the SDK ``PathList`` does that). ``stat_batch`` gives
 one stat and one status per path, and a missing path is
 ``DFTU_E_NOT_FOUND`` in its slot, not a failed task.
 
+``DFTU_SVC_JSON`` and ``DFTU_SVC_YAML`` (``Host::json()``, ``Host::yaml()``)
+serve one table type, ``dftu_svc_format``, so a plugin reads and writes either
+format with the same calls. The calls are synchronous. ``parse`` copies the text
+and gives a ``dftu_doc``; ``root`` gives its ``dftu_value`` tree, built once and
+valid until ``doc_free`` (the SDK ``Doc`` frees it). A parse error is
+``DFTU_E_PARSE`` with the message ``line:column: reason``. A JSON number is
+``I64`` or ``F64``; a YAML scalar is untyped text, so it is ``STR``, and ``NULL``
+for an empty value, ``~`` or ``null``. The writer streams ``begin_object``,
+``end_object``, ``begin_array``, ``end_array``, ``key``, ``i64``, ``f64``,
+``str``, ``boolean``, ``null`` and ``raw``, and ``finish`` gives the text as
+``dftu_bytes`` that the plugin frees through ``free_fn``. A call that breaks the
+grammar, such as a value in an object without a key, returns ``DFTU_E_INVALID``
+and a message, and leaves the writer as it was. Per-event JSON is not in this
+service; the host columns read it.
+
 A host utility is reached as a named op instead
 (``Host::run_op("dftu.hash.fnv1a", {column})``, ``DFTU_SVC_OPS``). Every
 ``dftu_svc_task`` call has an SDK form (``Host::spawn``, ``Host::tasks()``,
@@ -1466,6 +1481,10 @@ that covers it:
      - `9. Async work and I/O`_
    * - ``Host::fs()`` (typed ``Fs``, RAII ``PathList``)
      - ``DFTU_SVC_FS``
+     - `9. Async work and I/O`_
+   * - ``Host::json()`` / ``Host::yaml()`` (typed ``Json``, ``Yaml``, RAII
+       ``Doc``)
+     - ``DFTU_SVC_JSON``, ``DFTU_SVC_YAML``
      - `9. Async work and I/O`_
    * - ``Host::duql_compile`` / ``duql_matches``
      - ``DFTU_SVC_DUQL``

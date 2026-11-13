@@ -550,6 +550,56 @@ TEST_CASE("C ABI: dftu_svc_fs calls succeed and fail from C") {
     dftu_test_fs_ops(c.get(), &fx.host(), &hn, env.dir().c_str());
 }
 
+TEST_CASE("C ABI: dftu_svc_format JSON parses, writes and refuses from C") {
+    HostFixture fx;
+    Ctx c;
+    const dftu_test_harness hn = make_harness(c);
+    dftu_test_format_ops(c.get(), &fx.host(), &hn, DFTU_SVC_JSON);
+}
+
+TEST_CASE("C ABI: dftu_svc_format YAML parses, writes and refuses from C") {
+    HostFixture fx;
+    Ctx c;
+    const dftu_test_harness hn = make_harness(c);
+    dftu_test_format_ops(c.get(), &fx.host(), &hn, DFTU_SVC_YAML);
+}
+
+TEST_CASE("SDK: Json and Yaml parse, report errors and write a document") {
+    HostFixture fx;
+    Ctx c;
+    dftu_plugin_host& host = fx.host();
+
+    plugins::Json json(&host, c.get());
+    auto doc = json.parse(R"({"a":{"b":[1,2,3]},"s":"x"})");
+    REQUIRE(doc.has_value());
+    const dftu_value* b = dftu_obj_get(dftu_obj_get(doc->root(), "a"), "b");
+    REQUIRE(b != nullptr);
+    CHECK(b->count == 3);
+    CHECK(dftu_as_i64(&b->as.items[2], 0) == 3);
+
+    auto bad = json.parse("{\"a\": tru}");
+    REQUIRE(!bad.has_value());
+    CHECK(plugins::status_of(bad.error()) == DFTU_E_PARSE);
+    CHECK(c.message().find("1:7:") != dstd::String::npos);
+
+    plugins::Yaml yaml(&host, c.get());
+    auto writer = yaml.writer();
+    REQUIRE(writer.has_value());
+    CHECK(writer->begin_object().has_value());
+    CHECK(writer->key("name").has_value());
+    CHECK(writer->value("demo").has_value());
+    auto refused = writer->end_array();
+    REQUIRE(!refused.has_value());
+    CHECK(plugins::status_of(refused.error()) == DFTU_E_INVALID);
+    CHECK(writer->end_object().has_value());
+    auto text = writer->finish();
+    REQUIRE(text.has_value());
+    CHECK(*text == "name: demo");
+    auto back = yaml.parse(*text);
+    REQUIRE(back.has_value());
+    CHECK(dftu_obj_get(back->root(), "name") != nullptr);
+}
+
 TEST_CASE("C ABI: dftu_svc_fileio writer create/open/chunk/close from C") {
     dftu_utils_test::TestEnvironment env(0);
     HostFixture fx;

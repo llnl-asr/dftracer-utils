@@ -367,6 +367,7 @@ set(DFTRACER_UTILS_PLUGINS_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/host/fold_adapter/nodes.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/host/fold_adapter/fileio.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/host/fold_adapter/fs.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/host/fold_adapter/format.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/host/state_registry.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/host/plugins.cpp
 )
@@ -1005,10 +1006,12 @@ set_source_files_properties(
 set(DFTRACER_UTILS_JSON_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/json/canonical.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/json/dom_form.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/json/dom_value.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/json/json_value.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/json/line.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/json/parser.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/json/value.cpp)
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/json/value.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/json/writer.cpp)
 
 create_library(
   NAME

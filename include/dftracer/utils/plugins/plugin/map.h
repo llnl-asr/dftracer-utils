@@ -254,6 +254,11 @@ class Host {
     /// whole-file gzip and the file helpers; see plugin/fileio.h.
     class Fileio fileio() const;
 
+    /// The JSON and YAML services: parse text into a dftu_value tree and write
+    /// a document; see plugin/format.h.
+    class Json json() const;
+    class Yaml yaml() const;
+
     /// Get a host-owned parallel Writer for `path` with `worker_count` lanes
     /// (`gzip` != 0 compresses). The Writer is host-owned and scan-lifetime;
     /// open it, write chunks per worker, then close it - all co_await forms.

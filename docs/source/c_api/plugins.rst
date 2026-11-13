@@ -164,3 +164,10 @@ hashing. The JIT layer lowers ``jit.ilog2`` and friends to these.
 
 .. doxygenfile:: dftracer/utils/plugins/prims.h
    :project: dftracer-utils
+
+``dftu.svc.json`` and ``dftu.svc.yaml``: JSON and YAML. Both ids serve the same
+table type. A document parses into a ``dftu_value`` tree with line and column
+errors, and a streaming writer builds a document in memory.
+
+.. doxygenfile:: dftracer/utils/plugins/abi/format.h
+   :project: dftracer-utils

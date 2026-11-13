@@ -93,7 +93,8 @@ set(cabi_sources test_plugin_c_abi.cpp
                  trace_abi_c_consumer.c
                  io_abi_c_consumer.c
                  fileio_abi_c_consumer.c
-                 fs_abi_c_consumer.c)
+                 fs_abi_c_consumer.c
+                 format_abi_c_consumer.c)
 add_executable(${cabi_target} ${cabi_sources})
 target_include_directories(${cabi_target} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
 target_link_libraries(${cabi_target} PRIVATE doctest::doctest dftracer_utils

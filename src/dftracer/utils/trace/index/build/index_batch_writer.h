@@ -11,7 +11,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/trace/index/build/file_admission.h>
 #include <dftracer/utils/trace/index/extensions/bloom_fold.h>
-#include <dftracer/utils/trace/index/extensions/plugin_extension.h>
+#include <dftracer/utils/trace/index/extensions/extension_registry.h>
 #include <dftracer/utils/trace/index/extensions/rowset_fold.h>
 #include <dftracer/utils/trace/index/gzip/gzip_indexer.h>
 #include <dftracer/utils/trace/index/index.h>
@@ -40,7 +40,8 @@ struct ParsedIndexJob {
     dstd::UniquePtr<BloomFold> bloom_fold;
     dstd::UniquePtr<RowSetFold> rowset_fold;
     dstd::UniquePtr<AggregationFold> agg_fold;
-    dstd::UniquePtr<trace::index::extensions::PluginBuilders> plugin_builders;
+    dstd::UniquePtr<trace::index::extensions::ExtensionBuilders>
+        plugin_builders;
     bool success = true;
     /// Write only the bloom fold's tier; see IndexBuildBatchConfig::tier_only.
     bool tier_only = false;

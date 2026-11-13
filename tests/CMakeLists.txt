@@ -169,7 +169,7 @@ add_test(
   NAME trace_no_upward
   COMMAND
     sh -c
-    [=[bad=$(grep -rnE '^[[:space:]]*#[[:space:]]*include[[:space:]]*<dftracer/utils/(domains|cli|plugins)/' "$0/include/dftracer/utils/trace" "$0/src/dftracer/utils/trace" | grep -vE '<dftracer/utils/plugins/(abi/|arrow_abi\.h)'); if [ -n "$bad" ]; then echo "include from trace into a library above it:"; echo "$bad"; exit 1; fi]=]
+    [=[bad=$(grep -rnE '^[[:space:]]*#[[:space:]]*include[[:space:]]*<dftracer/utils/(domains|cli|plugins)/' "$0/include/dftracer/utils/trace" "$0/src/dftracer/utils/trace"); if [ -n "$bad" ]; then echo "include from trace into a library above it:"; echo "$bad"; exit 1; fi]=]
     ${CMAKE_SOURCE_DIR})
 add_test(
   NAME plugins_no_upward

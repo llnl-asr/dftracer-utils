@@ -68,6 +68,7 @@ set(TRACE_TEST_SOURCES
     index/extensions/test_rowset_fold.cpp
     index/extensions/test_bloom_fold.cpp
     index/extensions/test_catalog_fold.cpp
+    index/extensions/test_extension_registry.cpp
     views/test_raw_gzip_fuse.cpp
     views/test_restart_scan.cpp
     views/test_event_source.cpp

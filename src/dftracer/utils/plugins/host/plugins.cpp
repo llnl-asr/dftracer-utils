@@ -20,7 +20,7 @@
 #include <dftracer/utils/plugins/host/plugins_internal.h>
 #include <dftracer/utils/plugins/host/reserved_names.h>
 #include <dftracer/utils/plugins/host/state_registry.h>
-#include <dftracer/utils/trace/index/extensions/plugin_extension.h>
+#include <dftracer/utils/trace/index/extensions/extension_registry.h>
 #include <dftracer/utils/trace/views/view_plan.h>
 #include <dlfcn.h>
 
@@ -82,7 +82,7 @@ struct Plugins::Impl {
             for (const dstd::String& name : p.registered_nodes)
                 ::dftu_node_unregister(name.c_str());
             for (const dstd::String& name : p.registered_index_extensions)
-                trace::index::extensions::unregister_plugin_extension(name);
+                trace::index::extensions::unregister_extension(name);
             if (p.owned && p.plugin && p.plugin->destroy)
                 p.plugin->destroy(p.plugin->self);
             if (p.handle) dlclose(p.handle);
@@ -336,7 +336,7 @@ dstd::Result<Plugins::Impl::Loaded> load_plugin(const dstd::String& path,
             ::dftu_node_unregister(name.c_str());
         for (const dstd::String& name :
              build_host.registered_index_extensions())
-            trace::index::extensions::unregister_plugin_extension(name);
+            trace::index::extensions::unregister_extension(name);
     };
 
     // A factory that reached outside the registration surface built itself on

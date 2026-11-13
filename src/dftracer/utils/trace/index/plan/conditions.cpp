@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/logging.h>
-#include <dftracer/utils/coro/abi_context.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -13,7 +12,7 @@
 #include <dftracer/utils/duql/numbers.h>
 #include <dftracer/utils/duql/term.h>
 #include <dftracer/utils/trace/index/extensions/bloom_filter.h>
-#include <dftracer/utils/trace/index/extensions/plugin_extension.h>
+#include <dftracer/utils/trace/index/extensions/extension_registry.h>
 #include <dftracer/utils/trace/index/plan/condition.h>
 #include <dftracer/utils/trace/index/plan/file_index_data.h>
 #include <dftracer/utils/trace/index/store/file.h>
@@ -905,94 +904,91 @@ bool too_wide(const duql::detail::QueryNode& node) {
 
 namespace {
 
-// A literal as a dftu_value; false for a uint64 past int64, which the ABI
-// cannot carry. A string value borrows `lit`.
-bool to_value(const duql::LiteralNode& lit, ::dftu_value& out) {
+// A literal as an extension value; false for a uint64 past int64, which an
+// extension cannot carry. A string value borrows `lit`.
+bool to_value(const duql::LiteralNode& lit,
+              trace::index::extensions::ExtensionValue& out) {
+    using trace::index::extensions::ExtensionValue;
     return std::visit(
         [&out](auto&& v) -> bool {
             using T = std::decay_t<decltype(v)>;
-            out = ::dftu_value{};
+            out = ExtensionValue{};
             if constexpr (std::is_same_v<T, dstd::String>) {
-                out.kind = DFTU_VAL_STR;
-                out.count = static_cast<std::uint32_t>(v.size());
-                out.as.str = v.c_str();
+                out.kind = ExtensionValue::Kind::String;
+                out.str = &v;
             } else if constexpr (std::is_same_v<T, bool>) {
-                out.kind = DFTU_VAL_BOOL;
-                out.as.b = v ? 1U : 0U;
+                out.kind = ExtensionValue::Kind::Bool;
+                out.b = v;
             } else if constexpr (std::is_same_v<T, std::int64_t>) {
-                out.kind = DFTU_VAL_I64;
-                out.as.i64 = v;
+                out.kind = ExtensionValue::Kind::Int64;
+                out.i = v;
             } else if constexpr (std::is_same_v<T, std::uint64_t>) {
                 if (v > static_cast<std::uint64_t>(
                             std::numeric_limits<std::int64_t>::max()))
                     return false;
-                out.kind = DFTU_VAL_I64;
-                out.as.i64 = static_cast<std::int64_t>(v);
+                out.kind = ExtensionValue::Kind::Int64;
+                out.i = static_cast<std::int64_t>(v);
             } else {
-                out.kind = DFTU_VAL_F64;
-                out.as.f64 = v;
+                out.kind = ExtensionValue::Kind::Double;
+                out.f = v;
             }
             return true;
         },
         lit.value);
 }
 
-std::int32_t compare_op(duql::CompareOp op) {
+trace::index::extensions::ExtensionOp compare_op(duql::CompareOp op) {
+    using trace::index::extensions::ExtensionOp;
     switch (op) {
         case duql::CompareOp::Eq:
-            return DFTU_INDEX_EQ;
+            return ExtensionOp::Eq;
         case duql::CompareOp::Ne:
-            return DFTU_INDEX_NE;
+            return ExtensionOp::Ne;
         case duql::CompareOp::Lt:
-            return DFTU_INDEX_LT;
+            return ExtensionOp::Lt;
         case duql::CompareOp::Le:
-            return DFTU_INDEX_LE;
+            return ExtensionOp::Le;
         case duql::CompareOp::Gt:
-            return DFTU_INDEX_GT;
+            return ExtensionOp::Gt;
         case duql::CompareOp::Ge:
-            return DFTU_INDEX_GE;
+            return ExtensionOp::Ge;
     }
-    return DFTU_INDEX_EQ;
+    return ExtensionOp::Eq;
 }
 
-std::int32_t match_op(duql::MatchOp op) {
+trace::index::extensions::ExtensionOp match_op(duql::MatchOp op) {
+    using trace::index::extensions::ExtensionOp;
     switch (op) {
         case duql::MatchOp::Like:
-            return DFTU_INDEX_LIKE;
+            return ExtensionOp::Like;
         case duql::MatchOp::Ilike:
-            return DFTU_INDEX_ILIKE;
+            return ExtensionOp::Ilike;
         case duql::MatchOp::Regex:
-            return DFTU_INDEX_REGEX;
+            return ExtensionOp::Regex;
         case duql::MatchOp::Iregex:
-            return DFTU_INDEX_IREGEX;
+            return ExtensionOp::Iregex;
         case duql::MatchOp::Icontains:
-            return DFTU_INDEX_ICONTAINS;
+            return ExtensionOp::Icontains;
     }
-    return DFTU_INDEX_LIKE;
+    return ExtensionOp::Like;
 }
 
-/// A plugin extension (plugins/abi/index.h): the plugin compiles each leaf
-/// and judges each chunk's and the file's payload.
+/// An index extension: it compiles each leaf and judges each chunk's and the
+/// file's payload.
 class PluginCondition final : public Condition {
    public:
     PluginCondition(FileIndexData& d,
-                    trace::index::extensions::PluginExtensionPtr ext)
+                    trace::index::extensions::ExtensionPtr ext)
         : d_(d), ext_(std::move(ext)) {}
-    ~PluginCondition() override {
-        for (const auto& [leaf, h] : compiled_)
-            if (h) ext_->vt.release(h);
-    }
-    PluginCondition(const PluginCondition&) = delete;
-    PluginCondition& operator=(const PluginCondition&) = delete;
 
     IndexExtension extension() const override { return IndexExtension::Plugin; }
-    dstd::String name() const override { return ext_->name; }
+    dstd::String name() const override { return dstd::String(ext_->name()); }
 
     bool file_may_match(const duql::detail::QueryNode& root) override {
-        if (!ext_->vt.file_may_match) return true;
+        if (!ext_->has_file_check()) return true;
         if (!file_loaded_) {
-            auto loaded =
-                trace::index::plugin_file(*d_.snapshot, *d_.file, ext_->name);
+            auto loaded = trace::index::plugin_file(*d_.snapshot, *d_.file,
+                                                    dstd::String(ext_->name()));
             if (loaded)
                 file_ = std::move(*loaded);
             else
@@ -1004,12 +1000,12 @@ class PluginCondition final : public Condition {
 
     dstd::Optional<ChunkSet> may_match(const duql::detail::QueryNode& leaf,
                                        const ChunkSet& candidates) override {
-        void* h = compile(leaf);
-        if (!h) return dstd::nullopt;
+        const auto* q = compile(leaf);
+        if (!q) return dstd::nullopt;
         if (!granules_) {
             granules_.emplace();
-            auto listed = trace::index::plugin_granules(*d_.snapshot, *d_.file,
-                                                        ext_->name);
+            auto listed = trace::index::plugin_granules(
+                *d_.snapshot, *d_.file, dstd::String(ext_->name()));
             if (!listed)
                 d_.fail(std::move(listed).error());
             else if (*listed)
@@ -1020,9 +1016,8 @@ class PluginCondition final : public Condition {
         for (auto c : candidates) {
             auto it = granules_->find(c);
             if (it == granules_->end() ||
-                ext_->vt.may_match(
-                    h, reinterpret_cast<const std::uint8_t*>(it->second.data()),
-                    it->second.size()) != 0)
+                q->may_match(
+                    dstd::StringView(it->second.data(), it->second.size())))
                 out.insert(c);
         }
         return out;
@@ -1036,83 +1031,78 @@ class PluginCondition final : public Condition {
             return may_match_file(*o->left) || may_match_file(*o->right);
         if (std::holds_alternative<duql::detail::NotNode>(node.data))
             return true;
-        void* h = compile(node);
-        return !h ||
-               ext_->vt.file_may_match(
-                   h, reinterpret_cast<const std::uint8_t*>(file_->data()),
-                   file_->size()) != 0;
+        const auto* q = compile(node);
+        return !q || q->file_may_match(
+                         dstd::StringView(file_->data(), file_->size()));
     }
 
-    // NULL when the leaf cannot be passed or the plugin has no evidence.
-    void* compile(const duql::detail::QueryNode& leaf) {
-        auto [it, inserted] = compiled_.try_emplace(&leaf, nullptr);
+    // NULL when the leaf cannot be passed or the extension has no evidence.
+    const trace::index::extensions::ExtensionQuery* compile(
+        const duql::detail::QueryNode& leaf) {
+        auto [it, inserted] = compiled_.try_emplace(&leaf);
         if (inserted) it->second = compile_leaf(leaf);
-        return it->second;
+        return it->second.get();
     }
 
-    void* compile_leaf(const duql::detail::QueryNode& leaf) {
-        ::dftu_index_leaf l{};
-        ::dftu_value value{};
-        dstd::Vector<::dftu_value> items;
+    dstd::UniquePtr<trace::index::extensions::ExtensionQuery> compile_leaf(
+        const duql::detail::QueryNode& leaf) {
+        using trace::index::extensions::ExtensionOp;
+        trace::index::extensions::ExtensionLeaf l;
+        dstd::Vector<trace::index::extensions::ExtensionValue> items;
         const duql::detail::FieldNode* field = nullptr;
         auto array = [&](const duql::detail::ArrayNode& values) {
             items.resize(values.elements.size());
             for (std::size_t i = 0; i < items.size(); ++i)
                 if (!to_value(values.elements[i], items[i])) return false;
-            value.kind = DFTU_VAL_ARRAY;
-            value.count = static_cast<std::uint32_t>(items.size());
-            value.as.items = items.data();
+            l.items =
+                dstd::Span<const trace::index::extensions::ExtensionValue>(
+                    items.data(), items.size());
             return true;
         };
         if (const auto* cmp =
                 std::get_if<duql::detail::CompareNode>(&leaf.data)) {
-            if (!to_value(cmp->value, value)) return nullptr;
+            if (!to_value(cmp->value, l.value)) return nullptr;
             field = &cmp->field;
             l.op = compare_op(cmp->op);
         } else if (const auto* in =
                        std::get_if<duql::detail::InNode>(&leaf.data)) {
             if (!array(in->values)) return nullptr;
             field = &in->field;
-            l.op = DFTU_INDEX_IN;
+            l.op = ExtensionOp::In;
         } else if (const auto* nin =
                        std::get_if<duql::detail::NotInNode>(&leaf.data)) {
             if (!array(nin->values)) return nullptr;
             field = &nin->field;
-            l.op = DFTU_INDEX_NOT_IN;
+            l.op = ExtensionOp::NotIn;
         } else if (const auto* mt =
                        std::get_if<duql::detail::MatchNode>(&leaf.data)) {
             if (mt->negated) return nullptr;
-            value.kind = DFTU_VAL_STR;
-            value.count = static_cast<std::uint32_t>(mt->pattern.size());
-            value.as.str = mt->pattern.c_str();
+            l.value.kind =
+                trace::index::extensions::ExtensionValue::Kind::String;
+            l.value.str = &mt->pattern;
             field = &mt->field;
             l.op = match_op(mt->op);
         } else {
             return nullptr;
         }
-        l.path = field->path.c_str();
-        l.path_len = static_cast<std::uint32_t>(field->path.size());
-        l.any = field->any ? 1 : 0;
-        l.value = &value;
-        coro::AbiContext ctx;
-        void* compiled = nullptr;
-        const dftu_status status =
-            ext_->vt.compile(ctx.get(), ext_->self, &l, &compiled);
-        if (status < 0) {
+        l.path = field->path;
+        l.any = field->any;
+        auto compiled = ext_->compile(l);
+        if (!compiled) {
             DFTRACER_UTILS_LOG_WARN(
-                "Index extension '{}' compile failed with status {}: {}; the "
+                "Index extension '{}' compile failed with {}; the "
                 "leaf prunes nothing",
-                ext_->name, status,
-                ctx.message().empty() ? dstd::StringView("no message")
-                                      : ctx.message());
+                ext_->name(), compiled.error().message());
             return nullptr;
         }
-        return compiled;
+        return std::move(*compiled);
     }
 
     FileIndexData& d_;
-    trace::index::extensions::PluginExtensionPtr ext_;
-    dstd::HashMap<const duql::detail::QueryNode*, void*> compiled_;
+    trace::index::extensions::ExtensionPtr ext_;
+    dstd::HashMap<const duql::detail::QueryNode*,
+                  dstd::UniquePtr<trace::index::extensions::ExtensionQuery>>
+        compiled_;
     dstd::Optional<dstd::HashMap<std::uint64_t, dstd::String>> granules_;
     dstd::Optional<dstd::String> file_;
     bool file_loaded_ = false;
@@ -1128,7 +1118,7 @@ Conditions make_query_conditions(FileIndexData& data) {
     cs.push_back(dstd::make_unique<Counts>(data));
     cs.push_back(dstd::make_unique<Zonemap>(data));
     cs.push_back(dstd::make_unique<ChunkBloom>(data));
-    auto registered = trace::index::extensions::plugin_extensions();
+    auto registered = trace::index::extensions::registered_extensions();
     if (registered.empty()) return cs;
     const auto copies = trace::index::plugins(*data.snapshot, *data.file);
     if (!copies) {
@@ -1137,7 +1127,7 @@ Conditions make_query_conditions(FileIndexData& data) {
     }
     for (auto& ext : registered) {
         for (const auto& copy : *copies) {
-            if (dstd::StringView(copy.name) != ext->name) continue;
+            if (dstd::StringView(copy.name) != ext->name()) continue;
             const store::ExtensionState state{copy.version, copy.params_hash,
                                               copy.ready};
             if (ext->current(state))

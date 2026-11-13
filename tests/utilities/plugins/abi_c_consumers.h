@@ -73,6 +73,22 @@ dftu_status dftu_test_io_pread(dftu_ctx*, const dftu_plugin_host*, int, void*,
                                uint64_t, uint64_t, int64_t*, dftu_task**);
 dftu_status dftu_test_io_close(dftu_ctx*, const dftu_plugin_host*, int,
                                dftu_task**);
+/* What the C scenarios call back into: run a task to the end and give its
+ * status and error text, record one check, and read the text the last refused
+ * call left on the ctx. */
+typedef struct dftu_test_harness {
+    dftu_status (*run)(dftu_task*, char* message, uint64_t cap);
+    void (*expect)(const char* what, int ok);
+    void (*ctx_message)(dftu_ctx*, char* message, uint64_t cap);
+} dftu_test_harness;
+void dftu_test_io_fs_ops(dftu_ctx*, const dftu_plugin_host*,
+                         const dftu_test_harness*, const char* dir);
+void dftu_test_io_socket_ops(dftu_ctx*, const dftu_plugin_host*,
+                             const dftu_test_harness*);
+void dftu_test_io_linux_ops(dftu_ctx*, const dftu_plugin_host*,
+                            const dftu_test_harness*, const char* dir);
+void dftu_test_fs_ops(dftu_ctx*, const dftu_plugin_host*,
+                      const dftu_test_harness*, const char* dir);
 dftu_status dftu_test_writer_create(dftu_ctx*, const dftu_plugin_host*,
                                     const char*, dftu_writer**);
 dftu_status dftu_test_writer_open(dftu_ctx*, const dftu_plugin_host*,
@@ -82,6 +98,40 @@ dftu_status dftu_test_writer_chunk(dftu_ctx*, const dftu_plugin_host*,
                                    dftu_task**);
 dftu_status dftu_test_writer_close(dftu_ctx*, const dftu_plugin_host*,
                                    dftu_writer*, dftu_task**);
+dftu_status dftu_test_merge_shards(dftu_ctx*, const dftu_plugin_host*,
+                                   const char*, const char*, const char*,
+                                   dftu_task**);
+dftu_status dftu_test_lines_open(dftu_ctx*, const dftu_plugin_host*,
+                                 const char*, uint64_t, uint64_t,
+                                 dftu_line_reader**);
+dftu_status dftu_test_lines_next(dftu_ctx*, const dftu_plugin_host*,
+                                 dftu_line_reader*, uint32_t, dftu_line_batch*,
+                                 dftu_task**);
+void dftu_test_lines_close(const dftu_plugin_host*, dftu_line_reader*);
+dftu_status dftu_test_chunks_open(dftu_ctx*, const dftu_plugin_host*,
+                                  const char*, uint64_t, dftu_chunk_reader**);
+dftu_status dftu_test_chunks_next(dftu_ctx*, const dftu_plugin_host*,
+                                  dftu_chunk_reader*, dftu_bytes*, dftu_task**);
+void dftu_test_chunks_close(const dftu_plugin_host*, dftu_chunk_reader*);
+dftu_status dftu_test_gz_open(dftu_ctx*, const dftu_plugin_host*, const char*,
+                              uint64_t, dftu_gz_writer**, dftu_task**);
+dftu_status dftu_test_gz_append(dftu_ctx*, const dftu_plugin_host*,
+                                dftu_gz_writer*, const void*, uint64_t);
+dftu_status dftu_test_gz_close(dftu_ctx*, const dftu_plugin_host*,
+                               dftu_gz_writer*, dftu_gz_summary*, dftu_task**);
+dftu_status dftu_test_compress(dftu_ctx*, const dftu_plugin_host*, const char*,
+                               const char*, uint64_t*, dftu_task**);
+dftu_status dftu_test_decompress(dftu_ctx*, const dftu_plugin_host*,
+                                 const char*, const char*, uint64_t*,
+                                 dftu_task**);
+dftu_status dftu_test_logical_path(dftu_ctx*, const dftu_plugin_host*,
+                                   const char*, char*, uint64_t);
+dftu_status dftu_test_mtime(dftu_ctx*, const dftu_plugin_host*, const char*,
+                            int64_t*);
+dftu_status dftu_test_size(dftu_ctx*, const dftu_plugin_host*, const char*,
+                           uint64_t*);
+dftu_status dftu_test_sampled_hash(dftu_ctx*, const dftu_plugin_host*,
+                                   const char*, uint64_t*);
 
 #ifdef __cplusplus
 }

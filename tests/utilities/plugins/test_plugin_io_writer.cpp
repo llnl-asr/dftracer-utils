@@ -9,16 +9,20 @@
 #include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/domains/plugins/fold_adapter.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <dftracer/utils/plugins/plugin.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 #include <fcntl.h>
+#include <netinet/in.h>
+#include <poll.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/uio.h>
@@ -74,6 +78,14 @@ void drive_task(dftu_plugin_host& host, MakeTask make) {
     dstd::String message;
     CHECK(driver.run(make(driver.host()), &message) == DFTU_OK);
     CHECK(message.empty());
+}
+
+// Like drive_task, for a task that is meant to fail: its status and message.
+template <class MakeTask>
+dftu_status drive_status(dftu_plugin_host& host, MakeTask make,
+                         dstd::String* message) {
+    test_plugin_common::TaskDriver driver(host);
+    return driver.run(make(driver.host()), message);
 }
 
 // Vectored write then vectored positional read back, with an lseek in between.
@@ -205,6 +217,88 @@ dftracer::utils::plugins::Task write_via_writer(
     co_await w.close();
 }
 
+using dftracer::utils::plugins::Host;
+using dftracer::utils::plugins::Task;
+
+Task read_lines_sdk(Host h, const char* path, std::uint64_t start,
+                    std::uint64_t end, dstd::Vector<dstd::String>* out,
+                    dstd::Vector<std::uint64_t>* firsts) {
+    auto reader = h.fileio().lines(path, start, end);
+    for (;;) {
+        auto batch = co_await reader.next(2);
+        if (!batch) break;
+        firsts->push_back(batch->first_line());
+        for (dstd::StringView line : *batch) out->push_back(dstd::String(line));
+    }
+}
+
+Task read_chunks_sdk(Host h, const char* path, std::uint64_t chunk_size,
+                     dstd::String* out) {
+    auto reader = h.fileio().chunks(path, chunk_size);
+    for (;;) {
+        auto chunk = co_await reader.next();
+        if (!chunk) break;
+        out->append(chunk->data(), chunk->size());
+    }
+}
+
+Task gz_roundtrip_sdk(Host h, const char* path, dftu_gz_summary* summary,
+                      dstd::Vector<dstd::String>* back) {
+    auto fio = h.fileio();
+    auto writer = fio.gz(path);
+    co_await writer.open();
+    writer.append("alpha\nbeta\n");
+    writer.append("gamma\n");
+    *summary = co_await writer.close();
+    auto reader = fio.lines(path);
+    for (;;) {
+        auto batch = co_await reader.next();
+        if (!batch) break;
+        for (dstd::StringView line : *batch)
+            back->push_back(dstd::String(line));
+    }
+}
+
+Task gz_bad_append_sdk(Host h, const char* path) {
+    auto writer = h.fileio().gz(path);
+    co_await writer.open();
+    writer.append("no newline");
+}
+
+Task compress_roundtrip_sdk(Host h, const char* in, const char* gz,
+                            const char* back, std::uint64_t* gz_size,
+                            std::uint64_t* back_size) {
+    auto fio = h.fileio();
+    co_await fio.compress(in, gz, gz_size);
+    co_await fio.decompress(gz, back, back_size);
+}
+
+Task compress_missing_sdk(Host h, const char* in, const char* out) {
+    std::uint64_t size = 0;
+    co_await h.fileio().compress(in, out, &size);
+}
+
+Task lines_missing_sdk(Host h, const char* path) {
+    auto reader = h.fileio().lines(path);
+    co_return;
+}
+
+Task helpers_sdk(Host h, const char* path, dstd::String* logical,
+                 std::int64_t* mtime, std::uint64_t* size,
+                 std::uint64_t* hash) {
+    auto fio = h.fileio();
+    *logical = fio.logical_path(path);
+    *mtime = fio.mtime(path);
+    *size = fio.size(path);
+    *hash = fio.sampled_hash(path);
+    co_return;
+}
+
+Task size_missing_sdk(Host h, const char* path) {
+    (void)h.fileio().size(path);
+    co_return;
+}
+
 }  // namespace
 
 TEST_CASE("plugin cxx: vectored io writev/preadv and lseek round-trip") {
@@ -325,4 +419,316 @@ TEST_CASE("plugin cxx: merge_shards concatenates shard files into a target") {
     });
 
     CHECK(read_all(target) == "AAAABBBB");
+}
+
+namespace {
+
+// mkdir, rename and rmdir through the SDK, then a failing unlink read as a
+// status and a Linux-only op, which refuses off Linux.
+dftracer::utils::plugins::Task sdk_dir_ops(dftracer::utils::plugins::Host h,
+                                           const char* dir, const char* a,
+                                           const char* b, const char* missing,
+                                           dftu_status* unlink_status,
+                                           dftu_statx* sx) {
+    dftracer::utils::plugins::Io io = h.io();
+    co_await io.mkdir(dir, 0755);
+    co_await io.rename(dir, a);
+    co_await io.symlinkat(a, AT_FDCWD, b);
+    co_await io.unlink(b);
+    auto bad = io.unlink(missing);
+    *unlink_status = co_await bad.nothrow();
+    co_await io.statx(AT_FDCWD, a, 0, 0xfff, sx);
+    co_await io.rmdir(a);
+}
+
+// One loopback round trip with the socket calls of the SDK.
+dftracer::utils::plugins::Task sdk_loopback(dftracer::utils::plugins::Host h,
+                                            std::int64_t* got) {
+    dftracer::utils::plugins::Io io = h.io();
+    int srv = -1, cli = -1, conn = -1;
+    co_await io.socket(AF_INET, SOCK_STREAM, 0, &srv);
+    co_await io.socket(AF_INET, SOCK_STREAM, 0, &cli);
+    struct sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    co_await io.bind(srv, reinterpret_cast<const sockaddr*>(&addr),
+                     sizeof(addr));
+    co_await io.listen(srv, 1);
+    socklen_t len = sizeof(addr);
+    ::getsockname(srv, reinterpret_cast<sockaddr*>(&addr), &len);
+    co_await io.connect(cli, reinterpret_cast<const sockaddr*>(&addr),
+                        sizeof(addr));
+    co_await io.accept(srv, nullptr, nullptr, &conn);
+    char out[] = "sdk";
+    struct iovec oi = {out, 3};
+    struct msghdr om{};
+    om.msg_iov = &oi;
+    om.msg_iovlen = 1;
+    std::int64_t sent = 0;
+    co_await io.sendmsg(cli, &om, 0, &sent);
+    std::uint32_t events = 0;
+    co_await io.poll_add(conn, POLLIN, &events);
+    char in[8] = {};
+    struct iovec ii = {in, sizeof(in)};
+    struct msghdr im{};
+    im.msg_iov = &ii;
+    im.msg_iovlen = 1;
+    co_await io.recvmsg(conn, &im, 0, got);
+    co_await io.shutdown(cli, SHUT_WR);
+    co_await io.close(conn);
+    co_await io.close(cli);
+    co_await io.close(srv);
+}
+
+}  // namespace
+
+TEST_CASE("plugin cxx: Io directory and link ops, a failed op, a platform op") {
+    dftu_utils_test::TestEnvironment env(0);
+    const dstd::String dir = env.dir() + "/sdk_dir";
+    const dstd::String renamed = env.dir() + "/sdk_renamed";
+    const dstd::String link = env.dir() + "/sdk_link";
+    const dstd::String missing = env.dir() + "/sdk_missing";
+    HostFixture fx;
+    test_plugin_common::TaskDriver driver(fx.host());
+    dftu_status unlink_status = DFTU_OK;
+    dftu_statx sx{};
+    dstd::String message;
+    const dftu_status st = driver.run(
+        sdk_dir_ops(driver.host(), dir.c_str(), renamed.c_str(), link.c_str(),
+                    missing.c_str(), &unlink_status, &sx),
+        &message);
+    CHECK(unlink_status == DFTU_E_NOT_FOUND);
+#ifdef __linux__
+    CHECK(st == DFTU_OK);
+    CHECK(sx.mask != 0);
+#else
+    CHECK(st == DFTU_E_UNSUPPORTED);
+    CHECK(message.find("statx") != dstd::String::npos);
+#endif
+}
+
+TEST_CASE("plugin cxx: Io socket ops carry a message over loopback") {
+    HostFixture fx;
+    std::int64_t got = 0;
+    drive_task(fx.host(), [&](dftracer::utils::plugins::Host h) {
+        return sdk_loopback(h, &got);
+    });
+    CHECK(got == 3);
+}
+
+namespace {
+
+struct FsSdkResult {
+    dstd::String read_back;
+    dstd::String at_back;
+    std::uint64_t listed = 0;
+    std::uint64_t found = 0;
+    dstd::String first_found;
+    dftu_status missing_status = DFTU_OK;
+    dftu_status stat_status[2] = {DFTU_OK, DFTU_OK};
+    std::uint64_t stat_size = 0;
+};
+
+// write_file, read_file, positioned I/O, listing, find_all and stat_batch
+// through the SDK, and a failing read_file read as a status.
+dftracer::utils::plugins::Task sdk_fs_ops(dftracer::utils::plugins::Host h,
+                                          const char* dir, const char* file,
+                                          const char* missing,
+                                          FsSdkResult* out) {
+    dftracer::utils::plugins::Fs fs = h.fs();
+    std::int32_t created = 0;
+    co_await fs.create_directories(dir, &created);
+    co_await fs.write_file(file, "sdk file", 8);
+
+    dftracer::utils::plugins::FileBytes bytes;
+    co_await fs.read_file(file, bytes);
+    out->read_back.assign(bytes.view().data(), bytes.view().size());
+
+    std::int64_t n = 0;
+    co_await fs.write_at(file, 4, "FILE", 4, &n);
+    char buf[8] = {};
+    co_await fs.read_at(file, 0, buf, 8, &n);
+    out->at_back.assign(buf, static_cast<std::size_t>(n));
+
+    dftracer::utils::plugins::PathList entries = fs.new_list();
+    co_await fs.list_dir(dir, entries);
+    out->listed = entries.size();
+
+    dftracer::utils::plugins::PathList files = fs.new_list();
+    co_await fs.find_all(dir, nullptr, files);
+    out->found = files.size();
+    if (files.size() > 0) {
+        auto first = files.entry(0);
+        out->first_found.assign(first.path.data(), first.path.size());
+    }
+
+    const char* paths[2] = {file, missing};
+    dftu_fs_stat stats[2] = {};
+    co_await fs.stat_batch(paths, 2, stats, out->stat_status);
+    out->stat_size = stats[0].size;
+
+    dftracer::utils::plugins::FileBytes none;
+    auto bad = fs.read_file(missing, none);
+    out->missing_status = co_await bad.nothrow();
+
+    std::int32_t removed = 0;
+    co_await fs.remove(file, &removed);
+    co_await fs.remove(dir, &removed);
+}
+
+}  // namespace
+
+TEST_CASE("plugin cxx: Fs reads, writes, lists, finds and stats files") {
+    dftu_utils_test::TestEnvironment env(0);
+    const dstd::String dir = env.dir() + "/sdk_fs";
+    const dstd::String file = dir + "/f.txt";
+    const dstd::String missing = dir + "/missing.txt";
+    HostFixture fx;
+    FsSdkResult r;
+    drive_task(fx.host(), [&](dftracer::utils::plugins::Host h) {
+        return sdk_fs_ops(h, dir.c_str(), file.c_str(), missing.c_str(), &r);
+    });
+    CHECK(r.read_back == "sdk file");
+    CHECK(r.at_back == "sdk FILE");
+    CHECK(r.listed == 1);
+    CHECK(r.found == 1);
+    CHECK(r.first_found == file);
+    CHECK(r.missing_status == DFTU_E_NOT_FOUND);
+    CHECK(r.stat_status[0] == DFTU_OK);
+    CHECK(r.stat_status[1] == DFTU_E_NOT_FOUND);
+    CHECK(r.stat_size == 8);
+}
+
+TEST_CASE("plugin cxx: LineReader batches a plain file by line range") {
+    dftu_utils_test::TestEnvironment env(0);
+    dstd::String path = env.dir() + "/sdk_lines.txt";
+    dstd::fs::write_file(dstd::PathView(path), dstd::String("a\nb\nc\nd\ne"))
+        .discard();
+
+    HostFixture fx;
+    dstd::Vector<dstd::String> lines;
+    dstd::Vector<std::uint64_t> firsts;
+    drive_task(fx.host(), [&](Host h) {
+        return read_lines_sdk(h, path.c_str(), 2, 0, &lines, &firsts);
+    });
+    REQUIRE(lines.size() == 4);
+    CHECK(lines[0] == "b");
+    CHECK(lines[3] == "e");
+    REQUIRE(firsts.size() == 2);
+    CHECK(firsts[0] == 2);
+    CHECK(firsts[1] == 4);
+}
+
+TEST_CASE("plugin cxx: LineReader on a missing file throws NOT_FOUND") {
+    dftu_utils_test::TestEnvironment env(0);
+    dstd::String path = env.dir() + "/absent.txt";
+    HostFixture fx;
+    dstd::String message;
+    const dftu_status status = drive_status(
+        fx.host(), [&](Host h) { return lines_missing_sdk(h, path.c_str()); },
+        &message);
+    CHECK(status == DFTU_E_NOT_FOUND);
+    CHECK(message.find("lines_open") != dstd::String::npos);
+}
+
+TEST_CASE("plugin cxx: ChunkReader reads a file in chunks") {
+    dftu_utils_test::TestEnvironment env(0);
+    dstd::String path = env.dir() + "/sdk_chunks.bin";
+    const dstd::String body = "0123456789abcdef0123";
+    dstd::fs::write_file(dstd::PathView(path), body).discard();
+
+    HostFixture fx;
+    dstd::String got;
+    drive_task(fx.host(), [&](Host h) {
+        return read_chunks_sdk(h, path.c_str(), 7, &got);
+    });
+    CHECK(got == body);
+}
+
+TEST_CASE("plugin cxx: GzWriter writes lines that LineReader reads back") {
+    dftu_utils_test::TestEnvironment env(0);
+    dstd::String path = env.dir() + "/sdk_gz.pfw.gz";
+    HostFixture fx;
+    dftu_gz_summary summary{};
+    dstd::Vector<dstd::String> back;
+    drive_task(fx.host(), [&](Host h) {
+        return gz_roundtrip_sdk(h, path.c_str(), &summary, &back);
+    });
+    CHECK(summary.lines == 3);
+    CHECK(summary.uc_bytes == 17);
+    REQUIRE(back.size() == 3);
+    CHECK(back[0] == "alpha");
+    CHECK(back[2] == "gamma");
+}
+
+TEST_CASE("plugin cxx: GzWriter append without a final newline is INVALID") {
+    dftu_utils_test::TestEnvironment env(0);
+    dstd::String path = env.dir() + "/sdk_bad.pfw.gz";
+    HostFixture fx;
+    dstd::String message;
+    const dftu_status status = drive_status(
+        fx.host(), [&](Host h) { return gz_bad_append_sdk(h, path.c_str()); },
+        &message);
+    CHECK(status == DFTU_E_INVALID);
+}
+
+TEST_CASE("plugin cxx: Fileio compress then decompress round-trips") {
+    dftu_utils_test::TestEnvironment env(0);
+    dstd::String in = env.dir() + "/sdk_in.txt";
+    dstd::String gz = env.dir() + "/sdk_in.txt.gz";
+    dstd::String back = env.dir() + "/sdk_back.txt";
+    dstd::String text;
+    for (int i = 0; i < 100; ++i) text += dstd::fmt<"line {}\n">(i);
+    dstd::fs::write_file(dstd::PathView(in), text).discard();
+
+    HostFixture fx;
+    std::uint64_t gz_size = 0, back_size = 0;
+    drive_task(fx.host(), [&](Host h) {
+        return compress_roundtrip_sdk(h, in.c_str(), gz.c_str(), back.c_str(),
+                                      &gz_size, &back_size);
+    });
+    CHECK(gz_size > 0);
+    CHECK(back_size == text.size());
+    CHECK(read_all(back) == text);
+}
+
+TEST_CASE("plugin cxx: Fileio compress of a missing input is NOT_FOUND") {
+    dftu_utils_test::TestEnvironment env(0);
+    dstd::String in = env.dir() + "/absent.txt";
+    dstd::String out = env.dir() + "/absent.gz";
+    HostFixture fx;
+    dstd::String message;
+    const dftu_status status = drive_status(
+        fx.host(),
+        [&](Host h) {
+            return compress_missing_sdk(h, in.c_str(), out.c_str());
+        },
+        &message);
+    CHECK(status == DFTU_E_NOT_FOUND);
+    CHECK(message.find("compress") != dstd::String::npos);
+}
+
+TEST_CASE("plugin cxx: Fileio helpers answer and throw on a missing file") {
+    dftu_utils_test::TestEnvironment env(0);
+    dstd::String path = env.dir() + "/sdk_helper.txt";
+    dstd::fs::write_file(dstd::PathView(path), dstd::String("abc")).discard();
+
+    HostFixture fx;
+    dstd::String logical;
+    std::int64_t mtime = 0;
+    std::uint64_t size = 0, hash = 0;
+    drive_task(fx.host(), [&](Host h) {
+        return helpers_sdk(h, path.c_str(), &logical, &mtime, &size, &hash);
+    });
+    CHECK(logical.find("sdk_helper.txt") != dstd::String::npos);
+    CHECK(mtime > 0);
+    CHECK(size == 3);
+    CHECK(hash != 0);
+
+    dstd::String missing = env.dir() + "/absent.txt";
+    dstd::String message;
+    const dftu_status status = drive_status(
+        fx.host(), [&](Host h) { return size_missing_sdk(h, missing.c_str()); },
+        &message);
+    CHECK(status == DFTU_E_NOT_FOUND);
 }

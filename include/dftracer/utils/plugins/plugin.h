@@ -13,10 +13,12 @@
 #include <dftracer/utils/plugins/plugin/async.h>
 #include <dftracer/utils/plugins/plugin/types.h>
 #include <dftracer/utils/plugins/plugin/map.h>
+#include <dftracer/utils/plugins/plugin/fs.h>
 #include <dftracer/utils/plugins/plugin/job.h>
 #include <dftracer/utils/plugins/plugin/register.h>
 #include <dftracer/utils/plugins/plugin/source.h>
 #include <dftracer/utils/plugins/plugin/node.h>
+#include <dftracer/utils/plugins/plugin/fileio.h>
 // clang-format on
 
 #endif /* DFTRACER_UTILS_PLUGINS_PLUGIN_H */

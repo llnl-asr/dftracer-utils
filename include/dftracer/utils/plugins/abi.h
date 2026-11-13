@@ -14,6 +14,8 @@
 #include <dftracer/utils/plugins/abi/arrow.h>
 #include <dftracer/utils/plugins/abi/core.h>
 #include <dftracer/utils/plugins/abi/duql.h>
+#include <dftracer/utils/plugins/abi/fileio.h>
+#include <dftracer/utils/plugins/abi/fs.h>
 #include <dftracer/utils/plugins/abi/index.h>
 #include <dftracer/utils/plugins/abi/io.h>
 #include <dftracer/utils/plugins/abi/nodes.h>
@@ -26,6 +28,5 @@
 #include <dftracer/utils/plugins/abi/task.h>
 #include <dftracer/utils/plugins/abi/trace.h>
 #include <dftracer/utils/plugins/abi/value.h>
-#include <dftracer/utils/plugins/abi/writer.h>
 
 #endif /* DFTRACER_UTILS_PLUGINS_ABI_H */

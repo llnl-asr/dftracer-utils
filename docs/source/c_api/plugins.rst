@@ -100,19 +100,28 @@ rounds for a fan-in whose count is known only at run time.
 .. doxygenfile:: dftracer/utils/plugins/abi/task.h
    :project: dftracer-utils
 
-``dftu.svc.io``, ``dftu.svc.writer``, ``dftu.svc.trace``, ``dftu.svc.arrow``:
-files, output writers, trace files and Arrow IPC.
+``dftu.svc.io``, ``dftu.svc.fileio``, ``dftu.svc.trace``, ``dftu.svc.arrow``:
+files, the file readers and writers (line and chunk readers over plain and gzip
+files, the gzip line writer, the parallel writer, whole-file gzip and the file
+helpers), trace files and Arrow IPC.
 
 .. doxygenfile:: dftracer/utils/plugins/abi/io.h
    :project: dftracer-utils
 
-.. doxygenfile:: dftracer/utils/plugins/abi/writer.h
+.. doxygenfile:: dftracer/utils/plugins/abi/fileio.h
    :project: dftracer-utils
 
 .. doxygenfile:: dftracer/utils/plugins/abi/trace.h
    :project: dftracer-utils
 
 .. doxygenfile:: dftracer/utils/plugins/abi/arrow.h
+   :project: dftracer-utils
+
+``dftu.svc.fs``: the runtime file system layer. Whole-file and positioned
+reads and writes, directory listing and search, existence, creation and removal,
+and batched stat.
+
+.. doxygenfile:: dftracer/utils/plugins/abi/fs.h
    :project: dftracer-utils
 
 ``dftu.svc.index``: register an index extension. The host hands its builder

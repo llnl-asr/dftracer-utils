@@ -7,6 +7,7 @@
 #include <sys/wait.h>
 #include <testing_utilities.h>
 #include <unistd.h>
+#include <zlib.h>
 
 #include <cstdlib>
 #include <regex>
@@ -82,6 +83,16 @@ RunResult run_capture_stderr(const dstd::String& binary,
     return r;
 }
 
+bool read_gzip_text(const dstd::String& path, dstd::String& out) {
+    gzFile gz = gzopen(path.c_str(), "rb");
+    if (gz == nullptr) return false;
+    char buf[4096];
+    int n;
+    while ((n = gzread(gz, buf, sizeof(buf))) > 0)
+        out.append(buf, static_cast<std::size_t>(n));
+    return gzclose(gz) == Z_OK && n == 0;
+}
+
 long first_capture(const dstd::String& text, const dstd::String& pattern) {
     std::match_results<dstd::String::const_iterator> m;
     if (std::regex_search(text, m, std::regex(pattern.c_str())))
@@ -149,6 +160,46 @@ TEST_SUITE("DFTracerRun") {
         CHECK(lines >= 1);
         CHECK(total == 40);  // every generated event carries a duration
         MESSAGE("duration_histogram: bins=" << lines << " total=" << total);
+    }
+
+    TEST_CASE("duration_report plugin writes its report through fileio") {
+        dstd::String run =
+            env_or_probe("DFTRACER_UTILS_RUN_PATH", "dftracer_run");
+        dstd::String plugin = env_or_probe(
+            "DFTRACER_UTILS_DURATION_REPORT_PLUGIN_PATH", "duration_report.so");
+        if (run.empty() || plugin.empty()) {
+            MESSAGE("dftracer_run or duration_report plugin not found.");
+            return;
+        }
+
+        dftu_utils_test::TestEnvironment env(40);
+        REQUIRE(env.is_valid());
+        REQUIRE(!create_pfw_gz(env, 40).empty());
+        dstd::String out_dir = env.dir() + "/out";
+        REQUIRE(dstd::fs::create_directories(out_dir).has_value());
+        dstd::String report = out_dir + "/report.jsonl.gz";
+
+        RunResult r = run_capture_stderr(
+            run, {env.dir(), "--plugin", plugin, "--parg", "out=" + report});
+        CHECK(r.exit_code == 0);
+        long lines = first_capture(r.err, "duration_report: lines=([0-9]+)");
+        CHECK(lines >= 1);
+
+        dstd::String text;
+        REQUIRE(read_gzip_text(report, text));
+        long total = 0;
+        int rows = 0;
+        std::regex row("\\{\"log2_us\":[0-9]+,\"count\":([0-9]+)\\}\n");
+        for (std::regex_iterator<dstd::String::const_iterator>
+                 it(text.cbegin(), text.cend(), row),
+             end;
+             it != end; ++it) {
+            total += dftu_utils_test::to_number<long>(
+                dstd::String((*it)[1].first, (*it)[1].second));
+            ++rows;
+        }
+        CHECK(rows == lines);
+        CHECK(total == 40);
     }
 
     TEST_CASE("query_filter plugin (C++ SDK, F builder, no query-lib link)") {

@@ -38,6 +38,8 @@ dftu_status dftu_task_run(dftu_runtime* rt, dftu_task* t, dftu_error* err) {
         status = common::fill_error(err, ran.error());
     } else if (task->status < 0) {
         status = common::fill_error(err, coro::abi_task_error(*task));
+    } else {
+        status = task->status;
     }
     coro::free_abi_task(t);
     return status;

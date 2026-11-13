@@ -24,7 +24,6 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/fileio/gzip_line_writer.h>
-#include <dftracer/utils/fileio/parallel/merge.h>
 #include <dftracer/utils/json/value.h>
 #include <dftracer/utils/json/value_access.h>
 #include <dftracer/utils/memory/budget.h>
@@ -57,6 +56,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
 #include <new>
 #include <string>
 #include <utility>
@@ -120,7 +120,8 @@ void host_log(void* h, std::uint8_t level, const char* s, std::uint32_t n) {
 }
 
 // A negative result is -errno from the I/O layer; it fails the task as
-// DFTU_E_IO (DFTU_E_NOT_FOUND for ENOENT, DFTU_E_INVALID for EINVAL and EBADF).
+// DFTU_E_IO (DFTU_E_NOT_FOUND for ENOENT, DFTU_E_INVALID for EINVAL and EBADF,
+// DFTU_E_UNSUPPORTED for ENOSYS, EOPNOTSUPP and ENOTSUP).
 bool io_ok(coro::AbiTask* task, const char* op, std::int64_t result) {
     if (result >= 0) return true;
     const int err = static_cast<int>(-result);
@@ -129,6 +130,12 @@ bool io_ok(coro::AbiTask* task, const char* op, std::int64_t result) {
         status = DFTU_E_NOT_FOUND;
     } else if (err == EINVAL || err == EBADF) {
         status = DFTU_E_INVALID;
+    } else if (err == ENOSYS || err == EOPNOTSUPP
+#if ENOTSUP != EOPNOTSUPP
+               || err == ENOTSUP
+#endif
+    ) {
+        status = DFTU_E_UNSUPPORTED;
     }
     const dstd::String text = dstd::fmt<"{}: {} (errno {})">(
         dstd::StringView(op), dstd::StringView(std::strerror(err)), err);
@@ -318,103 +325,484 @@ dftu_status io_send(::dftu_ctx* ctx, void*, std::int32_t fd, const void* buf,
     });
 }
 
-const dftu_io g_io = {sizeof(dftu_io), io_open,    io_close,  io_read,
-                      io_write,        io_pread,   io_pwrite, io_fsync,
-                      io_ftruncate,    io_fstat,   io_readv,  io_writev,
-                      io_preadv,       io_pwritev, io_lseek,  io_sendfile,
-                      io_accept,       io_recv,    io_send};
-
-coro::CoroTask<void> merge_shards_body(coro::AbiTask* task, dstd::String target,
-                                       dstd::Vector<dstd::String> shards) {
-    const int rc = co_await fileio::parallel::merge_shards(target, shards);
-    if (rc != 0) {
-        task->fail(DFTU_E_IO,
-                   dstd::fmt<"merge_shards: could not merge into '{}'">(
-                       dstd::StringView(target)));
-    }
+dftu_status io_unlink(::dftu_ctx* ctx, void*, const char* path,
+                      ::dftu_task** out) {
+    if (path == nullptr)
+        return host_fail(ctx, DFTU_E_INVALID, "unlink: path is NULL");
+    const dstd::String copy(path);
+    return io_start(ctx, out, "unlink", static_cast<std::int64_t*>(nullptr),
+                    [=] { return runtime::io::unlink(copy.c_str()); });
 }
 
-dftu_status host_merge_shards(::dftu_ctx* ctx, void*, const char* target,
-                              const char* const* shards, std::uint32_t n,
-                              ::dftu_task** out) {
-    if (target == nullptr)
-        return host_fail(ctx, DFTU_E_INVALID, "merge_shards: target is NULL");
-    dstd::Vector<dstd::String> names;
-    names.reserve(n);
-    for (std::uint32_t i = 0; i < n; ++i) {
-        if (shards[i] == nullptr)
-            return host_fail(ctx, DFTU_E_INVALID,
-                             "merge_shards: a shard path is NULL");
-        names.emplace_back(shards[i]);
-    }
-    return start_task(ctx, out,
-                      [path = dstd::String(target),
-                       names = std::move(names)](coro::AbiTask* task) mutable {
-                          return merge_shards_body(task, std::move(path),
-                                                   std::move(names));
-                      });
+dftu_status io_rmdir(::dftu_ctx* ctx, void*, const char* path,
+                     ::dftu_task** out) {
+    if (path == nullptr)
+        return host_fail(ctx, DFTU_E_INVALID, "rmdir: path is NULL");
+    const dstd::String copy(path);
+    return io_start(ctx, out, "rmdir", static_cast<std::int64_t*>(nullptr),
+                    [=] { return runtime::io::rmdir(copy.c_str()); });
 }
 
-dftu_status host_writer_create(::dftu_ctx* ctx, void* h, const char* path,
-                               std::uint32_t worker_count, std::int32_t gzip,
-                               ::dftu_writer** out) {
-    if (path == nullptr || out == nullptr) {
-        return host_fail(ctx, DFTU_E_INVALID,
-                         "writer_create: path and out must be set");
-    }
-    *out = static_cast<PluginFold*>(h)->make_writer(path, worker_count, gzip);
-    return DFTU_OK;
+dftu_status io_rename(::dftu_ctx* ctx, void*, const char* from, const char* to,
+                      ::dftu_task** out) {
+    if (from == nullptr || to == nullptr)
+        return host_fail(ctx, DFTU_E_INVALID, "rename: a path is NULL");
+    const dstd::String from_copy(from);
+    const dstd::String to_copy(to);
+    return io_start(
+        ctx, out, "rename", static_cast<std::int64_t*>(nullptr), [=] {
+            return runtime::io::rename(from_copy.c_str(), to_copy.c_str());
+        });
 }
 
-// Runs one writer call; a nonzero result fails the task.
-template <class Call>
-coro::CoroTask<void> writer_body(coro::AbiTask* task, const char* op,
-                                 PluginWriter* writer, Call call) {
-    const int rc = co_await call(writer);
-    if (rc != 0) {
-        task->fail(DFTU_E_IO,
-                   dstd::fmt<"{}: could not write '{}'">(
-                       dstd::StringView(op), dstd::StringView(writer->path)));
-    }
+dftu_status io_mkdir(::dftu_ctx* ctx, void*, const char* path,
+                     std::int32_t mode, ::dftu_task** out) {
+    if (path == nullptr)
+        return host_fail(ctx, DFTU_E_INVALID, "mkdir: path is NULL");
+    const dstd::String copy(path);
+    return io_start(
+        ctx, out, "mkdir", static_cast<std::int64_t*>(nullptr), [=] {
+            return runtime::io::mkdir(copy.c_str(), static_cast<mode_t>(mode));
+        });
 }
 
-template <class Call>
-dftu_status writer_start(::dftu_ctx* ctx, ::dftu_writer* w, ::dftu_task** out,
-                         const char* op, Call call) {
-    if (w == nullptr) {
+dftu_status io_fadvise(::dftu_ctx* ctx, void*, std::int32_t fd,
+                       std::uint64_t off, std::uint64_t len,
+                       std::int32_t advice, ::dftu_task** out) {
+    return io_start(ctx, out, "fadvise", static_cast<std::int64_t*>(nullptr),
+                    [=] { return runtime::io::fadvise(fd, off, len, advice); });
+}
+
+dftu_status io_linkat(::dftu_ctx* ctx, void*, std::int32_t from_dirfd,
+                      const char* from, std::int32_t to_dirfd, const char* to,
+                      std::int32_t flags, ::dftu_task** out) {
+    if (from == nullptr || to == nullptr)
+        return host_fail(ctx, DFTU_E_INVALID, "linkat: a path is NULL");
+    const dstd::String from_copy(from);
+    const dstd::String to_copy(to);
+    return io_start(
+        ctx, out, "linkat", static_cast<std::int64_t*>(nullptr), [=] {
+            return runtime::io::linkat(from_dirfd, from_copy.c_str(), to_dirfd,
+                                       to_copy.c_str(), flags);
+        });
+}
+
+dftu_status io_symlinkat(::dftu_ctx* ctx, void*, const char* target,
+                         std::int32_t dirfd, const char* link,
+                         ::dftu_task** out) {
+    if (target == nullptr || link == nullptr)
+        return host_fail(ctx, DFTU_E_INVALID, "symlinkat: a path is NULL");
+    const dstd::String target_copy(target);
+    const dstd::String link_copy(link);
+    return io_start(ctx, out, "symlinkat", static_cast<std::int64_t*>(nullptr),
+                    [=] {
+                        return runtime::io::symlinkat(target_copy.c_str(),
+                                                      dirfd, link_copy.c_str());
+                    });
+}
+
+dftu_status io_socket(::dftu_ctx* ctx, void*, std::int32_t domain,
+                      std::int32_t type, std::int32_t protocol,
+                      std::int32_t* out_fd, ::dftu_task** out) {
+    return io_start(ctx, out, "socket", out_fd, [=] {
+        return runtime::io::socket(domain, type, protocol);
+    });
+}
+
+// The address is copied into the task: the plugin's buffer need not outlive
+// the call.
+bool copy_sockaddr(::dftu_ctx* ctx, const char* op, const struct sockaddr* addr,
+                   socklen_t addrlen, struct sockaddr_storage* out) {
+    if (addr == nullptr || addrlen > sizeof(*out)) {
+        host_fail(ctx, DFTU_E_INVALID,
+                  dstd::fmt<"{}: the socket address is NULL or too long">(
+                      dstd::StringView(op)));
+        return false;
+    }
+    std::memset(out, 0, sizeof(*out));
+    std::memcpy(out, addr, addrlen);
+    return true;
+}
+
+dftu_status io_connect(::dftu_ctx* ctx, void*, std::int32_t fd,
+                       const struct sockaddr* addr, socklen_t addrlen,
+                       ::dftu_task** out) {
+    struct sockaddr_storage ss;
+    if (!copy_sockaddr(ctx, "connect", addr, addrlen, &ss))
+        return DFTU_E_INVALID;
+    return io_start(
+        ctx, out, "connect", static_cast<std::int64_t*>(nullptr), [=] {
+            return runtime::io::connect(
+                fd, reinterpret_cast<const struct sockaddr*>(&ss), addrlen);
+        });
+}
+
+dftu_status io_bind(::dftu_ctx* ctx, void*, std::int32_t fd,
+                    const struct sockaddr* addr, socklen_t addrlen,
+                    ::dftu_task** out) {
+    struct sockaddr_storage ss;
+    if (!copy_sockaddr(ctx, "bind", addr, addrlen, &ss)) return DFTU_E_INVALID;
+    return io_start(ctx, out, "bind", static_cast<std::int64_t*>(nullptr), [=] {
+        return runtime::io::bind(
+            fd, reinterpret_cast<const struct sockaddr*>(&ss), addrlen);
+    });
+}
+
+dftu_status io_listen(::dftu_ctx* ctx, void*, std::int32_t fd,
+                      std::int32_t backlog, ::dftu_task** out) {
+    return io_start(ctx, out, "listen", static_cast<std::int64_t*>(nullptr),
+                    [=] { return runtime::io::listen(fd, backlog); });
+}
+
+dftu_status io_shutdown(::dftu_ctx* ctx, void*, std::int32_t fd,
+                        std::int32_t how, ::dftu_task** out) {
+    return io_start(ctx, out, "shutdown", static_cast<std::int64_t*>(nullptr),
+                    [=] { return runtime::io::shutdown(fd, how); });
+}
+
+dftu_status io_sendmsg(::dftu_ctx* ctx, void*, std::int32_t fd,
+                       const struct msghdr* msg, std::int32_t flags,
+                       std::int64_t* out_n, ::dftu_task** out) {
+    if (msg == nullptr)
+        return host_fail(ctx, DFTU_E_INVALID, "sendmsg: msg is NULL");
+    return io_start(ctx, out, "sendmsg", out_n,
+                    [=] { return runtime::io::sendmsg(fd, msg, flags); });
+}
+
+dftu_status io_recvmsg(::dftu_ctx* ctx, void*, std::int32_t fd,
+                       struct msghdr* msg, std::int32_t flags,
+                       std::int64_t* out_n, ::dftu_task** out) {
+    if (msg == nullptr)
+        return host_fail(ctx, DFTU_E_INVALID, "recvmsg: msg is NULL");
+    return io_start(ctx, out, "recvmsg", out_n,
+                    [=] { return runtime::io::recvmsg(fd, msg, flags); });
+}
+
+dftu_status io_poll_add(::dftu_ctx* ctx, void*, std::int32_t fd,
+                        std::uint32_t events, std::uint32_t* out_events,
+                        ::dftu_task** out) {
+    return io_start(ctx, out, "poll_add", out_events,
+                    [=] { return runtime::io::poll_add(fd, events); });
+}
+
+#ifdef __linux__
+
+std::int64_t timestamp_ns(const runtime::io::StatxTimestamp& t) {
+    return t.sec * 1000000000ll + static_cast<std::int64_t>(t.nsec);
+}
+
+coro::CoroTask<void> statx_body(coro::AbiTask* task, std::int32_t dirfd,
+                                dstd::String path, std::int32_t flags,
+                                std::uint32_t mask, dftu_statx* out) {
+    runtime::io::Statx st{};
+    const ssize_t rc =
+        co_await runtime::io::statx(dirfd, path.c_str(), flags, mask, &st);
+    if (!io_ok(task, "statx", rc) || out == nullptr) co_return;
+    out->attributes = st.attributes;
+    out->ino = st.ino;
+    out->size = st.size;
+    out->blocks = st.blocks;
+    out->attributes_mask = st.attributes_mask;
+    out->atime_ns = timestamp_ns(st.atime);
+    out->btime_ns = timestamp_ns(st.btime);
+    out->ctime_ns = timestamp_ns(st.ctime);
+    out->mtime_ns = timestamp_ns(st.mtime);
+    out->mask = st.mask;
+    out->blksize = st.blksize;
+    out->nlink = st.nlink;
+    out->uid = st.uid;
+    out->gid = st.gid;
+    out->mode = st.mode;
+    out->rdev_major = st.rdev_major;
+    out->rdev_minor = st.rdev_minor;
+    out->dev_major = st.dev_major;
+    out->dev_minor = st.dev_minor;
+}
+
+dftu_status io_statx(::dftu_ctx* ctx, void*, std::int32_t dirfd,
+                     const char* path, std::int32_t flags, std::uint32_t mask,
+                     dftu_statx* out_st, ::dftu_task** out) {
+    if (path == nullptr)
+        return host_fail(ctx, DFTU_E_INVALID, "statx: path is NULL");
+    dstd::String copy(path);
+    return start_task(ctx, out, [=](coro::AbiTask* task) {
+        return statx_body(task, dirfd, copy, flags, mask, out_st);
+    });
+}
+
+dftu_status io_fallocate(::dftu_ctx* ctx, void*, std::int32_t fd,
+                         std::int32_t mode, std::uint64_t off,
+                         std::uint64_t len, ::dftu_task** out) {
+    return io_start(ctx, out, "fallocate", static_cast<std::int64_t*>(nullptr),
+                    [=] { return runtime::io::fallocate(fd, mode, off, len); });
+}
+
+dftu_status io_sync_file_range(::dftu_ctx* ctx, void*, std::int32_t fd,
+                               std::uint64_t off, std::uint64_t len,
+                               std::uint32_t flags, ::dftu_task** out) {
+    return io_start(
+        ctx, out, "sync_file_range", static_cast<std::int64_t*>(nullptr),
+        [=] { return runtime::io::sync_file_range(fd, off, len, flags); });
+}
+
+coro::CoroTask<void> splice_body(coro::AbiTask* task, std::int32_t in_fd,
+                                 std::int64_t* in_off, std::int32_t out_fd,
+                                 std::int64_t* out_off, std::uint64_t len,
+                                 std::uint32_t flags, std::int64_t* out_n) {
+    const std::int64_t from = in_off != nullptr ? *in_off : -1;
+    const std::int64_t to = out_off != nullptr ? *out_off : -1;
+    const std::int64_t result =
+        static_cast<std::int64_t>(co_await runtime::io::splice(
+            in_fd, from, out_fd, to, static_cast<std::size_t>(len), flags));
+    if (!io_ok(task, "splice", result)) co_return;
+    if (in_off != nullptr) *in_off += result;
+    if (out_off != nullptr) *out_off += result;
+    if (out_n != nullptr) *out_n = result;
+}
+
+dftu_status io_splice(::dftu_ctx* ctx, void*, std::int32_t in_fd,
+                      std::int64_t* in_off, std::int32_t out_fd,
+                      std::int64_t* out_off, std::uint64_t len,
+                      std::uint32_t flags, std::int64_t* out_n,
+                      ::dftu_task** out) {
+    return start_task(ctx, out, [=](coro::AbiTask* task) {
+        return splice_body(task, in_fd, in_off, out_fd, out_off, len, flags,
+                           out_n);
+    });
+}
+
+coro::CoroTask<void> openat2_body(coro::AbiTask* task, std::int32_t dirfd,
+                                  dstd::String path, dftu_open_how how,
+                                  std::int32_t* out_fd) {
+    const runtime::io::OpenHow open_how{how.flags, how.mode, how.resolve};
+    const std::int64_t result = static_cast<std::int64_t>(
+        co_await runtime::io::openat2(dirfd, path.c_str(), open_how));
+    if (io_ok(task, "openat2", result) && out_fd != nullptr)
+        *out_fd = static_cast<std::int32_t>(result);
+}
+
+dftu_status io_openat2(::dftu_ctx* ctx, void*, std::int32_t dirfd,
+                       const char* path, const dftu_open_how* how,
+                       std::int32_t* out_fd, ::dftu_task** out) {
+    if (path == nullptr || how == nullptr)
+        return host_fail(ctx, DFTU_E_INVALID, "openat2: path or how is NULL");
+    const dstd::String copy(path);
+    const dftu_open_how how_copy = *how;
+    return start_task(ctx, out, [=](coro::AbiTask* task) {
+        return openat2_body(task, dirfd, copy, how_copy, out_fd);
+    });
+}
+
+enum class XattrKind { Get, Set, FGet, FSet };
+
+// The name and the arguments live in the frame until the await ends.
+coro::CoroTask<void> xattr_body(coro::AbiTask* task, XattrKind kind,
+                                const char* op, dstd::String path,
+                                std::int32_t fd, dstd::String name, void* value,
+                                std::uint64_t size, std::int32_t flags,
+                                std::int64_t* out_n) {
+    const runtime::io::XattrArgs args{name.c_str(), value,
+                                      static_cast<std::size_t>(size), flags};
+    std::int64_t result = 0;
+    switch (kind) {
+        case XattrKind::Get:
+            result = static_cast<std::int64_t>(
+                co_await runtime::io::getxattr(path.c_str(), args));
+            break;
+        case XattrKind::Set:
+            result = static_cast<std::int64_t>(
+                co_await runtime::io::setxattr(path.c_str(), args));
+            break;
+        case XattrKind::FGet:
+            result = static_cast<std::int64_t>(
+                co_await runtime::io::fgetxattr(fd, args));
+            break;
+        case XattrKind::FSet:
+            result = static_cast<std::int64_t>(
+                co_await runtime::io::fsetxattr(fd, args));
+            break;
+    }
+    if (io_ok(task, op, result) && out_n != nullptr) *out_n = result;
+}
+
+dftu_status xattr_start(::dftu_ctx* ctx, XattrKind kind, const char* op,
+                        const char* path, std::int32_t fd, const char* name,
+                        void* value, std::uint64_t size, std::int32_t flags,
+                        std::int64_t* out_n, ::dftu_task** out) {
+    const bool by_path = kind == XattrKind::Get || kind == XattrKind::Set;
+    if (name == nullptr || (by_path && path == nullptr)) {
         return host_fail(
             ctx, DFTU_E_INVALID,
-            dstd::fmt<"{}: the writer is NULL">(dstd::StringView(op)));
+            dstd::fmt<"{}: the path or name is NULL">(dstd::StringView(op)));
     }
-    PluginWriter* writer = reinterpret_cast<PluginWriter*>(w);
+    const dstd::String path_copy(by_path ? path : "");
+    const dstd::String name_copy(name);
     return start_task(ctx, out, [=](coro::AbiTask* task) {
-        return writer_body(task, op, writer, call);
+        return xattr_body(task, kind, op, path_copy, fd, name_copy, value, size,
+                          flags, out_n);
     });
 }
 
-dftu_status host_writer_open(::dftu_ctx* ctx, void*, ::dftu_writer* w,
-                             ::dftu_task** out) {
-    return writer_start(ctx, w, out, "writer_open", [](PluginWriter* pw) {
-        return pw->writer->open(pw->path, pw->worker_count, pw->gzip, nullptr);
+dftu_status io_getxattr(::dftu_ctx* ctx, void*, const char* path,
+                        const char* name, void* value, std::uint64_t size,
+                        std::int64_t* out_n, ::dftu_task** out) {
+    return xattr_start(ctx, XattrKind::Get, "getxattr", path, -1, name, value,
+                       size, 0, out_n, out);
+}
+
+dftu_status io_setxattr(::dftu_ctx* ctx, void*, const char* path,
+                        const char* name, const void* value, std::uint64_t size,
+                        std::int32_t flags, ::dftu_task** out) {
+    return xattr_start(ctx, XattrKind::Set, "setxattr", path, -1, name,
+                       const_cast<void*>(value), size, flags, nullptr, out);
+}
+
+dftu_status io_fgetxattr(::dftu_ctx* ctx, void*, std::int32_t fd,
+                         const char* name, void* value, std::uint64_t size,
+                         std::int64_t* out_n, ::dftu_task** out) {
+    return xattr_start(ctx, XattrKind::FGet, "fgetxattr", nullptr, fd, name,
+                       value, size, 0, out_n, out);
+}
+
+dftu_status io_fsetxattr(::dftu_ctx* ctx, void*, std::int32_t fd,
+                         const char* name, const void* value,
+                         std::uint64_t size, std::int32_t flags,
+                         ::dftu_task** out) {
+    return xattr_start(ctx, XattrKind::FSet, "fsetxattr", nullptr, fd, name,
+                       const_cast<void*>(value), size, flags, nullptr, out);
+}
+
+dftu_status io_tee(::dftu_ctx* ctx, void*, std::int32_t in_fd,
+                   std::int32_t out_fd, std::uint64_t len, std::uint32_t flags,
+                   std::int64_t* out_n, ::dftu_task** out) {
+    return io_start(ctx, out, "tee", out_n, [=] {
+        return runtime::io::tee(in_fd, out_fd, static_cast<std::size_t>(len),
+                                flags);
     });
 }
 
-dftu_status host_writer_chunk(::dftu_ctx* ctx, void*, ::dftu_writer* w,
-                              std::uint32_t worker, const void* data,
-                              std::uint64_t len, ::dftu_task** out) {
-    return writer_start(ctx, w, out, "writer_chunk", [=](PluginWriter* pw) {
-        return pw->writer->write_chunk(
-            static_cast<std::size_t>(worker),
-            dstd::ByteView(static_cast<const unsigned char*>(data),
-                           static_cast<std::size_t>(len)));
-    });
+dftu_status io_pipe(::dftu_ctx* ctx, void*, std::int32_t fds[2],
+                    std::int32_t flags, ::dftu_task** out) {
+    if (fds == nullptr)
+        return host_fail(ctx, DFTU_E_INVALID, "pipe: fds is NULL");
+    return io_start(ctx, out, "pipe", static_cast<std::int64_t*>(nullptr),
+                    [=] { return runtime::io::pipe(fds, flags); });
 }
 
-dftu_status host_writer_close(::dftu_ctx* ctx, void*, ::dftu_writer* w,
-                              ::dftu_task** out) {
-    return writer_start(ctx, w, out, "writer_close",
-                        [](PluginWriter* pw) { return pw->writer->close(); });
+#else
+
+dftu_status io_unsupported(::dftu_ctx* ctx, const char* op) {
+    return host_fail(
+        ctx, DFTU_E_UNSUPPORTED,
+        dstd::fmt<"{}: not supported on this platform">(dstd::StringView(op)));
 }
+
+dftu_status io_statx(::dftu_ctx* ctx, void*, std::int32_t, const char*,
+                     std::int32_t, std::uint32_t, dftu_statx*, ::dftu_task**) {
+    return io_unsupported(ctx, "statx");
+}
+
+dftu_status io_fallocate(::dftu_ctx* ctx, void*, std::int32_t, std::int32_t,
+                         std::uint64_t, std::uint64_t, ::dftu_task**) {
+    return io_unsupported(ctx, "fallocate");
+}
+
+dftu_status io_sync_file_range(::dftu_ctx* ctx, void*, std::int32_t,
+                               std::uint64_t, std::uint64_t, std::uint32_t,
+                               ::dftu_task**) {
+    return io_unsupported(ctx, "sync_file_range");
+}
+
+dftu_status io_splice(::dftu_ctx* ctx, void*, std::int32_t, std::int64_t*,
+                      std::int32_t, std::int64_t*, std::uint64_t, std::uint32_t,
+                      std::int64_t*, ::dftu_task**) {
+    return io_unsupported(ctx, "splice");
+}
+
+dftu_status io_openat2(::dftu_ctx* ctx, void*, std::int32_t, const char*,
+                       const dftu_open_how*, std::int32_t*, ::dftu_task**) {
+    return io_unsupported(ctx, "openat2");
+}
+
+dftu_status io_getxattr(::dftu_ctx* ctx, void*, const char*, const char*, void*,
+                        std::uint64_t, std::int64_t*, ::dftu_task**) {
+    return io_unsupported(ctx, "getxattr");
+}
+
+dftu_status io_setxattr(::dftu_ctx* ctx, void*, const char*, const char*,
+                        const void*, std::uint64_t, std::int32_t,
+                        ::dftu_task**) {
+    return io_unsupported(ctx, "setxattr");
+}
+
+dftu_status io_fgetxattr(::dftu_ctx* ctx, void*, std::int32_t, const char*,
+                         void*, std::uint64_t, std::int64_t*, ::dftu_task**) {
+    return io_unsupported(ctx, "fgetxattr");
+}
+
+dftu_status io_fsetxattr(::dftu_ctx* ctx, void*, std::int32_t, const char*,
+                         const void*, std::uint64_t, std::int32_t,
+                         ::dftu_task**) {
+    return io_unsupported(ctx, "fsetxattr");
+}
+
+dftu_status io_tee(::dftu_ctx* ctx, void*, std::int32_t, std::int32_t,
+                   std::uint64_t, std::uint32_t, std::int64_t*, ::dftu_task**) {
+    return io_unsupported(ctx, "tee");
+}
+
+dftu_status io_pipe(::dftu_ctx* ctx, void*, std::int32_t[2], std::int32_t,
+                    ::dftu_task**) {
+    return io_unsupported(ctx, "pipe");
+}
+
+#endif
+
+const dftu_io g_io = {sizeof(dftu_io),
+                      io_open,
+                      io_close,
+                      io_read,
+                      io_write,
+                      io_pread,
+                      io_pwrite,
+                      io_fsync,
+                      io_ftruncate,
+                      io_fstat,
+                      io_readv,
+                      io_writev,
+                      io_preadv,
+                      io_pwritev,
+                      io_lseek,
+                      io_sendfile,
+                      io_accept,
+                      io_recv,
+                      io_send,
+                      io_unlink,
+                      io_rmdir,
+                      io_rename,
+                      io_mkdir,
+                      io_fadvise,
+                      io_linkat,
+                      io_symlinkat,
+                      io_socket,
+                      io_connect,
+                      io_bind,
+                      io_listen,
+                      io_shutdown,
+                      io_sendmsg,
+                      io_recvmsg,
+                      io_poll_add,
+                      io_statx,
+                      io_fallocate,
+                      io_sync_file_range,
+                      io_splice,
+                      io_openat2,
+                      io_getxattr,
+                      io_setxattr,
+                      io_fgetxattr,
+                      io_fsetxattr,
+                      io_tee,
+                      io_pipe};
 
 // DDSketch lacks a mean, so the box tracks the running weighted sum.
 struct SketchBox : dstd::HeapObject {
@@ -741,10 +1129,6 @@ dftu_status host_trace_close(::dftu_ctx* ctx, void* h, ::dftu_trace_writer* w) {
     return DFTU_OK;
 }
 
-const dftu_svc_writer g_writer = {sizeof(dftu_svc_writer), host_merge_shards,
-                                  host_writer_create,      host_writer_open,
-                                  host_writer_chunk,       host_writer_close};
-
 const dftu_svc_sketch g_sketch = {sizeof(dftu_svc_sketch), host_sketch_create,
                                   host_sketch_add,         host_sketch_merge,
                                   host_sketch_result,      host_sketch_free};
@@ -872,7 +1256,8 @@ const void* host_get_service(void*, const char* ext_id) {
     if (std::strcmp(ext_id, DFTU_SVC_TASK) == 0)
         return detail::task_ext_vtable();
     if (std::strcmp(ext_id, DFTU_SVC_DUQL) == 0) return &g_query;
-    if (std::strcmp(ext_id, DFTU_SVC_WRITER) == 0) return &g_writer;
+    if (std::strcmp(ext_id, DFTU_SVC_FILEIO) == 0)
+        return detail::fileio_ext_vtable();
     if (std::strcmp(ext_id, DFTU_SVC_SKETCH) == 0) return &g_sketch;
     if (std::strcmp(ext_id, DFTU_SVC_ARROW) == 0) return &g_arrow;
     if (std::strcmp(ext_id, DFTU_SVC_TRACE) == 0) return &g_trace;
@@ -887,20 +1272,30 @@ const void* host_get_service(void*, const char* ext_id) {
         return detail::nodes_ext_vtable();
     if (std::strcmp(ext_id, DFTU_SVC_INDEX) == 0)
         return detail::index_ext_vtable();
+    if (std::strcmp(ext_id, DFTU_SVC_FS) == 0) return detail::fs_ext_vtable();
     return nullptr;
 }
 
 }  // namespace
 
-::dftu_writer* PluginFold::make_writer(const char* path,
-                                       std::uint32_t worker_count, int gzip) {
-    auto pw = dstd::make_unique<PluginWriter>();
-    pw->writer = fileio::parallel::make_sharded_writer();
-    pw->path = path ? path : "";
-    pw->worker_count = worker_count ? worker_count : 1;
-    pw->gzip = gzip != 0;
-    writers_.push_back(std::move(pw));
-    return reinterpret_cast<::dftu_writer*>(writers_.back().get());
+PluginHandle* PluginFold::adopt_handle(dstd::UniquePtr<PluginHandle> handle) {
+    std::lock_guard<std::mutex> lock(handles_mutex_);
+    handles_.push_back(std::move(handle));
+    return handles_.back().get();
+}
+
+void PluginFold::release_handle(const void* raw) {
+    dstd::UniquePtr<PluginHandle> released;
+    {
+        std::lock_guard<std::mutex> lock(handles_mutex_);
+        for (auto it = handles_.begin(); it != handles_.end(); ++it) {
+            if (static_cast<const void*>(it->get()) == raw) {
+                released = std::move(*it);
+                handles_.erase(it);
+                break;
+            }
+        }
+    }
 }
 
 ::dftu_trace_writer* PluginFold::make_trace_writer(const char* path) {

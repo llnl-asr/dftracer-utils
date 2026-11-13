@@ -902,6 +902,26 @@ cancelled task reports ``DFTU_E_CANCELLED``.
                              O_WRONLY | O_CREAT | O_TRUNC, 0644, &fd, pending);
          }
 
+``DFTU_SVC_IO`` also has the calls for ``unlink``, ``rmdir``, ``rename``,
+``mkdir``, ``linkat``, ``symlinkat``, ``fadvise``, ``socket``, ``connect``,
+``bind``, ``listen``, ``shutdown``, ``sendmsg``, ``recvmsg``, ``poll_add``,
+``statx``, ``fallocate``, ``sync_file_range``, ``splice``, ``openat2``, the four
+``xattr`` calls, ``tee`` and ``pipe``. The host copies each path, name and
+socket address when called; a buffer, message header or result slot stays valid
+until the task finishes. ``statx``, ``fallocate``, ``sync_file_range``,
+``splice``, ``openat2``, the ``xattr`` calls, ``tee`` and ``pipe`` need Linux;
+elsewhere the call returns ``DFTU_E_UNSUPPORTED`` and starts no task.
+
+``DFTU_SVC_FS`` (``Host::fs()``) is the runtime file system layer: ``read_file``,
+``write_file``, ``read_at``, ``write_at``, ``list_dir``, ``find_all``,
+``exists``, ``create_directories``, ``remove`` and ``stat_batch``. Each call
+copies its paths and starts a task. ``read_file`` gives host-owned bytes that
+the plugin frees through ``free_fn``. ``list_dir`` and ``find_all`` give a
+host-owned ``dftu_path_list``, read with ``list_count`` and ``list_entry`` and
+freed with ``list_free`` (the SDK ``PathList`` does that). ``stat_batch`` gives
+one stat and one status per path, and a missing path is
+``DFTU_E_NOT_FOUND`` in its slot, not a failed task.
+
 A host utility is reached as a named op instead
 (``Host::run_op("dftu.hash.fnv1a", {column})``, ``DFTU_SVC_OPS``). Every
 ``dftu_svc_task`` call has an SDK form (``Host::spawn``, ``Host::tasks()``,
@@ -1014,24 +1034,63 @@ on first read, not at close.
          T->trace_write(ctx, host->h, w, df);   /* every row of df, by column name */
          T->trace_close(ctx, host->h, w);
 
-The **parallel writer (DFTU_SVC_WRITER)** is a sharded, multi-worker gzip-member
-output (``writer_create`` / ``writer_open`` / ``writer_chunk`` / ``writer_close``
-/ ``merge_shards``).
+The **file service (DFTU_SVC_FILEIO)** gathers the host's file readers and
+writers in one table. A reader or writer handle is owned by the host: a close
+call ends it, and the host frees one that the plugin did not close at the end of
+the fold (a gzip writer that was not closed is aborted and its files are
+removed). Calls on one handle must not overlap.
+
+- ``lines_open`` / ``lines_next`` / ``lines_close``: lines of a plain or gzip
+  file (the host detects the ``1f 8b`` magic), from ``start_line`` to
+  ``end_line`` (1-based; 0 means the first and the last line). ``lines_next``
+  gives a batch of borrowed ``dftu_bytes`` that stays valid until the next call;
+  the task status is ``DFTU_END`` at the end of the file. A last line with no
+  newline is a line. A missing file is ``DFTU_E_NOT_FOUND``.
+- ``chunks_open`` / ``chunks_next`` / ``chunks_close``: the bytes of a file in
+  chunks, borrowed until the next call, ``DFTU_END`` at the end.
+- ``gz_open`` / ``gz_append`` / ``gz_close``: a gzip line writer.
+  ``gz_append`` copies whole lines (data must end with ``'\n'``, else
+  ``DFTU_E_INVALID``); ``gz_close`` gives a ``dftu_gz_summary``.
+- ``compress`` / ``decompress``: whole-file gzip.
+- ``logical_path`` / ``mtime`` / ``size`` / ``sampled_hash``: file helpers; a
+  missing file is ``DFTU_E_NOT_FOUND``.
+- The **parallel writer** is a sharded, multi-worker gzip-member output
+  (``writer_create`` / ``writer_open`` / ``writer_chunk`` / ``writer_close`` /
+  ``merge_shards``). It replaces the former ``dftu.svc.writer`` service.
 
 .. tab-set::
 
    .. tab-item:: C++ (SDK)
 
-      ``Host::writer`` returns an ergonomic ``Writer`` (host-owned, nothing to
-      free); ``open`` / ``chunk`` / ``close`` are ``co_await``-able AsyncOps, and
-      ``Host::merge_shards`` concatenates shard files into a target.
+      ``Host::fileio()`` returns a ``Fileio`` with a ``LineReader`` and a
+      ``ChunkReader`` that close in their destructors, and a ``GzWriter`` that
+      the plugin closes with ``co_await close()`` (one left open is aborted at
+      the end of the fold and its files are removed);
+      ``co_await reader.next()`` gives the next batch, or ``nullopt`` at the end.
+      ``Host::writer`` returns the ``Writer`` of the parallel writer (host-owned,
+      nothing to free); ``open`` / ``chunk`` / ``close`` are ``co_await``-able
+      AsyncOps, and ``Host::merge_shards`` concatenates shard files into a
+      target.
+      ``examples/plugins/duration_report.cpp`` is a full plugin that writes its
+      report with ``GzWriter``.
 
       .. code-block:: cpp
 
          Task on_finalize(Host h) {
-             Writer w = h.writer("/tmp/out.pfw.gz", /*worker_count=*/4,
+             auto reader = h.fileio().lines("/tmp/in.pfw");
+             for (;;) {
+                 auto batch = co_await reader.next(1024);
+                 if (!batch) break;
+                 for (std::string_view line : *batch) { /* ... */ }
+             }
+
+             auto gz = h.fileio().gz("/tmp/out.pfw.gz");
+             co_await gz.open();
+             gz.append("{\"name\":\"x\"}\n");
+             dftu_gz_summary summary = co_await gz.close();
+
+             Writer w = h.writer("/tmp/out2.pfw.gz", /*worker_count=*/4,
                                  /*gzip=*/true);
-             if (!w) co_return;
              co_await w.open();
              co_await w.chunk(/*worker=*/0, std::string_view{"payload"});
              co_await w.close();
@@ -1041,12 +1100,18 @@ output (``writer_create`` / ``writer_open`` / ``writer_chunk`` / ``writer_close`
 
       .. code-block:: c
 
-         const dftu_svc_writer* W =
-             (const dftu_svc_writer*)host->get_service(host->h, DFTU_SVC_WRITER);
+         const dftu_svc_fileio* F =
+             (const dftu_svc_fileio*)host->get_service(host->h, DFTU_SVC_FILEIO);
+         dftu_line_reader* r = NULL;
+         F->lines_open(ctx, host->h, "/tmp/in.pfw", 0, 0, &r);
+         /* await F->lines_next(ctx, host->h, r, 1024, &batch, &task) until
+            its status is DFTU_END, then: */
+         F->lines_close(host->h, r);
+
          dftu_writer* w = NULL;
-         W->writer_create(ctx, host->h, "/tmp/out.pfw.gz",
+         F->writer_create(ctx, host->h, "/tmp/out.pfw.gz",
                           /*num_workers=*/4, /*gzip=*/1, &w);
-         /* co-await W->writer_open / writer_chunk / writer_close (tasks) */
+         /* co-await F->writer_open / writer_chunk / writer_close (tasks) */
 
 13. Getting results back
 ------------------------
@@ -1357,8 +1422,13 @@ that covers it:
    * - ``Host::spawn`` / ``all`` / ``tasks()``, typed ``Job``
      - ``DFTU_SVC_TASK``
      - `9. Async work and I/O`_
-   * - ``Host::io()`` (typed ``Io``)
+   * - ``Host::io()`` (typed ``Io``: file, directory, link, socket, poll,
+       xattr, splice and pipe calls; the Linux-only ones answer
+       ``DFTU_E_UNSUPPORTED`` elsewhere)
      - ``DFTU_SVC_IO``
+     - `9. Async work and I/O`_
+   * - ``Host::fs()`` (typed ``Fs``, RAII ``PathList``)
+     - ``DFTU_SVC_FS``
      - `9. Async work and I/O`_
    * - ``Host::duql_compile`` / ``duql_matches``
      - ``DFTU_SVC_DUQL``
@@ -1369,8 +1439,9 @@ that covers it:
    * - ``Host::trace_open_write`` / ``trace_write`` / ``trace_read``
      - ``DFTU_SVC_TRACE``
      - `12. Output writers`_
-   * - none (raw ``get_service``)
-     - ``DFTU_SVC_WRITER``
+   * - ``Host::fileio()`` (typed ``Fileio``), ``Host::writer``,
+       ``Host::merge_shards``
+     - ``DFTU_SVC_FILEIO``
      - `12. Output writers`_
    * - ``Host::run_op`` / ``run_op_frame`` / ``run_op_aggregate``,
        ``PluginBuilder::op``, ``OwnedLazyFrame``

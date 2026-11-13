@@ -161,6 +161,8 @@ dftracer/utils/plugins/abi/agg.h
 dftracer/utils/plugins/abi/arrow.h
 dftracer/utils/plugins/abi/core.h
 dftracer/utils/plugins/abi/duql.h
+dftracer/utils/plugins/abi/fileio.h
+dftracer/utils/plugins/abi/fs.h
 dftracer/utils/plugins/abi/index.h
 dftracer/utils/plugins/abi/io.h
 dftracer/utils/plugins/abi/nodes.h
@@ -173,11 +175,12 @@ dftracer/utils/plugins/abi/sketch.h
 dftracer/utils/plugins/abi/task.h
 dftracer/utils/plugins/abi/trace.h
 dftracer/utils/plugins/abi/value.h
-dftracer/utils/plugins/abi/writer.h
 dftracer/utils/plugins/arrow_abi.h
 dftracer/utils/plugins/owned_arrow.h
 dftracer/utils/plugins/plugin.h
 dftracer/utils/plugins/plugin/async.h
+dftracer/utils/plugins/plugin/fileio.h
+dftracer/utils/plugins/plugin/fs.h
 dftracer/utils/plugins/plugin/job.h
 dftracer/utils/plugins/plugin/map.h
 dftracer/utils/plugins/plugin/node.h

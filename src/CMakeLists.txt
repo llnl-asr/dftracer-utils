@@ -320,6 +320,8 @@ list(APPEND DFTRACER_UTILS_DOMAINS_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/domains/plugins/fold_adapter/providers.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/domains/plugins/fold_adapter/index.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/domains/plugins/fold_adapter/nodes.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/domains/plugins/fold_adapter/fileio.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/domains/plugins/fold_adapter/fs.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/domains/plugins/state_registry.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/domains/plugins/plugins.cpp
 

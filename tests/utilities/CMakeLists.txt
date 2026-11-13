@@ -61,6 +61,7 @@ set(UTILITIES_TEST_SOURCES
     # I/O Lines
     fileio/lines/sources/test_async_indexed_file_line_generator.cpp
     fileio/lines/sources/test_async_streaming_gz_line_generator.cpp
+    fileio/lines/sources/test_async_streaming_plain_line_generator.cpp
 
     # Reader
     reader/test_trace_reader.cpp
@@ -260,7 +261,8 @@ set(cabi_sources plugins/test_plugin_c_abi.cpp
                  plugins/ops_abi_c_consumer.c
                  plugins/trace_abi_c_consumer.c
                  plugins/io_abi_c_consumer.c
-                 plugins/writer_abi_c_consumer.c)
+                 plugins/fileio_abi_c_consumer.c
+                 plugins/fs_abi_c_consumer.c)
 add_executable(${cabi_target} ${cabi_sources})
 target_include_directories(${cabi_target} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
 target_link_libraries(${cabi_target} PRIVATE doctest::doctest dftracer_utils

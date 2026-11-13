@@ -49,6 +49,28 @@ elseif(TARGET dftracer_utils_dataframe::static)
                         PRIVATE dftracer_utils_dataframe::static)
 endif()
 
+# Writes its report through the host fileio service.
+add_library(duration_report_plugin MODULE duration_report.cpp)
+target_set_warnings(duration_report_plugin)
+set_target_properties(
+  duration_report_plugin
+  PROPERTIES OUTPUT_NAME duration_report
+             PREFIX ""
+             POSITION_INDEPENDENT_CODE ON
+             CXX_STANDARD 20
+             CXX_STANDARD_REQUIRED ON
+             CXX_EXTENSIONS OFF)
+target_include_directories(duration_report_plugin
+                           PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_enable_coroutine(duration_report_plugin)
+if(TARGET dftracer_utils_dataframe::shared)
+  target_link_libraries(duration_report_plugin
+                        PRIVATE dftracer_utils_dataframe::shared)
+elseif(TARGET dftracer_utils_dataframe::static)
+  target_link_libraries(duration_report_plugin
+                        PRIVATE dftracer_utils_dataframe::static)
+endif()
+
 add_library(query_filter_plugin MODULE query_filter.cpp)
 target_set_warnings(query_filter_plugin)
 set_target_properties(
@@ -220,6 +242,7 @@ target_include_directories(process_regr_stats_plugin
                            PRIVATE ${CMAKE_SOURCE_DIR}/include)
 
 install(TARGETS event_counter_plugin duration_histogram_plugin
+                duration_report_plugin
                 query_filter_plugin
                 perbatch_producer_plugin perbatch_consumer_plugin
                 dur_stats_producer_plugin dur_stats_consumer_plugin

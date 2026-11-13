@@ -369,6 +369,149 @@ class Io {
                     t);
     }
 
+    /// The calls below follow the table in abi/io.h: paths, names and socket
+    /// addresses are copied when called; buffers and result slots stay valid
+    /// until the await ends. statx, fallocate, sync_file_range, splice,
+    /// openat2, the xattr calls, tee and pipe throw @ref Error with
+    /// DFTU_E_UNSUPPORTED off Linux.
+    AsyncOp unlink(const char* path) const {
+        dftu_task* t = nullptr;
+        return done(need().unlink(ctx_, h_->h, path, &t), t);
+    }
+    AsyncOp rmdir(const char* path) const {
+        dftu_task* t = nullptr;
+        return done(need().rmdir(ctx_, h_->h, path, &t), t);
+    }
+    AsyncOp rename(const char* from, const char* to) const {
+        dftu_task* t = nullptr;
+        return done(need().rename(ctx_, h_->h, from, to, &t), t);
+    }
+    AsyncOp mkdir(const char* path, int mode) const {
+        dftu_task* t = nullptr;
+        return done(need().mkdir(ctx_, h_->h, path, mode, &t), t);
+    }
+    AsyncOp fadvise(int fd, std::uint64_t off, std::uint64_t len,
+                    int advice) const {
+        dftu_task* t = nullptr;
+        return done(need().fadvise(ctx_, h_->h, fd, off, len, advice, &t), t);
+    }
+    AsyncOp linkat(int from_dirfd, const char* from, int to_dirfd,
+                   const char* to, int flags) const {
+        dftu_task* t = nullptr;
+        return done(need().linkat(ctx_, h_->h, from_dirfd, from, to_dirfd, to,
+                                  flags, &t),
+                    t);
+    }
+    AsyncOp symlinkat(const char* target, int dirfd, const char* link) const {
+        dftu_task* t = nullptr;
+        return done(need().symlinkat(ctx_, h_->h, target, dirfd, link, &t), t);
+    }
+    AsyncOp socket(int domain, int type, int protocol, int* out_fd) const {
+        dftu_task* t = nullptr;
+        return done(
+            need().socket(ctx_, h_->h, domain, type, protocol, out_fd, &t), t);
+    }
+    AsyncOp connect(int fd, const struct sockaddr* addr,
+                    socklen_t addrlen) const {
+        dftu_task* t = nullptr;
+        return done(need().connect(ctx_, h_->h, fd, addr, addrlen, &t), t);
+    }
+    AsyncOp bind(int fd, const struct sockaddr* addr, socklen_t addrlen) const {
+        dftu_task* t = nullptr;
+        return done(need().bind(ctx_, h_->h, fd, addr, addrlen, &t), t);
+    }
+    AsyncOp listen(int fd, int backlog) const {
+        dftu_task* t = nullptr;
+        return done(need().listen(ctx_, h_->h, fd, backlog, &t), t);
+    }
+    AsyncOp shutdown(int fd, int how) const {
+        dftu_task* t = nullptr;
+        return done(need().shutdown(ctx_, h_->h, fd, how, &t), t);
+    }
+    AsyncOp sendmsg(int fd, const struct msghdr* msg, int flags,
+                    std::int64_t* out_n) const {
+        dftu_task* t = nullptr;
+        return done(need().sendmsg(ctx_, h_->h, fd, msg, flags, out_n, &t), t);
+    }
+    AsyncOp recvmsg(int fd, struct msghdr* msg, int flags,
+                    std::int64_t* out_n) const {
+        dftu_task* t = nullptr;
+        return done(need().recvmsg(ctx_, h_->h, fd, msg, flags, out_n, &t), t);
+    }
+    AsyncOp poll_add(int fd, std::uint32_t events,
+                     std::uint32_t* out_events) const {
+        dftu_task* t = nullptr;
+        return done(need().poll_add(ctx_, h_->h, fd, events, out_events, &t),
+                    t);
+    }
+    AsyncOp statx(int dirfd, const char* path, int flags, std::uint32_t mask,
+                  dftu_statx* out_st) const {
+        dftu_task* t = nullptr;
+        return done(
+            need().statx(ctx_, h_->h, dirfd, path, flags, mask, out_st, &t), t);
+    }
+    AsyncOp fallocate(int fd, int mode, std::uint64_t off,
+                      std::uint64_t len) const {
+        dftu_task* t = nullptr;
+        return done(need().fallocate(ctx_, h_->h, fd, mode, off, len, &t), t);
+    }
+    AsyncOp sync_file_range(int fd, std::uint64_t off, std::uint64_t len,
+                            std::uint32_t flags) const {
+        dftu_task* t = nullptr;
+        return done(
+            need().sync_file_range(ctx_, h_->h, fd, off, len, flags, &t), t);
+    }
+    AsyncOp splice(int in_fd, std::int64_t* in_off, int out_fd,
+                   std::int64_t* out_off, std::uint64_t len,
+                   std::uint32_t flags, std::int64_t* out_n) const {
+        dftu_task* t = nullptr;
+        return done(need().splice(ctx_, h_->h, in_fd, in_off, out_fd, out_off,
+                                  len, flags, out_n, &t),
+                    t);
+    }
+    AsyncOp openat2(int dirfd, const char* path, const dftu_open_how* how,
+                    int* out_fd) const {
+        dftu_task* t = nullptr;
+        return done(need().openat2(ctx_, h_->h, dirfd, path, how, out_fd, &t),
+                    t);
+    }
+    AsyncOp getxattr(const char* path, const char* name, void* value,
+                     std::uint64_t size, std::int64_t* out_n) const {
+        dftu_task* t = nullptr;
+        return done(
+            need().getxattr(ctx_, h_->h, path, name, value, size, out_n, &t),
+            t);
+    }
+    AsyncOp setxattr(const char* path, const char* name, const void* value,
+                     std::uint64_t size, int flags) const {
+        dftu_task* t = nullptr;
+        return done(
+            need().setxattr(ctx_, h_->h, path, name, value, size, flags, &t),
+            t);
+    }
+    AsyncOp fgetxattr(int fd, const char* name, void* value, std::uint64_t size,
+                      std::int64_t* out_n) const {
+        dftu_task* t = nullptr;
+        return done(
+            need().fgetxattr(ctx_, h_->h, fd, name, value, size, out_n, &t), t);
+    }
+    AsyncOp fsetxattr(int fd, const char* name, const void* value,
+                      std::uint64_t size, int flags) const {
+        dftu_task* t = nullptr;
+        return done(
+            need().fsetxattr(ctx_, h_->h, fd, name, value, size, flags, &t), t);
+    }
+    AsyncOp tee(int in_fd, int out_fd, std::uint64_t len, std::uint32_t flags,
+                std::int64_t* out_n) const {
+        dftu_task* t = nullptr;
+        return done(
+            need().tee(ctx_, h_->h, in_fd, out_fd, len, flags, out_n, &t), t);
+    }
+    AsyncOp pipe(int fds[2], int flags) const {
+        dftu_task* t = nullptr;
+        return done(need().pipe(ctx_, h_->h, fds, flags, &t), t);
+    }
+
    private:
     const dftu_io& need() const {
         if (!io_) throw Error(DFTU_E_UNSUPPORTED, "host lacks dftu.svc.io");

@@ -40,7 +40,7 @@ typedef enum {
     REF_SVC_SKETCH,
     REF_SVC_TASK,
     REF_SVC_TRACE,
-    REF_SVC_WRITER,
+    REF_SVC_FILEIO,
     REF_SVC_COUNT
 } ref_svc_id;
 
@@ -77,8 +77,8 @@ static const char* ref_svc_name(ref_svc_id id) {
             return "task";
         case REF_SVC_TRACE:
             return "trace";
-        case REF_SVC_WRITER:
-            return "writer";
+        case REF_SVC_FILEIO:
+            return "fileio";
         case REF_SVC_COUNT:
             break;
     }
@@ -111,8 +111,8 @@ static const char* ref_svc_ext_id(ref_svc_id id) {
             return DFTU_SVC_TASK;
         case REF_SVC_TRACE:
             return DFTU_SVC_TRACE;
-        case REF_SVC_WRITER:
-            return DFTU_SVC_WRITER;
+        case REF_SVC_FILEIO:
+            return DFTU_SVC_FILEIO;
         case REF_SVC_COUNT:
             break;
     }
@@ -1062,19 +1062,19 @@ static dftu_status finalize_step(dftu_ctx* ctx, void* self, dftu_task** wait,
         }
         case 4: {
             static const char data[] = "reference-io";
-            const dftu_svc_writer* w;
+            const dftu_svc_fileio* w;
             int io_ok = fc->fd >= 0 && fc->io_wn == (int64_t)sizeof(data) &&
                         fc->io_rn == (int64_t)sizeof(data) &&
                         memcmp(fc->io_buf, data, sizeof(data)) == 0;
             g_status[REF_SVC_IO] = io_ok ? REF_OK : REF_FAIL;
 
-            w = (const dftu_svc_writer*)ref_get_service(host, REF_SVC_WRITER);
+            w = (const dftu_svc_fileio*)ref_get_service(host, REF_SVC_FILEIO);
             if (!w) break;
-            fc->stage = REF_SVC_WRITER;
+            fc->stage = REF_SVC_FILEIO;
             snprintf(path, sizeof(path), "%s/reference_writer.out", workdir);
             if (w->writer_create(ctx, host->h, path, 1, 0, &fc->writer) < 0 ||
                 !fc->writer) {
-                g_status[REF_SVC_WRITER] = REF_FAIL;
+                g_status[REF_SVC_FILEIO] = REF_FAIL;
                 break;
             }
             {
@@ -1085,8 +1085,8 @@ static dftu_status finalize_step(dftu_ctx* ctx, void* self, dftu_task** wait,
             return wait_for(fc, t, wait, n_wait);
         }
         case 5: {
-            const dftu_svc_writer* w =
-                (const dftu_svc_writer*)ref_get_service(host, REF_SVC_WRITER);
+            const dftu_svc_fileio* w =
+                (const dftu_svc_fileio*)ref_get_service(host, REF_SVC_FILEIO);
             static const char chunk[] = "reference-writer-chunk";
             if (!w || !fc->writer) break;
             {
@@ -1097,8 +1097,8 @@ static dftu_status finalize_step(dftu_ctx* ctx, void* self, dftu_task** wait,
             return wait_for(fc, t, wait, n_wait);
         }
         case 6: {
-            const dftu_svc_writer* w =
-                (const dftu_svc_writer*)ref_get_service(host, REF_SVC_WRITER);
+            const dftu_svc_fileio* w =
+                (const dftu_svc_fileio*)ref_get_service(host, REF_SVC_FILEIO);
             if (!w || !fc->writer) break;
             {
                 const dftu_status started =
@@ -1111,7 +1111,7 @@ static dftu_status finalize_step(dftu_ctx* ctx, void* self, dftu_task** wait,
             struct stat st;
             snprintf(path, sizeof(path), "%s/reference_writer.out.shard_0",
                      workdir);
-            g_status[REF_SVC_WRITER] =
+            g_status[REF_SVC_FILEIO] =
                 (fc->writer && stat(path, &st) == 0 && st.st_size > 0)
                     ? REF_OK
                     : REF_FAIL;

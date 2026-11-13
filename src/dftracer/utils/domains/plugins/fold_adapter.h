@@ -13,13 +13,13 @@
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
-#include <dftracer/utils/fileio/parallel/parallel_writer.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <dftracer/utils/plugins/result_registry.h>
 #include <dftracer/utils/trace/views/fold.h>
 
 #include <cstddef>
 #include <cstdint>
+#include <mutex>
 #include <string>
 #include <utility>
 #include <vector>
@@ -28,13 +28,10 @@
 // one fused scan. A task on_finalize hands back is awaited by finalize.
 namespace dftracer::utils::domains::plugins {
 
-// Host-owned parallel writer handed to the plugin as an opaque dftu_writer*;
-// worker_count/gzip are captured at writer_create for a later writer_open.
-struct PluginWriter {
-    dstd::UniquePtr<fileio::parallel::ParallelWriter> writer;
-    dstd::String path;
-    std::size_t worker_count = 1;
-    bool gzip = false;
+// A host-owned object lent to the plugin as an opaque handle (a reader, a
+// writer); the fold keeps it until the plugin closes it or the fold ends.
+struct PluginHandle {
+    virtual ~PluginHandle() = default;
 };
 
 // Host-owned trace writer handed to the plugin as an opaque dftu_trace_writer*.
@@ -241,8 +238,21 @@ class PluginFold : public trace::views::detail::Fold {
     Job& new_job(Job::Kind kind) { return jobs_.emplace_back(kind); }
 
     dftracer::utils::dstd::StringIntern& intern_table() { return *intern_; }
-    ::dftu_writer* make_writer(const char* path, std::uint32_t worker_count,
-                               int gzip);
+    /// Keeps @p handle until @ref release_handle or the end of the fold and
+    /// returns it, as the opaque pointer the plugin holds.
+    PluginHandle* adopt_handle(dstd::UniquePtr<PluginHandle> handle);
+    /// Frees the handle @p raw; a pointer the fold does not hold is ignored.
+    void release_handle(const void* raw);
+    /// The handle @p raw as a T, or null when the fold holds no such handle.
+    template <class T>
+    T* find_handle(const void* raw) {
+        std::lock_guard<std::mutex> lock(handles_mutex_);
+        for (auto& handle : handles_) {
+            if (static_cast<const void*>(handle.get()) == raw)
+                return dynamic_cast<T*>(handle.get());
+        }
+        return nullptr;
+    }
     ::dftu_trace_writer* make_trace_writer(const char* path);
     dstd::Result<void> close_trace_writer(::dftu_trace_writer* w);
 
@@ -314,7 +324,8 @@ class PluginFold : public trace::views::detail::Fold {
 
     // Keeps job addresses stable; jobs live for the scan.
     dstd::Deque<Job> jobs_;
-    dstd::Vector<dstd::UniquePtr<PluginWriter>> writers_;
+    std::mutex handles_mutex_;
+    dstd::Vector<dstd::UniquePtr<PluginHandle>> handles_;
     dstd::Vector<dstd::UniquePtr<PluginTraceWriter>> trace_writers_;
 
     // This plugin's own plan_duql, compiled once from the C string the

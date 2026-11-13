@@ -11,6 +11,7 @@
 #include <dftracer/utils/plugins/arrow_abi.h>
 #include <dftracer/utils/plugins/owned_arrow.h>
 #include <dftracer/utils/plugins/plugin/async.h>
+#include <dftracer/utils/plugins/plugin/fs.h>
 #include <dftracer/utils/plugins/plugin/types.h>
 #include <dftracer/utils/plugins/result_registry.h>
 
@@ -85,6 +86,7 @@ class Host {
     }
 
     Io io() const { return Io{h_, ctx_}; }
+    Fs fs() const { return Fs{h_, ctx_}; }
     AsyncOp await(dftu_task* t) const { return AsyncOp{t, h_}; }
     /// Await every task together; see @ref AsyncAll.
     AsyncAll all(std::initializer_list<dftu_task*> ts) const {
@@ -236,6 +238,10 @@ class Host {
     /// RAII trace writer for `path` (a gzip .pfw.gz).
     class TraceWriter trace_writer(const char* path) const;
 
+    /// The fileio service: line and chunk readers, the gzip line writer,
+    /// whole-file gzip and the file helpers; see plugin/fileio.h.
+    class Fileio fileio() const;
+
     /// Get a host-owned parallel Writer for `path` with `worker_count` lanes
     /// (`gzip` != 0 compresses). The Writer is host-owned and scan-lifetime;
     /// open it, write chunks per worker, then close it - all co_await forms.
@@ -248,7 +254,7 @@ class Host {
         dftu_task* t = nullptr;
         return detail::started(
             h_,
-            need(DFTU_SVC_WRITER, writer_ext_)
+            need(DFTU_SVC_FILEIO, fileio_ext_)
                 .merge_shards(ctx_, h_->h, target, shards.begin(),
                               static_cast<std::uint32_t>(shards.size()), &t),
             t);
@@ -435,7 +441,7 @@ class Host {
     dftu_ctx* ctx_ = nullptr;
     mutable const dftu_svc_task* task_ext_ = nullptr;
     mutable const dftu_svc_duql* query_ext_ = nullptr;
-    mutable const dftu_svc_writer* writer_ext_ = nullptr;
+    mutable const dftu_svc_fileio* fileio_ext_ = nullptr;
     mutable const dftu_svc_sketch* sketch_ext_ = nullptr;
     mutable const dftu_svc_arrow* arrow_ext_ = nullptr;
     mutable const dftu_svc_trace* trace_ext_ = nullptr;
@@ -571,19 +577,19 @@ class Writer {
 
    private:
     friend class Host;
-    Writer(Host host, const dftu_svc_writer* e, dftu_writer* w)
+    Writer(Host host, const dftu_svc_fileio* e, dftu_writer* w)
         : host_(host), e_(e), w_(w) {}
     void* h() const noexcept { return host_.raw()->h; }
     dftu_ctx* ctx() const noexcept { return host_.ctx(); }
 
     Host host_;
-    const dftu_svc_writer* e_ = nullptr;
+    const dftu_svc_fileio* e_ = nullptr;
     dftu_writer* w_ = nullptr;
 };
 
 inline Writer Host::writer(const char* path, std::uint32_t worker_count,
                            bool gzip) const {
-    const dftu_svc_writer& e = need(DFTU_SVC_WRITER, writer_ext_);
+    const dftu_svc_fileio& e = need(DFTU_SVC_FILEIO, fileio_ext_);
     dftu_writer* w = nullptr;
     detail::ok(
         e.writer_create(ctx_, h_->h, path, worker_count, gzip ? 1 : 0, &w));

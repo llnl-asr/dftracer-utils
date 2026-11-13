@@ -21,6 +21,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Add 26 calls to the plugin `dftu.svc.io` table: `unlink`, `rmdir`, `rename`, `mkdir`, `fadvise`, `linkat`, `symlinkat`, `socket`, `connect`, `bind`, `listen`, `shutdown`, `sendmsg`, `recvmsg`, `poll_add`, `statx`, `fallocate`, `sync_file_range`, `splice`, `openat2`, `getxattr`, `setxattr`, `fgetxattr`, `fsetxattr`, `tee` and `pipe`, each with an `Io` method in the SDK.
+  The host copies paths, names and socket addresses when called, and an errno of ENOSYS, EOPNOTSUPP or ENOTSUP fails a task with `DFTU_E_UNSUPPORTED`.
+  The calls that need Linux return `DFTU_E_UNSUPPORTED`, with no task, on another platform.
+- Add the plugin service `dftu.svc.fs` over the runtime file system layer: `read_file`, `write_file`, `read_at`, `write_at`, `list_dir`, `find_all`, `exists`, `create_directories`, `remove` and `stat_batch`.
+  A listing is a host-owned `dftu_path_list` read through `list_count` and `list_entry` and freed with `list_free`; the SDK has `Host::fs()` with `Fs`, `PathList` and `FileBytes`.
+  A path that `stat_batch` cannot stat fails its own slot with `DFTU_E_NOT_FOUND` or another status and not the task.
 - Redesign the plugin C ABI around a status and a call context.
   Every plugin callback takes a host-owned `dftu_ctx*` first and returns a `dftu_status`; a callback reports an error with `dftu_fail` and polls `dftu_check` in a long loop.
   Every host service call takes the caller's `ctx` first and gives results through out-parameters.
@@ -470,6 +476,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 - Parse YAML with the reader of `libdftracer_utils_yaml` in place of yaml-cpp, for record schema specs and the `--event-map` file of `dftracer_gen_dlio_config`, in the new library `libdftracer_utils_yaml`, which also holds a block-style YAML writer that the DLIO config uses.
   No yaml-cpp archive is in the link line or the install any more, and the same input is accepted, except that a mapping with a duplicate key is now an error, as YAML 1.2.2 requires.
   No source of ours except `common/error.cpp` builds with exceptions now.
+- Replace `dftu.svc.writer` with `dftu.svc.fileio` (`abi/fileio.h`), the host's file readers and writers.
+  The five writer calls (`merge_shards`, `writer_create`, `writer_open`, `writer_chunk`, `writer_close`) keep their meaning and move into the new table.
+  It adds a line reader over plain and gzip files (`lines_open`, `lines_next`, `lines_close`), a chunk reader, a gzip line writer (`gz_open`, `gz_append`, `gz_close`), whole-file `compress` and `decompress`, and the file helpers `logical_path`, `mtime`, `size` and `sampled_hash`.
+  The C++ SDK gets `Host::fileio()` with `LineReader`, `ChunkReader` and `GzWriter`, and the fileio library gets a plain-file line source, `async_streaming_plain_lines`.
+  `dftu_task_run` now returns the task's status, so a `DFTU_END` task status reaches the caller.
 
 ### Added
 

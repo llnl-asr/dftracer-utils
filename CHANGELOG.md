@@ -22,7 +22,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 ### Changed
 
 - Make `to_pandas()` give pandas' nullable dtypes (`Int64`, `boolean`, `string`) for integer, bool and string columns that hold nulls, and `category` for a dictionary column, so `DataFrame.from_pandas(df).to_pandas()` keeps those dtypes.
-  `from_pandas` keeps a `category` column with string categories as a dictionary column, without its unused categories or their order.
+  `from_pandas` keeps a `category` column with string categories as a dictionary column, in category order where pyarrow is installed, and `to_pandas` gives back only the categories that are used.
 - Make `DataFrame::names` a `dstd::Vector<dstd::SharedString>`, so reading a column by name copies a reference count and does not copy the name.
 - Pick the best vector instructions of the CPU at run time for `str_len_chars`, `str_len_bytes`, `to_lowercase`, `to_uppercase` and the UTF-8 check of duql patterns, which were built for SSE2 only on x86.
   `str_len_chars` of 1M short rows takes 2.2 ms where it took 12.9 ms on an AVX-512 x86 CPU, and the other three are 10 to 15% faster.

@@ -53,7 +53,8 @@ still import and export every column type:
   becomes columns after the data columns. Polars list, array and struct
   columns import as list and struct columns. A pandas Arrow-backed column
   needs pyarrow (pandas itself needs it to hold one).
-  A pandas ``category`` column whose categories are strings becomes a dictionary-encoded string column, without its unused categories or their order; other categories keep their values.
+  A pandas ``category`` column whose categories are strings becomes a dictionary-encoded string column; other categories keep their values.
+  With pyarrow installed the column is built from the category codes and keeps the category order, and ``to_pandas`` gives back the categories that are used.
 - ``from_parquet`` reads through ``pyarrow.parquet``.
 - ``from_dict`` builds the frame natively from Series, lists of scalars, NumPy
   arrays and pandas or polars Series; a mapping with anything else (a pyarrow

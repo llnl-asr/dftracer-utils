@@ -37,6 +37,14 @@ def test_unused_categories_are_dropped():
     assert set(out.cat.categories) == {"a", "b"}
 
 
+def test_category_order_is_kept():
+    pytest.importorskip("pyarrow")
+    s = pd.Series(pd.Categorical(["a", "c", None, "b"], categories=["c", "b", "a", "z"]))
+    out = Series.from_pandas(s).to_pandas()
+    assert out.cat.categories.tolist() == ["c", "b", "a"]
+    assert out.astype(object).where(out.notna(), None).tolist() == ["a", "c", None, "b"]
+
+
 def test_non_string_categories_keep_values():
     s = pd.Series(pd.Categorical([1, 2, 1]))
     native = Series.from_pandas(s)

@@ -27,7 +27,7 @@ An integer, bool or string column that holds nulls gives pandas' own nullable dt
 On pandas 3 a string column with nulls is the default ``str`` dtype, which holds missing values already.
 A float column keeps NaN, and dates and times keep their NumPy types.
 A dictionary-encoded string column gives ``category``.
-``from_pandas`` stores a ``category`` column with string categories as a dictionary-encoded column, without its unused categories or their order.
+``from_pandas`` stores a ``category`` column with string categories as a dictionary-encoded column, and ``to_pandas`` gives back only the categories that are used.
 With pyarrow installed the categories keep the dictionary order and no string is built per row; without it the categories come out sorted.
 Two options change the result further, and neither needs pyarrow:
 

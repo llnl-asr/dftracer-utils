@@ -104,18 +104,39 @@ def _zone_name(tz: Any) -> str:
     return str(tz)
 
 
+def _dictionary(codes: "np.ndarray", categories: "List[str]") -> "Optional[_ext._Series]":
+    """A dictionary column from integer codes (negative for null) and their
+    strings, built through pyarrow so no string is made per row; None without
+    pyarrow or an Arrow-enabled extension."""
+    if not hasattr(_ext, "_series_from_arrow"):
+        return None
+    try:
+        import pyarrow as pa  # ty: ignore[import-not-found]
+    except ImportError:
+        return None
+    indices = pa.array(codes, mask=codes < 0)
+    return _ext._series_from_arrow(
+        pa.DictionaryArray.from_arrays(indices, pa.array(categories, type=pa.string()))
+    )
+
+
 def pandas_to_native(s: Any) -> "_ext._Series":
     """A ``pandas.Series`` as a native column: a NaN in a float column and a
     ``NaT`` or ``NA`` anywhere read as null. A ``category`` column whose
-    categories are strings becomes a dictionary-encoded string column, without
-    its unused categories or their order; other categories keep their values."""
+    categories are strings becomes a dictionary-encoded string column, in
+    category order where pyarrow is installed; other categories keep their
+    values."""
     import pandas as pd
 
     dtype = s.dtype
     if hasattr(pd, "ArrowDtype") and isinstance(dtype, pd.ArrowDtype):
         raise NeedsArrow(f"a pandas column of dtype {dtype} needs pyarrow")
     if isinstance(dtype, pd.CategoricalDtype):
-        if all(isinstance(c, str) for c in dtype.categories):
+        categories = dtype.categories.tolist()
+        if all(isinstance(c, str) for c in categories):
+            native = _dictionary(s.cat.codes.to_numpy(), categories)
+            if native is not None:
+                return native
             return _objects(
                 s.astype(object).where(s.notna(), None).tolist(), None
             ).dictionary_encode()

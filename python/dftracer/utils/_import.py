@@ -120,6 +120,19 @@ def _dictionary(codes: "np.ndarray", categories: "List[str]") -> "Optional[_ext.
     )
 
 
+def _arrow_dictionary(s: Any) -> "Optional[_ext._Series]":
+    """A polars ``Categorical`` or ``Enum`` as a dictionary column from its
+    Arrow export, which carries the codes and the values together; None
+    without pyarrow or an Arrow-enabled extension."""
+    if not hasattr(_ext, "_series_from_arrow"):
+        return None
+    try:
+        import pyarrow  # noqa: F401  # ty: ignore[import-not-found]
+    except ImportError:
+        return None
+    return _ext._series_from_arrow(s.to_arrow())
+
+
 def pandas_to_native(s: Any) -> "_ext._Series":
     """A ``pandas.Series`` as a native column: a NaN in a float column and a
     ``NaT`` or ``NA`` anywhere read as null. A ``category`` column whose
@@ -178,7 +191,10 @@ def polars_to_native(s: Any) -> "_ext._Series":
     if name in ("String", "Utf8", "Binary", "Time") or name.startswith("Decimal"):
         return _objects(s.to_list(), None)
     if name in ("Categorical", "Enum") or name.startswith(("Categorical", "Enum")):
-        return _objects(s.cast(pl.String).to_list(), None)
+        native = _arrow_dictionary(s)
+        if native is not None:
+            return native
+        return _objects(s.cast(pl.String).to_list(), None).dictionary_encode()
     if name == "Date":
         phys = s.to_physical().fill_null(0).cast(pl.Int32).to_numpy()
         return _ext._series_retype(_ext._series_from_numpy(phys, mask), int(DType.DATE32))

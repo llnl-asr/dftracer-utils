@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/dstd/hash/hash_combine.h>
@@ -26,6 +27,7 @@
 #include <dftracer/utils/python/index/batch_indexer.h>
 #include <dftracer/utils/python/index/indexer.h>
 #include <dftracer/utils/python/runtime/runtime.h>
+#include <dftracer/utils/python/runtime/task_handle.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/index/build/resolve_and_build.h>
 #include <dftracer/utils/trace/index/build/resolver.h>
@@ -479,6 +481,43 @@ static PyObject* Indexer_build(IndexerObject* self,
     Py_RETURN_NONE;
 }
 
+static dftracer::utils::coro::CoroTask<
+    dftracer::utils::dstd::Result<dftracer::utils::trace::index::IndexStatus>>
+open_and_build(
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> paths,
+    dftracer::utils::trace::index::IndexerOptions options, bool force,
+    dftracer::utils::coro::Scope& scope) {
+    using namespace dftracer::utils;
+    auto opened =
+        trace::index::Indexer::open(std::move(paths), std::move(options));
+    if (!opened) co_return dstd::Unexpected<dstd::Error>(opened.error());
+    trace::index::Indexer ix = std::move(*opened);
+    auto building = force ? ix.rebuild(scope) : ix.build(scope);
+    co_return co_await std::move(building);
+}
+
+static PyObject* Indexer_build_async(IndexerObject* self,
+                                     PyObject* Py_UNUSED(ignored)) {
+    using namespace dftracer::utils;
+    auto options = indexer_options(self);
+    if (!options) return nullptr;
+    auto task = coro::with_scope(
+        [paths = indexer_paths(self), options = std::move(*options),
+         force = self->force_rebuild != 0](coro::Scope& scope) mutable {
+            return open_and_build(std::move(paths), std::move(options), force,
+                                  scope);
+        });
+    return python::runtime::submit_task_handle(
+        shared_runtime(self), std::move(task), "indexer-build",
+        [](dstd::Result<trace::index::IndexStatus>& result) -> PyObject* {
+            if (!result) {
+                python::core::set_py_error(result.error());
+                return nullptr;
+            }
+            Py_RETURN_NONE;
+        });
+}
+
 // ---------------------------------------------------------------------------
 // ensure_indexed() - resolve + build if needed
 // ---------------------------------------------------------------------------
@@ -777,6 +816,11 @@ static PyMethodDef Indexer_methods[] = {
      "build()\n"
      "--\n\n"
      "Build all missing index tiers based on require_* flags.\n"},
+    {"build_async", DFTU_PYCFUNCTION(Indexer_build_async), METH_NOARGS,
+     "build_async() -> TaskHandle[None]\n"
+     "--\n\n"
+     "Start build() on the Runtime and return at once. The handle's get()\n"
+     "raises the error build() would.\n"},
     {"ensure_indexed", DFTU_PYCFUNCTION(Indexer_ensure_indexed), METH_NOARGS,
      "ensure_indexed()\n"
      "--\n\n"

@@ -571,6 +571,7 @@ PY_ALLOWLIST = {
     },
     "LazyFrame": {
         "collect",
+        "collect_async",
         "columns",
         "explain",
         "output_schema",

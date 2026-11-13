@@ -25,6 +25,16 @@ dftracer::utils::Runtime *resolve_runtime(T *self) {
     return dftracer::utils::python::runtime::get_default_runtime();
 }
 
+// The same Runtime as an owning pointer, for a task that must outlive the call.
+template <typename T>
+dftracer::utils::dstd::SharedPtr<dftracer::utils::Runtime> shared_runtime(
+    T *self) {
+    if (self->runtime_obj) return ((RuntimeObject *)self->runtime_obj)->runtime;
+    return dftracer::utils::dstd::SharedPtr<dftracer::utils::Runtime>(
+        dftracer::utils::dstd::SharedPtr<void>(),
+        dftracer::utils::python::runtime::get_default_runtime());
+}
+
 template <typename T>
 PyObject *runtime_backed_new(PyTypeObject *type, PyObject *, PyObject *) {
     T *self = (T *)type->tp_alloc(type, 0);

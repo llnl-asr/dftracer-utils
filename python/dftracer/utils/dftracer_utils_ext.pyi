@@ -158,6 +158,14 @@ class Indexer:
         """
         ...
 
+    def build_async(self) -> "TaskHandle[None]":
+        """Start :meth:`build` on the Runtime and return at once.
+
+        The handle's ``get()`` returns ``None`` or raises the error ``build``
+        would.
+        """
+        ...
+
     def ensure_indexed(self) -> Dict[str, object]:
         """Ensure all files are indexed by calling resolve then build if needed.
 
@@ -260,6 +268,14 @@ class CheckpointIndexer:
         """Build the index."""
         ...
 
+    def build_async(self) -> "TaskHandle[None]":
+        """Start :meth:`build` on the Runtime and return at once.
+
+        The handle's ``get()`` returns ``None`` or raises the error ``build``
+        would.
+        """
+        ...
+
     def need_rebuild(self) -> bool:
         """Check if index needs rebuilding."""
         ...
@@ -313,11 +329,22 @@ class CheckpointIndexer:
         """Release this Python wrapper on context exit."""
         ...
 
+def _close_task_callbacks() -> None:
+    """Drop the done callbacks that have not started and wait for those
+    running. Called at interpreter exit."""
+    ...
+
 class TaskHandle(Generic[_T]):
-    """Handle to a submitted C++ coroutine task."""
+    """Handle to a native task that runs on the Runtime pool.
+
+    Made by ``build_async`` and ``collect_async``; it cannot be constructed.
+    Dropping it before the task ends is safe: the task finishes and its result
+    is discarded.
+    """
 
     def get(self) -> _T:
-        """Block until task completes and return result. Raises on error."""
+        """Block, with the GIL released, until the task ends. Return its result
+        or raise its error. A second call returns the same result."""
         ...
 
     def wait(self) -> None:
@@ -325,7 +352,18 @@ class TaskHandle(Generic[_T]):
         ...
 
     def done(self) -> bool:
-        """Return True if task has completed."""
+        """Return True if task has ended, without blocking."""
+        ...
+
+    def add_done_callback(self, fn: Callable[["TaskHandle[_T]"], None]) -> None:
+        """Call ``fn(handle)`` once when the task ends: on the calling thread
+        if it has, otherwise on the pool worker that finished it, which takes
+        the GIL for the call. A slow callback holds that worker. An exception
+        of ``fn`` is reported as unraisable."""
+        ...
+
+    def cancel(self) -> None:
+        """Ask the task to stop. ``get()`` then raises its cancelled error."""
         ...
 
     @property
@@ -805,6 +843,11 @@ class _LazyFrame:
         ...
     def explain(self) -> str: ...
     def collect(self, batch_size: int = 0, runtime: Optional[object] = None) -> "_DataFrame": ...
+    def collect_async(
+        self, batch_size: int = 0, runtime: Optional[object] = None
+    ) -> "TaskHandle[_DataFrame]":
+        """Start :meth:`collect` on the Runtime and return at once."""
+        ...
     def stream(
         self, batch_size: int = 0, runtime: Optional[object] = None
     ) -> Iterator["_DataFrame"]:

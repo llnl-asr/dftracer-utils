@@ -4649,6 +4649,8 @@ coro::CoroTask<dstd::Result<DataFrame>> LazyFrame::run_ops_in_memory(
     if (!fused) co_return fused.error();
     if (*fused) co_return std::move(**fused);
     for (const auto& op : ops) {
+        const bool stopping = co_await coro::this_coro::stop_requested;
+        if (stopping) co_await coro::stop_here();
         bool ok = true;
         dstd::Result<DataFrame> next = std::visit(
             Overloaded{

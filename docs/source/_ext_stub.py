@@ -10,7 +10,7 @@ from __future__ import annotations
 import sys
 import types
 from types import TracebackType
-from typing import Generic, Iterator, TypeVar
+from typing import Callable, Generic, Iterator, TypeVar
 
 _T = TypeVar("_T")
 
@@ -200,6 +200,14 @@ def install_extension_stub() -> None:
             """
             return {}
 
+        def build_async(self) -> "TaskHandle[None]":
+            """Start :meth:`build` on the Runtime and return at once.
+
+            The handle's ``get()`` returns ``None`` or raises the error
+            ``build`` would.
+            """
+            return TaskHandle()
+
         def ensure_indexed(self) -> dict[str, object]:
             """Ensure all files are indexed by calling resolve then build if needed.
 
@@ -292,6 +300,14 @@ def install_extension_stub() -> None:
             """Build the index."""
             return None
 
+        def build_async(self) -> "TaskHandle[None]":
+            """Start :meth:`build` on the Runtime and return at once.
+
+            The handle's ``get()`` returns ``None`` or raises the error
+            ``build`` would.
+            """
+            return TaskHandle()
+
         def need_rebuild(self) -> bool:
             """Check if index needs rebuilding."""
             return False
@@ -359,10 +375,16 @@ def install_extension_stub() -> None:
             return None
 
     class TaskHandle(_BaseNative, Generic[_T]):
-        """Handle to a submitted C++ coroutine task."""
+        """Handle to a native task that runs on the Runtime pool.
+
+        Made by ``build_async`` and ``collect_async``; it cannot be constructed.
+        Dropping it before the task ends is safe: the task finishes and its
+        result is discarded.
+        """
 
         def get(self) -> _T:
-            """Block until task completes and return result. Raises on error."""
+            """Block, with the GIL released, until the task ends. Return its
+            result or raise its error. A second call returns the same result."""
             return None  # type: ignore[return-value]
 
         def wait(self) -> None:
@@ -370,8 +392,19 @@ def install_extension_stub() -> None:
             return None
 
         def done(self) -> bool:
-            """Return True if task has completed."""
+            """Return True if task has ended, without blocking."""
             return True
+
+        def add_done_callback(self, fn: Callable[["TaskHandle[_T]"], None]) -> None:
+            """Call ``fn(handle)`` once when the task ends: on the calling
+            thread if it has, otherwise on the pool worker that finished it,
+            which takes the GIL for the call. A slow callback holds that
+            worker. An exception of ``fn`` is reported as unraisable."""
+            return None
+
+        def cancel(self) -> None:
+            """Ask the task to stop. ``get()`` then raises its cancelled error."""
+            return None
 
         @property
         def name(self) -> str:
@@ -471,6 +504,11 @@ def install_extension_stub() -> None:
                 - files_failed: Number of files that failed
         """
         return {}
+
+    def _close_task_callbacks() -> None:
+        """Drop the done callbacks that have not started and wait for those
+        running. Called at interpreter exit."""
+        return None
 
     def build_index_batch(
         files: list[str],
@@ -619,6 +657,7 @@ def install_extension_stub() -> None:
         "TaskHandle",
     ]
     _function_symbols = [
+        "_close_task_callbacks",
         "_dataframe_from_arrow",
         "_series_from_arrow",
         "_series_from_numpy",

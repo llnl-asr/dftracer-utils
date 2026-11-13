@@ -9,6 +9,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Added
 
+- Add `Indexer.build_async()` and `LazyFrame.collect_async()`, which start the work on the native pool and return a `TaskHandle` at once.
+  `get()` releases the GIL while it waits and raises the error that `build()` or `collect()` raises.
+  A handle can be awaited from `asyncio` or `uvloop`, takes `add_done_callback` and `cancel`, and a cancelled await asks the native task to stop.
+  The native `TaskHandle` is now a typed completion handle in place of the empty shell, and `dstd::Any` is no longer included by `trace/views/view.h`.
 - Add `dstd::Condition::OutOfMemory` and the C status `DFTU_E_NO_MEMORY` (-12) for a refused allocation.
   The error code `MemoryBudgetExceeded` now has the condition `OutOfMemory` in place of `Internal`.
   The Python bindings raise `MemoryError` for an `OutOfMemory` error, such as a plugin callback that returns `DFTU_E_NO_MEMORY`.

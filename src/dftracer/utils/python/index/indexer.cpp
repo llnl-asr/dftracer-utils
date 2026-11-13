@@ -11,6 +11,7 @@
 #include <dftracer/utils/python/core/type_helpers.h>
 #include <dftracer/utils/python/index/indexer.h>
 #include <dftracer/utils/python/runtime/runtime.h>
+#include <dftracer/utils/python/runtime/task_handle.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/index/build/batch_builder.h>
 #include <dftracer/utils/trace/index/gzip/checkpoint_indexer_factory.h>
@@ -157,6 +158,56 @@ static dftracer::utils::Runtime *get_indexer_runtime(
     return dftracer::utils::python::runtime::get_default_runtime();
 }
 
+// The config of a bloom build over this indexer's file, or null with a Python
+// error set.
+static dftracer::utils::dstd::SharedPtr<
+    dftracer::utils::trace::index::build::IndexBuildBatchConfig>
+bloom_build_config(CheckpointIndexerObject *self) {
+    using namespace dftracer::utils;
+    using namespace dftracer::utils::trace::index::build;
+
+    const char *gz = as_utf8(self->gz_path);
+    const char *idx = as_utf8(self->index_path);
+    if (!gz || !idx) return nullptr;
+
+    auto batch_config = dstd::make_shared<IndexBuildBatchConfig>();
+    batch_config->file_paths.emplace_back(gz);
+    batch_config->checkpoint_size =
+        static_cast<std::size_t>(self->checkpoint_size);
+    batch_config->parallelism = 1;
+
+    const dstd::StringView idx_str(idx);
+    auto pos = idx_str.find_last_of('/');
+    if (pos != dstd::StringView::npos) {
+        batch_config->index_dir = idx_str.substr(0, pos);
+    }
+    return batch_config;
+}
+
+static dftracer::utils::coro::CoroTask<dftracer::utils::dstd::Result<void>>
+build_checkpoints(dftracer::utils::dstd::SharedPtr<
+                  dftracer::utils::trace::index::gzip::CheckpointIndexer>
+                      indexer) {
+    auto building = indexer->try_build_async();
+    co_return co_await std::move(building);
+}
+
+static dftracer::utils::coro::CoroTask<dftracer::utils::dstd::Result<void>>
+build_with_bloom(dftracer::utils::dstd::SharedPtr<
+                 dftracer::utils::trace::index::build::IndexBuildBatchConfig>
+                     config) {
+    using namespace dftracer::utils;
+    auto processing = trace::index::build::BatchBuilder::process(config);
+    auto batch_result = co_await std::move(processing);
+    if (batch_result.failed > 0 && !batch_result.results.empty()) {
+        const auto &result = batch_result.results[0];
+        if (!result.success)
+            co_return dstd::Unexpected<dstd::Error>(
+                dstd::Error{dstd::Condition::Internal, result.error_message});
+    }
+    co_return dstd::Result<void>{};
+}
+
 static PyObject *CheckpointIndexer_build(CheckpointIndexerObject *self,
                                          PyObject *Py_UNUSED(ignored)) {
     if (!self->handle) {
@@ -170,23 +221,8 @@ static PyObject *CheckpointIndexer_build(CheckpointIndexerObject *self,
         using namespace dftracer::utils;
         using namespace dftracer::utils::trace::index::build;
 
-        const char *gz = as_utf8(self->gz_path);
-        const char *idx = as_utf8(self->index_path);
-        if (!gz || !idx) {
-            return NULL;
-        }
-
-        auto batch_config = dstd::make_shared<IndexBuildBatchConfig>();
-        batch_config->file_paths.emplace_back(gz);
-        batch_config->checkpoint_size =
-            static_cast<std::size_t>(self->checkpoint_size);
-        batch_config->parallelism = 1;
-
-        const dstd::StringView idx_str(idx);
-        auto pos = idx_str.find_last_of('/');
-        if (pos != dstd::StringView::npos) {
-            batch_config->index_dir = idx_str.substr(0, pos);
-        }
+        auto batch_config = bloom_build_config(self);
+        if (!batch_config) return NULL;
 
         Runtime *rt = get_indexer_runtime(self);
         IndexBuildBatchResult batch_result;
@@ -225,6 +261,32 @@ static PyObject *CheckpointIndexer_build(CheckpointIndexerObject *self,
     }
 
     Py_RETURN_NONE;
+}
+
+static PyObject *CheckpointIndexer_build_async(CheckpointIndexerObject *self,
+                                               PyObject *Py_UNUSED(ignored)) {
+    using namespace dftracer::utils;
+    if (!self->handle) {
+        PyErr_SetString(PyExc_RuntimeError, "Indexer not initialized");
+        return NULL;
+    }
+    auto convert = [](dstd::Result<void> &result) -> PyObject * {
+        if (!result) {
+            PyErr_SetString(PyExc_RuntimeError, result.error().c_str());
+            return NULL;
+        }
+        Py_RETURN_NONE;
+    };
+    if (self->build_bloom) {
+        auto config = bloom_build_config(self);
+        if (!config) return NULL;
+        return python::runtime::submit_task_handle(
+            shared_runtime(self), build_with_bloom(std::move(config)),
+            "indexer-build", convert);
+    }
+    return python::runtime::submit_task_handle(shared_runtime(self),
+                                               build_checkpoints(*self->handle),
+                                               "indexer-build", convert);
 }
 
 static PyObject *CheckpointIndexer_need_rebuild(CheckpointIndexerObject *self,
@@ -358,6 +420,13 @@ static PyMethodDef CheckpointIndexer_methods[] = {
      "--\n"
      "\n"
      "Build or rebuild the index.\n"},
+    {"build_async", DFTU_PYCFUNCTION(CheckpointIndexer_build_async),
+     METH_NOARGS,
+     "build_async() -> TaskHandle[None]\n"
+     "--\n"
+     "\n"
+     "Start the same build on the Runtime and return at once. The handle's\n"
+     "get() raises the error build() would.\n"},
     {"need_rebuild", DFTU_PYCFUNCTION(CheckpointIndexer_need_rebuild),
      METH_NOARGS, "Check if a rebuild is needed."},
     {"exists", DFTU_PYCFUNCTION(CheckpointIndexer_exists), METH_NOARGS,

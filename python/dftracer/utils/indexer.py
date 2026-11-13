@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Dict, List, Optional, Sequence, Set, Type, Uni
 from ._units import coerce_bytes, coerce_duration
 from .dftracer_utils_ext import CheckpointIndexer as _NativeCheckpointIndexer
 from .dftracer_utils_ext import Indexer as _NativeIndexer
-from .runtime import Runtime
+from .runtime import Runtime, TaskHandle
 from .schemas import RecordSchema, schema_id
 
 if TYPE_CHECKING:
@@ -253,6 +253,16 @@ class Indexer:
         When aggregation is enabled, it performs a fused pass for efficiency.
         """
         self._native.build()
+
+    def build_async(self) -> TaskHandle[None]:
+        """Start :meth:`build` on the native pool and return at once.
+
+        ``get()`` on the handle returns ``None`` when the build ends, or raises
+        the error ``build`` would, and releases the GIL while it waits. Opening
+        the files happens in the task, so a bad path fails there too.
+        """
+        native = self._native.build_async()
+        return TaskHandle(native=native, name=native.name, task_id=native.task_id)
 
     def ensure_indexed(self) -> IndexStatus:
         """Resolve and build if needed.

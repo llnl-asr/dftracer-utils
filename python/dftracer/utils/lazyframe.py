@@ -32,6 +32,7 @@ from typing import (
 
 from .columnar import Expr, _as_expr, _Col, _emit_ast, col
 from .dataframe import DataFrame, JoinHow, WindowSpec, _names, _norm_window_spec
+from .runtime import TaskHandle
 from .series import Series, _unwrap, _wrap
 
 if TYPE_CHECKING:
@@ -609,6 +610,21 @@ class LazyFrame:
         is the chunk a streaming source is pulled in; ``0`` (the default) is
         auto, and runs a resident source whole-column, as the eager path."""
         return self._finish(_wrap(self._native.collect(batch_size, self._runtime)))
+
+    def collect_async(self, batch_size: int = 0) -> TaskHandle[DataFrame]:
+        """Start :meth:`collect` on the native pool and return at once.
+
+        The native plan is copied into the task, so later changes to the sources
+        do not reach it. ``get()`` returns the :class:`DataFrame` ``collect`` would,
+        or raises its error, and releases the GIL while it waits.
+        """
+        native = self._native.collect_async(batch_size, self._runtime)
+        return TaskHandle(
+            native=native,
+            name=native.name,
+            task_id=native.task_id,
+            finish=lambda out: self._finish(_wrap(out)),
+        )
 
     def _finish(self, out: DataFrame) -> DataFrame:
         if self._index is not None and all(name in out for name in self._index):

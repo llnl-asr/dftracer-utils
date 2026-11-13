@@ -32,6 +32,7 @@ from .dftracer_utils_ext import (  # noqa: F401
     DFTUtilsPipelineError,
     DFTUtilsReaderError,
     DFTUtilsValueError,
+    _close_task_callbacks,
     consolidate_shard_set,
     get_log_level,
     set_log_color,
@@ -107,6 +108,11 @@ def _shutdown_default_runtime() -> None:
         wrapper.shutdown(wait=True)
     except Exception:
         pass
+
+
+# Registered after the shutdown above, so it runs first: done callbacks of
+# native tasks that have not started are dropped before the interpreter ends.
+atexit.register(_close_task_callbacks)
 
 
 try:

@@ -110,6 +110,31 @@ Async Task Submission
        # Or get individual results
        result = h1.get()  # blocks until h1 completes
 
+Native work has its own async calls.
+``Indexer.build_async()`` and ``LazyFrame.collect_async()`` start on the native
+pool and return a ``TaskHandle`` at once.
+``get()`` blocks with the GIL released and gives the result ``build()`` or
+``collect()`` would, or raises the same error:
+
+.. code-block:: python
+
+   building = indexer.build_async()
+   frame = lazy_frame.collect_async()
+   building.get()
+   df = frame.get()
+
+A ``TaskHandle`` can be awaited, so native work runs beside other coroutines in
+``asyncio`` or ``uvloop``:
+
+.. code-block:: python
+
+   import asyncio
+
+   async def main():
+       a, b = await asyncio.gather(lf_a.collect_async(), lf_b.collect_async())
+
+   asyncio.run(main())
+
 Task names are auto-derived from the callable (there is no ``name`` argument):
 
 .. code-block:: python

@@ -14,7 +14,8 @@
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/memory/budget.h>              // NO_SPILL_BUDGET
+#include <dftracer/utils/memory/budget.h>  // NO_SPILL_BUDGET
+#include <dftracer/utils/python/core/errors.h>
 #include <dftracer/utils/python/core/list_helpers.h>
 #include <dftracer/utils/python/core/method.h>
 #include <dftracer/utils/python/core/runtime_mixin.h>  // run_blocking
@@ -28,6 +29,7 @@
 #include <dftracer/utils/python/frame/join_helpers.h>
 #include <dftracer/utils/python/frame/lazyframe.h>
 #include <dftracer/utils/python/frame/series.h>
+#include <dftracer/utils/python/runtime/task_handle.h>
 #include <dftracer/utils/python/trace/streaming_iterator.h>
 #include <dftracer/utils/runtime/runtime.h>
 
@@ -855,6 +857,39 @@ PyObject* LazyFrame_collect(PyObject* self, PyObject* args, PyObject* kwds) {
     return dftracer::utils::python::frame::wrap_dataframe(std::move(out));
 }
 
+dftracer::utils::coro::CoroTask<
+    dftracer::utils::dstd::Result<dataframe::DataFrame>>
+collect_owned(LazyFrame lf, std::int64_t batch_size) {
+    auto collecting = lf.collect(batch_size);
+    co_return co_await std::move(collecting);
+}
+
+PyObject* LazyFrame_collect_async(PyObject* self, PyObject* args,
+                                  PyObject* kwds) {
+    LazyFrameObject* b = as_lazyframe(self);
+    if (!b) return nullptr;
+    long long batch_size = 0;
+    PyObject* runtime_arg = nullptr;
+    static const char* kw[] = {"batch_size", "runtime", nullptr};
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|LO", const_cast<char**>(kw),
+                                     &batch_size, &runtime_arg))
+        return nullptr;
+    dftracer::utils::dstd::SharedPtr<dftracer::utils::Runtime> rt =
+        runtime_from_arg(runtime_arg);
+    if (!rt) return nullptr;
+    return dftracer::utils::python::runtime::submit_task_handle(
+        std::move(rt), collect_owned(b->lf, batch_size), "lazyframe-collect",
+        [](dftracer::utils::dstd::Result<dataframe::DataFrame>& result)
+            -> PyObject* {
+            if (!result) {
+                dftracer::utils::python::core::set_py_error(result.error());
+                return nullptr;
+            }
+            return dftracer::utils::python::frame::wrap_dataframe(
+                std::move(*result));
+        });
+}
+
 // Drains the plan's chunk generator into `state`, which the Python iterator
 // pulls from with the GIL released.
 dftracer::utils::coro::CoroTask<void> drain_stream(
@@ -1085,6 +1120,10 @@ PyMethodDef LazyFrame_methods[] = {
     {"collect", DFTU_PYCFUNCTION(LazyFrame_collect),
      METH_VARARGS | METH_KEYWORDS,
      "collect(batch_size=65536) -> _DataFrame, running the pipeline."},
+    {"collect_async", DFTU_PYCFUNCTION(LazyFrame_collect_async),
+     METH_VARARGS | METH_KEYWORDS,
+     "collect_async(batch_size=0) -> TaskHandle[_DataFrame], running the "
+     "pipeline on the Runtime and returning at once."},
     {nullptr, nullptr, 0, nullptr}};
 
 PyObject* collect_all_py(PyObject*, PyObject* args, PyObject* kwds) {

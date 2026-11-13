@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
-#ifndef DFTRACER_UTILS_DATAFRAME_INTERNAL_PLUGIN_TASK_H
-#define DFTRACER_UTILS_DATAFRAME_INTERNAL_PLUGIN_TASK_H
+#ifndef DFTRACER_UTILS_PLUGINS_HOST_PLUGIN_TASK_H
+#define DFTRACER_UTILS_PLUGINS_HOST_PLUGIN_TASK_H
 
 #include <dftracer/utils/common/abi.h>
 #include <dftracer/utils/common/abi_error.h>
@@ -11,7 +11,7 @@
 #include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
 
-namespace dftracer::utils::dataframe {
+namespace dftracer::utils::plugins::host {
 
 /// The error of a plugin callback @p what that returned the negative
 /// @p status, carrying the message it set on @p ctx.
@@ -68,6 +68,6 @@ inline coro::CoroTask<dstd::Result<dftu_status>> await_plugin_task(
     co_return status;
 }
 
-}  // namespace dftracer::utils::dataframe
+}  // namespace dftracer::utils::plugins::host
 
-#endif  // DFTRACER_UTILS_DATAFRAME_INTERNAL_PLUGIN_TASK_H
+#endif  // DFTRACER_UTILS_PLUGINS_HOST_PLUGIN_TASK_H

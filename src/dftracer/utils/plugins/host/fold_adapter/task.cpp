@@ -2,15 +2,18 @@
 #include <dftracer/utils/coro/abi_context.h>
 #include <dftracer/utils/coro/combinators.h>
 #include <dftracer/utils/coro/executor.h>
+#include <dftracer/utils/coro/named.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/coro/task_abi.h>
 #include <dftracer/utils/coro/time.h>
 #include <dftracer/utils/coro/yield.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/host/fold_adapter.h>
 #include <dftracer/utils/plugins/host/fold_adapter/ext.h>
+#include <dftracer/utils/runtime/runtime.h>
 
 #include <algorithm>
 #include <atomic>
@@ -567,6 +570,33 @@ void host_discard(void* /*h*/, ::dftu_task* t) {
     if (is_unawaited(t)) coro::free_abi_task(t);
 }
 
+}  // namespace
+
+dftu_status detail::task_run(::dftu_ctx* ctx, void* /*h*/, ::dftu_task* t) {
+    if (t == nullptr) return fail(ctx, DFTU_E_INVALID, "run: NULL task");
+    coro::AbiTask* task = coro::abi_task(t);
+    const auto ran = default_runtime().block_on(
+        coro::named("dftu_svc_task::run", coro::run_abi_task(task)));
+    dftu_status status = DFTU_OK;
+    dstd::Optional<dstd::Error> error;
+    if (!ran) {
+        error = ran.error();
+    } else if (task->status < 0) {
+        error = coro::abi_task_error(*task);
+    } else {
+        status = task->status;
+    }
+    if (error) {
+        const dstd::StringView text =
+            error->message().empty() ? error->name() : error->message();
+        status = host_fail(ctx, common::to_status(error->condition()), text);
+    }
+    coro::free_abi_task(t);
+    return status;
+}
+
+namespace {
+
 const ::dftu_svc_task TASK_VTABLE = {
     sizeof(::dftu_svc_task),
     host_job,
@@ -580,6 +610,7 @@ const ::dftu_svc_task TASK_VTABLE = {
     host_drive,
     host_status,
     host_discard,
+    detail::task_run,
 };
 
 }  // namespace

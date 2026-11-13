@@ -2,9 +2,11 @@
 #ifndef DFTRACER_UTILS_PLUGINS_HOST_BUILD_HOST_H
 #define DFTRACER_UTILS_PLUGINS_HOST_BUILD_HOST_H
 
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi.h>
+#include <dftracer/utils/plugins/host/plugin_library.h>
 #include <dftracer/utils/plugins/host/state_registry.h>
 
 #include <utility>
@@ -15,14 +17,22 @@ namespace dftracer::utils::plugins::host {
 /// groups - DFTU_SVC_OPS, DFTU_SVC_AGG, DFTU_SVC_PORTS, DFTU_SVC_PROVIDERS,
 /// DFTU_SVC_NODES -
 /// and, inside those,
-/// only the registration slots. Anything that needs a scan (a fold, a batch,
-/// the intern table, the runtime) does not exist yet at load, so every other
-/// service returns NULL and records the denial: the loader then fails the load
-/// naming it, rather than letting the factory dereference a host that is not
-/// there. What a factory may do is enforced here, not documented.
+/// only the registration slots, plus dftu_svc_task::run, which uses no host
+/// state and so stays valid after the factory returns. Anything that needs a
+/// scan (a fold, a batch, the intern table, the runtime) does not exist yet at
+/// load, so every other service returns NULL and records the denial: the loader
+/// then fails the load naming it, rather than letting the factory dereference a
+/// host that is not there. What a factory may do is enforced here, not
+/// documented.
 class BuildHost {
    public:
-    explicit BuildHost(dstd::String plugin_name);
+    /// `library` is the plugin library being loaded; every object the factory
+    /// registers through this host keeps a reference to it. Null for a
+    /// plugin that was not loaded from a library.
+    explicit BuildHost(dstd::String plugin_name,
+                       dstd::SharedPtr<PluginLibrary> library = nullptr);
+
+    const dstd::SharedPtr<PluginLibrary>& library() const { return library_; }
 
     /// Handed to the factory; valid only for that call.
     dftu_plugin_host* host() { return &host_; }
@@ -84,6 +94,7 @@ class BuildHost {
     }
 
    private:
+    dstd::SharedPtr<PluginLibrary> library_;
     dstd::String plugin_name_;
     dstd::String denied_;
     StateRegistry states_;

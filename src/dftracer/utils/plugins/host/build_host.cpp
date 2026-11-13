@@ -114,7 +114,7 @@ dftu_status build_register_provider(::dftu_ctx* ctx, void* h, const char* name,
                                     const ::dftu_source_vt* vt, void* self) {
     BuildHost& bh = self_of(h);
     const dftu_status status =
-        detail::register_plugin_provider(ctx, name, vt, self);
+        detail::register_plugin_provider(ctx, name, vt, self, bh.library());
     if (status >= 0) bh.registered_providers().emplace_back(name);
     return status;
 }
@@ -126,7 +126,7 @@ dftu_status build_register_node(::dftu_ctx* ctx, void* h, const char* name,
                                 const ::dftu_node_vt* vt, void* self) {
     BuildHost& bh = self_of(h);
     const dftu_status status =
-        detail::register_plugin_node(ctx, name, vt, self);
+        detail::register_plugin_node(ctx, name, vt, self, bh.library());
     if (status >= 0) bh.registered_nodes().emplace_back(name);
     return status;
 }
@@ -137,14 +137,77 @@ const ::dftu_svc_nodes g_build_nodes = {sizeof(::dftu_svc_nodes),
 dftu_status build_register_index(::dftu_ctx* ctx, void* h, const char* name,
                                  const ::dftu_index_extension* vt, void* self) {
     BuildHost& bh = self_of(h);
-    const dftu_status status =
-        detail::register_plugin_index_extension(ctx, name, vt, self);
+    const dftu_status status = detail::register_plugin_index_extension(
+        ctx, name, vt, self, bh.library());
     if (status >= 0) bh.registered_index_extensions().emplace_back(name);
     return status;
 }
 
 const ::dftu_svc_index g_build_index = {sizeof(::dftu_svc_index),
                                         build_register_index};
+
+dftu_status build_task_job(::dftu_ctx* ctx, void* h, const ::dftu_job_desc*,
+                           ::dftu_job**) {
+    return denied(ctx, self_of(h), DFTU_SVC_TASK "::job");
+}
+
+dftu_status build_task_sleep(::dftu_ctx* ctx, void* h, std::uint64_t,
+                             ::dftu_job**) {
+    return denied(ctx, self_of(h), DFTU_SVC_TASK "::sleep");
+}
+
+dftu_status build_task_then(::dftu_ctx* ctx, void* h, ::dftu_job*, ::dftu_job*,
+                            ::dftu_job**) {
+    return denied(ctx, self_of(h), DFTU_SVC_TASK "::then");
+}
+
+dftu_status build_task_all(::dftu_ctx* ctx, void* h, ::dftu_job* const*,
+                           std::uint32_t, ::dftu_job**) {
+    return denied(ctx, self_of(h), DFTU_SVC_TASK "::all");
+}
+
+dftu_status build_task_any(::dftu_ctx* ctx, void* h, ::dftu_job* const*,
+                           std::uint32_t, ::dftu_job**) {
+    return denied(ctx, self_of(h), DFTU_SVC_TASK "::any");
+}
+
+dftu_status build_task_map(::dftu_ctx* ctx, void* h, ::dftu_job*, std::uint32_t,
+                           ::dftu_job**) {
+    return denied(ctx, self_of(h), DFTU_SVC_TASK "::map");
+}
+
+dftu_status build_task_start(::dftu_ctx* ctx, void* h, ::dftu_job*, const void*,
+                             void*, ::dftu_task**) {
+    return denied(ctx, self_of(h), DFTU_SVC_TASK "::start");
+}
+
+dftu_status build_task_spawn(::dftu_ctx* ctx, void* h,
+                             dftu_status (*)(::dftu_ctx*, void*), void*,
+                             ::dftu_job_where, ::dftu_task**) {
+    return denied(ctx, self_of(h), DFTU_SVC_TASK "::spawn");
+}
+
+dftu_status build_task_drive(::dftu_ctx* ctx, void* h, ::dftu_step_fn, void*,
+                             void (*)(void*), ::dftu_task**) {
+    return denied(ctx, self_of(h), DFTU_SVC_TASK "::drive");
+}
+
+dftu_status build_task_status(::dftu_ctx* ctx, void* h, const ::dftu_task*) {
+    return denied(ctx, self_of(h), DFTU_SVC_TASK "::status");
+}
+
+void build_task_discard(void* h, ::dftu_task*) {
+    self_of(h).deny(DFTU_SVC_TASK "::discard");
+}
+
+// run uses no host state, so a plugin may keep it past the factory: a node's
+// cursor pulls its input with it long after the build host is gone.
+const ::dftu_svc_task g_build_task = {
+    sizeof(::dftu_svc_task), build_task_job,    build_task_sleep,
+    build_task_then,         build_task_all,    build_task_any,
+    build_task_map,          build_task_start,  build_task_spawn,
+    build_task_drive,        build_task_status, build_task_discard,
+    detail::task_run};
 
 const void* build_get_service(void* h, const char* ext_id) {
     if (!ext_id) return nullptr;
@@ -155,6 +218,7 @@ const void* build_get_service(void* h, const char* ext_id) {
         return &g_build_providers;
     if (dstd::StringView{ext_id} == DFTU_SVC_NODES) return &g_build_nodes;
     if (dstd::StringView{ext_id} == DFTU_SVC_INDEX) return &g_build_index;
+    if (dstd::StringView{ext_id} == DFTU_SVC_TASK) return &g_build_task;
     self_of(h).deny(ext_id);
     return nullptr;
 }
@@ -199,8 +263,10 @@ void build_log(void* h, std::uint8_t level, const char* s, std::uint32_t n) {
 
 }  // namespace
 
-BuildHost::BuildHost(dstd::String plugin_name)
-    : plugin_name_(plugin_name.empty() ? "plugin" : std::move(plugin_name)) {
+BuildHost::BuildHost(dstd::String plugin_name,
+                     dstd::SharedPtr<PluginLibrary> library)
+    : library_(std::move(library)),
+      plugin_name_(plugin_name.empty() ? "plugin" : std::move(plugin_name)) {
     host_.struct_size = sizeof(dftu_plugin_host);
     host_.h = this;
     host_.get_service = build_get_service;

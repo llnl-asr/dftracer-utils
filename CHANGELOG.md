@@ -23,6 +23,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Register providers and plan nodes through the plugin host tables only.
+  `dftu_provider_register` and `dftu_node_register` are removed from the dataframe C ABI, and the dataframe library keeps C++ interfaces for both, so it knows no plugin type.
+  The `dftu_source_vt`, `dftu_cursor_vt` and `dftu_node_vt` tables, and the structs that only they use, move to `plugins/abi/providers.h` and `plugins/abi/nodes.h`.
+  Registration refuses an empty name as well as a NULL one.
+  A plan now keeps the node or provider it names alive, so `dftu_node_unregister` and `dftu_provider_unregister` no longer free state that a plan still holds.
+- Add `run` to `dftu_svc_task`: it blocks until a task ends, frees it and returns its status, `DFTU_END` included, with the message on the ctx.
+  The plugin SDK node input cursor uses it, and the factory host serves it.
+- Keep a plugin library loaded while a node, provider or index extension from it, or a plan or cursor that holds one, is alive.
+  Unloading a plugin removes its names at once; the plugin's own `destroy` runs after the last holder is gone and the library is closed after it, where it was closed at unload before and a plan could call into unmapped code.
+  Ops registered with `dftu_op_register` are not covered.
 - Add 26 calls to the plugin `dftu.svc.io` table: `unlink`, `rmdir`, `rename`, `mkdir`, `fadvise`, `linkat`, `symlinkat`, `socket`, `connect`, `bind`, `listen`, `shutdown`, `sendmsg`, `recvmsg`, `poll_add`, `statx`, `fallocate`, `sync_file_range`, `splice`, `openat2`, `getxattr`, `setxattr`, `fgetxattr`, `fsetxattr`, `tee` and `pipe`, each with an `Io` method in the SDK.
   The host copies paths, names and socket addresses when called, and an errno of ENOSYS, EOPNOTSUPP or ENOTSUP fails a task with `DFTU_E_UNSUPPORTED`.
   The calls that need Linux return `DFTU_E_UNSUPPORTED`, with no task, on another platform.

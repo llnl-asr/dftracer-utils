@@ -142,12 +142,21 @@ typedef struct dftu_plugin {
    `h` is a BUILD-PHASE host: its get_service answers only the registration
    groups (DFTU_SVC_OPS, DFTU_SVC_AGG, DFTU_SVC_PORTS, DFTU_SVC_PROVIDERS) and,
    within those, only the registration slots - register_op, register_state,
-   port_key and register_provider. Every other group, every non-registration
-   slot, and resolve/intern return NULL/failure, and the host fails the load
-   naming what was denied. Scanning, spawning, I/O and emitting belong to the
+   port_key and register_provider - plus DFTU_SVC_TASK with its run slot,
+   which uses no host state, so a plugin may keep that service pointer and
+   its `h` for later. Every other group, every non-registration slot, and
+   resolve/intern return NULL/failure, and the host fails the load naming
+   what was denied. Scanning, spawning, I/O and emitting belong to the
    run-time host the fold callbacks receive. `h` and anything obtained from it
    die when the factory returns; only log() is safe to keep using, and only
    for the duration of the call.
+
+   The host keeps the plugin library loaded while a node, provider or index
+   extension registered here, or a plan or cursor holding one, is alive;
+   unloading the plugin removes the names at once. The plugin's own destroy
+   runs after the last of them is gone, then the library is closed, so a
+   node's or provider's destroy may use the plugin's global state. Ops are not
+   covered by this.
 
    The returned descriptor is still pure data: plan_duql, provides and consumes
    are read after every factory has run, so registering here does not reorder

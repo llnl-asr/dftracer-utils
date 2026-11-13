@@ -926,6 +926,10 @@ A host utility is reached as a named op instead
 (``Host::run_op("dftu.hash.fnv1a", {column})``, ``DFTU_SVC_OPS``). Every
 ``dftu_svc_task`` call has an SDK form (``Host::spawn``, ``Host::tasks()``,
 and the typed ``Job`` in ``job.h``), so async composition needs no raw ABI.
+``dftu_svc_task::run`` blocks until a task ends, frees it and returns its
+status; a node's input cursor uses it, since a node has no host to await with.
+It uses no host state, so a plugin may keep the service pointer after the
+factory returns.
 
 10. duql filters against events (DFTU_SVC_DUQL)
 -----------------------------------------------
@@ -1218,7 +1222,9 @@ stream). Every ``dftu_source_vt`` and ``dftu_cursor_vt`` callback takes the
 ``dftu_ctx*`` first and returns a ``dftu_status``; a negative status is the
 error, with the message the callback set on the ctx.
 ``dftu_lazyframe_from_provider(name)``
-then scans it like a file, from any language. An optional ``apply`` callback lets the source
+then scans it like a file, from any language. The vtables live in
+``plugins/abi/providers.h``; the host wraps one as a C++ provider in the
+dataframe registry, so the dataframe library itself knows no plugin type. An optional ``apply`` callback lets the source
 absorb whole ops at plan time (filter, projection, aggregation, sort,
 top-N, limit, tail, join); see the planning hooks in
 :doc:`guides/data/lazyframe`.
@@ -1264,10 +1270,21 @@ host logs the message and applies the op itself.
        .source<Range>("me.range", dstd::make_unique<Range>(0, 1000))
        .build(out);
 
-**A plan node** (``DFTU_SVC_NODES``; ``dftu_node_register`` in the
-dataframe ABI for a non-plugin caller). Register it from the factory through
+**Library lifetime.** The host keeps a plugin's shared library loaded while
+anything made from it is alive: a registered node, provider or index
+extension, and the plans and cursors that hold one. Unloading the plugin
+removes its names at once, so no new lookup finds them. The plugin's own
+``destroy`` runs after the last holder is gone, and the library is closed
+after it; a node or provider calls its own ``destroy(self)`` before that, so it
+may use the plugin's global state. A plugin never counts
+references itself, since the host takes them. An op registered with
+``dftu_op_register`` is not covered: a plan built over a plugin op must not
+outlive the plugin.
+
+**A plan node** (``DFTU_SVC_NODES``; the ``dftu_node_vt`` is in
+``plugins/abi/nodes.h``). Register it from the factory through
 the service: the host gates the name to ``<plugin>.<name>`` and unregisters
-the node before the plugin unloads, so no plan can reach code that is gone. A
+the node when the plugin unloads, so no new plan finds it. A
 ``dftu_node_vt`` is a cursor that takes an input cursor and returns an
 output cursor: a streaming op (one morsel in, one out, state kept between
 morsels: sessionize, coalesce, a GPU kernel) or a breaker (drain the input

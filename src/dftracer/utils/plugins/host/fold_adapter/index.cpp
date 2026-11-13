@@ -31,8 +31,9 @@ void append_out(void* self, const void* data, std::uint64_t len) {
 class PluginIndexBuilder final
     : public trace::index::extensions::ExtensionBuilder {
    public:
-    PluginIndexBuilder(const ::dftu_index_extension& vt, void* builder)
-        : vt_(vt), builder_(builder) {}
+    PluginIndexBuilder(dstd::SharedPtr<PluginLibrary> library,
+                       const ::dftu_index_extension& vt, void* builder)
+        : library_(std::move(library)), vt_(vt), builder_(builder) {}
     ~PluginIndexBuilder() override { vt_.destroy_builder(builder_); }
     PluginIndexBuilder(const PluginIndexBuilder&) = delete;
     PluginIndexBuilder& operator=(const PluginIndexBuilder&) = delete;
@@ -78,6 +79,8 @@ class PluginIndexBuilder final
     }
 
    private:
+    // First, so it is released after destroy_builder has run.
+    dstd::SharedPtr<PluginLibrary> library_;
     const ::dftu_index_extension& vt_;
     void* builder_;
     dstd::Vector<::dftu_bytes> lines_;
@@ -85,8 +88,9 @@ class PluginIndexBuilder final
 
 class PluginIndexQuery final : public trace::index::extensions::ExtensionQuery {
    public:
-    PluginIndexQuery(const ::dftu_index_extension& vt, void* compiled)
-        : vt_(vt), compiled_(compiled) {}
+    PluginIndexQuery(dstd::SharedPtr<PluginLibrary> library,
+                     const ::dftu_index_extension& vt, void* compiled)
+        : library_(std::move(library)), vt_(vt), compiled_(compiled) {}
     ~PluginIndexQuery() override { vt_.release(compiled_); }
     PluginIndexQuery(const PluginIndexQuery&) = delete;
     PluginIndexQuery& operator=(const PluginIndexQuery&) = delete;
@@ -106,6 +110,8 @@ class PluginIndexQuery final : public trace::index::extensions::ExtensionQuery {
     }
 
    private:
+    // First, so it is released after release() has run.
+    dstd::SharedPtr<PluginLibrary> library_;
     const ::dftu_index_extension& vt_;
     void* compiled_;
 };
@@ -170,7 +176,8 @@ class PluginIndexQuery final : public trace::index::extensions::ExtensionQuery {
 class PluginIndexExtension final : public trace::index::extensions::Extension {
    public:
     static dstd::Result<trace::index::extensions::ExtensionPtr> make(
-        dstd::StringView name, const ::dftu_index_extension* vt, void* self) {
+        dstd::StringView name, const ::dftu_index_extension* vt, void* self,
+        dstd::SharedPtr<PluginLibrary> library) {
         if (!vt || vt->struct_size != sizeof(::dftu_index_extension)) {
             return common::make_error<
                 "index extension '{}' refused: its struct_size is not "
@@ -185,13 +192,17 @@ class PluginIndexExtension final : public trace::index::extensions::Extension {
                 common::ErrorCode::InvalidArgument, name);
         }
         return trace::index::extensions::ExtensionPtr(
-            dstd::make_shared<PluginIndexExtension>(dstd::String(name), *vt,
-                                                    self));
+            dstd::make_shared<PluginIndexExtension>(
+                std::move(library), dstd::String(name), *vt, self));
     }
 
-    PluginIndexExtension(dstd::String name, const ::dftu_index_extension& vt,
+    PluginIndexExtension(dstd::SharedPtr<PluginLibrary> library,
+                         dstd::String name, const ::dftu_index_extension& vt,
                          void* self)
-        : name_(std::move(name)), vt_(vt), self_(self) {}
+        : library_(std::move(library)),
+          name_(std::move(name)),
+          vt_(vt),
+          self_(self) {}
 
     dstd::StringView name() const override { return name_; }
     std::uint32_t version() const override { return vt_.version; }
@@ -211,7 +222,7 @@ class PluginIndexExtension final : public trace::index::extensions::Extension {
                                             ctx.message());
         }
         return dstd::UniquePtr<trace::index::extensions::ExtensionBuilder>(
-            dstd::make_unique<PluginIndexBuilder>(vt_, b));
+            dstd::make_unique<PluginIndexBuilder>(library_, vt_, b));
     }
 
     dstd::Result<dstd::UniquePtr<trace::index::extensions::ExtensionQuery>>
@@ -245,10 +256,11 @@ class PluginIndexExtension final : public trace::index::extensions::Extension {
         if (!compiled)
             return dstd::UniquePtr<trace::index::extensions::ExtensionQuery>();
         return dstd::UniquePtr<trace::index::extensions::ExtensionQuery>(
-            dstd::make_unique<PluginIndexQuery>(vt_, compiled));
+            dstd::make_unique<PluginIndexQuery>(library_, vt_, compiled));
     }
 
    private:
+    dstd::SharedPtr<PluginLibrary> library_;
     dstd::String name_;
     ::dftu_index_extension vt_;
     void* self_;
@@ -274,7 +286,7 @@ const ::dftu_svc_index g_index = {sizeof(::dftu_svc_index),
 
 dftu_status detail::register_plugin_index_extension(
     ::dftu_ctx* ctx, const char* name, const ::dftu_index_extension* vt,
-    void* self) {
+    void* self, dstd::SharedPtr<PluginLibrary> library) {
     if (refuse_plugin_op_name(name)) {
         return host_fail(
             ctx, DFTU_E_INVALID,
@@ -283,7 +295,7 @@ dftu_status detail::register_plugin_index_extension(
                       "must be '<plugin>.<name>'">(
                 dstd::StringView(name ? name : "(null)")));
     }
-    auto ext = PluginIndexExtension::make(name, vt, self);
+    auto ext = PluginIndexExtension::make(name, vt, self, std::move(library));
     if (!ext) return host_fail(ctx, ext.error());
     auto registered =
         trace::index::extensions::register_extension(std::move(*ext));

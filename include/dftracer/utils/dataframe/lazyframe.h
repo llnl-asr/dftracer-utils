@@ -140,17 +140,11 @@ struct Schema {
 
 /// How completely a source applied a pushed-down filter, per @ref ScanRequest
 /// filter. Guides whether the engine must re-apply it over the survivors.
-/// Mirrors dftu_pushed (dataframe/abi.h).
 enum class Pushed {
-    No = DFTU_PUSHED_NO,      ///< Not applied by the source; engine applies it.
-    Inexact =
-        DFTU_PUSHED_INEXACT,  ///< Pruned I/O but did not filter; re-apply.
-    Exact =
-        DFTU_PUSHED_EXACT,    ///< Fully applied by the source; engine drops it.
+    No = 0,       ///< Not applied by the source; engine applies it.
+    Inexact = 1,  ///< Pruned I/O but did not filter; re-apply.
+    Exact = 2,    ///< Fully applied by the source; engine drops it.
 };
-static_assert(static_cast<int>(Pushed::No) == DFTU_PUSHED_NO);
-static_assert(static_cast<int>(Pushed::Inexact) == DFTU_PUSHED_INEXACT);
-static_assert(static_cast<int>(Pushed::Exact) == DFTU_PUSHED_EXACT);
 
 /// A pushdown request the optimizer hands a Source at scan time.
 struct ScanRequest {
@@ -178,7 +172,6 @@ struct ScanResult {
 class Source;
 
 /// How a source took an op offered by a planning hook (Source::apply_*).
-/// Mirrors dftu_apply_status (dataframe/abi.h).
 enum class ApplyStatus {
     Exact,    ///< Fully applied; the planner removes the op.
     Inexact,  ///< Rows narrowed only; the planner keeps the op above.
@@ -619,13 +612,11 @@ class LazyFrame {
     /// default); sugar for readers who want spilling stated at the call site.
     LazyFrame auto_spill() const;
 
-    /// Append a step running the plan node registered under `name`
-    /// (dftu_node_register) as the next stage in the pull chain
-    /// lower_cursor_chain builds - a step the engine executes when this plan
-    /// is driven, not eagerly here. Resolves and captures the node's vt/self
-    /// now, so a later dftu_node_unregister of the same name is the same
-    /// dangling-registration hazard dftu_provider_unregister documents for a
-    /// captured provider, not a lookup that could fail at drive time.
+    /// Append a step running the plan node registered under `name` as the next
+    /// stage in the pull chain lower_cursor_chain builds - a step the engine
+    /// executes when this plan is driven, not eagerly here. Resolves the node
+    /// now and keeps it alive with the plan, so a later unregister of the same
+    /// name does not reach a plan that already holds it.
     /// An InvalidArgument error, kept as @ref status(), if no node is
     /// registered under `name`. The node is an optimization barrier: no filter
     /// or projection is ever pushed through it, and the engine never reorders

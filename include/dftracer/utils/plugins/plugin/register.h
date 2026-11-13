@@ -715,7 +715,7 @@ class PluginBuilder {
             if (!p || !p->register_node)
                 return fail("no node registry at load");
             const dftu_node_vt* vt = node_vtable<N>();
-            void* self = make_node_self(std::move(node));
+            void* self = make_node_self(std::move(node), host_);
             const dftu_status st =
                 p->register_node(ctx_, host_->h, name, vt, self);
             if (st < 0) vt->destroy(self);

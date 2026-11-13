@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
-#include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/plugins/host/fold_adapter/ext.h>
+#include <dftracer/utils/plugins/host/provider_source.h>
 #include <dftracer/utils/plugins/host/reserved_names.h>
 
 namespace dftracer::utils::plugins::host {
@@ -26,9 +26,9 @@ const ::dftu_svc_providers g_providers = {sizeof(::dftu_svc_providers),
 
 }  // namespace
 
-dftu_status detail::register_plugin_provider(::dftu_ctx* ctx, const char* name,
-                                             const ::dftu_source_vt* vt,
-                                             void* self) {
+dftu_status detail::register_plugin_provider(
+    ::dftu_ctx* ctx, const char* name, const ::dftu_source_vt* vt, void* self,
+    dstd::SharedPtr<PluginLibrary> library) {
     if (refuse_plugin_op_name(name)) {
         return host_fail(
             ctx, DFTU_E_INVALID,
@@ -37,17 +37,15 @@ dftu_status detail::register_plugin_provider(::dftu_ctx* ctx, const char* name,
                       "be '<plugin>.<name>'">(
                 dstd::StringView(name ? name : "(null)")));
     }
-    ::dftu_error error = DFTU_ERROR_INIT;
-    const dftu_status status = ::dftu_provider_register(name, vt, self, &error);
-    if (status < 0) {
-        host_fail(ctx, status,
-                  dstd::fmt<"provider '{}' refused: {}">(
-                      dstd::StringView(name),
-                      dstd::StringView(error.message ? error.message
-                                                     : "not registered")));
+    auto registered =
+        register_provider_vtable(name, vt, self, std::move(library));
+    if (!registered) {
+        return host_fail(
+            ctx, common::to_status(registered.error().condition()),
+            dstd::fmt<"provider '{}' refused: {}">(
+                dstd::StringView(name), registered.error().message()));
     }
-    ::dftu_error_release(&error);
-    return status;
+    return DFTU_OK;
 }
 
 const void* detail::providers_ext_vtable() { return &g_providers; }

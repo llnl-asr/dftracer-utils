@@ -4,11 +4,13 @@
 
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/agg_spill.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <dftracer/utils/plugins/host/host_status.h>
+#include <dftracer/utils/plugins/host/plugin_library.h>
 
 #include <string>
 #include <vector>
@@ -60,22 +62,28 @@ const void* fileio_ext_vtable();
 /// the build-phase host, whose op registration is the same call.
 dftu_status register_plugin_op(::dftu_ctx* ctx, const ::dftu_op_desc* desc);
 
+/// dftu_svc_task::run, which uses no host state, so the build-phase host
+/// serves it too.
+dftu_status task_run(::dftu_ctx* ctx, void* h, ::dftu_task* t);
+
 /// dftu_svc_providers::register_provider with the same plugin-name gate,
 /// forwarding into the process-lifetime provider_registry. Shared with the
 /// build-phase host, whose provider registration is the same call.
 dftu_status register_plugin_provider(::dftu_ctx* ctx, const char* name,
-                                     const ::dftu_source_vt* vt, void* self);
+                                     const ::dftu_source_vt* vt, void* self,
+                                     dstd::SharedPtr<PluginLibrary> library);
 
 /// dftu_svc_nodes::register_node with the same plugin-name gate, forwarding
 /// into the process-lifetime node registry.
 dftu_status register_plugin_node(::dftu_ctx* ctx, const char* name,
-                                 const ::dftu_node_vt* vt, void* self);
+                                 const ::dftu_node_vt* vt, void* self,
+                                 dstd::SharedPtr<PluginLibrary> library);
 
 /// dftu_svc_index::register_extension with the same plugin-name gate,
 /// forwarding into the process index extension registry.
-dftu_status register_plugin_index_extension(::dftu_ctx* ctx, const char* name,
-                                            const ::dftu_index_extension* vt,
-                                            void* self);
+dftu_status register_plugin_index_extension(
+    ::dftu_ctx* ctx, const char* name, const ::dftu_index_extension* vt,
+    void* self, dstd::SharedPtr<PluginLibrary> library);
 
 }  // namespace detail
 

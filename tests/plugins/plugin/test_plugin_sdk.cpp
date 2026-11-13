@@ -6,13 +6,15 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dataframe/expr.h>
-#include <dftracer/utils/dataframe/internal/provider_source.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/plugins/host/build_host.h>
+#include <dftracer/utils/plugins/host/node_adapter.h>
+#include <dftracer/utils/plugins/host/provider_source.h>
 #include <dftracer/utils/plugins/plugin/map.h>
 #include <dftracer/utils/plugins/plugin/node.h>
 #include <dftracer/utils/plugins/plugin/source.h>
@@ -177,7 +179,7 @@ struct Root {
          bool fail = false)
         : self(plugins::make_source_self(
               dstd::make_unique<RangeSource>(std::move(c), lo, hi, fail))),
-          source(dataframe::make_provider_source(*vt, self)) {}
+          source(plugins::host::make_provider_source(*vt, self)) {}
     ~Root() {
         source.reset();
         vt->destroy(self);
@@ -323,12 +325,13 @@ class DoubleVal {
 struct RegisteredNode {
     dstd::String name;
     RegisteredNode(dstd::String n, OpenMode mode) : name(std::move(n)) {
-        dftu_error err = DFTU_ERROR_INIT;
-        REQUIRE(dftu_node_register(
-                    name.c_str(), plugins::node_vtable<DoubleVal>(),
-                    plugins::make_node_self(dstd::make_unique<DoubleVal>(mode)),
-                    &err) == DFTU_OK);
-        dftu_error_release(&err);
+        // The build host dies with this scope, as a factory's does; the node
+        // keeps only the task service it served.
+        plugins::host::BuildHost build_host("sdk");
+        REQUIRE(plugins::host::register_node_vtable(
+            name, plugins::node_vtable<DoubleVal>(),
+            plugins::make_node_self(dstd::make_unique<DoubleVal>(mode),
+                                    build_host.host())));
     }
     ~RegisteredNode() { dftu_node_unregister(name.c_str()); }
 };
@@ -347,6 +350,23 @@ TEST_SUITE("plugin SDK node") {
             dataframe::DataFrame f = run(lf.collect());
             CHECK(ints(f, "id") == dstd::Vector<std::int64_t>{0, 1, 2, 3});
             CHECK(ints(f, "val") == dstd::Vector<std::int64_t>{0, 20, 40, 60});
+        }
+        CHECK(c->cursors_destroyed == 1);
+    }
+
+    TEST_CASE("a node over a node pulls its input through the task service") {
+        auto c = dstd::make_shared<Counters>();
+        RegisteredNode inner("sdk.double_inner", OpenMode::Normal);
+        RegisteredNode outer("sdk.double_outer", OpenMode::Normal);
+        {
+            Root r(c, 0, 4);
+            dataframe::DataFrame f =
+                run(dataframe::LazyFrame::scan(r.source)
+                        .op("sdk.double_inner", dataframe::OpArgs{})
+                        .op("sdk.double_outer", dataframe::OpArgs{})
+                        .collect());
+            CHECK(ints(f, "id") == dstd::Vector<std::int64_t>{0, 1, 2, 3});
+            CHECK(ints(f, "val") == dstd::Vector<std::int64_t>{0, 40, 80, 120});
         }
         CHECK(c->cursors_destroyed == 1);
     }

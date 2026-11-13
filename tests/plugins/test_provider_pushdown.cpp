@@ -11,12 +11,12 @@
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/expr.h>
-#include <dftracer/utils/dataframe/internal/provider_source.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/plugins/host/provider_source.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 #include <task_result.h>
@@ -26,22 +26,22 @@
 #include <stdexcept>
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::dataframe;
 
 namespace {
 
-DataFrame run(coro::CoroTask<dstd::Result<DataFrame>> t) {
+dataframe::DataFrame run(coro::CoroTask<dstd::Result<dataframe::DataFrame>> t) {
     return dftu_utils_test::ok(
         dftracer::utils::default_runtime().submit(std::move(t)).get());
 }
 
-DataFrame run_frame(coro::CoroTask<DataFrame> t) {
+dataframe::DataFrame run_frame(coro::CoroTask<dataframe::DataFrame> t) {
     return dftu_utils_test::ok(
         dftracer::utils::default_runtime().submit(std::move(t)).get());
 }
 
-coro::CoroTask<DataFrame> drain_cursor(dstd::UniquePtr<Cursor> cur) {
-    DataFrame out;
+coro::CoroTask<dataframe::DataFrame> drain_cursor(
+    dstd::UniquePtr<dataframe::Cursor> cur) {
+    dataframe::DataFrame out;
     for (;;) {
         auto m = dftu_utils_test::ok(co_await cur->next(1 << 20));
         if (!m) break;
@@ -205,11 +205,11 @@ dftu_status fixture_scan(dftu_ctx*, void* self, const dftu_scan_request* req,
 
 void fixture_destroy(void*) {}
 
-dstd::SharedPtr<Source> make_fixture_source(FixtureConfig& cfg) {
+dstd::SharedPtr<dataframe::Source> make_fixture_source(FixtureConfig& cfg) {
     static const dftu_source_vt vt = {
         sizeof(dftu_source_vt), fixture_schema, fixture_scan,
         fixture_destroy,        nullptr,        nullptr};
-    return make_provider_source(vt, &cfg);
+    return plugins::host::make_provider_source(vt, &cfg);
 }
 
 dftu_status no_cursor_scan(dftu_ctx*, void*, const dftu_scan_request*, int32_t*,
@@ -222,13 +222,13 @@ dftu_status failing_scan(dftu_ctx* ctx, void*, const dftu_scan_request*,
     return dftu_fail(ctx, DFTU_E_INVALID, "scan refused by the provider");
 }
 
-dstd::SharedPtr<Source> make_scan_source(
+dstd::SharedPtr<dataframe::Source> make_scan_source(
     FixtureConfig& cfg,
     dftu_status (*scan)(dftu_ctx*, void*, const dftu_scan_request*, int32_t*,
                         void**, const dftu_cursor_vt**)) {
     const dftu_source_vt vt = {sizeof(dftu_source_vt), fixture_schema, scan,
                                fixture_destroy,        nullptr,        nullptr};
-    return make_provider_source(vt, &cfg);
+    return plugins::host::make_provider_source(vt, &cfg);
 }
 
 }  // namespace
@@ -238,7 +238,8 @@ TEST_SUITE("provider pushdown") {
         FixtureConfig cfg;
         dftu_utils_test::expect_error(
             dftracer::utils::default_runtime()
-                .submit(LazyFrame::scan(make_scan_source(cfg, no_cursor_scan))
+                .submit(dataframe::LazyFrame::scan(
+                            make_scan_source(cfg, no_cursor_scan))
                             .collect())
                 .get(),
             dftracer::utils::common::ErrorCode::Internal,
@@ -247,11 +248,11 @@ TEST_SUITE("provider pushdown") {
 
     TEST_CASE("a provider whose scan fails reports its message") {
         FixtureConfig cfg;
-        const auto result =
-            dftracer::utils::default_runtime()
-                .submit(LazyFrame::scan(make_scan_source(cfg, failing_scan))
-                            .collect())
-                .get();
+        const auto result = dftracer::utils::default_runtime()
+                                .submit(dataframe::LazyFrame::scan(
+                                            make_scan_source(cfg, failing_scan))
+                                            .collect())
+                                .get();
         REQUIRE_FALSE(result.has_value());
         CHECK(dftracer::utils::common::errorcode_of(result.error()) ==
               dftracer::utils::common::ErrorCode::InvalidArgument);
@@ -266,14 +267,15 @@ TEST_SUITE("provider pushdown") {
         FixtureConfig no_cfg;
         no_cfg.filter_behavior = FilterBehavior::Ignore;
 
-        auto pred = col(0) > std::int64_t{5};
-        DataFrame exact_result =
-            run(LazyFrame::scan(make_fixture_source(exact_cfg))
+        auto pred = dataframe::col(0) > std::int64_t{5};
+        dataframe::DataFrame exact_result =
+            run(dataframe::LazyFrame::scan(make_fixture_source(exact_cfg))
                     .filter(pred)
                     .collect());
-        DataFrame no_result = run(LazyFrame::scan(make_fixture_source(no_cfg))
-                                      .filter(pred)
-                                      .collect());
+        dataframe::DataFrame no_result =
+            run(dataframe::LazyFrame::scan(make_fixture_source(no_cfg))
+                    .filter(pred)
+                    .collect());
 
         REQUIRE(exact_result.num_rows() == 4);
         REQUIRE(no_result.num_rows() == 4);
@@ -287,9 +289,10 @@ TEST_SUITE("provider pushdown") {
         FixtureConfig cfg;
         cfg.filter_behavior = FilterBehavior::ApplyInexact;
 
-        DataFrame result = run(LazyFrame::scan(make_fixture_source(cfg))
-                                   .filter(col(0) > std::int64_t{5})
-                                   .collect());
+        dataframe::DataFrame result =
+            run(dataframe::LazyFrame::scan(make_fixture_source(cfg))
+                    .filter(dataframe::col(0) > std::int64_t{5})
+                    .collect());
         REQUIRE(result.num_rows() == 4);
         const std::int64_t* ids = result.column("id").data<std::int64_t>();
         for (int i = 0; i < 4; ++i) CHECK(ids[i] == 6 + i);
@@ -302,16 +305,18 @@ TEST_SUITE("provider pushdown") {
         cfg.filter_behavior = FilterBehavior::Ignore;
         auto source = make_fixture_source(cfg);
 
-        ScanRequest req;
-        req.filters.push_back(col(0) > std::int64_t{5});
-        ScanResult r = dftu_utils_test::ok(source->scan(req));
+        dataframe::ScanRequest req;
+        req.filters.push_back(dataframe::col(0) > std::int64_t{5});
+        dataframe::ScanResult r = dftu_utils_test::ok(source->scan(req));
         REQUIRE(r.filters.size() == 1);
-        CHECK(r.filters[0] == Pushed::No);
-        DataFrame raw = run_frame(drain_cursor(std::move(r.cursor)));
+        CHECK(r.filters[0] == dataframe::Pushed::No);
+        dataframe::DataFrame raw = run_frame(drain_cursor(std::move(r.cursor)));
         CHECK(raw.num_rows() == 10);  // unfiltered; the engine would re-apply
 
-        DataFrame result = run(
-            LazyFrame::scan(source).filter(col(0) > std::int64_t{5}).collect());
+        dataframe::DataFrame result =
+            run(dataframe::LazyFrame::scan(source)
+                    .filter(dataframe::col(0) > std::int64_t{5})
+                    .collect());
         CHECK(result.num_rows() == 4);
     }
 
@@ -320,14 +325,16 @@ TEST_SUITE("provider pushdown") {
         cfg.filter_behavior = FilterBehavior::OutOfRange;
         auto source = make_fixture_source(cfg);
 
-        ScanRequest req;
-        req.filters.push_back(col(0) > std::int64_t{5});
-        ScanResult r = dftu_utils_test::ok(source->scan(req));
+        dataframe::ScanRequest req;
+        req.filters.push_back(dataframe::col(0) > std::int64_t{5});
+        dataframe::ScanResult r = dftu_utils_test::ok(source->scan(req));
         REQUIRE(r.filters.size() == 1);
-        CHECK(r.filters[0] == Pushed::No);
+        CHECK(r.filters[0] == dataframe::Pushed::No);
 
-        DataFrame result = run(
-            LazyFrame::scan(source).filter(col(0) > std::int64_t{5}).collect());
+        dataframe::DataFrame result =
+            run(dataframe::LazyFrame::scan(source)
+                    .filter(dataframe::col(0) > std::int64_t{5})
+                    .collect());
         CHECK(result.num_rows() == 4);
     }
 
@@ -335,7 +342,7 @@ TEST_SUITE("provider pushdown") {
         "a provider honoring the projection returns exactly those "
         "columns in order") {
         FixtureConfig cfg;
-        auto result = run(LazyFrame::scan(make_fixture_source(cfg))
+        auto result = run(dataframe::LazyFrame::scan(make_fixture_source(cfg))
                               .select({"val", "id"})
                               .collect());
         REQUIRE(dstd::to_strings(result.names) ==
@@ -350,7 +357,7 @@ TEST_SUITE("provider pushdown") {
         cfg.honor_projection = false;
         dftu_utils_test::expect_error(
             dftracer::utils::default_runtime()
-                .submit(LazyFrame::scan(make_fixture_source(cfg))
+                .submit(dataframe::LazyFrame::scan(make_fixture_source(cfg))
                             .select({"val", "id"})
                             .collect())
                 .get(),
@@ -362,9 +369,10 @@ TEST_SUITE("provider pushdown") {
         "rows") {
         FixtureConfig cfg;
         cfg.filter_behavior = FilterBehavior::FalseExact;
-        DataFrame result = run(LazyFrame::scan(make_fixture_source(cfg))
-                                   .filter(col(0) > std::int64_t{5})
-                                   .collect());
+        dataframe::DataFrame result =
+            run(dataframe::LazyFrame::scan(make_fixture_source(cfg))
+                    .filter(dataframe::col(0) > std::int64_t{5})
+                    .collect());
         // The engine trusted the claim and dropped the filter: all 10 rows
         // come back instead of the 4 matching id>5. There is no cheap runtime
         // check for a false Exact claim (safety rule c), so this is caught
@@ -378,18 +386,18 @@ TEST_SUITE("provider pushdown") {
         "it stays correct") {
         FixtureConfig honored;
         honored.apply_limit = true;
-        ScanRequest req1;
+        dataframe::ScanRequest req1;
         req1.limit = 3;
-        DataFrame got1 = run_frame(drain_cursor(std::move(
+        dataframe::DataFrame got1 = run_frame(drain_cursor(std::move(
             dftu_utils_test::ok(make_fixture_source(honored)->scan(req1))
                 .cursor)));
         CHECK(got1.num_rows() == 3);
 
         FixtureConfig ignored;
         ignored.apply_limit = false;
-        ScanRequest req2;
+        dataframe::ScanRequest req2;
         req2.limit = 3;
-        DataFrame got2 = run_frame(drain_cursor(std::move(
+        dataframe::DataFrame got2 = run_frame(drain_cursor(std::move(
             dftu_utils_test::ok(make_fixture_source(ignored)->scan(req2))
                 .cursor)));
         CHECK(got2.num_rows() == 10);
@@ -399,42 +407,37 @@ TEST_SUITE("provider pushdown") {
 namespace {
 
 // Records the limit the optimizer put in the request, and yields a fixed frame.
-class LimitRecordingSource : public dftracer::utils::dataframe::Source {
+class LimitRecordingSource : public dataframe::Source {
    public:
     mutable std::int64_t seen_limit = -2;  // -2 = scan() never ran
 
-    dftracer::utils::dataframe::Schema schema() const override {
-        return {{dftracer::utils::dataframe::Field{
-            "id",
-            dftracer::utils::dataframe::scalar(
-                dftracer::utils::dataframe::TypeId::Unknown),
-            true}}};
+    dataframe::Schema schema() const override {
+        return {{dataframe::Field{
+            "id", dataframe::scalar(dataframe::TypeId::Unknown), true}}};
     }
 
-    dstd::Result<dftracer::utils::dataframe::ScanResult> scan(
-        const ScanRequest& req) const override {
+    dstd::Result<dataframe::ScanResult> scan(
+        const dataframe::ScanRequest& req) const override {
         seen_limit = req.limit;
-        dftracer::utils::dataframe::ScanResult r;
+        dataframe::ScanResult r;
         r.cursor = dstd::make_unique<OneShot>();
-        r.filters.assign(req.filters.size(),
-                         dftracer::utils::dataframe::Pushed::No);
+        r.filters.assign(req.filters.size(), dataframe::Pushed::No);
         return r;
     }
 
    private:
-    struct OneShot : Cursor {
+    struct OneShot : dataframe::Cursor {
         bool done = false;
-        coro::CoroTask<MorselResult> next(std::int64_t) override {
-            if (done) co_return MorselResult(dstd::nullopt);
+        coro::CoroTask<dataframe::MorselResult> next(std::int64_t) override {
+            if (done) co_return dataframe::MorselResult(dstd::nullopt);
             done = true;
             dstd::Vector<std::int64_t> v{1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
-            dftracer::utils::dataframe::Morsel m;
+            dataframe::Morsel m;
             m.rows = static_cast<std::int64_t>(v.size());
-            m.columns.push_back(
-                dftracer::utils::dataframe::Series{dftu_series_new_flat(
-                    DFTU_TYPE_INT64, v.data(),
-                    static_cast<std::int64_t>(v.size()), nullptr)});
-            co_return MorselResult(std::move(m));
+            m.columns.push_back(dataframe::Series{dftu_series_new_flat(
+                DFTU_TYPE_INT64, v.data(), static_cast<std::int64_t>(v.size()),
+                nullptr)});
+            co_return dataframe::MorselResult(std::move(m));
         }
     };
 };
@@ -444,7 +447,8 @@ class LimitRecordingSource : public dftracer::utils::dataframe::Source {
 TEST_SUITE("provider_pushdown") {
     TEST_CASE("the optimizer pushes a reachable slice as req.limit") {
         auto src = dstd::make_shared<LimitRecordingSource>();
-        DataFrame got = run(LazyFrame::scan(src).head(3).collect());
+        dataframe::DataFrame got =
+            run(dataframe::LazyFrame::scan(src).head(3).collect());
         CHECK(got.num_rows() == 3);
         // head(3) is slice(0,3): the source only ever needed 3 rows.
         CHECK(src->seen_limit == 3);
@@ -452,10 +456,11 @@ TEST_SUITE("provider_pushdown") {
 
     TEST_CASE("a filter before the slice blocks the limit") {
         auto src = dstd::make_shared<LimitRecordingSource>();
-        DataFrame got = run(LazyFrame::scan(src)
-                                .filter(col(0) > std::int64_t{5})
-                                .head(3)
-                                .collect());
+        dataframe::DataFrame got =
+            run(dataframe::LazyFrame::scan(src)
+                    .filter(dataframe::col(0) > std::int64_t{5})
+                    .head(3)
+                    .collect());
         // Whether the source honored the filter is only known from the result
         // it has not returned yet, so truncating it here could starve the
         // engine of rows the filter would have kept.
@@ -465,8 +470,10 @@ TEST_SUITE("provider_pushdown") {
 
     TEST_CASE("a row-reordering op before the slice blocks the limit") {
         auto src = dstd::make_shared<LimitRecordingSource>();
-        DataFrame got =
-            run(LazyFrame::scan(src).sort_by("id", true).head(3).collect());
+        dataframe::DataFrame got = run(dataframe::LazyFrame::scan(src)
+                                           .sort_by("id", true)
+                                           .head(3)
+                                           .collect());
         CHECK(src->seen_limit == -1);  // sorting needs every row
         CHECK(got.num_rows() == 3);
     }
@@ -477,8 +484,8 @@ TEST_SUITE("provider_pushdown") {
         auto src = dstd::make_shared<LimitRecordingSource>();
         // offset + len would overflow int64; unset means "produce everything",
         // which is what a window that large asked for anyway.
-        DataFrame got =
-            run(LazyFrame::scan(src)
+        dataframe::DataFrame got =
+            run(dataframe::LazyFrame::scan(src)
                     .slice(std::numeric_limits<std::int64_t>::max(), 10)
                     .collect());
         CHECK(src->seen_limit == -1);

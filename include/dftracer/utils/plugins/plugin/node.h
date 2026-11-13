@@ -2,11 +2,11 @@
 #ifndef DFTRACER_UTILS_PLUGINS_PLUGIN_NODE_H
 #define DFTRACER_UTILS_PLUGINS_PLUGIN_NODE_H
 
-#include <dftracer/utils/coro/abi.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/plugins/abi/task.h>
 #include <dftracer/utils/plugins/plugin/source.h>
 #include <dftracer/utils/plugins/plugin/types.h>
 
@@ -79,6 +79,30 @@ struct InputOwnership {
     bool dropped = false;
 };
 
+// How an InputCursor runs the task its upstream hands back: through the task
+// service of the host the node was registered with. Only the service pointer
+// and its `h` are kept, never the host, which dies when the plugin factory
+// returns; dftu_svc_task::run uses no host state, so they stay valid.
+struct TaskRunner {
+    const dftu_svc_task* svc = nullptr;
+    void* h = nullptr;
+
+    TaskRunner() = default;
+    explicit TaskRunner(const dftu_plugin_host* host) noexcept {
+        if (!host || !host->get_service) return;
+        svc = static_cast<const dftu_svc_task*>(
+            host->get_service(host->h, DFTU_SVC_TASK));
+        h = host->h;
+    }
+
+    dftu_status run(dftu_ctx* ctx, dftu_task* t) const {
+        if (!svc || !svc->run)
+            return dftu_fail(ctx, DFTU_E_UNSUPPORTED,
+                             "the host offers no task service to run with");
+        return svc->run(ctx, h, t);
+    }
+};
+
 // The ctx InputCursor hands its upstream: it keeps the message the upstream
 // sets, which InputCursor then throws, so the node's own callback reports it.
 struct LocalCtx {
@@ -103,17 +127,19 @@ struct LocalCtx {
 
 }  // namespace detail
 
-/// The node's upstream cursor. Pulling it may run a task to completion on the
-/// default runtime, since a node's cursor has no host to await with.
+/// The node's upstream cursor. Pulling it may run a task to completion through
+/// the host's task service, since a node's cursor has no host to await with.
 class InputCursor {
    public:
     InputCursor(void* self, const dftu_cursor_vt* vt,
-                dstd::SharedPtr<detail::InputOwnership> own) noexcept
-        : self_(self), vt_(vt), own_(std::move(own)) {}
+                dstd::SharedPtr<detail::InputOwnership> own,
+                detail::TaskRunner runner) noexcept
+        : self_(self), vt_(vt), own_(std::move(own)), runner_(runner) {}
     InputCursor(InputCursor&& o) noexcept
         : self_(o.self_),
           vt_(std::exchange(o.vt_, nullptr)),
-          own_(std::move(o.own_)) {}
+          own_(std::move(o.own_)),
+          runner_(o.runner_) {}
     InputCursor& operator=(InputCursor&&) = delete;
     InputCursor(const InputCursor&) = delete;
     InputCursor& operator=(const InputCursor&) = delete;
@@ -133,12 +159,7 @@ class InputCursor {
         dftu_dataframe* out = nullptr;
         dftu_task* pending = nullptr;
         dftu_status st = vt_->next(&ctx.base, self_, max_rows, &out, &pending);
-        if (st >= 0 && pending) {
-            dftu_error err = DFTU_ERROR_INIT;
-            st = dftu_task_run(dftu_default_runtime(), pending, &err);
-            if (st < 0 && err.message) ctx.message = err.message;
-            dftu_error_release(&err);
-        }
+        if (st >= 0 && pending) st = runner_.run(&ctx.base, pending);
         if (st < 0) {
             if (out) dftu_dataframe_free(out);
             throw Error(st,
@@ -157,8 +178,7 @@ class InputCursor {
         dftu_task* pending = nullptr;
         dftu_status st =
             vt_->narrow(&ctx.base, self_, predicate.raw(), &applied, &pending);
-        if (st >= 0 && pending)
-            st = dftu_task_run(dftu_default_runtime(), pending, nullptr);
+        if (st >= 0 && pending) st = runner_.run(&ctx.base, pending);
         return st >= 0 && applied != 0;
     }
 
@@ -166,6 +186,7 @@ class InputCursor {
     void* self_;
     const dftu_cursor_vt* vt_;
     dstd::SharedPtr<detail::InputOwnership> own_;
+    detail::TaskRunner runner_;
 };
 
 namespace detail {
@@ -173,6 +194,7 @@ namespace detail {
 template <class N>
 struct NodeBox {
     dstd::UniquePtr<N> node;
+    TaskRunner runner;
 };
 
 template <class N>
@@ -197,7 +219,9 @@ struct NodeVt {
         auto own = dstd::make_shared<InputOwnership>();
         return guard(ctx, [&]() -> dftu_status {
             auto cursor = static_cast<NodeBox<N>*>(self)->node->open(
-                InputCursor(in_self, in_vt, own), OpArgs(args), memory_budget);
+                InputCursor(in_self, in_vt, own,
+                            static_cast<NodeBox<N>*>(self)->runner),
+                OpArgs(args), memory_budget);
             if (!cursor)
                 return dftu_fail(ctx, DFTU_E_INTERNAL,
                                  "open returned no cursor");
@@ -230,11 +254,13 @@ const dftu_node_vt* node_vtable() {
     return detail::NodeVt<N>::vt();
 }
 
-/// Wrap `node` as the `self` its vtable expects. Ownership passes to whoever
-/// calls the vtable's destroy() on it.
+/// Wrap `node` as the `self` its vtable expects. `host` is the host the node
+/// is registered through; the node's input cursor runs the tasks it is handed
+/// with that host's task service. Ownership passes to whoever calls the
+/// vtable's destroy() on it.
 template <class N>
-void* make_node_self(dstd::UniquePtr<N> node) {
-    return new detail::NodeBox<N>{std::move(node)};
+void* make_node_self(dstd::UniquePtr<N> node, const dftu_plugin_host* host) {
+    return new detail::NodeBox<N>{std::move(node), detail::TaskRunner(host)};
 }
 
 }  // namespace dftracer::utils::plugins

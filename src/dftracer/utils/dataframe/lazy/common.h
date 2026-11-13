@@ -5,7 +5,6 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/memory_budget.h>
-#include <dftracer/utils/coro/task_abi.h>        // task_to_abi
 #include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/dataframe/agg.h>        // streaming group-by state
 #include <dftracer/utils/dataframe/batch_ops.h>  // concat_columns, take, concat
@@ -21,10 +20,10 @@
 #include <dftracer/utils/dataframe/internal/fingerprint.h>
 #include <dftracer/utils/dataframe/internal/float16.h>
 #include <dftracer/utils/dataframe/internal/lazy_plan.h>
+#include <dftracer/utils/dataframe/internal/name_cache.h>
 #include <dftracer/utils/dataframe/internal/native_transform.h>
-#include <dftracer/utils/dataframe/internal/node_registry.h>  // find_node
 #include <dftracer/utils/dataframe/internal/rest_column.h>
-#include <dftracer/utils/dataframe/internal/schema_types.h>   // dftu_schema
+#include <dftracer/utils/dataframe/internal/schema_types.h>  // dftu_schema
 #include <dftracer/utils/dataframe/internal/spill.h>  // external-merge spill
 #include <dftracer/utils/dataframe/join.h>            // HashJoin (join cursor)
 #include <dftracer/utils/dataframe/kernels/field_stat.h>  // field_stat_reduce (SIMD)
@@ -319,49 +318,6 @@ template <class Name>
 inline bool has_rest(const dstd::Vector<Name>& sch) {
     return !sch.empty() && dstd::StringView{sch.back()} == REST_COLUMN;
 }
-
-// The names a cursor puts on its frames. A name is built once and every later
-// frame copies its reference count, so a stream of many morsels allocates no
-// name per morsel. One cursor owns one cache; it is not thread safe.
-class NameCache {
-   public:
-    dstd::SharedString shared(dstd::StringView name) {
-        const auto it = names_.find(name);
-        if (it != names_.end()) return *it;
-        return *names_.insert(dstd::SharedString{name}).first;
-    }
-
-    // The names of a schema that stays the same for the life of the cache:
-    // built on the first call, copied by reference count afterwards. `names`
-    // is read only on the first call.
-    const dstd::Vector<dstd::SharedString>& fixed(
-        const dstd::Vector<dstd::String>& names) {
-        if (!has_fixed_) {
-            for (const dstd::String& n : names) fixed_.push_back(shared(n));
-            has_fixed_ = true;
-        }
-        return fixed_;
-    }
-
-    // The names of `key`, rebuilt only when `key` differs from the last one.
-    // For a schema that can change between morsels.
-    const dstd::Vector<dstd::SharedString>& schema(
-        const dstd::Vector<dstd::String>& key) {
-        if (key != key_) {
-            key_ = key;
-            schema_.clear();
-            for (const dstd::String& n : key) schema_.push_back(shared(n));
-        }
-        return schema_;
-    }
-
-   private:
-    dstd::HashSet<dstd::SharedString> names_;
-    dstd::Vector<dstd::String> key_;
-    dstd::Vector<dstd::SharedString> schema_;
-    dstd::Vector<dstd::SharedString> fixed_;
-    bool has_fixed_ = false;
-};
 
 // The fields of a rest column as named columns, flat. With a `cache` the
 // names come from it.

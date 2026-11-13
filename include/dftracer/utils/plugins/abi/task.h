@@ -125,6 +125,13 @@ typedef struct dftu_svc_task {
        such as on an error path; the task never runs. A task already handed
        back must not be discarded. */
     void (*discard)(void* h, dftu_task* t);
+    /** Block the caller until `t` ends, free it in every case and return its
+       status: DFTU_OK, DFTU_END, or a negative status whose message is set
+       on `ctx` (NULL `ctx` drops the message). For code that has no host to
+       await with, such as a node's cursor pulling its input. Uses no state of
+       `h`, so a plugin may keep the service pointer and its `h` after the
+       factory returns. Safe on a pool worker. */
+    dftu_status (*run)(dftu_ctx* ctx, void* h, dftu_task* t);
 } dftu_svc_task;
 
 #ifdef __cplusplus

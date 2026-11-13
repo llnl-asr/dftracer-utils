@@ -203,10 +203,10 @@ Plans from C
 ------------
 
 ``dftu_dataframe_lazy(df)`` starts a plan over a frame,
-``dftu_lazyframe_from_provider(name)`` one over a source registered with
-``dftu_provider_register``; every builder step is a ``dftu_lazyframe_*``
-call, ``dftu_lazyframe_op(lf, name, args)`` appends a node registered with
-``dftu_node_register``, ``dftu_lazyframe_explain`` prints the plan and
+``dftu_lazyframe_from_provider(name)`` one over a source registered under that name by a plugin
+(``DFTU_SVC_PROVIDERS``); every builder step is a ``dftu_lazyframe_*``
+call, ``dftu_lazyframe_op(lf, name, args)`` appends a node registered
+by a plugin (``DFTU_SVC_NODES``), ``dftu_lazyframe_explain`` prints the plan and
 ``dftu_lazyframe_collect`` runs it. :doc:`../data/lazyframe` has the
 contract a source and a node fill.
 

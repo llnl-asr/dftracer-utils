@@ -15,10 +15,9 @@ set(DATAFRAME_TEST_SOURCES test_mask.cpp test_series.cpp test_methods.cpp
                            test_agg_extended_ops.cpp test_sketch_quantile.cpp
                            test_expr_string.cpp test_expr_string_ops.cpp test_expr_duql.cpp
                            test_expr_infer_type.cpp
-                           test_provider_pushdown.cpp test_provider_schema_types.cpp
                            test_type_parameter_propagation.cpp
                            test_lazyframe_output_schema.cpp
-                           test_lazyframe_plugin_node.cpp
+                           test_node_registry.cpp
                            test_morsel_ordering.cpp
                            test_order.cpp test_frame_window.cpp test_output_morsels.cpp
                            test_frame_gap_fill.cpp test_frame_asof.cpp test_lazy_asof_interval.cpp

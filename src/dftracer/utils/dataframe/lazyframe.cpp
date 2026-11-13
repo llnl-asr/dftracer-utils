@@ -3,9 +3,7 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/memory_budget.h>
-#include <dftracer/utils/coro/abi_context.h>
 #include <dftracer/utils/coro/scope.h>
-#include <dftracer/utils/coro/task_abi.h>        // task_to_abi
 #include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/dataframe/agg.h>        // streaming group-by state
 #include <dftracer/utils/dataframe/batch_ops.h>  // concat_columns, take, concat
@@ -25,9 +23,9 @@
 #include <dftracer/utils/dataframe/internal/join_names.h>
 #include <dftracer/utils/dataframe/internal/lazy_plan.h>
 #include <dftracer/utils/dataframe/internal/lazyframe_handle.h>
+#include <dftracer/utils/dataframe/internal/morsel_frame.h>
 #include <dftracer/utils/dataframe/internal/native_transform.h>
 #include <dftracer/utils/dataframe/internal/node_registry.h>  // find_node
-#include <dftracer/utils/dataframe/internal/plugin_task.h>
 #include <dftracer/utils/dataframe/internal/rest_column.h>
 #include <dftracer/utils/dataframe/internal/schema_types.h>   // dftu_schema
 #include <dftracer/utils/dataframe/internal/spill.h>  // external-merge spill
@@ -1554,14 +1552,13 @@ class SampleCursor : public Cursor {
     bool done_ = false;
 };
 
-// A plugin-registered plan node (dftu_node_register): vt/self captured at the
-// .op() call, args copied by value (see LazyFrame::op's Doxygen for the
-// pointer-operand borrow contract).
+// A registered plan node (register_node): resolved at the .op() call, args
+// copied by value (see LazyFrame::op's Doxygen for the pointer-operand borrow
+// contract).
 struct NodeOp {
     dstd::String name;
-    ::dftu_node_vt vt;
-    void* self;
-    ::dftu_op_arg args;
+    dstd::SharedPtr<NodeImpl> impl;
+    OpArgs args;
 };
 
 // Streaming per-column summary statistics, matching DataFrame::describe. One
@@ -1632,259 +1629,64 @@ class DescribeCursor : public Cursor {
     dstd::Vector<dstd::String> produced_;
 };
 
-// Adapts a host-native Cursor as a dftu_cursor_vt, the reverse of
-// ProviderCursor (provider_registry.cpp): a registered node's open() pulls its
-// input through this bridge exactly as it would pull from any other node's
-// input, so the host and a plugin node speak the same cursor protocol in
-// either direction. On success, ownership of `cursor_` passes to whichever
-// side ends up calling destroy() (see dftu_node_vt::open's Doxygen); on a
-// failed open() the caller still holds the owning unique_ptr and this object
-// is destroyed normally.
-class HostCursorBridge {
-   public:
-    HostCursorBridge(dstd::UniquePtr<Cursor> cursor,
-                     dstd::Vector<dstd::String> schema)
-        : cursor_(std::move(cursor)), schema_(std::move(schema)) {}
-
-    static const ::dftu_cursor_vt* vt() {
-        static const ::dftu_cursor_vt v{
-            sizeof(::dftu_cursor_vt),         &HostCursorBridge::next_thunk,
-            &HostCursorBridge::destroy_thunk, &HostCursorBridge::narrow_thunk,
-            &HostCursorBridge::bytes_thunk,   &HostCursorBridge::reclaim_thunk};
-        return &v;
-    }
-    void* self() { return this; }
-
-   private:
-    // The frame of one read of cursor_: null at end of stream, an error when
-    // the read failed.
-    dstd::Result<::dftu_dataframe*> answer(MorselResult&& read) {
-        if (!read) return read.error();
-        if (!*read) return static_cast<::dftu_dataframe*>(nullptr);
-        auto df = frame_from_morsel(std::move(**read), names_, schema_,
-                                    cursor_->out_names());
-        if (!df) return df.error();
-        return dataframe_handle_wrap(std::move(*df));
-    }
-
-    // Ends the task running next_task as one frame, end of stream or error.
-    coro::CoroTask<void> next_task(coro::AbiTask* task, std::int64_t max_rows,
-                                   ::dftu_dataframe** out) {
-        auto reading = cursor_->next(max_rows);
-        MorselResult read = co_await std::move(reading);
-        auto frame = answer(std::move(read));
-        if (!frame) {
-            task->fail(common::to_status(frame.error().condition()),
-                       frame.error().message());
-        } else if (*frame == nullptr) {
-            task->status = DFTU_END;
-        } else {
-            *out = *frame;
-        }
-    }
-
-    // Answers inline when cursor_->try_next answered without suspending;
-    // false leaves everything untouched so the caller falls back to
-    // next_task. Mirrors next_task's success/error/end-of-stream shapes
-    // exactly, so a plugin node cannot tell which path answered it apart
-    // from `pending`.
-    bool try_next_sync(::dftu_ctx* ctx, std::int64_t max_rows,
-                       ::dftu_dataframe** out, dftu_status* status) {
-        MorselResult read;
-        if (!cursor_->try_next(max_rows, read)) return false;
-        auto frame = answer(std::move(read));
-        if (!frame) {
-            *status =
-                dftu_fail(ctx, common::to_status(frame.error().condition()),
-                          frame.error().c_str());
-        } else if (*frame == nullptr) {
-            *status = DFTU_END;
-        } else {
-            *out = *frame;
-            *status = DFTU_OK;
-        }
-        return true;
-    }
-
-    static dftu_status next_thunk(::dftu_ctx* ctx, void* self,
-                                  std::int64_t max_rows, ::dftu_dataframe** out,
-                                  ::dftu_task** pending) {
-        auto* self_ = static_cast<HostCursorBridge*>(self);
-        *out = nullptr;
-        *pending = nullptr;
-        dftu_status status = DFTU_OK;
-        if (self_->try_next_sync(ctx, max_rows, out, &status)) return status;
-        *pending = coro::make_abi_task([=](coro::AbiTask* task) {
-            return self_->next_task(task, max_rows, out);
-        });
-        return DFTU_OK;
-    }
-    static void destroy_thunk(void* self) {
-        dstd::Delete<HostCursorBridge>{}(static_cast<HostCursorBridge*>(self));
-    }
-
-    coro::CoroTask<void> narrow_task(Expr predicate, std::int32_t* out) {
-        const bool applied = co_await cursor_->narrow(predicate);
-        *out = applied ? 1 : 0;
-    }
-    static dftu_status narrow_thunk(::dftu_ctx*, void* self,
-                                    const ::dftu_expr* predicate,
-                                    std::int32_t* out_applied,
-                                    ::dftu_task** pending) {
-        auto* self_ = static_cast<HostCursorBridge*>(self);
-        *pending = nullptr;
-        if (out_applied) *out_applied = 0;
-        if (!predicate || !out_applied) return DFTU_OK;
-        *pending = task_to_abi(
-            self_->narrow_task(expr_handle_unwrap(predicate), out_applied));
-        return DFTU_OK;
-    }
-    static std::uint64_t bytes_thunk(void* self) {
-        return static_cast<HostCursorBridge*>(self)->cursor_->resident_bytes();
-    }
-    static std::uint64_t reclaim_thunk(void* self, std::uint64_t want) {
-        auto* self_ = static_cast<HostCursorBridge*>(self);
-        auto reclaimed = self_->cursor_->reclaim(want).get();
-        return reclaimed ? *reclaimed : 0;
-    }
-
-    dstd::UniquePtr<Cursor> cursor_;
-    dstd::Vector<dstd::String> schema_;
-    NameCache names_;
-};
-
-// Drives a registered plugin node as one stage of the pull chain: opens the
-// node's output cursor over `in` at construction (eagerly, like
-// ProviderSource::scan), then pulls it exactly like any built-in cursor.
-// Verifies every produced frame's column count against the node's own
-// declared schema, so a node that lies about what it produces is caught here
-// rather than corrupting whatever the optimizer built on the declaration.
+// Drives a registered node as one stage of the pull chain: opens the node's
+// output cursor over `in` at construction (eagerly, like a source's scan), then
+// pulls it exactly like any built-in cursor. Verifies every produced frame's
+// column count against the node's own declared schema, so a node that lies
+// about what it produces is caught here rather than corrupting whatever the
+// optimizer built on the declaration.
 class NodeCursor final : public Cursor {
    public:
-    NodeCursor(dstd::String name, Schema declared_out)
-        : name_(std::move(name)), declared_(std::move(declared_out)) {}
+    NodeCursor(dstd::String name, Schema declared_out,
+               dstd::UniquePtr<Cursor> out)
+        : name_(std::move(name)),
+          declared_(std::move(declared_out)),
+          out_(std::move(out)) {}
 
-    // Opens the node over `in`, or says why it did not. A node that fails to
-    // open leaves the input cursor to be destroyed with its bridge.
+    // Opens the node over `in`, or says why it did not.
     static dstd::Result<dstd::UniquePtr<Cursor>> make(
         const NodeOp& node, dstd::UniquePtr<Cursor> in,
-        dstd::Vector<dstd::String> in_schema, Schema declared_out,
+        const dstd::Vector<dstd::String>& in_schema, Schema declared_out,
         std::uint64_t budget) {
-        auto cursor =
-            dstd::make_unique<NodeCursor>(node.name, std::move(declared_out));
-        auto bridge = dstd::make_unique<HostCursorBridge>(std::move(in),
-                                                          std::move(in_schema));
-        void* out_self = nullptr;
-        const ::dftu_cursor_vt* out_vt = nullptr;
-        coro::AbiContext ctx;
-        const dftu_status status = node.vt.open(
-            ctx.get(), node.self, bridge->self(), HostCursorBridge::vt(),
-            &node.args, budget, &out_self, &out_vt);
-        if (status < 0)
-            return plugin_error(ctx, status,
-                                dstd::fmt<"lazy op '{}' open">(node.name));
-        if (!out_vt || out_vt->struct_size != sizeof(::dftu_cursor_vt) ||
-            !out_vt->next)
-            return common::make_error<
-                "lazy op '{}': open() gave no valid cursor vtable">(
-                common::ErrorCode::Internal, node.name);
-        // The node took ownership of the input cursor on success: it (not us)
-        // now owns destroying it, via out_vt_->destroy eventually reaching
-        // HostCursorBridge::destroy_thunk.
-        bridge.release();
-        cursor->out_self_ = out_self;
-        cursor->out_vt_ = out_vt;
-        cursor->gov_.emplace(out_vt);
-        return dstd::UniquePtr<Cursor>(std::move(cursor));
+        auto opened =
+            node.impl->open(std::move(in), in_schema, node.args, budget);
+        if (!opened) return opened.error();
+        return dstd::UniquePtr<Cursor>(dstd::make_unique<NodeCursor>(
+            node.name, std::move(declared_out), std::move(*opened)));
     }
-
-    ~NodeCursor() override {
-        if (out_vt_ && out_vt_->destroy) out_vt_->destroy(out_self_);
-    }
-
-    NodeCursor(const NodeCursor&) = delete;
-    NodeCursor& operator=(const NodeCursor&) = delete;
 
     coro::CoroTask<MorselResult> next(std::int64_t max_rows) override {
-        const coro::CancelView cancel = co_await coro::this_coro::cancel_view;
-        coro::AbiContext ctx(cancel);
-        AbiHandle<::dftu_dataframe, ::dftu_dataframe_free> frame;
-        ::dftu_task* pending = nullptr;
-        dftu_status status = out_vt_->next(ctx.get(), out_self_, max_rows,
-                                           frame.slot(), &pending);
-        if (status < 0) {
-            if (pending) coro::free_abi_task(pending);
-            co_return plugin_error(ctx, status,
-                                   dstd::fmt<"lazy op '{}' next">(name_));
-        }
-        if (pending != nullptr) {
-            auto awaiting = await_plugin_task(pending);
-            auto awaited = co_await std::move(awaiting);
-            if (!awaited) {
-                co_return dstd::Error::from_format<"lazy op '{}' next: {}">(
-                    awaited.error().condition(), name_,
-                    awaited.error().message());
-            }
-            status = *awaited;
-        }
-        if (status == DFTU_END) co_return dstd::nullopt;
-        if (!frame.get())
-            co_return common::make_error<
-                "lazy op '{}': next returned no frame and not DFTU_END">(
-                common::ErrorCode::Internal, name_);
-
-        DataFrame df = dataframe_handle_take(frame.release());
+        auto reading = out_->next(max_rows);
+        MorselResult read = co_await std::move(reading);
+        if (!read || !*read) co_return std::move(read);
         if (!declared_.fields.empty() &&
-            df.columns.size() != declared_.fields.size())
+            (*read)->columns.size() != declared_.fields.size())
             co_return common::make_error<
                 "lazy op '{}': produced {} columns but output_schema "
                 "declared {}">(common::ErrorCode::Internal, name_,
-                               df.columns.size(), declared_.fields.size());
-
-        Morsel m;
-        m.rows = df.num_rows();
-        m.columns = std::move(df.columns);
-        gov_->at_morsel(out_vt_, out_self_);
-        co_return std::move(m);
+                               (*read)->columns.size(),
+                               declared_.fields.size());
+        co_return std::move(read);
     }
 
     coro::CoroTask<bool> narrow(const Expr& predicate) override {
-        if (!out_vt_->narrow) co_return false;
-        std::int32_t applied = 0;
-        AbiHandle<::dftu_expr, ::dftu_expr_free> h(expr_handle_wrap(predicate));
-        const coro::CancelView cancel = co_await coro::this_coro::cancel_view;
-        coro::AbiContext ctx(cancel);
-        ::dftu_task* t = nullptr;
-        const dftu_status status =
-            out_vt_->narrow(ctx.get(), out_self_, h.get(), &applied, &t);
-        bool awaited_ok = status >= 0;
-        if (status < 0) {
-            if (t) coro::free_abi_task(t);
-            DFTRACER_UTILS_LOG_WARN(
-                "{}", plugin_error(ctx, status, "plugin node narrow").format());
-        } else if (t) {
-            auto awaiting = await_plugin_task(t);
-            auto awaited = co_await std::move(awaiting);
-            awaited_ok = awaited.has_value();
-            if (!awaited_ok)
-                DFTRACER_UTILS_LOG_WARN("plugin node narrow failed: {}",
-                                        awaited.error().c_str());
-        }
-        co_return awaited_ok&& applied != 0;
+        auto narrowing = out_->narrow(predicate);
+        const bool narrowed = co_await std::move(narrowing);
+        co_return narrowed;
     }
     std::uint64_t resident_bytes() const override {
-        return out_vt_->bytes ? out_vt_->bytes(out_self_) : 0;
+        return out_->resident_bytes();
     }
     coro::CoroTask<std::uint64_t> reclaim(std::uint64_t want) override {
-        co_return out_vt_->reclaim ? out_vt_->reclaim(out_self_, want) : 0;
+        auto reclaiming = out_->reclaim(want);
+        const std::uint64_t freed = co_await std::move(reclaiming);
+        co_return freed;
     }
 
    private:
     dstd::String name_;
     Schema declared_;
-    void* out_self_ = nullptr;
-    const ::dftu_cursor_vt* out_vt_ = nullptr;
-    dstd::Optional<PluginGovernor> gov_;
+    dstd::UniquePtr<Cursor> out_;
 };
 
 class RowKeyCursor : public Cursor {
@@ -3375,22 +3177,10 @@ struct PlanAccess {
 namespace {
 
 // Runs a node's mandatory output_schema over `in`, returning exactly the
-// Schema it declares. dftu_schema::top mirrors dataframe::Schema::fields, so
-// the call is a plain copy in and out, no per-field translation needed.
+// Schema it declares.
 dstd::Result<Schema> call_node_output_schema(const NodeOp& node,
                                              const Schema& in) {
-    ::dftu_schema in_built;
-    in_built.top = in.fields;
-    ::dftu_schema out_built;
-    coro::AbiContext ctx;
-    const dftu_status status = node.vt.output_schema(
-        ctx.get(), node.self, &in_built, &node.args, &out_built);
-    if (status < 0)
-        return plugin_error(ctx, status,
-                            dstd::fmt<"lazy op '{}' output_schema">(node.name));
-    Schema out;
-    out.fields = std::move(out_built.top);
-    return out;
+    return node.impl->output_schema(in, node.args);
 }
 
 // Names-only callers (out_schema below, and lower_cursor_chain at drive time)
@@ -5748,16 +5538,23 @@ LazyFrame LazyFrame::with_error_of(const LazyFrame& other) const {
 }
 
 LazyFrame LazyFrame::op(dstd::String name, OpArgs args) const {
-    dstd::Optional<NodeEntry> entry = find_node(name.c_str());
-    if (!entry)
+    dstd::SharedPtr<NodeImpl> impl = find_node(name);
+    if (!impl)
         return failed(
             invalid_argument<
                 "lazy op '{}': no node registered under this name">(name)
                 .error());
     auto ops = ops_;
     ops.push_back(dstd::make_shared<LazyOp>(
-        LazyOp{NodeOp{std::move(name), entry->vt, entry->self, args.raw()}}));
+        LazyOp{NodeOp{std::move(name), std::move(impl), args}}));
     return with_ops(std::move(ops));
+}
+
+dstd::Result<DataFrame> morsel_to_frame(
+    Morsel&& m, NameCache& cache,
+    const dstd::Vector<dstd::String>& static_names,
+    const dstd::Optional<dstd::Vector<dstd::String>>& out_names) {
+    return frame_from_morsel(std::move(m), cache, static_names, out_names);
 }
 
 namespace {
@@ -6776,7 +6573,7 @@ void fingerprint_op(Fingerprint& fp, const LazyOp& op) {
             },
             [&](const NodeOp& o) {
                 fp.str(o.name);
-                fp.pod(static_cast<const void*>(o.self));
+                fp.pod(static_cast<const void*>(o.impl.get()));
                 fp.pod(static_cast<const void*>(&op));
             }},
         op.node);

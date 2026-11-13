@@ -140,10 +140,11 @@ quantile sketches.
 .. doxygenfile:: dftracer/utils/plugins/abi/sketch.h
    :project: dftracer-utils
 
-The plan node and source registries (``dftu_node_register``,
-``dftu_provider_register``, ``dftu_cursor_vt``, ``dftu_source_vt``) live in
-the dataframe ABI, since a non-plugin C caller uses them too: see
-:doc:`dataframe`.
+The plan node and source vtables (``dftu_node_vt``, ``dftu_source_vt``,
+``dftu_cursor_vt``) are documented in ``abi/nodes.h`` and ``abi/providers.h``
+above. The dataframe ABI keeps only the calls that take a name:
+``dftu_lazyframe_from_provider``, ``dftu_lazyframe_op``,
+``dftu_provider_unregister`` and ``dftu_node_unregister``: see :doc:`dataframe`.
 
 Arrow ABI
 ---------

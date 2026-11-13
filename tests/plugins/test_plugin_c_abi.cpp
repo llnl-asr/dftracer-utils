@@ -332,6 +332,55 @@ TEST_CASE("C ABI: drive runs rounds and status reads a failed task") {
     }
 }
 
+namespace {
+
+coro::CoroTask<void> end_body(coro::AbiTask* task) {
+    task->status = DFTU_END;
+    co_return;
+}
+
+coro::CoroTask<void> refuse_body(coro::AbiTask* task) {
+    task->fail(DFTU_E_PARSE, "run refused on purpose");
+    co_return;
+}
+
+}  // namespace
+
+TEST_CASE(
+    "C ABI: dftu_svc_task run blocks, frees the task and gives its status") {
+    HostFixture fx;
+    Ctx c;
+    const auto* svc = static_cast<const dftu_svc_task*>(
+        fx.host().get_service(fx.host().h, DFTU_SVC_TASK));
+    REQUIRE(svc != nullptr);
+    REQUIRE(svc->run != nullptr);
+
+    dftu_spawn_probe ok{0, DFTU_OK};
+    ::dftu_task* t = nullptr;
+    REQUIRE(dftu_test_task_spawn(c.get(), &fx.host(), &ok, DFTU_JOB_CPU, &t) >=
+            0);
+    CHECK(svc->run(c.get(), fx.host().h, t) == DFTU_OK);
+    CHECK(ok.ran == 1);
+
+    dftu_spawn_probe bad{0, DFTU_E_IO};
+    REQUIRE(dftu_test_task_spawn(c.get(), &fx.host(), &bad, DFTU_JOB_CPU, &t) >=
+            0);
+    CHECK(svc->run(c.get(), fx.host().h, t) == DFTU_E_IO);
+    CHECK(c.message() == "spawned failed");
+    CHECK(bad.ran == 1);
+
+    t = coro::make_abi_task(
+        [](coro::AbiTask* task) { return refuse_body(task); });
+    CHECK(svc->run(c.get(), fx.host().h, t) == DFTU_E_PARSE);
+    CHECK(c.message() == "run refused on purpose");
+
+    t = coro::make_abi_task([](coro::AbiTask* task) { return end_body(task); });
+    CHECK(svc->run(c.get(), fx.host().h, t) == DFTU_END);
+
+    CHECK(svc->run(c.get(), fx.host().h, nullptr) == DFTU_E_INVALID);
+    CHECK(svc->run(nullptr, fx.host().h, nullptr) == DFTU_E_INVALID);
+}
+
 TEST_CASE("C ABI: dftu_svc_duql compile + match from C") {
     HostFixture fx;
     dftu_plugin_host& host = fx.host();

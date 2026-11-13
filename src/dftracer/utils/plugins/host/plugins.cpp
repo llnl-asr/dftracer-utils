@@ -44,7 +44,10 @@ using Query = duql::Query;
 
 struct Plugins::Impl {
     struct Loaded {
-        void* handle = nullptr;
+        /* The plugin library. Every node, provider, index extension and
+           cursor of it holds a reference too, so dlclose waits for the last
+           of them; null for an injected test plugin. */
+        dstd::SharedPtr<PluginLibrary> library;
         dftu_plugin* plugin = nullptr;
         bool owned = true; /* injected test plugins are not owned */
         dstd::String name; /* load-path stem, used to tag the plugin's logs */
@@ -70,10 +73,11 @@ struct Plugins::Impl {
     };
 
     ~Impl() {
-        // Unregister every op/provider this plugin added and run destroy(),
-        // both before dlclose unmaps the plugin's code: a later dftu_op_find,
-        // dftu_lazyframe_from_provider or destroy() may otherwise dereference
-        // memory that dlclose just unmapped.
+        // Unregister every op/provider this plugin added, then drop the
+        // library reference, which runs the plugin's destroy() and closes the
+        // library once nothing it made is alive: a later dftu_op_find or
+        // dftu_lazyframe_from_provider finds nothing, and what a plan or
+        // cursor still holds keeps the library mapped until it is gone.
         for (auto& p : plugins) {
             for (const dstd::String& name : p.registered_ops)
                 ::dftu_op_unregister(name.c_str());
@@ -83,9 +87,7 @@ struct Plugins::Impl {
                 ::dftu_node_unregister(name.c_str());
             for (const dstd::String& name : p.registered_index_extensions)
                 trace::index::extensions::unregister_extension(name);
-            if (p.owned && p.plugin && p.plugin->destroy)
-                p.plugin->destroy(p.plugin->self);
-            if (p.handle) dlclose(p.handle);
+            p.library.reset();
         }
     }
 
@@ -276,12 +278,12 @@ dstd::Result<Plugins::Impl::Loaded> load_plugin(const dstd::String& path,
         return common::make_error<"plugin '{}' failed to load: {}">(
             common::ErrorCode::Io, path, why ? why : "unknown dlopen error");
     }
+    auto library = dstd::make_shared<PluginLibrary>(handle);
 
     using InfoFn = const dftu_plugin_info* (*)();
     auto info_fn = reinterpret_cast<InfoFn>(
         dlsym(handle, DFTRACER_UTILS_PLUGIN_INFO_SYMBOL));
     if (!info_fn) {
-        dlclose(handle);
         return common::make_error<
             "plugin '{}' exports no '{}' symbol; define it with "
             "DFTU_PLUGIN_INFO">(common::ErrorCode::NotFound, path,
@@ -289,7 +291,6 @@ dstd::Result<Plugins::Impl::Loaded> load_plugin(const dstd::String& path,
     }
     const dftu_plugin_info* info = info_fn();
     if (!info || info->struct_size != sizeof(dftu_plugin_info)) {
-        dlclose(handle);
         return common::make_error<
             "plugin '{}' has no valid dftu_plugin_info (NULL or wrong "
             "struct_size)">(common::ErrorCode::InvalidArgument, path);
@@ -298,7 +299,6 @@ dstd::Result<Plugins::Impl::Loaded> load_plugin(const dstd::String& path,
         info->abi_hash != DFTRACER_UTILS_PLUGIN_ABI_HASH) {
         const std::uint32_t got_version = info->abi_version;
         const std::uint64_t got_hash = info->abi_hash;
-        dlclose(handle);
         return common::make_error<
             "plugin '{}' was built against other plugin ABI headers (version "
             "{}, hash {:x}; this host has version {}, hash {:x}); rebuild it">(
@@ -310,17 +310,19 @@ dstd::Result<Plugins::Impl::Loaded> load_plugin(const dstd::String& path,
     auto factory = reinterpret_cast<dftu_plugin_factory>(
         dlsym(handle, DFTRACER_UTILS_PLUGIN_FACTORY_SYMBOL));
     if (!factory) {
-        dlclose(handle);
         return common::make_error<"plugin '{}' exports no '{}' symbol">(
             common::ErrorCode::NotFound, path,
             DFTRACER_UTILS_PLUGIN_FACTORY_SYMBOL);
     }
 
-    BuildHost build_host(plugin_name_from_path(path));
+    BuildHost build_host(plugin_name_from_path(path), library);
     coro::AbiContext factory_ctx;
     dftu_plugin* plugin = nullptr;
     const dftu_status built =
         factory(factory_ctx.get(), build_host.host(), config, &plugin);
+    // The library runs the plugin's destroy once the last node, provider or
+    // extension it made is gone; a failed load below relies on the same.
+    if (plugin) library->adopt(plugin);
 
     // A rejected load never reaches Loaded, so nothing will later walk
     // registered_ops()/registered_providers() and unregister them: a factory
@@ -343,9 +345,7 @@ dstd::Result<Plugins::Impl::Loaded> load_plugin(const dstd::String& path,
     // a host that was not there; whether it noticed the NULL or not, the load
     // fails here rather than at the first batch.
     if (!build_host.denied().empty()) {
-        if (plugin && plugin->destroy) plugin->destroy(plugin->self);
         unregister_all();
-        dlclose(handle);
         return common::make_error<
             "plugin '{}' factory asked for '{}', which the build-phase host "
             "does not provide. A factory may only register ops, state types "
@@ -354,9 +354,7 @@ dstd::Result<Plugins::Impl::Loaded> load_plugin(const dstd::String& path,
     }
 
     if (built < 0) {
-        if (plugin && plugin->destroy) plugin->destroy(plugin->self);
         unregister_all();
-        dlclose(handle);
         const dstd::Error why = factory_ctx.error(built, "factory");
         return common::make_error<"plugin '{}' factory failed: {}">(
             common::ErrorCode::InvalidArgument, path, why.message());
@@ -364,16 +362,13 @@ dstd::Result<Plugins::Impl::Loaded> load_plugin(const dstd::String& path,
 
     if (!plugin) {
         unregister_all();
-        dlclose(handle);
         return common::make_error<"plugin '{}' factory gave no descriptor">(
             common::ErrorCode::InvalidArgument, path);
     }
 
     if (plugin->struct_size != sizeof(dftu_plugin)) {
         const std::uint32_t got = plugin->struct_size;
-        if (plugin->destroy) plugin->destroy(plugin->self);
         unregister_all();
-        dlclose(handle);
         return common::make_error<
             "plugin '{}' descriptor struct_size {} is not {}; set it to "
             "sizeof(dftu_plugin)">(
@@ -382,9 +377,7 @@ dstd::Result<Plugins::Impl::Loaded> load_plugin(const dstd::String& path,
     }
 
     if (dstd::String bad = config_violation(plugin, config); !bad.empty()) {
-        if (plugin->destroy) plugin->destroy(plugin->self);
         unregister_all();
-        dlclose(handle);
         return common::make_error<"plugin '{}' config: {}">(
             common::ErrorCode::InvalidArgument, path, bad);
     }
@@ -404,9 +397,7 @@ dstd::Result<Plugins::Impl::Loaded> load_plugin(const dstd::String& path,
         const dstd::String plan(pq);
         auto parsed = Query::from_string(plan);
         if (!parsed) {
-            if (plugin->destroy) plugin->destroy(plugin->self);
             unregister_all();
-            dlclose(handle);
             return common::make_error<
                 "plugin '{}' plan_duql '{}' does not parse: {}">(
                 common::ErrorCode::InvalidArgument, path, plan,
@@ -414,7 +405,7 @@ dstd::Result<Plugins::Impl::Loaded> load_plugin(const dstd::String& path,
         }
     }
 
-    return Plugins::Impl::Loaded{handle,
+    return Plugins::Impl::Loaded{std::move(library),
                                  plugin,
                                  true,
                                  plugin_name_from_path(path),

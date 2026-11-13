@@ -7,6 +7,7 @@
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/internal/cell_ops.h>
+#include <dftracer/utils/dataframe/internal/node_registry.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -251,16 +252,20 @@ LazyFrame lookup_side() {
         dstd::make_shared<dataframe::InMemorySource>(std::move(side)));
 }
 
-dftu_status node_schema(dftu_ctx*, void*, const dftu_schema*,
-                        const dftu_op_arg*, dftu_schema*) {
-    return DFTU_OK;
-}
+class NeverOpenedNode final : public NodeImpl {
+   public:
+    dstd::Result<Schema> output_schema(const Schema&,
+                                       const OpArgs&) const override {
+        return Schema{};
+    }
 
-dftu_status node_open(dftu_ctx* ctx, void*, void*, const dftu_cursor_vt*,
-                      const dftu_op_arg*, std::uint64_t, void**,
-                      const dftu_cursor_vt**) {
-    return dftu_fail(ctx, DFTU_E_INVALID, "node_open must not run");
-}
+    dstd::Result<dstd::UniquePtr<Cursor>> open(dstd::UniquePtr<Cursor>,
+                                               const Names&, const OpArgs&,
+                                               std::uint64_t) const override {
+        return dstd::Error::from_format<"node_open must not run">(
+            dstd::Condition::InvalidArgument);
+    }
+};
 
 }  // namespace
 
@@ -479,14 +484,8 @@ TEST_SUITE("rest column") {
     }
 
     TEST_CASE("an op without a rule refuses the plan") {
-        dftu_node_vt vt{};
-        vt.struct_size = sizeof(vt);
-        vt.output_schema = node_schema;
-        vt.open = node_open;
-        dftu_error err = DFTU_ERROR_INIT;
-        REQUIRE(dftu_node_register("test.rest.node", &vt, nullptr, &err) ==
-                DFTU_OK);
-        dftu_error_release(&err);
+        REQUIRE(register_node("test.rest.node",
+                              dstd::make_shared<NeverOpenedNode>()));
         const auto collected =
             dftracer::utils::default_runtime()
                 .submit(rest_scan()
@@ -499,7 +498,7 @@ TEST_SUITE("rest column") {
         CHECK(
             dstd::String(collected.error().c_str()).find("op test.rest.node") !=
             dstd::String::npos);
-        CHECK(dftu_node_unregister("test.rest.node") == 0);
+        CHECK(unregister_node("test.rest.node"));
     }
 
     TEST_CASE("batches without undeclared columns give the declared ones") {

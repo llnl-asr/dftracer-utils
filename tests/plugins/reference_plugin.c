@@ -234,12 +234,15 @@ static const dftu_source_vt SRC_VT = {
  *
  * A node's open()/next() get no dftu_plugin_host*, so a node cannot reach
  * dftu_svc_coro to await its upstream, and plain C has no native coroutine
- * to co_await it with either. dftu_task_run (core/coro/abi.h) is the way
- * around that: it drives a task to completion on a given dftu_runtime and
- * blocks the calling thread, so next() can synchronously resolve its
- * upstream before transforming the frame. dftu_default_runtime() supplies
- * the runtime already driving this scan.
+ * to co_await it with either. dftu_svc_task::run is the way around that: it
+ * blocks the calling thread until a task ends, so next() can synchronously
+ * resolve its upstream before transforming the frame. The factory keeps the
+ * task service and its `h` (run uses no host state, so they outlive the
+ * factory's host) for the node to call.
  */
+
+static const dftu_svc_task* g_node_task = NULL;
+static void* g_node_task_h = NULL;
 
 typedef struct {
     void* in_self;
@@ -255,18 +258,11 @@ static dftu_status node_next(dftu_ctx* ctx, void* self, int64_t max_rows,
     (void)pending;
     *out = NULL;
     if (st >= 0 && t) {
-        dftu_error err = DFTU_ERROR_INIT;
-        st = dftu_task_run(dftu_default_runtime(), t, &err);
+        st = g_node_task->run(ctx, g_node_task_h, t);
         if (st < 0) {
-            st = dftu_fail(ctx, st,
-                           err.message
-                               ? err.message
-                               : "reference_plugin.node: upstream task failed");
-            dftu_error_release(&err);
             if (frame) dftu_dataframe_free(frame);
             return st;
         }
-        dftu_error_release(&err);
     }
     if (st < 0) return st;
     if (st == DFTU_END || !frame) return DFTU_END;
@@ -1207,6 +1203,8 @@ static const dftu_config_key* config_keys(void* self) {
 static void destroy(void* self) {
     RefConfig* cfg = (RefConfig*)self;
     dftu_node_unregister("reference_plugin.node");
+    g_node_task = NULL;
+    g_node_task_h = NULL;
     dftu_provider_unregister("reference_plugin.src");
     dftu_op_unregister("reference_plugin.count_rows");
     memset(g_status, 0, sizeof(g_status));
@@ -1293,6 +1291,8 @@ DFTU_PLUGIN_EXPORT dftu_status dftracer_plugin(dftu_ctx* ctx,
         }
     }
 
+    g_node_task = (const dftu_svc_task*)h->get_service(h->h, DFTU_SVC_TASK);
+    g_node_task_h = h->h;
     {
         const dftu_svc_nodes* nodes =
             (const dftu_svc_nodes*)h->get_service(h->h, DFTU_SVC_NODES);

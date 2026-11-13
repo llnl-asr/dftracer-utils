@@ -27,6 +27,11 @@ set(PLUGINS_TEST_SOURCES
     test_plugin_state.cpp
     test_plugin_reads.cpp
     test_plugin_providers.cpp
+    test_provider_pushdown.cpp
+    test_plugin_library_lifetime.cpp
+    test_provider_schema_types.cpp
+    test_lazyframe_plugin_node.cpp
+    test_source_hooks_vtable.cpp
     test_plugin_reference.cpp
     host/test_host_ops.cpp
     host/test_host_ops_autoregister.cpp
@@ -229,6 +234,33 @@ if(TARGET plugins_test_plugin_factory_host)
                    factory_registers_op_plugin factory_escapes_plugin
                    scan_registers_op_plugin
                    builder_plugin)
+endif()
+
+add_library(lifetime_plugin MODULE lifetime_plugin.c)
+target_set_warnings(lifetime_plugin)
+set_target_properties(
+  lifetime_plugin
+  PROPERTIES OUTPUT_NAME lifetime_plugin
+             PREFIX ""
+             POSITION_INDEPENDENT_CODE ON
+             C_STANDARD 11
+             C_STANDARD_REQUIRED ON
+             RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+             LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
+target_include_directories(lifetime_plugin
+                           PRIVATE ${CMAKE_SOURCE_DIR}/include
+                                   ${CMAKE_BINARY_DIR}/include)
+if(TARGET dftracer_utils_dataframe::shared)
+  target_link_libraries(lifetime_plugin PRIVATE dftracer_utils_dataframe::shared)
+elseif(TARGET dftracer_utils_dataframe::static)
+  target_link_libraries(lifetime_plugin PRIVATE dftracer_utils_dataframe::static)
+endif()
+
+if(TARGET plugins_test_plugin_library_lifetime)
+  target_compile_definitions(
+    plugins_test_plugin_library_lifetime PRIVATE
+    LIFETIME_PLUGIN_PATH="$<TARGET_FILE:lifetime_plugin>")
+  add_dependencies(plugins_test_plugin_library_lifetime lifetime_plugin)
 endif()
 
 if(TARGET plugins_test_plugin_providers)

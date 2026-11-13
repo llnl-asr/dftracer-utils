@@ -335,9 +335,9 @@ The cursor may also take part in two things the plan does while it runs:
    Built-in stages bound themselves and report 0; this is for a source or a
    plugin node that holds a table or a cache.
 
-In C, the same contract is ``dftu_source_vt`` / ``dftu_cursor_vt``,
-registered by name (``dftu_provider_register``, or ``DFTU_SVC_PROVIDERS``
-from a plugin) and opened with ``dftu_lazyframe_from_provider``. A source
+In C, the same contract is ``dftu_source_vt`` / ``dftu_cursor_vt``
+(``plugins/abi/providers.h``), registered by name from a plugin
+(``DFTU_SVC_PROVIDERS``) and opened with ``dftu_lazyframe_from_provider``. A source
 declares its column types through ``schema_types`` with the ``dftu_schema``
 builders, nested types included; one that declares nothing reports
 ``Unknown``.
@@ -449,7 +449,7 @@ A plugin's own step
 -------------------
 
 ``LazyFrame::op(name, args)`` (``dftu_lazyframe_op`` in C) appends a plan
-node a plugin registered with ``dftu_node_register``: a cursor that takes
+node a plugin registered through ``DFTU_SVC_NODES``: a cursor that takes
 the input cursor and returns its own, so a streaming operator (one morsel
 in, one out, state kept between them) or a breaker (drain, then emit one
 frame) sits in the plan like a built-in step. The node declares its output

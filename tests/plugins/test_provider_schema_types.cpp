@@ -10,11 +10,11 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/abi.h>
-#include <dftracer/utils/dataframe/internal/provider_source.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/plugins/host/provider_source.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 #include <task_result.h>
@@ -22,7 +22,6 @@
 #include <cstdint>
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::dataframe;
 
 namespace {
 
@@ -101,14 +100,14 @@ dftu_status fixture_scan(dftu_ctx*, void* self, const dftu_scan_request*,
 
 void fixture_destroy(void*) {}
 
-dstd::SharedPtr<Source> make_fixture(Fixture& fx) {
+dstd::SharedPtr<dataframe::Source> make_fixture(Fixture& fx) {
     dftu_source_vt vt{};
     vt.struct_size = sizeof(vt);
     vt.schema = fixture_schema;
     vt.scan = fixture_scan;
     vt.destroy = fixture_destroy;
     vt.schema_types = fx.schema_types;
-    return make_provider_source(vt, &fx);
+    return plugins::host::make_provider_source(vt, &fx);
 }
 
 dftu_status plain_scalars(dftu_ctx*, void*, dftu_schema* s) {
@@ -166,77 +165,77 @@ dftu_status malformed_list(dftu_ctx*, void*, dftu_schema* s) {
 TEST_SUITE("provider schema types") {
     TEST_CASE("plain scalar types are reported exactly") {
         Fixture fx{{"id", "val"}, plain_scalars};
-        Schema s = make_fixture(fx)->schema();
+        dataframe::Schema s = make_fixture(fx)->schema();
         REQUIRE(s.fields.size() == 2);
         CHECK(s.fields[0].name == "id");
-        CHECK(s.fields[0].type.id == TypeId::Int64);
+        CHECK(s.fields[0].type.id == dataframe::TypeId::Int64);
         CHECK(s.fields[0].nullable == false);
         CHECK(s.fields[1].name == "val");
-        CHECK(s.fields[1].type.id == TypeId::Float64);
+        CHECK(s.fields[1].type.id == dataframe::TypeId::Float64);
         CHECK(s.fields[1].nullable == true);
     }
 
     TEST_CASE(
         "parameterized types keep their parameters, not just the TypeId") {
         Fixture fx{{"ts", "amount", "digest"}, parameterized};
-        Schema s = make_fixture(fx)->schema();
+        dataframe::Schema s = make_fixture(fx)->schema();
         REQUIRE(s.fields.size() == 3);
 
-        const DataType& ts = s.fields[0].type;
-        CHECK(ts.id == TypeId::Timestamp);
-        CHECK(ts.time_unit() == TimeUnit::Nano);
+        const dataframe::DataType& ts = s.fields[0].type;
+        CHECK(ts.id == dataframe::TypeId::Timestamp);
+        CHECK(ts.time_unit() == dataframe::TimeUnit::Nano);
         CHECK(ts.timezone() == "UTC");
 
-        const DataType& amount = s.fields[1].type;
-        CHECK(amount.id == TypeId::Decimal128);
+        const dataframe::DataType& amount = s.fields[1].type;
+        CHECK(amount.id == dataframe::TypeId::Decimal128);
         CHECK(amount.decimal_precision() == 38);
         CHECK(amount.decimal_scale() == 9);
 
-        const DataType& digest = s.fields[2].type;
-        CHECK(digest.id == TypeId::FixedSizeBinary);
+        const dataframe::DataType& digest = s.fields[2].type;
+        CHECK(digest.id == dataframe::TypeId::FixedSizeBinary);
         CHECK(digest.fixed_size() == 7);
     }
 
     TEST_CASE("nested List and Struct types are expressible") {
         Fixture fx{{"tags", "point"}, nested};
-        Schema s = make_fixture(fx)->schema();
+        dataframe::Schema s = make_fixture(fx)->schema();
         REQUIRE(s.fields.size() == 2);
 
-        const DataType& tags = s.fields[0].type;
-        CHECK(tags.id == TypeId::List);
+        const dataframe::DataType& tags = s.fields[0].type;
+        CHECK(tags.id == dataframe::TypeId::List);
         REQUIRE(tags.fields.size() == 1);
-        CHECK(tags.fields[0].type.id == TypeId::Int64);
+        CHECK(tags.fields[0].type.id == dataframe::TypeId::Int64);
 
-        const DataType& point = s.fields[1].type;
-        CHECK(point.id == TypeId::Struct);
+        const dataframe::DataType& point = s.fields[1].type;
+        CHECK(point.id == dataframe::TypeId::Struct);
         REQUIRE(point.fields.size() == 2);
         CHECK(point.fields[0].name == "x");
-        CHECK(point.fields[0].type.id == TypeId::Int64);
+        CHECK(point.fields[0].type.id == dataframe::TypeId::Int64);
         CHECK(point.fields[1].name == "y");
-        CHECK(point.fields[1].type.id == TypeId::String);
+        CHECK(point.fields[1].type.id == dataframe::TypeId::String);
     }
 
     TEST_CASE("a second element under a List is refused at the call") {
         g_second_child_result = 0;
         Fixture fx{{"tags"}, malformed_list};
-        Schema s = make_fixture(fx)->schema();
+        dataframe::Schema s = make_fixture(fx)->schema();
         // Refused where it happens, so the builder never holds a shape that
         // would have to be thrown away later.
         CHECK(g_second_child_result == -1);
         REQUIRE(s.fields.size() == 1);
-        CHECK(s.fields[0].type.id == TypeId::List);
+        CHECK(s.fields[0].type.id == dataframe::TypeId::List);
         REQUIRE(s.fields[0].type.fields.size() == 1);
-        CHECK(s.fields[0].type.fields[0].type.id == TypeId::Int64);
+        CHECK(s.fields[0].type.fields[0].type.id == dataframe::TypeId::Int64);
     }
 
     TEST_CASE("a provider declaring nothing still works and reports Unknown") {
         Fixture fx{{"id", "val"}, nullptr};
-        Schema s = make_fixture(fx)->schema();
+        dataframe::Schema s = make_fixture(fx)->schema();
         REQUIRE(s.fields.size() == 2);
         CHECK(s.fields[0].name == "id");
-        CHECK(s.fields[0].type.id == TypeId::Unknown);
+        CHECK(s.fields[0].type.id == dataframe::TypeId::Unknown);
         CHECK(s.fields[1].name == "val");
-        CHECK(s.fields[1].type.id == TypeId::Unknown);
+        CHECK(s.fields[1].type.id == dataframe::TypeId::Unknown);
     }
 
     TEST_CASE(
@@ -252,16 +251,17 @@ TEST_SUITE("provider schema types") {
                                       DFTU_TIME_UNIT_MILLI, "UTC", 0, 0, 0);
                 return DFTU_OK;
             }};
-        LazyFrame lf = LazyFrame::scan(make_fixture(fx))
-                           .filter(col(0) > std::int64_t{0})
-                           .select({"val", "ts"});
-        Schema s = lf.output_schema();
+        dataframe::LazyFrame lf =
+            dataframe::LazyFrame::scan(make_fixture(fx))
+                .filter(dataframe::col(0) > std::int64_t{0})
+                .select({"val", "ts"});
+        dataframe::Schema s = lf.output_schema();
         REQUIRE(s.fields.size() == 2);
         CHECK(s.fields[0].name == "val");
-        CHECK(s.fields[0].type.id == TypeId::Float64);
+        CHECK(s.fields[0].type.id == dataframe::TypeId::Float64);
         CHECK(s.fields[1].name == "ts");
-        CHECK(s.fields[1].type.id == TypeId::Timestamp);
-        CHECK(s.fields[1].type.time_unit() == TimeUnit::Milli);
+        CHECK(s.fields[1].type.id == dataframe::TypeId::Timestamp);
+        CHECK(s.fields[1].type.time_unit() == dataframe::TimeUnit::Milli);
         CHECK(s.fields[1].type.timezone() == "UTC");
     }
 
@@ -270,7 +270,7 @@ TEST_SUITE("provider schema types") {
         Fixture fx{{"id", "val"}, plain_scalars};
         const auto collected =
             dftracer::utils::default_runtime()
-                .submit(LazyFrame::scan(make_fixture(fx)).collect())
+                .submit(dataframe::LazyFrame::scan(make_fixture(fx)).collect())
                 .get();
         dftu_utils_test::expect_error(collected,
                                       common::ErrorCode::InvalidArgument);

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
-#include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/plugins/host/fold_adapter/ext.h>
+#include <dftracer/utils/plugins/host/node_adapter.h>
 #include <dftracer/utils/plugins/host/reserved_names.h>
 
 namespace dftracer::utils::plugins::host {
@@ -23,8 +23,9 @@ const ::dftu_svc_nodes g_nodes = {sizeof(::dftu_svc_nodes),
 
 }  // namespace
 
-dftu_status detail::register_plugin_node(::dftu_ctx* ctx, const char* name,
-                                         const ::dftu_node_vt* vt, void* self) {
+dftu_status detail::register_plugin_node(
+    ::dftu_ctx* ctx, const char* name, const ::dftu_node_vt* vt, void* self,
+    dstd::SharedPtr<PluginLibrary> library) {
     if (refuse_plugin_op_name(name)) {
         return host_fail(
             ctx, DFTU_E_INVALID,
@@ -33,17 +34,14 @@ dftu_status detail::register_plugin_node(::dftu_ctx* ctx, const char* name,
                       "'<plugin>.<name>'">(
                 dstd::StringView(name ? name : "(null)")));
     }
-    ::dftu_error error = DFTU_ERROR_INIT;
-    const dftu_status status = ::dftu_node_register(name, vt, self, &error);
-    if (status < 0) {
-        host_fail(ctx, status,
-                  dstd::fmt<"node '{}' refused: {}">(
-                      dstd::StringView(name),
-                      dstd::StringView(error.message ? error.message
-                                                     : "not registered")));
+    auto registered = register_node_vtable(name, vt, self, std::move(library));
+    if (!registered) {
+        return host_fail(
+            ctx, common::to_status(registered.error().condition()),
+            dstd::fmt<"node '{}' refused: {}">(dstd::StringView(name),
+                                               registered.error().message()));
     }
-    ::dftu_error_release(&error);
-    return status;
+    return DFTU_OK;
 }
 
 const void* detail::nodes_ext_vtable() { return &g_nodes; }

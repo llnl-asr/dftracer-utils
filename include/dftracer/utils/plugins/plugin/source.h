@@ -16,10 +16,9 @@
 #include <utility>
 
 /* A LazyFrame source written as a C++ class. source_vtable<S>() adapts S to
- * dftu_source_vt; register it with PluginBuilder::source<S>() (or
- * dftu_provider_register). Only C handles and C calls cross the boundary:
- * exceptions are caught at every callback, and every object the host receives
- * is freed through its own vtable.
+ * dftu_source_vt; register it with PluginBuilder::source<S>(). Only C handles
+ * and C calls cross the boundary: exceptions are caught at every callback, and
+ * every object the host receives is freed through its own vtable.
  *
  * S provides:
  *   dstd::Vector<dstd::String> names() const;

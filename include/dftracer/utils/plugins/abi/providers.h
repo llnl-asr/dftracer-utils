@@ -22,12 +22,12 @@
  *
  * register_provider wraps the vtable, after the plugin-name gate, as a C++
  * provider in the process-global registry that dftu_lazyframe_from_provider
- * (dftracer/utils/dataframe/abi.h) reads. The registry has no C entry to
+ * (dftracer/utils/dataframe/c_api.h) reads. The registry has no C entry to
  * register: only the host builds the adapter from a vtable, so the C ABI of
  * dataframe stays free of plugin types.
  */
 
-#include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/plugins/abi/core.h>
 #include <stdint.h>
 

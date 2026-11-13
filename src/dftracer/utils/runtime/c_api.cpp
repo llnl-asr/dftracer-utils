@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-#include <dftracer/utils/runtime/abi.h>
+#include <dftracer/utils/runtime/c_api.h>
 #include <dftracer/utils/runtime/runtime.h>
 
 using namespace dftracer::utils;

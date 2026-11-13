@@ -212,8 +212,6 @@ dftu_agg_spec make_spec(int32_t op, const dftu_expr* value, const char* out,
 }
 }  // namespace
 
-extern "C" {
-
 dftu_agg_spec dftu_agg_count(const char* out) {
     return make_spec(DFTU_AGG_COUNT, nullptr, out);
 }
@@ -306,5 +304,4 @@ int32_t dftu_dataframe_group_agg_expr(const dftu_expr* key,
     for (dataframe::Series& c : owned)
         c.release();  // borrowed inputs, do not free
     return written;
-}
 }

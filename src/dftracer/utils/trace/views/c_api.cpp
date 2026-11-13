@@ -9,7 +9,7 @@
 #include <dftracer/utils/duql/internal/duql_handle.h>
 #include <dftracer/utils/duql/pipeline.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/trace/views/abi.h>
+#include <dftracer/utils/trace/views/c_api.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/trace/views/view_plan.h>
 #include <dftracer/utils/trace/views/view_plan_ops.h>

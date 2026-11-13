@@ -439,7 +439,7 @@ frame's own buffers, no interned-id round trip needed at the row level. Every
 
 A plugin working straight off the columns (no per-row cursor) reads the
 ``dftu_dataframe`` with the dataframe C ABI
-(``dftracer/utils/dataframe/abi.h``) - ``dftu_dataframe_column`` by name,
+(``dftracer/utils/dataframe/c_api.h``) - ``dftu_dataframe_column`` by name,
 ``dftu_series_type`` / ``dftu_series_data``. A string column can be a
 dictionary column, for which ``dftu_series_data`` and ``dftu_series_offsets``
 are null: read its strings with ``dftu_series_string_at(col, row, &len)``.
@@ -621,7 +621,7 @@ right.
    if (st >= 0 && res) { /* read columns, then: */ dftu_dataframe_free(res); }
 
 Reading the columns of that frame needs the dataframe C ABI
-(``dftracer/utils/dataframe/abi.h``), the one part of the plugin surface that
+(``dftracer/utils/dataframe/c_api.h``), the one part of the plugin surface that
 links the engine rather than headers alone. ``examples/plugins/dur_stats_producer.c``
 and ``dur_stats_consumer.c`` are the pair end to end.
 

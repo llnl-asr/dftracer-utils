@@ -3,7 +3,7 @@
 // (lazyframe.cpp) is the only reader: it resolves a node once, at the .op()
 // call, and the plan keeps that node alive.
 
-#include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/internal/node_registry.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -83,11 +83,7 @@ dstd::SharedPtr<NodeImpl> find_node(dstd::StringView name) {
 
 }  // namespace dftracer::utils::dataframe
 
-extern "C" {
-
 int dftu_node_unregister(const char* name) {
     if (!name) return 1;
     return dftracer::utils::dataframe::unregister_node(name) ? 0 : 1;
 }
-
-}  // extern "C"

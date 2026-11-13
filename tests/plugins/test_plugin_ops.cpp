@@ -8,9 +8,9 @@
 #include <dftracer/utils/plugins/abi.h>
 #include <dftracer/utils/plugins/host/fold_adapter.h>
 
-// After fold_adapter.h so nanoarrow is set up before dataframe/abi.h's
+// After fold_adapter.h so nanoarrow is set up before dataframe/c_api.h's
 // arrow_abi.
-#include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/vector.h>

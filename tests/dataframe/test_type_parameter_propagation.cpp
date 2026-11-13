@@ -7,7 +7,7 @@
 #include <cstdint>
 #include <cstring>
 
-// gather_column (kernels/filter.cpp) and dftu_series_slice (abi.cpp) used to
+// gather_column (kernels/filter.cpp) and dftu_series_slice (c_api.cpp) used to
 // copy a source column's TypeId but not its time_unit/timezone/
 // decimal_precision/decimal_scale/fixed_size, so every op built on take/slice
 // (head, tail, take, sort, unique, reverse, drop_nulls, DataFrame::head/

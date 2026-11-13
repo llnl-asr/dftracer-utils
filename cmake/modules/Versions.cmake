@@ -100,11 +100,11 @@ function(dftracer_utils_interface_versions version_file out_include_dir)
   list(
     APPEND
     _abi_headers
-    "${_inc}/common/abi.h"
+    "${_inc}/common/c_api.h"
     "${_inc}/common/export.h"
-    "${_inc}/dataframe/abi.h"
+    "${_inc}/dataframe/c_api.h"
     "${_inc}/dataframe/agg_op_codes.h"
-    "${_inc}/duql/abi.h"
+    "${_inc}/duql/c_api.h"
     "${_inc}/plugins/abi.h"
     "${_inc}/plugins/arrow_abi.h")
   list(SORT _abi_headers)

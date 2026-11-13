@@ -10,7 +10,7 @@
 #include <dftracer/utils/common/spill_dir.h>
 #include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/coro/executor.h>
-#include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/spill.h>
 #include <dftracer/utils/dataframe/types.h>

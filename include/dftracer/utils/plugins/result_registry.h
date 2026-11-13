@@ -2,7 +2,7 @@
 #ifndef DFTRACER_UTILS_PLUGINS_RESULT_REGISTRY_H
 #define DFTRACER_UTILS_PLUGINS_RESULT_REGISTRY_H
 
-#include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/op.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/span.h>

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
-#ifndef DFTRACER_UTILS_RUNTIME_ABI_H
-#define DFTRACER_UTILS_RUNTIME_ABI_H
+#ifndef DFTRACER_UTILS_RUNTIME_C_API_H
+#define DFTRACER_UTILS_RUNTIME_C_API_H
 
 #include <dftracer/utils/common/export.h>
 #include <stdint.h>
@@ -27,4 +27,4 @@ DFTU_EXPORT void dftu_runtime_free(dftu_runtime* rt);
 }
 #endif
 
-#endif /* DFTRACER_UTILS_RUNTIME_ABI_H */
+#endif /* DFTRACER_UTILS_RUNTIME_C_API_H */

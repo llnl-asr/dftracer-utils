@@ -3891,8 +3891,6 @@ dftu_expr* wrap(dataframe::Expr e) { return new dftu_expr{{}, std::move(e)}; }
 const dataframe::Expr& unwrap(const dftu_expr* e) { return e->e; }
 }  // namespace
 
-extern "C" {
-
 dftu_expr* dftu_expr_col(int32_t index) {
     return wrap(dataframe::expr_col(index));
 }
@@ -4253,5 +4251,4 @@ int32_t dftu_expr_eval_many(const dftu_expr* const* roots, int32_t n_roots,
     for (dataframe::Series& c : owned)
         c.release();  // borrowed inputs, do not free
     return written;
-}
 }

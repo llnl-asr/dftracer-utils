@@ -128,7 +128,7 @@ _PRIM_CODES = {
     "mix64": 5,
 }
 
-# DFTU_VEC_CMP_* and DFTU_VEC_LOGICAL_* codes (vec/abi.h).
+# DFTU_CMP_* and DFTU_LOGICAL_* codes (dataframe/c_api.h).
 _CMP_CODES = {"gt": 0, "ge": 1, "lt": 2, "le": 3, "eq": 4, "ne": 5}
 _CMP_SYMBOL = {"gt": ">", "ge": ">=", "lt": "<", "le": "<=", "eq": "==", "ne": "!="}
 _LOGICAL_CODES = {"and": 0, "or": 1}

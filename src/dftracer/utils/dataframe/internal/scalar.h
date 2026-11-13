@@ -3,7 +3,7 @@
 #define DFTRACER_UTILS_DATAFRAME_INTERNAL_SCALAR_H
 
 #include <dftracer/utils/common/error.h>
-#include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/types.h>
 
 namespace dftracer::utils::dataframe {

@@ -5,7 +5,7 @@
 // reverse, shift, top_k/bottom_k, sample. None is a lane kernel: the numeric
 // heavy lifting is delegated to argsort/topk_indices (SIMD) and take/filter.
 
-#include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/column_read.h>
 #include <dftracer/utils/dataframe/internal/compare_simd.h>  // pack_flags
@@ -288,8 +288,6 @@ Series sample_impl(const Series& v, std::int64_t n, std::uint64_t seed) {
 using dftracer::utils::dataframe::borrow;
 using dftracer::utils::dataframe::Series;
 
-extern "C" {
-
 dftu_series* dftu_series_is_unique(const dftu_series* v) {
     if (!v) return nullptr;
     DFTU_FLAT_INPUT(v, dftu_series_is_unique);
@@ -415,5 +413,3 @@ dftu_series* dftu_series_sample(const dftu_series* v, int64_t n,
     c.release();
     return r.release();
 }
-
-}  // extern "C"

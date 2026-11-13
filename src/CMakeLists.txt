@@ -129,7 +129,7 @@ set(DFTRACER_UTILS_DSTD_SOURCES
 # -----------------------------------------
 
 set(DFTRACER_UTILS_COMMON_SOURCES
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/abi_error.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/c_api_error.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/logging.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/symbolize.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/format_detector.cpp
@@ -174,7 +174,7 @@ set(DFTRACER_UTILS_RUNTIME_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/scheduler/watchdog.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/runtime.cpp
     # Runtime C API
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/runtime_abi.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/c_api.cpp
     # Async I/O
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/fs/filesystem.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/fs/fs.cpp
@@ -240,7 +240,7 @@ set(DFTRACER_UTILS_INDEX_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/gzip/checkpoint_size.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/gzip/gzip_indexer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/gzip/checkpoint_indexer_factory.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/abi.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/c_api.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/index.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/store/root_layout.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/indexer.cpp
@@ -414,7 +414,7 @@ set(DFTRACER_UTILS_TRACE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/sharded_view.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/view_export_index.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/result_join.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/abi.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/c_api.cpp
 
     # Reader
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/reader/trace_reader.cpp
@@ -818,7 +818,7 @@ use_precompiled_header(dftracer_utils_runtime_objects)
 # +++++++++++++++++++++++++++++++++++++++++
 
 set(DFTRACER_UTILS_STORE_SOURCES
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/store/abi.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/store/c_api.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/store/committer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/store/crc.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/store/data_file.cpp
@@ -906,8 +906,8 @@ use_precompiled_header(dftracer_utils_store_objects MIN_COUNT 1)
 # +++++++++++++++++++++++++++++++++++++++++
 
 set(DFTRACER_UTILS_VEC_SOURCES
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/abi.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/abi_enum_lockstep.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/c_api.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/c_api_enum_lockstep.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/op_registry.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/agg.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/agg/state.cpp
@@ -1254,7 +1254,7 @@ set(DFTRACER_UTILS_DUQL_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/duql/subsumption.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/duql/substr_simd.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/duql/pattern.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/duql/abi.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/duql/c_api.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/duql/literal_set.cpp)
 
 # Highway per-target dispatch functions are referenced only within their TU.
@@ -1353,17 +1353,17 @@ set(DFTRACER_UTILS_DATAFRAME_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/ops/gap_fill.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/ops/asof.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/ops/interval.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/dataframe_abi.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/c_api_dataframe.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/provider_registry.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/node_registry.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/schema_abi.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/c_api_schema.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/mask.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/query/vectorize.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/query/lookup.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/query/overlap.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/query/group_fold.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/plan.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/mask_abi.cpp)
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/c_api_mask.cpp)
 
 # A second build of the string-match kernels with branch padding (see
 # DFTU_JCC_FLAG above); the dispatch file picks one at run time. It is the same

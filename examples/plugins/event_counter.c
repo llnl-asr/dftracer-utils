@@ -7,7 +7,7 @@
  * Run:   dftracer_run ./traces --plugin ./event_counter.so
  */
 
-#include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <stdio.h>
 #include <stdlib.h>

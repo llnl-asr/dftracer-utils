@@ -4,7 +4,7 @@
  * recognize.
  */
 
-#include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/plugins/plugin.h>
 

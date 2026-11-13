@@ -6,7 +6,7 @@
  * holds them and checks that the library stays mapped until the plan is gone.
  */
 
-#include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <stdint.h>
 #include <stdio.h>

@@ -11,8 +11,8 @@ translation unit.
 
 Two headers cover the pieces most programs need:
 
-- ``dftracer/utils/duql/abi.h`` - parse and build query predicates.
-- ``dftracer/utils/dataframe/abi.h`` - build, inspect, and operate on columns
+- ``dftracer/utils/duql/c_api.h`` - parse and build query predicates.
+- ``dftracer/utils/dataframe/c_api.h`` - build, inspect, and operate on columns
   (``dftu_series``) and frames (``dftu_dataframe``), including evaluating a
   query as a mask.
 
@@ -35,7 +35,7 @@ sidesteps a parse error at runtime:
 
 .. code-block:: c
 
-   #include <dftracer/utils/duql/abi.h>
+   #include <dftracer/utils/duql/c_api.h>
 
    /* From duql text: */
    dftu_duql* q1 = dftu_duql_parse("cat == \"POSIX\" and dur > 1000");
@@ -66,7 +66,7 @@ or borrow an existing buffer to avoid the copy:
 
 .. code-block:: c
 
-   #include <dftracer/utils/dataframe/abi.h>
+   #include <dftracer/utils/dataframe/c_api.h>
 
    /* Element types are the named dftu_dtype enum (DFTU_TYPE_BOOL ...
       DFTU_TYPE_BINARY), whose values mirror dataframe::TypeId's C++ enum

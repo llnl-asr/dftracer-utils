@@ -3,7 +3,7 @@
 #define DFTRACER_UTILS_PYTHON_FRAME_FRAME_OP_HELPERS_H
 
 #include <Python.h>
-#include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dstd/deque.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>

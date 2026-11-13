@@ -2,7 +2,7 @@
 /* A real C consumer of the dftu_svc_ops ABI: call a host utility that is now a
  * named op (dftu.hash.fnv1a) on a column the consumer builds itself - the same
  * path a C plugin uses to reach the host's call-host registry. */
-#include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <plugins/abi_c_consumers.h>
 #include <stdint.h>

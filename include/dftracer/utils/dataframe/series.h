@@ -3,7 +3,7 @@
 #define DFTRACER_UTILS_DATAFRAME_SERIES_H
 
 #include <dftracer/utils/common/config.h>
-#include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/scalar.h>
 #include <dftracer/utils/dataframe/types.h>
 #include <dftracer/utils/dstd/fatal.h>
@@ -622,7 +622,7 @@ class Series {
     Series list_get(std::int64_t index) const;
     /// Each row's List<String> joined with `sep`.
     Series list_join(dstd::StringView sep) const;
-    /// The pandas .str batch over ASCII (dataframe/abi.h documents each):
+    /// The pandas .str batch over ASCII (dataframe/c_api.h documents each):
     /// case forms by dftu_str_case, character classes by dftu_str_class.
     Series str_case(std::int32_t op) const;
     Series str_is(std::int32_t cls) const;

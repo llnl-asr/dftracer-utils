@@ -139,7 +139,7 @@ target_include_directories(dur_stats_producer_plugin
                            PRIVATE ${CMAKE_SOURCE_DIR}/include)
 
 # The one example that reads a result frame, so the one that links the
-# dataframe C ABI. C11 because it includes both abi.h headers, which repeat the
+# dataframe C ABI. C11 because it includes both abi.h and c_api.h headers, which repeat the
 # dftu_series / dftu_dataframe typedefs.
 add_library(dur_stats_consumer_plugin MODULE dur_stats_consumer.c)
 target_set_warnings(dur_stats_consumer_plugin)

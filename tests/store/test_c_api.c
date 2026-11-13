@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-#include <dftracer/utils/store/abi.h>
+#include <dftracer/utils/store/c_api.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>

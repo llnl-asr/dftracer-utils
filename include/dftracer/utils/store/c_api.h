@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
-#ifndef DFTRACER_UTILS_STORE_ABI_H
-#define DFTRACER_UTILS_STORE_ABI_H
+#ifndef DFTRACER_UTILS_STORE_C_API_H
+#define DFTRACER_UTILS_STORE_C_API_H
 
-#include <dftracer/utils/common/abi.h>
+#include <dftracer/utils/common/c_api.h>
 #include <dftracer/utils/common/export.h>
 #include <stdint.h>
 
@@ -11,7 +11,7 @@
  * and the types around it (see store/store.h). No C++ type or exception
  * crosses this boundary. A fallible function returns a dftu_status, gives its
  * result through an out-parameter and takes a caller-owned dftu_error as its
- * last parameter; see common/abi.h.
+ * last parameter; see common/c_api.h.
  *
  * Blocking: each call that wraps a coroutine (commit, publish, flush, close,
  * pack) runs it to the end on the default runtime and returns when it is done.
@@ -386,4 +386,4 @@ DFTU_EXPORT void dftu_store_cursor_free(dftu_store_cursor_t* cursor);
 }
 #endif
 
-#endif  // DFTRACER_UTILS_STORE_ABI_H
+#endif  // DFTRACER_UTILS_STORE_C_API_H

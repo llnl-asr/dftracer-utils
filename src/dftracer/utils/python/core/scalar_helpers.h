@@ -3,7 +3,7 @@
 #define DFTRACER_UTILS_PYTHON_CORE_SCALAR_HELPERS_H
 
 #include <Python.h>
-#include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dataframe/c_api.h>
 
 // Fill dftu_scalar from a Python number: float -> F64, int -> I64, or U64 for
 // an integer above INT64_MAX (so the whole uint64 range stays exact); a str

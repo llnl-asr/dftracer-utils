@@ -16,7 +16,7 @@ CLASSES = [
     "src-crossmodule",
     "keep-abi",
 ]
-ABI_FILES = {"plugins/abi.h", "plugins/arrow_abi.h", "dataframe/abi.h"}
+ABI_FILES = {"plugins/abi.h", "plugins/arrow_abi.h", "dataframe/c_api.h"}
 # Vendored third-party single headers: upstream text, not a component of ours.
 VENDOR = os.path.join("include", UTILS, "dstd", "vendor")
 

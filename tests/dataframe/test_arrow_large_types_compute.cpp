@@ -16,9 +16,9 @@
 // works on them directly - equality, comparison, sort, group_by, a string op,
 // is_in, and take/gather (which sort's reordering relies on).
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
-#include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/arrow.h>
+#include <dftracer/utils/dataframe/c_api.h>
 #include <nanoarrow/nanoarrow.h>
 
 using namespace dftracer::utils;

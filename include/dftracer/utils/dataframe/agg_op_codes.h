@@ -9,10 +9,6 @@
    still carry the code as a fixed-width int for ABI stability and range-check
    it at the boundary. */
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 typedef enum {
     DFTU_AGG_COUNT = 0,
     DFTU_AGG_SUM = 1,
@@ -52,9 +48,5 @@ typedef enum {
     DFTU_AGG_PROD = 35,
     DFTU_AGG_SKETCH_QUANTILE = 36
 } dftu_agg_op;
-
-#ifdef __cplusplus
-}
-#endif
 
 #endif  // DFTRACER_UTILS_DATAFRAME_AGG_OP_CODES_H

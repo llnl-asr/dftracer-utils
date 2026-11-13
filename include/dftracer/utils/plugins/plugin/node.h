@@ -2,7 +2,7 @@
 #ifndef DFTRACER_UTILS_PLUGINS_PLUGIN_NODE_H
 #define DFTRACER_UTILS_PLUGINS_PLUGIN_NODE_H
 
-#include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>

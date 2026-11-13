@@ -5,7 +5,7 @@
 // end-to-end from real C, not just from C++.
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/scope.h>
-#include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -15,7 +15,7 @@
 #include <dftracer/utils/plugins/plugin.h>
 #include <dftracer/utils/plugins/task_abi.h>
 #include <dftracer/utils/runtime/runtime.h>
-// After fold_adapter.h so nanoarrow is set up before dataframe/abi.h's
+// After fold_adapter.h so nanoarrow is set up before dataframe/c_api.h's
 // arrow_abi.
 #include <dirent.h>
 #include <doctest/doctest.h>

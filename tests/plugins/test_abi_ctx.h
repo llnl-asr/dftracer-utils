@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_TESTS_PLUGIN_ABI_CTX_H
 #define DFTRACER_UTILS_TESTS_PLUGIN_ABI_CTX_H
-#include <dftracer/utils/common/abi.h>
+#include <dftracer/utils/common/c_api.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/plugins/abi_context.h>

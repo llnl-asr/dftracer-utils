@@ -5,7 +5,7 @@
 // stay in agreement with the JIT/plugin path (the plugin prims header mirrors
 // them).
 
-#include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/internal/buffers.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/kernels/prims.h>

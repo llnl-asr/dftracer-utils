@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
-#ifndef DFTRACER_UTILS_DUQL_ABI_H
-#define DFTRACER_UTILS_DUQL_ABI_H
+#ifndef DFTRACER_UTILS_DUQL_C_API_H
+#define DFTRACER_UTILS_DUQL_C_API_H
 
 #include <dftracer/utils/common/export.h>
 #include <stdint.h>
@@ -97,4 +97,4 @@ DFTU_EXPORT void dftu_duql_string_free(char* s);
 }
 #endif
 
-#endif  // DFTRACER_UTILS_DUQL_ABI_H
+#endif  // DFTRACER_UTILS_DUQL_C_API_H

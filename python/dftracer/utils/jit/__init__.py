@@ -2558,7 +2558,7 @@ def _emit(
     out: List[str] = [
         "#include <dftracer/utils/plugins/abi.h>",
         "#include <dftracer/utils/plugins/prims.h>",
-        "#include <dftracer/utils/dataframe/abi.h>",
+        "#include <dftracer/utils/dataframe/c_api.h>",
         "",
         "#include <cstring>",
         "#include <stdint.h>",
@@ -3067,7 +3067,7 @@ def _emit_vfold(
     plan_duql_field = "plan_duql" if plan_duql is not None else "NULL"
     out: List[str] = [
         "#include <dftracer/utils/plugins/abi.h>",
-        "#include <dftracer/utils/dataframe/abi.h>",
+        "#include <dftracer/utils/dataframe/c_api.h>",
         "",
         "#include <stdint.h>",
         "#include <stdlib.h>",

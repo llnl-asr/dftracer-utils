@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-#include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/dataframe_handle.h>
@@ -18,8 +18,6 @@
 #include <type_traits>
 #include <vector>
 
-extern "C" {
-
 dftu_series* dftu_series_take_i32(const dftu_series* v, const int64_t* idx,
                                   int32_t n) {
     return dftu_series_take(v, idx, n);
@@ -28,8 +26,6 @@ dftu_dataframe* dftu_dataframe_take_i32(const dftu_dataframe* df,
                                         const int64_t* idx, int32_t n) {
     return dftu_dataframe_take(df, idx, n);
 }
-
-}  // extern "C"
 
 namespace {
 
@@ -293,8 +289,6 @@ class PluginJoin {
 };
 
 }  // namespace
-
-extern "C" {
 
 dftu_op_kind dftu_op_kind_of(dftu_op_sig sig) {
     dftu_op_tok r = DFTU_OP_SIG_RET(sig);
@@ -836,8 +830,6 @@ dftu_lazyframe* dftu_op_run_lazy(const dftu_op_desc* op,
             return nullptr;
     }
 }
-
-}  // extern "C"
 
 namespace dftracer::utils::dataframe {
 

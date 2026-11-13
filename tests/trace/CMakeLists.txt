@@ -76,7 +76,7 @@ set(TRACE_TEST_SOURCES
     views/test_result_join.cpp
     views/test_view_join.cpp
     views/test_compare_view.cpp
-    views/test_view_c_abi.cpp
+    views/test_c_api.cpp
     views/test_duql_paths.cpp
     views/test_duql_wildcards.cpp
     views/test_drop_rename_views.cpp

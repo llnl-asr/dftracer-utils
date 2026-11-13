@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-#include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/numeric_dispatch.h>
 #include <dftracer/utils/dataframe/internal/varwidth_offsets.h>
@@ -826,8 +826,6 @@ Series log(const Series& v) { return Series{dftu_series_log(v.handle())}; }
 
 using dftracer::utils::dataframe::TypeId;
 
-extern "C" {
-
 dftu_series* dftu_series_abs(const dftu_series* a) {
     DFTU_FLAT_OPERAND(a, flat_a, dftu_series_abs(flat_a));
 
@@ -1155,7 +1153,5 @@ dftu_series* dftu_series_log(const dftu_series* a) {
      static_cast<std::size_t>(a->length));
     return out;
 }
-
-}  // extern "C"
 
 #endif  // HWY_ONCE

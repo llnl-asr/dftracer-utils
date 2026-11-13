@@ -3,7 +3,7 @@
 #define DFTRACER_UTILS_DATAFRAME_EXPR_H
 
 #include <dftracer/utils/common/export.h>
-#include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/result.h>

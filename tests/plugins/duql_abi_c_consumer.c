@@ -3,7 +3,7 @@
  * sees only abi.h. The C++ harness builds the host, interns the strings, and
  * constructs the events; this compiles the filter and matches through the raw
  * vtable. */
-#include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <plugins/abi_c_consumers.h>
 #include <stdint.h>

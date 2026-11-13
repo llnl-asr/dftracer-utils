@@ -5,7 +5,7 @@
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/json/value.h>
-#include <dftracer/utils/trace/index/abi.h>
+#include <dftracer/utils/trace/index/c_api.h>
 #include <dftracer/utils/trace/trace_config.h>
 #include <unistd.h>
 

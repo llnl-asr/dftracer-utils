@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
-#ifndef DFTRACER_UTILS_DATAFRAME_ABI_H
-#define DFTRACER_UTILS_DATAFRAME_ABI_H
+#ifndef DFTRACER_UTILS_DATAFRAME_C_API_H
+#define DFTRACER_UTILS_DATAFRAME_C_API_H
 
-#include <dftracer/utils/common/abi.h>
+#include <dftracer/utils/common/c_api.h>
 #include <dftracer/utils/common/export.h>
-#include <dftracer/utils/duql/abi.h>
+#include <dftracer/utils/duql/c_api.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -2557,4 +2557,4 @@ DFTU_EXPORT dftu_lazyframe* dftu_lazyframe_frame_op(
 } /* extern "C" */
 #endif
 
-#endif  // DFTRACER_UTILS_DATAFRAME_ABI_H
+#endif  // DFTRACER_UTILS_DATAFRAME_C_API_H

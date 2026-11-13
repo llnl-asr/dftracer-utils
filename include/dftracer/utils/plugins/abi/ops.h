@@ -9,7 +9,7 @@
  * dftracer/utils/plugins/abi.h rather than this file directly.
  */
 
-#include <dftracer/utils/dataframe/abi.h> /* dftu_scalar, by value below */
+#include <dftracer/utils/dataframe/c_api.h> /* dftu_scalar, by value below */
 #include <dftracer/utils/plugins/abi/core.h>
 #include <stdint.h>
 
@@ -21,7 +21,7 @@ extern "C" {
 
 /** Host-service group exposing the dataframe engine's op registry. Each slot
    is a thin name-keyed forwarder to the matching dftu_op_run / dftu_op_find /
-   dftu_op_register function (dftracer/utils/dataframe/abi.h): a plugin looks
+   dftu_op_register function (dftracer/utils/dataframe/c_api.h): a plugin looks
    an op up by name and runs it on Series/DataFrame handles it already holds,
    with no need to link the dataframe C ABI itself. Every call that can fail
    returns a @ref dftu_status and sets the message on the caller's ctx. */

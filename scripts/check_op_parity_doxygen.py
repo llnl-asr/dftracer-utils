@@ -43,7 +43,7 @@ CLASSES = {
     "LazyFrame": "classdftracer_1_1utils_1_1dataframe_1_1_lazy_frame.xml",
 }
 
-# Which registry bucket (see dftu_op_kind in abi.h) backs each class.
+# Which registry bucket (see dftu_op_kind in dataframe/c_api.h) backs each class.
 REGISTRY_BUCKET = {"Series": "series", "DataFrame": "frame", "LazyFrame": "lazy"}
 
 MEMBER_RE = re.compile(r'<memberdef kind="function"[^>]*>.*?</memberdef>', re.S)

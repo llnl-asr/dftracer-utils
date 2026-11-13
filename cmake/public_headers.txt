@@ -1,4 +1,4 @@
-dftracer/utils/common/abi.h
+dftracer/utils/common/c_api.h
 dftracer/utils/common/constants.h
 dftracer/utils/common/env.h
 dftracer/utils/common/error.h
@@ -47,7 +47,8 @@ dftracer/utils/coro/timer_service.h
 dftracer/utils/coro/when_all.h
 dftracer/utils/coro/when_any.h
 dftracer/utils/coro/yield.h
-dftracer/utils/dataframe/abi.h
+dftracer/utils/dataframe/c_api.h
+dftracer/utils/dataframe/c_api_agg_expr.h
 dftracer/utils/dataframe/agg.h
 dftracer/utils/dataframe/agg_expr.h
 dftracer/utils/dataframe/agg_op_codes.h
@@ -134,7 +135,7 @@ dftracer/utils/dstd/vector.h
 dftracer/utils/dstd/vendor/concurrentqueue.h
 dftracer/utils/dstd/vendor/unordered_dense.h
 dftracer/utils/dstd/vendor/xxhash.h
-dftracer/utils/duql/abi.h
+dftracer/utils/duql/c_api.h
 dftracer/utils/duql/builder.h
 dftracer/utils/duql/detail/ast.h
 dftracer/utils/duql/detail/ast_string.h
@@ -144,7 +145,7 @@ dftracer/utils/duql/error.h
 dftracer/utils/duql/query.h
 dftracer/utils/duql/types.h
 dftracer/utils/duql/value_map.h
-dftracer/utils/trace/index/abi.h
+dftracer/utils/trace/index/c_api.h
 dftracer/utils/trace/index/indexer.h
 dftracer/utils/trace/index/schemas/dft/agg/aggregation_config.h
 dftracer/utils/json/value.h
@@ -188,7 +189,7 @@ dftracer/utils/plugins/plugin/source.h
 dftracer/utils/plugins/plugin/types.h
 dftracer/utils/plugins/prims.h
 dftracer/utils/plugins/result_registry.h
-dftracer/utils/runtime/abi.h
+dftracer/utils/runtime/c_api.h
 dftracer/utils/runtime/fs/filesystem.h
 dftracer/utils/runtime/fs/fs.h
 dftracer/utils/runtime/io/backend.h
@@ -196,12 +197,12 @@ dftracer/utils/runtime/io/backend_type.h
 dftracer/utils/runtime/runtime.h
 dftracer/utils/runtime/scheduler/task_executor.h
 dftracer/utils/runtime/task_handle.h
-dftracer/utils/store/abi.h
+dftracer/utils/store/c_api.h
 dftracer/utils/store/store.h
 dftracer/utils/trace/args_map.h
 dftracer/utils/trace/time_metric.h
 dftracer/utils/trace/trace_config.h
-dftracer/utils/trace/views/abi.h
+dftracer/utils/trace/views/c_api.h
 dftracer/utils/trace/views/join_type.h
 dftracer/utils/trace/views/live_view.h
 dftracer/utils/trace/views/view.h

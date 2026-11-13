@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
-#ifndef DFTRACER_UTILS_TRACE_INDEX_ABI_H
-#define DFTRACER_UTILS_TRACE_INDEX_ABI_H
+#ifndef DFTRACER_UTILS_TRACE_INDEX_C_API_H
+#define DFTRACER_UTILS_TRACE_INDEX_C_API_H
 
-#include <dftracer/utils/common/abi.h>
+#include <dftracer/utils/common/c_api.h>
 #include <dftracer/utils/common/export.h>
 #include <stdint.h>
 
@@ -12,7 +12,7 @@
  * until done and runs on the default runtime. No C++ exception crosses this
  * boundary. A fallible function returns a dftu_status, gives its result
  * through an out-parameter and takes a caller-owned dftu_error as its last
- * parameter; see common/abi.h.
+ * parameter; see common/c_api.h.
  *
  * Errors: a failing call fills `err` (which may be NULL) and leaves its other
  * out-parameters unchanged, except that an out pointer is set to NULL. A
@@ -212,4 +212,4 @@ DFTU_EXPORT void dftu_indexer_file_list_free(dftu_indexer_file_list* list);
 }
 #endif
 
-#endif  // DFTRACER_UTILS_TRACE_INDEX_ABI_H
+#endif  // DFTRACER_UTILS_TRACE_INDEX_C_API_H

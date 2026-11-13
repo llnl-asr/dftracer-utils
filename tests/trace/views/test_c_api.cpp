@@ -9,7 +9,7 @@
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/trace/views/abi.h>
+#include <dftracer/utils/trace/views/c_api.h>
 #include <doctest/doctest.h>
 #include <task_result.h>
 #include <testing_utilities.h>

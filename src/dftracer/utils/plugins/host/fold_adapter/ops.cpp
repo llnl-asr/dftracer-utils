@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-#include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/op.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/plugins/host/fold_adapter/ext.h>

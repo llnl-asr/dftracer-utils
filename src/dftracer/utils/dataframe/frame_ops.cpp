@@ -27,8 +27,6 @@ bool valid_window_func(dftu_window_func f) {
 
 }  // namespace
 
-extern "C" {
-
 dftu_dataframe* dftu_dataframe_window(
     const dftu_dataframe* frame, const char* const* partition_by,
     int32_t n_part, const char* const* order_by, int32_t n_order,
@@ -109,5 +107,3 @@ dftu_dataframe* dftu_dataframe_interval(const dftu_dataframe* left,
     if (!out) return nullptr;
     return dataframe::dataframe_handle_wrap(std::move(*out));
 }
-
-}  // extern "C"

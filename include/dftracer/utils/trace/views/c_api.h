@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
-#ifndef DFTRACER_UTILS_TRACE_VIEWS_ABI_H
-#define DFTRACER_UTILS_TRACE_VIEWS_ABI_H
+#ifndef DFTRACER_UTILS_TRACE_VIEWS_C_API_H
+#define DFTRACER_UTILS_TRACE_VIEWS_C_API_H
 
 #include <dftracer/utils/common/export.h>
-#include <dftracer/utils/dataframe/abi.h>
-#include <dftracer/utils/duql/abi.h>
-#include <dftracer/utils/runtime/abi.h>
+#include <dftracer/utils/dataframe/c_api.h>
+#include <dftracer/utils/duql/c_api.h>
+#include <dftracer/utils/runtime/c_api.h>
 #include <stdint.h>
 
 /*
@@ -241,4 +241,4 @@ DFTU_EXPORT char* dftu_view_explain_duql(const dftu_view* v, const char* text,
 }
 #endif
 
-#endif  // DFTRACER_UTILS_TRACE_VIEWS_ABI_H
+#endif  // DFTRACER_UTILS_TRACE_VIEWS_C_API_H

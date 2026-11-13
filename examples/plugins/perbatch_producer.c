@@ -8,7 +8,7 @@
  *           -o perbatch_producer.so perbatch_producer.c
  */
 
-#include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <stdlib.h>
 #include <string.h>

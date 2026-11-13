@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
-#ifndef DFTRACER_UTILS_COMMON_ABI_ERROR_H
-#define DFTRACER_UTILS_COMMON_ABI_ERROR_H
+#ifndef DFTRACER_UTILS_COMMON_C_API_ERROR_H
+#define DFTRACER_UTILS_COMMON_C_API_ERROR_H
 
-#include <dftracer/utils/common/abi.h>
+#include <dftracer/utils/common/c_api.h>
 #include <dftracer/utils/dstd/error.h>
 
 #include <cstddef>
@@ -29,4 +29,4 @@ bool copy_struct(void* dst, std::size_t dst_size, const void* src,
 
 }  // namespace dftracer::utils::common
 
-#endif  // DFTRACER_UTILS_COMMON_ABI_ERROR_H
+#endif  // DFTRACER_UTILS_COMMON_C_API_ERROR_H

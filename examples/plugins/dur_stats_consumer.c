@@ -17,7 +17,7 @@
 #include <dftracer/utils/plugins/abi.h>
 /* Reading a result frame needs the engine's column ops, so this example links
  * the dataframe C ABI; the other examples link nothing. */
-#include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dataframe/c_api.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

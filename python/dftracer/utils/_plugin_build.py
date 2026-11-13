@@ -126,7 +126,7 @@ def _abi_fingerprint(include: str) -> str:
         except OSError:
             h.update(b"\0")
     try:
-        h.update((base / "dataframe/abi.h").read_bytes())
+        h.update((base / "dataframe/c_api.h").read_bytes())
     except OSError:
         h.update(b"\0")
     return h.hexdigest()[:16]

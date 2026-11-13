@@ -3,8 +3,8 @@
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/duql/abi.h>
 #include <dftracer/utils/duql/builder.h>
+#include <dftracer/utils/duql/c_api.h>
 #include <dftracer/utils/duql/internal/duql_handle.h>
 #include <dftracer/utils/duql/query.h>
 

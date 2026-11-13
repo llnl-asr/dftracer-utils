@@ -3,12 +3,12 @@
 // LazyFrame source (dftu.svc.providers@0), not just consume rows. Drives the
 // real dlopen path through Plugins::Builder against provider_fixture_plugin,
 // then reaches the registered providers through the public
-// dftu_lazyframe_from_provider entry point (dataframe/abi.h) - the same call
+// dftu_lazyframe_from_provider entry point (dataframe/c_api.h) - the same call
 // a non-plugin C caller would make.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/task.h>
-#include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi.h>

@@ -54,13 +54,13 @@ REQUIRED_PATTERNS = (
     # The whole include/dftracer/utils tree ships (not a hand-picked subset) so
     # any public C/C++ ABI header compiles standalone from the wheel: spot
     # check headers from directories that were NOT part of the old subset.
-    "dftracer/include/dftracer/utils/common/abi.h",
-    "dftracer/include/dftracer/utils/store/abi.h",
-    "dftracer/include/dftracer/utils/runtime/abi.h",
-    "dftracer/include/dftracer/utils/dataframe/abi.h",
-    "dftracer/include/dftracer/utils/duql/abi.h",
+    "dftracer/include/dftracer/utils/common/c_api.h",
+    "dftracer/include/dftracer/utils/store/c_api.h",
+    "dftracer/include/dftracer/utils/runtime/c_api.h",
+    "dftracer/include/dftracer/utils/dataframe/c_api.h",
+    "dftracer/include/dftracer/utils/duql/c_api.h",
     "dftracer/include/dftracer/utils/trace/index/indexer.h",
-    "dftracer/include/dftracer/utils/trace/index/abi.h",
+    "dftracer/include/dftracer/utils/trace/index/c_api.h",
 )
 
 # Index build internals stay private; Indexer (index/indexer.h) replaces them.

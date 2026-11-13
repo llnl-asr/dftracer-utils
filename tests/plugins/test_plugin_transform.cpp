@@ -8,7 +8,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 
 #include <dftracer/utils/common/str_format.h>
-#include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
@@ -20,7 +20,7 @@
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view.h>
-// After fold_adapter.h so nanoarrow is set up before dataframe/abi.h's
+// After fold_adapter.h so nanoarrow is set up before dataframe/c_api.h's
 // arrow_abi.
 #include <doctest/doctest.h>
 #include <plugins/test_plugin_common.h>

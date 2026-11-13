@@ -4,7 +4,7 @@
 
 /* Entry points of the C consumers of the plugin and dataframe C ABIs; the
  * C++ test drives them. */
-#include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <stdint.h>
 

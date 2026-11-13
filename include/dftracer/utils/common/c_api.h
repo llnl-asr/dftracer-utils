@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
-#ifndef DFTRACER_UTILS_COMMON_ABI_H
-#define DFTRACER_UTILS_COMMON_ABI_H
+#ifndef DFTRACER_UTILS_COMMON_C_API_H
+#define DFTRACER_UTILS_COMMON_C_API_H
 
 /** @file
  * The error and call-context types every C ABI shares.
@@ -26,7 +26,7 @@ extern "C" {
 
 typedef int32_t dftu_status;
 
-/* Error codes are -(dstd::Condition + 1); abi_enum_lockstep.cpp checks it. */
+/* Error codes are -(dstd::Condition + 1); c_api_enum_lockstep.cpp checks it. */
 enum {
     DFTU_OK = 0,
     DFTU_END = 1,     /**< a cursor or iterator has no more items */
@@ -107,4 +107,4 @@ static inline dftu_status dftu_check(dftu_ctx* c) { return c->vt->check(c); }
 }
 #endif
 
-#endif /* DFTRACER_UTILS_COMMON_ABI_H */
+#endif /* DFTRACER_UTILS_COMMON_C_API_H */

@@ -5,11 +5,11 @@
 /** @file
  * Fundamental types shared by every plugin ABI service group: value types,
  * opaque handles and the host descriptor. Errors and the call context are in
- * dftracer/utils/common/abi.h. Include
+ * dftracer/utils/common/c_api.h. Include
  * dftracer/utils/plugins/abi.h rather than this file directly.
  */
 
-#include <dftracer/utils/common/abi.h>
+#include <dftracer/utils/common/c_api.h>
 #include <dftracer/utils/common/export.h>
 #include <dftracer/utils/plugins/abi_version.h> /* DFTRACER_UTILS_PLUGIN_ABI_VERSION */
 #include <stddef.h>
@@ -86,7 +86,7 @@ typedef struct dftu_trace_writer
     dftu_trace_writer;            /**< trace output; host-owned */
 typedef struct dftu_job dftu_job; /**< async recipe; see abi/task.h */
 /** A columnar batch/table handle for the vectorized fold seam. The concrete
-   type is the dataframe engine's (dftracer/utils/dataframe/abi.h); a plugin
+   type is the dataframe engine's (dftracer/utils/dataframe/c_api.h); a plugin
    that uses it includes that header for the dftu_dataframe and dftu_series
    column ops. */
 #ifndef DFTU_TYPEDEF_DFTU_DATAFRAME
@@ -94,21 +94,22 @@ typedef struct dftu_job dftu_job; /**< async recipe; see abi/task.h */
 typedef struct dftu_dataframe dftu_dataframe;
 #endif
 /** A deferred columnar plan handle (the lazy counterpart to dftu_dataframe).
-   The concrete type is the dataframe engine's (dftracer/utils/dataframe/abi.h).
+   The concrete type is the dataframe engine's
+   (dftracer/utils/dataframe/c_api.h).
  */
 #ifndef DFTU_TYPEDEF_DFTU_LAZYFRAME
 #define DFTU_TYPEDEF_DFTU_LAZYFRAME
 typedef struct dftu_lazyframe dftu_lazyframe;
 #endif
 /** A single column handle for the vectorized fold seam. The concrete type is
-   the dataframe engine's (dftracer/utils/dataframe/abi.h); a plugin that uses
+   the dataframe engine's (dftracer/utils/dataframe/c_api.h); a plugin that uses
    it includes that header for the column ops. */
 #ifndef DFTU_TYPEDEF_DFTU_SERIES
 #define DFTU_TYPEDEF_DFTU_SERIES
 typedef struct dftu_series dftu_series;
 #endif
 /** A registered dataframe op record and its call-site operand bag. The
-   concrete types are the dataframe engine's (dftracer/utils/dataframe/abi.h).
+   concrete types are the dataframe engine's (dftracer/utils/dataframe/c_api.h).
  */
 #ifndef DFTU_TYPEDEF_DFTU_OP_DESC
 #define DFTU_TYPEDEF_DFTU_OP_DESC
@@ -119,7 +120,7 @@ typedef struct dftu_op_desc dftu_op_desc;
 typedef struct dftu_op_arg dftu_op_arg;
 #endif
 /** A tagged scalar value. The concrete type is the dataframe engine's
-   (dftracer/utils/dataframe/abi.h); a plugin that reads its fields includes
+   (dftracer/utils/dataframe/c_api.h); a plugin that reads its fields includes
    that header. Passed by pointer here so this header need not define it. */
 #ifndef DFTU_TYPEDEF_DFTU_SCALAR
 #define DFTU_TYPEDEF_DFTU_SCALAR

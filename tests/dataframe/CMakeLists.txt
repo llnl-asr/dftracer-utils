@@ -114,7 +114,7 @@ foreach(test_file ${DATAFRAME_TEST_SOURCES})
 endforeach()
 
 # ##############################################################################
-# DFTU_SCALAR_* C macros (guarded #ifndef __cplusplus in abi.h; needs a C TU)
+# DFTU_SCALAR_* C macros (guarded #ifndef __cplusplus in c_api.h; needs a C TU)
 # ##############################################################################
 
 add_executable(dataframe_test_scalar_macros_c test_scalar_macros_c.c)

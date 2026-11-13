@@ -2,7 +2,7 @@
 #ifndef DFTRACER_UTILS_DATAFRAME_INTERNAL_LAZYFRAME_HANDLE_H
 #define DFTRACER_UTILS_DATAFRAME_INTERNAL_LAZYFRAME_HANDLE_H
 
-#include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 
 namespace dftracer::utils::dataframe {

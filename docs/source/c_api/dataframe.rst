@@ -1,4 +1,4 @@
-:description: The flat C ABI to the columnar engine: construct, inspect, free, and operate on columns from any language or plugin via dataframe/abi.h.
+:description: The flat C ABI to the columnar engine: construct, inspect, free, and operate on columns from any language or plugin via dataframe/c_api.h.
 
 DataFrame
 =========
@@ -10,7 +10,7 @@ DataFrame
 
 The flat C interface to the columnar engine: construct, inspect, and free
 columns, and run the columnar operators, from any language or a plugin. Include
-``dftracer/utils/dataframe/abi.h``.
+``dftracer/utils/dataframe/c_api.h``.
 
-.. doxygenfile:: dftracer/utils/dataframe/abi.h
+.. doxygenfile:: dftracer/utils/dataframe/c_api.h
    :project: dftracer-utils

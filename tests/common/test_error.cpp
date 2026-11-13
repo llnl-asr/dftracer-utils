@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/common/abi.h>
-#include <dftracer/utils/common/abi_error.h>
+#include <dftracer/utils/common/c_api.h>
+#include <dftracer/utils/common/c_api_error.h>
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/memory_config.h>
 #include <dftracer/utils/dstd/string.h>

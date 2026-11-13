@@ -3,7 +3,7 @@
 // alone. Nothing here calls register_host_ops(), so a static build that lets
 // the linker drop the initializer's object file fails this and only this test.
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dataframe/c_api.h>
 #include <doctest/doctest.h>
 
 TEST_SUITE("host_ops") {

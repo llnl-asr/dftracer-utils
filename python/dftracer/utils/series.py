@@ -513,7 +513,7 @@ def _require_pyarrow() -> "ModuleType":
     return pa
 
 
-# Comparison op codes, mirroring abi.h DFTU_CMP_* (passed to native compare()).
+# Comparison op codes, mirroring c_api.h DFTU_CMP_* (passed to native compare()).
 _CMP_GT = 0
 _CMP_GE = 1
 _CMP_LT = 2
@@ -524,7 +524,7 @@ _LOGICAL_AND = 0
 _LOGICAL_OR = 1
 
 _NormForm = Literal["NFC", "NFKC", "NFD", "NFKD"]
-# abi.h DFTU_NORM_* and DFTU_WRAP_*.
+# c_api.h DFTU_NORM_* and DFTU_WRAP_*.
 _NORM_FORMS: Dict[str, int] = {"NFC": 0, "NFKC": 1, "NFD": 2, "NFKD": 3}
 _WRAP_FLAG_BITS = (1, 2, 4, 8, 16)
 

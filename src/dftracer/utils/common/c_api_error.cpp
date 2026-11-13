@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-#include <dftracer/utils/common/abi_error.h>
+#include <dftracer/utils/common/c_api_error.h>
 #include <dftracer/utils/memory/detail/heap.h>
 
 #include <cstring>

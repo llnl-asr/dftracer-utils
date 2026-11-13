@@ -3,7 +3,7 @@
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/little_endian.h>
 #include <dftracer/utils/dstd/string.h>
-#include <dftracer/utils/store/abi.h>
+#include <dftracer/utils/store/c_api.h>
 #include <dftracer/utils/store/data_file.h>
 #include <doctest/doctest.h>
 #include <fcntl.h>

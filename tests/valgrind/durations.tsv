@@ -36,7 +36,7 @@ trace/views/test_duql_wildcards	98.4
 binaries/test_dftracer_index	98.4
 binaries/test_dftracer_genesis_gen_dist	94.6
 trace/views/test_view_duql_sources	92.3
-trace/views/test_view_c_abi	90.1
+trace/views/test_c_api	90.1
 trace/views/test_view_agg_parity	86.9
 trace/views/test_time_window	85.7
 trace/index/test_build_memory	79.2
@@ -145,7 +145,7 @@ trace/index/test_schema_class	9.7
 dataframe/test_lazy_frame_ops	9.7
 dataframe/test_join_null_keys	9.7
 coro/test_coro_syntax	9.7
-runtime/test_runtime_abi	9.6
+runtime/test_c_api	9.6
 dataframe/test_string_simd	9.5
 dataframe/test_expr_string_methods	9.4
 trace/arrow/test_arrow_ipc_reader	9.3

@@ -2,7 +2,7 @@
 # Installs the build into a scratch prefix, then compiles every installed header
 # alone: one source file per header holding only that include, C++20, with the
 # prefix as the only include path. A header that needs src/ or a third-party
-# include fails here. The abi headers also compile as plain C.
+# include fails here. The abi and c_api headers also compile as plain C.
 #
 # Usage: cmake -DBUILD_DIR=<build tree> -DWORK_DIR=<scratch dir> -DGENERATOR=...
 #              -DC_COMPILER=... -DCXX_COMPILER=... -DCXX_FLAGS=... -P this file
@@ -42,7 +42,7 @@ foreach(header IN LISTS headers)
   set(source "${PROJECT_DIR}/src/${id}.cpp")
   file(WRITE "${source}" "#include <${header}>\n")
   list(APPEND cxx_sources "${source}")
-  if(header MATCHES "abi\\.h$|/abi/[^/]+\\.h$")
+  if(header MATCHES "abi\\.h$|/abi/[^/]+\\.h$|/c_api[^/]*\\.h$")
     set(source "${PROJECT_DIR}/src/${id}.c")
     file(WRITE "${source}" "#include <${header}>\n")
     list(APPEND c_sources "${source}")

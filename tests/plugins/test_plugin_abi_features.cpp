@@ -13,7 +13,7 @@
 
 // After plugin.h/fold_adapter.h so nanoarrow is already set up for arrow_abi.h.
 #include <dftracer/utils/common/str_format.h>
-#include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/scalar.h>
 #include <dftracer/utils/dataframe/types.h>
 #include <dftracer/utils/dstd/fs.h>

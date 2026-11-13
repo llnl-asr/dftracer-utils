@@ -3,7 +3,7 @@
 // registry in op_registry.cpp, and dftu_lazyframe_from_provider, which builds a
 // plan over a provider by name.
 
-#include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/internal/lazyframe_handle.h>
 #include <dftracer/utils/dataframe/internal/provider_registry.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
@@ -88,8 +88,6 @@ dstd::SharedPtr<ProviderFactory> find_provider(dstd::StringView name) {
 
 }  // namespace dftracer::utils::dataframe
 
-extern "C" {
-
 int dftu_provider_unregister(const char* name) {
     if (!name) return 1;
     return dftracer::utils::dataframe::unregister_provider(name) ? 0 : 1;
@@ -104,5 +102,3 @@ dftu_lazyframe* dftu_lazyframe_from_provider(const char* name) {
     return dftracer::utils::dataframe::lazyframe_handle_wrap(
         dftracer::utils::dataframe::LazyFrame::scan(factory->make_source()));
 }
-
-}  // extern "C"

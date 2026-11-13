@@ -2,7 +2,7 @@
 #ifndef DFTRACER_UTILS_DATAFRAME_FRAME_OPS_H
 #define DFTRACER_UTILS_DATAFRAME_FRAME_OPS_H
 
-#include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/types.h>
 #include <dftracer/utils/dstd/optional.h>

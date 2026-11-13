@@ -2,7 +2,7 @@
 #ifndef DFTRACER_UTILS_PLUGINS_TASK_ABI_H
 #define DFTRACER_UTILS_PLUGINS_TASK_ABI_H
 
-#include <dftracer/utils/common/abi.h>
+#include <dftracer/utils/common/c_api.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/memory.h>

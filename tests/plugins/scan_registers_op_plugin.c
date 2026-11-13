@@ -7,7 +7,7 @@
  * than silently accepted.
  */
 
-#include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <stdint.h>
 #include <stdlib.h>

@@ -2,7 +2,7 @@
 #ifndef DFTRACER_UTILS_DUQL_INTERNAL_DUQL_HANDLE_H
 #define DFTRACER_UTILS_DUQL_INTERNAL_DUQL_HANDLE_H
 
-#include <dftracer/utils/duql/abi.h>
+#include <dftracer/utils/duql/c_api.h>
 #include <dftracer/utils/duql/query.h>
 
 namespace dftracer::utils::duql {

@@ -33,6 +33,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Rename the C API headers `abi.h` to `c_api.h` in `common`, `dataframe`, `duql`, `runtime`, `store`, `trace/index` and `trace/views`.
+  Move the aggregate-over-expression C declarations from `dataframe/agg_expr.h` to the new `dataframe/c_api_agg_expr.h`.
+  The plugin headers `plugins/abi.h` and `plugins/abi/` keep their names.
 - Make the coroutine library throw and catch nothing.
   A task ends with a `dstd::Error` by `co_await coro::fail_with(error)`, or by `co_await` on a `dstd::Error` or an error `dstd::Result`.
   `co_await` on a task that ended with an error ends the awaiting task with the same error, and `Scope::join`, `when_all`, `when_any` and `SpawnFuture` do the same for the first error of their children.

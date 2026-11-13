@@ -257,14 +257,15 @@ class PivotCursor : public Cursor {
         if (refusal.refused()) return refusal.error();
         const std::size_t R = first_row.size();
         DataFrame out;
-        out.names.push_back(index_);
+        out.names.push_back(dstd::SharedString{index_});
         out.columns.push_back(ic.take(first_row).materialize());
         dstd::Vector<std::int64_t> ti(R);
         for (std::int64_t c = 0; c < C; ++c) {
             for (std::size_t r = 0; r < R; ++r)
                 ti[r] = cell_src[r * static_cast<std::size_t>(C) +
                                  static_cast<std::size_t>(c)];
-            out.names.push_back(produced_[static_cast<std::size_t>(c) + 1]);
+            out.names.push_back(
+                dstd::SharedString{produced_[static_cast<std::size_t>(c) + 1]});
             out.columns.push_back(vc.take(ti).materialize());
         }
         return MorselResult(morsel_of(std::move(out)));

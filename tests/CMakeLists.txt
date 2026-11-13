@@ -330,6 +330,7 @@ set(TEST_CPP_SOURCES
     dstd/test_raw_buffer.cpp
     dstd/test_expected.cpp
     dstd/test_error.cpp
+    dstd/test_shared_string.cpp
     dstd/test_shutdown.cpp
     dstd/test_std_extras.cpp
     common/test_filesystem_info.cpp

@@ -182,13 +182,14 @@ class GroupByCursor : public Cursor {
             if (dyn_specs_.empty()) return agg_accumulate(st, keys, values);
             dstd::Vector<AggDynInput> dyn;
             const DataFrame rest =
-                rest_dyn ? rest_fields(m.columns.back()) : DataFrame{};
+                rest_dyn ? rest_fields(m.columns.back(), &names_) : DataFrame{};
             dyn.reserve(sch_dyn.size() + rest.columns.size());
             for (const auto& [ci, name] : sch_dyn)
                 dyn.push_back({name, &m.columns[static_cast<std::size_t>(ci)]});
             for (std::size_t i = 0; i < rest.columns.size(); ++i)
-                if (rest.names[i].rfind(dyn_prefix_, 0) == 0)
-                    dyn.push_back({rest.names[i].substr(dyn_prefix_.size()),
+                if (rest.names[i].view().rfind(dyn_prefix_, 0) == 0)
+                    dyn.push_back({dstd::String{rest.names[i].view().substr(
+                                       dyn_prefix_.size())},
                                    &rest.columns[i]});
             return agg_accumulate(st, keys, values, dyn);
         };
@@ -240,7 +241,7 @@ class GroupByCursor : public Cursor {
 
         if (!spilled_) {
             DataFrame r = agg_finalize(*state, keys_);
-            out_names_ = r.names;
+            out_names_ = dstd::to_strings(r.names);
             result_ = to_morsel(r);
         } else {
             if (agg_group_count(*state) > 0) {
@@ -485,12 +486,13 @@ class GroupByCursor : public Cursor {
             DataFrame r = dyn_specs_.empty()
                               ? agg_finalize(*merged, keys_)
                               : agg_finalize(*merged, keys_, layout_);
-            out_names_ = r.names;
+            out_names_ = dstd::to_strings(r.names);
             chunks_.set(to_morsel(r));
         }
     }
 
     dstd::UniquePtr<Cursor> in_;
+    mutable NameCache names_;
     dstd::Vector<dstd::String> sch_;
     dstd::Vector<dstd::String> keys_;
     dstd::Vector<GroupAgg> aggs_;

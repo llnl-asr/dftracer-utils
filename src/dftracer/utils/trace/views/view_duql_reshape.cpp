@@ -346,7 +346,8 @@ Status Applier::stage(const duql::PipelineExpand& e) {
                     for (std::int64_t i = 0; i < child.num_children(); ++i) {
                         dstd::String joined_name(name);
                         joined_name.append(".").append(child.field_name(i));
-                        out.names.push_back(std::move(joined_name));
+                        out.names.push_back(
+                            dstd::SharedString{std::move(joined_name)});
                         out.columns.push_back(child.child(i).take(element));
                     }
                 } else if (off) {

@@ -91,7 +91,7 @@ TEST_CASE("a bool reduction agrees with the group-by sum") {
     const std::int64_t expected =
         dftu_utils_test::ok(bools({true, false, true, true}).sum()).i64();
     dataframe::DataFrame df;
-    df.names = {"k", "flag"};
+    df.names = dstd::make_shared_strings({"k", "flag"});
     df.columns.push_back(i64({7, 7, 7, 7}));
     df.columns.push_back(bools({true, false, true, true}));
     dataframe::DataFrame g = dftu_utils_test::ok(df.group_by(

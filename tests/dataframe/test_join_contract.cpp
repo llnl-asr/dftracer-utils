@@ -22,7 +22,7 @@ DataFrame keyed_frame() {
     const std::int64_t keys[] = {1, 2, 3};
     const std::int64_t values[] = {10, 20, 30};
     DataFrame df;
-    df.names = {"k", "v"};
+    df.names = dstd::make_shared_strings({"k", "v"});
     df.columns.push_back(Series::flat_i64(keys, 3));
     df.columns.push_back(Series::flat_i64(values, 3));
     return df;

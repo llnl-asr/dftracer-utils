@@ -122,16 +122,20 @@ TEST_SUITE("View duql sources") {
         const View v = view_of(write_records(env, "t", dftracer_lines()));
         const dataframe::DataFrame files =
             frame(v.duql("from files | sort fhash"));
-        CHECK(files.names == dstd::Vector<dstd::String>{"fhash", "path"});
+        CHECK(dstd::to_strings(files.names) ==
+              dstd::Vector<dstd::String>{"fhash", "path"});
         CHECK(column(files, "path") ==
               dstd::Vector<dstd::String>{"/data/a", "/data/b"});
         const dataframe::DataFrame hosts = frame(v.duql("from hosts"));
-        CHECK(hosts.names == dstd::Vector<dstd::String>{"hhash", "name"});
+        CHECK(dstd::to_strings(hosts.names) ==
+              dstd::Vector<dstd::String>{"hhash", "name"});
         CHECK(column(hosts, "name") == dstd::Vector<dstd::String>{"node1"});
         const dataframe::DataFrame strings = frame(v.duql("from strings"));
-        CHECK(strings.names == dstd::Vector<dstd::String>{"shash", "value"});
+        CHECK(dstd::to_strings(strings.names) ==
+              dstd::Vector<dstd::String>{"shash", "value"});
         const dataframe::DataFrame ranks = frame(v.duql("from ranks"));
-        CHECK(ranks.names == dstd::Vector<dstd::String>{"pid", "rank"});
+        CHECK(dstd::to_strings(ranks.names) ==
+              dstd::Vector<dstd::String>{"pid", "rank"});
         CHECK(column(ranks, "rank") == dstd::Vector<dstd::String>{"3"});
         // Metadata rows keep their args, which the index does not list.
         const dataframe::DataFrame pr =

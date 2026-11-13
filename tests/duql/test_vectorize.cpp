@@ -58,7 +58,7 @@ dataframe::Series numbers(dataframe::TypeId type,
 
 dataframe::DataFrame frame() {
     dataframe::DataFrame f;
-    f.names = {"i", "j", "f", "u", "s", "b", "t"};
+    f.names = dstd::make_shared_strings({"i", "j", "f", "u", "s", "b", "t"});
     f.columns.push_back(numbers(dataframe::TypeId::Int64, I));
     f.columns.push_back(numbers(dataframe::TypeId::Int64, J));
     f.columns.push_back(numbers(dataframe::TypeId::Float64, F));
@@ -250,7 +250,7 @@ TEST_CASE("calendar time agrees between the column and row evaluators") {
     const dstd::Vector<OptD> SECS = {1700000000.9, -0.5,  0.0,   2.5,
                                      {},           -1e30, 1e300, 86399.0};
     dataframe::DataFrame f;
-    f.names = {"ts", "secs", "s"};
+    f.names = dstd::make_shared_strings({"ts", "secs", "s"});
     f.columns.push_back(numbers(dataframe::TypeId::Int64, TS));
     f.columns.push_back(numbers(dataframe::TypeId::Float64, SECS));
     f.columns.push_back(
@@ -304,7 +304,7 @@ TEST_CASE("quantifiers over a list column agree with the row evaluator") {
     const dstd::Vector<std::int64_t> vals = {1, 5, 2, 0, 7};
     const dstd::Vector<std::uint8_t> valid = {0x17};  // element 3 is null
     dataframe::DataFrame f;
-    f.names = {"l", "s"};
+    f.names = dstd::make_shared_strings({"l", "s"});
     f.columns.push_back(
         dataframe::Series::list(
             offs, dataframe::Series::flat_i64(vals.data(), 5, valid.data()))

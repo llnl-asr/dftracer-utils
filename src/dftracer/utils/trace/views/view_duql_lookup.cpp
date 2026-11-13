@@ -519,7 +519,8 @@ Status Applier::overlap_lookup(
                 out.names.emplace_back(into);
                 out.columns.push_back(dataframe::Series::list(
                     offsets,
-                    dataframe::Series::structs(side.names, std::move(parts))));
+                    dataframe::Series::structs(dstd::to_strings(side.names),
+                                               std::move(parts))));
                 return out;
             }
             dstd::Vector<std::int64_t> from_rows;

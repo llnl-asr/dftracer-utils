@@ -43,6 +43,14 @@ dstd::Result<std::size_t> index_of(const dstd::Vector<dstd::String>& names,
     return static_cast<std::size_t>(it - names.begin());
 }
 
+dstd::Vector<dstd::SharedString> shared_names(
+    const dstd::Vector<dstd::String>& names) {
+    dstd::Vector<dstd::SharedString> out;
+    out.reserve(names.size());
+    for (const dstd::String& n : names) out.emplace_back(dstd::StringView{n});
+    return out;
+}
+
 std::size_t parts_for(std::uint64_t bytes, std::uint64_t budget) {
     const std::uint64_t target =
         std::max<std::uint64_t>(budget / share::SPILL_STATE, 1);
@@ -111,8 +119,8 @@ GraceJoin::GraceJoin(dstd::Vector<dstd::String> left_names,
                      bool nulls_equal, dstd::SharedPtr<spill::Dir> dir,
                      dstd::Vector<std::size_t> left_key,
                      dstd::Vector<std::size_t> right_key)
-    : left_names_(std::move(left_names)),
-      right_names_(std::move(right_names)),
+    : left_names_(shared_names(left_names)),
+      right_names_(shared_names(right_names)),
       left_on_(std::move(left_on)),
       right_on_(std::move(right_on)),
       left_key_(std::move(left_key)),

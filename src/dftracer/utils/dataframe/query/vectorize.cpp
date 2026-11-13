@@ -1341,8 +1341,9 @@ dataframe::Series members_column(const dstd::Vector<dataframe::Series>& args,
     const TypeId elem = type.fields.front().type.id;
     dstd::Vector<dataframe::DataFrame> frames(fields.size());
     dstd::Vector<const dataframe::DataFrame*> ptrs;
+    const dstd::SharedString value_name{"v"};
     for (std::size_t k = 0; k < fields.size(); ++k) {
-        frames[k].names.push_back("v");
+        frames[k].names.push_back(value_name);
         frames[k].columns.push_back(fields[k].second.type() == elem
                                         ? fields[k].second.share()
                                         : fields[k].second.cast(elem));
@@ -1627,11 +1628,12 @@ dataframe::Series list_column(const dstd::Vector<dataframe::Series>& items,
         return make_list(offsets, dataframe::Series::nulls(elem, 0), valid);
     dstd::Vector<dataframe::DataFrame> frames(items.size());
     dstd::Vector<const dataframe::DataFrame*> ptrs;
+    const dstd::SharedString value_name{"v"};
     for (std::size_t k = 0; k < items.size(); ++k) {
         const dataframe::Series s = items[k].null_count() == n
                                         ? dataframe::Series::nulls(elem, n)
                                         : flat_of(items[k]);
-        frames[k].names.push_back("v");
+        frames[k].names.push_back(value_name);
         frames[k].columns.push_back(s.type() == elem ? s.share()
                                                      : s.cast(elem));
         ptrs.push_back(&frames[k]);

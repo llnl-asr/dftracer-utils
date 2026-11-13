@@ -88,7 +88,7 @@ DataFrame make_frame() {
     }
     dstd::Vector<dstd::StringView> tv(text.begin(), text.end());
     DataFrame df;
-    df.names = {"i", "f", "b", "s", "j", "l"};
+    df.names = dstd::make_shared_strings({"i", "f", "b", "s", "j", "l"});
     df.columns.push_back(Series::flat_i64(i64.data(), N, valid.data()));
     df.columns.push_back(Series::flat_f64(f64.data(), N));
     df.columns.push_back(

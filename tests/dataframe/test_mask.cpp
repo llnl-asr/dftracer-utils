@@ -58,7 +58,7 @@ DataFrame nullable_x() {
     dstd::Vector<std::int64_t> x{1, 0, 3, 2};
     std::uint8_t valid = 0b1101;
     DataFrame b;
-    b.names = {"x", "cat"};
+    b.names = dstd::make_shared_strings({"x", "cat"});
     b.columns.push_back(Series::flat_i64(x.data(), 4, &valid));
     b.columns.push_back(Series::strings({"io", "io", "cpu", "net"}));
     return b;
@@ -69,7 +69,7 @@ TEST_SUITE("query vec_mask") {
     TEST_CASE("numeric + string predicate lowers to a SIMD mask") {
         dstd::Vector<std::int64_t> dur{50, 150, 200, 80, 300};
         DataFrame b;
-        b.names = {"dur", "cat"};
+        b.names = dstd::make_shared_strings({"dur", "cat"});
         b.columns.push_back(Series::flat_i64(dur.data(), 5));
         b.columns.push_back(Series::strings({"io", "cpu", "io", "io", "net"}));
 
@@ -90,7 +90,7 @@ TEST_SUITE("query vec_mask") {
     TEST_CASE("in-list lowers to OR-of-equals") {
         dstd::Vector<std::int64_t> x{1, 2, 3, 4};
         DataFrame b;
-        b.names = {"x"};
+        b.names = dstd::make_shared_strings({"x"});
         b.columns.push_back(Series::flat_i64(x.data(), 4));
 
         auto q = duql::Query::from_string("x in [2, 4]");
@@ -120,7 +120,7 @@ TEST_SUITE("query vec_mask") {
     TEST_CASE("unsupported predicate gives DuqlErrc::Unsupported") {
         dstd::Vector<std::int64_t> v{1};
         DataFrame b;
-        b.names = {"name"};
+        b.names = dstd::make_shared_strings({"name"});
         b.columns.push_back(Series::flat_i64(v.data(), 1));
 
         CHECK(truth(mask_of("name ~ \"^p\"", b)) == "N");
@@ -185,7 +185,7 @@ TEST_SUITE("query vec_mask") {
     TEST_CASE("query plan: where + select + order by + limit") {
         dstd::Vector<std::int64_t> dur{50, 150, 200, 80, 300};
         DataFrame b;
-        b.names = {"dur", "cat"};
+        b.names = dstd::make_shared_strings({"dur", "cat"});
         b.columns.push_back(Series::flat_i64(dur.data(), 5));
         b.columns.push_back(Series::strings({"io", "cpu", "io", "io", "net"}));
 
@@ -200,7 +200,8 @@ TEST_SUITE("query vec_mask") {
         DataFrame out = dftu_utils_test::ok(dataframe::execute(plan, b));
         // dur>60: {150,200,80,300}; sort desc -> 300,200,150,80; limit 2.
         REQUIRE(out.num_rows() == 2);
-        REQUIRE(out.names == dstd::Vector<dstd::String>{"dur", "cat"});
+        REQUIRE(dstd::to_strings(out.names) ==
+                dstd::Vector<dstd::String>{"dur", "cat"});
         CHECK(out.columns[0].data<std::int64_t>()[0] == 300);
         CHECK(out.columns[0].data<std::int64_t>()[1] == 200);
         CHECK(out.columns[1].string_at(0) == "net");
@@ -209,7 +210,7 @@ TEST_SUITE("query vec_mask") {
     TEST_CASE("query plan: where + group by/agg + order by + limit") {
         dstd::Vector<std::int64_t> dur{10, 5, 20, 15, 30};
         DataFrame b;
-        b.names = {"cat", "dur"};
+        b.names = dstd::make_shared_strings({"cat", "dur"});
         b.columns.push_back(Series::strings({"io", "cpu", "io", "io", "net"}));
         b.columns.push_back(Series::flat_i64(dur.data(), 5));
 
@@ -222,7 +223,7 @@ TEST_SUITE("query vec_mask") {
         DataFrame out = dftu_utils_test::ok(dataframe::execute(plan, b));
         // groups io(3),cpu(1),net(1); order by count desc -> io first.
         REQUIRE(out.num_rows() == 3);
-        REQUIRE(out.names ==
+        REQUIRE(dstd::to_strings(out.names) ==
                 dstd::Vector<dstd::String>{"cat", "count", "sum_dur"});
         CHECK(out.columns[0].string_at(0) == "io");
         CHECK(out.columns[1].data<std::int64_t>()[0] == 3);

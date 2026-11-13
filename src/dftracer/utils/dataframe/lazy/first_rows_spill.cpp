@@ -690,7 +690,7 @@ class UniqueCursor : public Cursor {
                     (fast_bytes_ > budget_ / share::SPILL_STATE || refuse))
                     spilling_ = true;
                 if (!keep.empty()) {
-                    DataFrame mf = frame_of(std::move(m->columns), sch_);
+                    DataFrame mf = frame_of(std::move(m->columns), sch_names_);
                     co_return MorselResult(morsel_of(take(mf, keep)));
                 }
                 if (spilling_) break;
@@ -772,6 +772,8 @@ class UniqueCursor : public Cursor {
 
     dstd::UniquePtr<Cursor> in_;
     dstd::Vector<dstd::String> sch_;
+    dstd::Vector<dstd::SharedString> sch_names_ =
+        dstd::make_shared_strings(sch_);
     dstd::Vector<std::int64_t> key_idx_;
     std::uint64_t budget_;
     // Declared before the arenas, so its pool closes after they free.

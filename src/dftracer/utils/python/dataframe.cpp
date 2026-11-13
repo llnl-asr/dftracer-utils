@@ -68,7 +68,7 @@ using dftracer::utils::python::strings_from_str_or_seq;
 // in one zero-copy step.
 struct DataFrameObject {
     PyObject_HEAD Series st;
-    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> names;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::SharedString> names;
 };
 
 PyTypeObject DataFrameType;
@@ -82,13 +82,14 @@ DataFrameObject* as_dataframe(PyObject* o) {
 }
 
 PyObject* make_dataframe(DataFrame&& b) {
-    Series st = Series::structs(b.names, std::move(b.columns));
+    Series st = Series::structs(dftracer::utils::dstd::to_strings(b.names),
+                                std::move(b.columns));
     auto* self = reinterpret_cast<DataFrameObject*>(
         DataFrameType.tp_alloc(&DataFrameType, 0));
     if (!self) return nullptr;
     new (&self->st) Series(std::move(st));
     new (&self->names)
-        dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>(
+        dftracer::utils::dstd::Vector<dftracer::utils::dstd::SharedString>(
             std::move(b.names));
     return reinterpret_cast<PyObject*>(self);
 }
@@ -320,7 +321,7 @@ PyObject* DataFrame_rename(PyObject* self, PyObject* mapping) {
     }
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> new_names;
     new_names.reserve(b->names.size());
-    for (const dftracer::utils::dstd::String& name : b->names) {
+    for (const dftracer::utils::dstd::SharedString& name : b->names) {
         PyObject* v = PyDict_GetItemString(mapping, name.c_str());
         if (v) {
             const char* s = PyUnicode_AsUTF8(v);
@@ -330,7 +331,7 @@ PyObject* DataFrame_rename(PyObject* self, PyObject* mapping) {
             }
             new_names.emplace_back(s);
         } else {
-            new_names.push_back(name);
+            new_names.emplace_back(name.view());
         }
     }
     return run_batch_op(
@@ -1701,7 +1702,8 @@ PyObject* dataframe_from_columns(PyObject* /*self*/, PyObject* args) {
             PyErr_SetString(PyExc_TypeError, "expected native Series");
             return nullptr;
         }
-        b.names.push_back(names[static_cast<std::size_t>(i)]);
+        b.names.push_back(
+            dstd::SharedString{names[static_cast<std::size_t>(i)]});
         b.columns.push_back(col->share());
     }
     Py_DECREF(seq);

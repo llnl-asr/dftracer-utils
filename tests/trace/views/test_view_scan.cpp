@@ -577,7 +577,7 @@ TEST_SUITE("View") {
 
         dataframe::DataFrame all = dftu_utils_test::ok(v.collect().get());
         REQUIRE(all.num_rows() == 3);
-        dstd::Vector<dstd::String> collected = all.names;
+        dstd::Vector<dstd::String> collected = dstd::to_strings(all.names);
         dstd::Vector<dstd::String> declared = v.lazy().schema();
         std::sort(collected.begin(), collected.end());
         std::sort(declared.begin(), declared.end());
@@ -605,7 +605,7 @@ TEST_SUITE("View") {
 
         dataframe::DataFrame sel = dftu_utils_test::ok(
             v.select({"name", "dur", "dur.p99"}).collect().get());
-        REQUIRE(sel.names ==
+        REQUIRE(dstd::to_strings(sel.names) ==
                 dstd::Vector<dstd::String>{"name", "dur", "args.dur.p99"});
         dstd::Map<dstd::String, dstd::Pair<double, double>> by_name;
         for (std::int64_t i = 0; i < sel.num_rows(); ++i)

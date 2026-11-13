@@ -1006,7 +1006,7 @@ void Applier::finish_fill(const duql::PipelineGroup& g,
             if (!*added) return f;
             if (spec.mode == duql::syntax::FillMode::Zero) return out;
             fill_carry(spec, f, out);
-            return out.select(f.names);
+            return out.select(dstd::to_strings(f.names));
         },
         dstd::fmt<"fill buckets {}{}{}{}">(
             number_text(width),

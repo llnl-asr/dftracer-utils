@@ -228,7 +228,7 @@ Series count_ones(std::int64_t n) {
 
 DataFrame keyed_frame(const Series& keys) {
     DataFrame df;
-    df.names = {"k", "v"};
+    df.names = dstd::make_shared_strings({"k", "v"});
     df.columns.push_back(keys.share());
     df.columns.push_back(count_ones(keys.length()).share());
     return df;
@@ -585,7 +585,7 @@ TEST_SUITE("dataframe_arrow_types_matrix") {
             Series s = row.build();
             REQUIRE(s.valid());
             DataFrame df;
-            df.names = {"k"};
+            df.names = dstd::make_shared_strings({"k"});
             df.columns.push_back(s.share());
             DataFrame d = df.describe();
             CHECK(d.num_rows() == 6);

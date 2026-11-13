@@ -8,6 +8,7 @@
 #include <dftracer/utils/dataframe/types.h>
 #include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/result.h>
+#include <dftracer/utils/dstd/shared_string.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -365,6 +366,8 @@ class Series {
     Series rename(dstd::StringView name) const {
         return Series{dftu_series_rename(handle_, name.data(), name.size())};
     }
+    /// Like the view overload, but shares @p name's bytes and allocates none.
+    Series rename(const dstd::SharedString& name) const;
 
     /// A new owned column sharing this column's buffers zero-copy (refcount
     /// bump, no data copy).

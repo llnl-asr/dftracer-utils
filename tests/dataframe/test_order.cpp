@@ -145,7 +145,7 @@ TEST_CASE("every float order in the library is the order of compare_doubles") {
     // The eager sorts, and the lazy sort that spills its runs and merges them
     // through KeyData.
     dataframe::DataFrame frame;
-    frame.names = {"x", "row"};
+    frame.names = dstd::make_shared_strings({"x", "row"});
     frame.columns.push_back(f64.share());
     frame.columns.push_back(dataframe::Series::flat_i64(row.data(), n));
     CHECK(order_of(dftu_utils_test::ok(frame.sort_by("x", false))
@@ -197,7 +197,7 @@ TEST_CASE(
         return got;
     };
     dataframe::DataFrame frame;
-    frame.names = {"x", "row"};
+    frame.names = dstd::make_shared_strings({"x", "row"});
     frame.columns.push_back(
         dataframe::Series::flat_f64(x.data(), n, valid.data()));
     frame.columns.push_back(dataframe::Series::flat_i64(row.data(), n));

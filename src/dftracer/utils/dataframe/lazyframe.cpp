@@ -221,12 +221,14 @@ coro::CoroTask<dstd::Result<DataFrame>> drain_cursor(
     const dstd::Vector<Field>& fields, std::int64_t max_rows, const char* who,
     std::uint64_t budget = memory::NO_SPILL_BUDGET) {
     PartHolder holder(budget);
+    const dstd::Vector<dstd::SharedString> shared_sch =
+        dstd::make_shared_strings(sch);
     for (;;) {
         auto next = c.next(max_rows);
         auto m = co_await std::move(next).or_fail();
         if (!m) break;
         DataFrame df;
-        df.names = sch;
+        df.names = shared_sch;
         df.columns = std::move(m->columns);
         auto added = holder.add(std::move(df));
         if (!added) co_return added.error();
@@ -237,7 +239,8 @@ coro::CoroTask<dstd::Result<DataFrame>> drain_cursor(
         e.columns.reserve(sch.size());
         for (const dstd::String& name : sch) {
             if (name == REST_COLUMN) {
-                e.columns.push_back(struct_of_length({}, {}, 0));
+                e.columns.push_back(
+                    struct_of_length(dstd::Vector<dstd::String>{}, {}, 0));
                 continue;
             }
             const auto f =
@@ -250,26 +253,26 @@ coro::CoroTask<dstd::Result<DataFrame>> drain_cursor(
             if (!empty) co_return empty.error();
             e.columns.push_back(std::move(*empty));
         }
-        e.names = std::move(sch);
+        e.names = dstd::make_shared_strings(sch);
         co_return e;
     }
     if (parts.size() == 1) co_return std::move(parts[0]);
     co_return co_await join_parts(std::move(parts));
 }
 
-dstd::Result<void> unpack_rest(DataFrame& f) {
-    const int at = column_index_of(f.names, dstd::String(REST_COLUMN));
+dstd::Result<void> unpack_rest(DataFrame& f, NameCache& cache) {
+    const int at = column_index_of(f.names, REST_COLUMN);
     if (at < 0) return {};
     const Series rest = std::move(f.columns[static_cast<std::size_t>(at)]);
     f.names.erase(f.names.begin() + at);
     f.columns.erase(f.columns.begin() + at);
-    DataFrame fields = rest_fields(rest);
+    DataFrame fields = rest_fields(rest, &cache);
     for (std::size_t i = 0; i < fields.names.size(); ++i) {
         if (column_index_of(f.names, fields.names[i]) >= 0)
             return invalid_argument<
                 "column '{}' is both a plan column and a column the scan "
                 "returned beyond the plan's schema; rename or drop one of "
-                "them">(fields.names[i]);
+                "them">(dstd::StringView{fields.names[i]});
         f.names.push_back(std::move(fields.names[i]));
         f.columns.push_back(std::move(fields.columns[i]));
     }
@@ -280,20 +283,22 @@ dstd::Result<void> unpack_rest(DataFrame& f) {
 // own schema (streaming, self-describing), else the cursor's data-dependent
 // out_names(), else the static plan schema.
 dstd::Result<DataFrame> frame_from_morsel(
-    Morsel&& m, const dstd::Vector<dstd::String>& static_names,
+    Morsel&& m, NameCache& cache,
+    const dstd::Vector<dstd::String>& static_names,
     const dstd::Optional<dstd::Vector<dstd::String>>& out_names) {
     DataFrame out;
     out.columns = std::move(m.columns);
     if (!m.name_ids().empty()) {
         out.names.reserve(m.name_ids().size());
         for (std::uint32_t id : m.name_ids())
-            out.names.emplace_back(m.dyn->intern->resolve(id));
-    } else if (out_names) {
-        out.names = *out_names;
+            out.names.push_back(cache.shared(m.dyn->intern->resolve(id)));
     } else {
-        out.names = static_names;
+        // A cursor that reports out_names() names columns from the data, so
+        // that schema can change between morsels; the static one cannot.
+        out.names =
+            out_names ? cache.schema(*out_names) : cache.fixed(static_names);
     }
-    auto unpacked = unpack_rest(out);
+    auto unpacked = unpack_rest(out, cache);
     if (!unpacked) return unpacked.error();
     return out;
 }
@@ -346,7 +351,7 @@ class FilterCursor : public Cursor {
         if (!evaluated) return evaluated.error();
         Series mask = std::move(*evaluated);
         DataFrame tmp;
-        tmp.names.assign(m.columns.size(), dstd::String());
+        tmp.names.assign(m.columns.size(), dstd::SharedString());
         for (Series& c : m.columns) tmp.columns.push_back(c.share());
         DataFrame kept = tmp.filter(mask);
         Morsel out;
@@ -432,7 +437,7 @@ class FilterMaskCursor : public Cursor {
         off_ += n;
         Series sub_mask = Series::flat(TypeId::Bool, sub.data(), n);
         DataFrame tmp;
-        tmp.names.assign(m.columns.size(), dstd::String());
+        tmp.names.assign(m.columns.size(), dstd::SharedString());
         for (Series& c : m.columns) tmp.columns.push_back(c.share());
         DataFrame kept = tmp.filter(sub_mask);
         Morsel out;
@@ -504,8 +509,8 @@ class SelectCursor : public Cursor {
         out.columns.reserve(idx_.size());
         for (int i : idx_) out.columns.push_back(m.columns[i].share());
         if (rest_drop_) {
-            DataFrame fields = rest_fields(out.columns.back());
-            dstd::Vector<dstd::String> names;
+            DataFrame fields = rest_fields(out.columns.back(), &names_);
+            dstd::Vector<dstd::SharedString> names;
             dstd::Vector<Series> kept;
             for (std::size_t i = 0; i < fields.names.size(); ++i) {
                 if (rest_drop_->count(fields.names[i])) continue;
@@ -530,6 +535,7 @@ class SelectCursor : public Cursor {
 
    private:
     dstd::UniquePtr<Cursor> in_;
+    mutable NameCache names_;
     dstd::Vector<int> idx_;
     dstd::Optional<dstd::HashSet<dstd::String>> rest_drop_;
 };
@@ -569,9 +575,10 @@ class RenameRestCursor : public Cursor {
 
    private:
     dstd::Result<void> apply(Morsel& m) const {
-        DataFrame fields = rest_fields(m.columns.back());
+        DataFrame fields = rest_fields(m.columns.back(), &names_);
         dstd::HashSet<dstd::String> seen;
-        for (dstd::String& n : fields.names) {
+        dstd::Vector<dstd::String> names = dstd::to_strings(fields.names);
+        for (dstd::String& n : names) {
             auto it = map_.find(n);
             if (it != map_.end()) n = it->second;
             if (plan_out_.count(n) || !seen.insert(n).second)
@@ -579,13 +586,13 @@ class RenameRestCursor : public Cursor {
                     "rename_columns: column name '{}' is used by two columns "
                     "after the rename">(n);
         }
-        m.columns.back() =
-            struct_of_length(std::move(fields.names), std::move(fields.columns),
-                             m.columns.back().length());
+        m.columns.back() = struct_of_length(names, std::move(fields.columns),
+                                            m.columns.back().length());
         return {};
     }
 
     dstd::UniquePtr<Cursor> in_;
+    mutable NameCache names_;
     dstd::HashMap<dstd::String, dstd::String> map_;
     dstd::HashSet<dstd::String> plan_out_;
 };
@@ -628,7 +635,9 @@ class AlignCursor : public Cursor {
    private:
     Morsel apply(Morsel&& m) {
         if (m.name_ids().empty()) {
-            if (rest_) m.columns.push_back(struct_of_length({}, {}, m.rows));
+            if (rest_)
+                m.columns.push_back(
+                    struct_of_length(dstd::Vector<dstd::String>{}, {}, m.rows));
             return std::move(m);
         }
         Morsel out;
@@ -916,7 +925,7 @@ class TailCursor : public Cursor {
 template <class Fn>
 Morsel map_frame(Morsel&& m, Fn&& fn) {
     DataFrame tmp;
-    tmp.names.assign(m.columns.size(), dstd::String());
+    tmp.names.assign(m.columns.size(), dstd::SharedString());
     for (Series& c : m.columns) tmp.columns.push_back(std::move(c));
     DataFrame r = fn(std::move(tmp));
     Morsel out;
@@ -1008,7 +1017,7 @@ class FillNullCursor : public Cursor {
         if (rest_) {
             const std::int64_t rows = out.columns.back().length();
             DataFrame fields =
-                rest_fields(out.columns.back()).fill_null(value_);
+                rest_fields(out.columns.back(), &names_).fill_null(value_);
             out.columns.back() = struct_of_length(
                 std::move(fields.names), std::move(fields.columns), rows);
         }
@@ -1020,6 +1029,7 @@ class FillNullCursor : public Cursor {
     }
 
     dstd::UniquePtr<Cursor> in_;
+    mutable NameCache names_;
     dftu_scalar value_;
     bool rest_;
 };
@@ -1117,7 +1127,7 @@ class NullCountCursor : public Cursor {
 // Wrap a morsel's columns in a DataFrame with real `names`, apply `fn`, return
 // the result materialized FLAT.
 template <class Fn>
-MorselResult frame_op(Morsel&& m, const dstd::Vector<dstd::String>& names,
+MorselResult frame_op(Morsel&& m, const dstd::Vector<dstd::SharedString>& names,
                       Fn&& fn) {
     DataFrame tmp;
     tmp.names = names;
@@ -1161,14 +1171,16 @@ class UnnestCursor : public Cursor {
 
    private:
     MorselResult apply(Morsel m) {
-        DataFrame f = frame_of(std::move(m.columns), sch_);
+        DataFrame f = frame_of(std::move(m.columns), sch_names_);
         auto r = f.unnest(column_, keep_empty_);
         if (!r) return r.error();
-        out_names_ = r->names;
+        out_names_ = dstd::to_strings(r->names);
         return morsel_of(std::move(*r));
     }
     dstd::UniquePtr<Cursor> in_;
     dstd::Vector<dstd::String> sch_;
+    dstd::Vector<dstd::SharedString> sch_names_ =
+        dstd::make_shared_strings(sch_);
     dstd::String column_;
     bool keep_empty_;
     dstd::Optional<dstd::Vector<dstd::String>> out_names_;
@@ -1189,7 +1201,7 @@ class ExplodeCursor : public Cursor {
         auto fill_task = feed_.fill(*in_, max_rows);
         const auto filled = co_await std::move(fill_task).or_fail();
         if (!filled) co_return dstd::nullopt;
-        co_return frame_op(feed_.take(rows_to_explode(max_rows)), sch_,
+        co_return frame_op(feed_.take(rows_to_explode(max_rows)), sch_names_,
                            [&](DataFrame f) { return f.explode(column_); });
     }
 
@@ -1199,7 +1211,7 @@ class ExplodeCursor : public Cursor {
         MorselResult m;
         if (!in_->try_next(max_rows, m)) return false;
         out = map_morsel(std::move(m), [&](Morsel&& x) {
-            return frame_op(std::move(x), sch_,
+            return frame_op(std::move(x), sch_names_,
                             [&](DataFrame f) { return f.explode(column_); });
         });
         return true;
@@ -1247,6 +1259,8 @@ class ExplodeCursor : public Cursor {
 
     dstd::UniquePtr<Cursor> in_;
     dstd::Vector<dstd::String> sch_;
+    dstd::Vector<dstd::SharedString> sch_names_ =
+        dstd::make_shared_strings(sch_);
     dstd::String column_;
     std::uint64_t budget_;
     int ci_;  // the list column's place in sch_, or -1 for one only the data
@@ -1270,7 +1284,7 @@ class UnpivotCursor : public Cursor {
         auto fill_task = feed_.fill(*in_, max_rows);
         const auto filled = co_await std::move(fill_task).or_fail();
         if (!filled) co_return dstd::nullopt;
-        co_return frame_op(feed_.take(rows_to_unpivot(max_rows)), sch_,
+        co_return frame_op(feed_.take(rows_to_unpivot(max_rows)), sch_names_,
                            [&](DataFrame f) { return f.unpivot(id_, val_); });
     }
 
@@ -1280,7 +1294,7 @@ class UnpivotCursor : public Cursor {
         MorselResult m;
         if (!in_->try_next(max_rows, m)) return false;
         out = map_morsel(std::move(m), [&](Morsel&& x) {
-            return frame_op(std::move(x), sch_,
+            return frame_op(std::move(x), sch_names_,
                             [&](DataFrame f) { return f.unpivot(id_, val_); });
         });
         return true;
@@ -1313,6 +1327,8 @@ class UnpivotCursor : public Cursor {
 
     dstd::UniquePtr<Cursor> in_;
     dstd::Vector<dstd::String> sch_, id_, val_;
+    dstd::Vector<dstd::SharedString> sch_names_ =
+        dstd::make_shared_strings(sch_);
     std::uint64_t budget_;
     MorselFeed feed_;
 };
@@ -1373,7 +1389,8 @@ class TopkCursor : public Cursor {
                 // still the top k of every row.
                 Morsel first = std::move(*m);
                 if (has) {
-                    DataFrame cur = frame_of(std::move(first.columns), sch_);
+                    DataFrame cur =
+                        frame_of(std::move(first.columns), sch_names_);
                     auto joined = concat({&best, &cur});
                     if (!joined) co_return joined.error();
                     first = morsel_of(std::move(*joined));
@@ -1392,7 +1409,7 @@ class TopkCursor : public Cursor {
                 co_return co_await std::move(sorted_next);
             }
             DataFrame cur;
-            cur.names = sch_;
+            cur.names = sch_names_;
             for (Series& c : m->columns) cur.columns.push_back(std::move(c));
             if (!has) {
                 auto top = cur.topk(name_, k_, largest_);
@@ -1438,6 +1455,8 @@ class TopkCursor : public Cursor {
 
     dstd::UniquePtr<Cursor> in_;
     dstd::Vector<dstd::String> sch_;
+    dstd::Vector<dstd::SharedString> sch_names_ =
+        dstd::make_shared_strings(sch_);
     dstd::String name_;
     std::int64_t k_;
     bool largest_;
@@ -1472,7 +1491,7 @@ class SampleCursor : public Cursor {
             auto m = co_await std::move(task).or_fail();
             if (!m) break;
             const std::int64_t mrows = m->rows;
-            DataFrame mf = frame_of(std::move(m->columns), sch_);
+            DataFrame mf = frame_of(std::move(m->columns), sch_names_);
             DataFrame combined;
             if (best.num_rows() == 0) {
                 combined = std::move(mf);
@@ -1526,6 +1545,8 @@ class SampleCursor : public Cursor {
    private:
     dstd::UniquePtr<Cursor> in_;
     dstd::Vector<dstd::String> sch_;
+    dstd::Vector<dstd::SharedString> sch_names_ =
+        dstd::make_shared_strings(sch_);
     std::int64_t n_;
     std::uint64_t seed_;
     bool done_ = false;
@@ -1577,7 +1598,7 @@ class DescribeCursor : public Cursor {
                     m->columns[static_cast<std::size_t>(num_idx[j])]));
         }
         DataFrame out;
-        out.names.push_back("statistic");
+        out.names.push_back(dstd::SharedString{"statistic"});
         out.columns.push_back(Series::strings(
             {"count", "null_count", "mean", "std", "min", "max"}));
         for (std::size_t j = 0; j < num_idx.size(); ++j) {
@@ -1591,9 +1612,10 @@ class DescribeCursor : public Cursor {
                 fs.n ? fs.min : 0.0,
                 fs.n ? fs.max : 0.0};
             out.columns.push_back(Series::flat_f64(vals, 6));
-            out.names.push_back(sch_[static_cast<std::size_t>(num_idx[j])]);
+            out.names.push_back(dstd::SharedString{
+                dstd::StringView{sch_[static_cast<std::size_t>(num_idx[j])]}});
         }
-        produced_ = out.names;
+        produced_ = dstd::to_strings(out.names);
         co_return morsel_of(std::move(out));
     }
 
@@ -1654,8 +1676,8 @@ class HostCursorBridge {
             out->u.value = nullptr;
             return;
         }
-        auto df =
-            frame_from_morsel(std::move(**read), schema_, cursor_->out_names());
+        auto df = frame_from_morsel(std::move(**read), names_, schema_,
+                                    cursor_->out_names());
         if (!df) {
             fail(df.error(), out);
             return;
@@ -1716,6 +1738,7 @@ class HostCursorBridge {
 
     dstd::UniquePtr<Cursor> cursor_;
     dstd::Vector<dstd::String> schema_;
+    NameCache names_;
     dstd::String last_error_;
 };
 
@@ -2373,7 +2396,7 @@ coro::AsyncGenerator<dstd::Result<DataFrame>> failed_stream(dstd::Error error) {
 
 // `cursor`'s morsels as frames named `names`.
 coro::AsyncGenerator<dstd::Result<DataFrame>> named_frames(
-    dstd::UniquePtr<Cursor> cursor, dstd::Vector<dstd::String> names,
+    dstd::UniquePtr<Cursor> cursor, dstd::Vector<dstd::SharedString> names,
     std::int64_t rows) {
     for (;;) {
         auto task = cursor->next(rows);
@@ -2443,7 +2466,7 @@ class JoinCursor : public Cursor {
                 break;
             }
             Morsel part = feed_.take(gov_.rows(max_rows));
-            DataFrame left = frame_of(std::move(part.columns), sch_);
+            DataFrame left = frame_of(std::move(part.columns), sch_names_);
             if (templates_.empty())
                 for (const Series& c : left.columns)
                     templates_.push_back(c.share());
@@ -2461,7 +2484,7 @@ class JoinCursor : public Cursor {
                 if (!made) co_return made.error();
                 templates_ = std::move(*made);
             }
-            DataFrame rest = join_->flush(sch_, templates_);
+            DataFrame rest = join_->flush(sch_names_, templates_);
             if (rest.num_rows() > 0) {
                 auto done = finish_morsel(std::move(rest));
                 if (!done) co_return done.error();
@@ -2484,7 +2507,8 @@ class JoinCursor : public Cursor {
         names.emplace_back(RIGHT_REST_COLUMN);
         auto side = concat_side(other_, true);
         if (!side) return failed_stream(side.error());
-        return named_frames(std::move(*side), std::move(names), max_rows);
+        return named_frames(std::move(*side), dstd::make_shared_strings(names),
+                            max_rows);
     }
 
     // A join output with the right rest fields moved into the rest column. A
@@ -2502,19 +2526,19 @@ class JoinCursor : public Cursor {
         const int r = column_index_of(f.names, dstd::String(RIGHT_REST_COLUMN));
         if (r < 0) return rest_to_back(std::move(f));
         const DataFrame right =
-            rest_fields(f.columns[static_cast<std::size_t>(r)]);
+            rest_fields(f.columns[static_cast<std::size_t>(r)], &names_);
         f.names.erase(f.names.begin() + r);
         f.columns.erase(f.columns.begin() + r);
-        const auto l = static_cast<std::size_t>(
-            column_index_of(f.names, dstd::String(REST_COLUMN)));
-        DataFrame fields = rest_fields(f.columns[l]);
+        const auto l =
+            static_cast<std::size_t>(column_index_of(f.names, REST_COLUMN));
+        DataFrame fields = rest_fields(f.columns[l], &names_);
         const dstd::String sfx = suffix_.empty() ? "_right" : suffix_;
-        auto taken = [&](const dstd::String& n) {
+        auto taken = [&](dstd::StringView n) {
             return column_index_of(f.names, n) >= 0 ||
                    column_index_of(fields.names, n) >= 0;
         };
         for (std::size_t i = 0; i < right.names.size(); ++i) {
-            dstd::String name = right.names[i];
+            dstd::String name{right.names[i].view()};
             if (suffix_extras_ ||
                 std::find(sch_.begin(), sch_.end(), name) != sch_.end())
                 name += sfx;
@@ -2522,7 +2546,7 @@ class JoinCursor : public Cursor {
                 return invalid_argument<
                     "join: column '{}' is taken on the left; rename or drop "
                     "one of them">(name);
-            fields.names.push_back(std::move(name));
+            fields.names.push_back(names_.shared(name));
             fields.columns.push_back(right.columns[i].share());
         }
         f.columns[l] =
@@ -2562,9 +2586,9 @@ class JoinCursor : public Cursor {
             parts.push_back(std::move(*df));
             if (!spill || (bytes <= budget_ && governor_.check(bytes) == 0))
                 continue;
-            auto made =
-                GraceJoin::make(sch_, parts.front().names, left_on_, right_on_,
-                                how_, suffix_, budget_, nulls_equal_);
+            auto made = GraceJoin::make(
+                sch_, dstd::to_strings(parts.front().names), left_on_,
+                right_on_, how_, suffix_, budget_, nulls_equal_);
             if (!made) co_return made.error();
             grace_ = std::move(*made);
             for (const DataFrame& p : parts) {
@@ -2591,7 +2615,7 @@ class JoinCursor : public Cursor {
     dstd::Result<DataFrame> empty_right() const {
         DataFrame f;
         for (const Field& field : other_.output_schema().fields) {
-            f.names.push_back(field.name);
+            f.names.push_back(dstd::SharedString{field.name});
             auto column = null_column_of(field, 0, "join",
                                          "the right side produced no rows");
             if (!column) return column.error();
@@ -2599,7 +2623,8 @@ class JoinCursor : public Cursor {
         }
         if (right_rest_) {
             f.names.emplace_back(RIGHT_REST_COLUMN);
-            f.columns.push_back(struct_of_length({}, {}, 0));
+            f.columns.push_back(
+                struct_of_length(dstd::Vector<dstd::String>{}, {}, 0));
         }
         return f;
     }
@@ -2703,7 +2728,7 @@ class JoinCursor : public Cursor {
             const bool filled = co_await std::move(fill_task).or_fail();
             if (!filled) break;
             Morsel part = feed_.take(feed_.remaining());
-            parts.push_back(frame_of(std::move(part.columns), sch_));
+            parts.push_back(frame_of(std::move(part.columns), sch_names_));
             bytes += spill::columns_bytes(flat_columns(parts.back()));
         }
         if (parts.empty()) {
@@ -2787,7 +2812,7 @@ class JoinCursor : public Cursor {
                 in_.reset();
                 break;
             }
-            DataFrame left = frame_of(std::move(m->columns), sch_);
+            DataFrame left = frame_of(std::move(m->columns), sch_names_);
             if (templates_.empty())
                 for (const Series& c : left.columns)
                     templates_.push_back(c.share());
@@ -2869,12 +2894,17 @@ class JoinCursor : public Cursor {
             if (!column) return column.error();
             out.push_back(std::move(*column));
         }
-        if (has_rest(sch_)) out.push_back(struct_of_length({}, {}, 1));
+        if (has_rest(sch_))
+            out.push_back(
+                struct_of_length(dstd::Vector<dstd::String>{}, {}, 1));
         return out;
     }
 
     dstd::UniquePtr<Cursor> in_;
     dstd::Vector<dstd::String> sch_;
+    dstd::Vector<dstd::SharedString> sch_names_ =
+        dstd::make_shared_strings(sch_);
+    mutable NameCache names_;
     dstd::Vector<Field> left_fields_;
     LazyFrame other_;
     dstd::Vector<dstd::String> left_on_;
@@ -2893,7 +2923,7 @@ class JoinCursor : public Cursor {
     bool cross_ = false;
     dstd::UniquePtr<spill::Spool> cross_right_;
     dstd::UniquePtr<Cursor> right_reader_;
-    dstd::Vector<dstd::String> cross_names_;
+    dstd::Vector<dstd::SharedString> cross_names_;
     std::uint64_t cross_chunk_bytes_ = 0;
     std::uint64_t cross_block_bytes_ = 0;
     dstd::Optional<DataFrame> block_;
@@ -2968,13 +2998,14 @@ class TapCursor : public Cursor {
         if (run_.rows) {
             DataFrame f;
             if (m->name_ids().empty()) {
-                f.names = sch_;
+                f.names = sch_names_;
             } else {
                 for (const std::uint32_t id : m->name_ids())
-                    f.names.emplace_back(m->dyn->intern->resolve(id));
+                    f.names.push_back(
+                        cache_.shared(m->dyn->intern->resolve(id)));
             }
             for (const Series& c : m->columns) f.columns.push_back(c.share());
-            auto unpacked = unpack_rest(f);
+            auto unpacked = unpack_rest(f, cache_);
             if (!unpacked) co_return unpacked.error();
             auto shown = run_.rows(f);
             if (!shown) co_return shown.error();
@@ -2985,6 +3016,9 @@ class TapCursor : public Cursor {
    private:
     dstd::UniquePtr<Cursor> in_;
     dstd::Vector<dstd::String> sch_;
+    dstd::Vector<dstd::SharedString> sch_names_ =
+        dstd::make_shared_strings(sch_);
+    NameCache cache_;
     detail::TapRun run_;
 };
 
@@ -3020,14 +3054,17 @@ class FrameOpCursor : public Cursor {
             auto m = co_await std::move(task).or_fail();
             if (!m) co_return MorselResult(dstd::nullopt);
             dstd::Vector<dstd::String> names = sch_;
+            dstd::Vector<dstd::SharedString> shared = sch_names_;
             if (auto produced = in_->out_names();
-                produced && !produced->empty())
+                produced && !produced->empty()) {
                 names = std::move(*produced);
-            DataFrame in = frame_of(std::move(m->columns), names);
+                shared = cache_.schema(names);
+            }
+            DataFrame in = frame_of(std::move(m->columns), std::move(shared));
             auto running =
                 run_frame_op(op_, *args_, std::move(in), name_, names);
             DataFrame out = co_await std::move(running).or_fail();
-            out_names_ = out.names;
+            out_names_ = dstd::to_strings(out.names);
             co_return MorselResult(morsel_of(std::move(out)));
         }
         if (!done_) {
@@ -3042,11 +3079,11 @@ class FrameOpCursor : public Cursor {
                 produced && !produced->empty())
                 names = std::move(*produced);
             in_.reset();
-            primary.names = names;
+            primary.names = dstd::make_shared_strings(names);
             auto running =
                 run_frame_op(op_, *args_, std::move(primary), name_, names);
             DataFrame out = co_await std::move(running).or_fail();
-            out_names_ = out.names;
+            out_names_ = dstd::to_strings(out.names);
             chunks_.set(morsel_of(std::move(out)));
         }
         if (chunks_.empty()) co_return MorselResult(dstd::nullopt);
@@ -3060,6 +3097,9 @@ class FrameOpCursor : public Cursor {
    private:
     dstd::UniquePtr<Cursor> in_;
     dstd::Vector<dstd::String> sch_;
+    dstd::Vector<dstd::SharedString> sch_names_ =
+        dstd::make_shared_strings(sch_);
+    NameCache cache_;
     dstd::Vector<Field> in_fields_;
     dstd::String name_;
     const dftu_op_desc* op_;
@@ -3918,9 +3958,9 @@ dstd::Vector<dstd::String> rest_out_schema(
     return out;
 }
 
-int col_index(const dstd::Vector<dstd::String>& sch, const dstd::String& name) {
-    auto it = std::find(sch.begin(), sch.end(), name);
-    return it == sch.end() ? -1 : static_cast<int>(it - sch.begin());
+template <class Name>
+int col_index(const dstd::Vector<Name>& sch, dstd::StringView name) {
+    return column_index_of(sch, name);
 }
 
 // Predicate pushdown: bubble each Filter left past any WithColumn whose output
@@ -4436,7 +4476,7 @@ dstd::Result<dstd::Optional<DataFrame>> try_fuse_map(
         comp = std::move(*evaluated);
     }
     DataFrame out;
-    out.names = sel->names;
+    out.names = dstd::make_shared_strings(sel->names);
     out.columns.reserve(outs.size());
     std::size_t ci = 0;
     for (const Expr& e : outs) {
@@ -4727,8 +4767,8 @@ Schema InMemorySource::schema() const {
     Schema s;
     s.fields.reserve(frame_->columns.size());
     for (std::size_t i = 0; i < frame_->columns.size(); ++i)
-        s.fields.push_back(
-            Field{frame_->names[i], frame_->columns[i].data_type(), true});
+        s.fields.push_back(Field{dstd::String{frame_->names[i].view()},
+                                 frame_->columns[i].data_type(), true});
     return s;
 }
 
@@ -4739,11 +4779,12 @@ dstd::Result<ScanResult> InMemorySource::scan(const ScanRequest& req) const {
     dstd::SharedPtr<const DataFrame> src = frame_;
     if (!req.projection.empty()) {
         DataFrame proj;
-        proj.names = req.projection;
+        proj.names.reserve(req.projection.size());
         proj.columns.reserve(req.projection.size());
         for (const dstd::String& nm : req.projection) {
             const int c = col_index(frame_->names, nm);
             if (c < 0) return not_found<"scan: no column named {}">(nm).error();
+            proj.names.push_back(frame_->names[static_cast<std::size_t>(c)]);
             proj.columns.push_back(
                 frame_->columns[static_cast<std::size_t>(c)].share());
         }
@@ -4782,11 +4823,12 @@ coro::CoroTask<dstd::Result<DataFrame>> LazyFrame::run_ops_in_memory(
                 },
                 [&](const RenameOp& o) { return df.rename(o.names); },
                 [&](const DropOp& o) {
-                    return df.select(dropped_names(df.names, o.names));
+                    return df.select(
+                        dropped_names(dstd::to_strings(df.names), o.names));
                 },
                 [&](const RenameColumnsOp& o) -> dstd::Result<DataFrame> {
-                    auto names =
-                        renamed_names(df.names, rename_map(o.from, o.to));
+                    auto names = renamed_names(dstd::to_strings(df.names),
+                                               rename_map(o.from, o.to));
                     if (!names) return names.error();
                     return df.rename(*names);
                 },
@@ -5879,6 +5921,7 @@ dstd::Result<CursorChain> lower_cursor_chain(
 // early-out (~StreamViewCursor stops and wakes the producer).
 coro::AsyncGenerator<dstd::Result<DataFrame>> drive_cursor_chain(
     CursorChain chain, std::int64_t rows) {
+    NameCache cache;
     for (;;) {
         auto task = chain.cursor->next(rows);
         auto m = co_await std::move(task);
@@ -5887,7 +5930,7 @@ coro::AsyncGenerator<dstd::Result<DataFrame>> drive_cursor_chain(
             break;
         }
         if (!*m) break;
-        auto out = frame_from_morsel(std::move(**m), chain.schema,
+        auto out = frame_from_morsel(std::move(**m), cache, chain.schema,
                                      chain.cursor->out_names());
         const bool failed = !out;
         co_yield std::move(out);
@@ -6120,8 +6163,8 @@ class CollectedSource final : public Source {
     CollectedSource(Schema schema, DataFrame frame)
         : schema_(std::move(schema)),
           frame_(dstd::make_shared<const DataFrame>(std::move(frame))) {
-        for (const dstd::String& n : frame_->names)
-            ids_.push_back(intern_->get_or_insert(n));
+        for (const dstd::SharedString& n : frame_->names)
+            ids_.push_back(intern_->get_or_insert(n.view()));
     }
 
     Schema schema() const override { return schema_; }
@@ -6460,9 +6503,10 @@ dstd::Result<void> agg_accumulate_chunk(
         return agg_accumulate(state, kcols, vcols, 0, frame.num_rows());
     dstd::Vector<AggDynInput> dcols;
     for (std::size_t i = 0; i < frame.names.size(); ++i)
-        if (frame.names[i].rfind(dyn_prefix, 0) == 0)
+        if (frame.names[i].view().rfind(dyn_prefix, 0) == 0)
             dcols.push_back(
-                {frame.names[i].substr(dyn_prefix.size()), &frame.columns[i]});
+                {dstd::String{frame.names[i].view().substr(dyn_prefix.size())},
+                 &frame.columns[i]});
     return agg_accumulate(state, kcols, vcols, dcols, 0, frame.num_rows());
 }
 

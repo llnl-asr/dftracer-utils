@@ -56,7 +56,7 @@ DataFrame make_df() {
     dstd::Vector<std::int64_t> b{60, 50, 40, 30, 20, 10};
     dstd::Vector<std::int64_t> g{1, 1, 2, 2, 3, 3};
     DataFrame df;
-    df.names = {"a", "b", "g"};
+    df.names = dstd::make_shared_strings({"a", "b", "g"});
     df.columns.push_back(Series::flat_i64(a.data(), 6));
     df.columns.push_back(Series::flat_i64(b.data(), 6));
     df.columns.push_back(Series::flat_i64(g.data(), 6));
@@ -136,8 +136,9 @@ class SmartSource final : public Source,
         if (!accepts(Kind::Projection)) return dstd::nullopt;
         dstd::Vector<dstd::String> names;
         for (const NamedExpr& e : exprs)
-            names.push_back(
-                frame_.names[static_cast<std::size_t>(expr_col_index(e.expr))]);
+            names.emplace_back(
+                frame_.names[static_cast<std::size_t>(expr_col_index(e.expr))]
+                    .view());
         return derive(dftu_utils_test::ok(frame_.select(names)),
                       policy_->projection_inexact ? ApplyStatus::Inexact
                                                   : ApplyStatus::Exact);
@@ -337,7 +338,8 @@ TEST_SUITE("source_hooks") {
         CHECK(plan.rfind("scan [b, a]", 0) == 0);
         CHECK(plan.find("filter") == dstd::String::npos);
         DataFrame r = run(lf.collect());
-        CHECK(r.names == dstd::Vector<dstd::String>{"b", "a"});
+        CHECK(dstd::to_strings(r.names) ==
+              dstd::Vector<dstd::String>{"b", "a"});
         CHECK(ints(r, "a") == dstd::Vector<std::int64_t>{5, 6});
     }
 
@@ -361,7 +363,8 @@ TEST_SUITE("source_hooks") {
         CHECK(expr_col_index(spec.aggs[1].input) == 0);
         CHECK(spec.aggs[1].out == "sum_b");
         CHECK(lf.explain().find("group_by") == dstd::String::npos);
-        CHECK(r.names == dstd::Vector<dstd::String>{"g", "n", "sum_b"});
+        CHECK(dstd::to_strings(r.names) ==
+              dstd::Vector<dstd::String>{"g", "n", "sum_b"});
         CHECK(nums(r, "sum_b") == dstd::Vector<double>{110, 70, 30});
     }
 

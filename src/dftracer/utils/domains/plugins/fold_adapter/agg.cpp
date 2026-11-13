@@ -61,7 +61,7 @@ const dftu_svc_agg g_agg = {host_agg_new, host_agg_accumulate, host_agg_result,
     for (dataframe::Series& c : out.columns) handles.push_back(c.release());
     dstd::Vector<const char*> names;
     names.reserve(out.names.size());
-    for (const dstd::String& n : out.names) names.push_back(n.c_str());
+    for (const dstd::SharedString& n : out.names) names.push_back(n.c_str());
     return dftu_dataframe_new(names.data(), handles.data(),
                               static_cast<std::int32_t>(handles.size()));
 }

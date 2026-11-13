@@ -437,10 +437,11 @@ coro::CoroTask<HttpResponse> handle_viz_untimed(const HttpRequest& req,
                 if (c > 0) rb.append_comma();
                 const auto it =
                     std::find(columns.begin(), columns.end(), rows.names[c]);
-                const dstd::String& name =
+                const dstd::StringView name =
                     it == columns.end()
-                        ? rows.names[c]
-                        : names[static_cast<std::size_t>(it - columns.begin())];
+                        ? rows.names[c].view()
+                        : dstd::StringView{names[static_cast<std::size_t>(
+                              it - columns.begin())]};
                 rb.escape_and_append_with_quotes(name);
                 rb.append_colon();
                 append_cell(rb, rows.columns[c], r, index, name == "dur",

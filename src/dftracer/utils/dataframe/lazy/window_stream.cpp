@@ -750,7 +750,7 @@ class WindowStreamCursor : public Cursor {
                 if (refusal.refused()) co_return refusal.error();
             }
             DataFrame frame;
-            frame.names = sch_;
+            frame.names = sch_names_;
             for (const Series& c : fcols) frame.columns.push_back(c.share());
             auto running =
                 run_frame_op(op_, *args_, std::move(frame), name_, sch_);
@@ -777,7 +777,7 @@ class WindowStreamCursor : public Cursor {
                 held_bytes_ = spill::columns_bytes(rest.columns);
                 held_.push_back(std::move(rest));
             }
-            out_names_ = res.names;
+            out_names_ = dstd::to_strings(res.names);
             co_return MorselResult(morsel_of(std::move(res)));
         }
     }
@@ -2606,6 +2606,8 @@ class WindowStreamCursor : public Cursor {
 
     dstd::UniquePtr<Cursor> in_;
     dstd::Vector<dstd::String> sch_;
+    dstd::Vector<dstd::SharedString> sch_names_ =
+        dstd::make_shared_strings(sch_);
     dstd::Vector<std::size_t> part_;
     dstd::Vector<std::size_t> order_;
     dstd::String name_;

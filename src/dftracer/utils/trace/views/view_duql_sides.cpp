@@ -287,7 +287,7 @@ dstd::Result<dstd::SharedPtr<const dataframe::DataFrame>> Sides::run(
     if (auto ok = caps.check_bytes(name, dataframe::query::frame_bytes(f)); !ok)
         return ok.error();
     if (keys[i]) {
-        auto selected = f.select(f.names);
+        auto selected = f.select(dstd::to_strings(f.names));
         if (!selected) return selected.error();
         dstd::Vector<dataframe::DataFrame> parts;
         parts.push_back(std::move(*selected));

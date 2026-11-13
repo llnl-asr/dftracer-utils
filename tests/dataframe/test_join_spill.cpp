@@ -67,7 +67,7 @@ DataFrame frame_of(const Table& t, const char* key, const char* value) {
         if (t.key[i]) bits[i >> 3] |= static_cast<std::uint8_t>(1U << (i & 7));
     }
     DataFrame f;
-    f.names = {key, value};
+    f.names = dstd::make_shared_strings({key, value});
     f.columns.push_back(Series::flat_i64(
         k.data(), static_cast<std::int64_t>(k.size()), bits.data()));
     f.columns.push_back(Series::flat_i64(
@@ -387,10 +387,10 @@ TEST_SUITE("join spill") {
             rv.push_back(j * 7);
         }
         DataFrame l;
-        l.names = {"lk"};
+        l.names = dstd::make_shared_strings({"lk"});
         l.columns.push_back(Series::flat_i64(lk.data(), 600));
         DataFrame r;
-        r.names = {"rk", "rv"};
+        r.names = dstd::make_shared_strings({"rk", "rv"});
         r.columns.push_back(Series::flat_f64(rk.data(), 400));
         r.columns.push_back(Series::flat_i64(rv.data(), 400));
         const auto plain = [&](std::uint64_t budget) {
@@ -411,10 +411,10 @@ TEST_SUITE("join spill") {
             rv.push_back(dstd::fmt<"v{}">(j));
         }
         DataFrame l;
-        l.names = {"lk"};
+        l.names = dstd::make_shared_strings({"lk"});
         l.columns.push_back(Series::flat_i64(lk.data(), 1000));
         DataFrame r;
-        r.names = {"rk", "rv"};
+        r.names = dstd::make_shared_strings({"rk", "rv"});
         r.columns.push_back(Series::flat_i64(rk.data(), 40));
         r.columns.push_back(Series::strings(rv));
         const DataFrame out = join(l, r, JoinHow::Lookup, 64);
@@ -436,7 +436,7 @@ TEST_SUITE("join spill") {
         DataFrame rf = frame_of(r, "rk", "rv");
         dstd::Vector<std::int32_t> off;
         for (int i = 0; i <= 500; ++i) off.push_back(i);
-        rf.names.push_back("tags");
+        rf.names.push_back(dstd::SharedString{"tags"});
         rf.columns.push_back(Series::list(off, rf.columns[1].share()));
         const DataFrame spilled = join(lf, rf, JoinHow::Inner, 256);
         const DataFrame whole = join(lf, rf, JoinHow::Inner,

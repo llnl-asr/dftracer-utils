@@ -1213,7 +1213,7 @@ dstd::Result<DataFrame> window(const DataFrame& df,
             }
         }
         if (!column) return column.error();
-        out.names.push_back(w.out);
+        out.names.push_back(dstd::SharedString{w.out});
         out.columns.push_back(std::move(*column));
     }
     return out;

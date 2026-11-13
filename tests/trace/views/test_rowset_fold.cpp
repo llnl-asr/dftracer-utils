@@ -95,7 +95,8 @@ dstd::String row_text(const dataframe::DataFrame& f, std::int64_t r) {
     dstd::String out;
     for (std::size_t c = 0; c < f.columns.size(); ++c) {
         const dataframe::Series col = f.columns[c].materialize();
-        out += f.names[c] + "=";
+        out += f.names[c].view();
+        out += "=";
         if (col.is_null(r))
             out += "null";
         else if (col.type() == dataframe::TypeId::String)

@@ -21,6 +21,7 @@
 #include <dftracer/utils/dstd/hash/fnv1a.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/memory/detail/manager.h>
 #include <doctest/doctest.h>
 #include <memory/fresh_process.h>
 #include <task_result.h>
@@ -1375,8 +1376,9 @@ TEST_SUITE("vec") {
             dftu_utils_test::ok(dataframe::group_agg(key, vals, specs, "cat"));
         REQUIRE(one.num_rows() == 2);
         REQUIRE(one.names.size() == 5);
-        REQUIRE(one.names == dstd::Vector<dstd::String>{"cat", "n", "sum_dur",
-                                                        "mean_dur", "max_dur"});
+        REQUIRE(dstd::to_strings(one.names) ==
+                dstd::Vector<dstd::String>{"cat", "n", "sum_dur", "mean_dur",
+                                           "max_dur"});
         // first-seen order: io then cpu; columns are key + specs in order.
         CHECK(one.columns[0].string_at(0) == "io");
         CHECK(one.columns[1].data<std::int64_t>()[0] == 3);   // io count
@@ -1436,7 +1438,7 @@ TEST_SUITE("vec") {
         DataFrame g = dftu_utils_test::ok(
             dataframe::group_agg(keys, vals, specs, {"cat", "pid"}));
         REQUIRE(g.num_rows() == 3);  // (io,1) (cpu,1) (io,2) - first-seen order
-        REQUIRE(g.names ==
+        REQUIRE(dstd::to_strings(g.names) ==
                 dstd::Vector<dstd::String>{"cat", "pid", "n", "sum_dur"});
         CHECK(g.columns[0].type() == TypeId::String);
         CHECK(g.columns[1].type() == TypeId::Int64);
@@ -1509,7 +1511,7 @@ TEST_SUITE("vec") {
         DataFrame g =
             dftu_utils_test::ok(dataframe::group_agg(key, vals, specs, "k"));
         REQUIRE(g.num_rows() == 2);
-        REQUIRE(g.names ==
+        REQUIRE(dstd::to_strings(g.names) ==
                 dstd::Vector<dstd::String>{"k", "var", "std", "skew", "kurt"});
         // Reference: the same group's values through the kernels directly.
         dstd::Vector<double> ga{2, 4, 8, 16};  // group "a", first-seen row 0
@@ -1592,7 +1594,7 @@ TEST_SUITE("vec") {
         DataFrame out = dftu_utils_test::ok(
             dataframe::group_agg_expr(keyx, specs, in, "k"));
         REQUIRE(out.num_rows() == 2);
-        REQUIRE(out.names ==
+        REQUIRE(dstd::to_strings(out.names) ==
                 dstd::Vector<dstd::String>{"k", "n", "sum_ab", "mean_ab"});
         // group "x": rows 0,2,4 -> (a+b) = 11,33,55; sum=99, mean=33, n=3.
         CHECK(out.columns[0].string_at(0) == "x");
@@ -1784,7 +1786,7 @@ TEST_SUITE("vec") {
 
     TEST_CASE("batch take/filter/slice apply across every column") {
         DataFrame b;
-        b.names = {"name", "count"};
+        b.names = dstd::make_shared_strings({"name", "count"});
         b.columns.push_back(Series::strings({"a", "b", "c", "d"}));
         dstd::Vector<std::int64_t> cnt{10, 20, 30, 40};
         b.columns.push_back(Series::flat_i64(cnt.data(), 4));
@@ -1809,7 +1811,7 @@ TEST_SUITE("vec") {
     TEST_CASE(
         "frame ops: select/rename/with_column zero-copy, argsort/sort_by") {
         DataFrame b;
-        b.names = {"name", "count"};
+        b.names = dstd::make_shared_strings({"name", "count"});
         b.columns.push_back(Series::strings({"a", "b", "c"}));
         dstd::Vector<std::int64_t> cnt{30, 10, 20};
         b.columns.push_back(Series::flat_i64(cnt.data(), 3));
@@ -2111,7 +2113,7 @@ TEST_SUITE("vec") {
 
     TEST_CASE("batch group_by re-aggregates a materialized batch") {
         DataFrame b;
-        b.names = {"cat", "dur"};
+        b.names = dstd::make_shared_strings({"cat", "dur"});
         b.columns.push_back(Series::strings({"io", "io", "cpu", "io", "cpu"}));
         dstd::Vector<std::int64_t> dur{10, 20, 5, 30, 15};
         b.columns.push_back(Series::flat_i64(dur.data(), 5));
@@ -2135,7 +2137,7 @@ TEST_SUITE("vec") {
 
     TEST_CASE("hash_partition co-locates equal keys and preserves rows") {
         DataFrame b;
-        b.names = {"cat", "dur"};
+        b.names = dstd::make_shared_strings({"cat", "dur"});
         b.columns.push_back(
             Series::strings({"io", "cpu", "io", "net", "cpu", "io"}));
         dstd::Vector<std::int64_t> dur{1, 2, 3, 4, 5, 6};
@@ -2208,7 +2210,7 @@ TEST_SUITE("vec") {
 
     TEST_CASE("topk: k largest/smallest via partial sort") {
         DataFrame b;
-        b.names = {"name", "dur"};
+        b.names = dstd::make_shared_strings({"name", "dur"});
         b.columns.push_back(Series::strings({"a", "b", "c", "d", "e"}));
         dstd::Vector<std::int64_t> dur{50, 10, 90, 30, 70};
         b.columns.push_back(Series::flat_i64(dur.data(), 5));
@@ -2228,12 +2230,12 @@ TEST_SUITE("vec") {
 
     TEST_CASE("concat vertically merges batches (numeric + string)") {
         DataFrame a;
-        a.names = {"k", "n"};
+        a.names = dstd::make_shared_strings({"k", "n"});
         a.columns.push_back(Series::strings({"x", "y"}));
         dstd::Vector<std::int64_t> an{1, 2};
         a.columns.push_back(Series::flat_i64(an.data(), 2));
         DataFrame b;
-        b.names = {"k", "n"};
+        b.names = dstd::make_shared_strings({"k", "n"});
         b.columns.push_back(Series::strings({"z"}));
         dstd::Vector<std::int64_t> bn{3};
         b.columns.push_back(Series::flat_i64(bn.data(), 1));
@@ -2248,14 +2250,14 @@ TEST_SUITE("vec") {
         // Part a: {k(str), n(i64)}; part b: {k(str), r(f64)} - disjoint n/r,
         // plus a shared numeric column m that is i64 in a and f64 in b.
         DataFrame a;
-        a.names = {"k", "n", "m"};
+        a.names = dstd::make_shared_strings({"k", "n", "m"});
         a.columns.push_back(Series::strings({"x", "y"}));
         dstd::Vector<std::int64_t> an{1, 2};
         a.columns.push_back(Series::flat_i64(an.data(), 2));
         dstd::Vector<std::int64_t> am{10, 20};
         a.columns.push_back(Series::flat_i64(am.data(), 2));
         DataFrame b;
-        b.names = {"k", "r", "m"};
+        b.names = dstd::make_shared_strings({"k", "r", "m"});
         b.columns.push_back(Series::strings({"z"}));
         dstd::Vector<double> br{2.5};
         b.columns.push_back(Series::flat_f64(br.data(), 1));
@@ -2266,7 +2268,8 @@ TEST_SUITE("vec") {
             dataframe::concat({&a, &b}, dataframe::ConcatHow::Diagonal));
         REQUIRE(m.num_rows() == 3);
         // Column order = first appearance: k, n, m, r.
-        REQUIRE(m.names == dstd::Vector<dstd::String>{"k", "n", "m", "r"});
+        REQUIRE(dstd::to_strings(m.names) ==
+                dstd::Vector<dstd::String>{"k", "n", "m", "r"});
 
         const std::int64_t ki = m.column_index("k");
         const std::int64_t ni = m.column_index("n");
@@ -2293,14 +2296,14 @@ TEST_SUITE("vec") {
         // (build_row_frame infers an arg column's type per batch) keeps each
         // value's JSON type, so the text "1" and the number 1 stay apart.
         DataFrame a;
-        a.names = {"v"};
+        a.names = dstd::make_shared_strings({"v"});
         a.columns.push_back(Series::strings({"1"}));
         DataFrame b;
-        b.names = {"v"};
+        b.names = dstd::make_shared_strings({"v"});
         dstd::Vector<std::int64_t> bn{1};
         b.columns.push_back(Series::flat_i64(bn.data(), 1));
         DataFrame c;
-        c.names = {"v"};
+        c.names = dstd::make_shared_strings({"v"});
         dstd::Vector<double> cn{2.5};
         c.columns.push_back(Series::flat_f64(cn.data(), 1));
         DataFrame m = dftu_utils_test::ok(
@@ -2322,13 +2325,13 @@ TEST_SUITE("vec") {
     TEST_CASE("concat diagonal throws on a nested/scalar type clash") {
         // A List column against a scalar has no meaningful unification.
         DataFrame a;
-        a.names = {"v"};
+        a.names = dstd::make_shared_strings({"v"});
         dstd::Vector<std::int32_t> offs{0, 1};
         dstd::Vector<std::int64_t> child{7};
         a.columns.push_back(
             Series::list(offs, Series::flat_i64(child.data(), 1)));
         DataFrame b;
-        b.names = {"v"};
+        b.names = dstd::make_shared_strings({"v"});
         dstd::Vector<std::int64_t> bn{1};
         b.columns.push_back(Series::flat_i64(bn.data(), 1));
         dftu_utils_test::expect_error(
@@ -3399,6 +3402,30 @@ TEST_CASE("DataFrame::column names the series with the column name") {
     CHECK(f.column("a").name() == "a");
     CHECK(f.column("b").name() == "b");
     CHECK(!f.column("missing").valid());
+}
+
+TEST_CASE(
+    "DataFrame::column shares the frame's name bytes and allocates none") {
+    const std::int64_t v[2] = {1, 2};
+    DataFrame f;
+    f.names.emplace_back("a_column_name_longer_than_any_small_buffer");
+    f.columns.push_back(Series::flat_i64(v, 2));
+    const dstd::StringView name = f.names[0].view();
+
+    memory::PoolHandle pool =
+        memory::detail::Manager::get().root().child("series_name");
+    memory::detail::Scope scope{*pool};
+    const std::size_t before_share = pool->blocks();
+    Series shared = f.columns[0].share();
+    const std::size_t share_blocks = pool->blocks() - before_share;
+
+    const std::size_t before = pool->blocks();
+    Series first = f.column(name);
+    Series second = f.column(name);
+    CHECK(pool->blocks() - before == 2 * share_blocks);
+    CHECK(first.name().data() == f.names[0].data());
+    CHECK(second.name().data() == f.names[0].data());
+    CHECK(first.name() == name);
 }
 
 TEST_CASE("the name survives the native byte form") {

@@ -212,7 +212,7 @@ TEST_SUITE("dataframe_arrow_public") {
         dstd::Vector<double> reals = {1.5, 2.5, 3.5};
 
         DataFrame df;
-        df.names = {"id", "value"};
+        df.names = dstd::make_shared_strings({"id", "value"});
         df.columns.push_back(Series::flat_i64(
             ints.data(), static_cast<std::int64_t>(ints.size())));
         df.columns.push_back(Series::flat_f64(
@@ -298,7 +298,7 @@ TEST_SUITE("dataframe_arrow_public") {
         Series st = Series::structs({"a", "b"}, std::move(fields));
 
         DataFrame df;
-        df.names = {"s"};
+        df.names = dstd::make_shared_strings({"s"});
         df.columns.push_back(std::move(st));
 
         OwnedArrow arw = df.to_arrow();
@@ -381,7 +381,7 @@ TEST_SUITE("dataframe_arrow_public") {
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
     TEST_CASE("to_ipc writes a dictionary column") {
         DataFrame df;
-        df.names = {"s"};
+        df.names = dstd::make_shared_strings({"s"});
         df.columns.push_back(
             Series::strings({"a", "b", "a", "a"}).dictionary_encode());
         auto bytes = df.to_ipc();

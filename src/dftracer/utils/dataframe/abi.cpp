@@ -484,9 +484,8 @@ dftu_series* dftu_series_share(const dftu_series* col) {
 }
 
 const char* dftu_series_name(const dftu_series* s, size_t* len) {
-    const bool named = s && s->name && !s->name->empty();
-    if (len) *len = named ? s->name->size() : 0;
-    return named ? s->name->data() : nullptr;
+    if (len) *len = s ? s->name.size() : 0;
+    return s && !s->name.empty() ? s->name.data() : nullptr;
 }
 
 dftu_series* dftu_series_rename(const dftu_series* s, const char* name,
@@ -494,11 +493,10 @@ dftu_series* dftu_series_rename(const dftu_series* s, const char* name,
     if (!s) return nullptr;
     auto* out = new dftu_series(*s);
     if (name && len > 0)
-        out->name =
-            dftracer::utils::dstd::make_shared<dftracer::utils::dstd::String>(
-                name, len);
+        out->name = dftracer::utils::dstd::SharedString{
+            dftracer::utils::dstd::StringView{name, len}};
     else
-        out->name = nullptr;
+        out->name = {};
     return out;
 }
 

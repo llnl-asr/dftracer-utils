@@ -46,7 +46,7 @@ coro::CoroTask<DataFrame> drain_cursor(dstd::UniquePtr<Cursor> cur) {
         auto m = dftu_utils_test::ok(co_await cur->next(1 << 20));
         if (!m) break;
         out.columns = std::move(m->columns);
-        out.names.assign(out.columns.size(), dstd::String());
+        out.names.assign(out.columns.size(), dstd::SharedString());
     }
     co_return out;
 }
@@ -306,7 +306,8 @@ TEST_SUITE("provider pushdown") {
         auto result = run(LazyFrame::scan(make_fixture_source(cfg))
                               .select({"val", "id"})
                               .collect());
-        REQUIRE(result.names == dstd::Vector<dstd::String>{"val", "id"});
+        REQUIRE(dstd::to_strings(result.names) ==
+                dstd::Vector<dstd::String>{"val", "id"});
         CHECK(result.column("id").data<std::int64_t>()[0] == 0);
     }
 

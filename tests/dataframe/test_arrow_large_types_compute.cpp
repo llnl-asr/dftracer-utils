@@ -388,7 +388,7 @@ TEST_SUITE("dataframe_arrow_large_types_compute") {
         dstd::Vector<std::int64_t> ones(6, 1);
         Series values = Series::flat_i64(ones.data(), 6);
         DataFrame df;
-        df.names = {"k", "v"};
+        df.names = dstd::make_shared_strings({"k", "v"});
         df.columns.push_back(keys.share());
         df.columns.push_back(values.share());
         DataFrame grouped = dftu_utils_test::ok(

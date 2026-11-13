@@ -265,8 +265,8 @@ TEST_CASE("typed set_union merges with a serialized partial") {
     DataFrame direct = dataframe::agg_finalize(*full, "k");
     REQUIRE(merged.num_rows() == direct.num_rows());
     for (std::int64_t r = 0; r < merged.num_rows(); ++r) {
-        merged.names[1] = "u";
-        direct.names[1] = "u";
+        merged.names[1] = dstd::SharedString{"u"};
+        direct.names[1] = dstd::SharedString{"u"};
         auto m = list_cell<std::int64_t>(merged, r);
         auto d = list_cell<std::int64_t>(direct, r);
         CHECK(m == d);

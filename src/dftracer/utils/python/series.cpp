@@ -43,7 +43,8 @@ Series named_like(Series out, const Series& source) {
 
 Series named_like(Series out, const Series& a, const Series& b) {
     if (!out.valid()) return out;
-    out.handle()->name = a.name() == b.name() ? a.handle()->name : nullptr;
+    out.handle()->name =
+        a.name() == b.name() ? a.handle()->name : dstd::SharedString{};
     return out;
 }
 
@@ -231,7 +232,7 @@ PyObject* Series_get_name(PyObject* self, void*) {
 PyObject* Series_rename(PyObject* self, PyObject* arg) {
     Series* a = as_series(self);
     if (!a) return nullptr;
-    if (arg == Py_None) return make_series(a->rename({}));
+    if (arg == Py_None) return make_series(a->rename(dstd::StringView{}));
     Py_ssize_t n = 0;
     const char* p = PyUnicode_AsUTF8AndSize(arg, &n);
     if (!p) return nullptr;

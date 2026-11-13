@@ -103,7 +103,7 @@ Series strs(const dstd::Vector<S>& v) {
 template <class... Cols>
 DataFrame frame(dstd::Vector<dstd::String> names, Cols&&... cols) {
     DataFrame out;
-    out.names = std::move(names);
+    out.names = dstd::make_shared_strings(names);
     (out.columns.push_back(std::forward<Cols>(cols)), ...);
     return out;
 }
@@ -184,7 +184,8 @@ TEST_CASE("asof - backward basic (no by keys)") {
     const DataFrame out =
         asof_g(ts_frame({3, 10, 20, 30}), ts_vals({5, 15, 25}, {"a", "b", "c"}),
                AsofDirection::Backward);
-    CHECK(out.names == dstd::Vector<dstd::String>{"ts", "val"});
+    CHECK(dstd::to_strings(out.names) ==
+          dstd::Vector<dstd::String>{"ts", "val"});
     CHECK(i64_col(out, "ts") == dstd::Vector<I>{3, 10, 20, 30});
     CHECK(str_col(out, "val") == dstd::Vector<S>{NS, "a", "b", "c"});
 }
@@ -250,7 +251,8 @@ TEST_CASE("asof - by-key partitioning") {
                               i64s({5, 8, 3}), strs({"a1", "a2", "b1"}));
     const DataFrame out = dftu_utils_test::ok(dataframe::asof(
         l, r, "ts", {"pid"}, AsofDirection::Backward, dstd::nullopt));
-    CHECK(out.names == dstd::Vector<dstd::String>{"pid", "ts", "val"});
+    CHECK(dstd::to_strings(out.names) ==
+          dstd::Vector<dstd::String>{"pid", "ts", "val"});
     CHECK(i64_col(out, "pid") == dstd::Vector<I>{1, 2});
     CHECK(str_col(out, "val") == dstd::Vector<S>{"a2", "b1"});
 }
@@ -354,7 +356,7 @@ TEST_CASE("asof - null ts semantics") {
         const DataFrame out =
             asof_g(ts_vals({NI, 20}, {"L0", "L1"}),
                    ts_vals({5, 15}, {"a", "b"}), AsofDirection::Backward);
-        CHECK(out.names ==
+        CHECK(dstd::to_strings(out.names) ==
               dstd::Vector<dstd::String>{"ts", "val", "val_right"});
         CHECK(i64_col(out, "ts") == dstd::Vector<I>{20, NI});
         CHECK(str_col(out, "val") == dstd::Vector<S>{"L1", "L0"});
@@ -385,7 +387,8 @@ TEST_CASE("asof - list<utf8> value passthrough") {
                               Series::list({0, 2, 3}, strs({"p", "q", "r"})));
     const DataFrame out =
         asof_g(ts_frame({10, 20}), r, AsofDirection::Backward);
-    CHECK(out.names == dstd::Vector<dstd::String>{"ts", "tags"});
+    CHECK(dstd::to_strings(out.names) ==
+          dstd::Vector<dstd::String>{"ts", "tags"});
     REQUIRE(out.num_rows() == 2);
     CHECK(str_list(out, "tags", 0) == dstd::Vector<dstd::String>{"p", "q"});
     CHECK(str_list(out, "tags", 1) == dstd::Vector<dstd::String>{"r"});
@@ -430,7 +433,7 @@ TEST_CASE("interval - point in a single interval") {
     const DataFrame l = points({5, 15, 25});
     const DataFrame r = spans({0, 20}, {10, 30}, {"i0", "i1"});
     SUBCASE("schema: left cols then right non-lo/hi value cols") {
-        CHECK(interval_g(l, r, false).names ==
+        CHECK(dstd::to_strings(interval_g(l, r, false).names) ==
               dstd::Vector<dstd::String>{"point", "val"});
     }
     SUBCASE("inner drops the uncovered point") {
@@ -465,7 +468,8 @@ TEST_CASE("interval - by-key partitioning") {
                               i64s({0, 0}), i64s({10, 10}), strs({"p1", "p2"}));
     const DataFrame out = dftu_utils_test::ok(
         dataframe::interval(l, r, "point", "lo", "hi", {"pid"}, false));
-    CHECK(out.names == dstd::Vector<dstd::String>{"pid", "point", "val"});
+    CHECK(dstd::to_strings(out.names) ==
+          dstd::Vector<dstd::String>{"pid", "point", "val"});
     CHECK(i64_col(out, "pid") == dstd::Vector<I>{1, 2});
     CHECK(str_col(out, "val") == dstd::Vector<S>{"p1", "p2"});
 }
@@ -511,7 +515,7 @@ TEST_CASE("interval - null semantics") {
             frame({"ts", "val"}, i64s({NI, 5}), strs({"L0", "L1"}));
         const DataFrame out = dftu_utils_test::ok(dataframe::interval(
             l, spans({0}, {10}, {"span"}), "ts", "lo", "hi", {}, true));
-        CHECK(out.names ==
+        CHECK(dstd::to_strings(out.names) ==
               dstd::Vector<dstd::String>{"ts", "val", "val_right"});
         CHECK(i64_col(out, "ts") == dstd::Vector<I>{5, NI});
         CHECK(str_col(out, "val_right") == dstd::Vector<S>{"span", NS});
@@ -606,7 +610,7 @@ DataFrame keyed(const Rows& rows, const dstd::String& id, int by_mode) {
     for (std::size_t i = 0; i < rows.size(); ++i)
         ids.emplace_back(static_cast<std::int64_t>(i));
     DataFrame out;
-    out.names.push_back(id);
+    out.names.push_back(dstd::SharedString{id});
     out.columns.push_back(i64s(ids));
     if (by_mode & 1) {
         out.names.emplace_back("ki");
@@ -713,13 +717,14 @@ TEST_CASE("asof matches a nested-loop reference") {
                             rids.push_back(
                                 asof_ref(l, i, r, type, by_mode, dir, tol));
                         }
-                        dstd::Vector<dstd::String> names = left.names;
+                        dstd::Vector<dstd::String> names =
+                            dstd::to_strings(left.names);
                         names.emplace_back("rid");
 
                         const DataFrame out =
                             dftu_utils_test::ok(dataframe::asof(
                                 left, right, "t", by_names(by_mode), dir, tol));
-                        CHECK(out.names == names);
+                        CHECK(dstd::to_strings(out.names) == names);
                         CHECK(i64_col(out, "lid") == lids);
                         CHECK(i64_col(out, "rid") == rids);
                     }
@@ -774,13 +779,14 @@ TEST_CASE("interval matches a nested-loop reference") {
                             rids.emplace_back(static_cast<std::int64_t>(j));
                         }
                     }
-                    dstd::Vector<dstd::String> names = left.names;
+                    dstd::Vector<dstd::String> names =
+                        dstd::to_strings(left.names);
                     names.emplace_back("rid");
 
                     const DataFrame out = dftu_utils_test::ok(
                         dataframe::interval(left, right, "p", "lo", "hi",
                                             by_names(by_mode), outer));
-                    CHECK(out.names == names);
+                    CHECK(dstd::to_strings(out.names) == names);
                     CHECK(i64_col(out, "lid") == lids);
                     CHECK(i64_col(out, "rid") == rids);
                 }

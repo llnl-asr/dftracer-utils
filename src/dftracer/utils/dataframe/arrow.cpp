@@ -37,7 +37,7 @@ Series Series::from_arrow(const ArrowSchema* schema, const ArrowArray* array) {
 }
 
 OwnedArrow DataFrame::to_arrow() const {
-    dstd::Vector<dstd::String> field_names = names;
+    dstd::Vector<dstd::String> field_names = dstd::to_strings(names);
     dstd::Vector<Series> field_columns;
     field_columns.reserve(columns.size());
     for (const Series& col : columns) field_columns.push_back(col.share());
@@ -90,7 +90,7 @@ dstd::Optional<DataFrame> frame_from_ipc(dstd::StringView bytes) {
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
 dstd::Result<dstd::Vector<std::uint8_t>> DataFrame::to_ipc() const {
     // Export the frame as one struct (record batch) - schema + array.
-    dstd::Vector<dstd::String> field_names = names;
+    dstd::Vector<dstd::String> field_names = dstd::to_strings(names);
     dstd::Vector<Series> field_columns;
     field_columns.reserve(columns.size());
     for (const Series& col : columns)

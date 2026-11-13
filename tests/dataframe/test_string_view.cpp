@@ -419,7 +419,7 @@ TEST_SUITE("string view kernels match the flat column") {
             v[static_cast<std::size_t>(i)] = i;
         auto frame = [&](const Series& key) {
             DataFrame f;
-            f.names = {"k", "v"};
+            f.names = dstd::make_shared_strings({"k", "v"});
             f.columns.push_back(key.share());
             f.columns.push_back(Series::flat_i64(v.data(), 10));
             return f;
@@ -439,7 +439,7 @@ TEST_SUITE("string view kernels match the flat column") {
         CHECK(counts(p.view) == counts(p.flat));
 
         DataFrame right;
-        right.names = {"k", "w"};
+        right.names = dstd::make_shared_strings({"k", "w"});
         right.columns.push_back(
             Series::strings({"pear", "short", "zz another long value here"}));
         const std::int64_t w[3] = {10, 20, 30};
@@ -459,7 +459,7 @@ TEST_SUITE("string view kernels match the flat column") {
         int released = 0;
         DataFrame left_flat = frame(p.flat);
         DataFrame right_view;
-        right_view.names = {"k", "w"};
+        right_view.names = dstd::make_shared_strings({"k", "w"});
         right_view.columns.push_back(
             Series::strings({"pear", "short", "zz another long value here"}));
         right_view.columns.push_back(Series::flat_i64(w, 3));
@@ -512,7 +512,7 @@ TEST_SUITE("string view writers") {
     TEST_CASE("a native frame writes a view column as values") {
         int released = 0;
         DataFrame f;
-        f.names = {"s"};
+        f.names = dstd::make_shared_strings({"s"});
         f.columns.push_back(make_view(SAMPLE, &released));
         const auto back =
             frame_from_native(dftu_utils_test::ok(frame_to_native(f)));
@@ -526,7 +526,7 @@ TEST_SUITE("string view writers") {
     TEST_CASE("IPC writes a view column as values") {
         int released = 0;
         DataFrame f;
-        f.names = {"s"};
+        f.names = dstd::make_shared_strings({"s"});
         f.columns.push_back(make_view(SAMPLE, &released));
         auto ipc = f.to_ipc();
         REQUIRE(ipc.has_value());

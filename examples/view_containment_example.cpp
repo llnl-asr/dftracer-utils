@@ -34,7 +34,7 @@ int main(int argc, char** argv) {
     const dataframe::DataFrame& ct = both.call_tree;
     std::printf("call_tree: %lld events (columns: ",
                 static_cast<long long>(ct.num_rows()));
-    for (const dftracer::utils::dstd::String& n : ct.names)
+    for (const dftracer::utils::dstd::SharedString& n : ct.names)
         std::printf("%s ", n.c_str());
     std::printf(")\n");
 

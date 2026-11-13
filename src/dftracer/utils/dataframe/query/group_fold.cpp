@@ -71,8 +71,9 @@ dstd::Result<dataframe::Series> joined(
     if (parts.size() == 1) return parts.front().share();
     dstd::Vector<dataframe::DataFrame> frames(parts.size());
     dstd::Vector<const dataframe::DataFrame*> ptrs;
+    const dstd::SharedString value_name{"v"};
     for (std::size_t i = 0; i < parts.size(); ++i) {
-        frames[i].names.push_back("v");
+        frames[i].names.push_back(value_name);
         frames[i].columns.push_back(parts[i].share());
         ptrs.push_back(&frames[i]);
     }
@@ -461,7 +462,7 @@ dstd::Result<dataframe::DataFrame> GroupFold::finish(
     const auto groups = group_count_;
     const auto count = static_cast<std::size_t>(groups);
     dataframe::DataFrame out;
-    out.names = std::move(names);
+    out.names = dstd::make_shared_strings(names);
     if (groups == 0) {
         for (const auto& t : key_types_) out.columns.push_back(empty(t));
         for (const auto& a : aggs_) out.columns.push_back(empty(a.type));

@@ -37,7 +37,7 @@ dataframe::DataFrame events_to_frame(
     if (spec.emit_dyn)
         for (auto& [name, col] :
              build_dyn_numeric_columns(events, intern, spec.select)) {
-            f.names.push_back(std::move(name));
+            f.names.push_back(dstd::SharedString{std::move(name)});
             f.columns.push_back(std::move(col));
         }
     return f;

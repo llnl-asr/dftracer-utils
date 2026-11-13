@@ -66,7 +66,7 @@ DataFrame make_nested() {
     fields.push_back(Series::strings({"read", "write", "open"}));
     fields.push_back(Series::flat_i64(counts, 3));
     DataFrame df;
-    df.names = {"pid", "tk"};
+    df.names = dstd::make_shared_strings({"pid", "tk"});
     df.columns.push_back(i64s({1, 2, 3}));
     df.columns.push_back(Series::list(
         {0, 2, 2, 3}, Series::structs({"value", "count"}, std::move(fields))));
@@ -75,7 +75,7 @@ DataFrame make_nested() {
 
 DataFrame make_base() {
     DataFrame df;
-    df.names = {"k", "n"};
+    df.names = dstd::make_shared_strings({"k", "n"});
     df.columns.push_back(i64s({2, 1}));
     df.columns.push_back(i64s({10, 20}));
     return df;
@@ -83,7 +83,7 @@ DataFrame make_base() {
 
 DataFrame make_variant() {
     DataFrame df;
-    df.names = {"k", "n"};
+    df.names = dstd::make_shared_strings({"k", "n"});
     df.columns.push_back(i64s({1, 3}));
     df.columns.push_back(i64s({15, 7}));
     return df;
@@ -292,7 +292,7 @@ TEST_SUITE("lazy frame ops") {
         "reduce: one aggregate over every eligible column, whole frame "
         "or per key") {
         DataFrame df;
-        df.names = {"k", "s", "a", "b"};
+        df.names = dstd::make_shared_strings({"k", "s", "a", "b"});
         double b[4] = {2.0, 4.0, 6.5, 1.5};
         df.columns.push_back(Series::strings({"x", "y", "x", "y"}));
         df.columns.push_back(Series::strings({"p", "q", "r", "s"}));
@@ -300,20 +300,24 @@ TEST_SUITE("lazy frame ops") {
         df.columns.push_back(Series::flat_f64(b, 4));
 
         DataFrame sum = dftu_utils_test::ok(df.reduce(Agg::Sum));
-        CHECK(sum.names == dstd::Vector<dstd::String>{"a", "b"});
+        CHECK(dstd::to_strings(sum.names) ==
+              dstd::Vector<dstd::String>{"a", "b"});
         REQUIRE(sum.num_rows() == 1);
         CHECK(i64_col(sum, "a") == dstd::Vector<I>{10});
         CHECK(sum.column("b").materialize().data<double>()[0] ==
               doctest::Approx(14.0));
         DataFrame present = dftu_utils_test::ok(df.reduce(Agg::CountValid));
-        CHECK(present.names == dstd::Vector<dstd::String>{"k", "s", "a", "b"});
+        CHECK(dstd::to_strings(present.names) ==
+              dstd::Vector<dstd::String>{"k", "s", "a", "b"});
         CHECK(i64_col(present, "s") == dstd::Vector<I>{4});
         // The grouped broadcast lives on the group-by object.
         DataFrame by_k = dftu_utils_test::ok(df.group_by({"k"}).max());
-        CHECK(by_k.names == dstd::Vector<dstd::String>{"k", "a", "b"});
+        CHECK(dstd::to_strings(by_k.names) ==
+              dstd::Vector<dstd::String>{"k", "a", "b"});
         CHECK(i64_col(by_k, "a") == dstd::Vector<I>{3, 4});
         DataFrame size = dftu_utils_test::ok(df.group_by({"k"}).size());
-        CHECK(size.names == dstd::Vector<dstd::String>{"k", "size"});
+        CHECK(dstd::to_strings(size.names) ==
+              dstd::Vector<dstd::String>{"k", "size"});
         CHECK(i64_col(size, "size") == dstd::Vector<I>{2, 2});
         dftu_utils_test::expect_error(
             df.reduce(Agg::Corr),
@@ -330,7 +334,8 @@ TEST_SUITE("lazy frame ops") {
         specs.push_back(GroupAgg{Agg::Corr, "b", "c", 0.0, "a"});
         specs.push_back(GroupAgg{Agg::Count, "", "n"});
         DataFrame gen = dftu_utils_test::ok(df.reduce(specs));
-        CHECK(gen.names == dstd::Vector<dstd::String>{"c", "n"});
+        CHECK(dstd::to_strings(gen.names) ==
+              dstd::Vector<dstd::String>{"c", "n"});
         CHECK(i64_col(gen, "n") == dstd::Vector<I>{4});
         CHECK(i64_col(dftu_utils_test::ok(df.group_by().agg(specs)), "n") ==
               dstd::Vector<I>{4});
@@ -350,7 +355,8 @@ TEST_SUITE("lazy frame ops") {
         DataFrame lz = run(plan.collect(1));
         CHECK(i64_col(lz, "a") == dstd::Vector<I>{10});
         DataFrame lz_k = run(scan_df().group_by({"k"}).max().collect(1));
-        CHECK(lz_k.names == dstd::Vector<dstd::String>{"k", "a", "b"});
+        CHECK(dstd::to_strings(lz_k.names) ==
+              dstd::Vector<dstd::String>{"k", "a", "b"});
         CHECK(i64_col(lz_k, "a") == dstd::Vector<I>{3, 4});
         DataFrame lz_size = run(scan_df().group_by({"k"}).size().collect(1));
         CHECK(i64_col(lz_size, "size") == dstd::Vector<I>{2, 2});
@@ -401,7 +407,7 @@ TEST_SUITE("lazy frame ops") {
         const std::int64_t av[3] = {1, 0, 3};
         const std::uint8_t valid[1] = {0x05};
         DataFrame df;
-        df.names = {"k", "a"};
+        df.names = dstd::make_shared_strings({"k", "a"});
         df.columns.push_back(Series::strings({"x", "y", "x"}));
         df.columns.push_back(Series::flat_i64(av, 3, valid));
         CHECK(i64_col(dftu_utils_test::ok(df.group_by({"k"}).min()), "a") ==
@@ -428,7 +434,7 @@ TEST_SUITE("lazy frame ops") {
         Series bits = Series{dftu_series_valid_mask(present.handle())};
         Series ones = bits.cast(TypeId::Int64);
         REQUIRE(ones.valid());
-        CHECK(i64_col(DataFrame{{"o"},
+        CHECK(i64_col(DataFrame{dstd::make_shared_strings({"o"}),
                                 [&] {
                                     dstd::Vector<Series> c;
                                     c.push_back(std::move(ones));
@@ -439,7 +445,7 @@ TEST_SUITE("lazy frame ops") {
 
     TEST_CASE("unique(subset): keyed on the named columns, first row kept") {
         DataFrame df;
-        df.names = {"k", "v"};
+        df.names = dstd::make_shared_strings({"k", "v"});
         df.columns.push_back(i64s({1, 1, 2, 2, 3}));
         df.columns.push_back(i64s({1, 2, 3, 3, 4}));
         DataFrame all = dftu_utils_test::ok(df.unique());
@@ -513,7 +519,7 @@ TEST_SUITE("lazy frame ops") {
         const std::int64_t v[7] = {BIG, 1, -BIG, -2, BIG, 1, -1};
         auto frame = [&] {
             DataFrame df;
-            df.names = {"k", "v"};
+            df.names = dstd::make_shared_strings({"k", "v"});
             df.columns.push_back(
                 Series::strings({"x", "x", "y", "y", "z", "z", "z"}));
             df.columns.push_back(Series::flat_i64(v, 7));
@@ -557,7 +563,7 @@ TEST_SUITE("lazy frame ops") {
         }
         auto frame = [&] {
             DataFrame df;
-            df.names = {"k", "j", "v"};
+            df.names = dstd::make_shared_strings({"k", "j", "v"});
             df.columns.push_back(Series::flat_i64(k.data(), N, valid.data()));
             df.columns.push_back(Series::flat_i64(j.data(), N));
             df.columns.push_back(Series::flat_i64(v.data(), N));
@@ -603,7 +609,7 @@ TEST_SUITE("lazy frame ops") {
         const std::uint8_t kvalid[1] = {0xB7};
         auto frame = [&] {
             DataFrame df;
-            df.names = {"k", "j", "v"};
+            df.names = dstd::make_shared_strings({"k", "j", "v"});
             df.columns.push_back(Series::flat_i64(kv, 8, kvalid));
             df.columns.push_back(i64s({0, 0, 1, 0, 0, 1, 0, 0}));
             df.columns.push_back(i64s({0, 1, 2, 3, 4, 5, 6, 7}));
@@ -635,7 +641,7 @@ TEST_SUITE("lazy frame ops") {
         // Equal numbers are one key: 0.0 and -0.0, and every NaN.
         const double fv[5] = {0.0, -0.0, std::nan(""), -std::nan(""), 1.5};
         DataFrame fdf;
-        fdf.names = {"f", "v"};
+        fdf.names = dstd::make_shared_strings({"f", "v"});
         fdf.columns.push_back(Series::flat_f64(fv, 5));
         fdf.columns.push_back(i64s({0, 1, 2, 3, 4}));
         CHECK(i64_col(run(scan(std::move(fdf)).head_by({"f"}, 1).collect(1)),
@@ -764,7 +770,7 @@ TEST_SUITE("lazy frame ops") {
         const std::uint8_t valid[1] = {0x1b};
         const double bv[5] = {1.0, 5.0, 2.0, 5.0, 0.5};
         DataFrame df;
-        df.names = {"k", "a", "b"};
+        df.names = dstd::make_shared_strings({"k", "a", "b"});
         df.columns.push_back(Series::strings({"x", "y", "x", "y", "x"}));
         df.columns.push_back(Series::flat_i64(av, 5, valid));
         df.columns.push_back(Series::flat_f64(bv, 5));
@@ -795,7 +801,8 @@ TEST_SUITE("lazy frame ops") {
         GroupBy g = df.group_by({"k"});
 
         DataFrame cs = dftu_utils_test::ok(g.cumsum());
-        CHECK(cs.names == dstd::Vector<dstd::String>{"a", "b"});
+        CHECK(dstd::to_strings(cs.names) ==
+              dstd::Vector<dstd::String>{"a", "b"});
         CHECK(i64_col(cs, "a") == dstd::Vector<I>{3, 1, NI, 3, 6});
         CHECK(f64_col(cs, "b") == dstd::Vector<D>{1.0, 5.0, 3.0, 10.0, 3.5});
         CHECK(i64_col(dftu_utils_test::ok(g.cummax()), "a") ==
@@ -807,13 +814,15 @@ TEST_SUITE("lazy frame ops") {
         CHECK(f64_col(dftu_utils_test::ok(g.cummin()), "b") ==
               dstd::Vector<D>{1.0, 5.0, 1.0, 5.0, 0.5});
         DataFrame cc = dftu_utils_test::ok(g.cumcount());
-        CHECK(cc.names == dstd::Vector<dstd::String>{"cumcount"});
+        CHECK(dstd::to_strings(cc.names) ==
+              dstd::Vector<dstd::String>{"cumcount"});
         CHECK(i64_col(cc, "cumcount") == dstd::Vector<I>{0, 0, 1, 1, 2});
         CHECK(i64_col(dftu_utils_test::ok(g.ngroup()), "ngroup") ==
               dstd::Vector<I>{0, 1, 0, 1, 0});
 
         DataFrame sh = dftu_utils_test::ok(g.shift());
-        CHECK(sh.names == dstd::Vector<dstd::String>{"a", "b"});
+        CHECK(dstd::to_strings(sh.names) ==
+              dstd::Vector<dstd::String>{"a", "b"});
         CHECK(i64_col(sh, "a") == dstd::Vector<I>{NI, NI, 3, 1, NI});
         CHECK(f64_col(sh, "b") == dstd::Vector<D>{ND, ND, 1.0, 5.0, 2.0});
         CHECK(i64_col(dftu_utils_test::ok(g.shift(-1)), "a") ==
@@ -849,7 +858,8 @@ TEST_SUITE("lazy frame ops") {
               dstd::Vector<D>{2.0, 1.0, ND, 2.0, 2.0});
 
         DataFrame h2 = dftu_utils_test::ok(g.head(2));
-        CHECK(h2.names == dstd::Vector<dstd::String>{"k", "a", "b"});
+        CHECK(dstd::to_strings(h2.names) ==
+              dstd::Vector<dstd::String>{"k", "a", "b"});
         CHECK(f64_col(h2, "b") == dstd::Vector<D>{1.0, 5.0, 2.0, 5.0});
         CHECK(f64_col(dftu_utils_test::ok(g.tail(1)), "b") ==
               dstd::Vector<D>{5.0, 0.5});
@@ -879,7 +889,7 @@ TEST_SUITE("lazy frame ops") {
         // The group-wise fills: a null before the group's first present value
         // stays null under ffill, after its last under bfill.
         DataFrame holes;
-        holes.names = {"k", "a"};
+        holes.names = dstd::make_shared_strings({"k", "a"});
         holes.columns.push_back(Series::strings({"x", "y", "x", "x", "y"}));
         const std::int64_t hv[5] = {0, 1, 2, 0, 0};
         const std::uint8_t hvalid[1] = {0x06};
@@ -915,7 +925,7 @@ TEST_SUITE("lazy frame ops") {
             df.group_by({}).ngroup(),
             dftracer::utils::common::ErrorCode::InvalidArgument);
         DataFrame keys_only;
-        keys_only.names = {"k"};
+        keys_only.names = dstd::make_shared_strings({"k"});
         keys_only.columns.push_back(Series::strings({"x", "y"}));
         dftu_utils_test::expect_error(
             keys_only.group_by({"k"}).cumsum(),
@@ -981,8 +991,8 @@ TEST_SUITE("lazy frame ops") {
         a.scalar(4, dftracer::utils::dataframe::Scalar{zero})
             .scalar(5, dftracer::utils::dataframe::Scalar{zero})
             .str(6, "");
-        LazyFrame lazy =
-            df.lazy().frame_op("dftu.frame.column_op", a, {}, df.names);
+        LazyFrame lazy = df.lazy().frame_op("dftu.frame.column_op", a, {},
+                                            dstd::to_strings(df.names));
         DataFrame out = run(lazy.collect());
         CHECK(f64_col(out, "b") == dstd::Vector<D>{1.0, 6.0, 8.0, 13.0, 13.5});
     }

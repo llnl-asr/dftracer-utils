@@ -140,7 +140,7 @@ void same_rows(const dataframe::DataFrame& a, const dataframe::DataFrame& b) {
 
 dstd::String join_names(const dataframe::DataFrame& f) {
     dstd::String out;
-    for (const auto& n : sorted(f.names)) out += n + " ";
+    for (const auto& n : sorted(dstd::to_strings(f.names))) out += n + " ";
     return out;
 }
 
@@ -201,7 +201,8 @@ void same_as_full(Gen gen, const dstd::String& schema, const dstd::String& q) {
     const auto got = frame(p.view, q);
     INFO(q);
     INFO("got " << join_names(got) << " want " << join_names(want));
-    REQUIRE(sorted(got.names) == sorted(want.names));
+    REQUIRE(sorted(dstd::to_strings(got.names)) ==
+            sorted(dstd::to_strings(want.names)));
     same_rows(got, want);
 }
 
@@ -246,13 +247,15 @@ TEST_SUITE("DropRenameViews") {
         const auto all = frame(q, base);
         REQUIRE(has(all, "v.p50"));
         REQUIRE(has(all, "count"));
-        CHECK(sorted(all.names) == sorted(frame(f, base).names));
+        CHECK(sorted(dstd::to_strings(all.names)) ==
+              sorted(dstd::to_strings(frame(f, base).names)));
 
         const auto dropped = frame(q, base + " | drop v.p50");
         CHECK_FALSE(has(dropped, "v.p50"));
         CHECK(dropped.names.size() == all.names.size() - 1);
         const auto dropped_full = frame(f, base + " | drop v.p50");
-        REQUIRE(sorted(dropped.names) == sorted(dropped_full.names));
+        REQUIRE(sorted(dstd::to_strings(dropped.names)) ==
+                sorted(dstd::to_strings(dropped_full.names)));
         same_rows(dropped, dropped_full);
 
         const dstd::String rename = base + " | rename cnt = count, p = v.p99";
@@ -263,7 +266,8 @@ TEST_SUITE("DropRenameViews") {
         CHECK(has(renamed, "p"));
         CHECK(renamed.names.size() == all.names.size());
         const auto renamed_full = frame(f, rename);
-        REQUIRE(sorted(renamed.names) == sorted(renamed_full.names));
+        REQUIRE(sorted(dstd::to_strings(renamed.names)) ==
+                sorted(dstd::to_strings(renamed_full.names)));
         same_rows(renamed, renamed_full);
     }
 
@@ -350,7 +354,8 @@ TEST_SUITE("DropRenameViews") {
         const Fresh p = fresh(genesis_trace, "genesis");
         const auto got =
             dftu_utils_test::ok(p.view.lazy().fill_null(0).collect().get());
-        REQUIRE(sorted(got.names) == sorted(want.names));
+        REQUIRE(sorted(dstd::to_strings(got.names)) ==
+                sorted(dstd::to_strings(want.names)));
         CHECK(has(got, "v.p50"));
         same_rows(got, want);
     }

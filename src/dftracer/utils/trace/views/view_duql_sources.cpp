@@ -28,8 +28,9 @@ dstd::Vector<std::uint32_t> frame_ids(
         });
     dstd::Vector<std::uint32_t> ids;
     for (std::size_t i = 0; i < f.names.size(); ++i)
-        ids.push_back(intern.get_or_insert(
-            !by_name && i < declared.size() ? declared[i] : f.names[i]));
+        ids.push_back(intern.get_or_insert(!by_name && i < declared.size()
+                                               ? dstd::StringView{declared[i]}
+                                               : f.names[i].view()));
     return ids;
 }
 

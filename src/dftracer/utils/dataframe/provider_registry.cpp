@@ -280,7 +280,10 @@ class ProviderCursor final : public Cursor {
         // O(projected columns), negligible next to the morsel's row data, and
         // the contract binds every dftu_dataframe the cursor produces, not
         // only its first.
-        if (!expected_projection_.empty() && df.names != expected_projection_)
+        if (!expected_projection_.empty() &&
+            !std::equal(df.names.begin(), df.names.end(),
+                        expected_projection_.begin(),
+                        expected_projection_.end()))
             return common::make_error<
                 "provider scan: frame columns [{}] do not match the requested "
                 "projection [{}]">(common::ErrorCode::Internal,

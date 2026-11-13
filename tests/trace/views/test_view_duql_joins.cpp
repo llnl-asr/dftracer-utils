@@ -947,7 +947,8 @@ TEST_SUITE("View duql joins") {
         CHECK(bnum(n, 0, "n") == 3);
         const auto u = frame(view_of(a).duql("select x, y | union (from \"" +
                                              b + "\" | select x, z)"));
-        CHECK(u.names == dstd::Vector<dstd::String>{"x", "y", "z"});
+        CHECK(dstd::to_strings(u.names) ==
+              dstd::Vector<dstd::String>{"x", "y", "z"});
         CHECK(column(u, "x") ==
               dstd::Vector<dstd::String>{"1", "2", "2.500000"});
         CHECK(column(u, "y") == dstd::Vector<dstd::String>{"p", "q", "null"});

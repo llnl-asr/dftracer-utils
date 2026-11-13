@@ -5,6 +5,7 @@
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dstd/result.h>
+#include <dftracer/utils/dstd/shared_string.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 
@@ -104,7 +105,9 @@ class ConcatPlan {
     static dstd::Result<ConcatPlan> make(
         const dstd::Vector<const DataFrame*>& parts, ConcatHow how);
 
-    const dstd::Vector<dstd::String>& names() const noexcept { return names_; }
+    const dstd::Vector<dstd::SharedString>& names() const noexcept {
+        return names_;
+    }
 
     /// Output column `c`, exactly as `concat(parts, how).columns[c]`; the
     /// error of `concat_columns` when its chunks cannot be joined.
@@ -120,7 +123,7 @@ class ConcatPlan {
 
     dstd::Vector<const DataFrame*> parts_;
     bool diagonal_ = false;
-    dstd::Vector<dstd::String> names_;
+    dstd::Vector<dstd::SharedString> names_;
     dstd::Vector<TypeId> types_;
     dstd::Vector<bool> json_;
 };
@@ -261,6 +264,10 @@ bool reduce_broadcasts(Agg agg) noexcept;
 dstd::Result<dstd::Vector<GroupAgg>> reduce_specs(
     const dstd::Vector<dstd::String>& names, const dstd::Vector<TypeId>& types,
     Agg agg, const dstd::Vector<dstd::String>& keys = {});
+dstd::Result<dstd::Vector<GroupAgg>> reduce_specs(
+    const dstd::Vector<dstd::SharedString>& names,
+    const dstd::Vector<TypeId>& types, Agg agg,
+    const dstd::Vector<dstd::String>& keys = {});
 dstd::Result<dstd::Vector<GroupAgg>> reduce_specs(
     const DataFrame& b, Agg agg, const dstd::Vector<dstd::String>& keys = {});
 

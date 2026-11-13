@@ -35,7 +35,8 @@ Schema collected_schema(const DataFrame& df) {
     Schema s;
     s.fields.reserve(df.columns.size());
     for (std::size_t i = 0; i < df.columns.size(); ++i)
-        s.fields.push_back(Field{df.names[i], df.columns[i].data_type(), true});
+        s.fields.push_back(Field{dstd::String{df.names[i].view()},
+                                 df.columns[i].data_type(), true});
     return s;
 }
 
@@ -121,7 +122,7 @@ Series make_decimal128(std::int32_t precision, std::int32_t scale,
 
 DataFrame basic_frame() {
     DataFrame df;
-    df.names = {"a", "b", "cat"};
+    df.names = dstd::make_shared_strings({"a", "b", "cat"});
     df.columns.push_back(i64({1, 2, 3, 4, 5}));
     df.columns.push_back(f64({1.5, 2.5, 3.5, 4.5, 5.5}));
     df.columns.push_back(Series::strings({"x", "y", "x", "z", "y"}));
@@ -133,7 +134,7 @@ DataFrame basic_frame() {
 // ops), a raw-repr string column, and a ts/dur pair for occupancy.
 DataFrame mixed_frame() {
     DataFrame df;
-    df.names = {"cat", "a", "b", "s", "ts", "dur"};
+    df.names = dstd::make_shared_strings({"cat", "a", "b", "s", "ts", "dur"});
     df.columns.push_back(Series::strings({"x", "x", "x", "y", "y", "y"}));
     df.columns.push_back(i64({1, 2, 3, 10, 20, 30}));
     df.columns.push_back(f64({1.5, 2.5, 3.5, 10.5, 20.5, 30.5}));
@@ -208,7 +209,7 @@ TEST_SUITE("LazyFrame output_schema") {
 
     TEST_CASE("explode reports the List element type") {
         DataFrame df;
-        df.names = {"k", "vals"};
+        df.names = dstd::make_shared_strings({"k", "vals"});
         df.columns.push_back(i64({1, 2}));
         dstd::Vector<std::int32_t> off{0, 2, 3};
         df.columns.push_back(Series::list(off, i64({10, 20, 30})));
@@ -235,7 +236,7 @@ TEST_SUITE("LazyFrame output_schema") {
         // dftu_series_fillna only runs on a numeric-dispatchable column, so a
         // Timestamp column is passed through unchanged, tz included.
         DataFrame df;
-        df.names = {"ts"};
+        df.names = dstd::make_shared_strings({"ts"});
         df.columns.push_back(
             make_timestamp({1, 2, 3}, TimeUnit::Micro, "America/Chicago"));
         LazyFrame lf =
@@ -251,7 +252,7 @@ TEST_SUITE("LazyFrame output_schema") {
         "select/rename/filter/sort_by preserve a Timestamp's tz and a "
         "Decimal128's precision/scale") {
         DataFrame df;
-        df.names = {"ts", "dec", "n"};
+        df.names = dstd::make_shared_strings({"ts", "dec", "n"});
         df.columns.push_back(make_timestamp({1, 2, 3}, TimeUnit::Nano, "UTC"));
         df.columns.push_back(make_decimal128(38, 9, {1, 2, 3}));
         df.columns.push_back(i64({3, 1, 2}));
@@ -441,7 +442,7 @@ TEST_SUITE("LazyFrame output_schema") {
         "group_by widens a Decimal128 or Timestamp value column through the "
         "Int64 domain") {
         DataFrame df;
-        df.names = {"cat", "dec", "ts"};
+        df.names = dstd::make_shared_strings({"cat", "dec", "ts"});
         df.columns.push_back(Series::strings({"x", "x", "y"}));
         df.columns.push_back(make_decimal128(38, 9, {100, 200, 300}));
         df.columns.push_back(

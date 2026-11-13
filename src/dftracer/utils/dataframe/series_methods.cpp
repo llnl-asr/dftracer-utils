@@ -24,6 +24,12 @@ double scalar_as_double(dftu_scalar s) {
 }
 }  // namespace
 
+Series Series::rename(const dstd::SharedString& name) const {
+    dftu_series* out = dftu_series_share(handle_);
+    if (out != nullptr) out->name = name;
+    return Series{out};
+}
+
 Series Series::derived(dftu_series* result) const {
     if (result != nullptr && handle_ != nullptr) result->name = handle_->name;
     return Series{result};
@@ -35,7 +41,7 @@ Series Series::derived(dftu_series* result, const Series& other) const {
         name() == other.name())
         result->name = handle_->name;
     else
-        result->name = nullptr;
+        result->name = {};
     return Series{result};
 }
 

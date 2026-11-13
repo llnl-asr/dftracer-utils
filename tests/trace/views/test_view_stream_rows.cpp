@@ -101,8 +101,8 @@ dstd::String create_args_trace(TestEnvironment& env, const dstd::String& name,
 
 dstd::Set<dstd::String> arg_columns(const dataframe::DataFrame& df) {
     dstd::Set<dstd::String> out;
-    for (const dstd::String& n : df.names)
-        if (n.rfind("args.", 0) == 0) out.insert(dstd::String(n));
+    for (const dstd::SharedString& n : df.names)
+        if (n.view().rfind("args.", 0) == 0) out.insert(dstd::String(n.view()));
     return out;
 }
 

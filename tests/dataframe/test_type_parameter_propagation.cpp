@@ -215,7 +215,7 @@ void check_all_ops(const Case& c) {
     check_op(c, c.source.filter(m), 0, "filter");
 
     DataFrame df;
-    df.names = {"id", "col"};
+    df.names = dstd::make_shared_strings({"id", "col"});
     df.columns.push_back(
         Series::flat_i64(dstd::Vector<std::int64_t>{0, 1, 2, 3, 4}.data(), 5));
     df.columns.push_back(c.source.share());
@@ -283,7 +283,7 @@ TEST_SUITE("dataframe_type_parameter_propagation") {
         dstd::Vector<std::int64_t> ts{1609459200000000LL, 1700000000000000LL,
                                       1609459200000000LL, 1700000000000000LL};
         DataFrame df;
-        df.names = {"k", "v"};
+        df.names = dstd::make_shared_strings({"k", "v"});
         df.columns.push_back(make_timestamp(ts, TimeUnit::Micro, "UTC"));
         df.columns.push_back(Series::flat_i64(
             dstd::Vector<std::int64_t>{10, 20, 30, 40}.data(), 4));

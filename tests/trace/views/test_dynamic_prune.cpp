@@ -351,7 +351,7 @@ TEST_SUITE("Dynamic filter pushdown") {
         "results") {
         std::array<std::int64_t, 5> xs{1, 2, 3, 4, 5};
         dataframe::DataFrame df;
-        df.names = {"x"};
+        df.names = dstd::make_shared_strings({"x"});
         df.columns.push_back(dataframe::Series::flat_i64(xs.data(), xs.size()));
 
         auto source =
@@ -390,7 +390,7 @@ TEST_SUITE("Dynamic filter pushdown") {
         // the scan's own key type.
         std::array<std::uint64_t, 1> key{3};
         dataframe::DataFrame right;
-        right.names = {"pid"};
+        right.names = dstd::make_shared_strings({"pid"});
         right.columns.push_back(
             dataframe::Series::flat(dataframe::TypeId::Uint64, key.data(), 1));
 

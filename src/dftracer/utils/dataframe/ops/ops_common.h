@@ -143,16 +143,18 @@ inline dstd::Result<DataFrame> join_columns(
     }
     for (std::size_t c = 0; c < right.columns.size(); ++c) {
         if (std::find(skip.begin(), skip.end(), c) != skip.end()) continue;
-        dstd::String name = right.names[c];
-        auto taken = [&](const dstd::String& n) {
+        dstd::SharedString name = right.names[c];
+        auto taken = [&](dstd::StringView n) {
             return std::find(out.names.begin(), out.names.end(), n) !=
                    out.names.end();
         };
         if (taken(name)) {
-            name += "_right";
-            if (taken(name))
+            dstd::String suffixed{name.view()};
+            suffixed += "_right";
+            if (taken(suffixed))
                 return invalid_argument<"{}: output column name collision: {}">(
-                    who, name);
+                    who, suffixed);
+            name = dstd::SharedString{suffixed};
         }
         out.names.push_back(std::move(name));
         out.columns.push_back(right.columns[c].take(right_rows));

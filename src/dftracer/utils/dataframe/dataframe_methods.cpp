@@ -28,7 +28,9 @@ std::int64_t DataFrame::column_index(dstd::StringView name) const {
 
 Series DataFrame::column(dstd::StringView name) const {
     const std::int64_t i = column_index(name);
-    return i < 0 ? Series{} : columns[static_cast<std::size_t>(i)].rename(name);
+    return i < 0 ? Series{}
+                 : columns[static_cast<std::size_t>(i)].rename(
+                       names[static_cast<std::size_t>(i)]);
 }
 
 DataFrame DataFrame::take(const dstd::Vector<std::int64_t>& indices) const {
@@ -173,7 +175,8 @@ dstd::Result<DataFrame> DataFrame::group_by(
     const std::int64_t idx = expr_col_index(key);
     const dstd::String key_name =
         (idx >= 0 && static_cast<std::size_t>(idx) < names.size())
-            ? names[static_cast<std::size_t>(idx)]
+            ? dstd::String(
+                  dstd::StringView{names[static_cast<std::size_t>(idx)]})
             : dstd::String("key");
     dstd::Vector<const Series*> inputs;
     inputs.reserve(columns.size());
@@ -190,7 +193,8 @@ dstd::Result<DataFrame> DataFrame::group_by(
         const std::int64_t idx = expr_col_index(keys[k]);
         key_names.push_back(
             (idx >= 0 && static_cast<std::size_t>(idx) < names.size())
-                ? names[static_cast<std::size_t>(idx)]
+                ? dstd::String(
+                      dstd::StringView{names[static_cast<std::size_t>(idx)]})
                 : dstd::fmt<"key{}">(k));
     }
     dstd::Vector<const Series*> inputs;

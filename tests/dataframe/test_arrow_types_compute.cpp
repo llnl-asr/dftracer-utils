@@ -586,7 +586,7 @@ TEST_SUITE("dataframe_arrow_types_compute") {
 
         // DataFrame::group_by (AggState/group_agg engine).
         DataFrame df;
-        df.names = {"ts", "v"};
+        df.names = dstd::make_shared_strings({"ts", "v"});
         df.columns.push_back(keys.share());
         df.columns.push_back(values.share());
         DataFrame grouped = dftu_utils_test::ok(
@@ -816,7 +816,7 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         dstd::Vector<std::int64_t> ones(6, 1);
         Series values = Series::flat_i64(ones.data(), 6);
         DataFrame df;
-        df.names = {"k", "v"};
+        df.names = dstd::make_shared_strings({"k", "v"});
         df.columns.push_back(keys.share());
         df.columns.push_back(values.share());
         DataFrame grouped = dftu_utils_test::ok(
@@ -925,7 +925,7 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         dstd::Vector<std::int64_t> ones(6, 1);
         Series values = Series::flat_i64(ones.data(), 6);
         DataFrame df;
-        df.names = {"k", "v"};
+        df.names = dstd::make_shared_strings({"k", "v"});
         df.columns.push_back(keys.share());
         df.columns.push_back(values.share());
         DataFrame grouped = dftu_utils_test::ok(
@@ -1010,7 +1010,7 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         dstd::Vector<std::int64_t> ones(6, 1);
         Series values = Series::flat_i64(ones.data(), 6);
         DataFrame df;
-        df.names = {"k", "v"};
+        df.names = dstd::make_shared_strings({"k", "v"});
         df.columns.push_back(keys.share());
         df.columns.push_back(values.share());
         DataFrame grouped = dftu_utils_test::ok(
@@ -1093,7 +1093,7 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         dstd::Vector<std::int64_t> ones(6, 1);
         Series values = Series::flat_i64(ones.data(), 6);
         DataFrame df;
-        df.names = {"k", "v"};
+        df.names = dstd::make_shared_strings({"k", "v"});
         df.columns.push_back(keys.share());
         df.columns.push_back(values.share());
         DataFrame grouped = dftu_utils_test::ok(
@@ -1167,7 +1167,7 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         dstd::Vector<std::int64_t> ones(6, 1);
         Series values = Series::flat_i64(ones.data(), 6);
         DataFrame df;
-        df.names = {"k", "v"};
+        df.names = dstd::make_shared_strings({"k", "v"});
         df.columns.push_back(keys.share());
         df.columns.push_back(values.share());
         DataFrame grouped = dftu_utils_test::ok(
@@ -1245,7 +1245,7 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         dstd::Vector<std::int64_t> ones(6, 1);
         Series values = Series::flat_i64(ones.data(), 6);
         DataFrame df;
-        df.names = {"k", "v"};
+        df.names = dstd::make_shared_strings({"k", "v"});
         df.columns.push_back(keys.share());
         df.columns.push_back(values.share());
         DataFrame grouped = dftu_utils_test::ok(

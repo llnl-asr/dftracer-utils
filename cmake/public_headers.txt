@@ -117,6 +117,7 @@ dftracer/utils/dstd/raw_buffer.h
 dftracer/utils/dstd/result.h
 dftracer/utils/dstd/scope_exit.h
 dftracer/utils/dstd/scoped_fd.h
+dftracer/utils/dstd/shared_string.h
 dftracer/utils/dstd/shutdown.h
 dftracer/utils/dstd/singleton.h
 dftracer/utils/dstd/span.h

@@ -399,7 +399,7 @@ dftracer::utils::dataframe::Morsel slice_morsel(
     const dftracer::utils::dataframe::Morsel& m, std::int64_t offset,
     std::int64_t n) {
     dftracer::utils::dataframe::DataFrame tmp;
-    tmp.names.assign(m.columns.size(), dstd::String());
+    tmp.names.assign(m.columns.size(), dstd::SharedString());
     for (const dftracer::utils::dataframe::Series& c : m.columns)
         tmp.columns.push_back(c.share());
     dftracer::utils::dataframe::DataFrame s = tmp.slice(offset, n);
@@ -1092,7 +1092,7 @@ dataframe::DataFrame declared(dataframe::DataFrame f,
     dstd::Vector<bool> used(f.names.size(), false);
     for (const dataframe::Field& field : schema.fields) {
         const auto it = std::find(f.names.begin(), f.names.end(), field.name);
-        out.names.push_back(field.name);
+        out.names.push_back(dstd::SharedString{field.name});
         if (it != f.names.end()) {
             const auto at = static_cast<std::size_t>(it - f.names.begin());
             used[at] = true;
@@ -1427,8 +1427,8 @@ dstd::Result<dftracer::utils::dataframe::Schema> ViewSource::compute_schema()
     const dataframe::DataFrame& buf = **held;
     s.fields.reserve(buf.columns.size());
     for (std::size_t i = 0; i < buf.columns.size(); ++i)
-        s.fields.push_back(
-            dataframe::Field{buf.names[i], buf.columns[i].data_type(), true});
+        s.fields.push_back(dataframe::Field{dstd::String{buf.names[i].view()},
+                                            buf.columns[i].data_type(), true});
     return s;
 }
 
@@ -1614,7 +1614,7 @@ dataframe::DataFrame partial_frame(dstd::StringView partial) {
     const std::int32_t offsets[2] = {0,
                                      static_cast<std::int32_t>(partial.size())};
     dataframe::DataFrame f;
-    f.names = {"partial"};
+    f.names.push_back(dstd::SharedString{"partial"});
     f.columns.push_back(dataframe::Series{dftu_series_new_string(
         static_cast<dftu_dtype>(dataframe::TypeId::Binary), offsets,
         partial.data(), 1, nullptr)});

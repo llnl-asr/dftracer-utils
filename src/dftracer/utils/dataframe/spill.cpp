@@ -383,8 +383,8 @@ dstd::Result<Series> get_series_in(In& in) {
     if (in.bad) return truncated_read();
     dftu_series* h = s.handle();
     if (name_bytes > 0)
-        h->name = dstd::make_shared<dstd::String>(
-            reinterpret_cast<const char*>(name), name_bytes);
+        h->name = dstd::SharedString{
+            dstd::StringView{reinterpret_cast<const char*>(name), name_bytes}};
     h->set_json(json);
     h->set_time_unit(unit);
     h->set_timezone(

@@ -461,7 +461,7 @@ dftu_node_vt make_forward_vt() {
 
 DataFrame right_keys(dstd::Vector<std::int64_t> keys) {
     DataFrame df;
-    df.names = {"key"};
+    df.names = dstd::make_shared_strings({"key"});
     df.columns.push_back(
         Series::flat_i64(keys.data(), static_cast<std::int64_t>(keys.size())));
     return df;
@@ -1020,7 +1020,7 @@ TEST_SUITE("lazyframe plugin node") {
                                    &sync_flags) == 0);
 
         DataFrame df;
-        df.names = {"val"};
+        df.names = dstd::make_shared_strings({"val"});
         dstd::Vector<std::int64_t> v{1, 2, 3};
         df.columns.push_back(Series::flat_i64(v.data(), 3));
 

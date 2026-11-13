@@ -136,7 +136,7 @@ coro::CoroTask<DataFrame> drain_cursor(dstd::UniquePtr<Cursor> cur) {
         auto m = dftu_utils_test::ok(co_await cur->next(1 << 20));
         if (!m) break;
         out.columns = std::move(m->columns);
-        out.names.assign(out.columns.size(), dstd::String());
+        out.names.assign(out.columns.size(), dstd::SharedString());
     }
     co_return out;
 }
@@ -180,6 +180,16 @@ coro::CoroTask<dstd::Vector<DataFrame>> stream_parts(
     co_return parts;
 }
 
+// The name blocks of every frame of a stream. A stream that builds one name
+// block per column, not one per morsel, hands every frame the same bytes.
+coro::CoroTask<dstd::Vector<dstd::Vector<dstd::SharedString>>> stream_names(
+    dftracer::utils::coro::AsyncGenerator<dstd::Result<DataFrame>> gen) {
+    dstd::Vector<dstd::Vector<dstd::SharedString>> all;
+    while (auto df = co_await gen.next())
+        all.push_back(dftu_utils_test::ok(std::move(*df)).names);
+    co_return all;
+}
+
 dstd::Vector<DataFrame> run_stream(const LazyFrame& lf, std::int64_t rows) {
     return dftu_utils_test::ok(dftracer::utils::default_runtime()
                                    .submit(stream_parts(lf.stream(rows)))
@@ -190,7 +200,7 @@ DataFrame make_df() {
     dstd::Vector<std::int64_t> a{1, 2, 3, 4, 5, 6};
     dstd::Vector<std::int64_t> b{10, 20, 30, 40, 50, 60};
     DataFrame df;
-    df.names = {"a", "b"};
+    df.names = dstd::make_shared_strings({"a", "b"});
     df.columns.push_back(Series::flat_i64(a.data(), 6));
     df.columns.push_back(Series::flat_i64(b.data(), 6));
     return df;
@@ -267,6 +277,33 @@ class RaggedSource : public Source {
 }  // namespace
 
 TEST_SUITE("lazyframe") {
+    TEST_CASE("a stream builds its column names once, not once per morsel") {
+        dstd::Vector<std::int64_t> a(40), b(40);
+        for (std::int64_t i = 0; i < 40; ++i) {
+            a[static_cast<std::size_t>(i)] = i + 1;
+            b[static_cast<std::size_t>(i)] = 10 * i;
+        }
+        DataFrame df;
+        df.names = dstd::make_shared_strings({"a", "b"});
+        df.columns.push_back(Series::flat_i64(a.data(), 40));
+        df.columns.push_back(Series::flat_i64(b.data(), 40));
+        auto lf = df.lazy()
+                      .filter(col(0) > std::int64_t{0})
+                      .with_column("c", col(0) + col(1))
+                      .select({"a", "c"});
+        auto all = dftu_utils_test::ok(dftracer::utils::default_runtime()
+                                           .submit(stream_names(lf.stream(4)))
+                                           .get());
+        REQUIRE(all.size() >= 8);
+        for (const auto& names : all) {
+            REQUIRE(names.size() == 2);
+            for (std::size_t c = 0; c < 2; ++c) {
+                CHECK(names[c] == all[0][c]);
+                CHECK(names[c].data() == all[0][c].data());
+            }
+        }
+    }
+
     TEST_CASE("lazy filter+with_column+select matches the eager path") {
         auto lf = make_df()
                       .lazy()
@@ -311,7 +348,8 @@ TEST_SUITE("lazyframe") {
                       .with_column("c", col(0) + col(1))
                       .select({"a", "c"});
         DataFrame r = run(lf.collect());  // in-memory, fused
-        CHECK(r.names == dstd::Vector<dstd::String>{"a", "c"});
+        CHECK(dstd::to_strings(r.names) ==
+              dstd::Vector<dstd::String>{"a", "c"});
         CHECK(r.num_rows() == 4);  // b in {30,40,50,60} -> a in {3,4,5,6}
         const std::int64_t* a = r.column("a").data<std::int64_t>();
         const std::int64_t* c = r.column("c").data<std::int64_t>();
@@ -384,7 +422,7 @@ TEST_SUITE("lazyframe") {
         CHECK(proj < filt);  // projection pushed ahead of the filter
 
         DataFrame r = run(lf.collect());
-        CHECK(r.names == dstd::Vector<dstd::String>{"a"});
+        CHECK(dstd::to_strings(r.names) == dstd::Vector<dstd::String>{"a"});
         CHECK(r.num_rows() == 4);  // a in {3,4,5,6}
         const std::int64_t* a = r.column("a").data<std::int64_t>();
         CHECK(a[0] == 3);
@@ -398,7 +436,7 @@ TEST_SUITE("lazyframe") {
         auto lf =
             make_df().lazy().filter(col(1) > std::int64_t{30}).select({"a"});
         DataFrame r = run(lf.collect());
-        CHECK(r.names == dstd::Vector<dstd::String>{"a"});
+        CHECK(dstd::to_strings(r.names) == dstd::Vector<dstd::String>{"a"});
         CHECK(r.num_rows() == 3);  // b in {40,50,60} -> a in {4,5,6}
         const std::int64_t* a = r.column("a").data<std::int64_t>();
         CHECK(a[0] == 4);
@@ -429,7 +467,8 @@ TEST_SUITE("lazyframe") {
         CHECK(t.column("a").data<std::int64_t>()[1] == 6);
 
         DataFrame r = run(base.rename({"x", "y"}).collect());
-        CHECK(r.names == dstd::Vector<dstd::String>{"x", "y"});
+        CHECK(dstd::to_strings(r.names) ==
+              dstd::Vector<dstd::String>{"x", "y"});
         CHECK(r.column("x").data<std::int64_t>()[5] == 6);
     }
 
@@ -437,7 +476,7 @@ TEST_SUITE("lazyframe") {
         dstd::Vector<std::int64_t> a{1, 2, 3, 4};
         std::uint8_t bm = 0b1011;  // rows 0,1,3 valid; row 2 null
         DataFrame df;
-        df.names = {"a"};
+        df.names = dstd::make_shared_strings({"a"});
         df.columns.push_back(Series::flat_i64(a.data(), 4, &bm));
 
         DataFrame f = run(df.lazy().fill_null(std::int64_t{-1}).collect());
@@ -466,7 +505,8 @@ TEST_SUITE("lazyframe") {
         CHECK(((a[0] == 6 && a[1] == 5) || (a[0] == 5 && a[1] == 6)));
 
         DataFrame up = run(make_df().lazy().unpivot({"a"}, {"b"}).collect(2));
-        CHECK(up.names == dstd::Vector<dstd::String>{"a", "variable", "value"});
+        CHECK(dstd::to_strings(up.names) ==
+              dstd::Vector<dstd::String>{"a", "variable", "value"});
         CHECK(up.num_rows() == 6);
     }
 
@@ -474,7 +514,7 @@ TEST_SUITE("lazyframe") {
         dstd::Vector<std::int64_t> g{0, 1, 0, 1, 0, 1};
         dstd::Vector<std::int64_t> v{1, 2, 3, 4, 5, 6};
         DataFrame df;
-        df.names = {"g", "v"};
+        df.names = dstd::make_shared_strings({"g", "v"});
         df.columns.push_back(Series::flat_i64(g.data(), 6));
         df.columns.push_back(Series::flat_i64(v.data(), 6));
         dstd::Vector<GroupAgg> aggs{{Agg::Sum, "v", "sum", 0.0},
@@ -507,7 +547,7 @@ TEST_SUITE("lazyframe") {
         dstd::Vector<std::int64_t> p{1, 1, 1, 2, 1, 2};
         dstd::Vector<std::int64_t> v{1, 2, 3, 4, 5, 6};
         DataFrame df;
-        df.names = {"g", "p", "v"};
+        df.names = dstd::make_shared_strings({"g", "p", "v"});
         df.columns.push_back(Series::flat_i64(g.data(), 6));
         df.columns.push_back(Series::flat_i64(p.data(), 6));
         df.columns.push_back(Series::flat_i64(v.data(), 6));
@@ -521,7 +561,7 @@ TEST_SUITE("lazyframe") {
                     .collect(2));
         DataFrame expected = dftu_utils_test::ok(
             df.group_by(dstd::Vector<dstd::String>{"g", "p"}, aggs));
-        REQUIRE(r.names ==
+        REQUIRE(dstd::to_strings(r.names) ==
                 dstd::Vector<dstd::String>{"g", "p", "sum", "count"});
         REQUIRE(r.num_rows() == expected.num_rows());
         for (std::int64_t i = 0; i < r.num_rows(); ++i) {
@@ -552,7 +592,7 @@ TEST_SUITE("lazyframe") {
             v[static_cast<std::size_t>(i)] = i;
         }
         DataFrame df;
-        df.names = {"g", "p", "v"};
+        df.names = dstd::make_shared_strings({"g", "p", "v"});
         df.columns.push_back(Series::flat_i64(g.data(), N));
         df.columns.push_back(Series::flat_i64(p.data(), N));
         df.columns.push_back(Series::flat_i64(v.data(), N));
@@ -602,7 +642,7 @@ TEST_SUITE("lazyframe") {
         dstd::Vector<double> x{1, 2, 3, 4};
         dstd::Vector<double> y{10, 20, 30, 40};
         DataFrame df;
-        df.names = {"g", "arg.x", "arg.y"};
+        df.names = dstd::make_shared_strings({"g", "arg.x", "arg.y"});
         df.columns.push_back(Series::flat_i64(g.data(), 4));
         df.columns.push_back(Series::flat_f64(x.data(), 4));
         df.columns.push_back(Series::flat_f64(y.data(), 4));
@@ -654,7 +694,7 @@ TEST_SUITE("lazyframe") {
             }
         }
         DataFrame df;
-        df.names = {"k", "arg.x", "arg.z"};
+        df.names = dstd::make_shared_strings({"k", "arg.x", "arg.z"});
         df.columns.push_back(Series::flat_i64(k.data(), N));
         df.columns.push_back(Series::flat_f64(x.data(), N));
         df.columns.push_back(Series::flat_f64(z.data(), N, z_valid.data()));
@@ -703,7 +743,7 @@ TEST_SUITE("lazyframe") {
             v[static_cast<std::size_t>(i)] = i * 2;
         }
         DataFrame df;
-        df.names = {"k", "v"};
+        df.names = dstd::make_shared_strings({"k", "v"});
         df.columns.push_back(Series::flat_i64(k.data(), N));
         df.columns.push_back(Series::flat_i64(v.data(), N));
 
@@ -735,7 +775,7 @@ TEST_SUITE("lazyframe") {
         dstd::Vector<std::int64_t> p{1, 1, 1, 2, 1, 2};
         dstd::Vector<std::int64_t> v{1, 2, 3, 4, 5, 6};
         DataFrame df;
-        df.names = {"g", "p", "v"};
+        df.names = dstd::make_shared_strings({"g", "p", "v"});
         df.columns.push_back(Series::flat_i64(g.data(), 6));
         df.columns.push_back(Series::flat_i64(p.data(), 6));
         df.columns.push_back(Series::flat_i64(v.data(), 6));
@@ -772,7 +812,7 @@ TEST_SUITE("lazyframe") {
         dstd::Vector<std::int64_t> g{0, 1, 0, 1, 0, 1};
         dstd::Vector<std::int64_t> v{1, 2, 3, 4, 5, 6};
         DataFrame df;
-        df.names = {"g", "v"};
+        df.names = dstd::make_shared_strings({"g", "v"});
         df.columns.push_back(Series::flat_i64(g.data(), 6));
         df.columns.push_back(Series::flat_i64(v.data(), 6));
 
@@ -808,7 +848,7 @@ TEST_SUITE("lazyframe") {
         dstd::Vector<std::int64_t> x{10, 20, 30, 40, 50, 60};
         dstd::Vector<std::int64_t> by{5, 1, 9, 2, 3, 7};
         DataFrame df;
-        df.names = {"g", "x", "by"};
+        df.names = dstd::make_shared_strings({"g", "x", "by"});
         df.columns.push_back(Series::flat_i64(g.data(), 6));
         df.columns.push_back(Series::flat_i64(x.data(), 6));
         df.columns.push_back(Series::flat_i64(by.data(), 6));
@@ -850,7 +890,7 @@ TEST_SUITE("lazyframe") {
         dstd::Vector<std::int64_t> x{10, 20, 30, 40, 50, 60};
         dstd::Vector<std::int64_t> by{5, 1, 9, 2, 3, 7};
         DataFrame df;
-        df.names = {"a", "b", "x", "by"};
+        df.names = dstd::make_shared_strings({"a", "b", "x", "by"});
         df.columns.push_back(Series::flat_i64(a.data(), 6));
         df.columns.push_back(Series::flat_i64(b.data(), 6));
         df.columns.push_back(Series::flat_i64(x.data(), 6));
@@ -894,7 +934,7 @@ TEST_SUITE("lazyframe") {
         dstd::Vector<std::int64_t> b{0, 1, 0, 0, 1, 1};
         dstd::Vector<std::int64_t> x{10, 20, 30, 40, 50, 60};
         DataFrame df;
-        df.names = {"a", "b", "x"};
+        df.names = dstd::make_shared_strings({"a", "b", "x"});
         df.columns.push_back(Series::flat_i64(a.data(), 6));
         df.columns.push_back(Series::flat_i64(b.data(), 6));
         df.columns.push_back(Series::flat_i64(x.data(), 6));
@@ -930,7 +970,7 @@ TEST_SUITE("lazyframe") {
 
         dstd::Vector<std::int64_t> d{1, 1, 2, 2, 3};
         DataFrame df;
-        df.names = {"x"};
+        df.names = dstd::make_shared_strings({"x"});
         df.columns.push_back(Series::flat_i64(d.data(), 5));
         DataFrame u = run(df.lazy().unique().collect(2));
         CHECK(u.num_rows() == 3);
@@ -940,7 +980,7 @@ TEST_SUITE("lazyframe") {
         // Duplicates spread across morsels; keep-first order must be preserved.
         dstd::Vector<std::int64_t> x{5, 3, 5, 1, 3, 5, 2, 1};
         DataFrame df;
-        df.names = {"x"};
+        df.names = dstd::make_shared_strings({"x"});
         df.columns.push_back(Series::flat_i64(x.data(), 8));
         DataFrame lz = run(df.lazy().unique().collect(3));  // multi-morsel scan
         DataFrame eg = dftu_utils_test::ok(df.unique());
@@ -954,7 +994,7 @@ TEST_SUITE("lazyframe") {
     TEST_CASE("unique external spill (tiny budget) matches in-memory") {
         dstd::Vector<std::int64_t> x{5, 3, 5, 1, 3, 5, 2, 1, 7, 3, 9, 5};
         DataFrame df;
-        df.names = {"x"};
+        df.names = dstd::make_shared_strings({"x"});
         df.columns.push_back(
             Series::flat_i64(x.data(), static_cast<std::int64_t>(x.size())));
 
@@ -979,7 +1019,7 @@ TEST_SUITE("lazyframe") {
         for (std::int64_t i = 0; i < N; ++i)
             x[static_cast<std::size_t>(i)] = i % 700;  // 700 distinct keys
         DataFrame df;
-        df.names = {"x"};
+        df.names = dstd::make_shared_strings({"x"});
         df.columns.push_back(Series::flat_i64(x.data(), N));
 
         DataFrame eg = dftu_utils_test::ok(df.unique());
@@ -1003,7 +1043,7 @@ TEST_SUITE("lazyframe") {
         "in order") {
         dstd::Vector<std::int64_t> x{5, 3, 5, 1, 3, 5, 2, 1, 7, 9};
         DataFrame df;
-        df.names = {"x"};
+        df.names = dstd::make_shared_strings({"x"});
         df.columns.push_back(
             Series::flat_i64(x.data(), static_cast<std::int64_t>(x.size())));
 
@@ -1026,7 +1066,7 @@ TEST_SUITE("lazyframe") {
             v[static_cast<std::size_t>(i)] = i;
         }
         DataFrame df;
-        df.names = {"k", "v"};
+        df.names = dstd::make_shared_strings({"k", "v"});
         df.columns.push_back(Series::flat_i64(k.data(), 200));
         df.columns.push_back(Series::flat_i64(v.data(), 200));
 
@@ -1059,7 +1099,7 @@ TEST_SUITE("lazyframe") {
             v[static_cast<std::size_t>(i)] = i;
         }
         DataFrame df;
-        df.names = {"k", "v"};
+        df.names = dstd::make_shared_strings({"k", "v"});
         df.columns.push_back(Series::flat_i64(k.data(), n));
         df.columns.push_back(Series::flat_i64(v.data(), n));
         DataFrame lz =
@@ -1100,7 +1140,7 @@ TEST_SUITE("lazyframe") {
                 valid[z >> 3] |= static_cast<std::uint8_t>(1u << (z & 7));
         }
         DataFrame df;
-        df.names = {"d", "t", "f", "id"};
+        df.names = dstd::make_shared_strings({"d", "t", "f", "id"});
         df.columns.push_back(
             Series::flat(TypeId::Date32, date.data(), n, valid.data()));
         df.columns.push_back(
@@ -1125,7 +1165,7 @@ TEST_SUITE("lazyframe") {
         }
         for (const std::int64_t rows : {std::int64_t{0}, std::int64_t{1}}) {
             DataFrame small;
-            small.names = {"t", "id"};
+            small.names = dstd::make_shared_strings({"t", "id"});
             small.columns.push_back(
                 Series::flat(TypeId::Timestamp, ts.data(), rows));
             small.columns.push_back(Series::flat_i64(id.data(), rows));
@@ -1161,7 +1201,8 @@ TEST_SUITE("lazyframe") {
                     fv[z >> 3] |= static_cast<std::uint8_t>(1u << (z & 7));
             }
             DataFrame df;
-            df.names = {"p", "o", "v", "f", "t", "u"};
+            df.names =
+                dstd::make_shared_strings({"p", "o", "v", "f", "t", "u"});
             df.columns.push_back(Series::flat_i64(p.data(), n));
             df.columns.push_back(Series::flat_i64(o.data(), n));
             df.columns.push_back(Series::flat_i64(v.data(), n, vv.data()));
@@ -1273,7 +1314,7 @@ TEST_SUITE("lazyframe") {
                 args.strlist(1, pc.data(), static_cast<std::int32_t>(pc.size()))
                     .strlist(2, oc, 1)
                     .winlist(3, specs);
-                dstd::Vector<dstd::String> names = df.names;
+                dstd::Vector<dstd::String> names = dstd::to_strings(df.names);
                 for (const dftu_window_spec& s : specs)
                     names.emplace_back(s.out);
                 const LazyFrame plan =
@@ -1333,7 +1374,8 @@ TEST_SUITE("lazyframe") {
                     wv[z >> 3] |= static_cast<std::uint8_t>(1u << (z & 7));
             }
             DataFrame df;
-            df.names = {"p", "o", "v", "f", "g", "u", "w", "s", "h"};
+            df.names = dstd::make_shared_strings(
+                {"p", "o", "v", "f", "g", "u", "w", "s", "h"});
             df.columns.push_back(Series::flat_i64(p.data(), n));
             df.columns.push_back(Series::flat_i64(o.data(), n));
             df.columns.push_back(Series::flat_i64(v.data(), n, vv.data()));
@@ -1573,7 +1615,7 @@ TEST_SUITE("lazyframe") {
                 args.strlist(1, pc.data(), static_cast<std::int32_t>(pc.size()))
                     .strlist(2, oc, 1)
                     .winlist(3, group.specs);
-                dstd::Vector<dstd::String> names = df.names;
+                dstd::Vector<dstd::String> names = dstd::to_strings(df.names);
                 for (const dftu_window_spec& s : group.specs)
                     names.emplace_back(s.out);
                 const LazyFrame plan =
@@ -1608,7 +1650,7 @@ TEST_SUITE("lazyframe") {
             s[z] = dstd::fmt<"s{}">(i % 31);
         }
         DataFrame df;
-        df.names = {"p", "o", "v", "s"};
+        df.names = dstd::make_shared_strings({"p", "o", "v", "s"});
         df.columns.push_back(Series::flat_i64(p.data(), n));
         df.columns.push_back(Series::flat_i64(o.data(), n));
         df.columns.push_back(Series::flat_i64(v.data(), n));
@@ -1641,7 +1683,7 @@ TEST_SUITE("lazyframe") {
         const char* oc[] = {"o"};
         OpArgs args;
         args.strlist(1, pc, 1).strlist(2, oc, 1).winlist(3, specs);
-        dstd::Vector<dstd::String> names = df.names;
+        dstd::Vector<dstd::String> names = dstd::to_strings(df.names);
         for (const dftu_window_spec& w : specs) names.emplace_back(w.out);
         const LazyFrame plan =
             df.lazy().frame_op("dftu.frame.window", args, {}, names);
@@ -1676,7 +1718,7 @@ TEST_SUITE("lazyframe") {
                 wv[z >> 3] |= static_cast<std::uint8_t>(1u << (z & 7));
         }
         DataFrame df;
-        df.names = {"k", "v", "f", "u", "w"};
+        df.names = dstd::make_shared_strings({"k", "v", "f", "u", "w"});
         df.columns.push_back(Series::flat_i64(k.data(), n));
         df.columns.push_back(Series::flat_i64(v.data(), n, vv.data()));
         df.columns.push_back(Series::flat_f64(f.data(), n, fv.data()));
@@ -1844,7 +1886,7 @@ TEST_SUITE("lazyframe") {
                                 dftracer::utils::dataframe::RankMethod::Average,
                                 true))
                             .collect(64));
-                    REQUIRE(got.names ==
+                    REQUIRE(dstd::to_strings(got.names) ==
                             dstd::Vector<dstd::String>{"cumcount"});
                     const Series cc = got.columns[0].materialize();
                     dstd::Map<std::int64_t, std::int64_t> seen;
@@ -1932,12 +1974,12 @@ TEST_SUITE("lazyframe") {
             TypeId::Float32, TypeId::Float64};
         for (const TypeId t : types) {
             DataFrame num;
-            num.names = {"k", "v", "k2"};
+            num.names = dstd::make_shared_strings({"k", "v", "k2"});
             num.columns.push_back(Series::flat_i64(k.data(), n, kv.data()));
             num.columns.push_back(typed(t));
             num.columns.push_back(Series::flat(TypeId::Int32, k2.data(), n));
             DataFrame str;
-            str.names = {"s", "v"};
+            str.names = dstd::make_shared_strings({"s", "v"});
             str.columns.push_back(Series::strings(names));
             str.columns.push_back(typed(t));
             struct Plan {
@@ -1982,7 +2024,7 @@ TEST_SUITE("lazyframe") {
             v[static_cast<std::size_t>(i)] = i;
         }
         DataFrame df;
-        df.names = {"k", "v"};
+        df.names = dstd::make_shared_strings({"k", "v"});
         df.columns.push_back(Series::flat_i64(k.data(), n));
         df.columns.push_back(Series::flat_i64(v.data(), n));
         const DataFrame want =
@@ -2006,7 +2048,7 @@ TEST_SUITE("lazyframe") {
         auto frame = [&](dstd::Vector<double> k, dstd::Vector<std::int64_t> v) {
             const auto n = static_cast<std::int64_t>(k.size());
             DataFrame df;
-            df.names = {"k", "v"};
+            df.names = dstd::make_shared_strings({"k", "v"});
             df.columns.push_back(Series::flat_f64(k.data(), n));
             df.columns.push_back(Series::flat_i64(v.data(), n));
             return df;
@@ -2076,7 +2118,7 @@ TEST_SUITE("lazyframe") {
         };
         auto frame = [&](TypeId t, const void* v) {
             DataFrame df;
-            df.names = {"k", "ord", "v"};
+            df.names = dstd::make_shared_strings({"k", "ord", "v"});
             df.columns.push_back(Series::flat_i64(k.data(), 2));
             df.columns.push_back(Series::flat_i64(ord.data(), 2));
             df.columns.push_back(Series::flat(t, v, 2));
@@ -2137,16 +2179,16 @@ TEST_SUITE("lazyframe") {
                 kv[z >> 3] |= static_cast<std::uint8_t>(1u << (z & 7));
         }
         DataFrame num;
-        num.names = {"k", "v"};
+        num.names = dstd::make_shared_strings({"k", "v"});
         num.columns.push_back(Series::flat_i64(k.data(), n, kv.data()));
         num.columns.push_back(Series::flat_i64(v.data(), n));
         // Float keys: negative zero and zero are one group, every NaN is one.
         DataFrame flt;
-        flt.names = {"k", "v"};
+        flt.names = dstd::make_shared_strings({"k", "v"});
         flt.columns.push_back(Series::flat_f64(kf.data(), n, kv.data()));
         flt.columns.push_back(Series::flat_i64(v.data(), n));
         DataFrame str;
-        str.names = {"s", "v"};
+        str.names = dstd::make_shared_strings({"s", "v"});
         str.columns.push_back(Series::strings(names));
         str.columns.push_back(Series::flat_i64(v.data(), n));
         const dstd::Vector<dstd::String> by_k = {"k"};
@@ -2198,7 +2240,7 @@ TEST_SUITE("lazyframe") {
         const dstd::Vector<double> w = {5.0, nan, 1.0, 2.0, 7.0, 3.0, 4.0};
         const auto n = static_cast<std::int64_t>(k.size());
         DataFrame df;
-        df.names = {"k", "v", "w"};
+        df.names = dstd::make_shared_strings({"k", "v", "w"});
         df.columns.push_back(Series::flat_f64(k.data(), n));
         df.columns.push_back(Series::flat_f64(v.data(), n));
         df.columns.push_back(Series::flat_f64(w.data(), n));
@@ -2277,7 +2319,7 @@ TEST_SUITE("lazyframe") {
                     fv[z >> 3] |= static_cast<std::uint8_t>(1u << (z & 7));
             }
             DataFrame df;
-            df.names = {"k", "v", "f", "u"};
+            df.names = dstd::make_shared_strings({"k", "v", "f", "u"});
             df.columns.push_back(Series::flat_i64(k.data(), n));
             df.columns.push_back(Series::flat_i64(v.data(), n, vv.data()));
             df.columns.push_back(Series::flat_f64(f.data(), n, fv.data()));
@@ -2361,7 +2403,7 @@ TEST_SUITE("lazyframe") {
             names.push_back(dstd::fmt<"n{}">(i % 17));
         }
         DataFrame df;
-        df.names = {"a", "s"};
+        df.names = dstd::make_shared_strings({"a", "s"});
         df.columns.push_back(Series::flat_i64(a.data(), 5000));
         df.columns.push_back(Series::strings(names));
 
@@ -2399,7 +2441,7 @@ TEST_SUITE("lazyframe") {
             std::swap(k[i], k[j]);
         }
         DataFrame df;
-        df.names = {"k", "v"};
+        df.names = dstd::make_shared_strings({"k", "v"});
         df.columns.push_back(Series::flat_i64(k.data(), N));
         df.columns.push_back(Series::flat_i64(v.data(), N));
         for (bool descending : {false, true}) {
@@ -2450,7 +2492,7 @@ TEST_SUITE("lazyframe") {
         dstd::Vector<std::int64_t> k{1, 1, 2, 2, 3};
         dstd::Vector<std::int64_t> v{20, 10, 40, 30, 5};
         DataFrame df;
-        df.names = {"k", "v"};
+        df.names = dstd::make_shared_strings({"k", "v"});
         df.columns.push_back(Series::flat_i64(k.data(), 5));
         df.columns.push_back(Series::flat_i64(v.data(), 5));
 
@@ -2513,7 +2555,7 @@ TEST_SUITE("lazyframe") {
         dstd::Vector<std::int64_t> k{3, 1, 2, 1, 3};
         dstd::Vector<std::int64_t> v{1, 2, 3, 4, 5};
         DataFrame df;
-        df.names = {"k", "v"};
+        df.names = dstd::make_shared_strings({"k", "v"});
         df.columns.push_back(Series::flat_i64(k.data(), 5));
         df.columns.push_back(Series::flat_i64(v.data(), 5));
 
@@ -2638,7 +2680,7 @@ TEST_SUITE("lazyframe") {
         for (std::int64_t i = 0; i < 100; ++i)
             big[static_cast<std::size_t>(i)] = i;
         DataFrame bf;
-        bf.names = {"x"};
+        bf.names = dstd::make_shared_strings({"x"});
         bf.columns.push_back(Series::flat_i64(big.data(), 100));
         DataFrame lz = run(bf.lazy().sample(7, 123).collect(8));  // morsel 8
         DataFrame eg = bf.sample(7, 123);
@@ -2652,33 +2694,36 @@ TEST_SUITE("lazyframe") {
         // Must match eager across a multi-morsel scan.
         dstd::Vector<std::int64_t> d{1, 1, 2, 3, 2, 1};
         DataFrame df;
-        df.names = {"x"};
+        df.names = dstd::make_shared_strings({"x"});
         df.columns.push_back(Series::flat_i64(d.data(), 6));
         auto bit = [](const Series& col, std::int64_t i) {
             return (col.data<std::uint8_t>()[i >> 3] >> (i & 7)) & 1;
         };
         DataFrame du = run(df.lazy().is_duplicated().collect(2));
-        CHECK(du.names == dstd::Vector<dstd::String>{"is_duplicated"});
+        CHECK(dstd::to_strings(du.names) ==
+              dstd::Vector<dstd::String>{"is_duplicated"});
         REQUIRE(du.num_rows() == 6);
         Series ed = dftu_utils_test::ok(df.is_duplicated());
         for (std::int64_t i = 0; i < 6; ++i)
             CHECK(bit(du.column("is_duplicated"), i) == bit(ed, i));
 
         DataFrame uq = run(df.lazy().is_unique().collect(2));
-        CHECK(uq.names == dstd::Vector<dstd::String>{"is_unique"});
+        CHECK(dstd::to_strings(uq.names) ==
+              dstd::Vector<dstd::String>{"is_unique"});
         Series eu = dftu_utils_test::ok(df.is_unique());
         for (std::int64_t i = 0; i < 6; ++i)
             CHECK(bit(uq.column("is_unique"), i) == bit(eu, i));
 
         dstd::Vector<std::int64_t> t{0, 1, 2, 3}, v{1, 1, 1, 1};
         DataFrame tf;
-        tf.names = {"t", "v"};
+        tf.names = dstd::make_shared_strings({"t", "v"});
         tf.columns.push_back(Series::flat_i64(t.data(), 4));
         tf.columns.push_back(Series::flat_i64(v.data(), 4));
         dstd::Vector<GroupAgg> aggs{{Agg::Sum, "v", "sum", 0.0}};
         DataFrame gd =
             run(tf.lazy().group_by_dynamic("t", 2, 2, aggs).collect(2));
-        CHECK(gd.names == dstd::Vector<dstd::String>{"t", "sum"});
+        CHECK(dstd::to_strings(gd.names) ==
+              dstd::Vector<dstd::String>{"t", "sum"});
         CHECK(gd.num_rows() == 2);  // windows [0,2), [2,4)
         CHECK(gd.column("sum").data<std::int64_t>()[0] == 2);
 
@@ -2690,7 +2735,7 @@ TEST_SUITE("lazyframe") {
             bv[static_cast<std::size_t>(i)] = i * 2;
         }
         DataFrame wf;
-        wf.names = {"t", "v"};
+        wf.names = dstd::make_shared_strings({"t", "v"});
         wf.columns.push_back(Series::flat_i64(bt.data(), 60));
         wf.columns.push_back(Series::flat_i64(bv.data(), 60));
         dstd::Vector<GroupAgg> wa{{Agg::Sum, "v", "s", 0.0},
@@ -2716,7 +2761,7 @@ TEST_SUITE("lazyframe") {
         // to_dummies: one Int8 column per distinct value of "g".
         dstd::Vector<std::int64_t> g{0, 1, 0};
         DataFrame gf;
-        gf.names = {"g"};
+        gf.names = dstd::make_shared_strings({"g"});
         gf.columns.push_back(Series::flat_i64(g.data(), 3));
         LazyFrame dl = gf.lazy().to_dummies("g");
         CHECK(dl.schema().empty());    // unknown until run
@@ -2724,7 +2769,7 @@ TEST_SUITE("lazyframe") {
         DataFrame dd = dftu_utils_test::ok(gf.to_dummies("g"));
         REQUIRE(d.names == dd.names);  // g_0, g_1 in ascending order
         REQUIRE(d.num_rows() == dd.num_rows());
-        for (const dstd::String& cn : d.names) {
+        for (const dstd::SharedString& cn : d.names) {
             const std::int8_t* a = d.column(cn).data<std::int8_t>();
             const std::int8_t* b = dd.column(cn).data<std::int8_t>();
             for (std::int64_t r = 0; r < d.num_rows(); ++r) CHECK(a[r] == b[r]);
@@ -2734,7 +2779,7 @@ TEST_SUITE("lazyframe") {
         dstd::Vector<std::int64_t> i{0, 0, 1, 1}, k{10, 20, 10, 20},
             v{1, 2, 3, 4};
         DataFrame pf;
-        pf.names = {"i", "k", "v"};
+        pf.names = dstd::make_shared_strings({"i", "k", "v"});
         pf.columns.push_back(Series::flat_i64(i.data(), 4));
         pf.columns.push_back(Series::flat_i64(k.data(), 4));
         pf.columns.push_back(Series::flat_i64(v.data(), 4));
@@ -2742,7 +2787,7 @@ TEST_SUITE("lazyframe") {
         DataFrame pe = dftu_utils_test::ok(pf.pivot("i", "k", "v", "sum"));
         REQUIRE(p.names == pe.names);  // i, 10, 20 (ascending on-values)
         REQUIRE(p.num_rows() == pe.num_rows());
-        for (const dstd::String& cn : p.names) {
+        for (const dstd::SharedString& cn : p.names) {
             const std::int64_t* a = p.column(cn).data<std::int64_t>();
             const std::int64_t* b = pe.column(cn).data<std::int64_t>();
             for (std::int64_t r = 0; r < p.num_rows(); ++r) CHECK(a[r] == b[r]);
@@ -2766,7 +2811,7 @@ TEST_SUITE("lazyframe") {
         // results must still match the in-memory path.
         dstd::Vector<std::int64_t> x{5, 3, 5, 1, 3, 5, 2, 1};
         DataFrame df;
-        df.names = {"x"};
+        df.names = dstd::make_shared_strings({"x"});
         df.columns.push_back(Series::flat_i64(x.data(), 8));
         auto bit = [](const Series& s, std::int64_t i) {
             return (s.data<std::uint8_t>()[i >> 3] >> (i & 7)) & 1;
@@ -2781,7 +2826,7 @@ TEST_SUITE("lazyframe") {
         dstd::Vector<std::int64_t> i2{0, 0, 1, 1}, k2{10, 20, 10, 20},
             v2{1, 2, 3, 4};
         DataFrame pf;
-        pf.names = {"i", "k", "v"};
+        pf.names = dstd::make_shared_strings({"i", "k", "v"});
         pf.columns.push_back(Series::flat_i64(i2.data(), 4));
         pf.columns.push_back(Series::flat_i64(k2.data(), 4));
         pf.columns.push_back(Series::flat_i64(v2.data(), 4));
@@ -2789,7 +2834,7 @@ TEST_SUITE("lazyframe") {
             pf.lazy().memory_budget(1).pivot("i", "k", "v", "sum").collect(2));
         DataFrame pe = dftu_utils_test::ok(pf.pivot("i", "k", "v", "sum"));
         REQUIRE(p.names == pe.names);
-        for (const dstd::String& cn : p.names) {
+        for (const dstd::SharedString& cn : p.names) {
             const std::int64_t* a = p.column(cn).data<std::int64_t>();
             const std::int64_t* b = pe.column(cn).data<std::int64_t>();
             for (std::int64_t r = 0; r < p.num_rows(); ++r) CHECK(a[r] == b[r]);
@@ -2808,7 +2853,7 @@ TEST_SUITE("lazyframe") {
             v[static_cast<std::size_t>(r)] = r;
         }
         DataFrame pf;
-        pf.names = {"i", "k", "v"};
+        pf.names = dstd::make_shared_strings({"i", "k", "v"});
         pf.columns.push_back(Series::strings(i));
         pf.columns.push_back(Series::flat_i64(k.data(), n));
         pf.columns.push_back(Series::flat_i64(v.data(), n));
@@ -2839,7 +2884,7 @@ TEST_SUITE("lazyframe") {
     TEST_CASE("a comparison the column type cannot take throws") {
         dstd::Vector<dstd::String> names{"a", "b", "c"};
         DataFrame f;
-        f.names = {"name"};
+        f.names = dstd::make_shared_strings({"name"});
         f.columns.push_back(Series::strings(names));
         LazyFrame lf = f.lazy().with_column("big", col(0) > std::int64_t{25});
         dftu_utils_test::expect_error(
@@ -2897,7 +2942,7 @@ TEST_SUITE("lazyframe") {
         Series st = Series::structs({"lo", "hi"}, std::move(fields));
 
         DataFrame df;
-        df.names = {"a", "range"};
+        df.names = dstd::make_shared_strings({"a", "range"});
         df.columns.push_back(Series::flat_i64(lo.data(), 2));
         df.columns.push_back(std::move(st));
 

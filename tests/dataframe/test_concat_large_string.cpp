@@ -150,8 +150,8 @@ TEST_SUITE("concat string and large_string") {
 
     TEST_CASE("a frame concat keeps every column") {
         DataFrame x, y;
-        x.names = {"s", "v"};
-        y.names = {"s", "v"};
+        x.names = dstd::make_shared_strings({"s", "v"});
+        y.names = dstd::make_shared_strings({"s", "v"});
         const dstd::Vector<std::int64_t> v0{1, 2}, v1{3};
         x.columns.push_back(make_large_utf8({"a", "b"}));
         x.columns.push_back(Series::flat_i64(v0.data(), 2));
@@ -164,8 +164,8 @@ TEST_SUITE("concat string and large_string") {
 
     TEST_CASE("a lazy concat of a string and a large_string plan collects") {
         DataFrame x, y;
-        x.names = {"s"};
-        y.names = {"s"};
+        x.names = dstd::make_shared_strings({"s"});
+        y.names = dstd::make_shared_strings({"s"});
         x.columns.push_back(make_string({"a", "b"}));
         y.columns.push_back(make_large_utf8({"c"}));
         LazyFrame lx =

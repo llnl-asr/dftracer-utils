@@ -472,7 +472,7 @@ TEST_SUITE("op_registry") {
         dftu_series* k_col = dftu_dataframe_column(df, "k");
         dftu_series* v_col = dftu_dataframe_column(df, "v");
         DataFrame cpp_df;
-        cpp_df.names = {"k", "v"};
+        cpp_df.names = dstd::make_shared_strings({"k", "v"});
         cpp_df.columns.emplace_back(k_col);
         cpp_df.columns.emplace_back(v_col);
         DataFrame via_cpp = dftu_utils_test::ok(

@@ -45,7 +45,7 @@ Series i64s(const dstd::Vector<std::int64_t>& v,
 // a: k = [1, 2, null], s = [x, y, z]
 DataFrame make_a() {
     DataFrame df;
-    df.names = {"k", "s"};
+    df.names = dstd::make_shared_strings({"k", "s"});
     df.columns.push_back(i64s({1, 2, 0}, {0x03}));
     df.columns.push_back(Series::strings({"x", "y", "z"}));
     return df;
@@ -54,7 +54,7 @@ DataFrame make_a() {
 // b: k = [2, 4], s = [y, w]
 DataFrame make_b() {
     DataFrame df;
-    df.names = {"k", "s"};
+    df.names = dstd::make_shared_strings({"k", "s"});
     df.columns.push_back(i64s({2, 4}));
     df.columns.push_back(Series::strings({"y", "w"}));
     return df;
@@ -205,7 +205,8 @@ TEST_SUITE("dataframe concat") {
         DataFrame b = make_b();
         DataFrame out =
             dftu_utils_test::ok(dftracer::utils::dataframe::concat({&a, &b}));
-        CHECK(out.names == dstd::Vector<dstd::String>{"k", "s"});
+        CHECK(dstd::to_strings(out.names) ==
+              dstd::Vector<dstd::String>{"k", "s"});
         CHECK(i64_col(out, "k") == dstd::Vector<I>{1, 2, NI, 2, 4});
         CHECK(str_col(out, "s") == dstd::Vector<S>{"x", "y", "z", "y", "w"});
     }
@@ -216,7 +217,7 @@ TEST_SUITE("dataframe concat") {
                        dstd::Vector<std::int64_t> vals,
                        dstd::Vector<std::int64_t> rows) {
             DataFrame df;
-            df.names = {"l"};
+            df.names = dstd::make_shared_strings({"l"});
             df.columns.push_back(Series::list(offs, i64s(vals)).take(rows));
             return df;
         };
@@ -236,14 +237,14 @@ TEST_SUITE("dataframe concat") {
         CHECK(flat.child(0).data<std::int64_t>()[2] == 3);
 
         DataFrame s1;
-        s1.names = {"s"};
+        s1.names = dstd::make_shared_strings({"s"});
         {
             dstd::Vector<Series> f;
             f.push_back(i64s({1, 2}));
             s1.columns.push_back(Series::structs({"x"}, std::move(f)));
         }
         DataFrame s2;
-        s2.names = {"s"};
+        s2.names = dstd::make_shared_strings({"s"});
         {
             dstd::Vector<Series> f;
             f.push_back(i64s({3}));
@@ -323,12 +324,12 @@ TEST_SUITE("dataframe concat") {
         LazyFrame la =
             LazyFrame::scan(dstd::make_shared<InMemorySource>(make_a()));
         DataFrame fewer;
-        fewer.names = {"k"};
+        fewer.names = dstd::make_shared_strings({"k"});
         fewer.columns.push_back(i64s({1}));
         DataFrame renamed = make_b();
-        renamed.names = {"k", "t"};
+        renamed.names = dstd::make_shared_strings({"k", "t"});
         DataFrame retyped;
-        retyped.names = {"k", "s"};
+        retyped.names = dstd::make_shared_strings({"k", "s"});
         retyped.columns.push_back(Series::strings({"1"}));
         retyped.columns.push_back(Series::strings({"q"}));
         dftu_utils_test::expect_error(

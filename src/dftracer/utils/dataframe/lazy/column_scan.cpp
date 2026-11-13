@@ -160,7 +160,7 @@ class SeriesColumnCursor : public Cursor {
         } else {
             at_ = static_cast<std::size_t>(at);
         }
-        operand_.names.push_back(std::move(name));
+        operand_.names.push_back(dstd::SharedString{std::move(name)});
         operand_.columns.push_back(std::move(column));
     }
 

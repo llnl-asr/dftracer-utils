@@ -411,7 +411,7 @@ dstd::Optional<DataFrame> finalize_in_place(
             std::memcpy(writable(h->validity), null_row.data(), validity_bytes);
             h->null_count = nulls;
         }
-        out.names.push_back(key_names[k]);
+        out.names.push_back(dstd::SharedString{key_names[k]});
         out.columns.push_back(std::move(col));
     }
 
@@ -789,11 +789,13 @@ dstd::Result<dstd::Optional<DataFrame>> group_agg_by_key_hash(
 
     DataFrame src;  // the key and value columns, shared, not copied
     for (const Series* c : keys) {
-        src.names.push_back(dstd::fmt<"k{}">(src.columns.size()));
+        src.names.push_back(
+            dstd::SharedString{dstd::fmt<"k{}">(src.columns.size())});
         src.columns.push_back(c->share());
     }
     for (const Series* c : values) {
-        src.names.push_back(dstd::fmt<"v{}">(src.columns.size()));
+        src.names.push_back(
+            dstd::SharedString{dstd::fmt<"v{}">(src.columns.size())});
         src.columns.push_back(c->share());
     }
     dstd::Vector<AggStatePtr> states(PARTITIONS);
@@ -1076,7 +1078,7 @@ dstd::Result<dstd::Optional<DataFrame>> group_agg_in_batches(
         return group_agg_whole(keys, vs, std::move(sub), key_names,
                                from == 0 ? 0 : keys.size());
     };
-    dstd::Vector<dstd::String> made_names;
+    dstd::Vector<dstd::SharedString> made_names;
     dstd::Vector<Series> made;
     dstd::Vector<Series> key_cols;
     auto keep = [&](DataFrame& df, bool first) {
@@ -1113,7 +1115,7 @@ dstd::Result<dstd::Optional<DataFrame>> group_agg_in_batches(
     // The columns back in the order the aggregates were asked for.
     DataFrame out;
     for (std::size_t k = 0; k < keys.size(); ++k) {
-        out.names.push_back(key_names[k]);
+        out.names.push_back(dstd::SharedString{key_names[k]});
         out.columns.push_back(std::move(key_cols[k]));
     }
     for (const AggSpec& sp : specs)

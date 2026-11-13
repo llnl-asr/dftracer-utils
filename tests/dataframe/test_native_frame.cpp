@@ -29,7 +29,8 @@ DataFrame sample() {
     const std::uint8_t valid[] = {0b1011};
     const double doubles[] = {1.5, -2.25, 0, 1e300};
     const std::uint8_t bools[] = {0b0101};
-    f.names = {"i", "d", "s", "b", "j", "ts", "dec", "tags", "st", "nest"};
+    f.names = dstd::make_shared_strings(
+        {"i", "d", "s", "b", "j", "ts", "dec", "tags", "st", "nest"});
     f.columns.push_back(Series::flat_i64(ints, 4, valid));
     f.columns.push_back(Series::flat_f64(doubles, 4));
     f.columns.push_back(strings({"", "alpha", "b\"eta", "\xc3\xa9"}));
@@ -115,7 +116,7 @@ TEST_SUITE("native frame") {
         REQUIRE(a);
         CHECK(a->columns.empty());
         DataFrame empty;
-        empty.names = {"x"};
+        empty.names = dstd::make_shared_strings({"x"});
         empty.columns.push_back(strings({}));
         const auto b = frame_from_native(bytes_of(empty));
         REQUIRE(b);
@@ -150,7 +151,7 @@ TEST_SUITE("native frame") {
 
     TEST_CASE("a map and a fixed-size list round-trip") {
         DataFrame f;
-        f.names = {"m", "fl"};
+        f.names = dstd::make_shared_strings({"m", "fl"});
         Series m =
             Series::list({0, 1, 1}, Series::structs({"key", "value"}, [] {
                              dstd::Vector<Series> c;
@@ -177,7 +178,7 @@ TEST_SUITE("native frame") {
 
     TEST_CASE("a group key keeps its JSON flag") {
         DataFrame f;
-        f.names = {"k", "v"};
+        f.names = dstd::make_shared_strings({"k", "v"});
         f.columns.push_back(strings({"1", "\"1\"", "1", "\"1\""}).as_json());
         const std::int64_t v[] = {1, 2, 3, 4};
         f.columns.push_back(Series::flat_i64(v, 4));

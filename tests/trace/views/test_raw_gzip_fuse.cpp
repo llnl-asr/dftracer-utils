@@ -90,7 +90,8 @@ bool rows_equal(const dftracer::utils::dataframe::DataFrame& a,
     if (a.num_rows() != b.num_rows()) return false;
     for (std::size_t c = 0; c < a.columns.size(); ++c)
         if (a.columns[c].type() != b.columns[c].type()) return false;
-    return sorted_row_keys(a, a.names) == sorted_row_keys(b, a.names);
+    const auto names = dstd::to_strings(a.names);
+    return sorted_row_keys(a, names) == sorted_row_keys(b, names);
 }
 
 }  // namespace

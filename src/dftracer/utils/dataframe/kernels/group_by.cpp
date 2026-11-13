@@ -265,7 +265,7 @@ DataFrame group_by(const Series& keys, const Series& values, std::int32_t ops) {
         dftu_series_group_by(keys.handle(), values.handle(), ops, &k, vals, 5);
 
     DataFrame b;
-    b.names.push_back("key");
+    b.names.push_back(dstd::SharedString{"key"});
     b.columns.push_back(Series{k});
     struct Named {
         std::int32_t flag;
@@ -279,7 +279,7 @@ DataFrame group_by(const Series& keys, const Series& values, std::int32_t ops) {
     std::int32_t idx = 0;
     for (const Named& o : order)
         if ((ops & o.flag) && idx < n) {
-            b.names.push_back(o.name);
+            b.names.push_back(dstd::SharedString{o.name});
             b.columns.push_back(Series{vals[idx++]});
         }
     return b;

@@ -727,7 +727,8 @@ inline dftracer::utils::dataframe::DataFrame to_batch(
     dftracer::utils::dataframe::DataFrame batch;
     const std::int64_t nrows = static_cast<std::int64_t>(ng);
     for (std::size_t i = 0; i < group_cols.size(); ++i) {
-        batch.names.push_back(group_cols[i]);
+        batch.names.push_back(
+            dftracer::utils::dstd::SharedString{group_cols[i]});
         dftracer::utils::dstd::Vector<dftracer::utils::dstd::StringView> views(
             gk[i].begin(), gk[i].end());
         dftracer::utils::dstd::Vector<std::uint8_t> vbits(
@@ -775,11 +776,13 @@ inline dftracer::utils::dataframe::DataFrame to_batch(
                                                                 nrows);
         };
     for (std::size_t i = 0; i < value_cols.size(); ++i) {
-        batch.names.push_back(value_cols[i]);
+        batch.names.push_back(
+            dftracer::utils::dstd::SharedString{value_cols[i]});
         batch.columns.push_back(build_value_column(vcells[i]));
     }
     for (std::size_t i = 0; i < text_cols.size(); ++i) {
-        batch.names.push_back(text_cols[i]);
+        batch.names.push_back(
+            dftracer::utils::dstd::SharedString{text_cols[i]});
         batch.columns.push_back(
             dftracer::utils::dataframe::Series::strings(tvals[i]));
     }
@@ -797,7 +800,8 @@ inline dftracer::utils::dataframe::DataFrame to_batch(
         dftracer::utils::dataframe::Series st =
             dftracer::utils::dataframe::Series::structs({"lo", "hi", "count"},
                                                         std::move(fields));
-        batch.names.push_back(hist_cols[i]);
+        batch.names.push_back(
+            dftracer::utils::dstd::SharedString{hist_cols[i]});
         batch.columns.push_back(
             dftracer::utils::dataframe::Series::list(h.off, std::move(st)));
     }

@@ -8,6 +8,7 @@
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dataframe/types.h>
 #include <dftracer/utils/dstd/result.h>
+#include <dftracer/utils/dstd/shared_string.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
@@ -109,7 +110,7 @@ class GroupBy;           // below
 /// eager methods return a new DataFrame (move-only); projection ops share the
 /// underlying column buffers zero-copy, row ops build new columns.
 struct DataFrame {
-    dstd::Vector<dstd::String> names;
+    dstd::Vector<dstd::SharedString> names;
     dstd::Vector<Series> columns;
 
     std::size_t num_columns() const noexcept { return columns.size(); }

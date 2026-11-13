@@ -249,7 +249,7 @@ Series cmp_str(const Series& col, dftu_cmp_op op, const dstd::String& lit) {
 
 dstd::String in_truth(const Series& col, const dstd::String& query) {
     DataFrame f;
-    f.names = {"name"};
+    f.names = dstd::make_shared_strings({"name"});
     f.columns.push_back(col.share());
     auto q = dftracer::utils::duql::Query::from_string(query);
     REQUIRE(q.has_value());
@@ -272,11 +272,11 @@ TEST_SUITE("kernels keep layouts") {
         }
         Series flat = Series::strings(cats);
         DataFrame df;
-        df.names = {"cat", "id"};
+        df.names = dstd::make_shared_strings({"cat", "id"});
         df.columns.push_back(flat.dictionary_encode());
         df.columns.push_back(Series::flat_i64(ids.data(), 1000));
         DataFrame flat_df;
-        flat_df.names = {"cat", "id"};
+        flat_df.names = dstd::make_shared_strings({"cat", "id"});
         flat_df.columns.push_back(Series::strings(cats));
         flat_df.columns.push_back(Series::flat_i64(ids.data(), 1000));
 
@@ -386,7 +386,7 @@ TEST_SUITE("kernels keep layouts") {
         }
         auto frame = [&](Series col) {
             DataFrame df;
-            df.names = {"s", "id", "key"};
+            df.names = dstd::make_shared_strings({"s", "id", "key"});
             df.columns.push_back(std::move(col));
             df.columns.push_back(Series::flat_i64(id.data(), 120));
             df.columns.push_back(Series::flat_i64(key.data(), 120));
@@ -416,7 +416,7 @@ TEST_SUITE("kernels keep layouts") {
                  dftu_utils_test::ok(flat.sort_by_multi({"key", "id"}, true)));
 
             DataFrame right;
-            right.names = {"key", "w"};
+            right.names = dstd::make_shared_strings({"key", "w"});
             dstd::Vector<std::int64_t> rk = {1, 2, 2, 9}, rw = {10, 20, 21, 90};
             right.columns.push_back(Series::flat_i64(rk.data(), 4));
             right.columns.push_back(Series::flat_i64(rw.data(), 4));
@@ -777,7 +777,7 @@ TEST_SUITE("kernels keep layouts: group-by drivers and size checks") {
         for (const Key& k : keys) {
             CAPTURE(k.name);
             DataFrame df;
-            df.names = {"s", "id", "o"};
+            df.names = dstd::make_shared_strings({"s", "id", "o"});
             df.columns.push_back(k.col.share());
             df.columns.push_back(Series::flat_i64(ids.data(), N));
             df.columns.push_back(Series::flat_i64(other.data(), N));

@@ -95,7 +95,7 @@ TEST_CASE("plugin host: arrow_write_ipc writes a non-empty IPC file") {
 
     const std::uint64_t ts0[3] = {500, 501, 502};
     dataframe::DataFrame df;
-    df.names = {"cat", "name", "ts"};
+    df.names = dstd::make_shared_strings({"cat", "name", "ts"});
     df.columns.push_back(
         dataframe::Series::strings({"STDIO", "STDIO", "STDIO"}));
     df.columns.push_back(

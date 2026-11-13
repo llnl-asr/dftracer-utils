@@ -206,11 +206,12 @@ DataFrame head(const DataFrame& b, std::int64_t n) { return slice(b, 0, n); }
 dstd::Result<DataFrame> select(const DataFrame& b,
                                const dstd::Vector<dstd::String>& names) {
     DataFrame out;
-    out.names = names;
+    out.names.reserve(names.size());
     out.columns.reserve(names.size());
     for (const dstd::String& name : names) {
         const dstd::Result<std::int64_t> i = require_index(b, name, "select");
         if (!i) return i.error();
+        out.names.push_back(b.names[static_cast<std::size_t>(*i)]);
         out.columns.push_back(b.columns[static_cast<std::size_t>(*i)].share());
     }
     return out;
@@ -221,7 +222,9 @@ dstd::Result<DataFrame> rename(const DataFrame& b,
     if (new_names.size() != b.columns.size())
         return invalid_argument<"rename: name count must match columns">();
     DataFrame out;
-    out.names = new_names;
+    out.names.reserve(new_names.size());
+    for (const dstd::String& n : new_names)
+        out.names.push_back(dstd::SharedString{n});
     out.columns.reserve(b.columns.size());
     for (const Series& c : b.columns) out.columns.push_back(c.share());
     return out;
@@ -237,7 +240,7 @@ DataFrame with_column(const DataFrame& b, const dstd::String& name,
     if (i >= 0) {
         out.columns[static_cast<std::size_t>(i)] = col.share();
     } else {
-        out.names.push_back(name);
+        out.names.push_back(dstd::SharedString{name});
         out.columns.push_back(col.share());
     }
     return out;
@@ -1125,7 +1128,7 @@ Series to_json_series(const Series& s) {
 namespace {
 
 struct DiagonalSchema {
-    dstd::Vector<dstd::String> names;
+    dstd::Vector<dstd::SharedString> names;
     dstd::Vector<TypeId> types;
     dstd::Vector<bool> json;
 };
@@ -1136,10 +1139,10 @@ dstd::Result<DiagonalSchema> diagonal_schema(
     dstd::Vector<ColumnKind> kinds;
     dstd::Vector<char> valued;
     DiagonalSchema out;
-    dstd::HashMap<dstd::String, std::size_t> idx;
+    dstd::HashMap<dstd::SharedString, std::size_t> idx;
     for (const DataFrame* p : parts)
         for (std::size_t c = 0; c < p->names.size(); ++c) {
-            const dstd::String& nm = p->names[c];
+            const dstd::SharedString& nm = p->names[c];
             const Series& col = p->columns[c];
             const ColumnKind t{col.type(), col.is_json()};
             const bool has_values =
@@ -1155,7 +1158,7 @@ dstd::Result<DiagonalSchema> diagonal_schema(
                 valued[it->second] = has_values;
             } else if (has_values) {
                 const dstd::Result<ColumnKind> promoted =
-                    promote_type(kinds[it->second], t, nm);
+                    promote_type(kinds[it->second], t, dstd::String{nm.view()});
                 if (!promoted) return promoted.error();
                 kinds[it->second] = *promoted;
             }
@@ -1168,7 +1171,7 @@ dstd::Result<DiagonalSchema> diagonal_schema(
 }
 
 dstd::Vector<Series> diagonal_parts(
-    const dstd::Vector<const DataFrame*>& parts, const dstd::String& name,
+    const dstd::Vector<const DataFrame*>& parts, dstd::StringView name,
     TypeId target, bool json,
     const dstd::Vector<std::int64_t>* rows = nullptr) {
     dstd::Vector<Series> owned;
@@ -1227,7 +1230,8 @@ dstd::Result<Series> concat_struct_by_name(const dstd::Vector<Series>& mats) {
     std::int64_t total = 0;
     for (std::size_t i = 0; i < mats.size(); ++i) {
         for (std::int64_t f = 0; f < mats[i].num_children(); ++f) {
-            frames[i].names.push_back(mats[i].field_name(f));
+            frames[i].names.push_back(
+                dstd::SharedString{mats[i].field_name(f)});
             frames[i].columns.push_back(mats[i].child(f));
         }
         parts.push_back(&frames[i]);
@@ -1732,7 +1736,7 @@ DataFrame with_row_index(const DataFrame& b, const dstd::String& name) {
     DataFrame out;
     out.names.reserve(b.names.size() + 1);
     out.columns.reserve(b.columns.size() + 1);
-    out.names.push_back(name);
+    out.names.push_back(dstd::SharedString{name});
     out.columns.push_back(Series::flat_i64(ids.data(), n));
     for (std::size_t i = 0; i < b.columns.size(); ++i) {
         out.names.push_back(b.names[i]);
@@ -1745,7 +1749,7 @@ DataFrame describe(const DataFrame& b) {
     const dstd::Vector<dstd::String> stat_names = {
         "count", "null_count", "mean", "std", "min", "max"};
     DataFrame out;
-    out.names.push_back("statistic");
+    out.names.push_back(dstd::SharedString{"statistic"});
     out.columns.push_back(Series::strings(stat_names));
     const std::int64_t n = b.num_rows();
     for (std::size_t i = 0; i < b.columns.size(); ++i) {
@@ -1824,9 +1828,11 @@ bool reduce_broadcasts(Agg agg) noexcept {
     return false;
 }
 
-dstd::Result<dstd::Vector<GroupAgg>> reduce_specs(
-    const dstd::Vector<dstd::String>& names, const dstd::Vector<TypeId>& types,
-    Agg agg, const dstd::Vector<dstd::String>& keys) {
+namespace {
+template <class Name>
+dstd::Result<dstd::Vector<GroupAgg>> reduce_specs_of(
+    const dstd::Vector<Name>& names, const dstd::Vector<TypeId>& types, Agg agg,
+    const dstd::Vector<dstd::String>& keys) {
     if (!reduce_broadcasts(agg))
         return invalid_argument<
             "reduce: '{}' takes a second column or a parameter; give it as a "
@@ -1835,13 +1841,27 @@ dstd::Result<dstd::Vector<GroupAgg>> reduce_specs(
         agg == Agg::CountValid || agg == Agg::First || agg == Agg::Last;
     dstd::Vector<GroupAgg> out;
     for (std::size_t i = 0; i < names.size(); ++i) {
-        if (std::find(keys.begin(), keys.end(), names[i]) != keys.end())
-            continue;
+        const dstd::String name{dstd::StringView{names[i]}};
+        if (std::find(keys.begin(), keys.end(), name) != keys.end()) continue;
         if (any_type || types[i] == TypeId::Unknown ||
             is_numeric_dispatchable(types[i]))
-            out.push_back(GroupAgg{agg, names[i], names[i]});
+            out.push_back(GroupAgg{agg, name, name});
     }
     return out;
+}
+}  // namespace
+
+dstd::Result<dstd::Vector<GroupAgg>> reduce_specs(
+    const dstd::Vector<dstd::String>& names, const dstd::Vector<TypeId>& types,
+    Agg agg, const dstd::Vector<dstd::String>& keys) {
+    return reduce_specs_of(names, types, agg, keys);
+}
+
+dstd::Result<dstd::Vector<GroupAgg>> reduce_specs(
+    const dstd::Vector<dstd::SharedString>& names,
+    const dstd::Vector<TypeId>& types, Agg agg,
+    const dstd::Vector<dstd::String>& keys) {
+    return reduce_specs_of(names, types, agg, keys);
 }
 
 dstd::Result<DataFrame> reduce(const DataFrame& b,
@@ -1886,7 +1906,8 @@ dstd::Result<DataFrame> value_counts(const Series& v) {
         }
     counts = std::move(kept);
     DataFrame df;
-    df.names = {"value", "count"};
+    df.names.push_back(dstd::SharedString{"value"});
+    df.names.push_back(dstd::SharedString{"count"});
     Series values = v.take(first_index);
     df.columns.push_back(values.encoding() == Encoding::Flat
                              ? std::move(values)
@@ -2104,8 +2125,8 @@ dstd::Result<DataFrame> to_dummies(const DataFrame& b,
             continue;
         }
         for (std::int64_t u = 0; u < d; ++u) {
-            out.names.push_back(
-                dstd::fmt<"{}_{}">(column, cell_to_string(uniq, u)));
+            out.names.push_back(dstd::SharedString{
+                dstd::fmt<"{}_{}">(column, cell_to_string(uniq, u))});
             out.columns.push_back(Series::flat(
                 TypeId::Int8, bits[static_cast<std::size_t>(u)].data(), n));
         }
@@ -2248,14 +2269,14 @@ dstd::Result<DataFrame> pivot(const DataFrame& b,
     DataFrame out;
     out.names.reserve(static_cast<std::size_t>(C) + 1);
     out.columns.reserve(static_cast<std::size_t>(C) + 1);
-    out.names.push_back(index_name);
+    out.names.push_back(dstd::SharedString{index_name});
     out.columns.push_back(uniq_idx.share());
     for (std::int64_t c = 0; c < C; ++c) {
         dstd::Vector<std::int64_t> take_idx(static_cast<std::size_t>(R));
         for (std::int64_t r = 0; r < R; ++r)
             take_idx[static_cast<std::size_t>(r)] =
                 cell_src[static_cast<std::size_t>(r * C + c)];
-        out.names.push_back(cell_to_string(uniq_col, c));
+        out.names.push_back(dstd::SharedString{cell_to_string(uniq_col, c)});
         out.columns.push_back(source.take(take_idx));
     }
     return out;

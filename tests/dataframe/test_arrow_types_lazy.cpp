@@ -49,7 +49,7 @@ dstd::Vector<const Series*> ptrs(const DataFrame& df) {
 DataFrame keyed(const Series& v) {
     dstd::Vector<std::int64_t> k{1, 2, 3, 4};
     DataFrame df;
-    df.names = {"k", "v"};
+    df.names = dstd::make_shared_strings({"k", "v"});
     df.columns.push_back(Series::flat_i64(k.data(), 4));
     df.columns.push_back(v.share());
     return df;
@@ -489,7 +489,7 @@ TEST_SUITE("dataframe_arrow_types_lazy") {
         dstd::Vector<std::int64_t> k{1, 1, 2, 2};
         Series vals = make_large_utf8({"p", "q", "r", "s"});
         DataFrame df;
-        df.names = {"k", "v"};
+        df.names = dstd::make_shared_strings({"k", "v"});
         df.columns.push_back(Series::flat_i64(k.data(), 4));
         df.columns.push_back(vals.share());
 

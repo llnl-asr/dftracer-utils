@@ -164,7 +164,7 @@ constexpr bool is_audited(TypeId t) {
 
 DataFrame frame_of(const dstd::String& col_name, const Series& s) {
     DataFrame df;
-    df.names = {col_name};
+    df.names = dstd::make_shared_strings({col_name});
     df.columns.push_back(s.share());
     return df;
 }
@@ -189,7 +189,7 @@ TEST_SUITE("dataframe_arrow_types_reshape") {
         for (const TypeRow& row : TYPE_ROWS) {
             INFO(dstd::String(type_name(row.id)));
             DataFrame df;
-            df.names = {"k", "id"};
+            df.names = dstd::make_shared_strings({"k", "id"});
             df.columns.push_back(row.build().share());
             dstd::Vector<std::int64_t> ids{0, 1, 2, 3};
             df.columns.push_back(Series::flat_i64(ids.data(), 4));
@@ -267,7 +267,7 @@ TEST_SUITE("dataframe_arrow_types_reshape") {
         for (const TypeRow& row : TYPE_ROWS) {
             INFO(dstd::String(type_name(row.id)));
             DataFrame df;
-            df.names = {"idx", "on", "val"};
+            df.names = dstd::make_shared_strings({"idx", "on", "val"});
             df.columns.push_back(row.build().share());
             dstd::Vector<std::int64_t> on{0, 1, 0, 1};
             dstd::Vector<std::int64_t> val{0, 1, 2, 3};
@@ -308,7 +308,7 @@ TEST_SUITE("dataframe_arrow_types_reshape") {
         for (const TypeRow& row : TYPE_ROWS) {
             INFO(dstd::String(type_name(row.id)));
             DataFrame df;
-            df.names = {"id", "v1", "v2"};
+            df.names = dstd::make_shared_strings({"id", "v1", "v2"});
             dstd::Vector<std::int64_t> id{0, 1, 2, 3};
             df.columns.push_back(Series::flat_i64(id.data(), 4));
             df.columns.push_back(row.build().share());
@@ -367,12 +367,12 @@ TEST_SUITE("dataframe_arrow_types_reshape") {
         fields.push_back(Series::flat_i64(counts, 3));
         Series elems = Series::structs({"value", "count"}, std::move(fields));
         DataFrame df;
-        df.names = {"pid", "tk"};
+        df.names = dstd::make_shared_strings({"pid", "tk"});
         df.columns.push_back(Series::flat_i64(ids, 3));
         df.columns.push_back(Series::list({0, 2, 2, 3}, std::move(elems)));
 
         DataFrame dropped = dftu_utils_test::ok(df.unnest("tk"));
-        CHECK(dropped.names ==
+        CHECK(dstd::to_strings(dropped.names) ==
               dstd::Vector<dstd::String>{"pid", "value", "count"});
         REQUIRE(dropped.num_rows() == 3);
         Series dpid = dropped.column("pid").materialize();
@@ -392,7 +392,8 @@ TEST_SUITE("dataframe_arrow_types_reshape") {
         CHECK(count.data<std::int64_t>()[3] == 9);
 
         DataFrame plain = dftu_utils_test::ok(df.explode("tk"));
-        CHECK(plain.names == dstd::Vector<dstd::String>{"pid", "tk"});
+        CHECK(dstd::to_strings(plain.names) ==
+              dstd::Vector<dstd::String>{"pid", "tk"});
         CHECK(plain.num_rows() == 4);
         dftu_utils_test::expect_error(
             df.unnest("nope"), dftracer::utils::common::ErrorCode::NotFound);

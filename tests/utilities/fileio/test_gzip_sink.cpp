@@ -6,7 +6,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/python/gzip_sink.h>
+#include <dftracer/utils/python/trace/gzip_sink.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
 #include <zlib.h>
@@ -60,7 +60,7 @@ TEST_CASE("GzipSink - pieces split mid-line") {
     }
     expected += "{\"unterminated\":1}";
     {
-        python::GzipSink sink(path, 6);
+        python::trace::GzipSink sink(path, 6);
         for (std::size_t off = 0; off < expected.size(); off += 7777) {
             sink.write(dstd::StringView(expected).substr(off, 7777));
         }

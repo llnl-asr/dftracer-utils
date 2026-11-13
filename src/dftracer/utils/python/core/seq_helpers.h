@@ -1,0 +1,93 @@
+// SPDX-License-Identifier: MIT
+#ifndef DFTRACER_UTILS_PYTHON_CORE_SEQ_HELPERS_H
+#define DFTRACER_UTILS_PYTHON_CORE_SEQ_HELPERS_H
+
+#include <Python.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
+
+#include <cstddef>
+#include <cstdint>
+
+namespace dftracer::utils::python::core {
+
+// Convert each item of a Python sequence via `convert`, appending to `out`.
+// `msg` is the TypeError text set when `obj` is not a sequence. Owns the
+// PySequence_Fast handle and releases it on every path, including errors.
+// `convert(item, out)` returns false with a Python error already set to abort;
+// `out` may be partially filled in that case.
+template <class T, class Convert>
+inline bool parse_seq(PyObject* obj, const char* msg,
+                      dftracer::utils::dstd::Vector<T>& out, Convert convert) {
+    PyObject* seq = PySequence_Fast(obj, msg);
+    if (!seq) return false;
+    Py_ssize_t n = PySequence_Fast_GET_SIZE(seq);
+    out.reserve(out.size() + static_cast<std::size_t>(n));
+    for (Py_ssize_t i = 0; i < n; ++i) {
+        if (!convert(PySequence_Fast_GET_ITEM(seq, i), out)) {
+            Py_DECREF(seq);
+            return false;
+        }
+    }
+    Py_DECREF(seq);
+    return true;
+}
+
+// Append the UTF-8 strings of a Python sequence to `out`. A non-str item sets
+// the TypeError raised by PyUnicode_AsUTF8AndSize. `msg` is the not-a-sequence
+// error.
+inline bool parse_string_seq(
+    PyObject* obj, const char* msg,
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>& out) {
+    PyObject* seq = PySequence_Fast(obj, msg);
+    if (!seq) return false;
+    const Py_ssize_t n = PySequence_Fast_GET_SIZE(seq);
+    out.reserve(out.size() + static_cast<std::size_t>(n));
+    for (Py_ssize_t i = 0; i < n; ++i) {
+        Py_ssize_t len = 0;
+        const char* s =
+            PyUnicode_AsUTF8AndSize(PySequence_Fast_GET_ITEM(seq, i), &len);
+        if (!s) {
+            Py_DECREF(seq);
+            return false;
+        }
+        out.emplace_back(s, static_cast<std::size_t>(len));
+    }
+    Py_DECREF(seq);
+    return true;
+}
+
+// Append the raw bytes of each item of a Python sequence to `out`; each item
+// must be a bytes object (PyBytes_AsStringAndSize sets the error otherwise).
+inline bool parse_bytes_seq(
+    PyObject* obj, const char* msg,
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>& out) {
+    return parse_seq<dftracer::utils::dstd::String>(
+        obj, msg, out,
+        [](PyObject* item,
+           dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>& o) {
+            char* buf = nullptr;
+            Py_ssize_t len = 0;
+            if (PyBytes_AsStringAndSize(item, &buf, &len) < 0) return false;
+            o.emplace_back(buf, static_cast<std::size_t>(len));
+            return true;
+        });
+}
+
+// Append the integers of a Python sequence to `out` via PyLong_AsLongLong.
+// A non-int item (or overflow) sets the error PyLong_AsLongLong raises.
+inline bool parse_int_seq(PyObject* obj, const char* msg,
+                          dftracer::utils::dstd::Vector<std::int64_t>& out) {
+    return parse_seq<std::int64_t>(
+        obj, msg, out,
+        [](PyObject* item, dftracer::utils::dstd::Vector<std::int64_t>& o) {
+            long long v = PyLong_AsLongLong(item);
+            if (v == -1 && PyErr_Occurred()) return false;
+            o.push_back(static_cast<std::int64_t>(v));
+            return true;
+        });
+}
+
+}  // namespace dftracer::utils::python::core
+
+#endif  // DFTRACER_UTILS_PYTHON_CORE_SEQ_HELPERS_H

@@ -1,0 +1,46 @@
+// SPDX-License-Identifier: MIT
+#ifndef DFTRACER_UTILS_PYTHON_CORE_ERRORS_H
+#define DFTRACER_UTILS_PYTHON_CORE_ERRORS_H
+
+#define PY_SSIZE_T_CLEAN
+#include <Python.h>
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/error.h>
+#include <dftracer/utils/python/core/error_exception.h>
+
+#include <exception>
+
+namespace dftracer::utils::python::core {
+
+// Typed Python exception objects
+extern PyObject *g_dft_error;              // DFTUtilsError (base)
+extern PyObject *g_dft_value_error;        // DFTUtilsValueError
+extern PyObject *g_dft_not_found_error;    // DFTUtilsNotFoundError
+extern PyObject *g_dft_io_error;           // DFTUtilsIOError
+extern PyObject *g_dft_parse_error;        // DFTUtilsParseError
+extern PyObject *g_dft_compression_error;  // DFTUtilsCompressionError
+extern PyObject *g_dft_duql_error;         // DFTUtilsDuqlError
+extern PyObject *g_dft_reader_error;       // DFTUtilsReaderError
+extern PyObject *g_dft_indexer_error;      // DFTUtilsIndexerError
+extern PyObject *g_dft_pipeline_error;     // DFTUtilsPipelineError
+extern PyObject *g_dft_aggregation_error;  // DFTUtilsAggregationError
+
+// Register the exception hierarchy on module `m`. Returns 0 on success, or -1
+// with a Python error set.
+int init_py_errors(PyObject *m);
+
+// Map a coarse ErrorCode to its Python exception type (borrowed reference).
+// Falls back to the DFTUtilsError base for UNKNOWN/INTERNAL.
+PyObject *py_error_type_for(dftracer::utils::common::ErrorCode code);
+/// Domain-aware: maps a domain error (e.g. the duql domain) to its Python
+/// type, falling back to the portable-condition map.
+PyObject *py_error_type_for(const dftracer::utils::dstd::Error &error);
+
+// Set the current Python error from a caught C++ exception. PyErrorException
+// maps by its error, std::invalid_argument to DFTUtilsValueError and anything
+// else to the DFTUtilsError base, as run_blocking does for inline bindings.
+void set_typed_py_error(const std::exception &e);
+
+}  // namespace dftracer::utils::python::core
+
+#endif  // DFTRACER_UTILS_PYTHON_CORE_ERRORS_H

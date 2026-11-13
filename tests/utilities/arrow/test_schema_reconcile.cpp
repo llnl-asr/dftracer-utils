@@ -7,7 +7,7 @@
 #include <nanoarrow/nanoarrow.h>
 #include <task_result.h>
 
-#include <dftracer/utils/python/schema_reconcile.cpp>
+#include <dftracer/utils/python/frame/schema_reconcile.cpp>
 
 using namespace dftracer::utils;
 using trace::arrow::ColumnType;
@@ -46,7 +46,7 @@ TEST_CASE("a column whose type differs from the locked one goes to _extra") {
     auto first = int_batch();
     auto second = double_batch();
 
-    python::SchemaReconciler reconciler;
+    python::frame::SchemaReconciler reconciler;
     reconciler.merge(first.schema());
     reconciler.merge(second.schema());
     REQUIRE(reconciler.finalize() == 0);

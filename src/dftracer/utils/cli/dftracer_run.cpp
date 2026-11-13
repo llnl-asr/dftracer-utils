@@ -2,11 +2,11 @@
 #include <dftracer/utils/cli/common_cli.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/coro/task.h>
-#include <dftracer/utils/domains/plugins/config.h>
-#include <dftracer/utils/domains/plugins/plugins.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/plugins/host/config.h>
+#include <dftracer/utils/plugins/host/plugins.h>
 #include <dftracer/utils/trace/index/build/resolve_and_build.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view.h>
@@ -17,8 +17,8 @@
 using namespace dftracer::utils;
 using namespace dftracer::utils::trace;
 using namespace dftracer::utils::trace::views;
-using domains::plugins::ConfigTree;
-using domains::plugins::Plugins;
+using plugins::host::ConfigTree;
+using plugins::host::Plugins;
 
 struct PluginBlock {
     dstd::StringView path;

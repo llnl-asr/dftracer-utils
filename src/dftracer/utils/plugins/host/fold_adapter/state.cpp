@@ -3,9 +3,6 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/spill_dir.h>
 #include <dftracer/utils/coro/abi_context.h>
-#include <dftracer/utils/domains/plugins/fold_adapter.h>
-#include <dftracer/utils/domains/plugins/fold_adapter/state.h>
-#include <dftracer/utils/domains/plugins/host_status.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -13,6 +10,9 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/memory/budget.h>
+#include <dftracer/utils/plugins/host/fold_adapter.h>
+#include <dftracer/utils/plugins/host/fold_adapter/state.h>
+#include <dftracer/utils/plugins/host/host_status.h>
 #include <unistd.h>
 
 #include <algorithm>
@@ -26,7 +26,7 @@
 // one instance per worker slice, folded batch by batch, merged at the fan-in,
 // spilled past the scan's memory budget, finalized once. Nothing here is a
 // second execution path: PluginFold::step/merge/finalize call in.
-namespace dftracer::utils::domains::plugins {
+namespace dftracer::utils::plugins::host {
 
 const dstd::Path& SpillDir::path() {
     if (!dir_) {
@@ -264,4 +264,4 @@ bool PluginFold::state_spill_refused(const char* name) const {
     return false;
 }
 
-}  // namespace dftracer::utils::domains::plugins
+}  // namespace dftracer::utils::plugins::host

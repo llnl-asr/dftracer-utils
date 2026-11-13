@@ -5,11 +5,11 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/str_format.h>
-#include <dftracer/utils/domains/plugins/plugins.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/plugins/host/plugins.h>
 #include <dftracer/utils/trace/index/indexer.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view.h>
@@ -48,8 +48,8 @@ dstd::String write_records(dftu_utils_test::TestEnvironment& env,
     return gz;
 }
 
-domains::plugins::Plugins load(const dstd::String& config = "") {
-    auto builder = domains::plugins::Plugins::builder();
+plugins::host::Plugins load(const dstd::String& config = "") {
+    auto builder = plugins::host::Plugins::builder();
     if (config.empty())
         builder.add(INDEX_MINMAX_PLUGIN_PATH);
     else
@@ -100,7 +100,7 @@ TEST_CASE("a plugin extension builds, prunes and survives being absent") {
     const dstd::String q = "v > 2990";
     std::uint64_t chunks = 0;
     {
-        domains::plugins::Plugins set = load();
+        plugins::host::Plugins set = load();
         auto ix = open(gz);
         dftu_utils_test::ok(ix.build());
         const auto e = entry(ix);
@@ -138,7 +138,7 @@ TEST_CASE("a file indexed without the plugin needs work once it is loaded") {
     dftu_utils_test::TestEnvironment env(10);
     const auto gz = write_records(env, "b");
     dftu_utils_test::ok(open(gz).build());
-    domains::plugins::Plugins set = load();
+    plugins::host::Plugins set = load();
     auto ix = open(gz);
     CHECK(dftu_utils_test::ok(ix.status()).needs_work.size() == 1);
     dftu_utils_test::ok(ix.build());
@@ -151,10 +151,10 @@ TEST_CASE("another extension version makes the data stale") {
     dftu_utils_test::TestEnvironment env(10);
     const auto gz = write_records(env, "c");
     {
-        domains::plugins::Plugins set = load();
+        plugins::host::Plugins set = load();
         dftu_utils_test::ok(open(gz).build());
     }
-    domains::plugins::Plugins set = load(R"({"version": 2})");
+    plugins::host::Plugins set = load(R"({"version": 2})");
     auto ix = open(gz);
     REQUIRE(entry(ix));
     CHECK_FALSE(entry(ix)->current);
@@ -165,7 +165,7 @@ TEST_CASE("another extension version makes the data stale") {
 TEST_CASE("drop and rebuild a plugin extension by name") {
     dftu_utils_test::TestEnvironment env(10);
     const auto gz = write_records(env, "d");
-    domains::plugins::Plugins set = load();
+    plugins::host::Plugins set = load();
     auto ix = open(gz);
     dftu_utils_test::ok(ix.build());
     dftu_utils_test::ok(ix.drop_extension(dstd::String(EXT)));
@@ -178,8 +178,8 @@ TEST_CASE("drop and rebuild a plugin extension by name") {
 }
 
 TEST_CASE("a second registration of the same name fails to load") {
-    domains::plugins::Plugins set = load();
-    CHECK_FALSE(domains::plugins::Plugins::builder()
+    plugins::host::Plugins set = load();
+    CHECK_FALSE(plugins::host::Plugins::builder()
                     .add(INDEX_MINMAX_PLUGIN_PATH)
                     .build());
 }
@@ -187,7 +187,7 @@ TEST_CASE("a second registration of the same name fails to load") {
 TEST_CASE("a failing extension step stores nothing and prunes nothing") {
     dftu_utils_test::TestEnvironment env(10);
     const auto gz = write_records(env, "e");
-    domains::plugins::Plugins set = load(R"({"fail_step": true})");
+    plugins::host::Plugins set = load(R"({"fail_step": true})");
     auto ix = open(gz);
     dftu_utils_test::ok(ix.build());
     const auto ex = dftu_utils_test::ok(ix.explain("v > 2990")).at(0);

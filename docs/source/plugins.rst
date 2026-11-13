@@ -1158,7 +1158,7 @@ shared scan must stay wide enough for every branch):
 
 .. code-block:: cpp
 
-   using dftracer::utils::domains::plugins::Plugins;
+   using dftracer::utils::plugins::host::Plugins;
 
    auto set = Plugins::builder()
                   .add("./name_edges.so", R"({"duql": "cat == \"POSIX\""})")

@@ -5,8 +5,6 @@
 #include <dftracer/utils/coro/named.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/coro/task_abi.h>
-#include <dftracer/utils/domains/plugins/fold_adapter.h>
-#include <dftracer/utils/domains/plugins/fold_adapter/ext.h>
 #include <dftracer/utils/dstd/byte_view.h>
 #include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/fmt.h>
@@ -25,13 +23,15 @@
 #include <dftracer/utils/fileio/lines/sources/async_streaming_plain_line_generator.h>
 #include <dftracer/utils/fileio/parallel/merge.h>
 #include <dftracer/utils/fileio/parallel/parallel_writer.h>
+#include <dftracer/utils/plugins/host/fold_adapter.h>
+#include <dftracer/utils/plugins/host/fold_adapter/ext.h>
 #include <dftracer/utils/runtime/runtime.h>
 
 #include <cstddef>
 #include <cstdint>
 #include <utility>
 
-namespace dftracer::utils::domains::plugins {
+namespace dftracer::utils::plugins::host {
 
 namespace {
 
@@ -596,4 +596,4 @@ const dftu_svc_fileio g_fileio = {sizeof(dftu_svc_fileio),
 
 const void* detail::fileio_ext_vtable() { return &g_fileio; }
 
-}  // namespace dftracer::utils::domains::plugins
+}  // namespace dftracer::utils::plugins::host

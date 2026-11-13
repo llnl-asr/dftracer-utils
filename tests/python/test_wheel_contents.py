@@ -42,6 +42,7 @@ REQUIRED_PATTERNS = (
     "dftracer/lib/libdftracer_utils_duql",
     "dftracer/lib/libdftracer_utils_dataframe",
     "dftracer/lib/libdftracer_utils_trace",
+    "dftracer/lib/libdftracer_utils_plugins",
     "dftracer/lib/libdftracer_utils_domains",
     "dftracer/bin/dftracer_index",
     # Plugin headers a pip-installed wheel needs to compile JIT plugins and the

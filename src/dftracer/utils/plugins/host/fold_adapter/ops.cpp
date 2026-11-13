@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dataframe/abi.h>
-#include <dftracer/utils/domains/plugins/fold_adapter/ext.h>
-#include <dftracer/utils/domains/plugins/reserved_names.h>
 #include <dftracer/utils/dstd/fmt.h>
+#include <dftracer/utils/plugins/host/fold_adapter/ext.h>
+#include <dftracer/utils/plugins/host/reserved_names.h>
 
 #include <cstdint>
 
-namespace dftracer::utils::domains::plugins {
+namespace dftracer::utils::plugins::host {
 namespace {
 
 dftu_status find_op(::dftu_ctx* ctx, const char* name,
@@ -135,4 +135,4 @@ dftu_status detail::register_plugin_op(::dftu_ctx* ctx,
 
 const void* detail::ops_ext_vtable() { return &g_ops; }
 
-}  // namespace dftracer::utils::domains::plugins
+}  // namespace dftracer::utils::plugins::host

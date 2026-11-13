@@ -36,6 +36,7 @@ set(_dirs
     include/dftracer/utils/duql
     src/dftracer/utils/duql
     include/dftracer/utils/plugins
+    src/dftracer/utils/plugins
     src/dftracer/utils/fileio
     include/dftracer/utils/trace
     src/dftracer/utils/trace

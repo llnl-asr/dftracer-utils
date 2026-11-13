@@ -4,12 +4,12 @@
 // covering the same-batch delivery, the ordering rule, and the per-batch reset.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/domains/plugins/fold_adapter.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi.h>
+#include <dftracer/utils/plugins/host/fold_adapter.h>
 #include <dftracer/utils/plugins/plugin.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/trace/views/fold_event.h>
@@ -59,11 +59,11 @@ struct ConsumerSlice {
 // Owns a plugin plus a PluginFold bound to `bus`, torn down in the right order.
 struct FoldHolder {
     dftu_plugin* plugin;
-    dstd::UniquePtr<domains::plugins::PluginFold> fold;
+    dstd::UniquePtr<plugins::host::PluginFold> fold;
     FoldHolder(dftu_plugin* p, dstd::StringIntern& intern,
                trace::views::detail::FoldPortBus* bus)
         : plugin(p),
-          fold(dstd::make_unique<domains::plugins::PluginFold>(p, intern)) {
+          fold(dstd::make_unique<plugins::host::PluginFold>(p, intern)) {
         fold->bind_port_bus(bus);
     }
     ~FoldHolder() {

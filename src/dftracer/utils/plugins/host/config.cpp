@@ -1,18 +1,18 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/str_format.h>
-#include <dftracer/utils/domains/plugins/config.h>
 #include <dftracer/utils/dstd/ascii.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/plugins/host/config.h>
 #include <simdjson.h>
 
 #include <cerrno>
 #include <cstdlib>
 
-namespace dftracer::utils::domains::plugins {
+namespace dftracer::utils::plugins::host {
 
 dstd::Result<ConfigTree::Node> ConfigTree::build_node(
     const simdjson::dom::element& el) {
@@ -299,4 +299,4 @@ const dftu_value* ConfigTree::root() const {
     return root_.get();
 }
 
-}  // namespace dftracer::utils::domains::plugins
+}  // namespace dftracer::utils::plugins::host

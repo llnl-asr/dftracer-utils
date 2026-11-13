@@ -4,10 +4,10 @@
 #include <dftracer/utils/coro/named.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/coro/task_abi.h>
-#include <dftracer/utils/domains/plugins/fold_adapter.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi.h>
+#include <dftracer/utils/plugins/host/fold_adapter.h>
 #include <dftracer/utils/python/core/errors.h>
 #include <dftracer/utils/python/frame/op_runner.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -22,7 +22,7 @@ namespace {
 
 using dftracer::utils::Runtime;
 using dftracer::utils::dstd::StringIntern;
-using domains::plugins::PluginFold;
+using plugins::host::PluginFold;
 
 using build_op_fn = ::dftu_status (*)(::dftu_ctx*, const ::dftu_plugin_host*,
                                       ::dftu_job**);

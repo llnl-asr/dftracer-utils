@@ -16,7 +16,7 @@
 // precede plugin.h so arrow_abi.h no-ops rather than tripping nanoarrow's outer
 // ARROW_FLAG_DICTIONARY_ORDERED sentinel.
 #include <dftracer/utils/dataframe/abi.h>
-#include <dftracer/utils/domains/plugins/fold_adapter.h>
+#include <dftracer/utils/plugins/host/fold_adapter.h>
 #include <dftracer/utils/plugins/plugin.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/internal/utils.h>
@@ -66,8 +66,8 @@ struct HostFixture {
     dstd::StringIntern intern;
     dftu_plugin* plugin =
         dftracer::utils::plugins::make_plugin<TrivialSlice>(nullptr);
-    dstd::UniquePtr<domains::plugins::PluginFold> fold =
-        dstd::make_unique<domains::plugins::PluginFold>(plugin, intern);
+    dstd::UniquePtr<plugins::host::PluginFold> fold =
+        dstd::make_unique<plugins::host::PluginFold>(plugin, intern);
     dftu_plugin_host& host() { return fold->host(); }
     dftu_ctx* ctx() { return ctx_.get(); }
     test_plugin_common::Ctx ctx_;
@@ -349,8 +349,7 @@ TEST_CASE("plugin host: trace close writes line-ended members and the tail") {
         expected += line + "\n";
     }
     expected += "{\"tail\":true}";
-    reinterpret_cast<domains::plugins::PluginTraceWriter*>(w)->buffer =
-        expected;
+    reinterpret_cast<plugins::host::PluginTraceWriter*>(w)->buffer = expected;
     REQUIRE(tr->trace_close(fx.ctx(), host.h, w) == DFTU_OK);
 
     dstd::String decoded, last;
@@ -411,7 +410,7 @@ TEST_CASE("plugin host: trace write prints a float arg with 17 digits") {
     CHECK(tr->trace_write(fx.ctx(), host.h, w, df) == DFTU_OK);
     dftu_dataframe_free(df);
     const dstd::String& buffer =
-        reinterpret_cast<domains::plugins::PluginTraceWriter*>(w)->buffer;
+        reinterpret_cast<plugins::host::PluginTraceWriter*>(w)->buffer;
     CHECK(buffer.find("\"v\":0.10000000000000001}") != dstd::String::npos);
     CHECK(buffer.find("\"v\":100}") != dstd::String::npos);
     CHECK(buffer.find("\"v\":1e+20}") != dstd::String::npos);

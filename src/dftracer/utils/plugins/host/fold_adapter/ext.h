@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: MIT
-#ifndef DFTRACER_UTILS_DOMAINS_PLUGINS_FOLD_ADAPTER_EXT_H
-#define DFTRACER_UTILS_DOMAINS_PLUGINS_FOLD_ADAPTER_EXT_H
+#ifndef DFTRACER_UTILS_PLUGINS_HOST_FOLD_ADAPTER_EXT_H
+#define DFTRACER_UTILS_PLUGINS_HOST_FOLD_ADAPTER_EXT_H
 
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/agg_spill.h>
-#include <dftracer/utils/domains/plugins/host_status.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi.h>
+#include <dftracer/utils/plugins/host/host_status.h>
 
 #include <string>
 #include <vector>
@@ -19,7 +19,7 @@
 // accessor below; host_get_service in the core TU calls the accessors. The
 // remaining declarations are the free helpers referenced across more than one
 // of those TUs.
-namespace dftracer::utils::domains::plugins {
+namespace dftracer::utils::plugins::host {
 
 // Per-slice engine-backed aggregation accumulator (dft.ext.agg). value_names
 // are the distinct value/by columns the specs reference, ordered so each spec's
@@ -79,6 +79,6 @@ dftu_status register_plugin_index_extension(::dftu_ctx* ctx, const char* name,
 
 }  // namespace detail
 
-}  // namespace dftracer::utils::domains::plugins
+}  // namespace dftracer::utils::plugins::host
 
-#endif  // DFTRACER_UTILS_DOMAINS_PLUGINS_FOLD_ADAPTER_EXT_H
+#endif  // DFTRACER_UTILS_PLUGINS_HOST_FOLD_ADAPTER_EXT_H

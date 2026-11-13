@@ -8,9 +8,9 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dataframe/abi.h>
-#include <dftracer/utils/domains/plugins/plugins.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/plugins/host/plugins.h>
 #include <dlfcn.h>
 #include <doctest/doctest.h>
 
@@ -24,8 +24,8 @@ using namespace dftracer::utils;
 
 namespace {
 
-dstd::Optional<domains::plugins::Plugins> load_fixture() {
-    auto result = domains::plugins::Plugins::Builder()
+dstd::Optional<plugins::host::Plugins> load_fixture() {
+    auto result = plugins::host::Plugins::Builder()
                       .add(PROVIDER_FIXTURE_PLUGIN_PATH)
                       .build();
     REQUIRE(result.has_value());
@@ -67,7 +67,7 @@ dstd::Vector<std::int64_t> read_i64_column(const dftu_dataframe* df,
 }  // namespace
 
 TEST_CASE("a registered provider backs a LazyFrame that collects its rows") {
-    dstd::Optional<domains::plugins::Plugins> plugins = load_fixture();
+    dstd::Optional<plugins::host::Plugins> plugins = load_fixture();
 
     dftu_lazyframe* lf = dftu_lazyframe_from_provider("provider_fixture.rows");
     REQUIRE(lf);
@@ -85,7 +85,7 @@ TEST_CASE("a registered provider backs a LazyFrame that collects its rows") {
 }
 
 TEST_CASE("an op chained on the provider's LazyFrame composes correctly") {
-    dstd::Optional<domains::plugins::Plugins> plugins = load_fixture();
+    dstd::Optional<plugins::host::Plugins> plugins = load_fixture();
 
     dftu_lazyframe* lf = dftu_lazyframe_from_provider("provider_fixture.rows");
     REQUIRE(lf);
@@ -103,7 +103,7 @@ TEST_CASE("an op chained on the provider's LazyFrame composes correctly") {
 }
 
 TEST_CASE("register_provider refuses a dftu.-prefixed and a duplicate name") {
-    dstd::Optional<domains::plugins::Plugins> plugins = load_fixture();
+    dstd::Optional<plugins::host::Plugins> plugins = load_fixture();
     FixtureAccessors fx;
     REQUIRE(fx.handle);
     auto gate_ok = fx.sym<int (*)()>("provider_fixture_gate_ok");
@@ -112,7 +112,7 @@ TEST_CASE("register_provider refuses a dftu.-prefixed and a duplicate name") {
 }
 
 TEST_CASE("a cursor failing mid-stream surfaces as a collect failure") {
-    dstd::Optional<domains::plugins::Plugins> plugins = load_fixture();
+    dstd::Optional<plugins::host::Plugins> plugins = load_fixture();
     FixtureAccessors fx;
     REQUIRE(fx.handle);
     auto next_calls = fx.sym<int (*)()>("provider_fixture_failing_next_calls");
@@ -131,7 +131,7 @@ TEST_CASE("a cursor failing mid-stream surfaces as a collect failure") {
 }
 
 TEST_CASE("source and cursor destroy are each called exactly once per scan") {
-    dstd::Optional<domains::plugins::Plugins> plugins = load_fixture();
+    dstd::Optional<plugins::host::Plugins> plugins = load_fixture();
     FixtureAccessors fx;
     REQUIRE(fx.handle);
     auto cursor_destroys =
@@ -158,7 +158,7 @@ TEST_CASE("a provider is gone once the loading plugin set is destroyed") {
     const int before = source_destroys();
 
     {
-        dstd::Optional<domains::plugins::Plugins> plugins = load_fixture();
+        dstd::Optional<plugins::host::Plugins> plugins = load_fixture();
         dftu_lazyframe* lf =
             dftu_lazyframe_from_provider("provider_fixture.rows");
         CHECK(lf);
@@ -179,7 +179,7 @@ TEST_CASE("a C++ SDK source absorbs a filter and is freed with the plugin") {
     const int filters_before = filters();
 
     {
-        dstd::Optional<domains::plugins::Plugins> plugins = load_fixture();
+        dstd::Optional<plugins::host::Plugins> plugins = load_fixture();
         dftu_lazyframe* lf =
             dftu_lazyframe_from_provider("provider_fixture.sdk");
         REQUIRE(lf);
@@ -209,7 +209,7 @@ TEST_CASE("a C++ SDK source absorbs a filter and is freed with the plugin") {
 
 TEST_CASE("a C++ SDK node runs over a provider and leaves with the plugin") {
     {
-        dstd::Optional<domains::plugins::Plugins> plugins = load_fixture();
+        dstd::Optional<plugins::host::Plugins> plugins = load_fixture();
         dftu_lazyframe* lf =
             dftu_lazyframe_from_provider("provider_fixture.sdk");
         REQUIRE(lf);

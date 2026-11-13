@@ -63,6 +63,7 @@ set(DFTU_PC_PRIVATE_duql "-lsimdjson -lpcre2-8 ${DFTU_PC_VECTORSCAN} -ldftracer_
 set(DFTU_PC_PRIVATE_yaml "-ldftracer_utils_hwy")
 set(DFTU_PC_PRIVATE_dataframe "-lsimdjson -ldftracer_utils_hwy_contrib -ldftracer_utils_hwy -ldftracer_utils_utf8proc_static -lzstd ${DFTU_PC_NANOARROW}")
 set(DFTU_PC_PRIVATE_trace "-lsimdjson -ldftracer_utils_zlib -ldeflate -lzstd ${DFTU_PC_NANOARROW}")
+set(DFTU_PC_PRIVATE_plugins "-lsimdjson")
 set(DFTU_PC_PRIVATE_domains "${DFTU_PC_NANOARROW}")
 
 # Branch padding against the Intel JCC erratum. The flag acts on the assembler,
@@ -221,7 +222,6 @@ endif()
 # -----------------------------------------
 
 set(DFTRACER_UTILS_DOMAINS_SOURCES
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/domains/plugins/host_ops.cpp
     # DLIO config generation
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/domains/workload/dlio/distributions.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/domains/workload/dlio/mixture.cpp
@@ -308,23 +308,6 @@ list(APPEND DFTRACER_UTILS_DOMAINS_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/domains/workload/genesis/discover.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/domains/workload/genesis/process.cpp
 
-    # Plugins (C ABI fold adapter + dlopen host + config tree builder)
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/domains/plugins/build_host.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/domains/plugins/config.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/domains/plugins/fold_adapter.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/domains/plugins/fold_adapter/agg.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/domains/plugins/fold_adapter/result.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/domains/plugins/fold_adapter/ops.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/domains/plugins/fold_adapter/state.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/domains/plugins/fold_adapter/task.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/domains/plugins/fold_adapter/providers.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/domains/plugins/fold_adapter/index.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/domains/plugins/fold_adapter/nodes.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/domains/plugins/fold_adapter/fileio.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/domains/plugins/fold_adapter/fs.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/domains/plugins/state_registry.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/domains/plugins/plugins.cpp
-
     # DFT Comparator
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/domains/analysis/comparator/comparison_aggregation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/domains/analysis/comparator/comparison_config.cpp
@@ -366,6 +349,26 @@ if(DFTRACER_UTILS_ENABLE_MPI)
   list(APPEND DFTRACER_UTILS_DOMAINS_SOURCES
        ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/mpi/mpi_utils.cpp)
 endif()
+
+# Plugins (C ABI fold adapter + dlopen host + config tree builder)
+set(DFTRACER_UTILS_PLUGINS_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/host/host_ops.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/host/build_host.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/host/config.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/host/fold_adapter.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/host/fold_adapter/agg.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/host/fold_adapter/result.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/host/fold_adapter/ops.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/host/fold_adapter/state.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/host/fold_adapter/task.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/host/fold_adapter/providers.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/host/fold_adapter/index.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/host/fold_adapter/nodes.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/host/fold_adapter/fileio.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/host/fold_adapter/fs.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/host/state_registry.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/host/plugins.cpp
+)
 
 set(DFTRACER_UTILS_TRACE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/chunk_extractor_utility.cpp
@@ -1591,6 +1594,120 @@ endforeach()
 use_precompiled_header(dftracer_utils_trace_objects)
 
 # +++++++++++++++++++++++++++++++++++++++++
+# Plugin Host Library
+# +++++++++++++++++++++++++++++++++++++++++
+
+create_library(
+  NAME
+  dftracer_utils_plugins
+  NAMESPACE
+  dftracer_utils_plugins
+  SOURCES
+  ${DFTRACER_UTILS_PLUGINS_SOURCES}
+  VERSION
+  ${PROJECT_VERSION}
+  DESCRIPTION
+  "DFTracer utils plugin host library"
+  URL
+  "https://github.com/llnl-asr/dftracer-utils"
+  BUILD_SHARED
+  ${DFTRACER_UTILS_BUILD_SHARED}
+  BUILD_STATIC
+  ${DFTRACER_UTILS_BUILD_STATIC}
+  SHARED_LINK_LIBRARIES
+    dftracer_utils_runtime::shared
+    dftracer_utils_dataframe::shared
+    dftracer_utils_json::shared
+    dftracer_utils_duql::shared
+    dftracer_utils_store::shared
+    dftracer_utils_fileio::shared
+    dftracer_utils_trace::shared
+  STATIC_LINK_LIBRARIES
+    dftracer_utils_runtime::static
+    dftracer_utils_dataframe::static
+    dftracer_utils_json::static
+    dftracer_utils_duql::static
+    dftracer_utils_store::static
+    dftracer_utils_fileio::static
+    dftracer_utils_trace::static
+  PUBLIC_INCLUDE_DIRS
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include>
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+  $<BUILD_INTERFACE:${CMAKE_BINARY_DIR}/include>
+  $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+  PRIVATE_COMPILE_OPTIONS
+  ${COVERAGE_COMPILE_OPTIONS}
+  PKG_CONFIG_REQUIRES
+  "dftracer_utils_runtime dftracer_utils_json dftracer_utils_duql dftracer_utils_store dftracer_utils_fileio dftracer_utils_dataframe dftracer_utils_trace"
+  PKG_CONFIG_LIBS_PRIVATE
+  "${DFTU_PC_PRIVATE_plugins}"
+  FIND_DEPENDENCIES
+  dftracer_utils_runtime
+  dftracer_utils_dataframe
+  dftracer_utils_json
+  dftracer_utils_duql
+  dftracer_utils_store
+  dftracer_utils_fileio
+  dftracer_utils_trace)
+
+foreach(variant objects shared static)
+  dftu_variant_target(VARIANT_TARGET dftracer_utils_plugins ${variant})
+  set(VARIANT_UPPER ${DFTU_LINK_TYPE_${variant}})
+  if(TARGET ${VARIANT_TARGET})
+    link_simdjson(${VARIANT_TARGET} ${VARIANT_UPPER})
+
+    # The plugin host dlopen()s plugin shared libraries; libdl is empty where
+    # the symbols already live in libc/libSystem.
+    target_link_libraries(${VARIANT_TARGET}
+                          PUBLIC ${CMAKE_DL_LIBS})
+
+    if(DFTRACER_UTILS_ENABLE_ARROW)
+      link_nanoarrow(${VARIANT_TARGET} ${VARIANT_UPPER})
+    endif()
+
+    if(variant STREQUAL "objects")
+      target_set_warnings(dftracer_utils_plugins_objects)
+      target_compile_options(dftracer_utils_plugins_objects
+                             PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions>)
+    elseif(COVERAGE_LINK_OPTIONS)
+      target_link_libraries(${VARIANT_TARGET}
+                            PRIVATE ${COVERAGE_LINK_OPTIONS})
+    endif()
+
+    # The host ops (dftu.fs.*, dftu.file.*, dftu.text.*) register from a static
+    # initializer that nothing references, so a linker drops it and the ops
+    # silently do not exist. A static link drops the archive member; a shared
+    # link under GNU ld drops the whole DT_NEEDED entry, since --as-needed is
+    # the default on most Linux distros and no symbol of ours is referenced.
+    # Force a reference through the unmangled anchor in both cases. Mach-O
+    # prefixes an underscore, and does not default to --as-needed, which is why
+    # the shared half only ever failed on Linux.
+    if(APPLE)
+      set(host_ops_anchor "_dftu_register_host_ops")
+    else()
+      set(host_ops_anchor "dftu_register_host_ops")
+    endif()
+    # The one library holds every object, so a shared link references it
+    # directly and needs neither the anchor nor --no-as-needed.
+    if(NOT variant STREQUAL "objects"
+       AND NOT (DFTRACER_UTILS_SINGLE_LIBRARY AND variant STREQUAL "shared"))
+      target_link_options(${VARIANT_TARGET} INTERFACE
+                          "LINKER:-u,${host_ops_anchor}")
+      # GNU ld does not count -u as a reference when deciding --as-needed, so
+      # the shared library is still dropped from DT_NEEDED and its initializer
+      # never runs. Keep the dependency explicitly; Mach-O has no --as-needed
+      # and needs only the -u above.
+      if(NOT APPLE AND variant STREQUAL "shared")
+        target_link_options(${VARIANT_TARGET} INTERFACE
+                            "LINKER:--no-as-needed")
+      endif()
+    endif()
+  endif()
+endforeach()
+
+use_precompiled_header(dftracer_utils_plugins_objects)
+
+# +++++++++++++++++++++++++++++++++++++++++
 # Utilities Library
 # +++++++++++++++++++++++++++++++++++++++++
 
@@ -1604,7 +1721,7 @@ create_library(
   VERSION
   ${PROJECT_VERSION}
   DESCRIPTION
-  "DFTracer utils domains library (analysis, workload, server, plugin host)"
+  "DFTracer utils domains library (analysis, workload, server)"
   URL
   "https://github.com/llnl-asr/dftracer-utils"
   BUILD_SHARED
@@ -1620,6 +1737,7 @@ create_library(
     dftracer_utils_fileio::shared
     dftracer_utils_yaml::shared
     dftracer_utils_trace::shared
+    dftracer_utils_plugins::shared
   STATIC_LINK_LIBRARIES
     dftracer_utils_runtime::static
     dftracer_utils_dataframe::static
@@ -1629,6 +1747,7 @@ create_library(
     dftracer_utils_fileio::static
     dftracer_utils_yaml::static
     dftracer_utils_trace::static
+    dftracer_utils_plugins::static
   PUBLIC_INCLUDE_DIRS
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include>
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
@@ -1637,7 +1756,7 @@ create_library(
   PRIVATE_COMPILE_OPTIONS
   ${COVERAGE_COMPILE_OPTIONS}
   PKG_CONFIG_REQUIRES
-  "dftracer_utils_runtime dftracer_utils_json dftracer_utils_duql dftracer_utils_store dftracer_utils_fileio dftracer_utils_yaml dftracer_utils_dataframe dftracer_utils_trace"
+  "dftracer_utils_runtime dftracer_utils_json dftracer_utils_duql dftracer_utils_store dftracer_utils_fileio dftracer_utils_yaml dftracer_utils_dataframe dftracer_utils_trace dftracer_utils_plugins"
   PKG_CONFIG_LIBS_PRIVATE
   "${DFTU_PC_PRIVATE_domains}"
   FIND_DEPENDENCIES
@@ -1649,6 +1768,7 @@ create_library(
   dftracer_utils_fileio
   dftracer_utils_yaml
   dftracer_utils_trace
+  dftracer_utils_plugins
   BUNDLED_PACKAGES
     ${DFTU_ARROW_PACKAGES})
 
@@ -1680,11 +1800,6 @@ foreach(variant objects shared static)
         endif()
       endif()
     endif()
-
-    # The plugin host dlopen()s plugin shared libraries; libdl is empty where
-    # the symbols already live in libc/libSystem.
-    target_link_libraries(${VARIANT_TARGET}
-                          PUBLIC ${CMAKE_DL_LIBS})
 
     if(variant STREQUAL "objects")
       target_set_warnings(dftracer_utils_domains_objects)
@@ -1719,35 +1834,6 @@ foreach(variant objects shared static)
     if(DFTRACER_UTILS_HAVE_LUSTREAPI)
       target_link_libraries(${VARIANT_TARGET}
                             PRIVATE ${LUSTREAPI_LIBRARY})
-    endif()
-
-    # The host ops (dftu.fs.*, dftu.file.*, dftu.text.*) register from a static
-    # initializer that nothing references, so a linker drops it and the ops
-    # silently do not exist. A static link drops the archive member; a shared
-    # link under GNU ld drops the whole DT_NEEDED entry, since --as-needed is
-    # the default on most Linux distros and no symbol of ours is referenced.
-    # Force a reference through the unmangled anchor in both cases. Mach-O
-    # prefixes an underscore, and does not default to --as-needed, which is why
-    # the shared half only ever failed on Linux.
-    if(APPLE)
-      set(host_ops_anchor "_dftu_register_host_ops")
-    else()
-      set(host_ops_anchor "dftu_register_host_ops")
-    endif()
-    # The one library holds every object, so a shared link references it
-    # directly and needs neither the anchor nor --no-as-needed.
-    if(NOT variant STREQUAL "objects"
-       AND NOT (DFTRACER_UTILS_SINGLE_LIBRARY AND variant STREQUAL "shared"))
-      target_link_options(${VARIANT_TARGET} INTERFACE
-                          "LINKER:-u,${host_ops_anchor}")
-      # GNU ld does not count -u as a reference when deciding --as-needed, so
-      # the shared library is still dropped from DT_NEEDED and its initializer
-      # never runs. Keep the dependency explicitly; Mach-O has no --as-needed
-      # and needs only the -u above.
-      if(NOT APPLE AND variant STREQUAL "shared")
-        target_link_options(${VARIANT_TARGET} INTERFACE
-                            "LINKER:--no-as-needed")
-      endif()
     endif()
   endif()
 endforeach()
@@ -2001,15 +2087,41 @@ if(NOT DFTRACER_UTILS_SINGLE_LIBRARY)
 
   create_unified_library_config(
     NAME
+    dftracer_utils_plugins
+    VERSION
+    ${PROJECT_VERSION}
+    DESCRIPTION
+    "DFTracer utils plugin host library"
+    URL
+    "https://github.com/llnl-asr/dftracer-utils"
+    PKG_CONFIG_REQUIRES
+    "dftracer_utils_runtime dftracer_utils_json dftracer_utils_duql dftracer_utils_store dftracer_utils_fileio dftracer_utils_dataframe dftracer_utils_trace"
+    PKG_CONFIG_LIBS_PRIVATE
+    "${DFTU_PC_PRIVATE_plugins}"
+    FIND_DEPENDENCIES
+    dftracer_utils_runtime
+    dftracer_utils_json
+    dftracer_utils_duql
+    dftracer_utils_store
+    dftracer_utils_fileio
+    dftracer_utils_dataframe
+    dftracer_utils_trace
+    BUILD_SHARED
+    ${DFTRACER_UTILS_BUILD_SHARED}
+    BUILD_STATIC
+    ${DFTRACER_UTILS_BUILD_STATIC})
+
+  create_unified_library_config(
+    NAME
     dftracer_utils_domains
     VERSION
     ${PROJECT_VERSION}
     DESCRIPTION
-    "DFTracer utils domains library (analysis, workload, server, plugin host)"
+    "DFTracer utils domains library (analysis, workload, server)"
     URL
     "https://github.com/llnl-asr/dftracer-utils"
     PKG_CONFIG_REQUIRES
-    "dftracer_utils_runtime dftracer_utils_json dftracer_utils_duql dftracer_utils_store dftracer_utils_fileio dftracer_utils_yaml dftracer_utils_dataframe dftracer_utils_trace"
+    "dftracer_utils_runtime dftracer_utils_json dftracer_utils_duql dftracer_utils_store dftracer_utils_fileio dftracer_utils_yaml dftracer_utils_dataframe dftracer_utils_trace dftracer_utils_plugins"
     PKG_CONFIG_LIBS_PRIVATE
     "${DFTU_PC_PRIVATE_domains}"
     FIND_DEPENDENCIES
@@ -2021,6 +2133,7 @@ if(NOT DFTRACER_UTILS_SINGLE_LIBRARY)
     dftracer_utils_yaml
     dftracer_utils_dataframe
     dftracer_utils_trace
+    dftracer_utils_plugins
     BUILD_SHARED
     ${DFTRACER_UTILS_BUILD_SHARED}
     BUILD_STATIC
@@ -2053,7 +2166,7 @@ else()
     target_link_libraries(
       dftracer_utils_shared
       INTERFACE dftracer_utils_runtime::shared dftracer_utils_store::shared
-                dftracer_utils_fileio::shared dftracer_utils_trace::shared dftracer_utils_domains::shared
+                dftracer_utils_fileio::shared dftracer_utils_trace::shared dftracer_utils_plugins::shared dftracer_utils_domains::shared
                 dftracer_utils_dataframe::shared)
 
     # Create aliases
@@ -2071,7 +2184,7 @@ else()
     target_link_libraries(
       dftracer_utils_static
       INTERFACE dftracer_utils_runtime::static dftracer_utils_store::static
-                dftracer_utils_fileio::static dftracer_utils_trace::static dftracer_utils_domains::static
+                dftracer_utils_fileio::static dftracer_utils_trace::static dftracer_utils_plugins::static dftracer_utils_domains::static
                 dftracer_utils_dataframe::static)
 
     # Create aliases
@@ -2102,7 +2215,7 @@ if(DFTRACER_UTILS_PREFERRED_TYPE)
   string(APPEND UNIFIED_CONFIG_CONTENT "@PACKAGE_INIT@\n\n")
   string(APPEND UNIFIED_CONFIG_CONTENT "include(CMakeFindDependencyMacro)\n\n")
   if(NOT DFTRACER_UTILS_SINGLE_LIBRARY)
-    string(APPEND UNIFIED_CONFIG_CONTENT "# Find memory, dstd, common, coro, runtime, store, fileio, trace, domains and dataframe libraries\n")
+    string(APPEND UNIFIED_CONFIG_CONTENT "# Find memory, dstd, common, coro, runtime, store, fileio, trace, plugins, domains and dataframe libraries\n")
     string(APPEND UNIFIED_CONFIG_CONTENT "find_dependency(dftracer_utils_memory)\n")
     string(APPEND UNIFIED_CONFIG_CONTENT "find_dependency(dftracer_utils_dstd)\n")
     string(APPEND UNIFIED_CONFIG_CONTENT "find_dependency(dftracer_utils_common)\n")
@@ -2111,6 +2224,7 @@ if(DFTRACER_UTILS_PREFERRED_TYPE)
     string(APPEND UNIFIED_CONFIG_CONTENT "find_dependency(dftracer_utils_store)\n")
     string(APPEND UNIFIED_CONFIG_CONTENT "find_dependency(dftracer_utils_fileio)\n")
     string(APPEND UNIFIED_CONFIG_CONTENT "find_dependency(dftracer_utils_trace)\n")
+    string(APPEND UNIFIED_CONFIG_CONTENT "find_dependency(dftracer_utils_plugins)\n")
     string(APPEND UNIFIED_CONFIG_CONTENT
            "find_dependency(dftracer_utils_domains)\n")
     string(APPEND UNIFIED_CONFIG_CONTENT
@@ -2226,7 +2340,7 @@ if(DFTRACER_UTILS_PREFERRED_TYPE)
     set(DFTRACER_UTILS_PKG_CONFIG_LIBS_PRIVATE "-lpthread")
   else()
     set(DFTRACER_UTILS_PKG_CONFIG_REQUIRES
-        "dftracer_utils_runtime dftracer_utils_store dftracer_utils_fileio dftracer_utils_trace dftracer_utils_domains dftracer_utils_dataframe")
+        "dftracer_utils_runtime dftracer_utils_store dftracer_utils_fileio dftracer_utils_trace dftracer_utils_plugins dftracer_utils_domains dftracer_utils_dataframe")
     set(DFTRACER_UTILS_PKG_CONFIG_LIBS_PRIVATE "")
   endif()
   create_pkgconfig_file(

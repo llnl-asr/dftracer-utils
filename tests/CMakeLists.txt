@@ -116,7 +116,7 @@ elseif(DFTRACER_UTILS_BUILD_SHARED)
 endif()
 if(DFTRACER_UTILS_BUILD_SHARED)
   set(CODEC_EXPORT_LIBS)
-  foreach(lib memory dstd common runtime store fileio json yaml duql dataframe trace domains)
+  foreach(lib memory dstd common runtime store fileio json yaml duql dataframe trace plugins domains)
     dftu_variant_target(_target dftracer_utils_${lib} shared)
     if(TARGET ${_target})
       list(APPEND CODEC_EXPORT_LIBS $<TARGET_FILE:${_target}>)
@@ -167,6 +167,12 @@ add_test(
   COMMAND
     sh -c
     [=[bad=$(grep -rnE '^[[:space:]]*#[[:space:]]*include[[:space:]]*<dftracer/utils/(domains|cli|plugins)/' "$0/include/dftracer/utils/trace" "$0/src/dftracer/utils/trace" | grep -vE '<dftracer/utils/plugins/(abi/|arrow_abi\.h)'); if [ -n "$bad" ]; then echo "include from trace into a library above it:"; echo "$bad"; exit 1; fi]=]
+    ${CMAKE_SOURCE_DIR})
+add_test(
+  NAME plugins_no_upward
+  COMMAND
+    sh -c
+    [=[bad=$(grep -rnE '^[[:space:]]*#[[:space:]]*include[[:space:]]*<dftracer/utils/(domains|cli|python)/' "$0/include/dftracer/utils/plugins" "$0/src/dftracer/utils/plugins"); if [ -n "$bad" ]; then echo "include from plugins into a library above it:"; echo "$bad"; exit 1; fi]=]
     ${CMAKE_SOURCE_DIR})
 add_test(
   NAME spdx_headers
@@ -1020,6 +1026,16 @@ if(DFTRACER_UTILS_PACKAGE_TESTS)
         -DTEST_TYPE=pkgconfig -P
         ${CMAKE_CURRENT_SOURCE_DIR}/test_package_discovery.cmake)
 
+    # Test plugins library
+    add_test(
+      NAME test_pkgconfig_discovery_plugins
+      COMMAND
+        ${CMAKE_COMMAND}
+        -DPKG_CONFIG_PATH=${TEST_INSTALL_PREFIX}/lib/pkgconfig:${TEST_INSTALL_PREFIX}/lib64/pkgconfig:${TEST_INSTALL_PREFIX}/lib/${CMAKE_LIBRARY_ARCHITECTURE}/pkgconfig
+        -DLIBRARY_NAME=dftracer_utils_plugins
+        -DTEST_TYPE=pkgconfig -P
+        ${CMAKE_CURRENT_SOURCE_DIR}/test_package_discovery.cmake)
+
     # Test domains library
     add_test(
       NAME test_pkgconfig_discovery_domains
@@ -1115,6 +1131,15 @@ if(DFTRACER_UTILS_PACKAGE_TESTS)
       COMMAND
         ${CMAKE_COMMAND} -DCMAKE_PREFIX_PATH=${TEST_INSTALL_PREFIX}
         -DLIBRARY_NAME=dftracer_utils_trace
+        -DTEST_TYPE=cmake -P
+        ${CMAKE_CURRENT_SOURCE_DIR}/test_package_discovery.cmake)
+
+    # Test plugins library
+    add_test(
+      NAME test_cmake_discovery_plugins
+      COMMAND
+        ${CMAKE_COMMAND} -DCMAKE_PREFIX_PATH=${TEST_INSTALL_PREFIX}
+        -DLIBRARY_NAME=dftracer_utils_plugins
         -DTEST_TYPE=cmake -P
         ${CMAKE_CURRENT_SOURCE_DIR}/test_package_discovery.cmake)
 
@@ -1214,6 +1239,7 @@ if(DFTRACER_UTILS_PACKAGE_TESTS)
       test_pkgconfig_discovery_store
       test_pkgconfig_discovery_io
       test_pkgconfig_discovery_trace
+      test_pkgconfig_discovery_plugins
       test_pkgconfig_discovery_domains
       test_cmake_discovery_common
       test_cmake_discovery_coro
@@ -1221,6 +1247,7 @@ if(DFTRACER_UTILS_PACKAGE_TESTS)
       test_cmake_discovery_store
       test_cmake_discovery_io
       test_cmake_discovery_trace
+      test_cmake_discovery_plugins
       test_cmake_discovery_domains)
   endif()
 
@@ -1243,7 +1270,7 @@ if(DFTRACER_UTILS_PACKAGE_TESTS)
   foreach(VARIANT IN LISTS PACKAGE_TEST_VARIANTS)
     if(NOT DFTRACER_UTILS_SINGLE_LIBRARY)
       foreach(LIBRARY dftracer_utils_memory dftracer_utils_dstd dftracer_utils_common dftracer_utils_coro
-                      dftracer_utils_runtime dftracer_utils_store dftracer_utils_fileio dftracer_utils_trace dftracer_utils_domains)
+                      dftracer_utils_runtime dftracer_utils_store dftracer_utils_fileio dftracer_utils_trace dftracer_utils_plugins dftracer_utils_domains)
         add_target_alias_test(test_target_${LIBRARY}_${VARIANT}
                               "${LIBRARY}::${VARIANT}")
         list(APPEND PACKAGE_DISCOVERY_TESTS test_target_${LIBRARY}_${VARIANT})

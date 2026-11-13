@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: MIT
-#ifndef DFTRACER_UTILS_DOMAINS_PLUGINS_BUILD_HOST_H
-#define DFTRACER_UTILS_DOMAINS_PLUGINS_BUILD_HOST_H
+#ifndef DFTRACER_UTILS_PLUGINS_HOST_BUILD_HOST_H
+#define DFTRACER_UTILS_PLUGINS_HOST_BUILD_HOST_H
 
-#include <dftracer/utils/domains/plugins/state_registry.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi.h>
+#include <dftracer/utils/plugins/host/state_registry.h>
 
 #include <utility>
 
-namespace dftracer::utils::domains::plugins {
+namespace dftracer::utils::plugins::host {
 
 /// The host a plugin factory receives. It answers only the registration
 /// groups - DFTU_SVC_OPS, DFTU_SVC_AGG, DFTU_SVC_PORTS, DFTU_SVC_PROVIDERS,
@@ -94,6 +94,6 @@ class BuildHost {
     dftu_plugin_host host_{};
 };
 
-}  // namespace dftracer::utils::domains::plugins
+}  // namespace dftracer::utils::plugins::host
 
-#endif  // DFTRACER_UTILS_DOMAINS_PLUGINS_BUILD_HOST_H
+#endif  // DFTRACER_UTILS_PLUGINS_HOST_BUILD_HOST_H

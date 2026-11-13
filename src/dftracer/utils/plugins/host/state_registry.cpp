@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: MIT
-#include <dftracer/utils/domains/plugins/host_status.h>
-#include <dftracer/utils/domains/plugins/reserved_names.h>
-#include <dftracer/utils/domains/plugins/state_registry.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/plugins/host/host_status.h>
+#include <dftracer/utils/plugins/host/reserved_names.h>
+#include <dftracer/utils/plugins/host/state_registry.h>
 
 #include <algorithm>
 
-namespace dftracer::utils::domains::plugins {
+namespace dftracer::utils::plugins::host {
 
 dftu_status register_state_into(StateRegistry& out, ::dftu_ctx* ctx,
                                 const dftu_state_desc* desc, void* self) {
@@ -52,4 +52,4 @@ dftu_status register_state_into(StateRegistry& out, ::dftu_ctx* ctx,
     return DFTU_OK;
 }
 
-}  // namespace dftracer::utils::domains::plugins
+}  // namespace dftracer::utils::plugins::host

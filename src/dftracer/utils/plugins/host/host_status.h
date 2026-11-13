@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
-#ifndef DFTRACER_UTILS_DOMAINS_PLUGINS_HOST_STATUS_H
-#define DFTRACER_UTILS_DOMAINS_PLUGINS_HOST_STATUS_H
+#ifndef DFTRACER_UTILS_PLUGINS_HOST_HOST_STATUS_H
+#define DFTRACER_UTILS_PLUGINS_HOST_HOST_STATUS_H
 
 #include <dftracer/utils/common/abi.h>
 #include <dftracer/utils/common/abi_error.h>
@@ -9,7 +9,7 @@
 
 #include <cstdint>
 
-namespace dftracer::utils::domains::plugins {
+namespace dftracer::utils::plugins::host {
 
 /// Reports @p message on the caller's @p ctx and returns @p status; a service
 /// function returns this for every failure.
@@ -35,6 +35,6 @@ inline dstd::Error callback_error(dstd::StringView plugin,
         common::to_condition(status), plugin, callback, message);
 }
 
-}  // namespace dftracer::utils::domains::plugins
+}  // namespace dftracer::utils::plugins::host
 
-#endif  // DFTRACER_UTILS_DOMAINS_PLUGINS_HOST_STATUS_H
+#endif  // DFTRACER_UTILS_PLUGINS_HOST_HOST_STATUS_H

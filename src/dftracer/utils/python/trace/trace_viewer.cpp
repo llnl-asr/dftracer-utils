@@ -5,7 +5,6 @@
 #include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/internal/lazy_plan.h>
-#include <dftracer/utils/domains/plugins/plugins.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -19,6 +18,7 @@
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/duql/syntax/parser.h>
 #include <dftracer/utils/duql/syntax/tree.h>
+#include <dftracer/utils/plugins/host/plugins.h>
 #include <dftracer/utils/python/core/dict_helpers.h>
 #include <dftracer/utils/python/core/errors.h>
 #include <dftracer/utils/python/core/list_helpers.h>
@@ -1133,7 +1133,7 @@ PyObject* tv_plugins(PyObject* self, PyObject* host) {
         PyErr_SetString(PyExc_TypeError, "plugins() needs a Plugins instance");
         return nullptr;
     }
-    const domains::plugins::Plugins* set =
+    const plugins::host::Plugins* set =
         python::plugins::plugin_host_plugins(host);
     if (!set) return nullptr;
     dftracer::utils::plugins::NamedResultRegistry* results =
@@ -1147,7 +1147,7 @@ PyObject* tv_plugins(PyObject* self, PyObject* host) {
     });
     trace::views::SessionBranch attach = [set, results,
                                           keep](trace::views::ViewSession& s) {
-        trace::views::Deferred<domains::plugins::PluginRun> h = set->attach(s);
+        trace::views::Deferred<plugins::host::PluginRun> h = set->attach(s);
         return dftracer::utils::dstd::Function<void(const ExportStats&)>(
             [h, results, keep](const ExportStats&) mutable {
                 *results = std::move(h.get().results);

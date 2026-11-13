@@ -10,9 +10,9 @@
 // first.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/domains/plugins/plugins.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/plugins/abi.h>
+#include <dftracer/utils/plugins/host/plugins.h>
 #include <doctest/doctest.h>
 
 using namespace dftracer::utils;
@@ -36,7 +36,7 @@ bool contains(const dstd::String& text, const char* part) {
 }  // namespace
 
 TEST_CASE("a plugin stamped with a mismatched ABI version is refused") {
-    auto set = domains::plugins::Plugins::builder()
+    auto set = plugins::host::Plugins::builder()
                    .add(BAD_ABI_VERSION_PLUGIN_PATH)
                    .build();
 
@@ -48,9 +48,8 @@ TEST_CASE("a plugin stamped with a mismatched ABI version is refused") {
 }
 
 TEST_CASE("a plugin with a mismatched ABI header hash is refused") {
-    auto set = domains::plugins::Plugins::builder()
-                   .add(BAD_ABI_HASH_PLUGIN_PATH)
-                   .build();
+    auto set =
+        plugins::host::Plugins::builder().add(BAD_ABI_HASH_PLUGIN_PATH).build();
 
     REQUIRE_FALSE(set.has_value());
     const dstd::String message(set.error().message());
@@ -62,7 +61,7 @@ TEST_CASE("a plugin with a mismatched ABI header hash is refused") {
 
 TEST_CASE("a plugin with no info symbol is refused") {
     auto set =
-        domains::plugins::Plugins::builder().add(NO_INFO_PLUGIN_PATH).build();
+        plugins::host::Plugins::builder().add(NO_INFO_PLUGIN_PATH).build();
 
     REQUIRE_FALSE(set.has_value());
     const dstd::String message(set.error().message());

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
-#ifndef DFTRACER_UTILS_DOMAINS_PLUGINS_CONFIG_H
-#define DFTRACER_UTILS_DOMAINS_PLUGINS_CONFIG_H
+#ifndef DFTRACER_UTILS_PLUGINS_HOST_CONFIG_H
+#define DFTRACER_UTILS_PLUGINS_HOST_CONFIG_H
 
 #include <dftracer/utils/dstd/deque.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -18,7 +18,7 @@ class element;
 }
 }  // namespace simdjson
 
-namespace dftracer::utils::domains::plugins {
+namespace dftracer::utils::plugins::host {
 
 // Owns a dftu_value config tree built from a JSON file and/or --parg overrides;
 // root() materializes the internal Node tree into an ABI-shaped dftu_value
@@ -77,6 +77,6 @@ class ConfigTree {
     mutable dstd::UniquePtr<dftu_value> root_;
 };
 
-}  // namespace dftracer::utils::domains::plugins
+}  // namespace dftracer::utils::plugins::host
 
-#endif  // DFTRACER_UTILS_DOMAINS_PLUGINS_CONFIG_H
+#endif  // DFTRACER_UTILS_PLUGINS_HOST_CONFIG_H

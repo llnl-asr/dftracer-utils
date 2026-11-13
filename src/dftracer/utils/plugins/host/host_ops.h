@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
-#ifndef DFTRACER_UTILS_DOMAINS_PLUGINS_HOST_OPS_H
-#define DFTRACER_UTILS_DOMAINS_PLUGINS_HOST_OPS_H
+#ifndef DFTRACER_UTILS_PLUGINS_HOST_HOST_OPS_H
+#define DFTRACER_UTILS_PLUGINS_HOST_HOST_OPS_H
 
-namespace dftracer::utils::domains::plugins {
+namespace dftracer::utils::plugins::host {
 
 /**
  * @brief Register the utilities-layer host ops into the dataframe op registry.
@@ -17,7 +17,7 @@ namespace dftracer::utils::domains::plugins {
  */
 void register_host_ops();
 
-}  // namespace dftracer::utils::domains::plugins
+}  // namespace dftracer::utils::plugins::host
 
 extern "C" {
 
@@ -33,4 +33,4 @@ extern "C" {
 void dftu_register_host_ops(void);
 }
 
-#endif  // DFTRACER_UTILS_DOMAINS_PLUGINS_HOST_OPS_H
+#endif  // DFTRACER_UTILS_PLUGINS_HOST_HOST_OPS_H

@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: MIT
-#ifndef DFTRACER_UTILS_DOMAINS_PLUGINS_FOLD_ADAPTER_H
-#define DFTRACER_UTILS_DOMAINS_PLUGINS_FOLD_ADAPTER_H
+#ifndef DFTRACER_UTILS_PLUGINS_HOST_FOLD_ADAPTER_H
+#define DFTRACER_UTILS_PLUGINS_HOST_FOLD_ADAPTER_H
 
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dataframe/series.h>
-#include <dftracer/utils/domains/plugins/state_registry.h>
 #include <dftracer/utils/dstd/deque.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -14,6 +13,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/plugins/abi.h>
+#include <dftracer/utils/plugins/host/state_registry.h>
 #include <dftracer/utils/plugins/result_registry.h>
 #include <dftracer/utils/trace/views/fold.h>
 
@@ -26,7 +26,7 @@
 
 // Adapts a loaded C-ABI plugin to the internal fold interface so N plugins ride
 // one fused scan. A task on_finalize hands back is awaited by finalize.
-namespace dftracer::utils::domains::plugins {
+namespace dftracer::utils::plugins::host {
 
 // A host-owned object lent to the plugin as an opaque handle (a reader, a
 // writer); the fold keeps it until the plugin closes it or the fold ends.
@@ -358,6 +358,6 @@ class PluginFold : public trace::views::detail::Fold {
     dstd::Vector<dstd::String> projection_;
 };
 
-}  // namespace dftracer::utils::domains::plugins
+}  // namespace dftracer::utils::plugins::host
 
-#endif  // DFTRACER_UTILS_DOMAINS_PLUGINS_FOLD_ADAPTER_H
+#endif  // DFTRACER_UTILS_PLUGINS_HOST_FOLD_ADAPTER_H

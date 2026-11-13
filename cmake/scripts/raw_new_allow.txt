@@ -38,7 +38,7 @@ ArrowExportResult | derives dstd::HeapObject
 MemoryViewBatchData | derives dstd::HeapObject
 PluginHostState | derives dstd::HeapObject
 ArrowStreamingIteratorState | derives dstd::HeapObject
-src/dftracer/utils/domains/plugins/fold_adapter.cpp | SketchBox | derives dstd::HeapObject
+src/dftracer/utils/plugins/host/fold_adapter.cpp | SketchBox | derives dstd::HeapObject
 ParkNode | derives dstd::HeapObject
 
 # The heap itself, and code that compiles in a plugin on the plugin's allocator.

@@ -13,9 +13,6 @@
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/internal/dataframe_handle.h>
 #include <dftracer/utils/dataframe/sketch.h>
-#include <dftracer/utils/domains/plugins/fold_adapter.h>
-#include <dftracer/utils/domains/plugins/fold_adapter/ext.h>
-#include <dftracer/utils/domains/plugins/fold_adapter/state.h>
 #include <dftracer/utils/dstd/byte_view.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/hash/fnv1a.h>
@@ -27,6 +24,9 @@
 #include <dftracer/utils/json/value.h>
 #include <dftracer/utils/json/value_access.h>
 #include <dftracer/utils/memory/budget.h>
+#include <dftracer/utils/plugins/host/fold_adapter.h>
+#include <dftracer/utils/plugins/host/fold_adapter/ext.h>
+#include <dftracer/utils/plugins/host/fold_adapter/state.h>
 #include <dftracer/utils/runtime/io/ops.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/index/record_schema.h>
@@ -62,7 +62,7 @@
 #include <utility>
 #include <vector>
 
-namespace dftracer::utils::domains::plugins {
+namespace dftracer::utils::plugins::host {
 
 namespace {
 
@@ -1727,4 +1727,4 @@ coro::CoroTask<dstd::Result<bool>> PluginFold::finalize(const CoverageSet&) {
     co_return false;
 }
 
-}  // namespace dftracer::utils::domains::plugins
+}  // namespace dftracer::utils::plugins::host

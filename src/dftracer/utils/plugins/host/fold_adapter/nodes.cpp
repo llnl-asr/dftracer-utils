@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dataframe/abi.h>
-#include <dftracer/utils/domains/plugins/fold_adapter/ext.h>
-#include <dftracer/utils/domains/plugins/reserved_names.h>
 #include <dftracer/utils/dstd/fmt.h>
+#include <dftracer/utils/plugins/host/fold_adapter/ext.h>
+#include <dftracer/utils/plugins/host/reserved_names.h>
 
-namespace dftracer::utils::domains::plugins {
+namespace dftracer::utils::plugins::host {
 namespace {
 
 // As with providers, a node registered mid-scan reaches no plan built before
@@ -48,4 +48,4 @@ dftu_status detail::register_plugin_node(::dftu_ctx* ctx, const char* name,
 
 const void* detail::nodes_ext_vtable() { return &g_nodes; }
 
-}  // namespace dftracer::utils::domains::plugins
+}  // namespace dftracer::utils::plugins::host

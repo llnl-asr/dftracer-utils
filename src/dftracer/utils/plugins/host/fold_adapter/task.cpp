@@ -7,10 +7,10 @@
 #include <dftracer/utils/coro/task_abi.h>
 #include <dftracer/utils/coro/time.h>
 #include <dftracer/utils/coro/yield.h>
-#include <dftracer/utils/domains/plugins/fold_adapter.h>
-#include <dftracer/utils/domains/plugins/fold_adapter/ext.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/plugins/host/fold_adapter.h>
+#include <dftracer/utils/plugins/host/fold_adapter/ext.h>
 
 #include <algorithm>
 #include <atomic>
@@ -18,7 +18,7 @@
 #include <cstring>
 #include <mutex>
 
-namespace dftracer::utils::domains::plugins {
+namespace dftracer::utils::plugins::host {
 
 namespace {
 
@@ -586,4 +586,4 @@ const ::dftu_svc_task TASK_VTABLE = {
 
 const void* detail::task_ext_vtable() { return &TASK_VTABLE; }
 
-}  // namespace dftracer::utils::domains::plugins
+}  // namespace dftracer::utils::plugins::host

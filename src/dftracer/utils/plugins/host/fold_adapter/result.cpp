@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/abi.h>
-#include <dftracer/utils/domains/plugins/fold_adapter.h>
-#include <dftracer/utils/domains/plugins/fold_adapter/ext.h>
+#include <dftracer/utils/plugins/host/fold_adapter.h>
+#include <dftracer/utils/plugins/host/fold_adapter/ext.h>
 
 #include <cstdint>
 
-namespace dftracer::utils::domains::plugins {
+namespace dftracer::utils::plugins::host {
 namespace {
 
 dftu_status host_result_emit(::dftu_ctx* ctx, void* h, const char* name,
@@ -59,4 +59,4 @@ dstd::Result<void> PluginFold::emit_result(const char* name,
         common::ErrorCode::InvalidArgument, plugin_label(), name, v->kind);
 }
 
-}  // namespace dftracer::utils::domains::plugins
+}  // namespace dftracer::utils::plugins::host

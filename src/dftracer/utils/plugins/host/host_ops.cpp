@@ -4,13 +4,13 @@
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/series.h>
-#include <dftracer/utils/domains/plugins/host_ops.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/fileio/file_compressor_utility.h>
 #include <dftracer/utils/fileio/file_decompressor_utility.h>
+#include <dftracer/utils/plugins/host/host_ops.h>
 #include <dftracer/utils/runtime/fs/fs.h>
 #include <dftracer/utils/runtime/runtime.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
@@ -20,7 +20,7 @@
 #include <mutex>
 #include <utility>
 
-namespace dftracer::utils::domains::plugins {
+namespace dftracer::utils::plugins::host {
 namespace {
 
 using dataframe::Series;
@@ -170,8 +170,8 @@ namespace {
 [[maybe_unused]] const bool REGISTERED = (register_host_ops(), true);
 }  // namespace
 
-}  // namespace dftracer::utils::domains::plugins
+}  // namespace dftracer::utils::plugins::host
 
 extern "C" void dftu_register_host_ops(void) {
-    dftracer::utils::domains::plugins::register_host_ops();
+    dftracer::utils::plugins::host::register_host_ops();
 }

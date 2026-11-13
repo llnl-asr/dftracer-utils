@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: MIT
-#ifndef DFTRACER_UTILS_DOMAINS_PLUGINS_STATE_REGISTRY_H
-#define DFTRACER_UTILS_DOMAINS_PLUGINS_STATE_REGISTRY_H
+#ifndef DFTRACER_UTILS_PLUGINS_HOST_STATE_REGISTRY_H
+#define DFTRACER_UTILS_PLUGINS_HOST_STATE_REGISTRY_H
 
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi.h>
 
-namespace dftracer::utils::domains::plugins {
+namespace dftracer::utils::plugins::host {
 
 /// One dftu_state_desc a plugin's factory registered, with the `self` its
 /// callbacks receive. The descriptor is copied at registration, so the one the
@@ -27,6 +27,6 @@ using StateRegistry = dstd::Vector<RegisteredState>;
 dftu_status register_state_into(StateRegistry& out, ::dftu_ctx* ctx,
                                 const dftu_state_desc* desc, void* self);
 
-}  // namespace dftracer::utils::domains::plugins
+}  // namespace dftracer::utils::plugins::host
 
-#endif  // DFTRACER_UTILS_DOMAINS_PLUGINS_STATE_REGISTRY_H
+#endif  // DFTRACER_UTILS_PLUGINS_HOST_STATE_REGISTRY_H

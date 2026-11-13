@@ -1,16 +1,16 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dataframe/abi.h>
-#include <dftracer/utils/domains/plugins/build_host.h>
-#include <dftracer/utils/domains/plugins/fold_adapter/ext.h>
-#include <dftracer/utils/domains/plugins/state_registry.h>
 #include <dftracer/utils/dstd/hash/fnv1a.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/plugins/host/build_host.h>
+#include <dftracer/utils/plugins/host/fold_adapter/ext.h>
+#include <dftracer/utils/plugins/host/state_registry.h>
 
 #include <cstdint>
 #include <utility>
 
-namespace dftracer::utils::domains::plugins {
+namespace dftracer::utils::plugins::host {
 namespace {
 
 BuildHost& self_of(void* h) { return *static_cast<BuildHost*>(h); }
@@ -218,4 +218,4 @@ void BuildHost::deny(const char* what) {
         plugin_name_, denied_);
 }
 
-}  // namespace dftracer::utils::domains::plugins
+}  // namespace dftracer::utils::plugins::host

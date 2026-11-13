@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
-#ifndef DFTRACER_UTILS_DOMAINS_PLUGINS_PLUGINS_INTERNAL_H
-#define DFTRACER_UTILS_DOMAINS_PLUGINS_PLUGINS_INTERNAL_H
+#ifndef DFTRACER_UTILS_PLUGINS_HOST_PLUGINS_INTERNAL_H
+#define DFTRACER_UTILS_PLUGINS_HOST_PLUGINS_INTERNAL_H
 
-#include <dftracer/utils/domains/plugins/plugins.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
+#include <dftracer/utils/plugins/host/plugins.h>
 
 #include <cstddef>
 
@@ -13,7 +13,7 @@ struct dftu_plugin;
 
 // The parts of the plugin set that speak the C ABI: kept out of the public
 // header so plugins.h stays ABI-free.
-namespace dftracer::utils::domains::plugins {
+namespace dftracer::utils::plugins::host {
 
 namespace detail {
 
@@ -40,6 +40,6 @@ dstd::Result<Plugins> build_injected_plugins(
 /// their registration order.
 dstd::Vector<std::size_t> fold_order(const Plugins& set);
 
-}  // namespace dftracer::utils::domains::plugins
+}  // namespace dftracer::utils::plugins::host
 
-#endif  // DFTRACER_UTILS_DOMAINS_PLUGINS_PLUGINS_INTERNAL_H
+#endif  // DFTRACER_UTILS_PLUGINS_HOST_PLUGINS_INTERNAL_H

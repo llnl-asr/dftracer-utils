@@ -44,7 +44,7 @@ dstd::Set<dstd::String> lazy_def_names() {
     return names;
 }
 
-// Registered by domains/plugins/host_ops.cpp outside the .def tables (I/O ops
+// Registered by plugins/host/host_ops.cpp outside the .def tables (I/O ops
 // the columnar engine itself has no business depending on, per
 // exported_series_ops.def's own header comment). Shrinks only if one of
 // these moves into the .def; grows only with a matching host_ops.cpp change.

@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
-#include <dftracer/utils/domains/plugins/fold_adapter/ext.h>
-#include <dftracer/utils/domains/plugins/reserved_names.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/plugins/abi/index.h>
+#include <dftracer/utils/plugins/host/fold_adapter/ext.h>
+#include <dftracer/utils/plugins/host/reserved_names.h>
 #include <dftracer/utils/trace/index/extensions/plugin_extension.h>
 
-namespace dftracer::utils::domains::plugins {
+namespace dftracer::utils::plugins::host {
 namespace {
 
 // An extension registered mid-scan would build nothing for the files already
@@ -45,4 +45,4 @@ dftu_status detail::register_plugin_index_extension(
 
 const void* detail::index_ext_vtable() { return &g_index; }
 
-}  // namespace dftracer::utils::domains::plugins
+}  // namespace dftracer::utils::plugins::host

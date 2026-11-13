@@ -9,6 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Added
 
+- Add the library `libdftracer_utils_plugins`, with its pkg-config file and CMake package, between trace and domains.
+  It holds the plugin host, which moves from `dftracer::utils::domains::plugins` to `dftracer::utils::plugins::host`.
 - Add `Series.name`, kept through `from_pandas`, `to_pandas`, Polars, ops, `df["x"]` and pickle, with `dftu_series_name` and `dftu_series_rename` in the C ABI.
   A binary op keeps the name only when both names are equal, as pandas does, and `Series.rename` and `Series(data, name=...)` set it.
 - Add `yaml::Records` for a YAML text too large for memory.

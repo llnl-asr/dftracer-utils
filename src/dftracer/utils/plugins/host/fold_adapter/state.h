@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: MIT
-#ifndef DFTRACER_UTILS_DOMAINS_PLUGINS_FOLD_ADAPTER_STATE_H
-#define DFTRACER_UTILS_DOMAINS_PLUGINS_FOLD_ADAPTER_STATE_H
+#ifndef DFTRACER_UTILS_PLUGINS_HOST_FOLD_ADAPTER_STATE_H
+#define DFTRACER_UTILS_PLUGINS_HOST_FOLD_ADAPTER_STATE_H
 
 #include <dftracer/utils/common/spill_dir.h>
 #include <dftracer/utils/coro/abi_context.h>
-#include <dftracer/utils/domains/plugins/state_registry.h>
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -12,10 +11,11 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi.h>
+#include <dftracer/utils/plugins/host/state_registry.h>
 
 #include <cstdint>
 
-namespace dftracer::utils::domains::plugins {
+namespace dftracer::utils::plugins::host {
 
 /// A self-cleaning directory under spill_dir() holding one state's spill runs.
 class SpillDir {
@@ -88,6 +88,6 @@ class StateAccum {
     dstd::Vector<dstd::Path> runs_;
 };
 
-}  // namespace dftracer::utils::domains::plugins
+}  // namespace dftracer::utils::plugins::host
 
-#endif  // DFTRACER_UTILS_DOMAINS_PLUGINS_FOLD_ADAPTER_STATE_H
+#endif  // DFTRACER_UTILS_PLUGINS_HOST_FOLD_ADAPTER_STATE_H

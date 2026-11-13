@@ -5,9 +5,9 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/error.h>
-#include <dftracer/utils/domains/plugins/config.h>
-#include <dftracer/utils/domains/plugins/plugins.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/plugins/host/config.h>
+#include <dftracer/utils/plugins/host/plugins.h>
 #include <doctest/doctest.h>
 
 #include <algorithm>
@@ -21,14 +21,14 @@ using namespace dftracer::utils;
 namespace {
 
 // The fixture declares `label` required and `stride` optional.
-domains::plugins::ConfigTree config_of(const dstd::String& json) {
-    auto tree = domains::plugins::ConfigTree::from_json_string(json);
+plugins::host::ConfigTree config_of(const dstd::String& json) {
+    auto tree = plugins::host::ConfigTree::from_json_string(json);
     REQUIRE(tree.has_value());
     return std::move(*tree);
 }
 
-auto load(domains::plugins::ConfigTree cfg) {
-    return domains::plugins::Plugins::builder()
+auto load(plugins::host::ConfigTree cfg) {
+    return plugins::host::Plugins::builder()
         .add(CONFIG_KEYS_PLUGIN_PATH, std::move(cfg))
         .build();
 }
@@ -98,22 +98,21 @@ TEST_CASE("an unparseable `query` fails the load") {
 }
 
 TEST_CASE("no config at all still fails when a key is required") {
-    auto set = domains::plugins::Plugins::builder()
-                   .add(CONFIG_KEYS_PLUGIN_PATH)
-                   .build();
+    auto set =
+        plugins::host::Plugins::builder().add(CONFIG_KEYS_PLUGIN_PATH).build();
     REQUIRE(!set.has_value());
     CHECK(has_substr(set.error().message(), "required key 'label' is missing"));
 }
 
 TEST_CASE("a config that is not JSON is a parse error") {
-    auto tree = domains::plugins::ConfigTree::from_json_string("{not json");
+    auto tree = plugins::host::ConfigTree::from_json_string("{not json");
     REQUIRE(!tree.has_value());
     CHECK(common::errorcode_of(tree.error()) == common::ErrorCode::Parse);
     CHECK(has_substr(tree.error().message(), "failed to parse plugin config"));
 }
 
 TEST_CASE("a config whose root is not an object is an invalid argument") {
-    auto tree = domains::plugins::ConfigTree::from_json_string("[1, 2]");
+    auto tree = plugins::host::ConfigTree::from_json_string("[1, 2]");
     REQUIRE(!tree.has_value());
     CHECK(common::errorcode_of(tree.error()) ==
           common::ErrorCode::InvalidArgument);
@@ -122,7 +121,7 @@ TEST_CASE("a config whose root is not an object is an invalid argument") {
 }
 
 TEST_CASE("a config file that is missing is an I/O error") {
-    auto tree = domains::plugins::ConfigTree::from_json_file(
+    auto tree = plugins::host::ConfigTree::from_json_file(
         "/nonexistent/dftracer-utils-no-such-config.json");
     REQUIRE(!tree.has_value());
     CHECK(common::errorcode_of(tree.error()) == common::ErrorCode::Io);

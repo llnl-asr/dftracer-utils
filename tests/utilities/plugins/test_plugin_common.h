@@ -2,9 +2,9 @@
 #ifndef DFTRACER_UTILS_TESTS_PLUGIN_COMMON_H
 #define DFTRACER_UTILS_TESTS_PLUGIN_COMMON_H
 #include <dftracer/utils/coro/scope.h>
-#include <dftracer/utils/domains/plugins/plugins.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/plugins/host/plugins.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view.h>
@@ -39,11 +39,11 @@ inline dftracer::utils::trace::views::ViewFile index_trace(
 
 // Runs a built plugin set over `view` to completion and returns the result.
 // `tag` is the runtime submit tag, surfaced in runtime logs.
-inline dftracer::utils::domains::plugins::PluginRun run_set(
-    const dftracer::utils::domains::plugins::Plugins& set,
+inline dftracer::utils::plugins::host::PluginRun run_set(
+    const dftracer::utils::plugins::host::Plugins& set,
     const dftracer::utils::trace::views::View& view,
     const char* tag = "plugin-run") {
-    dftracer::utils::domains::plugins::PluginRun out;
+    dftracer::utils::plugins::host::PluginRun out;
     dftracer::utils::Runtime rt(2);
     auto task = dftracer::utils::coro::with_scope(
         [&](dftracer::utils::coro::Scope&)
@@ -60,7 +60,7 @@ inline dftracer::utils::domains::plugins::PluginRun run_set(
 
 // Text bytes of a named result, or "(missing)" if `name` is not present.
 inline dftracer::utils::dstd::String result_text(
-    dftracer::utils::domains::plugins::PluginRun& run, const char* name) {
+    dftracer::utils::plugins::host::PluginRun& run, const char* name) {
     auto it = run.results.results().find(name);
     if (it == run.results.results().end()) return "(missing)";
     const auto& bytes =

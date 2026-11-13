@@ -6,8 +6,8 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/scope.h>
-#include <dftracer/utils/domains/plugins/fold_adapter.h>
 #include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/plugins/host/fold_adapter.h>
 #include <dftracer/utils/runtime/runtime.h>
 
 // After fold_adapter.h so nanoarrow is set up before dataframe/abi.h's
@@ -126,14 +126,14 @@ trace::views::detail::FoldEvent evt(dstd::StringIntern& intern) {
 // Runs one worker slice through step, merge and finalize and gives the first
 // error it met ("" when none), whichever stage raised it.
 dstd::String first_error(const dftu_plugin& p,
-                         const domains::plugins::StateRegistry* states) {
+                         const plugins::host::StateRegistry* states) {
     dstd::StringIntern intern;
     plugins::NamedResultRegistry named;
-    domains::plugins::PluginFold master(&p, intern, nullptr, &named,
-                                        "cb_errors", 0, states);
+    plugins::host::PluginFold master(&p, intern, nullptr, &named, "cb_errors",
+                                     0, states);
     dstd::Vector<trace::views::detail::FoldEvent> evs{evt(intern)};
     auto slice = master.slice();
-    auto* pf = static_cast<domains::plugins::PluginFold*>(slice.get());
+    auto* pf = static_cast<plugins::host::PluginFold*>(slice.get());
     trace::views::detail::ScanUnit unit{};
     auto stepped = pf->step(trace::views::detail::FoldBatch{
         dstd::Span<const trace::views::detail::FoldEvent>(evs), unit, {}});
@@ -202,7 +202,7 @@ TEST_CASE("a failing on_finalize names the plugin and callback") {
 }
 
 TEST_CASE("a failing registered-state callback names the state and callback") {
-    domains::plugins::StateRegistry registry{domains::plugins::RegisteredState{
+    plugins::host::StateRegistry registry{plugins::host::RegisteredState{
         "cb_errors.state", make_state_desc(), nullptr}};
     dftu_plugin p = make_c_plugin();
     const struct {
@@ -281,8 +281,8 @@ TEST_CASE("an Error thrown from a Slice keeps its status") {
     {
         dstd::StringIntern intern;
         plugins::NamedResultRegistry named;
-        domains::plugins::PluginFold master(p, intern, nullptr, &named,
-                                            "cb_errors", 0, nullptr);
+        plugins::host::PluginFold master(p, intern, nullptr, &named,
+                                         "cb_errors", 0, nullptr);
         dstd::Vector<trace::views::detail::FoldEvent> evs{evt(intern)};
         auto slice = master.slice();
         trace::views::detail::ScanUnit unit{};

@@ -2,8 +2,6 @@
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/coro/task_abi.h>
-#include <dftracer/utils/domains/plugins/fold_adapter/ext.h>
-#include <dftracer/utils/domains/plugins/host_status.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -11,6 +9,8 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi.h>
+#include <dftracer/utils/plugins/host/fold_adapter/ext.h>
+#include <dftracer/utils/plugins/host/host_status.h>
 #include <dftracer/utils/runtime/fs/filesystem.h>
 #include <dftracer/utils/runtime/fs/fs.h>
 
@@ -19,7 +19,7 @@
 #include <new>
 #include <utility>
 
-namespace dftracer::utils::domains::plugins {
+namespace dftracer::utils::plugins::host {
 
 namespace {
 
@@ -444,4 +444,4 @@ const dftu_svc_fs FS_VTABLE = {
 
 const void* detail::fs_ext_vtable() { return &FS_VTABLE; }
 
-}  // namespace dftracer::utils::domains::plugins
+}  // namespace dftracer::utils::plugins::host

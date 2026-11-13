@@ -9,13 +9,13 @@
 
 #include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/dataframe/abi.h>
-#include <dftracer/utils/domains/plugins/fold_adapter.h>
-#include <dftracer/utils/domains/plugins/plugins_internal.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi.h>
+#include <dftracer/utils/plugins/host/fold_adapter.h>
+#include <dftracer/utils/plugins/host/plugins_internal.h>
 #include <dftracer/utils/plugins/plugin.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/internal/utils.h>
@@ -217,7 +217,7 @@ dstd::String make_trace(dftu_utils_test::TestEnvironment& env) {
 
 void run_host(dstd::Vector<dftu_plugin*> plugins,
               dstd::Vector<ViewFile> files) {
-    auto set = domains::plugins::build_injected_plugins(std::move(plugins));
+    auto set = plugins::host::build_injected_plugins(std::move(plugins));
     REQUIRE(set.has_value());
     View view = View::from_files(std::move(files));
     Runtime rt(4);

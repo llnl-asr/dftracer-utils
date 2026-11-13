@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
-#ifndef DFTRACER_UTILS_DOMAINS_PLUGINS_PLUGINS_H
-#define DFTRACER_UTILS_DOMAINS_PLUGINS_PLUGINS_H
+#ifndef DFTRACER_UTILS_PLUGINS_HOST_PLUGINS_H
+#define DFTRACER_UTILS_PLUGINS_HOST_PLUGINS_H
 
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/task.h>
@@ -15,8 +15,8 @@
 
 // Load plugin shared libraries and run them as folds over one fused scan of a
 // View. Free of the C ABI: the ABI types and the test seams live in
-// src/dftracer/utils/domains/plugins/plugins_internal.h.
-namespace dftracer::utils::domains::plugins {
+// src/dftracer/utils/plugins/host/plugins_internal.h.
+namespace dftracer::utils::plugins::host {
 
 class ConfigTree;
 
@@ -137,6 +137,6 @@ class Plugins {
     dstd::UniquePtr<Impl> impl_;
 };
 
-}  // namespace dftracer::utils::domains::plugins
+}  // namespace dftracer::utils::plugins::host
 
-#endif  // DFTRACER_UTILS_DOMAINS_PLUGINS_PLUGINS_H
+#endif  // DFTRACER_UTILS_PLUGINS_HOST_PLUGINS_H

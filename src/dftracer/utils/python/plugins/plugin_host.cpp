@@ -4,12 +4,12 @@
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/scope.h>
-#include <dftracer/utils/domains/plugins/config.h>
-#include <dftracer/utils/domains/plugins/plugins.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/plugins/host/config.h>
+#include <dftracer/utils/plugins/host/plugins.h>
 #include <dftracer/utils/plugins/result_registry.h>
 #include <dftracer/utils/python/core/dict_helpers.h>
 #include <dftracer/utils/python/core/errors.h>
@@ -62,9 +62,9 @@ using dftracer::utils::plugins::OwnedDataFrame;
 using dftracer::utils::plugins::OwnedLazyFrame;
 using dftracer::utils::python::core::parse_seq;
 using dftracer::utils::python::core::parse_string_seq;
-using domains::plugins::ConfigTree;
-using domains::plugins::PluginRun;
-using domains::plugins::Plugins;
+using plugins::host::ConfigTree;
+using plugins::host::PluginRun;
+using plugins::host::Plugins;
 
 }  // namespace
 
@@ -443,7 +443,7 @@ PyObject* dftracer::utils::python::plugins::plugin_host_results_dict(
     return results_to_dict(state_of((PluginHostObject*)host));
 }
 
-const domains::plugins::Plugins*
+const plugins::host::Plugins*
 dftracer::utils::python::plugins::plugin_host_plugins(PyObject* host) {
     if (!PyObject_TypeCheck(host, &PluginHostType)) {
         PyErr_SetString(PyExc_TypeError, "expected a Plugins instance");

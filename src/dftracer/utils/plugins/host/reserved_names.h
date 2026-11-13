@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: MIT
-#ifndef DFTRACER_UTILS_DOMAINS_PLUGINS_RESERVED_NAMES_H
-#define DFTRACER_UTILS_DOMAINS_PLUGINS_RESERVED_NAMES_H
+#ifndef DFTRACER_UTILS_PLUGINS_HOST_RESERVED_NAMES_H
+#define DFTRACER_UTILS_PLUGINS_HOST_RESERVED_NAMES_H
 
 #include <dftracer/utils/dstd/string.h>
 
 #include <string_view>
 
-namespace dftracer::utils::domains::plugins {
+namespace dftracer::utils::plugins::host {
 
 /// The prefix the host keeps for its own ops, ports and accumulators.
 inline constexpr dstd::StringView HOST_NAME_PREFIX = "dftu.";
@@ -52,6 +52,6 @@ static_assert(refuse_plugin_op_name("add"));
 static_assert(refuse_plugin_op_name("dftu.hash.fnv1a"));
 static_assert(!refuse_plugin_op_name("com.example.myop"));
 
-}  // namespace dftracer::utils::domains::plugins
+}  // namespace dftracer::utils::plugins::host
 
-#endif  // DFTRACER_UTILS_DOMAINS_PLUGINS_RESERVED_NAMES_H
+#endif  // DFTRACER_UTILS_PLUGINS_HOST_RESERVED_NAMES_H

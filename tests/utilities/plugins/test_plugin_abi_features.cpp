@@ -5,9 +5,9 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/scope.h>
-#include <dftracer/utils/domains/plugins/config.h>
-#include <dftracer/utils/domains/plugins/fold_adapter.h>
 #include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/plugins/host/config.h>
+#include <dftracer/utils/plugins/host/fold_adapter.h>
 #include <dftracer/utils/plugins/plugin.h>
 #include <dftracer/utils/runtime/runtime.h>
 
@@ -236,11 +236,10 @@ template <class Slice>
 struct FoldFixture {
     dstd::StringIntern intern;
     dftu_plugin* plugin;
-    dstd::UniquePtr<domains::plugins::PluginFold> fold;
+    dstd::UniquePtr<plugins::host::PluginFold> fold;
     explicit FoldFixture(const dftu_value* config)
         : plugin(dftracer::utils::plugins::make_plugin<Slice>(config)),
-          fold(dstd::make_unique<domains::plugins::PluginFold>(plugin,
-                                                               intern)) {}
+          fold(dstd::make_unique<plugins::host::PluginFold>(plugin, intern)) {}
     dftu_plugin_host& host() { return fold->host(); }
     ~FoldFixture() {
         fold.reset();
@@ -348,7 +347,7 @@ TEST_CASE("plugin ABI: on_batch hands the batch as columns") {
     p.on_batch = col_on_batch;
 
     dstd::StringIntern intern;
-    domains::plugins::PluginFold fold(&p, intern);
+    plugins::host::PluginFold fold(&p, intern);
     dstd::Vector<trace::views::detail::FoldEvent> evs = {
         make_event(intern, "f", "h"), make_event(intern, "f", "h"),
         make_event(intern, "f", "h")};
@@ -370,9 +369,9 @@ TEST_CASE("plugin ABI: config tree reads scalars, nested, array, and default") {
             .discard();
     }
 
-    auto loaded = domains::plugins::ConfigTree::from_json_file(path);
+    auto loaded = plugins::host::ConfigTree::from_json_file(path);
     REQUIRE(loaded.has_value());
-    domains::plugins::ConfigTree tree = std::move(*loaded);
+    plugins::host::ConfigTree tree = std::move(*loaded);
     dftu_plugin* p =
         dftracer::utils::plugins::make_plugin<ConfigSlice>(tree.root());
     test_plugin_common::Ctx slice_ctx;
@@ -495,7 +494,7 @@ TEST_CASE("plugin ABI: duql_matches reads a non-flat number column") {
 TEST_CASE("plugin ABI: plan_duql on fhash delivers only matching events") {
     SUBCASE("fhash predicate keeps every match, drops the rest") {
         g_count = CountState{};
-        domains::plugins::ConfigTree tree;
+        plugins::host::ConfigTree tree;
         tree.set("duql", "fhash == \"fhAAA\"");
         FoldFixture<CountSlice> fx(tree.root());
 
@@ -519,7 +518,7 @@ TEST_CASE("plugin ABI: plan_duql on fhash delivers only matching events") {
 
     SUBCASE("hhash predicate routes on a non cat/name field too") {
         g_count = CountState{};
-        domains::plugins::ConfigTree tree;
+        plugins::host::ConfigTree tree;
         tree.set("duql", "hhash == \"hhZ\"");
         FoldFixture<CountSlice> fx(tree.root());
 

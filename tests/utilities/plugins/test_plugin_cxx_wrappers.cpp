@@ -6,9 +6,9 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/scope.h>
-#include <dftracer/utils/domains/plugins/fold_adapter.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/plugins/abi.h>
+#include <dftracer/utils/plugins/host/fold_adapter.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <utilities/plugins/test_abi_ctx.h>
 // After fold_adapter.h so nanoarrow is set up before dataframe/abi.h's
@@ -102,13 +102,13 @@ dftu_plugin make_wrappers_plugin() {
 void run_wrappers(dstd::StringIntern& intern,
                   plugins::NamedResultRegistry& named) {
     dftu_plugin p = make_wrappers_plugin();
-    domains::plugins::PluginFold master(&p, intern, nullptr, &named);
+    plugins::host::PluginFold master(&p, intern, nullptr, &named);
     const dstd::Vector<dstd::Vector<trace::views::detail::FoldEvent>> slices = {
         {evt(intern, 1, 10, "read"), evt(intern, 1, 20, "read")},
         {evt(intern, 1, 5, "write"), evt(intern, 2, 7, "write")}};
     for (const auto& evs : slices) {
         auto slice = master.slice();
-        auto* pf = static_cast<domains::plugins::PluginFold*>(slice.get());
+        auto* pf = static_cast<plugins::host::PluginFold*>(slice.get());
         trace::views::detail::ScanUnit unit;
         dftu_utils_test::ok(pf->step(trace::views::detail::FoldBatch{
             dstd::Span<const trace::views::detail::FoldEvent>(evs), unit, {}}));
@@ -292,7 +292,7 @@ TEST_SUITE("PluginCxxWrappers") {
     TEST_CASE("Host::agg_result yields an empty frame for an unknown name") {
         dstd::StringIntern intern;
         dftu_plugin p = make_wrappers_plugin();
-        auto fold = dstd::make_unique<domains::plugins::PluginFold>(&p, intern);
+        auto fold = dstd::make_unique<plugins::host::PluginFold>(&p, intern);
         test_plugin_common::Ctx c;
         plugins::Host h{&fold->host(), c.get()};
         const plugins::OwnedDataFrame miss =
@@ -405,11 +405,11 @@ struct PortConsumer {
 
 struct PortHolder {
     dftu_plugin* plugin;
-    dstd::UniquePtr<domains::plugins::PluginFold> fold;
+    dstd::UniquePtr<plugins::host::PluginFold> fold;
     PortHolder(dftu_plugin* p, dstd::StringIntern& intern,
                trace::views::detail::FoldPortBus* bus)
         : plugin(p),
-          fold(dstd::make_unique<domains::plugins::PluginFold>(p, intern)) {
+          fold(dstd::make_unique<plugins::host::PluginFold>(p, intern)) {
         fold->bind_port_bus(bus);
     }
     ~PortHolder() {

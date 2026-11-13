@@ -2,13 +2,6 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/coro/abi_context.h>
 #include <dftracer/utils/dataframe/abi.h>
-#include <dftracer/utils/domains/plugins/build_host.h>
-#include <dftracer/utils/domains/plugins/config.h>
-#include <dftracer/utils/domains/plugins/fold_adapter.h>
-#include <dftracer/utils/domains/plugins/plugins.h>
-#include <dftracer/utils/domains/plugins/plugins_internal.h>
-#include <dftracer/utils/domains/plugins/reserved_names.h>
-#include <dftracer/utils/domains/plugins/state_registry.h>
 #include <dftracer/utils/dstd/deque.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/hash_map.h>
@@ -20,6 +13,13 @@
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi.h>
+#include <dftracer/utils/plugins/host/build_host.h>
+#include <dftracer/utils/plugins/host/config.h>
+#include <dftracer/utils/plugins/host/fold_adapter.h>
+#include <dftracer/utils/plugins/host/plugins.h>
+#include <dftracer/utils/plugins/host/plugins_internal.h>
+#include <dftracer/utils/plugins/host/reserved_names.h>
+#include <dftracer/utils/plugins/host/state_registry.h>
 #include <dftracer/utils/trace/index/extensions/plugin_extension.h>
 #include <dftracer/utils/trace/views/view_plan.h>
 #include <dlfcn.h>
@@ -33,7 +33,7 @@
 #include <memory>
 #include <utility>
 
-namespace dftracer::utils::domains::plugins {
+namespace dftracer::utils::plugins::host {
 
 namespace {
 using View = trace::views::View;
@@ -753,4 +753,4 @@ dstd::Vector<std::size_t> fold_order(const Plugins& set) {
     return PluginsInternalAccess::impl(set).order;
 }
 
-}  // namespace dftracer::utils::domains::plugins
+}  // namespace dftracer::utils::plugins::host

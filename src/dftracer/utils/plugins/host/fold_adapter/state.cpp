@@ -2,7 +2,6 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/spill_dir.h>
-#include <dftracer/utils/coro/abi_context.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -10,6 +9,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/memory/budget.h>
+#include <dftracer/utils/plugins/abi_context.h>
 #include <dftracer/utils/plugins/host/fold_adapter.h>
 #include <dftracer/utils/plugins/host/fold_adapter/state.h>
 #include <dftracer/utils/plugins/host/host_status.h>
@@ -51,7 +51,7 @@ const dstd::Path& StateAccum::dir_path() {
     return dir_->path();
 }
 
-dstd::Error StateAccum::error_of(const coro::AbiContext& ctx,
+dstd::Error StateAccum::error_of(const plugins::AbiContext& ctx,
                                  dftu_status status,
                                  const char* callback) const {
     return callback_error(plugin_,
@@ -72,7 +72,7 @@ StateAccum::~StateAccum() {
 }
 
 dstd::Result<void> StateAccum::init_state() {
-    coro::AbiContext ctx;
+    plugins::AbiContext ctx;
     void* fresh = nullptr;
     const dftu_status status = reg_->desc.init(ctx.get(), reg_->self, &fresh);
     if (status < 0) return error_of(ctx, status, "init");
@@ -89,7 +89,7 @@ dstd::Result<void> StateAccum::init_state() {
 dstd::Result<void> StateAccum::update(const ::dftu_dataframe* df) {
     if (init_error_) return *init_error_;
     if (!state_ || !df) return {};
-    coro::AbiContext ctx;
+    plugins::AbiContext ctx;
     const dftu_status status = reg_->desc.update(ctx.get(), state_, df);
     if (status < 0) return error_of(ctx, status, "update");
     return maybe_spill();
@@ -116,7 +116,7 @@ dstd::Result<void> StateAccum::maybe_spill() {
     }
 
     ::dftu_bytes out{};
-    coro::AbiContext ctx;
+    plugins::AbiContext ctx;
     const dftu_status status = reg_->desc.serialize(ctx.get(), state_, &out);
     if (status < 0 || !out.data) {
         if (out.free_fn) out.free_fn(const_cast<void*>(out.data), out.ud);
@@ -159,7 +159,7 @@ dstd::Result<void> StateAccum::merge(StateAccum& other) {
     if (init_error_) return *init_error_;
     if (other.init_error_) return *other.init_error_;
     if (!state_ || !other.state_) return {};
-    coro::AbiContext ctx;
+    plugins::AbiContext ctx;
     const dftu_status status =
         reg_->desc.merge(ctx.get(), state_, other.state_);
     if (status < 0) return error_of(ctx, status, "merge");
@@ -191,7 +191,7 @@ dstd::Result<void> StateAccum::drain_runs() {
         const dstd::String& buf = *read;
         ::dftu_bytes in{buf.data(), static_cast<std::uint64_t>(buf.size()),
                         nullptr, nullptr};
-        coro::AbiContext ctx;
+        plugins::AbiContext ctx;
         void* run_state = nullptr;
         const dftu_status loaded =
             reg_->desc.deserialize(ctx.get(), reg_->self, in, &run_state);
@@ -214,7 +214,7 @@ dstd::Result<bool> StateAccum::finalize(::dftu_result_value* out) {
     if (init_error_) return *init_error_;
     if (!state_ || !out) return false;
     if (auto drained = drain_runs(); !drained) return drained.error();
-    coro::AbiContext ctx;
+    plugins::AbiContext ctx;
     const dftu_status status = reg_->desc.finalize(ctx.get(), state_, out);
     if (status < 0) return error_of(ctx, status, "finalize");
     return true;

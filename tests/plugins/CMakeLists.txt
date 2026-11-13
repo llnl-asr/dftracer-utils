@@ -31,6 +31,7 @@ set(PLUGINS_TEST_SOURCES
     test_plugin_library_lifetime.cpp
     test_provider_schema_types.cpp
     test_lazyframe_plugin_node.cpp
+    test_abi_task.cpp
     test_source_hooks_vtable.cpp
     test_plugin_reference.cpp
     host/test_host_ops.cpp

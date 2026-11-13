@@ -4,10 +4,9 @@
  * rather than only consuming rows.
  *
  * Registers two providers:
- *   - "provider_fixture.rows": two known frames, the first answered
- *     synchronously, the second via a real dftu_task the host must await, then
- *     end of stream. Exercises both the sync and async dftu_cursor_vt::next
- *     paths in one cursor.
+ *   - "provider_fixture.rows": two known frames, then end of stream. A plugin
+ *     built by the build host cannot start a task, so the async next path is
+ *     covered in-process by test_plugin_providers.cpp.
  *   - "provider_fixture.failing": a cursor whose first next() call fails, to
  *     prove a mid-stream error surfaces rather than being read as end of
  *     stream.
@@ -25,8 +24,6 @@
  * time (dlopen on an already-resident path returns the same image).
  */
 
-#include <dftracer/utils/coro/task.h>
-#include <dftracer/utils/coro/task_abi.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -61,7 +58,7 @@ const char* FAILING_NAMES[] = {"x"};
     return ::dftu_dataframe_new(ROWS_NAMES, cols, 2);
 }
 
-/* ---- provider_fixture.rows: sync frame 1, async frame 2, then EOS ---- */
+/* ---- provider_fixture.rows: two frames, then EOS ---- */
 
 dftu_status rows_schema(dftu_ctx*, void*, const char* const** out_names,
                         int32_t* out_count) {
@@ -75,7 +72,7 @@ struct RowsCursor {
 };
 
 dftu_status rows_next(dftu_ctx*, void* self, int64_t, ::dftu_dataframe** out,
-                      dftu_task** pending) {
+                      dftu_task**) {
     auto* cur = static_cast<RowsCursor*>(self);
     const int call = cur->call++;
     if (call == 0) {
@@ -85,16 +82,9 @@ dftu_status rows_next(dftu_ctx*, void* self, int64_t, ::dftu_dataframe** out,
         return DFTU_OK;  // synchronous
     }
     if (call == 1) {
-        // Asynchronous: a real coroutine task the host must co_await before
-        // *out is valid.
-        auto fill =
-            [](::dftu_dataframe** o) -> dftracer::utils::coro::CoroTask<void> {
-            const int64_t ids[] = {4, 5};
-            const int64_t vals[] = {40, 50};
-            *o = make_rows_frame(ids, vals, 2);
-            co_return;
-        };
-        *pending = dftracer::utils::coro::task_to_abi(fill(out));
+        const int64_t ids[] = {4, 5};
+        const int64_t vals[] = {40, 50};
+        *out = make_rows_frame(ids, vals, 2);
         return DFTU_OK;
     }
     *out = nullptr;

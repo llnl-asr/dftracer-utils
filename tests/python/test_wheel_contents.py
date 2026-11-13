@@ -56,7 +56,7 @@ REQUIRED_PATTERNS = (
     # check headers from directories that were NOT part of the old subset.
     "dftracer/include/dftracer/utils/common/abi.h",
     "dftracer/include/dftracer/utils/store/abi.h",
-    "dftracer/include/dftracer/utils/coro/abi.h",
+    "dftracer/include/dftracer/utils/runtime/abi.h",
     "dftracer/include/dftracer/utils/dataframe/abi.h",
     "dftracer/include/dftracer/utils/duql/abi.h",
     "dftracer/include/dftracer/utils/trace/index/indexer.h",

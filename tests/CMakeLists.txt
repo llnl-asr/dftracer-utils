@@ -31,11 +31,6 @@ file(
   RELATIVE ${CMAKE_SOURCE_DIR}/include
   ${CMAKE_SOURCE_DIR}/include/dftracer/*abi.h)
 
-# task_abi.h is a C++ bridge (dftracer::utils::task_to_abi takes a
-# coro::CoroTask<void>&&) that hands C++ coroutines off to the C ABI in
-# coro/abi.h; it is not itself a C ABI header, so exclude it here.
-list(FILTER DFTRACER_UTILS_C_ABI_HEADERS EXCLUDE REGEX
-     "coro/task_abi\\.h$")
 list(SORT DFTRACER_UTILS_C_ABI_HEADERS)
 
 set(C_ABI_GUARD_SRC ${CMAKE_CURRENT_BINARY_DIR}/generated/c_abi_guard.c)
@@ -172,6 +167,12 @@ add_test(
     [=[bad=$(grep -rnE '^[[:space:]]*#[[:space:]]*include[[:space:]]*<dftracer/utils/(domains|cli|plugins)/' "$0/include/dftracer/utils/trace" "$0/src/dftracer/utils/trace"); if [ -n "$bad" ]; then echo "include from trace into a library above it:"; echo "$bad"; exit 1; fi]=]
     ${CMAKE_SOURCE_DIR})
 add_test(
+  NAME lower_no_plugins
+  COMMAND
+    sh -c
+    [=[bad=$(for lib in memory dstd common coro runtime store json yaml duql fileio dataframe trace; do for root in include src; do [ -d "$0/$root/dftracer/utils/$lib" ] && grep -rnE '^[[:space:]]*#[[:space:]]*include[[:space:]]*<dftracer/utils/plugins/' "$0/$root/dftracer/utils/$lib"; done; done | grep -v 'include/dftracer/utils/dataframe/arrow.h:.*<dftracer/utils/plugins/arrow_abi.h>'); if [ -n "$bad" ]; then echo "include of a plugins header from a library below plugins:"; echo "$bad"; exit 1; fi]=]
+    ${CMAKE_SOURCE_DIR})
+add_test(
   NAME plugins_no_upward
   COMMAND
     sh -c
@@ -300,7 +301,6 @@ set(TEST_CPP_SOURCES
     runtime/test_runtime.cpp
     runtime/test_runtime_abi.cpp
     runtime/test_submit_exception.cpp
-    runtime/test_task_abi.cpp
     runtime/test_task_pool.cpp
     runtime/test_reserve_async.cpp
     runtime/test_shutdown.cpp

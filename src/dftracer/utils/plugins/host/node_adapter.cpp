@@ -4,8 +4,6 @@
 
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/logging.h>
-#include <dftracer/utils/coro/abi_context.h>
-#include <dftracer/utils/coro/task_abi.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/internal/dataframe_handle.h>
 #include <dftracer/utils/dataframe/internal/expr_handle.h>
@@ -19,9 +17,11 @@
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/plugins/abi_context.h>
 #include <dftracer/utils/plugins/host/node_adapter.h>
 #include <dftracer/utils/plugins/host/plugin_governor.h>
 #include <dftracer/utils/plugins/host/plugin_task.h>
+#include <dftracer/utils/plugins/task_abi.h>
 
 #include <cstdint>
 #include <utility>
@@ -64,7 +64,8 @@ class HostCursorBridge {
     }
 
     // Ends the task running next_task as one frame, end of stream or error.
-    coro::CoroTask<void> next_task(coro::AbiTask* task, std::int64_t max_rows,
+    coro::CoroTask<void> next_task(plugins::AbiTask* task,
+                                   std::int64_t max_rows,
                                    ::dftu_dataframe** out) {
         auto reading = cursor_->next(max_rows);
         dataframe::MorselResult read = co_await std::move(reading);
@@ -110,7 +111,7 @@ class HostCursorBridge {
         *pending = nullptr;
         dftu_status status = DFTU_OK;
         if (self_->try_next_sync(ctx, max_rows, out, &status)) return status;
-        *pending = coro::make_abi_task([=](coro::AbiTask* task) {
+        *pending = plugins::make_abi_task([=](plugins::AbiTask* task) {
             return self_->next_task(task, max_rows, out);
         });
         return DFTU_OK;
@@ -132,7 +133,7 @@ class HostCursorBridge {
         *pending = nullptr;
         if (out_applied) *out_applied = 0;
         if (!predicate || !out_applied) return DFTU_OK;
-        *pending = coro::task_to_abi(self_->narrow_task(
+        *pending = plugins::task_to_abi(self_->narrow_task(
             dataframe::expr_handle_unwrap(predicate), out_applied));
         return DFTU_OK;
     }
@@ -192,13 +193,13 @@ class PluginNodeCursor final : public dataframe::Cursor {
     coro::CoroTask<dataframe::MorselResult> next(
         std::int64_t max_rows) override {
         const coro::CancelView cancel = co_await coro::this_coro::cancel_view;
-        coro::AbiContext ctx(cancel);
+        plugins::AbiContext ctx(cancel);
         AbiHandle<::dftu_dataframe, ::dftu_dataframe_free> frame;
         ::dftu_task* pending = nullptr;
         dftu_status status = out_vt_->next(ctx.get(), out_self_, max_rows,
                                            frame.slot(), &pending);
         if (status < 0) {
-            if (pending) coro::free_abi_task(pending);
+            if (pending) plugins::free_abi_task(pending);
             co_return plugin_error(ctx, status,
                                    dstd::fmt<"lazy op '{}' next">(node_->name));
         }
@@ -233,13 +234,13 @@ class PluginNodeCursor final : public dataframe::Cursor {
         AbiHandle<::dftu_expr, ::dftu_expr_free> h(
             dataframe::expr_handle_wrap(predicate));
         const coro::CancelView cancel = co_await coro::this_coro::cancel_view;
-        coro::AbiContext ctx(cancel);
+        plugins::AbiContext ctx(cancel);
         ::dftu_task* t = nullptr;
         const dftu_status status =
             out_vt_->narrow(ctx.get(), out_self_, h.get(), &applied, &t);
         bool awaited_ok = status >= 0;
         if (status < 0) {
-            if (t) coro::free_abi_task(t);
+            if (t) plugins::free_abi_task(t);
             DFTRACER_UTILS_LOG_WARN(
                 "{}", plugin_error(ctx, status, "plugin node narrow").format());
         } else if (t) {
@@ -279,7 +280,7 @@ class VtableNode final : public dataframe::NodeImpl {
         ::dftu_schema in_built;
         in_built.top = in.fields;
         ::dftu_schema out_built;
-        coro::AbiContext ctx;
+        plugins::AbiContext ctx;
         const dftu_status status = handle_->vt.output_schema(
             ctx.get(), handle_->self, &in_built, &args.raw(), &out_built);
         if (status < 0)
@@ -300,7 +301,7 @@ class VtableNode final : public dataframe::NodeImpl {
             dstd::make_unique<HostCursorBridge>(std::move(input), input_names);
         void* out_self = nullptr;
         const ::dftu_cursor_vt* out_vt = nullptr;
-        coro::AbiContext ctx;
+        plugins::AbiContext ctx;
         const dftu_status status = handle_->vt.open(
             ctx.get(), handle_->self, bridge->self(), HostCursorBridge::vt(),
             &args.raw(), memory_budget, &out_self, &out_vt);

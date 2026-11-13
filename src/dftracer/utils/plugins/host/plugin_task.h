@@ -4,19 +4,19 @@
 
 #include <dftracer/utils/common/abi.h>
 #include <dftracer/utils/common/abi_error.h>
-#include <dftracer/utils/coro/abi_context.h>
 #include <dftracer/utils/coro/task.h>
-#include <dftracer/utils/coro/task_abi.h>
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/plugins/abi_context.h>
+#include <dftracer/utils/plugins/task_abi.h>
 
 namespace dftracer::utils::plugins::host {
 
 /// The error of a plugin callback @p what that returned the negative
 /// @p status, carrying the message it set on @p ctx.
-inline dstd::Error plugin_error(const coro::AbiContext& ctx, dftu_status status,
-                                dstd::StringView what) {
+inline dstd::Error plugin_error(const plugins::AbiContext& ctx,
+                                dftu_status status, dstd::StringView what) {
     dstd::StringView message = ctx.message();
     if (message.empty()) message = "failed";
     return dstd::Error::from_format<"{}: {}">(common::to_condition(status),
@@ -53,18 +53,18 @@ class AbiHandle {
 /// gives its error, and a task that throws is a failed task.
 inline coro::CoroTask<dstd::Result<dftu_status>> await_plugin_task(
     ::dftu_task* t) {
-    coro::AbiTask* task = coro::abi_task(t);
-    const dftu_status status = co_await coro::run_abi_task(task);
+    plugins::AbiTask* task = plugins::abi_task(t);
+    const dftu_status status = co_await plugins::run_abi_task(task);
     if (task->stopped) {
-        coro::free_abi_task(t);
+        plugins::free_abi_task(t);
         co_await coro::stop_here();
     }
     if (status < 0) {
-        dstd::Error failure = coro::abi_task_error(*task);
-        coro::free_abi_task(t);
+        dstd::Error failure = plugins::abi_task_error(*task);
+        plugins::free_abi_task(t);
         co_return failure;
     }
-    coro::free_abi_task(t);
+    plugins::free_abi_task(t);
     co_return status;
 }
 

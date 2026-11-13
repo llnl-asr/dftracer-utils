@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
-#include <dftracer/utils/coro/task_abi.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -11,6 +10,7 @@
 #include <dftracer/utils/plugins/abi.h>
 #include <dftracer/utils/plugins/host/fold_adapter/ext.h>
 #include <dftracer/utils/plugins/host/host_status.h>
+#include <dftracer/utils/plugins/task_abi.h>
 #include <dftracer/utils/runtime/fs/filesystem.h>
 #include <dftracer/utils/runtime/fs/fs.h>
 
@@ -58,7 +58,8 @@ const PathList* list_of(const ::dftu_path_list* list) {
     return reinterpret_cast<const PathList*>(list);
 }
 
-void fail_with(coro::AbiTask* task, const char* op, const dstd::Error& error) {
+void fail_with(plugins::AbiTask* task, const char* op,
+               const dstd::Error& error) {
     task->fail(common::to_status(error.condition()),
                dstd::fmt<"{}: {}">(dstd::StringView(op), error.message()));
 }
@@ -67,7 +68,7 @@ template <class Make>
 dftu_status start_task(::dftu_ctx* ctx, ::dftu_task** out, Make&& make) {
     if (out == nullptr)
         return host_fail(ctx, DFTU_E_INVALID, "the task slot is NULL");
-    *out = coro::make_abi_task(std::forward<Make>(make));
+    *out = plugins::make_abi_task(std::forward<Make>(make));
     return DFTU_OK;
 }
 
@@ -81,7 +82,7 @@ void free_owned_string(void*, void* ud) {
     dstd::UniquePtr<dstd::String> owned(static_cast<dstd::String*>(ud));
 }
 
-coro::CoroTask<void> read_file_body(coro::AbiTask* task, dstd::String path,
+coro::CoroTask<void> read_file_body(plugins::AbiTask* task, dstd::String path,
                                     dftu_bytes* out) {
     auto reading = runtime::fs::read_file(dstd::PathView(path));
     auto read = co_await std::move(reading);
@@ -102,12 +103,12 @@ dftu_status fs_read_file(::dftu_ctx* ctx, void*, const char* path,
     if (dftu_status st = check_path(ctx, "read_file", path); st < 0) return st;
     if (out != nullptr) *out = dftu_bytes{nullptr, 0, nullptr, nullptr};
     const dstd::String copy(path);
-    return start_task(ctx, task, [=](coro::AbiTask* t) {
+    return start_task(ctx, task, [=](plugins::AbiTask* t) {
         return read_file_body(t, copy, out);
     });
 }
 
-coro::CoroTask<void> write_file_body(coro::AbiTask* task, dstd::String path,
+coro::CoroTask<void> write_file_body(plugins::AbiTask* task, dstd::String path,
                                      const void* data, std::uint64_t len) {
     auto writing = runtime::fs::write_file(
         dstd::PathView(path), dstd::StringView(static_cast<const char*>(data),
@@ -123,12 +124,12 @@ dftu_status fs_write_file(::dftu_ctx* ctx, void*, const char* path,
     if (data == nullptr && len != 0)
         return host_fail(ctx, DFTU_E_INVALID, "write_file: data is NULL");
     const dstd::String copy(path);
-    return start_task(ctx, task, [=](coro::AbiTask* t) {
+    return start_task(ctx, task, [=](plugins::AbiTask* t) {
         return write_file_body(t, copy, data, len);
     });
 }
 
-coro::CoroTask<void> read_at_body(coro::AbiTask* task, dstd::String path,
+coro::CoroTask<void> read_at_body(plugins::AbiTask* task, dstd::String path,
                                   std::uint64_t off, void* buf,
                                   std::uint64_t len, std::int64_t* out_n) {
     auto file_system = runtime::fs::file_system_for(dstd::PathView(path));
@@ -166,12 +167,12 @@ dftu_status fs_read_at(::dftu_ctx* ctx, void*, const char* path,
     if (buf == nullptr && len != 0)
         return host_fail(ctx, DFTU_E_INVALID, "read_at: buf is NULL");
     const dstd::String copy(path);
-    return start_task(ctx, task, [=](coro::AbiTask* t) {
+    return start_task(ctx, task, [=](plugins::AbiTask* t) {
         return read_at_body(t, copy, off, buf, len, out_n);
     });
 }
 
-coro::CoroTask<void> write_at_body(coro::AbiTask* task, dstd::String path,
+coro::CoroTask<void> write_at_body(plugins::AbiTask* task, dstd::String path,
                                    std::uint64_t off, const void* buf,
                                    std::uint64_t len, std::int64_t* out_n) {
     auto file_system = runtime::fs::file_system_for(dstd::PathView(path));
@@ -211,7 +212,7 @@ dftu_status fs_write_at(::dftu_ctx* ctx, void*, const char* path,
     if (buf == nullptr && len != 0)
         return host_fail(ctx, DFTU_E_INVALID, "write_at: buf is NULL");
     const dstd::String copy(path);
-    return start_task(ctx, task, [=](coro::AbiTask* t) {
+    return start_task(ctx, task, [=](plugins::AbiTask* t) {
         return write_at_body(t, copy, off, buf, len, out_n);
     });
 }
@@ -220,7 +221,7 @@ dftu_file_kind kind_of(dstd::fs::FileKind kind) {
     return static_cast<dftu_file_kind>(kind);
 }
 
-coro::CoroTask<void> list_dir_body(coro::AbiTask* task, dstd::String path,
+coro::CoroTask<void> list_dir_body(plugins::AbiTask* task, dstd::String path,
                                    ::dftu_path_list** out) {
     auto listing = runtime::fs::list_dir(dstd::PathView(path));
     auto listed = co_await std::move(listing);
@@ -246,7 +247,7 @@ dftu_status fs_list_dir(::dftu_ctx* ctx, void*, const char* path,
     if (dftu_status st = check_path(ctx, "list_dir", path); st < 0) return st;
     if (out != nullptr) *out = nullptr;
     const dstd::String copy(path);
-    return start_task(ctx, task, [=](coro::AbiTask* t) {
+    return start_task(ctx, task, [=](plugins::AbiTask* t) {
         return list_dir_body(t, copy, out);
     });
 }
@@ -254,7 +255,7 @@ dftu_status fs_list_dir(::dftu_ctx* ctx, void*, const char* path,
 using FoundResult =
     dstd::Expected<dstd::Vector<runtime::fs::FoundFile>, dstd::Error>;
 
-coro::CoroTask<void> find_all_body(coro::AbiTask* task, dstd::String root,
+coro::CoroTask<void> find_all_body(plugins::AbiTask* task, dstd::String root,
                                    runtime::fs::FindOptions options,
                                    ::dftu_path_list** out) {
     auto body = [&](coro::Scope& scope) -> coro::CoroTask<FoundResult> {
@@ -315,7 +316,7 @@ dftu_status fs_find_all(::dftu_ctx* ctx, void*, const char* root,
     find.skip_unreadable = given.skip_unreadable != 0;
     if (out != nullptr) *out = nullptr;
     const dstd::String copy(root);
-    return start_task(ctx, task, [=](coro::AbiTask* t) {
+    return start_task(ctx, task, [=](plugins::AbiTask* t) {
         return find_all_body(t, copy, find, out);
     });
 }
@@ -345,7 +346,7 @@ void fs_list_free(::dftu_path_list* list) {
 }
 
 template <class Call>
-coro::CoroTask<void> flag_body(coro::AbiTask* task, const char* op,
+coro::CoroTask<void> flag_body(plugins::AbiTask* task, const char* op,
                                dstd::String path, std::int32_t* out,
                                Call call) {
     auto running = call(dstd::PathView(path));
@@ -362,7 +363,7 @@ dftu_status flag_start(::dftu_ctx* ctx, const char* op, const char* path,
                        std::int32_t* out, ::dftu_task** task, Call call) {
     if (dftu_status st = check_path(ctx, op, path); st < 0) return st;
     const dstd::String copy(path);
-    return start_task(ctx, task, [=](coro::AbiTask* t) {
+    return start_task(ctx, task, [=](plugins::AbiTask* t) {
         return flag_body(t, op, copy, out, call);
     });
 }
@@ -387,7 +388,7 @@ dftu_status fs_remove(::dftu_ctx* ctx, void*, const char* path,
                       [](dstd::PathView p) { return runtime::fs::remove(p); });
 }
 
-coro::CoroTask<void> stat_batch_body(coro::AbiTask*,
+coro::CoroTask<void> stat_batch_body(plugins::AbiTask*,
                                      dstd::Vector<dstd::Path> paths,
                                      dftu_fs_stat* out,
                                      dftu_status* out_status) {
@@ -429,7 +430,7 @@ dftu_status fs_stat_batch(::dftu_ctx* ctx, void*, const char* const* paths,
                              "stat_batch: every path must use one file system");
         copies.push_back(dstd::Path(dstd::StringView(paths[i])));
     }
-    return start_task(ctx, task, [=](coro::AbiTask* t) {
+    return start_task(ctx, task, [=](plugins::AbiTask* t) {
         return stat_batch_body(t, copies, out, out_status);
     });
 }

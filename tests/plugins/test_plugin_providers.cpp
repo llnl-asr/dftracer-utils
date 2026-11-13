@@ -7,10 +7,15 @@
 // a non-plugin C caller would make.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/plugins/abi.h>
+#include <dftracer/utils/plugins/abi_context.h>
+#include <dftracer/utils/plugins/host/fold_adapter/ext.h>
 #include <dftracer/utils/plugins/host/plugins.h>
+#include <dftracer/utils/plugins/task_abi.h>
 #include <dlfcn.h>
 #include <doctest/doctest.h>
 
@@ -64,7 +69,73 @@ dstd::Vector<std::int64_t> read_i64_column(const dftu_dataframe* df,
     return out;
 }
 
+const char* ASYNC_NAMES[] = {"id"};
+
+struct AsyncCursor {
+    int call = 0;
+};
+
+coro::CoroTask<void> fill_async(dftu_dataframe** out) {
+    const std::int64_t ids[] = {7, 8};
+    dftu_series* col = dftu_series_new_flat(DFTU_TYPE_INT64, ids, 2, nullptr);
+    *out = dftu_dataframe_new(ASYNC_NAMES, &col, 1);
+    co_return;
+}
+
+dftu_status async_next(dftu_ctx*, void* self, std::int64_t,
+                       dftu_dataframe** out, dftu_task** pending) {
+    auto* cur = static_cast<AsyncCursor*>(self);
+    if (cur->call++ == 0) {
+        *pending = plugins::task_to_abi(fill_async(out));
+        return DFTU_OK;
+    }
+    *out = nullptr;
+    return DFTU_END;
+}
+
+void async_cursor_destroy(void* self) {
+    delete static_cast<AsyncCursor*>(self);
+}
+
+const dftu_cursor_vt ASYNC_CURSOR_VT = {.struct_size = sizeof(dftu_cursor_vt),
+                                        .next = async_next,
+                                        .destroy = async_cursor_destroy};
+
+dftu_status async_schema(dftu_ctx*, void*, const char* const** names,
+                         std::int32_t* count) {
+    *names = ASYNC_NAMES;
+    *count = 1;
+    return DFTU_OK;
+}
+
+dftu_status async_scan(dftu_ctx*, void*, const dftu_scan_request*,
+                       std::int32_t*, void** cursor_self,
+                       const dftu_cursor_vt** cursor_vt) {
+    *cursor_self = new AsyncCursor();
+    *cursor_vt = &ASYNC_CURSOR_VT;
+    return DFTU_OK;
+}
+
+const dftu_source_vt ASYNC_SOURCE_VT = {.struct_size = sizeof(dftu_source_vt),
+                                        .schema = async_schema,
+                                        .scan = async_scan};
+
 }  // namespace
+
+TEST_CASE("a provider whose next returns a task is awaited by the host") {
+    plugins::AbiContext ctx;
+    REQUIRE(plugins::host::detail::register_plugin_provider(
+                ctx.get(), "inproc.async", &ASYNC_SOURCE_VT, nullptr,
+                nullptr) >= 0);
+    dftu_lazyframe* lf = dftu_lazyframe_from_provider("inproc.async");
+    REQUIRE(lf);
+    dftu_dataframe* out = dftu_lazyframe_collect(lf, -1);
+    REQUIRE(out);
+    CHECK(read_i64_column(out, "id") == dstd::Vector<std::int64_t>{7, 8});
+    dftu_dataframe_free(out);
+    dftu_lazyframe_free(lf);
+    dftu_provider_unregister("inproc.async");
+}
 
 TEST_CASE("a registered provider backs a LazyFrame that collects its rows") {
     dstd::Optional<plugins::host::Plugins> plugins = load_fixture();

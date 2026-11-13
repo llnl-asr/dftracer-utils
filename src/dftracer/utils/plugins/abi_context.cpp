@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/abi_error.h>
-#include <dftracer/utils/coro/abi_context.h>
+#include <dftracer/utils/plugins/abi_context.h>
 
-namespace dftracer::utils::coro {
+namespace dftracer::utils::plugins {
 
 const dftu_ctx_vt AbiContext::VT = {
     sizeof(dftu_ctx_vt),
@@ -10,7 +10,7 @@ const dftu_ctx_vt AbiContext::VT = {
     &AbiContext::check,
 };
 
-AbiContext::AbiContext(CancelView cancel) noexcept
+AbiContext::AbiContext(coro::CancelView cancel) noexcept
     : ctx_{sizeof(dftu_ctx), 0, &VT, this}, cancel_(cancel) {}
 
 dftu_status AbiContext::set_error(dftu_ctx* c, dftu_status code,
@@ -31,4 +31,4 @@ dstd::Error AbiContext::error(dftu_status status, dstd::StringView what) const {
     return dstd::Error::from_format<"{} failed">(condition, what);
 }
 
-}  // namespace dftracer::utils::coro
+}  // namespace dftracer::utils::plugins

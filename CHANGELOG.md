@@ -23,6 +23,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Remove `dftu_task_run`; run a task with the host task service `run` instead.
+  `dftu_runtime`, `dftu_default_runtime`, `dftu_runtime_new` and `dftu_runtime_free` move from `coro/abi.h` to `runtime/abi.h`, and the `coro` and `runtime` libraries hold no plugin task type.
+  `AbiTask` and `AbiContext` move to `dftracer::utils::plugins`.
+- Add the ctest `lower_no_plugins`, which fails when a library below `plugins` includes a `plugins/` header.
 - Register providers and plan nodes through the plugin host tables only.
   `dftu_provider_register` and `dftu_node_register` are removed from the dataframe C ABI, and the dataframe library keeps C++ interfaces for both, so it knows no plugin type.
   The `dftu_source_vt`, `dftu_cursor_vt` and `dftu_node_vt` tables, and the structs that only they use, move to `plugins/abi/providers.h` and `plugins/abi/nodes.h`.

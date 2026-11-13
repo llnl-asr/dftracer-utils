@@ -1,18 +1,18 @@
 // SPDX-License-Identifier: MIT
-#include <dftracer/utils/coro/abi_context.h>
 #include <dftracer/utils/coro/combinators.h>
 #include <dftracer/utils/coro/executor.h>
 #include <dftracer/utils/coro/named.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
-#include <dftracer/utils/coro/task_abi.h>
 #include <dftracer/utils/coro/time.h>
 #include <dftracer/utils/coro/yield.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/plugins/abi_context.h>
 #include <dftracer/utils/plugins/host/fold_adapter.h>
 #include <dftracer/utils/plugins/host/fold_adapter/ext.h>
+#include <dftracer/utils/plugins/task_abi.h>
 #include <dftracer/utils/runtime/runtime.h>
 
 #include <algorithm>
@@ -30,17 +30,17 @@ constexpr std::uint32_t DRIVE_WAIT_CAP = 64;
 PluginFold& fold_of(void* h) { return *static_cast<PluginFold*>(h); }
 
 bool is_unawaited(::dftu_task* task) {
-    return task != nullptr && !coro::abi_task(task)->awaited;
+    return task != nullptr && !plugins::abi_task(task)->awaited;
 }
 
 // Awaits a task handed back to the host, takes its message on failure and
 // frees it.
 coro::CoroTask<dftu_status> consume(::dftu_task* handed,
                                     dstd::String* message) {
-    coro::AbiTask* task = coro::abi_task(handed);
-    const dftu_status status = co_await coro::run_abi_task(task);
+    plugins::AbiTask* task = plugins::abi_task(handed);
+    const dftu_status status = co_await plugins::run_abi_task(task);
     if (status < 0) *message = std::move(task->message);
-    coro::free_abi_task(handed);
+    plugins::free_abi_task(handed);
     co_return status;
 }
 
@@ -52,7 +52,7 @@ dftu_status fail(::dftu_ctx* ctx, dftu_status status, const char* message) {
     return ctx != nullptr ? dftu_fail(ctx, status, message) : status;
 }
 
-void take_message(const coro::AbiContext& ctx, const char* what,
+void take_message(const plugins::AbiContext& ctx, const char* what,
                   dstd::String* out) {
     const dstd::StringView text = ctx.message();
     if (text.empty()) {
@@ -73,7 +73,7 @@ coro::CoroTask<dftu_status> run_leaf(PluginFold* fold, Job* job, const void* in,
         *message = "cancelled";
         co_return DFTU_E_CANCELLED;
     }
-    coro::AbiContext ctx(cancel);
+    plugins::AbiContext ctx(cancel);
     ::dftu_task* pending = nullptr;
     dftu_status status = DFTU_OK;
     if (job->where == DFTU_JOB_BLOCKING) {
@@ -256,17 +256,17 @@ coro::CoroTask<dftu_status> eval(PluginFold* fold, Job* job, const void* in,
 }
 
 coro::CoroTask<void> run_job(PluginFold* fold, Job* job, const void* in,
-                             void* out, coro::AbiTask* task) {
+                             void* out, plugins::AbiTask* task) {
     dstd::String message;
     const dftu_status status = co_await eval(fold, job, in, out, &message);
     if (status < 0) task->fail(status, message);
 }
 
 coro::CoroTask<void> run_spawn(dftu_status (*fn)(::dftu_ctx*, void*), void* arg,
-                               ::dftu_job_where where, coro::AbiTask* task) {
+                               ::dftu_job_where where, plugins::AbiTask* task) {
     if (where != DFTU_JOB_INLINE) co_await coro::yield();
     const coro::CancelView cancel = co_await coro::this_coro::cancel_view;
-    coro::AbiContext ctx(cancel);
+    plugins::AbiContext ctx(cancel);
     dftu_status status = DFTU_OK;
     if (where == DFTU_JOB_BLOCKING) {
         coro::BlockingRegion block;
@@ -282,7 +282,7 @@ coro::CoroTask<void> run_spawn(dftu_status (*fn)(::dftu_ctx*, void*), void* arg,
 }
 
 coro::CoroTask<void> await_one(::dftu_task* task) {
-    co_await coro::run_abi_task(coro::abi_task(task));
+    co_await plugins::run_abi_task(plugins::abi_task(task));
 }
 
 coro::CoroTask<void> await_round(::dftu_task* const* tasks, std::uint32_t n) {
@@ -309,7 +309,7 @@ struct Round {
 
     void clear() {
         for (std::uint32_t i = 0; i < n; ++i) {
-            if (tasks[i]) coro::free_abi_task(tasks[i]);
+            if (tasks[i]) plugins::free_abi_task(tasks[i]);
         }
         n = 0;
     }
@@ -337,7 +337,7 @@ struct DriveState {
 // The tasks of a round stay readable through status() during the next step,
 // then are freed.
 coro::CoroTask<void> run_drive(::dftu_step_fn step, DriveState state,
-                               coro::AbiTask* task) {
+                               plugins::AbiTask* task) {
     Round wait;
     Round done;
     for (;;) {
@@ -346,7 +346,7 @@ coro::CoroTask<void> run_drive(::dftu_step_fn step, DriveState state,
             task->fail(DFTU_E_CANCELLED, "drive: cancelled");
             co_return;
         }
-        coro::AbiContext ctx(cancel);
+        plugins::AbiContext ctx(cancel);
         std::uint32_t n = 0;
         const dftu_status status =
             step(ctx.get(), state.coro, wait.tasks, DRIVE_WAIT_CAP, &n);
@@ -516,9 +516,10 @@ dftu_status host_start(::dftu_ctx* ctx, void* h, ::dftu_job* job,
                     "value");
     }
     PluginFold* fold = &fold_of(h);
-    *out_task = coro::make_abi_task([fold, j, in, out](coro::AbiTask* task) {
-        return run_job(fold, j, in, out, task);
-    });
+    *out_task =
+        plugins::make_abi_task([fold, j, in, out](plugins::AbiTask* task) {
+            return run_job(fold, j, in, out, task);
+        });
     return DFTU_OK;
 }
 
@@ -532,9 +533,10 @@ dftu_status host_spawn(::dftu_ctx* ctx, void* h,
         return fail(ctx, DFTU_E_INVALID, "spawn: unknown where");
     }
     (void)h;
-    *out_task = coro::make_abi_task([fn, arg, where](coro::AbiTask* task) {
-        return run_spawn(fn, arg, where, task);
-    });
+    *out_task =
+        plugins::make_abi_task([fn, arg, where](plugins::AbiTask* task) {
+            return run_spawn(fn, arg, where, task);
+        });
     return DFTU_OK;
 }
 
@@ -546,7 +548,7 @@ dftu_status host_drive(::dftu_ctx* ctx, void* h, ::dftu_step_fn step,
     }
     (void)h;
     *out_task =
-        coro::make_abi_task([step, state, release](coro::AbiTask* task) {
+        plugins::make_abi_task([step, state, release](plugins::AbiTask* task) {
             return run_drive(step, DriveState(state, release), task);
         });
     return DFTU_OK;
@@ -554,7 +556,8 @@ dftu_status host_drive(::dftu_ctx* ctx, void* h, ::dftu_step_fn step,
 
 dftu_status host_status(::dftu_ctx* ctx, void* /*h*/, const ::dftu_task* t) {
     if (t == nullptr) return fail(ctx, DFTU_E_INVALID, "status: NULL task");
-    const coro::AbiTask* task = coro::abi_task(const_cast<::dftu_task*>(t));
+    const plugins::AbiTask* task =
+        plugins::abi_task(const_cast<::dftu_task*>(t));
     if (!task->finished) {
         return fail(ctx, DFTU_E_INVALID, "status: the task has not finished");
     }
@@ -567,22 +570,22 @@ dftu_status host_status(::dftu_ctx* ctx, void* /*h*/, const ::dftu_task* t) {
 }
 
 void host_discard(void* /*h*/, ::dftu_task* t) {
-    if (is_unawaited(t)) coro::free_abi_task(t);
+    if (is_unawaited(t)) plugins::free_abi_task(t);
 }
 
 }  // namespace
 
 dftu_status detail::task_run(::dftu_ctx* ctx, void* /*h*/, ::dftu_task* t) {
     if (t == nullptr) return fail(ctx, DFTU_E_INVALID, "run: NULL task");
-    coro::AbiTask* task = coro::abi_task(t);
+    plugins::AbiTask* task = plugins::abi_task(t);
     const auto ran = default_runtime().block_on(
-        coro::named("dftu_svc_task::run", coro::run_abi_task(task)));
+        coro::named("dftu_svc_task::run", plugins::run_abi_task(task)));
     dftu_status status = DFTU_OK;
     dstd::Optional<dstd::Error> error;
     if (!ran) {
         error = ran.error();
     } else if (task->status < 0) {
-        error = coro::abi_task_error(*task);
+        error = plugins::abi_task_error(*task);
     } else {
         status = task->status;
     }
@@ -591,7 +594,7 @@ dftu_status detail::task_run(::dftu_ctx* ctx, void* /*h*/, ::dftu_task* t) {
             error->message().empty() ? error->name() : error->message();
         status = host_fail(ctx, common::to_status(error->condition()), text);
     }
-    coro::free_abi_task(t);
+    plugins::free_abi_task(t);
     return status;
 }
 

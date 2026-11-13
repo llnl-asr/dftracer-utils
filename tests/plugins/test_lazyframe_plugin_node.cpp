@@ -7,9 +7,7 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/abi_error.h>
-#include <dftracer/utils/coro/abi_context.h>
 #include <dftracer/utils/coro/task.h>
-#include <dftracer/utils/coro/task_abi.h>
 #include <dftracer/utils/coro/yield.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/internal/expr_handle.h>
@@ -19,8 +17,10 @@
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/plugins/abi_context.h>
 #include <dftracer/utils/plugins/host/node_adapter.h>
 #include <dftracer/utils/plugins/host/provider_source.h>
+#include <dftracer/utils/plugins/task_abi.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 #include <task_result.h>
@@ -147,22 +147,22 @@ struct Pulled {
 coro::CoroTask<Pulled> pull(void* in_self, const dftu_cursor_vt* in_vt,
                             std::int64_t max_rows) {
     Pulled pulled;
-    coro::AbiContext ctx;
+    plugins::AbiContext ctx;
     dftu_task* t = nullptr;
     pulled.status =
         in_vt->next(ctx.get(), in_self, max_rows, &pulled.frame, &t);
     pulled.message = dstd::String(ctx.message());
     if (t) {
-        coro::AbiTask* at = coro::abi_task(t);
-        auto running = coro::run_abi_task(at);
+        plugins::AbiTask* at = plugins::abi_task(t);
+        auto running = plugins::run_abi_task(at);
         pulled.status = co_await std::move(running);
         pulled.message = at->message;
-        coro::free_abi_task(t);
+        plugins::free_abi_task(t);
     }
     co_return std::move(pulled);
 }
 
-coro::CoroTask<void> pull_and_double(coro::AbiTask* task, void* in_self,
+coro::CoroTask<void> pull_and_double(plugins::AbiTask* task, void* in_self,
                                      const dftu_cursor_vt* in_vt,
                                      std::int64_t max_rows,
                                      dftu_dataframe** out) {
@@ -201,7 +201,7 @@ dftu_status double_cursor_next(dftu_ctx*, void* self, std::int64_t max_rows,
                                dftu_dataframe** out, dftu_task** pending) {
     auto* st = static_cast<DoubleCursorState*>(self);
     *out = nullptr;
-    *pending = coro::make_abi_task([=](coro::AbiTask* task) {
+    *pending = plugins::make_abi_task([=](plugins::AbiTask* task) {
         return pull_and_double(task, st->in_self, st->in_vt, max_rows, out);
     });
     return DFTU_OK;
@@ -1027,7 +1027,7 @@ TEST_SUITE("lazyframe plugin node") {
         };
 
         struct Impl {
-            static coro::CoroTask<void> drain_and_count(coro::AbiTask* task,
+            static coro::CoroTask<void> drain_and_count(plugins::AbiTask* task,
                                                         CountState* st,
                                                         dftu_dataframe** out) {
                 std::int64_t total = 0;
@@ -1056,7 +1056,7 @@ TEST_SUITE("lazyframe plugin node") {
                 *pending = nullptr;
                 if (st->done) return DFTU_END;
                 st->done = true;
-                *pending = coro::make_abi_task([=](coro::AbiTask* task) {
+                *pending = plugins::make_abi_task([=](plugins::AbiTask* task) {
                     return drain_and_count(task, st, out);
                 });
                 return DFTU_OK;

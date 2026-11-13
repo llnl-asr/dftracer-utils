@@ -2,10 +2,10 @@
 #ifndef DFTRACER_UTILS_TESTS_PLUGIN_ABI_CTX_H
 #define DFTRACER_UTILS_TESTS_PLUGIN_ABI_CTX_H
 #include <dftracer/utils/common/abi.h>
-#include <dftracer/utils/coro/abi.h>
-#include <dftracer/utils/coro/abi_context.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/plugins/abi_context.h>
+#include <dftracer/utils/plugins/host/fold_adapter/ext.h>
 #include <dftracer/utils/plugins/plugin.h>
 
 namespace test_plugin_common {
@@ -13,22 +13,22 @@ namespace test_plugin_common {
 // A call context for driving the plugin ABI from outside a callback. It keeps
 // the message a service or callback reports.
 struct Ctx {
-    dftracer::utils::coro::AbiContext ctx;
+    dftracer::utils::plugins::AbiContext ctx;
     dftu_ctx* get() { return ctx.get(); }
     dftracer::utils::dstd::String message() const {
         return dftracer::utils::dstd::String(ctx.message());
     }
 };
 
-// Runs a task a plugin handed back to completion on the default runtime and
-// gives its status; `message` gets the error text of a failed task.
+// Runs a task a plugin handed back to completion through the host task
+// service's run, and gives its status; `message` gets the error text of a
+// failed task.
 inline dftu_status run_task(::dftu_task* task,
                             dftracer::utils::dstd::String* message = nullptr) {
-    dftu_error err = DFTU_ERROR_INIT;
-    const dftu_status status =
-        dftu_task_run(dftu_default_runtime(), task, &err);
-    if (message) *message = err.message ? err.message : "";
-    dftu_error_release(&err);
+    Ctx c;
+    const dftu_status status = dftracer::utils::plugins::host::detail::task_run(
+        c.get(), nullptr, task);
+    if (message) *message = c.message();
     return status;
 }
 

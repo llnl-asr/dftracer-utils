@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/error.h>
-#include <dftracer/utils/coro/abi_context.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi/index.h>
+#include <dftracer/utils/plugins/abi_context.h>
 #include <dftracer/utils/plugins/host/fold_adapter/ext.h>
 #include <dftracer/utils/plugins/host/reserved_names.h>
 #include <dftracer/utils/trace/index/extensions/extension_registry.h>
@@ -43,7 +43,7 @@ class PluginIndexBuilder final
         lines_.reserve(lines.size());
         for (dstd::StringView l : lines)
             lines_.push_back({l.data(), l.size(), nullptr, nullptr});
-        coro::AbiContext ctx;
+        plugins::AbiContext ctx;
         const dftu_status status =
             vt_.step(ctx.get(), builder_, lines_.data(), lines_.size());
         if (status < 0)
@@ -56,7 +56,7 @@ class PluginIndexBuilder final
         std::uint64_t granule,
         trace::index::extensions::ExtensionOut& out) override {
         const ::dftu_index_out sink{sizeof(::dftu_index_out), &out, append_out};
-        coro::AbiContext ctx;
+        plugins::AbiContext ctx;
         const dftu_status status =
             vt_.finish_granule(ctx.get(), builder_, granule, &sink);
         if (status < 0)
@@ -70,7 +70,7 @@ class PluginIndexBuilder final
     dstd::Result<void> finish_file(
         trace::index::extensions::ExtensionOut& out) override {
         const ::dftu_index_out sink{sizeof(::dftu_index_out), &out, append_out};
-        coro::AbiContext ctx;
+        plugins::AbiContext ctx;
         const dftu_status status = vt_.finish_file(ctx.get(), builder_, &sink);
         if (status < 0)
             return dstd::Unexpected<dstd::Error>(
@@ -214,7 +214,7 @@ class PluginIndexExtension final : public trace::index::extensions::Extension {
 
     dstd::Result<dstd::UniquePtr<trace::index::extensions::ExtensionBuilder>>
     make_builder() const override {
-        coro::AbiContext ctx;
+        plugins::AbiContext ctx;
         void* b = nullptr;
         const dftu_status status = vt_.make_builder(ctx.get(), self_, &b);
         if (status < 0 || !b) {
@@ -246,7 +246,7 @@ class PluginIndexExtension final : public trace::index::extensions::Extension {
         l.any = leaf.any ? 1 : 0;
         l.op = to_c(leaf.op);
         l.value = &value;
-        coro::AbiContext ctx;
+        plugins::AbiContext ctx;
         void* compiled = nullptr;
         const dftu_status status = vt_.compile(ctx.get(), self_, &l, &compiled);
         if (status < 0) {

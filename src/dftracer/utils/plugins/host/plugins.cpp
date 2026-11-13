@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/logging.h>
-#include <dftracer/utils/coro/abi_context.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dstd/deque.h>
 #include <dftracer/utils/dstd/fmt.h>
@@ -13,6 +12,7 @@
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi.h>
+#include <dftracer/utils/plugins/abi_context.h>
 #include <dftracer/utils/plugins/host/build_host.h>
 #include <dftracer/utils/plugins/host/config.h>
 #include <dftracer/utils/plugins/host/fold_adapter.h>
@@ -316,7 +316,7 @@ dstd::Result<Plugins::Impl::Loaded> load_plugin(const dstd::String& path,
     }
 
     BuildHost build_host(plugin_name_from_path(path), library);
-    coro::AbiContext factory_ctx;
+    plugins::AbiContext factory_ctx;
     dftu_plugin* plugin = nullptr;
     const dftu_status built =
         factory(factory_ctx.get(), build_host.host(), config, &plugin);

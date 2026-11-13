@@ -4,7 +4,6 @@
 #include <dftracer/utils/coro/async_generator.h>
 #include <dftracer/utils/coro/named.h>
 #include <dftracer/utils/coro/task.h>
-#include <dftracer/utils/coro/task_abi.h>
 #include <dftracer/utils/dstd/byte_view.h>
 #include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/fmt.h>
@@ -25,6 +24,7 @@
 #include <dftracer/utils/fileio/parallel/parallel_writer.h>
 #include <dftracer/utils/plugins/host/fold_adapter.h>
 #include <dftracer/utils/plugins/host/fold_adapter/ext.h>
+#include <dftracer/utils/plugins/task_abi.h>
 #include <dftracer/utils/runtime/runtime.h>
 
 #include <cstddef>
@@ -49,7 +49,7 @@ template <class Make>
 dftu_status start_task(::dftu_ctx* ctx, ::dftu_task** out, Make&& make) {
     if (out == nullptr)
         return host_fail(ctx, DFTU_E_INVALID, "the task slot is NULL");
-    *out = coro::make_abi_task(std::forward<Make>(make));
+    *out = plugins::make_abi_task(std::forward<Make>(make));
     return DFTU_OK;
 }
 
@@ -63,7 +63,8 @@ dftu_status fail_error(::dftu_ctx* ctx, const char* op,
                      op_message(op, error));
 }
 
-void fail_task(coro::AbiTask* task, const char* op, const dstd::Error& error) {
+void fail_task(plugins::AbiTask* task, const char* op,
+               const dstd::Error& error) {
     task->fail(common::to_status(error.condition()), op_message(op, error));
 }
 
@@ -73,7 +74,8 @@ dftu_status invalid(::dftu_ctx* ctx, const char* op, const char* what) {
         dstd::fmt<"{}: {}">(dstd::StringView(op), dstd::StringView(what)));
 }
 
-coro::CoroTask<void> merge_shards_body(coro::AbiTask* task, dstd::String target,
+coro::CoroTask<void> merge_shards_body(plugins::AbiTask* task,
+                                       dstd::String target,
                                        dstd::Vector<dstd::String> shards) {
     const int rc = co_await fileio::parallel::merge_shards(target, shards);
     if (rc != 0) {
@@ -96,12 +98,12 @@ dftu_status host_merge_shards(::dftu_ctx* ctx, void*, const char* target,
                              "merge_shards: a shard path is NULL");
         names.emplace_back(shards[i]);
     }
-    return start_task(ctx, out,
-                      [path = dstd::String(target),
-                       names = std::move(names)](coro::AbiTask* task) mutable {
-                          return merge_shards_body(task, std::move(path),
-                                                   std::move(names));
-                      });
+    return start_task(
+        ctx, out,
+        [path = dstd::String(target),
+         names = std::move(names)](plugins::AbiTask* task) mutable {
+            return merge_shards_body(task, std::move(path), std::move(names));
+        });
 }
 
 // Host-owned parallel writer handed to the plugin as an opaque dftu_writer*;
@@ -132,7 +134,7 @@ dftu_status host_writer_create(::dftu_ctx* ctx, void* h, const char* path,
 
 // Runs one writer call; a nonzero result fails the task.
 template <class Call>
-coro::CoroTask<void> writer_body(coro::AbiTask* task, const char* op,
+coro::CoroTask<void> writer_body(plugins::AbiTask* task, const char* op,
                                  WriterHandle* writer, Call call) {
     const int rc = co_await call(writer);
     if (rc != 0) {
@@ -147,7 +149,7 @@ dftu_status writer_start(::dftu_ctx* ctx, void* h, ::dftu_writer* w,
                          ::dftu_task** out, const char* op, Call call) {
     WriterHandle* writer = fold_of(h).find_handle<WriterHandle>(w);
     if (writer == nullptr) return invalid(ctx, op, "the writer is not valid");
-    return start_task(ctx, out, [=](coro::AbiTask* task) {
+    return start_task(ctx, out, [=](plugins::AbiTask* task) {
         return writer_body(task, op, writer, call);
     });
 }
@@ -171,7 +173,7 @@ dftu_status host_writer_chunk(::dftu_ctx* ctx, void* h, ::dftu_writer* w,
 }
 
 // A close ends the handle whether or not the close succeeded.
-coro::CoroTask<void> writer_close_body(coro::AbiTask* task, PluginFold* fold,
+coro::CoroTask<void> writer_close_body(plugins::AbiTask* task, PluginFold* fold,
                                        WriterHandle* writer) {
     const int rc = co_await writer->writer->close();
     if (rc != 0) {
@@ -187,7 +189,7 @@ dftu_status host_writer_close(::dftu_ctx* ctx, void* h, ::dftu_writer* w,
     WriterHandle* writer = fold->find_handle<WriterHandle>(w);
     if (writer == nullptr)
         return invalid(ctx, "writer_close", "the writer is not valid");
-    return start_task(ctx, out, [=](coro::AbiTask* task) {
+    return start_task(ctx, out, [=](plugins::AbiTask* task) {
         return writer_close_body(task, fold, writer);
     });
 }
@@ -243,7 +245,8 @@ dftu_status host_lines_open(::dftu_ctx* ctx, void* h, const char* path,
     return DFTU_OK;
 }
 
-coro::CoroTask<void> lines_next_body(coro::AbiTask* task, LineReaderHandle* r,
+coro::CoroTask<void> lines_next_body(plugins::AbiTask* task,
+                                     LineReaderHandle* r,
                                      std::uint32_t max_lines,
                                      dftu_line_batch* out) {
     r->bytes.clear();
@@ -292,7 +295,7 @@ dftu_status host_lines_next(::dftu_ctx* ctx, void* h, ::dftu_line_reader* r,
     if (out == nullptr)
         return invalid(ctx, "lines_next", "the batch slot is NULL");
     const std::uint32_t max = max_lines != 0 ? max_lines : DEFAULT_MAX_LINES;
-    return start_task(ctx, task, [=](coro::AbiTask* t) {
+    return start_task(ctx, task, [=](plugins::AbiTask* t) {
         return lines_next_body(t, reader, max, out);
     });
 }
@@ -315,8 +318,8 @@ dftu_status host_chunks_open(::dftu_ctx* ctx, void* h, const char* path,
     return DFTU_OK;
 }
 
-coro::CoroTask<void> chunks_next_body(coro::AbiTask* task, ChunkReaderHandle* r,
-                                      dftu_bytes* out) {
+coro::CoroTask<void> chunks_next_body(plugins::AbiTask* task,
+                                      ChunkReaderHandle* r, dftu_bytes* out) {
     *out = dftu_bytes{nullptr, 0, nullptr, nullptr};
     if (r->ended) {
         task->status = DFTU_END;
@@ -344,7 +347,7 @@ dftu_status host_chunks_next(::dftu_ctx* ctx, void* h, ::dftu_chunk_reader* r,
         return invalid(ctx, "chunks_next", "the reader is not valid");
     if (out == nullptr)
         return invalid(ctx, "chunks_next", "the chunk slot is NULL");
-    return start_task(ctx, task, [=](coro::AbiTask* t) {
+    return start_task(ctx, task, [=](plugins::AbiTask* t) {
         return chunks_next_body(t, reader, out);
     });
 }
@@ -353,7 +356,7 @@ void host_chunks_close(void* h, ::dftu_chunk_reader* r) {
     fold_of(h).release_handle(r);
 }
 
-coro::CoroTask<void> gz_open_body(coro::AbiTask* task, GzHandle* g,
+coro::CoroTask<void> gz_open_body(plugins::AbiTask* task, GzHandle* g,
                                   dstd::String path,
                                   fileio::GzipWriterOptions options) {
     auto opened = co_await fileio::GzipLineWriter::open(std::move(path),
@@ -391,12 +394,12 @@ dftu_status host_gz_open(::dftu_ctx* ctx, void* h, const char* path,
     GzHandle* g = handle.get();
     *out = reinterpret_cast<::dftu_gz_writer*>(
         fold_of(h).adopt_handle(std::move(handle)));
-    return start_task(ctx, task,
-                      [g, p = dstd::String(path),
-                       options = std::move(options)](coro::AbiTask* t) mutable {
-                          return gz_open_body(t, g, std::move(p),
-                                              std::move(options));
-                      });
+    return start_task(
+        ctx, task,
+        [g, p = dstd::String(path),
+         options = std::move(options)](plugins::AbiTask* t) mutable {
+            return gz_open_body(t, g, std::move(p), std::move(options));
+        });
 }
 
 dftu_status host_gz_append(::dftu_ctx* ctx, void* h, ::dftu_gz_writer* w,
@@ -417,7 +420,7 @@ dftu_status host_gz_append(::dftu_ctx* ctx, void* h, ::dftu_gz_writer* w,
 }
 
 // A close ends the handle whether or not the close succeeded.
-coro::CoroTask<void> gz_close_body(coro::AbiTask* task, PluginFold* fold,
+coro::CoroTask<void> gz_close_body(plugins::AbiTask* task, PluginFold* fold,
                                    GzHandle* g, dftu_gz_summary* out) {
     g->is_open = false;
     auto summary = co_await g->writer.close();
@@ -438,12 +441,12 @@ dftu_status host_gz_close(::dftu_ctx* ctx, void* h, ::dftu_gz_writer* w,
         return invalid(ctx, "gz_close", "the writer is not open");
     if (out == nullptr)
         return invalid(ctx, "gz_close", "the summary slot is NULL");
-    return start_task(ctx, task, [=](coro::AbiTask* t) {
+    return start_task(ctx, task, [=](plugins::AbiTask* t) {
         return gz_close_body(t, fold, g, out);
     });
 }
 
-coro::CoroTask<void> compress_body(coro::AbiTask* task, dstd::String in,
+coro::CoroTask<void> compress_body(plugins::AbiTask* task, dstd::String in,
                                    dstd::String out_path, std::int32_t level,
                                    std::uint64_t member_size,
                                    std::uint64_t* out_size) {
@@ -468,15 +471,16 @@ dftu_status host_compress(::dftu_ctx* ctx, void*, const char* in_path,
                           ::dftu_task** task) {
     if (in_path == nullptr || out_path == nullptr)
         return invalid(ctx, "compress", "the paths must be set");
-    return start_task(ctx, task,
-                      [=, in = dstd::String(in_path),
-                       out = dstd::String(out_path)](coro::AbiTask* t) mutable {
-                          return compress_body(t, std::move(in), std::move(out),
-                                               level, member_size, out_size);
-                      });
+    return start_task(
+        ctx, task,
+        [=, in = dstd::String(in_path),
+         out = dstd::String(out_path)](plugins::AbiTask* t) mutable {
+            return compress_body(t, std::move(in), std::move(out), level,
+                                 member_size, out_size);
+        });
 }
 
-coro::CoroTask<void> decompress_body(coro::AbiTask* task, dstd::String in,
+coro::CoroTask<void> decompress_body(plugins::AbiTask* task, dstd::String in,
                                      dstd::String out_path,
                                      std::uint64_t* out_size) {
     auto input = fileio::FileDecompressionUtilityInput::from_file(in);
@@ -496,12 +500,12 @@ dftu_status host_decompress(::dftu_ctx* ctx, void*, const char* in_path,
                             ::dftu_task** task) {
     if (in_path == nullptr || out_path == nullptr)
         return invalid(ctx, "decompress", "the paths must be set");
-    return start_task(ctx, task,
-                      [=, in = dstd::String(in_path),
-                       out = dstd::String(out_path)](coro::AbiTask* t) mutable {
-                          return decompress_body(t, std::move(in),
-                                                 std::move(out), out_size);
-                      });
+    return start_task(
+        ctx, task,
+        [=, in = dstd::String(in_path),
+         out = dstd::String(out_path)](plugins::AbiTask* t) mutable {
+            return decompress_body(t, std::move(in), std::move(out), out_size);
+        });
 }
 
 // The text of logical_path, kept until the plugin frees its dftu_bytes.

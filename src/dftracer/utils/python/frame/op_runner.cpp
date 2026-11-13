@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/error.h>
-#include <dftracer/utils/coro/abi_context.h>
 #include <dftracer/utils/coro/named.h>
 #include <dftracer/utils/coro/task.h>
-#include <dftracer/utils/coro/task_abi.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi.h>
+#include <dftracer/utils/plugins/abi_context.h>
 #include <dftracer/utils/plugins/host/fold_adapter.h>
+#include <dftracer/utils/plugins/task_abi.h>
 #include <dftracer/utils/python/core/errors.h>
 #include <dftracer/utils/python/frame/op_runner.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -34,10 +34,10 @@ struct JobRun {
 };
 
 coro::CoroTask<JobRun> await_job(::dftu_task* started) {
-    coro::AbiTask* task = coro::abi_task(started);
+    plugins::AbiTask* task = plugins::abi_task(started);
     JobRun run;
-    run.status = co_await coro::run_abi_task(task);
-    if (run.status < 0) run.message = coro::abi_task_error(*task).message();
+    run.status = co_await plugins::run_abi_task(task);
+    if (run.status < 0) run.message = plugins::abi_task_error(*task).message();
     co_return run;
 }
 
@@ -81,7 +81,7 @@ PyObject* jit_run_op(PyObject*, PyObject* args) {
         plugin.struct_size = sizeof(::dftu_plugin);
         PluginFold fold(&plugin, intern);
         ::dftu_plugin_host& host = fold.host();
-        coro::AbiContext ctx;
+        plugins::AbiContext ctx;
         ::dftu_job* job = nullptr;
         const dftu_status built = build(ctx.get(), &host, &job);
         if (built < 0) {
@@ -109,7 +109,7 @@ PyObject* jit_run_op(PyObject*, PyObject* args) {
                     run.message = finished.error().message();
                 }
                 Py_END_ALLOW_THREADS;
-                coro::free_abi_task(task);
+                plugins::free_abi_task(task);
             }
             ran = true;
         }

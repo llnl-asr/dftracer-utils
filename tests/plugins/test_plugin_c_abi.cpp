@@ -5,7 +5,6 @@
 // end-to-end from real C, not just from C++.
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/scope.h>
-#include <dftracer/utils/coro/task_abi.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
@@ -14,6 +13,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/host/fold_adapter.h>
 #include <dftracer/utils/plugins/plugin.h>
+#include <dftracer/utils/plugins/task_abi.h>
 #include <dftracer/utils/runtime/runtime.h>
 // After fold_adapter.h so nanoarrow is set up before dataframe/abi.h's
 // arrow_abi.
@@ -120,7 +120,7 @@ struct HostFixture {
 // A ctx for calling the plugin ABI from outside a callback; it keeps the
 // message a service reports.
 struct Ctx {
-    coro::AbiContext ctx;
+    plugins::AbiContext ctx;
     dftu_ctx* get() { return ctx.get(); }
     dstd::String message() { return dstd::String(ctx.message()); }
 };
@@ -326,7 +326,7 @@ TEST_CASE("C ABI: drive runs rounds and status reads a failed task") {
         dftu_drive_report rep{};
         ::dftu_task* t = nullptr;
         REQUIRE(dftu_test_task_drive(c.get(), &fx.host(), &rep, &t) >= 0);
-        coro::free_abi_task(t);
+        plugins::free_abi_task(t);
         CHECK(rep.steps == 0);
         CHECK(rep.released == 1);
     }
@@ -334,12 +334,12 @@ TEST_CASE("C ABI: drive runs rounds and status reads a failed task") {
 
 namespace {
 
-coro::CoroTask<void> end_body(coro::AbiTask* task) {
+coro::CoroTask<void> end_body(plugins::AbiTask* task) {
     task->status = DFTU_END;
     co_return;
 }
 
-coro::CoroTask<void> refuse_body(coro::AbiTask* task) {
+coro::CoroTask<void> refuse_body(plugins::AbiTask* task) {
     task->fail(DFTU_E_PARSE, "run refused on purpose");
     co_return;
 }
@@ -369,12 +369,13 @@ TEST_CASE(
     CHECK(c.message() == "spawned failed");
     CHECK(bad.ran == 1);
 
-    t = coro::make_abi_task(
-        [](coro::AbiTask* task) { return refuse_body(task); });
+    t = plugins::make_abi_task(
+        [](plugins::AbiTask* task) { return refuse_body(task); });
     CHECK(svc->run(c.get(), fx.host().h, t) == DFTU_E_PARSE);
     CHECK(c.message() == "run refused on purpose");
 
-    t = coro::make_abi_task([](coro::AbiTask* task) { return end_body(task); });
+    t = plugins::make_abi_task(
+        [](plugins::AbiTask* task) { return end_body(task); });
     CHECK(svc->run(c.get(), fx.host().h, t) == DFTU_END);
 
     CHECK(svc->run(c.get(), fx.host().h, nullptr) == DFTU_E_INVALID);

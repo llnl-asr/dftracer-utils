@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/coro/abi.h>
-#include <dftracer/utils/coro/task_abi.h>
+#include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/runtime/abi.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 #include <testing_runtime.h>
@@ -21,8 +21,8 @@ coro::CoroTask<void> set_flag(std::atomic<int>* n) {
 // access (ASan catches it), not just a pointer comparison.
 bool exercise(dftu_runtime* rt) {
     std::atomic<int> ran{0};
-    dftu_task* t = coro::task_to_abi(set_flag(&ran));
-    return dftu_task_run(rt, t, nullptr) == DFTU_OK && ran.load() == 1;
+    const auto done = reinterpret_cast<Runtime*>(rt)->block_on(set_flag(&ran));
+    return done.has_value() && ran.load() == 1;
 }
 
 }  // namespace

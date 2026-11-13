@@ -5,8 +5,6 @@
 
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/logging.h>
-#include <dftracer/utils/coro/abi_context.h>
-#include <dftracer/utils/coro/task_abi.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/internal/dataframe_handle.h>
@@ -20,9 +18,11 @@
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/plugins/abi_context.h>
 #include <dftracer/utils/plugins/host/plugin_governor.h>
 #include <dftracer/utils/plugins/host/plugin_task.h>
 #include <dftracer/utils/plugins/host/provider_source.h>
+#include <dftracer/utils/plugins/task_abi.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -85,7 +85,7 @@ class ProviderCursor final : public dataframe::Cursor {
           expected_types_(std::move(expected_types)) {}
 
     ~ProviderCursor() override {
-        if (pending_task_) coro::free_abi_task(pending_task_);
+        if (pending_task_) plugins::free_abi_task(pending_task_);
         if (pending_frame_) ::dftu_dataframe_free(pending_frame_);
         if (vt_->destroy) vt_->destroy(self_);
     }
@@ -134,13 +134,13 @@ class ProviderCursor final : public dataframe::Cursor {
         AbiHandle<::dftu_expr, ::dftu_expr_free> h(
             dataframe::expr_handle_wrap(predicate));
         const coro::CancelView cancel = co_await coro::this_coro::cancel_view;
-        coro::AbiContext ctx(cancel);
+        plugins::AbiContext ctx(cancel);
         ::dftu_task* t = nullptr;
         const dftu_status status =
             vt_->narrow(ctx.get(), self_, h.get(), &applied, &t);
         bool awaited_ok = status >= 0;
         if (status < 0) {
-            if (t) coro::free_abi_task(t);
+            if (t) plugins::free_abi_task(t);
             DFTRACER_UTILS_LOG_WARN(
                 "{}", plugin_error(ctx, status, "provider narrow").format());
         } else if (t) {
@@ -166,7 +166,7 @@ class ProviderCursor final : public dataframe::Cursor {
     // await.
     bool call_next(coro::CancelView cancel, std::int64_t max_rows,
                    dataframe::MorselResult& out) {
-        coro::AbiContext ctx(cancel);
+        plugins::AbiContext ctx(cancel);
         // The member is the out slot: a pending task writes it after this
         // call returns, so it must outlive the task.
         ::dftu_task* pending = nullptr;
@@ -179,7 +179,7 @@ class ProviderCursor final : public dataframe::Cursor {
         ::dftu_dataframe* frame = pending_frame_;
         pending_frame_ = nullptr;
         if (status < 0) {
-            if (pending) coro::free_abi_task(pending);
+            if (pending) plugins::free_abi_task(pending);
             if (frame) ::dftu_dataframe_free(frame);
             out = plugin_error(ctx, status, "provider next");
             return true;
@@ -441,7 +441,7 @@ class ProviderSource final
 
         void* cursor_self = nullptr;
         const ::dftu_cursor_vt* vt = nullptr;
-        coro::AbiContext ctx;
+        plugins::AbiContext ctx;
         const dftu_status status =
             handle_->vt.scan(ctx.get(), handle_->self, &creq, out_pushed.data(),
                              &cursor_self, &vt);
@@ -482,7 +482,7 @@ class ProviderSource final
         dataframe::Schema s;
         const char* const* names = nullptr;
         std::int32_t n = 0;
-        coro::AbiContext ctx;
+        plugins::AbiContext ctx;
         const dftu_status status =
             handle_->vt.schema(ctx.get(), handle_->self, &names, &n);
         if (status < 0) return plugin_error(ctx, status, "provider schema");
@@ -495,7 +495,7 @@ class ProviderSource final
 
         if (handle_->vt.schema_types) {
             ::dftu_schema built;
-            coro::AbiContext types_ctx;
+            plugins::AbiContext types_ctx;
             const dftu_status typed_status = handle_->vt.schema_types(
                 types_ctx.get(), handle_->self, &built);
             if (typed_status < 0)
@@ -540,7 +540,7 @@ class ProviderSource final
         if (!handle_->vt.apply) return dftracer::utils::dstd::nullopt;
         ::dftu_apply_result out{};
         out.status = DFTU_APPLY_NO_CHANGE;
-        coro::AbiContext ctx;
+        plugins::AbiContext ctx;
         const dftu_status applied =
             handle_->vt.apply(ctx.get(), handle_->self, &req, &out);
         if (applied < 0) {

@@ -3,7 +3,6 @@
 #define DFTRACER_UTILS_PLUGINS_HOST_FOLD_ADAPTER_STATE_H
 
 #include <dftracer/utils/common/spill_dir.h>
-#include <dftracer/utils/coro/abi_context.h>
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -11,6 +10,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi.h>
+#include <dftracer/utils/plugins/abi_context.h>
 #include <dftracer/utils/plugins/host/state_registry.h>
 
 #include <cstdint>
@@ -72,7 +72,7 @@ class StateAccum {
     void adopt_runs(StateAccum& other);
     dstd::Result<void> drain_runs();
     const dstd::Path& dir_path();
-    dstd::Error error_of(const coro::AbiContext& ctx, dftu_status status,
+    dstd::Error error_of(const plugins::AbiContext& ctx, dftu_status status,
                          const char* callback) const;
 
     const RegisteredState* reg_;

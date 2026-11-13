@@ -2,7 +2,8 @@
 // Unary numeric primitives (ilog2/mix64/popcount/...) as a hand-written Highway
 // dataframe kernel over an Int64/Uint64 column, producing an Int64 column. The
 // scalar tail reuses the core bit/hash primitives so the SIMD body and the tail
-// stay in agreement with the JIT/plugin path (plugins/prims.h mirrors them).
+// stay in agreement with the JIT/plugin path (the plugin prims header mirrors
+// them).
 
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/internal/buffers.h>

@@ -22,7 +22,7 @@
  * Only host utilities that are genuine column kernels belong here. The file
  * and filesystem families (dftu.fs.*, dftu.file.*, dftu.text.line_filter) are
  * I/O, not kernels: they register into the same name-keyed registry at runtime
- * from the domains layer (plugins/host/host_ops.h) via dftu_op_register, so the
+ * from the plugin host via dftu_op_register, so the
  * columnar engine keeps no dependency on the file system.
  *
  * This is the whole column-op surface (every dftu_series_* op). Frame ops

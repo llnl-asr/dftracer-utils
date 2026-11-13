@@ -102,7 +102,6 @@ function(dftracer_utils_interface_versions version_file out_include_dir)
     _abi_headers
     "${_inc}/common/abi.h"
     "${_inc}/common/export.h"
-    "${_inc}/coro/abi.h"
     "${_inc}/dataframe/abi.h"
     "${_inc}/dataframe/agg_op_codes.h"
     "${_inc}/duql/abi.h"

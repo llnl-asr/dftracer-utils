@@ -162,8 +162,6 @@ set(DFTRACER_UTILS_CORO_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/coro/combinators.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/coro/scope.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/coro/stop_token.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/coro/abi_context.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/coro/task_abi.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/coro/yield.cpp)
 
 # -----------------------------------------
@@ -176,8 +174,8 @@ set(DFTRACER_UTILS_RUNTIME_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/scheduler/task_executor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/scheduler/watchdog.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/runtime.cpp
-    # Coro task ABI bridge
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/task_abi.cpp
+    # Runtime C API
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/runtime_abi.cpp
     # Async I/O
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/fs/filesystem.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/fs/fs.cpp
@@ -352,6 +350,8 @@ endif()
 
 # Plugins (C ABI fold adapter + dlopen host + config tree builder)
 set(DFTRACER_UTILS_PLUGINS_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/abi_context.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/task_abi.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/host/host_ops.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/host/build_host.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/host/config.cpp

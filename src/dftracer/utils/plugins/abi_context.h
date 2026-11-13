@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: MIT
-#ifndef DFTRACER_UTILS_CORO_ABI_CONTEXT_H
-#define DFTRACER_UTILS_CORO_ABI_CONTEXT_H
+#ifndef DFTRACER_UTILS_PLUGINS_ABI_CONTEXT_H
+#define DFTRACER_UTILS_PLUGINS_ABI_CONTEXT_H
 
 #include <dftracer/utils/common/abi.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/string.h>
 
-namespace dftracer::utils::coro {
+namespace dftracer::utils::plugins {
 
 /**
  * @brief The host side of one @ref dftu_ctx: keeps the message a callback
@@ -18,7 +18,7 @@ namespace dftracer::utils::coro {
  */
 class AbiContext {
    public:
-    explicit AbiContext(CancelView cancel = {}) noexcept;
+    explicit AbiContext(coro::CancelView cancel = {}) noexcept;
     AbiContext(const AbiContext&) = delete;
     AbiContext& operator=(const AbiContext&) = delete;
 
@@ -39,10 +39,10 @@ class AbiContext {
     static const dftu_ctx_vt VT;
 
     dftu_ctx ctx_;
-    CancelView cancel_;
+    coro::CancelView cancel_;
     dstd::String message_;
 };
 
-}  // namespace dftracer::utils::coro
+}  // namespace dftracer::utils::plugins
 
-#endif  // DFTRACER_UTILS_CORO_ABI_CONTEXT_H
+#endif  // DFTRACER_UTILS_PLUGINS_ABI_CONTEXT_H

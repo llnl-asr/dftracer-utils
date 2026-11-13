@@ -5,9 +5,7 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/field_ref.h>
 #include <dftracer/utils/common/logging.h>
-#include <dftracer/utils/coro/abi_context.h>
 #include <dftracer/utils/coro/named.h>
-#include <dftracer/utils/coro/task_abi.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/agg_expr.h>
 #include <dftracer/utils/dataframe/dataframe.h>
@@ -24,9 +22,11 @@
 #include <dftracer/utils/json/value.h>
 #include <dftracer/utils/json/value_access.h>
 #include <dftracer/utils/memory/budget.h>
+#include <dftracer/utils/plugins/abi_context.h>
 #include <dftracer/utils/plugins/host/fold_adapter.h>
 #include <dftracer/utils/plugins/host/fold_adapter/ext.h>
 #include <dftracer/utils/plugins/host/fold_adapter/state.h>
+#include <dftracer/utils/plugins/task_abi.h>
 #include <dftracer/utils/runtime/io/ops.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/index/record_schema.h>
@@ -122,7 +122,7 @@ void host_log(void* h, std::uint8_t level, const char* s, std::uint32_t n) {
 // A negative result is -errno from the I/O layer; it fails the task as
 // DFTU_E_IO (DFTU_E_NOT_FOUND for ENOENT, DFTU_E_INVALID for EINVAL and EBADF,
 // DFTU_E_UNSUPPORTED for ENOSYS, EOPNOTSUPP and ENOTSUP).
-bool io_ok(coro::AbiTask* task, const char* op, std::int64_t result) {
+bool io_ok(plugins::AbiTask* task, const char* op, std::int64_t result) {
     if (result >= 0) return true;
     const int err = static_cast<int>(-result);
     dftu_status status = DFTU_E_IO;
@@ -145,7 +145,7 @@ bool io_ok(coro::AbiTask* task, const char* op, std::int64_t result) {
 
 // Runs one I/O call and stores its non-negative result in `slot`, if any.
 template <class Slot, class Make>
-coro::CoroTask<void> io_body(coro::AbiTask* task, const char* op, Slot* slot,
+coro::CoroTask<void> io_body(plugins::AbiTask* task, const char* op, Slot* slot,
                              Make make) {
     const std::int64_t result = static_cast<std::int64_t>(co_await make());
     if (io_ok(task, op, result) && slot != nullptr)
@@ -156,7 +156,7 @@ template <class Make>
 dftu_status start_task(::dftu_ctx* ctx, ::dftu_task** out, Make&& make) {
     if (out == nullptr)
         return host_fail(ctx, DFTU_E_INVALID, "the task slot is NULL");
-    *out = coro::make_abi_task(std::forward<Make>(make));
+    *out = plugins::make_abi_task(std::forward<Make>(make));
     return DFTU_OK;
 }
 
@@ -164,7 +164,7 @@ dftu_status start_task(::dftu_ctx* ctx, ::dftu_task** out, Make&& make) {
 template <class Slot, class Make>
 dftu_status io_start(::dftu_ctx* ctx, ::dftu_task** out, const char* op,
                      Slot* slot, Make make) {
-    return start_task(ctx, out, [=](coro::AbiTask* task) {
+    return start_task(ctx, out, [=](plugins::AbiTask* task) {
         return io_body<Slot>(task, op, slot, make);
     });
 }
@@ -232,7 +232,7 @@ dftu_status io_ftruncate(::dftu_ctx* ctx, void*, std::int32_t fd,
                     [=] { return runtime::io::ftruncate(fd, len); });
 }
 
-coro::CoroTask<void> fstat_body(coro::AbiTask* task, std::int32_t fd,
+coro::CoroTask<void> fstat_body(plugins::AbiTask* task, std::int32_t fd,
                                 dftu_stat* out) {
     struct stat st{};
     const ssize_t rc = co_await runtime::io::fstat(fd, &st);
@@ -250,7 +250,7 @@ coro::CoroTask<void> fstat_body(coro::AbiTask* task, std::int32_t fd,
 
 dftu_status io_fstat(::dftu_ctx* ctx, void*, std::int32_t fd, dftu_stat* out_st,
                      ::dftu_task** out) {
-    return start_task(ctx, out, [=](coro::AbiTask* task) {
+    return start_task(ctx, out, [=](plugins::AbiTask* task) {
         return fstat_body(task, fd, out_st);
     });
 }
@@ -491,7 +491,7 @@ std::int64_t timestamp_ns(const runtime::io::StatxTimestamp& t) {
     return t.sec * 1000000000ll + static_cast<std::int64_t>(t.nsec);
 }
 
-coro::CoroTask<void> statx_body(coro::AbiTask* task, std::int32_t dirfd,
+coro::CoroTask<void> statx_body(plugins::AbiTask* task, std::int32_t dirfd,
                                 dstd::String path, std::int32_t flags,
                                 std::uint32_t mask, dftu_statx* out) {
     runtime::io::Statx st{};
@@ -525,7 +525,7 @@ dftu_status io_statx(::dftu_ctx* ctx, void*, std::int32_t dirfd,
     if (path == nullptr)
         return host_fail(ctx, DFTU_E_INVALID, "statx: path is NULL");
     dstd::String copy(path);
-    return start_task(ctx, out, [=](coro::AbiTask* task) {
+    return start_task(ctx, out, [=](plugins::AbiTask* task) {
         return statx_body(task, dirfd, copy, flags, mask, out_st);
     });
 }
@@ -545,7 +545,7 @@ dftu_status io_sync_file_range(::dftu_ctx* ctx, void*, std::int32_t fd,
         [=] { return runtime::io::sync_file_range(fd, off, len, flags); });
 }
 
-coro::CoroTask<void> splice_body(coro::AbiTask* task, std::int32_t in_fd,
+coro::CoroTask<void> splice_body(plugins::AbiTask* task, std::int32_t in_fd,
                                  std::int64_t* in_off, std::int32_t out_fd,
                                  std::int64_t* out_off, std::uint64_t len,
                                  std::uint32_t flags, std::int64_t* out_n) {
@@ -565,13 +565,13 @@ dftu_status io_splice(::dftu_ctx* ctx, void*, std::int32_t in_fd,
                       std::int64_t* out_off, std::uint64_t len,
                       std::uint32_t flags, std::int64_t* out_n,
                       ::dftu_task** out) {
-    return start_task(ctx, out, [=](coro::AbiTask* task) {
+    return start_task(ctx, out, [=](plugins::AbiTask* task) {
         return splice_body(task, in_fd, in_off, out_fd, out_off, len, flags,
                            out_n);
     });
 }
 
-coro::CoroTask<void> openat2_body(coro::AbiTask* task, std::int32_t dirfd,
+coro::CoroTask<void> openat2_body(plugins::AbiTask* task, std::int32_t dirfd,
                                   dstd::String path, dftu_open_how how,
                                   std::int32_t* out_fd) {
     const runtime::io::OpenHow open_how{how.flags, how.mode, how.resolve};
@@ -588,7 +588,7 @@ dftu_status io_openat2(::dftu_ctx* ctx, void*, std::int32_t dirfd,
         return host_fail(ctx, DFTU_E_INVALID, "openat2: path or how is NULL");
     const dstd::String copy(path);
     const dftu_open_how how_copy = *how;
-    return start_task(ctx, out, [=](coro::AbiTask* task) {
+    return start_task(ctx, out, [=](plugins::AbiTask* task) {
         return openat2_body(task, dirfd, copy, how_copy, out_fd);
     });
 }
@@ -596,7 +596,7 @@ dftu_status io_openat2(::dftu_ctx* ctx, void*, std::int32_t dirfd,
 enum class XattrKind { Get, Set, FGet, FSet };
 
 // The name and the arguments live in the frame until the await ends.
-coro::CoroTask<void> xattr_body(coro::AbiTask* task, XattrKind kind,
+coro::CoroTask<void> xattr_body(plugins::AbiTask* task, XattrKind kind,
                                 const char* op, dstd::String path,
                                 std::int32_t fd, dstd::String name, void* value,
                                 std::uint64_t size, std::int32_t flags,
@@ -637,7 +637,7 @@ dftu_status xattr_start(::dftu_ctx* ctx, XattrKind kind, const char* op,
     }
     const dstd::String path_copy(by_path ? path : "");
     const dstd::String name_copy(name);
-    return start_task(ctx, out, [=](coro::AbiTask* task) {
+    return start_task(ctx, out, [=](plugins::AbiTask* task) {
         return xattr_body(task, kind, op, path_copy, fd, name_copy, value, size,
                           flags, out_n);
     });
@@ -1377,7 +1377,7 @@ PluginFold::PluginFold(const dftu_plugin* plugin,
     }
 
     if (plugin_->make_slice) {
-        coro::AbiContext ctx;
+        plugins::AbiContext ctx;
         void* made = nullptr;
         const dftu_status status =
             plugin_->make_slice(ctx.get(), plugin_->self, &made);
@@ -1558,7 +1558,7 @@ dstd::Result<void> PluginFold::step(const FoldBatch& batch) {
                            static_cast<std::int32_t>(handles.size()));
     dstd::Result<void> stepped = states_update(cdf);
     if (stepped && has_transform) {
-        coro::AbiContext ctx;
+        plugins::AbiContext ctx;
         ::dftu_dataframe* out = nullptr;
         const dftu_status status =
             plugin_->transform(ctx.get(), slice_, cdf, &host_, &out);
@@ -1575,7 +1575,7 @@ dstd::Result<void> PluginFold::step(const FoldBatch& batch) {
                 dftu_dataframe_free(out);
         }
     } else if (stepped && has_on_batch) {
-        coro::AbiContext ctx;
+        plugins::AbiContext ctx;
         const dftu_status status =
             plugin_->on_batch(ctx.get(), slice_, cdf, &host_);
         if (status < 0) {
@@ -1654,7 +1654,7 @@ dstd::Result<void> PluginFold::merge(Fold& other) {
     if (auto states = states_merge(o); !states) return states.error();
     if (!slice_) return {};
     if (o.slice_) {
-        coro::AbiContext ctx;
+        plugins::AbiContext ctx;
         const dftu_status status = plugin_->merge(ctx.get(), slice_, o.slice_);
         if (status < 0)
             return callback_error(plugin_label(), "merge", status,
@@ -1697,27 +1697,27 @@ coro::CoroTask<dstd::Result<bool>> PluginFold::finalize(const CoverageSet&) {
     if (!states) co_return states.error();
     if (slice_ && plugin_->on_finalize) {
         const coro::CancelView cancel = co_await coro::this_coro::cancel_view;
-        coro::AbiContext ctx(cancel);
+        plugins::AbiContext ctx(cancel);
         ::dftu_task* pending = nullptr;
         const dftu_status status =
             plugin_->on_finalize(ctx.get(), slice_, &host_, &pending);
         if (status < 0) {
-            if (pending) coro::free_abi_task(pending);
+            if (pending) plugins::free_abi_task(pending);
             co_return callback_error(plugin_label(), "on_finalize", status,
                                      ctx.message());
         }
-        if (pending && coro::abi_task(pending)->awaited) {
+        if (pending && plugins::abi_task(pending)->awaited) {
             co_return callback_error(plugin_label(), "on_finalize",
                                      DFTU_E_INVALID,
                                      "pending is a task that was already "
                                      "awaited");
         }
         if (pending) {
-            coro::AbiTask* task = coro::abi_task(pending);
-            const dftu_status done = co_await coro::run_abi_task(task);
+            plugins::AbiTask* task = plugins::abi_task(pending);
+            const dftu_status done = co_await plugins::run_abi_task(task);
             const dstd::Error failure =
-                done < 0 ? coro::abi_task_error(*task) : dstd::Error();
-            coro::free_abi_task(pending);
+                done < 0 ? plugins::abi_task_error(*task) : dstd::Error();
+            plugins::free_abi_task(pending);
             if (done < 0) {
                 co_return callback_error(plugin_label(), "on_finalize", done,
                                          failure.message());

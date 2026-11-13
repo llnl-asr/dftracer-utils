@@ -60,7 +60,7 @@ add_test(NAME c_abi_guard
                  c_abi_guard --config $<CONFIG>)
 
 add_executable(schema_class_bad_member EXCLUDE_FROM_ALL
-               index/schema_class_bad_member.cpp)
+               trace/index/schema_class_bad_member.cpp)
 target_link_libraries(schema_class_bad_member
                       PRIVATE testing_utilities)
 target_set_warnings(schema_class_bad_member)
@@ -81,6 +81,9 @@ add_test(NAME index_layers
 add_test(NAME library_folders
          COMMAND ${CMAKE_COMMAND} -DCOMPILE_COMMANDS=${CMAKE_BINARY_DIR}/compile_commands.json -P
                  ${CMAKE_SOURCE_DIR}/cmake/scripts/check_library_folders.cmake)
+add_test(NAME test_folders
+         COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -P
+                 ${CMAKE_SOURCE_DIR}/cmake/scripts/check_test_folders.cmake)
 add_test(NAME runtime_layers
          COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -P
                  ${CMAKE_SOURCE_DIR}/cmake/scripts/check_runtime_layers.cmake)
@@ -350,10 +353,10 @@ set(TEST_CPP_SOURCES
     common/test_hw_concurrency.cpp
     # Pipeline tests
 
-    pipeline/test_dynamic_workers.cpp
-    pipeline/test_runtime_elasticity.cpp
-    pipeline/test_blocking_handoff.cpp
-    pipeline/test_run_loop.cpp
+    runtime/scheduler/test_dynamic_workers.cpp
+    runtime/scheduler/test_runtime_elasticity.cpp
+    runtime/scheduler/test_blocking_handoff.cpp
+    coro/test_run_loop.cpp
     # Coroutine tests
     test_testing_utilities.cpp
     coro/test_coro_syntax.cpp
@@ -384,39 +387,39 @@ set(TEST_CPP_SOURCES
     coro/test_async_mutex.cpp
     coro/test_adaptive_gate.cpp
     # Async I/O tests
-    io/test_async_io.cpp
+    runtime/io/test_async_io.cpp
     # Task Graph tests
     # Reader tests
-    reader/test_reader.cpp
-    reader/test_reader_stream.cpp
-    reader/test_reader_line_byte_stream.cpp
-    reader/test_reader_multi_lines_byte_stream.cpp
-    reader/test_basic_factory.cpp
-    reader/test_reader_formats.cpp
-    reader/test_reader_robustness.cpp
+    trace/reader/test_reader.cpp
+    trace/reader/test_reader_stream.cpp
+    trace/reader/test_reader_line_byte_stream.cpp
+    trace/reader/test_reader_multi_lines_byte_stream.cpp
+    trace/reader/test_basic_factory.cpp
+    trace/reader/test_reader_formats.cpp
+    trace/reader/test_reader_robustness.cpp
     # Trace generation utility tests
-    utilities/trace_gen/test_fake_trace_writer.cpp
+    domains/workload/trace_gen/test_fake_trace_writer.cpp
     # Replay tests
-    replay/test_replay.cpp
-    replay/test_replay_fidelity.cpp
+    domains/workload/replay/test_replay.cpp
+    domains/workload/replay/test_replay_fidelity.cpp
     # Server unit tests
-    server/test_http_parser.cpp
-    server/test_http_response.cpp
-    server/test_http_request.cpp
-    server/test_query_params.cpp
-    server/test_trace_index.cpp
-    server/test_cancel.cpp
-    server/test_viz_stats_fastpath.cpp
-    server/test_viz_aggregated.cpp
-    server/test_viz_refused.cpp
-    server/test_viz_schema.cpp
-    server/test_viz_errors.cpp
-    trace/genesis/test_genesis.cpp
-    trace/provenance/test_provenance_graph.cpp
-    index/test_index_api.cpp
-    index/test_indexer.cpp
-    index/test_exit_shutdown.cpp
-    index/test_store_key.cpp
+    domains/server/test_http_parser.cpp
+    domains/server/test_http_response.cpp
+    domains/server/test_http_request.cpp
+    domains/server/test_query_params.cpp
+    domains/server/test_trace_index.cpp
+    domains/server/test_cancel.cpp
+    domains/server/test_viz_stats_fastpath.cpp
+    domains/server/test_viz_aggregated.cpp
+    domains/server/test_viz_refused.cpp
+    domains/server/test_viz_schema.cpp
+    domains/server/test_viz_errors.cpp
+    domains/workload/genesis/test_genesis.cpp
+    domains/analysis/provenance/test_provenance_graph.cpp
+    trace/index/test_index_api.cpp
+    trace/index/test_indexer.cpp
+    trace/index/test_exit_shutdown.cpp
+    trace/index/test_store_key.cpp
     store/test_segment.cpp
     store/test_file.cpp
     store/test_snapshot.cpp
@@ -434,34 +437,34 @@ set(TEST_CPP_SOURCES
     store/test_store_fork.cpp
     store/test_store_pack.cpp
     store/test_adopt.cpp
-    index/test_agg_extension.cpp
-    index/test_counters_columns.cpp
-    index/test_chunk_columns.cpp
-    index/test_prune_oracle.cpp
-    index/test_layout.cpp
-    index/test_kinds.cpp
-    index/test_member_pieces.cpp
-    index/test_index_pass_parallel.cpp
-    index/test_index_skip.cpp
-    index/test_catalog.cpp
-    index/test_spill_publish.cpp
-    index/test_bloom_open_counts.cpp
-    index/test_build_parallelism.cpp
-    index/test_build_peak.cpp
-    index/test_big_member_reads.cpp
-    index/test_parse_allocations.cpp
-    index/test_input_syscalls.cpp
-    index/test_fold_driver.cpp
-    index/test_record_schema.cpp
-    index/test_schema_registry.cpp
-    index/test_schema_class.cpp
-    index/test_prefilter.cpp
-    index/test_prefilter_fuzz.cpp
+    trace/index/test_agg_extension.cpp
+    trace/index/test_counters_columns.cpp
+    trace/index/test_chunk_columns.cpp
+    trace/index/test_prune_oracle.cpp
+    trace/index/test_layout.cpp
+    trace/index/test_kinds.cpp
+    trace/index/test_member_pieces.cpp
+    trace/index/test_index_pass_parallel.cpp
+    trace/index/test_index_skip.cpp
+    trace/index/test_catalog.cpp
+    trace/index/test_spill_publish.cpp
+    trace/index/test_bloom_open_counts.cpp
+    trace/index/test_build_parallelism.cpp
+    trace/index/test_build_peak.cpp
+    trace/index/test_big_member_reads.cpp
+    trace/index/test_parse_allocations.cpp
+    trace/index/test_input_syscalls.cpp
+    trace/index/test_fold_driver.cpp
+    trace/index/test_record_schema.cpp
+    trace/index/test_schema_registry.cpp
+    trace/index/test_schema_class.cpp
+    trace/index/test_prefilter.cpp
+    trace/index/test_prefilter_fuzz.cpp
     )
 
 # Test-only syscall counter injected into the CLI tools by
-# index/test_input_syscalls. It links none of our libraries.
-add_library(input_syscalls_interpose SHARED index/input_syscalls_interpose.cpp)
+# trace/index/test_input_syscalls. It links none of our libraries.
+add_library(input_syscalls_interpose SHARED trace/index/input_syscalls_interpose.cpp)
 set_target_properties(input_syscalls_interpose PROPERTIES
   CXX_VISIBILITY_PRESET default VISIBILITY_INLINES_HIDDEN OFF)
 target_set_warnings(input_syscalls_interpose)
@@ -472,13 +475,13 @@ endif()
 # These read counters that exist only when DFTRACER_UTILS_TEST_PROBES is ON.
 if(DFTRACER_UTILS_TEST_PROBES)
   list(APPEND TEST_CPP_SOURCES
-    index/test_build_memory.cpp
-    index/test_design_a.cpp
-    index/test_parser_reuse.cpp
-    index/test_agg_partials_store.cpp
-    index/test_event_cost.cpp
-    index/test_parse_walks.cpp
-    index/test_serial_stages.cpp
+    trace/index/test_build_memory.cpp
+    trace/index/test_design_a.cpp
+    trace/index/test_parser_reuse.cpp
+    trace/index/test_agg_partials_store.cpp
+    trace/index/test_event_cost.cpp
+    trace/index/test_parse_walks.cpp
+    trace/index/test_serial_stages.cpp
     )
 endif()
 
@@ -557,11 +560,11 @@ foreach(test_file ${TEST_CPP_SOURCES})
   # Builds a dozen indexes. Each commit ends in a full fsync (F_FULLFSYNC on
   # macOS), so it waits on the disk and slows down when the rest of the suite
   # writes at the same time.
-  # index/test_indexer and reader/test_reader build indexes too and can pass
-  # their limit under the full suite.
-  if(bin_exec STREQUAL "index/test_build_memory"
-     OR bin_exec STREQUAL "index/test_indexer"
-     OR bin_exec STREQUAL "reader/test_reader")
+  # trace/index/test_indexer and trace/reader/test_reader build indexes too
+  # and can pass their limit under the full suite.
+  if(bin_exec STREQUAL "trace/index/test_build_memory"
+     OR bin_exec STREQUAL "trace/index/test_indexer"
+     OR bin_exec STREQUAL "trace/reader/test_reader")
     set_tests_properties(${bin_exec} PROPERTIES RUN_SERIAL TRUE)
   endif()
 
@@ -584,9 +587,9 @@ foreach(test_file ${TEST_CPP_SOURCES})
   # test_big_member_reads inflates several large gzip members and can pass the
   # default limit on a small CI runner under the full suite. test_catalog and
   # test_build_memory can too, and more so under coverage.
-  if(bin_exec STREQUAL "index/test_big_member_reads"
-     OR bin_exec STREQUAL "index/test_catalog"
-     OR bin_exec STREQUAL "index/test_build_memory")
+  if(bin_exec STREQUAL "trace/index/test_big_member_reads"
+     OR bin_exec STREQUAL "trace/index/test_catalog"
+     OR bin_exec STREQUAL "trace/index/test_build_memory")
     set(slow_serial_timeout 300)
     if(DFTRACER_UTILS_COVERAGE)
       set(slow_serial_timeout 900)
@@ -600,12 +603,12 @@ foreach(test_file ${TEST_CPP_SOURCES})
 
   # The allocator counts its allocations only in debug mode, which is fixed
   # before the first allocation.
-  if(bin_exec STREQUAL "index/test_parse_allocations")
+  if(bin_exec STREQUAL "trace/index/test_parse_allocations")
     set_tests_properties(${bin_exec} PROPERTIES ENVIRONMENT
                                            "DFTRACER_UTILS_MEMORY_DEBUG=1")
   endif()
 
-  if(bin_exec STREQUAL "index/test_input_syscalls")
+  if(bin_exec STREQUAL "trace/index/test_input_syscalls")
     if(DFTRACER_UTILS_ENABLE_ASAN OR DFTRACER_UTILS_ENABLE_TSAN
        OR DFTRACER_UTILS_ENABLE_UBSAN)
       # strace and the interposer cannot run a sanitizer binary's children
@@ -621,7 +624,7 @@ foreach(test_file ${TEST_CPP_SOURCES})
     set_tests_properties(${bin_exec} PROPERTIES TIMEOUT 300 RUN_SERIAL TRUE)
   endif()
 
-  if(bin_exec STREQUAL "index/test_index_skip")
+  if(bin_exec STREQUAL "trace/index/test_index_skip")
     add_dependencies(${target_name} dftracer_index)
     target_compile_definitions(${target_name} PRIVATE
       DFTRACER_UTILS_TEST_INDEX_BINARY="$<TARGET_FILE:dftracer_index>")
@@ -631,9 +634,9 @@ foreach(test_file ${TEST_CPP_SOURCES})
   # instrumentation makes it significantly slower, and TSan more so. The prune
   # oracle reads its corpus once per query and time range.
   # The prefilter fuzz scans 300 random queries four ways.
-  if(bin_exec STREQUAL "reader/test_reader_robustness"
-     OR bin_exec STREQUAL "index/test_prune_oracle"
-     OR bin_exec STREQUAL "index/test_prefilter_fuzz")
+  if(bin_exec STREQUAL "trace/reader/test_reader_robustness"
+     OR bin_exec STREQUAL "trace/index/test_prune_oracle"
+     OR bin_exec STREQUAL "trace/index/test_prefilter_fuzz")
     set(robustness_timeout 600)
     if(DFTRACER_UTILS_COVERAGE)
       set(robustness_timeout 1800)
@@ -656,7 +659,7 @@ endif()
 # +++++++++++++++++++++++++++++++++++++++++
 
 set(TEST_C_SOURCES
-    index/test_indexer_abi.c
+    trace/index/test_indexer_abi.c
     store/test_store_abi.c
     )
 
@@ -698,10 +701,22 @@ foreach (test_file ${TEST_C_SOURCES})
 endforeach()
 
 # +++++++++++++++++++++++++++++++++++++++++
-# Utilities Tests
+# File I/O Library Tests
 # +++++++++++++++++++++++++++++++++++++++++
 
-add_subdirectory(utilities)
+add_subdirectory(fileio)
+
+# +++++++++++++++++++++++++++++++++++++++++
+# Plugin Host Tests
+# +++++++++++++++++++++++++++++++++++++++++
+
+add_subdirectory(plugins)
+
+# +++++++++++++++++++++++++++++++++++++++++
+# Domains Library Tests
+# +++++++++++++++++++++++++++++++++++++++++
+
+add_subdirectory(domains)
 
 # +++++++++++++++++++++++++++++++++++++++++
 # Trace Library Tests

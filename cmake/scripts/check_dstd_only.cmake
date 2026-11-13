@@ -53,19 +53,16 @@ set(_dirs
     tests/dstd
     tests/compose
     tests/coro
+    tests/domains
     tests/duql
-    tests/index
-    tests/io
+    tests/fileio
     tests/layering
     tests/layout
     tests/yaml
     tests/memory
-    tests/reader
-    tests/replay
+    tests/plugins
     tests/runtime
-    tests/server
     tests/store
-    tests/utilities
     tests/trace)
 
 set(_extra_files

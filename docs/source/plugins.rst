@@ -1321,7 +1321,7 @@ handle every later step short-circuits on, so a chain fails once, at the
 end, not with a crash in the middle. ``emit_result_frame`` emits an eager
 frame the same way.
 
-``tests/utilities/plugins/reference_plugin.c`` is the conformance plugin: it
+``tests/plugins/reference_plugin.c`` is the conformance plugin: it
 touches every service slot, registers an op, a source, a state and a node,
 and is the one file to read for the exact C of each.
 
@@ -1389,7 +1389,7 @@ and keep it loaded while they run: C++ ``Plugins::builder().add(path)``,
 Python ``dftracer.utils.plugins.Plugins``, or
 ``dftracer_index --plugin path``. ``Indexer::manifest`` and ``explain`` list
 the extension by name, and ``rebuild_extension`` and ``drop_extension``
-accept it. ``tests/utilities/plugins/index_minmax_plugin.c`` is a complete
+accept it. ``tests/plugins/index_minmax_plugin.c`` is a complete
 extension: per chunk min and max of one number.
 
 Host services index

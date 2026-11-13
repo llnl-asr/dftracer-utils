@@ -10,18 +10,18 @@ set(TRACE_TEST_SOURCES
     test_chunk_verifier.cpp
     test_trace_config.cpp
     test_chunk_extractor.cpp
-    test_index_builder.cpp
+    index/build/test_batch_builder.cpp
     test_metadata_collector.cpp
     test_time_metric.cpp
     test_index_root_stat.cpp
 
     # Indexing
-    indexing/test_bloom_filter.cpp
-    indexing/test_scalable_bloom_filter.cpp
-    indexing/test_chunk_statistics.cpp
-    indexing/test_chunk_indexer.cpp
-    indexing/test_chunk_pruner.cpp
-    indexing/test_shard_manifest.cpp
+    index/extensions/test_bloom_filter.cpp
+    index/extensions/test_scalable_bloom_filter.cpp
+    index/schemas/dft/test_chunk_statistics.cpp
+    index/build/test_chunk_indexer.cpp
+    index/plan/test_chunk_pruner.cpp
+    index/store/test_shard_manifest.cpp
 
     # Views
     views/test_view_definition.cpp
@@ -52,8 +52,6 @@ set(TRACE_TEST_SOURCES
     views/test_view_agg_parity.cpp
     views/test_view_agg_keys.cpp
     views/test_view_agg_scan.cpp
-    views/test_stats_view.cpp
-    views/test_detail_stats_view.cpp
     views/test_view_mv.cpp
     views/test_coverage.cpp
     views/test_fold.cpp
@@ -64,12 +62,12 @@ set(TRACE_TEST_SOURCES
     views/test_stream_early_out.cpp
     views/test_agg_transform_memory.cpp
     views/test_vectorized_fold.cpp
-    views/test_rollup_store.cpp
-    views/test_query_cache.cpp
-    views/test_lookup_store.cpp
-    views/test_rowset_fold.cpp
-    views/test_bloom_fold.cpp
-    views/test_catalog_fold.cpp
+    index/cache/test_rollup_store.cpp
+    index/cache/test_query_cache.cpp
+    index/cache/test_lookup_store.cpp
+    index/extensions/test_rowset_fold.cpp
+    index/extensions/test_bloom_fold.cpp
+    index/extensions/test_catalog_fold.cpp
     views/test_raw_gzip_fuse.cpp
     views/test_restart_scan.cpp
     views/test_event_source.cpp
@@ -83,31 +81,142 @@ set(TRACE_TEST_SOURCES
     views/test_drop_rename_views.cpp
     views/test_schemaless.cpp
 
-    # Statistics
-    statistics/test_trace_statistics.cpp
-    statistics/test_statistics_query.cpp
-    statistics/test_detailed_statistics.cpp
-
     # Aggregators
-    aggregators/test_aggregation_metrics.cpp
-    aggregators/test_aggregation_config.cpp
-    aggregators/test_system_metrics.cpp
-    aggregators/test_agg_parity.cpp
-    aggregators/test_quantile_store.cpp
-    aggregators/test_agg_partial.cpp
-    aggregators/test_agg_query.cpp
+    index/schemas/dft/agg/test_aggregation_metrics.cpp
+    index/schemas/dft/agg/test_aggregation_config.cpp
+    index/schemas/dft/agg/test_system_metrics.cpp
+    index/schemas/dft/agg/test_quantile_store.cpp
+    index/schemas/dft/agg/test_agg_partial.cpp
+    test_agg_query.cpp
 
-    # Comparator
-    comparator/test_comparison_result.cpp
-    comparator/test_comparison_config.cpp
-    comparator/test_is_data_transfer_op.cpp
-    comparator/test_tree_table_formatter.cpp
+    # Internal
+    internal/test_is_data_transfer_op.cpp
+
+    # Index
+    index/test_index_builder.cpp
+    index/test_hash_table_aggregation.cpp
+
+    # Reader
+    reader/test_trace_reader.cpp
+    reader/test_member_decode_cache.cpp
+    reader/test_member_cache_integration.cpp
+    reader/test_member_cache_exit.cpp
+    reader/test_reader_fatal.cpp
+    reader/test_large_gzip_members.cpp
+    reader/test_gzip_restart_points.cpp
+    reader/test_sigill_regression.cpp
+    reader/test_indexed_file_reader.cpp
+    reader/test_async_indexed_file_line_generator.cpp
 )
 
 # These read counters that exist only when DFTRACER_UTILS_TEST_PROBES is ON.
 if(DFTRACER_UTILS_TEST_PROBES)
   list(APPEND TRACE_TEST_SOURCES test_bootstrap_parallelism.cpp
        test_bootstrap_peak.cpp)
+endif()
+
+# +++++++++++++++++++++++++++++++++++++++++
+# Arrow Tests (optional, requires nanoarrow)
+# +++++++++++++++++++++++++++++++++++++++++
+
+if(DFTRACER_UTILS_ENABLE_ARROW)
+  foreach(ARROW_TEST_SOURCE arrow/test_arrow_column_builder.cpp
+                            arrow/test_schema_reconcile.cpp)
+    string(REPLACE ".cpp" "" arrow_bin_exec ${ARROW_TEST_SOURCE})
+    string(REPLACE "/" "_" arrow_target "trace_${arrow_bin_exec}")
+
+    add_executable(${arrow_target} ${ARROW_TEST_SOURCE})
+    target_include_directories(${arrow_target} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+    target_link_libraries(${arrow_target} PRIVATE doctest::doctest dftracer_utils testing_utilities)
+    link_nanoarrow(${arrow_target} STATIC)
+    target_set_warnings(${arrow_target})
+
+    get_filename_component(arrow_bin_dir ${arrow_bin_exec} DIRECTORY)
+    get_filename_component(arrow_bin_name ${arrow_bin_exec} NAME)
+    if(arrow_bin_dir)
+      set_target_properties(${arrow_target} PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/${arrow_bin_dir}")
+    endif()
+    set_target_properties(${arrow_target} PROPERTIES OUTPUT_NAME ${arrow_bin_name})
+
+    if(DFTRACER_UTILS_COVERAGE AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+      target_compile_options(${arrow_target} PRIVATE --coverage -fprofile-arcs -ftest-coverage)
+      target_link_libraries(${arrow_target} PRIVATE --coverage)
+    endif()
+
+    set(arrow_workdir "${CMAKE_CURRENT_BINARY_DIR}/workdirs/${arrow_target}")
+    file(MAKE_DIRECTORY "${arrow_workdir}")
+    add_test(NAME trace/${arrow_bin_exec} COMMAND ${arrow_target})
+    set_tests_properties(trace/${arrow_bin_exec} PROPERTIES
+                         WORKING_DIRECTORY "${arrow_workdir}")
+  endforeach()
+endif()
+
+# +++++++++++++++++++++++++++++++++++++++++
+# Arrow IPC Tests (optional, requires nanoarrow IPC)
+# +++++++++++++++++++++++++++++++++++++++++
+
+if(DFTRACER_UTILS_ENABLE_ARROW_IPC)
+  # IPC Writer tests
+  set(ARROW_IPC_TEST_SOURCE arrow/test_arrow_ipc_writer.cpp)
+  string(REPLACE ".cpp" "" arrow_ipc_bin_exec ${ARROW_IPC_TEST_SOURCE})
+  string(REPLACE "/" "_" arrow_ipc_target "trace_${arrow_ipc_bin_exec}")
+
+  add_executable(${arrow_ipc_target} ${ARROW_IPC_TEST_SOURCE})
+  target_include_directories(${arrow_ipc_target} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+  target_link_libraries(${arrow_ipc_target} PRIVATE doctest::doctest dftracer_utils testing_utilities)
+  link_nanoarrow(${arrow_ipc_target} STATIC)
+  target_set_warnings(${arrow_ipc_target})
+
+  get_filename_component(arrow_ipc_bin_dir ${arrow_ipc_bin_exec} DIRECTORY)
+  get_filename_component(arrow_ipc_bin_name ${arrow_ipc_bin_exec} NAME)
+  if(arrow_ipc_bin_dir)
+    set_target_properties(${arrow_ipc_target} PROPERTIES
+      RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/${arrow_ipc_bin_dir}")
+  endif()
+  set_target_properties(${arrow_ipc_target} PROPERTIES OUTPUT_NAME ${arrow_ipc_bin_name})
+
+  if(DFTRACER_UTILS_COVERAGE AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(${arrow_ipc_target} PRIVATE --coverage -fprofile-arcs -ftest-coverage)
+    target_link_libraries(${arrow_ipc_target} PRIVATE --coverage)
+  endif()
+
+  set(arrow_ipc_workdir "${CMAKE_CURRENT_BINARY_DIR}/workdirs/${arrow_ipc_target}")
+  file(MAKE_DIRECTORY "${arrow_ipc_workdir}")
+  add_test(NAME trace/${arrow_ipc_bin_exec} COMMAND ${arrow_ipc_target})
+  set_tests_properties(trace/${arrow_ipc_bin_exec} PROPERTIES
+                       WORKING_DIRECTORY "${arrow_ipc_workdir}")
+
+  # IPC Reader tests
+  set(ARROW_IPC_READER_SOURCE arrow/test_arrow_ipc_reader.cpp)
+  string(REPLACE ".cpp" "" arrow_ipc_reader_bin ${ARROW_IPC_READER_SOURCE})
+  string(REPLACE "/" "_" arrow_ipc_reader_target "trace_${arrow_ipc_reader_bin}")
+
+  add_executable(${arrow_ipc_reader_target} ${ARROW_IPC_READER_SOURCE})
+  target_include_directories(${arrow_ipc_reader_target} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+  target_link_libraries(${arrow_ipc_reader_target} PRIVATE doctest::doctest dftracer_utils testing_utilities)
+  link_nanoarrow(${arrow_ipc_reader_target} STATIC)
+  target_set_warnings(${arrow_ipc_reader_target})
+  target_enable_coroutine(${arrow_ipc_reader_target})
+
+  get_filename_component(arrow_ipc_reader_dir ${arrow_ipc_reader_bin} DIRECTORY)
+  get_filename_component(arrow_ipc_reader_name ${arrow_ipc_reader_bin} NAME)
+  if(arrow_ipc_reader_dir)
+    set_target_properties(${arrow_ipc_reader_target} PROPERTIES
+      RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/${arrow_ipc_reader_dir}")
+  endif()
+  set_target_properties(${arrow_ipc_reader_target} PROPERTIES OUTPUT_NAME ${arrow_ipc_reader_name})
+
+  if(DFTRACER_UTILS_COVERAGE AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(${arrow_ipc_reader_target} PRIVATE --coverage -fprofile-arcs -ftest-coverage)
+    target_link_libraries(${arrow_ipc_reader_target} PRIVATE --coverage)
+  endif()
+
+  set(arrow_ipc_reader_workdir "${CMAKE_CURRENT_BINARY_DIR}/workdirs/${arrow_ipc_reader_target}")
+  file(MAKE_DIRECTORY "${arrow_ipc_reader_workdir}")
+  add_test(NAME trace/${arrow_ipc_reader_bin} COMMAND ${arrow_ipc_reader_target})
+  set_tests_properties(trace/${arrow_ipc_reader_bin} PROPERTIES
+                       WORKING_DIRECTORY "${arrow_ipc_reader_workdir}")
 endif()
 
 foreach(test_file ${TRACE_TEST_SOURCES})
@@ -172,18 +281,9 @@ set_tests_properties(trace/views/test_dynamic_prune_t224 PROPERTIES
   ENVIRONMENT "DFTRACER_UTILS_THREADS=224")
 
 
-# The parity test replays references recorded from the CLI tools and the View.
-target_compile_definitions(trace_aggregators_test_agg_parity PRIVATE
-  DFTRACER_UTILS_AGG_PARITY_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/aggregators/data")
-add_dependencies(trace_aggregators_test_agg_parity
-                 dftracer_comparator dftracer_gen_dlio_config)
-set_tests_properties(trace/aggregators/test_agg_parity PROPERTIES
-  ENVIRONMENT "DFTRACER_UTILS_COMPARATOR_PATH=$<TARGET_FILE:dftracer_comparator>;DFTRACER_UTILS_GEN_DLIO_CONFIG_PATH=$<TARGET_FILE:dftracer_gen_dlio_config>"
-  TIMEOUT 600)
-
 # The allocator counts its allocations only in debug mode, which is fixed
 # before the first allocation.
-set_tests_properties(trace/aggregators/test_quantile_store PROPERTIES
+set_tests_properties(trace/index/schemas/dft/agg/test_quantile_store PROPERTIES
   ENVIRONMENT "DFTRACER_UTILS_MEMORY_DEBUG=1")
-set_tests_properties(trace/aggregators/test_agg_partial PROPERTIES
+set_tests_properties(trace/index/schemas/dft/agg/test_agg_partial PROPERTIES
   ENVIRONMENT "DFTRACER_UTILS_MEMORY_DEBUG=1")

@@ -3,12 +3,12 @@
 # entry may exceed that default.
 
 schema_class_bad_member 60
-reader/test_reader_robustness 60
-server/test_viz_stats_fastpath 60
-index/test_build_memory 60
-index/test_prefilter_fuzz 60
+trace/reader/test_reader_robustness 60
+domains/server/test_viz_stats_fastpath 60
+trace/index/test_build_memory 60
+trace/index/test_prefilter_fuzz 60
 binaries/test_dftracer_server 60
-utilities/reader/test_gzip_restart_points 60
+trace/reader/test_gzip_restart_points 60
 trace/views/test_view_index_freshness 60
 trace/views/test_view_duql 60
 trace/views/test_view_duql_joins 60

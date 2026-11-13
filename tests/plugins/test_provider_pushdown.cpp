@@ -101,10 +101,7 @@ void fixture_cursor_destroy(void* self) {
 
 const dftu_cursor_vt FIXTURE_CURSOR_VT = {sizeof(dftu_cursor_vt),
                                           fixture_cursor_next,
-                                          fixture_cursor_destroy,
-                                          nullptr,
-                                          nullptr,
-                                          nullptr};
+                                          fixture_cursor_destroy, nullptr};
 
 dftu_dataframe* make_base_frame() {
     std::int64_t ids[10];
@@ -125,8 +122,9 @@ dftu_dataframe* make_base_frame() {
 // 10 rows: id 0..9, val = id*10. Honors/ignores projection and applies its
 // one filter per cfg->filter_behavior, so a single vtable drives every test
 // below by varying `self`.
-dftu_status fixture_scan(dftu_ctx*, void* self, const dftu_scan_request* req,
-                         int32_t* out_pushed, void** out_cursor_self,
+dftu_status fixture_scan(dftu_ctx*, void* self, const dftu_plugin_host*,
+                         const dftu_scan_request* req, int32_t* out_pushed,
+                         void** out_cursor_self,
                          const dftu_cursor_vt** out_vt) {
     auto* cfg = static_cast<FixtureConfig*>(self);
     dftu_dataframe* df = make_base_frame();
@@ -212,20 +210,23 @@ dstd::SharedPtr<dataframe::Source> make_fixture_source(FixtureConfig& cfg) {
     return plugins::host::make_provider_source(vt, &cfg);
 }
 
-dftu_status no_cursor_scan(dftu_ctx*, void*, const dftu_scan_request*, int32_t*,
-                           void**, const dftu_cursor_vt**) {
+dftu_status no_cursor_scan(dftu_ctx*, void*, const dftu_plugin_host*,
+                           const dftu_scan_request*, int32_t*, void**,
+                           const dftu_cursor_vt**) {
     return DFTU_OK;
 }
 
-dftu_status failing_scan(dftu_ctx* ctx, void*, const dftu_scan_request*,
-                         int32_t*, void**, const dftu_cursor_vt**) {
+dftu_status failing_scan(dftu_ctx* ctx, void*, const dftu_plugin_host*,
+                         const dftu_scan_request*, int32_t*, void**,
+                         const dftu_cursor_vt**) {
     return dftu_fail(ctx, DFTU_E_INVALID, "scan refused by the provider");
 }
 
 dstd::SharedPtr<dataframe::Source> make_scan_source(
     FixtureConfig& cfg,
-    dftu_status (*scan)(dftu_ctx*, void*, const dftu_scan_request*, int32_t*,
-                        void**, const dftu_cursor_vt**)) {
+    dftu_status (*scan)(dftu_ctx*, void*, const dftu_plugin_host*,
+                        const dftu_scan_request*, int32_t*, void**,
+                        const dftu_cursor_vt**)) {
     const dftu_source_vt vt = {sizeof(dftu_source_vt), fixture_schema, scan,
                                fixture_destroy,        nullptr,        nullptr};
     return plugins::host::make_provider_source(vt, &cfg);

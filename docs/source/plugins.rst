@@ -107,9 +107,9 @@ Each stage maps one-to-one between the SDK and the ABI:
      - ``transform``
      - in place of ``step``: rewrites the batch for every later plugin
        (:doc:`guides/plugins/inter-plugin-comms`)
-   * - ``bytes() const`` / ``reclaim(want)``
-     - ``bytes`` / ``reclaim``
-     - after a step or merge past the memory budget
+   * - ``Host::memory()`` (``Reservation::set_reclaimer``)
+     - ``DFTU_SVC_MEMORY``
+     - a grow past the memory budget runs the reclaimer
        (:doc:`guides/runtime/memory-budget`)
    * - ``static ... provides()`` / ``consumes()``
      - ``provides`` / ``consumes``
@@ -953,6 +953,27 @@ grammar, such as a value in an object without a key, returns ``DFTU_E_INVALID``
 and a message, and leaves the writer as it was. Per-event JSON is not in this
 service; the host columns read it.
 
+``DFTU_SVC_MEMORY`` (``Host::memory()``, ``dftu_svc_memory``) is the host's
+memory manager lent to a plugin. Every loaded plugin has one pool, named after
+the plugin, so the bytes of its blocks and reservations show in the pool gauges
+under that name. ``alloc``, ``realloc`` and ``free`` take the size and the
+alignment and keep no header; a block still live when the plugin unloads is
+reported as a leak. A slice that holds growing state reserves it instead of
+reporting a size: ``reserve`` opens a reservation, ``try_grow`` adds bytes and
+``shrink`` and ``release`` give them back (the SDK ``Reservation`` releases in
+its destructor). ``try_grow`` is all or nothing. Past the scan's memory budget
+or the process budget it returns ``DFTU_E_NO_MEMORY`` with a message and leaves
+the reservation as it was. Before it fails, the host calls the reclaimer set
+with ``set_reclaimer`` once with the number of bytes missing; the reclaimer
+frees that much of the slice (writes part of it out, compacts, drops a cache)
+and returns how many bytes it freed, which the host takes off the reservation,
+and the grow then succeeds when that made room. A reservation the plugin leaves
+at unload is released by the host, which logs an error. The service is served by
+the run-time host that a fold callback receives and by the host that a
+provider's ``scan`` or a node's ``open`` receives (see "The cursor host" under
+section 14), not by the build-phase host. ``dftu_ctx`` scratch stays the tool
+for short per-call buffers.
+
 A host utility is reached as a named op instead
 (``Host::run_op("dftu.hash.fnv1a", {column})``, ``DFTU_SVC_OPS``). Every
 ``dftu_svc_task`` call has an SDK form (``Host::spawn``, ``Host::tasks()``,
@@ -1273,7 +1294,9 @@ views (``ExprView`` with ``as_compare`` / ``as_logical`` / ``as_not`` /
 values (``OwnedFrame``, ``Applied<S>``). ``scan``, ``next`` and the planning
 hooks return a ``dstd::Result``, and an error fails the call with its status
 and message. A failed cursor fails the scan with it; for a failed planning hook
-the host logs the message and applies the op itself.
+the host logs the message and applies the op itself. ``scan`` also receives the
+cursor's ``Host``; a cursor whose ``next`` takes ``(std::int64_t, const Host&)``
+in place of ``(std::int64_t)`` gets a ``Host`` that is good for that call.
 
 .. code-block:: cpp
 
@@ -1290,7 +1313,7 @@ the host logs the message and applies the op itself.
                return std::move(frame);
            }
        };
-       pl::ScanResult<Cursor> scan(const pl::ScanView&) const;
+       pl::ScanResult<Cursor> scan(const pl::ScanView&, const pl::Host&) const;
        // `id > k` becomes a narrower range; anything else stays with the engine.
        dstd::Optional<pl::Applied<Range>> apply_filter(pl::ExprView p) const {
            auto c = p.as_compare();
@@ -1304,6 +1327,23 @@ the host logs the message and applies the op itself.
    return pl::plugin(ctx, h, config)
        .source<Range>("me.range", dstd::make_unique<Range>(0, 1000))
        .build(out);
+
+**The cursor host.** A provider's ``scan`` and a node's ``open`` receive a
+``const dftu_plugin_host*`` that stays valid until the cursor's ``destroy`` has
+returned. It serves the services of a fold callback's host that need no scan:
+``DFTU_SVC_MEMORY``, ``DFTU_SVC_IO``, ``DFTU_SVC_FS``, ``DFTU_SVC_JSON``,
+``DFTU_SVC_YAML``, ``DFTU_SVC_SKETCH``, ``DFTU_SVC_ARROW``, ``DFTU_SVC_OPS`` and
+the registration groups, which refuse at run time. It returns NULL for the
+services that belong to one scan: ``DFTU_SVC_TASK``, ``DFTU_SVC_FILEIO``,
+``DFTU_SVC_AGG``, ``DFTU_SVC_RESULT``, ``DFTU_SVC_PORTS``, ``DFTU_SVC_DUQL`` and
+``DFTU_SVC_TRACE``, and its ``resolve`` and ``intern`` find nothing, since a
+cursor has no intern table. A cursor reserves memory through it like a fold
+slice, and the reservations are charged to the pool of the plugin, one budget
+shared with its folds. When another holder of the process budget asks the pool
+for bytes, the host runs the reclaimers of the cursor's reservations between two
+of its ``next()`` calls, on the thread that drives it. A reservation the cursor
+still holds when its ``destroy`` returns is released by the host, which logs an
+error.
 
 **Library lifetime.** The host keeps a plugin's shared library loaded while
 anything made from it is alive: a registered node, provider, index
@@ -1329,14 +1369,14 @@ may not push a filter or projection through the node, and ``explain`` names
 it. ``LazyFrame::op(name, args)`` / ``dftu_lazyframe_op`` stacks it on a
 plan like any built-in step. The cursor's optional slots let it take part in
 the plan's machinery: ``narrow`` forwards a join's key set to its input,
-``open`` receives the plan's memory budget in bytes, and ``bytes`` /
-``reclaim`` hold it to that budget
+and ``open`` receives the plan's memory budget in bytes and the cursor host,
+through which the cursor reserves memory
 (:doc:`guides/runtime/memory-budget`).
 
 In C++, ``plugins/plugin/node.h`` does the same for a node class:
 ``output_schema(SchemaView in, OpArgs args, SchemaBuilder& out)`` and
-``open(InputCursor in, OpArgs args, std::uint64_t memory_budget)`` returning
-a cursor like a source's. ``memory_budget`` is the plan's budget in bytes,
+``open(InputCursor in, OpArgs args, std::uint64_t memory_budget, const Host& host)``
+returning a cursor like a source's. ``memory_budget`` is the plan's budget in bytes,
 never 0; a node that holds state sizes its spill threshold and its output
 frames from it.
 ``InputCursor`` owns the upstream: ``next()`` pulls it (running an upstream
@@ -1353,7 +1393,7 @@ node when ``open`` succeeds and by the host when it fails.
            dstd::Optional<pl::OwnedFrame> next(std::int64_t rows);  // pull, transform
        };
        dstd::UniquePtr<Cursor> open(pl::InputCursor in, const pl::OpArgs&,
-                                    std::uint64_t) const {
+                                    std::uint64_t, const pl::Host&) const {
            return dstd::make_unique<Cursor>(Cursor{std::move(in)});
        }
    };
@@ -1485,6 +1525,9 @@ that covers it:
    * - ``Host::json()`` / ``Host::yaml()`` (typed ``Json``, ``Yaml``, RAII
        ``Doc``)
      - ``DFTU_SVC_JSON``, ``DFTU_SVC_YAML``
+     - `9. Async work and I/O`_
+   * - ``Host::memory()`` (typed ``Memory``, RAII ``Reservation``)
+     - ``DFTU_SVC_MEMORY``
      - `9. Async work and I/O`_
    * - ``Host::duql_compile`` / ``duql_matches``
      - ``DFTU_SVC_DUQL``

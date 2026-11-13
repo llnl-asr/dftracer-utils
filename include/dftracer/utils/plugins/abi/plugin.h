@@ -106,19 +106,10 @@ typedef struct dftu_plugin {
        this, so such a plugin keeps every column. A projection is an
        optimisation and must never cost correctness. */
     const char* const* (*reads)(void* self);
-    /** Optional (may be NULL). Bytes `slice` holds: the host's only measure
-       of a slice against the scan's memory budget. A plugin that declares no
-       size is never asked to reclaim, and its slice grows unbounded. */
-    uint64_t (*bytes)(void* slice);
-    /** Optional (may be NULL). Free up to `want` bytes of `slice` however
-       the plugin can (write part of it out, compact, drop a cache) and
-       return how many were freed; 0 says nothing could go. The host calls it
-       after an on_batch or merge that left bytes(slice) past the budget,
-       and logs once per slice when a call frees nothing while still over,
-       so a state that cannot shrink is reported rather than silently
-       exceeding the budget. A registered state (dftu_svc_agg) is spilled by
-       the host through its serialize pair instead and needs none of this. */
-    uint64_t (*reclaim)(void* slice, uint64_t want);
+    /* A slice that holds growing state reserves its bytes through
+       dftu_svc_memory (DFTU_SVC_MEMORY) and sets a reclaimer there. A
+       registered state (dftu_svc_agg) is spilled by the host through its
+       serialize pair instead. */
     /** Optional (may be NULL). Rewrite the batch every plugin AFTER this one
        in fold order receives: set *out to a NEW dftu_dataframe (the host frees
        it) with rows dropped or added and columns added, dropped or changed,

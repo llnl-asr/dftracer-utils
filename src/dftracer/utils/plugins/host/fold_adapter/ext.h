@@ -11,7 +11,9 @@
 #include <dftracer/utils/plugins/abi.h>
 #include <dftracer/utils/plugins/host/host_status.h>
 #include <dftracer/utils/plugins/host/plugin_library.h>
+#include <dftracer/utils/plugins/host/plugin_memory.h>
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -59,6 +61,18 @@ const void* fs_ext_vtable();
 const void* fileio_ext_vtable();
 const void* json_ext_vtable();
 const void* yaml_ext_vtable();
+const void* memory_ext_vtable();
+/// The dftu.svc.memory table for the host of a provider or node cursor.
+const void* cursor_memory_ext_vtable();
+
+/// The table of a service that keeps no state in a fold (io, sketch, arrow,
+/// ops, providers, nodes, index, fs, json and yaml), shared by the host of a
+/// fold and the host of a cursor; null for any other id.
+const void* stateless_service(const char* ext_id);
+
+/// Logs a plugin's line at `level` (a dftu_log_level) tagged with its name.
+void log_plugin_line(dstd::StringView plugin, std::uint8_t level, const char* s,
+                     std::uint32_t n);
 
 /// dftu_svc_ops::register_op with the plugin-name gate applied. Shared with
 /// the build-phase host, whose op registration is the same call. The record
@@ -75,13 +89,15 @@ dftu_status task_run(::dftu_ctx* ctx, void* h, ::dftu_task* t);
 /// build-phase host, whose provider registration is the same call.
 dftu_status register_plugin_provider(::dftu_ctx* ctx, const char* name,
                                      const ::dftu_source_vt* vt, void* self,
-                                     dstd::SharedPtr<PluginLibrary> library);
+                                     dstd::SharedPtr<PluginLibrary> library,
+                                     dstd::SharedPtr<PluginMemory> memory);
 
 /// dftu_svc_nodes::register_node with the same plugin-name gate, forwarding
 /// into the process-lifetime node registry.
 dftu_status register_plugin_node(::dftu_ctx* ctx, const char* name,
                                  const ::dftu_node_vt* vt, void* self,
-                                 dstd::SharedPtr<PluginLibrary> library);
+                                 dstd::SharedPtr<PluginLibrary> library,
+                                 dstd::SharedPtr<PluginMemory> memory);
 
 /// dftu_svc_index::register_extension with the same plugin-name gate,
 /// forwarding into the process index extension registry.

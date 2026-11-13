@@ -20,6 +20,7 @@
 #include <dftracer/utils/plugins/plugin/node.h>
 #include <dftracer/utils/plugins/plugin/fileio.h>
 #include <dftracer/utils/plugins/plugin/format.h>
+#include <dftracer/utils/plugins/plugin/memory.h>
 // clang-format on
 
 #endif /* DFTRACER_UTILS_PLUGINS_PLUGIN_H */

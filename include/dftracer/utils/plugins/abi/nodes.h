@@ -43,12 +43,13 @@ typedef struct dftu_node_vt {
                                  const dftu_schema* in, const dftu_op_arg* args,
                                  dftu_schema* out);
     /** Open an output cursor over an already-open input cursor. Same
-       convention as dftu_source_vt::scan: writes *out_cursor_self (it may be
-       NULL for a stateless cursor) and *out_vt, which must outlive the
-       cursor. `in_cursor_self`/`in_vt` is the upstream stage, already open:
-       pull it with in_vt->next(ctx, in_cursor_self, ...), passing the node's
-       own ctx, the same way the engine pulls any cursor. On success the node
-       takes ownership of the input cursor and must call
+       convention as dftu_source_vt::scan, `host` included: it stays valid
+       until the output cursor's destroy() has returned. Writes
+       *out_cursor_self (it may be NULL for a stateless cursor) and *out_vt,
+       which must outlive the cursor. `in_cursor_self`/`in_vt` is the upstream
+       stage, already open: pull it with in_vt->next(ctx, in_cursor_self, ...),
+       passing the node's own ctx, the same way the engine pulls any cursor. On
+       success the node takes ownership of the input cursor and must call
        in_vt->destroy(in_cursor_self) exactly once, whenever the node's own
        output cursor is destroyed (or earlier, once fully drained); on failure
        (a negative status) the node must not have taken that ownership - the
@@ -56,10 +57,10 @@ typedef struct dftu_node_vt {
        plan's memory budget in bytes, already resolved, so never 0: a node
        that holds state sizes its spill threshold and its output frames from
        it. */
-    dftu_status (*open)(dftu_ctx* ctx, void* self, void* in_cursor_self,
-                        const dftu_cursor_vt* in_vt, const dftu_op_arg* args,
-                        uint64_t memory_budget, void** out_cursor_self,
-                        const dftu_cursor_vt** out_vt);
+    dftu_status (*open)(dftu_ctx* ctx, void* self, const dftu_plugin_host* host,
+                        void* in_cursor_self, const dftu_cursor_vt* in_vt,
+                        const dftu_op_arg* args, uint64_t memory_budget,
+                        void** out_cursor_self, const dftu_cursor_vt** out_vt);
     /** Release the node; called once, after every cursor opened against it
        has been destroyed. May be NULL for a stateless node. */
     void (*destroy)(void* self);

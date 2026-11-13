@@ -12,7 +12,9 @@
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
+#include <dftracer/utils/memory/detail/manager.h>
 #include <dftracer/utils/plugins/abi.h>
+#include <dftracer/utils/plugins/host/plugin_memory.h>
 #include <dftracer/utils/plugins/host/state_registry.h>
 #include <dftracer/utils/plugins/result_registry.h>
 #include <dftracer/utils/trace/views/fold.h>
@@ -150,13 +152,16 @@ class PluginFold : public trace::views::detail::Fold {
     /// memory) and memory::NO_SPILL_BUDGET disables spilling. Past it, an
     /// accumulator's live group map spills to a sorted temp run. `states` are
     /// the state types the plugin's factory registered, one instance per slice.
-    /// It must outlive the fold. Null means none.
+    /// It must outlive the fold. Null means none. `memory` is the pool the
+    /// plugin's blocks and reservations live in, shared by every fold of the
+    /// plugin; null gives this fold and its slices one of their own.
     PluginFold(const dftu_plugin* plugin,
                dftracer::utils::dstd::StringIntern& intern,
                SharedResultRegistry* results = nullptr,
                utils::plugins::NamedResultRegistry* named_results = nullptr,
                dstd::String plugin_name = {}, std::uint64_t memory_budget = 0,
-               const StateRegistry* states = nullptr);
+               const StateRegistry* states = nullptr,
+               dstd::SharedPtr<PluginMemory> memory = nullptr);
     ~PluginFold() override;
 
     PluginFold(const PluginFold&) = delete;
@@ -171,7 +176,7 @@ class PluginFold : public trace::views::detail::Fold {
     dstd::UniquePtr<Fold> slice() const override {
         return dstd::make_unique<PluginFold>(plugin_, *intern_, results_,
                                              named_results_, plugin_name_,
-                                             memory_budget_, states_);
+                                             memory_budget_, states_, memory_);
     }
 
     /// Name this plugin logs under (its load-path stem); empty if unknown.
@@ -227,13 +232,17 @@ class PluginFold : public trace::views::detail::Fold {
     /// serialize/deserialize pair, so the host had to refuse it a spill.
     bool state_spill_refused(const char* name) const;
 
-    /// Times the host asked the slice to reclaim (dftu_plugin::reclaim)
-    /// after a step or merge left it past the budget; the budget-engaged
-    /// signal for a plugin's own slice.
-    std::size_t slice_reclaims() const { return slice_reclaims_; }
-    /// True once a reclaim freed nothing while the slice was still over the
-    /// budget, or the plugin measures its slice but declares no reclaim.
-    bool slice_reclaim_refused() const { return reclaim_refused_; }
+    /// The pool and the reservations of this fold's plugin.
+    PluginMemory& memory() { return *memory_; }
+    /// The scan's memory budget as given; see the constructor.
+    std::uint64_t memory_budget() const { return memory_budget_; }
+    /// Starts listening for the memory manager's requests to give bytes back;
+    /// called when the plugin makes its first reservation.
+    void watch_memory_requests();
+    /// At a batch boundary: runs the reclaimers of this fold's reservations
+    /// for the bytes another holder asked of the plugin's pool. A no-op until
+    /// a reservation exists.
+    void poll_reclaim();
 
     Job& new_job(Job::Kind kind) { return jobs_.emplace_back(kind); }
 
@@ -302,11 +311,8 @@ class PluginFold : public trace::views::detail::Fold {
     SharedResultRegistry* results_ = nullptr;
     utils::plugins::NamedResultRegistry* named_results_ = nullptr;
     std::uint64_t memory_budget_ = 0;
-    std::size_t slice_reclaims_ = 0;
-    bool reclaim_refused_ = false;
-
-    // Asks the slice to shrink when its declared size runs past the budget.
-    void reclaim_slice();
+    dstd::SharedPtr<PluginMemory> memory_;
+    MemoryWatch memory_watch_;
 
     // A batch an earlier plugin rewrote, as this plugin sees it.
     dataframe::DataFrame rewritten_batch(

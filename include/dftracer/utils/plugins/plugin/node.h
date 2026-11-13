@@ -22,13 +22,15 @@
  *   void output_schema(const SchemaView& in, const OpArgs& args,
  *                      SchemaBuilder& out) const;   // or dstd::Result<void>
  *   dstd::Result<dstd::UniquePtr<C>> open(InputCursor in, const OpArgs& args,
- *                                         std::uint64_t memory_budget) const;
+ *                                         std::uint64_t memory_budget,
+ *                                         const Host& host) const;
  * where C is a cursor type as in plugin/source.h (next, and optionally
- * narrow / resident_bytes / reclaim). The cursor owns `in` and pulls it with
- * in.next(). `memory_budget` is the plan's budget in bytes, never 0. A failed
- * or empty open() leaves the upstream cursor with the host, as
- * dftu_node_vt::open requires; a failed next() fails the scan with its error's
- * status and message. */
+ * narrow). The cursor owns `in` and pulls it with in.next(). `memory_budget` is
+ * the plan's budget in bytes, never 0. `host` is the cursor's host, as in
+ * plugin/source.h: reserve memory through host.memory() in open(). A failed or
+ * empty open() leaves the upstream cursor with the host, as dftu_node_vt::open
+ * requires; a failed next() fails the scan with its error's status and
+ * message. */
 
 namespace dftracer::utils::plugins {
 
@@ -211,7 +213,8 @@ struct NodeVt {
         });
     }
 
-    static dftu_status open(dftu_ctx* ctx, void* self, void* in_self,
+    static dftu_status open(dftu_ctx* ctx, void* self,
+                            const dftu_plugin_host* host, void* in_self,
                             const dftu_cursor_vt* in_vt,
                             const dftu_op_arg* args,
                             std::uint64_t memory_budget, void** out_cursor_self,
@@ -221,14 +224,14 @@ struct NodeVt {
             auto opened = static_cast<NodeBox<N>*>(self)->node->open(
                 InputCursor(in_self, in_vt, own,
                             static_cast<NodeBox<N>*>(self)->runner),
-                OpArgs(args), memory_budget);
+                OpArgs(args), memory_budget, Host(host, ctx));
             if (!opened.has_value()) return report(ctx, opened.error());
             auto cursor = std::move(*opened);
             if (!cursor)
                 return dftu_fail(ctx, DFTU_E_INTERNAL,
                                  "open returned no cursor");
             using C = typename decltype(cursor)::element_type;
-            auto* box = new CursorBox<C>{std::move(cursor)};
+            auto* box = new CursorBox<C>{std::move(cursor), host};
             // Nothing below fails, so the upstream changes hands only once
             // open() is certain to succeed.
             own->committed = true;

@@ -353,6 +353,8 @@ set(DFTRACER_UTILS_PLUGINS_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/task_abi.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/host/host_ops.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/host/build_host.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/host/plugin_memory.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/host/cursor_host.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/host/config.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/host/provider_source.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/host/node_adapter.cpp
@@ -368,6 +370,7 @@ set(DFTRACER_UTILS_PLUGINS_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/host/fold_adapter/fileio.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/host/fold_adapter/fs.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/host/fold_adapter/format.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/host/fold_adapter/memory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/host/state_registry.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/host/plugins.cpp
 )

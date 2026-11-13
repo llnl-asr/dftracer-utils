@@ -114,12 +114,8 @@ void c_cursor_destroy(void* self) {
     delete cs;
 }
 
-const dftu_cursor_vt C_CURSOR_VT = {sizeof(dftu_cursor_vt),
-                                    c_next,
-                                    c_cursor_destroy,
-                                    nullptr,
-                                    nullptr,
-                                    nullptr};
+const dftu_cursor_vt C_CURSOR_VT = {sizeof(dftu_cursor_vt), c_next,
+                                    c_cursor_destroy, nullptr};
 
 dftu_status open_cursor(dftu_dataframe* df, void** out_cursor_self,
                         const dftu_cursor_vt** out_vt) {
@@ -129,14 +125,15 @@ dftu_status open_cursor(dftu_dataframe* df, void** out_cursor_self,
     return DFTU_OK;
 }
 
-dftu_status c_root_scan(dftu_ctx*, void*, const dftu_scan_request*,
-                        std::int32_t*, void** out_cursor_self,
-                        const dftu_cursor_vt** out_vt) {
+dftu_status c_root_scan(dftu_ctx*, void*, const dftu_plugin_host*,
+                        const dftu_scan_request*, std::int32_t*,
+                        void** out_cursor_self, const dftu_cursor_vt** out_vt) {
     return open_cursor(make_rows(0, -1), out_cursor_self, out_vt);
 }
 
-dftu_status c_derived_scan(dftu_ctx*, void* self, const dftu_scan_request*,
-                           std::int32_t*, void** out_cursor_self,
+dftu_status c_derived_scan(dftu_ctx*, void* self, const dftu_plugin_host*,
+                           const dftu_scan_request*, std::int32_t*,
+                           void** out_cursor_self,
                            const dftu_cursor_vt** out_vt) {
     auto* d = static_cast<Derived*>(self);
     return open_cursor(make_rows(d->offset, d->n), out_cursor_self, out_vt);
@@ -319,8 +316,9 @@ struct ChainNode {
     int id;
 };
 
-dftu_status chain_scan(dftu_ctx* ctx, void*, const dftu_scan_request*,
-                       std::int32_t*, void**, const dftu_cursor_vt**) {
+dftu_status chain_scan(dftu_ctx* ctx, void*, const dftu_plugin_host*,
+                       const dftu_scan_request*, std::int32_t*, void**,
+                       const dftu_cursor_vt**) {
     return dftu_fail(ctx, DFTU_E_UNSUPPORTED, "chain source does not scan");
 }
 

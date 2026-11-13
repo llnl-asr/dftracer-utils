@@ -7,6 +7,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <dftracer/utils/plugins/host/plugin_library.h>
+#include <dftracer/utils/plugins/host/plugin_memory.h>
 #include <dftracer/utils/plugins/host/state_registry.h>
 
 #include <utility>
@@ -33,6 +34,11 @@ class BuildHost {
                        dstd::SharedPtr<PluginLibrary> library = nullptr);
 
     const dstd::SharedPtr<PluginLibrary>& library() const { return library_; }
+
+    /// The pool of the plugin being loaded. The providers and nodes the
+    /// factory registers charge their cursors to it, and the loaded plugin
+    /// keeps it for its folds.
+    const dstd::SharedPtr<PluginMemory>& memory() const { return memory_; }
 
     /// Handed to the factory; valid only for that call.
     dftu_plugin_host* host() { return &host_; }
@@ -96,6 +102,7 @@ class BuildHost {
    private:
     dstd::SharedPtr<PluginLibrary> library_;
     dstd::String plugin_name_;
+    dstd::SharedPtr<PluginMemory> memory_;
     dstd::String denied_;
     StateRegistry states_;
     dstd::Vector<dstd::String> registered_ops_;

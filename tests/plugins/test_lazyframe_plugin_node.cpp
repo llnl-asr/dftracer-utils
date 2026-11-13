@@ -18,8 +18,12 @@
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/memory/detail/manager.h>
+#include <dftracer/utils/memory/detail/pool_access.h>
+#include <dftracer/utils/plugins/abi.h>
 #include <dftracer/utils/plugins/abi_context.h>
 #include <dftracer/utils/plugins/host/node_adapter.h>
+#include <dftracer/utils/plugins/host/plugin_memory.h>
 #include <dftracer/utils/plugins/host/provider_source.h>
 #include <dftracer/utils/plugins/task_abi.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -91,15 +95,12 @@ void src_cursor_destroy(void* self) {
     delete cs;
 }
 
-const dftu_cursor_vt SRC_CURSOR_VT = {sizeof(dftu_cursor_vt),
-                                      src_cursor_next,
-                                      src_cursor_destroy,
-                                      nullptr,
-                                      nullptr,
-                                      nullptr};
+const dftu_cursor_vt SRC_CURSOR_VT = {sizeof(dftu_cursor_vt), src_cursor_next,
+                                      src_cursor_destroy, nullptr};
 
-dftu_status src_scan(dftu_ctx*, void* self, const dftu_scan_request*, int32_t*,
-                     void** out_cursor_self, const dftu_cursor_vt** out_vt) {
+dftu_status src_scan(dftu_ctx*, void* self, const dftu_plugin_host*,
+                     const dftu_scan_request*, int32_t*, void** out_cursor_self,
+                     const dftu_cursor_vt** out_vt) {
     auto* s = static_cast<IntSource*>(self);
     dftu_series* c = dftu_series_new_flat(
         DFTU_TYPE_INT64, s->col0.data(),
@@ -213,16 +214,12 @@ void double_cursor_destroy(void* self) {
     delete st;
 }
 
-const dftu_cursor_vt DOUBLE_CURSOR_VT = {sizeof(dftu_cursor_vt),
-                                         double_cursor_next,
-                                         double_cursor_destroy,
-                                         nullptr,
-                                         nullptr,
-                                         nullptr};
+const dftu_cursor_vt DOUBLE_CURSOR_VT = {
+    sizeof(dftu_cursor_vt), double_cursor_next, double_cursor_destroy, nullptr};
 
-dftu_status double_node_open(dftu_ctx*, void*, void* in_self,
-                             const dftu_cursor_vt* in_vt, const dftu_op_arg*,
-                             std::uint64_t, void** out_self,
+dftu_status double_node_open(dftu_ctx*, void*, const dftu_plugin_host*,
+                             void* in_self, const dftu_cursor_vt* in_vt,
+                             const dftu_op_arg*, std::uint64_t, void** out_self,
                              const dftu_cursor_vt** out_vt) {
     auto* st = new DoubleCursorState{in_self, in_vt};
     *out_self = st;
@@ -252,8 +249,8 @@ dftu_node_vt make_double_vt() {
 
 // ---- "test.open_fails": open() always fails with a message. ----------
 
-dftu_status failing_node_open(dftu_ctx* ctx, void*, void*,
-                              const dftu_cursor_vt*, const dftu_op_arg*,
+dftu_status failing_node_open(dftu_ctx* ctx, void*, const dftu_plugin_host*,
+                              void*, const dftu_cursor_vt*, const dftu_op_arg*,
                               std::uint64_t, void**, const dftu_cursor_vt**) {
     return dftu_fail(ctx, DFTU_E_INVALID, "node refused to open");
 }
@@ -280,9 +277,10 @@ dftu_status recording_node_schema(dftu_ctx*, void*, const dftu_schema* in,
 // Reuses the doubler's cursor machinery (values end up doubled); the test
 // below only checks that open() ran and where the node sits in explain(),
 // not the values.
-dftu_status recording_node_open(dftu_ctx*, void* self, void* in_self,
-                                const dftu_cursor_vt* in_vt, const dftu_op_arg*,
-                                std::uint64_t memory_budget, void** out_self,
+dftu_status recording_node_open(dftu_ctx*, void* self, const dftu_plugin_host*,
+                                void* in_self, const dftu_cursor_vt* in_vt,
+                                const dftu_op_arg*, std::uint64_t memory_budget,
+                                void** out_self,
                                 const dftu_cursor_vt** out_vt) {
     static_cast<RecordingNode*>(self)->opened = true;
     static_cast<RecordingNode*>(self)->budget = memory_budget;
@@ -319,12 +317,8 @@ void probe_cursor_destroy(void* self) {
     delete st;
 }
 
-const dftu_cursor_vt PROBE_CURSOR_VT = {sizeof(dftu_cursor_vt),
-                                        probe_cursor_next,
-                                        probe_cursor_destroy,
-                                        nullptr,
-                                        nullptr,
-                                        nullptr};
+const dftu_cursor_vt PROBE_CURSOR_VT = {
+    sizeof(dftu_cursor_vt), probe_cursor_next, probe_cursor_destroy, nullptr};
 
 dftu_status probe_node_schema(dftu_ctx*, void*, const dftu_schema* in,
                               const dftu_op_arg*, dftu_schema* out) {
@@ -333,9 +327,9 @@ dftu_status probe_node_schema(dftu_ctx*, void*, const dftu_schema* in,
     return DFTU_OK;
 }
 
-dftu_status probe_node_open(dftu_ctx*, void* self, void* in_self,
-                            const dftu_cursor_vt* in_vt, const dftu_op_arg*,
-                            std::uint64_t, void** out_self,
+dftu_status probe_node_open(dftu_ctx*, void* self, const dftu_plugin_host*,
+                            void* in_self, const dftu_cursor_vt* in_vt,
+                            const dftu_op_arg*, std::uint64_t, void** out_self,
                             const dftu_cursor_vt** out_vt) {
     auto* flags = static_cast<dstd::Vector<bool>*>(self);
     auto* st = new ProbeCursorState{in_self, in_vt, flags};
@@ -357,9 +351,6 @@ dftu_node_vt make_probe_vt() {
 
 struct NarrowLog {
     dstd::Vector<dstd::Vector<bool>> masks;
-    // A declared resident size and the reclaims the source got for it.
-    std::uint64_t bytes = 0;
-    dstd::Vector<std::uint64_t> reclaims;
 };
 
 struct NarrowSource {
@@ -403,21 +394,9 @@ dftu_status narrow_cursor_narrow(dftu_ctx*, void* self,
     return DFTU_OK;
 }
 
-std::uint64_t narrow_cursor_bytes(void* self) {
-    return static_cast<NarrowCursorState*>(self)->owner->log->bytes;
-}
-
-std::uint64_t narrow_cursor_reclaim(void* self, std::uint64_t want) {
-    NarrowLog* log = static_cast<NarrowCursorState*>(self)->owner->log;
-    log->reclaims.push_back(want);
-    const std::uint64_t freed = std::min(want, log->bytes);
-    log->bytes -= freed;
-    return freed;
-}
-
 const dftu_cursor_vt NARROW_CURSOR_VT = {
-    sizeof(dftu_cursor_vt), narrow_cursor_next,  narrow_cursor_destroy,
-    narrow_cursor_narrow,   narrow_cursor_bytes, narrow_cursor_reclaim};
+    sizeof(dftu_cursor_vt), narrow_cursor_next, narrow_cursor_destroy,
+    narrow_cursor_narrow};
 
 dftu_status narrow_src_schema(dftu_ctx* ctx, void* self,
                               const char* const** out_names,
@@ -426,8 +405,9 @@ dftu_status narrow_src_schema(dftu_ctx* ctx, void* self,
                       out_count);
 }
 
-dftu_status narrow_src_scan(dftu_ctx*, void* self, const dftu_scan_request*,
-                            int32_t*, void** out_cursor_self,
+dftu_status narrow_src_scan(dftu_ctx*, void* self, const dftu_plugin_host*,
+                            const dftu_scan_request*, int32_t*,
+                            void** out_cursor_self,
                             const dftu_cursor_vt** out_vt) {
     auto* s = static_cast<NarrowSource*>(self);
     dftu_series* c = dftu_series_new_flat(
@@ -451,18 +431,11 @@ dstd::SharedPtr<dataframe::Source> make_narrow_source(NarrowSource& fx) {
 }
 
 // ---- "test.forward": a transparent node that forwards narrow() to its
-// input, declares a (fake) resident size and records the reclaim it gets.
-
-struct ForwardLog {
-    bool reclaim_input = false;
-    std::uint64_t bytes = 0;
-    dstd::Vector<std::uint64_t> reclaims;
-};
+// input.
 
 struct ForwardCursorState {
     void* in_self;
     const dftu_cursor_vt* in_vt;
-    ForwardLog* log;
 };
 
 dftu_status forward_cursor_next(dftu_ctx* ctx, void* self,
@@ -491,23 +464,9 @@ dftu_status forward_cursor_narrow(dftu_ctx* ctx, void* self,
     return st->in_vt->narrow(ctx, st->in_self, predicate, out_applied, pending);
 }
 
-std::uint64_t forward_cursor_bytes(void* self) {
-    return static_cast<ForwardCursorState*>(self)->log->bytes;
-}
-
-std::uint64_t forward_cursor_reclaim(void* self, std::uint64_t want) {
-    auto* st = static_cast<ForwardCursorState*>(self);
-    st->log->reclaims.push_back(want);
-    const std::uint64_t freed = std::min(want, st->log->bytes);
-    st->log->bytes -= freed;
-    if (st->log->reclaim_input && st->in_vt->reclaim)
-        st->in_vt->reclaim(st->in_self, want);
-    return freed;
-}
-
 const dftu_cursor_vt FORWARD_CURSOR_VT = {
-    sizeof(dftu_cursor_vt), forward_cursor_next,  forward_cursor_destroy,
-    forward_cursor_narrow,  forward_cursor_bytes, forward_cursor_reclaim};
+    sizeof(dftu_cursor_vt), forward_cursor_next, forward_cursor_destroy,
+    forward_cursor_narrow};
 
 dftu_status forward_node_schema(dftu_ctx*, void*, const dftu_schema* in,
                                 const dftu_op_arg*, dftu_schema* out) {
@@ -516,12 +475,11 @@ dftu_status forward_node_schema(dftu_ctx*, void*, const dftu_schema* in,
     return DFTU_OK;
 }
 
-dftu_status forward_node_open(dftu_ctx*, void* self, void* in_self,
-                              const dftu_cursor_vt* in_vt, const dftu_op_arg*,
-                              std::uint64_t, void** out_self,
-                              const dftu_cursor_vt** out_vt) {
-    auto* st =
-        new ForwardCursorState{in_self, in_vt, static_cast<ForwardLog*>(self)};
+dftu_status forward_node_open(dftu_ctx*, void*, const dftu_plugin_host*,
+                              void* in_self, const dftu_cursor_vt* in_vt,
+                              const dftu_op_arg*, std::uint64_t,
+                              void** out_self, const dftu_cursor_vt** out_vt) {
+    auto* st = new ForwardCursorState{in_self, in_vt};
     *out_self = st;
     *out_vt = &FORWARD_CURSOR_VT;
     return DFTU_OK;
@@ -532,6 +490,223 @@ dftu_node_vt make_forward_vt() {
     vt.struct_size = sizeof(vt);
     vt.output_schema = forward_node_schema;
     vt.open = forward_node_open;
+    return vt;
+}
+
+// ---- Cursor memory: a cursor reserves through the host it is given and its
+// reclaimer runs between two next() calls when another holder asks the pool. -
+
+struct MemoryProbe {
+    std::uint64_t held = 0;
+    std::uint64_t wanted = 0;
+    int reclaims = 0;
+    int nexts = 0;
+    int nexts_at_reclaim = -1;
+    bool release_on_destroy = true;
+};
+
+constexpr std::uint64_t PROBE_BYTES = std::uint64_t{1} << 20;
+constexpr int PROBE_FRAMES = 3;
+
+std::uint64_t probe_reclaim(void* ud, std::uint64_t want) {
+    auto* probe = static_cast<MemoryProbe*>(ud);
+    ++probe->reclaims;
+    probe->wanted = want;
+    probe->nexts_at_reclaim = probe->nexts;
+    const std::uint64_t freed = std::min(want, probe->held);
+    probe->held -= freed;
+    return freed;
+}
+
+// Another holder of the process budget asks for bytes the budget lacks.
+void press_budget() {
+    auto& manager = memory::detail::Manager::get();
+    manager.set_budget(memory::root_pool().reserved() + PROBE_BYTES / 2);
+    auto refused =
+        memory::detail::PoolAccess::reserve(memory::root_pool(), PROBE_BYTES);
+    CHECK_FALSE(refused);
+}
+
+struct BudgetGuard {
+    ~BudgetGuard() { memory::detail::Manager::get().set_budget(0); }
+};
+
+// The probe's view of one cursor: the pressure it makes at its first next()
+// and the one it lifts at its second.
+void step_pressure(MemoryProbe* probe, bool press) {
+    ++probe->nexts;
+    if (!press) return;
+    if (probe->nexts == 1) press_budget();
+    if (probe->nexts == 2) memory::detail::Manager::get().set_budget(0);
+}
+
+struct MemoryHold {
+    MemoryProbe* probe = nullptr;
+    const dftu_svc_memory* svc = nullptr;
+    dftu_reservation* res = nullptr;
+};
+
+dftu_status hold_memory(dftu_ctx* ctx, const dftu_plugin_host* host,
+                        MemoryProbe* probe, MemoryHold* hold) {
+    if (!host)
+        return dftu_fail(ctx, DFTU_E_UNSUPPORTED, "the cursor got no host");
+    hold->probe = probe;
+    hold->svc = static_cast<const dftu_svc_memory*>(
+        host->get_service(host->h, DFTU_SVC_MEMORY));
+    if (!hold->svc)
+        return dftu_fail(ctx, DFTU_E_UNSUPPORTED,
+                         "the cursor host has no memory service");
+    dftu_status st = hold->svc->reserve(ctx, host->h, &hold->res, "cursor");
+    if (st < 0) return st;
+    st = hold->svc->try_grow(ctx, hold->res, PROBE_BYTES);
+    if (st < 0) return st;
+    hold->svc->set_reclaimer(hold->res, probe_reclaim, probe);
+    probe->held = PROBE_BYTES;
+    return DFTU_OK;
+}
+
+void drop_memory(MemoryHold* hold) {
+    if (hold->res && hold->probe->release_on_destroy)
+        hold->svc->release(hold->res);
+    hold->res = nullptr;
+}
+
+dftu_dataframe* chunk_frame(int index) {
+    const std::int64_t rows[2] = {2 * index, 2 * index + 1};
+    dftu_series* c = dftu_series_new_flat(DFTU_TYPE_INT64, rows, 2, nullptr);
+    const char* names[1] = {"val"};
+    dftu_series* cols[1] = {c};
+    return dftu_dataframe_new(names, cols, 1);
+}
+
+// ---- A provider whose cursor reserves at scan() and yields PROBE_FRAMES
+// frames of two rows.
+
+struct ChunkSource {
+    MemoryProbe* probe;
+    bool reserves;
+    bool presses;
+};
+
+struct ChunkCursor {
+    MemoryHold hold;
+    ChunkSource* owner;
+    int sent = 0;
+};
+
+dftu_status chunk_schema(dftu_ctx*, void*, const char* const** out_names,
+                         int32_t* out_count) {
+    static const char* const NAMES[1] = {"val"};
+    *out_names = NAMES;
+    *out_count = 1;
+    return DFTU_OK;
+}
+
+dftu_status chunk_cursor_next(dftu_ctx*, void* self, std::int64_t,
+                              dftu_dataframe** out, dftu_task** pending) {
+    auto* cs = static_cast<ChunkCursor*>(self);
+    *pending = nullptr;
+    step_pressure(cs->owner->probe, cs->owner->presses);
+    if (cs->sent == PROBE_FRAMES) {
+        *out = nullptr;
+        return DFTU_END;
+    }
+    *out = chunk_frame(cs->sent++);
+    return DFTU_OK;
+}
+
+void chunk_cursor_destroy(void* self) {
+    auto* cs = static_cast<ChunkCursor*>(self);
+    drop_memory(&cs->hold);
+    delete cs;
+}
+
+const dftu_cursor_vt CHUNK_CURSOR_VT = {
+    sizeof(dftu_cursor_vt), chunk_cursor_next, chunk_cursor_destroy, nullptr};
+
+dftu_status chunk_scan(dftu_ctx* ctx, void* self, const dftu_plugin_host* host,
+                       const dftu_scan_request*, int32_t*,
+                       void** out_cursor_self, const dftu_cursor_vt** out_vt) {
+    auto* fx = static_cast<ChunkSource*>(self);
+    auto* cs = new ChunkCursor{{}, fx};
+    if (fx->reserves) {
+        const dftu_status st = hold_memory(ctx, host, fx->probe, &cs->hold);
+        if (st < 0) {
+            drop_memory(&cs->hold);
+            delete cs;
+            return st;
+        }
+    }
+    *out_cursor_self = cs;
+    *out_vt = &CHUNK_CURSOR_VT;
+    return DFTU_OK;
+}
+
+dstd::SharedPtr<dataframe::Source> make_chunk_source(
+    ChunkSource& fx, dstd::SharedPtr<plugins::host::PluginMemory> memory) {
+    dftu_source_vt vt{};
+    vt.struct_size = sizeof(vt);
+    vt.schema = chunk_schema;
+    vt.scan = chunk_scan;
+    vt.destroy = src_destroy;
+    return plugins::host::make_provider_source(vt, &fx, std::move(memory));
+}
+
+// ---- "test.reserving": a node whose cursor reserves at open() and forwards
+// its input.
+
+struct ReservingNode {
+    MemoryProbe* probe;
+};
+
+struct ReservingCursor {
+    MemoryHold hold;
+    void* in_self;
+    const dftu_cursor_vt* in_vt;
+};
+
+dftu_status reserving_cursor_next(dftu_ctx* ctx, void* self,
+                                  std::int64_t max_rows, dftu_dataframe** out,
+                                  dftu_task** pending) {
+    auto* st = static_cast<ReservingCursor*>(self);
+    step_pressure(st->hold.probe, true);
+    return st->in_vt->next(ctx, st->in_self, max_rows, out, pending);
+}
+
+void reserving_cursor_destroy(void* self) {
+    auto* st = static_cast<ReservingCursor*>(self);
+    drop_memory(&st->hold);
+    if (st->in_vt->destroy) st->in_vt->destroy(st->in_self);
+    delete st;
+}
+
+const dftu_cursor_vt RESERVING_CURSOR_VT = {sizeof(dftu_cursor_vt),
+                                            reserving_cursor_next,
+                                            reserving_cursor_destroy, nullptr};
+
+dftu_status reserving_node_open(dftu_ctx* ctx, void* self,
+                                const dftu_plugin_host* host, void* in_self,
+                                const dftu_cursor_vt* in_vt, const dftu_op_arg*,
+                                std::uint64_t, void** out_self,
+                                const dftu_cursor_vt** out_vt) {
+    auto* node = static_cast<ReservingNode*>(self);
+    auto* st = new ReservingCursor{{}, in_self, in_vt};
+    const dftu_status status = hold_memory(ctx, host, node->probe, &st->hold);
+    if (status < 0) {
+        drop_memory(&st->hold);
+        delete st;
+        return status;
+    }
+    *out_self = st;
+    *out_vt = &RESERVING_CURSOR_VT;
+    return DFTU_OK;
+}
+
+dftu_node_vt make_reserving_vt() {
+    dftu_node_vt vt{};
+    vt.struct_size = sizeof(vt);
+    vt.output_schema = forward_node_schema;
+    vt.open = reserving_node_open;
     return vt;
 }
 
@@ -572,7 +747,6 @@ class CursorSource : public dataframe::Source {
 // the six rows 1..6, in one morsel.
 struct HookFaults {
     int narrows = 0;
-    int reclaims = 0;
 };
 
 class ThrowingHooksCursor : public dataframe::Cursor {
@@ -593,12 +767,6 @@ class ThrowingHooksCursor : public dataframe::Cursor {
         ++faults_->narrows;
         co_await coro_test::failing_task("narrow boom");
         co_return false;
-    }
-    std::uint64_t resident_bytes() const override { return 1; }
-    coro::CoroTask<std::uint64_t> reclaim(std::uint64_t) override {
-        ++faults_->reclaims;
-        co_await coro_test::failing_task("reclaim boom");
-        co_return 0;
     }
 
    private:
@@ -1069,12 +1237,8 @@ TEST_SUITE("lazyframe plugin node") {
             }
         };
 
-        static const dftu_cursor_vt COUNT_VT = {sizeof(dftu_cursor_vt),
-                                                Impl::next,
-                                                Impl::destroy,
-                                                nullptr,
-                                                nullptr,
-                                                nullptr};
+        static const dftu_cursor_vt COUNT_VT = {
+            sizeof(dftu_cursor_vt), Impl::next, Impl::destroy, nullptr};
 
         struct NodeImpl {
             static dftu_status schema(dftu_ctx*, void*, const dftu_schema*,
@@ -1083,8 +1247,8 @@ TEST_SUITE("lazyframe plugin node") {
                                       DFTU_TIME_UNIT_MICRO, nullptr, 0, 0, 0);
                 return DFTU_OK;
             }
-            static dftu_status open(dftu_ctx*, void*, void* in_self,
-                                    const dftu_cursor_vt* in_vt,
+            static dftu_status open(dftu_ctx*, void*, const dftu_plugin_host*,
+                                    void* in_self, const dftu_cursor_vt* in_vt,
                                     const dftu_op_arg*, std::uint64_t,
                                     void** out_self,
                                     const dftu_cursor_vt** out_vt) {
@@ -1365,13 +1529,9 @@ TEST_SUITE("lazyframe plugin node") {
         }
     }
 
-    TEST_CASE(
-        "a plugin node forwards narrow() to its input and is reclaimed "
-        "against the plan's budget") {
-        ForwardLog flog;
-        flog.bytes = std::uint64_t{1} << 40;
+    TEST_CASE("a plugin node forwards narrow() to its input") {
         dftu_node_vt vt = make_forward_vt();
-        REQUIRE(register_node("test.forward", &vt, &flog) == 0);
+        REQUIRE(register_node("test.forward", &vt, nullptr) == 0);
 
         NarrowLog log;
         NarrowSource fx{{{"val"}, {1, 2, 3, 4, 5, 6}}, &log};
@@ -1379,8 +1539,7 @@ TEST_SUITE("lazyframe plugin node") {
         dataframe::LazyFrame lf =
             dataframe::LazyFrame::scan(make_narrow_source(fx))
                 .op("test.forward", dataframe::OpArgs())
-                .join(right, {"val"}, {"key"}, dataframe::JoinHow::Inner)
-                .memory_budget(64 * 1024 * 1024);
+                .join(right, {"val"}, {"key"}, dataframe::JoinHow::Inner);
         dataframe::DataFrame out = run(lf.collect());
         REQUIRE(out.num_rows() == 2);
 
@@ -1389,45 +1548,7 @@ TEST_SUITE("lazyframe plugin node") {
         const dstd::Vector<bool> want{false, false, true, false, true, false};
         CHECK(log.masks[0] == want);
 
-        // The node's declared size cannot be reserved under the budget, so
-        // its governor asked it for all of it at the next morsel.
-        REQUIRE(!flog.reclaims.empty());
-        CHECK(flog.reclaims[0] == std::uint64_t{1} << 40);
-        CHECK(flog.bytes == 0);
-
         CHECK(dftu_node_unregister("test.forward") == 0);
-    }
-
-    TEST_CASE(
-        "a provider under a plugin node is still measured and reclaimed") {
-        // The node owns its input cursor once open() succeeds. The provider
-        // has its own place in the governor, so it is measured and asked
-        // wherever it ends up.
-        constexpr std::uint64_t BUDGET = 64 * 1024 * 1024;
-        ForwardLog flog;  // the node itself holds nothing
-        dftu_node_vt vt = make_forward_vt();
-        REQUIRE(register_node("test.forward.under", &vt, &flog) == 0);
-
-        NarrowLog log;
-        log.bytes = std::uint64_t{1} << 40;
-        NarrowSource fx{{{"val"}, {1, 2, 3, 4, 5, 6}}, &log};
-        dataframe::LazyFrame lf =
-            dataframe::LazyFrame::scan(make_narrow_source(fx))
-                .op("test.forward.under", dataframe::OpArgs())
-                .op("test.forward.under",
-                    dataframe::OpArgs())  // two nodes deep
-                .with_column("twice", dataframe::col(0) *
-                                          dataframe::lit(std::int64_t{2}))
-                .memory_budget(BUDGET);
-        dataframe::DataFrame out = run(lf.collect());
-        REQUIRE(out.num_rows() == 6);
-
-        CHECK(flog.reclaims.empty());
-        REQUIRE(!log.reclaims.empty());
-        CHECK(log.reclaims[0] == std::uint64_t{1} << 40);
-        CHECK(log.bytes == 0);
-
-        CHECK(dftu_node_unregister("test.forward.under") == 0);
     }
 
     TEST_CASE("a narrow that throws is logged and the join still answers") {
@@ -1439,24 +1560,85 @@ TEST_SUITE("lazyframe plugin node") {
         CHECK(faults.narrows == 1);
         CHECK(out.num_rows() == 3);
     }
+    TEST_CASE("a node cursor's reclaimer runs between two next() calls") {
+        BudgetGuard guard;
+        auto memory = dstd::make_shared<plugins::host::PluginMemory>(
+            "node_cursor_memory");
+        MemoryProbe probe;
+        ReservingNode node{&probe};
+        dftu_node_vt vt = make_reserving_vt();
+        REQUIRE(plugins::host::register_node_vtable("test.reserving", &vt,
+                                                    &node, nullptr, memory)
+                    .has_value());
 
-    TEST_CASE("a reclaim that throws is logged and counts as nothing freed") {
-        HookFaults faults;
-        ForwardLog flog;
-        flog.reclaim_input = true;
-        flog.bytes = std::uint64_t{1} << 40;
-        dftu_node_vt vt = make_forward_vt();
-        REQUIRE(register_node("test.forward.throwing", &vt, &flog) == 0);
-
+        MemoryProbe source_probe;
+        ChunkSource fx{&source_probe, false, false};
         dataframe::LazyFrame lf =
-            throwing_hooks_source(faults)
-                .op("test.forward.throwing", dataframe::OpArgs())
-                .memory_budget(64 * 1024 * 1024);
+            dataframe::LazyFrame::scan(make_chunk_source(fx, memory))
+                .op("test.reserving", dataframe::OpArgs());
         dataframe::DataFrame out = run(lf.collect());
-        CHECK(out.num_rows() == 6);
-        CHECK(!flog.reclaims.empty());
-        CHECK(faults.reclaims >= 1);
+        CHECK(out.num_rows() == 2 * PROBE_FRAMES);
 
-        CHECK(dftu_node_unregister("test.forward.throwing") == 0);
+        CHECK(probe.reclaims >= 1);
+        CHECK(probe.wanted > 0);
+        CHECK(probe.nexts_at_reclaim == 1);
+        CHECK(probe.held < PROBE_BYTES);
+        CHECK(memory->pool().reserved() == 0);
+
+        CHECK(dftu_node_unregister("test.reserving") == 0);
+    }
+
+    TEST_CASE("a provider cursor's reclaimer runs between two next() calls") {
+        BudgetGuard guard;
+        auto memory = dstd::make_shared<plugins::host::PluginMemory>(
+            "provider_cursor_memory");
+        MemoryProbe probe;
+        ChunkSource fx{&probe, true, true};
+        dataframe::LazyFrame lf =
+            dataframe::LazyFrame::scan(make_chunk_source(fx, memory));
+        dataframe::DataFrame out = run(lf.collect());
+        CHECK(out.num_rows() == 2 * PROBE_FRAMES);
+
+        CHECK(probe.reclaims >= 1);
+        CHECK(probe.wanted > 0);
+        CHECK(probe.nexts_at_reclaim == 1);
+        CHECK(probe.held < PROBE_BYTES);
+        CHECK(memory->pool().reserved() == 0);
+    }
+
+    TEST_CASE("a reservation a cursor leaves is released when it closes") {
+        BudgetGuard guard;
+        auto memory = dstd::make_shared<plugins::host::PluginMemory>(
+            "leaked_cursor_memory");
+
+        SUBCASE("provider") {
+            MemoryProbe probe;
+            probe.release_on_destroy = false;
+            ChunkSource fx{&probe, true, false};
+            dataframe::LazyFrame lf =
+                dataframe::LazyFrame::scan(make_chunk_source(fx, memory));
+            dataframe::DataFrame out = run(lf.collect());
+            CHECK(out.num_rows() == 2 * PROBE_FRAMES);
+            CHECK(memory->pool().reserved() == 0);
+        }
+
+        SUBCASE("node") {
+            MemoryProbe probe;
+            probe.release_on_destroy = false;
+            ReservingNode node{&probe};
+            dftu_node_vt vt = make_reserving_vt();
+            REQUIRE(plugins::host::register_node_vtable(
+                        "test.reserving.leak", &vt, &node, nullptr, memory)
+                        .has_value());
+            MemoryProbe source_probe;
+            ChunkSource fx{&source_probe, false, false};
+            dataframe::LazyFrame lf =
+                dataframe::LazyFrame::scan(make_chunk_source(fx, memory))
+                    .op("test.reserving.leak", dataframe::OpArgs());
+            dataframe::DataFrame out = run(lf.collect());
+            CHECK(out.num_rows() == 2 * PROBE_FRAMES);
+            CHECK(memory->pool().reserved() == 0);
+            CHECK(dftu_node_unregister("test.reserving.leak") == 0);
+        }
     }
 }

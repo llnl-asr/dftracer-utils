@@ -114,8 +114,8 @@ const ::dftu_svc_ports g_build_ports = {sizeof(::dftu_svc_ports),
 dftu_status build_register_provider(::dftu_ctx* ctx, void* h, const char* name,
                                     const ::dftu_source_vt* vt, void* self) {
     BuildHost& bh = self_of(h);
-    const dftu_status status =
-        detail::register_plugin_provider(ctx, name, vt, self, bh.library());
+    const dftu_status status = detail::register_plugin_provider(
+        ctx, name, vt, self, bh.library(), bh.memory());
     if (status >= 0) bh.registered_providers().emplace_back(name);
     return status;
 }
@@ -126,8 +126,8 @@ const ::dftu_svc_providers g_build_providers = {sizeof(::dftu_svc_providers),
 dftu_status build_register_node(::dftu_ctx* ctx, void* h, const char* name,
                                 const ::dftu_node_vt* vt, void* self) {
     BuildHost& bh = self_of(h);
-    const dftu_status status =
-        detail::register_plugin_node(ctx, name, vt, self, bh.library());
+    const dftu_status status = detail::register_plugin_node(
+        ctx, name, vt, self, bh.library(), bh.memory());
     if (status >= 0) bh.registered_nodes().emplace_back(name);
     return status;
 }
@@ -267,7 +267,8 @@ void build_log(void* h, std::uint8_t level, const char* s, std::uint32_t n) {
 BuildHost::BuildHost(dstd::String plugin_name,
                      dstd::SharedPtr<PluginLibrary> library)
     : library_(std::move(library)),
-      plugin_name_(plugin_name.empty() ? "plugin" : std::move(plugin_name)) {
+      plugin_name_(plugin_name.empty() ? "plugin" : std::move(plugin_name)),
+      memory_(dstd::make_shared<PluginMemory>(plugin_name_)) {
     host_.struct_size = sizeof(dftu_plugin_host);
     host_.h = this;
     host_.get_service = build_get_service;

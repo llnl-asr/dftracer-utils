@@ -332,8 +332,9 @@ The cursor may also take part in two things the plan does while it runs:
    How much the cursor holds beyond one morsel, and a request to free some
    of it. After every morsel the driver sums the resident bytes of the
    plan's stages against the budget and asks the largest holders first.
-   Built-in stages bound themselves and report 0; this is for a source or a
-   plugin node that holds a table or a cache.
+   Built-in stages bound themselves and report 0; this is for a source that
+   holds a table or a cache. A plugin cursor reserves its bytes through the
+   host its ``scan`` or ``open`` receives instead (:doc:`../runtime/memory-budget`).
 
 In C, the same contract is ``dftu_source_vt`` / ``dftu_cursor_vt``
 (``plugins/abi/providers.h``), registered by name from a plugin

@@ -7,6 +7,7 @@
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/plugins/plugin/map.h>
 #include <dftracer/utils/plugins/plugin/types.h>
 
 #include <algorithm>
@@ -21,13 +22,11 @@
  *
  * S provides:
  *   dstd::Vector<dstd::String> names() const;
- *   dstd::Result<ScanResult<C>> scan(const ScanView&) const;
+ *   dstd::Result<ScanResult<C>> scan(const ScanView&, const Host&) const;
  * where C is a cursor type with
  *   dstd::Result<dstd::Optional<OwnedFrame>> next(std::int64_t max_rows);
  * and optionally, each wired only when present,
  *   bool narrow(ExprView predicate);          // advisory, see dftu_cursor_vt
- *   std::uint64_t resident_bytes();
- *   std::uint64_t reclaim(std::uint64_t want);
  * and optionally
  *   void schema(SchemaBuilder&) const;               // column types; or
  *                                                    // dstd::Result<void>
@@ -44,7 +43,13 @@
  * for unsupported or no change, a new S otherwise, projection / aggregation /
  * join only as Apply::Exact. A cursor error is the dstd::Error its next()
  * returns, which fails the call with its status and message; so does an error
- * from apply_*, scan() or schema(). */
+ * from apply_*, scan() or schema().
+ *
+ * The Host given to scan is that of the cursor, valid for that call: reserve
+ * memory through Host::memory() there and keep the reservations in C. A
+ * cursor that must grow a reservation while it runs takes
+ *   next(std::int64_t max_rows, const Host& host)
+ * in place of next(max_rows), and gets a Host that is good for that call. */
 
 namespace dftracer::utils::plugins {
 
@@ -304,6 +309,7 @@ struct SourceBox {
 template <class C>
 struct CursorBox {
     dstd::UniquePtr<C> cursor;
+    const dftu_plugin_host* host = nullptr;
 };
 
 template <class C>
@@ -312,8 +318,14 @@ struct CursorVt {
                             dftu_dataframe** out, dftu_task**) noexcept {
         auto* box = static_cast<CursorBox<C>*>(self);
         return to_status(ctx, [&]() -> dftu_status {
-            dstd::Result<dstd::Optional<OwnedFrame>> next =
-                box->cursor->next(max_rows);
+            dstd::Result<dstd::Optional<OwnedFrame>> next = [&] {
+                if constexpr (requires(C& c, const Host& h) {
+                                  c.next(std::int64_t{}, h);
+                              })
+                    return box->cursor->next(max_rows, Host(box->host, ctx));
+                else
+                    return box->cursor->next(max_rows);
+            }();
             if (!next.has_value()) return report(ctx, next.error());
             dstd::Optional<OwnedFrame>& f = *next;
             if (!f) {
@@ -334,12 +346,6 @@ struct CursorVt {
             return DFTU_OK;
         });
     }
-    static std::uint64_t bytes(void* self) noexcept {
-        return static_cast<CursorBox<C>*>(self)->cursor->resident_bytes();
-    }
-    static std::uint64_t reclaim(void* self, std::uint64_t want) noexcept {
-        return static_cast<CursorBox<C>*>(self)->cursor->reclaim(want);
-    }
     static const dftu_cursor_vt* vt() {
         static const dftu_cursor_vt VT = [] {
             dftu_cursor_vt t{};
@@ -350,18 +356,6 @@ struct CursorVt {
                               { c.narrow(ExprView{}) } -> std::same_as<bool>;
                           })
                 t.narrow = narrow;
-            if constexpr (requires(C& c) {
-                              {
-                                  c.resident_bytes()
-                              } -> std::same_as<std::uint64_t>;
-                          })
-                t.bytes = bytes;
-            if constexpr (requires(C& c) {
-                              {
-                                  c.reclaim(std::uint64_t{})
-                              } -> std::same_as<std::uint64_t>;
-                          })
-                t.reclaim = reclaim;
             return t;
         }();
         return &VT;
@@ -418,6 +412,7 @@ struct SourceVt {
     }
 
     static dftu_status scan(dftu_ctx* ctx, void* self,
+                            const dftu_plugin_host* host,
                             const dftu_scan_request* req,
                             std::int32_t* out_pushed, void** out_cursor_self,
                             const dftu_cursor_vt** out_vt) noexcept {
@@ -429,7 +424,7 @@ struct SourceVt {
                 view.filters.emplace_back(req->filters[i]);
             view.limit = req->limit;
             view.memory_budget = req->memory_budget;
-            auto scanned = box->source->scan(view);
+            auto scanned = box->source->scan(view, Host(host, ctx));
             if (!scanned.has_value()) return report(ctx, scanned.error());
             auto& result = *scanned;
             using C = typename decltype(result.cursor)::element_type;
@@ -441,7 +436,7 @@ struct SourceVt {
                                       static_cast<std::size_t>(req->n_filters));
             for (std::size_t i = 0; i < n; ++i)
                 out_pushed[i] = static_cast<std::int32_t>(result.filters[i]);
-            auto* cbox = new CursorBox<C>{std::move(result.cursor)};
+            auto* cbox = new CursorBox<C>{std::move(result.cursor), host};
             *out_cursor_self = cbox;
             *out_vt = CursorVt<C>::vt();
             return DFTU_OK;

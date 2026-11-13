@@ -28,7 +28,8 @@ const ::dftu_svc_providers g_providers = {sizeof(::dftu_svc_providers),
 
 dftu_status detail::register_plugin_provider(
     ::dftu_ctx* ctx, const char* name, const ::dftu_source_vt* vt, void* self,
-    dstd::SharedPtr<PluginLibrary> library) {
+    dstd::SharedPtr<PluginLibrary> library,
+    dstd::SharedPtr<PluginMemory> memory) {
     if (refuse_plugin_op_name(name)) {
         return host_fail(
             ctx, DFTU_E_INVALID,
@@ -37,8 +38,8 @@ dftu_status detail::register_plugin_provider(
                       "be '<plugin>.<name>'">(
                 dstd::StringView(name ? name : "(null)")));
     }
-    auto registered =
-        register_provider_vtable(name, vt, self, std::move(library));
+    auto registered = register_provider_vtable(
+        name, vt, self, std::move(library), std::move(memory));
     if (!registered) {
         return host_fail(
             ctx, common::to_status(registered.error().condition()),

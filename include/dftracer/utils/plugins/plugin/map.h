@@ -259,6 +259,10 @@ class Host {
     class Json json() const;
     class Yaml yaml() const;
 
+    /// The memory service: blocks in the plugin's pool and reservations with
+    /// reclaimers; see plugin/memory.h.
+    class Memory memory() const;
+
     /// Get a host-owned parallel Writer for `path` with `worker_count` lanes
     /// (`gzip` != 0 compresses). The Writer is host-owned and scan-lifetime;
     /// open it, write chunks per worker, then close it - all co_await forms.

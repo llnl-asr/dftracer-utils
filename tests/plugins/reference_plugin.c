@@ -205,15 +205,17 @@ static dftu_status src_next(dftu_ctx* ctx, void* self, int64_t max_rows,
 
 static void src_cursor_destroy(void* self) { free(self); }
 
-static const dftu_cursor_vt SRC_CURSOR_VT = {
-    sizeof(dftu_cursor_vt), src_next, src_cursor_destroy, NULL, NULL, NULL};
+static const dftu_cursor_vt SRC_CURSOR_VT = {sizeof(dftu_cursor_vt), src_next,
+                                             src_cursor_destroy, NULL};
 
 static dftu_status src_scan(dftu_ctx* ctx, void* self,
+                            const dftu_plugin_host* host,
                             const dftu_scan_request* req, int32_t* out_pushed,
                             void** out_cursor_self,
                             const dftu_cursor_vt** out_vt) {
     SrcCursor* cur;
     (void)self;
+    (void)host;
     (void)req;
     (void)out_pushed;
     cur = (SrcCursor*)calloc(1, sizeof(SrcCursor));
@@ -232,13 +234,15 @@ static const dftu_source_vt SRC_VT = {
 /* ---- Node: "reference_plugin.node", doubles column "n", passes "amount"
  * through unchanged.
  *
- * A node's open()/next() get no dftu_plugin_host*, so a node cannot reach
- * dftu_svc_coro to await its upstream, and plain C has no native coroutine
- * to co_await it with either. dftu_svc_task::run is the way around that: it
- * blocks the calling thread until a task ends, so next() can synchronously
- * resolve its upstream before transforming the frame. The factory keeps the
- * task service and its `h` (run uses no host state, so they outlive the
- * factory's host) for the node to call.
+ * A node's next() gets no dftu_plugin_host*, and the host open() gets serves no
+ * dftu_svc_task, so a node cannot reach dftu_svc_coro to await its upstream,
+ * and plain C has no native coroutine to co_await it with either.
+ * dftu_svc_task::run is the way around that: it blocks the calling thread
+ * until a task ends, so next() can synchronously resolve its upstream before
+ * transforming the frame. The factory keeps the task service and its `h` (run
+ * uses no host state, so they outlive the factory's host) for the node to
+ * call. open() uses its host for the memory service: the cursor reserves its
+ * working bytes in the pool of the plugin and releases them when destroyed.
  */
 
 static const dftu_svc_task* g_node_task = NULL;
@@ -247,6 +251,8 @@ static void* g_node_task_h = NULL;
 typedef struct {
     void* in_self;
     const dftu_cursor_vt* in_vt;
+    const dftu_svc_memory* mem;
+    dftu_reservation* res;
 } NodeCursor;
 
 static dftu_status node_next(dftu_ctx* ctx, void* self, int64_t max_rows,
@@ -291,6 +297,7 @@ static dftu_status node_next(dftu_ctx* ctx, void* self, int64_t max_rows,
 
 static void node_cursor_destroy(void* self) {
     NodeCursor* nc = (NodeCursor*)self;
+    nc->mem->release(nc->res);
     if (nc->in_vt->destroy) nc->in_vt->destroy(nc->in_self);
     free(nc);
 }
@@ -298,8 +305,7 @@ static void node_cursor_destroy(void* self) {
 /* The node keeps every input column at its position (it rewrites `n` in
  * place), so a narrowing over its output is one over its input as well and
  * goes straight up; a node that dropped or reordered columns would remap or
- * refuse. The node holds nothing beyond the frame in flight, so it reports
- * no resident bytes and has nothing to reclaim. */
+ * refuse. */
 static dftu_status node_narrow(dftu_ctx* ctx, void* self,
                                const dftu_expr* predicate, int32_t* out_applied,
                                dftu_task** pending) {
@@ -311,23 +317,8 @@ static dftu_status node_narrow(dftu_ctx* ctx, void* self,
     return nc->in_vt->narrow(ctx, nc->in_self, predicate, out_applied, pending);
 }
 
-static uint64_t node_bytes(void* self) {
-    (void)self;
-    return 0;
-}
-
-static uint64_t node_reclaim(void* self, uint64_t want) {
-    (void)self;
-    (void)want;
-    return 0;
-}
-
-static const dftu_cursor_vt NODE_CURSOR_VT = {sizeof(dftu_cursor_vt),
-                                              node_next,
-                                              node_cursor_destroy,
-                                              node_narrow,
-                                              node_bytes,
-                                              node_reclaim};
+static const dftu_cursor_vt NODE_CURSOR_VT = {sizeof(dftu_cursor_vt), node_next,
+                                              node_cursor_destroy, node_narrow};
 
 static dftu_status node_output_schema(dftu_ctx* ctx, void* self,
                                       const dftu_schema* in,
@@ -342,7 +333,8 @@ static dftu_status node_output_schema(dftu_ctx* ctx, void* self,
     return DFTU_OK;
 }
 
-static dftu_status node_open(dftu_ctx* ctx, void* self, void* in_cursor_self,
+static dftu_status node_open(dftu_ctx* ctx, void* self,
+                             const dftu_plugin_host* host, void* in_cursor_self,
                              const dftu_cursor_vt* in_vt,
                              const dftu_op_arg* args, uint64_t memory_budget,
                              void** out_cursor_self,
@@ -355,6 +347,24 @@ static dftu_status node_open(dftu_ctx* ctx, void* self, void* in_cursor_self,
     if (!nc) return dftu_fail(ctx, DFTU_E_NO_MEMORY, "out of memory");
     nc->in_self = in_cursor_self;
     nc->in_vt = in_vt;
+    nc->res = NULL;
+    nc->mem =
+        (const dftu_svc_memory*)host->get_service(host->h, DFTU_SVC_MEMORY);
+    if (!nc->mem) {
+        free(nc);
+        return dftu_fail(ctx, DFTU_E_UNSUPPORTED,
+                         "the cursor host has no memory service");
+    }
+    {
+        dftu_status st =
+            nc->mem->reserve(ctx, host->h, &nc->res, "reference node");
+        if (st >= 0) st = nc->mem->try_grow(ctx, nc->res, 4096);
+        if (st < 0) {
+            nc->mem->release(nc->res);
+            free(nc);
+            return st;
+        }
+    }
     *out_cursor_self = nc;
     *out_vt = &NODE_CURSOR_VT;
     return DFTU_OK;
@@ -591,21 +601,6 @@ static dftu_status merge(dftu_ctx* ctx, void* into, void* other) {
 }
 
 static void destroy_slice(void* slice) { free(slice); }
-
-/* The slice's own footprint: the struct itself. The sketch and accumulator
-   are host handles, measured and spilled by the host. Nothing here can be
-   freed while the fold runs, so reclaim reports 0 honestly rather than
-   pretending; the host then logs once that the budget is not honoured. */
-static uint64_t slice_bytes(void* slice) {
-    (void)slice;
-    return (uint64_t)sizeof(RefSlice);
-}
-
-static uint64_t slice_reclaim(void* slice, uint64_t want) {
-    (void)slice;
-    (void)want;
-    return 0;
-}
 
 static dftu_status on_batch(dftu_ctx* ctx, void* slice,
                             const dftu_dataframe* df,
@@ -1312,8 +1307,6 @@ DFTU_PLUGIN_EXPORT dftu_status dftracer_plugin(dftu_ctx* ctx,
     g_plugin.destroy = destroy;
     g_plugin.config_keys = config_keys;
     g_plugin.reads = reads;
-    g_plugin.bytes = slice_bytes;
-    g_plugin.reclaim = slice_reclaim;
     *out = &g_plugin;
     return DFTU_OK;
 }

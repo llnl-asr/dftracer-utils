@@ -166,6 +166,7 @@ dftracer/utils/plugins/abi/format.h
 dftracer/utils/plugins/abi/fs.h
 dftracer/utils/plugins/abi/index.h
 dftracer/utils/plugins/abi/io.h
+dftracer/utils/plugins/abi/memory.h
 dftracer/utils/plugins/abi/nodes.h
 dftracer/utils/plugins/abi/ops.h
 dftracer/utils/plugins/abi/plugin.h
@@ -185,6 +186,7 @@ dftracer/utils/plugins/plugin/format.h
 dftracer/utils/plugins/plugin/fs.h
 dftracer/utils/plugins/plugin/job.h
 dftracer/utils/plugins/plugin/map.h
+dftracer/utils/plugins/plugin/memory.h
 dftracer/utils/plugins/plugin/node.h
 dftracer/utils/plugins/plugin/register.h
 dftracer/utils/plugins/plugin/source.h

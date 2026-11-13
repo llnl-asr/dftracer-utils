@@ -108,9 +108,9 @@ dftu_status async_schema(dftu_ctx*, void*, const char* const** names,
     return DFTU_OK;
 }
 
-dftu_status async_scan(dftu_ctx*, void*, const dftu_scan_request*,
-                       std::int32_t*, void** cursor_self,
-                       const dftu_cursor_vt** cursor_vt) {
+dftu_status async_scan(dftu_ctx*, void*, const dftu_plugin_host*,
+                       const dftu_scan_request*, std::int32_t*,
+                       void** cursor_self, const dftu_cursor_vt** cursor_vt) {
     *cursor_self = new AsyncCursor();
     *cursor_vt = &ASYNC_CURSOR_VT;
     return DFTU_OK;
@@ -125,7 +125,7 @@ const dftu_source_vt ASYNC_SOURCE_VT = {.struct_size = sizeof(dftu_source_vt),
 TEST_CASE("a provider whose next returns a task is awaited by the host") {
     plugins::AbiContext ctx;
     REQUIRE(plugins::host::detail::register_plugin_provider(
-                ctx.get(), "inproc.async", &ASYNC_SOURCE_VT, nullptr,
+                ctx.get(), "inproc.async", &ASYNC_SOURCE_VT, nullptr, nullptr,
                 nullptr) >= 0);
     dftu_lazyframe* lf = dftu_lazyframe_from_provider("inproc.async");
     REQUIRE(lf);

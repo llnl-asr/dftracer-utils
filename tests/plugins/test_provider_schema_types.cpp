@@ -62,12 +62,8 @@ void cursor_destroy(void* self) {
     delete cs;
 }
 
-const dftu_cursor_vt CURSOR_VT = {sizeof(dftu_cursor_vt),
-                                  cursor_next,
-                                  cursor_destroy,
-                                  nullptr,
-                                  nullptr,
-                                  nullptr};
+const dftu_cursor_vt CURSOR_VT = {sizeof(dftu_cursor_vt), cursor_next,
+                                  cursor_destroy, nullptr};
 
 // A source over the given names, whose scan() always returns one empty
 // morsel. `schema_types` is the vtable's optional type-declaration callback;
@@ -88,8 +84,9 @@ dftu_status fixture_schema(dftu_ctx*, void* self, const char* const** out_names,
     return DFTU_OK;
 }
 
-dftu_status fixture_scan(dftu_ctx*, void* self, const dftu_scan_request*,
-                         int32_t*, void** out_cursor_self,
+dftu_status fixture_scan(dftu_ctx*, void* self, const dftu_plugin_host*,
+                         const dftu_scan_request*, int32_t*,
+                         void** out_cursor_self,
                          const dftu_cursor_vt** out_vt) {
     auto* fx = static_cast<Fixture*>(self);
     auto* cs = new CursorState{empty_frame(fx->names)};

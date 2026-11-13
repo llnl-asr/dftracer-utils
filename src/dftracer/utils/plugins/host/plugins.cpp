@@ -16,6 +16,7 @@
 #include <dftracer/utils/plugins/host/build_host.h>
 #include <dftracer/utils/plugins/host/config.h>
 #include <dftracer/utils/plugins/host/fold_adapter.h>
+#include <dftracer/utils/plugins/host/plugin_memory.h>
 #include <dftracer/utils/plugins/host/plugins.h>
 #include <dftracer/utils/plugins/host/plugins_internal.h>
 #include <dftracer/utils/plugins/host/reserved_names.h>
@@ -70,6 +71,10 @@ struct Plugins::Impl {
         /* Index extension names registered via
            dftu_svc_index::register_extension; same reason as the providers. */
         dstd::Vector<dstd::String> registered_index_extensions;
+        /* The pool the plugin's blocks and reservations live in, named after
+           the plugin. Closed after the plugin's destroy ran, which releases
+           and reports any reservation the plugin left. */
+        dstd::SharedPtr<PluginMemory> memory;
     };
 
     ~Impl() {
@@ -88,6 +93,7 @@ struct Plugins::Impl {
             for (const dstd::String& name : p.registered_index_extensions)
                 trace::index::extensions::unregister_extension(name);
             p.library.reset();
+            p.memory.reset();
         }
     }
 
@@ -414,7 +420,8 @@ dstd::Result<Plugins::Impl::Loaded> load_plugin(const dstd::String& path,
                                  build_host.take_registered_ops(),
                                  build_host.take_registered_providers(),
                                  build_host.take_registered_nodes(),
-                                 build_host.take_registered_index_extensions()};
+                                 build_host.take_registered_index_extensions(),
+                                 build_host.memory()};
 }
 
 // Kahn topological sort of `n` nodes over `from -> to` edges (from must precede
@@ -672,7 +679,7 @@ coro::CoroTask<dstd::Result<PluginRun>> Plugins::run(const View& view) const {
         owned.push_back(dstd::make_unique<PluginFold>(
             impl_->plugins[i].plugin, intern, &shared, &out.results,
             impl_->plugins[i].name, view.memory_budget_bytes(),
-            &impl_->plugins[i].states));
+            &impl_->plugins[i].states, impl_->plugins[i].memory));
         folds.push_back(owned.back().get());
     }
 
@@ -705,15 +712,17 @@ trace::views::Deferred<PluginRun> Plugins::attach(
         const dftu_plugin* plugin = impl_->plugins[i].plugin;
         dstd::String name = impl_->plugins[i].name;
         const StateRegistry* states = &impl_->plugins[i].states;
+        dstd::SharedPtr<PluginMemory> memory = impl_->plugins[i].memory;
         // A session does not expose its plan's budget here, so an attached
         // plugin's accumulators spill on the auto policy rather than on an
         // explicit session budget.
         session.attach_fold_factory(
-            [plugin, shared, named, name,
-             states](dftracer::utils::dstd::StringIntern& intern)
+            [plugin, shared, named, name, states,
+             memory](dftracer::utils::dstd::StringIntern& intern)
                 -> dstd::UniquePtr<trace::views::detail::Fold> {
-                return dstd::make_unique<PluginFold>(
-                    plugin, intern, shared.get(), named, name, 0, states);
+                return dstd::make_unique<PluginFold>(plugin, intern,
+                                                     shared.get(), named, name,
+                                                     0, states, memory);
             },
             // The fused scan finalizes every attached fold together, so the
             // last one to finalize marks the handle resolved.
@@ -733,7 +742,7 @@ dstd::Result<Plugins> build_injected_plugins(
     impl->plugins.reserve(plugins.size());
     for (dftu_plugin* pl : plugins)
         impl->plugins.push_back(
-            {nullptr, pl, false, {}, {}, {}, {}, {}, {}, {}});
+            {nullptr, pl, false, {}, {}, {}, {}, {}, {}, {}, {}});
     auto ordered = settle_order(*impl);
     if (!ordered) return dstd::Unexpected(std::move(ordered).error());
     settle_prune(*impl);

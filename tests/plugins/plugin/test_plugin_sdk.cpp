@@ -16,6 +16,7 @@
 #include <dftracer/utils/plugins/host/node_adapter.h>
 #include <dftracer/utils/plugins/host/provider_source.h>
 #include <dftracer/utils/plugins/plugin/map.h>
+#include <dftracer/utils/plugins/plugin/memory.h>
 #include <dftracer/utils/plugins/plugin/node.h>
 #include <dftracer/utils/plugins/plugin/source.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -91,8 +92,8 @@ class RangeSource {
         dstd::SharedPtr<Counters> c_;
     };
 
-    dstd::Result<plugins::ScanResult<Cursor>> scan(
-        const plugins::ScanView& req) const {
+    dstd::Result<plugins::ScanResult<Cursor>> scan(const plugins::ScanView& req,
+                                                   const plugins::Host&) const {
         dstd::Vector<std::int64_t> ids, vals;
         for (std::int64_t i = lo_; i < hi_; ++i) {
             ids.push_back(i);
@@ -288,10 +289,12 @@ class DoubleVal {
 
     class Cursor {
        public:
-        explicit Cursor(dstd::Optional<plugins::InputCursor> in)
-            : in_(std::move(in)) {}
+        Cursor(dstd::Optional<plugins::InputCursor> in,
+               plugins::Reservation reservation)
+            : in_(std::move(in)), reservation_(std::move(reservation)) {}
         dstd::Result<dstd::Optional<plugins::OwnedFrame>> next(
-            std::int64_t max_rows) {
+            std::int64_t max_rows, const plugins::Host& host) {
+            DFTRACER_UTILS_TRY_VOID(reservation_.try_grow(host, 64));
             if (!in_) return dstd::nullopt;
             DFTRACER_UTILS_TRY(dstd::Optional<plugins::OwnedFrame> f,
                                in_->next(max_rows));
@@ -313,16 +316,20 @@ class DoubleVal {
 
        private:
         dstd::Optional<plugins::InputCursor> in_;
+        plugins::Reservation reservation_;
     };
 
-    dstd::Result<dstd::UniquePtr<Cursor>> open(plugins::InputCursor in,
-                                               const plugins::OpArgs&,
-                                               std::uint64_t) const {
+    dstd::Result<dstd::UniquePtr<Cursor>> open(
+        plugins::InputCursor in, const plugins::OpArgs&, std::uint64_t,
+        const plugins::Host& host) const {
         if (mode_ == OpenMode::Fail)
             return plugins::make_error(DFTU_E_INTERNAL, "no open");
+        DFTRACER_UTILS_TRY(plugins::Reservation reservation,
+                           host.memory().reserve("sdk node"));
         if (mode_ == OpenMode::DropInput)
-            return dstd::make_unique<Cursor>(dstd::nullopt);
-        return dstd::make_unique<Cursor>(std::move(in));
+            return dstd::make_unique<Cursor>(dstd::nullopt,
+                                             std::move(reservation));
+        return dstd::make_unique<Cursor>(std::move(in), std::move(reservation));
     }
 
    private:

@@ -18,8 +18,8 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi_context.h>
+#include <dftracer/utils/plugins/host/cursor_host.h>
 #include <dftracer/utils/plugins/host/node_adapter.h>
-#include <dftracer/utils/plugins/host/plugin_governor.h>
 #include <dftracer/utils/plugins/host/plugin_task.h>
 #include <dftracer/utils/plugins/task_abi.h>
 
@@ -44,9 +44,8 @@ class HostCursorBridge {
 
     static const ::dftu_cursor_vt* vt() {
         static const ::dftu_cursor_vt v{
-            sizeof(::dftu_cursor_vt),         &HostCursorBridge::next_thunk,
-            &HostCursorBridge::destroy_thunk, &HostCursorBridge::narrow_thunk,
-            &HostCursorBridge::bytes_thunk,   &HostCursorBridge::reclaim_thunk};
+            sizeof(::dftu_cursor_vt), &HostCursorBridge::next_thunk,
+            &HostCursorBridge::destroy_thunk, &HostCursorBridge::narrow_thunk};
         return &v;
     }
     void* self() { return this; }
@@ -137,14 +136,6 @@ class HostCursorBridge {
             dataframe::expr_handle_unwrap(predicate), out_applied));
         return DFTU_OK;
     }
-    static std::uint64_t bytes_thunk(void* self) {
-        return static_cast<HostCursorBridge*>(self)->cursor_->resident_bytes();
-    }
-    static std::uint64_t reclaim_thunk(void* self, std::uint64_t want) {
-        auto* self_ = static_cast<HostCursorBridge*>(self);
-        auto reclaimed = self_->cursor_->reclaim(want).get();
-        return reclaimed ? *reclaimed : 0;
-    }
 
     dstd::UniquePtr<dataframe::Cursor> cursor_;
     dstd::Vector<dstd::String> schema_;
@@ -157,14 +148,21 @@ class HostCursorBridge {
 struct NodeHandle {
     // First, so it is released after destroy() has run.
     dstd::SharedPtr<PluginLibrary> library;
+    dstd::SharedPtr<PluginMemory> memory;
     ::dftu_node_vt vt;
     void* self;
     dstd::String name;
     bool owned;
 
-    NodeHandle(dstd::SharedPtr<PluginLibrary> l, const ::dftu_node_vt& v,
+    NodeHandle(dstd::SharedPtr<PluginLibrary> l,
+               dstd::SharedPtr<PluginMemory> m, const ::dftu_node_vt& v,
                void* s, dstd::StringView n, bool o)
-        : library(std::move(l)), vt(v), self(s), name(n), owned(o) {}
+        : library(std::move(l)),
+          memory(std::move(m)),
+          vt(v),
+          self(s),
+          name(n),
+          owned(o) {}
     NodeHandle(const NodeHandle&) = delete;
     NodeHandle& operator=(const NodeHandle&) = delete;
     ~NodeHandle() {
@@ -176,15 +174,17 @@ struct NodeHandle {
 // any built-in one.
 class PluginNodeCursor final : public dataframe::Cursor {
    public:
-    PluginNodeCursor(dstd::SharedPtr<NodeHandle> node, void* out_self,
+    PluginNodeCursor(dstd::SharedPtr<NodeHandle> node,
+                     dstd::UniquePtr<CursorHost> host, void* out_self,
                      const ::dftu_cursor_vt* out_vt)
         : node_(std::move(node)),
+          host_(std::move(host)),
           out_self_(out_self),
-          out_vt_(out_vt),
-          gov_(out_vt) {}
+          out_vt_(out_vt) {}
 
     ~PluginNodeCursor() override {
         if (out_vt_->destroy) out_vt_->destroy(out_self_);
+        host_.reset();
     }
 
     PluginNodeCursor(const PluginNodeCursor&) = delete;
@@ -192,6 +192,7 @@ class PluginNodeCursor final : public dataframe::Cursor {
 
     coro::CoroTask<dataframe::MorselResult> next(
         std::int64_t max_rows) override {
+        host_->poll_reclaim();
         const coro::CancelView cancel = co_await coro::this_coro::cancel_view;
         plugins::AbiContext ctx(cancel);
         AbiHandle<::dftu_dataframe, ::dftu_dataframe_free> frame;
@@ -224,7 +225,6 @@ class PluginNodeCursor final : public dataframe::Cursor {
         dataframe::Morsel m;
         m.rows = df.num_rows();
         m.columns = std::move(df.columns);
-        gov_.at_morsel(out_vt_, out_self_);
         co_return std::move(m);
     }
 
@@ -253,18 +253,13 @@ class PluginNodeCursor final : public dataframe::Cursor {
         }
         co_return awaited_ok&& applied != 0;
     }
-    std::uint64_t resident_bytes() const override {
-        return out_vt_->bytes ? out_vt_->bytes(out_self_) : 0;
-    }
-    coro::CoroTask<std::uint64_t> reclaim(std::uint64_t want) override {
-        co_return out_vt_->reclaim ? out_vt_->reclaim(out_self_, want) : 0;
-    }
 
    private:
     dstd::SharedPtr<NodeHandle> node_;
+    // After the plugin's cursor is destroyed, so what it left is released then.
+    dstd::UniquePtr<CursorHost> host_;
     void* out_self_;
     const ::dftu_cursor_vt* out_vt_;
-    PluginGovernor gov_;
 };
 
 class VtableNode final : public dataframe::NodeImpl {
@@ -302,9 +297,12 @@ class VtableNode final : public dataframe::NodeImpl {
         void* out_self = nullptr;
         const ::dftu_cursor_vt* out_vt = nullptr;
         plugins::AbiContext ctx;
-        const dftu_status status = handle_->vt.open(
-            ctx.get(), handle_->self, bridge->self(), HostCursorBridge::vt(),
-            &args.raw(), memory_budget, &out_self, &out_vt);
+        auto host = dstd::make_unique<CursorHost>(handle_->memory, "node",
+                                                  memory_budget);
+        const dftu_status status =
+            handle_->vt.open(ctx.get(), handle_->self, host->host(),
+                             bridge->self(), HostCursorBridge::vt(),
+                             &args.raw(), memory_budget, &out_self, &out_vt);
         if (status < 0)
             return plugin_error(ctx, status,
                                 dstd::fmt<"lazy op '{}' open">(handle_->name));
@@ -318,7 +316,8 @@ class VtableNode final : public dataframe::NodeImpl {
         // HostCursorBridge::destroy_thunk.
         bridge.release();
         return dstd::UniquePtr<dataframe::Cursor>(
-            dstd::make_unique<PluginNodeCursor>(handle_, out_self, out_vt));
+            dstd::make_unique<PluginNodeCursor>(handle_, std::move(host),
+                                                out_self, out_vt));
     }
 
    private:
@@ -327,9 +326,10 @@ class VtableNode final : public dataframe::NodeImpl {
 
 }  // namespace
 
-dstd::Result<void> register_node_vtable(
-    dstd::StringView name, const ::dftu_node_vt* vt, void* self,
-    dstd::SharedPtr<PluginLibrary> library) {
+dstd::Result<void> register_node_vtable(dstd::StringView name,
+                                        const ::dftu_node_vt* vt, void* self,
+                                        dstd::SharedPtr<PluginLibrary> library,
+                                        dstd::SharedPtr<PluginMemory> memory) {
     if (name.empty() || !vt || !vt->output_schema || !vt->open) {
         return dstd::Error::from_format<
             "node register: the name, output_schema and open must be set">(
@@ -342,8 +342,8 @@ dstd::Result<void> register_node_vtable(
     }
     // Not owned until registered, so a refused registration leaves `self` to
     // the caller.
-    auto handle = dstd::make_shared<NodeHandle>(std::move(library), *vt, self,
-                                                name, false);
+    auto handle = dstd::make_shared<NodeHandle>(
+        std::move(library), std::move(memory), *vt, self, name, false);
     auto registered =
         dataframe::register_node(name, dstd::make_shared<VtableNode>(handle));
     if (registered) handle->owned = true;

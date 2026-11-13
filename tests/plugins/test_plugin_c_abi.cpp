@@ -550,6 +550,13 @@ TEST_CASE("C ABI: dftu_svc_fs calls succeed and fail from C") {
     dftu_test_fs_ops(c.get(), &fx.host(), &hn, env.dir().c_str());
 }
 
+TEST_CASE("C ABI: dftu_svc_memory blocks and reservations from C") {
+    HostFixture fx;
+    Ctx c;
+    const dftu_test_harness hn = make_harness(c);
+    dftu_test_memory_ops(c.get(), &fx.host(), &hn);
+}
+
 TEST_CASE("C ABI: dftu_svc_format JSON parses, writes and refuses from C") {
     HostFixture fx;
     Ctx c;

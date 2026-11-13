@@ -19,6 +19,7 @@
 #include <dftracer/utils/plugins/abi/fs.h>
 #include <dftracer/utils/plugins/abi/index.h>
 #include <dftracer/utils/plugins/abi/io.h>
+#include <dftracer/utils/plugins/abi/memory.h>
 #include <dftracer/utils/plugins/abi/nodes.h>
 #include <dftracer/utils/plugins/abi/ops.h>
 #include <dftracer/utils/plugins/abi/plugin.h>

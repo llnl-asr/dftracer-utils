@@ -57,14 +57,16 @@ static dftu_status src_next(dftu_ctx* ctx, void* self, int64_t max_rows,
 
 static void src_cursor_destroy(void* self) { free(self); }
 
-static const dftu_cursor_vt SRC_CURSOR_VT = {
-    sizeof(dftu_cursor_vt), src_next, src_cursor_destroy, NULL, NULL, NULL};
+static const dftu_cursor_vt SRC_CURSOR_VT = {sizeof(dftu_cursor_vt), src_next,
+                                             src_cursor_destroy, NULL};
 
 static dftu_status src_scan(dftu_ctx* ctx, void* self,
+                            const dftu_plugin_host* host,
                             const dftu_scan_request* req, int32_t* out_pushed,
                             void** out_cursor_self,
                             const dftu_cursor_vt** out_vt) {
     (void)self;
+    (void)host;
     (void)req;
     (void)out_pushed;
     *out_cursor_self = calloc(1, sizeof(SrcCursor));
@@ -98,8 +100,8 @@ static void node_cursor_destroy(void* self) {
     free(nc);
 }
 
-static const dftu_cursor_vt NODE_CURSOR_VT = {
-    sizeof(dftu_cursor_vt), node_next, node_cursor_destroy, NULL, NULL, NULL};
+static const dftu_cursor_vt NODE_CURSOR_VT = {sizeof(dftu_cursor_vt), node_next,
+                                              node_cursor_destroy, NULL};
 
 static dftu_status node_schema(dftu_ctx* ctx, void* self, const dftu_schema* in,
                                const dftu_op_arg* args, dftu_schema* out) {
@@ -112,12 +114,14 @@ static dftu_status node_schema(dftu_ctx* ctx, void* self, const dftu_schema* in,
     return DFTU_OK;
 }
 
-static dftu_status node_open(dftu_ctx* ctx, void* self, void* in_self,
+static dftu_status node_open(dftu_ctx* ctx, void* self,
+                             const dftu_plugin_host* host, void* in_self,
                              const dftu_cursor_vt* in_vt,
                              const dftu_op_arg* args, uint64_t budget,
                              void** out_self, const dftu_cursor_vt** out_vt) {
     NodeCursor* nc = (NodeCursor*)malloc(sizeof(NodeCursor));
     (void)self;
+    (void)host;
     (void)args;
     (void)budget;
     if (!nc) return dftu_fail(ctx, DFTU_E_INTERNAL, "no memory");

@@ -25,6 +25,7 @@ set(PLUGINS_TEST_SOURCES
     test_plugin_config.cpp
     test_plugin_public_config.cpp
     test_plugin_state.cpp
+    test_plugin_memory.cpp
     test_plugin_reads.cpp
     test_plugin_providers.cpp
     test_provider_pushdown.cpp
@@ -94,7 +95,8 @@ set(cabi_sources test_plugin_c_abi.cpp
                  io_abi_c_consumer.c
                  fileio_abi_c_consumer.c
                  fs_abi_c_consumer.c
-                 format_abi_c_consumer.c)
+                 format_abi_c_consumer.c
+                 memory_abi_c_consumer.c)
 add_executable(${cabi_target} ${cabi_sources})
 target_include_directories(${cabi_target} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
 target_link_libraries(${cabi_target} PRIVATE doctest::doctest dftracer_utils

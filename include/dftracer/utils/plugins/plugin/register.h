@@ -231,20 +231,6 @@ concept TransformStep = requires(Slice& s, const dftu_dataframe* df, Host h) {
     { s.transform(df, h) } -> std::same_as<dstd::Result<dftu_dataframe*>>;
 };
 
-/// A Slice that can say how big it is; the host's measure of it against the
-/// scan's memory budget.
-template <class Slice>
-concept MeasurableSlice = requires(const Slice& s) {
-    { s.bytes() } -> std::convertible_to<std::uint64_t>;
-};
-
-/// A Slice that can shrink on request: `reclaim(want)` frees up to `want`
-/// bytes however it can and returns how many it freed.
-template <class Slice>
-concept ReclaimableSlice = requires(Slice& s, std::uint64_t want) {
-    { s.reclaim(want) } -> std::convertible_to<std::uint64_t>;
-};
-
 /// One host step of the driven coroutine: runs it to its next co_await and
 /// hands the host the tasks it awaits, DFTU_END once it ran to completion, or
 /// the error it ended with. A task that ended with an error is not resumed: its
@@ -393,10 +379,10 @@ const dftu_config_key* config_key_thunk(void*) {
    consumes()`, each a range of const char* port/accumulator names outliving the
    plugin; make_plugin wires them to dftu_plugin::provides / ::consumes. A
    `static ... reads()` of batch column names becomes dftu_plugin::reads, which
-   projects the batch down to those columns. A `bytes()` const on the Slice
-   becomes dftu_plugin::bytes and a `reclaim(std::uint64_t want)` returning
-   the bytes freed becomes dftu_plugin::reclaim, so the host can hold the
-   slice to the scan's memory budget. A Slice that can fail at creation
+   projects the batch down to those columns. A Slice that holds growing state
+   reserves it through Host::memory() and sets a reclaimer on the reservation,
+   so the host can hold it to the scan's memory budget. A Slice that can fail
+   at creation
    provides `static dstd::Result<Slice> from_config(const Config&)`, which
    make_slice uses in place of the constructor. A callback reports failure by
    returning a dstd::Result (step, merge, finalize and the others may also
@@ -506,16 +492,6 @@ dftu_plugin* make_plugin(const dftu_value* config) {
         vt.reads = &detail::name_list_thunk<Slice, detail::NameList::Reads>;
     if constexpr (detail::DeclaresConfigKeys<Slice>)
         vt.config_keys = &detail::config_key_thunk<Slice>;
-    if constexpr (detail::MeasurableSlice<Slice>)
-        vt.bytes = [](void* slice) noexcept -> std::uint64_t {
-            return static_cast<const Slice*>(slice)->bytes();
-        };
-    if constexpr (detail::ReclaimableSlice<Slice>)
-        vt.reclaim = [](void* slice,
-                        std::uint64_t want) noexcept -> std::uint64_t {
-            return static_cast<Slice*>(slice)->reclaim(want);
-        };
-
     return &vt;
 }
 

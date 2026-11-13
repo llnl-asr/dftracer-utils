@@ -9,6 +9,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Added
 
+- Add the plugin service `dftu.svc.memory` (`abi/memory.h`), the `dftu_svc_memory` table.
+  Every loaded plugin has one memory pool named after it, so its blocks and reservations show in the pool gauges.
+  A slice reserves bytes with `reserve` and `try_grow`, which returns `DFTU_E_NO_MEMORY` with a message past the budget and leaves the reservation as it was.
+  A reclaimer set with `set_reclaimer` runs when a grow needs room, and the host releases and logs a reservation that a plugin leaves at unload.
+  The SDK has `Host::memory()`, with `Memory` and an RAII `Reservation`.
 - Add the plugin services `dftu.svc.json` and `dftu.svc.yaml` (`abi/format.h`), one `dftu_svc_format` table served under both ids.
   A plugin parses a text into a `dftu_value` tree, gets `DFTU_E_PARSE` with a `line:column: reason` message for a bad text, and writes a document with a streaming writer that returns `DFTU_E_INVALID` for a misuse.
   The SDK has `Host::json()` and `Host::yaml()`, with `Doc` and `FormatWriter`.
@@ -37,6 +42,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Remove `dftu_plugin::bytes` and `dftu_plugin::reclaim`, and `dftu_cursor_vt::bytes` and `dftu_cursor_vt::reclaim`.
+  A slice reserves its bytes through `dftu.svc.memory` and sets a reclaimer there, in place of reporting a size for the host to ask about.
+  A Slice no longer gets slots from `bytes()` and `reclaim()`, and a source cursor no longer gets them from `resident_bytes()` and `reclaim()`.
+- Pass a `const dftu_plugin_host*` to `dftu_source_vt::scan` and `dftu_node_vt::open`, and to `scan` and `open` in the SDK source and node classes.
+  The host stays valid until the cursor is destroyed, and it serves the services of a fold callback's host that need no scan.
+  A cursor reserves memory through it, charged to the pool of its plugin, and its reclaimers run between two `next()` calls when another holder of the budget asks the pool for bytes.
+  The host releases and logs a reservation that a cursor leaves.
 - Rename the C API headers `abi.h` to `c_api.h` in `common`, `dataframe`, `duql`, `runtime`, `store`, `trace/index` and `trace/views`.
   Move the aggregate-over-expression C declarations from `dataframe/agg_expr.h` to the new `dataframe/c_api_agg_expr.h`.
   The plugin headers `plugins/abi.h` and `plugins/abi/` keep their names.

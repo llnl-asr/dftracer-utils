@@ -100,7 +100,8 @@ const ::dftu_cursor_vt ROWS_CURSOR_VT = {.struct_size = sizeof(dftu_cursor_vt),
                                          .next = rows_next,
                                          .destroy = rows_cursor_destroy};
 
-dftu_status rows_scan(dftu_ctx*, void*, const ::dftu_scan_request*, int32_t*,
+dftu_status rows_scan(dftu_ctx*, void*, const dftu_plugin_host*,
+                      const ::dftu_scan_request*, int32_t*,
                       void** out_cursor_self, const ::dftu_cursor_vt** out_vt) {
     auto* cur = new RowsCursor();
     *out_cursor_self = cur;
@@ -138,7 +139,8 @@ const ::dftu_cursor_vt FAILING_CURSOR_VT = {
     .next = failing_next,
     .destroy = failing_cursor_destroy};
 
-dftu_status failing_scan(dftu_ctx*, void*, const ::dftu_scan_request*, int32_t*,
+dftu_status failing_scan(dftu_ctx*, void*, const dftu_plugin_host*,
+                         const ::dftu_scan_request*, int32_t*,
                          void** out_cursor_self,
                          const ::dftu_cursor_vt** out_vt) {
     static int dummy = 0;
@@ -193,7 +195,8 @@ class SdkRange {
     };
 
     dstd::Result<dftracer::utils::plugins::ScanResult<Cursor>> scan(
-        const dftracer::utils::plugins::ScanView&) const {
+        const dftracer::utils::plugins::ScanView&,
+        const dftracer::utils::plugins::Host&) const {
         dstd::Vector<int64_t> ids, vals;
         for (int64_t i = lo_; i < hi_; ++i) {
             ids.push_back(i);
@@ -261,7 +264,8 @@ class DoubleVal {
 
     dstd::Result<dstd::UniquePtr<Cursor>> open(
         dftracer::utils::plugins::InputCursor in,
-        const dftracer::utils::plugins::OpArgs&, std::uint64_t) const {
+        const dftracer::utils::plugins::OpArgs&, std::uint64_t,
+        const dftracer::utils::plugins::Host&) const {
         return dstd::make_unique<Cursor>(std::move(in));
     }
 };

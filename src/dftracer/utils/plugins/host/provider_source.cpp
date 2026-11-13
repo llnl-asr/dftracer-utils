@@ -19,7 +19,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi_context.h>
-#include <dftracer/utils/plugins/host/plugin_governor.h>
+#include <dftracer/utils/plugins/host/cursor_host.h>
 #include <dftracer/utils/plugins/host/plugin_task.h>
 #include <dftracer/utils/plugins/host/provider_source.h>
 #include <dftracer/utils/plugins/task_abi.h>
@@ -38,13 +38,19 @@ namespace {
 struct ProviderHandle {
     // First, so it is released after destroy() has run.
     dstd::SharedPtr<PluginLibrary> library;
+    dstd::SharedPtr<PluginMemory> memory;
     ::dftu_source_vt vt;
     void* self;
     bool owned;
 
-    ProviderHandle(dstd::SharedPtr<PluginLibrary> l, const ::dftu_source_vt& v,
+    ProviderHandle(dstd::SharedPtr<PluginLibrary> l,
+                   dstd::SharedPtr<PluginMemory> m, const ::dftu_source_vt& v,
                    void* s, bool o)
-        : library(std::move(l)), vt(v), self(s), owned(o) {}
+        : library(std::move(l)),
+          memory(std::move(m)),
+          vt(v),
+          self(s),
+          owned(o) {}
     ProviderHandle(const ProviderHandle&) = delete;
     ProviderHandle& operator=(const ProviderHandle&) = delete;
     ~ProviderHandle() {
@@ -74,13 +80,14 @@ class ProviderCursor final : public dataframe::Cursor {
    public:
     ProviderCursor(
         const ::dftu_cursor_vt* vt, void* self,
+        dstd::UniquePtr<CursorHost> host,
         dstd::Vector<dstd::String> expected_projection,
         dstd::Vector<dataframe::TypeId> expected_types,
         dftracer::utils::dstd::SharedPtr<const dataframe::Source> source)
         : source_(std::move(source)),
           vt_(vt),
           self_(self),
-          gov_(vt),
+          host_(std::move(host)),
           expected_projection_(std::move(expected_projection)),
           expected_types_(std::move(expected_types)) {}
 
@@ -88,6 +95,7 @@ class ProviderCursor final : public dataframe::Cursor {
         if (pending_task_) plugins::free_abi_task(pending_task_);
         if (pending_frame_) ::dftu_dataframe_free(pending_frame_);
         if (vt_->destroy) vt_->destroy(self_);
+        host_.reset();
     }
 
     ProviderCursor(const ProviderCursor&) = delete;
@@ -154,18 +162,13 @@ class ProviderCursor final : public dataframe::Cursor {
         const bool narrowed = awaited_ok && applied != 0;
         co_return narrowed;
     }
-    std::uint64_t resident_bytes() const override {
-        return vt_->bytes ? vt_->bytes(self_) : 0;
-    }
-    coro::CoroTask<std::uint64_t> reclaim(std::uint64_t want) override {
-        co_return vt_->reclaim ? vt_->reclaim(self_, want) : 0;
-    }
 
    private:
     // true when `out` holds the result; false when the call left a task to
     // await.
     bool call_next(coro::CancelView cancel, std::int64_t max_rows,
                    dataframe::MorselResult& out) {
+        host_->poll_reclaim();
         plugins::AbiContext ctx(cancel);
         // The member is the out slot: a pending task writes it after this
         // call returns, so it must outlive the task.
@@ -229,7 +232,6 @@ class ProviderCursor final : public dataframe::Cursor {
         dataframe::Morsel m;
         m.rows = df.num_rows();
         m.columns = std::move(df.columns);
-        gov_.at_morsel(vt_, self_);
         return dataframe::MorselResult(std::move(m));
     }
 
@@ -238,7 +240,8 @@ class ProviderCursor final : public dataframe::Cursor {
     dftracer::utils::dstd::SharedPtr<const dataframe::Source> source_;
     const ::dftu_cursor_vt* vt_;
     void* self_;
-    PluginGovernor gov_;
+    // After the plugin's cursor is destroyed, so what it left is released then.
+    dstd::UniquePtr<CursorHost> host_;
     dstd::Vector<dstd::String> expected_projection_;
     dstd::Vector<dataframe::TypeId> expected_types_;
     ::dftu_dataframe* pending_frame_ = nullptr;
@@ -442,9 +445,11 @@ class ProviderSource final
         void* cursor_self = nullptr;
         const ::dftu_cursor_vt* vt = nullptr;
         plugins::AbiContext ctx;
+        auto host = dstd::make_unique<CursorHost>(handle_->memory, "provider",
+                                                  req.memory_budget);
         const dftu_status status =
-            handle_->vt.scan(ctx.get(), handle_->self, &creq, out_pushed.data(),
-                             &cursor_self, &vt);
+            handle_->vt.scan(ctx.get(), handle_->self, host->host(), &creq,
+                             out_pushed.data(), &cursor_self, &vt);
 
         for (dftu_expr* h : owned_filters) dftu_expr_free(h);
 
@@ -472,8 +477,8 @@ class ProviderSource final
             }
         }
         r.cursor = dstd::make_unique<ProviderCursor>(
-            vt, cursor_self, req.projection, std::move(expected_types),
-            shared_from_this());
+            vt, cursor_self, std::move(host), req.projection,
+            std::move(expected_types), shared_from_this());
         return r;
     }
 
@@ -564,8 +569,8 @@ class ProviderSource final
             inputs{shared_from_this()};
         if (other) inputs.push_back(std::move(other));
         auto derived = dstd::make_shared<ProviderSource>(
-            dstd::make_shared<ProviderHandle>(handle_->library, *out.vt,
-                                              out.self, true),
+            dstd::make_shared<ProviderHandle>(handle_->library, handle_->memory,
+                                              *out.vt, out.self, true),
             std::move(inputs));
         // Constructed first so an answer refused below is still destroyed.
         if (!status ||
@@ -597,14 +602,16 @@ class VtableProvider final : public dataframe::ProviderFactory {
 }  // namespace
 
 dstd::SharedPtr<dataframe::Source> make_provider_source(
-    const ::dftu_source_vt& vt, void* self) {
-    return dstd::make_shared<ProviderSource>(
-        dstd::make_shared<ProviderHandle>(nullptr, vt, self, false));
+    const ::dftu_source_vt& vt, void* self,
+    dstd::SharedPtr<PluginMemory> memory) {
+    return dstd::make_shared<ProviderSource>(dstd::make_shared<ProviderHandle>(
+        nullptr, std::move(memory), vt, self, false));
 }
 
 dstd::Result<void> register_provider_vtable(
     dstd::StringView name, const ::dftu_source_vt* vt, void* self,
-    dstd::SharedPtr<PluginLibrary> library) {
+    dstd::SharedPtr<PluginLibrary> library,
+    dstd::SharedPtr<PluginMemory> memory) {
     if (name.empty() || !vt) {
         return dstd::Error::from_format<
             "provider register: the name and the vtable must be set">(
@@ -617,8 +624,8 @@ dstd::Result<void> register_provider_vtable(
     }
     // Not owned until registered, so a refused registration leaves `self` to
     // the caller.
-    auto handle =
-        dstd::make_shared<ProviderHandle>(std::move(library), *vt, self, false);
+    auto handle = dstd::make_shared<ProviderHandle>(
+        std::move(library), std::move(memory), *vt, self, false);
     auto registered = dataframe::register_provider(
         name, dstd::make_shared<VtableProvider>(handle));
     if (registered) handle->owned = true;

@@ -22,6 +22,7 @@
 #include <dftracer/utils/json/value.h>
 #include <dftracer/utils/json/value_access.h>
 #include <dftracer/utils/memory/budget.h>
+#include <dftracer/utils/memory/detail/pool_access.h>
 #include <dftracer/utils/plugins/abi_context.h>
 #include <dftracer/utils/plugins/host/fold_adapter.h>
 #include <dftracer/utils/plugins/host/fold_adapter/ext.h>
@@ -91,32 +92,9 @@ dftu_str host_intern(void* h, const char* s, std::uint32_t len) {
 // it honors the configured (compile-time and runtime) level.
 void host_log(void* h, std::uint8_t level, const char* s, std::uint32_t n) {
     const auto* pf = static_cast<const PluginFold*>(h);
-    const char* name =
-        pf && !pf->plugin_name().empty() ? pf->plugin_name().c_str() : "plugin";
-    const int len = static_cast<int>(n);
-    const char* msg = s ? s : "";
-    switch (level) {
-        case DFTU_LOG_ERROR:
-            DFTRACER_UTILS_LOG_ERROR("[plugin:{}] {}", name,
-                                     dstd::StringView(msg, len));
-            break;
-        case DFTU_LOG_WARN:
-            DFTRACER_UTILS_LOG_WARN("[plugin:{}] {}", name,
-                                    dstd::StringView(msg, len));
-            break;
-        case DFTU_LOG_DEBUG:
-            DFTRACER_UTILS_LOG_DEBUG("[plugin:{}] {}", name,
-                                     dstd::StringView(msg, len));
-            break;
-        case DFTU_LOG_TRACE:
-            DFTRACER_UTILS_LOG_TRACE("[plugin:{}] {}", name,
-                                     dstd::StringView(msg, len));
-            break;
-        default:
-            DFTRACER_UTILS_LOG_INFO("[plugin:{}] {}", name,
-                                    dstd::StringView(msg, len));
-            break;
-    }
+    detail::log_plugin_line(
+        pf ? dstd::StringView(pf->plugin_name()) : dstd::StringView(), level, s,
+        n);
 }
 
 // A negative result is -errno from the I/O layer; it fails the task as
@@ -1249,22 +1227,31 @@ const dftu_svc_ports g_ports = {sizeof(dftu_svc_ports), host_port_key,
 const dftu_svc_duql g_query = {sizeof(dftu_svc_duql), host_query_compile,
                                host_query_matches};
 
-// Stateless ext tables share one instance across all folds (each fn takes h).
+// The tables of the services that need a scan share one instance across all
+// folds (each fn takes h); detail::stateless_service has the rest.
 const void* host_get_service(void*, const char* ext_id) {
     if (!ext_id) return nullptr;
-    if (std::strcmp(ext_id, DFTU_SVC_IO) == 0) return &g_io;
     if (std::strcmp(ext_id, DFTU_SVC_TASK) == 0)
         return detail::task_ext_vtable();
     if (std::strcmp(ext_id, DFTU_SVC_DUQL) == 0) return &g_query;
     if (std::strcmp(ext_id, DFTU_SVC_FILEIO) == 0)
         return detail::fileio_ext_vtable();
-    if (std::strcmp(ext_id, DFTU_SVC_SKETCH) == 0) return &g_sketch;
-    if (std::strcmp(ext_id, DFTU_SVC_ARROW) == 0) return &g_arrow;
     if (std::strcmp(ext_id, DFTU_SVC_TRACE) == 0) return &g_trace;
     if (std::strcmp(ext_id, DFTU_SVC_PORTS) == 0) return &g_ports;
     if (std::strcmp(ext_id, DFTU_SVC_RESULT) == 0)
         return detail::result_ext_vtable();
     if (std::strcmp(ext_id, DFTU_SVC_AGG) == 0) return detail::agg_ext_vtable();
+    if (std::strcmp(ext_id, DFTU_SVC_MEMORY) == 0)
+        return detail::memory_ext_vtable();
+    return detail::stateless_service(ext_id);
+}
+
+}  // namespace
+
+const void* detail::stateless_service(const char* ext_id) {
+    if (std::strcmp(ext_id, DFTU_SVC_IO) == 0) return &g_io;
+    if (std::strcmp(ext_id, DFTU_SVC_SKETCH) == 0) return &g_sketch;
+    if (std::strcmp(ext_id, DFTU_SVC_ARROW) == 0) return &g_arrow;
     if (std::strcmp(ext_id, DFTU_SVC_OPS) == 0) return detail::ops_ext_vtable();
     if (std::strcmp(ext_id, DFTU_SVC_PROVIDERS) == 0)
         return detail::providers_ext_vtable();
@@ -1280,7 +1267,35 @@ const void* host_get_service(void*, const char* ext_id) {
     return nullptr;
 }
 
-}  // namespace
+void detail::log_plugin_line(dstd::StringView plugin, std::uint8_t level,
+                             const char* s, std::uint32_t n) {
+    const dstd::StringView name =
+        plugin.empty() ? dstd::StringView("plugin") : plugin;
+    const int len = static_cast<int>(n);
+    const char* msg = s ? s : "";
+    switch (level) {
+        case DFTU_LOG_ERROR:
+            DFTRACER_UTILS_LOG_ERROR("[plugin:{}] {}", name,
+                                     dstd::StringView(msg, len));
+            break;
+        case DFTU_LOG_WARN:
+            DFTRACER_UTILS_LOG_WARN("[plugin:{}] {}", name,
+                                    dstd::StringView(msg, len));
+            break;
+        case DFTU_LOG_DEBUG:
+            DFTRACER_UTILS_LOG_DEBUG("[plugin:{}] {}", name,
+                                     dstd::StringView(msg, len));
+            break;
+        case DFTU_LOG_TRACE:
+            DFTRACER_UTILS_LOG_TRACE("[plugin:{}] {}", name,
+                                     dstd::StringView(msg, len));
+            break;
+        default:
+            DFTRACER_UTILS_LOG_INFO("[plugin:{}] {}", name,
+                                    dstd::StringView(msg, len));
+            break;
+    }
+}
 
 PluginHandle* PluginFold::adopt_handle(dstd::UniquePtr<PluginHandle> handle) {
     std::lock_guard<std::mutex> lock(handles_mutex_);
@@ -1365,14 +1380,17 @@ PluginFold::PluginFold(const dftu_plugin* plugin,
                        SharedResultRegistry* results,
                        utils::plugins::NamedResultRegistry* named_results,
                        dstd::String plugin_name, std::uint64_t memory_budget,
-                       const StateRegistry* states)
+                       const StateRegistry* states,
+                       dstd::SharedPtr<PluginMemory> memory)
     : plugin_(plugin),
       plugin_name_(std::move(plugin_name)),
       intern_(&intern),
       results_(results),
       named_results_(named_results),
       memory_budget_(memory_budget),
+      memory_(std::move(memory)),
       states_(states) {
+    if (!memory_) memory_ = dstd::make_shared<PluginMemory>(plugin_name_);
     if (states_) {
         state_accums_.reserve(states_->size());
         for (const RegisteredState& reg : *states_)
@@ -1425,6 +1443,7 @@ PluginFold::PluginFold(const dftu_plugin* plugin,
 
 PluginFold::~PluginFold() {
     if (slice_) plugin_->destroy_slice(slice_);
+    memory_->release_tagged(this);
 }
 
 dstd::Result<::dftu_duql*> PluginFold::compile_query(const char* src,
@@ -1588,10 +1607,13 @@ dstd::Result<void> PluginFold::step(const FoldBatch& batch) {
         }
     }
     dftu_dataframe_free(cdf);
-    if (!stepped) return stepped;
-    reclaim_slice();
-    return {};
+    poll_reclaim();
+    return stepped;
 }
+
+void PluginFold::watch_memory_requests() { memory_watch_.watch(*memory_); }
+
+void PluginFold::poll_reclaim() { memory_watch_.poll(*memory_, this); }
 
 // The batch a transform earlier in this step rewrote, cut down to this
 // plugin's projection (by name; a column the rewrite dropped is absent, as
@@ -1631,30 +1653,9 @@ dataframe::DataFrame PluginFold::rewritten_batch(
     return df;
 }
 
-void PluginFold::reclaim_slice() {
-    if (!slice_ || !plugin_->bytes) return;
-    const std::uint64_t budget =
-        dftracer::utils::memory::resolve_spill_budget(memory_budget_);
-    if (budget == dftracer::utils::memory::NO_SPILL_BUDGET) return;
-    const std::uint64_t held = plugin_->bytes(slice_);
-    if (held <= budget) return;
-    const std::uint64_t freed =
-        plugin_->reclaim ? plugin_->reclaim(slice_, held - budget) : 0;
-    ++slice_reclaims_;
-    if (freed == 0 && !reclaim_refused_) {
-        reclaim_refused_ = true;
-        DFTRACER_UTILS_LOG_ERROR(
-            "[plugin:{}] slice holds {} bytes past the {} byte memory budget "
-            "and {}, so it stays in memory and the budget is not honoured",
-            plugin_name().empty() ? "plugin" : plugin_name(),
-            static_cast<unsigned long long>(held),
-            static_cast<unsigned long long>(budget),
-            plugin_->reclaim ? "reclaim freed nothing" : "declares no reclaim");
-    }
-}
-
 dstd::Result<void> PluginFold::merge(Fold& other) {
     auto& o = static_cast<PluginFold&>(other);
+    memory_->retag(&o, this);
     if (auto states = states_merge(o); !states) return states.error();
     if (!slice_) return {};
     if (o.slice_) {
@@ -1664,9 +1665,8 @@ dstd::Result<void> PluginFold::merge(Fold& other) {
             return callback_error(plugin_label(), "merge", status,
                                   ctx.message());
     }
-    slice_reclaims_ += o.slice_reclaims_;
-    reclaim_refused_ = reclaim_refused_ || o.reclaim_refused_;
-    reclaim_slice();
+    if (memory_->held_by(this) != 0) watch_memory_requests();
+    poll_reclaim();
 
     // Fold each worker's aggregation accumulators into this master by name via
     // the engine's single merge path (agg_merge). An accumulator new to the

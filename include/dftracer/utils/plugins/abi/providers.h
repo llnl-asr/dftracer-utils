@@ -69,16 +69,6 @@ typedef struct dftu_cursor_vt {
        (nonzero when the cursor did anything with it, for diagnostics). */
     dftu_status (*narrow)(dftu_ctx* ctx, void* self, const dftu_expr* predicate,
                           int32_t* out_applied, dftu_task** pending);
-    /** Optional (may be NULL). Bytes this cursor holds resident beyond one
-       in-flight frame: a build table, a spool, a cache. The host sums it
-       over the plan against the memory budget; without it the cursor is
-       never asked to reclaim. */
-    uint64_t (*bytes)(void* self);
-    /** Optional (may be NULL). Free up to `want` resident bytes (spill to
-       disk, compact, drop a cache) and return how many were freed; less, or
-       0, is allowed. The rows the cursor produces must not change. Called
-       when the plan runs past its budget, largest holder first. */
-    uint64_t (*reclaim)(void* self, uint64_t want);
 } dftu_cursor_vt;
 
 /** How completely a source applied one pushed-down filter (mirrors
@@ -259,7 +249,21 @@ typedef struct dftu_source_vt {
        for its lifetime (until destroy()); `*out_count` is their number. */
     dftu_status (*schema)(dftu_ctx* ctx, void* self,
                           const char* const** out_names, int32_t* out_count);
-    /** Open a cursor honoring `req`. `out_pushed` has req->n_filters entries,
+    /** Open a cursor honoring `req`. `host` is the host of this cursor: it
+       stays valid until the cursor's destroy() has returned. It answers
+       DFTU_SVC_MEMORY, DFTU_SVC_IO, DFTU_SVC_FS, DFTU_SVC_JSON, DFTU_SVC_YAML,
+       DFTU_SVC_SKETCH, DFTU_SVC_ARROW, DFTU_SVC_OPS, DFTU_SVC_PROVIDERS,
+       DFTU_SVC_NODES and DFTU_SVC_INDEX as a fold callback's host does, and
+       returns NULL for the services that belong to one scan: DFTU_SVC_TASK,
+       DFTU_SVC_FILEIO, DFTU_SVC_AGG, DFTU_SVC_RESULT, DFTU_SVC_PORTS,
+       DFTU_SVC_DUQL and DFTU_SVC_TRACE. Its resolve returns NULL and its
+       intern returns DFTU_STR_NONE, since a cursor has no intern table. A
+       reservation made through it is charged to the plugin's pool, and a
+       reclaimer set on it runs on the thread that drives the cursor, between
+       two next() calls, when another holder of the process budget asks the
+       pool for bytes. A reservation the cursor still holds when destroy()
+       returns is released by the host, which logs an error. `out_pushed` has
+       req->n_filters entries,
        pre-filled DFTU_PUSHED_NO by the host; write one dftu_pushed per
        req->filters entry, leaving an untranslated filter DFTU_PUSHED_NO.
        On success, *out_cursor_self receives the cursor's `self` (it may be
@@ -269,9 +273,9 @@ typedef struct dftu_source_vt {
        produces (sync or via the awaited task) MUST carry exactly those
        columns, in that order; the host verifies this and surfaces a scan
        error rather than passing a mismatched frame downstream. */
-    dftu_status (*scan)(dftu_ctx* ctx, void* self, const dftu_scan_request* req,
-                        int32_t* out_pushed, void** out_cursor_self,
-                        const dftu_cursor_vt** out_vt);
+    dftu_status (*scan)(dftu_ctx* ctx, void* self, const dftu_plugin_host* host,
+                        const dftu_scan_request* req, int32_t* out_pushed,
+                        void** out_cursor_self, const dftu_cursor_vt** out_vt);
     /** Release the source; called once, after every cursor it opened has
        been destroyed. */
     void (*destroy)(void* self);

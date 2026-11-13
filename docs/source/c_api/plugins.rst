@@ -37,8 +37,8 @@ Core: the descriptor, the host and the values
 
 ``dftu_plugin`` is the fold a plugin fills (``make_slice`` / ``on_batch`` or
 ``transform`` / ``merge`` / ``on_finalize``, plus the optional ``reads``,
-``plan_duql``, ``provides`` / ``consumes``, ``config_keys``, ``bytes`` /
-``reclaim``); ``dftu_plugin_host`` is what the host lends back;
+``plan_duql``, ``provides`` / ``consumes``, ``config_keys``);
+``dftu_plugin_host`` is what the host lends back;
 ``dftu_value`` is the config tree.
 
 .. doxygenfile:: dftracer/utils/plugins/abi/core.h
@@ -170,4 +170,11 @@ table type. A document parses into a ``dftu_value`` tree with line and column
 errors, and a streaming writer builds a document in memory.
 
 .. doxygenfile:: dftracer/utils/plugins/abi/format.h
+   :project: dftracer-utils
+
+``dftu.svc.memory``: the host's memory manager. A plugin has one pool, named
+after it, for its blocks and its reservations. A reservation grows or fails
+cleanly and may carry a reclaimer that the host calls when a grow needs room.
+
+.. doxygenfile:: dftracer/utils/plugins/abi/memory.h
    :project: dftracer-utils

@@ -208,6 +208,10 @@ add_test(
     "bad=$(grep -rnE '^[[:space:]]*using namespace' \"$0/include\" \"$0/src\" \"$0/tests\" \"$0/benchmarks\" \"$0/examples\" --include='*.h' --include='*.hpp' --include='*.inl' | grep -v 'dftracer/utils/dstd/vendor/'); if [ -n \"$bad\" ]; then echo \"using namespace in a header; qualify the names and put the directive in the .cpp:\"; echo \"$bad\"; exit 1; fi"
     ${CMAKE_SOURCE_DIR})
 add_test(
+  NAME included_source_using
+  COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -P
+          ${CMAKE_SOURCE_DIR}/cmake/scripts/check_included_source_using.cmake)
+add_test(
   NAME no_namespace_aliases
   COMMAND
     sh -c

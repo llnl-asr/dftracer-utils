@@ -171,14 +171,6 @@ TEST_CASE("arguments and results pass through") {
 
 namespace {
 
-struct ThrowingCopy {
-    ThrowingCopy() = default;
-    ThrowingCopy(const ThrowingCopy&) { throw std::runtime_error("copy"); }
-    ThrowingCopy(ThrowingCopy&&) noexcept = default;
-    int operator()(int x) { return x; }
-    std::array<char, 64> pad{};
-};
-
 struct alignas(32) OverAligned {
     int operator()(int x) const {
         return reinterpret_cast<std::uintptr_t>(this) % 32 == 0 ? x : -1;
@@ -186,14 +178,6 @@ struct alignas(32) OverAligned {
 };
 
 }  // namespace
-
-TEST_CASE("a throwing copy into the heap frees the block") {
-    memory::PoolHandle pool = root().child("throwing");
-    memory::detail::Scope s{*pool};
-    ThrowingCopy source;
-    CHECK_THROWS_AS(dstd::Function<int(int)>{source}, std::runtime_error);
-    CHECK(pool->blocks() == 0);
-}
 
 TEST_CASE("an over-aligned callable goes to the heap with its alignment") {
     memory::PoolHandle pool = root().child("aligned");

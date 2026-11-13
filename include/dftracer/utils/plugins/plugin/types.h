@@ -24,7 +24,7 @@ inline dstd::Error make_error(dftu_status status,
     const std::int32_t code = -status - 1;
     const auto condition =
         status < 0 &&
-                code <= static_cast<std::int32_t>(dstd::Condition::ForkedHandle)
+                code <= static_cast<std::int32_t>(dstd::Condition::OutOfMemory)
             ? static_cast<dstd::Condition>(code)
             : dstd::Condition::Unknown;
     return dstd::Error(condition, message);

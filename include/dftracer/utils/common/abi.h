@@ -42,7 +42,8 @@ enum {
     DFTU_E_TIMEOUT = -8,
     DFTU_E_UNSUPPORTED = -9,
     DFTU_E_CANCELLED = -10,
-    DFTU_E_FORKED_HANDLE = -11
+    DFTU_E_FORKED_HANDLE = -11,
+    DFTU_E_NO_MEMORY = -12 /**< an allocation or reservation was refused */
 };
 
 /** A library call's error.

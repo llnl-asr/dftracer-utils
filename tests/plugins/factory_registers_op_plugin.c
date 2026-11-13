@@ -25,7 +25,7 @@ static int64_t g_total;
 static dftu_status make_slice(dftu_ctx* ctx, void* self, void** out) {
     (void)self;
     *out = calloc(1, sizeof(int64_t));
-    if (!*out) return dftu_fail(ctx, DFTU_E_INTERNAL, "out of memory");
+    if (!*out) return dftu_fail(ctx, DFTU_E_NO_MEMORY, "out of memory");
     return DFTU_OK;
 }
 

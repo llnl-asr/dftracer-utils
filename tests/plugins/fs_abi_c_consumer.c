@@ -238,6 +238,13 @@ void dftu_test_fs_ops(dftu_ctx* ctx, const dftu_plugin_host* h,
     expect_status(s, "stat_batch with a NULL path array",
                   fs->stat_batch(ctx, h->h, NULL, 3, stats, statuses, &t),
                   DFTU_E_INVALID, NULL);
+    expect_status(
+        s, "stat_batch with a count the heap cannot hold",
+        fs->stat_batch(ctx, h->h, paths, UINT64_MAX / 2, stats, statuses, &t),
+        DFTU_E_NO_MEMORY, NULL);
+    hn->ctx_message(ctx, s->msg, MSG_CAP);
+    hn->expect("the refused stat_batch names the allocation",
+               strstr(s->msg, "cannot allocate") != NULL);
 
     expect_failed(s, "remove of a directory that has entries",
                   finish(s, fs->remove(ctx, h->h, sub, &flag, &t), t),

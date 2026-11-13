@@ -192,7 +192,7 @@ is never called into. Rebuild the plugin against the host you run.
          static dftu_status make_slice(dftu_ctx* ctx, void* self, void** out) {
              (void)self;
              *out = calloc(1, 1);
-             return *out ? DFTU_OK : dftu_fail(ctx, DFTU_E_INTERNAL, "out of memory");
+             return *out ? DFTU_OK : dftu_fail(ctx, DFTU_E_NO_MEMORY, "out of memory");
          }
          static dftu_status on_batch(dftu_ctx* ctx, void* slice,
                                      const dftu_dataframe* df,

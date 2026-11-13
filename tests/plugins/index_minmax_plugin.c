@@ -39,7 +39,7 @@ static int g_fail_step;
 static dftu_status make_builder(dftu_ctx* ctx, void* self, void** out) {
     (void)self;
     *out = calloc(1, sizeof(builder));
-    if (!*out) return dftu_fail(ctx, DFTU_E_INTERNAL, "out of memory");
+    if (!*out) return dftu_fail(ctx, DFTU_E_NO_MEMORY, "out of memory");
     return DFTU_OK;
 }
 
@@ -98,7 +98,7 @@ static dftu_status compile(dftu_ctx* ctx, void* self,
     if (leaf->value->kind != DFTU_VAL_I64 && leaf->value->kind != DFTU_VAL_F64)
         return DFTU_OK;
     c = (compiled*)malloc(sizeof(compiled));
-    if (!c) return dftu_fail(ctx, DFTU_E_INTERNAL, "out of memory");
+    if (!c) return dftu_fail(ctx, DFTU_E_NO_MEMORY, "out of memory");
     c->op = leaf->op;
     c->value = dftu_as_f64(leaf->value, 0);
     *out = c;
@@ -134,7 +134,7 @@ static dftu_index_extension g_ext;
 static dftu_status make_slice(dftu_ctx* ctx, void* self, void** out) {
     (void)self;
     *out = calloc(1, 1);
-    if (!*out) return dftu_fail(ctx, DFTU_E_INTERNAL, "out of memory");
+    if (!*out) return dftu_fail(ctx, DFTU_E_NO_MEMORY, "out of memory");
     return DFTU_OK;
 }
 static dftu_status on_batch(dftu_ctx* ctx, void* slice,

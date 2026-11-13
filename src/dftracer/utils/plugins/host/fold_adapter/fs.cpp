@@ -6,6 +6,7 @@
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/try_reserve.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <dftracer/utils/plugins/host/fold_adapter/ext.h>
@@ -421,7 +422,9 @@ dftu_status fs_stat_batch(::dftu_ctx* ctx, void*, const char* const* paths,
         return host_fail(ctx, DFTU_E_INVALID,
                          "stat_batch: paths, out or out_status is NULL");
     dstd::Vector<dstd::Path> copies;
-    copies.reserve(static_cast<std::size_t>(n));
+    if (auto reserved = dstd::try_reserve(copies, static_cast<std::size_t>(n));
+        !reserved)
+        return host_fail(ctx, reserved.error());
     for (std::uint64_t i = 0; i < n; ++i) {
         if (paths[i] == nullptr)
             return host_fail(ctx, DFTU_E_INVALID, "stat_batch: a path is NULL");

@@ -292,6 +292,17 @@ add_test(NAME coro_lambdas
 add_test(NAME coro_lambdas_self
          COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -DSELF_TEST=ON -P
                  ${CMAKE_SOURCE_DIR}/cmake/scripts/check_coro_lambdas.cmake)
+add_test(NAME no_exceptions_self
+         COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -DSELF_TEST=ON -P
+                 ${CMAKE_SOURCE_DIR}/cmake/scripts/check_no_exceptions.cmake)
+# Fails until the coroutine library and the tests no longer use exceptions.
+option(DFTRACER_UTILS_CHECK_NO_EXCEPTIONS
+       "Register the no_exceptions ctest" OFF)
+if(DFTRACER_UTILS_CHECK_NO_EXCEPTIONS)
+  add_test(NAME no_exceptions
+           COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -P
+                   ${CMAKE_SOURCE_DIR}/cmake/scripts/check_no_exceptions.cmake)
+endif()
 add_test(NAME enum_style
          COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -P
                  ${CMAKE_SOURCE_DIR}/cmake/scripts/check_enum_style.cmake)
@@ -341,6 +352,7 @@ set(TEST_CPP_SOURCES
     dstd/test_string_intern.cpp
     dstd/test_eviction_policy.cpp
     dstd/test_containers.cpp
+    dstd/test_try_reserve.cpp
     dstd/test_function.cpp
     dstd/test_any.cpp
     dstd/test_cstring_view.cpp

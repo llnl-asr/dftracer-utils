@@ -126,7 +126,7 @@ inline std::uint64_t peak_heap_bytes() {
 void *operator new(std::size_t size) {
     dftu::bench::new_calls().fetch_add(1, std::memory_order_relaxed);
     void *p = std::malloc(size == 0 ? 1 : size);
-    if (p == nullptr) throw std::bad_alloc();
+    if (p == nullptr) std::abort();
     return p;
 }
 
@@ -136,7 +136,7 @@ void *operator new(std::size_t size, std::align_val_t align) {
     std::size_t alignment = static_cast<std::size_t>(align);
     if (alignment < sizeof(void *)) alignment = sizeof(void *);
     if (::posix_memalign(&p, alignment, size == 0 ? 1 : size) != 0) {
-        throw std::bad_alloc();
+        std::abort();
     }
     return p;
 }

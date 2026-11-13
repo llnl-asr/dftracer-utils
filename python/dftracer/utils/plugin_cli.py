@@ -28,7 +28,7 @@ def _c_template(name: str) -> str:
 static dftu_status make_slice(dftu_ctx* ctx, void* self, void** out) {{
     (void)self;
     *out = calloc(1, 1);
-    if (!*out) return dftu_fail(ctx, DFTU_E_INTERNAL, "out of memory");
+    if (!*out) return dftu_fail(ctx, DFTU_E_NO_MEMORY, "out of memory");
     return DFTU_OK;
 }}
 

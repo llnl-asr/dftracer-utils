@@ -24,7 +24,7 @@ A ``dstd::Error`` (``dstd/error.h``) is 16 bytes and carries three things and an
   Every name starts with ``dftracer.utils.``, such as ``dftracer.utils.core`` and ``dftracer.utils.duql``.
 - ``code()`` is that subsystem's own enum value, which means something only together with its domain.
   The duql library's ``DuqlErrc::Pattern`` and another subsystem's code ``1`` are unrelated even when their numbers match.
-- ``condition()`` is a ``dstd::Condition``, a small, closed, cross-domain enum (``Unknown``, ``Internal``, ``InvalidArgument``, ``NotFound``, ``Io``, ``Parse``, ``Compression``, ``Timeout``, ``Unsupported``, ``Cancelled``).
+- ``condition()`` is a ``dstd::Condition``, a small, closed, cross-domain enum (``Unknown``, ``Internal``, ``InvalidArgument``, ``NotFound``, ``Io``, ``Parse``, ``Compression``, ``Timeout``, ``Unsupported``, ``Cancelled``, ``ForkedHandle``, ``OutOfMemory``).
   A caller that does not know which subsystem failed can still switch on it.
 - ``message()`` is the readable text.
   An error with no message takes no heap memory, and copies of an error with a message share one reference-counted block.

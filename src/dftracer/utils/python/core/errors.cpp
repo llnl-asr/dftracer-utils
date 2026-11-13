@@ -106,6 +106,8 @@ PyObject *py_error_type_for(const dftracer::utils::dstd::Error &error) {
     // Domain-specific types take precedence over the portable-condition map.
     if (error.domain().id == dftracer::utils::duql::ERROR_DOMAIN.id)
         return g_dft_duql_error;
+    if (error.condition() == dftracer::utils::dstd::Condition::OutOfMemory)
+        return PyExc_MemoryError;
     return py_error_type_for(common::errorcode_of(error));
 }
 

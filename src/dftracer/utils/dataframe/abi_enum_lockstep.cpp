@@ -27,6 +27,7 @@ static_assert(-(code(dstd::Condition::Unsupported) + 1) == DFTU_E_UNSUPPORTED);
 static_assert(-(code(dstd::Condition::Cancelled) + 1) == DFTU_E_CANCELLED);
 static_assert(-(code(dstd::Condition::ForkedHandle) + 1) ==
               DFTU_E_FORKED_HANDLE);
+static_assert(-(code(dstd::Condition::OutOfMemory) + 1) == DFTU_E_NO_MEMORY);
 
 static_assert(code(CmpOp::Gt) == DFTU_CMP_GT);
 static_assert(code(CmpOp::Ge) == DFTU_CMP_GE);

@@ -48,7 +48,7 @@ static void counts_add(Counts* c, uint64_t pid, uint64_t n) {
 static dftu_status make_slice(dftu_ctx* ctx, void* self, void** out) {
     (void)self;
     *out = calloc(1, sizeof(Counts));
-    if (!*out) return dftu_fail(ctx, DFTU_E_INTERNAL, "out of memory");
+    if (!*out) return dftu_fail(ctx, DFTU_E_NO_MEMORY, "out of memory");
     return DFTU_OK;
 }
 
@@ -104,7 +104,7 @@ static dftu_status on_finalize(dftu_ctx* ctx, void* slice,
 
     cap = c->size * 32 + 1;
     buf = (char*)malloc(cap);
-    if (!buf) return dftu_fail(ctx, DFTU_E_INTERNAL, "out of memory");
+    if (!buf) return dftu_fail(ctx, DFTU_E_NO_MEMORY, "out of memory");
     len = 0;
     for (size_t i = 0; i < c->size; ++i) {
         int n = snprintf(buf + len, cap - len, "%llu\t%llu\n",

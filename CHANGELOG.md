@@ -9,6 +9,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Added
 
+- Add `dstd::Condition::OutOfMemory` and the C status `DFTU_E_NO_MEMORY` (-12) for a refused allocation.
+  The error code `MemoryBudgetExceeded` now has the condition `OutOfMemory` in place of `Internal`.
+  The Python bindings raise `MemoryError` for an `OutOfMemory` error, such as a plugin callback that returns `DFTU_E_NO_MEMORY`.
+  The plugin examples and the `dftracer_plugin` and JIT templates report `DFTU_E_NO_MEMORY` when a `malloc` fails.
+- Add `dstd::try_reserve` for `dstd::Vector` and `dstd::String`, which returns `OutOfMemory` in place of ending the process when the heap refuses.
+  The plugin file system service `stat_batch` uses it, so a count the heap cannot hold returns `DFTU_E_NO_MEMORY` with a message.
 - Add the library `libdftracer_utils_plugins`, with its pkg-config file and CMake package, between trace and domains.
   It holds the plugin host, which moves from `dftracer::utils::domains::plugins` to `dftracer::utils::plugins::host`.
 - Add `Series.name`, kept through `from_pandas`, `to_pandas`, Polars, ops, `df["x"]` and pickle, with `dftu_series_name` and `dftu_series_rename` in the C ABI.

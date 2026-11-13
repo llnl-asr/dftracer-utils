@@ -217,7 +217,7 @@ static dftu_status src_scan(dftu_ctx* ctx, void* self,
     (void)req;
     (void)out_pushed;
     cur = (SrcCursor*)calloc(1, sizeof(SrcCursor));
-    if (!cur) return dftu_fail(ctx, DFTU_E_INTERNAL, "out of memory");
+    if (!cur) return dftu_fail(ctx, DFTU_E_NO_MEMORY, "out of memory");
     *out_cursor_self = cur;
     *out_vt = &SRC_CURSOR_VT;
     return DFTU_OK;
@@ -352,7 +352,7 @@ static dftu_status node_open(dftu_ctx* ctx, void* self, void* in_cursor_self,
     (void)args;
     (void)memory_budget;
     nc = (NodeCursor*)malloc(sizeof(NodeCursor));
-    if (!nc) return dftu_fail(ctx, DFTU_E_INTERNAL, "out of memory");
+    if (!nc) return dftu_fail(ctx, DFTU_E_NO_MEMORY, "out of memory");
     nc->in_self = in_cursor_self;
     nc->in_vt = in_vt;
     *out_cursor_self = nc;
@@ -401,7 +401,7 @@ typedef struct {
 static dftu_status dur_sum_init(dftu_ctx* ctx, void* self, void** out) {
     (void)self;
     *out = calloc(1, sizeof(DurSumState));
-    if (!*out) return dftu_fail(ctx, DFTU_E_INTERNAL, "out of memory");
+    if (!*out) return dftu_fail(ctx, DFTU_E_NO_MEMORY, "out of memory");
     return DFTU_OK;
 }
 
@@ -441,7 +441,7 @@ static void dur_sum_free_buf(void* data, void* ud) {
 static dftu_status dur_sum_serialize(dftu_ctx* ctx, const void* state,
                                      dftu_bytes* out) {
     uint64_t* buf = (uint64_t*)malloc(sizeof(uint64_t));
-    if (!buf) return dftu_fail(ctx, DFTU_E_INTERNAL, "out of memory");
+    if (!buf) return dftu_fail(ctx, DFTU_E_NO_MEMORY, "out of memory");
     *buf = ((const DurSumState*)state)->sum;
     out->data = buf;
     out->len = sizeof(uint64_t);
@@ -455,7 +455,7 @@ static dftu_status dur_sum_deserialize(dftu_ctx* ctx, void* self, dftu_bytes in,
     DurSumState* s;
     (void)self;
     s = (DurSumState*)calloc(1, sizeof(DurSumState));
-    if (!s) return dftu_fail(ctx, DFTU_E_INTERNAL, "out of memory");
+    if (!s) return dftu_fail(ctx, DFTU_E_NO_MEMORY, "out of memory");
     if (in.data && in.len == sizeof(uint64_t))
         memcpy(&s->sum, in.data, sizeof(uint64_t));
     *out = s;
@@ -564,7 +564,7 @@ typedef struct {
 
 static dftu_status make_slice(dftu_ctx* ctx, void* self, void** out) {
     RefSlice* s = (RefSlice*)calloc(1, sizeof(RefSlice));
-    if (!s) return dftu_fail(ctx, DFTU_E_INTERNAL, "out of memory");
+    if (!s) return dftu_fail(ctx, DFTU_E_NO_MEMORY, "out of memory");
     s->cfg = (const RefConfig*)self;
     *out = s;
     return DFTU_OK;
@@ -1166,7 +1166,7 @@ static dftu_status on_finalize(dftu_ctx* ctx, void* slice,
     RefSlice* s = (RefSlice*)slice;
     const dftu_svc_task* tk;
     FinalizeCtx* fc = (FinalizeCtx*)calloc(1, sizeof(FinalizeCtx));
-    if (!fc) return dftu_fail(ctx, DFTU_E_INTERNAL, "out of memory");
+    if (!fc) return dftu_fail(ctx, DFTU_E_NO_MEMORY, "out of memory");
     fc->host = host;
     fc->slice = s;
 
@@ -1238,7 +1238,7 @@ DFTU_PLUGIN_EXPORT dftu_status dftracer_plugin(dftu_ctx* ctx,
         return dftu_fail(ctx, DFTU_E_INVALID, "workdir is missing or too long");
 
     cfg = (RefConfig*)calloc(1, sizeof(RefConfig));
-    if (!cfg) return dftu_fail(ctx, DFTU_E_INTERNAL, "out of memory");
+    if (!cfg) return dftu_fail(ctx, DFTU_E_NO_MEMORY, "out of memory");
     memcpy(cfg->workdir, workdir_s, workdir_len);
     cfg->workdir[workdir_len] = '\0';
 

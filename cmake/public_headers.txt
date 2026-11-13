@@ -126,6 +126,7 @@ dftracer/utils/dstd/string_intern.h
 dftracer/utils/dstd/thread.h
 dftracer/utils/dstd/to_chars.h
 dftracer/utils/dstd/transparent_string_hash.h
+dftracer/utils/dstd/try_reserve.h
 dftracer/utils/dstd/tuple.h
 dftracer/utils/dstd/type_name.h
 dftracer/utils/dstd/variant.h

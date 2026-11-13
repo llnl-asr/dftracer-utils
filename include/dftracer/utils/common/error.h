@@ -62,7 +62,7 @@ inline constexpr dstd::ErrorCodeInfo CORE_ERROR_CODE_INFOS[] = {
      dstd::Condition::Internal, "AGGREGATION"},
     {&dstd::CORE_ERROR_DOMAIN,
      static_cast<std::int32_t>(ErrorCode::MemoryBudgetExceeded),
-     dstd::Condition::Internal, "MEMORY_BUDGET_EXCEEDED"},
+     dstd::Condition::OutOfMemory, "MEMORY_BUDGET_EXCEEDED"},
 };
 
 constexpr const dstd::ErrorCodeInfo& error_info(ErrorCode code) noexcept {
@@ -101,6 +101,8 @@ constexpr ErrorCode errorcode_of(dstd::Condition c) noexcept {
         case dstd::Condition::Cancelled:
         case dstd::Condition::ForkedHandle:
             return ErrorCode::Unknown;
+        case dstd::Condition::OutOfMemory:
+            return ErrorCode::MemoryBudgetExceeded;
     }
     return ErrorCode::Unknown;
 }

@@ -70,7 +70,6 @@
 #include <cstdlib>
 #include <numeric>
 #include <random>
-#include <stdexcept>
 
 using namespace dftracer::utils;
 
@@ -139,7 +138,9 @@ constexpr Scale FULL_SCALE{.big_rows = 10000000,
                            .join_reps = 50};
 
 void check(bool ok, const char* what) {
-    if (!ok) throw std::runtime_error(what);
+    if (ok) return;
+    std::fprintf(stderr, "check failed: %s\n", what);
+    std::exit(1);
 }
 
 double elapsed_ns(Clock::time_point start, Clock::time_point end) {
@@ -586,12 +587,7 @@ int drive(const dftracer::utils::dstd::String& self,
 int smoke() {
     int failures = 0;
     for (const Case& c : make_cases()) {
-        bool ok = false;
-        try {
-            ok = c.run(SMOKE_SCALE) > 0.0;
-        } catch (const std::exception& e) {
-            std::fprintf(stderr, "%s: %s\n", c.name.c_str(), e.what());
-        }
+        const bool ok = c.run(SMOKE_SCALE) > 0.0;
         std::printf("smoke %-26s %s\n", c.name.c_str(), ok ? "ok" : "FAILED");
         if (!ok) ++failures;
     }
@@ -601,12 +597,7 @@ int smoke() {
 int run_one(const dftracer::utils::dstd::String& name) {
     for (const Case& c : make_cases()) {
         if (c.name != name) continue;
-        try {
-            std::printf("RESULT %.3f\n", c.run(FULL_SCALE));
-        } catch (const std::exception& e) {
-            std::fprintf(stderr, "%s: %s\n", name.c_str(), e.what());
-            return 1;
-        }
+        std::printf("RESULT %.3f\n", c.run(FULL_SCALE));
         return 0;
     }
     std::fprintf(stderr, "unknown case: %s\n", name.c_str());

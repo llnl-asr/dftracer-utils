@@ -170,7 +170,7 @@ TEST_CASE("memory statuses map to error codes") {
           "MEMORY_BUDGET_EXCEEDED");
     CHECK(common::condition_of(
               dftracer::utils::common::ErrorCode::MemoryBudgetExceeded) ==
-          dstd::Condition::Internal);
+          dstd::Condition::OutOfMemory);
 }
 
 TEST_CASE("a failed reservation maps to the budget error") {

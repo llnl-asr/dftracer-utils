@@ -2652,7 +2652,7 @@ def _emit(
         "static dftu_status make_slice(dftu_ctx* ctx, void* self, void** out) {",
         "    (void)self;",
         "    *out = calloc(1, 1);",
-        '    return *out ? DFTU_OK : dftu_fail(ctx, DFTU_E_INTERNAL, "out of memory");',
+        '    return *out ? DFTU_OK : dftu_fail(ctx, DFTU_E_NO_MEMORY, "out of memory");',
         "}",
         "",
         "static dftu_status on_batch(dftu_ctx* ctx, void* slice, const dftu_dataframe* df,",
@@ -2704,7 +2704,7 @@ def _emit(
         inner += _emit_flush(attr, decl, map_ids[attr])
     out += ["    " + ln for ln in inner]
     out.append("    }")
-    out.append('    if (!_alloc_ok) _st = dftu_fail(ctx, DFTU_E_INTERNAL, "out of memory");')
+    out.append('    if (!_alloc_ok) _st = dftu_fail(ctx, DFTU_E_NO_MEMORY, "out of memory");')
     for attr, decl in maps.items():
         out += _emit_frees(attr, decl)
     for field in sorted(fields_used):
@@ -3087,7 +3087,7 @@ def _emit_vfold(
         "static dftu_status make_slice(dftu_ctx* ctx, void* self, void** out) {",
         "    (void)self;",
         "    *out = calloc(1, 1);",
-        '    return *out ? DFTU_OK : dftu_fail(ctx, DFTU_E_INTERNAL, "out of memory");',
+        '    return *out ? DFTU_OK : dftu_fail(ctx, DFTU_E_NO_MEMORY, "out of memory");',
         "}",
         "",
         "static dftu_status on_batch(dftu_ctx* ctx, void* slice,",

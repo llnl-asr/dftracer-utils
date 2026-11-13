@@ -27,6 +27,7 @@ enum class Condition : std::uint16_t {
     Unsupported,
     Cancelled,
     ForkedHandle,
+    OutOfMemory,
 };
 
 struct ErrorDomain {
@@ -71,6 +72,8 @@ inline constexpr ErrorCodeInfo CORE_ERROR_INFOS[] = {
      Condition::Cancelled, "CANCELLED"},
     {&CORE_ERROR_DOMAIN, static_cast<std::int32_t>(Condition::ForkedHandle),
      Condition::ForkedHandle, "FORKED_HANDLE"},
+    {&CORE_ERROR_DOMAIN, static_cast<std::int32_t>(Condition::OutOfMemory),
+     Condition::OutOfMemory, "OUT_OF_MEMORY"},
 };
 
 constexpr const ErrorCodeInfo& error_info(Condition condition) noexcept {

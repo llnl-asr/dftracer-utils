@@ -155,3 +155,19 @@ def test_new_build_load_run_cpp(tmp_path):
     tbl = pa.table(results["mycount"])
     val = tbl.column("value").to_numpy(zero_copy_only=False)
     assert int(val.sum()) == n
+
+
+@pytest.mark.skipif(not _HAS_CXX, reason="no C++ compiler available")
+def test_plugin_out_of_memory_raises_memory_error(tmp_path):
+    assert plugin_cli.main(["new", "oom", "-o", str(tmp_path)]) == 0
+    src = tmp_path / "oom.c"
+    text = src.read_text()
+    refuse = '(void)slice;\n    return dftu_fail(ctx, DFTU_E_NO_MEMORY, "heap refused");'
+    assert "(void)slice;\n    if (!agg" in text
+    src.write_text(text.replace("(void)slice;", refuse, 1))
+    so = tmp_path / "oom.so"
+    assert plugin_cli.main(["build", str(src), "-o", str(so)]) == 0
+
+    _write_trace(str(tmp_path / "trace.pfw.gz"), 10)
+    with pytest.raises(MemoryError, match="heap refused"):
+        Plugins([str(so)]).run(str(tmp_path))

@@ -9,7 +9,7 @@ namespace dftracer::utils::common {
 namespace {
 
 constexpr std::int32_t LAST_CONDITION =
-    static_cast<std::int32_t>(dstd::Condition::ForkedHandle);
+    static_cast<std::int32_t>(dstd::Condition::OutOfMemory);
 
 void release_message(dftu_error* e) {
     if (e->message != nullptr) {

@@ -65,8 +65,9 @@ dstd::Result<dataframe::DataFrame> Applier::run_column_op(
 
 Status Applier::stage(const duql::PipelinePlugin& p) {
     leave_scan("plugin function");
-    const dftu_op_desc* op = dftu_op_find(p.op.c_str());
-    if (!op) return refuse<"plugin function '{}' is not registered">(p.op);
+    auto found = dataframe::find_op(p.op.c_str());
+    if (!found) return refuse<"plugin function '{}' is not registered">(p.op);
+    const dftu_op_desc* op = found->get();
     auto compiled = compile(p.arg.term, dstd::String(p.arg.text));
     if (!compiled) return compiled.error();
     if (auto done = with_column(dstd::String(p.arg.name), *compiled,
@@ -126,10 +127,11 @@ Status Applier::stage(const duql::PipelinePlugin& p) {
     dstd::Vector<dataframe::query::VectorColumn> next = cols_;
     next[at].type = type;
     map_rows(
-        [name = p.arg.name, op, second, a, b, str = p.str](
+        [name = p.arg.name, held = std::move(*found), second, a, b,
+         str = p.str](
             dataframe::DataFrame f) -> dstd::Result<dataframe::DataFrame> {
-            return run_column_op(std::move(f), dstd::String(name), op, second,
-                                 a, b, str);
+            return run_column_op(std::move(f), dstd::String(name), held.get(),
+                                 second, a, b, str);
         },
         std::move(next), dstd::fmt<"plugin {} over {}">(p.op, p.arg.name));
     return {};

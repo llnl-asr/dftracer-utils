@@ -1,13 +1,16 @@
 // SPDX-License-Identifier: MIT
-// The host keeps a plugin library loaded while a plan holds a node or provider
-// from it. Unloading the Plugins set removes the names at once. The node's and
-// provider's destroy run when the plan is gone, then the plugin's own destroy,
-// then the library closes.
+// The host keeps a plugin library loaded while a plan holds a node, provider or
+// op from it. Unloading the Plugins set removes the names at once. The node's
+// and provider's destroy run when the plan is gone, then the plugin's own
+// destroy, then the library closes.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dataframe/op.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/plugins/host/plugins.h>
@@ -17,6 +20,7 @@
 #include <task_result.h>
 #include <unistd.h>
 
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <thread>
@@ -150,5 +154,47 @@ TEST_CASE("an unloaded plugin with no plan left closes its library at once") {
         CHECK(library_mapped());
     }
     CHECK(marker.text() == "snp");
+    CHECK_FALSE(library_mapped());
+}
+
+TEST_CASE("a plan keeps a plugin op and its library after the plugin unloads") {
+    Marker marker;
+    REQUIRE(marker.ok());
+
+    dstd::Optional<plugins::host::Plugins> loaded;
+    {
+        auto built =
+            plugins::host::Plugins::Builder().add(LIFETIME_PLUGIN_PATH).build();
+        REQUIRE(built.has_value());
+        loaded = std::move(built).value();
+    }
+
+    dataframe::DataFrame df;
+    df.names = dstd::make_shared_strings({"id"});
+    const std::int64_t ids[] = {4, 5, 6};
+    df.columns.push_back(dataframe::Series::flat_i64(ids, 3));
+    dstd::Optional<dataframe::LazyFrame> plan = dataframe::LazyFrame::scan(
+        dstd::make_shared<dataframe::InMemorySource>(std::move(df)));
+    plan = plan->frame_op("lifetime_plugin.first_row", {});
+    REQUIRE(static_cast<bool>(plan->status()));
+
+    loaded.reset();
+    CHECK_FALSE(dataframe::find_op("lifetime_plugin.first_row").has_value());
+    CHECK(library_mapped());
+    // The provider and the node had no plan, so they went at once; the plugin
+    // stays for the op.
+    const dstd::String before = marker.wait_for(2);
+    CHECK(before.size() == 2);
+    CHECK(before.find('p') == dstd::String::npos);
+
+    dataframe::DataFrame out = dftu_utils_test::ok(
+        dftracer::utils::default_runtime().submit(plan->collect(1)).get());
+    CHECK(out.num_rows() == 1);
+    CHECK(library_mapped());
+
+    plan.reset();
+    const dstd::String order = marker.wait_for(3);
+    REQUIRE(order.size() == 3);
+    CHECK(order[2] == 'p');
     CHECK_FALSE(library_mapped());
 }

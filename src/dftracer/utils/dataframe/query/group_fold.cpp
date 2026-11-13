@@ -2,6 +2,7 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
+#include <dftracer/utils/dataframe/op.h>
 #include <dftracer/utils/dataframe/query/group_fold.h>
 #include <dftracer/utils/dataframe/query/vectorize.h>
 #include <dftracer/utils/dstd/base64.h>
@@ -519,12 +520,13 @@ dstd::Result<dataframe::DataFrame> GroupFold::finish(
                 break;
             }
             case FoldOp::Plugin: {
-                const dftu_op_desc* op = dftu_op_find(f.plugin.c_str());
-                if (!op)
+                auto found = dataframe::find_op(f.plugin.c_str());
+                if (!found)
                     return common::make_error(
                         common::ErrorCode::InvalidArgument,
                         dstd::fmt<"plugin function '{}' is not registered">(
                             f.plugin));
+                const dftu_op_desc* op = found->get();
                 const dftu_op_arg arg = plugin_arg(*op, f.params);
                 auto& members = members_[a];
                 members.resize(count);

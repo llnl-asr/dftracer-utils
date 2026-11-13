@@ -30,9 +30,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   A plan now keeps the node or provider it names alive, so `dftu_node_unregister` and `dftu_provider_unregister` no longer free state that a plan still holds.
 - Add `run` to `dftu_svc_task`: it blocks until a task ends, frees it and returns its status, `DFTU_END` included, with the message on the ctx.
   The plugin SDK node input cursor uses it, and the factory host serves it.
-- Keep a plugin library loaded while a node, provider or index extension from it, or a plan or cursor that holds one, is alive.
+- Keep a plugin library loaded while a node, provider, index extension or op from it, or a plan or cursor that holds one, is alive.
   Unloading a plugin removes its names at once; the plugin's own `destroy` runs after the last holder is gone and the library is closed after it, where it was closed at unload before and a plan could call into unmapped code.
-  Ops registered with `dftu_op_register` are not covered.
 - Add 26 calls to the plugin `dftu.svc.io` table: `unlink`, `rmdir`, `rename`, `mkdir`, `fadvise`, `linkat`, `symlinkat`, `socket`, `connect`, `bind`, `listen`, `shutdown`, `sendmsg`, `recvmsg`, `poll_add`, `statx`, `fallocate`, `sync_file_range`, `splice`, `openat2`, `getxattr`, `setxattr`, `fgetxattr`, `fsetxattr`, `tee` and `pipe`, each with an `Io` method in the SDK.
   The host copies paths, names and socket addresses when called, and an errno of ENOSYS, EOPNOTSUPP or ENOTSUP fails a task with `DFTU_E_UNSUPPORTED`.
   The calls that need Linux return `DFTU_E_UNSUPPORTED`, with no task, on another platform.
@@ -669,6 +668,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Fixed
 
+- Fix a use after free when a plan ran an op after `dftu_op_unregister` removed it.
+  A plan now keeps the op it uses, and unregistering removes only the name, so a later lookup by name finds nothing.
 - Fix `to_pandas()` giving `int64` and `uint64` columns the numpy types `longlong` and `ulonglong`, so a pandas `merge` on a repeated `uint64` key raised `KeyError`.
   The columns are now numpy's own `int64` and `uint64`.
 - Fix a read of freed memory when a task that waits in `with_timeout` or `when_any` on a timeout is cancelled, which a later cancel on the same executor could hit.

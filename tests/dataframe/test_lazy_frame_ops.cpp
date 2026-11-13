@@ -125,6 +125,26 @@ dftu_dataframe* to_abi(const DataFrame& df) {
                               static_cast<int32_t>(names.size()));
 }
 
+int g_keep_alive_destroyed = 0;
+
+struct KeepAlive {
+    ~KeepAlive() { ++g_keep_alive_destroyed; }
+};
+
+bool g_reentered = false;
+
+// Calls back into the registry when it drops, as a plugin's destroy may.
+struct ReenteringKeepAlive {
+    ~ReenteringKeepAlive() {
+        g_reentered = dftu_op_find("mymod.taken") != nullptr;
+    }
+};
+
+// A user frame op with no native lazy twin: the first row of its input.
+dftu_dataframe* first_row(const dftu_dataframe* df) {
+    return dftu_dataframe_head(df, 1);
+}
+
 }  // namespace
 
 TEST_SUITE("lazy frame ops") {
@@ -1053,5 +1073,42 @@ TEST_SUITE("lazy frame ops") {
         dftu_lazyframe_free(via_l);
         dftu_lazyframe_free(lf);
         dftu_dataframe_free(h);
+    }
+
+    TEST_CASE("a plan keeps a user op that is unregistered after it is built") {
+        const dftu_op_desc desc{
+            "mymod.first_row", DFTU_OP_SIG(FRAME, FRAME, NONE, NONE),
+            reinterpret_cast<dftu_op_generic_fn>(&first_row)};
+        g_keep_alive_destroyed = 0;
+        REQUIRE(register_op(desc, dstd::make_shared<KeepAlive>()));
+        {
+            LazyFrame plan = scan(make_base()).frame_op("mymod.first_row", {});
+            REQUIRE(static_cast<bool>(plan.status()));
+            REQUIRE(dftu_op_unregister("mymod.first_row") == 0);
+
+            CHECK_FALSE(find_op("mymod.first_row").has_value());
+            CHECK(dftu_op_find("mymod.first_row") == nullptr);
+            CHECK(g_keep_alive_destroyed == 0);
+
+            DataFrame out = run(plan.collect(1));
+            CHECK(out.num_rows() == 1);
+            CHECK(i64_col(out, "n") == dstd::Vector<I>{I(10)});
+
+            LazyFrame again = scan(make_base()).frame_op("mymod.first_row", {});
+            CHECK_FALSE(static_cast<bool>(again.status()));
+        }
+        CHECK(g_keep_alive_destroyed == 1);
+    }
+
+    TEST_CASE("a refused registration drops its keep-alive after the lock") {
+        const dftu_op_desc desc{
+            "mymod.taken", DFTU_OP_SIG(FRAME, FRAME, NONE, NONE),
+            reinterpret_cast<dftu_op_generic_fn>(&first_row)};
+        REQUIRE(register_op(desc, nullptr));
+        g_reentered = false;
+        CHECK_FALSE(
+            register_op(desc, dstd::make_shared<ReenteringKeepAlive>()));
+        CHECK(g_reentered);
+        REQUIRE(dftu_op_unregister("mymod.taken") == 0);
     }
 }

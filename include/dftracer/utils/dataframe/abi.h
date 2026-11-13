@@ -2376,7 +2376,10 @@ DFTU_EXPORT uint32_t dftu_op_arity(dftu_op_sig sig);
  */
 DFTU_EXPORT const char* dftu_op_signature(dftu_op_sig sig);
 
-/** The registered op named `name` (built-in or user), or NULL if none. */
+/** The registered op named `name` (built-in or user), or NULL if none. The
+ * pointer is valid while the name stays registered; after
+ * dftu_op_unregister it may dangle. A plan or expression keeps an op past
+ * that through the C++ handle @ref dftracer::utils::dataframe::OpDesc. */
 DFTU_EXPORT const dftu_op_desc* dftu_op_find(const char* name);
 
 /** Number of registered ops (built-ins + user), for discovery/listing. */
@@ -2390,10 +2393,15 @@ DFTU_EXPORT const dftu_op_desc* dftu_op_at(uint32_t i);
  * borrowed. Returns 0 on success, non-zero if `desc`/its name is NULL or the
  * name is already registered (no silent shadowing). A registrant whose code
  * can unload (a plugin's .so) must call dftu_op_unregister before unloading,
- * or `fn` dangles in a registry entry no one can remove it from. */
+ * or `fn` dangles in a registry entry no one can remove it from. A plan built
+ * over the op keeps its record, not the code `fn` points into: a registrant in
+ * plain C must keep that code loaded while a plan can still run the op, and the
+ * plugin host does so for a plugin's ops. */
 DFTU_EXPORT int dftu_op_register(const dftu_op_desc* desc);
 
-/** Remove a user op previously added with dftu_op_register. A no-op (returns
+/** Remove a user op previously added with dftu_op_register. Only the name is
+ * removed: a plan that already holds the op keeps running it, and a later
+ * lookup by name finds nothing. A no-op (returns
  * non-zero) if `name` is NULL, unregistered, or a built-in - built-ins can
  * never be removed this way. Safe to call for a name that was never
  * registered. */

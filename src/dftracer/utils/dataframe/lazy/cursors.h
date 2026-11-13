@@ -59,7 +59,7 @@ dstd::Result<LazyFrame> compose_compare_agg(const LazyFrame& base,
 CursorResult make_window(dstd::UniquePtr<Cursor> in,
                          const dstd::Vector<dstd::String>& sch,
                          const dstd::Vector<Field>& in_fields,
-                         const dstd::String& name, const dftu_op_desc* op,
+                         const dstd::String& name, OpDesc op,
                          dstd::SharedPtr<const OwnedFrameOpArgs> args,
                          std::uint64_t budget);
 

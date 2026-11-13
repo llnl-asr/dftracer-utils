@@ -58,12 +58,12 @@ std::int64_t scalar_to_i64(const dftu_scalar& s) {
 class ColumnScanCursor : public Cursor {
    public:
     ColumnScanCursor(dstd::UniquePtr<Cursor> in, dstd::Vector<Field> in_fields,
-                     std::size_t column, const dftu_op_desc* op, Carry carry,
+                     std::size_t column, OpDesc op, Carry carry,
                      std::int64_t keep, std::int64_t shift)
         : in_(std::move(in)),
           in_fields_(std::move(in_fields)),
           column_(column),
-          op_(op),
+          op_(std::move(op)),
           carry_mode_(carry),
           keep_(keep),
           shift_(shift) {}
@@ -108,7 +108,7 @@ class ColumnScanCursor : public Cursor {
         dftu_op_arg arg{};
         arg.args[1].i64 = shift_;
         const dftu_series* in[1] = {whole.handle()};
-        dftu_series* raw = dftu_op_run(op_, in, 1, &arg);
+        dftu_series* raw = dftu_op_run(op_.get(), in, 1, &arg);
         if (!raw)
             return common::make_error<
                 "lazy frame op 'dftu.frame.column_op' failed: the op returned "
@@ -137,7 +137,7 @@ class ColumnScanCursor : public Cursor {
     dstd::UniquePtr<Cursor> in_;
     dstd::Vector<Field> in_fields_;
     std::size_t column_;
-    const dftu_op_desc* op_;
+    OpDesc op_;
     Carry carry_mode_;
     std::int64_t keep_;
     std::int64_t shift_;
@@ -238,11 +238,11 @@ CursorResult make_column_scan(dstd::UniquePtr<Cursor>& in,
     } else if (series_op == "dftu.series.diff") {
         keep = 1;
     }
-    const dftu_op_desc* op = dftu_op_find(series_op.c_str());
+    auto op = find_op(series_op.c_str());
     if (!op) return no_cursor();
-    return dstd::make_unique<ColumnScanCursor>(std::move(in), in_fields,
-                                               static_cast<std::size_t>(at), op,
-                                               scan->carry, keep, shift);
+    return dstd::make_unique<ColumnScanCursor>(
+        std::move(in), in_fields, static_cast<std::size_t>(at), std::move(*op),
+        scan->carry, keep, shift);
 }
 
 CursorResult make_series_column(dstd::UniquePtr<Cursor>& in,

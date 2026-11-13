@@ -48,7 +48,8 @@ const ::dftu_op_desc* build_ops_find(void*, const char* name) {
 
 dftu_status build_ops_register(::dftu_ctx* ctx, void* h,
                                const ::dftu_op_desc* desc) {
-    const dftu_status status = detail::register_plugin_op(ctx, desc);
+    const dftu_status status =
+        detail::register_plugin_op(ctx, desc, self_of(h).library());
     if (status >= 0) self_of(h).registered_ops().emplace_back(desc->name);
     return status;
 }

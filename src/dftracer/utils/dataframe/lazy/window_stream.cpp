@@ -621,18 +621,20 @@ bool window_needs_stats(dstd::Vector<WindowSpecInfo>& specs, PartitionStats& st,
 // kernel's own (partition, order) order, which the sort has already given.
 class WindowStreamCursor : public Cursor {
    public:
-    WindowStreamCursor(
-        dstd::UniquePtr<Cursor> sorted, dstd::Vector<dstd::String> sch,
-        dstd::Vector<std::size_t> part, dstd::Vector<std::size_t> order,
-        dstd::Vector<WindowSpecInfo> specs, dstd::String name,
-        const dftu_op_desc* op, dstd::SharedPtr<const OwnedFrameOpArgs> args,
-        dstd::SharedPtr<PartitionStats> stats, std::uint64_t budget)
+    WindowStreamCursor(dstd::UniquePtr<Cursor> sorted,
+                       dstd::Vector<dstd::String> sch,
+                       dstd::Vector<std::size_t> part,
+                       dstd::Vector<std::size_t> order,
+                       dstd::Vector<WindowSpecInfo> specs, dstd::String name,
+                       OpDesc op, dstd::SharedPtr<const OwnedFrameOpArgs> args,
+                       dstd::SharedPtr<PartitionStats> stats,
+                       std::uint64_t budget)
         : in_(std::move(sorted)),
           sch_(std::move(sch)),
           part_(std::move(part)),
           order_(std::move(order)),
           name_(std::move(name)),
-          op_(op),
+          op_(std::move(op)),
           args_(std::move(args)),
           stats_(std::move(stats)),
           budget_(budget),
@@ -753,7 +755,7 @@ class WindowStreamCursor : public Cursor {
             frame.names = sch_names_;
             for (const Series& c : fcols) frame.columns.push_back(c.share());
             auto running =
-                run_frame_op(op_, *args_, std::move(frame), name_, sch_);
+                run_frame_op(op_.get(), *args_, std::move(frame), name_, sch_);
             DataFrame out = co_await std::move(running).or_fail();
             DataFrame res = out.slice(ctx_n, emit);
             for (Series& c : res.columns) c = c.materialize();
@@ -2611,7 +2613,7 @@ class WindowStreamCursor : public Cursor {
     dstd::Vector<std::size_t> part_;
     dstd::Vector<std::size_t> order_;
     dstd::String name_;
-    const dftu_op_desc* op_;
+    OpDesc op_;
     dstd::SharedPtr<const OwnedFrameOpArgs> args_;
     dstd::SharedPtr<PartitionStats> stats_;
     std::uint64_t budget_;
@@ -2661,7 +2663,7 @@ namespace lazy_internal {
 CursorResult make_window(dstd::UniquePtr<Cursor> in,
                          const dstd::Vector<dstd::String>& sch,
                          const dstd::Vector<Field>& in_fields,
-                         const dstd::String& name, const dftu_op_desc* op,
+                         const dstd::String& name, OpDesc op,
                          dstd::SharedPtr<const OwnedFrameOpArgs> args,
                          std::uint64_t budget) {
     const dstd::Vector<dstd::String>& part = args->strings_at(1);
@@ -2707,7 +2709,8 @@ CursorResult make_window(dstd::UniquePtr<Cursor> in,
     }
     return dstd::make_unique<WindowStreamCursor>(
         std::move(sorted), sch, std::move(part_idx), std::move(order_idx),
-        std::move(specs), name, op, std::move(args), std::move(stats), budget);
+        std::move(specs), name, std::move(op), std::move(args),
+        std::move(stats), budget);
 }
 
 }  // namespace lazy_internal

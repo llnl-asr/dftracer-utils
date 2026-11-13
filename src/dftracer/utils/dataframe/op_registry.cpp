@@ -4,12 +4,14 @@
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/dataframe_handle.h>
 #include <dftracer/utils/dataframe/internal/op_dispatch.h>
+#include <dftracer/utils/dataframe/op.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/singleton.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 
 #include <cstring>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -82,35 +84,59 @@ constexpr uint32_t BUILTIN_COUNT =
 
 // A user op's name must outlive the plugin that supplied it: the registry, not
 // the plugin, owns it. `desc.name` points at `name`, so the two must stay
-// together and `name` must not move once inserted (hence unique_ptr storage,
-// which also keeps a record's address stable as the vector grows, so a
-// pointer from dftu_op_find stays valid after a later registration).
+// together and `name` must not move once inserted. A record is immutable and
+// shared: unregistering removes the name from the registry only, and a plan or
+// expression that took the op through find_op keeps the record, and so
+// `keep_alive`, until it is gone.
 // Host ops register during static initialization, before the executable's
 // memory exit check, so this registry stays on std types the check cannot see.
 struct UserOp {
     std::string name;
     dftu_op_desc desc;
+    dftracer::utils::dstd::SharedPtr<const void> keep_alive;
 };
 
 struct UserOps {
     std::mutex mutex;
-    std::vector<std::unique_ptr<UserOp>> ops;
+    std::vector<std::shared_ptr<const UserOp>> ops;
 };
 
 std::mutex& reg_mutex() {
     return dftracer::utils::dstd::Singleton<UserOps>::get().mutex;
 }
 
-std::vector<std::unique_ptr<UserOp>>& user_ops() {
+std::vector<std::shared_ptr<const UserOp>>& user_ops() {
     return dftracer::utils::dstd::Singleton<UserOps>::get().ops;
 }
 
-const dftu_op_desc* find_locked(const char* name) {
+dftracer::utils::dataframe::OpDesc handle_of(
+    const std::shared_ptr<const UserOp>& op) {
+    return dftracer::utils::dataframe::OpDesc(&op->desc,
+                                              std::shared_ptr<const void>(op));
+}
+
+dftracer::utils::dataframe::OpDesc find_handle_locked(const char* name) {
     for (uint32_t i = 0; i < BUILTIN_COUNT; ++i)
-        if (std::strcmp(BUILTINS[i].name, name) == 0) return &BUILTINS[i];
+        if (std::strcmp(BUILTINS[i].name, name) == 0)
+            return dftracer::utils::dataframe::OpDesc(&BUILTINS[i]);
     for (const auto& op : user_ops())
-        if (op->name == name) return &op->desc;
-    return nullptr;
+        if (op->name == name) return handle_of(op);
+    return {};
+}
+
+// Takes `keep_alive` only on success, so a refused registration leaves the
+// caller's reference to drop after the registry lock is released.
+bool register_locked(const dftu_op_desc& desc,
+                     dftracer::utils::dstd::SharedPtr<const void>& keep_alive) {
+    if (!desc.name) return false;
+    if (find_handle_locked(desc.name)) return false;  // no silent shadowing
+    auto rec = std::make_shared<UserOp>();
+    rec->name = desc.name;
+    rec->desc = desc;
+    rec->desc.name = rec->name.c_str();
+    rec->keep_alive = std::move(keep_alive);
+    user_ops().push_back(std::move(rec));
+    return true;
 }
 
 using CS = const dftu_series*;
@@ -197,11 +223,11 @@ bool needs_arg(dftu_op_sig sig) {
     return false;
 }
 
+// A user op is any record that is not one of the static built-ins; it may be
+// unregistered already while a plan still holds it.
 bool is_user_op(const dftu_op_desc* op) {
-    std::lock_guard<std::mutex> lock(reg_mutex());
-    for (const auto& u : user_ops())
-        if (&u->desc == op) return true;
-    return false;
+    return !std::less_equal<const dftu_op_desc*>()(BUILTINS, op) ||
+           !std::less<const dftu_op_desc*>()(op, BUILTINS + BUILTIN_COUNT);
 }
 
 // A plugin op reads numbers through the data pointer, so it is handed joined
@@ -311,7 +337,7 @@ const char* dftu_op_signature(dftu_op_sig sig) {
 const dftu_op_desc* dftu_op_find(const char* name) {
     if (!name) return nullptr;
     std::lock_guard<std::mutex> lock(reg_mutex());
-    return find_locked(name);
+    return find_handle_locked(name).get();
 }
 
 uint32_t dftu_op_count(void) {
@@ -328,28 +354,30 @@ const dftu_op_desc* dftu_op_at(uint32_t i) {
 }
 
 int dftu_op_register(const dftu_op_desc* desc) {
-    if (!desc || !desc->name) return 1;
+    if (!desc) return 1;
     std::lock_guard<std::mutex> lock(reg_mutex());
-    if (find_locked(desc->name)) return 1;  // no silent shadowing
-    auto rec = std::make_unique<UserOp>();
-    rec->name = desc->name;
-    rec->desc = *desc;
-    rec->desc.name = rec->name.c_str();
-    user_ops().push_back(std::move(rec));
-    return 0;
+    dftracer::utils::dstd::SharedPtr<const void> none;
+    return register_locked(*desc, none) ? 0 : 1;
 }
 
 int dftu_op_unregister(const char* name) {
     if (!name) return 1;
-    std::lock_guard<std::mutex> lock(reg_mutex());
-    auto& v = user_ops();
-    for (auto it = v.begin(); it != v.end(); ++it) {
-        if ((*it)->name == name) {
-            v.erase(it);
-            return 0;
+    std::shared_ptr<const UserOp> removed;
+    {
+        std::lock_guard<std::mutex> lock(reg_mutex());
+        auto& v = user_ops();
+        for (auto it = v.begin(); it != v.end(); ++it) {
+            if ((*it)->name == name) {
+                removed = std::move(*it);
+                v.erase(it);
+                break;
+            }
         }
     }
-    return 1;  // not found: a no-op, not an error the caller must react to
+    // The record's keep-alive may run a plugin's destroy, which can call back
+    // into the registry, so the last reference drops outside the lock.
+    // Not found is a no-op, not an error the caller must react to.
+    return removed ? 0 : 1;
 }
 
 dftu_series* dftu_op_run(const dftu_op_desc* op, const dftu_series* const* in,
@@ -810,3 +838,29 @@ dftu_lazyframe* dftu_op_run_lazy(const dftu_op_desc* op,
 }
 
 }  // extern "C"
+
+namespace dftracer::utils::dataframe {
+
+dstd::Optional<OpDesc> find_op(const char* name) noexcept {
+    if (!name) return dstd::nullopt;
+    std::lock_guard<std::mutex> lock(reg_mutex());
+    OpDesc op = find_handle_locked(name);
+    if (!op) return dstd::nullopt;
+    return op;
+}
+
+OpDesc op_at(std::uint32_t i) noexcept {
+    std::lock_guard<std::mutex> lock(reg_mutex());
+    if (i < BUILTIN_COUNT) return OpDesc(&BUILTINS[i]);
+    i -= BUILTIN_COUNT;
+    if (i < user_ops().size()) return handle_of(user_ops()[i]);
+    return {};
+}
+
+bool register_op(const dftu_op_desc& desc,
+                 dstd::SharedPtr<const void> keep_alive) noexcept {
+    std::lock_guard<std::mutex> lock(reg_mutex());
+    return register_locked(desc, keep_alive);
+}
+
+}  // namespace dftracer::utils::dataframe

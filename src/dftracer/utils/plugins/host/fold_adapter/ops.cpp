@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dataframe/op.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/plugins/host/fold_adapter/ext.h>
 #include <dftracer/utils/plugins/host/reserved_names.h>
 
 #include <cstdint>
+#include <utility>
 
 namespace dftracer::utils::plugins::host {
 namespace {
@@ -113,7 +115,8 @@ const ::dftu_svc_ops g_ops = {sizeof(::dftu_svc_ops), host_ops_run,
 }  // namespace
 
 dftu_status detail::register_plugin_op(::dftu_ctx* ctx,
-                                       const ::dftu_op_desc* desc) {
+                                       const ::dftu_op_desc* desc,
+                                       dstd::SharedPtr<PluginLibrary> library) {
     if (desc == nullptr)
         return host_fail(ctx, DFTU_E_INVALID, "register_op: desc is NULL");
     if (refuse_plugin_op_name(desc->name)) {
@@ -124,7 +127,7 @@ dftu_status detail::register_plugin_op(::dftu_ctx* ctx,
                       "'<plugin>.<name>'">(
                 dstd::StringView(desc->name ? desc->name : "(null)")));
     }
-    if (::dftu_op_register(desc) != 0) {
+    if (!dataframe::register_op(*desc, std::move(library))) {
         return host_fail(
             ctx, DFTU_E_INVALID,
             dstd::fmt<"op '{}' refused: the name is already registered">(

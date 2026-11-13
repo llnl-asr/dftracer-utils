@@ -151,12 +151,11 @@ typedef struct dftu_plugin {
    die when the factory returns; only log() is safe to keep using, and only
    for the duration of the call.
 
-   The host keeps the plugin library loaded while a node, provider or index
-   extension registered here, or a plan or cursor holding one, is alive;
+   The host keeps the plugin library loaded while a node, provider, index
+   extension or op registered here, or a plan or cursor holding one, is alive;
    unloading the plugin removes the names at once. The plugin's own destroy
    runs after the last of them is gone, then the library is closed, so a
-   node's or provider's destroy may use the plugin's global state. Ops are not
-   covered by this.
+   node's or provider's destroy may use the plugin's global state.
 
    The returned descriptor is still pure data: plan_duql, provides and consumes
    are read after every factory has run, so registering here does not reorder

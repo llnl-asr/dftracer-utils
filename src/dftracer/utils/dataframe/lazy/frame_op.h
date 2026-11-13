@@ -4,6 +4,7 @@
 
 #include <dftracer/utils/dataframe/internal/errors.h>
 #include <dftracer/utils/dataframe/lazy/common.h>
+#include <dftracer/utils/dataframe/op.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>

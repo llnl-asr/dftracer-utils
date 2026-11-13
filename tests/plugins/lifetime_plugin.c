@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
-/* Test-only plugin that registers a provider and a pass-through node, and
- * appends one byte to the file named by LIFETIME_PLUGIN_MARKER whenever the
- * host calls the provider's, the node's or the plugin's own destroy ('s', 'n'
- * or 'p'). The test
- * unloads the plugin while a plan still holds both and checks that the library
- * stays mapped until the plan is gone. */
+/* Test-only plugin that registers a provider, a pass-through node and a frame
+ * op, and appends one byte to the file named by LIFETIME_PLUGIN_MARKER
+ * whenever the host calls the provider's, the node's or the plugin's own
+ * destroy ('s', 'n' or 'p'). The test unloads the plugin while a plan still
+ * holds them and checks that the library stays mapped until the plan is gone.
+ */
 
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/plugins/abi.h>
@@ -136,6 +136,14 @@ static void node_destroy(void* self) {
 static const dftu_node_vt NODE_VT = {sizeof(dftu_node_vt), node_schema,
                                      node_open, node_destroy};
 
+static dftu_dataframe* first_row(const dftu_dataframe* df) {
+    return dftu_dataframe_head(df, 1);
+}
+
+static const dftu_op_desc FIRST_ROW_OP = {"lifetime_plugin.first_row",
+                                          DFTU_OP_SIG(FRAME, FRAME, NONE, NONE),
+                                          (dftu_op_generic_fn)&first_row};
+
 static void destroy(void* self) {
     (void)self;
     mark('p');
@@ -151,18 +159,22 @@ DFTU_PLUGIN_EXPORT dftu_status dftracer_plugin(dftu_ctx* ctx,
                                                dftu_plugin** out) {
     const dftu_svc_providers* providers;
     const dftu_svc_nodes* nodes;
+    const dftu_svc_ops* ops;
     dftu_status st;
     (void)config;
     providers =
         (const dftu_svc_providers*)h->get_service(h->h, DFTU_SVC_PROVIDERS);
     nodes = (const dftu_svc_nodes*)h->get_service(h->h, DFTU_SVC_NODES);
-    if (!providers || !nodes)
+    ops = (const dftu_svc_ops*)h->get_service(h->h, DFTU_SVC_OPS);
+    if (!providers || !nodes || !ops)
         return dftu_fail(ctx, DFTU_E_UNSUPPORTED, "no registry at load");
     st = providers->register_provider(ctx, h->h, "lifetime_plugin.src", &SRC_VT,
                                       NULL);
     if (st < 0) return st;
     st =
         nodes->register_node(ctx, h->h, "lifetime_plugin.pass", &NODE_VT, NULL);
+    if (st < 0) return st;
+    st = ops->register_op(ctx, h->h, &FIRST_ROW_OP);
     if (st < 0) return st;
     memset(&g_plugin, 0, sizeof(g_plugin));
     g_plugin.struct_size = sizeof(g_plugin);

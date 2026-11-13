@@ -1271,15 +1271,15 @@ host logs the message and applies the op itself.
        .build(out);
 
 **Library lifetime.** The host keeps a plugin's shared library loaded while
-anything made from it is alive: a registered node, provider or index
-extension, and the plans and cursors that hold one. Unloading the plugin
+anything made from it is alive: a registered node, provider, index
+extension or op, and the plans and cursors that hold one. Unloading the plugin
 removes its names at once, so no new lookup finds them. The plugin's own
 ``destroy`` runs after the last holder is gone, and the library is closed
 after it; a node or provider calls its own ``destroy(self)`` before that, so it
 may use the plugin's global state. A plugin never counts
-references itself, since the host takes them. An op registered with
-``dftu_op_register`` is not covered: a plan built over a plugin op must not
-outlive the plugin.
+references itself, since the host takes them. An op registered by a plugin's
+factory is covered the same way; an op registered with ``dftu_op_register``
+from plain C code is not tied to any library.
 
 **A plan node** (``DFTU_SVC_NODES``; the ``dftu_node_vt`` is in
 ``plugins/abi/nodes.h``). Register it from the factory through

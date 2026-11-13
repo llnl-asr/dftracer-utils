@@ -2868,15 +2868,14 @@ class TapCursor : public Cursor {
 class FrameOpCursor : public Cursor {
    public:
     FrameOpCursor(dstd::UniquePtr<Cursor> in, dstd::Vector<dstd::String> sch,
-                  dstd::Vector<Field> in_fields, dstd::String name,
-                  const dftu_op_desc* op,
+                  dstd::Vector<Field> in_fields, dstd::String name, OpDesc op,
                   dstd::SharedPtr<const OwnedFrameOpArgs> args,
                   std::uint64_t budget, bool per_morsel = false)
         : in_(std::move(in)),
           sch_(std::move(sch)),
           in_fields_(std::move(in_fields)),
           name_(std::move(name)),
-          op_(op),
+          op_(std::move(op)),
           args_(std::move(args)),
           hold_(has_cap(budget) ? budget / share::SPOOL
                                 : memory::NO_SPILL_BUDGET),
@@ -2901,7 +2900,7 @@ class FrameOpCursor : public Cursor {
             }
             DataFrame in = frame_of(std::move(m->columns), std::move(shared));
             auto running =
-                run_frame_op(op_, *args_, std::move(in), name_, names);
+                run_frame_op(op_.get(), *args_, std::move(in), name_, names);
             DataFrame out = co_await std::move(running).or_fail();
             out_names_ = dstd::to_strings(out.names);
             co_return MorselResult(morsel_of(std::move(out)));
@@ -2919,8 +2918,8 @@ class FrameOpCursor : public Cursor {
                 names = std::move(*produced);
             in_.reset();
             primary.names = dstd::make_shared_strings(names);
-            auto running =
-                run_frame_op(op_, *args_, std::move(primary), name_, names);
+            auto running = run_frame_op(op_.get(), *args_, std::move(primary),
+                                        name_, names);
             DataFrame out = co_await std::move(running).or_fail();
             out_names_ = dstd::to_strings(out.names);
             chunks_.set(morsel_of(std::move(out)));
@@ -2941,7 +2940,7 @@ class FrameOpCursor : public Cursor {
     NameCache cache_;
     dstd::Vector<Field> in_fields_;
     dstd::String name_;
-    const dftu_op_desc* op_;
+    OpDesc op_;
     dstd::SharedPtr<const OwnedFrameOpArgs> args_;
     dstd::Optional<dstd::Vector<dstd::String>> out_names_;
     ResultChunks chunks_;
@@ -2998,7 +2997,7 @@ struct UnnestOp {
 };
 struct FrameOp {
     dstd::String name;
-    const dftu_op_desc* op;
+    OpDesc op;
     dstd::SharedPtr<const OwnedFrameOpArgs> args;
     // The output names when the caller can say them from the op's contract
     // (a window keeps its input and appends its specs); empty means
@@ -5256,12 +5255,13 @@ LazyFrame LazyFrame::frame_op(dstd::String name, OpArgs args,
     for (const LazyFrame& other : others)
         if (auto other_status = other.status(); !other_status)
             return failed(other_status.error());
-    const dftu_op_desc* op = dftu_op_find(name.c_str());
-    if (!op)
+    auto found = find_op(name.c_str());
+    if (!found)
         return failed(
             invalid_argument<
                 "lazy frame op '{}': no op registered under this name">(name)
                 .error());
+    const dftu_op_desc* op = found->get();
     if (dftu_op_kind_of(op->sig) != DFTU_OP_KIND_FRAME ||
         DFTU_OP_SIG_ARG(op->sig, 0) != DFTU_TOK_FRAME)
         return failed(
@@ -5300,7 +5300,7 @@ LazyFrame LazyFrame::frame_op(dstd::String name, OpArgs args,
     auto ops = ops_;
     ops.push_back(
         dstd::make_shared<LazyOp>(LazyOp{FrameOp{std::move(name),
-                                                 op,
+                                                 std::move(*found),
                                                  std::move(*owned),
                                                  std::move(out_names),
                                                  {},
@@ -5365,8 +5365,9 @@ dstd::Optional<LazyFrame> native_group_transform(
         out_names.push_back(f.name);
         out_types.push_back(scalar(out));
     }
-    const dftu_op_desc* op = dftu_op_find(GROUP_TRANSFORM_OP);
-    if (!op) return dstd::nullopt;
+    auto found = find_op(GROUP_TRANSFORM_OP);
+    if (!found) return dstd::nullopt;
+    const dftu_op_desc* op = found->get();
     dstd::Vector<const char*> key_ptrs;
     for (const dstd::String& k : keys) key_ptrs.push_back(k.c_str());
     OpArgs args;
@@ -5379,8 +5380,8 @@ dstd::Optional<LazyFrame> native_group_transform(
     if (!owned) return dstd::nullopt;
     auto ops = detail::PlanAccess::ops(plan);
     ops.push_back(dstd::make_shared<LazyOp>(LazyOp{
-        FrameOp{GROUP_TRANSFORM_OP, op, std::move(*owned), std::move(out_names),
-                std::move(out_types), in.fields}}));
+        FrameOp{GROUP_TRANSFORM_OP, std::move(*found), std::move(*owned),
+                std::move(out_names), std::move(out_types), in.fields}}));
     return detail::PlanAccess::with_error_of(
         detail::PlanAccess::make(detail::PlanAccess::source_ptr(plan),
                                  std::move(ops),
@@ -6564,7 +6565,7 @@ void fingerprint_op(Fingerprint& fp, const LazyOp& op) {
             },
             [&](const FrameOp& o) {
                 fp.str(o.name);
-                fp.pod(static_cast<const void*>(o.op));
+                fp.pod(static_cast<const void*>(o.op.get()));
                 fp.pod(static_cast<const void*>(o.args.get()));
                 fp.strs(o.out_names);
                 if (o.args)

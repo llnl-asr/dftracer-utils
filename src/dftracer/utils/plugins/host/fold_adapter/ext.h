@@ -59,8 +59,10 @@ const void* fs_ext_vtable();
 const void* fileio_ext_vtable();
 
 /// dftu_svc_ops::register_op with the plugin-name gate applied. Shared with
-/// the build-phase host, whose op registration is the same call.
-dftu_status register_plugin_op(::dftu_ctx* ctx, const ::dftu_op_desc* desc);
+/// the build-phase host, whose op registration is the same call. The record
+/// keeps `library` alive, so a plan that holds the op keeps the plugin loaded.
+dftu_status register_plugin_op(::dftu_ctx* ctx, const ::dftu_op_desc* desc,
+                               dstd::SharedPtr<PluginLibrary> library);
 
 /// dftu_svc_task::run, which uses no host state, so the build-phase host
 /// serves it too.

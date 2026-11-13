@@ -51,6 +51,29 @@ trace::views::detail::FoldEvent evt(dstd::StringIntern& intern,
     return e;
 }
 
+dstd::Result<void> accumulate_wrappers(plugins::Host h,
+                                       const dftu_dataframe* df) {
+    DFTRACER_UTILS_TRY(
+        plugins::Agg scalar,
+        h.agg("wrap_scalar", {},
+              {plugins::agg::count("n"), plugins::agg::sum("dur", "sum_dur")}));
+    DFTRACER_UTILS_TRY_VOID(scalar.accumulate(df));
+    DFTRACER_UTILS_TRY(
+        plugins::Agg by_pid,
+        h.agg("wrap_by_pid", {"pid"},
+              {plugins::agg::count("hits"), plugins::agg::sum("dur", "sum_dur"),
+               plugins::agg::mean("dur", "mean_dur")}));
+    DFTRACER_UTILS_TRY_VOID(by_pid.accumulate(df));
+    DFTRACER_UTILS_TRY(
+        plugins::Agg by_pid_name,
+        h.agg("wrap_by_pid_name", {"pid", "name"}, {plugins::agg::count("n")}));
+    DFTRACER_UTILS_TRY_VOID(by_pid_name.accumulate(df));
+    DFTRACER_UTILS_TRY(plugins::Agg names,
+                       h.agg("wrap_names", {"pid"},
+                             {plugins::agg::set_union("name", "names")}));
+    return names.accumulate(df);
+}
+
 // One columnar step builds every accumulator the cases below read: the
 // zero-key scalar form, a pid-keyed pair of reductions, a two-key
 // (pid, name) count, and a per-pid name set. All through Host::agg + the
@@ -58,22 +81,7 @@ trace::views::detail::FoldEvent evt(dstd::StringIntern& intern,
 dftu_status wrappers_columns(dftu_ctx* ctx, void*, const dftu_dataframe* df,
                              const dftu_plugin_host* host) {
     plugins::Host h{host, ctx};
-    if (const auto a = h.agg(
-            "wrap_scalar", {},
-            {plugins::agg::count("n"), plugins::agg::sum("dur", "sum_dur")}))
-        a.accumulate(df);
-    if (const auto a = h.agg(
-            "wrap_by_pid", {"pid"},
-            {plugins::agg::count("hits"), plugins::agg::sum("dur", "sum_dur"),
-             plugins::agg::mean("dur", "mean_dur")}))
-        a.accumulate(df);
-    if (const auto a = h.agg("wrap_by_pid_name", {"pid", "name"},
-                             {plugins::agg::count("n")}))
-        a.accumulate(df);
-    if (const auto a = h.agg("wrap_names", {"pid"},
-                             {plugins::agg::set_union("name", "names")}))
-        a.accumulate(df);
-    return DFTU_OK;
+    return test_plugin_common::as_status(accumulate_wrappers(h, df));
 }
 
 dftu_plugin make_wrappers_plugin() {
@@ -295,9 +303,10 @@ TEST_SUITE("PluginCxxWrappers") {
         auto fold = dstd::make_unique<plugins::host::PluginFold>(&p, intern);
         test_plugin_common::Ctx c;
         plugins::Host h{&fold->host(), c.get()};
-        const plugins::OwnedDataFrame miss =
+        const dstd::Result<plugins::OwnedDataFrame> miss =
             h.agg_result("no_such_accumulator");
-        CHECK(miss.handle == nullptr);
+        REQUIRE(miss.has_value());
+        CHECK(miss->handle == nullptr);
         fold.reset();
     }
 }

@@ -289,9 +289,9 @@ TEST_SUITE("PluginTransform") {
     TEST_CASE("make_plugin wires transform in place of step") {
         struct Rewriter {
             explicit Rewriter(const dftracer::utils::plugins::Config&) {}
-            dftu_dataframe* transform(const dftu_dataframe*,
-                                      dftracer::utils::plugins::Host) {
-                return nullptr;
+            dstd::Result<dftu_dataframe*> transform(
+                const dftu_dataframe*, dftracer::utils::plugins::Host) {
+                return static_cast<dftu_dataframe*>(nullptr);
             }
             void merge(Rewriter&) {}
             void finalize(dftracer::utils::plugins::Host) {}

@@ -187,31 +187,34 @@ dftracer::utils::plugins::Task job_ops(dftracer::utils::plugins::Host h,
                                        std::int64_t* piped, std::int64_t* all0,
                                        std::int64_t* all1,
                                        std::int64_t* raced) {
-    auto a = plugins::make_job<std::int64_t, std::int64_t>(
+    auto a = co_await plugins::make_job<std::int64_t, std::int64_t>(
         h, [](std::int64_t x) { return x * 2; });
-    auto b = plugins::make_job<std::int64_t, std::int64_t>(
+    auto b = co_await plugins::make_job<std::int64_t, std::int64_t>(
         h, [](std::int64_t x) { return x + 1; });
 
     std::int64_t in = 5;
     std::int64_t p = 0;
-    co_await plugins::run(a | b, in, p);  // (5*2)+1 == 11
+    auto piped_job = co_await (a | b);
+    co_await plugins::run(piped_job, in, p);  // (5*2)+1 == 11
     *piped = p;
 
     std::array<std::int64_t, 2> both{};
-    co_await plugins::run(plugins::when_all(a, b), in, both);
+    auto all_job = co_await plugins::when_all(a, b);
+    co_await plugins::run(all_job, in, both);
     *all0 = both[0];  // 10
     *all1 = both[1];  // 6
 
     std::int64_t one = 0;
-    co_await plugins::run(plugins::when_any(a, b), in, one);
+    auto any_job = co_await plugins::when_any(a, b);
+    co_await plugins::run(any_job, in, one);
     *raced = one;  // 10 or 6
 }
 
 // Free function (not a coroutine lambda) so the frame's captures cannot dangle.
 dftracer::utils::plugins::Task write_via_writer(
     dftracer::utils::plugins::Host h, const char* path) {
-    dftracer::utils::plugins::Writer w = h.writer(path, 1, /*gzip=*/false);
-    if (!w) co_return;
+    dftracer::utils::plugins::Writer w =
+        co_await h.writer(path, 1, /*gzip=*/false);
     co_await w.open();
     co_await w.chunk(0, dstd::StringView{"writer-chunk-payload\n"});
     co_await w.close();
@@ -223,7 +226,7 @@ using dftracer::utils::plugins::Task;
 Task read_lines_sdk(Host h, const char* path, std::uint64_t start,
                     std::uint64_t end, dstd::Vector<dstd::String>* out,
                     dstd::Vector<std::uint64_t>* firsts) {
-    auto reader = h.fileio().lines(path, start, end);
+    auto reader = co_await h.fileio().lines(path, start, end);
     for (;;) {
         auto batch = co_await reader.next(2);
         if (!batch) break;
@@ -234,7 +237,7 @@ Task read_lines_sdk(Host h, const char* path, std::uint64_t start,
 
 Task read_chunks_sdk(Host h, const char* path, std::uint64_t chunk_size,
                      dstd::String* out) {
-    auto reader = h.fileio().chunks(path, chunk_size);
+    auto reader = co_await h.fileio().chunks(path, chunk_size);
     for (;;) {
         auto chunk = co_await reader.next();
         if (!chunk) break;
@@ -245,12 +248,12 @@ Task read_chunks_sdk(Host h, const char* path, std::uint64_t chunk_size,
 Task gz_roundtrip_sdk(Host h, const char* path, dftu_gz_summary* summary,
                       dstd::Vector<dstd::String>* back) {
     auto fio = h.fileio();
-    auto writer = fio.gz(path);
+    auto writer = co_await fio.gz(path);
     co_await writer.open();
-    writer.append("alpha\nbeta\n");
-    writer.append("gamma\n");
+    co_await writer.append("alpha\nbeta\n");
+    co_await writer.append("gamma\n");
     *summary = co_await writer.close();
-    auto reader = fio.lines(path);
+    auto reader = co_await fio.lines(path);
     for (;;) {
         auto batch = co_await reader.next();
         if (!batch) break;
@@ -260,9 +263,9 @@ Task gz_roundtrip_sdk(Host h, const char* path, dftu_gz_summary* summary,
 }
 
 Task gz_bad_append_sdk(Host h, const char* path) {
-    auto writer = h.fileio().gz(path);
+    auto writer = co_await h.fileio().gz(path);
     co_await writer.open();
-    writer.append("no newline");
+    co_await writer.append("no newline");
 }
 
 Task compress_roundtrip_sdk(Host h, const char* in, const char* gz,
@@ -279,24 +282,21 @@ Task compress_missing_sdk(Host h, const char* in, const char* out) {
 }
 
 Task lines_missing_sdk(Host h, const char* path) {
-    auto reader = h.fileio().lines(path);
-    co_return;
+    auto reader = co_await h.fileio().lines(path);
 }
 
 Task helpers_sdk(Host h, const char* path, dstd::String* logical,
                  std::int64_t* mtime, std::uint64_t* size,
                  std::uint64_t* hash) {
     auto fio = h.fileio();
-    *logical = fio.logical_path(path);
-    *mtime = fio.mtime(path);
-    *size = fio.size(path);
-    *hash = fio.sampled_hash(path);
-    co_return;
+    *logical = co_await fio.logical_path(path);
+    *mtime = co_await fio.mtime(path);
+    *size = co_await fio.size(path);
+    *hash = co_await fio.sampled_hash(path);
 }
 
 Task size_missing_sdk(Host h, const char* path) {
-    (void)h.fileio().size(path);
-    co_return;
+    (void)co_await h.fileio().size(path);
 }
 
 }  // namespace
@@ -436,7 +436,9 @@ dftracer::utils::plugins::Task sdk_dir_ops(dftracer::utils::plugins::Host h,
     co_await io.symlinkat(a, AT_FDCWD, b);
     co_await io.unlink(b);
     auto bad = io.unlink(missing);
-    *unlink_status = co_await bad.nothrow();
+    auto outcome = co_await bad.expected();
+    *unlink_status =
+        outcome.has_value() ? DFTU_OK : plugins::status_of(outcome.error());
     co_await io.statx(AT_FDCWD, a, 0, 0xfff, sx);
     co_await io.rmdir(a);
 }
@@ -558,7 +560,7 @@ dftracer::utils::plugins::Task sdk_fs_ops(dftracer::utils::plugins::Host h,
     co_await fs.find_all(dir, nullptr, files);
     out->found = files.size();
     if (files.size() > 0) {
-        auto first = files.entry(0);
+        auto first = co_await files.entry(0);
         out->first_found.assign(first.path.data(), first.path.size());
     }
 
@@ -569,7 +571,9 @@ dftracer::utils::plugins::Task sdk_fs_ops(dftracer::utils::plugins::Host h,
 
     dftracer::utils::plugins::FileBytes none;
     auto bad = fs.read_file(missing, none);
-    out->missing_status = co_await bad.nothrow();
+    auto outcome = co_await bad.expected();
+    out->missing_status =
+        outcome.has_value() ? DFTU_OK : plugins::status_of(outcome.error());
 
     std::int32_t removed = 0;
     co_await fs.remove(file, &removed);
@@ -619,7 +623,7 @@ TEST_CASE("plugin cxx: LineReader batches a plain file by line range") {
     CHECK(firsts[1] == 4);
 }
 
-TEST_CASE("plugin cxx: LineReader on a missing file throws NOT_FOUND") {
+TEST_CASE("plugin cxx: LineReader on a missing file fails with NOT_FOUND") {
     dftu_utils_test::TestEnvironment env(0);
     dstd::String path = env.dir() + "/absent.txt";
     HostFixture fx;
@@ -708,7 +712,7 @@ TEST_CASE("plugin cxx: Fileio compress of a missing input is NOT_FOUND") {
     CHECK(message.find("compress") != dstd::String::npos);
 }
 
-TEST_CASE("plugin cxx: Fileio helpers answer and throw on a missing file") {
+TEST_CASE("plugin cxx: Fileio helpers answer and fail on a missing file") {
     dftu_utils_test::TestEnvironment env(0);
     dstd::String path = env.dir() + "/sdk_helper.txt";
     dstd::fs::write_file(dstd::PathView(path), dstd::String("abc")).discard();

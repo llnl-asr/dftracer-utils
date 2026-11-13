@@ -11,7 +11,6 @@
 #include <dftracer/utils/plugins/plugin/types.h>
 
 #include <cstdint>
-#include <stdexcept>
 #include <string>
 #include <utility>
 
@@ -21,15 +20,15 @@
  *
  * N provides:
  *   void output_schema(const SchemaView& in, const OpArgs& args,
- *                      SchemaBuilder& out) const;
- *   dstd::UniquePtr<C> open(InputCursor in, const OpArgs& args,
- *                           std::uint64_t memory_budget) const;
+ *                      SchemaBuilder& out) const;   // or dstd::Result<void>
+ *   dstd::Result<dstd::UniquePtr<C>> open(InputCursor in, const OpArgs& args,
+ *                                         std::uint64_t memory_budget) const;
  * where C is a cursor type as in plugin/source.h (next, and optionally
  * narrow / resident_bytes / reclaim). The cursor owns `in` and pulls it with
- * in.next(). `memory_budget` is the plan's budget in bytes, never 0. A throwing
+ * in.next(). `memory_budget` is the plan's budget in bytes, never 0. A failed
  * or empty open() leaves the upstream cursor with the host, as
- * dftu_node_vt::open requires; a throwing next() fails the scan with its
- * what() text. */
+ * dftu_node_vt::open requires; a failed next() fails the scan with its error's
+ * status and message. */
 
 namespace dftracer::utils::plugins {
 
@@ -104,7 +103,8 @@ struct TaskRunner {
 };
 
 // The ctx InputCursor hands its upstream: it keeps the message the upstream
-// sets, which InputCursor then throws, so the node's own callback reports it.
+// sets, which InputCursor then returns in its error, so the node's own
+// callback reports it.
 struct LocalCtx {
     dftu_ctx base;
     dstd::String message;
@@ -152,9 +152,9 @@ class InputCursor {
         }
     }
 
-    /// The next upstream frame, or dstd::nullopt at the end of the stream.
-    /// Throws @ref Error with the upstream's status and message when it fails.
-    dstd::Optional<OwnedFrame> next(std::int64_t max_rows) {
+    /// The next upstream frame, or dstd::nullopt at the end of the stream. An
+    /// error with the upstream's status and message when it fails.
+    dstd::Result<dstd::Optional<OwnedFrame>> next(std::int64_t max_rows) {
         detail::LocalCtx ctx;
         dftu_dataframe* out = nullptr;
         dftu_task* pending = nullptr;
@@ -162,11 +162,12 @@ class InputCursor {
         if (st >= 0 && pending) st = runner_.run(&ctx.base, pending);
         if (st < 0) {
             if (out) dftu_dataframe_free(out);
-            throw Error(st,
-                        ctx.message.empty() ? "upstream failed" : ctx.message);
+            return make_error(st, ctx.message.empty()
+                                      ? dstd::StringView("upstream failed")
+                                      : dstd::StringView(ctx.message));
         }
-        if (st == DFTU_END || !out) return dstd::nullopt;
-        return OwnedFrame(out);
+        if (st == DFTU_END || !out) return dstd::Optional<OwnedFrame>();
+        return dstd::Optional<OwnedFrame>(OwnedFrame(out));
     }
 
     /// Offer `predicate` upstream. Only sound when it is positional against
@@ -202,12 +203,11 @@ struct NodeVt {
     static dftu_status output_schema(dftu_ctx* ctx, void* self,
                                      const dftu_schema* in,
                                      const dftu_op_arg* args,
-                                     dftu_schema* out) {
-        return guard(ctx, [&]() -> dftu_status {
+                                     dftu_schema* out) noexcept {
+        return to_status(ctx, [&]() {
             SchemaBuilder b(out);
-            static_cast<NodeBox<N>*>(self)->node->output_schema(
+            return static_cast<NodeBox<N>*>(self)->node->output_schema(
                 SchemaView(in), OpArgs(args), b);
-            return DFTU_OK;
         });
     }
 
@@ -215,19 +215,21 @@ struct NodeVt {
                             const dftu_cursor_vt* in_vt,
                             const dftu_op_arg* args,
                             std::uint64_t memory_budget, void** out_cursor_self,
-                            const dftu_cursor_vt** out_vt) {
+                            const dftu_cursor_vt** out_vt) noexcept {
         auto own = dstd::make_shared<InputOwnership>();
-        return guard(ctx, [&]() -> dftu_status {
-            auto cursor = static_cast<NodeBox<N>*>(self)->node->open(
+        return to_status(ctx, [&]() -> dftu_status {
+            auto opened = static_cast<NodeBox<N>*>(self)->node->open(
                 InputCursor(in_self, in_vt, own,
                             static_cast<NodeBox<N>*>(self)->runner),
                 OpArgs(args), memory_budget);
+            if (!opened.has_value()) return report(ctx, opened.error());
+            auto cursor = std::move(*opened);
             if (!cursor)
                 return dftu_fail(ctx, DFTU_E_INTERNAL,
                                  "open returned no cursor");
             using C = typename decltype(cursor)::element_type;
             auto* box = new CursorBox<C>{std::move(cursor)};
-            // Nothing below throws, so the upstream changes hands only once
+            // Nothing below fails, so the upstream changes hands only once
             // open() is certain to succeed.
             own->committed = true;
             if (own->dropped && in_vt->destroy) in_vt->destroy(in_self);

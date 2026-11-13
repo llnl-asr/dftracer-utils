@@ -143,8 +143,14 @@ is never called into. Rebuild the plugin against the host you run.
 
       A ``Slice`` provides the constructor and methods; ``plugin(ctx, h,
       config).fold<Slice>().build(out)`` fills the ``dftu_plugin`` struct and
-      adapts exceptions at the boundary: every callback catches, and a thrown
-      ``std::exception`` becomes an error carrying its ``what()`` text.
+      adapts errors at the boundary. The SDK throws nothing and catches
+      nothing, and its headers compile with ``-fno-exceptions``. A call that
+      can fail returns a ``dstd::Result``, and a callback returns a
+      ``dstd::Result<void>`` (or ``void`` where it cannot fail); the SDK turns
+      the error into the callback's status and message. A callback that throws
+      terminates the process. A Slice that can fail at creation, for a bad
+      config, provides ``static dstd::Result<Slice> from_config(const
+      Config&)``, which the SDK uses in place of the constructor.
       ``struct_size`` is set for you.
 
       .. code-block:: cpp
@@ -542,11 +548,12 @@ Count events and total their duration per ``(pid, event-name)``:
 
       .. code-block:: cpp
 
-         void step(const Batch& b, Host h) {
-             const auto edges = h.agg("name_edges", {"pid", "name"},
+         dstd::Result<void> step(const Batch& b, Host h) {
+             DFTRACER_UTILS_TRY(Agg edges,
+                                h.agg("name_edges", {"pid", "name"},
                                       {agg::count("edges"),
-                                       agg::sum("dur", "dur_sum")});
-             if (edges) edges.accumulate(b.raw());
+                                       agg::sum("dur", "dur_sum")}));
+             return edges.accumulate(b.raw());
          }
 
    .. tab-item:: C (raw ABI)
@@ -781,11 +788,13 @@ the cross-worker-merged, finalized result by that name at ``on_finalize``.
       .. code-block:: cpp
 
          // producer, in step (or on_batch):
-         const auto a = h.agg("com.example.total", {}, {agg::count("count")});
-         if (a) a.accumulate(b.raw());
+         DFTRACER_UTILS_TRY(Agg a, h.agg("com.example.total", {},
+                                         {agg::count("count")}));
+         DFTRACER_UTILS_TRY_VOID(a.accumulate(b.raw()));
 
          // consumer, in on_finalize:
-         const OwnedDataFrame res = h.agg_result("com.example.total");
+         DFTRACER_UTILS_TRY(OwnedDataFrame res,
+                            h.agg_result("com.example.total"));
          if (res.handle) { /* read the "count" column */ }
 
    .. tab-item:: C (raw ABI)
@@ -843,8 +852,15 @@ cancelled task reports ``DFTU_E_CANCELLED``.
       step after a task is the next ``co_await``. Typed jobs (``job.h``,
       ``make_job<In, Out>``) pipe with ``|`` and fan out with ``when_all`` /
       ``when_any``; see :doc:`guides/plugins/compose-ops`. A call the host
-      refuses, or a task that fails, throws ``Error`` out of the ``co_await``,
-      and an uncaught one fails ``on_finalize`` with its message.
+      refuses, or a task that fails, ends the ``Task`` with its error: the
+      ``co_await`` does not return, the host reports the status and message,
+      and the frame is destroyed, which gives back every task its locals
+      still own. ``co_await op.expected()`` returns the failure as a
+      ``dstd::Result`` instead and the ``Task`` goes on. A ``Task`` ends when its body ends, or
+      fails with ``co_await fail(error)``. ``co_await`` on a ``dstd::Result`` gives its value or ends
+      the ``Task`` the same way; in a plain function, use
+      ``DFTRACER_UTILS_TRY(decl, expr)`` and ``DFTRACER_UTILS_TRY_VOID(expr)``
+      from ``dstd/result.h``, which return the error.
 
       .. code-block:: cpp
 
@@ -953,11 +969,14 @@ scan; do not free it.
          struct Filtered {
              dftu_duql* q_ = nullptr;
              explicit Filtered(const Config&) {}
-             void step(const Batch& b, Host h) {
-                 if (!q_) q_ = h.duql_compile(F("dur") > 1000);
-                 // Equivalent: h.duql_compile("dur > 1000");
+             dstd::Result<void> step(const Batch& b, Host h) {
+                 if (!q_) {
+                     DFTRACER_UTILS_TRY(q_, h.duql_compile(F("dur") > 1000));
+                     // Equivalent: h.duql_compile("dur > 1000");
+                 }
                  for (std::int64_t row = 0; row < b.size(); ++row)
                      if (h.duql_matches(q_, b.raw(), row)) { /* ... */ }
+                 return {};
              }
              void merge(Filtered&) {}
              void finalize(Host) {}
@@ -988,9 +1007,9 @@ must release them; the SDK's ``OwnedArrow`` does that in its destructor.
 
       .. code-block:: cpp
 
-         void finalize(Host h) {
-             OwnedArrow a = h.arrow_read_ipc("/tmp/in.arrow");
-             if (a) h.arrow_write_ipc(a, "/tmp/out.arrow");
+         dstd::Result<void> finalize(Host h) {
+             DFTRACER_UTILS_TRY(OwnedArrow a, h.arrow_read_ipc("/tmp/in.arrow"));
+             return h.arrow_write_ipc(a, "/tmp/out.arrow");
          }
 
    .. tab-item:: C (raw ABI)
@@ -1021,10 +1040,11 @@ on first read, not at close.
 
       .. code-block:: cpp
 
-         void step(const Batch& b, Host h) {
-             TraceWriter w = h.trace_writer("/tmp/out.pfw.gz");  // RAII
-             w.write(b.raw());
-             w.close();
+         dstd::Result<void> step(const Batch& b, Host h) {
+             DFTRACER_UTILS_TRY(TraceWriter w,
+                                h.trace_writer("/tmp/out.pfw.gz"));  // RAII
+             DFTRACER_UTILS_TRY_VOID(w.write(b.raw()));
+             return w.close();
          }
 
    .. tab-item:: C (raw ABI)
@@ -1071,8 +1091,8 @@ removed). Calls on one handle must not overlap.
       the plugin closes with ``co_await close()`` (one left open is aborted at
       the end of the fold and its files are removed);
       ``co_await reader.next()`` gives the next batch, or ``nullopt`` at the end.
-      ``Host::writer`` returns the ``Writer`` of the parallel writer (host-owned,
-      nothing to free); ``open`` / ``chunk`` / ``close`` are ``co_await``-able
+      ``Host::writer`` returns the ``Writer`` of the parallel writer as a
+      ``dstd::Result`` (host-owned, nothing to free); ``open`` / ``chunk`` / ``close`` are ``co_await``-able
       AsyncOps, and ``Host::merge_shards`` concatenates shard files into a
       target.
       ``examples/plugins/duration_report.cpp`` is a full plugin that writes its
@@ -1081,20 +1101,20 @@ removed). Calls on one handle must not overlap.
       .. code-block:: cpp
 
          Task on_finalize(Host h) {
-             auto reader = h.fileio().lines("/tmp/in.pfw");
+             auto reader = co_await h.fileio().lines("/tmp/in.pfw");
              for (;;) {
                  auto batch = co_await reader.next(1024);
                  if (!batch) break;
                  for (std::string_view line : *batch) { /* ... */ }
              }
 
-             auto gz = h.fileio().gz("/tmp/out.pfw.gz");
+             auto gz = co_await h.fileio().gz("/tmp/out.pfw.gz");
              co_await gz.open();
-             gz.append("{\"name\":\"x\"}\n");
+             co_await gz.append("{\"name\":\"x\"}\n");
              dftu_gz_summary summary = co_await gz.close();
 
-             Writer w = h.writer("/tmp/out2.pfw.gz", /*worker_count=*/4,
-                                 /*gzip=*/true);
+             Writer w = co_await h.writer("/tmp/out2.pfw.gz", /*worker_count=*/4,
+                                          /*gzip=*/true);
              co_await w.open();
              co_await w.chunk(/*worker=*/0, std::string_view{"payload"});
              co_await w.close();
@@ -1235,10 +1255,10 @@ is optional, and only the ones it defines are wired up. Requests arrive as
 views (``ExprView`` with ``as_compare`` / ``as_logical`` / ``as_not`` /
 ``as_str_pred`` / ``as_is_in``, ``SortView``, ``AggregationView``,
 ``JoinView<S>`` with the other side as ``S``), and results are owned C++
-values (``OwnedFrame``, ``Applied<S>``). Exceptions never cross the ABI: a
-thrown ``std::exception`` fails the call with its ``what()`` text as the
-message. A failed cursor fails the scan with it; for a failed planning hook the
-host logs the message and applies the op itself.
+values (``OwnedFrame``, ``Applied<S>``). ``scan``, ``next`` and the planning
+hooks return a ``dstd::Result``, and an error fails the call with its status
+and message. A failed cursor fails the scan with it; for a failed planning hook
+the host logs the message and applies the op itself.
 
 .. code-block:: cpp
 

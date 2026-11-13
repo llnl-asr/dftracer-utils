@@ -65,9 +65,9 @@ struct RowCount {
         rows += static_cast<std::uint64_t>(dftu_dataframe_num_rows(df));
     }
     void merge(RowCount& other) { rows += other.rows; }
-    void finalize(Host h) {
+    dstd::Result<void> finalize(Host h) {
         const dstd::String s = dstd::to_string(rows);
-        h.emit_result("builder_plugin.rows", s);
+        return h.emit_result("builder_plugin.rows", s);
     }
 };
 

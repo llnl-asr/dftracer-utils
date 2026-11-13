@@ -19,12 +19,13 @@ struct QueryFilter {
 
     explicit QueryFilter(const Config&) {}
 
-    void step(const Batch& b, Host h) {
-        dftu_duql* q = h.duql_compile(F("dur") > 300);
+    dftracer::utils::dstd::Result<void> step(const Batch& b, Host h) {
+        DFTRACER_UTILS_TRY(dftu_duql * q, h.duql_compile(F("dur") > 300));
         for (const Event& e : b) {
             ++total;
-            if (q && h.duql_matches(q, e.frame(), e.row())) ++matched;
+            if (h.duql_matches(q, e.frame(), e.row())) ++matched;
         }
+        return ok();
     }
 
     void merge(QueryFilter& other) {

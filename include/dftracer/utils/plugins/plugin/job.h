@@ -17,15 +17,17 @@
  * error instead of a runtime DFTU_E_INVALID. Values are trivially copyable
  * (they cross the C ABI as bytes).
  *
- *   auto a = make_job<std::int64_t, std::int64_t>(host, [](auto x) {
+ *   auto a = co_await make_job<std::int64_t, std::int64_t>(host, [](auto x) {
  *       return x * 2; });
- *   auto b = make_job<std::int64_t, std::int64_t>(host, [](auto x) {
+ *   auto b = co_await make_job<std::int64_t, std::int64_t>(host, [](auto x) {
  *       return x + 10; });
+ *   auto both = co_await (a | b);
  *   std::int64_t in = 5, out = 0;
- *   co_await run(a | b, in, out);   // out == 20; a | c with another type
+ *   co_await run(both, in, out);    // out == 20; a | c with another type
  *                                   // does not compile
  *
- * Every call that the host refuses throws Error. */
+ * Every call that the host refuses returns its error as a dstd::Result, which
+ * `co_await` turns into the end of the task. */
 
 namespace dftracer::utils::plugins {
 
@@ -80,8 +82,8 @@ namespace detail {
 
 template <class In, class Out, class Fn>
 dftu_status job_thunk(dftu_ctx* ctx, void* state, const void* in, void* out,
-                      dftu_task**) {
-    return guard(ctx, [&]() -> dftu_status {
+                      dftu_task**) noexcept {
+    return to_status(ctx, [&]() -> dftu_status {
         *static_cast<Out*>(out) =
             (*static_cast<Fn*>(state))(*static_cast<const In*>(in));
         return DFTU_OK;
@@ -98,11 +100,13 @@ void job_free(void* state) {
 /// A typed leaf from any callable `Out(const In&)`. In and Out must be
 /// trivially copyable. The closure is heap-owned by the job.
 template <class In, class Out, class Fn>
-Job<In, Out> make_job(Host host, Fn fn, dftu_job_where where = DFTU_JOB_CPU) {
+dstd::Result<Job<In, Out>> make_job(Host host, Fn fn,
+                                    dftu_job_where where = DFTU_JOB_CPU) {
     static_assert(
         std::is_trivially_copyable_v<In> && std::is_trivially_copyable_v<Out>,
         "job values cross the C ABI as bytes; In/Out must be trivially "
         "copyable");
+    DFTRACER_UTILS_TRY(const dftu_svc_task* svc, host.tasks());
     Fn* state = new Fn(std::move(fn));
     dftu_job_desc desc{};
     desc.struct_size = sizeof(dftu_job_desc);
@@ -115,53 +119,55 @@ Job<In, Out> make_job(Host host, Fn fn, dftu_job_where where = DFTU_JOB_CPU) {
     desc.out_ty = type_tag<Out>();
     desc.out_size = static_cast<std::uint32_t>(sizeof(Out));
     dftu_job* job = nullptr;
-    const dftu_status st =
-        host.tasks().job(host.ctx(), host.raw()->h, &desc, &job);
+    const dftu_status st = svc->job(host.ctx(), host.raw()->h, &desc, &job);
     if (st < 0) {
         delete state;
-        detail::ok(st);
+        return detail::reported(st).error();
     }
-    return {host, job};
+    return Job<In, Out>{host, job};
 }
 
 /// Pipe (`|`): the middle type must chain, so `Job<A,B> | Job<B,C>` is valid
 /// and a mismatch is a compile error.
 template <class In, class Mid, class Out>
-Job<In, Out> operator|(Job<In, Mid> a, Job<Mid, Out> b) {
+dstd::Result<Job<In, Out>> operator|(Job<In, Mid> a, Job<Mid, Out> b) {
     Host host = a.host();
+    DFTRACER_UTILS_TRY(const dftu_svc_task* svc, host.tasks());
     dftu_job* out = nullptr;
-    detail::ok(
-        host.tasks().then(host.ctx(), host.raw()->h, a.raw(), b.raw(), &out));
-    return {host, out};
+    DFTRACER_UTILS_TRY_VOID(detail::reported(
+        svc->then(host.ctx(), host.raw()->h, a.raw(), b.raw(), &out)));
+    return Job<In, Out>{host, out};
 }
 
 /// Run every job on the SAME input and concatenate their outputs in order, as
 /// a std::array<Out, N>. The first error cancels the rest and is the result.
 template <class In, class Out, class... Jobs>
-Job<In, std::array<Out, 1 + sizeof...(Jobs)>> when_all(Job<In, Out> first,
-                                                       Jobs... rest) {
+dstd::Result<Job<In, std::array<Out, 1 + sizeof...(Jobs)>>> when_all(
+    Job<In, Out> first, Jobs... rest) {
     static_assert((std::is_same_v<Jobs, Job<In, Out>> && ...),
                   "when_all jobs must share In and Out");
     Host host = first.host();
+    DFTRACER_UTILS_TRY(const dftu_svc_task* svc, host.tasks());
     dftu_job* jobs[] = {first.raw(), rest.raw()...};
     dftu_job* out = nullptr;
-    detail::ok(host.tasks().all(host.ctx(), host.raw()->h, jobs,
-                                1 + sizeof...(Jobs), &out));
-    return {host, out};
+    DFTRACER_UTILS_TRY_VOID(detail::reported(
+        svc->all(host.ctx(), host.raw()->h, jobs, 1 + sizeof...(Jobs), &out)));
+    return Job<In, std::array<Out, 1 + sizeof...(Jobs)>>{host, out};
 }
 
 /// Race every job on the same input: the first to finish decides the output
 /// (or the error), and the rest are cancelled.
 template <class In, class Out, class... Jobs>
-Job<In, Out> when_any(Job<In, Out> first, Jobs... rest) {
+dstd::Result<Job<In, Out>> when_any(Job<In, Out> first, Jobs... rest) {
     static_assert((std::is_same_v<Jobs, Job<In, Out>> && ...),
                   "when_any jobs must share In and Out");
     Host host = first.host();
+    DFTRACER_UTILS_TRY(const dftu_svc_task* svc, host.tasks());
     dftu_job* jobs[] = {first.raw(), rest.raw()...};
     dftu_job* out = nullptr;
-    detail::ok(host.tasks().any(host.ctx(), host.raw()->h, jobs,
-                                1 + sizeof...(Jobs), &out));
-    return {host, out};
+    DFTRACER_UTILS_TRY_VOID(detail::reported(
+        svc->any(host.ctx(), host.raw()->h, jobs, 1 + sizeof...(Jobs), &out)));
+    return Job<In, Out>{host, out};
 }
 
 /// Start the job over `in`, writing `out`; co_await the result. `in` and
@@ -169,11 +175,12 @@ Job<In, Out> when_any(Job<In, Out> first, Jobs... rest) {
 template <class In, class Out>
 AsyncOp run(Job<In, Out> job, const In& in, Out& out) {
     Host host = job.host();
+    auto svc = host.tasks();
+    if (!svc.has_value()) return AsyncOp{std::move(svc).error()};
     dftu_task* t = nullptr;
     return detail::started(
         host.raw(),
-        host.tasks().start(host.ctx(), host.raw()->h, job.raw(), &in, &out, &t),
-        t);
+        (*svc)->start(host.ctx(), host.raw()->h, job.raw(), &in, &out, &t), t);
 }
 
 }  // namespace dftracer::utils::plugins

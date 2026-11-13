@@ -58,7 +58,9 @@ TEST_CASE("plugin ops: run_op runs a registered column op by name") {
     REQUIRE(a);
     REQUIRE(b);
 
-    dftu_series* sum = h.run_op("dftu.series.add", {a, b});
+    auto sum_result = h.run_op("dftu.series.add", {a, b});
+    REQUIRE(sum_result.has_value());
+    dftu_series* sum = *sum_result;
     REQUIRE(sum);
     REQUIRE(dftu_series_length(sum) == 3);
     const auto* sum_data =
@@ -77,23 +79,20 @@ TEST_CASE("plugin ops: run_op reports unknown names and bad arity") {
     test_plugin_common::Ctx c;
     plugins::Host h{&fx.host(), c.get()};
 
-    try {
-        h.run_op("dftu.test.nonexistent_op", {});
-        FAIL("run_op of an unknown name must throw");
-    } catch (const plugins::Error& e) {
-        // The host's message is on the call's ctx; the Error carries the
-        // status.
-        CHECK(e.status() == DFTU_E_NOT_FOUND);
-        CHECK(e.reported());
-        CHECK(c.message().find("dftu.test.nonexistent_op") !=
-              dstd::String::npos);
-    }
+    auto unknown = h.run_op("dftu.test.nonexistent_op", {});
+    REQUIRE_FALSE(unknown.has_value());
+    // The host's message is on the call's ctx; the Error carries the status.
+    CHECK(plugins::status_of(unknown.error()) == DFTU_E_NOT_FOUND);
+    CHECK(unknown.error().message().empty());
+    CHECK(c.message().find("dftu.test.nonexistent_op") != dstd::String::npos);
 
     const std::int64_t a_vals[] = {1, 2, 3};
     dftu_series* a = dftu_series_new_flat(DFTU_TYPE_INT64, a_vals, 3, nullptr);
     REQUIRE(a);
     // "dftu.series.add" takes two series operands; one is an arity mismatch.
-    CHECK_THROWS_AS(h.run_op("dftu.series.add", {a}), plugins::Error);
+    auto arity = h.run_op("dftu.series.add", {a});
+    REQUIRE_FALSE(arity.has_value());
+    CHECK(plugins::status_of(arity.error()) == DFTU_E_INVALID);
     dftu_series_free(a);
 }
 

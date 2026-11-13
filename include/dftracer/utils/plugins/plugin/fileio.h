@@ -17,17 +17,32 @@
 namespace dftracer::utils::plugins {
 
 /// An @ref AsyncOp whose awaited result is built from the task's status.
+/// Awaiting it fails the @ref Task as the op does; `co_await v.expected()`
+/// gives a @ref dstd::Result instead.
 template <class T, class Finish>
-class AsyncValue {
+class [[nodiscard]] AsyncValue {
    public:
     AsyncValue(AsyncOp op, Finish finish)
         : op_(std::move(op)), finish_(std::move(finish)) {}
+
+    detail::Settled<AsyncValue> expected() & noexcept {
+        return detail::Settled<AsyncValue>(*this);
+    }
+    detail::Settled<AsyncValue> expected() && noexcept {
+        return detail::Settled<AsyncValue>(*this);
+    }
 
     bool await_ready() const noexcept { return false; }
     void await_suspend(std::coroutine_handle<Task::promise_type> h) noexcept {
         op_.await_suspend(h);
     }
     T await_resume() { return finish_(op_.await_resume()); }
+
+    bool resolved() const noexcept { return op_.resolved(); }
+    dstd::Result<T> resume_expected() {
+        return op_.resume_expected().transform(
+            [this](dftu_status status) { return finish_(status); });
+    }
 
    private:
     AsyncOp op_;
@@ -98,10 +113,11 @@ class LineReader {
     ~LineReader() { close(); }
 
     /// The batch is valid until the next `next()` or `close()`. A read error
-    /// throws @ref Error when awaited.
+    /// fails the await.
     auto next(std::uint32_t max_lines = 0) {
         dftu_task* t = nullptr;
-        detail::ok(e_->lines_next(ctx_, h_->h, r_, max_lines, slot_.get(), &t));
+        const dftu_status st =
+            e_->lines_next(ctx_, h_->h, r_, max_lines, slot_.get(), &t);
         const dftu_line_batch* slot = slot_.get();
         auto finish = [slot](dftu_status status) {
             return status == DFTU_END
@@ -109,7 +125,7 @@ class LineReader {
                        : dstd::Optional<LineBatch>(LineBatch(*slot));
         };
         return AsyncValue<dstd::Optional<LineBatch>, decltype(finish)>(
-            AsyncOp{t, h_}, finish);
+            detail::started(h_, st, t), finish);
     }
 
     void close() noexcept {
@@ -165,7 +181,8 @@ class ChunkReader {
 
     auto next() {
         dftu_task* t = nullptr;
-        detail::ok(e_->chunks_next(ctx_, h_->h, r_, slot_.get(), &t));
+        const dftu_status st =
+            e_->chunks_next(ctx_, h_->h, r_, slot_.get(), &t);
         const dftu_bytes* slot = slot_.get();
         auto finish = [slot](dftu_status status) {
             using Chunk = dstd::Optional<dstd::StringView>;
@@ -176,7 +193,7 @@ class ChunkReader {
                              static_cast<std::size_t>(slot->len)));
         };
         return AsyncValue<dstd::Optional<dstd::StringView>, decltype(finish)>(
-            AsyncOp{t, h_}, finish);
+            detail::started(h_, st, t), finish);
     }
 
     void close() noexcept {
@@ -228,20 +245,21 @@ class GzWriter {
         return op;
     }
 
-    /// Copies `lines`, which must end with '\n'; throws @ref Error with
-    /// DFTU_E_INVALID otherwise.
-    void append(dstd::StringView lines) const {
-        detail::ok(e_->gz_append(ctx_, h_->h, w_, lines.data(), lines.size()));
+    /// Copies `lines`, which must end with '\n'; DFTU_E_INVALID otherwise.
+    dstd::Result<void> append(dstd::StringView lines) const {
+        return detail::reported(
+            e_->gz_append(ctx_, h_->h, w_, lines.data(), lines.size()));
     }
 
     /// Finishes the file; the awaited value is its summary.
     auto close() const {
         dftu_task* t = nullptr;
-        detail::ok(e_->gz_close(ctx_, h_->h, w_, summary_.get(), &t));
+        const dftu_status st =
+            e_->gz_close(ctx_, h_->h, w_, summary_.get(), &t);
         const dftu_gz_summary* summary = summary_.get();
         auto finish = [summary](dftu_status) { return *summary; };
-        return AsyncValue<dftu_gz_summary, decltype(finish)>(AsyncOp{t, h_},
-                                                             finish);
+        return AsyncValue<dftu_gz_summary, decltype(finish)>(
+            detail::started(h_, st, t), finish);
     }
 
     dftu_gz_writer* raw() const noexcept { return w_; }
@@ -268,8 +286,8 @@ class GzWriter {
 };
 
 /// Typed wrapper over the fileio service (see abi/fileio.h). A call the host
-/// refuses, or a host without the service, throws @ref Error; a failed task
-/// throws when awaited.
+/// refuses, or a host without the service, returns its error; one that starts
+/// a task gives an @ref AsyncOp that fails when awaited, as does a failed task.
 class Fileio {
    public:
     Fileio(const dftu_plugin_host* h, dftu_ctx* ctx)
@@ -280,28 +298,35 @@ class Fileio {
                                  : nullptr) {}
 
     /// Lines `start_line` to `end_line` (1-based; 0 is the first and the last
-    /// line) of a plain or gzip file. Throws DFTU_E_NOT_FOUND for a missing
-    /// file.
-    LineReader lines(const char* path, std::uint64_t start_line = 0,
-                     std::uint64_t end_line = 0) const {
+    /// line) of a plain or gzip file. DFTU_E_NOT_FOUND for a missing file.
+    dstd::Result<LineReader> lines(const char* path,
+                                   std::uint64_t start_line = 0,
+                                   std::uint64_t end_line = 0) const {
+        if (!e_) return unsupported();
         dftu_line_reader* r = nullptr;
-        detail::ok(
-            need().lines_open(ctx_, h_->h, path, start_line, end_line, &r));
+        DFTRACER_UTILS_TRY_VOID(detail::reported(
+            e_->lines_open(ctx_, h_->h, path, start_line, end_line, &r)));
         return LineReader(h_, ctx_, e_, r);
     }
 
-    ChunkReader chunks(const char* path, std::uint64_t chunk_size = 0) const {
+    dstd::Result<ChunkReader> chunks(const char* path,
+                                     std::uint64_t chunk_size = 0) const {
+        if (!e_) return unsupported();
         dftu_chunk_reader* r = nullptr;
-        detail::ok(need().chunks_open(ctx_, h_->h, path, chunk_size, &r));
+        DFTRACER_UTILS_TRY_VOID(detail::reported(
+            e_->chunks_open(ctx_, h_->h, path, chunk_size, &r)));
         return ChunkReader(h_, ctx_, e_, r);
     }
 
-    GzWriter gz(const char* path, const GzOptions& options = {}) const {
+    dstd::Result<GzWriter> gz(const char* path,
+                              const GzOptions& options = {}) const {
+        if (!e_) return unsupported();
         dftu_gz_options raw{sizeof(dftu_gz_options), options.level,
                             options.member_size, options.workers};
         dftu_gz_writer* w = nullptr;
         dftu_task* t = nullptr;
-        detail::ok(need().gz_open(ctx_, h_->h, path, &raw, &w, &t));
+        DFTRACER_UTILS_TRY_VOID(
+            detail::reported(e_->gz_open(ctx_, h_->h, path, &raw, &w, &t)));
         return GzWriter(h_, ctx_, e_, w, AsyncOp{t, h_});
     }
 
@@ -309,49 +334,58 @@ class Fileio {
     AsyncOp compress(const char* in_path, const char* out_path,
                      std::uint64_t* out_size, std::int32_t level = 0,
                      std::uint64_t member_size = 0) const {
+        if (!e_) return AsyncOp{unsupported()};
         dftu_task* t = nullptr;
-        detail::ok(need().compress(ctx_, h_->h, in_path, out_path, level,
-                                   member_size, out_size, &t));
-        return AsyncOp{t, h_};
+        return detail::started(h_,
+                               e_->compress(ctx_, h_->h, in_path, out_path,
+                                            level, member_size, out_size, &t),
+                               t);
     }
     AsyncOp decompress(const char* in_path, const char* out_path,
                        std::uint64_t* out_size) const {
+        if (!e_) return AsyncOp{unsupported()};
         dftu_task* t = nullptr;
-        detail::ok(
-            need().decompress(ctx_, h_->h, in_path, out_path, out_size, &t));
-        return AsyncOp{t, h_};
+        return detail::started(
+            h_, e_->decompress(ctx_, h_->h, in_path, out_path, out_size, &t),
+            t);
     }
 
-    /// The absolute normalized path; throws DFTU_E_NOT_FOUND for a missing
-    /// file.
-    dstd::String logical_path(const char* path) const {
+    /// The absolute normalized path; DFTU_E_NOT_FOUND for a missing file.
+    dstd::Result<dstd::String> logical_path(const char* path) const {
+        if (!e_) return unsupported();
         dftu_bytes out{};
-        detail::ok(need().logical_path(ctx_, h_->h, path, &out));
+        DFTRACER_UTILS_TRY_VOID(
+            detail::reported(e_->logical_path(ctx_, h_->h, path, &out)));
         dstd::String text(static_cast<const char*>(out.data),
                           static_cast<std::size_t>(out.len));
         if (out.free_fn) out.free_fn(const_cast<void*>(out.data), out.ud);
         return text;
     }
-    std::int64_t mtime(const char* path) const {
+    dstd::Result<std::int64_t> mtime(const char* path) const {
+        if (!e_) return unsupported();
         std::int64_t seconds = 0;
-        detail::ok(need().mtime(ctx_, h_->h, path, &seconds));
+        DFTRACER_UTILS_TRY_VOID(
+            detail::reported(e_->mtime(ctx_, h_->h, path, &seconds)));
         return seconds;
     }
-    std::uint64_t size(const char* path) const {
+    dstd::Result<std::uint64_t> size(const char* path) const {
+        if (!e_) return unsupported();
         std::uint64_t bytes = 0;
-        detail::ok(need().size(ctx_, h_->h, path, &bytes));
+        DFTRACER_UTILS_TRY_VOID(
+            detail::reported(e_->size(ctx_, h_->h, path, &bytes)));
         return bytes;
     }
-    std::uint64_t sampled_hash(const char* path) const {
+    dstd::Result<std::uint64_t> sampled_hash(const char* path) const {
+        if (!e_) return unsupported();
         std::uint64_t hash = 0;
-        detail::ok(need().sampled_hash(ctx_, h_->h, path, &hash));
+        DFTRACER_UTILS_TRY_VOID(
+            detail::reported(e_->sampled_hash(ctx_, h_->h, path, &hash)));
         return hash;
     }
 
    private:
-    const dftu_svc_fileio& need() const {
-        if (!e_) throw Error(DFTU_E_UNSUPPORTED, "host lacks dftu.svc.fileio");
-        return *e_;
+    static dstd::Error unsupported() noexcept {
+        return make_error(DFTU_E_UNSUPPORTED, "host lacks dftu.svc.fileio");
     }
 
     const dftu_plugin_host* h_;

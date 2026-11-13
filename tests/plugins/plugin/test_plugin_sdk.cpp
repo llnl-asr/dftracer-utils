@@ -24,7 +24,6 @@
 
 #include <cstdint>
 #include <cstring>
-#include <stdexcept>
 #include <utility>
 
 using namespace dftracer::utils;
@@ -51,7 +50,7 @@ struct Counters {
     int cursors_destroyed = 0;
 };
 
-// A filter on `id` against this value makes RangeSource::apply_filter throw.
+// A filter on `id` against this value makes RangeSource::apply_filter fail.
 constexpr std::int64_t APPLY_THROWS = 424242;
 
 // Rows id = lo..hi-1, val = id * 10, kept in memory.
@@ -78,8 +77,10 @@ class RangeSource {
             : f_(std::move(f)), fail_(fail), c_(std::move(c)) {}
         Cursor(const Cursor&) = delete;
         ~Cursor() { ++c_->cursors_destroyed; }
-        dstd::Optional<plugins::OwnedFrame> next(std::int64_t) {
-            if (fail_) throw std::runtime_error("range cursor broke");
+        dstd::Result<dstd::Optional<plugins::OwnedFrame>> next(std::int64_t) {
+            if (fail_)
+                return plugins::make_error(DFTU_E_INTERNAL,
+                                           "range cursor broke");
             if (!f_) return dstd::nullopt;
             return std::move(f_);
         }
@@ -90,7 +91,8 @@ class RangeSource {
         dstd::SharedPtr<Counters> c_;
     };
 
-    plugins::ScanResult<Cursor> scan(const plugins::ScanView& req) const {
+    dstd::Result<plugins::ScanResult<Cursor>> scan(
+        const plugins::ScanView& req) const {
         dstd::Vector<std::int64_t> ids, vals;
         for (std::int64_t i = lo_; i < hi_; ++i) {
             ids.push_back(i);
@@ -117,17 +119,18 @@ class RangeSource {
         }
         plugins::OwnedFrame f(dftu_dataframe_new(
             names.data(), cols.data(), static_cast<std::int32_t>(cols.size())));
-        return {dstd::make_unique<Cursor>(std::move(f), fail_, c_), {}};
+        return plugins::ScanResult<Cursor>{
+            dstd::make_unique<Cursor>(std::move(f), fail_, c_), {}};
     }
 
     // `id > k` (and `id >= k`) narrows the range exactly.
-    dstd::Optional<plugins::Applied<RangeSource>> apply_filter(
+    dstd::Result<dstd::Optional<plugins::Applied<RangeSource>>> apply_filter(
         plugins::ExprView pred) const {
         auto cmp = pred.as_compare();
         if (!cmp || cmp->column != 0 || cmp->rhs.kind != DFTU_SCALAR_TAG_I64)
             return dstd::nullopt;
         if (cmp->rhs.value.i == APPLY_THROWS)
-            throw std::runtime_error("range apply broke");
+            return plugins::make_error(DFTU_E_INTERNAL, "range apply broke");
         std::int64_t lo = lo_;
         if (cmp->op == DFTU_CMP_GT)
             lo = cmp->rhs.value.i + 1;
@@ -142,7 +145,7 @@ class RangeSource {
             plugins::Apply::Exact};
     }
 
-    dstd::Optional<plugins::Applied<RangeSource>> apply_limit(
+    dstd::Result<dstd::Optional<plugins::Applied<RangeSource>>> apply_limit(
         std::int64_t offset, std::int64_t n) const {
         const std::int64_t lo = lo_ + offset;
         const std::int64_t hi = std::min(hi_, lo + n);
@@ -153,7 +156,7 @@ class RangeSource {
     }
 
     // Records the offer of an inner join on id, then leaves it to the engine.
-    dstd::Optional<plugins::Applied<RangeSource>> apply_join(
+    dstd::Result<dstd::Optional<plugins::Applied<RangeSource>>> apply_join(
         const plugins::JoinView<RangeSource>& j) const {
         if (j.how != DFTU_JOIN_INNER || j.left_on.size() != 1 ||
             j.left_on[0] != "id" || j.right_on[0] != "id")
@@ -246,7 +249,7 @@ TEST_SUITE("plugin SDK source") {
         CHECK(ints(f, "id") == dstd::Vector<std::int64_t>{3, 4});
     }
 
-    TEST_CASE("a cursor exception surfaces as a scan error") {
+    TEST_CASE("a cursor error surfaces as a scan error") {
         auto c = dstd::make_shared<Counters>();
         Root r(c, 0, 3, true);
         const auto collected =
@@ -258,7 +261,7 @@ TEST_SUITE("plugin SDK source") {
                   .find("range cursor broke") != dstd::String::npos);
     }
 
-    TEST_CASE("a throwing apply_filter leaves the filter to the engine") {
+    TEST_CASE("a failing apply_filter leaves the filter to the engine") {
         auto c = dstd::make_shared<Counters>();
         Root r(c, 0, 4);
         dataframe::LazyFrame lf = dataframe::LazyFrame::scan(r.source).filter(
@@ -271,7 +274,7 @@ TEST_SUITE("plugin SDK source") {
 
 namespace {
 
-enum class OpenMode { Normal, Throw, DropInput };
+enum class OpenMode { Normal, Fail, DropInput };
 
 // Doubles column "val"; keeps every column in place.
 class DoubleVal {
@@ -287,9 +290,11 @@ class DoubleVal {
        public:
         explicit Cursor(dstd::Optional<plugins::InputCursor> in)
             : in_(std::move(in)) {}
-        dstd::Optional<plugins::OwnedFrame> next(std::int64_t max_rows) {
+        dstd::Result<dstd::Optional<plugins::OwnedFrame>> next(
+            std::int64_t max_rows) {
             if (!in_) return dstd::nullopt;
-            dstd::Optional<plugins::OwnedFrame> f = in_->next(max_rows);
+            DFTRACER_UTILS_TRY(dstd::Optional<plugins::OwnedFrame> f,
+                               in_->next(max_rows));
             if (!f) return dstd::nullopt;
             dftu_series* id = dftu_dataframe_column(f->get(), "id");
             dftu_series* val = dftu_dataframe_column(f->get(), "val");
@@ -310,9 +315,11 @@ class DoubleVal {
         dstd::Optional<plugins::InputCursor> in_;
     };
 
-    dstd::UniquePtr<Cursor> open(plugins::InputCursor in,
-                                 const plugins::OpArgs&, std::uint64_t) const {
-        if (mode_ == OpenMode::Throw) throw std::runtime_error("no open");
+    dstd::Result<dstd::UniquePtr<Cursor>> open(plugins::InputCursor in,
+                                               const plugins::OpArgs&,
+                                               std::uint64_t) const {
+        if (mode_ == OpenMode::Fail)
+            return plugins::make_error(DFTU_E_INTERNAL, "no open");
         if (mode_ == OpenMode::DropInput)
             return dstd::make_unique<Cursor>(dstd::nullopt);
         return dstd::make_unique<Cursor>(std::move(in));
@@ -371,20 +378,20 @@ TEST_SUITE("plugin SDK node") {
         CHECK(c->cursors_destroyed == 1);
     }
 
-    TEST_CASE("a throwing open leaves the upstream with the host") {
+    TEST_CASE("a failing open leaves the upstream with the host") {
         auto c = dstd::make_shared<Counters>();
-        RegisteredNode node("sdk.double_throw", OpenMode::Throw);
+        RegisteredNode node("sdk.double_fail", OpenMode::Fail);
         {
             Root r(c, 0, 4);
             const auto collected =
                 dftracer::utils::default_runtime()
                     .submit(dataframe::LazyFrame::scan(r.source)
-                                .op("sdk.double_throw", dataframe::OpArgs{})
+                                .op("sdk.double_fail", dataframe::OpArgs{})
                                 .collect())
                     .get();
             REQUIRE_FALSE(collected.has_value());
             CHECK(dstd::String(collected.error().c_str())
-                      .find("sdk.double_throw") != dstd::String::npos);
+                      .find("sdk.double_fail") != dstd::String::npos);
         }
         CHECK(c->cursors_destroyed == 1);
     }

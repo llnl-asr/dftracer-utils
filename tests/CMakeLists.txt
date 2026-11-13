@@ -277,6 +277,15 @@ add_test(
   NAME public_headers_self
   COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -DSELF_TEST=ON -P
           ${CMAKE_SOURCE_DIR}/cmake/scripts/check_public_headers.cmake)
+add_test(
+  NAME plugin_no_exceptions
+  COMMAND
+    ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR}
+    -DBUILD_DIR=${CMAKE_BINARY_DIR}
+    -DWORK_DIR=${CMAKE_BINARY_DIR}/plugin_no_exceptions
+    "-DGENERATOR=${CMAKE_GENERATOR}" -DC_COMPILER=${CMAKE_C_COMPILER}
+    -DCXX_COMPILER=${CMAKE_CXX_COMPILER} "-DCXX_FLAGS=${CMAKE_CXX_FLAGS}" -P
+    ${CMAKE_SOURCE_DIR}/cmake/scripts/check_plugin_no_exceptions.cmake)
 add_test(NAME coro_lambdas
          COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -P
                  ${CMAKE_SOURCE_DIR}/cmake/scripts/check_coro_lambdas.cmake)

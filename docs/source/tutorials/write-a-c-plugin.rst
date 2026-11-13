@@ -47,10 +47,10 @@ That is 100 events for ``pid`` 2 (every third event) and 200 for ``pid`` 1.
 
 The generated file already compiles and links: a struct with a constructor
 taking ``const Config&``, a ``step(const dftu_dataframe*, Host)`` that counts
-events by ``pid`` into a host accumulator, an empty ``merge`` (the host owns
+events by ``pid`` into a host accumulator and returns a ``dstd::Result``, an empty ``merge`` (the host owns
 and merges the accumulator for you), the ``DFTU_PLUGIN_INFO`` record the loader checks, and the
 ``dftracer_plugin`` factory that ``plugin(...).fold<...>().build(out)`` fills in.
-An exception a ``step`` throws becomes an error with its ``what()`` text. The rest of this lesson
+An error a ``step`` returns becomes the call's status and message. The rest of this lesson
 rewrites its ``step`` with your own accumulator name and output column.
 
 3. Write the fold

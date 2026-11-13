@@ -47,7 +47,6 @@
 #include <chrono>
 #include <cstdint>
 #include <cstring>
-#include <stdexcept>
 
 using namespace dftracer::utils;
 
@@ -417,7 +416,8 @@ TEST_CASE("plugin host: trace write prints a float arg with 17 digits") {
     CHECK(tr->trace_close(fx.ctx(), host.h, w) == DFTU_OK);
 }
 
-TEST_CASE("plugin host: a trace_read callback that throws fails the read") {
+TEST_CASE(
+    "plugin host: a trace_read callback that returns an error fails the read") {
     dftu_utils_test::TestEnvironment env(0);
     HostFixture fx;
     const dstd::String pfw = env.dir() + "/throw.pfw";
@@ -432,18 +432,15 @@ TEST_CASE("plugin host: a trace_read callback that throws fails the read") {
 
     dftracer::utils::plugins::Host h{&fx.host(), fx.ctx()};
     int calls = 0;
-    bool threw = false;
-    try {
-        h.trace_read(gz.c_str(), [&](const dftu_dataframe*) {
+    auto failed = h.trace_read(
+        gz.c_str(), [&](const dftu_dataframe*) -> dstd::Result<void> {
             ++calls;
-            throw std::runtime_error("boom");
+            return dftracer::utils::plugins::make_error(DFTU_E_INTERNAL,
+                                                        "boom");
         });
-    } catch (const dftracer::utils::plugins::Error& e) {
-        threw = true;
-        CHECK(e.status() < 0);
-        CHECK(fx.ctx_.message().find("boom") != dstd::String::npos);
-    }
-    CHECK(threw);
+    REQUIRE_FALSE(failed.has_value());
+    CHECK(dftracer::utils::plugins::status_of(failed.error()) < 0);
+    CHECK(fx.ctx_.message().find("boom") != dstd::String::npos);
     CHECK(calls == 1);
-    CHECK_NOTHROW(h.trace_read(gz.c_str(), [&](const dftu_dataframe*) {}));
+    CHECK(h.trace_read(gz.c_str(), [&](const dftu_dataframe*) {}).has_value());
 }

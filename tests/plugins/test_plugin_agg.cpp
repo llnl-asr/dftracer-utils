@@ -23,6 +23,7 @@
 #include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/trace/views/fold_event.h>
 #include <doctest/doctest.h>
+#include <plugins/test_abi_ctx.h>
 #include <task_result.h>
 
 #include <cstdint>
@@ -75,8 +76,8 @@ dftu_status agg_factory_on_batch(dftu_ctx* ctx, void*, const dftu_dataframe* df,
     const auto acc = h.agg("by_cat_factory", {"cat"},
                            {plugins::agg::mean("dur", "mean_dur"),
                             plugins::agg::pct("dur", "p50_dur", 0.5)});
-    if (acc) acc.accumulate(df);
-    return DFTU_OK;
+    if (!acc.has_value()) return plugins::status_of(acc.error());
+    return test_plugin_common::as_status(acc->accumulate(df));
 }
 
 dftu_plugin make_agg_factory_plugin() {
@@ -310,8 +311,8 @@ dftu_status multi_key_columns(dftu_ctx* ctx, void*, const dftu_dataframe* df,
                plugins::agg::max("dur", "max_dur"),
                plugins::agg::mean("dur", "mean_dur"),
                plugins::agg::count_valid("dur", "n_dur")});
-    if (acc) acc.accumulate(df);
-    return DFTU_OK;
+    if (!acc.has_value()) return plugins::status_of(acc.error());
+    return test_plugin_common::as_status(acc->accumulate(df));
 }
 
 // Zero key columns: the scalar-handle case, one whole-scan row.
@@ -323,8 +324,8 @@ dftu_status scalar_columns(dftu_ctx* ctx, void*, const dftu_dataframe* df,
               {plugins::agg::count("n"), plugins::agg::sum("dur", "sum_dur"),
                plugins::agg::min("dur", "min_dur"),
                plugins::agg::max("dur", "max_dur")});
-    if (acc) acc.accumulate(df);
-    return DFTU_OK;
+    if (!acc.has_value()) return plugins::status_of(acc.error());
+    return test_plugin_common::as_status(acc->accumulate(df));
 }
 
 // Every op appended after DFTU_AGG_COUNT_VALID, built as raw dftu_agg_col
@@ -369,15 +370,20 @@ bool g_unknown_is_null = false;
 dftu_status read_other_agg(dftu_ctx* ctx, void*, const dftu_plugin_host* host,
                            dftu_task**) {
     plugins::Host h(host, ctx);
-    const plugins::OwnedDataFrame other = h.agg_result("whole_scan");
-    if (other.handle) {
-        g_seen_rows = dftu_dataframe_num_rows(other.handle);
-        if (dftu_series* s = dftu_dataframe_column(other.handle, "sum_dur")) {
+    const dstd::Result<plugins::OwnedDataFrame> other =
+        h.agg_result("whole_scan");
+    if (!other.has_value()) return plugins::status_of(other.error());
+    if (other->handle) {
+        g_seen_rows = dftu_dataframe_num_rows(other->handle);
+        if (dftu_series* s = dftu_dataframe_column(other->handle, "sum_dur")) {
             g_seen_sum = num_at(s, 0);
             dftu_series_free(s);
         }
     }
-    g_unknown_is_null = h.agg_result("no_such_accumulator").handle == nullptr;
+    const dstd::Result<plugins::OwnedDataFrame> unknown =
+        h.agg_result("no_such_accumulator");
+    if (!unknown.has_value()) return plugins::status_of(unknown.error());
+    g_unknown_is_null = unknown->handle == nullptr;
     return DFTU_OK;
 }
 

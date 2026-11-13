@@ -38,9 +38,9 @@ struct CountBlobSlice {
         total += b.size();
     }
     void merge(CountBlobSlice& o) { total += o.total; }
-    void finalize(dftracer::utils::plugins::Host h) {
+    dstd::Result<void> finalize(dftracer::utils::plugins::Host h) {
         dstd::String s = "count=" + dstd::to_string(total);
-        h.emit_result("counts", s);
+        return h.emit_result("counts", s);
     }
     std::uint64_t total = 0;
 };

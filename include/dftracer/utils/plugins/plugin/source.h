@@ -12,38 +12,39 @@
 #include <algorithm>
 #include <concepts>
 #include <cstdint>
-#include <exception>
 #include <utility>
 
 /* A LazyFrame source written as a C++ class. source_vtable<S>() adapts S to
  * dftu_source_vt; register it with PluginBuilder::source<S>(). Only C handles
- * and C calls cross the boundary: exceptions are caught at every callback, and
- * every object the host receives is freed through its own vtable.
+ * and C calls cross the boundary: a callback reports failure as a dstd::Result,
+ * and every object the host receives is freed through its own vtable.
  *
  * S provides:
  *   dstd::Vector<dstd::String> names() const;
- *   ScanResult<C> scan(const ScanView&) const;
+ *   dstd::Result<ScanResult<C>> scan(const ScanView&) const;
  * where C is a cursor type with
- *   dstd::Optional<OwnedFrame> next(std::int64_t max_rows);
+ *   dstd::Result<dstd::Optional<OwnedFrame>> next(std::int64_t max_rows);
  * and optionally, each wired only when present,
  *   bool narrow(ExprView predicate);          // advisory, see dftu_cursor_vt
  *   std::uint64_t resident_bytes();
  *   std::uint64_t reclaim(std::uint64_t want);
  * and optionally
- *   void schema(SchemaBuilder&) const;               // column types
- *   dstd::Optional<Applied<S>> apply_filter(ExprView) const;
- *   dstd::Optional<Applied<S>> apply_projection(const dstd::Vector<NamedExpr>&)
- * const; dstd::Optional<Applied<S>> apply_aggregation(const AggregationView&)
- * const; dstd::Optional<Applied<S>> apply_sort(const SortView&) const;
- *   dstd::Optional<Applied<S>> apply_topn(const SortView&, std::int64_t k)
- * const; dstd::Optional<Applied<S>> apply_limit(std::int64_t offset,
- * std::int64_t n) const; dstd::Optional<Applied<S>> apply_tail(std::int64_t n)
- * const; dstd::Optional<Applied<S>> apply_join(const JoinView<S>&) const; The
- * apply_* contract is dftu_source_vt::apply's: dstd::nullopt for unsupported or
- * no change, a new S otherwise, projection / aggregation / join only as
- * Apply::Exact. A cursor error is a thrown std::exception, which fails the
- * call with its what() text as the message; so does a throwing apply_*,
- * scan() or schema(). */
+ *   void schema(SchemaBuilder&) const;               // column types; or
+ *                                                    // dstd::Result<void>
+ *   dstd::Result<dstd::Optional<Applied<S>>> apply_filter(ExprView) const;
+ *   apply_projection(const dstd::Vector<NamedExpr>&) const;
+ *   apply_aggregation(const AggregationView&) const;
+ *   apply_sort(const SortView&) const;
+ *   apply_topn(const SortView&, std::int64_t k) const;
+ *   apply_limit(std::int64_t offset, std::int64_t n) const;
+ *   apply_tail(std::int64_t n) const;
+ *   apply_join(const JoinView<S>&) const;
+ * each of the apply_* returning the same dstd::Result of an Optional of
+ * Applied<S>. The apply_* contract is dftu_source_vt::apply's: dstd::nullopt
+ * for unsupported or no change, a new S otherwise, projection / aggregation /
+ * join only as Apply::Exact. A cursor error is the dstd::Error its next()
+ * returns, which fails the call with its status and message; so does an error
+ * from apply_*, scan() or schema(). */
 
 namespace dftracer::utils::plugins {
 
@@ -308,10 +309,13 @@ struct CursorBox {
 template <class C>
 struct CursorVt {
     static dftu_status next(dftu_ctx* ctx, void* self, std::int64_t max_rows,
-                            dftu_dataframe** out, dftu_task**) {
+                            dftu_dataframe** out, dftu_task**) noexcept {
         auto* box = static_cast<CursorBox<C>*>(self);
-        return guard(ctx, [&]() -> dftu_status {
-            dstd::Optional<OwnedFrame> f = box->cursor->next(max_rows);
+        return to_status(ctx, [&]() -> dftu_status {
+            dstd::Result<dstd::Optional<OwnedFrame>> next =
+                box->cursor->next(max_rows);
+            if (!next.has_value()) return report(ctx, next.error());
+            dstd::Optional<OwnedFrame>& f = *next;
             if (!f) {
                 *out = nullptr;
                 return DFTU_END;
@@ -323,26 +327,18 @@ struct CursorVt {
     static void destroy(void* self) { delete static_cast<CursorBox<C>*>(self); }
     static dftu_status narrow(dftu_ctx* ctx, void* self,
                               const dftu_expr* predicate,
-                              std::int32_t* out_applied, dftu_task**) {
+                              std::int32_t* out_applied, dftu_task**) noexcept {
         auto* box = static_cast<CursorBox<C>*>(self);
-        return guard(ctx, [&]() -> dftu_status {
+        return to_status(ctx, [&]() -> dftu_status {
             *out_applied = box->cursor->narrow(ExprView(predicate)) ? 1 : 0;
             return DFTU_OK;
         });
     }
-    static std::uint64_t bytes(void* self) {
-        try {
-            return static_cast<CursorBox<C>*>(self)->cursor->resident_bytes();
-        } catch (...) {
-            return 0;
-        }
+    static std::uint64_t bytes(void* self) noexcept {
+        return static_cast<CursorBox<C>*>(self)->cursor->resident_bytes();
     }
-    static std::uint64_t reclaim(void* self, std::uint64_t want) {
-        try {
-            return static_cast<CursorBox<C>*>(self)->cursor->reclaim(want);
-        } catch (...) {
-            return 0;
-        }
+    static std::uint64_t reclaim(void* self, std::uint64_t want) noexcept {
+        return static_cast<CursorBox<C>*>(self)->cursor->reclaim(want);
     }
     static const dftu_cursor_vt* vt() {
         static const dftu_cursor_vt VT = [] {
@@ -405,9 +401,9 @@ struct SourceVt {
 
     static dftu_status schema(dftu_ctx* ctx, void* self,
                               const char* const** out_names,
-                              std::int32_t* out_count) {
+                              std::int32_t* out_count) noexcept {
         auto* box = static_cast<Box*>(self);
-        return guard(ctx, [&]() -> dftu_status {
+        return to_status(ctx, [&]() -> dftu_status {
             if (!box->named) {
                 box->names = box->source->names();
                 box->name_ptrs.clear();
@@ -424,16 +420,18 @@ struct SourceVt {
     static dftu_status scan(dftu_ctx* ctx, void* self,
                             const dftu_scan_request* req,
                             std::int32_t* out_pushed, void** out_cursor_self,
-                            const dftu_cursor_vt** out_vt) {
+                            const dftu_cursor_vt** out_vt) noexcept {
         auto* box = static_cast<Box*>(self);
-        return guard(ctx, [&]() -> dftu_status {
+        return to_status(ctx, [&]() -> dftu_status {
             ScanView view;
             view.projection = string_views(req->projection, req->n_projection);
             for (std::int32_t i = 0; i < req->n_filters; ++i)
                 view.filters.emplace_back(req->filters[i]);
             view.limit = req->limit;
             view.memory_budget = req->memory_budget;
-            auto result = box->source->scan(view);
+            auto scanned = box->source->scan(view);
+            if (!scanned.has_value()) return report(ctx, scanned.error());
+            auto& result = *scanned;
             using C = typename decltype(result.cursor)::element_type;
             if (!result.cursor)
                 return dftu_fail(ctx, DFTU_E_INTERNAL,
@@ -452,19 +450,19 @@ struct SourceVt {
 
     static void destroy(void* self) { delete static_cast<Box*>(self); }
 
-    static dftu_status schema_types(dftu_ctx* ctx, void* self, dftu_schema* out)
+    static dftu_status schema_types(dftu_ctx* ctx, void* self,
+                                    dftu_schema* out) noexcept
         requires HasSchema<S>
     {
         auto* box = static_cast<Box*>(self);
-        return guard(ctx, [&]() -> dftu_status {
+        return to_status(ctx, [&]() {
             SchemaBuilder b(out);
-            box->source->schema(b);
-            return DFTU_OK;
+            return box->source->schema(b);
         });
     }
 
-    static dstd::Optional<Applied<S>> dispatch(const S& s,
-                                               const dftu_apply_request& req) {
+    static dstd::Result<dstd::Optional<Applied<S>>> dispatch(
+        const S& s, const dftu_apply_request& req) {
         switch (req.kind) {
             case DFTU_APPLY_FILTER:
                 if constexpr (requires { s.apply_filter(ExprView{}); })
@@ -552,10 +550,13 @@ struct SourceVt {
 
     static dftu_status apply(dftu_ctx* ctx, void* self,
                              const dftu_apply_request* req,
-                             dftu_apply_result* out) {
+                             dftu_apply_result* out) noexcept {
         auto* box = static_cast<Box*>(self);
-        return guard(ctx, [&]() -> dftu_status {
-            dstd::Optional<Applied<S>> r = dispatch(*box->source, *req);
+        return to_status(ctx, [&]() -> dftu_status {
+            dstd::Result<dstd::Optional<Applied<S>>> applied =
+                dispatch(*box->source, *req);
+            if (!applied.has_value()) return report(ctx, applied.error());
+            dstd::Optional<Applied<S>>& r = *applied;
             if (!r || !r->source) return DFTU_OK;
             auto* next = new Box{std::move(r->source), {}, {}, false};
             out->status = r->status == Apply::Exact ? DFTU_APPLY_EXACT

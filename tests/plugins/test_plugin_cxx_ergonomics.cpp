@@ -412,8 +412,8 @@ dftu_status agg_facade_columns(dftu_ctx* ctx, void*, const dftu_dataframe* df,
     const auto acc = h.agg("by_pid", {"pid"},
                            {plugins::agg::count("hits"),
                             plugins::agg::argmax("tid", "tid_at_max", "dur")});
-    if (acc) acc.accumulate(df);
-    return DFTU_OK;
+    if (!acc.has_value()) return plugins::status_of(acc.error());
+    return test_plugin_common::as_status(acc->accumulate(df));
 }
 
 dftu_plugin make_agg_facade_plugin() {

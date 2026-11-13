@@ -23,6 +23,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Make the plugin SDK throw and catch nothing, and compile its headers with `-fno-exceptions`.
+  `plugins::Error` and `AsyncOp::nothrow` are removed.
+  A call that can fail returns a `dstd::Result`, and the callbacks of a Slice, source, cursor or node return one too, or `void` where they cannot fail.
+  `co_await` on a `dstd::Result`, or on an `AsyncOp` whose call or task failed, ends the `Task` with that error.
+  `co_await op.expected()` gives the failure as a `dstd::Result` instead, `co_await fail(error)` fails a `Task`, a Slice that can fail at creation provides `static dstd::Result<Slice> from_config(const Config&)`, and `DFTRACER_UTILS_TRY` and `DFTRACER_UTILS_TRY_VOID` in `dstd/result.h` return the error from a plain function.
+  A callback that throws terminates the process.
+  The ctest `plugin_no_exceptions` compiles every SDK header and three example plugins with `-fno-exceptions -Werror`.
 - Remove `dftu_task_run`; run a task with the host task service `run` instead.
   `dftu_runtime`, `dftu_default_runtime`, `dftu_runtime_new` and `dftu_runtime_free` move from `coro/abi.h` to `runtime/abi.h`, and the `coro` and `runtime` libraries hold no plugin task type.
   `AbiTask` and `AbiContext` move to `dftracer::utils::plugins`.

@@ -23,6 +23,7 @@
 #include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/trace/views/fold_event.h>
 #include <doctest/doctest.h>
+#include <plugins/test_abi_ctx.h>
 #include <task_result.h>
 
 #include <cstdint>
@@ -53,8 +54,8 @@ dftu_status spill_columns(dftu_ctx* ctx, void*, const dftu_dataframe* df,
                plugins::agg::mean("dur", "mean_dur"),
                plugins::agg::pct("dur", "p50_dur", 0.5),
                plugins::agg::argmax("cat", "cat_at_max", "dur")});
-    if (acc) acc.accumulate(df);
-    return DFTU_OK;
+    if (!acc.has_value()) return plugins::status_of(acc.error());
+    return test_plugin_common::as_status(acc->accumulate(df));
 }
 
 // A nested-output op (list<string>) alongside a flat one: drain cannot

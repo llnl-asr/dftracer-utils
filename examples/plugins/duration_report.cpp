@@ -36,7 +36,7 @@ struct DurationReport {
     }
 
     Task on_finalize(Host h) {
-        GzWriter writer = h.fileio().gz(out.c_str());
+        GzWriter writer = co_await h.fileio().gz(out.c_str());
         co_await writer.open();
         char line[96];
         for (int i = 0; i < static_cast<int>(bins.size()); ++i) {
@@ -44,7 +44,8 @@ struct DurationReport {
             int n = std::snprintf(line, sizeof(line),
                                   "{\"log2_us\":%d,\"count\":%llu}\n", i,
                                   static_cast<unsigned long long>(bins[i]));
-            writer.append(dstd::StringView{line, static_cast<std::size_t>(n)});
+            co_await writer.append(
+                dstd::StringView{line, static_cast<std::size_t>(n)});
         }
         dftu_gz_summary summary = co_await writer.close();
         std::fprintf(stderr, "duration_report: lines=%llu path=%s\n",

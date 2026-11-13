@@ -58,7 +58,8 @@ a leaf polls ``dftu_check(ctx)`` to stop early.
 
 The C++ SDK (``dftracer/utils/plugins/plugin/job.h``) types this layer, so a
 mismatched pipe does not compile. Values must be trivially copyable, since they
-cross the ABI as bytes:
+cross the ABI as bytes. Each call returns a ``dstd::Result``, so a ``Task``
+awaits it: a refused call ends the ``Task`` with its error:
 
 .. code-block:: cpp
 
@@ -66,12 +67,13 @@ cross the ABI as bytes:
    using namespace dftracer::utils::plugins;
 
    Task scale(Host h, std::int64_t* result) {
-       auto twice = make_job<std::int64_t, std::int64_t>(
+       auto twice = co_await make_job<std::int64_t, std::int64_t>(
            h, [](std::int64_t x) { return x * 2; });
-       auto plus10 = make_job<std::int64_t, std::int64_t>(
+       auto plus10 = co_await make_job<std::int64_t, std::int64_t>(
            h, [](std::int64_t x) { return x + 10; });
+       auto both = co_await (twice | plus10);
        std::int64_t in = 5, out = 0;
-       co_await run(twice | plus10, in, out);   // out == 20
+       co_await run(both, in, out);   // out == 20
        *result = out;
    }
 

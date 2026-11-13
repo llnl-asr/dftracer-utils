@@ -18,7 +18,6 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <exception>
 #include <initializer_list>
 #include <iterator>
 #include <type_traits>
@@ -28,13 +27,11 @@ namespace dftracer::utils::plugins {
 
 namespace detail {
 
-inline void ok(dftu_status st) {
-    if (st < 0) throw Error(st, "host service failed", true);
-}
-
+/// The op of a task a service call started; when the call failed, an op that
+/// fails with its status when awaited.
 inline AsyncOp started(const dftu_plugin_host* host, dftu_status st,
                        dftu_task* t) {
-    ok(st);
+    if (st < 0) return AsyncOp{make_error(st)};
     return AsyncOp{t, host};
 }
 
@@ -42,6 +39,8 @@ inline AsyncOp started(const dftu_plugin_host* host, dftu_status st,
 
 class Writer;
 class Agg;
+class Query;
+class TraceWriter;
 class Batch;
 class Event;
 template <class T>
@@ -50,11 +49,12 @@ template <class T>
 class InPort;
 
 /// The services the host lends a plugin, bound to the call they run in. `ctx`
-/// is the dftu_ctx of the callback the Host was handed to; a service call that
-/// fails throws @ref Error with the host's status and message (the host
-/// already holds the message on the ctx), and a host without the service group
-/// throws @ref Error with DFTU_E_UNSUPPORTED. A Host is valid for the call it
-/// was handed to, or for a Task's whole run.
+/// is the dftu_ctx of the callback the Host was handed to. A service call that
+/// fails returns a @ref dstd::Result holding an error with the host's status
+/// (the host already holds the message on the ctx), and a host without the
+/// service group returns one with DFTU_E_UNSUPPORTED; a call that starts a task
+/// gives an @ref AsyncOp that fails when awaited instead. A Host is valid for
+/// the call it was handed to, or for a Task's whole run.
 class Host {
    public:
     Host() = default;
@@ -78,23 +78,30 @@ class Host {
         log(static_cast<dftu_log_level>(level), msg);
     }
 
-    /// Throws @ref Error with DFTU_E_CANCELLED once the call was cancelled;
-    /// call it once per morsel in a long loop.
-    void check() const {
+    /// An error with DFTU_E_CANCELLED once the call was cancelled; call it once
+    /// per morsel in a long loop.
+    dstd::Result<void> check() const {
         const dftu_status st = dftu_check(ctx_);
-        if (st < 0) throw Error(st, "cancelled");
+        if (st < 0) return make_error(st, "cancelled");
+        return {};
     }
 
     Io io() const { return Io{h_, ctx_}; }
     Fs fs() const { return Fs{h_, ctx_}; }
     AsyncOp await(dftu_task* t) const { return AsyncOp{t, h_}; }
+    /// The op of a task handed over by @ref AsyncOp::release; an op that never
+    /// started fails with its own error.
+    AsyncOp await(dstd::Result<dftu_task*> t) const {
+        if (!t.has_value()) return AsyncOp{std::move(t).error()};
+        return AsyncOp{*t, h_};
+    }
     /// Await every task together; see @ref AsyncAll.
-    AsyncAll all(std::initializer_list<dftu_task*> ts) const {
+    AsyncAll all(std::initializer_list<dstd::Result<dftu_task*>> ts) const {
         return AsyncAll(ts, h_);
     }
 
     /// The task service: jobs, spawn and drive; see abi/task.h.
-    const dftu_svc_task& tasks() const {
+    dstd::Result<const dftu_svc_task*> tasks() const {
         return need(DFTU_SVC_TASK, task_ext_);
     }
 
@@ -103,47 +110,41 @@ class Host {
     /// await. A negative status from `fn` fails the task with that status.
     AsyncOp spawn(dftu_status (*fn)(dftu_ctx*, void*), void* arg,
                   dftu_job_where where = DFTU_JOB_CPU) const {
+        auto svc = tasks();
+        if (!svc.has_value()) return AsyncOp{std::move(svc).error()};
         dftu_task* t = nullptr;
         return detail::started(
-            h_, tasks().spawn(ctx_, h_->h, fn, arg, where, &t), t);
+            h_, (*svc)->spawn(ctx_, h_->h, fn, arg, where, &t), t);
     }
-    /// Start any callable `void()` (or one returning dftu_status) on a pool
-    /// worker; `fn` is borrowed for the await, so it must outlive it (a
-    /// coroutine local naturally does). A throw fails the task with its
-    /// message. Use DFTU_JOB_BLOCKING for a call that blocks, so the worker
-    /// gives back its run permit.
+    /// Start any callable returning void, dftu_status or a @ref dstd::Result of
+    /// void on a pool worker; `fn` is borrowed for the await, so it must
+    /// outlive it (a coroutine local naturally does). A failure fails the task
+    /// with its status and message. Use DFTU_JOB_BLOCKING for a call that
+    /// blocks, so the worker gives back its run permit.
     template <class Fn>
     AsyncOp spawn(Fn& fn, dftu_job_where where = DFTU_JOB_CPU) const {
         return spawn(
-            [](dftu_ctx* ctx, void* p) -> dftu_status {
-                return detail::guard(ctx, [&]() -> dftu_status {
-                    if constexpr (std::is_same_v<decltype((
-                                                     *static_cast<Fn*>(p))()),
-                                                 dftu_status>)
-                        return (*static_cast<Fn*>(p))();
-                    else {
-                        (*static_cast<Fn*>(p))();
-                        return DFTU_OK;
-                    }
-                });
+            [](dftu_ctx* ctx, void* p) noexcept -> dftu_status {
+                return detail::to_status(ctx, *static_cast<Fn*>(p));
             },
             &fn, where);
     }
 
-    /// Valid for the whole scan. Throws on a parse error. Do not free.
-    dftu_duql* duql_compile(dstd::StringView src) const {
+    /// Valid for the whole scan. DFTU_E_PARSE for a parse error. Do not free.
+    dstd::Result<dftu_duql*> duql_compile(dstd::StringView src) const {
+        DFTRACER_UTILS_TRY(const dftu_svc_duql* e,
+                           need(DFTU_SVC_DUQL, query_ext_));
         dftu_duql* out = nullptr;
-        detail::ok(need(DFTU_SVC_DUQL, query_ext_)
-                       .duql_compile(ctx_, h_->h, src.data(),
-                                     static_cast<std::uint32_t>(src.size()),
-                                     &out));
+        DFTRACER_UTILS_TRY_VOID(detail::reported(
+            e->duql_compile(ctx_, h_->h, src.data(),
+                            static_cast<std::uint32_t>(src.size()), &out)));
         return out;
     }
 
     /// Compile a predicate built with `F`/`Field`, e.g.
     /// `h.duql_compile(F("dur") > 1000)`. Rendered to a DSL string and parsed
     /// host-side, so the plugin links nothing from the query library.
-    dftu_duql* duql_compile(const Expr& e) const {
+    dstd::Result<dftu_duql*> duql_compile(const Expr& e) const {
         return duql_compile(e.to_string());
     }
     bool duql_matches(const dftu_duql* q, const dftu_dataframe* df,
@@ -154,9 +155,9 @@ class Host {
     }
     /// Compile and wrap as a non-owning Query bound to this host; see
     /// duql_compile for lifetime.
-    class Query compile(dstd::StringView src) const;
+    dstd::Result<Query> compile(dstd::StringView src) const;
     /// compile() for a predicate built with `F`/`Field`.
-    class Query compile(const Expr& e) const;
+    dstd::Result<Query> compile(const Expr& e) const;
 
     /// Caller owns the handle and must sketch_free it.
     dftu_sketch* sketch_create() const {
@@ -183,60 +184,71 @@ class Host {
     /// RAII sketch bound to this host; frees the handle in its destructor.
     class Sketch make_sketch() const;
 
-    void arrow_write_ipc(ArrowArray* a, ArrowSchema* s,
-                         const char* path) const {
-        detail::ok(need(DFTU_SVC_ARROW, arrow_ext_)
-                       .arrow_write_ipc(ctx_, h_->h, a, s, path));
+    dstd::Result<void> arrow_write_ipc(ArrowArray* a, ArrowSchema* s,
+                                       const char* path) const {
+        DFTRACER_UTILS_TRY(const dftu_svc_arrow* e,
+                           need(DFTU_SVC_ARROW, arrow_ext_));
+        return detail::reported(e->arrow_write_ipc(ctx_, h_->h, a, s, path));
     }
     /// Read the first record batch of an IPC file; the caller owns *out and
     /// *out_schema and must call their release.
-    void arrow_read_ipc(const char* path, ArrowArray* out,
-                        ArrowSchema* out_schema) const {
-        detail::ok(need(DFTU_SVC_ARROW, arrow_ext_)
-                       .arrow_read_ipc(ctx_, h_->h, path, out, out_schema));
+    dstd::Result<void> arrow_read_ipc(const char* path, ArrowArray* out,
+                                      ArrowSchema* out_schema) const {
+        DFTRACER_UTILS_TRY(const dftu_svc_arrow* e,
+                           need(DFTU_SVC_ARROW, arrow_ext_));
+        return detail::reported(
+            e->arrow_read_ipc(ctx_, h_->h, path, out, out_schema));
     }
     /// arrow_write_ipc for an already-owning batch.
-    void arrow_write_ipc(OwnedArrow& a, const char* path) const {
-        arrow_write_ipc(&a.array, &a.schema, path);
+    dstd::Result<void> arrow_write_ipc(OwnedArrow& a, const char* path) const {
+        return arrow_write_ipc(&a.array, &a.schema, path);
     }
     /// Owning form of arrow_read_ipc.
-    OwnedArrow arrow_read_ipc(const char* path) const {
+    dstd::Result<OwnedArrow> arrow_read_ipc(const char* path) const {
         OwnedArrow owned;
-        arrow_read_ipc(path, &owned.array, &owned.schema);
+        DFTRACER_UTILS_TRY_VOID(
+            arrow_read_ipc(path, &owned.array, &owned.schema));
         return owned;
     }
-    dftu_trace_writer* trace_open_write(const char* path) const {
+    dstd::Result<dftu_trace_writer*> trace_open_write(const char* path) const {
+        DFTRACER_UTILS_TRY(const dftu_svc_trace* e,
+                           need(DFTU_SVC_TRACE, trace_ext_));
         dftu_trace_writer* w = nullptr;
-        detail::ok(need(DFTU_SVC_TRACE, trace_ext_)
-                       .trace_open_write(ctx_, h_->h, path, &w));
+        DFTRACER_UTILS_TRY_VOID(
+            detail::reported(e->trace_open_write(ctx_, h_->h, path, &w)));
         return w;
     }
     /// Append every row of `df` as a trace event.
-    void trace_write(dftu_trace_writer* w, const dftu_dataframe* df) const {
-        detail::ok(
-            need(DFTU_SVC_TRACE, trace_ext_).trace_write(ctx_, h_->h, w, df));
+    dstd::Result<void> trace_write(dftu_trace_writer* w,
+                                   const dftu_dataframe* df) const {
+        DFTRACER_UTILS_TRY(const dftu_svc_trace* e,
+                           need(DFTU_SVC_TRACE, trace_ext_));
+        return detail::reported(e->trace_write(ctx_, h_->h, w, df));
     }
-    void trace_close(dftu_trace_writer* w) const {
-        detail::ok(
-            need(DFTU_SVC_TRACE, trace_ext_).trace_close(ctx_, h_->h, w));
+    dstd::Result<void> trace_close(dftu_trace_writer* w) const {
+        DFTRACER_UTILS_TRY(const dftu_svc_trace* e,
+                           need(DFTU_SVC_TRACE, trace_ext_));
+        return detail::reported(e->trace_close(ctx_, h_->h, w));
     }
     /// Scan `path` (auto-indexed) and call on_batch once per scanned batch with
     /// a dftu_dataframe*. A negative status from on_batch stops the read and is
-    /// thrown.
-    void trace_read(const char* path, dftu_stream_item_fn on_batch,
-                    void* ud) const {
-        detail::ok(need(DFTU_SVC_TRACE, trace_ext_)
-                       .trace_read(ctx_, h_->h, path, on_batch, ud));
+    /// the result.
+    dstd::Result<void> trace_read(const char* path,
+                                  dftu_stream_item_fn on_batch,
+                                  void* ud) const {
+        DFTRACER_UTILS_TRY(const dftu_svc_trace* e,
+                           need(DFTU_SVC_TRACE, trace_ext_));
+        return detail::reported(e->trace_read(ctx_, h_->h, path, on_batch, ud));
     }
     /// Scan `path` (auto-indexed), invoking `fn` once per scanned batch as
-    /// either `fn(const Batch&)` or `fn(const dftu_dataframe*)`. `fn` is
-    /// borrowed for the call; an exception it throws stops the read and is
-    /// rethrown.
+    /// either `fn(const Batch&)` or `fn(const dftu_dataframe*)`, returning void
+    /// or a @ref dstd::Result of void; an error it returns stops the read and
+    /// is the result. `fn` is borrowed for the call.
     template <class Fn>
-    void trace_read(const char* path, Fn&& fn) const;
+    dstd::Result<void> trace_read(const char* path, Fn&& fn) const;
 
     /// RAII trace writer for `path` (a gzip .pfw.gz).
-    class TraceWriter trace_writer(const char* path) const;
+    dstd::Result<TraceWriter> trace_writer(const char* path) const;
 
     /// The fileio service: line and chunk readers, the gzip line writer,
     /// whole-file gzip and the file helpers; see plugin/fileio.h.
@@ -245,18 +257,19 @@ class Host {
     /// Get a host-owned parallel Writer for `path` with `worker_count` lanes
     /// (`gzip` != 0 compresses). The Writer is host-owned and scan-lifetime;
     /// open it, write chunks per worker, then close it - all co_await forms.
-    Writer writer(const char* path, std::uint32_t worker_count,
-                  bool gzip = false) const;
+    dstd::Result<Writer> writer(const char* path, std::uint32_t worker_count,
+                                bool gzip = false) const;
     /// Merge worker shard files into `target`; co_await the returned @ref
     /// AsyncOp.
     AsyncOp merge_shards(const char* target,
                          std::initializer_list<const char*> shards) const {
+        auto e = need(DFTU_SVC_FILEIO, fileio_ext_);
+        if (!e.has_value()) return AsyncOp{std::move(e).error()};
         dftu_task* t = nullptr;
         return detail::started(
             h_,
-            need(DFTU_SVC_FILEIO, fileio_ext_)
-                .merge_shards(ctx_, h_->h, target, shards.begin(),
-                              static_cast<std::uint32_t>(shards.size()), &t),
+            (*e)->merge_shards(ctx_, h_->h, target, shards.begin(),
+                               static_cast<std::uint32_t>(shards.size()), &t),
             t);
     }
 
@@ -276,68 +289,74 @@ class Host {
         const dftu_svc_ports* e = ext(DFTU_SVC_PORTS, ports_ext_);
         return e && e->consume ? e->consume(h_->h, key, out_size) : nullptr;
     }
-    dftu_agg* agg_new(const char* name, const char* const* key_names,
-                      std::uint32_t key_n, const dftu_agg_col* specs,
-                      std::uint32_t spec_n) const {
+    dstd::Result<dftu_agg*> agg_new(const char* name,
+                                    const char* const* key_names,
+                                    std::uint32_t key_n,
+                                    const dftu_agg_col* specs,
+                                    std::uint32_t spec_n) const {
+        DFTRACER_UTILS_TRY(const dftu_svc_agg* e, need(DFTU_SVC_AGG, agg_ext_));
         dftu_agg* out = nullptr;
-        detail::ok(need(DFTU_SVC_AGG, agg_ext_)
-                       .agg_new(ctx_, h_->h, name, key_names, key_n, specs,
-                                spec_n, &out));
+        DFTRACER_UTILS_TRY_VOID(detail::reported(e->agg_new(
+            ctx_, h_->h, name, key_names, key_n, specs, spec_n, &out)));
         return out;
     }
-    void agg_accumulate(dftu_agg* a, const dftu_dataframe* df) const {
-        detail::ok(
-            need(DFTU_SVC_AGG, agg_ext_).agg_accumulate(ctx_, h_->h, a, df));
+    dstd::Result<void> agg_accumulate(dftu_agg* a,
+                                      const dftu_dataframe* df) const {
+        DFTRACER_UTILS_TRY(const dftu_svc_agg* e, need(DFTU_SVC_AGG, agg_ext_));
+        return detail::reported(e->agg_accumulate(ctx_, h_->h, a, df));
     }
     /// Get-or-create a named cross-batch aggregation accumulator grouping by
-    /// `key_names` and computing each of `cols`. Throws if the host lacks the
+    /// `key_names` and computing each of `cols`. An error if the host lacks the
     /// agg group or agg_new rejects the spec (a bad op code or missing output
     /// name). See dftu_svc_agg::agg_new; a name seen before returns the
     /// existing accumulator and ignores `cols`.
-    Agg agg(const char* name, std::initializer_list<const char*> key_names,
-            std::initializer_list<AggCol> cols) const;
+    dstd::Result<Agg> agg(const char* name,
+                          std::initializer_list<const char*> key_names,
+                          std::initializer_list<AggCol> cols) const;
 
     /// The cross-worker-merged, finalized result of the accumulator named
     /// `name` (any plugin's), as an owned frame. Call at on_finalize; the
     /// producing plugin must be registered first. Empty (`!frame.handle`) when
     /// no plugin produced that name.
-    OwnedDataFrame agg_result(const char* name) const;
+    dstd::Result<OwnedDataFrame> agg_result(const char* name) const;
 
     /// Look up and run a registered dataframe column op by name on `in` (see
-    /// dftu_svc_ops::run). Throws DFTU_E_NOT_FOUND for an unregistered `name`
-    /// and DFTU_E_INVALID when the call mismatches the op's kind/arity/shape.
-    /// The result is newly owned by the caller (free with dftu_series_free).
-    dftu_series* run_op(const char* name,
-                        std::initializer_list<const dftu_series*> in,
-                        const dftu_op_arg* args = nullptr) const {
+    /// dftu_svc_ops::run). DFTU_E_NOT_FOUND for an unregistered `name` and
+    /// DFTU_E_INVALID when the call mismatches the op's kind/arity/shape. The
+    /// result is newly owned by the caller (free with dftu_series_free).
+    dstd::Result<dftu_series*> run_op(
+        const char* name, std::initializer_list<const dftu_series*> in,
+        const dftu_op_arg* args = nullptr) const {
+        DFTRACER_UTILS_TRY(const dftu_svc_ops* e, need(DFTU_SVC_OPS, ops_ext_));
         dstd::Vector<const dftu_series*> vin(in);
         dftu_series* out = nullptr;
-        detail::ok(need(DFTU_SVC_OPS, ops_ext_)
-                       .run(ctx_, h_->h, name, vin.data(),
-                            static_cast<std::uint32_t>(vin.size()), args,
-                            &out));
+        DFTRACER_UTILS_TRY_VOID(detail::reported(
+            e->run(ctx_, h_->h, name, vin.data(),
+                   static_cast<std::uint32_t>(vin.size()), args, &out)));
         return out;
     }
     /// run_op for a signature whose return token is FRAME; the result is
     /// newly owned by the caller (free with dftu_dataframe_free).
-    dftu_dataframe* run_op_frame(
+    dstd::Result<dftu_dataframe*> run_op_frame(
         const char* name, std::initializer_list<const dftu_dataframe*> in,
         const dftu_op_arg* args = nullptr) const {
+        DFTRACER_UTILS_TRY(const dftu_svc_ops* e, need(DFTU_SVC_OPS, ops_ext_));
         dstd::Vector<const dftu_dataframe*> vin(in);
         dftu_dataframe* out = nullptr;
-        detail::ok(need(DFTU_SVC_OPS, ops_ext_)
-                       .run_frame(ctx_, h_->h, name, vin.data(),
-                                  static_cast<std::uint32_t>(vin.size()), args,
-                                  &out));
+        DFTRACER_UTILS_TRY_VOID(detail::reported(
+            e->run_frame(ctx_, h_->h, name, vin.data(),
+                         static_cast<std::uint32_t>(vin.size()), args, &out)));
         return out;
     }
     /// run_op for a signature whose return token is SCALAR/I64/BOOL, reducing
     /// one column.
-    dftu_scalar run_op_aggregate(const char* name, const dftu_series* in,
-                                 const dftu_op_arg* args = nullptr) const {
+    dstd::Result<dftu_scalar> run_op_aggregate(
+        const char* name, const dftu_series* in,
+        const dftu_op_arg* args = nullptr) const {
+        DFTRACER_UTILS_TRY(const dftu_svc_ops* e, need(DFTU_SVC_OPS, ops_ext_));
         dftu_scalar out{};
-        detail::ok(need(DFTU_SVC_OPS, ops_ext_)
-                       .run_aggregate(ctx_, h_->h, name, &in, 1, args, &out));
+        DFTRACER_UTILS_TRY_VOID(detail::reported(
+            e->run_aggregate(ctx_, h_->h, name, &in, 1, args, &out)));
         return out;
     }
     /// The registered op named `name` (built-in or user), or NULL if none or
@@ -348,58 +367,65 @@ class Host {
     }
     /// Register a user op in the host's shared registry; see dftu_op_register.
     /// The op must be named `<plugin>.<name>`: the bare and "dftu." namespaces
-    /// are the host's. Throws on a NULL desc/name, a name the host keeps, or an
-    /// already-registered name.
-    void register_op(const dftu_op_desc* desc) const {
-        detail::ok(need(DFTU_SVC_OPS, ops_ext_).register_op(ctx_, h_->h, desc));
+    /// are the host's. An error for a NULL desc/name, a name the host keeps, or
+    /// an already-registered name.
+    dstd::Result<void> register_op(const dftu_op_desc* desc) const {
+        DFTRACER_UTILS_TRY(const dftu_svc_ops* e, need(DFTU_SVC_OPS, ops_ext_));
+        return detail::reported(e->register_op(ctx_, h_->h, desc));
     }
 
     /// Named result channel: emit an opaque blob; the host copies `len` bytes.
     /// Surfaces from Plugins::run keyed by name. Best called at on_finalize.
-    void emit_result(const char* name, const void* data,
-                     std::uint64_t len) const {
+    dstd::Result<void> emit_result(const char* name, const void* data,
+                                   std::uint64_t len) const {
         dftu_result_value v{};
         v.kind = DFTU_RESULT_KIND_BYTES;
         v.u.bytes.data = data;
         v.u.bytes.len = len;
-        emit(name, &v);
+        return emit(name, &v);
     }
-    void emit_result(const char* name, dstd::StringView data) const {
-        emit_result(name, data.data(), data.size());
+    dstd::Result<void> emit_result(const char* name,
+                                   dstd::StringView data) const {
+        return emit_result(name, data.data(), data.size());
     }
     /// Moves *a and *s into the host on success.
-    void emit_result_arrow(const char* name, ArrowArray* a,
-                           ArrowSchema* s) const {
+    dstd::Result<void> emit_result_arrow(const char* name, ArrowArray* a,
+                                         ArrowSchema* s) const {
         dftu_result_value v{};
         v.kind = DFTU_RESULT_KIND_ARROW;
         v.u.arrow.array = a;
         v.u.arrow.schema = s;
-        emit(name, &v);
+        return emit(name, &v);
     }
     /// Hands a native dataframe result to the host, which takes ownership on
-    /// success; on a throw `df` is left intact so it frees normally. Same
+    /// success; on an error `df` is left intact so it frees normally. Same
     /// finalize/collision semantics as emit_result.
-    void emit_result_frame(const char* name, OwnedDataFrame&& df) const {
+    dstd::Result<void> emit_result_frame(const char* name,
+                                         OwnedDataFrame&& df) const {
         dftu_result_value v{};
         v.kind = DFTU_RESULT_KIND_FRAME;
         v.u.frame = df.handle;
-        emit(name, &v);
+        DFTRACER_UTILS_TRY_VOID(emit(name, &v));
         df.release();
+        return {};
     }
     /// Hands a deferred plan to the host, which takes ownership and collects it
     /// at the Python edge. The plan must be self-contained (see the emit's
     /// DFTU_RESULT_KIND_LAZYFRAME contract in abi.h).
-    void emit_result_lazyframe(const char* name, dftu_lazyframe* lf) const {
+    dstd::Result<void> emit_result_lazyframe(const char* name,
+                                             dftu_lazyframe* lf) const {
         dftu_result_value v{};
         v.kind = DFTU_RESULT_KIND_LAZYFRAME;
         v.u.lazyframe = lf;
-        emit(name, &v);
+        return emit(name, &v);
     }
-    /// @ref OwnedLazyFrame overload of emit_result_lazyframe; a throw leaves
+    /// @ref OwnedLazyFrame overload of emit_result_lazyframe; an error leaves
     /// `lf` intact so it frees normally.
-    void emit_result_lazyframe(const char* name, OwnedLazyFrame&& lf) const {
-        emit_result_lazyframe(name, lf.handle);
+    dstd::Result<void> emit_result_lazyframe(const char* name,
+                                             OwnedLazyFrame&& lf) const {
+        DFTRACER_UTILS_TRY_VOID(emit_result_lazyframe(name, lf.handle));
         lf.release();
+        return {};
     }
 
     /// Typed batch-scoped output port: send() publishes a trivially-copyable T
@@ -424,17 +450,18 @@ class Host {
         return slot;
     }
     template <class T>
-    const T& need(const char* id, const T*& slot) const {
+    dstd::Result<const T*> need(const char* id, const T*& slot) const {
         const T* e = ext(id, slot);
         if (!e)
-            throw Error(DFTU_E_UNSUPPORTED,
-                        dstd::String("host lacks the service ") + id);
-        return *e;
+            return make_error(DFTU_E_UNSUPPORTED,
+                              dstd::String("host lacks the service ") + id);
+        return e;
     }
 
-    void emit(const char* name, dftu_result_value* v) const {
-        detail::ok(
-            need(DFTU_SVC_RESULT, result_ext_).emit(ctx_, h_->h, name, v));
+    dstd::Result<void> emit(const char* name, dftu_result_value* v) const {
+        DFTRACER_UTILS_TRY(const dftu_svc_result* e,
+                           need(DFTU_SVC_RESULT, result_ext_));
+        return detail::reported(e->emit(ctx_, h_->h, name, v));
     }
 
     const dftu_plugin_host* h_ = nullptr;
@@ -501,10 +528,12 @@ class Agg {
     /// Fold one batch's key/value columns (looked up by name in `df`) into
     /// this accumulator. Serial per accumulator; one slice's accumulator is
     /// touched by one thread.
-    void accumulate(const dftu_dataframe* df) const {
-        host_.agg_accumulate(a_, df);
+    dstd::Result<void> accumulate(const dftu_dataframe* df) const {
+        return host_.agg_accumulate(a_, df);
     }
-    void accumulate(const OwnedDataFrame& df) const { accumulate(df.handle); }
+    dstd::Result<void> accumulate(const OwnedDataFrame& df) const {
+        return accumulate(df.handle);
+    }
 
     /// Borrowed handle; the host retains ownership.
     dftu_agg* raw() const noexcept { return a_; }
@@ -518,23 +547,25 @@ class Agg {
     dftu_agg* a_ = nullptr;
 };
 
-inline Agg Host::agg(const char* name,
-                     std::initializer_list<const char*> key_names,
-                     std::initializer_list<AggCol> cols) const {
+inline dstd::Result<Agg> Host::agg(const char* name,
+                                   std::initializer_list<const char*> key_names,
+                                   std::initializer_list<AggCol> cols) const {
     dstd::Vector<const char*> keys(key_names.begin(), key_names.end());
     dstd::Vector<dftu_agg_col> specs;
     specs.reserve(cols.size());
     for (const AggCol& c : cols) specs.push_back(c.raw());
-    dftu_agg* a =
+    DFTRACER_UTILS_TRY(
+        dftu_agg * a,
         agg_new(name, keys.data(), static_cast<std::uint32_t>(keys.size()),
-                specs.data(), static_cast<std::uint32_t>(specs.size()));
+                specs.data(), static_cast<std::uint32_t>(specs.size())));
     return Agg{*this, a};
 }
 
-inline OwnedDataFrame Host::agg_result(const char* name) const {
+inline dstd::Result<OwnedDataFrame> Host::agg_result(const char* name) const {
+    DFTRACER_UTILS_TRY(const dftu_svc_agg* e, need(DFTU_SVC_AGG, agg_ext_));
     dftu_dataframe* out = nullptr;
-    detail::ok(
-        need(DFTU_SVC_AGG, agg_ext_).agg_result(ctx_, h_->h, name, &out));
+    DFTRACER_UTILS_TRY_VOID(
+        detail::reported(e->agg_result(ctx_, h_->h, name, &out)));
     return OwnedDataFrame{out};
 }
 
@@ -587,13 +618,15 @@ class Writer {
     dftu_writer* w_ = nullptr;
 };
 
-inline Writer Host::writer(const char* path, std::uint32_t worker_count,
-                           bool gzip) const {
-    const dftu_svc_fileio& e = need(DFTU_SVC_FILEIO, fileio_ext_);
+inline dstd::Result<Writer> Host::writer(const char* path,
+                                         std::uint32_t worker_count,
+                                         bool gzip) const {
+    DFTRACER_UTILS_TRY(const dftu_svc_fileio* e,
+                       need(DFTU_SVC_FILEIO, fileio_ext_));
     dftu_writer* w = nullptr;
-    detail::ok(
-        e.writer_create(ctx_, h_->h, path, worker_count, gzip ? 1 : 0, &w));
-    return Writer{*this, &e, w};
+    DFTRACER_UTILS_TRY_VOID(detail::reported(
+        e->writer_create(ctx_, h_->h, path, worker_count, gzip ? 1 : 0, &w)));
+    return Writer{*this, e, w};
 }
 
 /// Typed batch-scoped output port (see Host::publish_port). send() publishes a
@@ -974,22 +1007,22 @@ inline const detail::ColBuf* Batch::find_dyn(
 }
 
 template <class Fn>
-inline void Host::trace_read(const char* path, Fn&& fn) const {
+inline dstd::Result<void> Host::trace_read(const char* path, Fn&& fn) const {
     struct State {
         std::decay_t<Fn>* f;
     } state{const_cast<std::decay_t<Fn>*>(std::addressof(fn))};
-    auto thunk = [](dftu_ctx* ctx, const void* item, void* ud) -> dftu_status {
+    auto thunk = [](dftu_ctx* ctx, const void* item,
+                    void* ud) noexcept -> dftu_status {
         const auto* df = static_cast<const dftu_dataframe*>(item);
         auto& st = *static_cast<State*>(ud);
-        return detail::guard(ctx, [&]() -> dftu_status {
+        return detail::to_status(ctx, [&]() -> decltype(auto) {
             if constexpr (std::is_invocable_v<std::decay_t<Fn>&, const Batch&>)
-                (*st.f)(Batch{df});
+                return (*st.f)(Batch{df});
             else
-                (*st.f)(df);
-            return DFTU_OK;
+                return (*st.f)(df);
         });
     };
-    trace_read(path, thunk, &state);
+    return trace_read(path, thunk, &state);
 }
 
 /// Non-owning view over a compiled dftu_duql (see Host::compile). Host-owned
@@ -1016,11 +1049,13 @@ class Query {
     dftu_duql* q_ = nullptr;
 };
 
-inline Query Host::compile(dstd::StringView src) const {
-    return Query{*this, duql_compile(src)};
+inline dstd::Result<Query> Host::compile(dstd::StringView src) const {
+    DFTRACER_UTILS_TRY(dftu_duql * q, duql_compile(src));
+    return Query{*this, q};
 }
-inline Query Host::compile(const Expr& e) const {
-    return Query{*this, duql_compile(e)};
+inline dstd::Result<Query> Host::compile(const Expr& e) const {
+    DFTRACER_UTILS_TRY(dftu_duql * q, duql_compile(e));
+    return Query{*this, q};
 }
 
 /// Move-only RAII owner of a host trace writer (see Host::trace_writer):
@@ -1048,14 +1083,17 @@ class TraceWriter {
 
     explicit operator bool() const noexcept { return w_ != nullptr; }
 
-    void write(const dftu_dataframe* df) const { host_.trace_write(w_, df); }
-    void write(const Batch& b) const { write(b.raw()); }
+    dstd::Result<void> write(const dftu_dataframe* df) const {
+        return host_.trace_write(w_, df);
+    }
+    dstd::Result<void> write(const Batch& b) const { return write(b.raw()); }
     /// Idempotent: a no-op once already closed. The writer is closed even if
     /// the host reports an error.
-    void close() {
+    dstd::Result<void> close() {
         dftu_trace_writer* w = w_;
         w_ = nullptr;
-        if (w) host_.trace_close(w);
+        if (!w) return {};
+        return host_.trace_close(w);
     }
 
     /// Borrowed handle; the TraceWriter retains ownership.
@@ -1066,19 +1104,15 @@ class TraceWriter {
     TraceWriter(Host host, dftu_trace_writer* w) noexcept
         : host_(host), w_(w) {}
 
-    void release() noexcept {
-        try {
-            close();
-        } catch (...) {
-        }
-    }
+    void release() noexcept { close().discard(); }
 
     Host host_;
     dftu_trace_writer* w_ = nullptr;
 };
 
-inline TraceWriter Host::trace_writer(const char* path) const {
-    return TraceWriter{*this, trace_open_write(path)};
+inline dstd::Result<TraceWriter> Host::trace_writer(const char* path) const {
+    DFTRACER_UTILS_TRY(dftu_trace_writer * w, trace_open_write(path));
+    return TraceWriter{*this, w};
 }
 
 }  // namespace dftracer::utils::plugins

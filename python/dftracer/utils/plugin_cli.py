@@ -100,14 +100,16 @@ def _cpp_template(name: str) -> str:
 
 #include <cstdint>
 
+using namespace dftracer::utils;
 using namespace dftracer::utils::plugins;
 
 struct {cls} {{
     explicit {cls}(const Config&) {{}}
 
-    void step(const dftu_dataframe* df, Host host) {{
-        Agg a = host.agg("{name}", {{"pid"}}, {{agg::count("value")}});
-        if (a) a.accumulate(df);
+    dstd::Result<void> step(const dftu_dataframe* df, Host host) {{
+        DFTRACER_UTILS_TRY(Agg a,
+                           host.agg("{name}", {{"pid"}}, {{agg::count("value")}}));
+        return a.accumulate(df);
     }}
 
     void merge({cls}&) {{}}

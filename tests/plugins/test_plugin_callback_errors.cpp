@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 // A plugin callback that returns a negative status fails the fold with an
 // error that names the plugin, the callback and the message the plugin set
-// through dftu_fail. The same holds for a C++ Slice that throws, since the SDK
-// trampolines catch every exception and return it as a status.
+// through dftu_fail. The same holds for a C++ Slice that returns an error,
+// since the SDK trampolines turn it into a status and a message.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/scope.h>
@@ -22,8 +22,6 @@
 #include <dftracer/utils/trace/views/fold_event.h>
 #include <doctest/doctest.h>
 #include <task_result.h>
-
-#include <stdexcept>
 
 using namespace dftracer::utils;
 
@@ -224,39 +222,47 @@ TEST_CASE("a failing registered-state callback names the state and callback") {
 
 namespace {
 
-// The SDK catch wall: a Slice that throws at the chosen stage.
-struct ThrowingSlice {
-    explicit ThrowingSlice(const plugins::Config&) {
-        if (is(At::MakeSlice)) throw std::runtime_error("sdk threw in make");
+// A Slice that returns an error at the chosen stage.
+struct FailingSlice {
+    explicit FailingSlice(const plugins::Config&) {}
+    static dstd::Result<FailingSlice> from_config(const plugins::Config& c) {
+        if (is(At::MakeSlice))
+            return plugins::make_error(DFTU_E_PARSE, "sdk failed in make");
+        return FailingSlice(c);
     }
-    void step(const dftu_dataframe*, plugins::Host) {
-        if (is(At::OnBatch)) throw std::runtime_error("sdk threw in step");
+    dstd::Result<void> step(const dftu_dataframe*, plugins::Host) {
+        if (is(At::OnBatch))
+            return plugins::make_error(DFTU_E_PARSE, "sdk failed in step");
+        return plugins::ok();
     }
-    void merge(ThrowingSlice&) {
-        if (is(At::Merge)) throw std::runtime_error("sdk threw in merge");
+    dstd::Result<void> merge(FailingSlice&) {
+        if (is(At::Merge))
+            return plugins::make_error(DFTU_E_PARSE, "sdk failed in merge");
+        return plugins::ok();
     }
-    void finalize(plugins::Host) {
+    dstd::Result<void> finalize(plugins::Host) {
         if (is(At::OnFinalize))
-            throw std::runtime_error("sdk threw in finalize");
+            return plugins::make_error(DFTU_E_PARSE, "sdk failed in finalize");
+        return plugins::ok();
     }
 };
 
 struct SdkPlugin {
-    dftu_plugin* p = plugins::make_plugin<ThrowingSlice>(nullptr);
+    dftu_plugin* p = plugins::make_plugin<FailingSlice>(nullptr);
     ~SdkPlugin() { p->destroy(p->self); }
 };
 
 }  // namespace
 
-TEST_CASE("the SDK turns a thrown exception into an error with its text") {
+TEST_CASE("the SDK turns a returned error into an error with its text") {
     const struct {
         At at;
         const char* callback;
         const char* detail;
-    } cases[] = {{At::MakeSlice, "make_slice", "sdk threw in make"},
-                 {At::OnBatch, "on_batch", "sdk threw in step"},
-                 {At::Merge, "merge", "sdk threw in merge"},
-                 {At::OnFinalize, "on_finalize", "sdk threw in finalize"}};
+    } cases[] = {{At::MakeSlice, "make_slice", "sdk failed in make"},
+                 {At::OnBatch, "on_batch", "sdk failed in step"},
+                 {At::Merge, "merge", "sdk failed in merge"},
+                 {At::OnFinalize, "on_finalize", "sdk failed in finalize"}};
     for (const auto& c : cases) {
         CAPTURE(c.callback);
         g_at = c.at;
@@ -266,11 +272,42 @@ TEST_CASE("the SDK turns a thrown exception into an error with its text") {
     }
 }
 
-TEST_CASE("an Error thrown from a Slice keeps its status") {
+TEST_CASE("DFTRACER_UTILS_TRY in a step returns a failed service call") {
+    struct TrySlice {
+        explicit TrySlice(const plugins::Config&) {}
+        dstd::Result<void> step(const dftu_dataframe*, plugins::Host h) {
+            DFTRACER_UTILS_TRY(dftu_series * out,
+                               h.run_op("dftu.test.nonexistent_op", {}));
+            dftu_series_free(out);
+            return plugins::ok();
+        }
+        void merge(TrySlice&) {}
+        void finalize(plugins::Host) {}
+    };
+    dftu_plugin* p = plugins::make_plugin<TrySlice>(nullptr);
+    const dstd::String e = first_error(*p, nullptr);
+    CHECK(names(e, "on_batch", "dftu.test.nonexistent_op"));
+    {
+        dstd::StringIntern intern;
+        plugins::NamedResultRegistry named;
+        plugins::host::PluginFold master(p, intern, nullptr, &named,
+                                         "cb_errors", 0, nullptr);
+        dstd::Vector<trace::views::detail::FoldEvent> evs{evt(intern)};
+        auto slice = master.slice();
+        trace::views::detail::ScanUnit unit{};
+        auto stepped = slice->step(trace::views::detail::FoldBatch{
+            dstd::Span<const trace::views::detail::FoldEvent>(evs), unit, {}});
+        REQUIRE_FALSE(stepped.has_value());
+        CHECK(stepped.error().is(dstd::Condition::NotFound));
+    }
+    p->destroy(p->self);
+}
+
+TEST_CASE("an Error returned from a Slice keeps its status") {
     struct CodedSlice {
         explicit CodedSlice(const plugins::Config&) {}
-        void step(const dftu_dataframe*, plugins::Host) {
-            throw plugins::Error(DFTU_E_NOT_FOUND, "no such column");
+        dstd::Result<void> step(const dftu_dataframe*, plugins::Host) {
+            return plugins::make_error(DFTU_E_NOT_FOUND, "no such column");
         }
         void merge(CodedSlice&) {}
         void finalize(plugins::Host) {}

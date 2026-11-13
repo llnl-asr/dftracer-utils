@@ -182,7 +182,8 @@ class SdkRange {
        public:
         explicit Cursor(dftracer::utils::plugins::OwnedFrame f)
             : f_(std::move(f)) {}
-        dstd::Optional<dftracer::utils::plugins::OwnedFrame> next(int64_t) {
+        dstd::Result<dstd::Optional<dftracer::utils::plugins::OwnedFrame>> next(
+            int64_t) {
             if (!f_) return dstd::nullopt;
             return std::move(f_);
         }
@@ -191,21 +192,22 @@ class SdkRange {
         dftracer::utils::plugins::OwnedFrame f_;
     };
 
-    dftracer::utils::plugins::ScanResult<Cursor> scan(
+    dstd::Result<dftracer::utils::plugins::ScanResult<Cursor>> scan(
         const dftracer::utils::plugins::ScanView&) const {
         dstd::Vector<int64_t> ids, vals;
         for (int64_t i = lo_; i < hi_; ++i) {
             ids.push_back(i);
             vals.push_back(i * 10);
         }
-        return {dstd::make_unique<Cursor>(dftracer::utils::plugins::OwnedFrame(
-                    make_rows_frame(ids.data(), vals.data(),
-                                    static_cast<int64_t>(ids.size())))),
-                {}};
+        return dftracer::utils::plugins::ScanResult<Cursor>{
+            dstd::make_unique<Cursor>(dftracer::utils::plugins::OwnedFrame(
+                make_rows_frame(ids.data(), vals.data(),
+                                static_cast<int64_t>(ids.size())))),
+            {}};
     }
 
-    dstd::Optional<dftracer::utils::plugins::Applied<SdkRange>> apply_filter(
-        dftracer::utils::plugins::ExprView pred) const {
+    dstd::Result<dstd::Optional<dftracer::utils::plugins::Applied<SdkRange>>>
+    apply_filter(dftracer::utils::plugins::ExprView pred) const {
         auto cmp = pred.as_compare();
         if (!cmp || cmp->column != 0 || cmp->op != DFTU_CMP_GT ||
             cmp->rhs.kind != DFTU_SCALAR_TAG_I64 || cmp->rhs.value.i + 1 <= lo_)
@@ -232,9 +234,11 @@ class DoubleVal {
        public:
         explicit Cursor(dftracer::utils::plugins::InputCursor in)
             : in_(std::move(in)) {}
-        dstd::Optional<dftracer::utils::plugins::OwnedFrame> next(
+        dstd::Result<dstd::Optional<dftracer::utils::plugins::OwnedFrame>> next(
             int64_t max_rows) {
-            auto f = in_.next(max_rows);
+            DFTRACER_UTILS_TRY(
+                dstd::Optional<dftracer::utils::plugins::OwnedFrame> f,
+                in_.next(max_rows));
             if (!f) return dstd::nullopt;
             ::dftu_series* id = ::dftu_dataframe_column(f->get(), "id");
             ::dftu_series* val = ::dftu_dataframe_column(f->get(), "val");
@@ -255,9 +259,9 @@ class DoubleVal {
         dftracer::utils::plugins::InputCursor in_;
     };
 
-    dstd::UniquePtr<Cursor> open(dftracer::utils::plugins::InputCursor in,
-                                 const dftracer::utils::plugins::OpArgs&,
-                                 std::uint64_t) const {
+    dstd::Result<dstd::UniquePtr<Cursor>> open(
+        dftracer::utils::plugins::InputCursor in,
+        const dftracer::utils::plugins::OpArgs&, std::uint64_t) const {
         return dstd::make_unique<Cursor>(std::move(in));
     }
 };

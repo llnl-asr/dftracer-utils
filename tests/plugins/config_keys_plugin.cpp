@@ -34,8 +34,8 @@ struct Counted {
                 static_cast<std::uint64_t>(stride);
     }
     void merge(Counted& other) { rows += other.rows; }
-    void finalize(Host h) {
-        h.emit_result("config_keys_plugin.rows", dstd::to_string(rows));
+    dstd::Result<void> finalize(Host h) {
+        return h.emit_result("config_keys_plugin.rows", dstd::to_string(rows));
     }
 };
 

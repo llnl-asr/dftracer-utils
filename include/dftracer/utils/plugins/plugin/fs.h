@@ -42,13 +42,13 @@ class PathList {
     std::uint64_t size() const noexcept {
         return list_ && fs_ ? fs_->list_count(list_) : 0;
     }
-    /// Throws @ref Error with DFTU_E_INVALID for an index past the end.
-    PathEntry entry(std::uint64_t i) const {
+    /// DFTU_E_INVALID for an index past the end.
+    dstd::Result<PathEntry> entry(std::uint64_t i) const {
         dftu_path_entry raw{};
         const dftu_status st = list_ && fs_
                                    ? fs_->list_entry(ctx_, list_, i, &raw)
                                    : DFTU_E_INVALID;
-        if (st < 0) throw Error(st, "list_entry failed", true);
+        if (st < 0) return make_error(st);
         return PathEntry{dstd::StringView(raw.path, raw.path_len), raw.size,
                          raw.mtime_ns, raw.kind};
     }
@@ -87,8 +87,8 @@ class FileBytes {
 
 /// Thin typed wrapper over the fs service; each call starts the operation and
 /// returns an @ref AsyncOp to `co_await`. A call the host refuses, or a host
-/// without the fs group, throws @ref Error. A failed operation surfaces when
-/// the AsyncOp is awaited, with the status of its error and the message
+/// without the fs group, gives an AsyncOp that fails when awaited, as does a
+/// failed operation, with the status of its error and the message
 /// "<op>: <text>". Paths are copied when called; buffers and result slots stay
 /// valid until the await ends.
 class Fs {
@@ -100,70 +100,80 @@ class Fs {
                                         h->get_service(h->h, DFTU_SVC_FS))
                                   : nullptr) {}
 
-    PathList new_list() const { return PathList(&need(), ctx_); }
+    PathList new_list() const { return PathList(fs_, ctx_); }
 
     AsyncOp read_file(const char* path, FileBytes& out) const {
+        if (!fs_) return unsupported();
         dftu_task* t = nullptr;
-        return done(need().read_file(ctx_, h_->h, path, out.slot(), &t), t);
+        return done(fs_->read_file(ctx_, h_->h, path, out.slot(), &t), t);
     }
     AsyncOp write_file(const char* path, const void* data,
                        std::uint64_t len) const {
+        if (!fs_) return unsupported();
         dftu_task* t = nullptr;
-        return done(need().write_file(ctx_, h_->h, path, data, len, &t), t);
+        return done(fs_->write_file(ctx_, h_->h, path, data, len, &t), t);
     }
     AsyncOp read_at(const char* path, std::uint64_t off, void* buf,
                     std::uint64_t len, std::int64_t* out_n) const {
+        if (!fs_) return unsupported();
         dftu_task* t = nullptr;
-        return done(need().read_at(ctx_, h_->h, path, off, buf, len, out_n, &t),
+        return done(fs_->read_at(ctx_, h_->h, path, off, buf, len, out_n, &t),
                     t);
     }
     AsyncOp write_at(const char* path, std::uint64_t off, const void* buf,
                      std::uint64_t len, std::int64_t* out_n) const {
+        if (!fs_) return unsupported();
         dftu_task* t = nullptr;
-        return done(
-            need().write_at(ctx_, h_->h, path, off, buf, len, out_n, &t), t);
+        return done(fs_->write_at(ctx_, h_->h, path, off, buf, len, out_n, &t),
+                    t);
     }
     AsyncOp list_dir(const char* path, PathList& out) const {
+        if (!fs_) return unsupported();
         dftu_task* t = nullptr;
-        return done(need().list_dir(ctx_, h_->h, path, out.slot(), &t), t);
+        return done(fs_->list_dir(ctx_, h_->h, path, out.slot(), &t), t);
     }
     /// `options` may be null for every file, recursive, with stat.
     AsyncOp find_all(const char* root, const dftu_find_options* options,
                      PathList& out) const {
+        if (!fs_) return unsupported();
         dftu_task* t = nullptr;
-        return done(need().find_all(ctx_, h_->h, root, options, out.slot(), &t),
+        return done(fs_->find_all(ctx_, h_->h, root, options, out.slot(), &t),
                     t);
     }
     AsyncOp exists(const char* path, std::int32_t* out) const {
+        if (!fs_) return unsupported();
         dftu_task* t = nullptr;
-        return done(need().exists(ctx_, h_->h, path, out, &t), t);
+        return done(fs_->exists(ctx_, h_->h, path, out, &t), t);
     }
     AsyncOp create_directories(const char* path,
                                std::int32_t* out_created) const {
+        if (!fs_) return unsupported();
         dftu_task* t = nullptr;
-        return done(
-            need().create_directories(ctx_, h_->h, path, out_created, &t), t);
+        return done(fs_->create_directories(ctx_, h_->h, path, out_created, &t),
+                    t);
     }
     AsyncOp remove(const char* path, std::int32_t* out_removed) const {
+        if (!fs_) return unsupported();
         dftu_task* t = nullptr;
-        return done(need().remove(ctx_, h_->h, path, out_removed, &t), t);
+        return done(fs_->remove(ctx_, h_->h, path, out_removed, &t), t);
     }
     /// One stat and one status per path; a path that cannot be stat'ed fails
     /// only its own slot. `paths`, `out` and `out_status` hold `n` entries.
     AsyncOp stat_batch(const char* const* paths, std::uint64_t n,
                        dftu_fs_stat* out, dftu_status* out_status) const {
+        if (!fs_) return unsupported();
         dftu_task* t = nullptr;
-        return done(
-            need().stat_batch(ctx_, h_->h, paths, n, out, out_status, &t), t);
+        return done(fs_->stat_batch(ctx_, h_->h, paths, n, out, out_status, &t),
+                    t);
     }
 
    private:
-    const dftu_svc_fs& need() const {
-        if (!fs_) throw Error(DFTU_E_UNSUPPORTED, "host lacks dftu.svc.fs");
-        return *fs_;
+    static AsyncOp unsupported() {
+        return AsyncOp{
+            make_error(DFTU_E_UNSUPPORTED, "host lacks dftu.svc.fs")};
     }
     AsyncOp done(dftu_status st, dftu_task* t) const {
-        if (st < 0) throw Error(st, "fs call failed", true);
+        if (st < 0) return AsyncOp{make_error(st)};
         return AsyncOp{t, h_};
     }
 

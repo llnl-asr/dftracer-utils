@@ -75,11 +75,14 @@ struct ColumnProbe {
         args_x_sum = other.args_x_sum;
     }
 
-    void finalize(Host h) {
-        h.emit_result("reads_probe.num_columns", dstd::to_string(num_columns));
-        h.emit_result("reads_probe.columns", columns);
-        h.emit_result("reads_probe.has_args_x", has_args_x ? "1" : "0");
-        h.emit_result("reads_probe.args_x_sum", dstd::to_string(args_x_sum));
+    dstd::Result<void> finalize(Host h) {
+        DFTRACER_UTILS_TRY_VOID(h.emit_result("reads_probe.num_columns",
+                                              dstd::to_string(num_columns)));
+        DFTRACER_UTILS_TRY_VOID(h.emit_result("reads_probe.columns", columns));
+        DFTRACER_UTILS_TRY_VOID(
+            h.emit_result("reads_probe.has_args_x", has_args_x ? "1" : "0"));
+        return h.emit_result("reads_probe.args_x_sum",
+                             dstd::to_string(args_x_sum));
     }
 };
 

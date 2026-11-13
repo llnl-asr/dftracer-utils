@@ -18,6 +18,7 @@
 #include <dftracer/utils/dataframe/types.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
@@ -116,16 +117,149 @@ dftu_status append2_fn(dftu_ctx*, void* p) {
 }
 
 plugins::Task fanout_all(plugins::Host h, std::atomic<int>* ran, int n) {
-    dstd::Vector<dftu_task*> kids;
+    dstd::Vector<dstd::Result<dftu_task*>> kids;
     for (int i = 0; i < n; ++i) kids.push_back(h.spawn(inc_fn, ran).release());
     plugins::AsyncAll all(std::move(kids), h.raw());
     co_await all;
 }
 
-plugins::Task drop_then_throw(plugins::Host h, std::atomic<int>* ran) {
+plugins::Task drop_then_fail(plugins::Host h, std::atomic<int>* ran) {
     plugins::AsyncOp dropped = h.spawn(inc_fn, ran);
-    if (ran != nullptr) throw plugins::Error(DFTU_E_IO, "gave up");
+    if (ran != nullptr) {
+        dstd::Error gave_up = plugins::make_error(DFTU_E_IO, "gave up");
+        co_await plugins::fail(std::move(gave_up));
+    }
     co_await std::move(dropped);
+}
+
+dftu_status spawn_fails_fn(dftu_ctx* ctx, void*) {
+    return dftu_fail(ctx, DFTU_E_IO, "spawned work failed");
+}
+
+// Counts the frames it lives in that were destroyed, to show a frame goes once.
+struct FrameCounter {
+    static inline int destroyed = 0;
+    FrameCounter() = default;
+    FrameCounter(const FrameCounter&) = delete;
+    FrameCounter& operator=(const FrameCounter&) = delete;
+    ~FrameCounter() { ++destroyed; }
+};
+
+// A failed awaited task ends the task: the line after the await never runs, and
+// a child started earlier and still owned by a local is given back unrun.
+plugins::Task await_failed_op(plugins::Host h, std::atomic<int>* child,
+                              bool* reached) {
+    FrameCounter counter;
+    plugins::AsyncOp started = h.spawn(inc_fn, child);
+    co_await h.spawn(spawn_fails_fn, nullptr);
+    *reached = true;
+    co_await std::move(started);
+}
+
+// `co_await` on an error Result ends the task with it.
+plugins::Task await_error_result(plugins::Host h, bool* reached) {
+    FrameCounter counter;
+    auto missing = h.run_op("dftu.test.nonexistent_op", {});
+    co_await std::move(missing);
+    *reached = true;
+}
+
+// `.expected()` hands the failure back: the task goes on and ends in success.
+plugins::Task await_expected(plugins::Host h, dstd::Optional<dftu_status>* seen,
+                             bool* reached) {
+    plugins::AsyncOp failing = h.spawn(spawn_fails_fn, nullptr);
+    auto outcome = co_await failing.expected();
+    if (!outcome.has_value()) *seen = plugins::status_of(outcome.error());
+    *reached = true;
+}
+
+plugins::Task return_error(plugins::Host, bool* reached) {
+    FrameCounter counter;
+    *reached = true;
+    dstd::Error gave_up =
+        plugins::make_error(DFTU_E_PARSE, "gave up with a parse error");
+    co_await plugins::fail(std::move(gave_up));
+}
+
+// The task service of a host whose spawn refuses the call numbered
+// `refuse_call` (1-based), and which counts discards.
+struct RefusingHost {
+    static inline dftu_plugin_host* real = nullptr;
+    static inline const dftu_svc_task* real_svc = nullptr;
+    static inline dftu_svc_task svc{};
+    static inline int spawn_calls = 0;
+    static inline int refuse_call = 0;
+    static inline int discards = 0;
+    dftu_plugin_host wrapped{};
+
+    explicit RefusingHost(dftu_plugin_host& host, int refuse) {
+        real = &host;
+        real_svc = static_cast<const dftu_svc_task*>(
+            host.get_service(host.h, DFTU_SVC_TASK));
+        svc = *real_svc;
+        spawn_calls = 0;
+        refuse_call = refuse;
+        discards = 0;
+        svc.spawn = [](dftu_ctx* ctx, void* h,
+                       dftu_status (*fn)(dftu_ctx*, void*), void* arg,
+                       dftu_job_where where, dftu_task** out) -> dftu_status {
+            if (++spawn_calls == refuse_call)
+                return dftu_fail(ctx, DFTU_E_TIMEOUT, "host refused the start");
+            return real_svc->spawn(ctx, h, fn, arg, where, out);
+        };
+        svc.discard = [](void* h, dftu_task* t) {
+            ++discards;
+            real_svc->discard(h, t);
+        };
+        wrapped = host;
+        wrapped.get_service = [](void* h, const char* id) -> const void* {
+            return std::strcmp(id, DFTU_SVC_TASK) == 0
+                       ? &svc
+                       : real->get_service(h, id);
+        };
+    }
+};
+
+plugins::Task await_refused(plugins::Host h, std::atomic<int>* ran,
+                            bool* reached) {
+    FrameCounter counter;
+    co_await h.spawn(inc_fn, ran);
+    *reached = true;
+}
+
+plugins::Task all_refused(plugins::Host h, std::atomic<int>* ran,
+                          bool* reached) {
+    FrameCounter counter;
+    plugins::AsyncOp first = h.spawn(inc_fn, ran);
+    plugins::AsyncOp second = h.spawn(inc_fn, ran);
+    plugins::AsyncAll both = h.all({first.release(), second.release()});
+    co_await std::move(both);
+    *reached = true;
+}
+
+plugins::Task await_released_refused(plugins::Host h, std::atomic<int>* ran,
+                                     bool* reached) {
+    plugins::AsyncOp op = h.spawn(inc_fn, ran);
+    co_await h.await(op.release());
+    *reached = true;
+}
+
+plugins::Task all_one_fails(plugins::Host h, std::atomic<int>* ran) {
+    plugins::AsyncOp bad = h.spawn(spawn_fails_fn, nullptr);
+    plugins::AsyncOp good = h.spawn(inc_fn, ran);
+    plugins::AsyncAll both = h.all({bad.release(), good.release()});
+    co_await std::move(both);
+}
+
+plugins::Task fail_on_entry() {
+    FrameCounter counter;
+    dstd::Error gave_up = plugins::make_error(DFTU_E_PARSE, "failed on entry");
+    co_await plugins::fail(std::move(gave_up));
+}
+
+plugins::Task return_ok() {
+    FrameCounter counter;
+    co_return;
 }
 
 plugins::Task chain(plugins::Host h, dstd::Vector<int>* order) {
@@ -137,43 +271,55 @@ using I64 = std::int64_t;
 
 // (in*2) then (+10): a value threaded through the pipe.
 plugins::Task typed_pipe(plugins::Host h, I64* result) {
-    auto a = plugins::make_job<I64, I64>(h, [](I64 x) { return x * 2; });
-    auto b = plugins::make_job<I64, I64>(h, [](I64 x) { return x + 10; });
+    auto a =
+        co_await plugins::make_job<I64, I64>(h, [](I64 x) { return x * 2; });
+    auto b =
+        co_await plugins::make_job<I64, I64>(h, [](I64 x) { return x + 10; });
+    auto piped = co_await (a | b);
     I64 in = 5, out = 0;
-    co_await plugins::run(a | b, in, out);
+    co_await plugins::run(piped, in, out);
     *result = out;
 }
 
 // when_all: both leaves see the same input; the output is their values
 // concatenated.
 plugins::Task jobs_all(plugins::Host h, std::array<I64, 2>* out) {
-    auto a = plugins::make_job<I64, I64>(h, [](I64 x) { return x * 2; });
-    auto b = plugins::make_job<I64, I64>(h, [](I64 x) { return x + 10; });
+    auto a =
+        co_await plugins::make_job<I64, I64>(h, [](I64 x) { return x * 2; });
+    auto b =
+        co_await plugins::make_job<I64, I64>(h, [](I64 x) { return x + 10; });
+    auto both = co_await plugins::when_all(a, b);
     I64 in = 5;
-    co_await plugins::run(plugins::when_all(a, b), in, *out);
+    co_await plugins::run(both, in, *out);
 }
 
 // when_any: both racers compute the same value, so the winner is
 // deterministic.
 plugins::Task jobs_any(plugins::Host h, I64* result) {
-    auto a = plugins::make_job<I64, I64>(h, [](I64 x) { return x + 10; });
-    auto b = plugins::make_job<I64, I64>(h, [](I64 x) { return x + 10; });
+    auto a =
+        co_await plugins::make_job<I64, I64>(h, [](I64 x) { return x + 10; });
+    auto b =
+        co_await plugins::make_job<I64, I64>(h, [](I64 x) { return x + 10; });
+    auto any = co_await plugins::when_any(a, b);
     I64 in = 5;
-    co_await plugins::run(plugins::when_any(a, b), in, *result);
+    co_await plugins::run(any, in, *result);
 }
 
 // map: one body run per item, outputs in item order.
 plugins::Task jobs_map(plugins::Host h, dstd::Vector<I64>* out) {
-    auto body = plugins::make_job<I64, I64>(h, [](I64 x) { return x * x; });
+    auto body =
+        co_await plugins::make_job<I64, I64>(h, [](I64 x) { return x * x; });
     dstd::Vector<I64> items = {1, 2, 3, 4};
     out->assign(items.size(), 0);
     dftu_job_items in{items.data(), items.size()};
     dftu_job_slots slots{out->data(), out->size()};
+    const dftu_svc_task* svc = co_await h.tasks();
     dftu_job* m = nullptr;
-    plugins::detail::ok(h.tasks().map(h.ctx(), h.raw()->h, body.raw(), 2, &m));
+    co_await plugins::detail::reported(
+        svc->map(h.ctx(), h.raw()->h, body.raw(), 2, &m));
     dftu_task* t = nullptr;
-    plugins::detail::ok(
-        h.tasks().start(h.ctx(), h.raw()->h, m, &in, &slots, &t));
+    co_await plugins::detail::reported(
+        svc->start(h.ctx(), h.raw()->h, m, &in, &slots, &t));
     co_await h.await(t);
 }
 
@@ -184,16 +330,17 @@ plugins::Task jobs_map(plugins::Host h, dstd::Vector<I64>* out) {
 plugins::Task series_pipe(plugins::Host h, dftu_series** result) {
     I64 vals[4] = {1, 2, 3, 4};
     dftu_series* src = dftu_series_new_flat(DFTU_TYPE_INT64, vals, 4, nullptr);
-    auto a = plugins::make_job<dftu_series*, dftu_series*>(
+    auto a = co_await plugins::make_job<dftu_series*, dftu_series*>(
         h, [](dftu_series* s) { return dftu_series_add(s, s); });
-    auto b =
-        plugins::make_job<dftu_series*, dftu_series*>(h, [](dftu_series* s) {
+    auto b = co_await plugins::make_job<dftu_series*, dftu_series*>(
+        h, [](dftu_series* s) {
             dftu_series* r = dftu_series_add(s, s);
             dftu_series_free(s);
             return r;
         });
+    auto piped = co_await (a | b);
     dftu_series* out = nullptr;
-    co_await plugins::run(a | b, src, out);
+    co_await plugins::run(piped, src, out);
     dftu_series_free(src);
     *result = out;
 }
@@ -220,7 +367,9 @@ dftu_status make_raw_job(plugins::Host h, dftu_type in_ty, dftu_type out_ty,
     d.in_size = 8;
     d.out_ty = out_ty;
     d.out_size = 8;
-    return h.tasks().job(h.ctx(), h.raw()->h, &d, out);
+    auto svc = h.tasks();
+    if (!svc.has_value()) return plugins::status_of(svc.error());
+    return (*svc)->job(h.ctx(), h.raw()->h, &d, out);
 }
 
 template <class MakeTask>
@@ -545,13 +694,186 @@ TEST_CASE("plugin ABI: spawn fan-out joined by all runs every child") {
     CHECK(ran.load() == 4);
 }
 
-TEST_CASE("plugin ABI: a started task dropped on a throw never runs") {
+TEST_CASE("plugin ABI: a started task dropped on a returned error never runs") {
     FoldFixture<CountSlice> fx(nullptr);
     std::atomic<int> ran{0};
     CHECK(drive_task(fx.host(), [&](plugins::Host h) {
-              return drop_then_throw(h, &ran);
+              return drop_then_fail(h, &ran);
           }) == DFTU_E_IO);
     CHECK(ran.load() == 0);
+}
+
+TEST_CASE("plugin ABI: a failed awaited task ends the task with its error") {
+    FoldFixture<CountSlice> fx(nullptr);
+    std::atomic<int> child{0};
+    bool reached = false;
+    FrameCounter::destroyed = 0;
+    dstd::String message;
+    CHECK(drive_task(
+              fx.host(),
+              [&](plugins::Host h) {
+                  return await_failed_op(h, &child, &reached);
+              },
+              &message) == DFTU_E_IO);
+    CHECK(message.find("spawned work failed") != dstd::String::npos);
+    CHECK_FALSE(reached);
+    // The child started before the failing await is given back, never run.
+    CHECK(child.load() == 0);
+    CHECK(FrameCounter::destroyed == 1);
+}
+
+TEST_CASE("plugin ABI: a started child is discarded when the task ends early") {
+    FoldFixture<CountSlice> fx(nullptr);
+    static dftu_plugin_host* real = nullptr;
+    static const dftu_svc_task* real_svc = nullptr;
+    static dftu_svc_task counting{};
+    static int discards = 0;
+    real = &fx.host();
+    real_svc = static_cast<const dftu_svc_task*>(
+        real->get_service(real->h, DFTU_SVC_TASK));
+    REQUIRE(real_svc != nullptr);
+    counting = *real_svc;
+    discards = 0;
+    counting.discard = [](void* h, dftu_task* t) {
+        ++discards;
+        real_svc->discard(h, t);
+    };
+    dftu_plugin_host wrapped = *real;
+    wrapped.get_service = [](void* h, const char* id) -> const void* {
+        return std::strcmp(id, DFTU_SVC_TASK) == 0 ? &counting
+                                                   : real->get_service(h, id);
+    };
+    std::atomic<int> child{0};
+    bool reached = false;
+    CHECK(drive_task(wrapped, [&](plugins::Host h) {
+              return await_failed_op(h, &child, &reached);
+          }) == DFTU_E_IO);
+    CHECK(child.load() == 0);
+    CHECK(discards == 1);
+}
+
+TEST_CASE("plugin ABI: co_await on an error Result ends the task with it") {
+    FoldFixture<CountSlice> fx(nullptr);
+    bool reached = false;
+    FrameCounter::destroyed = 0;
+    dstd::String message;
+    CHECK(drive_task(
+              fx.host(),
+              [&](plugins::Host h) { return await_error_result(h, &reached); },
+              &message) == DFTU_E_NOT_FOUND);
+    CHECK(message.find("dftu.test.nonexistent_op") != dstd::String::npos);
+    CHECK_FALSE(reached);
+    CHECK(FrameCounter::destroyed == 1);
+}
+
+TEST_CASE("plugin ABI: expected() hands a failure back and the task goes on") {
+    FoldFixture<CountSlice> fx(nullptr);
+    dstd::Optional<dftu_status> seen;
+    bool reached = false;
+    CHECK(drive_task(fx.host(), [&](plugins::Host h) {
+              return await_expected(h, &seen, &reached);
+          }) == DFTU_OK);
+    CHECK(reached);
+    REQUIRE(seen.has_value());
+    CHECK(*seen == DFTU_E_IO);
+}
+
+TEST_CASE("plugin ABI: co_await fail(error) fails the task with its status") {
+    FoldFixture<CountSlice> fx(nullptr);
+    bool reached = false;
+    FrameCounter::destroyed = 0;
+    dstd::String message;
+    CHECK(drive_task(
+              fx.host(),
+              [&](plugins::Host h) { return return_error(h, &reached); },
+              &message) == DFTU_E_PARSE);
+    CHECK(message == "gave up with a parse error");
+    CHECK(reached);
+    CHECK(FrameCounter::destroyed == 1);
+}
+
+TEST_CASE("plugin ABI: an op the host refuses fails the task with its error") {
+    FoldFixture<CountSlice> fx(nullptr);
+    RefusingHost refusing(fx.host(), 1);
+    std::atomic<int> ran{0};
+    bool reached = false;
+    dstd::String message;
+    CHECK(drive_task(
+              refusing.wrapped,
+              [&](plugins::Host h) { return await_refused(h, &ran, &reached); },
+              &message) == DFTU_E_TIMEOUT);
+    CHECK(message.find("host refused the start") != dstd::String::npos);
+    CHECK_FALSE(reached);
+    CHECK(ran.load() == 0);
+}
+
+TEST_CASE("plugin ABI: a refused op in all() keeps its status and message") {
+    FoldFixture<CountSlice> fx(nullptr);
+    RefusingHost refusing(fx.host(), 2);
+    std::atomic<int> ran{0};
+    bool reached = false;
+    FrameCounter::destroyed = 0;
+    dstd::String message;
+    CHECK(drive_task(
+              refusing.wrapped,
+              [&](plugins::Host h) { return all_refused(h, &ran, &reached); },
+              &message) == DFTU_E_TIMEOUT);
+    CHECK(message.find("host refused the start") != dstd::String::npos);
+    CHECK_FALSE(reached);
+    // The child that did start is given back once and never runs.
+    CHECK(RefusingHost::discards == 1);
+    CHECK(ran.load() == 0);
+    CHECK(FrameCounter::destroyed == 1);
+}
+
+TEST_CASE("plugin ABI: a refused op through Host::await keeps its error") {
+    FoldFixture<CountSlice> fx(nullptr);
+    RefusingHost refusing(fx.host(), 1);
+    std::atomic<int> ran{0};
+    bool reached = false;
+    dstd::String message;
+    CHECK(drive_task(
+              refusing.wrapped,
+              [&](plugins::Host h) {
+                  return await_released_refused(h, &ran, &reached);
+              },
+              &message) == DFTU_E_TIMEOUT);
+    CHECK(message.find("host refused the start") != dstd::String::npos);
+    CHECK_FALSE(reached);
+}
+
+TEST_CASE("plugin ABI: all() with one failing child fails and awaits both") {
+    FoldFixture<CountSlice> fx(nullptr);
+    RefusingHost refusing(fx.host(), 0);
+    std::atomic<int> ran{0};
+    dstd::String message;
+    CHECK(drive_task(
+              refusing.wrapped,
+              [&](plugins::Host h) { return all_one_fails(h, &ran); },
+              &message) == DFTU_E_IO);
+    CHECK(message.find("spawned work failed") != dstd::String::npos);
+    CHECK(ran.load() == 1);
+    CHECK(RefusingHost::discards == 0);
+}
+
+TEST_CASE(
+    "plugin ABI: a failure on entry reports once and destroys the frame") {
+    FoldFixture<CountSlice> fx(nullptr);
+    FrameCounter::destroyed = 0;
+    dstd::String message;
+    CHECK(drive_task(
+              fx.host(), [&](plugins::Host) { return fail_on_entry(); },
+              &message) == DFTU_E_PARSE);
+    CHECK(message == "failed on entry");
+    CHECK(FrameCounter::destroyed == 1);
+}
+
+TEST_CASE("plugin ABI: a task that ends in success destroys its frame once") {
+    FoldFixture<CountSlice> fx(nullptr);
+    FrameCounter::destroyed = 0;
+    CHECK(drive_task(fx.host(), [&](plugins::Host) { return return_ok(); }) ==
+          DFTU_OK);
+    CHECK(FrameCounter::destroyed == 1);
 }
 
 TEST_CASE("plugin SDK: an AsyncOp dropped unawaited discards its task") {
@@ -577,7 +899,7 @@ TEST_CASE("plugin SDK: an AsyncOp dropped unawaited discards its task") {
     CHECK(seen == fake);
     {
         plugins::AsyncOp handed(fake, &host);
-        CHECK(handed.release() == fake);
+        CHECK(*handed.release() == fake);
     }
     CHECK(discarded == 1);
 }
@@ -669,10 +991,12 @@ TEST_CASE(
     REQUIRE(make_raw_job(h, DFTU_T_I64, DFTU_T_SERIES, &col_out) == DFTU_OK);
     REQUIRE(make_raw_job(h, DFTU_T_TABLE, DFTU_T_I64, &tbl_in) == DFTU_OK);
     REQUIRE(make_raw_job(h, DFTU_T_SERIES, DFTU_T_I64, &col_in) == DFTU_OK);
-    CHECK(h.tasks().then(c.get(), h.raw()->h, col_out, tbl_in, &piped) ==
-          DFTU_E_INVALID);  // SERIES out != TABLE in
-    CHECK(h.tasks().then(c.get(), h.raw()->h, col_out, col_in, &piped) ==
-          DFTU_OK);         // SERIES out -> SERIES in
+    CHECK(
+        h.tasks().value()->then(c.get(), h.raw()->h, col_out, tbl_in, &piped) ==
+        DFTU_E_INVALID);  // SERIES out != TABLE in
+    CHECK(
+        h.tasks().value()->then(c.get(), h.raw()->h, col_out, col_in, &piped) ==
+        DFTU_OK);         // SERIES out -> SERIES in
 }
 
 TEST_CASE("plugin ABI: job then rejects a type mismatch") {
@@ -684,9 +1008,11 @@ TEST_CASE("plugin ABI: job then rejects a type mismatch") {
     // Same byte size (8) but a different type must not pipe.
     REQUIRE(make_raw_job(h, DFTU_T_F64, DFTU_T_F64, &f) == DFTU_OK);
     REQUIRE(make_raw_job(h, DFTU_T_I64, DFTU_T_I64, &i) == DFTU_OK);
-    CHECK(h.tasks().then(c.get(), h.raw()->h, a, f, &piped) == DFTU_E_INVALID);
+    CHECK(h.tasks().value()->then(c.get(), h.raw()->h, a, f, &piped) ==
+          DFTU_E_INVALID);
     CHECK_FALSE(c.message().empty());
-    CHECK(h.tasks().then(c.get(), h.raw()->h, a, i, &piped) == DFTU_OK);
+    CHECK(h.tasks().value()->then(c.get(), h.raw()->h, a, i, &piped) ==
+          DFTU_OK);
 }
 
 TEST_CASE("plugin ABI: host utility ops fnv1a and hex64_parse") {
@@ -701,14 +1027,18 @@ TEST_CASE("plugin ABI: host utility ops fnv1a and hex64_parse") {
         dftu_series_new_string(DFTU_TYPE_STRING, offsets, data, 4, nullptr);
     REQUIRE(in != nullptr);
 
-    dftu_series* hashed = h.run_op("dftu.hash.fnv1a", {in});
+    auto hashed_result = h.run_op("dftu.hash.fnv1a", {in});
+    REQUIRE(hashed_result.has_value());
+    dftu_series* hashed = *hashed_result;
     REQUIRE(hashed != nullptr);
     const auto* hv =
         static_cast<const std::uint64_t*>(dftu_series_data(hashed));
     REQUIRE(hv != nullptr);
     CHECK(hv[0] == 5527563327133061832ULL);  // fnv1a("POSIX")
 
-    dftu_series* parsed = h.run_op("dftu.hex.parse64", {in});
+    auto parsed_result = h.run_op("dftu.hex.parse64", {in});
+    REQUIRE(parsed_result.has_value());
+    dftu_series* parsed = *parsed_result;
     REQUIRE(parsed != nullptr);
     const auto* pv =
         static_cast<const std::uint64_t*>(dftu_series_data(parsed));

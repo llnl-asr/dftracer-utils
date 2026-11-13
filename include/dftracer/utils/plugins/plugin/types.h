@@ -2,70 +2,75 @@
 #ifndef DFTRACER_UTILS_PLUGINS_PLUGIN_TYPES_H
 #define DFTRACER_UTILS_PLUGINS_PLUGIN_TYPES_H
 
+#include <dftracer/utils/dstd/error.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/duql/builder.h>
 #include <dftracer/utils/plugins/abi.h>
 
 #include <cstdint>
-#include <exception>
-#include <new>
-#include <stdexcept>
-#include <string>
-#include <string_view>
 #include <type_traits>
 
 namespace dftracer::utils::plugins {
 
-/// What a plugin throws, and what a failed host service call throws: a status
-/// and a message. The SDK trampolines catch every exception at the ABI edge and
-/// return its status with its what() text as the call's error, so a callback
-/// never lets one cross. `reported` is true when the host already holds the
-/// message on the call's dftu_ctx (a failed service call), so the trampoline
-/// returns the status as it is.
-class Error : public std::runtime_error {
-   public:
-    Error(dftu_status status, const char* what, bool reported = false)
-        : std::runtime_error(what), status_(status), reported_(reported) {}
-    Error(dftu_status status, const dstd::String& what, bool reported = false)
-        : Error(status, what.c_str(), reported) {}
+/// The error a failed SDK call or plugin callback carries is a @ref
+/// dstd::Error. Its condition is the status the host sees: `status =
+/// -(condition
+/// + 1)`, the numbering of dftu_status. A failed host service call returns an
+/// Error with no message, because the host already holds the message on the
+/// call's dftu_ctx; @ref report then returns the status as it is.
+inline dstd::Error make_error(dftu_status status,
+                              dstd::StringView message = {}) noexcept {
+    const std::int32_t code = -status - 1;
+    const auto condition =
+        status < 0 &&
+                code <= static_cast<std::int32_t>(dstd::Condition::ForkedHandle)
+            ? static_cast<dstd::Condition>(code)
+            : dstd::Condition::Unknown;
+    return dstd::Error(condition, message);
+}
 
-    dftu_status status() const noexcept { return status_; }
-    bool reported() const noexcept { return reported_; }
+/// The dftu_status of `error`.
+inline dftu_status status_of(const dstd::Error& error) noexcept {
+    return -static_cast<dftu_status>(error.condition()) - 1;
+}
 
-   private:
-    dftu_status status_;
-    bool reported_;
-};
+/// The success value of a callback or a task that returns @ref dstd::Result.
+inline dstd::Result<void> ok() noexcept { return {}; }
+
+/// The status a callback returns for `error`. Sets the error's message on `ctx`
+/// unless it has none, in which case the host already holds it.
+inline dftu_status report(dftu_ctx* ctx, const dstd::Error& error) noexcept {
+    const dftu_status status = status_of(error);
+    return error.message().empty() ? status
+                                   : dftu_fail(ctx, status, error.c_str());
+}
 
 namespace detail {
 
-/// The status a callback returns for the exception being handled; call it only
-/// inside a catch block. Sets the message on `ctx` unless the host already has
-/// it.
-inline dftu_status fail_from_current_exception(dftu_ctx* ctx) noexcept {
-    try {
-        throw;
-    } catch (const Error& e) {
-        return e.reported() ? e.status() : dftu_fail(ctx, e.status(), e.what());
-    } catch (const std::invalid_argument& e) {
-        return dftu_fail(ctx, DFTU_E_INVALID, e.what());
-    } catch (const std::bad_alloc&) {
-        return dftu_fail(ctx, DFTU_E_INTERNAL, "out of memory");
-    } catch (const std::exception& e) {
-        return dftu_fail(ctx, DFTU_E_INTERNAL, e.what());
-    } catch (...) {
-        return dftu_fail(ctx, DFTU_E_INTERNAL, "unknown exception");
-    }
+/// The result of a host service call that returned `status`.
+inline dstd::Result<void> reported(dftu_status status) noexcept {
+    if (status < 0) return make_error(status);
+    return {};
 }
 
-/// Runs `fn() -> dftu_status` and turns any exception into the callback's
-/// error: the catch wall every SDK trampoline goes through.
+/// Runs `fn`, which returns void, a dftu_status or a @ref dstd::Result of void,
+/// and gives the status of its outcome. The ABI-edge adapter every SDK
+/// trampoline goes through; it holds no catch, so a callback that throws
+/// terminates.
 template <class Fn>
-dftu_status guard(dftu_ctx* ctx, Fn&& fn) noexcept {
-    try {
+dftu_status to_status(dftu_ctx* ctx, Fn&& fn) noexcept {
+    using R = std::invoke_result_t<Fn>;
+    if constexpr (std::is_void_v<R>) {
+        fn();
+        return DFTU_OK;
+    } else if constexpr (std::is_same_v<R, dftu_status>) {
         return fn();
-    } catch (...) {
-        return fail_from_current_exception(ctx);
+    } else {
+        static_assert(std::is_same_v<R, dstd::Result<void>>,
+                      "a callback returns void, dftu_status or dstd::Result");
+        dstd::Result<void> result = fn();
+        return result.has_value() ? DFTU_OK : report(ctx, result.error());
     }
 }
 

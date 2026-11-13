@@ -20,6 +20,14 @@ struct Ctx {
     }
 };
 
+// The status a callback returns for the outcome of an SDK call.
+inline dftu_status as_status(
+    const dftracer::utils::dstd::Result<void>& result) {
+    return result.has_value()
+               ? DFTU_OK
+               : dftracer::utils::plugins::status_of(result.error());
+}
+
 // Runs a task a plugin handed back to completion through the host task
 // service's run, and gives its status; `message` gets the error text of a
 // failed task.

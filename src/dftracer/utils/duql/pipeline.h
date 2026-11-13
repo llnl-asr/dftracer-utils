@@ -410,10 +410,18 @@ struct Program {
 /// kind, or nothing.
 enum class PluginKind : std::uint8_t { None, Column, Table, Aggregate, Other };
 
+/// The argument counts a plugin UDF takes.
+struct UdfArity {
+    std::int32_t min_args = 0;
+    std::int32_t max_args = 0;
+};
+
 /// The plugin functions a compile may call: `kind` of a dotted name, and
 /// the loaded plugin namespaces, sorted, for the unknown-name error.
 struct PluginCatalog {
     dstd::Function<PluginKind(dstd::StringView)> kind;
+    /// The argument counts of the plugin UDF `name`, nullopt for no such UDF.
+    dstd::Function<dstd::Optional<UdfArity>(dstd::StringView)> udf;
     dstd::Vector<dstd::String> namespaces;
 };
 

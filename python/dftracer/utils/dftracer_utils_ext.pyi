@@ -1365,6 +1365,19 @@ def vec_eval(ast: List[tuple], columns: List[_Series]) -> _Series:
     run it over `columns` as one fused chunked evaluation."""
     ...
 
+class _UdfHandle:
+    """A registered scalar UDF held for expressions that call it. Opaque."""
+
+def udf_lookup(name: str, /) -> _UdfHandle:
+    """The registered scalar UDF `name`; it stays callable, and its plugin
+    library loaded, while a handle or an expression made from it lives. Raises
+    `LookupError` for an unknown name."""
+    ...
+
+def udf_names() -> List[str]:
+    """The names of the registered scalar UDFs."""
+    ...
+
 def vec_eval_many(asts: List[List[tuple]], columns: List[_Series]) -> List[_Series]:
     """Compile several `asts` into one CSE'd program over a shared `columns`
     list and evaluate in one pass."""

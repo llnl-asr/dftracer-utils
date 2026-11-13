@@ -10,6 +10,7 @@
  */
 
 #include <dftracer/utils/dataframe/c_api.h> /* dftu_scalar, by value below */
+#include <dftracer/utils/dataframe/c_api_udf.h> /* dftu_udf_desc */
 #include <dftracer/utils/plugins/abi/core.h>
 #include <stdint.h>
 
@@ -64,6 +65,15 @@ typedef struct dftu_svc_ops {
     dftu_status (*run_lazy)(dftu_ctx* ctx, void* h, const char* name,
                             const dftu_lazyframe* const* in, uint32_t n_in,
                             const dftu_op_arg* args, dftu_lazyframe** out);
+    /** Register a scalar UDF that duql calls by `desc->name`; see
+       dftu_udf_desc. `self` is passed to its bind. The host copies `desc`, and
+       the plugin library stays loaded while a plan holds the call. Fails with
+       DFTU_E_INVALID, naming the problem on `ctx`, if `desc` or its name is
+       NULL, the name is not a duql function name, it is a built-in function or
+       another UDF, a flag is unknown, or the argument counts do not fit; with
+       DFTU_E_UNSUPPORTED after the load. Registration is a load-time call. */
+    dftu_status (*register_udf)(dftu_ctx* ctx, void* h,
+                                const dftu_udf_desc* desc, void* self);
 } dftu_svc_ops;
 
 #ifdef __cplusplus

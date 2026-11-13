@@ -402,8 +402,16 @@ dstd::Result<dstd::Pair<View, dstd::Vector<dstd::String>>> View::duql_plan(
                   std::find(asof.begin(), asof.end(), i) != asof.end());
         if (!built) return built.error();
         Built b = std::move(*built);
-        sides.keys[i] =
-            cache_key(*b.view.plan_, side.pipeline.input.kind, side.key);
+        // A plugin function may change between runs, so a side that calls one
+        // is never stored in the lookup cache.
+        bool plugin_call = false;
+        duql::for_each_pipeline_term(side.pipeline, [&](const duql::Term& x) {
+            const auto* c = std::get_if<duql::TCall>(&x.node);
+            plugin_call = plugin_call || (c && c->fn == duql::Fn::Udf);
+        });
+        if (!plugin_call)
+            sides.keys[i] =
+                cache_key(*b.view.plan_, side.pipeline.input.kind, side.key);
         if (side.rowset) {
             for (const auto& f : plan_->files)
                 sides.files[i].push_back(

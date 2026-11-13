@@ -12,7 +12,10 @@
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/parallel.h>
+#include <dftracer/utils/dataframe/udf.h>
+#include <dftracer/utils/dataframe/udf_registry.h>
 #include <dftracer/utils/dstd/fatal.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/python/core/method.h>
@@ -56,7 +59,16 @@ enum {
     AstStrPredCol = 23,
     AstStrReplaceCol = 24,
     AstLitS = 25,
+    AstUdf = 26,  // (udf capsule, operand count)
 };
+
+const char* const UDF_CAPSULE = "dftu.udf";
+
+void free_udf_capsule(PyObject* capsule) {
+    dftracer::utils::dstd::UniquePtr<dataframe::Udf> owner(
+        static_cast<dataframe::Udf*>(
+            PyCapsule_GetPointer(capsule, UDF_CAPSULE)));
+}
 
 // A borrowed view of a Python str; valid while `o` lives, which the ast list
 // guarantees for the duration of build_expr.
@@ -156,6 +168,23 @@ bool build_expr(PyObject* ast, dataframe::Expr* out) {
                 dftracer::utils::dstd::StringView v;
                 if (!py_str_view(arg(1), &v)) return false;
                 stack.push_back(dataframe::expr_lit_str(v));
+                break;
+            }
+            case AstUdf: {
+                auto* udf = static_cast<dataframe::Udf*>(
+                    PyCapsule_GetPointer(arg(1), UDF_CAPSULE));
+                if (!udf) return false;
+                const long count = PyLong_AsLong(arg(2));
+                if (count < 0 ||
+                    static_cast<std::size_t>(count) > stack.size()) {
+                    PyErr_SetString(PyExc_ValueError,
+                                    "a udf call needs its operands");
+                    return false;
+                }
+                dftracer::utils::dstd::Vector<dataframe::Expr> operands(
+                    stack.end() - count, stack.end());
+                stack.resize(stack.size() - static_cast<std::size_t>(count));
+                stack.push_back((*udf)(operands));
                 break;
             }
             case AstBin: {
@@ -403,6 +432,43 @@ bool build_expr_from_ast(PyObject* ast, dataframe::Expr* out) {
     return build_expr(ast, out);
 }
 
+// udf_lookup(name) -> capsule holding a dataframe::Udf. The capsule keeps the
+// UDF, and so its plugin library, alive for as long as an expression holds it.
+static PyObject* udf_lookup(PyObject* /*self*/, PyObject* arg) {
+    Py_ssize_t n = 0;
+    const char* name = PyUnicode_AsUTF8AndSize(arg, &n);
+    if (!name) return nullptr;
+    auto found = dataframe::udf(
+        dftracer::utils::dstd::StringView(name, static_cast<std::size_t>(n)));
+    if (!found) {
+        const dftracer::utils::dstd::String message(found.error().message());
+        PyErr_SetString(PyExc_LookupError, message.c_str());
+        return nullptr;
+    }
+    auto held =
+        dftracer::utils::dstd::make_unique<dataframe::Udf>(std::move(*found));
+    PyObject* capsule =
+        PyCapsule_New(held.get(), UDF_CAPSULE, free_udf_capsule);
+    if (capsule) held.release();
+    return capsule;
+}
+
+static PyObject* udf_names(PyObject* /*self*/, PyObject* /*unused*/) {
+    PyObject* list = PyList_New(0);
+    if (!list) return nullptr;
+    for (const auto& name : dataframe::udf_names()) {
+        PyObject* item = PyUnicode_FromStringAndSize(
+            name.data(), static_cast<Py_ssize_t>(name.size()));
+        if (!item || PyList_Append(list, item) < 0) {
+            Py_XDECREF(item);
+            Py_DECREF(list);
+            return nullptr;
+        }
+        Py_DECREF(item);
+    }
+    return list;
+}
+
 // vec_eval(ast, [Series, ...]) -> Series
 static PyObject* vec_eval(PyObject* /*self*/, PyObject* args) {
     PyObject* ast = nullptr;
@@ -517,6 +583,26 @@ int init_columnar_eval(PyObject* m) {
     if (!fn_many) return -1;
     if (PyModule_AddObject(m, "vec_eval_many", fn_many) < 0) {
         Py_DECREF(fn_many);
+        return -1;
+    }
+    static PyMethodDef def_udf = {
+        "udf_lookup", udf_lookup, METH_O,
+        "udf_lookup(name) -> capsule: the registered scalar UDF `name`, for "
+        "the udf node of a columnar ast. Raises LookupError for an unknown "
+        "name."};
+    PyObject* fn_udf = PyCFunction_NewEx(&def_udf, nullptr, nullptr);
+    if (!fn_udf) return -1;
+    if (PyModule_AddObject(m, "udf_lookup", fn_udf) < 0) {
+        Py_DECREF(fn_udf);
+        return -1;
+    }
+    static PyMethodDef def_names = {
+        "udf_names", udf_names, METH_NOARGS,
+        "udf_names() -> [str]: the names of the registered scalar UDFs."};
+    PyObject* fn_names = PyCFunction_NewEx(&def_names, nullptr, nullptr);
+    if (!fn_names) return -1;
+    if (PyModule_AddObject(m, "udf_names", fn_names) < 0) {
+        Py_DECREF(fn_names);
         return -1;
     }
     return 0;

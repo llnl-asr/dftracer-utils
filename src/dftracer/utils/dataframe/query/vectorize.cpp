@@ -3,6 +3,7 @@
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/query/vectorize.h>
 #include <dftracer/utils/dstd/algorithm.h>
+#include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
@@ -576,7 +577,8 @@ class Vectorizer {
     }
 
     static dstd::StringView fn_name(const duql::TCall& c) {
-        return fn_info(c.fn).name;
+        return c.fn == duql::Fn::Udf ? dstd::StringView(c.udf)
+                                     : fn_info(c.fn).name;
     }
 
     static V text(const V& v) {
@@ -905,6 +907,7 @@ class Vectorizer {
             case duql::Fn::Sort:
             case duql::Fn::Unique:
             case duql::Fn::Join:
+            case duql::Fn::Udf:
                 return column_call(c);
             case duql::Fn::Extract: {
                 const V v = arg(c, 0);
@@ -1652,7 +1655,8 @@ bool is_column_call(duql::Fn fn) {
            fn == duql::Fn::Keys || fn == duql::Fn::Values ||
            fn == duql::Fn::ParseJson || fn == duql::Fn::Split ||
            fn == duql::Fn::IndexOf || fn == duql::Fn::Sort ||
-           fn == duql::Fn::Unique || fn == duql::Fn::Join;
+           fn == duql::Fn::Unique || fn == duql::Fn::Join ||
+           fn == duql::Fn::Udf;
 }
 
 bool is_column_term(const duql::Term& t) {
@@ -1816,6 +1820,8 @@ dataframe::Series call_column(const duql::Term& t,
             return unique_column(args[0]);
         case duql::Fn::Join:
             return join_column(args[0], args[1]);
+        case duql::Fn::Udf:
+            dstd::fatal("vectorize: a udf call is run by the view, not here");
         default:
             return dataframe::Series::nulls(type.id, rows);
     }

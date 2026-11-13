@@ -60,10 +60,18 @@ dftu_status build_ops_run_lazy(::dftu_ctx* ctx, void* h, const char*,
     return denied(ctx, self_of(h), DFTU_SVC_OPS "::run_lazy");
 }
 
+dftu_status build_ops_register_udf(::dftu_ctx* ctx, void* h,
+                                   const ::dftu_udf_desc* desc, void* self) {
+    const dftu_status status =
+        detail::register_plugin_udf(ctx, desc, self, self_of(h).library());
+    if (status >= 0) self_of(h).registered_udfs().emplace_back(desc->name);
+    return status;
+}
+
 const ::dftu_svc_ops g_build_ops = {
-    sizeof(::dftu_svc_ops), build_ops_run,  build_ops_run_aggregate,
-    build_ops_run_frame,    build_ops_find, build_ops_register,
-    build_ops_run_lazy};
+    sizeof(::dftu_svc_ops), build_ops_run,         build_ops_run_aggregate,
+    build_ops_run_frame,    build_ops_find,        build_ops_register,
+    build_ops_run_lazy,     build_ops_register_udf};
 
 dftu_status build_agg_new(::dftu_ctx* ctx, void* h, const char*,
                           const char* const*, std::uint32_t,

@@ -317,7 +317,7 @@ class Lowering {
                 const auto* semi = std::get_if<In>(&t->node);
                 const bool set =
                     semi && semi->subquery && !semi->negated && joins(*t);
-                if (joins(*t) && !set) {
+                if (uses_udf(*t) || (joins(*t) && !set)) {
                     after.push_back(t);
                     continue;
                 }
@@ -3407,6 +3407,44 @@ class Lowering {
                                       std::move(*cond)});
     }
 
+    dstd::Optional<duql::UdfArity> udf_arity(const dstd::String& name) const {
+        if (!plugins_ || !plugins_->udf) return dstd::nullopt;
+        return plugins_->udf(name);
+    }
+
+    // Whether `e` calls a plugin UDF, which runs on columns after the scan.
+    bool uses_udf(const Expr& e) const {
+        if (const auto* c = std::get_if<Call>(&e.node))
+            if (udf_arity(c->name)) return true;
+        bool out = false;
+        syntax::children(const_cast<Expr&>(e), [&](ExprPtr& child) {
+            out = out || uses_udf(*child);
+        });
+        return out;
+    }
+
+    Result<duql::TermPtr> udf_call(const Call& c, Span span,
+                                   duql::UdfArity arity_of) const {
+        const std::size_t n = c.args.size();
+        if (n < static_cast<std::size_t>(arity_of.min_args) ||
+            n > static_cast<std::size_t>(arity_of.max_args))
+            return fail(
+                span, arity(c.name, static_cast<std::size_t>(arity_of.min_args),
+                            static_cast<std::size_t>(arity_of.max_args), n));
+        duql::TCall t{duql::Fn::Udf, {}, nullptr, nullptr};
+        t.udf = c.name;
+        for (const auto& a : c.args) {
+            if (!a.name.empty())
+                return fail(a.value->span,
+                            dstd::fmt<"'{}' takes no named argument '{}'">(
+                                c.name, a.name));
+            auto arg = term(*a.value);
+            if (!arg) return dstd::Unexpected(arg.error());
+            t.args.push_back(std::move(*arg));
+        }
+        return make_term(std::move(t));
+    }
+
     Result<duql::TermPtr> call_term(const Call& c, Span span) const {
         auto timed = time_call(c, span);
         if (!timed) return dstd::Unexpected(timed.error());
@@ -3426,6 +3464,9 @@ class Lowering {
                 span,
                 dstd::fmt<"'{}' is an aggregate; it stands in a 'group' or "
                           "'agg' block">(c.name));
+        if (!info)
+            if (const auto udf = udf_arity(c.name))
+                return udf_call(c, span, *udf);
         if (!info && c.name.find('.') != dstd::String::npos)
             return plugin_call(c, span);
         if (!info)
@@ -3595,6 +3636,8 @@ class Lowering {
 };
 
 }  // namespace
+
+bool is_builtin_function(dstd::StringView name) { return builtin_name(name); }
 
 namespace {
 

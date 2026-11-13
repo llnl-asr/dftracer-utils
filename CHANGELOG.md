@@ -9,6 +9,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Added
 
+- Add scalar UDFs for plugins: `dftu_svc_ops::register_udf` takes a `dftu_udf_desc` (`dataframe/c_api_udf.h`) with `bind`, `exec` and `free_bound`, and duql calls the UDF by its name in `derive`, `select`, `where` and join keys.
+  `exec` runs on whole columns, the host nulls the rows with a null argument unless `DFTU_FN_NULL_AWARE` is set, and a name that a built-in function or another UDF holds fails the load.
+  A long `exec` polls `dftu_check`, so a cancelled or timed out query stops within one batch, and a plan that holds a UDF keeps its plugin library loaded.
+  The SDK has `PluginBuilder::udf<U>` with `UdfBind` and `UdfBatch`, and `examples/plugins/duration_udfs.cpp` registers two UDFs.
+  A UDF is one registration for every surface: Python calls it as `dft.udf["name"](...)` or `dft.call("name", ...)`, C++ as `dataframe::udf("name")`, and `dftu_op_find` lists it.
+  `dataframe::make_udf<T>()` registers the same class in the same process and returns an owning `Udf`, which removes the name when it is destroyed while plans that hold it keep running.
 - Add the plugin service `dftu.svc.memory` (`abi/memory.h`), the `dftu_svc_memory` table.
   Every loaded plugin has one memory pool named after it, so its blocks and reservations show in the pool gauges.
   A slice reserves bytes with `reserve` and `try_grow`, which returns `DFTU_E_NO_MEMORY` with a message past the budget and leaves the reservation as it was.

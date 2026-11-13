@@ -1210,7 +1210,8 @@ void put_term(dstd::String& out, const Term& t) {
                 }
                 out += ']';
             } else if constexpr (std::is_same_v<T, TCall>) {
-                out += fn_info(n.fn).name;
+                out += n.fn == Fn::Udf ? dstd::StringView(n.udf)
+                                       : fn_info(n.fn).name;
                 out += '(';
                 for (std::size_t i = 0; i < n.args.size(); ++i) {
                     if (i > 0) out += ", ";

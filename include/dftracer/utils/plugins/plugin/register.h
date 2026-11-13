@@ -11,6 +11,7 @@
 #include <dftracer/utils/plugins/plugin/node.h>
 #include <dftracer/utils/plugins/plugin/source.h>
 #include <dftracer/utils/plugins/plugin/types.h>
+#include <dftracer/utils/plugins/plugin/udf.h>
 
 #include <concepts>
 #include <coroutine>
@@ -673,6 +674,18 @@ class PluginBuilder {
         const dftu_svc_ops* ops = ext<dftu_svc_ops>(DFTU_SVC_OPS);
         if (!ops || !ops->register_op) return fail("no op registry at load");
         return record(ops->register_op(ctx_, host_->h, &desc));
+    }
+
+    /// Register `U` as the scalar UDF duql calls `name`, which no built-in
+    /// function or other UDF may hold; see @ref UdfType for what U provides
+    /// and @ref UdfOptions for the argument counts and flags. The host copies
+    /// the name and unregisters the UDF before the plugin unloads.
+    template <UdfType U>
+    PluginBuilder& udf(const char* name, UdfOptions options = {}) {
+        const dftu_svc_ops* ops = ext<dftu_svc_ops>(DFTU_SVC_OPS);
+        if (!ops || !ops->register_udf) return fail("no udf registry at load");
+        const dftu_udf_desc desc = detail::udf_desc_of<U>(name, options);
+        return record(ops->register_udf(ctx_, host_->h, &desc, nullptr));
     }
 
     /// Register `src` as the @ref dftracer::utils::dataframe::LazyFrame

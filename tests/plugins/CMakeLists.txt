@@ -14,6 +14,7 @@ set(PLUGINS_TEST_SOURCES
     test_plugin_agg.cpp
     test_plugin_agg_spill.cpp
     test_plugin_ops.cpp
+    test_plugin_udf.cpp
     test_plugin_lazyframe_facade.cpp
     test_plugin_planner.cpp
     test_plugin_order.cpp
@@ -155,7 +156,8 @@ endif()
 # +++++++++++++++++++++++++++++++++++++++++
 
 foreach(fh_plugin factory_registers_op_plugin factory_escapes_plugin
-                  scan_registers_op_plugin index_minmax_plugin)
+                  scan_registers_op_plugin index_minmax_plugin udf_plugin
+                  udf_clash_plugin)
   add_library(${fh_plugin} MODULE ${fh_plugin}.c)
   target_set_warnings(${fh_plugin})
   set_target_properties(
@@ -194,7 +196,7 @@ endforeach()
 
 # It reads the batch dataframe and runs its own registered op, so it links the
 # dataframe C ABI like the examples that do the same.
-foreach(df_plugin factory_registers_op_plugin builder_plugin
+foreach(df_plugin factory_registers_op_plugin builder_plugin udf_plugin
                   config_keys_plugin reads_projection_plugin
                   provider_fixture_plugin)
   if(TARGET dftracer_utils_dataframe::shared)
@@ -238,6 +240,20 @@ if(TARGET plugins_test_plugin_factory_host)
                    factory_registers_op_plugin factory_escapes_plugin
                    scan_registers_op_plugin
                    builder_plugin)
+endif()
+
+if(TARGET plugins_test_plugin_udf)
+  target_compile_definitions(
+    plugins_test_plugin_udf PRIVATE
+    UDF_PLUGIN_PATH="$<TARGET_FILE:udf_plugin>"
+    UDF_CLASH_PLUGIN_PATH="$<TARGET_FILE:udf_clash_plugin>")
+  add_dependencies(plugins_test_plugin_udf udf_plugin udf_clash_plugin)
+  if(TARGET duration_udfs_plugin)
+    target_compile_definitions(
+      plugins_test_plugin_udf PRIVATE
+      DURATION_UDFS_PLUGIN_PATH="$<TARGET_FILE:duration_udfs_plugin>")
+    add_dependencies(plugins_test_plugin_udf duration_udfs_plugin)
+  endif()
 endif()
 
 add_library(lifetime_plugin MODULE lifetime_plugin.c)

@@ -481,6 +481,10 @@ class Applier {
     // call_column() computes.
     Status call(const duql::TermRef& t, const duql::Term* term);
 
+    // The column of a plugin UDF call, bound once or, for an operand typed
+    // only by each batch, per batch.
+    Status udf_call(const duql::TermRef& t, const duql::Term* term);
+
     // Binds the pipeline's lookups before a batch reads them.
     static Status ready(const dstd::SharedPtr<const detail::BuildStep>& step);
 

@@ -1257,7 +1257,10 @@ registered it is reachable from anywhere: ``run`` / ``run_frame`` /
 ``op_run`` from Python, and a ``LazyFrame`` plan through
 ``dftu_lazyframe_op``. The same service runs any built-in on handles the
 plugin already holds (``Host::run_op("dftu.hash.fnv1a", {column})``), so a
-plugin never links the dataframe ABI to use the engine.
+plugin does not link the dataframe ABI to use the engine. A scalar UDF plugin
+is the exception: it builds its result column with ``dftu_series_new_*``, so it
+links the dataframe library, and the process must hold exactly one copy of that
+library, the one the host runs on, because the host frees the column.
 
 .. code-block:: cpp
 
@@ -1265,6 +1268,80 @@ plugin never links the dataframe ABI to use the engine.
    static const dftu_op_desc ZSCORE = {"me.zscore",
        DFTU_OP_SIG(SERIES, SERIES, NONE, NONE), (dftu_op_generic_fn)&zscore};
    return plugin(ctx, h, config).op(ZSCORE).fold<MySlice>().build(out);
+
+**A scalar UDF** (``dftu_svc_ops::register_udf``). A function that duql
+calls by name, such as ``to_ms(dur)`` or ``is_slow(dur, 1000)``, in a ``derive``,
+``select``, ``where``, join key or any other expression. Unlike an op, its name
+is the duql name as the query spells it, with no ``<plugin>.`` prefix. A name
+that a built-in function or another UDF holds fails the load with a message.
+A ``dftu_udf_desc`` (``dataframe/c_api_udf.h``) has the name, the argument
+counts ``min_args`` and ``max_args``, flags and three callbacks. ``bind`` runs
+once per call site with the argument types (``dftu_type_info``) and, for each
+argument the query writes as a constant, its ``dftu_scalar``; it picks the result
+type and may keep state in ``bound``. ``exec`` runs on one batch: the argument
+columns, borrowed, and the row count in, one new column of that many rows and
+the bound type out. It never runs per row. ``free_bound`` releases ``bound``.
+A UDF takes and gives Bool, the integer and float types, String and Binary.
+Bool columns are bit-packed, one bit per row, least significant bit first.
+The registration serves every surface. Python calls the UDF as
+``dft.udf["to_ms"](dft.col("dur"))`` or ``dft.call("to_ms", dft.col("dur"))``,
+C++ as ``dataframe::udf("to_ms")->operator()(col(0))``, and ``dftu_op_find("to_ms")``
+finds a record of it in the op registry. That record has no function to run:
+the UDF runs through duql and expressions, which bind it.
+
+``exec`` may run on several batches at once, so it reads ``bound`` and writes
+only what it owns. By default the UDF is deterministic and a row with a null
+argument gives a null result: the host nulls those rows after ``exec``, which
+may compute anything for them. ``DFTU_FN_NULL_AWARE`` passes the columns as they
+are and keeps the result's validity. ``DFTU_FN_VOLATILE`` marks a result that
+can differ for the same arguments; the flag is advisory. A UDF call is never
+folded to a constant either way, and a ``lookup`` side that calls a UDF is not
+stored in the lookup cache. A ``bind`` that fails owns its own cleanup: the host
+ignores ``*bound`` and calls ``free_bound`` only for a ``bind`` that succeeded.
+
+A long ``exec`` polls ``dftu_check`` once per few thousand rows and returns its
+status. A cancelled query, such as one past a deadline, then stops within one
+batch; a UDF that never polls delays the stop until its batch is done. An error
+status with a message from ``exec`` fails the query with that message.
+duql has no join predicate, so a UDF joins as a key function, and a Bool UDF as
+a key too: ``lookup flags on is_slow(dur, 1000) == slow``.
+
+.. code-block:: cpp
+
+   struct ToMs {                                  // plugins/plugin/udf.h
+       dftu_dtype type;
+       static dstd::Result<dstd::UniquePtr<ToMs>> bind(pl::UdfBind& bind);
+       dstd::Result<dftu_series*> exec(pl::UdfBatch& batch) const;
+   };
+   return plugin(ctx, h, config).udf<ToMs>("to_ms").build(out);
+
+``examples/plugins/duration_udfs.cpp`` is a full plugin with two UDFs.
+
+**A UDF in the same process.** Code that is not a plugin registers the same
+class with ``dataframe::make_udf<T>()`` (``dataframe/udf.h``). ``T`` is the
+class a plugin passes to ``PluginBuilder::udf``, plus a static ``NAME`` and
+optional ``MIN_ARGS``, ``MAX_ARGS`` and ``FLAGS``; both paths build the
+``dftu_udf_desc`` through one adapter. The result is a
+``dstd::Result<dataframe::Udf>``: a clash with a built-in function, another UDF
+or an op is an error with a message.
+
+.. code-block:: cpp
+
+   struct PlusOne {
+       static constexpr const char* NAME = "plus_one";
+       static dstd::Result<dstd::UniquePtr<PlusOne>> bind(dataframe::UdfBind&);
+       dstd::Result<dftu_series*> exec(dataframe::UdfBatch&) const;
+   };
+   auto plus_one = dataframe::make_udf<PlusOne>();   // owns the registration
+   Expr e = (*plus_one)(col(0));                     // Udf is callable
+
+The ``Udf`` that ``make_udf`` returns owns the registration: when it is
+destroyed the name leaves the registry, so a later lookup, query or
+``dftu_op_find`` finds nothing. A plan or expression that took the UDF before
+keeps it and runs. A ``Udf`` is move only, and moving it keeps one
+registration. ``dataframe::udf(name)`` gives a ``Udf`` that only looks the name
+up, so destroying it never unregisters, and fails with NotFound for an unknown
+name.
 
 **A source** (``DFTU_SVC_PROVIDERS``). A ``dftu_source_vt`` is the C mirror
 of the engine's ``Source`` / ``Cursor`` pair: ``schema`` names the columns
@@ -1347,7 +1424,7 @@ error.
 
 **Library lifetime.** The host keeps a plugin's shared library loaded while
 anything made from it is alive: a registered node, provider, index
-extension or op, and the plans and cursors that hold one. Unloading the plugin
+extension, op or UDF, and the plans and cursors that hold one. Unloading the plugin
 removes its names at once, so no new lookup finds them. The plugin's own
 ``destroy`` runs after the last holder is gone, and the library is closed
 after it; a node or provider calls its own ``destroy(self)`` before that, so it

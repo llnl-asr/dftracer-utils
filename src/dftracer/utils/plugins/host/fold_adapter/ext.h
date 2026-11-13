@@ -80,6 +80,12 @@ void log_plugin_line(dstd::StringView plugin, std::uint8_t level, const char* s,
 dftu_status register_plugin_op(::dftu_ctx* ctx, const ::dftu_op_desc* desc,
                                dstd::SharedPtr<PluginLibrary> library);
 
+/// dftu_svc_ops::register_udf. The record keeps `library` alive, so a plan
+/// that holds the call keeps the plugin loaded.
+dftu_status register_plugin_udf(::dftu_ctx* ctx, const ::dftu_udf_desc* desc,
+                                void* self,
+                                dstd::SharedPtr<PluginLibrary> library);
+
 /// dftu_svc_task::run, which uses no host state, so the build-phase host
 /// serves it too.
 dftu_status task_run(::dftu_ctx* ctx, void* h, ::dftu_task* t);

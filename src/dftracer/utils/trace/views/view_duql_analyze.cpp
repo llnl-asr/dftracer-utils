@@ -4,6 +4,7 @@
 #include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/query/vectorize.h>
+#include <dftracer/utils/dataframe/udf_registry.h>
 #include <dftracer/utils/dstd/ascii.h>
 #include <dftracer/utils/dstd/hash/splitmix64.h>
 #include <dftracer/utils/dstd/map.h>
@@ -40,6 +41,11 @@ duql::PluginCatalog registry_plugins() {
             DFTU_OP_SIG_ARG(op->sig, 0) == DFTU_TOK_SERIES)
             return duql::PluginKind::Aggregate;
         return duql::PluginKind::Other;
+    };
+    out.udf = [](dstd::StringView name) -> dstd::Optional<duql::UdfArity> {
+        const auto udf = dataframe::find_udf(name);
+        if (!udf) return dstd::nullopt;
+        return duql::UdfArity{udf->min_args(), udf->max_args()};
     };
     for (std::uint32_t k = 0; k < dftu_op_count(); ++k) {
         const dstd::StringView op = dftu_op_at(k)->name;

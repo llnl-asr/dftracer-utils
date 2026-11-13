@@ -230,6 +230,17 @@ Expr expr_neg(const Expr& a);
 /// two domains that do not compare.
 Expr expr_cmp_expr(CmpOp cmp, const Expr& a, const Expr& b);
 
+/// A call of the plugin UDF registered under `name` (see
+/// dftu_svc_ops::register_udf) over the operands `args`. Fails with NotFound
+/// when no UDF has that name. The expression holds the UDF, so the plugin
+/// that registered it stays loaded while the expression lives. Argument counts
+/// and types are checked when the expression compiles: @ref eval and
+/// @ref infer_type fail with the UDF's own message for operands it refuses. A
+/// row with a null operand is null in the result unless the UDF reads nulls
+/// itself.
+dstd::Result<Expr> expr_udf(dstd::StringView name,
+                            const dstd::Vector<Expr>& args);
+
 /// The first operand that is not null in each row; operands are promoted to
 /// one type as arithmetic promotes them (numeric) or must share it. `args`
 /// must not be empty (fatal).

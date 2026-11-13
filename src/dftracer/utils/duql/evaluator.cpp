@@ -1367,6 +1367,8 @@ class TermEval {
                 return unique(arg(c, 0));
             case Fn::Join:
                 return join(arg(c, 0), arg(c, 1));
+            case Fn::Udf:
+                dstd::fatal("duql: a udf call is evaluated by the engine");
             case Fn::Extract: {
                 const auto s = str(arg(c, 0));
                 if (!s || !c.pattern) return VNull{};

@@ -1254,6 +1254,38 @@ released.
   accumulators are not duql aggregates. A plugin node is not a ``call``
   target.
 
+.. _duql-plugin-udfs:
+
+Plugin UDFs
+~~~~~~~~~~~
+
+.. code-block:: text
+
+   derive ms = to_ms(dur) | where is_slow(dur, 1000) | select name, ms
+   lookup flags on is_slow(dur, 1000) == slow
+
+A loaded plugin, or C++ code through ``dataframe::make_udf<T>()``, registers
+scalar UDFs by name (see :doc:`../plugins`). A UDF is callable by that name like
+a built-in function, with no dotted prefix, and none can take a built-in's name.
+The name stays until the plugin set is released or the owning ``Udf`` is
+destroyed; a plan that already holds the UDF keeps running.
+
+- A UDF runs on columns after the scan, in a ``derive``, ``select``, ``where``
+  after the first stage and a ``lookup`` key. A leading ``where`` that calls a UDF runs after the scan, as a
+  sub-query join does, and the other terms of that ``where`` still filter the
+  scan.
+- The argument count must be in the UDF's range. A UDF that takes a constant
+  fails with its message when the query writes a column there.
+- The result type is the one the UDF picks from its argument types. A UDF
+  that gives Bool is a condition in ``where``, ``if`` and ``case``.
+- A row with a null argument gives null, unless the UDF reads nulls itself.
+- A UDF error, or a type it does not take, fails the query with the message
+  the UDF gives.
+- duql has no join predicate, so a UDF joins only as a key function on the
+  left of ``on``, and a UDF that gives Bool is a key as any Bool is.
+- A ``let`` or sub-query side that calls a UDF is not stored in the lookup
+  cache.
+
 Explain
 ~~~~~~~
 

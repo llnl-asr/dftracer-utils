@@ -617,6 +617,14 @@ def install_extension_stub() -> None:
         """Compile and evaluate one column expression on the SIMD engine."""
         return _Series()
 
+    def udf_lookup(name: str) -> object:
+        """The registered scalar UDF `name`, held for expressions."""
+        return object()
+
+    def udf_names() -> list:
+        """The names of the registered scalar UDFs."""
+        return []
+
     def vec_eval_many(asts: object, columns: object) -> list:
         """Compile several column expressions into one CSE'd pass; return one
         Series per root."""
@@ -674,6 +682,8 @@ def install_extension_stub() -> None:
         "plan_lpt_partition",
         "read_arrow_files_parallel",
         "scan_files",
+        "udf_lookup",
+        "udf_names",
         "set_log_color",
         "set_log_level",
         "vec_eval",

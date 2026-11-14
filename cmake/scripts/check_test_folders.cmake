@@ -4,6 +4,8 @@
 #
 # Usage: cmake -DSOURCE_DIR=<repo root> -P check_test_folders.cmake
 
+cmake_policy(SET CMP0057 NEW)
+
 if(NOT DEFINED SOURCE_DIR)
   message(FATAL_ERROR "check_test_folders.cmake requires -DSOURCE_DIR=...")
 endif()

@@ -80,9 +80,14 @@ class Plugins {
     /// source.
     struct PluginInfo {
         dstd::String path;  ///< the shared-library path given to Builder::add
+        /// The name the plugin declares in its dftu_plugin_info, or its
+        /// load-path stem when it declares none.
+        dstd::String name;
+        /// The version text the plugin declares, empty when it declares none.
+        dstd::String version;
         std::uint32_t abi_version = 0;
         bool has_plan_duql =
-            false;          ///< true if the plugin declares a plan_duql
+            false;  ///< true if the plugin declares a plan_duql
         /// True when the descriptor carries a fold at all: it makes slices or
         /// rewrites batches. A hand-written descriptor that only registers
         /// names reports false; one built with the C++ SDK reports true, since

@@ -252,18 +252,17 @@ LazyFrame lookup_side() {
         dstd::make_shared<dataframe::InMemorySource>(std::move(side)));
 }
 
-class NeverOpenedNode final : public NodeImpl {
+class PassNode final : public NodeImpl {
    public:
-    dstd::Result<Schema> output_schema(const Schema&,
+    dstd::Result<Schema> output_schema(const Schema& in,
                                        const OpArgs&) const override {
-        return Schema{};
+        return in;
     }
 
-    dstd::Result<dstd::UniquePtr<Cursor>> open(dstd::UniquePtr<Cursor>,
-                                               const Names&, const OpArgs&,
-                                               std::uint64_t) const override {
-        return dstd::Error::from_format<"node_open must not run">(
-            dstd::Condition::InvalidArgument);
+    dstd::Result<dstd::UniquePtr<Cursor>> open(
+        dstd::UniquePtr<Cursor> input, const dstd::Vector<dstd::String>&,
+        const OpArgs&, std::uint64_t) const override {
+        return input;
     }
 };
 
@@ -483,21 +482,17 @@ TEST_SUITE("rest column") {
         CHECK(column(clash, "z") == dstd::Vector<dstd::String>{"22"});
     }
 
-    TEST_CASE("an op without a rule refuses the plan") {
-        REQUIRE(register_node("test.rest.node",
-                              dstd::make_shared<NeverOpenedNode>()));
-        const auto collected =
-            dftracer::utils::default_runtime()
-                .submit(rest_scan()
-                            .sort_by("a")
-                            .op("test.rest.node", dataframe::OpArgs())
-                            .collect())
-                .get();
-        dftu_utils_test::expect_error(
-            collected, dftracer::utils::common::ErrorCode::InvalidArgument);
-        CHECK(
-            dstd::String(collected.error().c_str()).find("op test.rest.node") !=
-            dstd::String::npos);
+    TEST_CASE("a node reads the plan's columns and never the rest column") {
+        REQUIRE(register_node("test.rest.node", dstd::make_shared<PassNode>()));
+        const LazyFrame lf =
+            rest_scan().sort_by("a").op("test.rest.node", dataframe::OpArgs());
+        CHECK(lf.schema() == Names{"a", "b"});
+        const DataFrame out = run(lf);
+        CHECK(dstd::to_strings(out.names) == Names{"a", "b"});
+        const DataFrame want = run(declared_scan().sort_by("a"));
+        CHECK(out.num_rows() == want.num_rows());
+        for (const char* n : {"a", "b"})
+            CHECK(column(out, n) == column(want, n));
         CHECK(unregister_node("test.rest.node"));
     }
 

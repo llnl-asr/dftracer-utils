@@ -49,6 +49,19 @@ class BuildHost {
 
     const dstd::String& plugin_name() const { return plugin_name_; }
 
+    /// The name the plugin declares in its dftu_plugin_info, or the load-path
+    /// stem when it declares none. This is the namespace providers, file
+    /// formats and sinks register under (name_in_plugin_namespace).
+    const dstd::String& declared_name() const {
+        return declared_name_.empty() ? plugin_name_ : declared_name_;
+    }
+
+    /// The declared name arrives with dftu_plugin_info, which the loader reads
+    /// before it constructs the factory's host.
+    void set_declared_name(dstd::String name) {
+        declared_name_ = std::move(name);
+    }
+
     /// Record `what` as denied; only the first is kept, so the loader reports
     /// the call that first stepped outside the build phase.
     void deny(const char* what);
@@ -140,6 +153,7 @@ class BuildHost {
    private:
     dstd::SharedPtr<PluginLibrary> library_;
     dstd::String plugin_name_;
+    dstd::String declared_name_;
     dstd::SharedPtr<PluginMemory> memory_;
     dstd::String denied_;
     StateRegistry states_;

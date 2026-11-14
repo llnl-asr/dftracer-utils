@@ -3718,9 +3718,9 @@ dstd::String describe_op(const LazyOp& op) {
 // What an op does with the rest column. Moves: it keeps the column with the
 // rows it keeps, as any other column. Keys: Moves, and whole-row identity
 // includes it. Omits: its output has none of its input columns but those it
-// names, so the rest column is dropped before it. None: no rule, so a plan
-// that carries the rest column into the op is refused.
-enum class RestRule : std::uint8_t { Moves, Keys, Omits, None };
+// names, so the rest column is dropped before it. Every op has a rule, so a
+// plan that carries the rest column always has an answer.
+enum class RestRule : std::uint8_t { Moves, Keys, Omits };
 
 RestRule rest_rule(const LazyOp& op, const dstd::Vector<dstd::String>& in) {
     return std::visit(
@@ -3774,7 +3774,11 @@ RestRule rest_rule(const LazyOp& op, const dstd::Vector<dstd::String>& in) {
                                return RestRule::Omits;
                        return RestRule::Moves;
                    },
-                   [](const NodeOp&) { return RestRule::None; },
+                   // A plugin node declares its output over the schema the plan
+                   // hands it, which is exactly the columns a plan step names:
+                   // the rest column is never part of that schema, so it is
+                   // dropped before the node runs.
+                   [](const NodeOp&) { return RestRule::Omits; },
                    [](const TapOp&) { return RestRule::Moves; }},
         op.node);
 }
@@ -5801,11 +5805,6 @@ dstd::Result<CursorChain> lower_cursor_chain(
         const bool rest = has_rest(chain.schema);
         const RestRule rule =
             rest ? rest_rule(*ops[i], chain.schema) : RestRule::Moves;
-        if (rule == RestRule::None)
-            return invalid_argument<
-                "'{}' has no rule for the columns the scan returns beyond the "
-                "plan's schema; select the columns it needs first">(
-                describe_op(*ops[i]));
         const auto* group = std::get_if<GroupByOp>(&ops[i]->node);
         if (rule == RestRule::Omits && !(group && !group->dyn.empty())) {
             dstd::Vector<int> idx(chain.schema.size() - 1);

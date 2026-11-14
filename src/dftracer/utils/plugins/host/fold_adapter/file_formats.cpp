@@ -39,16 +39,17 @@ const ::dftu_svc_file_formats g_file_formats = {
 }  // namespace
 
 dftu_status detail::register_plugin_file_format(
-    ::dftu_ctx* ctx, const char* name, const ::dftu_file_format_vt* vt,
-    void* self, dstd::SharedPtr<PluginLibrary> library,
+    ::dftu_ctx* ctx, dstd::StringView plugin, const char* name,
+    const ::dftu_file_format_vt* vt, void* self,
+    dstd::SharedPtr<PluginLibrary> library,
     dstd::SharedPtr<PluginMemory> memory) {
-    if (refuse_plugin_op_name(name)) {
+    if (!name_in_plugin_namespace(name, plugin)) {
         return host_fail(
             ctx, DFTU_E_INVALID,
-            dstd::fmt<"file format '{}' refused: the bare and 'dftu.' "
-                      "namespaces are host-reserved, so a file format name "
-                      "must be '<plugin>.<name>'">(
-                dstd::StringView(name ? name : "(null)")));
+            dstd::fmt<"file format '{}' refused: a file format name must be "
+                      "'{}' or '{}.<name>'; the bare and 'dftu.' namespaces "
+                      "belong to the host">(
+                dstd::StringView(name ? name : "(null)"), plugin, plugin));
     }
     auto registered = register_file_format_vtable(
         name, vt, self, std::move(library), std::move(memory));
@@ -62,15 +63,16 @@ dftu_status detail::register_plugin_file_format(
 }
 
 dftu_status detail::register_plugin_sink(
-    ::dftu_ctx* ctx, const char* name, const ::dftu_sink_vt* vt, void* self,
+    ::dftu_ctx* ctx, dstd::StringView plugin, const char* name,
+    const ::dftu_sink_vt* vt, void* self,
     dstd::SharedPtr<PluginLibrary> library) {
-    if (refuse_plugin_op_name(name)) {
+    if (!name_in_plugin_namespace(name, plugin)) {
         return host_fail(
             ctx, DFTU_E_INVALID,
-            dstd::fmt<"sink '{}' refused: the bare and 'dftu.' namespaces are "
-                      "host-reserved, so a sink name must be "
-                      "'<plugin>.<name>'">(
-                dstd::StringView(name ? name : "(null)")));
+            dstd::fmt<"sink '{}' refused: a sink name must be '{}' or "
+                      "'{}.<name>'; the bare and 'dftu.' namespaces belong to "
+                      "the host">(dstd::StringView(name ? name : "(null)"),
+                                  plugin, plugin));
     }
     auto registered = register_sink_vtable(name, vt, self, std::move(library));
     if (!registered) {

@@ -1241,6 +1241,17 @@ released.
   so far. Its literal arguments fill the operands after the table, in order.
   The result columns are the function's. ``call`` must be the last stage;
   any stage after it is a compile error.
+- ``| call ns.n()`` with no arguments runs a plan node the plugin registered
+  (``PluginBuilder::node<N>()``), table to table. The node reads the columns
+  the plan carries at that point: after a scan those are the scan's declared
+  columns, and after a ``select`` they are the columns that ``select`` names.
+  Undeclared columns (the fields a file without a catalog carries beyond the
+  declared ones) are dropped before the node; name one in a ``select`` to
+  pass it.
+  The output columns are the schema the node declares for that input. A node
+  takes no arguments, because it has no signature, and an argument is a
+  compile error that names the node and says so. A name that a table function
+  and a node both carry runs the table function.
 - A dotted name that no loaded plugin registered is a compile error that
   lists the loaded plugin namespaces, or says that none is loaded.
 - A plugin function in a ``where``, a key, an aggregate argument, a ``let``
@@ -1265,8 +1276,9 @@ released.
   reducer that fails on a group fails the query.
 - A plugin aggregate runs on the frame plan and keeps every group's values
   until the end, like ``collect``. Plugin mergeable states and jit
-  accumulators are not duql aggregates. A plugin node is not a ``call``
-  target.
+  accumulators are not duql aggregates. A plugin node is reachable only as a
+  ``call`` stage, and only with no arguments: it is not a scalar function, a
+  reducer or a UDF.
 
 .. _duql-plugin-udfs:
 

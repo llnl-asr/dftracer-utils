@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: MIT
 """A LazyFrame sink: a plugin's writer takes every row the plan streams.
 
-The example plugin ``csv_sink`` registers the sink ``csv.write``, whose option
-``path`` names the file it writes. The summary the run returns is what the sink
+The example plugin ``csv`` (examples/plugins/csv_sink.cpp) registers the sink
+``csv.write``, whose option ``path`` names the file it writes. The summary the run returns is what the sink
 took, not what a frame held, so the test reads the file back.
 """
 

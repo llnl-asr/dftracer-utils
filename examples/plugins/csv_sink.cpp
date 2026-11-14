@@ -216,7 +216,7 @@ class CsvSink : public Sink {
 
 }  // namespace
 
-DFTU_PLUGIN_INFO("csv_sink", "1.0")
+DFTU_PLUGIN_INFO("csv", "1.0")
 
 extern "C" DFTU_PLUGIN_EXPORT dftu_status
 dftracer_plugin(dftu_ctx* ctx, dftu_plugin_host* host, const dftu_value* config,

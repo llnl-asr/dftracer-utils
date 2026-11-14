@@ -32,6 +32,12 @@ Add your own analysis that rides the fused scan, from C, C++ or Python.
 
       Publish and consume batch-scoped ports in one scan.
 
+   .. grid-item-card:: Write and test a plugin
+      :link: plugins/write-and-test-a-plugin
+      :link-type: doc
+
+      Scaffold a project, then prove it with golden tests.
+
    .. grid-item-card:: Write a sink plugin
       :link: plugins/write-a-sink
       :link-type: doc
@@ -52,4 +58,5 @@ Add your own analysis that rides the fused scan, from C, C++ or Python.
    plugins/compose-ops
    plugins/inter-plugin-comms
    plugins/write-a-sink
+   plugins/write-and-test-a-plugin
    core/c-abi

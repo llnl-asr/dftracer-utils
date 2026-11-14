@@ -1,0 +1,9 @@
+# The query below runs over the sample trace next to this file, with the
+# @NAME@ plugin loaded. `dftracer_plugin check --tests tests` runs it through
+# the @NAME@ sink, so a broken sink fails this test.
+input ../data/sample.pfw.gz
+query
+select name, dur | sink "@NAME@" path "sink_out.txt"
+----
+rows	batches
+3	1

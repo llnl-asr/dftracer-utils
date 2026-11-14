@@ -97,10 +97,13 @@ dftu_status register_plugin_udaf(::dftu_ctx* ctx, const ::dftu_udaf_desc* desc,
 /// serves it too.
 dftu_status task_run(::dftu_ctx* ctx, void* h, ::dftu_task* t);
 
-/// dftu_svc_providers::register_provider with the same plugin-name gate,
-/// forwarding into the process-lifetime provider_registry. Shared with the
-/// build-phase host, whose provider registration is the same call.
-dftu_status register_plugin_provider(::dftu_ctx* ctx, const char* name,
+/// dftu_svc_providers::register_provider behind the plugin-namespace gate
+/// (name_in_plugin_namespace), forwarding into the process-lifetime
+/// provider_registry. Shared with the build-phase host, whose provider
+/// registration is the same call. `plugin` is the name the plugin declares in
+/// its dftu_plugin_info.
+dftu_status register_plugin_provider(::dftu_ctx* ctx, dstd::StringView plugin,
+                                     const char* name,
                                      const ::dftu_source_vt* vt, void* self,
                                      dstd::SharedPtr<PluginLibrary> library,
                                      dstd::SharedPtr<PluginMemory> memory);
@@ -118,19 +121,22 @@ dftu_status register_plugin_index_extension(
     ::dftu_ctx* ctx, const char* name, const ::dftu_index_extension* vt,
     void* self, dstd::SharedPtr<PluginLibrary> library);
 
-/// dftu_svc_file_formats::register_format with the same plugin-name gate,
+/// dftu_svc_file_formats::register_format behind the plugin-namespace gate,
 /// forwarding into the process-lifetime file format registry. The format keeps
 /// `library` alive, so a plan over a file it opened keeps the plugin mapped.
-dftu_status register_plugin_file_format(::dftu_ctx* ctx, const char* name,
+dftu_status register_plugin_file_format(::dftu_ctx* ctx,
+                                        dstd::StringView plugin,
+                                        const char* name,
                                         const ::dftu_file_format_vt* vt,
                                         void* self,
                                         dstd::SharedPtr<PluginLibrary> library,
                                         dstd::SharedPtr<PluginMemory> memory);
 
-/// dftu_svc_file_formats::register_sink with the same plugin-name gate,
+/// dftu_svc_file_formats::register_sink behind the plugin-namespace gate,
 /// forwarding into the process-lifetime sink registry.
-dftu_status register_plugin_sink(::dftu_ctx* ctx, const char* name,
-                                 const ::dftu_sink_vt* vt, void* self,
+dftu_status register_plugin_sink(::dftu_ctx* ctx, dstd::StringView plugin,
+                                 const char* name, const ::dftu_sink_vt* vt,
+                                 void* self,
                                  dstd::SharedPtr<PluginLibrary> library);
 
 }  // namespace detail

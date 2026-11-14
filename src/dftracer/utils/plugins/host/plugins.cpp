@@ -91,6 +91,10 @@ struct Plugins::Impl {
            the plugin. Closed after the plugin's destroy ran, which releases
            and reports any reservation the plugin left. */
         dstd::SharedPtr<PluginMemory> memory;
+        /* The name and version the plugin declares in its dftu_plugin_info;
+           name falls back to the load-path stem when it declares none. */
+        dstd::String declared_name;
+        dstd::String version;
     };
 
     ~Impl() {
@@ -346,6 +350,7 @@ dstd::Result<Plugins::Impl::Loaded> load_plugin(const dstd::String& path,
     }
 
     BuildHost build_host(plugin_name_from_path(path), library);
+    build_host.set_declared_name(dstd::String(info->name ? info->name : ""));
     plugins::AbiContext factory_ctx;
     dftu_plugin* plugin = nullptr;
     const dftu_status built =
@@ -443,21 +448,24 @@ dstd::Result<Plugins::Impl::Loaded> load_plugin(const dstd::String& path,
         }
     }
 
-    return Plugins::Impl::Loaded{std::move(library),
-                                 plugin,
-                                 true,
-                                 plugin_name_from_path(path),
-                                 path,
-                                 build_host.take_states(),
-                                 build_host.take_registered_ops(),
-                                 build_host.take_registered_udfs(),
-                                 build_host.take_registered_udafs(),
-                                 build_host.take_registered_providers(),
-                                 build_host.take_registered_nodes(),
-                                 build_host.take_registered_file_formats(),
-                                 build_host.take_registered_sinks(),
-                                 build_host.take_registered_index_extensions(),
-                                 build_host.memory()};
+    return Plugins::Impl::Loaded{
+        std::move(library),
+        plugin,
+        true,
+        plugin_name_from_path(path),
+        path,
+        build_host.take_states(),
+        build_host.take_registered_ops(),
+        build_host.take_registered_udfs(),
+        build_host.take_registered_udafs(),
+        build_host.take_registered_providers(),
+        build_host.take_registered_nodes(),
+        build_host.take_registered_file_formats(),
+        build_host.take_registered_sinks(),
+        build_host.take_registered_index_extensions(),
+        build_host.memory(),
+        build_host.declared_name(),
+        dstd::String(info->version ? info->version : "")};
 }
 
 // Kahn topological sort of `n` nodes over `from -> to` edges (from must precede
@@ -670,6 +678,8 @@ dstd::Vector<Plugins::PluginInfo> Plugins::describe() const {
     for (const auto& p : impl_->plugins) {
         PluginInfo info;
         info.path = p.path;
+        info.name = p.declared_name;
+        info.version = p.version;
         info.abi_version = DFTRACER_UTILS_PLUGIN_ABI_VERSION;
         info.has_plan_duql = p.plugin->plan_duql != nullptr;
         info.has_fold =
@@ -791,6 +801,8 @@ dstd::Result<Plugins> build_injected_plugins(
         impl->plugins.push_back({nullptr,
                                  pl,
                                  false,
+                                 {},
+                                 {},
                                  {},
                                  {},
                                  {},

@@ -306,9 +306,12 @@ typedef struct dftu_source_vt {
    settled. */
 typedef struct dftu_svc_providers {
     uint32_t struct_size; /**< sizeof(dftu_svc_providers) */
-    /** Register `vt`/`self` under `name`. `name` must be `<plugin>.<name>`
-       (the bare and "dftu." namespaces are host-reserved, the same rule
-       dftu_svc_ops::register_op enforces); `vt` is copied, so it need not
+    /** Register `vt`/`self` under `name`. `name` must be the name the plugin
+       declares in its dftu_plugin_info (its bare name, for a plugin that
+       registers one provider) or `<plugin>.<name>`; any other name is refused,
+       so the bare namespace outside the plugin's own name and the host's
+       "dftu." prefix stay the host's, and another plugin's name stays that
+       plugin's. `vt` is copied, so it need not
        outlive the call, but `self` must outlive every scan the host later
        opens against it. Fails with DFTU_E_INVALID if `name` is NULL or
        empty, `vt` is NULL, `name` fails the namespace rule, or the name is

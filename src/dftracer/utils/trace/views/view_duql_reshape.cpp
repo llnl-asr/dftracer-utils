@@ -4,6 +4,7 @@
 #include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/internal/dataframe_handle.h>
+#include <dftracer/utils/dataframe/internal/node_registry.h>
 #include <dftracer/utils/dataframe/internal/sink_plan.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/op.h>
@@ -141,7 +142,21 @@ Status Applier::stage(const duql::PipelinePlugin& p) {
 Status Applier::stage(const duql::PipelineCall& c) {
     leave_scan("call");
     const dftu_op_desc* op = dftu_op_find(c.op.c_str());
-    if (!op) return refuse<"'call {}' is not registered">(c.op);
+    if (!op) {
+        // A plugin node: a table to table step with no signature, so it takes
+        // no arguments and the plan reads its output schema itself.
+        if (!dataframe::find_node(c.op))
+            return refuse<"'call {}' is not registered">(c.op);
+        if (!c.args.empty())
+            return refuse<
+                "'call {}' takes no arguments; a plugin node has no signature">(
+                c.op);
+        lines.push_back(dstd::fmt<"node {}">(c.op));
+        v_ =
+            v_.with_lazy(v_.lazy().op(dstd::String(c.op), dataframe::OpArgs{}));
+        cols_.clear();
+        return {};
+    }
     const dstd::String what = dstd::fmt<"call {}">(c.op);
     dataframe::OpArgs args;
     std::size_t used = 0;

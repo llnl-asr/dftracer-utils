@@ -1,0 +1,10 @@
+# The query below reads the @NAME@ file next to this file through the plugin
+# itself. `dftracer_plugin check --tests tests` runs it.
+input ../data/sample.ids
+query
+select id
+----
+id
+1
+2
+3

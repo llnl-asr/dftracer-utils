@@ -2595,12 +2595,39 @@ if(DFTRACER_UTILS_BUILD_BINARIES)
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/cli/dftracer_server.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/cli/dftracer_comparator.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/cli/dftracer_gen_dlio_config.cpp
-      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/cli/dftracer_genesis_gen_dist.cpp)
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/cli/dftracer_genesis_gen_dist.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/cli/dftracer_plugin.cpp)
+
+  # `dftracer_plugin new` writes its scaffolds from real files under
+  # cli/plugin_templates/, embedded into the binary here so the tool never
+  # looks for a share directory at run time. The header is regenerated whenever
+  # a template file changes.
+  set(DFTRACER_UTILS_PLUGIN_TEMPLATE_DIR
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/cli/plugin_templates)
+  file(GLOB_RECURSE DFTRACER_UTILS_PLUGIN_TEMPLATE_FILES CONFIGURE_DEPENDS
+       "${DFTRACER_UTILS_PLUGIN_TEMPLATE_DIR}/*")
+  set(DFTRACER_UTILS_PLUGIN_TEMPLATES_HEADER
+      ${CMAKE_BINARY_DIR}/include/dftracer/utils/cli/plugin_templates.h)
+  add_custom_command(
+    OUTPUT ${DFTRACER_UTILS_PLUGIN_TEMPLATES_HEADER}
+    COMMAND
+      ${CMAKE_COMMAND} -DTEMPLATE_DIR=${DFTRACER_UTILS_PLUGIN_TEMPLATE_DIR}
+      -DOUT=${DFTRACER_UTILS_PLUGIN_TEMPLATES_HEADER} -P
+      ${CMAKE_CURRENT_SOURCE_DIR}/../cmake/scripts/gen_plugin_templates.cmake
+    DEPENDS ${DFTRACER_UTILS_PLUGIN_TEMPLATE_FILES}
+            ${CMAKE_CURRENT_SOURCE_DIR}/../cmake/scripts/gen_plugin_templates.cmake
+    COMMENT "Embedding the plugin templates"
+    VERBATIM)
+  add_custom_target(dftracer_plugin_templates
+                    DEPENDS ${DFTRACER_UTILS_PLUGIN_TEMPLATES_HEADER})
 
   set(DFTRACER_UTILS_MPI_BINARIES "")
 
-  add_library(dftracer_utils_cli STATIC
-              ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/cli/cli_args.cpp)
+  add_library(
+    dftracer_utils_cli STATIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/cli/cli_args.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/cli/plugin_info.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/cli/plugin_golden.cpp)
   target_link_libraries(dftracer_utils_cli PUBLIC dftracer_utils)
   target_include_directories(
     dftracer_utils_cli PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/../include
@@ -2621,6 +2648,11 @@ if(DFTRACER_UTILS_BUILD_BINARIES)
       ${bin_exec} PROPERTIES OUTPUT_NAME "${bin_exec}" RUNTIME_OUTPUT_DIRECTORY
                                                        ${CMAKE_BINARY_DIR}/bin)
     target_add_rpath(${bin_exec})
+
+    # The scaffolds it writes are compiled into it.
+    if(bin_exec STREQUAL "dftracer_plugin")
+      add_dependencies(${bin_exec} dftracer_plugin_templates)
+    endif()
 
     # Link to unified library (which includes both runtime and domains)
     target_link_libraries(${bin_exec} PRIVATE dftracer_utils dftracer_utils_cli)

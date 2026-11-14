@@ -156,9 +156,12 @@ typedef struct dftu_sink_vt {
    scan_file can name is already settled. */
 typedef struct dftu_svc_file_formats {
     uint32_t struct_size; /**< sizeof(dftu_svc_file_formats) */
-    /** Register `vt`/`self` as a file format under `name`. `name` must be
-       `<plugin>.<name>` (the bare and "dftu." namespaces are host-reserved,
-       the same rule dftu_svc_providers::register_provider enforces); `vt` is
+    /** Register `vt`/`self` as a file format under `name`. `name` must be the
+       name the plugin declares in its dftu_plugin_info (its bare name, for a
+       plugin that registers one format) or `<plugin>.<name>`; any other name
+       is refused, so the bare namespace outside the plugin's own name and the
+       host's "dftu." prefix stay the host's, and another plugin's name stays
+       that plugin's. `vt` is
        copied, so it need not outlive the call, but `self` must outlive every
        file and scan the host later opens on it. Fails with DFTU_E_INVALID if
        `name` is NULL or empty, `vt` is NULL, `vt->struct_size` is not
@@ -168,8 +171,8 @@ typedef struct dftu_svc_file_formats {
     dftu_status (*register_format)(dftu_ctx* ctx, void* h, const char* name,
                                    const dftu_file_format_vt* vt, void* self);
     /** Register `vt`/`self` as a sink under `name`, with the same name rule
-       and the same refusals as register_format. Nothing calls a registered
-       sink yet. */
+       (`<plugin>` or `<plugin>.<name>`) and the same refusals as
+       register_format. Nothing calls a registered sink yet. */
     dftu_status (*register_sink)(dftu_ctx* ctx, void* h, const char* name,
                                  const dftu_sink_vt* vt, void* self);
 } dftu_svc_file_formats;

@@ -28,6 +28,21 @@ constexpr bool is_plugin_qualified(dstd::StringView name) noexcept {
     return dot != dstd::StringView::npos && dot != 0 && dot + 1 < name.size();
 }
 
+/// True when `name` belongs to the namespace of the plugin named `plugin`:
+/// the bare plugin name itself, or `<plugin>.<name>`. Providers, file formats
+/// and sinks use this gate, so a plugin that registers one of each can use its
+/// own name for the single one and `<plugin>.<x>` for the rest. The host's
+/// `dftu.` prefix stays refused, and so does another plugin's name, so a name
+/// never reaches past its own plugin.
+constexpr bool name_in_plugin_namespace(dstd::StringView name,
+                                        dstd::StringView plugin) noexcept {
+    if (plugin.empty() || is_host_namespace(name)) return false;
+    if (name == plugin) return true;
+    return name.size() > plugin.size() + 1 &&
+           name.substr(0, plugin.size()) == plugin &&
+           name[plugin.size()] == '.';
+}
+
 /// The gate for a name a plugin registers into the op registry. Every host op
 /// now lives under `dftu.` (`dftu.series.add`, `dftu.frame.select`, ...), so
 /// the bare namespace (`add`, `sum`, ...) is no longer host-owned in fact - but
@@ -44,6 +59,12 @@ constexpr bool is_host_namespace(const char* name) noexcept {
 constexpr bool refuse_plugin_op_name(const char* name) noexcept {
     return name == nullptr || refuse_plugin_op_name(dstd::StringView{name});
 }
+constexpr bool name_in_plugin_namespace(const char* name,
+                                        const char* plugin) noexcept {
+    return name != nullptr && plugin != nullptr &&
+           name_in_plugin_namespace(dstd::StringView{name},
+                                    dstd::StringView{plugin});
+}
 
 static_assert(is_host_namespace("dftu.hash.fnv1a"));
 static_assert(!is_host_namespace("com.example.dftu.stats"));
@@ -51,6 +72,19 @@ static_assert(!is_host_namespace(static_cast<const char*>(nullptr)));
 static_assert(refuse_plugin_op_name("add"));
 static_assert(refuse_plugin_op_name("dftu.hash.fnv1a"));
 static_assert(!refuse_plugin_op_name("com.example.myop"));
+
+static_assert(name_in_plugin_namespace("toy", "toy"));
+static_assert(name_in_plugin_namespace("toy.rows", "toy"));
+static_assert(!name_in_plugin_namespace("toyz", "toy"));
+static_assert(!name_in_plugin_namespace("toyz.rows", "toy"));
+static_assert(!name_in_plugin_namespace("toy.", "toy"));
+static_assert(!name_in_plugin_namespace("other.rows", "toy"));
+static_assert(!name_in_plugin_namespace("dftu.rows", "toy"));
+static_assert(!name_in_plugin_namespace("", "toy"));
+static_assert(!name_in_plugin_namespace(static_cast<const char*>(nullptr),
+                                        "toy"));
+static_assert(!name_in_plugin_namespace("toy",
+                                        static_cast<const char*>(nullptr)));
 
 }  // namespace dftracer::utils::plugins::host
 

@@ -3,6 +3,7 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/expr.h>
+#include <dftracer/utils/dataframe/internal/node_registry.h>
 #include <dftracer/utils/dataframe/query/vectorize.h>
 #include <dftracer/utils/dataframe/udaf_registry.h>
 #include <dftracer/utils/dataframe/udf_registry.h>
@@ -30,7 +31,11 @@ duql::PluginCatalog registry_plugins() {
     duql::PluginCatalog out;
     out.kind = [](dstd::StringView name) {
         const dftu_op_desc* op = dftu_op_find(dstd::String(name).c_str());
-        if (!op) return duql::PluginKind::None;
+        // A plugin node is a table to table step like a frame op, but it has no
+        // signature of its own.
+        if (!op)
+            return dataframe::find_node(name) ? duql::PluginKind::Table
+                                              : duql::PluginKind::None;
         const dftu_op_kind k = dftu_op_kind_of(op->sig);
         if (k == DFTU_OP_KIND_SERIES &&
             DFTU_OP_SIG_ARG(op->sig, 0) == DFTU_TOK_SERIES)

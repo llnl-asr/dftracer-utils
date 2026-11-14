@@ -3,6 +3,9 @@
 #   - c_api*.h and c_api*.cpp: the C API of each library.
 #   - include/dftracer/utils/plugins/ and src/dftracer/utils/plugins/: the
 #     plugin ABI headers and the host that defines the callbacks behind them.
+#   - src/dftracer/utils/cli/plugin_templates/: the plugin scaffolds `dftracer
+#     plugin new` writes. They are plugin code, embedded as bytes and never
+#     compiled here.
 #   - include/dftracer/utils/dstd/vendor/: vendored upstream headers.
 #   - include/dftracer/utils/common/platform_compat.h: the TSan runtime hooks,
 #     which are C symbols of the sanitizer.
@@ -19,6 +22,7 @@ endif()
 
 set(_allowed_prefixes
     include/dftracer/utils/plugins/ src/dftracer/utils/plugins/
+    src/dftracer/utils/cli/plugin_templates/
     include/dftracer/utils/dstd/vendor/
     include/dftracer/utils/common/platform_compat.h)
 

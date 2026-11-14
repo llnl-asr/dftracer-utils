@@ -27,16 +27,17 @@ const ::dftu_svc_providers g_providers = {sizeof(::dftu_svc_providers),
 }  // namespace
 
 dftu_status detail::register_plugin_provider(
-    ::dftu_ctx* ctx, const char* name, const ::dftu_source_vt* vt, void* self,
+    ::dftu_ctx* ctx, dstd::StringView plugin, const char* name,
+    const ::dftu_source_vt* vt, void* self,
     dstd::SharedPtr<PluginLibrary> library,
     dstd::SharedPtr<PluginMemory> memory) {
-    if (refuse_plugin_op_name(name)) {
+    if (!name_in_plugin_namespace(name, plugin)) {
         return host_fail(
             ctx, DFTU_E_INVALID,
-            dstd::fmt<"provider '{}' refused: the bare and 'dftu.' "
-                      "namespaces are host-reserved, so a provider name must "
-                      "be '<plugin>.<name>'">(
-                dstd::StringView(name ? name : "(null)")));
+            dstd::fmt<"provider '{}' refused: a provider name must be '{}' or "
+                      "'{}.<name>'; the bare and 'dftu.' namespaces belong to "
+                      "the host">(dstd::StringView(name ? name : "(null)"),
+                                  plugin, plugin));
     }
     auto registered = register_provider_vtable(
         name, vt, self, std::move(library), std::move(memory));

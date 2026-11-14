@@ -125,8 +125,8 @@ const dftu_source_vt ASYNC_SOURCE_VT = {.struct_size = sizeof(dftu_source_vt),
 TEST_CASE("a provider whose next returns a task is awaited by the host") {
     plugins::AbiContext ctx;
     REQUIRE(plugins::host::detail::register_plugin_provider(
-                ctx.get(), "inproc.async", &ASYNC_SOURCE_VT, nullptr, nullptr,
-                nullptr) >= 0);
+                ctx.get(), "inproc", "inproc.async", &ASYNC_SOURCE_VT, nullptr,
+                nullptr, nullptr) >= 0);
     dftu_lazyframe* lf = dftu_lazyframe_from_provider("inproc.async");
     REQUIRE(lf);
     dftu_dataframe* out = dftu_lazyframe_collect(lf, -1);

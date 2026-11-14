@@ -1249,7 +1249,8 @@ A plugin is not only a fold over the scan. Three registries let it add to the
 engine itself, each name-keyed and process-wide, each refusing a duplicate
 name and the host's own namespaces (bare names and ``dftu.`` are the host's; a
 plugin's names are ``<plugin>.<name>``). Register from the factory; by run
-time the registries are settled.
+time the registries are settled. A format or a sink is the one exception:
+it may take the plugin's own bare name.
 
 **An op** (``DFTU_SVC_OPS``). The same registry the engine's built-ins live
 in: a ``dftu_op_desc`` is a name, a packed signature (``DFTU_OP_SIG(SERIES,
@@ -1553,8 +1554,12 @@ on the first ``next``, emit one frame). ``output_schema`` declares its
 columns from the input's, so the optimizer can type the plan around it; it
 may not push a filter or projection through the node, and ``explain`` names
 it. ``LazyFrame::op(name, args)`` / ``dftu_lazyframe_op`` stacks it on a
-plan like any built-in step. The cursor's optional slots let it take part in
-the plan's machinery: ``narrow`` forwards a join's key set to its input,
+plan like any built-in step, and duql reaches it with ``call ns.n()`` and no
+arguments (see :ref:`duql-plugin-functions`); the node then reads the columns
+the plan carries at that point, which after a ``select`` are the names that
+``select`` gives, not the scan's own. Undeclared columns are dropped before
+a node, so a plan names a field in a ``select`` to pass it. The cursor's optional slots let it take
+part in the plan's machinery: ``narrow`` forwards a join's key set to its input,
 and ``open`` receives the plan's memory budget in bytes and the cursor host,
 through which the cursor reserves memory
 (:doc:`guides/runtime/memory-budget`).
@@ -1742,7 +1747,8 @@ exception per callback and report it as a status.
 the columns and options it accepts (``bind``), takes one borrowed frame per
 call (``write``), and finishes with ``finalize`` or ``abort``.
 
-A sink name is ``<plugin>.<name>``, and every surface reaches it:
+A sink name is the plugin's own name, such as ``toy`` from plugin ``toy``, or
+``<plugin>.<name>``. Any other name fails the load. Every surface reaches it:
 
 .. code-block:: cpp
 

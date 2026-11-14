@@ -834,6 +834,8 @@ set(TEST_BINARY_SOURCES
     binaries/test_dftracer_replay.cpp
     binaries/test_dftracer_comparator.cpp
     binaries/test_dftracer_run.cpp
+    binaries/test_dftracer_plugin.cpp
+    binaries/test_plugin_golden.cpp
     binaries/test_nested_inputs.cpp
     binaries/test_run_on_pool.cpp
     binaries/test_cli_read_only_dir.cpp
@@ -945,6 +947,9 @@ foreach(test_file ${TEST_BINARY_SOURCES})
   elseif(bin_exec STREQUAL "binaries/test_dftracer_run")
     set_tests_properties(${bin_exec} PROPERTIES ENVIRONMENT
       "DFTRACER_UTILS_RUN_PATH=$<TARGET_FILE:dftracer_run>;DFTRACER_UTILS_DURATION_UDFS_PLUGIN_PATH=$<TARGET_FILE:duration_udfs_plugin>;DFTRACER_UTILS_EVENT_COUNTER_PLUGIN_PATH=$<TARGET_FILE:event_counter_plugin>;DFTRACER_UTILS_DURATION_HISTOGRAM_PLUGIN_PATH=$<TARGET_FILE:duration_histogram_plugin>;DFTRACER_UTILS_DURATION_REPORT_PLUGIN_PATH=$<TARGET_FILE:duration_report_plugin>;DFTRACER_UTILS_QUERY_FILTER_PLUGIN_PATH=$<TARGET_FILE:query_filter_plugin>;DFTRACER_UTILS_PERBATCH_PRODUCER_PLUGIN_PATH=$<TARGET_FILE:perbatch_producer_plugin>;DFTRACER_UTILS_PERBATCH_CONSUMER_PLUGIN_PATH=$<TARGET_FILE:perbatch_consumer_plugin>;DFTRACER_UTILS_DUR_STATS_PRODUCER_PLUGIN_PATH=$<TARGET_FILE:dur_stats_producer_plugin>;DFTRACER_UTILS_DUR_STATS_CONSUMER_PLUGIN_PATH=$<TARGET_FILE:dur_stats_consumer_plugin>")
+  elseif(bin_exec STREQUAL "binaries/test_dftracer_plugin")
+    set_tests_properties(${bin_exec} PROPERTIES ENVIRONMENT
+      "DFTRACER_UTILS_PLUGIN_PATH=$<TARGET_FILE:dftracer_plugin>;DFTRACER_UTILS_DURATION_UDFS_PLUGIN_PATH=$<TARGET_FILE:duration_udfs_plugin>;DFTRACER_UTILS_LEAKY_PLUGIN_PATH=$<TARGET_FILE:leaky_plugin>;DFTRACER_UTILS_CRASH_PLUGIN_PATH=$<TARGET_FILE:crash_plugin>")
   elseif(bin_exec STREQUAL "binaries/test_dftracer_genesis_gen_dist_mpi")
     set_tests_properties(${bin_exec} PROPERTIES ENVIRONMENT
       "DFTRACER_UTILS_GENESIS_GEN_DIST_PATH=$<TARGET_FILE:dftracer_genesis_gen_dist>;MPIEXEC_EXECUTABLE=${MPIEXEC_EXECUTABLE};ASAN_OPTIONS=detect_leaks=0;LSAN_OPTIONS=detect_leaks=0")
@@ -1245,6 +1250,23 @@ if(DFTRACER_UTILS_PACKAGE_TESTS)
         "-DCXX_FLAGS=${CMAKE_CXX_FLAGS}"
         "-DLINKER_FLAGS=${CMAKE_EXE_LINKER_FLAGS}" -P
         ${CMAKE_CURRENT_SOURCE_DIR}/package_consumer/run.cmake)
+    # A plugin project outside this build: `dftracer_plugin new` writes one per
+    # kind, each is built against the installed packages and then checked with
+    # the golden test it comes with. Reuses the install fixture above.
+    if(TARGET dftracer_plugin)
+      add_test(
+        NAME plugin_scaffold
+        COMMAND
+          ${CMAKE_COMMAND} -DTOOL=$<TARGET_FILE:dftracer_plugin>
+          -DWORK_DIR=${CMAKE_BINARY_DIR}/test_plugin_scaffold
+          -DPREFIX=${TEST_INSTALL_PREFIX} "-DGENERATOR=${CMAKE_GENERATOR}"
+          -DC_COMPILER=${CMAKE_C_COMPILER}
+          -DCXX_COMPILER=${CMAKE_CXX_COMPILER} "-DCXX_FLAGS=${CMAKE_CXX_FLAGS}"
+          "-DLINKER_FLAGS=${CMAKE_EXE_LINKER_FLAGS}" -P
+          ${CMAKE_CURRENT_SOURCE_DIR}/plugins/scaffold/run.cmake)
+      set_tests_properties(plugin_scaffold PROPERTIES TIMEOUT 900)
+    endif()
+
     if(DFTRACER_UTILS_BUILD_STATIC)
       # An archive built with a sanitizer needs its runtime in the consumer.
       set(pkgconfig_consumer_flags "${CMAKE_CXX_FLAGS}")
@@ -1348,6 +1370,10 @@ if(DFTRACER_UTILS_PACKAGE_TESTS)
          test_target_dftracer_utils_${VARIANT}
          test_target_dftracer_utils_${VARIANT}_no_namespace)
   endforeach()
+
+  if(TARGET dftracer_plugin)
+    list(APPEND PACKAGE_DISCOVERY_TESTS plugin_scaffold)
+  endif()
 
   # ==========================================================================
   # Set test dependencies - all discovery tests should run after installation

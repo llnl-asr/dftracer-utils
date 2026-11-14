@@ -1,0 +1,11 @@
+# `dftracer_plugin check --tests tests` runs the @NAME@ fold over the sample
+# trace next to this file and then this query. A fold that errors or crashes
+# fails the check; the fold's own report goes to the child's stderr.
+input ../data/sample.pfw.gz
+query
+select name, dur
+----
+name	dur
+open	100
+read	150
+close	80

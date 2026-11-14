@@ -131,7 +131,7 @@ dftu_status build_register_provider(::dftu_ctx* ctx, void* h, const char* name,
                                     const ::dftu_source_vt* vt, void* self) {
     BuildHost& bh = self_of(h);
     const dftu_status status = detail::register_plugin_provider(
-        ctx, name, vt, self, bh.library(), bh.memory());
+        ctx, bh.declared_name(), name, vt, self, bh.library(), bh.memory());
     if (status >= 0) bh.registered_providers().emplace_back(name);
     return status;
 }
@@ -143,7 +143,7 @@ dftu_status build_register_format(::dftu_ctx* ctx, void* h, const char* name,
                                   const ::dftu_file_format_vt* vt, void* self) {
     BuildHost& bh = self_of(h);
     const dftu_status status = detail::register_plugin_file_format(
-        ctx, name, vt, self, bh.library(), bh.memory());
+        ctx, bh.declared_name(), name, vt, self, bh.library(), bh.memory());
     if (status >= 0) bh.registered_file_formats().emplace_back(name);
     return status;
 }
@@ -151,8 +151,8 @@ dftu_status build_register_format(::dftu_ctx* ctx, void* h, const char* name,
 dftu_status build_register_sink(::dftu_ctx* ctx, void* h, const char* name,
                                 const ::dftu_sink_vt* vt, void* self) {
     BuildHost& bh = self_of(h);
-    const dftu_status status =
-        detail::register_plugin_sink(ctx, name, vt, self, bh.library());
+    const dftu_status status = detail::register_plugin_sink(
+        ctx, bh.declared_name(), name, vt, self, bh.library());
     if (status >= 0) bh.registered_sinks().emplace_back(name);
     return status;
 }

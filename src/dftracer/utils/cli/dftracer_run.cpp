@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/cli/common_cli.h>
+#include <dftracer/utils/cli/plugin_info.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/pair.h>
@@ -202,18 +203,9 @@ static dstd::Result<Plugins> build_plugins(const PluginArgs& plugin_args) {
     return builder.build();
 }
 
-static dstd::String join_or_none(const dstd::Vector<dstd::String>& names) {
-    if (names.empty()) return "(none)";
-    dstd::String out;
-    for (const auto& name : names) {
-        if (!out.empty()) out += ", ";
-        out.append(name.data(), name.size());
-    }
-    return out;
-}
-
 // Print each loaded plugin's path and provides/consumes, one line per fact so
-// the output is greppable, and exit without touching any trace file.
+// the output is greppable, and exit without touching any trace file. The
+// rendering is shared with `dftracer_plugin check` (plugin_info.h).
 static int describe_plugins(const PluginArgs& plugin_args) {
     if (plugin_args.blocks.empty()) {
         DFTRACER_UTILS_LOG_ERROR("{}",
@@ -227,42 +219,8 @@ static int describe_plugins(const PluginArgs& plugin_args) {
         return 1;
     }
 
-    for (const auto& info : plugins->describe()) {
-        std::fprintf(stderr, "plugin: %s\n", info.path.c_str());
-        std::fprintf(stderr, "  abi_version: %u\n", info.abi_version);
-        std::fprintf(stderr, "  plan_duql: %s\n",
-                     info.has_plan_duql ? "yes" : "no");
-        std::fprintf(stderr, "  fold: %s\n", info.has_fold ? "yes" : "no");
-        std::fprintf(stderr, "  provides: %s\n",
-                     join_or_none(info.provides).c_str());
-        std::fprintf(stderr, "  consumes: %s\n",
-                     join_or_none(info.consumes).c_str());
-        std::fprintf(stderr, "  ops: %s\n", join_or_none(info.ops).c_str());
-        std::fprintf(stderr, "  udfs: %s\n", join_or_none(info.udfs).c_str());
-        std::fprintf(stderr, "  udafs: %s\n", join_or_none(info.udafs).c_str());
-        std::fprintf(stderr, "  states: %s\n",
-                     join_or_none(info.states).c_str());
-        std::fprintf(stderr, "  providers: %s\n",
-                     join_or_none(info.providers).c_str());
-        std::fprintf(stderr, "  nodes: %s\n", join_or_none(info.nodes).c_str());
-        std::fprintf(stderr, "  index_extensions: %s\n",
-                     join_or_none(info.index_extensions).c_str());
-        std::fprintf(stderr, "  file_formats: %s\n",
-                     join_or_none(info.file_formats).c_str());
-        std::fprintf(stderr, "  sinks: %s\n", join_or_none(info.sinks).c_str());
-        // "(none)" here means the plugin declared no projection, so it is
-        // handed every batch column - not that it reads nothing.
-        std::fprintf(stderr, "  reads: %s\n",
-                     info.reads.empty() ? "(all columns)"
-                                        : join_or_none(info.reads).c_str());
-        if (info.config_keys.empty()) {
-            std::fprintf(stderr, "  config: (undeclared)\n");
-        } else {
-            for (const auto& key : info.config_keys)
-                std::fprintf(stderr, "  config: %s\n", key.c_str());
-        }
-        std::fprintf(stderr, "\n");
-    }
+    for (const auto& info : plugins->describe())
+        cli::print_plugin_info(stderr, info);
     return 0;
 }
 

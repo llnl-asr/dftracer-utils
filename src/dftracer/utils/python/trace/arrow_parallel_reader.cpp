@@ -7,7 +7,8 @@
 
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
-#include <dftracer/utils/arrow/parallel_reader.h>
+#include <dftracer/utils/arrow/arrow.h>
+#include <dftracer/utils/arrow/ipc.h>
 #include <dftracer/utils/python/core/dict_helpers.h>
 #include <dftracer/utils/python/core/list_helpers.h>
 #include <dftracer/utils/python/core/method.h>
@@ -18,8 +19,49 @@
 
 namespace dftracer::utils::python::trace {
 
-using dftracer::utils::arrow::ArrowExportResult;
-using dftracer::utils::arrow::read_arrow_files_parallel;
+using dftracer::utils::arrow::Batch;
+using dftracer::utils::arrow::Reader;
+
+namespace {
+
+/// One file: its batches as Arrow C structs, or the error that stopped it.
+struct FileRead {
+    dftracer::utils::dstd::String path;
+    dftracer::utils::dstd::Vector<Batch> batches;
+    dftracer::utils::dstd::String error;
+    std::int64_t total_rows = 0;
+
+    bool success() const { return error.empty(); }
+};
+
+FileRead read_file(const dftracer::utils::dstd::Path& path,
+                   const dftracer::utils::dstd::String& name) {
+    FileRead out;
+    out.path = name;
+    auto reader = Reader::open(path);
+    if (!reader) {
+        out.error = reader.error().message().data();
+        return out;
+    }
+    while (true) {
+        auto batch = reader->next();
+        if (!batch) {
+            out.error = batch.error().message().data();
+            return out;
+        }
+        if (!batch->has_value()) break;
+        auto exported = arrow::to_arrow(**batch);
+        if (!exported) {
+            out.error = exported.error().message().data();
+            return out;
+        }
+        out.total_rows += exported->num_rows();
+        out.batches.push_back(std::move(*exported));
+    }
+    return out;
+}
+
+}  // namespace
 
 static PyObject* py_read_arrow_files_parallel(PyObject* /*self*/,
                                               PyObject* args,
@@ -34,10 +76,9 @@ static PyObject* py_read_arrow_files_parallel(PyObject* /*self*/,
         return nullptr;
     }
 
-    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> paths;
-    if (!parse_str_list(paths_obj, "paths", paths)) return nullptr;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> names;
+    if (!parse_str_list(paths_obj, "paths", names)) return nullptr;
 
-    // Get runtime
     Runtime* runtime = nullptr;
     if (runtime_obj && runtime_obj != Py_None) {
         if (!PyObject_TypeCheck(runtime_obj, &RuntimeType)) {
@@ -50,52 +91,65 @@ static PyObject* py_read_arrow_files_parallel(PyObject* /*self*/,
         runtime = runtime::get_default_runtime();
     }
 
-    // Call C++ parallel reader (releases GIL during file I/O)
-    dftracer::utils::arrow::ParallelReadResult result;
-    if (!run_blocking_r(
-            [&] {
-                auto task = read_arrow_files_parallel(std::move(paths));
-                return dftracer::utils::python::core::py_unwrap(
-                    runtime->submit(std::move(task), "read_arrow_files").get());
-            },
-            result)) {
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::Path> paths;
+    paths.reserve(names.size());
+    for (const auto& name : names)
+        paths.emplace_back(
+            dftracer::utils::dstd::StringView(name.data(), name.size()));
+
+    // One file per worker; the GIL is released for the whole read.
+    dftracer::utils::dstd::Vector<FileRead> files(paths.size());
+    dftracer::utils::dstd::Result<void> status{};
+    Py_BEGIN_ALLOW_THREADS auto read_all = [&](std::int64_t begin,
+                                               std::int64_t end) {
+        for (std::int64_t i = begin; i < end; ++i)
+            files[static_cast<std::size_t>(i)] =
+                read_file(paths[static_cast<std::size_t>(i)],
+                          names[static_cast<std::size_t>(i)]);
+    };
+    status = runtime->parallel_for(static_cast<std::int64_t>(paths.size()), 1,
+                                   read_all);
+    Py_END_ALLOW_THREADS if (!status) {
+        PyErr_SetString(PyExc_RuntimeError, status.error().c_str());
         return nullptr;
     }
 
-    // Build Python result dict
-    PyObject* file_results_list = PyList_New(result.file_results.size());
-    if (!file_results_list) return nullptr;
+    std::int64_t total_rows = 0;
+    std::int64_t total_batches = 0;
+    std::size_t files_read = 0;
+    std::size_t files_failed = 0;
 
-    for (std::size_t i = 0; i < result.file_results.size(); ++i) {
-        const auto& fr = result.file_results[i];
+    PyObject* file_results_list = PyList_New(files.size());
+    if (!file_results_list) return nullptr;
+    for (std::size_t i = 0; i < files.size(); ++i) {
+        FileRead& fr = files[i];
         PyObject* fr_dict = PyDict_New();
         if (!fr_dict) {
             Py_DECREF(file_results_list);
             return nullptr;
         }
-
         dict_set_str(fr_dict, "path", fr.path.c_str());
-        dict_set_bool(fr_dict, "success", fr.success);
-
-        if (!fr.error.empty()) {
-            dict_set_str(fr_dict, "error", fr.error.c_str());
-        } else {
+        dict_set_bool(fr_dict, "success", fr.success());
+        if (fr.error.empty()) {
             Py_INCREF(Py_None);
             PyDict_SetItemString(fr_dict, "error", Py_None);
+            ++files_read;
+        } else {
+            dict_set_str(fr_dict, "error", fr.error.c_str());
+            ++files_failed;
         }
-
         dict_set_i64(fr_dict, "total_rows", fr.total_rows);
+        total_rows += fr.total_rows;
+        total_batches += static_cast<std::int64_t>(fr.batches.size());
 
-        // batches - list of ArrowBatchCapsule objects
-        PyObject* batches_list = PyList_New(fr.batches->size());
+        PyObject* batches_list = PyList_New(fr.batches.size());
         if (!batches_list) {
             Py_DECREF(fr_dict);
             Py_DECREF(file_results_list);
             return nullptr;
         }
-
-        for (std::size_t j = 0; j < fr.batches->size(); ++j) {
-            ArrowBatchCapsuleObject* capsule =
+        for (std::size_t j = 0; j < fr.batches.size(); ++j) {
+            auto* capsule =
                 (ArrowBatchCapsuleObject*)ArrowBatchCapsuleType.tp_alloc(
                     &ArrowBatchCapsuleType, 0);
             if (!capsule) {
@@ -104,33 +158,26 @@ static PyObject* py_read_arrow_files_parallel(PyObject* /*self*/,
                 Py_DECREF(file_results_list);
                 return nullptr;
             }
-            // Move the batch into the capsule
-            capsule->result =
-                new ArrowExportResult(std::move((*fr.batches)[j]));
-            PyList_SetItem(batches_list, j, (PyObject*)capsule);
+            capsule->result = new Batch(std::move(fr.batches[j]));
+            PyList_SetItem(batches_list, static_cast<Py_ssize_t>(j),
+                           (PyObject*)capsule);
         }
-
         PyDict_SetItemString(fr_dict, "batches", batches_list);
         Py_DECREF(batches_list);
-
-        PyList_SetItem(file_results_list, i, fr_dict);
+        PyList_SetItem(file_results_list, static_cast<Py_ssize_t>(i), fr_dict);
     }
 
-    // Build final result dict
     PyObject* result_dict = PyDict_New();
     if (!result_dict) {
         Py_DECREF(file_results_list);
         return nullptr;
     }
-
     PyDict_SetItemString(result_dict, "file_results", file_results_list);
     Py_DECREF(file_results_list);
-
-    dict_set_i64(result_dict, "total_rows", result.total_rows);
-    dict_set_i64(result_dict, "total_batches", result.total_batches);
-    dict_set_size(result_dict, "files_read", result.files_read);
-    dict_set_size(result_dict, "files_failed", result.files_failed);
-
+    dict_set_i64(result_dict, "total_rows", total_rows);
+    dict_set_i64(result_dict, "total_batches", total_batches);
+    dict_set_size(result_dict, "files_read", files_read);
+    dict_set_size(result_dict, "files_failed", files_failed);
     return result_dict;
 }
 
@@ -157,7 +204,6 @@ static PyMethodDef arrow_parallel_reader_methods[] = {
     {nullptr, nullptr, 0, nullptr}};
 
 int init_arrow_parallel_reader(PyObject* m) {
-    // Add the function to the module
     if (PyModule_AddFunctions(m, arrow_parallel_reader_methods) < 0) {
         return -1;
     }

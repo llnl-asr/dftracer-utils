@@ -41,12 +41,12 @@ PyObject* Series_arrow_c_array(PyObject* self, PyObject* /*args*/) {
     dftracer::utils::dstd::UniquePtr<ArrowArray> array;
     schema = dftracer::utils::dstd::make_unique<ArrowSchema>();
     array = dftracer::utils::dstd::make_unique<ArrowArray>();
-    try {
-        arrow::to_arrow(*a, schema.get(), array.get());
-    } catch (const std::exception& e) {
-        PyErr_SetString(PyExc_RuntimeError, e.what());
+    auto batch = arrow::to_arrow(*a);
+    if (!batch) {
+        PyErr_SetString(PyExc_RuntimeError, batch.error().c_str());
         return nullptr;
     }
+    batch->release_into(schema.get(), array.get());
     PyObject* scap =
         PyCapsule_New(schema.get(), "arrow_schema", schema_capsule_destructor);
     if (!scap) {
@@ -91,11 +91,15 @@ Series import_arrow_column(PyObject* obj) {
     }
     Series col;
     try {
-        // from_arrow adopts `array` (nulls its release), so the array capsule's
-        // destructor becomes a no-op; the schema capsule still owns the schema.
-        col = arrow::series_from_arrow(schema, array);
-        if (!col.valid())
-            PyErr_SetString(PyExc_ValueError, "unsupported Arrow column");
+        // Batch::adopt takes both structs, so both capsules' destructors become
+        // no-ops; the batch releases the schema and the array.
+        auto imported =
+            arrow::series_from_arrow(arrow::Batch::adopt(schema, array));
+        if (!imported) {
+            PyErr_SetString(PyExc_ValueError, imported.error().c_str());
+        } else {
+            col = std::move(*imported);
+        }
     } catch (const std::exception& e) {
         PyErr_SetString(PyExc_ValueError, e.what());
         col = Series{};

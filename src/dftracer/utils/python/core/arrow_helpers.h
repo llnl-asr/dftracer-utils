@@ -3,16 +3,16 @@
 #define DFTRACER_UTILS_PYTHON_CORE_ARROW_HELPERS_H
 
 #include <Python.h>
-#include <dftracer/utils/arrow/arrow_export.h>
+#include <dftracer/utils/arrow/batch.h>
 #include <dftracer/utils/common/config.h>
 
 namespace dftracer::utils::python::core {
 
-using dftracer::utils::arrow::ArrowExportResult;
+using dftracer::utils::arrow::Batch;
 
-/// Wrap an ArrowExportResult in an ArrowBatchCapsuleObject.
+/// Wrap a Batch in an ArrowBatchCapsuleObject.
 /// Returns a new reference, or NULL on error.
-PyObject *wrap_arrow_result(ArrowExportResult result);
+PyObject *wrap_arrow_result(Batch result);
 
 /// Wrap a Python list of ArrowBatchCapsule objects in an ArrowTable.
 /// Steals a reference to batch_list on success.

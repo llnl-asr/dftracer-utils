@@ -8,10 +8,9 @@
 
 namespace dftracer::utils::python::core {
 
-PyObject *wrap_arrow_result(ArrowExportResult result) {
-    if (!result.valid()) {
-        PyErr_SetString(PyExc_RuntimeError,
-                        "Cannot wrap invalid ArrowExportResult");
+PyObject *wrap_arrow_result(Batch result) {
+    if (!result.is_valid()) {
+        PyErr_SetString(PyExc_RuntimeError, "Cannot wrap invalid Batch");
         return NULL;
     }
 
@@ -19,7 +18,7 @@ PyObject *wrap_arrow_result(ArrowExportResult result) {
         &ArrowBatchCapsuleType, 0);
     if (!cap) return NULL;
 
-    cap->result = new ArrowExportResult(std::move(result));
+    cap->result = new Batch(std::move(result));
     return (PyObject *)cap;
 }
 

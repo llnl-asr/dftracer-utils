@@ -45,7 +45,7 @@ static PyObject* ArrowStreamingIterator_iter(PyObject* self) {
 
 // The next Arrow batch of a pull_next producer, wrapped in a capsule.
 static PyObject* next_batch(ArrowStreamingIteratorObject* self) {
-    dstd::Optional<ArrowExportResult> result;
+    dstd::Optional<Batch> result;
     if (!run_blocking_r([&] { return self->cpp_state->pull_next(); }, result))
         return NULL;
 
@@ -61,12 +61,12 @@ static PyObject* next_batch(ArrowStreamingIteratorObject* self) {
         return NULL;  // StopIteration
     }
 
-    // Wrap the ArrowExportResult in an ArrowBatchCapsule
+    // Wrap the Batch in an ArrowBatchCapsule
     ArrowBatchCapsuleObject* obj =
         (ArrowBatchCapsuleObject*)ArrowBatchCapsuleType.tp_alloc(
             &ArrowBatchCapsuleType, 0);
     if (!obj) return NULL;
-    obj->result = new ArrowExportResult(std::move(*result));
+    obj->result = new Batch(std::move(*result));
     return (PyObject*)obj;
 }
 

@@ -426,14 +426,8 @@ set(DFTRACER_UTILS_TRACE_SOURCES
 set(DFTRACER_UTILS_ARROW_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/arrow/arrow.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/arrow/arrow_bridge.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/arrow/column_builder.cpp)
-
-list(
-  APPEND
-  DFTRACER_UTILS_ARROW_SOURCES
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/arrow/ipc_reader.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/arrow/ipc_writer.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/arrow/parallel_reader.cpp)
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/arrow/ipc_reader.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/arrow/ipc_writer.cpp)
 
 # Determine which dependencies to require based on what was found vs built with
 # CPM

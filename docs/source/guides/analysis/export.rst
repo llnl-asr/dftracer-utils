@@ -141,15 +141,16 @@ The Arrow C Data Interface (C++)
 --------------------------------
 
 The zero-copy bridge is the free functions ``to_arrow``, ``series_from_arrow``
-and ``dataframe_from_arrow`` in the installed public header
-``dftracer/utils/arrow/arrow.h`` (namespace ``dftracer::utils::arrow``, library
-``dftracer_utils_arrow``, which only Python and tests link). ``to_arrow``
-returns an ``OwnedArrow`` - a move-only RAII owner of the paired
-``ArrowSchema`` / ``ArrowArray`` whose buffers alias the column's - so the
-caller never juggles release callbacks by hand. A ``DataFrame`` exports as a
-struct array with one child per column. The header pulls in the Arrow C Data
-Interface struct definitions itself, so a consumer needs no Arrow library to
-include it.
+and ``dataframe_from_arrow`` in the installed public headers
+``dftracer/utils/arrow/arrow.h`` and ``dftracer/utils/arrow/batch.h``
+(namespace ``dftracer::utils::arrow``, library ``dftracer_utils_arrow``, which
+only Python and tests link). ``to_arrow`` returns a ``Batch`` - a move-only
+RAII owner of the paired ``ArrowSchema`` / ``ArrowArray`` whose buffers alias
+the column's - so the caller never juggles release callbacks by hand. A
+``DataFrame`` exports as a struct array with one child per column. Every call
+reports failure as a ``dstd::Result``. The headers pull in the Arrow C Data
+Interface struct definitions themselves, so a consumer needs no Arrow library
+to include them.
 
 .. code-block:: cpp
 
@@ -157,14 +158,40 @@ include it.
 
    using namespace dftracer::utils;
 
-   arrow::OwnedArrow a = arrow::to_arrow(df);          // zero-copy export
-   // ... hand (a.schema(), a.array()) to any Arrow consumer ...
-   dataframe::DataFrame back =
-       arrow::dataframe_from_arrow(a.schema(), a.array());
+   dstd::Result<arrow::Batch> a = arrow::to_arrow(df);   // zero-copy export
+   if (!a) return a.error();
+   // ... hand (a->schema(), a->array()) to any Arrow consumer, or give the
+   // structs away with a->release_into(&schema, &array) ...
 
    // A single column round-trips the same way.
-   arrow::OwnedArrow col = arrow::to_arrow(df.column("dur"));
-   dataframe::Series s = arrow::series_from_arrow(col.schema(), col.array());
+   dstd::Result<arrow::Batch> col = arrow::to_arrow(df.column("dur"));
+   dstd::Result<dataframe::Series> s =
+       arrow::series_from_arrow(std::move(*col));
+
+The IPC format is ``arrow::Writer`` and ``arrow::Reader`` in
+``dftracer/utils/arrow/ipc.h``. A writer goes to a file or to a buffer, takes
+one ``DataFrame`` per record batch and is closed by ``finish()``. A reader
+hands back one record batch per ``next()`` as a ``DataFrame``. ``scan_ipc``
+returns a ``LazyFrame`` over the record batches of several files, read in
+parallel by the engine and honouring the column projection, and ``read_ipc``
+is that scan collected.
+
+.. code-block:: cpp
+
+   #include <dftracer/utils/arrow/ipc.h>
+
+   arrow::Writer writer = arrow::Writer::to_buffer();
+   writer.write(df);
+   writer.finish();
+   dstd::Vector<std::uint8_t> bytes = writer.take_bytes();
+
+   dstd::Result<arrow::Reader> reader =
+       arrow::Reader::from_bytes(dstd::Span<const std::uint8_t>(
+           bytes.data(), bytes.size()));     // the bytes must outlive it
+   while (auto batch = reader->next()) {
+       if (!batch->has_value()) break;
+       dataframe::DataFrame part = std::move(**batch);
+   }
 
 Write a new trace
 -----------------

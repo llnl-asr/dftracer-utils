@@ -215,5 +215,6 @@ dftracer/utils/trace/views/join_type.h
 dftracer/utils/trace/views/live_view.h
 dftracer/utils/trace/views/view.h
 dftracer/utils/arrow/arrow.h
+dftracer/utils/arrow/batch.h
 dftracer/utils/arrow/c_api.h
-dftracer/utils/arrow/owned_arrow.h
+dftracer/utils/arrow/ipc.h

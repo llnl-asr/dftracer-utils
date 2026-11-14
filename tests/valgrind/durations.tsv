@@ -271,7 +271,7 @@ coro/test_generator	7.1
 coro/test_coro	7.1
 plugins/test_plugin_abi_gate	7.0
 dataframe/test_timestamp_histogram	7.0
-trace/arrow/test_arrow_column_builder	7.0
+trace/arrow/test_arrow_bridge	7.0
 trace/views/test_row_build	7.0
 domains/analysis/comparator/test_tree_table_formatter	7.0
 domains/server/test_query_params	7.0

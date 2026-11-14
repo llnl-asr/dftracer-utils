@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/arrow/column_builder.h>
-#include <dftracer/utils/common/config.h>
+#include <dftracer/utils/arrow/arrow.h>
+#include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
 #include <nanoarrow/nanoarrow.h>
 #include <task_result.h>
@@ -10,25 +12,20 @@
 #include <dftracer/utils/python/frame/schema_reconcile.cpp>
 
 using namespace dftracer::utils;
-using arrow::ColumnType;
-using arrow::RecordBatchBuilder;
+using namespace dftracer::utils::dataframe;
 
 namespace {
 
-auto int_batch() {
-    RecordBatchBuilder b;
-    const std::size_t x = b.add_or_get_column("x", ColumnType::Int64);
-    b.append_int64(x, 7);
-    b.end_row();
-    return dftu_utils_test::ok(b.finish());
-}
-
-auto double_batch() {
-    RecordBatchBuilder b;
-    const std::size_t x = b.add_or_get_column("x", ColumnType::Double);
-    b.append_double(x, 1.5);
-    b.end_row();
-    return dftu_utils_test::ok(b.finish());
+/// A one-row, one-column frame named "x": the batch a Python consumer would
+/// hand the reconciler.
+arrow::Batch one_row(const char* type, std::int64_t i64, double f64) {
+    Series column = dstd::StringView(type) == "int64"
+                        ? Series::flat_i64(&i64, 1)
+                        : Series::flat_f64(&f64, 1);
+    DataFrame frame;
+    frame.names.push_back(dstd::SharedString{"x"});
+    frame.columns.push_back(std::move(column));
+    return dftu_utils_test::ok(arrow::to_arrow(frame));
 }
 
 struct View {
@@ -43,8 +40,8 @@ struct View {
 }  // namespace
 
 TEST_CASE("a column whose type differs from the locked one goes to _extra") {
-    auto first = int_batch();
-    auto second = double_batch();
+    auto first = one_row("int64", 7, 0.0);
+    auto second = one_row("float64", 0, 1.5);
 
     python::frame::SchemaReconciler reconciler;
     reconciler.merge(first.schema());
@@ -52,7 +49,9 @@ TEST_CASE("a column whose type differs from the locked one goes to _extra") {
     REQUIRE(reconciler.finalize() == 0);
 
     ArrowArray same{};
-    REQUIRE(reconciler.reconcile(first.schema(), first.array(), &same) == 0);
+    REQUIRE(reconciler.reconcile(first.schema(),
+                                 const_cast<ArrowArray*>(first.array()),
+                                 &same) == 0);
     {
         View x(NANOARROW_TYPE_INT64, same.children[0]);
         CHECK(ArrowArrayViewGetIntUnsafe(&x.view, 0) == 7);
@@ -62,7 +61,9 @@ TEST_CASE("a column whose type differs from the locked one goes to _extra") {
     same.release(&same);
 
     ArrowArray other{};
-    REQUIRE(reconciler.reconcile(second.schema(), second.array(), &other) == 0);
+    REQUIRE(reconciler.reconcile(second.schema(),
+                                 const_cast<ArrowArray*>(second.array()),
+                                 &other) == 0);
     {
         View x(NANOARROW_TYPE_INT64, other.children[0]);
         CHECK(ArrowArrayViewIsNull(&x.view, 0));

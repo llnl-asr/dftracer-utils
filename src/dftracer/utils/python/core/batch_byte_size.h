@@ -2,7 +2,7 @@
 #ifndef DFTRACER_UTILS_PYTHON_CORE_BATCH_BYTE_SIZE_H
 #define DFTRACER_UTILS_PYTHON_CORE_BATCH_BYTE_SIZE_H
 
-#include <dftracer/utils/arrow/arrow_export.h>
+#include <dftracer/utils/arrow/batch.h>
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/python/core/memoryview_batch.h>
 #include <dftracer/utils/python/trace/trace_reader_iterator.h>
@@ -34,8 +34,7 @@ inline std::size_t arrow_array_byte_size(const ArrowArray *arr) {
     return total;
 }
 
-inline std::size_t byte_size(
-    const dftracer::utils::arrow::ArrowExportResult &b) {
+inline std::size_t byte_size(const dftracer::utils::arrow::Batch &b) {
     return arrow_array_byte_size(b.array());
 }
 

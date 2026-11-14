@@ -1,169 +1,143 @@
 // SPDX-License-Identifier: MIT
-
 #include <dftracer/utils/arrow/array_view.h>
-#include <dftracer/utils/arrow/ipc_writer.h>
+#include <dftracer/utils/arrow/internal.h>
+#include <dftracer/utils/arrow/ipc.h>
 #include <dftracer/utils/common/config.h>
-#include <dftracer/utils/coro/when_all.h>
-#include <dftracer/utils/dstd/cstring_view.h>
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/byte_view.h>
 #include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/runtime/io/ops.h>
 #include <flatcc/flatcc_builder.h>
 #include <nanoarrow/ipc/flatcc_generated.h>
 #include <nanoarrow/nanoarrow.h>
 #include <nanoarrow/nanoarrow_ipc.h>
-#include <sys/uio.h>
 #include <zstd.h>
 
+#include <atomic>
 #include <cstring>
+#include <utility>
 
 #define ns(x) FLATBUFFERS_WRAP_NAMESPACE(org_apache_arrow_flatbuf, x)
 
 namespace dftracer::utils::arrow {
 
-using FileBlock = ArrowIpcFileBlock;
+namespace {
 
-// ---------------------------------------------------------------------------
-// BufferPool
-// ---------------------------------------------------------------------------
+using dataframe::DataFrame;
+using dataframe::Series;
 
-BufferPool::BufferPool(std::size_t slot_count, std::size_t initial_capacity) {
-    slots_.reserve(slot_count);
-    for (std::size_t i = 0; i < slot_count; ++i) {
-        auto slot = dstd::make_unique<Slot>();
-        slot->data.reserve(initial_capacity);
-        slots_.push_back(std::move(slot));
-    }
+/// nanoarrow's IPC encoder has no schema form for the view and dictionary
+/// encodings, so a frame with one is written as its plain values.
+DataFrame as_written(const DataFrame& frame) {
+    DataFrame out;
+    out.names = frame.names;
+    out.columns.reserve(frame.columns.size());
+    for (const Series& col : frame.columns)
+        out.columns.push_back(col.is_flat() ? col.share() : col.materialize());
+    return out;
 }
 
-BufferPool::Lease BufferPool::acquire(std::size_t min_capacity) {
-    Lease lease;
-    for (auto& slot : slots_) {
-        bool expected = false;
-        if (slot->in_use.compare_exchange_strong(expected, true,
-                                                 std::memory_order_acquire)) {
-            lease.pooled_ = slot.get();
-            break;
-        }
-    }
-    if (!lease.pooled_) lease.owned_ = dstd::make_unique<Slot>();
-    auto& data = lease.data();
-    if (data.capacity() < min_capacity) data.reserve(min_capacity);
-    data.clear();
-    return lease;
-}
-
-// ---------------------------------------------------------------------------
-// Compression helpers
-// ---------------------------------------------------------------------------
+/// The 8-byte magic an Arrow IPC file starts with: "ARROW1", then two zero
+/// bytes of padding.
+constexpr std::uint8_t FILE_HEADER_MAGIC[8] = {'A', 'R', 'R', 'O',
+                                               'W', '1', 0,   0};
+/// The 6-byte magic a file ends with, right after the footer length.
+constexpr std::uint8_t FILE_FOOTER_MAGIC[6] = {'A', 'R', 'R', 'O', 'W', '1'};
 
 struct BufferInfo {
     std::int64_t offset;
     std::int64_t length;
 };
 
-static void collect_flat_buffers(ArrowArrayView* view,
-                                 dstd::Vector<ArrowBufferView>& out,
-                                 bool is_root = false) {
+/// Set by a test, so one writer call fails the way a real export can.
+std::atomic<bool> g_fail_next_ipc_write{false};
+
+void collect_flat_buffers(ArrowArrayView* view,
+                          dstd::Vector<ArrowBufferView>& out, bool is_root) {
     if (!is_root) {
-        std::int64_t buffer_count = ArrowArrayViewGetNumBuffers(view);
-        for (std::int64_t i = 0; i < buffer_count; i++) {
+        const std::int64_t count = ArrowArrayViewGetNumBuffers(view);
+        for (std::int64_t i = 0; i < count; ++i)
             out.push_back(ArrowArrayViewGetBufferView(view, i));
-        }
     }
-    for (std::int64_t i = 0; i < view->n_children; i++) {
+    for (std::int64_t i = 0; i < view->n_children; ++i)
         collect_flat_buffers(view->children[i], out, false);
-    }
 }
 
-static void collect_nodes(const ArrowArrayView* view,
-                          dstd::Vector<ns(FieldNode_t)>& nodes,
-                          bool is_root = false) {
+void collect_nodes(const ArrowArrayView* view,
+                   dstd::Vector<ns(FieldNode_t)>& nodes, bool is_root) {
     if (!is_root) {
         ns(FieldNode_t) node;
         node.length = view->length;
         node.null_count = ArrowArrayViewComputeNullCount(view);
         nodes.push_back(node);
     }
-    for (std::int64_t i = 0; i < view->n_children; i++) {
+    for (std::int64_t i = 0; i < view->n_children; ++i)
         collect_nodes(view->children[i], nodes, false);
-    }
 }
 
-static int build_compressed_body(ArrowArrayView* view,
-                                 dstd::Vector<uint8_t>& out_body,
-                                 dstd::Vector<BufferInfo>& out_info) {
-    dstd::Vector<ArrowBufferView> flat_buffers;
-    collect_flat_buffers(view, flat_buffers, true);
-
-    out_body.clear();
-    out_info.clear();
-    std::int64_t compressed_offset = 0;
-
-    for (const auto& buf : flat_buffers) {
-        std::int64_t uncompressed_size = buf.size_bytes;
-
-        if (uncompressed_size == 0 || buf.data.data == nullptr) {
-            out_info.push_back({compressed_offset, 0});
+/// The compressed body: each non-empty buffer as an int64 uncompressed size
+/// followed by zstd data, padded to 8 bytes.
+bool build_compressed_body(ArrowArrayView* view,
+                           dstd::Vector<std::uint8_t>& body,
+                           dstd::Vector<BufferInfo>& info) {
+    dstd::Vector<ArrowBufferView> flat;
+    collect_flat_buffers(view, flat, true);
+    body.clear();
+    info.clear();
+    std::int64_t offset = 0;
+    for (const auto& buf : flat) {
+        const std::int64_t size = buf.size_bytes;
+        if (size == 0 || buf.data.data == nullptr) {
+            info.push_back({offset, 0});
             continue;
         }
-
-        std::size_t max_compressed = ZSTD_compressBound(uncompressed_size);
-        std::size_t old_size = out_body.size();
-
-        // Reserve space: [int64 uncompressed_size][zstd data]
-        out_body.resize(old_size + 8 + max_compressed);
-
-        std::size_t compressed_size =
-            ZSTD_compress(out_body.data() + old_size + 8, max_compressed,
-                          buf.data.data, uncompressed_size, 3);
-
-        if (ZSTD_isError(compressed_size)) {
-            return -1;
-        }
-
-        std::int64_t total_size =
-            8 + static_cast<std::int64_t>(compressed_size);
-        out_body.resize(old_size + total_size);
-        std::memcpy(out_body.data() + old_size, &uncompressed_size, 8);
-
-        out_info.push_back({compressed_offset, total_size});
-
-        compressed_offset += total_size;
-        std::int64_t padded = (compressed_offset + 7) & ~7;
-        out_body.resize(padded, 0);
-        compressed_offset = padded;
+        const std::size_t bound =
+            ZSTD_compressBound(static_cast<std::size_t>(size));
+        const std::size_t at = body.size();
+        body.resize(at + 8 + bound);
+        const std::size_t written =
+            ZSTD_compress(body.data() + at + 8, bound, buf.data.data,
+                          static_cast<std::size_t>(size), 3);
+        if (ZSTD_isError(written)) return false;
+        const std::int64_t total = 8 + static_cast<std::int64_t>(written);
+        body.resize(at + static_cast<std::size_t>(total));
+        std::memcpy(body.data() + at, &size, 8);
+        info.push_back({offset, total});
+        offset += total;
+        const std::int64_t padded = (offset + 7) & ~std::int64_t{7};
+        body.resize(static_cast<std::size_t>(padded), 0);
+        offset = padded;
     }
-
-    return 0;
+    return true;
 }
 
-static int build_message_header(ArrowArrayView* view,
-                                const dstd::Vector<BufferInfo>& buffer_info,
-                                std::int64_t body_length,
-                                dstd::Vector<uint8_t>& out_header) {
+/// A record batch message header: the encapsulated prefix, the flatbuffer and
+/// its padding, so the whole thing is a multiple of 8 bytes.
+bool build_message_header(ArrowArrayView* view,
+                          const dstd::Vector<BufferInfo>& info,
+                          std::int64_t body_length,
+                          dstd::Vector<std::uint8_t>& header) {
     dstd::Vector<ns(FieldNode_t)> nodes;
     collect_nodes(view, nodes, true);
 
     flatcc_builder_t builder;
-    if (flatcc_builder_init(&builder) == -1) {
-        return -1;
-    }
+    if (flatcc_builder_init(&builder) != 0) return false;
     flatcc_builder_set_vtable_clustering(&builder, 0);
 
-    dstd::Vector<ns(Buffer_t)> buffer_structs;
-    buffer_structs.reserve(buffer_info.size());
-    for (const auto& buf : buffer_info) {
-        ns(Buffer_t) b;
-        b.offset = buf.offset;
-        b.length = buf.length;
-        buffer_structs.push_back(b);
+    dstd::Vector<ns(Buffer_t)> buffers;
+    buffers.reserve(info.size());
+    for (const auto& b : info) {
+        ns(Buffer_t) entry;
+        entry.offset = b.offset;
+        entry.length = b.length;
+        buffers.push_back(entry);
     }
 
-    ns(BodyCompression_ref_t) compression_ref = ns(BodyCompression_create(
+    ns(BodyCompression_ref_t) compression = ns(BodyCompression_create(
         &builder, ns(CompressionType_ZSTD), ns(BodyCompressionMethod_BUFFER)));
 
     ns(Message_start_as_root(&builder));
@@ -173,486 +147,352 @@ static int build_message_header(ArrowArrayView* view,
     ns(RecordBatch_nodes_create(
         &builder, reinterpret_cast<ns(FieldNode_t)*>(nodes.data()),
         nodes.size()));
-    ns(RecordBatch_buffers_create(&builder, buffer_structs.data(),
-                                  buffer_structs.size()));
-    ns(RecordBatch_compression_add(&builder, compression_ref));
+    ns(RecordBatch_buffers_create(&builder, buffers.data(), buffers.size()));
+    ns(RecordBatch_compression_add(&builder, compression));
     ns(Message_header_RecordBatch_end(&builder));
     ns(Message_bodyLength_add(&builder, body_length));
     ns(Message_end_as_root(&builder));
 
-    std::size_t msg_size = 0;
-    void* msg_buf = flatcc_builder_get_direct_buffer(&builder, &msg_size);
-    void* allocated_buf = nullptr;
-
-    if (!msg_buf) {
-        msg_buf = flatcc_builder_finalize_buffer(&builder, &msg_size);
-        allocated_buf = msg_buf;
+    std::size_t message_size = 0;
+    void* message = flatcc_builder_get_direct_buffer(&builder, &message_size);
+    void* allocated = nullptr;
+    if (message == nullptr) {
+        message = flatcc_builder_finalize_buffer(&builder, &message_size);
+        allocated = message;
     }
-
-    if (!msg_buf || msg_size == 0) {
-        if (allocated_buf) flatcc_builder_free(allocated_buf);
+    if (message == nullptr || message_size == 0) {
+        if (allocated != nullptr) flatcc_builder_free(allocated);
         flatcc_builder_clear(&builder);
-        return -1;
+        return false;
     }
 
-    // Build IPC encapsulated message: continuation(-1) + size + metadata +
-    // padding
-    std::int32_t continuation = -1;
-    std::int32_t msg_size_i32 = static_cast<std::int32_t>(msg_size);
-    std::size_t msg_padding = (8 - (msg_size % 8)) % 8;
+    const std::int32_t continuation = -1;
+    const auto size32 = static_cast<std::int32_t>(message_size);
+    const std::size_t padding = (8 - (message_size % 8)) % 8;
+    header.clear();
+    header.resize(8 + message_size + padding);
+    std::memcpy(header.data(), &continuation, 4);
+    std::memcpy(header.data() + 4, &size32, 4);
+    std::memcpy(header.data() + 8, message, message_size);
 
-    out_header.clear();
-    out_header.resize(8 + msg_size + msg_padding);
-    std::memcpy(out_header.data(), &continuation, 4);
-    std::memcpy(out_header.data() + 4, &msg_size_i32, 4);
-    std::memcpy(out_header.data() + 8, msg_buf, msg_size);
-    // Padding bytes are already zero from resize
-
-    if (allocated_buf) flatcc_builder_free(allocated_buf);
+    if (allocated != nullptr) flatcc_builder_free(allocated);
     flatcc_builder_clear(&builder);
-
-    return 0;
+    return true;
 }
 
-// ---------------------------------------------------------------------------
-// IpcWriter lifecycle
-// ---------------------------------------------------------------------------
-
-IpcWriter::~IpcWriter() {
-    if (is_open()) reset_state();
-}
-
-IpcWriter::IpcWriter(IpcWriter&& other) noexcept {
-    file_ = std::move(other.file_);
-    write_offset_ = other.write_offset_;
-    buffer_pool_ = std::move(other.buffer_pool_);
-    schema_written_ = other.schema_written_;
-    compression_ = other.compression_;
-    batch_blocks_ = other.batch_blocks_;
-    schema_copy_ = other.schema_copy_;
-    other.reset_state();
-}
-
-IpcWriter& IpcWriter::operator=(IpcWriter&& other) noexcept {
-    if (this != &other) {
-        file_ = std::move(other.file_);
-        write_offset_ = other.write_offset_;
-        buffer_pool_ = std::move(other.buffer_pool_);
-        schema_written_ = other.schema_written_;
-        compression_ = other.compression_;
-        batch_blocks_ = other.batch_blocks_;
-        schema_copy_ = other.schema_copy_;
-        other.reset_state();
-    }
-    return *this;
-}
-
-void IpcWriter::reset_state() noexcept {
-    write_offset_ = 0;
-    schema_written_ = false;
-    batch_blocks_ = nullptr;
-    schema_copy_ = nullptr;
-}
-
-// ---------------------------------------------------------------------------
-// open
-// ---------------------------------------------------------------------------
-
-coro::CoroTask<int> IpcWriter::open(dstd::CStringView path,
-                                    IpcCompression compression,
-                                    std::size_t pool_slots) {
-    if (is_open()) co_return -1;
-
-    compression_ = compression;
-    buffer_pool_ = BufferPool(pool_slots);
-
-    // Async open via runtime::io::open (auto-detects executor context)
-    const dstd::OpenOptions open_options{.access = dstd::Access::Write,
-                                         .creation = dstd::Creation::AlwaysNew};
-    auto opening =
-        runtime::io::open_file(dstd::PathView(path.view()), open_options);
-    auto opened = co_await std::move(opening);
-
-    if (!opened) {
-        reset_state();
-        co_return -1;
-    }
-
-    file_ = std::move(*opened);
-    write_offset_ = 0;
-
-    // Write Arrow IPC file magic "ARROW1" + padding
-    constexpr char MAGIC[] = "ARROW1\0\0";
-    auto write_result =
-        co_await runtime::io::pwrite(file_.native_handle(), MAGIC, 8, 0);
-    if (write_result < 0) {
-        file_.close().discard();
-        reset_state();
-        co_return static_cast<int>(write_result);
-    }
-    write_offset_ = 8;
-
-    // Initialize block tracking
-    batch_blocks_ = dstd::make_unique<dstd::Vector<FileBlock>>().release();
-
-    co_return 0;
-}
-
-// ---------------------------------------------------------------------------
-// write_schema
-// ---------------------------------------------------------------------------
-
-coro::CoroTask<int> IpcWriter::write_schema(ArrowExportResult& batch) {
-    ArrowSchema* schema = batch.schema();
-
-    // Deep copy schema for footer
-    auto* schema_cp = dstd::make_unique<ArrowSchema>().release();
-    ArrowSchemaDeepCopy(schema, schema_cp);
-    schema_copy_ = schema_cp;
-
-    // Encode schema message
-    ArrowIpcEncoder encoder;
-    ArrowIpcEncoderInit(&encoder);
-
-    ArrowError error;
-    int rc = ArrowIpcEncoderEncodeSchema(&encoder, schema, &error);
-    if (rc != NANOARROW_OK) {
-        ArrowIpcEncoderReset(&encoder);
-        co_return rc;
-    }
-
-    ArrowBuffer msg_buf;
-    ArrowBufferInit(&msg_buf);
-    rc = ArrowIpcEncoderFinalizeBuffer(&encoder, 1, &msg_buf);
-    ArrowIpcEncoderReset(&encoder);
-    if (rc != NANOARROW_OK) {
-        ArrowBufferReset(&msg_buf);
-        co_return rc;
-    }
-
-    // Write schema message
-    auto result = co_await runtime::io::pwrite(
-        file_.native_handle(), msg_buf.data, msg_buf.size_bytes, write_offset_);
-
-    if (result < 0) {
-        ArrowBufferReset(&msg_buf);
-        co_return static_cast<int>(result);
-    }
-
-    write_offset_ += msg_buf.size_bytes;
-    ArrowBufferReset(&msg_buf);
-    schema_written_ = true;
-
-    co_return 0;
-}
-
-// ---------------------------------------------------------------------------
-// encode_batch_uncompressed
-// ---------------------------------------------------------------------------
-
-static int encode_batch_uncompressed(ArrowExportResult& batch,
-                                     dstd::Vector<uint8_t>& out_header,
-                                     dstd::Vector<uint8_t>& out_body) {
-    ArrowSchema* schema = batch.schema();
-    ArrowArray* array = batch.array();
-
+/// An uncompressed record batch, as nanoarrow encodes it.
+bool encode_batch_uncompressed(const ArrowSchema* schema,
+                               const ArrowArray* array,
+                               dstd::Vector<std::uint8_t>& header,
+                               dstd::Vector<std::uint8_t>& body) {
     ArrowArrayView view;
     ArrowError error;
-    int rc = ArrowArrayViewInitFromSchema(&view, schema, &error);
-    if (rc != NANOARROW_OK) {
-        return rc;
+    if (ArrowArrayViewInitFromSchema(&view, schema, &error) != NANOARROW_OK) {
+        DFTRACER_UTILS_LOG_ERROR("arrow ipc write: schema view: {}",
+                                 error.message);
+        return false;
     }
-
-    rc = ArrowArrayViewSetArray(&view, array, &error);
-    if (rc != NANOARROW_OK) {
+    if (ArrowArrayViewSetArray(&view, array, &error) != NANOARROW_OK) {
+        DFTRACER_UTILS_LOG_ERROR("arrow ipc write: array view: {}",
+                                 error.message);
         ArrowArrayViewReset(&view);
-        return rc;
+        return false;
     }
 
     ArrowIpcEncoder encoder;
     ArrowIpcEncoderInit(&encoder);
-
     ArrowBuffer body_buf;
     ArrowBufferInit(&body_buf);
-
-    rc = ArrowIpcEncoderEncodeSimpleRecordBatch(&encoder, &view, &body_buf,
-                                                &error);
-    if (rc != NANOARROW_OK) {
-        ArrowBufferReset(&body_buf);
-        ArrowIpcEncoderReset(&encoder);
-        ArrowArrayViewReset(&view);
-        return rc;
-    }
-
+    int rc = ArrowIpcEncoderEncodeSimpleRecordBatch(&encoder, &view, &body_buf,
+                                                    &error);
     ArrowBuffer header_buf;
     ArrowBufferInit(&header_buf);
-
-    rc = ArrowIpcEncoderFinalizeBuffer(&encoder, 1, &header_buf);
-    if (rc != NANOARROW_OK) {
-        ArrowBufferReset(&body_buf);
-        ArrowBufferReset(&header_buf);
-        ArrowIpcEncoderReset(&encoder);
-        ArrowArrayViewReset(&view);
-        return rc;
+    if (rc == NANOARROW_OK)
+        rc = ArrowIpcEncoderFinalizeBuffer(&encoder, 1, &header_buf);
+    if (rc == NANOARROW_OK) {
+        header.assign(header_buf.data, header_buf.data + header_buf.size_bytes);
+        body.assign(body_buf.data, body_buf.data + body_buf.size_bytes);
     }
-
-    out_header.resize(header_buf.size_bytes);
-    std::memcpy(out_header.data(), header_buf.data, header_buf.size_bytes);
-
-    out_body.resize(body_buf.size_bytes);
-    std::memcpy(out_body.data(), body_buf.data, body_buf.size_bytes);
-
     ArrowBufferReset(&body_buf);
     ArrowBufferReset(&header_buf);
     ArrowIpcEncoderReset(&encoder);
     ArrowArrayViewReset(&view);
-
-    return 0;
+    return rc == NANOARROW_OK;
 }
 
-// ---------------------------------------------------------------------------
-// compress_batch
-// ---------------------------------------------------------------------------
-
-coro::CoroTask<IpcWriter::CompressedBatch> IpcWriter::compress_batch(
-    ArrowExportResult& batch) {
-    CompressedBatch result{};
-
-    if (compression_ == IpcCompression::None) {
-        result.body = buffer_pool_.acquire(64 * 1024);
-
-        int rc =
-            encode_batch_uncompressed(batch, result.header, result.body.data());
-        if (rc != 0) {
-            co_return result;
-        }
-
-        result.body_size = result.body.data().size();
-        result.body_length = static_cast<std::int64_t>(result.body_size);
-        result.metadata_length =
-            static_cast<std::int32_t>(result.header.size());
-        co_return result;
-    }
-
-    if (compression_ != IpcCompression::Zstd) {
-        co_return result;
-    }
-
-    ArrowSchema* schema = batch.schema();
-    ArrowArray* array = batch.array();
+/// One record batch: its header message and its body.
+bool encode_batch(const ArrowSchema* schema, const ArrowArray* array,
+                  Compression compression, dstd::Vector<std::uint8_t>& header,
+                  dstd::Vector<std::uint8_t>& body) {
+    if (compression == Compression::None)
+        return encode_batch_uncompressed(schema, array, header, body);
 
     ArrowArrayView view;
-    int rc = init_array_view(view, schema, array);
-    if (rc != NANOARROW_OK) {
-        co_return result;
-    }
-
-    // Acquire pooled buffer for compressed body
-    std::size_t estimated_size = 0;
-    dstd::Vector<ArrowBufferView> flat_buffers;
-    collect_flat_buffers(&view, flat_buffers, true);
-    for (const auto& buf : flat_buffers) {
-        estimated_size += ZSTD_compressBound(buf.size_bytes) + 8;
-    }
-
-    result.body = buffer_pool_.acquire(estimated_size);
-
-    // Compress into pooled buffer
-    dstd::Vector<BufferInfo> buffer_info;
-    rc = build_compressed_body(&view, result.body.data(), buffer_info);
-    if (rc != 0) {
-        ArrowArrayViewReset(&view);
-        co_return result;
-    }
-
-    result.body_size = result.body.data().size();
-    result.body_length = static_cast<std::int64_t>(result.body_size);
-
-    // Build message header
-    rc = build_message_header(&view, buffer_info, result.body_length,
-                              result.header);
-    if (rc != 0) {
-        ArrowArrayViewReset(&view);
-        co_return result;
-    }
-
-    result.metadata_length = static_cast<std::int32_t>(result.header.size());
-
+    if (arrow::init_array_view(view, const_cast<ArrowSchema*>(schema),
+                               const_cast<ArrowArray*>(array)) != NANOARROW_OK)
+        return false;
+    dstd::Vector<BufferInfo> info;
+    const bool ok =
+        build_compressed_body(&view, body, info) &&
+        build_message_header(&view, info,
+                             static_cast<std::int64_t>(body.size()), header);
     ArrowArrayViewReset(&view);
-
-    co_return result;
+    return ok;
 }
 
-// ---------------------------------------------------------------------------
-// write_compressed
-// ---------------------------------------------------------------------------
+}  // namespace
 
-coro::CoroTask<int> IpcWriter::write_compressed(CompressedBatch& cb) {
-    auto* blocks = static_cast<dstd::Vector<FileBlock>*>(batch_blocks_);
+namespace detail {
 
-    // Record block info
-    FileBlock block;
-    block.offset = write_offset_;
-    block.metadata_length = cb.metadata_length;
-    block.body_length = cb.body_length;
-
-    // Vectored write: header + body
-    struct iovec iov[2];
-    iov[0].iov_base = cb.header.data();
-    iov[0].iov_len = cb.header.size();
-    iov[1].iov_base = cb.body.data().data();
-    iov[1].iov_len = cb.body_size;
-
-    auto result = co_await runtime::io::pwritev(file_.native_handle(), iov, 2,
-                                                write_offset_);
-
-    // Release pooled buffer
-    cb.body.reset();
-
-    if (result < 0) {
-        co_return static_cast<int>(result);
-    }
-
-    write_offset_ += result;
-    blocks->push_back(block);
-
-    co_return 0;
+void fail_next_ipc_write_for_test() {
+    g_fail_next_ipc_write.store(true, std::memory_order_relaxed);
 }
 
-// ---------------------------------------------------------------------------
-// write_batch
-// ---------------------------------------------------------------------------
+}  // namespace detail
 
-coro::CoroTask<int> IpcWriter::write_batch(ArrowExportResult& batch) {
-    if (!is_open() || !batch.valid()) co_return -1;
+struct Writer::Impl {
+    dstd::File file;
+    dstd::Vector<std::uint8_t> bytes;
+    std::int64_t offset = 0;
+    bool is_file = false;
+    Compression compression = Compression::None;
+    bool schema_written = false;
+    bool finished = false;
+    ArrowSchema footer_schema{};
+    dstd::Vector<ArrowIpcFileBlock> blocks;
+    dstd::Vector<dstd::String> names;
+    /// The first frame's column types, which every later frame must match.
+    dstd::Vector<dataframe::DataType> types;
+    bool failed = false;
+    common::ErrorCode failure_code = common::ErrorCode::Internal;
+    dstd::String failure;
 
-    // Write schema on first batch
-    if (!schema_written_) {
-        int rc = co_await write_schema(batch);
-        if (rc != 0) co_return rc;
+    Impl() = default;
+    Impl(const Impl&) = delete;
+    Impl& operator=(const Impl&) = delete;
+    ~Impl() {
+        if (footer_schema.release != nullptr)
+            footer_schema.release(&footer_schema);
     }
 
-    // Compress and write
-    auto cb = co_await compress_batch(batch);
-    if (cb.header.empty()) co_return -1;
-
-    co_return co_await write_compressed(cb);
-}
-
-// ---------------------------------------------------------------------------
-// write_batches (parallel compression)
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// write_footer
-// ---------------------------------------------------------------------------
-
-coro::CoroTask<int> IpcWriter::write_footer() {
-    auto* blocks = static_cast<dstd::Vector<FileBlock>*>(batch_blocks_);
-    auto* schema = static_cast<ArrowSchema*>(schema_copy_);
-
-    if (!blocks || !schema) {
-        co_return -1;
+    dstd::Result<void> fail(common::ErrorCode code, dstd::StringView what) {
+        DFTRACER_UTILS_LOG_ERROR("arrow ipc write: {}", what);
+        failed = true;
+        failure_code = code;
+        failure = dstd::String(what);
+        return common::make_error(code, what);
     }
 
-    ArrowIpcFooter footer;
-    ArrowIpcFooterInit(&footer);
-    ArrowSchemaMove(schema, &footer.schema);
+    dstd::Result<void> not_failed() const {
+        if (!failed) return {};
+        return common::make_error<"{}, and the writer failed earlier: {}">(
+            failure_code, "arrow ipc write", failure);
+    }
 
-    for (const auto& block : *blocks) {
-        int rc = ArrowBufferAppend(&footer.record_batch_blocks, &block,
-                                   sizeof(FileBlock));
+    /// Appends `data` to the sink, then `data2` when it is not empty.
+    dstd::Result<void> emit(dstd::ByteView data) {
+        if (!is_file) {
+            bytes.insert(bytes.end(), data.as<std::uint8_t>(),
+                         data.as<std::uint8_t>() + data.size());
+            offset = static_cast<std::int64_t>(bytes.size());
+            return {};
+        }
+        auto written =
+            file.write_all_at(static_cast<std::uint64_t>(offset), data);
+        if (!written)
+            return fail(common::ErrorCode::Io, written.error().message());
+        offset += static_cast<std::int64_t>(data.size());
+        return {};
+    }
+
+    dstd::Result<void> write_schema(const ArrowSchema* schema) {
+        if (ArrowSchemaDeepCopy(schema, &footer_schema) != NANOARROW_OK)
+            return fail(common::ErrorCode::Internal,
+                        "arrow ipc write: schema copy failed");
+        ArrowIpcEncoder encoder;
+        ArrowIpcEncoderInit(&encoder);
+        ArrowError error;
+        int rc = ArrowIpcEncoderEncodeSchema(&encoder, schema, &error);
+        ArrowBuffer message;
+        ArrowBufferInit(&message);
+        if (rc == NANOARROW_OK)
+            rc = ArrowIpcEncoderFinalizeBuffer(&encoder, 1, &message);
+        ArrowIpcEncoderReset(&encoder);
         if (rc != NANOARROW_OK) {
-            ArrowIpcFooterReset(&footer);
-            co_return rc;
+            ArrowBufferReset(&message);
+            return fail(common::ErrorCode::Internal, error.message);
+        }
+        auto out = emit(dstd::ByteView(message.data, message.size_bytes));
+        ArrowBufferReset(&message);
+        if (!out) return out;
+        schema_written = true;
+        return {};
+    }
+
+    dstd::Result<void> write_footer() {
+        ArrowIpcFooter footer;
+        ArrowIpcFooterInit(&footer);
+        ArrowSchemaMove(&footer_schema, &footer.schema);
+        for (const auto& block : blocks) {
+            if (ArrowBufferAppend(&footer.record_batch_blocks, &block,
+                                  sizeof(block)) != NANOARROW_OK) {
+                ArrowIpcFooterReset(&footer);
+                return fail(common::ErrorCode::Internal,
+                            "arrow ipc write: footer block append failed");
+            }
+        }
+        ArrowIpcEncoder encoder;
+        ArrowIpcEncoderInit(&encoder);
+        ArrowError error;
+        int rc = ArrowIpcEncoderEncodeFooter(&encoder, &footer, &error);
+        ArrowBuffer buffer;
+        ArrowBufferInit(&buffer);
+        if (rc == NANOARROW_OK)
+            rc = ArrowIpcEncoderFinalizeBuffer(&encoder, 0, &buffer);
+        ArrowIpcEncoderReset(&encoder);
+        ArrowIpcFooterReset(&footer);
+        if (rc != NANOARROW_OK) {
+            ArrowBufferReset(&buffer);
+            return fail(common::ErrorCode::Internal, error.message);
+        }
+
+        // End of stream, footer, its size, and the magic.
+        dstd::Vector<std::uint8_t> data(8 + buffer.size_bytes + 4 + 6, 0);
+        const std::int32_t continuation = -1;
+        const std::int32_t end_of_stream = 0;
+        std::memcpy(data.data(), &continuation, 4);
+        std::memcpy(data.data() + 4, &end_of_stream, 4);
+        std::memcpy(data.data() + 8, buffer.data, buffer.size_bytes);
+        const auto footer_size = static_cast<std::int32_t>(buffer.size_bytes);
+        std::memcpy(data.data() + 8 + buffer.size_bytes, &footer_size, 4);
+        std::memcpy(data.data() + 8 + buffer.size_bytes + 4, FILE_FOOTER_MAGIC,
+                    6);
+        ArrowBufferReset(&buffer);
+
+        auto out = emit(dstd::ByteView(data));
+        if (!out) return out;
+        return file.close() ? dstd::Result<void>{}
+                            : fail(common::ErrorCode::Io,
+                                   "arrow ipc write: close failed");
+    }
+};
+
+Writer::Writer(dstd::UniquePtr<Impl> impl) noexcept : impl_(std::move(impl)) {}
+Writer::Writer(Writer&& other) noexcept = default;
+Writer& Writer::operator=(Writer&& other) noexcept = default;
+Writer::~Writer() = default;
+
+dstd::Result<Writer> Writer::open(const dstd::Path& path,
+                                  WriterOptions options) {
+    auto impl = dstd::make_unique<Impl>();
+    impl->is_file = true;
+    impl->compression = options.compression;
+    const dstd::OpenOptions open_options{.access = dstd::Access::Write,
+                                         .creation = dstd::Creation::AlwaysNew};
+    auto opened = dstd::File::open(path.view(), open_options);
+    if (!opened)
+        return common::make_error<"arrow ipc open '{}': {}">(
+            common::ErrorCode::Io, path.view(), opened.error().message());
+    impl->file = std::move(*opened);
+    auto header = impl->emit(dstd::ByteView(FILE_HEADER_MAGIC, 8));
+    if (!header) return header.error();
+    return Writer{std::move(impl)};
+}
+
+Writer Writer::to_buffer(WriterOptions options) {
+    auto impl = dstd::make_unique<Impl>();
+    impl->compression = options.compression;
+    return Writer{std::move(impl)};
+}
+
+dstd::Result<void> Writer::write(const DataFrame& frame) {
+    Impl& self = *impl_;
+    DFTRACER_UTILS_TRY_VOID(self.not_failed());
+    if (self.finished)
+        return self.fail(common::ErrorCode::InvalidArgument,
+                         "arrow ipc write: the writer is finished");
+    const DataFrame written = as_written(frame);
+    if (self.schema_written) {
+        if (self.names.size() != written.names.size() ||
+            self.types.size() != written.columns.size())
+            return self.fail(common::ErrorCode::InvalidArgument,
+                             "arrow ipc write: a frame with other columns");
+        for (std::size_t i = 0; i < self.names.size(); ++i) {
+            if (self.names[i] != written.names[i].view())
+                return self.fail(common::ErrorCode::InvalidArgument,
+                                 "arrow ipc write: a frame with other columns");
+        }
+        for (std::size_t i = 0; i < self.types.size(); ++i) {
+            if (self.types[i] != written.columns[i].data_type())
+                return self.fail(common::ErrorCode::InvalidArgument,
+                                 "arrow ipc write: a frame with other column "
+                                 "types");
         }
     }
 
-    ArrowIpcEncoder encoder;
-    ArrowIpcEncoderInit(&encoder);
+    if (g_fail_next_ipc_write.exchange(false, std::memory_order_relaxed))
+        return common::make_error<"arrow ipc write: an injected failure">(
+            common::ErrorCode::Internal);
+    auto batch = to_arrow(written);
+    if (!batch) return batch.error();
+    ArrowSchema schema;
+    ArrowArray array;
+    batch->release_into(&schema, &array);
 
-    ArrowError error;
-    int rc = ArrowIpcEncoderEncodeFooter(&encoder, &footer, &error);
-    if (rc != NANOARROW_OK) {
-        ArrowIpcEncoderReset(&encoder);
-        ArrowIpcFooterReset(&footer);
-        co_return rc;
+    dstd::Result<void> out{};
+    if (!self.schema_written) {
+        out = self.write_schema(&schema);
+        // Set only once the schema is out, so a failed call leaves them unset.
+        if (out) {
+            self.names = dstd::to_strings(written.names);
+            self.types.reserve(written.columns.size());
+            for (const Series& col : written.columns)
+                self.types.push_back(col.data_type());
+        }
     }
-
-    ArrowBuffer footer_buf;
-    ArrowBufferInit(&footer_buf);
-    rc = ArrowIpcEncoderFinalizeBuffer(&encoder, 0, &footer_buf);
-    ArrowIpcEncoderReset(&encoder);
-    if (rc != NANOARROW_OK) {
-        ArrowBufferReset(&footer_buf);
-        ArrowIpcFooterReset(&footer);
-        co_return rc;
+    if (out) {
+        dstd::Vector<std::uint8_t> header;
+        dstd::Vector<std::uint8_t> body;
+        if (!encode_batch(&schema, &array, self.compression, header, body)) {
+            out = self.fail(common::ErrorCode::Internal,
+                            "arrow ipc write: record batch encode failed");
+        } else {
+            ArrowIpcFileBlock block{};
+            block.offset = self.offset;
+            block.metadata_length = static_cast<std::int32_t>(header.size());
+            block.body_length = static_cast<std::int64_t>(body.size());
+            out = self.emit(dstd::ByteView(header));
+            if (out) out = self.emit(dstd::ByteView(body));
+            if (out) self.blocks.push_back(block);
+        }
     }
-
-    // Build footer: EOS marker + footer + footer_size + magic
-    dstd::Vector<uint8_t> footer_data;
-    footer_data.resize(8 + footer_buf.size_bytes + 4 + 6);
-
-    std::int32_t eos_continuation = -1;
-    std::int32_t eos_size = 0;
-    std::memcpy(footer_data.data(), &eos_continuation, 4);
-    std::memcpy(footer_data.data() + 4, &eos_size, 4);
-    std::memcpy(footer_data.data() + 8, footer_buf.data, footer_buf.size_bytes);
-
-    std::int32_t footer_size = static_cast<std::int32_t>(footer_buf.size_bytes);
-    std::memcpy(footer_data.data() + 8 + footer_buf.size_bytes, &footer_size,
-                4);
-    std::memcpy(footer_data.data() + 8 + footer_buf.size_bytes + 4, "ARROW1",
-                6);
-
-    ArrowBufferReset(&footer_buf);
-    ArrowIpcFooterReset(&footer);
-
-    // Write footer
-    auto result =
-        co_await runtime::io::pwrite(file_.native_handle(), footer_data.data(),
-                                     footer_data.size(), write_offset_);
-
-    if (result < 0) {
-        co_return static_cast<int>(result);
-    }
-
-    write_offset_ += result;
-    co_return 0;
+    if (schema.release != nullptr) schema.release(&schema);
+    if (array.release != nullptr) array.release(&array);
+    return out;
 }
 
-// ---------------------------------------------------------------------------
-// close
-// ---------------------------------------------------------------------------
-
-coro::CoroTask<int> IpcWriter::close() {
-    if (!is_open()) co_return 0;
-
-    int rc = 0;
-
-    // Write footer
-    if (schema_written_ && batch_blocks_) {
-        rc = co_await write_footer();
+dstd::Result<void> Writer::finish() {
+    Impl& self = *impl_;
+    DFTRACER_UTILS_TRY_VOID(self.not_failed());
+    if (self.finished) return {};
+    self.finished = true;
+    if (self.is_file) {
+        if (!self.schema_written)
+            return self.fail(common::ErrorCode::InvalidArgument,
+                             "arrow ipc finish: no frame was written");
+        return self.write_footer();
     }
+    const std::int32_t continuation = -1;
+    const std::int32_t end_of_stream = 0;
+    std::uint8_t eos[8];
+    std::memcpy(eos, &continuation, 4);
+    std::memcpy(eos + 4, &end_of_stream, 4);
+    return self.emit(dstd::ByteView(eos, 8));
+}
 
-    // Cleanup
-    if (schema_copy_) {
-        auto* schema = static_cast<ArrowSchema*>(schema_copy_);
-        if (schema->release) schema->release(schema);
-        dstd::UniquePtr<ArrowSchema>(schema).reset();
-    }
-    if (batch_blocks_) {
-        dstd::UniquePtr<dstd::Vector<FileBlock>>(
-            static_cast<dstd::Vector<FileBlock>*>(batch_blocks_))
-            .reset();
-    }
-
-    const ssize_t synced = co_await runtime::io::fsync(file_.native_handle());
-    auto closed = file_.close();
-    if (!closed || synced < 0) rc = -1;
-
-    reset_state();
-    co_return rc;
+dstd::Vector<std::uint8_t> Writer::take_bytes() {
+    if (impl_ == nullptr) return {};
+    return std::move(impl_->bytes);
 }
 
 }  // namespace dftracer::utils::arrow

@@ -3,7 +3,7 @@
 #define DFTRACER_UTILS_PYTHON_TRACE_STREAMING_ITERATOR_H
 
 #include <Python.h>
-#include <dftracer/utils/arrow/arrow_export.h>
+#include <dftracer/utils/arrow/batch.h>
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dstd/error.h>
@@ -135,13 +135,13 @@ class StreamingState {
     dstd::SharedFuture<void> task_future_;
 };
 
-using dftracer::utils::arrow::ArrowExportResult;
+using dftracer::utils::arrow::Batch;
 
 /// Internal C++ state for ArrowStreamingIterator.
 /// Stored as a pointer to avoid C++ object layout issues with Python.
 struct ArrowStreamingIteratorState : dstd::HeapObject {
     dstd::SharedPtr<void> state;
-    dstd::Function<dstd::Optional<ArrowExportResult>()> pull_next;
+    dstd::Function<dstd::Optional<Batch>()> pull_next;
     // When set, the iterator yields native DataFrame chunks instead of Arrow
     // batches (pull_next is then unused). Keeps Arrow off the streaming path.
     dstd::Function<dstd::Optional<dftracer::utils::dataframe::DataFrame>()>
@@ -152,7 +152,7 @@ struct ArrowStreamingIteratorState : dstd::HeapObject {
 
 /// Type-erased Arrow streaming iterator for Python.
 ///
-/// This allows different producer types (AggregationBatch, ArrowExportResult,
+/// This allows different producer types (AggregationBatch, Batch,
 /// etc.) to share the same Python iterator mechanics.
 struct ArrowStreamingIteratorObject {
     PyObject_HEAD

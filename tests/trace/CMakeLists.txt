@@ -120,7 +120,7 @@ endif()
 # Arrow Tests (optional, requires nanoarrow)
 # +++++++++++++++++++++++++++++++++++++++++
 
-foreach(ARROW_TEST_SOURCE arrow/test_arrow_column_builder.cpp
+foreach(ARROW_TEST_SOURCE arrow/test_arrow_bridge.cpp
                           arrow/test_schema_reconcile.cpp)
   string(REPLACE ".cpp" "" arrow_bin_exec ${ARROW_TEST_SOURCE})
   string(REPLACE "/" "_" arrow_target "trace_${arrow_bin_exec}")

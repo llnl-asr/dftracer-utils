@@ -11,7 +11,7 @@
 #include <dftracer/utils/python/trace/trace_reader_iterator.h>
 #include <nanoarrow/nanoarrow.h>
 
-using ArrowExportResult = dftracer::utils::arrow::ArrowExportResult;
+using Batch = dftracer::utils::arrow::Batch;
 
 static void release_arrow_schema(PyObject *capsule) {
     auto *schema = static_cast<ArrowSchema *>(
@@ -36,7 +36,7 @@ static PyObject *ArrowBatchCapsule_arrow_c_array(ArrowBatchCapsuleObject *self,
     PyObject *requested_schema = Py_None;
     if (!PyArg_ParseTuple(args, "|O", &requested_schema)) return NULL;
 
-    if (!self->result || !self->result->valid()) {
+    if (!self->result || !self->result->is_valid()) {
         PyErr_SetString(PyExc_RuntimeError,
                         "Arrow data already exported via __arrow_c_array__. "
                         "Each batch can only be exported once.");
@@ -46,8 +46,7 @@ static PyObject *ArrowBatchCapsule_arrow_c_array(ArrowBatchCapsuleObject *self,
     auto *schema = dftracer::utils::dstd::make_unique<ArrowSchema>().release();
     auto *array = dftracer::utils::dstd::make_unique<ArrowArray>().release();
 
-    self->result->release_schema().move(schema);
-    self->result->release_array().move(array);
+    self->result->release_into(schema, array);
 
     PyObject *schema_capsule =
         PyCapsule_New(schema, "arrow_schema", release_arrow_schema);
@@ -76,13 +75,13 @@ static PyObject *ArrowBatchCapsule_arrow_c_array(ArrowBatchCapsuleObject *self,
 
 static PyObject *ArrowBatchCapsule_get_num_rows(ArrowBatchCapsuleObject *self,
                                                 void *) {
-    if (!self->result || !self->result->valid()) return PyLong_FromLong(0);
+    if (!self->result || !self->result->is_valid()) return PyLong_FromLong(0);
     return PyLong_FromLongLong(self->result->num_rows());
 }
 
 static PyObject *ArrowBatchCapsule_get_num_columns(
     ArrowBatchCapsuleObject *self, void *) {
-    if (!self->result || !self->result->valid()) return PyLong_FromLong(0);
+    if (!self->result || !self->result->is_valid()) return PyLong_FromLong(0);
     return PyLong_FromLongLong(self->result->num_columns());
 }
 
@@ -150,7 +149,7 @@ static PyObject *TraceReaderIterator_iter(TraceReaderIteratorObject *self) {
 static PyObject *TraceReaderIterator_next(TraceReaderIteratorObject *self) {
     if (self->mode == IteratorMode::Arrow) {
         auto *astate = self->arrow_state.get();
-        dftracer::utils::dstd::Optional<ArrowExportResult> batch;
+        dftracer::utils::dstd::Optional<Batch> batch;
         Py_BEGIN_ALLOW_THREADS batch = astate->channel->blocking_receive();
         Py_END_ALLOW_THREADS
 
@@ -171,7 +170,7 @@ static PyObject *TraceReaderIterator_next(TraceReaderIteratorObject *self) {
             (ArrowBatchCapsuleObject *)ArrowBatchCapsuleType.tp_alloc(
                 &ArrowBatchCapsuleType, 0);
         if (!obj) return NULL;
-        obj->result = new ArrowExportResult(std::move(*batch));
+        obj->result = new Batch(std::move(*batch));
         return (PyObject *)obj;
     }
 

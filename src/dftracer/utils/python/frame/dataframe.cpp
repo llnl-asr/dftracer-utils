@@ -6,6 +6,8 @@
 // interface.
 
 #include <dftracer/utils/arrow/arrow.h>
+#include <dftracer/utils/arrow/internal.h>
+#include <dftracer/utils/arrow/ipc.h>
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/agg_expr.h>
@@ -1296,12 +1298,12 @@ PyObject* DataFrame_arrow_c_array(PyObject* self, PyObject*) {
     dftracer::utils::dstd::UniquePtr<ArrowArray> array;
     schema = dftracer::utils::dstd::make_unique<ArrowSchema>();
     array = dftracer::utils::dstd::make_unique<ArrowArray>();
-    try {
-        arrow::to_arrow(b->st, schema.get(), array.get());
-    } catch (const std::exception& e) {
-        PyErr_SetString(PyExc_RuntimeError, e.what());
+    auto batch = arrow::to_arrow(b->st);
+    if (!batch) {
+        PyErr_SetString(PyExc_RuntimeError, batch.error().c_str());
         return nullptr;
     }
+    batch->release_into(schema.get(), array.get());
     PyObject* scap =
         PyCapsule_New(schema.get(), "arrow_schema", schema_capsule_destructor);
     if (!scap) {
@@ -1348,7 +1350,7 @@ PyObject* DataFrame_arrow_c_stream(PyObject* self, PyObject*) {
             if (a.release) a.release(&a);
     };
     try {
-        arrays = arrow::to_arrow_batches(b->st, &schema);
+        arrays = arrow::detail::to_arrow_batches(b->st, &schema);
     } catch (const std::exception& e) {
         drop();
         PyErr_SetString(PyExc_RuntimeError, e.what());
@@ -1382,14 +1384,17 @@ PyObject* DataFrame_arrow_c_stream(PyObject* self, PyObject*) {
 PyObject* DataFrame_to_ipc(PyObject* self, PyObject*) {
     DataFrameObject* b = as_dataframe(self);
     if (!b) return nullptr;
-    auto bytes = arrow::to_ipc(to_dataframe(b));
-    if (!bytes) {
-        PyErr_SetString(PyExc_RuntimeError, bytes.error().c_str());
+    auto writer = arrow::Writer::to_buffer();
+    auto status = writer.write(to_dataframe(b));
+    if (status) status = writer.finish();
+    if (!status) {
+        PyErr_SetString(PyExc_RuntimeError, status.error().c_str());
         return nullptr;
     }
+    const auto bytes = writer.take_bytes();
     return PyBytes_FromStringAndSize(
-        reinterpret_cast<const char*>(bytes->data()),
-        static_cast<Py_ssize_t>(bytes->size()));
+        reinterpret_cast<const char*>(bytes.data()),
+        static_cast<Py_ssize_t>(bytes.size()));
 }
 
 PyObject* DataFrame_to_bytes(PyObject* self, PyObject*) {

@@ -9,6 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Added
 
+- The arrow library has one owner type, `arrow::Batch`, in `dftracer/utils/arrow/batch.h`, and `dftracer/utils/arrow/ipc.h` has `arrow::Writer`, `arrow::Reader`, `arrow::scan_ipc` and `arrow::read_ipc`; `to_arrow`, `series_from_arrow` and `dataframe_from_arrow` report failure as `dstd::Result`, and `arrow::WriterOptions` picks the IPC compression.
+  `arrow::scan_ipc` decodes several files at once, as many as the request's memory budget holds, gives their batches in file order, and rejects a file whose columns differ from the first file's.
 - Add user-defined aggregates for plugins: `dftu_svc_ops::register_udaf` takes a `dftu_udaf_desc` (`dataframe/c_api_udaf.h`) with `bind`, `init`, `update`, `combine`, `finalize`, `destroy` and a `serialize` pair, and the host owns the memory of every group state.
   A state that is plain bytes (`DFTU_AGG_STATE_POD`) needs no `destroy` or `serialize`, and any other state needs all three, or the load fails with a message.
   `update` runs on whole columns and gets a null state pointer for a row with a null argument unless `DFTU_AGG_NULL_AWARE` is set.
@@ -55,7 +57,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
-- Move Arrow conversion and IPC out of the core libraries into the arrow library (`dftracer_utils_arrow`, `dftracer/utils/arrow/arrow.h`), which the Python module and the tests link: `Series::to_arrow`, `Series::from_arrow`, `DataFrame::to_arrow`, `DataFrame::from_arrow` and `DataFrame::to_ipc` become `arrow::to_arrow`, `arrow::series_from_arrow`, `arrow::dataframe_from_arrow` and `arrow::to_ipc`.
+- Move Arrow conversion and IPC out of the core libraries into the arrow library (`dftracer_utils_arrow`, `dftracer/utils/arrow/arrow.h`), which the Python module and the tests link: `Series::to_arrow`, `Series::from_arrow`, `DataFrame::to_arrow`, `DataFrame::from_arrow` and `DataFrame::to_ipc` become `arrow::to_arrow`, `arrow::series_from_arrow`, `arrow::dataframe_from_arrow`, and IPC through `arrow::Writer` and `arrow::Reader`.
 - Remove the CMake options `DFTRACER_UTILS_ENABLE_ARROW` and `DFTRACER_UTILS_ENABLE_ARROW_IPC`; the arrow library always has IPC.
 - Remove the plugin Arrow service `dftu.svc.arrow`, the result kind `DFTU_RESULT_KIND_ARROW`, `ViewScannerBatch::to_arrow` and `ComparisonOutput::to_arrow`.
 - Remove `dftu_plugin::bytes` and `dftu_plugin::reclaim`, and `dftu_cursor_vt::bytes` and `dftu_cursor_vt::reclaim`.

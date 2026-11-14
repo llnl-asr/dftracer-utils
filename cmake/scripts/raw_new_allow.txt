@@ -34,7 +34,7 @@ src/dftracer/utils/store/open_extent.cpp | OpenExtent | derives dstd::HeapObject
 src/dftracer/utils/store/open_extent.cpp | SlotBlock | derives dstd::HeapObject
 src/dftracer/utils/store/open_extent.cpp | PendingWrite | derives dstd::HeapObject
 src/dftracer/utils/python/core/arrow_stream_capsule.cpp | StreamPrivate | derives dstd::HeapObject
-ArrowExportResult | derives dstd::HeapObject
+Batch | the payload of an Arrow C capsule
 MemoryViewBatchData | derives dstd::HeapObject
 PluginHostState | derives dstd::HeapObject
 ArrowStreamingIteratorState | derives dstd::HeapObject

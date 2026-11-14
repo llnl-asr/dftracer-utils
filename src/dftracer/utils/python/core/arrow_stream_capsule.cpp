@@ -19,7 +19,7 @@
 #include <exception>
 #include <mutex>
 
-using ArrowExportResult = dftracer::utils::arrow::ArrowExportResult;
+using Batch = dftracer::utils::arrow::Batch;
 
 namespace {
 
@@ -31,7 +31,7 @@ struct StreamPrivate : dftracer::utils::dstd::HeapObject {
     dftracer::utils::dstd::SharedPtr<ArrowIteratorState> state;
     dftracer::utils::python::frame::SchemaReconciler reconciler;
     // Drained during discovery, emitted first from get_next.
-    dftracer::utils::dstd::Deque<ArrowExportResult> pending;
+    dftracer::utils::dstd::Deque<Batch> pending;
     dftracer::utils::dstd::String last_error;
     bool initialized = false;
     // Sticky: once set, all entry points short-circuit to EIO.
@@ -109,7 +109,7 @@ static int stream_get_next(struct ArrowArrayStream *s, struct ArrowArray *out) {
     }
 
     // Drain any discovery-phase batches first, then pull from the channel.
-    dftracer::utils::dstd::Optional<ArrowExportResult> batch;
+    dftracer::utils::dstd::Optional<Batch> batch;
     if (!p->pending.empty()) {
         batch = std::move(p->pending.front());
         p->pending.pop_front();
@@ -131,7 +131,9 @@ static int stream_get_next(struct ArrowArrayStream *s, struct ArrowArray *out) {
         astate->bytes_in_queue.fetch_sub(dequeued, std::memory_order_acq_rel);
     }
 
-    if (p->reconciler.reconcile(batch->schema(), batch->array(), out) != 0) {
+    if (p->reconciler.reconcile(batch->schema(),
+                                const_cast<ArrowArray *>(batch->array()),
+                                out) != 0) {
         mark_error(p, p->reconciler.last_error().empty()
                           ? "schema reconciliation failed"
                           : p->reconciler.last_error());

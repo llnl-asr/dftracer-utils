@@ -4,6 +4,7 @@
 // integer still fails.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dataframe/builders_arrow_types.h>
 #include <dftracer/utils/arrow/arrow.h>
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
@@ -57,7 +58,7 @@ Series make_large_utf8(const Cells& values) {
     }
     ArrowError err;
     REQUIRE(ArrowArrayFinishBuildingDefault(&b.array, &err) == NANOARROW_OK);
-    return arrow::series_from_arrow(&b.schema, &b.array);
+    return test_types::import_series(&b.schema, &b.array);
 }
 
 // A String column with a null where `values[i]` is nullopt.

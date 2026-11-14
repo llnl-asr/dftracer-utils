@@ -107,7 +107,7 @@ Series make_timestamp(const dstd::Vector<std::int64_t>& values) {
     for (std::int64_t v : values)
         REQUIRE(ArrowArrayAppendInt(&b.array, v) == NANOARROW_OK);
     finish_building(&b.array);
-    return arrow::series_from_arrow(&b.schema, &b.array);
+    return test_types::import_series(&b.schema, &b.array);
 }
 
 Series make_date32(const dstd::Vector<std::int32_t>& values) {
@@ -121,7 +121,7 @@ Series make_date32(const dstd::Vector<std::int32_t>& values) {
     for (std::int32_t v : values)
         REQUIRE(ArrowArrayAppendInt(&b.array, v) == NANOARROW_OK);
     finish_building(&b.array);
-    return arrow::series_from_arrow(&b.schema, &b.array);
+    return test_types::import_series(&b.schema, &b.array);
 }
 
 Series make_date64(const dstd::Vector<std::int64_t>& values) {
@@ -135,7 +135,7 @@ Series make_date64(const dstd::Vector<std::int64_t>& values) {
     for (std::int64_t v : values)
         REQUIRE(ArrowArrayAppendInt(&b.array, v) == NANOARROW_OK);
     finish_building(&b.array);
-    return arrow::series_from_arrow(&b.schema, &b.array);
+    return test_types::import_series(&b.schema, &b.array);
 }
 
 Series make_time32(const dstd::Vector<std::int32_t>& values) {
@@ -150,7 +150,7 @@ Series make_time32(const dstd::Vector<std::int32_t>& values) {
     for (std::int32_t v : values)
         REQUIRE(ArrowArrayAppendInt(&b.array, v) == NANOARROW_OK);
     finish_building(&b.array);
-    return arrow::series_from_arrow(&b.schema, &b.array);
+    return test_types::import_series(&b.schema, &b.array);
 }
 
 Series make_time64(const dstd::Vector<std::int64_t>& values) {
@@ -165,7 +165,7 @@ Series make_time64(const dstd::Vector<std::int64_t>& values) {
     for (std::int64_t v : values)
         REQUIRE(ArrowArrayAppendInt(&b.array, v) == NANOARROW_OK);
     finish_building(&b.array);
-    return arrow::series_from_arrow(&b.schema, &b.array);
+    return test_types::import_series(&b.schema, &b.array);
 }
 
 Series make_duration(const dstd::Vector<std::int64_t>& values) {
@@ -180,7 +180,7 @@ Series make_duration(const dstd::Vector<std::int64_t>& values) {
     for (std::int64_t v : values)
         REQUIRE(ArrowArrayAppendInt(&b.array, v) == NANOARROW_OK);
     finish_building(&b.array);
-    return arrow::series_from_arrow(&b.schema, &b.array);
+    return test_types::import_series(&b.schema, &b.array);
 }
 
 // builders_arrow_types.h's make_decimal128 always uses scale 0, which cannot
@@ -201,7 +201,7 @@ Series make_decimal128_scaled(const dstd::Vector<std::int64_t>& unscaled,
         REQUIRE(ArrowArrayAppendDecimal(&b.array, &dec) == NANOARROW_OK);
     }
     finish_building(&b.array);
-    return arrow::series_from_arrow(&b.schema, &b.array);
+    return test_types::import_series(&b.schema, &b.array);
 }
 
 enum class SpillExpect { RoundTrips, Refuses };

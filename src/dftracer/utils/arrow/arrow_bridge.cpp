@@ -3,10 +3,10 @@
 #include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/vector.h>
 
-// nanoarrow must precede arrow.h: c_api.h (pulled in by arrow.h) defines
-// ARROW_FLAG_DICTIONARY_ORDERED, nanoarrow's outer include guard, which would
-// otherwise suppress its ArrowArrayStream definition.
-#include <dftracer/utils/arrow/arrow.h>
+// nanoarrow must precede c_api.h: it defines ARROW_FLAG_DICTIONARY_ORDERED,
+// nanoarrow's outer include guard, which would otherwise suppress its
+// ArrowArrayStream definition.
+#include <dftracer/utils/arrow/internal.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
@@ -585,6 +585,8 @@ void build_schema(const dftu_series& col, ArrowSchema* schema) {
 
 }  // namespace
 
+namespace detail {
+
 void to_arrow(const Series& col, ArrowSchema* schema, ArrowArray* array) {
     const dftu_series* c = col.handle();
     if (c == nullptr) {
@@ -643,6 +645,8 @@ dstd::Vector<ArrowArray> to_arrow_batches(const Series& st,
     }
     return out;
 }
+
+}  // namespace detail
 
 namespace {
 
@@ -1012,41 +1016,116 @@ Series import_any(const ArrowSchema* schema, const ArrowArray* arr,
     return out;
 }
 
+// An imported array plus whatever else must outlive its buffers: the IPC file
+// mapping, a caller's bytes, or a sibling struct, any of which can have a
+// shorter lifetime than the array itself.
+struct ArrayOwner {
+    ArrowArray array;
+    dstd::SharedPtr<void> keep;
+};
+
 // Move `array` into a shared owner that runs its release once the last wrapped
 // buffer is dropped; the caller's array is marked released.
-dstd::SharedPtr<ArrowArray> adopt_array(ArrowArray* array) {
-    auto* moved = dstd::make_unique<ArrowArray>(*array).release();
+dstd::SharedPtr<ArrayOwner> adopt_array(ArrowArray* array,
+                                        dstd::SharedPtr<void> keep) {
+    auto* moved = dstd::make_unique<ArrayOwner>().release();
+    moved->array = *array;
+    moved->keep = std::move(keep);
     array->release = nullptr;
-    return dstd::adopt_shared_ptr(moved, [](ArrowArray* a) {
-        if (a->release != nullptr) a->release(a);
-        dstd::UniquePtr<ArrowArray>(a).reset();
+    return dstd::adopt_shared_ptr(moved, [](ArrayOwner* o) {
+        if (o->array.release != nullptr) o->array.release(&o->array);
+        dstd::UniquePtr<ArrayOwner>(o).reset();
     });
 }
 
 }  // namespace
 
-Series series_from_arrow(const ArrowSchema* schema, ArrowArray* array) {
-    dstd::SharedPtr<ArrowArray> owner = adopt_array(array);
-    return import_any(schema, owner.get(), owner);
+namespace detail {
+
+Series import_series(const ArrowSchema* schema, ArrowArray* array,
+                     dstd::SharedPtr<void> keep) {
+    dstd::SharedPtr<ArrayOwner> owner = adopt_array(array, std::move(keep));
+    return import_any(schema, &owner->array, owner);
 }
 
-DataFrame dataframe_from_arrow(const ArrowSchema* schema, ArrowArray* array) {
+DataFrame import_frame(const ArrowSchema* schema, ArrowArray* array,
+                       dstd::SharedPtr<void> keep) {
     ArrowSchemaView view;
     ArrowError error;
     if (ArrowSchemaViewInit(&view, schema, &error) != NANOARROW_OK)
         return DataFrame{};
     if (view.type != NANOARROW_TYPE_STRUCT) return DataFrame{};
 
-    dstd::SharedPtr<ArrowArray> owner = adopt_array(array);
+    dstd::SharedPtr<ArrayOwner> owner = adopt_array(array, std::move(keep));
     DataFrame df;
     df.names.reserve(static_cast<std::size_t>(schema->n_children));
     df.columns.reserve(static_cast<std::size_t>(schema->n_children));
     for (std::int64_t i = 0; i < schema->n_children; ++i) {
         const ArrowSchema* cs = schema->children[i];
         df.names.emplace_back(cs->name != nullptr ? cs->name : "");
-        df.columns.push_back(import_any(cs, owner->children[i], owner));
+        df.columns.push_back(import_any(cs, owner->array.children[i], owner));
     }
     return df;
 }
+
+bool is_struct(const ArrowSchema* schema) {
+    if (schema == nullptr) return false;
+    ArrowSchemaView view;
+    ArrowError error;
+    return ArrowSchemaViewInit(&view, schema, &error) == NANOARROW_OK &&
+           view.type == NANOARROW_TYPE_STRUCT;
+}
+
+dataframe::DataType field_type(const ArrowSchema* schema) {
+    dataframe::DataType type;
+    if (schema == nullptr) return type;
+    if (schema->dictionary != nullptr) return field_type(schema->dictionary);
+    ArrowSchemaView view;
+    ArrowError error;
+    if (ArrowSchemaViewInit(&view, schema, &error) != NANOARROW_OK) return type;
+    const bool map_view = view.type == NANOARROW_TYPE_MAP;
+    auto one_child = [&]() {
+        return field_type(schema->n_children == 1 ? schema->children[0]
+                                                  : nullptr);
+    };
+    if (view.type == NANOARROW_TYPE_STRUCT) {
+        dstd::Vector<dataframe::Field> fields;
+        fields.reserve(static_cast<std::size_t>(schema->n_children));
+        for (std::int64_t i = 0; i < schema->n_children; ++i) {
+            const ArrowSchema* cs = schema->children[i];
+            fields.push_back({cs->name != nullptr ? cs->name : "",
+                              field_type(cs),
+                              (cs->flags & ARROW_FLAG_NULLABLE) != 0});
+        }
+        return dataframe::struct_of(std::move(fields));
+    }
+    if (view.type == NANOARROW_TYPE_LIST)
+        return dataframe::list_of(one_child());
+    if (view.type == NANOARROW_TYPE_LARGE_LIST)
+        return dataframe::large_list_of(one_child());
+    if (view.type == NANOARROW_TYPE_FIXED_SIZE_LIST)
+        return dataframe::fixed_size_list_of(one_child(), view.fixed_size);
+    if (map_view && schema->n_children == 1 &&
+        schema->children[0]->n_children == 2)
+        return dataframe::map_of(field_type(schema->children[0]->children[0]),
+                                 field_type(schema->children[0]->children[1]));
+
+    TypeId id;
+    if (!from_arrow_type(view, id)) return type;
+    type = dataframe::scalar(id);
+    if (id == TypeId::Timestamp || id == TypeId::Time32 ||
+        id == TypeId::Time64 || id == TypeId::Duration) {
+        type.set_time_unit(from_arrow_time_unit(view.time_unit));
+        if (id == TypeId::Timestamp && view.timezone != nullptr)
+            type.set_timezone(view.timezone);
+    } else if (id == TypeId::Decimal128 || id == TypeId::Decimal256) {
+        type.set_decimal(view.decimal_precision, view.decimal_scale);
+    } else if (id == TypeId::FixedSizeBinary) {
+        type.set_fixed_size(view.fixed_size);
+    }
+    return type;
+}
+
+}  // namespace detail
 
 }  // namespace dftracer::utils::arrow

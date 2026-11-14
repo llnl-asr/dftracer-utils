@@ -160,9 +160,7 @@ skip the local script entirely and serve queries over HTTP.
 
          #include <dftracer/utils/arrow/arrow.h>
 
-         using dftracer::utils::arrow::OwnedArrow;
-
-         OwnedArrow a = dftracer::utils::arrow::to_arrow(df);  // one child per column
+         dstd::Result<arrow::Batch> a = arrow::to_arrow(df);  // one child per column
 
    .. tab-item:: CLI (serve)
 

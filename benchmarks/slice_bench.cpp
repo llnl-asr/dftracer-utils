@@ -66,8 +66,10 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <initializer_list>
 #include <numeric>
 #include <random>
+#include <utility>
 
 using namespace dftracer::utils;
 
@@ -77,6 +79,14 @@ using Clock = std::chrono::steady_clock;
 using dataframe::DataFrame;
 using dataframe::Series;
 using dataframe::TypeId;
+
+/// Column names of a frame under construction.
+dstd::Vector<dstd::SharedString> names_of(
+    std::initializer_list<const char*> names) {
+    dstd::Vector<dstd::SharedString> out;
+    for (const char* name : names) out.push_back(dstd::SharedString{name});
+    return out;
+}
 
 constexpr std::size_t MIB = std::size_t{1} << 20;
 constexpr std::uint64_t SEED = 42;
@@ -280,7 +290,7 @@ double slice_nullable(const Scale& s, std::int64_t shift) {
 
 DataFrame wide_frame(std::int64_t rows, bool nullable) {
     DataFrame frame;
-    frame.names = {"i", "f", "s"};
+    frame.names = names_of({"i", "f", "s"});
     frame.columns.push_back(int_column(rows));
     dftracer::utils::dstd::Vector<double> f =
         random_f64(static_cast<std::size_t>(rows), SEED);
@@ -360,9 +370,12 @@ double arrow_round_trip(const Scale& s) {
     std::int64_t rows = 0;
     auto start = Clock::now();
     for (std::size_t i = 0; i < s.arrow_ops; ++i) {
-        arrow::OwnedArrow out = arrow::to_arrow(frame);
-        DataFrame back = arrow::dataframe_from_arrow(out.schema(), out.array());
-        rows += back.num_rows() * static_cast<std::int64_t>(back.num_columns());
+        auto out = arrow::to_arrow(frame);
+        check(static_cast<bool>(out), "arrow export");
+        auto back = arrow::dataframe_from_arrow(std::move(*out));
+        check(static_cast<bool>(back), "arrow import");
+        rows +=
+            back->num_rows() * static_cast<std::int64_t>(back->num_columns());
     }
     auto end = Clock::now();
     check(rows == 3 * s.op_rows * static_cast<std::int64_t>(s.arrow_ops),
@@ -372,7 +385,7 @@ double arrow_round_trip(const Scale& s) {
 
 DataFrame key_frame(std::int64_t rows, std::int64_t groups) {
     DataFrame frame;
-    frame.names = {"k", "g", "v"};
+    frame.names = names_of({"k", "g", "v"});
     dftracer::utils::dstd::Vector<std::int64_t> k =
         random_i64(static_cast<std::size_t>(rows), 1 << 30, SEED);
     dftracer::utils::dstd::Vector<std::int64_t> g =
@@ -431,11 +444,11 @@ double join_inner(const Scale& s) {
     dftracer::utils::dstd::Vector<double> lv = random_f64(rows, SEED);
     dftracer::utils::dstd::Vector<double> rv = random_f64(rows, SEED + 1);
     DataFrame left;
-    left.names = {"k", "lv"};
+    left.names = names_of({"k", "lv"});
     left.columns.push_back(Series::flat_i64(left_keys.data(), s.op_rows));
     left.columns.push_back(Series::flat_f64(lv.data(), s.op_rows));
     DataFrame right;
-    right.names = {"k", "rv"};
+    right.names = names_of({"k", "rv"});
     right.columns.push_back(Series::flat_i64(right_keys.data(), s.op_rows));
     right.columns.push_back(Series::flat_f64(rv.data(), s.op_rows));
     return repeat_op(s.join_reps, [&] {

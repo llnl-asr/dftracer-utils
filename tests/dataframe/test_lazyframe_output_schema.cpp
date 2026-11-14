@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dataframe/builders_arrow_types.h>
 #include <dftracer/utils/arrow/arrow.h>
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/dataframe/dataframe.h>
@@ -91,7 +92,7 @@ Series make_timestamp(const dstd::Vector<std::int64_t>& values, TimeUnit unit,
     for (std::int64_t v : values)
         REQUIRE(ArrowArrayAppendInt(&b.array, v) == NANOARROW_OK);
     finish(&b.array);
-    return arrow::series_from_arrow(&b.schema, &b.array);
+    return test_types::import_series(&b.schema, &b.array);
 }
 
 Series make_decimal128(std::int32_t precision, std::int32_t scale,
@@ -110,7 +111,7 @@ Series make_decimal128(std::int32_t precision, std::int32_t scale,
         REQUIRE(ArrowArrayAppendDecimal(&b.array, &dec) == NANOARROW_OK);
     }
     finish(&b.array);
-    return arrow::series_from_arrow(&b.schema, &b.array);
+    return test_types::import_series(&b.schema, &b.array);
 }
 
 DataFrame basic_frame() {

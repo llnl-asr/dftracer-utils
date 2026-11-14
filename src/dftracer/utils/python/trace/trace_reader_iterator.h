@@ -3,7 +3,7 @@
 #define DFTRACER_UTILS_PYTHON_TRACE_TRACE_READER_ITERATOR_H
 
 #include <Python.h>
-#include <dftracer/utils/arrow/arrow_export.h>
+#include <dftracer/utils/arrow/batch.h>
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/future.h>
@@ -13,7 +13,7 @@
 #include <dftracer/utils/runtime/task_handle.h>
 
 typedef struct {
-    PyObject_HEAD dftracer::utils::arrow::ArrowExportResult *result;
+    PyObject_HEAD dftracer::utils::arrow::Batch *result;
 } ArrowBatchCapsuleObject;
 
 extern PyTypeObject ArrowBatchCapsuleType;
@@ -24,7 +24,7 @@ enum class IteratorMode {
 };
 
 struct ArrowIteratorState {
-    using BatchType = dftracer::utils::arrow::ArrowExportResult;
+    using BatchType = dftracer::utils::arrow::Batch;
     dftracer::utils::dstd::SharedPtr<dftracer::utils::coro::Channel<BatchType>>
         channel;
     std::mutex error_mtx;

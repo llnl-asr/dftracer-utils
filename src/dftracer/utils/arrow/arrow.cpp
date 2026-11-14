@@ -1,31 +1,21 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/arrow/arrow.h>
+#include <dftracer/utils/arrow/c_api.h>
+#include <dftracer/utils/arrow/internal.h>
 #include <dftracer/utils/common/config.h>
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dstd/result.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 
-// nanoarrow must precede arrow.h: c_api.h (pulled in by arrow.h) defines
-// ARROW_FLAG_DICTIONARY_ORDERED, nanoarrow's outer include guard, which would
-// otherwise suppress its ArrowArrayStream definition.
-#include <dftracer/utils/arrow/arrow.h>
-#include <dftracer/utils/common/error.h>
-#include <dftracer/utils/dstd/optional.h>
-#include <dftracer/utils/dstd/string.h>
-#include <nanoarrow/nanoarrow.h>
-#include <nanoarrow/nanoarrow_ipc.h>
-
-#include <cstdint>
-#include <stdexcept>
 #include <utility>
 
 namespace dftracer::utils::arrow {
 
 using dataframe::DataFrame;
 using dataframe::Series;
-
-OwnedArrow to_arrow(const Series& col) {
-    OwnedArrow out;
-    to_arrow(col, out.schema(), out.array());
-    return out;
-}
 
 namespace {
 
@@ -41,91 +31,69 @@ Series as_struct(const DataFrame& frame, bool materialize) {
 
 }  // namespace
 
-OwnedArrow to_arrow(const DataFrame& frame) {
-    Series st = as_struct(frame, false);
-    OwnedArrow out;
-    to_arrow(st, out.schema(), out.array());
-    return out;
-}
-
-dstd::Optional<DataFrame> from_ipc(dstd::StringView bytes) {
-    ArrowBuffer buf;
-    ArrowBufferInit(&buf);
-    if (ArrowBufferAppend(&buf, bytes.data(),
-                          static_cast<std::int64_t>(bytes.size())) !=
-        NANOARROW_OK) {
-        ArrowBufferReset(&buf);
-        return dstd::nullopt;
-    }
-    ArrowIpcInputStream in;
-    if (ArrowIpcInputStreamInitBuffer(&in, &buf) != NANOARROW_OK) {
-        ArrowBufferReset(&buf);
-        return dstd::nullopt;
-    }
-    ArrowArrayStream stream;
-    if (ArrowIpcArrayStreamReaderInit(&stream, &in, nullptr) != NANOARROW_OK) {
-        in.release(&in);
-        return dstd::nullopt;
-    }
-    dstd::Optional<DataFrame> out;
-    ArrowSchema schema;
-    if (stream.get_schema(&stream, &schema) == 0) {
-        ArrowArray array;
-        if (stream.get_next(&stream, &array) == 0 && array.release)
-            out = dataframe_from_arrow(&schema, &array);
-        schema.release(&schema);
-    }
-    stream.release(&stream);
-    return out;
-}
-
-dstd::Result<dstd::Vector<std::uint8_t>> to_ipc(const DataFrame& frame) {
-    // Export the frame as one struct (record batch) - schema + array.
-    Series st = as_struct(frame, true);
+dstd::Result<Batch> to_arrow(const Series& col) {
+    if (!col.valid())
+        return common::make_error<"to_arrow: a column with no buffers">(
+            common::ErrorCode::InvalidArgument);
     ArrowSchema schema;
     ArrowArray array;
-    to_arrow(st, &schema, &array);
+    detail::to_arrow(col, &schema, &array);
+    return Batch::adopt(&schema, &array);
+}
 
-    // A one-batch array stream (takes ownership of schema + array on success).
-    ArrowArrayStream stream;
-    if (ArrowBasicArrayStreamInit(&stream, &schema, 1) != NANOARROW_OK) {
-        if (schema.release) schema.release(&schema);
-        if (array.release) array.release(&array);
-        return common::make_error<"to_ipc: array stream init failed">(
-            common::ErrorCode::Internal);
+dstd::Result<Batch> to_arrow(const DataFrame& frame) {
+    for (std::size_t i = 0; i < frame.columns.size(); ++i) {
+        if (frame.columns[i].valid()) continue;
+        return common::make_error<"to_arrow: column '{}' has no buffers">(
+            common::ErrorCode::InvalidArgument, frame.names[i]);
     }
-    ArrowBasicArrayStreamSetArray(&stream, 0, &array);
+    Series st = as_struct(frame, false);
+    ArrowSchema schema;
+    ArrowArray array;
+    detail::to_arrow(st, &schema, &array);
+    return Batch::adopt(&schema, &array);
+}
 
-    // Encode schema message + record batch + EOS into a caller-owned buffer.
-    ArrowBuffer buf;
-    ArrowBufferInit(&buf);
-    ArrowIpcOutputStream out;
-    if (ArrowIpcOutputStreamInitBuffer(&out, &buf) != NANOARROW_OK) {
-        ArrowBufferReset(&buf);
-        stream.release(&stream);
-        return common::make_error<"to_ipc: output stream init failed">(
-            common::ErrorCode::Internal);
+dstd::Result<Series> series_from_arrow(Batch&& batch) {
+    if (!batch.is_valid())
+        return common::make_error<"series_from_arrow: a batch with no data">(
+            common::ErrorCode::InvalidArgument);
+    ArrowSchema schema;
+    ArrowArray array;
+    batch.release_into(&schema, &array);
+    Series col = detail::import_series(&schema, &array, nullptr);
+    if (schema.release != nullptr) schema.release(&schema);
+    if (!col.valid())
+        return common::make_error<
+            "series_from_arrow: an Arrow type the engine cannot hold">(
+            common::ErrorCode::InvalidArgument);
+    return col;
+}
+
+dstd::Result<DataFrame> dataframe_from_arrow(Batch&& batch) {
+    if (!batch.is_valid())
+        return common::make_error<"dataframe_from_arrow: a batch with no data">(
+            common::ErrorCode::InvalidArgument);
+    ArrowSchema schema;
+    ArrowArray array;
+    batch.release_into(&schema, &array);
+    // `import_frame` takes the array only when it is a struct, so the shape is
+    // checked here and both structs are released on that path.
+    if (!detail::is_struct(&schema)) {
+        if (schema.release != nullptr) schema.release(&schema);
+        if (array.release != nullptr) array.release(&array);
+        return common::make_error<"dataframe_from_arrow: not a struct array">(
+            common::ErrorCode::InvalidArgument);
     }
-    ArrowIpcWriter writer;
-    if (ArrowIpcWriterInit(&writer, &out) != NANOARROW_OK) {  // adopts `out`
-        out.release(&out);
-        ArrowBufferReset(&buf);
-        stream.release(&stream);
-        return common::make_error<"to_ipc: writer init failed">(
-            common::ErrorCode::Internal);
+    DataFrame df = detail::import_frame(&schema, &array, nullptr);
+    if (schema.release != nullptr) schema.release(&schema);
+    for (std::size_t i = 0; i < df.columns.size(); ++i) {
+        if (df.columns[i].valid()) continue;
+        return common::make_error<
+            "dataframe_from_arrow: an Arrow type the engine cannot hold in "
+            "column '{}'">(common::ErrorCode::NotFound, df.names[i]);
     }
-    ArrowError err;
-    err.message[0] = '\0';
-    const int code = ArrowIpcWriterWriteArrayStream(&writer, &stream, &err);
-    dstd::Vector<std::uint8_t> bytes;
-    if (code == NANOARROW_OK) bytes.assign(buf.data, buf.data + buf.size_bytes);
-    ArrowIpcWriterReset(&writer);  // releases `out`
-    ArrowBufferReset(&buf);
-    stream.release(&stream);       // releases schema + array
-    if (code != NANOARROW_OK)
-        return common::make_error<"to_ipc: {}">(common::ErrorCode::Internal,
-                                                err.message);
-    return bytes;
+    return df;
 }
 
 }  // namespace dftracer::utils::arrow

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dataframe/builders_arrow_types.h>
 #include <dataframe/expr_ok.h>
 #include <dftracer/utils/arrow/arrow.h>
 #include <dftracer/utils/common/config.h>
@@ -2950,7 +2951,7 @@ TEST_SUITE("vec_arrow") {
 
         ArrowSchema schema;
         ArrowArray array;
-        arrow::to_arrow(col, &schema, &array);
+        test_types::export_series(col, &schema, &array);
         CHECK(std::strcmp(schema.format, "l") == 0);
         REQUIRE(array.length == 3);
         REQUIRE(array.n_buffers == 2);
@@ -2960,7 +2961,7 @@ TEST_SUITE("vec_arrow") {
         CHECK(raw[0] == 10);
         CHECK(raw[2] == 30);
 
-        Series back = arrow::series_from_arrow(&schema, &array);
+        Series back = test_types::import_series(&schema, &array);
         REQUIRE(back.valid());
         CHECK(back.type() == TypeId::Int64);
         REQUIRE(back.length() == 3);
@@ -2979,7 +2980,7 @@ TEST_SUITE("vec_arrow") {
 
         ArrowSchema schema;
         ArrowArray array;
-        arrow::to_arrow(sel, &schema, &array);
+        test_types::export_series(sel, &schema, &array);
 
         CHECK(std::strcmp(schema.format, "l") == 0);  // int64 indices
         REQUIRE(schema.dictionary != nullptr);
@@ -3005,12 +3006,12 @@ TEST_SUITE("vec_arrow") {
 
         ArrowSchema schema;
         ArrowArray array;
-        arrow::to_arrow(s, &schema, &array);
+        test_types::export_series(s, &schema, &array);
         CHECK(std::strcmp(schema.format, "u") == 0);  // utf8
         REQUIRE(array.n_buffers == 3);
         REQUIRE(array.length == 3);
 
-        Series back = arrow::series_from_arrow(&schema, &array);
+        Series back = test_types::import_series(&schema, &array);
         REQUIRE(back.valid());
         CHECK(back.type() == TypeId::String);
         REQUIRE(back.length() == 3);
@@ -3026,7 +3027,7 @@ TEST_SUITE("vec_arrow") {
 
         ArrowSchema schema;
         ArrowArray array;
-        arrow::to_arrow(d, &schema, &array);
+        test_types::export_series(d, &schema, &array);
         CHECK(std::strcmp(schema.format, "i") == 0);              // int32 codes
         REQUIRE(schema.dictionary != nullptr);
         CHECK(std::strcmp(schema.dictionary->format, "u") == 0);  // string dict
@@ -3052,7 +3053,7 @@ TEST_SUITE("vec_arrow") {
 
         ArrowSchema schema;
         ArrowArray array;
-        arrow::to_arrow(hist, &schema, &array);
+        test_types::export_series(hist, &schema, &array);
 
         CHECK(std::strcmp(schema.format, "+l") == 0);               // list
         REQUIRE(schema.n_children == 1);
@@ -3107,10 +3108,10 @@ TEST_SUITE("vec_arrow") {
 
         ArrowSchema schema;
         ArrowArray array;
-        arrow::to_arrow(b, &schema, &array);
+        test_types::export_series(b, &schema, &array);
         CHECK(std::strcmp(schema.format, "b") == 0);
 
-        Series back = arrow::series_from_arrow(&schema, &array);
+        Series back = test_types::import_series(&schema, &array);
         REQUIRE(back.valid());
         CHECK(back.type() == TypeId::Bool);
         REQUIRE(back.length() == 5);

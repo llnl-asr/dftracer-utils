@@ -19,6 +19,10 @@
 #include <string.h>
 #include <unistd.h>
 
+DFTU_PLUGIN_EXPORT int64_t udf_plugin_binds(void);
+DFTU_PLUGIN_EXPORT int64_t udf_plugin_frees(void);
+DFTU_PLUGIN_EXPORT int64_t udf_plugin_slow_steps(void);
+
 static int64_t g_binds;
 static int64_t g_frees;
 static int64_t g_slow_steps;

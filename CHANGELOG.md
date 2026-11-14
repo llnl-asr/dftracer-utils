@@ -9,6 +9,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Added
 
+- Add user-defined aggregates for plugins: `dftu_svc_ops::register_udaf` takes a `dftu_udaf_desc` (`dataframe/c_api_udaf.h`) with `bind`, `init`, `update`, `combine`, `finalize`, `destroy` and a `serialize` pair, and the host owns the memory of every group state.
+  A state that is plain bytes (`DFTU_AGG_STATE_POD`) needs no `destroy` or `serialize`, and any other state needs all three, or the load fails with a message.
+  `update` runs on whole columns and gets a null state pointer for a row with a null argument unless `DFTU_AGG_NULL_AWARE` is set.
+  The SDK has `PluginBuilder::udaf<A>` with `UdafOptions` and `UdafStateSet`, and `dataframe::make_udaf<A>()` registers the same class in the same process and returns an owning `Udaf`.
+  This adds the registry and the state table only; no query calls a UDAF yet.
 - Add scalar UDFs for plugins: `dftu_svc_ops::register_udf` takes a `dftu_udf_desc` (`dataframe/c_api_udf.h`) with `bind`, `exec` and `free_bound`, and duql calls the UDF by its name in `derive`, `select`, `where` and join keys.
   `exec` runs on whole columns, the host nulls the rows with a null argument unless `DFTU_FN_NULL_AWARE` is set, and a name that a built-in function or another UDF holds fails the load.
   A long `exec` polls `dftu_check`, so a cancelled or timed out query stops within one batch, and a plan that holds a UDF keeps its plugin library loaded.

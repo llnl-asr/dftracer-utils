@@ -5,6 +5,7 @@
 #include <dftracer/utils/dataframe/internal/dataframe_handle.h>
 #include <dftracer/utils/dataframe/internal/op_dispatch.h>
 #include <dftracer/utils/dataframe/op.h>
+#include <dftracer/utils/dataframe/udaf_registry.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/singleton.h>
 #include <dftracer/utils/dstd/string.h>
@@ -126,6 +127,7 @@ bool register_locked(const dftu_op_desc& desc,
                      dftracer::utils::dstd::SharedPtr<const void>& keep_alive) {
     if (!desc.name) return false;
     if (find_handle_locked(desc.name)) return false;  // no silent shadowing
+    if (dftracer::utils::dataframe::find_udaf(desc.name)) return false;
     auto rec = std::make_shared<UserOp>();
     rec->name = desc.name;
     rec->desc = desc;

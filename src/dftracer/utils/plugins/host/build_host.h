@@ -76,6 +76,15 @@ class BuildHost {
 
     dstd::Vector<dstd::String>& registered_udfs() { return registered_udfs_; }
 
+    /// The UDAF names the factory registered with
+    /// dftu_svc_ops::register_udaf; unregistered before dlclose, as the UDFs
+    /// are.
+    dstd::Vector<dstd::String> take_registered_udafs() {
+        return std::move(registered_udafs_);
+    }
+
+    dstd::Vector<dstd::String>& registered_udafs() { return registered_udafs_; }
+
     /// The provider names the factory registered with
     /// dftu_svc_providers::register_provider, moved out once it returns. The
     /// loader must unregister each of these before it dlcloses the plugin, or
@@ -116,6 +125,7 @@ class BuildHost {
     StateRegistry states_;
     dstd::Vector<dstd::String> registered_ops_;
     dstd::Vector<dstd::String> registered_udfs_;
+    dstd::Vector<dstd::String> registered_udafs_;
     dstd::Vector<dstd::String> registered_providers_;
     dstd::Vector<dstd::String> registered_nodes_;
     dstd::Vector<dstd::String> registered_index_extensions_;

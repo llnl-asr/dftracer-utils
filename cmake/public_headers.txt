@@ -49,6 +49,7 @@ dftracer/utils/coro/when_any.h
 dftracer/utils/coro/yield.h
 dftracer/utils/dataframe/c_api.h
 dftracer/utils/dataframe/c_api_agg_expr.h
+dftracer/utils/dataframe/c_api_udaf.h
 dftracer/utils/dataframe/c_api_udf.h
 dftracer/utils/dataframe/agg.h
 dftracer/utils/dataframe/agg_expr.h
@@ -69,6 +70,8 @@ dftracer/utils/dataframe/scalar.h
 dftracer/utils/dataframe/series.h
 dftracer/utils/dataframe/sketch.h
 dftracer/utils/dataframe/types.h
+dftracer/utils/dataframe/udaf.h
+dftracer/utils/dataframe/udaf_adapter.h
 dftracer/utils/dataframe/udf.h
 dftracer/utils/dataframe/udf_adapter.h
 dftracer/utils/dstd/algorithm.h
@@ -194,6 +197,7 @@ dftracer/utils/plugins/plugin/node.h
 dftracer/utils/plugins/plugin/register.h
 dftracer/utils/plugins/plugin/source.h
 dftracer/utils/plugins/plugin/types.h
+dftracer/utils/plugins/plugin/udaf.h
 dftracer/utils/plugins/plugin/udf.h
 dftracer/utils/plugins/prims.h
 dftracer/utils/plugins/result_registry.h

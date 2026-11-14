@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/op.h>
+#include <dftracer/utils/dataframe/udaf_registry.h>
 #include <dftracer/utils/dataframe/udf_registry.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/duql/lower.h>
@@ -121,10 +122,20 @@ dftu_status host_ops_register_udf(::dftu_ctx* ctx, void*,
             dstd::StringView(desc && desc->name ? desc->name : "(null)")));
 }
 
-const ::dftu_svc_ops g_ops = {sizeof(::dftu_svc_ops), host_ops_run,
-                              host_ops_run_aggregate, host_ops_run_frame,
-                              host_ops_find,          host_ops_register,
-                              host_ops_run_lazy,      host_ops_register_udf};
+dftu_status host_ops_register_udaf(::dftu_ctx* ctx, void*,
+                                   const ::dftu_udaf_desc* desc, void*) {
+    return host_fail(
+        ctx, DFTU_E_UNSUPPORTED,
+        dstd::fmt<"udaf '{}' refused: register from the plugin factory, which "
+                  "runs before the scan; the scan-time host does not register "
+                  "udafs">(
+            dstd::StringView(desc && desc->name ? desc->name : "(null)")));
+}
+
+const ::dftu_svc_ops g_ops = {
+    sizeof(::dftu_svc_ops), host_ops_run,          host_ops_run_aggregate,
+    host_ops_run_frame,     host_ops_find,         host_ops_register,
+    host_ops_run_lazy,      host_ops_register_udf, host_ops_register_udaf};
 
 }  // namespace
 
@@ -163,6 +174,23 @@ dftu_status detail::register_plugin_udf(
                 dstd::StringView(desc->name), desc->struct_size,
                 static_cast<std::uint32_t>(sizeof(::dftu_udf_desc))));
     auto registered = dataframe::add_udf(*desc, self, std::move(library));
+    if (!registered) return host_fail(ctx, registered.error());
+    return DFTU_OK;
+}
+
+dftu_status detail::register_plugin_udaf(
+    ::dftu_ctx* ctx, const ::dftu_udaf_desc* desc, void* self,
+    dstd::SharedPtr<PluginLibrary> library) {
+    if (desc == nullptr || desc->name == nullptr)
+        return host_fail(ctx, DFTU_E_INVALID,
+                         "register_udaf: desc or its name is NULL");
+    if (desc->struct_size < sizeof(::dftu_udaf_desc))
+        return host_fail(
+            ctx, DFTU_E_INVALID,
+            dstd::fmt<"udaf '{}' refused: struct_size {} is below {}">(
+                dstd::StringView(desc->name), desc->struct_size,
+                static_cast<std::uint32_t>(sizeof(::dftu_udaf_desc))));
+    auto registered = dataframe::add_udaf(*desc, self, std::move(library));
     if (!registered) return host_fail(ctx, registered.error());
     return DFTU_OK;
 }

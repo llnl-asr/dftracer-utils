@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dataframe/c_api.h>
+#include <dftracer/utils/dataframe/udaf_registry.h>
 #include <dftracer/utils/dataframe/udf_registry.h>
 #include <dftracer/utils/dstd/deque.h>
 #include <dftracer/utils/dstd/fmt.h>
@@ -64,6 +65,9 @@ struct Plugins::Impl {
         /* UDF names registered via dftu_svc_ops::register_udf; same reason as
            the ops. */
         dstd::Vector<dstd::String> registered_udfs;
+        /* UDAF names registered via dftu_svc_ops::register_udaf; same reason
+           as the ops. */
+        dstd::Vector<dstd::String> registered_udafs;
         /* Provider names the factory registered via
            dftu_svc_providers::register_provider; the provider registry
            outlives the plugin, so these must be unregistered before dlclose or
@@ -92,6 +96,8 @@ struct Plugins::Impl {
                 ::dftu_op_unregister(name.c_str());
             for (const dstd::String& name : p.registered_udfs)
                 dataframe::unregister_udf(name);
+            for (const dstd::String& name : p.registered_udafs)
+                dataframe::unregister_udaf(name);
             for (const dstd::String& name : p.registered_providers)
                 ::dftu_provider_unregister(name.c_str());
             for (const dstd::String& name : p.registered_nodes)
@@ -346,6 +352,8 @@ dstd::Result<Plugins::Impl::Loaded> load_plugin(const dstd::String& path,
             ::dftu_op_unregister(name.c_str());
         for (const dstd::String& name : build_host.registered_udfs())
             dataframe::unregister_udf(name);
+        for (const dstd::String& name : build_host.registered_udafs())
+            dataframe::unregister_udaf(name);
         for (const dstd::String& name : build_host.registered_providers())
             ::dftu_provider_unregister(name.c_str());
         for (const dstd::String& name : build_host.registered_nodes())
@@ -427,6 +435,7 @@ dstd::Result<Plugins::Impl::Loaded> load_plugin(const dstd::String& path,
                                  build_host.take_states(),
                                  build_host.take_registered_ops(),
                                  build_host.take_registered_udfs(),
+                                 build_host.take_registered_udafs(),
                                  build_host.take_registered_providers(),
                                  build_host.take_registered_nodes(),
                                  build_host.take_registered_index_extensions(),
@@ -751,7 +760,7 @@ dstd::Result<Plugins> build_injected_plugins(
     impl->plugins.reserve(plugins.size());
     for (dftu_plugin* pl : plugins)
         impl->plugins.push_back(
-            {nullptr, pl, false, {}, {}, {}, {}, {}, {}, {}, {}, {}});
+            {nullptr, pl, false, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}});
     auto ordered = settle_order(*impl);
     if (!ordered) return dstd::Unexpected(std::move(ordered).error());
     settle_prune(*impl);

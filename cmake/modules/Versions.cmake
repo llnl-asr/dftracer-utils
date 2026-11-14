@@ -103,6 +103,8 @@ function(dftracer_utils_interface_versions version_file out_include_dir)
     "${_inc}/common/c_api.h"
     "${_inc}/common/export.h"
     "${_inc}/dataframe/c_api.h"
+    "${_inc}/dataframe/c_api_udaf.h"
+    "${_inc}/dataframe/c_api_udf.h"
     "${_inc}/dataframe/agg_op_codes.h"
     "${_inc}/duql/c_api.h"
     "${_inc}/plugins/abi.h"

@@ -10,7 +10,8 @@
  */
 
 #include <dftracer/utils/dataframe/c_api.h> /* dftu_scalar, by value below */
-#include <dftracer/utils/dataframe/c_api_udf.h> /* dftu_udf_desc */
+#include <dftracer/utils/dataframe/c_api_udaf.h> /* dftu_udaf_desc */
+#include <dftracer/utils/dataframe/c_api_udf.h>  /* dftu_udf_desc */
 #include <dftracer/utils/plugins/abi/core.h>
 #include <stdint.h>
 
@@ -74,6 +75,18 @@ typedef struct dftu_svc_ops {
        DFTU_E_UNSUPPORTED after the load. Registration is a load-time call. */
     dftu_status (*register_udf)(dftu_ctx* ctx, void* h,
                                 const dftu_udf_desc* desc, void* self);
+    /** Register a user-defined aggregate under `desc->name`; see
+       dftu_udaf_desc. `self` is passed to its bind. The host copies `desc`. The
+       UDAF is registered; no query can call it yet. Fails with
+       DFTU_E_INVALID, naming the problem on `ctx`, if `desc` or its name is
+       NULL, the name is not a duql function name, it is a built-in function or
+       aggregate, an op, a UDF or another UDAF, a flag is unknown, a required
+       callback is missing, `state_size` is 0, `state_align` is not a power of
+       two up to 64, the argument counts do not fit, or the state is not
+       DFTU_AGG_STATE_POD and has no destroy, serialize and deserialize; with
+       DFTU_E_UNSUPPORTED after the load. Registration is a load-time call. */
+    dftu_status (*register_udaf)(dftu_ctx* ctx, void* h,
+                                 const dftu_udaf_desc* desc, void* self);
 } dftu_svc_ops;
 
 #ifdef __cplusplus

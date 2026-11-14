@@ -58,12 +58,15 @@ missing group comes back NULL from ``get_service``.
 
 ``dftu.svc.ops``: run any registered engine op on handles the plugin holds,
 register the plugin's own (``<plugin>.<name>``), and register a scalar UDF
-that duql calls by name.
+that duql calls by name or a user-defined aggregate.
 
 .. doxygenfile:: dftracer/utils/plugins/abi/ops.h
    :project: dftracer-utils
 
 .. doxygenfile:: dftracer/utils/dataframe/c_api_udf.h
+   :project: dftracer-utils
+
+.. doxygenfile:: dftracer/utils/dataframe/c_api_udaf.h
    :project: dftracer-utils
 
 ``dftu.svc.agg``: host-owned mergeable accumulators, and ``register_state``

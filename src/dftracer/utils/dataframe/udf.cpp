@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/c_api_error.h>
 #include <dftracer/utils/dataframe/op.h>
+#include <dftracer/utils/dataframe/udaf_registry.h>
 #include <dftracer/utils/dataframe/udf.h>
 #include <dftracer/utils/dataframe/udf_registry.h>
+#include <dftracer/utils/dataframe/udf_support.h>
 #include <dftracer/utils/dstd/ascii.h>
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/singleton.h>
@@ -17,32 +19,6 @@ namespace dftracer::utils::dataframe {
 namespace {
 
 thread_local coro::CancelView t_cancel;
-
-class CallContext {
-   public:
-    CallContext() noexcept : ctx_{sizeof(dftu_ctx), 0, &VT, this} {}
-    CallContext(const CallContext&) = delete;
-    CallContext& operator=(const CallContext&) = delete;
-
-    dftu_ctx* get() noexcept { return &ctx_; }
-    dstd::StringView message() const noexcept { return message_; }
-
-   private:
-    static dftu_status set_error(dftu_ctx* c, dftu_status code, const char* msg,
-                                 std::uint32_t len) {
-        auto* self = static_cast<CallContext*>(c->h);
-        if (msg != nullptr) self->message_.assign(msg, len);
-        return code;
-    }
-    static dftu_status check(dftu_ctx*) {
-        return t_cancel.requested() ? DFTU_E_CANCELLED : DFTU_OK;
-    }
-
-    static constexpr dftu_ctx_vt VT = {sizeof(dftu_ctx_vt), &set_error, &check};
-
-    dftu_ctx ctx_;
-    dstd::String message_;
-};
 
 struct Registry {
     std::mutex mutex;
@@ -66,6 +42,50 @@ bool is_name_part(dstd::StringView part) {
         if (!dstd::is_ascii_alnum(c) && c != '_') return false;
     return true;
 }
+
+dstd::Unexpected<dstd::Error> invalid(dstd::StringView what) {
+    return dstd::Unexpected(
+        dstd::Error(dstd::Condition::InvalidArgument, what));
+}
+
+// Null where an argument is null: `out` is picked per row from itself or an
+// all-null column by the AND of the arguments' valid masks.
+dstd::Result<Series> mask_nulls(const UdfRecord& udf, Series out,
+                                dstd::Span<const Series* const> args,
+                                std::int64_t rows) {
+    Series valid;
+    for (const Series* arg : args) {
+        if (arg->null_count() == 0) continue;
+        Series mask = arg->valid_mask();
+        valid = valid.valid() ? valid.logical_and(mask) : std::move(mask);
+    }
+    if (!valid.valid()) return out;
+    Series nulls = Series::nulls(out.type(), rows);
+    Series masked = out.where(valid, nulls);
+    if (!masked.valid())
+        return dstd::Unexpected(dstd::Error::from_format<
+                                "udf '{}' result of type {} cannot be nulled">(
+            dstd::Condition::Unsupported, udf.name(), type_name(out.type())));
+    return masked;
+}
+
+dftu_status set_error(dftu_ctx* c, dftu_status code, const char* msg,
+                      std::uint32_t len) {
+    auto* self = static_cast<CallContext*>(c->h);
+    if (msg != nullptr) self->set_message(dstd::StringView(msg, len));
+    return code;
+}
+
+dftu_status check(dftu_ctx*) {
+    return t_cancel.requested() ? DFTU_E_CANCELLED : DFTU_OK;
+}
+
+const dftu_ctx_vt CALL_VT = {sizeof(dftu_ctx_vt), &set_error, &check};
+
+}  // namespace
+
+CallContext::CallContext() noexcept
+    : ctx_{sizeof(dftu_ctx), 0, &CALL_VT, this} {}
 
 bool is_function_name(dstd::StringView name) {
     std::size_t from = 0;
@@ -101,43 +121,16 @@ bool takes_type(TypeId id) {
     }
 }
 
-dstd::Unexpected<dstd::Error> invalid(dstd::StringView what) {
-    return dstd::Unexpected(
-        dstd::Error(dstd::Condition::InvalidArgument, what));
-}
-
-dstd::Error call_error(const UdfRecord& udf, dstd::StringView step,
-                       dftu_status status, const CallContext& ctx) {
+dstd::Error call_error(dstd::StringView kind, dstd::StringView name,
+                       dstd::StringView step, dftu_status status,
+                       const CallContext& ctx) {
     const dstd::Condition condition = common::to_condition(status);
     if (!ctx.message().empty())
-        return dstd::Error::from_format<"udf '{}' {}: {}">(
-            condition, udf.name(), step, ctx.message());
-    return dstd::Error::from_format<"udf '{}' {} failed">(condition, udf.name(),
-                                                          step);
+        return dstd::Error::from_format<"{} '{}' {}: {}">(condition, kind, name,
+                                                          step, ctx.message());
+    return dstd::Error::from_format<"{} '{}' {} failed">(condition, kind, name,
+                                                         step);
 }
-
-// Null where an argument is null: `out` is picked per row from itself or an
-// all-null column by the AND of the arguments' valid masks.
-dstd::Result<Series> mask_nulls(const UdfRecord& udf, Series out,
-                                dstd::Span<const Series* const> args,
-                                std::int64_t rows) {
-    Series valid;
-    for (const Series* arg : args) {
-        if (arg->null_count() == 0) continue;
-        Series mask = arg->valid_mask();
-        valid = valid.valid() ? valid.logical_and(mask) : std::move(mask);
-    }
-    if (!valid.valid()) return out;
-    Series nulls = Series::nulls(out.type(), rows);
-    Series masked = out.where(valid, nulls);
-    if (!masked.valid())
-        return dstd::Unexpected(dstd::Error::from_format<
-                                "udf '{}' result of type {} cannot be nulled">(
-            dstd::Condition::Unsupported, udf.name(), type_name(out.type())));
-    return masked;
-}
-
-}  // namespace
 
 UdfRecord::UdfRecord(const dftu_udf_desc& desc, void* self,
                      dstd::SharedPtr<const void> keep_alive)
@@ -189,7 +182,9 @@ dstd::Result<UdfBinding> bind_udf(dstd::SharedPtr<const UdfRecord> udf,
     const dftu_status status = u.desc_.bind(
         ctx.get(), u.self_, types.data(),
         static_cast<std::uint32_t>(types.size()), consts.data(), &out, &bound);
-    if (status < 0) return dstd::Unexpected(call_error(u, "bind", status, ctx));
+    if (status < 0)
+        return dstd::Unexpected(
+            call_error("udf", u.name(), "bind", status, ctx));
     const auto result_id = static_cast<TypeId>(out.id);
     if (!takes_type(result_id)) {
         if (bound != nullptr && u.desc_.free_bound != nullptr)
@@ -229,7 +224,9 @@ dstd::Result<Series> UdfBinding::run(dstd::Span<const Series* const> args,
                      static_cast<std::uint32_t>(handles.size()),
                      static_cast<std::uint64_t>(rows), &produced);
     Series out(produced);
-    if (status < 0) return dstd::Unexpected(call_error(u, "exec", status, ctx));
+    if (status < 0)
+        return dstd::Unexpected(
+            call_error("udf", u.name(), "exec", status, ctx));
     if (!out.valid())
         return dstd::Unexpected(
             dstd::Error::from_format<"udf '{}' exec returned no column">(
@@ -268,6 +265,10 @@ dstd::Result<void> add_udf(const dftu_udf_desc& desc, void* self,
         return dstd::Unexpected(
             dstd::Error::from_format<"udf '{}' has an unknown flag">(
                 dstd::Condition::Unsupported, dstd::StringView(desc.name)));
+    if (find_udaf(desc.name) != nullptr)
+        return dstd::Unexpected(
+            dstd::Error::from_format<"udf '{}' refused: the name is a udaf">(
+                dstd::Condition::InvalidArgument, dstd::StringView(desc.name)));
     auto record =
         dstd::make_shared<const UdfRecord>(desc, self, std::move(keep_alive));
     {

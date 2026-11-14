@@ -11,6 +11,7 @@
 #include <dftracer/utils/plugins/plugin/node.h>
 #include <dftracer/utils/plugins/plugin/source.h>
 #include <dftracer/utils/plugins/plugin/types.h>
+#include <dftracer/utils/plugins/plugin/udaf.h>
 #include <dftracer/utils/plugins/plugin/udf.h>
 
 #include <concepts>
@@ -686,6 +687,21 @@ class PluginBuilder {
         if (!ops || !ops->register_udf) return fail("no udf registry at load");
         const dftu_udf_desc desc = detail::udf_desc_of<U>(name, options);
         return record(ops->register_udf(ctx_, host_->h, &desc, nullptr));
+    }
+
+    /// Register `A` as the user-defined aggregate `name`, which no built-in
+    /// function or aggregate, op, UDF or other UDAF may hold. It is registered
+    /// but not yet callable from queries; see
+    /// @ref UdafType for what A provides and @ref UdafOptions for the argument
+    /// counts and flags. The host copies the name and unregisters the UDAF
+    /// before the plugin unloads.
+    template <UdafType A>
+    PluginBuilder& udaf(const char* name, UdafOptions options = {}) {
+        const dftu_svc_ops* ops = ext<dftu_svc_ops>(DFTU_SVC_OPS);
+        if (!ops || !ops->register_udaf)
+            return fail("no udaf registry at load");
+        const dftu_udaf_desc desc = detail::udaf_desc_of<A>(name, options);
+        return record(ops->register_udaf(ctx_, host_->h, &desc, nullptr));
     }
 
     /// Register `src` as the @ref dftracer::utils::dataframe::LazyFrame

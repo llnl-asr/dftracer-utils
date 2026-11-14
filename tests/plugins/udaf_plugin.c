@@ -1,0 +1,440 @@
+// SPDX-License-Identifier: MIT
+/* Test-only plugin whose factory registers user-defined aggregates:
+ *   usum(x)       POD state: Int64 sum of integers, Float64 sum of floats
+ *   udistinct(x)  non-POD state (a heap set): the count of distinct Int64
+ *   ucountall(x)  NULL_AWARE POD state: the number of rows, nulls included
+ *   ufail(x)      update fails with a message
+ *   ubadrows(x)   finalize returns one row too many
+ *   ualign32(x)   POD state of 24 bytes aligned to 32; counts misaligned inits
+ *   ualign16(x)   POD state of 40 bytes aligned to 16; counts misaligned inits
+ *   ufailcombine(x)  combine fails with a message
+ * It counts binds, frees, inits and destroys, which the test reads by dlsym. */
+
+#include <dftracer/utils/dataframe/c_api.h>
+#include <dftracer/utils/plugins/abi.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
+
+DFTU_PLUGIN_EXPORT int64_t udaf_plugin_binds(void);
+DFTU_PLUGIN_EXPORT int64_t udaf_plugin_frees(void);
+DFTU_PLUGIN_EXPORT int64_t udaf_plugin_inits(void);
+DFTU_PLUGIN_EXPORT int64_t udaf_plugin_destroys(void);
+DFTU_PLUGIN_EXPORT int64_t udaf_plugin_misaligned(void);
+
+static int64_t g_binds;
+static int64_t g_frees;
+static int64_t g_inits;
+static int64_t g_destroys;
+static int64_t g_misaligned;
+
+DFTU_PLUGIN_EXPORT int64_t udaf_plugin_binds(void) { return g_binds; }
+DFTU_PLUGIN_EXPORT int64_t udaf_plugin_frees(void) { return g_frees; }
+DFTU_PLUGIN_EXPORT int64_t udaf_plugin_inits(void) { return g_inits; }
+DFTU_PLUGIN_EXPORT int64_t udaf_plugin_destroys(void) { return g_destroys; }
+DFTU_PLUGIN_EXPORT int64_t udaf_plugin_misaligned(void) { return g_misaligned; }
+
+typedef struct {
+    dftu_dtype in;
+    dftu_dtype out;
+} Bound;
+
+static int is_int(dftu_dtype t) {
+    return t == DFTU_TYPE_INT64 || t == DFTU_TYPE_UINT64 ||
+           t == DFTU_TYPE_INT32 || t == DFTU_TYPE_UINT32;
+}
+
+static int64_t int_at(const dftu_series* s, dftu_dtype t, uint64_t i) {
+    const void* d = dftu_series_data(s);
+    switch (t) {
+        case DFTU_TYPE_INT64:
+            return ((const int64_t*)d)[i];
+        case DFTU_TYPE_UINT64:
+            return (int64_t)((const uint64_t*)d)[i];
+        case DFTU_TYPE_INT32:
+            return ((const int32_t*)d)[i];
+        default:
+            return ((const uint32_t*)d)[i];
+    }
+}
+
+static dftu_status bind_as(dftu_ctx* ctx, const dftu_type_info* args,
+                           uint32_t n, dftu_type_info* out, void** bound,
+                           dftu_dtype result, int ints_only, int i64_only) {
+    Bound* b;
+    if (n != 1 || (i64_only && args[0].id != DFTU_TYPE_INT64) ||
+        (ints_only && !is_int(args[0].id) && args[0].id != DFTU_TYPE_FLOAT64))
+        return dftu_fail(ctx, DFTU_E_INVALID,
+                         "udaf_plugin: the argument type is not accepted");
+    b = (Bound*)calloc(1, sizeof(Bound));
+    if (!b) return dftu_fail(ctx, DFTU_E_NO_MEMORY, "out of memory");
+    b->in = args[0].id;
+    b->out = result;
+    ++g_binds;
+    *bound = b;
+    out->struct_size = sizeof(*out);
+    out->id = result;
+    return DFTU_OK;
+}
+
+static void free_bound(void* bound) {
+    ++g_frees;
+    free(bound);
+}
+
+/* usum */
+
+typedef struct {
+    int64_t i;
+    double d;
+} Sum;
+
+static dftu_status usum_bind(dftu_ctx* ctx, void* self,
+                             const dftu_type_info* args, uint32_t n,
+                             const dftu_scalar* const* consts,
+                             dftu_type_info* out, void** bound) {
+    (void)self;
+    (void)consts;
+    return bind_as(ctx, args, n, out, bound,
+                   n == 1 && args[0].id == DFTU_TYPE_FLOAT64 ? DFTU_TYPE_FLOAT64
+                                                             : DFTU_TYPE_INT64,
+                   1, 0);
+}
+
+static void count_inits(void* bound, void* const* states, uint64_t n) {
+    (void)bound;
+    (void)states;
+    g_inits += (int64_t)n;
+}
+
+static dftu_status usum_update(dftu_ctx* ctx, void* bound, void* const* states,
+                               const dftu_series* const* args, uint32_t nargs,
+                               uint64_t rows) {
+    const Bound* b = (const Bound*)bound;
+    uint64_t i;
+    (void)ctx;
+    (void)nargs;
+    for (i = 0; i < rows; ++i) {
+        Sum* s = (Sum*)states[i];
+        if (!s) continue;
+        if (b->in == DFTU_TYPE_FLOAT64)
+            s->d += ((const double*)dftu_series_data(args[0]))[i];
+        else
+            s->i += int_at(args[0], b->in, i);
+    }
+    return DFTU_OK;
+}
+
+static dftu_status usum_combine(dftu_ctx* ctx, void* bound, void* const* into,
+                                void* const* from, uint64_t n) {
+    uint64_t i;
+    (void)ctx;
+    (void)bound;
+    for (i = 0; i < n; ++i) {
+        ((Sum*)into[i])->i += ((const Sum*)from[i])->i;
+        ((Sum*)into[i])->d += ((const Sum*)from[i])->d;
+    }
+    return DFTU_OK;
+}
+
+static dftu_status usum_finalize(dftu_ctx* ctx, void* bound,
+                                 void* const* states, uint64_t n,
+                                 dftu_series** out) {
+    const Bound* b = (const Bound*)bound;
+    uint64_t i;
+    (void)ctx;
+    if (b->out == DFTU_TYPE_FLOAT64) {
+        double* v = (double*)malloc(n * sizeof(double) + 1);
+        for (i = 0; i < n; ++i) v[i] = ((const Sum*)states[i])->d;
+        *out = dftu_series_new_flat(DFTU_TYPE_FLOAT64, v, (int64_t)n, NULL);
+        free(v);
+    } else {
+        int64_t* v = (int64_t*)malloc(n * sizeof(int64_t) + 1);
+        for (i = 0; i < n; ++i) v[i] = ((const Sum*)states[i])->i;
+        *out = dftu_series_new_flat(DFTU_TYPE_INT64, v, (int64_t)n, NULL);
+        free(v);
+    }
+    return DFTU_OK;
+}
+
+/* udistinct */
+
+typedef struct {
+    int64_t* v;
+    uint64_t n;
+    uint64_t cap;
+} Set;
+
+static int set_add(Set* s, int64_t x) {
+    uint64_t i;
+    for (i = 0; i < s->n; ++i)
+        if (s->v[i] == x) return 1;
+    if (s->n == s->cap) {
+        uint64_t cap = s->cap ? s->cap * 2 : 4;
+        int64_t* grown = (int64_t*)realloc(s->v, cap * sizeof(int64_t));
+        if (!grown) return 0;
+        s->v = grown;
+        s->cap = cap;
+    }
+    s->v[s->n++] = x;
+    return 1;
+}
+
+static dftu_status udistinct_bind(dftu_ctx* ctx, void* self,
+                                  const dftu_type_info* args, uint32_t n,
+                                  const dftu_scalar* const* consts,
+                                  dftu_type_info* out, void** bound) {
+    (void)self;
+    (void)consts;
+    return bind_as(ctx, args, n, out, bound, DFTU_TYPE_INT64, 0, 1);
+}
+
+static dftu_status udistinct_update(dftu_ctx* ctx, void* bound,
+                                    void* const* states,
+                                    const dftu_series* const* args,
+                                    uint32_t nargs, uint64_t rows) {
+    uint64_t i;
+    (void)bound;
+    (void)nargs;
+    for (i = 0; i < rows; ++i) {
+        if (!states[i]) continue;
+        if (!set_add((Set*)states[i],
+                     ((const int64_t*)dftu_series_data(args[0]))[i]))
+            return dftu_fail(ctx, DFTU_E_NO_MEMORY, "udistinct: out of memory");
+    }
+    return DFTU_OK;
+}
+
+static dftu_status udistinct_combine(dftu_ctx* ctx, void* bound,
+                                     void* const* into, void* const* from,
+                                     uint64_t n) {
+    uint64_t i, j;
+    (void)bound;
+    for (i = 0; i < n; ++i) {
+        const Set* f = (const Set*)from[i];
+        for (j = 0; j < f->n; ++j)
+            if (!set_add((Set*)into[i], f->v[j]))
+                return dftu_fail(ctx, DFTU_E_NO_MEMORY,
+                                 "udistinct: out of memory");
+    }
+    return DFTU_OK;
+}
+
+static dftu_status udistinct_finalize(dftu_ctx* ctx, void* bound,
+                                      void* const* states, uint64_t n,
+                                      dftu_series** out) {
+    int64_t* v = (int64_t*)malloc(n * sizeof(int64_t) + 1);
+    uint64_t i;
+    (void)ctx;
+    (void)bound;
+    for (i = 0; i < n; ++i) v[i] = (int64_t)((const Set*)states[i])->n;
+    *out = dftu_series_new_flat(DFTU_TYPE_INT64, v, (int64_t)n, NULL);
+    free(v);
+    return DFTU_OK;
+}
+
+static void udistinct_destroy(void* bound, void* const* states, uint64_t n) {
+    uint64_t i;
+    (void)bound;
+    for (i = 0; i < n; ++i) {
+        free(((Set*)states[i])->v);
+        ++g_destroys;
+    }
+}
+
+static dftu_status udistinct_serialize(dftu_ctx* ctx, void* bound,
+                                       const void* state, uint8_t* out,
+                                       uint64_t cap, uint64_t* size) {
+    const Set* s = (const Set*)state;
+    (void)ctx;
+    (void)bound;
+    *size = s->n * sizeof(int64_t);
+    if (out && cap >= *size && s->n) memcpy(out, s->v, (size_t)*size);
+    return DFTU_OK;
+}
+
+static dftu_status udistinct_deserialize(dftu_ctx* ctx, void* bound,
+                                         const uint8_t* in, uint64_t n,
+                                         void* state) {
+    Set* s = (Set*)state;
+    uint64_t i;
+    (void)bound;
+    if (n % sizeof(int64_t) != 0)
+        return dftu_fail(ctx, DFTU_E_INVALID, "udistinct: bad state bytes");
+    for (i = 0; i < n / sizeof(int64_t); ++i) {
+        int64_t x;
+        memcpy(&x, in + i * sizeof(int64_t), sizeof(x));
+        if (!set_add(s, x))
+            return dftu_fail(ctx, DFTU_E_NO_MEMORY, "udistinct: out of memory");
+    }
+    return DFTU_OK;
+}
+
+/* ucountall */
+
+static dftu_status ucountall_bind(dftu_ctx* ctx, void* self,
+                                  const dftu_type_info* args, uint32_t n,
+                                  const dftu_scalar* const* consts,
+                                  dftu_type_info* out, void** bound) {
+    (void)self;
+    (void)consts;
+    return bind_as(ctx, args, n, out, bound, DFTU_TYPE_INT64, 0, 0);
+}
+
+static dftu_status ucountall_update(dftu_ctx* ctx, void* bound,
+                                    void* const* states,
+                                    const dftu_series* const* args,
+                                    uint32_t nargs, uint64_t rows) {
+    uint64_t i;
+    (void)ctx;
+    (void)bound;
+    (void)args;
+    (void)nargs;
+    for (i = 0; i < rows; ++i)
+        if (states[i]) ++*(int64_t*)states[i];
+    return DFTU_OK;
+}
+
+static dftu_status ucountall_combine(dftu_ctx* ctx, void* bound,
+                                     void* const* into, void* const* from,
+                                     uint64_t n) {
+    uint64_t i;
+    (void)ctx;
+    (void)bound;
+    for (i = 0; i < n; ++i) *(int64_t*)into[i] += *(const int64_t*)from[i];
+    return DFTU_OK;
+}
+
+static dftu_status ucountall_finalize(dftu_ctx* ctx, void* bound,
+                                      void* const* states, uint64_t n,
+                                      dftu_series** out) {
+    int64_t* v = (int64_t*)malloc(n * sizeof(int64_t) + 1);
+    uint64_t i;
+    (void)ctx;
+    (void)bound;
+    for (i = 0; i < n; ++i) v[i] = *(const int64_t*)states[i];
+    *out = dftu_series_new_flat(DFTU_TYPE_INT64, v, (int64_t)n, NULL);
+    free(v);
+    return DFTU_OK;
+}
+
+/* ufail, ubadrows */
+
+static dftu_status ufail_update(dftu_ctx* ctx, void* bound, void* const* states,
+                                const dftu_series* const* args, uint32_t nargs,
+                                uint64_t rows) {
+    (void)bound;
+    (void)states;
+    (void)args;
+    (void)nargs;
+    (void)rows;
+    return dftu_fail(ctx, DFTU_E_INVALID, "ufail: refused on purpose");
+}
+
+static dftu_status ubadrows_finalize(dftu_ctx* ctx, void* bound,
+                                     void* const* states, uint64_t n,
+                                     dftu_series** out) {
+    int64_t* v = (int64_t*)calloc(n + 1, sizeof(int64_t));
+    (void)ctx;
+    (void)bound;
+    (void)states;
+    *out = dftu_series_new_flat(DFTU_TYPE_INT64, v, (int64_t)n + 1, NULL);
+    free(v);
+    return DFTU_OK;
+}
+
+static void init_align(void* const* states, uint64_t n, uintptr_t align) {
+    uint64_t i;
+    for (i = 0; i < n; ++i)
+        if ((uintptr_t)states[i] % align != 0) ++g_misaligned;
+}
+
+static void init_align32(void* bound, void* const* states, uint64_t n) {
+    (void)bound;
+    init_align(states, n, 32);
+}
+
+static void init_align16(void* bound, void* const* states, uint64_t n) {
+    (void)bound;
+    init_align(states, n, 16);
+}
+
+static dftu_status ufailcombine_combine(dftu_ctx* ctx, void* bound,
+                                        void* const* into, void* const* from,
+                                        uint64_t n) {
+    (void)bound;
+    (void)into;
+    (void)from;
+    (void)n;
+    return dftu_fail(ctx, DFTU_E_INVALID, "ufailcombine: refused merge");
+}
+
+#define POD_FIELDS(NAME, FLAGS, SIZE, ALIGN, BIND, UPDATE, COMBINE, FINALIZE) \
+    {sizeof(dftu_udaf_desc),                                                  \
+     NAME,                                                                    \
+     FLAGS,                                                                   \
+     1,                                                                       \
+     1,                                                                       \
+     SIZE,                                                                    \
+     ALIGN,                                                                   \
+     BIND,                                                                    \
+     count_inits,                                                             \
+     UPDATE,                                                                  \
+     COMBINE,                                                                 \
+     FINALIZE,                                                                \
+     NULL,                                                                    \
+     NULL,                                                                    \
+     NULL,                                                                    \
+     NULL,                                                                    \
+     NULL,                                                                    \
+     free_bound}
+
+static const dftu_udaf_desc UDAFS[] = {
+    POD_FIELDS("usum", DFTU_AGG_STATE_POD | DFTU_AGG_PARALLEL_SAFE, sizeof(Sum),
+               8, usum_bind, usum_update, usum_combine, usum_finalize),
+    {sizeof(dftu_udaf_desc), "udistinct", DFTU_AGG_PARALLEL_SAFE, 1, 1,
+     sizeof(Set), 8, udistinct_bind, count_inits, udistinct_update,
+     udistinct_combine, udistinct_finalize, udistinct_destroy,
+     udistinct_serialize, udistinct_deserialize, NULL, NULL, free_bound},
+    POD_FIELDS("ucountall", DFTU_AGG_STATE_POD | DFTU_AGG_NULL_AWARE,
+               sizeof(int64_t), 8, ucountall_bind, ucountall_update,
+               ucountall_combine, ucountall_finalize),
+    POD_FIELDS("ufail", DFTU_AGG_STATE_POD, sizeof(int64_t), 8, ucountall_bind,
+               ufail_update, ucountall_combine, ucountall_finalize),
+    {sizeof(dftu_udaf_desc), "ualign32", DFTU_AGG_STATE_POD, 1, 1, 24, 32,
+     ucountall_bind, init_align32, ucountall_update, ucountall_combine,
+     ucountall_finalize, NULL, NULL, NULL, NULL, NULL, free_bound},
+    {sizeof(dftu_udaf_desc), "ualign16", DFTU_AGG_STATE_POD, 1, 1, 40, 16,
+     ucountall_bind, init_align16, ucountall_update, ucountall_combine,
+     ucountall_finalize, NULL, NULL, NULL, NULL, NULL, free_bound},
+    POD_FIELDS("ufailcombine", DFTU_AGG_STATE_POD, sizeof(int64_t), 8,
+               ucountall_bind, ucountall_update, ufailcombine_combine,
+               ucountall_finalize),
+    POD_FIELDS("ubadrows", DFTU_AGG_STATE_POD, sizeof(int64_t), 8,
+               ucountall_bind, ucountall_update, ucountall_combine,
+               ubadrows_finalize),
+};
+
+static dftu_plugin g_plugin;
+
+DFTU_PLUGIN_INFO("udaf_plugin", "1.0")
+
+DFTU_PLUGIN_EXPORT dftu_status dftracer_plugin(dftu_ctx* ctx,
+                                               dftu_plugin_host* h,
+                                               const dftu_value* config,
+                                               dftu_plugin** out) {
+    const dftu_svc_ops* ops;
+    size_t i;
+    (void)config;
+    ops = (const dftu_svc_ops*)h->get_service(h->h, DFTU_SVC_OPS);
+    if (!ops || !ops->register_udaf)
+        return dftu_fail(ctx, DFTU_E_UNSUPPORTED, "no udaf registry at load");
+    for (i = 0; i < sizeof(UDAFS) / sizeof(UDAFS[0]); ++i) {
+        const dftu_status st = ops->register_udaf(ctx, h->h, &UDAFS[i], NULL);
+        if (st < 0) return st;
+    }
+    memset(&g_plugin, 0, sizeof(g_plugin));
+    g_plugin.struct_size = sizeof(g_plugin);
+    *out = &g_plugin;
+    return DFTU_OK;
+}

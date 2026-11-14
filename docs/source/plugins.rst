@@ -1343,6 +1343,54 @@ registration. ``dataframe::udf(name)`` gives a ``Udf`` that only looks the name
 up, so destroying it never unregisters, and fails with NotFound for an unknown
 name.
 
+**A user-defined aggregate** (``dftu_svc_ops::register_udaf``). A function
+that keeps one state per group, such as ``p95(dur)``. Its name follows the
+rules of a UDF name, and a name that a built-in function or aggregate, an op, a
+UDF or another aggregate holds fails the load with a message. A
+``dftu_udaf_desc`` (``dataframe/c_api_udaf.h``) has the name, the argument
+counts, flags, ``state_size`` and ``state_align``, and the callbacks. The host
+owns the memory of every state, in blocks that never move while the table
+grows. ``bind`` runs once per call site like a UDF's. ``init`` makes new states
+ready, ``update`` feeds a batch of rows to the states of their groups
+(``states[i]`` is the state of row ``i``), ``combine`` merges states, and
+``finalize`` gives one result row per state. They run over arrays and columns,
+never row by row. ``free_bound`` releases ``bound``, after the last state.
+
+Without ``DFTU_AGG_NULL_AWARE`` the host passes a NULL state pointer for a row
+where any argument is null, so ``update`` skips it; with the flag the plugin
+sees every row. ``DFTU_AGG_STATE_POD`` marks a state that is plain bytes: the
+host zero-fills it, and may copy it to spill or move it, so it needs no
+``destroy``, ``serialize`` or ``deserialize``. Any other state needs all
+three: ``destroy`` runs on every state that ``init`` made, and ``serialize``
+writes a state as bytes with a two-call size query (a NULL ``out``, or a
+``cap`` that is too small, only sets ``*size``) for a spill or a merge across
+processes. A UDAF with neither a POD state nor the serialize pair fails the
+load. ``DFTU_AGG_PARALLEL_SAFE`` lets the host feed several state sets on
+different threads and merge them with ``combine``; one set is never used by
+two threads at once. ``DFTU_AGG_HAS_RETRACT`` needs ``retract`` and ``value``
+for a sliding window. The registry and the state table are in place; no duql
+stage, window or Python call runs a UDAF yet.
+
+.. code-block:: cpp
+
+   struct P95 {                                   // plugins/plugin/udaf.h
+       struct State { Sketch sketch; };           // not trivially copyable
+       static dstd::Result<dstd::UniquePtr<P95>> bind(pl::UdfBind& bind);
+       dstd::Result<void> update(pl::UdafStateSet<State>& states,
+                                 const pl::UdfBatch& batch) const;
+       dstd::Result<void> combine(State& into, State& from) const;
+       dstd::Result<dftu_series*> finalize(pl::UdafStateSet<State>& states) const;
+       void serialize(const State& state, dstd::String& out) const;
+       dstd::Result<void> deserialize(State& state, dstd::StringView in) const;
+   };
+   return plugin(ctx, h, config).udaf<P95>("p95").build(out);
+
+A ``State`` that is trivially copyable is a POD state and needs no
+``serialize`` pair. Code that is not a plugin registers the same class, plus a
+static ``NAME``, with ``dataframe::make_udaf<A>()`` (``dataframe/udaf.h``);
+the ``dataframe::Udaf`` it returns owns the registration, as ``Udf`` does, and
+``dataframe::udaf(name)`` only looks a name up.
+
 **A source** (``DFTU_SVC_PROVIDERS``). A ``dftu_source_vt`` is the C mirror
 of the engine's ``Source`` / ``Cursor`` pair: ``schema`` names the columns
 without a scan (``schema_types`` optionally types them, nested types
@@ -1424,7 +1472,7 @@ error.
 
 **Library lifetime.** The host keeps a plugin's shared library loaded while
 anything made from it is alive: a registered node, provider, index
-extension, op or UDF, and the plans and cursors that hold one. Unloading the plugin
+extension, op, UDF or UDAF, and the plans and cursors that hold one. Unloading the plugin
 removes its names at once, so no new lookup finds them. The plugin's own
 ``destroy`` runs after the last holder is gone, and the library is closed
 after it; a node or provider calls its own ``destroy(self)`` before that, so it

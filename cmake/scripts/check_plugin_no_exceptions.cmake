@@ -34,7 +34,8 @@ endforeach()
 list(APPEND sources "${SOURCE_DIR}/examples/plugins/duration_report.cpp"
      "${SOURCE_DIR}/examples/plugins/duration_histogram.cpp"
      "${SOURCE_DIR}/examples/plugins/query_filter.cpp"
-     "${SOURCE_DIR}/examples/plugins/duration_udfs.cpp")
+     "${SOURCE_DIR}/examples/plugins/duration_udfs.cpp"
+     "${SOURCE_DIR}/examples/plugins/stats_udafs.cpp")
 
 file(WRITE "${PROJECT_DIR}/CMakeLists.txt"
      "cmake_minimum_required(VERSION 3.20)\n"

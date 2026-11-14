@@ -93,6 +93,29 @@ elseif(TARGET dftracer_utils_dataframe::static)
                         PRIVATE dftracer_utils_dataframe::static)
 endif()
 
+# Registers user-defined aggregates; reads the argument columns through the
+# dataframe C ABI.
+add_library(stats_udafs_plugin MODULE stats_udafs.cpp)
+target_set_warnings(stats_udafs_plugin)
+set_target_properties(
+  stats_udafs_plugin
+  PROPERTIES OUTPUT_NAME stats_udafs
+             PREFIX ""
+             POSITION_INDEPENDENT_CODE ON
+             CXX_STANDARD 20
+             CXX_STANDARD_REQUIRED ON
+             CXX_EXTENSIONS OFF)
+target_include_directories(stats_udafs_plugin
+                           PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_enable_coroutine(stats_udafs_plugin)
+if(TARGET dftracer_utils_dataframe::shared)
+  target_link_libraries(stats_udafs_plugin
+                        PRIVATE dftracer_utils_dataframe::shared)
+elseif(TARGET dftracer_utils_dataframe::static)
+  target_link_libraries(stats_udafs_plugin
+                        PRIVATE dftracer_utils_dataframe::static)
+endif()
+
 add_library(query_filter_plugin MODULE query_filter.cpp)
 target_set_warnings(query_filter_plugin)
 set_target_properties(
@@ -264,7 +287,7 @@ target_include_directories(process_regr_stats_plugin
                            PRIVATE ${CMAKE_SOURCE_DIR}/include)
 
 install(TARGETS event_counter_plugin duration_histogram_plugin
-                duration_report_plugin duration_udfs_plugin
+                duration_report_plugin duration_udfs_plugin stats_udafs_plugin
                 query_filter_plugin
                 perbatch_producer_plugin perbatch_consumer_plugin
                 dur_stats_producer_plugin dur_stats_consumer_plugin

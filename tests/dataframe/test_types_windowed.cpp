@@ -6,15 +6,14 @@
 #include <cstdint>
 
 // Windowed/statistical kernel coverage (rolling, ewm, cut/qcut, moments,
-// quantile) for the Arrow-only logical types, mirroring
-// test_arrow_types_matrix.cpp's default-less is_audited() switch.
-#include <dataframe/builders_arrow_types.h>
-#include <dftracer/utils/arrow/arrow.h>
+// quantile) for the non-native-constructor logical types, mirroring
+// test_types_matrix.cpp's default-less is_audited() switch.
+#include <dataframe/builders_types.h>
 #include <dftracer/utils/common/config.h>
+#include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/scalar.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <nanoarrow/nanoarrow.h>
 
 using namespace dftracer::utils;
 
@@ -116,7 +115,7 @@ double scale(TypeId t) {
 
 }  // namespace
 
-TEST_SUITE("dataframe_arrow_types_windowed") {
+TEST_SUITE("dataframe_types_windowed") {
     TEST_CASE("every audited TypeId has a matrix row") {
         for (std::int32_t code = 0;
              code <= static_cast<std::int32_t>(TypeId::Map); ++code) {

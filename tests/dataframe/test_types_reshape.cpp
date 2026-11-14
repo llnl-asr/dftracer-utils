@@ -9,14 +9,12 @@
 #include <cstdint>
 #include <stdexcept>
 
-// Reshaping/dedupe-key coverage for the Arrow-only logical types:
+// Reshaping/dedupe-key coverage for the non-native-constructor logical types:
 // sort_by_multi, unique, to_dummies, pivot, unpivot and explode. Table-driven
 // with a default-less switch, so a new TypeId with no row here fails.
-#include <dataframe/builders_arrow_types.h>
-#include <dftracer/utils/arrow/arrow.h>
+#include <dataframe/builders_types.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/scalar.h>
-#include <nanoarrow/nanoarrow.h>
 
 using namespace dftracer::utils;
 
@@ -170,7 +168,7 @@ DataFrame frame_of(const dstd::String& col_name, const Series& s) {
 
 }  // namespace
 
-TEST_SUITE("dataframe_arrow_types_reshape") {
+TEST_SUITE("dataframe_types_reshape") {
     TEST_CASE("every audited TypeId has a matrix row") {
         for (std::int32_t code = 0;
              code <= static_cast<std::int32_t>(TypeId::Map); ++code) {

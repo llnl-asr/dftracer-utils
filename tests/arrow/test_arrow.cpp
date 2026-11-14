@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dataframe/builders_arrow_types.h>
+#include <arrow/arrow_helpers.h>
 #include <dftracer/utils/arrow/arrow.h>
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/dataframe/c_api.h>

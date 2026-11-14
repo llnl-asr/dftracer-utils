@@ -11,11 +11,10 @@
 #include <cstring>
 #include <stdexcept>
 
-// Lazy engine, spill and Expr coverage for the 15 Arrow logical types: the
+// Lazy engine, spill and Expr coverage for the 15 logical types: the
 // eager sweep (6d2859fc..95f09311) never touched lazy/streaming or spill, so
 // a divergence found here is a lazy or spill bug, not eager's.
-#include <dataframe/builders_arrow_types.h>
-#include <dftracer/utils/arrow/arrow.h>
+#include <dataframe/builders_types.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/expr.h>
@@ -24,7 +23,6 @@
 #include <dftracer/utils/dataframe/scalar.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <nanoarrow/nanoarrow.h>
 
 using namespace dftracer::utils;
 
@@ -93,117 +91,6 @@ void check_v_equal(const Series& lazy_v, const Series& eager_v) {
     }
 }
 
-// No shared builder header covers the temporal family, so this file defines
-// its own.
-Series make_timestamp(const dstd::Vector<std::int64_t>& values) {
-    BuiltArrow b;
-    ArrowSchemaInit(&b.schema);
-    REQUIRE(ArrowSchemaSetTypeDateTime(&b.schema, NANOARROW_TYPE_TIMESTAMP,
-                                       NANOARROW_TIME_UNIT_MICRO,
-                                       "UTC") == NANOARROW_OK);
-    REQUIRE(ArrowArrayInitFromSchema(&b.array, &b.schema, nullptr) ==
-            NANOARROW_OK);
-    REQUIRE(ArrowArrayStartAppending(&b.array) == NANOARROW_OK);
-    for (std::int64_t v : values)
-        REQUIRE(ArrowArrayAppendInt(&b.array, v) == NANOARROW_OK);
-    finish_building(&b.array);
-    return test_types::import_series(&b.schema, &b.array);
-}
-
-Series make_date32(const dstd::Vector<std::int32_t>& values) {
-    BuiltArrow b;
-    ArrowSchemaInit(&b.schema);
-    REQUIRE(ArrowSchemaSetType(&b.schema, NANOARROW_TYPE_DATE32) ==
-            NANOARROW_OK);
-    REQUIRE(ArrowArrayInitFromSchema(&b.array, &b.schema, nullptr) ==
-            NANOARROW_OK);
-    REQUIRE(ArrowArrayStartAppending(&b.array) == NANOARROW_OK);
-    for (std::int32_t v : values)
-        REQUIRE(ArrowArrayAppendInt(&b.array, v) == NANOARROW_OK);
-    finish_building(&b.array);
-    return test_types::import_series(&b.schema, &b.array);
-}
-
-Series make_date64(const dstd::Vector<std::int64_t>& values) {
-    BuiltArrow b;
-    ArrowSchemaInit(&b.schema);
-    REQUIRE(ArrowSchemaSetType(&b.schema, NANOARROW_TYPE_DATE64) ==
-            NANOARROW_OK);
-    REQUIRE(ArrowArrayInitFromSchema(&b.array, &b.schema, nullptr) ==
-            NANOARROW_OK);
-    REQUIRE(ArrowArrayStartAppending(&b.array) == NANOARROW_OK);
-    for (std::int64_t v : values)
-        REQUIRE(ArrowArrayAppendInt(&b.array, v) == NANOARROW_OK);
-    finish_building(&b.array);
-    return test_types::import_series(&b.schema, &b.array);
-}
-
-Series make_time32(const dstd::Vector<std::int32_t>& values) {
-    BuiltArrow b;
-    ArrowSchemaInit(&b.schema);
-    REQUIRE(ArrowSchemaSetTypeDateTime(&b.schema, NANOARROW_TYPE_TIME32,
-                                       NANOARROW_TIME_UNIT_MILLI,
-                                       nullptr) == NANOARROW_OK);
-    REQUIRE(ArrowArrayInitFromSchema(&b.array, &b.schema, nullptr) ==
-            NANOARROW_OK);
-    REQUIRE(ArrowArrayStartAppending(&b.array) == NANOARROW_OK);
-    for (std::int32_t v : values)
-        REQUIRE(ArrowArrayAppendInt(&b.array, v) == NANOARROW_OK);
-    finish_building(&b.array);
-    return test_types::import_series(&b.schema, &b.array);
-}
-
-Series make_time64(const dstd::Vector<std::int64_t>& values) {
-    BuiltArrow b;
-    ArrowSchemaInit(&b.schema);
-    REQUIRE(ArrowSchemaSetTypeDateTime(&b.schema, NANOARROW_TYPE_TIME64,
-                                       NANOARROW_TIME_UNIT_MICRO,
-                                       nullptr) == NANOARROW_OK);
-    REQUIRE(ArrowArrayInitFromSchema(&b.array, &b.schema, nullptr) ==
-            NANOARROW_OK);
-    REQUIRE(ArrowArrayStartAppending(&b.array) == NANOARROW_OK);
-    for (std::int64_t v : values)
-        REQUIRE(ArrowArrayAppendInt(&b.array, v) == NANOARROW_OK);
-    finish_building(&b.array);
-    return test_types::import_series(&b.schema, &b.array);
-}
-
-Series make_duration(const dstd::Vector<std::int64_t>& values) {
-    BuiltArrow b;
-    ArrowSchemaInit(&b.schema);
-    REQUIRE(ArrowSchemaSetTypeDateTime(&b.schema, NANOARROW_TYPE_DURATION,
-                                       NANOARROW_TIME_UNIT_MICRO,
-                                       nullptr) == NANOARROW_OK);
-    REQUIRE(ArrowArrayInitFromSchema(&b.array, &b.schema, nullptr) ==
-            NANOARROW_OK);
-    REQUIRE(ArrowArrayStartAppending(&b.array) == NANOARROW_OK);
-    for (std::int64_t v : values)
-        REQUIRE(ArrowArrayAppendInt(&b.array, v) == NANOARROW_OK);
-    finish_building(&b.array);
-    return test_types::import_series(&b.schema, &b.array);
-}
-
-// builders_arrow_types.h's make_decimal128 always uses scale 0, which cannot
-// catch a lost decimal_scale; this one uses a non-zero scale instead.
-Series make_decimal128_scaled(const dstd::Vector<std::int64_t>& unscaled,
-                              std::int32_t scale) {
-    BuiltArrow b;
-    ArrowSchemaInit(&b.schema);
-    REQUIRE(ArrowSchemaSetTypeDecimal(&b.schema, NANOARROW_TYPE_DECIMAL128, 38,
-                                      scale) == NANOARROW_OK);
-    REQUIRE(ArrowArrayInitFromSchema(&b.array, &b.schema, nullptr) ==
-            NANOARROW_OK);
-    REQUIRE(ArrowArrayStartAppending(&b.array) == NANOARROW_OK);
-    for (std::int64_t v : unscaled) {
-        ArrowDecimal dec;
-        ArrowDecimalInit(&dec, 128, 38, scale);
-        ArrowDecimalSetInt(&dec, v);
-        REQUIRE(ArrowArrayAppendDecimal(&b.array, &dec) == NANOARROW_OK);
-    }
-    finish_building(&b.array);
-    return test_types::import_series(&b.schema, &b.array);
-}
-
 enum class SpillExpect { RoundTrips, Refuses };
 
 // Spills `col` alone in a one-column morsel and reads it back.
@@ -221,7 +108,7 @@ dstd::Optional<Morsel> spill_round_trip(const Series& col, spill::Dir& dir,
 
 }  // namespace
 
-TEST_SUITE("dataframe_arrow_types_lazy") {
+TEST_SUITE("dataframe_types_lazy") {
     TEST_CASE("spill round-trips Float16, Decimal128/256 and FixedSizeBinary") {
         const auto dir_owner = dftu_utils_test::ok(spill::Dir::create());
         spill::Dir& dir = *dir_owner;
@@ -240,7 +127,7 @@ TEST_SUITE("dataframe_arrow_types_lazy") {
         }
         {
             INFO("Decimal128 (non-zero scale)");
-            Series s = make_decimal128_scaled({12345, -100, 0, 999999}, 3);
+            Series s = make_decimal128({12345, -100, 0, 999999}, 38, 3);
             auto m = spill_round_trip(s, dir, 1);
             REQUIRE(m.has_value());
             const Series& back = m->columns[0];
@@ -330,6 +217,8 @@ TEST_SUITE("dataframe_arrow_types_lazy") {
         {
             INFO("Time32");
             Series s = make_time32({1000, -1, 0, 86399000});
+            REQUIRE(s.data<std::int32_t>()[1] == -1);
+            REQUIRE(s.data<std::int32_t>()[3] == 86399000);
             auto m = spill_round_trip(s, dir, 4);
             REQUIRE(m.has_value());
             const Series& back = m->columns[0];
@@ -410,7 +299,7 @@ TEST_SUITE("dataframe_arrow_types_lazy") {
         "opaque-value types") {
         dstd::Vector<Series> values;
         values.push_back(make_float16({10.0f, 20.0f, 30.0f, 40.0f}));
-        values.push_back(make_decimal128_scaled({100, 200, 300, 400}, 2));
+        values.push_back(make_decimal128({100, 200, 300, 400}, 38, 2));
         values.push_back(make_decimal256({100, 200, 300, 400}));
         values.push_back(
             make_fixed_size_binary({"aaaa", "bbbb", "cccc", "dddd"}, 4));
@@ -462,7 +351,7 @@ TEST_SUITE("dataframe_arrow_types_lazy") {
     TEST_CASE("lazy sort_by on the value column matches eager") {
         dstd::Vector<Series> values;
         values.push_back(make_float16({30.0f, 10.0f, 20.0f, 10.0f}));
-        values.push_back(make_decimal128_scaled({300, 100, 200, 100}, 1));
+        values.push_back(make_decimal128({300, 100, 200, 100}, 38, 1));
         values.push_back(make_decimal256({300, 100, 200, 100}));
         values.push_back(
             make_fixed_size_binary({"cccc", "aaaa", "bbbb", "aaaa"}, 4));

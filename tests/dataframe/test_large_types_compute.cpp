@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dataframe/builders_arrow_types.h>
+#include <dataframe/builders_types.h>
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
@@ -16,113 +17,14 @@
 // copy on import), and every kernel that already worked on String/Binary/List
 // works on them directly - equality, comparison, sort, group_by, a string op,
 // is_in, and take/gather (which sort's reordering relies on).
-#include <dftracer/utils/arrow/arrow.h>
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/c_api.h>
-#include <nanoarrow/nanoarrow.h>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::dataframe;
+using namespace dftracer::utils::dataframe::test_types;
 
-namespace {
-
-struct BuiltArrow {
-    ArrowSchema schema{};
-    ArrowArray array{};
-    ~BuiltArrow() {
-        if (array.release) array.release(&array);
-        if (schema.release) schema.release(&schema);
-    }
-};
-
-void finish(ArrowArray* a) {
-    ArrowError err;
-    REQUIRE(ArrowArrayFinishBuildingDefault(a, &err) == NANOARROW_OK);
-}
-
-Series make_large_utf8(const dstd::Vector<dstd::String>& values) {
-    BuiltArrow b;
-    ArrowSchemaInit(&b.schema);
-    REQUIRE(ArrowSchemaSetType(&b.schema, NANOARROW_TYPE_LARGE_STRING) ==
-            NANOARROW_OK);
-    REQUIRE(ArrowArrayInitFromSchema(&b.array, &b.schema, nullptr) ==
-            NANOARROW_OK);
-    REQUIRE(ArrowArrayStartAppending(&b.array) == NANOARROW_OK);
-    for (const dstd::String& v : values) {
-        ArrowStringView sv{v.data(), static_cast<int64_t>(v.size())};
-        REQUIRE(ArrowArrayAppendString(&b.array, sv) == NANOARROW_OK);
-    }
-    finish(&b.array);
-    return test_types::import_series(&b.schema, &b.array);
-}
-
-Series make_large_binary(const dstd::Vector<dstd::String>& values) {
-    BuiltArrow b;
-    ArrowSchemaInit(&b.schema);
-    REQUIRE(ArrowSchemaSetType(&b.schema, NANOARROW_TYPE_LARGE_BINARY) ==
-            NANOARROW_OK);
-    REQUIRE(ArrowArrayInitFromSchema(&b.array, &b.schema, nullptr) ==
-            NANOARROW_OK);
-    REQUIRE(ArrowArrayStartAppending(&b.array) == NANOARROW_OK);
-    for (const dstd::String& v : values) {
-        ArrowBufferView bv;
-        bv.data.data = v.data();
-        bv.size_bytes = static_cast<int64_t>(v.size());
-        REQUIRE(ArrowArrayAppendBytes(&b.array, bv) == NANOARROW_OK);
-    }
-    finish(&b.array);
-    return test_types::import_series(&b.schema, &b.array);
-}
-
-// large_list<int64>: rows = lists of int64 values.
-Series make_large_list_i64(
-    const dstd::Vector<dstd::Vector<std::int64_t>>& rows) {
-    BuiltArrow b;
-    ArrowSchemaInit(&b.schema);
-    REQUIRE(ArrowSchemaSetType(&b.schema, NANOARROW_TYPE_LARGE_LIST) ==
-            NANOARROW_OK);
-    REQUIRE(ArrowSchemaSetType(b.schema.children[0], NANOARROW_TYPE_INT64) ==
-            NANOARROW_OK);
-    REQUIRE(ArrowArrayInitFromSchema(&b.array, &b.schema, nullptr) ==
-            NANOARROW_OK);
-    REQUIRE(ArrowArrayStartAppending(&b.array) == NANOARROW_OK);
-    for (const auto& row : rows) {
-        for (std::int64_t v : row)
-            REQUIRE(ArrowArrayAppendInt(b.array.children[0], v) ==
-                    NANOARROW_OK);
-        REQUIRE(ArrowArrayFinishElement(&b.array) == NANOARROW_OK);
-    }
-    finish(&b.array);
-    return test_types::import_series(&b.schema, &b.array);
-}
-
-// large_list<large_utf8>: rows = lists of strings, nested Large both levels.
-Series make_large_list_large_utf8(
-    const dstd::Vector<dstd::Vector<dstd::String>>& rows) {
-    BuiltArrow b;
-    ArrowSchemaInit(&b.schema);
-    REQUIRE(ArrowSchemaSetType(&b.schema, NANOARROW_TYPE_LARGE_LIST) ==
-            NANOARROW_OK);
-    REQUIRE(ArrowSchemaSetType(b.schema.children[0],
-                               NANOARROW_TYPE_LARGE_STRING) == NANOARROW_OK);
-    REQUIRE(ArrowArrayInitFromSchema(&b.array, &b.schema, nullptr) ==
-            NANOARROW_OK);
-    REQUIRE(ArrowArrayStartAppending(&b.array) == NANOARROW_OK);
-    for (const auto& row : rows) {
-        for (const dstd::String& s : row) {
-            ArrowStringView sv{s.data(), static_cast<int64_t>(s.size())};
-            REQUIRE(ArrowArrayAppendString(b.array.children[0], sv) ==
-                    NANOARROW_OK);
-        }
-        REQUIRE(ArrowArrayFinishElement(&b.array) == NANOARROW_OK);
-    }
-    finish(&b.array);
-    return test_types::import_series(&b.schema, &b.array);
-}
-
-}  // namespace
-
-TEST_SUITE("dataframe_arrow_large_types_compute") {
+TEST_SUITE("dataframe_large_types_compute") {
     TEST_CASE(
         "large_utf8 imports as LargeString with its own 64-bit "
         "offsets, not narrowed to String") {
@@ -324,7 +226,8 @@ TEST_SUITE("dataframe_arrow_large_types_compute") {
     TEST_CASE(
         "Nested large_list<large_utf8>: both levels are wide-offset "
         "and the string data survives") {
-        Series s = make_large_list_large_utf8({{"a", "bb"}, {"ccc"}, {}});
+        Series s =
+            make_large_list({0, 2, 3, 3}, make_large_utf8({"a", "bb", "ccc"}));
         REQUIRE(s.valid());
         CHECK(s.type() == TypeId::LargeList);
         CHECK(is_wide_offset_type(s.type()));
@@ -351,34 +254,6 @@ TEST_SUITE("dataframe_arrow_large_types_compute") {
         CHECK(tchild.string_at(0) == "ccc");
         CHECK(tchild.string_at(1) == "a");
         CHECK(tchild.string_at(2) == "bb");
-    }
-
-    TEST_CASE(
-        "large_utf8 round-trips through export as utf8 with intact "
-        "values, and its offsets were never copied down to int32") {
-        Series s = make_large_utf8({"one", "two", "three"});
-        REQUIRE(s.valid());
-        REQUIRE(s.type() == TypeId::LargeString);
-        const std::int64_t* wide_off = s.offsets64();
-        REQUIRE(wide_off != nullptr);
-        CHECK(s.offsets() == nullptr);  // never materialized an int32 buffer
-
-        arrow::Batch out = test_types::exported(s);
-        REQUIRE(out.is_valid());
-        ArrowSchemaView view;
-        ArrowError err;
-        REQUIRE(ArrowSchemaViewInit(&view, out.schema(), &err) == NANOARROW_OK);
-        // A faithful representation of the same data: our LargeString
-        // exports as Arrow's large_utf8, not narrowed to utf8.
-        CHECK(view.type == NANOARROW_TYPE_LARGE_STRING);
-
-        Series back = test_types::import_series(out.schema(), out.array());
-        REQUIRE(back.valid());
-        CHECK(back.type() == TypeId::LargeString);
-        REQUIRE(back.length() == 3);
-        CHECK(back.string_at(0) == "one");
-        CHECK(back.string_at(1) == "two");
-        CHECK(back.string_at(2) == "three");
     }
 
     TEST_CASE(

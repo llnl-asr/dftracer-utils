@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dataframe/builders_arrow_types.h>
+#include <arrow/arrow_helpers.h>
 #include <dftracer/utils/arrow/arrow.h>
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/dstd/string.h>
@@ -35,6 +35,23 @@ void append_str(ArrowArray* a, const dstd::String& s) {
 void finish(ArrowArray* a) {
     ArrowError err;
     REQUIRE(ArrowArrayFinishBuildingDefault(a, &err) == NANOARROW_OK);
+}
+
+}  // namespace
+
+namespace {
+
+Series import_large_utf8(const dstd::Vector<dstd::String>& values) {
+    BuiltArrow b;
+    ArrowSchemaInit(&b.schema);
+    REQUIRE(ArrowSchemaSetType(&b.schema, NANOARROW_TYPE_LARGE_STRING) ==
+            NANOARROW_OK);
+    REQUIRE(ArrowArrayInitFromSchema(&b.array, &b.schema, nullptr) ==
+            NANOARROW_OK);
+    REQUIRE(ArrowArrayStartAppending(&b.array) == NANOARROW_OK);
+    for (const dstd::String& v : values) append_str(&b.array, v);
+    finish(&b.array);
+    return test_types::import_series(&b.schema, &b.array);
 }
 
 }  // namespace
@@ -457,4 +474,32 @@ TEST_SUITE("dataframe_arrow_types") {
         REQUIRE(s.valid());
         CHECK(s.data_type().id != TypeId::Unknown);
     }
+}
+
+TEST_CASE(
+    "large_utf8 round-trips through export as utf8 with intact "
+    "values, and its offsets were never copied down to int32") {
+    Series s = import_large_utf8({"one", "two", "three"});
+    REQUIRE(s.valid());
+    REQUIRE(s.type() == TypeId::LargeString);
+    const std::int64_t* wide_off = s.offsets64();
+    REQUIRE(wide_off != nullptr);
+    CHECK(s.offsets() == nullptr);  // never materialized an int32 buffer
+
+    arrow::Batch out = test_types::exported(s);
+    REQUIRE(out.is_valid());
+    ArrowSchemaView view;
+    ArrowError err;
+    REQUIRE(ArrowSchemaViewInit(&view, out.schema(), &err) == NANOARROW_OK);
+    // A faithful representation of the same data: our LargeString
+    // exports as Arrow's large_utf8, not narrowed to utf8.
+    CHECK(view.type == NANOARROW_TYPE_LARGE_STRING);
+
+    Series back = test_types::import_series(out.schema(), out.array());
+    REQUIRE(back.valid());
+    CHECK(back.type() == TypeId::LargeString);
+    REQUIRE(back.length() == 3);
+    CHECK(back.string_at(0) == "one");
+    CHECK(back.string_at(1) == "two");
+    CHECK(back.string_at(2) == "three");
 }

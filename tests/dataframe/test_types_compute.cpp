@@ -1,8 +1,12 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dataframe/builders_arrow_types.h>
+#include <dataframe/builders_types.h>
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dataframe/agg.h>
+#include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dataframe/internal/float16.h>
+#include <dftracer/utils/dataframe/scalar.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
@@ -13,209 +17,17 @@
 #include <cstring>
 #include <stdexcept>
 
-// Confirms the new Arrow logical types compute, not just round-trip: Float16
+// Confirms the new logical types compute, not just round-trip: Float16
 // arithmetic/reduction promote to Float32 and produce real numbers,
 // FixedSizeBinary/Decimal128 compare/sort/group_by/is_in on their exact
 // bytes, and Decimal128 arithmetic goes through the documented (lossy)
 // Float64 cast.
-#include <dftracer/utils/arrow/arrow.h>
-#include <dftracer/utils/dataframe/agg.h>
-#include <dftracer/utils/dataframe/internal/float16.h>
-#include <dftracer/utils/dataframe/scalar.h>
-#include <nanoarrow/nanoarrow.h>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::dataframe;
+using namespace dftracer::utils::dataframe::test_types;
 
-namespace {
-
-struct BuiltArrow {
-    ArrowSchema schema{};
-    ArrowArray array{};
-    ~BuiltArrow() {
-        if (array.release) array.release(&array);
-        if (schema.release) schema.release(&schema);
-    }
-};
-
-void finish(ArrowArray* a) {
-    ArrowError err;
-    REQUIRE(ArrowArrayFinishBuildingDefault(a, &err) == NANOARROW_OK);
-}
-
-Series make_float16(const dstd::Vector<float>& values) {
-    BuiltArrow b;
-    ArrowSchemaInit(&b.schema);
-    REQUIRE(ArrowSchemaSetType(&b.schema, NANOARROW_TYPE_HALF_FLOAT) ==
-            NANOARROW_OK);
-    REQUIRE(ArrowArrayInitFromSchema(&b.array, &b.schema, nullptr) ==
-            NANOARROW_OK);
-    REQUIRE(ArrowArrayStartAppending(&b.array) == NANOARROW_OK);
-    for (float v : values)
-        REQUIRE(ArrowArrayAppendDouble(&b.array, static_cast<double>(v)) ==
-                NANOARROW_OK);
-    finish(&b.array);
-    return test_types::import_series(&b.schema, &b.array);
-}
-
-Series make_fixed_size_binary(const dstd::Vector<dstd::String>& values,
-                              std::int32_t width) {
-    BuiltArrow b;
-    ArrowSchemaInit(&b.schema);
-    REQUIRE(ArrowSchemaSetTypeFixedSize(&b.schema,
-                                        NANOARROW_TYPE_FIXED_SIZE_BINARY,
-                                        width) == NANOARROW_OK);
-    REQUIRE(ArrowArrayInitFromSchema(&b.array, &b.schema, nullptr) ==
-            NANOARROW_OK);
-    REQUIRE(ArrowArrayStartAppending(&b.array) == NANOARROW_OK);
-    for (const dstd::String& v : values) {
-        REQUIRE(static_cast<std::int32_t>(v.size()) == width);
-        ArrowBufferView bv;
-        bv.data.data = v.data();
-        bv.size_bytes = width;
-        REQUIRE(ArrowArrayAppendBytes(&b.array, bv) == NANOARROW_OK);
-    }
-    finish(&b.array);
-    return test_types::import_series(&b.schema, &b.array);
-}
-
-Series make_binary(const dstd::Vector<dstd::String>& values) {
-    BuiltArrow b;
-    ArrowSchemaInit(&b.schema);
-    REQUIRE(ArrowSchemaSetType(&b.schema, NANOARROW_TYPE_BINARY) ==
-            NANOARROW_OK);
-    REQUIRE(ArrowArrayInitFromSchema(&b.array, &b.schema, nullptr) ==
-            NANOARROW_OK);
-    REQUIRE(ArrowArrayStartAppending(&b.array) == NANOARROW_OK);
-    for (const dstd::String& v : values) {
-        ArrowBufferView bv;
-        bv.data.data = v.data();
-        bv.size_bytes = static_cast<int64_t>(v.size());
-        REQUIRE(ArrowArrayAppendBytes(&b.array, bv) == NANOARROW_OK);
-    }
-    finish(&b.array);
-    return test_types::import_series(&b.schema, &b.array);
-}
-
-Series make_large_binary(const dstd::Vector<dstd::String>& values) {
-    BuiltArrow b;
-    ArrowSchemaInit(&b.schema);
-    REQUIRE(ArrowSchemaSetType(&b.schema, NANOARROW_TYPE_LARGE_BINARY) ==
-            NANOARROW_OK);
-    REQUIRE(ArrowArrayInitFromSchema(&b.array, &b.schema, nullptr) ==
-            NANOARROW_OK);
-    REQUIRE(ArrowArrayStartAppending(&b.array) == NANOARROW_OK);
-    for (const dstd::String& v : values) {
-        ArrowBufferView bv;
-        bv.data.data = v.data();
-        bv.size_bytes = static_cast<int64_t>(v.size());
-        REQUIRE(ArrowArrayAppendBytes(&b.array, bv) == NANOARROW_OK);
-    }
-    finish(&b.array);
-    return test_types::import_series(&b.schema, &b.array);
-}
-
-Series make_timestamp(const dstd::Vector<std::int64_t>& values) {
-    BuiltArrow b;
-    ArrowSchemaInit(&b.schema);
-    REQUIRE(ArrowSchemaSetTypeDateTime(&b.schema, NANOARROW_TYPE_TIMESTAMP,
-                                       NANOARROW_TIME_UNIT_MICRO,
-                                       "UTC") == NANOARROW_OK);
-    REQUIRE(ArrowArrayInitFromSchema(&b.array, &b.schema, nullptr) ==
-            NANOARROW_OK);
-    REQUIRE(ArrowArrayStartAppending(&b.array) == NANOARROW_OK);
-    for (std::int64_t v : values)
-        REQUIRE(ArrowArrayAppendInt(&b.array, v) == NANOARROW_OK);
-    finish(&b.array);
-    return test_types::import_series(&b.schema, &b.array);
-}
-
-Series make_decimal128(const dstd::Vector<std::int64_t>& values,
-                       std::int32_t precision = 38, std::int32_t scale = 0) {
-    BuiltArrow b;
-    ArrowSchemaInit(&b.schema);
-    REQUIRE(ArrowSchemaSetTypeDecimal(&b.schema, NANOARROW_TYPE_DECIMAL128,
-                                      precision, scale) == NANOARROW_OK);
-    REQUIRE(ArrowArrayInitFromSchema(&b.array, &b.schema, nullptr) ==
-            NANOARROW_OK);
-    REQUIRE(ArrowArrayStartAppending(&b.array) == NANOARROW_OK);
-    for (std::int64_t v : values) {
-        struct ArrowDecimal dec;
-        ArrowDecimalInit(&dec, 128, precision, scale);
-        ArrowDecimalSetInt(&dec, v);
-        REQUIRE(ArrowArrayAppendDecimal(&b.array, &dec) == NANOARROW_OK);
-    }
-    finish(&b.array);
-    return test_types::import_series(&b.schema, &b.array);
-}
-
-Series make_decimal256(const dstd::Vector<std::int64_t>& values,
-                       std::int32_t precision, std::int32_t scale) {
-    BuiltArrow b;
-    ArrowSchemaInit(&b.schema);
-    REQUIRE(ArrowSchemaSetTypeDecimal(&b.schema, NANOARROW_TYPE_DECIMAL256,
-                                      precision, scale) == NANOARROW_OK);
-    REQUIRE(ArrowArrayInitFromSchema(&b.array, &b.schema, nullptr) ==
-            NANOARROW_OK);
-    REQUIRE(ArrowArrayStartAppending(&b.array) == NANOARROW_OK);
-    for (std::int64_t v : values) {
-        struct ArrowDecimal dec;
-        ArrowDecimalInit(&dec, 256, precision, scale);
-        ArrowDecimalSetInt(&dec, v);
-        REQUIRE(ArrowArrayAppendDecimal(&b.array, &dec) == NANOARROW_OK);
-    }
-    finish(&b.array);
-    return test_types::import_series(&b.schema, &b.array);
-}
-
-Series make_timestamp_tz(ArrowTimeUnit unit, const char* tz,
-                         const dstd::Vector<std::int64_t>& values) {
-    BuiltArrow b;
-    ArrowSchemaInit(&b.schema);
-    REQUIRE(ArrowSchemaSetTypeDateTime(&b.schema, NANOARROW_TYPE_TIMESTAMP,
-                                       unit, tz) == NANOARROW_OK);
-    REQUIRE(ArrowArrayInitFromSchema(&b.array, &b.schema, nullptr) ==
-            NANOARROW_OK);
-    REQUIRE(ArrowArrayStartAppending(&b.array) == NANOARROW_OK);
-    for (std::int64_t v : values)
-        REQUIRE(ArrowArrayAppendInt(&b.array, v) == NANOARROW_OK);
-    finish(&b.array);
-    return test_types::import_series(&b.schema, &b.array);
-}
-
-Series make_duration(ArrowTimeUnit unit,
-                     const dstd::Vector<std::int64_t>& values) {
-    BuiltArrow b;
-    ArrowSchemaInit(&b.schema);
-    REQUIRE(ArrowSchemaSetTypeDateTime(&b.schema, NANOARROW_TYPE_DURATION, unit,
-                                       nullptr) == NANOARROW_OK);
-    REQUIRE(ArrowArrayInitFromSchema(&b.array, &b.schema, nullptr) ==
-            NANOARROW_OK);
-    REQUIRE(ArrowArrayStartAppending(&b.array) == NANOARROW_OK);
-    for (std::int64_t v : values)
-        REQUIRE(ArrowArrayAppendInt(&b.array, v) == NANOARROW_OK);
-    finish(&b.array);
-    return test_types::import_series(&b.schema, &b.array);
-}
-
-Series make_time64(ArrowTimeUnit unit,
-                   const dstd::Vector<std::int64_t>& values) {
-    BuiltArrow b;
-    ArrowSchemaInit(&b.schema);
-    REQUIRE(ArrowSchemaSetTypeDateTime(&b.schema, NANOARROW_TYPE_TIME64, unit,
-                                       nullptr) == NANOARROW_OK);
-    REQUIRE(ArrowArrayInitFromSchema(&b.array, &b.schema, nullptr) ==
-            NANOARROW_OK);
-    REQUIRE(ArrowArrayStartAppending(&b.array) == NANOARROW_OK);
-    for (std::int64_t v : values)
-        REQUIRE(ArrowArrayAppendInt(&b.array, v) == NANOARROW_OK);
-    finish(&b.array);
-    return test_types::import_series(&b.schema, &b.array);
-}
-
-}  // namespace
-
-TEST_SUITE("dataframe_arrow_types_compute") {
+TEST_SUITE("dataframe_types_compute") {
     TEST_CASE("Float16 arithmetic promotes to Float32 and computes exactly") {
         Series a = make_float16({1.5f, 2.5f, -3.0f});
         Series b = make_float16({1.0f, 1.0f, 1.0f});
@@ -618,10 +430,9 @@ TEST_SUITE("dataframe_arrow_types_compute") {
     }
 
     TEST_CASE("Timestamp - Timestamp is an exact Duration at the finer unit") {
-        Series a =
-            make_timestamp_tz(NANOARROW_TIME_UNIT_MILLI, "UTC", {5000, 9000});
-        Series b = make_timestamp_tz(NANOARROW_TIME_UNIT_MICRO, "UTC",
-                                     {1000000, 2000000});  // 1s, 2s in micros
+        Series a = make_timestamp({5000, 9000}, TimeUnit::Milli, "UTC");
+        Series b = make_timestamp({1000000, 2000000}, TimeUnit::Micro,
+                                  "UTC");  // 1s, 2s in micros
         REQUIRE(a.valid());
         REQUIRE(b.valid());
         Series diff = a.sub(b);
@@ -640,14 +451,12 @@ TEST_SUITE("dataframe_arrow_types_compute") {
     TEST_CASE(
         "Timestamp - Timestamp with mismatched timezones is refused, "
         "not silently naive-vs-aware") {
-        Series a = make_timestamp_tz(NANOARROW_TIME_UNIT_MICRO, "UTC", {100});
-        Series b = make_timestamp_tz(NANOARROW_TIME_UNIT_MICRO,
-                                     "America/Denver", {50});
+        Series a = make_timestamp({100}, TimeUnit::Micro, "UTC");
+        Series b = make_timestamp({50}, TimeUnit::Micro, "America/Denver");
         Series diff = a.sub(b);
         CHECK_FALSE(diff.valid());
 
-        Series naive =
-            make_timestamp_tz(NANOARROW_TIME_UNIT_MICRO, nullptr, {50});
+        Series naive = make_timestamp({50}, TimeUnit::Micro, nullptr);
         Series diff2 = a.sub(naive);
         CHECK_FALSE(diff2.valid());
     }
@@ -655,9 +464,8 @@ TEST_SUITE("dataframe_arrow_types_compute") {
     TEST_CASE(
         "Timestamp + Duration is an exact Timestamp keeping the "
         "timezone, at the finer unit") {
-        Series ts =
-            make_timestamp_tz(NANOARROW_TIME_UNIT_SECOND, "UTC", {10, 20});
-        Series dur = make_duration(NANOARROW_TIME_UNIT_MILLI, {500, 1500});
+        Series ts = make_timestamp({10, 20}, TimeUnit::Second, "UTC");
+        Series dur = make_duration({500, 1500}, TimeUnit::Milli);
         Series sum = ts.add(dur);
         REQUIRE(sum.valid());
         CHECK(sum.type() == TypeId::Timestamp);
@@ -677,8 +485,8 @@ TEST_SUITE("dataframe_arrow_types_compute") {
     }
 
     TEST_CASE("Timestamp - Duration is an exact Timestamp") {
-        Series ts = make_timestamp_tz(NANOARROW_TIME_UNIT_SECOND, "UTC", {10});
-        Series dur = make_duration(NANOARROW_TIME_UNIT_SECOND, {3});
+        Series ts = make_timestamp({10}, TimeUnit::Second, "UTC");
+        Series dur = make_duration({3}, TimeUnit::Second);
         Series diff = ts.sub(dur);
         REQUIRE(diff.valid());
         CHECK(diff.type() == TypeId::Timestamp);
@@ -687,14 +495,14 @@ TEST_SUITE("dataframe_arrow_types_compute") {
 
     TEST_CASE("Duration - Timestamp is refused (wrong order)") {
         Series ts = make_timestamp({10});
-        Series dur = make_duration(NANOARROW_TIME_UNIT_MICRO, {3});
+        Series dur = make_duration({3}, TimeUnit::Micro);
         Series diff = dur.sub(ts);
         CHECK_FALSE(diff.valid());
     }
 
     TEST_CASE("Duration +/- Duration is exact at the finer unit") {
-        Series a = make_duration(NANOARROW_TIME_UNIT_SECOND, {2});
-        Series b = make_duration(NANOARROW_TIME_UNIT_MILLI, {500});
+        Series a = make_duration({2}, TimeUnit::Second);
+        Series b = make_duration({500}, TimeUnit::Milli);
         Series sum = a.add(b);
         REQUIRE(sum.valid());
         CHECK(sum.type() == TypeId::Duration);
@@ -710,7 +518,7 @@ TEST_SUITE("dataframe_arrow_types_compute") {
     TEST_CASE(
         "Duration * scalar and Duration / scalar stay Duration, "
         "unit unchanged") {
-        Series d = make_duration(NANOARROW_TIME_UNIT_MILLI, {100, 200});
+        Series d = make_duration({100, 200}, TimeUnit::Milli);
         dftu_scalar three{};
         three.kind = DFTU_SCALAR_TAG_I64;
         three.value.i = 3;
@@ -744,7 +552,7 @@ TEST_SUITE("dataframe_arrow_types_compute") {
     TEST_CASE(
         "Duration SUM reduces to a Duration total; PRODUCT stays "
         "refused") {
-        Series d = make_duration(NANOARROW_TIME_UNIT_MICRO, {10, 20, 30});
+        Series d = make_duration({10, 20, 30}, TimeUnit::Micro);
         REQUIRE(d.valid());
         Scalar total = dftu_utils_test::ok(d.sum());
         CHECK(total.i64() == 60);
@@ -759,8 +567,8 @@ TEST_SUITE("dataframe_arrow_types_compute") {
     TEST_CASE(
         "Time64 - Time64 is an exact Duration; Time64 + Time64 is "
         "refused") {
-        Series a = make_time64(NANOARROW_TIME_UNIT_MICRO, {5000, 9000});
-        Series b = make_time64(NANOARROW_TIME_UNIT_MICRO, {1000, 2000});
+        Series a = make_time64({5000, 9000}, TimeUnit::Micro);
+        Series b = make_time64({1000, 2000}, TimeUnit::Micro);
         Series diff = a.sub(b);
         REQUIRE(diff.valid());
         CHECK(diff.type() == TypeId::Duration);
@@ -772,8 +580,8 @@ TEST_SUITE("dataframe_arrow_types_compute") {
     }
 
     TEST_CASE("Time64 +/- Duration is an exact Time64 at the finer unit") {
-        Series t = make_time64(NANOARROW_TIME_UNIT_MICRO, {5000});
-        Series dur = make_duration(NANOARROW_TIME_UNIT_NANO, {2000});
+        Series t = make_time64({5000}, TimeUnit::Micro);
+        Series dur = make_duration({2000}, TimeUnit::Nano);
         Series sum = t.add(dur);
         REQUIRE(sum.valid());
         CHECK(sum.type() == TypeId::Time64);
@@ -785,8 +593,8 @@ TEST_SUITE("dataframe_arrow_types_compute") {
     TEST_CASE(
         "Time64 + a coarser (Second) Duration still resolves to "
         "Time64's own finer unit") {
-        Series t = make_time64(NANOARROW_TIME_UNIT_MICRO, {5000});
-        Series dur = make_duration(NANOARROW_TIME_UNIT_SECOND, {1});
+        Series t = make_time64({5000}, TimeUnit::Micro);
+        Series dur = make_duration({1}, TimeUnit::Second);
         Series sum = t.add(dur);
         REQUIRE(sum.valid());
         CHECK(sum.type() == TypeId::Time64);

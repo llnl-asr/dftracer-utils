@@ -1,11 +1,9 @@
 // SPDX-License-Identifier: MIT
 // VIEW columns: 16-byte Arrow views over buffers the column keeps alive,
-// their constructor, readers, kernels and the spill, native and IPC writers.
+// their constructor, readers, kernels and the spill and native writers.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 
-#include <dftracer/utils/arrow/arrow.h>
-#include <dftracer/utils/arrow/ipc.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/dataframe.h>
@@ -522,22 +520,6 @@ TEST_SUITE("string view writers") {
         CHECK(back->columns[0].encoding() == Encoding::Flat);
         CHECK(back->columns[0].type() == TypeId::String);
         CHECK(rows_of(back->columns[0]) == SAMPLE);
-    }
-
-    TEST_CASE("IPC writes a view column as values") {
-        int released = 0;
-        DataFrame f;
-        f.names = dstd::make_shared_strings({"s"});
-        f.columns.push_back(make_view(SAMPLE, &released));
-        arrow::WriterOptions options;
-        options.compression = arrow::Compression::None;
-        arrow::Writer writer = arrow::Writer::to_buffer(options);
-        REQUIRE(writer.write(f));
-        REQUIRE(writer.finish());
-        const dstd::Vector<std::uint8_t>& bytes = writer.take_bytes();
-        const dstd::String text(bytes.begin(), bytes.end());
-        CHECK(text.find("a value longer than twelve") != dstd::String::npos);
-        CHECK(text.find("zz another long value here") != dstd::String::npos);
     }
 }
 

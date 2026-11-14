@@ -758,6 +758,12 @@ add_subdirectory(domains)
 add_subdirectory(trace)
 
 # +++++++++++++++++++++++++++++++++++++++++
+# Arrow Bridge Tests
+# +++++++++++++++++++++++++++++++++++++++++
+
+add_subdirectory(arrow)
+
+# +++++++++++++++++++++++++++++++++++++++++
 # JSON Library Tests
 # +++++++++++++++++++++++++++++++++++++++++
 
@@ -845,9 +851,6 @@ foreach(test_file ${TEST_BINARY_SOURCES})
   target_link_libraries(${target_name} PRIVATE doctest::doctest testing_utilities)
   if(TARGET dftracer_utils_cli)
     target_link_libraries(${target_name} PRIVATE dftracer_utils_cli)
-  endif()
-  if(bin_exec MATCHES "^binaries/test_dftracer_view")
-    target_link_libraries(${target_name} PRIVATE ${DFTRACER_UTILS_ARROW_TARGET})
   endif()
   target_set_warnings(${target_name})
   target_enable_coroutine(${target_name})

@@ -4,8 +4,7 @@
 // integer still fails.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dataframe/builders_arrow_types.h>
-#include <dftracer/utils/arrow/arrow.h>
+#include <dataframe/builders_types.h>
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/c_api.h>
@@ -18,7 +17,6 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
-#include <nanoarrow/nanoarrow.h>
 #include <task_result.h>
 
 #include <cstdint>
@@ -26,54 +24,9 @@
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::dataframe;
+using namespace dftracer::utils::dataframe::test_types;
 
 namespace {
-
-struct BuiltArrow {
-    ArrowSchema schema{};
-    ArrowArray array{};
-    ~BuiltArrow() {
-        if (array.release) array.release(&array);
-        if (schema.release) schema.release(&schema);
-    }
-};
-
-using Cells = dstd::Vector<dstd::Optional<dstd::String>>;
-
-Series make_large_utf8(const Cells& values) {
-    BuiltArrow b;
-    ArrowSchemaInit(&b.schema);
-    REQUIRE(ArrowSchemaSetType(&b.schema, NANOARROW_TYPE_LARGE_STRING) ==
-            NANOARROW_OK);
-    REQUIRE(ArrowArrayInitFromSchema(&b.array, &b.schema, nullptr) ==
-            NANOARROW_OK);
-    REQUIRE(ArrowArrayStartAppending(&b.array) == NANOARROW_OK);
-    for (const auto& v : values) {
-        if (!v) {
-            REQUIRE(ArrowArrayAppendNull(&b.array, 1) == NANOARROW_OK);
-            continue;
-        }
-        ArrowStringView sv{v->data(), static_cast<int64_t>(v->size())};
-        REQUIRE(ArrowArrayAppendString(&b.array, sv) == NANOARROW_OK);
-    }
-    ArrowError err;
-    REQUIRE(ArrowArrayFinishBuildingDefault(&b.array, &err) == NANOARROW_OK);
-    return test_types::import_series(&b.schema, &b.array);
-}
-
-// A String column with a null where `values[i]` is nullopt.
-Series make_string(const Cells& values) {
-    dstd::Vector<dstd::String> data;
-    dstd::Vector<std::uint8_t> validity((values.size() + 7) / 8, 0);
-    for (std::size_t i = 0; i < values.size(); ++i) {
-        data.push_back(values[i].value_or(""));
-        if (values[i])
-            validity[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
-    }
-    dstd::Vector<dstd::StringView> views(data.begin(), data.end());
-    return Series::strings(dstd::Span<const dstd::StringView>(views),
-                           validity.data());
-}
 
 Cells cells_of(const Series& s) {
     const Series m = s.materialize();

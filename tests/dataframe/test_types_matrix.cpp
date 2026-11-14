@@ -8,17 +8,16 @@
 #include <cstdint>
 #include <stdexcept>
 
-// One table of {TypeId, per-op expectation} covering every Arrow logical type
-// the engine can build, so an op that neither computes nor refuses shows up as
-// a failure instead of a plausible zero. TYPE_ROWS must have an entry for
-// every TypeId is_audited() marks true, and is_audited() has no default case,
-// so a newly added TypeId cannot slip through unclassified.
-#include <dataframe/builders_arrow_types.h>
-#include <dftracer/utils/arrow/arrow.h>
+// One table of {TypeId, per-op expectation} covering every logical type without
+// a native constructor the engine can build, so an op that neither computes nor
+// refuses shows up as a failure instead of a plausible zero. TYPE_ROWS must
+// have an entry for every TypeId is_audited() marks true, and is_audited() has
+// no default case, so a newly added TypeId cannot slip through unclassified.
+#include <dataframe/builders_types.h>
+#include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/scalar.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <nanoarrow/nanoarrow.h>
 
 using namespace dftracer::utils;
 
@@ -169,10 +168,11 @@ const TypeRow TYPE_ROWS[] = {
      0.0},
 };
 
-/// True for the types this matrix owns: the ones only Arrow import can build,
+/// True for the types this matrix owns: the ones with no public Series
+/// constructor, so builders_types.h creates them,
 /// which is exactly where a silently-wrong kernel result would go unnoticed.
 /// The plain scalar and 32-bit-offset types are covered by test_series and
-/// test_methods, and the temporal family by test_arrow_types_compute. No
+/// test_methods, and the temporal family by test_types_compute. No
 /// default case, so adding a TypeId forces a decision here.
 constexpr bool is_audited(TypeId t) {
     switch (t) {
@@ -235,7 +235,7 @@ DataFrame keyed_frame(const Series& keys) {
 
 }  // namespace
 
-TEST_SUITE("dataframe_arrow_types_matrix") {
+TEST_SUITE("dataframe_types_matrix") {
     TEST_CASE("every audited TypeId has a matrix row") {
         for (std::int32_t code = 0;
              code <= static_cast<std::int32_t>(TypeId::Map); ++code) {

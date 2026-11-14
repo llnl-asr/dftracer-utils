@@ -4,16 +4,15 @@
 
 #include <cstdint>
 
-// The tail of the Arrow-types audit: search_sorted, interpolate and rank,
-// which the matrix test in test_arrow_types_matrix.cpp does not cover. Same
+// The tail of the logical-type audit: search_sorted, interpolate and rank,
+// which the matrix test in test_types_matrix.cpp does not cover. Same
 // table-driven shape and the same default-less is_audited() switch, so a new
 // TypeId with no row here fails instead of being silently skipped.
-#include <dataframe/builders_arrow_types.h>
-#include <dftracer/utils/arrow/arrow.h>
+#include <dataframe/builders_types.h>
 #include <dftracer/utils/common/config.h>
+#include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/scalar.h>
 #include <dftracer/utils/dstd/string.h>
-#include <nanoarrow/nanoarrow.h>
 
 using namespace dftracer::utils;
 
@@ -86,8 +85,8 @@ const TypeRow TYPE_ROWS[] = {
     {TypeId::Map, build_map, nullptr, R, R, {}},
 };
 
-/// Mirrors is_audited() in test_arrow_types_matrix.cpp: the types only Arrow
-/// import can build. No default case, so a new TypeId forces a decision here.
+/// Mirrors is_audited() in test_types_matrix.cpp: the types with no public
+/// Series constructor. No default case, so a new TypeId forces a decision here.
 constexpr bool is_audited(TypeId t) {
     switch (t) {
         case TypeId::Float16:
@@ -129,7 +128,7 @@ constexpr bool is_audited(TypeId t) {
 
 }  // namespace
 
-TEST_SUITE("dataframe_arrow_types_tail") {
+TEST_SUITE("dataframe_types_tail") {
     TEST_CASE("every audited TypeId has a tail row") {
         for (std::int32_t code = 0;
              code <= static_cast<std::int32_t>(TypeId::Map); ++code) {

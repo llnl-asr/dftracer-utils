@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dataframe/builders_arrow_types.h>
-#include <dftracer/utils/arrow/arrow.h>
+#include <dataframe/builders_types.h>
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/expr.h>
@@ -10,7 +9,6 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
-#include <nanoarrow/nanoarrow.h>
 #include <task_result.h>
 
 #include <cstdint>
@@ -19,6 +17,7 @@
 using namespace dftracer::utils;
 
 using namespace dftracer::utils::dataframe;
+using namespace dftracer::utils::dataframe::test_types;
 
 namespace {
 
@@ -60,58 +59,6 @@ Series f64(dstd::Vector<double> v) {
 
 dstd::SharedPtr<const Source> src(DataFrame df) {
     return dstd::make_shared<const InMemorySource>(std::move(df));
-}
-
-struct BuiltArrow {
-    ArrowSchema schema{};
-    ArrowArray array{};
-    ~BuiltArrow() {
-        if (array.release) array.release(&array);
-        if (schema.release) schema.release(&schema);
-    }
-};
-
-void finish(ArrowArray* a) {
-    ArrowError err;
-    REQUIRE(ArrowArrayFinishBuildingDefault(a, &err) == NANOARROW_OK);
-}
-
-Series make_timestamp(const dstd::Vector<std::int64_t>& values, TimeUnit unit,
-                      const char* tz) {
-    ArrowTimeUnit au = unit == TimeUnit::Second  ? NANOARROW_TIME_UNIT_SECOND
-                       : unit == TimeUnit::Milli ? NANOARROW_TIME_UNIT_MILLI
-                       : unit == TimeUnit::Micro ? NANOARROW_TIME_UNIT_MICRO
-                                                 : NANOARROW_TIME_UNIT_NANO;
-    BuiltArrow b;
-    ArrowSchemaInit(&b.schema);
-    REQUIRE(ArrowSchemaSetTypeDateTime(&b.schema, NANOARROW_TYPE_TIMESTAMP, au,
-                                       tz) == NANOARROW_OK);
-    REQUIRE(ArrowArrayInitFromSchema(&b.array, &b.schema, nullptr) ==
-            NANOARROW_OK);
-    REQUIRE(ArrowArrayStartAppending(&b.array) == NANOARROW_OK);
-    for (std::int64_t v : values)
-        REQUIRE(ArrowArrayAppendInt(&b.array, v) == NANOARROW_OK);
-    finish(&b.array);
-    return test_types::import_series(&b.schema, &b.array);
-}
-
-Series make_decimal128(std::int32_t precision, std::int32_t scale,
-                       const dstd::Vector<std::int64_t>& values) {
-    BuiltArrow b;
-    ArrowSchemaInit(&b.schema);
-    REQUIRE(ArrowSchemaSetTypeDecimal(&b.schema, NANOARROW_TYPE_DECIMAL128,
-                                      precision, scale) == NANOARROW_OK);
-    REQUIRE(ArrowArrayInitFromSchema(&b.array, &b.schema, nullptr) ==
-            NANOARROW_OK);
-    REQUIRE(ArrowArrayStartAppending(&b.array) == NANOARROW_OK);
-    for (std::int64_t v : values) {
-        ArrowDecimal dec;
-        ArrowDecimalInit(&dec, 128, precision, scale);
-        ArrowDecimalSetInt(&dec, v);
-        REQUIRE(ArrowArrayAppendDecimal(&b.array, &dec) == NANOARROW_OK);
-    }
-    finish(&b.array);
-    return test_types::import_series(&b.schema, &b.array);
 }
 
 DataFrame basic_frame() {
@@ -247,7 +194,7 @@ TEST_SUITE("LazyFrame output_schema") {
         DataFrame df;
         df.names = dstd::make_shared_strings({"ts", "dec", "n"});
         df.columns.push_back(make_timestamp({1, 2, 3}, TimeUnit::Nano, "UTC"));
-        df.columns.push_back(make_decimal128(38, 9, {1, 2, 3}));
+        df.columns.push_back(make_decimal128({1, 2, 3}, 38, 9));
         df.columns.push_back(i64({3, 1, 2}));
 
         LazyFrame lf = LazyFrame::scan(src(std::move(df)))
@@ -435,7 +382,7 @@ TEST_SUITE("LazyFrame output_schema") {
         DataFrame df;
         df.names = dstd::make_shared_strings({"cat", "dec", "ts"});
         df.columns.push_back(Series::strings({"x", "x", "y"}));
-        df.columns.push_back(make_decimal128(38, 9, {100, 200, 300}));
+        df.columns.push_back(make_decimal128({100, 200, 300}, 38, 9));
         df.columns.push_back(
             make_timestamp({1, 2, 3}, TimeUnit::Micro, "America/Chicago"));
         LazyFrame lf =

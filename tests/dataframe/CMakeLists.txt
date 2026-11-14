@@ -48,6 +48,7 @@ set(DATAFRAME_TEST_SOURCES test_mask.cpp test_series.cpp test_methods.cpp
                            test_governor.cpp
                            test_ddsketch.cpp test_distinct_sketch.cpp
                            test_field_stat.cpp test_log2_histogram.cpp
+                           test_validate.cpp
                            test_timestamp_histogram.cpp)
 
 foreach(test_file ${DATAFRAME_TEST_SOURCES})

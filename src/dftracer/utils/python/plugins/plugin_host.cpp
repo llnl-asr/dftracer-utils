@@ -388,7 +388,79 @@ PyObject* ph_run(PluginHostObject* self, PyObject* args, PyObject* kwds) {
     return out;
 }
 
+// Set dict[key] to a new Python list of `items`; false with the Python error
+// set on failure.
+bool dict_set_list(
+    PyObject* d, const char* key,
+    const dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>& items) {
+    PyObject* list = PyList_New(0);
+    if (!list) return false;
+    for (const auto& s : items) {
+        PyObject* item = PyUnicode_FromString(s.c_str());
+        if (!item) {
+            Py_DECREF(list);
+            return false;
+        }
+        const int rc = PyList_Append(list, item);
+        Py_DECREF(item);
+        if (rc < 0) {
+            Py_DECREF(list);
+            return false;
+        }
+    }
+    return dict_set_steal(d, key, list) == 0;
+}
+
+// describe() -> list[dict]: one plain dict per loaded plugin, in registration
+// order. The Python wrapper turns each into a typed PluginInfo record.
+PyObject* ph_describe(PluginHostObject* self, PyObject*) {
+    const Plugins* plugins = built_set(self);
+    if (!plugins) return nullptr;
+    auto infos = plugins->describe();
+
+    PyObject* out = PyList_New(0);
+    if (!out) return nullptr;
+    for (const auto& info : infos) {
+        PyObject* d = PyDict_New();
+        if (!d) {
+            Py_DECREF(out);
+            return nullptr;
+        }
+        // A failed insert leaves the Python error set; `ok` carries it out.
+        const bool ok =
+            dict_set_str(d, "path", info.path.c_str()) == 0 &&
+            dict_set_u64(d, "abi_version", info.abi_version) == 0 &&
+            dict_set_bool(d, "has_plan_duql", info.has_plan_duql) == 0 &&
+            dict_set_bool(d, "has_fold", info.has_fold) == 0 &&
+            dict_set_list(d, "provides", info.provides) &&
+            dict_set_list(d, "consumes", info.consumes) &&
+            dict_set_list(d, "ops", info.ops) &&
+            dict_set_list(d, "udfs", info.udfs) &&
+            dict_set_list(d, "udafs", info.udafs) &&
+            dict_set_list(d, "states", info.states) &&
+            dict_set_list(d, "providers", info.providers) &&
+            dict_set_list(d, "nodes", info.nodes) &&
+            dict_set_list(d, "index_extensions", info.index_extensions) &&
+            dict_set_list(d, "file_formats", info.file_formats) &&
+            dict_set_list(d, "sinks", info.sinks) &&
+            dict_set_list(d, "reads", info.reads) &&
+            dict_set_list(d, "config_keys", info.config_keys);
+        if (!ok || PyList_Append(out, d) < 0) {
+            Py_DECREF(d);
+            Py_DECREF(out);
+            return nullptr;
+        }
+        Py_DECREF(d);
+    }
+    return out;
+}
+
 PyMethodDef ph_methods[] = {
+    {"describe", DFTU_PYCFUNCTION(ph_describe), METH_NOARGS,
+     "describe() -> list[dict]: one record per loaded plugin, in registration "
+     "order, naming every kind it registered (ops, udfs, udafs, states, "
+     "providers, nodes, index_extensions, file_formats, sinks) and whether it "
+     "carries a fold."},
     {"run", DFTU_PYCFUNCTION(ph_run), METH_VARARGS | METH_KEYWORDS,
      "run(traces, index_dir=None, auto_index=True) -> (dict, dict): fold every "
      "plugin over one fused scan. Returns ({name: bytes | DataFrame | "

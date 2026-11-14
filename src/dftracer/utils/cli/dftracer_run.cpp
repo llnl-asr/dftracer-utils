@@ -232,11 +232,24 @@ static int describe_plugins(const PluginArgs& plugin_args) {
         std::fprintf(stderr, "  abi_version: %u\n", info.abi_version);
         std::fprintf(stderr, "  plan_duql: %s\n",
                      info.has_plan_duql ? "yes" : "no");
+        std::fprintf(stderr, "  fold: %s\n", info.has_fold ? "yes" : "no");
         std::fprintf(stderr, "  provides: %s\n",
                      join_or_none(info.provides).c_str());
         std::fprintf(stderr, "  consumes: %s\n",
                      join_or_none(info.consumes).c_str());
         std::fprintf(stderr, "  ops: %s\n", join_or_none(info.ops).c_str());
+        std::fprintf(stderr, "  udfs: %s\n", join_or_none(info.udfs).c_str());
+        std::fprintf(stderr, "  udafs: %s\n", join_or_none(info.udafs).c_str());
+        std::fprintf(stderr, "  states: %s\n",
+                     join_or_none(info.states).c_str());
+        std::fprintf(stderr, "  providers: %s\n",
+                     join_or_none(info.providers).c_str());
+        std::fprintf(stderr, "  nodes: %s\n", join_or_none(info.nodes).c_str());
+        std::fprintf(stderr, "  index_extensions: %s\n",
+                     join_or_none(info.index_extensions).c_str());
+        std::fprintf(stderr, "  file_formats: %s\n",
+                     join_or_none(info.file_formats).c_str());
+        std::fprintf(stderr, "  sinks: %s\n", join_or_none(info.sinks).c_str());
         // "(none)" here means the plugin declared no projection, so it is
         // handed every batch column - not that it reads nothing.
         std::fprintf(stderr, "  reads: %s\n",

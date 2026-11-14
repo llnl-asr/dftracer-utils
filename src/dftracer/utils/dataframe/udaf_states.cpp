@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/dataframe/internal/validate.h>
 #include <dftracer/utils/dataframe/udaf_states.h>
 #include <dftracer/utils/dataframe/udf_support.h>
 #include <dftracer/utils/dstd/error.h>
@@ -287,6 +288,12 @@ dstd::Result<Series> UdafStates::finalize() {
                                 "not {} rows of {}">(
             dstd::Condition::Internal, u.name(), out.length(),
             type_name(out.type()), count_, type_name(result_type().id)));
+    if (auto checked = validate_if_checking(out); !checked)
+        return dstd::Unexpected(
+            dstd::Error::from_format<"udaf '{}' finalize returned a broken "
+                                     "column: {}">(dstd::Condition::Internal,
+                                                   u.name(),
+                                                   checked.error().message()));
     return out;
 }
 

@@ -19,6 +19,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi_context.h>
 #include <dftracer/utils/plugins/host/cursor_host.h>
+#include <dftracer/utils/plugins/host/frame_check.h>
 #include <dftracer/utils/plugins/host/node_adapter.h>
 #include <dftracer/utils/plugins/host/plugin_task.h>
 #include <dftracer/utils/plugins/task_abi.h>
@@ -180,7 +181,10 @@ class PluginNodeCursor final : public dataframe::Cursor {
         : node_(std::move(node)),
           host_(std::move(host)),
           out_self_(out_self),
-          out_vt_(out_vt) {}
+          out_vt_(out_vt),
+          // Once per cursor: building it per frame would cost every scan the
+          // check is off for.
+          label_(dstd::fmt<"node '{}' next">(node_->name)) {}
 
     ~PluginNodeCursor() override {
         if (out_vt_->destroy) out_vt_->destroy(out_self_);
@@ -222,6 +226,8 @@ class PluginNodeCursor final : public dataframe::Cursor {
 
         dataframe::DataFrame df =
             dataframe::dataframe_handle_take(frame.release());
+        if (auto checked = check_plugin_frame(df, label_); !checked)
+            co_return checked.error();
         dataframe::Morsel m;
         m.rows = df.num_rows();
         m.columns = std::move(df.columns);
@@ -260,6 +266,7 @@ class PluginNodeCursor final : public dataframe::Cursor {
     dstd::UniquePtr<CursorHost> host_;
     void* out_self_;
     const ::dftu_cursor_vt* out_vt_;
+    dstd::String label_;
 };
 
 class VtableNode final : public dataframe::NodeImpl {

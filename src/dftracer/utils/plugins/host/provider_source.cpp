@@ -20,6 +20,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi_context.h>
 #include <dftracer/utils/plugins/host/cursor_host.h>
+#include <dftracer/utils/plugins/host/frame_check.h>
 #include <dftracer/utils/plugins/host/plugin_task.h>
 #include <dftracer/utils/plugins/host/provider_source.h>
 #include <dftracer/utils/plugins/task_abi.h>
@@ -41,15 +42,19 @@ struct ProviderHandle {
     dstd::SharedPtr<PluginMemory> memory;
     ::dftu_source_vt vt;
     void* self;
+    /* The registered name, `<plugin>.<name>`; empty for a source that was
+       never registered. */
+    dstd::String name;
     bool owned;
 
     ProviderHandle(dstd::SharedPtr<PluginLibrary> l,
                    dstd::SharedPtr<PluginMemory> m, const ::dftu_source_vt& v,
-                   void* s, bool o)
+                   void* s, bool o, dstd::String n = {})
         : library(std::move(l)),
           memory(std::move(m)),
           vt(v),
           self(s),
+          name(std::move(n)),
           owned(o) {}
     ProviderHandle(const ProviderHandle&) = delete;
     ProviderHandle& operator=(const ProviderHandle&) = delete;
@@ -83,13 +88,15 @@ class ProviderCursor final : public dataframe::Cursor {
         dstd::UniquePtr<CursorHost> host,
         dstd::Vector<dstd::String> expected_projection,
         dstd::Vector<dataframe::TypeId> expected_types,
-        dftracer::utils::dstd::SharedPtr<const dataframe::Source> source)
+        dftracer::utils::dstd::SharedPtr<const dataframe::Source> source,
+        dstd::String label)
         : source_(std::move(source)),
           vt_(vt),
           self_(self),
           host_(std::move(host)),
           expected_projection_(std::move(expected_projection)),
-          expected_types_(std::move(expected_types)) {}
+          expected_types_(std::move(expected_types)),
+          label_(std::move(label)) {}
 
     ~ProviderCursor() override {
         if (pending_task_) plugins::free_abi_task(pending_task_);
@@ -230,6 +237,8 @@ class ProviderCursor final : public dataframe::Cursor {
             }
 
         dataframe::Morsel m;
+        if (auto checked = check_plugin_frame(df, label_); !checked)
+            return dataframe::MorselResult(checked.error());
         m.rows = df.num_rows();
         m.columns = std::move(df.columns);
         return dataframe::MorselResult(std::move(m));
@@ -244,6 +253,10 @@ class ProviderCursor final : public dataframe::Cursor {
     dstd::UniquePtr<CursorHost> host_;
     dstd::Vector<dstd::String> expected_projection_;
     dstd::Vector<dataframe::TypeId> expected_types_;
+    /* Who made this cursor's frames, for a check-mode error naming the
+       plugin and the callback: "provider 'a.b' next", "file format 'a.f'
+       next". */
+    dstd::String label_;
     ::dftu_dataframe* pending_frame_ = nullptr;
     ::dftu_task* pending_task_ = nullptr;
 };
@@ -467,11 +480,19 @@ class ProviderSource final
             declared_types(*read, req.projection);
         r.cursor = dstd::make_unique<ProviderCursor>(
             vt, cursor_self, std::move(host), req.projection,
-            std::move(expected_types), shared_from_this());
+            std::move(expected_types), shared_from_this(), label());
         return r;
     }
 
    private:
+    /* Who this source's cursor is, for a check-mode error naming the plugin
+       and the callback that handed the frame back. */
+    dstd::String label() const {
+        return handle_->name.empty()
+                   ? dstd::String("provider next")
+                   : dstd::fmt<"provider '{}' next">(handle_->name);
+    }
+
     dstd::Result<dataframe::Schema> read_schema() const {
         dataframe::Schema s;
         const char* const* names = nullptr;
@@ -559,7 +580,8 @@ class ProviderSource final
         if (other) inputs.push_back(std::move(other));
         auto derived = dstd::make_shared<ProviderSource>(
             dstd::make_shared<ProviderHandle>(handle_->library, handle_->memory,
-                                              *out.vt, out.self, true),
+                                              *out.vt, out.self, true,
+                                              handle_->name),
             std::move(inputs));
         // Constructed first so an answer refused below is still destroyed.
         if (!status ||
@@ -594,10 +616,10 @@ dstd::UniquePtr<dataframe::Cursor> make_plugin_cursor(
     const ::dftu_cursor_vt* vt, void* self, dstd::UniquePtr<CursorHost> host,
     dstd::Vector<dstd::String> expected_projection,
     dstd::Vector<dataframe::TypeId> expected_types,
-    dstd::SharedPtr<const dataframe::Source> source) {
+    dstd::SharedPtr<const dataframe::Source> source, dstd::String label) {
     return dstd::make_unique<ProviderCursor>(
         vt, self, std::move(host), std::move(expected_projection),
-        std::move(expected_types), std::move(source));
+        std::move(expected_types), std::move(source), std::move(label));
 }
 
 dataframe::Pushed plugin_pushed(std::int32_t value) { return to_pushed(value); }
@@ -645,8 +667,9 @@ dstd::Result<void> register_provider_vtable(
     }
     // Not owned until registered, so a refused registration leaves `self` to
     // the caller.
-    auto handle = dstd::make_shared<ProviderHandle>(
-        std::move(library), std::move(memory), *vt, self, false);
+    auto handle =
+        dstd::make_shared<ProviderHandle>(std::move(library), std::move(memory),
+                                          *vt, self, false, dstd::String(name));
     auto registered = dataframe::register_provider(
         name, dstd::make_shared<VtableProvider>(handle));
     if (registered) handle->owned = true;

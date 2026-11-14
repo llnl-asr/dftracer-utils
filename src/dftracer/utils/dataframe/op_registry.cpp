@@ -4,8 +4,10 @@
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/dataframe_handle.h>
 #include <dftracer/utils/dataframe/internal/op_dispatch.h>
+#include <dftracer/utils/dataframe/internal/validate.h>
 #include <dftracer/utils/dataframe/op.h>
 #include <dftracer/utils/dataframe/udaf_registry.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/singleton.h>
 #include <dftracer/utils/dstd/string.h>
@@ -376,8 +378,12 @@ int dftu_op_unregister(const char* name) {
     return removed ? 0 : 1;
 }
 
-dftu_series* dftu_op_run(const dftu_op_desc* op, const dftu_series* const* in,
-                         uint32_t n, const dftu_op_arg* a) {
+namespace {
+
+// One signature's dispatch to the function it names, split from dftu_op_run so
+// a plugin's result is checked on the way out.
+dftu_series* run_series(const dftu_op_desc* op, const dftu_series* const* in,
+                        uint32_t n, const dftu_op_arg* a) {
     if (!op || !op->fn) return nullptr;
     if (dftu_op_kind_of(op->sig) != DFTU_OP_KIND_SERIES) return nullptr;
     if (n != dftu_op_arity(op->sig)) return nullptr;
@@ -390,7 +396,7 @@ dftu_series* dftu_op_run(const dftu_op_desc* op, const dftu_series* const* in,
         dftu_op_arg ja{};
         if (a) ja = j.args(op->sig, *a);
         if (j.changed())
-            return dftu_op_run(op, joined.data(), n, a ? &ja : nullptr);
+            return run_series(op, joined.data(), n, a ? &ja : nullptr);
     }
     const dftu_op_val* g = a ? a->args : nullptr;
     switch (op->sig) {
@@ -506,6 +512,47 @@ dftu_series* dftu_op_run(const dftu_op_desc* op, const dftu_series* const* in,
     }
 }
 
+// The result a plugin op handed back, checked before the caller reads it: a
+// result that breaks a rule is freed and reported as no result at all, the way
+// every other rejection here reports, with the reason op_check_error() keeps
+// for the caller's message. Zero cost while checking is off.
+dftu_series* check_series_result(const dftu_op_desc* op, dftu_series* out) {
+    if (!dftracer::utils::dataframe::plugin_check_enabled()) return out;
+    dftracer::utils::dataframe::record_op_check_error(
+        dftracer::utils::dstd::StringView());
+    if (!out || !is_user_op(op)) return out;
+    auto checked = dftracer::utils::dataframe::validate_if_checking(*out);
+    if (checked) return out;
+    dftracer::utils::dataframe::record_op_check_error(
+        dftracer::utils::dstd::fmt<"op '{}' returned a broken column: {}">(
+            op->name, checked.error().message()));
+    dftu_series_free(out);
+    return nullptr;
+}
+
+dftu_dataframe* check_frame_result(const dftu_op_desc* op,
+                                   dftu_dataframe* out) {
+    if (!dftracer::utils::dataframe::plugin_check_enabled()) return out;
+    dftracer::utils::dataframe::record_op_check_error(
+        dftracer::utils::dstd::StringView());
+    if (!out || !is_user_op(op)) return out;
+    auto checked = dftracer::utils::dataframe::validate_if_checking(
+        dftracer::utils::dataframe::dataframe_handle_view(out));
+    if (checked) return out;
+    dftracer::utils::dataframe::record_op_check_error(
+        dftracer::utils::dstd::fmt<"op '{}' returned a broken frame: {}">(
+            op->name, checked.error().message()));
+    dftu_dataframe_free(out);
+    return nullptr;
+}
+
+}  // namespace
+
+dftu_series* dftu_op_run(const dftu_op_desc* op, const dftu_series* const* in,
+                         uint32_t n, const dftu_op_arg* a) {
+    return check_series_result(op, run_series(op, in, n, a));
+}
+
 dftu_scalar dftu_op_run_aggregate(const dftu_op_desc* op, const dftu_series* v,
                                   const dftu_op_arg* a, int* ok) {
     dftu_scalar z;
@@ -578,9 +625,11 @@ dftu_scalar dftu_op_run_aggregate(const dftu_op_desc* op, const dftu_series* v,
     }
 }
 
-dftu_dataframe* dftu_op_run_frame(const dftu_op_desc* op,
-                                  const dftu_dataframe* const* frames,
-                                  uint32_t n, const dftu_op_arg* a) {
+namespace {
+
+dftu_dataframe* run_frame(const dftu_op_desc* op,
+                          const dftu_dataframe* const* frames, uint32_t n,
+                          const dftu_op_arg* a) {
     if (!op || !op->fn) return nullptr;
     if (dftu_op_kind_of(op->sig) != DFTU_OP_KIND_FRAME) return nullptr;
     if (n != dftu_op_arity(op->sig)) return nullptr;
@@ -592,7 +641,7 @@ dftu_dataframe* dftu_op_run_frame(const dftu_op_desc* op,
         dftu_op_arg ja{};
         if (a) ja = j.args(op->sig, *a);
         if (j.changed())
-            return dftu_op_run_frame(op, joined.data(), n, a ? &ja : nullptr);
+            return run_frame(op, joined.data(), n, a ? &ja : nullptr);
     }
     using CDF = const dftu_dataframe*;
     const dftu_op_val* g = a ? a->args : nullptr;
@@ -719,6 +768,14 @@ dftu_dataframe* dftu_op_run_frame(const dftu_op_desc* op,
         default:
             return nullptr;
     }
+}
+
+}  // namespace
+
+dftu_dataframe* dftu_op_run_frame(const dftu_op_desc* op,
+                                  const dftu_dataframe* const* frames,
+                                  uint32_t n, const dftu_op_arg* a) {
+    return check_frame_result(op, run_frame(op, frames, n, a));
 }
 
 dftu_lazyframe* dftu_op_run_lazy(const dftu_op_desc* op,

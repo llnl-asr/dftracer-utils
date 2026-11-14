@@ -1906,3 +1906,91 @@ C++20 flags:
 
 For a full compiled-and-run C++ walkthrough (scaffold, edit, build, run), see
 :doc:`tutorials/write-a-c-plugin`.
+
+What a loaded plugin registered
+-------------------------------
+
+``Plugins::describe()`` (``plugins/host/plugins.h``) reports, for every loaded
+plugin, its path, its ABI version, whether it declares ``plan_duql``, whether
+its descriptor carries a fold at all (``has_fold``: a ``make_slice`` or a
+``transform`` slot), and the names it registered, one list per kind: ``ops``,
+``udfs``, ``udafs``, ``states``, ``providers``, ``nodes``,
+``index_extensions``, ``file_formats`` and ``sinks``.
+
+``has_fold`` reads the descriptor, not the names: a descriptor written by hand
+that only registers names reports false, while a plugin built with the C++ SDK
+always reports true, because the SDK fills an empty fold for a plugin that
+declares none, so the host can drive the states it registered.
+
+``dftracer_run --describe --plugin path.so`` prints the same facts, one line
+per list, and needs no trace and no index:
+
+.. code-block:: text
+
+   plugin: /path/to/com.example.formats.so
+   abi_version: 0
+   plan_duql: no
+   fold: no
+   provides: (none)
+   consumes: (none)
+   ops: (none)
+   udfs: (none)
+   udafs: (none)
+   states: (none)
+   providers: (none)
+   nodes: (none)
+   index_extensions: (none)
+   file_formats: com.example.toy
+   sinks: com.example.toy_sink
+
+Checking the frames a plugin returns
+------------------------------------
+
+Set ``DFTRACER_UTILS_PLUGIN_CHECK=1`` to make the host validate every frame and
+column a plugin hands back: the frames of a provider cursor, of a file format
+cursor, of a node's output cursor, a UDF's ``exec`` result, a UDAF's
+``finalize`` result, a plugin op's result and a fold transform's output. A broken one fails the run with an error naming the
+plugin, the callback and the rule that broke, such as
+
+.. code-block:: text
+
+   provider 'com.example.p' next returned a broken frame: column 'dur':
+   its offset buffer holds 4 bytes, but 2 rows need 3 entries of 4 bytes
+
+The check covers a negative length, a validity bitmap or null count that
+disagrees with the rows, a data buffer too short for its rows, variable-width
+offsets that are too few, negative, decreasing or past the data, a string view
+whose inline length, buffer index or range is out of bounds, a dictionary code
+past its values, a selection index past its base, chunks that do not add up, a
+struct field of another length, list offsets past the values column, and a
+frame whose names disagree with its columns. It is off by default, and off
+costs one cached boolean test per frame.
+
+Whatever the kind, the check runs on the host side only, after the plugin
+returns; a plugin cannot see it and its own tests are unaffected.
+
+From Python, ``Plugins.describe()`` returns one ``PluginInfo`` per plugin, a
+named tuple with ``path``, ``abi_version``, ``has_plan_duql``, ``has_fold`` and
+one ``List[str]`` per kind, so a caller prints or filters a plugin's registered
+names without scanning a trace:
+
+.. code-block:: python
+
+   from dftracer.utils.plugins import Plugins
+
+   for info in Plugins(["./my_formats.so"]).describe():
+       print(info.file_formats, info.udfs)
+
+A format a plugin registers is readable from Python with
+``dftracer.utils.scan_file``, which plans the read with the format that claims
+the file:
+
+.. code-block:: python
+
+   import dftracer.utils as dft
+
+   frame = dft.scan_file("rows.toy").collect()
+
+The plan is lazy; ``collect()`` raises ``DFTUtilsNotFoundError``
+(``no format claims <path>``) for a file no registered format claims, and
+``DFTUtilsValueError`` when two formats tie for it.

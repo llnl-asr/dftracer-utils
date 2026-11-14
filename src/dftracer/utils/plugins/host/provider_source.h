@@ -23,12 +23,16 @@ class CursorHost;
 /// owns `self`, destroying it through vt->destroy once the cursor is gone,
 /// awaits the task a callback leaves pending, and keeps `source` alive, so a
 /// plugin's state outlives the cursor. `vt` must be a valid cursor vtable and
-/// `self` must belong to the caller until this call.
+/// `self` must belong to the caller until this call. With
+/// DFTRACER_UTILS_PLUGIN_CHECK on, every frame it yields is validated and a
+/// broken one fails the scan with an error naming `label` (who made the frames
+/// and the callback that handed one back, such as "provider 'a.b' next") and
+/// the rule.
 dstd::UniquePtr<dataframe::Cursor> make_plugin_cursor(
     const ::dftu_cursor_vt* vt, void* self, dstd::UniquePtr<CursorHost> host,
     dstd::Vector<dstd::String> expected_projection,
     dstd::Vector<dataframe::TypeId> expected_types,
-    dstd::SharedPtr<const dataframe::Source> source);
+    dstd::SharedPtr<const dataframe::Source> source, dstd::String label = {});
 
 /// The dataframe::Pushed one dftu_pushed value means. A value the ABI does not
 /// define reads as No, which is always sound: the engine re-applies.

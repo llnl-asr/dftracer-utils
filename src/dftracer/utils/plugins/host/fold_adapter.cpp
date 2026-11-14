@@ -29,6 +29,7 @@
 #include <dftracer/utils/plugins/host/fold_adapter.h>
 #include <dftracer/utils/plugins/host/fold_adapter/ext.h>
 #include <dftracer/utils/plugins/host/fold_adapter/state.h>
+#include <dftracer/utils/plugins/host/frame_check.h>
 #include <dftracer/utils/plugins/task_abi.h>
 #include <dftracer/utils/runtime/io/ops.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -1494,10 +1495,23 @@ dstd::Result<void> PluginFold::step(const FoldBatch& batch) {
         } else if (out) {
             // Every fold after this one in the batch reads the rewrite; with
             // no bus (a fold driven alone) there is no one to hand it to.
-            if (port_bus_)
-                port_bus_->frame = dataframe::dataframe_handle_take(out);
-            else
+            if (port_bus_) {
+                dataframe::DataFrame rewritten =
+                    dataframe::dataframe_handle_take(out);
+                dstd::Result<void> checked;
+                // The label is built only while checking, which is off for a
+                // shipped scan.
+                if (dataframe::plugin_check_enabled())
+                    checked = check_plugin_frame(
+                        rewritten,
+                        dstd::fmt<"plugin '{}' transform">(plugin_label()));
+                if (checked)
+                    port_bus_->frame = std::move(rewritten);
+                else
+                    stepped = dstd::Unexpected(checked.error());
+            } else {
                 dftu_dataframe_free(out);
+            }
         }
     } else if (stepped && has_on_batch) {
         plugins::AbiContext ctx;

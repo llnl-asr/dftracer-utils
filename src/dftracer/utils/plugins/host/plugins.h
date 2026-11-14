@@ -83,11 +83,32 @@ class Plugins {
         std::uint32_t abi_version = 0;
         bool has_plan_duql =
             false;          ///< true if the plugin declares a plan_duql
+        /// True when the descriptor carries a fold at all: it makes slices or
+        /// rewrites batches. A hand-written descriptor that only registers
+        /// names reports false; one built with the C++ SDK reports true, since
+        /// the SDK fills an empty fold so the host can drive the states.
+        bool has_fold = false;
         dstd::Vector<dstd::String> provides;
         dstd::Vector<dstd::String> consumes;
         /// One entry per op the plugin's factory added to the host op
         /// registry: `name(arg, ...) -> ret [kind]`.
         dstd::Vector<dstd::String> ops;
+        /// One entry per column op the factory registered as a UDF.
+        dstd::Vector<dstd::String> udfs;
+        /// One entry per accumulator the factory registered as a UDAF.
+        dstd::Vector<dstd::String> udafs;
+        /// One entry per state type the factory registered.
+        dstd::Vector<dstd::String> states;
+        /// One entry per scan provider the factory registered.
+        dstd::Vector<dstd::String> providers;
+        /// One entry per plan node the factory registered.
+        dstd::Vector<dstd::String> nodes;
+        /// One entry per index extension the factory registered.
+        dstd::Vector<dstd::String> index_extensions;
+        /// One entry per file format the factory registered.
+        dstd::Vector<dstd::String> file_formats;
+        /// One entry per sink the factory registered.
+        dstd::Vector<dstd::String> sinks;
         /// The batch columns the plugin declared it reads. Empty means it
         /// declared none, so it is handed every column.
         dstd::Vector<dstd::String> reads;

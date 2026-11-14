@@ -174,9 +174,10 @@ class FormatCursor final : public dataframe::Cursor {
    private:
     void adopt(OpenedChunk chunk) {
         host_ = std::move(chunk.host);
-        cursor_ =
-            make_plugin_cursor(chunk.vt, chunk.cursor_self, std::move(host_),
-                               req_.projection, expected_types_, source_);
+        cursor_ = make_plugin_cursor(
+            chunk.vt, chunk.cursor_self, std::move(host_), req_.projection,
+            expected_types_, source_,
+            dstd::fmt<"file format '{}' next">(file_->handle->name));
     }
 
     // Releases the chunk just ended and opens the next one. No error means

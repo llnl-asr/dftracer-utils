@@ -379,6 +379,27 @@ TEST_SUITE("DFTracerRun") {
         MESSAGE("describe: " << r.err);
     }
 
+    TEST_CASE("--describe lists an example plugin's udfs and fold state") {
+        dstd::String run =
+            env_or_probe("DFTRACER_UTILS_RUN_PATH", "dftracer_run");
+        dstd::String udfs = env_or_probe(
+            "DFTRACER_UTILS_DURATION_UDFS_PLUGIN_PATH", "duration_udfs.so");
+        if (run.empty() || udfs.empty()) {
+            MESSAGE("dftracer_run or duration_udfs not found, skipping.");
+            return;
+        }
+
+        RunResult r = run_capture_stderr(run, {"--describe", "--plugin", udfs});
+        CHECK(r.exit_code == 0);
+        CHECK(r.err.find("udfs: ") != dstd::String::npos);
+        CHECK(r.err.find("to_ms") != dstd::String::npos);
+        // The kind lines exist for every kind, even the ones this plugin
+        // registers none of, so a reader sees the whole list.
+        CHECK(r.err.find("sinks: (none)") != dstd::String::npos);
+        CHECK(r.err.find("providers: (none)") != dstd::String::npos);
+        MESSAGE("describe: " << r.err);
+    }
+
     TEST_CASE("--describe on a plugin that fails to load reports the error") {
         dstd::String run =
             env_or_probe("DFTRACER_UTILS_RUN_PATH", "dftracer_run");

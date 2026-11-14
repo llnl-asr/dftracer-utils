@@ -1329,6 +1329,27 @@ class _TraceViewer:
         reads the results after the collect."""
         ...
 
+class PluginRecord(TypedDict):
+    """One plugin's entry in :meth:`Plugins.describe`."""
+
+    path: str
+    abi_version: int
+    has_plan_duql: bool
+    has_fold: bool
+    provides: List[str]
+    consumes: List[str]
+    ops: List[str]
+    udfs: List[str]
+    udafs: List[str]
+    states: List[str]
+    providers: List[str]
+    nodes: List[str]
+    index_extensions: List[str]
+    file_formats: List[str]
+    sinks: List[str]
+    reads: List[str]
+    config_keys: List[str]
+
 class Plugins:
     """A fixed, built set of compiled DFTracer plugins."""
 
@@ -1340,6 +1361,15 @@ class Plugins:
     ) -> None:
         """Build every ``(path, config_json_or_None)`` spec now; raises
         ImportError on a load/symbol/ABI/capability failure."""
+        ...
+    def describe(self) -> List[PluginRecord]:
+        """One plain dict per loaded plugin, in registration order: ``path``,
+        ``abi_version``, ``has_plan_duql``, ``has_fold``, and the names it
+        registered per kind (``ops``, ``udfs``, ``udafs``, ``states``,
+        ``providers``, ``nodes``, ``index_extensions``, ``file_formats``,
+        ``sinks``), plus ``provides``, ``consumes``, ``reads`` and
+        ``config_keys``. Static: nothing is scanned.
+        """
         ...
     def run(
         self,
@@ -1435,6 +1465,12 @@ def op_info(name: str) -> Dict[str, object]:
 def op_run(name: str, *args: object) -> Union[_Series, int, float]:
     """Run a registered op by name: columns are ``_Series``, other operands
     follow the op's signature. Returns a ``_Series`` or a Python scalar."""
+    ...
+
+def scan_file(path: str, /) -> _LazyFrame:
+    """A deferred scan over `path`, planned by the plugin file format that
+    claims it. collect() returns the error of a file no format claims.
+    """
     ...
 
 def memory_budget_advice(required_bytes: int, available_bytes: int = ...) -> Dict[str, object]:

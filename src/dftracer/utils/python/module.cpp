@@ -6,6 +6,7 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/memory_budget.h>
 #include <dftracer/utils/common/memory_config.h>
+#include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/memory/detail/manager.h>
 #include <dftracer/utils/plugins/abi_version.h>
@@ -93,7 +94,24 @@ PyObject* py_memory_budget_advice(PyObject*, PyObject* args, PyObject* kwds) {
         (unsigned long long)a.suggested_nodes, "warning", warning.c_str());
 }
 
+// scan_file(path) -> _LazyFrame: a deferred scan over `path`, planned by the
+// plugin file format that claims it. A file no format claims, a tie between
+// two, or a beta feature the host does not support is an error the plan keeps
+// and collect() returns.
+PyObject* py_scan_file(PyObject*, PyObject* args) {
+    const char* path = nullptr;
+    if (!PyArg_ParseTuple(args, "s", &path)) return nullptr;
+    return dftracer::utils::python::frame::wrap_lazyframe(
+        dftracer::utils::dataframe::LazyFrame::scan_file(
+            dftracer::utils::dstd::StringView(path)));
+}
+
 PyMethodDef dftracer_utils_methods[] = {
+    {"scan_file", py_scan_file, METH_VARARGS,
+     "scan_file(path: str) -> _LazyFrame\n\n"
+     "A deferred scan over `path`, decompressed and parsed by the plugin file\n"
+     "format that claims it. Nothing runs until collect(), which returns the\n"
+     "error of a file no format claims."},
     {"memory_budget_advice", DFTU_PYCFUNCTION(py_memory_budget_advice),
      METH_VARARGS | METH_KEYWORDS,
      "memory_budget_advice(required_bytes, available_bytes=0) -> dict\n\n"

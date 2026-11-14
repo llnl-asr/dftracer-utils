@@ -672,11 +672,22 @@ dstd::Vector<Plugins::PluginInfo> Plugins::describe() const {
         info.path = p.path;
         info.abi_version = DFTRACER_UTILS_PLUGIN_ABI_VERSION;
         info.has_plan_duql = p.plugin->plan_duql != nullptr;
+        info.has_fold =
+            p.plugin->make_slice != nullptr || p.plugin->transform != nullptr;
         info.provides = name_list(p.plugin->provides, p.plugin->self);
         info.consumes = name_list(p.plugin->consumes, p.plugin->self);
         info.reads = name_list(p.plugin->reads, p.plugin->self);
         for (const dstd::String& op : p.registered_ops)
             info.ops.push_back(op_summary(op));
+        info.udfs = p.registered_udfs;
+        info.udafs = p.registered_udafs;
+        info.providers = p.registered_providers;
+        info.nodes = p.registered_nodes;
+        info.index_extensions = p.registered_index_extensions;
+        info.file_formats = p.registered_file_formats;
+        info.sinks = p.registered_sinks;
+        for (const RegisteredState& state : p.states)
+            info.states.push_back(state.name);
         if (p.plugin->config_keys) {
             const dftu_config_key* keys = p.plugin->config_keys(p.plugin->self);
             for (; keys && keys->name; ++keys) {

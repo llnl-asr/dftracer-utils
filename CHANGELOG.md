@@ -9,6 +9,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Added
 
+- `Plugins::describe()` reports the names each loaded plugin registered, one list per kind (`ops`, `udfs`, `udafs`, `states`, `providers`, `nodes`, `index_extensions`, `file_formats`, `sinks`) plus `has_fold`, and `dftracer_run --describe` prints them. Python: `Plugins.describe()` returns one `PluginInfo` named tuple per plugin, and `dft.scan_file(path)` plans a read through the plugin format that claims the file.
+- Set `DFTRACER_UTILS_PLUGIN_CHECK=1` to make the plugin host validate every frame and column a plugin returns (provider, file format and node cursors, a UDF's `exec`, a UDAF's `finalize`, a plugin op's result and a fold transform's output), failing the run with an error that names the plugin, the callback and the broken rule. Off by default.
+
 - A plugin can register a file format (`DFTU_SVC_FILE_FORMATS`, `plugins/abi/file_formats.h`): it scores a file 0..100 from its first 4 KiB, opens it, declares its columns, and hands the engine one cursor per chunk. `LazyFrame::scan_file` / `dftu_lazyframe_scan_file` scan a file through the highest-scoring format, `PluginBuilder::file_format<F>()` is the C++ SDK for one.
 
 - A plugin can register an output sink (`DFTU_SVC_FILE_FORMATS`, `dftu_sink_vt`, `PluginBuilder::sink<S>()`), and every surface writes through it: `LazyFrame::sink(name, options, batch_size)` returns a `SinkSummary` of the rows and batches it wrote, `dftu_lazyframe_sink` is the C ABI, `LazyFrame.sink` in Python takes the options as keywords, `dftracer_view --sink NAME --sink-option KEY=VALUE` sends the query to it, and a duql pipeline ends with `sink "name" key "value"`, which returns one row of `rows` and `batches`. A bind, scan or write error aborts the sink once before it returns.

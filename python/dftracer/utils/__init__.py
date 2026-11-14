@@ -65,6 +65,7 @@ from .lazyframe import (  # noqa: F401
     SinkSummary,
     collect_all,
     lazy,
+    scan_file,
 )
 from .live_trace_viewer import LiveFileStatus, LiveTraceViewer  # noqa: F401
 from .runtime import Runtime, TaskHandle  # noqa: F401
@@ -169,6 +170,7 @@ __all__ = [
     "SinkSummary",
     "collect_all",
     "lazy",
+    "scan_file",
     "Series",
     "Runtime",
     "TaskHandle",

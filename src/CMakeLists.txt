@@ -933,6 +933,7 @@ set(DFTRACER_UTILS_VEC_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/parallel_runtime.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/batch_ops.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/types.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/validate.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/frame_native.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/grace_join.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/join.cpp

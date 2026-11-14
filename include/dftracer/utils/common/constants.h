@@ -27,6 +27,13 @@ namespace dataframe {
 inline constexpr std::int64_t BATCH_SIZE = 65536;
 }  // namespace dataframe
 
+namespace plugins {
+/// "0", "false", "off" or "no" checks nothing; any other value makes the host
+/// validate every frame and column a plugin hands back, and fail the run
+/// naming the plugin, the callback and the broken rule.
+inline constexpr const char* CHECK_ENV = "DFTRACER_UTILS_PLUGIN_CHECK";
+}  // namespace plugins
+
 /// Repeated in memory/detail/constants.h. A test keeps the two equal. The
 /// backend, decay, debug and exit check are read by the memory library before
 /// its first allocation. Byte values take a number or a unit such as "512MB".

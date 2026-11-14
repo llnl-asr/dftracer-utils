@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/c_api_error.h>
+#include <dftracer/utils/dataframe/internal/validate.h>
 #include <dftracer/utils/dataframe/op.h>
 #include <dftracer/utils/dataframe/udaf_registry.h>
 #include <dftracer/utils/dataframe/udf.h>
@@ -237,6 +238,10 @@ dstd::Result<Series> UdfBinding::run(dstd::Span<const Series* const> args,
                                 "{} rows of {}">(
             dstd::Condition::Internal, u.name(), out.length(),
             type_name(out.type()), rows, type_name(result_.id)));
+    if (auto checked = validate_if_checking(out); !checked)
+        return dstd::Unexpected(dstd::Error::from_format<
+                                "udf '{}' exec returned a broken column: {}">(
+            dstd::Condition::Internal, u.name(), checked.error().message()));
     if (u.is_null_aware()) return out;
     return mask_nulls(u, std::move(out), args, rows);
 }

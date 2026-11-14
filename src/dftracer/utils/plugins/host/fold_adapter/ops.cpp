@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dataframe/c_api.h>
+#include <dftracer/utils/dataframe/internal/validate.h>
 #include <dftracer/utils/dataframe/op.h>
 #include <dftracer/utils/dataframe/udaf_registry.h>
 #include <dftracer/utils/dataframe/udf_registry.h>
@@ -23,7 +24,17 @@ dftu_status find_op(::dftu_ctx* ctx, const char* name,
                          dstd::StringView(name ? name : "(null)")));
 }
 
-dftu_status rejected(::dftu_ctx* ctx, const char* name) {
+dftu_status rejected(::dftu_ctx* ctx, const char* name,
+                     bool may_be_checked = false) {
+    // A plugin op whose result failed the check named its own reason; report
+    // that instead of the shape mismatch that same null result would mean.
+    // Only series and frame runs check, so only they may read the reason.
+    if (const dstd::StringView why = dataframe::op_check_error();
+        may_be_checked && !why.empty()) {
+        const dftu_status status = host_fail(ctx, DFTU_E_INVALID, why);
+        dataframe::record_op_check_error({});
+        return status;
+    }
     return host_fail(ctx, DFTU_E_INVALID,
                      dstd::fmt<"op '{}' rejected: kind/arity/shape mismatch">(
                          dstd::StringView(name)));
@@ -38,7 +49,7 @@ dftu_status host_ops_run(::dftu_ctx* ctx, void*, const char* name,
     if (const dftu_status found = find_op(ctx, name, &op); found < 0)
         return found;
     ::dftu_series* result = ::dftu_op_run(op, in, n_in, args);
-    if (result == nullptr) return rejected(ctx, name);
+    if (result == nullptr) return rejected(ctx, name, true);
     *out = result;
     return DFTU_OK;
 }
@@ -72,7 +83,7 @@ dftu_status host_ops_run_frame(::dftu_ctx* ctx, void*, const char* name,
     if (const dftu_status found = find_op(ctx, name, &op); found < 0)
         return found;
     ::dftu_dataframe* result = ::dftu_op_run_frame(op, frames, n_in, args);
-    if (result == nullptr) return rejected(ctx, name);
+    if (result == nullptr) return rejected(ctx, name, true);
     *out = result;
     return DFTU_OK;
 }

@@ -1276,6 +1276,20 @@ def lazy(frame: DataFrame) -> LazyFrame:
     return frame.lazy()
 
 
+def scan_file(path: str) -> LazyFrame:
+    """A plan over the file at ``path``, read by the plugin file format that
+    claims it (the one with the highest probe score for the file).
+
+    Nothing is read until :meth:`LazyFrame.collect`, which returns the error of
+    a file no registered format claims (``no format claims <path>``), of two
+    formats that tie, or of the winning format's own open failure. Use it to
+    read a format a plugin added without going through the trace index.
+    """
+    from . import dftracer_utils_ext as _ext
+
+    return LazyFrame(_ext.scan_file(path))
+
+
 _ALL_ROWS = (1 << 63) - 1
 
 T = TypeVar("T")

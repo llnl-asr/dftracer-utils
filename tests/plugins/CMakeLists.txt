@@ -33,6 +33,9 @@ set(PLUGINS_TEST_SOURCES
     test_plugin_memory.cpp
     test_plugin_reads.cpp
     test_plugin_providers.cpp
+    test_plugin_describe.cpp
+    test_plugin_frame_check.cpp
+    test_plugin_frame_check_off.cpp
     test_plugin_file_formats.cpp
     test_plugin_sink_duql.cpp
     test_provider_pushdown.cpp
@@ -184,7 +187,7 @@ foreach(fh_plugin toy_format_plugin toy_format_tie_plugin
 endforeach()
 
 foreach(cxx_plugin builder_plugin config_keys_plugin reads_projection_plugin
-                  provider_fixture_plugin toy_sink_plugin)
+                  provider_fixture_plugin toy_sink_plugin broken_frame_plugin)
   add_library(${cxx_plugin} MODULE ${cxx_plugin}.cpp)
   target_set_warnings(${cxx_plugin})
   set_target_properties(
@@ -209,7 +212,7 @@ foreach(df_plugin toy_format_plugin toy_format_tie_plugin toy_sink_plugin
                   factory_registers_op_plugin builder_plugin udf_plugin
                   udaf_plugin
                   config_keys_plugin reads_projection_plugin
-                  provider_fixture_plugin)
+                  provider_fixture_plugin broken_frame_plugin)
   if(TARGET dftracer_utils_dataframe::shared)
     target_link_libraries(${df_plugin} PRIVATE dftracer_utils_dataframe::shared)
   elseif(TARGET dftracer_utils_dataframe::static)
@@ -251,6 +254,37 @@ if(TARGET plugins_test_plugin_factory_host)
                    factory_registers_op_plugin factory_escapes_plugin
                    scan_registers_op_plugin
                    builder_plugin)
+endif()
+
+if(TARGET plugins_test_plugin_describe)
+  target_compile_definitions(
+    plugins_test_plugin_describe PRIVATE
+    TOY_FORMAT_PLUGIN_PATH="$<TARGET_FILE:toy_format_plugin>"
+    TOY_SINK_PLUGIN_PATH="$<TARGET_FILE:toy_sink_plugin>"
+    UDF_PLUGIN_PATH="$<TARGET_FILE:udf_plugin>"
+    UDAF_PLUGIN_PATH="$<TARGET_FILE:udaf_plugin>"
+    PROVIDER_FIXTURE_PLUGIN_PATH="$<TARGET_FILE:provider_fixture_plugin>"
+    BUILDER_PLUGIN_PATH="$<TARGET_FILE:builder_plugin>"
+    INDEX_MINMAX_PLUGIN_PATH="$<TARGET_FILE:index_minmax_plugin>"
+    LIFETIME_PLUGIN_PATH="$<TARGET_FILE:lifetime_plugin>")
+  add_dependencies(plugins_test_plugin_describe toy_format_plugin
+                   toy_sink_plugin udf_plugin udaf_plugin
+                   provider_fixture_plugin builder_plugin
+                   index_minmax_plugin lifetime_plugin)
+endif()
+
+if(TARGET plugins_test_plugin_frame_check)
+  target_compile_definitions(
+    plugins_test_plugin_frame_check PRIVATE
+    BROKEN_FRAME_PLUGIN_PATH="$<TARGET_FILE:broken_frame_plugin>")
+  add_dependencies(plugins_test_plugin_frame_check broken_frame_plugin)
+endif()
+
+if(TARGET plugins_test_plugin_frame_check_off)
+  target_compile_definitions(
+    plugins_test_plugin_frame_check_off PRIVATE
+    BROKEN_FRAME_PLUGIN_PATH="$<TARGET_FILE:broken_frame_plugin>")
+  add_dependencies(plugins_test_plugin_frame_check_off broken_frame_plugin)
 endif()
 
 if(TARGET plugins_test_plugin_udf)

@@ -383,9 +383,7 @@ class TestAwait:
         # Every kernel forks through the runtime, so a worker that waited for
         # its fork without running a chunk made the pool add a thread for it.
         rows = 20_000
-        frame = DataFrame.from_dict(
-            {"k": [i % 7 for i in range(rows)], "v": list(range(rows))}
-        )
+        frame = DataFrame.from_dict({"k": [i % 7 for i in range(rows)], "v": list(range(rows))})
         lf = frame.lazy().group_by("k", "count", "sum:v").sort_by("k")
         lf.collect_async().get()
         before = _os_thread_count()

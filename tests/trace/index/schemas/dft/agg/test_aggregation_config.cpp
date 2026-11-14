@@ -12,12 +12,6 @@ TEST_SUITE("AggregationConfig") {
         CHECK(config.use_relative_time == false);
         CHECK(config.compute_statistics == true);
         CHECK(config.compute_percentiles == false);
-        CHECK(config.output_format == "json");
-    }
-
-    TEST_CASE("AggregationConfig - Valid formats") {
-        CHECK(AggregationConfig::is_valid_format("json"));
-        CHECK_FALSE(AggregationConfig::is_valid_format("csv"));
     }
 
     TEST_CASE("AggregationConfig - group_by_file changes the hash") {

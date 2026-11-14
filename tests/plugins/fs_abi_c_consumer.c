@@ -18,10 +18,12 @@ typedef struct {
     char msg[MSG_CAP];
 } scn;
 
-static dftu_status finish(scn* s, dftu_status st, dftu_task* t) {
+/* Takes the task by address: C leaves the order of argument evaluation open,
+ * so a plain `t` could be read before the op call sets it. */
+static dftu_status finish(scn* s, dftu_status st, dftu_task** t) {
     s->msg[0] = 0;
     if (st < 0) return st;
-    return s->hn->run(t, s->msg, MSG_CAP);
+    return s->hn->run(*t, s->msg, MSG_CAP);
 }
 
 /* Checks the status and, for a failure, that the message names the op. */
@@ -79,41 +81,41 @@ void dftu_test_fs_ops(dftu_ctx* ctx, const dftu_plugin_host* h,
     int32_t flag = -1;
     expect_status(
         s, "create_directories",
-        finish(s, fs->create_directories(ctx, h->h, sub, &flag, &t), t),
+        finish(s, fs->create_directories(ctx, h->h, sub, &flag, &t), &t),
         DFTU_OK, NULL);
     hn->expect("create_directories made them", flag == 1);
     expect_status(
         s, "create_directories again",
-        finish(s, fs->create_directories(ctx, h->h, sub, &flag, &t), t),
+        finish(s, fs->create_directories(ctx, h->h, sub, &flag, &t), &t),
         DFTU_OK, NULL);
     hn->expect("create_directories found them", flag == 0);
 
     const char text[] = "hello world";
     expect_status(s, "write_file",
-                  finish(s, fs->write_file(ctx, h->h, a, text, 11, &t), t),
+                  finish(s, fs->write_file(ctx, h->h, a, text, 11, &t), &t),
                   DFTU_OK, NULL);
     expect_status(
         s, "write_file into a missing directory",
-        finish(s, fs->write_file(ctx, h->h, in_missing_dir, text, 11, &t), t),
+        finish(s, fs->write_file(ctx, h->h, in_missing_dir, text, 11, &t), &t),
         DFTU_E_NOT_FOUND, "write_file");
     expect_status(s, "write_file with a NULL path",
                   fs->write_file(ctx, h->h, NULL, text, 11, &t), DFTU_E_INVALID,
                   NULL);
     expect_status(s, "write_file b",
-                  finish(s, fs->write_file(ctx, h->h, b, "bb", 2, &t), t),
+                  finish(s, fs->write_file(ctx, h->h, b, "bb", 2, &t), &t),
                   DFTU_OK, NULL);
 
     dftu_bytes bytes;
     memset(&bytes, 0, sizeof bytes);
     expect_status(s, "read_file",
-                  finish(s, fs->read_file(ctx, h->h, a, &bytes, &t), t),
+                  finish(s, fs->read_file(ctx, h->h, a, &bytes, &t), &t),
                   DFTU_OK, NULL);
     hn->expect("read_file bytes", bytes.len == 11 &&
                                       memcmp(bytes.data, text, 11) == 0 &&
                                       bytes.free_fn != NULL);
     if (bytes.free_fn) bytes.free_fn((void*)(uintptr_t)bytes.data, bytes.ud);
     expect_status(s, "read_file of a missing file",
-                  finish(s, fs->read_file(ctx, h->h, missing, &bytes, &t), t),
+                  finish(s, fs->read_file(ctx, h->h, missing, &bytes, &t), &t),
                   DFTU_E_NOT_FOUND, "read_file");
     hn->expect("a failed read_file leaves no bytes to free",
                bytes.free_fn == NULL);
@@ -121,53 +123,53 @@ void dftu_test_fs_ops(dftu_ctx* ctx, const dftu_plugin_host* h,
     char buf[16] = {0};
     int64_t n = -1;
     expect_status(s, "read_at",
-                  finish(s, fs->read_at(ctx, h->h, a, 6, buf, 5, &n, &t), t),
+                  finish(s, fs->read_at(ctx, h->h, a, 6, buf, 5, &n, &t), &t),
                   DFTU_OK, NULL);
     hn->expect("read_at bytes", n == 5 && memcmp(buf, "world", 5) == 0);
     expect_status(s, "read_at past the end",
-                  finish(s, fs->read_at(ctx, h->h, a, 100, buf, 5, &n, &t), t),
+                  finish(s, fs->read_at(ctx, h->h, a, 100, buf, 5, &n, &t), &t),
                   DFTU_OK, NULL);
     hn->expect("read_at past the end gives 0", n == 0);
     expect_status(
         s, "read_at of a missing file",
-        finish(s, fs->read_at(ctx, h->h, missing, 0, buf, 5, &n, &t), t),
+        finish(s, fs->read_at(ctx, h->h, missing, 0, buf, 5, &n, &t), &t),
         DFTU_E_NOT_FOUND, "read_at");
 
     expect_status(
         s, "write_at",
-        finish(s, fs->write_at(ctx, h->h, a, 6, "WORLD", 5, &n, &t), t),
+        finish(s, fs->write_at(ctx, h->h, a, 6, "WORLD", 5, &n, &t), &t),
         DFTU_OK, NULL);
     hn->expect("write_at count", n == 5);
     memset(buf, 0, sizeof buf);
     expect_status(s, "read back",
-                  finish(s, fs->read_at(ctx, h->h, a, 0, buf, 11, &n, &t), t),
+                  finish(s, fs->read_at(ctx, h->h, a, 0, buf, 11, &n, &t), &t),
                   DFTU_OK, NULL);
     hn->expect("write_at changed the file",
                n == 11 && memcmp(buf, "hello WORLD", 11) == 0);
     expect_status(
         s, "write_at in a missing directory",
         finish(s, fs->write_at(ctx, h->h, in_missing_dir, 0, "x", 1, &n, &t),
-               t),
+               &t),
         DFTU_E_NOT_FOUND, "write_at");
 
     expect_status(s, "exists",
-                  finish(s, fs->exists(ctx, h->h, a, &flag, &t), t), DFTU_OK,
+                  finish(s, fs->exists(ctx, h->h, a, &flag, &t), &t), DFTU_OK,
                   NULL);
     hn->expect("exists of a file", flag == 1);
     expect_status(s, "exists of a missing path",
-                  finish(s, fs->exists(ctx, h->h, missing, &flag, &t), t),
+                  finish(s, fs->exists(ctx, h->h, missing, &flag, &t), &t),
                   DFTU_OK, NULL);
     hn->expect("exists of a missing path", flag == 0);
     expect_status(s, "exists with a NULL path",
                   fs->exists(ctx, h->h, NULL, &flag, &t), DFTU_E_INVALID, NULL);
     expect_failed(
         s, "create_directories below a file",
-        finish(s, fs->create_directories(ctx, h->h, through, &flag, &t), t),
+        finish(s, fs->create_directories(ctx, h->h, through, &flag, &t), &t),
         "create_directories");
 
     dftu_path_list* list = NULL;
     expect_status(s, "list_dir",
-                  finish(s, fs->list_dir(ctx, h->h, root, &list, &t), t),
+                  finish(s, fs->list_dir(ctx, h->h, root, &list, &t), &t),
                   DFTU_OK, NULL);
     hn->expect("list_dir lists a file and a directory",
                list != NULL && fs->list_count(list) == 2 &&
@@ -180,7 +182,7 @@ void dftu_test_fs_ops(dftu_ctx* ctx, const dftu_plugin_host* h,
     fs->list_free(list);
     list = NULL;
     expect_status(s, "list_dir of a missing directory",
-                  finish(s, fs->list_dir(ctx, h->h, missing, &list, &t), t),
+                  finish(s, fs->list_dir(ctx, h->h, missing, &list, &t), &t),
                   DFTU_E_NOT_FOUND, "list_dir");
     hn->expect("a failed list_dir leaves no list", list == NULL);
 
@@ -192,9 +194,10 @@ void dftu_test_fs_ops(dftu_ctx* ctx, const dftu_plugin_host* h,
     opts.pattern_count = 1;
     opts.recursive = 1;
     opts.with_stat = 1;
-    expect_status(s, "find_all",
-                  finish(s, fs->find_all(ctx, h->h, root, &opts, &list, &t), t),
-                  DFTU_OK, NULL);
+    expect_status(
+        s, "find_all",
+        finish(s, fs->find_all(ctx, h->h, root, &opts, &list, &t), &t), DFTU_OK,
+        NULL);
     hn->expect("find_all finds both files with their sizes",
                list != NULL && fs->list_count(list) == 2 &&
                    has_name(fs, list, "a.txt", DFTU_FILE_FILE) &&
@@ -208,16 +211,17 @@ void dftu_test_fs_ops(dftu_ctx* ctx, const dftu_plugin_host* h,
     fs->list_free(list);
     list = NULL;
     opts.recursive = 0;
-    expect_status(s, "find_all not recursive",
-                  finish(s, fs->find_all(ctx, h->h, root, &opts, &list, &t), t),
-                  DFTU_OK, NULL);
+    expect_status(
+        s, "find_all not recursive",
+        finish(s, fs->find_all(ctx, h->h, root, &opts, &list, &t), &t), DFTU_OK,
+        NULL);
     hn->expect("find_all not recursive finds one file",
                list != NULL && fs->list_count(list) == 1);
     fs->list_free(list);
     list = NULL;
     expect_status(
         s, "find_all of a missing root",
-        finish(s, fs->find_all(ctx, h->h, missing, &opts, &list, &t), t),
+        finish(s, fs->find_all(ctx, h->h, missing, &opts, &list, &t), &t),
         DFTU_E_NOT_FOUND, "find_all");
 
     const char* const paths[3] = {a, missing, sub};
@@ -226,7 +230,7 @@ void dftu_test_fs_ops(dftu_ctx* ctx, const dftu_plugin_host* h,
     memset(stats, 0, sizeof stats);
     expect_status(
         s, "stat_batch",
-        finish(s, fs->stat_batch(ctx, h->h, paths, 3, stats, statuses, &t), t),
+        finish(s, fs->stat_batch(ctx, h->h, paths, 3, stats, statuses, &t), &t),
         DFTU_OK, NULL);
     hn->expect("stat_batch of a file", statuses[0] == DFTU_OK &&
                                            stats[0].size == 11 &&
@@ -247,14 +251,14 @@ void dftu_test_fs_ops(dftu_ctx* ctx, const dftu_plugin_host* h,
                strstr(s->msg, "cannot allocate") != NULL);
 
     expect_failed(s, "remove of a directory that has entries",
-                  finish(s, fs->remove(ctx, h->h, sub, &flag, &t), t),
+                  finish(s, fs->remove(ctx, h->h, sub, &flag, &t), &t),
                   "remove");
     expect_status(s, "remove",
-                  finish(s, fs->remove(ctx, h->h, b, &flag, &t), t), DFTU_OK,
+                  finish(s, fs->remove(ctx, h->h, b, &flag, &t), &t), DFTU_OK,
                   NULL);
     hn->expect("remove removed it", flag == 1);
     expect_status(s, "remove of a missing path",
-                  finish(s, fs->remove(ctx, h->h, b, &flag, &t), t), DFTU_OK,
+                  finish(s, fs->remove(ctx, h->h, b, &flag, &t), &t), DFTU_OK,
                   NULL);
     hn->expect("remove of a missing path gives 0", flag == 0);
     expect_status(s, "remove with a NULL path",

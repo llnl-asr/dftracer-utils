@@ -172,7 +172,9 @@ class Fs {
         return AsyncOp{
             make_error(DFTU_E_UNSUPPORTED, "host lacks dftu.svc.fs")};
     }
-    AsyncOp done(dftu_status st, dftu_task* t) const {
+    // `t` by reference: callers write done(call(..., &t), t), and the order of
+    // argument evaluation is unspecified, so a copy could predate the call.
+    AsyncOp done(dftu_status st, dftu_task* const& t) const {
         if (st < 0) return AsyncOp{make_error(st)};
         return AsyncOp{t, h_};
     }

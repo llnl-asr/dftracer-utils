@@ -67,10 +67,12 @@ typedef struct {
     char msg[MSG_CAP];
 } scn;
 
-static dftu_status finish(scn* s, dftu_status st, dftu_task* t) {
+/* Takes the task by address: C leaves the order of argument evaluation open,
+ * so a plain `t` could be read before the op call sets it. */
+static dftu_status finish(scn* s, dftu_status st, dftu_task** t) {
     s->msg[0] = 0;
     if (st < 0) return st;
-    return s->hn->run(t, s->msg, MSG_CAP);
+    return s->hn->run(*t, s->msg, MSG_CAP);
 }
 
 static int expect_status(scn* s, const char* what, dftu_status got,
@@ -95,34 +97,34 @@ void dftu_test_io_fs_ops(dftu_ctx* ctx, const dftu_plugin_host* h,
     snprintf(missing, sizeof missing, "%s/fs_missing", dir);
     struct stat st;
 
-    expect_status(s, "mkdir", finish(s, io->mkdir(ctx, h->h, a, 0755, &t), t),
+    expect_status(s, "mkdir", finish(s, io->mkdir(ctx, h->h, a, 0755, &t), &t),
                   DFTU_OK, NULL);
     hn->expect("mkdir made a directory",
                stat(a, &st) == 0 && S_ISDIR(st.st_mode));
     expect_status(s, "mkdir twice fails",
-                  finish(s, io->mkdir(ctx, h->h, a, 0755, &t), t), DFTU_E_IO,
+                  finish(s, io->mkdir(ctx, h->h, a, 0755, &t), &t), DFTU_E_IO,
                   "mkdir");
 
-    expect_status(s, "rename", finish(s, io->rename(ctx, h->h, a, b, &t), t),
+    expect_status(s, "rename", finish(s, io->rename(ctx, h->h, a, b, &t), &t),
                   DFTU_OK, NULL);
     hn->expect("rename moved it", stat(a, &st) != 0 && stat(b, &st) == 0);
     expect_status(s, "rename of a missing path",
-                  finish(s, io->rename(ctx, h->h, missing, c, &t), t),
+                  finish(s, io->rename(ctx, h->h, missing, c, &t), &t),
                   DFTU_E_NOT_FOUND, "rename");
 
     expect_status(s, "symlinkat",
-                  finish(s, io->symlinkat(ctx, h->h, b, AT_FDCWD, l, &t), t),
+                  finish(s, io->symlinkat(ctx, h->h, b, AT_FDCWD, l, &t), &t),
                   DFTU_OK, NULL);
     hn->expect("symlinkat made a link",
                lstat(l, &st) == 0 && S_ISLNK(st.st_mode));
     expect_status(s, "symlinkat over an existing path",
-                  finish(s, io->symlinkat(ctx, h->h, b, AT_FDCWD, l, &t), t),
+                  finish(s, io->symlinkat(ctx, h->h, b, AT_FDCWD, l, &t), &t),
                   DFTU_E_IO, "symlinkat");
 
     expect_status(s, "unlink of the link",
-                  finish(s, io->unlink(ctx, h->h, l, &t), t), DFTU_OK, NULL);
+                  finish(s, io->unlink(ctx, h->h, l, &t), &t), DFTU_OK, NULL);
     expect_status(s, "unlink of a missing path",
-                  finish(s, io->unlink(ctx, h->h, missing, &t), t),
+                  finish(s, io->unlink(ctx, h->h, missing, &t), &t),
                   DFTU_E_NOT_FOUND, "unlink");
 
     int fd = open(c, O_CREAT | O_WRONLY | O_TRUNC, 0644);
@@ -131,33 +133,33 @@ void dftu_test_io_fs_ops(dftu_ctx* ctx, const dftu_plugin_host* h,
     snprintf(l, sizeof l, "%s/fs_hard", dir);
     expect_status(
         s, "linkat",
-        finish(s, io->linkat(ctx, h->h, AT_FDCWD, c, AT_FDCWD, l, 0, &t), t),
+        finish(s, io->linkat(ctx, h->h, AT_FDCWD, c, AT_FDCWD, l, 0, &t), &t),
         DFTU_OK, NULL);
     hn->expect("linkat made a second name",
                stat(l, &st) == 0 && st.st_nlink == 2);
     expect_status(
         s, "linkat of a missing path",
         finish(s, io->linkat(ctx, h->h, AT_FDCWD, missing, AT_FDCWD, a, 0, &t),
-               t),
+               &t),
         DFTU_E_NOT_FOUND, "linkat");
     unlink(l);
 
     fd = open(c, O_RDWR);
     expect_status(s, "fadvise",
-                  finish(s, io->fadvise(ctx, h->h, fd, 0, 0, 0, &t), t),
+                  finish(s, io->fadvise(ctx, h->h, fd, 0, 0, 0, &t), &t),
                   DFTU_OK, NULL);
 #ifdef __linux__
     expect_status(s, "fadvise on a bad descriptor",
-                  finish(s, io->fadvise(ctx, h->h, -1, 0, 0, 0, &t), t),
+                  finish(s, io->fadvise(ctx, h->h, -1, 0, 0, 0, &t), &t),
                   DFTU_E_INVALID, "fadvise");
 #endif
     if (fd >= 0) close(fd);
     unlink(c);
 
-    expect_status(s, "rmdir", finish(s, io->rmdir(ctx, h->h, b, &t), t),
+    expect_status(s, "rmdir", finish(s, io->rmdir(ctx, h->h, b, &t), &t),
                   DFTU_OK, NULL);
     expect_status(s, "rmdir of a missing path",
-                  finish(s, io->rmdir(ctx, h->h, b, &t), t), DFTU_E_NOT_FOUND,
+                  finish(s, io->rmdir(ctx, h->h, b, &t), &t), DFTU_E_NOT_FOUND,
                   "rmdir");
     expect_status(s, "unlink with a NULL path", io->unlink(ctx, h->h, NULL, &t),
                   DFTU_E_INVALID, NULL);
@@ -173,15 +175,15 @@ void dftu_test_io_socket_ops(dftu_ctx* ctx, const dftu_plugin_host* h,
 
     expect_status(
         s, "socket",
-        finish(s, io->socket(ctx, h->h, AF_INET, SOCK_STREAM, 0, &srv, &t), t),
+        finish(s, io->socket(ctx, h->h, AF_INET, SOCK_STREAM, 0, &srv, &t), &t),
         DFTU_OK, NULL);
     expect_status(
         s, "socket",
-        finish(s, io->socket(ctx, h->h, AF_INET, SOCK_STREAM, 0, &cli, &t), t),
+        finish(s, io->socket(ctx, h->h, AF_INET, SOCK_STREAM, 0, &cli, &t), &t),
         DFTU_OK, NULL);
     expect_status(
         s, "socket with a bad domain",
-        finish(s, io->socket(ctx, h->h, 9999, SOCK_STREAM, 0, &conn, &t), t),
+        finish(s, io->socket(ctx, h->h, 9999, SOCK_STREAM, 0, &conn, &t), &t),
         DFTU_E_IO, "socket");
     if (srv < 0 || cli < 0) return;
 
@@ -193,21 +195,21 @@ void dftu_test_io_socket_ops(dftu_ctx* ctx, const dftu_plugin_host* h,
                        finish(s,
                               io->bind(ctx, h->h, srv, (struct sockaddr*)&addr,
                                        sizeof addr, &t),
-                              t),
+                              &t),
                        DFTU_OK, NULL))
         return;
     expect_status(s, "bind on a bad descriptor",
                   finish(s,
                          io->bind(ctx, h->h, -1, (struct sockaddr*)&addr,
                                   sizeof addr, &t),
-                         t),
+                         &t),
                   DFTU_E_INVALID, "bind");
     if (!expect_status(s, "listen",
-                       finish(s, io->listen(ctx, h->h, srv, 4, &t), t), DFTU_OK,
-                       NULL))
+                       finish(s, io->listen(ctx, h->h, srv, 4, &t), &t),
+                       DFTU_OK, NULL))
         return;
     expect_status(s, "listen on a bad descriptor",
-                  finish(s, io->listen(ctx, h->h, -1, 4, &t), t),
+                  finish(s, io->listen(ctx, h->h, -1, 4, &t), &t),
                   DFTU_E_INVALID, "listen");
 
     socklen_t len = sizeof addr;
@@ -218,21 +220,21 @@ void dftu_test_io_socket_ops(dftu_ctx* ctx, const dftu_plugin_host* h,
             finish(s,
                    io->connect(ctx, h->h, cli, (struct sockaddr*)&addr,
                                sizeof addr, &t),
-                   t),
+                   &t),
             DFTU_OK, NULL))
         return;
     expect_status(s, "connect on a bad descriptor",
                   finish(s,
                          io->connect(ctx, h->h, -1, (struct sockaddr*)&addr,
                                      sizeof addr, &t),
-                         t),
+                         &t),
                   DFTU_E_INVALID, "connect");
     expect_status(s, "connect with a NULL address",
                   io->connect(ctx, h->h, cli, NULL, 0, &t), DFTU_E_INVALID,
                   NULL);
     expect_status(
         s, "accept",
-        finish(s, io->accept(ctx, h->h, srv, NULL, NULL, &conn, &t), t),
+        finish(s, io->accept(ctx, h->h, srv, NULL, NULL, &conn, &t), &t),
         DFTU_OK, NULL);
     if (conn < 0) return;
 
@@ -245,18 +247,18 @@ void dftu_test_io_socket_ops(dftu_ctx* ctx, const dftu_plugin_host* h,
     int64_t sent = 0;
     expect_status(
         s, "sendmsg",
-        finish(s, io->sendmsg(ctx, h->h, cli, &out_msg, 0, &sent, &t), t),
+        finish(s, io->sendmsg(ctx, h->h, cli, &out_msg, 0, &sent, &t), &t),
         DFTU_OK, NULL);
     hn->expect("sendmsg sent four bytes", sent == 4);
     expect_status(
         s, "sendmsg on a bad descriptor",
-        finish(s, io->sendmsg(ctx, h->h, -1, &out_msg, 0, &sent, &t), t),
+        finish(s, io->sendmsg(ctx, h->h, -1, &out_msg, 0, &sent, &t), &t),
         DFTU_E_INVALID, "sendmsg");
 
     uint32_t happened = 0;
     expect_status(
         s, "poll_add",
-        finish(s, io->poll_add(ctx, h->h, conn, POLLIN, &happened, &t), t),
+        finish(s, io->poll_add(ctx, h->h, conn, POLLIN, &happened, &t), &t),
         DFTU_OK, NULL);
     hn->expect("poll_add saw POLLIN", (happened & POLLIN) != 0);
 
@@ -269,24 +271,24 @@ void dftu_test_io_socket_ops(dftu_ctx* ctx, const dftu_plugin_host* h,
     int64_t got = 0;
     expect_status(
         s, "recvmsg",
-        finish(s, io->recvmsg(ctx, h->h, conn, &in_msg, 0, &got, &t), t),
+        finish(s, io->recvmsg(ctx, h->h, conn, &in_msg, 0, &got, &t), &t),
         DFTU_OK, NULL);
     hn->expect("recvmsg got the message",
                got == 4 && memcmp(in_buf, "ping", 4) == 0);
     expect_status(
         s, "recvmsg on a bad descriptor",
-        finish(s, io->recvmsg(ctx, h->h, -1, &in_msg, 0, &got, &t), t),
+        finish(s, io->recvmsg(ctx, h->h, -1, &in_msg, 0, &got, &t), &t),
         DFTU_E_INVALID, "recvmsg");
 
     expect_status(s, "shutdown",
-                  finish(s, io->shutdown(ctx, h->h, cli, SHUT_WR, &t), t),
+                  finish(s, io->shutdown(ctx, h->h, cli, SHUT_WR, &t), &t),
                   DFTU_OK, NULL);
     expect_status(s, "shutdown on a bad descriptor",
-                  finish(s, io->shutdown(ctx, h->h, -1, SHUT_WR, &t), t),
+                  finish(s, io->shutdown(ctx, h->h, -1, SHUT_WR, &t), &t),
                   DFTU_E_INVALID, "shutdown");
     expect_status(
         s, "poll_add on a bad descriptor",
-        finish(s, io->poll_add(ctx, h->h, -1, POLLIN, &happened, &t), t),
+        finish(s, io->poll_add(ctx, h->h, -1, POLLIN, &happened, &t), &t),
         DFTU_E_INVALID, "poll_add");
 
     close(conn);
@@ -353,36 +355,37 @@ void dftu_test_io_linux_ops(dftu_ctx* ctx, const dftu_plugin_host* h,
 
     expect_status(
         s, "statx",
-        finish(s, io->statx(ctx, h->h, AT_FDCWD, path, 0, 0xfff, &sx, &t), t),
+        finish(s, io->statx(ctx, h->h, AT_FDCWD, path, 0, 0xfff, &sx, &t), &t),
         DFTU_OK, NULL);
     hn->expect("statx size", sx.size == 10);
     expect_status(
         s, "statx of a missing path",
         finish(s, io->statx(ctx, h->h, AT_FDCWD, missing, 0, 0xfff, &sx, &t),
-               t),
+               &t),
         DFTU_E_NOT_FOUND, "statx");
 
     expect_status(s, "fallocate",
-                  finish(s, io->fallocate(ctx, h->h, f, 0, 0, 4096, &t), t),
+                  finish(s, io->fallocate(ctx, h->h, f, 0, 0, 4096, &t), &t),
                   DFTU_OK, NULL);
     expect_status(s, "fallocate on a bad descriptor",
-                  finish(s, io->fallocate(ctx, h->h, -1, 0, 0, 4096, &t), t),
+                  finish(s, io->fallocate(ctx, h->h, -1, 0, 0, 4096, &t), &t),
                   DFTU_E_INVALID, "fallocate");
     expect_status(s, "sync_file_range",
-                  finish(s, io->sync_file_range(ctx, h->h, f, 0, 0, 0, &t), t),
+                  finish(s, io->sync_file_range(ctx, h->h, f, 0, 0, 0, &t), &t),
                   DFTU_OK, NULL);
-    expect_status(s, "sync_file_range on a bad descriptor",
-                  finish(s, io->sync_file_range(ctx, h->h, -1, 0, 0, 0, &t), t),
-                  DFTU_E_INVALID, "sync_file_range");
+    expect_status(
+        s, "sync_file_range on a bad descriptor",
+        finish(s, io->sync_file_range(ctx, h->h, -1, 0, 0, 0, &t), &t),
+        DFTU_E_INVALID, "sync_file_range");
 
-    expect_status(s, "pipe", finish(s, io->pipe(ctx, h->h, fds, 0, &t), t),
+    expect_status(s, "pipe", finish(s, io->pipe(ctx, h->h, fds, 0, &t), &t),
                   DFTU_OK, NULL);
     expect_status(s, "pipe with bad flags",
-                  finish(s, io->pipe(ctx, h->h, fds, ~0, &t), t),
+                  finish(s, io->pipe(ctx, h->h, fds, ~0, &t), &t),
                   DFTU_E_INVALID, "pipe");
     int32_t fds2[2] = {-1, -1};
     expect_status(s, "second pipe",
-                  finish(s, io->pipe(ctx, h->h, fds2, 0, &t), t), DFTU_OK,
+                  finish(s, io->pipe(ctx, h->h, fds2, 0, &t), &t), DFTU_OK,
                   NULL);
     if (fds[0] >= 0 && fds2[0] >= 0) {
         int64_t off = 2;
@@ -390,13 +393,13 @@ void dftu_test_io_linux_ops(dftu_ctx* ctx, const dftu_plugin_host* h,
             s, "splice file to pipe",
             finish(s,
                    io->splice(ctx, h->h, f, &off, fds[1], NULL, 4, 0, &n, &t),
-                   t),
+                   &t),
             DFTU_OK, NULL);
         hn->expect("splice moved four bytes and advanced the offset",
                    n == 4 && off == 6);
         expect_status(
             s, "tee",
-            finish(s, io->tee(ctx, h->h, fds[0], fds2[1], 4, 0, &n, &t), t),
+            finish(s, io->tee(ctx, h->h, fds[0], fds2[1], 4, 0, &n, &t), &t),
             DFTU_OK, NULL);
         hn->expect("tee copied four bytes", n == 4);
         char buf[8] = {0};
@@ -407,44 +410,44 @@ void dftu_test_io_linux_ops(dftu_ctx* ctx, const dftu_plugin_host* h,
     }
     expect_status(
         s, "splice on a bad descriptor",
-        finish(s, io->splice(ctx, h->h, -1, NULL, -1, NULL, 4, 0, &n, &t), t),
+        finish(s, io->splice(ctx, h->h, -1, NULL, -1, NULL, 4, 0, &n, &t), &t),
         DFTU_E_INVALID, "splice");
     expect_status(s, "tee on a bad descriptor",
-                  finish(s, io->tee(ctx, h->h, -1, -1, 4, 0, &n, &t), t),
+                  finish(s, io->tee(ctx, h->h, -1, -1, 4, 0, &n, &t), &t),
                   DFTU_E_INVALID, "tee");
 
     expect_status(
         s, "openat2",
-        finish(s, io->openat2(ctx, h->h, AT_FDCWD, path, &how, &fd, &t), t),
+        finish(s, io->openat2(ctx, h->h, AT_FDCWD, path, &how, &fd, &t), &t),
         DFTU_OK, NULL);
     expect_status(
         s, "openat2 of a missing path",
-        finish(s, io->openat2(ctx, h->h, AT_FDCWD, missing, &how, &fd, &t), t),
+        finish(s, io->openat2(ctx, h->h, AT_FDCWD, missing, &how, &fd, &t), &t),
         DFTU_E_NOT_FOUND, "openat2");
     if (fd >= 0) close(fd);
 
     /* A file system without user xattrs gives ENOTSUP, which is UNSUPPORTED. */
     dftu_status set = finish(
-        s, io->setxattr(ctx, h->h, path, "user.dftu", "val", 3, 0, &t), t);
+        s, io->setxattr(ctx, h->h, path, "user.dftu", "val", 3, 0, &t), &t);
     hn->expect("setxattr", set == DFTU_OK || set == DFTU_E_UNSUPPORTED);
     if (set == DFTU_OK) {
         expect_status(
             s, "getxattr",
             finish(s,
                    io->getxattr(ctx, h->h, path, "user.dftu", value, 8, &n, &t),
-                   t),
+                   &t),
             DFTU_OK, NULL);
         hn->expect("getxattr value", n == 3 && memcmp(value, "val", 3) == 0);
         expect_status(
             s, "fsetxattr",
             finish(s, io->fsetxattr(ctx, h->h, f, "user.dftu2", "xy", 2, 0, &t),
-                   t),
+                   &t),
             DFTU_OK, NULL);
         expect_status(
             s, "fgetxattr",
             finish(s,
                    io->fgetxattr(ctx, h->h, f, "user.dftu2", value, 8, &n, &t),
-                   t),
+                   &t),
             DFTU_OK, NULL);
         hn->expect("fgetxattr value", n == 2 && memcmp(value, "xy", 2) == 0);
     }
@@ -452,21 +455,21 @@ void dftu_test_io_linux_ops(dftu_ctx* ctx, const dftu_plugin_host* h,
         s, "getxattr of a missing path",
         finish(s,
                io->getxattr(ctx, h->h, missing, "user.dftu", value, 8, &n, &t),
-               t),
+               &t),
         DFTU_E_NOT_FOUND, "getxattr");
     expect_status(
         s, "setxattr of a missing path",
         finish(s, io->setxattr(ctx, h->h, missing, "user.dftu", "v", 1, 0, &t),
-               t),
+               &t),
         DFTU_E_NOT_FOUND, "setxattr");
     expect_status(
         s, "fgetxattr on a bad descriptor",
         finish(s, io->fgetxattr(ctx, h->h, -1, "user.dftu", value, 8, &n, &t),
-               t),
+               &t),
         DFTU_E_INVALID, "fgetxattr");
     expect_status(
         s, "fsetxattr on a bad descriptor",
-        finish(s, io->fsetxattr(ctx, h->h, -1, "user.dftu", "v", 1, 0, &t), t),
+        finish(s, io->fsetxattr(ctx, h->h, -1, "user.dftu", "v", 1, 0, &t), &t),
         DFTU_E_INVALID, "fsetxattr");
 
     if (f >= 0) close(f);

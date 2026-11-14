@@ -29,8 +29,10 @@ namespace detail {
 
 /// The op of a task a service call started; when the call failed, an op that
 /// fails with its status when awaited.
+/// `t` is taken by reference: callers write started(h, call(..., &t), t), and
+/// the order of argument evaluation is unspecified.
 inline AsyncOp started(const dftu_plugin_host* host, dftu_status st,
-                       dftu_task* t) {
+                       dftu_task* const& t) {
     if (st < 0) return AsyncOp{make_error(st)};
     return AsyncOp{t, host};
 }

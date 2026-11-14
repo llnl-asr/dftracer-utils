@@ -46,11 +46,14 @@ class UdafStates::Block {
 };
 
 UdafStates::UdafStates(UdafBinding binding)
+    : UdafStates(dstd::make_shared<const UdafBinding>(std::move(binding))) {}
+
+UdafStates::UdafStates(dstd::SharedPtr<const UdafBinding> binding)
     : binding_(std::move(binding)),
-      stride_((binding_.udaf().desc().state_size +
-               binding_.udaf().desc().state_align - 1) /
-              binding_.udaf().desc().state_align *
-              binding_.udaf().desc().state_align),
+      stride_((binding_->udaf().desc().state_size +
+               binding_->udaf().desc().state_align - 1) /
+              binding_->udaf().desc().state_align *
+              binding_->udaf().desc().state_align),
       per_block_(std::max<std::size_t>(1, BLOCK_BYTES / stride_)) {}
 
 UdafStates::UdafStates(UdafStates&& other) noexcept
@@ -59,6 +62,7 @@ UdafStates::UdafStates(UdafStates&& other) noexcept
       scratch_(std::move(other.scratch_)),
       stride_(other.stride_),
       per_block_(other.per_block_),
+      first_block_(other.first_block_),
       count_(other.count_) {
     other.count_ = 0;
 }
@@ -67,8 +71,11 @@ UdafStates::~UdafStates() { destroy_all(); }
 
 void* UdafStates::state_at(std::int64_t group) const noexcept {
     const auto g = static_cast<std::size_t>(group);
-    return static_cast<char*>(blocks_[g / per_block_].data()) +
-           (g % per_block_) * stride_;
+    if (g < first_block_)
+        return static_cast<char*>(blocks_[0].data()) + g * stride_;
+    const std::size_t rest = g - first_block_;
+    return static_cast<char*>(blocks_[1 + rest / per_block_].data()) +
+           (rest % per_block_) * stride_;
 }
 
 void UdafStates::fill_all(dstd::Vector<void*>& out) const {
@@ -79,7 +86,7 @@ void UdafStates::fill_all(dstd::Vector<void*>& out) const {
 
 void UdafStates::destroy_all() noexcept {
     if (count_ == 0) return;
-    const dftu_udaf_desc& d = binding_.udaf().desc();
+    const dftu_udaf_desc& d = binding_->udaf().desc();
     if (d.destroy != nullptr) {
         for (std::int64_t from = 0; from < count_;
              from += static_cast<std::int64_t>(DESTROY_CHUNK)) {
@@ -88,7 +95,7 @@ void UdafStates::destroy_all() noexcept {
             scratch_.clear();
             for (std::int64_t g = from; g < to; ++g)
                 scratch_.push_back(state_at(g));
-            d.destroy(binding_.bound(), scratch_.data(), scratch_.size());
+            d.destroy(binding_->bound(), scratch_.data(), scratch_.size());
         }
     }
     count_ = 0;
@@ -98,32 +105,39 @@ void UdafStates::destroy_all() noexcept {
 dstd::Result<void> UdafStates::grow(std::int64_t groups) {
     if (groups <= count_) return {};
     const auto wanted = static_cast<std::size_t>(groups);
-    const std::size_t block_bytes = per_block_ * stride_;
-    const std::size_t block_count = (wanted + per_block_ - 1) / per_block_;
+    // The first block holds only the groups asked for, up to a full block, so
+    // a table of one group does not zero a whole block.
+    if (blocks_.empty()) first_block_ = std::min(wanted, per_block_);
+    const std::size_t block_count =
+        wanted <= first_block_
+            ? 1
+            : 1 + (wanted - first_block_ + per_block_ - 1) / per_block_;
     blocks_.reserve(block_count);
     while (blocks_.size() < block_count) {
-        Block block(block_bytes, binding_.udaf().desc().state_align);
+        const std::size_t block_bytes =
+            (blocks_.empty() ? first_block_ : per_block_) * stride_;
+        Block block(block_bytes, binding_->udaf().desc().state_align);
         if (block.data() == nullptr)
             return dstd::Unexpected(dstd::Error::from_format<
                                     "udaf '{}' cannot allocate {} bytes of "
                                     "state">(dstd::Condition::OutOfMemory,
-                                             binding_.udaf().name(),
+                                             binding_->udaf().name(),
                                              block_bytes));
         blocks_.push_back(std::move(block));
     }
     scratch_.clear();
     for (std::int64_t g = count_; g < groups; ++g)
         scratch_.push_back(state_at(g));
-    binding_.udaf().desc().init(binding_.bound(), scratch_.data(),
-                                scratch_.size());
+    binding_->udaf().desc().init(binding_->bound(), scratch_.data(),
+                                 scratch_.size());
     count_ = groups;
     return {};
 }
 
 dstd::Result<void> UdafStates::update(dstd::Span<const std::int64_t> gids,
                                       dstd::Span<const Series* const> args) {
-    const UdafRecord& u = binding_.udaf();
-    if (args.size() != binding_.arg_count())
+    const UdafRecord& u = binding_->udaf();
+    if (args.size() != binding_->arg_count())
         return fail(u, "bound for a different number of arguments");
     const std::size_t rows = gids.size();
     for (const Series* arg : args)
@@ -158,7 +172,7 @@ dstd::Result<void> UdafStates::update(dstd::Span<const std::int64_t> gids,
 
     CallContext ctx;
     const dftu_status status = u.desc().update(
-        ctx.get(), binding_.bound(), scratch_.data(), handles.data(),
+        ctx.get(), binding_->bound(), scratch_.data(), handles.data(),
         static_cast<std::uint32_t>(handles.size()), rows);
     if (status < 0)
         return dstd::Unexpected(
@@ -166,40 +180,55 @@ dstd::Result<void> UdafStates::update(dstd::Span<const std::int64_t> gids,
     return {};
 }
 
-dstd::Result<void> UdafStates::combine_from(
-    UdafStates& other, dstd::Span<const std::int64_t> mapping) {
-    const UdafRecord& u = binding_.udaf();
-    if (&other == this || &other.binding_.udaf() != &u)
+dstd::Result<void> UdafStates::combine_pairs(
+    const UdafStates& other, dstd::Span<const std::int64_t> into,
+    dstd::Span<const std::int64_t> from) {
+    const UdafRecord& u = binding_->udaf();
+    if (&other == this || &other.binding_->udaf() != &u)
         return fail(u, "can only combine with another table of the same udaf");
-    if (mapping.size() != static_cast<std::size_t>(other.count_))
-        return fail(u, "combine needs one target group per source group");
-    if (other.count_ == 0) return {};
-    dstd::Vector<void*> from;
-    other.fill_all(from);
-    scratch_.resize(mapping.size());
-    for (std::size_t i = 0; i < mapping.size(); ++i) {
-        if (mapping[i] < 0 || mapping[i] >= count_)
+    if (into.size() != from.size())
+        return fail(u, "combine needs one source group per target group");
+    if (into.empty()) return {};
+    dstd::Vector<void*> sources(from.size());
+    scratch_.resize(into.size());
+    for (std::size_t i = 0; i < into.size(); ++i) {
+        if (into[i] < 0 || into[i] >= count_ || from[i] < 0 ||
+            from[i] >= other.count_)
             return fail(u, "combine names a group that grow did not make");
-        scratch_[i] = state_at(mapping[i]);
+        scratch_[i] = state_at(into[i]);
+        sources[i] = other.state_at(from[i]);
     }
     CallContext ctx;
     const dftu_status status =
-        u.desc().combine(ctx.get(), binding_.bound(), scratch_.data(),
-                         from.data(), mapping.size());
+        u.desc().combine(ctx.get(), binding_->bound(), scratch_.data(),
+                         sources.data(), into.size());
     if (status < 0)
         return dstd::Unexpected(
             call_error("udaf", u.name(), "combine", status, ctx));
+    return {};
+}
+
+dstd::Result<void> UdafStates::combine_from(
+    UdafStates& other, dstd::Span<const std::int64_t> mapping) {
+    const UdafRecord& u = binding_->udaf();
+    if (mapping.size() != static_cast<std::size_t>(other.count_))
+        return fail(u, "combine needs one target group per source group");
+    dstd::Vector<std::int64_t> from(mapping.size());
+    for (std::size_t i = 0; i < from.size(); ++i)
+        from[i] = static_cast<std::int64_t>(i);
+    dstd::Result<void> merged = combine_pairs(other, mapping, from);
+    if (!merged) return merged;
     other.destroy_all();
     return {};
 }
 
 dstd::Result<Series> UdafStates::finalize() {
-    const UdafRecord& u = binding_.udaf();
+    const UdafRecord& u = binding_->udaf();
     fill_all(scratch_);
     CallContext ctx;
     dftu_series* produced = nullptr;
     const dftu_status status =
-        u.desc().finalize(ctx.get(), binding_.bound(), scratch_.data(),
+        u.desc().finalize(ctx.get(), binding_->bound(), scratch_.data(),
                           scratch_.size(), &produced);
     Series out(produced);
     if (status < 0)
@@ -217,7 +246,7 @@ dstd::Result<Series> UdafStates::finalize() {
 
 dstd::Result<void> UdafStates::serialize(std::int64_t group,
                                          dstd::String& out) const {
-    const UdafRecord& u = binding_.udaf();
+    const UdafRecord& u = binding_->udaf();
     if (group < 0 || group >= count_)
         return fail(u, "serialize: no such group");
     const dftu_udaf_desc& d = u.desc();
@@ -227,7 +256,7 @@ dstd::Result<void> UdafStates::serialize(std::int64_t group,
     }
     CallContext ctx;
     std::uint64_t need = 0;
-    dftu_status status = d.serialize(ctx.get(), binding_.bound(),
+    dftu_status status = d.serialize(ctx.get(), binding_->bound(),
                                      state_at(group), nullptr, 0, &need);
     if (status < 0)
         return dstd::Unexpected(
@@ -235,7 +264,7 @@ dstd::Result<void> UdafStates::serialize(std::int64_t group,
     const std::size_t offset = out.size();
     out.resize(offset + need);
     std::uint64_t written = need;
-    status = d.serialize(ctx.get(), binding_.bound(), state_at(group),
+    status = d.serialize(ctx.get(), binding_->bound(), state_at(group),
                          reinterpret_cast<std::uint8_t*>(out.data()) + offset,
                          need, &written);
     if (status >= 0 && written != need) {
@@ -252,7 +281,7 @@ dstd::Result<void> UdafStates::serialize(std::int64_t group,
 
 dstd::Result<void> UdafStates::deserialize(std::int64_t group,
                                            dstd::StringView bytes) {
-    const UdafRecord& u = binding_.udaf();
+    const UdafRecord& u = binding_->udaf();
     if (group < 0 || group >= count_)
         return fail(u, "deserialize: no such group");
     const dftu_udaf_desc& d = u.desc();
@@ -264,7 +293,7 @@ dstd::Result<void> UdafStates::deserialize(std::int64_t group,
     }
     CallContext ctx;
     const dftu_status status =
-        d.deserialize(ctx.get(), binding_.bound(),
+        d.deserialize(ctx.get(), binding_->bound(),
                       reinterpret_cast<const std::uint8_t*>(bytes.data()),
                       bytes.size(), state_at(group));
     if (status < 0)

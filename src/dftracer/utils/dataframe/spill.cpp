@@ -1082,6 +1082,7 @@ dstd::Result<dstd::UniquePtr<Cursor>> Spool::reverse_reader() {
 
 dstd::Result<void> write_agg_run(AggState& state, const dstd::String& path) {
     agg_sort_groups(state);
+    if (dstd::Result<void> checked = agg_check(state); !checked) return checked;
     dstd::ScopedFile os(open_file(path, "wb"));
     if (!os)
         return common::make_error<"agg spill: cannot open run {}">(
@@ -1090,8 +1091,10 @@ dstd::Result<void> write_agg_run(AggState& state, const dstd::String& path) {
         common::ScopedSpillSubdir::charge_for(dstd::PathView(path));
     const std::int64_t ng = agg_group_count(state);
     for (std::int64_t g = 0; g < ng; ++g) {
-        const dstd::String blob =
-            agg_serialize(*agg_extract_group(state, g), true);
+        const AggStatePtr one = agg_extract_group(state, g);
+        const dstd::String blob = agg_serialize(*one, true);
+        if (dstd::Result<void> checked = agg_check(*one); !checked)
+            return checked;
         if (blob.size() > std::numeric_limits<std::uint32_t>::max())
             dstd::fatal("agg spill: a group state is over 4 GiB");
         const std::uint32_t len = static_cast<std::uint32_t>(blob.size());
@@ -1146,7 +1149,7 @@ dstd::Result<void> AggRunReader::advance() {
     if (std::fread(blob.data(), 1, len, is_.get()) != len)
         return common::make_error<"agg spill: truncated run">(
             common::ErrorCode::Io);
-    auto state = agg_deserialize(blob, true);
+    auto state = agg_deserialize(blob, true, cur_.get());
     if (!state) return state.error();
     cur_ = std::move(*state);
     valid_ = true;

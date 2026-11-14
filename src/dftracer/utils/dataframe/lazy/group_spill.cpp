@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/coro/executor.h>
+#include <dftracer/utils/dataframe/agg/lower.h>
 #include <dftracer/utils/dataframe/internal/errors.h>
 #include <dftracer/utils/dataframe/internal/governor.h>
 #include <dftracer/utils/dataframe/lazy/cursors.h>
@@ -14,6 +15,7 @@
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 
+#include <algorithm>
 #include <cstdio>
 
 namespace dftracer::utils::dataframe {
@@ -147,15 +149,8 @@ class GroupByCursor : public Cursor {
             return idx;
         };
         specs_.reserve(aggs_.size());
-        for (const GroupAgg& a : aggs_) {
-            AggSpec sp;
-            sp.op = to_agg_op(a.op);
-            sp.out = a.out;
-            sp.param = a.param;
-            sp.value_col = sp.op == AggOp::Count ? -1 : resolve(a.column);
-            if (agg_uses_by_col(sp.op)) sp.by_col = resolve(a.by);
-            specs_.push_back(std::move(sp));
-        }
+        for (const GroupAgg& a : aggs_)
+            specs_.push_back(*lower_group_agg(a, resolve));
         if (resolve_error) co_return *resolve_error;
 
         // Dyn columns are the prefix-tagged plan columns, and the
@@ -241,6 +236,8 @@ class GroupByCursor : public Cursor {
 
         if (!spilled_) {
             DataFrame r = agg_finalize(*state, keys_);
+            if (dstd::Result<void> checked = agg_check(*state); !checked)
+                co_return checked;
             out_names_ = dstd::to_strings(r.names);
             result_ = to_morsel(r);
         } else {
@@ -288,8 +285,10 @@ class GroupByCursor : public Cursor {
         const auto split = agg_split_groups(state, out.size(), salt);
         for (std::size_t p = 0; p < split.size(); ++p) {
             if (split[p].empty()) continue;
-            const dstd::String blob =
-                agg_serialize(*agg_extract_groups(state, split[p]), true);
+            const AggStatePtr piece = agg_extract_groups(state, split[p]);
+            const dstd::String blob = agg_serialize(*piece, true);
+            if (dstd::Result<void> checked = agg_check(*piece); !checked)
+                return checked;
             if (blob.size() > std::numeric_limits<std::uint32_t>::max())
                 return common::make_error<
                     "group_by spill: a part holds over 4 GiB of group "
@@ -307,10 +306,11 @@ class GroupByCursor : public Cursor {
     }
 
     // Reads blobs in batches of about `limit` bytes, deserializes each batch
-    // in parallel and calls `fn` on it until it returns false.
+    // in parallel (in turn for a UDAF that is not parallel safe) and calls
+    // `fn` on it until it returns false.
     template <class F>
-    static dstd::Result<void> read_batches(const dstd::String& path,
-                                           std::uint64_t limit, F&& fn) {
+    dstd::Result<void> read_batches(const dstd::String& path,
+                                    std::uint64_t limit, F&& fn) const {
         dstd::ScopedFile is;
         std::uint64_t file_size = 0;
         {
@@ -333,21 +333,42 @@ class GroupByCursor : public Cursor {
         // Returns whether to keep reading; `failed` holds an error that ended
         // the read.
         dstd::Optional<dstd::Error> failed;
+        // A UDAF without DFTU_AGG_PARALLEL_SAFE runs on one thread at a time,
+        // bind and deserialize included, so its blobs are read in turn.
+        const bool serial = agg_specs_serial(specs_);
+        const bool has_udaf =
+            std::any_of(specs_.begin(), specs_.end(),
+                        [](const AggSpec& sp) { return sp.op == AggOp::Udaf; });
+        // An empty state that holds the bindings of the first blob, so the
+        // other blobs do not bind again.
+        AggStatePtr bound;
         auto flush = [&] {
             if (raw.empty()) return true;
             dstd::Vector<AggStatePtr> states(raw.size());
             dstd::Vector<dstd::Optional<dstd::Error>> bad(raw.size());
-            parallel_for(static_cast<std::int64_t>(raw.size()), 1,
-                         [&](std::int64_t b, std::int64_t e) {
-                             for (std::int64_t j = b; j < e; ++j) {
-                                 const auto z = static_cast<std::size_t>(j);
-                                 auto state = agg_deserialize(raw[z], true);
-                                 if (state)
-                                     states[z] = std::move(*state);
-                                 else
-                                     bad[z] = state.error();
-                             }
-                         });
+            auto load = [&](std::size_t z) {
+                auto state = agg_deserialize(raw[z], true, bound.get());
+                if (state)
+                    states[z] = std::move(*state);
+                else
+                    bad[z] = state.error();
+                return state.has_value();
+            };
+            std::size_t first = 0;
+            if (has_udaf && !bound) {
+                first = load(0) ? 1 : raw.size();
+                if (first == 1) bound = agg_extract_groups(*states[0], {});
+            }
+            if (serial) {
+                for (std::size_t z = first; z < raw.size(); ++z)
+                    if (!load(z)) break;
+            } else {
+                parallel_for(static_cast<std::int64_t>(raw.size() - first), 1,
+                             [&](std::int64_t b, std::int64_t e) {
+                                 for (std::int64_t j = b; j < e; ++j)
+                                     load(first + static_cast<std::size_t>(j));
+                             });
+            }
             raw.clear();
             have = 0;
             for (auto& b : bad)
@@ -437,6 +458,8 @@ class GroupByCursor : public Cursor {
             });
         if (write_failed) return *write_failed;
         if (!read) return read;
+        if (dstd::Result<void> checked = agg_check(*acc); !checked)
+            return checked;
         if (agg_group_count(*acc) > 0) {
             auto split = write_split(*acc, out, bytes, part.depth + 1);
             if (!split) return split;
@@ -486,6 +509,8 @@ class GroupByCursor : public Cursor {
             DataFrame r = dyn_specs_.empty()
                               ? agg_finalize(*merged, keys_)
                               : agg_finalize(*merged, keys_, layout_);
+            if (dstd::Result<void> checked = agg_check(*merged); !checked)
+                return checked.error();
             out_names_ = dstd::to_strings(r.names);
             chunks_.set(to_morsel(r));
         }
@@ -552,6 +577,8 @@ class GroupByDynamicCursor : public Cursor {
                 // The open windows, or a typed result with no rows.
                 auto sorted =
                     agg_finalize(*state_, time_col_).sort_by(time_col_, false);
+                if (dstd::Result<void> checked = agg_check(*state_); !checked)
+                    co_return checked.error();
                 if (!sorted) co_return sorted.error();
                 chunks_.set(morsel_of(std::move(*sorted)));
                 break;
@@ -612,6 +639,8 @@ class GroupByDynamicCursor : public Cursor {
     dstd::Result<void> close_windows() {
         if (!seen_ || agg_group_count(*state_) == 0) return {};
         DataFrame all = agg_finalize(*state_, time_col_);
+        if (dstd::Result<void> checked = agg_check(*state_); !checked)
+            return checked;
         const std::int64_t* start = all.columns.front().data<std::int64_t>();
         dstd::Vector<std::int64_t> closed, open;
         for (std::int64_t g = 0; g < all.num_rows(); ++g)
@@ -619,6 +648,8 @@ class GroupByDynamicCursor : public Cursor {
         if (closed.empty()) return {};
         AggStatePtr kept = agg_new(specs_);
         if (!open.empty()) agg_merge(*kept, *state_, open);
+        if (dstd::Result<void> checked = agg_check(*kept); !checked)
+            return checked;
         state_ = std::move(kept);
         DataFrame done;
         done.names = all.names;
@@ -693,15 +724,8 @@ CursorResult make_group_by_dynamic(dstd::UniquePtr<Cursor> in,
     };
     dstd::Vector<AggSpec> specs;
     specs.reserve(aggs.size());
-    for (const GroupAgg& a : aggs) {
-        AggSpec sp;
-        sp.op = to_agg_op(a.op);
-        sp.out = a.out;
-        sp.param = a.param;
-        sp.value_col = sp.op == AggOp::Count ? -1 : resolve(a.column);
-        if (agg_uses_by_col(sp.op)) sp.by_col = resolve(a.by);
-        specs.push_back(std::move(sp));
-    }
+    for (const GroupAgg& a : aggs)
+        specs.push_back(*lower_group_agg(a, resolve));
     if (resolve_error) return *resolve_error;
     return dstd::make_unique<GroupByDynamicCursor>(
         std::move(in), std::move(time_col), time_idx, std::move(value_idx),

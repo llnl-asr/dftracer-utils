@@ -28,7 +28,9 @@ enum {
     DFTU_AGG_STATE_POD = 1,
     /** Several state sets of the UDAF may be fed on different threads at once
        and merged with combine. A set itself is never used by two threads at
-       once. Advisory: the host decides whether to split a group by. */
+       once. Advisory: the host decides whether to split a group by. Without
+       the flag no callback of the UDAF runs on two threads at once, bind,
+       init, destroy, serialize, deserialize and free_bound included. */
     DFTU_AGG_PARALLEL_SAFE = 2,
     /** The UDAF provides retract and value, so a window can slide its frame. */
     DFTU_AGG_HAS_RETRACT = 4,
@@ -40,8 +42,12 @@ enum {
 
 /** A user-defined aggregate. The host copies the record and the name at
    registration, so the plugin may free its own copy. `self` of the
-   registration is passed to bind. bind runs once per call site, with the
-   argument types; the other callbacks then run on the `bound` it made.
+   registration is passed to bind. bind runs with the argument types for a
+   group-by, and again for each state set the host builds apart from the
+   first, such as a partial fed on another thread or states read back from a
+   spill; the other callbacks then run on the `bound` of the bind that made
+   their states. A `bound` is shared by every state set copied or merged from
+   its own, so its callbacks may run for several state sets.
    Every callback that gets `states` gets pointers to states of this UDAF only,
    each `state_size` bytes at `state_align`, valid until the host destroys
    them. A state never moves while it lives, unless the UDAF is

@@ -4,6 +4,7 @@
 
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dataframe/udaf_registry.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
@@ -16,11 +17,12 @@ namespace dftracer::utils::dataframe {
 
 /// The states of one bound UDAF for groups 0 to group_count() - 1.
 ///
-/// The states live in fixed blocks of aligned memory from the memory library,
+/// The states live in blocks of aligned memory from the memory library (the
+/// first block holds only the groups of the first grow, up to a full block),
 /// so the address of a state never changes while the table grows. The table
 /// holds its @ref UdafBinding, so the library behind the callbacks stays
 /// loaded while a state lives, and the destructor destroys every state before
-/// it releases the binding.
+/// it releases the binding. Several tables may share one binding.
 ///
 /// Not thread safe: one thread uses a table at a time. Tables of one UDAF may
 /// be fed on different threads and merged with @ref combine_from when the UDAF
@@ -28,6 +30,7 @@ namespace dftracer::utils::dataframe {
 class UdafStates {
    public:
     explicit UdafStates(UdafBinding binding);
+    explicit UdafStates(dstd::SharedPtr<const UdafBinding> binding);
     UdafStates(UdafStates&& other) noexcept;
     UdafStates& operator=(UdafStates&&) = delete;
     UdafStates(const UdafStates&) = delete;
@@ -35,9 +38,12 @@ class UdafStates {
     ~UdafStates();
 
     const DataType& result_type() const noexcept {
-        return binding_.result_type();
+        return binding_->result_type();
     }
-    const UdafRecord& udaf() const noexcept { return binding_.udaf(); }
+    const UdafRecord& udaf() const noexcept { return binding_->udaf(); }
+    const dstd::SharedPtr<const UdafBinding>& binding() const noexcept {
+        return binding_;
+    }
 
     std::int64_t group_count() const noexcept { return count_; }
 
@@ -61,6 +67,13 @@ class UdafStates {
     dstd::Result<void> combine_from(UdafStates& other,
                                     dstd::Span<const std::int64_t> mapping);
 
+    /// Merges group `from[i]` of `other` into group `into[i]` of this table,
+    /// for each i, in order; the two spans are the same size. `other` keeps
+    /// every state as it was. Both tables must hold the same UDAF.
+    dstd::Result<void> combine_pairs(const UdafStates& other,
+                                     dstd::Span<const std::int64_t> into,
+                                     dstd::Span<const std::int64_t> from);
+
     /// The result column: one row per group, of @ref result_type. The states
     /// stay as they are.
     dstd::Result<Series> finalize();
@@ -83,11 +96,12 @@ class UdafStates {
     void fill_all(dstd::Vector<void*>& out) const;
     void destroy_all() noexcept;
 
-    UdafBinding binding_;
+    dstd::SharedPtr<const UdafBinding> binding_;
     dstd::Vector<Block> blocks_;
     dstd::Vector<void*> scratch_;
     std::size_t stride_;
     std::size_t per_block_;
+    std::size_t first_block_ = 0;
     std::int64_t count_ = 0;
 };
 

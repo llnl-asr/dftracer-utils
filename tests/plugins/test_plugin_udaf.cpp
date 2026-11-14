@@ -396,6 +396,27 @@ TEST_CASE("states keep their value while the table grows past one block") {
     CHECK(out->data<std::int64_t>()[4999] == 4999);
 }
 
+TEST_CASE("a table of one group does not hold a whole block") {
+    auto set = load(UDAF_PLUGIN_PATH);
+    auto t = table_of("usum", TypeId::Int64);
+    REQUIRE(t.has_value());
+    REQUIRE(t->grow(1).has_value());
+    CHECK(t->approx_bytes() < 1024);
+
+    // Growing a group at a time crosses from the small first block into full
+    // blocks with every state where it was.
+    constexpr std::int64_t GROUPS = 3000;
+    for (std::int64_t g = 1; g <= GROUPS; ++g) {
+        REQUIRE(t->grow(g).has_value());
+        REQUIRE(feed(*t, {g - 1}, ints({g})).has_value());
+    }
+    auto out = t->finalize();
+    REQUIRE(out.has_value());
+    REQUIRE(out->length() == GROUPS);
+    for (std::int64_t g = 0; g < GROUPS; ++g)
+        CHECK(out->data<std::int64_t>()[g] == g + 1);
+}
+
 TEST_CASE("combine_from merges by a group mapping and empties the source") {
     auto set = load(UDAF_PLUGIN_PATH);
     auto a = table_of("udistinct", TypeId::Int64);

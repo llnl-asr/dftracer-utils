@@ -383,7 +383,9 @@ inline std::size_t accumulate_batch(std::uint64_t budget,
 // `state`, and calls `after(batch, state)` once per batch. A batch of one folds
 // straight into `state`; a larger one is folded morsel by morsel into partial
 // states in parallel (the mergeable agg IR) that are then merged, so the batch
-// size follows the size of a partial and memory stays near the budget.
+// size follows the size of a partial and memory stays near the budget. A state
+// that holds a UDAF which two threads must not feed at once takes the morsels
+// one at a time, with no partials.
 // `accumulate(state, morsel, row_base)` folds one morsel and returns a
 // dstd::Result<void>, as does `after`; `make()` makes a
 // fresh state, `active()` says whether folding is still wanted and
@@ -417,9 +419,11 @@ inline coro::CoroTask<dstd::Result<void>> accumulate_batches(
             rows_seen += m.rows;
         }
         if (active()) {
-            if (batch.size() == 1) {
-                auto folded = accumulate(*state, batch[0], row_base[0]);
-                if (!folded) co_return folded.error();
+            if (batch.size() == 1 || agg_serial_only(*state)) {
+                for (std::size_t z = 0; z < batch.size(); ++z) {
+                    auto folded = accumulate(*state, batch[z], row_base[z]);
+                    if (!folded) co_return folded.error();
+                }
             } else {
                 dstd::Vector<AggStatePtr> partials(batch.size());
                 dstd::Vector<dstd::Optional<dstd::Error>> failed(batch.size());

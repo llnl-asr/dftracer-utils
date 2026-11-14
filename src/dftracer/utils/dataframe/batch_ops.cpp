@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dataframe/agg.h>
+#include <dftracer/utils/dataframe/agg/lower.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/containment.h>
@@ -868,23 +869,9 @@ dstd::Result<DataFrame> group_by(const DataFrame& b,
     dstd::Vector<AggSpec> specs;
     specs.reserve(aggs.size());
     for (const GroupAgg& a : aggs) {
-        AggSpec sp;
-        sp.op = to_agg_op(a.op);
-        sp.out = a.out;
-        sp.param = a.param;
-        if (sp.op != AggOp::Count) {
-            const dstd::Result<std::int32_t> value = resolve(a.column);
-            if (!value) return value.error();
-            sp.value_col = *value;
-        } else {
-            sp.value_col = -1;
-        }
-        if (agg_uses_by_col(sp.op)) {
-            const dstd::Result<std::int32_t> by = resolve(a.by);
-            if (!by) return by.error();
-            sp.by_col = *by;
-        }
-        specs.push_back(std::move(sp));
+        dstd::Result<AggSpec> sp = lower_group_agg(a, resolve);
+        if (!sp) return sp.error();
+        specs.push_back(std::move(*sp));
     }
     return group_agg(key_cols, values, std::move(specs), keys);
 }
@@ -1823,6 +1810,7 @@ bool reduce_broadcasts(Agg agg) noexcept {
         case Agg::RegrSlope:
         case Agg::RegrIntercept:
         case Agg::RegrR2:
+        case Agg::Udaf:
             return false;
     }
     return false;
@@ -2375,23 +2363,9 @@ dstd::Result<DataFrame> group_by_dynamic(const DataFrame& b,
         };
         specs.reserve(aggs.size());
         for (const GroupAgg& a : aggs) {
-            AggSpec sp;
-            sp.op = to_agg_op(a.op);
-            sp.out = a.out;
-            sp.param = a.param;
-            if (sp.op != AggOp::Count) {
-                const dstd::Result<std::int32_t> value = resolve(a.column);
-                if (!value) return value.error();
-                sp.value_col = *value;
-            } else {
-                sp.value_col = -1;
-            }
-            if (agg_uses_by_col(sp.op)) {
-                const dstd::Result<std::int32_t> by = resolve(a.by);
-                if (!by) return by.error();
-                sp.by_col = *by;
-            }
-            specs.push_back(std::move(sp));
+            dstd::Result<AggSpec> sp = lower_group_agg(a, resolve);
+            if (!sp) return sp.error();
+            specs.push_back(std::move(*sp));
         }
         dstd::Result<DataFrame> res =
             group_agg(keyc, values, std::move(specs), time_col);
@@ -2439,23 +2413,9 @@ dstd::Result<DataFrame> group_by_dynamic(const DataFrame& b,
     };
     specs.reserve(aggs.size());
     for (const GroupAgg& a : aggs) {
-        AggSpec sp;
-        sp.op = to_agg_op(a.op);
-        sp.out = a.out;
-        sp.param = a.param;
-        if (sp.op != AggOp::Count) {
-            const dstd::Result<std::int32_t> value = resolve(a.column);
-            if (!value) return value.error();
-            sp.value_col = *value;
-        } else {
-            sp.value_col = -1;
-        }
-        if (agg_uses_by_col(sp.op)) {
-            const dstd::Result<std::int32_t> by = resolve(a.by);
-            if (!by) return by.error();
-            sp.by_col = *by;
-        }
-        specs.push_back(std::move(sp));
+        dstd::Result<AggSpec> sp = lower_group_agg(a, resolve);
+        if (!sp) return sp.error();
+        specs.push_back(std::move(*sp));
     }
     dstd::Vector<const Series*> values;
     values.reserve(gathered.size());

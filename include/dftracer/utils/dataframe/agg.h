@@ -101,7 +101,11 @@ enum class AggOp {
     /// null or undecodable cell, an empty sketch and a sketch of another
     /// accuracy than the group's first are skipped; a group with no valid
     /// sketch is null.
-    SketchQuantile = 36
+    SketchQuantile = 36,
+    /// A registered user-defined aggregate (see @ref make_udaf), named by
+    /// AggSpec::fn and fed the columns `value_col` and AggSpec::args; the
+    /// result type is the one its bind chose.
+    Udaf = 37
 };
 
 /// Ops taking a second input through `by_col`: the extremum ArgMax/ArgMin
@@ -158,6 +162,10 @@ struct AggSpec {
                          ///< SetUnion: nonzero asks for the typed list
     std::int32_t by_col = -1;  ///< the second input for the ops
                                ///< agg_uses_by_col() names; unused otherwise
+    dstd::String fn{};         ///< Udaf: the registered name of the aggregate
+    dstd::Vector<std::int32_t> args{};  ///< Udaf: the arguments after
+                                        ///< `value_col`, which is argument 0
+                                        ///< (-1 when the UDAF takes none)
 };
 
 /// One reduction applied to every auto-discovered dyn (per-argument) column.
@@ -295,8 +303,27 @@ DataFrame agg_finalize(const AggState& state,
 dstd::String agg_serialize(const AggState& state, bool compact = false);
 /// Returns an InvalidArgument error for a blob that is truncated or corrupt,
 /// and a Parse error for one in the other (compact or full) format.
+///
+/// A UDAF aggregate is bound again for each blob, calling the bind of the UDAF,
+/// unless `like` is a state with the same aggregates that is already bound to
+/// the same argument types: the result then shares its binding and bind does
+/// not run. A reader of many blobs passes a state it read before. `like` is
+/// only read, so threads may share one.
 dstd::Result<AggStatePtr> agg_deserialize(const dstd::String& blob,
-                                          bool compact = false);
+                                          bool compact = false,
+                                          const AggState* like = nullptr);
+
+/// The first error of a user-defined aggregate in `state` from a call that has
+/// no way to return one: a merge, a reorder, a serialize or a finalize. The
+/// state holds the failure; a caller that finalizes, serializes or merges a
+/// state with a Udaf spec checks it afterwards. Success for a state without
+/// one.
+dstd::Result<void> agg_check(const AggState& state);
+
+/// Whether `state` holds a UDAF that two threads must not feed at once (one
+/// without DFTU_AGG_PARALLEL_SAFE). A driver that folds batches into separate
+/// partials on several threads gives such a state every batch in turn instead.
+bool agg_serial_only(const AggState& state);
 
 /// Number of groups currently held by `state`.
 std::int64_t agg_group_count(const AggState& state);
@@ -340,6 +367,10 @@ AggStatePtr agg_extract_group(const AggState& state, std::int64_t g);
 /// Like agg_extract_group for several groups, in the order given. The result
 /// has no key index, so it is for serializing or finalizing, not for
 /// accumulating more rows.
+///
+/// A state with a UDAF settles its state tables to its group count when it is
+/// extracted from, serialized, finalized or merged from, although it is const:
+/// two threads must not call these on one such state at once.
 AggStatePtr agg_extract_groups(const AggState& state,
                                const dstd::Vector<std::int64_t>& groups);
 

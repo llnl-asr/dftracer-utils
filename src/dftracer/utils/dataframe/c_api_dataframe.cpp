@@ -6,6 +6,7 @@
 #include <dftracer/utils/dataframe/internal/expr_handle.h>
 #include <dftracer/utils/dataframe/internal/lazyframe_handle.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dataframe/udaf_registry.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/result.h>
@@ -92,6 +93,26 @@ dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> key_names(
     ks.reserve(static_cast<std::size_t>(n));
     for (int32_t i = 0; i < n; ++i) ks.emplace_back(keys[i]);
     return ks;
+}
+
+// The GroupAgg of one dftu_group_agg. A name that is no built-in aggregate
+// resolves to the registered UDAF of that name, which takes `column` as its one
+// argument (none when `column` is empty). False for a name that is neither.
+bool to_group_agg(const dftu_group_agg& in, GroupAgg& out) {
+    using dftracer::utils::dataframe::Agg;
+    const char* name = in.op ? in.op : "";
+    const auto op = dftracer::utils::dataframe::agg_from_string(name);
+    if (op && *op == Agg::Udaf) return false;
+    if (op) {
+        out.op = *op;
+    } else {
+        if (!dftracer::utils::dataframe::find_udaf(name)) return false;
+        out.op = Agg::Udaf;
+        out.fn = name;
+    }
+    out.column = in.column ? in.column : "";
+    out.out = in.out ? in.out : "";
+    return true;
 }
 
 bool group_transform_args_ok(int32_t kind, int32_t rank_method) {
@@ -419,13 +440,7 @@ dftu_dataframe* dftu_dataframe_group_by_dynamic(const dftu_dataframe* df,
     v.reserve(static_cast<std::size_t>(n_aggs));
     for (int32_t i = 0; i < n_aggs; ++i) {
         dftracer::utils::dataframe::GroupAgg a;
-        const dftracer::utils::dstd::Result<dftracer::utils::dataframe::Agg>
-            op = dftracer::utils::dataframe::agg_from_string(
-                aggs[i].op ? aggs[i].op : "");
-        if (!op) return nullptr;
-        a.op = *op;
-        a.column = aggs[i].column ? aggs[i].column : "";
-        a.out = aggs[i].out ? aggs[i].out : "";
+        if (!to_group_agg(aggs[i], a)) return nullptr;
         v.push_back(std::move(a));
     }
     return wrap(df->df.group_by_dynamic(time_col, every, period, v));
@@ -465,13 +480,7 @@ dftu_dataframe* dftu_dataframe_group_by(const dftu_dataframe* df,
     ag.reserve(static_cast<std::size_t>(n_aggs));
     for (int32_t i = 0; i < n_aggs; ++i) {
         GroupAgg a;
-        const dftracer::utils::dstd::Result<dftracer::utils::dataframe::Agg>
-            op = dftracer::utils::dataframe::agg_from_string(
-                aggs[i].op ? aggs[i].op : "");
-        if (!op) return nullptr;
-        a.op = *op;
-        a.column = aggs[i].column ? aggs[i].column : "";
-        a.out = aggs[i].out ? aggs[i].out : "";
+        if (!to_group_agg(aggs[i], a)) return nullptr;
         ag.push_back(std::move(a));
     }
     return wrap(df->df.group_by(std::move(ks), std::move(ag)));
@@ -548,13 +557,7 @@ dftu_lazyframe* dftu_lazyframe_group_by(const dftu_lazyframe* lf,
     ag.reserve(static_cast<std::size_t>(n_aggs));
     for (int32_t i = 0; i < n_aggs; ++i) {
         GroupAgg a;
-        const dftracer::utils::dstd::Result<dftracer::utils::dataframe::Agg>
-            op = dftracer::utils::dataframe::agg_from_string(
-                aggs[i].op ? aggs[i].op : "");
-        if (!op) return nullptr;
-        a.op = *op;
-        a.column = aggs[i].column ? aggs[i].column : "";
-        a.out = aggs[i].out ? aggs[i].out : "";
+        if (!to_group_agg(aggs[i], a)) return nullptr;
         ag.push_back(std::move(a));
     }
     return wrap_lazy(lf->lf.group_by(std::move(ks), std::move(ag)));
@@ -764,13 +767,7 @@ dftu_lazyframe* dftu_lazyframe_group_by_dynamic(const dftu_lazyframe* lf,
     v.reserve(static_cast<std::size_t>(n_aggs));
     for (int32_t i = 0; i < n_aggs; ++i) {
         GroupAgg a;
-        const dftracer::utils::dstd::Result<dftracer::utils::dataframe::Agg>
-            op = dftracer::utils::dataframe::agg_from_string(
-                aggs[i].op ? aggs[i].op : "");
-        if (!op) return nullptr;
-        a.op = *op;
-        a.column = aggs[i].column ? aggs[i].column : "";
-        a.out = aggs[i].out ? aggs[i].out : "";
+        if (!to_group_agg(aggs[i], a)) return nullptr;
         v.push_back(std::move(a));
     }
     return wrap_lazy(lf->lf.group_by_dynamic(

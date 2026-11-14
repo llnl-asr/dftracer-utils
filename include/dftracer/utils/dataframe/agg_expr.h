@@ -29,6 +29,9 @@ struct AggExprSpec {
                          ///< nonzero asks for the typed list
     Expr by{};           ///< ArgMax: the value maximized (value is the field
                          ///< represented); unused otherwise
+    dstd::String fn{};   ///< Udaf: the registered name of the aggregate
+    dstd::Vector<Expr> args{};  ///< Udaf: the arguments after `value`, which
+                                ///< is argument 0 (unset for no argument)
 
     /// Rename the output column (fluent), e.g. `agg_sum(a + b).as("sum_ab")`.
     AggExprSpec as(dstd::String name) const {

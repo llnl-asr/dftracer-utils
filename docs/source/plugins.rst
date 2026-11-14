@@ -1350,7 +1350,9 @@ UDF or another aggregate holds fails the load with a message. A
 ``dftu_udaf_desc`` (``dataframe/c_api_udaf.h``) has the name, the argument
 counts, flags, ``state_size`` and ``state_align``, and the callbacks. The host
 owns the memory of every state, in blocks that never move while the table
-grows. ``bind`` runs once per call site like a UDF's. ``init`` makes new states
+grows. ``bind`` runs for a group-by and again for each state set the host
+builds apart from the first (a partial fed on another thread, states read back
+from a spill). ``init`` makes new states
 ready, ``update`` feeds a batch of rows to the states of their groups
 (``states[i]`` is the state of row ``i``), ``combine`` merges states, and
 ``finalize`` gives one result row per state. They run over arrays and columns,
@@ -1367,9 +1369,21 @@ writes a state as bytes with a two-call size query (a NULL ``out``, or a
 processes. A UDAF with neither a POD state nor the serialize pair fails the
 load. ``DFTU_AGG_PARALLEL_SAFE`` lets the host feed several state sets on
 different threads and merge them with ``combine``; one set is never used by
-two threads at once. ``DFTU_AGG_HAS_RETRACT`` needs ``retract`` and ``value``
-for a sliding window. The registry and the state table are in place; no duql
-stage, window or Python call runs a UDAF yet.
+two threads at once. Without the flag no callback of the UDAF runs on two
+threads at once (``bind``, ``init``, ``update``, ``combine``, ``finalize``,
+``destroy``, ``serialize``, ``deserialize`` and ``free_bound``), so a group-by
+with such a UDAF runs on one state set. ``DFTU_AGG_HAS_RETRACT`` needs ``retract`` and ``value``
+for a sliding window.
+
+``DataFrame::group_by``, ``LazyFrame::group_by`` and ``group_by_dynamic`` run a
+UDAF as a ``GroupAgg`` with ``op = Agg::Udaf``, ``fn`` the registered name,
+``column`` the first argument and ``args`` the others. The C ABI does the same:
+an ``op`` name of ``dftu_dataframe_group_by`` that no built-in aggregate has
+resolves to the registered UDAF of that name, with ``column`` as its one
+argument. The argument types are fixed by the first batch, and a later batch
+with another type fails. A group-by that spills writes each group state with
+``serialize`` and merges the runs with ``combine``. No duql stage, window or
+Python call runs a UDAF yet.
 
 .. code-block:: cpp
 

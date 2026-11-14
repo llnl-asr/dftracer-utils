@@ -8,31 +8,51 @@
  *   ualign32(x)   POD state of 24 bytes aligned to 32; counts misaligned inits
  *   ualign16(x)   POD state of 40 bytes aligned to 16; counts misaligned inits
  *   ufailcombine(x)  combine fails with a message
+ *   userial(x)    usum with a non-POD state and without
+ *                 DFTU_AGG_PARALLEL_SAFE; every callback counts the threads
+ *                 inside the plugin at once
  * It counts binds, frees, inits and destroys, which the test reads by dlsym. */
 
 #include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/plugins/abi.h>
+#include <stdatomic.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 DFTU_PLUGIN_EXPORT int64_t udaf_plugin_binds(void);
 DFTU_PLUGIN_EXPORT int64_t udaf_plugin_frees(void);
 DFTU_PLUGIN_EXPORT int64_t udaf_plugin_inits(void);
 DFTU_PLUGIN_EXPORT int64_t udaf_plugin_destroys(void);
 DFTU_PLUGIN_EXPORT int64_t udaf_plugin_misaligned(void);
+DFTU_PLUGIN_EXPORT int64_t udaf_plugin_serial_serializes(void);
+DFTU_PLUGIN_EXPORT int64_t udaf_plugin_max_active(void);
+DFTU_PLUGIN_EXPORT void udaf_plugin_reset_active(void);
 
 static int64_t g_binds;
 static int64_t g_frees;
 static int64_t g_inits;
 static int64_t g_destroys;
 static int64_t g_misaligned;
+static atomic_int g_serial_serializes;
+static atomic_int g_active;
+static atomic_int g_max_active;
 
 DFTU_PLUGIN_EXPORT int64_t udaf_plugin_binds(void) { return g_binds; }
 DFTU_PLUGIN_EXPORT int64_t udaf_plugin_frees(void) { return g_frees; }
 DFTU_PLUGIN_EXPORT int64_t udaf_plugin_inits(void) { return g_inits; }
 DFTU_PLUGIN_EXPORT int64_t udaf_plugin_destroys(void) { return g_destroys; }
 DFTU_PLUGIN_EXPORT int64_t udaf_plugin_misaligned(void) { return g_misaligned; }
+DFTU_PLUGIN_EXPORT int64_t udaf_plugin_serial_serializes(void) {
+    return atomic_load(&g_serial_serializes);
+}
+DFTU_PLUGIN_EXPORT int64_t udaf_plugin_max_active(void) {
+    return atomic_load(&g_max_active);
+}
+DFTU_PLUGIN_EXPORT void udaf_plugin_reset_active(void) {
+    atomic_store(&g_max_active, 0);
+}
 
 typedef struct {
     dftu_dtype in;
@@ -155,6 +175,107 @@ static dftu_status usum_finalize(dftu_ctx* ctx, void* bound,
         free(v);
     }
     return DFTU_OK;
+}
+
+/* userial: usum that records how many threads are inside it at once */
+
+static void enter_serial(void) {
+    const int now = atomic_fetch_add(&g_active, 1) + 1;
+    int seen = atomic_load(&g_max_active);
+    while (now > seen &&
+           !atomic_compare_exchange_weak(&g_max_active, &seen, now));
+    usleep(200);
+}
+
+static void leave_serial(void) { atomic_fetch_sub(&g_active, 1); }
+
+static dftu_status userial_bind(dftu_ctx* ctx, void* self,
+                                const dftu_type_info* args, uint32_t n,
+                                const dftu_scalar* const* consts,
+                                dftu_type_info* out, void** bound) {
+    dftu_status st;
+    enter_serial();
+    st = usum_bind(ctx, self, args, n, consts, out, bound);
+    leave_serial();
+    return st;
+}
+
+static void userial_init(void* bound, void* const* states, uint64_t n) {
+    enter_serial();
+    count_inits(bound, states, n);
+    leave_serial();
+}
+
+static dftu_status userial_update(dftu_ctx* ctx, void* bound,
+                                  void* const* states,
+                                  const dftu_series* const* args,
+                                  uint32_t nargs, uint64_t rows) {
+    dftu_status st;
+    enter_serial();
+    st = usum_update(ctx, bound, states, args, nargs, rows);
+    leave_serial();
+    return st;
+}
+
+static dftu_status userial_combine(dftu_ctx* ctx, void* bound,
+                                   void* const* into, void* const* from,
+                                   uint64_t n) {
+    dftu_status st;
+    enter_serial();
+    st = usum_combine(ctx, bound, into, from, n);
+    leave_serial();
+    return st;
+}
+
+static dftu_status userial_finalize(dftu_ctx* ctx, void* bound,
+                                    void* const* states, uint64_t n,
+                                    dftu_series** out) {
+    dftu_status st;
+    enter_serial();
+    st = usum_finalize(ctx, bound, states, n, out);
+    leave_serial();
+    return st;
+}
+
+static void userial_destroy(void* bound, void* const* states, uint64_t n) {
+    (void)bound;
+    (void)states;
+    (void)n;
+    enter_serial();
+    leave_serial();
+}
+
+static dftu_status userial_serialize(dftu_ctx* ctx, void* bound,
+                                     const void* state, uint8_t* out,
+                                     uint64_t cap, uint64_t* size) {
+    (void)ctx;
+    (void)bound;
+    enter_serial();
+    atomic_fetch_add(&g_serial_serializes, 1);
+    *size = sizeof(Sum);
+    if (out && cap >= sizeof(Sum)) memcpy(out, state, sizeof(Sum));
+    leave_serial();
+    return DFTU_OK;
+}
+
+static dftu_status userial_deserialize(dftu_ctx* ctx, void* bound,
+                                       const uint8_t* in, uint64_t n,
+                                       void* state) {
+    dftu_status st = DFTU_OK;
+    (void)bound;
+    enter_serial();
+    if (n != sizeof(Sum))
+        st = dftu_fail(ctx, DFTU_E_INVALID, "userial: bad state size");
+    else
+        memcpy(state, in, sizeof(Sum));
+    leave_serial();
+    return st;
+}
+
+static void userial_free_bound(void* bound) {
+    enter_serial();
+    free_bound(bound);
+    leave_serial();
 }
 
 /* udistinct */
@@ -410,6 +531,10 @@ static const dftu_udaf_desc UDAFS[] = {
     POD_FIELDS("ufailcombine", DFTU_AGG_STATE_POD, sizeof(int64_t), 8,
                ucountall_bind, ucountall_update, ufailcombine_combine,
                ucountall_finalize),
+    {sizeof(dftu_udaf_desc), "userial", 0, 1, 1, sizeof(Sum), 8, userial_bind,
+     userial_init, userial_update, userial_combine, userial_finalize,
+     userial_destroy, userial_serialize, userial_deserialize, NULL, NULL,
+     userial_free_bound},
     POD_FIELDS("ubadrows", DFTU_AGG_STATE_POD, sizeof(int64_t), 8,
                ucountall_bind, ucountall_update, ucountall_combine,
                ubadrows_finalize),

@@ -71,8 +71,9 @@ enum class Agg {
     RegrIntercept,  ///< least-squares intercept of `column` on `by`, Float64
     RegrR2,  ///< coefficient of determination of `column` on `by`, Float64
     Prod,    ///< product of `column`'s present values, Float64
-    SketchQuantile  ///< `param` quantile of the merged base64 DDSketch cells
-                    ///< of a String `column`, Float64
+    SketchQuantile,  ///< `param` quantile of the merged base64 DDSketch cells
+                     ///< of a String `column`, Float64
+    Udaf  ///< the registered user-defined aggregate named by GroupAgg::fn
 };
 
 /// Canonical lowercase name of `agg` (the string the C ABI accepts).
@@ -101,10 +102,14 @@ struct GroupAgg {
                          ///< SetUnion: nonzero asks for the typed list
     dstd::String by{};   ///< the second input column for the ops
                          ///< agg_uses_by_col() names; unused otherwise
+    dstd::String fn{};   ///< Udaf: the registered name of the aggregate
+    dstd::Vector<dstd::String> args{};  ///< Udaf: the columns after `column`,
+                                        ///< which is argument 0 (empty for a
+                                        ///< UDAF that takes no argument)
 };
 
-class LazyFrame;         // dataframe/lazyframe.h
-class GroupBy;           // below
+class LazyFrame;                        // dataframe/lazyframe.h
+class GroupBy;                          // below
 
 /// A named ordered set of columns (the RecordBatch / DataChunk analogue). The
 /// eager methods return a new DataFrame (move-only); projection ops share the

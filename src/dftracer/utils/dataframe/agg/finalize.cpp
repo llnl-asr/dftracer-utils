@@ -456,7 +456,9 @@ static DataFrame finalize_impl(const AggState& st_in,
             fi >= 0 ? st.field_domain[static_cast<std::size_t>(fi)]
                     : FieldStatDomain::I64;
 
-        if (sp.op == AggOp::Pct) {
+        if (sp.op == AggOp::Udaf) {
+            out.columns.push_back(st.udaf_column(s));
+        } else if (sp.op == AggOp::Pct) {
             const int sk =
                 fi >= 0 ? st.field_sketch[static_cast<std::size_t>(fi)] : -1;
             dstd::Vector<double> v(static_cast<std::size_t>(ng));

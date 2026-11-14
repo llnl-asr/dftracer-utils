@@ -1394,9 +1394,12 @@ DFTU_EXPORT dftu_dataframe* dftu_dataframe_pivot(const dftu_dataframe* df,
                                                  const char* agg);
 
 /** One aggregate for the group_by and group_by_dynamic calls: `op` is any
- * aggregate name in agg_ops.def (an unknown name fails the call), `column` the
- * value column (ignored / may be NULL for count), `out` the result column name.
- */
+ * aggregate name in agg_ops.def, or else the name of a user-defined aggregate
+ * a plugin registered (dftu_svc_ops::register_udaf), which gets `column` as its
+ * one argument, or none when `column` is NULL or empty, and gives a column of
+ * the result type its bind chose. A name that is neither fails the call, and so
+ * does the name "udaf" itself. `column` is the value column (ignored / may be
+ * NULL for count), `out` the result column name. */
 typedef struct dftu_group_agg {
     const char* op;
     const char* column;

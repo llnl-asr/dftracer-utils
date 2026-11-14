@@ -87,6 +87,12 @@ dstd::Result<UdafBinding> bind_udaf(
     dstd::SharedPtr<const UdafRecord> udaf, dstd::Span<const DataType> args,
     dstd::Span<const dftu_scalar* const> consts);
 
+/// The result type of the UDAF `name` bound to argument types `args`, or
+/// Unknown when no UDAF has that name or its bind refuses the types. For a plan
+/// that wants the type of a result column before it runs.
+DataType udaf_result_type(dstd::StringView name,
+                          dstd::Span<const DataType> args);
+
 /// Registers a UDAF like dftu_svc_ops::register_udaf, which copies the record
 /// and the name. `keep_alive` is held by the record, and so by every binding
 /// of it, until the last is gone. Fails, naming the problem, for a descriptor

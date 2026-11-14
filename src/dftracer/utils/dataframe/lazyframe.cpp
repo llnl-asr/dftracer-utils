@@ -6,6 +6,7 @@
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/dataframe/agg.h>        // streaming group-by state
+#include <dftracer/utils/dataframe/agg/lower.h>
 #include <dftracer/utils/dataframe/batch_ops.h>  // concat_columns, take, concat
 #include <dftracer/utils/dataframe/field_stat.h>  // FieldStat (describe)
 #include <dftracer/utils/dataframe/grace_join.h>  // GraceJoin (join cursor)
@@ -36,6 +37,7 @@
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/parallel.h>  // parallel_for (parallel sinks)
 #include <dftracer/utils/dataframe/types.h>     // byte_width, buffer_bytes
+#include <dftracer/utils/dataframe/udaf_registry.h>
 #include <dftracer/utils/dstd/algorithm.h>
 #include <dftracer/utils/dstd/deque.h>
 #include <dftracer/utils/dstd/fatal.h>
@@ -3390,6 +3392,18 @@ dstd::Vector<Field> group_agg_fields(const Schema& in,
     for (const GroupAgg& a : aggs) {
         TypeId vt = a.column.empty() ? TypeId::Unknown
                                      : field_type_or_unknown(in, a.column);
+        if (a.op == Agg::Udaf) {
+            dstd::Vector<DataType> types;
+            if (!a.column.empty()) types.push_back(scalar(vt));
+            for (const dstd::String& arg : a.args)
+                types.push_back(scalar(field_type_or_unknown(in, arg)));
+            out.push_back(
+                Field{a.out,
+                      udaf_result_type(a.fn, dstd::Span<const DataType>(
+                                                 types.data(), types.size())),
+                      true});
+            continue;
+        }
         DataType t = agg_output_type(to_agg_op(a.op), vt, a.param);
         if (a.op == Agg::SetUnion && a.param != 0.0 &&
             (vt == TypeId::List || vt == TypeId::LargeList))
@@ -3922,6 +3936,7 @@ dstd::Vector<dstd::SharedPtr<const LazyOp>> pushdown_projections(
         for (const GroupAgg& a : gb->aggs) {
             if (!a.column.empty()) wanted.push_back(a.column);
             if (!a.by.empty()) wanted.push_back(a.by);
+            for (const dstd::String& arg : a.args) wanted.push_back(arg);
         }
     }
     for (const dstd::String& nm : wanted) {
@@ -4008,6 +4023,7 @@ dstd::Optional<AggregateSpec> aggregate_spec(
     }
     spec.aggs.reserve(g.aggs.size());
     for (const GroupAgg& a : g.aggs) {
+        if (a.op == Agg::Udaf) return dstd::nullopt;
         AggregateExpr e;
         e.op = a.op;
         e.param = a.param;
@@ -4731,7 +4747,11 @@ coro::CoroTask<dstd::Result<DataFrame>> LazyFrame::run_ops_in_memory(
                     auto accumulated = agg_accumulate_chunk(
                         *state, df, o.keys, lowered.value_names, o.dyn_prefix);
                     if (!accumulated) return accumulated.error();
-                    return agg_finalize(*state, o.keys);
+                    DataFrame grouped = agg_finalize(*state, o.keys);
+                    if (dstd::Result<void> checked = agg_check(*state);
+                        !checked)
+                        return checked.error();
+                    return grouped;
                 },
                 [&](const auto&) -> dstd::Result<DataFrame> {
                     ok = false;
@@ -5004,7 +5024,14 @@ LazyFrame desugar_expr_group_by(const LazyFrame& self, dstd::Vector<Expr> keys,
         g.op = from_agg_op(a.op);
         g.out = a.out;
         g.param = a.param;
-        if (a.op != AggOp::Count) g.column = resolve_val(a.value, "v");
+        if (a.op == AggOp::Udaf) {
+            g.fn = a.fn;
+            if (a.value.valid()) g.column = resolve_val(a.value, "v");
+            for (const Expr& arg : a.args)
+                g.args.push_back(resolve_val(arg, "a"));
+        } else if (a.op != AggOp::Count) {
+            g.column = resolve_val(a.value, "v");
+        }
         if (agg_uses_by_col(a.op)) g.by = resolve_val(a.by, "by");
         gaggs.push_back(std::move(g));
     }
@@ -6317,15 +6344,8 @@ LoweredGroupAggs lower_group_aggs(const dstd::Vector<GroupAgg>& aggs) {
         return idx;
     };
     out.specs.reserve(aggs.size());
-    for (const GroupAgg& a : aggs) {
-        AggSpec sp;
-        sp.op = to_agg_op(a.op);
-        sp.out = a.out;
-        sp.param = a.param;
-        sp.value_col = sp.op == AggOp::Count ? -1 : resolve(a.column);
-        if (agg_uses_by_col(sp.op)) sp.by_col = resolve(a.by);
-        out.specs.push_back(std::move(sp));
-    }
+    for (const GroupAgg& a : aggs)
+        out.specs.push_back(*lower_group_agg(a, resolve));
     return out;
 }
 
@@ -6444,6 +6464,8 @@ void fingerprint_group_aggs(Fingerprint& fp,
         fp.str(a.out);
         fp.pod(a.param);
         fp.str(a.by);
+        fp.str(a.fn);
+        fp.strs(a.args);
     }
 }
 

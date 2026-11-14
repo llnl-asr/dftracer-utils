@@ -148,6 +148,14 @@ dstd::Result<UdafBinding> bind_udaf(
                        static_cast<std::uint32_t>(types.size()));
 }
 
+DataType udaf_result_type(dstd::StringView name,
+                          dstd::Span<const DataType> args) {
+    dstd::SharedPtr<const UdafRecord> record = find_udaf(name);
+    if (!record) return scalar(TypeId::Unknown);
+    dstd::Result<UdafBinding> bound = bind_udaf(std::move(record), args, {});
+    return bound ? bound->result_type() : scalar(TypeId::Unknown);
+}
+
 dstd::Result<void> add_udaf(const dftu_udaf_desc& desc, void* self,
                             dstd::SharedPtr<const void> keep_alive) {
     if (desc.name == nullptr || !is_function_name(desc.name))

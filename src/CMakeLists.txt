@@ -918,6 +918,7 @@ set(DFTRACER_UTILS_VEC_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/udaf_states.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/agg.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/agg/state.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/agg/udaf.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/agg/finalize.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/agg/seed.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/agg/serialize.cpp

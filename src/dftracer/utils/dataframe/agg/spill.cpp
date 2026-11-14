@@ -160,7 +160,12 @@ void AggSpiller::adopt(AggSpiller& other) {
 
 dstd::Result<DataFrame> AggSpiller::drain(
     const AggState& live, const dstd::Vector<dstd::String>& key_names) const {
-    if (impl_->runs.empty()) return agg_finalize(live, key_names);
+    if (impl_->runs.empty()) {
+        DataFrame whole = agg_finalize(live, key_names);
+        if (dstd::Result<void> checked = agg_check(live); !checked)
+            return checked.error();
+        return whole;
+    }
 
     const dstd::Vector<AggSpec> specs = agg_specs(live);
     const bool nested =
@@ -205,12 +210,17 @@ dstd::Result<DataFrame> AggSpiller::drain(
         }
         if (++in_chunk >= chunk) {
             parts.push_back(agg_finalize(*merged, key_names));
+            if (dstd::Result<void> checked = agg_check(*merged); !checked)
+                return checked.error();
             merged = agg_new(specs);
             in_chunk = 0;
         }
     }
-    if (in_chunk > 0 || parts.empty())
+    if (in_chunk > 0 || parts.empty()) {
         parts.push_back(agg_finalize(*merged, key_names));
+        if (dstd::Result<void> checked = agg_check(*merged); !checked)
+            return checked.error();
+    }
     if (parts.size() == 1) return std::move(parts.front());
 
     dstd::Vector<const DataFrame*> refs;

@@ -733,6 +733,20 @@ class Pipe:
     def call(self, call: Col) -> "Pipe":
         return self._stage("call " + call._text)
 
+    def sink(self, name: str, **options: str) -> "Pipe":
+        """Ends the pipeline by writing its rows to the sink ``name``, e.g.
+        ``sink("csv", path="out.csv")``. Every option is a string: the sink
+        reads them as text. A sink is the last stage of a pipeline, so a stage
+        after it does not parse."""
+        if not isinstance(name, str):
+            raise TypeError(f"a sink name must be a str, not {type(name).__name__}")
+        text = "sink " + _duql_string(name)
+        for key, value in options.items():
+            if not isinstance(value, str):
+                raise TypeError(f"sink option {key!r} must be a str, not {type(value).__name__}")
+            text += f" {key} {_duql_string(value)}"
+        return self._stage(text)
+
     def time_range(self, low: object = None, high: object = None, overlap: bool = False) -> "Pipe":
         """``time_range low .. high``; leave a bound out for an open side."""
         if low is None and high is None:

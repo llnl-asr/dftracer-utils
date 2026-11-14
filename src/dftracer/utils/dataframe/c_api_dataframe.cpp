@@ -502,6 +502,31 @@ dftu_dataframe* dftu_lazyframe_collect(dftu_lazyframe* lf, int64_t batch_size) {
 
 void dftu_lazyframe_free(dftu_lazyframe* lf) { delete lf; }
 
+int32_t dftu_lazyframe_sink(const dftu_lazyframe* lf, const char* name,
+                            const char* const* option_keys,
+                            const char* const* option_values,
+                            uint32_t n_options, int64_t* rows_out,
+                            int64_t* batches_out) {
+    if (!lf || !name) return 1;
+    if (n_options > 0 && (!option_keys || !option_values)) return 1;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::Pair<
+        dftracer::utils::dstd::String, dftracer::utils::dstd::String>>
+        options;
+    options.reserve(static_cast<std::size_t>(n_options));
+    for (uint32_t i = 0; i < n_options; ++i) {
+        if (!option_keys[i] || !option_values[i]) return 1;
+        options.emplace_back(dftracer::utils::dstd::String(option_keys[i]),
+                             dftracer::utils::dstd::String(option_values[i]));
+    }
+    auto written = dftracer::utils::default_runtime()
+                       .submit(lf->lf.sink(name, std::move(options)))
+                       .get();
+    if (!written) return 1;
+    if (rows_out) *rows_out = written->rows;
+    if (batches_out) *batches_out = written->batches;
+    return 0;
+}
+
 char* dftu_lazyframe_schema(const dftu_lazyframe* lf) {
     if (!lf) return nullptr;
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> names =

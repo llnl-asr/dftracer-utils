@@ -932,7 +932,7 @@ foreach(test_file ${TEST_BINARY_SOURCES})
       "DFTRACER_UTILS_GENESIS_GEN_DIST_PATH=$<TARGET_FILE:dftracer_genesis_gen_dist>")
   elseif(bin_exec STREQUAL "binaries/test_dftracer_view")
     set_tests_properties(${bin_exec} PROPERTIES ENVIRONMENT
-      "DFTRACER_UTILS_VIEW_PATH=$<TARGET_FILE:dftracer_view>")
+      "DFTRACER_UTILS_VIEW_PATH=$<TARGET_FILE:dftracer_view>;DFTRACER_UTILS_CSV_SINK_PLUGIN=$<TARGET_FILE:csv_sink_plugin>")
   elseif(bin_exec STREQUAL "binaries/test_nested_inputs")
     set_tests_properties(${bin_exec} PROPERTIES ENVIRONMENT
       "DFTRACER_UTILS_INDEX_PATH=$<TARGET_FILE:dftracer_index>;DFTRACER_UTILS_EVENT_COUNT_PATH=$<TARGET_FILE:dftracer_event_count>;DFTRACER_UTILS_INFO_PATH=$<TARGET_FILE:dftracer_info>;DFTRACER_UTILS_STATS_PATH=$<TARGET_FILE:dftracer_stats>;DFTRACER_UTILS_SPLIT_PATH=$<TARGET_FILE:dftracer_split>;DFTRACER_UTILS_COMPARATOR_PATH=$<TARGET_FILE:dftracer_comparator>;DFTRACER_UTILS_REPLAY_PATH=$<TARGET_FILE:dftracer_replay>")

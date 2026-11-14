@@ -194,6 +194,9 @@ static bool eq(const TimeRange& a, const TimeRange& b) {
 }
 static bool eq(const CallTree&, const CallTree&) { return true; }
 static bool eq(const Use& a, const Use& b) { return eq(a.call, b.call); }
+static bool eq(const Sink& a, const Sink& b) {
+    return a.name == b.name && a.options == b.options;
+}
 static bool eq(const Bucket& a, const Bucket& b) {
     return a.fill == b.fill && a.fill_mode == b.fill_mode && a.as == b.as &&
            eq(a.width, b.width) && eq(a.every, b.every) && eq(a.at, b.at) &&
@@ -946,6 +949,17 @@ class Printer {
     }
 
     void print_stage(const CallTree&) { out += "call_tree"; }
+
+    void print_stage(const Sink& s) {
+        out += "sink ";
+        put_string(out, s.name);
+        for (const auto& [key, value] : s.options) {
+            out += ' ';
+            out += key;
+            out += ' ';
+            put_string(out, value);
+        }
+    }
 
     void print_stage(const Bucket& s) {
         out += "bucket ";

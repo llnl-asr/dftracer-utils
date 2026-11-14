@@ -80,6 +80,25 @@ HttpResponse get(Served& s, const dstd::String& target,
     return out;
 }
 
+// `text` as a query-string value: everything but an unreserved byte escaped.
+dstd::String encode(const dstd::String& text) {
+    static const char kHex[] = "0123456789ABCDEF";
+    dstd::String out;
+    for (const char c : text) {
+        const auto byte = static_cast<unsigned char>(c);
+        if ((byte >= 'a' && byte <= 'z') || (byte >= 'A' && byte <= 'Z') ||
+            (byte >= '0' && byte <= '9') || byte == '-' || byte == '_' ||
+            byte == '.' || byte == '~') {
+            out += c;
+        } else {
+            out += '%';
+            out += kHex[byte >> 4];
+            out += kHex[byte & 0xF];
+        }
+    }
+    return out;
+}
+
 }  // namespace
 
 TEST_SUITE("viz_errors") {
@@ -120,6 +139,24 @@ TEST_SUITE("viz_errors") {
             CHECK_MESSAGE(resp.body.find("Invalid duql") != dstd::String::npos,
                           endpoint, ": ", resp.body);
         }
+    }
+
+    TEST_CASE("a duql param that ends in a sink is a 400 and writes nothing") {
+        auto s = serve("viz_errors_sink");
+        const dstd::String out(s->dir.file("sink_out.csv"));
+        const dstd::String query =
+            dstd::fmt<"cat == \"POSIX\" | sink \"csv.write\" path \"{}\"">(out);
+        const auto resp =
+            get(*s,
+                "/api/viz/density?begin=0&end=100000&width=1000&summary=0"
+                "&duql=" +
+                    encode(query));
+        CHECK_MESSAGE(resp.status_code == 400, resp.body);
+        // The refusal names the stage, so it is the sink guard that fired.
+        CHECK(resp.body.find("stages such as 'sink'") != dstd::String::npos);
+        const auto written = dstd::fs::exists(dstd::PathView(out));
+        REQUIRE(written.has_value());
+        CHECK_FALSE(*written);
     }
 
     TEST_CASE("a scan that fails is a 500") {

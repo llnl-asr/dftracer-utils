@@ -363,6 +363,15 @@ struct PipelineCall {
     dstd::String text;
 };
 
+/// `sink "name" key "value" ...`: the rows go to the registered sink `name`,
+/// with `options` as they are written. It ends the pipeline. duql keeps this
+/// as data: the sink registry is the trace layer's.
+struct PipelineSink {
+    dstd::String name;
+    dstd::Vector<dstd::Pair<dstd::String, dstd::String>> options;
+    dstd::String text;
+};
+
 using PipelineStage =
     dstd::Variant<PipelineWhere, PipelineSelect, PipelineDrop, PipelineRename,
                   PipelineDerive, PipelineDistinct, PipelineSort, PipelineTake,
@@ -370,7 +379,7 @@ using PipelineStage =
                   PipelineTimeRange, PipelineBucket, PipelineCallTree,
                   PipelineWindow, PipelineExpand, PipelinePivot,
                   PipelineUnpivot, PipelineLookup, PipelineUnion,
-                  PipelineSession, PipelinePlugin, PipelineCall>;
+                  PipelineSession, PipelinePlugin, PipelineCall, PipelineSink>;
 
 /// The records a pipeline reads: every record of the View's files (`all`),
 /// the records the View reads (`data`), the records of the file `path`, or

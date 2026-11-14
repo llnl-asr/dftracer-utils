@@ -859,6 +859,69 @@ PyObject* LazyFrame_collect(PyObject* self, PyObject* args, PyObject* kwds) {
     return dftracer::utils::python::frame::wrap_dataframe(std::move(out));
 }
 
+PyObject* LazyFrame_sink(PyObject* self, PyObject* args, PyObject* kwds) {
+    LazyFrameObject* b = as_lazyframe(self);
+    if (!b) return nullptr;
+    const char* name = nullptr;
+    PyObject* options_arg = nullptr;
+    long long batch_size = 0;
+    PyObject* runtime_arg = nullptr;
+    static const char* kw[] = {"name", "options", "batch_size", "runtime",
+                               nullptr};
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "s|OLO",
+                                     const_cast<char**>(kw), &name,
+                                     &options_arg, &batch_size, &runtime_arg))
+        return nullptr;
+    dftracer::utils::dstd::SharedPtr<dftracer::utils::Runtime> rt =
+        runtime_from_arg(runtime_arg);
+    if (!rt) return nullptr;
+    // The mapping is read with the GIL held: no Python API runs below.
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::Pair<
+        dftracer::utils::dstd::String, dftracer::utils::dstd::String>>
+        options;
+    if (options_arg != nullptr && options_arg != Py_None) {
+        if (!PyDict_Check(options_arg)) {
+            PyErr_SetString(PyExc_TypeError,
+                            "options must be a dict of str to str, or None");
+            return nullptr;
+        }
+        PyObject* key = nullptr;
+        PyObject* value = nullptr;
+        Py_ssize_t pos = 0;
+        while (PyDict_Next(options_arg, &pos, &key, &value)) {
+            Py_ssize_t key_size = 0;
+            Py_ssize_t value_size = 0;
+            const char* key_text = PyUnicode_AsUTF8AndSize(key, &key_size);
+            if (key_text == nullptr) {
+                PyErr_SetString(PyExc_TypeError,
+                                "sink option names must be str");
+                return nullptr;
+            }
+            const char* value_text =
+                PyUnicode_AsUTF8AndSize(value, &value_size);
+            if (value_text == nullptr) {
+                PyErr_SetString(PyExc_TypeError,
+                                "sink option values must be str");
+                return nullptr;
+            }
+            options.emplace_back(
+                dftracer::utils::dstd::String(
+                    key_text, static_cast<std::size_t>(key_size)),
+                dftracer::utils::dstd::String(
+                    value_text, static_cast<std::size_t>(value_size)));
+        }
+    }
+    dataframe::SinkSummary summary;
+    if (!run_blocking([&] {
+            summary = dftracer::utils::python::core::py_unwrap(
+                rt->submit(b->lf.sink(name, std::move(options), batch_size))
+                    .get());
+        }))
+        return nullptr;
+    return Py_BuildValue("(LL)", static_cast<long long>(summary.rows),
+                         static_cast<long long>(summary.batches));
+}
+
 dftracer::utils::coro::CoroTask<
     dftracer::utils::dstd::Result<dataframe::DataFrame>>
 collect_owned(LazyFrame lf, std::int64_t batch_size) {
@@ -1205,6 +1268,10 @@ PyMethodDef LazyFrame_methods[] = {
     {"collect", DFTU_PYCFUNCTION(LazyFrame_collect),
      METH_VARARGS | METH_KEYWORDS,
      "collect(batch_size=65536) -> _DataFrame, running the pipeline."},
+    {"sink", DFTU_PYCFUNCTION(LazyFrame_sink), METH_VARARGS | METH_KEYWORDS,
+     "sink(name, options=None, batch_size=0, runtime=None) -> (rows, "
+     "batches), writing the pipeline's rows to the sink the plugin "
+     "registered as name."},
     {"collect_async", DFTU_PYCFUNCTION(LazyFrame_collect_async),
      METH_VARARGS | METH_KEYWORDS,
      "collect_async(batch_size=0) -> TaskHandle[_DataFrame], running the "

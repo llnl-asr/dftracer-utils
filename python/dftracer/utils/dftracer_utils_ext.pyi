@@ -846,6 +846,16 @@ class _LazyFrame:
         ...
     def explain(self) -> str: ...
     def collect(self, batch_size: int = 0, runtime: Optional[object] = None) -> "_DataFrame": ...
+    def sink(
+        self,
+        name: str,
+        options: Optional[Mapping[str, str]] = None,
+        batch_size: int = 0,
+        runtime: Optional[object] = None,
+    ) -> Tuple[int, int]:
+        """Write the pipeline's rows to the sink a plugin registered as ``name``;
+        returns ``(rows, batches)``."""
+        ...
     def __arrow_c_stream__(
         self, requested_schema: object = None, runtime: Optional[object] = None
     ) -> object: ...

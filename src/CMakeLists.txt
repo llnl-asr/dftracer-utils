@@ -925,6 +925,7 @@ set(DFTRACER_UTILS_VEC_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/lazy/pivot.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/lazy/native_transform.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/lazy/column_scan.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/lazy/sink.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/group_transform.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/column_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/spill.cpp

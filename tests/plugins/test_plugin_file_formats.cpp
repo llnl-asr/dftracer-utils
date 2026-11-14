@@ -11,6 +11,7 @@
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/internal/file_format_registry.h>
+#include <dftracer/utils/dataframe/internal/sink_plan.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
@@ -135,6 +136,16 @@ const std::int64_t* toy_sink_stats() {
     plugin_symbol<void (*)(std::int64_t*)>(TOY_SINK_PLUGIN_PATH,
                                            "toy_sink_stats")(values);
     return values;
+}
+
+std::int64_t toy_sink_row_count() {
+    return plugin_symbol<std::int64_t (*)()>(TOY_SINK_PLUGIN_PATH,
+                                             "toy_sink_row_count")();
+}
+
+const std::int64_t* toy_sink_rows() {
+    return plugin_symbol<const std::int64_t* (*)()>(TOY_SINK_PLUGIN_PATH,
+                                                    "toy_sink_rows")();
 }
 
 const char* toy_sink_option(const char* symbol) {
@@ -420,4 +431,196 @@ TEST_CASE("a sink without write is refused and named") {
     const dstd::String message = built.error().c_str();
     CHECK(message.find("toy_bad_sink.out") != dstd::String::npos);
     CHECK(message.find("write") != dstd::String::npos);
+}
+
+TEST_CASE("LazyFrame::sink writes every row in order to the plugin sink") {
+    dstd::Optional<plugins::host::Plugins> plugins = load(TOY_SINK_PLUGIN_PATH);
+    std::int64_t ids[3] = {7, 8, 9};
+    DataFrame frame;
+    frame.names.emplace_back("id");
+    frame.columns.push_back(Series::flat_i64(ids, 3));
+
+    dstd::Vector<dstd::Pair<dstd::String, dstd::String>> options;
+    options.emplace_back("path", "sink.csv");
+    const std::int64_t written_before = toy_sink_stats()[2];
+    const std::int64_t aborted_before = toy_sink_stats()[4];
+
+    const std::int64_t rows_before = toy_sink_row_count();
+    LazyFrame lf = frame.lazy();
+    const SinkSummary summary = dftu_utils_test::ok(
+        default_runtime().submit(lf.sink("toy_sink.out", options)).get());
+    CHECK(summary.rows == 3);
+    CHECK(summary.batches == 1);
+    CHECK(toy_sink_stats()[2] - written_before == 1);  // one frame written
+    CHECK(toy_sink_stats()[4] == aborted_before);      // and none aborted
+    CHECK(toy_sink_stats()[5] == 1);                   // the plan's columns
+    CHECK(toy_sink_row_count() - rows_before == 3);
+    const std::int64_t* rows = toy_sink_rows() + rows_before;
+    CHECK(rows[0] == 7);
+    CHECK(rows[1] == 8);
+    CHECK(rows[2] == 9);
+    CHECK(dstd::StringView(toy_sink_option("toy_sink_option_key")) == "path");
+    CHECK(dstd::StringView(toy_sink_option("toy_sink_option_value")) ==
+          "sink.csv");
+}
+
+TEST_CASE("a sink whose write fails aborts the writer once") {
+    dstd::Optional<plugins::host::Plugins> plugins = load(TOY_SINK_PLUGIN_PATH);
+    const std::int64_t made_before = toy_sink_stats()[0];
+    const std::int64_t aborted_before = toy_sink_stats()[4];
+    const std::int64_t finalized_before = toy_sink_stats()[3];
+
+    std::int64_t ids[2] = {1, 2};
+    DataFrame frame;
+    frame.names.emplace_back("id");
+    frame.columns.push_back(Series::flat_i64(ids, 2));
+    dstd::Vector<dstd::Pair<dstd::String, dstd::String>> options;
+    options.emplace_back("fail", "0");
+
+    LazyFrame lf = frame.lazy();
+    const auto failed =
+        default_runtime().submit(lf.sink("toy_sink.out", options)).get();
+    REQUIRE(!failed.has_value());
+    CHECK(toy_sink_stats()[0] - made_before == 1);     // one writer built
+    CHECK(toy_sink_stats()[4] - aborted_before == 1);  // aborted once
+    CHECK(toy_sink_stats()[3] == finalized_before);    // never finalized
+}
+
+TEST_CASE("an unknown sink name names the registered sinks") {
+    dstd::Optional<plugins::host::Plugins> plugins = load(TOY_SINK_PLUGIN_PATH);
+    DataFrame frame;
+    frame.names.emplace_back("id");
+    const std::int64_t ids[1] = {1};
+    frame.columns.push_back(Series::flat_i64(ids, 1));
+
+    LazyFrame lf = frame.lazy();
+    const auto failed = default_runtime().submit(lf.sink("no_such.sink")).get();
+    REQUIRE(!failed.has_value());
+    const dstd::String message = failed.error().c_str();
+    CHECK(message.find("no sink named 'no_such.sink'") != dstd::String::npos);
+    CHECK(message.find("toy_sink.out") != dstd::String::npos);
+}
+
+TEST_CASE("the C ABI sink writes the same rows and reports the same totals") {
+    dstd::Optional<plugins::host::Plugins> plugins = load(TOY_SINK_PLUGIN_PATH);
+    const std::int64_t ids[2] = {4, 5};
+    const char* names[1] = {"id"};
+    dftu_series* columns[1] = {nullptr};
+    columns[0] = dftu_series_new_flat(DFTU_TYPE_INT64, ids, 2, nullptr);
+    REQUIRE(columns[0] != nullptr);
+    dftu_dataframe* source = dftu_dataframe_new(names, columns, 1);
+    REQUIRE(source != nullptr);
+    dftu_lazyframe* lf = dftu_dataframe_lazy(source);
+    REQUIRE(lf != nullptr);
+
+    const char* keys[1] = {"path"};
+    const char* values[1] = {"abi.csv"};
+    std::int64_t rows = -1;
+    std::int64_t batches = -1;
+    CHECK(dftu_lazyframe_sink(lf, "toy_sink.out", keys, values, 1, &rows,
+                              &batches) == 0);
+    CHECK(rows == 2);
+    CHECK(batches == 1);
+    const std::int64_t* written = toy_sink_rows() + toy_sink_row_count() - 2;
+    CHECK(written[0] == 4);
+    CHECK(written[1] == 5);
+
+    // A missing name fails and writes nothing through the out pointers.
+    std::int64_t untouched_rows = -1;
+    CHECK(dftu_lazyframe_sink(lf, "no_such.sink", nullptr, nullptr, 0,
+                              &untouched_rows, &batches) != 0);
+    CHECK(untouched_rows == -1);
+    CHECK(dftu_lazyframe_sink(nullptr, "toy_sink.out", nullptr, nullptr, 0,
+                              &rows, &batches) != 0);
+    CHECK(dftu_lazyframe_sink(lf, nullptr, nullptr, nullptr, 0, &rows,
+                              &batches) != 0);
+
+    dftu_lazyframe_free(lf);
+    dftu_dataframe_free(source);
+}
+
+namespace {
+
+// A plan of one good frame, then a failure: the second batch never comes.
+class FailingSource final : public Source {
+   public:
+    class FailingCursor final : public Cursor {
+       public:
+        coro::CoroTask<MorselResult> next(std::int64_t) override {
+            if (served_) {
+                co_return common::make_error<"scripted source: batch 1 failed">(
+                    common::ErrorCode::Io);
+            }
+            served_ = true;
+            std::int64_t value = 1;
+            Morsel morsel;
+            morsel.rows = 1;
+            morsel.batch_index = 0;
+            morsel.columns.push_back(Series::flat_i64(&value, 1));
+            co_return morsel;
+        }
+
+       private:
+        bool served_ = false;
+    };
+
+    Schema schema() const override {
+        Schema s;
+        s.fields.push_back(
+            Field{dstd::String("id"), scalar(TypeId::Int64), false});
+        return s;
+    }
+
+    dstd::Result<ScanResult> scan(const ScanRequest& request) const override {
+        ScanResult r;
+        r.filters.assign(request.filters.size(), Pushed::No);
+        r.cursor = dstd::make_unique<FailingCursor>();
+        return r;
+    }
+};
+
+}  // namespace
+
+TEST_CASE("a stream that fails after one good frame aborts the sink once") {
+    dstd::Optional<plugins::host::Plugins> plugins = load(TOY_SINK_PLUGIN_PATH);
+    const std::int64_t written_before = toy_sink_stats()[2];
+    const std::int64_t finalized_before = toy_sink_stats()[3];
+    const std::int64_t aborted_before = toy_sink_stats()[4];
+
+    LazyFrame failing = LazyFrame::scan(dstd::make_shared<FailingSource>());
+    dstd::Vector<dstd::Pair<dstd::String, dstd::String>> options;
+    options.emplace_back("path", "bad.csv");
+    const auto got =
+        default_runtime().submit(failing.sink("toy_sink.out", options)).get();
+    REQUIRE(!got.has_value());
+    CHECK(dstd::StringView(got.error().c_str()).find("batch 1 failed") !=
+          dstd::StringView::npos);
+    CHECK(toy_sink_stats()[2] - written_before == 1);  // the good frame
+    CHECK(toy_sink_stats()[4] - aborted_before == 1);  // aborted once
+    CHECK(toy_sink_stats()[3] == finalized_before);    // never finalized
+}
+
+TEST_CASE("a second run of one sink plan writes and counts again") {
+    dstd::Optional<plugins::host::Plugins> plugins = load(TOY_SINK_PLUGIN_PATH);
+    std::int64_t ids[4] = {1, 2, 3, 4};
+    DataFrame frame;
+    frame.names.emplace_back("id");
+    frame.columns.push_back(Series::flat_i64(ids, 4));
+
+    dstd::Vector<dstd::Pair<dstd::String, dstd::String>> options;
+    options.emplace_back("path", "twice.csv");
+    auto counts = dstd::make_shared<SinkSummary>();
+    auto wrapped = sink_plan(frame.lazy(), "toy_sink.out", options, 2, counts);
+    REQUIRE(wrapped.has_value());
+
+    const std::int64_t rows_before = toy_sink_row_count();
+    for (int pass = 0; pass < 2; ++pass) {
+        DataFrame totals = dftu_utils_test::ok(run(*wrapped));
+        CHECK(totals.num_rows() == 1);
+        // The second run replaces the totals; it does not add to them.
+        CHECK(counts->rows == 4);
+        CHECK(counts->batches == 2);
+    }
+    // The sink saw both runs, over two binds.
+    CHECK(toy_sink_row_count() - rows_before == 8);
 }

@@ -65,7 +65,7 @@ named ``missing``.
 Stage names (``where``, ``derive``, ``select``, ``drop``, ``rename``,
 ``distinct``, ``group``, ``agg``, ``window``, ``pivot``, ``unpivot``,
 ``sort``, ``take``, ``skip``, ``sample``, ``expand``, ``parse``, ``lookup``, ``union``,
-``call``, ``time_range``, ``call_tree``, ``bucket``, ``session``) and ``from`` are
+``call``, ``time_range``, ``call_tree``, ``bucket``, ``session``, ``sink``) and ``from`` are
 keywords only at the start of a stage. Elsewhere they are field names:
 ``where sample == 1`` compares the field ``sample``. A query that starts
 with a stage name is a stage, so a field with that name at the start is
@@ -499,6 +499,9 @@ On a View, a query is a pipeline of stages joined by ``|``:
        overlapping or sparse windows.
    * - ``call_tree``
      - The nesting of events per ``pid`` and ``tid``.
+   * - ``sink "name" k "v", ...``
+     - Writes every row to the plugin sink ``name`` and ends the pipeline (see
+       `Sinks`_).
    * - ``name(args)``
      - The stages of a pipeline macro (see `Macros`_).
    * - ``window [k1, k2] [sort s] { a = expr, ... }``
@@ -1583,6 +1586,30 @@ extension); with ``distinct``, each row once per file. Reading it decodes no
 trace. Any other row set, and a file whose index holds no rows for it, runs
 as a lookup side over ``all`` when the query executes. Both give the same
 rows. Stored cells keep their JSON type: a number stays a number.
+
+Sinks
+~~~~~
+
+``sink "name" key "value", key2 "value2"`` writes the rows of the pipeline
+to the plugin sink ``name`` and is the last stage: a stage after it is a parse
+error (``A stage cannot follow 'sink': 'sink' ends a pipeline``). The name and
+every value are double-quoted strings; a key is a bare name. The sink is a
+plugin's (see :doc:`../plugins`), so the run loads the plugin that registers it
+before the query executes.
+
+.. code-block:: text
+
+   from data | where dur > 1000 | sink "csv.write" path "out.csv"
+
+A pipeline that ends in ``sink`` returns one row of the totals, with the
+integer columns ``rows`` and ``batches``: ``rows`` is the count the sink took
+and ``batches`` is how many frames it was given. That row is what the executor
+returns, so a run that writes a file still reports what it wrote, and
+``dftracer_view --sink`` prints it to stderr instead of a table.
+
+duql does not call the sink registry itself: the name and the options reach the
+executor as data, so a duql library build without the plugins layer can still
+plan a query that ends in ``sink``.
 
 Macros
 ~~~~~~

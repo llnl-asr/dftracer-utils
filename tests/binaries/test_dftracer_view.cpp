@@ -1173,3 +1173,136 @@ TEST_SUITE("DFTracerView JSON cell printer") {
             dftracer::utils::cli::cli_emittable(dataframe::TypeId::Decimal128));
     }
 }
+
+namespace {
+
+// Run `binary`, capturing its stderr into `err`.
+int run_view_stderr(const dstd::String& binary,
+                    const dstd::Vector<dstd::String>& args,
+                    const dstd::String& capture_path, dstd::String& err) {
+    dstd::Vector<const char*> argv;
+    argv.push_back(binary.c_str());
+    for (const auto& arg : args) argv.push_back(arg.c_str());
+    argv.push_back(nullptr);
+    auto capture = dstd::File::open(
+        dstd::PathView(capture_path),
+        {.access = dstd::Access::Write, .creation = dstd::Creation::AlwaysNew});
+    if (!capture) return -1;
+    const int fd = capture->native_handle();
+    pid_t pid = ::fork();
+    if (pid < 0) return -1;
+    if (pid == 0) {
+        ::dup2(fd, STDERR_FILENO);
+        ::close(fd);
+        ::execv(binary.c_str(), const_cast<char* const*>(argv.data()));
+        ::_exit(127);
+    }
+    capture->close().discard();
+    int status = 0;
+    ::waitpid(pid, &status, 0);
+    err = dftu_utils_test::read_text(capture_path);
+    if (WIFEXITED(status)) return WEXITSTATUS(status);
+    return -1;
+}
+
+// The example sink plugin the build produced, or empty when it is missing.
+dstd::String csv_sink_plugin() {
+    const char* path = std::getenv("DFTRACER_UTILS_CSV_SINK_PLUGIN");
+    if (path != nullptr && path[0] != '\0') return dstd::String(path);
+    return "";
+}
+
+}  // namespace
+
+TEST_CASE("--sink writes the query's rows and reports the totals") {
+    auto binary = find_view_binary();
+    const dstd::String plugin = csv_sink_plugin();
+    if (binary.empty() || plugin.empty()) {
+        MESSAGE("dftracer_view or the csv sink plugin not found, skipping.");
+        return;
+    }
+
+    dftu_utils_test::TestEnvironment env(100);
+    REQUIRE(env.is_valid());
+    auto f = create_pfw_gz(env, 50, 0);
+    REQUIRE(!f.empty());
+
+    const dstd::String out = env.dir() + "/sink_out.csv";
+    const dstd::String err_path = env.dir() + "/sink_err.txt";
+    dstd::String err;
+    const int rc = run_view_stderr(
+        binary,
+        {"--plugin", plugin, "--sink", "csv.write", "--sink-option",
+         "path=" + out, "-q", R"(cat == "POSIX")", env.dir()},
+        err_path, err);
+    CHECK(rc == 0);
+    // The totals line names the sink, its rows and its batches.
+    CHECK(err.find("sink csv.write: ") != dstd::String::npos);
+    CHECK(err.find(" rows in ") != dstd::String::npos);
+    const dstd::String csv = dftu_utils_test::read_text(out);
+    REQUIRE(csv.find("name,") == 0);
+    CHECK(count_lines(csv) > 1);
+}
+
+TEST_CASE("--sink with an unknown name fails and names the registered sinks") {
+    auto binary = find_view_binary();
+    const dstd::String plugin = csv_sink_plugin();
+    if (binary.empty() || plugin.empty()) {
+        MESSAGE("dftracer_view or the csv sink plugin not found, skipping.");
+        return;
+    }
+
+    dftu_utils_test::TestEnvironment env(100);
+    REQUIRE(env.is_valid());
+    auto f = create_pfw_gz(env, 50, 0);
+    REQUIRE(!f.empty());
+
+    const dstd::String err_path = env.dir() + "/sink_bad_err.txt";
+    dstd::String err;
+    const int rc = run_view_stderr(binary,
+                                   {"--plugin", plugin, "--sink", "nope", "-q",
+                                    R"(cat == "POSIX")", env.dir()},
+                                   err_path, err);
+    CHECK(rc != 0);
+    CHECK(err.find("no sink named 'nope'") != dstd::String::npos);
+    CHECK(err.find("csv.write") != dstd::String::npos);
+}
+
+TEST_CASE("--sink with a terminal mode is refused") {
+    auto binary = find_view_binary();
+    const dstd::String plugin = csv_sink_plugin();
+    if (binary.empty() || plugin.empty()) {
+        MESSAGE("dftracer_view or the csv sink plugin not found, skipping.");
+        return;
+    }
+
+    dftu_utils_test::TestEnvironment env(100);
+    REQUIRE(env.is_valid());
+    auto f = create_pfw_gz(env, 50, 0);
+    REQUIRE(!f.empty());
+
+    const dstd::String err_path = env.dir() + "/sink_mode_err.txt";
+    dstd::String err;
+    const int rc =
+        run_view_stderr(binary,
+                        {"--plugin", plugin, "--sink", "csv.write",
+                         "--sink-option", "path=" + env.dir() + "/mode.csv",
+                         "--counters", "-q", R"(cat == "POSIX")", env.dir()},
+                        err_path, err);
+    CHECK(rc != 0);
+    CHECK(err.find("cannot be combined with --counters") != dstd::String::npos);
+}
+
+TEST_CASE("--sink-option without --sink is refused") {
+    auto binary = find_view_binary();
+    if (binary.empty()) {
+        MESSAGE("dftracer_view binary not found, skipping.");
+        return;
+    }
+
+    dftu_utils_test::TestEnvironment env(100);
+    REQUIRE(env.is_valid());
+    const int rc = run_view(binary, {"--sink-option", "path=x.csv", "-q",
+                                     R"(cat == "POSIX")", env.dir()});
+    CHECK(rc != 0);
+}

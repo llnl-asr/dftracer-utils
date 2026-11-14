@@ -91,6 +91,9 @@ bool unregister_sink(dstd::StringView name);
 /// The sink registered as `name`, or null.
 dstd::SharedPtr<SinkFactory> find_sink(dstd::StringView name);
 
+/// The names of the sinks registered now, in sorted order.
+dstd::Vector<dstd::String> registered_sink_names();
+
 /// Opens `path` through the registered format with the highest probe score over
 /// the file's first 4 KiB. A NotFound error when no format claims it, and an
 /// InvalidArgument error naming both formats when two formats tie at the top.

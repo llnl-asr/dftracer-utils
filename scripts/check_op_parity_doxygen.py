@@ -142,6 +142,7 @@ ALLOWLIST = {
         "output_schema",
         "has_undeclared_columns",
         "reduce_specs",
+        "sink",
         "stream",
         "open_cursor",
         "frame_op",
@@ -580,6 +581,7 @@ PY_ALLOWLIST = {
         "reduce_specs",
         "schema",
         "set_index",
+        "sink",
         "stream",
     },
 }

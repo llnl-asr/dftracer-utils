@@ -667,6 +667,8 @@ class Applier {
 
     Status stage(const duql::PipelineCall& c);
 
+    Status stage(const duql::PipelineSink& s);
+
     Status stage(const duql::PipelineSession& ss);
 
     Status stage(const duql::PipelineExpand& e);

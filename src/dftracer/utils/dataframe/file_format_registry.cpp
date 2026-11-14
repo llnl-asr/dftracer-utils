@@ -19,6 +19,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <mutex>
@@ -166,6 +167,16 @@ dstd::SharedPtr<SinkFactory> find_sink(dstd::StringView name) {
     auto it = reg.find(name);
     if (it == reg.end()) return nullptr;
     return it->second;
+}
+
+dstd::Vector<dstd::String> registered_sink_names() {
+    dstd::Vector<dstd::String> names;
+    std::lock_guard<std::mutex> lock(registries().mutex);
+    auto& reg = sinks();
+    names.reserve(reg.size());
+    for (const auto& entry : reg) names.push_back(entry.first);
+    std::sort(names.begin(), names.end());
+    return names;
 }
 
 dstd::Result<dstd::SharedPtr<const Source>> open_file_with_format(

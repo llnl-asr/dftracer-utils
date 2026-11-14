@@ -4,6 +4,7 @@
 #include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/internal/dataframe_handle.h>
+#include <dftracer/utils/dataframe/internal/sink_plan.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/op.h>
 #include <dftracer/utils/dataframe/query/vectorize.h>
@@ -193,6 +194,22 @@ Status Applier::stage(const duql::PipelineCall& c) {
     lines.push_back(dstd::fmt<"frame_op {}">(c.op));
     v_ = v_.with_lazy(v_.lazy().frame_op(std_str(c.op), args));
     cols_.clear();
+    return {};
+}
+
+Status Applier::stage(const duql::PipelineSink& s) {
+    if (!main_)
+        return refuse<"'sink {}' is only allowed in the main pipeline">(s.name);
+    leave_scan("sink");
+    auto wrapped = dataframe::sink_plan(v_.lazy(), s.name, s.options, 0);
+    if (!wrapped) return wrapped.error();
+    lines.push_back(dstd::fmt<"sink {}">(s.name));
+    v_ = v_.with_lazy(std::move(*wrapped));
+    cols_.clear();
+    cols_.push_back(dataframe::query::VectorColumn{
+        dstd::String("rows"), dataframe::scalar(dataframe::TypeId::Int64)});
+    cols_.push_back(dataframe::query::VectorColumn{
+        dstd::String("batches"), dataframe::scalar(dataframe::TypeId::Int64)});
     return {};
 }
 

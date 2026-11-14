@@ -1740,9 +1740,49 @@ exception per callback and report it as a status.
 **Sinks.** ``DFTU_SVC_FILE_FORMATS`` also takes a ``dftu_sink_vt``
 (``register_sink``, ``PluginBuilder::sink<S>``): an output format that names
 the columns and options it accepts (``bind``), takes one borrowed frame per
-call (``write``), and finishes with ``finalize`` or ``abort``. The registry
-and the host adapter exist in this release; the lazy plan starts choosing a
-sink for its output in the next one, so a registered sink is not called yet.
+call (``write``), and finishes with ``finalize`` or ``abort``.
+
+A sink name is ``<plugin>.<name>``, and every surface reaches it:
+
+.. code-block:: cpp
+
+   // A frame or a whole plan, streamed to the sink in batches of batch_size.
+   auto summary = lf.sink("toy_sink.out", {{"path", "out.csv"}}, 65536).get();
+   // summary.rows, summary.batches
+
+.. code-block:: c
+
+   int64_t rows = 0, batches = 0;
+   dftu_lazyframe_sink(lf, "toy_sink.out", keys, values, n, &rows, &batches);
+
+.. code-block:: python
+
+   summary = lf.sink("csv.write", path="out.csv")   # SinkSummary(rows, batches)
+
+.. code-block:: text
+
+   dftracer_view ./traces --plugin ./csv.dylib --sink csv.write \
+                 --sink-option path=out.csv -q 'where dur > 1000'
+   # stderr: sink csv.write: 195 rows in 1 batches
+
+A duql pipeline names it as its last stage, and a stage after it is a parse
+error:
+
+.. code-block:: text
+
+   from data | where dur > 1000 | sink "csv.write" path "out.csv"
+
+The sink is bound with the plan's output column names and types (an ``Unknown``
+type passes through as ``Unknown``), then every frame the plan streams is
+written and ``finalize`` runs. A bind error, a scan error and a write error each
+call ``abort`` exactly once and return the error to the caller, and cancelling
+the task aborts too. A name that no plugin registered fails with
+``no sink named '<name>'; registered sinks: ...``.
+
+A duql pipeline that ends in ``sink`` yields one row of the totals, with the
+columns ``rows`` and ``batches``, so a run that writes a file still reports what
+it wrote. ``examples/plugins/csv_sink.cpp`` is a complete sink: it writes a CSV
+header and then every row, and it needs the option ``path``.
 
 Host services index
 --------------------

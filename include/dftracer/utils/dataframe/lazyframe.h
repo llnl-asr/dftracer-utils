@@ -11,6 +11,7 @@
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
@@ -359,6 +360,12 @@ class InMemorySource : public Source {
     dstd::SharedPtr<const DataFrame> frame_;
 };
 
+/// What one sink output took: the rows written and the frames they arrived in.
+struct SinkSummary {
+    std::int64_t rows = 0;
+    std::int64_t batches = 0;
+};
+
 /// A deferred query over a Source. Builder methods record ops and return a new
 /// @ref LazyFrame; nothing runs until collect(). A filter/with_column expr's
 /// col(i) refers to the i-th column of the frame at that point.
@@ -684,6 +691,22 @@ class LazyFrame {
     /// that cannot be written or read, a failed plugin node, or a cursor that
     /// ended with an error.
     coro::CoroTask<dstd::Result<DataFrame>> collect(
+        std::int64_t batch_size = 0) const;
+
+    /// Write this plan's rows to the sink registered as `name` instead of
+    /// returning them, and report what it wrote. Binds the sink with the
+    /// columns of @ref output_schema (an Unknown type is passed through as
+    /// such), writes every frame @ref stream yields, then finalizes the output.
+    /// `options` are the sink's own name/value pairs, in the order given.
+    /// `batch_size` is the scan chunk size, as for @ref collect.
+    ///
+    /// Any error - an unknown sink name, a failed bind, a failed read, a
+    /// failed write - aborts the output exactly once and comes back as this
+    /// result; so does the end of a cancelled task, because the output is
+    /// released on every path that does not reach finalize.
+    coro::CoroTask<dstd::Result<SinkSummary>> sink(
+        dstd::StringView name,
+        dstd::Vector<dstd::Pair<dstd::String, dstd::String>> options = {},
         std::int64_t batch_size = 0) const;
 
     /// Group `keys` with `aggs` and return the mergeable partial instead of a

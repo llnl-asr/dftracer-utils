@@ -138,6 +138,26 @@ elseif(TARGET dftracer_utils_dataframe::static)
                         PRIVATE dftracer_utils_dataframe::static)
 endif()
 
+# Registers the sink "csv": it writes every frame it is given to the file its
+# path option names, so it reads the batch through the dataframe C ABI.
+add_library(csv_sink_plugin MODULE csv_sink.cpp)
+target_set_warnings(csv_sink_plugin)
+set_target_properties(
+  csv_sink_plugin
+  PROPERTIES OUTPUT_NAME csv
+             PREFIX ""
+             POSITION_INDEPENDENT_CODE ON
+             CXX_STANDARD 20
+             CXX_STANDARD_REQUIRED ON
+             CXX_EXTENSIONS OFF)
+target_include_directories(csv_sink_plugin PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_enable_coroutine(csv_sink_plugin)
+if(TARGET dftracer_utils_dataframe::shared)
+  target_link_libraries(csv_sink_plugin PRIVATE dftracer_utils_dataframe::shared)
+elseif(TARGET dftracer_utils_dataframe::static)
+  target_link_libraries(csv_sink_plugin PRIVATE dftracer_utils_dataframe::static)
+endif()
+
 # Reads the batch dataframe directly (dftu_series_data / dftu_series_type), so
 # it links the dataframe C ABI like dur_stats_consumer does.
 add_library(perbatch_producer_plugin MODULE perbatch_producer.c)
@@ -311,7 +331,7 @@ endif()
 
 install(TARGETS event_counter_plugin duration_histogram_plugin
                 duration_report_plugin duration_udfs_plugin stats_udafs_plugin
-                query_filter_plugin
+                query_filter_plugin csv_sink_plugin
                 perbatch_producer_plugin perbatch_consumer_plugin
                 dur_stats_producer_plugin dur_stats_consumer_plugin
                 process_counts_plugin process_file_edges_plugin

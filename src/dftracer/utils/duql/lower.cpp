@@ -361,10 +361,15 @@ class Lowering {
         dstd::Optional<Span> bucket;
         bool open_pivot = false;
         bool called = false;
+        dstd::Optional<Span> sank;
         for (std::size_t first = i; i < steps.size(); ++i) {
             if (called)
                 return fail(steps[i].stage ? steps[i].stage->span : Span{},
                             "a stage after 'call' is not allowed: 'call' ends "
+                            "the pipeline");
+            if (sank)
+                return fail(steps[i].stage ? steps[i].stage->span : *sank,
+                            "a stage after 'sink' is not allowed: 'sink' ends "
                             "the pipeline");
             if (!steps[i].stage) {
                 if (open_pivot)
@@ -408,6 +413,7 @@ class Lowering {
                 continue;
             }
             called = std::holds_alternative<CallStage>(s.node);
+            if (std::holds_alternative<Sink>(s.node)) sank = s.span;
             auto lowered = stage(s);
             if (!lowered) return dstd::Unexpected(lowered.error());
             for (auto& b : before_) out.stages.push_back(std::move(b));
@@ -1541,6 +1547,12 @@ class Lowering {
                     auto call = call_stage(n.call, s.span);
                     if (!call) return dstd::Unexpected(call.error());
                     return std::move(*call);
+                } else if constexpr (std::is_same_v<T, Sink>) {
+                    duql::PipelineSink out;
+                    out.name = n.name;
+                    out.options = n.options;
+                    out.text = text_of(s.span);
+                    return std::move(out);
                 } else if constexpr (std::is_same_v<T, Use>) {
                     return fail(
                         s.span,
@@ -2402,7 +2414,7 @@ class Lowering {
             "unpivot",  "sort",       "take",      "skip",   "sample",
             "expand",   "lookup",     "lookup",    "lookup", "union",
             "call",     "time_range", "call_tree", "bucket", "session",
-            "parse",    "use"};
+            "parse",    "use",        "sink"};
         static_assert(std::size(NAMES) == std::variant_size_v<StageNode>);
         return NAMES[s.node.index()];
     }
@@ -2646,6 +2658,7 @@ class Lowering {
                                      std::is_same_v<T, Unpivot> ||
                                      std::is_same_v<T, Union> ||
                                      std::is_same_v<T, CallStage> ||
+                                     std::is_same_v<T, Sink> ||
                                      std::is_same_v<T, CallTree>) {
                     col_units_.clear();
                     record_units_ = false;

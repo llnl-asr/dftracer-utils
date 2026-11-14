@@ -23,6 +23,7 @@ from typing import (
     List,
     Literal,
     Mapping,
+    NamedTuple,
     Optional,
     Sequence,
     Tuple,
@@ -43,6 +44,14 @@ if TYPE_CHECKING:
     from .runtime import Runtime
 
 Value = Union[int, float]
+
+
+class SinkSummary(NamedTuple):
+    """What a :meth:`LazyFrame.sink` run wrote: ``rows`` rows in ``batches``
+    batches."""
+
+    rows: int
+    batches: int
 
 
 class LazyFrame:
@@ -630,6 +639,25 @@ class LazyFrame:
         if self._index is not None and all(name in out for name in self._index):
             out._index = self._index
         return out
+
+    def sink(
+        self,
+        name: str,
+        **options: str,
+    ) -> SinkSummary:
+        """Write the pipeline's rows to the sink a plugin registered as ``name``
+        and return the totals.
+
+        Every option is a string, e.g. ``lf.sink("csv.write", path="out.csv")``; a
+        value that is not a ``str`` raises ``TypeError``. The plan runs on the
+        whole pipeline, so this call does the work of :meth:`collect` with no
+        frame kept in memory. An unknown name raises with the registered names.
+        """
+        for key, value in options.items():
+            if not isinstance(value, str):
+                raise TypeError(f"sink option {key!r} must be a str, not {type(value).__name__}")
+        rows, batches = self._native.sink(name, dict(options), 0, self._runtime)
+        return SinkSummary(rows=int(rows), batches=int(batches))
 
     def stream(self, batch_size: int = 0) -> "Iterator[DataFrame]":
         """Run the pipeline and yield its rows as :class:`DataFrame` chunks of

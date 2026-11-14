@@ -15,6 +15,8 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
 
 using namespace dftracer::utils;
 
@@ -26,6 +28,9 @@ std::int64_t g_written = 0;
 std::int64_t g_finalized = 0;
 std::int64_t g_aborted = 0;
 std::int64_t g_bound_columns = 0;
+std::int64_t g_rows[64] = {0};
+std::int64_t g_row_count = 0;
+std::int64_t g_fail_after = -1;
 char g_option_key[64];
 char g_option_value[64];
 
@@ -39,6 +44,18 @@ class ToyWriter : public plugins::SinkWriter {
             return dstd::Error::from_format<"toy_sink: no frame">(
                 dstd::Condition::InvalidArgument);
         ++g_written;
+        if (g_fail_after >= 0 && g_written > g_fail_after)
+            return dstd::Error::from_format<"toy_sink: write refused">(
+                dstd::Condition::InvalidArgument);
+        dftu_series* ids = dftu_dataframe_column(batch, "id");
+        if (ids != nullptr) {
+            const auto* data =
+                static_cast<const std::int64_t*>(dftu_series_data(ids));
+            const std::int64_t n = dftu_series_length(ids);
+            for (std::int64_t i = 0; i < n && g_row_count < 64; ++i)
+                g_rows[g_row_count++] = data[i];
+            dftu_series_free(ids);
+        }
         return {};
     }
 
@@ -64,6 +81,17 @@ class ToySink : public plugins::Sink {
             std::snprintf(g_option_value, sizeof(g_option_value), "%s",
                           root->as.members[0].value->as.str);
         }
+        if (root != nullptr && root->kind == DFTU_VAL_OBJECT) {
+            g_fail_after = -1;
+            for (std::uint64_t i = 0; i < root->count; ++i) {
+                const dftu_value* v = root->as.members[i].value;
+                if (v != nullptr && v->kind == DFTU_VAL_STR &&
+                    std::snprintf(nullptr, 0, "%s", root->as.members[i].key) >
+                        0 &&
+                    std::strcmp(root->as.members[i].key, "fail") == 0)
+                    g_fail_after = std::atoi(v->as.str);
+            }
+        }
         return dstd::UniquePtr<plugins::SinkWriter>(
             dstd::make_unique<ToyWriter>());
     }
@@ -87,6 +115,15 @@ extern "C" DFTU_PLUGIN_EXPORT const char* toy_sink_option_key() {
 }
 extern "C" DFTU_PLUGIN_EXPORT const char* toy_sink_option_value() {
     return g_option_value;
+}
+
+// The values of the `id` column every written frame carried, in order.
+extern "C" DFTU_PLUGIN_EXPORT const std::int64_t* toy_sink_rows() {
+    return g_rows;
+}
+
+extern "C" DFTU_PLUGIN_EXPORT std::int64_t toy_sink_row_count() {
+    return g_row_count;
 }
 
 extern "C" DFTU_PLUGIN_EXPORT dftu_status

@@ -1779,6 +1779,25 @@ DFTU_EXPORT dftu_lazyframe* dftu_dataframe_lazy(const dftu_dataframe* df);
 DFTU_EXPORT dftu_dataframe* dftu_lazyframe_collect(dftu_lazyframe* lf,
                                                    int64_t batch_size);
 
+/** Write the deferred pipeline's rows to the sink registered as `name` instead
+ * of returning them, then finalize the output. Does NOT consume `lf`: it stays
+ * valid and re-runnable. `option_keys[i]` and `option_values[i]` are one
+ * name/value pair each, both NUL-terminated and borrowed for the call, in the
+ * order the sink receives them; `n_options` is their count, and both arrays are
+ * unused (and may be NULL) when it is 0. `rows_out` and `batches_out` are
+ * caller-owned and may each be NULL; on success they receive the rows written
+ * and the frames they arrived in. Returns 0 on success. On any error - an
+ * unknown sink name, a failed bind, a failed read or write - nothing is written
+ * through the out pointers, the output is aborted exactly once, and the return
+ * is non-zero. Returns non-zero and writes nothing when `lf` or `name` is NULL,
+ * or when `n_options` is non-zero and an entry of either array is NULL. */
+DFTU_EXPORT int32_t dftu_lazyframe_sink(const dftu_lazyframe* lf,
+                                        const char* name,
+                                        const char* const* option_keys,
+                                        const char* const* option_values,
+                                        uint32_t n_options, int64_t* rows_out,
+                                        int64_t* batches_out);
+
 /** Free a lazyframe handle. */
 DFTU_EXPORT void dftu_lazyframe_free(dftu_lazyframe* lf);
 

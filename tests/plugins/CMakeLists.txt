@@ -34,6 +34,7 @@ set(PLUGINS_TEST_SOURCES
     test_plugin_reads.cpp
     test_plugin_providers.cpp
     test_plugin_file_formats.cpp
+    test_plugin_sink_duql.cpp
     test_provider_pushdown.cpp
     test_plugin_library_lifetime.cpp
     test_provider_schema_types.cpp
@@ -355,6 +356,13 @@ if(TARGET plugins_test_plugin_file_formats)
     TOY_BAD_SINK_PLUGIN_PATH="$<TARGET_FILE:toy_bad_sink_plugin>")
   add_dependencies(plugins_test_plugin_file_formats toy_format_plugin
                    toy_format_tie_plugin toy_sink_plugin toy_bad_sink_plugin)
+endif()
+
+if(TARGET plugins_test_plugin_sink_duql)
+  target_compile_definitions(
+    plugins_test_plugin_sink_duql PRIVATE
+    TOY_SINK_PLUGIN_PATH="$<TARGET_FILE:toy_sink_plugin>")
+  add_dependencies(plugins_test_plugin_sink_duql toy_sink_plugin)
 endif()
 
 if(TARGET plugins_test_plugin_providers)

@@ -62,6 +62,7 @@ from .lazyframe import (  # noqa: F401
     LazyFrame,
     LazyResult,
     LazyScalar,
+    SinkSummary,
     collect_all,
     lazy,
 )
@@ -165,6 +166,7 @@ __all__ = [
     "LazyResult",
     "LazyScalar",
     "BoundColumn",
+    "SinkSummary",
     "collect_all",
     "lazy",
     "Series",

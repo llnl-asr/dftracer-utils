@@ -32,6 +32,12 @@ Add your own analysis that rides the fused scan, from C, C++ or Python.
 
       Publish and consume batch-scoped ports in one scan.
 
+   .. grid-item-card:: Write a sink plugin
+      :link: plugins/write-a-sink
+      :link-type: doc
+
+      Take the rows of a query and write them where you want them.
+
    .. grid-item-card:: Use the library from C
       :link: core/c-abi
       :link-type: doc
@@ -45,4 +51,5 @@ Add your own analysis that rides the fused scan, from C, C++ or Python.
    ../jit
    plugins/compose-ops
    plugins/inter-plugin-comms
+   plugins/write-a-sink
    core/c-abi

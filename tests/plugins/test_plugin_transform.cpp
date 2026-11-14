@@ -20,8 +20,6 @@
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view.h>
-// After fold_adapter.h so nanoarrow is set up before dataframe/c_api.h's
-// arrow_abi.
 #include <doctest/doctest.h>
 #include <plugins/test_plugin_common.h>
 #include <task_result.h>

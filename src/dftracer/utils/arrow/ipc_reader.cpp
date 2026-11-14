@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
-#include <dftracer/utils/common/config.h>
-#ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
 
+#include <dftracer/utils/arrow/ipc_reader.h>
+#include <dftracer/utils/common/config.h>
 #include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/function.h>
@@ -9,7 +9,6 @@
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/trace/arrow/ipc_reader.h>
 #include <nanoarrow/nanoarrow.h>
 #include <nanoarrow/nanoarrow_ipc.h>
 #include <sys/mman.h>
@@ -17,7 +16,7 @@
 #include <cstring>
 #include <new>
 
-namespace dftracer::utils::trace::arrow {
+namespace dftracer::utils::arrow {
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -300,6 +299,4 @@ int IpcReader::for_each_batch(
     return 0;
 }
 
-}  // namespace dftracer::utils::trace::arrow
-
-#endif  // DFTRACER_UTILS_ENABLE_ARROW_IPC
+}  // namespace dftracer::utils::arrow

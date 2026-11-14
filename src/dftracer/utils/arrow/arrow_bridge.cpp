@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/config.h>
-#include <dftracer/utils/dataframe/arrow_bridge.h>
 #include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/vector.h>
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
 
+// nanoarrow must precede arrow.h: c_api.h (pulled in by arrow.h) defines
+// ARROW_FLAG_DICTIONARY_ORDERED, nanoarrow's outer include guard, which would
+// otherwise suppress its ArrowArrayStream definition.
+#include <dftracer/utils/arrow/arrow.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
@@ -16,7 +18,19 @@
 #include <memory>
 #include <stdexcept>
 
-namespace dftracer::utils::dataframe {
+namespace dftracer::utils::arrow {
+
+using dataframe::adopt_type_from;
+using dataframe::borrow_buffer;
+using dataframe::BufferView;
+using dataframe::DataFrame;
+using dataframe::Encoding;
+using dataframe::new_buffer;
+using dataframe::Series;
+using dataframe::TimeUnit;
+using dataframe::TypeId;
+using dataframe::writable;
+
 namespace {
 
 ArrowTimeUnit to_arrow_time_unit(TimeUnit u) {
@@ -1011,7 +1025,7 @@ dstd::SharedPtr<ArrowArray> adopt_array(ArrowArray* array) {
 
 }  // namespace
 
-Series from_arrow(const ArrowSchema* schema, ArrowArray* array) {
+Series series_from_arrow(const ArrowSchema* schema, ArrowArray* array) {
     dstd::SharedPtr<ArrowArray> owner = adopt_array(array);
     return import_any(schema, owner.get(), owner);
 }
@@ -1035,6 +1049,4 @@ DataFrame dataframe_from_arrow(const ArrowSchema* schema, ArrowArray* array) {
     return df;
 }
 
-}  // namespace dftracer::utils::dataframe
-
-#endif  // DFTRACER_UTILS_ENABLE_ARROW
+}  // namespace dftracer::utils::arrow

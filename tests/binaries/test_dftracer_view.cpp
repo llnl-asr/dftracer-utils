@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dataframe/builders_arrow_types.h>
 #include <dftracer/utils/cli/json_cell_printer.h>
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
@@ -24,10 +25,6 @@
 #include <task_result.h>
 #include <testing_utilities.h>
 #include <unistd.h>
-
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
-#include <dataframe/builders_arrow_types.h>
-#endif
 
 #include <algorithm>
 #include <cstdlib>
@@ -1077,7 +1074,6 @@ TEST_SUITE("DFTracerView JSON cell printer") {
         CHECK(cell(b, 0) == "\"a\\tb\"");
     }
 
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
     TEST_CASE("FixedSizeBinary reads its declared width") {
         auto fsb = dataframe::test_types::make_fixed_size_binary({"ab\"c"}, 4);
         CHECK(cell(fsb, 0) == "\"ab\\\"c\"");
@@ -1089,7 +1085,6 @@ TEST_SUITE("DFTracerView JSON cell printer") {
         auto lb = dataframe::test_types::make_large_binary({"a\nb"});
         CHECK(cell(lb, 0) == "\"a\\nb\"");
     }
-#endif
 
     TEST_CASE("temporal types emit the exact physical integer") {
         auto date32 = dataframe::Series::flat(

@@ -17,18 +17,17 @@ extern "C" {
 
 #define DFTU_SVC_RESULT "dftu.svc.result"
 
-/** The alternative a dftu_result_value carries; matches the host's own
-   NamedResult variant one for one. */
+/** The alternative a dftu_result_value carries. Value 1 was the Arrow kind and
+   is never reused. */
 typedef int32_t dftu_result_kind;
 enum {
     DFTU_RESULT_KIND_BYTES = 0,
-    DFTU_RESULT_KIND_ARROW = 1,
     DFTU_RESULT_KIND_FRAME = 2,
     DFTU_RESULT_KIND_LAZYFRAME = 3
 };
 
-/** A tagged named-result value: exactly one of `bytes`/`arrow`/`frame`/
-   `lazyframe` is live, selected by `kind`. See dftu_svc_result::emit for
+/** A tagged named-result value: exactly one of `bytes`/`frame`/`lazyframe` is
+   live, selected by `kind`. See dftu_svc_result::emit for
    ownership per kind. */
 typedef struct dftu_result_value {
     int32_t kind; /**< a dftu_result_kind value */
@@ -37,23 +36,19 @@ typedef struct dftu_result_value {
             const void* data;
             uint64_t len;
         } bytes;
-        struct {
-            struct ArrowArray* array;
-            struct ArrowSchema* schema;
-        } arrow;
         dftu_dataframe* frame;
         dftu_lazyframe* lazyframe;
     } u;
 } dftu_result_value;
 
-/** Named result channel. The host moves Arrow/frame/lazyframe handles and
+/** Named result channel. The host moves frame/lazyframe handles and
    copies bytes, never interpreting any of them; Plugins::run returns the
    collected results to the caller keyed by name. */
 typedef struct dftu_svc_result {
     uint32_t struct_size; /**< sizeof(dftu_svc_result) */
     /** Emit a named result carrying `v`. DFTU_RESULT_KIND_BYTES is COPIED
-       (`v->u.bytes.len` bytes); ARROW/FRAME/LAZYFRAME are MOVED - the host
-       takes ownership of the array/schema or handle (do not use or free it
+       (`v->u.bytes.len` bytes); FRAME/LAZYFRAME are MOVED - the host
+       takes ownership of the handle (do not use or free it
        after a successful call). A LAZYFRAME plan MUST be self-contained - its
        source an in-memory frame or a re-openable source (dftu_dataframe_lazy
        of a materialized frame is the supported construction); a plan

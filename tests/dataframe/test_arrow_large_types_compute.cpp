@@ -15,9 +15,8 @@
 // copy on import), and every kernel that already worked on String/Binary/List
 // works on them directly - equality, comparison, sort, group_by, a string op,
 // is_in, and take/gather (which sort's reordering relies on).
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
+#include <dftracer/utils/arrow/arrow.h>
 #include <dftracer/utils/dataframe/agg.h>
-#include <dftracer/utils/dataframe/arrow.h>
 #include <dftracer/utils/dataframe/c_api.h>
 #include <nanoarrow/nanoarrow.h>
 
@@ -53,7 +52,7 @@ Series make_large_utf8(const dstd::Vector<dstd::String>& values) {
         REQUIRE(ArrowArrayAppendString(&b.array, sv) == NANOARROW_OK);
     }
     finish(&b.array);
-    return Series::from_arrow(&b.schema, &b.array);
+    return arrow::series_from_arrow(&b.schema, &b.array);
 }
 
 Series make_large_binary(const dstd::Vector<dstd::String>& values) {
@@ -71,7 +70,7 @@ Series make_large_binary(const dstd::Vector<dstd::String>& values) {
         REQUIRE(ArrowArrayAppendBytes(&b.array, bv) == NANOARROW_OK);
     }
     finish(&b.array);
-    return Series::from_arrow(&b.schema, &b.array);
+    return arrow::series_from_arrow(&b.schema, &b.array);
 }
 
 // large_list<int64>: rows = lists of int64 values.
@@ -93,7 +92,7 @@ Series make_large_list_i64(
         REQUIRE(ArrowArrayFinishElement(&b.array) == NANOARROW_OK);
     }
     finish(&b.array);
-    return Series::from_arrow(&b.schema, &b.array);
+    return arrow::series_from_arrow(&b.schema, &b.array);
 }
 
 // large_list<large_utf8>: rows = lists of strings, nested Large both levels.
@@ -117,7 +116,7 @@ Series make_large_list_large_utf8(
         REQUIRE(ArrowArrayFinishElement(&b.array) == NANOARROW_OK);
     }
     finish(&b.array);
-    return Series::from_arrow(&b.schema, &b.array);
+    return arrow::series_from_arrow(&b.schema, &b.array);
 }
 
 }  // namespace
@@ -363,7 +362,7 @@ TEST_SUITE("dataframe_arrow_large_types_compute") {
         REQUIRE(wide_off != nullptr);
         CHECK(s.offsets() == nullptr);  // never materialized an int32 buffer
 
-        OwnedArrow out = s.to_arrow();
+        arrow::OwnedArrow out = arrow::to_arrow(s);
         REQUIRE(static_cast<bool>(out));
         ArrowSchemaView view;
         ArrowError err;
@@ -372,7 +371,7 @@ TEST_SUITE("dataframe_arrow_large_types_compute") {
         // exports as Arrow's large_utf8, not narrowed to utf8.
         CHECK(view.type == NANOARROW_TYPE_LARGE_STRING);
 
-        Series back = Series::from_arrow(out.schema(), out.array());
+        Series back = arrow::series_from_arrow(out.schema(), out.array());
         REQUIRE(back.valid());
         CHECK(back.type() == TypeId::LargeString);
         REQUIRE(back.length() == 3);
@@ -458,8 +457,3 @@ TEST_SUITE("dataframe_arrow_large_types_compute") {
         }
     }
 }
-#else
-TEST_SUITE("dataframe_arrow_large_types_compute") {
-    TEST_CASE("Arrow disabled: nothing to exercise") { CHECK(true); }
-}
-#endif

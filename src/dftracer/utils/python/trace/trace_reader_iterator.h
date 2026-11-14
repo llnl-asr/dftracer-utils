@@ -3,34 +3,28 @@
 #define DFTRACER_UTILS_PYTHON_TRACE_TRACE_READER_ITERATOR_H
 
 #include <Python.h>
+#include <dftracer/utils/arrow/arrow_export.h>
 #include <dftracer/utils/common/config.h>
-#include <dftracer/utils/python/core/memoryview_batch.h>
-#include <dftracer/utils/runtime/task_handle.h>
-
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/future.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
-#include <dftracer/utils/trace/arrow/arrow_export.h>
+#include <dftracer/utils/python/core/memoryview_batch.h>
+#include <dftracer/utils/runtime/task_handle.h>
 
 typedef struct {
-    PyObject_HEAD dftracer::utils::trace::arrow::ArrowExportResult *result;
+    PyObject_HEAD dftracer::utils::arrow::ArrowExportResult *result;
 } ArrowBatchCapsuleObject;
 
 extern PyTypeObject ArrowBatchCapsuleType;
-#endif
 
 enum class IteratorMode {
     Memoryview,
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
     Arrow,
-#endif
 };
 
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
 struct ArrowIteratorState {
-    using BatchType = dftracer::utils::trace::arrow::ArrowExportResult;
+    using BatchType = dftracer::utils::arrow::ArrowExportResult;
     dftracer::utils::dstd::SharedPtr<dftracer::utils::coro::Channel<BatchType>>
         channel;
     std::mutex error_mtx;
@@ -45,7 +39,6 @@ struct ArrowIteratorState {
         if (!error) error.emplace(std::move(e));
     }
 };
-#endif
 
 using dftracer::utils::python::core::MemoryViewBatchIteratorState;
 using dftracer::utils::python::core::MemoryViewBatchObject;
@@ -57,9 +50,7 @@ typedef struct {
         batch_state;
     PyObject *current_batch;
     Py_ssize_t batch_index;
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
     dftracer::utils::dstd::SharedPtr<ArrowIteratorState> arrow_state;
-#endif
     IteratorMode mode;
 } TraceReaderIteratorObject;
 

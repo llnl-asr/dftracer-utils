@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_PYTHON_TRACE_STREAMING_ITERATOR_H
 
 #include <Python.h>
+#include <dftracer/utils/arrow/arrow_export.h>
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dstd/error.h>
@@ -18,9 +19,6 @@
 #include <exception>
 #include <mutex>
 #include <utility>
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
-#include <dftracer/utils/trace/arrow/arrow_export.h>
-#endif
 
 namespace dftracer::utils::python::trace {
 
@@ -137,17 +135,13 @@ class StreamingState {
     dstd::SharedFuture<void> task_future_;
 };
 
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
-using dftracer::utils::trace::arrow::ArrowExportResult;
-#endif
+using dftracer::utils::arrow::ArrowExportResult;
 
 /// Internal C++ state for ArrowStreamingIterator.
 /// Stored as a pointer to avoid C++ object layout issues with Python.
 struct ArrowStreamingIteratorState : dstd::HeapObject {
     dstd::SharedPtr<void> state;
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
     dstd::Function<dstd::Optional<ArrowExportResult>()> pull_next;
-#endif
     // When set, the iterator yields native DataFrame chunks instead of Arrow
     // batches (pull_next is then unused). Keeps Arrow off the streaming path.
     dstd::Function<dstd::Optional<dftracer::utils::dataframe::DataFrame>()>

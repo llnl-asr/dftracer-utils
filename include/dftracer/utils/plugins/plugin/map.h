@@ -8,8 +8,6 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi.h>
-#include <dftracer/utils/plugins/arrow_abi.h>
-#include <dftracer/utils/plugins/owned_arrow.h>
 #include <dftracer/utils/plugins/plugin/async.h>
 #include <dftracer/utils/plugins/plugin/fs.h>
 #include <dftracer/utils/plugins/plugin/types.h>
@@ -186,32 +184,6 @@ class Host {
     /// RAII sketch bound to this host; frees the handle in its destructor.
     class Sketch make_sketch() const;
 
-    dstd::Result<void> arrow_write_ipc(ArrowArray* a, ArrowSchema* s,
-                                       const char* path) const {
-        DFTRACER_UTILS_TRY(const dftu_svc_arrow* e,
-                           need(DFTU_SVC_ARROW, arrow_ext_));
-        return detail::reported(e->arrow_write_ipc(ctx_, h_->h, a, s, path));
-    }
-    /// Read the first record batch of an IPC file; the caller owns *out and
-    /// *out_schema and must call their release.
-    dstd::Result<void> arrow_read_ipc(const char* path, ArrowArray* out,
-                                      ArrowSchema* out_schema) const {
-        DFTRACER_UTILS_TRY(const dftu_svc_arrow* e,
-                           need(DFTU_SVC_ARROW, arrow_ext_));
-        return detail::reported(
-            e->arrow_read_ipc(ctx_, h_->h, path, out, out_schema));
-    }
-    /// arrow_write_ipc for an already-owning batch.
-    dstd::Result<void> arrow_write_ipc(OwnedArrow& a, const char* path) const {
-        return arrow_write_ipc(&a.array, &a.schema, path);
-    }
-    /// Owning form of arrow_read_ipc.
-    dstd::Result<OwnedArrow> arrow_read_ipc(const char* path) const {
-        OwnedArrow owned;
-        DFTRACER_UTILS_TRY_VOID(
-            arrow_read_ipc(path, &owned.array, &owned.schema));
-        return owned;
-    }
     dstd::Result<dftu_trace_writer*> trace_open_write(const char* path) const {
         DFTRACER_UTILS_TRY(const dftu_svc_trace* e,
                            need(DFTU_SVC_TRACE, trace_ext_));
@@ -399,15 +371,6 @@ class Host {
                                    dstd::StringView data) const {
         return emit_result(name, data.data(), data.size());
     }
-    /// Moves *a and *s into the host on success.
-    dstd::Result<void> emit_result_arrow(const char* name, ArrowArray* a,
-                                         ArrowSchema* s) const {
-        dftu_result_value v{};
-        v.kind = DFTU_RESULT_KIND_ARROW;
-        v.u.arrow.array = a;
-        v.u.arrow.schema = s;
-        return emit(name, &v);
-    }
     /// Hands a native dataframe result to the host, which takes ownership on
     /// success; on an error `df` is left intact so it frees normally. Same
     /// finalize/collision semantics as emit_result.
@@ -481,7 +444,6 @@ class Host {
     mutable const dftu_svc_duql* query_ext_ = nullptr;
     mutable const dftu_svc_fileio* fileio_ext_ = nullptr;
     mutable const dftu_svc_sketch* sketch_ext_ = nullptr;
-    mutable const dftu_svc_arrow* arrow_ext_ = nullptr;
     mutable const dftu_svc_trace* trace_ext_ = nullptr;
     mutable const dftu_svc_ports* ports_ext_ = nullptr;
     mutable const dftu_svc_result* result_ext_ = nullptr;

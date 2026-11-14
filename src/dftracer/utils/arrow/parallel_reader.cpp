@@ -1,17 +1,15 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/arrow/ipc_reader.h>
+#include <dftracer/utils/arrow/parallel_reader.h>
 #include <dftracer/utils/common/config.h>
-#include <dftracer/utils/dstd/vector.h>
-#ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
-
 #include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/string.h>
-#include <dftracer/utils/trace/arrow/ipc_reader.h>
-#include <dftracer/utils/trace/arrow/parallel_reader.h>
+#include <dftracer/utils/dstd/vector.h>
 
 using namespace dftracer::utils;
 
-namespace dftracer::utils::trace::arrow {
+namespace dftracer::utils::arrow {
 
 coro::CoroTask<ArrowFileReadResult> read_arrow_file_async(dstd::String path) {
     ArrowFileReadResult result;
@@ -64,6 +62,4 @@ coro::CoroTask<ParallelReadResult> read_arrow_files_parallel(
     co_return result;
 }
 
-}  // namespace dftracer::utils::trace::arrow
-
-#endif  // DFTRACER_UTILS_ENABLE_ARROW_IPC
+}  // namespace dftracer::utils::arrow

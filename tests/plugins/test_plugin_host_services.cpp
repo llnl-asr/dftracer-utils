@@ -1,21 +1,18 @@
 // SPDX-License-Identifier: MIT
-// Exercises the host services a plugin calls synchronously: Arrow batch export,
-// Arrow IPC write, the DDSketch handle, and the dftracer trace write/read
-// round-trip. Drives them through a real PluginFold-wired dftu_plugin_host, the
-// way a loaded plugin would.
+// Exercises the host services a plugin calls synchronously: the DDSketch handle
+// and the dftracer trace write/read round-trip. Drives them through a real
+// PluginFold-wired dftu_plugin_host, the way a loaded plugin would.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi.h>
-// fold_adapter.h transitively pulls nanoarrow (ArrowArray/ArrowSchema); it must
-// precede plugin.h so arrow_abi.h no-ops rather than tripping nanoarrow's outer
-// ARROW_FLAG_DICTIONARY_ORDERED sentinel.
-#include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/plugins/host/fold_adapter.h>
 #include <dftracer/utils/plugins/plugin.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -23,25 +20,10 @@
 #include <dirent.h>
 #include <doctest/doctest.h>
 #include <fcntl.h>
-#include <sys/stat.h>
-#include <zlib.h>
-
-// dftu_svc_arrow::batch_to_arrow was removed with the row ABI; the dataframe
-// engine's own Arrow bridge (DataFrame::to_arrow) now builds the test arrays
-// arrow_write_ipc round-trips.
-#ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
-#include <dftracer/utils/dataframe/arrow.h>
-#include <dftracer/utils/dataframe/dataframe.h>
-#include <dftracer/utils/dataframe/series.h>
-#include <dftracer/utils/dstd/fs.h>
-#include <dftracer/utils/dstd/memory.h>
-#include <dftracer/utils/dstd/path.h>
-#include <dftracer/utils/dstd/string.h>
-#include <dftracer/utils/dstd/vector.h>
-#endif
-
 #include <plugins/test_abi_ctx.h>
+#include <sys/stat.h>
 #include <testing_utilities.h>
+#include <zlib.h>
 
 #include <algorithm>
 #include <chrono>
@@ -88,57 +70,6 @@ std::uint64_t file_size(const dstd::String& path) {
 }
 
 }  // namespace
-
-#ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
-TEST_CASE("plugin host: arrow_write_ipc writes a non-empty IPC file") {
-    dftu_utils_test::TestEnvironment env(0);
-    HostFixture fx;
-    dftu_plugin_host& host = fx.host();
-
-    const std::uint64_t ts0[3] = {500, 501, 502};
-    dataframe::DataFrame df;
-    df.names = dstd::make_shared_strings({"cat", "name", "ts"});
-    df.columns.push_back(
-        dataframe::Series::strings({"STDIO", "STDIO", "STDIO"}));
-    df.columns.push_back(
-        dataframe::Series::strings({"fwrite", "fwrite", "fwrite"}));
-    df.columns.push_back(
-        dataframe::Series::flat(dataframe::TypeId::Uint64, ts0, 3));
-    dataframe::OwnedArrow owned = df.to_arrow();
-    REQUIRE(owned);
-
-    const auto* arrow = static_cast<const dftu_svc_arrow*>(
-        host.get_service(host.h, DFTU_SVC_ARROW));
-    REQUIRE(arrow != nullptr);
-
-    dstd::String ipc = env.dir() + "/x.arrow";
-    int wr = arrow->arrow_write_ipc(fx.ctx(), host.h, owned.array(),
-                                    owned.schema(), ipc.c_str());
-    CHECK(wr == DFTU_OK);
-    CHECK(file_size(ipc) > 0);
-    MESSAGE("arrow ipc: " << ipc << " size=" << file_size(ipc));
-
-    owned.reset();
-
-    ArrowArray back{};
-    ArrowSchema back_sch{};
-    int rd =
-        arrow->arrow_read_ipc(fx.ctx(), host.h, ipc.c_str(), &back, &back_sch);
-    CHECK(rd == DFTU_OK);
-    REQUIRE(back.release != nullptr);
-    REQUIRE(back_sch.release != nullptr);
-    CHECK(back.length == 3);  // rows survive the write/read round-trip
-    REQUIRE(back.n_children == 3);
-    const ArrowArray* ts_col = back.children[2];
-    const std::uint64_t* ts =
-        static_cast<const std::uint64_t*>(ts_col->buffers[1]);
-    CHECK(ts[0] == 500);
-    CHECK(ts[2] == 502);
-    MESSAGE("arrow ipc read: rows=" << back.length << " ts0=" << ts[0]);
-    back.release(&back);
-    back_sch.release(&back_sch);
-}
-#endif
 
 TEST_CASE("plugin host: DDSketch handle add/merge/result round-trips") {
     HostFixture fx;

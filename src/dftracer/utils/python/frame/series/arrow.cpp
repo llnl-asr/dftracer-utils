@@ -1,13 +1,10 @@
 // SPDX-License-Identifier: MIT
-#include <dftracer/utils/common/config.h>  // DFTRACER_UTILS_ENABLE_ARROW
+#include <dftracer/utils/arrow/arrow.h>
+#include <dftracer/utils/common/config.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/python/frame/series_detail.h>
-
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
-#include <dftracer/utils/dataframe/arrow_bridge.h>
 #include <nanoarrow/nanoarrow.h>
-#endif
 
 #include <cstdint>
 #include <exception>
@@ -15,8 +12,6 @@
 #include <utility>
 
 namespace dftracer::utils::python::frame::series_detail {
-
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
 
 namespace {
 
@@ -47,7 +42,7 @@ PyObject* Series_arrow_c_array(PyObject* self, PyObject* /*args*/) {
     schema = dftracer::utils::dstd::make_unique<ArrowSchema>();
     array = dftracer::utils::dstd::make_unique<ArrowArray>();
     try {
-        dataframe::to_arrow(*a, schema.get(), array.get());
+        arrow::to_arrow(*a, schema.get(), array.get());
     } catch (const std::exception& e) {
         PyErr_SetString(PyExc_RuntimeError, e.what());
         return nullptr;
@@ -98,7 +93,7 @@ Series import_arrow_column(PyObject* obj) {
     try {
         // from_arrow adopts `array` (nulls its release), so the array capsule's
         // destructor becomes a no-op; the schema capsule still owns the schema.
-        col = dataframe::from_arrow(schema, array);
+        col = arrow::series_from_arrow(schema, array);
         if (!col.valid())
             PyErr_SetString(PyExc_ValueError, "unsupported Arrow column");
     } catch (const std::exception& e) {
@@ -114,8 +109,6 @@ PyObject* vec_from_arrow(PyObject* /*self*/, PyObject* obj) {
     if (!col.valid()) return nullptr;
     return make_series(std::move(col));
 }
-
-#endif  // DFTRACER_UTILS_ENABLE_ARROW
 
 namespace {
 

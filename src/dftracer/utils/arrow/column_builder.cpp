@@ -1,13 +1,11 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/arrow/column_builder.h>
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/error.h>
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
-
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/trace/arrow/column_builder.h>
 #include <nanoarrow/nanoarrow.h>
 
 #include <cmath>
@@ -15,7 +13,7 @@
 #include <limits>
 #include <stdexcept>
 
-namespace dftracer::utils::trace::arrow {
+namespace dftracer::utils::arrow {
 
 namespace {
 
@@ -1404,6 +1402,4 @@ void RecordBatchBuilder::reset(bool keep_schema) {
     num_rows_ = 0;
 }
 
-}  // namespace dftracer::utils::trace::arrow
-
-#endif  // DFTRACER_UTILS_ENABLE_ARROW
+}  // namespace dftracer::utils::arrow

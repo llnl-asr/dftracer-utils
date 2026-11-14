@@ -70,8 +70,8 @@ struct Job {
     std::uint32_t max_parallel = 0;
 };
 
-// dft.ext.agg accumulator; defined in the .cpp to keep agg.h (and its Arrow
-// tangle) out of this header.
+// dft.ext.agg accumulator; defined in the .cpp to keep agg.h out of this
+// header.
 struct AggAccum;
 
 // One live instance of a plugin-registered dftu_state_desc; defined in
@@ -202,7 +202,7 @@ class PluginFold : public trace::views::detail::Fold {
     }
 
     // Emit a named, kind-tagged result into the host registry; moves the
-    // Arrow/frame/lazyframe handle carried in `v` (bytes are copied). Fails on
+    // frame/lazyframe handle carried in `v` (bytes are copied). Fails on
     // a NULL name/v/registry or an unrecognized kind.
     dstd::Result<void> emit_result(const char* name, dftu_result_value* v);
 

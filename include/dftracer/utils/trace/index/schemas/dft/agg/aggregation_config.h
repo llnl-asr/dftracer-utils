@@ -35,18 +35,12 @@ struct AggregationConfig {
     static constexpr const char* FORMAT_ARROW = "arrow";
 
     static bool is_valid_format(const dstd::String& fmt) {
-        return fmt == FORMAT_JSON
-#ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
-               || fmt == FORMAT_ARROW
-#endif
-            ;
+        return fmt == FORMAT_JSON || fmt == FORMAT_ARROW;
     }
 
     static dstd::String supported_formats_str() {
         dstd::String s = "'json'";
-#ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
         s += " or 'arrow'";
-#endif
         return s;
     }
 

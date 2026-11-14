@@ -24,8 +24,6 @@
 
 using namespace dftracer::utils;
 
-#ifdef REFERENCE_PLUGIN_PATH
-
 using View = dftracer::utils::trace::views::View;
 using ViewFile = dftracer::utils::trace::views::ViewFile;
 
@@ -154,11 +152,3 @@ TEST_CASE("reference_plugin: a forced-missing service fails loudly") {
     CHECK(report.find("agg: MISSING") != dstd::String::npos);
     CHECK(report.find("agg_state: MISSING") != dstd::String::npos);
 }
-
-#else
-
-TEST_CASE("reference_plugin: skipped (Arrow disabled at configure time)") {
-    WARN("reference_plugin requires DFTRACER_UTILS_ENABLE_ARROW");
-}
-
-#endif

@@ -11,7 +11,6 @@
  */
 
 #include <dftracer/utils/plugins/abi/agg.h>
-#include <dftracer/utils/plugins/abi/arrow.h>
 #include <dftracer/utils/plugins/abi/core.h>
 #include <dftracer/utils/plugins/abi/duql.h>
 #include <dftracer/utils/plugins/abi/fileio.h>

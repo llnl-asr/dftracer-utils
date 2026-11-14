@@ -45,6 +45,8 @@ set(_dirs
     src/dftracer/utils/trace
     include/dftracer/utils/dataframe
     src/dftracer/utils/dataframe
+    include/dftracer/utils/arrow
+    src/dftracer/utils/arrow
     src/dftracer/utils/domains
     src/dftracer/utils/cli
     src/dftracer/utils/python

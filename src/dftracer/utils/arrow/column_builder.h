@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: MIT
-#ifndef DFTRACER_UTILS_TRACE_ARROW_COLUMN_BUILDER_H
-#define DFTRACER_UTILS_TRACE_ARROW_COLUMN_BUILDER_H
+#ifndef DFTRACER_UTILS_ARROW_COLUMN_BUILDER_H
+#define DFTRACER_UTILS_ARROW_COLUMN_BUILDER_H
 
+#include <dftracer/utils/arrow/arrow_export.h>
 #include <dftracer/utils/common/config.h>
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
-
 #include <dftracer/utils/dataframe/sketch.h>
 #include <dftracer/utils/dstd/deque.h>
 #include <dftracer/utils/dstd/hash_map.h>
@@ -13,13 +12,12 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/trace/arrow/arrow_export.h>
 
 #include <cstddef>
 #include <cstdint>
 #include <initializer_list>
 
-namespace dftracer::utils::trace::arrow {
+namespace dftracer::utils::arrow {
 
 /// HIST is a list<struct<lo:double, hi:double, count:uint64>> column: one raw
 /// histogram (a list of buckets) per row. STRING_LIST is a list<utf8> column
@@ -254,7 +252,6 @@ class RecordBatchBuilder {
     void mark_touched(std::size_t col_idx);
 };
 
-}  // namespace dftracer::utils::trace::arrow
+}  // namespace dftracer::utils::arrow
 
-#endif  // DFTRACER_UTILS_ENABLE_ARROW
-#endif  // DFTRACER_UTILS_TRACE_ARROW_COLUMN_BUILDER_H
+#endif  // DFTRACER_UTILS_ARROW_COLUMN_BUILDER_H

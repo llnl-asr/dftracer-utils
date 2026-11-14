@@ -1,26 +1,21 @@
 // SPDX-License-Identifier: MIT
-#ifndef DFTRACER_UTILS_DATAFRAME_ARROW_H
-#define DFTRACER_UTILS_DATAFRAME_ARROW_H
+#ifndef DFTRACER_UTILS_ARROW_OWNED_ARROW_H
+#define DFTRACER_UTILS_ARROW_OWNED_ARROW_H
 
-#include <dftracer/utils/common/config.h>
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
-
-#include <dftracer/utils/dataframe/dataframe.h>
-#include <dftracer/utils/dataframe/series.h>
 // Supplies ArrowSchema/ArrowArray under the ARROW_C_DATA_INTERFACE guard, so a
 // consumer needs no Arrow library; a real Arrow header, if included first,
 // wins.
-#include <dftracer/utils/plugins/arrow_abi.h>
+#include <dftracer/utils/arrow/c_api.h>
 
-namespace dftracer::utils::dataframe {
+namespace dftracer::utils::arrow {
 
 /**
  * Move-only RAII owner of a paired Arrow C Data Interface @ref ArrowSchema and
  * @ref ArrowArray. On destruction it calls each struct's `release` callback
- * when non-null, so a caller of `Series::to_arrow` / `DataFrame::to_arrow`
- * never leaks or double-frees the exported buffers. The accessors hand out
- * pointers suitable for passing to a consumer's Arrow import (e.g. pyarrow's
- * `_import_from_c`, or `from_arrow` for a round trip).
+ * when non-null, so a caller of `to_arrow` never leaks or double-frees the
+ * exported buffers. The accessors hand out pointers suitable for passing to a
+ * consumer's Arrow import (e.g. pyarrow's `_import_from_c`, or
+ * `series_from_arrow` for a round trip).
  */
 class OwnedArrow {
    public:
@@ -70,7 +65,6 @@ class OwnedArrow {
     ArrowArray array_{};
 };
 
-}  // namespace dftracer::utils::dataframe
+}  // namespace dftracer::utils::arrow
 
-#endif  // DFTRACER_UTILS_ENABLE_ARROW
-#endif  // DFTRACER_UTILS_DATAFRAME_ARROW_H
+#endif  // DFTRACER_UTILS_ARROW_OWNED_ARROW_H

@@ -13,9 +13,8 @@
 // a failure instead of a plausible zero. TYPE_ROWS must have an entry for
 // every TypeId is_audited() marks true, and is_audited() has no default case,
 // so a newly added TypeId cannot slip through unclassified.
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
 #include <dataframe/builders_arrow_types.h>
-#include <dftracer/utils/dataframe/arrow.h>
+#include <dftracer/utils/arrow/arrow.h>
 #include <dftracer/utils/dataframe/scalar.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -603,8 +602,3 @@ TEST_SUITE("dataframe_arrow_types_matrix") {
         }
     }
 }
-#else
-TEST_SUITE("dataframe_arrow_types_matrix") {
-    TEST_CASE("Arrow disabled: nothing to exercise") { CHECK(true); }
-}
-#endif

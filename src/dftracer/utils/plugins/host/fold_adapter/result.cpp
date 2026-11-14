@@ -39,15 +39,6 @@ dstd::Result<void> PluginFold::emit_result(const char* name,
         case DFTU_RESULT_KIND_BYTES:
             named_results_->emit_blob(name, v->u.bytes.data, v->u.bytes.len);
             return {};
-        case DFTU_RESULT_KIND_ARROW:
-            if (named_results_->emit_arrow(name, v->u.arrow.array,
-                                           v->u.arrow.schema) != 0) {
-                return common::make_error<
-                    "plugin '{}' emit '{}': the Arrow array or schema is not "
-                    "valid">(common::ErrorCode::InvalidArgument, plugin_label(),
-                             name);
-            }
-            return {};
         case DFTU_RESULT_KIND_FRAME:
             named_results_->emit_frame(name, v->u.frame);
             return {};

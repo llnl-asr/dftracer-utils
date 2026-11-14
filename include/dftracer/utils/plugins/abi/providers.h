@@ -252,7 +252,7 @@ typedef struct dftu_source_vt {
     /** Open a cursor honoring `req`. `host` is the host of this cursor: it
        stays valid until the cursor's destroy() has returned. It answers
        DFTU_SVC_MEMORY, DFTU_SVC_IO, DFTU_SVC_FS, DFTU_SVC_JSON, DFTU_SVC_YAML,
-       DFTU_SVC_SKETCH, DFTU_SVC_ARROW, DFTU_SVC_OPS, DFTU_SVC_PROVIDERS,
+       DFTU_SVC_SKETCH, DFTU_SVC_OPS, DFTU_SVC_PROVIDERS,
        DFTU_SVC_NODES and DFTU_SVC_INDEX as a fold callback's host does, and
        returns NULL for the services that belong to one scan: DFTU_SVC_TASK,
        DFTU_SVC_FILEIO, DFTU_SVC_AGG, DFTU_SVC_RESULT, DFTU_SVC_PORTS,

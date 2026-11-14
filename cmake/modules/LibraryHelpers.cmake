@@ -76,17 +76,20 @@ endfunction()
 
 # Sets OUT_VAR to the target that carries LIBRARY's settings for VARIANT
 # (objects, shared or static). In single library mode the shared and static
-# variants of every library are the one library.
+# variants of every library are the one library, except a STANDALONE library,
+# which keeps its own.
 function(dftu_variant_target OUT_VAR LIBRARY VARIANT)
+  set(_target ${LIBRARY}_${VARIANT})
   if(DFTRACER_UTILS_SINGLE_LIBRARY AND NOT VARIANT STREQUAL "objects")
-    set(${OUT_VAR}
-        dftracer_utils_${VARIANT}
-        PARENT_SCOPE)
-  else()
-    set(${OUT_VAR}
-        ${LIBRARY}_${VARIANT}
-        PARENT_SCOPE)
+    get_property(_standalone GLOBAL PROPERTY
+                 DFTRACER_UTILS_STANDALONE_LIBRARIES)
+    if(NOT LIBRARY IN_LIST _standalone)
+      set(_target dftracer_utils_${VARIANT})
+    endif()
   endif()
+  set(${OUT_VAR}
+      ${_target}
+      PARENT_SCOPE)
 endfunction()
 
 #[=[
@@ -119,6 +122,7 @@ Usage:
     [BUILD_SHARED ON|OFF]             # Build shared library (defaults to parent option)
     [BUILD_STATIC ON|OFF]             # Build static library (defaults to parent option)
     [BUILD_INTERFACE ON|OFF]          # Build as INTERFACE library only
+    [STANDALONE]                      # Keep own targets with SINGLE_LIBRARY
 
     # Include directories
     [PUBLIC_INCLUDE_DIRS dir1 dir2 ...] # Public include directories
@@ -154,6 +158,10 @@ With DFTRACER_UTILS_SINGLE_LIBRARY only ${NAME}_objects is created. The
 ${NAMESPACE}::shared and ${NAMESPACE}::static targets are aliases of the one
 library dftracer_utils_shared and dftracer_utils_static, which holds the objects
 of every library, and no per-library export or package config is made.
+A STANDALONE library keeps its own ${NAME}_shared and ${NAME}_static targets in
+single library mode and links dftracer_utils_shared and dftracer_utils_static
+for them, so its objects and its third-party dependencies stay out of the one
+library.
 
 Returns (sets in parent scope):
   ${NAME}_OBJECTS_TARGET - Name of the object library (if a variant is built)
@@ -163,7 +171,7 @@ Returns (sets in parent scope):
   ${NAME}_TARGETS - List of all created targets
 #]=]
 function(create_library)
-  set(options BUILD_INTERFACE)
+  set(options BUILD_INTERFACE STANDALONE)
   set(oneValueArgs
       NAME
       NAMESPACE
@@ -204,6 +212,15 @@ function(create_library)
 
   if(NOT LIB_NAMESPACE)
     set(LIB_NAMESPACE ${LIB_NAME})
+  endif()
+
+  set(STANDALONE_LIB OFF)
+  if(LIB_STANDALONE AND DFTRACER_UTILS_SINGLE_LIBRARY)
+    set(STANDALONE_LIB ON)
+    set_property(GLOBAL APPEND PROPERTY DFTRACER_UTILS_STANDALONE_LIBRARIES
+                                  ${LIB_NAME})
+    set(LIB_FIND_DEPENDENCIES dftracer_utils)
+    set(LIB_PKG_CONFIG_REQUIRES dftracer_utils)
   endif()
 
   # Set defaults
@@ -289,7 +306,7 @@ function(create_library)
     else()
       set(OBJECT_VARIANT_LIBRARIES ${LIB_STATIC_LINK_LIBRARIES})
     endif()
-    if(DFTRACER_UTILS_SINGLE_LIBRARY)
+    if(DFTRACER_UTILS_SINGLE_LIBRARY AND NOT STANDALONE_LIB)
       # ::shared and ::static name the one library here, which links this
       # object target. Take usage requirements from the other object targets.
       list(TRANSFORM OBJECT_VARIANT_LIBRARIES REPLACE "::(shared|static)$"
@@ -363,7 +380,7 @@ function(create_library)
                             INTERFACE ${LIB_INTERFACE_LINK_LIBRARIES})
     endif()
 
-    if(NOT DFTRACER_UTILS_SINGLE_LIBRARY)
+    if(NOT DFTRACER_UTILS_SINGLE_LIBRARY OR STANDALONE_LIB)
       if("${VARIANT}" STREQUAL "shared" AND LIB_SHARED_LINK_LIBRARIES)
         target_link_libraries(${TARGET_NAME}
                               PUBLIC ${LIB_SHARED_LINK_LIBRARIES})
@@ -460,7 +477,7 @@ function(create_library)
   # ============================================================================
   # Single library mode: the objects go into the one library
   # ============================================================================
-  if(DFTRACER_UTILS_SINGLE_LIBRARY)
+  if(DFTRACER_UTILS_SINGLE_LIBRARY AND NOT STANDALONE_LIB)
     _create_single_library_targets()
     foreach(VARIANT shared static)
       string(TOUPPER ${VARIANT} VARIANT_UPPER)
@@ -481,7 +498,7 @@ function(create_library)
   # ============================================================================
   # Create SHARED library
   # ============================================================================
-  if(BUILD_SHARED_LIB AND NOT DFTRACER_UTILS_SINGLE_LIBRARY)
+  if(BUILD_SHARED_LIB AND (NOT DFTRACER_UTILS_SINGLE_LIBRARY OR STANDALONE_LIB))
     set(SHARED_TARGET_NAME ${LIB_NAME}_shared)
     add_library(${SHARED_TARGET_NAME} SHARED
                 $<TARGET_OBJECTS:${OBJECTS_TARGET_NAME}>)
@@ -534,7 +551,7 @@ function(create_library)
   # ============================================================================
   # Create STATIC library
   # ============================================================================
-  if(BUILD_STATIC_LIB AND NOT DFTRACER_UTILS_SINGLE_LIBRARY)
+  if(BUILD_STATIC_LIB AND (NOT DFTRACER_UTILS_SINGLE_LIBRARY OR STANDALONE_LIB))
     set(STATIC_TARGET_NAME ${LIB_NAME}_static)
     add_library(${STATIC_TARGET_NAME} STATIC
                 $<TARGET_OBJECTS:${OBJECTS_TARGET_NAME}>)

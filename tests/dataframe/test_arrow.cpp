@@ -1,19 +1,16 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/arrow/arrow.h>
 #include <dftracer/utils/common/config.h>
-#include <dftracer/utils/dstd/vector.h>
-#include <doctest/doctest.h>
-
-#include <cstdint>
-
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
-#include <dftracer/utils/dataframe/arrow.h>
 #include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
+#include <doctest/doctest.h>
 #include <nanoarrow/nanoarrow.h>
 
+#include <cstdint>
 #include <cstring>
 
 using namespace dftracer::utils;
@@ -75,7 +72,7 @@ TEST_SUITE("dataframe_arrow_public") {
         {
             Series s = f.make();
             REQUIRE(s.valid());
-            OwnedArrow a = s.to_arrow();
+            arrow::OwnedArrow a = arrow::to_arrow(s);
             CHECK(dstd::String(a.schema()->format) == "vu");
             CHECK(a.array()->n_buffers == 5);
             CHECK(a.array()->buffers[1] == s.handle()->data.data());
@@ -86,7 +83,7 @@ TEST_SUITE("dataframe_arrow_public") {
             CHECK(sizes[0] == f.sizes[0]);
             CHECK(sizes[1] == f.sizes[1]);
 
-            Series back = Series::from_arrow(a.schema(), a.array());
+            Series back = arrow::series_from_arrow(a.schema(), a.array());
             REQUIRE(back.valid());
             CHECK(back.handle()->encoding == Encoding::View);
             CHECK(back.handle()->data.data() == s.handle()->data.data());
@@ -103,9 +100,9 @@ TEST_SUITE("dataframe_arrow_public") {
         ViewFixture f;
         Series s = f.make(TypeId::Binary);
         REQUIRE(s.valid());
-        OwnedArrow a = s.to_arrow();
+        arrow::OwnedArrow a = arrow::to_arrow(s);
         CHECK(dstd::String(a.schema()->format) == "vz");
-        Series back = Series::from_arrow(a.schema(), a.array());
+        Series back = arrow::series_from_arrow(a.schema(), a.array());
         REQUIRE(back.valid());
         CHECK(back.type() == TypeId::Binary);
         CHECK(back.string_at(2) == VIEW_LONG_B);
@@ -136,7 +133,7 @@ TEST_SUITE("dataframe_arrow_public") {
             a->release = nullptr;
         };
         {
-            Series back = Series::from_arrow(&schema, &arr);
+            Series back = arrow::series_from_arrow(&schema, &arr);
             REQUIRE(back.valid());
             CHECK(arr.release == nullptr);
             CHECK(back.handle()->data.data() == f.views + 16);
@@ -164,10 +161,10 @@ TEST_SUITE("dataframe_arrow_public") {
         col->set_child(adopt_series(values.release()));
         {
             Series dict{col};
-            OwnedArrow a = dict.to_arrow();
+            arrow::OwnedArrow a = arrow::to_arrow(dict);
             CHECK(dstd::String(a.schema()->dictionary->format) == "vu");
             CHECK(a.array()->dictionary->n_buffers == 5);
-            Series back = Series::from_arrow(a.schema(), a.array());
+            Series back = arrow::series_from_arrow(a.schema(), a.array());
             REQUIRE(back.valid());
             Series flat = back.materialize();
             REQUIRE(flat.length() == 4);
@@ -184,10 +181,10 @@ TEST_SUITE("dataframe_arrow_public") {
         Series s = Series::flat_i64(vals.data(),
                                     static_cast<std::int64_t>(vals.size()));
 
-        OwnedArrow a = s.to_arrow();
+        arrow::OwnedArrow a = arrow::to_arrow(s);
         CHECK(static_cast<bool>(a));
 
-        Series back = Series::from_arrow(a.schema(), a.array());
+        Series back = arrow::series_from_arrow(a.schema(), a.array());
         REQUIRE(back.valid());
         REQUIRE(back.length() == 4);
         const std::int64_t* d = back.data<std::int64_t>();
@@ -198,8 +195,8 @@ TEST_SUITE("dataframe_arrow_public") {
     TEST_CASE("String Series round-trips through the public Arrow bridge") {
         Series s = Series::strings({"alpha", "beta", "gamma"});
 
-        OwnedArrow a = s.to_arrow();
-        Series back = Series::from_arrow(a.schema(), a.array());
+        arrow::OwnedArrow a = arrow::to_arrow(s);
+        Series back = arrow::series_from_arrow(a.schema(), a.array());
         REQUIRE(back.valid());
         REQUIRE(back.length() == 3);
         CHECK(back.string_at(0) == "alpha");
@@ -218,10 +215,10 @@ TEST_SUITE("dataframe_arrow_public") {
         df.columns.push_back(Series::flat_f64(
             reals.data(), static_cast<std::int64_t>(reals.size())));
 
-        OwnedArrow a = df.to_arrow();
+        arrow::OwnedArrow a = arrow::to_arrow(df);
         CHECK(static_cast<bool>(a));
 
-        DataFrame back = DataFrame::from_arrow(a.schema(), a.array());
+        DataFrame back = arrow::dataframe_from_arrow(a.schema(), a.array());
         REQUIRE(back.num_columns() == 2);
         REQUIRE(back.num_rows() == 3);
         REQUIRE(back.names.size() == 2);
@@ -248,10 +245,10 @@ TEST_SUITE("dataframe_arrow_public") {
         REQUIRE(dict.valid());
         REQUIRE(dict.encoding() == Encoding::Dictionary);
 
-        OwnedArrow a = dict.to_arrow();
+        arrow::OwnedArrow a = arrow::to_arrow(dict);
         CHECK(static_cast<bool>(a));
 
-        Series back = Series::from_arrow(a.schema(), a.array());
+        Series back = arrow::series_from_arrow(a.schema(), a.array());
         REQUIRE(back.valid());
         REQUIRE(back.length() == 6);
         CHECK(back.encoding() == Encoding::Dictionary);
@@ -269,7 +266,7 @@ TEST_SUITE("dataframe_arrow_public") {
         Series dict = s.dictionary_encode();
         REQUIRE(dict.valid());
 
-        OwnedArrow a = dict.to_arrow();
+        arrow::OwnedArrow a = arrow::to_arrow(dict);
         CHECK(static_cast<bool>(a));
 
         // Slice off the first 2 rows via the Arrow offset, keeping the same
@@ -277,7 +274,7 @@ TEST_SUITE("dataframe_arrow_public") {
         a.array()->offset = 2;
         a.array()->length = 4;
 
-        Series back = Series::from_arrow(a.schema(), a.array());
+        Series back = arrow::series_from_arrow(a.schema(), a.array());
         REQUIRE(back.valid());
         REQUIRE(back.length() == 4);
 
@@ -301,8 +298,8 @@ TEST_SUITE("dataframe_arrow_public") {
         df.names = dstd::make_shared_strings({"s"});
         df.columns.push_back(std::move(st));
 
-        OwnedArrow arw = df.to_arrow();
-        DataFrame back = DataFrame::from_arrow(arw.schema(), arw.array());
+        arrow::OwnedArrow arw = arrow::to_arrow(df);
+        DataFrame back = arrow::dataframe_from_arrow(arw.schema(), arw.array());
         REQUIRE(back.num_columns() == 1);
         REQUIRE(back.num_rows() == 3);
         Series s = back.column("s");
@@ -322,11 +319,11 @@ TEST_SUITE("dataframe_arrow_public") {
         dstd::Vector<dstd::StringView> v = {"a", "", "c", "d"};
         const std::uint8_t valid = 0b1101;
         Series s = Series::strings(v, &valid);
-        OwnedArrow a = s.to_arrow();
+        arrow::OwnedArrow a = arrow::to_arrow(s);
         a.array()->offset = 1;
         a.array()->length = 2;
         a.array()->null_count = 1;
-        Series back = Series::from_arrow(a.schema(), a.array());
+        Series back = arrow::series_from_arrow(a.schema(), a.array());
         REQUIRE(back.valid());
         REQUIRE(back.length() == 2);
         CHECK(back.is_null(0));
@@ -340,10 +337,10 @@ TEST_SUITE("dataframe_arrow_public") {
             if (i % 4 == 0)
                 bits[i / 8] |= static_cast<std::uint8_t>(1 << (i % 8));
         Series s = Series::flat(TypeId::Bool, bits.data(), 20);
-        OwnedArrow a = s.to_arrow();
+        arrow::OwnedArrow a = arrow::to_arrow(s);
         a.array()->offset = 3;
         a.array()->length = 10;
-        Series back = Series::from_arrow(a.schema(), a.array());
+        Series back = arrow::series_from_arrow(a.schema(), a.array());
         REQUIRE(back.valid());
         REQUIRE(back.length() == 10);
         const std::uint8_t* d = back.data<std::uint8_t>();
@@ -355,15 +352,15 @@ TEST_SUITE("dataframe_arrow_public") {
         Series base = Series::strings({"x", "y", "z"});
         std::uint8_t mask_bits = 0b101;
         Series mask = Series::flat(TypeId::Bool, &mask_bits, 3);
-        OwnedArrow src = base.filter(mask).to_arrow();
+        arrow::OwnedArrow src = arrow::to_arrow(base.filter(mask));
         REQUIRE(src.array()->dictionary != nullptr);
         auto* sel = static_cast<std::int64_t*>(
             const_cast<void*>(src.array()->buffers[1]));
         sel[1] = -1;
-        Series filled = Series::from_arrow(src.schema(), src.array());
+        Series filled = arrow::series_from_arrow(src.schema(), src.array());
         REQUIRE(filled.valid());
 
-        OwnedArrow a = filled.to_arrow();
+        arrow::OwnedArrow a = arrow::to_arrow(filled);
         REQUIRE(a.array()->dictionary != nullptr);
         const auto* idx =
             static_cast<const std::int64_t*>(a.array()->buffers[1]);
@@ -373,25 +370,35 @@ TEST_SUITE("dataframe_arrow_public") {
             CHECK(idx[i] < dict_size);
         }
         CHECK(a.array()->null_count == 1);
-        Series back = Series::from_arrow(a.schema(), a.array());
+        Series back = arrow::series_from_arrow(a.schema(), a.array());
         CHECK(back.string_at(0) == "x");
         CHECK(back.is_null(1));
     }
 
-#ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
     TEST_CASE("to_ipc writes a dictionary column") {
         DataFrame df;
         df.names = dstd::make_shared_strings({"s"});
         df.columns.push_back(
             Series::strings({"a", "b", "a", "a"}).dictionary_encode());
-        auto bytes = df.to_ipc();
+        auto bytes = arrow::to_ipc(df);
         REQUIRE(bytes.has_value());
         CHECK_FALSE(bytes->empty());
     }
-#endif
+
+    TEST_CASE("an IPC stream round-trips a frame") {
+        const std::uint64_t ts[3] = {500, 501, 502};
+        DataFrame df;
+        df.names = dstd::make_shared_strings({"cat", "ts"});
+        df.columns.push_back(Series::strings({"STDIO", "STDIO", "STDIO"}));
+        df.columns.push_back(Series::flat(TypeId::Uint64, ts, 3));
+        auto bytes = arrow::to_ipc(df);
+        REQUIRE(bytes.has_value());
+        auto back = arrow::from_ipc(dstd::StringView(
+            reinterpret_cast<const char*>(bytes->data()), bytes->size()));
+        REQUIRE(back.has_value());
+        REQUIRE(back->columns.size() == 2);
+        CHECK(back->columns[1].type() == TypeId::Uint64);
+        CHECK(back->columns[1].length() == 3);
+        CHECK(back->columns[1].data<std::uint64_t>()[2] == 502);
+    }
 }
-#else
-TEST_SUITE("dataframe_arrow_public") {
-    TEST_CASE("Arrow disabled: nothing to exercise") { CHECK(true); }
-}
-#endif

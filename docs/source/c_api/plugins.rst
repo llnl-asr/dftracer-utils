@@ -88,8 +88,8 @@ stacks on a plan; the host unregisters it before the plugin unloads.
 .. doxygenfile:: dftracer/utils/plugins/abi/nodes.h
    :project: dftracer-utils
 
-``dftu.svc.result``: emit a named result (bytes, an Arrow array, a frame or a
-lazy plan) the caller reads back after the scan.
+``dftu.svc.result``: emit a named result (bytes, a frame or a lazy plan) the
+caller reads back after the scan.
 
 .. doxygenfile:: dftracer/utils/plugins/abi/result.h
    :project: dftracer-utils
@@ -107,10 +107,10 @@ rounds for a fan-in whose count is known only at run time.
 .. doxygenfile:: dftracer/utils/plugins/abi/task.h
    :project: dftracer-utils
 
-``dftu.svc.io``, ``dftu.svc.fileio``, ``dftu.svc.trace``, ``dftu.svc.arrow``:
+``dftu.svc.io``, ``dftu.svc.fileio``, ``dftu.svc.trace``:
 files, the file readers and writers (line and chunk readers over plain and gzip
 files, the gzip line writer, the parallel writer, whole-file gzip and the file
-helpers), trace files and Arrow IPC.
+helpers) and trace files.
 
 .. doxygenfile:: dftracer/utils/plugins/abi/io.h
    :project: dftracer-utils
@@ -119,9 +119,6 @@ helpers), trace files and Arrow IPC.
    :project: dftracer-utils
 
 .. doxygenfile:: dftracer/utils/plugins/abi/trace.h
-   :project: dftracer-utils
-
-.. doxygenfile:: dftracer/utils/plugins/abi/arrow.h
    :project: dftracer-utils
 
 ``dftu.svc.fs``: the runtime file system layer. Whole-file and positioned
@@ -152,15 +149,6 @@ The plan node and source vtables (``dftu_node_vt``, ``dftu_source_vt``,
 above. The dataframe ABI keeps only the calls that take a name:
 ``dftu_lazyframe_from_provider``, ``dftu_lazyframe_op``,
 ``dftu_provider_unregister`` and ``dftu_node_unregister``: see :doc:`dataframe`.
-
-Arrow ABI
----------
-
-The Arrow extension group: build Arrow record batches from a plugin over the
-Arrow C Data Interface.
-
-.. doxygenfile:: dftracer/utils/plugins/arrow_abi.h
-   :project: dftracer-utils
 
 Numeric primitives
 ------------------

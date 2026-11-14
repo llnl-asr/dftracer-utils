@@ -171,7 +171,7 @@ add_test(
   NAME lower_no_plugins
   COMMAND
     sh -c
-    [=[bad=$(for lib in memory dstd common coro runtime store json yaml duql fileio dataframe trace; do for root in include src; do [ -d "$0/$root/dftracer/utils/$lib" ] && grep -rnE '^[[:space:]]*#[[:space:]]*include[[:space:]]*<dftracer/utils/plugins/' "$0/$root/dftracer/utils/$lib"; done; done | grep -v 'include/dftracer/utils/dataframe/arrow.h:.*<dftracer/utils/plugins/arrow_abi.h>'); if [ -n "$bad" ]; then echo "include of a plugins header from a library below plugins:"; echo "$bad"; exit 1; fi]=]
+    [=[bad=$(for lib in memory dstd common coro runtime store json yaml duql fileio dataframe trace; do for root in include src; do [ -d "$0/$root/dftracer/utils/$lib" ] && grep -rnE '^[[:space:]]*#[[:space:]]*include[[:space:]]*<dftracer/utils/plugins/' "$0/$root/dftracer/utils/$lib"; done; done); if [ -n "$bad" ]; then echo "include of a plugins header from a library below plugins:"; echo "$bad"; exit 1; fi]=]
     ${CMAKE_SOURCE_DIR})
 add_test(
   NAME plugins_no_upward
@@ -840,6 +840,9 @@ foreach(test_file ${TEST_BINARY_SOURCES})
   target_link_libraries(${target_name} PRIVATE doctest::doctest testing_utilities)
   if(TARGET dftracer_utils_cli)
     target_link_libraries(${target_name} PRIVATE dftracer_utils_cli)
+  endif()
+  if(bin_exec MATCHES "^binaries/test_dftracer_view")
+    target_link_libraries(${target_name} PRIVATE ${DFTRACER_UTILS_ARROW_TARGET})
   endif()
   target_set_warnings(${target_name})
   target_enable_coroutine(${target_name})

@@ -6,7 +6,7 @@
  * compile as C (c_abi_guard already covers that).
  *
  * Config: "workdir" (required) - a scratch directory for the io/writer/
- * trace/arrow files this plugin writes. "force_missing" (optional) - a
+ * trace files this plugin writes. "force_missing" (optional) - a
  * dftu.svc.* id to report as unavailable, so a test can prove the failure
  * path is loud rather than silently green.
  */
@@ -14,7 +14,6 @@
 #include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <fcntl.h>
-#include <nanoarrow/nanoarrow.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -29,7 +28,6 @@
    the new service is wired into this plugin. */
 typedef enum {
     REF_SVC_AGG = 0,
-    REF_SVC_ARROW,
     REF_SVC_IO,
     REF_SVC_NODES,
     REF_SVC_OPS,
@@ -55,8 +53,6 @@ static const char* ref_svc_name(ref_svc_id id) {
     switch (id) {
         case REF_SVC_AGG:
             return "agg";
-        case REF_SVC_ARROW:
-            return "arrow";
         case REF_SVC_IO:
             return "io";
         case REF_SVC_NODES:
@@ -89,8 +85,6 @@ static const char* ref_svc_ext_id(ref_svc_id id) {
     switch (id) {
         case REF_SVC_AGG:
             return DFTU_SVC_AGG;
-        case REF_SVC_ARROW:
-            return DFTU_SVC_ARROW;
         case REF_SVC_IO:
             return DFTU_SVC_IO;
         case REF_SVC_NODES:
@@ -800,69 +794,6 @@ static void finalize_tail(dftu_ctx* ctx, FinalizeCtx* fc) {
         }
     }
 
-    /* arrow: write a one-column Int64 IPC batch and read it back. */
-    {
-        const dftu_svc_arrow* ar =
-            (const dftu_svc_arrow*)ref_get_service(host, REF_SVC_ARROW);
-        if (ar) {
-            struct ArrowSchema schema;
-            struct ArrowArray array;
-            struct ArrowError err;
-            int arrow_ok = 0;
-            memset(&schema, 0, sizeof(schema));
-            memset(&array, 0, sizeof(array));
-            /* An IPC batch's top-level schema/array is always a struct of
-               columns, even for one column. */
-            if (ArrowSchemaInitFromType(&schema, NANOARROW_TYPE_STRUCT) == 0 &&
-                ArrowSchemaAllocateChildren(&schema, 1) == 0 &&
-                ArrowSchemaInitFromType(schema.children[0],
-                                        NANOARROW_TYPE_INT64) == 0 &&
-                ArrowSchemaSetName(schema.children[0], "v") == 0 &&
-                ArrowArrayInitFromType(&array, NANOARROW_TYPE_STRUCT) == 0 &&
-                ArrowArrayAllocateChildren(&array, 1) == 0 &&
-                ArrowArrayInitFromType(array.children[0],
-                                       NANOARROW_TYPE_INT64) == 0 &&
-                ArrowArrayStartAppending(array.children[0]) == 0 &&
-                ArrowArrayAppendInt(array.children[0], 42) == 0 &&
-                ArrowArrayAppendInt(array.children[0], 43) == 0 &&
-                ArrowArrayFinishBuildingDefault(array.children[0], &err) == 0) {
-                array.length = 2;
-                array.null_count = 0;
-                char path[600];
-                dftu_status wrc;
-                snprintf(path, sizeof(path), "%s/reference_arrow.ipc", workdir);
-                wrc = ar->arrow_write_ipc(ctx, host->h, &array, &schema, path);
-                if (wrc >= 0) {
-                    struct ArrowArray in_array;
-                    struct ArrowSchema in_schema;
-                    dftu_status rrc;
-                    memset(&in_array, 0, sizeof(in_array));
-                    memset(&in_schema, 0, sizeof(in_schema));
-                    rrc = ar->arrow_read_ipc(ctx, host->h, path, &in_array,
-                                             &in_schema);
-                    if (rrc >= 0) {
-                        if (in_array.length == 2 && in_array.n_children == 1) {
-                            struct ArrowArrayView view;
-                            ArrowArrayViewInitFromSchema(&view, &in_schema,
-                                                         NULL);
-                            ArrowArrayViewSetArray(&view, &in_array, NULL);
-                            arrow_ok = ArrowArrayViewGetIntUnsafe(
-                                           view.children[0], 0) == 42 &&
-                                       ArrowArrayViewGetIntUnsafe(
-                                           view.children[0], 1) == 43;
-                            ArrowArrayViewReset(&view);
-                        }
-                        if (in_array.release) in_array.release(&in_array);
-                        if (in_schema.release) in_schema.release(&in_schema);
-                    }
-                }
-            }
-            if (array.release) array.release(&array);
-            if (schema.release) schema.release(&schema);
-            g_status[REF_SVC_ARROW] = arrow_ok ? REF_OK : REF_FAIL;
-        }
-    }
-
     /* providers + node: run a LazyFrame over the registered provider through
        the registered node, and confirm schema_types was reachable. The node
        doubles column "n" ({1, 2, 3} -> {2, 4, 6}). */
@@ -1185,8 +1116,7 @@ static const char* const* reads(void* self) {
 }
 
 static const dftu_config_key CONFIG_KEYS[] = {
-    {"workdir", DFTU_VAL_STR, 1,
-     "scratch directory for io/writer/trace/arrow files"},
+    {"workdir", DFTU_VAL_STR, 1, "scratch directory for io/writer/trace files"},
     {"force_missing", DFTU_VAL_STR, 0,
      "a dftu.svc.* id to report as unreachable"},
     {NULL, 0, 0, NULL}};

@@ -17,16 +17,7 @@
 #include <cstdint>
 #include <type_traits>
 
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
-struct ArrowSchema;
-struct ArrowArray;
-#endif
-
 namespace dftracer::utils::dataframe {
-
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
-class OwnedArrow;
-#endif
 
 /// Aggregate function selector for group_by / group_by_dynamic / pivot. First
 /// and Last take the group's first / last non-null value in row order (an
@@ -334,31 +325,6 @@ struct DataFrame {
                                              const dstd::Vector<GroupAgg>& aggs,
                                              std::int64_t origin = 0,
                                              bool origin_min = false) const;
-
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
-    /// Export this frame through the Arrow C Data Interface as a struct array
-    /// with one child per column (zero copy: the exported buffers alias the
-    /// columns' and are kept alive by the returned owner's release callbacks).
-    /// Include <dftracer/utils/dataframe/arrow.h> for the OwnedArrow
-    /// definition.
-    OwnedArrow to_arrow() const;
-
-#ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
-    /// Serialize this frame to an Arrow IPC stream (schema message + one record
-    /// batch + EOS) as bytes any Arrow IPC reader can open - no pyarrow. An
-    /// @ref common::ErrorCode::Internal error result on an encode failure.
-    dstd::Result<dstd::Vector<std::uint8_t>> to_ipc() const;
-#endif
-
-    /// Import a STRUCT Arrow array (viewed through `schema`) as a @ref
-    /// dftracer::utils::dataframe::DataFrame "DataFrame": one column per struct
-    /// child, named by its child schema, wrapped zero copy. ADOPTS `array`
-    /// (ownership of its buffers moves into the frame and the passed array is
-    /// marked released, so the caller must not release it again); `schema` is
-    /// only read. An empty frame on a non-struct or unsupported child type.
-    static DataFrame from_arrow(const ArrowSchema* schema,
-                                const ArrowArray* array);
-#endif
 };
 
 /// The two-step group-by: a frame (shared zero-copy) and its key columns,

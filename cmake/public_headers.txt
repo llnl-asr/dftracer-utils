@@ -55,7 +55,6 @@ dftracer/utils/dataframe/agg.h
 dftracer/utils/dataframe/agg_expr.h
 dftracer/utils/dataframe/agg_op_codes.h
 dftracer/utils/dataframe/agg_ops.def
-dftracer/utils/dataframe/arrow.h
 dftracer/utils/dataframe/dataframe.h
 dftracer/utils/dataframe/exported_frame_ops.def
 dftracer/utils/dataframe/exported_lazy_ops.def
@@ -164,7 +163,6 @@ dftracer/utils/memory/detail/pool_access.h
 dftracer/utils/memory/pool.h
 dftracer/utils/plugins/abi.h
 dftracer/utils/plugins/abi/agg.h
-dftracer/utils/plugins/abi/arrow.h
 dftracer/utils/plugins/abi/core.h
 dftracer/utils/plugins/abi/duql.h
 dftracer/utils/plugins/abi/fileio.h
@@ -183,8 +181,6 @@ dftracer/utils/plugins/abi/sketch.h
 dftracer/utils/plugins/abi/task.h
 dftracer/utils/plugins/abi/trace.h
 dftracer/utils/plugins/abi/value.h
-dftracer/utils/plugins/arrow_abi.h
-dftracer/utils/plugins/owned_arrow.h
 dftracer/utils/plugins/plugin.h
 dftracer/utils/plugins/plugin/async.h
 dftracer/utils/plugins/plugin/fileio.h
@@ -218,3 +214,6 @@ dftracer/utils/trace/views/c_api.h
 dftracer/utils/trace/views/join_type.h
 dftracer/utils/trace/views/live_view.h
 dftracer/utils/trace/views/view.h
+dftracer/utils/arrow/arrow.h
+dftracer/utils/arrow/c_api.h
+dftracer/utils/arrow/owned_arrow.h

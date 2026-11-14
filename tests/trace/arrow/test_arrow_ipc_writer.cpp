@@ -1,15 +1,14 @@
 // SPDX-License-Identifier: MIT
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
+#include <dftracer/utils/arrow/column_builder.h>
+#include <dftracer/utils/arrow/ipc_writer.h>
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/trace/arrow/column_builder.h>
-#include <dftracer/utils/trace/arrow/ipc_writer.h>
 #include <doctest/doctest.h>
 #include <task_result.h>
 #include <testing_utilities.h>
@@ -18,10 +17,10 @@
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::coro;
-using namespace dftracer::utils::trace::arrow;
+using namespace dftracer::utils::arrow;
 
 static dstd::String tmp_path(const char* name) {
-    return dftu_utils_test::make_unique_test_path(name).str();
+    return dstd::String(dftu_utils_test::make_unique_test_path(name).str());
 }
 
 TEST_CASE("IpcWriter - basic write and close") {
@@ -56,7 +55,7 @@ TEST_CASE("IpcWriter - basic write and close") {
         if (writer.is_open()) co_return 5;
         co_return 0;
     };
-    auto result = runtime.submit(task(), "test").get();
+    auto result = dftu_utils_test::ok(runtime.submit(task(), "test").get());
 
     CHECK(result == 0);
     CHECK(dstd::fs::exists(path).value());
@@ -90,7 +89,7 @@ TEST_CASE("IpcWriter - multiple batches") {
         if (co_await writer.close() != 0) co_return 3;
         co_return 0;
     };
-    auto result = runtime.submit(task(), "test").get();
+    auto result = dftu_utils_test::ok(runtime.submit(task(), "test").get());
 
     CHECK(result == 0);
     CHECK(dstd::fs::exists(path).value());
@@ -110,7 +109,7 @@ TEST_CASE("IpcWriter - close without writing batches") {
         if (writer.is_open()) co_return 3;
         co_return 0;
     };
-    auto result = runtime.submit(task(), "test").get();
+    auto result = dftu_utils_test::ok(runtime.submit(task(), "test").get());
 
     CHECK(result == 0);
     dstd::fs::remove(path).discard();
@@ -144,7 +143,7 @@ TEST_CASE("IpcWriter - batches without a pooled slot match the pooled file") {
             if (co_await writer.close() != 0) co_return 3;
             co_return 0;
         };
-        return runtime.submit(task(), "test").get();
+        return dftu_utils_test::ok(runtime.submit(task(), "test").get());
     };
     dstd::Vector<IpcCompression> modes{IpcCompression::None};
     modes.push_back(IpcCompression::Zstd);
@@ -183,20 +182,10 @@ TEST_CASE("IpcWriter - explicit ZSTD compression") {
         if (co_await writer.close() != 0) co_return 3;
         co_return 0;
     };
-    auto result = runtime.submit(task(), "test").get();
+    auto result = dftu_utils_test::ok(runtime.submit(task(), "test").get());
 
     CHECK(result == 0);
     CHECK(dstd::fs::exists(path).value());
     CHECK(dstd::fs::file_size(path).value() > 0);
     dstd::fs::remove(path).discard();
 }
-
-#else
-
-#define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <doctest/doctest.h>
-
-// Nothing to test without the writer: reported as skipped, not as a pass.
-TEST_CASE("IpcWriter - the Arrow IPC writer is not built" * doctest::skip()) {}
-
-#endif  // DFTRACER_UTILS_ENABLE_ARROW_IPC

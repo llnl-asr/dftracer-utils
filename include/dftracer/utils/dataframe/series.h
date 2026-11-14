@@ -22,17 +22,9 @@
 #include <utility>
 #include <vector>
 
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
-struct ArrowSchema;
-struct ArrowArray;
-#endif
-
 namespace dftracer::utils::dataframe {
 
 struct DataFrame;
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
-class OwnedArrow;
-#endif
 
 /// A typed column. Move-only owning wrapper over the C ABI handle; the buffers,
 /// encoding, and null handling live behind it. Typed accessors are inline
@@ -537,23 +529,6 @@ class Series {
     Series bottom_k(std::int64_t k) const;  ///< The k smallest rows.
     /// A deterministic sample of n distinct rows (mix64(index, seed) hash).
     Series sample(std::int64_t n, std::uint64_t seed = 0) const;
-
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
-    /// Export this column through the Arrow C Data Interface (zero copy: the
-    /// exported buffers alias this column's and are kept alive by the returned
-    /// owner's release callbacks). Include
-    /// <dftracer/utils/dataframe/arrow.h> for the OwnedArrow definition.
-    OwnedArrow to_arrow() const;
-
-    /// Import an Arrow array (viewed through `schema`) as a Series, wrapping
-    /// its buffers zero copy. ADOPTS `array`: ownership of its buffers moves
-    /// into the returned Series (the array's release runs when the Series is
-    /// destroyed) and the passed array is marked released, so the caller must
-    /// not release it again. `schema` is only read. An invalid Series on an
-    /// unsupported type.
-    static Series from_arrow(const ArrowSchema* schema,
-                             const ArrowArray* array);
-#endif
 
     Series argsort(bool descending = false) const;
     Series take(const dstd::Vector<std::int64_t>& indices) const;

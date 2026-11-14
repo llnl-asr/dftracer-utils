@@ -1,17 +1,15 @@
 // SPDX-License-Identifier: MIT
-#ifndef DFTRACER_UTILS_TRACE_ARROW_PARALLEL_READER_H
-#define DFTRACER_UTILS_TRACE_ARROW_PARALLEL_READER_H
+#ifndef DFTRACER_UTILS_ARROW_PARALLEL_READER_H
+#define DFTRACER_UTILS_ARROW_PARALLEL_READER_H
 
+#include <dftracer/utils/arrow/arrow_export.h>
 #include <dftracer/utils/common/config.h>
-#ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
-
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/trace/arrow/arrow_export.h>
 
-namespace dftracer::utils::trace::arrow {
+namespace dftracer::utils::arrow {
 
 /**
  * Result from reading a single Arrow IPC file.
@@ -58,7 +56,6 @@ coro::CoroTask<ArrowFileReadResult> read_arrow_file_async(dstd::String path);
 coro::CoroTask<ParallelReadResult> read_arrow_files_parallel(
     dstd::Vector<dstd::String> paths);
 
-}  // namespace dftracer::utils::trace::arrow
+}  // namespace dftracer::utils::arrow
 
-#endif  // DFTRACER_UTILS_ENABLE_ARROW_IPC
-#endif  // DFTRACER_UTILS_TRACE_ARROW_PARALLEL_READER_H
+#endif  // DFTRACER_UTILS_ARROW_PARALLEL_READER_H

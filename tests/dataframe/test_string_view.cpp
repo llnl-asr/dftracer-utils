@@ -4,6 +4,7 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 
+#include <dftracer/utils/arrow/arrow.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/dataframe.h>
@@ -522,20 +523,18 @@ TEST_SUITE("string view writers") {
         CHECK(rows_of(back->columns[0]) == SAMPLE);
     }
 
-#ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
     TEST_CASE("IPC writes a view column as values") {
         int released = 0;
         DataFrame f;
         f.names = dstd::make_shared_strings({"s"});
         f.columns.push_back(make_view(SAMPLE, &released));
-        auto ipc = f.to_ipc();
+        auto ipc = arrow::to_ipc(f);
         REQUIRE(ipc.has_value());
         const dstd::Vector<std::uint8_t>& bytes = *ipc;
         const dstd::String text(bytes.begin(), bytes.end());
         CHECK(text.find("a value longer than twelve") != dstd::String::npos);
         CHECK(text.find("zz another long value here") != dstd::String::npos);
     }
-#endif
 }
 
 namespace {

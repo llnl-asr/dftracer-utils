@@ -14,10 +14,9 @@
 // Lazy engine, spill and Expr coverage for the 15 Arrow logical types: the
 // eager sweep (6d2859fc..95f09311) never touched lazy/streaming or spill, so
 // a divergence found here is a lazy or spill bug, not eager's.
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
 #include <dataframe/builders_arrow_types.h>
+#include <dftracer/utils/arrow/arrow.h>
 #include <dftracer/utils/coro/task.h>
-#include <dftracer/utils/dataframe/arrow.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/internal/spill.h>
@@ -108,7 +107,7 @@ Series make_timestamp(const dstd::Vector<std::int64_t>& values) {
     for (std::int64_t v : values)
         REQUIRE(ArrowArrayAppendInt(&b.array, v) == NANOARROW_OK);
     finish_building(&b.array);
-    return Series::from_arrow(&b.schema, &b.array);
+    return arrow::series_from_arrow(&b.schema, &b.array);
 }
 
 Series make_date32(const dstd::Vector<std::int32_t>& values) {
@@ -122,7 +121,7 @@ Series make_date32(const dstd::Vector<std::int32_t>& values) {
     for (std::int32_t v : values)
         REQUIRE(ArrowArrayAppendInt(&b.array, v) == NANOARROW_OK);
     finish_building(&b.array);
-    return Series::from_arrow(&b.schema, &b.array);
+    return arrow::series_from_arrow(&b.schema, &b.array);
 }
 
 Series make_date64(const dstd::Vector<std::int64_t>& values) {
@@ -136,7 +135,7 @@ Series make_date64(const dstd::Vector<std::int64_t>& values) {
     for (std::int64_t v : values)
         REQUIRE(ArrowArrayAppendInt(&b.array, v) == NANOARROW_OK);
     finish_building(&b.array);
-    return Series::from_arrow(&b.schema, &b.array);
+    return arrow::series_from_arrow(&b.schema, &b.array);
 }
 
 Series make_time32(const dstd::Vector<std::int32_t>& values) {
@@ -151,7 +150,7 @@ Series make_time32(const dstd::Vector<std::int32_t>& values) {
     for (std::int32_t v : values)
         REQUIRE(ArrowArrayAppendInt(&b.array, v) == NANOARROW_OK);
     finish_building(&b.array);
-    return Series::from_arrow(&b.schema, &b.array);
+    return arrow::series_from_arrow(&b.schema, &b.array);
 }
 
 Series make_time64(const dstd::Vector<std::int64_t>& values) {
@@ -166,7 +165,7 @@ Series make_time64(const dstd::Vector<std::int64_t>& values) {
     for (std::int64_t v : values)
         REQUIRE(ArrowArrayAppendInt(&b.array, v) == NANOARROW_OK);
     finish_building(&b.array);
-    return Series::from_arrow(&b.schema, &b.array);
+    return arrow::series_from_arrow(&b.schema, &b.array);
 }
 
 Series make_duration(const dstd::Vector<std::int64_t>& values) {
@@ -181,7 +180,7 @@ Series make_duration(const dstd::Vector<std::int64_t>& values) {
     for (std::int64_t v : values)
         REQUIRE(ArrowArrayAppendInt(&b.array, v) == NANOARROW_OK);
     finish_building(&b.array);
-    return Series::from_arrow(&b.schema, &b.array);
+    return arrow::series_from_arrow(&b.schema, &b.array);
 }
 
 // builders_arrow_types.h's make_decimal128 always uses scale 0, which cannot
@@ -202,7 +201,7 @@ Series make_decimal128_scaled(const dstd::Vector<std::int64_t>& unscaled,
         REQUIRE(ArrowArrayAppendDecimal(&b.array, &dec) == NANOARROW_OK);
     }
     finish_building(&b.array);
-    return Series::from_arrow(&b.schema, &b.array);
+    return arrow::series_from_arrow(&b.schema, &b.array);
 }
 
 enum class SpillExpect { RoundTrips, Refuses };
@@ -504,5 +503,3 @@ TEST_SUITE("dataframe_arrow_types_lazy") {
             CHECK(lc[i] == ec[i]);
     }
 }
-
-#endif  // DFTRACER_UTILS_ENABLE_ARROW

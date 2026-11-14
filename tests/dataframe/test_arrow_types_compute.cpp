@@ -17,9 +17,8 @@
 // FixedSizeBinary/Decimal128 compare/sort/group_by/is_in on their exact
 // bytes, and Decimal128 arithmetic goes through the documented (lossy)
 // Float64 cast.
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
+#include <dftracer/utils/arrow/arrow.h>
 #include <dftracer/utils/dataframe/agg.h>
-#include <dftracer/utils/dataframe/arrow.h>
 #include <dftracer/utils/dataframe/internal/float16.h>
 #include <dftracer/utils/dataframe/scalar.h>
 #include <nanoarrow/nanoarrow.h>
@@ -55,7 +54,7 @@ Series make_float16(const dstd::Vector<float>& values) {
         REQUIRE(ArrowArrayAppendDouble(&b.array, static_cast<double>(v)) ==
                 NANOARROW_OK);
     finish(&b.array);
-    return Series::from_arrow(&b.schema, &b.array);
+    return arrow::series_from_arrow(&b.schema, &b.array);
 }
 
 Series make_fixed_size_binary(const dstd::Vector<dstd::String>& values,
@@ -76,7 +75,7 @@ Series make_fixed_size_binary(const dstd::Vector<dstd::String>& values,
         REQUIRE(ArrowArrayAppendBytes(&b.array, bv) == NANOARROW_OK);
     }
     finish(&b.array);
-    return Series::from_arrow(&b.schema, &b.array);
+    return arrow::series_from_arrow(&b.schema, &b.array);
 }
 
 Series make_binary(const dstd::Vector<dstd::String>& values) {
@@ -94,7 +93,7 @@ Series make_binary(const dstd::Vector<dstd::String>& values) {
         REQUIRE(ArrowArrayAppendBytes(&b.array, bv) == NANOARROW_OK);
     }
     finish(&b.array);
-    return Series::from_arrow(&b.schema, &b.array);
+    return arrow::series_from_arrow(&b.schema, &b.array);
 }
 
 Series make_large_binary(const dstd::Vector<dstd::String>& values) {
@@ -112,7 +111,7 @@ Series make_large_binary(const dstd::Vector<dstd::String>& values) {
         REQUIRE(ArrowArrayAppendBytes(&b.array, bv) == NANOARROW_OK);
     }
     finish(&b.array);
-    return Series::from_arrow(&b.schema, &b.array);
+    return arrow::series_from_arrow(&b.schema, &b.array);
 }
 
 Series make_timestamp(const dstd::Vector<std::int64_t>& values) {
@@ -127,7 +126,7 @@ Series make_timestamp(const dstd::Vector<std::int64_t>& values) {
     for (std::int64_t v : values)
         REQUIRE(ArrowArrayAppendInt(&b.array, v) == NANOARROW_OK);
     finish(&b.array);
-    return Series::from_arrow(&b.schema, &b.array);
+    return arrow::series_from_arrow(&b.schema, &b.array);
 }
 
 Series make_decimal128(const dstd::Vector<std::int64_t>& values,
@@ -146,7 +145,7 @@ Series make_decimal128(const dstd::Vector<std::int64_t>& values,
         REQUIRE(ArrowArrayAppendDecimal(&b.array, &dec) == NANOARROW_OK);
     }
     finish(&b.array);
-    return Series::from_arrow(&b.schema, &b.array);
+    return arrow::series_from_arrow(&b.schema, &b.array);
 }
 
 Series make_decimal256(const dstd::Vector<std::int64_t>& values,
@@ -165,7 +164,7 @@ Series make_decimal256(const dstd::Vector<std::int64_t>& values,
         REQUIRE(ArrowArrayAppendDecimal(&b.array, &dec) == NANOARROW_OK);
     }
     finish(&b.array);
-    return Series::from_arrow(&b.schema, &b.array);
+    return arrow::series_from_arrow(&b.schema, &b.array);
 }
 
 Series make_timestamp_tz(ArrowTimeUnit unit, const char* tz,
@@ -180,7 +179,7 @@ Series make_timestamp_tz(ArrowTimeUnit unit, const char* tz,
     for (std::int64_t v : values)
         REQUIRE(ArrowArrayAppendInt(&b.array, v) == NANOARROW_OK);
     finish(&b.array);
-    return Series::from_arrow(&b.schema, &b.array);
+    return arrow::series_from_arrow(&b.schema, &b.array);
 }
 
 Series make_duration(ArrowTimeUnit unit,
@@ -195,7 +194,7 @@ Series make_duration(ArrowTimeUnit unit,
     for (std::int64_t v : values)
         REQUIRE(ArrowArrayAppendInt(&b.array, v) == NANOARROW_OK);
     finish(&b.array);
-    return Series::from_arrow(&b.schema, &b.array);
+    return arrow::series_from_arrow(&b.schema, &b.array);
 }
 
 Series make_time64(ArrowTimeUnit unit,
@@ -210,7 +209,7 @@ Series make_time64(ArrowTimeUnit unit,
     for (std::int64_t v : values)
         REQUIRE(ArrowArrayAppendInt(&b.array, v) == NANOARROW_OK);
     finish(&b.array);
-    return Series::from_arrow(&b.schema, &b.array);
+    return arrow::series_from_arrow(&b.schema, &b.array);
 }
 
 }  // namespace
@@ -1343,8 +1342,3 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         CHECK(seen_nan == 1);
     }
 }
-#else
-TEST_SUITE("dataframe_arrow_types_compute") {
-    TEST_CASE("Arrow disabled: nothing to exercise") { CHECK(true); }
-}
-#endif

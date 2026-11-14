@@ -215,11 +215,9 @@ PyObject* Series_dt_round(PyObject* self, PyObject* args);
 PyObject* Series_with_timezone(PyObject* self, PyObject* arg);
 
 // series/arrow.cpp
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
 PyObject* Series_arrow_c_array(PyObject* self, PyObject* args);
 Series import_arrow_column(PyObject* obj);
 PyObject* vec_from_arrow(PyObject* self, PyObject* obj);
-#endif
 PyObject* vec_from_numpy(PyObject* self, PyObject* obj);
 
 // series/convert.cpp

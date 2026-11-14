@@ -159,12 +159,13 @@ A worked round trip
 The C++ engine and Arrow
 --------------------------
 
-The C++ ``dataframe::Series``/``dataframe::DataFrame`` API exposes a zero-copy
-Arrow bridge through the installed public header
-``dftracer/utils/dataframe/arrow.h``: ``Series::to_arrow`` /
-``DataFrame::to_arrow`` return an ``OwnedArrow`` (a move-only owner of the
-paired ``ArrowSchema`` / ``ArrowArray``), and ``Series::from_arrow(schema,
-array)`` / ``DataFrame::from_arrow(schema, array)`` import back. A
+The C++ ``dataframe::Series``/``dataframe::DataFrame`` API has a zero-copy
+Arrow bridge in the installed public header
+``dftracer/utils/arrow/arrow.h``: ``arrow::to_arrow`` returns an
+``OwnedArrow`` (a move-only owner of the paired ``ArrowSchema`` /
+``ArrowArray``) for a ``Series`` or a ``DataFrame``, and
+``arrow::series_from_arrow(schema, array)`` /
+``arrow::dataframe_from_arrow(schema, array)`` import back. A
 ``DataFrame`` is represented as a struct array with one child per column. The
 bridge sits on the same C ABI a C caller would use: the flat-column functions
 (``dftu_series_new_flat``, ``dftu_series_data``, and the Arrow-layout validity

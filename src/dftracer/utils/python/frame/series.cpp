@@ -9,7 +9,7 @@
 // file-statics. The method bodies live in series/{arith,math,window,stats,
 // reduce,string,arrow}.cpp and are declared in series_detail.h.
 
-#include <dftracer/utils/common/config.h>  // DFTRACER_UTILS_ENABLE_ARROW
+#include <dftracer/utils/common/config.h>
 #include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
@@ -274,10 +274,8 @@ PyMethodDef Series_methods[] = {
      "logical(op, other) -> Bool column (op is a DFTU_LOGICAL_* code)."},
     {"logical_not", Series_logical_not, METH_NOARGS,
      "Boolean NOT of a Bool column."},
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
     {"__arrow_c_array__", Series_arrow_c_array, METH_VARARGS,
      "Arrow PyCapsule export: (schema_capsule, array_capsule)."},
-#endif
     {"quantile", Series_quantile, METH_O,
      "quantile(q) -> float (linear interpolation, SIMD sort)."},
     {"median", Series_median, METH_NOARGS, "Median (quantile 0.5)."},
@@ -622,11 +620,9 @@ const dftracer::utils::dataframe::Series* unwrap_vec_column(PyObject* o) {
     return &reinterpret_cast<series_detail::SeriesObject*>(o)->col;
 }
 
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
 dftracer::utils::dataframe::Series column_from_arrow(PyObject* arrow_array) {
     return series_detail::import_arrow_column(arrow_array);
 }
-#endif
 
 int init_series(PyObject* m) {
     using namespace series_detail;
@@ -648,7 +644,6 @@ int init_series(PyObject* m) {
         nullptr;  // created only via _series_from_arrow / kernels
     if (register_type(m, &SeriesType, "_Series") < 0) return -1;
 
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
     static PyMethodDef from_arrow_def = {
         "_series_from_arrow", vec_from_arrow, METH_O,
         "_series_from_arrow(arrow_array) -> _Series: import a pyarrow array "
@@ -659,7 +654,6 @@ int init_series(PyObject* m) {
         Py_DECREF(fn);
         return -1;
     }
-#endif
 
     static PyMethodDef from_list_def = {
         "_series_from_list", vec_from_list, METH_VARARGS,

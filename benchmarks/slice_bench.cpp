@@ -43,6 +43,7 @@
 //   slice_bench --case NAME    (one case in this process; prints RESULT)
 
 #include <bench_ok.h>
+#include <dftracer/utils/arrow/arrow.h>
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/c_api.h>
@@ -50,14 +51,11 @@
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/function.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
-#include <dftracer/utils/dataframe/arrow.h>
-#include <dftracer/utils/dstd/optional.h>
-#include <dftracer/utils/dstd/string.h>
-#endif
 #include <sys/resource.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -357,14 +355,13 @@ double concat_slices(const Scale& s) {
     return elapsed_ns(start, end) / static_cast<double>(s.concat_ops);
 }
 
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
 double arrow_round_trip(const Scale& s) {
     DataFrame frame = wide_frame(s.op_rows, true);
     std::int64_t rows = 0;
     auto start = Clock::now();
     for (std::size_t i = 0; i < s.arrow_ops; ++i) {
-        dataframe::OwnedArrow out = frame.to_arrow();
-        DataFrame back = DataFrame::from_arrow(out.schema(), out.array());
+        arrow::OwnedArrow out = arrow::to_arrow(frame);
+        DataFrame back = arrow::dataframe_from_arrow(out.schema(), out.array());
         rows += back.num_rows() * static_cast<std::int64_t>(back.num_columns());
     }
     auto end = Clock::now();
@@ -372,7 +369,6 @@ double arrow_round_trip(const Scale& s) {
           "arrow round trip rows");
     return elapsed_ns(start, end) / static_cast<double>(s.arrow_ops);
 }
-#endif
 
 DataFrame key_frame(std::int64_t rows, std::int64_t groups) {
     DataFrame frame;
@@ -467,9 +463,7 @@ dftracer::utils::dstd::Vector<Case> make_cases() {
     cases.push_back({"head tail", head_tail});
     cases.push_back({"filter half", filter_half});
     cases.push_back({"concat 1000 slices", concat_slices});
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
     cases.push_back({"arrow round trip", arrow_round_trip});
-#endif
     cases.push_back({"sort_by", sort_by});
     cases.push_back({"group_by sum", group_by_sum});
     cases.push_back({"unique", unique_rows});

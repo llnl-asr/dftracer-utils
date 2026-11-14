@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/common/config.h>
 #include <doctest/doctest.h>
 #include <task_result.h>
 
@@ -17,8 +16,8 @@
 // parametric type keeps its parameters (and correct values) through every
 // reachable op, so a future `new dftu_series()` site that forgets them fails
 // here instead of shipping a silent wrong-answer.
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
-#include <dftracer/utils/dataframe/arrow.h>
+#include <dftracer/utils/arrow/arrow.h>
+#include <dftracer/utils/common/config.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -60,7 +59,7 @@ Series make_timestamp(const dstd::Vector<std::int64_t>& values, TimeUnit unit,
     for (std::int64_t v : values)
         REQUIRE(ArrowArrayAppendInt(&b.array, v) == NANOARROW_OK);
     finish(&b.array);
-    return Series::from_arrow(&b.schema, &b.array);
+    return arrow::series_from_arrow(&b.schema, &b.array);
 }
 
 Series make_time32(const dstd::Vector<std::int32_t>& values, TimeUnit unit) {
@@ -76,7 +75,7 @@ Series make_time32(const dstd::Vector<std::int32_t>& values, TimeUnit unit) {
     for (std::int32_t v : values)
         REQUIRE(ArrowArrayAppendInt(&b.array, v) == NANOARROW_OK);
     finish(&b.array);
-    return Series::from_arrow(&b.schema, &b.array);
+    return arrow::series_from_arrow(&b.schema, &b.array);
 }
 
 Series make_time64(const dstd::Vector<std::int64_t>& values, TimeUnit unit) {
@@ -92,7 +91,7 @@ Series make_time64(const dstd::Vector<std::int64_t>& values, TimeUnit unit) {
     for (std::int64_t v : values)
         REQUIRE(ArrowArrayAppendInt(&b.array, v) == NANOARROW_OK);
     finish(&b.array);
-    return Series::from_arrow(&b.schema, &b.array);
+    return arrow::series_from_arrow(&b.schema, &b.array);
 }
 
 Series make_duration(const dstd::Vector<std::int64_t>& values, TimeUnit unit) {
@@ -110,7 +109,7 @@ Series make_duration(const dstd::Vector<std::int64_t>& values, TimeUnit unit) {
     for (std::int64_t v : values)
         REQUIRE(ArrowArrayAppendInt(&b.array, v) == NANOARROW_OK);
     finish(&b.array);
-    return Series::from_arrow(&b.schema, &b.array);
+    return arrow::series_from_arrow(&b.schema, &b.array);
 }
 
 Series make_decimal(ArrowType arrow_type, int bitwidth, std::int32_t precision,
@@ -130,7 +129,7 @@ Series make_decimal(ArrowType arrow_type, int bitwidth, std::int32_t precision,
         REQUIRE(ArrowArrayAppendDecimal(&b.array, &dec) == NANOARROW_OK);
     }
     finish(&b.array);
-    return Series::from_arrow(&b.schema, &b.array);
+    return arrow::series_from_arrow(&b.schema, &b.array);
 }
 
 Series make_fixed_size_binary(const dstd::Vector<dstd::String>& values,
@@ -150,16 +149,16 @@ Series make_fixed_size_binary(const dstd::Vector<dstd::String>& values,
         REQUIRE(ArrowArrayAppendBytes(&b.array, bv) == NANOARROW_OK);
     }
     finish(&b.array);
-    return Series::from_arrow(&b.schema, &b.array);
+    return arrow::series_from_arrow(&b.schema, &b.array);
 }
 
 // Round-trips `s` through to_arrow/from_arrow and returns the reimported
 // column: exercises the export path a segfaulting gather would crash in, not
 // just the in-memory dftu_series fields.
 Series arrow_round_trip(const Series& s) {
-    OwnedArrow out = s.to_arrow();
+    arrow::OwnedArrow out = arrow::to_arrow(s);
     REQUIRE(static_cast<bool>(out));
-    Series back = Series::from_arrow(out.schema(), out.array());
+    Series back = arrow::series_from_arrow(out.schema(), out.array());
     REQUIRE(back.valid());
     return back;
 }
@@ -314,8 +313,3 @@ TEST_SUITE("dataframe_type_parameter_propagation") {
         }
     }
 }
-#else
-TEST_SUITE("dataframe_type_parameter_propagation") {
-    TEST_CASE("Arrow disabled: nothing to exercise") { CHECK(true); }
-}
-#endif

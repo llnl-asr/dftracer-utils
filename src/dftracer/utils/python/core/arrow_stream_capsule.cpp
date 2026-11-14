@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/python/core/type_helpers.h>
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
 
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
@@ -20,7 +19,7 @@
 #include <exception>
 #include <mutex>
 
-using ArrowExportResult = dftracer::utils::trace::arrow::ArrowExportResult;
+using ArrowExportResult = dftracer::utils::arrow::ArrowExportResult;
 
 namespace {
 
@@ -277,5 +276,3 @@ PyObject *dftracer::utils::python::core::make_arrow_batch_stream(
     obj->consumed = false;
     return (PyObject *)obj;
 }
-
-#endif

@@ -1,61 +1,54 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/dstd/vector.h>
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
 
-// nanoarrow must precede arrow.h: arrow_abi.h (pulled in by arrow.h) defines
+// nanoarrow must precede arrow.h: c_api.h (pulled in by arrow.h) defines
 // ARROW_FLAG_DICTIONARY_ORDERED, nanoarrow's outer include guard, which would
 // otherwise suppress its ArrowArrayStream definition.
-#ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
+#include <dftracer/utils/arrow/arrow.h>
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
 #include <nanoarrow/nanoarrow.h>
 #include <nanoarrow/nanoarrow_ipc.h>
 
-#include <stdexcept>
-#endif
-
-#include <dftracer/utils/common/error.h>
-#include <dftracer/utils/dataframe/arrow.h>
-#include <dftracer/utils/dataframe/arrow_bridge.h>
-#include <dftracer/utils/dataframe/internal/ipc.h>
-#include <dftracer/utils/dstd/optional.h>
-#include <dftracer/utils/dstd/string.h>
-
 #include <cstdint>
+#include <stdexcept>
 #include <utility>
 
-namespace dftracer::utils::dataframe {
+namespace dftracer::utils::arrow {
 
-OwnedArrow Series::to_arrow() const {
+using dataframe::DataFrame;
+using dataframe::Series;
+
+OwnedArrow to_arrow(const Series& col) {
     OwnedArrow out;
-    dftracer::utils::dataframe::to_arrow(*this, out.schema(), out.array());
+    to_arrow(col, out.schema(), out.array());
     return out;
 }
 
-Series Series::from_arrow(const ArrowSchema* schema, const ArrowArray* array) {
-    return dftracer::utils::dataframe::from_arrow(
-        schema, const_cast<ArrowArray*>(array));
-}
+namespace {
 
-OwnedArrow DataFrame::to_arrow() const {
-    dstd::Vector<dstd::String> field_names = dstd::to_strings(names);
+Series as_struct(const DataFrame& frame, bool materialize) {
+    dstd::Vector<dstd::String> field_names = dstd::to_strings(frame.names);
     dstd::Vector<Series> field_columns;
-    field_columns.reserve(columns.size());
-    for (const Series& col : columns) field_columns.push_back(col.share());
-    Series st =
-        Series::structs(std::move(field_names), std::move(field_columns));
+    field_columns.reserve(frame.columns.size());
+    for (const Series& col : frame.columns)
+        field_columns.push_back(
+            materialize && !col.is_flat() ? col.materialize() : col.share());
+    return Series::structs(std::move(field_names), std::move(field_columns));
+}
+
+}  // namespace
+
+OwnedArrow to_arrow(const DataFrame& frame) {
+    Series st = as_struct(frame, false);
     OwnedArrow out;
-    dftracer::utils::dataframe::to_arrow(st, out.schema(), out.array());
+    to_arrow(st, out.schema(), out.array());
     return out;
 }
 
-DataFrame DataFrame::from_arrow(const ArrowSchema* schema,
-                                const ArrowArray* array) {
-    return dftracer::utils::dataframe::dataframe_from_arrow(
-        schema, const_cast<ArrowArray*>(array));
-}
-
-#ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
-dstd::Optional<DataFrame> frame_from_ipc(dstd::StringView bytes) {
+dstd::Optional<DataFrame> from_ipc(dstd::StringView bytes) {
     ArrowBuffer buf;
     ArrowBufferInit(&buf);
     if (ArrowBufferAppend(&buf, bytes.data(),
@@ -79,28 +72,19 @@ dstd::Optional<DataFrame> frame_from_ipc(dstd::StringView bytes) {
     if (stream.get_schema(&stream, &schema) == 0) {
         ArrowArray array;
         if (stream.get_next(&stream, &array) == 0 && array.release)
-            out = DataFrame::from_arrow(&schema, &array);
+            out = dataframe_from_arrow(&schema, &array);
         schema.release(&schema);
     }
     stream.release(&stream);
     return out;
 }
-#endif
 
-#ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
-dstd::Result<dstd::Vector<std::uint8_t>> DataFrame::to_ipc() const {
+dstd::Result<dstd::Vector<std::uint8_t>> to_ipc(const DataFrame& frame) {
     // Export the frame as one struct (record batch) - schema + array.
-    dstd::Vector<dstd::String> field_names = dstd::to_strings(names);
-    dstd::Vector<Series> field_columns;
-    field_columns.reserve(columns.size());
-    for (const Series& col : columns)
-        field_columns.push_back(col.is_flat() ? col.share()
-                                              : col.materialize());
-    Series st =
-        Series::structs(std::move(field_names), std::move(field_columns));
+    Series st = as_struct(frame, true);
     ArrowSchema schema;
     ArrowArray array;
-    dftracer::utils::dataframe::to_arrow(st, &schema, &array);
+    to_arrow(st, &schema, &array);
 
     // A one-batch array stream (takes ownership of schema + array on success).
     ArrowArrayStream stream;
@@ -143,8 +127,5 @@ dstd::Result<dstd::Vector<std::uint8_t>> DataFrame::to_ipc() const {
                                                 err.message);
     return bytes;
 }
-#endif  // DFTRACER_UTILS_ENABLE_ARROW_IPC
 
-}  // namespace dftracer::utils::dataframe
-
-#endif  // DFTRACER_UTILS_ENABLE_ARROW
+}  // namespace dftracer::utils::arrow

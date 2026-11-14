@@ -13,8 +13,6 @@
 #include <dftracer/utils/plugins/host/host_ops.h>
 #include <dftracer/utils/runtime/fs/fs.h>
 #include <dftracer/utils/runtime/runtime.h>
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
-#endif
 
 #include <cstdint>
 #include <mutex>

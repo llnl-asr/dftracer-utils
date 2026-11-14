@@ -491,16 +491,8 @@ def _apply_index(pdf: "pd.DataFrame", index: "Union[str, Sequence[str]]") -> "pd
 
 
 def _arrow_native(name: str) -> Callable[..., Any]:
-    """The native Arrow entry point `name`; absent when the extension was built
-    without Arrow support (``DFTRACER_UTILS_ENABLE_ARROW=OFF``)."""
-    fn = getattr(_ext, name, None)
-    if fn is None:
-        raise RuntimeError(
-            "this build of dftracer-utils has no Arrow support "
-            "(built with DFTRACER_UTILS_ENABLE_ARROW=OFF); "
-            "Arrow, pandas and polars interop is unavailable"
-        )
-    return fn
+    """The native Arrow entry point `name`."""
+    return getattr(_ext, name)
 
 
 def _require_pyarrow() -> "ModuleType":

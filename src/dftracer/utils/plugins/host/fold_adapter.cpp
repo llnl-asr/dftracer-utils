@@ -16,7 +16,9 @@
 #include <dftracer/utils/dstd/hash/fnv1a.h>
 #include <dftracer/utils/dstd/intern_cache.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/fileio/gzip_line_writer.h>
 #include <dftracer/utils/json/value.h>
@@ -38,18 +40,6 @@
 #include <dftracer/utils/trace/views/view.h>
 #include <sys/stat.h>
 #include <sys/types.h>
-
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
-#include <dftracer/utils/trace/arrow/arrow_export.h>
-#include <dftracer/utils/trace/arrow/column_builder.h>
-#endif
-#ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
-#include <dftracer/utils/dstd/pair.h>
-#include <dftracer/utils/dstd/string.h>
-#include <dftracer/utils/dstd/to_chars.h>
-#include <dftracer/utils/trace/arrow/ipc_reader.h>
-#include <dftracer/utils/trace/arrow/ipc_writer.h>
-#endif
 
 #include <cerrno>
 #include <cstddef>
@@ -990,92 +980,6 @@ void serialize_row(dstd::String& out, const dftu_dataframe* df,
     out += "}\n";
 }
 
-dftu_status host_arrow_write_ipc(::dftu_ctx* ctx, void*,
-                                 [[maybe_unused]] ::ArrowArray* a,
-                                 [[maybe_unused]] ::ArrowSchema* s,
-                                 [[maybe_unused]] const char* path) {
-#ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
-    if (!a || !s || !path || !a->release || !s->release) {
-        return host_fail(ctx, DFTU_E_INVALID,
-                         "arrow_write_ipc: the array, the schema and the path "
-                         "must be set and not released");
-    }
-    nanoarrow::UniqueSchema schema;
-    ArrowSchemaMove(s, schema.get());
-    nanoarrow::UniqueArray array;
-    ArrowArrayMove(a, array.get());
-    trace::arrow::ArrowExportResult res(std::move(schema), std::move(array));
-    const char* failed = nullptr;
-    const auto ran = dftracer::utils::default_runtime().block_on(
-        coro::named("dft-plugin-ipc", [&]() -> coro::CoroTask<void> {
-            trace::arrow::IpcWriter writer;
-            const auto open_rc = co_await writer.open(path);
-            if (open_rc != 0) {
-                failed = "open";
-                co_return;
-            }
-            const auto write_rc = co_await writer.write_batch(res);
-            if (write_rc != 0) {
-                failed = "write";
-                co_return;
-            }
-            const auto close_rc = co_await writer.close();
-            if (close_rc != 0) failed = "close";
-        }()));
-    if (!ran) return host_fail(ctx, ran.error());
-    ArrowSchemaMove(res.schema(), s);
-    ArrowArrayMove(res.array(), a);
-    if (failed != nullptr) {
-        return host_fail(ctx, DFTU_E_IO,
-                         dstd::fmt<"arrow_write_ipc: {} of '{}' failed">(
-                             dstd::StringView(failed), dstd::StringView(path)));
-    }
-    return DFTU_OK;
-#else
-    return host_fail(ctx, DFTU_E_UNSUPPORTED,
-                     "arrow_write_ipc: this build has no Arrow IPC support");
-#endif
-}
-
-// Read the first record batch of an IPC file into out/out_schema; the caller
-// must release both.
-dftu_status host_arrow_read_ipc(::dftu_ctx* ctx, void*,
-                                [[maybe_unused]] const char* path,
-                                [[maybe_unused]] ::ArrowArray* out,
-                                [[maybe_unused]] ::ArrowSchema* out_schema) {
-#ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
-    if (!path || !out || !out_schema) {
-        return host_fail(ctx, DFTU_E_INVALID,
-                         "arrow_read_ipc: the path and both outputs must be "
-                         "set");
-    }
-    trace::arrow::IpcReader reader;
-    if (reader.open(path) != 0) {
-        return host_fail(ctx, DFTU_E_IO,
-                         dstd::fmt<"arrow_read_ipc: cannot open '{}'">(
-                             dstd::StringView(path)));
-    }
-    if (reader.batch_count() == 0) {
-        return host_fail(ctx, DFTU_E_PARSE,
-                         dstd::fmt<"arrow_read_ipc: '{}' has no record batch">(
-                             dstd::StringView(path)));
-    }
-    trace::arrow::ArrowExportResult res = reader.read_batch(0);
-    if (!res.array() || !res.schema() || !res.array()->release ||
-        !res.schema()->release) {
-        return host_fail(ctx, DFTU_E_PARSE,
-                         dstd::fmt<"arrow_read_ipc: cannot read the first "
-                                   "batch of '{}'">(dstd::StringView(path)));
-    }
-    ArrowArrayMove(res.array(), out);
-    ArrowSchemaMove(res.schema(), out_schema);
-    return DFTU_OK;
-#else
-    return host_fail(ctx, DFTU_E_UNSUPPORTED,
-                     "arrow_read_ipc: this build has no Arrow IPC support");
-#endif
-}
-
 dftu_status host_trace_open_write(::dftu_ctx* ctx, void* h, const char* path,
                                   ::dftu_trace_writer** out) {
     if (!path || !out) {
@@ -1110,9 +1014,6 @@ dftu_status host_trace_close(::dftu_ctx* ctx, void* h, ::dftu_trace_writer* w) {
 const dftu_svc_sketch g_sketch = {sizeof(dftu_svc_sketch), host_sketch_create,
                                   host_sketch_add,         host_sketch_merge,
                                   host_sketch_result,      host_sketch_free};
-
-const dftu_svc_arrow g_arrow = {sizeof(dftu_svc_arrow), host_arrow_write_ipc,
-                                host_arrow_read_ipc};
 
 dftu_status host_trace_read(::dftu_ctx* ctx, void* h, const char* path,
                             dftu_stream_item_fn on_batch, void* ud) {
@@ -1251,7 +1152,6 @@ const void* host_get_service(void*, const char* ext_id) {
 const void* detail::stateless_service(const char* ext_id) {
     if (std::strcmp(ext_id, DFTU_SVC_IO) == 0) return &g_io;
     if (std::strcmp(ext_id, DFTU_SVC_SKETCH) == 0) return &g_sketch;
-    if (std::strcmp(ext_id, DFTU_SVC_ARROW) == 0) return &g_arrow;
     if (std::strcmp(ext_id, DFTU_SVC_OPS) == 0) return detail::ops_ext_vtable();
     if (std::strcmp(ext_id, DFTU_SVC_PROVIDERS) == 0)
         return detail::providers_ext_vtable();

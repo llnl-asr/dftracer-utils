@@ -12,9 +12,8 @@
 // Reshaping/dedupe-key coverage for the Arrow-only logical types:
 // sort_by_multi, unique, to_dummies, pivot, unpivot and explode. Table-driven
 // with a default-less switch, so a new TypeId with no row here fails.
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
 #include <dataframe/builders_arrow_types.h>
-#include <dftracer/utils/dataframe/arrow.h>
+#include <dftracer/utils/arrow/arrow.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/scalar.h>
 #include <nanoarrow/nanoarrow.h>
@@ -399,8 +398,3 @@ TEST_SUITE("dataframe_arrow_types_reshape") {
             df.unnest("nope"), dftracer::utils::common::ErrorCode::NotFound);
     }
 }
-#else
-TEST_SUITE("dataframe_arrow_types_reshape") {
-    TEST_CASE("Arrow disabled: nothing to exercise") { CHECK(true); }
-}
-#endif

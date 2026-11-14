@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/common/config.h>
 #include <doctest/doctest.h>
 
 #include <cmath>
@@ -9,9 +8,9 @@
 // Windowed/statistical kernel coverage (rolling, ewm, cut/qcut, moments,
 // quantile) for the Arrow-only logical types, mirroring
 // test_arrow_types_matrix.cpp's default-less is_audited() switch.
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
 #include <dataframe/builders_arrow_types.h>
-#include <dftracer/utils/dataframe/arrow.h>
+#include <dftracer/utils/arrow/arrow.h>
+#include <dftracer/utils/common/config.h>
 #include <dftracer/utils/dataframe/scalar.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -320,5 +319,3 @@ TEST_SUITE("dataframe_arrow_types_windowed") {
         }
     }
 }
-
-#endif  // DFTRACER_UTILS_ENABLE_ARROW

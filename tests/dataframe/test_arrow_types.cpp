@@ -1,14 +1,12 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/arrow/arrow.h>
 #include <dftracer/utils/common/config.h>
+#include <dftracer/utils/dstd/string.h>
 #include <doctest/doctest.h>
+#include <nanoarrow/nanoarrow.h>
 
 #include <cstdint>
-
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
-#include <dftracer/utils/dataframe/arrow.h>
-#include <dftracer/utils/dstd/string.h>
-#include <nanoarrow/nanoarrow.h>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::dataframe;
@@ -54,7 +52,7 @@ TEST_SUITE("dataframe_arrow_types") {
         append_i64(&b.array, 1700000001000000LL);
         finish(&b.array);
 
-        Series s = Series::from_arrow(&b.schema, &b.array);
+        Series s = arrow::series_from_arrow(&b.schema, &b.array);
         REQUIRE(s.valid());
         DataType expected = timestamp(TimeUnit::Micro, "UTC");
         CHECK(s.data_type() == expected);
@@ -77,9 +75,9 @@ TEST_SUITE("dataframe_arrow_types") {
               timestamp(TimeUnit::Micro));
         CHECK_FALSE(Series::flat_i64(d, 2).with_timezone("UTC").valid());
 
-        OwnedArrow out = s.to_arrow();
+        arrow::OwnedArrow out = arrow::to_arrow(s);
         CHECK(static_cast<bool>(out));
-        Series back = Series::from_arrow(out.schema(), out.array());
+        Series back = arrow::series_from_arrow(out.schema(), out.array());
         REQUIRE(back.valid());
         CHECK(back.data_type() == expected);
     }
@@ -96,7 +94,7 @@ TEST_SUITE("dataframe_arrow_types") {
         append_i64(&b.array, 42);
         finish(&b.array);
 
-        Series s = Series::from_arrow(&b.schema, &b.array);
+        Series s = arrow::series_from_arrow(&b.schema, &b.array);
         REQUIRE(s.valid());
         DataType expected = timestamp(TimeUnit::Nano);
         CHECK(s.data_type() == expected);
@@ -113,7 +111,7 @@ TEST_SUITE("dataframe_arrow_types") {
         append_i64(&b.array, 19000);
         finish(&b.array);
 
-        Series s = Series::from_arrow(&b.schema, &b.array);
+        Series s = arrow::series_from_arrow(&b.schema, &b.array);
         REQUIRE(s.valid());
         CHECK(s.data_type() == scalar(TypeId::Date32));
         CHECK(dftracer::utils::dataframe::physical_type(TypeId::Date32) ==
@@ -122,8 +120,8 @@ TEST_SUITE("dataframe_arrow_types") {
         REQUIRE(d != nullptr);
         CHECK(d[0] == 19000);
 
-        OwnedArrow out = s.to_arrow();
-        Series back = Series::from_arrow(out.schema(), out.array());
+        arrow::OwnedArrow out = arrow::to_arrow(s);
+        Series back = arrow::series_from_arrow(out.schema(), out.array());
         REQUIRE(back.valid());
         CHECK(back.data_type() == scalar(TypeId::Date32));
     }
@@ -140,13 +138,13 @@ TEST_SUITE("dataframe_arrow_types") {
         append_i64(&b.array, 3600);
         finish(&b.array);
 
-        Series s = Series::from_arrow(&b.schema, &b.array);
+        Series s = arrow::series_from_arrow(&b.schema, &b.array);
         REQUIRE(s.valid());
         DataType expected = duration_of(TimeUnit::Second);
         CHECK(s.data_type() == expected);
 
-        OwnedArrow out = s.to_arrow();
-        Series back = Series::from_arrow(out.schema(), out.array());
+        arrow::OwnedArrow out = arrow::to_arrow(s);
+        Series back = arrow::series_from_arrow(out.schema(), out.array());
         REQUIRE(back.valid());
         CHECK(back.data_type() == expected);
     }
@@ -165,7 +163,7 @@ TEST_SUITE("dataframe_arrow_types") {
         REQUIRE(ArrowArrayAppendDecimal(&b.array, &dec) == NANOARROW_OK);
         finish(&b.array);
 
-        Series s = Series::from_arrow(&b.schema, &b.array);
+        Series s = arrow::series_from_arrow(&b.schema, &b.array);
         REQUIRE(s.valid());
         DataType expected = decimal128(38, 9);
         CHECK(s.data_type() == expected);
@@ -173,8 +171,8 @@ TEST_SUITE("dataframe_arrow_types") {
         CHECK(s.data_type().decimal_scale() == 9);
         REQUIRE(s.length() == 1);
 
-        OwnedArrow out = s.to_arrow();
-        Series back = Series::from_arrow(out.schema(), out.array());
+        arrow::OwnedArrow out = arrow::to_arrow(s);
+        Series back = arrow::series_from_arrow(out.schema(), out.array());
         REQUIRE(back.valid());
         CHECK(back.data_type() == expected);
         REQUIRE(back.length() == 1);
@@ -195,7 +193,7 @@ TEST_SUITE("dataframe_arrow_types") {
         REQUIRE(ArrowArrayAppendBytes(&b.array, bv) == NANOARROW_OK);
         finish(&b.array);
 
-        Series s = Series::from_arrow(&b.schema, &b.array);
+        Series s = arrow::series_from_arrow(&b.schema, &b.array);
         REQUIRE(s.valid());
         DataType expected = fixed_size_binary(4);
         CHECK(s.data_type() == expected);
@@ -204,8 +202,8 @@ TEST_SUITE("dataframe_arrow_types") {
         REQUIRE(d != nullptr);
         CHECK(dstd::String(d, 4) == "abcd");
 
-        OwnedArrow out = s.to_arrow();
-        Series back = Series::from_arrow(out.schema(), out.array());
+        arrow::OwnedArrow out = arrow::to_arrow(s);
+        Series back = arrow::series_from_arrow(out.schema(), out.array());
         REQUIRE(back.valid());
         CHECK(back.data_type() == expected);
     }
@@ -221,7 +219,7 @@ TEST_SUITE("dataframe_arrow_types") {
         append_str(&b.array, "large string world");
         finish(&b.array);
 
-        Series s = Series::from_arrow(&b.schema, &b.array);
+        Series s = arrow::series_from_arrow(&b.schema, &b.array);
         REQUIRE(s.valid());
         CHECK(s.data_type() == scalar(TypeId::LargeString));
         REQUIRE(s.length() == 2);
@@ -232,8 +230,8 @@ TEST_SUITE("dataframe_arrow_types") {
         REQUIRE(d != nullptr);
         CHECK(dstd::String(d, 23) == "hellolarge string world");
 
-        OwnedArrow out = s.to_arrow();
-        Series back = Series::from_arrow(out.schema(), out.array());
+        arrow::OwnedArrow out = arrow::to_arrow(s);
+        Series back = arrow::series_from_arrow(out.schema(), out.array());
         REQUIRE(back.valid());
         CHECK(back.data_type() == scalar(TypeId::LargeString));
         REQUIRE(back.length() == 2);
@@ -271,13 +269,13 @@ TEST_SUITE("dataframe_arrow_types") {
         REQUIRE(ArrowArrayFinishElement(&b.array) == NANOARROW_OK);
         finish(&b.array);
 
-        Series s = Series::from_arrow(&b.schema, &b.array);
+        Series s = arrow::series_from_arrow(&b.schema, &b.array);
         REQUIRE(s.valid());
         CHECK(s.data_type() == large_list_of(scalar(TypeId::Int64)));
         REQUIRE(s.length() == 2);
 
-        OwnedArrow out = s.to_arrow();
-        Series back = Series::from_arrow(out.schema(), out.array());
+        arrow::OwnedArrow out = arrow::to_arrow(s);
+        Series back = arrow::series_from_arrow(out.schema(), out.array());
         REQUIRE(back.valid());
         CHECK(back.data_type() == large_list_of(scalar(TypeId::Int64)));
         REQUIRE(back.length() == 2);
@@ -302,15 +300,15 @@ TEST_SUITE("dataframe_arrow_types") {
         REQUIRE(ArrowArrayFinishElement(&b.array) == NANOARROW_OK);
         finish(&b.array);
 
-        Series s = Series::from_arrow(&b.schema, &b.array);
+        Series s = arrow::series_from_arrow(&b.schema, &b.array);
         REQUIRE(s.valid());
         DataType expected = fixed_size_list_of(scalar(TypeId::Int64), 2);
         CHECK(s.data_type() == expected);
         CHECK(s.data_type().fixed_size() == 2);
         REQUIRE(s.length() == 2);
 
-        OwnedArrow out = s.to_arrow();
-        Series back = Series::from_arrow(out.schema(), out.array());
+        arrow::OwnedArrow out = arrow::to_arrow(s);
+        Series back = arrow::series_from_arrow(out.schema(), out.array());
         REQUIRE(back.valid());
         CHECK(back.data_type() == expected);
     }
@@ -337,7 +335,7 @@ TEST_SUITE("dataframe_arrow_types") {
         REQUIRE(ArrowArrayFinishElement(&b.array) == NANOARROW_OK);
         finish(&b.array);
 
-        Series s = Series::from_arrow(&b.schema, &b.array);
+        Series s = arrow::series_from_arrow(&b.schema, &b.array);
         REQUIRE(s.valid());
         DataType expected =
             map_of(scalar(TypeId::String), scalar(TypeId::Int64));
@@ -346,8 +344,8 @@ TEST_SUITE("dataframe_arrow_types") {
               TypeId::List);
         REQUIRE(s.length() == 1);
 
-        OwnedArrow out = s.to_arrow();
-        Series back = Series::from_arrow(out.schema(), out.array());
+        arrow::OwnedArrow out = arrow::to_arrow(s);
+        Series back = arrow::series_from_arrow(out.schema(), out.array());
         REQUIRE(back.valid());
         CHECK(back.data_type() == expected);
         REQUIRE(back.length() == 1);
@@ -368,15 +366,15 @@ TEST_SUITE("dataframe_arrow_types") {
         REQUIRE(ArrowArrayFinishElement(&b.array) == NANOARROW_OK);
         finish(&b.array);
 
-        Series s = Series::from_arrow(&b.schema, &b.array);
+        Series s = arrow::series_from_arrow(&b.schema, &b.array);
         REQUIRE(s.valid());
         DataType expected = list_of(timestamp(TimeUnit::Micro, "UTC"));
         CHECK(s.data_type() == expected);
         CHECK(s.data_type().fields[0].type.time_unit() == TimeUnit::Micro);
         CHECK(s.data_type().fields[0].type.timezone() == "UTC");
 
-        OwnedArrow out = s.to_arrow();
-        Series back = Series::from_arrow(out.schema(), out.array());
+        arrow::OwnedArrow out = arrow::to_arrow(s);
+        Series back = arrow::series_from_arrow(out.schema(), out.array());
         REQUIRE(back.valid());
         CHECK(back.data_type() == expected);
     }
@@ -410,15 +408,15 @@ TEST_SUITE("dataframe_arrow_types") {
         REQUIRE(ArrowArrayFinishElement(&b.array) == NANOARROW_OK);
         finish(&b.array);
 
-        Series s = Series::from_arrow(&b.schema, &b.array);
+        Series s = arrow::series_from_arrow(&b.schema, &b.array);
         REQUIRE(s.valid());
         DataType expected =
             struct_of({{"ts", timestamp(TimeUnit::Micro, "UTC"), true},
                        {"amount", decimal128(38, 9), true}});
         CHECK(s.data_type() == expected);
 
-        OwnedArrow out = s.to_arrow();
-        Series back = Series::from_arrow(out.schema(), out.array());
+        arrow::OwnedArrow out = arrow::to_arrow(s);
+        Series back = arrow::series_from_arrow(out.schema(), out.array());
         REQUIRE(back.valid());
         CHECK(back.data_type() == expected);
     }
@@ -436,7 +434,7 @@ TEST_SUITE("dataframe_arrow_types") {
         REQUIRE(ArrowArrayAppendInterval(&b.array, &iv) == NANOARROW_OK);
         finish(&b.array);
 
-        Series s = Series::from_arrow(&b.schema, &b.array);
+        Series s = arrow::series_from_arrow(&b.schema, &b.array);
         CHECK_FALSE(s.valid());
     }
 
@@ -452,13 +450,8 @@ TEST_SUITE("dataframe_arrow_types") {
         append_i64(&b.array, 7);
         finish(&b.array);
 
-        Series s = Series::from_arrow(&b.schema, &b.array);
+        Series s = arrow::series_from_arrow(&b.schema, &b.array);
         REQUIRE(s.valid());
         CHECK(s.data_type().id != TypeId::Unknown);
     }
 }
-#else
-TEST_SUITE("dataframe_arrow_types") {
-    TEST_CASE("Arrow disabled: nothing to exercise") { CHECK(true); }
-}
-#endif

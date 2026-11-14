@@ -351,45 +351,38 @@ endif()
 
 # +++++++++++++++++++++++++++++++++++++++++
 # Reference plugin: touches every dftu.svc.* service slot from real C (plan
-# 12, gap 11 - "conformance + trust"). Only built when Arrow is enabled: it
-# exercises dftu.svc.arrow too, and there is no service-less stand-in for
-# that check.
+# 12, gap 11 - "conformance + trust").
 # +++++++++++++++++++++++++++++++++++++++++
 
-if(DFTRACER_UTILS_ENABLE_ARROW)
-  add_library(reference_plugin MODULE reference_plugin.c)
-  target_set_warnings(reference_plugin)
-  set_target_properties(
-    reference_plugin
-    PROPERTIES OUTPUT_NAME reference_plugin
-               PREFIX ""
-               POSITION_INDEPENDENT_CODE ON
-               C_STANDARD 11
-               C_STANDARD_REQUIRED ON
-               RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
-               LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
-  target_include_directories(reference_plugin
-                             PRIVATE ${CMAKE_SOURCE_DIR}/include
-                                     ${CMAKE_BINARY_DIR}/include)
-  if(TARGET dftracer_utils_dataframe::shared)
-    target_link_libraries(reference_plugin PRIVATE dftracer_utils_dataframe::shared)
-  elseif(TARGET dftracer_utils_dataframe::static)
-    target_link_libraries(reference_plugin PRIVATE dftracer_utils_dataframe::static)
-  endif()
-  # A loadable module links the shared nanoarrow: the static archive is not
-  # position independent on every target (aarch64 Linux refuses it).
-  link_nanoarrow(reference_plugin SHARED)
-  # A switch with a missing case for a newly added ref_svc_id enumerator (a
-  # 14th dftu.svc.* service not yet wired into this plugin) must fail the
-  # build, not just the editor.
-  if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(reference_plugin PRIVATE -Wswitch -Werror=switch)
-  endif()
+add_library(reference_plugin MODULE reference_plugin.c)
+target_set_warnings(reference_plugin)
+set_target_properties(
+  reference_plugin
+  PROPERTIES OUTPUT_NAME reference_plugin
+             PREFIX ""
+             POSITION_INDEPENDENT_CODE ON
+             C_STANDARD 11
+             C_STANDARD_REQUIRED ON
+             RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+             LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
+target_include_directories(reference_plugin
+                           PRIVATE ${CMAKE_SOURCE_DIR}/include
+                                   ${CMAKE_BINARY_DIR}/include)
+if(TARGET dftracer_utils_dataframe::shared)
+  target_link_libraries(reference_plugin PRIVATE dftracer_utils_dataframe::shared)
+elseif(TARGET dftracer_utils_dataframe::static)
+  target_link_libraries(reference_plugin PRIVATE dftracer_utils_dataframe::static)
+endif()
+# A switch with a missing case for a newly added ref_svc_id enumerator (a
+# 14th dftu.svc.* service not yet wired into this plugin) must fail the
+# build, not just the editor.
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+  target_compile_options(reference_plugin PRIVATE -Wswitch -Werror=switch)
+endif()
 
-  if(TARGET plugins_test_plugin_reference)
-    target_compile_definitions(
-      plugins_test_plugin_reference PRIVATE
-      REFERENCE_PLUGIN_PATH="$<TARGET_FILE:reference_plugin>")
-    add_dependencies(plugins_test_plugin_reference reference_plugin)
-  endif()
+if(TARGET plugins_test_plugin_reference)
+  target_compile_definitions(
+    plugins_test_plugin_reference PRIVATE
+    REFERENCE_PLUGIN_PATH="$<TARGET_FILE:reference_plugin>")
+  add_dependencies(plugins_test_plugin_reference reference_plugin)
 endif()

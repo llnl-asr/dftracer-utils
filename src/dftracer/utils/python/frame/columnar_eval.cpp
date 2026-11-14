@@ -7,7 +7,7 @@
 // parallel backend so vec's parallelism seam fans out across the coroutine
 // pool.
 
-#include <dftracer/utils/common/config.h>  // DFTRACER_UTILS_ENABLE_ARROW
+#include <dftracer/utils/common/config.h>
 #include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/expr.h>

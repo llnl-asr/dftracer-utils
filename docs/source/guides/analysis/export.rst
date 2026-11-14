@@ -134,37 +134,37 @@ to get ``to_pandas`` / ``to_polars``:
    batches = [pa.record_batch(b) for fr in result["file_results"] for b in fr["batches"]]
    table = ArrowTable(batches).to_pandas()
 
-This function is built only when Arrow IPC support is compiled in
-(``DFTRACER_UTILS_ENABLE_ARROW_IPC``); there is no Python-level write path for
-IPC files. To write one, convert through
+There is no Python-level write path for IPC files. To write one, convert through
 pyarrow (``pa.ipc.new_file(...).write_table(df.to_arrow())``).
 
 The Arrow C Data Interface (C++)
 --------------------------------
 
-The zero-copy bridge is ``to_arrow`` / ``from_arrow`` on ``Series`` and
-``DataFrame``, in the installed public header
-``dftracer/utils/dataframe/arrow.h`` (namespace ``dftracer::utils::dataframe``,
-built when ``DFTRACER_UTILS_ENABLE_ARROW`` is set). ``to_arrow`` returns an
-``OwnedArrow`` - a move-only RAII owner of the paired ``ArrowSchema`` /
-``ArrowArray`` whose buffers alias the column's - so the caller never juggles
-release callbacks by hand. A ``DataFrame`` exports as a struct array with one
-child per column. The header pulls in the Arrow C Data Interface struct
-definitions itself, so a consumer needs no Arrow library to include it.
+The zero-copy bridge is the free functions ``to_arrow``, ``series_from_arrow``
+and ``dataframe_from_arrow`` in the installed public header
+``dftracer/utils/arrow/arrow.h`` (namespace ``dftracer::utils::arrow``, library
+``dftracer_utils_arrow``, which only Python and tests link). ``to_arrow``
+returns an ``OwnedArrow`` - a move-only RAII owner of the paired
+``ArrowSchema`` / ``ArrowArray`` whose buffers alias the column's - so the
+caller never juggles release callbacks by hand. A ``DataFrame`` exports as a
+struct array with one child per column. The header pulls in the Arrow C Data
+Interface struct definitions itself, so a consumer needs no Arrow library to
+include it.
 
 .. code-block:: cpp
 
-   #include <dftracer/utils/dataframe/arrow.h>
+   #include <dftracer/utils/arrow/arrow.h>
 
-   using namespace dftracer::utils::dataframe;
+   using namespace dftracer::utils;
 
-   OwnedArrow a = df.to_arrow();                       // zero-copy export
+   arrow::OwnedArrow a = arrow::to_arrow(df);          // zero-copy export
    // ... hand (a.schema(), a.array()) to any Arrow consumer ...
-   DataFrame back = DataFrame::from_arrow(a.schema(), a.array());
+   dataframe::DataFrame back =
+       arrow::dataframe_from_arrow(a.schema(), a.array());
 
    // A single column round-trips the same way.
-   OwnedArrow col = df.column("dur").to_arrow();
-   Series s = Series::from_arrow(col.schema(), col.array());
+   arrow::OwnedArrow col = arrow::to_arrow(df.column("dur"));
+   dataframe::Series s = arrow::series_from_arrow(col.schema(), col.array());
 
 Write a new trace
 -----------------

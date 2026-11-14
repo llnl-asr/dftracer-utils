@@ -2,11 +2,9 @@
 #ifndef DFTRACER_UTILS_PYTHON_CORE_ARROW_STREAM_CAPSULE_H
 #define DFTRACER_UTILS_PYTHON_CORE_ARROW_STREAM_CAPSULE_H
 
-#include <dftracer/utils/common/config.h>
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
-
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
+#include <dftracer/utils/common/config.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/python/trace/trace_reader_iterator.h>
 
@@ -26,5 +24,4 @@ PyObject *make_arrow_batch_stream(
 
 }  // namespace dftracer::utils::python::core
 
-#endif
 #endif

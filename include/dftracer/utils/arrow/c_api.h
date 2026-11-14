@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
-#ifndef DFTRACER_UTILS_PLUGINS_ARROW_ABI_H
-#define DFTRACER_UTILS_PLUGINS_ARROW_ABI_H
+#ifndef DFTRACER_UTILS_ARROW_C_API_H
+#define DFTRACER_UTILS_ARROW_C_API_H
 
 /* The standard Arrow C Data and C Stream Interfaces (stable across Arrow
    versions), copied as the Arrow project intends, Apache-2.0,
@@ -65,4 +65,4 @@ struct ArrowArrayStream {
 }
 #endif
 
-#endif /* DFTRACER_UTILS_PLUGINS_ARROW_ABI_H */
+#endif /* DFTRACER_UTILS_ARROW_C_API_H */

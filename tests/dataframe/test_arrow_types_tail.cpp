@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/common/config.h>
 #include <doctest/doctest.h>
 
 #include <cstdint>
@@ -9,9 +8,9 @@
 // which the matrix test in test_arrow_types_matrix.cpp does not cover. Same
 // table-driven shape and the same default-less is_audited() switch, so a new
 // TypeId with no row here fails instead of being silently skipped.
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
 #include <dataframe/builders_arrow_types.h>
-#include <dftracer/utils/dataframe/arrow.h>
+#include <dftracer/utils/arrow/arrow.h>
+#include <dftracer/utils/common/config.h>
 #include <dftracer/utils/dataframe/scalar.h>
 #include <dftracer/utils/dstd/string.h>
 #include <nanoarrow/nanoarrow.h>
@@ -264,8 +263,3 @@ TEST_SUITE("dataframe_arrow_types_tail") {
         }
     }
 }
-#else
-TEST_SUITE("dataframe_arrow_types_tail") {
-    TEST_CASE("Arrow disabled: nothing to exercise") { CHECK(true); }
-}
-#endif

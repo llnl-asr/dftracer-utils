@@ -13,9 +13,6 @@
 #include <dftracer/utils/plugins/host/fold_adapter.h>
 #include <dftracer/utils/plugins/host/plugin_memory.h>
 #include <dftracer/utils/plugins/plugin.h>
-
-// After fold_adapter.h so nanoarrow is set up before dataframe/c_api.h's
-// arrow_abi.
 #include <doctest/doctest.h>
 #include <plugins/test_abi_ctx.h>
 

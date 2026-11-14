@@ -5,20 +5,15 @@
 // an explicit to_arrow()/to_pandas()/to_polars(), zero-copy through the Arrow C
 // interface.
 
-#include <dftracer/utils/common/config.h>  // DFTRACER_UTILS_ENABLE_ARROW
+#include <dftracer/utils/arrow/arrow.h>
+#include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/agg_expr.h>
-#include <dftracer/utils/dataframe/frame_ops.h>
-#include <dftracer/utils/dataframe/internal/frame_native.h>
-#include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/python/frame/dataframe.h>
-#include <dftracer/utils/python/frame/frame_op_helpers.h>
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
-#include <dftracer/utils/dataframe/arrow_bridge.h>
-#endif
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/expr.h>
+#include <dftracer/utils/dataframe/frame_ops.h>
+#include <dftracer/utils/dataframe/internal/frame_native.h>
 #include <dftracer/utils/dataframe/kernels/kernels.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/plan.h>
@@ -26,6 +21,7 @@
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/errc.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/python/core/errors.h>
@@ -34,16 +30,15 @@
 #include <dftracer/utils/python/core/type_helpers.h>
 #include <dftracer/utils/python/frame/agg_helpers.h>
 #include <dftracer/utils/python/frame/columnar_eval.h>
+#include <dftracer/utils/python/frame/dataframe.h>
+#include <dftracer/utils/python/frame/frame_op_helpers.h>
 #include <dftracer/utils/python/frame/join_helpers.h>
 #include <dftracer/utils/python/frame/lazyframe.h>
 #include <dftracer/utils/python/frame/series.h>
 
 #include <cstdint>
 #include <cstring>
-#include <new>
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
 #include <nanoarrow/nanoarrow.hpp>
-#endif
 #include <new>
 #include <stdexcept>
 #include <utility>
@@ -1271,7 +1266,6 @@ PyObject* DataFrame_concat(PyObject* self, PyObject* args, PyObject* kwds) {
     return run_batch_op([&] { return dataframe::concat(parts, how); });
 }
 
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
 // Arrow/pandas/polars conversion and pickling live in the Python wrapper
 // (dftracer.utils.frame); the native handle only exposes the zero-copy
 // __arrow_c_array__ / __arrow_c_stream__ capsules.
@@ -1303,7 +1297,7 @@ PyObject* DataFrame_arrow_c_array(PyObject* self, PyObject*) {
     schema = dftracer::utils::dstd::make_unique<ArrowSchema>();
     array = dftracer::utils::dstd::make_unique<ArrowArray>();
     try {
-        dataframe::to_arrow(b->st, schema.get(), array.get());
+        arrow::to_arrow(b->st, schema.get(), array.get());
     } catch (const std::exception& e) {
         PyErr_SetString(PyExc_RuntimeError, e.what());
         return nullptr;
@@ -1354,7 +1348,7 @@ PyObject* DataFrame_arrow_c_stream(PyObject* self, PyObject*) {
             if (a.release) a.release(&a);
     };
     try {
-        arrays = dataframe::to_arrow_batches(b->st, &schema);
+        arrays = arrow::to_arrow_batches(b->st, &schema);
     } catch (const std::exception& e) {
         drop();
         PyErr_SetString(PyExc_RuntimeError, e.what());
@@ -1383,13 +1377,12 @@ PyObject* DataFrame_arrow_c_stream(PyObject* self, PyObject*) {
     return cap;
 }
 
-#ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
 // to_ipc() -> bytes: the frame serialized as an Arrow IPC stream (schema + one
 // record batch + EOS), so a consumer needs no pyarrow to produce .arrow bytes.
 PyObject* DataFrame_to_ipc(PyObject* self, PyObject*) {
     DataFrameObject* b = as_dataframe(self);
     if (!b) return nullptr;
-    auto bytes = to_dataframe(b).to_ipc();
+    auto bytes = arrow::to_ipc(to_dataframe(b));
     if (!bytes) {
         PyErr_SetString(PyExc_RuntimeError, bytes.error().c_str());
         return nullptr;
@@ -1398,9 +1391,6 @@ PyObject* DataFrame_to_ipc(PyObject* self, PyObject*) {
         reinterpret_cast<const char*>(bytes->data()),
         static_cast<Py_ssize_t>(bytes->size()));
 }
-#endif
-
-#endif  // DFTRACER_UTILS_ENABLE_ARROW
 
 PyObject* DataFrame_to_bytes(PyObject* self, PyObject*) {
     DataFrameObject* b = as_dataframe(self);
@@ -1600,18 +1590,14 @@ PyMethodDef DataFrame_methods[] = {
     {"hash_partition", DataFrame_hash_partition, METH_VARARGS,
      "hash_partition(keys, n_parts) -> list[DataFrame] partitioned by a stable "
      "hash of the key columns (the distributed shuffle primitive)."},
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
     {"__arrow_c_array__", DataFrame_arrow_c_array, METH_VARARGS,
      "Arrow PyCapsule export of the struct: (schema_capsule, array_capsule)."},
     {"__arrow_c_stream__", DataFrame_arrow_c_stream, METH_VARARGS,
      "Arrow PyCapsule stream export (one struct batch); pa.table(batch) uses "
      "this to import every column zero-copy."},
-#endif
-#ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
     {"to_ipc", DataFrame_to_ipc, METH_NOARGS,
      "to_ipc() -> bytes: the frame as an Arrow IPC stream (schema + one record "
      "batch + EOS); no pyarrow needed to produce .arrow bytes."},
-#endif
     {"to_bytes", DataFrame_to_bytes, METH_NOARGS,
      "to_bytes() -> bytes: the frame in the native frame format."},
     {nullptr, nullptr, 0, nullptr}};
@@ -1627,7 +1613,6 @@ PyGetSetDef DataFrame_getset[] = {
 PyMappingMethods DataFrame_as_mapping = {};
 PySequenceMethods DataFrame_as_sequence = {};
 
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
 // Whether field `i` of `obj`'s schema carries the `arrow.json` extension in
 // its metadata. A pyarrow without the registered extension type (before 18)
 // keeps the name only there, and an Array's own export has no field metadata.
@@ -1708,7 +1693,6 @@ PyObject* vec_batch_from_arrow(PyObject* /*self*/, PyObject* obj) {
     Py_DECREF(names);
     return make_dataframe(std::move(b));
 }
-#endif  // DFTRACER_UTILS_ENABLE_ARROW
 
 // _dataframe_from_columns(names, series) -> DataFrame: a frame of native
 // Series, no Arrow involved.
@@ -1778,7 +1762,6 @@ int init_dataframe(PyObject* m) {
     DataFrameType.tp_new = nullptr;  // created only by a trace view
     if (register_type(m, &DataFrameType, "_DataFrame") < 0) return -1;
 
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
     static PyMethodDef from_arrow_def = {
         "_dataframe_from_arrow", vec_batch_from_arrow, METH_O,
         "vec_batch_from_arrow(table) -> DataFrame: import a pyarrow Table's "
@@ -1789,7 +1772,6 @@ int init_dataframe(PyObject* m) {
         Py_DECREF(fn);
         return -1;
     }
-#endif
     static PyMethodDef from_columns_def = {
         "_dataframe_from_columns", dataframe_from_columns, METH_VARARGS,
         "_dataframe_from_columns(names, series) -> DataFrame of native "

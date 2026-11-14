@@ -19,11 +19,6 @@
 extern "C" {
 #endif
 
-/** The standard Arrow C Data Interface structs (defined in arrow_abi.h); only
-   opaque pointers to them cross this ABI. */
-struct ArrowArray;
-struct ArrowSchema;
-
 /** Interned string id; resolve for bytes stable for the whole scan.
    DFTU_STR_NONE marks an absent field. */
 typedef uint32_t dftu_str;

@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: MIT
-#include <dftracer/utils/common/config.h>
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
 
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
+#include <dftracer/utils/common/config.h>
 #include <dftracer/utils/python/core/arrow_helpers.h>
 #include <dftracer/utils/python/trace/trace_reader_iterator.h>
 
@@ -49,20 +48,4 @@ PyObject *wrap_arrow_table(PyObject *batch_list) {
     return table;
 }
 
-PyObject *arrow_result_to_table(ArrowExportResult result) {
-    PyObject *capsule = wrap_arrow_result(std::move(result));
-    if (!capsule) return NULL;
-
-    PyObject *list = PyList_New(1);
-    if (!list) {
-        Py_DECREF(capsule);
-        return NULL;
-    }
-    PyList_SET_ITEM(list, 0, capsule);  // steals ref
-
-    return wrap_arrow_table(list);
-}
-
 }  // namespace dftracer::utils::python::core
-
-#endif  // DFTRACER_UTILS_ENABLE_ARROW

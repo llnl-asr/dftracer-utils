@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: MIT
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
+#include <dftracer/utils/arrow/column_builder.h>
+#include <dftracer/utils/arrow/ipc_reader.h>
+#include <dftracer/utils/arrow/ipc_writer.h>
+#include <dftracer/utils/arrow/parallel_reader.h>
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/fs.h>
@@ -9,10 +12,6 @@
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/trace/arrow/column_builder.h>
-#include <dftracer/utils/trace/arrow/ipc_reader.h>
-#include <dftracer/utils/trace/arrow/ipc_writer.h>
-#include <dftracer/utils/trace/arrow/parallel_reader.h>
 #include <doctest/doctest.h>
 #include <task_result.h>
 #include <testing_utilities.h>
@@ -21,10 +20,10 @@
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::coro;
-using namespace dftracer::utils::trace::arrow;
+using namespace dftracer::utils::arrow;
 
 static dstd::String tmp_path(const char* name) {
-    return dftu_utils_test::make_unique_test_path(name).str();
+    return dstd::String(dftu_utils_test::make_unique_test_path(name).str());
 }
 
 static void write_test_file(const dstd::String& path, int batch_count,
@@ -60,7 +59,7 @@ static void write_test_file(const dstd::String& path, int batch_count,
         co_await writer.close();
     };
 
-    runtime.submit(task(), "write_test_file").get();
+    dftu_utils_test::ok(runtime.submit(task(), "write_test_file").get());
     runtime.shutdown();
 }
 
@@ -288,7 +287,7 @@ TEST_CASE("IpcReader - roundtrip with all column types") {
             co_await writer.close();
         };
 
-        runtime.submit(task(), "write_types").get();
+        dftu_utils_test::ok(runtime.submit(task(), "write_types").get());
         runtime.shutdown();
     }
 
@@ -317,7 +316,8 @@ TEST_CASE("IpcReader - roundtrip with all column types") {
 static ParallelReadResult run_parallel_read(Runtime& runtime,
                                             dstd::Vector<dstd::String> paths) {
     auto task = read_arrow_files_parallel(std::move(paths));
-    return runtime.submit(std::move(task), "read_arrow_files").get();
+    return dftu_utils_test::ok(
+        runtime.submit(std::move(task), "read_arrow_files").get());
 }
 
 TEST_CASE("read_arrow_files_parallel - single file") {
@@ -433,12 +433,3 @@ TEST_CASE("read_arrow_files_parallel - mixed compression") {
     runtime.shutdown();
     dstd::fs::remove_all(dir).discard();
 }
-
-#else
-
-#define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <doctest/doctest.h>
-
-TEST_CASE("IpcReader - disabled") { CHECK(true); }
-
-#endif  // DFTRACER_UTILS_ENABLE_ARROW_IPC

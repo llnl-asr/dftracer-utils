@@ -65,8 +65,8 @@ const void* memory_ext_vtable();
 /// The dftu.svc.memory table for the host of a provider or node cursor.
 const void* cursor_memory_ext_vtable();
 
-/// The table of a service that keeps no state in a fold (io, sketch, arrow,
-/// ops, providers, nodes, index, fs, json and yaml), shared by the host of a
+/// The table of a service that keeps no state in a fold (io, sketch, ops,
+/// providers, nodes, index, fs, json and yaml), shared by the host of a
 /// fold and the host of a cursor; null for any other id.
 const void* stateless_service(const char* ext_id);
 

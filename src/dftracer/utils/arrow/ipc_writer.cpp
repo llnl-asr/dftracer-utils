@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
-#include <dftracer/utils/common/config.h>
-#ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
 
+#include <dftracer/utils/arrow/array_view.h>
+#include <dftracer/utils/arrow/ipc_writer.h>
+#include <dftracer/utils/common/config.h>
 #include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/file.h>
@@ -10,8 +11,6 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/io/ops.h>
-#include <dftracer/utils/trace/arrow/array_view.h>
-#include <dftracer/utils/trace/arrow/ipc_writer.h>
 #include <flatcc/flatcc_builder.h>
 #include <nanoarrow/ipc/flatcc_generated.h>
 #include <nanoarrow/nanoarrow.h>
@@ -23,7 +22,7 @@
 
 #define ns(x) FLATBUFFERS_WRAP_NAMESPACE(org_apache_arrow_flatbuf, x)
 
-namespace dftracer::utils::trace::arrow {
+namespace dftracer::utils::arrow {
 
 using FileBlock = ArrowIpcFileBlock;
 
@@ -656,6 +655,4 @@ coro::CoroTask<int> IpcWriter::close() {
     co_return rc;
 }
 
-}  // namespace dftracer::utils::trace::arrow
-
-#endif  // DFTRACER_UTILS_ENABLE_ARROW_IPC
+}  // namespace dftracer::utils::arrow

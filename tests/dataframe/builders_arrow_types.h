@@ -6,7 +6,7 @@
 // (they only ever enter the engine through Arrow import). Header-only so a
 // doctest TU can use REQUIRE inside them.
 
-#include <dftracer/utils/dataframe/arrow.h>
+#include <dftracer/utils/arrow/arrow.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -44,7 +44,7 @@ inline Series make_float16(const dstd::Vector<float>& values) {
         REQUIRE(ArrowArrayAppendDouble(&b.array, static_cast<double>(v)) ==
                 NANOARROW_OK);
     finish_building(&b.array);
-    return Series::from_arrow(&b.schema, &b.array);
+    return arrow::series_from_arrow(&b.schema, &b.array);
 }
 
 inline Series make_decimal(ArrowType arrow_type, int bitwidth,
@@ -63,7 +63,7 @@ inline Series make_decimal(ArrowType arrow_type, int bitwidth,
         REQUIRE(ArrowArrayAppendDecimal(&b.array, &dec) == NANOARROW_OK);
     }
     finish_building(&b.array);
-    return Series::from_arrow(&b.schema, &b.array);
+    return arrow::series_from_arrow(&b.schema, &b.array);
 }
 
 inline Series make_decimal128(const dstd::Vector<std::int64_t>& values) {
@@ -92,7 +92,7 @@ inline Series make_fixed_size_binary(const dstd::Vector<dstd::String>& values,
         REQUIRE(ArrowArrayAppendBytes(&b.array, bv) == NANOARROW_OK);
     }
     finish_building(&b.array);
-    return Series::from_arrow(&b.schema, &b.array);
+    return arrow::series_from_arrow(&b.schema, &b.array);
 }
 
 inline Series make_large_utf8(const dstd::Vector<dstd::String>& values) {
@@ -108,7 +108,7 @@ inline Series make_large_utf8(const dstd::Vector<dstd::String>& values) {
         REQUIRE(ArrowArrayAppendString(&b.array, sv) == NANOARROW_OK);
     }
     finish_building(&b.array);
-    return Series::from_arrow(&b.schema, &b.array);
+    return arrow::series_from_arrow(&b.schema, &b.array);
 }
 
 inline Series make_large_binary(const dstd::Vector<dstd::String>& values) {
@@ -126,7 +126,7 @@ inline Series make_large_binary(const dstd::Vector<dstd::String>& values) {
         REQUIRE(ArrowArrayAppendBytes(&b.array, bv) == NANOARROW_OK);
     }
     finish_building(&b.array);
-    return Series::from_arrow(&b.schema, &b.array);
+    return arrow::series_from_arrow(&b.schema, &b.array);
 }
 
 inline Series make_large_list_i64(
@@ -147,7 +147,7 @@ inline Series make_large_list_i64(
         REQUIRE(ArrowArrayFinishElement(&b.array) == NANOARROW_OK);
     }
     finish_building(&b.array);
-    return Series::from_arrow(&b.schema, &b.array);
+    return arrow::series_from_arrow(&b.schema, &b.array);
 }
 
 /// Every row must hold exactly `rows[0].size()` elements; that count becomes
@@ -174,7 +174,7 @@ inline Series make_fixed_size_list_i64(
         REQUIRE(ArrowArrayFinishElement(&b.array) == NANOARROW_OK);
     }
     finish_building(&b.array);
-    return Series::from_arrow(&b.schema, &b.array);
+    return arrow::series_from_arrow(&b.schema, &b.array);
 }
 
 inline Series make_map_string_i64(
@@ -205,7 +205,7 @@ inline Series make_map_string_i64(
         REQUIRE(ArrowArrayFinishElement(&b.array) == NANOARROW_OK);
     }
     finish_building(&b.array);
-    return Series::from_arrow(&b.schema, &b.array);
+    return arrow::series_from_arrow(&b.schema, &b.array);
 }
 
 }  // namespace dftracer::utils::dataframe::test_types

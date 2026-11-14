@@ -164,12 +164,6 @@ Pass with ``-D`` at configure time, for example
    * - Option
      - Default
      - Effect
-   * - ``DFTRACER_UTILS_ENABLE_ARROW``
-     - ``ON``
-     - Arrow C Data Interface via nanoarrow (zero-copy export).
-   * - ``DFTRACER_UTILS_ENABLE_ARROW_IPC``
-     - ``ON``
-     - Arrow IPC file read/write via nanoarrow.
    * - ``DFTRACER_UTILS_ENABLE_VECTORSCAN``
      - ``ON``
      - Vectorscan for yes/no regex matches. ``OFF`` downloads

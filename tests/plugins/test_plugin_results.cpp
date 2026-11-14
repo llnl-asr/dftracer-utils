@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Generic named result channel: a plugin emits an opaque blob at finalize and
 // the host collects it verbatim into the named-result registry; a second case
-// checks the registry moves and releases an emitted Arrow array.
+// checks an emitted lazyframe is owned and collects to the frame.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/scope.h>
@@ -84,16 +84,6 @@ void finalize_now(plugins::host::PluginFold& f) {
     rt.shutdown();
 }
 
-int g_released = 0;
-void array_release(ArrowArray* a) {
-    ++g_released;
-    a->release = nullptr;
-}
-void schema_release(ArrowSchema* s) {
-    ++g_released;
-    s->release = nullptr;
-}
-
 }  // namespace
 
 TEST_SUITE("PluginResults") {
@@ -127,38 +117,6 @@ TEST_SUITE("PluginResults") {
         dstd::String got(reinterpret_cast<const char*>(bytes.data()),
                          bytes.size());
         CHECK(got == "count=" + dstd::to_string(total));
-    }
-
-    TEST_CASE("emit_arrow moves the array/schema and releases them on clear") {
-        plugins::NamedResultRegistry named;
-        g_released = 0;
-
-        ArrowArray a{};
-        a.release = array_release;
-        ArrowSchema s{};
-        s.release = schema_release;
-
-        REQUIRE(named.emit_arrow("tbl", &a, &s) == 0);
-        // The registry stole ownership: the source structs are zeroed.
-        CHECK(a.release == nullptr);
-        CHECK(s.release == nullptr);
-
-        auto it = named.results().find("tbl");
-        REQUIRE(it != named.results().end());
-        REQUIRE(std::holds_alternative<plugins::OwnedArrow>(it->second));
-        CHECK(g_released == 0);
-
-        named.clear();
-        CHECK(g_released == 2);
-    }
-
-    TEST_CASE("emit_arrow rejects null arguments") {
-        plugins::NamedResultRegistry named;
-        ArrowArray a{};
-        ArrowSchema s{};
-        CHECK(named.emit_arrow(nullptr, &a, &s) == -1);
-        CHECK(named.emit_arrow("x", nullptr, &s) == -1);
-        CHECK(named.emit_arrow("x", &a, nullptr) == -1);
     }
 
     TEST_CASE("an emitted lazyframe is owned and collects to the frame") {

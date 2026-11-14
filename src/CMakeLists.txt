@@ -11,9 +11,7 @@ need_zstd()
 need_simdjson()
 need_boost_math()
 
-if(DFTRACER_UTILS_ENABLE_ARROW)
-  need_nanoarrow()
-endif()
+need_nanoarrow()
 need_highway()
 need_pcre2()
 need_utf8proc()
@@ -26,10 +24,8 @@ install_private_static_deps()
 # them privately. Highway and utf8proc come from dftracer_utils_deps.
 set(DFTU_ARROW_PACKAGES)
 set(DFTU_PC_NANOARROW)
-if(DFTRACER_UTILS_ENABLE_ARROW)
-  set(DFTU_ARROW_PACKAGES nanoarrow)
-  set(DFTU_PC_NANOARROW "-lnanoarrow")
-endif()
+set(DFTU_ARROW_PACKAGES nanoarrow)
+set(DFTU_PC_NANOARROW "-lnanoarrow")
 # The archives that a static library of ours needs beside it, for the Libs.private
 # line of its pkg-config file.
 set(DFTU_PC_VECTORSCAN)
@@ -61,10 +57,10 @@ endfunction()
 
 set(DFTU_PC_PRIVATE_duql "-lsimdjson -lpcre2-8 ${DFTU_PC_VECTORSCAN} -ldftracer_utils_hwy")
 set(DFTU_PC_PRIVATE_yaml "-ldftracer_utils_hwy")
-set(DFTU_PC_PRIVATE_dataframe "-lsimdjson -ldftracer_utils_hwy_contrib -ldftracer_utils_hwy -ldftracer_utils_utf8proc_static -lzstd ${DFTU_PC_NANOARROW}")
-set(DFTU_PC_PRIVATE_trace "-lsimdjson -ldftracer_utils_zlib -ldeflate -lzstd ${DFTU_PC_NANOARROW}")
+set(DFTU_PC_PRIVATE_dataframe "-lsimdjson -ldftracer_utils_hwy_contrib -ldftracer_utils_hwy -ldftracer_utils_utf8proc_static -lzstd")
+set(DFTU_PC_PRIVATE_trace "-lsimdjson -ldftracer_utils_zlib -ldeflate -lzstd")
 set(DFTU_PC_PRIVATE_plugins "-lsimdjson")
-set(DFTU_PC_PRIVATE_domains "${DFTU_PC_NANOARROW}")
+set(DFTU_PC_PRIVATE_arrow "${DFTU_PC_NANOARROW} -lzstd")
 
 # Branch padding against the Intel JCC erratum. The flag acts on the assembler,
 # so a padded kernel is a second compile of the same source (string_match_jcc.cpp,
@@ -427,23 +423,17 @@ set(DFTRACER_UTILS_TRACE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/reader/internal/reader_factory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/reader/error.cpp)
 
-if(DFTRACER_UTILS_ENABLE_ARROW)
-  list(
-    APPEND
-    DFTRACER_UTILS_TRACE_SOURCES
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/arrow/column_builder.cpp
-  )
-endif()
+set(DFTRACER_UTILS_ARROW_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/arrow/arrow.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/arrow/arrow_bridge.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/arrow/column_builder.cpp)
 
-if(DFTRACER_UTILS_ENABLE_ARROW_IPC)
-  list(
-    APPEND
-    DFTRACER_UTILS_TRACE_SOURCES
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/arrow/ipc_reader.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/arrow/ipc_writer.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/arrow/parallel_reader.cpp
-  )
-endif()
+list(
+  APPEND
+  DFTRACER_UTILS_ARROW_SOURCES
+  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/arrow/ipc_reader.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/arrow/ipc_writer.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/arrow/parallel_reader.cpp)
 
 # Determine which dependencies to require based on what was found vs built with
 # CPM
@@ -941,8 +931,6 @@ set(DFTRACER_UTILS_VEC_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/spill.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/parallel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/parallel_runtime.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/arrow_bridge.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/arrow.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/batch_ops.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/types.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/frame_native.cpp
@@ -1429,7 +1417,7 @@ create_library(
   FIND_DEPENDENCIES
     dftracer_utils_runtime dftracer_utils_duql
   BUNDLED_PACKAGES
-    simdjson ${DFTU_ARROW_PACKAGES}
+    simdjson
   STATIC_BUNDLED_PACKAGES
     dftracer_utils_deps zstd)
 
@@ -1461,9 +1449,6 @@ foreach(variant objects shared static)
     target_link_libraries(${VARIANT_TARGET} PRIVATE utf8proc_static)
     # Spill files compress each morsel with zstd (spill.cpp).
     link_zstd(${VARIANT_TARGET})
-    if(DFTRACER_UTILS_ENABLE_ARROW)
-      link_nanoarrow(${VARIANT_TARGET} ${VARIANT_UPPER})
-    endif()
     if(NOT variant STREQUAL "objects" AND COVERAGE_LINK_OPTIONS)
       target_link_libraries(${VARIANT_TARGET}
                             PRIVATE ${COVERAGE_LINK_OPTIONS})
@@ -1474,7 +1459,97 @@ endforeach()
 use_precompiled_header(dftracer_utils_dataframe_objects)
 
 # +++++++++++++++++++++++++++++++++++++++++
-# Trace Library (index, views, reader, Arrow)
+# Arrow Library (Arrow C Data Interface and IPC; linked by Python and tests)
+# +++++++++++++++++++++++++++++++++++++++++
+
+create_library(
+  NAME
+  dftracer_utils_arrow
+  NAMESPACE
+  dftracer_utils_arrow
+  SOURCES
+  ${DFTRACER_UTILS_ARROW_SOURCES}
+  VERSION
+  ${PROJECT_VERSION}
+  DESCRIPTION
+  "DFTracer utils arrow library (Arrow conversion and IPC of dataframes)"
+  URL
+  "https://github.com/llnl-asr/dftracer-utils"
+  BUILD_SHARED
+  ${DFTRACER_UTILS_BUILD_SHARED}
+  BUILD_STATIC
+  ${DFTRACER_UTILS_BUILD_STATIC}
+  # No core library holds Arrow or nanoarrow, not even the one library.
+  STANDALONE
+  SHARED_LINK_LIBRARIES
+    dftracer_utils_memory::shared
+    dftracer_utils_dstd::shared
+    dftracer_utils_common::shared
+    dftracer_utils_coro::shared
+    dftracer_utils_runtime::shared
+    dftracer_utils_dataframe::shared
+  STATIC_LINK_LIBRARIES
+    dftracer_utils_memory::static
+    dftracer_utils_dstd::static
+    dftracer_utils_common::static
+    dftracer_utils_coro::static
+    dftracer_utils_runtime::static
+    dftracer_utils_dataframe::static
+  PUBLIC_INCLUDE_DIRS
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include>
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+  $<BUILD_INTERFACE:${CMAKE_BINARY_DIR}/include>
+  $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+  PRIVATE_COMPILE_OPTIONS
+  ${COVERAGE_COMPILE_OPTIONS}
+  PKG_CONFIG_REQUIRES
+  "dftracer_utils_memory dftracer_utils_dstd dftracer_utils_common dftracer_utils_coro dftracer_utils_runtime dftracer_utils_dataframe"
+  PKG_CONFIG_LIBS_PRIVATE
+  "${DFTU_PC_PRIVATE_arrow}"
+  FIND_DEPENDENCIES
+  dftracer_utils_memory
+  dftracer_utils_dstd
+  dftracer_utils_common
+  dftracer_utils_coro
+  dftracer_utils_runtime
+  dftracer_utils_dataframe
+  BUNDLED_PACKAGES
+    ${DFTU_ARROW_PACKAGES}
+  STATIC_BUNDLED_PACKAGES
+    zstd)
+
+foreach(variant objects shared static)
+  dftu_variant_target(VARIANT_TARGET dftracer_utils_arrow ${variant})
+  set(VARIANT_UPPER ${DFTU_LINK_TYPE_${variant}})
+  if(TARGET ${VARIANT_TARGET})
+    if(variant STREQUAL "objects")
+      target_set_warnings(dftracer_utils_arrow_objects)
+      target_compile_options(
+        dftracer_utils_arrow_objects
+        PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions>)
+    endif()
+    link_nanoarrow(${VARIANT_TARGET} ${VARIANT_UPPER})
+    # The IPC writer compresses record batches with zstd (ipc_writer.cpp).
+    link_zstd(${VARIANT_TARGET})
+    if(NOT variant STREQUAL "objects" AND COVERAGE_LINK_OPTIONS)
+      target_link_libraries(${VARIANT_TARGET}
+                            PRIVATE ${COVERAGE_LINK_OPTIONS})
+    endif()
+  endif()
+endforeach()
+
+use_precompiled_header(dftracer_utils_arrow_objects)
+
+# What a test or benchmark links to call the arrow library.
+if(DFTRACER_UTILS_BUILD_SHARED)
+  set(DFTRACER_UTILS_ARROW_TARGET dftracer_utils_arrow::shared)
+else()
+  set(DFTRACER_UTILS_ARROW_TARGET dftracer_utils_arrow::static)
+endif()
+set(DFTRACER_UTILS_ARROW_TARGET ${DFTRACER_UTILS_ARROW_TARGET} PARENT_SCOPE)
+
+# +++++++++++++++++++++++++++++++++++++++++
+# Trace Library (index, views, reader)
 # +++++++++++++++++++++++++++++++++++++++++
 
 # Third-party code inlined here trips GCC's optimizer-based -Wstrict-overflow
@@ -1510,7 +1585,7 @@ create_library(
   VERSION
   ${PROJECT_VERSION}
   DESCRIPTION
-  "DFTracer utils trace library (index, views, trace reader, Arrow)"
+  "DFTracer utils trace library (index, views, trace reader)"
   URL
   "https://github.com/llnl-asr/dftracer-utils"
   BUILD_SHARED
@@ -1561,7 +1636,7 @@ create_library(
   dftracer_utils_yaml
   dftracer_utils_dataframe
   BUNDLED_PACKAGES
-    simdjson ${DFTU_ARROW_PACKAGES}
+    simdjson
   STATIC_BUNDLED_PACKAGES
     dftracer_utils_zlib
     libdeflate
@@ -1579,9 +1654,6 @@ foreach(variant objects shared static)
       link_zlib(${VARIANT_TARGET})
       link_libdeflate(${VARIANT_TARGET})
       link_zstd(${VARIANT_TARGET})
-    endif()
-    if(DFTRACER_UTILS_ENABLE_ARROW)
-      link_nanoarrow(${VARIANT_TARGET} ${VARIANT_UPPER})
     endif()
     if(variant STREQUAL "objects")
       target_set_warnings(dftracer_utils_trace_objects)
@@ -1668,10 +1740,6 @@ foreach(variant objects shared static)
     # the symbols already live in libc/libSystem.
     target_link_libraries(${VARIANT_TARGET}
                           PUBLIC ${CMAKE_DL_LIBS})
-
-    if(DFTRACER_UTILS_ENABLE_ARROW)
-      link_nanoarrow(${VARIANT_TARGET} ${VARIANT_UPPER})
-    endif()
 
     if(variant STREQUAL "objects")
       target_set_warnings(dftracer_utils_plugins_objects)
@@ -1765,8 +1833,6 @@ create_library(
   ${COVERAGE_COMPILE_OPTIONS}
   PKG_CONFIG_REQUIRES
   "dftracer_utils_runtime dftracer_utils_json dftracer_utils_duql dftracer_utils_store dftracer_utils_fileio dftracer_utils_yaml dftracer_utils_dataframe dftracer_utils_trace dftracer_utils_plugins"
-  PKG_CONFIG_LIBS_PRIVATE
-  "${DFTU_PC_PRIVATE_domains}"
   FIND_DEPENDENCIES
   dftracer_utils_runtime
   dftracer_utils_dataframe
@@ -1776,9 +1842,7 @@ create_library(
   dftracer_utils_fileio
   dftracer_utils_yaml
   dftracer_utils_trace
-  dftracer_utils_plugins
-  BUNDLED_PACKAGES
-    ${DFTU_ARROW_PACKAGES})
+  dftracer_utils_plugins)
 
 # Boost.Math reports a domain, pole, overflow, evaluation or rounding error
 # through errno and a NaN or infinite result, and never throws.
@@ -1830,11 +1894,6 @@ foreach(variant objects shared static)
     if(NOT variant STREQUAL "objects" AND COVERAGE_LINK_OPTIONS)
       target_link_libraries(${VARIANT_TARGET}
                             PRIVATE ${COVERAGE_LINK_OPTIONS})
-    endif()
-
-    # Link nanoarrow for Arrow data interchange
-    if(DFTRACER_UTILS_ENABLE_ARROW)
-      link_nanoarrow(${VARIANT_TARGET} ${VARIANT_UPPER})
     endif()
 
     # Lustre stripe query (optional). The config header carries the
@@ -2073,7 +2132,7 @@ if(NOT DFTRACER_UTILS_SINGLE_LIBRARY)
     VERSION
     ${PROJECT_VERSION}
     DESCRIPTION
-    "DFTracer utils trace library (index, views, trace reader, Arrow)"
+    "DFTracer utils trace library (index, views, trace reader)"
     URL
     "https://github.com/llnl-asr/dftracer-utils"
     BUILD_SHARED
@@ -2130,8 +2189,6 @@ if(NOT DFTRACER_UTILS_SINGLE_LIBRARY)
     "https://github.com/llnl-asr/dftracer-utils"
     PKG_CONFIG_REQUIRES
     "dftracer_utils_runtime dftracer_utils_json dftracer_utils_duql dftracer_utils_store dftracer_utils_fileio dftracer_utils_yaml dftracer_utils_dataframe dftracer_utils_trace dftracer_utils_plugins"
-    PKG_CONFIG_LIBS_PRIVATE
-    "${DFTU_PC_PRIVATE_domains}"
     FIND_DEPENDENCIES
     dftracer_utils_runtime
     dftracer_utils_json
@@ -2151,6 +2208,39 @@ endif()
 # +++++++++++++++++++++++++++++++++++++++++
 # Unified Interface Library
 # +++++++++++++++++++++++++++++++++++++++++
+
+
+# The arrow library is its own package in both modes; in single library mode
+# its dependencies are the one library.
+if(DFTRACER_UTILS_SINGLE_LIBRARY)
+  set(DFTU_ARROW_REQUIRES "dftracer_utils")
+  set(DFTU_ARROW_DEPENDENCIES dftracer_utils)
+else()
+  set(DFTU_ARROW_REQUIRES
+      "dftracer_utils_memory dftracer_utils_dstd dftracer_utils_common dftracer_utils_coro dftracer_utils_runtime dftracer_utils_dataframe")
+  set(DFTU_ARROW_DEPENDENCIES
+      dftracer_utils_memory dftracer_utils_dstd dftracer_utils_common
+      dftracer_utils_coro dftracer_utils_runtime dftracer_utils_dataframe)
+endif()
+create_unified_library_config(
+  NAME
+  dftracer_utils_arrow
+  VERSION
+  ${PROJECT_VERSION}
+  DESCRIPTION
+  "DFTracer utils arrow library (Arrow conversion and IPC of dataframes)"
+  URL
+  "https://github.com/llnl-asr/dftracer-utils"
+  BUILD_SHARED
+  ${DFTRACER_UTILS_BUILD_SHARED}
+  BUILD_STATIC
+  ${DFTRACER_UTILS_BUILD_STATIC}
+  PKG_CONFIG_REQUIRES
+  "${DFTU_ARROW_REQUIRES}"
+  PKG_CONFIG_LIBS_PRIVATE
+  "${DFTU_PC_PRIVATE_arrow}"
+  FIND_DEPENDENCIES
+  ${DFTU_ARROW_DEPENDENCIES})
 
 # The one library is its own export. Aliases and targets exist since
 # create_library.
@@ -2238,7 +2328,7 @@ if(DFTRACER_UTILS_PREFERRED_TYPE)
     string(APPEND UNIFIED_CONFIG_CONTENT
            "find_dependency(dftracer_utils_dataframe)\n\n")
   else()
-    set(DFTU_SINGLE_PACKAGES simdjson ${DFTU_ARROW_PACKAGES})
+    set(DFTU_SINGLE_PACKAGES simdjson)
     if(DFTRACER_UTILS_BUILD_STATIC)
       list(APPEND DFTU_SINGLE_PACKAGES pcre2 dftracer_utils_deps
            dftracer_utils_zlib libdeflate zstd
@@ -2784,6 +2874,7 @@ if(DFTRACER_UTILS_BUILD_BENCHMARKS)
   endforeach()
 
   target_link_libraries(gzip_crc_bench PRIVATE dftracer::zlib)
+  target_link_libraries(slice_bench PRIVATE ${DFTRACER_UTILS_ARROW_TARGET})
 
   # `--smoke` runs one tiny case. ctest sees these only when
   # DFTRACER_UTILS_TESTS is ON, which the `bench` preset sets.
@@ -2955,9 +3046,7 @@ if(DFTRACER_UTILS_BUILD_PYTHON)
   target_link_libraries(dftracer_utils_ext PRIVATE dftracer_utils::shared)
   target_set_warnings(dftracer_utils_ext)
 
-  if(DFTRACER_UTILS_ENABLE_ARROW)
-    link_nanoarrow(dftracer_utils_ext SHARED)
-  endif()
+  target_link_libraries(dftracer_utils_ext PRIVATE dftracer_utils_arrow::shared)
 
   if(DFTRACER_UTILS_COVERAGE AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(dftracer_utils_ext PRIVATE --coverage)

@@ -4,15 +4,8 @@
 // integer still fails.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/arrow/arrow.h>
 #include <dftracer/utils/common/config.h>
-#include <doctest/doctest.h>
-#include <task_result.h>
-
-#include <cstdint>
-#include <stdexcept>
-
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
-#include <dftracer/utils/dataframe/arrow.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/dataframe.h>
@@ -23,7 +16,12 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
+#include <doctest/doctest.h>
 #include <nanoarrow/nanoarrow.h>
+#include <task_result.h>
+
+#include <cstdint>
+#include <stdexcept>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::dataframe;
@@ -59,7 +57,7 @@ Series make_large_utf8(const Cells& values) {
     }
     ArrowError err;
     REQUIRE(ArrowArrayFinishBuildingDefault(&b.array, &err) == NANOARROW_OK);
-    return Series::from_arrow(&b.schema, &b.array);
+    return arrow::series_from_arrow(&b.schema, &b.array);
 }
 
 // A String column with a null where `values[i]` is nullopt.
@@ -178,8 +176,3 @@ TEST_SUITE("concat string and large_string") {
         CHECK(cells_of(out.column("s")) == Cells{"a", "b", "c"});
     }
 }
-#else
-TEST_SUITE("concat string and large_string") {
-    TEST_CASE("Arrow disabled: nothing to exercise") { CHECK(true); }
-}
-#endif

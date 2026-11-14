@@ -1,17 +1,11 @@
 // SPDX-License-Identifier: MIT
 // Exercises the additive C++-ergonomics layer over the plugin C ABI: the
 // Sketch RAII owner, co_await-able Io ops, the StrId interning view, the
-// AggCol / agg:: aggregate builders, and the owning Arrow helpers.
+// AggCol / agg:: aggregate builders.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/coro/scope.h>
-#include <dftracer/utils/dstd/string_intern.h>
-#include <dftracer/utils/plugins/abi.h>
-#include <dftracer/utils/plugins/host/fold_adapter.h>
-#include <dftracer/utils/runtime/runtime.h>
-// After fold_adapter.h so nanoarrow is set up before dataframe/c_api.h's
-// arrow_abi.
 #include <dftracer/utils/common/str_format.h>
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dataframe/agg_op_codes.h>
 #include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dstd/fs.h>
@@ -19,9 +13,13 @@
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/plugins/abi.h>
+#include <dftracer/utils/plugins/host/fold_adapter.h>
 #include <dftracer/utils/plugins/plugin.h>
 #include <dftracer/utils/plugins/result_registry.h>
+#include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/schema.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/trace/views/fold_event.h>

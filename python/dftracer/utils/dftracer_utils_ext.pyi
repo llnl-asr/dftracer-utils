@@ -24,7 +24,6 @@ from typing import (
 
 if TYPE_CHECKING:
     import numpy as np  # ty: ignore[import-not-found]
-    import pyarrow as pa  # ty: ignore[import-not-found]
     from pandas._libs.missing import NAType  # ty: ignore[import-not-found]
 
 _T = TypeVar("_T")
@@ -38,8 +37,8 @@ _AggSpec = Union[str, Tuple[str, str, List[str]]]
 PLUGIN_ABI_VERSION: int
 PLUGIN_ABI_HASH: int
 
-# A run() map result value: emitted bytes, or an eager/streamed pyarrow object.
-_RunResultValue = Union[bytes, "pa.Table", "pa.RecordBatchReader"]
+# A run() map result value: emitted bytes, a native frame or a lazy plan.
+_RunResultValue = Union[bytes, "_DataFrame", "_LazyFrame"]
 
 class CollectTypedResult(TypedDict):
     """The three record families returned by _TraceViewer.typed()."""
@@ -1335,7 +1334,7 @@ class Plugins:
         auto_index: bool = ...,
     ) -> "Tuple[Dict[str, _RunResultValue], Dict[str, int]]":
         """Fold every plugin in the set over one fused scan; returns
-        ``({name: bytes | pyarrow object}, {events_scanned, events_matched})``.
+        ``({name: bytes | _DataFrame | _LazyFrame}, {events_scanned, events_matched})``.
         """
         ...
 

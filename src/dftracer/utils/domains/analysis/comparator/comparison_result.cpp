@@ -7,10 +7,6 @@
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
-#include <dftracer/utils/trace/arrow/column_builder.h>
-#endif
-
 #include <cmath>
 #include <cstdint>
 #include <utility>
@@ -208,9 +204,6 @@ dstd::Vector<MetricComparison> compare_metrics(
     return result;
 }
 
-// Metric-name helpers are used by the tree formatter too, so keep them out of
-// the Arrow ifdef below.
-
 bool is_atomic_metric(const dstd::String& name) {
     return name == "count" || name == "transfer_size" || name == "bandwidth" ||
            name == "unique_files" || name == "proc_files" ||
@@ -244,76 +237,5 @@ const char* significance_to_string(Significance s) {
     }
     return "NEGLIGIBLE";
 }
-
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
-using trace::arrow::ArrowExportResult;
-using trace::arrow::ColumnType;
-using trace::arrow::RecordBatchBuilder;
-
-namespace {
-
-void flatten_node(RecordBatchBuilder& builder, const NodeResult& node,
-                  const dstd::String& parent_path) {
-    dstd::String path = parent_path.empty()
-                            ? node.name
-                            : dstd::fmt<"{}/{}">(parent_path, node.name);
-
-    auto emit = [&](const dstd::String& sub_path,
-                    const dstd::Vector<MetricComparison>& metrics) {
-        for (const auto& mc : metrics) {
-            if (mc.baseline_value == 0.0 && mc.variant_value == 0.0) continue;
-            builder.append_string(0, sub_path);
-            builder.append_string(1, metric_group(mc.metric_name));
-            builder.append_string(2, metric_leaf(mc.metric_name));
-            builder.append_double(3, mc.baseline_value);
-            builder.append_double(4, mc.variant_value);
-            builder.append_double(5, mc.baseline_stdev);
-            builder.append_double(6, mc.variant_stdev);
-            builder.append_double(7, mc.delta);
-            builder.append_double(8, mc.pct_change);
-            builder.append_double(9, mc.cohens_d);
-            builder.append_string(10, significance_to_string(mc.significance));
-            builder.append_bool(11, mc.is_regression);
-            builder.end_row();
-        }
-    };
-
-    emit(dstd::fmt<"{}/SUMMARY">(path), node.summary.metrics);
-
-    for (const auto& g : node.groups) {
-        emit(dstd::fmt<"{}/{}">(path, g.label), g.metrics);
-    }
-
-    for (const auto& child : node.children) {
-        flatten_node(builder, child, path);
-    }
-}
-
-}  // anonymous namespace
-
-dstd::Result<ArrowExportResult> ComparisonOutput::to_arrow() const {
-    RecordBatchBuilder builder;
-    builder.declare_schema({
-        {"node_path", ColumnType::String},
-        {"metric_group", ColumnType::String},
-        {"metric_name", ColumnType::String},
-        {"baseline", ColumnType::Double},
-        {"variant", ColumnType::Double},
-        {"baseline_stdev", ColumnType::Double},
-        {"variant_stdev", ColumnType::Double},
-        {"delta", ColumnType::Double},
-        {"pct_change", ColumnType::Double},
-        {"cohens_d", ColumnType::Double},
-        {"significance", ColumnType::String},
-        {"is_regression", ColumnType::Bool},
-    });
-
-    for (const auto& node : nodes) {
-        flatten_node(builder, node, "");
-    }
-
-    return builder.finish();
-}
-#endif  // DFTRACER_UTILS_ENABLE_ARROW
 
 }  // namespace dftracer::utils::domains::analysis::comparator

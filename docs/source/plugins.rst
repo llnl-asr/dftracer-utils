@@ -51,7 +51,7 @@ Overview
   ``string_view`` into the frame's own buffer with nothing copied on the hot
   path.
 - **Services are optional extension groups**: aggregation, async I/O, duql filters,
-  Arrow, writers, sketches, and inter-plugin channels are fetched by id; a
+  writers, sketches, and inter-plugin channels are fetched by id; a
   missing group degrades gracefully to a null/no-op.
 
 1. Entry point and lifecycle
@@ -815,10 +815,10 @@ the cross-worker-merged, finalized result by that name at ``on_finalize``.
          st = agg->agg_result(ctx, host->h, "com.example.total", &res);
          if (st >= 0 && res) dftu_dataframe_free(res);
 
-**Named results (DFTU_SVC_RESULT)** emit an opaque blob or a user-schema Arrow
-array under a name; both surface from ``Plugins::run`` keyed by that name.
-Use ``Host::emit_result`` / ``emit_result_arrow`` (C: ``emit`` / ``emit_arrow``
-on ``dftu_svc_result``), best called at finalize.
+**Named results (DFTU_SVC_RESULT)** emit an opaque blob, a native frame or a
+lazy plan under a name; all surface from ``Plugins::run`` keyed by that name.
+Use ``Host::emit_result`` / ``emit_result_frame`` / ``emit_result_lazyframe``
+(C: ``emit`` on ``dftu_svc_result``), best called at finalize.
 
 9. Async work and I/O
 ---------------------
@@ -971,7 +971,7 @@ and the grow then succeeds when that made room. A reservation the plugin leaves
 at unload is released by the host, which logs an error. The service is served by
 the run-time host that a fold callback receives and by the host that a
 provider's ``scan`` or a node's ``open`` receives (see "The cursor host" under
-section 14), not by the build-phase host. ``dftu_ctx`` scratch stays the tool
+section 13), not by the build-phase host. ``dftu_ctx`` scratch stays the tool
 for short per-call buffers.
 
 A host utility is reached as a named op instead
@@ -1028,39 +1028,7 @@ scan; do not free it.
          dftu_status st = Q->duql_compile(ctx, host->h, "dur > 1000", 10, &q);
          if (st >= 0 && Q->duql_matches(host->h, q, df, row)) { /* ... */ }
 
-11. Arrow interchange (DFTU_SVC_ARROW)
---------------------------------------
-
-Read and write Arrow IPC files for an ``ArrowArray`` / ``ArrowSchema`` pair the
-plugin already holds (built with the dataframe engine's own Arrow bridge, or
-read back from a previous IPC file). This group is file I/O only - it does not
-convert a batch to Arrow for you. The caller owns the exported array/schema and
-must release them; the SDK's ``OwnedArrow`` does that in its destructor.
-
-.. tab-set::
-
-   .. tab-item:: C++ (SDK)
-
-      .. code-block:: cpp
-
-         dstd::Result<void> finalize(Host h) {
-             DFTRACER_UTILS_TRY(OwnedArrow a, h.arrow_read_ipc("/tmp/in.arrow"));
-             return h.arrow_write_ipc(a, "/tmp/out.arrow");
-         }
-
-   .. tab-item:: C (raw ABI)
-
-      .. code-block:: c
-
-         const dftu_svc_arrow* A =
-             (const dftu_svc_arrow*)host->get_service(host->h, DFTU_SVC_ARROW);
-         struct ArrowArray arr; struct ArrowSchema sch;
-         if (A->arrow_read_ipc(ctx, host->h, "/tmp/in.arrow", &arr, &sch) >= 0) {
-             A->arrow_write_ipc(ctx, host->h, &arr, &sch, "/tmp/out.arrow");
-             arr.release(&arr); sch.release(&sch);   /* caller owns */
-         }
-
-12. Output writers
+11. Output writers
 ------------------
 
 Two writer groups exist. The **trace writer (DFTU_SVC_TRACE)** appends events to
@@ -1173,7 +1141,7 @@ removed). Calls on one handle must not overlap.
                           /*num_workers=*/4, /*gzip=*/1, &w);
          /* co-await F->writer_open / writer_chunk / writer_close (tasks) */
 
-13. Getting results back
+12. Getting results back
 ------------------------
 
 Each host-owned accumulator is finalized at scan end to a table keyed by the
@@ -1184,7 +1152,7 @@ emit name.
 
 **From Python**, build a fixed set of plugins and run them over a single fused
 scan; each result comes back shaped by its emit kind (a native
-:class:`~dftracer.utils.DataFrame`, a ``pyarrow.Table``, a
+:class:`~dftracer.utils.DataFrame`, a
 :class:`~dftracer.utils.LazyFrame`, or ``bytes``):
 
 .. code-block:: python
@@ -1226,7 +1194,7 @@ shared scan must stay wide enough for every branch):
                   .build();                      // dstd::Result<Plugins>: a bad path,
    if (!set) throw std::runtime_error(set.error().message);   // ABI or graph fault
    PluginRun run = co_await set->run(View::from_files(files));
-   // NamedResult is a variant: bytes, OwnedArrow, OwnedDataFrame, OwnedLazyFrame.
+   // NamedResult is a variant: bytes, OwnedDataFrame, OwnedLazyFrame.
    auto& table = std::get<OwnedDataFrame>(run.results.results().at("name_edges"));
 
 **From the command line**, ``dftracer_run`` folds every ``--plugin`` over one
@@ -1240,7 +1208,7 @@ result tables - read those through :class:`~dftracer.utils.plugins.Plugins`):
 
 Use ``-d <directory>`` for a whole tree instead of ``--files``.
 
-14. Extending the engine: ops, sources, plan nodes
+13. Extending the engine: ops, sources, plan nodes
 --------------------------------------------------
 
 A plugin is not only a fold over the scan. Three registries let it add to the
@@ -1516,7 +1484,7 @@ in place of ``(std::int64_t)`` gets a ``Host`` that is good for that call.
 ``const dftu_plugin_host*`` that stays valid until the cursor's ``destroy`` has
 returned. It serves the services of a fold callback's host that need no scan:
 ``DFTU_SVC_MEMORY``, ``DFTU_SVC_IO``, ``DFTU_SVC_FS``, ``DFTU_SVC_JSON``,
-``DFTU_SVC_YAML``, ``DFTU_SVC_SKETCH``, ``DFTU_SVC_ARROW``, ``DFTU_SVC_OPS`` and
+``DFTU_SVC_YAML``, ``DFTU_SVC_SKETCH``, ``DFTU_SVC_OPS`` and
 the registration groups, which refuse at run time. It returns NULL for the
 services that belong to one scan: ``DFTU_SVC_TASK``, ``DFTU_SVC_FILEIO``,
 ``DFTU_SVC_AGG``, ``DFTU_SVC_RESULT``, ``DFTU_SVC_PORTS``, ``DFTU_SVC_DUQL`` and
@@ -1601,7 +1569,7 @@ frame the same way.
 touches every service slot, registers an op, a source, a state and a node,
 and is the one file to read for the exact C of each.
 
-15. Index extensions (DFTU_SVC_INDEX)
+14. Index extensions (DFTU_SVC_INDEX)
 -------------------------------------
 
 An index extension adds pruning evidence to the index. While a plugin set
@@ -1692,7 +1660,7 @@ that covers it:
    * - ``Host::publish_port`` / ``consume_port`` (``OutPort`` / ``InPort``)
      - ``DFTU_SVC_PORTS``
      - `8. Inter-plugin communication`_
-   * - ``Host::emit_result`` / ``emit_result_arrow``
+   * - ``Host::emit_result``
      - ``DFTU_SVC_RESULT``
      - `8. Inter-plugin communication`_
    * - ``Host::spawn`` / ``all`` / ``tasks()``, typed ``Job``
@@ -1716,35 +1684,32 @@ that covers it:
    * - ``Host::duql_compile`` / ``duql_matches``
      - ``DFTU_SVC_DUQL``
      - `10. duql filters against events (DFTU_SVC_DUQL)`_
-   * - ``Host::arrow_read_ipc`` / ``arrow_write_ipc``
-     - ``DFTU_SVC_ARROW``
-     - `11. Arrow interchange (DFTU_SVC_ARROW)`_
    * - ``Host::trace_open_write`` / ``trace_write`` / ``trace_read``
      - ``DFTU_SVC_TRACE``
-     - `12. Output writers`_
+     - `11. Output writers`_
    * - ``Host::fileio()`` (typed ``Fileio``), ``Host::writer``,
        ``Host::merge_shards``
      - ``DFTU_SVC_FILEIO``
-     - `12. Output writers`_
+     - `11. Output writers`_
    * - ``Host::run_op`` / ``run_op_frame`` / ``run_op_aggregate``,
        ``PluginBuilder::op``, ``OwnedLazyFrame``
      - ``DFTU_SVC_OPS``
-     - `14. Extending the engine: ops, sources, plan nodes`_
+     - `13. Extending the engine: ops, sources, plan nodes`_
    * - ``PluginBuilder::source<S>``
      - ``DFTU_SVC_PROVIDERS``
-     - `14. Extending the engine: ops, sources, plan nodes`_
+     - `13. Extending the engine: ops, sources, plan nodes`_
    * - ``PluginBuilder::node<N>``
      - ``DFTU_SVC_NODES``
-     - `14. Extending the engine: ops, sources, plan nodes`_
+     - `13. Extending the engine: ops, sources, plan nodes`_
    * - ``Host::emit_result_frame`` / ``emit_result_lazyframe``
      - ``DFTU_SVC_RESULT``
-     - `14. Extending the engine: ops, sources, plan nodes`_
+     - `13. Extending the engine: ops, sources, plan nodes`_
    * - ``PluginBuilder::state<T>``
      - ``DFTU_SVC_AGG`` (``register_state``)
      - `6. Mergeable aggregation (DFTU_SVC_AGG)`_
    * - none (raw ``get_service``)
      - ``DFTU_SVC_INDEX``
-     - `15. Index extensions (DFTU_SVC_INDEX)`_
+     - `14. Index extensions (DFTU_SVC_INDEX)`_
 
 Building and scaffolding
 ------------------------

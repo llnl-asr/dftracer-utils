@@ -50,6 +50,14 @@ set(DATAFRAME_TEST_SOURCES test_mask.cpp test_series.cpp test_methods.cpp
                            test_field_stat.cpp test_log2_histogram.cpp
                            test_timestamp_histogram.cpp)
 
+# Tests that convert through Arrow link the arrow library.
+set(DATAFRAME_ARROW_TESTS
+    test_arrow test_arrow_types test_arrow_types_compute
+    test_arrow_large_types_compute test_arrow_types_matrix test_arrow_types_tail
+    test_arrow_types_lazy test_arrow_types_windowed test_arrow_types_reshape
+    test_concat_large_string test_lazyframe_output_schema test_series
+    test_string_view test_type_parameter_propagation)
+
 foreach(test_file ${DATAFRAME_TEST_SOURCES})
   string(REPLACE ".cpp" "" bin_exec ${test_file})
   string(REPLACE "/" "_" target_name "dataframe_${bin_exec}")
@@ -57,6 +65,9 @@ foreach(test_file ${DATAFRAME_TEST_SOURCES})
   add_executable(${target_name} ${test_file})
   target_include_directories(${target_name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
   target_link_libraries(${target_name} PRIVATE doctest::doctest dftracer_utils testing_utilities)
+  if(bin_exec IN_LIST DATAFRAME_ARROW_TESTS)
+    target_link_libraries(${target_name} PRIVATE ${DFTRACER_UTILS_ARROW_TARGET})
+  endif()
   # Some tests include internal SIMD kernel headers (e.g. kernels/sort.h ->
   # hwy/contrib/sort/vqsort.h). The dataframe library links Highway PRIVATE, so
   # its include dir is not propagated to consumers; bring it in for the tests

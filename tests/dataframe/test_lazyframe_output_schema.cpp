@@ -1,24 +1,21 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/arrow/arrow.h>
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <nanoarrow/nanoarrow.h>
 #include <task_result.h>
 
 #include <cstdint>
 #include <utility>
 
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
-#include <dftracer/utils/dataframe/arrow.h>
-#include <dftracer/utils/dstd/memory.h>
-#include <nanoarrow/nanoarrow.h>
-
 using namespace dftracer::utils;
-#endif
 
 using namespace dftracer::utils::dataframe;
 
@@ -64,8 +61,6 @@ dstd::SharedPtr<const Source> src(DataFrame df) {
     return dstd::make_shared<const InMemorySource>(std::move(df));
 }
 
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
-
 struct BuiltArrow {
     ArrowSchema schema{};
     ArrowArray array{};
@@ -96,7 +91,7 @@ Series make_timestamp(const dstd::Vector<std::int64_t>& values, TimeUnit unit,
     for (std::int64_t v : values)
         REQUIRE(ArrowArrayAppendInt(&b.array, v) == NANOARROW_OK);
     finish(&b.array);
-    return Series::from_arrow(&b.schema, &b.array);
+    return arrow::series_from_arrow(&b.schema, &b.array);
 }
 
 Series make_decimal128(std::int32_t precision, std::int32_t scale,
@@ -115,10 +110,8 @@ Series make_decimal128(std::int32_t precision, std::int32_t scale,
         REQUIRE(ArrowArrayAppendDecimal(&b.array, &dec) == NANOARROW_OK);
     }
     finish(&b.array);
-    return Series::from_arrow(&b.schema, &b.array);
+    return arrow::series_from_arrow(&b.schema, &b.array);
 }
-
-#endif  // DFTRACER_UTILS_ENABLE_ARROW
 
 DataFrame basic_frame() {
     DataFrame df;
@@ -230,7 +223,6 @@ TEST_SUITE("LazyFrame output_schema") {
         check_matches_collect(lf);
     }
 
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
     TEST_CASE(
         "fill_null leaves a Timestamp column (and its timezone) untouched") {
         // dftu_series_fillna only runs on a numeric-dispatchable column, so a
@@ -269,7 +261,6 @@ TEST_SUITE("LazyFrame output_schema") {
         CHECK(s.fields[1] == Field{"dec2", decimal128(38, 9), true});
         check_matches_collect(lf);
     }
-#endif  // DFTRACER_UTILS_ENABLE_ARROW
 
     TEST_CASE("group_by types Count/Sum/Mean/Min/Max from the value column") {
         LazyFrame lf = LazyFrame::scan(src(basic_frame()))
@@ -437,7 +428,6 @@ TEST_SUITE("LazyFrame output_schema") {
         check_matches_collect(lf);
     }
 
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
     TEST_CASE(
         "group_by widens a Decimal128 or Timestamp value column through the "
         "Int64 domain") {
@@ -466,5 +456,4 @@ TEST_SUITE("LazyFrame output_schema") {
         CHECK(s.fields[4] == Field{"first_ts", scalar(TypeId::Int64), true});
         check_matches_collect(lf);
     }
-#endif  // DFTRACER_UTILS_ENABLE_ARROW
 }

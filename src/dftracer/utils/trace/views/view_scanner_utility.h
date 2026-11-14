@@ -6,20 +6,16 @@
 #include <dftracer/utils/coro/async_generator.h>
 #include <dftracer/utils/dstd/deque.h>
 #include <dftracer/utils/dstd/intern_cache.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/result.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/trace/index/gzip/checkpoint_indexer.h>
 #include <dftracer/utils/trace/views/fold_event.h>
 #include <dftracer/utils/trace/views/view_definition.h>
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
-#include <dftracer/utils/dstd/optional.h>
-#include <dftracer/utils/dstd/span.h>
-#include <dftracer/utils/dstd/string.h>
-#include <dftracer/utils/trace/arrow/arrow_export.h>
-#include <dftracer/utils/trace/arrow/column_builder.h>
-#endif
 
 #include <cstddef>
 #include <cstdint>
@@ -113,12 +109,6 @@ struct ViewScannerBatch {
     std::uint64_t events_scanned = 0;
     std::uint64_t lines_invalid = 0;
     std::uint64_t values_unconverted = 0;
-
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
-    dstd::Result<trace::arrow::ArrowExportResult> to_arrow() const;
-    dstd::Result<trace::arrow::ArrowExportResult> to_arrow(
-        trace::arrow::RecordBatchBuilder& builder) const;
-#endif
 };
 
 inline void ScanCounts::add(const ViewScannerBatch& b) {

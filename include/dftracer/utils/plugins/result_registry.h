@@ -10,7 +10,6 @@
 #include <dftracer/utils/dstd/variant.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi/ops.h>
-#include <dftracer/utils/plugins/owned_arrow.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -19,7 +18,7 @@
 #include <mutex>
 
 // Host-side named result channel backing dft.ext.result. Policy-free: it moves
-// opaque bytes or a user-schema Arrow array and never interprets either.
+// opaque bytes, a frame or a lazy plan and never interprets any of them.
 namespace dftracer::utils::plugins {
 
 /// A native columnar result carried across the ABI as a dftu_dataframe handle
@@ -355,8 +354,8 @@ struct OwnedLazyFrame {
     void* host_ = nullptr;
 };
 
-using NamedResult = dstd::Variant<dstd::Vector<std::byte>, OwnedArrow,
-                                  OwnedDataFrame, OwnedLazyFrame>;
+using NamedResult =
+    dstd::Variant<dstd::Vector<std::byte>, OwnedDataFrame, OwnedLazyFrame>;
 
 class NamedResultRegistry {
    public:
@@ -378,19 +377,6 @@ class NamedResultRegistry {
             std::memcpy(bytes.data(), data, static_cast<std::size_t>(len));
         std::lock_guard<std::mutex> lock(mutex_);
         results_[name] = std::move(bytes);
-    }
-
-    /// Steals *a and *s (zeroing them). -1 on a null argument.
-    int emit_arrow(const char* name, ArrowArray* a, ArrowSchema* s) {
-        if (!name || !a || !s) return -1;
-        OwnedArrow owned;
-        owned.array = *a;
-        owned.schema = *s;
-        *a = ArrowArray{};
-        *s = ArrowSchema{};
-        std::lock_guard<std::mutex> lock(mutex_);
-        results_[name] = std::move(owned);
-        return 0;
     }
 
     /// Take ownership of a native dftu_dataframe result. A null handle is a

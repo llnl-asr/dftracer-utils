@@ -4,10 +4,16 @@
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dataframe/internal/lazyframe_handle.h>
+#include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/host/config.h>
 #include <dftracer/utils/plugins/host/plugins.h>
 #include <dftracer/utils/plugins/result_registry.h>
@@ -18,6 +24,8 @@
 #include <dftracer/utils/python/core/seq_helpers.h>
 #include <dftracer/utils/python/core/str_helpers.h>
 #include <dftracer/utils/python/core/type_helpers.h>
+#include <dftracer/utils/python/frame/dataframe.h>
+#include <dftracer/utils/python/frame/lazyframe.h>
 #include <dftracer/utils/python/plugins/plugin_host.h>
 #include <dftracer/utils/python/runtime/runtime.h>
 #include <dftracer/utils/runtime/fs/fs.h>
@@ -25,21 +33,6 @@
 #include <dftracer/utils/trace/index/build/resolve_and_build.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view.h>
-// Unconditional: the native-frame result path (OwnedDataFrame) needs the
-// DataFrame wrapper regardless of the Arrow build option.
-#include <dftracer/utils/dataframe/dataframe.h>
-#include <dftracer/utils/dataframe/internal/lazyframe_handle.h>
-#include <dftracer/utils/dataframe/lazyframe.h>
-#include <dftracer/utils/python/frame/dataframe.h>
-#include <dftracer/utils/python/frame/lazyframe.h>
-
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
-#include <dftracer/utils/dstd/hash_map.h>
-#include <dftracer/utils/dstd/optional.h>
-#include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/python/core/arrow_helpers.h>
-#include <nanoarrow/nanoarrow.h>
-#endif
 
 #include <algorithm>
 #include <cerrno>
@@ -57,7 +50,6 @@ namespace {
 using dftracer::utils::Runtime;
 using dftracer::utils::plugins::NamedResult;
 using dftracer::utils::plugins::NamedResultRegistry;
-using dftracer::utils::plugins::OwnedArrow;
 using dftracer::utils::plugins::OwnedDataFrame;
 using dftracer::utils::plugins::OwnedLazyFrame;
 using dftracer::utils::python::core::parse_seq;
@@ -179,10 +171,9 @@ bool collect_inputs(
     return parse_string_seq(traces, "traces must be a str or list[str]", out);
 }
 
-// Convert one emitted result to Python: an opaque blob to bytes, a single
-// user-schema Arrow array to a pyarrow-compatible table, and a streamed
-// multi-batch map result to a pull-based pyarrow.RecordBatchReader. Returns a
-// new reference, or nullptr with a Python error set.
+// Convert one emitted result to Python: an opaque blob to bytes, a native
+// frame to a DataFrame and a lazy plan to a LazyFrame. Returns a new
+// reference, or nullptr with a Python error set.
 PyObject* result_to_py(NamedResult& result) {
     if (auto* blob =
             std::get_if<dftracer::utils::dstd::Vector<std::byte>>(&result))
@@ -214,20 +205,8 @@ PyObject* result_to_py(NamedResult& result) {
             std::move(dataframe::lazyframe_handle_unwrap(lazy->handle));
         return dftracer::utils::python::frame::wrap_lazyframe(std::move(lf));
     }
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
-    auto* owned = std::get_if<OwnedArrow>(&result);
-    nanoarrow::UniqueSchema schema;
-    nanoarrow::UniqueArray array;
-    ArrowSchemaMove(&owned->schema, schema.get());
-    ArrowArrayMove(&owned->array, array.get());
-    return dftracer::utils::python::core::arrow_result_to_table(
-        trace::arrow::ArrowExportResult(std::move(schema), std::move(array)));
-#else
-    PyErr_SetString(PyExc_RuntimeError,
-                    "plugin emitted an Arrow result but the extension was "
-                    "built without Arrow support");
+    PyErr_SetString(PyExc_RuntimeError, "plugin emitted an unknown result");
     return nullptr;
-#endif
 }
 
 PyObject* results_to_dict(PluginHostState* st) {
@@ -412,7 +391,8 @@ PyObject* ph_run(PluginHostObject* self, PyObject* args, PyObject* kwds) {
 PyMethodDef ph_methods[] = {
     {"run", DFTU_PYCFUNCTION(ph_run), METH_VARARGS | METH_KEYWORDS,
      "run(traces, index_dir=None, auto_index=True) -> (dict, dict): fold every "
-     "plugin over one fused scan. Returns ({name: bytes | pyarrow table}, "
+     "plugin over one fused scan. Returns ({name: bytes | DataFrame | "
+     "LazyFrame}, "
      "{events_scanned, events_matched})."},
     {nullptr, nullptr, 0, nullptr}};
 

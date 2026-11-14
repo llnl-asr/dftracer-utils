@@ -107,8 +107,7 @@ function(dftracer_utils_interface_versions version_file out_include_dir)
     "${_inc}/dataframe/c_api_udf.h"
     "${_inc}/dataframe/agg_op_codes.h"
     "${_inc}/duql/c_api.h"
-    "${_inc}/plugins/abi.h"
-    "${_inc}/plugins/arrow_abi.h")
+    "${_inc}/plugins/abi.h")
   list(SORT _abi_headers)
   set_property(
     DIRECTORY

@@ -3,8 +3,6 @@
 #define DFTRACER_UTILS_PYTHON_FRAME_SCHEMA_RECONCILE_H
 
 #include <dftracer/utils/common/config.h>
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
-
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -46,5 +44,4 @@ class SchemaReconciler {
 
 }  // namespace dftracer::utils::python::frame
 
-#endif  // DFTRACER_UTILS_ENABLE_ARROW
 #endif  // DFTRACER_UTILS_PYTHON_FRAME_SCHEMA_RECONCILE_H

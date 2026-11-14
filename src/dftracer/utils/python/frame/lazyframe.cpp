@@ -5,7 +5,7 @@
 // filter/with_column expr's col(i) refers to the i-th column of the frame at
 // that point, so the Python wrapper resolves names to indices against schema().
 
-#include <dftracer/utils/common/config.h>  // DFTRACER_UTILS_ENABLE_ARROW
+#include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/memory_budget.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/expr.h>

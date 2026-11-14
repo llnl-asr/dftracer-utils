@@ -4,15 +4,8 @@
 // and the coroutine control ops (drive path).
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/coro/scope.h>
-#include <dftracer/utils/dstd/string_intern.h>
-#include <dftracer/utils/plugins/host/config.h>
-#include <dftracer/utils/plugins/host/fold_adapter.h>
-#include <dftracer/utils/plugins/plugin.h>
-#include <dftracer/utils/runtime/runtime.h>
-
-// After plugin.h/fold_adapter.h so nanoarrow is already set up for arrow_abi.h.
 #include <dftracer/utils/common/str_format.h>
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/scalar.h>
 #include <dftracer/utils/dataframe/types.h>
@@ -22,7 +15,12 @@
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/plugins/host/config.h>
+#include <dftracer/utils/plugins/host/fold_adapter.h>
+#include <dftracer/utils/plugins/plugin.h>
+#include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/schema.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/trace/views/fold_event.h>

@@ -9,10 +9,9 @@
 #include <dftracer/utils/python/core/method.h>
 #include <dftracer/utils/python/core/type_helpers.h>
 #include <dftracer/utils/python/trace/trace_reader_iterator.h>
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
 #include <nanoarrow/nanoarrow.h>
 
-using ArrowExportResult = dftracer::utils::trace::arrow::ArrowExportResult;
+using ArrowExportResult = dftracer::utils::arrow::ArrowExportResult;
 
 static void release_arrow_schema(PyObject *capsule) {
     auto *schema = static_cast<ArrowSchema *>(
@@ -117,8 +116,6 @@ PyTypeObject ArrowBatchCapsuleType = {
     .tp_getset = ArrowBatchCapsule_getsetters,
 };
 
-#endif  // DFTRACER_UTILS_ENABLE_ARROW
-
 static void cancel_and_wait_batch_state(
     dftracer::utils::python::core::MemoryViewBatchIteratorState *bs) {
     bs->cancelled.store(true, std::memory_order_release);
@@ -127,7 +124,6 @@ static void cancel_and_wait_batch_state(
 }
 
 static void TraceReaderIterator_dealloc(TraceReaderIteratorObject *self) {
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
     if (self->arrow_state) {
         self->arrow_state->cancelled.store(true, std::memory_order_release);
         if (self->arrow_state->channel) self->arrow_state->channel->close();
@@ -136,7 +132,6 @@ static void TraceReaderIterator_dealloc(TraceReaderIteratorObject *self) {
         }
         Py_END_ALLOW_THREADS self->arrow_state.reset();
     }
-#endif
     if (self->batch_state) {
         Py_BEGIN_ALLOW_THREADS cancel_and_wait_batch_state(
             self->batch_state.get());
@@ -153,7 +148,6 @@ static PyObject *TraceReaderIterator_iter(TraceReaderIteratorObject *self) {
 }
 
 static PyObject *TraceReaderIterator_next(TraceReaderIteratorObject *self) {
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
     if (self->mode == IteratorMode::Arrow) {
         auto *astate = self->arrow_state.get();
         dftracer::utils::dstd::Optional<ArrowExportResult> batch;
@@ -180,7 +174,6 @@ static PyObject *TraceReaderIterator_next(TraceReaderIteratorObject *self) {
         obj->result = new ArrowExportResult(std::move(*batch));
         return (PyObject *)obj;
     }
-#endif
 
     while (true) {
         if (self->current_batch) {
@@ -245,10 +238,8 @@ int dftracer::utils::python::trace::init_trace_reader_iterator(PyObject *m) {
     if (register_type(m, &TraceReaderIteratorType, "TraceReaderIterator") < 0)
         return -1;
 
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
     if (register_type(m, &ArrowBatchCapsuleType, "_ArrowBatchCapsule") < 0)
         return -1;
-#endif
 
     return 0;
 }

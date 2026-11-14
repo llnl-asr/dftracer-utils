@@ -24,12 +24,10 @@ PyObject* wrap_vec_column(dftracer::utils::dataframe::Series&& col);
 // the lifetime of `o`.
 const dftracer::utils::dataframe::Series* unwrap_vec_column(PyObject* o);
 
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
 // Import one Arrow array (any object exposing __arrow_c_array__) into an owned
 // dataframe::Series. Returns an invalid Series with a Python error set on
 // failure.
 dftracer::utils::dataframe::Series column_from_arrow(PyObject* arrow_array);
-#endif
 
 }  // namespace dftracer::utils::python::frame
 

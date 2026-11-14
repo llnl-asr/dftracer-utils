@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
-#include <dftracer/utils/common/config.h>
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
 
+#include <dftracer/utils/common/config.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/string.h>
@@ -385,5 +384,3 @@ int SchemaReconciler::reconcile(const ArrowSchema *in_schema,
 }
 
 }  // namespace dftracer::utils::python::frame
-
-#endif  // DFTRACER_UTILS_ENABLE_ARROW

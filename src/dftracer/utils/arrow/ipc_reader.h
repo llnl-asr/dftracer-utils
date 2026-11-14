@@ -1,30 +1,28 @@
 // SPDX-License-Identifier: MIT
-#ifndef DFTRACER_UTILS_TRACE_ARROW_IPC_READER_H
-#define DFTRACER_UTILS_TRACE_ARROW_IPC_READER_H
+#ifndef DFTRACER_UTILS_ARROW_IPC_READER_H
+#define DFTRACER_UTILS_ARROW_IPC_READER_H
 
+#include <dftracer/utils/arrow/arrow_export.h>
 #include <dftracer/utils/common/config.h>
-#ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
-
 #include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/trace/arrow/arrow_export.h>
 
 #include <cstdint>
 
-namespace dftracer::utils::trace::arrow::detail {
+namespace dftracer::utils::arrow::detail {
 /// Store block info separately from decoder state
 struct IpcBlock {
     std::int64_t offset;
     std::int32_t metadata_length;
     std::int64_t body_length;
 };
-}  // namespace dftracer::utils::trace::arrow::detail
+}  // namespace dftracer::utils::arrow::detail
 
-namespace dftracer::utils::trace::arrow {
+namespace dftracer::utils::arrow {
 
 /**
  * RAII reader for Arrow IPC file format (.arrow).
@@ -96,7 +94,6 @@ class IpcReader {
     int read_footer();
 };
 
-}  // namespace dftracer::utils::trace::arrow
+}  // namespace dftracer::utils::arrow
 
-#endif  // DFTRACER_UTILS_ENABLE_ARROW_IPC
-#endif  // DFTRACER_UTILS_TRACE_ARROW_IPC_READER_H
+#endif  // DFTRACER_UTILS_ARROW_IPC_READER_H

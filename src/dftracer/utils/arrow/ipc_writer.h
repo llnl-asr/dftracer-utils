@@ -1,22 +1,20 @@
 // SPDX-License-Identifier: MIT
-#ifndef DFTRACER_UTILS_TRACE_ARROW_IPC_WRITER_H
-#define DFTRACER_UTILS_TRACE_ARROW_IPC_WRITER_H
+#ifndef DFTRACER_UTILS_ARROW_IPC_WRITER_H
+#define DFTRACER_UTILS_ARROW_IPC_WRITER_H
 
+#include <dftracer/utils/arrow/arrow_export.h>
 #include <dftracer/utils/common/config.h>
-#ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
-
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/trace/arrow/arrow_export.h>
 
 #include <atomic>
 #include <cstdio>
 
-namespace dftracer::utils::trace::arrow {
+namespace dftracer::utils::arrow {
 
 /**
  * Compression type for Arrow IPC buffer-level compression.
@@ -153,7 +151,6 @@ class IpcWriter {
     coro::CoroTask<int> write_footer();
 };
 
-}  // namespace dftracer::utils::trace::arrow
+}  // namespace dftracer::utils::arrow
 
-#endif  // DFTRACER_UTILS_ENABLE_ARROW_IPC
-#endif  // DFTRACER_UTILS_TRACE_ARROW_IPC_WRITER_H
+#endif  // DFTRACER_UTILS_ARROW_IPC_WRITER_H

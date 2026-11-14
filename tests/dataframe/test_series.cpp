@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dataframe/expr_ok.h>
+#include <dftracer/utils/arrow/arrow.h>
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/agg.h>
@@ -20,10 +21,13 @@
 #include <dftracer/utils/dataframe/op.h>
 #include <dftracer/utils/dstd/hash/fnv1a.h>
 #include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/memory/detail/manager.h>
 #include <doctest/doctest.h>
 #include <memory/fresh_process.h>
+#include <nanoarrow/nanoarrow.h>
 #include <task_result.h>
 
 #include <cmath>
@@ -31,17 +35,9 @@
 #include <cstring>
 #include <limits>
 #include <utility>
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
-#include <dftracer/utils/dataframe/arrow_bridge.h>
-#include <dftracer/utils/dstd/span.h>
-#include <dftracer/utils/dstd/string.h>
-#include <nanoarrow/nanoarrow.h>
-
-#include <cstring>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::dataframe;
-#endif
 
 static bool mask_bit(const Series& m, std::int64_t i) {
     const std::uint8_t* b = m.data<std::uint8_t>();
@@ -2947,8 +2943,6 @@ TEST_SUITE("vec") {
     }
 }
 
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
-
 TEST_SUITE("vec_arrow") {
     TEST_CASE("flat int64 round-trips through Arrow zero-copy") {
         dstd::Vector<std::int64_t> a{10, 20, 30};
@@ -2956,7 +2950,7 @@ TEST_SUITE("vec_arrow") {
 
         ArrowSchema schema;
         ArrowArray array;
-        to_arrow(col, &schema, &array);
+        arrow::to_arrow(col, &schema, &array);
         CHECK(std::strcmp(schema.format, "l") == 0);
         REQUIRE(array.length == 3);
         REQUIRE(array.n_buffers == 2);
@@ -2966,7 +2960,7 @@ TEST_SUITE("vec_arrow") {
         CHECK(raw[0] == 10);
         CHECK(raw[2] == 30);
 
-        Series back = from_arrow(&schema, &array);
+        Series back = arrow::series_from_arrow(&schema, &array);
         REQUIRE(back.valid());
         CHECK(back.type() == TypeId::Int64);
         REQUIRE(back.length() == 3);
@@ -2985,7 +2979,7 @@ TEST_SUITE("vec_arrow") {
 
         ArrowSchema schema;
         ArrowArray array;
-        to_arrow(sel, &schema, &array);
+        arrow::to_arrow(sel, &schema, &array);
 
         CHECK(std::strcmp(schema.format, "l") == 0);  // int64 indices
         REQUIRE(schema.dictionary != nullptr);
@@ -3011,12 +3005,12 @@ TEST_SUITE("vec_arrow") {
 
         ArrowSchema schema;
         ArrowArray array;
-        to_arrow(s, &schema, &array);
+        arrow::to_arrow(s, &schema, &array);
         CHECK(std::strcmp(schema.format, "u") == 0);  // utf8
         REQUIRE(array.n_buffers == 3);
         REQUIRE(array.length == 3);
 
-        Series back = from_arrow(&schema, &array);
+        Series back = arrow::series_from_arrow(&schema, &array);
         REQUIRE(back.valid());
         CHECK(back.type() == TypeId::String);
         REQUIRE(back.length() == 3);
@@ -3032,7 +3026,7 @@ TEST_SUITE("vec_arrow") {
 
         ArrowSchema schema;
         ArrowArray array;
-        to_arrow(d, &schema, &array);
+        arrow::to_arrow(d, &schema, &array);
         CHECK(std::strcmp(schema.format, "i") == 0);              // int32 codes
         REQUIRE(schema.dictionary != nullptr);
         CHECK(std::strcmp(schema.dictionary->format, "u") == 0);  // string dict
@@ -3058,7 +3052,7 @@ TEST_SUITE("vec_arrow") {
 
         ArrowSchema schema;
         ArrowArray array;
-        to_arrow(hist, &schema, &array);
+        arrow::to_arrow(hist, &schema, &array);
 
         CHECK(std::strcmp(schema.format, "+l") == 0);               // list
         REQUIRE(schema.n_children == 1);
@@ -3113,10 +3107,10 @@ TEST_SUITE("vec_arrow") {
 
         ArrowSchema schema;
         ArrowArray array;
-        to_arrow(b, &schema, &array);
+        arrow::to_arrow(b, &schema, &array);
         CHECK(std::strcmp(schema.format, "b") == 0);
 
-        Series back = from_arrow(&schema, &array);
+        Series back = arrow::series_from_arrow(&schema, &array);
         REQUIRE(back.valid());
         CHECK(back.type() == TypeId::Bool);
         REQUIRE(back.length() == 5);
@@ -3128,7 +3122,6 @@ TEST_SUITE("vec_arrow") {
         schema.release(&schema);
     }
 }
-#endif  // DFTRACER_UTILS_ENABLE_ARROW
 
 TEST_CASE("slicing a Bool column respects bit packing") {
     // Bool data is bit-packed ((n+7)/8 bytes) while byte_width(Bool) is 1, so

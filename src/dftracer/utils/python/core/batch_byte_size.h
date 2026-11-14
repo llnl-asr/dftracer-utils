@@ -2,15 +2,12 @@
 #ifndef DFTRACER_UTILS_PYTHON_CORE_BATCH_BYTE_SIZE_H
 #define DFTRACER_UTILS_PYTHON_CORE_BATCH_BYTE_SIZE_H
 
+#include <dftracer/utils/arrow/arrow_export.h>
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/python/core/memoryview_batch.h>
 #include <dftracer/utils/python/trace/trace_reader_iterator.h>
 
 #include <cstddef>
-
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
-#include <dftracer/utils/trace/arrow/arrow_export.h>
-#endif
 
 namespace dftracer::utils::python::core {
 
@@ -18,8 +15,6 @@ inline std::size_t byte_size(const MemoryViewBatchData &b) {
     return b.buffer.capacity() + b.offsets.capacity() * sizeof(Py_ssize_t) +
            b.lengths.capacity() * sizeof(Py_ssize_t);
 }
-
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
 
 inline std::size_t arrow_array_byte_size(const ArrowArray *arr) {
     if (!arr || !arr->release) return 0;
@@ -40,11 +35,9 @@ inline std::size_t arrow_array_byte_size(const ArrowArray *arr) {
 }
 
 inline std::size_t byte_size(
-    const dftracer::utils::trace::arrow::ArrowExportResult &b) {
+    const dftracer::utils::arrow::ArrowExportResult &b) {
     return arrow_array_byte_size(b.array());
 }
-
-#endif  // DFTRACER_UTILS_ENABLE_ARROW
 
 }  // namespace dftracer::utils::python::core
 

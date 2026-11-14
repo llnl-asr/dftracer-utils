@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: MIT
-#include <dftracer/utils/common/config.h>
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/arrow/array_view.h>
+#include <dftracer/utils/arrow/arrow_export.h>
+#include <dftracer/utils/arrow/column_builder.h>
+#include <dftracer/utils/common/config.h>
 #include <dftracer/utils/dstd/string.h>
-#include <dftracer/utils/trace/arrow/array_view.h>
-#include <dftracer/utils/trace/arrow/arrow_export.h>
-#include <dftracer/utils/trace/arrow/column_builder.h>
 #include <doctest/doctest.h>
 #include <nanoarrow/nanoarrow.h>
 #include <task_result.h>
@@ -15,7 +14,7 @@
 
 using namespace dftracer::utils;
 
-using namespace dftracer::utils::trace::arrow;
+using namespace dftracer::utils::arrow;
 
 static dstd::String child_schema_name(const ArrowExportResult& r, int64_t i) {
     return r.schema()->children[i]->name;
@@ -615,8 +614,6 @@ TEST_CASE(
         CHECK(c.is_null(0, 0));
     }
 }
-
-#endif  // DFTRACER_UTILS_ENABLE_ARROW
 
 TEST_CASE("RecordBatchBuilder - a number promoted to text is normalized") {
     RecordBatchBuilder b;

@@ -456,7 +456,7 @@ in, one out, state kept between them) or a breaker (drain, then emit one
 frame) sits in the plan like a built-in step. The node declares its output
 schema from its input's; the optimizer types the plan around it and never
 pushes a step through it. ``explain`` prints it as ``op <name>``.
-:doc:`../../plugins` section 14 has the registration side.
+:doc:`../../plugins` section 13 has the registration side.
 
 Joining and stacking plans
 --------------------------

@@ -55,6 +55,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Move Arrow conversion and IPC out of the core libraries into the arrow library (`dftracer_utils_arrow`, `dftracer/utils/arrow/arrow.h`), which the Python module and the tests link: `Series::to_arrow`, `Series::from_arrow`, `DataFrame::to_arrow`, `DataFrame::from_arrow` and `DataFrame::to_ipc` become `arrow::to_arrow`, `arrow::series_from_arrow`, `arrow::dataframe_from_arrow` and `arrow::to_ipc`.
+- Remove the CMake options `DFTRACER_UTILS_ENABLE_ARROW` and `DFTRACER_UTILS_ENABLE_ARROW_IPC`; the arrow library always has IPC.
+- Remove the plugin Arrow service `dftu.svc.arrow`, the result kind `DFTU_RESULT_KIND_ARROW`, `ViewScannerBatch::to_arrow` and `ComparisonOutput::to_arrow`.
 - Remove `dftu_plugin::bytes` and `dftu_plugin::reclaim`, and `dftu_cursor_vt::bytes` and `dftu_cursor_vt::reclaim`.
   A slice reserves its bytes through `dftu.svc.memory` and sets a reclaimer there, in place of reporting a size for the host to ask about.
   A Slice no longer gets slots from `bytes()` and `reclaim()`, and a source cursor no longer gets them from `resident_bytes()` and `reclaim()`.

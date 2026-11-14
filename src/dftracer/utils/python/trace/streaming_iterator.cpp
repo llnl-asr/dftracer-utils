@@ -43,7 +43,6 @@ static PyObject* ArrowStreamingIterator_iter(PyObject* self) {
     return self;
 }
 
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
 // The next Arrow batch of a pull_next producer, wrapped in a capsule.
 static PyObject* next_batch(ArrowStreamingIteratorObject* self) {
     dstd::Optional<ArrowExportResult> result;
@@ -70,15 +69,12 @@ static PyObject* next_batch(ArrowStreamingIteratorObject* self) {
     obj->result = new ArrowExportResult(std::move(*result));
     return (PyObject*)obj;
 }
-#endif
 
 static PyObject* ArrowStreamingIterator_next(
     ArrowStreamingIteratorObject* self) {
     if (!self->cpp_state || !self->cpp_state->pull_df) {
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
         if (self->cpp_state && self->cpp_state->pull_next)
             return next_batch(self);
-#endif
         PyErr_SetString(PyExc_RuntimeError, "Iterator not initialized");
         return NULL;
     }

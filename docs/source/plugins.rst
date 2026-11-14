@@ -1208,6 +1208,40 @@ result tables - read those through :class:`~dftracer.utils.plugins.Plugins`):
 
 Use ``-d <directory>`` for a whole tree instead of ``--files``.
 
+Arrow from a plugin
+~~~~~~~~~~~~~~~~~~~
+
+The plugin ABI has no Arrow type, and it does not need one: every buffer a
+column holds is already in Arrow's layout. The validity bitmap is one bit per
+row with 1 meaning valid, String and Binary offsets are int32 (int64 for their
+Large forms), and a StringView column holds Arrow's 16-byte views. A plugin
+that wants Arrow builds the arrays itself, with nanoarrow, libarrow or
+anything else, borrowing the column's buffers with no copy:
+
+.. code-block:: c
+
+   int64_t bit_offset = 0;
+   const uint8_t* validity = dftu_series_validity(col, &bit_offset);  /* NULL: no nulls */
+   const void* values = dftu_series_data(col);        /* Int64: 8 bytes per row */
+   const int32_t* offsets = dftu_series_offsets(col); /* String: length+1 entries */
+
+``dftu_series_validity``, ``dftu_series_offsets``, ``dftu_series_offsets64``,
+``dftu_series_data``, ``dftu_series_chunk_count`` with ``dftu_series_chunk``,
+``dftu_series_dictionary_codes`` with ``dftu_series_dictionary_values`` and
+``dftu_series_view_data`` with ``dftu_series_view_buffer_count`` and
+``dftu_series_view_buffer`` hand out the buffers of a FLAT, VIEW, DICTIONARY
+or CHUNKED column. They are borrowed and stay valid while the column lives, and
+return NULL (or -1) for an encoding that has no such buffer.
+
+Arrow memory comes back the same way. ``dftu_series_new_flat_borrowed``,
+``dftu_series_new_string_borrowed`` and ``dftu_series_new_string_view`` build a
+column that borrows the buffers and the validity bitmap with no copy, and calls
+``release(ctx)`` exactly once, when the last column using them is freed - so
+``release`` can be the ArrowArray's own release callback. See
+``examples/plugins/arrow_convert.c`` for the whole round trip (Int64, Float64,
+String by offsets and by views, and a dictionary column) and the
+``arrow_convert`` test that runs it.
+
 13. Extending the engine: ops, sources, plan nodes
 --------------------------------------------------
 

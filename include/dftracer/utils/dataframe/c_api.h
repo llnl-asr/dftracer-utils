@@ -124,12 +124,18 @@ DFTU_EXPORT dftu_series* dftu_series_new_flat(dftu_dtype type, const void* data,
                                               const uint8_t* validity);
 
 /** Create a FLAT column BORROWING `n` values of `type` from `data` (no copy):
- * the column's data buffer points straight at `data`. `data` must stay valid
- * until `release(release_ctx)` runs, which happens when the column's last
- * reference is dropped; pass NULL for `release` to borrow non-owned static
- * memory. `validity` is copied if non-NULL (usually NULL). Returns NULL on a
+ * the column's data buffer points straight at `data`. `validity` is an
+ * Arrow-layout bitmap (1 = valid) or NULL for no nulls, and it is borrowed too
+ * (no copy), so both buffers must stay valid until `release(release_ctx)` runs.
+ *
+ * Ownership: the column borrows `data` and `validity`. `release(release_ctx)`
+ * runs exactly once, when the last column that uses them (this one, or any made
+ * from it by filter, take, slice or share) is freed, or at once if this
+ * function returns NULL; pass NULL `release` to borrow non-owned static memory.
+ * `release` may run on any thread. Returns NULL, after running `release`, on a
  * variable-width type (String/Binary), where borrowing a single flat buffer is
- * not meaningful. */
+ * not meaningful, or on a fixed-width type that is not a byte width (see
+ * dftu_series_new_flat). */
 DFTU_EXPORT dftu_series* dftu_series_new_flat_borrowed(
     dftu_dtype type, const void* data, int64_t n, const uint8_t* validity,
     void (*release)(void* ctx), void* release_ctx);
@@ -139,8 +145,8 @@ DFTU_EXPORT dftu_series* dftu_series_new_flat_borrowed(
  * of at most 12 the bytes inline (zero padded), else a 4-byte prefix, an int32
  * index into `buffers` and an int32 offset into that buffer. `views` must hold
  * `n` views and `buffers[k]` `sizes[k]` bytes, all valid until `release(ctx)`
- * runs. `validity` is an Arrow-layout bitmap (1 = valid) or NULL; it is copied,
- * and a null row's view is ignored.
+ * runs. `validity` is an Arrow-layout bitmap (1 = valid) or NULL, borrowed like
+ * the views, and a null row's view is ignored.
  *
  * Ownership: the column borrows `views` and every buffer. `release(ctx)` runs
  * exactly once, when the last column that uses them (this one, or any made from
@@ -166,6 +172,24 @@ DFTU_EXPORT dftu_series* dftu_series_new_string(dftu_dtype type,
                                                 const int32_t* offsets,
                                                 const void* data, int64_t n,
                                                 const uint8_t* validity);
+
+/** Create a FLAT variable-width column BORROWING `offsets`, `data` and
+ * `validity` with no copy: String or Binary with n+1 int32 offsets, or
+ * LargeString or LargeBinary with n+1 int64 offsets, into `data`, which holds
+ * `data_size` usable bytes. Ownership is that of dftu_series_new_string_view:
+ * the column borrows all three, `release(ctx)` runs exactly once when the last
+ * column that uses them (this one, or any made from it by filter, take, slice
+ * or share) is freed, or at once if this function returns NULL; pass NULL
+ * `release` for static memory, and `release` may run on any thread. Returns a
+ * column owned by the caller, freed with dftu_series_free. Returns NULL, after
+ * running `release`, for a type other than those four, a negative `n` or
+ * `data_size`, a NULL `offsets` with `n` > 0, a NULL `data` with `data_size` >
+ * 0, or a row whose lower offset is negative, whose upper offset is below its
+ * lower one, or whose upper offset is past `data_size`. `data` may be NULL with
+ * `data_size` 0, as Arrow allows for a column whose rows are all empty. */
+DFTU_EXPORT dftu_series* dftu_series_new_string_borrowed(
+    dftu_dtype type, const void* offsets, const void* data, int64_t data_size,
+    int64_t n, const uint8_t* validity, void (*release)(void* ctx), void* ctx);
 
 /** Create a STRUCT column from `n_fields` child columns (each the same length),
  * named by `names`. Takes ownership of the child columns. */
@@ -225,6 +249,59 @@ DFTU_EXPORT const int32_t* dftu_series_offsets(const dftu_series* col);
  * LargeList column, or NULL otherwise (including a plain String/Binary/List
  * column, whose offsets are dftu_series_offsets instead). */
 DFTU_EXPORT const int64_t* dftu_series_offsets64(const dftu_series* col);
+
+/** Arrow-layout validity bitmap (1 = valid, one bit per row) of a FLAT or VIEW
+ * column, or NULL when the column has no validity buffer (it may still hold
+ * nulls: a slice that starts inside a byte or an import that keeps a bitmap
+ * elsewhere reports them through dftu_series_is_null). NULL as well for a NULL
+ * column or another encoding (CONSTANT, DICTIONARY, SELECTION, CHUNKED), whose
+ * nulls are per row and come from dftu_series_is_null. Writes the bit offset of
+ * row 0 (the bit of row 0 inside the returned byte) to `*bit_offset`, 0 when
+ * there is no bitmap; writes nothing when `bit_offset` is NULL. Borrowed: valid
+ * while `col` lives, with the unused high bits of the last byte undefined. */
+DFTU_EXPORT const uint8_t* dftu_series_validity(const dftu_series* col,
+                                                int64_t* bit_offset);
+
+/** Number of chunks: the chunk count of a CHUNKED column, 1 for any other
+ * encoding (one chunk, the column itself), 0 for a NULL `col`. */
+DFTU_EXPORT int32_t dftu_series_chunk_count(const dftu_series* col);
+
+/** Chunk `i` as a new owned column sharing its buffers, freed with
+ * dftu_series_free: chunk `i` of a CHUNKED column, or `col` itself for `i` 0 of
+ * a column of any other encoding. NULL for a negative or out-of-range `i`, or a
+ * NULL `col`. */
+DFTU_EXPORT dftu_series* dftu_series_chunk(const dftu_series* col, int32_t i);
+
+/** The codes column of a DICTIONARY column as a new owned FLAT Int32 column
+ * sharing its buffer and validity, so row i's value is row codes[i] of
+ * dftu_series_dictionary_values(col); freed with dftu_series_free. NULL for
+ * another encoding, a NULL `col`, or a DICTIONARY column with no code buffer.
+ * The returned column shares memory with `col` and may outlive it. */
+DFTU_EXPORT dftu_series* dftu_series_dictionary_codes(const dftu_series* col);
+
+/** The column a DICTIONARY column's codes index into (String or Binary, in any
+ * encoding), as a new owned column sharing its buffers and freed with
+ * dftu_series_free; a value a code selects may itself be null. NULL for another
+ * encoding, a NULL `col`, or a DICTIONARY column with no values. */
+DFTU_EXPORT dftu_series* dftu_series_dictionary_values(const dftu_series* col);
+
+/** Number of data buffers of a VIEW (StringView/BinaryView) column: the
+ * buffers its 16-byte views point into. -1 when `col` is NULL or is another
+ * encoding. */
+DFTU_EXPORT int32_t dftu_series_view_buffer_count(const dftu_series* col);
+
+/** The `length()` 16-byte views of a VIEW column (the layout
+ * dftu_series_new_string_view takes), or NULL when `col` is NULL, is another
+ * encoding, or holds no views. Borrowed: valid while `col` lives. */
+DFTU_EXPORT const void* dftu_series_view_data(const dftu_series* col);
+
+/** Data buffer `i` of a VIEW column, with its size in bytes written to `*size`
+ * (`size` may be NULL). NULL with `*size` 0 for a NULL `col`, another encoding,
+ * or an `i` that is negative or not below dftu_series_view_buffer_count, so a
+ * zero-length buffer is the only way to get a NULL pointer with no error.
+ * Borrowed: valid while `col` lives. */
+DFTU_EXPORT const void* dftu_series_view_buffer(const dftu_series* col,
+                                                int32_t i, int64_t* size);
 
 /** Number of child columns: 1 for a List (its flattened values), the field
  * count for a Struct, 0 otherwise. */

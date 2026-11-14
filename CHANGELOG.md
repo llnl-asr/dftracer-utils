@@ -54,6 +54,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   `Records::next_chunks` gives a batch of `RecordsOptions::batch_chunks` chunks, which the caller can parse and read on its own threads.
 - Add `yaml::Document::parse` with a `yaml::RunJobs` hook that indexes one large text in chunks on the caller's threads and joins them, with the same result and errors as the one-thread parse.
   A 200 MB text parsed 5 to 7 times faster on 14 threads and 7 to 9 times faster on 48.
+- Add the Arrow buffer getters `dftu_series_validity`, `dftu_series_chunk_count`/`dftu_series_chunk`, `dftu_series_dictionary_codes`/`dftu_series_dictionary_values` and `dftu_series_view_buffer_count`/`dftu_series_view_data`/`dftu_series_view_buffer`, add `dftu_series_new_string_borrowed`, and make `dftu_series_new_flat_borrowed` and `dftu_series_new_string_view` borrow the validity bitmap, so a plugin builds Arrow arrays from a column and hands Arrow memory back with no copy (`examples/plugins/arrow_convert.c`).
 
 ### Changed
 

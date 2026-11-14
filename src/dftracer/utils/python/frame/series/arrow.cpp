@@ -177,15 +177,25 @@ bool numpy_format_type(const char* fmt, Py_ssize_t itemsize, TypeId* out) {
     }
 }
 
+// What a borrowed numpy column owns: the Py_buffer that keeps the data alive,
+// and a copy of the null mask, because the mask the caller built lives on this
+// frame's stack and the column only borrows bitmaps.
+struct BorrowedColumn {
+    Py_buffer* view = nullptr;
+    dftracer::utils::dstd::Vector<std::uint8_t> mask;
+};
+
 // Drop a borrowed numpy buffer once the column's last reference is gone. Runs
 // from Series destruction, which may be off the interpreter thread, so it
 // re-acquires the GIL before touching CPython state.
 void numpy_buffer_release(void* ctx) {
-    auto* view = static_cast<Py_buffer*>(ctx);
+    dftracer::utils::dstd::UniquePtr<BorrowedColumn> held(
+        static_cast<BorrowedColumn*>(ctx));
+    if (!held) return;
+    dftracer::utils::dstd::UniquePtr<Py_buffer> view(held->view);
     PyGILState_STATE gil = PyGILState_Ensure();
-    PyBuffer_Release(view);
+    PyBuffer_Release(view.get());
     PyGILState_Release(gil);
-    dftracer::utils::dstd::UniquePtr<Py_buffer>(view).reset();
 }
 
 }  // namespace
@@ -259,7 +269,7 @@ PyObject* vec_from_numpy(PyObject* /*self*/, PyObject* call_args) {
     // An empty array has no memory to borrow (the release would not run on a
     // null/zero-length buffer), so copy the (empty) column and free the view.
     if (n == 0 || view->buf == nullptr) {
-        Series col = Series::flat(type, view->buf, n, nullptr);
+        Series col = Series::flat(type, view->buf, n, valid);
         PyBuffer_Release(view);
         if (!col.valid()) {
             PyErr_SetString(PyExc_RuntimeError,
@@ -268,12 +278,21 @@ PyObject* vec_from_numpy(PyObject* /*self*/, PyObject* call_args) {
         }
         return make_series(std::move(col));
     }
+    // The column borrows the data and the bitmap, so the release context keeps
+    // both alive: the Py_buffer and a heap copy of the mask, which lives on
+    // this frame.
+    dftracer::utils::dstd::UniquePtr<BorrowedColumn> held =
+        dftracer::utils::dstd::make_unique<BorrowedColumn>();
+    held->view = view;
+    held->mask = std::move(validity);
     view_owner.release();
-    dftu_series* h =
-        dftu_series_new_flat_borrowed(static_cast<dftu_dtype>(type), view->buf,
-                                      n, valid, numpy_buffer_release, view);
+    BorrowedColumn* ctx = held.release();
+    dftu_series* h = dftu_series_new_flat_borrowed(
+        static_cast<dftu_dtype>(type), view->buf, n,
+        ctx->mask.empty() ? nullptr : ctx->mask.data(), numpy_buffer_release,
+        ctx);
     if (!h) {
-        numpy_buffer_release(view);  // releases the buffer and deletes the view
+        // The constructor already ran the release, which freed `ctx`.
         PyErr_SetString(PyExc_RuntimeError,
                         "failed to borrow the numpy buffer");
         return nullptr;

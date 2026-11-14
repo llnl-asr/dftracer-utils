@@ -286,6 +286,29 @@ set_target_properties(
 target_include_directories(process_regr_stats_plugin
                            PRIVATE ${CMAKE_SOURCE_DIR}/include)
 
+# The one example that may include nanoarrow: it turns a column into an
+# ArrowSchema/ArrowArray pair and back with nanoarrow's own zero-copy buffers,
+# so it links the dataframe C ABI plus nanoarrow and nothing from the arrow
+# library. tests/CMakeLists.txt runs the binary as the arrow_convert test.
+add_executable(arrow_convert arrow_convert.c)
+target_set_warnings(arrow_convert)
+set_target_properties(
+  arrow_convert
+  PROPERTIES C_STANDARD 11
+             C_STANDARD_REQUIRED ON)
+target_add_rpath(arrow_convert)
+target_include_directories(arrow_convert PRIVATE ${CMAKE_SOURCE_DIR}/include)
+if(TARGET dftracer_utils_dataframe::shared)
+  target_link_libraries(arrow_convert PRIVATE dftracer_utils_dataframe::shared)
+elseif(TARGET dftracer_utils_dataframe::static)
+  target_link_libraries(arrow_convert PRIVATE dftracer_utils_dataframe::static)
+endif()
+if(DFTRACER_UTILS_BUILD_SHARED)
+  link_nanoarrow(arrow_convert SHARED)
+else()
+  link_nanoarrow(arrow_convert STATIC)
+endif()
+
 install(TARGETS event_counter_plugin duration_histogram_plugin
                 duration_report_plugin duration_udfs_plugin stats_udafs_plugin
                 query_filter_plugin

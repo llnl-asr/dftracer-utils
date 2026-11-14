@@ -82,15 +82,23 @@ dftu_series* dftu_series_new_flat_borrowed(dftu_dtype type, const void* data,
 
     std::size_t bytes = buffer_bytes(t, n);
     auto* base = static_cast<std::uint8_t*>(const_cast<void*>(data));
-    col->data = BufferView(dftracer::utils::memory::Block::borrow(
-        base, bytes, release != nullptr ? release : no_release, release_ctx));
-
-    if (validity != nullptr) {
-        std::size_t vbytes = static_cast<std::size_t>(validity_bytes(n));
-        col->validity = new_buffer(vbytes);
-        std::memcpy(writable(col->validity), validity, vbytes);
-        col->null_count = count_nulls(validity, n);
+    if (validity == nullptr) {
+        col->data = BufferView(dftracer::utils::memory::Block::borrow(
+            base, bytes, release != nullptr ? release : no_release,
+            release_ctx));
+        return col;
     }
+    // One owner shared by the value and validity borrows, so `release` runs
+    // once when the last of them dies rather than once per buffer.
+    dftracer::utils::dstd::SharedPtr<void> owner(nullptr,
+                                                 [release, release_ctx](void*) {
+                                                     if (release != nullptr)
+                                                         release(release_ctx);
+                                                 });
+    col->data = borrow_buffer(base, bytes, owner);
+    col->validity = borrow_buffer(
+        validity, static_cast<std::size_t>(validity_bytes(n)), owner);
+    col->null_count = count_nulls(validity, n);
     return col;
 }
 
@@ -146,9 +154,9 @@ dftu_series* dftu_series_new_string_view(
     col->blobs = std::move(blobs);
 
     if (validity != nullptr) {
-        std::size_t vbytes = static_cast<std::size_t>(validity_bytes(n));
-        col->validity = new_buffer(vbytes);
-        std::memcpy(writable(col->validity), validity, vbytes);
+        // Borrowed under the same owner as the views and the data buffers.
+        col->validity = borrow_buffer(
+            validity, static_cast<std::size_t>(validity_bytes(n)), owner);
         col->null_count = count_nulls(validity, n);
     }
     return col;
@@ -182,6 +190,53 @@ dftu_series* dftu_series_new_string(dftu_dtype type, const int32_t* offsets,
         std::size_t vbytes = static_cast<std::size_t>(validity_bytes(n));
         col->validity = new_buffer(vbytes);
         std::memcpy(writable(col->validity), validity, vbytes);
+        col->null_count = count_nulls(validity, n);
+    }
+    return col;
+}
+
+dftu_series* dftu_series_new_string_borrowed(
+    dftu_dtype type, const void* offsets, const void* data, int64_t data_size,
+    int64_t n, const uint8_t* validity, void (*release)(void* ctx), void* ctx) {
+    // Runs `release` once when the last column or buffer using it dies, and on
+    // every early return below.
+    dftracer::utils::dstd::SharedPtr<void> owner(nullptr,
+                                                 [release, ctx](void*) {
+                                                     if (release != nullptr)
+                                                         release(ctx);
+                                                 });
+    TypeId t = static_cast<TypeId>(type);
+    const bool wide = t == TypeId::LargeString || t == TypeId::LargeBinary;
+    if (!wide && t != TypeId::String && t != TypeId::Binary) return nullptr;
+    if (n < 0 || data_size < 0) return nullptr;
+    if (n > 0 && offsets == nullptr) return nullptr;
+    // Arrow leaves the values buffer NULL for a column of all-empty rows.
+    if (data == nullptr && data_size > 0) return nullptr;
+
+    const auto* o32 = static_cast<const std::int32_t*>(offsets);
+    const auto* o64 = static_cast<const std::int64_t*>(offsets);
+    for (std::int64_t i = 0; i < n; ++i) {
+        const std::int64_t lo = wide ? o64[i] : o32[i];
+        const std::int64_t hi = wide ? o64[i + 1] : o32[i + 1];
+        if (lo < 0 || hi < lo || hi > data_size) return nullptr;
+    }
+
+    auto* col = new dftu_series();
+    col->type = t;
+    col->encoding = Encoding::Flat;
+    col->length = n;
+    if (offsets != nullptr)
+        col->offsets = borrow_buffer(
+            offsets,
+            static_cast<std::size_t>(n + 1) *
+                (wide ? sizeof(std::int64_t) : sizeof(std::int32_t)),
+            owner);
+    if (data != nullptr)
+        col->data =
+            borrow_buffer(data, static_cast<std::size_t>(data_size), owner);
+    if (validity != nullptr) {
+        col->validity = borrow_buffer(
+            validity, static_cast<std::size_t>(validity_bytes(n)), owner);
         col->null_count = count_nulls(validity, n);
     }
     return col;
@@ -257,6 +312,72 @@ const int32_t* dftu_series_offsets(const dftu_series* col) {
 const int64_t* dftu_series_offsets64(const dftu_series* col) {
     if (!col->offsets.block() || !col->wide_offsets()) return nullptr;
     return reinterpret_cast<const int64_t*>(col->offsets.data());
+}
+
+const uint8_t* dftu_series_validity(const dftu_series* col,
+                                    int64_t* bit_offset) {
+    // No storage keeps a bit offset: a slice repacks the bitmap from bit 0.
+    if (bit_offset != nullptr) *bit_offset = 0;
+    if (col == nullptr) return nullptr;
+    if (col->encoding != Encoding::Flat && col->encoding != Encoding::View)
+        return nullptr;
+    if (!col->validity.block()) return nullptr;
+    return col->validity.data();
+}
+
+int32_t dftu_series_chunk_count(const dftu_series* col) {
+    if (col == nullptr) return 0;
+    if (!col->is_chunked()) return 1;
+    return static_cast<int32_t>(col->nested.size());
+}
+
+dftu_series* dftu_series_chunk(const dftu_series* col, int32_t i) {
+    if (col == nullptr || i < 0) return nullptr;
+    if (!col->is_chunked()) return i == 0 ? new dftu_series(*col) : nullptr;
+    const auto at = static_cast<std::size_t>(i);
+    if (at >= col->nested.size() || !col->nested[at].series) return nullptr;
+    return new dftu_series(*col->nested[at].series);
+}
+
+dftu_series* dftu_series_dictionary_codes(const dftu_series* col) {
+    if (col == nullptr || col->encoding != Encoding::Dictionary ||
+        !col->data.block())
+        return nullptr;
+    auto* out = new dftu_series();
+    out->type = TypeId::Int32;
+    out->encoding = Encoding::Flat;
+    out->length = col->length;
+    out->data = col->data;
+    out->validity = col->validity;
+    out->null_count = col->null_count;
+    return out;
+}
+
+dftu_series* dftu_series_dictionary_values(const dftu_series* col) {
+    if (col == nullptr || col->encoding != Encoding::Dictionary) return nullptr;
+    const auto& values = col->child();
+    if (!values) return nullptr;
+    return new dftu_series(*values);
+}
+
+int32_t dftu_series_view_buffer_count(const dftu_series* col) {
+    if (col == nullptr || col->encoding != Encoding::View) return -1;
+    return col->blobs ? static_cast<int32_t>(col->blobs->size()) : 0;
+}
+
+const void* dftu_series_view_data(const dftu_series* col) {
+    if (col == nullptr || col->encoding != Encoding::View || !col->data.block())
+        return nullptr;
+    return col->data.data();
+}
+
+const void* dftu_series_view_buffer(const dftu_series* col, int32_t i,
+                                    int64_t* size) {
+    if (size != nullptr) *size = 0;
+    if (i < 0 || dftu_series_view_buffer_count(col) <= i) return nullptr;
+    const BufferView& blob = (*col->blobs)[static_cast<std::size_t>(i)];
+    if (size != nullptr) *size = static_cast<std::int64_t>(blob.size());
+    return blob.block() ? blob.data() : nullptr;
 }
 
 int32_t dftu_series_is_null(const dftu_series* col, int64_t i) {

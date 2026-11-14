@@ -90,6 +90,11 @@ add_test(NAME runtime_layers_planted
 add_test(NAME blame_ignore_revs
          COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -P
                  ${CMAKE_SOURCE_DIR}/cmake/scripts/check_blame_ignore_revs.cmake)
+# examples/plugins/arrow_convert.c: exports every supported column layout to
+# Arrow with nanoarrow, imports it back and checks the values and nulls.
+if(TARGET arrow_convert)
+  add_test(NAME arrow_convert COMMAND arrow_convert)
+endif()
 set_tests_properties(blame_ignore_revs PROPERTIES SKIP_REGULAR_EXPRESSION
                      "blame_ignore_revs: (shallow clone|not a git checkout), skipping")
 if(DFTRACER_UTILS_SINGLE_LIBRARY)

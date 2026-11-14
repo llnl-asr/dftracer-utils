@@ -14,6 +14,7 @@
 #include <dftracer/utils/dstd/vector.h>
 
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <span>
 #include <stdexcept>
@@ -76,9 +77,10 @@ class Series {
     /// which happens exactly once when the column's last reference is dropped
     /// (Series destruction, possibly off the creating thread). Pass a null
     /// `release` to borrow static or otherwise-owned memory. `validity` is
-    /// copied if non-null (usually null). Returns an invalid Series for a
-    /// variable-width type (String/Binary), where borrowing a single flat
-    /// buffer is not meaningful. Mirrors dftu_series_new_flat_borrowed.
+    /// borrowed like `data`: it must live as long as `release` has not run.
+    /// Returns an invalid Series for a variable-width type (String/Binary),
+    /// where borrowing a single flat buffer is not meaningful. Mirrors
+    /// dftu_series_new_flat_borrowed.
     static Series from_borrowed(TypeId type, const void* data, std::int64_t n,
                                 const std::uint8_t* validity = nullptr,
                                 void (*release)(void* ctx) = nullptr,
@@ -94,19 +96,30 @@ class Series {
     /// borrows the buffer with no copy and destroys `owner` exactly once when
     /// its last reference is dropped, freeing whatever backs `data`. On a
     /// variable-width `type` the borrow is rejected and `owner` is destroyed
-    /// before an invalid Series is returned. `validity` is copied if non-null.
+    /// before an invalid Series is returned. `validity` is COPIED, into a
+    /// bitmap released with `owner`, so a caller's local bitmap is safe here
+    /// (dftu_series_new_flat_borrowed itself borrows it).
     template <class Owner, class = std::enable_if_t<!std::is_convertible_v<
                                Owner&&, const std::uint8_t*>>>
     static Series from_borrowed(TypeId type, const void* data, std::int64_t n,
                                 Owner&& owner,
                                 const std::uint8_t* validity = nullptr) {
         using Held = std::decay_t<Owner>;
-        auto* held = new Held(std::forward<Owner>(owner));
+        struct Bundle {
+            Held owner;
+            dstd::Vector<std::uint8_t> validity;
+        };
+        auto* held = new Bundle{std::forward<Owner>(owner), {}};
+        if (validity != nullptr && n > 0) {
+            held->validity.resize(static_cast<std::size_t>((n + 7) / 8));
+            std::memcpy(held->validity.data(), validity, held->validity.size());
+        }
         // A rejected borrow (variable-width) runs release() itself, so `held`
         // is freed there; never double-free it here.
         return Series{dftu_series_new_flat_borrowed(
-            static_cast<dftu_dtype>(type), data, n, validity,
-            [](void* ctx) { delete static_cast<Held*>(ctx); }, held)};
+            static_cast<dftu_dtype>(type), data, n,
+            held->validity.empty() ? nullptr : held->validity.data(),
+            [](void* ctx) { delete static_cast<Bundle*>(ctx); }, held)};
     }
 
     /// Ends the process when `total` bytes do not fit the int32 offsets of a

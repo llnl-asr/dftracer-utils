@@ -321,6 +321,7 @@ set(TEST_CPP_SOURCES
     # Runtime and common tests
     runtime/test_process_runtime.cpp
     runtime/test_runtime.cpp
+    runtime/test_parallel_fork_join.cpp
     runtime/test_c_api.cpp
     runtime/test_submit_exception.cpp
     runtime/test_task_pool.cpp

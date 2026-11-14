@@ -379,6 +379,22 @@ class TestAwait:
         assert len(asyncio.run(run())) == 200
         assert peak[0] - before <= max(pool_growth, 0) + 8
 
+    def test_group_by_fork_join_adds_few_threads(self):
+        # Every kernel forks through the runtime, so a worker that waited for
+        # its fork without running a chunk made the pool add a thread for it.
+        rows = 20_000
+        frame = DataFrame.from_dict(
+            {"k": [i % 7 for i in range(rows)], "v": list(range(rows))}
+        )
+        lf = frame.lazy().group_by("k", "count", "sum:v").sort_by("k")
+        lf.collect_async().get()
+        before = _os_thread_count()
+        handles = [lf.collect_async() for _ in range(200)]
+        peak = _os_thread_count()
+        for handle in handles:
+            handle.get()
+        assert peak - before <= 8
+
     def test_await_done_handle(self):
         handle = _big_frame(10).lazy().collect_async()
         handle.get()

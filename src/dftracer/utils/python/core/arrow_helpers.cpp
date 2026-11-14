@@ -47,4 +47,37 @@ PyObject *wrap_arrow_table(PyObject *batch_list) {
     return table;
 }
 
+namespace {
+
+void stream_capsule_destructor(PyObject *cap) {
+    auto *s = static_cast<ArrowArrayStream *>(
+        PyCapsule_GetPointer(cap, "arrow_array_stream"));
+    if (s == nullptr) return;
+    if (s->release != nullptr) s->release(s);
+    dstd::UniquePtr<ArrowArrayStream>(s).reset();
+}
+
+}  // namespace
+
+bool no_requested_schema(PyObject *requested_schema) {
+    if (requested_schema != nullptr && requested_schema != Py_None) {
+        PyErr_SetString(PyExc_NotImplementedError,
+                        "requested_schema casting is not supported; pass "
+                        "None to use the native schema.");
+        return false;
+    }
+    return true;
+}
+
+PyObject *stream_capsule(dstd::UniquePtr<ArrowArrayStream> stream) {
+    PyObject *cap = PyCapsule_New(stream.get(), "arrow_array_stream",
+                                  stream_capsule_destructor);
+    if (cap == nullptr) {
+        if (stream->release != nullptr) stream->release(stream.get());
+        return nullptr;
+    }
+    stream.release();
+    return cap;
+}
+
 }  // namespace dftracer::utils::python::core

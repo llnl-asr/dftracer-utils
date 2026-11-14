@@ -637,6 +637,12 @@ class LazyFrame:
         memory. Each chunk carries its own schema. Starts on the first pull."""
         return (_wrap(chunk) for chunk in self._native.stream(batch_size, self._runtime))
 
+    def __arrow_c_stream__(self, requested_schema: Optional[object] = None) -> object:
+        """Stream the query through the Arrow C Stream Interface: one batch per
+        ``get_next``, run on the native pool, so ``pa.RecordBatchReader.from_stream``
+        and ``pl.from_arrow`` read it without a full collect."""
+        return self._native.__arrow_c_stream__(requested_schema, self._runtime)
+
     def __getitem__(self, key: object) -> "Union[BoundColumn, LazyFrame]":
         """Lazy indexing: a name gives a column expression bound to this plan
         (its reductions are :class:`LazyScalar` values), a list of names a

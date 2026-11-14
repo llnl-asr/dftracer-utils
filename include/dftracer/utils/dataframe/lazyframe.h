@@ -643,6 +643,11 @@ class LazyFrame {
     /// determine statically is TypeId::Unknown, never a guess.
     Schema output_schema() const;
 
+    /// Whether the query can return columns beyond @ref output_schema: its
+    /// source, or the source of a joined or concatenated plan, has columns
+    /// that its schema does not declare.
+    bool has_undeclared_columns() const;
+
     /// The optimized plan as text (source then one op per line), for
     /// introspection and tests.
     dstd::String explain() const;

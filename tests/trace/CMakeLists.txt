@@ -121,7 +121,8 @@ endif()
 # +++++++++++++++++++++++++++++++++++++++++
 
 foreach(ARROW_TEST_SOURCE arrow/test_arrow_bridge.cpp
-                          arrow/test_schema_reconcile.cpp)
+                          arrow/test_schema_reconcile.cpp
+                          arrow/test_arrow_stream.cpp)
   string(REPLACE ".cpp" "" arrow_bin_exec ${ARROW_TEST_SOURCE})
   string(REPLACE "/" "_" arrow_target "trace_${arrow_bin_exec}")
 

@@ -274,6 +274,8 @@ PyMethodDef Series_methods[] = {
      "logical(op, other) -> Bool column (op is a DFTU_LOGICAL_* code)."},
     {"logical_not", Series_logical_not, METH_NOARGS,
      "Boolean NOT of a Bool column."},
+    {"__arrow_c_stream__", Series_arrow_c_stream, METH_VARARGS,
+     "Stream the column: one Arrow array per chunk."},
     {"__arrow_c_array__", Series_arrow_c_array, METH_VARARGS,
      "Arrow PyCapsule export: (schema_capsule, array_capsule)."},
     {"quantile", Series_quantile, METH_O,

@@ -8,6 +8,7 @@
 #include <dftracer/utils/arrow/arrow.h>
 #include <dftracer/utils/arrow/internal.h>
 #include <dftracer/utils/arrow/ipc.h>
+#include <dftracer/utils/arrow/stream.h>
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/agg_expr.h>
@@ -26,6 +27,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/errc.h>
 #include <dftracer/utils/duql/query.h>
+#include <dftracer/utils/python/core/arrow_helpers.h>
 #include <dftracer/utils/python/core/errors.h>
 #include <dftracer/utils/python/core/method.h>
 #include <dftracer/utils/python/core/scalar_helpers.h>
@@ -1326,57 +1328,29 @@ PyObject* DataFrame_arrow_c_array(PyObject* self, PyObject*) {
     return result;
 }
 
-void array_stream_capsule_destructor(PyObject* cap) {
-    auto* s = static_cast<ArrowArrayStream*>(
-        PyCapsule_GetPointer(cap, "arrow_array_stream"));
-    if (s) {
-        if (s->release) s->release(s);
-        dftracer::utils::dstd::UniquePtr<ArrowArrayStream>(s).reset();
-    }
-}
-
 // __arrow_c_stream__: a stream of the struct (one batch per chunk of a
 // collected frame), so pa.table(batch) / pl.from_arrow(batch) import every
 // column zero-copy without an explicit to_arrow(). The single struct array
 // carries all fields.
-PyObject* DataFrame_arrow_c_stream(PyObject* self, PyObject*) {
+PyObject* DataFrame_arrow_c_stream(PyObject* self, PyObject* args) {
+    PyObject* requested_schema = Py_None;
+    if (!PyArg_ParseTuple(args, "|O", &requested_schema)) return nullptr;
+    if (!dftracer::utils::python::core::no_requested_schema(requested_schema))
+        return nullptr;
     DataFrameObject* b = as_dataframe(self);
     if (!b) return nullptr;
-    ArrowSchema schema{};
-    dftracer::utils::dstd::Vector<ArrowArray> arrays;
-    auto drop = [&] {
-        if (schema.release) schema.release(&schema);
-        for (auto& a : arrays)
-            if (a.release) a.release(&a);
-    };
-    try {
-        arrays = arrow::detail::to_arrow_batches(b->st, &schema);
-    } catch (const std::exception& e) {
-        drop();
-        PyErr_SetString(PyExc_RuntimeError, e.what());
+    dataframe::DataFrame frame;
+    frame.names = b->names;
+    for (std::size_t i = 0; i < b->names.size(); ++i)
+        frame.columns.push_back(
+            Series(dftu_series_child(b->st.handle(), static_cast<int32_t>(i))));
+    auto stream = dftracer::utils::dstd::make_unique<ArrowArrayStream>();
+    auto status = arrow::to_arrow_stream(frame, stream.get());
+    if (!status) {
+        PyErr_SetString(PyExc_RuntimeError, status.error().c_str());
         return nullptr;
     }
-    auto stream_owner = dftracer::utils::dstd::make_unique<ArrowArrayStream>();
-    ArrowArrayStream* stream = stream_owner.get();
-    if (ArrowBasicArrayStreamInit(stream, &schema,
-                                  static_cast<std::int64_t>(arrays.size())) !=
-        NANOARROW_OK) {
-        drop();
-        PyErr_SetString(PyExc_RuntimeError,
-                        "failed to init arrow array stream");
-        return nullptr;
-    }
-    for (std::size_t i = 0; i < arrays.size(); ++i)
-        ArrowBasicArrayStreamSetArray(stream, static_cast<std::int64_t>(i),
-                                      &arrays[i]);
-    PyObject* cap = PyCapsule_New(stream, "arrow_array_stream",
-                                  array_stream_capsule_destructor);
-    if (!cap) {
-        if (stream->release) stream->release(stream);
-        return nullptr;
-    }
-    stream_owner.release();
-    return cap;
+    return dftracer::utils::python::core::stream_capsule(std::move(stream));
 }
 
 // to_ipc() -> bytes: the frame serialized as an Arrow IPC stream (schema + one

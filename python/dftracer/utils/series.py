@@ -639,9 +639,10 @@ class Series(_SeriesPandasMixin, _Wrapper["_ext._Series"]):
             self.name = name
 
     @classmethod
-    def from_arrow(cls, arr: "pa.Array") -> "Series":
+    def from_arrow(cls, arr: "Union[pa.Array, pa.ChunkedArray]") -> "Series":
         """Import a ``pyarrow.Array`` (or any ``__arrow_c_array__`` provider),
-        zero-copy via the Arrow C Data Interface."""
+        zero-copy via the Arrow C Data Interface. A ``pyarrow.ChunkedArray``
+        (or any ``__arrow_c_stream__`` provider) keeps one chunk per batch."""
         return _series_from_arrow(arr)
 
     @classmethod
@@ -2671,6 +2672,6 @@ def _series_from_bytes(data: bytes) -> Series:
     return Series(_ext._series_from_bytes(data))
 
 
-def _series_from_arrow(array: "pa.Array") -> Series:
+def _series_from_arrow(array: "Union[pa.Array, pa.ChunkedArray]") -> Series:
     """Import a pyarrow Array into a native Series wrapper."""
     return Series(_arrow_native("_series_from_arrow")(array))

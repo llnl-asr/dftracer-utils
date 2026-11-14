@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/arrow/arrow.h>
+#include <dftracer/utils/arrow/schema_reconcile.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dstd/string.h>
@@ -9,9 +10,8 @@
 #include <nanoarrow/nanoarrow.h>
 #include <task_result.h>
 
-#include <dftracer/utils/python/frame/schema_reconcile.cpp>
-
 using namespace dftracer::utils;
+using namespace dftracer::utils::arrow;
 using namespace dftracer::utils::dataframe;
 
 namespace {
@@ -43,7 +43,7 @@ TEST_CASE("a column whose type differs from the locked one goes to _extra") {
     auto first = one_row("int64", 7, 0.0);
     auto second = one_row("float64", 0, 1.5);
 
-    python::frame::SchemaReconciler reconciler;
+    SchemaReconciler reconciler;
     reconciler.merge(first.schema());
     reconciler.merge(second.schema());
     REQUIRE(reconciler.finalize() == 0);

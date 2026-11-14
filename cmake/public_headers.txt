@@ -218,3 +218,4 @@ dftracer/utils/arrow/arrow.h
 dftracer/utils/arrow/batch.h
 dftracer/utils/arrow/c_api.h
 dftracer/utils/arrow/ipc.h
+dftracer/utils/arrow/stream.h

@@ -5526,6 +5526,8 @@ Schema LazyFrame::output_schema() const {
     return s;
 }
 
+bool LazyFrame::has_undeclared_columns() const { return can_carry_rest(*this); }
+
 dstd::Vector<dstd::String> LazyFrame::schema() const {
     Schema s = output_schema();
     dstd::Vector<dstd::String> names;

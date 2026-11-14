@@ -4,6 +4,7 @@
 
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
+#include <dftracer/utils/arrow/schema_reconcile.h>
 #include <dftracer/utils/dstd/deque.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -11,7 +12,6 @@
 #include <dftracer/utils/python/core/arrow_stream_capsule.h>
 #include <dftracer/utils/python/core/batch_byte_size.h>
 #include <dftracer/utils/python/core/method.h>
-#include <dftracer/utils/python/frame/schema_reconcile.h>
 #include <nanoarrow/nanoarrow.h>
 
 #include <cerrno>
@@ -29,7 +29,7 @@ constexpr int MAX_DRAIN = 128;
 
 struct StreamPrivate : dftracer::utils::dstd::HeapObject {
     dftracer::utils::dstd::SharedPtr<ArrowIteratorState> state;
-    dftracer::utils::python::frame::SchemaReconciler reconciler;
+    dftracer::utils::arrow::SchemaReconciler reconciler;
     // Drained during discovery, emitted first from get_next.
     dftracer::utils::dstd::Deque<Batch> pending;
     dftracer::utils::dstd::String last_error;

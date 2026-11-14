@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_DATAFRAME_LAZY_COMMON_H
 #define DFTRACER_UTILS_DATAFRAME_LAZY_COMMON_H
 
+#include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/memory_budget.h>
@@ -312,7 +313,8 @@ inline dstd::Vector<Series> key_columns(const dstd::Vector<Series>& cols,
 }
 
 // Default scan chunk when the caller does not set one (batch_size <= 0).
-inline constexpr std::int64_t DEFAULT_BATCH_SIZE = 65536;
+inline constexpr std::int64_t DEFAULT_BATCH_SIZE =
+    common::constants::dataframe::BATCH_SIZE;
 
 template <class Name>
 inline bool has_rest(const dstd::Vector<Name>& sch) {

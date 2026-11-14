@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Added
 
+- ``dftracer/utils/arrow/stream.h`` streams a ``dataframe::Series``, a ``dataframe::DataFrame`` and a ``dataframe::LazyFrame`` as an ``ArrowArrayStream`` and imports one back as a chunked column, a frame, or a lazy frame that pulls one batch per scan; Python gains ``Series.__arrow_c_stream__``, a per-chunk ``DataFrame.__arrow_c_stream__`` and ``LazyFrame.__arrow_c_stream__``, and the schema reconciler moved into the arrow library.
 - The arrow library has one owner type, `arrow::Batch`, in `dftracer/utils/arrow/batch.h`, and `dftracer/utils/arrow/ipc.h` has `arrow::Writer`, `arrow::Reader`, `arrow::scan_ipc` and `arrow::read_ipc`; `to_arrow`, `series_from_arrow` and `dataframe_from_arrow` report failure as `dstd::Result`, and `arrow::WriterOptions` picks the IPC compression.
   `arrow::scan_ipc` decodes several files at once, as many as the request's memory budget holds, gives their batches in file order, and rejects a file whose columns differ from the first file's.
 - Add user-defined aggregates for plugins: `dftu_svc_ops::register_udaf` takes a `dftu_udaf_desc` (`dataframe/c_api_udaf.h`) with `bind`, `init`, `update`, `combine`, `finalize`, `destroy` and a `serialize` pair, and the host owns the memory of every group state.

@@ -19,6 +19,15 @@ namespace dftracer::utils::arrow::detail {
 void to_arrow(const dataframe::Series& col, ArrowSchema* schema,
               ArrowArray* array);
 
+/// Fills `schema` with the Arrow type of `col`, without exporting a buffer.
+void column_schema(const dataframe::Series& col, ArrowSchema* schema);
+
+/// Fills `array` with the buffers of `col`, zero copy; the caller releases it.
+void column_array(const dataframe::Series& col, ArrowArray* array);
+
+/// `frame` as one struct column whose children share its buffers.
+dataframe::Series struct_column(const dataframe::DataFrame& frame);
+
 /// One exported array per chunk of `st`, and in `schema` one export of the
 /// column's schema that all of them follow. The caller releases the schema and
 /// every array.

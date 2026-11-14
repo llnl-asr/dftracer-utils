@@ -139,6 +139,7 @@ ALLOWLIST = {
         "scan",
         "schema",
         "output_schema",
+        "has_undeclared_columns",
         "reduce_specs",
         "stream",
         "open_cursor",

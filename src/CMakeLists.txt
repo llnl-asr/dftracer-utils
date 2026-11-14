@@ -427,7 +427,10 @@ set(DFTRACER_UTILS_ARROW_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/arrow/arrow.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/arrow/arrow_bridge.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/arrow/ipc_reader.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/arrow/ipc_writer.cpp)
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/arrow/ipc_writer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/arrow/schema_reconcile.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/arrow/schema_reconcile.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/arrow/stream.cpp)
 
 # Determine which dependencies to require based on what was found vs built with
 # CPM
@@ -2996,6 +2999,7 @@ if(DFTRACER_UTILS_BUILD_PYTHON)
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/frame/series/reduce.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/frame/series/string.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/frame/series/arrow.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/frame/series/arrow_stream.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/frame/series/convert.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/frame/series/typed.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/frame/dataframe.cpp
@@ -3029,8 +3033,6 @@ if(DFTRACER_UTILS_BUILD_PYTHON)
        ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/core/arrow_helpers.h
        ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/core/arrow_stream_capsule.cpp
        ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/core/arrow_stream_capsule.h
-       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/frame/schema_reconcile.cpp
-       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/frame/schema_reconcile.h
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/trace/streaming_iterator.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/trace/streaming_iterator.h
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/trace/arrow_parallel_reader.cpp

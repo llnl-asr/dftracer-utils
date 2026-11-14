@@ -31,6 +31,12 @@ Series as_struct(const DataFrame& frame, bool materialize) {
 
 }  // namespace
 
+namespace detail {
+
+Series struct_column(const DataFrame& frame) { return as_struct(frame, false); }
+
+}  // namespace detail
+
 dstd::Result<Batch> to_arrow(const Series& col) {
     if (!col.valid())
         return common::make_error<"to_arrow: a column with no buffers">(
@@ -47,7 +53,7 @@ dstd::Result<Batch> to_arrow(const DataFrame& frame) {
         return common::make_error<"to_arrow: column '{}' has no buffers">(
             common::ErrorCode::InvalidArgument, frame.names[i]);
     }
-    Series st = as_struct(frame, false);
+    Series st = detail::struct_column(frame);
     ArrowSchema schema;
     ArrowArray array;
     detail::to_arrow(st, &schema, &array);

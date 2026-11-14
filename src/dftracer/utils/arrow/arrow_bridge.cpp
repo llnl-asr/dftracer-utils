@@ -588,22 +588,32 @@ void build_schema(const dftu_series& col, ArrowSchema* schema) {
 namespace detail {
 
 void to_arrow(const Series& col, ArrowSchema* schema, ArrowArray* array) {
+    column_schema(col, schema);
+    column_array(col, array);
+}
+
+void column_schema(const Series& col, ArrowSchema* schema) {
     const dftu_series* c = col.handle();
     if (c == nullptr) {
-        // A null handle is an empty result; export a valid empty struct rather
-        // than dereferencing it.
         ArrowSchemaInitFromType(schema, NANOARROW_TYPE_STRUCT);
-        auto* h = new ExportedArray();
-        std::memset(array, 0, sizeof(*array));
-        array->length = 0;
-        array->n_buffers = 1;
-        array->buffers = h->buffers;
-        array->private_data = h;
-        array->release = release_exported;
         return;
     }
     build_schema(*c, schema);
-    export_array(*c, array);
+}
+
+void column_array(const Series& col, ArrowArray* array) {
+    const dftu_series* c = col.handle();
+    if (c != nullptr) {
+        export_array(*c, array);
+        return;
+    }
+    auto* h = new ExportedArray();
+    std::memset(array, 0, sizeof(*array));
+    array->length = 0;
+    array->n_buffers = 1;
+    array->buffers = h->buffers;
+    array->private_data = h;
+    array->release = release_exported;
 }
 
 dstd::Vector<ArrowArray> to_arrow_batches(const Series& st,

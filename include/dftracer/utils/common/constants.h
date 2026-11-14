@@ -21,6 +21,12 @@ inline constexpr const char* SPILL_DIR_ENV = "DFTRACER_UTILS_SPILL_DIR";
 inline constexpr const char* SPILL_COMPRESS_ENV =
     "DFTRACER_UTILS_SPILL_COMPRESS";
 
+namespace dataframe {
+/// The rows of one batch of a DataFrame Arrow stream, and of a scan handed no
+/// batch size of its own.
+inline constexpr std::int64_t BATCH_SIZE = 65536;
+}  // namespace dataframe
+
 /// Repeated in memory/detail/constants.h. A test keeps the two equal. The
 /// backend, decay, debug and exit check are read by the memory library before
 /// its first allocation. Byte values take a number or a unit such as "512MB".

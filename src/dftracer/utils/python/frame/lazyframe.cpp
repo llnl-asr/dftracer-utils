@@ -5,6 +5,7 @@
 // filter/with_column expr's col(i) refers to the i-th column of the frame at
 // that point, so the Python wrapper resolves names to indices against schema().
 
+#include <dftracer/utils/arrow/stream.h>
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/memory_budget.h>
 #include <dftracer/utils/dataframe/dataframe.h>
@@ -15,6 +16,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/memory/budget.h>  // NO_SPILL_BUDGET
+#include <dftracer/utils/python/core/arrow_helpers.h>
 #include <dftracer/utils/python/core/errors.h>
 #include <dftracer/utils/python/core/list_helpers.h>
 #include <dftracer/utils/python/core/method.h>
@@ -977,7 +979,90 @@ PyObject* LazyFrame_output_schema(PyObject* self, PyObject*) {
     return out;
 }
 
+namespace {
+
+/// Gives up the GIL while a blocking call runs, when this thread holds it. A
+/// drain task that needs the GIL would wait for a get_next that waits for it.
+class GilRelease {
+   public:
+    GilRelease() {
+        if (PyGILState_Check() != 0) state_ = PyEval_SaveThread();
+    }
+    ~GilRelease() {
+        if (state_ != nullptr) PyEval_RestoreThread(state_);
+    }
+    GilRelease(const GilRelease&) = delete;
+    GilRelease& operator=(const GilRelease&) = delete;
+
+   private:
+    PyThreadState* state_ = nullptr;
+};
+
+/// The stream handed to Python: the library stream, with the GIL released
+/// around every call that can block.
+struct WrappedStream {
+    ArrowArrayStream inner{};
+};
+
+int wrapped_get_schema(ArrowArrayStream* stream, ArrowSchema* out) {
+    auto* self = static_cast<WrappedStream*>(stream->private_data);
+    GilRelease release;
+    return self->inner.get_schema(&self->inner, out);
+}
+
+int wrapped_get_next(ArrowArrayStream* stream, ArrowArray* out) {
+    auto* self = static_cast<WrappedStream*>(stream->private_data);
+    GilRelease release;
+    return self->inner.get_next(&self->inner, out);
+}
+
+const char* wrapped_get_last_error(ArrowArrayStream* stream) {
+    auto* self = static_cast<WrappedStream*>(stream->private_data);
+    return self->inner.get_last_error(&self->inner);
+}
+
+void wrapped_release(ArrowArrayStream* stream) {
+    dftracer::utils::dstd::UniquePtr<WrappedStream> self(
+        static_cast<WrappedStream*>(stream->private_data));
+    stream->private_data = nullptr;
+    stream->release = nullptr;
+    GilRelease release;
+    if (self->inner.release != nullptr) self->inner.release(&self->inner);
+}
+
+}  // namespace
+
+PyObject* LazyFrame_arrow_c_stream(PyObject* self, PyObject* args) {
+    PyObject* requested_schema = Py_None;
+    PyObject* runtime = Py_None;
+    if (!PyArg_ParseTuple(args, "|OO", &requested_schema, &runtime))
+        return nullptr;
+    if (!dftracer::utils::python::core::no_requested_schema(requested_schema))
+        return nullptr;
+    LazyFrameObject* b = as_lazyframe(self);
+    if (!b) return nullptr;
+    dftracer::utils::dstd::SharedPtr<dftracer::utils::Runtime> rt =
+        runtime_from_arg(runtime);
+    if (!rt) return nullptr;
+    auto wrapped = dftracer::utils::dstd::make_unique<WrappedStream>();
+    auto status = arrow::to_arrow_stream(b->lf, *rt, &wrapped->inner);
+    if (!status) {
+        PyErr_SetString(PyExc_RuntimeError, status.error().c_str());
+        return nullptr;
+    }
+    auto outer = dftracer::utils::dstd::make_unique<ArrowArrayStream>();
+    outer->get_schema = wrapped_get_schema;
+    outer->get_next = wrapped_get_next;
+    outer->get_last_error = wrapped_get_last_error;
+    outer->release = wrapped_release;
+    outer->private_data = wrapped.release();
+    return dftracer::utils::python::core::stream_capsule(std::move(outer));
+}
+
 PyMethodDef LazyFrame_methods[] = {
+    {"__arrow_c_stream__", LazyFrame_arrow_c_stream, METH_VARARGS,
+     "__arrow_c_stream__(requested_schema=None, runtime=None): stream the "
+     "query, one Arrow batch per get_next."},
     {"filter", LazyFrame_filter, METH_O,
      "filter(ast) -> LazyFrame keeping rows where the predicate holds."},
     {"with_column", LazyFrame_with_column, METH_VARARGS,

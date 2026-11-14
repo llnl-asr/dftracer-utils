@@ -1,17 +1,17 @@
 // SPDX-License-Identifier: MIT
 
+#include <dftracer/utils/arrow/schema_reconcile.h>
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/python/frame/schema_reconcile.h>
 
 #include <cstdint>
 #include <cstring>
 
-namespace dftracer::utils::python::frame {
+namespace dftracer::utils::arrow {
 
 namespace {
 
@@ -383,4 +383,4 @@ int SchemaReconciler::reconcile(const ArrowSchema *in_schema,
     return 0;
 }
 
-}  // namespace dftracer::utils::python::frame
+}  // namespace dftracer::utils::arrow

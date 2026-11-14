@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/arrow/arrow.h>
+#include <dftracer/utils/arrow/stream.h>
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -108,8 +109,36 @@ Series import_arrow_column(PyObject* obj) {
     return col;
 }
 
+namespace {
+
+// A ChunkedArray has only __arrow_c_stream__: each batch becomes a chunk.
+Series import_arrow_stream(PyObject* obj) {
+    PyObject* cap = PyObject_CallMethod(obj, "__arrow_c_stream__", nullptr);
+    if (!cap) return Series{};
+    auto* stream = static_cast<ArrowArrayStream*>(
+        PyCapsule_GetPointer(cap, "arrow_array_stream"));
+    if (!stream) {
+        Py_DECREF(cap);
+        return Series{};
+    }
+    auto moved = dftracer::utils::dstd::make_unique<ArrowArrayStream>(*stream);
+    stream->release = nullptr;
+    Py_DECREF(cap);
+    auto imported = arrow::series_from_arrow_stream(moved.get());
+    if (!imported) {
+        PyErr_SetString(PyExc_ValueError, imported.error().c_str());
+        return Series{};
+    }
+    return std::move(*imported);
+}
+
+}  // namespace
+
 PyObject* vec_from_arrow(PyObject* /*self*/, PyObject* obj) {
-    Series col = import_arrow_column(obj);
+    Series col = !PyObject_HasAttrString(obj, "__arrow_c_array__") &&
+                         PyObject_HasAttrString(obj, "__arrow_c_stream__")
+                     ? import_arrow_stream(obj)
+                     : import_arrow_column(obj);
     if (!col.valid()) return nullptr;
     return make_series(std::move(col));
 }

@@ -33,6 +33,10 @@ class UdafRecord {
     bool is_null_aware() const noexcept {
         return (desc_.flags & DFTU_AGG_NULL_AWARE) != 0;
     }
+    bool can_slide() const noexcept {
+        return (desc_.flags & DFTU_AGG_HAS_RETRACT) != 0 && desc_.retract &&
+               desc_.value;
+    }
     bool is_parallel_safe() const noexcept {
         return (desc_.flags & DFTU_AGG_PARALLEL_SAFE) != 0;
     }

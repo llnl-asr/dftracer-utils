@@ -885,6 +885,7 @@ enum class WindowFunc : std::int32_t {
     FrameArgMax = 29,
     FrameArgMin = 30,
     FrameCollect = 31,
+    FrameUdaf = 32,
 };
 
 /// FRAME_* bound interpretation: Rows = row offsets, Range = value deltas on

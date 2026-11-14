@@ -126,12 +126,15 @@ dataframe::TypeId Applier::observed(dstd::StringView name) {
 
 namespace {
 
-// Whether a group of `p` or of a union's other pipeline runs a UDAF.
+// Whether a group or window of `p` or of a union's other pipeline runs a UDAF.
 bool calls_udaf(const duql::Pipeline& p) {
     for (const auto& stage : p.stages) {
         if (const auto* g = std::get_if<duql::PipelineGroup>(&stage))
             for (const auto& a : g->aggs)
                 if (a.fn == duql::AggFn::Udaf) return true;
+        if (const auto* w = std::get_if<duql::PipelineWindow>(&stage))
+            for (const auto& c : w->calls)
+                if (c.fn == duql::WinFn::Udaf) return true;
         if (const auto* u = std::get_if<duql::PipelineUnion>(&stage))
             if (calls_udaf(*u->other)) return true;
     }

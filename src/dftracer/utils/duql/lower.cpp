@@ -1928,7 +1928,7 @@ class Lowering {
                         "'over' stands after a window function in a 'window' "
                         "block");
         const WinInfo* w = window_info(c.name);
-        bool framed = false;
+        bool framed = !w && !aggregate_info(c.name) && udaf_arity(c.name);
         if (w) switch (w->fn) {
                 case duql::WinFn::Sum:
                 case duql::WinFn::Mean:
@@ -1956,7 +1956,8 @@ class Lowering {
                 dstd::fmt<
                     "'{}' takes no frame; 'over' follows sum, mean, min, "
                     "max, count, count_if, count_distinct, collect, arg_max, "
-                    "arg_min, var, std or quantile">(c.name));
+                    "arg_min, var, std, quantile or a "
+                    "user-defined aggregate">(c.name));
         auto call = window_call(c, span, &o);
         if (!call) return dstd::Unexpected(call.error());
         return std::move(**call);
@@ -1986,6 +1987,8 @@ class Lowering {
                 return fail(
                     span,
                     dstd::fmt<"'{}' does not run in a 'window' block">(c.name));
+            if (const auto udaf = udaf_arity(c.name))
+                return udaf_window_call(c, span, *udaf, over);
             return dstd::Optional<duql::TermPtr>{};
         }
         if ((w->fn == duql::WinFn::Min || w->fn == duql::WinFn::Max) &&
@@ -2060,6 +2063,62 @@ class Lowering {
             if (!fallback) return dstd::Unexpected(fallback.error());
             call.fallback = dstd::to_shared_ptr(std::move(*fallback));
         }
+        if (over) {
+            const auto frame = frame_of(*over, span);
+            if (!frame) return dstd::Unexpected(frame.error());
+            call.frame = *frame;
+        }
+        duql::TField f;
+        f.base = call.column;
+        f.steps.push_back({call.column, false, dstd::nullopt});
+        f.neg_at = 1;
+        win_->push_back(std::move(call));
+        return dstd::Optional<duql::TermPtr>(make_term(std::move(f)));
+    }
+
+    // A user-defined aggregate in a window entry: over its frame, else over
+    // the whole partition.
+    Result<dstd::Optional<duql::TermPtr>> udaf_window_call(
+        const Call& c, Span span, duql::UdfArity arity_of,
+        const Over* over) const {
+        const std::size_t n = c.args.size();
+        if (n < static_cast<std::size_t>(arity_of.min_args) ||
+            n > static_cast<std::size_t>(arity_of.max_args))
+            return fail(
+                span, arity(c.name, static_cast<std::size_t>(arity_of.min_args),
+                            static_cast<std::size_t>(arity_of.max_args), n));
+        duql::PipelineWinCall call;
+        call.column = dstd::fmt<"__duql_w_{}">(win_->size());
+        call.fn = duql::WinFn::Udaf;
+        call.plugin = c.name;
+        call.text = text_of(span);
+        win_arg_ = true;
+        for (std::size_t k = 0; k < n; ++k) {
+            const auto& a = c.args[k];
+            if (!a.name.empty()) {
+                win_arg_ = false;
+                return fail(a.value->span,
+                            dstd::fmt<"'{}' takes no named argument '{}'">(
+                                c.name, a.name));
+            }
+            auto arg = term(*a.value);
+            if (!arg) {
+                win_arg_ = false;
+                return dstd::Unexpected(arg.error());
+            }
+            if (std::get_if<duql::TConst>(&(*arg)->node)) {
+                win_arg_ = false;
+                return fail(
+                    a.value->span,
+                    dstd::fmt<"'{}' takes a column or an expression as "
+                              "argument {}, not a constant">(c.name, k + 1));
+            }
+            if (k == 0)
+                call.arg = dstd::to_shared_ptr(std::move(*arg));
+            else
+                call.rest.push_back(dstd::to_shared_ptr(std::move(*arg)));
+        }
+        win_arg_ = false;
         if (over) {
             const auto frame = frame_of(*over, span);
             if (!frame) return dstd::Unexpected(frame.error());
@@ -3967,6 +4026,7 @@ void for_each_pipeline_term(const duql::Pipeline& p,
                     for (const auto& c : s.calls) {
                         on(c.arg);
                         on(c.by);
+                        for (const auto& r : c.rest) on(r);
                     }
                     items(s.items);
                 } else if constexpr (std::is_same_v<T, duql::PipelinePivot>) {

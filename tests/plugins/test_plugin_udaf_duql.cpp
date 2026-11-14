@@ -94,6 +94,9 @@ dstd::Vector<dstd::String> cells(const dataframe::DataFrame& f,
             case dataframe::TypeId::Int64:
                 out.push_back(dstd::to_string(col.data<std::int64_t>()[r]));
                 break;
+            case dataframe::TypeId::Uint64:
+                out.push_back(dstd::to_string(col.data<std::uint64_t>()[r]));
+                break;
             case dataframe::TypeId::Float64:
                 out.push_back(dstd::to_string(col.data<double>()[r]));
                 break;
@@ -101,6 +104,12 @@ dstd::Vector<dstd::String> cells(const dataframe::DataFrame& f,
                 out.emplace_back(col.string_at(r));
         }
     }
+    return out;
+}
+
+dstd::String joined(const dstd::Vector<dstd::String>& list) {
+    dstd::String out;
+    for (const auto& s : list) out += s + " ";
     return out;
 }
 
@@ -373,4 +382,122 @@ TEST_CASE("a UDAF of two arguments and one of none run in a group block") {
     const auto all = run(v, "agg { c = ucount(), n = count() }");
     CHECK(cells(all, "c") == cells(all, "n"));
     CHECK(cells(all, "c")[0] == "600");
+}
+
+TEST_CASE(
+    "a window block calls a UDAF over a rows frame, a range frame or all") {
+    dftu_utils_test::TestEnvironment env(0);
+    REQUIRE(env.is_valid());
+    const View v = view_of(env, 1, 40);
+    auto set = load(UDAF_PLUGIN_PATH);
+
+    // usumr slides its frame, usum recomputes it; both equal the built-in sum.
+    const auto rows =
+        run(v,
+            "window name sort ts { b = sum(dur) over 3 rows, "
+            "s = usumr(dur) over 3 rows, r = usum(dur) over 3 rows }");
+    REQUIRE(rows.num_rows() == 40);
+    CHECK(joined(cells(rows, "s")) == joined(cells(rows, "b")));
+    CHECK(joined(cells(rows, "r")) == joined(cells(rows, "b")));
+    CHECK(cells(rows, "s")[0] == "10");
+    // Row 8 is the third of op0: 18 + 14 + 10.
+    CHECK(cells(rows, "s")[8] == "42");
+
+    // Rows of one name are 400 apart in ts, so 900 holds three of them.
+    const auto range = run(v,
+                           "window name sort ts { b = sum(dur) over 900, "
+                           "s = usumr(dur) over 900, r = usum(dur) over 900 }");
+    CHECK(joined(cells(range, "s")) == joined(cells(range, "b")));
+    CHECK(joined(cells(range, "r")) == joined(cells(range, "b")));
+    CHECK(joined(cells(range, "s")) == joined(cells(rows, "s")));
+
+    // No frame: the whole partition, as a group gives it.
+    const auto whole = run(v, "window name { u = usum(dur), b = sum(dur) }");
+    CHECK(joined(cells(whole, "u")) == joined(cells(whole, "b")));
+    CHECK(cells(whole, "u")[0] == "280");
+    const auto grouped = run(v, "group name { u = usum(dur) } | sort name");
+    CHECK(cells(grouped, "u")[0] == cells(whole, "u")[0]);
+    CHECK(cells(grouped, "u")[1] == cells(whole, "u")[1]);
+}
+
+#ifdef STATS_UDAFS_PLUGIN_PATH
+TEST_CASE("p50 over a rows frame recomputes each frame") {
+    dftu_utils_test::TestEnvironment env(0);
+    REQUIRE(env.is_valid());
+    const View v = view_of(env, 1, 40);
+    auto set = load(STATS_UDAFS_PLUGIN_PATH);
+
+    // Each name's durations rise, so a frame of up to three holds the element
+    // at n / 2: the row itself for one or two rows, the row before for three.
+    dstd::Vector<dstd::String> want;
+    for (int i = 0; i < 40; ++i) {
+        const int j = i / KEYS;
+        want.push_back(dstd::to_string(10.0 + (j <= 1 ? i : i - KEYS)));
+    }
+    const auto out = run(v, "window name sort ts { m = p50(dur) over 3 rows }");
+    CHECK(out.columns.back().type() == dataframe::TypeId::Float64);
+    CHECK(cells(out, "m") == want);
+
+    const auto whole = run(v, "window name { m = p50(dur) }");
+    const auto grouped = run(v, "group name { m = p50(dur) } | sort name");
+    CHECK(cells(whole, "m")[0] == cells(grouped, "m")[0]);
+}
+#endif
+
+TEST_CASE("a window UDAF reads the column only its second argument names") {
+    dftu_utils_test::TestEnvironment env(0);
+    REQUIRE(env.is_valid());
+    const View v = view_of(env, 1, 40);
+    auto set = load(UDAF_PLUGIN_PATH);
+
+    // The select closes the pipeline, so the scan reads only the fields the
+    // stages name; pid is named only as the second argument and is 1 in every
+    // event.
+    const auto out = run(v,
+                         "window name sort ts { b = sum(int(dur)) over 3 rows, "
+                         "w = uwsum(int(dur), int(pid)) over 3 rows } | "
+                         "select name, ts, b, w");
+    REQUIRE(out.num_rows() == 40);
+    CHECK(joined(cells(out, "w")) == joined(cells(out, "b")));
+    CHECK(cells(out, "w")[0] == "10");
+}
+
+TEST_CASE("a UDAF window call is checked when the query compiles") {
+    dftu_utils_test::TestEnvironment env(0);
+    REQUIRE(env.is_valid());
+    const View v = view_of(env, 1, 40);
+    auto set = load(UDAF_PLUGIN_PATH);
+
+    const dstd::String many =
+        failure(v, "window name sort ts { u = usum(dur, ts) over 3 rows }");
+    CHECK(has(many, "usum"));
+    CHECK(has(many, "argument"));
+    const dstd::String constant =
+        failure(v, "window name sort ts { u = usum(1) over 3 rows }");
+    CHECK(has(constant, "usum"));
+    CHECK(has(constant, "constant"));
+    const dstd::String no_sort =
+        failure(v, "window name { u = usum(dur) over 5 }");
+    CHECK(has(no_sort, "sort"));
+    const dstd::String fails =
+        failure(v, "window name sort ts { u = ufail(dur) over 3 rows }");
+    CHECK(has(fails, "refused on purpose"));
+    const dstd::String retract =
+        failure(v, "window name sort ts { u = uretfail(dur) over 3 rows }");
+    CHECK(has(retract, "retract refused"));
+}
+
+TEST_CASE("a UDAF window over several files equals the built-in sum") {
+    dftu_utils_test::TestEnvironment env(0);
+    REQUIRE(env.is_valid());
+    const View v = view_of(env, 5, 600);
+    auto set = load(UDAF_PLUGIN_PATH);
+
+    const auto out =
+        run(v,
+            "window name sort ts { b = sum(dur) over 4 rows, "
+            "s = usumr(dur) over 4 rows, r = usum(dur) over 4 rows }");
+    REQUIRE(out.num_rows() == 3000);
+    CHECK(joined(cells(out, "s")) == joined(cells(out, "b")));
+    CHECK(joined(cells(out, "r")) == joined(cells(out, "b")));
 }

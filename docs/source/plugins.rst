@@ -1375,6 +1375,21 @@ threads at once (``bind``, ``init``, ``update``, ``combine``, ``finalize``,
 with such a UDAF runs on one state set. ``DFTU_AGG_HAS_RETRACT`` needs ``retract`` and ``value``
 for a sliding window.
 
+A UDAF is also a window function: a ``window`` block of duql calls it with
+``over`` (``usum(x) over 10 rows``, ``usum(x) over 5s``), and the C ABI runs it
+as ``DFTU_WINDOW_FRAME_UDAF`` with ``udaf``, ``args`` and ``arg_count`` in the
+frame of a ``dftu_window_spec``. With ``DFTU_AGG_HAS_RETRACT`` the host keeps
+one state per partition and slides the frame: ``update`` takes the rows that
+join the frame, ``retract`` the rows that leave it (with the same null pointers
+as ``update``) and ``value`` gives the result of each frame. A UDAF without
+them is recomputed: each frame gets a state of its own, fed the frame's rows by
+``update``, and ``finalize`` gives all the results at once, so a frame of ``w``
+rows costs ``w`` rows of ``update``. A frame with no fed row, or fewer than the
+``min_count`` the query sets, gives null without calling ``value``. A ``window``
+entry with no ``over`` runs the UDAF over each whole partition as ``group``
+does. A window over a stream is cut at partition boundaries, as for the
+built-in frame functions that need the whole partition.
+
 ``DataFrame::group_by``, ``LazyFrame::group_by`` and ``group_by_dynamic`` run a
 UDAF as a ``GroupAgg`` with ``op = Agg::Udaf``, ``fn`` the registered name,
 ``column`` the first argument and ``args`` the others. The C ABI does the same:

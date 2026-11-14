@@ -136,7 +136,34 @@ dstd::Result<void> UdafStates::grow(std::int64_t groups) {
 
 dstd::Result<void> UdafStates::update(dstd::Span<const std::int64_t> gids,
                                       dstd::Span<const Series* const> args) {
+    return feed(gids, args, false);
+}
+
+dstd::Result<void> UdafStates::retract(dstd::Span<const std::int64_t> gids,
+                                       dstd::Span<const Series* const> args) {
+    return feed(gids, args, true);
+}
+
+dstd::Result<void> UdafStates::value(std::int64_t group, dftu_scalar& out) {
     const UdafRecord& u = binding_->udaf();
+    if (!u.desc().value) return fail(u, "has no value callback");
+    if (group < 0 || group >= count_)
+        return fail(u, "value names a group that grow did not make");
+    CallContext ctx;
+    const dftu_status status =
+        u.desc().value(ctx.get(), binding_->bound(), state_at(group), &out);
+    if (status < 0)
+        return dstd::Unexpected(
+            call_error("udaf", u.name(), "value", status, ctx));
+    return {};
+}
+
+dstd::Result<void> UdafStates::feed(dstd::Span<const std::int64_t> gids,
+                                    dstd::Span<const Series* const> args,
+                                    bool take_out) {
+    const UdafRecord& u = binding_->udaf();
+    if (take_out && !u.desc().retract)
+        return fail(u, "has no retract callback");
     if (args.size() != binding_->arg_count())
         return fail(u, "bound for a different number of arguments");
     const std::size_t rows = gids.size();
@@ -171,12 +198,13 @@ dstd::Result<void> UdafStates::update(dstd::Span<const std::int64_t> gids,
     }
 
     CallContext ctx;
-    const dftu_status status = u.desc().update(
-        ctx.get(), binding_->bound(), scratch_.data(), handles.data(),
-        static_cast<std::uint32_t>(handles.size()), rows);
+    const auto call = take_out ? u.desc().retract : u.desc().update;
+    const dftu_status status =
+        call(ctx.get(), binding_->bound(), scratch_.data(), handles.data(),
+             static_cast<std::uint32_t>(handles.size()), rows);
     if (status < 0)
-        return dstd::Unexpected(
-            call_error("udaf", u.name(), "update", status, ctx));
+        return dstd::Unexpected(call_error(
+            "udaf", u.name(), take_out ? "retract" : "update", status, ctx));
     return {};
 }
 

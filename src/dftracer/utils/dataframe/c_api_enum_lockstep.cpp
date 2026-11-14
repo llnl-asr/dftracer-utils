@@ -69,6 +69,7 @@ static_assert(code(WindowFunc::FrameCountDistinct) ==
 static_assert(code(WindowFunc::FrameArgMax) == DFTU_WINDOW_FRAME_ARG_MAX);
 static_assert(code(WindowFunc::FrameArgMin) == DFTU_WINDOW_FRAME_ARG_MIN);
 static_assert(code(WindowFunc::FrameCollect) == DFTU_WINDOW_FRAME_COLLECT);
+static_assert(code(WindowFunc::FrameUdaf) == DFTU_WINDOW_FRAME_UDAF);
 
 static_assert(code(WindowFrameMode::Rows) == DFTU_WINDOW_FRAME_ROWS);
 static_assert(code(WindowFrameMode::Range) == DFTU_WINDOW_FRAME_RANGE);

@@ -2014,7 +2014,8 @@ enum {
     DFTU_WINDOW_FRAME_COUNT_DISTINCT = 28,
     DFTU_WINDOW_FRAME_ARG_MAX = 29,
     DFTU_WINDOW_FRAME_ARG_MIN = 30,
-    DFTU_WINDOW_FRAME_COLLECT = 31
+    DFTU_WINDOW_FRAME_COLLECT = 31,
+    DFTU_WINDOW_FRAME_UDAF = 32
 };
 
 /** How a FRAME_* bound reads; mirrors the utilities WindowFrameMode. */
@@ -2045,6 +2046,19 @@ enum { DFTU_WINDOW_FRAME_ROWS = 0, DFTU_WINDOW_FRAME_RANGE = 1 };
  *   FRAME_QUANTILE only and `by` by FRAME_ARG_MAX / FRAME_ARG_MIN only; the
  *   other frame functions ignore them. FRAME_COUNT_DISTINCT and FRAME_COLLECT
  *   ignore `min_count`, as FRAME_COUNT does.
+ * - `udaf` (FRAME_UDAF): the first four members are those of `frame` and mean
+ *   the same. It runs the user-defined aggregate `name` (see c_api_udaf.h)
+ *   over the `arg_count` columns named in `args`, bound to their types;
+ *   `value` is not read. A UDAF with
+ *   DFTU_AGG_HAS_RETRACT slides the frame, one state per partition; any other
+ *   UDAF is recomputed over each frame. A row where an argument is null is
+ *   left out of the frame unless the UDAF is DFTU_AGG_NULL_AWARE, and the
+ *   output is null when no row is in the frame or fewer than `min_count`
+ *   are. `name`, `args` and each name in it are borrowed for the call; an
+ *   unknown UDAF or a failing callback fails the call. `name` and `out` must
+ *   not be NULL, `arg_count` must not be negative, and `args` and each name
+ *   in it must not be NULL when `arg_count` is above 0; a spec that breaks
+ *   a rule fails the call with NULL.
  * - `rate` (RATE): the time column and, when `counter` is nonzero, the
  *   counter-reset correction.
  * - `session` (SESSIONIZE): the time column, the row-end column (NULL = each
@@ -2064,6 +2078,15 @@ typedef struct dftu_window_spec {
             double q;
             const char* by;
         } frame;
+        struct {
+            int64_t min_count;
+            int64_t preceding;
+            int64_t following;
+            dftu_window_frame_mode mode;
+            const char* name;
+            const char* const* args;
+            int32_t arg_count;
+        } udaf;
         struct {
             const char* time;
             int32_t counter;

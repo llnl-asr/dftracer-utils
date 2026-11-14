@@ -4,7 +4,10 @@
 #include <dftracer/utils/dataframe/kernels/order.h>
 #include <dftracer/utils/dataframe/kernels/running.h>
 #include <dftracer/utils/dataframe/ops/ops_common.h>
+#include <dftracer/utils/dataframe/udaf_registry.h>
+#include <dftracer/utils/dataframe/udaf_states.h>
 #include <dftracer/utils/dstd/fatal.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/result.h>
@@ -1060,6 +1063,270 @@ dstd::Result<Series> frame_stats(const Layout& lay, const Series& column,
     }
 }
 
+constexpr std::int64_t UDAF_FEED_CHUNK = std::int64_t{1} << 18;
+
+// What the UDAF of a FrameUdaf spec reads: the bound UDAF, its argument columns
+// in original row order and in sorted order, and whether each sorted position
+// is fed to the UDAF.
+struct UdafWindow {
+    dstd::SharedPtr<const UdafBinding> binding;
+    dstd::Vector<const Series*> original;
+    dstd::Vector<Series> sorted;
+    dstd::Vector<std::uint8_t> present;
+};
+
+dstd::Result<UdafWindow> udaf_window(const Layout& lay, const DataFrame& df,
+                                     const WindowColumn& w) {
+    UdafWindow u;
+    if (!w.udaf())
+        return invalid_argument<"window: '{}' needs an aggregate name">(w.out);
+    dstd::SharedPtr<const UdafRecord> record = find_udaf(*w.udaf());
+    if (!record) return not_found<"window: unknown aggregate '{}'">(*w.udaf());
+    dstd::Vector<DataType> types;
+    for (std::size_t k = 0; k < w.udaf_arg_count(); ++k) {
+        const dstd::Result<std::size_t> at =
+            ops::column_named(df, w.udaf_arg(k), "window");
+        if (!at) return at.error();
+        u.original.push_back(&df.columns[*at]);
+        types.push_back(scalar(df.columns[*at].type()));
+    }
+    dstd::Result<UdafBinding> bound =
+        bind_udaf(std::move(record),
+                  dstd::Span<const DataType>(types.data(), types.size()), {});
+    if (!bound) return dstd::Unexpected(std::move(bound.error()));
+    u.binding = dstd::make_shared<const UdafBinding>(std::move(*bound));
+    const bool null_aware = u.binding->udaf().is_null_aware();
+    u.present.assign(static_cast<std::size_t>(lay.n), 1);
+    for (const Series* col : u.original) {
+        u.sorted.push_back(col->take(lay.idx));
+        if (null_aware || col->null_count() == 0) continue;
+        for (std::int64_t r = 0; r < lay.n; ++r)
+            if (col->is_null(lay.row(r)))
+                u.present[static_cast<std::size_t>(r)] = 0;
+    }
+    return u;
+}
+
+// One state per partition: rows that join the frame are updated in, rows that
+// leave it retracted, and value reads each frame's result. A step is one
+// callback on the rows that joined or left since the previous frame.
+dstd::Result<Series> frame_udaf_slide(const FrameCtx& c, const UdafWindow& u,
+                                      std::int64_t min_count) {
+    const Layout& lay = c.lay;
+    const TypeId id = u.binding->result_type().id;
+    const bool text = id == TypeId::String;
+    const bool floating = id == TypeId::Float32 || id == TypeId::Float64;
+    const bool unsigned_int = id == TypeId::Uint8 || id == TypeId::Uint16 ||
+                              id == TypeId::Uint32 || id == TypeId::Uint64;
+    const std::size_t n = static_cast<std::size_t>(lay.n);
+    UdafStates states(u.binding);
+    dstd::Result<void> status =
+        states.grow(static_cast<std::int64_t>(lay.parts.size()));
+    if (!status) return dstd::Unexpected(std::move(status.error()));
+
+    Column<std::int64_t> ints(lay.n);
+    Column<std::uint64_t> uints(lay.n);
+    Column<double> doubles(lay.n);
+    dstd::Vector<dstd::String> texts(text ? n : 0);
+    dstd::Vector<std::uint8_t> text_valid = ops::valid_bits(n);
+    const auto set_null = [&](std::int64_t r) {
+        if (text)
+            ops::set_null(text_valid, static_cast<std::size_t>(r));
+        else if (floating)
+            doubles.null(r);
+        else if (unsigned_int)
+            uints.null(r);
+        else
+            ints.null(r);
+    };
+
+    dstd::Vector<std::int64_t> gids;
+    dstd::Vector<Series> batch;
+    dstd::Vector<const Series*> args;
+    const auto feed = [&](std::int64_t gid, std::int64_t first,
+                          std::int64_t last, bool take_out) {
+        if (first > last) return dstd::Result<void>{};
+        const std::int64_t len = last - first + 1;
+        gids.assign(static_cast<std::size_t>(len), gid);
+        batch.clear();
+        for (const Series& col : u.sorted)
+            batch.push_back(col.slice(first, len));
+        args.clear();
+        for (const Series& col : batch) args.push_back(&col);
+        const dstd::Span<const std::int64_t> g(gids.data(), gids.size());
+        const dstd::Span<const Series* const> a(args.data(), args.size());
+        return take_out ? states.retract(g, a) : states.update(g, a);
+    };
+    dstd::String bad_text;
+    const auto store = [&](std::int64_t r, const dftu_scalar& sc) {
+        const bool is_int =
+            sc.kind == DFTU_SCALAR_TAG_I64 || sc.kind == DFTU_SCALAR_TAG_U64;
+        const std::size_t at = static_cast<std::size_t>(r);
+        if (text && sc.kind == DFTU_SCALAR_TAG_STR) {
+            texts[at].assign(sc.value.s, sc.len);
+        } else if (floating && (is_int || sc.kind == DFTU_SCALAR_TAG_F64)) {
+            doubles.set(r, sc.kind == DFTU_SCALAR_TAG_F64 ? sc.value.d
+                           : sc.kind == DFTU_SCALAR_TAG_I64
+                               ? static_cast<double>(sc.value.i)
+                               : static_cast<double>(sc.value.u));
+        } else if (!text && !floating && is_int) {
+            const bool negative =
+                sc.kind == DFTU_SCALAR_TAG_I64 && sc.value.i < 0;
+            const bool too_big =
+                sc.kind == DFTU_SCALAR_TAG_U64 &&
+                sc.value.u > static_cast<std::uint64_t>(
+                                 std::numeric_limits<std::int64_t>::max());
+            if (unsigned_int ? negative : too_big) return false;
+            if (unsigned_int)
+                uints.set(r, sc.value.u);
+            else
+                ints.set(r, sc.value.i);
+        } else {
+            if (sc.kind == DFTU_SCALAR_TAG_ERR && sc.value.err &&
+                sc.value.err->message)
+                bad_text = sc.value.err->message;
+            return false;
+        }
+        return true;
+    };
+
+    bool bad_scalar = false;
+    std::int64_t gid = 0;
+    for (const auto& [p, q] : lay.parts) {
+        std::int64_t count = 0;
+        std::int64_t enter_first = -1, enter_last = -2;
+        std::int64_t leave_first = -1, leave_last = -2;
+        walk_frame(
+            c, p, q,
+            [&](std::int64_t pos) {
+                if (enter_first < 0) enter_first = p + pos;
+                enter_last = p + pos;
+                count += u.present[static_cast<std::size_t>(p + pos)];
+            },
+            [&](std::int64_t pos) {
+                if (leave_first < 0) leave_first = p + pos;
+                leave_last = p + pos;
+                count -= u.present[static_cast<std::size_t>(p + pos)];
+            },
+            [&](std::int64_t r, std::int64_t, std::int64_t) {
+                const std::int64_t ef = enter_first, el = enter_last;
+                const std::int64_t lf = leave_first, ll = leave_last;
+                enter_first = leave_first = -1;
+                enter_last = leave_last = -2;
+                if (!status) return;
+                status = feed(gid, ef, el, false);
+                if (status) status = feed(gid, lf, ll, true);
+                if (!status) return;
+                if (count == 0 || count < min_count) {
+                    set_null(r);
+                    return;
+                }
+                dftu_scalar sc{};
+                status = states.value(gid, sc);
+                if (status && !store(r, sc)) bad_scalar = true;
+            });
+        if (!status || bad_scalar) break;
+        ++gid;
+    }
+    if (!status) return dstd::Unexpected(std::move(status.error()));
+    if (bad_scalar) {
+        if (!bad_text.empty())
+            return invalid_argument<"window: udaf '{}' value failed: {}">(
+                u.binding->udaf().name(), bad_text.c_str());
+        return invalid_argument<
+            "window: udaf '{}' value gave a scalar that does not fit its "
+            "result type {}">(u.binding->udaf().name(), type_name(id));
+    }
+    if (text) {
+        dstd::Vector<dstd::StringView> views;
+        views.reserve(n);
+        for (const dstd::String& s : texts)
+            views.push_back(dstd::StringView(s.data(), s.size()));
+        return Series::strings(
+            dstd::Span<const dstd::StringView>(views.data(), views.size()),
+            text_valid.data());
+    }
+    const auto as = [&](Series out, TypeId base) {
+        return id == base ? std::move(out) : out.cast(id);
+    };
+    if (floating) return as(doubles.series(TypeId::Float64), TypeId::Float64);
+    if (unsigned_int) return as(uints.series(TypeId::Uint64), TypeId::Uint64);
+    return as(ints.series(TypeId::Int64), TypeId::Int64);
+}
+
+// Without retract, each output row gets a state of its own, fed the rows of
+// its frame, and finalize gives the column at once. Frames are fed in chunks
+// of about UDAF_FEED_CHUNK rows to bound the gathered columns.
+dstd::Result<Series> frame_udaf_recompute(const FrameCtx& c,
+                                          const UdafWindow& u,
+                                          std::int64_t min_count) {
+    const Layout& lay = c.lay;
+    const std::size_t n = static_cast<std::size_t>(lay.n);
+    UdafStates states(u.binding);
+    dstd::Result<void> status = states.grow(lay.n);
+    if (!status) return dstd::Unexpected(std::move(status.error()));
+
+    dstd::Vector<std::int64_t> source(n, -1);
+    dstd::Vector<std::int64_t> gids, rows;
+    dstd::Vector<Series> batch;
+    dstd::Vector<const Series*> args;
+    const auto flush = [&]() {
+        if (gids.empty()) return dstd::Result<void>{};
+        batch.clear();
+        for (const Series* col : u.original)
+            batch.push_back(col->take(
+                dstd::Span<const std::int64_t>(rows.data(), rows.size())));
+        args.clear();
+        for (const Series& col : batch) args.push_back(&col);
+        dstd::Result<void> fed = states.update(
+            dstd::Span<const std::int64_t>(gids.data(), gids.size()),
+            dstd::Span<const Series* const>(args.data(), args.size()));
+        gids.clear();
+        rows.clear();
+        return fed;
+    };
+
+    dstd::Vector<std::int64_t> prefix(n + 1, 0);
+    for (std::size_t r = 0; r < n; ++r)
+        prefix[r + 1] = prefix[r] + u.present[r];
+    for (const auto& [p, q] : lay.parts) {
+        walk_frame(
+            c, p, q, [](std::int64_t) {}, [](std::int64_t) {},
+            [&](std::int64_t r, std::int64_t lo, std::int64_t hi) {
+                if (!status) return;
+                const std::int64_t present =
+                    prefix[static_cast<std::size_t>(p + hi + 1)] -
+                    prefix[static_cast<std::size_t>(p + lo)];
+                if (present == 0 || present < min_count) return;
+                source[static_cast<std::size_t>(r)] = r;
+                for (std::int64_t pos = lo; pos <= hi; ++pos) {
+                    gids.push_back(r);
+                    rows.push_back(lay.row(p + pos));
+                }
+                if (static_cast<std::int64_t>(gids.size()) >= UDAF_FEED_CHUNK)
+                    status = flush();
+            });
+        if (!status) break;
+    }
+    if (status) status = flush();
+    if (!status) return dstd::Unexpected(std::move(status.error()));
+    dstd::Result<Series> out = states.finalize();
+    if (!out) return out.error();
+    return out->take(source);
+}
+
+dstd::Result<Series> frame_udaf(const Layout& lay, const DataFrame& df,
+                                const WindowColumn& w) {
+    const dstd::Result<FrameCtx> ctx = frame_context(lay, w);
+    if (!ctx) return ctx.error();
+    const dstd::Result<UdafWindow> u = udaf_window(lay, df, w);
+    if (!u) return u.error();
+    const std::int64_t min_count = w.params.frame.min_count;
+    return u->binding->udaf().can_slide()
+               ? frame_udaf_slide(*ctx, *u, min_count)
+               : frame_udaf_recompute(*ctx, *u, min_count);
+}
+
 }  // namespace
 
 WindowColumn window_column(const dftu_window_spec& s) {
@@ -1068,11 +1335,19 @@ WindowColumn window_column(const dftu_window_spec& s) {
     if (s.value) c.set_value(s.value);
     c.out = s.out ? s.out : "";
     if (is_frame_func(c.func)) {
+        const bool is_udaf = c.func == WindowFunc::FrameUdaf;
         c.params.frame = {s.param.frame.min_count, s.param.frame.preceding,
                           s.param.frame.following,
                           static_cast<WindowFrameMode>(s.param.frame.mode),
-                          s.param.frame.q};
-        if (s.param.frame.by) c.set_by(s.param.frame.by);
+                          is_udaf ? 0.0 : s.param.frame.q};
+        if (!is_udaf && s.param.frame.by) c.set_by(s.param.frame.by);
+        if (is_udaf) {
+            dstd::Vector<dstd::String> args;
+            for (std::int32_t i = 0; i < s.param.udaf.arg_count; ++i)
+                args.emplace_back(s.param.udaf.args[i]);
+            c.set_udaf(s.param.udaf.name ? s.param.udaf.name : "",
+                       std::move(args));
+        }
     } else if (is_offset_func(c.func)) {
         c.params.offset = s.param.offset;
     } else if (c.func == WindowFunc::Rate) {
@@ -1201,6 +1476,9 @@ dstd::Result<DataFrame> window(const DataFrame& df,
                 column = frame_stats(lay, **value, nullptr, w);
                 break;
             }
+            case WindowFunc::FrameUdaf:
+                column = frame_udaf(lay, df, w);
+                break;
             case WindowFunc::FrameArgMax:
             case WindowFunc::FrameArgMin: {
                 const dstd::Result<const Series*> by =
@@ -1217,6 +1495,55 @@ dstd::Result<DataFrame> window(const DataFrame& df,
         out.columns.push_back(std::move(*column));
     }
     return out;
+}
+
+dstd::Result<DataFrame> window_checked(
+    const DataFrame& df, const char* const* partition_by, std::int32_t n_part,
+    const char* const* order_by, std::int32_t n_order,
+    const dftu_window_spec* specs, std::int32_t n_specs) {
+    const auto names =
+        [](const char* const* items, std::int32_t n,
+           const char* what) -> dstd::Result<dstd::Vector<dstd::String>> {
+        if (n < 0 || (n > 0 && !items))
+            return invalid_argument<"window: bad {} list">(what);
+        dstd::Vector<dstd::String> out;
+        for (std::int32_t i = 0; i < n; ++i) {
+            if (!items[i])
+                return invalid_argument<"window: NULL {} name">(what);
+            out.emplace_back(items[i]);
+        }
+        return out;
+    };
+    dstd::Result<dstd::Vector<dstd::String>> parts =
+        names(partition_by, n_part, "partition");
+    if (!parts) return parts.error();
+    dstd::Result<dstd::Vector<dstd::String>> order =
+        names(order_by, n_order, "order");
+    if (!order) return order.error();
+    if (n_specs < 0 || (n_specs > 0 && !specs))
+        return invalid_argument<"window: bad spec list">();
+    dstd::Vector<WindowColumn> cols;
+    cols.reserve(static_cast<std::size_t>(n_specs));
+    for (std::int32_t i = 0; i < n_specs; ++i) {
+        const dftu_window_spec& s = specs[i];
+        if (s.func < DFTU_WINDOW_ROW_NUMBER ||
+            s.func > DFTU_WINDOW_FRAME_UDAF || !s.out)
+            return invalid_argument<"window: bad function or output name">();
+        if (s.func == DFTU_WINDOW_FRAME_UDAF) {
+            const auto& u = s.param.udaf;
+            if (!u.name)
+                return invalid_argument<"window: udaf spec without a name">();
+            if (u.arg_count < 0 || (u.arg_count > 0 && !u.args))
+                return invalid_argument<
+                    "window: udaf '{}' has a bad argument list">(u.name);
+            for (std::int32_t k = 0; k < u.arg_count; ++k)
+                if (!u.args[k])
+                    return invalid_argument<
+                        "window: udaf '{}' has a NULL argument name">(u.name);
+        }
+        cols.push_back(window_column(s));
+    }
+    return window(df, *parts, *order, cols);
 }
 
 }  // namespace dftracer::utils::dataframe

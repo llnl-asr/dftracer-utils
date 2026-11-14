@@ -10,6 +10,10 @@
  *   ualign32(x)   POD state of 24 bytes aligned to 32; counts misaligned inits
  *   ualign16(x)   POD state of 40 bytes aligned to 16; counts misaligned inits
  *   ufailcombine(x)  combine fails with a message
+ *   usumr(x)      usum with retract and value, so a window slides its frame
+ *   uretfail(x)   usumr whose retract fails with a message
+ *   uwneg(x)      usumr with a UInt64 result whose value() gives -1
+ *   uwbig(x)      usumr with an Int64 result whose value() gives UINT64_MAX
  *   userial(x)    usum with a non-POD state and without
  *                 DFTU_AGG_PARALLEL_SAFE; every callback counts the threads
  *                 inside the plugin at once
@@ -176,6 +180,92 @@ static dftu_status usum_finalize(dftu_ctx* ctx, void* bound,
         *out = dftu_series_new_flat(DFTU_TYPE_INT64, v, (int64_t)n, NULL);
         free(v);
     }
+    return DFTU_OK;
+}
+
+static dftu_status usumr_retract(dftu_ctx* ctx, void* bound,
+                                 void* const* states,
+                                 const dftu_series* const* args, uint32_t nargs,
+                                 uint64_t rows) {
+    const Bound* b = (const Bound*)bound;
+    uint64_t i;
+    (void)ctx;
+    (void)nargs;
+    for (i = 0; i < rows; ++i) {
+        Sum* s = (Sum*)states[i];
+        if (!s) continue;
+        if (b->in == DFTU_TYPE_FLOAT64)
+            s->d -= ((const double*)dftu_series_data(args[0]))[i];
+        else
+            s->i -= int_at(args[0], b->in, i);
+    }
+    return DFTU_OK;
+}
+
+static dftu_status uretfail_retract(dftu_ctx* ctx, void* bound,
+                                    void* const* states,
+                                    const dftu_series* const* args,
+                                    uint32_t nargs, uint64_t rows) {
+    (void)bound;
+    (void)states;
+    (void)args;
+    (void)nargs;
+    (void)rows;
+    return dftu_fail(ctx, DFTU_E_INVALID, "uretfail: retract refused");
+}
+
+static dftu_status usumr_value(dftu_ctx* ctx, void* bound, const void* state,
+                               dftu_scalar* out) {
+    const Bound* b = (const Bound*)bound;
+    (void)ctx;
+    memset(out, 0, sizeof(*out));
+    if (b->out == DFTU_TYPE_FLOAT64) {
+        out->kind = DFTU_SCALAR_TAG_F64;
+        out->value.d = ((const Sum*)state)->d;
+    } else {
+        out->kind = DFTU_SCALAR_TAG_I64;
+        out->value.i = ((const Sum*)state)->i;
+    }
+    return DFTU_OK;
+}
+
+static dftu_status uwneg_bind(dftu_ctx* ctx, void* self,
+                              const dftu_type_info* args, uint32_t n,
+                              const dftu_scalar* const* consts,
+                              dftu_type_info* out, void** bound) {
+    (void)self;
+    (void)consts;
+    return bind_as(ctx, args, n, out, bound, DFTU_TYPE_UINT64, 1, 0);
+}
+
+static dftu_status uwneg_value(dftu_ctx* ctx, void* bound, const void* state,
+                               dftu_scalar* out) {
+    (void)ctx;
+    (void)bound;
+    (void)state;
+    memset(out, 0, sizeof(*out));
+    out->kind = DFTU_SCALAR_TAG_I64;
+    out->value.i = -1;
+    return DFTU_OK;
+}
+
+static dftu_status uwbig_bind(dftu_ctx* ctx, void* self,
+                              const dftu_type_info* args, uint32_t n,
+                              const dftu_scalar* const* consts,
+                              dftu_type_info* out, void** bound) {
+    (void)self;
+    (void)consts;
+    return bind_as(ctx, args, n, out, bound, DFTU_TYPE_INT64, 1, 0);
+}
+
+static dftu_status uwbig_value(dftu_ctx* ctx, void* bound, const void* state,
+                               dftu_scalar* out) {
+    (void)ctx;
+    (void)bound;
+    (void)state;
+    memset(out, 0, sizeof(*out));
+    out->kind = DFTU_SCALAR_TAG_U64;
+    out->value.u = UINT64_MAX;
     return DFTU_OK;
 }
 
@@ -593,6 +683,20 @@ static const dftu_udaf_desc UDAFS[] = {
      DFTU_AGG_STATE_POD | DFTU_AGG_PARALLEL_SAFE, 2, 2, sizeof(Sum), 8,
      uwsum_bind, count_inits, uwsum_update, usum_combine, usum_finalize, NULL,
      NULL, NULL, NULL, NULL, free_bound},
+    {sizeof(dftu_udaf_desc), "usumr",
+     DFTU_AGG_STATE_POD | DFTU_AGG_PARALLEL_SAFE | DFTU_AGG_HAS_RETRACT, 1, 1,
+     sizeof(Sum), 8, usum_bind, count_inits, usum_update, usum_combine,
+     usum_finalize, NULL, NULL, NULL, usumr_retract, usumr_value, free_bound},
+    {sizeof(dftu_udaf_desc), "uretfail",
+     DFTU_AGG_STATE_POD | DFTU_AGG_HAS_RETRACT, 1, 1, sizeof(Sum), 8, usum_bind,
+     count_inits, usum_update, usum_combine, usum_finalize, NULL, NULL, NULL,
+     uretfail_retract, usumr_value, free_bound},
+    {sizeof(dftu_udaf_desc), "uwneg", DFTU_AGG_STATE_POD | DFTU_AGG_HAS_RETRACT,
+     1, 1, sizeof(Sum), 8, uwneg_bind, count_inits, usum_update, usum_combine,
+     usum_finalize, NULL, NULL, NULL, usumr_retract, uwneg_value, free_bound},
+    {sizeof(dftu_udaf_desc), "uwbig", DFTU_AGG_STATE_POD | DFTU_AGG_HAS_RETRACT,
+     1, 1, sizeof(Sum), 8, uwbig_bind, count_inits, usum_update, usum_combine,
+     usum_finalize, NULL, NULL, NULL, usumr_retract, uwbig_value, free_bound},
     {sizeof(dftu_udaf_desc), "ucount",
      DFTU_AGG_STATE_POD | DFTU_AGG_PARALLEL_SAFE, 0, 0, sizeof(int64_t), 8,
      ucount_bind, count_inits, ucountall_update, ucountall_combine,

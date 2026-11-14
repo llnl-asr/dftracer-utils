@@ -18,6 +18,7 @@ set(PLUGINS_TEST_SOURCES
     test_plugin_udaf.cpp
     test_plugin_udaf_groupby.cpp
     test_plugin_udaf_duql.cpp
+    test_plugin_udaf_window.cpp
     test_plugin_lazyframe_facade.cpp
     test_plugin_planner.cpp
     test_plugin_order.cpp
@@ -285,6 +286,13 @@ if(TARGET plugins_test_plugin_udaf_groupby)
       STATS_UDAFS_PLUGIN_PATH="$<TARGET_FILE:stats_udafs_plugin>")
     add_dependencies(plugins_test_plugin_udaf_groupby stats_udafs_plugin)
   endif()
+endif()
+
+if(TARGET plugins_test_plugin_udaf_window)
+  target_compile_definitions(
+    plugins_test_plugin_udaf_window PRIVATE
+    UDAF_PLUGIN_PATH="$<TARGET_FILE:udaf_plugin>")
+  add_dependencies(plugins_test_plugin_udaf_window udaf_plugin)
 endif()
 
 if(TARGET plugins_test_plugin_udaf_duql)

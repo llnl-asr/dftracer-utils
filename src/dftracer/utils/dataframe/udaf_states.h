@@ -60,6 +60,16 @@ class UdafStates {
     dstd::Result<void> update(dstd::Span<const std::int64_t> gids,
                               dstd::Span<const Series* const> args);
 
+    /// Takes rows out as @ref update puts them in, with the same group ids
+    /// and the same skipping of rows. Needs a UDAF with a retract callback.
+    dstd::Result<void> retract(dstd::Span<const std::int64_t> gids,
+                               dstd::Span<const Series* const> args);
+
+    /// Sets `out` to the result of group `group` through the value callback
+    /// of a UDAF with DFTU_AGG_HAS_RETRACT. A STR scalar stays valid until the
+    /// next call that reaches the UDAF.
+    dstd::Result<void> value(std::int64_t group, dftu_scalar& out);
+
     /// Merges group g of `other` into group `mapping[g]` of this table, for
     /// every group of `other`, then destroys its states and leaves it with no
     /// group. Both tables must hold the same UDAF. On failure nothing of
@@ -92,6 +102,9 @@ class UdafStates {
    private:
     class Block;
 
+    dstd::Result<void> feed(dstd::Span<const std::int64_t> gids,
+                            dstd::Span<const Series* const> args,
+                            bool take_out);
     void* state_at(std::int64_t group) const noexcept;
     void fill_all(dstd::Vector<void*>& out) const;
     void destroy_all() noexcept;

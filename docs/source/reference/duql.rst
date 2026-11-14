@@ -938,6 +938,17 @@ entry.
 
      window pid sort ts { m = mean(size) over 3 rows, bw = sum(size) over 1s }
 
+- A user-defined aggregate from a plugin is a window function too and takes
+  a frame like ``sum``: ``usum(x) over 10 rows``, ``usum(x) over 5s``. Its
+  arguments are columns or expressions, not constants. With no ``over`` it runs
+  over the whole partition, as it does in ``group``. A UDAF with ``retract``
+  and ``value`` slides its frame; any other is recomputed over each frame. A
+  frame that holds no row with all arguments present is null.
+
+  .. code-block:: text
+
+     window pid sort ts { p = p50(dur) over 100 rows }
+
 .. list-table::
    :header-rows: 1
 

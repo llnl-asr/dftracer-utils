@@ -124,7 +124,9 @@ void Applier::window_op(const dstd::Vector<dstd::String>& part,
     const char* by = order.c_str();
     dstd::Vector<dftu_window_spec> raw;
     dstd::Vector<dstd::String> out = names();
-    for (const auto& s : specs) {
+    dstd::Vector<dstd::Vector<const char*>> udaf_args(specs.size());
+    for (std::size_t i = 0; i < specs.size(); ++i) {
+        const WinSpec& s = specs[i];
         dftu_window_spec w{};
         w.func = s.func;
         w.value = s.value.empty() ? nullptr : s.value.c_str();
@@ -137,6 +139,17 @@ void Applier::window_op(const dstd::Vector<dstd::String>& part,
                 s.mode,   s.q,         s.by.empty() ? nullptr : s.by.c_str()};
         else
             w.param.offset = s.offset;
+        if (s.func == DFTU_WINDOW_FRAME_UDAF) {
+            for (const auto& arg : s.udaf_args)
+                udaf_args[i].push_back(arg.c_str());
+            w.param.udaf = {s.offset,
+                            s.preceding,
+                            s.following,
+                            s.mode,
+                            s.udaf.c_str(),
+                            udaf_args[i].data(),
+                            static_cast<std::int32_t>(udaf_args[i].size())};
+        }
         raw.push_back(w);
         out.push_back(s.out);
         cols_.push_back({s.out, s.type, false});
@@ -149,7 +162,7 @@ void Applier::window_op(const dstd::Vector<dstd::String>& part,
         v_.lazy().frame_op("dftu.frame.window", a, {}, std_strs(out)));
 }
 
-void Applier::partition_aggs(
+Status Applier::partition_aggs(
     const dstd::Vector<dstd::Pair<const duql::PipelineWinCall*, dstd::String>>&
         calls,
     const dstd::String& pid) {
@@ -184,6 +197,16 @@ void Applier::partition_aggs(
                          "count", dataframe::scalar(dataframe::TypeId::Uint64),
                          true}}));
                 break;
+            case duql::WinFn::Udaf: {
+                g.op = dataframe::Agg::Udaf;
+                g.fn = c->plugin;
+                for (std::size_t k = 0; k < c->rest.size(); ++k)
+                    g.args.push_back(dstd::fmt<"{}_a{}">(c->column, k + 1));
+                auto udaf_out = udaf_type(g);
+                if (!udaf_out) return udaf_out.error();
+                type = std::move(*udaf_out);
+                break;
+            }
             default:
                 break;
         }
@@ -212,6 +235,7 @@ void Applier::partition_aggs(
             dataframe::expr_select(
                 dataframe::expr_unary(dataframe::UnaryOp::IsNan, col(q)),
                 dataframe::expr_lit_null(dataframe::TypeId::Float64), col(q)));
+    return {};
 }
 
 dataframe::DataType Applier::type_of(const dstd::String& column) const {
@@ -446,6 +470,31 @@ Status Applier::window_call(WindowPasses& p, const duql::PipelineWinCall& c,
                 return numbers.error();
             p.partition.emplace_back(&c, in);
             break;
+        case duql::WinFn::Udaf: {
+            dstd::Vector<dstd::String> args;
+            if (!in.empty()) args.push_back(in);
+            for (std::size_t k = 0; k < c.rest.size(); ++k) {
+                auto rest = source({"", c.rest[k], c.text},
+                                   dstd::fmt<"{}_a{}">(c.column, k + 1));
+                if (!rest) return rest.error();
+                args.push_back(std::move(*rest));
+            }
+            if (!c.frame) {
+                p.partition.emplace_back(&c, in);
+                break;
+            }
+            dataframe::GroupAgg g{dataframe::Agg::Udaf, in,
+                                  dstd::String(c.column)};
+            g.fn = c.plugin;
+            g.args.assign(args.begin() + (in.empty() ? 0 : 1), args.end());
+            auto type = udaf_type(g);
+            if (!type) return type.error();
+            WinSpec s{DFTU_WINDOW_FRAME_UDAF, "", dstd::String(c.column),
+                      std::move(*type)};
+            s.udaf = c.plugin;
+            s.udaf_args = std::move(args);
+            return window_framed(p, std::move(s), c);
+        }
     }
     return {};
 }
@@ -578,7 +627,8 @@ Status Applier::stage(const duql::PipelineWindow& w) {
              "", dstd::String(c->column),
              dataframe::scalar(dataframe::TypeId::Float64)});
     window_op(part, "__duql_dr", p.distribution);
-    if (!p.partition.empty()) partition_aggs(p.partition, pid);
+    if (!p.partition.empty())
+        if (auto done = partition_aggs(p.partition, pid); !done) return done;
     lines.push_back(dstd::fmt<"sort_by_multi {}">(pos));
     v_ = v_.sort_by_multi({std_str(pos)}, dstd::Vector<bool>{false});
     dstd::Vector<dstd::String> keep_names = before;

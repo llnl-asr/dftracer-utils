@@ -323,6 +323,7 @@ Reads referenced_fields(const dstd::Vector<duql::PipelineStage>& stages,
                     for (const auto& c : s.calls) {
                         add(c.arg);
                         add(c.by);
+                        for (const auto& r : c.rest) add(r);
                         defined.push_back(dstd::String(c.column));
                     }
                     items(s.items);

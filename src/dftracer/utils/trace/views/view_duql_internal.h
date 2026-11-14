@@ -598,6 +598,8 @@ class Applier {
         dftu_window_frame_mode mode = DFTU_WINDOW_FRAME_ROWS;
         double q = 0;
         dstd::String by{};
+        dstd::String udaf{};
+        dstd::Vector<dstd::String> udaf_args{};
     };
     // One dftu.frame.window pass over `order`, each spec's column appended.
     void window_op(const dstd::Vector<dstd::String>& part,
@@ -606,7 +608,7 @@ class Applier {
 
     // Aggregates over each whole partition, as `group` gives them, on every
     // row: the rows grouped by their partition id `pid` and joined back.
-    void partition_aggs(
+    Status partition_aggs(
         const dstd::Vector<
             dstd::Pair<const duql::PipelineWinCall*, dstd::String>>& calls,
         const dstd::String& pid);

@@ -231,6 +231,7 @@ enum class WinFn : std::uint8_t {
     Collect,
     Argmax,
     Argmin,
+    Udaf,
 };
 
 /// The frame of `over N rows` (`rows` rows ending at the current one) or
@@ -246,7 +247,8 @@ struct WinFrame {
 /// column `column`. `arg` is null for the functions that take none;
 /// `offset` is the lag or lead distance, the ntile bucket count or the nth
 /// position, `q` the quantile level. `fallback` is the lag or lead default
-/// past the partition's edge (null: none).
+/// past the partition's edge (null: none). UDAF runs the user-defined aggregate
+/// named `plugin` over the columns `arg` and then `rest`.
 struct PipelineWinCall {
     dstd::String column;
     WinFn fn = WinFn::RowNumber;
@@ -256,6 +258,8 @@ struct PipelineWinCall {
     dstd::Optional<WinFrame> frame;
     std::int64_t offset = 1;
     double q = 0;
+    dstd::String plugin;
+    dstd::Vector<TermRef> rest;
     dstd::String text;
 };
 

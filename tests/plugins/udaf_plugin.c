@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
 /* Test-only plugin whose factory registers user-defined aggregates:
+ *   uwsum(x, w)   POD state: Int64 sum of x * w over Int64 arguments
+ *   ucount()      POD state, no argument: the number of rows
  *   usum(x)       POD state: Int64 sum of integers, Float64 sum of floats
  *   udistinct(x)  non-POD state (a heap set): the count of distinct Int64
  *   ucountall(x)  NULL_AWARE POD state: the number of rows, nulls included
@@ -490,6 +492,55 @@ static dftu_status ufailcombine_combine(dftu_ctx* ctx, void* bound,
     return dftu_fail(ctx, DFTU_E_INVALID, "ufailcombine: refused merge");
 }
 
+/* uwsum, ucount: a UDAF of two arguments and one of none */
+
+static dftu_status uwsum_bind(dftu_ctx* ctx, void* self,
+                              const dftu_type_info* args, uint32_t n,
+                              const dftu_scalar* const* consts,
+                              dftu_type_info* out, void** bound) {
+    (void)self;
+    (void)consts;
+    if (n != 2 || args[1].id != DFTU_TYPE_INT64)
+        return dftu_fail(ctx, DFTU_E_INVALID,
+                         "udaf_plugin: the argument type is not accepted");
+    return bind_as(ctx, args, 1, out, bound, DFTU_TYPE_INT64, 0, 1);
+}
+
+static dftu_status uwsum_update(dftu_ctx* ctx, void* bound, void* const* states,
+                                const dftu_series* const* args, uint32_t nargs,
+                                uint64_t rows) {
+    const int64_t* x = (const int64_t*)dftu_series_data(args[0]);
+    const int64_t* w = (const int64_t*)dftu_series_data(args[1]);
+    uint64_t i;
+    (void)ctx;
+    (void)bound;
+    if (nargs != 2)
+        return dftu_fail(ctx, DFTU_E_INVALID, "uwsum: expected two arguments");
+    for (i = 0; i < rows; ++i)
+        if (states[i]) ((Sum*)states[i])->i += x[i] * w[i];
+    return DFTU_OK;
+}
+
+static dftu_status ucount_bind(dftu_ctx* ctx, void* self,
+                               const dftu_type_info* args, uint32_t n,
+                               const dftu_scalar* const* consts,
+                               dftu_type_info* out, void** bound) {
+    Bound* b;
+    (void)self;
+    (void)args;
+    (void)consts;
+    if (n != 0)
+        return dftu_fail(ctx, DFTU_E_INVALID, "ucount takes no argument");
+    b = (Bound*)calloc(1, sizeof(Bound));
+    if (!b) return dftu_fail(ctx, DFTU_E_NO_MEMORY, "out of memory");
+    b->out = DFTU_TYPE_INT64;
+    ++g_binds;
+    *bound = b;
+    out->struct_size = sizeof(*out);
+    out->id = DFTU_TYPE_INT64;
+    return DFTU_OK;
+}
+
 #define POD_FIELDS(NAME, FLAGS, SIZE, ALIGN, BIND, UPDATE, COMBINE, FINALIZE) \
     {sizeof(dftu_udaf_desc),                                                  \
      NAME,                                                                    \
@@ -538,6 +589,14 @@ static const dftu_udaf_desc UDAFS[] = {
     POD_FIELDS("ubadrows", DFTU_AGG_STATE_POD, sizeof(int64_t), 8,
                ucountall_bind, ucountall_update, ucountall_combine,
                ubadrows_finalize),
+    {sizeof(dftu_udaf_desc), "uwsum",
+     DFTU_AGG_STATE_POD | DFTU_AGG_PARALLEL_SAFE, 2, 2, sizeof(Sum), 8,
+     uwsum_bind, count_inits, uwsum_update, usum_combine, usum_finalize, NULL,
+     NULL, NULL, NULL, NULL, free_bound},
+    {sizeof(dftu_udaf_desc), "ucount",
+     DFTU_AGG_STATE_POD | DFTU_AGG_PARALLEL_SAFE, 0, 0, sizeof(int64_t), 8,
+     ucount_bind, count_inits, ucountall_update, ucountall_combine,
+     ucountall_finalize, NULL, NULL, NULL, NULL, NULL, free_bound},
 };
 
 static dftu_plugin g_plugin;

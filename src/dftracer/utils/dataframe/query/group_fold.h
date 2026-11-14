@@ -31,7 +31,9 @@ enum class FoldOp : std::uint8_t {
 };
 
 /// One aggregate of a GroupFold; `in` and `by` index a batch's columns.
-/// ENGINE runs `engine` with `param` in the dataframe aggregation. The others
+/// ENGINE runs `engine` with `param` in the dataframe aggregation; for
+/// `AggOp::Udaf` it runs the registered UDAF `fn` over the column `in` and then
+/// the columns `args` (`in` is -1 for a UDAF with no argument). The others
 /// skip a null input: COUNT_DISTINCT counts distinct values by value
 /// equality; COLLECT lists the values in input order; `arg_max` and `arg_min`
 /// give `in` at the row with the greatest or least `by`, the first on ties;
@@ -49,6 +51,8 @@ struct FoldAgg {
     dataframe::DataType type;
     dstd::String plugin;
     dstd::Vector<double> params;
+    dstd::String fn;
+    dstd::Vector<std::int32_t> args;
 };
 
 /// A group-by over batches whose first `keys` columns are the group keys,

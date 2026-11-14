@@ -4,6 +4,7 @@
 #include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/query/vectorize.h>
+#include <dftracer/utils/dataframe/udaf_registry.h>
 #include <dftracer/utils/dataframe/udf_registry.h>
 #include <dftracer/utils/dstd/ascii.h>
 #include <dftracer/utils/dstd/hash/splitmix64.h>
@@ -46,6 +47,11 @@ duql::PluginCatalog registry_plugins() {
         const auto udf = dataframe::find_udf(name);
         if (!udf) return dstd::nullopt;
         return duql::UdfArity{udf->min_args(), udf->max_args()};
+    };
+    out.udaf = [](dstd::StringView name) -> dstd::Optional<duql::UdfArity> {
+        const auto udaf = dataframe::find_udaf(name);
+        if (!udaf) return dstd::nullopt;
+        return duql::UdfArity{udaf->desc().min_args, udaf->desc().max_args};
     };
     for (std::uint32_t k = 0; k < dftu_op_count(); ++k) {
         const dstd::StringView op = dftu_op_at(k)->name;
@@ -130,6 +136,8 @@ dstd::String agg_name(duql::AggFn fn) {
             return "merge";
         case duql::AggFn::Plugin:
             return "plugin function";
+        case duql::AggFn::Udaf:
+            return "user-defined aggregate";
     }
     return {};
 }
@@ -174,6 +182,7 @@ dstd::Optional<AggOp> trace_op(const duql::PipelineAgg& a) {
         case duql::AggFn::Sketch:
         case duql::AggFn::Merge:
         case duql::AggFn::Plugin:
+        case duql::AggFn::Udaf:
             return dstd::nullopt;
     }
     return dstd::nullopt;
@@ -291,6 +300,7 @@ Reads referenced_fields(const dstd::Vector<duql::PipelineStage>& stages,
                     for (const auto& a : s.aggs) {
                         add(a.arg);
                         add(a.by);
+                        for (const auto& r : a.rest) add(r);
                     }
                     define(s.keys);
                     for (const auto& a : s.aggs)

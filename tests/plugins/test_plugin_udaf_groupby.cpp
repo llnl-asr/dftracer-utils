@@ -671,3 +671,39 @@ TEST_CASE("a spilled p50 equals the in-memory median") {
     spill_equals_memory("p50", "median", false);
 }
 #endif
+
+TEST_CASE("group_by runs a UDAF of two arguments and one of none") {
+    auto set = load(UDAF_PLUGIN_PATH);
+    DataFrame df = make_frame(900, 7);
+    Ints w(900);
+    for (std::int64_t i = 0; i < 900; ++i)
+        w[static_cast<std::size_t>(i)] = i % 5 + 1;
+    df.names.push_back(dstd::SharedString{"w"});
+    df.columns.push_back(ints(w, 7));
+
+    GroupAgg weighted = udaf_agg("uwsum", "v", "uwsum");
+    weighted.args = {"w"};
+    GroupAgg swapped = udaf_agg("uwsum", "w", "swapped");
+    swapped.args = {"v"};
+    GroupAgg count = udaf_agg("ucount", "", "ucount");
+    const dstd::Vector<GroupAgg> aggs{weighted, swapped, count,
+                                      builtin(Agg::Count, "k", "count")};
+    ByKey want, want_rows;
+    for (std::int64_t i = 0; i < 900; ++i) {
+        const std::int64_t k = key_of(i, 7);
+        want_rows[k] += 1;
+        want[k] += 0;
+        if ((i + 1) % 5 != 0 && (i + 1) % 7 != 0)
+            want[k] += static_cast<double>((i % 13) * (i % 5 + 1));
+    }
+    for (const std::int64_t batch : {0, 64}) {
+        INFO("batch " << batch);
+        auto out = batch == 0
+                       ? df.group_by("k", aggs)
+                       : dstd::Result<DataFrame>(collect_lazy(df, aggs, batch));
+        REQUIRE(out.has_value());
+        same(by_key(*out, "uwsum"), want);
+        same(by_key(*out, "swapped"), want);
+        same(by_key(*out, "ucount"), want_rows);
+    }
+}

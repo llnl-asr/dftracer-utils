@@ -124,6 +124,22 @@ dataframe::TypeId Applier::observed(dstd::StringView name) {
     return it == index_types_->end() ? dataframe::TypeId::Unknown : it->second;
 }
 
+namespace {
+
+// Whether a group of `p` or of a union's other pipeline runs a UDAF.
+bool calls_udaf(const duql::Pipeline& p) {
+    for (const auto& stage : p.stages) {
+        if (const auto* g = std::get_if<duql::PipelineGroup>(&stage))
+            for (const auto& a : g->aggs)
+                if (a.fn == duql::AggFn::Udaf) return true;
+        if (const auto* u = std::get_if<duql::PipelineUnion>(&stage))
+            if (calls_udaf(*u->other)) return true;
+    }
+    return false;
+}
+
+}  // namespace
+
 // `p` as a View over its input: its build step, when it reads lookups, then
 // its scan filter and projection, then its stages. With `table`, the scan
 // ends, so the columns are the stages' own. The `main` plan owns the sides.
@@ -409,6 +425,7 @@ dstd::Result<dstd::Pair<View, dstd::Vector<dstd::String>>> View::duql_plan(
             const auto* c = std::get_if<duql::TCall>(&x.node);
             plugin_call = plugin_call || (c && c->fn == duql::Fn::Udf);
         });
+        plugin_call = plugin_call || calls_udaf(side.pipeline);
         if (!plugin_call)
             sides.keys[i] =
                 cache_key(*b.view.plan_, side.pipeline.input.kind, side.key);

@@ -1286,6 +1286,35 @@ destroyed; a plan that already holds the UDF keeps running.
 - A ``let`` or sub-query side that calls a UDF is not stored in the lookup
   cache.
 
+.. _duql-plugin-udafs:
+
+Plugin UDAFs
+~~~~~~~~~~~~
+
+.. code-block:: text
+
+   group name { n = usum(size), p = p50(dur) } | sort name
+   agg { distinct_sizes = udistinct(size) }
+
+A user-defined aggregate (UDAF) that a plugin registers, or C++ code through
+``dataframe::make_udaf<A>()``, is callable by its name in a ``group`` or ``agg``
+block like a built-in aggregate (see :doc:`../plugins`). It takes no dotted
+prefix, and none can take a built-in's name.
+
+- Every argument is a column or an expression over columns; a constant fails
+  with an error. The argument count must be in the UDAF's range, and a UDAF may
+  take none.
+- The result type is the one the UDAF picks when it binds to the argument
+  types, which the scan must know: a column of unknown type fails with the
+  UDAF's message.
+- A row where an argument is null skips the UDAF, unless it reads nulls itself.
+- A UDAF error fails the query with the message the UDAF gives.
+- A UDAF stands in a ``group`` or ``agg`` block, alone or inside an expression
+  such as ``usum(size) / 1000``. It does not run in ``pivot`` or outside a
+  block. A UDAF without ``DFTU_AGG_PARALLEL_SAFE`` runs on one thread at a time.
+- A ``let`` or sub-query side that calls a UDAF is not stored in the lookup
+  cache.
+
 Explain
 ~~~~~~~
 

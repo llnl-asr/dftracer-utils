@@ -1382,8 +1382,9 @@ an ``op`` name of ``dftu_dataframe_group_by`` that no built-in aggregate has
 resolves to the registered UDAF of that name, with ``column`` as its one
 argument. The argument types are fixed by the first batch, and a later batch
 with another type fails. A group-by that spills writes each group state with
-``serialize`` and merges the runs with ``combine``. No duql stage, window or
-Python call runs a UDAF yet.
+``serialize`` and merges the runs with ``combine``. A duql ``group`` or ``agg``
+block calls a UDAF by name, as ``n = usum(size)`` (see
+:ref:`duql-plugin-udafs`). No duql window or Python call runs a UDAF yet.
 
 .. code-block:: cpp
 

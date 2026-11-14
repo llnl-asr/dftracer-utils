@@ -120,6 +120,7 @@ enum class AggFn : std::uint8_t {
     Sketch,
     Merge,
     Plugin,
+    Udaf,
 };
 
 inline bool is_occupancy(AggFn fn) {
@@ -133,6 +134,8 @@ inline bool is_occupancy(AggFn fn) {
 /// `quantile(merge(arg), q)`, a quantile of the merged stored sketches.
 /// PLUGIN runs the registered reducer `plugin` over each group's non-null
 /// `arg` values, `params` filling its operands after the column in order.
+/// UDAF runs the registered user-defined aggregate named `plugin` over the
+/// columns `arg` and then `rest`, one per argument of the call.
 struct PipelineAgg {
     dstd::String name;
     AggFn fn = AggFn::Count;
@@ -143,6 +146,7 @@ struct PipelineAgg {
     bool merged = false;
     dstd::String plugin;
     dstd::Vector<LiteralValue> params;
+    dstd::Vector<TermRef> rest;
 };
 
 /// `group k { ... }`, or `agg { ... }` with no keys.
@@ -410,7 +414,7 @@ struct Program {
 /// kind, or nothing.
 enum class PluginKind : std::uint8_t { None, Column, Table, Aggregate, Other };
 
-/// The argument counts a plugin UDF takes.
+/// The argument counts a plugin UDF or UDAF takes.
 struct UdfArity {
     std::int32_t min_args = 0;
     std::int32_t max_args = 0;
@@ -422,6 +426,9 @@ struct PluginCatalog {
     dstd::Function<PluginKind(dstd::StringView)> kind;
     /// The argument counts of the plugin UDF `name`, nullopt for no such UDF.
     dstd::Function<dstd::Optional<UdfArity>(dstd::StringView)> udf;
+    /// The argument counts of the user-defined aggregate `name`, nullopt for
+    /// no such UDAF.
+    dstd::Function<dstd::Optional<UdfArity>(dstd::StringView)> udaf;
     dstd::Vector<dstd::String> namespaces;
 };
 

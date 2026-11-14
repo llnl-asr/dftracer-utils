@@ -774,6 +774,11 @@ class Applier {
 
     static dataframe::DataType plugin_type(const dstd::String& name);
 
+    // The result type of the UDAF `spec` runs, bound to the types of its
+    // argument columns; the bind's error when it refuses them.
+    dstd::Result<dataframe::DataType> udaf_type(
+        const dataframe::GroupAgg& spec);
+
     static std::int64_t floor_div(std::int64_t a, std::int64_t b) {
         std::int64_t q = a / b;
         if ((a % b != 0) && ((a < 0) != (b < 0))) --q;

@@ -14,6 +14,8 @@
  *   uretfail(x)   usumr whose retract fails with a message
  *   uwneg(x)      usumr with a UInt64 result whose value() gives -1
  *   uwbig(x)      usumr with an Int64 result whose value() gives UINT64_MAX
+ *   uhash(x)      order-sensitive POD state without retract: h = h * 31 + x
+ *                 over the rows in row order, merged as left then right
  *   userial(x)    usum with a non-POD state and without
  *                 DFTU_AGG_PARALLEL_SAFE; every callback counts the threads
  *                 inside the plugin at once
@@ -582,6 +584,72 @@ static dftu_status ufailcombine_combine(dftu_ctx* ctx, void* bound,
     return dftu_fail(ctx, DFTU_E_INVALID, "ufailcombine: refused merge");
 }
 
+/* uhash */
+
+typedef struct {
+    uint64_t h;
+    uint64_t count;
+} Hash;
+
+static dftu_status uhash_bind(dftu_ctx* ctx, void* self,
+                              const dftu_type_info* args, uint32_t n,
+                              const dftu_scalar* const* consts,
+                              dftu_type_info* out, void** bound) {
+    (void)self;
+    (void)consts;
+    return bind_as(ctx, args, n, out, bound, DFTU_TYPE_INT64, 0, 1);
+}
+
+static dftu_status uhash_update(dftu_ctx* ctx, void* bound, void* const* states,
+                                const dftu_series* const* args, uint32_t nargs,
+                                uint64_t rows) {
+    const int64_t* x = (const int64_t*)dftu_series_data(args[0]);
+    uint64_t i;
+    (void)ctx;
+    (void)bound;
+    (void)nargs;
+    for (i = 0; i < rows; ++i) {
+        Hash* s = (Hash*)states[i];
+        if (!s) continue;
+        s->h = s->h * 31u + (uint64_t)x[i];
+        ++s->count;
+    }
+    return DFTU_OK;
+}
+
+static dftu_status uhash_combine(dftu_ctx* ctx, void* bound, void* const* into,
+                                 void* const* from, uint64_t n) {
+    uint64_t i;
+    (void)ctx;
+    (void)bound;
+    for (i = 0; i < n; ++i) {
+        Hash* a = (Hash*)into[i];
+        const Hash* b = (const Hash*)from[i];
+        uint64_t scale = 1, base = 31, e = b->count;
+        while (e) {
+            if (e & 1u) scale *= base;
+            base *= base;
+            e >>= 1;
+        }
+        a->h = a->h * scale + b->h;
+        a->count += b->count;
+    }
+    return DFTU_OK;
+}
+
+static dftu_status uhash_finalize(dftu_ctx* ctx, void* bound,
+                                  void* const* states, uint64_t n,
+                                  dftu_series** out) {
+    int64_t* v = (int64_t*)malloc(n * sizeof(int64_t) + 1);
+    uint64_t i;
+    (void)ctx;
+    (void)bound;
+    for (i = 0; i < n; ++i) v[i] = (int64_t)((const Hash*)states[i])->h;
+    *out = dftu_series_new_flat(DFTU_TYPE_INT64, v, (int64_t)n, NULL);
+    free(v);
+    return DFTU_OK;
+}
+
 /* uwsum, ucount: a UDAF of two arguments and one of none */
 
 static dftu_status uwsum_bind(dftu_ctx* ctx, void* self,
@@ -697,6 +765,9 @@ static const dftu_udaf_desc UDAFS[] = {
     {sizeof(dftu_udaf_desc), "uwbig", DFTU_AGG_STATE_POD | DFTU_AGG_HAS_RETRACT,
      1, 1, sizeof(Sum), 8, uwbig_bind, count_inits, usum_update, usum_combine,
      usum_finalize, NULL, NULL, NULL, usumr_retract, uwbig_value, free_bound},
+    POD_FIELDS("uhash", DFTU_AGG_STATE_POD | DFTU_AGG_PARALLEL_SAFE,
+               sizeof(Hash), 8, uhash_bind, uhash_update, uhash_combine,
+               uhash_finalize),
     {sizeof(dftu_udaf_desc), "ucount",
      DFTU_AGG_STATE_POD | DFTU_AGG_PARALLEL_SAFE, 0, 0, sizeof(int64_t), 8,
      ucount_bind, count_inits, ucountall_update, ucountall_combine,

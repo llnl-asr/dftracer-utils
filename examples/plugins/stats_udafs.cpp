@@ -93,7 +93,7 @@ struct Geomean {
         return {};
     }
 
-    dstd::Result<void> combine(State& into, State& from) const {
+    dstd::Result<void> combine(State& into, const State& from) const {
         into.log_sum += from.log_sum;
         into.count += from.count;
         return {};
@@ -128,7 +128,7 @@ struct P50 {
         return {};
     }
 
-    dstd::Result<void> combine(State& into, State& from) const {
+    dstd::Result<void> combine(State& into, const State& from) const {
         into.values.insert(into.values.end(), from.values.begin(),
                            from.values.end());
         return {};

@@ -60,6 +60,9 @@ UdafStates::UdafStates(UdafStates&& other) noexcept
     : binding_(std::move(other.binding_)),
       blocks_(std::move(other.blocks_)),
       scratch_(std::move(other.scratch_)),
+      sources_(std::move(other.sources_)),
+      flat_(std::move(other.flat_)),
+      handles_(std::move(other.handles_)),
       stride_(other.stride_),
       per_block_(other.per_block_),
       first_block_(other.first_block_),
@@ -180,19 +183,22 @@ dstd::Result<void> UdafStates::feed(dstd::Span<const std::int64_t> gids,
         scratch_[i] = g < 0 ? nullptr : state_at(g);
     }
 
-    dstd::Vector<Series> flat;
-    dstd::Vector<const dftu_series*> handles;
-    flat.reserve(args.size());
-    handles.reserve(args.size());
+    flat_.clear();
+    handles_.clear();
+    flat_.reserve(args.size());
     for (const Series* arg : args) {
-        flat.push_back(arg->materialize());
-        handles.push_back(flat.back().handle());
+        if (arg->encoding() == Encoding::Flat) {
+            handles_.push_back(arg->handle());
+            continue;
+        }
+        flat_.push_back(arg->materialize());
+        handles_.push_back(flat_.back().handle());
     }
     if (!u.is_null_aware()) {
-        for (const Series& col : flat) {
-            if (col.null_count() == 0) continue;
+        for (const dftu_series* col : handles_) {
+            if (dftu_series_null_count(col) == 0) continue;
             for (std::size_t i = 0; i < rows; ++i)
-                if (col.is_null(static_cast<std::int64_t>(i)))
+                if (dftu_series_is_null(col, static_cast<std::int64_t>(i)))
                     scratch_[i] = nullptr;
         }
     }
@@ -200,8 +206,8 @@ dstd::Result<void> UdafStates::feed(dstd::Span<const std::int64_t> gids,
     CallContext ctx;
     const auto call = take_out ? u.desc().retract : u.desc().update;
     const dftu_status status =
-        call(ctx.get(), binding_->bound(), scratch_.data(), handles.data(),
-             static_cast<std::uint32_t>(handles.size()), rows);
+        call(ctx.get(), binding_->bound(), scratch_.data(), handles_.data(),
+             static_cast<std::uint32_t>(handles_.size()), rows);
     if (status < 0)
         return dstd::Unexpected(call_error(
             "udaf", u.name(), take_out ? "retract" : "update", status, ctx));
@@ -214,22 +220,34 @@ dstd::Result<void> UdafStates::combine_pairs(
     const UdafRecord& u = binding_->udaf();
     if (&other == this || &other.binding_->udaf() != &u)
         return fail(u, "can only combine with another table of the same udaf");
+    return combine_impl(other, into, from);
+}
+
+dstd::Result<void> UdafStates::combine_within(
+    dstd::Span<const std::int64_t> into, dstd::Span<const std::int64_t> from) {
+    return combine_impl(*this, into, from);
+}
+
+dstd::Result<void> UdafStates::combine_impl(
+    const UdafStates& other, dstd::Span<const std::int64_t> into,
+    dstd::Span<const std::int64_t> from) {
+    const UdafRecord& u = binding_->udaf();
     if (into.size() != from.size())
         return fail(u, "combine needs one source group per target group");
     if (into.empty()) return {};
-    dstd::Vector<void*> sources(from.size());
+    sources_.resize(from.size());
     scratch_.resize(into.size());
     for (std::size_t i = 0; i < into.size(); ++i) {
         if (into[i] < 0 || into[i] >= count_ || from[i] < 0 ||
             from[i] >= other.count_)
             return fail(u, "combine names a group that grow did not make");
         scratch_[i] = state_at(into[i]);
-        sources[i] = other.state_at(from[i]);
+        sources_[i] = other.state_at(from[i]);
     }
     CallContext ctx;
     const dftu_status status =
         u.desc().combine(ctx.get(), binding_->bound(), scratch_.data(),
-                         sources.data(), into.size());
+                         sources_.data(), into.size());
     if (status < 0)
         return dstd::Unexpected(
             call_error("udaf", u.name(), "combine", status, ctx));

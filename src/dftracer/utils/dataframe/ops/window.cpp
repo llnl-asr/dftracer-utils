@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/frame_ops.h>
 #include <dftracer/utils/dataframe/internal/errors.h>
 #include <dftracer/utils/dataframe/kernels/order.h>
@@ -6,6 +7,7 @@
 #include <dftracer/utils/dataframe/ops/ops_common.h>
 #include <dftracer/utils/dataframe/udaf_registry.h>
 #include <dftracer/utils/dataframe/udaf_states.h>
+#include <dftracer/utils/dstd/bits.h>
 #include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -1107,9 +1109,75 @@ dstd::Result<UdafWindow> udaf_window(const Layout& lay, const DataFrame& df,
     return u;
 }
 
-// One state per partition: rows that join the frame are updated in, rows that
-// leave it retracted, and value reads each frame's result. A step is one
-// callback on the rows that joined or left since the previous frame.
+// The frame of every row as [lo, hi] in sorted positions; hi < lo is an empty
+// frame. Both bounds never decrease inside a partition.
+struct UdafFrames {
+    dstd::Vector<std::int64_t> lo;
+    dstd::Vector<std::int64_t> hi;
+};
+
+UdafFrames udaf_frames(const FrameCtx& c) {
+    const std::size_t n = static_cast<std::size_t>(c.lay.n);
+    UdafFrames b{dstd::Vector<std::int64_t>(n), dstd::Vector<std::int64_t>(n)};
+    for (const auto& [p, q] : c.lay.parts)
+        walk_frame(
+            c, p, q, [](std::int64_t) {}, [](std::int64_t) {},
+            [&](std::int64_t r, std::int64_t lo, std::int64_t hi) {
+                b.lo[static_cast<std::size_t>(r)] = p + lo;
+                b.hi[static_cast<std::size_t>(r)] = p + hi;
+            });
+    return b;
+}
+
+// Present rows of every prefix of the sorted rows.
+dstd::Vector<std::int64_t> present_prefix(const UdafWindow& u) {
+    dstd::Vector<std::int64_t> prefix(u.present.size() + 1, 0);
+    for (std::size_t r = 0; r < u.present.size(); ++r)
+        prefix[r + 1] = prefix[r] + u.present[r];
+    return prefix;
+}
+
+std::int64_t present_in(const dstd::Vector<std::int64_t>& prefix,
+                        std::int64_t lo, std::int64_t hi) {
+    return hi < lo ? 0
+                   : prefix[static_cast<std::size_t>(hi + 1)] -
+                         prefix[static_cast<std::size_t>(lo)];
+}
+
+// A slice of consecutive rows of one partition, slid through by one state. The
+// first row's frame is fed whole, so a segment costs about one frame of rows
+// on top of its own steps.
+struct Segment {
+    std::int64_t first;
+    std::int64_t end;
+};
+
+constexpr std::int64_t SEGMENT_MIN_ROWS = 1024;
+
+// Cuts each partition where the next frame is no longer than the rows since the
+// last cut, so a running frame stays one segment while a short frame gives a
+// segment per SEGMENT_MIN_ROWS rows or more.
+dstd::Vector<Segment> frame_segments(const Layout& lay,
+                                     const UdafFrames& bounds) {
+    dstd::Vector<Segment> segments;
+    for (const auto& [p, q] : lay.parts) {
+        std::int64_t last = p;
+        for (std::int64_t r = p + SEGMENT_MIN_ROWS; r < q; ++r) {
+            if (r - last < SEGMENT_MIN_ROWS) continue;
+            const std::size_t at = static_cast<std::size_t>(r);
+            if (bounds.hi[at] - bounds.lo[at] + 1 > r - last) continue;
+            segments.push_back({last, r});
+            last = r;
+        }
+        segments.push_back({last, q});
+    }
+    return segments;
+}
+
+// One state per segment. Every step moves each segment that has a row left by
+// one row, so rows that join the frames are updated in and rows that leave
+// them are retracted for all the segments in one call, and value reads each
+// frame's result.
 dstd::Result<Series> frame_udaf_slide(const FrameCtx& c, const UdafWindow& u,
                                       std::int64_t min_count) {
     const Layout& lay = c.lay;
@@ -1119,9 +1187,12 @@ dstd::Result<Series> frame_udaf_slide(const FrameCtx& c, const UdafWindow& u,
     const bool unsigned_int = id == TypeId::Uint8 || id == TypeId::Uint16 ||
                               id == TypeId::Uint32 || id == TypeId::Uint64;
     const std::size_t n = static_cast<std::size_t>(lay.n);
+    const UdafFrames bounds = udaf_frames(c);
+    const dstd::Vector<std::int64_t> prefix = present_prefix(u);
+    const dstd::Vector<Segment> segments = frame_segments(lay, bounds);
     UdafStates states(u.binding);
     dstd::Result<void> status =
-        states.grow(static_cast<std::int64_t>(lay.parts.size()));
+        states.grow(static_cast<std::int64_t>(segments.size()));
     if (!status) return dstd::Unexpected(std::move(status.error()));
 
     Column<std::int64_t> ints(lay.n);
@@ -1140,22 +1211,25 @@ dstd::Result<Series> frame_udaf_slide(const FrameCtx& c, const UdafWindow& u,
             ints.null(r);
     };
 
-    dstd::Vector<std::int64_t> gids;
+    dstd::Vector<std::int64_t> enter_gids, enter_rows, leave_gids, leave_rows;
     dstd::Vector<Series> batch;
     dstd::Vector<const Series*> args;
-    const auto feed = [&](std::int64_t gid, std::int64_t first,
-                          std::int64_t last, bool take_out) {
-        if (first > last) return dstd::Result<void>{};
-        const std::int64_t len = last - first + 1;
-        gids.assign(static_cast<std::size_t>(len), gid);
+    const auto feed = [&](dstd::Vector<std::int64_t>& gids,
+                          dstd::Vector<std::int64_t>& rows, bool take_out) {
+        if (gids.empty()) return dstd::Result<void>{};
         batch.clear();
         for (const Series& col : u.sorted)
-            batch.push_back(col.slice(first, len));
+            batch.push_back(col.take(
+                dstd::Span<const std::int64_t>(rows.data(), rows.size())));
         args.clear();
         for (const Series& col : batch) args.push_back(&col);
         const dstd::Span<const std::int64_t> g(gids.data(), gids.size());
         const dstd::Span<const Series* const> a(args.data(), args.size());
-        return take_out ? states.retract(g, a) : states.update(g, a);
+        dstd::Result<void> fed =
+            take_out ? states.retract(g, a) : states.update(g, a);
+        gids.clear();
+        rows.clear();
+        return fed;
     };
     dstd::String bad_text;
     const auto store = [&](std::int64_t r, const dftu_scalar& sc) {
@@ -1190,43 +1264,59 @@ dstd::Result<Series> frame_udaf_slide(const FrameCtx& c, const UdafWindow& u,
         return true;
     };
 
+    const auto put = [](dstd::Vector<std::int64_t>& gids,
+                        dstd::Vector<std::int64_t>& rows, std::int64_t gid,
+                        std::int64_t from, std::int64_t to) {
+        for (std::int64_t pos = from; pos <= to; ++pos) {
+            gids.push_back(gid);
+            rows.push_back(pos);
+        }
+    };
+    for (std::size_t s = 0; s < segments.size() && status; ++s) {
+        const std::size_t at = static_cast<std::size_t>(segments[s].first);
+        for (std::int64_t pos = bounds.lo[at]; pos <= bounds.hi[at] && status;
+             ++pos) {
+            enter_gids.push_back(static_cast<std::int64_t>(s));
+            enter_rows.push_back(pos);
+            if (static_cast<std::int64_t>(enter_gids.size()) >= UDAF_FEED_CHUNK)
+                status = feed(enter_gids, enter_rows, false);
+        }
+    }
+    if (status) status = feed(enter_gids, enter_rows, false);
+
     bool bad_scalar = false;
-    std::int64_t gid = 0;
-    for (const auto& [p, q] : lay.parts) {
-        std::int64_t count = 0;
-        std::int64_t enter_first = -1, enter_last = -2;
-        std::int64_t leave_first = -1, leave_last = -2;
-        walk_frame(
-            c, p, q,
-            [&](std::int64_t pos) {
-                if (enter_first < 0) enter_first = p + pos;
-                enter_last = p + pos;
-                count += u.present[static_cast<std::size_t>(p + pos)];
-            },
-            [&](std::int64_t pos) {
-                if (leave_first < 0) leave_first = p + pos;
-                leave_last = p + pos;
-                count -= u.present[static_cast<std::size_t>(p + pos)];
-            },
-            [&](std::int64_t r, std::int64_t, std::int64_t) {
-                const std::int64_t ef = enter_first, el = enter_last;
-                const std::int64_t lf = leave_first, ll = leave_last;
-                enter_first = leave_first = -1;
-                enter_last = leave_last = -2;
-                if (!status) return;
-                status = feed(gid, ef, el, false);
-                if (status) status = feed(gid, lf, ll, true);
-                if (!status) return;
-                if (count == 0 || count < min_count) {
-                    set_null(r);
-                    return;
-                }
+    dstd::Vector<std::size_t> active(segments.size());
+    for (std::size_t s = 0; s < active.size(); ++s) active[s] = s;
+    for (std::int64_t step = 0; status && !bad_scalar && !active.empty();
+         ++step) {
+        std::size_t kept = 0;
+        for (const std::size_t s : active) {
+            const std::int64_t r = segments[s].first + step;
+            const std::size_t at = static_cast<std::size_t>(r);
+            const std::int64_t count =
+                present_in(prefix, bounds.lo[at], bounds.hi[at]);
+            if (count == 0 || count < min_count) {
+                set_null(r);
+            } else {
                 dftu_scalar sc{};
-                status = states.value(gid, sc);
-                if (status && !store(r, sc)) bad_scalar = true;
-            });
+                status = states.value(static_cast<std::int64_t>(s), sc);
+                if (!status) break;
+                if (!store(r, sc)) {
+                    bad_scalar = true;
+                    break;
+                }
+            }
+            if (r + 1 >= segments[s].end) continue;
+            active[kept++] = s;
+            put(enter_gids, enter_rows, static_cast<std::int64_t>(s),
+                bounds.hi[at] + 1, bounds.hi[at + 1]);
+            put(leave_gids, leave_rows, static_cast<std::int64_t>(s),
+                bounds.lo[at], bounds.lo[at + 1] - 1);
+        }
         if (!status || bad_scalar) break;
-        ++gid;
+        active.resize(kept);
+        status = feed(enter_gids, enter_rows, false);
+        if (status) status = feed(leave_gids, leave_rows, true);
     }
     if (!status) return dstd::Unexpected(std::move(status.error()));
     if (bad_scalar) {
@@ -1315,6 +1405,199 @@ dstd::Result<Series> frame_udaf_recompute(const FrameCtx& c,
     return out->take(source);
 }
 
+// Frames of at most this many rows are recomputed: its feed is cheaper than
+// the combines of a tree.
+constexpr std::int64_t UDAF_RECOMPUTE_MAX_FRAME = 8;
+
+// The partition [p, q) as a segment tree of states: level k holds a node for
+// each full block of 2^k consecutive rows, the node of a block merges its two
+// half blocks, and a frame is the O(log) nodes that tile it, left to right.
+// Only levels up to the one of the longest frame are built, as a frame never
+// takes a node larger than itself.
+// Segment tree window aggregation after V. Leis, K. Kundhikanchana, A. Kemper
+// and T. Neumann, "Efficient Processing of Window Functions in Analytical SQL
+// Queries", PVLDB 8(10), 2015, https://www.vldb.org/pvldb/vol8/p1058-leis.pdf
+struct FrameTree {
+    dstd::Vector<std::int64_t> offset;
+    std::int64_t total = 0;
+
+    FrameTree(std::int64_t size, std::int64_t longest_frame) {
+        const std::int64_t top =
+            dstd::bits::ilog2_u64(static_cast<std::uint64_t>(
+                std::max<std::int64_t>(longest_frame, 1)));
+        for (std::int64_t k = 0; k <= top && (size >> k) >= 1; ++k) {
+            offset.push_back(total);
+            total += size >> k;
+        }
+    }
+    std::int64_t node(std::int64_t level, std::int64_t index) const {
+        return offset[static_cast<std::size_t>(level)] + index;
+    }
+    // Appends the nodes that tile the local positions [lo, hi] to `out`.
+    void cover(std::int64_t lo, std::int64_t hi,
+               dstd::Vector<std::int64_t>& out) const {
+        const std::int64_t end = hi + 1;
+        for (std::int64_t x = lo; x < end;) {
+            const int fit =
+                dstd::bits::ilog2_u64(static_cast<std::uint64_t>(end - x));
+            const int aligned =
+                x == 0 ? fit
+                       : dstd::bits::ctz_u64(static_cast<std::uint64_t>(x));
+            const int level = std::min(fit, aligned);
+            out.push_back(node(level, x >> level));
+            x += std::int64_t{1} << level;
+        }
+    }
+};
+
+constexpr std::int64_t TREE_COMBINE_CHUNK = std::int64_t{1} << 16;
+
+// Builds the tree of the rows [p, p + size): a leaf per row, then each level
+// merged from the one below. A node is never changed after it is built, so a
+// frame merges nodes into a state of its own.
+dstd::Result<void> build_tree(const UdafWindow& u, const FrameTree& tree,
+                              UdafStates& states, std::int64_t p,
+                              std::int64_t size) {
+    dstd::Result<void> status = states.grow(tree.total);
+    if (!status) return status;
+    dstd::Vector<std::int64_t> gids;
+    dstd::Vector<Series> batch;
+    dstd::Vector<const Series*> args;
+    for (std::int64_t first = 0; first < size; first += UDAF_FEED_CHUNK) {
+        const std::int64_t len = std::min(UDAF_FEED_CHUNK, size - first);
+        gids.resize(static_cast<std::size_t>(len));
+        for (std::int64_t i = 0; i < len; ++i)
+            gids[static_cast<std::size_t>(i)] = tree.node(0, first + i);
+        batch.clear();
+        for (const Series& col : u.sorted)
+            batch.push_back(col.slice(p + first, len));
+        args.clear();
+        for (const Series& col : batch) args.push_back(&col);
+        status = states.update(
+            dstd::Span<const std::int64_t>(gids.data(), gids.size()),
+            dstd::Span<const Series* const>(args.data(), args.size()));
+        if (!status) return status;
+    }
+    dstd::Vector<std::int64_t> into, from;
+    for (std::size_t level = 1; level < tree.offset.size(); ++level) {
+        const std::int64_t level_size = size >> level;
+        for (std::int64_t half = 0; half < 2; ++half) {
+            for (std::int64_t first = 0; first < level_size;
+                 first += TREE_COMBINE_CHUNK) {
+                const std::int64_t last =
+                    std::min(level_size, first + TREE_COMBINE_CHUNK);
+                into.clear();
+                from.clear();
+                for (std::int64_t j = first; j < last; ++j) {
+                    into.push_back(
+                        tree.node(static_cast<std::int64_t>(level), j));
+                    from.push_back(tree.node(
+                        static_cast<std::int64_t>(level) - 1, 2 * j + half));
+                }
+                status = states.combine_within(
+                    dstd::Span<const std::int64_t>(into.data(), into.size()),
+                    dstd::Span<const std::int64_t>(from.data(), from.size()));
+                if (!status) return status;
+            }
+        }
+    }
+    return {};
+}
+
+// Without retract, each frame is a fresh state that merges the nodes of a
+// segment tree over its partition, so a row costs O(log frame) merges in place
+// of a feed of the whole frame. The frames are finalized in chunks that hold
+// about UDAF_FEED_CHUNK nodes of rows, which bounds the states of a UDAF whose
+// state grows with its rows.
+dstd::Result<Series> frame_udaf_tree(const FrameCtx& c, const UdafWindow& u,
+                                     std::int64_t min_count) {
+    const Layout& lay = c.lay;
+    const std::size_t n = static_cast<std::size_t>(lay.n);
+    const UdafFrames bounds = udaf_frames(c);
+    const dstd::Vector<std::int64_t> prefix = present_prefix(u);
+    const bool pod = u.binding->udaf().is_pod();
+    dstd::Vector<std::int64_t> source(n, -1);
+    dstd::Vector<Series> parts;
+    std::int64_t emitted = 0;
+
+    for (const auto& [p, q] : lay.parts) {
+        std::int64_t longest = 1;
+        for (std::int64_t r = p; r < q; ++r) {
+            const std::size_t at = static_cast<std::size_t>(r);
+            longest = std::max(longest, bounds.hi[at] - bounds.lo[at] + 1);
+        }
+        const FrameTree tree(q - p, longest);
+        UdafStates nodes(u.binding);
+        bool built = false;
+        std::int64_t r = p;
+        while (r < q) {
+            dstd::Vector<std::int64_t> rows;
+            dstd::Vector<std::int64_t> cover, starts{0};
+            std::int64_t weight = 0;
+            for (; r < q; ++r) {
+                const std::size_t at = static_cast<std::size_t>(r);
+                const std::int64_t count =
+                    present_in(prefix, bounds.lo[at], bounds.hi[at]);
+                if (count == 0 || count < min_count) continue;
+                if (!rows.empty() && (pod ? static_cast<std::int64_t>(
+                                                rows.size()) >= UDAF_FEED_CHUNK
+                                          : weight >= UDAF_FEED_CHUNK))
+                    break;
+                rows.push_back(r);
+                weight += bounds.hi[at] - bounds.lo[at] + 1;
+                tree.cover(bounds.lo[at] - p, bounds.hi[at] - p, cover);
+                starts.push_back(static_cast<std::int64_t>(cover.size()));
+            }
+            if (rows.empty()) break;
+            if (!built) {
+                dstd::Result<void> status =
+                    build_tree(u, tree, nodes, p, q - p);
+                if (!status) return dstd::Unexpected(std::move(status.error()));
+                built = true;
+            }
+            UdafStates acc(u.binding);
+            dstd::Result<void> status =
+                acc.grow(static_cast<std::int64_t>(rows.size()));
+            if (!status) return dstd::Unexpected(std::move(status.error()));
+            dstd::Vector<std::int64_t> into, from;
+            for (std::size_t round = 0;; ++round) {
+                into.clear();
+                from.clear();
+                for (std::size_t i = 0; i < rows.size(); ++i) {
+                    if (starts[i] + static_cast<std::int64_t>(round) >=
+                        starts[i + 1])
+                        continue;
+                    into.push_back(static_cast<std::int64_t>(i));
+                    from.push_back(
+                        cover[static_cast<std::size_t>(starts[i]) + round]);
+                }
+                if (into.empty()) break;
+                status = acc.combine_pairs(
+                    nodes,
+                    dstd::Span<const std::int64_t>(into.data(), into.size()),
+                    dstd::Span<const std::int64_t>(from.data(), from.size()));
+                if (!status) return dstd::Unexpected(std::move(status.error()));
+            }
+            dstd::Result<Series> out = acc.finalize();
+            if (!out) return out.error();
+            parts.push_back(std::move(*out));
+            for (const std::int64_t row : rows)
+                source[static_cast<std::size_t>(row)] = emitted++;
+        }
+    }
+    if (parts.empty()) {
+        UdafStates none(u.binding);
+        dstd::Result<Series> out = none.finalize();
+        if (!out) return out.error();
+        return out->take(source);
+    }
+    dstd::Result<Series> chunked = chunked_column(std::move(parts));
+    if (!chunked) return chunked.error();
+    dstd::Result<Series> joined = join_chunks(*chunked);
+    if (!joined) return joined.error();
+    return joined->take(source);
+}
+
 dstd::Result<Series> frame_udaf(const Layout& lay, const DataFrame& df,
                                 const WindowColumn& w) {
     const dstd::Result<FrameCtx> ctx = frame_context(lay, w);
@@ -1322,9 +1605,15 @@ dstd::Result<Series> frame_udaf(const Layout& lay, const DataFrame& df,
     const dstd::Result<UdafWindow> u = udaf_window(lay, df, w);
     if (!u) return u.error();
     const std::int64_t min_count = w.params.frame.min_count;
-    return u->binding->udaf().can_slide()
-               ? frame_udaf_slide(*ctx, *u, min_count)
-               : frame_udaf_recompute(*ctx, *u, min_count);
+    if (u->binding->udaf().can_slide())
+        return frame_udaf_slide(*ctx, *u, min_count);
+    const WindowParams::Frame& f = ctx->f;
+    const bool short_frame =
+        !ctx->range && f.preceding != WINDOW_UNBOUNDED &&
+        f.following != WINDOW_UNBOUNDED &&
+        f.preceding + f.following + 1 <= UDAF_RECOMPUTE_MAX_FRAME;
+    return short_frame ? frame_udaf_recompute(*ctx, *u, min_count)
+                       : frame_udaf_tree(*ctx, *u, min_count);
 }
 
 }  // namespace

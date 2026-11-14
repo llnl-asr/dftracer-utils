@@ -130,7 +130,7 @@ struct SumAgg {
             if (State* s = states[i]) s->total += in[i];
         return {};
     }
-    dstd::Result<void> combine(State& into, State& from) const {
+    dstd::Result<void> combine(State& into, const State& from) const {
         into.total += from.total;
         return {};
     }
@@ -210,7 +210,7 @@ struct ListAgg {
             if (State* s = states[i]) s->add(in[i]);
         return {};
     }
-    dstd::Result<void> combine(State& into, State& from) const {
+    dstd::Result<void> combine(State& into, const State& from) const {
         for (const std::int64_t x : from.seen) into.add(x);
         return {};
     }

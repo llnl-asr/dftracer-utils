@@ -293,6 +293,12 @@ if(TARGET plugins_test_plugin_udaf_window)
     plugins_test_plugin_udaf_window PRIVATE
     UDAF_PLUGIN_PATH="$<TARGET_FILE:udaf_plugin>")
   add_dependencies(plugins_test_plugin_udaf_window udaf_plugin)
+  if(TARGET stats_udafs_plugin)
+    target_compile_definitions(
+      plugins_test_plugin_udaf_window PRIVATE
+      STATS_UDAFS_PLUGIN_PATH="$<TARGET_FILE:stats_udafs_plugin>")
+    add_dependencies(plugins_test_plugin_udaf_window stats_udafs_plugin)
+  endif()
 endif()
 
 if(TARGET plugins_test_plugin_udaf_duql)

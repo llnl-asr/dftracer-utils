@@ -87,8 +87,10 @@ typedef struct dftu_udaf_desc {
                           const dftu_series* const* args, uint32_t nargs,
                           uint64_t rows);
     /** Merges `from[i]` into `into[i]` for i below `n`. The same `into` state
-       may appear more than once; apply the pairs in order. A `from` state is
-       left valid, and the host destroys it afterwards. */
+       may appear more than once; apply the pairs in order. combine only reads
+       a `from` state and leaves it unchanged: a window merges one `from` into
+       many frames. In a window, `from` holds rows that come after the rows of
+       `into`. */
     dftu_status (*combine)(dftu_ctx* ctx, void* bound, void* const* into,
                            void* const* from, uint64_t n);
     /** Gives the result of each of the `n` states, in order: set `*out` to a

@@ -1378,13 +1378,26 @@ for a sliding window.
 A UDAF is also a window function: a ``window`` block of duql calls it with
 ``over`` (``usum(x) over 10 rows``, ``usum(x) over 5s``), and the C ABI runs it
 as ``DFTU_WINDOW_FRAME_UDAF`` with ``udaf``, ``args`` and ``arg_count`` in the
-frame of a ``dftu_window_spec``. With ``DFTU_AGG_HAS_RETRACT`` the host keeps
-one state per partition and slides the frame: ``update`` takes the rows that
-join the frame, ``retract`` the rows that leave it (with the same null pointers
-as ``update``) and ``value`` gives the result of each frame. A UDAF without
-them is recomputed: each frame gets a state of its own, fed the frame's rows by
-``update``, and ``finalize`` gives all the results at once, so a frame of ``w``
-rows costs ``w`` rows of ``update``. A frame with no fed row, or fewer than the
+frame of a ``dftu_window_spec``. With ``DFTU_AGG_HAS_RETRACT`` the host slides
+the frame. It cuts a partition into slices of at least 1024 rows wherever the
+frame is no longer than the slice so far (a running frame stays one slice),
+keeps one state per slice and moves every slice one row per step, so ``update``
+takes the
+rows that join the frames of all slices in one call, ``retract`` takes the rows
+that leave them in one call (with the same null pointers as ``update``) and
+``value`` gives the result of each frame. A row costs O(1) rows of ``update``
+and ``retract`` and one ``value`` call, whatever the frame size. A UDAF without
+them is merged from a tree: the host feeds each row to a state of its own with
+``update``, merges the states of two neighbors into a state of the next level
+with ``combine``, and gives each frame a fresh state that ``combine`` merges
+the O(log w) tree states tiling the frame into, from left to right, so
+``combine`` must keep the order of the rows if the result depends on it. A
+``combine`` leaves its ``from`` state unchanged, because a tree state feeds
+many frames. ``finalize`` gives the results of a chunk of frames at once. A
+frame of at most 8 rows of a ``ROWS`` frame is not worth a tree: each such frame
+gets a state of its own, fed its rows by ``update``. The tree holds about two
+states per row of a partition, so a state that grows with its rows (a list of
+values) holds O(n log n) values of it. A frame with no fed row, or fewer than the
 ``min_count`` the query sets, gives null without calling ``value``. A ``window``
 entry with no ``over`` runs the UDAF over each whole partition as ``group``
 does. A window over a stream is cut at partition boundaries, as for the
@@ -1399,7 +1412,8 @@ argument. The argument types are fixed by the first batch, and a later batch
 with another type fails. A group-by that spills writes each group state with
 ``serialize`` and merges the runs with ``combine``. A duql ``group`` or ``agg``
 block calls a UDAF by name, as ``n = usum(size)`` (see
-:ref:`duql-plugin-udafs`). No duql window runs a UDAF yet.
+:ref:`duql-plugin-udafs`). A duql ``window`` block runs a UDAF over a frame,
+as described above.
 
 Python calls a UDAF from ``group_by(...).agg``. ``dft.udaf`` is the read-only
 registry, like ``dft.udf``: ``dft.udaf["p95"]`` is a ``Udaf`` with ``name``,
@@ -1423,7 +1437,7 @@ the UDAF by name when it runs, so the plugin must still be loaded then.
        static dstd::Result<dstd::UniquePtr<P95>> bind(pl::UdfBind& bind);
        dstd::Result<void> update(pl::UdafStateSet<State>& states,
                                  const pl::UdfBatch& batch) const;
-       dstd::Result<void> combine(State& into, State& from) const;
+       dstd::Result<void> combine(State& into, const State& from) const;
        dstd::Result<dftu_series*> finalize(pl::UdafStateSet<State>& states) const;
        void serialize(const State& state, dstd::String& out) const;
        dstd::Result<void> deserialize(State& state, dstd::StringView in) const;

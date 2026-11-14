@@ -63,10 +63,10 @@ struct UdafOptions {
 ///
 /// bind gives a new `A` or an error, which fails the query. update feeds a
 /// batch to the states of its rows (null entries are skipped rows), combine
-/// merges `from` into `into`, and finalize gives an owned result column with
-/// one row per state, of the type bind chose. They only read `A`, so one `A`
-/// serves every state set. A UDAF that retracts rows is not written through
-/// this class.
+/// merges `from` into `into` and leaves `from` unchanged, and finalize gives an
+/// owned result column with one row per state, of the type bind chose. They
+/// only read `A`, so one `A` serves every state set. A UDAF that retracts rows
+/// is not written through this class.
 template <class A>
 concept UdafType =
     requires {
@@ -75,11 +75,11 @@ concept UdafType =
         requires alignof(typename A::State) <= 64;
     } &&
     requires(UdfBind& bind, const UdfBatch& batch, const A& udaf,
-             UdafStateSet<typename A::State>& states,
-             typename A::State& state) {
+             UdafStateSet<typename A::State>& states, typename A::State& state,
+             const typename A::State& from) {
         { A::bind(bind) } -> std::same_as<dstd::Result<dstd::UniquePtr<A>>>;
         { udaf.update(states, batch) } -> std::same_as<dstd::Result<void>>;
-        { udaf.combine(state, state) } -> std::same_as<dstd::Result<void>>;
+        { udaf.combine(state, from) } -> std::same_as<dstd::Result<void>>;
         { udaf.finalize(states) } -> std::same_as<dstd::Result<dftu_series*>>;
     } &&
     (std::is_trivially_copyable_v<typename A::State> ||
@@ -138,8 +138,9 @@ dftu_udaf_desc udaf_desc_of(const char* name, UdafOptions options) noexcept {
                    void* const* from, std::uint64_t n) noexcept -> dftu_status {
         const A& udaf = *static_cast<const A*>(bound);
         for (std::uint64_t i = 0; i < n; ++i) {
-            dstd::Result<void> done = udaf.combine(
-                *static_cast<State*>(into[i]), *static_cast<State*>(from[i]));
+            dstd::Result<void> done =
+                udaf.combine(*static_cast<State*>(into[i]),
+                             *static_cast<const State*>(from[i]));
             if (!done) return udf_report(ctx, done.error());
         }
         return DFTU_OK;

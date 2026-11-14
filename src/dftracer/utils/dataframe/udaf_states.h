@@ -84,6 +84,12 @@ class UdafStates {
                                      dstd::Span<const std::int64_t> into,
                                      dstd::Span<const std::int64_t> from);
 
+    /// @ref combine_pairs inside one table: merges group `from[i]` into group
+    /// `into[i]`, for each i, in order. A `from` group stays as it was, so a
+    /// group may feed several merges.
+    dstd::Result<void> combine_within(dstd::Span<const std::int64_t> into,
+                                      dstd::Span<const std::int64_t> from);
+
     /// The result column: one row per group, of @ref result_type. The states
     /// stay as they are.
     dstd::Result<Series> finalize();
@@ -102,6 +108,9 @@ class UdafStates {
    private:
     class Block;
 
+    dstd::Result<void> combine_impl(const UdafStates& other,
+                                    dstd::Span<const std::int64_t> into,
+                                    dstd::Span<const std::int64_t> from);
     dstd::Result<void> feed(dstd::Span<const std::int64_t> gids,
                             dstd::Span<const Series* const> args,
                             bool take_out);
@@ -112,6 +121,9 @@ class UdafStates {
     dstd::SharedPtr<const UdafBinding> binding_;
     dstd::Vector<Block> blocks_;
     dstd::Vector<void*> scratch_;
+    dstd::Vector<void*> sources_;
+    dstd::Vector<Series> flat_;
+    dstd::Vector<const dftu_series*> handles_;
     std::size_t stride_;
     std::size_t per_block_;
     std::size_t first_block_ = 0;

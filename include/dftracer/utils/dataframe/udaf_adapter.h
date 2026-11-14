@@ -107,7 +107,8 @@ dftu_udaf_desc udaf_desc_of(const char* name, UdafOptions options) noexcept {
     dftu_udaf_desc d{};
     d.struct_size = sizeof(dftu_udaf_desc);
     d.name = name;
-    d.flags = options.flags | (IS_POD ? DFTU_AGG_STATE_POD : 0u);
+    d.flags = options.flags |
+              (IS_POD ? static_cast<std::uint32_t>(DFTU_AGG_STATE_POD) : 0u);
     d.min_args = options.min_args;
     d.max_args = options.max_args;
     d.state_size = sizeof(State);

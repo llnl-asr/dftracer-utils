@@ -7,6 +7,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <dftracer/utils/plugins/plugin/async.h>
+#include <dftracer/utils/plugins/plugin/file_format.h>
 #include <dftracer/utils/plugins/plugin/map.h>
 #include <dftracer/utils/plugins/plugin/node.h>
 #include <dftracer/utils/plugins/plugin/source.h>
@@ -718,6 +719,41 @@ class PluginBuilder {
         void* self = make_source_self(std::move(src));
         const dftu_status st =
             p->register_provider(ctx_, host_->h, name, vt, self);
+        if (st < 0) vt->destroy(self);
+        return record(st);
+    }
+
+    /// Register `format` as the file format `name`, which must be
+    /// `<plugin>.<name>`; see plugin/file_format.h for what F provides.
+    /// dftracer::utils::dataframe::LazyFrame::scan_file opens a file with it.
+    /// The host owns it once registered and destroys it when it is
+    /// unregistered and every file it opened is closed.
+    template <class F>
+    PluginBuilder& file_format(const char* name, dstd::UniquePtr<F> format) {
+        const dftu_svc_file_formats* p =
+            ext<dftu_svc_file_formats>(DFTU_SVC_FILE_FORMATS);
+        if (!p || !p->register_format)
+            return fail("no file format registry at load");
+        const dftu_file_format_vt* vt = file_format_vtable<F>();
+        void* self = make_file_format_self(std::move(format));
+        const dftu_status st =
+            p->register_format(ctx_, host_->h, name, vt, self);
+        if (st < 0) vt->destroy(self);
+        return record(st);
+    }
+
+    /// Register `sink` as the sink `name`, which must be `<plugin>.<name>`; see
+    /// plugin/file_format.h for what S provides. Nothing calls a registered
+    /// sink yet. The host owns it once registered and unregisters it before the
+    /// plugin unloads.
+    template <class S>
+    PluginBuilder& sink(const char* name, dstd::UniquePtr<S> sink) {
+        const dftu_svc_file_formats* p =
+            ext<dftu_svc_file_formats>(DFTU_SVC_FILE_FORMATS);
+        if (!p || !p->register_sink) return fail("no sink registry at load");
+        const dftu_sink_vt* vt = sink_vtable<S>();
+        void* self = make_sink_self(std::move(sink));
+        const dftu_status st = p->register_sink(ctx_, host_->h, name, vt, self);
         if (st < 0) vt->destroy(self);
         return record(st);
     }

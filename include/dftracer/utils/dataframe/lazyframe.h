@@ -372,6 +372,15 @@ class LazyFrame {
    public:
     static LazyFrame scan(dstd::SharedPtr<const Source> source);
 
+    /// A plan over the file at `path`, opened by the registered file-format
+    /// factory with the highest probe score for it (a plugin's
+    /// dftu_file_format_vt). A file no format claims is a NotFound error kept
+    /// as @ref status(), and so is a tie between two formats (an
+    /// InvalidArgument one, naming both), as is the error the winning
+    /// format's open reported. The plan holds the open file, so a later
+    /// unregistration does not affect it.
+    static LazyFrame scan_file(dstd::StringView path);
+
     LazyFrame select(dstd::Vector<dstd::String> names) const;
     LazyFrame filter(Expr predicate) const;
     LazyFrame with_column(dstd::String name, Expr expr) const;

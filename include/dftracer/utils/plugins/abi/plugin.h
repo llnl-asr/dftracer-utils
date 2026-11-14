@@ -131,16 +131,18 @@ typedef struct dftu_plugin {
    `config` is NULL when none was given. On success *out is the descriptor.
 
    `h` is a BUILD-PHASE host: its get_service answers only the registration
-   groups (DFTU_SVC_OPS, DFTU_SVC_AGG, DFTU_SVC_PORTS, DFTU_SVC_PROVIDERS) and,
-   within those, only the registration slots - register_op, register_state,
-   port_key and register_provider - plus DFTU_SVC_TASK with its run slot,
-   which uses no host state, so a plugin may keep that service pointer and
-   its `h` for later. Every other group, every non-registration slot, and
-   resolve/intern return NULL/failure, and the host fails the load naming
-   what was denied. Scanning, spawning, I/O and emitting belong to the
-   run-time host the fold callbacks receive. `h` and anything obtained from it
-   die when the factory returns; only log() is safe to keep using, and only
-   for the duration of the call.
+   groups (DFTU_SVC_OPS, DFTU_SVC_AGG, DFTU_SVC_PORTS, DFTU_SVC_PROVIDERS,
+   DFTU_SVC_NODES, DFTU_SVC_INDEX, DFTU_SVC_FILE_FORMATS) and, within those,
+   only the registration slots - register_op, register_udf, register_udaf,
+   register_state, port_key, register_provider, register_node,
+   register_extension, register_format and register_sink - plus DFTU_SVC_TASK
+   with its run slot, which uses no host state, so a plugin may keep that
+   service pointer and its `h` for later. Every other group, every
+   non-registration slot, and resolve/intern return NULL/failure, and the host
+   fails the load naming what was denied. Scanning, spawning, I/O and emitting
+   belong to the run-time host the fold callbacks receive. `h` and anything
+   obtained from it die when the factory returns; only log() is safe to keep
+   using, and only for the duration of the call.
 
    The host keeps the plugin library loaded while a node, provider, index
    extension or op registered here, or a plan or cursor holding one, is alive;

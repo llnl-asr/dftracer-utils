@@ -1670,6 +1670,80 @@ the extension by name, and ``rebuild_extension`` and ``drop_extension``
 accept it. ``tests/plugins/index_minmax_plugin.c`` is a complete
 extension: per chunk min and max of one number.
 
+15. File formats (DFTU_SVC_FILE_FORMATS)
+----------------------------------------
+
+A file format teaches the engine to read a file kind it does not know. The
+engine asks every registered format for a score, picks the highest, and scans
+the file through it: ``LazyFrame::scan_file(path)`` from C++,
+``dftu_lazyframe_scan_file(path, &lf)`` from C. The planning, the columns and
+the result are the ones ``LazyFrame::scan`` gives, so every op works on the
+file without knowing its format.
+
+A ``dftu_file_format_vt`` (``plugins/abi/file_formats.h``) is:
+
+- ``probe(self, head, n, path)`` returns 0 to 100. The head is the first 4 KiB
+  of the file, read once for the whole choice. The highest score above 0 wins,
+  and two formats at the same top score are an error that names both, so a
+  format must not claim a file another one claims just as well. Nothing above
+  0 is ``NotFound``, "no format claims <path>". ``extensions`` is a hint only.
+- ``open(ctx, self, path, &file)`` opens the file, ``schema(ctx, file,
+  &out)`` fills a ``dftu_schema`` with its names and types, and
+  ``chunks(ctx, file, &n)`` says how many pieces of the file can be scanned
+  independently, at least 1.
+- ``chunk_stats(ctx, file, chunk, &out)`` is optional (NULL for none) and
+  gives the row count of one chunk, -1 when it does not know. The host does not
+  call it yet; it is a hint for a planner.
+- ``scan(ctx, file, chunk, host, req, out_pushed, &cursor_self, &cursor_vt)``
+  opens one chunk's cursor. ``req`` is the provider ``dftu_scan_request``:
+  projection, filters, limit and memory budget. The format honors what it
+  can and answers per filter how completely it did it
+  (``DFTU_PUSHED_NO`` / ``INEXACT`` / ``EXACT``); the host re-applies
+  anything short of exact. Every chunk of one scan must report the same
+  votes, so a filter counts as pushed only when all chunks took it, and a
+  chunk that disagrees fails the scan.
+- ``close(file)`` and ``destroy(self)``, each called once.
+
+The engine walks chunks 0 to n-1 in order, one cursor at a time. The file
+stays open while any plan or cursor made from it lives, and the plugin's
+library stays loaded for as long as they do, so a plan keeps working after
+the plugin set is dropped; after that a new ``scan_file`` no longer finds the
+format. A negative status from ``probe``, ``open``, ``schema``, ``chunks`` or
+``scan`` surfaces to the caller with the message the callback set on the ctx.
+
+In C++, derive from ``pl::FileFormat<F>`` (``plugins/plugin/file_format.h``)
+and call ``.file_format<F>()`` on the builder. The trampolines catch an
+exception per callback and report it as a status.
+
+.. code-block:: cpp
+
+   #include <dftracer/utils/plugins/plugin.h>
+   namespace pl = dftracer::utils::plugins;
+
+   class Rows {                       // a text file of "<id> <name>" lines
+    public:
+       int probe(const std::uint8_t* head, std::uint64_t n,
+                 dstd::StringView path) const {
+           (void)path;
+           return n >= 4 && std::memcmp(head, "TOY1", 4) == 0 ? 90 : 0;
+       }
+       class File { /* the parsed rows */ };
+       dstd::Result<File> open(dstd::StringView path);
+       dstd::Vector<pl::Field> schema(const File&) const;   // id: Int64, name: String
+       std::uint64_t chunks(const File&) const { return 2; }
+       std::unique_ptr<pl::FormatCursor> scan(File&, std::uint64_t chunk,
+                                             const pl::ScanRequest&);
+   };
+
+   return plugin(ctx, h, config).file_format<Rows>().fold<MySlice>().build(out);
+
+**Sinks.** ``DFTU_SVC_FILE_FORMATS`` also takes a ``dftu_sink_vt``
+(``register_sink``, ``PluginBuilder::sink<S>``): an output format that names
+the columns and options it accepts (``bind``), takes one borrowed frame per
+call (``write``), and finishes with ``finalize`` or ``abort``. The registry
+and the host adapter exist in this release; the lazy plan starts choosing a
+sink for its output in the next one, so a registered sink is not called yet.
+
 Host services index
 --------------------
 
@@ -1744,6 +1818,10 @@ that covers it:
    * - none (raw ``get_service``)
      - ``DFTU_SVC_INDEX``
      - `14. Index extensions (DFTU_SVC_INDEX)`_
+   * - ``LazyFrame::scan_file``, ``dftu_lazyframe_scan_file``,
+       ``PluginBuilder::file_format<F>``
+     - ``DFTU_SVC_FILE_FORMATS``
+     - `15. File formats (DFTU_SVC_FILE_FORMATS)`_
 
 Building and scaffolding
 ------------------------

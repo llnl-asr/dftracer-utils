@@ -165,6 +165,7 @@ dftracer/utils/plugins/abi.h
 dftracer/utils/plugins/abi/agg.h
 dftracer/utils/plugins/abi/core.h
 dftracer/utils/plugins/abi/duql.h
+dftracer/utils/plugins/abi/file_formats.h
 dftracer/utils/plugins/abi/fileio.h
 dftracer/utils/plugins/abi/format.h
 dftracer/utils/plugins/abi/fs.h
@@ -183,6 +184,7 @@ dftracer/utils/plugins/abi/trace.h
 dftracer/utils/plugins/abi/value.h
 dftracer/utils/plugins/plugin.h
 dftracer/utils/plugins/plugin/async.h
+dftracer/utils/plugins/plugin/file_format.h
 dftracer/utils/plugins/plugin/fileio.h
 dftracer/utils/plugins/plugin/format.h
 dftracer/utils/plugins/plugin/fs.h

@@ -91,6 +91,9 @@ void dftu_test_format_ops(dftu_ctx*, const dftu_plugin_host*,
                           const dftu_test_harness*, const char* id);
 void dftu_test_memory_ops(dftu_ctx*, const dftu_plugin_host*,
                           const dftu_test_harness*);
+/* The file format and sink vtables, registered through a service table of the
+ * consumer's own: no host involved. */
+void dftu_test_file_format_ops(dftu_ctx*, const dftu_test_harness*);
 void dftu_test_fs_ops(dftu_ctx*, const dftu_plugin_host*,
                       const dftu_test_harness*, const char* dir);
 dftu_status dftu_test_writer_create(dftu_ctx*, const dftu_plugin_host*,

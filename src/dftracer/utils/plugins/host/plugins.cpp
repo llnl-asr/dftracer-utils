@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dataframe/c_api.h>
+#include <dftracer/utils/dataframe/internal/file_format_registry.h>
 #include <dftracer/utils/dataframe/udaf_registry.h>
 #include <dftracer/utils/dataframe/udf_registry.h>
 #include <dftracer/utils/dstd/deque.h>
@@ -76,6 +77,13 @@ struct Plugins::Impl {
         /* Node names registered via dftu_svc_nodes::register_node; same
            reason as the providers. */
         dstd::Vector<dstd::String> registered_nodes;
+        /* File format names registered via
+           dftu_svc_file_formats::register_format; same reason as the
+           providers. */
+        dstd::Vector<dstd::String> registered_file_formats;
+        /* Sink names registered via dftu_svc_file_formats::register_sink; same
+           reason as the providers. */
+        dstd::Vector<dstd::String> registered_sinks;
         /* Index extension names registered via
            dftu_svc_index::register_extension; same reason as the providers. */
         dstd::Vector<dstd::String> registered_index_extensions;
@@ -102,6 +110,10 @@ struct Plugins::Impl {
                 ::dftu_provider_unregister(name.c_str());
             for (const dstd::String& name : p.registered_nodes)
                 ::dftu_node_unregister(name.c_str());
+            for (const dstd::String& name : p.registered_file_formats)
+                ::dftu_format_unregister(name.c_str());
+            for (const dstd::String& name : p.registered_sinks)
+                dataframe::unregister_sink(name);
             for (const dstd::String& name : p.registered_index_extensions)
                 trace::index::extensions::unregister_extension(name);
             p.library.reset();
@@ -358,6 +370,10 @@ dstd::Result<Plugins::Impl::Loaded> load_plugin(const dstd::String& path,
             ::dftu_provider_unregister(name.c_str());
         for (const dstd::String& name : build_host.registered_nodes())
             ::dftu_node_unregister(name.c_str());
+        for (const dstd::String& name : build_host.registered_file_formats())
+            ::dftu_format_unregister(name.c_str());
+        for (const dstd::String& name : build_host.registered_sinks())
+            dataframe::unregister_sink(name);
         for (const dstd::String& name :
              build_host.registered_index_extensions())
             trace::index::extensions::unregister_extension(name);
@@ -438,6 +454,8 @@ dstd::Result<Plugins::Impl::Loaded> load_plugin(const dstd::String& path,
                                  build_host.take_registered_udafs(),
                                  build_host.take_registered_providers(),
                                  build_host.take_registered_nodes(),
+                                 build_host.take_registered_file_formats(),
+                                 build_host.take_registered_sinks(),
                                  build_host.take_registered_index_extensions(),
                                  build_host.memory()};
 }
@@ -759,8 +777,21 @@ dstd::Result<Plugins> build_injected_plugins(
     auto impl = dstd::make_unique<Plugins::Impl>();
     impl->plugins.reserve(plugins.size());
     for (dftu_plugin* pl : plugins)
-        impl->plugins.push_back(
-            {nullptr, pl, false, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}});
+        impl->plugins.push_back({nullptr,
+                                 pl,
+                                 false,
+                                 {},
+                                 {},
+                                 {},
+                                 {},
+                                 {},
+                                 {},
+                                 {},
+                                 {},
+                                 {},
+                                 {},
+                                 {},
+                                 {}});
     auto ordered = settle_order(*impl);
     if (!ordered) return dstd::Unexpected(std::move(ordered).error());
     settle_prune(*impl);

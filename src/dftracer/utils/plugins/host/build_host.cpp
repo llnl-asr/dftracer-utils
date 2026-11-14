@@ -139,6 +139,28 @@ dftu_status build_register_provider(::dftu_ctx* ctx, void* h, const char* name,
 const ::dftu_svc_providers g_build_providers = {sizeof(::dftu_svc_providers),
                                                 build_register_provider};
 
+dftu_status build_register_format(::dftu_ctx* ctx, void* h, const char* name,
+                                  const ::dftu_file_format_vt* vt, void* self) {
+    BuildHost& bh = self_of(h);
+    const dftu_status status = detail::register_plugin_file_format(
+        ctx, name, vt, self, bh.library(), bh.memory());
+    if (status >= 0) bh.registered_file_formats().emplace_back(name);
+    return status;
+}
+
+dftu_status build_register_sink(::dftu_ctx* ctx, void* h, const char* name,
+                                const ::dftu_sink_vt* vt, void* self) {
+    BuildHost& bh = self_of(h);
+    const dftu_status status =
+        detail::register_plugin_sink(ctx, name, vt, self, bh.library());
+    if (status >= 0) bh.registered_sinks().emplace_back(name);
+    return status;
+}
+
+const ::dftu_svc_file_formats g_build_file_formats = {
+    sizeof(::dftu_svc_file_formats), build_register_format,
+    build_register_sink};
+
 dftu_status build_register_node(::dftu_ctx* ctx, void* h, const char* name,
                                 const ::dftu_node_vt* vt, void* self) {
     BuildHost& bh = self_of(h);
@@ -233,6 +255,8 @@ const void* build_get_service(void* h, const char* ext_id) {
     if (dstd::StringView{ext_id} == DFTU_SVC_PORTS) return &g_build_ports;
     if (dstd::StringView{ext_id} == DFTU_SVC_PROVIDERS)
         return &g_build_providers;
+    if (dstd::StringView{ext_id} == DFTU_SVC_FILE_FORMATS)
+        return &g_build_file_formats;
     if (dstd::StringView{ext_id} == DFTU_SVC_NODES) return &g_build_nodes;
     if (dstd::StringView{ext_id} == DFTU_SVC_INDEX) return &g_build_index;
     if (dstd::StringView{ext_id} == DFTU_SVC_TASK) return &g_build_task;

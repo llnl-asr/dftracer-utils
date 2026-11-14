@@ -54,6 +54,7 @@ const void* agg_ext_vtable();
 const void* result_ext_vtable();
 const void* ops_ext_vtable();
 const void* providers_ext_vtable();
+const void* file_formats_ext_vtable();
 const void* nodes_ext_vtable();
 const void* index_ext_vtable();
 const void* task_ext_vtable();
@@ -66,8 +67,8 @@ const void* memory_ext_vtable();
 const void* cursor_memory_ext_vtable();
 
 /// The table of a service that keeps no state in a fold (io, sketch, ops,
-/// providers, nodes, index, fs, json and yaml), shared by the host of a
-/// fold and the host of a cursor; null for any other id.
+/// providers, nodes, index, fs, json, yaml and file formats), shared by the
+/// host of a fold and the host of a cursor; null for any other id.
 const void* stateless_service(const char* ext_id);
 
 /// Logs a plugin's line at `level` (a dftu_log_level) tagged with its name.
@@ -116,6 +117,21 @@ dftu_status register_plugin_node(::dftu_ctx* ctx, const char* name,
 dftu_status register_plugin_index_extension(
     ::dftu_ctx* ctx, const char* name, const ::dftu_index_extension* vt,
     void* self, dstd::SharedPtr<PluginLibrary> library);
+
+/// dftu_svc_file_formats::register_format with the same plugin-name gate,
+/// forwarding into the process-lifetime file format registry. The format keeps
+/// `library` alive, so a plan over a file it opened keeps the plugin mapped.
+dftu_status register_plugin_file_format(::dftu_ctx* ctx, const char* name,
+                                        const ::dftu_file_format_vt* vt,
+                                        void* self,
+                                        dstd::SharedPtr<PluginLibrary> library,
+                                        dstd::SharedPtr<PluginMemory> memory);
+
+/// dftu_svc_file_formats::register_sink with the same plugin-name gate,
+/// forwarding into the process-lifetime sink registry.
+dftu_status register_plugin_sink(::dftu_ctx* ctx, const char* name,
+                                 const ::dftu_sink_vt* vt, void* self,
+                                 dstd::SharedPtr<PluginLibrary> library);
 
 }  // namespace detail
 

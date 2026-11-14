@@ -17,6 +17,7 @@
 #include <dftracer/utils/plugins/plugin/job.h>
 #include <dftracer/utils/plugins/plugin/register.h>
 #include <dftracer/utils/plugins/plugin/source.h>
+#include <dftracer/utils/plugins/plugin/file_format.h>
 #include <dftracer/utils/plugins/plugin/node.h>
 #include <dftracer/utils/plugins/plugin/fileio.h>
 #include <dftracer/utils/plugins/plugin/format.h>

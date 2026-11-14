@@ -16,7 +16,7 @@ namespace dftracer::utils::plugins::host {
 
 /// The host a plugin factory receives. It answers only the registration
 /// groups - DFTU_SVC_OPS, DFTU_SVC_AGG, DFTU_SVC_PORTS, DFTU_SVC_PROVIDERS,
-/// DFTU_SVC_NODES -
+/// DFTU_SVC_NODES, DFTU_SVC_INDEX, DFTU_SVC_FILE_FORMATS -
 /// and, inside those,
 /// only the registration slots, plus dftu_svc_task::run, which uses no host
 /// state and so stays valid after the factory returns. Anything that needs a
@@ -106,6 +106,26 @@ class BuildHost {
 
     dstd::Vector<dstd::String>& registered_nodes() { return registered_nodes_; }
 
+    /// The file format names the factory registered with
+    /// dftu_svc_file_formats::register_format; unregistered before dlclose, as
+    /// the providers are.
+    dstd::Vector<dstd::String> take_registered_file_formats() {
+        return std::move(registered_file_formats_);
+    }
+
+    dstd::Vector<dstd::String>& registered_file_formats() {
+        return registered_file_formats_;
+    }
+
+    /// The sink names the factory registered with
+    /// dftu_svc_file_formats::register_sink; unregistered before dlclose, as
+    /// the formats are.
+    dstd::Vector<dstd::String> take_registered_sinks() {
+        return std::move(registered_sinks_);
+    }
+
+    dstd::Vector<dstd::String>& registered_sinks() { return registered_sinks_; }
+
     /// The index extension names registered with
     /// dftu_svc_index::register_extension; unregistered before dlclose, as the
     /// providers are.
@@ -128,6 +148,8 @@ class BuildHost {
     dstd::Vector<dstd::String> registered_udafs_;
     dstd::Vector<dstd::String> registered_providers_;
     dstd::Vector<dstd::String> registered_nodes_;
+    dstd::Vector<dstd::String> registered_file_formats_;
+    dstd::Vector<dstd::String> registered_sinks_;
     dstd::Vector<dstd::String> registered_index_extensions_;
     dftu_plugin_host host_{};
 };

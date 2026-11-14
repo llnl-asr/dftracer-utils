@@ -1782,6 +1782,25 @@ DFTU_EXPORT dftu_dataframe* dftu_lazyframe_collect(dftu_lazyframe* lf,
 /** Free a lazyframe handle. */
 DFTU_EXPORT void dftu_lazyframe_free(dftu_lazyframe* lf);
 
+/** A plan over the file at `path`, opened by the plugin file format that
+ * claims it (dftu_file_format_vt, registered through
+ * dftu_svc_file_formats). `path` is borrowed for the call. Writes a new
+ * caller-owned handle to `*out` and returns 0; the caller frees it with
+ * dftu_lazyframe_free. A file no format claims, two formats that tie for it, or
+ * a failing plugin all produce a plan whose dftu_lazyframe_collect returns
+ * NULL, exactly as they do in C++; to tell them apart, read the reason from the
+ * C++ LazyFrame::status(). Returns non-zero and writes nothing when `path` or
+ * `out` is NULL. */
+DFTU_EXPORT int dftu_lazyframe_scan_file(const char* path,
+                                         dftu_lazyframe** out);
+
+/** Remove the file format registered as `name`. Only the name is removed: a
+ * plan that already opened a file through it keeps running, and a later scan
+ * of a new path no longer finds it. Returns 0 on success, non-zero if `name`
+ * is NULL or unregistered. A plugin host calls this for every format a plugin
+ * registered before it unloads the plugin. */
+DFTU_EXPORT int dftu_format_unregister(const char* name);
+
 /** Output column names without running the query, joined by '\n' into a new
  * malloc'd C string (empty for a plan ending in a data-dependent op). The
  * caller frees it with dftu_duql_string_free. NULL on error. */

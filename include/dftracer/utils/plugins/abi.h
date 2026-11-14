@@ -13,6 +13,7 @@
 #include <dftracer/utils/plugins/abi/agg.h>
 #include <dftracer/utils/plugins/abi/core.h>
 #include <dftracer/utils/plugins/abi/duql.h>
+#include <dftracer/utils/plugins/abi/file_formats.h>
 #include <dftracer/utils/plugins/abi/fileio.h>
 #include <dftracer/utils/plugins/abi/format.h>
 #include <dftracer/utils/plugins/abi/fs.h>

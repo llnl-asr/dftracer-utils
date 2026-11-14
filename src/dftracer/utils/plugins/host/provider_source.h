@@ -3,14 +3,43 @@
 #define DFTRACER_UTILS_PLUGINS_HOST_PROVIDER_SOURCE_H
 
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dataframe/types.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi/providers.h>
 #include <dftracer/utils/plugins/host/plugin_library.h>
 #include <dftracer/utils/plugins/host/plugin_memory.h>
 
 namespace dftracer::utils::plugins::host {
+
+class CursorHost;
+
+/// A dataframe::Cursor over one dftu_cursor_vt/self a plugin scan handed back,
+/// converting each frame it yields and checking every one of them against
+/// `expected_projection` (when non-empty: exactly those columns, in that order)
+/// and `expected_types` (a non-Unknown declared type the frame must match). It
+/// owns `self`, destroying it through vt->destroy once the cursor is gone,
+/// awaits the task a callback leaves pending, and keeps `source` alive, so a
+/// plugin's state outlives the cursor. `vt` must be a valid cursor vtable and
+/// `self` must belong to the caller until this call.
+dstd::UniquePtr<dataframe::Cursor> make_plugin_cursor(
+    const ::dftu_cursor_vt* vt, void* self, dstd::UniquePtr<CursorHost> host,
+    dstd::Vector<dstd::String> expected_projection,
+    dstd::Vector<dataframe::TypeId> expected_types,
+    dstd::SharedPtr<const dataframe::Source> source);
+
+/// The dataframe::Pushed one dftu_pushed value means. A value the ABI does not
+/// define reads as No, which is always sound: the engine re-applies.
+dataframe::Pushed plugin_pushed(std::int32_t value);
+
+/// The declared type of each column of `projection`, in that order, or of the
+/// whole schema when `projection` is empty. A name the schema does not declare
+/// reads as Unknown, so the frame check skips it.
+dstd::Vector<dataframe::TypeId> declared_types(
+    const dataframe::Schema& declared,
+    const dstd::Vector<dstd::String>& projection);
 
 /// Adapts a dftu_source_vt/self pair as a dataframe Source, for a test that
 /// drives the scan() C-ABI marshaling (dftu_scan_request, the out_pushed array,

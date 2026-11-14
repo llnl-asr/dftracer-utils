@@ -18,6 +18,7 @@
 #include <dftracer/utils/dataframe/internal/decimal.h>
 #include <dftracer/utils/dataframe/internal/errors.h>
 #include <dftracer/utils/dataframe/internal/expr_handle.h>  // expr_handle_wrap/unwrap
+#include <dftracer/utils/dataframe/internal/file_format_registry.h>
 #include <dftracer/utils/dataframe/internal/fingerprint.h>
 #include <dftracer/utils/dataframe/internal/float16.h>
 #include <dftracer/utils/dataframe/internal/governor.h>
@@ -4775,6 +4776,34 @@ coro::CoroTask<dstd::Result<DataFrame>> LazyFrame::run_ops_in_memory(
 
 LazyFrame LazyFrame::scan(dstd::SharedPtr<const Source> source) {
     return LazyFrame(std::move(source), {});
+}
+
+namespace {
+
+/// The plan a failed scan_file() holds: an empty schema and a scan that reports
+/// the same error, so the failure surfaces from status() and from every read.
+class FailedSource final : public Source {
+   public:
+    explicit FailedSource(dstd::Error error) : error_(std::move(error)) {}
+
+    Schema schema() const override { return Schema{}; }
+
+    dstd::Result<ScanResult> scan(const ScanRequest&) const override {
+        return error_;
+    }
+
+   private:
+    dstd::Error error_;
+};
+
+}  // namespace
+
+LazyFrame LazyFrame::scan_file(dstd::StringView path) {
+    auto opened = open_file_with_format(path);
+    if (!opened)
+        return LazyFrame(dstd::make_shared<FailedSource>(opened.error()), {})
+            .failed(opened.error());
+    return LazyFrame(std::move(*opened), {});
 }
 
 LazyFrame LazyFrame::select(dstd::Vector<dstd::String> names) const {

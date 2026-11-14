@@ -9,6 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Added
 
+- A plugin can register a file format (`DFTU_SVC_FILE_FORMATS`, `plugins/abi/file_formats.h`): it scores a file 0..100 from its first 4 KiB, opens it, declares its columns, and hands the engine one cursor per chunk. `LazyFrame::scan_file` / `dftu_lazyframe_scan_file` scan a file through the highest-scoring format, `PluginBuilder::file_format<F>()` is the C++ SDK for one, and output sinks are declared (`dftu_sink_vt`, `PluginBuilder::sink<S>()`) and get wired into the plan next.
+
 - ``dftracer/utils/arrow/stream.h`` streams a ``dataframe::Series``, a ``dataframe::DataFrame`` and a ``dataframe::LazyFrame`` as an ``ArrowArrayStream`` and imports one back as a chunked column, a frame, or a lazy frame that pulls one batch per scan; Python gains ``Series.__arrow_c_stream__``, a per-chunk ``DataFrame.__arrow_c_stream__`` and ``LazyFrame.__arrow_c_stream__``, and the schema reconciler moved into the arrow library.
 - The arrow library has one owner type, `arrow::Batch`, in `dftracer/utils/arrow/batch.h`, and `dftracer/utils/arrow/ipc.h` has `arrow::Writer`, `arrow::Reader`, `arrow::scan_ipc` and `arrow::read_ipc`; `to_arrow`, `series_from_arrow` and `dataframe_from_arrow` report failure as `dstd::Result`, and `arrow::WriterOptions` picks the IPC compression.
   `arrow::scan_ipc` decodes several files at once, as many as the request's memory budget holds, gives their batches in file order, and rejects a file whose columns differ from the first file's.

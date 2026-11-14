@@ -463,19 +463,8 @@ class ProviderSource final
             r.filters[i] = to_pushed(out_pushed[i]);
         auto read = read_schema();
         if (!read) return read.error();
-        const dataframe::Schema& declared = *read;
-        dstd::Vector<dataframe::TypeId> expected_types;
-        if (req.projection.empty()) {
-            for (const dataframe::Field& f : declared.fields)
-                expected_types.push_back(f.type.id);
-        } else {
-            for (const dstd::String& name : req.projection) {
-                dataframe::TypeId id = dataframe::TypeId::Unknown;
-                for (const dataframe::Field& f : declared.fields)
-                    if (f.name == name) id = f.type.id;
-                expected_types.push_back(id);
-            }
-        }
+        dstd::Vector<dataframe::TypeId> expected_types =
+            declared_types(*read, req.projection);
         r.cursor = dstd::make_unique<ProviderCursor>(
             vt, cursor_self, std::move(host), req.projection,
             std::move(expected_types), shared_from_this());
@@ -600,6 +589,38 @@ class VtableProvider final : public dataframe::ProviderFactory {
 };
 
 }  // namespace
+
+dstd::UniquePtr<dataframe::Cursor> make_plugin_cursor(
+    const ::dftu_cursor_vt* vt, void* self, dstd::UniquePtr<CursorHost> host,
+    dstd::Vector<dstd::String> expected_projection,
+    dstd::Vector<dataframe::TypeId> expected_types,
+    dstd::SharedPtr<const dataframe::Source> source) {
+    return dstd::make_unique<ProviderCursor>(
+        vt, self, std::move(host), std::move(expected_projection),
+        std::move(expected_types), std::move(source));
+}
+
+dataframe::Pushed plugin_pushed(std::int32_t value) { return to_pushed(value); }
+
+dstd::Vector<dataframe::TypeId> declared_types(
+    const dataframe::Schema& declared,
+    const dstd::Vector<dstd::String>& projection) {
+    dstd::Vector<dataframe::TypeId> types;
+    if (projection.empty()) {
+        types.reserve(declared.fields.size());
+        for (const dataframe::Field& f : declared.fields)
+            types.push_back(f.type.id);
+        return types;
+    }
+    types.reserve(projection.size());
+    for (const dstd::String& name : projection) {
+        dataframe::TypeId id = dataframe::TypeId::Unknown;
+        for (const dataframe::Field& f : declared.fields)
+            if (f.name == name) id = f.type.id;
+        types.push_back(id);
+    }
+    return types;
+}
 
 dstd::SharedPtr<dataframe::Source> make_provider_source(
     const ::dftu_source_vt& vt, void* self,

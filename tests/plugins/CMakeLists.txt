@@ -33,6 +33,7 @@ set(PLUGINS_TEST_SOURCES
     test_plugin_memory.cpp
     test_plugin_reads.cpp
     test_plugin_providers.cpp
+    test_plugin_file_formats.cpp
     test_provider_pushdown.cpp
     test_plugin_library_lifetime.cpp
     test_provider_schema_types.cpp
@@ -101,6 +102,7 @@ set(cabi_sources test_plugin_c_abi.cpp
                  fileio_abi_c_consumer.c
                  fs_abi_c_consumer.c
                  format_abi_c_consumer.c
+                 file_formats_abi_c_consumer.c
                  memory_abi_c_consumer.c)
 add_executable(${cabi_target} ${cabi_sources})
 target_include_directories(${cabi_target} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
@@ -159,7 +161,9 @@ endif()
 # through Plugins::Builder by plugins/test_plugin_factory_host.
 # +++++++++++++++++++++++++++++++++++++++++
 
-foreach(fh_plugin factory_registers_op_plugin factory_escapes_plugin
+foreach(fh_plugin toy_format_plugin toy_format_tie_plugin
+                  toy_bad_sink_plugin
+                  factory_registers_op_plugin factory_escapes_plugin
                   scan_registers_op_plugin index_minmax_plugin udf_plugin
                   udf_clash_plugin udaf_plugin udaf_bad_plugin)
   add_library(${fh_plugin} MODULE ${fh_plugin}.c)
@@ -179,7 +183,7 @@ foreach(fh_plugin factory_registers_op_plugin factory_escapes_plugin
 endforeach()
 
 foreach(cxx_plugin builder_plugin config_keys_plugin reads_projection_plugin
-                  provider_fixture_plugin)
+                  provider_fixture_plugin toy_sink_plugin)
   add_library(${cxx_plugin} MODULE ${cxx_plugin}.cpp)
   target_set_warnings(${cxx_plugin})
   set_target_properties(
@@ -200,7 +204,8 @@ endforeach()
 
 # It reads the batch dataframe and runs its own registered op, so it links the
 # dataframe C ABI like the examples that do the same.
-foreach(df_plugin factory_registers_op_plugin builder_plugin udf_plugin
+foreach(df_plugin toy_format_plugin toy_format_tie_plugin toy_sink_plugin
+                  factory_registers_op_plugin builder_plugin udf_plugin
                   udaf_plugin
                   config_keys_plugin reads_projection_plugin
                   provider_fixture_plugin)
@@ -339,6 +344,17 @@ if(TARGET plugins_test_plugin_library_lifetime)
     plugins_test_plugin_library_lifetime PRIVATE
     LIFETIME_PLUGIN_PATH="$<TARGET_FILE:lifetime_plugin>")
   add_dependencies(plugins_test_plugin_library_lifetime lifetime_plugin)
+endif()
+
+if(TARGET plugins_test_plugin_file_formats)
+  target_compile_definitions(
+    plugins_test_plugin_file_formats PRIVATE
+    TOY_FORMAT_PLUGIN_PATH="$<TARGET_FILE:toy_format_plugin>"
+    TOY_FORMAT_TIE_PLUGIN_PATH="$<TARGET_FILE:toy_format_tie_plugin>"
+    TOY_SINK_PLUGIN_PATH="$<TARGET_FILE:toy_sink_plugin>"
+    TOY_BAD_SINK_PLUGIN_PATH="$<TARGET_FILE:toy_bad_sink_plugin>")
+  add_dependencies(plugins_test_plugin_file_formats toy_format_plugin
+                   toy_format_tie_plugin toy_sink_plugin toy_bad_sink_plugin)
 endif()
 
 if(TARGET plugins_test_plugin_providers)

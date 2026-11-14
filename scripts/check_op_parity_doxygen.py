@@ -137,6 +137,7 @@ ALLOWLIST = {
         "collect_group_state",
         "explain",
         "scan",
+        "scan_file",
         "schema",
         "output_schema",
         "has_undeclared_columns",

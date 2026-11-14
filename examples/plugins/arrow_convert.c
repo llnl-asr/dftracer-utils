@@ -330,8 +330,9 @@ done:
 // Fills `schema` and `array` from `col`, borrowing its buffers. Returns 0 on
 // success, or -1 with `why` set and both left released, so the caller releases
 // nothing on a failure.
-int dftu_plugin_export_arrow(const dftu_series* col, struct ArrowSchema* schema,
-                             struct ArrowArray* array, char* why) {
+static int dftu_plugin_export_arrow(const dftu_series* col,
+                                    struct ArrowSchema* schema,
+                                    struct ArrowArray* array, char* why) {
     schema->release = NULL;
     array->release = NULL;
     if (col == NULL) return fail(why, "no column");
@@ -419,8 +420,9 @@ static dftu_series* import_dictionary(const struct ArrowArray* a, char* why) {
 // Takes ownership of `array` (released here when the import fails) and returns
 // a column borrowing its buffers. Returns NULL with `why` set on an unsupported
 // layout.
-dftu_series* dftu_plugin_import_arrow(const struct ArrowSchema* schema,
-                                      struct ArrowArray* array, char* why) {
+static dftu_series* dftu_plugin_import_arrow(const struct ArrowSchema* schema,
+                                             struct ArrowArray* array,
+                                             char* why) {
     if (array == NULL || array->release == NULL) {
         fail(why, "the array is already released");
         return NULL;

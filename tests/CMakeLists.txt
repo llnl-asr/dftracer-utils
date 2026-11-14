@@ -178,6 +178,15 @@ add_test(
     sh -c
     [=[bad=$(for lib in memory dstd common coro runtime store json yaml duql fileio dataframe trace; do for root in include src; do [ -d "$0/$root/dftracer/utils/$lib" ] && grep -rnE '^[[:space:]]*#[[:space:]]*include[[:space:]]*<dftracer/utils/plugins/' "$0/$root/dftracer/utils/$lib"; done; done); if [ -n "$bad" ]; then echo "include of a plugins header from a library below plugins:"; echo "$bad"; exit 1; fi]=]
     ${CMAKE_SOURCE_DIR})
+# Arrow stays in the arrow library, the Python bindings and tests/arrow/.
+# slice_bench measures the conversion, and arrow_convert.c shows a plugin that
+# brings its own nanoarrow.
+add_test(
+  NAME arrow_only_in_arrow
+  COMMAND
+    sh -c
+    [=[cd "$0" && bad=$(grep -rnE '^[[:space:]]*#[[:space:]]*include[[:space:]]*<(nanoarrow/|dftracer/utils/arrow/)' include src tests benchmarks examples | grep -vE '^(include|src)/dftracer/utils/arrow/|^src/dftracer/utils/python/|^tests/arrow/|^benchmarks/slice_bench\.cpp:|^examples/plugins/arrow_convert\.c:'); if [ -n "$bad" ]; then echo "Arrow include outside the arrow library, the Python bindings and tests/arrow:"; echo "$bad"; exit 1; fi]=]
+    ${CMAKE_SOURCE_DIR})
 add_test(
   NAME plugins_no_upward
   COMMAND

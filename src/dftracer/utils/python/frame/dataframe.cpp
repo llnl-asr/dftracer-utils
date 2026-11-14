@@ -750,10 +750,11 @@ PyObject* DataFrame_group_agg_expr(PyObject* self, PyObject* args) {
     for (Py_ssize_t i = 0; i < ns; ++i) {
         PyObject* t = PySequence_Fast_GET_ITEM(seq, i);
         const Py_ssize_t tn = PyTuple_Check(t) ? PyTuple_GET_SIZE(t) : 0;
-        if (tn != 3 && tn != 4 && tn != 5) {
+        if (tn < 3 || tn > 6) {
             Py_DECREF(seq);
-            PyErr_SetString(PyExc_TypeError,
-                            "each spec is (op, ast, out[, param[, by_ast]])");
+            PyErr_SetString(
+                PyExc_TypeError,
+                "each spec is (op, ast, out[, param[, by_ast[, udaf]]])");
             return nullptr;
         }
         dataframe::AggExprSpec s;
@@ -775,7 +776,7 @@ PyObject* DataFrame_group_agg_expr(PyObject* self, PyObject* args) {
             }
             s.value = std::move(v);
         }
-        if (tn == 5) {
+        if (tn >= 5) {
             PyObject* by_ast = PyTuple_GET_ITEM(t, 4);
             if (by_ast != Py_None) {
                 dataframe::Expr by;
@@ -785,6 +786,36 @@ PyObject* DataFrame_group_agg_expr(PyObject* self, PyObject* args) {
                     return nullptr;
                 }
                 s.by = std::move(by);
+            }
+        }
+        if (tn == 6) {
+            // (name, [arg_ast, ...]): the UDAF the spec calls and its
+            // arguments after `value`.
+            PyObject* call = PyTuple_GET_ITEM(t, 5);
+            PyObject* fn = PyTuple_Check(call) && PyTuple_GET_SIZE(call) == 2
+                               ? PyTuple_GET_ITEM(call, 0)
+                               : nullptr;
+            PyObject* arg_asts = fn ? PyTuple_GET_ITEM(call, 1) : nullptr;
+            if (!fn || !PyList_Check(arg_asts)) {
+                Py_DECREF(seq);
+                PyErr_SetString(PyExc_TypeError,
+                                "a udaf spec is (name, [arg_ast, ...])");
+                return nullptr;
+            }
+            const char* fn_name = PyUnicode_AsUTF8(fn);
+            if (!fn_name) {
+                Py_DECREF(seq);
+                return nullptr;
+            }
+            s.fn = fn_name;
+            for (Py_ssize_t j = 0; j < PyList_GET_SIZE(arg_asts); ++j) {
+                dataframe::Expr arg;
+                if (!dftracer::utils::python::frame::build_expr_from_ast(
+                        PyList_GET_ITEM(arg_asts, j), &arg)) {
+                    Py_DECREF(seq);
+                    return nullptr;
+                }
+                s.args.push_back(std::move(arg));
             }
         }
         const char* out = PyUnicode_AsUTF8(PyTuple_GET_ITEM(t, 2));

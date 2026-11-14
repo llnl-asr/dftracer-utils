@@ -78,16 +78,51 @@ reduce_spec_strings(
     return out;
 }
 
-// Parse a sequence of agg spec strings ("count" or "<op>:<column>") into
-// GroupAgg records, mirroring the group_by string-spec form.
+// Parse a UDAF spec (name, out, [column, ...]) into a GroupAgg: `column` is the
+// first argument and `args` the others.
+inline bool udaf_agg_from_tuple(PyObject* item,
+                                dftracer::utils::dataframe::GroupAgg& out) {
+    if (PyTuple_GET_SIZE(item) != 3 ||
+        !PyList_Check(PyTuple_GET_ITEM(item, 2))) {
+        PyErr_SetString(PyExc_TypeError,
+                        "a udaf spec is (name, out, [column, ...])");
+        return false;
+    }
+    PyObject* columns = PyTuple_GET_ITEM(item, 2);
+    const char* fn = PyUnicode_AsUTF8(PyTuple_GET_ITEM(item, 0));
+    const char* name =
+        fn ? PyUnicode_AsUTF8(PyTuple_GET_ITEM(item, 1)) : nullptr;
+    if (!name) return false;
+    out.op = dftracer::utils::dataframe::Agg::Udaf;
+    out.fn = fn;
+    out.out = name;
+    for (Py_ssize_t i = 0; i < PyList_GET_SIZE(columns); ++i) {
+        const char* c = PyUnicode_AsUTF8(PyList_GET_ITEM(columns, i));
+        if (!c) return false;
+        if (i == 0)
+            out.column = c;
+        else
+            out.args.emplace_back(c);
+    }
+    return true;
+}
+
+// Parse a sequence of agg specs into GroupAgg records: a string ("count" or
+// "<op>:<column>"), mirroring the group_by string-spec form, or a UDAF tuple.
 inline bool aggs_from_seq(
     PyObject* obj,
     dftracer::utils::dstd::Vector<dftracer::utils::dataframe::GroupAgg>& out) {
     return core::parse_seq<dftracer::utils::dataframe::GroupAgg>(
-        obj, "aggs must be a sequence of str", out,
+        obj, "aggs must be a sequence of str or udaf tuples", out,
         [](PyObject* item,
            dftracer::utils::dstd::Vector<dftracer::utils::dataframe::GroupAgg>&
                o) {
+            if (PyTuple_Check(item)) {
+                dftracer::utils::dataframe::GroupAgg a;
+                if (!udaf_agg_from_tuple(item, a)) return false;
+                o.push_back(std::move(a));
+                return true;
+            }
             const char* s = PyUnicode_AsUTF8(item);
             if (!s) return false;
             try {

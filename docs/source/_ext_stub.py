@@ -625,6 +625,14 @@ def install_extension_stub() -> None:
         """The names of the registered scalar UDFs."""
         return []
 
+    def udaf_lookup(name: str) -> tuple:
+        """The registered UDAF `name`: (handle, min_args, max_args, flags)."""
+        return (object(), 0, 0, 0)
+
+    def udaf_names() -> list:
+        """The names of the registered UDAFs."""
+        return []
+
     def vec_eval_many(asts: object, columns: object) -> list:
         """Compile several column expressions into one CSE'd pass; return one
         Series per root."""
@@ -684,6 +692,8 @@ def install_extension_stub() -> None:
         "scan_files",
         "udf_lookup",
         "udf_names",
+        "udaf_lookup",
+        "udaf_names",
         "set_log_color",
         "set_log_level",
         "vec_eval",

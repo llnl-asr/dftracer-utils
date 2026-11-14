@@ -84,6 +84,8 @@ __all__ = [
     "udf",
     "call",
     "Udf",
+    "udaf",
+    "Udaf",
     "if_else",
     "Agg",
     "Named",
@@ -266,6 +268,7 @@ _AGG_CODE = {
     "regr_r2": 34,
     "prod": 35,
     "sketch_quantile": 36,
+    "udaf": 37,
 }
 
 _NOT_PUSHABLE = (
@@ -2083,6 +2086,81 @@ def call(name: str, *args: Expr) -> Expr:
     return udf[name](*args)
 
 
+class Udaf:
+    """A registered user-defined aggregate, called over expressions inside
+    ``group_by(...).agg``: ``udaf["p50"](col("dur"))`` is the :class:`Agg` that
+    runs ``p50`` per group. The engine looks the name up when the group-by runs,
+    so the plugin that registered it must still be loaded then."""
+
+    __slots__ = ("_name", "_handle", "_min_args", "_max_args", "_flags")
+
+    def __init__(
+        self, name: str, handle: "_ext._UdafHandle", min_args: int, max_args: int, flags: int
+    ) -> None:
+        self._name = name
+        self._handle = handle
+        self._min_args = min_args
+        self._max_args = max_args
+        self._flags = flags
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    @property
+    def min_args(self) -> int:
+        return self._min_args
+
+    @property
+    def max_args(self) -> int:
+        return self._max_args
+
+    @property
+    def flags(self) -> int:
+        """The ``DFTU_AGG_*`` flag bits the UDAF registered with."""
+        return self._flags
+
+    def __call__(self, *args: Expr) -> "Agg":
+        if not self._min_args <= len(args) <= self._max_args:
+            want = (
+                str(self._min_args)
+                if self._min_args == self._max_args
+                else f"{self._min_args} to {self._max_args}"
+            )
+            raise TypeError(f"udaf {self._name!r} takes {want} arguments, got {len(args)}")
+        return _UdafAgg(self._name, self._handle, tuple(_wrap(a) for a in args))
+
+    def __repr__(self) -> str:
+        return f"Udaf({self._name!r})"
+
+
+class _UdafRegistry(Mapping[str, Udaf]):
+    """The registered user-defined aggregates by name, read only:
+    ``udaf[name]``, ``udaf.get(name)``, ``name in udaf``, iteration and ``len``.
+    An unknown name raises ``KeyError`` here, not when an aggregate runs."""
+
+    def __getitem__(self, name: str) -> Udaf:
+        if not isinstance(name, str):
+            raise KeyError(name)
+        try:
+            handle, min_args, max_args, flags = _ext.udaf_lookup(name)
+        except LookupError:
+            raise KeyError(name) from None
+        return Udaf(name, handle, min_args, max_args, flags)
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(_ext.udaf_names())
+
+    def __len__(self) -> int:
+        return len(_ext.udaf_names())
+
+    def __repr__(self) -> str:
+        return f"udaf({list(self)!r})"
+
+
+udaf: Mapping[str, Udaf] = _UdafRegistry()
+
+
 class _When:
     """``when(cond).then(a).otherwise(b)``, the polars spelling of a select."""
 
@@ -2557,6 +2635,49 @@ class Agg:
         return (code, ast, self.out, self.param, by_ast)
 
 
+class _UdafAgg(Agg):
+    """A call of a registered UDAF over ``args``; the group-by finds the UDAF
+    again by ``name``."""
+
+    def __init__(
+        self,
+        name: str,
+        handle: "_ext._UdafHandle",
+        args: Tuple[Expr, ...],
+        out: "Optional[str]" = None,
+    ) -> None:
+        super().__init__("udaf", args[0] if args else None, out)
+        self.name = name
+        self.handle = handle
+        self.args = args
+
+    def alias(self, name: str) -> "Agg":
+        return _UdafAgg(self.name, self.handle, self.args, name)
+
+    @property
+    def out(self) -> str:
+        if self._out is not None:
+            return self._out
+        if self.args and isinstance(self.args[0], _Col):
+            return f"{self.name}_{self.args[0].name}"
+        return self.name
+
+    def _spec(self, names: List[str]) -> tuple:
+        asts: List[List[tuple]] = []
+        for arg in self.args:
+            ast: List[tuple] = []
+            _emit_ast(arg, names.index, ast)
+            asts.append(ast)
+        return (
+            _AGG_CODE["udaf"],
+            asts[0] if asts else None,
+            self.out,
+            0.0,
+            None,
+            (self.name, asts[1:]),
+        )
+
+
 def _occupancy(op: str, value: Expr, resolution: "Union[int, float, str, None]") -> Agg:
     from ._units import coerce_duration
 
@@ -2769,7 +2890,10 @@ class GroupBy:
         # directly; anything with an expression goes through the
         # expression group-by.
         plain = bool(self._keys) and all(
-            a.by is None and a.param == 0.0 and (a.value is None or type(a.value) is _Col)
+            type(a) is Agg
+            and a.by is None
+            and a.param == 0.0
+            and (a.value is None or type(a.value) is _Col)
             for a in aggs
         )
         if plain:

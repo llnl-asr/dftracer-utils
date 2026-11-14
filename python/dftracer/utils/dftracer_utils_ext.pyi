@@ -31,6 +31,9 @@ _T = TypeVar("_T")
 
 # The file name patterns directory discovery lists as input traces: gzip files.
 INPUT_FILE_PATTERNS: Tuple[str, ...]
+
+# An aggregate spec string (`op[:column[:out...]]`), or `(udaf_name, out, [column, ...])`.
+_AggSpec = Union[str, Tuple[str, str, List[str]]]
 # The plugin ABI version this extension accepts: (major << 16) | (minor << 8) | patch.
 PLUGIN_ABI_VERSION: int
 PLUGIN_ABI_HASH: int
@@ -795,7 +798,7 @@ class _LazyFrame:
     def unpivot(self, id_vars: List[str], value_vars: List[str]) -> "_LazyFrame": ...
     def melt(self, id_vars: List[str], value_vars: List[str]) -> "_LazyFrame": ...
     def topk(self, name: str, k: int, largest: bool = True) -> "_LazyFrame": ...
-    def group_by(self, key: "str | Sequence[str]", aggs: List[str]) -> "_LazyFrame": ...
+    def group_by(self, key: "str | Sequence[str]", aggs: Sequence[_AggSpec]) -> "_LazyFrame": ...
     def sort_by(self, name: str, descending: bool = False) -> "_LazyFrame": ...
     def unique(self, subset: "str | Sequence[str] | None" = None) -> "_LazyFrame": ...
     def take(self, indices: Sequence[int]) -> "_LazyFrame": ...
@@ -825,7 +828,7 @@ class _LazyFrame:
         time_col: str,
         every: int,
         period: Optional[int] = ...,
-        aggs: Optional[List[str]] = ...,
+        aggs: Optional[Sequence[_AggSpec]] = ...,
         origin: int = ...,
         origin_min: bool = ...,
     ) -> "_LazyFrame": ...
@@ -963,7 +966,7 @@ class _DataFrame:
         time_col: str,
         every: int,
         period: "int | None" = None,
-        aggs: "list[str] | None" = None,
+        aggs: "Sequence[_AggSpec] | None" = None,
         origin: "int | Literal['min'] | None" = None,
     ) -> "_DataFrame": ...
     def query(
@@ -982,7 +985,9 @@ class _DataFrame:
     # leading plain key names followed by either legacy specs (inline) or
     # nothing (two-step .agg()); both key count and spec shape are runtime-only.
     def group_by(self, *args: Any) -> object: ...
-    def _group_agg_expr(self, key: "str | Sequence[str]", specs: List[tuple]) -> "_DataFrame": ...
+    def _group_agg_expr(self, key: "str | Sequence[str]", specs: List[tuple]) -> "_DataFrame":
+        """`specs` are `(op, ast, out[, param[, by_ast[, (udaf_name, [arg_ast, ...])]]])`."""
+        ...
     def join(
         self,
         other: "_DataFrame",
@@ -1376,6 +1381,20 @@ def udf_lookup(name: str, /) -> _UdfHandle:
 
 def udf_names() -> List[str]:
     """The names of the registered scalar UDFs."""
+    ...
+
+class _UdafHandle:
+    """A registered user-defined aggregate held for aggregates that call it.
+    Opaque."""
+
+def udaf_lookup(name: str, /) -> Tuple[_UdafHandle, int, int, int]:
+    """The registered UDAF `name` as `(handle, min_args, max_args, flags)`; it
+    stays callable, and its plugin library loaded, while the handle lives.
+    Raises `LookupError` for an unknown name."""
+    ...
+
+def udaf_names() -> List[str]:
+    """The names of the registered UDAFs."""
     ...
 
 def vec_eval_many(asts: List[List[tuple]], columns: List[_Series]) -> List[_Series]:

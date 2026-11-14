@@ -66,7 +66,7 @@ def _agg_specs(specs: Sequence[Union[str, Agg]]) -> "tuple[List[str], List[str],
     """Trace agg spec strings, ``F.any`` reductions and the occupancy grid of
     ``specs``: spec strings pass through, a bare-field ``Agg`` becomes
     ``"op:field"``, and ``F.any.<op>()`` becomes a numeric-args reduction."""
-    from .columnar import _Wildcard
+    from .columnar import _UdafAgg, _Wildcard
 
     strings: List[str] = []
     wildcard: List[str] = []
@@ -78,6 +78,11 @@ def _agg_specs(specs: Sequence[Union[str, Agg]]) -> "tuple[List[str], List[str],
         if not isinstance(s, Agg):
             raise TypeError(
                 f"agg() expects a spec string or an Agg (F.dur.sum()), got {type(s).__name__}"
+            )
+        if isinstance(s, _UdafAgg):
+            raise TypeError(
+                f"TraceViewer.agg() cannot run the udaf {s.name!r}; collect first, "
+                "then DataFrame.group_by"
             )
         if isinstance(s.value, _Wildcard):
             if s.op == "count":

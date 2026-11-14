@@ -1501,14 +1501,18 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
         time_col: str,
         every: int,
         period: "int | None" = None,
-        aggs: "list[str] | None" = None,
+        aggs: "Sequence[Union[str, Agg, Tuple[str, str, List[str]]]] | None" = None,
         origin: "int | Literal['min'] | None" = None,
     ) -> "DataFrame":
         """Tumbling/sliding time-window aggregation. ``origin`` anchors the
         window grid at ``origin + k*every`` (default: the classic ts-floored
         grid); pass a window's begin, or ``"min"`` to align buckets to the
         minimum timestamp (the frame-native ``time_bucket("min")``)."""
-        return self._like(self._native.group_by_dynamic(time_col, every, period, aggs, origin))
+        from .lazyframe import dynamic_aggs
+
+        return self._like(
+            self._native.group_by_dynamic(time_col, every, period, dynamic_aggs(self, aggs), origin)
+        )
 
     def query(
         self,

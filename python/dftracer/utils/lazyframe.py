@@ -572,7 +572,7 @@ class LazyFrame:
         time_col: str,
         every: int,
         period: Union[int, None] = None,
-        aggs: Union[List[str], None] = None,
+        aggs: "Optional[Sequence[Union[str, Agg, Tuple[str, str, List[str]]]]]" = None,
         origin: int = 0,
         origin_min: bool = False,
     ) -> "LazyFrame":
@@ -580,7 +580,7 @@ class LazyFrame:
         time column. ``period`` defaults to ``every`` (tumbling)."""
         return self._new(
             self._native.group_by_dynamic(
-                time_col, every, period, list(aggs or []), origin, origin_min
+                time_col, every, period, dynamic_aggs(self, aggs), origin, origin_min
             )
         )
 
@@ -669,13 +669,32 @@ class LazyFrame:
         return "<LazyFrame>\n" + plan
 
 
+def dynamic_aggs(
+    frame: object, aggs: "Optional[Sequence[Union[str, Agg, Tuple[str, str, List[str]]]]]"
+) -> "List[Union[str, Tuple[str, str, List[str]]]]":
+    """The ``aggs`` of ``group_by_dynamic``: spec strings and UDAF spec tuples
+    stay as they are and an ``Agg`` becomes its spec."""
+    from .columnar import Agg
+
+    out: "List[Union[str, Tuple[str, str, List[str]]]]" = []
+    for item in aggs or []:
+        if isinstance(item, Agg):
+            out.extend(agg_spec_strings(frame, [], [item], {}))
+        elif isinstance(item, (str, tuple)):
+            out.append(item)
+        else:
+            raise TypeError(f"aggs takes str or Agg items, got {type(item).__name__}")
+    return out
+
+
 def agg_spec_strings(
     frame: object, keys: Sequence[str], specs: Sequence[object], named: Mapping[str, object]
-) -> List[str]:
+) -> "List[Union[str, Tuple[str, str, List[str]]]]":
     """The ``op:column:out`` spec strings the streaming group-by and
     ``group_by_dynamic`` take, from ``Agg`` objects, spec strings and the
-    pandas ``agg`` forms (a name, a list, a dict, ``out=("column", name)``)."""
-    from .columnar import Agg, _agg_specs_from_pandas_forms, _Col
+    pandas ``agg`` forms (a name, a list, a dict, ``out=("column", name)``). A
+    UDAF ``Agg`` becomes the tuple ``(udaf_name, out, [column, ...])``."""
+    from .columnar import Agg, _agg_specs_from_pandas_forms, _Col, _UdafAgg
 
     flat: "List[object]" = []
     for spec in specs:
@@ -687,13 +706,23 @@ def agg_spec_strings(
         flat.extend(_agg_specs_from_pandas_forms(frame, list(keys), None, dict(named)))
     if not flat:
         raise TypeError("agg() needs at least one aggregate")
-    strings: List[str] = []
+    strings: "List[Union[str, Tuple[str, str, List[str]]]]" = []
     for spec in flat:
         if isinstance(spec, str):
             strings.append(spec)
             continue
         if not isinstance(spec, Agg):
             raise TypeError(f"agg() takes Agg or str specs, got {type(spec).__name__}")
+        if isinstance(spec, _UdafAgg):
+            if not all(isinstance(a, _Col) for a in spec.args):
+                raise ValueError(
+                    f"lazy group_by: the udaf {spec.name!r} takes bare columns; the "
+                    "streaming group-by aggregates columns by name"
+                )
+            strings.append(
+                (spec.name, spec.out, [a.name for a in spec.args if isinstance(a, _Col)])
+            )
+            continue
         if spec.by is not None and not isinstance(spec.by, _Col):
             raise ValueError(
                 f"lazy group_by: aggregate {spec.out!r} has a computed second column; "

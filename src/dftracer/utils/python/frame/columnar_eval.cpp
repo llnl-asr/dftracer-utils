@@ -12,6 +12,7 @@
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/parallel.h>
+#include <dftracer/utils/dataframe/udaf_registry.h>
 #include <dftracer/utils/dataframe/udf.h>
 #include <dftracer/utils/dataframe/udf_registry.h>
 #include <dftracer/utils/dstd/fatal.h>
@@ -68,6 +69,15 @@ void free_udf_capsule(PyObject* capsule) {
     dftracer::utils::dstd::UniquePtr<dataframe::Udf> owner(
         static_cast<dataframe::Udf*>(
             PyCapsule_GetPointer(capsule, UDF_CAPSULE)));
+}
+
+const char* const UDAF_CAPSULE = "dftu.udaf";
+
+using UdafHold = dftracer::utils::dstd::SharedPtr<const dataframe::UdafRecord>;
+
+void free_udaf_capsule(PyObject* capsule) {
+    dftracer::utils::dstd::UniquePtr<UdafHold> owner(
+        static_cast<UdafHold*>(PyCapsule_GetPointer(capsule, UDAF_CAPSULE)));
 }
 
 // A borrowed view of a Python str; valid while `o` lives, which the ast list
@@ -469,6 +479,47 @@ static PyObject* udf_names(PyObject* /*self*/, PyObject* /*unused*/) {
     return list;
 }
 
+// udaf_lookup(name) -> (capsule, min_args, max_args, flags). The capsule holds
+// the UDAF record, and so its plugin library, for as long as an aggregate made
+// from it lives.
+static PyObject* udaf_lookup(PyObject* /*self*/, PyObject* arg) {
+    Py_ssize_t n = 0;
+    const char* name = PyUnicode_AsUTF8AndSize(arg, &n);
+    if (!name) return nullptr;
+    auto record = dataframe::find_udaf(
+        dftracer::utils::dstd::StringView(name, static_cast<std::size_t>(n)));
+    if (!record) {
+        PyErr_Format(PyExc_LookupError, "no udaf named %s", name);
+        return nullptr;
+    }
+    const dftu_udaf_desc& desc = record->desc();
+    const int min_args = desc.min_args;
+    const int max_args = desc.max_args;
+    const unsigned long flags = static_cast<unsigned long>(desc.flags);
+    auto held = dftracer::utils::dstd::make_unique<UdafHold>(std::move(record));
+    PyObject* capsule =
+        PyCapsule_New(held.get(), UDAF_CAPSULE, free_udaf_capsule);
+    if (!capsule) return nullptr;
+    held.release();
+    return Py_BuildValue("(Niik)", capsule, min_args, max_args, flags);
+}
+
+static PyObject* udaf_names(PyObject* /*self*/, PyObject* /*unused*/) {
+    PyObject* list = PyList_New(0);
+    if (!list) return nullptr;
+    for (const auto& name : dataframe::udaf_names()) {
+        PyObject* item = PyUnicode_FromStringAndSize(
+            name.data(), static_cast<Py_ssize_t>(name.size()));
+        if (!item || PyList_Append(list, item) < 0) {
+            Py_XDECREF(item);
+            Py_DECREF(list);
+            return nullptr;
+        }
+        Py_DECREF(item);
+    }
+    return list;
+}
+
 // vec_eval(ast, [Series, ...]) -> Series
 static PyObject* vec_eval(PyObject* /*self*/, PyObject* args) {
     PyObject* ast = nullptr;
@@ -603,6 +654,26 @@ int init_columnar_eval(PyObject* m) {
     if (!fn_names) return -1;
     if (PyModule_AddObject(m, "udf_names", fn_names) < 0) {
         Py_DECREF(fn_names);
+        return -1;
+    }
+    static PyMethodDef def_udaf = {
+        "udaf_lookup", udaf_lookup, METH_O,
+        "udaf_lookup(name) -> (capsule, min_args, max_args, flags): the "
+        "registered UDAF `name`. Raises LookupError for an unknown name."};
+    PyObject* fn_udaf = PyCFunction_NewEx(&def_udaf, nullptr, nullptr);
+    if (!fn_udaf) return -1;
+    if (PyModule_AddObject(m, "udaf_lookup", fn_udaf) < 0) {
+        Py_DECREF(fn_udaf);
+        return -1;
+    }
+    static PyMethodDef def_udaf_names = {
+        "udaf_names", udaf_names, METH_NOARGS,
+        "udaf_names() -> [str]: the names of the registered UDAFs."};
+    PyObject* fn_udaf_names =
+        PyCFunction_NewEx(&def_udaf_names, nullptr, nullptr);
+    if (!fn_udaf_names) return -1;
+    if (PyModule_AddObject(m, "udaf_names", fn_udaf_names) < 0) {
+        Py_DECREF(fn_udaf_names);
         return -1;
     }
     return 0;

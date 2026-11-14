@@ -1384,7 +1384,22 @@ argument. The argument types are fixed by the first batch, and a later batch
 with another type fails. A group-by that spills writes each group state with
 ``serialize`` and merges the runs with ``combine``. A duql ``group`` or ``agg``
 block calls a UDAF by name, as ``n = usum(size)`` (see
-:ref:`duql-plugin-udafs`). No duql window or Python call runs a UDAF yet.
+:ref:`duql-plugin-udafs`). No duql window runs a UDAF yet.
+
+Python calls a UDAF from ``group_by(...).agg``. ``dft.udaf`` is the read-only
+registry, like ``dft.udf``: ``dft.udaf["p95"]`` is a ``Udaf`` with ``name``,
+``min_args``, ``max_args`` and ``flags``, and an unknown name raises
+``KeyError``. Calling it with column expressions gives an ``Agg`` that takes
+``.alias(...)`` or a keyword name, and the output column is ``<name>_<column>``
+by default. Each argument must be a bare column. A wrong argument count raises
+``TypeError``, and a failure in the UDAF raises ``ValueError``. The group-by finds
+the UDAF by name when it runs, so the plugin must still be loaded then.
+``LazyFrame.group_by`` and ``group_by_dynamic`` (lazy and eager) take the same
+``Agg``; their arguments must be bare columns, or they raise ``ValueError``.
+
+.. code-block:: python
+
+   df.group_by("pid").agg(dft.udaf["p95"](dft.col("dur")).alias("dur_p95"))
 
 .. code-block:: cpp
 

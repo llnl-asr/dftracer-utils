@@ -66,8 +66,9 @@ struct [[nodiscard]] FailAwait {
 template <class T>
 struct ResultAwait;
 
-/// Forwards to an awaitable by address. GCC 12 copies the reference that
-/// await_transform returns, which a move-only awaitable rejects.
+/// Forwards to a named awaitable by address. GCC 12 copies the reference that
+/// await_transform returns, which a move-only awaitable rejects. A temporary
+/// is moved into the awaiter, so it lives in the frame until resume.
 template <class A>
 struct [[nodiscard]] RefAwait {
     A* a;
@@ -130,9 +131,12 @@ class Task {
             return detail::ResultAwait<T>{std::move(result)};
         }
         template <class A>
-        detail::RefAwait<std::remove_reference_t<A>> await_transform(
-            A&& awaitable) noexcept {
-            return {&awaitable};
+        auto await_transform(A&& awaitable) noexcept {
+            if constexpr (std::is_lvalue_reference_v<A>) {
+                return detail::RefAwait<std::remove_reference_t<A>>{&awaitable};
+            } else {
+                return A(std::move(awaitable));
+            }
         }
     };
 

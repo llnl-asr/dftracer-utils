@@ -102,6 +102,9 @@ ci:
   script:
     - JOBID=$(flux jobs -n --name="$ALLOC_NAME" -o "{id}" | head -1)
     - test -n "$JOBID"
+    # The plugin ABI must not lose a line a released tag published unless the
+    # abi major moved. GIT_DEPTH 0 already brings the tags.
+    - python3 scripts/check_plugin_abi_manifest_diff.py
     # One container per phase, run concurrently in the single allocation.
     # ubuntu:24.04, not 22.04: presets v6 needs CMake >= 3.25, 22.04 ships 3.22.
     - bash .gitlab/ci/parallel-phases.sh test-cpp test-py valgrind-cpp valgrind-py valgrind-mpi

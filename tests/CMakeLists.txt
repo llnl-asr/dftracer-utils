@@ -71,6 +71,73 @@ set_tests_properties(
              RESOURCE_LOCK build_tree)
 set_tests_properties(c_abi_guard PROPERTIES RESOURCE_LOCK build_tree)
 
+# The plugin ABI manifest: the recorded shape of the headers a plugin compiles
+# against (struct sizes, field offsets, enum values, integer constants and
+# function pointer spellings). The generator writes a C program that asks the
+# compiler for every number, so a shape change shows as one changed line.
+# python3 is required and not optional: without it there is no manifest.
+find_package(Python3 3.8 COMPONENTS Interpreter REQUIRED)
+file(GLOB_RECURSE DFTRACER_UTILS_ABI_HEADER_DEPS
+     ${CMAKE_SOURCE_DIR}/include/dftracer/*.h)
+set(PLUGIN_ABI_MANIFEST_SRC
+    ${CMAKE_CURRENT_BINARY_DIR}/generated/plugin_abi_manifest.c)
+set(PLUGIN_ABI_MANIFEST_TXT ${CMAKE_SOURCE_DIR}/cmake/plugin_abi_manifest.txt)
+set(PLUGIN_ABI_MANIFEST_WORK
+    ${CMAKE_CURRENT_BINARY_DIR}/plugin_abi_manifest_work)
+
+add_custom_command(
+  OUTPUT ${PLUGIN_ABI_MANIFEST_SRC}
+  COMMAND
+    ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/plugin_abi_manifest.py
+    --root ${CMAKE_SOURCE_DIR} --out ${PLUGIN_ABI_MANIFEST_SRC}
+  DEPENDS ${DFTRACER_UTILS_ABI_HEADER_DEPS}
+          ${CMAKE_SOURCE_DIR}/scripts/plugin_abi_manifest.py
+  COMMENT "Writing the plugin ABI manifest source"
+  VERBATIM)
+
+add_executable(plugin_abi_manifest_gen ${PLUGIN_ABI_MANIFEST_SRC})
+set_target_properties(plugin_abi_manifest_gen PROPERTIES C_STANDARD 11
+                                                         OUTPUT_NAME plugin_abi_manifest)
+target_set_warnings(plugin_abi_manifest_gen)
+target_include_directories(
+  plugin_abi_manifest_gen PRIVATE ${CMAKE_SOURCE_DIR}/include
+                                  ${CMAKE_BINARY_DIR}/include)
+
+# Records cmake/plugin_abi_manifest.txt from the headers as they are now.
+add_custom_target(
+  plugin_abi_manifest_update
+  COMMAND
+    ${CMAKE_COMMAND} -DBINARY=$<TARGET_FILE:plugin_abi_manifest_gen>
+    -DMANIFEST=${PLUGIN_ABI_MANIFEST_TXT} -DREGENERATE=ON -P
+    ${CMAKE_SOURCE_DIR}/cmake/scripts/check_plugin_abi_manifest.cmake
+  DEPENDS plugin_abi_manifest_gen
+  COMMENT "Recording cmake/plugin_abi_manifest.txt"
+  VERBATIM)
+
+add_test(
+  NAME plugin_abi_manifest
+  COMMAND
+    ${CMAKE_COMMAND} -DBUILD_DIR=${CMAKE_BINARY_DIR}
+    -DTARGET=plugin_abi_manifest_gen
+    -DBINARY=$<TARGET_FILE:plugin_abi_manifest_gen>
+    -DMANIFEST=${PLUGIN_ABI_MANIFEST_TXT}
+    -DWORK_DIR=${PLUGIN_ABI_MANIFEST_WORK} -P
+    ${CMAKE_SOURCE_DIR}/cmake/scripts/check_plugin_abi_manifest.cmake)
+set_tests_properties(plugin_abi_manifest PROPERTIES RESOURCE_LOCK build_tree)
+
+# The same generator on one fixture header: a struct with a multi-declarator
+# member, an anonymous union holding a function pointer, a nested tagged struct
+# member, an enumerator pair, three defines and two function pointers, so a
+# parser that silently drops a member fails here and not only as a shorter real
+# manifest.
+add_test(
+  NAME plugin_abi_manifest_self
+  COMMAND
+    ${CMAKE_COMMAND} -DPYTHON=${Python3_EXECUTABLE}
+    -DC_COMPILER=${CMAKE_C_COMPILER} -DSOURCE_DIR=${CMAKE_SOURCE_DIR}
+    -DWORK_DIR=${PLUGIN_ABI_MANIFEST_WORK}/self -P
+    ${CMAKE_SOURCE_DIR}/cmake/scripts/check_plugin_abi_manifest_self.cmake)
+
 add_test(NAME index_layers
          COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -P
                  ${CMAKE_SOURCE_DIR}/cmake/scripts/check_index_layers.cmake)

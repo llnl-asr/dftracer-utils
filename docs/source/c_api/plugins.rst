@@ -37,6 +37,20 @@ not have reads NULL, and the host skips it. A smaller or a larger size is
 refused at the call that hands the record over, with a message that names the
 record.
 
+The shape of these headers is recorded, not only the version. ``cmake/plugin_abi_manifest.txt``
+holds one line per struct size and alignment, field offset and size, enumerator
+value, integer and string ``DFTU_*`` constant, typedef underlying type and
+function pointer spelling (with the parameter names stripped, so a rename
+changes nothing), and ctest ``plugin_abi_manifest`` rebuilds it from the headers
+and fails on any difference, so a shape change records the new manifest in the
+same commit (``cmake --build <build dir> --target plugin_abi_manifest_update``).
+CI also diffs that file against the newest release tag of the form
+``v``\ *major*\ ``.``\ *minor*\ ``.``\ *patch* that carries one: an added line
+passes, and so does a struct that grew while its alignment and its old fields
+stayed put, while a removed or changed line fails unless the ``abi`` major in
+``VERSION`` moved, because a plugin built against the tag reads a field that is
+gone or moved.
+
 .. code-block:: c
 
    #include <dftracer/utils/plugins/abi.h>

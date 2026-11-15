@@ -445,7 +445,7 @@ TEST_SUITE("plugin sdk batch strings") {
         plugins::OwnedDataFrame f(dftu_dataframe_new(col_names, cols, 2));
         REQUIRE(f.get() != nullptr);
 
-        const plugins::Batch batch(f.get());
+        const plugins::Batch batch = plugins::detail::batch_from_raw(f.get());
         REQUIRE(batch.size() == 4);
         CHECK(batch[0].cat() == "POSIX");
         CHECK(batch[1].cat().empty());
@@ -489,7 +489,7 @@ TEST_SUITE("plugin sdk batch strings") {
         plugins::OwnedDataFrame f(dftu_dataframe_new(col_names, cols, 1));
         REQUIRE(f.get() != nullptr);
 
-        const plugins::Batch batch(f.get());
+        const plugins::Batch batch = plugins::detail::batch_from_raw(f.get());
         REQUIRE(batch.size() == 3);
         CHECK(batch[0].name() == "open");
         CHECK(batch[1].name().empty());

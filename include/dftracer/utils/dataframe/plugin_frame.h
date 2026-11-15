@@ -31,6 +31,10 @@ namespace dftracer::utils::dataframe {
 class ColumnView;
 class FrameView;
 
+namespace detail {
+class FrameViewAccess;
+}  // namespace detail
+
 /// A native columnar result the plugin surface hands back to the engine, freed
 /// through the dataframe C ABI. Lets an engine-backed result (the aggregation
 /// accumulator) cross as our own @ref dftracer::utils::dataframe::DataFrame
@@ -564,8 +568,24 @@ class FrameView {
     }
 
    private:
+    friend class detail::FrameViewAccess;
     const dftu_dataframe* frame_ = nullptr;
 };
+
+namespace detail {
+
+class FrameViewAccess {
+   public:
+    static const dftu_dataframe* get(const FrameView& view) noexcept {
+        return view.frame_;
+    }
+};
+
+inline const dftu_dataframe* frame_pointer(const FrameView& view) noexcept {
+    return FrameViewAccess::get(view);
+}
+
+}  // namespace detail
 
 inline FrameView OwnedDataFrame::view() const noexcept {
     return FrameView(frame_);

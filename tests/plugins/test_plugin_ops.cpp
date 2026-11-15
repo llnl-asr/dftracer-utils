@@ -23,7 +23,7 @@ namespace {
 
 struct TrivialSlice {
     explicit TrivialSlice(const dftracer::utils::plugins::Config&) {}
-    void step(const dftu_dataframe*, plugins::Host) {}
+    void step(dataframe::FrameView, plugins::Host) {}
     void merge(TrivialSlice&) {}
     void finalize(plugins::Host) {}
 };
@@ -46,7 +46,7 @@ struct HostFixture {
 TEST_CASE("plugin ops: run_op runs a registered column op by name") {
     HostFixture fx;
     test_plugin_common::Ctx c;
-    plugins::Host h{&fx.host(), c.get()};
+    plugins::Host h = plugins::detail::host_from_raw(&fx.host(), c.get());
 
     const std::int64_t a_vals[] = {1, 2, 3};
     const std::int64_t b_vals[] = {10, 20, 30};
@@ -55,9 +55,10 @@ TEST_CASE("plugin ops: run_op runs a registered column op by name") {
     REQUIRE(a);
     REQUIRE(b);
 
-    auto sum_result = h.run_op("dftu.series.add", {a, b});
+    auto sum_result = h.run_op("dftu.series.add", {dataframe::ColumnView{a},
+                                                   dataframe::ColumnView{b}});
     REQUIRE(sum_result.has_value());
-    dftu_series* sum = *sum_result;
+    dftu_series* sum = sum_result->get();
     REQUIRE(sum);
     REQUIRE(dftu_series_length(sum) == 3);
     const auto* sum_data =
@@ -66,7 +67,6 @@ TEST_CASE("plugin ops: run_op runs a registered column op by name") {
     for (std::int64_t i = 0; i < 3; ++i)
         CHECK(sum_data[i] == a_vals[i] + b_vals[i]);
 
-    dftu_series_free(sum);
     dftu_series_free(a);
     dftu_series_free(b);
 }
@@ -74,7 +74,7 @@ TEST_CASE("plugin ops: run_op runs a registered column op by name") {
 TEST_CASE("plugin ops: run_op reports unknown names and bad arity") {
     HostFixture fx;
     test_plugin_common::Ctx c;
-    plugins::Host h{&fx.host(), c.get()};
+    plugins::Host h = plugins::detail::host_from_raw(&fx.host(), c.get());
 
     auto unknown = h.run_op("dftu.test.nonexistent_op", {});
     REQUIRE_FALSE(unknown.has_value());
@@ -87,7 +87,7 @@ TEST_CASE("plugin ops: run_op reports unknown names and bad arity") {
     dftu_series* a = dftu_series_new_flat(DFTU_TYPE_INT64, a_vals, 3, nullptr);
     REQUIRE(a);
     // "dftu.series.add" takes two series operands; one is an arity mismatch.
-    auto arity = h.run_op("dftu.series.add", {a});
+    auto arity = h.run_op("dftu.series.add", {dataframe::ColumnView{a}});
     REQUIRE_FALSE(arity.has_value());
     CHECK(plugins::status_of(arity.error()) == DFTU_E_INVALID);
     dftu_series_free(a);
@@ -124,12 +124,12 @@ TEST_CASE("plugin ops: unknown op and a failed op are distinguishable") {
 TEST_CASE("plugin ops: find_op resolves a built-in by name") {
     HostFixture fx;
     test_plugin_common::Ctx c;
-    plugins::Host h{&fx.host(), c.get()};
+    plugins::Host h = plugins::detail::host_from_raw(&fx.host(), c.get());
 
-    const dftu_op_desc* desc = h.find_op("dftu.series.add");
+    const auto desc = h.find_op("dftu.series.add");
     REQUIRE(desc);
-    CHECK(dftu_op_kind_of(desc->sig) == DFTU_OP_KIND_SERIES);
-    CHECK(h.find_op("dftu.test.nonexistent_op") == nullptr);
+    CHECK(desc->sig().kind() == dataframe::OpKind::Series);
+    CHECK_FALSE(h.find_op("dftu.test.nonexistent_op"));
 }
 
 TEST_CASE("plugin ops: a dftu. op name is refused") {

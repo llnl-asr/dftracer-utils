@@ -13,7 +13,7 @@ namespace {
 
 struct RefusedSlice {
     explicit RefusedSlice(const Config&) {}
-    void step(const dftu_dataframe*, Host) {}
+    void step(dataframe::FrameView, Host) {}
     void merge(RefusedSlice&) {}
     void finalize(Host) {}
 };

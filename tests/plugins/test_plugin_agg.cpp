@@ -69,12 +69,13 @@ dftu_status agg_on_batch(dftu_ctx* ctx, void*, const dftu_dataframe* df,
 // raw dftu_agg_col structs, proving each factory produces the same wire spec.
 dftu_status agg_factory_on_batch(dftu_ctx* ctx, void*, const dftu_dataframe* df,
                                  const dftu_plugin_host* host) {
-    plugins::Host h(host, ctx);
+    plugins::Host h = plugins::detail::host_from_raw(host, ctx);
     const auto acc = h.agg("by_cat_factory", {"cat"},
                            {plugins::agg::mean("dur", "mean_dur"),
                             plugins::agg::pct("dur", "p50_dur", 0.5)});
     if (!acc.has_value()) return plugins::status_of(acc.error());
-    return test_plugin_common::as_status(acc->accumulate(df));
+    return test_plugin_common::as_status(
+        acc->accumulate(dataframe::FrameView{df}));
 }
 
 dftu_plugin make_agg_factory_plugin() {
@@ -300,7 +301,7 @@ void run_slices(
 // A keyed accumulator with two key columns and six aggregates.
 dftu_status multi_key_columns(dftu_ctx* ctx, void*, const dftu_dataframe* df,
                               const dftu_plugin_host* host) {
-    plugins::Host h(host, ctx);
+    plugins::Host h = plugins::detail::host_from_raw(host, ctx);
     const auto acc =
         h.agg("by_cat_pid", {"cat", "pid"},
               {plugins::agg::count("n"), plugins::agg::sum("dur", "sum_dur"),
@@ -309,20 +310,22 @@ dftu_status multi_key_columns(dftu_ctx* ctx, void*, const dftu_dataframe* df,
                plugins::agg::mean("dur", "mean_dur"),
                plugins::agg::count_valid("dur", "n_dur")});
     if (!acc.has_value()) return plugins::status_of(acc.error());
-    return test_plugin_common::as_status(acc->accumulate(df));
+    return test_plugin_common::as_status(
+        acc->accumulate(dataframe::FrameView{df}));
 }
 
 // Zero key columns: the scalar-handle case, one whole-scan row.
 dftu_status scalar_columns(dftu_ctx* ctx, void*, const dftu_dataframe* df,
                            const dftu_plugin_host* host) {
-    plugins::Host h(host, ctx);
+    plugins::Host h = plugins::detail::host_from_raw(host, ctx);
     const auto acc =
         h.agg("whole_scan", {},
               {plugins::agg::count("n"), plugins::agg::sum("dur", "sum_dur"),
                plugins::agg::min("dur", "min_dur"),
                plugins::agg::max("dur", "max_dur")});
     if (!acc.has_value()) return plugins::status_of(acc.error());
-    return test_plugin_common::as_status(acc->accumulate(df));
+    return test_plugin_common::as_status(
+        acc->accumulate(dataframe::FrameView{df}));
 }
 
 // Every op appended after DFTU_AGG_COUNT_VALID, built as raw dftu_agg_col
@@ -366,7 +369,7 @@ bool g_unknown_is_null = false;
 
 dftu_status read_other_agg(dftu_ctx* ctx, void*, const dftu_plugin_host* host,
                            dftu_task**) {
-    plugins::Host h(host, ctx);
+    plugins::Host h = plugins::detail::host_from_raw(host, ctx);
     const dstd::Result<plugins::OwnedDataFrame> other =
         h.agg_result("whole_scan");
     if (!other.has_value()) return plugins::status_of(other.error());

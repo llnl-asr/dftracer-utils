@@ -408,7 +408,8 @@ block args (later wins). A plugin reads the resulting tree from its factory.
          }
 
       Declaring ``config_keys`` (a ``dftu_config_key`` array terminated by a
-      NULL-name entry, or a Slice's ``static ... config_keys()`` in the SDK)
+      NULL-name entry in the C ABI, or a Slice's ``static ... config_keys()``
+      returning ``ConfigKey`` values in the SDK)
       makes the host validate the config before the plugin runs: an undeclared
       key, a key of the wrong kind, or a missing required key each fail the
       load, instead of a typo silently doing nothing. An undeclared plugin's
@@ -569,12 +570,12 @@ Count events and total their duration per ``(pid, event-name)``:
 
       .. code-block:: cpp
 
-         dstd::Result<void> step(const Batch& b, Host h) {
+         dstd::Result<void> step(dataframe::FrameView b, Host h) {
              DFTRACER_UTILS_TRY(Agg edges,
                                 h.agg("name_edges", {"pid", "name"},
                                       {agg::count("edges"),
                                        agg::sum("dur", "dur_sum")}));
-             return edges.accumulate(b.raw());
+             return edges.accumulate(b);
          }
 
    .. tab-item:: C (raw ABI)
@@ -704,7 +705,7 @@ spill, once, out loud (``state_spill_refused``), and kept whole.
 --------------------------------------
 
 A plugin-owned DDSketch accumulates values and reports mergeable quantiles
-(``dftu_quantiles``: ``count``, ``min``, ``max``, ``mean``, ``p50``, ``p90``,
+(``Quantiles``: ``count``, ``min``, ``max``, ``mean``, ``p50``, ``p90``,
 ``p95``, ``p99``). Unlike a map, the plugin owns the handle and merges it itself
 across slices.
 
@@ -730,7 +731,7 @@ across slices.
              }
              void merge(Durations& o) { if (sk && o.sk) sk->merge(*o.sk); }
              void finalize(Host) {
-                 if (sk) { dftu_quantiles q = sk->result(); (void)q; }
+                 if (sk) { Quantiles q = sk->result(); (void)q; }
              }
          };
 
@@ -814,12 +815,12 @@ the cross-worker-merged, finalized result by that name at ``on_finalize``.
          // producer, in step (or on_batch):
          DFTRACER_UTILS_TRY(Agg a, h.agg("com.example.total", {},
                                          {agg::count("count")}));
-         DFTRACER_UTILS_TRY_VOID(a.accumulate(b.raw()));
+         DFTRACER_UTILS_TRY_VOID(a.accumulate(b));
 
          // consumer, in on_finalize:
          DFTRACER_UTILS_TRY(OwnedDataFrame res,
                             h.agg_result("com.example.total"));
-         if (res.handle) { /* read the "count" column */ }
+         if (res.get()) { /* read the "count" column */ }
 
    .. tab-item:: C (raw ABI)
 
@@ -1018,7 +1019,7 @@ scan; do not free it.
 
    .. tab-item:: C++ (SDK)
 
-      ``duql_compile`` accepts either a raw duql string or an expression built
+      ``Host::compile`` accepts either a raw duql string or an expression built
       with the ergonomic ``F`` / ``Field`` builder. The SDK re-exports the
       builder into ``dftracer::utils::plugins``, so ``plugin.h`` is the only include and no
       ``duql::`` qualifier is needed; the host parses the rendered string, so
@@ -1027,15 +1028,15 @@ scan; do not free it.
       .. code-block:: cpp
 
          struct Filtered {
-             dftu_duql* q_ = nullptr;
+             Query q;
              explicit Filtered(const Config&) {}
-             dstd::Result<void> step(const Batch& b, Host h) {
-                 if (!q_) {
-                     DFTRACER_UTILS_TRY(q_, h.duql_compile(F("dur") > 1000));
-                     // Equivalent: h.duql_compile("dur > 1000");
+             dstd::Result<void> step(dataframe::FrameView b, Host h) {
+                 if (!q) {
+                     DFTRACER_UTILS_TRY(q, h.compile(F("dur") > 1000));
+                     // Equivalent: h.compile("dur > 1000");
                  }
-                 for (std::int64_t row = 0; row < b.size(); ++row)
-                     if (h.duql_matches(q_, b.raw(), row)) { /* ... */ }
+                 for (std::int64_t row = 0; row < b.row_count(); ++row)
+                     if (q.matches(b, row)) { /* ... */ }
                  return {};
              }
              void merge(Filtered&) {}
@@ -1068,10 +1069,10 @@ on first read, not at close.
 
       .. code-block:: cpp
 
-         dstd::Result<void> step(const Batch& b, Host h) {
+         dstd::Result<void> step(dataframe::FrameView b, Host h) {
              DFTRACER_UTILS_TRY(TraceWriter w,
                                 h.trace_writer("/tmp/out.pfw.gz"));  // RAII
-             DFTRACER_UTILS_TRY_VOID(w.write(b.raw()));
+             DFTRACER_UTILS_TRY_VOID(w.write(b));
              return w.close();
          }
 
@@ -1983,7 +1984,7 @@ that covers it:
    * - ``Host::memory()`` (typed ``Memory``, RAII ``Reservation``)
      - ``DFTU_SVC_MEMORY``
      - `9. Async work and I/O`_
-   * - ``Host::duql_compile`` / ``duql_matches``
+   * - ``Host::compile`` / ``Query::matches``
      - ``DFTU_SVC_DUQL``
      - `10. duql filters against events (DFTU_SVC_DUQL)`_
    * - ``Host::trace_open_write`` / ``trace_write`` / ``trace_read``

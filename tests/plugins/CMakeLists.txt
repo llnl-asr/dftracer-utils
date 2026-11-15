@@ -201,7 +201,7 @@ foreach(cxx_plugin builder_plugin config_keys_plugin reads_projection_plugin
                   provider_fixture_plugin toy_sink_plugin toy_node_plugin
                   broken_frame_plugin borrowed_frame_plugin
                   sessionize_input_plugin macro_plugin macro_error_plugin
-                  error_after_register_plugin)
+                  error_after_register_plugin empty_config_key_plugin)
   add_library(${cxx_plugin} MODULE ${cxx_plugin}.cpp)
   target_set_warnings(${cxx_plugin})
   set_target_properties(
@@ -230,7 +230,7 @@ foreach(df_plugin toy_format_plugin toy_format_tie_plugin toy_sink_plugin
                   provider_fixture_plugin broken_frame_plugin
                   borrowed_frame_plugin sessionize_input_plugin
                   macro_plugin macro_error_plugin
-                  error_after_register_plugin
+                  error_after_register_plugin empty_config_key_plugin
                   leaky_plugin crash_plugin)
   if(TARGET dftracer_utils_dataframe::shared)
     target_link_libraries(${df_plugin} PRIVATE dftracer_utils_dataframe::shared)
@@ -242,8 +242,10 @@ endforeach()
 if(TARGET plugins_test_plugin_config)
   target_compile_definitions(
     plugins_test_plugin_config PRIVATE
-    CONFIG_KEYS_PLUGIN_PATH="$<TARGET_FILE:config_keys_plugin>")
-  add_dependencies(plugins_test_plugin_config config_keys_plugin)
+    CONFIG_KEYS_PLUGIN_PATH="$<TARGET_FILE:config_keys_plugin>"
+    EMPTY_CONFIG_KEY_PLUGIN_PATH="$<TARGET_FILE:empty_config_key_plugin>")
+  add_dependencies(plugins_test_plugin_config config_keys_plugin
+                   empty_config_key_plugin)
 endif()
 
 if(TARGET plugins_test_plugin_public_config)

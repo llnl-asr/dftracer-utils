@@ -24,13 +24,13 @@ struct Counted {
     explicit Counted(const Config& cfg) : stride(cfg.get_int("stride", 1)) {}
 
     static auto config_keys() {
-        return std::array<dftu_config_key, 2>{
-            dftu_config_key{"stride", DFTU_VAL_I64, 0, "rows counted per row"},
-            dftu_config_key{"label", DFTU_VAL_STR, 1, "name of the result"}};
+        return std::array<ConfigKey, 2>{
+            ConfigKey{"stride", ValueKind::I64, false, "rows counted per row"},
+            ConfigKey{"label", ValueKind::Str, true, "name of the result"}};
     }
 
-    void step(const dftu_dataframe* df, Host) {
-        rows += static_cast<std::uint64_t>(dftu_dataframe_num_rows(df)) *
+    void step(dataframe::FrameView df, Host) {
+        rows += static_cast<std::uint64_t>(df.row_count()) *
                 static_cast<std::uint64_t>(stride);
     }
     void merge(Counted& other) { rows += other.rows; }

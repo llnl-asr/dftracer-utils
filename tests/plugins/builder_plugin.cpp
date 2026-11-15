@@ -21,28 +21,23 @@ namespace {
 constexpr const char* OP_NAME = "builder_plugin.double_rows";
 constexpr const char* STATE_NAME = "builder_plugin.total_dur";
 
-extern "C" std::int64_t double_rows(const dftu_series* v) {
-    return 2 * static_cast<std::int64_t>(dftu_series_length(v));
+std::int64_t double_rows_sdk(const dataframe::ColumnView& v) {
+    return 2 * v.size();
 }
-
-const dftu_op_desc OP = {OP_NAME, DFTU_OP_SIG(I64, SERIES, NONE, NONE),
-                         reinterpret_cast<dftu_op_generic_fn>(&double_rows)};
 
 // Nothing but a running total, so the test can compare the state's answer
 // against the fold's and see both halves of one factory work.
 struct TotalDur {
     std::uint64_t total = 0;
 
-    void update(const dftu_dataframe* df) {
-        dftu_series* dur = dftu_dataframe_column(df, "dur");
+    void update(dataframe::FrameView df) {
+        const dstd::Optional<dataframe::ColumnView> dur = df.column("dur");
         if (!dur) return;
-        dftu_series* flat = dftu_series_materialize(dur);
-        const auto* v =
-            static_cast<const std::uint64_t*>(dftu_series_data(flat));
-        for (std::int64_t r = 0; r < dftu_series_length(flat); ++r)
-            total += v[r];
-        dftu_series_free(flat);
-        dftu_series_free(dur);
+        const dstd::Result<dataframe::Column> flat = dur->flat();
+        if (!flat.has_value()) return;
+        const dataframe::ColumnView view{flat->get()};
+        const dstd::Span<const std::uint64_t> v = view.values<std::uint64_t>();
+        for (const std::uint64_t x : v) total += x;
     }
 
     void merge(TotalDur& other) { total += other.total; }
@@ -61,8 +56,8 @@ struct RowCount {
 
     explicit RowCount(const Config&) {}
 
-    void step(const dftu_dataframe* df, Host) {
-        rows += static_cast<std::uint64_t>(dftu_dataframe_num_rows(df));
+    void step(dataframe::FrameView df, Host) {
+        rows += static_cast<std::uint64_t>(df.row_count());
     }
     void merge(RowCount& other) { rows += other.rows; }
     dstd::Result<void> finalize(Host h) {
@@ -77,7 +72,7 @@ DFTU_PLUGIN("builder_plugin", "1.0",
             [](PluginBuilder& p, const Config& config) -> dstd::Result<void> {
                 (void)config;
                 p.fold<RowCount>();
-                p.op(OP);
+                p.op(OpSpec::series_i64<&double_rows_sdk>(OP_NAME));
                 p.state<TotalDur>(STATE_NAME);
                 return {};
             })

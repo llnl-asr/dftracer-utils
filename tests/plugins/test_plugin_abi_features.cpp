@@ -55,12 +55,12 @@ struct ConfigSlice {
         enabled = c.get_bool("enabled");
         inner = c.child("nested").get_int("inner");
         missing = c.get_int("missing", -1);
-        const dftu_value* arr = c.find("buckets");
-        if (arr && arr->kind == DFTU_VAL_ARRAY)
-            for (std::uint32_t i = 0; i < arr->count; ++i)
-                buckets.push_back(dftu_as_i64(&arr->as.items[i], 0));
+        const dftracer::utils::plugins::ConfigValue arr = c.value("buckets");
+        if (arr.is_array())
+            for (std::uint32_t i = 0; i < arr.size(); ++i)
+                buckets.push_back(arr[i].as_i64());
     }
-    void step(const dftu_dataframe*, dftracer::utils::plugins::Host) {}
+    void step(dataframe::FrameView, dftracer::utils::plugins::Host) {}
     void merge(ConfigSlice&) {}
     void finalize(dftracer::utils::plugins::Host) {}
 };
@@ -116,13 +116,14 @@ dftu_status append2_fn(dftu_ctx*, void* p) {
 
 plugins::Task fanout_all(plugins::Host h, std::atomic<int>* ran, int n) {
     dstd::Vector<dstd::Result<dftu_task*>> kids;
-    for (int i = 0; i < n; ++i) kids.push_back(h.spawn(inc_fn, ran).release());
-    plugins::AsyncAll all(std::move(kids), h.raw());
+    for (int i = 0; i < n; ++i)
+        kids.push_back(plugins::detail::spawn_raw(h, inc_fn, ran).release());
+    plugins::AsyncAll all(std::move(kids), plugins::detail::host_raw(h));
     co_await all;
 }
 
 plugins::Task drop_then_fail(plugins::Host h, std::atomic<int>* ran) {
-    plugins::AsyncOp dropped = h.spawn(inc_fn, ran);
+    plugins::AsyncOp dropped = plugins::detail::spawn_raw(h, inc_fn, ran);
     if (ran != nullptr) {
         dstd::Error gave_up = plugins::io_error("gave up");
         co_await plugins::fail(std::move(gave_up));
@@ -148,8 +149,8 @@ struct FrameCounter {
 plugins::Task await_failed_op(plugins::Host h, std::atomic<int>* child,
                               bool* reached) {
     FrameCounter counter;
-    plugins::AsyncOp started = h.spawn(inc_fn, child);
-    co_await h.spawn(spawn_fails_fn, nullptr);
+    plugins::AsyncOp started = plugins::detail::spawn_raw(h, inc_fn, child);
+    co_await plugins::detail::spawn_raw(h, spawn_fails_fn, nullptr);
     *reached = true;
     co_await std::move(started);
 }
@@ -165,7 +166,8 @@ plugins::Task await_error_result(plugins::Host h, bool* reached) {
 // `.expected()` hands the failure back: the task goes on and ends in success.
 plugins::Task await_expected(plugins::Host h, dstd::Optional<dftu_status>* seen,
                              bool* reached) {
-    plugins::AsyncOp failing = h.spawn(spawn_fails_fn, nullptr);
+    plugins::AsyncOp failing =
+        plugins::detail::spawn_raw(h, spawn_fails_fn, nullptr);
     auto outcome = co_await failing.expected();
     if (!outcome.has_value()) *seen = plugins::status_of(outcome.error());
     *reached = true;
@@ -220,31 +222,34 @@ struct RefusingHost {
 plugins::Task await_refused(plugins::Host h, std::atomic<int>* ran,
                             bool* reached) {
     FrameCounter counter;
-    co_await h.spawn(inc_fn, ran);
+    co_await plugins::detail::spawn_raw(h, inc_fn, ran);
     *reached = true;
 }
 
 plugins::Task all_refused(plugins::Host h, std::atomic<int>* ran,
                           bool* reached) {
     FrameCounter counter;
-    plugins::AsyncOp first = h.spawn(inc_fn, ran);
-    plugins::AsyncOp second = h.spawn(inc_fn, ran);
-    plugins::AsyncAll both = h.all({first.release(), second.release()});
+    plugins::AsyncOp first = plugins::detail::spawn_raw(h, inc_fn, ran);
+    plugins::AsyncOp second = plugins::detail::spawn_raw(h, inc_fn, ran);
+    plugins::AsyncAll both =
+        plugins::detail::all_raw(h, {first.release(), second.release()});
     co_await std::move(both);
     *reached = true;
 }
 
 plugins::Task await_released_refused(plugins::Host h, std::atomic<int>* ran,
                                      bool* reached) {
-    plugins::AsyncOp op = h.spawn(inc_fn, ran);
-    co_await h.await(op.release());
+    plugins::AsyncOp op = plugins::detail::spawn_raw(h, inc_fn, ran);
+    co_await plugins::detail::await_result(h, op.release());
     *reached = true;
 }
 
 plugins::Task all_one_fails(plugins::Host h, std::atomic<int>* ran) {
-    plugins::AsyncOp bad = h.spawn(spawn_fails_fn, nullptr);
-    plugins::AsyncOp good = h.spawn(inc_fn, ran);
-    plugins::AsyncAll both = h.all({bad.release(), good.release()});
+    plugins::AsyncOp bad =
+        plugins::detail::spawn_raw(h, spawn_fails_fn, nullptr);
+    plugins::AsyncOp good = plugins::detail::spawn_raw(h, inc_fn, ran);
+    plugins::AsyncAll both =
+        plugins::detail::all_raw(h, {bad.release(), good.release()});
     co_await std::move(both);
 }
 
@@ -260,8 +265,8 @@ plugins::Task return_ok() {
 }
 
 plugins::Task chain(plugins::Host h, dstd::Vector<int>* order) {
-    co_await h.spawn(append1_fn, order);
-    co_await h.spawn(append2_fn, order);
+    co_await plugins::detail::spawn_raw(h, append1_fn, order);
+    co_await plugins::detail::spawn_raw(h, append2_fn, order);
 }
 
 using I64 = std::int64_t;
@@ -310,14 +315,16 @@ plugins::Task jobs_map(plugins::Host h, dstd::Vector<I64>* out) {
     out->assign(items.size(), 0);
     dftu_job_items in{items.data(), items.size()};
     dftu_job_slots slots{out->data(), out->size()};
-    const dftu_svc_task* svc = co_await h.tasks();
+    const dftu_svc_task* svc = co_await plugins::detail::task_service(h);
     dftu_job* m = nullptr;
     co_await plugins::detail::reported(
-        svc->map(h.ctx(), h.raw()->h, body.raw(), 2, &m));
+        svc->map(plugins::detail::host_ctx(h), plugins::detail::host_raw(h)->h,
+                 plugins::detail::job_raw(body), 2, &m));
     dftu_task* t = nullptr;
     co_await plugins::detail::reported(
-        svc->start(h.ctx(), h.raw()->h, m, &in, &slots, &t));
-    co_await h.await(t);
+        svc->start(plugins::detail::host_ctx(h),
+                   plugins::detail::host_raw(h)->h, m, &in, &slots, &t));
+    co_await plugins::detail::await_raw(h, t);
 }
 
 // A column rides the pipe as a first-class DFTU_T_SERIES value: the source
@@ -364,9 +371,10 @@ dftu_status make_raw_job(plugins::Host h, dftu_type in_ty, dftu_type out_ty,
     d.in_size = 8;
     d.out_ty = out_ty;
     d.out_size = 8;
-    auto svc = h.tasks();
+    auto svc = plugins::detail::task_service(h);
     if (!svc.has_value()) return plugins::status_of(svc.error());
-    return (*svc)->job(h.ctx(), h.raw()->h, &d, out);
+    return (*svc)->job(plugins::detail::host_ctx(h),
+                       plugins::detail::host_raw(h)->h, &d, out);
 }
 
 template <class MakeTask>
@@ -979,7 +987,7 @@ TEST_CASE(
     "plugin ABI: DFTU_T_SERIES and DFTU_T_TABLE are distinct handle tags") {
     FoldFixture<CountSlice> fx(nullptr);
     test_plugin_common::Ctx c;
-    plugins::Host h{&fx.host(), c.get()};
+    plugins::Host h = plugins::detail::host_from_raw(&fx.host(), c.get());
     // Both are 8-byte handle values; as opaque DFTU_T_BYTES they would have
     // piped. A distinct tag makes a column-out reject a table-in, and accept a
     // column-in. (Bodies never run; `then` only checks the type + size seam.)
@@ -988,27 +996,29 @@ TEST_CASE(
     REQUIRE(make_raw_job(h, DFTU_T_I64, DFTU_T_SERIES, &col_out) == DFTU_OK);
     REQUIRE(make_raw_job(h, DFTU_T_TABLE, DFTU_T_I64, &tbl_in) == DFTU_OK);
     REQUIRE(make_raw_job(h, DFTU_T_SERIES, DFTU_T_I64, &col_in) == DFTU_OK);
-    CHECK(
-        h.tasks().value()->then(c.get(), h.raw()->h, col_out, tbl_in, &piped) ==
-        DFTU_E_INVALID);  // SERIES out != TABLE in
-    CHECK(
-        h.tasks().value()->then(c.get(), h.raw()->h, col_out, col_in, &piped) ==
-        DFTU_OK);         // SERIES out -> SERIES in
+    CHECK(plugins::detail::task_service(h).value()->then(
+              c.get(), plugins::detail::host_raw(h)->h, col_out, tbl_in,
+              &piped) == DFTU_E_INVALID);  // SERIES out != TABLE in
+    CHECK(plugins::detail::task_service(h).value()->then(
+              c.get(), plugins::detail::host_raw(h)->h, col_out, col_in,
+              &piped) == DFTU_OK);         // SERIES out -> SERIES in
 }
 
 TEST_CASE("plugin ABI: job then rejects a type mismatch") {
     FoldFixture<CountSlice> fx(nullptr);
     test_plugin_common::Ctx c;
-    plugins::Host h{&fx.host(), c.get()};
+    plugins::Host h = plugins::detail::host_from_raw(&fx.host(), c.get());
     dftu_job *a = nullptr, *f = nullptr, *i = nullptr, *piped = nullptr;
     REQUIRE(make_raw_job(h, DFTU_T_I64, DFTU_T_I64, &a) == DFTU_OK);
     // Same byte size (8) but a different type must not pipe.
     REQUIRE(make_raw_job(h, DFTU_T_F64, DFTU_T_F64, &f) == DFTU_OK);
     REQUIRE(make_raw_job(h, DFTU_T_I64, DFTU_T_I64, &i) == DFTU_OK);
-    CHECK(h.tasks().value()->then(c.get(), h.raw()->h, a, f, &piped) ==
+    CHECK(plugins::detail::task_service(h).value()->then(
+              c.get(), plugins::detail::host_raw(h)->h, a, f, &piped) ==
           DFTU_E_INVALID);
     CHECK_FALSE(c.message().empty());
-    CHECK(h.tasks().value()->then(c.get(), h.raw()->h, a, i, &piped) ==
+    CHECK(plugins::detail::task_service(h).value()->then(
+              c.get(), plugins::detail::host_raw(h)->h, a, i, &piped) ==
           DFTU_OK);
 }
 
@@ -1016,7 +1026,8 @@ TEST_CASE("plugin ABI: host utility ops fnv1a and hex64_parse") {
     FoldFixture<CountSlice> fx(nullptr);
     dftu_plugin_host& host = fx.host();
     test_plugin_common::Ctx c;
-    dftracer::utils::plugins::Host h{&host, c.get()};
+    dftracer::utils::plugins::Host h =
+        dftracer::utils::plugins::detail::host_from_raw(&host, c.get());
 
     const char data[] = "POSIXabc0123456789abcdefnothexnothex1234";
     const std::int32_t offsets[] = {0, 5, 8, 24, 40};
@@ -1024,18 +1035,20 @@ TEST_CASE("plugin ABI: host utility ops fnv1a and hex64_parse") {
         dftu_series_new_string(DFTU_TYPE_STRING, offsets, data, 4, nullptr);
     REQUIRE(in != nullptr);
 
-    auto hashed_result = h.run_op("dftu.hash.fnv1a", {in});
+    auto hashed_result =
+        h.run_op("dftu.hash.fnv1a", {dataframe::ColumnView{in}});
     REQUIRE(hashed_result.has_value());
-    dftu_series* hashed = *hashed_result;
+    dftu_series* hashed = hashed_result->get();
     REQUIRE(hashed != nullptr);
     const auto* hv =
         static_cast<const std::uint64_t*>(dftu_series_data(hashed));
     REQUIRE(hv != nullptr);
     CHECK(hv[0] == 5527563327133061832ULL);  // fnv1a("POSIX")
 
-    auto parsed_result = h.run_op("dftu.hex.parse64", {in});
+    auto parsed_result =
+        h.run_op("dftu.hex.parse64", {dataframe::ColumnView{in}});
     REQUIRE(parsed_result.has_value());
-    dftu_series* parsed = *parsed_result;
+    dftu_series* parsed = parsed_result->get();
     REQUIRE(parsed != nullptr);
     const auto* pv =
         static_cast<const std::uint64_t*>(dftu_series_data(parsed));
@@ -1045,7 +1058,5 @@ TEST_CASE("plugin ABI: host utility ops fnv1a and hex64_parse") {
     CHECK(dftu_series_is_null(parsed, 1));  // "abc" is too short
     CHECK(dftu_series_is_null(parsed, 3));  // 16 chars, not all hex
 
-    dftu_series_free(parsed);
-    dftu_series_free(hashed);
     dftu_series_free(in);
 }

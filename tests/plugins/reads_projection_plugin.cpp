@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-/* Test-only plugin that records the columns dftu_plugin::reads projects into
+/* Test-only plugin that records the columns the host projects into
  * on_batch. One Slice declares `static reads()`, the other does not; the
  * `declare_reads` config key picks which one the factory builds, so a single
  * .so drives both the declared-projection and the full-frame test cases.
@@ -33,36 +33,36 @@ struct ColumnProbe {
     bool has_args_x = false;
     double args_x_sum = 0.0;
 
-    void step(const dftu_dataframe* df, Host) {
+    void step(dataframe::FrameView df, Host) {
         if (seen) return;
         seen = true;
-        num_columns = dftu_dataframe_num_columns(df);
+        num_columns = df.column_count();
 
         dstd::Vector<dstd::String> names;
         names.reserve(static_cast<std::size_t>(num_columns));
-        for (std::int32_t i = 0; i < num_columns; ++i) {
-            const char* n = dftu_dataframe_column_name(df, i);
-            names.emplace_back(n ? n : "");
-        }
+        for (std::int32_t i = 0; i < num_columns; ++i)
+            names.emplace_back(df.name(i));
         std::sort(names.begin(), names.end());
         for (std::size_t i = 0; i < names.size(); ++i) {
             if (i) columns += ",";
             columns += names[i];
         }
 
-        dftu_series* xcol = dftu_dataframe_column(df, "args.x");
-        if (!xcol) xcol = dftu_dataframe_column(df, "x");
+        dstd::Optional<dataframe::ColumnView> xcol = df.column("args.x");
+        if (!xcol) xcol = df.column("x");
         if (xcol) {
             has_args_x = true;
-            if (dftu_series_type(xcol) == DFTU_TYPE_INT64) {
-                const auto* data =
-                    static_cast<const std::int64_t*>(dftu_series_data(xcol));
-                const std::int64_t rows = dftu_dataframe_num_rows(df);
-                for (std::int64_t i = 0; i < rows; ++i)
-                    if (!dftu_series_is_null(xcol, i))
+            const dstd::Result<dataframe::Column> flat = xcol->flat();
+            if (flat.has_value()) {
+                const dataframe::ColumnView view{flat->get()};
+                const dstd::Span<const std::int64_t> data =
+                    view.values<std::int64_t>();
+                for (std::int64_t i = 0;
+                     i < static_cast<std::int64_t>(data.size()); ++i) {
+                    if (!view.is_null(i))
                         args_x_sum += static_cast<double>(data[i]);
+                }
             }
-            dftu_series_free(xcol);
         }
     }
 

@@ -369,7 +369,8 @@ struct CursorVt {
                 if constexpr (requires(C& c, const Host& h) {
                                   c.next(std::int64_t{}, h);
                               })
-                    return box->cursor->next(max_rows, Host(box->host, ctx));
+                    return box->cursor->next(
+                        max_rows, detail::host_from_raw(box->host, ctx));
                 else
                     return box->cursor->next(max_rows);
             }();
@@ -471,7 +472,8 @@ struct SourceVt {
                 view.filters.emplace_back(req->filters[i]);
             view.limit = req->limit;
             view.memory_budget = req->memory_budget;
-            auto scanned = box->source->scan(view, Host(host, ctx));
+            auto scanned =
+                box->source->scan(view, detail::host_from_raw(host, ctx));
             if (!scanned.has_value()) return report(ctx, scanned.error());
             auto& result = *scanned;
             using C = typename decltype(result.cursor)::element_type;

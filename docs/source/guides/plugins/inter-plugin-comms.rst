@@ -33,11 +33,11 @@ consumer reads it back during the same batch.
 
       .. code-block:: cpp
 
-         template <class T> OutPort<T> publish_port(const char* cap_id) const;
-         template <class T> InPort<T> consume_port(const char* cap_id) const;
+         template <class T> OutPort<T> publish_port(dstd::CStringView cap_id) const;
+         template <class T> InPort<T> consume_port(dstd::CStringView cap_id) const;
 
          // OutPort<T>: void send(const T& v) const;
-         // InPort<T>:  std::optional<T> recv() const;
+         // InPort<T>:  dstd::Optional<T> recv() const;
 
       ``T`` must be trivially copyable; the host copies ``sizeof(T)`` bytes per
       publish. A producer built with ``dftracer::utils::plugins::make_plugin<Slice>``
@@ -55,10 +55,12 @@ consumer reads it back during the same batch.
              }
 
              explicit ProducerSlice(const dftracer::utils::plugins::Config&) {}
-             void step(const dftracer::utils::plugins::Batch& b, dftracer::utils::plugins::Host h) {
+             void step(dataframe::FrameView b, dftracer::utils::plugins::Host h) {
                  std::uint64_t with_dur = 0;
-                 for (const dftracer::utils::plugins::Event& e : b)
-                     if (e.has_dur()) ++with_dur;
+                 if (const auto dur = b.column("dur")) {
+                     for (std::int64_t row = 0; row < b.row_count(); ++row)
+                         if (!dur->is_null(row)) ++with_dur;
+                 }
                  h.publish_port<std::uint64_t>(PORT_CAP).send(with_dur);
              }
              void merge(ProducerSlice&) {}
@@ -85,7 +87,7 @@ consumer reads it back during the same batch.
              }
 
              explicit ConsumerSlice(const dftracer::utils::plugins::Config&) {}
-             void step(const dftracer::utils::plugins::Batch&, dftracer::utils::plugins::Host h) {
+             void step(dataframe::FrameView, dftracer::utils::plugins::Host h) {
                  if (auto with_dur = h.consume_port<std::uint64_t>(PORT_CAP).recv()) {
                      // ... use *with_dur for this batch
                  }

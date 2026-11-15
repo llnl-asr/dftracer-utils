@@ -36,7 +36,7 @@ namespace {
 
 struct TrivialSlice {
     explicit TrivialSlice(const dftracer::utils::plugins::Config&) {}
-    void step(const dftu_dataframe*, dftracer::utils::plugins::Host) {}
+    void step(dataframe::FrameView, dftracer::utils::plugins::Host) {}
     void merge(TrivialSlice&) {}
     void finalize(dftracer::utils::plugins::Host) {}
 };
@@ -361,7 +361,8 @@ TEST_CASE(
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
     dstd::fs::remove(pfw).discard();
 
-    dftracer::utils::plugins::Host h{&fx.host(), fx.ctx()};
+    dftracer::utils::plugins::Host h =
+        dftracer::utils::plugins::detail::host_from_raw(&fx.host(), fx.ctx());
     int calls = 0;
     auto failed = h.trace_read(
         gz.c_str(), [&](const dftu_dataframe*) -> dstd::Result<void> {

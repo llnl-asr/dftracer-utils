@@ -106,7 +106,7 @@ using namespace dftracer::utils::plugins;
 struct {cls} {{
     explicit {cls}(const Config&) {{}}
 
-    dstd::Result<void> step(const dftu_dataframe* df, Host host) {{
+    dstd::Result<void> step(dataframe::FrameView df, Host host) {{
         DFTRACER_UTILS_TRY(Agg a,
                            host.agg("{name}", {{"pid"}}, {{agg::count("value")}}));
         return a.accumulate(df);

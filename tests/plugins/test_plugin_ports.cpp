@@ -37,7 +37,7 @@ struct ProducerSlice {
         std::uint64_t with_dur = 0;
         for (const dftracer::utils::plugins::Event& e : b)
             if (e.has_dur()) ++with_dur;
-        h.publish(h.port_key(PORT_CAP), &with_dur, sizeof with_dur);
+        h.publish_port<std::uint64_t>(PORT_CAP).send(with_dur);
     }
     void merge(ProducerSlice&) {}
     void finalize(dftracer::utils::plugins::Host) {}
@@ -47,10 +47,12 @@ struct ConsumerSlice {
     explicit ConsumerSlice(const dftracer::utils::plugins::Config&) {}
     void step(const dftracer::utils::plugins::Batch&,
               dftracer::utils::plugins::Host h) {
-        std::uint32_t len = 0;
-        const void* p = h.consume(h.port_key(PORT_CAP), &len);
-        g_present = p != nullptr && len == sizeof(std::uint64_t);
-        g_consumed = g_present ? *static_cast<const std::uint64_t*>(p) : 0;
+        const dftracer::utils::plugins::InPort<std::uint64_t> port =
+            h.consume_port<std::uint64_t>(PORT_CAP);
+        const dftracer::utils::dstd::Optional<std::uint64_t> value =
+            port.recv();
+        g_present = value.has_value();
+        g_consumed = value.value_or(0);
     }
     void merge(ConsumerSlice&) {}
     void finalize(dftracer::utils::plugins::Host) {}

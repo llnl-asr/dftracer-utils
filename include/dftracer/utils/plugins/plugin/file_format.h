@@ -254,7 +254,7 @@ struct SinkVt {
                                          ? static_cast<TypeId>(types[i])
                                          : TypeId::Unknown);
             }
-            view.options = Config(options);
+            view.options = detail::config_from_raw(options);
             auto writer = static_cast<Box*>(self)->sink->bind(view);
             if (!writer.has_value()) return report(ctx, writer.error());
             if (!*writer)

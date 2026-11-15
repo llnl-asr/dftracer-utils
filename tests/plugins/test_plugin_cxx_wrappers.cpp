@@ -50,7 +50,7 @@ trace::views::detail::FoldEvent evt(dstd::StringIntern& intern,
 }
 
 dstd::Result<void> accumulate_wrappers(plugins::Host h,
-                                       const dftu_dataframe* df) {
+                                       dataframe::FrameView df) {
     DFTRACER_UTILS_TRY(
         plugins::Agg scalar,
         h.agg("wrap_scalar", {},
@@ -78,8 +78,9 @@ dstd::Result<void> accumulate_wrappers(plugins::Host h,
 // agg:: factories, so no case names a raw DFTU_AGG_* code.
 dftu_status wrappers_columns(dftu_ctx* ctx, void*, const dftu_dataframe* df,
                              const dftu_plugin_host* host) {
-    plugins::Host h{host, ctx};
-    return test_plugin_common::as_status(accumulate_wrappers(h, df));
+    plugins::Host h = plugins::detail::host_from_raw(host, ctx);
+    return test_plugin_common::as_status(
+        accumulate_wrappers(h, dataframe::FrameView{df}));
 }
 
 dftu_plugin make_wrappers_plugin() {
@@ -300,7 +301,8 @@ TEST_SUITE("PluginCxxWrappers") {
         dftu_plugin p = make_wrappers_plugin();
         auto fold = dstd::make_unique<plugins::host::PluginFold>(&p, intern);
         test_plugin_common::Ctx c;
-        plugins::Host h{&fold->host(), c.get()};
+        plugins::Host h =
+            plugins::detail::host_from_raw(&fold->host(), c.get());
         const dstd::Result<plugins::OwnedDataFrame> miss =
             h.agg_result("no_such_accumulator");
         REQUIRE(miss.has_value());
@@ -352,7 +354,8 @@ TEST_SUITE("PluginCxxConfigArrays") {
         root.count = 3;
         root.as.members = members;
 
-        dftracer::utils::plugins::Config cfg{&root};
+        dftracer::utils::plugins::Config cfg =
+            dftracer::utils::plugins::detail::config_from_raw(&root);
         CHECK(cfg.get_int_array("nums") ==
               dstd::Vector<std::int64_t>{10, 20, 30});
         CHECK(cfg.get_double_array("reals") == dstd::Vector<double>{1.5, 3.0});

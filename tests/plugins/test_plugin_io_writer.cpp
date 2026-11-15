@@ -41,7 +41,7 @@ namespace {
 
 struct TrivialSlice {
     explicit TrivialSlice(const dftracer::utils::plugins::Config&) {}
-    void step(const dftu_dataframe*, dftracer::utils::plugins::Host) {}
+    void step(dataframe::FrameView, dftracer::utils::plugins::Host) {}
     void merge(TrivialSlice&) {}
     void finalize(dftracer::utils::plugins::Host) {}
 };
@@ -172,7 +172,8 @@ dftracer::utils::plugins::Task spawn_then(dftracer::utils::plugins::Host h,
     auto tb = h.spawn(fb);
     // GCC 12.1 rejects a braced list inside a co_await expression ("array used
     // as initializer"), so the op is built in its own statement.
-    auto both = h.all({ta.release(), tb.release()});
+    auto both = dftracer::utils::plugins::detail::all_raw(
+        h, {ta.release(), tb.release()});
     co_await both;
     *order = (a_done && b_done) ? 1 : 0;
 

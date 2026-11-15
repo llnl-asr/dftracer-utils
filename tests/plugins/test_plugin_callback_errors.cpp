@@ -227,7 +227,7 @@ struct FailingSlice {
             return plugins::parse_error("sdk failed in make");
         return FailingSlice(c);
     }
-    dstd::Result<void> step(const dftu_dataframe*, plugins::Host) {
+    dstd::Result<void> step(dataframe::FrameView, plugins::Host) {
         if (is(At::OnBatch)) return plugins::parse_error("sdk failed in step");
         return plugins::ok();
     }
@@ -270,10 +270,10 @@ TEST_CASE("the SDK turns a returned error into an error with its text") {
 TEST_CASE("DFTRACER_UTILS_TRY in a step returns a failed service call") {
     struct TrySlice {
         explicit TrySlice(const plugins::Config&) {}
-        dstd::Result<void> step(const dftu_dataframe*, plugins::Host h) {
-            DFTRACER_UTILS_TRY(dftu_series * out,
+        dstd::Result<void> step(dataframe::FrameView, plugins::Host h) {
+            DFTRACER_UTILS_TRY(dataframe::Column out,
                                h.run_op("dftu.test.nonexistent_op", {}));
-            dftu_series_free(out);
+            (void)out;
             return plugins::ok();
         }
         void merge(TrySlice&) {}
@@ -301,7 +301,7 @@ TEST_CASE("DFTRACER_UTILS_TRY in a step returns a failed service call") {
 TEST_CASE("an Error returned from a Slice keeps its status") {
     struct CodedSlice {
         explicit CodedSlice(const plugins::Config&) {}
-        dstd::Result<void> step(const dftu_dataframe*, plugins::Host) {
+        dstd::Result<void> step(dataframe::FrameView, plugins::Host) {
             return plugins::not_found("no such column");
         }
         void merge(CodedSlice&) {}

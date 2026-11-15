@@ -2,7 +2,10 @@
 #ifndef DFTRACER_UTILS_PLUGINS_PLUGIN_TYPES_H
 #define DFTRACER_UTILS_PLUGINS_PLUGIN_TYPES_H
 
+#include <dftracer/utils/dataframe/op.h>
 #include <dftracer/utils/dataframe/plugin_error.h>
+#include <dftracer/utils/dataframe/plugin_frame.h>
+#include <dftracer/utils/dataframe/scalar.h>
 #include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
@@ -104,6 +107,32 @@ static_assert(static_cast<dftu_log_level>(LogLevel::Info) == DFTU_LOG_INFO);
 static_assert(static_cast<dftu_log_level>(LogLevel::Warn) == DFTU_LOG_WARN);
 static_assert(static_cast<dftu_log_level>(LogLevel::Error) == DFTU_LOG_ERROR);
 
+/// Scoped mirror of dftu_job_where for Host::spawn and make_job; each
+/// enumerator is its ABI constant, so static_cast<dftu_job_where> recovers the
+/// raw value.
+enum class JobWhere : std::int32_t {
+    Cpu = DFTU_JOB_CPU,
+    Inline = DFTU_JOB_INLINE,
+    Blocking = DFTU_JOB_BLOCKING
+};
+static_assert(static_cast<dftu_job_where>(JobWhere::Cpu) == DFTU_JOB_CPU);
+static_assert(static_cast<dftu_job_where>(JobWhere::Inline) == DFTU_JOB_INLINE);
+static_assert(static_cast<dftu_job_where>(JobWhere::Blocking) ==
+              DFTU_JOB_BLOCKING);
+
+/// The quantile summary a @ref Sketch returns; the SDK spelling of
+/// dftu_quantiles.
+struct Quantiles {
+    std::uint64_t count = 0;
+    double min = 0.0;
+    double max = 0.0;
+    double mean = 0.0;
+    double p50 = 0.0;
+    double p90 = 0.0;
+    double p95 = 0.0;
+    double p99 = 0.0;
+};
+
 /// Scoped mirror of dftu_value_kind for ConfigValue::kind; each enumerator is
 /// its ABI constant, so static_cast<dftu_value_kind> recovers the raw value.
 enum class ValueKind : std::int32_t {
@@ -178,6 +207,9 @@ static_assert(static_cast<dftu_agg_op>(AggOp::CountValid) ==
 
 namespace detail {
 struct AggColAccess;
+struct ConfigAccess;
+struct ConfigKeyAccess;
+struct OpSpecAccess;
 }  // namespace detail
 
 /// Fluent builder for one dftu_agg_col spec passed to Host::agg. Every name
@@ -348,6 +380,127 @@ inline AggCol active(dstd::CStringView ts, dstd::CStringView dur,
 
 class Host;
 
+/// One config key a plugin reads, for validation and for --describe. The SDK
+/// spells its kind as @ref ValueKind; @ref any makes the key accept every kind.
+/// All four strings are borrowed and must outlive the plugin descriptor.
+class ConfigKey {
+   public:
+    ConfigKey() = default;
+    ConfigKey(dstd::CStringView name, ValueKind kind, bool required = false,
+              dstd::CStringView doc = {}) noexcept
+        : name_(name),
+          kind_(kind),
+          required_(required),
+          doc_(doc),
+          any_(false) {}
+
+    static ConfigKey any(dstd::CStringView name, bool required = false,
+                         dstd::CStringView doc = {}) noexcept {
+        ConfigKey key;
+        key.name_ = name;
+        key.required_ = required;
+        key.doc_ = doc;
+        key.any_ = true;
+        return key;
+    }
+
+    dstd::CStringView name() const noexcept { return name_; }
+
+   private:
+    friend struct detail::ConfigKeyAccess;
+
+    dftu_config_key raw() const noexcept {
+        // An empty name reaches the host as "", which refuses it; NULL would
+        // end the key array early.
+        return dftu_config_key{
+            name_.c_str() != nullptr ? name_.c_str() : "",
+            any_ ? DFTU_CONFIG_ANY : static_cast<std::int32_t>(kind_),
+            required_ ? 1 : 0, c_name(doc_)};
+    }
+
+    static const char* c_name(dstd::CStringView name) noexcept {
+        return name.empty() ? nullptr : name.c_str();
+    }
+
+    dstd::CStringView name_;
+    ValueKind kind_ = ValueKind::Null;
+    bool required_ = false;
+    dstd::CStringView doc_;
+    bool any_ = true;
+};
+
+namespace detail {
+template <auto Fn>
+std::int64_t series_i64_thunk(const dftu_series* series);
+}  // namespace detail
+
+/// A typed op descriptor for @ref PluginBuilder::op. The one shape a plugin
+/// registers through the SDK is an aggregate over one borrowed column returning
+/// a count or sum as int64; `Fn` is the plugin's function pointer
+/// (`std::int64_t(const ColumnView&)`).
+class OpSpec {
+   public:
+    OpSpec() = default;
+
+    template <auto Fn>
+    static OpSpec series_i64(dstd::CStringView name) noexcept {
+        static_assert(std::is_invocable_r_v<std::int64_t, decltype(Fn),
+                                            dataframe::ColumnView>);
+        OpSpec spec;
+        spec.name_ = dstd::String(name.c_str(), name.size());
+        spec.desc_.sig =
+            static_cast<dftu_op_sig>(DFTU_OP_SIG(I64, SERIES, NONE, NONE));
+        spec.desc_.fn =
+            reinterpret_cast<dftu_op_generic_fn>(&detail::series_i64_thunk<Fn>);
+        return spec;
+    }
+
+   private:
+    friend struct detail::OpSpecAccess;
+
+    const dftu_op_desc* raw() const noexcept {
+        desc_.name = name_.c_str();
+        return &desc_;
+    }
+
+    dstd::String name_;
+    mutable dftu_op_desc desc_{};
+};
+
+namespace detail {
+
+template <auto Fn>
+std::int64_t series_i64_thunk(const dftu_series* series) {
+    return Fn(dataframe::ColumnView{series});
+}
+
+}  // namespace detail
+
+/// Borrowed view of a registered dataframe op. It wraps the host's registry
+/// record without exposing the raw dftu_op_desc, and stays valid while the op
+/// is registered.
+class OpRef {
+   public:
+    OpRef() = default;
+
+    dstd::StringView name() const noexcept {
+        return desc_ != nullptr ? dstd::StringView{desc_->name}
+                                : dstd::StringView{};
+    }
+    dataframe::OpSig sig() const noexcept {
+        return desc_ != nullptr ? dataframe::OpSig{desc_->sig}
+                                : dataframe::OpSig{};
+    }
+    explicit operator bool() const noexcept { return desc_ != nullptr; }
+
+   private:
+    friend class Host;
+
+    explicit OpRef(const dftu_op_desc* desc) noexcept : desc_(desc) {}
+
+    const dftu_op_desc* desc_ = nullptr;
+};
+
 /// Opaque strong handle for an interned-string id (the C ABI's dftu_str, which
 /// is an id, not bytes). Compare and hash by identity; resolve to bytes with
 /// @ref Host::str. absent() is the DFTU_STR_NONE sentinel. The id itself
@@ -392,7 +545,6 @@ inline dftu_agg_col agg_col_raw(const AggCol& col) noexcept {
 class ConfigValue {
    public:
     ConfigValue() = default;
-    explicit ConfigValue(const dftu_value* v) noexcept : v_(v) {}
 
     ValueKind kind() const noexcept {
         return v_ ? static_cast<ValueKind>(v_->kind) : ValueKind::Null;
@@ -453,9 +605,11 @@ class ConfigValue {
         return ConfigValue{};
     }
 
-    const dftu_value* raw() const noexcept { return v_; }
-
    private:
+    friend class Config;
+
+    explicit ConfigValue(const dftu_value* v) noexcept : v_(v) {}
+
     const dftu_value* v_ = nullptr;
 };
 
@@ -464,16 +618,10 @@ class ConfigValue {
 class Config {
    public:
     Config() = default;
-    explicit Config(const dftu_value* root) : root_(root) {}
 
-    const dftu_value* find(dstd::StringView key) const {
-        if (!root_ || root_->kind != DFTU_VAL_OBJECT) return nullptr;
-        for (std::uint32_t i = 0; i < root_->count; ++i) {
-            const dftu_member& m = root_->as.members[i];
-            if (dstd::StringView{m.key, m.key_len} == key) return m.value;
-        }
-        return nullptr;
-    }
+    /// Typed view of the whole config tree, of any kind; null when there is no
+    /// tree.
+    ConfigValue value() const { return ConfigValue{root_}; }
 
     dstd::StringView get(dstd::StringView key,
                          dstd::StringView dflt = {}) const {
@@ -547,9 +695,21 @@ class Config {
     }
 
     explicit operator bool() const { return root_ != nullptr; }
-    const dftu_value* raw() const { return root_; }
 
    private:
+    friend struct detail::ConfigAccess;
+
+    explicit Config(const dftu_value* root) : root_(root) {}
+
+    const dftu_value* find(dstd::StringView key) const {
+        if (!root_ || root_->kind != DFTU_VAL_OBJECT) return nullptr;
+        for (std::uint32_t i = 0; i < root_->count; ++i) {
+            const dftu_member& m = root_->as.members[i];
+            if (dstd::StringView{m.key, m.key_len} == key) return m.value;
+        }
+        return nullptr;
+    }
+
     const dftu_value* raw_array(dstd::StringView key) const {
         const dftu_value* v = find(key);
         return (v && v->kind == DFTU_VAL_ARRAY) ? v : nullptr;
@@ -557,6 +717,40 @@ class Config {
 
     const dftu_value* root_ = nullptr;
 };
+
+namespace detail {
+
+struct ConfigAccess {
+    static Config from_raw(const dftu_value* value) noexcept {
+        return Config{value};
+    }
+};
+
+struct ConfigKeyAccess {
+    static dftu_config_key raw(const ConfigKey& key) noexcept {
+        return key.raw();
+    }
+};
+
+struct OpSpecAccess {
+    static const dftu_op_desc* raw(const OpSpec& spec) noexcept {
+        return spec.raw();
+    }
+};
+
+inline Config config_from_raw(const dftu_value* value) noexcept {
+    return ConfigAccess::from_raw(value);
+}
+
+inline dftu_config_key config_key_raw(const ConfigKey& key) noexcept {
+    return ConfigKeyAccess::raw(key);
+}
+
+inline const dftu_op_desc* op_spec_raw(const OpSpec& spec) noexcept {
+    return OpSpecAccess::raw(spec);
+}
+
+}  // namespace detail
 
 }  // namespace dftracer::utils::plugins
 

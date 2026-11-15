@@ -52,12 +52,11 @@ template <class Slice>
 concept BatchViewStep =
     requires(Slice& s, const Batch& b, Host h) { s.step(b, h); };
 
-/// A Slice whose synchronous step takes the raw dftu_dataframe batch, the
-/// shape that feeds Host::agg directly (its accumulator takes column
-/// batches).
+/// A Slice whose synchronous step takes the borrowed typed frame, the shape
+/// that feeds Host::agg directly (its accumulator takes column batches).
 template <class Slice>
 concept ColumnStep =
-    requires(Slice& s, const dftu_dataframe* df, Host h) { s.step(df, h); };
+    requires(Slice& s, dataframe::FrameView df, Host h) { s.step(df, h); };
 
 template <class Slice>
 concept AsyncFinalize = requires(Slice& s, Host h) {
@@ -65,11 +64,11 @@ concept AsyncFinalize = requires(Slice& s, Host h) {
 };
 
 /// A Slice that rewrites the batch for every plugin after it in fold order:
-/// returns a new dftu_dataframe (the host frees it) or nullptr for unchanged,
-/// or the error that failed it. Takes the place of step().
+/// returns an owned frame (null for unchanged) or the error that failed it.
+/// Takes the place of step().
 template <class Slice>
-concept TransformStep = requires(Slice& s, const dftu_dataframe* df, Host h) {
-    { s.transform(df, h) } -> std::same_as<dstd::Result<dftu_dataframe*>>;
+concept TransformStep = requires(Slice& s, dataframe::FrameView df, Host h) {
+    { s.transform(df, h) } -> std::same_as<dstd::Result<OwnedDataFrame>>;
 };
 
 /// One host step of the driven coroutine: runs it to its next co_await and
@@ -184,8 +183,7 @@ const char* const* name_list_thunk(void*) {
 }
 
 /// A Slice declaring the config keys it reads via a static `config_keys()`
-/// returning a range of dftu_config_key (a NULL name is not needed; the thunk
-/// terminates the array).
+/// returning a range of ConfigKey (the thunk terminates the array).
 template <class Slice>
 concept DeclaresConfigKeys = requires {
     { std::begin(Slice::config_keys()) };
@@ -200,10 +198,12 @@ template <class Slice>
 const dftu_config_key* config_key_thunk(void*) {
     static const dstd::Vector<dftu_config_key> KEYS = [] {
         dstd::Vector<dftu_config_key> v;
-        for (const dftu_config_key& k : Slice::config_keys()) v.push_back(k);
-        v.push_back({"duql", DFTU_VAL_STR, 0,
-                     "coarse DSL predicate the scan is pruned by"});
-        v.push_back({nullptr, DFTU_CONFIG_ANY, 0, nullptr});
+        for (const ConfigKey& k : Slice::config_keys())
+            v.push_back(config_key_raw(k));
+        v.push_back(config_key_raw(
+            ConfigKey{"duql", ValueKind::Str, false,
+                      "coarse DSL predicate the scan is pruned by"}));
+        v.push_back(dftu_config_key{nullptr, DFTU_CONFIG_ANY, 0, nullptr});
         return v;
     }();
     return KEYS.data();
@@ -212,28 +212,26 @@ const dftu_config_key* config_key_thunk(void*) {
 }  // namespace detail
 
 /** Build a dftu_plugin from a Slice providing Slice(const Config&), merge, and
-   either a synchronous step(const Batch&, Host) / step(const dftu_dataframe*,
-   Host), or a transform(const dftu_dataframe*, Host) returning the rewritten
-   batch every later plugin receives (dftu_plugin::transform, in place of
-   step), and a sync or Task-returning on_finalize. To take part in the fold
-   ordering a Slice may also declare `static ... provides()` and `static ...
-   consumes()`, each a range of const char* port/accumulator names outliving the
-   plugin; make_plugin wires them to dftu_plugin::provides / ::consumes. A
-   `static ... reads()` of batch column names becomes dftu_plugin::reads, which
-   projects the batch down to those columns. A Slice that holds growing state
-   reserves it through Host::memory() and sets a reclaimer on the reservation,
-   so the host can hold it to the scan's memory budget. A Slice that can fail
-   at creation
-   provides `static dstd::Result<Slice> from_config(const Config&)`, which
-   make_slice uses in place of the constructor. A callback reports failure by
-   returning a dstd::Result (step, merge, finalize and the others may also
-   return void when they cannot fail); the trampolines turn it into the
-   callback's status and message and hold no catch, so a callback that throws
-   terminates. */
+   either a synchronous step(const Batch&, Host) / step(FrameView, Host), or
+   a transform(FrameView, Host) returning the rewritten batch every later
+   plugin receives (dftu_plugin::transform, in place of step), and a sync or
+   Task-returning on_finalize. To take part in the fold ordering a Slice may
+   also declare `static ... provides()` and `static ... consumes()`, each a
+   range of const char* port/accumulator names outliving the plugin; make_plugin
+   wires them to dftu_plugin::provides / ::consumes. A `static ... reads()` of
+   batch column names becomes dftu_plugin::reads, which projects the batch down
+   to those columns. A Slice that holds growing state reserves it through
+   Host::memory() and sets a reclaimer on the reservation, so the host can hold
+   it to the scan's memory budget. A Slice that can fail at creation provides
+   `static dstd::Result<Slice> from_config(const Config&)`, which make_slice
+   uses in place of the constructor. A callback reports failure by returning a
+   dstd::Result (step, merge, finalize and the others may also return void when
+   they cannot fail); the trampolines turn it into the callback's status and
+   message and hold no catch, so a callback that throws terminates. */
 template <class Slice>
 dftu_plugin* make_plugin(const dftu_value* config) {
     auto* hd = new detail::Holder<Slice>();
-    hd->config = Config(config);
+    hd->config = detail::config_from_raw(config);
     hd->plan = hd->config.get("duql");
 
     dftu_plugin& vt = hd->vt;
@@ -267,10 +265,12 @@ dftu_plugin* make_plugin(const dftu_value* config) {
                           const dftu_plugin_host* host,
                           dftu_dataframe** out) noexcept -> dftu_status {
             return detail::to_status(ctx, [&]() -> dftu_status {
-                dstd::Result<dftu_dataframe*> r =
-                    static_cast<Slice*>(slice)->transform(df, Host{host, ctx});
+                dstd::Result<OwnedDataFrame> r =
+                    static_cast<Slice*>(slice)->transform(
+                        dataframe::FrameView{df},
+                        detail::host_from_raw(host, ctx));
                 if (!r.has_value()) return report(ctx, r.error());
-                *out = *r;
+                *out = r->release();
                 return DFTU_OK;
             });
         };
@@ -279,11 +279,11 @@ dftu_plugin* make_plugin(const dftu_value* config) {
                          const dftu_plugin_host* host) noexcept -> dftu_status {
             return detail::to_status(ctx, [&]() {
                 Slice* sl = static_cast<Slice*>(slice);
-                Host h{host, ctx};
+                Host h = detail::host_from_raw(host, ctx);
                 if constexpr (detail::BatchViewStep<Slice>) {
-                    return sl->step(Batch{df}, h);
+                    return sl->step(detail::batch_from_raw(df), h);
                 } else {
-                    return sl->step(df, h);
+                    return sl->step(dataframe::FrameView{df}, h);
                 }
             });
         };
@@ -304,13 +304,13 @@ dftu_plugin* make_plugin(const dftu_value* config) {
             if constexpr (detail::AsyncFinalize<Slice>) {
                 auto proxy = dstd::make_unique<detail::ProxyCtx>(ctx);
                 Task t = static_cast<Slice*>(slice)->on_finalize(
-                    Host{host, &proxy->base});
+                    detail::host_from_raw(host, &proxy->base));
                 return detail::drive_coro(ctx, host, std::move(t),
                                           std::move(proxy), pending);
             } else {
                 return detail::to_status(ctx, [&]() {
                     return static_cast<Slice*>(slice)->finalize(
-                        Host{host, ctx});
+                        detail::host_from_raw(host, ctx));
                 });
             }
         });
@@ -359,7 +359,7 @@ namespace detail {
 /// ownership of; anything else must produce a byte string.
 template <class State>
 concept FrameFinalize = requires(State& s) {
-    { s.finalize() } -> std::same_as<dftu_dataframe*>;
+    { s.finalize() } -> std::same_as<dstd::Result<OwnedDataFrame>>;
 };
 
 /// A state that can be written out and read back, which is what lets the host
@@ -381,7 +381,7 @@ concept Measurable = requires(const State& s) {
 /// its registered states through.
 struct EmptySlice {
     explicit EmptySlice(const Config&) {}
-    void step(const dftu_dataframe*, Host) {}
+    void step(dataframe::FrameView, Host) {}
     void merge(EmptySlice&) {}
     void finalize(Host) {}
 };
@@ -412,8 +412,10 @@ const dftu_state_desc& state_desc_of(const char* name) {
         };
         d.update = [](dftu_ctx* ctx, void* s,
                       const dftu_dataframe* df) noexcept -> dftu_status {
-            return to_status(
-                ctx, [&]() { return static_cast<Box*>(s)->state.update(df); });
+            return to_status(ctx, [&]() {
+                return static_cast<Box*>(s)->state.update(
+                    dataframe::FrameView{df});
+            });
         };
         d.merge = [](dftu_ctx* ctx, void* into,
                      void* other) noexcept -> dftu_status {
@@ -462,12 +464,13 @@ const dftu_state_desc& state_desc_of(const char* name) {
             return to_status(ctx, [&]() -> dftu_status {
                 Box& box = *static_cast<Box*>(s);
                 if constexpr (FrameFinalize<State>) {
-                    dftu_dataframe* frame = box.state.finalize();
-                    if (!frame)
+                    dstd::Result<OwnedDataFrame> made = box.state.finalize();
+                    if (!made.has_value()) return report(ctx, made.error());
+                    if (!*made)
                         return dftu_fail(ctx, DFTU_E_INTERNAL,
                                          "state finalize returned no frame");
                     out->kind = DFTU_RESULT_KIND_FRAME;
-                    out->u.frame = frame;
+                    out->u.frame = made->release();
                 } else {
                     box.scratch = box.state.finalize();
                     out->kind = DFTU_RESULT_KIND_BYTES;
@@ -528,10 +531,11 @@ class PluginBuilder {
     }
 
     /// Register a dataframe op, which must be named `<plugin>.<name>`.
-    PluginBuilder& op(const dftu_op_desc& desc) {
+    PluginBuilder& op(const OpSpec& spec) {
         const dftu_svc_ops* ops = ext<dftu_svc_ops>(DFTU_SVC_OPS);
         if (!ops || !ops->register_op) return fail("no op registry at load");
-        return record(ops->register_op(ctx_, host_->h, &desc));
+        return record(
+            ops->register_op(ctx_, host_->h, detail::op_spec_raw(spec)));
     }
 
     /// Register `U` as the scalar UDF duql calls `name`, which no built-in
@@ -718,7 +722,8 @@ template <class Fn>
 dftu_status plugin_entry(Fn&& fn, dftu_ctx* ctx, dftu_plugin_host* host,
                          const dftu_value* config, dftu_plugin** out) noexcept {
     PluginBuilder builder(ctx, host, config);
-    const dstd::Result<void> body = fn(builder, Config(config));
+    const dstd::Result<void> body =
+        fn(builder, detail::config_from_raw(config));
     if (!body.has_value()) return report(ctx, body.error());
     return builder.build(out);
 }

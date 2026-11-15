@@ -3,9 +3,14 @@
 #define DFTRACER_UTILS_PLUGINS_PLUGIN_MAP_H
 
 #include <dftracer/utils/dataframe/c_api.h>
+#include <dftracer/utils/dataframe/op.h>
 #include <dftracer/utils/dataframe/plugin_error.h>
+#include <dftracer/utils/dataframe/plugin_frame.h>
+#include <dftracer/utils/dataframe/scalar.h>
+#include <dftracer/utils/dstd/byte_view.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi.h>
@@ -26,6 +31,10 @@ namespace dftracer::utils::plugins {
 
 namespace detail {
 
+struct HostAccess;
+struct BatchAccess;
+struct OpArgsBuilderAccess;
+
 /// The op of a task a service call started; when the call failed, an op that
 /// fails with its status when awaited.
 /// `t` is taken by reference: callers write started(h, call(..., &t), t), and
@@ -34,6 +43,102 @@ inline AsyncOp started(const dftu_plugin_host* host, dftu_status st,
                        dftu_task* const& t) {
     if (st < 0) return AsyncOp{dataframe::error_of(st)};
     return AsyncOp{t, host};
+}
+
+}  // namespace detail
+
+/// Typed op argument list; the one C++ spelling of dftu_op_arg. Series and
+/// frame slots borrow the views the plugin already holds, and every string or
+/// list slot borrows its caller-owned backing storage.
+class OpArgsBuilder {
+   public:
+    OpArgsBuilder() = default;
+
+    OpArgsBuilder& scalar(std::uint32_t i, dataframe::Scalar value) noexcept {
+        args_.scalar(i, value);
+        return *this;
+    }
+    OpArgsBuilder& i64(std::uint32_t i, std::int64_t value) noexcept {
+        args_.i64(i, value);
+        return *this;
+    }
+    OpArgsBuilder& u64(std::uint32_t i, std::uint64_t value) noexcept {
+        args_.u64(i, value);
+        return *this;
+    }
+    OpArgsBuilder& f64(std::uint32_t i, double value) noexcept {
+        args_.f64(i, value);
+        return *this;
+    }
+    OpArgsBuilder& i32(std::uint32_t i, std::int32_t value) noexcept {
+        args_.i32(i, value);
+        return *this;
+    }
+    OpArgsBuilder& ch(std::uint32_t i, char value) noexcept {
+        args_.ch(i, value);
+        return *this;
+    }
+    OpArgsBuilder& series(std::uint32_t i,
+                          dataframe::ColumnView value) noexcept {
+        args_.series(i, dataframe::detail::column_series(value));
+        return *this;
+    }
+    OpArgsBuilder& frame(std::uint32_t i, dataframe::FrameView value) noexcept {
+        args_.frame(i, dataframe::detail::frame_pointer(value));
+        return *this;
+    }
+    OpArgsBuilder& str(std::uint32_t i, dstd::CStringView value) noexcept {
+        args_.str(i, value.view());
+        return *this;
+    }
+    OpArgsBuilder& strlist(std::uint32_t i,
+                           dstd::Span<const dstd::CStringView> items) noexcept {
+        if (c_strings_.size() <= i) c_strings_.resize(i + 1);
+        auto& slot = c_strings_[i];
+        slot.clear();
+        slot.reserve(items.size());
+        for (const dstd::CStringView item : items) {
+            slot.push_back(item.c_str());
+        }
+        args_.strlist(i, slot.data(), static_cast<std::int32_t>(slot.size()));
+        return *this;
+    }
+    OpArgsBuilder& i32list(std::uint32_t i,
+                           dstd::Span<const std::int32_t> items) noexcept {
+        args_.i32list(i, items);
+        return *this;
+    }
+    OpArgsBuilder& i64list(std::uint32_t i,
+                           dstd::Span<const std::int64_t> items) noexcept {
+        args_.i64list(i, items);
+        return *this;
+    }
+
+    OpArgsBuilder(const OpArgsBuilder&) = delete;
+    OpArgsBuilder& operator=(const OpArgsBuilder&) = delete;
+    OpArgsBuilder(OpArgsBuilder&&) noexcept = default;
+    OpArgsBuilder& operator=(OpArgsBuilder&&) noexcept = default;
+
+   private:
+    friend class Host;
+    friend struct detail::OpArgsBuilderAccess;
+
+    const dftu_op_arg* raw() const noexcept { return &args_.raw(); }
+
+    dataframe::OpArgs args_;
+    dstd::Vector<dstd::Vector<const char*>> c_strings_;
+};
+
+namespace detail {
+
+struct OpArgsBuilderAccess {
+    static const dftu_op_arg* raw(const OpArgsBuilder& b) noexcept {
+        return b.raw();
+    }
+};
+
+inline const dftu_op_arg* op_args_raw(const OpArgsBuilder& b) noexcept {
+    return OpArgsBuilderAccess::raw(b);
 }
 
 }  // namespace detail
@@ -59,7 +164,6 @@ class InPort;
 class Host {
    public:
     Host() = default;
-    Host(const dftu_plugin_host* h, dftu_ctx* ctx) : h_(h), ctx_(ctx) {}
 
     dstd::StringView str(StrId id) const {
         if (id.absent()) return {};
@@ -70,10 +174,6 @@ class Host {
     StrId intern(dstd::StringView s) const {
         return StrId{
             h_->intern(h_->h, s.data(), static_cast<std::uint32_t>(s.size()))};
-    }
-    void log(dftu_log_level level, dstd::StringView msg) const {
-        h_->log(h_->h, static_cast<std::uint8_t>(level), msg.data(),
-                static_cast<std::uint32_t>(msg.size()));
     }
     void log(LogLevel level, dstd::StringView msg) const {
         log(static_cast<dftu_log_level>(level), msg);
@@ -89,6 +189,12 @@ class Host {
 
     Io io() const { return Io{h_, ctx_}; }
     Fs fs() const { return Fs{h_, ctx_}; }
+
+   private:
+    void log(dftu_log_level level, dstd::StringView msg) const {
+        h_->log(h_->h, static_cast<std::uint8_t>(level), msg.data(),
+                static_cast<std::uint32_t>(msg.size()));
+    }
     AsyncOp await(dftu_task* t) const { return AsyncOp{t, h_}; }
     /// The op of a task handed over by @ref AsyncOp::release; an op that never
     /// started fails with its own error.
@@ -117,20 +223,23 @@ class Host {
         return detail::started(
             h_, (*svc)->spawn(ctx_, h_->h, fn, arg, where, &t), t);
     }
+
+   public:
     /// Start any callable returning void, dftu_status or a @ref dstd::Result of
     /// void on a pool worker; `fn` is borrowed for the await, so it must
     /// outlive it (a coroutine local naturally does). A failure fails the task
-    /// with its status and message. Use DFTU_JOB_BLOCKING for a call that
+    /// with its status and message. Use JobWhere::Blocking for a call that
     /// blocks, so the worker gives back its run permit.
     template <class Fn>
-    AsyncOp spawn(Fn& fn, dftu_job_where where = DFTU_JOB_CPU) const {
+    AsyncOp spawn(Fn& fn, JobWhere where = JobWhere::Cpu) const {
         return spawn(
             [](dftu_ctx* ctx, void* p) noexcept -> dftu_status {
                 return detail::to_status(ctx, *static_cast<Fn*>(p));
             },
-            &fn, where);
+            &fn, static_cast<dftu_job_where>(where));
     }
 
+   private:
     /// Valid for the whole scan. DFTU_E_PARSE for a parse error. Do not free.
     dstd::Result<dftu_duql*> duql_compile(dstd::StringView src) const {
         DFTRACER_UTILS_TRY(const dftu_svc_duql* e,
@@ -154,12 +263,15 @@ class Host {
         return q && qe && qe->duql_matches &&
                qe->duql_matches(h_->h, q, df, row) != 0;
     }
+
+   public:
     /// Compile and wrap as a non-owning Query bound to this host; see
     /// duql_compile for lifetime.
     dstd::Result<Query> compile(dstd::StringView src) const;
     /// compile() for a predicate built with `F`/`Field`.
     dstd::Result<Query> compile(const Expr& e) const;
 
+   private:
     /// Caller owns the handle and must sketch_free it.
     dftu_sketch* sketch_create() const {
         const dftu_svc_sketch* e = ext(DFTU_SVC_SKETCH, sketch_ext_);
@@ -182,9 +294,12 @@ class Host {
         const dftu_svc_sketch* e = ext(DFTU_SVC_SKETCH, sketch_ext_);
         if (e && e->sketch_free) e->sketch_free(h_->h, s);
     }
+
+   public:
     /// RAII sketch bound to this host; frees the handle in its destructor.
     class Sketch make_sketch() const;
 
+   private:
     dstd::Result<dftu_trace_writer*> trace_open_write(const char* path) const {
         DFTRACER_UTILS_TRY(const dftu_svc_trace* e,
                            need(DFTU_SVC_TRACE, trace_ext_));
@@ -215,15 +330,17 @@ class Host {
                            need(DFTU_SVC_TRACE, trace_ext_));
         return detail::reported(e->trace_read(ctx_, h_->h, path, on_batch, ud));
     }
+
+   public:
     /// Scan `path` (auto-indexed), invoking `fn` once per scanned batch as
     /// either `fn(const Batch&)` or `fn(const dftu_dataframe*)`, returning void
     /// or a @ref dstd::Result of void; an error it returns stops the read and
     /// is the result. `fn` is borrowed for the call.
     template <class Fn>
-    dstd::Result<void> trace_read(const char* path, Fn&& fn) const;
+    dstd::Result<void> trace_read(dstd::CStringView path, Fn&& fn) const;
 
     /// RAII trace writer for `path` (a gzip .pfw.gz).
-    dstd::Result<TraceWriter> trace_writer(const char* path) const;
+    dstd::Result<TraceWriter> trace_writer(dstd::CStringView path) const;
 
     /// The fileio service: line and chunk readers, the gzip line writer,
     /// whole-file gzip and the file helpers; see plugin/fileio.h.
@@ -241,22 +358,31 @@ class Host {
     /// Get a host-owned parallel Writer for `path` with `worker_count` lanes
     /// (`gzip` != 0 compresses). The Writer is host-owned and scan-lifetime;
     /// open it, write chunks per worker, then close it - all co_await forms.
-    dstd::Result<Writer> writer(const char* path, std::uint32_t worker_count,
+    dstd::Result<Writer> writer(dstd::CStringView path,
+                                std::uint32_t worker_count,
                                 bool gzip = false) const;
     /// Merge worker shard files into `target`; co_await the returned @ref
     /// AsyncOp.
-    AsyncOp merge_shards(const char* target,
-                         std::initializer_list<const char*> shards) const {
+    AsyncOp merge_shards(
+        dstd::CStringView target,
+        std::initializer_list<dstd::CStringView> shards) const {
         auto e = need(DFTU_SVC_FILEIO, fileio_ext_);
         if (!e.has_value()) return AsyncOp{std::move(e).error()};
+        dstd::Vector<const char*> shard_paths;
+        shard_paths.reserve(shards.size());
+        for (const dstd::CStringView shard : shards) {
+            shard_paths.push_back(shard.c_str());
+        }
         dftu_task* t = nullptr;
         return detail::started(
             h_,
-            (*e)->merge_shards(ctx_, h_->h, target, shards.begin(),
-                               static_cast<std::uint32_t>(shards.size()), &t),
+            (*e)->merge_shards(ctx_, h_->h, target.c_str(), shard_paths.data(),
+                               static_cast<std::uint32_t>(shard_paths.size()),
+                               &t),
             t);
     }
 
+   private:
     /// Batch-scoped ports: a producer publishes a derived value a later
     /// consumer reads for the same batch. consume returns NULL (and 0 len) when
     /// the producer has not published this batch; the borrow is valid only
@@ -289,116 +415,80 @@ class Host {
         DFTRACER_UTILS_TRY(const dftu_svc_agg* e, need(DFTU_SVC_AGG, agg_ext_));
         return detail::reported(e->agg_accumulate(ctx_, h_->h, a, df));
     }
+
+   public:
     /// Get-or-create a named cross-batch aggregation accumulator grouping by
     /// `key_names` and computing each of `cols`. An error if the host lacks the
     /// agg group or agg_new rejects the spec (a bad op code or missing output
-    /// name). See dftu_svc_agg::agg_new; a name seen before returns the
-    /// existing accumulator and ignores `cols`.
-    dstd::Result<Agg> agg(const char* name,
-                          std::initializer_list<const char*> key_names,
+    /// name). A name seen before returns the existing accumulator and ignores
+    /// `cols`.
+    dstd::Result<Agg> agg(dstd::CStringView name,
+                          std::initializer_list<dstd::CStringView> key_names,
                           std::initializer_list<AggCol> cols) const;
 
     /// The cross-worker-merged, finalized result of the accumulator named
     /// `name` (any plugin's), as an owned frame. Call at on_finalize; the
     /// producing plugin must be registered first. Empty (`!frame`) when
     /// no plugin produced that name.
-    dstd::Result<OwnedDataFrame> agg_result(const char* name) const;
+    dstd::Result<OwnedDataFrame> agg_result(dstd::CStringView name) const;
 
     /// Look up and run a registered dataframe column op by name on `in` (see
     /// dftu_svc_ops::run). DFTU_E_NOT_FOUND for an unregistered `name` and
     /// DFTU_E_INVALID when the call mismatches the op's kind/arity/shape. The
-    /// result is newly owned by the caller (free with dftu_series_free).
-    dstd::Result<dftu_series*> run_op(
-        const char* name, std::initializer_list<const dftu_series*> in,
-        const dftu_op_arg* args = nullptr) const {
-        DFTRACER_UTILS_TRY(const dftu_svc_ops* e, need(DFTU_SVC_OPS, ops_ext_));
-        dstd::Vector<const dftu_series*> vin(in);
-        dftu_series* out = nullptr;
-        DFTRACER_UTILS_TRY_VOID(detail::reported(
-            e->run(ctx_, h_->h, name, vin.data(),
-                   static_cast<std::uint32_t>(vin.size()), args, &out)));
-        return out;
-    }
+    /// result is newly owned by the caller.
+    dstd::Result<Column> run_op(dstd::CStringView name,
+                                std::initializer_list<ColumnView> in,
+                                const OpArgsBuilder* args = nullptr) const;
     /// run_op for a signature whose return token is FRAME; the result is
-    /// newly owned by the caller (free with dftu_dataframe_free).
-    dstd::Result<dftu_dataframe*> run_op_frame(
-        const char* name, std::initializer_list<const dftu_dataframe*> in,
-        const dftu_op_arg* args = nullptr) const {
-        DFTRACER_UTILS_TRY(const dftu_svc_ops* e, need(DFTU_SVC_OPS, ops_ext_));
-        dstd::Vector<const dftu_dataframe*> vin(in);
-        dftu_dataframe* out = nullptr;
-        DFTRACER_UTILS_TRY_VOID(detail::reported(
-            e->run_frame(ctx_, h_->h, name, vin.data(),
-                         static_cast<std::uint32_t>(vin.size()), args, &out)));
-        return out;
-    }
+    /// newly owned by the caller.
+    dstd::Result<OwnedDataFrame> run_op_frame(
+        dstd::CStringView name, std::initializer_list<FrameView> in,
+        const OpArgsBuilder* args = nullptr) const;
     /// run_op for a signature whose return token is SCALAR/I64/BOOL, reducing
     /// one column.
-    dstd::Result<dftu_scalar> run_op_aggregate(
-        const char* name, const dftu_series* in,
-        const dftu_op_arg* args = nullptr) const {
-        DFTRACER_UTILS_TRY(const dftu_svc_ops* e, need(DFTU_SVC_OPS, ops_ext_));
-        dftu_scalar out{};
-        DFTRACER_UTILS_TRY_VOID(detail::reported(
-            e->run_aggregate(ctx_, h_->h, name, &in, 1, args, &out)));
-        return out;
-    }
-    /// The registered op named `name` (built-in or user), or NULL if none or
-    /// the host lacks the ops group. See dftu_op_find.
-    const dftu_op_desc* find_op(const char* name) const {
-        const dftu_svc_ops* e = ext(DFTU_SVC_OPS, ops_ext_);
-        return e && e->find ? e->find(h_->h, name) : nullptr;
-    }
-    /// Register a user op in the host's shared registry; see dftu_op_register.
-    /// The op must be named `<plugin>.<name>`: the bare and "dftu." namespaces
-    /// are the host's. An error for a NULL desc/name, a name the host keeps, or
-    /// an already-registered name.
-    dstd::Result<void> register_op(const dftu_op_desc* desc) const {
-        DFTRACER_UTILS_TRY(const dftu_svc_ops* e, need(DFTU_SVC_OPS, ops_ext_));
-        return detail::reported(e->register_op(ctx_, h_->h, desc));
-    }
+    dstd::Result<dataframe::Scalar> run_op_aggregate(
+        dstd::CStringView name, ColumnView in,
+        const OpArgsBuilder* args = nullptr) const;
+    /// The registered op named `name` (built-in or user), or none if the host
+    /// lacks the ops group.
+    dstd::Optional<OpRef> find_op(dstd::CStringView name) const;
+    /// Register a user op in the host's shared registry. The op must be named
+    /// `<plugin>.<name>`: the bare and "dftu." namespaces are the host's. An
+    /// error for a null desc/name, a name the host keeps, or an already-
+    /// registered name.
+    dstd::Result<void> register_op(const OpSpec& spec) const;
 
     /// Named result channel: emit an opaque blob; the host copies `len` bytes.
     /// Surfaces from Plugins::run keyed by name. Best called at on_finalize.
-    dstd::Result<void> emit_result(const char* name, const void* data,
-                                   std::uint64_t len) const {
+    dstd::Result<void> emit_result(dstd::CStringView name,
+                                   dstd::ByteView data) const {
         dftu_result_value v{};
         v.kind = DFTU_RESULT_KIND_BYTES;
-        v.u.bytes.data = data;
-        v.u.bytes.len = len;
-        return emit(name, &v);
+        v.u.bytes.data = data.data();
+        v.u.bytes.len = static_cast<std::uint64_t>(data.size());
+        return emit(name.c_str(), &v);
     }
-    dstd::Result<void> emit_result(const char* name,
+    dstd::Result<void> emit_result(dstd::CStringView name,
                                    dstd::StringView data) const {
-        return emit_result(name, data.data(), data.size());
+        return emit_result(name, dstd::ByteView{data.data(), data.size()});
     }
     /// Hands a native dataframe result to the host, which takes ownership on
     /// success; on an error `df` is left intact so it frees normally. Same
     /// finalize/collision semantics as emit_result.
-    dstd::Result<void> emit_result_frame(const char* name,
+    dstd::Result<void> emit_result_frame(dstd::CStringView name,
                                          OwnedDataFrame&& df) const {
         dftu_result_value v{};
         v.kind = DFTU_RESULT_KIND_FRAME;
         v.u.frame = df.get();
-        DFTRACER_UTILS_TRY_VOID(emit(name, &v));
+        DFTRACER_UTILS_TRY_VOID(emit(name.c_str(), &v));
         df.release();
         return {};
     }
     /// Hands a deferred plan to the host, which takes ownership and collects it
-    /// at the Python edge. The plan must be self-contained (see the emit's
-    /// DFTU_RESULT_KIND_LAZYFRAME contract in abi.h).
-    dstd::Result<void> emit_result_lazyframe(const char* name,
-                                             dftu_lazyframe* lf) const {
-        dftu_result_value v{};
-        v.kind = DFTU_RESULT_KIND_LAZYFRAME;
-        v.u.lazyframe = lf;
-        return emit(name, &v);
-    }
-    /// @ref OwnedLazyFrame overload of emit_result_lazyframe; an error leaves
-    /// `lf` intact so it frees normally.
-    dstd::Result<void> emit_result_lazyframe(const char* name,
+    /// at the Python edge. The plan must be self-contained.
+    dstd::Result<void> emit_result_lazyframe(dstd::CStringView name,
                                              OwnedLazyFrame&& lf) const {
-        DFTRACER_UTILS_TRY_VOID(emit_result_lazyframe(name, lf.get()));
+        DFTRACER_UTILS_TRY_VOID(emit_result_lazyframe(name.c_str(), lf.get()));
         lf.release();
         return {};
     }
@@ -406,16 +496,44 @@ class Host {
     /// Typed batch-scoped output port: send() publishes a trivially-copyable T
     /// under `name` for a same-batch consumer. See publish/consume.
     template <class T>
-    OutPort<T> publish_port(const char* name) const;
+    OutPort<T> publish_port(dstd::CStringView name) const;
     /// Typed batch-scoped input port: recv() reads the T a producer published
     /// under `name` this batch, or nullopt if none. See publish/consume.
     template <class T>
-    InPort<T> consume_port(const char* name) const;
+    InPort<T> consume_port(dstd::CStringView name) const;
 
-    const dftu_plugin_host* raw() const { return h_; }
-    dftu_ctx* ctx() const { return ctx_; }
+    std::uint64_t port_key(dstd::CStringView name) const {
+        return port_key(name.c_str());
+    }
+    void publish(std::uint64_t key, dstd::ByteView data) const {
+        publish(key, data.data(), static_cast<std::uint32_t>(data.size()));
+    }
+    dstd::ByteView consume(std::uint64_t key) const {
+        std::uint32_t size = 0;
+        const void* data = consume(key, &size);
+        return data != nullptr
+                   ? dstd::ByteView{static_cast<const char*>(data), size}
+                   : dstd::ByteView{};
+    }
 
    private:
+    friend struct detail::HostAccess;
+    friend class Sketch;
+    friend class Agg;
+    friend class Query;
+    friend class TraceWriter;
+    friend class Writer;
+
+    Host(const dftu_plugin_host* h, dftu_ctx* ctx) : h_(h), ctx_(ctx) {}
+
+    dstd::Result<void> emit_result_lazyframe(const char* name,
+                                             dftu_lazyframe* lf) const {
+        dftu_result_value v{};
+        v.kind = DFTU_RESULT_KIND_LAZYFRAME;
+        v.u.lazyframe = lf;
+        return emit(name, &v);
+    }
+
     /// Fetch a host-service group once and memoize it in `slot`; a missing
     /// group stays null.
     template <class T>
@@ -452,6 +570,135 @@ class Host {
     mutable const dftu_svc_ops* ops_ext_ = nullptr;
 };
 
+namespace detail {
+
+struct HostAccess {
+    static const dftu_plugin_host* raw(const Host& host) noexcept {
+        return host.h_;
+    }
+    static dftu_ctx* ctx(const Host& host) noexcept { return host.ctx_; }
+    static dstd::Result<const dftu_svc_task*> tasks(const Host& host) {
+        return host.tasks();
+    }
+    static Host from_raw(const dftu_plugin_host* host, dftu_ctx* ctx) noexcept {
+        return Host{host, ctx};
+    }
+    static AsyncOp spawn_raw(const Host& host,
+                             dftu_status (*fn)(dftu_ctx*, void*), void* arg,
+                             dftu_job_where where = DFTU_JOB_CPU) {
+        return host.spawn(fn, arg, where);
+    }
+    static AsyncOp await_raw(const Host& host, dftu_task* t) {
+        return host.await(t);
+    }
+    static AsyncOp await_result(const Host& host, dstd::Result<dftu_task*> t) {
+        return host.await(std::move(t));
+    }
+    static AsyncAll all_raw(
+        const Host& host, std::initializer_list<dstd::Result<dftu_task*>> ts) {
+        return host.all(ts);
+    }
+};
+
+inline Host host_from_raw(const dftu_plugin_host* host,
+                          dftu_ctx* ctx) noexcept {
+    return HostAccess::from_raw(host, ctx);
+}
+
+inline AsyncOp spawn_raw(const Host& host, dftu_status (*fn)(dftu_ctx*, void*),
+                         void* arg, dftu_job_where where = DFTU_JOB_CPU) {
+    return HostAccess::spawn_raw(host, fn, arg, where);
+}
+
+inline const dftu_plugin_host* host_raw(const Host& host) noexcept {
+    return HostAccess::raw(host);
+}
+
+inline dftu_ctx* host_ctx(const Host& host) noexcept {
+    return HostAccess::ctx(host);
+}
+
+inline dstd::Result<const dftu_svc_task*> task_service(const Host& host) {
+    return HostAccess::tasks(host);
+}
+
+inline AsyncOp await_raw(const Host& host, dftu_task* t) {
+    return HostAccess::await_raw(host, t);
+}
+
+inline AsyncOp await_result(const Host& host, dstd::Result<dftu_task*> t) {
+    return HostAccess::await_result(host, std::move(t));
+}
+
+inline AsyncAll all_raw(const Host& host,
+                        std::initializer_list<dstd::Result<dftu_task*>> ts) {
+    return HostAccess::all_raw(host, ts);
+}
+
+inline Quantiles quantiles_from_raw(dftu_quantiles q) noexcept {
+    return Quantiles{q.count, q.min, q.max, q.mean, q.p50, q.p90, q.p95, q.p99};
+}
+
+}  // namespace detail
+
+inline dstd::Result<Column> Host::run_op(dstd::CStringView name,
+                                         std::initializer_list<ColumnView> in,
+                                         const OpArgsBuilder* args) const {
+    DFTRACER_UTILS_TRY(const dftu_svc_ops* e, need(DFTU_SVC_OPS, ops_ext_));
+    dstd::Vector<const dftu_series*> vin;
+    vin.reserve(in.size());
+    for (const ColumnView column : in) {
+        vin.push_back(dataframe::detail::column_series(column));
+    }
+    dftu_series* out = nullptr;
+    DFTRACER_UTILS_TRY_VOID(detail::reported(
+        e->run(ctx_, h_->h, name.c_str(), vin.data(),
+               static_cast<std::uint32_t>(vin.size()),
+               args != nullptr ? args->raw() : nullptr, &out)));
+    return Column{out};
+}
+
+inline dstd::Result<OwnedDataFrame> Host::run_op_frame(
+    dstd::CStringView name, std::initializer_list<FrameView> in,
+    const OpArgsBuilder* args) const {
+    DFTRACER_UTILS_TRY(const dftu_svc_ops* e, need(DFTU_SVC_OPS, ops_ext_));
+    dstd::Vector<const dftu_dataframe*> vin;
+    vin.reserve(in.size());
+    for (const FrameView frame : in) {
+        vin.push_back(dataframe::detail::frame_pointer(frame));
+    }
+    dftu_dataframe* out = nullptr;
+    DFTRACER_UTILS_TRY_VOID(detail::reported(
+        e->run_frame(ctx_, h_->h, name.c_str(), vin.data(),
+                     static_cast<std::uint32_t>(vin.size()),
+                     args != nullptr ? args->raw() : nullptr, &out)));
+    return OwnedDataFrame{out};
+}
+
+inline dstd::Result<dataframe::Scalar> Host::run_op_aggregate(
+    dstd::CStringView name, ColumnView in, const OpArgsBuilder* args) const {
+    DFTRACER_UTILS_TRY(const dftu_svc_ops* e, need(DFTU_SVC_OPS, ops_ext_));
+    const dftu_series* input = dataframe::detail::column_series(in);
+    dftu_scalar out{};
+    DFTRACER_UTILS_TRY_VOID(detail::reported(
+        e->run_aggregate(ctx_, h_->h, name.c_str(), &input, 1,
+                         args != nullptr ? args->raw() : nullptr, &out)));
+    return dataframe::Scalar{out};
+}
+
+inline dstd::Optional<OpRef> Host::find_op(dstd::CStringView name) const {
+    const dftu_svc_ops* const e = ext(DFTU_SVC_OPS, ops_ext_);
+    if (!e || !e->find) return dstd::nullopt;
+    const dftu_op_desc* const desc = e->find(h_->h, name.c_str());
+    return desc != nullptr ? dstd::Optional<OpRef>{OpRef{desc}} : dstd::nullopt;
+}
+
+inline dstd::Result<void> Host::register_op(const OpSpec& spec) const {
+    DFTRACER_UTILS_TRY(const dftu_svc_ops* e, need(DFTU_SVC_OPS, ops_ext_));
+    return detail::reported(
+        e->register_op(ctx_, h_->h, detail::op_spec_raw(spec)));
+}
+
 /// Move-only RAII owner of a host sketch handle; frees it in the destructor.
 /// Construct from a Host (`Sketch s{host};`) or via Host::make_sketch().
 class Sketch {
@@ -475,10 +722,10 @@ class Sketch {
         host_.sketch_add(s_, value, weight);
     }
     void merge(const Sketch& other) const { host_.sketch_merge(s_, other.s_); }
-    dftu_quantiles result() const { return host_.sketch_result(s_); }
+    Quantiles result() const {
+        return detail::quantiles_from_raw(host_.sketch_result(s_));
+    }
 
-    /// Borrowed handle; the Sketch retains ownership. Null if unsupported.
-    dftu_sketch* raw() const noexcept { return s_; }
     explicit operator bool() const noexcept { return s_ != nullptr; }
 
    private:
@@ -502,15 +749,13 @@ class Agg {
     /// Fold one batch's key/value columns (looked up by name in `df`) into
     /// this accumulator. Serial per accumulator; one slice's accumulator is
     /// touched by one thread.
-    dstd::Result<void> accumulate(const dftu_dataframe* df) const {
-        return host_.agg_accumulate(a_, df);
+    dstd::Result<void> accumulate(dataframe::FrameView df) const {
+        return host_.agg_accumulate(a_, dataframe::detail::frame_pointer(df));
     }
     dstd::Result<void> accumulate(const OwnedDataFrame& df) const {
-        return accumulate(df.get());
+        return accumulate(df.view());
     }
 
-    /// Borrowed handle; the host retains ownership.
-    dftu_agg* raw() const noexcept { return a_; }
     explicit operator bool() const noexcept { return a_ != nullptr; }
 
    private:
@@ -521,25 +766,31 @@ class Agg {
     dftu_agg* a_ = nullptr;
 };
 
-inline dstd::Result<Agg> Host::agg(const char* name,
-                                   std::initializer_list<const char*> key_names,
-                                   std::initializer_list<AggCol> cols) const {
-    dstd::Vector<const char*> keys(key_names.begin(), key_names.end());
+inline dstd::Result<Agg> Host::agg(
+    dstd::CStringView name, std::initializer_list<dstd::CStringView> key_names,
+    std::initializer_list<AggCol> cols) const {
+    dstd::Vector<const char*> keys;
+    keys.reserve(key_names.size());
+    for (const dstd::CStringView key : key_names) {
+        keys.push_back(key.c_str());
+    }
     dstd::Vector<dftu_agg_col> specs;
     specs.reserve(cols.size());
     for (const AggCol& c : cols) specs.push_back(detail::agg_col_raw(c));
     DFTRACER_UTILS_TRY(
         dftu_agg * a,
-        agg_new(name, keys.data(), static_cast<std::uint32_t>(keys.size()),
-                specs.data(), static_cast<std::uint32_t>(specs.size())));
+        agg_new(name.c_str(), keys.data(),
+                static_cast<std::uint32_t>(keys.size()), specs.data(),
+                static_cast<std::uint32_t>(specs.size())));
     return Agg{*this, a};
 }
 
-inline dstd::Result<OwnedDataFrame> Host::agg_result(const char* name) const {
+inline dstd::Result<OwnedDataFrame> Host::agg_result(
+    dstd::CStringView name) const {
     DFTRACER_UTILS_TRY(const dftu_svc_agg* e, need(DFTU_SVC_AGG, agg_ext_));
     dftu_dataframe* out = nullptr;
     DFTRACER_UTILS_TRY_VOID(
-        detail::reported(e->agg_result(ctx_, h_->h, name, &out)));
+        detail::reported(e->agg_result(ctx_, h_->h, name.c_str(), &out)));
     return OwnedDataFrame{out};
 }
 
@@ -555,51 +806,55 @@ class Writer {
     /// Open the underlying output; co_await before writing any chunk.
     AsyncOp open() const {
         dftu_task* t = nullptr;
-        return detail::started(host_.raw(), e_->writer_open(ctx(), h(), w_, &t),
-                               t);
+        return detail::started(
+            detail::host_raw(host_),
+            e_->writer_open(detail::host_ctx(host_), h(), w_, &t), t);
     }
     /// Append `len` bytes to lane `worker`; co_await to complete the write.
-    AsyncOp chunk(std::uint32_t worker, const void* data,
-                  std::uint64_t len) const {
-        dftu_task* t = nullptr;
-        return detail::started(
-            host_.raw(),
-            e_->writer_chunk(ctx(), h(), w_, worker, data, len, &t), t);
+    AsyncOp chunk(std::uint32_t worker, dstd::ByteView data) const {
+        return chunk(worker, data.data(), data.size());
     }
     AsyncOp chunk(std::uint32_t worker, dstd::StringView data) const {
-        return chunk(worker, data.data(), data.size());
+        return chunk(worker, dstd::ByteView{data.data(), data.size()});
     }
     /// Flush and finalize; co_await after all chunks are written.
     AsyncOp close() const {
         dftu_task* t = nullptr;
-        return detail::started(host_.raw(),
-                               e_->writer_close(ctx(), h(), w_, &t), t);
+        return detail::started(
+            detail::host_raw(host_),
+            e_->writer_close(detail::host_ctx(host_), h(), w_, &t), t);
     }
 
-    /// Borrowed handle; the host retains ownership.
-    dftu_writer* raw() const noexcept { return w_; }
     explicit operator bool() const noexcept { return w_ != nullptr; }
 
    private:
     friend class Host;
     Writer(Host host, const dftu_svc_fileio* e, dftu_writer* w)
         : host_(host), e_(e), w_(w) {}
-    void* h() const noexcept { return host_.raw()->h; }
-    dftu_ctx* ctx() const noexcept { return host_.ctx(); }
+    void* h() const noexcept { return detail::host_raw(host_)->h; }
+    dftu_ctx* ctx() const noexcept { return detail::host_ctx(host_); }
+    AsyncOp chunk(std::uint32_t worker, const void* data,
+                  std::uint64_t len) const {
+        dftu_task* t = nullptr;
+        return detail::started(detail::host_raw(host_),
+                               e_->writer_chunk(detail::host_ctx(host_), h(),
+                                                w_, worker, data, len, &t),
+                               t);
+    }
 
     Host host_;
     const dftu_svc_fileio* e_ = nullptr;
     dftu_writer* w_ = nullptr;
 };
 
-inline dstd::Result<Writer> Host::writer(const char* path,
+inline dstd::Result<Writer> Host::writer(dstd::CStringView path,
                                          std::uint32_t worker_count,
                                          bool gzip) const {
     DFTRACER_UTILS_TRY(const dftu_svc_fileio* e,
                        need(DFTU_SVC_FILEIO, fileio_ext_));
     dftu_writer* w = nullptr;
-    DFTRACER_UTILS_TRY_VOID(detail::reported(
-        e->writer_create(ctx_, h_->h, path, worker_count, gzip ? 1 : 0, &w)));
+    DFTRACER_UTILS_TRY_VOID(detail::reported(e->writer_create(
+        ctx_, h_->h, path.c_str(), worker_count, gzip ? 1 : 0, &w)));
     return Writer{*this, e, w};
 }
 
@@ -615,7 +870,11 @@ class OutPort {
 
     /// Publish `v` for this batch; the host copies sizeof(T) bytes.
     void send(const T& v) const {
-        if (key_ != 0) host_.publish(key_, &v, sizeof(T));
+        if (key_ != 0) {
+            host_.publish(
+                key_,
+                dstd::ByteView{reinterpret_cast<const char*>(&v), sizeof(T)});
+        }
     }
 
     std::uint64_t key() const noexcept { return key_; }
@@ -643,11 +902,10 @@ class InPort {
     /// the result outlives the borrowed port buffer.
     dstd::Optional<T> recv() const {
         if (key_ == 0) return dstd::nullopt;
-        std::uint32_t len = 0;
-        const void* p = host_.consume(key_, &len);
-        if (!p || len != sizeof(T)) return dstd::nullopt;
+        const dstd::ByteView data = host_.consume(key_);
+        if (data.size() != sizeof(T)) return dstd::nullopt;
         T out;
-        std::memcpy(&out, p, sizeof(T));
+        std::memcpy(&out, data.data(), sizeof(T));
         return out;
     }
 
@@ -662,12 +920,12 @@ class InPort {
 };
 
 template <class T>
-inline OutPort<T> Host::publish_port(const char* name) const {
-    return OutPort<T>{*this, port_key(name)};
+inline OutPort<T> Host::publish_port(dstd::CStringView name) const {
+    return OutPort<T>{*this, port_key(name.c_str())};
 }
 template <class T>
-inline InPort<T> Host::consume_port(const char* name) const {
-    return InPort<T>{*this, port_key(name)};
+inline InPort<T> Host::consume_port(dstd::CStringView name) const {
+    return InPort<T>{*this, port_key(name.c_str())};
 }
 
 namespace detail {
@@ -705,7 +963,7 @@ class Event {
     bool operator!=(const Event& o) const noexcept { return row_ != o.row_; }
 
     std::int64_t row() const noexcept { return row_; }
-    const dftu_dataframe* frame() const noexcept;
+    dataframe::FrameView frame() const noexcept;
 
     std::uint64_t pid() const noexcept;
     std::uint64_t tid() const noexcept;
@@ -750,7 +1008,6 @@ class Event {
 /// for the on_batch call that delivered `df`.
 class Batch {
    public:
-    explicit Batch(const dftu_dataframe* df) noexcept;
     ~Batch();
     Batch(Batch&&) noexcept;
     Batch& operator=(Batch&&) noexcept;
@@ -760,15 +1017,19 @@ class Batch {
     std::int64_t size() const noexcept { return n_; }
     bool empty() const noexcept { return n_ == 0; }
 
+    dataframe::FrameView frame() const noexcept {
+        return dataframe::FrameView{df_};
+    }
+
     Event begin() const noexcept { return Event{this, 0}; }
     Event end() const noexcept { return Event{this, n_}; }
     Event operator[](std::int64_t i) const noexcept { return Event{this, i}; }
 
-    const dftu_dataframe* raw() const noexcept { return df_; }
-
    private:
     friend class Event;
+    friend struct detail::BatchAccess;
 
+    explicit Batch(const dftu_dataframe* df) noexcept;
     static detail::ColBuf resolve(const dftu_dataframe* df, const char* name);
     static bool is_str(const detail::ColBuf& c) noexcept {
         return c.type == DFTU_TYPE_STRING;
@@ -797,7 +1058,23 @@ class Batch {
     dstd::Vector<dstd::Pair<dstd::String, detail::ColBuf>> dyn_;
 };
 
-inline const dftu_dataframe* Event::frame() const noexcept { return b_->raw(); }
+namespace detail {
+
+struct BatchAccess {
+    static Batch from_raw(const dftu_dataframe* df) noexcept {
+        return Batch{df};
+    }
+};
+
+inline Batch batch_from_raw(const dftu_dataframe* df) noexcept {
+    return BatchAccess::from_raw(df);
+}
+
+}  // namespace detail
+
+inline dataframe::FrameView Event::frame() const noexcept {
+    return b_ != nullptr ? b_->frame() : dataframe::FrameView{};
+}
 inline std::uint64_t Event::pid() const noexcept {
     return b_->pid_.data
                ? static_cast<const std::uint64_t*>(b_->pid_.data)[row_]
@@ -981,7 +1258,8 @@ inline const detail::ColBuf* Batch::find_dyn(
 }
 
 template <class Fn>
-inline dstd::Result<void> Host::trace_read(const char* path, Fn&& fn) const {
+inline dstd::Result<void> Host::trace_read(dstd::CStringView path,
+                                           Fn&& fn) const {
     struct State {
         std::decay_t<Fn>* f;
     } state{const_cast<std::decay_t<Fn>*>(std::addressof(fn))};
@@ -991,12 +1269,15 @@ inline dstd::Result<void> Host::trace_read(const char* path, Fn&& fn) const {
         auto& st = *static_cast<State*>(ud);
         return detail::to_status(ctx, [&]() -> decltype(auto) {
             if constexpr (std::is_invocable_v<std::decay_t<Fn>&, const Batch&>)
-                return (*st.f)(Batch{df});
+                return (*st.f)(detail::batch_from_raw(df));
+            else if constexpr (std::is_invocable_v<std::decay_t<Fn>&,
+                                                   dataframe::FrameView>)
+                return (*st.f)(dataframe::FrameView{df});
             else
                 return (*st.f)(df);
         });
     };
-    return trace_read(path, thunk, &state);
+    return trace_read(path.c_str(), thunk, &state);
 }
 
 /// Non-owning view over a compiled dftu_duql (see Host::compile). Host-owned
@@ -1007,13 +1288,11 @@ class Query {
 
     explicit operator bool() const noexcept { return q_ != nullptr; }
 
-    bool matches(const dftu_dataframe* df, std::int64_t row) const {
-        return host_.duql_matches(q_, df, row);
+    bool matches(dataframe::FrameView df, std::int64_t row) const {
+        return host_.duql_matches(q_, dataframe::detail::frame_pointer(df),
+                                  row);
     }
     bool matches(const Event& e) const { return matches(e.frame(), e.row()); }
-
-    /// Borrowed handle; the host retains ownership. Null if unsupported.
-    dftu_duql* raw() const noexcept { return q_; }
 
    private:
     friend class Host;
@@ -1057,10 +1336,10 @@ class TraceWriter {
 
     explicit operator bool() const noexcept { return w_ != nullptr; }
 
-    dstd::Result<void> write(const dftu_dataframe* df) const {
-        return host_.trace_write(w_, df);
+    dstd::Result<void> write(dataframe::FrameView df) const {
+        return host_.trace_write(w_, dataframe::detail::frame_pointer(df));
     }
-    dstd::Result<void> write(const Batch& b) const { return write(b.raw()); }
+    dstd::Result<void> write(const Batch& b) const { return write(b.frame()); }
     /// Idempotent: a no-op once already closed. The writer is closed even if
     /// the host reports an error.
     dstd::Result<void> close() {
@@ -1069,9 +1348,6 @@ class TraceWriter {
         if (!w) return {};
         return host_.trace_close(w);
     }
-
-    /// Borrowed handle; the TraceWriter retains ownership.
-    dftu_trace_writer* raw() const noexcept { return w_; }
 
    private:
     friend class Host;
@@ -1084,8 +1360,9 @@ class TraceWriter {
     dftu_trace_writer* w_ = nullptr;
 };
 
-inline dstd::Result<TraceWriter> Host::trace_writer(const char* path) const {
-    DFTRACER_UTILS_TRY(dftu_trace_writer * w, trace_open_write(path));
+inline dstd::Result<TraceWriter> Host::trace_writer(
+    dstd::CStringView path) const {
+    DFTRACER_UTILS_TRY(dftu_trace_writer * w, trace_open_write(path.c_str()));
     return TraceWriter{*this, w};
 }
 

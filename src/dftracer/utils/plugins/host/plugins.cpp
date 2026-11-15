@@ -246,6 +246,8 @@ dstd::String config_violation(const dftu_plugin* plugin,
         return "expected a JSON object";
 
     for (const dftu_config_key* k = keys; k->name; ++k) {
+        if (k->name[0] == '\0')
+            return "the plugin declares a config key with an empty name";
         const dftu_value* v = config ? dftu_obj_get(config, k->name) : nullptr;
         if (!v) {
             if (k->required)

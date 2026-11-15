@@ -15,16 +15,22 @@
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/plugins/host/fold_adapter.h>
 #include <dftracer/utils/plugins/plugin/file_format.h>
+#include <dftracer/utils/plugins/plugin/map.h>
 #include <dftracer/utils/plugins/plugin/node.h>
+#include <dftracer/utils/plugins/plugin/register.h>
 #include <dftracer/utils/plugins/plugin/source.h>
+#include <dftracer/utils/trace/views/fold.h>
 #include <doctest/doctest.h>
 #include <plugins/test_abi_ctx.h>
 
 #include <array>
 #include <cstdint>
 #include <cstring>
+#include <type_traits>
 #include <utility>
 
 using namespace dftracer::utils;
@@ -204,7 +210,175 @@ class VotingSource {
     }
 };
 
+struct TrivialSlice {
+    explicit TrivialSlice(const Config&) {}
+    void step(dataframe::FrameView, Host) {}
+    void merge(TrivialSlice&) {}
+    void finalize(Host) {}
+};
+
+std::int64_t double_rows_sdk(const dataframe::ColumnView& v) {
+    return 2 * v.size();
+}
+
+struct MixedConfigKeysSlice {
+    explicit MixedConfigKeysSlice(const Config&) {}
+    void step(dataframe::FrameView, Host) {}
+    void merge(MixedConfigKeysSlice&) {}
+    void finalize(Host) {}
+    static auto config_keys() {
+        return std::array<ConfigKey, 3>{
+            ConfigKey{}, ConfigKey{"present", ValueKind::I64, true, "doc"},
+            ConfigKey{"stride", ValueKind::I64, false, "doc"}};
+    }
+};
+
+struct HostFixture {
+    dstd::StringIntern intern;
+    trace::views::detail::FoldPortBus bus;
+    dftu_plugin* plugin = make_plugin<TrivialSlice>(nullptr);
+    dstd::UniquePtr<plugins::host::PluginFold> fold =
+        dstd::make_unique<plugins::host::PluginFold>(plugin, intern);
+    HostFixture() { fold->bind_port_bus(&bus); }
+    dftu_plugin_host& host() { return fold->host(); }
+    ~HostFixture() {
+        fold.reset();
+        if (plugin && plugin->destroy) plugin->destroy(plugin->self);
+    }
+};
+
 }  // namespace
+
+TEST_CASE("plugin SDK enums keep their ABI values") {
+    static_assert(static_cast<int>(ValueKind::Null) == DFTU_VAL_NULL);
+    static_assert(static_cast<int>(ValueKind::Bool) == DFTU_VAL_BOOL);
+    static_assert(static_cast<int>(ValueKind::I64) == DFTU_VAL_I64);
+    static_assert(static_cast<int>(ValueKind::F64) == DFTU_VAL_F64);
+    static_assert(static_cast<int>(ValueKind::Str) == DFTU_VAL_STR);
+    static_assert(static_cast<int>(ValueKind::Array) == DFTU_VAL_ARRAY);
+    static_assert(static_cast<int>(ValueKind::Object) == DFTU_VAL_OBJECT);
+
+    static_assert(static_cast<int>(LogLevel::Trace) == DFTU_LOG_TRACE);
+    static_assert(static_cast<int>(LogLevel::Debug) == DFTU_LOG_DEBUG);
+    static_assert(static_cast<int>(LogLevel::Info) == DFTU_LOG_INFO);
+    static_assert(static_cast<int>(LogLevel::Warn) == DFTU_LOG_WARN);
+    static_assert(static_cast<int>(LogLevel::Error) == DFTU_LOG_ERROR);
+
+    static_assert(static_cast<int>(JobWhere::Cpu) == DFTU_JOB_CPU);
+    static_assert(static_cast<int>(JobWhere::Inline) == DFTU_JOB_INLINE);
+    static_assert(static_cast<int>(JobWhere::Blocking) == DFTU_JOB_BLOCKING);
+
+    static_assert(static_cast<int>(AggOp::Count) == DFTU_AGG_COUNT);
+    static_assert(static_cast<int>(AggOp::Sum) == DFTU_AGG_SUM);
+    static_assert(static_cast<int>(AggOp::Pct) == DFTU_AGG_PCT);
+    static_assert(static_cast<int>(AggOp::Argmax) == DFTU_AGG_ARGMAX);
+}
+
+TEST_CASE("plugin SDK calls and changed return types work at runtime") {
+    HostFixture fx;
+    test_plugin_common::Ctx c;
+    Host h = detail::host_from_raw(&fx.host(), c.get());
+
+    SUBCASE("run_op_frame returns an owned frame") {
+        OwnedDataFrame in = two_columns();
+        dstd::Result<OwnedDataFrame> out =
+            h.run_op_frame("dftu.frame.reverse", {in.view()});
+        REQUIRE(out.has_value());
+        REQUIRE(out->view().row_count() == 2);
+        const auto ids = out->view().column(0).values<std::int64_t>();
+        REQUIRE(ids.size() == 2);
+        CHECK(ids[0] == 4);
+        CHECK(ids[1] == 3);
+    }
+
+    SUBCASE("run_op_aggregate returns a scalar") {
+        Column col = int64_column({1, 2, 3});
+        OpArgsBuilder args;
+        args.i32(1, DFTU_REDUCE_SUM);
+        dstd::Result<dataframe::Scalar> sum = h.run_op_aggregate(
+            "dftu.series.reduce", ColumnView{col.get()}, &args);
+        REQUIRE(sum.has_value());
+        CHECK(sum->i64() == 6);
+    }
+
+    SUBCASE("publish and consume round-trip bytes") {
+        const std::uint64_t key =
+            h.port_key(dstd::CStringView{"sdk.types.roundtrip"});
+        const std::uint8_t payload[] = {0xde, 0xad, 0xbe, 0xef};
+        h.publish(key,
+                  dstd::ByteView{reinterpret_cast<const char*>(payload), 4});
+        const dstd::ByteView got = h.consume(key);
+        REQUIRE(got.size() == 4);
+        CHECK(std::memcmp(got.data(), payload, 4) == 0);
+    }
+
+    SUBCASE("ConfigKey with an empty name reaches the host, not the end") {
+        // The host refuses the empty name at load; a NULL here would end the
+        // array and hide the keys after it.
+        const dftu_config_key* keys =
+            detail::config_key_thunk<MixedConfigKeysSlice>(nullptr);
+        REQUIRE(keys != nullptr);
+        REQUIRE(keys[0].name != nullptr);
+        CHECK(keys[0].name[0] == '\0');
+        CHECK(std::strcmp(keys[1].name, "present") == 0);
+        CHECK(std::strcmp(keys[2].name, "stride") == 0);
+        CHECK(std::strcmp(keys[3].name, "duql") == 0);
+        CHECK(keys[4].name == nullptr);
+    }
+}
+
+TEST_CASE("plugin SDK OpArgsBuilder keeps two strlist slots alive") {
+    OpArgsBuilder args;
+    const dstd::CStringView left[] = {"a", "bb"};
+    const dstd::CStringView right[] = {"ccc", "dddd", "e"};
+    args.strlist(0, dstd::Span<const dstd::CStringView>{left, 2})
+        .strlist(2, dstd::Span<const dstd::CStringView>{right, 3});
+
+    const dftu_op_arg* raw = detail::op_args_raw(args);
+    REQUIRE(raw != nullptr);
+    REQUIRE(raw->args[0].list.n == 2);
+    CHECK(std::strcmp(raw->args[0].list.items[0], "a") == 0);
+    CHECK(std::strcmp(raw->args[0].list.items[1], "bb") == 0);
+    REQUIRE(raw->args[2].list.n == 3);
+    CHECK(std::strcmp(raw->args[2].list.items[0], "ccc") == 0);
+    CHECK(std::strcmp(raw->args[2].list.items[1], "dddd") == 0);
+    CHECK(std::strcmp(raw->args[2].list.items[2], "e") == 0);
+}
+
+// Unregisters the op when the test ends, on every path out of it.
+struct OpGuard {
+    const char* name;
+    bool registered = false;
+    ~OpGuard() {
+        if (registered) dftu_op_unregister(name);
+    }
+};
+
+TEST_CASE("plugin SDK moved OpSpec registers and runs") {
+    // Short enough for the small-string buffer of every standard library, so a
+    // move copies the bytes and a name pointer into the old object would
+    // dangle.
+    OpSpec spec = OpSpec::series_i64<double_rows_sdk>("sdk.dbl");
+    OpSpec moved = std::move(spec);
+
+    const dftu_op_desc* raw = detail::op_spec_raw(moved);
+    REQUIRE(raw != nullptr);
+    CHECK(std::strcmp(raw->name, "sdk.dbl") == 0);
+    OpGuard guard{"sdk.dbl"};
+    REQUIRE(dftu_op_register(raw) == 0);
+    guard.registered = true;
+
+    const dftu_op_desc* found = dftu_op_find("sdk.dbl");
+    REQUIRE(found != nullptr);
+    CHECK(found->sig == raw->sig);
+
+    Column col = int64_column({10, 20, 30});
+    dftu_series* series = col.get();
+    int ok = 0;
+    const dftu_scalar out = dftu_op_run_aggregate(found, series, nullptr, &ok);
+    REQUIRE(ok == 1);
+    CHECK(out.value.i == 6);
+}
 
 TEST_CASE("SchemaBuilder keeps the time unit of a column") {
     dftu_schema schema{};

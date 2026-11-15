@@ -17,6 +17,9 @@ using namespace dftracer::utils;
 #ifndef CONFIG_KEYS_PLUGIN_PATH
 #error "CONFIG_KEYS_PLUGIN_PATH must be defined by CMake"
 #endif
+#ifndef EMPTY_CONFIG_KEY_PLUGIN_PATH
+#error "EMPTY_CONFIG_KEY_PLUGIN_PATH must be defined by CMake"
+#endif
 
 namespace {
 
@@ -71,6 +74,14 @@ TEST_CASE("a missing required key fails the load") {
     auto set = load(config_of(R"({"stride": 2})"));
     REQUIRE(!set.has_value());
     CHECK(has_substr(set.error().message(), "required key 'label' is missing"));
+}
+
+TEST_CASE("a declared key with an empty name fails the load") {
+    auto set = plugins::host::Plugins::builder()
+                   .add(EMPTY_CONFIG_KEY_PLUGIN_PATH)
+                   .build();
+    REQUIRE_FALSE(set.has_value());
+    CHECK(has_substr(set.error().message(), "config key with an empty name"));
 }
 
 TEST_CASE("a declared key of the wrong kind fails the load") {

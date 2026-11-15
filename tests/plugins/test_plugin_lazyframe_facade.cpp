@@ -24,7 +24,7 @@ namespace {
 
 struct TrivialSlice {
     explicit TrivialSlice(const dftracer::utils::plugins::Config&) {}
-    void step(const dftu_dataframe*, dftracer::utils::plugins::Host) {}
+    void step(dataframe::FrameView, dftracer::utils::plugins::Host) {}
     void merge(TrivialSlice&) {}
     void finalize(dftracer::utils::plugins::Host) {}
 };

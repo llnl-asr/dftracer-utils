@@ -40,7 +40,7 @@ namespace {
 
 struct TrivialSlice {
     explicit TrivialSlice(const dftracer::utils::plugins::Config&) {}
-    void step(const dftu_dataframe*, dftracer::utils::plugins::Host) {}
+    void step(dataframe::FrameView, dftracer::utils::plugins::Host) {}
     void merge(TrivialSlice&) {}
     void finalize(dftracer::utils::plugins::Host) {}
 };
@@ -84,7 +84,8 @@ dftracer::utils::plugins::Task read_probe(dftracer::utils::plugins::Host h,
     std::int64_t n = 0;
     co_await io.read(fd, buf, sizeof(buf), &n);
     if (n > 0) *bytes += n;
-    co_await h.await(io.close(fd).release());
+    co_await dftracer::utils::plugins::detail::await_result(
+        h, io.close(fd).release());
 }
 
 }  // namespace
@@ -92,7 +93,8 @@ dftracer::utils::plugins::Task read_probe(dftracer::utils::plugins::Host h,
 TEST_CASE("plugin cxx: Sketch RAII adds, merges, and frees") {
     HostFixture fx;
     test_plugin_common::Ctx ctx_;
-    dftracer::utils::plugins::Host h{&fx.host(), ctx_.get()};
+    dftracer::utils::plugins::Host h =
+        dftracer::utils::plugins::detail::host_from_raw(&fx.host(), ctx_.get());
 
     dftracer::utils::plugins::Sketch a = h.make_sketch();
     dftracer::utils::plugins::Sketch b{h};
@@ -103,7 +105,7 @@ TEST_CASE("plugin cxx: Sketch RAII adds, merges, and frees") {
     for (int v = 501; v <= 1000; ++v) b.add(static_cast<double>(v));
     a.merge(b);
 
-    dftu_quantiles q = a.result();
+    dftracer::utils::plugins::Quantiles q = a.result();
     CHECK(q.count == 1000);
     CHECK(q.min == doctest::Approx(1.0));
     CHECK(q.max == doctest::Approx(1000.0));
@@ -135,7 +137,8 @@ TEST_CASE("plugin cxx: Io ops are co_await-able directly") {
 TEST_CASE("plugin cxx: StrId hides the raw interned-id integer") {
     HostFixture fx;
     test_plugin_common::Ctx ctx_;
-    dftracer::utils::plugins::Host h{&fx.host(), ctx_.get()};
+    dftracer::utils::plugins::Host h =
+        dftracer::utils::plugins::detail::host_from_raw(&fx.host(), ctx_.get());
 
     const dftracer::utils::plugins::StrId id = h.intern("POSIX");
     CHECK_FALSE(id.absent());
@@ -409,12 +412,14 @@ trace::views::detail::FoldEvent evt(std::uint64_t pid, std::uint64_t dur,
 // names a raw DFTU_AGG_* code nor fills a dftu_agg_col by hand.
 dftu_status agg_facade_columns(dftu_ctx* ctx, void*, const dftu_dataframe* df,
                                const dftu_plugin_host* host) {
-    dftracer::utils::plugins::Host h{host, ctx};
+    dftracer::utils::plugins::Host h =
+        dftracer::utils::plugins::detail::host_from_raw(host, ctx);
     const auto acc = h.agg("by_pid", {"pid"},
                            {plugins::agg::count("hits"),
                             plugins::agg::argmax("tid", "tid_at_max", "dur")});
     if (!acc.has_value()) return plugins::status_of(acc.error());
-    return test_plugin_common::as_status(acc->accumulate(df));
+    return test_plugin_common::as_status(
+        acc->accumulate(dataframe::FrameView{df}));
 }
 
 dftu_plugin make_agg_facade_plugin() {

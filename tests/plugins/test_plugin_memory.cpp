@@ -25,7 +25,7 @@ namespace {
 
 struct TrivialSlice {
     explicit TrivialSlice(const plugins::Config&) {}
-    void step(const dftu_dataframe*, plugins::Host) {}
+    void step(dataframe::FrameView, plugins::Host) {}
     void merge(TrivialSlice&) {}
     void finalize(plugins::Host) {}
 };
@@ -130,7 +130,7 @@ TEST_CASE("a reclaimer runs when a grow needs room and the grow then passes") {
     };
     PluginFixture fx("mem_reclaim_plugin", BUDGET);
     test_plugin_common::Ctx c;
-    plugins::Host host(&fx.host(), c.get());
+    plugins::Host host = plugins::detail::host_from_raw(&fx.host(), c.get());
     plugins::Memory mem = host.memory();
 
     auto res = mem.reserve("reclaim");
@@ -162,7 +162,7 @@ TEST_CASE("a reclaimer runs when a grow needs room and the grow then passes") {
 TEST_CASE("a reservation gives its bytes back on release and on destruction") {
     PluginFixture fx("mem_release_plugin", 0);
     test_plugin_common::Ctx c;
-    plugins::Host host(&fx.host(), c.get());
+    plugins::Host host = plugins::detail::host_from_raw(&fx.host(), c.get());
     {
         auto res = host.memory().reserve("raii");
         REQUIRE(res.has_value());
@@ -255,7 +255,7 @@ TEST_CASE("another holder's request reaches the reclaimer at a boundary") {
     };
     PluginFixture fx("mem_pressure_plugin", 0);
     test_plugin_common::Ctx c;
-    plugins::Host host(&fx.host(), c.get());
+    plugins::Host host = plugins::detail::host_from_raw(&fx.host(), c.get());
     auto res = host.memory().reserve("pressure");
     REQUIRE(res.has_value());
     Holder holder;

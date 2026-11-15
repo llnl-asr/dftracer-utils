@@ -274,7 +274,7 @@ struct NodeVt {
             auto opened = static_cast<NodeBox<N>*>(self)->node->open(
                 InputCursor(in_self, in_vt, own,
                             static_cast<NodeBox<N>*>(self)->runner),
-                OpArgs(args), memory_budget, Host(host, ctx));
+                OpArgs(args), memory_budget, detail::host_from_raw(host, ctx));
             if (!opened.has_value()) return report(ctx, opened.error());
             auto cursor = std::move(*opened);
             if (!cursor)

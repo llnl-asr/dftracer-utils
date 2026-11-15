@@ -21,10 +21,10 @@ struct QueryFilter {
     explicit QueryFilter(const Config&) {}
 
     dftracer::utils::dstd::Result<void> step(const Batch& b, Host h) {
-        DFTRACER_UTILS_TRY(dftu_duql * q, h.duql_compile(F("dur") > 300));
+        DFTRACER_UTILS_TRY(Query q, h.compile(F("dur") > 300));
         for (const Event& e : b) {
             ++total;
-            if (h.duql_matches(q, e.frame(), e.row())) ++matched;
+            if (q.matches(e)) ++matched;
         }
         return ok();
     }
@@ -41,8 +41,8 @@ struct QueryFilter {
                               static_cast<unsigned long long>(matched),
                               static_cast<unsigned long long>(total));
         if (n > 0)
-            h.log(DFTU_LOG_INFO, dftracer::utils::dstd::StringView(
-                                     line, static_cast<std::size_t>(n)));
+            h.log(LogLevel::Info, dftracer::utils::dstd::StringView(
+                                      line, static_cast<std::size_t>(n)));
     }
 };
 

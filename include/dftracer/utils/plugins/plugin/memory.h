@@ -30,7 +30,8 @@ class Reservation {
     /// Adds `bytes`. DFTU_E_NO_MEMORY with the message on the host's ctx when
     /// the budget has no room, and the reservation is as it was.
     dstd::Result<void> try_grow(const Host& host, std::uint64_t bytes) const {
-        return detail::reported(e_->try_grow(host.ctx(), r_, bytes));
+        return detail::reported(
+            e_->try_grow(detail::host_ctx(host), r_, bytes));
     }
     /// Gives back at most what the reservation holds.
     void shrink(std::uint64_t bytes) const noexcept { e_->shrink(r_, bytes); }

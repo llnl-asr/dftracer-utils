@@ -72,7 +72,7 @@ class ToySink : public plugins::Sink {
         // The first key of the options object, whatever it is, so the test can
         // see that the tree reached the plugin.
         g_fail_after = -1;
-        const plugins::ConfigValue root(view.options.raw());
+        const plugins::ConfigValue root = view.options.value();
         if (root.is_object() && root.size() > 0) {
             for (std::uint32_t i = 0; i < root.size(); ++i) {
                 const dstd::StringView key = root.key_at(i);

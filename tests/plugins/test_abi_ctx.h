@@ -53,7 +53,10 @@ class TaskDriver {
           proxy_(dftracer::utils::dstd::make_unique<
                  dftracer::utils::plugins::detail::ProxyCtx>(ctx_.get())) {}
 
-    dftracer::utils::plugins::Host host() { return {host_, &proxy_->base}; }
+    dftracer::utils::plugins::Host host() {
+        return dftracer::utils::plugins::detail::host_from_raw(host_,
+                                                               &proxy_->base);
+    }
 
     // The status the task ends with; `message` gets its error text.
     dftu_status run(dftracer::utils::plugins::Task&& task,

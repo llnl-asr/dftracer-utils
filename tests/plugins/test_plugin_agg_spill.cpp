@@ -44,7 +44,7 @@ constexpr std::uint64_t TINY_BUDGET = 4096;
 // String-repr op, all of which have to survive a serialize/merge round trip.
 dftu_status spill_columns(dftu_ctx* ctx, void*, const dftu_dataframe* df,
                           const dftu_plugin_host* host) {
-    plugins::Host h(host, ctx);
+    plugins::Host h = plugins::detail::host_from_raw(host, ctx);
     const auto acc =
         h.agg(ACC_NAME, {"name"},
               {plugins::agg::count("n"), plugins::agg::sum("dur", "sum_dur"),
@@ -52,7 +52,8 @@ dftu_status spill_columns(dftu_ctx* ctx, void*, const dftu_dataframe* df,
                plugins::agg::pct("dur", "p50_dur", 0.5),
                plugins::agg::argmax("cat", "cat_at_max", "dur")});
     if (!acc.has_value()) return plugins::status_of(acc.error());
-    return test_plugin_common::as_status(acc->accumulate(df));
+    return test_plugin_common::as_status(
+        acc->accumulate(dataframe::FrameView{df}));
 }
 
 // A nested-output op (list<string>) alongside a flat one: drain cannot

@@ -214,3 +214,22 @@ TEST_CASE("a bad default is a fatal error") {
     auto result = fresh_process::run("a bad default ends the process");
     CHECK(result.aborted_with("bad default for --chunk: Invalid byte size"));
 }
+
+TEST_CASE("help text and defaults built at registration outlive their source") {
+    std::size_t size = 0;
+    cli::ArgParser p("tool", "1.2.3", "A test tool.");
+    {
+        dstd::String help = "Chunk size, built ";
+        help += dstd::String(64, 'h');
+        dstd::String fallback = "64KB";
+        p.bytes(size, {"--chunk"}, help, fallback);
+        help.assign(help.size(), 'x');
+        fallback.assign(fallback.size(), 'y');
+    }
+    dstd::String scratch(256, 'z');
+    const dstd::String text = p.help();
+    CHECK(text.find("Chunk size, built hhhh") != dstd::String::npos);
+    CHECK(text.find("\"64KB\"") != dstd::String::npos);
+    CHECK(text.find("xxxx") == dstd::String::npos);
+    CHECK(text.find("yyyy") == dstd::String::npos);
+}

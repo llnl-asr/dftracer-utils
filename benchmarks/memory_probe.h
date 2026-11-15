@@ -188,9 +188,9 @@ inline void counted_free(void* p) noexcept {
     std::free(p);
 }
 
-inline void* counted_alloc_or_throw(std::size_t size, std::size_t align) {
+inline void* counted_alloc_or_abort(std::size_t size, std::size_t align) {
     void* p = counted_alloc(size, align);
-    if (p == nullptr) throw std::bad_alloc();
+    if (p == nullptr) std::abort();
     return p;
 }
 
@@ -201,11 +201,11 @@ inline void* counted_alloc_or_throw(std::size_t size, std::size_t align) {
 #ifdef DFTRACER_UTILS_MEMORY_PROBE_DEFINE_NEW
 
 void* operator new(std::size_t size) {
-    return dftu::memory_probe::detail::counted_alloc_or_throw(
+    return dftu::memory_probe::detail::counted_alloc_or_abort(
         size, alignof(std::max_align_t));
 }
 void* operator new[](std::size_t size) {
-    return dftu::memory_probe::detail::counted_alloc_or_throw(
+    return dftu::memory_probe::detail::counted_alloc_or_abort(
         size, alignof(std::max_align_t));
 }
 void* operator new(std::size_t size, const std::nothrow_t&) noexcept {
@@ -217,11 +217,11 @@ void* operator new[](std::size_t size, const std::nothrow_t&) noexcept {
                                                      alignof(std::max_align_t));
 }
 void* operator new(std::size_t size, std::align_val_t align) {
-    return dftu::memory_probe::detail::counted_alloc_or_throw(
+    return dftu::memory_probe::detail::counted_alloc_or_abort(
         size, static_cast<std::size_t>(align));
 }
 void* operator new[](std::size_t size, std::align_val_t align) {
-    return dftu::memory_probe::detail::counted_alloc_or_throw(
+    return dftu::memory_probe::detail::counted_alloc_or_abort(
         size, static_cast<std::size_t>(align));
 }
 void* operator new(std::size_t size, std::align_val_t align,

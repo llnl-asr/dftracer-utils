@@ -27,7 +27,7 @@ dataframe::DataFrame make(const dstd::Vector<dstd::String>& cats,
                           const dstd::String& vname,
                           const dstd::Vector<double>& vals) {
     dataframe::DataFrame b;
-    b.names = {"cat", vname};
+    b.names = dstd::make_shared_strings({"cat", vname});
     b.columns.push_back(dataframe::Series::strings(cats));
     b.columns.push_back(dataframe::Series::flat_f64(
         vals.data(), static_cast<std::int64_t>(vals.size())));
@@ -149,14 +149,14 @@ TEST_SUITE("ResultJoin") {
 
     TEST_CASE("multi-column group key joins on the full tuple") {
         dataframe::DataFrame l;
-        l.names = {"pid", "name", "count"};
+        l.names = dstd::make_shared_strings({"pid", "name", "count"});
         l.columns.push_back(dataframe::Series::strings({"1", "1", "2"}));
         l.columns.push_back(
             dataframe::Series::strings({"read", "write", "read"}));
         dstd::Vector<double> lv{1.0, 2.0, 3.0};
         l.columns.push_back(dataframe::Series::flat_f64(lv.data(), 3));
         dataframe::DataFrame r;
-        r.names = {"pid", "name", "sum"};
+        r.names = dstd::make_shared_strings({"pid", "name", "sum"});
         r.columns.push_back(dataframe::Series::strings({"1", "2", "2"}));
         r.columns.push_back(
             dataframe::Series::strings({"write", "read", "open"}));
@@ -174,7 +174,7 @@ TEST_SUITE("ResultJoin") {
 
     TEST_CASE("a text column survives the join opaquely") {
         dataframe::DataFrame l;
-        l.names = {"cat", "top"};
+        l.names = dstd::make_shared_strings({"cat", "top"});
         l.columns.push_back(dataframe::Series::strings({"a", "b"}));
         l.columns.push_back(dataframe::Series::strings({"read", "write"}));
         dataframe::DataFrame r = make({"a"}, "sum", {2.5});
@@ -191,7 +191,7 @@ TEST_SUITE("ResultJoin") {
     TEST_CASE("mismatched key schema yields an empty DataFrame") {
         dataframe::DataFrame l = make({"a"}, "count", {1.0});
         dataframe::DataFrame r;
-        r.names = {"pid", "name"};
+        r.names = dstd::make_shared_strings({"pid", "name"});
         r.columns.push_back(dataframe::Series::strings({"1"}));
         r.columns.push_back(dataframe::Series::strings({"read"}));
         dataframe::DataFrame j = dftu_utils_test::ok(
@@ -204,7 +204,7 @@ TEST_SUITE("ResultJoin") {
         // offset buffer, so join_batches rejects it up front.
         const double keys[] = {1.0, 2.0};
         dataframe::DataFrame b;
-        b.names = {"k", "count"};
+        b.names = dstd::make_shared_strings({"k", "count"});
         b.columns.push_back(dataframe::Series::flat_f64(keys, 2));
         b.columns.push_back(dataframe::Series::flat_f64(keys, 2));
         dftu_utils_test::expect_error(

@@ -71,6 +71,51 @@ without a return value.
    for h in handles:
        print(h.name, h.get())
 
+Native Async Handles
+~~~~~~~~~~~~~~~~~~~~
+
+``Indexer.build_async()`` and ``LazyFrame.collect_async(batch_size=0)`` start
+the same work as ``build()`` and ``collect()`` on the native pool and return a
+``TaskHandle`` at once. The task owns copies of its inputs, so the handle
+needs nothing else.
+
+.. code-block:: python
+
+   import dftracer.utils as dft
+
+   indexer = dft.Indexer(directory="traces/")
+   building = indexer.build_async()    # returns at once
+   frame = lazy_frame.collect_async()  # a TaskHandle[DataFrame]
+   print(building.done())              # False until the build ends
+   building.get()                      # None, or the error build() raises
+   df = frame.get()                    # the DataFrame collect() returns
+
+``get()`` and ``wait()`` release the GIL while they block, so other Python
+threads keep running. A second ``get()`` returns the same result, or raises
+the same error again.
+A handle that is dropped before its task ends is safe: the task finishes and
+its result is discarded.
+``Runtime.submit()`` also accepts a native handle and wraps it.
+
+A handle also works with ``asyncio`` and ``uvloop``.
+``await handle`` does not block the loop, and cancelling the awaiting task asks
+the native task to stop. A loop that closes first drops the result.
+``add_done_callback(fn)`` calls ``fn(handle)`` once when the task ends, or at
+once if it has ended.
+The call runs on the pool worker that finished the task, which takes the GIL
+for it, so a slow callback holds that worker.
+An exception of ``fn`` is reported as unraisable.
+``cancel()`` asks the task to stop.
+
+.. code-block:: python
+
+   import asyncio
+
+   async def main():
+       a, b = await asyncio.gather(lf_a.collect_async(), lf_b.collect_async())
+
+   asyncio.run(main())
+
 Task Naming
 ~~~~~~~~~~~
 

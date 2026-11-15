@@ -65,19 +65,11 @@ bool Scope::admit() {
     return false;
 }
 
-void Scope::fail(std::exception_ptr error) noexcept {
+void Scope::fail(dstd::Error error) noexcept {
     if (!failed_.exchange(true, std::memory_order_acq_rel)) {
-        error_ = std::move(error);
+        error_.emplace(std::move(error));
     }
     if (mode_ == ScopeMode::FailFast) request_stop();
-}
-
-void Scope::child_sink(void* scope, std::exception_ptr error) noexcept {
-    static_cast<Scope*>(scope)->child_failed(std::move(error));
-}
-
-void Scope::child_failed(std::exception_ptr error) noexcept {
-    fail(std::move(error));
 }
 
 void Scope::note_child_stopped() noexcept {
@@ -91,11 +83,6 @@ void Scope::note_child_stopped() noexcept {
 
 void Scope::start(detail::Coro& child) {
     join_.track(child);
-    auto& promise = child.handle().promise();
-    if (promise.exception_sink == nullptr) {
-        promise.exception_sink = &Scope::child_sink;
-        promise.sink_owner = this;
-    }
     spawned_.store(true, std::memory_order_release);
     child.handle().promise().executor = executor_;
     executor_->post(child.release());
@@ -104,6 +91,16 @@ void Scope::start(detail::Coro& child) {
 void Scope::finish_join() noexcept {
     joined_ = true;
     close();
+}
+
+CoroTask<void> Scope::join() {
+    co_await detail::AFTER_JOIN;
+    co_await join_quietly();
+    dstd::Optional<dstd::Error> error = take_error();
+    if (error) {
+        auto failure = fail_with(std::move(*error));
+        co_await failure;
+    }
 }
 
 detail::Coro Scope::run_child(CoroTask<void> task, Scope* scope) {

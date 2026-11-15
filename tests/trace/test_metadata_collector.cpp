@@ -283,11 +283,8 @@ TEST_SUITE("MetadataCollector") {
 
             MetadataCollectorUtility collector;
             MetadataCollectorUtilityOutput output;
-            try {
-                output = dftu_utils_test::ok(collector(input).get());
-            } catch (...) {
-                // noop
-            }
+            auto result = collector(input).get();
+            if (result.has_value()) output = std::move(*result);
 
             CHECK(output.success == false);
             CHECK(output.valid_events == 0);

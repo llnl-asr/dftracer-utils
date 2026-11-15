@@ -52,6 +52,22 @@ def find_example_plugin(name: str, env_var: str, repo_root) -> str:
     return max(candidates, key=os.path.getmtime)
 
 
+def find_installed_example_plugin(name: str) -> str:
+    """The example plugin `.so` installed next to the loaded dftracer_utils_ext,
+    or an empty string. A plugin that builds columns links the dataframe
+    library, and a build-tree plugin would bring its own copy of it, so only the
+    plugin of the same install tree is safe to load."""
+    ext_file = getattr(_dftracer_utils_ext, "__file__", None)
+    if not ext_file:
+        return ""
+    install_root = Path(ext_file).resolve().parent.parent
+    for suffix in ("so", "dylib"):
+        candidate = install_root / "bin" / "examples" / "plugins" / f"{name}.{suffix}"
+        if candidate.is_file():
+            return str(candidate)
+    return ""
+
+
 def valgrind_scale(n: int, divisor: int = 10) -> int:
     """Return n/divisor when running under Valgrind, else n."""
     if os.environ.get("DFTRACER_UTILS_VALGRIND"):

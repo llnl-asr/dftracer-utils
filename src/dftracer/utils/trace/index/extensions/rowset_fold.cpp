@@ -320,7 +320,7 @@ dstd::Result<void> RowSetFold::write(trace::index::FileBuild& build) const {
         dataframe::DataFrame f;
         for (std::size_t c = 0; c < rowsets_[r].columns.size(); ++c) {
             const auto& name = rowsets_[r].columns[c].first;
-            f.names.emplace_back(name.data(), name.size());
+            f.names.emplace_back(dstd::StringView{name.data(), name.size()});
             f.columns.push_back(series_of(sealed_[r].columns[c]));
         }
         auto native = dataframe::frame_to_native(f);

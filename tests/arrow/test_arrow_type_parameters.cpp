@@ -1,0 +1,179 @@
+// SPDX-License-Identifier: MIT
+#define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <arrow/arrow_helpers.h>
+#include <dataframe/builders_types.h>
+#include <doctest/doctest.h>
+#include <task_result.h>
+
+#include <cstdint>
+#include <cstring>
+
+// Every parametric type keeps its parameters through each op that gathers or
+// slices rows and then through Arrow export and import: Decimal128/256 and
+// Time32 once crashed on export after a gather, and Timestamp, Time64 and
+// Duration once exported with the wrong unit or timezone.
+#include <dftracer/utils/common/config.h>
+#include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
+
+using namespace dftracer::utils;
+
+using namespace dftracer::utils::dataframe;
+using namespace dftracer::utils::dataframe::test_types;
+
+namespace {
+
+Series arrow_round_trip(const Series& s) {
+    arrow::Batch out = exported(s);
+    REQUIRE(out.is_valid());
+    Series back = import_series(out.schema(), out.array());
+    REQUIRE(back.valid());
+    return back;
+}
+
+void check_bytes_equal(const Series& a, std::int64_t ai, const Series& b,
+                       std::int64_t bi, std::size_t width) {
+    Series am = a.is_flat() ? a.share() : a.materialize();
+    Series bm = b.is_flat() ? b.share() : b.materialize();
+    REQUIRE(am.data<std::uint8_t>() != nullptr);
+    REQUIRE(bm.data<std::uint8_t>() != nullptr);
+    CHECK(std::memcmp(
+              am.data<std::uint8_t>() + static_cast<std::size_t>(ai) * width,
+              bm.data<std::uint8_t>() + static_cast<std::size_t>(bi) * width,
+              width) == 0);
+}
+
+// One parametric-type case: a 5-row source column, the DataType every
+// reachable op must preserve, and a byte width for value comparison.
+struct Case {
+    dstd::String name;
+    Series source;
+    DataType expected;
+    std::size_t width;
+};
+
+// Every op that gathers/reindexes rows and so must carry type parameters
+// through gather_column or dftu_series_slice.
+void check_op(const Case& c, const Series& result, std::int64_t src_row,
+              const dstd::String& op = "") {
+    CAPTURE(op);
+    REQUIRE(result.valid());
+    Series back = arrow_round_trip(result);
+    CHECK(back.data_type() == c.expected);
+    if (src_row >= 0) check_bytes_equal(back, 0, c.source, src_row, c.width);
+}
+
+void check_all_ops(const Case& c) {
+    INFO(c.name);
+    CHECK(c.source.data_type() == c.expected);
+
+    check_op(c, c.source.head(3), 0, "head");
+    check_op(c, c.source.tail(2), 3, "tail");
+    check_op(c, c.source.take({4, 1}), 4, "take");
+    check_op(c, c.source.slice(2, 2), 2, "slice");
+    check_op(c, c.source.reverse(), -1, "reverse");
+    check_op(c, c.source.sort(false), -1, "sort");
+    check_op(c, c.source.unique(), -1, "unique");
+    check_op(c, c.source.drop_nulls(), -1, "drop_nulls");
+
+    dstd::Vector<std::uint8_t> mask{0b0001'0101};  // keep rows 0, 2, 4
+    Series m = Series::flat(TypeId::Bool, mask.data(), 5);
+    check_op(c, c.source.filter(m), 0, "filter");
+
+    DataFrame df;
+    df.names = dstd::make_shared_strings({"id", "col"});
+    df.columns.push_back(
+        Series::flat_i64(dstd::Vector<std::int64_t>{0, 1, 2, 3, 4}.data(), 5));
+    df.columns.push_back(c.source.share());
+    check_op(c, df.head(3).column("col"), 0, "df.head");
+    check_op(c, df.filter(m).column("col"), 0, "df.filter");
+    check_op(c, df.slice(1, 2).column("col"), 1, "df.slice");
+}
+
+}  // namespace
+
+TEST_SUITE("arrow_type_parameter_propagation") {
+    TEST_CASE("Timestamp(Nano, tz) keeps unit and timezone through every op") {
+        dstd::Vector<std::int64_t> v{1609459200000000000LL, 2, 3, 4, 5};
+        check_all_ops({"Timestamp",
+                       make_timestamp(v, TimeUnit::Nano, "America/Chicago"),
+                       timestamp(TimeUnit::Nano, "America/Chicago"), 8});
+    }
+
+    TEST_CASE("Time32(Second) keeps its unit through every op") {
+        dstd::Vector<std::int32_t> v{1, 2, 3, 4, 5};
+        DataType expected = time_of(TimeUnit::Second);
+        REQUIRE(expected.id == TypeId::Time32);
+        check_all_ops(
+            {"Time32", make_time32(v, TimeUnit::Second), expected, 4});
+    }
+
+    TEST_CASE("Time64(Nano) keeps its unit through every op") {
+        dstd::Vector<std::int64_t> v{1, 2, 3, 4, 5};
+        DataType expected = time_of(TimeUnit::Nano);
+        REQUIRE(expected.id == TypeId::Time64);
+        check_all_ops({"Time64", make_time64(v, TimeUnit::Nano), expected, 8});
+    }
+
+    TEST_CASE("Duration(Milli) keeps its unit through every op") {
+        dstd::Vector<std::int64_t> v{1, 2, 3, 4, 5};
+        check_all_ops({"Duration", make_duration(v, TimeUnit::Milli),
+                       duration_of(TimeUnit::Milli), 8});
+    }
+
+    TEST_CASE("Decimal128(38, 9) keeps precision and scale through every op") {
+        dstd::Vector<std::int64_t> v{1, 2, 3, 4, 5};
+        check_all_ops(
+            {"Decimal128", make_decimal128(v, 38, 9), decimal128(38, 9), 16});
+    }
+
+    TEST_CASE("Decimal256(38, 9) keeps precision and scale through every op") {
+        dstd::Vector<std::int64_t> v{1, 2, 3, 4, 5};
+        check_all_ops(
+            {"Decimal256", make_decimal256(v, 38, 9), decimal256(38, 9), 32});
+    }
+
+    TEST_CASE("FixedSizeBinary(7) keeps its width through every op") {
+        dstd::Vector<dstd::String> v{"aaaaaaa", "bbbbbbb", "ccccccc", "ddddddd",
+                                     "eeeeeee"};
+        check_all_ops({"FixedSizeBinary", make_fixed_size_binary(v, 7),
+                       fixed_size_binary(7), 7});
+    }
+
+    TEST_CASE("group_by keeps a Timestamp key's unit and timezone") {
+        // Two rows per key so the group actually folds, not just passes
+        // through: id 0 and 2 share key row 0's value, id 1 and 3 share row
+        // 1's value.
+        dstd::Vector<std::int64_t> ts{1609459200000000LL, 1700000000000000LL,
+                                      1609459200000000LL, 1700000000000000LL};
+        DataFrame df;
+        df.names = dstd::make_shared_strings({"k", "v"});
+        df.columns.push_back(make_timestamp(ts, TimeUnit::Micro, "UTC"));
+        df.columns.push_back(Series::flat_i64(
+            dstd::Vector<std::int64_t>{10, 20, 30, 40}.data(), 4));
+
+        DataFrame g = dftu_utils_test::ok(df.group_by(
+            "k",
+            {GroupAgg{Agg::Sum, "v", "total"}, GroupAgg{Agg::Count, "", "n"}}));
+        REQUIRE(g.num_rows() == 2);
+
+        Series key = arrow_round_trip(g.column("k"));
+        DataType expected = timestamp(TimeUnit::Micro, "UTC");
+        CHECK(key.data_type() == expected);
+
+        const std::int64_t* kd = key.data<std::int64_t>();
+        const std::int64_t* total = g.column("total").data<std::int64_t>();
+        const std::int64_t* n = g.column("n").data<std::int64_t>();
+        REQUIRE(kd != nullptr);
+        for (std::int64_t r = 0; r < 2; ++r) {
+            CHECK(n[r] == 2);
+            if (kd[r] == ts[0])
+                CHECK(total[r] == 40);  // rows 0 and 2: 10 + 30
+            else if (kd[r] == ts[1])
+                CHECK(total[r] == 60);  // rows 1 and 3: 20 + 40
+            else
+                FAIL("unexpected group key value ", kd[r]);
+        }
+    }
+}

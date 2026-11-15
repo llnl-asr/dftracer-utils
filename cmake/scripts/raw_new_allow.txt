@@ -25,7 +25,7 @@ dftu_store_value_list_s | derives dstd::HeapObject
 src/dftracer/utils/dataframe/agg/seed.cpp | AggState | derives dstd::HeapObject
 src/dftracer/utils/dataframe/agg/serialize.cpp | AggState | derives dstd::HeapObject
 src/dftracer/utils/dataframe/agg/state.cpp | AggState | derives dstd::HeapObject
-src/dftracer/utils/dataframe/arrow_bridge.cpp | ExportedArray | derives dstd::HeapObject
+src/dftracer/utils/arrow/arrow_bridge.cpp | ExportedArray | derives dstd::HeapObject
 src/dftracer/utils/dataframe/spill.cpp | Mapping | derives dstd::HeapObject
 src/dftracer/utils/common/logging.cpp | ScopeFrame | derives dstd::HeapObject
 src/dftracer/utils/store/writer.cpp | PendingBatch | derives dstd::HeapObject
@@ -33,21 +33,21 @@ src/dftracer/utils/store/open_extent.cpp | NamespaceSlot | derives dstd::HeapObj
 src/dftracer/utils/store/open_extent.cpp | OpenExtent | derives dstd::HeapObject
 src/dftracer/utils/store/open_extent.cpp | SlotBlock | derives dstd::HeapObject
 src/dftracer/utils/store/open_extent.cpp | PendingWrite | derives dstd::HeapObject
-src/dftracer/utils/python/arrow_stream_capsule.cpp | StreamPrivate | derives dstd::HeapObject
-ArrowExportResult | derives dstd::HeapObject
+src/dftracer/utils/python/core/arrow_stream_capsule.cpp | StreamPrivate | derives dstd::HeapObject
+Batch | the payload of an Arrow C capsule
 MemoryViewBatchData | derives dstd::HeapObject
 PluginHostState | derives dstd::HeapObject
 ArrowStreamingIteratorState | derives dstd::HeapObject
-src/dftracer/utils/domains/plugins/fold_adapter.cpp | SketchBox | derives dstd::HeapObject
+src/dftracer/utils/plugins/host/fold_adapter.cpp | SketchBox | derives dstd::HeapObject
 ParkNode | derives dstd::HeapObject
 
 # The heap itself, and code that compiles in a plugin on the plugin's allocator.
 src/dftracer/utils/memory/* | the heap
 include/dftracer/utils/memory/* | the heap
 include/dftracer/utils/plugins/plugin/* | compiles in the plugin
-src/dftracer/utils/domains/plugins/compose.h | compiles in the plugin
 include/dftracer/utils/dataframe/series.h | from_borrowed: new and delete both compile in the plugin
 include/dftracer/utils/dstd/vendor/* | vendored upstream text
 
 # Immortal on purpose.
 src/dftracer/utils/runtime/runtime.cpp | Vector | holds the runtime a fork child inherited and is never destroyed
+src/dftracer/utils/plugins/host/fold_adapter/store.cpp | Owned | derives dstd::HeapObject

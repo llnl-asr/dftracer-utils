@@ -65,7 +65,7 @@ named ``missing``.
 Stage names (``where``, ``derive``, ``select``, ``drop``, ``rename``,
 ``distinct``, ``group``, ``agg``, ``window``, ``pivot``, ``unpivot``,
 ``sort``, ``take``, ``skip``, ``sample``, ``expand``, ``parse``, ``lookup``, ``union``,
-``call``, ``time_range``, ``call_tree``, ``bucket``, ``session``) and ``from`` are
+``call``, ``time_range``, ``call_tree``, ``bucket``, ``session``, ``sink``) and ``from`` are
 keywords only at the start of a stage. Elsewhere they are field names:
 ``where sample == 1`` compares the field ``sample``. A query that starts
 with a stage name is a stage, so a field with that name at the start is
@@ -499,6 +499,9 @@ On a View, a query is a pipeline of stages joined by ``|``:
        overlapping or sparse windows.
    * - ``call_tree``
      - The nesting of events per ``pid`` and ``tid``.
+   * - ``sink "name" k "v", ...``
+     - Writes every row to the plugin sink ``name`` and ends the pipeline (see
+       `Sinks`_).
    * - ``name(args)``
      - The stages of a pipeline macro (see `Macros`_).
    * - ``window [k1, k2] [sort s] { a = expr, ... }``
@@ -938,6 +941,17 @@ entry.
 
      window pid sort ts { m = mean(size) over 3 rows, bw = sum(size) over 1s }
 
+- A user-defined aggregate from a plugin is a window function too and takes
+  a frame like ``sum``: ``usum(x) over 10 rows``, ``usum(x) over 5s``. Its
+  arguments are columns or expressions, not constants. With no ``over`` it runs
+  over the whole partition, as it does in ``group``. A UDAF with ``retract``
+  and ``value`` slides its frame; any other is recomputed over each frame. A
+  frame that holds no row with all arguments present is null.
+
+  .. code-block:: text
+
+     window pid sort ts { p = p50(dur) over 100 rows }
+
 .. list-table::
    :header-rows: 1
 
@@ -1227,6 +1241,17 @@ released.
   so far. Its literal arguments fill the operands after the table, in order.
   The result columns are the function's. ``call`` must be the last stage;
   any stage after it is a compile error.
+- ``| call ns.n()`` with no arguments runs a plan node the plugin registered
+  (``PluginBuilder::node<N>()``), table to table. The node reads the columns
+  the plan carries at that point: after a scan those are the scan's declared
+  columns, and after a ``select`` they are the columns that ``select`` names.
+  Undeclared columns (the fields a file without a catalog carries beyond the
+  declared ones) are dropped before the node; name one in a ``select`` to
+  pass it.
+  The output columns are the schema the node declares for that input. A node
+  takes no arguments, because it has no signature, and an argument is a
+  compile error that names the node and says so. A name that a table function
+  and a node both carry runs the table function.
 - A dotted name that no loaded plugin registered is a compile error that
   lists the loaded plugin namespaces, or says that none is loaded.
 - A plugin function in a ``where``, a key, an aggregate argument, a ``let``
@@ -1251,8 +1276,70 @@ released.
   reducer that fails on a group fails the query.
 - A plugin aggregate runs on the frame plan and keeps every group's values
   until the end, like ``collect``. Plugin mergeable states and jit
-  accumulators are not duql aggregates. A plugin node is not a ``call``
-  target.
+  accumulators are not duql aggregates. A plugin node is reachable only as a
+  ``call`` stage, and only with no arguments: it is not a scalar function, a
+  reducer or a UDF.
+
+.. _duql-plugin-udfs:
+
+Plugin UDFs
+~~~~~~~~~~~
+
+.. code-block:: text
+
+   derive ms = to_ms(dur) | where is_slow(dur, 1000) | select name, ms
+   lookup flags on is_slow(dur, 1000) == slow
+
+A loaded plugin, or C++ code through ``dataframe::make_udf<T>()``, registers
+scalar UDFs by name (see :doc:`../plugins`). A UDF is callable by that name like
+a built-in function, with no dotted prefix, and none can take a built-in's name.
+The name stays until the plugin set is released or the owning ``Udf`` is
+destroyed; a plan that already holds the UDF keeps running.
+
+- A UDF runs on columns after the scan, in a ``derive``, ``select``, ``where``
+  after the first stage and a ``lookup`` key. A leading ``where`` that calls a UDF runs after the scan, as a
+  sub-query join does, and the other terms of that ``where`` still filter the
+  scan.
+- The argument count must be in the UDF's range. A UDF that takes a constant
+  fails with its message when the query writes a column there.
+- The result type is the one the UDF picks from its argument types. A UDF
+  that gives Bool is a condition in ``where``, ``if`` and ``case``.
+- A row with a null argument gives null, unless the UDF reads nulls itself.
+- A UDF error, or a type it does not take, fails the query with the message
+  the UDF gives.
+- duql has no join predicate, so a UDF joins only as a key function on the
+  left of ``on``, and a UDF that gives Bool is a key as any Bool is.
+- A ``let`` or sub-query side that calls a UDF is not stored in the lookup
+  cache.
+
+.. _duql-plugin-udafs:
+
+Plugin UDAFs
+~~~~~~~~~~~~
+
+.. code-block:: text
+
+   group name { n = usum(size), p = p50(dur) } | sort name
+   agg { distinct_sizes = udistinct(size) }
+
+A user-defined aggregate (UDAF) that a plugin registers, or C++ code through
+``dataframe::make_udaf<A>()``, is callable by its name in a ``group`` or ``agg``
+block like a built-in aggregate (see :doc:`../plugins`). It takes no dotted
+prefix, and none can take a built-in's name.
+
+- Every argument is a column or an expression over columns; a constant fails
+  with an error. The argument count must be in the UDAF's range, and a UDAF may
+  take none.
+- The result type is the one the UDAF picks when it binds to the argument
+  types, which the scan must know: a column of unknown type fails with the
+  UDAF's message.
+- A row where an argument is null skips the UDAF, unless it reads nulls itself.
+- A UDAF error fails the query with the message the UDAF gives.
+- A UDAF stands in a ``group`` or ``agg`` block, alone or inside an expression
+  such as ``usum(size) / 1000``. It does not run in ``pivot`` or outside a
+  block. A UDAF without ``DFTU_AGG_PARALLEL_SAFE`` runs on one thread at a time.
+- A ``let`` or sub-query side that calls a UDAF is not stored in the lookup
+  cache.
 
 Explain
 ~~~~~~~
@@ -1511,6 +1598,30 @@ extension); with ``distinct``, each row once per file. Reading it decodes no
 trace. Any other row set, and a file whose index holds no rows for it, runs
 as a lookup side over ``all`` when the query executes. Both give the same
 rows. Stored cells keep their JSON type: a number stays a number.
+
+Sinks
+~~~~~
+
+``sink "name" key "value", key2 "value2"`` writes the rows of the pipeline
+to the plugin sink ``name`` and is the last stage: a stage after it is a parse
+error (``A stage cannot follow 'sink': 'sink' ends a pipeline``). The name and
+every value are double-quoted strings; a key is a bare name. The sink is a
+plugin's (see :doc:`../plugins`), so the run loads the plugin that registers it
+before the query executes.
+
+.. code-block:: text
+
+   from data | where dur > 1000 | sink "csv.write" path "out.csv"
+
+A pipeline that ends in ``sink`` returns one row of the totals, with the
+integer columns ``rows`` and ``batches``: ``rows`` is the count the sink took
+and ``batches`` is how many frames it was given. That row is what the executor
+returns, so a run that writes a file still reports what it wrote, and
+``dftracer_view --sink`` prints it to stderr instead of a table.
+
+duql does not call the sink registry itself: the name and the options reach the
+executor as data, so a duql library build without the plugins layer can still
+plan a query that ends in ``sink``.
 
 Macros
 ~~~~~~

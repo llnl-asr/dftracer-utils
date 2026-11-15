@@ -7,11 +7,15 @@
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/domains/server/viz_result_cache.h>
 #include <dftracer/utils/domains/server/viz_summary.h>
+#include <dftracer/utils/dstd/future.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/store/store.h>
 #include <dftracer/utils/trace/index/gzip/member.h>
 #include <dftracer/utils/trace/index/record_schema.h>
 #include <dftracer/utils/trace/index/schemas/dft/statistics.h>
@@ -61,6 +65,9 @@ class TraceIndex {
                std::size_t max_concurrent = 8,
                std::size_t checkpoint_size =
                    common::constants::indexer::DEFAULT_CHECKPOINT_SIZE);
+    /// Waits for the store writes this index started and flushes the store
+    /// once, so a later process reads every stored response.
+    ~TraceIndex();
 
     /// Scan directory and populate the file list. The error is the directory
     /// scan or index lookup that failed; a file whose index cannot be read is
@@ -92,7 +99,8 @@ class TraceIndex {
         return *record_schema_;
     }
 
-    /// Result cache for heavy viz endpoints. Immutable trace => never stale.
+    /// Result cache for heavy viz endpoints: an in-memory LRU in front of the
+    /// folder's copies in the index store, keyed by the folder's fingerprint.
     VizResultCache& viz_cache() { return viz_cache_; }
 
     /// Trace-wide native time unit (one unit per trace), from the leading CM
@@ -135,15 +143,83 @@ class TraceIndex {
     dstd::String resolve(dstd::StringView rowset, dstd::StringView key,
                          dstd::StringView value, const dstd::String& k);
 
-    /// On-disk summary cache (index_dir/.dftviz_summary), keyed by a
-    /// fingerprint of the current file set so a re-indexed trace invalidates
-    /// it. Loading it skips the full rescan on restart.
+    /// Summary cache in the index root's store, under
+    /// `server.viz_summary`, in this folder's scope. The stored value carries
+    /// a fingerprint of the current file set and their mtimes and sizes, so
+    /// loading it skips the full rescan on restart.
     bool load_persisted_viz_summary();
-    void persist_viz_summary() const;
+    /// Commits the summary without flushing: the index flushes the store once,
+    /// at shutdown.
+    coro::CoroTask<dstd::Result<void>> persist_viz_summary();
+
+    /// The stored viz results of `request_keys`, in order, from one store
+    /// read. Nothing for a key the store holds no copy of, or a copy of
+    /// another fingerprint.
+    dstd::Vector<dstd::Optional<dstd::String>> load_viz_results(
+        const dstd::Vector<dstd::String>& request_keys);
+    /// Hands a viz result to a store write this index owns and returns: no
+    /// request waits for the store. The write is keyed by the folder's
+    /// fingerprint, and a failure is logged and dropped.
+    void store_viz_result(dstd::String request_key, dstd::String body);
+
+    /// Fingerprint of the indexed folder: its record schema, its time bounds
+    /// and each file's path, size, mtime, checkpoint count and timestamps. A
+    /// stored value keyed by it is never served after the folder is re-indexed
+    /// or a file changes. Computed once, at the end of @ref initialize.
+    const dstd::String& folder_fingerprint() const {
+        return folder_fingerprint_;
+    }
+
+    /// Test hook: records that this index computed the summary rather than
+    /// loading it from the store, so a test can tell a cache hit from a
+    /// rebuild.
+    void note_viz_summary_compute() {
+        viz_summary_compute_count_.fetch_add(1, std::memory_order_relaxed);
+    }
+    /// Test hook: how many times @ref note_viz_summary_compute ran.
+    std::size_t viz_summary_compute_count() const {
+        return viz_summary_compute_count_.load(std::memory_order_relaxed);
+    }
+    /// Test hook: records that a viz result was in neither the memory cache nor
+    /// the store, so this index computed it.
+    void note_viz_result_compute() {
+        viz_result_compute_count_.fetch_add(1, std::memory_order_relaxed);
+    }
+    /// Test hook: how many times @ref note_viz_result_compute ran.
+    std::size_t viz_result_compute_count() const {
+        return viz_result_compute_count_.load(std::memory_order_relaxed);
+    }
+    /// Test hook: how many times a viz result was looked for in the store, so a
+    /// test can tell a memory hit from a store read.
+    std::size_t viz_result_store_read_count() const {
+        return viz_result_store_read_count_.load(std::memory_order_relaxed);
+    }
+    /// Test hook: how many times the index flushed the viz store at shutdown.
+    std::size_t viz_store_flush_count() const {
+        return viz_store_flush_count_.load(std::memory_order_relaxed);
+    }
+
+    /// Waits for every stored-response write this index started, then flushes
+    /// the store once. The destructor calls it; call it before closing the
+    /// index stores from outside, such as with release_all_roots.
+    void drain_viz_writes();
 
    private:
-    dstd::Path viz_summary_cache_path() const;
-    dstd::String viz_summary_fingerprint() const;
+    /// The folder's stored viz responses: one store handle for the life of the
+    /// index, the writes no request waits for, and the bytes the folder keeps
+    /// stored. Shared with the writes, which outlive the request that started
+    /// them; the destructor waits for them.
+    struct VizStore;
+
+    /// The folder's store, opened on first use. Null when it cannot be opened.
+    dstd::SharedPtr<VizStore> viz_store();
+    /// One store write of one response, on the store's own runtime.
+    static coro::CoroTask<void> write_viz_result(dstd::SharedPtr<VizStore> viz,
+                                                 dstd::String stored_key,
+                                                 dstd::String body,
+                                                 dstd::String directory);
+    /// The fingerprint of the folder as it stands, from one stat per file.
+    dstd::String compute_folder_fingerprint() const;
 
     dstd::String directory_;
     dstd::String index_dir_;
@@ -155,7 +231,7 @@ class TraceIndex {
     const dftracer::utils::trace::index::RecordSchema* record_schema_ = nullptr;
     std::size_t max_concurrent_;
     std::size_t checkpoint_size_;
-    VizResultCache viz_cache_{VIZ_RESULT_CACHE_BYTES};
+    VizResultCache viz_cache_{VIZ_RESULT_CACHE_BYTES, this};
 
     std::mutex chunk_meta_mutex_;
     dstd::HashMap<dstd::String, dstd::SharedPtr<const FileChunkMeta>>
@@ -169,6 +245,14 @@ class TraceIndex {
     dstd::UniquePtr<VizSummary> viz_summary_;
     std::atomic<int> viz_summary_state_{
         0};  ///< 0 not built, 1 building, 2 ready
+    std::atomic<std::size_t> viz_summary_compute_count_{0};
+    std::atomic<std::size_t> viz_result_compute_count_{0};
+    std::atomic<std::size_t> viz_result_store_read_count_{0};
+    std::atomic<std::size_t> viz_store_flush_count_{0};
+
+    dstd::String folder_fingerprint_;
+    std::mutex viz_store_mutex_;
+    dstd::SharedPtr<VizStore> viz_store_;
 };
 
 class QueryParams;

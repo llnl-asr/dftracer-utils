@@ -33,6 +33,7 @@ from typing import (
     Any,
     Callable,
     Dict,
+    Iterator,
     List,
     Literal,
     Mapping,
@@ -80,6 +81,11 @@ __all__ = [
     "Value",
     "where",
     "when",
+    "udf",
+    "call",
+    "Udf",
+    "udaf",
+    "Udaf",
     "if_else",
     "Agg",
     "Named",
@@ -128,7 +134,7 @@ _PRIM_CODES = {
     "mix64": 5,
 }
 
-# DFTU_VEC_CMP_* and DFTU_VEC_LOGICAL_* codes (vec/abi.h).
+# DFTU_CMP_* and DFTU_LOGICAL_* codes (dataframe/c_api.h).
 _CMP_CODES = {"gt": 0, "ge": 1, "lt": 2, "le": 3, "eq": 4, "ne": 5}
 _CMP_SYMBOL = {"gt": ">", "ge": ">=", "lt": "<", "le": "<=", "eq": "==", "ne": "!="}
 _LOGICAL_CODES = {"and": 0, "or": 1}
@@ -143,6 +149,7 @@ _AST_UNARY, _AST_CLIP, _AST_FILLNA = 9, 10, 11
 _AST_STR_PRED, _AST_STR_MAP, _AST_STR_LEN, _AST_STR_FIND = 12, 13, 14, 15
 _AST_STR_REPLACE, _AST_STR_SLICE, _AST_IS_IN, _AST_SELECT = 16, 17, 18, 19
 _AST_STR_PRED_COL, _AST_STR_REPLACE_COL, _AST_LIT_S = 23, 24, 25
+_AST_UDF = 26
 _AST_IS_NULL, _AST_CMP_EXPR, _AST_STR_FN = 20, 21, 22
 
 # StrPredOp / StrMapOp codes (dataframe/types.h).
@@ -261,6 +268,7 @@ _AGG_CODE = {
     "regr_r2": 34,
     "prod": 35,
     "sketch_quantile": 36,
+    "udaf": 37,
 }
 
 _NOT_PUSHABLE = (
@@ -2013,6 +2021,146 @@ class _Select(Expr):
         self.b = b
 
 
+class _Udf(Expr):
+    """A call of a registered scalar UDF over ``args``; ``handle`` is the native
+    UDF the call holds, so the plugin that registered it stays loaded."""
+
+    def __init__(self, name: str, handle: "_ext._UdfHandle", args: Tuple[Expr, ...]) -> None:
+        self.name = name
+        self.handle = handle
+        self.args = args
+
+
+class Udf:
+    """A registered scalar UDF, called over expressions: ``udf["f"](col("x"))``
+    is the expression that calls ``f``. The handle keeps the UDF, and the plugin
+    library that holds it, alive while it or an expression made from it lives."""
+
+    __slots__ = ("_name", "_handle")
+
+    def __init__(self, name: str, handle: "_ext._UdfHandle") -> None:
+        self._name = name
+        self._handle = handle
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    def __call__(self, *args: Expr) -> Expr:
+        return _Udf(self._name, self._handle, tuple(_wrap(a) for a in args))
+
+    def __repr__(self) -> str:
+        return f"Udf({self._name!r})"
+
+
+class _UdfRegistry(Mapping[str, Udf]):
+    """The registered scalar UDFs by name, read only: ``udf[name]``,
+    ``udf.get(name)``, ``name in udf``, iteration and ``len``. ``udf["f"]`` is the
+    non-owning :class:`Udf` handle and raises ``KeyError`` here, not when an
+    expression runs, for an unknown name."""
+
+    def __getitem__(self, name: str) -> Udf:
+        if not isinstance(name, str):
+            raise KeyError(name)
+        try:
+            return Udf(name, _ext.udf_lookup(name))
+        except LookupError:
+            raise KeyError(name) from None
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(_ext.udf_names())
+
+    def __len__(self) -> int:
+        return len(_ext.udf_names())
+
+    def __repr__(self) -> str:
+        return f"udf({list(self)!r})"
+
+
+udf: Mapping[str, Udf] = _UdfRegistry()
+
+
+def call(name: str, *args: Expr) -> Expr:
+    """``udf[name](*args)``: the call of a registered scalar UDF. Raises
+    ``KeyError`` for an unknown name."""
+    return udf[name](*args)
+
+
+class Udaf:
+    """A registered user-defined aggregate, called over expressions inside
+    ``group_by(...).agg``: ``udaf["p50"](col("dur"))`` is the :class:`Agg` that
+    runs ``p50`` per group. The engine looks the name up when the group-by runs,
+    so the plugin that registered it must still be loaded then."""
+
+    __slots__ = ("_name", "_handle", "_min_args", "_max_args", "_flags")
+
+    def __init__(
+        self, name: str, handle: "_ext._UdafHandle", min_args: int, max_args: int, flags: int
+    ) -> None:
+        self._name = name
+        self._handle = handle
+        self._min_args = min_args
+        self._max_args = max_args
+        self._flags = flags
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    @property
+    def min_args(self) -> int:
+        return self._min_args
+
+    @property
+    def max_args(self) -> int:
+        return self._max_args
+
+    @property
+    def flags(self) -> int:
+        """The ``DFTU_AGG_*`` flag bits the UDAF registered with."""
+        return self._flags
+
+    def __call__(self, *args: Expr) -> "Agg":
+        if not self._min_args <= len(args) <= self._max_args:
+            want = (
+                str(self._min_args)
+                if self._min_args == self._max_args
+                else f"{self._min_args} to {self._max_args}"
+            )
+            raise TypeError(f"udaf {self._name!r} takes {want} arguments, got {len(args)}")
+        return _UdafAgg(self._name, self._handle, tuple(_wrap(a) for a in args))
+
+    def __repr__(self) -> str:
+        return f"Udaf({self._name!r})"
+
+
+class _UdafRegistry(Mapping[str, Udaf]):
+    """The registered user-defined aggregates by name, read only:
+    ``udaf[name]``, ``udaf.get(name)``, ``name in udaf``, iteration and ``len``.
+    An unknown name raises ``KeyError`` here, not when an aggregate runs."""
+
+    def __getitem__(self, name: str) -> Udaf:
+        if not isinstance(name, str):
+            raise KeyError(name)
+        try:
+            handle, min_args, max_args, flags = _ext.udaf_lookup(name)
+        except LookupError:
+            raise KeyError(name) from None
+        return Udaf(name, handle, min_args, max_args, flags)
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(_ext.udaf_names())
+
+    def __len__(self) -> int:
+        return len(_ext.udaf_names())
+
+    def __repr__(self) -> str:
+        return f"udaf({list(self)!r})"
+
+
+udaf: Mapping[str, Udaf] = _UdafRegistry()
+
+
 class _When:
     """``when(cond).then(a).otherwise(b)``, the polars spelling of a select."""
 
@@ -2316,6 +2464,10 @@ def _emit_ast(expr: Expr, resolve: Callable[[str], int], ast: List[tuple]) -> No
         ast.append((_AST_IS_IN, list(expr.values)))
         if expr.negated:
             ast.append((_AST_NOT,))
+    elif isinstance(expr, _Udf):
+        for arg in expr.args:
+            _emit_ast(arg, resolve, ast)
+        ast.append((_AST_UDF, expr.handle, len(expr.args)))
     elif isinstance(expr, _StrMap):
         _emit_ast(expr.arg, resolve, ast)
         ast.append((_AST_STR_MAP, _STR_MAP_CODES[expr.op]))
@@ -2481,6 +2633,49 @@ class Agg:
         by_ast: List[tuple] = []
         _emit_ast(self.by, names.index, by_ast)
         return (code, ast, self.out, self.param, by_ast)
+
+
+class _UdafAgg(Agg):
+    """A call of a registered UDAF over ``args``; the group-by finds the UDAF
+    again by ``name``."""
+
+    def __init__(
+        self,
+        name: str,
+        handle: "_ext._UdafHandle",
+        args: Tuple[Expr, ...],
+        out: "Optional[str]" = None,
+    ) -> None:
+        super().__init__("udaf", args[0] if args else None, out)
+        self.name = name
+        self.handle = handle
+        self.args = args
+
+    def alias(self, name: str) -> "Agg":
+        return _UdafAgg(self.name, self.handle, self.args, name)
+
+    @property
+    def out(self) -> str:
+        if self._out is not None:
+            return self._out
+        if self.args and isinstance(self.args[0], _Col):
+            return f"{self.name}_{self.args[0].name}"
+        return self.name
+
+    def _spec(self, names: List[str]) -> tuple:
+        asts: List[List[tuple]] = []
+        for arg in self.args:
+            ast: List[tuple] = []
+            _emit_ast(arg, names.index, ast)
+            asts.append(ast)
+        return (
+            _AGG_CODE["udaf"],
+            asts[0] if asts else None,
+            self.out,
+            0.0,
+            None,
+            (self.name, asts[1:]),
+        )
 
 
 def _occupancy(op: str, value: Expr, resolution: "Union[int, float, str, None]") -> Agg:
@@ -2695,7 +2890,10 @@ class GroupBy:
         # directly; anything with an expression goes through the
         # expression group-by.
         plain = bool(self._keys) and all(
-            a.by is None and a.param == 0.0 and (a.value is None or type(a.value) is _Col)
+            type(a) is Agg
+            and a.by is None
+            and a.param == 0.0
+            and (a.value is None or type(a.value) is _Col)
             for a in aggs
         )
         if plain:
@@ -3503,6 +3701,9 @@ def _collect_columns(expr: Expr) -> List[str]:
             walk(e.cond)
             walk(e.a)
             walk(e.b)
+        elif isinstance(e, _Udf):
+            for arg in e.args:
+                walk(arg)
         elif isinstance(e, _ColumnOpNode):
             walk(e.arg)
             if e.spec.column2 is not None:

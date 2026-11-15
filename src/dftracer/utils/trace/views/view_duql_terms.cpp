@@ -3,6 +3,7 @@
 #include <dftracer/utils/dataframe/internal/rest_column.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/query/vectorize.h>
+#include <dftracer/utils/dataframe/udf_registry.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -383,8 +384,159 @@ Status Applier::object_fields(const duql::TField& f, const dstd::String& text,
     return {};
 }
 
+namespace {
+
+// The constant operands of the UDF call `c`, as bind reads them: borrowed
+// from the term, null where an operand is no constant.
+struct UdfConsts {
+    dstd::Vector<dftu_scalar> scalars;
+    dstd::Vector<const dftu_scalar*> pointers;
+};
+
+UdfConsts udf_consts(const duql::TCall& c) {
+    UdfConsts out;
+    out.scalars.resize(c.args.size());
+    out.pointers.assign(c.args.size(), nullptr);
+    for (std::size_t i = 0; i < c.args.size(); ++i) {
+        const auto* k = std::get_if<duql::TConst>(&c.args[i]->node);
+        if (!k) continue;
+        dftu_scalar& s = out.scalars[i];
+        if (const auto* v = std::get_if<std::int64_t>(&k->value)) {
+            s.kind = DFTU_SCALAR_TAG_I64;
+            s.value.i = *v;
+        } else if (const auto* u = std::get_if<std::uint64_t>(&k->value)) {
+            s.kind = DFTU_SCALAR_TAG_U64;
+            s.value.u = *u;
+        } else if (const auto* d = std::get_if<double>(&k->value)) {
+            s.kind = DFTU_SCALAR_TAG_F64;
+            s.value.d = *d;
+        } else if (const auto* b = std::get_if<bool>(&k->value)) {
+            s.kind = DFTU_SCALAR_TAG_I64;
+            s.value.i = *b ? 1 : 0;
+        } else if (const auto* str = std::get_if<dstd::String>(&k->value)) {
+            s.kind = DFTU_SCALAR_TAG_STR;
+            s.value.s = str->data();
+            s.len = static_cast<std::uint32_t>(str->size());
+        } else {
+            continue;
+        }
+        out.pointers[i] = &s;
+    }
+    return out;
+}
+
+dstd::Result<dataframe::DataFrame> run_udf_batch(
+    const dataframe::UdfBinding& binding,
+    const dstd::Vector<dataframe::Expr>& args, const dstd::String& name,
+    dataframe::DataFrame f) {
+    dstd::Vector<const dataframe::Series*> inputs;
+    for (const auto& x : f.columns) inputs.push_back(&x);
+    dstd::Vector<dataframe::Series> values;
+    for (const auto& a : args) {
+        auto value = dataframe::eval(a, inputs);
+        if (!value) return value.error();
+        values.push_back(std::move(*value));
+    }
+    dstd::Vector<const dataframe::Series*> columns;
+    for (const auto& v : values) columns.push_back(&v);
+    auto out = binding.run(dstd::Span<const dataframe::Series* const>(
+                               columns.data(), columns.size()),
+                           f.num_rows());
+    if (!out) return out.error();
+    f.names.emplace_back(name);
+    f.columns.push_back(std::move(*out));
+    return f;
+}
+
+}  // namespace
+
+Status Applier::udf_call(const duql::TermRef& t, const duql::Term* term) {
+    const auto& c = std::get<duql::TCall>(term->node);
+    if (std::any_of(cols_.begin(), cols_.end(),
+                    [&](const auto& x) { return x.call == &c; }))
+        return {};
+    const dstd::String text = dstd::String(duql::term_text(*term));
+    dstd::SharedPtr<const dataframe::UdfRecord> udf =
+        dataframe::find_udf(c.udf);
+    if (!udf) return refuse<"udf '{}' is not registered">(c.udf);
+    dstd::Vector<dataframe::Expr> args;
+    dstd::Vector<dataframe::DataType> arg_types;
+    dstd::Vector<bool> per_batch;
+    for (const auto& a : c.args) {
+        if (const auto* inner = std::get_if<duql::TCall>(&a->node);
+            inner && inner->fn == duql::Fn::ParseJson)
+            return refuse<
+                "'{}' reads a parse_json() value, which only a scan "
+                "filter evaluates">(text);
+        auto e = dataframe::query::vectorize(*a, cols_, schema_.args_fallback);
+        if (!e) return refuse<"{} in '{}'">(e.error().message(), text);
+        args.push_back(std::move(*e));
+        auto inferred = dataframe::infer_type(args.back(), types());
+        if (!inferred) return inferred.error();
+        arg_types.push_back(std::move(*inferred));
+        per_batch.push_back(arg_types.back().id == dataframe::TypeId::Unknown &&
+                            untyped(*a));
+    }
+    const dstd::String name = "__duql_c_" + dstd::to_string(calls_++);
+    dstd::Vector<dataframe::query::VectorColumn> next = cols_;
+    next.push_back({name, dataframe::scalar(dataframe::TypeId::Unknown)});
+    next.back().call = &c;
+    if (std::find(per_batch.begin(), per_batch.end(), true) !=
+        per_batch.end()) {
+        // An operand of no known type: each batch binds the UDF to the
+        // types of its own operand columns.
+        map_rows(
+            [t, term, udf, args, arg_types, per_batch, text, name](
+                dataframe::DataFrame f) -> dstd::Result<dataframe::DataFrame> {
+                const auto& call = std::get<duql::TCall>(term->node);
+                dstd::Vector<const dataframe::Series*> inputs;
+                for (const auto& x : f.columns) inputs.push_back(&x);
+                dstd::Vector<dataframe::DataType> types = arg_types;
+                for (std::size_t i = 0; i < args.size(); ++i) {
+                    if (!per_batch[i]) continue;
+                    auto value = dataframe::eval(args[i], inputs);
+                    if (!value) return value.error();
+                    types[i] = value->data_type();
+                }
+                const UdfConsts consts = udf_consts(call);
+                auto bound = dataframe::bind_udf(
+                    udf,
+                    dstd::Span<const dataframe::DataType>(types.data(),
+                                                          types.size()),
+                    dstd::Span<const dftu_scalar* const>(
+                        consts.pointers.data(), consts.pointers.size()));
+                if (!bound)
+                    return common::make_error<"{} in '{}'">(
+                        common::ErrorCode::InvalidArgument,
+                        bound.error().message(), text);
+                return run_udf_batch(*bound, args, name, std::move(f));
+            },
+            std::move(next), dstd::fmt<"udf {} per batch = {}">(name, text));
+        return {};
+    }
+    const UdfConsts consts = udf_consts(c);
+    auto bound = dataframe::bind_udf(
+        udf,
+        dstd::Span<const dataframe::DataType>(arg_types.data(),
+                                              arg_types.size()),
+        dstd::Span<const dftu_scalar* const>(consts.pointers.data(),
+                                             consts.pointers.size()));
+    if (!bound) return refuse<"{} in '{}'">(bound.error().message(), text);
+    next.back().type = bound->result_type();
+    auto binding =
+        dstd::make_shared<const dataframe::UdfBinding>(std::move(*bound));
+    map_rows(
+        [t, binding, args,
+         name](dataframe::DataFrame f) -> dstd::Result<dataframe::DataFrame> {
+            return run_udf_batch(*binding, args, name, std::move(f));
+        },
+        std::move(next), dstd::fmt<"udf {} = {}">(name, text));
+    return {};
+}
+
 Status Applier::call(const duql::TermRef& t, const duql::Term* term) {
     const auto* c = std::get_if<duql::TCall>(&term->node);
+    if (c && c->fn == duql::Fn::Udf) return udf_call(t, term);
     const auto* ix = std::get_if<duql::TIndex>(&term->node);
     const auto* ls = std::get_if<duql::TList>(&term->node);
     if (std::any_of(cols_.begin(), cols_.end(), [&](const auto& x) {

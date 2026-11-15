@@ -8,7 +8,8 @@
 # library needs: memory needs none, dstd needs only memory, common needs only
 # memory and dstd, coro needs only memory, dstd and common, fileio needs only memory,
 # dstd, common, coro, runtime and json, yaml needs only memory, dstd and common,
-# trace needs everything but domains, and json and duql do not need runtime.
+# trace needs everything but plugins and domains, plugins needs everything but
+# domains, and json and duql do not need runtime.
 # Library names come from the create_library NAME arguments in
 # src/CMakeLists.txt.
 #
@@ -256,6 +257,14 @@ foreach(_name ${_names})
   endif()
   if(_name STREQUAL "dftracer_utils_trace" AND "dftracer_utils_domains" IN_LIST _needed)
     message(SEND_ERROR "${_name}: needs dftracer_utils_domains, but trace is below domains")
+    set(_failed TRUE)
+  endif()
+  if(_name STREQUAL "dftracer_utils_trace" AND "dftracer_utils_plugins" IN_LIST _needed)
+    message(SEND_ERROR "${_name}: needs dftracer_utils_plugins, but trace is below plugins")
+    set(_failed TRUE)
+  endif()
+  if(_name STREQUAL "dftracer_utils_plugins" AND "dftracer_utils_domains" IN_LIST _needed)
+    message(SEND_ERROR "${_name}: needs dftracer_utils_domains, but plugins is below domains")
     set(_failed TRUE)
   endif()
   if((_name STREQUAL "dftracer_utils_json" OR _name STREQUAL "dftracer_utils_duql")

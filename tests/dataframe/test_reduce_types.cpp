@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/error.h>
-#include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/agg.h>
+#include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/scalar.h>
 #include <dftracer/utils/dstd/span.h>
@@ -91,7 +91,7 @@ TEST_CASE("a bool reduction agrees with the group-by sum") {
     const std::int64_t expected =
         dftu_utils_test::ok(bools({true, false, true, true}).sum()).i64();
     dataframe::DataFrame df;
-    df.names = {"k", "flag"};
+    df.names = dstd::make_shared_strings({"k", "flag"});
     df.columns.push_back(i64({7, 7, 7, 7}));
     df.columns.push_back(bools({true, false, true, true}));
     dataframe::DataFrame g = dftu_utils_test::ok(df.group_by(

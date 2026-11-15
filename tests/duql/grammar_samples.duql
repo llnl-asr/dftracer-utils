@@ -233,7 +233,13 @@ select a * b, a.b * 2
 missing == "x"
 ---
 any(missing) == "a" and x is missing
+---
+from data | sink "toy_sink.out" path "out.csv" mode "a"
+---
+from data | where x > 1 | sink "csv"
 ### invalid
+from data | sink "csv" | take 1
+---
 def m = from data | where x;
 ---
 where x | foo.bar(1)

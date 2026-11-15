@@ -75,7 +75,7 @@ class PartsSource : public Source {
         const DataFrame& first = parts_->front();
         for (std::size_t c = 0; c < leading_; ++c)
             s.fields.push_back(Field{
-                first.names[c],
+                dstd::String{first.names[c].view()},
                 dftracer::utils::dataframe::scalar(first.columns[c].type()),
                 true});
         return s;
@@ -166,7 +166,7 @@ dstd::Vector<DataFrame> equal_parts() {
     for (int k = 0; k < PARTS; ++k) {
         const std::int64_t n = 5 + k % 7;
         DataFrame df;
-        df.names = {"i", "f", "s"};
+        df.names = dstd::make_shared_strings({"i", "f", "s"});
         df.columns.push_back(ints(base, n));
         df.columns.push_back(doubles(base, n));
         df.columns.push_back(words(base, n));
@@ -182,14 +182,14 @@ dstd::Vector<DataFrame> ragged_parts() {
     for (int k = 0; k < PARTS; ++k) {
         const std::int64_t n = 4 + k % 5;
         DataFrame df;
-        df.names = {"i"};
+        df.names = dstd::make_shared_strings({"i"});
         df.columns.push_back(ints(base, n));
-        df.names.push_back(dstd::fmt<"x{}">(k % 3));
+        df.names.push_back(dstd::SharedString{dstd::fmt<"x{}">(k % 3)});
         df.columns.push_back(ints(base * 2, n));
-        df.names.push_back("v");
+        df.names.push_back(dstd::SharedString{"v"});
         df.columns.push_back(k % 2 ? doubles(base, n) : ints(base, n));
         if (k % 4 == 0) {
-            df.names.push_back("s");
+            df.names.push_back(dstd::SharedString{"s"});
             df.columns.push_back(words(base, n));
         }
         parts.push_back(std::move(df));
@@ -225,7 +225,7 @@ TEST_CASE("an error in one column fails the collect") {
         nested.push_back(ints(0, parts[k].num_rows()));
         field.push_back(k == 7 ? Series::structs({"b"}, std::move(nested))
                                : ints(0, parts[k].num_rows()));
-        parts[k].names.push_back("st");
+        parts[k].names.push_back(dstd::SharedString{"st"});
         parts[k].columns.push_back(Series::structs({"a"}, std::move(field)));
     }
 

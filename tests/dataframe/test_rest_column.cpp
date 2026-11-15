@@ -4,9 +4,10 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/task.h>
-#include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/internal/cell_ops.h>
+#include <dftracer/utils/dataframe/internal/node_registry.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -229,7 +230,7 @@ dstd::Vector<dstd::String> column(const DataFrame& f,
 // Equal columns by name: the undeclared ones follow the plan's columns, so
 // their position differs from a plan that declares them.
 void check_same(const DataFrame& got, const DataFrame& want) {
-    Names g = got.names, w = want.names;
+    Names g = dstd::to_strings(got.names), w = dstd::to_strings(want.names);
     std::sort(g.begin(), g.end());
     std::sort(w.begin(), w.end());
     REQUIRE(g == w);
@@ -244,26 +245,34 @@ using Op = LazyFrame (*)(const LazyFrame&);
 
 LazyFrame lookup_side() {
     DataFrame side;
-    side.names = {"a", "w"};
+    side.names = dstd::make_shared_strings({"a", "w"});
     side.columns.push_back(ints({1, 5, 6}));
     side.columns.push_back(ints({7, 8, 9}));
     return LazyFrame::scan(
         dstd::make_shared<dataframe::InMemorySource>(std::move(side)));
 }
 
-void node_schema(void*, const dftu_schema*, const dftu_op_arg*, dftu_schema*) {}
+class PassNode final : public NodeImpl {
+   public:
+    dstd::Result<Schema> output_schema(const Schema& in,
+                                       const OpArgs&) const override {
+        return in;
+    }
 
-void* node_open(void*, void*, const dftu_cursor_vt*, const dftu_op_arg*,
-                std::uint64_t, void**, const dftu_cursor_vt**) {
-    return nullptr;
-}
+    dstd::Result<dstd::UniquePtr<Cursor>> open(
+        dstd::UniquePtr<Cursor> input, const dstd::Vector<dstd::String>&,
+        const OpArgs&, std::uint64_t) const override {
+        return input;
+    }
+};
 
 }  // namespace
 
 TEST_SUITE("rest column") {
     TEST_CASE("a plain collect returns every scanned column") {
         check_same(run(rest_scan()), run(declared_scan()));
-        CHECK(run(rest_scan()).names == Names{"a", "b", "x", "y"});
+        CHECK(dstd::to_strings(run(rest_scan()).names) ==
+              Names{"a", "b", "x", "y"});
     }
 
     TEST_CASE("every op that moves rows keeps the undeclared columns") {
@@ -319,7 +328,7 @@ TEST_SUITE("rest column") {
             run(rest_scan()
                     .with_column("c", col(0) * dataframe::lit(std::int64_t{2}))
                     .filter(col(2) > std::int64_t{6}));
-        CHECK(out.names == Names{"a", "b", "c", "x", "y"});
+        CHECK(dstd::to_strings(out.names) == Names{"a", "b", "c", "x", "y"});
         CHECK(column(out, "c") ==
               dstd::Vector<dstd::String>{"8", "10", "18", "12", "8", "12"});
         CHECK(column(out, "x")[0] == "null");
@@ -333,7 +342,7 @@ TEST_SUITE("rest column") {
 
     TEST_CASE("drop_nulls counts only the plan's columns") {
         DataFrame out = run(rest_scan().drop_nulls());
-        CHECK(out.names == Names{"a", "b", "x", "y"});
+        CHECK(dstd::to_strings(out.names) == Names{"a", "b", "x", "y"});
         CHECK(out.num_rows() == 9);
         CHECK(column(out, "x")[2] == "null");
         CHECK(column(out, "y")[4] == "1001");
@@ -341,7 +350,7 @@ TEST_SUITE("rest column") {
 
     TEST_CASE("fill_null fills the undeclared values a batch carries") {
         DataFrame out = run(rest_scan().fill_null(std::int64_t{0}));
-        CHECK(out.names == Names{"a", "b", "x", "y"});
+        CHECK(dstd::to_strings(out.names) == Names{"a", "b", "x", "y"});
         CHECK(column(out, "b")[4] == "0");
         CHECK(column(out, "x")[2] == "0");
         CHECK(column(out, "x")[7] == "null");
@@ -349,14 +358,18 @@ TEST_SUITE("rest column") {
     }
 
     TEST_CASE("ops that build columns from named inputs leave them out") {
-        CHECK(run(rest_scan().select({"a"})).names == Names{"a"});
+        CHECK(dstd::to_strings(run(rest_scan().select({"a"})).names) ==
+              Names{"a"});
         dataframe::GroupAgg sum{dataframe::Agg::Sum, "b", "sum_b"};
         DataFrame g = run(rest_scan().group_by(
             Names{"a"}, dstd::Vector<dataframe::GroupAgg>{sum}));
-        CHECK(g.names == Names{"a", "sum_b"});
-        CHECK(run(rest_scan().null_count()).names == Names{"a", "b"});
-        CHECK(run(rest_scan().filter(col(0) > std::int64_t{0}).select({"b"}))
-                  .names == Names{"b"});
+        CHECK(dstd::to_strings(g.names) == Names{"a", "sum_b"});
+        CHECK(dstd::to_strings(run(rest_scan().null_count()).names) ==
+              Names{"a", "b"});
+        CHECK(
+            dstd::to_strings(
+                run(rest_scan().filter(col(0) > std::int64_t{0}).select({"b"}))
+                    .names) == Names{"b"});
     }
 
     TEST_CASE("whole-row identity includes the undeclared columns") {
@@ -372,7 +385,7 @@ TEST_SUITE("rest column") {
 
     TEST_CASE("an undeclared column with the name of a plan column fails") {
         DataFrame side;
-        side.names = {"a", "x"};
+        side.names = dstd::make_shared_strings({"a", "x"});
         side.columns.push_back(ints({1}));
         side.columns.push_back(ints({5}));
         const LazyFrame joined = rest_scan().join(
@@ -389,7 +402,7 @@ TEST_SUITE("rest column") {
 
     TEST_CASE("a concat keeps the undeclared columns of either side") {
         DataFrame left;
-        left.names = {"a", "b"};
+        left.names = dstd::make_shared_strings({"a", "b"});
         left.columns.push_back(ints({7, 8}));
         left.columns.push_back(ints({70, 80}));
         const LazyFrame lf =
@@ -397,7 +410,7 @@ TEST_SUITE("rest column") {
                 dstd::make_shared<dataframe::InMemorySource>(std::move(left)))
                 .concat(rest_scan());
         DataFrame out = run(lf);
-        CHECK(out.names == Names{"a", "b", "x", "y"});
+        CHECK(dstd::to_strings(out.names) == Names{"a", "b", "x", "y"});
         REQUIRE(out.num_rows() == 12);
         const auto x = column(out, "x");
         const auto y = column(out, "y");
@@ -413,7 +426,7 @@ TEST_SUITE("rest column") {
              {dataframe::JoinHow::Left, dataframe::JoinHow::Lookup}) {
             CAPTURE(static_cast<int>(how));
             DataFrame out = run(rest_scan().join(right_side(), {"a"}, how));
-            Names names = out.names;
+            Names names = dstd::to_strings(out.names);
             std::sort(names.begin(), names.end());
             CHECK(names ==
                   Names{"a", "b", "w", "x", "x_right", "y", "z_right"});
@@ -443,21 +456,21 @@ TEST_SUITE("rest column") {
 
     TEST_CASE("a declared-only left suffixes a right extra only on a clash") {
         DataFrame left;
-        left.names = {"a", "b"};
+        left.names = dstd::make_shared_strings({"a", "b"});
         left.columns.push_back(ints({1, 6}));
         left.columns.push_back(ints({10, 60}));
         DataFrame out =
             run(LazyFrame::scan(dstd::make_shared<dataframe::InMemorySource>(
                                     std::move(left)))
                     .join(right_side(), {"a"}, dataframe::JoinHow::Left));
-        Names names = out.names;
+        Names names = dstd::to_strings(out.names);
         std::sort(names.begin(), names.end());
         CHECK(names == Names{"a", "b", "w", "x", "z"});
         CHECK(column(out, "x") == dstd::Vector<dstd::String>{"11", "13"});
         CHECK(column(out, "z") == dstd::Vector<dstd::String>{"21", "23"});
 
         DataFrame with_x;
-        with_x.names = {"a", "x"};
+        with_x.names = dstd::make_shared_strings({"a", "x"});
         with_x.columns.push_back(ints({5}));
         with_x.columns.push_back(ints({-1}));
         DataFrame clash =
@@ -469,31 +482,25 @@ TEST_SUITE("rest column") {
         CHECK(column(clash, "z") == dstd::Vector<dstd::String>{"22"});
     }
 
-    TEST_CASE("an op without a rule refuses the plan") {
-        dftu_node_vt vt{};
-        vt.output_schema = node_schema;
-        vt.open = node_open;
-        REQUIRE(dftu_node_register("test.rest.node", &vt, nullptr) == 0);
-        const auto collected =
-            dftracer::utils::default_runtime()
-                .submit(rest_scan()
-                            .sort_by("a")
-                            .op("test.rest.node", dataframe::OpArgs())
-                            .collect())
-                .get();
-        dftu_utils_test::expect_error(
-            collected, dftracer::utils::common::ErrorCode::InvalidArgument);
-        CHECK(
-            dstd::String(collected.error().c_str()).find("op test.rest.node") !=
-            dstd::String::npos);
-        CHECK(dftu_node_unregister("test.rest.node") == 0);
+    TEST_CASE("a node reads the plan's columns and never the rest column") {
+        REQUIRE(register_node("test.rest.node", dstd::make_shared<PassNode>()));
+        const LazyFrame lf =
+            rest_scan().sort_by("a").op("test.rest.node", dataframe::OpArgs());
+        CHECK(lf.schema() == Names{"a", "b"});
+        const DataFrame out = run(lf);
+        CHECK(dstd::to_strings(out.names) == Names{"a", "b"});
+        const DataFrame want = run(declared_scan().sort_by("a"));
+        CHECK(out.num_rows() == want.num_rows());
+        for (const char* n : {"a", "b"})
+            CHECK(column(out, n) == column(want, n));
+        CHECK(unregister_node("test.rest.node"));
     }
 
     TEST_CASE("batches without undeclared columns give the declared ones") {
         const LazyFrame lf = LazyFrame::scan(
             dstd::make_shared<PartsSource>(plain_parts(), false, false));
         DataFrame out = run(lf.sort_by("a"));
-        CHECK(out.names == Names{"a", "b"});
+        CHECK(dstd::to_strings(out.names) == Names{"a", "b"});
         CHECK(column(out, "a") == dstd::Vector<dstd::String>{"1", "2", "3"});
         CHECK(lf.sort_by("a").schema() == Names{"a", "b"});
     }

@@ -49,6 +49,73 @@ elseif(TARGET dftracer_utils_dataframe::static)
                         PRIVATE dftracer_utils_dataframe::static)
 endif()
 
+# Writes its report through the host fileio service.
+add_library(duration_report_plugin MODULE duration_report.cpp)
+target_set_warnings(duration_report_plugin)
+set_target_properties(
+  duration_report_plugin
+  PROPERTIES OUTPUT_NAME duration_report
+             PREFIX ""
+             POSITION_INDEPENDENT_CODE ON
+             CXX_STANDARD 20
+             CXX_STANDARD_REQUIRED ON
+             CXX_EXTENSIONS OFF)
+target_include_directories(duration_report_plugin
+                           PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_enable_coroutine(duration_report_plugin)
+if(TARGET dftracer_utils_dataframe::shared)
+  target_link_libraries(duration_report_plugin
+                        PRIVATE dftracer_utils_dataframe::shared)
+elseif(TARGET dftracer_utils_dataframe::static)
+  target_link_libraries(duration_report_plugin
+                        PRIVATE dftracer_utils_dataframe::static)
+endif()
+
+# Registers scalar UDFs; reads the argument columns through the dataframe C ABI.
+add_library(duration_udfs_plugin MODULE duration_udfs.cpp)
+target_set_warnings(duration_udfs_plugin)
+set_target_properties(
+  duration_udfs_plugin
+  PROPERTIES OUTPUT_NAME duration_udfs
+             PREFIX ""
+             POSITION_INDEPENDENT_CODE ON
+             CXX_STANDARD 20
+             CXX_STANDARD_REQUIRED ON
+             CXX_EXTENSIONS OFF)
+target_include_directories(duration_udfs_plugin
+                           PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_enable_coroutine(duration_udfs_plugin)
+if(TARGET dftracer_utils_dataframe::shared)
+  target_link_libraries(duration_udfs_plugin
+                        PRIVATE dftracer_utils_dataframe::shared)
+elseif(TARGET dftracer_utils_dataframe::static)
+  target_link_libraries(duration_udfs_plugin
+                        PRIVATE dftracer_utils_dataframe::static)
+endif()
+
+# Registers user-defined aggregates; reads the argument columns through the
+# dataframe C ABI.
+add_library(stats_udafs_plugin MODULE stats_udafs.cpp)
+target_set_warnings(stats_udafs_plugin)
+set_target_properties(
+  stats_udafs_plugin
+  PROPERTIES OUTPUT_NAME stats_udafs
+             PREFIX ""
+             POSITION_INDEPENDENT_CODE ON
+             CXX_STANDARD 20
+             CXX_STANDARD_REQUIRED ON
+             CXX_EXTENSIONS OFF)
+target_include_directories(stats_udafs_plugin
+                           PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_enable_coroutine(stats_udafs_plugin)
+if(TARGET dftracer_utils_dataframe::shared)
+  target_link_libraries(stats_udafs_plugin
+                        PRIVATE dftracer_utils_dataframe::shared)
+elseif(TARGET dftracer_utils_dataframe::static)
+  target_link_libraries(stats_udafs_plugin
+                        PRIVATE dftracer_utils_dataframe::static)
+endif()
+
 add_library(query_filter_plugin MODULE query_filter.cpp)
 target_set_warnings(query_filter_plugin)
 set_target_properties(
@@ -68,6 +135,94 @@ if(TARGET dftracer_utils_dataframe::shared)
                         PRIVATE dftracer_utils_dataframe::shared)
 elseif(TARGET dftracer_utils_dataframe::static)
   target_link_libraries(query_filter_plugin
+                        PRIVATE dftracer_utils_dataframe::static)
+endif()
+
+# Registers the sink "csv": it writes every frame it is given to the file its
+# path option names, so it reads the batch through the dataframe C ABI.
+add_library(csv_sink_plugin MODULE csv_sink.cpp)
+target_set_warnings(csv_sink_plugin)
+set_target_properties(
+  csv_sink_plugin
+  PROPERTIES OUTPUT_NAME csv
+             PREFIX ""
+             POSITION_INDEPENDENT_CODE ON
+             CXX_STANDARD 20
+             CXX_STANDARD_REQUIRED ON
+             CXX_EXTENSIONS OFF)
+target_include_directories(csv_sink_plugin PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_enable_coroutine(csv_sink_plugin)
+if(TARGET dftracer_utils_dataframe::shared)
+  target_link_libraries(csv_sink_plugin PRIVATE dftracer_utils_dataframe::shared)
+elseif(TARGET dftracer_utils_dataframe::static)
+  target_link_libraries(csv_sink_plugin PRIVATE dftracer_utils_dataframe::static)
+endif()
+
+# Registers the file format "csv_reader": it claims a .csv file, names its
+# columns from the header line and builds each chunk's frame through the
+# dataframe C ABI.
+add_library(csv_reader_plugin MODULE csv_reader.cpp)
+target_set_warnings(csv_reader_plugin)
+set_target_properties(
+  csv_reader_plugin
+  PROPERTIES OUTPUT_NAME csv_reader
+             PREFIX ""
+             POSITION_INDEPENDENT_CODE ON
+             CXX_STANDARD 20
+             CXX_STANDARD_REQUIRED ON
+             CXX_EXTENSIONS OFF)
+target_include_directories(csv_reader_plugin PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_enable_coroutine(csv_reader_plugin)
+if(TARGET dftracer_utils_dataframe::shared)
+  target_link_libraries(csv_reader_plugin
+                        PRIVATE dftracer_utils_dataframe::shared)
+elseif(TARGET dftracer_utils_dataframe::static)
+  target_link_libraries(csv_reader_plugin
+                        PRIVATE dftracer_utils_dataframe::static)
+endif()
+
+# Registers the plan node "sessionize.gaps": it appends an int64 `session`
+# column, copying the input columns through the dataframe C ABI.
+add_library(sessionize_plugin MODULE sessionize.cpp)
+target_set_warnings(sessionize_plugin)
+set_target_properties(
+  sessionize_plugin
+  PROPERTIES OUTPUT_NAME sessionize
+             PREFIX ""
+             POSITION_INDEPENDENT_CODE ON
+             CXX_STANDARD 20
+             CXX_STANDARD_REQUIRED ON
+             CXX_EXTENSIONS OFF)
+target_include_directories(sessionize_plugin PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_enable_coroutine(sessionize_plugin)
+if(TARGET dftracer_utils_dataframe::shared)
+  target_link_libraries(sessionize_plugin
+                        PRIVATE dftracer_utils_dataframe::shared)
+elseif(TARGET dftracer_utils_dataframe::static)
+  target_link_libraries(sessionize_plugin
+                        PRIVATE dftracer_utils_dataframe::static)
+endif()
+
+# Registers the provider "range_provider.numbers": a table built in code, with
+# its frames built through the dataframe C ABI.
+add_library(range_provider_plugin MODULE range_provider.cpp)
+target_set_warnings(range_provider_plugin)
+set_target_properties(
+  range_provider_plugin
+  PROPERTIES OUTPUT_NAME range_provider
+             PREFIX ""
+             POSITION_INDEPENDENT_CODE ON
+             CXX_STANDARD 20
+             CXX_STANDARD_REQUIRED ON
+             CXX_EXTENSIONS OFF)
+target_include_directories(range_provider_plugin
+                           PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_enable_coroutine(range_provider_plugin)
+if(TARGET dftracer_utils_dataframe::shared)
+  target_link_libraries(range_provider_plugin
+                        PRIVATE dftracer_utils_dataframe::shared)
+elseif(TARGET dftracer_utils_dataframe::static)
+  target_link_libraries(range_provider_plugin
                         PRIVATE dftracer_utils_dataframe::static)
 endif()
 
@@ -117,7 +272,7 @@ target_include_directories(dur_stats_producer_plugin
                            PRIVATE ${CMAKE_SOURCE_DIR}/include)
 
 # The one example that reads a result frame, so the one that links the
-# dataframe C ABI. C11 because it includes both abi.h headers, which repeat the
+# dataframe C ABI. C11 because it includes both abi.h and c_api.h headers, which repeat the
 # dftu_series / dftu_dataframe typedefs.
 add_library(dur_stats_consumer_plugin MODULE dur_stats_consumer.c)
 target_set_warnings(dur_stats_consumer_plugin)
@@ -219,8 +374,33 @@ set_target_properties(
 target_include_directories(process_regr_stats_plugin
                            PRIVATE ${CMAKE_SOURCE_DIR}/include)
 
+# The one example that may include nanoarrow: it turns a column into an
+# ArrowSchema/ArrowArray pair and back with nanoarrow's own zero-copy buffers,
+# so it links the dataframe C ABI plus nanoarrow and nothing from the arrow
+# library. tests/CMakeLists.txt runs the binary as the arrow_convert test.
+add_executable(arrow_convert arrow_convert.c)
+target_set_warnings(arrow_convert)
+set_target_properties(
+  arrow_convert
+  PROPERTIES C_STANDARD 11
+             C_STANDARD_REQUIRED ON)
+target_add_rpath(arrow_convert)
+target_include_directories(arrow_convert PRIVATE ${CMAKE_SOURCE_DIR}/include)
+if(TARGET dftracer_utils_dataframe::shared)
+  target_link_libraries(arrow_convert PRIVATE dftracer_utils_dataframe::shared)
+elseif(TARGET dftracer_utils_dataframe::static)
+  target_link_libraries(arrow_convert PRIVATE dftracer_utils_dataframe::static)
+endif()
+if(DFTRACER_UTILS_BUILD_SHARED)
+  link_nanoarrow(arrow_convert SHARED)
+else()
+  link_nanoarrow(arrow_convert STATIC)
+endif()
+
 install(TARGETS event_counter_plugin duration_histogram_plugin
-                query_filter_plugin
+                duration_report_plugin duration_udfs_plugin stats_udafs_plugin
+                query_filter_plugin csv_sink_plugin csv_reader_plugin
+                sessionize_plugin range_provider_plugin
                 perbatch_producer_plugin perbatch_consumer_plugin
                 dur_stats_producer_plugin dur_stats_consumer_plugin
                 process_counts_plugin process_file_edges_plugin

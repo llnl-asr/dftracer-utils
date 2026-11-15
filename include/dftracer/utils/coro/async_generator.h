@@ -2,7 +2,6 @@
 #ifndef DFTRACER_UTILS_CORO_ASYNC_GENERATOR_H
 #define DFTRACER_UTILS_CORO_ASYNC_GENERATOR_H
 
-#include <dftracer/utils/common/exception_helpers.h>
 #include <dftracer/utils/coro/detail/frame.h>
 #include <dftracer/utils/coro/detail/pool_resume.h>
 #include <dftracer/utils/coro/task.h>
@@ -12,7 +11,6 @@
 #include <atomic>
 #include <coroutine>
 #include <cstddef>
-#include <exception>
 #include <new>
 #include <optional>
 #include <type_traits>
@@ -59,7 +57,6 @@ class AsyncGenerator {
     struct promise_type : PromiseBase {
         alignas(T) std::byte value_storage[sizeof(T)];
         bool has_value = false;
-        std::exception_ptr exception;
 
         T* value_ptr() noexcept {
             return std::launder(reinterpret_cast<T*>(value_storage));
@@ -114,7 +111,9 @@ class AsyncGenerator {
 
         void return_void() noexcept {}
 
-        void unhandled_exception() { exception = std::current_exception(); }
+        void unhandled_exception() noexcept {
+            dstd::fatal("coro: an exception escaped a coroutine");
+        }
 
         // The consumer may destroy the frame once the exchange is done.
         struct ToConsumer {
@@ -134,13 +133,17 @@ class AsyncGenerator {
     class NextAwaitable {
        private:
         std::coroutine_handle<promise_type> handle_;
+        bool settled_;
 
        public:
-        explicit NextAwaitable(std::coroutine_handle<promise_type> handle)
-            : handle_(handle) {}
+        /// @p settled is true for a read that never ends its awaiter.
+        explicit NextAwaitable(std::coroutine_handle<promise_type> handle,
+                               bool settled = false)
+            : handle_(handle), settled_(settled) {}
 
         bool await_ready() const noexcept {
-            return !handle_ || handle_.done() || handle_.promise().cancelled;
+            return !handle_ || handle_.done() || handle_.promise().cancelled ||
+                   handle_.promise().error.has_value();
         }
 
         template <typename Promise>
@@ -150,7 +153,8 @@ class AsyncGenerator {
             p.handoff.store(false, std::memory_order_relaxed);
             // Set on every read: a reader before this one may be gone.
             p.set_root_promise(nullptr);
-            p.parent_end = detail::cancel_end_for<Promise>();
+            p.parent_end =
+                settled_ ? nullptr : detail::cancel_end_for<Promise>();
             Executor* awaiter_executor = nullptr;
             if constexpr (std::is_base_of_v<PromiseBase, Promise>) {
                 p.set_root_promise(awaiting.promise().get_root_promise());
@@ -165,7 +169,12 @@ class AsyncGenerator {
             if (!p.handoff.exchange(true, std::memory_order_acq_rel))
                 return true;
             if constexpr (requires { awaiting.promise().propagate_cancel(); }) {
+                if (settled_) return false;
                 if (p.cancelled && awaiting.promise().propagate_cancel()) {
+                    return true;
+                }
+                if (p.error && awaiting.promise().propagate_error(
+                                   std::move(*p.error), false)) {
                     return true;
                 }
             }
@@ -180,8 +189,10 @@ class AsyncGenerator {
                 detail::cancelled_unstoppable(
                     "a stopped generator read by a frame that cannot stop");
             }
-            if (handle_.promise().exception) {
-                common::rethrow_and_clear(handle_.promise().exception);
+            if (handle_.promise().error) {
+                dstd::fatal(
+                    "coro: a failed generator was read by a frame that "
+                    "cannot fail");
             }
             if (handle_.done()) {
                 return dstd::nullopt;
@@ -235,13 +246,13 @@ class AsyncGenerator {
     }
 
     /// The read of @ref next that gives how it ended and never ends the reader:
-    /// an item or the end (an empty inner optional), a stop, or an exception.
+    /// an item or the end (an empty inner optional), a stop, or an error.
     class SettledNext {
        public:
         static constexpr bool CANCEL_EXEMPT = true;
 
         explicit SettledNext(std::coroutine_handle<promise_type> handle)
-            : next_(handle), handle_(handle) {}
+            : next_(handle, true), handle_(handle) {}
 
         bool await_ready() const noexcept { return next_.await_ready(); }
 
@@ -260,9 +271,10 @@ class AsyncGenerator {
             auto& promise = handle_.promise();
             if (promise.cancelled) {
                 out.stopped = true;
-            } else if (promise.exception) {
-                out.exception = std::move(promise.exception);
-                promise.exception = nullptr;
+            } else if (promise.error) {
+                // Copied, not taken: the frame stays suspended at its fail
+                // point, so a later read must see the error, not resume it.
+                out.error = promise.error;
             } else if (handle_.done() || !promise.has_value) {
                 out.value.emplace();
             } else {
@@ -281,14 +293,8 @@ class AsyncGenerator {
 
     bool done() const { return !handle_ || handle_.done(); }
 
-    bool has_exception() const {
-        return handle_ && handle_.promise().exception != nullptr;
-    }
-
-    void rethrow_if_exception() {
-        if (handle_ && handle_.promise().exception) {
-            common::rethrow_and_clear(handle_.promise().exception);
-        }
+    bool has_error() const {
+        return handle_ && handle_.promise().error.has_value();
     }
 
     /// Ends a wait inside this generator once @p flag is set, for a reader that

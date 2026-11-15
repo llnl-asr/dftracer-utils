@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_TESTS_INDEX_TEST_HELPERS_H
 #define DFTRACER_UTILS_TESTS_INDEX_TEST_HELPERS_H
 
+#include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
@@ -17,7 +18,6 @@
 
 #include <algorithm>
 #include <cstdint>
-#include <stdexcept>
 #include <utility>
 
 // Helpers for tests that write synthetic index data by hand or read the index
@@ -35,7 +35,10 @@ inline dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> dstd_paths(
 template <class T>
 T index_take(
     dftracer::utils::dstd::Expected<T, dftracer::utils::dstd::Error> result) {
-    if (!result) throw std::runtime_error("index test: an index call failed");
+    if (!result) {
+        dftracer::utils::dstd::fatal("index test: an index call failed",
+                                     result.error().c_str());
+    }
     return std::move(*result);
 }
 
@@ -69,7 +72,9 @@ inline dftracer::utils::trace::index::FileRef require_indexed_file(
     const dftracer::utils::trace::index::Snapshot& snapshot,
     dftracer::utils::dstd::StringView trace_path) {
     auto found = find_indexed_file(snapshot, trace_path);
-    if (!found) throw std::runtime_error("index test: the file is not indexed");
+    if (!found) {
+        dftracer::utils::dstd::fatal("index test: the file is not indexed");
+    }
     return std::move(*found);
 }
 
@@ -112,7 +117,7 @@ inline dftracer::utils::dstd::Vector<IndexRecord> dump_index(
             out.push_back(std::move(record));
         }
         if (cursor.error())
-            throw std::runtime_error("index test: a scan failed");
+            dftracer::utils::dstd::fatal("index test: a scan failed");
     }
     std::sort(out.begin(), out.end());
     return out;
@@ -130,7 +135,10 @@ indexed_members(dftracer::utils::dstd::StringView index_path,
 
 inline void commit_test_build(dftracer::utils::trace::index::FileBuild& build) {
     auto done = dftracer::utils::default_runtime().submit(build.commit()).get();
-    if (!done) throw std::runtime_error("index test: a commit failed");
+    if (!done) {
+        dftracer::utils::dstd::fatal("index test: a commit failed",
+                                     done.error().c_str());
+    }
 }
 
 /// Starts the data of `logical_path`: the file metadata and the Members copy

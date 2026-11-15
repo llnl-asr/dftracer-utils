@@ -15,15 +15,16 @@
 extern "C" {
 #endif
 
-typedef enum {
+typedef int32_t dftu_value_kind;
+enum {
     DFTU_VAL_NULL = 0,
-    DFTU_VAL_BOOL,
-    DFTU_VAL_I64,
-    DFTU_VAL_F64,
-    DFTU_VAL_STR,
-    DFTU_VAL_ARRAY,
-    DFTU_VAL_OBJECT
-} dftu_value_kind;
+    DFTU_VAL_BOOL = 1,
+    DFTU_VAL_I64 = 2,
+    DFTU_VAL_F64 = 3,
+    DFTU_VAL_STR = 4,
+    DFTU_VAL_ARRAY = 5,
+    DFTU_VAL_OBJECT = 6
+};
 
 typedef struct dftu_value dftu_value;
 

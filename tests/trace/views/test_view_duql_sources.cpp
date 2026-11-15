@@ -96,22 +96,12 @@ dstd::Vector<dstd::String> dftracer_lines() {
             event(30, R"("fhash":"h1","hhash":"n1")", 3)};
 }
 
-// The message of the exception `fn` throws, or of the error the View, plan or
-// result it returns kept.
+// The message of the error the View, plan or result `fn` returns kept.
 template <typename Fn>
 dstd::String error_of(Fn&& fn) {
-    if constexpr (std::is_void_v<std::invoke_result_t<Fn&>>) {
-        try {
-            fn();
-        } catch (const std::exception& e) {
-            return e.what();
-        }
-        return {};
-    } else {
-        const auto status = test_view_common::status_of(fn());
-        if (status.has_value()) return {};
-        return dstd::String(status.error().message());
-    }
+    const auto status = test_view_common::status_of(fn());
+    if (status.has_value()) return {};
+    return dstd::String(status.error().message());
 }
 
 }  // namespace
@@ -122,16 +112,20 @@ TEST_SUITE("View duql sources") {
         const View v = view_of(write_records(env, "t", dftracer_lines()));
         const dataframe::DataFrame files =
             frame(v.duql("from files | sort fhash"));
-        CHECK(files.names == dstd::Vector<dstd::String>{"fhash", "path"});
+        CHECK(dstd::to_strings(files.names) ==
+              dstd::Vector<dstd::String>{"fhash", "path"});
         CHECK(column(files, "path") ==
               dstd::Vector<dstd::String>{"/data/a", "/data/b"});
         const dataframe::DataFrame hosts = frame(v.duql("from hosts"));
-        CHECK(hosts.names == dstd::Vector<dstd::String>{"hhash", "name"});
+        CHECK(dstd::to_strings(hosts.names) ==
+              dstd::Vector<dstd::String>{"hhash", "name"});
         CHECK(column(hosts, "name") == dstd::Vector<dstd::String>{"node1"});
         const dataframe::DataFrame strings = frame(v.duql("from strings"));
-        CHECK(strings.names == dstd::Vector<dstd::String>{"shash", "value"});
+        CHECK(dstd::to_strings(strings.names) ==
+              dstd::Vector<dstd::String>{"shash", "value"});
         const dataframe::DataFrame ranks = frame(v.duql("from ranks"));
-        CHECK(ranks.names == dstd::Vector<dstd::String>{"pid", "rank"});
+        CHECK(dstd::to_strings(ranks.names) ==
+              dstd::Vector<dstd::String>{"pid", "rank"});
         CHECK(column(ranks, "rank") == dstd::Vector<dstd::String>{"3"});
         // Metadata rows keep their args, which the index does not list.
         const dataframe::DataFrame pr =

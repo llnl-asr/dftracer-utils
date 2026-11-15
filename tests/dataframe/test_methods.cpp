@@ -76,7 +76,7 @@ TEST_CASE("Series comparison + logical produce masks, drive filter") {
 
 TEST_CASE("DataFrame select / filter / sort_by / column") {
     DataFrame df;
-    df.names = {"id", "val"};
+    df.names = dstd::make_shared_strings({"id", "val"});
     df.columns.push_back(i64({1, 2, 3, 4}));
     df.columns.push_back(i64({40, 10, 30, 20}));
     CHECK(df.num_rows() == 4);
@@ -96,7 +96,7 @@ TEST_CASE("DataFrame select / filter / sort_by / column") {
 
 TEST_CASE("DataFrame group_by aggregates") {
     DataFrame df;
-    df.names = {"k", "v"};
+    df.names = dstd::make_shared_strings({"k", "v"});
     df.columns.push_back(i64({1, 2, 1, 2, 1}));
     df.columns.push_back(i64({10, 5, 20, 7, 30}));
     DataFrame g =
@@ -116,7 +116,7 @@ TEST_CASE(
     "group_agg_expr over a String value column: count and count_valid "
     "work, a numeric reducer is refused") {
     DataFrame b;
-    b.names = {"name", "cycles"};
+    b.names = dstd::make_shared_strings({"name", "cycles"});
     b.columns.push_back(Series::strings(
         dstd::Vector<dstd::String>{"cpu", "gpu", "cpu", "gpu"}));
     // "lots", "few", null, "few": row 2 is null.
@@ -198,7 +198,7 @@ TEST_CASE("DataFrame group_by pct (DDSketch quantile) is close to exact") {
         v.push_back(10 * (i + 1));  // key 1: 10..10*per
     }
     DataFrame b;
-    b.names = {"k", "v"};
+    b.names = dstd::make_shared_strings({"k", "v"});
     b.columns.push_back(Series::flat_i64(k.data(), 2 * per));
     b.columns.push_back(Series::flat_i64(v.data(), 2 * per));
     DataFrame g = dftu_utils_test::ok(
@@ -346,7 +346,7 @@ TEST_CASE("DataFrame group_by hist emits a list<struct> per group") {
         v.push_back((i % 2 == 0) ? 1 + i % 10 : 100 + i % 10);
     }
     DataFrame b;
-    b.names = {"k", "v"};
+    b.names = dstd::make_shared_strings({"k", "v"});
     b.columns.push_back(Series::flat_i64(k.data(), 1000));
     b.columns.push_back(Series::flat_i64(v.data(), 1000));
     DataFrame g = dftu_utils_test::ok(
@@ -364,7 +364,7 @@ TEST_CASE("DataFrame group_by hist emits a list<struct> per group") {
 
 TEST_CASE("DataFrame group_by first / last") {
     DataFrame df;
-    df.names = {"k", "v"};
+    df.names = dstd::make_shared_strings({"k", "v"});
     df.columns.push_back(i64({1, 2, 1, 2, 1}));
     df.columns.push_back(i64({10, 5, 20, 7, 30}));
     DataFrame g = dftu_utils_test::ok(df.group_by(
@@ -390,7 +390,7 @@ TEST_CASE("group_agg first/last is exact across the parallel-chunk merge") {
         v[static_cast<std::size_t>(i)] = i;  // strictly increasing
     }
     DataFrame b;
-    b.names = {"k", "v"};
+    b.names = dstd::make_shared_strings({"k", "v"});
     b.columns.push_back(Series::flat_i64(k.data(), n));
     b.columns.push_back(Series::flat_i64(v.data(), n));
     DataFrame g = dftu_utils_test::ok(
@@ -409,7 +409,7 @@ TEST_CASE("group_agg first/last is exact across the parallel-chunk merge") {
 
 TEST_CASE("DataFrame group_by sumsq matches FieldStat::sumsq") {
     DataFrame df;
-    df.names = {"k", "v"};
+    df.names = dstd::make_shared_strings({"k", "v"});
     df.columns.push_back(i64({1, 2, 1, 2, 1}));
     df.columns.push_back(i64({10, 5, 20, 7, 30}));
     DataFrame g = dftu_utils_test::ok(
@@ -427,7 +427,7 @@ TEST_CASE("DataFrame group_by sumsq matches FieldStat::sumsq") {
 
 TEST_CASE("DataFrame group_by argmax picks the repr at the max by-value") {
     DataFrame df;
-    df.names = {"k", "name", "dur"};
+    df.names = dstd::make_shared_strings({"k", "name", "dur"});
     df.columns.push_back(i64({1, 1, 1, 2, 2}));
     df.columns.push_back(Series::strings({"a", "b", "c", "x", "y"}));
     df.columns.push_back(i64({10, 30, 20, 5, 8}));
@@ -448,7 +448,7 @@ TEST_CASE("DataFrame group_by argmax picks the repr at the max by-value") {
 
 TEST_CASE("DataFrame group_by set_union sorts and joins distinct values") {
     DataFrame df;
-    df.names = {"k", "tag"};
+    df.names = dstd::make_shared_strings({"k", "tag"});
     df.columns.push_back(i64({1, 1, 1, 2}));
     df.columns.push_back(Series::strings({"posix", "stdio", "posix", "mpi"}));
     DataFrame g = dftu_utils_test::ok(
@@ -515,7 +515,7 @@ TEST_CASE("group_agg argmax/sumsq/set_union merge and serialize round-trip") {
 
 TEST_CASE("group_agg_expr argmax/sumsq/set_union via the expression builders") {
     DataFrame b;
-    b.names = {"k", "name", "dur", "tag"};
+    b.names = dstd::make_shared_strings({"k", "name", "dur", "tag"});
     b.columns.push_back(i64({1, 1, 1, 2, 2}));
     b.columns.push_back(Series::strings({"a", "b", "c", "x", "y"}));
     b.columns.push_back(i64({10, 30, 20, 5, 8}));
@@ -552,7 +552,7 @@ TEST_CASE("group_agg_expr argmax/sumsq/set_union via the expression builders") {
 TEST_CASE(
     "DataFrame::group_by(Expr, AggExprSpec) matches the string overload") {
     DataFrame b;
-    b.names = {"k", "v"};
+    b.names = dstd::make_shared_strings({"k", "v"});
     b.columns.push_back(i64({0, 1, 0, 1, 0, 1}));
     b.columns.push_back(i64({1, 2, 3, 4, 5, 6}));
 
@@ -742,7 +742,7 @@ TEST_CASE("Expr engine is null-aware: fillna and null-preserving ops") {
 
 TEST_CASE("DataFrame tail / reverse / with_row_index / sample") {
     DataFrame df;
-    df.names = {"id", "val"};
+    df.names = dstd::make_shared_strings({"id", "val"});
     df.columns.push_back(i64({1, 2, 3, 4, 5}));
     df.columns.push_back(i64({10, 20, 30, 40, 50}));
 
@@ -775,7 +775,7 @@ TEST_CASE("DataFrame tail / reverse / with_row_index / sample") {
 
 TEST_CASE("DataFrame sort_by_multi lexicographic") {
     DataFrame df;
-    df.names = {"a", "b"};
+    df.names = dstd::make_shared_strings({"a", "b"});
     df.columns.push_back(i64({2, 1, 2, 1}));
     df.columns.push_back(i64({9, 8, 7, 6}));
     DataFrame s = dftu_utils_test::ok(df.sort_by_multi({"a", "b"}, false));
@@ -811,7 +811,7 @@ TEST_CASE("DataFrame sort_by_multi on a permutation key") {
         INFO(desc);
         for (int u = 0; u < 2; ++u) {
             DataFrame df;
-            df.names = {"k", "p"};
+            df.names = dstd::make_shared_strings({"k", "p"});
             df.columns.push_back(
                 u ? Series::flat(dftracer::utils::dataframe::TypeId::Uint64,
                                  ukey.data(), n)
@@ -840,7 +840,7 @@ TEST_CASE("DataFrame sort_by_multi on a non-permutation key is stable") {
     };
     for (const auto& key : keys) {
         DataFrame df;
-        df.names = {"k", "p"};
+        df.names = dstd::make_shared_strings({"k", "p"});
         df.columns.push_back(i64(key));
         df.columns.push_back(i64({10, 11, 12, 13}));
         const DataFrame s = dftu_utils_test::ok(df.sort_by_multi({"k"}, false));
@@ -857,7 +857,7 @@ TEST_CASE("DataFrame sort_by_multi on a non-permutation key is stable") {
 
 TEST_CASE("DataFrame sort_by_multi puts a null key last") {
     DataFrame df;
-    df.names = {"k", "p"};
+    df.names = dstd::make_shared_strings({"k", "p"});
     df.columns.push_back(i64_nullable({1, 0, 2, 0}, {1, 1, 0, 1}));
     df.columns.push_back(i64({10, 11, 12, 13}));
     const DataFrame s = dftu_utils_test::ok(df.sort_by_multi({"k"}, false));
@@ -889,7 +889,7 @@ TEST_CASE(
             valid[u >> 3] |= static_cast<std::uint8_t>(1u << (u & 7));
     }
     DataFrame df;
-    df.names = {"a", "w", "c", "id"};
+    df.names = dstd::make_shared_strings({"a", "w", "c", "id"});
     df.columns.push_back(i64(a));
     df.columns.push_back(Series::strings(views, valid.data()));
     df.columns.push_back(
@@ -933,7 +933,7 @@ TEST_CASE("float keys sort as one total order: NaN last, -0.0 equals 0.0") {
         id[z] = i;
     }
     DataFrame df;
-    df.names = {"f", "g", "id"};
+    df.names = dstd::make_shared_strings({"f", "g", "id"});
     df.columns.push_back(Series::flat_f64(f.data(), n));
     df.columns.push_back(i64(g));
     df.columns.push_back(i64(id));
@@ -980,7 +980,7 @@ TEST_CASE("float keys sort as one total order: NaN last, -0.0 equals 0.0") {
 
 TEST_CASE("DataFrame sort_by_multi per-column direction") {
     DataFrame df;
-    df.names = {"a", "b"};
+    df.names = dstd::make_shared_strings({"a", "b"});
     df.columns.push_back(i64({2, 1, 2, 1}));
     df.columns.push_back(i64({9, 8, 7, 6}));
 
@@ -1025,7 +1025,7 @@ TEST_CASE("DataFrame sort_by_multi per-column direction") {
 
 TEST_CASE("DataFrame unique / is_duplicated / is_unique") {
     DataFrame df;
-    df.names = {"k", "v"};
+    df.names = dstd::make_shared_strings({"k", "v"});
     df.columns.push_back(i64({1, 2, 1, 3, 2}));
     df.columns.push_back(i64({7, 8, 7, 9, 8}));
     // rows: (1,7) dup, (2,8) dup, (1,7) dup, (3,9) unique, (2,8) dup
@@ -1049,7 +1049,7 @@ TEST_CASE("DataFrame unique / is_duplicated / is_unique") {
 
 TEST_CASE("DataFrame drop_nulls / fill_null / null_count") {
     DataFrame df;
-    df.names = {"a", "b"};
+    df.names = dstd::make_shared_strings({"a", "b"});
     df.columns.push_back(i64_nullable({1, 2, 3, 4}, {1, 0, 1, 1}));
     df.columns.push_back(i64_nullable({5, 6, 7, 8}, {1, 1, 1, 0}));
 
@@ -1073,7 +1073,7 @@ TEST_CASE("Ergonomic scalar API: no raw dftu_scalar at the call site") {
     // A bare literal 0 must resolve unambiguously against the dftu_scalar
     // overload.
     DataFrame df;
-    df.names = {"a"};
+    df.names = dstd::make_shared_strings({"a"});
     df.columns.push_back(i64_nullable({1, 2, 3, 4}, {1, 0, 1, 1}));
     DataFrame f = df.fill_null(0);
     CHECK(f.column("a").null_count() == 0);
@@ -1099,7 +1099,7 @@ TEST_CASE("Ergonomic scalar API: no raw dftu_scalar at the call site") {
 
 TEST_CASE("DataFrame describe") {
     DataFrame df;
-    df.names = {"x"};
+    df.names = dstd::make_shared_strings({"x"});
     df.columns.push_back(i64({2, 4, 6, 8}));
     DataFrame d = df.describe();
     REQUIRE(d.num_rows() == 6);   // count,null_count,mean,std,min,max
@@ -1159,7 +1159,7 @@ TEST_CASE("dftu_dataframe new frame ops via C ABI") {
 
 TEST_CASE("DataFrame unpivot / melt wide -> long") {
     DataFrame df;
-    df.names = {"id", "a", "b"};
+    df.names = dstd::make_shared_strings({"id", "a", "b"});
     df.columns.push_back(i64({1, 2}));
     df.columns.push_back(i64({10, 20}));
     df.columns.push_back(i64({30, 40}));
@@ -1192,7 +1192,7 @@ TEST_CASE("DataFrame unpivot / melt wide -> long") {
 
 TEST_CASE("DataFrame explode a List column") {
     DataFrame df;
-    df.names = {"id", "vals"};
+    df.names = dstd::make_shared_strings({"id", "vals"});
     df.columns.push_back(i64({1, 2, 3}));
     // Lists: [10,20], [], [30]  (row 1 empty -> one null row)
     dstd::Vector<std::int32_t> offsets = {0, 2, 2, 3};
@@ -1215,7 +1215,7 @@ TEST_CASE("DataFrame explode a List column") {
 
 TEST_CASE("DataFrame to_dummies one-hot") {
     DataFrame df;
-    df.names = {"id", "k"};
+    df.names = dstd::make_shared_strings({"id", "k"});
     df.columns.push_back(i64({1, 2, 3, 4}));
     df.columns.push_back(i64({7, 8, 7, 9}));  // distinct sorted: 7,8,9
 
@@ -1239,7 +1239,7 @@ TEST_CASE("DataFrame to_dummies one-hot") {
 
 TEST_CASE("DataFrame pivot long->wide") {
     DataFrame df;
-    df.names = {"idx", "col", "val"};
+    df.names = dstd::make_shared_strings({"idx", "col", "val"});
     df.columns.push_back(i64({1, 1, 2, 1}));
     df.columns.push_back(Series::strings({"a", "b", "a", "a"}));
     df.columns.push_back(i64({10, 20, 30, 40}));
@@ -1279,7 +1279,7 @@ TEST_CASE("DataFrame pivot long->wide") {
 
 TEST_CASE("DataFrame group_by_dynamic tumbling and sliding") {
     DataFrame df;
-    df.names = {"t", "v"};
+    df.names = dstd::make_shared_strings({"t", "v"});
     df.columns.push_back(i64({0, 1, 2, 3, 4, 5}));
     df.columns.push_back(i64({10, 20, 30, 40, 50, 60}));
 
@@ -1369,7 +1369,7 @@ TEST_CASE("dftu_dataframe reshaping ops via C ABI") {
 
 TEST_CASE("DataFrame mask from a compiled query") {
     DataFrame df;
-    df.names = {"cat", "dur"};
+    df.names = dstd::make_shared_strings({"cat", "dur"});
     df.columns.push_back(
         Series::strings({"POSIX", "STDIO", "POSIX", "MPI", "POSIX"}));
     df.columns.push_back(i64({10, 20, 30, 40, 50}));
@@ -1396,7 +1396,7 @@ TEST_CASE("DataFrame mask from a compiled query") {
 
 TEST_CASE("DataFrame mask on a missing column selects no row") {
     DataFrame df;
-    df.names = {"cat"};
+    df.names = dstd::make_shared_strings({"cat"});
     df.columns.push_back(Series::strings({"POSIX", "STDIO"}));
     Series m = dftu_utils_test::ok(df.mask(dftu_utils_test::ok(
         dftracer::utils::duql::Query::from_string("dur > 5"))));
@@ -1407,7 +1407,7 @@ TEST_CASE("DataFrame mask on a missing column selects no row") {
 
 TEST_CASE("DataFrame mask gives an error when a predicate cannot be lowered") {
     DataFrame df;
-    df.names = {"cat"};
+    df.names = dstd::make_shared_strings({"cat"});
     df.columns.push_back(Series::strings({"POSIX", "STDIO"}));
     auto q = dftu_utils_test::ok(
         dftracer::utils::duql::Query::from_string("any(cat) == \"P\""));
@@ -1512,7 +1512,7 @@ TEST_CASE("concat keeps the bits at unaligned seams") {
             ++next;
         }
         DataFrame d;
-        d.names = {"x"};
+        d.names = dstd::make_shared_strings({"x"});
         d.columns.push_back(i64_nullable(pv, pok));
         parts.push_back(std::move(d));
     }
@@ -1532,7 +1532,7 @@ TEST_CASE("concat keeps the bits at unaligned seams") {
     dstd::Vector<const DataFrame*> bptrs;
     for (const DataFrame& d : parts) {
         DataFrame b;
-        b.names = {"m"};
+        b.names = dstd::make_shared_strings({"m"});
         b.columns.push_back(d.columns[0] > std::int64_t{10});
         bparts.push_back(std::move(b));
     }

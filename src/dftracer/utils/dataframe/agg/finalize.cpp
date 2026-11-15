@@ -343,8 +343,8 @@ static DataFrame finalize_impl(const AggState& st_in,
             ? 0
             : (st.nkeys > key_names.size() ? st.nkeys : key_names.size());
     for (std::size_t k = 0; k < nk; ++k) {
-        out.names.push_back(k < key_names.size() ? key_names[k]
-                                                 : dstd::fmt<"key{}">(k));
+        out.names.push_back(dstd::SharedString{
+            k < key_names.size() ? key_names[k] : dstd::fmt<"key{}">(k)});
         if (k >= st.nkeys) {
             out.columns.push_back(Series::strings(
                 dstd::Vector<dstd::String>(static_cast<std::size_t>(ng))));
@@ -447,7 +447,7 @@ static DataFrame finalize_impl(const AggState& st_in,
     for (std::size_t s = 0; s < ns; ++s) {
         const AggSpec& sp = st.specs[s];
         const int fi = st.spec_field[s];
-        out.names.push_back(sp.out);
+        out.names.push_back(dstd::SharedString{sp.out});
         auto fs_at = [&](std::int64_t g) -> FieldStat {
             return st.field_stat(static_cast<std::size_t>(g) * st.nf +
                                  static_cast<std::size_t>(fi));
@@ -456,7 +456,9 @@ static DataFrame finalize_impl(const AggState& st_in,
             fi >= 0 ? st.field_domain[static_cast<std::size_t>(fi)]
                     : FieldStatDomain::I64;
 
-        if (sp.op == AggOp::Pct) {
+        if (sp.op == AggOp::Udaf) {
+            out.columns.push_back(st.udaf_column(s));
+        } else if (sp.op == AggOp::Pct) {
             const int sk =
                 fi >= 0 ? st.field_sketch[static_cast<std::size_t>(fi)] : -1;
             dstd::Vector<double> v(static_cast<std::size_t>(ng));
@@ -837,7 +839,7 @@ static DataFrame finalize_impl(const AggState& st_in,
             const std::uint32_t id = st.dyn_id_of(name);
             const bool have = id != AggState::NO_DYN_ID;
             for (const AggDynSpec& d : st.dyn_specs) {
-                out.names.push_back(d.out_prefix + name);
+                out.names.push_back(dstd::SharedString{d.out_prefix + name});
                 FieldStat cell;
                 auto fs_of = [&](std::int64_t g) -> const FieldStat* {
                     if (!have) return nullptr;

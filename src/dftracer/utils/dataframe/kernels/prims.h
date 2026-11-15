@@ -7,8 +7,8 @@
 namespace dftracer::utils::dataframe {
 
 /// Unary numeric primitives over a FLAT Int64/Uint64 column (the same ops as
-/// plugins/prims.h), producing an Int64 column. Cast the input to a 64-bit
-/// integer first. `Mix64` yields the hash's bit pattern as int64.
+/// the plugin prims header), producing an Int64 column. Cast the input to a
+/// 64-bit integer first. `Mix64` yields the hash's bit pattern as int64.
 enum class Prim {
     Ilog2 = 0,
     BitWidth = 1,

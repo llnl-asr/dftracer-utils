@@ -318,13 +318,8 @@ _POLARS_NATIVE_ONLY = (DType.FLOAT16, DType.DECIMAL128, DType.DECIMAL256)
 
 def _polars_via_arrow(native: "_ext._Series") -> bool:
     """Whether the Arrow capsule gives polars the dtype the native path does: not
-    for Float16 and decimals, and not for a dictionary column, which Arrow
-    exports as Categorical."""
-    return (
-        hasattr(native, "__arrow_c_array__")
-        and native.encoding != 2
-        and DType(native.type) not in _POLARS_NATIVE_ONLY
-    )
+    for Float16 and decimals."""
+    return hasattr(native, "__arrow_c_array__") and DType(native.type) not in _POLARS_NATIVE_ONLY
 
 
 def _polars_native(native: "_ext._Series", pl: Any) -> "pl.Series":
@@ -343,6 +338,8 @@ def _polars_native(native: "_ext._Series", pl: Any) -> "pl.Series":
 
         return pl.Series(_native_numpy(native).astype(np.float32))  # type: ignore[union-attr]
     values: Any = native.to_pylist()
+    if native.encoding == 2 and dtype in (DType.STRING, DType.LARGE_STRING):
+        return pl.Series(values, dtype=pl.Categorical)
     if dtype == DType.MAP:
         values = [
             None if row is None else [{"key": k, "value": v} for k, v in row] for row in values
@@ -494,16 +491,8 @@ def _apply_index(pdf: "pd.DataFrame", index: "Union[str, Sequence[str]]") -> "pd
 
 
 def _arrow_native(name: str) -> Callable[..., Any]:
-    """The native Arrow entry point `name`; absent when the extension was built
-    without Arrow support (``DFTRACER_UTILS_ENABLE_ARROW=OFF``)."""
-    fn = getattr(_ext, name, None)
-    if fn is None:
-        raise RuntimeError(
-            "this build of dftracer-utils has no Arrow support "
-            "(built with DFTRACER_UTILS_ENABLE_ARROW=OFF); "
-            "Arrow, pandas and polars interop is unavailable"
-        )
-    return fn
+    """The native Arrow entry point `name`."""
+    return getattr(_ext, name)
 
 
 def _require_pyarrow() -> "ModuleType":
@@ -516,7 +505,7 @@ def _require_pyarrow() -> "ModuleType":
     return pa
 
 
-# Comparison op codes, mirroring abi.h DFTU_CMP_* (passed to native compare()).
+# Comparison op codes, mirroring c_api.h DFTU_CMP_* (passed to native compare()).
 _CMP_GT = 0
 _CMP_GE = 1
 _CMP_LT = 2
@@ -527,7 +516,7 @@ _LOGICAL_AND = 0
 _LOGICAL_OR = 1
 
 _NormForm = Literal["NFC", "NFKC", "NFD", "NFKD"]
-# abi.h DFTU_NORM_* and DFTU_WRAP_*.
+# c_api.h DFTU_NORM_* and DFTU_WRAP_*.
 _NORM_FORMS: Dict[str, int] = {"NFC": 0, "NFKC": 1, "NFD": 2, "NFKD": 3}
 _WRAP_FLAG_BITS = (1, 2, 4, 8, 16)
 
@@ -650,9 +639,10 @@ class Series(_SeriesPandasMixin, _Wrapper["_ext._Series"]):
             self.name = name
 
     @classmethod
-    def from_arrow(cls, arr: "pa.Array") -> "Series":
+    def from_arrow(cls, arr: "Union[pa.Array, pa.ChunkedArray]") -> "Series":
         """Import a ``pyarrow.Array`` (or any ``__arrow_c_array__`` provider),
-        zero-copy via the Arrow C Data Interface."""
+        zero-copy via the Arrow C Data Interface. A ``pyarrow.ChunkedArray``
+        (or any ``__arrow_c_stream__`` provider) keeps one chunk per batch."""
         return _series_from_arrow(arr)
 
     @classmethod
@@ -784,12 +774,12 @@ class Series(_SeriesPandasMixin, _Wrapper["_ext._Series"]):
 
     def to_polars(self) -> "pl.Series":
         """This column as a polars Series. Where the extension has Arrow
-        support, every column but a Float16, decimal or dictionary one
-        comes through the Arrow PyCapsule interface (polars >= 1.3; an older
-        polars raises its own error), without pyarrow; those, and builds
-        without Arrow, use the native conversion (Float16 becomes Float32, a
-        decimal gets precision 38, a dictionary becomes String). The polars
-        Series takes this name, ``""`` when there is none."""
+        support, every column but a Float16 or decimal one comes through the
+        Arrow PyCapsule interface (polars >= 1.3; an older polars raises its own
+        error), without pyarrow; those, and builds without Arrow, use the
+        native conversion (Float16 becomes Float32, a decimal gets precision
+        38). A dictionary column becomes ``Categorical``. The polars Series
+        takes this name, ``""`` when there is none."""
         try:
             import polars as pl  # ty: ignore[import-not-found]
         except ImportError:
@@ -2682,6 +2672,6 @@ def _series_from_bytes(data: bytes) -> Series:
     return Series(_ext._series_from_bytes(data))
 
 
-def _series_from_arrow(array: "pa.Array") -> Series:
+def _series_from_arrow(array: "Union[pa.Array, pa.ChunkedArray]") -> Series:
     """Import a pyarrow Array into a native Series wrapper."""
     return Series(_arrow_native("_series_from_arrow")(array))

@@ -141,7 +141,7 @@ class CompareAggCursor : public Cursor {
         auto df = co_await gen_->next();
         if (!df) co_return MorselResult(dstd::nullopt);
         if (!*df) co_return df->error();
-        out_names_ = (*df)->names;
+        out_names_ = dstd::to_strings((*df)->names);
         co_return MorselResult(morsel_of(std::move(**df)));
     }
 
@@ -219,7 +219,7 @@ class CompareAggCursor : public Cursor {
             if (!next_df) break;
             if (!*next_df) co_return next_df->error();
             DataFrame* df = &**next_df;
-            if (rtypes.empty()) rnames = df->names;
+            if (rtypes.empty()) rnames = dstd::to_strings(df->names);
             note_types(rtypes, df->columns);
             dstd::Vector<Series> cols;
             for (const Series& c : df->columns)

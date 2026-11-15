@@ -68,7 +68,7 @@ DataFrame frame_of(const dstd::Vector<Cell>& cells) {
         if (cells[i].text) valid[i >> 3] |= std::uint8_t(1u << (i & 7));
     }
     DataFrame d;
-    d.names = {"k", "s"};
+    d.names = dstd::make_shared_strings({"k", "s"});
     d.columns.push_back(
         Series::flat_i64(keys.data(), static_cast<std::int64_t>(keys.size())));
     d.columns.push_back(Series::strings(views, valid.data()));
@@ -285,7 +285,7 @@ TEST_CASE("sketch_quantile: a non-String column is refused") {
     dstd::Vector<std::int64_t> k{0, 0};
     dstd::Vector<std::int64_t> v{1, 2};
     DataFrame d;
-    d.names = {"k", "s"};
+    d.names = dstd::make_shared_strings({"k", "s"});
     d.columns.push_back(Series::flat_i64(k.data(), 2));
     d.columns.push_back(Series::flat_i64(v.data(), 2));
     dftu_utils_test::expect_error(

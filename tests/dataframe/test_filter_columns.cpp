@@ -34,7 +34,7 @@ DataFrame two_ints(const dstd::Vector<std::int64_t>& a,
                    const dstd::Vector<std::int64_t>& b,
                    const dstd::Vector<std::uint8_t>& bv) {
     DataFrame d;
-    d.names = {"a", "b"};
+    d.names = dstd::make_shared_strings({"a", "b"});
     const auto n = static_cast<std::int64_t>(a.size());
     d.columns.push_back(
         Series::flat_i64(a.data(), n, av.empty() ? nullptr : av.data()));
@@ -69,7 +69,7 @@ TEST_CASE("a null on either side leaves the row out") {
 
 TEST_CASE("columns that cannot compare fail with an error naming both types") {
     DataFrame d;
-    d.names = {"s", "i"};
+    d.names = dstd::make_shared_strings({"s", "i"});
     dstd::Vector<dstd::StringView> words{"a", "b"};
     dstd::Vector<std::int64_t> ints{1, 2};
     d.columns.push_back(

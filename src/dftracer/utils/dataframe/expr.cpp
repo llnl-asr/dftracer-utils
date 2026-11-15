@@ -10,6 +10,7 @@
 #include <dftracer/utils/dataframe/internal/scalar.h>     // scalar_as
 #include <dftracer/utils/dataframe/kernels/string_ops.h>  // str_pattern
 #include <dftracer/utils/dataframe/parallel.h>
+#include <dftracer/utils/dataframe/udf_registry.h>
 #include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/map.h>
@@ -94,7 +95,8 @@ enum class ExprKind {
     RoundCol,
     StrExtractCol,
     DatePart,
-    FormatTime
+    FormatTime,
+    Udf
 };
 
 struct ExprNode {
@@ -120,6 +122,9 @@ struct ExprNode {
     dftracer::utils::dstd::SharedPtr<const ExprNode>
         b;               // second child (select: then)
     dftracer::utils::dstd::SharedPtr<const ExprNode> c;  // select: otherwise
+    // Udf: the call's operands, and the registered UDF (named by `text`).
+    dstd::Vector<dstd::SharedPtr<const ExprNode>> args;
+    dstd::SharedPtr<const UdfRecord> udf;
 };
 
 namespace {
@@ -165,6 +170,7 @@ void fingerprint_node(detail::Fingerprint& fp, const ExprNode* n) {
     fingerprint_node(fp, n->a.get());
     fingerprint_node(fp, n->b.get());
     fingerprint_node(fp, n->c.get());
+    for (const auto& arg : n->args) fingerprint_node(fp, arg.get());
 }
 
 }  // namespace
@@ -218,6 +224,8 @@ bool node_references(const dftracer::utils::dstd::SharedPtr<const ExprNode>& n,
                      std::int32_t index) {
     if (!n) return false;
     if (n->kind == ExprKind::Col) return n->i == index;
+    for (const auto& arg : n->args)
+        if (node_references(arg, index)) return true;
     return node_references(n->a, index) || node_references(n->b, index) ||
            node_references(n->c, index);
 }
@@ -232,8 +240,10 @@ std::int32_t node_max_col(
     const dftracer::utils::dstd::SharedPtr<const ExprNode>& n) {
     if (!n) return -1;
     if (n->kind == ExprKind::Col) return n->i;
-    return std::max(
-        {node_max_col(n->a), node_max_col(n->b), node_max_col(n->c)});
+    std::int32_t out =
+        std::max({node_max_col(n->a), node_max_col(n->b), node_max_col(n->c)});
+    for (const auto& arg : n->args) out = std::max(out, node_max_col(arg));
+    return out;
 }
 }  // namespace
 
@@ -259,6 +269,8 @@ dftracer::utils::dstd::SharedPtr<ExprNode> clone(const ExprNode& n) {
     c->a = n.a;
     c->b = n.b;
     c->c = n.c;
+    c->args = n.args;
+    c->udf = n.udf;
     return c;
 }
 
@@ -276,11 +288,19 @@ dftracer::utils::dstd::SharedPtr<const ExprNode> node_remap(
     auto a = node_remap(n->a, old_to_new);
     auto b = node_remap(n->b, old_to_new);
     auto c3 = node_remap(n->c, old_to_new);
-    if (a == n->a && b == n->b && c3 == n->c) return n;  // unchanged: share
+    dstd::Vector<dstd::SharedPtr<const ExprNode>> args;
+    bool same_args = true;
+    for (const auto& arg : n->args) {
+        args.push_back(node_remap(arg, old_to_new));
+        same_args = same_args && args.back() == arg;
+    }
+    if (a == n->a && b == n->b && c3 == n->c && same_args)
+        return n;  // unchanged: share
     auto c = clone(*n);
     c->a = std::move(a);
     c->b = std::move(b);
     c->c = std::move(c3);
+    c->args = std::move(args);
     return c;
 }
 dftracer::utils::dstd::SharedPtr<const ExprNode> node_rebind(
@@ -297,11 +317,18 @@ dftracer::utils::dstd::SharedPtr<const ExprNode> node_rebind(
     auto a = node_rebind(n->a, by);
     auto b = node_rebind(n->b, by);
     auto c3 = node_rebind(n->c, by);
-    if (a == n->a && b == n->b && c3 == n->c) return n;
+    dstd::Vector<dstd::SharedPtr<const ExprNode>> args;
+    bool same_args = true;
+    for (const auto& arg : n->args) {
+        args.push_back(node_rebind(arg, by));
+        same_args = same_args && args.back() == arg;
+    }
+    if (a == n->a && b == n->b && c3 == n->c && same_args) return n;
     auto c = clone(*n);
     c->a = std::move(a);
     c->b = std::move(b);
     c->c = std::move(c3);
+    c->args = std::move(args);
     return c;
 }
 
@@ -357,6 +384,10 @@ void canonical_node(dstd::String& out, const ExprNode* n) {
     canonical_node(out, n->b.get());
     out += ',';
     canonical_node(out, n->c.get());
+    for (const auto& arg : n->args) {
+        out += ',';
+        canonical_node(out, arg.get());
+    }
     out += ')';
 }
 
@@ -577,6 +608,28 @@ Expr fold_args(ExprKind k, std::int32_t i, const dstd::Vector<Expr>& args,
     return out;
 }
 }  // namespace
+
+Expr udf_call_expr(dstd::SharedPtr<const UdfRecord> udf,
+                   const dstd::Vector<Expr>& args) {
+    auto n = dstd::make_shared<ExprNode>();
+    n->kind = ExprKind::Udf;
+    n->text = dstd::String(udf->name());
+    n->udf = std::move(udf);
+    for (const Expr& arg : args) {
+        if (!arg.valid()) dstd::fatal("expr: a udf call has a null operand");
+        n->args.push_back(arg.node());
+    }
+    return Expr{std::move(n)};
+}
+
+dstd::Result<Expr> expr_udf(dstd::StringView name,
+                            const dstd::Vector<Expr>& args) {
+    auto udf = find_udf(name);
+    if (!udf)
+        return common::make_error<"no udf named '{}'">(
+            common::ErrorCode::NotFound, name);
+    return udf_call_expr(std::move(udf), args);
+}
 
 Expr expr_coalesce(const dstd::Vector<Expr>& args) {
     return fold_args(ExprKind::Coalesce, 0, args, "coalesce");
@@ -835,6 +888,7 @@ enum {
     OpStrReplace,
     OpStrSlice,
     OpIsIn,
+    OpUdf,     // the bound UDF over the columns in `udf_args`
     OpConst,   // a column of `param` type filled with `scalar`
     OpSelect,  // c ? a : b, with the mask in slot `c`
     OpIsNull,  // the null mask of slot `a` (param 1) or the valid mask (0)
@@ -883,6 +937,9 @@ struct SlotOp {
     // OP_STR_PATTERN / OP_STR_EXTRACT, keyed by the node identity in `text`.
     const duql::CompiledPattern* pattern = nullptr;
     const duql::Substitution* subst = nullptr;
+    // OpUdf: the bound UDF and the slot of each operand.
+    const UdfBinding* udf = nullptr;
+    dstd::Vector<int> udf_args;
 };
 
 const int COL_OP[4] = {OpAdd, OpSub, OpMul, OpDiv};
@@ -1426,6 +1483,8 @@ class Compiler {
             }
             case ExprKind::StrFn:
                 return compile_str_fn(n);
+            case ExprKind::Udf:
+                return compile_udf(n);
             case ExprKind::IsNull: {
                 Val a0 = compile(n->a.get());
                 if (is_unknown(a0)) return unknown_val();
@@ -1441,6 +1500,7 @@ class Compiler {
     }
 
     dstd::Vector<SlotOp> program;
+    dstd::Vector<dstd::SharedPtr<const UdfBinding>> bindings;
 
    private:
     static Val col_val(int slot, TypeId t) {
@@ -1768,6 +1828,52 @@ class Compiler {
         }
     }
 
+    // A call of a registered UDF over its operands, which bind sees as types
+    // and, for a literal, as constants. The program holds the binding, which
+    // keeps the plugin library loaded while it runs.
+    Val compile_udf(const ExprNode* n) {
+        dstd::Vector<Val> vals;
+        dstd::Vector<DataType> types;
+        dstd::Vector<dftu_scalar> scalars(n->args.size());
+        dstd::Vector<const dftu_scalar*> consts(n->args.size(), nullptr);
+        for (std::size_t i = 0; i < n->args.size(); ++i) {
+            const ExprNode& arg = *n->args[i];
+            Val v = compile(&arg);
+            if (is_unknown(v)) return unknown_val();
+            if (arg.kind == ExprKind::LitI64 || arg.kind == ExprKind::LitF64 ||
+                arg.kind == ExprKind::LitStr || arg.kind == ExprKind::LitBool) {
+                scalars[i] = arg.scalar;
+                if (arg.kind == ExprKind::LitStr) {
+                    scalars[i].kind = DFTU_SCALAR_TAG_STR;
+                    scalars[i].value.s = arg.text.data();
+                    scalars[i].len =
+                        static_cast<std::uint32_t>(arg.text.size());
+                } else if (arg.kind == ExprKind::LitBool) {
+                    scalars[i].kind = DFTU_SCALAR_TAG_I64;
+                    scalars[i].value.i = arg.i;
+                }
+                consts[i] = &scalars[i];
+            }
+            v = column(v);
+            types.push_back(v.full);
+            vals.push_back(std::move(v));
+        }
+        auto bound = bind_udf(
+            n->udf, dstd::Span<const DataType>(types.data(), types.size()),
+            dstd::Span<const dftu_scalar* const>(consts.data(), consts.size()));
+        if (!bound) return fail(dstd::String(bound.error().message()));
+        bindings.push_back(
+            dstd::make_shared<const UdfBinding>(std::move(*bound)));
+        SlotOp op;
+        op.opcode = OpUdf;
+        op.udf = bindings.back().get();
+        for (const Val& v : vals) op.udf_args.push_back(v.slot);
+        const TypeId type = bindings.back()->result_type().id;
+        const int slot = static_cast<int>(program.size());
+        program.push_back(std::move(op));
+        return col_val(slot, type);
+    }
+
     // A column of `t` holding `s` in every row, for a scalar arm of a select.
     Val broadcast(dftu_scalar s, TypeId t) {
         return {false,
@@ -1946,10 +2052,14 @@ Series load_slice(const Series& in, std::int64_t offset, std::int64_t len) {
 struct EvalError {
     std::mutex mutex;
     dstd::String message;
+    dstd::Condition condition = dstd::Condition::InvalidArgument;
 
-    void set(dstd::String text) {
+    void set(dstd::String text,
+             dstd::Condition why = dstd::Condition::InvalidArgument) {
         std::lock_guard<std::mutex> lock(mutex);
-        if (message.empty()) message = std::move(text);
+        if (!message.empty()) return;
+        message = std::move(text);
+        condition = why;
     }
 };
 
@@ -3405,6 +3515,23 @@ dstd::Vector<Series> eval_chunk(const dstd::Vector<SlotOp>& prog,
             return s[static_cast<std::size_t>(op.b)];
         };
         switch (op.opcode) {
+            case OpUdf: {
+                dstd::Vector<const Series*> columns;
+                for (const int slot : op.udf_args)
+                    columns.push_back(&s[static_cast<std::size_t>(slot)]);
+                auto ran = op.udf->run(dstd::Span<const Series* const>(
+                                           columns.data(), columns.size()),
+                                       len);
+                if (!ran)
+                    error.set(
+                        dstd::String(ran.error().message()),
+                        ran.error().condition() == dstd::Condition::Cancelled
+                            ? dstd::Condition::Cancelled
+                            : dstd::Condition::InvalidArgument);
+                else
+                    s[k] = std::move(*ran);
+                break;
+            }
             case OpLoad:
                 s[k] = load_slice(inputs[static_cast<std::size_t>(op.param)],
                                   offset, len);
@@ -3706,13 +3833,14 @@ dstd::Result<void> require_evaluated(const dstd::Vector<Series>& outs,
                                      EvalError& error) {
     if (outs.empty()) {
         dstd::String message;
+        dstd::Condition condition;
         {
             std::lock_guard<std::mutex> lock(error.mutex);
             message.swap(error.message);
+            condition = error.condition;
         }
         if (!message.empty())
-            return common::make_error(common::ErrorCode::InvalidArgument,
-                                      message);
+            return dstd::Unexpected(dstd::Error(condition, message));
         return common::make_error(
             common::ErrorCode::InvalidArgument,
             "expr: an operation does not take its input column type");
@@ -3817,7 +3945,9 @@ dstd::Result<dstd::Vector<Series>> eval_many(
     dstd::Vector<dstd::Vector<Series>> parts(static_cast<std::size_t>(windows));
     // One task per window: without a parallel backend parallel_for runs the
     // whole range as one call, which must still fill every window.
+    const coro::CancelView cancel = udf_cancel();
     parallel_for(windows, 1, [&](std::int64_t b, std::int64_t e) {
+        const UdfCancelScope cancel_scope(cancel);
         for (std::int64_t k = b; k < e; ++k) {
             const std::int64_t lo = bounds[static_cast<std::size_t>(k)];
             const std::int64_t hi = bounds[static_cast<std::size_t>(k) + 1];
@@ -3890,8 +4020,6 @@ namespace {
 dftu_expr* wrap(dataframe::Expr e) { return new dftu_expr{{}, std::move(e)}; }
 const dataframe::Expr& unwrap(const dftu_expr* e) { return e->e; }
 }  // namespace
-
-extern "C" {
 
 dftu_expr* dftu_expr_col(int32_t index) {
     return wrap(dataframe::expr_col(index));
@@ -4253,5 +4381,4 @@ int32_t dftu_expr_eval_many(const dftu_expr* const* roots, int32_t n_roots,
     for (dataframe::Series& c : owned)
         c.release();  // borrowed inputs, do not free
     return written;
-}
 }

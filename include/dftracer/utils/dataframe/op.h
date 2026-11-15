@@ -2,9 +2,10 @@
 #ifndef DFTRACER_UTILS_DATAFRAME_OP_H
 #define DFTRACER_UTILS_DATAFRAME_OP_H
 
-#include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/scalar.h>
 #include <dftracer/utils/dataframe/types.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
@@ -118,36 +119,53 @@ class OpSig {
     dftu_op_sig sig_ = 0;
 };
 
-/// Non-owning view over a registered op. Valid for the registry's lifetime
-/// (built-ins are permanent; a user op stays registered for the process).
+/// A registered op. A built-in has static storage. A user op is an immutable
+/// shared record that this handle keeps alive, with whatever keep-alive its
+/// registrant gave to @ref register_op, so a plan or expression that holds an
+/// OpDesc stays valid after @ref dftu_op_unregister. Take one when the plan is
+/// built and read through @ref get per call: copying an OpDesc of a user op is
+/// one atomic increment, so it must not happen per row or per batch.
 class OpDesc {
    public:
     OpDesc() noexcept = default;
-    OpDesc(const dftu_op_desc* desc) noexcept : desc_(desc) {}
+    explicit OpDesc(const dftu_op_desc* desc,
+                    dstd::SharedPtr<const void> owner = nullptr) noexcept
+        : desc_(desc), owner_(std::move(owner)) {}
 
     dstd::StringView name() const noexcept { return desc_->name; }
     OpSig sig() const noexcept { return OpSig(desc_->sig); }
     dftu_op_generic_fn fn() const noexcept { return desc_->fn; }
 
+    /// The registry record, or null for an empty handle. Valid while this
+    /// handle lives.
+    const dftu_op_desc* get() const noexcept { return desc_; }
+    const dftu_op_desc& operator*() const noexcept { return *desc_; }
+    const dftu_op_desc* operator->() const noexcept { return desc_; }
+
     explicit operator bool() const noexcept { return desc_ != nullptr; }
 
    private:
     const dftu_op_desc* desc_ = nullptr;
+    dstd::SharedPtr<const void> owner_;
 };
 
 /// Looks up a registered op by name (built-in or user). Empty if none.
-inline dstd::Optional<OpDesc> find_op(const char* name) noexcept {
-    const dftu_op_desc* d = dftu_op_find(name);
-    if (d == nullptr) return dstd::nullopt;
-    return OpDesc(d);
-}
+dstd::Optional<OpDesc> find_op(const char* name) noexcept;
+
+/// Registers a user op like dftu_op_register, which copies the record and the
+/// name. `keep_alive`, if any, is held by the record, and so by every
+/// @ref OpDesc of it, until the last one is gone: give it whatever the op's
+/// function needs to stay callable, such as a loaded library. Returns false if
+/// `desc` or its name is null or the name is taken.
+bool register_op(const dftu_op_desc& desc,
+                 dstd::SharedPtr<const void> keep_alive = nullptr) noexcept;
 
 /// Number of registered ops (built-ins + user), for discovery/listing.
 inline std::uint32_t op_count() noexcept { return dftu_op_count(); }
 
 /// The op at index `i` in [0, op_count()); an empty @ref OpDesc if out of
 /// range.
-inline OpDesc op_at(std::uint32_t i) noexcept { return OpDesc(dftu_op_at(i)); }
+OpDesc op_at(std::uint32_t i) noexcept;
 
 /// Builder for a dftu_op_arg. Slots are indexed by operand-TOKEN position (a
 /// series op's column operands ride the runner's separate `in[]` array, so

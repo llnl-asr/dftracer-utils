@@ -26,10 +26,11 @@ constexpr dstd::StringView RESERVED[] = {"and",    "or",    "not",     "in",
                                          "escape", "null",  "true",    "false"};
 
 constexpr dstd::StringView STAGES[] = {
-    "where",    "derive", "parse",      "select",    "drop",   "rename",
-    "distinct", "group",  "agg",        "window",    "pivot",  "unpivot",
-    "sort",     "take",   "skip",       "sample",    "expand", "lookup",
-    "union",    "call",   "time_range", "call_tree", "bucket", "session"};
+    "where",      "derive",    "parse",  "select",  "drop",
+    "rename",     "distinct",  "group",  "agg",     "window",
+    "pivot",      "unpivot",   "sort",   "take",    "skip",
+    "sample",     "expand",    "lookup", "union",   "call",
+    "time_range", "call_tree", "bucket", "session", "sink"};
 
 bool reserved(dstd::StringView word) {
     for (auto r : RESERVED)
@@ -304,7 +305,9 @@ class Parser {
     }
     Span span_from(const Token& first) const {
         const Token& last = toks_[pos_ == 0 ? 0 : pos_ - 1];
-        const std::size_t end = last.offset + last.text.size();
+        const std::size_t end =
+            last.offset + last.text.size() +
+            (last.kind == Tok::String || last.kind == Tok::Qname ? 2 : 0);
         return {static_cast<std::uint32_t>(first.offset),
                 static_cast<std::uint32_t>(
                     end > first.offset ? end - first.offset : 0)};
@@ -462,7 +465,12 @@ class Parser {
                                 cur().text));
             auto s = stage();
             if (!s) return dstd::Unexpected(s.error());
+            const bool ends = std::holds_alternative<Sink>(s->node);
             p->stages.push_back(std::move(*s));
+            if (ends && at(Tok::Pipe))
+                return fail(cur(),
+                            "A stage cannot follow 'sink': 'sink' ends a "
+                            "pipeline");
         }
         return p;
     }
@@ -1027,6 +1035,24 @@ class Parser {
                 ss.as = std::move(*n);
             }
             s.node = std::move(ss);
+        } else if (kw == "sink") {
+            if (!at(Tok::String))
+                return fail(cur(), "Expected a quoted sink name after 'sink'");
+            auto sink_name = string_value(advance());
+            if (!sink_name) return dstd::Unexpected(sink_name.error());
+            Sink k;
+            k.name = std::move(*sink_name);
+            while (at(Tok::Name)) {
+                dstd::String key(advance().text);
+                if (!at(Tok::String))
+                    return fail(cur(),
+                                dstd::fmt<"Expected a quoted value after the "
+                                          "sink option '{}'">(key));
+                auto value = string_value(advance());
+                if (!value) return dstd::Unexpected(value.error());
+                k.options.emplace_back(std::move(key), std::move(*value));
+            }
+            s.node = std::move(k);
         } else {
             return fail(first, dstd::fmt<"Unknown stage '{}'">(first.text));
         }

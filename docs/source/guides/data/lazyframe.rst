@@ -332,12 +332,13 @@ The cursor may also take part in two things the plan does while it runs:
    How much the cursor holds beyond one morsel, and a request to free some
    of it. After every morsel the driver sums the resident bytes of the
    plan's stages against the budget and asks the largest holders first.
-   Built-in stages bound themselves and report 0; this is for a source or a
-   plugin node that holds a table or a cache.
+   Built-in stages bound themselves and report 0; this is for a source that
+   holds a table or a cache. A plugin cursor reserves its bytes through the
+   host its ``scan`` or ``open`` receives instead (:doc:`../runtime/memory-budget`).
 
-In C, the same contract is ``dftu_source_vt`` / ``dftu_cursor_vt``,
-registered by name (``dftu_provider_register``, or ``DFTU_SVC_PROVIDERS``
-from a plugin) and opened with ``dftu_lazyframe_from_provider``. A source
+In C, the same contract is ``dftu_source_vt`` / ``dftu_cursor_vt``
+(``plugins/abi/providers.h``), registered by name from a plugin
+(``DFTU_SVC_PROVIDERS``) and opened with ``dftu_lazyframe_from_provider``. A source
 declares its column types through ``schema_types`` with the ``dftu_schema``
 builders, nested types included; one that declares nothing reports
 ``Unknown``.
@@ -449,13 +450,13 @@ A plugin's own step
 -------------------
 
 ``LazyFrame::op(name, args)`` (``dftu_lazyframe_op`` in C) appends a plan
-node a plugin registered with ``dftu_node_register``: a cursor that takes
+node a plugin registered through ``DFTU_SVC_NODES``: a cursor that takes
 the input cursor and returns its own, so a streaming operator (one morsel
 in, one out, state kept between them) or a breaker (drain, then emit one
 frame) sits in the plan like a built-in step. The node declares its output
 schema from its input's; the optimizer types the plan around it and never
 pushes a step through it. ``explain`` prints it as ``op <name>``.
-:doc:`../../plugins` section 14 has the registration side.
+:doc:`../../plugins` section 13 has the registration side.
 
 Joining and stacking plans
 --------------------------

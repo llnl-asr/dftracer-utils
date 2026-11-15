@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/error.h>
-#include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/agg_expr.h>
+#include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/span.h>
@@ -265,8 +265,8 @@ TEST_CASE("typed set_union merges with a serialized partial") {
     DataFrame direct = dataframe::agg_finalize(*full, "k");
     REQUIRE(merged.num_rows() == direct.num_rows());
     for (std::int64_t r = 0; r < merged.num_rows(); ++r) {
-        merged.names[1] = "u";
-        direct.names[1] = "u";
+        merged.names[1] = dstd::SharedString{"u"};
+        direct.names[1] = dstd::SharedString{"u"};
         auto m = list_cell<std::int64_t>(merged, r);
         auto d = list_cell<std::int64_t>(direct, r);
         CHECK(m == d);

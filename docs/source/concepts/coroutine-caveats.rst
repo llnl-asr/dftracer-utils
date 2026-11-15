@@ -231,8 +231,8 @@ Two rules keep a child coroutine from outliving the frame that it points into:
 
 #. **A scope is joined.** A ``coro::Scope`` that spawned and is destroyed
    without ``co_await scope.join()`` calls ``std::terminate``.
-   ``coro::with_scope`` joins also when its body raises, so use it in code that
-   can raise between a spawn and the join.
+   ``coro::with_scope`` joins also when its body ends with an error, so use it in
+   code that can fail between a spawn and the join.
    A scope that lives across many calls (such as the gzip line writer's) is a member of its owner, and the owner joins it before it closes.
 #. **``when_any`` waits for its losers.** It cancels the losers and awaits them
    before it returns, so no loser outlives the parent. The cancel token is

@@ -23,6 +23,7 @@ from typing import (
     List,
     Literal,
     Mapping,
+    NamedTuple,
     Optional,
     Sequence,
     Tuple,
@@ -32,6 +33,7 @@ from typing import (
 
 from .columnar import Expr, _as_expr, _Col, _emit_ast, col
 from .dataframe import DataFrame, JoinHow, WindowSpec, _names, _norm_window_spec
+from .runtime import TaskHandle
 from .series import Series, _unwrap, _wrap
 
 if TYPE_CHECKING:
@@ -42,6 +44,14 @@ if TYPE_CHECKING:
     from .runtime import Runtime
 
 Value = Union[int, float]
+
+
+class SinkSummary(NamedTuple):
+    """What a :meth:`LazyFrame.sink` run wrote: ``rows`` rows in ``batches``
+    batches."""
+
+    rows: int
+    batches: int
 
 
 class LazyFrame:
@@ -571,7 +581,7 @@ class LazyFrame:
         time_col: str,
         every: int,
         period: Union[int, None] = None,
-        aggs: Union[List[str], None] = None,
+        aggs: "Optional[Sequence[Union[str, Agg, Tuple[str, str, List[str]]]]]" = None,
         origin: int = 0,
         origin_min: bool = False,
     ) -> "LazyFrame":
@@ -579,7 +589,7 @@ class LazyFrame:
         time column. ``period`` defaults to ``every`` (tumbling)."""
         return self._new(
             self._native.group_by_dynamic(
-                time_col, every, period, list(aggs or []), origin, origin_min
+                time_col, every, period, dynamic_aggs(self, aggs), origin, origin_min
             )
         )
 
@@ -610,16 +620,56 @@ class LazyFrame:
         auto, and runs a resident source whole-column, as the eager path."""
         return self._finish(_wrap(self._native.collect(batch_size, self._runtime)))
 
+    def collect_async(self, batch_size: int = 0) -> TaskHandle[DataFrame]:
+        """Start :meth:`collect` on the native pool and return at once.
+
+        The native plan is copied into the task, so later changes to the sources
+        do not reach it. ``get()`` returns the :class:`DataFrame` ``collect`` would,
+        or raises its error, and releases the GIL while it waits.
+        """
+        native = self._native.collect_async(batch_size, self._runtime)
+        return TaskHandle(
+            native=native,
+            name=native.name,
+            task_id=native.task_id,
+            finish=lambda out: self._finish(_wrap(out)),
+        )
+
     def _finish(self, out: DataFrame) -> DataFrame:
         if self._index is not None and all(name in out for name in self._index):
             out._index = self._index
         return out
+
+    def sink(
+        self,
+        name: str,
+        **options: str,
+    ) -> SinkSummary:
+        """Write the pipeline's rows to the sink a plugin registered as ``name``
+        and return the totals.
+
+        Every option is a string, e.g. ``lf.sink("csv.write", path="out.csv")``; a
+        value that is not a ``str`` raises ``TypeError``. The plan runs on the
+        whole pipeline, so this call does the work of :meth:`collect` with no
+        frame kept in memory. An unknown name raises with the registered names.
+        """
+        for key, value in options.items():
+            if not isinstance(value, str):
+                raise TypeError(f"sink option {key!r} must be a str, not {type(value).__name__}")
+        rows, batches = self._native.sink(name, dict(options), 0, self._runtime)
+        return SinkSummary(rows=int(rows), batches=int(batches))
 
     def stream(self, batch_size: int = 0) -> "Iterator[DataFrame]":
         """Run the pipeline and yield its rows as :class:`DataFrame` chunks of
         about ``batch_size`` rows (``0`` is auto), holding a bounded amount in
         memory. Each chunk carries its own schema. Starts on the first pull."""
         return (_wrap(chunk) for chunk in self._native.stream(batch_size, self._runtime))
+
+    def __arrow_c_stream__(self, requested_schema: Optional[object] = None) -> object:
+        """Stream the query through the Arrow C Stream Interface: one batch per
+        ``get_next``, run on the native pool, so ``pa.RecordBatchReader.from_stream``
+        and ``pl.from_arrow`` read it without a full collect."""
+        return self._native.__arrow_c_stream__(requested_schema, self._runtime)
 
     def __getitem__(self, key: object) -> "Union[BoundColumn, LazyFrame]":
         """Lazy indexing: a name gives a column expression bound to this plan
@@ -653,13 +703,32 @@ class LazyFrame:
         return "<LazyFrame>\n" + plan
 
 
+def dynamic_aggs(
+    frame: object, aggs: "Optional[Sequence[Union[str, Agg, Tuple[str, str, List[str]]]]]"
+) -> "List[Union[str, Tuple[str, str, List[str]]]]":
+    """The ``aggs`` of ``group_by_dynamic``: spec strings and UDAF spec tuples
+    stay as they are and an ``Agg`` becomes its spec."""
+    from .columnar import Agg
+
+    out: "List[Union[str, Tuple[str, str, List[str]]]]" = []
+    for item in aggs or []:
+        if isinstance(item, Agg):
+            out.extend(agg_spec_strings(frame, [], [item], {}))
+        elif isinstance(item, (str, tuple)):
+            out.append(item)
+        else:
+            raise TypeError(f"aggs takes str or Agg items, got {type(item).__name__}")
+    return out
+
+
 def agg_spec_strings(
     frame: object, keys: Sequence[str], specs: Sequence[object], named: Mapping[str, object]
-) -> List[str]:
+) -> "List[Union[str, Tuple[str, str, List[str]]]]":
     """The ``op:column:out`` spec strings the streaming group-by and
     ``group_by_dynamic`` take, from ``Agg`` objects, spec strings and the
-    pandas ``agg`` forms (a name, a list, a dict, ``out=("column", name)``)."""
-    from .columnar import Agg, _agg_specs_from_pandas_forms, _Col
+    pandas ``agg`` forms (a name, a list, a dict, ``out=("column", name)``). A
+    UDAF ``Agg`` becomes the tuple ``(udaf_name, out, [column, ...])``."""
+    from .columnar import Agg, _agg_specs_from_pandas_forms, _Col, _UdafAgg
 
     flat: "List[object]" = []
     for spec in specs:
@@ -671,13 +740,23 @@ def agg_spec_strings(
         flat.extend(_agg_specs_from_pandas_forms(frame, list(keys), None, dict(named)))
     if not flat:
         raise TypeError("agg() needs at least one aggregate")
-    strings: List[str] = []
+    strings: "List[Union[str, Tuple[str, str, List[str]]]]" = []
     for spec in flat:
         if isinstance(spec, str):
             strings.append(spec)
             continue
         if not isinstance(spec, Agg):
             raise TypeError(f"agg() takes Agg or str specs, got {type(spec).__name__}")
+        if isinstance(spec, _UdafAgg):
+            if not all(isinstance(a, _Col) for a in spec.args):
+                raise ValueError(
+                    f"lazy group_by: the udaf {spec.name!r} takes bare columns; the "
+                    "streaming group-by aggregates columns by name"
+                )
+            strings.append(
+                (spec.name, spec.out, [a.name for a in spec.args if isinstance(a, _Col)])
+            )
+            continue
         if spec.by is not None and not isinstance(spec.by, _Col):
             raise ValueError(
                 f"lazy group_by: aggregate {spec.out!r} has a computed second column; "
@@ -1195,6 +1274,20 @@ class LazyGroupBy:
 def lazy(frame: DataFrame) -> LazyFrame:
     """Free-function form of :meth:`DataFrame.lazy`."""
     return frame.lazy()
+
+
+def scan_file(path: str) -> LazyFrame:
+    """A plan over the file at ``path``, read by the plugin file format that
+    claims it (the one with the highest probe score for the file).
+
+    Nothing is read until :meth:`LazyFrame.collect`, which returns the error of
+    a file no registered format claims (``no format claims <path>``), of two
+    formats that tie, or of the winning format's own open failure. Use it to
+    read a format a plugin added without going through the trace index.
+    """
+    from . import dftracer_utils_ext as _ext
+
+    return LazyFrame(_ext.scan_file(path))
 
 
 _ALL_ROWS = (1 << 63) - 1

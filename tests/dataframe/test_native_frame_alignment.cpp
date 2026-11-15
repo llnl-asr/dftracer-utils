@@ -67,7 +67,7 @@ DataFrame frame_with_name_size(std::size_t length) {
     f.columns.push_back(Series::flat_i64(INT64S, 4));
     f.columns.push_back(Series::flat_f64(DOUBLES, 4));
     for (std::size_t c = 0; c < f.columns.size(); ++c)
-        f.names.push_back(name_of(length, c));
+        f.names.push_back(dstd::SharedString{name_of(length, c)});
     return f;
 }
 
@@ -122,7 +122,7 @@ TEST_SUITE("native frame alignment") {
             f.columns.push_back(Series::strings(TEXT));
             f.columns.push_back(large_strings(TEXT));
             for (std::size_t c = 0; c < f.columns.size(); ++c)
-                f.names.push_back(name_of(length, c));
+                f.names.push_back(dstd::SharedString{name_of(length, c)});
             const dstd::String bytes = dftu_utils_test::ok(frame_to_native(f));
             const auto back = frame_from_native(bytes);
             REQUIRE(back);

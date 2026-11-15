@@ -46,63 +46,69 @@ That is 100 events for ``pid`` 2 (every third event) and 200 for ``pid`` 1.
    /path/to/events_per_pid.cpp
 
 The generated file already compiles and links: a struct with a constructor
-taking ``const Config&``, a ``step(const dftu_dataframe*, Host)`` that counts
-events by ``pid`` into a host accumulator, an empty ``merge`` (the host owns
-and merges the accumulator for you), and the ``dftracer_plugin`` factory that
-``make_plugin`` fills in. The rest of this lesson
-rewrites its ``step`` with your own accumulator name and output column.
+taking ``const Config&``, a ``dstd::Result<void> step(dataframe::FrameView,
+Host)`` that counts events by ``pid`` into a host accumulator, an empty
+``merge`` (the host owns and merges the accumulator for you), and a
+``DFTU_PLUGIN`` body that registers the struct with ``p.fold<EventsPerPid>()``.
+An error a ``step`` returns becomes the call's status and message. The rest of
+this lesson rewrites its ``step`` with your own accumulator name and output
+column.
 
 3. Write the fold
 ---------------------
 
-Replace ``events_per_pid.cpp`` with:
+The scaffold already has the shape you want. Change its accumulator name to
+``hits`` and its aggregate to ``events``, so the output table reads one row per
+``pid`` with an ``events`` column, and ``events_per_pid.cpp`` holds:
 
 .. code-block:: cpp
 
    #include <dftracer/utils/plugins/plugin.h>
 
-   #include <cstdint>
-
+   using namespace dftracer::utils;
    using namespace dftracer::utils::plugins;
-   // Prefer a short alias if you would rather qualify the SDK names:
-   // namespace dp = dftracer::utils::plugins;
 
    struct EventsPerPid {
        explicit EventsPerPid(const Config&) {}
 
-       void step(const dftu_dataframe* df, Host h) {
-           h.agg("hits", {"pid"}, {agg::count("events")}).accumulate(df);
+       dstd::Result<void> step(dataframe::FrameView df, Host h) {
+           DFTRACER_UTILS_TRY(
+               Agg hits, h.agg("hits", {"pid"}, {agg::count("events")}));
+           return hits.accumulate(df);
        }
 
        void merge(EventsPerPid&) {}
        void finalize(Host) {}
    };
 
-   extern "C" dftu_plugin* dftracer_plugin(dftu_plugin_host* h,
-                                           const dftu_value* config) {
-       (void)h;
-       return make_plugin<EventsPerPid>(config);
-   }
+   DFTU_PLUGIN("events_per_pid", "1.0",
+               [](PluginBuilder& p, const Config& config) -> dstd::Result<void> {
+                   (void)config;
+                   p.fold<EventsPerPid>();
+                   return {};
+               })
 
-A ``step`` taking a ``const dftu_dataframe*`` reads straight off the columns:
-the host materializes each scanned batch into columns and hands the whole
-batch over at once, N rows in scan order being N events.
+A ``step`` taking a ``dataframe::FrameView`` sees the whole batch the host
+materialized from the scan, N rows in scan order being N events; the view is
+borrowed for the call and copies nothing.
 ``h.agg(name, keys, cols)`` get-or-creates the host-owned mergeable accumulator
 behind that name, grouping by the named key columns and computing one output
 column per ``AggCol``; the ``agg::`` namespace has a factory per aggregate
 (``count``, ``sum``, ``mean``, ``pct``, ``argmax``, ``busy``, ...), each taking
 exactly the arguments its op consumes. The accumulator is write-only. The host
 merges every worker's contributions and finalizes the result, so ``merge``
-stays empty exactly as in the scaffold. ``plugin.h`` is header-only; nothing
-links against it.
+stays empty exactly as in the scaffold. ``plugin.h`` is header-only: a plugin
+includes headers only, and the host process provides every function it calls.
 
 4. Compile it
 -----------------
 
 ``dftracer_plugin cflags`` prints the exact flags the CLI's own build step
-uses. They select C++20, position-independent code and a shared library. They
-add the include directories it resolved, the headers and the generated plugin
-ABI version. On macOS they add ``-undefined dynamic_lookup``, since a plugin
+uses. They select C++20, position-independent code and a shared library, and
+add the plugin include directory it resolved. When that directory carries no
+generated ``abi_version.h``, as in a source checkout, they add a second include
+directory holding one, stamped with the plugin ABI version the host checks.
+On macOS they add ``-undefined dynamic_lookup``, since a plugin
 ``.so`` is loaded into a host process rather than pre-linked against one:
 
 .. code-block:: console
@@ -143,8 +149,8 @@ What you learned
   against ``plugin.h``; ``dftracer_plugin cflags`` prints the exact compile
   flags, and ``dftracer_plugin build <src>`` runs them for you.
 - ``Host::agg`` and the ``agg::`` factories give a mergeable per-key
-  accumulator over the same ``dftu_dataframe`` ABI the raw scaffold uses, with
-  no ``DFTU_AGG_*`` codes to spell.
+  accumulator over the same frame the scan produces, with no ``DFTU_AGG_*``
+  codes to spell.
 - ``dftracer_run --plugin <so> <trace>`` (or ``-d <dir>``) runs the
   compiled plugin over one shared scan with no Python involved.
 

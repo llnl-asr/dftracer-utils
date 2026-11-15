@@ -5,7 +5,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dataframe/expr_ok.h>
 #include <dftracer/utils/common/config.h>
-#include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dataframe/types.h>

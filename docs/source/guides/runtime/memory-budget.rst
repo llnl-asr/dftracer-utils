@@ -109,23 +109,34 @@ Hold a plugin to the budget
 
 The same ceiling reaches a plugin's own state. A registered state
 (``dftu_svc_agg``) is spilled by the host through its ``serialize`` pair.
-A plugin's fold slice and a plan node it registers are measured and asked
-to shrink instead:
+A plugin's fold slice reserves its bytes through the memory service
+(``DFTU_SVC_MEMORY``, ``Host::memory()``) instead:
 
-- ``dftu_plugin::bytes(slice)`` reports the slice's size; after a step or a
-  merge that leaves it past the budget the host calls
-  ``dftu_plugin::reclaim(slice, want)``, which frees what it can (writes a
-  part out, compacts, drops a cache) and returns the bytes freed. On the
-  C++ facade a Slice with ``bytes() const`` and ``reclaim(std::uint64_t)``
-  gets both slots from ``make_plugin``.
-- ``dftu_cursor_vt::bytes`` and ``::reclaim`` do the same for a plan node's
-  cursor: after every morsel the driver sums the resident bytes of the
-  chain's stages against the plan's ``memory_budget`` and asks the largest
-  holders to reclaim until it fits.
+- ``reserve`` opens a reservation in the pool of the plugin, which is named
+  after it, so the reserved bytes show in the pool gauges. The slice calls
+  ``try_grow`` as its state grows and ``shrink`` or ``release`` as it
+  shrinks.
+- ``try_grow`` that would pass the scan's budget, or the budget of the
+  process, returns ``DFTU_E_NO_MEMORY`` with a message and leaves the
+  reservation as it was; the step or merge that returns it fails the scan.
+- A reclaimer set with ``set_reclaimer`` is called first, once, with the
+  number of bytes missing. It frees what it can (writes a part out, compacts,
+  drops a cache) and returns the bytes freed, and the grow then goes through
+  when that made room. The reclaimer runs on the thread that called
+  ``try_grow``, so it needs no lock of its own against the slice. It is also
+  called after a step or a merge when another holder of the process budget
+  asked for bytes and the plugin's pool was asked to give some back.
+- The scan's budget is one budget for all the reservations of a plugin
+  together.
 
-Both are advisory. A slice or node that declares no size is never asked; one
-that measures itself but frees nothing is logged once, and the run goes on
-over budget rather than stopping, since the result is not in question.
+A slice that reserves and sets no reclaimer is refused at the budget.
+
+A provider's cursor and a plan node's cursor reserve the same way. The host a
+provider's ``scan`` or a node's ``open`` receives serves the memory service,
+charges the reservations to the pool of the plugin, and runs a cursor's
+reclaimers between two of its ``next()`` calls when another holder of the
+process budget asked the pool for bytes. A reservation a cursor leaves when
+it is destroyed is released and logged.
 
 Check a footprint before you run
 --------------------------------

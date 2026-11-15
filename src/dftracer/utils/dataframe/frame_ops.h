@@ -2,7 +2,7 @@
 #ifndef DFTRACER_UTILS_DATAFRAME_FRAME_OPS_H
 #define DFTRACER_UTILS_DATAFRAME_FRAME_OPS_H
 
-#include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/types.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -77,26 +77,47 @@ struct WindowColumn {
                    ? named(1)
                    : nullptr;
     }
+    /// FrameUdaf: the registered name of the aggregate, then its argument
+    /// columns.
+    const dstd::String* udaf() const {
+        return func == WindowFunc::FrameUdaf ? named(0) : nullptr;
+    }
+    std::size_t udaf_arg_count() const {
+        return func == WindowFunc::FrameUdaf && !names_.empty()
+                   ? names_.size() - 1
+                   : 0;
+    }
+    const dstd::String& udaf_arg(std::size_t k) const { return names_[k + 1]; }
+    void set_udaf(dstd::String name, dstd::Vector<dstd::String> args) {
+        if (func != WindowFunc::FrameUdaf) return;
+        names_.clear();
+        names_.push_back(std::move(name));
+        for (auto& a : args) names_.push_back(std::move(a));
+    }
     void set_by(dstd::String name) {
         if (func == WindowFunc::FrameArgMax || func == WindowFunc::FrameArgMin)
-            names_[1] = std::move(name);
+            put(1, std::move(name));
     }
     void set_value(dstd::String name) {
-        if (func != WindowFunc::Sessionize) names_[0] = std::move(name);
+        if (func != WindowFunc::Sessionize) put(0, std::move(name));
     }
     void set_time(dstd::String name) {
-        if (func == WindowFunc::Rate) names_[1] = std::move(name);
-        if (func == WindowFunc::Sessionize) names_[0] = std::move(name);
+        if (func == WindowFunc::Rate) put(1, std::move(name));
+        if (func == WindowFunc::Sessionize) put(0, std::move(name));
     }
     void set_end(dstd::String name) {
-        if (func == WindowFunc::Sessionize) names_[1] = std::move(name);
+        if (func == WindowFunc::Sessionize) put(1, std::move(name));
     }
 
    private:
-    const dstd::String* named(int i) const {
-        return names_[i].empty() ? nullptr : &names_[i];
+    const dstd::String* named(std::size_t i) const {
+        return i < names_.size() && !names_[i].empty() ? &names_[i] : nullptr;
     }
-    dstd::String names_[2];
+    void put(std::size_t i, dstd::String name) {
+        if (names_.size() <= i) names_.resize(i + 1);
+        names_[i] = std::move(name);
+    }
+    dstd::Vector<dstd::String> names_;
 };
 
 /// Whether `f` is a Frame* function (reads WindowParams::frame).
@@ -107,7 +128,7 @@ constexpr bool is_frame_func(WindowFunc f) {
            f == WindowFunc::FrameStd || f == WindowFunc::FrameQuantile ||
            f == WindowFunc::FrameCountDistinct ||
            f == WindowFunc::FrameArgMax || f == WindowFunc::FrameArgMin ||
-           f == WindowFunc::FrameCollect;
+           f == WindowFunc::FrameCollect || f == WindowFunc::FrameUdaf;
 }
 
 /// Whether `f` reads WindowParams::offset.
@@ -118,6 +139,14 @@ constexpr bool is_offset_func(WindowFunc f) {
 
 /// The @ref WindowColumn a C ABI window spec names; its strings are copied.
 WindowColumn window_column(const dftu_window_spec& s);
+
+/// The C ABI entry of @ref window: checks the borrowed arrays and each spec
+/// (a count above 0 needs its array, every name is non-NULL) and reports a
+/// bad one as an InvalidArgument error before it runs the window.
+dstd::Result<DataFrame> window_checked(
+    const DataFrame& df, const char* const* partition_by, std::int32_t n_part,
+    const char* const* order_by, std::int32_t n_order,
+    const dftu_window_spec* specs, std::int32_t n_specs);
 
 /// SQL window functions over `df`, PARTITION BY `partition_by` and ORDER BY
 /// `order_by` (either may be empty). The output holds every input column,

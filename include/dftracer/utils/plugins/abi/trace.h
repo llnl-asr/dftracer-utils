@@ -14,21 +14,26 @@
 extern "C" {
 #endif
 
-#define DFTU_SVC_TRACE "dftu.svc.trace@1"
+#define DFTU_SVC_TRACE "dftu.svc.trace"
 
 typedef struct dftu_svc_trace {
+    uint32_t struct_size; /**< sizeof(dftu_svc_trace) */
     /** dftracer trace writer: open a gzip .pfw.gz, append events, then close.
        The index is built lazily on first read, not at close. */
-    dftu_trace_writer* (*trace_open_write)(void* h, const char* path);
+    dftu_status (*trace_open_write)(dftu_ctx* ctx, void* h, const char* path,
+                                    dftu_trace_writer** out);
     /** Append every row of `df` (a batch's columns, by name) as a trace event.
      */
-    int (*trace_write)(void* h, dftu_trace_writer* w, const dftu_dataframe* df);
-    int (*trace_close)(void* h, dftu_trace_writer* w);
+    dftu_status (*trace_write)(dftu_ctx* ctx, void* h, dftu_trace_writer* w,
+                               const dftu_dataframe* df);
+    dftu_status (*trace_close)(dftu_ctx* ctx, void* h, dftu_trace_writer* w);
     /** Scan a trace file (auto-indexed) and call on_batch once per scanned
        batch with a dftu_dataframe* (item), ids interned into the host scan
-       table; the frame is valid only for the call. 0 on success. */
-    int (*trace_read)(void* h, const char* path, dftu_stream_item_fn on_batch,
-                      void* ud);
+       table; the frame is valid only for the call. A status other than
+       DFTU_OK from on_batch (an error, or DFTU_END) stops the delivery of
+       batches and is returned. */
+    dftu_status (*trace_read)(dftu_ctx* ctx, void* h, const char* path,
+                              dftu_stream_item_fn on_batch, void* ud);
 } dftu_svc_trace;
 
 #ifdef __cplusplus

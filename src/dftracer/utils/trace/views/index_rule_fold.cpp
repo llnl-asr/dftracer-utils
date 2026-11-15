@@ -70,7 +70,7 @@ dstd::Result<void> IndexRuleFold::merge(Fold& other) {
     return {};
 }
 
-coro::CoroTask<bool> IndexRuleFold::finalize(const CoverageSet&) {
+coro::CoroTask<dstd::Result<bool>> IndexRuleFold::finalize(const CoverageSet&) {
     state_ = seed_rows(*rules_->plan, rules_->spec, rules_->query,
                        rules_->texts, rows_);
     rows_ = AggQueryResult::Rows();

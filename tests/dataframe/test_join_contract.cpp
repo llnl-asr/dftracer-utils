@@ -22,7 +22,7 @@ DataFrame keyed_frame() {
     const std::int64_t keys[] = {1, 2, 3};
     const std::int64_t values[] = {10, 20, 30};
     DataFrame df;
-    df.names = {"k", "v"};
+    df.names = dstd::make_shared_strings({"k", "v"});
     df.columns.push_back(Series::flat_i64(keys, 3));
     df.columns.push_back(Series::flat_i64(values, 3));
     return df;
@@ -69,7 +69,8 @@ TEST_SUITE("join contract") {
               doctest::skip()) {
         fresh_process::announce_abort();
         HashJoin join = make_join(JoinHow::Right);
-        (void)join.flush({"k", "v"}, dstd::Vector<Series>{});
+        (void)join.flush(dstd::Vector<dstd::String>{"k", "v"},
+                         dstd::Vector<Series>{});
     }
 
     TEST_CASE("left templates of the wrong count are fatal") {

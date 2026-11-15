@@ -388,7 +388,10 @@ coro::CoroTask<dstd::Result<ExportStats>> run_export_trace_indexed(
     // each file, and write the bloom as a second transaction.
     CoverageSet whole_file;
     for (const auto& part : parts) whole_file.add_file(part.path);
-    for (auto* f : folds) co_await f->finalize(whole_file);
+    for (auto* f : folds) {
+        auto finished = co_await f->finalize(whole_file);
+        if (!finished.has_value()) co_return finished.error();
+    }
 
     ExportStats st;
     st.chunks_skipped = skipped;

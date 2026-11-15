@@ -43,21 +43,19 @@
 //   slice_bench --case NAME    (one case in this process; prints RESULT)
 
 #include <bench_ok.h>
+#include <dftracer/utils/arrow/arrow.h>
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/error.h>
-#include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/function.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
-#include <dftracer/utils/dataframe/arrow.h>
-#include <dftracer/utils/dstd/optional.h>
-#include <dftracer/utils/dstd/string.h>
-#endif
 #include <sys/resource.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -68,9 +66,10 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <initializer_list>
 #include <numeric>
 #include <random>
-#include <stdexcept>
+#include <utility>
 
 using namespace dftracer::utils;
 
@@ -80,6 +79,14 @@ using Clock = std::chrono::steady_clock;
 using dataframe::DataFrame;
 using dataframe::Series;
 using dataframe::TypeId;
+
+/// Column names of a frame under construction.
+dstd::Vector<dstd::SharedString> names_of(
+    std::initializer_list<const char*> names) {
+    dstd::Vector<dstd::SharedString> out;
+    for (const char* name : names) out.push_back(dstd::SharedString{name});
+    return out;
+}
 
 constexpr std::size_t MIB = std::size_t{1} << 20;
 constexpr std::uint64_t SEED = 42;
@@ -139,7 +146,9 @@ constexpr Scale FULL_SCALE{.big_rows = 10000000,
                            .join_reps = 50};
 
 void check(bool ok, const char* what) {
-    if (!ok) throw std::runtime_error(what);
+    if (ok) return;
+    std::fprintf(stderr, "check failed: %s\n", what);
+    std::exit(1);
 }
 
 double elapsed_ns(Clock::time_point start, Clock::time_point end) {
@@ -281,7 +290,7 @@ double slice_nullable(const Scale& s, std::int64_t shift) {
 
 DataFrame wide_frame(std::int64_t rows, bool nullable) {
     DataFrame frame;
-    frame.names = {"i", "f", "s"};
+    frame.names = names_of({"i", "f", "s"});
     frame.columns.push_back(int_column(rows));
     dftracer::utils::dstd::Vector<double> f =
         random_f64(static_cast<std::size_t>(rows), SEED);
@@ -356,26 +365,27 @@ double concat_slices(const Scale& s) {
     return elapsed_ns(start, end) / static_cast<double>(s.concat_ops);
 }
 
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
 double arrow_round_trip(const Scale& s) {
     DataFrame frame = wide_frame(s.op_rows, true);
     std::int64_t rows = 0;
     auto start = Clock::now();
     for (std::size_t i = 0; i < s.arrow_ops; ++i) {
-        dataframe::OwnedArrow out = frame.to_arrow();
-        DataFrame back = DataFrame::from_arrow(out.schema(), out.array());
-        rows += back.num_rows() * static_cast<std::int64_t>(back.num_columns());
+        auto out = arrow::to_arrow(frame);
+        check(static_cast<bool>(out), "arrow export");
+        auto back = arrow::dataframe_from_arrow(std::move(*out));
+        check(static_cast<bool>(back), "arrow import");
+        rows +=
+            back->num_rows() * static_cast<std::int64_t>(back->num_columns());
     }
     auto end = Clock::now();
     check(rows == 3 * s.op_rows * static_cast<std::int64_t>(s.arrow_ops),
           "arrow round trip rows");
     return elapsed_ns(start, end) / static_cast<double>(s.arrow_ops);
 }
-#endif
 
 DataFrame key_frame(std::int64_t rows, std::int64_t groups) {
     DataFrame frame;
-    frame.names = {"k", "g", "v"};
+    frame.names = names_of({"k", "g", "v"});
     dftracer::utils::dstd::Vector<std::int64_t> k =
         random_i64(static_cast<std::size_t>(rows), 1 << 30, SEED);
     dftracer::utils::dstd::Vector<std::int64_t> g =
@@ -434,11 +444,11 @@ double join_inner(const Scale& s) {
     dftracer::utils::dstd::Vector<double> lv = random_f64(rows, SEED);
     dftracer::utils::dstd::Vector<double> rv = random_f64(rows, SEED + 1);
     DataFrame left;
-    left.names = {"k", "lv"};
+    left.names = names_of({"k", "lv"});
     left.columns.push_back(Series::flat_i64(left_keys.data(), s.op_rows));
     left.columns.push_back(Series::flat_f64(lv.data(), s.op_rows));
     DataFrame right;
-    right.names = {"k", "rv"};
+    right.names = names_of({"k", "rv"});
     right.columns.push_back(Series::flat_i64(right_keys.data(), s.op_rows));
     right.columns.push_back(Series::flat_f64(rv.data(), s.op_rows));
     return repeat_op(s.join_reps, [&] {
@@ -466,9 +476,7 @@ dftracer::utils::dstd::Vector<Case> make_cases() {
     cases.push_back({"head tail", head_tail});
     cases.push_back({"filter half", filter_half});
     cases.push_back({"concat 1000 slices", concat_slices});
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
     cases.push_back({"arrow round trip", arrow_round_trip});
-#endif
     cases.push_back({"sort_by", sort_by});
     cases.push_back({"group_by sum", group_by_sum});
     cases.push_back({"unique", unique_rows});
@@ -586,12 +594,7 @@ int drive(const dftracer::utils::dstd::String& self,
 int smoke() {
     int failures = 0;
     for (const Case& c : make_cases()) {
-        bool ok = false;
-        try {
-            ok = c.run(SMOKE_SCALE) > 0.0;
-        } catch (const std::exception& e) {
-            std::fprintf(stderr, "%s: %s\n", c.name.c_str(), e.what());
-        }
+        const bool ok = c.run(SMOKE_SCALE) > 0.0;
         std::printf("smoke %-26s %s\n", c.name.c_str(), ok ? "ok" : "FAILED");
         if (!ok) ++failures;
     }
@@ -601,12 +604,7 @@ int smoke() {
 int run_one(const dftracer::utils::dstd::String& name) {
     for (const Case& c : make_cases()) {
         if (c.name != name) continue;
-        try {
-            std::printf("RESULT %.3f\n", c.run(FULL_SCALE));
-        } catch (const std::exception& e) {
-            std::fprintf(stderr, "%s: %s\n", name.c_str(), e.what());
-            return 1;
-        }
+        std::printf("RESULT %.3f\n", c.run(FULL_SCALE));
         return 0;
     }
     std::fprintf(stderr, "unknown case: %s\n", name.c_str());

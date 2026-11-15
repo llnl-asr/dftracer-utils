@@ -271,6 +271,12 @@ Index storage and indexing
        in ``rollups/`` and ``views/`` inside ``.dftindex``). A size such as
        ``512M`` or ``4G``. When a store grows past the cap, the least
        recently used entries are removed.
+   * - ``DFTRACER_UTILS_VIZ_RESULT_STORE_BYTES``
+     - ``67108864`` (64 MiB)
+     - Most bytes of stored viz responses that ``dftracer_server`` keeps for
+       one trace folder in its index store. A plain number of bytes. A folder
+       that would pass it drops its stored responses and starts again. See
+       :doc:`guides/serving/viz-api`.
 
 Logging
 --------

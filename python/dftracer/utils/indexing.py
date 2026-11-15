@@ -807,7 +807,9 @@ class Resampler:
         self._time = time
         self._every = every
 
-    def _run(self, specs: List[str]) -> "Union[DataFrame, LazyFrame]":
+    def _run(
+        self, specs: "Sequence[Union[str, Tuple[str, str, List[str]]]]"
+    ) -> "Union[DataFrame, LazyFrame]":
         return self._frame.sort_by(self._time).group_by_dynamic(
             self._time, self._every, None, specs
         )

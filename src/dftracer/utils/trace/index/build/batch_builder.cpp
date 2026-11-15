@@ -84,7 +84,8 @@ struct ParsedBloomJob {
     dstd::UniquePtr<trace::index::extensions::BloomFold> bloom_fold;
     dstd::UniquePtr<trace::index::extensions::RowSetFold> rowset_fold;
     dstd::UniquePtr<trace::index::schemas::dft::agg::AggregationFold> agg_fold;
-    dstd::UniquePtr<trace::index::extensions::PluginBuilders> plugin_builders;
+    dstd::UniquePtr<trace::index::extensions::ExtensionBuilders>
+        plugin_builders;
     dstd::Optional<trace::index::schemas::dft::agg::AggFoldOutput> agg_output;
     const trace::index::RecordSchema* schema = nullptr;
 };
@@ -273,7 +274,7 @@ static coro::CoroTask<void> parse_and_write_worker(
                 dstd::Optional<trace::index::store::FileMetadataResult> stored;
                 if (known && !tier_only && !admission->force_rebuild &&
                     pf.file_size > known->stat().size &&
-                    trace::index::extensions::plugin_extensions().empty()) {
+                    trace::index::extensions::registered_extensions().empty()) {
                     auto meta =
                         trace::index::file_metadata(*writer->snapshot, *known);
                     if (!meta) {
@@ -395,12 +396,13 @@ static coro::CoroTask<void> parse_and_write_worker(
                         driver->share_buffers(admission->buffers);
                         driver->set_parse_gate(admission->files.gate());
                         if (build_bloom) {
-                            auto exts =
-                                trace::index::extensions::plugin_extensions();
+                            auto exts = trace::index::extensions::
+                                registered_extensions();
                             if (!exts.empty()) {
-                                job.plugin_builders = dstd::make_unique<
-                                    trace::index::extensions::PluginBuilders>(
-                                    std::move(exts));
+                                job.plugin_builders =
+                                    dstd::make_unique<trace::index::extensions::
+                                                          ExtensionBuilders>(
+                                        std::move(exts));
                                 driver->set_plugin_builders(
                                     job.plugin_builders.get());
                             }

@@ -299,7 +299,7 @@ TEST_CASE("AggState dyn: per-batch name discovery unions into each group") {
     REQUIRE(r.num_rows() == 2);
     const dstd::Vector<dstd::String> expect{
         "k", "n", "sum_x", "mean_x", "count_x", "sum_y", "mean_y", "count_y"};
-    REQUIRE(r.names == expect);
+    REQUIRE(dstd::to_strings(r.names) == expect);
     // Sum/Mean over a Float64 arg stay Float64; the present-count is Int64.
     CHECK(r.column("sum_x").type() == TypeId::Float64);
     CHECK(r.column("count_x").type() == TypeId::Int64);
@@ -554,7 +554,7 @@ dataframe::AggStatePtr dyn_full_state(const dstd::Vector<AggDynSpec>& specs,
 void check_same_columns(const DataFrame& a, const DataFrame& b) {
     REQUIRE(a.names == b.names);
     REQUIRE(a.num_rows() == b.num_rows());
-    for (const dstd::String& name : a.names) {
+    for (const dstd::SharedString& name : a.names) {
         const Series ca = a.column(name);
         const Series cb = b.column(name);
         REQUIRE(ca.type() == cb.type());

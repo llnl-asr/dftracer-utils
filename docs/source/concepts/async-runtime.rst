@@ -56,10 +56,10 @@ This is what makes concurrency structured rather than fire-and-forget:
 - ``scope.spawn(...)`` starts a child coroutine that the scope joins.
   ``scope.spawn_future(...)`` returns a ``SpawnFuture<T>``, which you can
   ``co_await`` to join that specific child.
-- ``co_await scope.join()`` waits for every child and raises the first error of a
-  ``spawn`` child.
+- ``co_await scope.join()`` waits for every child and ends the awaiting task with
+  the first error of a ``spawn`` child.
   A scope that spawned and is destroyed without a join ends the process.
-  ``with_scope`` joins also when its body raises.
+  ``with_scope`` joins also when its body ends with an error.
 - ``dftracer::utils::runtime::io::read``/``write``/``open``/``close``
   are the async I/O surface: free functions that submit to the executor's io
   backend and suspend, rather than blocking. They need no ``Scope``

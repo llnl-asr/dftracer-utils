@@ -422,7 +422,7 @@ bool plain_shape(const AggState& st, const dstd::Vector<const Series*>& keys,
                  dstd::Vector<PlainKey>& k, dstd::Vector<Plain8>& v) {
     if (st.has_fl || st.has_arg || st.has_bitor || st.has_prod || st.has_msk ||
         st.has_kmv || st.has_lst || st.has_ss || st.has_co || st.has_set ||
-        st.has_occ || st.has_dyn)
+        st.has_occ || st.has_dyn || st.has_udaf)
         return false;
     k.resize(keys.size());
     for (std::size_t j = 0; j < keys.size(); ++j)
@@ -1327,6 +1327,10 @@ dstd::Result<void> agg_accumulate(AggState& st,
         }
         st.inited = true;
     }
+    if (st.has_udaf) {
+        dstd::Result<void> prepared = st.udaf_prepare(values);
+        if (!prepared) return prepared;
+    }
     // A zero-key state (the whole batch is one group) has no key column to read
     // the row count from, so fall back to a value column; a caller with neither
     // must pass `end` explicitly.
@@ -1660,6 +1664,16 @@ dstd::Result<void> agg_accumulate(AggState& st,
             }
         }
     }
+    if (st.has_udaf && clen > 0) {
+        // The UDAFs take the batch at once, with the group of each row. Every
+        // group exists by now, so this only looks them up.
+        dstd::Vector<std::int64_t> udaf_gids(static_cast<std::size_t>(clen));
+        for (std::int64_t i = begin; i < end; ++i)
+            udaf_gids[static_cast<std::size_t>(i - begin)] =
+                st.group_of(keys, i);
+        dstd::Result<void> fed = st.udaf_update(udaf_gids, values, begin, end);
+        if (!fed) return fed;
+    }
     if (t_has_nested_text) {
         t_has_nested_text = false;
         return common::make_error<
@@ -1715,9 +1729,13 @@ void agg_merge(AggState& into, const AggState& other,
     if (into.has_dyn)
         into.dyn_light_open_for_merge(other,
                                       other.has_dyn ? &dyn_map : nullptr);
-    for (const std::int64_t j : order)
-        into.merge_group(into.group_of_other(other, j), other, j,
-                         other.has_dyn ? &dyn_map : nullptr);
+    dstd::Vector<std::int64_t> udaf_into;
+    for (const std::int64_t j : order) {
+        const std::int64_t g = into.group_of_other(other, j);
+        into.merge_group(g, other, j, other.has_dyn ? &dyn_map : nullptr);
+        if (into.has_udaf) udaf_into.push_back(g);
+    }
+    if (into.has_udaf) into.udaf_combine(other, udaf_into, order);
 }
 
 bool agg_pack_shape(AggState& st, const dstd::Vector<const Series*>& keys,
@@ -1927,14 +1945,23 @@ AggStatePtr agg_merge_many(dstd::Vector<AggStatePtr>& partials) {
         }
     });
     for (std::size_t p = 0; p < others.size(); ++p) {
-        const dstd::Vector<std::int64_t>& m = map[p];
+        dstd::Vector<std::int64_t>& m = map[p];
         for (std::size_t j = 0; j < m.size(); ++j)
-            if (m[j] < 0)
-                base->merge_group(base->group_of_other(
-                                      *others[p], static_cast<std::int64_t>(j)),
-                                  *others[p], static_cast<std::int64_t>(j),
+            if (m[j] < 0) {
+                m[j] = base->group_of_other(*others[p],
+                                            static_cast<std::int64_t>(j));
+                base->merge_group(m[j], *others[p],
+                                  static_cast<std::int64_t>(j),
                                   others[p]->has_dyn ? &dyn_map[p] : nullptr);
+            }
     }
+    // The UDAF tables merge one after another: each is used by one thread.
+    if (base->has_udaf)
+        for (std::size_t p = 0; p < others.size(); ++p) {
+            dstd::Vector<std::int64_t> from(map[p].size());
+            std::iota(from.begin(), from.end(), std::int64_t{0});
+            base->udaf_combine(*others[p], map[p], from);
+        }
     return base;
 }
 
@@ -1974,6 +2001,7 @@ AggStatePtr agg_regroup(const AggState& src_in,
     dst->inited = true;
 
     const std::int64_t ng = src.ngroups();
+    dstd::Vector<std::int64_t> udaf_into;
     for (std::int64_t j = 0; j < ng; ++j) {
         const std::int64_t g = dst->find_or_add_group(
             [&](std::size_t k) -> std::int64_t {
@@ -1993,6 +2021,12 @@ AggStatePtr agg_regroup(const AggState& src_in,
                                     [static_cast<std::size_t>(j)] != 0;
             });
         dst->merge_group(g, src, j);
+        if (dst->has_udaf) udaf_into.push_back(g);
+    }
+    if (dst->has_udaf) {
+        dstd::Vector<std::int64_t> from(udaf_into.size());
+        std::iota(from.begin(), from.end(), std::int64_t{0});
+        dst->udaf_combine(src, udaf_into, from);
     }
     return dst;
 }

@@ -104,9 +104,9 @@ TEST_SUITE("struct concat by name") {
         Series b = st({"a"}, one(Series::strings({"x"})));
         Series out = dftu_utils_test::ok(concat_columns({&a, &b}));
         DataFrame fa, fb;
-        fa.names = {"a"};
+        fa.names = dstd::make_shared_strings({"a"});
         fa.columns.push_back(i64s({1}));
-        fb.names = {"a"};
+        fb.names = dstd::make_shared_strings({"a"});
         fb.columns.push_back(Series::strings({"x"}));
         DataFrame diag =
             dftu_utils_test::ok(concat({&fa, &fb}, ConcatHow::Diagonal));
@@ -127,7 +127,8 @@ TEST_SUITE("struct concat by name") {
     }
 
     TEST_CASE("a zero-field part keeps its rows as nulls") {
-        Series a = dftracer::utils::dataframe::struct_of_length({}, {}, 3);
+        Series a = dftracer::utils::dataframe::struct_of_length(
+            dstd::Vector<dstd::String>{}, {}, 3);
         Series b = st({"a"}, one(i64s({5, 6})));
         Series out = dftu_utils_test::ok(concat_columns({&a, &b}));
         REQUIRE(out.num_children() == 1);

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/task.h>
-#include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/internal/cell_ops.h>
 #include <dftracer/utils/dataframe/internal/governor.h>
@@ -95,7 +95,7 @@ class Hooked : public Source {
 
     DataFrame whole() const {
         DataFrame f;
-        f.names = {"k", "v", "p"};
+        f.names = dstd::make_shared_strings({"k", "v", "p"});
         dstd::Vector<std::int64_t> k, v, p;
         for (std::int64_t i = 0; i < morsels_ * rows_; ++i) {
             k.push_back(key_of(i));
@@ -465,7 +465,7 @@ TEST_CASE(
 TEST_CASE("a request posted to a join's build side turns it to grace") {
     Budget budget(BUDGET);
     DataFrame left;
-    left.names = {"k", "w"};
+    left.names = dstd::make_shared_strings({"k", "w"});
     dstd::Vector<std::int64_t> k, w;
     for (std::int64_t i = 0; i < KEYS / 5; ++i) {
         k.push_back(i * 5);

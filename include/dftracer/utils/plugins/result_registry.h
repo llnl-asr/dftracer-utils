@@ -2,7 +2,7 @@
 #ifndef DFTRACER_UTILS_PLUGINS_RESULT_REGISTRY_H
 #define DFTRACER_UTILS_PLUGINS_RESULT_REGISTRY_H
 
-#include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/op.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/span.h>
@@ -10,7 +10,7 @@
 #include <dftracer/utils/dstd/variant.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi/ops.h>
-#include <dftracer/utils/plugins/owned_arrow.h>
+#include <dftracer/utils/plugins/plugin/frame.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -19,43 +19,8 @@
 #include <mutex>
 
 // Host-side named result channel backing dft.ext.result. Policy-free: it moves
-// opaque bytes or a user-schema Arrow array and never interprets either.
+// opaque bytes, a frame or a lazy plan and never interprets any of them.
 namespace dftracer::utils::plugins {
-
-/// A native columnar result carried across the ABI as a dftu_dataframe handle
-/// (the dataframe engine's own boundary type), freed via the dataframe C ABI.
-/// Lets an engine-backed result (the aggregation accumulator) cross as our own
-/// @ref dftracer::utils::dataframe::DataFrame "DataFrame" with no Arrow
-/// round-trip.
-struct OwnedDataFrame {
-    dftu_dataframe* handle = nullptr;
-    OwnedDataFrame() = default;
-    explicit OwnedDataFrame(dftu_dataframe* h) noexcept : handle(h) {}
-    OwnedDataFrame(OwnedDataFrame&& o) noexcept : handle(o.handle) {
-        o.handle = nullptr;
-    }
-    OwnedDataFrame& operator=(OwnedDataFrame&& o) noexcept {
-        if (this != &o) {
-            if (handle) dftu_dataframe_free(handle);
-            handle = o.handle;
-            o.handle = nullptr;
-        }
-        return *this;
-    }
-    OwnedDataFrame(const OwnedDataFrame&) = delete;
-    OwnedDataFrame& operator=(const OwnedDataFrame&) = delete;
-    ~OwnedDataFrame() {
-        if (handle) dftu_dataframe_free(handle);
-    }
-
-    /// Releases ownership to the caller, who must free it (or hand it to
-    /// something that will); the destructor no longer will.
-    dftu_dataframe* release() noexcept {
-        dftu_dataframe* h = handle;
-        handle = nullptr;
-        return h;
-    }
-};
 
 /// A deferred columnar result carried across the ABI as a dftu_lazyframe
 /// handle, freed via the dataframe C ABI. Lets a plugin return a lazy plan the
@@ -74,46 +39,48 @@ struct OwnedDataFrame {
 /// dftracer::utils::dataframe::LazyFrame "LazyFrame"'s own methods are const. A
 /// method that fails for any reason (no ops extension wired up, an unregistered
 /// name, or a kind/arity/shape/argument rejection) returns an EMPTY
-/// OwnedLazyFrame (`!out.handle`); every method short-circuits on an
-/// already-empty OwnedLazyFrame, so a failure partway through a chain
-/// propagates to the end without corrupting or leaking anything, and the
-/// caller checks `handle` once at the end of the chain rather than after
-/// every step.
+/// OwnedLazyFrame (`!out`); every method short-circuits on an already-empty
+/// OwnedLazyFrame, so a failure partway through a chain propagates to the end
+/// without corrupting or leaking anything, and the caller checks the result
+/// once at the end of the chain rather than after every step.
 struct OwnedLazyFrame {
     OwnedLazyFrame() = default;
-    explicit OwnedLazyFrame(dftu_lazyframe* h) noexcept : handle(h) {}
+    explicit OwnedLazyFrame(dftu_lazyframe* h) noexcept : handle_(h) {}
     OwnedLazyFrame(dftu_lazyframe* h, const dftu_svc_ops* ops,
                    void* host) noexcept
-        : handle(h), ops_(ops), host_(host) {}
+        : handle_(h), ops_(ops), host_(host) {}
     OwnedLazyFrame(OwnedLazyFrame&& o) noexcept
-        : handle(o.handle), ops_(o.ops_), host_(o.host_) {
-        o.handle = nullptr;
+        : handle_(o.handle_), ops_(o.ops_), host_(o.host_) {
+        o.handle_ = nullptr;
     }
     OwnedLazyFrame& operator=(OwnedLazyFrame&& o) noexcept {
         if (this != &o) {
-            if (handle) dftu_lazyframe_free(handle);
-            handle = o.handle;
+            if (handle_) dftu_lazyframe_free(handle_);
+            handle_ = o.handle_;
             ops_ = o.ops_;
             host_ = o.host_;
-            o.handle = nullptr;
+            o.handle_ = nullptr;
         }
         return *this;
     }
     OwnedLazyFrame(const OwnedLazyFrame&) = delete;
     OwnedLazyFrame& operator=(const OwnedLazyFrame&) = delete;
     ~OwnedLazyFrame() {
-        if (handle) dftu_lazyframe_free(handle);
+        if (handle_) dftu_lazyframe_free(handle_);
     }
+
+    /// The plan, or null when there is none. It stays owned by this object.
+    dftu_lazyframe* get() const noexcept { return handle_; }
+    explicit operator bool() const noexcept { return handle_ != nullptr; }
+    bool is_null() const noexcept { return handle_ == nullptr; }
 
     /// Releases ownership to the caller, who must free it (or hand it to
     /// something that will); the destructor no longer will.
     dftu_lazyframe* release() noexcept {
-        dftu_lazyframe* h = handle;
-        handle = nullptr;
+        dftu_lazyframe* h = handle_;
+        handle_ = nullptr;
         return h;
     }
-
-    dftu_lazyframe* handle = nullptr;
 
     OwnedLazyFrame auto_spill() const {
         return apply("dftu.lazy.auto_spill", nullptr);
@@ -282,7 +249,7 @@ struct OwnedLazyFrame {
         if (left_on.size() != right_on.size()) return OwnedLazyFrame{};
         dstd::Vector<const char*> l(left_on);
         dstd::Vector<const char*> r(right_on);
-        const dftu_lazyframe* in[2] = {handle, other.handle};
+        const dftu_lazyframe* in[2] = {handle_, other.handle_};
         return apply(
             "dftu.lazy.join", in, 2,
             dataframe::OpArgs()
@@ -326,28 +293,38 @@ struct OwnedLazyFrame {
     // `auto a = lf.head(1); auto b = lf.tail(1);` silently hand back an empty
     // `b`, with no error and nothing to see at the call site.
     OwnedLazyFrame apply(const char* name, const dftu_op_arg* args) const {
-        const dftu_lazyframe* src = handle;
+        const dftu_lazyframe* src = handle_;
         return apply(name, &src, 1, args);
     }
     /// The multi-input form: `in[0]` is this handle, the rest are borrowed
     /// operand plans; empty if any of them is empty.
     OwnedLazyFrame apply(const char* name, const dftu_lazyframe* const* in,
                          std::uint32_t n, const dftu_op_arg* args) const {
-        if (!handle) return OwnedLazyFrame{};
+        if (!handle_) return OwnedLazyFrame{};
         for (std::uint32_t i = 0; i < n; ++i)
             if (!in[i]) return OwnedLazyFrame{};
         if (!ops_ || !ops_->run_lazy) return OwnedLazyFrame{};
-        dftu_result_lazyframe res = ops_->run_lazy(host_, name, in, n, args);
-        if (!DFTU_RESULT_OK(res)) return OwnedLazyFrame{};
-        return OwnedLazyFrame{DFTU_RESULT_VALUE(res), ops_, host_};
+        // A plugin-side context: the reason a rejected call reports is dropped
+        // and an empty plan is the answer, as before.
+        static const dftu_ctx_vt VT = {
+            sizeof(dftu_ctx_vt),
+            [](dftu_ctx*, dftu_status code, const char*,
+               std::uint32_t) -> dftu_status { return code; },
+            [](dftu_ctx*) -> dftu_status { return DFTU_OK; }};
+        dftu_ctx ctx{sizeof(dftu_ctx), 0, &VT, nullptr};
+        dftu_lazyframe* made = nullptr;
+        if (ops_->run_lazy(&ctx, host_, name, in, n, args, &made) < 0 || !made)
+            return OwnedLazyFrame{};
+        return OwnedLazyFrame{made, ops_, host_};
     }
 
+    dftu_lazyframe* handle_ = nullptr;
     const dftu_svc_ops* ops_ = nullptr;
     void* host_ = nullptr;
 };
 
-using NamedResult = dstd::Variant<dstd::Vector<std::byte>, OwnedArrow,
-                                  OwnedDataFrame, OwnedLazyFrame>;
+using NamedResult =
+    dstd::Variant<dstd::Vector<std::byte>, OwnedDataFrame, OwnedLazyFrame>;
 
 class NamedResultRegistry {
    public:
@@ -369,19 +346,6 @@ class NamedResultRegistry {
             std::memcpy(bytes.data(), data, static_cast<std::size_t>(len));
         std::lock_guard<std::mutex> lock(mutex_);
         results_[name] = std::move(bytes);
-    }
-
-    /// Steals *a and *s (zeroing them). -1 on a null argument.
-    int emit_arrow(const char* name, ArrowArray* a, ArrowSchema* s) {
-        if (!name || !a || !s) return -1;
-        OwnedArrow owned;
-        owned.array = *a;
-        owned.schema = *s;
-        *a = ArrowArray{};
-        *s = ArrowSchema{};
-        std::lock_guard<std::mutex> lock(mutex_);
-        results_[name] = std::move(owned);
-        return 0;
     }
 
     /// Take ownership of a native dftu_dataframe result. A null handle is a

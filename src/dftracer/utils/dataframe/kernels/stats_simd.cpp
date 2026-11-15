@@ -4,7 +4,7 @@
 // accumulate then a horizontal ReduceSum, like the reduce_simd sum). The
 // windowed / sequential / search stats stay scalar in stats.cpp.
 
-#include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/column_read.h>
 #include <dftracer/utils/dataframe/internal/scalar.h>
@@ -168,7 +168,9 @@ bool between_numeric(TypeId t) {
 
 }  // namespace
 
-extern "C" {
+}  // namespace dftracer::utils::dataframe
+
+using namespace dftracer::utils::dataframe;
 
 dftu_series* dftu_series_is_between(const dftu_series* v, dftu_scalar lo,
                                     dftu_scalar hi) {
@@ -280,7 +282,4 @@ dftu_scalar dftu_series_dot(const dftu_series* v, const dftu_series* other) {
     return out;
 }
 
-}  // extern "C"
-
-}  // namespace dftracer::utils::dataframe
 #endif  // HWY_ONCE

@@ -588,3 +588,15 @@ def test_source_refuses_a_row_set_that_reads_a_file():
         Source().rowset("x", rowset("runs"))
     with pytest.raises(ValueError):
         Source().rowset("x", source("a.pfw"))
+
+
+def test_sink_is_the_last_stage_and_takes_string_options():
+    p = source("t.pfw.gz").where(c("dur") > 1).sink("toy_sink.out", path="out.csv")
+    assert p.raw() == ('from "t.pfw.gz" | where (dur > 1) | sink "toy_sink.out" path "out.csv"')
+    # The sink is the last stage: nothing can follow it.
+    assert p.raw().endswith('sink "toy_sink.out" path "out.csv"')
+    with pytest.raises(TypeError) as failed:
+        source("t.pfw.gz").sink("csv", path=1)
+    assert "path" in str(failed.value)
+    with pytest.raises(TypeError):
+        source("t.pfw.gz").sink(1)

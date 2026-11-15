@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <coro/failing.h>
 #include <dftracer/utils/common/platform_compat.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/map.h>
@@ -13,7 +14,6 @@
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
-#include <stdexcept>
 #include <thread>
 
 using namespace dftracer::utils;
@@ -26,15 +26,19 @@ static CoroTask<int> add_async(int a, int b) { co_return a + b; }
 static CoroTask<void> noop_async() { co_return; }
 
 static CoroTask<int> throw_async() {
-    throw std::runtime_error("test error");
-    co_return 0;
+    co_return co_await coro_test::failing_task<int>("test error");
 }
 
 static CoroTask<dstd::String> string_async() { co_return "hello"; }
 
 static CoroTask<void> throw_void_async() {
-    throw std::runtime_error("schedule error");
-    co_return;
+    co_await coro_test::failing_task("schedule error");
+}
+
+template <typename R>
+void check_failed(const R& result, const char* message) {
+    REQUIRE_FALSE(result.has_value());
+    CHECK(dstd::String(result.error().message()) == message);
 }
 
 }  // namespace
@@ -112,11 +116,9 @@ TEST_CASE("Runtime - submit void completes") {
     CHECK_NOTHROW(dftu_utils_test::ok(rt.submit(noop_async(), "noop").wait()));
 }
 
-TEST_CASE("Runtime - submit propagates exception") {
+TEST_CASE("Runtime - submit propagates error") {
     Runtime rt(2);
-    CHECK_THROWS_AS(
-        dftu_utils_test::ok(rt.submit(throw_async(), "throw").get()),
-        std::runtime_error);
+    check_failed(rt.submit(throw_async(), "throw").get(), "test error");
 }
 
 TEST_CASE("Runtime - submit string result") {
@@ -249,7 +251,7 @@ TEST_CASE("Runtime - progress workers present") {
     Runtime rt(2);
     auto p = rt.progress();
     CHECK(p.workers.size() == 2);
-    for (const auto &w : p.workers) {
+    for (const auto& w : p.workers) {
         CHECK(w.local_queue_depth == 0);
     }
 }
@@ -297,14 +299,11 @@ TEST_CASE("Runtime - progress keeps only the task history limit") {
     CHECK(p.tasks_completed == 3);
 }
 
-TEST_CASE("Runtime - a task that raises counts as failed") {
+TEST_CASE("Runtime - a task that fails counts as failed") {
     Runtime rt(ExecutorConfig{.thread_count = 2, .task_history = 0}, false);
-    CHECK_THROWS_AS(
-        dftu_utils_test::ok(rt.submit(throw_async(), "throw").get()),
-        std::runtime_error);
-    CHECK_THROWS_AS(
-        dftu_utils_test::ok(rt.submit(throw_void_async(), "throw_void").wait()),
-        std::runtime_error);
+    check_failed(rt.submit(throw_async(), "throw").get(), "test error");
+    check_failed(rt.submit(throw_void_async(), "throw_void").wait(),
+                 "schedule error");
     auto p = rt.progress();
     CHECK(p.tasks_failed == 2);
     CHECK(p.tasks_completed == 0);
@@ -312,9 +311,7 @@ TEST_CASE("Runtime - a task that raises counts as failed") {
 
 TEST_CASE("Runtime - a failed task keeps its message in the history") {
     Runtime rt(ExecutorConfig{.thread_count = 2, .task_history = 2}, false);
-    CHECK_THROWS_AS(
-        dftu_utils_test::ok(rt.submit(throw_async(), "throw").get()),
-        std::runtime_error);
+    check_failed(rt.submit(throw_async(), "throw").get(), "test error");
     auto p = rt.progress();
     REQUIRE(p.root_tasks.size() == 1);
     CHECK(p.root_tasks[0].state == TaskState::Failed);
@@ -331,7 +328,7 @@ TEST_CASE("Runtime - progress multiple tasks have names") {
     auto p = rt.progress();
     REQUIRE(p.root_tasks.size() == 3);
     dstd::Set<dstd::String> names;
-    for (const auto &t : p.root_tasks) {
+    for (const auto& t : p.root_tasks) {
         names.insert(t.name);
         CHECK(t.state == TaskState::Completed);
     }
@@ -391,10 +388,10 @@ TEST_CASE("TypedTaskHandle - get() returns correct value") {
     CHECK(dftu_utils_test::ok(h.get()) == 30);
 }
 
-TEST_CASE("TypedTaskHandle - get() propagates exception") {
+TEST_CASE("TypedTaskHandle - get() propagates error") {
     Runtime rt(2);
     auto h = rt.submit(throw_async(), "typed-throw");
-    CHECK_THROWS_AS(dftu_utils_test::ok(h.get()), std::runtime_error);
+    check_failed(h.get(), "test error");
 }
 
 TEST_CASE("TypedTaskHandle - done() and name work") {
@@ -453,16 +450,16 @@ TEST_CASE("Runtime - auto-generated names are unique") {
     rt.wait_all();
 }
 
-TEST_CASE("TaskHandle - void exception via wait") {
+TEST_CASE("TaskHandle - void error via wait") {
     Runtime rt(2);
     auto h = rt.submit(throw_void_async(), "void-throw");
-    CHECK_THROWS_AS(dftu_utils_test::ok(h.wait()), std::runtime_error);
+    check_failed(h.wait(), "schedule error");
     CHECK(h.done());
 }
 
-TEST_CASE("TaskHandle - void exception via get") {
+TEST_CASE("TaskHandle - void error via get") {
     Runtime rt(2);
     auto h = rt.submit(throw_void_async(), "void-get-throw");
-    CHECK_THROWS_AS(dftu_utils_test::ok(h.get()), std::runtime_error);
+    check_failed(h.get(), "schedule error");
     CHECK(h.done());
 }

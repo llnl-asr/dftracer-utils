@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
-#include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/internal/dataframe_handle.h>
+#include <dftracer/utils/dataframe/op.h>
 
 #include <cstdint>
 #include <cstring>
@@ -96,12 +97,16 @@ bool fill_args(const dftu_op_desc* op, const dftu_series* column2,
 
 }  // namespace
 
-extern "C" dftu_dataframe* dftu_dataframe_column_op(
-    const dftu_dataframe* df, const char* column, const char* op_name,
-    const char* column2, dftu_scalar a, dftu_scalar b, const char* text) {
+dftu_dataframe* dftu_dataframe_column_op(const dftu_dataframe* df,
+                                         const char* column,
+                                         const char* op_name,
+                                         const char* column2, dftu_scalar a,
+                                         dftu_scalar b, const char* text) {
     if (!df || !column || !op_name) return nullptr;
-    const dftu_op_desc* op = dftu_op_find(op_name);
-    if (!op || dftu_op_kind_of(op->sig) != DFTU_OP_KIND_SERIES ||
+    auto found = dftracer::utils::dataframe::find_op(op_name);
+    if (!found) return nullptr;
+    const dftu_op_desc* op = found->get();
+    if (dftu_op_kind_of(op->sig) != DFTU_OP_KIND_SERIES ||
         DFTU_OP_SIG_ARG(op->sig, 0) != DFTU_TOK_SERIES)
         return nullptr;
     const DataFrame& frame =

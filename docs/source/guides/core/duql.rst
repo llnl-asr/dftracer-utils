@@ -94,7 +94,7 @@ Start from a field, compare it, and combine.
 
       .. code-block:: c
 
-         #include <dftracer/utils/duql/abi.h>
+         #include <dftracer/utils/duql/c_api.h>
 
          dftu_duql* a = dftu_duql_cmp_str("cat", DFTU_DUQL_CMP_EQ, "POSIX");
          dftu_duql* b = dftu_duql_cmp_i64("dur", DFTU_DUQL_CMP_GT, 1000);

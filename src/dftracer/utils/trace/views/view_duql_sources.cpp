@@ -4,6 +4,7 @@
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/internal/dataframe_handle.h>
+#include <dftracer/utils/dataframe/udf_registry.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/trace/views/view_duql_internal.h>
 
@@ -28,8 +29,9 @@ dstd::Vector<std::uint32_t> frame_ids(
         });
     dstd::Vector<std::uint32_t> ids;
     for (std::size_t i = 0; i < f.names.size(); ++i)
-        ids.push_back(intern.get_or_insert(
-            !by_name && i < declared.size() ? declared[i] : f.names[i]));
+        ids.push_back(intern.get_or_insert(!by_name && i < declared.size()
+                                               ? dstd::StringView{declared[i]}
+                                               : f.names[i].view()));
     return ids;
 }
 
@@ -127,6 +129,14 @@ class FinishSource final : public dataframe::Source {
     dstd::SharedPtr<Finish> finish_;
 };
 
+// `map` over `f`, with a UDF in it polling the cancel of the task that reads.
+dstd::Result<dataframe::DataFrame> map_batch(const FrameFn& map,
+                                             dataframe::DataFrame f,
+                                             coro::CancelView cancel) {
+    const dataframe::UdfCancelScope scope(cancel);
+    return map(std::move(f));
+}
+
 // Rows of `inner`, each batch passed through `map` as it streams.
 class MapSource final : public dataframe::Source {
    public:
@@ -166,6 +176,8 @@ class MapSource final : public dataframe::Source {
 
         coro::CoroTask<dataframe::MorselResult> next(
             std::int64_t max_rows) override {
+            const coro::CancelView cancel =
+                co_await coro::this_coro::cancel_view;
             for (;;) {
                 if (rows_) {
                     auto next_task = rows_->next(max_rows);
@@ -180,8 +192,13 @@ class MapSource final : public dataframe::Source {
                 auto batch = co_await batches_.next();
                 if (!batch) co_return dataframe::MorselResult(dstd::nullopt);
                 if (!*batch) co_return batch->error();
-                auto mapped = (*map_)(std::move(**batch));
-                if (!mapped) co_return mapped.error();
+                auto mapped = map_batch(*map_, std::move(**batch), cancel);
+                if (!mapped) {
+                    if (mapped.error().condition() ==
+                        dstd::Condition::Cancelled)
+                        co_await coro::stop_here();
+                    co_return mapped.error();
+                }
                 dataframe::DataFrame f = std::move(*mapped);
                 if (!projection_.empty()) {
                     auto selected = f.select(projection_);

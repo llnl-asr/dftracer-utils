@@ -200,6 +200,33 @@ Requests are cancellable and cacheable the same way as any other route; see
 :doc:`http-server` for the ``X-Request-Id`` / ``/api/cancel`` flow and the
 access token.
 
+Where the viz caches live
+-------------------------
+
+The server keeps two caches in the index store of each trace folder, the same
+store that ``--index-dir`` points at, so a restart serves them without a scan:
+
+- the whole-trace summary, in the store namespace ``server.viz_summary``;
+- each computed response, in the store namespace ``server.viz_result``, keyed
+  by the request and a fingerprint of the folder's trace files.
+
+Both sit in one scope per trace folder. Several folders under one
+``--index-dir`` keep separate scopes, so a change in one folder never drops
+another folder's caches.
+
+When a trace file in the folder changes, or a file is added or removed, the
+server finds the folder stale at startup and drops that folder's scope: the
+summary and every stored response are computed again on the next request.
+
+A response is held in memory first and written to the store after the request
+returns, so no request waits for the store. The store copy becomes readable by
+a later run when the server shuts down and flushes the store. A response that
+leaves the in-memory cache during a run is computed again in that run.
+
+``DFTRACER_UTILS_VIZ_RESULT_STORE_BYTES`` bounds the stored responses of one
+folder (64 MiB by default). A folder that would pass it drops its stored
+responses and starts again.
+
 See also
 --------
 

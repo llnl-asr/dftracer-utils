@@ -288,7 +288,7 @@ sorted_row_keys(
 
 inline dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>
 sorted_row_keys(const dftracer::utils::dataframe::DataFrame& b) {
-    auto cols = b.names;
+    auto cols = dftracer::utils::dstd::to_strings(b.names);
     std::sort(cols.begin(), cols.end());
     return sorted_row_keys(b, cols);
 }

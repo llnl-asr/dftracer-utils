@@ -3,7 +3,7 @@
 #define DFTRACER_UTILS_DATAFRAME_EXPR_H
 
 #include <dftracer/utils/common/export.h>
-#include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/result.h>
@@ -229,6 +229,17 @@ Expr expr_neg(const Expr& a);
 /// (2^53 + 1 is not equal to 2^53.0). @ref eval and @ref infer_type fail for
 /// two domains that do not compare.
 Expr expr_cmp_expr(CmpOp cmp, const Expr& a, const Expr& b);
+
+/// A call of the plugin UDF registered under `name` (see
+/// dftu_svc_ops::register_udf) over the operands `args`. Fails with NotFound
+/// when no UDF has that name. The expression holds the UDF, so the plugin
+/// that registered it stays loaded while the expression lives. Argument counts
+/// and types are checked when the expression compiles: @ref eval and
+/// @ref infer_type fail with the UDF's own message for operands it refuses. A
+/// row with a null operand is null in the result unless the UDF reads nulls
+/// itself.
+dstd::Result<Expr> expr_udf(dstd::StringView name,
+                            const dstd::Vector<Expr>& args);
 
 /// The first operand that is not null in each row; operands are promoted to
 /// one type as arithmetic promotes them (numeric) or must share it. `args`

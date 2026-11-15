@@ -3,7 +3,6 @@
 #define DFTRACER_UTILS_CORO_STREAM_H
 
 #include <dftracer/utils/common/error.h>
-#include <dftracer/utils/common/exception_helpers.h>
 #include <dftracer/utils/coro/adaptor.h>
 #include <dftracer/utils/coro/async_generator.h>
 #include <dftracer/utils/coro/async_semaphore.h>
@@ -24,7 +23,6 @@
 #include <atomic>
 #include <chrono>
 #include <cstddef>
-#include <exception>
 #include <functional>
 #include <type_traits>
 #include <utility>
@@ -36,7 +34,7 @@ namespace detail {
 template <typename T>
 struct StreamMessage {
     dstd::Optional<T> value;
-    std::exception_ptr error;
+    dstd::Optional<dstd::Error> error;
     /// The source stopped, which stops the reader.
     bool stopped{false};
 };
@@ -105,14 +103,14 @@ Coro pump_stream(dstd::SharedPtr<Shared> shared,
         StreamMessage<T> message;
         if (settled.stopped) {
             message.stopped = true;
-        } else if (settled.exception) {
-            message.error = std::move(settled.exception);
+        } else if (settled.error) {
+            message.error = std::move(settled.error);
         } else if (*settled.value) {
             message.value.emplace(std::move(**settled.value));
         } else {
             break;
         }
-        const bool last = message.error != nullptr || message.stopped;
+        const bool last = message.error.has_value() || message.stopped;
         const bool sent = co_await shared->channel.send(std::move(message));
         if (last || !sent) break;
     }
@@ -127,7 +125,10 @@ AsyncGenerator<T> read_stream(dstd::SharedPtr<StreamShared<T>> shared) {
             closer.drained = true;
             co_return;
         }
-        if (message->error) common::rethrow_and_clear(message->error);
+        if (message->error) {
+            auto failure = fail_with(std::move(*message->error));
+            co_await failure;
+        }
         if (message->stopped) co_await stop_here();
         co_yield std::move(*message->value);
     }
@@ -168,8 +169,8 @@ Coro pump_outer(dstd::SharedPtr<MergeMapShared<U, F>> shared,
             message.stopped = true;
             break;
         }
-        if (next.exception) {
-            message.error = std::move(next.exception);
+        if (next.error) {
+            message.error = std::move(next.error);
             break;
         }
         if (!*next.value) co_return;
@@ -180,10 +181,10 @@ Coro pump_outer(dstd::SharedPtr<MergeMapShared<U, F>> shared,
         }
         auto made = co_await settle(
             call_as_task<Inner>(shared->fn, std::move(**next.value)));
-        if (made.stopped || made.exception) {
+        if (made.stopped || made.error) {
             shared->slots.release(1);
             message.stopped = made.stopped;
-            message.error = std::move(made.exception);
+            message.error = std::move(made.error);
             break;
         }
         start_stream_pump(
@@ -232,8 +233,8 @@ Coro pump_ordered(
             message.stopped = true;
             break;
         }
-        if (next.exception) {
-            message.error = std::move(next.exception);
+        if (next.error) {
+            message.error = std::move(next.error);
             break;
         }
         if (!*next.value) co_return;
@@ -273,7 +274,10 @@ AsyncGenerator<U> read_ordered(dstd::SharedPtr<OrderedShared<U, F>> shared,
             closer.drained = true;
             co_return;
         }
-        if (message->error) common::rethrow_and_clear(message->error);
+        if (message->error) {
+            auto failure = fail_with(std::move(*message->error));
+            co_await failure;
+        }
         if (message->stopped) co_await stop_here();
         window[message->value->first % limit].emplace(
             std::move(message->value->second));
@@ -479,7 +483,7 @@ CoroTask<Acc> fold(AsyncGenerator<T> source, Acc init, F fn) {
 /**
  * @brief Reads every source at once and yields items as they come.
  *
- * Items of one source keep their order. The first error is raised from the next
+ * Items of one source keep their order. The first error ends the next
  * read. Dropping the generator ends the sources in the background at their
  * current wait, so a source must own what it uses.
  */
@@ -565,7 +569,7 @@ AsyncGenerator<U> flat_map_merge(AsyncGenerator<T> source, F fn,
  * to @p limit items at once, and yields the results as they finish.
  *
  * `fn` runs at the same time on separate items. It lives until the jobs end.
- * The first error is raised from the next read. Jobs run in the background and
+ * The first error ends the next read. Jobs run in the background and
  * must own what they use. A limit of 0 is misuse and ends the process.
  */
 template <typename T, typename F,

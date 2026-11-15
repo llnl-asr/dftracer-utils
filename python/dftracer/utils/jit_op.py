@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: MIT
-"""Author a compose op (``dftu_op``) in Python and JIT-compile it to a native
+"""Author a job (``dftu_job``) in Python and JIT-compile it to a native
 plugin.
 
-``@op`` turns a typed value transform into a compose leaf; ``|`` pipes them,
-mirroring the C++ typed ``Op<In,Out>`` over the ``dftu_svc_compose`` ABI. Calling
-an op JIT-compiles it and drives the ``dftu_op`` graph on a standalone compose
+``@op`` turns a typed value transform into a job leaf; ``|`` pipes them,
+mirroring the C++ typed ``Job<In,Out>`` over the ``dftu_svc_task`` ABI. Calling
+an op JIT-compiles it and drives the ``dftu_job`` graph on a standalone task
 host (no plugin, no scan); the same op referenced from a ``@jit.each_event``
 body is inlined into the plugin as a static C function instead.
 
@@ -386,12 +386,14 @@ def _emit(op_obj: Op) -> str:
         for j in range(len(literals)):
             expr = expr.replace(f"__LIT{j}__", f"leaf_{i}_lit_{j}")
         lines += [
-            f"static dftu_task* leaf_{i}(void* s, const void* in, void* out, int* rc) {{",
+            f"static dftu_status leaf_{i}(dftu_ctx* ctx, void* s, const void* in, void* out,",
+            "                              dftu_task** pending) {",
+            "    (void)ctx;",
             "    (void)s;",
+            "    (void)pending;",
             f"    {ict} x = *(const {ict}*)in;",
             f"    *({oct_}*)out = ({oct_})({expr});",
-            "    if (rc) *rc = 0;",
-            "    return NULL;",
+            "    return DFTU_OK;",
             "}",
             "",
         ]
@@ -399,10 +401,12 @@ def _emit(op_obj: Op) -> str:
         "#ifdef __cplusplus",
         'extern "C"',
         "#endif",
-        "dftu_op* dftracer_build_op(const dftu_plugin_host* host) {",
-        "    const dftu_svc_compose* c = (const dftu_svc_compose*)"
-        "host->get_service(host->h, DFTU_SVC_COMPOSE);",
-        "    if (!c) return 0;",
+        "dftu_status dftracer_build_op(dftu_ctx* ctx, const dftu_plugin_host* host,",
+        "                              dftu_job** out) {",
+        "    const dftu_svc_task* t = (const dftu_svc_task*)"
+        "host->get_service(host->h, DFTU_SVC_TASK);",
+        '    if (!t) return dftu_fail(ctx, DFTU_E_UNSUPPORTED, "the host has no task service");',
+        "    dftu_status st;",
     ]
     # A string literal interns to a stable id for this host's whole lifetime
     # (the graph runs once), so resolving it once here - rather than lazily
@@ -414,14 +418,22 @@ def _emit(op_obj: Op) -> str:
                 f"    leaf_{i}_lit_{j} = host->intern(host->h, {_c_str_literal(lit)}, {len(b)});"
             )
     for i, st in enumerate(op_obj.stages):
-        lines.append(
-            f"    dftu_op* op_{i} = c->make_op(host->h, leaf_{i}, 0, 0, "
-            f"{st['in']}, {_SIZE[st['in']]}, {st['out']}, {_SIZE[st['out']]});"
-        )
-    lines.append("    dftu_op* g = op_0;")
+        lines += [
+            f"    dftu_job* op_{i} = NULL;",
+            f"    dftu_job_desc desc_{i} = {{sizeof(dftu_job_desc), DFTU_JOB_INLINE, leaf_{i},",
+            f"                               NULL, NULL, {st['in']}, {_SIZE[st['in']]},",
+            f"                               {st['out']}, {_SIZE[st['out']]}}};",
+            f"    st = t->job(ctx, host->h, &desc_{i}, &op_{i});",
+            "    if (st < 0) return st;",
+        ]
+    lines.append("    dftu_job* g_0 = op_0;")
     for i in range(1, len(op_obj.stages)):
-        lines.append(f"    g = c->then(host->h, g, op_{i});")
-    lines += ["    return g;", "}", ""]
+        lines += [
+            f"    dftu_job* g_{i} = NULL;",
+            f"    st = t->then(ctx, host->h, g_{i - 1}, op_{i}, &g_{i});",
+            "    if (st < 0) return st;",
+        ]
+    lines += [f"    *out = g_{len(op_obj.stages) - 1};", "    return DFTU_OK;", "}", ""]
     return "\n".join(lines)
 
 

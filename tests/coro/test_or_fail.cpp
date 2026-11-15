@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <coro/failing.h>
 #include <dftracer/utils/coro/hooks.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/coro/yield.h>
@@ -10,7 +11,6 @@
 
 #include <atomic>
 #include <cstddef>
-#include <stdexcept>
 
 using namespace dftracer::utils;
 
@@ -219,15 +219,19 @@ TEST_SUITE("or_fail") {
         CHECK(begins.load() == ends.load());
     }
 
-    TEST_CASE("an exception of the awaited task still reaches the awaiter") {
+    TEST_CASE(
+        "an error that ended the awaited task still reaches the awaiter") {
         Runtime rt(2);
-        auto thrower = []() -> coro::CoroTask<IntResult> {
+        auto failing = []() -> coro::CoroTask<IntResult> {
             co_await coro::yield();
-            throw std::runtime_error("boom");
+            co_await coro_test::failing_task("boom");
+            co_return IntResult{};
         };
         auto task = [&]() -> coro::CoroTask<IntResult> {
-            co_return co_await coro::or_fail(thrower());
+            co_return co_await coro::or_fail(failing());
         };
-        CHECK_THROWS_AS((void)run(rt, task()), std::runtime_error);
+        const auto result = rt.submit(task()).get();
+        REQUIRE_FALSE(result.has_value());
+        CHECK(dstd::String(result.error().message()) == "boom");
     }
 }

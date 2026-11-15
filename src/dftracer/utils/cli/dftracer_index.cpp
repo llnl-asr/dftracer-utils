@@ -3,7 +3,6 @@
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
-#include <dftracer/utils/domains/plugins/plugins.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -12,6 +11,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/fileio/file_helpers.h>
+#include <dftracer/utils/plugins/host/plugins.h>
 #include <dftracer/utils/trace/index/build/aggregation_run.h>
 #include <dftracer/utils/trace/index/build/batch_builder.h>
 #include <dftracer/utils/trace/index/build/chunk_indexer.h>
@@ -167,9 +167,9 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
 
     // Held for the whole build: loading registers the plugins' index
     // extensions, and destroying the set removes them.
-    dstd::Optional<domains::plugins::Plugins> loaded;
+    dstd::Optional<plugins::host::Plugins> loaded;
     if (!cli->plugins.empty()) {
-        auto builder = domains::plugins::Plugins::builder();
+        auto builder = plugins::host::Plugins::builder();
         for (const auto& path : cli->plugins) builder.add(dstd::String(path));
         auto built = builder.build();
         if (!built) {

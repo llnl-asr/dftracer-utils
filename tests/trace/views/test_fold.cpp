@@ -76,7 +76,7 @@ struct CountingFold : Fold {
         sealed_units += o.sealed_units;
         return {};
     }
-    coro::CoroTask<bool> finalize(const CoverageSet&) override {
+    coro::CoroTask<dstd::Result<bool>> finalize(const CoverageSet&) override {
         co_return true;
     }
 };
@@ -93,7 +93,7 @@ struct FailingFold : Fold {
     void seal_unit(const ScanUnit&) override {}
     void drop_unit(const ScanUnit&) override {}
     dstd::Result<void> merge(Fold&) override { return {}; }
-    coro::CoroTask<bool> finalize(const CoverageSet&) override {
+    coro::CoroTask<dstd::Result<bool>> finalize(const CoverageSet&) override {
         co_return true;
     }
 };
@@ -304,7 +304,8 @@ TEST_SUITE("Fold") {
                     got.insert({t, nv});
                 return {};
             }
-            coro::CoroTask<bool> finalize(const CoverageSet&) override {
+            coro::CoroTask<dstd::Result<bool>> finalize(
+                const CoverageSet&) override {
                 co_return true;
             }
         };

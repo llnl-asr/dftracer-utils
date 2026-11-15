@@ -26,7 +26,7 @@
 #include <dftracer/utils/trace/index/build/index_visitor.h>
 #include <dftracer/utils/trace/index/build/parse_gate.h>
 #include <dftracer/utils/trace/index/extensions/bloom_fold.h>
-#include <dftracer/utils/trace/index/extensions/plugin_extension.h>
+#include <dftracer/utils/trace/index/extensions/extension_registry.h>
 #include <dftracer/utils/trace/index/record_schema.h>
 #include <dftracer/utils/trace/index/schemas/dft/agg/aggregation_fold.h>
 #include <dftracer/utils/trace/parse_inflated.h>
@@ -200,7 +200,7 @@ class IndexFoldDriver : public trace::index::build::IndexVisitor {
     /// Also hand each chunk's record lines to `builders`, which must outlive
     /// the parse.
     void set_plugin_builders(
-        trace::index::extensions::PluginBuilders* builders) {
+        trace::index::extensions::ExtensionBuilders* builders) {
         builders_ = builders;
     }
 
@@ -887,7 +887,7 @@ class IndexFoldDriver : public trace::index::build::IndexVisitor {
     std::size_t dropped_lines_ = 0;
     dstd::String index_path_;
     dstd::Vector<dstd::String> extra_fields_;
-    trace::index::extensions::PluginBuilders* builders_ = nullptr;
+    trace::index::extensions::ExtensionBuilders* builders_ = nullptr;
 };
 
 }  // namespace dftracer::utils::trace::index::build

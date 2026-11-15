@@ -14,6 +14,17 @@
 extern "C" {
 #endif
 
+/** What the loader reads before it runs any plugin code: the plugin's
+   name, and the ABI version it was built against. */
+typedef struct dftu_plugin_info {
+    uint32_t struct_size;
+    uint32_t abi_version; /**< DFTRACER_UTILS_PLUGIN_ABI_VERSION */
+    const char* name;     /**< the plugin's own name; may be NULL */
+    const char* version;  /**< the plugin's own version text; may be NULL */
+} dftu_plugin_info;
+
+#define DFTRACER_UTILS_PLUGIN_INFO_SYMBOL "dftracer_plugin_info"
+
 /** Any value kind is accepted for a declared config key. */
 #define DFTU_CONFIG_ANY (-1)
 
@@ -29,10 +40,10 @@ typedef struct dftu_config_key {
 } dftu_config_key;
 
 /** A plugin: a data-parallel fold; one slice per worker, merged then finalized.
-   on_finalize returns NULL when handled synchronously, else a task the host
-   awaits. */
+   on_finalize leaves `pending` NULL when it finished synchronously, else sets
+   a task the host awaits. */
 typedef struct dftu_plugin {
-    uint32_t abi_version;
+    uint32_t struct_size;
     void* self; /**< read-only config, shared across slices */
 
     /** Coarse filter this plugin's own predicate is a subset of, or NULL to
@@ -44,14 +55,17 @@ typedef struct dftu_plugin {
        one plugin's own predicate here would starve the others of events they
        are entitled to, since the scan is shared. */
     const char* (*plan_duql)(void* self);
-    void* (*make_slice)(void* self);
-    /** N rows in scan order = N events, one dftu_dataframe per batch. Must be
-       synchronous (return NULL); `df` is owned by the host and valid only for
-       the call. */
-    dftu_task* (*on_batch)(void* slice, const dftu_dataframe* df,
-                           const dftu_plugin_host* host);
-    void (*merge)(void* into, void* other);
-    dftu_task* (*on_finalize)(void* slice, const dftu_plugin_host* host);
+    dftu_status (*make_slice)(dftu_ctx* ctx, void* self, void** out_slice);
+    /** N rows in scan order = N events, one dftu_dataframe per batch.
+       Synchronous; `df` is owned by the host and valid only for the call. */
+    dftu_status (*on_batch)(dftu_ctx* ctx, void* slice,
+                            const dftu_dataframe* df,
+                            const dftu_plugin_host* host);
+    dftu_status (*merge)(dftu_ctx* ctx, void* into, void* other);
+    /** Set *pending to finish later; NULL = finished now. */
+    dftu_status (*on_finalize)(dftu_ctx* ctx, void* slice,
+                               const dftu_plugin_host* host,
+                               dftu_task** pending);
     void (*destroy_slice)(void* slice); /**< one call per make_slice */
     void (*destroy)(void* self);        /**< plugin teardown; frees self */
 
@@ -91,23 +105,14 @@ typedef struct dftu_plugin {
        this, so such a plugin keeps every column. A projection is an
        optimisation and must never cost correctness. */
     const char* const* (*reads)(void* self);
-    /** Optional (may be NULL). Bytes `slice` holds: the host's only measure
-       of a slice against the scan's memory budget. A plugin that declares no
-       size is never asked to reclaim, and its slice grows unbounded. */
-    uint64_t (*bytes)(void* slice);
-    /** Optional (may be NULL). Free up to `want` bytes of `slice` however
-       the plugin can (write part of it out, compact, drop a cache) and
-       return how many were freed; 0 says nothing could go. The host calls it
-       after an on_batch or merge that left bytes(slice) past the budget,
-       and logs once per slice when a call frees nothing while still over,
-       so a state that cannot shrink is reported rather than silently
-       exceeding the budget. A registered state (dftu_svc_agg) is spilled by
-       the host through its serialize pair instead and needs none of this. */
-    uint64_t (*reclaim)(void* slice, uint64_t want);
+    /* A slice that holds growing state reserves its bytes through
+       dftu_svc_memory (DFTU_SVC_MEMORY) and sets a reclaimer there. A
+       registered state (dftu_svc_agg) is spilled by the host through its
+       serialize pair instead. */
     /** Optional (may be NULL). Rewrite the batch every plugin AFTER this one
-       in fold order receives: return a NEW dftu_dataframe (the host frees
+       in fold order receives: set *out to a NEW dftu_dataframe (the host frees
        it) with rows dropped or added and columns added, dropped or changed,
-       or NULL to pass the batch on unchanged. Called in place of on_batch
+       or to NULL to pass the batch on unchanged. Called in place of on_batch
        (a transform that also accumulates does so inside the call, on the
        frame it was given). The batch it receives is the whole one, `reads`
        is ignored for a transform; a later plugin still gets its own `reads`
@@ -115,28 +120,41 @@ typedef struct dftu_plugin {
        re-applied to the rewritten rows. Order it with provides / consumes:
        a plugin that must see the rewritten batch consumes a name this one
        provides. Synchronous; the frame is valid only for the call. */
-    dftu_dataframe* (*transform)(void* slice, const dftu_dataframe* df,
-                                 const dftu_plugin_host* host);
+    dftu_status (*transform)(dftu_ctx* ctx, void* slice,
+                             const dftu_dataframe* df,
+                             const dftu_plugin_host* host,
+                             dftu_dataframe** out);
 } dftu_plugin;
 
-/** The one symbol the loader resolves via dlsym; the plugin's init. `config` is
-   NULL when none was given.
+/** The plugin's init, resolved with dlsym after dftracer_plugin_info passed.
+   `config` is NULL when none was given. On success *out is the descriptor.
 
    `h` is a BUILD-PHASE host: its get_service answers only the registration
-   groups (DFTU_SVC_OPS, DFTU_SVC_AGG, DFTU_SVC_PORTS, DFTU_SVC_PROVIDERS) and,
-   within those, only the registration slots - register_op, register_state,
-   port_key and register_provider. Every other group, every non-registration
-   slot, and resolve/intern return NULL/failure, and the host fails the load
-   naming what was denied. Scanning, spawning, I/O and emitting belong to the
-   run-time host the fold callbacks receive. `h` and anything obtained from it
-   die when the factory returns; only log() is safe to keep using, and only
-   for the duration of the call.
+   groups (DFTU_SVC_OPS, DFTU_SVC_AGG, DFTU_SVC_PORTS, DFTU_SVC_PROVIDERS,
+   DFTU_SVC_NODES, DFTU_SVC_INDEX, DFTU_SVC_FILE_FORMATS) and, within those,
+   only the registration slots - register_op, register_udf, register_udaf,
+   register_state, port_key, register_provider, register_node,
+   register_extension, register_format and register_sink - plus DFTU_SVC_TASK
+   with its run slot, which uses no host state, so a plugin may keep that
+   service pointer and its `h` for later. Every other group, every
+   non-registration slot, and resolve/intern return NULL/failure, and the host
+   fails the load naming what was denied. Scanning, spawning, I/O and emitting
+   belong to the run-time host the fold callbacks receive. `h` and anything
+   obtained from it die when the factory returns; only log() is safe to keep
+   using, and only for the duration of the call.
+
+   The host keeps the plugin library loaded while a node, provider, index
+   extension or op registered here, or a plan or cursor holding one, is alive;
+   unloading the plugin removes the names at once. The plugin's own destroy
+   runs after the last of them is gone, then the library is closed, so a
+   node's or provider's destroy may use the plugin's global state.
 
    The returned descriptor is still pure data: plan_duql, provides and consumes
    are read after every factory has run, so registering here does not reorder
    the fold or change the prune. */
-typedef dftu_plugin* (*dftu_plugin_factory)(dftu_plugin_host* h,
-                                            const dftu_value* config);
+typedef dftu_status (*dftu_plugin_factory)(dftu_ctx* ctx, dftu_plugin_host* h,
+                                           const dftu_value* config,
+                                           dftu_plugin** out);
 #define DFTRACER_UTILS_PLUGIN_FACTORY_SYMBOL "dftracer_plugin"
 
 /**
@@ -144,8 +162,27 @@ typedef dftu_plugin* (*dftu_plugin_factory)(dftu_plugin_host* h,
  * @ref dftu_plugin_factory. Declared here so a plugin's definition has a
  * prior declaration.
  */
-DFTU_PLUGIN_EXPORT dftu_plugin* dftracer_plugin(dftu_plugin_host* h,
-                                                const dftu_value* config);
+DFTU_PLUGIN_EXPORT dftu_status dftracer_plugin(dftu_ctx* ctx,
+                                               dftu_plugin_host* h,
+                                               const dftu_value* config,
+                                               dftu_plugin** out);
+
+/**
+ * @brief The record the loader checks before it runs the factory; a plugin
+ * defines it with @ref DFTU_PLUGIN_INFO. A missing symbol, or an ABI version
+ * the host does not accept, refuses the plugin.
+ */
+DFTU_PLUGIN_EXPORT const dftu_plugin_info* dftracer_plugin_info(void);
+
+/** Define dftracer_plugin_info for a plugin named `name` at `version` (string
+   literals or NULL). Use once per plugin library. */
+#define DFTU_PLUGIN_INFO(name, version)                                     \
+    DFTU_PLUGIN_EXPORT const dftu_plugin_info* dftracer_plugin_info(void) { \
+        static const dftu_plugin_info info = {                              \
+            sizeof(dftu_plugin_info), DFTRACER_UTILS_PLUGIN_ABI_VERSION,    \
+            (name), (version)};                                             \
+        return &info;                                                       \
+    }
 
 #ifdef __cplusplus
 }

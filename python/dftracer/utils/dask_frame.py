@@ -31,7 +31,7 @@ from typing import (
     cast,
 )
 
-from .columnar import Agg, GroupBy, col
+from .columnar import Agg, GroupBy, _UdafAgg, col
 from .dataframe import DataFrame
 from .series import Series
 
@@ -287,6 +287,8 @@ def _parse(name: str, spec: AggSpec) -> Tuple[str, str, Optional[float]]:
     ``(column, op)`` pair, or ``(column, "quantile", q)``. A ``col(c).quantile(q)`` Agg is a
     quantile, ``median`` is the 0.5 quantile."""
     if isinstance(spec, Agg):
+        if isinstance(spec, _UdafAgg):
+            raise TypeError(f"agg {name!r}: the udaf {spec.name!r} does not combine from partials")
         column = getattr(spec.value, "name", None)
         op, param = _AGG_OP.get(spec.op, spec.op), None
         if op == "pct":

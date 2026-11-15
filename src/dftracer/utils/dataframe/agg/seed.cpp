@@ -25,6 +25,12 @@ void permute_blocks(Vec& v, const dstd::Vector<std::int64_t>& perm,
     }
     v.swap(tmp);
 }
+
+dstd::Vector<std::int64_t> iota_to(std::size_t n) {
+    dstd::Vector<std::int64_t> v(n);
+    std::iota(v.begin(), v.end(), std::int64_t{0});
+    return v;
+}
 }  // namespace
 
 void agg_sort_groups(AggState& st) {
@@ -79,6 +85,7 @@ void agg_permute_groups(AggState& st, const dstd::Vector<std::int64_t>& perm) {
         permute_blocks(st.occ_ts, perm, st.n_occ);
         permute_blocks(st.occ_te, perm, st.n_occ);
     }
+    st.udaf_permute(perm);
     if (st.has_dyn) {
         if (st.dyn_light_on)
             permute_blocks(st.dyn_light, perm, 1);
@@ -239,6 +246,7 @@ AggStatePtr agg_extract_groups(const AggState& st_in,
                 out->dyn_sketch[o] = st.dyn_sketch[static_cast<std::size_t>(g)];
         }
     }
+    if (st.has_udaf) out->udaf_combine(st, iota_to(groups.size()), groups);
     out->inited = true;
     return out;
 }
@@ -290,6 +298,7 @@ static bool agg_op_seedable(AggOp op) {
         case AggOp::Active:
         case AggOp::Prod:
         case AggOp::SketchQuantile:
+        case AggOp::Udaf:
             return false;
     }
     return false;
@@ -317,7 +326,7 @@ void agg_seed_group(AggState& st, const dstd::Vector<dstd::String>& str_keys,
             dstd::fatal(
                 "agg_seed_group: an aggregate op has no FieldStat/sketch seed "
                 "representation (First/Last, the extremum/list/sketch ops, "
-                "SetUnion, the co-moments, occupancy)");
+                "SetUnion, the co-moments, occupancy, Udaf)");
     const std::int64_t g = st.find_or_add_group(
         [](std::size_t) -> std::int64_t { return 0; },
         [&](std::size_t k) -> dstd::StringView { return str_keys[k]; },

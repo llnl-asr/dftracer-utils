@@ -481,6 +481,10 @@ class Applier {
     // call_column() computes.
     Status call(const duql::TermRef& t, const duql::Term* term);
 
+    // The column of a plugin UDF call, bound once or, for an operand typed
+    // only by each batch, per batch.
+    Status udf_call(const duql::TermRef& t, const duql::Term* term);
+
     // Binds the pipeline's lookups before a batch reads them.
     static Status ready(const dstd::SharedPtr<const detail::BuildStep>& step);
 
@@ -594,6 +598,8 @@ class Applier {
         dftu_window_frame_mode mode = DFTU_WINDOW_FRAME_ROWS;
         double q = 0;
         dstd::String by{};
+        dstd::String udaf{};
+        dstd::Vector<dstd::String> udaf_args{};
     };
     // One dftu.frame.window pass over `order`, each spec's column appended.
     void window_op(const dstd::Vector<dstd::String>& part,
@@ -602,7 +608,7 @@ class Applier {
 
     // Aggregates over each whole partition, as `group` gives them, on every
     // row: the rows grouped by their partition id `pid` and joined back.
-    void partition_aggs(
+    Status partition_aggs(
         const dstd::Vector<
             dstd::Pair<const duql::PipelineWinCall*, dstd::String>>& calls,
         const dstd::String& pid);
@@ -660,6 +666,8 @@ class Applier {
     Status stage(const duql::PipelinePlugin& p);
 
     Status stage(const duql::PipelineCall& c);
+
+    Status stage(const duql::PipelineSink& s);
 
     Status stage(const duql::PipelineSession& ss);
 
@@ -769,6 +777,11 @@ class Applier {
         const duql::PipelineAgg& a);
 
     static dataframe::DataType plugin_type(const dstd::String& name);
+
+    // The result type of the UDAF `spec` runs, bound to the types of its
+    // argument columns; the bind's error when it refuses them.
+    dstd::Result<dataframe::DataType> udaf_type(
+        const dataframe::GroupAgg& spec);
 
     static std::int64_t floor_div(std::int64_t a, std::int64_t b) {
         std::int64_t q = a / b;

@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_CORO_DETAIL_PARKED_H
 #define DFTRACER_UTILS_CORO_DETAIL_PARKED_H
 
+#include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/memory.h>
 
 #include <atomic>
@@ -12,6 +13,7 @@
 #include <new>
 #include <thread>
 #include <type_traits>
+#include <utility>
 
 namespace dftracer::utils::coro {
 class Executor;
@@ -37,6 +39,11 @@ struct ParkOwnerOps {
     /// True for a task that must resume at a cancelled wait, such as one that
     /// holds a scope.
     bool (*refuses_stop)(const void*) noexcept;
+    /// Ends the suspended task with the error, so the frame never resumes, and
+    /// returns true after it moved the error out. Returns false, and leaves
+    /// the error, for a task that must resume. Null for an owner that cannot
+    /// end with an error.
+    bool (*fail)(const void*, dstd::Error&) noexcept {nullptr};
 };
 
 struct ParkOwner {
@@ -66,9 +73,26 @@ bool promise_stop(const void* promise) noexcept {
 }
 
 template <typename Promise>
+bool promise_fail(const void* promise, dstd::Error& error) noexcept {
+    auto* p = const_cast<Promise*>(static_cast<const Promise*>(promise));
+    return p->propagate_error(std::move(error));
+}
+
+template <typename Promise>
+constexpr auto promise_fail_op() noexcept {
+    if constexpr (requires(Promise& p, dstd::Error& e) {
+                      p.propagate_error(std::move(e));
+                  }) {
+        return &promise_fail<Promise>;
+    } else {
+        return nullptr;
+    }
+}
+
+template <typename Promise>
 inline constexpr ParkOwnerOps STOPPABLE_OWNER_OPS{
     &promise_cancel_requested<Promise>, &promise_stop<Promise>,
-    &promise_refuses_stop<Promise>};
+    &promise_refuses_stop<Promise>, promise_fail_op<Promise>()};
 
 template <typename Promise>
 inline constexpr ParkOwnerOps CANCEL_ONLY_OWNER_OPS{
@@ -127,6 +151,21 @@ bool stop_parked(Executor* executor, ParkNode* node) noexcept;
 /// wait that completes with a stop, where no cancel callback runs. Touches
 /// nothing of the waiter after it returns true, since its frame can be gone.
 bool stop_task(Executor* executor, ParkNode* node, ParkOwner owner) noexcept;
+
+/// Ends the task `owner` names with `error`, through a job on `executor` (in
+/// place when it is null), and removes `node` first when it is not null.
+/// Returns false, does nothing and keeps `error` when the owner cannot end
+/// with an error. Touches nothing of the waiter after it returns true, since
+/// its frame can be gone.
+bool fail_task(Executor* executor, ParkNode* node, ParkOwner owner,
+               dstd::Error&& error) noexcept;
+
+/// Continues the waiter `handle` of a wait that ended with an error: ends its
+/// task through @ref fail_task, or resumes it when the task cannot end, and
+/// the wait then ends the process.
+void fail_or_continue(Executor* executor, ParkOwner owner,
+                      std::coroutine_handle<> handle,
+                      dstd::Error&& error) noexcept;
 
 /// Continues the waiter `handle` of a wait that ended with a stop: ends its
 /// task through @ref stop_task, or resumes it when the task cannot stop, and

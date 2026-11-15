@@ -77,7 +77,7 @@ Series plain(const dstd::Vector<std::int64_t>& v) {
 DataFrame make3(const dstd::Vector<std::int64_t>& p,
                 const dstd::Vector<std::int64_t>& o, const Col& v) {
     DataFrame d;
-    d.names = {"p", "o", "v"};
+    d.names = dstd::make_shared_strings({"p", "o", "v"});
     d.columns.push_back(plain(p));
     d.columns.push_back(plain(o));
     d.columns.push_back(i64s(v));
@@ -88,7 +88,7 @@ DataFrame make3u(const dstd::Vector<std::int64_t>& p,
                  const dstd::Vector<std::int64_t>& o,
                  const dstd::Vector<std::uint64_t>& v) {
     DataFrame d;
-    d.names = {"p", "o", "v"};
+    d.names = dstd::make_shared_strings({"p", "o", "v"});
     d.columns.push_back(plain(p));
     d.columns.push_back(plain(o));
     d.columns.push_back(Series::flat(TypeId::Uint64, v.data(),
@@ -331,7 +331,7 @@ TEST_CASE("window - multiple specs appended in order") {
 
 TEST_CASE("window - list<utf8> carry-through survives") {
     DataFrame in;
-    in.names = {"p", "o", "tags"};
+    in.names = dstd::make_shared_strings({"p", "o", "tags"});
     in.columns.push_back(plain({1, 1}));
     in.columns.push_back(plain({20, 10}));
     in.columns.push_back(tag_lists());
@@ -346,7 +346,7 @@ TEST_CASE("window - list<utf8> carry-through survives") {
 TEST_CASE("window - running sum over double column yields double") {
     const dstd::Vector<double> v = {1.5, 2.25};
     DataFrame in;
-    in.names = {"o", "v"};
+    in.names = dstd::make_shared_strings({"o", "v"});
     in.columns.push_back(plain({1, 2}));
     in.columns.push_back(Series::flat_f64(v.data(), 2));
     const DataFrame out =
@@ -481,7 +481,7 @@ TEST_CASE("window - sessionize rejects a negative gap and a text end") {
                           {session_spec("o", "sid", 1.0, -2.0)}),
         dftracer::utils::common::ErrorCode::InvalidArgument);
     DataFrame text;
-    text.names = {"p", "o", "e"};
+    text.names = dstd::make_shared_strings({"p", "o", "e"});
     text.columns.push_back(plain({1}));
     text.columns.push_back(plain({0}));
     text.columns.push_back(Series::strings(dstd::Vector<dstd::String>{"x"}));
@@ -505,7 +505,7 @@ TEST_CASE("window - delta determinism across input order") {
 
 TEST_CASE("window - delta carries a list<utf8> column through") {
     DataFrame in;
-    in.names = {"p", "o", "v", "tags"};
+    in.names = dstd::make_shared_strings({"p", "o", "v", "tags"});
     in.columns.push_back(plain({1, 1}));
     in.columns.push_back(plain({20, 10}));
     in.columns.push_back(plain({15, 10}));
@@ -620,7 +620,7 @@ TEST_CASE("window - nth_value out of range yields null") {
 
 TEST_CASE("window - first/last/nth carry a list<utf8> column") {
     DataFrame in;
-    in.names = {"p", "o", "tags"};
+    in.names = dstd::make_shared_strings({"p", "o", "tags"});
     in.columns.push_back(plain({1, 1}));
     in.columns.push_back(plain({20, 10}));
     in.columns.push_back(tag_lists());
@@ -640,7 +640,7 @@ TEST_CASE(
     const dstd::Vector<dstd::StringView> names = {"b", "", "a", "c"};
     const dstd::Vector<std::uint8_t> valid = bits_of({true, false, true, true});
     DataFrame in;
-    in.names = {"p", "o", "s"};
+    in.names = dstd::make_shared_strings({"p", "o", "s"});
     in.columns.push_back(plain({1, 1, 1, 1}));
     in.columns.push_back(plain({4, 3, 2, 1}));
     in.columns.push_back(Series::strings(
@@ -848,7 +848,7 @@ TEST_CASE("window - range unbounded-preceding includes peers, rows does not") {
 TEST_CASE("window - range frame over a double order column resets per part") {
     const dstd::Vector<double> o = {10.0, 12.0, 100.0, 101.0};
     DataFrame in;
-    in.names = {"p", "o", "v"};
+    in.names = dstd::make_shared_strings({"p", "o", "v"});
     in.columns.push_back(plain({1, 1, 2, 2}));
     in.columns.push_back(Series::flat_f64(o.data(), 4));
     in.columns.push_back(plain({1, 2, 10, 20}));
@@ -863,7 +863,7 @@ TEST_CASE(
     "window - range frames treat null order values as peers of each other") {
     const DataFrame in = [] {
         DataFrame d;
-        d.names = {"p", "o", "v"};
+        d.names = dstd::make_shared_strings({"p", "o", "v"});
         d.columns.push_back(plain({1, 1, 1, 1, 1}));
         d.columns.push_back(
             i64s(Col{10, 12, dstd::nullopt, dstd::nullopt, 11}));
@@ -941,7 +941,7 @@ RandomFrame random_frame(std::uint64_t seed, std::size_t n, bool order_nulls) {
 
 DataFrame to_frame(const RandomFrame& f) {
     DataFrame d;
-    d.names = {"p", "o", "vi", "vf"};
+    d.names = dstd::make_shared_strings({"p", "o", "vi", "vf"});
     d.columns.push_back(i64s(f.p, f.p_ok));
     d.columns.push_back(i64s(f.o, f.o_ok));
     d.columns.push_back(i64s(f.vi, f.vi_ok));
@@ -1711,7 +1711,8 @@ Series bool_series(const dstd::Vector<bool>& v, const dstd::Vector<bool>& ok) {
 
 DataFrame stat_frame(const RandomFrame& f, const Extra& e) {
     DataFrame d = to_frame(f);
-    d.names.insert(d.names.end(), {"vs", "vb", "bi", "bs", "bb"});
+    for (const char* n : {"vs", "vb", "bi", "bs", "bb"})
+        d.names.emplace_back(n);
     d.columns.push_back(text_series(e.vs, e.vs_ok));
     d.columns.push_back(bool_series(e.vb, e.vb_ok));
     d.columns.push_back(i64s(e.bi, e.bi_ok));
@@ -2018,7 +2019,7 @@ namespace {
 
 DataFrame names_dur(const dstd::Vector<dstd::String>& names, const Col& dur) {
     DataFrame d;
-    d.names = {"p", "o", "name", "dur"};
+    d.names = dstd::make_shared_strings({"p", "o", "name", "dur"});
     dstd::Vector<std::int64_t> p(names.size(), 1), o(names.size());
     std::iota(o.begin(), o.end(), std::int64_t{0});
     d.columns.push_back(plain(p));
@@ -2057,7 +2058,7 @@ TEST_CASE("window - arg_max skips a null by and may return a null value") {
     CHECK(strs(win(in, {"p"}, {"o"}, {mx}), "mx") == SCol{"x", "x", "z", "z"});
 
     DataFrame nullval;
-    nullval.names = {"p", "o", "v", "b"};
+    nullval.names = dstd::make_shared_strings({"p", "o", "v", "b"});
     nullval.columns.push_back(plain({1, 1}));
     nullval.columns.push_back(plain({1, 2}));
     nullval.columns.push_back(i64s(Col{dstd::nullopt, 7}));
@@ -2101,7 +2102,7 @@ TEST_CASE("window - collect past 2^27 values in all fails naming the frame") {
     dstd::Vector<std::int64_t> p(static_cast<std::size_t>(n), 1), o(p.size());
     std::iota(o.begin(), o.end(), std::int64_t{0});
     DataFrame in;
-    in.names = {"p", "o", "v"};
+    in.names = dstd::make_shared_strings({"p", "o", "v"});
     in.columns.push_back(plain(p));
     in.columns.push_back(plain(o));
     in.columns.push_back(plain(o));
@@ -2153,7 +2154,7 @@ TEST_CASE("window - new frame functions refuse bad parameters") {
     WindowColumn listed = frame_spec(WindowFunc::FrameArgMin, "dur", "r", 1, 0);
     listed.set_by("tags");
     DataFrame with_tags = names_dur({"a", "b"}, {1, 2});
-    with_tags.names.push_back("tags");
+    with_tags.names.push_back(dstd::SharedString{"tags"});
     with_tags.columns.push_back(tag_lists());
     dftu_utils_test::expect_error(
         dataframe::window(with_tags, {"p"}, {"o"}, {listed}),
@@ -2184,7 +2185,7 @@ TEST_CASE("window - frame variance near 1e9 matches a two-pass reference") {
         ok.push_back(i % 17 != 3);
     }
     DataFrame in;
-    in.names = {"p", "o", "v"};
+    in.names = dstd::make_shared_strings({"p", "o", "v"});
     in.columns.push_back(plain(p));
     in.columns.push_back(plain(o));
     in.columns.push_back(f64s(v, ok));
@@ -2314,7 +2315,7 @@ TEST_CASE("window - frame variance and std are exactly 0 on constant frames") {
             ok.push_back(!(run && i % 7 == 0));
         }
         DataFrame in;
-        in.names = {"p", "o", "v"};
+        in.names = dstd::make_shared_strings({"p", "o", "v"});
         in.columns.push_back(plain(p));
         in.columns.push_back(plain(o));
         in.columns.push_back(f64s(v, ok));
@@ -2368,7 +2369,7 @@ TEST_CASE("window - frame variance of values drifting past 1e9 stays close") {
         ok.push_back(true);
     }
     DataFrame in;
-    in.names = {"p", "o", "v"};
+    in.names = dstd::make_shared_strings({"p", "o", "v"});
     in.columns.push_back(plain(p));
     in.columns.push_back(plain(o));
     in.columns.push_back(f64s(v, ok));
@@ -2397,7 +2398,7 @@ TEST_CASE("lag and lead read the row `offset` back or ahead in the partition") {
     const dstd::Vector<std::int64_t> ord = {0, 1, 2, 3, 0, 1, 2};
     const dstd::Vector<std::int64_t> v = {10, 11, 12, 13, 20, 21, 22};
     DataFrame frame;
-    frame.names = {"k", "ord", "v"};
+    frame.names = dstd::make_shared_strings({"k", "ord", "v"});
     frame.columns.push_back(Series::flat_i64(k.data(), 7));
     frame.columns.push_back(Series::flat_i64(ord.data(), 7));
     frame.columns.push_back(Series::flat_i64(v.data(), 7));

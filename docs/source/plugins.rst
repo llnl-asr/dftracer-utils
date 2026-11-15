@@ -18,8 +18,9 @@ There are two co-equal ways to author one:
 
 - **The C++ SDK** (``<dftracer/utils/plugins/plugin.h>``, namespace
   ``dftracer::utils::plugins``): a plain ``Slice`` struct with ``step`` / ``merge`` /
-  ``finalize`` methods, assembled with ``plugin(h, config).fold<Slice>().build()``
-  (or ``make_plugin<Slice>(config)`` directly, what ``fold`` calls underneath).
+  ``finalize`` methods, registered from a ``DFTU_PLUGIN`` body with
+  ``p.fold<Slice>()`` (or, from C++ that already holds a host, with
+  ``plugin(ctx, h, config).fold<Slice>().build(out)``).
   Typed ``Batch`` / ``Event`` views, host-owned ``Agg`` accumulators, and an
   RAII ``Host`` read like ordinary C++.
 - **The raw C ABI** (``<dftracer/utils/plugins/abi.h>``): a small set of C
@@ -50,16 +51,37 @@ Overview
   ``string_view`` into the frame's own buffer with nothing copied on the hot
   path.
 - **Services are optional extension groups**: aggregation, async I/O, duql filters,
-  Arrow, writers, sketches, and inter-plugin channels are fetched by id; a
+  writers, sketches, and inter-plugin channels are fetched by id; a
   missing group degrades gracefully to a null/no-op.
 
 1. Entry point and lifecycle
 ----------------------------
 
-A plugin is a shared library exporting one symbol, ``dftracer_plugin`` (the
-``DFTRACER_UTILS_PLUGIN_FACTORY_SYMBOL`` the loader resolves via ``dlsym``). It
-receives the parsed config tree (NULL when none given) and returns a
-``dftu_plugin``. The host then drives that plugin as a data-parallel fold:
+A plugin is a shared library exporting two symbols: ``dftracer_plugin_info``
+(the ``DFTRACER_UTILS_PLUGIN_INFO_SYMBOL``) and ``dftracer_plugin`` (the
+``DFTRACER_UTILS_PLUGIN_FACTORY_SYMBOL``, which the loader resolves via
+``dlsym``). The factory receives the parsed config tree (NULL when none given)
+and returns a ``dftu_plugin``.
+
+In C++, ``DFTU_PLUGIN(name, version, ...)`` writes both symbols and the entry
+body, and it is the one way to write a C++ entry point: the only ``DFTU_`` name
+a C++ plugin file spells. The body is a lambda or a function name callable as
+``dstd::Result<void>(PluginBuilder&, const Config&)``; it fills the builder and
+returns the first error it hit, which fails the load with that error's condition
+and its message. The last argument is variadic, so a comma in the body outside
+parentheses, as in a structured binding or a braced initializer, does not end the
+macro's arguments. A body that registers a fold and then returns an error
+unregisters nothing itself: the builder destroys the fold it still holds when it
+goes away. Nothing throws. The C ABI described below is what the SDK
+translates to, so a C++ plugin never writes a ``dftu_*`` type, call or
+``DFTU_*`` constant: name a ``dstd::Condition`` through ``make_error`` or a
+named helper (``invalid_argument``, ``io_error``, ``unsupported``,
+``internal``, ``not_found``, ``parse_error``, ``cancelled``,
+``out_of_memory``) for an error, and a
+``dstd::CStringView`` or ``dstd::StringView`` for a string. Each ``C++ (SDK)``
+tab below gives the C++ spelling of that part.
+
+The host then drives that plugin as a data-parallel fold:
 
 .. mermaid::
 
@@ -104,9 +126,9 @@ Each stage maps one-to-one between the SDK and the ABI:
      - ``transform``
      - in place of ``step``: rewrites the batch for every later plugin
        (:doc:`guides/plugins/inter-plugin-comms`)
-   * - ``bytes() const`` / ``reclaim(want)``
-     - ``bytes`` / ``reclaim``
-     - after a step or merge past the memory budget
+   * - ``Host::memory()`` (``Reservation::set_reclaimer``)
+     - ``DFTU_SVC_MEMORY``
+     - a grow past the memory budget runs the reclaimer
        (:doc:`guides/runtime/memory-budget`)
    * - ``static ... provides()`` / ``consumes()``
      - ``provides`` / ``consumes``
@@ -115,30 +137,47 @@ Each stage maps one-to-one between the SDK and the ABI:
      - ``config_keys``
      - queried at load, validates the config (section 4)
 
-``on_batch`` returns ``NULL`` (or nothing, for the sync SDK ``step``) since it
-is always synchronous; ``on_finalize`` returns ``NULL`` when handled
-synchronously, or a ``dftu_task`` the host awaits for async work (section 9).
+``on_batch`` returns a ``dftu_status`` (or nothing, for the sync SDK ``step``)
+since it is always synchronous; ``on_finalize`` leaves ``*pending`` NULL when
+handled synchronously, or sets a ``dftu_task`` the host awaits for async work
+(section 9). Every callback takes the host's ``dftu_ctx*`` first. A negative
+status is an error: report it with ``dftu_fail(ctx, code, message)``, and the
+host names the plugin and the callback in the error the caller sees. A long
+loop polls ``dftu_check(ctx)`` and returns what it gives, so a cancelled scan
+stops.
 The delivered ``dftu_dataframe`` is owned by the host and valid only for the
 call - N rows in scan order is N events, never retain the pointer.
 
 ``DFTRACER_UTILS_PLUGIN_ABI_VERSION`` comes from the ``abi`` line of the
-``VERSION`` file, packed as ``(major << 16) | (minor << 8) | patch``. A plugin
-built against another ABI version is refused at load with a version message and
-is never called into. Rebuild the plugin against the host you run.
+``VERSION`` file, packed as ``(major << 16) | (minor << 8) | patch``. The
+loader reads ``dftracer_plugin_info`` before it runs any plugin code. A plugin
+that exports no ``dftracer_plugin_info``, or was built against an ABI version
+whose major differs from the host's or whose minor is greater than the host's,
+is refused at load with a message that names both versions and is never called
+into. Rebuild the plugin against the host you run.
 
 .. tab-set::
 
    .. tab-item:: C++ (SDK)
 
-      A ``Slice`` provides the constructor and methods; ``plugin(h,
-      config).fold<Slice>().build()`` fills the ``dftu_plugin`` struct and
-      adapts exceptions at the boundary (every callback catches and logs).
-      ``abi_version`` is set for you.
+      A ``Slice`` provides the constructor and methods; the ``DFTU_PLUGIN``
+      body registers it with ``p.fold<Slice>()``, and the ``dstd::Result<void>``
+      the body returns is adapted at the boundary - an error fails the load with
+      its condition and its message. The SDK throws nothing and catches
+      nothing, and its headers compile with ``-fno-exceptions``. A call that
+      can fail returns a ``dstd::Result``, and a callback returns a
+      ``dstd::Result<void>`` (or ``void`` where it cannot fail); the SDK turns
+      the error into the callback's status and message. A callback that throws
+      terminates the process. A Slice that can fail at creation, for a bad
+      config, provides ``static dstd::Result<Slice> from_config(const
+      Config&)``, which the SDK uses in place of the constructor.
+      ``struct_size`` is set for you.
 
       .. code-block:: cpp
 
          #include <dftracer/utils/plugins/plugin.h>
 
+         using namespace dftracer::utils;
          using namespace dftracer::utils::plugins;
 
          struct MyPlugin {
@@ -151,16 +190,19 @@ is never called into. Rebuild the plugin against the host you run.
              void finalize(Host) {}                 // emit output
          };
 
-         extern "C" dftu_plugin* dftracer_plugin(dftu_plugin_host* h,
-                                                 const dftu_value* config) {
-             return plugin(h, config).fold<MyPlugin>().build();
-         }
+         DFTU_PLUGIN("my_plugin", "1.0",
+                     [](PluginBuilder& p, const Config& config)
+                         -> dstd::Result<void> {
+                         (void)config;
+                         p.fold<MyPlugin>();
+                         return {};
+                     })
 
    .. tab-item:: C (raw ABI)
 
-      Fill the ``dftu_plugin`` struct by hand. ``abi_version`` must be set to
-      ``DFTRACER_UTILS_PLUGIN_ABI_VERSION``; ``self`` is the read-only config shared
-      across slices.
+      Fill the ``dftu_plugin`` struct by hand. Set ``struct_size`` to
+      ``sizeof(dftu_plugin)``; ``self`` is the read-only config shared across
+      slices.
 
       .. code-block:: c
 
@@ -168,23 +210,40 @@ is never called into. Rebuild the plugin against the host you run.
          #include <stdlib.h>
 
          static const char* plan_duql(void* self) { (void)self; return NULL; }
-         static void* make_slice(void* self) { (void)self; return calloc(1, 1); }
-         static dftu_task* on_batch(void* slice, const dftu_dataframe* df,
-                                   const dftu_plugin_host* host) {
-             (void)slice; (void)df; (void)host; return NULL;  /* synchronous */
+         static dftu_status make_slice(dftu_ctx* ctx, void* self, void** out) {
+             (void)self;
+             *out = calloc(1, 1);
+             return *out ? DFTU_OK : dftu_fail(ctx, DFTU_E_NO_MEMORY, "out of memory");
          }
-         static void merge(void* into, void* other) { (void)into; (void)other; }
-         static dftu_task* on_finalize(void* s, const dftu_plugin_host* h) {
-             (void)s; (void)h; return NULL;
+         static dftu_status on_batch(dftu_ctx* ctx, void* slice,
+                                     const dftu_dataframe* df,
+                                     const dftu_plugin_host* host) {
+             (void)ctx; (void)slice; (void)df; (void)host;
+             return DFTU_OK;  /* synchronous */
+         }
+         static dftu_status merge(dftu_ctx* ctx, void* into, void* other) {
+             (void)ctx; (void)into; (void)other;
+             return DFTU_OK;
+         }
+         static dftu_status on_finalize(dftu_ctx* ctx, void* s,
+                                        const dftu_plugin_host* h,
+                                        dftu_task** pending) {
+             (void)ctx; (void)s; (void)h;
+             *pending = NULL;
+             return DFTU_OK;
          }
          static void destroy_slice(void* slice) { free(slice); }
          static void destroy(void* self) { (void)self; }
 
          static dftu_plugin g_plugin;
 
-         dftu_plugin* dftracer_plugin(dftu_plugin_host* h, const dftu_value* config) {
-             (void)h; (void)config;
-             g_plugin.abi_version   = DFTRACER_UTILS_PLUGIN_ABI_VERSION;
+         DFTU_PLUGIN_INFO("my_plugin", "1.0")
+
+         DFTU_PLUGIN_EXPORT dftu_status dftracer_plugin(
+             dftu_ctx* ctx, dftu_plugin_host* h, const dftu_value* config,
+             dftu_plugin** out) {
+             (void)ctx; (void)h; (void)config;
+             g_plugin.struct_size   = sizeof(dftu_plugin);
              g_plugin.self          = NULL;
              g_plugin.plan_duql    = plan_duql;
              g_plugin.make_slice    = make_slice;
@@ -193,7 +252,8 @@ is never called into. Rebuild the plugin against the host you run.
              g_plugin.on_finalize   = on_finalize;
              g_plugin.destroy_slice = destroy_slice;
              g_plugin.destroy       = destroy;
-             return &g_plugin;
+             *out = &g_plugin;
+             return DFTU_OK;
          }
 
 2. Declaring the batch columns you read (reads)
@@ -334,17 +394,22 @@ block args (later wins). A plugin reads the resulting tree from its factory.
 
       .. code-block:: c
 
-         dftu_plugin* dftracer_plugin(dftu_plugin_host* h, const dftu_value* config) {
+         DFTU_PLUGIN_EXPORT dftu_status dftracer_plugin(
+             dftu_ctx* ctx, dftu_plugin_host* h, const dftu_value* config,
+             dftu_plugin** out) {
              (void)h;
              int64_t threshold = dftu_as_i64(dftu_obj_get(config, "threshold"), 0);
+             if (threshold < 0)
+                 return dftu_fail(ctx, DFTU_E_INVALID, "threshold must not be negative");
              /* stash `threshold` in a static/self the slices can read */
-             (void)threshold;
              /* ... fill g_plugin ... */
-             return &g_plugin;
+             *out = &g_plugin;
+             return DFTU_OK;
          }
 
       Declaring ``config_keys`` (a ``dftu_config_key`` array terminated by a
-      NULL-name entry, or a Slice's ``static ... config_keys()`` in the SDK)
+      NULL-name entry in the C ABI, or a Slice's ``static ... config_keys()``
+      returning ``ConfigKey`` values in the SDK)
       makes the host validate the config before the plugin runs: an undeclared
       key, a key of the wrong kind, or a missing required key each fail the
       load, instead of a typo silently doing nothing. An undeclared plugin's
@@ -394,12 +459,15 @@ frame's own buffers, no interned-id round trip needed at the row level. Every
      - ``args.<key>``
      - the arg value for this row
 
-A plugin working straight off the columns (no per-row cursor) reads the
+In C, a plugin working straight off the columns (no per-row cursor) reads the
 ``dftu_dataframe`` with the dataframe C ABI
-(``dftracer/utils/dataframe/abi.h``) - ``dftu_dataframe_column`` by name,
+(``dftracer/utils/dataframe/c_api.h``) - ``dftu_dataframe_column`` by name,
 ``dftu_series_type`` / ``dftu_series_data``. A string column can be a
 dictionary column, for which ``dftu_series_data`` and ``dftu_series_offsets``
-are null: read its strings with ``dftu_series_string_at(col, row, &len)``.
+are null: read its strings with ``dftu_series_string_at(col, row, &len)``. In
+C++ the same access is ``FrameView::column(name)``, a borrowed ``ColumnView``
+whose ``values<T>()`` gives the column's values as a span, and whose
+``flat()`` turns any other encoding into a FLAT column.
 
 .. tab-set::
 
@@ -420,9 +488,10 @@ are null: read its strings with ``dftu_series_string_at(col, row, &len)``.
 
       .. code-block:: c
 
-         static dftu_task* on_batch(void* slice, const dftu_dataframe* df,
-                                   const dftu_plugin_host* host) {
-             (void)slice;
+         static dftu_status on_batch(dftu_ctx* ctx, void* slice,
+                                     const dftu_dataframe* df,
+                                     const dftu_plugin_host* host) {
+             (void)ctx; (void)slice;
              int64_t n = dftu_dataframe_num_rows(df);
              dftu_series* ph_col = dftu_dataframe_column(df, "ph");
              const int64_t* ph = (ph_col && dftu_series_type(ph_col) == DFTU_TYPE_INT64)
@@ -433,7 +502,7 @@ are null: read its strings with ``dftu_series_string_at(col, row, &len)``.
                      if (ph[i] == DFTU_PH_COMPLETE) { /* row i has a duration */ }
              if (ph_col) dftu_series_free(ph_col);
              (void)host;
-             return NULL;
+             return DFTU_OK;
          }
 
 6. Mergeable aggregation (DFTU_SVC_AGG)
@@ -504,11 +573,12 @@ Count events and total their duration per ``(pid, event-name)``:
 
       .. code-block:: cpp
 
-         void step(const Batch& b, Host h) {
-             const auto edges = h.agg("name_edges", {"pid", "name"},
+         dstd::Result<void> step(dataframe::FrameView b, Host h) {
+             DFTRACER_UTILS_TRY(Agg edges,
+                                h.agg("name_edges", {"pid", "name"},
                                       {agg::count("edges"),
-                                       agg::sum("dur", "dur_sum")});
-             if (edges) edges.accumulate(b.raw());
+                                       agg::sum("dur", "dur_sum")}));
+             return edges.accumulate(b);
          }
 
    .. tab-item:: C (raw ABI)
@@ -519,8 +589,9 @@ Count events and total their duration per ``(pid, event-name)``:
 
       .. code-block:: c
 
-         static dftu_task* on_batch(void* slice, const dftu_dataframe* df,
-                                   const dftu_plugin_host* host) {
+         static dftu_status on_batch(dftu_ctx* ctx, void* slice,
+                                     const dftu_dataframe* df,
+                                     const dftu_plugin_host* host) {
              (void)slice;
              const dftu_svc_agg* agg =
                  (const dftu_svc_agg*)host->get_service(host->h, DFTU_SVC_AGG);
@@ -528,11 +599,13 @@ Count events and total their duration per ``(pid, event-name)``:
              static const dftu_agg_col specs[2] = {
                  {DFTU_AGG_COUNT, NULL, "edges", 0.0, NULL},
                  {DFTU_AGG_SUM, "dur", "dur_sum", 0.0, NULL}};
-             dftu_agg* a;
-             if (!agg || !agg->agg_new) return NULL;
-             a = agg->agg_new(host->h, "name_edges", keys, 2, specs, 2);
-             if (a) agg->agg_accumulate(host->h, a, df);
-             return NULL;
+             dftu_agg* a = NULL;
+             dftu_status st;
+             if (!agg || !agg->agg_new)
+                 return dftu_fail(ctx, DFTU_E_UNSUPPORTED, "no aggregation service");
+             st = agg->agg_new(ctx, host->h, "name_edges", keys, 2, specs, 2, &a);
+             if (st < 0) return st;
+             return agg->agg_accumulate(ctx, host->h, a, df);
          }
 
 A batch missing any referenced key or value column is skipped whole rather than
@@ -550,7 +623,9 @@ form of a scalar handle:
        {DFTU_AGG_COUNT, NULL, "count", 0.0, NULL},
        {DFTU_AGG_PCT, "dur", "p50", 0.5, NULL},
        {DFTU_AGG_MAX, "dur", "max", 0.0, NULL}};
-   dftu_agg* a = agg->agg_new(host->h, "com.example.dur_stats", NULL, 0, specs, 3);
+   dftu_agg* a = NULL;
+   dftu_status st = agg->agg_new(ctx, host->h, "com.example.dur_stats", NULL, 0,
+                                 specs, 3, &a);
 
 Reading another plugin's result
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -566,11 +641,12 @@ right.
 
 .. code-block:: c
 
-   dftu_dataframe* res = agg->agg_result(host->h, "com.example.dur_stats");
-   if (res) { /* read columns, then: */ dftu_dataframe_free(res); }
+   dftu_dataframe* res = NULL;
+   dftu_status st = agg->agg_result(ctx, host->h, "com.example.dur_stats", &res);
+   if (st >= 0 && res) { /* read columns, then: */ dftu_dataframe_free(res); }
 
 Reading the columns of that frame needs the dataframe C ABI
-(``dftracer/utils/dataframe/abi.h``), the one part of the plugin surface that
+(``dftracer/utils/dataframe/c_api.h``), the one part of the plugin surface that
 links the engine rather than headers alone. ``examples/plugins/dur_stats_producer.c``
 and ``dur_stats_consumer.c`` are the pair end to end.
 
@@ -592,29 +668,37 @@ the registry is settled.
       .. code-block:: cpp
 
          struct Graph {
-             void update(const dftu_dataframe* batch);
+             void update(dataframe::FrameView batch);
              void merge(Graph& other);
-             dftu_dataframe* finalize();               // or a bytes result
+             dstd::Result<OwnedDataFrame> finalize();  // or a dstd::String of bytes
              std::uint64_t bytes() const;              // optional: the budget measure
              dstd::String serialize() const;           // optional pair: spill
              static Graph* deserialize(dstd::StringView);
          };
 
-         extern "C" dftu_plugin* dftracer_plugin(dftu_plugin_host* h,
-                                                 const dftu_value* config) {
-             return plugin(h, config).state<Graph>("me.graph").build();
-         }
+         DFTU_PLUGIN("me", "1.0",
+                     [](PluginBuilder& p, const Config& config)
+                         -> dstd::Result<void> {
+                         (void)config;
+                         p.state<Graph>("me.graph");
+                         return {};
+                     })
 
-      A plugin may have a fold and several states; ``plugin(h, config)`` is
-      the builder for all of them (``fold<Slice>()``, ``state<T>(name)``,
-      ``op(desc)``), and ``build()`` fails the load when any step failed.
+      ``state<T>`` reads ``update``, ``merge`` and ``finalize`` off ``T``, and
+      takes ``bytes`` and the ``serialize`` pair only when ``T`` provides them.
+      A plugin may have a fold and several states; the ``PluginBuilder`` the
+      ``DFTU_PLUGIN`` body receives is the builder for all of them
+      (``fold<Slice>()``, ``state<T>(name)``, ``op(spec)``), and an error the
+      body returns fails the load.
 
    .. tab-item:: C (raw ABI)
 
       Fill a ``dftu_state_desc`` (``init`` / ``update`` / ``merge`` /
       ``finalize`` / ``destroy``, optional ``bytes`` and a ``serialize`` /
-      ``deserialize`` pair) and call ``agg->register_state(h->h, &desc,
-      self)`` from the factory.
+      ``deserialize`` pair) and call ``agg->register_state(ctx, h->h, &desc,
+      self)`` from the factory. Every state callback takes the ``dftu_ctx*``
+      first and returns a ``dftu_status``; an error from ``update``, ``merge``
+      or ``finalize`` fails the scan with the plugin's message.
 
 A state that declares ``bytes`` is measured against the scan's memory budget;
 one that also has the ``serialize`` pair is spilled to sorted runs past it and
@@ -626,7 +710,7 @@ spill, once, out loud (``state_spill_refused``), and kept whole.
 --------------------------------------
 
 A plugin-owned DDSketch accumulates values and reports mergeable quantiles
-(``dftu_quantiles``: ``count``, ``min``, ``max``, ``mean``, ``p50``, ``p90``,
+(``Quantiles``: ``count``, ``min``, ``max``, ``mean``, ``p50``, ``p90``,
 ``p95``, ``p99``). Unlike a map, the plugin owns the handle and merges it itself
 across slices.
 
@@ -652,7 +736,7 @@ across slices.
              }
              void merge(Durations& o) { if (sk && o.sk) sk->merge(*o.sk); }
              void finalize(Host) {
-                 if (sk) { dftu_quantiles q = sk->result(); (void)q; }
+                 if (sk) { Quantiles q = sk->result(); (void)q; }
              }
          };
 
@@ -716,6 +800,7 @@ plugin provides a consumed name.
 
          const dftu_svc_ports* p =
              (const dftu_svc_ports*)host->get_service(host->h, DFTU_SVC_PORTS);
+         /* the ports slots take no ctx: they cannot fail */
          uint64_t key = p->port_key(host->h, "com.example.perbatch");
          uint64_t n = 42;
          p->publish(host->h, key, &n, sizeof(n));         /* producer */
@@ -733,12 +818,14 @@ the cross-worker-merged, finalized result by that name at ``on_finalize``.
       .. code-block:: cpp
 
          // producer, in step (or on_batch):
-         const auto a = h.agg("com.example.total", {}, {agg::count("count")});
-         if (a) a.accumulate(b.raw());
+         DFTRACER_UTILS_TRY(Agg a, h.agg("com.example.total", {},
+                                         {agg::count("count")}));
+         DFTRACER_UTILS_TRY_VOID(a.accumulate(b));
 
          // consumer, in on_finalize:
-         const OwnedDataFrame res = h.agg_result("com.example.total");
-         if (res.handle) { /* read the "count" column */ }
+         DFTRACER_UTILS_TRY(OwnedDataFrame res,
+                            h.agg_result("com.example.total"));
+         if (res.get()) { /* read the "count" column */ }
 
    .. tab-item:: C (raw ABI)
 
@@ -749,25 +836,35 @@ the cross-worker-merged, finalized result by that name at ``on_finalize``.
          static const dftu_agg_col specs[1] =
              {{DFTU_AGG_COUNT, NULL, "count", 0.0, NULL}};
          /* during on_batch */
-         dftu_agg* a = agg->agg_new(host->h, "com.example.total", NULL, 0, specs, 1);
-         agg->agg_accumulate(host->h, a, df);
+         dftu_agg* a = NULL;
+         dftu_status st = agg->agg_new(ctx, host->h, "com.example.total", NULL, 0,
+                                       specs, 1, &a);
+         if (st >= 0) st = agg->agg_accumulate(ctx, host->h, a, df);
          /* at on_finalize, in a plugin naming "com.example.total" in consumes */
-         dftu_dataframe* res = agg->agg_result(host->h, "com.example.total");
-         if (res) dftu_dataframe_free(res);
+         dftu_dataframe* res = NULL;
+         st = agg->agg_result(ctx, host->h, "com.example.total", &res);
+         if (st >= 0 && res) dftu_dataframe_free(res);
 
-**Named results (DFTU_SVC_RESULT)** emit an opaque blob or a user-schema Arrow
-array under a name; both surface from ``Plugins::run`` keyed by that name.
-Use ``Host::emit_result`` / ``emit_result_arrow`` (C: ``emit`` / ``emit_arrow``
-on ``dftu_svc_result``), best called at finalize.
+**Named results (DFTU_SVC_RESULT)** emit an opaque blob, a native frame or a
+lazy plan under a name; all surface from ``Plugins::run`` keyed by that name.
+Use ``Host::emit_result`` / ``emit_result_frame`` / ``emit_result_lazyframe``
+(C: ``emit`` on ``dftu_svc_result``), best called at finalize.
 
 9. Async work and I/O
 ---------------------
 
-``on_batch`` / ``step`` is always synchronous - it must return ``NULL`` (or
-nothing, for ``step``) and stay CPU-bound. Only ``on_finalize`` may return a
-task for overlapped I/O or a custom fan-out; the host awaits it before
-considering the fold done. Offload real blocking work through the async path
-or ``run_blocking``, never inside ``on_batch``.
+``on_batch`` / ``step`` is always synchronous - it returns its status (or
+nothing, for ``step``) and stays CPU-bound. Only ``on_finalize`` may set
+``*pending`` to a task for overlapped I/O or a custom fan-out; the host awaits
+it before considering the fold done. Offload real blocking work through the
+task service (``JobWhere::Blocking``; ``DFTU_JOB_BLOCKING`` in C), never inside
+``on_batch``.
+
+A task is owned by whoever awaits it: the host, once the task comes back
+through ``*pending`` or a ``drive`` wait slot. A plugin must hand back every
+task it starts, also on an error return. The first error of a combinator
+cancels and awaits the tasks it no longer needs before it finishes, and a
+cancelled task reports ``DFTU_E_CANCELLED``.
 
 .. tab-set::
 
@@ -780,10 +877,21 @@ or ``run_blocking``, never inside ``on_batch``.
       ``write`` / ``pread`` / ``pwrite`` / ``fsync`` / ``ftruncate`` /
       ``fstat``, the vectored ``readv`` / ``writev`` / ``preadv`` / ``pwritev``,
       ``lseek``, ``sendfile``, and the socket ops ``accept`` / ``recv`` /
-      ``send``. ``Host::spawn`` runs a callable on a pool worker, ``Host::then``
-      sequences one after a task, ``Host::all`` / ``Host::any`` are ``when_all``
-      / ``when_any`` over tasks, and ``Host::run_blocking`` runs a synchronous
-      call while releasing the worker's run-permit.
+      ``send``. ``Host::spawn`` runs a callable on a pool worker (pass
+      ``JobWhere::Blocking`` for a call that blocks, so the worker gives back its
+      run permit), and ``Host::all`` awaits several spawned tasks together. A
+      step after a task is the next ``co_await``. Typed jobs (``job.h``,
+      ``make_job<In, Out>``) pipe with ``|`` and fan out with ``when_all`` /
+      ``when_any``; see :doc:`guides/plugins/compose-ops`. A call the host
+      refuses, or a task that fails, ends the ``Task`` with its error: the
+      ``co_await`` does not return, the host reports the status and message,
+      and the frame is destroyed, which gives back every task its locals
+      still own. ``co_await op.expected()`` returns the failure as a
+      ``dstd::Result`` instead and the ``Task`` goes on. A ``Task`` ends when its body ends, or
+      fails with ``co_await fail(error)``. ``co_await`` on a ``dstd::Result`` gives its value or ends
+      the ``Task`` the same way; in a plain function, use
+      ``DFTRACER_UTILS_TRY(decl, expr)`` and ``DFTRACER_UTILS_TRY_VOID(expr)``
+      from ``dstd/result.h``, which return the error.
 
       .. code-block:: cpp
 
@@ -798,49 +906,121 @@ or ``run_blocking``, never inside ``on_batch``.
              void merge(Writer&) {}
 
              Task on_finalize(Host h) {
-                 int fd = -1, rc = 0;
+                 int fd = -1;
                  co_await h.io().open("/tmp/out.bin",
                                       O_WRONLY | O_CREAT | O_TRUNC, 0644, &fd);
-                 if (fd >= 0) {
-                     std::int64_t n = 0;
-                     const char msg[] = "done";
-                     co_await h.io().write(fd, msg, sizeof(msg) - 1, &n);
-                     co_await h.io().close(fd, &rc);
-                 }
+                 std::int64_t n = 0;
+                 const char msg[] = "done";
+                 co_await h.io().write(fd, dstd::ByteView(msg, sizeof(msg) - 1),
+                                      &n);
+                 co_await h.io().close(fd);
              }
          };
 
-         extern "C" dftu_plugin* dftracer_plugin(dftu_plugin_host* h,
-                                                 const dftu_value* config) {
-             return plugin(h, config).fold<Writer>().build();
-         }
+         DFTU_PLUGIN("writer", "1.0",
+                     [](PluginBuilder& p, const Config& config)
+                         -> dstd::Result<void> {
+                         (void)config;
+                         p.fold<Writer>();
+                         return {};
+                     })
 
    .. tab-item:: C (raw ABI)
 
-      Fetch ``DFTU_SVC_IO`` for the ``dftu_io`` calls (each returns a ``dftu_task``
-      to compose or await; the out-slot must outlive it) and ``DFTU_SVC_CORO``
-      for the combinators ``spawn`` / ``when_all`` / ``when_any`` / ``then`` /
-      ``run_blocking``, plus ``drive`` (which the SDK's coroutine adapter uses).
-      Return the root task from ``on_finalize`` only - ``on_batch`` must return
-      NULL.
+      Fetch ``DFTU_SVC_IO`` for the ``dftu_io`` calls (each starts a
+      ``dftu_task`` and hands it back through an out-parameter; the out-slot
+      must outlive it) and ``DFTU_SVC_TASK`` for jobs (``job`` / ``then`` /
+      ``all`` / ``any`` / ``map`` / ``start``), ``spawn`` and ``drive`` (which
+      the SDK's coroutine adapter uses). Set ``*pending`` from ``on_finalize``
+      only; ``on_batch`` returns its status.
 
       .. code-block:: c
 
-         static dftu_task* on_finalize(void* slice, const dftu_plugin_host* host) {
+         static int fd = -1;
+
+         static dftu_status on_finalize(dftu_ctx* ctx, void* slice,
+                                        const dftu_plugin_host* host,
+                                        dftu_task** pending) {
              (void)slice;
-             const dftu_io* io =
-                 (const dftu_io*)host->get_service(host->h, DFTU_SVC_IO);
-             if (!io) return NULL;
-             static int fd = -1;
-             /* returns a task the host awaits; compose with dftu_svc_coro */
-             return io->open(host->h, "/tmp/out.bin",
-                             O_WRONLY | O_CREAT | O_TRUNC, 0644, &fd);
+             const dftu_svc_io* io =
+                 (const dftu_svc_io*)host->get_service(host->h, DFTU_SVC_IO);
+             if (!io) return dftu_fail(ctx, DFTU_E_UNSUPPORTED, "no io service");
+             /* the task the host awaits; its status is the open's status */
+             return io->open(ctx, host->h, "/tmp/out.bin",
+                             O_WRONLY | O_CREAT | O_TRUNC, 0644, &fd, pending);
          }
+
+``DFTU_SVC_IO`` also has the calls for ``unlink``, ``rmdir``, ``rename``,
+``mkdir``, ``linkat``, ``symlinkat``, ``fadvise``, ``socket``, ``connect``,
+``bind``, ``listen``, ``shutdown``, ``sendmsg``, ``recvmsg``, ``poll_add``,
+``statx``, ``fallocate``, ``sync_file_range``, ``splice``, ``openat2``, the four
+``xattr`` calls, ``tee`` and ``pipe``. The host copies each path, name and
+socket address when called; a buffer, message header or result slot stays valid
+until the task finishes. ``statx``, ``fallocate``, ``sync_file_range``,
+``splice``, ``openat2``, the ``xattr`` calls, ``tee`` and ``pipe`` need Linux;
+elsewhere the call returns ``DFTU_E_UNSUPPORTED`` and starts no task. From C++
+the SDK spells a path or a name ``dstd::CStringView``, a buffer
+``dstd::ByteView`` in and ``dstd::MutableByteView`` out, the ``openat2``
+arguments ``OpenHow``, and the two stat results ``Stat`` and ``Statx``.
+
+``DFTU_SVC_FS`` (``Host::fs()``) is the runtime file system layer: ``read_file``,
+``write_file``, ``read_at``, ``write_at``, ``list_dir``, ``find_all``,
+``exists``, ``create_directories``, ``remove`` and ``stat_batch``. Each call
+copies its paths and starts a task. ``read_file`` gives host-owned bytes that
+the plugin frees through ``free_fn``. ``list_dir`` and ``find_all`` give a
+host-owned ``dftu_path_list``, read with ``list_count`` and ``list_entry`` and
+freed with ``list_free`` (the SDK ``PathList`` does that). ``stat_batch`` gives
+one stat and one status per path, and a missing path is
+``DFTU_E_NOT_FOUND`` in its slot, not a failed task. From C++ the SDK spells a
+path ``dstd::CStringView``, a buffer ``dstd::ByteView`` or
+``dstd::MutableByteView``, the result slots ``FileStat`` and ``StatStatus``, the
+``find_all`` options ``FindOptions`` and a reported bool ``Flag``.
+
+``DFTU_SVC_JSON`` and ``DFTU_SVC_YAML`` (``Host::json()``, ``Host::yaml()``)
+serve one table type, ``dftu_svc_format``, so a plugin reads and writes either
+format with the same calls. The calls are synchronous. ``parse`` copies the text
+and gives a ``dftu_doc``; ``root`` gives its ``dftu_value`` tree, built once and
+valid until ``doc_free`` (the SDK ``Doc`` frees it, and hands the root over as a
+``ConfigValue``). A parse error is
+``DFTU_E_PARSE`` with the message ``line:column: reason``. A JSON number is
+``I64`` or ``F64``; a YAML scalar is untyped text, so it is ``STR``, and ``NULL``
+for an empty value, ``~`` or ``null``. The writer streams ``begin_object``,
+``end_object``, ``begin_array``, ``end_array``, ``key``, ``i64``, ``f64``,
+``str``, ``boolean``, ``null`` and ``raw``, and ``finish`` gives the text as
+``dftu_bytes`` that the plugin frees through ``free_fn``. A call that breaks the
+grammar, such as a value in an object without a key, returns ``DFTU_E_INVALID``
+and a message, and leaves the writer as it was. Per-event JSON is not in this
+service; the host columns read it.
+
+``DFTU_SVC_MEMORY`` (``Host::memory()``, ``dftu_svc_memory``) is the host's
+memory manager lent to a plugin. Every loaded plugin has one pool, named after
+the plugin, so the bytes of its blocks and reservations show in the pool gauges
+under that name. ``alloc``, ``realloc`` and ``free`` take the size and the
+alignment and keep no header; a block still live when the plugin unloads is
+reported as a leak. A slice that holds growing state reserves it instead of
+reporting a size: ``reserve`` opens a reservation, ``try_grow`` adds bytes and
+``shrink`` and ``release`` give them back (the SDK ``Reservation`` releases in
+its destructor). ``try_grow`` is all or nothing. Past the scan's memory budget
+or the process budget it returns ``DFTU_E_NO_MEMORY`` with a message and leaves
+the reservation as it was. Before it fails, the host calls the reclaimer set
+with ``set_reclaimer`` once with the number of bytes missing; the reclaimer
+frees that much of the slice (writes part of it out, compacts, drops a cache)
+and returns how many bytes it freed, which the host takes off the reservation,
+and the grow then succeeds when that made room. A reservation the plugin leaves
+at unload is released by the host, which logs an error. The service is served by
+the run-time host that a fold callback receives and by the host that a
+provider's ``scan`` or a node's ``open`` receives (see "The cursor host" under
+section 13), not by the build-phase host. ``dftu_ctx`` scratch stays the tool
+for short per-call buffers.
 
 A host utility is reached as a named op instead
 (``Host::run_op("dftu.hash.fnv1a", {column})``, ``DFTU_SVC_OPS``). Every
-``dftu_svc_coro`` combinator has an SDK method (``spawn`` / ``then`` / ``all``
-/ ``any`` / ``run_blocking``), so async composition needs no raw ABI.
+``dftu_svc_task`` call has an SDK form (``Host::spawn``, ``Host::tasks()``,
+and the typed ``Job`` in ``job.h``), so async composition needs no raw ABI.
+``dftu_svc_task::run`` blocks until a task ends, frees it and returns its
+status; a node's input cursor uses it, since a node has no host to await with.
+It uses no host state, so a plugin may keep the service pointer after the
+factory returns.
 
 10. duql filters against events (DFTU_SVC_DUQL)
 -----------------------------------------------
@@ -853,7 +1033,7 @@ scan; do not free it.
 
    .. tab-item:: C++ (SDK)
 
-      ``duql_compile`` accepts either a raw duql string or an expression built
+      ``Host::compile`` accepts either a raw duql string or an expression built
       with the ergonomic ``F`` / ``Field`` builder. The SDK re-exports the
       builder into ``dftracer::utils::plugins``, so ``plugin.h`` is the only include and no
       ``duql::`` qualifier is needed; the host parses the rendered string, so
@@ -862,13 +1042,16 @@ scan; do not free it.
       .. code-block:: cpp
 
          struct Filtered {
-             dftu_duql* q_ = nullptr;
+             Query q;
              explicit Filtered(const Config&) {}
-             void step(const Batch& b, Host h) {
-                 if (!q_) q_ = h.duql_compile(F("dur") > 1000);
-                 // Equivalent: h.duql_compile("dur > 1000");
-                 for (std::int64_t row = 0; row < b.size(); ++row)
-                     if (h.duql_matches(q_, b.raw(), row)) { /* ... */ }
+             dstd::Result<void> step(dataframe::FrameView b, Host h) {
+                 if (!q) {
+                     DFTRACER_UTILS_TRY(q, h.compile(F("dur") > 1000));
+                     // Equivalent: h.compile("dur > 1000");
+                 }
+                 for (std::int64_t row = 0; row < b.row_count(); ++row)
+                     if (q.matches(b, row)) { /* ... */ }
+                 return {};
              }
              void merge(Filtered&) {}
              void finalize(Host) {}
@@ -880,42 +1063,11 @@ scan; do not free it.
 
          const dftu_svc_duql* Q =
              (const dftu_svc_duql*)host->get_service(host->h, DFTU_SVC_DUQL);
-         dftu_duql* q = Q->duql_compile(host->h, "dur > 1000", 10);
-         if (Q->duql_matches(host->h, q, df, row)) { /* ... */ }
+         dftu_duql* q = NULL;
+         dftu_status st = Q->duql_compile(ctx, host->h, "dur > 1000", 10, &q);
+         if (st >= 0 && Q->duql_matches(host->h, q, df, row)) { /* ... */ }
 
-11. Arrow interchange (DFTU_SVC_ARROW)
---------------------------------------
-
-Read and write Arrow IPC files for an ``ArrowArray`` / ``ArrowSchema`` pair the
-plugin already holds (built with the dataframe engine's own Arrow bridge, or
-read back from a previous IPC file). This group is file I/O only - it does not
-convert a batch to Arrow for you. The caller owns the exported array/schema and
-must release them; the SDK's ``OwnedArrow`` does that in its destructor.
-
-.. tab-set::
-
-   .. tab-item:: C++ (SDK)
-
-      .. code-block:: cpp
-
-         void finalize(Host h) {
-             OwnedArrow a = h.arrow_read_ipc("/tmp/in.arrow");
-             if (a) h.arrow_write_ipc(a, "/tmp/out.arrow");
-         }
-
-   .. tab-item:: C (raw ABI)
-
-      .. code-block:: c
-
-         const dftu_svc_arrow* A =
-             (const dftu_svc_arrow*)host->get_service(host->h, DFTU_SVC_ARROW);
-         struct ArrowArray arr; struct ArrowSchema sch;
-         if (A->arrow_read_ipc(host->h, "/tmp/in.arrow", &arr, &sch) == 0) {
-             A->arrow_write_ipc(host->h, &arr, &sch, "/tmp/out.arrow");
-             arr.release(&arr); sch.release(&sch);   /* caller owns */
-         }
-
-12. Output writers
+11. Output writers
 ------------------
 
 Two writer groups exist. The **trace writer (DFTU_SVC_TRACE)** appends events to
@@ -931,9 +1083,11 @@ on first read, not at close.
 
       .. code-block:: cpp
 
-         void step(const Batch& b, Host h) {
-             dftu_trace_writer* w = h.trace_open_write("/tmp/out.pfw.gz");
-             if (w) { h.trace_write(w, b.raw()); h.trace_close(w); }
+         dstd::Result<void> step(dataframe::FrameView b, Host h) {
+             DFTRACER_UTILS_TRY(TraceWriter w,
+                                h.trace_writer("/tmp/out.pfw.gz"));  // RAII
+             DFTRACER_UTILS_TRY_VOID(w.write(b));
+             return w.close();
          }
 
    .. tab-item:: C (raw ABI)
@@ -942,28 +1096,68 @@ on first read, not at close.
 
          const dftu_svc_trace* T =
              (const dftu_svc_trace*)host->get_service(host->h, DFTU_SVC_TRACE);
-         dftu_trace_writer* w = T->trace_open_write(host->h, "/tmp/out.pfw.gz");
-         T->trace_write(host->h, w, df);   /* every row of df, by column name */
-         T->trace_close(host->h, w);
+         dftu_trace_writer* w = NULL;
+         T->trace_open_write(ctx, host->h, "/tmp/out.pfw.gz", &w);
+         T->trace_write(ctx, host->h, w, df);   /* every row of df, by column name */
+         T->trace_close(ctx, host->h, w);
 
-The **parallel writer (DFTU_SVC_WRITER)** is a sharded, multi-worker gzip-member
-output (``writer_create`` / ``writer_open`` / ``writer_chunk`` / ``writer_close``
-/ ``merge_shards``).
+The **file service (DFTU_SVC_FILEIO)** gathers the host's file readers and
+writers in one table. A reader or writer handle is owned by the host: a close
+call ends it, and the host frees one that the plugin did not close at the end of
+the fold (a gzip writer that was not closed is aborted and its files are
+removed). Calls on one handle must not overlap.
+
+- ``lines_open`` / ``lines_next`` / ``lines_close``: lines of a plain or gzip
+  file (the host detects the ``1f 8b`` magic), from ``start_line`` to
+  ``end_line`` (1-based; 0 means the first and the last line). ``lines_next``
+  gives a batch of borrowed ``dftu_bytes`` that stays valid until the next call;
+  the task status is ``DFTU_END`` at the end of the file. A last line with no
+  newline is a line. A missing file is ``DFTU_E_NOT_FOUND``.
+- ``chunks_open`` / ``chunks_next`` / ``chunks_close``: the bytes of a file in
+  chunks, borrowed until the next call, ``DFTU_END`` at the end.
+- ``gz_open`` / ``gz_append`` / ``gz_close``: a gzip line writer.
+  ``gz_append`` copies whole lines (data must end with ``'\n'``, else
+  ``DFTU_E_INVALID``); ``gz_close`` gives a ``dftu_gz_summary``.
+- ``compress`` / ``decompress``: whole-file gzip.
+- ``logical_path`` / ``mtime`` / ``size`` / ``sampled_hash``: file helpers; a
+  missing file is ``DFTU_E_NOT_FOUND``.
+- The **parallel writer** is a sharded, multi-worker gzip-member output
+  (``writer_create`` / ``writer_open`` / ``writer_chunk`` / ``writer_close`` /
+  ``merge_shards``). It replaces the former ``dftu.svc.writer`` service.
 
 .. tab-set::
 
    .. tab-item:: C++ (SDK)
 
-      ``Host::writer`` returns an ergonomic ``Writer`` (host-owned, nothing to
-      free); ``open`` / ``chunk`` / ``close`` are ``co_await``-able AsyncOps, and
-      ``Host::merge_shards`` concatenates shard files into a target.
+      ``Host::fileio()`` returns a ``Fileio`` with a ``LineReader`` and a
+      ``ChunkReader`` that close in their destructors, and a ``GzWriter`` that
+      the plugin closes with ``co_await close()`` (one left open is aborted at
+      the end of the fold and its files are removed);
+      ``co_await reader.next()`` gives the next batch, or ``nullopt`` at the end.
+      ``Host::writer`` returns the ``Writer`` of the parallel writer as a
+      ``dstd::Result`` (host-owned, nothing to free); ``open`` / ``chunk`` / ``close`` are ``co_await``-able
+      AsyncOps, and ``Host::merge_shards`` concatenates shard files into a
+      target.
+      ``examples/plugins/duration_report.cpp`` is a full plugin that writes its
+      report with ``GzWriter``.
 
       .. code-block:: cpp
 
          Task on_finalize(Host h) {
-             Writer w = h.writer("/tmp/out.pfw.gz", /*worker_count=*/4,
-                                 /*gzip=*/true);
-             if (!w) co_return;
+             auto reader = co_await h.fileio().lines("/tmp/in.pfw");
+             for (;;) {
+                 auto batch = co_await reader.next(1024);
+                 if (!batch) break;
+                 for (std::string_view line : *batch) { /* ... */ }
+             }
+
+             auto gz = co_await h.fileio().gz("/tmp/out.pfw.gz");
+             co_await gz.open();
+             co_await gz.append("{\"name\":\"x\"}\n");
+             GzSummary summary = co_await gz.close();
+
+             Writer w = co_await h.writer("/tmp/out2.pfw.gz", /*worker_count=*/4,
+                                          /*gzip=*/true);
              co_await w.open();
              co_await w.chunk(/*worker=*/0, std::string_view{"payload"});
              co_await w.close();
@@ -973,13 +1167,20 @@ output (``writer_create`` / ``writer_open`` / ``writer_chunk`` / ``writer_close`
 
       .. code-block:: c
 
-         const dftu_svc_writer* W =
-             (const dftu_svc_writer*)host->get_service(host->h, DFTU_SVC_WRITER);
-         dftu_writer* w = W->writer_create(host->h, "/tmp/out.pfw.gz",
-                                          /*num_workers=*/4, /*gzip=*/1);
-         /* co-await W->writer_open / writer_chunk / writer_close (tasks) */
+         const dftu_svc_fileio* F =
+             (const dftu_svc_fileio*)host->get_service(host->h, DFTU_SVC_FILEIO);
+         dftu_line_reader* r = NULL;
+         F->lines_open(ctx, host->h, "/tmp/in.pfw", 0, 0, &r);
+         /* await F->lines_next(ctx, host->h, r, 1024, &batch, &task) until
+            its status is DFTU_END, then: */
+         F->lines_close(host->h, r);
 
-13. Getting results back
+         dftu_writer* w = NULL;
+         F->writer_create(ctx, host->h, "/tmp/out.pfw.gz",
+                          /*num_workers=*/4, /*gzip=*/1, &w);
+         /* co-await F->writer_open / writer_chunk / writer_close (tasks) */
+
+12. Getting results back
 ------------------------
 
 Each host-owned accumulator is finalized at scan end to a table keyed by the
@@ -990,7 +1191,7 @@ emit name.
 
 **From Python**, build a fixed set of plugins and run them over a single fused
 scan; each result comes back shaped by its emit kind (a native
-:class:`~dftracer.utils.DataFrame`, a ``pyarrow.Table``, a
+:class:`~dftracer.utils.DataFrame`, a
 :class:`~dftracer.utils.LazyFrame`, or ``bytes``):
 
 .. code-block:: python
@@ -1024,7 +1225,7 @@ shared scan must stay wide enough for every branch):
 
 .. code-block:: cpp
 
-   using dftracer::utils::domains::plugins::Plugins;
+   using dftracer::utils::plugins::host::Plugins;
 
    auto set = Plugins::builder()
                   .add("./name_edges.so", R"({"duql": "cat == \"POSIX\""})")
@@ -1032,7 +1233,7 @@ shared scan must stay wide enough for every branch):
                   .build();                      // dstd::Result<Plugins>: a bad path,
    if (!set) throw std::runtime_error(set.error().message);   // ABI or graph fault
    PluginRun run = co_await set->run(View::from_files(files));
-   // NamedResult is a variant: bytes, OwnedArrow, OwnedDataFrame, OwnedLazyFrame.
+   // NamedResult is a variant: bytes, OwnedDataFrame, OwnedLazyFrame.
    auto& table = std::get<OwnedDataFrame>(run.results.results().at("name_edges"));
 
 **From the command line**, ``dftracer_run`` folds every ``--plugin`` over one
@@ -1046,14 +1247,49 @@ result tables - read those through :class:`~dftracer.utils.plugins.Plugins`):
 
 Use ``-d <directory>`` for a whole tree instead of ``--files``.
 
-14. Extending the engine: ops, sources, plan nodes
+Arrow from a plugin
+~~~~~~~~~~~~~~~~~~~
+
+The plugin ABI has no Arrow type, and it does not need one: every buffer a
+column holds is already in Arrow's layout. The validity bitmap is one bit per
+row with 1 meaning valid, String and Binary offsets are int32 (int64 for their
+Large forms), and a StringView column holds Arrow's 16-byte views. A plugin
+that wants Arrow builds the arrays itself, with nanoarrow, libarrow or
+anything else, borrowing the column's buffers with no copy:
+
+.. code-block:: c
+
+   int64_t bit_offset = 0;
+   const uint8_t* validity = dftu_series_validity(col, &bit_offset);  /* NULL: no nulls */
+   const void* values = dftu_series_data(col);        /* Int64: 8 bytes per row */
+   const int32_t* offsets = dftu_series_offsets(col); /* String: length+1 entries */
+
+``dftu_series_validity``, ``dftu_series_offsets``, ``dftu_series_offsets64``,
+``dftu_series_data``, ``dftu_series_chunk_count`` with ``dftu_series_chunk``,
+``dftu_series_dictionary_codes`` with ``dftu_series_dictionary_values`` and
+``dftu_series_view_data`` with ``dftu_series_view_buffer_count`` and
+``dftu_series_view_buffer`` hand out the buffers of a FLAT, VIEW, DICTIONARY
+or CHUNKED column. They are borrowed and stay valid while the column lives, and
+return NULL (or -1) for an encoding that has no such buffer.
+
+Arrow memory comes back the same way. ``dftu_series_new_flat_borrowed``,
+``dftu_series_new_string_borrowed`` and ``dftu_series_new_string_view`` build a
+column that borrows the buffers and the validity bitmap with no copy, and calls
+``release(ctx)`` exactly once, when the last column using them is freed - so
+``release`` can be the ArrowArray's own release callback. See
+``examples/plugins/arrow_convert.c`` for the whole round trip (Int64, Float64,
+String by offsets and by views, and a dictionary column) and the
+``arrow_convert`` test that runs it.
+
+13. Extending the engine: ops, sources, plan nodes
 --------------------------------------------------
 
 A plugin is not only a fold over the scan. Three registries let it add to the
 engine itself, each name-keyed and process-wide, each refusing a duplicate
 name and the host's own namespaces (bare names and ``dftu.`` are the host's; a
 plugin's names are ``<plugin>.<name>``). Register from the factory; by run
-time the registries are settled.
+time the registries are settled. A format or a sink is the one exception:
+it may take the plugin's own bare name.
 
 **An op** (``DFTU_SVC_OPS``). The same registry the engine's built-ins live
 in: a ``dftu_op_desc`` is a name, a packed signature (``DFTU_OP_SIG(SERIES,
@@ -1063,14 +1299,212 @@ registered it is reachable from anywhere: ``run`` / ``run_frame`` /
 ``op_run`` from Python, and a ``LazyFrame`` plan through
 ``dftu_lazyframe_op``. The same service runs any built-in on handles the
 plugin already holds (``Host::run_op("dftu.hash.fnv1a", {column})``), so a
-plugin never links the dataframe ABI to use the engine.
+plugin does not link the dataframe ABI to use the engine. A plugin that reads or
+builds a column's buffers does link the dataframe library, and the process must
+hold exactly one copy of it, the one the host runs on, because the host frees
+the column. The SDK registers one op shape, an aggregate over one borrowed
+column returning an int64 (``OpSpec::series_i64``); any other signature token
+needs the ``dftu_op_desc`` form of the C ABI, which the same registry takes.
 
 .. code-block:: cpp
 
-   static dftu_series* zscore(const dftu_series* v);   // series -> series
-   static const dftu_op_desc ZSCORE = {"me.zscore",
-       DFTU_OP_SIG(SERIES, SERIES, NONE, NONE), (dftu_op_generic_fn)&zscore};
-   return plugin(h, config).op(ZSCORE).fold<MySlice>().build();
+   // The op body: a borrowed column in, one int64 aggregate out.
+   std::int64_t row_count(const dataframe::ColumnView& v);
+
+   DFTU_PLUGIN("me", "1.0",
+               [](PluginBuilder& p, const Config& config)
+                   -> dstd::Result<void> {
+                   (void)config;
+                   p.op(OpSpec::series_i64<&row_count>("me.row_count"));
+                   p.fold<MySlice>();   // the fold or state that runs it
+                   return {};
+               })
+
+**A scalar UDF** (``dftu_svc_ops::register_udf``). A function that duql
+calls by name, such as ``to_ms(dur)`` or ``is_slow(dur, 1000)``, in a ``derive``,
+``select``, ``where``, join key or any other expression. Unlike an op, its name
+is the duql name as the query spells it, with no ``<plugin>.`` prefix. A name
+that a built-in function or another UDF holds fails the load with a message.
+A ``dftu_udf_desc`` (``dataframe/c_api_udf.h``) has the name, the argument
+counts ``min_args`` and ``max_args``, flags and three callbacks. ``bind`` runs
+once per call site with the argument types (``dftu_type_info``) and, for each
+argument the query writes as a constant, its ``dftu_scalar``; it picks the result
+type and may keep state in ``bound``. ``exec`` runs on one batch: the argument
+columns, borrowed, and the row count in, one new column of that many rows and
+the bound type out. It never runs per row. ``free_bound`` releases ``bound``.
+A UDF takes and gives Bool, the integer and float types, String and Binary.
+Bool columns are bit-packed, one bit per row, least significant bit first.
+The registration serves every surface. Python calls the UDF as
+``dft.udf["to_ms"](dft.col("dur"))`` or ``dft.call("to_ms", dft.col("dur"))``,
+C++ as ``dataframe::udf("to_ms")->operator()(col(0))``, and ``dftu_op_find("to_ms")``
+finds a record of it in the op registry. That record has no function to run:
+the UDF runs through duql and expressions, which bind it.
+
+``exec`` may run on several batches at once, so it reads ``bound`` and writes
+only what it owns. By default the UDF is deterministic and a row with a null
+argument gives a null result: the host nulls those rows after ``exec``, which
+may compute anything for them. ``DFTU_FN_NULL_AWARE`` passes the columns as they
+are and keeps the result's validity. ``DFTU_FN_VOLATILE`` marks a result that
+can differ for the same arguments; the flag is advisory. The SDK spells the same
+two flags ``pl::UdfFlag::NullAware`` and ``pl::UdfFlag::Volatile``, declared in
+the ``FLAGS`` of a class you name or returned from ``bind``. A UDF call is never
+folded to a constant either way, and a ``lookup`` side that calls a UDF is not
+stored in the lookup cache. A ``bind`` that fails owns its own cleanup: the host
+ignores ``*bound`` and calls ``free_bound`` only for a ``bind`` that succeeded.
+
+A long ``exec`` polls once per few thousand rows, with ``dftu_check`` in C or
+``UdfBatch::check()`` in C++, and returns the error it reports. A cancelled
+query, such as one past a deadline, then stops within one batch; a UDF that
+never polls delays the stop until its batch is done. An error status with a
+message from ``exec`` fails the query with that message.
+duql has no join predicate, so a UDF joins as a key function, and a Bool UDF as
+a key too: ``lookup flags on is_slow(dur, 1000) == slow``.
+
+.. code-block:: cpp
+
+   struct ToMs {                                  // plugins/plugin/udf.h
+       dataframe::TypeId type;
+       static dstd::Result<dstd::UniquePtr<ToMs>> bind(pl::UdfBind& bind);
+       dstd::Result<dataframe::Column> exec(pl::UdfBatch& batch) const;
+   };
+   return plugin(ctx, h, config).udf<ToMs>("to_ms").build(out);
+
+``examples/plugins/duration_udfs.cpp`` is a full plugin with two UDFs.
+
+**A UDF in the same process.** Code that is not a plugin registers the same
+class with ``dataframe::make_udf<T>()`` (``dataframe/udf.h``). ``T`` is the
+class a plugin passes to ``PluginBuilder::udf``, plus a static ``NAME`` and
+optional ``MIN_ARGS``, ``MAX_ARGS`` and ``FLAGS``; both paths build the
+``dftu_udf_desc`` through one adapter. The result is a
+``dstd::Result<dataframe::Udf>``: a clash with a built-in function, another UDF
+or an op is an error with a message.
+
+.. code-block:: cpp
+
+   struct PlusOne {
+       static constexpr const char* NAME = "plus_one";
+       static dstd::Result<dstd::UniquePtr<PlusOne>> bind(dataframe::UdfBind&);
+       dstd::Result<dataframe::Column> exec(dataframe::UdfBatch&) const;
+   };
+   auto plus_one = dataframe::make_udf<PlusOne>();   // owns the registration
+   Expr e = (*plus_one)(col(0));                     // Udf is callable
+
+The ``Udf`` that ``make_udf`` returns owns the registration: when it is
+destroyed the name leaves the registry, so a later lookup, query or
+``dftu_op_find`` finds nothing. A plan or expression that took the UDF before
+keeps it and runs. A ``Udf`` is move only, and moving it keeps one
+registration. ``dataframe::udf(name)`` gives a ``Udf`` that only looks the name
+up, so destroying it never unregisters, and fails with NotFound for an unknown
+name.
+
+**A user-defined aggregate** (``dftu_svc_ops::register_udaf``). A function
+that keeps one state per group, such as ``p95(dur)``. Its name follows the
+rules of a UDF name, and a name that a built-in function or aggregate, an op, a
+UDF or another aggregate holds fails the load with a message. A
+``dftu_udaf_desc`` (``dataframe/c_api_udaf.h``) has the name, the argument
+counts, flags, ``state_size`` and ``state_align``, and the callbacks. The host
+owns the memory of every state, in blocks that never move while the table
+grows. ``bind`` runs for a group-by and again for each state set the host
+builds apart from the first (a partial fed on another thread, states read back
+from a spill). ``init`` makes new states
+ready, ``update`` feeds a batch of rows to the states of their groups
+(``states[i]`` is the state of row ``i``), ``combine`` merges states, and
+``finalize`` gives one result row per state. They run over arrays and columns,
+never row by row. ``free_bound`` releases ``bound``, after the last state.
+
+Without ``DFTU_AGG_NULL_AWARE`` the host passes a NULL state pointer for a row
+where any argument is null, so ``update`` skips it; with the flag the plugin
+sees every row (``pl::UdafFlag::NullAware`` in the SDK). ``DFTU_AGG_STATE_POD``
+marks a state that is plain bytes: the host zero-fills it, and may copy it to
+spill or move it, so it needs no ``destroy``, ``serialize`` or ``deserialize``.
+In the SDK the adapter adds that flag itself, from the state type. Any other
+state needs all three: ``destroy`` runs on every state that ``init`` made, and
+``serialize`` writes a state as bytes with a two-call size query (a NULL
+``out``, or a ``cap`` that is too small, only sets ``*size``) for a spill or a
+merge across processes. A UDAF with neither a POD state nor the serialize pair
+fails the load. ``DFTU_AGG_PARALLEL_SAFE`` lets the host feed several state
+sets on different threads and merge them with ``combine``; one set is never
+used by two threads at once. Without the flag no callback of the UDAF runs on two
+threads at once (``bind``, ``init``, ``update``, ``combine``, ``finalize``,
+``destroy``, ``serialize``, ``deserialize`` and ``free_bound``), so a group-by
+with such a UDAF runs on one state set. ``DFTU_AGG_HAS_RETRACT`` needs
+``retract`` and ``value`` for a sliding window.
+
+A UDAF is also a window function: a ``window`` block of duql calls it with
+``over`` (``usum(x) over 10 rows``, ``usum(x) over 5s``), and the C ABI runs it
+as ``DFTU_WINDOW_FRAME_UDAF`` with ``udaf``, ``args`` and ``arg_count`` in the
+frame of a ``dftu_window_spec``. With ``DFTU_AGG_HAS_RETRACT`` the host slides
+the frame. It cuts a partition into slices of at least 1024 rows wherever the
+frame is no longer than the slice so far (a running frame stays one slice),
+keeps one state per slice and moves every slice one row per step, so ``update``
+takes the
+rows that join the frames of all slices in one call, ``retract`` takes the rows
+that leave them in one call (with the same null pointers as ``update``) and
+``value`` gives the result of each frame. A row costs O(1) rows of ``update``
+and ``retract`` and one ``value`` call, whatever the frame size. A UDAF without
+them is merged from a tree: the host feeds each row to a state of its own with
+``update``, merges the states of two neighbors into a state of the next level
+with ``combine``, and gives each frame a fresh state that ``combine`` merges
+the O(log w) tree states tiling the frame into, from left to right, so
+``combine`` must keep the order of the rows if the result depends on it. A
+``combine`` leaves its ``from`` state unchanged, because a tree state feeds
+many frames. ``finalize`` gives the results of a chunk of frames at once. A
+frame of at most 8 rows of a ``ROWS`` frame is not worth a tree: each such frame
+gets a state of its own, fed its rows by ``update``. The tree holds about two
+states per row of a partition, so a state that grows with its rows (a list of
+values) holds O(n log n) values of it. A frame with no fed row, or fewer than the
+``min_count`` the query sets, gives null without calling ``value``. A ``window``
+entry with no ``over`` runs the UDAF over each whole partition as ``group``
+does. A window over a stream is cut at partition boundaries, as for the
+built-in frame functions that need the whole partition.
+
+``DataFrame::group_by``, ``LazyFrame::group_by`` and ``group_by_dynamic`` run a
+UDAF as a ``GroupAgg`` with ``op = Agg::Udaf``, ``fn`` the registered name,
+``column`` the first argument and ``args`` the others. The C ABI does the same:
+an ``op`` name of ``dftu_dataframe_group_by`` that no built-in aggregate has
+resolves to the registered UDAF of that name, with ``column`` as its one
+argument. The argument types are fixed by the first batch, and a later batch
+with another type fails. A group-by that spills writes each group state with
+``serialize`` and merges the runs with ``combine``. A duql ``group`` or ``agg``
+block calls a UDAF by name, as ``n = usum(size)`` (see
+:ref:`duql-plugin-udafs`). A duql ``window`` block runs a UDAF over a frame,
+as described above.
+
+Python calls a UDAF from ``group_by(...).agg``. ``dft.udaf`` is the read-only
+registry, like ``dft.udf``: ``dft.udaf["p95"]`` is a ``Udaf`` with ``name``,
+``min_args``, ``max_args`` and ``flags``, and an unknown name raises
+``KeyError``. Calling it with column expressions gives an ``Agg`` that takes
+``.alias(...)`` or a keyword name, and the output column is ``<name>_<column>``
+by default. Each argument must be a bare column. A wrong argument count raises
+``TypeError``, and a failure in the UDAF raises ``ValueError``. The group-by finds
+the UDAF by name when it runs, so the plugin must still be loaded then.
+``LazyFrame.group_by`` and ``group_by_dynamic`` (lazy and eager) take the same
+``Agg``; their arguments must be bare columns, or they raise ``ValueError``.
+
+.. code-block:: python
+
+   df.group_by("pid").agg(dft.udaf["p95"](dft.col("dur")).alias("dur_p95"))
+
+.. code-block:: cpp
+
+   struct P95 {                                   // plugins/plugin/udaf.h
+       struct State { Sketch sketch; };           // not trivially copyable
+       static dstd::Result<dstd::UniquePtr<P95>> bind(pl::UdfBind& bind);
+       dstd::Result<void> update(pl::UdafStateSet<State>& states,
+                                 const pl::UdfBatch& batch) const;
+       dstd::Result<void> combine(State& into, const State& from) const;
+       dstd::Result<dataframe::Column> finalize(
+           pl::UdafStateSet<State>& states) const;
+       void serialize(const State& state, dstd::String& out) const;
+       dstd::Result<void> deserialize(State& state, dstd::StringView in) const;
+   };
+   return plugin(ctx, h, config).udaf<P95>("p95").build(out);
+
+A ``State`` that is trivially copyable is a POD state and needs no
+``serialize`` pair. Code that is not a plugin registers the same class, plus a
+static ``NAME``, with ``dataframe::make_udaf<A>()`` (``dataframe/udaf.h``);
+the ``dataframe::Udaf`` it returns owns the registration, as ``Udf`` does, and
+``dataframe::udaf(name)`` only looks a name up.
 
 **A source** (``DFTU_SVC_PROVIDERS``). A ``dftu_source_vt`` is the C mirror
 of the engine's ``Source`` / ``Cursor`` pair: ``schema`` names the columns
@@ -1079,8 +1513,14 @@ included), ``scan`` opens a cursor honoring a ``dftu_scan_request``
 (projection, filters, limit, budget) and reports per filter how completely it
 applied it (``DFTU_PUSHED_NO`` / ``INEXACT`` / ``EXACT``; the host re-applies
 anything short of exact), and the cursor's ``next`` pulls one frame at a
-time, synchronously or as a task. ``dftu_lazyframe_from_provider(name)``
-then scans it like a file, from any language. An optional ``apply`` callback lets the source
+time, synchronously or through a ``pending`` task (``DFTU_END`` ends the
+stream). Every ``dftu_source_vt`` and ``dftu_cursor_vt`` callback takes the
+``dftu_ctx*`` first and returns a ``dftu_status``; a negative status is the
+error, with the message the callback set on the ctx.
+``dftu_lazyframe_from_provider(name)``
+then scans it like a file, from any language. The vtables live in
+``plugins/abi/providers.h``; the host wraps one as a C++ provider in the
+dataframe registry, so the dataframe library itself knows no plugin type. An optional ``apply`` callback lets the source
 absorb whole ops at plan time (filter, projection, aggregation, sort,
 top-N, limit, tail, join); see the planning hooks in
 :doc:`guides/data/lazyframe`.
@@ -1091,8 +1531,12 @@ is optional, and only the ones it defines are wired up. Requests arrive as
 views (``ExprView`` with ``as_compare`` / ``as_logical`` / ``as_not`` /
 ``as_str_pred`` / ``as_is_in``, ``SortView``, ``AggregationView``,
 ``JoinView<S>`` with the other side as ``S``), and results are owned C++
-values (``OwnedFrame``, ``Applied<S>``). Exceptions never cross the ABI: a
-throwing cursor surfaces as a scan error and a throwing hook as no change.
+values (``OwnedDataFrame``, ``Applied<S>``). ``scan``, ``next`` and the planning
+hooks return a ``dstd::Result``, and an error fails the call with its status
+and message. A failed cursor fails the scan with it; for a failed planning hook
+the host logs the message and applies the op itself. ``scan`` also receives the
+cursor's ``Host``; a cursor whose ``next`` takes ``(std::int64_t, const Host&)``
+in place of ``(std::int64_t)`` gets a ``Host`` that is good for that call.
 
 .. code-block:: cpp
 
@@ -1103,31 +1547,115 @@ throwing cursor surfaces as a scan error and a throwing hook as no change.
     public:
        dstd::Vector<dstd::String> names() const { return {"id"}; }
        struct Cursor {
-           pl::OwnedFrame frame;
-           dstd::Optional<pl::OwnedFrame> next(std::int64_t) {
+           pl::OwnedDataFrame frame;
+           dstd::Optional<pl::OwnedDataFrame> next(std::int64_t) {
                if (!frame) return dstd::nullopt;
                return std::move(frame);
            }
        };
-       pl::ScanResult<Cursor> scan(const pl::ScanView&) const;
+       pl::ScanResult<Cursor> scan(const pl::ScanView&, const pl::Host&) const;
        // `id > k` becomes a narrower range; anything else stays with the engine.
        dstd::Optional<pl::Applied<Range>> apply_filter(pl::ExprView p) const {
            auto c = p.as_compare();
-           if (!c || c->column != 0 || c->op != DFTU_CMP_GT) return dstd::nullopt;
-           return pl::Applied<Range>{
-               dstd::make_unique<Range>(c->rhs.value.i + 1, hi_)};
+           if (!c || c->column != 0 || c->op != pl::CmpOp::Gt)
+               return dstd::nullopt;
+           const pl::ScalarView k = c->rhs();
+           if (k.kind() != pl::ScalarKind::I64) return dstd::nullopt;
+           return pl::Applied<Range>{dstd::make_unique<Range>(k.i64() + 1, hi_)};
        }
        // ...
    };
 
-   return pl::plugin(h, config)
+   return pl::plugin(ctx, h, config)
        .source<Range>("me.range", dstd::make_unique<Range>(0, 1000))
-       .build();
+       .build(out);
 
-**A plan node** (``DFTU_SVC_NODES``; ``dftu_node_register`` in the
-dataframe ABI for a non-plugin caller). Register it from the factory through
+A source also votes on the filters it absorbed: ``ScanResult::filters`` holds one
+``Pushed`` per ``ScanView::filters`` entry (``Pushed::Exact`` when the rows the
+cursor hands out already satisfy it, ``Pushed::No`` or no entry when the engine
+must apply it). A node reads its operands through ``OpArgs``: ``i64``, ``f64``,
+``str``, ``column`` and ``column_index`` by position, plus ``OpArgs::size()``.
+
+**Building a frame.** ``plugins/plugin/frame.h`` makes the frames and columns
+that a plugin gives away, and copies no data. ``Column`` takes the plugin's
+buffers by move and borrows them through ``dftu_series_new_flat_borrowed`` or
+``dftu_series_new_string_borrowed`` (see the borrowed-column section above):
+``from_int64``, ``from_int32``, ``from_uint64``, ``from_double``,
+``from_bool`` (bit-packed, one bit per row), ``from_timestamp`` and
+``from_duration`` (the ABI carries no time unit, so both read as micro),
+``from_strings`` from offsets and bytes, and ``from_static_*`` for memory that
+the plugin owns for the whole process, which it neither copies nor frees.
+Every one takes its values as a ``dstd::Span`` (``bytes`` as a
+``dstd::StringView``), so a borrowed table needs no separate row count:
+``from_static_int64``, ``from_static_int32``, ``from_static_uint64``,
+``from_static_double``, ``from_static_timestamp`` and ``from_static_duration``
+over a ``dstd::Span<const T>``, ``from_static_bool`` over its bit-packed bytes
+and a row count, and ``from_static_strings`` over the offsets and the bytes,
+where the rows are the offsets minus one.
+``FrameBuilder`` names each column and builds the frame with
+``dftu_dataframe_new``. A null column, or a column whose row count differs from
+the first, is an error, and the builder frees everything it made.
+
+``OwnedDataFrame`` is the one owner of a frame in the plugin surface: a
+source, a node, a format, a UDF result and a named result all hand it back.
+``get()`` borrows the handle, ``release()`` gives it away, and the destructor
+frees it with ``dftu_dataframe_free``. It owns the columns it was built from,
+so the buffer a ``Column`` borrowed is freed exactly once: when the last column
+that uses it is gone - the base column, and any column that a filter, slice,
+take or share made from it.
+
+.. code-block:: cpp
+
+   dstd::Vector<std::int64_t> ids(1024, 0);
+   dstd::Vector<std::int32_t> offsets{0, 3, 7};
+   dstd::String bytes("abcd");
+   pl::FrameBuilder builder;
+   builder.add("id", pl::Column::from_int64(std::move(ids)));
+   builder.add("name",
+               pl::Column::from_strings(std::move(offsets), std::move(bytes)));
+   dstd::Result<pl::OwnedDataFrame> frame = builder.build();
+   if (!frame) return std::move(frame).error();
+   return std::move(*frame);  // the host frees the frame and its buffers
+
+``examples/plugins/range_provider.cpp`` is the smallest complete provider:
+it registers ``range_provider.numbers``, a table of ``rows`` rows (its config
+key, 10 by default) with the int64 columns ``i`` and ``square``, hands the
+rows out in frames of 1024, honors a projection and leaves filters and sorting
+to the engine. ``tests/plugins/test_example_range_provider.cpp`` collects it,
+projects it and sets ``rows``.
+
+**The cursor host.** A provider's ``scan`` and a node's ``open`` receive a
+``const dftu_plugin_host*`` that stays valid until the cursor's ``destroy`` has
+returned. It serves the services of a fold callback's host that need no scan:
+``DFTU_SVC_MEMORY``, ``DFTU_SVC_IO``, ``DFTU_SVC_FS``, ``DFTU_SVC_JSON``,
+``DFTU_SVC_YAML``, ``DFTU_SVC_SKETCH``, ``DFTU_SVC_OPS`` and
+the registration groups, which refuse at run time. It returns NULL for the
+services that belong to one scan: ``DFTU_SVC_TASK``, ``DFTU_SVC_FILEIO``,
+``DFTU_SVC_AGG``, ``DFTU_SVC_RESULT``, ``DFTU_SVC_PORTS``, ``DFTU_SVC_DUQL`` and
+``DFTU_SVC_TRACE``, and its ``resolve`` and ``intern`` find nothing, since a
+cursor has no intern table. A cursor reserves memory through it like a fold
+slice, and the reservations are charged to the pool of the plugin, one budget
+shared with its folds. When another holder of the process budget asks the pool
+for bytes, the host runs the reclaimers of the cursor's reservations between two
+of its ``next()`` calls, on the thread that drives it. A reservation the cursor
+still holds when its ``destroy`` returns is released by the host, which logs an
+error.
+
+**Library lifetime.** The host keeps a plugin's shared library loaded while
+anything made from it is alive: a registered node, provider, index
+extension, op, UDF or UDAF, and the plans and cursors that hold one. Unloading the plugin
+removes its names at once, so no new lookup finds them. The plugin's own
+``destroy`` runs after the last holder is gone, and the library is closed
+after it; a node or provider calls its own ``destroy(self)`` before that, so it
+may use the plugin's global state. A plugin never counts
+references itself, since the host takes them. An op registered by a plugin's
+factory is covered the same way; an op registered with ``dftu_op_register``
+from plain C code is not tied to any library.
+
+**A plan node** (``DFTU_SVC_NODES``; the ``dftu_node_vt`` is in
+``plugins/abi/nodes.h``). Register it from the factory through
 the service: the host gates the name to ``<plugin>.<name>`` and unregisters
-the node before the plugin unloads, so no plan can reach code that is gone. A
+the node when the plugin unloads, so no new plan finds it. A
 ``dftu_node_vt`` is a cursor that takes an input cursor and returns an
 output cursor: a streaming op (one morsel in, one out, state kept between
 morsels: sessionize, coalesce, a GPU kernel) or a breaker (drain the input
@@ -1135,16 +1663,20 @@ on the first ``next``, emit one frame). ``output_schema`` declares its
 columns from the input's, so the optimizer can type the plan around it; it
 may not push a filter or projection through the node, and ``explain`` names
 it. ``LazyFrame::op(name, args)`` / ``dftu_lazyframe_op`` stacks it on a
-plan like any built-in step. The cursor's optional slots let it take part in
-the plan's machinery: ``narrow`` forwards a join's key set to its input,
-``open`` receives the plan's memory budget in bytes, and ``bytes`` /
-``reclaim`` hold it to that budget
+plan like any built-in step, and duql reaches it with ``call ns.n()`` and no
+arguments (see :ref:`duql-plugin-functions`); the node then reads the columns
+the plan carries at that point, which after a ``select`` are the names that
+``select`` gives, not the scan's own. Undeclared columns are dropped before
+a node, so a plan names a field in a ``select`` to pass it. The cursor's optional slots let it take
+part in the plan's machinery: ``narrow`` forwards a join's key set to its input,
+and ``open`` receives the plan's memory budget in bytes and the cursor host,
+through which the cursor reserves memory
 (:doc:`guides/runtime/memory-budget`).
 
 In C++, ``plugins/plugin/node.h`` does the same for a node class:
 ``output_schema(SchemaView in, OpArgs args, SchemaBuilder& out)`` and
-``open(InputCursor in, OpArgs args, std::uint64_t memory_budget)`` returning
-a cursor like a source's. ``memory_budget`` is the plan's budget in bytes,
+``open(InputCursor in, OpArgs args, std::uint64_t memory_budget, const Host& host)``
+returning a cursor like a source's. ``memory_budget`` is the plan's budget in bytes,
 never 0; a node that holds state sizes its spill threshold and its output
 frames from it.
 ``InputCursor`` owns the upstream: ``next()`` pulls it (running an upstream
@@ -1158,16 +1690,22 @@ node when ``open`` succeeds and by the host when it fails.
                           pl::SchemaBuilder& out) const { in.copy_all(out); }
        struct Cursor {
            pl::InputCursor in;
-           dstd::Optional<pl::OwnedFrame> next(std::int64_t rows);  // pull, transform
+           dstd::Optional<pl::OwnedDataFrame> next(std::int64_t rows);  // pull, transform
        };
        dstd::UniquePtr<Cursor> open(pl::InputCursor in, const pl::OpArgs&,
-                                    std::uint64_t) const {
+                                    std::uint64_t, const pl::Host&) const {
            return dstd::make_unique<Cursor>(Cursor{std::move(in)});
        }
    };
 
-   return pl::plugin(h, config).node<Double>("me.double",
-                                             dstd::make_unique<Double>()).build();
+   return pl::plugin(ctx, h, config).node<Double>(
+       "me.double", dstd::make_unique<Double>()).build(out);
+
+``examples/plugins/sessionize.cpp`` is a complete streaming node: it keeps the
+last ``ts`` of each ``pid`` across frames and appends an int64 ``session``
+column, opening a new session when the gap from one row of that pid to the
+next is more than a second (``ts`` is in microseconds). ``select pid, ts |
+call sessionize.gaps()`` runs it from duql.
 
 **Plans inside a plugin.** ``OwnedLazyFrame`` (``result_registry.h``) is the
 fluent facade over ``dftu.lazy.*``: build a plan from a frame
@@ -1181,11 +1719,51 @@ handle every later step short-circuits on, so a chain fails once, at the
 end, not with a crash in the middle. ``emit_result_frame`` emits an eager
 frame the same way.
 
-``tests/utilities/plugins/reference_plugin.c`` is the conformance plugin: it
+``tests/plugins/reference_plugin.c`` is the conformance plugin: it
 touches every service slot, registers an op, a source, a state and a node,
 and is the one file to read for the exact C of each.
 
-15. Index extensions (DFTU_SVC_INDEX)
+**Examples by kind.** ``examples/plugins/`` builds one small plugin per kind,
+and ``ctest -R examples/plugins/`` loads each example that loads on its own
+through ``dftracer_plugin check`` and runs the golden tests it ships in
+``examples/plugins/tests/``:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 14 34 52
+
+   * - Kind
+     - File
+     - What it shows
+   * - fold
+     - ``examples/plugins/duration_report.cpp``
+     - A fold that writes its report through the host fileio service.
+   * - fold
+     - ``examples/plugins/duration_histogram.cpp``
+     - A fold that emits its histogram as named results.
+   * - fold
+     - ``examples/plugins/event_counter.c``, ``process_*.c``
+     - The C fold ABI: a batch, a port pair, cross-worker accumulators.
+   * - udf
+     - ``examples/plugins/duration_udfs.cpp``
+     - Two scalar UDFs duql calls by name.
+   * - aggregate
+     - ``examples/plugins/stats_udafs.cpp``
+     - Two UDAFs, one of them parallel-safe over a group.
+   * - sink
+     - ``examples/plugins/csv_sink.cpp``
+     - A sink that writes every frame of a plan to a CSV file.
+   * - format
+     - ``examples/plugins/csv_reader.cpp``
+     - A format that reads a CSV file, typed per column and chunked.
+   * - node
+     - ``examples/plugins/sessionize.cpp``
+     - A streaming node that appends a session number per pid.
+   * - provider
+     - ``examples/plugins/range_provider.cpp``
+     - A provider whose table is built in code, honoring a projection.
+
+14. Index extensions (DFTU_SVC_INDEX)
 -------------------------------------
 
 An index extension adds pruning evidence to the index. While a plugin set
@@ -1202,7 +1780,7 @@ Register from the factory, which is the only place registration is allowed:
 
    const dftu_svc_index* index =
        (const dftu_svc_index*)h->get_service(h->h, DFTU_SVC_INDEX);
-   index->register_extension(h->h, "myplugin.range", &g_ext, NULL);
+   index->register_extension(ctx, h->h, "myplugin.range", &g_ext, NULL);
 
 The name must be ``<plugin>.<name>``, and a name already registered in the
 process fails the load. ``dftu_index_extension`` holds:
@@ -1224,11 +1802,13 @@ process fails the load. ``dftu_index_extension`` holds:
      - One builder per file, used by one thread. NULL stores nothing for the
        file.
    * - ``step``
-     - The next record lines of the current chunk, borrowed for the call.
-       Nonzero stores nothing for the chunk.
+     - The next record lines of the current chunk, borrowed for the call. A
+       negative status stores nothing for the chunk or the file, and the host
+       logs it once with the message set on the ctx.
    * - ``finish_granule`` / ``finish_file``
      - Append the chunk's or the file's payload through ``dftu_index_out``;
-       the host owns the bytes. No bytes stores nothing.
+       the host owns the bytes. No bytes stores nothing, and a negative status
+       stores nothing and is logged.
    * - ``compile`` / ``release``
      - Prepare a ``dftu_index_leaf`` (path, ``any``, operator, literal as a
        ``dftu_value``), or return NULL when the extension has no evidence for
@@ -1247,8 +1827,145 @@ and keep it loaded while they run: C++ ``Plugins::builder().add(path)``,
 Python ``dftracer.utils.plugins.Plugins``, or
 ``dftracer_index --plugin path``. ``Indexer::manifest`` and ``explain`` list
 the extension by name, and ``rebuild_extension`` and ``drop_extension``
-accept it. ``tests/utilities/plugins/index_minmax_plugin.c`` is a complete
+accept it. ``tests/plugins/index_minmax_plugin.c`` is a complete
 extension: per chunk min and max of one number.
+
+15. File formats (DFTU_SVC_FILE_FORMATS)
+----------------------------------------
+
+A file format teaches the engine to read a file kind it does not know. The
+engine asks every registered format for a score, picks the highest, and scans
+the file through it: ``LazyFrame::scan_file(path)`` from C++,
+``dftu_lazyframe_scan_file(path, &lf)`` from C. The planning, the columns and
+the result are the ones ``LazyFrame::scan`` gives, so every op works on the
+file without knowing its format.
+
+A ``dftu_file_format_vt`` (``plugins/abi/file_formats.h``) is:
+
+- ``probe(self, head, n, path)`` returns 0 to 100. The head is the first 4 KiB
+  of the file, read once for the whole choice. The highest score above 0 wins,
+  and two formats at the same top score are an error that names both, so a
+  format must not claim a file another one claims just as well. Nothing above
+  0 is ``NotFound``, "no format claims <path>". ``extensions`` is a hint only.
+- ``open(ctx, self, path, &file)`` opens the file, ``schema(ctx, file,
+  &out)`` fills a ``dftu_schema`` with its names and types, and
+  ``chunks(ctx, file, &n)`` says how many pieces of the file can be scanned
+  independently, at least 1.
+- ``chunk_stats(ctx, file, chunk, &out)`` is optional (NULL for none) and
+  gives the row count of one chunk, -1 when it does not know. The host does not
+  call it yet; it is a hint for a planner.
+- ``scan(ctx, file, chunk, host, req, out_pushed, &cursor_self, &cursor_vt)``
+  opens one chunk's cursor. ``req`` is the provider ``dftu_scan_request``:
+  projection, filters, limit and memory budget. The format honors what it
+  can and answers per filter how completely it did it
+  (``DFTU_PUSHED_NO`` / ``INEXACT`` / ``EXACT``); the host re-applies
+  anything short of exact. Every chunk of one scan must report the same
+  votes, so a filter counts as pushed only when all chunks took it, and a
+  chunk that disagrees fails the scan.
+- ``close(file)`` and ``destroy(self)``, each called once.
+
+The engine walks chunks 0 to n-1 in order, one cursor at a time. The file
+stays open while any plan or cursor made from it lives, and the plugin's
+library stays loaded for as long as they do, so a plan keeps working after
+the plugin set is dropped; after that a new ``scan_file`` no longer finds the
+format. A negative status from ``probe``, ``open``, ``schema``, ``chunks`` or
+``scan`` surfaces to the caller with the message the callback set on the ctx.
+
+In C++, derive from ``pl::FileFormat<F>`` (``plugins/plugin/file_format.h``)
+and call ``.file_format<F>()`` on the builder. The trampolines hold no catch: a
+callback returns a ``dstd::Result``, which becomes its status and message, so a
+callback that throws terminates the process.
+
+.. code-block:: cpp
+
+   #include <dftracer/utils/plugins/plugin.h>
+   namespace pl = dftracer::utils::plugins;
+
+   class Rows : public pl::FileFormat {     // a file of "<id> <name>" lines
+    public:
+       std::int32_t probe(dstd::ByteView head,
+                          dstd::CStringView path) override {
+           (void)path;
+           return head.size() >= 4 &&
+                          std::memcmp(head.data(), "TOY1", 4) == 0
+                      ? 90
+                      : 0;
+       }
+       dstd::Result<dstd::UniquePtr<pl::FormatFile>> open(
+           dstd::StringView path) override;
+   };
+
+   class File : public pl::FormatFile {     // the parsed rows
+    public:
+       void schema(pl::SchemaBuilder& out) const override {
+           out.add("id", pl::TypeId::Int64, false);
+           out.add("name", pl::TypeId::String);
+       }
+       std::uint64_t chunks() const override { return 2; }
+       dstd::Result<pl::ScanResult<pl::FormatCursor>> scan(
+           std::uint64_t chunk, const pl::ScanView&) override;
+   };
+
+   return plugin(ctx, h, config).file_format<Rows>().fold<MySlice>().build(out);
+
+``examples/plugins/csv_reader.cpp`` is a complete format: it claims a file
+whose name ends in ``.csv`` and whose first line reads as a CSV header, names
+its columns from that line, types each column from its data (int64 when every
+cell is a whole number, double when every cell is a number, string otherwise),
+splits the rows into chunks of 1024 so the chunks scan in parallel, keeps
+exactly the projected columns, and votes on no filter. Its golden test is
+``examples/plugins/tests/csv_reader/basic.test``.
+
+**Sinks.** ``DFTU_SVC_FILE_FORMATS`` also takes a ``dftu_sink_vt``
+(``register_sink``, ``PluginBuilder::sink<S>``): an output format whose ``bind``
+gets a ``BindView`` of the caller's column ``names``, their ``types`` and the
+``options`` tree, and hands back a ``SinkWriter`` whose ``write`` takes one
+borrowed ``FrameView`` per call and whose ``finalize`` or ``abort`` ends the
+run. A column of the frame is a ``ColumnView``, which shares its buffers, so
+``write`` reads the rows in place.
+
+A sink name is the plugin's own name, such as ``toy`` from plugin ``toy``, or
+``<plugin>.<name>``. Any other name fails the load. Every surface reaches it:
+
+.. code-block:: cpp
+
+   // A frame or a whole plan, streamed to the sink in batches of batch_size.
+   auto summary = lf.sink("toy_sink.out", {{"path", "out.csv"}}, 65536).get();
+   // summary.rows, summary.batches
+
+.. code-block:: c
+
+   int64_t rows = 0, batches = 0;
+   dftu_lazyframe_sink(lf, "toy_sink.out", keys, values, n, &rows, &batches);
+
+.. code-block:: python
+
+   summary = lf.sink("csv.write", path="out.csv")   # SinkSummary(rows, batches)
+
+.. code-block:: text
+
+   dftracer_view ./traces --plugin ./csv.dylib --sink csv.write \
+                 --sink-option path=out.csv -q 'where dur > 1000'
+   # stderr: sink csv.write: 195 rows in 1 batches
+
+A duql pipeline names it as its last stage, and a stage after it is a parse
+error:
+
+.. code-block:: text
+
+   from data | where dur > 1000 | sink "csv.write" path "out.csv"
+
+The sink is bound with the plan's output column names and types (an ``Unknown``
+type passes through as ``Unknown``), then every frame the plan streams is
+written and ``finalize`` runs. A bind error, a scan error and a write error each
+call ``abort`` exactly once and return the error to the caller, and cancelling
+the task aborts too. A name that no plugin registered fails with
+``no sink named '<name>'; registered sinks: ...``.
+
+A duql pipeline that ends in ``sink`` yields one row of the totals, with the
+columns ``rows`` and ``batches``, so a run that writes a file still reports what
+it wrote. ``examples/plugins/csv_sink.cpp`` is a complete sink: it writes a CSV
+header and then every row, and it needs the option ``path``.
 
 Host services index
 --------------------
@@ -1274,46 +1991,60 @@ that covers it:
    * - ``Host::publish_port`` / ``consume_port`` (``OutPort`` / ``InPort``)
      - ``DFTU_SVC_PORTS``
      - `8. Inter-plugin communication`_
-   * - ``Host::emit_result`` / ``emit_result_arrow``
+   * - ``Host::emit_result``
      - ``DFTU_SVC_RESULT``
      - `8. Inter-plugin communication`_
-   * - ``Host::all`` / ``any`` / ``run_blocking``
-     - ``DFTU_SVC_CORO``
+   * - ``Host::spawn`` / ``all`` / ``tasks()``, typed ``Job``
+     - ``DFTU_SVC_TASK``
      - `9. Async work and I/O`_
-   * - ``Host::io()`` (typed ``Io``)
+   * - ``Host::io()`` (typed ``Io``: file, directory, link, socket, poll,
+       xattr, splice and pipe calls; the Linux-only ones answer
+       ``DFTU_E_UNSUPPORTED`` elsewhere)
      - ``DFTU_SVC_IO``
      - `9. Async work and I/O`_
-   * - ``Host::duql_compile`` / ``duql_matches``
+   * - ``Host::fs()`` (typed ``Fs``, RAII ``PathList``)
+     - ``DFTU_SVC_FS``
+     - `9. Async work and I/O`_
+   * - ``Host::json()`` / ``Host::yaml()`` (typed ``Json``, ``Yaml``, RAII
+       ``Doc``)
+     - ``DFTU_SVC_JSON``, ``DFTU_SVC_YAML``
+     - `9. Async work and I/O`_
+   * - ``Host::memory()`` (typed ``Memory``, RAII ``Reservation``)
+     - ``DFTU_SVC_MEMORY``
+     - `9. Async work and I/O`_
+   * - ``Host::compile`` / ``Query::matches``
      - ``DFTU_SVC_DUQL``
      - `10. duql filters against events (DFTU_SVC_DUQL)`_
-   * - ``Host::arrow_read_ipc`` / ``arrow_write_ipc``
-     - ``DFTU_SVC_ARROW``
-     - `11. Arrow interchange (DFTU_SVC_ARROW)`_
    * - ``Host::trace_open_write`` / ``trace_write`` / ``trace_read``
      - ``DFTU_SVC_TRACE``
-     - `12. Output writers`_
-   * - none (raw ``get_service``)
-     - ``DFTU_SVC_WRITER``
-     - `12. Output writers`_
+     - `11. Output writers`_
+   * - ``Host::fileio()`` (typed ``Fileio``), ``Host::writer``,
+       ``Host::merge_shards``
+     - ``DFTU_SVC_FILEIO``
+     - `11. Output writers`_
    * - ``Host::run_op`` / ``run_op_frame`` / ``run_op_aggregate``,
        ``PluginBuilder::op``, ``OwnedLazyFrame``
      - ``DFTU_SVC_OPS``
-     - `14. Extending the engine: ops, sources, plan nodes`_
+     - `13. Extending the engine: ops, sources, plan nodes`_
    * - ``PluginBuilder::source<S>``
      - ``DFTU_SVC_PROVIDERS``
-     - `14. Extending the engine: ops, sources, plan nodes`_
+     - `13. Extending the engine: ops, sources, plan nodes`_
    * - ``PluginBuilder::node<N>``
      - ``DFTU_SVC_NODES``
-     - `14. Extending the engine: ops, sources, plan nodes`_
+     - `13. Extending the engine: ops, sources, plan nodes`_
    * - ``Host::emit_result_frame`` / ``emit_result_lazyframe``
      - ``DFTU_SVC_RESULT``
-     - `14. Extending the engine: ops, sources, plan nodes`_
+     - `13. Extending the engine: ops, sources, plan nodes`_
    * - ``PluginBuilder::state<T>``
      - ``DFTU_SVC_AGG`` (``register_state``)
      - `6. Mergeable aggregation (DFTU_SVC_AGG)`_
    * - none (raw ``get_service``)
      - ``DFTU_SVC_INDEX``
-     - `15. Index extensions (DFTU_SVC_INDEX)`_
+     - `14. Index extensions (DFTU_SVC_INDEX)`_
+   * - ``LazyFrame::scan_file``, ``dftu_lazyframe_scan_file``,
+       ``PluginBuilder::file_format<F>``
+     - ``DFTU_SVC_FILE_FORMATS``
+     - `15. File formats (DFTU_SVC_FILE_FORMATS)`_
 
 Building and scaffolding
 ------------------------
@@ -1358,3 +2089,91 @@ C++20 flags:
 
 For a full compiled-and-run C++ walkthrough (scaffold, edit, build, run), see
 :doc:`tutorials/write-a-c-plugin`.
+
+What a loaded plugin registered
+-------------------------------
+
+``Plugins::describe()`` (``plugins/host/plugins.h``) reports, for every loaded
+plugin, its path, its ABI version, whether it declares ``plan_duql``, whether
+its descriptor carries a fold at all (``has_fold``: a ``make_slice`` or a
+``transform`` slot), and the names it registered, one list per kind: ``ops``,
+``udfs``, ``udafs``, ``states``, ``providers``, ``nodes``,
+``index_extensions``, ``file_formats`` and ``sinks``.
+
+``has_fold`` reads the descriptor, not the names: a descriptor written by hand
+that only registers names reports false, while a plugin built with the C++ SDK
+always reports true, because the SDK fills an empty fold for a plugin that
+declares none, so the host can drive the states it registered.
+
+``dftracer_run --describe --plugin path.so`` prints the same facts, one line
+per list, and needs no trace and no index:
+
+.. code-block:: text
+
+   plugin: /path/to/com.example.formats.so
+   abi_version: 0
+   plan_duql: no
+   fold: no
+   provides: (none)
+   consumes: (none)
+   ops: (none)
+   udfs: (none)
+   udafs: (none)
+   states: (none)
+   providers: (none)
+   nodes: (none)
+   index_extensions: (none)
+   file_formats: com.example.toy
+   sinks: com.example.toy_sink
+
+Checking the frames a plugin returns
+------------------------------------
+
+Set ``DFTRACER_UTILS_PLUGIN_CHECK=1`` to make the host validate every frame and
+column a plugin hands back: the frames of a provider cursor, of a file format
+cursor, of a node's output cursor, a UDF's ``exec`` result, a UDAF's
+``finalize`` result, a plugin op's result and a fold transform's output. A broken one fails the run with an error naming the
+plugin, the callback and the rule that broke, such as
+
+.. code-block:: text
+
+   provider 'com.example.p' next returned a broken frame: column 'dur':
+   its offset buffer holds 4 bytes, but 2 rows need 3 entries of 4 bytes
+
+The check covers a negative length, a validity bitmap or null count that
+disagrees with the rows, a data buffer too short for its rows, variable-width
+offsets that are too few, negative, decreasing or past the data, a string view
+whose inline length, buffer index or range is out of bounds, a dictionary code
+past its values, a selection index past its base, chunks that do not add up, a
+struct field of another length, list offsets past the values column, and a
+frame whose names disagree with its columns. It is off by default, and off
+costs one cached boolean test per frame.
+
+Whatever the kind, the check runs on the host side only, after the plugin
+returns; a plugin cannot see it and its own tests are unaffected.
+
+From Python, ``Plugins.describe()`` returns one ``PluginInfo`` per plugin, a
+named tuple with ``path``, ``abi_version``, ``has_plan_duql``, ``has_fold`` and
+one ``List[str]`` per kind, so a caller prints or filters a plugin's registered
+names without scanning a trace:
+
+.. code-block:: python
+
+   from dftracer.utils.plugins import Plugins
+
+   for info in Plugins(["./my_formats.so"]).describe():
+       print(info.file_formats, info.udfs)
+
+A format a plugin registers is readable from Python with
+``dftracer.utils.scan_file``, which plans the read with the format that claims
+the file:
+
+.. code-block:: python
+
+   import dftracer.utils as dft
+
+   frame = dft.scan_file("rows.toy").collect()
+
+The plan is lazy; ``collect()`` raises ``DFTUtilsNotFoundError``
+(``no format claims <path>``) for a file no registered format claims, and
+``DFTUtilsValueError`` when two formats tie for it.

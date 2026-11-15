@@ -154,52 +154,11 @@ TEST_CASE("a failed any_cast aborts with its message") {
 
 namespace {
 
-int g_copies_left = 0;
-
-struct FailingCopy {
-    FailingCopy() { ++g_alive; }
-    FailingCopy(const FailingCopy& other) : pad(other.pad) {
-        if (g_copies_left-- == 0) throw std::runtime_error("copy");
-        ++g_alive;
-    }
-    FailingCopy(FailingCopy&& other) noexcept : pad(other.pad) { ++g_alive; }
-    ~FailingCopy() { --g_alive; }
-    std::array<char, 64> pad{};
-};
-
 struct alignas(32) OverAligned {
     int value = 5;
 };
 
 }  // namespace
-
-TEST_CASE("a throwing copy leaves no block and keeps the target") {
-    memory::PoolHandle pool = root().child("throwing");
-    memory::detail::Scope s{*pool};
-    {
-        dstd::Any a;
-        a.emplace<FailingCopy>();
-        CHECK(pool->blocks() == 1);
-        g_copies_left = 0;
-        CHECK_THROWS_AS(dstd::Any{a}, std::runtime_error);
-        CHECK(pool->blocks() == 1);
-
-        dstd::Any b = 1;
-        g_copies_left = 0;
-        CHECK_THROWS_AS(b = a, std::runtime_error);
-        CHECK(dstd::any_cast<int>(b) == 1);
-        CHECK(pool->blocks() == 1);
-
-        FailingCopy source;
-        g_copies_left = 0;
-        CHECK_THROWS_AS(b.emplace<FailingCopy>(source), std::runtime_error);
-        CHECK_FALSE(b.has_value());
-        CHECK(pool->blocks() == 1);
-        CHECK(g_alive == 2);
-    }
-    CHECK(g_alive == 0);
-    CHECK(pool->blocks() == 0);
-}
 
 TEST_CASE("an over-aligned value goes to the heap with its alignment") {
     memory::PoolHandle pool = root().child("aligned");

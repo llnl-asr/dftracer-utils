@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <coro/failing.h>
 #include <dftracer/utils/cli/common_cli.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/coro/time.h>
@@ -8,7 +9,6 @@
 #include <doctest/doctest.h>
 
 #include <chrono>
-#include <stdexcept>
 
 using namespace dftracer::utils;
 
@@ -43,14 +43,13 @@ TEST_CASE("run_on_pool returns the error result of the body") {
     CHECK(dstd::StringView(result.error().c_str()) == "bad input");
 }
 
-TEST_CASE("run_on_pool raises the exception of the body") {
-    CHECK_THROWS_AS(cli::run_on_pool("fail", small_runtime(),
-                                     [](coro::Scope&) -> coro::CoroTask<void> {
-                                         throw std::runtime_error("boom");
-                                         co_return;
-                                     })
-                        .discard(),
-                    std::runtime_error);
+TEST_CASE("run_on_pool gives the error a body ended with") {
+    auto result = cli::run_on_pool("fail", small_runtime(),
+                                   [](coro::Scope&) -> coro::CoroTask<void> {
+                                       co_await coro_test::failing_task("boom");
+                                   });
+    REQUIRE(!result.has_value());
+    CHECK(dstd::StringView(result.error().c_str()) == "boom");
 }
 
 TEST_CASE("run_on_pool with a watchdog returns the value of the body") {

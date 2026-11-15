@@ -35,7 +35,7 @@ dstd::Result<dstd::String> frame_to_native(const DataFrame& f) {
     put<std::int64_t>(out, f.num_rows());
     put<std::uint32_t>(out, static_cast<std::uint32_t>(f.columns.size()));
     for (std::size_t c = 0; c < f.columns.size(); ++c) {
-        const dstd::String& name = f.names[c];
+        const dstd::StringView name = f.names[c];
         put<std::uint32_t>(out, static_cast<std::uint32_t>(name.size()));
         out += name;
         auto put_one = spill::put_series(out, f.columns[c]);
@@ -63,7 +63,8 @@ dstd::Optional<DataFrame> frame_from_native(dstd::StringView bytes) noexcept {
         if (!take(p, end, name_bytes) ||
             static_cast<std::size_t>(end - p) < name_bytes)
             return dstd::nullopt;
-        f.names.emplace_back(reinterpret_cast<const char*>(p), name_bytes);
+        f.names.emplace_back(
+            dstd::StringView{reinterpret_cast<const char*>(p), name_bytes});
         p += name_bytes;
         auto column = spill::get_series(p, end);
         if (!column) return dstd::nullopt;

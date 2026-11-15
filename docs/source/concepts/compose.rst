@@ -139,4 +139,4 @@ See also
 --------
 
 - :doc:`async-runtime` for ``CoroTask``, ``Scope``, and the runtime that drives both.
-- :doc:`../guides/plugins/compose-ops` for writing a stage, and for composing ops in a plugin.
+- :doc:`../guides/plugins/compose-ops` for writing a stage, and for composing jobs in a plugin.

@@ -48,7 +48,7 @@ enum class IndexExtension : std::uint16_t {
     Profile = 10,
     /// Per chunk: how many metadata records, with their names and paths.
     Metadata = 11,
-    /// Plugin extensions (plugins/abi/index.h), each keyed by its name, with
+    /// Plugin extensions (the plugin index ABI), each keyed by its name, with
     /// one manifest entry per name.
     Plugin = 12,
     /// The dftracer pre-aggregation tier. Its manifest entry marks a file's

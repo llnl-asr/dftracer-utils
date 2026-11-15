@@ -116,7 +116,35 @@ StopJob run_stop(Executor* executor, ParkNode* node, ParkOwner owner) {
     }
     co_return;
 }
+
+StopJob run_fail(Executor* executor, ParkNode* node, ParkOwner owner,
+                 dstd::Error error) {
+    if (node != nullptr) executor->unpark(node);
+    if (!owner.ops->fail(owner.promise, error)) {
+        dstd::fatal("coro: a failed wait in a task that holds a scope");
+    }
+    co_return;
+}
 }  // namespace
+
+bool fail_task(Executor* executor, ParkNode* node, ParkOwner owner,
+               dstd::Error&& error) noexcept {
+    if (owner.ops == nullptr || owner.ops->fail == nullptr ||
+        owner.ops->refuses_stop(owner.promise)) {
+        return false;
+    }
+    if (executor == nullptr) return owner.ops->fail(owner.promise, error);
+    StopJob job = run_fail(executor, node, owner, std::move(error));
+    executor->post(job.handle);
+    return true;
+}
+
+void fail_or_continue(Executor* executor, ParkOwner owner,
+                      std::coroutine_handle<> handle,
+                      dstd::Error&& error) noexcept {
+    if (fail_task(executor, nullptr, owner, std::move(error))) return;
+    post_resumption(executor, handle);
+}
 
 bool stop_task(Executor* executor, ParkNode* node, ParkOwner owner) noexcept {
     if (owner.ops == nullptr || owner.ops->stop == nullptr ||

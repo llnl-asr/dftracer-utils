@@ -33,11 +33,11 @@ consumer reads it back during the same batch.
 
       .. code-block:: cpp
 
-         template <class T> OutPort<T> publish_port(const char* cap_id) const;
-         template <class T> InPort<T> consume_port(const char* cap_id) const;
+         template <class T> OutPort<T> publish_port(dstd::CStringView cap_id) const;
+         template <class T> InPort<T> consume_port(dstd::CStringView cap_id) const;
 
          // OutPort<T>: void send(const T& v) const;
-         // InPort<T>:  std::optional<T> recv() const;
+         // InPort<T>:  dstd::Optional<T> recv() const;
 
       ``T`` must be trivially copyable; the host copies ``sizeof(T)`` bytes per
       publish. A producer built with ``dftracer::utils::plugins::make_plugin<Slice>``
@@ -55,20 +55,26 @@ consumer reads it back during the same batch.
              }
 
              explicit ProducerSlice(const dftracer::utils::plugins::Config&) {}
-             void step(const dftracer::utils::plugins::Batch& b, dftracer::utils::plugins::Host h) {
+             void step(dataframe::FrameView b, dftracer::utils::plugins::Host h) {
                  std::uint64_t with_dur = 0;
-                 for (const dftracer::utils::plugins::Event& e : b)
-                     if (e.has_dur()) ++with_dur;
+                 if (const auto dur = b.column("dur")) {
+                     for (std::int64_t row = 0; row < b.row_count(); ++row)
+                         if (!dur->is_null(row)) ++with_dur;
+                 }
                  h.publish_port<std::uint64_t>(PORT_CAP).send(with_dur);
              }
              void merge(ProducerSlice&) {}
              void finalize(dftracer::utils::plugins::Host) {}
          };
 
-         dftu_plugin* dftracer_plugin(dftu_plugin_host* h, const dftu_value* config) {
-             (void)h;
-             return dftracer::utils::plugins::make_plugin<ProducerSlice>(config);
-         }
+         DFTU_PLUGIN("producer", "1.0",
+                     [](dftracer::utils::plugins::PluginBuilder& p,
+                        const dftracer::utils::plugins::Config& config)
+                         -> dftracer::utils::dstd::Result<void> {
+                         (void)config;
+                         p.fold<ProducerSlice>();
+                         return {};
+                     })
 
       A consumer reads it back with the same port name, named in its own
       static ``consumes()`` so the host runs the producer first:
@@ -81,7 +87,7 @@ consumer reads it back during the same batch.
              }
 
              explicit ConsumerSlice(const dftracer::utils::plugins::Config&) {}
-             void step(const dftracer::utils::plugins::Batch&, dftracer::utils::plugins::Host h) {
+             void step(dataframe::FrameView, dftracer::utils::plugins::Host h) {
                  if (auto with_dur = h.consume_port<std::uint64_t>(PORT_CAP).recv()) {
                      // ... use *with_dur for this batch
                  }
@@ -112,11 +118,13 @@ consumer reads it back during the same batch.
 
       .. code-block:: c
 
-         static dftu_task* on_batch(void* slice, const dftu_dataframe* df,
-                                    const dftu_plugin_host* host) {
+         static dftu_status on_batch(dftu_ctx* ctx, void* slice,
+                                     const dftu_dataframe* df,
+                                     const dftu_plugin_host* host) {
              MyState* s = (MyState*)slice;
              const dftu_svc_ports* ports =
                  (const dftu_svc_ports*)host->get_service(host->h, DFTU_SVC_PORTS);
+             (void)ctx;
              if (!s->port_key) s->port_key = ports->port_key(host->h, "com.example.perbatch");
 
              int64_t n = dftu_dataframe_num_rows(df);
@@ -130,18 +138,20 @@ consumer reads it back during the same batch.
                      if (ph[i] == DFTU_PH_COMPLETE) ++with_dur;
              if (ph_col) dftu_series_free(ph_col);
              ports->publish(host->h, s->port_key, &with_dur, sizeof(with_dur));
-             return NULL;  /* synchronous */
+             return DFTU_OK;  /* synchronous */
          }
 
       and a consumer reads it back with the same key:
 
       .. code-block:: c
 
-         static dftu_task* on_batch(void* slice, const dftu_dataframe* df,
-                                    const dftu_plugin_host* host) {
+         static dftu_status on_batch(dftu_ctx* ctx, void* slice,
+                                     const dftu_dataframe* df,
+                                     const dftu_plugin_host* host) {
              MyState* s = (MyState*)slice;
              const dftu_svc_ports* ports =
                  (const dftu_svc_ports*)host->get_service(host->h, DFTU_SVC_PORTS);
+             (void)ctx;
              if (!s->port_key) s->port_key = ports->port_key(host->h, "com.example.perbatch");
 
              (void)df;
@@ -151,7 +161,7 @@ consumer reads it back during the same batch.
                  uint64_t with_dur; memcpy(&with_dur, v, sizeof(with_dur));
                  /* ... use with_dur for this batch */
              }
-             return NULL;
+             return DFTU_OK;
          }
 
    .. tab-item:: Python (JIT)
@@ -197,22 +207,22 @@ consumer reads it back during the same batch.
 The ordering rule
 -------------------
 
-A consumer sees nothing published (``std::nullopt`` in C++, NULL in C, ``0``
-in JIT) whenever the producer has not published for the current batch - most
-commonly because it runs after the consumer. Name the port in the consumer's
-``consumes`` and the producer's ``provides`` (a single NULL-terminated name
-array per plugin, one namespace shared with accumulator names, section 6 of
-:doc:`../../plugins`): the host orders the fold from that declaration, running
-every provider of a consumed name first, and refuses to run the set at all if
-no loaded plugin provides it. There is no ``--plugin`` flag order to get
-right.
+A consumer sees nothing published (an empty ``dstd::Optional`` in C++, NULL in
+C, ``0`` in JIT) whenever the producer has not published for the current batch
+- most commonly because it runs after the consumer. Name the port in the
+consumer's ``consumes`` and the producer's ``provides`` (a single
+NULL-terminated name array per plugin, one namespace shared with accumulator
+names, section 6 of :doc:`../../plugins`): the host orders the fold from that
+declaration, running every provider of a consumed name first, and refuses to
+run the set at all if no loaded plugin provides it. There is no ``--plugin``
+flag order to get right.
 
 A value published in one batch does not carry over to the next: the host
 clears every port between batches, so a consumer sees nothing published until
 that batch's producer publishes again.
 
 In C++, ``recv()`` copies the published bytes into the returned
-``std::optional<T>``, so the result is safe to keep past the current
+``dstd::Optional<T>``, so the result is safe to keep past the current
 ``on_batch``/``step`` call without any manual copying. In C, ``consume``
 returns a pointer that is only valid until ``on_batch`` returns; copy it out
 if you need it longer.
@@ -232,9 +242,10 @@ give the plugin a ``transform`` in place of ``on_batch``:
 
          struct Sessionize {
              explicit Sessionize(const Config&) {}
-             // The rewritten batch (the host frees it), or nullptr for
+             // The rewritten batch (the host frees it), or an empty frame for
              // "unchanged". Takes the place of step().
-             dftu_dataframe* transform(const dftu_dataframe* df, Host h);
+             dstd::Result<OwnedDataFrame> transform(dataframe::FrameView df,
+                                                    Host h);
              void merge(Sessionize&) {}
              void finalize(Host) {}
              static auto provides() { return std::array{"sessions.batch"}; }
@@ -244,7 +255,9 @@ give the plugin a ``transform`` in place of ``on_batch``:
 
       .. code-block:: c
 
-         g_plugin.transform = sessionize;   /* dftu_dataframe* (slice, df, host) */
+         /* dftu_status (ctx, slice, df, host, dftu_dataframe** out); NULL in *out
+            means "unchanged" */
+         g_plugin.transform = sessionize;
 
 The rewrite may drop rows, add rows, and add, drop or change columns. A
 transform sees the whole batch (its ``reads`` is ignored); a plugin after it

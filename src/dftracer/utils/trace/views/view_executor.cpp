@@ -878,7 +878,12 @@ coro::CoroTask<dstd::Result<BootstrapFile>> bootstrap_file(
     if (run->keep_state) {
         if (rule_agg) {
             CoverageSet none;
-            co_await rule_agg->finalize(none);
+            auto finished = co_await rule_agg->finalize(none);
+            if (!finished.has_value()) {
+                DFTRACER_UTILS_LOG_ERROR("bootstrap rule finalize failed: {}",
+                                         finished.error().format());
+                co_return out;
+            }
             out.state = rule_agg->take_state();
         } else {
             out.state = frame_agg->take_state();
@@ -1436,7 +1441,7 @@ class DistinctRowFold : public Fold {
         return {};
     }
 
-    coro::CoroTask<bool> finalize(const CoverageSet&) override {
+    coro::CoroTask<dstd::Result<bool>> finalize(const CoverageSet&) override {
         co_return true;
     }
 
@@ -2114,7 +2119,7 @@ class BranchDriverFold : public Fold {
     // in finalize, so there is nothing to fold slice-to-slice here.
     dstd::Result<void> merge(Fold&) override { return {}; }
 
-    coro::CoroTask<bool> finalize(const CoverageSet&) override {
+    coro::CoroTask<dstd::Result<bool>> finalize(const CoverageSet&) override {
         for (const auto* br : *branches_) {
             if (!br->finalize) continue;
             auto finished = br->finalize();

@@ -19,6 +19,7 @@
 #include <dftracer/utils/domains/server/viz/summary_build.h>
 #include <dftracer/utils/domains/server/viz_api.h>
 #include <dftracer/utils/dstd/fmt.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
@@ -353,10 +354,16 @@ coro::CoroTask<HttpResponse> handle_viz_untimed(const HttpRequest& req,
         dstd::fmt<"untimed\n{}\n{}">(params.get("file"), text);
     const dstd::String page_key =
         dstd::fmt<"{}\n{}\n{}">(all_key, offset, limit);
-    if (auto hit = index.viz_cache().get(all_key)) {
-        const dstd::StringView text_rows(*hit);
+    // One store read for both keys: a miss on the whole text leaves the page
+    // to look for in the same read.
+    const dstd::String cache_keys[] = {all_key, page_key};
+    auto hits = index.viz_cache().get_many(
+        dstd::Span<const dstd::String>(cache_keys, 2));
+    if (hits[0]) {
+        const auto& hit = *hits[0];
+        const dstd::StringView text_rows(hit);
         const std::size_t head = text_rows.find('\n');
-        const std::uint64_t count = std::strtoull(hit->c_str(), nullptr, 10);
+        const std::uint64_t count = std::strtoull(hit.c_str(), nullptr, 10);
         // Rows [offset, offset + limit): skip `offset` lines, keep `limit`.
         std::size_t pos =
             head == dstd::StringView::npos ? text_rows.size() : head;
@@ -376,8 +383,7 @@ coro::CoroTask<HttpResponse> handle_viz_untimed(const HttpRequest& req,
         }
         co_return HttpResponse::ok(respond(page, count));
     }
-    if (auto hit = index.viz_cache().get(page_key))
-        co_return HttpResponse::ok(std::move(*hit));
+    if (hits[1]) co_return HttpResponse::ok(std::move(*hits[1]));
 
     dstd::Vector<dstd::String> columns;
     dstd::Vector<dstd::String> names;
@@ -437,10 +443,11 @@ coro::CoroTask<HttpResponse> handle_viz_untimed(const HttpRequest& req,
                 if (c > 0) rb.append_comma();
                 const auto it =
                     std::find(columns.begin(), columns.end(), rows.names[c]);
-                const dstd::String& name =
+                const dstd::StringView name =
                     it == columns.end()
-                        ? rows.names[c]
-                        : names[static_cast<std::size_t>(it - columns.begin())];
+                        ? rows.names[c].view()
+                        : dstd::StringView{names[static_cast<std::size_t>(
+                              it - columns.begin())]};
                 rb.escape_and_append_with_quotes(name);
                 rb.append_colon();
                 append_cell(rb, rows.columns[c], r, index, name == "dur",
@@ -468,10 +475,12 @@ coro::CoroTask<HttpResponse> handle_viz_untimed(const HttpRequest& req,
     }
     dstd::String body = respond(page, count);
     if (!req.cancel_token.cancelled()) {
-        if (whole)
-            index.viz_cache().put(all_key, dstd::fmt<"{}{}">(count, all_rows));
-        else
+        if (whole) {
+            const dstd::String all = dstd::fmt<"{}{}">(count, all_rows);
+            index.viz_cache().put(all_key, all);
+        } else {
             index.viz_cache().put(page_key, body);
+        }
     }
     co_return HttpResponse::ok(std::move(body));
 }

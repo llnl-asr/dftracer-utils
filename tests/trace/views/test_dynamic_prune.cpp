@@ -74,7 +74,7 @@ struct NameCollectorFold : Fold {
         sealed_units += o.sealed_units;
         return {};
     }
-    coro::CoroTask<bool> finalize(const CoverageSet&) override {
+    coro::CoroTask<dstd::Result<bool>> finalize(const CoverageSet&) override {
         co_return true;
     }
 };
@@ -351,7 +351,7 @@ TEST_SUITE("Dynamic filter pushdown") {
         "results") {
         std::array<std::int64_t, 5> xs{1, 2, 3, 4, 5};
         dataframe::DataFrame df;
-        df.names = {"x"};
+        df.names = dstd::make_shared_strings({"x"});
         df.columns.push_back(dataframe::Series::flat_i64(xs.data(), xs.size()));
 
         auto source =
@@ -390,7 +390,7 @@ TEST_SUITE("Dynamic filter pushdown") {
         // the scan's own key type.
         std::array<std::uint64_t, 1> key{3};
         dataframe::DataFrame right;
-        right.names = {"pid"};
+        right.names = dstd::make_shared_strings({"pid"});
         right.columns.push_back(
             dataframe::Series::flat(dataframe::TypeId::Uint64, key.data(), 1));
 
@@ -440,21 +440,26 @@ TEST_SUITE("Dynamic filter pushdown") {
 
         // Each call plans over its own ViewPlan, so threads share the index
         // and nothing else.
-        auto scan_all = [&] {
+        auto scan_all = [&]() -> dstd::Result<std::uint64_t> {
             views::detail::scan::ScanPlan plan_ptr =
                 views::detail::scan::from_file(dstd::String(gz),
                                                dstd::String(idx));
             const ViewPlan& plan = *plan_ptr;
-            ViewDefinition vdef =
-                dftu_utils_test::ok(make_vdef(plan, /*for_aggregation=*/false));
+            auto vdef = make_vdef(plan, /*for_aggregation=*/false);
+            if (!vdef) return dstd::Unexpected<dstd::Error>(vdef.error());
             std::uint64_t skipped = 0;
             std::uint64_t matched = 0;
-            for (const ScanUnit& u :
-                 dftu_utils_test::ok(gather_units(plan, vdef, skipped).get()))
-                matched += dftu_utils_test::ok(scan_unit_events(u, vdef).get());
+            auto units = gather_units(plan, *vdef, skipped).get();
+            if (!units) return dstd::Unexpected<dstd::Error>(units.error());
+            for (const ScanUnit& u : *units) {
+                auto events = scan_unit_events(u, *vdef).get();
+                if (!events)
+                    return dstd::Unexpected<dstd::Error>(events.error());
+                matched += *events;
+            }
             return matched;
         };
-        const std::uint64_t expected = scan_all();
+        const std::uint64_t expected = dftu_utils_test::ok(scan_all());
         REQUIRE(expected > 0);
 
         constexpr int THREADS = 8;
@@ -467,13 +472,14 @@ TEST_SUITE("Dynamic filter pushdown") {
         for (int t = 0; t < THREADS; ++t)
             threads.emplace_back([&] {
                 for (int r = 0; r < ROUNDS; ++r) {
-                    try {
-                        if (scan_all() != expected) ++wrong;
-                    } catch (const std::exception& e) {
+                    const auto matched = scan_all();
+                    if (!matched) {
                         if (failed++ == 0) {
                             std::lock_guard<std::mutex> lock(error_mutex);
-                            first_error = e.what();
+                            first_error = matched.error().c_str();
                         }
+                    } else if (*matched != expected) {
+                        ++wrong;
                     }
                 }
             });

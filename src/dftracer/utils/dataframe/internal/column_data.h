@@ -2,11 +2,12 @@
 #ifndef DFTRACER_UTILS_DATAFRAME_INTERNAL_COLUMN_DATA_H
 #define DFTRACER_UTILS_DATAFRAME_INTERNAL_COLUMN_DATA_H
 
-#include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/internal/buffers.h>
 #include <dftracer/utils/dataframe/parallel.h>
 #include <dftracer/utils/dataframe/types.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/shared_string.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 
@@ -82,7 +83,7 @@ struct dftu_series : dftracer::utils::dstd::HeapObject {
     dftracer::utils::dstd::Vector<dftu_nested> nested;
     /// The series name; null when the series has none. Shared by every handle
     /// that copies this one.
-    dftracer::utils::dstd::SharedPtr<const dftracer::utils::dstd::String> name;
+    dftracer::utils::dstd::SharedString name;
     dftracer::utils::dataframe::TypeParams params;
 
     /// Whether `nested` holds Struct fields.

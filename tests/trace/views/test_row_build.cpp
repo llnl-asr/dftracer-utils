@@ -95,7 +95,7 @@ dstd::Vector<views::detail::FoldEvent> copy_events(
 }
 
 void check_equal(const Built& got, const dataframe::DataFrame& want) {
-    REQUIRE(got.names == want.names);
+    REQUIRE(got.names == dstd::to_strings(want.names));
     REQUIRE(got.columns.size() == want.columns.size());
     for (std::size_t c = 0; c < want.columns.size(); ++c) {
         CAPTURE(want.names[c]);

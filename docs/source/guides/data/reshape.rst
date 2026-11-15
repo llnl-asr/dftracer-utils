@@ -37,7 +37,7 @@ distinct pivot-column value (sorted, named by its value); each cell is the
 
       .. code-block:: c
 
-         #include <dftracer/utils/dataframe/abi.h>
+         #include <dftracer/utils/dataframe/c_api.h>
 
          dftu_dataframe* wide = dftu_dataframe_pivot(df, "ts", "cat", "dur", "sum");
 

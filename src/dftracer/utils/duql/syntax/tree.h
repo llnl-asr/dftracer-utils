@@ -364,12 +364,18 @@ struct Session {
     ExprPtr max;
     dstd::String as;
 };
+/// `sink "name" key "value" ...`: the rows go to the registered sink `name`,
+/// which ends the pipeline.
+struct Sink {
+    dstd::String name;
+    dstd::Vector<dstd::Pair<dstd::String, dstd::String>> options;
+};
 
 using StageNode =
     dstd::Variant<Where, Derive, Select, Drop, Rename, Distinct, Group, Agg,
                   Window, Pivot, Unpivot, Sort, Take, Skip, Sample, Expand,
                   Lookup, AsofLookup, OverlapLookup, Union, CallStage,
-                  TimeRange, CallTree, Bucket, Session, Parse, Use>;
+                  TimeRange, CallTree, Bucket, Session, Parse, Use, Sink>;
 
 struct Stage {
     StageNode node;

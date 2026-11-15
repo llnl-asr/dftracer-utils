@@ -21,31 +21,17 @@ dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> names_of(
     return out;
 }
 
-bool valid_window_func(dftu_window_func f) {
-    return f >= DFTU_WINDOW_ROW_NUMBER && f <= DFTU_WINDOW_FRAME_COLLECT;
-}
-
 }  // namespace
-
-extern "C" {
 
 dftu_dataframe* dftu_dataframe_window(
     const dftu_dataframe* frame, const char* const* partition_by,
     int32_t n_part, const char* const* order_by, int32_t n_order,
     const dftu_window_spec* specs, int32_t n_specs) {
-    if (!frame || (n_part > 0 && !partition_by) || (n_order > 0 && !order_by) ||
-        (n_specs > 0 && !specs))
-        return nullptr;
-    dftracer::utils::dstd::Vector<dataframe::WindowColumn> cols;
-    cols.reserve(static_cast<std::size_t>(n_specs));
-    for (int32_t i = 0; i < n_specs; ++i) {
-        const dftu_window_spec& s = specs[i];
-        if (!valid_window_func(s.func) || !s.out) return nullptr;
-        cols.push_back(dataframe::window_column(s));
-    }
-    dftracer::utils::dstd::Result<dataframe::DataFrame> out = dataframe::window(
-        dataframe::dataframe_handle_view(frame), names_of(partition_by, n_part),
-        names_of(order_by, n_order), cols);
+    if (!frame) return nullptr;
+    dftracer::utils::dstd::Result<dataframe::DataFrame> out =
+        dataframe::window_checked(dataframe::dataframe_handle_view(frame),
+                                  partition_by, n_part, order_by, n_order,
+                                  specs, n_specs);
     if (!out) return nullptr;
     return dataframe::dataframe_handle_wrap(std::move(*out));
 }
@@ -109,5 +95,3 @@ dftu_dataframe* dftu_dataframe_interval(const dftu_dataframe* left,
     if (!out) return nullptr;
     return dataframe::dataframe_handle_wrap(std::move(*out));
 }
-
-}  // extern "C"

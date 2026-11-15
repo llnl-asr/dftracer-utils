@@ -19,6 +19,10 @@ dftracer::utils::dstd::Expected<duql::detail::QueryNodePtr, duql::DuqlError>
 lower_filter(syntax::Program program, const duql::Params& params,
              dstd::StringView source);
 
+/// Whether `name` is a built-in function, aggregate, window function or other
+/// name a query reads before a plugin function, which may not take it.
+bool is_builtin_function(dstd::StringView name);
+
 }  // namespace dftracer::utils::duql
 
 #endif  // DFTRACER_UTILS_DUQL_LOWER_H

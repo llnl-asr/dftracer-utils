@@ -707,7 +707,7 @@ dstd::Result<dataframe::Series> scalar_column(
     const std::int64_t n = nest.length();
     const std::int32_t* off = nest.offsets();
     dataframe::DataFrame values;
-    values.names = {duql::CORRELATED_VALUE};
+    values.names.push_back(dstd::SharedString{duql::CORRELATED_VALUE});
     values.columns.push_back(
         nest.child(0).child(static_cast<std::int64_t>(field)));
     std::int64_t none = -1;

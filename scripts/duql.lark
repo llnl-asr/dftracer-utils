@@ -12,17 +12,20 @@ decl: "let" NAME "=" pipeline ";"                    -> let_decl
 params: "(" [NAME ("," NAME)*] ")"
 
 def_body: expr
-        | plain_stage ("|" stage)*                   -> stage_pipeline
-        | expr ("|" stage)+                          -> filter_pipeline
+        | plain_stage ("|" stage)* ["|" sink]        -> stage_pipeline
+        | expr ("|" stage)+ ["|" sink]               -> filter_pipeline
 
 member: NAME "=" pipeline                           -> member_rowset
       | "def" NAME params? "=" def_body                -> member_def
 
 ?pipeline: from_pipeline
-         | plain_stage ("|" stage)*                   -> stage_pipeline
-         | expr ("|" stage)*                          -> filter_pipeline
+         | plain_stage ("|" stage)* ["|" sink]        -> stage_pipeline
+         | expr ("|" stage)* ["|" sink]               -> filter_pipeline
+         | sink
 
-from_pipeline: "from" src ("," src)* ("|" stage)*
+// `sink` ends a pipeline, so no rule reads a stage after it.
+from_pipeline: "from" src ("," src)* ("|" stage)* ["|" sink]
+sink: "sink" STRING (NAME STRING)*
 
 src: STRING | NAME | PARAM
 

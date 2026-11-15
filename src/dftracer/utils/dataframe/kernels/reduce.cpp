@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/logging.h>
-#include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/numeric_dispatch.h>
 #include <dftracer/utils/dataframe/internal/radix_dedup.h>  // parallel dedup
@@ -279,8 +279,9 @@ dftu_scalar refuse(const dftracer::utils::dstd::String& message) {
     static thread_local dftu_error err;
     text = message;
     err.domain = dftracer::utils::dstd::CORE_ERROR_DOMAIN.id;
-    err.code = DFTU_COND_UNSUPPORTED;
-    err.condition = DFTU_COND_UNSUPPORTED;
+    err.code = static_cast<std::int32_t>(
+        dftracer::utils::dstd::Condition::Unsupported);
+    err.status = DFTU_E_UNSUPPORTED;
     err.message = text.c_str();
     dftu_scalar out{};
     out.kind = DFTU_SCALAR_TAG_ERR;

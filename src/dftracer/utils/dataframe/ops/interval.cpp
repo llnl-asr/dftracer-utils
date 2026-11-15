@@ -42,8 +42,8 @@ dstd::Result<DataFrame> interval(const DataFrame& left, const DataFrame& right,
     if (type != right.columns[lo_at].type() ||
         type != right.columns[hi_at].type())
         return invalid_argument<"interval: point/lo/hi types differ">();
-    if (!ColumnView::supports(type) ||
-        ColumnView(left.columns[p_at]).is_bytes())
+    if (!ColumnReader::supports(type) ||
+        ColumnReader(left.columns[p_at]).is_bytes())
         return invalid_argument<
             "interval: point/lo/hi columns must be numeric">();
     dstd::Vector<std::size_t> skip{lo_at, hi_at};
@@ -59,21 +59,21 @@ dstd::Result<DataFrame> interval(const DataFrame& left, const DataFrame& right,
         skip.push_back(*rc);
     }
 
-    dstd::Result<dstd::Vector<ColumnView>> lviews =
+    dstd::Result<dstd::Vector<ColumnReader>> lviews =
         ops::views_of(left, by, "interval");
     if (!lviews) return lviews.error();
-    dstd::Result<dstd::Vector<ColumnView>> rviews =
+    dstd::Result<dstd::Vector<ColumnReader>> rviews =
         ops::views_of(right, by, "interval");
     if (!rviews) return rviews.error();
-    dstd::Vector<ColumnView> lequi = std::move(*lviews);
-    dstd::Vector<ColumnView> requi = std::move(*rviews);
-    dstd::Vector<ColumnView> lkeys = lequi;
-    dstd::Vector<ColumnView> rkeys = requi;
+    dstd::Vector<ColumnReader> lequi = std::move(*lviews);
+    dstd::Vector<ColumnReader> requi = std::move(*rviews);
+    dstd::Vector<ColumnReader> lkeys = lequi;
+    dstd::Vector<ColumnReader> rkeys = requi;
     lkeys.emplace_back(left.columns[p_at]);
     rkeys.emplace_back(right.columns[lo_at]);
-    const ColumnView& points = lkeys.back();
-    const ColumnView& los = rkeys.back();
-    const ColumnView his(right.columns[hi_at]);
+    const ColumnReader& points = lkeys.back();
+    const ColumnReader& los = rkeys.back();
+    const ColumnReader his(right.columns[hi_at]);
 
     const std::int64_t L = left.num_rows();
     const std::int64_t R = right.num_rows();

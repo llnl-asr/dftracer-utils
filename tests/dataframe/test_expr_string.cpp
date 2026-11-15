@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dataframe/expr_ok.h>
-#include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/kernels/kernels.h>
 #include <dftracer/utils/dataframe/scalar.h>
@@ -186,6 +186,6 @@ TEST_SUITE("expr string comparisons") {
     }
 
     // DFTU_SCALAR_I64/_U64/_F64/_STR are C-only (guarded by #ifndef
-    // __cplusplus in abi.h), so they are exercised from a C TU instead:
+    // __cplusplus in c_api.h), so they are exercised from a C TU instead:
     // see test_scalar_macros_c.c.
 }

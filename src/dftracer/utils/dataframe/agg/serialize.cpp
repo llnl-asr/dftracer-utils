@@ -249,6 +249,10 @@ dstd::String agg_serialize(const AggState& st_in, bool compact) {
         put_bytes(s, sp.out);
         put(s, sp.param);
         put(s, sp.by_col);
+        if (sp.op != AggOp::Udaf) continue;
+        put_bytes(s, sp.fn);
+        put(s, static_cast<std::uint32_t>(sp.args.size()));
+        for (const std::int32_t a : sp.args) put(s, a);
     }
     put(s, static_cast<std::uint32_t>(st.nf));
     for (FieldStatDomain d : st.field_domain)
@@ -439,11 +443,42 @@ dstd::String agg_serialize(const AggState& st_in, bool compact) {
             put(s, c.cxy);
         }
     }
+    if (st.has_udaf) {
+        // A UDAF that fails leaves the error in the state, and the blob short
+        // of its states: agg_check tells the caller.
+        if (dstd::Result<void> synced = st.udaf_sync(); !synced) {
+            st.udaf_note(std::move(synced.error()));
+            return s;
+        }
+        dstd::String bytes;
+        for (std::size_t i = 0; i < st.udafs.size(); ++i) {
+            const AggState::UdafSlot& slot = st.udafs[i];
+            put(s, static_cast<std::uint8_t>(slot.binding ? 1 : 0));
+            if (!slot.binding) continue;
+            put(s, static_cast<std::uint32_t>(slot.arg_types.size()));
+            for (const TypeId t : slot.arg_types)
+                put(s, static_cast<std::uint8_t>(t));
+            dstd::Result<UdafStates*> table = st.udaf_table(i);
+            if (!table) {
+                st.udaf_note(std::move(table.error()));
+                return s;
+            }
+            for (std::int64_t g = 0; g < ng; ++g) {
+                bytes.clear();
+                if (dstd::Result<void> done = (*table)->serialize(g, bytes);
+                    !done) {
+                    st.udaf_note(std::move(done.error()));
+                    return s;
+                }
+                put_bytes(s, bytes);
+            }
+        }
+    }
     return s;
 }
 
 dstd::Result<AggStatePtr> agg_deserialize(const dstd::String& blob,
-                                          bool compact) {
+                                          bool compact, const AggState* like) {
     Reader r{blob.data(), blob.data() + blob.size()};
     const bool marked =
         blob.size() >= sizeof(COMPACT_MAGIC) &&
@@ -505,15 +540,26 @@ dstd::Result<AggStatePtr> agg_deserialize(const dstd::String& blob,
     st->specs.resize(ns);
     for (std::uint32_t i = 0; i < ns; ++i) {
         const std::int32_t op = r.get<std::int32_t>();
-        if (op < 0 || op > static_cast<std::int32_t>(AggOp::SketchQuantile))
+        if (op < 0 || op > static_cast<std::int32_t>(AggOp::Udaf))
             return corrupt_blob();
         st->specs[i].op = static_cast<AggOp>(op);
         st->specs[i].value_col = r.get<std::int32_t>();
         st->specs[i].out = r.get_bytes();
         st->specs[i].param = r.get<double>();
         st->specs[i].by_col = r.get<std::int32_t>();
+        if (st->specs[i].op != AggOp::Udaf) continue;
+        st->specs[i].fn = r.get_bytes();
+        const std::uint32_t nargs = r.get<std::uint32_t>();
+        if (!r.count(std::uint64_t{nargs} * sizeof(std::int32_t)))
+            return corrupt_blob();
+        st->specs[i].args.resize(nargs);
+        for (std::uint32_t a = 0; a < nargs; ++a)
+            st->specs[i].args[a] = r.get<std::int32_t>();
     }
     st->init_layout();
+    if (!st->init_error.empty())
+        return common::make_error(common::ErrorCode::InvalidArgument,
+                                  st->init_error);
     const std::uint32_t nf = r.get<std::uint32_t>();
     if (nf != st->nf) return corrupt_blob();
     if (!r.count(nf)) return corrupt_blob();
@@ -868,6 +914,47 @@ dstd::Result<AggStatePtr> agg_deserialize(const dstd::String& blob,
             c.cxx = r.get<double>();
             c.cyy = r.get<double>();
             c.cxy = r.get<double>();
+        }
+    }
+    for (std::size_t i = 0; st->has_udaf && i < st->udafs.size(); ++i) {
+        AggState::UdafSlot& slot = st->udafs[i];
+        if (r.get<std::uint8_t>() == 0) continue;
+        const std::uint32_t nargs = r.get<std::uint32_t>();
+        if (!r.count(nargs)) return corrupt_blob();
+        dstd::Vector<DataType> types;
+        for (std::uint32_t a = 0; a < nargs; ++a) {
+            const std::uint8_t t = r.get<std::uint8_t>();
+            if (t > static_cast<std::uint8_t>(TypeId::Map))
+                return corrupt_blob();
+            slot.arg_types.push_back(static_cast<TypeId>(t));
+            types.push_back(scalar(static_cast<TypeId>(t)));
+        }
+        if (r.bad) return corrupt_blob();
+        const AggState::UdafSlot* seen =
+            like != nullptr && like->has_udaf && i < like->udafs.size()
+                ? &like->udafs[i]
+                : nullptr;
+        if (seen != nullptr && seen->binding && seen->record == slot.record &&
+            seen->arg_types == slot.arg_types) {
+            slot.binding = seen->binding;
+        } else {
+            dstd::Result<UdafBinding> bound = bind_udaf(
+                slot.record,
+                dstd::Span<const DataType>(types.data(), types.size()), {});
+            if (!bound) return dstd::Unexpected(std::move(bound.error()));
+            slot.binding =
+                dstd::make_shared<const UdafBinding>(std::move(*bound));
+        }
+        dstd::Result<UdafStates*> table = st->udaf_table(i);
+        if (!table) return dstd::Unexpected(std::move(table.error()));
+        if (dstd::Result<void> grown = (*table)->grow(ng); !grown)
+            return grown.error();
+        for (std::int64_t g = 0; g < ng; ++g) {
+            const dstd::String bytes = r.get_bytes();
+            if (r.bad) return corrupt_blob();
+            if (dstd::Result<void> done = (*table)->deserialize(g, bytes);
+                !done)
+                return done.error();
         }
     }
     if (r.bad) return corrupt_blob();

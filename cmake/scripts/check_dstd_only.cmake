@@ -5,17 +5,20 @@
 # also fails on a row that matches no file, on a row name no matching file
 # uses, and on any line that contains "keep std". Comments are not checked.
 #
-# Usage: cmake -DSOURCE_DIR=<repo root> -P check_dstd_only.cmake
-#        cmake -DSOURCE_DIR=<repo root> -DSELF_TEST=ON -P check_dstd_only.cmake
+# Usage: cmake -DSOURCE_DIR=<repo root> -DWORK_DIR=<scratch dir> -P check_dstd_only.cmake
+#        cmake -DSOURCE_DIR=<repo root> -DWORK_DIR=<scratch dir> -DSELF_TEST=ON -P check_dstd_only.cmake
 
 cmake_policy(SET CMP0057 NEW)
 
 if(NOT SOURCE_DIR)
   message(FATAL_ERROR "check_dstd_only.cmake requires -DSOURCE_DIR=...")
 endif()
-if(NOT CMAKE_CURRENT_BINARY_DIR)
-  set(CMAKE_CURRENT_BINARY_DIR "${CMAKE_BINARY_DIR}")
+# Script mode puts CMAKE_CURRENT_BINARY_DIR at the caller's cwd, so a run from
+# the repo root would write its scratch files into the checkout.
+if(NOT WORK_DIR)
+  message(FATAL_ERROR "check_dstd_only.cmake requires -DWORK_DIR=<scratch dir>")
 endif()
+file(MAKE_DIRECTORY "${WORK_DIR}")
 
 find_program(_awk awk REQUIRED)
 
@@ -36,11 +39,14 @@ set(_dirs
     include/dftracer/utils/duql
     src/dftracer/utils/duql
     include/dftracer/utils/plugins
+    src/dftracer/utils/plugins
     src/dftracer/utils/fileio
     include/dftracer/utils/trace
     src/dftracer/utils/trace
     include/dftracer/utils/dataframe
     src/dftracer/utils/dataframe
+    include/dftracer/utils/arrow
+    src/dftracer/utils/arrow
     src/dftracer/utils/domains
     src/dftracer/utils/cli
     src/dftracer/utils/python
@@ -52,19 +58,16 @@ set(_dirs
     tests/dstd
     tests/compose
     tests/coro
+    tests/domains
     tests/duql
-    tests/index
-    tests/io
+    tests/fileio
     tests/layering
     tests/layout
     tests/yaml
     tests/memory
-    tests/reader
-    tests/replay
+    tests/plugins
     tests/runtime
-    tests/server
     tests/store
-    tests/utilities
     tests/trace)
 
 set(_extra_files
@@ -201,7 +204,7 @@ function(dstd_only_run root allow work out_var rc_var)
 endfunction()
 
 if(SELF_TEST)
-  set(_root "${CMAKE_CURRENT_BINARY_DIR}/dstd_only_self")
+  set(_root "${WORK_DIR}/dstd_only_self")
   file(REMOVE_RECURSE "${_root}")
   file(MAKE_DIRECTORY "${_root}")
   function(_expect label want_rc out rc)
@@ -291,7 +294,7 @@ if(NOT _files)
   message(FATAL_ERROR "dstd_only: no file under the listed areas")
 endif()
 
-dstd_only_run("${SOURCE_DIR}" "${SOURCE_DIR}/cmake/scripts/dstd_only_allow.txt" "${CMAKE_CURRENT_BINARY_DIR}" _out _rc ${_files})
+dstd_only_run("${SOURCE_DIR}" "${SOURCE_DIR}/cmake/scripts/dstd_only_allow.txt" "${WORK_DIR}" _out _rc ${_files})
 if(_rc)
   string(REPLACE "${SOURCE_DIR}/" "" _out "${_out}")
   message("${_out}")

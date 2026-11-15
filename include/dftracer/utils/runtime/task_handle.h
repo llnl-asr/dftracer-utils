@@ -29,7 +29,7 @@ inline void fulfill(dstd::Promise<dstd::Result<void>>& promise,
 /// Handle to a submitted void task. Non-blocking by default.
 /// Call .wait() or .get() to block, or .done() to check. They give the error
 /// of a task that was stopped (dstd::Condition::Cancelled) or that a shut down
-/// runtime refused, and rethrow an exception the task raised.
+/// runtime refused, or the error the task ended with.
 struct TaskHandle {
     dstd::SharedFuture<dstd::Result<void>> future;
     common::TaskIndex id{-1};

@@ -18,7 +18,7 @@
 #include <dftracer/utils/runtime/fs/fs.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/index/build/resolver.h>
-#include <dftracer/utils/trace/index/extensions/plugin_extension.h>
+#include <dftracer/utils/trace/index/extensions/extension_registry.h>
 #include <dftracer/utils/trace/index/index.h>
 #include <dftracer/utils/trace/index/plan/prune.h>
 #include <dftracer/utils/trace/index/record_schema.h>
@@ -156,7 +156,7 @@ dstd::Result<trace::index::store::ExtensionMask> stale_tier(
                 if (config->extensions.has(ext)) stale.add(ext);
         }
     }
-    const auto registered = trace::index::extensions::plugin_extensions();
+    const auto registered = trace::index::extensions::registered_extensions();
     if (!registered.empty()) {
         const auto listed = trace::index::plugins(snapshot, file);
         if (!listed) return listed.error();
@@ -165,7 +165,7 @@ dstd::Result<trace::index::store::ExtensionMask> stale_tier(
             const trace::index::PluginCopy* copy = nullptr;
             for (const auto& candidate : copies)
                 if (dstd::StringView(candidate.name.data(),
-                                     candidate.name.size()) == ext->name)
+                                     candidate.name.size()) == ext->name())
                     copy = &candidate;
             if (copy == nullptr ||
                 !ext->current(trace::index::store::ExtensionState{

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <coro/failing.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
@@ -309,8 +310,7 @@ TEST_CASE("CoroTask - operator| fallback on success") {
 TEST_CASE("CoroTask - operator| fallback on failure") {
     auto task = []() -> CoroTask<int> {
         auto primary = []() -> CoroTask<int> {
-            throw std::runtime_error("Primary failed");
-            co_return 0;
+            co_return co_await coro_test::failing_task<int>("Primary failed");
         };
 
         auto fallback = []() -> CoroTask<int> { co_return 42; };
@@ -331,8 +331,7 @@ TEST_CASE("CoroTask<void> - operator| fallback") {
     auto task = [&execution_count]() -> CoroTask<void> {
         auto primary = [&execution_count]() -> CoroTask<void> {
             execution_count++;
-            throw std::runtime_error("Primary void task failed");
-            co_return;
+            co_await coro_test::failing_task("Primary void task failed");
         };
 
         auto fallback = [&execution_count]() -> CoroTask<void> {
@@ -359,8 +358,7 @@ TEST_CASE("CoroTask - Combining & and | operators") {
         auto compute1 = []() -> CoroTask<int> { co_return 10; };
 
         auto compute2_primary = []() -> CoroTask<int> {
-            throw std::runtime_error("Compute2 failed");
-            co_return 0;
+            co_return co_await coro_test::failing_task<int>("Compute2 failed");
         };
 
         auto compute2_fallback = []() -> CoroTask<int> { co_return 5; };

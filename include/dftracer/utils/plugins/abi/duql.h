@@ -15,13 +15,16 @@
 extern "C" {
 #endif
 
-#define DFTU_SVC_DUQL "dftu.svc.duql@1"
+#define DFTU_SVC_DUQL "dftu.svc.duql"
 
 typedef struct dftu_svc_duql {
-    dftu_duql* (*duql_compile)(void* h, const char* src, uint32_t len);
+    uint32_t struct_size; /**< sizeof(dftu_svc_duql) */
+    /** Compile `src`; a parse error is DFTU_E_PARSE with its text in ctx. */
+    dftu_status (*duql_compile)(dftu_ctx* ctx, void* h, const char* src,
+                                uint32_t len, dftu_duql** out);
     /** Evaluate `q` against row `row` of `df` (a batch's columns, by name). */
-    int (*duql_matches)(void* h, const dftu_duql* q, const dftu_dataframe* df,
-                        int64_t row);
+    int32_t (*duql_matches)(void* h, const dftu_duql* q,
+                            const dftu_dataframe* df, int64_t row);
 } dftu_svc_duql;
 
 #ifdef __cplusplus

@@ -421,10 +421,10 @@ TEST_CASE("the group-by of many groups equals the serial one-pass sum") {
         std::size_t c = 0;
         while (got.names[c] != name) ++c;
         DataFrame a, b;
-        a.names = {got.names[0], name};
+        a.names = dstd::make_shared_strings({got.names[0], name});
         a.columns.push_back(got.columns[0].share());
         a.columns.push_back(got.columns[c].share());
-        b.names = {ref.names[0], name};
+        b.names = dstd::make_shared_strings({ref.names[0], name});
         b.columns.push_back(ref.columns[0].share());
         b.columns.push_back(ref.columns[c].share());
         INFO(name << ": " << why);

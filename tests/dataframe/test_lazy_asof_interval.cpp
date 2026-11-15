@@ -83,7 +83,7 @@ Series strs(const dstd::Vector<S>& v) {
 template <class... Cols>
 DataFrame frame(dstd::Vector<dstd::String> names, Cols&&... cols) {
     DataFrame out;
-    out.names = std::move(names);
+    out.names = dstd::make_shared_strings(names);
     (out.columns.push_back(std::move(cols)), ...);
     return out;
 }

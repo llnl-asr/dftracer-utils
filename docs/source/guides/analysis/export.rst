@@ -27,7 +27,7 @@ An integer, bool or string column that holds nulls gives pandas' own nullable dt
 On pandas 3 a string column with nulls is the default ``str`` dtype, which holds missing values already.
 A float column keeps NaN, and dates and times keep their NumPy types.
 A dictionary-encoded string column gives ``category``.
-``from_pandas`` stores a ``category`` column with string categories as a dictionary-encoded column, without its unused categories or their order.
+``from_pandas`` stores a ``category`` column with string categories as a dictionary-encoded column, and ``to_pandas`` gives back only the categories that are used.
 With pyarrow installed the categories keep the dictionary order and no string is built per row; without it the categories come out sorted.
 Two options change the result further, and neither needs pyarrow:
 
@@ -56,7 +56,8 @@ with the same text share one ``str``, so a column of repeated names allocates
 once per distinct name. A dictionary-encoded column keeps its nulls.
 ``to_arrow`` exports a dictionary-encoded column as an Arrow dictionary array,
 which pandas and polars read through Arrow as a categorical column;
-``to_pandas`` gives ``category``, and ``to_list``, ``to_numpy`` and ``to_polars`` give plain strings.
+``to_pandas`` gives ``category``, ``to_polars`` gives ``Categorical``, and ``to_list`` and ``to_numpy`` give plain strings.
+``from_polars`` reads a ``Categorical`` or ``Enum`` column as a dictionary-encoded column, so an ``Enum`` comes back as ``Categorical``.
 ``to_ipc`` writes a dictionary-encoded column as its values.
 A view column exports as an Arrow ``string_view`` or ``binary_view`` array
 with zero copy (pyarrow 16 or later), and ``from_arrow`` imports such arrays
@@ -133,37 +134,64 @@ to get ``to_pandas`` / ``to_polars``:
    batches = [pa.record_batch(b) for fr in result["file_results"] for b in fr["batches"]]
    table = ArrowTable(batches).to_pandas()
 
-This function is built only when Arrow IPC support is compiled in
-(``DFTRACER_UTILS_ENABLE_ARROW_IPC``); there is no Python-level write path for
-IPC files. To write one, convert through
+There is no Python-level write path for IPC files. To write one, convert through
 pyarrow (``pa.ipc.new_file(...).write_table(df.to_arrow())``).
 
 The Arrow C Data Interface (C++)
 --------------------------------
 
-The zero-copy bridge is ``to_arrow`` / ``from_arrow`` on ``Series`` and
-``DataFrame``, in the installed public header
-``dftracer/utils/dataframe/arrow.h`` (namespace ``dftracer::utils::dataframe``,
-built when ``DFTRACER_UTILS_ENABLE_ARROW`` is set). ``to_arrow`` returns an
-``OwnedArrow`` - a move-only RAII owner of the paired ``ArrowSchema`` /
-``ArrowArray`` whose buffers alias the column's - so the caller never juggles
-release callbacks by hand. A ``DataFrame`` exports as a struct array with one
-child per column. The header pulls in the Arrow C Data Interface struct
-definitions itself, so a consumer needs no Arrow library to include it.
+The zero-copy bridge is the free functions ``to_arrow``, ``series_from_arrow``
+and ``dataframe_from_arrow`` in the installed public headers
+``dftracer/utils/arrow/arrow.h`` and ``dftracer/utils/arrow/batch.h``
+(namespace ``dftracer::utils::arrow``, library ``dftracer_utils_arrow``, which
+only Python and tests link). ``to_arrow`` returns a ``Batch`` - a move-only
+RAII owner of the paired ``ArrowSchema`` / ``ArrowArray`` whose buffers alias
+the column's - so the caller never juggles release callbacks by hand. A
+``DataFrame`` exports as a struct array with one child per column. Every call
+reports failure as a ``dstd::Result``. The headers pull in the Arrow C Data
+Interface struct definitions themselves, so a consumer needs no Arrow library
+to include them.
 
 .. code-block:: cpp
 
-   #include <dftracer/utils/dataframe/arrow.h>
+   #include <dftracer/utils/arrow/arrow.h>
 
-   using namespace dftracer::utils::dataframe;
+   using namespace dftracer::utils;
 
-   OwnedArrow a = df.to_arrow();                       // zero-copy export
-   // ... hand (a.schema(), a.array()) to any Arrow consumer ...
-   DataFrame back = DataFrame::from_arrow(a.schema(), a.array());
+   dstd::Result<arrow::Batch> a = arrow::to_arrow(df);   // zero-copy export
+   if (!a) return a.error();
+   // ... hand (a->schema(), a->array()) to any Arrow consumer, or give the
+   // structs away with a->release_into(&schema, &array) ...
 
    // A single column round-trips the same way.
-   OwnedArrow col = df.column("dur").to_arrow();
-   Series s = Series::from_arrow(col.schema(), col.array());
+   dstd::Result<arrow::Batch> col = arrow::to_arrow(df.column("dur"));
+   dstd::Result<dataframe::Series> s =
+       arrow::series_from_arrow(std::move(*col));
+
+The IPC format is ``arrow::Writer`` and ``arrow::Reader`` in
+``dftracer/utils/arrow/ipc.h``. A writer goes to a file or to a buffer, takes
+one ``DataFrame`` per record batch and is closed by ``finish()``. A reader
+hands back one record batch per ``next()`` as a ``DataFrame``. ``scan_ipc``
+returns a ``LazyFrame`` over the record batches of several files, read in
+parallel by the engine and honouring the column projection, and ``read_ipc``
+is that scan collected.
+
+.. code-block:: cpp
+
+   #include <dftracer/utils/arrow/ipc.h>
+
+   arrow::Writer writer = arrow::Writer::to_buffer();
+   writer.write(df);
+   writer.finish();
+   dstd::Vector<std::uint8_t> bytes = writer.take_bytes();
+
+   dstd::Result<arrow::Reader> reader =
+       arrow::Reader::from_bytes(dstd::Span<const std::uint8_t>(
+           bytes.data(), bytes.size()));     // the bytes must outlive it
+   while (auto batch = reader->next()) {
+       if (!batch->has_value()) break;
+       dataframe::DataFrame part = std::move(**batch);
+   }
 
 Write a new trace
 -----------------

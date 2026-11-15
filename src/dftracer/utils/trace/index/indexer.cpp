@@ -19,7 +19,7 @@
 #include <dftracer/utils/runtime/fs/fs.h>
 #include <dftracer/utils/trace/index/build/resolve_and_build.h>
 #include <dftracer/utils/trace/index/build/resolver.h>
-#include <dftracer/utils/trace/index/extensions/plugin_extension.h>
+#include <dftracer/utils/trace/index/extensions/extension_registry.h>
 #include <dftracer/utils/trace/index/indexer.h>
 #include <dftracer/utils/trace/index/plan/chunk_pruner.h>
 #include <dftracer/utils/trace/index/plan/prune.h>
@@ -183,8 +183,7 @@ coro::CoroTask<dstd::Result<void>> drop_plugin_extension(
 }
 
 dstd::Result<store::IndexExtension> tier_extension(const dstd::String& name) {
-    if (extensions::find_plugin_extension(name))
-        return store::IndexExtension::Plugin;
+    if (extensions::find_extension(name)) return store::IndexExtension::Plugin;
     auto ext = store::parse_extension(name);
     if (!ext || !(store::PRUNING_EXTENSIONS.has(*ext) ||
                   *ext == store::IndexExtension::Stats ||
@@ -446,7 +445,7 @@ coro::CoroTask<dstd::Result<dstd::Vector<FileManifest>>> Indexer::manifest(
             if (!copies) co_return copies.error();
             for (const auto& copy : *copies) {
                 const dstd::String name(copy.name.data(), copy.name.size());
-                const auto ext = extensions::find_plugin_extension(name);
+                const auto ext = extensions::find_extension(name);
                 const bool current =
                     ext && ext->current(store::ExtensionState{
                                copy.version, copy.params_hash, copy.ready});

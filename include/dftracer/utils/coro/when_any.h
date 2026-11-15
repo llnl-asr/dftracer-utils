@@ -3,7 +3,6 @@
 #define DFTRACER_UTILS_CORO_WHEN_ANY_H
 
 #include <dftracer/utils/common/error.h>
-#include <dftracer/utils/common/exception_helpers.h>
 #include <dftracer/utils/coro/detail/completion_state.h>
 #include <dftracer/utils/coro/detail/coro.h>
 #include <dftracer/utils/coro/detail/frame.h>
@@ -16,7 +15,6 @@
 #include <coroutine>
 #include <cstddef>
 #include <cstdint>
-#include <exception>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -42,47 +40,10 @@ using when_any_result_t =
 
 namespace detail {
 
-/// Runs a cancel() that may throw in a frame, which keeps what it threw in
-/// `slot`, since coro code cannot catch.
-struct CaptureCall {
-    struct promise_type : FrameAllocation {
-        std::exception_ptr* slot;
-
-        template <typename A>
-        promise_type(A&, std::exception_ptr& error) noexcept : slot(&error) {}
-
-        CaptureCall get_return_object() noexcept { return {}; }
-        std::suspend_never initial_suspend() noexcept { return {}; }
-        std::suspend_never final_suspend() noexcept { return {}; }
-        void return_void() noexcept {}
-        void unhandled_exception() noexcept {
-            *slot = std::current_exception();
-        }
-    };
-};
-
+/// Calls `awaitable.cancel()`.
 template <typename A>
-CaptureCall cancel_capturing(A& awaitable,
-                             [[maybe_unused]] std::exception_ptr& slot) {
+void cancel_loser(A& awaitable) noexcept {
     awaitable.cancel();
-    co_return;
-}
-
-/// Calls `awaitable.cancel()`. One that may throw does not stop the others: the
-/// first error goes to `first`, unless it already holds one.
-template <typename A>
-void cancel_loser(A& awaitable, std::exception_ptr& first,
-                  std::atomic<bool>& failed) noexcept {
-    if constexpr (noexcept(awaitable.cancel())) {
-        awaitable.cancel();
-    } else {
-        std::exception_ptr error;
-        cancel_capturing(awaitable, error);
-        if (error && !first) {
-            first = std::move(error);
-            failed.store(true, std::memory_order_release);
-        }
-    }
 }
 
 /// A never-started loser with a cancel hook is dropped once a winner exists.
@@ -144,7 +105,6 @@ template <typename Awaitable>
 struct WhenAnySharedState : detail::WhenAnyCompletionState {
     std::atomic<bool> completed{false};
     WhenAnyResult<typename Awaitable::result_type> result;
-    std::exception_ptr exception;
     dstd::Vector<dstd::SharedPtr<std::atomic<bool>>> cancellation_tokens;
     dstd::Vector<Awaitable> awaitables;
     detail::ChildClaims claims;
@@ -170,18 +130,19 @@ struct WhenAnySharedState : detail::WhenAnyCompletionState {
             }
             if (j != winner) {
                 if constexpr (requires { awaitables[j].cancel(); }) {
-                    detail::cancel_loser(awaitables[j], exception, failed);
+                    detail::cancel_loser(awaitables[j]);
                 }
             }
         }
     }
 
-    /// Runs once, by the winner. `error` is null when nothing threw. `stopped`
-    /// is true when the winner stopped, which stops the awaiter.
-    void finish_winner(std::size_t winner, std::exception_ptr* error,
+    /// Runs once, by the winner. `winner_error` is empty when it did not fail.
+    /// `stopped` is true when the winner stopped, which stops the awaiter.
+    void finish_winner(std::size_t winner,
+                       dstd::Optional<dstd::Error>&& winner_error,
                        bool winner_stopped) noexcept {
-        if (error != nullptr) {
-            exception = std::move(*error);
+        if (winner_error) {
+            error = std::move(winner_error);
             failed.store(true, std::memory_order_release);
         }
         if (winner_stopped) stopped.store(true, std::memory_order_release);
@@ -253,7 +214,7 @@ class WhenAnyAwaitable {
         }
 
         if (state_->released()) {
-            return state_->end_stopped();
+            return state_->end_early();
         }
 
         // Set awaiting_async BEFORE mark_suspended_and_check_completion.
@@ -272,9 +233,6 @@ class WhenAnyAwaitable {
     result_type await_resume() {
         state_->finish_wait();
         state_->awaitables.clear();
-        if (state_->exception) {
-            common::rethrow_and_clear(state_->exception);
-        }
         return std::move(state_->result);
     }
 
@@ -301,7 +259,7 @@ class WhenAnyAwaitable {
                     expected, true, std::memory_order_acq_rel);
                 if (won) {
                     state->result.index = index;
-                    if (!outcome.exception && !outcome.stopped) {
+                    if (!outcome.error && !outcome.stopped) {
                         if constexpr (!std::is_void_v<
                                           typename Awaitable::result_type>) {
                             state->result.result = std::move(*outcome.value);
@@ -316,8 +274,7 @@ class WhenAnyAwaitable {
                                 .push_back(state->cancellation_tokens[j]);
                         }
                     }
-                    std::exception_ptr error = std::move(outcome.exception);
-                    state->finish_winner(index, error ? &error : nullptr,
+                    state->finish_winner(index, std::move(outcome.error),
                                          outcome.stopped);
                 }
                 state->on_wrapper_finished();
@@ -476,7 +433,6 @@ struct WhenAnyTupleState : detail::WhenAnyCompletionState {
     dstd::Optional<dstd::Tuple<Awaitables...>> awaitables;
     std::atomic<bool> completed{false};
     WhenAnyTupleResult<Awaitables...> result;
-    std::exception_ptr exception;
     dstd::Vector<dstd::SharedPtr<std::atomic<bool>>> cancellation_tokens;
 
     explicit WhenAnyTupleState(Awaitables&&... aws)
@@ -525,13 +481,13 @@ struct WhenAnyTupleState : detail::WhenAnyCompletionState {
         }
     }
 
-    /// Runs once, by the winner. `error` is null when nothing threw.
+    /// Runs once, by the winner. `winner_error` is empty when it did not fail.
     /// `winner_stopped` stops the awaiter.
     template <std::size_t I>
-    void finish_winner(std::exception_ptr* error,
+    void finish_winner(dstd::Optional<dstd::Error>&& winner_error,
                        bool winner_stopped) noexcept {
-        if (error != nullptr) {
-            exception = std::move(*error);
+        if (winner_error) {
+            error = std::move(winner_error);
             failed.store(true, std::memory_order_release);
         }
         if (winner_stopped) stopped.store(true, std::memory_order_release);
@@ -552,8 +508,7 @@ struct WhenAnyTupleState : detail::WhenAnyCompletionState {
                     if constexpr (requires {
                                       std::get<Is>(*awaitables).cancel();
                                   }) {
-                        detail::cancel_loser(std::get<Is>(*awaitables),
-                                             exception, failed);
+                        detail::cancel_loser(std::get<Is>(*awaitables));
                     }
                 }
             }(),
@@ -580,7 +535,7 @@ class WhenAnyTupleAwaitable {
             auto outcome =
                 co_await settle_in_place(std::get<I>(*state->awaitables));
             if (state->claim()) {
-                if (!outcome.exception && !outcome.stopped) {
+                if (!outcome.error && !outcome.stopped) {
                     if constexpr (std::is_void_v<typename A::result_type>) {
                         state->template store_winner<I>(dstd::Monostate{});
                     } else {
@@ -590,8 +545,7 @@ class WhenAnyTupleAwaitable {
                 } else {
                     state->template record_winner<I>();
                 }
-                std::exception_ptr error = std::move(outcome.exception);
-                state->template finish_winner<I>(error ? &error : nullptr,
+                state->template finish_winner<I>(std::move(outcome.error),
                                                  outcome.stopped);
             }
             state->on_wrapper_finished();
@@ -630,7 +584,7 @@ class WhenAnyTupleAwaitable {
         launch_all(std::make_index_sequence<sizeof...(Awaitables)>{});
 
         if (state_->released()) {
-            return state_->end_stopped();
+            return state_->end_early();
         }
 
         if constexpr (std::is_base_of_v<PromiseBase, Promise>) {
@@ -646,9 +600,6 @@ class WhenAnyTupleAwaitable {
     result_type await_resume() {
         state_->finish_wait();
         state_->awaitables.reset();
-        if (state_->exception) {
-            common::rethrow_and_clear(state_->exception);
-        }
         return std::move(state_->result);
     }
 };

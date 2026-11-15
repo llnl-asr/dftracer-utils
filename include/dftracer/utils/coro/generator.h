@@ -3,15 +3,12 @@
 #define DFTRACER_UTILS_CORO_GENERATOR_H
 
 #include <dftracer/utils/common/error.h>
-#include <dftracer/utils/common/exception_helpers.h>
 #include <dftracer/utils/coro/detail/frame.h>
 #include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/optional.h>
 
 #include <coroutine>
-#include <exception>
 #include <iterator>
-#include <stdexcept>
 #include <type_traits>
 #include <utility>
 
@@ -21,7 +18,8 @@ namespace dftracer::utils::coro {
  * Generator<T> - Synchronous lazy sequence generator
  *
  * The operations on it are in `coro/stream.h`, with the names that
- * @ref AsyncGenerator uses.
+ * @ref AsyncGenerator uses. A body cannot fail: it yields items, and an item
+ * that can fail is a dstd::Result.
  *
  * Usage:
  * @code
@@ -62,7 +60,6 @@ class Generator {
      */
     struct promise_type : detail::FrameAllocation {
         dstd::Optional<T> current_value;
-        std::exception_ptr exception;
 
         /**
          * Create Generator from promise
@@ -95,10 +92,9 @@ class Generator {
          */
         void return_void() noexcept {}
 
-        /**
-         * Capture exception
-         */
-        void unhandled_exception() { exception = std::current_exception(); }
+        void unhandled_exception() noexcept {
+            dstd::fatal("coro: an exception escaped a coroutine");
+        }
     };
 
     /**
@@ -127,9 +123,6 @@ class Generator {
         iterator& operator++() {
             if (handle_ && !handle_.done()) {
                 handle_.resume();
-                if (handle_.promise().exception) {
-                    common::rethrow_and_clear(handle_.promise().exception);
-                }
             }
             return *this;
         }
@@ -224,10 +217,6 @@ class Generator {
 
         handle_.resume();
 
-        if (handle_.promise().exception) {
-            common::rethrow_and_clear(handle_.promise().exception);
-        }
-
         if (handle_.done()) {
             return iterator{nullptr};
         }
@@ -241,16 +230,12 @@ class Generator {
     iterator end() { return iterator{nullptr}; }
 
     /// The next item, or nothing at the end, as @ref AsyncGenerator gives it.
-    /// The item moves out, so a move-only type works. An error from the body is
-    /// raised here.
+    /// The item moves out, so a move-only type works.
     dstd::Optional<T> next() {
         if (!handle_ || handle_.done()) {
             return dstd::nullopt;
         }
         handle_.resume();
-        if (handle_.promise().exception) {
-            common::rethrow_and_clear(handle_.promise().exception);
-        }
         if (handle_.done()) {
             return dstd::nullopt;
         }
@@ -261,22 +246,6 @@ class Generator {
     }
 
     bool done() const { return !handle_ || handle_.done(); }
-
-    /**
-     * Check if generator has pending exception
-     */
-    bool has_exception() const {
-        return handle_ && handle_.promise().exception != nullptr;
-    }
-
-    /**
-     * Rethrow pending exception
-     */
-    void rethrow_if_exception() {
-        if (handle_ && handle_.promise().exception) {
-            common::rethrow_and_clear(handle_.promise().exception);
-        }
-    }
 };
 
 }  // namespace dftracer::utils::coro

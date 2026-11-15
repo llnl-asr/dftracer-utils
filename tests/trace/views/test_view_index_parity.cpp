@@ -198,19 +198,20 @@ struct Fixture {
     }
 };
 
-dataframe::DataFrame scan_only(const views::detail::scan::ScanPlan& p) {
+dstd::Result<dataframe::DataFrame> scan_only(
+    const views::detail::scan::ScanPlan& p) {
     static Runtime rt;
     dataframe::DataFrame out;
-    dftu_utils_test::ok(rt.block_on(
-        coro::named("scan-only",
-                    coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-                        auto st = dftu_utils_test::ok(
-                            co_await views::detail::build_engine_agg_state(*p));
-                        out = dftu_utils_test::ok(
-                            views::detail::finalize_engine_result(*st, *p));
-                    }))));
-    return dftu_utils_test::ok(
-        views::detail::apply_agg_post_ops(std::move(out), *p));
+    auto ran = rt.block_on(coro::named(
+        "scan-only",
+        coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+            auto built = co_await views::detail::build_engine_agg_state(*p);
+            auto st = co_await std::move(built);
+            auto finalized = views::detail::finalize_engine_result(*st, *p);
+            out = co_await std::move(finalized);
+        })));
+    if (!ran) return dstd::Unexpected<dstd::Error>(ran.error());
+    return views::detail::apply_agg_post_ops(std::move(out), *p);
 }
 
 struct Shape {
@@ -414,12 +415,13 @@ TEST_SUITE("ViewIndexParity") {
                 if (sh.window_us != 0)
                     p = views::detail::scan::time_bucket(p, sh.window_us);
                 p = views::detail::scan::agg(p, {ac.spec});
-                try {
-                    expected[sh.label][ac.label] =
-                        cells_of(scan_only(p), sh.columns,
-                                 dstd::String(ac.spec.out_name));
-                } catch (const std::exception& e) {
-                    scan_error[sh.label + "/" + ac.label] = e.what();
+                auto scanned = scan_only(p);
+                if (scanned) {
+                    expected[sh.label][ac.label] = cells_of(
+                        *scanned, sh.columns, dstd::String(ac.spec.out_name));
+                } else {
+                    scan_error[sh.label + "/" + ac.label] =
+                        scanned.error().c_str();
                 }
             }
         }
@@ -453,18 +455,16 @@ TEST_SUITE("ViewIndexParity") {
                 }
                 const Cells& want = expected[sh.label][ac.label];
                 Cells got;
-                try {
-                    View v = fx.view();
-                    if (!sh.keys.empty()) v = v.group_by(sh.keys);
-                    if (sh.window_us != 0) v = v.time_bucket(sh.window_us);
-                    auto collected = v.agg({ac.spec}).collect().get();
-                    if (!collected)
-                        throw std::runtime_error(collected.error().c_str());
+                View v = fx.view();
+                if (!sh.keys.empty()) v = v.group_by(sh.keys);
+                if (sh.window_us != 0) v = v.time_bucket(sh.window_us);
+                auto collected = v.agg({ac.spec}).collect().get();
+                if (collected) {
                     got = cells_of(*collected, sh.columns,
                                    dstd::String(ac.spec.out_name));
-                } catch (const std::exception& e) {
+                } else {
                     line.status = "declined";
-                    line.note = first_line(e.what());
+                    line.note = first_line(collected.error().c_str());
                     ++declined;
                     CHECK_MESSAGE(
                         listed_decline,
@@ -563,10 +563,10 @@ TEST_SUITE("ViewIndexParity") {
             dstd::String(determine_index_path(gz, o.index_dir));
 
         const dstd::Vector<AggSpec> count{{AggOp::Count, "", "n"}};
-        const dataframe::DataFrame trace = scan_only(
+        const dataframe::DataFrame trace = dftu_utils_test::ok(scan_only(
             views::detail::scan::agg(views::detail::scan::from_file(
                                          dstd::String(gz), dstd::String(index)),
-                                     count));
+                                     count)));
         REQUIRE(trace.num_rows() == 1);
         CHECK(bnum(trace, 0, "n") == doctest::Approx(4));
 

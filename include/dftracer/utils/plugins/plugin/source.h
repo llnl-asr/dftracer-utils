@@ -2,105 +2,78 @@
 #ifndef DFTRACER_UTILS_PLUGINS_PLUGIN_SOURCE_H
 #define DFTRACER_UTILS_PLUGINS_PLUGIN_SOURCE_H
 
-#include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dataframe/c_api.h>
+#include <dftracer/utils/dataframe/types.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/plugins/plugin/frame.h>
+#include <dftracer/utils/plugins/plugin/map.h>
+#include <dftracer/utils/plugins/plugin/types.h>
 
 #include <algorithm>
+#include <array>
 #include <concepts>
+#include <cstddef>
 #include <cstdint>
-#include <exception>
 #include <utility>
 
 /* A LazyFrame source written as a C++ class. source_vtable<S>() adapts S to
- * dftu_source_vt; register it with PluginBuilder::source<S>() (or
- * dftu_provider_register). Only C handles and C calls cross the boundary:
- * exceptions are caught at every callback, and every object the host receives
- * is freed through its own vtable.
+ * dftu_source_vt; register it with PluginBuilder::source<S>(). Only C handles
+ * and C calls cross the boundary: a callback reports failure as a dstd::Result,
+ * and every object the host receives is freed through its own vtable.
  *
  * S provides:
  *   dstd::Vector<dstd::String> names() const;
- *   ScanResult<C> scan(const ScanView&) const;
+ *   dstd::Result<ScanResult<C>> scan(const ScanView&, const Host&) const;
  * where C is a cursor type with
- *   dstd::Optional<OwnedFrame> next(std::int64_t max_rows);
+ *   dstd::Result<dstd::Optional<OwnedDataFrame>> next(std::int64_t max_rows);
  * and optionally, each wired only when present,
  *   bool narrow(ExprView predicate);          // advisory, see dftu_cursor_vt
- *   std::uint64_t resident_bytes();
- *   std::uint64_t reclaim(std::uint64_t want);
  * and optionally
- *   void schema(SchemaBuilder&) const;               // column types
- *   dstd::Optional<Applied<S>> apply_filter(ExprView) const;
- *   dstd::Optional<Applied<S>> apply_projection(const dstd::Vector<NamedExpr>&)
- * const; dstd::Optional<Applied<S>> apply_aggregation(const AggregationView&)
- * const; dstd::Optional<Applied<S>> apply_sort(const SortView&) const;
- *   dstd::Optional<Applied<S>> apply_topn(const SortView&, std::int64_t k)
- * const; dstd::Optional<Applied<S>> apply_limit(std::int64_t offset,
- * std::int64_t n) const; dstd::Optional<Applied<S>> apply_tail(std::int64_t n)
- * const; dstd::Optional<Applied<S>> apply_join(const JoinView<S>&) const; The
- * apply_* contract is dftu_source_vt::apply's: dstd::nullopt for unsupported or
- * no change, a new S otherwise, projection / aggregation / join only as
- * Apply::Exact. A cursor error is a thrown std::exception; a throwing apply_*
- * reads as no change and a throwing scan() as a failed scan. */
+ *   void schema(SchemaBuilder&) const;               // column types; or
+ *                                                    // dstd::Result<void>
+ *   dstd::Result<dstd::Optional<Applied<S>>> apply_filter(ExprView) const;
+ *   apply_projection(const dstd::Vector<NamedExpr>&) const;
+ *   apply_aggregation(const AggregationView&) const;
+ *   apply_sort(const SortView&) const;
+ *   apply_topn(const SortView&, std::int64_t k) const;
+ *   apply_limit(std::int64_t offset, std::int64_t n) const;
+ *   apply_tail(std::int64_t n) const;
+ *   apply_join(const JoinView<S>&) const;
+ * each of the apply_* returning the same dstd::Result of an Optional of
+ * Applied<S>. The apply_* contract is dftu_source_vt::apply's: dstd::nullopt
+ * for unsupported or no change, a new S otherwise, projection / aggregation /
+ * join only as Apply::Exact. A cursor error is the dstd::Error its next()
+ * returns, which fails the call with its status and message; so does an error
+ * from apply_*, scan() or schema().
+ *
+ * The Host given to scan is that of the cursor, valid for that call: reserve
+ * memory through Host::memory() there and keep the reservations in C. A
+ * cursor that must grow a reservation while it runs takes
+ *   next(std::int64_t max_rows, const Host& host)
+ * in place of next(max_rows), and gets a Host that is good for that call. */
 
 namespace dftracer::utils::plugins {
 
-class OwnedFrame {
-   public:
-    OwnedFrame() = default;
-    explicit OwnedFrame(dftu_dataframe* df) noexcept : df_(df) {}
-    OwnedFrame(OwnedFrame&& o) noexcept : df_(std::exchange(o.df_, nullptr)) {}
-    OwnedFrame& operator=(OwnedFrame&& o) noexcept {
-        if (this != &o) {
-            reset();
-            df_ = std::exchange(o.df_, nullptr);
-        }
-        return *this;
-    }
-    OwnedFrame(const OwnedFrame&) = delete;
-    OwnedFrame& operator=(const OwnedFrame&) = delete;
-    ~OwnedFrame() { reset(); }
+namespace detail {
+struct ExprAccess;
+struct SchemaAccess;
+}  // namespace detail
 
-    dftu_dataframe* get() const noexcept { return df_; }
-    dftu_dataframe* release() noexcept { return std::exchange(df_, nullptr); }
-    explicit operator bool() const noexcept { return df_ != nullptr; }
-
-   private:
-    void reset() noexcept {
-        if (df_) dftu_dataframe_free(df_);
-        df_ = nullptr;
-    }
-    dftu_dataframe* df_ = nullptr;
-};
-
-class OwnedSeries {
-   public:
-    OwnedSeries() = default;
-    explicit OwnedSeries(dftu_series* s) noexcept : s_(s) {}
-    OwnedSeries(OwnedSeries&& o) noexcept : s_(std::exchange(o.s_, nullptr)) {}
-    OwnedSeries& operator=(OwnedSeries&& o) noexcept {
-        if (this != &o) {
-            reset();
-            s_ = std::exchange(o.s_, nullptr);
-        }
-        return *this;
-    }
-    OwnedSeries(const OwnedSeries&) = delete;
-    OwnedSeries& operator=(const OwnedSeries&) = delete;
-    ~OwnedSeries() { reset(); }
-
-    dftu_series* get() const noexcept { return s_; }
-    dftu_series* release() noexcept { return std::exchange(s_, nullptr); }
-    explicit operator bool() const noexcept { return s_ != nullptr; }
-
-   private:
-    void reset() noexcept {
-        if (s_) dftu_series_free(s_);
-        s_ = nullptr;
-    }
-    dftu_series* s_ = nullptr;
-};
+/// The query-language enums of the dataframe library, spelled as themselves: a
+/// plugin writes @ref CmpOp "CmpOp::Gt" and @ref Pushed "Pushed::No", never a
+/// status code.
+using dataframe::CmpOp;
+using dataframe::JoinHow;
+using dataframe::LogicalOp;
+using dataframe::Pushed;
+using dataframe::ScalarKind;
+using dataframe::StrPredOp;
+using dataframe::TimeUnit;
 
 class OwnedExpr;
 
@@ -109,8 +82,6 @@ class ExprView {
    public:
     ExprView() = default;
     explicit ExprView(const dftu_expr* e) noexcept : e_(e) {}
-
-    const dftu_expr* raw() const noexcept { return e_; }
     explicit operator bool() const noexcept { return e_ != nullptr; }
 
     /// The column when this is a bare column reference.
@@ -120,26 +91,39 @@ class ExprView {
         return c;
     }
 
+    /// `column <op> literal`.
     struct Compare {
-        std::int32_t column;
-        dftu_cmp_op op;
-        dftu_scalar rhs;  ///< a string borrows from this expression
+        std::int32_t column = -1;
+        CmpOp op = CmpOp::Eq;
+
+        /// The literal, read in its own domain. It borrows this Compare, so it
+        /// is valid only while this object lives.
+        ScalarView rhs() const noexcept { return ScalarView(&literal_); }
+
+       private:
+        friend class ExprView;
+        dftu_scalar literal_{};  ///< a string borrows from the expression
     };
     dstd::Optional<Compare> as_compare() const {
         std::int32_t col = -1, op = 0;
         dftu_scalar rhs{};
         if (!e_ || !dftu_expr_as_col_cmp(e_, &col, &op, &rhs))
             return dstd::nullopt;
-        return Compare{col, static_cast<dftu_cmp_op>(op), rhs};
+        Compare cmp;
+        cmp.column = col;
+        cmp.op = static_cast<CmpOp>(op);
+        cmp.literal_ = rhs;
+        return cmp;
     }
 
     struct Logical;
     dstd::Optional<Logical> as_logical() const;
     dstd::Optional<OwnedExpr> as_not() const;
 
+    /// `column <op> pattern`.
     struct StrPred {
-        std::int32_t column;
-        dftu_str_pred_op op;
+        std::int32_t column = -1;
+        StrPredOp op = StrPredOp::Contains;
         dstd::StringView pattern;  ///< borrows from this expression
     };
     dstd::Optional<StrPred> as_str_pred() const {
@@ -147,30 +131,60 @@ class ExprView {
         const char* pat = nullptr;
         if (!e_ || !dftu_expr_as_col_str_pred(e_, &col, &op, &pat, &len))
             return dstd::nullopt;
-        return StrPred{col, static_cast<dftu_str_pred_op>(op),
+        return StrPred{col, static_cast<StrPredOp>(op),
                        dstd::StringView(pat, static_cast<std::size_t>(len))};
     }
 
+    /// `column is_in values`.
     struct IsIn {
-        std::int32_t column;
-        OwnedSeries values;
+        std::int32_t column = -1;
+
+        /// The candidate values. They borrow this IsIn, so the view is valid
+        /// only while this object lives.
+        ColumnView values() const noexcept { return ColumnView(values_.get()); }
+
+       private:
+        friend class ExprView;
+        Column values_;
     };
     dstd::Optional<IsIn> as_is_in() const {
         std::int32_t col = -1;
         dftu_series* values = nullptr;
         if (!e_ || !dftu_expr_as_col_is_in(e_, &col, &values))
             return dstd::nullopt;
-        return IsIn{col, OwnedSeries(values)};
+        IsIn in;
+        in.column = col;
+        in.values_ = Column(values);
+        return in;
     }
 
-    /// Evaluate over `inputs`; an empty result on a malformed expression.
-    OwnedSeries eval(const dstd::Vector<const dftu_series*>& inputs) const {
-        if (!e_) return {};
-        return OwnedSeries(dftu_expr_eval(
-            e_, inputs.data(), static_cast<std::int32_t>(inputs.size())));
+    /// Evaluate over `inputs`, one column per positional index the expression
+    /// reads. An empty column on a malformed expression and on an expression
+    /// that reads more columns than it was given.
+    Column eval(dstd::Span<const ColumnView> inputs) const {
+        if (!e_) return Column();
+        const std::size_t n = inputs.size();
+        // The C call takes one pointer per column, so the common small frame
+        // evaluates without allocating.
+        std::array<const dftu_series*, 8> stack{};
+        dstd::Vector<const dftu_series*> heap;
+        const dftu_series* const* columns = nullptr;
+        if (n <= stack.size()) {
+            for (std::size_t i = 0; i < n; ++i)
+                stack[i] = dataframe::detail::column_series(inputs[i]);
+            columns = stack.data();
+        } else {
+            heap.reserve(n);
+            for (const ColumnView& input : inputs)
+                heap.push_back(dataframe::detail::column_series(input));
+            columns = heap.data();
+        }
+        return Column(
+            dftu_expr_eval(e_, columns, static_cast<std::int32_t>(n)));
     }
 
    private:
+    friend struct detail::ExprAccess;
     const dftu_expr* e_ = nullptr;
 };
 
@@ -201,7 +215,7 @@ class OwnedExpr {
 };
 
 struct ExprView::Logical {
-    dftu_logical_op op;
+    LogicalOp op = LogicalOp::And;
     OwnedExpr lhs;
     OwnedExpr rhs;
 };
@@ -211,8 +225,7 @@ inline dstd::Optional<ExprView::Logical> ExprView::as_logical() const {
     dftu_expr* a = nullptr;
     dftu_expr* b = nullptr;
     if (!e_ || !dftu_expr_as_logical(e_, &op, &a, &b)) return dstd::nullopt;
-    return Logical{static_cast<dftu_logical_op>(op), OwnedExpr(a),
-                   OwnedExpr(b)};
+    return Logical{static_cast<LogicalOp>(op), OwnedExpr(a), OwnedExpr(b)};
 }
 
 inline dstd::Optional<OwnedExpr> ExprView::as_not() const {
@@ -220,6 +233,20 @@ inline dstd::Optional<OwnedExpr> ExprView::as_not() const {
     if (!e_ || !dftu_expr_as_not(e_, &a)) return dstd::nullopt;
     return OwnedExpr(a);
 }
+
+namespace detail {
+
+/// The C expression a @ref ExprView borrows. SDK plumbing, not plugin surface.
+struct ExprAccess {
+    static const dftu_expr* raw(const ExprView& e) noexcept { return e.e_; }
+};
+
+/// @see ExprAccess
+inline const dftu_expr* expr_raw(const ExprView& e) noexcept {
+    return ExprAccess::raw(e);
+}
+
+}  // namespace detail
 
 struct NamedExpr {
     dstd::StringView name;
@@ -249,7 +276,7 @@ struct JoinView {
     const S& other;  ///< the right side, fully absorbed into its own source
     dstd::Vector<dstd::StringView> left_on;
     dstd::Vector<dstd::StringView> right_on;
-    dftu_join_how how;
+    JoinHow how = JoinHow::Inner;
     dstd::StringView suffix;
 };
 
@@ -263,8 +290,8 @@ struct ScanView {
 template <class Cursor>
 struct ScanResult {
     dstd::UniquePtr<Cursor> cursor;
-    /// One entry per ScanView::filters; missing entries read as NO.
-    dstd::Vector<dftu_pushed> filters;
+    /// One entry per ScanView::filters; missing entries read as Pushed::No.
+    dstd::Vector<Pushed> filters;
 };
 
 enum class Apply { Exact, Inexact };
@@ -278,16 +305,43 @@ struct Applied {
 class SchemaBuilder {
    public:
     explicit SchemaBuilder(dftu_schema* s) noexcept : s_(s) {}
-    /// Appends a column; returns its index, or -1 on a bad argument.
-    std::int32_t add(const char* name, dftu_dtype type, bool nullable = true) {
-        return dftu_schema_add_field(s_, name, type, nullable ? 1 : 0,
-                                     DFTU_TIME_UNIT_MICRO, nullptr, 0, 0, 0);
+
+    /// Append a column whose time values are microseconds, the unit an ABI
+    /// column that declares none reads in.
+    std::int32_t add(dstd::CStringView name, TypeId type,
+                     bool nullable = true) {
+        return add(name, type, TimeUnit::Micro, nullable);
     }
-    dftu_schema* raw() const noexcept { return s_; }
+    /// Append a column read in `unit`, which a Timestamp, Time or Duration
+    /// column uses and every other type ignores. Returns the field's index, or
+    /// -1 for a type cast from outside @ref TypeId; a call that names a
+    /// @ref TypeId value cannot fail, so it may ignore the result.
+    std::int32_t add(dstd::CStringView name, TypeId type, TimeUnit unit,
+                     bool nullable = true) {
+        return dftu_schema_add_field(
+            s_, name.c_str(), static_cast<dftu_dtype>(type), nullable ? 1 : 0,
+            static_cast<dftu_time_unit>(unit), nullptr, 0, 0, 0);
+    }
 
    private:
-    dftu_schema* s_;
+    friend struct detail::SchemaAccess;
+    dftu_schema* s_ = nullptr;
 };
+
+namespace detail {
+
+/// The C schema a @ref SchemaBuilder appends to. SDK plumbing, not plugin
+/// surface.
+struct SchemaAccess {
+    static dftu_schema* raw(const SchemaBuilder& b) noexcept { return b.s_; }
+};
+
+/// @see SchemaAccess
+inline dftu_schema* schema_raw(const SchemaBuilder& b) noexcept {
+    return SchemaAccess::raw(b);
+}
+
+}  // namespace detail
 
 namespace detail {
 
@@ -302,77 +356,54 @@ struct SourceBox {
 template <class C>
 struct CursorBox {
     dstd::UniquePtr<C> cursor;
-    dstd::String error;
+    const dftu_plugin_host* host = nullptr;
 };
 
 template <class C>
 struct CursorVt {
-    static dftu_task* next(void* self, std::int64_t max_rows,
-                           dftu_result_frame* out) {
+    static dftu_status next(dftu_ctx* ctx, void* self, std::int64_t max_rows,
+                            dftu_dataframe** out, dftu_task**) noexcept {
         auto* box = static_cast<CursorBox<C>*>(self);
-        try {
-            dstd::Optional<OwnedFrame> f = box->cursor->next(max_rows);
-            out->ok = 1;
-            out->u.value = f ? f->release() : nullptr;
-        } catch (const std::exception& e) {
-            box->error = e.what();
-            out->ok = 0;
-            out->u.err =
-                dftu_error{0, 0, DFTU_COND_UNKNOWN, box->error.c_str()};
-        } catch (...) {
-            box->error = "source cursor failed";
-            out->ok = 0;
-            out->u.err =
-                dftu_error{0, 0, DFTU_COND_UNKNOWN, box->error.c_str()};
-        }
-        return nullptr;
+        return to_status(ctx, [&]() -> dftu_status {
+            dstd::Result<dstd::Optional<OwnedDataFrame>> next = [&] {
+                if constexpr (requires(C& c, const Host& h) {
+                                  c.next(std::int64_t{}, h);
+                              })
+                    return box->cursor->next(
+                        max_rows, detail::host_from_raw(box->host, ctx));
+                else
+                    return box->cursor->next(max_rows);
+            }();
+            if (!next.has_value()) return report(ctx, next.error());
+            dstd::Optional<OwnedDataFrame>& f = *next;
+            if (!f) {
+                *out = nullptr;
+                return DFTU_END;
+            }
+            *out = f->release();
+            return DFTU_OK;
+        });
     }
     static void destroy(void* self) { delete static_cast<CursorBox<C>*>(self); }
-    static dftu_task* narrow(void* self, const dftu_expr* predicate,
-                             std::int32_t* out_applied) {
+    static dftu_status narrow(dftu_ctx* ctx, void* self,
+                              const dftu_expr* predicate,
+                              std::int32_t* out_applied, dftu_task**) noexcept {
         auto* box = static_cast<CursorBox<C>*>(self);
-        try {
+        return to_status(ctx, [&]() -> dftu_status {
             *out_applied = box->cursor->narrow(ExprView(predicate)) ? 1 : 0;
-        } catch (...) {
-            *out_applied = 0;
-        }
-        return nullptr;
-    }
-    static std::uint64_t bytes(void* self) {
-        try {
-            return static_cast<CursorBox<C>*>(self)->cursor->resident_bytes();
-        } catch (...) {
-            return 0;
-        }
-    }
-    static std::uint64_t reclaim(void* self, std::uint64_t want) {
-        try {
-            return static_cast<CursorBox<C>*>(self)->cursor->reclaim(want);
-        } catch (...) {
-            return 0;
-        }
+            return DFTU_OK;
+        });
     }
     static const dftu_cursor_vt* vt() {
         static const dftu_cursor_vt VT = [] {
             dftu_cursor_vt t{};
+            t.struct_size = sizeof(dftu_cursor_vt);
             t.next = next;
             t.destroy = destroy;
             if constexpr (requires(C& c) {
                               { c.narrow(ExprView{}) } -> std::same_as<bool>;
                           })
                 t.narrow = narrow;
-            if constexpr (requires(C& c) {
-                              {
-                                  c.resident_bytes()
-                              } -> std::same_as<std::uint64_t>;
-                          })
-                t.bytes = bytes;
-            if constexpr (requires(C& c) {
-                              {
-                                  c.reclaim(std::uint64_t{})
-                              } -> std::same_as<std::uint64_t>;
-                          })
-                t.reclaim = reclaim;
             return t;
         }();
         return &VT;
@@ -410,9 +441,11 @@ template <class S>
 struct SourceVt {
     using Box = SourceBox<S>;
 
-    static std::int32_t schema(void* self, const char* const** out_names) {
+    static dftu_status schema(dftu_ctx* ctx, void* self,
+                              const char* const** out_names,
+                              std::int32_t* out_count) noexcept {
         auto* box = static_cast<Box*>(self);
-        try {
+        return to_status(ctx, [&]() -> dftu_status {
             if (!box->named) {
                 box->names = box->source->names();
                 box->name_ptrs.clear();
@@ -420,56 +453,60 @@ struct SourceVt {
                     box->name_ptrs.push_back(n.c_str());
                 box->named = true;
             }
-        } catch (...) {
-            return -1;
-        }
-        *out_names = box->name_ptrs.data();
-        return static_cast<std::int32_t>(box->name_ptrs.size());
+            *out_names = box->name_ptrs.data();
+            *out_count = static_cast<std::int32_t>(box->name_ptrs.size());
+            return DFTU_OK;
+        });
     }
 
-    static void* scan(void* self, const dftu_scan_request* req,
-                      std::int32_t* out_pushed, void** out_cursor_self,
-                      const dftu_cursor_vt** out_vt) {
+    static dftu_status scan(dftu_ctx* ctx, void* self,
+                            const dftu_plugin_host* host,
+                            const dftu_scan_request* req,
+                            std::int32_t* out_pushed, void** out_cursor_self,
+                            const dftu_cursor_vt** out_vt) noexcept {
         auto* box = static_cast<Box*>(self);
-        try {
+        return to_status(ctx, [&]() -> dftu_status {
             ScanView view;
             view.projection = string_views(req->projection, req->n_projection);
             for (std::int32_t i = 0; i < req->n_filters; ++i)
                 view.filters.emplace_back(req->filters[i]);
             view.limit = req->limit;
             view.memory_budget = req->memory_budget;
-            auto result = box->source->scan(view);
+            auto scanned =
+                box->source->scan(view, detail::host_from_raw(host, ctx));
+            if (!scanned.has_value()) return report(ctx, scanned.error());
+            auto& result = *scanned;
             using C = typename decltype(result.cursor)::element_type;
-            if (!result.cursor) return nullptr;
+            if (!result.cursor)
+                return dftu_fail(ctx, DFTU_E_INTERNAL,
+                                 "scan returned no cursor");
             const std::size_t n =
                 std::min<std::size_t>(result.filters.size(),
                                       static_cast<std::size_t>(req->n_filters));
             for (std::size_t i = 0; i < n; ++i)
                 out_pushed[i] = static_cast<std::int32_t>(result.filters[i]);
-            auto* cbox = new CursorBox<C>{std::move(result.cursor), {}};
+            auto* cbox = new CursorBox<C>{std::move(result.cursor), host};
             *out_cursor_self = cbox;
             *out_vt = CursorVt<C>::vt();
-            return cbox;
-        } catch (...) {
-            return nullptr;
-        }
+            return DFTU_OK;
+        });
     }
 
     static void destroy(void* self) { delete static_cast<Box*>(self); }
 
-    static void schema_types(void* self, dftu_schema* out)
+    static dftu_status schema_types(dftu_ctx* ctx, void* self,
+                                    dftu_schema* out) noexcept
         requires HasSchema<S>
     {
         auto* box = static_cast<Box*>(self);
-        try {
+        return to_status(ctx, [&]() {
             SchemaBuilder b(out);
-            box->source->schema(b);
-        } catch (...) {
-        }
+            return box->source->schema(b);
+        });
     }
 
-    static dstd::Optional<Applied<S>> dispatch(const S& s,
-                                               const dftu_apply_request& req) {
+    static dstd::Result<dstd::Optional<Applied<S>>> dispatch(
+        const S& s, const dftu_apply_request& req) {
         switch (req.kind) {
             case DFTU_APPLY_FILTER:
                 if constexpr (requires { s.apply_filter(ExprView{}); })
@@ -536,7 +573,7 @@ struct SourceVt {
                     const S& other = *static_cast<Box*>(j.other_self)->source;
                     JoinView<S> v{other, string_views(j.left_on, j.n_on),
                                   string_views(j.right_on, j.n_on),
-                                  static_cast<dftu_join_how>(j.how),
+                                  static_cast<JoinHow>(j.how),
                                   j.suffix ? j.suffix : ""};
                     return s.apply_join(v);
                 }
@@ -555,25 +592,29 @@ struct SourceVt {
         return v;
     }
 
-    static void apply(void* self, const dftu_apply_request* req,
-                      dftu_apply_result* out) {
+    static dftu_status apply(dftu_ctx* ctx, void* self,
+                             const dftu_apply_request* req,
+                             dftu_apply_result* out) noexcept {
         auto* box = static_cast<Box*>(self);
-        try {
-            dstd::Optional<Applied<S>> r = dispatch(*box->source, *req);
-            if (!r || !r->source) return;
+        return to_status(ctx, [&]() -> dftu_status {
+            dstd::Result<dstd::Optional<Applied<S>>> applied =
+                dispatch(*box->source, *req);
+            if (!applied.has_value()) return report(ctx, applied.error());
+            dstd::Optional<Applied<S>>& r = *applied;
+            if (!r || !r->source) return DFTU_OK;
             auto* next = new Box{std::move(r->source), {}, {}, false};
             out->status = r->status == Apply::Exact ? DFTU_APPLY_EXACT
                                                     : DFTU_APPLY_INEXACT;
             out->self = next;
             out->vt = vt();
-        } catch (...) {
-            out->status = DFTU_APPLY_NO_CHANGE;
-        }
+            return DFTU_OK;
+        });
     }
 
     static const dftu_source_vt* vt() {
         static const dftu_source_vt VT = [] {
             dftu_source_vt t{};
+            t.struct_size = sizeof(dftu_source_vt);
             t.schema = schema;
             t.scan = scan;
             t.destroy = destroy;

@@ -65,6 +65,9 @@ enum class Fn : std::uint8_t {
     Sort,
     Unique,
     Join,
+    /// A call of a plugin UDF, named by TCall::udf. Never in FUNCTIONS by a
+    /// name a query can write.
+    Udf,
 };
 
 struct FnInfo {
@@ -123,6 +126,7 @@ inline constexpr FnInfo FUNCTIONS[] = {
     {Fn::Sort, "sort", 1, 1},
     {Fn::Unique, "unique", 1, 1},
     {Fn::Join, "join", 2, 2},
+    {Fn::Udf, "<udf>", 0, VARIADIC},
 };
 
 inline const FnInfo& fn_info(Fn fn) {
@@ -222,6 +226,8 @@ struct TCall {
     std::int64_t ns_per_unit = 0;
     /// DATE_PART: the DatePart code of the second argument.
     std::int32_t part = 0;
+    /// UDF: the name of the plugin function.
+    dstd::String udf{};
 };
 
 /// `any(subject, cond)`, or `all(subject, cond)` when `all`: `cond` holds

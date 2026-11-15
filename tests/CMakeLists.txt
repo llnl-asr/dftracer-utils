@@ -527,6 +527,7 @@ set(TEST_CPP_SOURCES
     domains/server/test_http_request.cpp
     domains/server/test_query_params.cpp
     domains/server/test_trace_index.cpp
+    domains/server/test_viz_store_cache.cpp
     domains/server/test_cancel.cpp
     domains/server/test_viz_stats_fastpath.cpp
     domains/server/test_viz_aggregated.cpp

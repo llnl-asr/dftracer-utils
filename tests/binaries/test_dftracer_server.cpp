@@ -1192,7 +1192,6 @@ TEST_CASE("DFTracer Server - viz summary cache persists and invalidates") {
     dftu_utils_test::TestEnvironment env(1);
     REQUIRE(env.is_valid());
     dstd::String pfw = env.dir() + "/mr.pfw.gz";
-    dstd::String cache = env.dir() + "/.dftviz_summary";
     const dstd::String breaks_req =
         "GET /api/viz/breaks HTTP/1.1\r\n"
         "Host: localhost\r\nConnection: close\r\n\r\n";
@@ -1201,7 +1200,9 @@ TEST_CASE("DFTracer Server - viz summary cache persists and invalidates") {
     REQUIRE(!v1.empty());
     REQUIRE(dstd::fs::rename(v1, pfw).has_value());
 
-    // First run builds the summary (a /viz request) and writes the cache.
+    // First run builds the summary (a /viz request) and stores it in the
+    // folder's index store. That a restart serves it without a rebuild is
+    // proven in tests/domains/server/test_viz_store_cache.cpp.
     {
         int port = pick_port();
         ServerProcess server;
@@ -1211,12 +1212,9 @@ TEST_CASE("DFTracer Server - viz summary cache persists and invalidates") {
         CHECK(body.find("\"begin\":1000000,\"end\":1010000") !=
               dstd::String::npos);
     }
-    REQUIRE(dstd::fs::exists(cache).value());
-    const auto cache_time = dstd::fs::mtime_ns(cache).value();
-    const auto cache_size = dstd::fs::file_size(cache).value();
+    CHECK_FALSE(dstd::fs::exists(env.dir() + "/.dftviz_summary").value());
 
-    // Second run reuses the cache; the result is unchanged. A rejected cache
-    // is rebuilt and rewritten, so an untouched file shows the load worked.
+    // Second run reads the stored summary; the result is unchanged.
     {
         int port = pick_port();
         ServerProcess server;
@@ -1227,9 +1225,6 @@ TEST_CASE("DFTracer Server - viz summary cache persists and invalidates") {
               dstd::String::npos);
         CHECK(body.find("\"begin\":2010000") == dstd::String::npos);
     }
-
-    CHECK(dstd::fs::mtime_ns(cache).value() == cache_time);
-    CHECK(dstd::fs::file_size(cache).value() == cache_size);
 
     // A changed source invalidates the cache: the new run's gap must appear.
     auto v2 = env.create_dft_multirun_gzip_file(3, 1000000, 10000);

@@ -10,6 +10,7 @@
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/trace/index/gzip/member.h>
@@ -135,14 +136,24 @@ class TraceIndex {
     dstd::String resolve(dstd::StringView rowset, dstd::StringView key,
                          dstd::StringView value, const dstd::String& k);
 
-    /// On-disk summary cache (index_dir/.dftviz_summary), keyed by a
-    /// fingerprint of the current file set so a re-indexed trace invalidates
-    /// it. Loading it skips the full rescan on restart.
+    /// Summary cache in the index root's store, under
+    /// `server.viz_summary`, keyed by a fingerprint of the current file
+    /// set and their mtimes and sizes. Loading it skips the full rescan on
+    /// restart.
     bool load_persisted_viz_summary();
-    void persist_viz_summary() const;
+    coro::CoroTask<dstd::Result<void>> persist_viz_summary() const;
+    /// Test hook: records that this index computed the summary rather than
+    /// loading it from the store, so a test can tell a cache hit from a
+    /// rebuild.
+    void note_viz_summary_compute() {
+        viz_summary_compute_count_.fetch_add(1, std::memory_order_relaxed);
+    }
+    /// Test hook: how many times @ref note_viz_summary_compute ran.
+    std::size_t viz_summary_compute_count() const {
+        return viz_summary_compute_count_.load(std::memory_order_relaxed);
+    }
 
    private:
-    dstd::Path viz_summary_cache_path() const;
     dstd::String viz_summary_fingerprint() const;
 
     dstd::String directory_;
@@ -169,6 +180,7 @@ class TraceIndex {
     dstd::UniquePtr<VizSummary> viz_summary_;
     std::atomic<int> viz_summary_state_{
         0};  ///< 0 not built, 1 building, 2 ready
+    std::atomic<std::size_t> viz_summary_compute_count_{0};
 };
 
 class QueryParams;

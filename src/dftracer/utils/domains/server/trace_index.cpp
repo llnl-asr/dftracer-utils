@@ -11,11 +11,15 @@
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/hash/constants.h>
+#include <dftracer/utils/dstd/hash/fnv1a.h>
+#include <dftracer/utils/dstd/hash/hex64.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -23,6 +27,7 @@
 #include <dftracer/utils/runtime/fs/fs.h>
 #include <dftracer/utils/runtime/io/io_backend.h>
 #include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/store/store.h>
 #include <dftracer/utils/trace/index/extensions/kinds/time_bounds.h>
 #include <dftracer/utils/trace/index/index.h>
 #include <dftracer/utils/trace/index/indexer.h>
@@ -98,16 +103,25 @@ dstd::Result<dftracer::utils::trace::index::gzip::TimeBounds> timeline_bounds(
     return bounds;
 }
 
-// True when the index at `root` no longer matches `paths`: a path is not
-// indexed, its stat changed, or the index holds a path that is not listed.
+// True when the index at `root` no longer matches `paths` in `directory`: a
+// path is not indexed, its stat changed, or the index holds another path from
+// the same directory that is not listed. `unlisted` reports those entries, the
+// ones a stale rebuild drops from the root: no other directory names them, so
+// keeping them makes this directory stale on every start. A path from another
+// directory that shares the root makes neither stale. A file belongs to the
+// directory only when its parent directory is the directory, because the scan
+// is not recursive and a subfolder is a trace folder of its own.
 dstd::Result<bool> index_is_stale(dstd::StringView root,
-                                  const dstd::Vector<dstd::String>& paths) {
+                                  const dstd::Vector<dstd::String>& paths,
+                                  dstd::StringView directory,
+                                  dstd::Vector<dstd::String>& unlisted) {
     auto opened = trace::index::plan::open_snapshot(root);
     if (!opened) return opened.error();
     const auto& snapshot = *opened;
     dstd::HashSet<dstd::StringView> listed;
     dstd::Vector<dstd::String> logical_paths;
     logical_paths.reserve(paths.size());
+    bool changed = false;
     for (const auto& path : paths) {
         logical_paths.push_back(fileio::get_logical_path(path));
         listed.insert(logical_paths.back());
@@ -119,13 +133,21 @@ dstd::Result<bool> index_is_stale(dstd::StringView root,
         }
         if (snapshot.freshness(logical_paths.back(), now) !=
             trace::index::Freshness::Current)
-            return true;
+            changed = true;
     }
     const auto files = snapshot.files();
     if (!files) return files.error();
-    for (const auto& file : *files)
-        if (listed.find(file.path()) == listed.end()) return true;
-    return false;
+    // The index names a file by its logical path, which is absolute and
+    // normalized, so the folder is built the same way; dstd::normalize alone
+    // keeps a relative folder relative and matches nothing.
+    const dstd::String folder = fileio::get_logical_path(directory);
+    const dstd::StringView folder_view(folder);
+    for (const auto& file : *files) {
+        if (listed.find(file.path()) != listed.end()) continue;
+        if (dstd::PathView(file.path()).parent().str() != folder_view) continue;
+        unlisted.emplace_back(file.path());
+    }
+    return changed || !unlisted.empty();
 }
 
 dstd::Result<dstd::SharedPtr<const TraceIndex::FileChunkMeta>> read_chunk_meta(
@@ -182,9 +204,8 @@ using namespace dftracer::utils::trace;
 
 namespace {
 
-// Bump VERSION when the on-disk layout below changes; the loader then ignores
-// the stale cache.
-constexpr std::uint32_t VIZ_SUMMARY_MAGIC = 0x315A5644;  // "DVZ1"
+// Bump VERSION when the summary value layout below changes; the store namespace
+// version then keeps older copies from loading.
 constexpr std::uint32_t VIZ_SUMMARY_FORMAT_VERSION = 0;
 
 struct BufWriter {
@@ -568,6 +589,55 @@ bool deserialize_summary(BufReader& r, VizSummary& s) {
     return r.ok;
 }
 
+constexpr dstd::StringView VIZ_SUMMARY_NAMESPACE = "server.viz_summary";
+constexpr dstd::StringView VIZ_SUMMARY_KEY = "summary";
+
+dftracer::utils::store::NamespaceSpec viz_summary_namespace() {
+    dftracer::utils::store::NamespaceSpec spec;
+    spec.name.assign(VIZ_SUMMARY_NAMESPACE.data(),
+                     VIZ_SUMMARY_NAMESPACE.size());
+    spec.format_version = VIZ_SUMMARY_FORMAT_VERSION;
+    return spec;
+}
+
+dstd::String viz_summary_store_path(const TraceIndex& index) {
+    return dftracer::utils::trace::index::store_of(
+        dftracer::utils::trace::internal::determine_index_path(
+            index.directory(), index.index_dir()));
+}
+
+struct VizSummaryScope {
+    dftracer::utils::store::ScopeKey key;
+    dstd::Vector<dftracer::utils::store::SourceStat> sources;
+};
+
+VizSummaryScope make_viz_summary_scope(
+    const dstd::Vector<dstd::String>& paths) {
+    VizSummaryScope out;
+    dstd::Vector<dstd::Pair<dstd::String, dftracer::utils::store::SourceStat>>
+        by_path;
+    by_path.reserve(paths.size());
+    for (const auto& path : paths) {
+        common::InputFileStat st;
+        dftracer::utils::store::SourceStat source;
+        if (common::stat_input(path, st)) {
+            source.mtime = static_cast<std::uint64_t>(st.mtime);
+            source.size = st.size;
+        }
+        by_path.emplace_back(fileio::get_logical_path(path), source);
+    }
+    std::sort(by_path.begin(), by_path.end(),
+              [](const auto& a, const auto& b) { return a.first < b.first; });
+    dstd::Vector<dstd::StringView> views;
+    views.reserve(by_path.size());
+    for (const auto& item : by_path) views.push_back(item.first);
+    out.key = dftracer::utils::store::ScopeKey::files(
+        dstd::Span<const dstd::StringView>(views));
+    out.sources.reserve(by_path.size());
+    for (const auto& item : by_path) out.sources.push_back(item.second);
+    return out;
+}
+
 }  // namespace
 
 TraceIndex::TraceIndex(const dstd::String& directory,
@@ -602,6 +672,7 @@ coro::CoroTask<dstd::Result<void>> TraceIndex::initialize() {
 
     dstd::Vector<std::size_t> needs_build;
     dstd::Vector<std::size_t> large_files;
+    dstd::HashSet<dstd::String> dropped_paths;
     dstd::Vector<const dftracer::utils::trace::index::RecordSchema*>
         file_schemas(entries.size(), nullptr);
     auto default_schema = trace::index::get_schema("dftracer");
@@ -609,8 +680,9 @@ coro::CoroTask<dstd::Result<void>> TraceIndex::initialize() {
     record_schema_ = *default_schema;
 
     // The reuse decision below is existence-only, so a changed .pfw would be
-    // served from a stale index. Drop any (shared) index root whose sources
-    // changed since indexing; the loop then rebuilds it as if absent.
+    // served from a stale index. Drop this directory's entries from the shared
+    // index root and summary scope when its sources changed; the loop then
+    // rebuilds the dropped files as if absent.
     {
         dstd::Map<dstd::String, dstd::Vector<dstd::String>> by_root;
         for (const auto& entry : entries)
@@ -625,7 +697,9 @@ coro::CoroTask<dstd::Result<void>> TraceIndex::initialize() {
                 continue;
             }
             bool stale = false;
-            const auto checked = index_is_stale(root, paths);
+            dstd::Vector<dstd::String> unlisted;
+            const auto checked =
+                index_is_stale(root, paths, directory_, unlisted);
             if (checked.has_value()) {
                 stale = *checked;
             } else {
@@ -638,11 +712,62 @@ coro::CoroTask<dstd::Result<void>> TraceIndex::initialize() {
                 DFTRACER_UTILS_LOG_WARN(
                     "TraceIndex: source changed since indexing; rebuilding {}",
                     root);
-                // Drop the cached handle first, as the builder does: a live
-                // handle on a removed directory would serve the old data.
+                for (const auto& path : paths) dropped_paths.insert(path);
+                auto viz_store = dftracer::utils::store::Store::open(store);
+                if (viz_store) {
+                    auto ns = viz_store->ns(viz_summary_namespace());
+                    if (ns) {
+                        const auto scope = make_viz_summary_scope(paths);
+                        const auto dropped = viz_store->drop(*ns, scope.key);
+                        if (!dropped) {
+                            DFTRACER_UTILS_LOG_WARN(
+                                "TraceIndex: failed to drop cached viz summary "
+                                "for {}: {}",
+                                root, dropped.error().message());
+                        }
+                        const auto flushed = co_await viz_store->flush();
+                        if (!flushed) {
+                            DFTRACER_UTILS_LOG_WARN(
+                                "TraceIndex: failed to flush viz summary drop "
+                                "for {}: {}",
+                                root, flushed.error().message());
+                        }
+                    } else {
+                        DFTRACER_UTILS_LOG_WARN(
+                            "TraceIndex: failed to register viz summary "
+                            "namespace for {}: {}",
+                            root, ns.error().message());
+                    }
+                } else {
+                    DFTRACER_UTILS_LOG_WARN(
+                        "TraceIndex: failed to open store for {}: {}", root,
+                        viz_store.error().message());
+                }
+                auto index = trace::index::Index::open(root);
+                if (index) {
+                    // Every entry this directory owns: the listed paths, whose
+                    // source changed, and the entries the scan no longer
+                    // finds, whose source is gone.
+                    dstd::Vector<dstd::String> dropped;
+                    dropped.reserve(paths.size() + unlisted.size());
+                    for (const auto& path : paths)
+                        dropped.push_back(fileio::get_logical_path(path));
+                    for (const auto& logical : unlisted)
+                        dropped.push_back(logical);
+                    for (const auto& logical : dropped) {
+                        const auto removed = co_await index->remove(logical);
+                        if (!removed) {
+                            DFTRACER_UTILS_LOG_WARN(
+                                "TraceIndex: failed to drop {} from {}: {}",
+                                logical, root, removed.error().message());
+                        }
+                    }
+                } else {
+                    DFTRACER_UTILS_LOG_WARN(
+                        "TraceIndex: failed to open index for {}: {}", root,
+                        index.error().message());
+                }
                 trace::index::release_root(root);
-                dstd::fs::remove_all(dstd::PathView(store)).discard();
-                common::forget_input(store);
             }
         }
     }
@@ -661,7 +786,9 @@ coro::CoroTask<dstd::Result<void>> TraceIndex::initialize() {
         const auto has_store = dstd::fs::exists(
             dstd::PathView(trace::index::store_of(info.index_path)));
         if (!has_store.has_value()) co_return has_store.error();
-        info.has_bloom_data = *has_store;
+        const bool was_dropped =
+            dropped_paths.find(info.path) != dropped_paths.end();
+        info.has_bloom_data = *has_store && !was_dropped;
         info.has_checkpoint_index = info.has_bloom_data;
         if (!info.has_bloom_data) {
             needs_build.push_back(idx);
@@ -942,48 +1069,58 @@ dstd::String TraceIndex::resolve(dstd::StringView rowset, dstd::StringView key,
     return hit == it->second.end() ? dstd::String() : hit->second;
 }
 
-dstd::Path TraceIndex::viz_summary_cache_path() const {
-    return dstd::PathView(index_dir_) / ".dftviz_summary";
-}
-
-// A changed source is re-indexed in initialize(), shifting these per-file
-// values, so the cache invalidates itself on mismatch.
+// A changed source is re-indexed in initialize(), and each file's current
+// mtime and size are folded in here, so the cache invalidates itself on
+// mismatch. The hash is equality only; it is not used as a table key.
 dstd::String TraceIndex::viz_summary_fingerprint() const {
-    std::uint64_t h = dftracer::utils::dstd::hash::FNV1A_OFFSET_BASIS_LEGACY;
-    auto mix = [&](const void* data, std::size_t n) {
-        const auto* b = static_cast<const unsigned char*>(data);
-        for (std::size_t i = 0; i < n; ++i) {
-            h ^= b[i];
-            h *= dftracer::utils::dstd::hash::FNV1A_PRIME;
-        }
-    };
-    std::uint32_t ver = VIZ_SUMMARY_FORMAT_VERSION;
-    mix(&ver, sizeof ver);
-    int tm = static_cast<int>(time_metric_);
-    mix(&tm, sizeof tm);
-    const std::uint64_t schema = record_schema().params_hash();
-    mix(&schema, sizeof schema);
-    mix(&global_min_ts_, sizeof global_min_ts_);
-    mix(&global_max_ts_, sizeof global_max_ts_);
+    BufWriter w;
+    w.u32(VIZ_SUMMARY_FORMAT_VERSION);
+    w.u32(static_cast<std::uint32_t>(time_metric_));
+    w.u64(record_schema().params_hash());
+    w.u64(global_min_ts_);
+    w.u64(global_max_ts_);
     for (const auto& f : files_) {
-        mix(f.path.data(), f.path.size());
-        mix(&f.uncompressed_size, sizeof f.uncompressed_size);
-        mix(&f.checkpoint_count, sizeof f.checkpoint_count);
-        mix(&f.min_timestamp_us, sizeof f.min_timestamp_us);
-        mix(&f.max_timestamp_us, sizeof f.max_timestamp_us);
+        w.str(f.path);
+        common::InputFileStat st;
+        std::uint64_t size = f.uncompressed_size;
+        std::uint64_t mtime = 0;
+        if (common::stat_input(f.path, st)) {
+            size = st.size;
+            mtime = static_cast<std::uint64_t>(st.mtime_ns);
+        }
+        w.u64(size);
+        w.u64(mtime);
+        w.u64(f.checkpoint_count);
+        w.u64(f.min_timestamp_us);
+        w.u64(f.max_timestamp_us);
     }
-    return dstd::fmt<"{:016x}">(h);
+    const std::uint64_t h =
+        dftracer::utils::dstd::hash::fnv1a_hash(w.b.data(), w.b.size());
+    return dftracer::utils::dstd::hash::format_hex64(h);
 }
 
 bool TraceIndex::load_persisted_viz_summary() {
-    const auto path = viz_summary_cache_path();
-    const auto loaded = dstd::fs::read_file(path.view());
-    if (!loaded || loaded->empty()) return false;
-    const dstd::String& buf = *loaded;
+    const dstd::String store_path = viz_summary_store_path(*this);
+    const auto exists = dstd::fs::exists(dstd::PathView(store_path));
+    if (!exists.has_value() || !*exists) return false;
 
-    BufReader r{buf.data(), buf.data() + buf.size()};
-    if (r.u32() != VIZ_SUMMARY_MAGIC || r.u32() != VIZ_SUMMARY_FORMAT_VERSION)
-        return false;
+    auto opened = dftracer::utils::store::Store::open(store_path);
+    if (!opened) return false;
+    auto ns = opened->ns(viz_summary_namespace());
+    if (!ns) return false;
+    dstd::Vector<dstd::String> paths;
+    paths.reserve(files_.size());
+    for (const auto& f : files_) paths.push_back(f.path);
+    const auto scope = make_viz_summary_scope(paths);
+    auto snap = opened->snapshot();
+    if (!snap) return false;
+    const auto found =
+        snap->get(*ns, scope.key, dstd::ByteView(VIZ_SUMMARY_KEY));
+    if (!found) return false;
+    if (!*found) return false;
+    const dstd::ByteView bytes = (**found).bytes();
+    const char* data = reinterpret_cast<const char*>(bytes.data());
+    BufReader r{data, data + bytes.size()};
     dstd::String fp = r.str();
     if (!r.ok || fp != viz_summary_fingerprint()) return false;
 
@@ -992,34 +1129,35 @@ bool TraceIndex::load_persisted_viz_summary() {
 
     set_viz_summary(std::move(summary));
     DFTRACER_UTILS_LOG_INFO("TraceIndex: loaded cached viz summary from {}",
-                            path);
+                            store_path);
     return true;
 }
 
-void TraceIndex::persist_viz_summary() const {
+coro::CoroTask<dstd::Result<void>> TraceIndex::persist_viz_summary() const {
     if (viz_summary_state_.load(std::memory_order_acquire) != 2 ||
         !viz_summary_)
-        return;
+        co_return dstd::Result<void>{};
     BufWriter w;
-    w.u32(VIZ_SUMMARY_MAGIC);
-    w.u32(VIZ_SUMMARY_FORMAT_VERSION);
     w.str(viz_summary_fingerprint());
     serialize_summary(w, *viz_summary_);
 
-    const auto path = viz_summary_cache_path();
-    dstd::String tmp_text(path.str());
-    tmp_text.append(".tmp");
-    const dstd::Path tmp{dstd::StringView(tmp_text)};
-    if (!dstd::fs::write_file(tmp.view(),
-                              dstd::StringView(w.b.data(), w.b.size()))) {
-        dstd::fs::remove(tmp.view()).discard();
-        return;
-    }
-    // A cache that cannot be published is dropped, and the next run
-    // builds it again.
-    if (!dstd::fs::rename(tmp.view(), path.view())) {
-        dstd::fs::remove(tmp.view()).discard();
-    }
+    const dstd::String store_path = viz_summary_store_path(*this);
+    auto opened = dftracer::utils::store::Store::open(store_path);
+    if (!opened) co_return opened.error();
+    auto ns = opened->ns(viz_summary_namespace());
+    if (!ns) co_return ns.error();
+    dstd::Vector<dstd::String> paths;
+    paths.reserve(files_.size());
+    for (const auto& f : files_) paths.push_back(f.path);
+    const auto scope = make_viz_summary_scope(paths);
+    auto batch = opened->batch(*ns, scope.key, 0, &scope.sources);
+    batch.put(dstd::ByteView(VIZ_SUMMARY_KEY),
+              dstd::ByteView(w.b.data(), w.b.size()));
+    const auto committed = co_await opened->commit(std::move(batch));
+    if (!committed) co_return committed.error();
+    const auto flushed = co_await opened->flush();
+    if (!flushed) co_return flushed.error();
+    co_return dstd::Result<void>{};
 }
 
 const TraceIndex::FileInfo* TraceIndex::find_file(

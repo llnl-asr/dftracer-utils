@@ -1,18 +1,18 @@
 // SPDX-License-Identifier: MIT
-#ifndef DFTRACER_UTILS_RUNTIME_DISTRIBUTED_MPI_TRANSPORT_H
-#define DFTRACER_UTILS_RUNTIME_DISTRIBUTED_MPI_TRANSPORT_H
+#ifndef DFTRACER_UTILS_COMM_MPI_TRANSPORT_H
+#define DFTRACER_UTILS_COMM_MPI_TRANSPORT_H
 
 // MPI implementation of Transport. Safe to include anywhere: the body compiles
 // only when the build enabled MPI (DFTRACER_UTILS_ENABLE_MPI, from config.h),
 // so callers guard their MpiTransport use with the same macro. The MPI-free
-// interface in transport.h keeps core buildable without MPI.
+// interface in transport.h keeps this library buildable without MPI.
 
+#include <dftracer/utils/comm/transport.h>
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/platform_compat.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/runtime/distributed/transport.h>
 
 #ifdef DFTRACER_UTILS_ENABLE_MPI
 
@@ -21,7 +21,7 @@
 #include <algorithm>
 #include <cstdlib>
 
-namespace dftracer::utils::distributed {
+namespace dftracer::utils::comm {
 
 /// Transport backed by MPI collectives over `comm` (default MPI_COMM_WORLD).
 class MpiTransport : public Transport {
@@ -83,8 +83,8 @@ inline void set_local_thread_budget(MPI_Comm comm = MPI_COMM_WORLD) {
     ::setenv("DFTRACER_UTILS_IO_THREADS", n.c_str(), 1);
 }
 
-}  // namespace dftracer::utils::distributed
+}  // namespace dftracer::utils::comm
 
 #endif  // DFTRACER_UTILS_ENABLE_MPI
 
-#endif  // DFTRACER_UTILS_RUNTIME_DISTRIBUTED_MPI_TRANSPORT_H
+#endif  // DFTRACER_UTILS_COMM_MPI_TRANSPORT_H

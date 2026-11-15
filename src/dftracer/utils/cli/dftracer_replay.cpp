@@ -11,6 +11,7 @@
 //           set, the legacy replay_with_call_tree path that builds a
 //           hierarchical tree first
 
+#include <dftracer/utils/comm/mpi/mpi_utils.h>
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/memory_config.h>
@@ -24,7 +25,6 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/runtime/mpi/mpi_utils.h>
 
 #ifdef DFTRACER_UTILS_MPI_ENABLED
 #include <mpi.h>
@@ -469,9 +469,9 @@ int run(int argc, char** argv) {
     ctx.cli = &cli;
 
 #ifdef DFTRACER_UTILS_MPI_ENABLED
-    ctx.mpi_rank = mpi::MPIUtils::instance().rank();
-    ctx.mpi_size = mpi::MPIUtils::instance().world_size();
-    ctx.is_root = mpi::MPIUtils::instance().is_root();
+    ctx.mpi_rank = comm::mpi::MPIUtils::instance().rank();
+    ctx.mpi_size = comm::mpi::MPIUtils::instance().world_size();
+    ctx.is_root = comm::mpi::MPIUtils::instance().is_root();
 #endif
 
     // Mirror the parsed options into ReplayConfig.
@@ -542,13 +542,13 @@ int run(int argc, char** argv) {
 int main(int argc, char** argv) {
 #ifdef DFTRACER_UTILS_MPI_ENABLED
     MPI_Init(&argc, &argv);
-    mpi::MPIUtils::instance().initialize();
+    comm::mpi::MPIUtils::instance().initialize();
 #endif
 
     int rc = run(argc, argv);
 
 #ifdef DFTRACER_UTILS_MPI_ENABLED
-    mpi::MPIUtils::instance().finalize();
+    comm::mpi::MPIUtils::instance().finalize();
     MPI_Finalize();
 #endif
     return rc;

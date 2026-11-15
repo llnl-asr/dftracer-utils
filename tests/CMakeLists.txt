@@ -222,6 +222,12 @@ add_test(
     "bad=$(grep -rnE '^[[:space:]]*#[[:space:]]*include[[:space:]]*<dftracer/utils/' \"$0/include/dftracer/utils/coro\" \"$0/src/dftracer/utils/coro\" | grep -vE '<dftracer/utils/(coro|common|dstd|memory)/'); if [ -n \"$bad\" ]; then echo \"include from coro/ into a module above it:\"; echo \"$bad\"; exit 1; fi"
     ${CMAKE_SOURCE_DIR})
 add_test(
+  NAME comm_no_upward
+  COMMAND
+    sh -c
+    [=[bad=$(grep -rnE '^[[:space:]]*#[[:space:]]*include[[:space:]]*<dftracer/utils/' "$0/src/dftracer/utils/comm" "$0/include/dftracer/utils/comm" 2>/dev/null | grep -vE '<dftracer/utils/(memory|dstd|common|coro|runtime|comm)/'); if [ -n "$bad" ]; then echo "include from comm into a library above it:"; echo "$bad"; exit 1; fi]=]
+    ${CMAKE_SOURCE_DIR})
+add_test(
   NAME fileio_no_upward
   COMMAND
     sh -c
@@ -243,7 +249,7 @@ add_test(
   NAME lower_no_plugins
   COMMAND
     sh -c
-    [=[bad=$(for lib in memory dstd common coro runtime store json yaml duql fileio dataframe trace; do for root in include src; do [ -d "$0/$root/dftracer/utils/$lib" ] && grep -rnE '^[[:space:]]*#[[:space:]]*include[[:space:]]*<dftracer/utils/plugins/' "$0/$root/dftracer/utils/$lib"; done; done); if [ -n "$bad" ]; then echo "include of a plugins header from a library below plugins:"; echo "$bad"; exit 1; fi]=]
+    [=[bad=$(for lib in memory dstd common coro runtime comm store json yaml duql fileio dataframe trace; do for root in include src; do [ -d "$0/$root/dftracer/utils/$lib" ] && grep -rnE '^[[:space:]]*#[[:space:]]*include[[:space:]]*<dftracer/utils/plugins/' "$0/$root/dftracer/utils/$lib"; done; done); if [ -n "$bad" ]; then echo "include of a plugins header from a library below plugins:"; echo "$bad"; exit 1; fi]=]
     ${CMAKE_SOURCE_DIR})
 # Arrow stays in the arrow library, the Python bindings and tests/arrow/.
 # slice_bench measures the conversion, and arrow_convert.c shows a plugin that

@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/comm/mpi/mpi_utils.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/runtime/mpi/mpi_utils.h>
 
-namespace dftracer::utils::mpi {
+namespace dftracer::utils::comm::mpi {
 
 namespace {
 
@@ -72,4 +72,4 @@ void MPIUtils::barrier() {
 #endif
 }
 
-}  // namespace dftracer::utils::mpi
+}  // namespace dftracer::utils::comm::mpi

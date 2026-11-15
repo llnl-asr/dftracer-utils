@@ -352,8 +352,10 @@ ARCHITECTURE_MMD = """graph BT
     yaml["dftracer_utils_yaml<br/><i>line-index reader, YAML writer</i>"]
     store["dftracer_utils_store<br/><i>key-value store engine</i>"]
     runtime["dftracer_utils_runtime<br/><i>coroutines, tasks, task graph, io backend,<br/>pipelines, primitives</i>"]
+    comm["dftracer_utils_comm<br/><i>transports, MPI helpers</i>"]
 
     runtime --> io
+    runtime --> comm
     runtime --> json
     runtime --> store
     io --> trace
@@ -369,6 +371,7 @@ ARCHITECTURE_MMD = """graph BT
     runtime -.- compose
 
     style runtime fill:#4a90d9,stroke:#2c5f8a,color:#fff
+    style comm fill:#f0f0f0,stroke:#999,color:#333
     style dataframe fill:#e8f4e8,stroke:#5a9,color:#333
     style utilities fill:#e8f4e8,stroke:#5a9,color:#333
     style trace fill:#e8f4e8,stroke:#5a9,color:#333

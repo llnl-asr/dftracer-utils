@@ -34,11 +34,11 @@
 // source then produces a distribution-capable dftracer_view; without MPI it is
 // the plain single-node binary.
 #ifdef DFTRACER_UTILS_ENABLE_MPI
+#include <dftracer/utils/comm/mpi_transport.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/fileio/parallel/merge.h>
-#include <dftracer/utils/runtime/distributed/mpi_transport.h>
 
 #endif
 
@@ -824,9 +824,9 @@ struct ViewRun {
     dstd::Optional<int> probe_duql();
 #ifdef DFTRACER_UTILS_ENABLE_MPI
     coro::CoroTask<dstd::Result<void>> run_distributed_aggregate(
-        distributed::MpiTransport& transport);
+        comm::MpiTransport& transport);
     coro::CoroTask<dstd::Result<void>> run_distributed_write(
-        distributed::MpiTransport& transport);
+        comm::MpiTransport& transport);
 #endif
     coro::CoroTask<dstd::Result<void>> run_shard_set();
     coro::CoroTask<dstd::Result<void>> run_local();
@@ -964,7 +964,7 @@ dstd::Optional<int> ViewRun::probe_duql() {
 // Distributed aggregation: each rank aggregates its shard into a serialized
 // partial, the partials are gathered, and rank 0 merges and emits.
 coro::CoroTask<dstd::Result<void>> ViewRun::run_distributed_aggregate(
-    distributed::MpiTransport& transport) {
+    comm::MpiTransport& transport) {
     auto shard = shard_files(files, transport.rank(), transport.size());
     // Each rank builds its own shard of the root, on node-local scratch when
     // the destination warrants it, and publishes it as <root>/shards/<rank>.
@@ -1054,7 +1054,7 @@ coro::CoroTask<dstd::Result<void>> ViewRun::run_distributed_aggregate(
 
 // Distributed: each rank writes its shard, rank 0 concatenates.
 coro::CoroTask<dstd::Result<void>> ViewRun::run_distributed_write(
-    distributed::MpiTransport& transport) {
+    comm::MpiTransport& transport) {
     auto shard = shard_files(files, transport.rank(), transport.size());
     dstd::String idx_base(index_dir);
     if (idx_base.empty())
@@ -1246,7 +1246,7 @@ coro::CoroTask<dstd::Result<void>> ViewRun::run() {
         loaded.emplace(std::move(*built));
     }
 #ifdef DFTRACER_UTILS_ENABLE_MPI
-    distributed::MpiTransport transport;
+    comm::MpiTransport transport;
     // Only the reductions distribute; other modes fall through to rank 0
     // (single-node) below.
     if ((counters || aggregate || fg_mode) && transport.size() > 1 &&
@@ -1431,7 +1431,7 @@ int main(int argc, char** argv) {
 #ifdef DFTRACER_UTILS_ENABLE_MPI
     MPI_Init(&argc, &argv);
     // Local ranks share the node's cores (Dask-style) before any runtime work.
-    distributed::set_local_thread_budget();
+    comm::set_local_thread_budget();
 #endif
     int rc = cli::cli_main<ViewArgParse>(
         argc, argv, "dftracer_view",

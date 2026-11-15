@@ -90,6 +90,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- The distributed code is its own library, `libdftracer_utils_comm`: the MPI helpers and the transports (`transport.h` with `LocalTransport`, `mpi_transport.h` with `MpiTransport`) moved out of `runtime` into `src/dftracer/utils/comm/` under `dftracer::utils::comm`, a single implementation file was added for `LocalTransport`, and `libdftracer_utils_runtime` no longer links MPI. MPI is linked by the `comm` library alone, so a build with `-DDFTRACER_UTILS_ENABLE_MPI=ON` puts `<mpi.h>` in that one library and `dftracer_utils_commConfig.cmake` is the only package config that finds MPI. The ctest `comm_no_upward` keeps `comm` below `store`.
+
 - `dftracer_server` keeps its viz summary in the index store of each trace folder, namespace `server.viz_summary`, in place of one `.dftviz_summary` file per index directory. A restart serves it from the store, and a changed, added or removed trace file makes the server compute it again. An old `.dftviz_summary` file is ignored.
 - `dftracer_server` caches its viz responses in the index store of each trace folder, namespace `server.viz_result`, so a restart serves a response that a trace file did not invalidate without scanning the trace. A response key carries the folder's fingerprint, so a changed file misses.
   One scope per folder holds both namespaces, and an added or removed trace file drops that scope, with the summary and every response of the folder in it.

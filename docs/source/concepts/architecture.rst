@@ -7,10 +7,10 @@ What this explains: how the codebase is layered, and the path a query takes
 from a ``.pfw.gz`` trace file on disk to a result the caller can use, in C++,
 C, or Python.
 
-Eight libraries, one dependency direction
+Layered libraries, one dependency direction
 -------------------------------------------
 
-The C++ build produces eight layered libraries, each as both a shared and a
+The C++ build produces layered libraries, each as both a shared and a
 static variant (``src/CMakeLists.txt``), aggregated behind
 ``dftracer::utils``:
 
@@ -18,6 +18,10 @@ static variant (``src/CMakeLists.txt``), aggregated behind
   executor and scheduler, the io backend, the pipeline machinery, and shared
   primitives (string interning, sharded maps, the error type). It knows
   nothing about traces.
+- ``dftracer_utils_comm`` is the distributed layer: the transport interface
+  with ``LocalTransport``, and the MPI helpers and MPI transport. It links the
+  runtime, and it is the only library that links MPI, so a build without
+  ``-DDFTRACER_UTILS_ENABLE_MPI=ON`` builds it with no MPI at all.
 - ``dftracer_utils_store`` is the key-value store engine: data files, the
   writer and its committer, and the snapshot that reads them. It links only
   the runtime and knows nothing about traces.
@@ -66,6 +70,7 @@ active.
 
    graph TB
        Runtime["dftracer_utils_runtime<br/>runtime, coro, io, pipeline"]
+       Comm["dftracer_utils_comm<br/>transports, MPI"]
        Store["dftracer_utils_store<br/>key-value store engine"]
        Io["dftracer_utils_fileio<br/>gzip, line streams, writers"]
        Json["dftracer_utils_json<br/>simdjson-backed parsing"]
@@ -76,6 +81,7 @@ active.
        Plugins["dftracer_utils_plugins<br/>plugin host"]
        Util["dftracer_utils_domains<br/>analysis, workload, server"]
        Store --> Runtime
+       Comm --> Runtime
        Io --> Runtime
        Io --> Json
        Json --> Runtime

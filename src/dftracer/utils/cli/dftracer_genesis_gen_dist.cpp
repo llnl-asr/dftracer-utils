@@ -37,7 +37,7 @@
 #include <utility>
 
 #ifdef DFTRACER_UTILS_ENABLE_MPI
-#include <dftracer/utils/runtime/distributed/mpi_transport.h>
+#include <dftracer/utils/comm/mpi_transport.h>
 #include <mpi.h>
 #endif
 
@@ -890,7 +890,7 @@ int run_mpi(GenDistArgParse& cli) {
 int main(int argc, char** argv) {
 #ifdef DFTRACER_UTILS_ENABLE_MPI
     MPI_Init(&argc, &argv);
-    distributed::set_local_thread_budget();
+    comm::set_local_thread_budget();
 #endif
     const int rc = cli::cli_main<GenDistArgParse>(
         argc, argv, "dftracer_genesis_gen_dist",

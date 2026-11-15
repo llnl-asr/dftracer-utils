@@ -1523,6 +1523,17 @@ foreach(variant objects shared static)
       target_compile_options(dftracer_utils_dataframe_objects
                              PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions>)
     endif()
+    if(NOT variant STREQUAL "objects")
+      # A C++ plugin links this library. GCC binds the statics of inline
+      # functions and templates as GNU unique symbols, which keep a plugin
+      # mapped after the host unloads it, so every module that links this
+      # library and is compiled by GCC gets -fno-gnu-unique.
+      target_compile_options(
+        ${VARIANT_TARGET}
+        INTERFACE
+          $<$<AND:$<CXX_COMPILER_ID:GNU>,$<COMPILE_LANGUAGE:CXX>,$<STREQUAL:$<TARGET_PROPERTY:TYPE>,MODULE_LIBRARY>>:-fno-gnu-unique>
+      )
+    endif()
     link_simdjson(${VARIANT_TARGET} ${VARIANT_UPPER})
     # Highway powers the SIMD kernels; hwy_contrib carries VQSort (argsort) and
     # publicly depends on hwy, so linking it pulls hwy in too. Fall back to hwy

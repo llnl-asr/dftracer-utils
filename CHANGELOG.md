@@ -782,7 +782,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Fixed
 
-- On Linux with GCC, a C++ plugin that the Python JIT or the test build compiles now unloads when the host closes it: these builds pass `-fno-gnu-unique`, since GCC binds the statics of inline functions and templates as GNU unique symbols and `dlclose` then keeps the library mapped.
+- On Linux with GCC, a C++ plugin now unloads when the host closes it: the Python JIT, the test build and every module that links `dftracer_utils_dataframe` (the plugin templates, the examples and plugins built against the installed package) compile with `-fno-gnu-unique`, since GCC binds the statics of inline functions and templates as GNU unique symbols and `dlclose` then keeps the library mapped.
 - The CLI tools print the right default and help text for an option whose text is built at start-up, such as `dftracer_server --checkpoint-size` and `--member-cache-size`; `--help` printed freed memory there.
 - `dftracer_server` with `--index-dir` shared by several trace folders: a stale folder deleted the whole index store, which held the other folders' index data too. It now drops only its own files, including files removed from it, and a sub-folder counts as a folder of its own. A relative `--dir` now finds removed files.
 - Fix a use after free when a plan ran an op after `dftu_op_unregister` removed it.

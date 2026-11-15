@@ -262,6 +262,16 @@ add_test(NAME single_runtime
 add_test(NAME coro_conditions
          COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -P
                  ${CMAKE_SOURCE_DIR}/cmake/scripts/check_coro_conditions.cmake)
+add_test(NAME cxx_plugins_no_c_abi
+         COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -P
+                 ${CMAKE_SOURCE_DIR}/cmake/scripts/check_cxx_plugins_no_c_abi.cmake)
+# With the allow list off, the scan must find the raw names the ABI fixtures
+# use on purpose, so a scanner that matches nothing cannot pass.
+add_test(NAME cxx_plugins_no_c_abi_self
+         COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -DSELF_TEST=ON -P
+                 ${CMAKE_SOURCE_DIR}/cmake/scripts/check_cxx_plugins_no_c_abi.cmake)
+set_tests_properties(cxx_plugins_no_c_abi_self PROPERTIES
+                     PASS_REGULAR_EXPRESSION "borrowed_frame_plugin.cpp: dftu_")
 add_test(NAME dstd_only
          COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/dstd_only_work -P
                  ${CMAKE_SOURCE_DIR}/cmake/scripts/check_dstd_only.cmake)

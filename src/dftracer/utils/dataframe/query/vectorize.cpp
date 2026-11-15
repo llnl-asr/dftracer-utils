@@ -3,6 +3,7 @@
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/query/vectorize.h>
 #include <dftracer/utils/dstd/algorithm.h>
+#include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
@@ -576,7 +577,8 @@ class Vectorizer {
     }
 
     static dstd::StringView fn_name(const duql::TCall& c) {
-        return fn_info(c.fn).name;
+        return c.fn == duql::Fn::Udf ? dstd::StringView(c.udf)
+                                     : fn_info(c.fn).name;
     }
 
     static V text(const V& v) {
@@ -905,6 +907,7 @@ class Vectorizer {
             case duql::Fn::Sort:
             case duql::Fn::Unique:
             case duql::Fn::Join:
+            case duql::Fn::Udf:
                 return column_call(c);
             case duql::Fn::Extract: {
                 const V v = arg(c, 0);
@@ -1341,8 +1344,9 @@ dataframe::Series members_column(const dstd::Vector<dataframe::Series>& args,
     const TypeId elem = type.fields.front().type.id;
     dstd::Vector<dataframe::DataFrame> frames(fields.size());
     dstd::Vector<const dataframe::DataFrame*> ptrs;
+    const dstd::SharedString value_name{"v"};
     for (std::size_t k = 0; k < fields.size(); ++k) {
-        frames[k].names.push_back("v");
+        frames[k].names.push_back(value_name);
         frames[k].columns.push_back(fields[k].second.type() == elem
                                         ? fields[k].second.share()
                                         : fields[k].second.cast(elem));
@@ -1627,11 +1631,12 @@ dataframe::Series list_column(const dstd::Vector<dataframe::Series>& items,
         return make_list(offsets, dataframe::Series::nulls(elem, 0), valid);
     dstd::Vector<dataframe::DataFrame> frames(items.size());
     dstd::Vector<const dataframe::DataFrame*> ptrs;
+    const dstd::SharedString value_name{"v"};
     for (std::size_t k = 0; k < items.size(); ++k) {
         const dataframe::Series s = items[k].null_count() == n
                                         ? dataframe::Series::nulls(elem, n)
                                         : flat_of(items[k]);
-        frames[k].names.push_back("v");
+        frames[k].names.push_back(value_name);
         frames[k].columns.push_back(s.type() == elem ? s.share()
                                                      : s.cast(elem));
         ptrs.push_back(&frames[k]);
@@ -1650,7 +1655,8 @@ bool is_column_call(duql::Fn fn) {
            fn == duql::Fn::Keys || fn == duql::Fn::Values ||
            fn == duql::Fn::ParseJson || fn == duql::Fn::Split ||
            fn == duql::Fn::IndexOf || fn == duql::Fn::Sort ||
-           fn == duql::Fn::Unique || fn == duql::Fn::Join;
+           fn == duql::Fn::Unique || fn == duql::Fn::Join ||
+           fn == duql::Fn::Udf;
 }
 
 bool is_column_term(const duql::Term& t) {
@@ -1814,6 +1820,8 @@ dataframe::Series call_column(const duql::Term& t,
             return unique_column(args[0]);
         case duql::Fn::Join:
             return join_column(args[0], args[1]);
+        case duql::Fn::Udf:
+            dstd::fatal("vectorize: a udf call is run by the view, not here");
         default:
             return dataframe::Series::nulls(type.id, rows);
     }

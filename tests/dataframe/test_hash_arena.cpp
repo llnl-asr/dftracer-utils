@@ -75,7 +75,7 @@ TEST_SUITE("hash arena") {
         const dstd::Vector<dstd::String> b{"c",  "bc", "c", "zz",
                                            "bc", "zw", "c"};
         DataFrame df;
-        df.names = {"a", "b"};
+        df.names = dstd::make_shared_strings({"a", "b"});
         df.columns.push_back(Series::strings(a));
         df.columns.push_back(Series::strings(b));
         DataFrame out =

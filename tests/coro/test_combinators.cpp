@@ -21,7 +21,6 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
-#include <stdexcept>
 #include <thread>
 #include <utility>
 
@@ -41,9 +40,16 @@ CoroTask<int> value_nested(int value, std::chrono::milliseconds delay) {
     co_return inner + 1;
 }
 
+CoroTask<void> fail_with_message(const char* message) {
+    dstd::Error error{dstd::Condition::Unknown, message};
+    auto failure = fail_with(std::move(error));
+    co_await failure;
+}
+
 CoroTask<int> fails_after(std::chrono::milliseconds delay) {
     co_await sleep(delay);
-    throw std::runtime_error("planned failure");
+    co_await fail_with_message("planned failure");
+    co_return 0;
 }
 
 CoroTask<void> nothing_after(std::chrono::milliseconds delay) {
@@ -52,7 +58,7 @@ CoroTask<void> nothing_after(std::chrono::milliseconds delay) {
 
 CoroTask<void> failing_void(std::chrono::milliseconds delay) {
     co_await sleep(delay);
-    throw std::runtime_error("planned failure");
+    co_await fail_with_message("planned failure");
 }
 
 CoroTask<void> count_after(std::atomic<int>& finished,
@@ -208,7 +214,7 @@ TEST_CASE("a cancelled timeout leaves no wait that names its freed frame") {
         // Sweeps the parked waits again while the timeout is still alive.
         waiting.cancel();
         auto settled = co_await settle_in_place(waiting);
-        CHECK(!settled.exception);
+        CHECK(!settled.error);
         co_await scope.join();
     }()));
 }
@@ -227,7 +233,7 @@ TEST_CASE("retry runs until success and stops at max_attempts") {
     auto flaky = [&]() -> CoroTask<int> {
         ++calls;
         if (calls < 3) {
-            throw std::runtime_error("flaky");
+            co_await fail_with_message("flaky");
         }
         co_return 42;
     };
@@ -241,15 +247,14 @@ TEST_CASE("retry runs until success and stops at max_attempts") {
     int failures = 0;
     auto always = [&]() -> CoroTask<void> {
         ++failures;
-        throw std::runtime_error("always");
-        co_return;
+        co_await fail_with_message("always");
     };
     RetryPolicy limited;
     limited.initial_backoff = 1ms;
     limited.max_attempts = 4;
-    CHECK_THROWS_AS(dftu_utils_test::ok(
-                        runtime.block_on(retry(always, std::move(limited)))),
-                    std::runtime_error);
+    const auto exhausted = runtime.block_on(retry(always, std::move(limited)));
+    REQUIRE_FALSE(exhausted.has_value());
+    CHECK(dstd::String(exhausted.error().message()) == "always");
     CHECK(failures == 4);
 }
 
@@ -258,14 +263,15 @@ TEST_CASE("retry obeys the predicate and never retries a stop") {
     int calls = 0;
     auto failing = [&]() -> CoroTask<int> {
         ++calls;
-        throw std::runtime_error("no");
+        co_await fail_with_message("no");
         co_return 0;
     };
     RetryPolicy policy;
     policy.initial_backoff = 1ms;
-    policy.should_retry = [](std::exception_ptr) { return false; };
-    CHECK_THROWS(dftu_utils_test::ok(
-        runtime.block_on(retry(failing, std::move(policy)))));
+    policy.should_retry = [](const dstd::Error&) { return false; };
+    const auto refused = runtime.block_on(retry(failing, std::move(policy)));
+    REQUIRE_FALSE(refused.has_value());
+    CHECK(dstd::String(refused.error().message()) == "no");
     CHECK(calls == 1);
 
     int stopped_calls = 0;
@@ -337,14 +343,14 @@ TEST_CASE("first_success skips failures and cancels the slow loser") {
     CHECK(std::chrono::steady_clock::now() - start < 10s);
 }
 
-TEST_CASE("first_success raises the last error when all fail") {
+TEST_CASE("first_success ends with the last error when all fail") {
     Runtime runtime(2);
     dstd::Vector<CoroTask<int>> tasks;
     tasks.push_back(fails_after(1ms));
     tasks.push_back(fails_after(2ms));
-    CHECK_THROWS_AS(
-        dftu_utils_test::ok(runtime.block_on(first_success(std::move(tasks)))),
-        std::runtime_error);
+    const auto result = runtime.block_on(first_success(std::move(tasks)));
+    REQUIRE_FALSE(result.has_value());
+    CHECK(dstd::String(result.error().message()) == "planned failure");
 }
 
 TEST_CASE("first_success cancelled mid-wait cancels its tasks and joins") {
@@ -399,11 +405,12 @@ TEST_CASE("parallel_map fails fast and does not start later jobs") {
     auto job = [&](int) -> CoroTask<void> {
         started.fetch_add(1);
         co_await sleep(1ms);
-        throw std::runtime_error("stop here");
+        co_await fail_with_message("stop here");
     };
-    CHECK_THROWS_AS(dftu_utils_test::ok(runtime.block_on(
-                        parallel_map(std::move(items), job, options))),
-                    std::runtime_error);
+    const auto result =
+        runtime.block_on(parallel_map(std::move(items), job, options));
+    REQUIRE_FALSE(result.has_value());
+    CHECK(dstd::String(result.error().message()) == "stop here");
     CHECK(started.load() < 100);
 }
 
@@ -460,43 +467,36 @@ TEST_CASE("parallel_map_unordered survives a reader that stops early") {
     CHECK(running.load() == 0);
 }
 
-TEST_CASE("parallel_map_unordered raises a job error from the read") {
+TEST_CASE("parallel_map_unordered ends the reader with a job error") {
     Runtime runtime(2);
     dstd::Vector<int> items;
     items.push_back(1);
     auto job = [](int) -> CoroTask<int> {
         co_await sleep(1ms);
-        throw std::runtime_error("bad job");
+        co_await fail_with_message("bad job");
+        co_return 0;
     };
-    dstd::String raised;
-    dftu_utils_test::ok(runtime.block_on([&]() -> CoroTask<void> {
+    const auto result = runtime.block_on([&]() -> CoroTask<void> {
         auto stream = parallel_map_unordered(std::move(items), job);
-        try {
-            auto value = co_await stream.next();
-            CHECK(!value);
-        } catch (const std::runtime_error& e) {
-            raised = e.what();
-        }
-    }()));
-    CHECK(raised == "bad job");
+        auto value = co_await stream.next();
+        CHECK(!value);
+    }());
+    REQUIRE_FALSE(result.has_value());
+    CHECK(dstd::String(result.error().message()) == "bad job");
 }
 
-TEST_CASE("a child error wakes a parked sibling and join raises that error") {
+TEST_CASE("a child error wakes a parked sibling and join gives that error") {
     Runtime runtime(2);
     const auto start = std::chrono::steady_clock::now();
-    dstd::String raised;
-    try {
-        dftu_utils_test::ok(
-            runtime.block_on(with_scope([](Scope& scope) -> CoroTask<void> {
-                scope.spawn(nothing_after(30s));
-                scope.spawn(nothing_after(30s));
-                scope.spawn(failing_void(1ms));
-                co_return;
-            })));
-    } catch (const std::runtime_error& e) {
-        raised = e.what();
-    }
-    CHECK(raised == "planned failure");
+    const auto result =
+        runtime.block_on(with_scope([](Scope& scope) -> CoroTask<void> {
+            scope.spawn(nothing_after(30s));
+            scope.spawn(nothing_after(30s));
+            scope.spawn(failing_void(1ms));
+            co_return;
+        }));
+    REQUIRE_FALSE(result.has_value());
+    CHECK(dstd::String(result.error().message()) == "planned failure");
     CHECK(std::chrono::steady_clock::now() - start < 10s);
 }
 
@@ -517,27 +517,22 @@ TEST_CASE("a child that only stopped does not stop its siblings") {
     CHECK(finished.load() == 1);
 }
 
-TEST_CASE(
-    "a supervisor scope lets siblings finish and raises the first error") {
+TEST_CASE("a supervisor scope lets siblings finish and gives the first error") {
     Runtime runtime(2);
     std::atomic<int> finished{0};
-    dstd::String raised;
-    try {
-        dftu_utils_test::ok(runtime.block_on(with_scope(
-            [&](Scope& scope) -> CoroTask<void> {
-                scope.spawn(failing_void(1ms));
-                scope.spawn(count_after(finished, 30ms));
-                co_return;
-            },
-            ScopeMode::Supervisor)));
-    } catch (const std::runtime_error& e) {
-        raised = e.what();
-    }
-    CHECK(raised == "planned failure");
+    const auto result = runtime.block_on(with_scope(
+        [&](Scope& scope) -> CoroTask<void> {
+            scope.spawn(failing_void(1ms));
+            scope.spawn(count_after(finished, 30ms));
+            co_return;
+        },
+        ScopeMode::Supervisor));
+    REQUIRE_FALSE(result.has_value());
+    CHECK(dstd::String(result.error().message()) == "planned failure");
     CHECK(finished.load() == 1);
 }
 
-TEST_CASE("request_stop ends parked children and join raises nothing") {
+TEST_CASE("request_stop ends parked children and join gives no error") {
     Runtime runtime(2);
     const auto start = std::chrono::steady_clock::now();
     dftu_utils_test::ok(

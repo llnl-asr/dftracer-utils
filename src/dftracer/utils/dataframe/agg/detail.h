@@ -3,14 +3,18 @@
 #define DFTRACER_UTILS_DATAFRAME_AGG_DETAIL_H
 
 #include <dftracer/utils/dataframe/agg.h>
+#include <dftracer/utils/dataframe/agg/lower.h>
 #include <dftracer/utils/dataframe/field_stat.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dataframe/sketch.h>
+#include <dftracer/utils/dataframe/udaf_states.h>
+#include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/function_ref.h>
 #include <dftracer/utils/dstd/hash/hash_combine.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
@@ -608,6 +612,62 @@ class AggState : public dstd::HeapObject {
     dstd::Vector<std::uint64_t> occ_ts;      // groups * n_occ (min; init max)
     dstd::Vector<std::uint64_t> occ_te;      // groups * n_occ (max; init 0)
 
+    // Udaf: one slot per Udaf spec. `binding` is made at the first accumulate,
+    // from the types of the spec's argument columns, and is shared by every
+    // table of the slot, so a state made from this one (an extract, a
+    // regroup, a reorder) needs no new bind. `states` holds a slot's groups
+    // and grows to the group count when something reads or merges it
+    // (udaf_sync), not as each group is added.
+    struct UdafSlot {
+        std::size_t spec = 0;
+        dstd::SharedPtr<const UdafRecord> record;  // null: the name is unknown
+        dstd::Vector<TypeId> arg_types;
+        dstd::SharedPtr<const UdafBinding> binding;
+        dstd::UniquePtr<UdafStates> states;
+    };
+    bool has_udaf = false;
+    bool udaf_serial = false;  // a UDAF that two threads must not feed at once
+    dstd::Vector<int> spec_udaf;  // spec -> udaf slot, or -1
+    // Mutable: a const reader (finalize, serialize) makes a table and grows it.
+    mutable dstd::Vector<UdafSlot> udafs;
+    // The first error of a UDAF call that cannot return one (finalize,
+    // serialize, merge, reorder); agg_check reports it.
+    mutable dstd::Optional<dstd::Error> udaf_error;
+
+    void init_udaf_layout();
+    /// Binds each slot on its first batch and checks the later ones against
+    /// it; `values` are the columns accumulate reads.
+    dstd::Result<void> udaf_prepare(const dstd::Vector<const Series*>& values);
+    /// Feeds rows [begin, end) of `values`: row begin + i goes to group
+    /// gids[i].
+    dstd::Result<void> udaf_update(const dstd::Vector<std::int64_t>& gids,
+                                   const dstd::Vector<const Series*>& values,
+                                   std::int64_t begin, std::int64_t end);
+    /// The table of slot `i`, made from its binding when it has none.
+    dstd::Result<UdafStates*> udaf_table(std::size_t i) const;
+    /// Makes every table hold ngroups() groups.
+    dstd::Result<void> udaf_sync() const;
+    /// Merges group from[i] of `other` into group into[i] of this state, each
+    /// slot, `other` unchanged. Failures go to udaf_error.
+    void udaf_combine(const AggState& other,
+                      const dstd::Vector<std::int64_t>& into,
+                      const dstd::Vector<std::int64_t>& from);
+    /// Puts each table's groups in perm order (group i becomes old group
+    /// perm[i]).
+    void udaf_permute(const dstd::Vector<std::int64_t>& perm);
+    /// Copies slot bindings and argument types of `other`, which hold no
+    /// states here.
+    void udaf_adopt(const AggState& other);
+    std::size_t udaf_bytes() const;
+    /// The result column of spec `spec`, one row per group; all null, with
+    /// udaf_error set, when the UDAF fails.
+    Series udaf_column(std::size_t spec) const;
+    /// The argument columns of a Udaf spec: `value_col`, then `args`.
+    static dstd::Vector<std::int32_t> udaf_arg_cols(const AggSpec& sp);
+    void udaf_note(dstd::Error error) const {
+        if (!udaf_error) udaf_error = std::move(error);
+    }
+
     // Name-keyed dyn side-table: per group, one FieldStat (and, when a Pct
     // reduction is configured, one DDSketch) per auto-discovered argument name.
     // The name set is data-dependent (grows during accumulate) and merges by
@@ -973,8 +1033,9 @@ class AggState : public dstd::HeapObject {
         for (std::size_t s = 0; s < specs.size(); ++s) {
             const AggSpec& sp = specs[s];
             if (sp.op == AggOp::Count || sp.op == AggOp::BitOr ||
-                sp.op == AggOp::Prod || agg_uses_raw_value(sp.op) ||
-                agg_uses_by_col(sp.op) || sp.value_col < 0)
+                sp.op == AggOp::Prod || sp.op == AggOp::Udaf ||
+                agg_uses_raw_value(sp.op) || agg_uses_by_col(sp.op) ||
+                sp.value_col < 0)
                 continue;
             auto it = seen.find(sp.value_col);
             if (it == seen.end()) {
@@ -1099,6 +1160,8 @@ class AggState : public dstd::HeapObject {
             spec_msk[s] = slot;
         }
         has_msk = n_msk > 0;
+
+        init_udaf_layout();
 
         spec_kmv.assign(specs.size(), -1);
         kmv_val_col.clear();
@@ -1804,6 +1867,7 @@ class AggState : public dstd::HeapObject {
         dyn_ids = other.dyn_ids;
         dyn_domain = other.dyn_domain;
         dyn_light_layout();
+        udaf_adopt(other);
     }
 };
 

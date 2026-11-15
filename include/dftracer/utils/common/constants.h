@@ -21,6 +21,19 @@ inline constexpr const char* SPILL_DIR_ENV = "DFTRACER_UTILS_SPILL_DIR";
 inline constexpr const char* SPILL_COMPRESS_ENV =
     "DFTRACER_UTILS_SPILL_COMPRESS";
 
+namespace dataframe {
+/// The rows of one batch of a DataFrame Arrow stream, and of a scan handed no
+/// batch size of its own.
+inline constexpr std::int64_t BATCH_SIZE = 65536;
+}  // namespace dataframe
+
+namespace plugins {
+/// "0", "false", "off" or "no" checks nothing; any other value makes the host
+/// validate every frame and column a plugin hands back, and fail the run
+/// naming the plugin, the callback and the broken rule.
+inline constexpr const char* CHECK_ENV = "DFTRACER_UTILS_PLUGIN_CHECK";
+}  // namespace plugins
+
 /// Repeated in memory/detail/constants.h. A test keeps the two equal. The
 /// backend, decay, debug and exit check are read by the memory library before
 /// its first allocation. Byte values take a number or a unit such as "512MB".
@@ -107,6 +120,18 @@ inline constexpr const char* STORE_PAGE_CACHE_BYTES_ENV =
 inline constexpr std::size_t STORE_DEFAULT_PAGE_CACHE_BYTES = std::size_t{64}
                                                               << 20;
 }  // namespace store
+
+/// The server's stored caches.
+namespace server {
+/// The most bytes of stored viz responses one trace folder keeps in the index
+/// store under `server.viz_result`. A folder that would pass it drops its
+/// stored responses and starts again. VIZ_RESULT_STORE_BYTES_ENV overrides it
+/// with a plain number of bytes.
+inline constexpr const char* VIZ_RESULT_STORE_BYTES_ENV =
+    "DFTRACER_UTILS_VIZ_RESULT_STORE_BYTES";
+inline constexpr std::uint64_t VIZ_RESULT_DEFAULT_STORE_BYTES =
+    std::uint64_t{64} << 20;
+}  // namespace server
 
 /// What a file in flight and each piece parsed at once reserve from the memory
 /// budget, in bytes held per byte of plaintext. Set from the manager's peak on

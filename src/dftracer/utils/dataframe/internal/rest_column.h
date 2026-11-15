@@ -21,7 +21,8 @@ inline constexpr dstd::StringView REST_COLUMN = "__rest";
 
 /// A flat Struct of `rows` rows over `fields` named `names`. Unlike
 /// Series::structs it keeps the length of a struct with no fields.
-inline Series struct_of_length(dstd::Vector<dstd::String> names,
+template <class Name>
+inline Series struct_of_length(const dstd::Vector<Name>& names,
                                dstd::Vector<Series> fields, std::int64_t rows) {
     auto* col = new dftu_series();
     col->type = TypeId::Struct;
@@ -29,8 +30,8 @@ inline Series struct_of_length(dstd::Vector<dstd::String> names,
     col->length = rows;
     col->nested.reserve(fields.size());
     for (std::size_t i = 0; i < fields.size(); ++i)
-        col->nested.push_back(
-            {adopt_series(fields[i].release()), std::move(names[i])});
+        col->nested.push_back({adopt_series(fields[i].release()),
+                               dstd::String{dstd::StringView{names[i]}}});
     return Series{col};
 }
 

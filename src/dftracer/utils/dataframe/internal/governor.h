@@ -2,7 +2,6 @@
 #ifndef DFTRACER_UTILS_DATAFRAME_INTERNAL_GOVERNOR_H
 #define DFTRACER_UTILS_DATAFRAME_INTERNAL_GOVERNOR_H
 
-#include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/memory/detail/manager.h>
@@ -95,28 +94,6 @@ class Governor final : public memory::detail::Reclaimer {
     memory::detail::ReclaimSlot slot_;
     // The resident size whose grow was refused, zero when none was.
     std::uint64_t denied_at_ = 0;
-};
-
-// A plugin cursor's state is what its `bytes` slot reports, and it frees it
-// through its own `reclaim` slot, called at a morsel boundary on the thread
-// that pulls the cursor. A plugin without both slots is not governed.
-class PluginGovernor {
-   public:
-    explicit PluginGovernor(const ::dftu_cursor_vt* vt) {
-        if (vt->bytes && vt->reclaim) gov_.emplace("plugin");
-    }
-
-    void at_morsel(const ::dftu_cursor_vt* vt, void* self) {
-        if (!gov_) return;
-        const std::uint64_t held = vt->bytes(self);
-        const std::uint64_t want = gov_->check(held);
-        if (want == 0) return;
-        const std::uint64_t freed = vt->reclaim(self, want);
-        gov_->spilled(held - std::min(held, freed));
-    }
-
-   private:
-    dstd::Optional<Governor> gov_;
 };
 
 }  // namespace dftracer::utils::dataframe

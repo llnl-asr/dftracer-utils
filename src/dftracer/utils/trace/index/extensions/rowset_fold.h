@@ -49,7 +49,7 @@ class RowSetFold : public trace::views::detail::Fold {
     void seal_unit(const trace::views::detail::ScanUnit& unit) override;
     void drop_unit(const trace::views::detail::ScanUnit& unit) override;
     dstd::Result<void> merge(trace::views::detail::Fold& slice) override;
-    coro::CoroTask<bool> finalize(
+    coro::CoroTask<dstd::Result<bool>> finalize(
         const trace::views::detail::CoverageSet&) override {
         co_return true;
     }

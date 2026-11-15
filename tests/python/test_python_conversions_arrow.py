@@ -145,7 +145,10 @@ def test_dataframe_to_pandas_matches_native(layout, chunked):
 def test_to_pandas_nullable_strings(layout, chunked):
     s = _series(layout, chunked)
     got = s.to_pandas(nullable=True)
-    assert got.tolist() == [pd.NA if v is None else v for v in VALUES]
+    # A dictionary layout is categorical, whose null is NaN, not pd.NA.
+    assert got.astype(object).where(got.notna(), None).tolist() == VALUES
+    if not isinstance(got.dtype, pd.CategoricalDtype):
+        assert got.tolist() == [pd.NA if v is None else v for v in VALUES]
 
 
 def _selection():

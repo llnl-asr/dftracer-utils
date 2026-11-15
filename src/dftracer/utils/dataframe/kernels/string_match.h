@@ -3,7 +3,7 @@
 #define DFTRACER_UTILS_DATAFRAME_KERNELS_STRING_MATCH_H
 
 #include <dftracer/utils/common/cpu_features.h>
-#include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dataframe/c_api.h>
 
 #include <cstdint>
 

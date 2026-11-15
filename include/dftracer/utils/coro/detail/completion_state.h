@@ -6,19 +6,22 @@
 #include <dftracer/utils/coro/detail/parked.h>
 #include <dftracer/utils/coro/detail/resumption_helper.h>
 #include <dftracer/utils/coro/executor.h>
+#include <dftracer/utils/dstd/error.h>
+#include <dftracer/utils/dstd/fatal.h>
+#include <dftracer/utils/dstd/optional.h>
 
 #include <atomic>
 #include <coroutine>
 #include <cstddef>
-#include <exception>
 
 namespace dftracer::utils::coro::detail {
 
 /// Common suspension/completion coordination shared by when_all / when_any
 /// shared-state structs. Holds the awaiting coroutine, its executor, and the
 /// @ref CompletionLatch that guards the suspend-vs-complete race. A child that
-/// stopped and no error end the awaiter as stopped, in place of resuming it.
-/// Shutdown ends a suspended awaiter the same way.
+/// stopped and no error end the awaiter as stopped, in place of resuming it. A
+/// child that failed ends the awaiter with its error. Shutdown ends a suspended
+/// awaiter as stopped.
 struct CompletionState {
     std::coroutine_handle<> awaiting_coroutine{};
     Executor* executor{nullptr};
@@ -26,9 +29,11 @@ struct CompletionState {
     CompletionLatch latch;
     /// A child stopped. Set before the child counts as done.
     std::atomic<bool> stopped{false};
-    /// A child failed with an exception, which the awaiter raises in place of
-    /// the stop.
+    /// A child failed with @ref error, which ends the awaiter in place of the
+    /// stop.
     std::atomic<bool> failed{false};
+    /// The first child error. Written before `failed` is set.
+    dstd::Optional<dstd::Error> error;
 
     /// Records the awaiter. Call first in await_suspend.
     template <typename Promise>
@@ -43,15 +48,27 @@ struct CompletionState {
     }
 
     /// For an await_suspend that finds its children done. True when the awaiter
-    /// was ended as stopped, so await_suspend returns true and the frame stays
-    /// suspended. False when the awaiter continues.
-    bool end_stopped() noexcept {
+    /// was ended as stopped or with the error, so await_suspend returns true
+    /// and the frame stays suspended. False when the awaiter continues.
+    bool end_early() noexcept {
+        if (failed.load(std::memory_order_acquire)) {
+            return fail_task(executor, nullptr, owner, std::move(*error));
+        }
         return stop_wanted() && stop_task(executor, nullptr, owner);
     }
 
-    /// Continues the awaiter once its children are done: ends it as stopped, or
-    /// resumes it.
+    /// Continues the awaiter once its children are done: ends it as stopped or
+    /// with the error, or resumes it.
     void continue_awaiter() noexcept {
+        if (failed.load(std::memory_order_acquire)) {
+            if (park_) {
+                executor->unpark(park_);
+                park_ = nullptr;
+            }
+            fail_or_continue(executor, owner, awaiting_coroutine,
+                             std::move(*error));
+            return;
+        }
         if (stop_wanted()) {
             // The entry names the awaiter's frame, which the stop can free
             // while the children still hold this state.
@@ -89,11 +106,16 @@ struct CompletionState {
     }
 
     /// First step of await_resume: leaves the registry. Ends the process when
-    /// the awaiter could not stop and shutdown, or a stopped child, resumed it.
+    /// the awaiter could not stop or fail and shutdown, a stopped child or a
+    /// failed child resumed it.
     void finish_wait() {
         if (park_) {
             executor->unpark(park_);
             park_ = nullptr;
+        }
+        if (failed.load(std::memory_order_acquire)) {
+            dstd::fatal(
+                "coro: a wait for failed tasks in a frame that cannot fail");
         }
         if (cancelled_) cancelled_unstoppable("a wait for tasks");
         if (stop_wanted()) cancelled_unstoppable("a wait for stopped tasks");
@@ -138,10 +160,9 @@ class ChildClaims {
 };
 
 /// All-of accounting: resumes only after every child completes, recording the
-/// first exception observed.
+/// first error observed.
 struct WhenAllCompletionState : CompletionState {
-    std::exception_ptr exception;
-    std::atomic<bool> has_exception{false};
+    std::atomic<bool> has_error{false};
     std::atomic<std::size_t> completed_count{0};
     std::size_t total{0};
 
@@ -153,12 +174,12 @@ struct WhenAllCompletionState : CompletionState {
         }
     }
 
-    void on_exception(std::exception_ptr e) {
+    void on_error(dstd::Error e) {
         bool expected = false;
-        if (has_exception.compare_exchange_strong(expected, true,
-                                                  std::memory_order_acq_rel,
-                                                  std::memory_order_relaxed)) {
-            exception = e;
+        if (has_error.compare_exchange_strong(expected, true,
+                                              std::memory_order_acq_rel,
+                                              std::memory_order_relaxed)) {
+            error.emplace(std::move(e));
         }
         failed.store(true, std::memory_order_release);
         on_one_complete();

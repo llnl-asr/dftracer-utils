@@ -218,7 +218,8 @@ dstd::String items(const dataframe::DataFrame& f, std::int64_t r,
 dstd::String text(const dataframe::DataFrame& f) {
     dstd::String out;
     for (std::size_t c = 0; c < f.columns.size(); ++c) {
-        out += f.names[c] + ":";
+        out += f.names[c].view();
+        out += ":";
         for (std::int64_t r = 0; r < f.num_rows(); ++r) {
             if (f.columns[c].is_null(r))
                 out += "null";
@@ -316,7 +317,8 @@ TEST_SUITE("View duql pipeline") {
                       .head(5)
                       .select({"name", "ms"}));
 
-        CHECK(got.names == dstd::Vector<dstd::String>{"name", "ms"});
+        CHECK(dstd::to_strings(got.names) ==
+              dstd::Vector<dstd::String>{"name", "ms"});
         CHECK(nums(got, "ms") == nums(want, "ms"));
         CHECK(nums(got, "ms") ==
               dstd::Vector<double>{0.039, 0.038, 0.037, 0.036, 0.035});
@@ -680,13 +682,14 @@ TEST_SUITE("View duql pipeline") {
 
         const dataframe::DataFrame one = pipe(
             R"(pivot name in ["read" as r, "write" as w] { n = count() })");
-        CHECK(one.names == dstd::Vector<dstd::String>{"r", "w"});
+        CHECK(dstd::to_strings(one.names) ==
+              dstd::Vector<dstd::String>{"r", "w"});
         const dataframe::DataFrame plain =
             pipe(R"(pivot name in ["read", "write"] { n = count() })");
         CHECK(nums(one, "r") == nums(plain, "n.read"));
         const dataframe::DataFrame two = pipe(
             R"(pivot name in ["read" as r, "write"] { n = count(), s = sum(dur) })");
-        CHECK(two.names ==
+        CHECK(dstd::to_strings(two.names) ==
               dstd::Vector<dstd::String>{"n_r", "n.write", "s_r", "s.write"});
 
         const auto all = nums(pipe("sort ts | select ts"), "ts");
@@ -705,7 +708,7 @@ TEST_SUITE("View duql pipeline") {
             "group name { n = count(), ms = sum(dur) / 1000, "
             "r = sum(dur) / count(), m = coalesce(max(dur), 0), "
             "k = max(max(dur), 0) } | sort name");
-        CHECK(f.names ==
+        CHECK(dstd::to_strings(f.names) ==
               dstd::Vector<dstd::String>{"name", "n", "ms", "r", "m", "k"});
         CHECK(text(f) ==
               text(pipe("group name { n = count(), s = sum(dur), "
@@ -714,7 +717,8 @@ TEST_SUITE("View duql pipeline") {
                         "select name, n, ms, r, m, k | sort name")));
         const dataframe::DataFrame e =
             pipe("where dur < 0 | agg { r = sum(dur) / count(), n = count() }");
-        CHECK(e.names == dstd::Vector<dstd::String>{"r", "n"});
+        CHECK(dstd::to_strings(e.names) ==
+              dstd::Vector<dstd::String>{"r", "n"});
         REQUIRE(e.num_rows() == 1);
         CHECK(text(e) == text(pipe("where dur < 0 | agg { s = sum(dur), "
                                    "n = count() } | derive r = s / n | "
@@ -724,7 +728,8 @@ TEST_SUITE("View duql pipeline") {
     TEST_CASE("unnamed aggregates and case blocks") {
         const dataframe::DataFrame f =
             pipe("group cat { count(), sum(dur) } | sort cat");
-        CHECK(f.names == dstd::Vector<dstd::String>{"cat", "count", "sum_dur"});
+        CHECK(dstd::to_strings(f.names) ==
+              dstd::Vector<dstd::String>{"cat", "count", "sum_dur"});
         CHECK(text(f) ==
               text(pipe("group cat { count = count(), sum_dur = sum(dur) } | "
                         "sort cat")));
@@ -751,7 +756,7 @@ TEST_SUITE("View duql pipeline") {
     TEST_CASE("distinct keeps first occurrences of the keys") {
         const dataframe::DataFrame f = pipe("distinct cat | sort cat");
         REQUIRE(f.num_rows() == 2);
-        CHECK(f.names == dstd::Vector<dstd::String>{"cat"});
+        CHECK(dstd::to_strings(f.names) == dstd::Vector<dstd::String>{"cat"});
         CHECK(bstr(f, 0, "cat") == "POSIX");
         CHECK(bstr(f, 1, "cat") == "STDIO");
     }
@@ -759,10 +764,11 @@ TEST_SUITE("View duql pipeline") {
     TEST_CASE("select, rename and drop shape the columns") {
         const dataframe::DataFrame f =
             pipe("select name, dur | rename d = dur | drop name | take 1");
-        CHECK(f.names == dstd::Vector<dstd::String>{"d"});
+        CHECK(dstd::to_strings(f.names) == dstd::Vector<dstd::String>{"d"});
         const dataframe::DataFrame g =
             pipe("take 1 | select twice = dur * 2, dur, n = name");
-        CHECK(g.names == dstd::Vector<dstd::String>{"twice", "dur", "n"});
+        CHECK(dstd::to_strings(g.names) ==
+              dstd::Vector<dstd::String>{"twice", "dur", "n"});
         CHECK(bnum(g, 0, "twice") == 2 * bnum(g, 0, "dur"));
     }
 
@@ -860,21 +866,24 @@ TEST_SUITE("View duql pipeline") {
 TEST_SUITE("View duql aggregation") {
     TEST_CASE("a bare distinct keeps every column") {
         const dataframe::DataFrame got = pipe("select name, cat | distinct");
-        CHECK(got.names == dstd::Vector<dstd::String>{"name", "cat"});
+        CHECK(dstd::to_strings(got.names) ==
+              dstd::Vector<dstd::String>{"name", "cat"});
         CHECK(got.num_rows() == 2);
     }
 
     TEST_CASE("a select before a trace group keeps the group's columns") {
         const dataframe::DataFrame got =
             pipe("select name | group name { n = count() }");
-        CHECK(got.names == dstd::Vector<dstd::String>{"name", "n"});
+        CHECK(dstd::to_strings(got.names) ==
+              dstd::Vector<dstd::String>{"name", "n"});
         CHECK(text(got) == text(pipe("group name { n = count() }")));
     }
 
     TEST_CASE("count and time per name equal the trace group_by") {
         const dataframe::DataFrame got =
             pipe("group name { n = count(), t = sum(dur) }");
-        CHECK(got.names == dstd::Vector<dstd::String>{"name", "n", "t"});
+        CHECK(dstd::to_strings(got.names) ==
+              dstd::Vector<dstd::String>{"name", "n", "t"});
         const dataframe::DataFrame want =
             frame(base()
                       .group_by({GroupKey::field("name")})
@@ -893,7 +902,8 @@ TEST_SUITE("View duql aggregation") {
             "derive y = if(dur > 35, null, dur) | group big = y > 30"
             " { n = count() }");
         REQUIRE(f.num_rows() == 3);
-        CHECK(f.names == dstd::Vector<dstd::String>{"big", "n"});
+        CHECK(dstd::to_strings(f.names) ==
+              dstd::Vector<dstd::String>{"big", "n"});
         CHECK(nums(f, "n") == dstd::Vector<double>{32, 10, 8});
         CHECK(f.columns[0].is_null(2));
     }
@@ -1090,7 +1100,8 @@ TEST_SUITE("View duql aggregation") {
     TEST_CASE("top rows per key") {
         const dataframe::DataFrame f =
             pipe("take 2 by name sort -dur | select name, dur");
-        CHECK(f.names == dstd::Vector<dstd::String>{"name", "dur"});
+        CHECK(dstd::to_strings(f.names) ==
+              dstd::Vector<dstd::String>{"name", "dur"});
         REQUIRE(f.num_rows() == 4);
         CHECK(nums(f, "dur") == dstd::Vector<double>{39, 39, 38, 38});
         CHECK(bstr(f, 0, "name") == "read");
@@ -1209,7 +1220,8 @@ TEST_SUITE("View duql aggregation") {
         }
         const dataframe::DataFrame g =
             pipe("bucket 1ms fill | group cat { n = count() }");
-        CHECK(g.names == dstd::Vector<dstd::String>{"bucket", "cat", "n"});
+        CHECK(dstd::to_strings(g.names) ==
+              dstd::Vector<dstd::String>{"bucket", "cat", "n"});
         CHECK(g.num_rows() == 6 * 2);
         CHECK(fails_with("bucket 1ms | derive z = 1", {"bucket", "group"}));
     }
@@ -2364,7 +2376,8 @@ TEST_SUITE("View duql pivot and unpivot") {
         const View v = view_of_lines(env, METRICS);
         const dataframe::DataFrame f =
             frame(v.duql("select f, metric, v | pivot metric { s = sum(v) }"));
-        CHECK(f.names == dstd::Vector<dstd::String>{"f", "s.cpu", "s.mem"});
+        CHECK(dstd::to_strings(f.names) ==
+              dstd::Vector<dstd::String>{"f", "s.cpu", "s.mem"});
         CHECK(rows(f) == "a,1,2;b,3,null");
     }
 
@@ -2374,7 +2387,8 @@ TEST_SUITE("View duql pivot and unpivot") {
         const dataframe::DataFrame f =
             frame(v.duql("select f, metric, v | pivot metric in [\"mem\"]"
                          " { s = sum(v) } | where s.mem > 0"));
-        CHECK(f.names == dstd::Vector<dstd::String>{"f", "s.mem"});
+        CHECK(dstd::to_strings(f.names) ==
+              dstd::Vector<dstd::String>{"f", "s.mem"});
         CHECK(rows(f) == "a,2");
     }
 
@@ -2400,7 +2414,8 @@ TEST_SUITE("View duql pivot and unpivot") {
         const View v = view_of_lines(env, {line("io", 1, R"("a":1,"b":2)")});
         const dataframe::DataFrame f =
             frame(v.duql("select name, a, b | unpivot a, b as k, v"));
-        CHECK(f.names == dstd::Vector<dstd::String>{"name", "k", "v"});
+        CHECK(dstd::to_strings(f.names) ==
+              dstd::Vector<dstd::String>{"name", "k", "v"});
         CHECK(rows(f) == "op,a,1;op,b,2");
     }
 
@@ -2623,7 +2638,7 @@ TEST_SUITE("View duql array and object functions") {
         CHECK(bstr(f, 0, "q") == R"({"k":[1,2]})");
         CHECK(f.columns[bcol(f, "q")].is_null(1));
         for (const auto& n : frame(v.duql(R"(derive p = split(s, ","))")).names)
-            CHECK_FALSE(n.starts_with("__duql"));
+            CHECK_FALSE(n.view().starts_with("__duql"));
     }
 
     TEST_CASE("each function in the scan filter and after it") {

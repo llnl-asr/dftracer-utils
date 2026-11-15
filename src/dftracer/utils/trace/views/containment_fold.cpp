@@ -314,7 +314,9 @@ dataframe::DataFrame build_call_tree(
     });
 
     dataframe::DataFrame out;
-    out.names = {"pid", "tid", "ts", "dur", "name", "level", "parent_id"};
+    for (const char* column :
+         {"pid", "tid", "ts", "dur", "name", "level", "parent_id"})
+        out.names.emplace_back(column);
     out.columns.push_back(Series::flat_i64(pid.data(), n));
     out.columns.push_back(Series::flat_i64(tid.data(), n));
     auto times = [&](const dstd::Vector<double>& v) {
@@ -453,8 +455,9 @@ static dataframe::DataFrame flame_arena_to_frame(
         }
     }
     dataframe::DataFrame out;
-    out.names = {"node_id", "parent", "name", "level",
-                 "total",   "self",   "count"};
+    for (const char* column :
+         {"node_id", "parent", "name", "level", "total", "self", "count"})
+        out.names.emplace_back(column);
     out.columns.push_back(Series::flat_i64(node_id.data(), nn));
     out.columns.push_back(Series::flat_i64(par.data(), nn));
     out.columns.push_back(Series::strings(names));

@@ -21,7 +21,7 @@ DataFrame make_df(std::int64_t n) {
     dstd::Vector<std::int64_t> a(static_cast<std::size_t>(n));
     for (std::int64_t i = 0; i < n; ++i) a[static_cast<std::size_t>(i)] = i;
     DataFrame df;
-    df.names = {"a"};
+    df.names = dstd::make_shared_strings({"a"});
     df.columns.push_back(Series::flat_i64(a.data(), n));
     return df;
 }

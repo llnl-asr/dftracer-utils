@@ -18,7 +18,9 @@ namespace dftu_utils_test {
 
 template <typename R>
 typename std::remove_cvref_t<R>::value_type ok(R&& result) {
-    REQUIRE_MESSAGE(result.has_value(), result.error().format().c_str());
+    if (!result.has_value()) {
+        FAIL(result.error().format().c_str());
+    }
     if constexpr (!std::is_void_v<
                       typename std::remove_cvref_t<R>::value_type>) {
         return *std::forward<R>(result);

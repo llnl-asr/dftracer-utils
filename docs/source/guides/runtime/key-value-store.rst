@@ -9,7 +9,7 @@ Store your own data in the key-value store
    Write keys and values with atomic batches, read them from point-in-time snapshots and merge small files when a directory grows.
 
 The store that holds the index is also a public library.
-Use ``dftracer/utils/store/store.h`` from C++, ``dftracer/utils/store/abi.h`` from C and ``dftracer.utils.Store`` from Python.
+Use ``dftracer/utils/store/store.h`` from C++, ``dftracer/utils/store/c_api.h`` from C and ``dftracer.utils.Store`` from Python.
 
 Write and read
 --------------

@@ -462,19 +462,19 @@ dstd::Result<dataframe::DataFrame> finalize_engine_frame(
     dstd::Vector<DynFix> dyn;
     for (std::size_t k = 0; k < dyn_count && !dyn_specs.empty(); ++k) {
         const dataframe::AggDynSpec& sp = dyn_specs[k % dyn_specs.size()];
-        dyn.push_back({dstd::String(r.names[dyn_at + k]),
+        dyn.push_back({dstd::String(r.names[dyn_at + k].view()),
                        sp.op == dataframe::AggOp::Pct,
                        sp.op == dataframe::AggOp::Count});
     }
     const std::size_t n_value_cols = n_plan_value + dyn_count;
 
-    if (off) r.names[0] = "time_bucket";
-    if (cat_pos) r.names[off + *cat_pos] = "cat";
+    if (off) r.names[0] = dstd::SharedString{"time_bucket"};
+    if (cat_pos) r.names[off + *cat_pos] = dstd::SharedString{"cat"};
     for (std::size_t j = 0; j < ng; ++j) {
         const GroupKey::Kind k = plan.group_by[j].kind;
         if (key_transformed[j] || k == GroupKey::Kind::Arg ||
             k == GroupKey::Kind::Field || k == GroupKey::Kind::Expr)
-            r.names[off + j].assign(key_names[j]);
+            r.names[off + j] = dstd::SharedString{key_names[j]};
     }
     const auto json_of_keys = json_keys(plan);
     if (!json_of_keys) return json_of_keys.error();
@@ -498,7 +498,7 @@ dstd::Result<dataframe::DataFrame> finalize_engine_frame(
             static_cast<std::int64_t>(plan.occ_cell_us));
         const std::size_t at = off + ng + n_value_cols;
         r.names.insert(r.names.begin() + static_cast<std::ptrdiff_t>(at),
-                       "busy_cell_us");
+                       dstd::SharedString{"busy_cell_us"});
         r.columns.insert(r.columns.begin() + static_cast<std::ptrdiff_t>(at),
                          dataframe::Series::flat_i64(cell.data(), nrows));
     }
@@ -517,7 +517,7 @@ dstd::Result<dataframe::DataFrame> finalize_engine_frame(
             const std::size_t idx = off + j;
             r.columns[idx] =
                 resolve_key_column(r.columns[idx], *resolver, plan.group_by[j]);
-            r.names[idx].assign(key_names[j]);
+            r.names[idx] = dstd::SharedString{key_names[j]};
         }
     }
 
@@ -592,7 +592,7 @@ dstd::Optional<dataframe::Schema> aggregated_output_schema(
             std::find(input_typed.begin(), input_typed.end(),
                       dstd::StringView(r.names[i])) != input_typed.end();
         s.fields.push_back(dataframe::Field{
-            r.names[i],
+            dstd::String{r.names[i].view()},
             follows_input ? dataframe::scalar(dataframe::TypeId::Unknown)
                           : r.columns[i].data_type(),
             true});
@@ -1050,7 +1050,7 @@ dstd::Result<dataframe::DataFrame> build_agg_input_frame(
             if (at >= 0) {
                 f.columns[static_cast<std::size_t>(at)] = std::move(col);
             } else {
-                f.names.push_back(std::move(name));
+                f.names.push_back(dstd::SharedString{std::move(name)});
                 f.columns.push_back(std::move(col));
             }
         }

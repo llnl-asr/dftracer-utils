@@ -14,13 +14,16 @@
 #include <stdint.h>
 #include <stdlib.h>
 
-static void* make_slice(void* self) {
+static dftu_status make_slice(dftu_ctx* ctx, void* self, void** out) {
     (void)self;
-    return calloc(1, 1);
+    *out = calloc(1, 1);
+    if (!*out) return dftu_fail(ctx, DFTU_E_NO_MEMORY, "out of memory");
+    return DFTU_OK;
 }
 
-static dftu_task* on_batch(void* slice, const dftu_dataframe* df,
-                           const dftu_plugin_host* host) {
+static dftu_status on_batch(dftu_ctx* ctx, void* slice,
+                            const dftu_dataframe* df,
+                            const dftu_plugin_host* host) {
     const dftu_svc_agg* agg =
         (const dftu_svc_agg*)host->get_service(host->h, DFTU_SVC_AGG);
     static const char* const keys[1] = {"pid"};
@@ -31,23 +34,32 @@ static dftu_task* on_batch(void* slice, const dftu_dataframe* df,
         {DFTU_AGG_CORR, "dur", "corr", 0.0, "ts"},
         {DFTU_AGG_SKEW, "dur", "dur_skew", 0.0, NULL},
         {DFTU_AGG_KURT, "dur", "dur_kurt", 0.0, NULL}};
-    dftu_agg* a;
+    dftu_agg* a = NULL;
+    dftu_status st;
     (void)slice;
-    if (!agg || !agg->agg_new) return NULL;
-    a = agg->agg_new(host->h, "process_regr_stats", keys, 1, specs, 6);
-    if (a) agg->agg_accumulate(host->h, a, df);
-    return NULL;
+    if (!agg || !agg->agg_new)
+        return dftu_fail(ctx, DFTU_E_UNSUPPORTED, "host lacks dftu.svc.agg");
+    st =
+        agg->agg_new(ctx, host->h, "process_regr_stats", keys, 1, specs, 6, &a);
+    if (st < 0) return st;
+    return agg->agg_accumulate(ctx, host->h, a, df);
 }
 
-static void merge(void* into, void* other) {
+static dftu_status merge(dftu_ctx* ctx, void* into, void* other) {
+    (void)ctx;
     (void)into;
     (void)other;
+    return DFTU_OK;
 }
 
-static dftu_task* on_finalize(void* slice, const dftu_plugin_host* host) {
+static dftu_status on_finalize(dftu_ctx* ctx, void* slice,
+                               const dftu_plugin_host* host,
+                               dftu_task** pending) {
+    (void)ctx;
+    (void)pending;
     (void)slice;
     (void)host;
-    return NULL;
+    return DFTU_OK;
 }
 
 static void destroy_slice(void* slice) { free(slice); }
@@ -56,11 +68,16 @@ static void destroy(void* self) { (void)self; }
 
 static dftu_plugin g_plugin;
 
-DFTU_PLUGIN_EXPORT dftu_plugin* dftracer_plugin(dftu_plugin_host* h,
-                                                const dftu_value* config) {
+DFTU_PLUGIN_INFO("process_regr_stats", "1.0")
+
+DFTU_PLUGIN_EXPORT dftu_status dftracer_plugin(dftu_ctx* ctx,
+                                               dftu_plugin_host* h,
+                                               const dftu_value* config,
+                                               dftu_plugin** out) {
+    (void)ctx;
     (void)h;
     (void)config;
-    g_plugin.abi_version = DFTRACER_UTILS_PLUGIN_ABI_VERSION;
+    g_plugin.struct_size = sizeof(dftu_plugin);
     g_plugin.self = NULL;
     g_plugin.plan_duql = NULL;
     g_plugin.make_slice = make_slice;
@@ -69,5 +86,6 @@ DFTU_PLUGIN_EXPORT dftu_plugin* dftracer_plugin(dftu_plugin_host* h,
     g_plugin.destroy_slice = destroy_slice;
     g_plugin.destroy = destroy;
     g_plugin.on_batch = on_batch;
-    return &g_plugin;
+    *out = &g_plugin;
+    return DFTU_OK;
 }

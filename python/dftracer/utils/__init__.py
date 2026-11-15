@@ -11,11 +11,16 @@ from .columnar import (  # noqa: F401
     F,
     Field,
     GroupBy,
+    Udaf,
+    Udf,
+    call,
     col,
     columnar,
     count,
     eval_many,
     lit,
+    udaf,
+    udf,
     where,
 )
 from .dataframe import DataFrame  # noqa: F401
@@ -32,6 +37,7 @@ from .dftracer_utils_ext import (  # noqa: F401
     DFTUtilsPipelineError,
     DFTUtilsReaderError,
     DFTUtilsValueError,
+    _close_task_callbacks,
     consolidate_shard_set,
     get_log_level,
     set_log_color,
@@ -56,8 +62,10 @@ from .lazyframe import (  # noqa: F401
     LazyFrame,
     LazyResult,
     LazyScalar,
+    SinkSummary,
     collect_all,
     lazy,
+    scan_file,
 )
 from .live_trace_viewer import LiveFileStatus, LiveTraceViewer  # noqa: F401
 from .runtime import Runtime, TaskHandle  # noqa: F401
@@ -109,6 +117,11 @@ def _shutdown_default_runtime() -> None:
         pass
 
 
+# Registered after the shutdown above, so it runs first: done callbacks of
+# native tasks that have not started are dropped before the interpreter ends.
+atexit.register(_close_task_callbacks)
+
+
 try:
     __version__ = version("dftracer-utils")
 except PackageNotFoundError:
@@ -127,6 +140,11 @@ __all__ = [
     "columnar",
     "F",
     "where",
+    "Udaf",
+    "Udf",
+    "udaf",
+    "udf",
+    "call",
     "Agg",
     "GroupBy",
     "count",
@@ -149,8 +167,10 @@ __all__ = [
     "LazyResult",
     "LazyScalar",
     "BoundColumn",
+    "SinkSummary",
     "collect_all",
     "lazy",
+    "scan_file",
     "Series",
     "Runtime",
     "TaskHandle",

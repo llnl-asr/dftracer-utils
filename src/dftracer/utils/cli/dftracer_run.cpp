@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/cli/common_cli.h>
+#include <dftracer/utils/cli/plugin_info.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/coro/task.h>
-#include <dftracer/utils/domains/plugins/config.h>
-#include <dftracer/utils/domains/plugins/plugins.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/plugins/host/config.h>
+#include <dftracer/utils/plugins/host/plugins.h>
 #include <dftracer/utils/trace/index/build/resolve_and_build.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view.h>
@@ -17,8 +18,8 @@
 using namespace dftracer::utils;
 using namespace dftracer::utils::trace;
 using namespace dftracer::utils::trace::views;
-using domains::plugins::ConfigTree;
-using domains::plugins::Plugins;
+using plugins::host::ConfigTree;
+using plugins::host::Plugins;
 
 struct PluginBlock {
     dstd::StringView path;
@@ -202,18 +203,9 @@ static dstd::Result<Plugins> build_plugins(const PluginArgs& plugin_args) {
     return builder.build();
 }
 
-static dstd::String join_or_none(const dstd::Vector<dstd::String>& names) {
-    if (names.empty()) return "(none)";
-    dstd::String out;
-    for (const auto& name : names) {
-        if (!out.empty()) out += ", ";
-        out.append(name.data(), name.size());
-    }
-    return out;
-}
-
 // Print each loaded plugin's path and provides/consumes, one line per fact so
-// the output is greppable, and exit without touching any trace file.
+// the output is greppable, and exit without touching any trace file. The
+// rendering is shared with `dftracer_plugin check` (plugin_info.h).
 static int describe_plugins(const PluginArgs& plugin_args) {
     if (plugin_args.blocks.empty()) {
         DFTRACER_UTILS_LOG_ERROR("{}",
@@ -227,29 +219,8 @@ static int describe_plugins(const PluginArgs& plugin_args) {
         return 1;
     }
 
-    for (const auto& info : plugins->describe()) {
-        std::fprintf(stderr, "plugin: %s\n", info.path.c_str());
-        std::fprintf(stderr, "  abi_version: %u\n", info.abi_version);
-        std::fprintf(stderr, "  plan_duql: %s\n",
-                     info.has_plan_duql ? "yes" : "no");
-        std::fprintf(stderr, "  provides: %s\n",
-                     join_or_none(info.provides).c_str());
-        std::fprintf(stderr, "  consumes: %s\n",
-                     join_or_none(info.consumes).c_str());
-        std::fprintf(stderr, "  ops: %s\n", join_or_none(info.ops).c_str());
-        // "(none)" here means the plugin declared no projection, so it is
-        // handed every batch column - not that it reads nothing.
-        std::fprintf(stderr, "  reads: %s\n",
-                     info.reads.empty() ? "(all columns)"
-                                        : join_or_none(info.reads).c_str());
-        if (info.config_keys.empty()) {
-            std::fprintf(stderr, "  config: (undeclared)\n");
-        } else {
-            for (const auto& key : info.config_keys)
-                std::fprintf(stderr, "  config: %s\n", key.c_str());
-        }
-        std::fprintf(stderr, "\n");
-    }
+    for (const auto& info : plugins->describe())
+        cli::print_plugin_info(stderr, info);
     return 0;
 }
 

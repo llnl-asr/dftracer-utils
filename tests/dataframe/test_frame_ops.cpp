@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/task.h>
-#include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/frame_ops.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
@@ -49,7 +49,7 @@ dstd::Vector<I> i64_col(const DataFrame& df, const dstd::String& name) {
 // pid = [1, 1, 1, 2], ts = [10, 20, 30, 5], dur = [1, 2, 3, 4]
 DataFrame make_events() {
     DataFrame df;
-    df.names = {"pid", "ts", "dur"};
+    df.names = dstd::make_shared_strings({"pid", "ts", "dur"});
     df.columns.push_back(i64s({1, 1, 1, 2}));
     df.columns.push_back(i64s({10, 20, 30, 5}));
     df.columns.push_back(i64s({1, 2, 3, 4}));
@@ -83,8 +83,9 @@ TEST_SUITE("frame ops") {
         specs[2].out = "prev";
         DataFrame out = dftu_utils_test::ok(
             dataframe::window(make_events(), {"pid"}, {"ts"}, specs));
-        CHECK(out.names == dstd::Vector<dstd::String>{"pid", "ts", "dur", "rn",
-                                                      "cum", "prev"});
+        CHECK(dstd::to_strings(out.names) ==
+              dstd::Vector<dstd::String>{"pid", "ts", "dur", "rn", "cum",
+                                         "prev"});
         CHECK(i64_col(out, "rn") == dstd::Vector<I>{1, 2, 3, 1});
         CHECK(i64_col(out, "cum") == dstd::Vector<I>{1, 3, 6, 4});
         CHECK(i64_col(out, "prev") == dstd::Vector<I>{NI, 1, 2, NI});
@@ -96,7 +97,7 @@ TEST_SUITE("frame ops") {
 
     TEST_CASE("gap_fill: locf over a grid, with and without a range") {
         DataFrame df;
-        df.names = {"pid", "ts", "v"};
+        df.names = dstd::make_shared_strings({"pid", "ts", "v"});
         df.columns.push_back(i64s({1, 1, 1}));
         df.columns.push_back(i64s({0, 10, 30}));
         df.columns.push_back(i64s({100, 110, 130}));
@@ -116,19 +117,20 @@ TEST_SUITE("frame ops") {
         "asof: backward match within a partition, tolerance drops far "
         "rows") {
         DataFrame left;
-        left.names = {"pid", "ts", "x"};
+        left.names = dstd::make_shared_strings({"pid", "ts", "x"});
         left.columns.push_back(i64s({1, 1, 2}));
         left.columns.push_back(i64s({10, 25, 10}));
         left.columns.push_back(i64s({1, 2, 3}));
         DataFrame right;
-        right.names = {"pid", "ts", "y"};
+        right.names = dstd::make_shared_strings({"pid", "ts", "y"});
         right.columns.push_back(i64s({1, 1, 2}));
         right.columns.push_back(i64s({5, 20, 50}));
         right.columns.push_back(i64s({50, 200, 500}));
         DataFrame out = dftu_utils_test::ok(
             dataframe::asof(left, right, "ts", {"pid"},
                             dataframe::AsofDirection::Backward, dstd::nullopt));
-        CHECK(out.names == dstd::Vector<dstd::String>{"pid", "ts", "x", "y"});
+        CHECK(dstd::to_strings(out.names) ==
+              dstd::Vector<dstd::String>{"pid", "ts", "x", "y"});
         CHECK(i64_col(out, "x") == dstd::Vector<I>{1, 2, 3});
         CHECK(i64_col(out, "y") == dstd::Vector<I>{50, 200, NI});
         DataFrame tight = dftu_utils_test::ok(dataframe::asof(
@@ -142,16 +144,17 @@ TEST_SUITE("frame ops") {
 
     TEST_CASE("interval: point in [lo, hi], outer keeps the unmatched point") {
         DataFrame left;
-        left.names = {"p"};
+        left.names = dstd::make_shared_strings({"p"});
         left.columns.push_back(i64s({5, 15, 99}));
         DataFrame right;
-        right.names = {"lo", "hi", "tag"};
+        right.names = dstd::make_shared_strings({"lo", "hi", "tag"});
         right.columns.push_back(i64s({0, 10}));
         right.columns.push_back(i64s({10, 20}));
         right.columns.push_back(i64s({1, 2}));
         DataFrame inner = dftu_utils_test::ok(
             dataframe::interval(left, right, "p", "lo", "hi", {}, false));
-        CHECK(inner.names == dstd::Vector<dstd::String>{"p", "tag"});
+        CHECK(dstd::to_strings(inner.names) ==
+              dstd::Vector<dstd::String>{"p", "tag"});
         CHECK(i64_col(inner, "p") == dstd::Vector<I>{5, 15});
         CHECK(i64_col(inner, "tag") == dstd::Vector<I>{1, 2});
         DataFrame outer = dftu_utils_test::ok(
@@ -185,7 +188,7 @@ TEST_SUITE("frame ops") {
             scan(make_events()).frame_op("dftu.frame.window", warg);
         CHECK(plan.schema().empty());
         DataFrame w = dftu_utils_test::ok(run(plan.collect(1)));
-        CHECK(w.names ==
+        CHECK(dstd::to_strings(w.names) ==
               dstd::Vector<dstd::String>{"pid", "ts", "dur", "rn", "cum"});
         CHECK(i64_col(w, "cum") == dstd::Vector<I>{1, 3, 6, 4});
 

@@ -3,7 +3,6 @@
 #define DFTRACER_UTILS_CORO_STAGE_H
 
 #include <dftracer/utils/common/error.h>
-#include <dftracer/utils/common/exception_helpers.h>
 #include <dftracer/utils/coro/adaptor.h>
 #include <dftracer/utils/coro/async_generator.h>
 #include <dftracer/utils/coro/async_semaphore.h>
@@ -21,7 +20,6 @@
 #include <chrono>
 #include <concepts>
 #include <cstddef>
-#include <exception>
 #include <functional>
 #include <type_traits>
 #include <utility>
@@ -456,15 +454,15 @@ template <class T, class F>
 CoroTask<T> recover_task(CoroTask<T> task, F handler) {
     auto settled = co_await settle(std::move(task));
     if (settled.stopped) co_await stop_here();
-    if (!settled.exception) {
+    if (!settled.error) {
         if constexpr (std::is_void_v<T>) {
             co_return;
         } else {
             co_return std::move(*settled.value);
         }
     }
-    dstd::Error error = common::error_of_exception(settled.exception);
-    settled.exception = nullptr;
+    dstd::Error error = std::move(*settled.error);
+    settled.error.reset();
     using R = std::invoke_result_t<F&, dstd::Error>;
     if constexpr (is_coro_task_v<R>) {
         co_return co_await handler(std::move(error));

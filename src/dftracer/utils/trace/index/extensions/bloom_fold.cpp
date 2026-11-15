@@ -711,7 +711,7 @@ dstd::Result<void> BloomFold::merge(trace::views::detail::Fold& slice) {
     return {};
 }
 
-coro::CoroTask<bool> BloomFold::finalize(
+coro::CoroTask<dstd::Result<bool>> BloomFold::finalize(
     const trace::views::detail::CoverageSet& covered) {
     bool wrote = false;
 

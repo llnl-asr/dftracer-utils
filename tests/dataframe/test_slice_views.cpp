@@ -332,7 +332,7 @@ TEST_SUITE("slice views") {
     TEST_CASE("frame slice, head and tail equal take for every layout") {
         DataFrame df;
         for (const Case& c : cases()) {
-            df.names.push_back(c.name);
+            df.names.push_back(dstd::SharedString{c.name});
             df.columns.push_back(c.col.share());
         }
         dstd::Vector<std::int32_t> off{0};
@@ -341,7 +341,7 @@ TEST_SUITE("slice views") {
             for (std::int64_t k = 0; k < i % 4; ++k) vals.push_back(i * 10 + k);
             off.push_back(static_cast<std::int32_t>(vals.size()));
         }
-        df.names.push_back("list");
+        df.names.push_back(dstd::SharedString{"list"});
         df.columns.push_back(Series::list(
             off, Series::flat_i64(vals.data(),
                                   static_cast<std::int64_t>(vals.size()))));
@@ -381,7 +381,7 @@ TEST_SUITE("slice views") {
     TEST_CASE("lazy filter and with_column over string layouts match eager") {
         const Rows rows = rows_for(true);
         DataFrame df;
-        df.names = {"i", "flat", "view", "dict"};
+        df.names = dstd::make_shared_strings({"i", "flat", "view", "dict"});
         df.columns.push_back(int64_of(false));
         df.columns.push_back(strings_of(rows, TypeId::String));
         df.columns.push_back(view_of(rows));

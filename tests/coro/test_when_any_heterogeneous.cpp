@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <coro/failing.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/when_any.h>
 #include <dftracer/utils/dstd/string.h>
@@ -126,7 +127,7 @@ TEST_CASE("when_any - Mixed void and non-void") {
     CHECK(type_valid.load());
 }
 
-TEST_CASE("when_any - Exception propagation") {
+TEST_CASE("when_any - Error propagation") {
     Runtime rt(4);
 
     std::atomic<bool> handled{false};
@@ -134,28 +135,22 @@ TEST_CASE("when_any - Exception propagation") {
     dftu_utils_test::ok(rt.block_on(
         coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
             auto f1 = scope.spawn_future([]() -> coro::CoroTask<int> {
-                throw std::runtime_error("boom");
-                co_return 0;
+                co_return co_await coro_test::failing_task<int>("boom");
             });
             auto f2 = scope.spawn_future([]() -> coro::CoroTask<dstd::String> {
                 co_return dstd::String("ok");
             });
 
             auto* h = &handled;
-            try {
-                auto result =
-                    co_await coro::when_any(std::move(f1), std::move(f2));
+            auto any = coro::when_any(std::move(f1), std::move(f2));
+            auto settled = co_await coro::settle_in_place(any);
+            if (settled.error) {
+                // The failing task won the race
+                h->store(dstd::String(settled.error->message()) == "boom",
+                         std::memory_order_relaxed);
+            } else if (settled.value->index == 1) {
                 // The int task may have lost the race; string won.
-                if (result.index == 1) {
-                    h->store(result.get<1>() == "ok",
-                             std::memory_order_relaxed);
-                } else {
-                    // Should not reach here without exception
-                    h->store(false, std::memory_order_relaxed);
-                }
-            } catch (const std::runtime_error& e) {
-                // Throwing task won the race
-                h->store(dstd::String(e.what()) == "boom",
+                h->store(settled.value->get<1>() == "ok",
                          std::memory_order_relaxed);
             }
 

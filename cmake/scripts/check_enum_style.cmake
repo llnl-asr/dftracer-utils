@@ -5,7 +5,8 @@
 #
 # CapitalCase: leading upper-case letter, no underscore, and not all upper-case
 # unless it is one letter plus digits (I64, S). `typedef enum` declarations are
-# C enums in headers that compile as plain C and are skipped.
+# C enums in headers that compile as plain C and are skipped, and a C ABI
+# value (DFTU_*) keeps its C spelling.
 
 if(NOT SOURCE_DIR)
   message(FATAL_ERROR "check_enum_style: pass -DSOURCE_DIR=<repo root>")
@@ -110,6 +111,9 @@ foreach(file IN LISTS SOURCES)
             if(value MATCHES "^[A-Z0-9]+$" AND NOT value MATCHES "^[A-Z][0-9]*$")
               set(ok FALSE)
             endif()
+          endif()
+          if(value MATCHES "^DFTU_[A-Z0-9_]+$")
+            set(ok TRUE)
           endif()
           if(NOT ok)
             string(APPEND HITS "${rel}:${body_line}: ${value}\n")

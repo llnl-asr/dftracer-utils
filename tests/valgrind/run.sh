@@ -438,7 +438,7 @@ run_cpp_one() {
   local -a leak_errors=(--errors-for-leak-kinds=definite,indirect)
   case "$name" in
   store/test_store_fork | runtime/test_process_runtime | \
-    pipeline/test_runtime_elasticity | runtime/test_io_op)
+    runtime/scheduler/test_runtime_elasticity | runtime/test_io_op)
     leak_errors=(--errors-for-leak-kinds=none)
     ;;
   esac

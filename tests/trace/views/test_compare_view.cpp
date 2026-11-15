@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/views/compare_view.h>
@@ -20,7 +21,7 @@ namespace {
 std::size_t col(const dataframe::DataFrame& b, const dstd::String& name) {
     for (std::size_t i = 0; i < b.names.size(); ++i)
         if (b.names[i] == name) return i;
-    throw std::runtime_error(("no column: " + name).c_str());
+    dstd::fatal("no column", name.c_str());
 }
 
 // Row index whose group-key (column 0) string equals `cat`.

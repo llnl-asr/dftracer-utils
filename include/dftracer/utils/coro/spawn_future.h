@@ -2,11 +2,12 @@
 #ifndef DFTRACER_UTILS_CORO_SPAWN_FUTURE_H
 #define DFTRACER_UTILS_CORO_SPAWN_FUTURE_H
 
-#include <dftracer/utils/common/exception_helpers.h>
 #include <dftracer/utils/coro/detail/parked.h>
 #include <dftracer/utils/coro/detail/resumption_helper.h>
 #include <dftracer/utils/coro/executor.h>
+#include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/expected.h>
+#include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/variant.h>
@@ -14,7 +15,6 @@
 #include <atomic>
 #include <coroutine>
 #include <cstdint>
-#include <exception>
 #include <type_traits>
 #include <utility>
 
@@ -50,7 +50,8 @@ struct SharedState {
     std::atomic<std::uintptr_t> flag{EMPTY};
     [[no_unique_address]] std::conditional_t<std::is_void_v<T>, dstd::Monostate,
                                              dstd::Optional<T>> result;
-    std::exception_ptr exception;
+    /// The error the spawned task ended with. Written before DONE.
+    dstd::Optional<dstd::Error> error;
     /// The spawned task stopped and gave no result. Written before DONE.
     bool stopped{false};
     /// The task that waits, so a stop of the spawn can stop it. Written before
@@ -87,9 +88,9 @@ struct SharedState {
         notify_done();
     }
 
-    /// Called by the spawned coroutine on exception.
-    void complete_with_exception(std::exception_ptr e) {
-        exception = std::move(e);
+    /// Called by the spawned coroutine when it ended with an error.
+    void complete_with_error(dstd::Error e) {
+        error.emplace(std::move(e));
         notify_done();
     }
 
@@ -112,14 +113,19 @@ struct SharedState {
             // prev is a waiting coroutine handle address.
             auto waiter = std::coroutine_handle<>::from_address(
                 reinterpret_cast<void*>(prev));
-            if (stopped) {
+            if (stopped || error) {
                 // The entry names the waiter's frame, which the stop can free
                 // while this future still lives.
                 if (waiter_park) {
                     waiter_executor->unpark(waiter_park);
                     waiter_park = nullptr;
                 }
-                detail::stop_or_continue(executor, waiter_owner, waiter);
+                if (error) {
+                    detail::fail_or_continue(executor, waiter_owner, waiter,
+                                             std::move(*error));
+                } else {
+                    detail::stop_or_continue(executor, waiter_owner, waiter);
+                }
             } else {
                 detail::post_resumption(executor, waiter);
             }
@@ -168,7 +174,7 @@ class SpawnFuture {
     // ====================================================================
 
     bool await_ready() const noexcept {
-        return state_->is_done() && !state_->stopped;
+        return state_->is_done() && !state_->stopped && !state_->error;
     }
 
     /// The awaiting task stops when the spawn stops, and when the executor
@@ -195,6 +201,10 @@ class SpawnFuture {
         }
         if (state_->waiter_park) executor_->unpark(state_->waiter_park);
         state_->waiter_park = nullptr;
+        if (state_->error) {
+            return detail::fail_task(executor_, nullptr, state_->waiter_owner,
+                                     std::move(*state_->error));
+        }
         if (state_->stopped) {
             return detail::stop_task(executor_, nullptr, state_->waiter_owner);
         }
@@ -222,8 +232,10 @@ class SpawnFuture {
         }
         if (cancelled_) detail::cancelled_unstoppable("future wait");
         if (state_->stopped) detail::cancelled_unstoppable("a stopped future");
-        if (state_->exception) {
-            common::rethrow_and_clear(state_->exception);
+        if (state_->error) {
+            dstd::fatal(
+                "coro: a failed future was awaited by a frame that "
+                "cannot fail");
         }
         if constexpr (!std::is_void_v<T>) {
             return std::move(*state_->result);

@@ -2,7 +2,7 @@
 #ifndef DFTRACER_UTILS_DATAFRAME_INTERNAL_DATAFRAME_HANDLE_H
 #define DFTRACER_UTILS_DATAFRAME_INTERNAL_DATAFRAME_HANDLE_H
 
-#include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 
 #include <cstdint>

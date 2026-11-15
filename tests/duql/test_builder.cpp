@@ -4,8 +4,8 @@
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/duql/abi.h>
 #include <dftracer/utils/duql/builder.h>
+#include <dftracer/utils/duql/c_api.h>
 #include <dftracer/utils/duql/internal/duql_handle.h>
 #include <dftracer/utils/duql/pipeline.h>
 #include <dftracer/utils/duql/query.h>
@@ -258,7 +258,8 @@ void check_same_tree(const Pipe& built, const dstd::String& text) {
     auto want = syntax::parse(text);
     REQUIRE(want.has_value());
     auto got = syntax::parse(built.raw());
-    REQUIRE_MESSAGE(got.has_value(), got.error().format());
+    REQUIRE_MESSAGE(got.has_value(),
+                    (got ? dstd::String() : got.error().format()));
     CHECK(syntax::equal(*got, *want));
     auto text_of_built = built.text();
     REQUIRE(text_of_built.has_value());

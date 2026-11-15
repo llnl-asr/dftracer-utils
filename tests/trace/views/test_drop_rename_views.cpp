@@ -94,16 +94,10 @@ View full_index(const dstd::String& gz, const dstd::String& schema) {
         .record_schema(dstd::String(schema));
 }
 
-// The query's rows, or its error: from building the view, which throws, or
-// from running it.
+// The query's rows, or its error.
 dstd::Result<dataframe::DataFrame> frame_result(const View& v,
                                                 const dstd::String& q) {
-    try {
-        return v.duql(q).collect().get();
-    } catch (const std::exception&) {
-        return dftracer::utils::common::error_of_exception(
-            std::current_exception());
-    }
+    return v.duql(q).collect().get();
 }
 
 dataframe::DataFrame frame(const View& v, const dstd::String& q) {
@@ -140,21 +134,21 @@ void same_rows(const dataframe::DataFrame& a, const dataframe::DataFrame& b) {
 
 dstd::String join_names(const dataframe::DataFrame& f) {
     dstd::String out;
-    for (const auto& n : sorted(f.names)) out += n + " ";
+    for (const auto& n : sorted(dstd::to_strings(f.names))) out += n + " ";
     return out;
 }
 
 bool has_catalog(const dstd::String& gz) {
-    try {
-        const auto snapshot = dftu_utils_test::index_snapshot(
-            dstd::String(determine_index_path(gz, "")));
-        const auto file = dftu_utils_test::find_indexed_file(snapshot, gz);
-        return file && dftracer::utils::trace::index::extension_current(
-                           snapshot, *file,
-                           trace::index::store::IndexExtension::Catalog);
-    } catch (...) {
-        return false;
-    }
+    auto index = dftracer::utils::trace::index::Index::open(
+        dftracer::utils::trace::index::normalize_index_root(
+            dstd::String(determine_index_path(gz, ""))));
+    if (!index) return false;
+    auto snapshot = index->snapshot();
+    if (!snapshot) return false;
+    const auto file = dftu_utils_test::find_indexed_file(*snapshot, gz);
+    return file &&
+           dftracer::utils::trace::index::extension_current(
+               *snapshot, *file, trace::index::store::IndexExtension::Catalog);
 }
 
 // A trace whose index holds no catalog: a full scan writes one, so each
@@ -201,7 +195,8 @@ void same_as_full(Gen gen, const dstd::String& schema, const dstd::String& q) {
     const auto got = frame(p.view, q);
     INFO(q);
     INFO("got " << join_names(got) << " want " << join_names(want));
-    REQUIRE(sorted(got.names) == sorted(want.names));
+    REQUIRE(sorted(dstd::to_strings(got.names)) ==
+            sorted(dstd::to_strings(want.names)));
     same_rows(got, want);
 }
 
@@ -246,13 +241,15 @@ TEST_SUITE("DropRenameViews") {
         const auto all = frame(q, base);
         REQUIRE(has(all, "v.p50"));
         REQUIRE(has(all, "count"));
-        CHECK(sorted(all.names) == sorted(frame(f, base).names));
+        CHECK(sorted(dstd::to_strings(all.names)) ==
+              sorted(dstd::to_strings(frame(f, base).names)));
 
         const auto dropped = frame(q, base + " | drop v.p50");
         CHECK_FALSE(has(dropped, "v.p50"));
         CHECK(dropped.names.size() == all.names.size() - 1);
         const auto dropped_full = frame(f, base + " | drop v.p50");
-        REQUIRE(sorted(dropped.names) == sorted(dropped_full.names));
+        REQUIRE(sorted(dstd::to_strings(dropped.names)) ==
+                sorted(dstd::to_strings(dropped_full.names)));
         same_rows(dropped, dropped_full);
 
         const dstd::String rename = base + " | rename cnt = count, p = v.p99";
@@ -263,7 +260,8 @@ TEST_SUITE("DropRenameViews") {
         CHECK(has(renamed, "p"));
         CHECK(renamed.names.size() == all.names.size());
         const auto renamed_full = frame(f, rename);
-        REQUIRE(sorted(renamed.names) == sorted(renamed_full.names));
+        REQUIRE(sorted(dstd::to_strings(renamed.names)) ==
+                sorted(dstd::to_strings(renamed_full.names)));
         same_rows(renamed, renamed_full);
     }
 
@@ -350,7 +348,8 @@ TEST_SUITE("DropRenameViews") {
         const Fresh p = fresh(genesis_trace, "genesis");
         const auto got =
             dftu_utils_test::ok(p.view.lazy().fill_null(0).collect().get());
-        REQUIRE(sorted(got.names) == sorted(want.names));
+        REQUIRE(sorted(dstd::to_strings(got.names)) ==
+                sorted(dstd::to_strings(want.names)));
         CHECK(has(got, "v.p50"));
         same_rows(got, want);
     }

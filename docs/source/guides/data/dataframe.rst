@@ -75,7 +75,7 @@ In C++, build a frame from ``Series`` you already hold:
    DataFrame df{{"cat", "dur"}, {std::move(cat_series), std::move(dur_series)}};
 
 There is also a flat C ABI (``dftu_dataframe_*`` in
-``dftracer/utils/dataframe/abi.h``) for building and operating on frames from a
+``dftracer/utils/dataframe/c_api.h``) for building and operating on frames from a
 foreign language or a plugin; see :doc:`../../cpp_api/dataframe`.
 
 Project columns

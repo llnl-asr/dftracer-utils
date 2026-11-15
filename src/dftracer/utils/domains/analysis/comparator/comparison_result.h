@@ -6,13 +6,10 @@
 #include <dftracer/utils/dataframe/field_stat.h>
 #include <dftracer/utils/dstd/hash/splitmix64.h>
 #include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/trace/index/schemas/dft/agg/agg_partial.h>
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
-#include <dftracer/utils/dstd/string.h>
-#include <dftracer/utils/trace/arrow/arrow_export.h>
-#endif
 
 #include <cmath>
 #include <cstdint>
@@ -22,8 +19,7 @@ namespace dftracer::utils::domains::analysis::comparator {
 using dftracer::utils::trace::index::schemas::dft::agg::AggPartial;
 using dftracer::utils::trace::index::schemas::dft::agg::QuantileStore;
 
-/// Metric-name classification, shared by the Arrow exporter and the tree
-/// formatter so the atomic-name set cannot drift between them. Atomic names are
+/// Metric-name classification used by the tree formatter. Atomic names are
 /// standalone metrics (e.g. "count"); others split into group + leaf, e.g.
 /// "dur_mean" -> group "dur", leaf "mean".
 bool is_atomic_metric(const dstd::String& name);
@@ -116,17 +112,6 @@ struct ComparisonOutput {
     TraceMetadata variant_meta;
     dstd::Vector<NodeResult> nodes;
     double execution_time_ms = 0.0;
-
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
-    /// Flatten the tree into a single Arrow record batch.
-    ///
-    /// Columns: node_path, metric_group, metric_name, baseline,
-    /// variant, baseline_stdev, variant_stdev, delta, pct_change,
-    /// cohens_d, significance, is_regression.
-    /// Rows with all-zero values are skipped. Gives the error of the Arrow
-    /// export when it cannot build the batch.
-    dstd::Result<trace::arrow::ArrowExportResult> to_arrow() const;
-#endif
 };
 
 /// Per-(category, operation) collapsed metrics aggregated across

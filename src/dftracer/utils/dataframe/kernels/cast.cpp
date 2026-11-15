@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/str_format.h>
-#include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/decimal.h>
 #include <dftracer/utils/dataframe/internal/float16.h>

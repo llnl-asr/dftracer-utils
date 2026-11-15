@@ -108,9 +108,10 @@ dstd::Result<DataFrame> group_agg_expr(
         cs.op = sp.op;
         cs.out = sp.out;
         cs.param = sp.param;
+        cs.fn = sp.fn;
         if (sp.op == AggOp::Count || !sp.value.valid()) {
             cs.value_col = -1;
-        } else if (agg_uses_raw_value(sp.op)) {
+        } else if (agg_uses_raw_value(sp.op) || sp.op == AggOp::Udaf) {
             const std::int32_t ci = expr_col_index(sp.value);
             if (ci < 0)
                 return common::make_error(
@@ -122,6 +123,18 @@ dstd::Result<DataFrame> group_agg_expr(
         } else {
             cs.value_col = dedup(sp.value);
         }
+        if (sp.op == AggOp::Udaf)
+            for (const Expr& arg : sp.args) {
+                const std::int32_t ci = expr_col_index(arg);
+                if (ci < 0)
+                    return common::make_error(
+                        common::ErrorCode::InvalidArgument,
+                        "group_agg_expr: a udaf argument must be a bare "
+                        "column reference");
+                raw_cols.push_back(ci);
+                cs.args.push_back(
+                    static_cast<std::int32_t>(raw_cols.size() - 1));
+            }
         // The agg_uses_by_col() ops read a second column via by_col; leaving
         // it -1 would index values[SIZE_MAX] at accumulate.
         if (agg_uses_by_col(sp.op)) {
@@ -159,8 +172,12 @@ dstd::Result<DataFrame> group_agg_expr(
     // raw_col indices are 0-based within raw_cols; offset them past the
     // value_cols outputs once both column counts are known.
     const std::int32_t raw_base = static_cast<std::int32_t>(value_cols.size());
-    for (AggSpec& cs : col_specs)
-        if (agg_uses_raw_value(cs.op)) cs.value_col += raw_base;
+    for (AggSpec& cs : col_specs) {
+        if (agg_uses_raw_value(cs.op) ||
+            (cs.op == AggOp::Udaf && cs.value_col >= 0))
+            cs.value_col += raw_base;
+        for (std::int32_t& a : cs.args) a += raw_base;
+    }
 
     dstd::Vector<const Series*> values;
     values.reserve(value_cols.size() + raw_cols.size());
@@ -211,8 +228,6 @@ dftu_agg_spec make_spec(int32_t op, const dftu_expr* value, const char* out,
     return {op, value, out, param, by};
 }
 }  // namespace
-
-extern "C" {
 
 dftu_agg_spec dftu_agg_count(const char* out) {
     return make_spec(DFTU_AGG_COUNT, nullptr, out);
@@ -306,5 +321,4 @@ int32_t dftu_dataframe_group_agg_expr(const dftu_expr* key,
     for (dataframe::Series& c : owned)
         c.release();  // borrowed inputs, do not free
     return written;
-}
 }

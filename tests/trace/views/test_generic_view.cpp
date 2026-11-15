@@ -98,7 +98,8 @@ TEST_SUITE("GenericView") {
         const auto gz = write_ndjson(env, "s");
         auto sel =
             run(view_of(gz).select({"op", "lat", "io.off"}).lazy().collect());
-        CHECK(sel.names == dstd::Vector<dstd::String>{"op", "lat", "io.off"});
+        CHECK(dstd::to_strings(sel.names) ==
+              dstd::Vector<dstd::String>{"op", "lat", "io.off"});
         CHECK(sel.num_rows() == RECORDS);
 
         auto top = run(view_of(gz).topk("lat", 3).lazy().collect());

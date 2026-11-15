@@ -11,6 +11,7 @@
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
@@ -85,10 +86,10 @@ using MorselResult = dstd::Result<dstd::Optional<Morsel>>;
 /// nullopt at end, or the error that ended the read; `max_rows` is a size
 /// hint. The engine pulls it async (co_await), so a producer can suspend on
 /// real I/O inside next() instead of blocking a worker thread. A cursor that
-/// a source hands out may still throw from next(), narrow() or reclaim(): the
-/// engine awaits those through @ref coro::settle and turns an exception into
-/// an error result (a failed narrow() or reclaim() counts as nothing done).
-/// try_next(), out_names() and resident_bytes() must not throw.
+/// a source hands out may still end next(), narrow() or reclaim() with an
+/// error (@ref coro::fail_with): the engine awaits those through
+/// @ref coro::settle and turns the error into an error result (a failed
+/// narrow() or reclaim() counts as nothing done).
 class Cursor {
    public:
     virtual ~Cursor();
@@ -138,20 +139,6 @@ struct Schema {
     dstd::Vector<Field> fields;
 };
 
-/// How completely a source applied a pushed-down filter, per @ref ScanRequest
-/// filter. Guides whether the engine must re-apply it over the survivors.
-/// Mirrors dftu_pushed (dataframe/abi.h).
-enum class Pushed {
-    No = DFTU_PUSHED_NO,      ///< Not applied by the source; engine applies it.
-    Inexact =
-        DFTU_PUSHED_INEXACT,  ///< Pruned I/O but did not filter; re-apply.
-    Exact =
-        DFTU_PUSHED_EXACT,    ///< Fully applied by the source; engine drops it.
-};
-static_assert(static_cast<int>(Pushed::No) == DFTU_PUSHED_NO);
-static_assert(static_cast<int>(Pushed::Inexact) == DFTU_PUSHED_INEXACT);
-static_assert(static_cast<int>(Pushed::Exact) == DFTU_PUSHED_EXACT);
-
 /// A pushdown request the optimizer hands a Source at scan time.
 struct ScanRequest {
     /// Columns the plan needs, in the order the scan must return them. Empty
@@ -178,7 +165,6 @@ struct ScanResult {
 class Source;
 
 /// How a source took an op offered by a planning hook (Source::apply_*).
-/// Mirrors dftu_apply_status (dataframe/abi.h).
 enum class ApplyStatus {
     Exact,    ///< Fully applied; the planner removes the op.
     Inexact,  ///< Rows narrowed only; the planner keeps the op above.
@@ -255,8 +241,7 @@ class Source {
     /// Open a Cursor honoring `req`. When req.projection is non-empty the
     /// cursor's morsels carry exactly those columns in that order; the returned
     /// ScanResult.filters reports, per req.filter, how completely it was
-    /// applied. A scan that cannot open returns the error; it must not throw,
-    /// so a source built with exceptions catches at its own edge.
+    /// applied. A scan that cannot open returns the error.
     virtual dstd::Result<ScanResult> scan(const ScanRequest& req) const = 0;
     /// The resident frame when this source is already in memory, else nullptr
     /// (rows produced only by streaming). collect() runs a resident source
@@ -321,8 +306,8 @@ class Source {
     /// would return. Called on members.front(); every member shares its
     /// batch_key(). The default is fatal: a source that returns a batch_key()
     /// must override it. An error result fails the collect. An override may
-    /// also throw, as next() of a cursor may: the engine awaits it through
-    /// @ref coro::settle and turns an exception into an error result.
+    /// also end with an error, as next() of a cursor may: the engine awaits it
+    /// through @ref coro::settle and turns the error into an error result.
     virtual coro::CoroTask<dstd::Result<dstd::Vector<DataFrame>>> collect_batch(
         dstd::Vector<dstd::SharedPtr<const Source>> members) const;
     /// One cursor per member, in order, over one shared read that runs in the
@@ -367,6 +352,12 @@ class InMemorySource : public Source {
     dstd::SharedPtr<const DataFrame> frame_;
 };
 
+/// What one sink output took: the rows written and the frames they arrived in.
+struct SinkSummary {
+    std::int64_t rows = 0;
+    std::int64_t batches = 0;
+};
+
 /// A deferred query over a Source. Builder methods record ops and return a new
 /// @ref LazyFrame; nothing runs until collect(). A filter/with_column expr's
 /// col(i) refers to the i-th column of the frame at that point.
@@ -379,6 +370,15 @@ struct PlanAccess;
 class LazyFrame {
    public:
     static LazyFrame scan(dstd::SharedPtr<const Source> source);
+
+    /// A plan over the file at `path`, opened by the registered file-format
+    /// factory with the highest probe score for it (a plugin's
+    /// dftu_file_format_vt). A file no format claims is a NotFound error kept
+    /// as @ref status(), and so is a tie between two formats (an
+    /// InvalidArgument one, naming both), as is the error the winning
+    /// format's open reported. The plan holds the open file, so a later
+    /// unregistration does not affect it.
+    static LazyFrame scan_file(dstd::StringView path);
 
     LazyFrame select(dstd::Vector<dstd::String> names) const;
     LazyFrame filter(Expr predicate) const;
@@ -619,13 +619,11 @@ class LazyFrame {
     /// default); sugar for readers who want spilling stated at the call site.
     LazyFrame auto_spill() const;
 
-    /// Append a step running the plan node registered under `name`
-    /// (dftu_node_register) as the next stage in the pull chain
-    /// lower_cursor_chain builds - a step the engine executes when this plan
-    /// is driven, not eagerly here. Resolves and captures the node's vt/self
-    /// now, so a later dftu_node_unregister of the same name is the same
-    /// dangling-registration hazard dftu_provider_unregister documents for a
-    /// captured provider, not a lookup that could fail at drive time.
+    /// Append a step running the plan node registered under `name` as the next
+    /// stage in the pull chain lower_cursor_chain builds - a step the engine
+    /// executes when this plan is driven, not eagerly here. Resolves the node
+    /// now and keeps it alive with the plan, so a later unregister of the same
+    /// name does not reach a plan that already holds it.
     /// An InvalidArgument error, kept as @ref status(), if no node is
     /// registered under `name`. The node is an optimization barrier: no filter
     /// or projection is ever pushed through it, and the engine never reorders
@@ -653,6 +651,11 @@ class LazyFrame {
     /// determine statically is TypeId::Unknown, never a guess.
     Schema output_schema() const;
 
+    /// Whether the query can return columns beyond @ref output_schema: its
+    /// source, or the source of a joined or concatenated plan, has columns
+    /// that its schema does not declare.
+    bool has_undeclared_columns() const;
+
     /// The optimized plan as text (source then one op per line), for
     /// introspection and tests.
     dstd::String explain() const;
@@ -678,8 +681,24 @@ class LazyFrame {
     /// the first one a builder kept (@ref status()) or the one that ended the
     /// run: a column the data lacks, a type a kernel refuses, a spill file
     /// that cannot be written or read, a failed plugin node, or a cursor that
-    /// threw (as an error of the exception's message).
+    /// ended with an error.
     coro::CoroTask<dstd::Result<DataFrame>> collect(
+        std::int64_t batch_size = 0) const;
+
+    /// Write this plan's rows to the sink registered as `name` instead of
+    /// returning them, and report what it wrote. Binds the sink with the
+    /// columns of @ref output_schema (an Unknown type is passed through as
+    /// such), writes every frame @ref stream yields, then finalizes the output.
+    /// `options` are the sink's own name/value pairs, in the order given.
+    /// `batch_size` is the scan chunk size, as for @ref collect.
+    ///
+    /// Any error - an unknown sink name, a failed bind, a failed read, a
+    /// failed write - aborts the output exactly once and comes back as this
+    /// result; so does the end of a cancelled task, because the output is
+    /// released on every path that does not reach finalize.
+    coro::CoroTask<dstd::Result<SinkSummary>> sink(
+        dstd::StringView name,
+        dstd::Vector<dstd::Pair<dstd::String, dstd::String>> options = {},
         std::int64_t batch_size = 0) const;
 
     /// Group `keys` with `aggs` and return the mergeable partial instead of a

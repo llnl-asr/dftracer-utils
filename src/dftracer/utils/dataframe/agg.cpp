@@ -106,6 +106,7 @@ std::size_t agg_approx_bytes(const AggState& st) {
             for (const auto& [v, c] : m)
                 total += v.size() + sizeof(std::uint64_t) + 48;
     if (st.has_co) total += st.co.size() * sizeof(CoStat);
+    if (st.has_udaf) total += st.udaf_bytes();
     if (st.has_set)
         for (const AggState::StringSet& gset : st.sets)
             for (const dstd::String& v : gset) total += v.size() + 32;
@@ -236,6 +237,8 @@ DataType agg_output_type(AggOp op, TypeId value_type, double param) {
         case AggOp::Prod:
         case AggOp::SketchQuantile:
             return scalar(TypeId::Float64);
+        case AggOp::Udaf:
+            return scalar(TypeId::Unknown);
         case AggOp::SetUnion:
             if (param != 0.0)
                 return list_of(set_union_element_type(value_type));

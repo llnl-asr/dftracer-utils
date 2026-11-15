@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <cstdio>
 
+using namespace dftracer::utils;
 using namespace dftracer::utils::plugins;
 
 struct DurationHistogram {
@@ -42,7 +43,9 @@ struct DurationHistogram {
     }
 };
 
-extern "C" DFTU_PLUGIN_EXPORT dftu_plugin* dftracer_plugin(
-    dftu_plugin_host* h, const dftu_value* config) {
-    return plugin(h, config).fold<DurationHistogram>().build();
-}
+DFTU_PLUGIN("duration_histogram", "1.0",
+            [](PluginBuilder& p, const Config& config) -> dstd::Result<void> {
+                (void)config;
+                p.fold<DurationHistogram>();
+                return {};
+            })

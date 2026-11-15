@@ -42,9 +42,12 @@ static variant (``src/CMakeLists.txt``), aggregated behind
 - ``dftracer_utils_trace`` is the trace layer: the index (build, plan, cache,
   schemas), the views and folds, the trace reader and the Arrow interchange.
   It links every library above it and never includes ``dftracer_utils_domains``.
+- ``dftracer_utils_plugins`` is the plugin host: the loader, the fold adapter,
+  the host services, the providers and the host ops. It links every library
+  above it and never includes ``dftracer_utils_domains``.
 - ``dftracer_utils_domains`` depends on the libraries above and holds the
   work done with traces: analysis (comparator, statistics, provenance),
-  workload (genesis, DLIO, replay, fake traces), the server and the plugin host.
+  workload (genesis, DLIO, replay, fake traces) and the server.
 
 Each library keeps its sources in one folder of the same name under
 ``src/dftracer/utils/``, and the namespace follows the folder: the comparator
@@ -70,6 +73,7 @@ active.
        Query["dftracer_utils_duql<br/>predicate IR, evaluator"]
        DF["dftracer_utils_dataframe<br/>Series/DataFrame, SIMD kernels"]
        Trace["dftracer_utils_trace<br/>index, views, trace reader"]
+       Plugins["dftracer_utils_plugins<br/>plugin host"]
        Util["dftracer_utils_domains<br/>analysis, workload, server"]
        Store --> Runtime
        Io --> Runtime
@@ -86,6 +90,8 @@ active.
        Trace --> Yaml
        Trace --> Query
        Trace --> DF
+       Plugins --> Trace
+       Util --> Plugins
        Util --> Trace
        Util --> Yaml
 
@@ -98,7 +104,7 @@ then ``build``, ``plan`` for pruning and ``cache`` for rollups; a CTest check
 keeps each layer from including a higher one), comparison under
 ``domains/analysis/comparator``, the columnar engine under
 ``dataframe/``, the duql filter language under ``duql/``, and the plugin C ABI under
-``plugins/`` in ``include/`` and the plugin host under ``domains/plugins/``. See :doc:`fused-scan`, :doc:`indexing-and-pushdown`, and
+``plugins/`` in ``include/`` and the plugin host under ``plugins/host/``. See :doc:`fused-scan`, :doc:`indexing-and-pushdown`, and
 :doc:`dataframe-model` for each of those in turn.
 
 From trace file to result

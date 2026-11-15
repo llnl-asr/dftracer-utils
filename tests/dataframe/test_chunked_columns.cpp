@@ -297,7 +297,8 @@ TEST_SUITE("chunked columns") {
         DataFrame df;
         for (Kind kind :
              {Kind::Int64, Kind::Float64, Kind::Bool, Kind::StringFlat}) {
-            df.names.push_back(dstd::fmt<"c{}">(static_cast<int>(kind)));
+            df.names.push_back(
+                dstd::SharedString{dstd::fmt<"c{}">(static_cast<int>(kind))});
             df.columns.push_back(piece_of(kind, 0, N, true, 0));
         }
         DataFrame got = run(df.lazy().collect(6));
@@ -312,7 +313,7 @@ TEST_SUITE("chunked columns") {
 
     TEST_CASE("a collect of parts whose column types differ") {
         DataFrame a, b, c;
-        a.names = b.names = c.names = {"v", "s"};
+        a.names = b.names = c.names = dstd::make_shared_strings({"v", "s"});
         a.columns.push_back(piece_of(Kind::Int64, 0, 10, false, 0));
         b.columns.push_back(piece_of(Kind::Float64, 0, 10, false, 0));
         c.columns.push_back(piece_of(Kind::Int64, 10, 20, true, 0));
@@ -549,7 +550,8 @@ TEST_SUITE("chunked columns") {
                 Pair reals = build(Kind::Float64, nulls);
                 Pair text = build(Kind::StringMixed, nulls);
                 DataFrame chunked, joined;
-                chunked.names = joined.names = {"key", "i", "f", "s"};
+                chunked.names = joined.names =
+                    dstd::make_shared_strings({"key", "i", "f", "s"});
                 for (Pair* col : {&key, &ints, &reals, &text}) {
                     chunked.columns.push_back(col->chunked.share());
                     joined.columns.push_back(col->joined.share());

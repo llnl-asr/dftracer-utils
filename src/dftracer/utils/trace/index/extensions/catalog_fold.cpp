@@ -73,7 +73,7 @@ dstd::HashMap<dstd::String, trace::index::store::PathStat> CatalogFold::paths()
     return out;
 }
 
-coro::CoroTask<bool> CatalogFold::finalize(
+coro::CoroTask<dstd::Result<bool>> CatalogFold::finalize(
     const trace::views::detail::CoverageSet& covered) {
     using trace::index::store::IndexExtension;
     bool wrote = false;

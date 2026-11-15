@@ -1,0 +1,11 @@
+# The query below runs over the sample trace next to this file, with the
+# @NAME@ plugin loaded. `dftracer_plugin check --tests tests` runs it, and the
+# doubled column is what fails when the plugin breaks.
+input ../data/sample.pfw.gz
+query
+select name, @NAME@.doubled(dur) as doubled
+----
+name	doubled
+open	200
+read	300
+close	160

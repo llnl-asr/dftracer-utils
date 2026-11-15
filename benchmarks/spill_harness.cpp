@@ -47,11 +47,12 @@
 
 #include <bench_ok.h>
 #include <dftracer/utils/common/error.h>
-#include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/op.h>
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/hash/splitmix64.h>
@@ -79,7 +80,6 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
-#include <stdexcept>
 
 using namespace dftracer::utils;
 
@@ -114,7 +114,9 @@ constexpr std::int64_t HEAD_BY_N = 2;
 constexpr std::uint64_t ROW_BYTES = 5 * 8 + 13 + 8;
 
 void check(bool ok, const char* what) {
-    if (!ok) throw std::runtime_error(what);
+    if (ok) return;
+    std::fprintf(stderr, "check failed: %s\n", what);
+    std::exit(1);
 }
 
 // splitmix64 finalizer, Sebastiano Vigna, public domain
@@ -154,7 +156,7 @@ dataframe::DataType type_of(Gen gen) {
                                        dftracer::utils::dstd::String>{""})
                 .data_type();
     }
-    throw std::logic_error("unknown generator");
+    dftracer::utils::dstd::fatal("spill_harness: unknown generator");
 }
 
 Series generate(const Column& c, std::size_t salt, std::uint64_t seed,
@@ -538,27 +540,22 @@ int run_one(dftracer::utils::dstd::StringView name, std::uint64_t budget) {
     }
     auto& runtime = dftracer::utils::default_runtime();
     Inputs in{rows_for(data_bytes(budget)), budget};
-    try {
-        LazyFrame plan = c->plan(in);
-        const std::uint64_t base = current_rss();
-        const std::uint64_t written = bytes_written();
-        auto start = Clock::now();
-        const std::int64_t out =
-            dftu::bench::ok(runtime.submit(drain(std::move(plan))).get());
-        auto end = Clock::now();
-        const std::uint64_t spilled = bytes_written() - written;
-        const std::uint64_t peak = peak_rss();
-        check(c->rows_ok(out, in), "unexpected output row count");
-        std::printf(
-            "RESULT rows=%" PRId64 " out=%" PRId64 " base=%" PRIu64
-            " peak=%" PRIu64 " spilled=%" PRIu64 " ns=%.0f headroom=%zu\n",
-            in.rows, out, base, peak, spilled,
-            std::chrono::duration<double, std::nano>(end - start).count(),
-            dftracer::utils::memory::detail::Manager::get().spill_headroom());
-    } catch (const std::exception& e) {
-        std::fprintf(stderr, "%s: %s\n", c->name.c_str(), e.what());
-        return 1;
-    }
+    LazyFrame plan = c->plan(in);
+    const std::uint64_t base = current_rss();
+    const std::uint64_t written = bytes_written();
+    auto start = Clock::now();
+    const std::int64_t out =
+        dftu::bench::ok(runtime.submit(drain(std::move(plan))).get());
+    auto end = Clock::now();
+    const std::uint64_t spilled = bytes_written() - written;
+    const std::uint64_t peak = peak_rss();
+    check(c->rows_ok(out, in), "unexpected output row count");
+    std::printf(
+        "RESULT rows=%" PRId64 " out=%" PRId64 " base=%" PRIu64 " peak=%" PRIu64
+        " spilled=%" PRIu64 " ns=%.0f headroom=%zu\n",
+        in.rows, out, base, peak, spilled,
+        std::chrono::duration<double, std::nano>(end - start).count(),
+        dftracer::utils::memory::detail::Manager::get().spill_headroom());
     return 0;
 }
 
@@ -682,14 +679,9 @@ int smoke() {
     Inputs in{rows_for(SMOKE_DATA), SMOKE_BUDGET};
     int failures = 0;
     for (const Case& c : make_cases()) {
-        bool ok = false;
-        std::int64_t out = -1;
-        try {
-            out = dftu::bench::ok(runtime.submit(drain(c.plan(in))).get());
-            ok = c.rows_ok(out, in);
-        } catch (const std::exception& e) {
-            std::fprintf(stderr, "%s: %s\n", c.name.c_str(), e.what());
-        }
+        const std::int64_t out =
+            dftu::bench::ok(runtime.submit(drain(c.plan(in))).get());
+        const bool ok = c.rows_ok(out, in);
         std::printf("smoke %-14s rows=%" PRId64 " out=%" PRId64 " %s\n",
                     c.name.c_str(), in.rows, out, ok ? "ok" : "FAILED");
         if (!ok) ++failures;

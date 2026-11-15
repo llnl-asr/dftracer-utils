@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/error.h>
-#include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
+#include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/op.h>
 #include <dftracer/utils/dataframe/query/group_fold.h>
 #include <dftracer/utils/dataframe/query/vectorize.h>
+#include <dftracer/utils/dataframe/udaf_registry.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
@@ -39,6 +40,7 @@ dstd::Optional<dataframe::TypeId> Applier::agg_type(
             return dataframe::TypeId::String;
         case duql::AggFn::Collect:
         case duql::AggFn::Plugin:
+        case duql::AggFn::Udaf:
             return dstd::nullopt;
         case duql::AggFn::Sum:
             if (!in) return dstd::nullopt;
@@ -124,11 +126,16 @@ dstd::Result<dstd::String> Applier::trace_refusal(
             duql::for_each_term_field(*k.term, [&](const duql::TField& f) {
                 if (!has_column_for(dstd::String(f.base))) missing = f.base;
             });
-        for (const auto& a : g.aggs)
+        for (const auto& a : g.aggs) {
             if (a.arg)
                 duql::for_each_term_field(*a.arg, [&](const duql::TField& f) {
                     if (!has_column_for(dstd::String(f.base))) missing = f.base;
                 });
+            for (const auto& r : a.rest)
+                duql::for_each_term_field(*r, [&](const duql::TField& f) {
+                    if (!has_column_for(dstd::String(f.base))) missing = f.base;
+                });
+        }
         if (!missing.empty())
             return refuse<"has no column '{}'; the columns here are {}">(
                 missing, joined(names()));
@@ -412,6 +419,20 @@ dstd::Result<dstd::Vector<double>> Applier::plugin_params(
     return out;
 }
 
+dstd::Result<dataframe::DataType> Applier::udaf_type(
+    const dataframe::GroupAgg& spec) {
+    auto udaf = dataframe::find_udaf(spec.fn);
+    if (!udaf) return refuse<"udaf '{}' is not registered">(spec.fn);
+    dstd::Vector<dataframe::DataType> types;
+    if (!spec.column.empty()) types.push_back(type_of(spec.column));
+    for (const auto& arg : spec.args) types.push_back(type_of(arg));
+    auto bound = dataframe::bind_udaf(
+        std::move(udaf),
+        dstd::Span<const dataframe::DataType>(types.data(), types.size()), {});
+    if (!bound) return bound.error();
+    return bound->result_type();
+}
+
 dataframe::DataType Applier::plugin_type(const dstd::String& name) {
     switch (DFTU_OP_SIG_RET(dftu_op_find(name.c_str())->sig)) {
         case DFTU_TOK_I64:
@@ -568,6 +589,13 @@ Status Applier::frame_group(
             if (!column) return column.error();
             in = std::move(*column);
         }
+        dstd::Vector<dstd::String> udaf_args;
+        for (std::size_t k = 0; k < a.rest.size(); ++k) {
+            auto column = source({"", a.rest[k], duql::term_text(*a.rest[k])},
+                                 dstd::fmt<"__duql_in_{}_{}">(i, k + 1));
+            if (!column) return column.error();
+            udaf_args.push_back(std::move(*column));
+        }
         dataframe::GroupAgg spec{dataframe::Agg::Count, std_str(in),
                                  std_str(out)};
         switch (a.fn) {
@@ -644,6 +672,15 @@ Status Applier::frame_group(
             case duql::AggFn::Merge:
                 fold[i].op = dataframe::query::FoldOp::Merge;
                 break;
+            case duql::AggFn::Udaf: {
+                spec.op = dataframe::Agg::Udaf;
+                spec.fn = a.plugin;
+                spec.args = std::move(udaf_args);
+                auto type = udaf_type(spec);
+                if (!type) return type.error();
+                fold[i].type = std::move(*type);
+                break;
+            }
             case duql::AggFn::Plugin:
                 fold[i].op = dataframe::query::FoldOp::Plugin;
                 fold[i].plugin = a.plugin;
@@ -657,6 +694,7 @@ Status Applier::frame_group(
         folded = folded || fold[i].op != dataframe::query::FoldOp::Engine;
         fold[i].engine = dataframe::to_agg_op(spec.op);
         fold[i].param = spec.param;
+        fold[i].fn = spec.fn;
         specs.push_back(std::move(spec));
     }
     if (!folded) {
@@ -683,6 +721,7 @@ void Applier::fold_group(const dstd::Vector<dstd::String>& keys,
     for (std::size_t i = 0; i < fold.size(); ++i) {
         if (!specs[i].column.empty()) fold[i].in = at(specs[i].column);
         if (!by[i].empty()) fold[i].by = at(by[i]);
+        for (const auto& arg : specs[i].args) fold[i].args.push_back(at(arg));
     }
     dataframe::Schema schema;
     dstd::Vector<dataframe::DataType> key_types;
@@ -699,7 +738,8 @@ void Applier::fold_group(const dstd::Vector<dstd::String>& keys,
                      : type_of(read[static_cast<std::size_t>(f.in)]);
         switch (f.op) {
             case dataframe::query::FoldOp::Engine:
-                f.type = dataframe::agg_output_type(f.engine, t.id);
+                if (f.engine != dataframe::AggOp::Udaf)
+                    f.type = dataframe::agg_output_type(f.engine, t.id);
                 break;
             case dataframe::query::FoldOp::CountDistinct:
                 f.type = dataframe::scalar(dataframe::TypeId::Int64);
@@ -1006,7 +1046,7 @@ void Applier::finish_fill(const duql::PipelineGroup& g,
             if (!*added) return f;
             if (spec.mode == duql::syntax::FillMode::Zero) return out;
             fill_carry(spec, f, out);
-            return out.select(f.names);
+            return out.select(dstd::to_strings(f.names));
         },
         dstd::fmt<"fill buckets {}{}{}{}">(
             number_text(width),

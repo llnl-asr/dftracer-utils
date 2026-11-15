@@ -283,7 +283,7 @@ void project_columns(dftracer::utils::dataframe::DataFrame& batch,
                      const dstd::Vector<dstd::String>& select) {
     if (select.empty()) return;
     const dstd::HashSet<dstd::String> keep(select.begin(), select.end());
-    dstd::Vector<dstd::String> names;
+    dstd::Vector<dstd::SharedString> names;
     dstd::Vector<dftracer::utils::dataframe::Series> columns;
     for (std::size_t i = 0; i < batch.names.size(); ++i) {
         if (keep.count(dstd::StringView(batch.names[i]))) {

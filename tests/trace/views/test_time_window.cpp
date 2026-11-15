@@ -406,7 +406,7 @@ TEST_SUITE("TimeWindow") {
         CHECK(bnum(df, 0, "b") == 400);
         int seen = 0;
         for (std::size_t c = 0; c < df.names.size(); ++c)
-            if (df.names[c].find("bytes") != dstd::String::npos) {
+            if (df.names[c].view().find("bytes") != dstd::StringView::npos) {
                 CAPTURE(df.names[c]);
                 CHECK(bnum(df, 0, df.names[c]) == 1);
                 ++seen;

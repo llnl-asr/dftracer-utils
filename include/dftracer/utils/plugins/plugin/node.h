@@ -2,15 +2,18 @@
 #ifndef DFTRACER_UTILS_PLUGINS_PLUGIN_NODE_H
 #define DFTRACER_UTILS_PLUGINS_PLUGIN_NODE_H
 
-#include <dftracer/utils/coro/abi.h>
-#include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dataframe/c_api.h>
+#include <dftracer/utils/dataframe/plugin_error.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/plugins/abi/task.h>
 #include <dftracer/utils/plugins/plugin/source.h>
+#include <dftracer/utils/plugins/plugin/types.h>
 
+#include <cstddef>
 #include <cstdint>
-#include <stdexcept>
+#include <string>
 #include <utility>
 
 /* A LazyFrame plan node written as a C++ class. node_vtable<N>() adapts N to
@@ -19,52 +22,103 @@
  *
  * N provides:
  *   void output_schema(const SchemaView& in, const OpArgs& args,
- *                      SchemaBuilder& out) const;
- *   dstd::UniquePtr<C> open(InputCursor in, const OpArgs& args,
- *                           std::uint64_t memory_budget) const;
+ *                      SchemaBuilder& out) const;   // or dstd::Result<void>
+ *   dstd::Result<dstd::UniquePtr<C>> open(InputCursor in, const OpArgs& args,
+ *                                         std::uint64_t memory_budget,
+ *                                         const Host& host) const;
  * where C is a cursor type as in plugin/source.h (next, and optionally
- * narrow / resident_bytes / reclaim). The cursor owns `in` and pulls it with
- * in.next(). `memory_budget` is the plan's budget in bytes, never 0. A throwing
- * or empty open() leaves the upstream cursor with the host, as
- * dftu_node_vt::open requires; a throwing next() surfaces as a scan error. */
+ * narrow). The cursor owns `in` and pulls it with in.next(). `memory_budget` is
+ * the plan's budget in bytes, never 0. `host` is the cursor's host, as in
+ * plugin/source.h: reserve memory through host.memory() in open(). A failed or
+ * empty open() leaves the upstream cursor with the host, as dftu_node_vt::open
+ * requires; a failed next() fails the scan with its error's status and
+ * message. */
 
 namespace dftracer::utils::plugins {
 
 /// The plan's schema at the node's input, read without a scan.
 class SchemaView {
    public:
+    SchemaView() = default;
     explicit SchemaView(const dftu_schema* s) noexcept : s_(s) {}
-    std::int32_t size() const { return dftu_schema_field_count(s_); }
+
+    /// The number of columns.
+    std::int32_t size() const noexcept { return dftu_schema_field_count(s_); }
+    /// The name of column `i`, borrowed from the plan; empty when there is no
+    /// such column.
+    dstd::StringView name(std::int32_t i) const noexcept {
+        const char* const n = dftu_schema_field_name(s_, i);
+        return n != nullptr ? dstd::StringView(n) : dstd::StringView();
+    }
+    /// The type of column `i`, @ref TypeId "TypeId::Unknown" when there is no
+    /// such column.
+    TypeId type(std::int32_t i) const noexcept {
+        const std::int32_t t = dftu_schema_field_type(s_, i);
+        return t < 0 ? TypeId::Unknown : static_cast<TypeId>(t);
+    }
+    /// Whether column `i` admits a null; false when there is no such column.
+    bool nullable(std::int32_t i) const noexcept {
+        return dftu_schema_field_nullable(s_, i) == 1;
+    }
+    /// The granularity of column `i`, which a Timestamp, Time or Duration
+    /// column uses; @ref TimeUnit "TimeUnit::Micro" for any other type and for
+    /// a column that is not there.
+    TimeUnit unit(std::int32_t i) const noexcept {
+        const std::int32_t u = dftu_schema_field_time_unit(s_, i);
+        return u < 0 ? TimeUnit::Micro : static_cast<TimeUnit>(u);
+    }
+    /// The index of the first column named `name`, or -1.
+    std::int32_t find(dstd::StringView name) const {
+        for (std::int32_t i = 0; i < size(); ++i)
+            if (this->name(i) == name) return i;
+        return -1;
+    }
+
     /// Append input column `i`, unchanged, to `out`.
     void copy_to(SchemaBuilder& out, std::int32_t i) const {
-        dftu_schema_copy_field(out.raw(), s_, i);
+        dftu_schema_copy_field(detail::schema_raw(out), s_, i);
     }
     void copy_all(SchemaBuilder& out) const {
         for (std::int32_t i = 0; i < size(); ++i) copy_to(out, i);
     }
-    const dftu_schema* raw() const noexcept { return s_; }
 
    private:
-    const dftu_schema* s_;
+    const dftu_schema* s_ = nullptr;
 };
 
 /// The operands dftu_lazyframe_op was given, zero-filled when it was given
 /// none. Read only the slots the node's own contract names.
 class OpArgs {
    public:
+    OpArgs() = default;
     explicit OpArgs(const dftu_op_arg* a) noexcept : a_(a) {}
-    const dftu_op_val& operator[](int i) const { return a_->args[i]; }
-    std::int64_t i64(int i) const { return a_->args[i].i64; }
-    double f64(int i) const { return a_->args[i].f64; }
-    dstd::StringView str(int i) const {
-        const auto& s = a_->args[i].str;
-        return s.ptr ? dstd::StringView(s.ptr, static_cast<std::size_t>(s.len))
-                     : dstd::StringView();
+
+    /// The number of operand slots a node may read, one per token of its op
+    /// signature.
+    static constexpr std::size_t size() noexcept { return DFTU_OP_MAX_ARGS; }
+
+    std::int64_t i64(std::size_t i) const noexcept {
+        return a_ != nullptr ? a_->args[i].i64 : 0;
     }
-    const dftu_op_arg* raw() const noexcept { return a_; }
+    double f64(std::size_t i) const noexcept {
+        return a_ != nullptr ? a_->args[i].f64 : 0.0;
+    }
+    /// The text of a string operand, borrowed from the plan.
+    dstd::StringView str(std::size_t i) const noexcept {
+        if (a_ == nullptr || a_->args[i].str.ptr == nullptr)
+            return dstd::StringView();
+        return dstd::StringView(a_->args[i].str.ptr,
+                                static_cast<std::size_t>(a_->args[i].str.len));
+    }
+    /// The name of the column operand at `i`.
+    dstd::StringView column(std::size_t i) const noexcept { return str(i); }
+    /// The positional index of the column operand at `i`, or -1.
+    std::int32_t column_index(std::size_t i) const noexcept {
+        return a_ != nullptr ? a_->args[i].i32 : -1;
+    }
 
    private:
-    const dftu_op_arg* a_;
+    const dftu_op_arg* a_ = nullptr;
 };
 
 namespace detail {
@@ -76,19 +130,68 @@ struct InputOwnership {
     bool dropped = false;
 };
 
+// How an InputCursor runs the task its upstream hands back: through the task
+// service of the host the node was registered with. Only the service pointer
+// and its `h` are kept, never the host, which dies when the plugin factory
+// returns; dftu_svc_task::run uses no host state, so they stay valid.
+struct TaskRunner {
+    const dftu_svc_task* svc = nullptr;
+    void* h = nullptr;
+
+    TaskRunner() = default;
+    explicit TaskRunner(const dftu_plugin_host* host) noexcept {
+        if (!host || !host->get_service) return;
+        svc = static_cast<const dftu_svc_task*>(
+            host->get_service(host->h, DFTU_SVC_TASK));
+        h = host->h;
+    }
+
+    dftu_status run(dftu_ctx* ctx, dftu_task* t) const {
+        if (!svc || !svc->run)
+            return dftu_fail(ctx, DFTU_E_UNSUPPORTED,
+                             "the host offers no task service to run with");
+        return svc->run(ctx, h, t);
+    }
+};
+
+// The ctx InputCursor hands its upstream: it keeps the message the upstream
+// sets, which InputCursor then returns in its error, so the node's own
+// callback reports it.
+struct LocalCtx {
+    dftu_ctx base;
+    dstd::String message;
+
+    static dftu_status set_error(dftu_ctx* c, dftu_status code, const char* msg,
+                                 std::uint32_t len) {
+        static_cast<LocalCtx*>(c->h)->message.assign(msg, len);
+        return code;
+    }
+    static dftu_status check(dftu_ctx*) { return DFTU_OK; }
+    static const dftu_ctx_vt* vt() {
+        static const dftu_ctx_vt VT = {sizeof(dftu_ctx_vt), set_error, check};
+        return &VT;
+    }
+
+    LocalCtx() : base{sizeof(dftu_ctx), 0, vt(), this} {}
+    LocalCtx(const LocalCtx&) = delete;
+    LocalCtx& operator=(const LocalCtx&) = delete;
+};
+
 }  // namespace detail
 
-/// The node's upstream cursor. Pulling it may run a task to completion on the
-/// default runtime, since a node's cursor has no host to await with.
+/// The node's upstream cursor. Pulling it may run a task to completion through
+/// the host's task service, since a node's cursor has no host to await with.
 class InputCursor {
    public:
     InputCursor(void* self, const dftu_cursor_vt* vt,
-                dstd::SharedPtr<detail::InputOwnership> own) noexcept
-        : self_(self), vt_(vt), own_(std::move(own)) {}
+                dstd::SharedPtr<detail::InputOwnership> own,
+                detail::TaskRunner runner) noexcept
+        : self_(self), vt_(vt), own_(std::move(own)), runner_(runner) {}
     InputCursor(InputCursor&& o) noexcept
         : self_(o.self_),
           vt_(std::exchange(o.vt_, nullptr)),
-          own_(std::move(o.own_)) {}
+          own_(std::move(o.own_)),
+          runner_(o.runner_) {}
     InputCursor& operator=(InputCursor&&) = delete;
     InputCursor(const InputCursor&) = delete;
     InputCursor& operator=(const InputCursor&) = delete;
@@ -101,34 +204,42 @@ class InputCursor {
         }
     }
 
-    /// The next upstream frame, or dstd::nullopt at the end of the stream.
-    /// Throws std::runtime_error when the upstream fails.
-    dstd::Optional<OwnedFrame> next(std::int64_t max_rows) {
-        dftu_result_frame out{};
-        dftu_task* t = vt_->next(self_, max_rows, &out);
-        if (t && dftu_task_run(dftu_default_runtime(), t) != 0)
-            throw std::runtime_error("upstream task failed");
-        if (!DFTU_RESULT_OK(out))
-            throw std::runtime_error(out.u.err.message ? out.u.err.message
-                                                       : "upstream failed");
-        if (!out.u.value) return dstd::nullopt;
-        return OwnedFrame(out.u.value);
+    /// The next upstream frame, or dstd::nullopt at the end of the stream. An
+    /// error with the upstream's status and message when it fails.
+    dstd::Result<dstd::Optional<OwnedDataFrame>> next(std::int64_t max_rows) {
+        detail::LocalCtx ctx;
+        dftu_dataframe* out = nullptr;
+        dftu_task* pending = nullptr;
+        dftu_status st = vt_->next(&ctx.base, self_, max_rows, &out, &pending);
+        if (st >= 0 && pending) st = runner_.run(&ctx.base, pending);
+        if (st < 0) {
+            if (out) dftu_dataframe_free(out);
+            return dataframe::error_of(
+                st, ctx.message.empty() ? dstd::StringView("upstream failed")
+                                        : dstd::StringView(ctx.message));
+        }
+        if (st == DFTU_END || !out) return dstd::Optional<OwnedDataFrame>();
+        return dstd::Optional<OwnedDataFrame>(OwnedDataFrame(out));
     }
 
     /// Offer `predicate` upstream. Only sound when it is positional against
     /// the upstream's columns too (a node that keeps every column in place).
     bool narrow(ExprView predicate) {
         if (!vt_->narrow) return false;
+        detail::LocalCtx ctx;
         std::int32_t applied = 0;
-        dftu_task* t = vt_->narrow(self_, predicate.raw(), &applied);
-        if (t && dftu_task_run(dftu_default_runtime(), t) != 0) return false;
-        return applied != 0;
+        dftu_task* pending = nullptr;
+        dftu_status st = vt_->narrow(
+            &ctx.base, self_, detail::expr_raw(predicate), &applied, &pending);
+        if (st >= 0 && pending) st = runner_.run(&ctx.base, pending);
+        return st >= 0 && applied != 0;
     }
 
    private:
     void* self_;
     const dftu_cursor_vt* vt_;
     dstd::SharedPtr<detail::InputOwnership> own_;
+    detail::TaskRunner runner_;
 };
 
 namespace detail {
@@ -136,46 +247,56 @@ namespace detail {
 template <class N>
 struct NodeBox {
     dstd::UniquePtr<N> node;
+    TaskRunner runner;
 };
 
 template <class N>
 struct NodeVt {
-    static void output_schema(void* self, const dftu_schema* in,
-                              const dftu_op_arg* args, dftu_schema* out) {
-        try {
+    static dftu_status output_schema(dftu_ctx* ctx, void* self,
+                                     const dftu_schema* in,
+                                     const dftu_op_arg* args,
+                                     dftu_schema* out) noexcept {
+        return to_status(ctx, [&]() {
             SchemaBuilder b(out);
-            static_cast<NodeBox<N>*>(self)->node->output_schema(
+            return static_cast<NodeBox<N>*>(self)->node->output_schema(
                 SchemaView(in), OpArgs(args), b);
-        } catch (...) {
-        }
+        });
     }
 
-    static void* open(void* self, void* in_self, const dftu_cursor_vt* in_vt,
-                      const dftu_op_arg* args, std::uint64_t memory_budget,
-                      void** out_cursor_self, const dftu_cursor_vt** out_vt) {
+    static dftu_status open(dftu_ctx* ctx, void* self,
+                            const dftu_plugin_host* host, void* in_self,
+                            const dftu_cursor_vt* in_vt,
+                            const dftu_op_arg* args,
+                            std::uint64_t memory_budget, void** out_cursor_self,
+                            const dftu_cursor_vt** out_vt) noexcept {
         auto own = dstd::make_shared<InputOwnership>();
-        try {
-            auto cursor = static_cast<NodeBox<N>*>(self)->node->open(
-                InputCursor(in_self, in_vt, own), OpArgs(args), memory_budget);
-            if (!cursor) return nullptr;
+        return to_status(ctx, [&]() -> dftu_status {
+            auto opened = static_cast<NodeBox<N>*>(self)->node->open(
+                InputCursor(in_self, in_vt, own,
+                            static_cast<NodeBox<N>*>(self)->runner),
+                OpArgs(args), memory_budget, detail::host_from_raw(host, ctx));
+            if (!opened.has_value()) return report(ctx, opened.error());
+            auto cursor = std::move(*opened);
+            if (!cursor)
+                return dftu_fail(ctx, DFTU_E_INTERNAL,
+                                 "open returned no cursor");
             using C = typename decltype(cursor)::element_type;
-            auto* box = new CursorBox<C>{std::move(cursor), {}};
-            // Nothing below throws, so the upstream changes hands only once
+            auto* box = new CursorBox<C>{std::move(cursor), host};
+            // Nothing below fails, so the upstream changes hands only once
             // open() is certain to succeed.
             own->committed = true;
             if (own->dropped && in_vt->destroy) in_vt->destroy(in_self);
             *out_cursor_self = box;
             *out_vt = CursorVt<C>::vt();
-            return box;
-        } catch (...) {
-            return nullptr;
-        }
+            return DFTU_OK;
+        });
     }
 
     static void destroy(void* self) { delete static_cast<NodeBox<N>*>(self); }
 
     static const dftu_node_vt* vt() {
-        static const dftu_node_vt VT = {output_schema, open, destroy};
+        static const dftu_node_vt VT = {sizeof(dftu_node_vt), output_schema,
+                                        open, destroy};
         return &VT;
     }
 };
@@ -188,11 +309,13 @@ const dftu_node_vt* node_vtable() {
     return detail::NodeVt<N>::vt();
 }
 
-/// Wrap `node` as the `self` its vtable expects. Ownership passes to whoever
-/// calls the vtable's destroy() on it.
+/// Wrap `node` as the `self` its vtable expects. `host` is the host the node
+/// is registered through; the node's input cursor runs the tasks it is handed
+/// with that host's task service. Ownership passes to whoever calls the
+/// vtable's destroy() on it.
 template <class N>
-void* make_node_self(dstd::UniquePtr<N> node) {
-    return new detail::NodeBox<N>{std::move(node)};
+void* make_node_self(dstd::UniquePtr<N> node, const dftu_plugin_host* host) {
+    return new detail::NodeBox<N>{std::move(node), detail::TaskRunner(host)};
 }
 
 }  // namespace dftracer::utils::plugins

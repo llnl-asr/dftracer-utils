@@ -30,7 +30,7 @@ DataFrame make_df() {
     dstd::Vector<std::int64_t> b{10, 20, 30, 40, 50, 60};
     dstd::Vector<std::int64_t> c{7, 7, 8, 8, 9, 9};
     DataFrame df;
-    df.names = {"a", "b", "c"};
+    df.names = dstd::make_shared_strings({"a", "b", "c"});
     df.columns.push_back(Series::flat_i64(a.data(), 6));
     df.columns.push_back(Series::flat_i64(b.data(), 6));
     df.columns.push_back(Series::flat_i64(c.data(), 6));

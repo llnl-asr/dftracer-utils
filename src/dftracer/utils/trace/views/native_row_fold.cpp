@@ -813,8 +813,9 @@ void append_all_arg_columns(EventRows evs,
         order.emplace_back(intern.resolve(cols[c].key), c);
     std::sort(order.begin(), order.end());
     for (const auto& [name, idx] : order) {
-        out.names.emplace_back(prefix);
-        out.names.back().append(name);
+        dstd::String column{prefix};
+        column.append(name);
+        out.names.emplace_back(dstd::StringView{column});
         out.columns.push_back(typed_arg_column(
             cols[idx].vals, cols[idx].kinds.kind(), cols[idx].present, intern));
     }
@@ -1366,7 +1367,8 @@ dataframe::DataFrame build_row_frame(
                                dftracer::utils::common::ARGS_PREFIX);
     } else {
         for (const dstd::String& sel : select_) {
-            out.names.push_back(canonical_row_column_name(sel, by_path));
+            out.names.push_back(
+                dstd::SharedString{canonical_row_column_name(sel, by_path)});
             out.columns.push_back(
                 select_column(evs, *intern_, sel, time_scale, by_path));
         }

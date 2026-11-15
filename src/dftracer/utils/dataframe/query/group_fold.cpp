@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/error.h>
-#include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
+#include <dftracer/utils/dataframe/c_api.h>
+#include <dftracer/utils/dataframe/op.h>
 #include <dftracer/utils/dataframe/query/group_fold.h>
 #include <dftracer/utils/dataframe/query/vectorize.h>
 #include <dftracer/utils/dstd/base64.h>
@@ -71,8 +72,9 @@ dstd::Result<dataframe::Series> joined(
     if (parts.size() == 1) return parts.front().share();
     dstd::Vector<dataframe::DataFrame> frames(parts.size());
     dstd::Vector<const dataframe::DataFrame*> ptrs;
+    const dstd::SharedString value_name{"v"};
     for (std::size_t i = 0; i < parts.size(); ++i) {
-        frames[i].names.push_back("v");
+        frames[i].names.push_back(value_name);
         frames[i].columns.push_back(parts[i].share());
         ptrs.push_back(&frames[i]);
     }
@@ -198,7 +200,7 @@ GroupFold::GroupFold(dstd::Vector<dataframe::DataType> key_types,
         const dstd::String name = dstd::fmt<"__duql_fold_{}">(a);
         dstd::String spec_name(name.data(), name.size());
         specs.push_back({aggs_[a].engine, aggs_[a].in, std::move(spec_name),
-                         aggs_[a].param, -1});
+                         aggs_[a].param, -1, aggs_[a].fn, aggs_[a].args});
     }
     if (!specs.empty()) engine_ = dataframe::agg_new(std::move(specs));
 }
@@ -461,7 +463,7 @@ dstd::Result<dataframe::DataFrame> GroupFold::finish(
     const auto groups = group_count_;
     const auto count = static_cast<std::size_t>(groups);
     dataframe::DataFrame out;
-    out.names = std::move(names);
+    out.names = dstd::make_shared_strings(names);
     if (groups == 0) {
         for (const auto& t : key_types_) out.columns.push_back(empty(t));
         for (const auto& a : aggs_) out.columns.push_back(empty(a.type));
@@ -478,6 +480,8 @@ dstd::Result<dataframe::DataFrame> GroupFold::finish(
     if (engine_) {
         engine = dataframe::agg_finalize(
             *engine_, dstd::Vector<dstd::String>{"__duql_gid"});
+        if (auto checked = dataframe::agg_check(*engine_); !checked)
+            return checked.error();
         order.assign(count, -1);
         const dataframe::Series g = engine->columns.front().cast(TypeId::Int64);
         for (std::int64_t r = 0; r < g.length(); ++r)
@@ -518,12 +522,13 @@ dstd::Result<dataframe::DataFrame> GroupFold::finish(
                 break;
             }
             case FoldOp::Plugin: {
-                const dftu_op_desc* op = dftu_op_find(f.plugin.c_str());
-                if (!op)
+                auto found = dataframe::find_op(f.plugin.c_str());
+                if (!found)
                     return common::make_error(
                         common::ErrorCode::InvalidArgument,
                         dstd::fmt<"plugin function '{}' is not registered">(
                             f.plugin));
+                const dftu_op_desc* op = found->get();
                 const dftu_op_arg arg = plugin_arg(*op, f.params);
                 auto& members = members_[a];
                 members.resize(count);

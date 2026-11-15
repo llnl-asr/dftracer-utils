@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <cstdio>
 
+using namespace dftracer::utils;
 using namespace dftracer::utils::plugins;
 
 struct QueryFilter {
@@ -19,12 +20,13 @@ struct QueryFilter {
 
     explicit QueryFilter(const Config&) {}
 
-    void step(const Batch& b, Host h) {
-        dftu_duql* q = h.duql_compile(F("dur") > 300);
+    dftracer::utils::dstd::Result<void> step(const Batch& b, Host h) {
+        DFTRACER_UTILS_TRY(Query q, h.compile(F("dur") > 300));
         for (const Event& e : b) {
             ++total;
-            if (q && h.duql_matches(q, e.frame(), e.row())) ++matched;
+            if (q.matches(e)) ++matched;
         }
+        return ok();
     }
 
     void merge(QueryFilter& other) {
@@ -39,13 +41,14 @@ struct QueryFilter {
                               static_cast<unsigned long long>(matched),
                               static_cast<unsigned long long>(total));
         if (n > 0)
-            h.log(DFTU_LOG_INFO, dftracer::utils::dstd::StringView(
-                                     line, static_cast<std::size_t>(n)));
+            h.log(LogLevel::Info, dftracer::utils::dstd::StringView(
+                                      line, static_cast<std::size_t>(n)));
     }
 };
 
-extern "C" DFTU_PLUGIN_EXPORT dftu_plugin* dftracer_plugin(
-    dftu_plugin_host* h, const dftu_value* config) {
-    (void)h;
-    return make_plugin<QueryFilter>(config);
-}
+DFTU_PLUGIN("query_filter", "1.0",
+            [](PluginBuilder& p, const Config& config) -> dstd::Result<void> {
+                (void)config;
+                p.fold<QueryFilter>();
+                return {};
+            })

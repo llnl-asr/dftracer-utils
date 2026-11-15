@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/calendar.h>
-#include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/kernels/kernels.h>
 #include <dftracer/utils/dataframe/types.h>
@@ -134,8 +134,6 @@ std::int64_t part_of(std::int64_t t, std::int64_t per_second, bool days,
 }  // namespace
 }  // namespace dftracer::utils::dataframe
 
-extern "C" {
-
 dftu_series* dftu_series_dt_part(const dftu_series* in, int32_t part,
                                  int32_t unit) {
     DFTU_FLAT_OPERAND(in, flat_in, dftu_series_dt_part(flat_in, part, unit));
@@ -268,5 +266,3 @@ dftu_series* dftu_series_with_timezone(const dftu_series* v, const char* tz,
         tz, static_cast<std::size_t>(tz_size)));
     return out;
 }
-
-}  // extern "C"

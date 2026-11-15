@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/common/c_api.h>
+#include <dftracer/utils/common/c_api_error.h>
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/common/memory_config.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/duql/errc.h>
 #include <doctest/doctest.h>
@@ -49,17 +52,22 @@ TEST_CASE("make_error carries the code and the message") {
           "PARSE");
 }
 
-TEST_CASE("error_of_exception reads a std exception as an Unknown error") {
-    const dstd::Error err = common::error_of_exception(
-        std::make_exception_ptr(std::runtime_error("disk gone")));
-    CHECK(err.condition() == dstd::Condition::Unknown);
-    CHECK(dstd::String(err.c_str()) == "disk gone");
-    CHECK(common::errorcode_of(err) == common::ErrorCode::Unknown);
-}
+TEST_CASE("a refused reservation reaches the C ABI as DFTU_E_NO_MEMORY") {
+    for (const memory::Status status :
+         {memory::Status::OverBudget, memory::Status::OverCap,
+          memory::Status::Pending}) {
+        const dstd::Error error(common::error_code_of(status),
+                                "reservation refused");
+        CHECK(error.condition() == dstd::Condition::OutOfMemory);
+        CHECK(common::to_status(error.condition()) == DFTU_E_NO_MEMORY);
 
-TEST_CASE("error_of_exception gives a fixed text for a non-std exception") {
-    const dstd::Error err =
-        common::error_of_exception(std::make_exception_ptr(7));
-    CHECK(err.condition() == dstd::Condition::Unknown);
-    CHECK(dstd::String(err.c_str()) == "unknown error");
+        dftu_error out = DFTU_ERROR_INIT;
+        CHECK(common::fill_error(&out, error) == DFTU_E_NO_MEMORY);
+        CHECK(out.status == DFTU_E_NO_MEMORY);
+        REQUIRE(out.message != nullptr);
+        CHECK(dstd::String(out.message) == "reservation refused");
+        dftu_error_release(&out);
+    }
+    CHECK(common::to_condition(DFTU_E_NO_MEMORY) ==
+          dstd::Condition::OutOfMemory);
 }

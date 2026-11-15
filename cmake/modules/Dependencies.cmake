@@ -571,23 +571,21 @@ function(need_nanoarrow)
     set(NANOARROW_IPC_INCLUDE_DIRS)
 
     # Arrow IPC support (reader/writer for .arrows files)
-    if(DFTRACER_UTILS_ENABLE_ARROW_IPC)
-      list(
-        APPEND
-        NANOARROW_SOURCES
-        ${nanoarrow_SOURCE_DIR}/src/nanoarrow/ipc/decoder.c
-        ${nanoarrow_SOURCE_DIR}/src/nanoarrow/ipc/encoder.c
-        ${nanoarrow_SOURCE_DIR}/src/nanoarrow/ipc/reader.c
-        ${nanoarrow_SOURCE_DIR}/src/nanoarrow/ipc/writer.c
-        ${nanoarrow_SOURCE_DIR}/src/nanoarrow/ipc/codecs.c
-        ${nanoarrow_SOURCE_DIR}/thirdparty/flatcc/src/runtime/builder.c
-        ${nanoarrow_SOURCE_DIR}/thirdparty/flatcc/src/runtime/emitter.c
-        ${nanoarrow_SOURCE_DIR}/thirdparty/flatcc/src/runtime/refmap.c
-        ${nanoarrow_SOURCE_DIR}/thirdparty/flatcc/src/runtime/verifier.c)
-      set(NANOARROW_FLATCC_INCLUDE
-          ${nanoarrow_SOURCE_DIR}/thirdparty/flatcc/include)
-      dftracer_utils_ok("nanoarrow IPC support enabled (reader + writer)")
-    endif()
+    list(
+      APPEND
+      NANOARROW_SOURCES
+      ${nanoarrow_SOURCE_DIR}/src/nanoarrow/ipc/decoder.c
+      ${nanoarrow_SOURCE_DIR}/src/nanoarrow/ipc/encoder.c
+      ${nanoarrow_SOURCE_DIR}/src/nanoarrow/ipc/reader.c
+      ${nanoarrow_SOURCE_DIR}/src/nanoarrow/ipc/writer.c
+      ${nanoarrow_SOURCE_DIR}/src/nanoarrow/ipc/codecs.c
+      ${nanoarrow_SOURCE_DIR}/thirdparty/flatcc/src/runtime/builder.c
+      ${nanoarrow_SOURCE_DIR}/thirdparty/flatcc/src/runtime/emitter.c
+      ${nanoarrow_SOURCE_DIR}/thirdparty/flatcc/src/runtime/refmap.c
+      ${nanoarrow_SOURCE_DIR}/thirdparty/flatcc/src/runtime/verifier.c)
+    set(NANOARROW_FLATCC_INCLUDE
+        ${nanoarrow_SOURCE_DIR}/thirdparty/flatcc/include)
+    dftracer_utils_ok("nanoarrow IPC support enabled (reader + writer)")
 
     # Generate nanoarrow_config.h from template
     set(NANOARROW_VERSION_MAJOR 0)
@@ -605,16 +603,14 @@ function(need_nanoarrow)
         PUBLIC $<BUILD_INTERFACE:${nanoarrow_SOURCE_DIR}/src>
                $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}>
                $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
-      if(DFTRACER_UTILS_ENABLE_ARROW_IPC)
-        target_include_directories(
-          nanoarrow_static
-          PUBLIC $<BUILD_INTERFACE:${NANOARROW_FLATCC_INCLUDE}>
-                 $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
-        # Enable zstd compression for Arrow IPC
-        target_compile_definitions(nanoarrow_static
-                                   PRIVATE NANOARROW_IPC_WITH_ZSTD)
-        target_link_libraries(nanoarrow_static PRIVATE zstd::libzstd_static)
-      endif()
+      target_include_directories(
+        nanoarrow_static
+        PUBLIC $<BUILD_INTERFACE:${NANOARROW_FLATCC_INCLUDE}>
+               $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+      # Enable zstd compression for Arrow IPC
+      target_compile_definitions(nanoarrow_static
+                                 PRIVATE NANOARROW_IPC_WITH_ZSTD)
+      target_link_libraries(nanoarrow_static PRIVATE zstd::libzstd_static)
       set_target_properties(
         nanoarrow_static
         PROPERTIES VERSION ${PROJECT_VERSION}
@@ -633,16 +629,14 @@ function(need_nanoarrow)
         PUBLIC $<BUILD_INTERFACE:${nanoarrow_SOURCE_DIR}/src>
                $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}>
                $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
-      if(DFTRACER_UTILS_ENABLE_ARROW_IPC)
-        target_include_directories(
-          nanoarrow_shared
-          PUBLIC $<BUILD_INTERFACE:${NANOARROW_FLATCC_INCLUDE}>
-                 $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
-        # Enable zstd compression for Arrow IPC
-        target_compile_definitions(nanoarrow_shared
-                                   PRIVATE NANOARROW_IPC_WITH_ZSTD)
-        target_link_libraries(nanoarrow_shared PRIVATE zstd::libzstd_static)
-      endif()
+      target_include_directories(
+        nanoarrow_shared
+        PUBLIC $<BUILD_INTERFACE:${NANOARROW_FLATCC_INCLUDE}>
+               $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+      # Enable zstd compression for Arrow IPC
+      target_compile_definitions(nanoarrow_shared
+                                 PRIVATE NANOARROW_IPC_WITH_ZSTD)
+      target_link_libraries(nanoarrow_shared PRIVATE zstd::libzstd_static)
       set_target_properties(
         nanoarrow_shared
         PROPERTIES VERSION ${PROJECT_VERSION}
@@ -684,7 +678,7 @@ function(need_nanoarrow)
 
       # nanoarrow_static links zstd for the IPC codec.
       set(nanoarrow_dependencies)
-      if(DFTRACER_UTILS_ENABLE_ARROW_IPC AND DFTRACER_UTILS_BUILD_STATIC)
+      if(DFTRACER_UTILS_BUILD_STATIC)
         set(nanoarrow_dependencies zstd)
       endif()
       install_dependency_config(nanoarrow nanoarrowTargets.cmake DEPENDENCIES

@@ -1,0 +1,9 @@
+# The query below runs over the sample trace next to this file, with the
+# @NAME@ plugin loaded. `dftracer_plugin check --tests tests` runs it, and the
+# total is what fails when the plugin breaks.
+input ../data/sample.pfw.gz
+query
+agg { total = @NAME@.total(dur) }
+----
+total
+330

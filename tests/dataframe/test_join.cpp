@@ -5,8 +5,8 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/task.h>
-#include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
+#include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
@@ -49,7 +49,7 @@ Series bools(const dstd::Vector<bool>& v) {
 // left: k = [1, 2, 3, 2, null], v = [10, 20, 30, 40, 50], flag = [t,f,t,f,t]
 DataFrame make_left() {
     DataFrame df;
-    df.names = {"k", "v", "flag"};
+    df.names = dstd::make_shared_strings({"k", "v", "flag"});
     df.columns.push_back(i64s({1, 2, 3, 2, 0}, {0x0f}));
     df.columns.push_back(i64s({10, 20, 30, 40, 50}));
     df.columns.push_back(bools({true, false, true, false, true}));
@@ -59,7 +59,7 @@ DataFrame make_left() {
 // right: k = [2, 4, 2, null], name = [b, d, bb, n], v = [200, 400, 220, 0]
 DataFrame make_right() {
     DataFrame df;
-    df.names = {"k", "name", "v"};
+    df.names = dstd::make_shared_strings({"k", "name", "v"});
     df.columns.push_back(i64s({2, 4, 2, 0}, {0x07}));
     df.columns.push_back(Series::strings({"b", "d", "bb", "n"}));
     df.columns.push_back(i64s({200, 400, 220, 0}));
@@ -131,7 +131,8 @@ DataFrame lazy_join(JoinHow how, std::int64_t batch_size) {
 void check_same(const DataFrame& a, const DataFrame& b) {
     REQUIRE(a.names == b.names);
     REQUIRE(a.num_rows() == b.num_rows());
-    for (const dstd::String& n : a.names) {
+    for (const dstd::SharedString& sn : a.names) {
+        const dstd::String n{sn.view()};
         Series ca = a.column(n);
         Series cb = b.column(n);
         REQUIRE(ca.type() == cb.type());
@@ -152,7 +153,7 @@ TEST_SUITE("dataframe join") {
     TEST_CASE("inner: matched pairs in left order, chains in right order") {
         DataFrame out =
             dftu_utils_test::ok(make_left().join(make_right(), {"k"}));
-        CHECK(out.names ==
+        CHECK(dstd::to_strings(out.names) ==
               dstd::Vector<dstd::String>{"k", "v", "flag", "name", "v_right"});
         CHECK(i64_col(out, "k") == dstd::Vector<I>{2, 2, 2, 2});
         CHECK(i64_col(out, "v") == dstd::Vector<I>{20, 20, 40, 40});
@@ -204,11 +205,13 @@ TEST_SUITE("dataframe join") {
     TEST_CASE("semi and anti: left columns only, one row per left row") {
         DataFrame semi = dftu_utils_test::ok(
             make_left().join(make_right(), {"k"}, JoinHow::Semi));
-        CHECK(semi.names == dstd::Vector<dstd::String>{"k", "v", "flag"});
+        CHECK(dstd::to_strings(semi.names) ==
+              dstd::Vector<dstd::String>{"k", "v", "flag"});
         CHECK(i64_col(semi, "v") == dstd::Vector<I>{20, 40});
         DataFrame anti = dftu_utils_test::ok(
             make_left().join(make_right(), {"k"}, JoinHow::Anti));
-        CHECK(anti.names == dstd::Vector<dstd::String>{"k", "v", "flag"});
+        CHECK(dstd::to_strings(anti.names) ==
+              dstd::Vector<dstd::String>{"k", "v", "flag"});
         CHECK(i64_col(anti, "v") == dstd::Vector<I>{10, 30, 50});
         CHECK(i64_col(anti, "k") == dstd::Vector<I>{1, 3, NI});
     }
@@ -217,8 +220,9 @@ TEST_SUITE("dataframe join") {
         DataFrame out = dftu_utils_test::ok(
             make_left().join(make_right(), {}, JoinHow::Cross));
         CHECK(out.num_rows() == 20);
-        CHECK(out.names == dstd::Vector<dstd::String>{
-                               "k", "v", "flag", "k_right", "name", "v_right"});
+        CHECK(dstd::to_strings(out.names) ==
+              dstd::Vector<dstd::String>{"k", "v", "flag", "k_right", "name",
+                                         "v_right"});
         dstd::Vector<I> k = i64_col(out, "k");
         dstd::Vector<I> kr = i64_col(out, "k_right");
         CHECK(k[0] == I{1});
@@ -235,7 +239,7 @@ TEST_SUITE("dataframe join") {
             dftu_utils_test::ok(make_right().rename({"rk", "name", "rv"}));
         DataFrame out =
             dftu_utils_test::ok(make_left().join(right, {"k"}, {"rk"}));
-        CHECK(out.names ==
+        CHECK(dstd::to_strings(out.names) ==
               dstd::Vector<dstd::String>{"k", "v", "flag", "rk", "name", "rv"});
         CHECK(i64_col(out, "rk") == dstd::Vector<I>{2, 2, 2, 2});
         DataFrame outer = dftu_utils_test::ok(
@@ -249,23 +253,24 @@ TEST_SUITE("dataframe join") {
     TEST_CASE("custom suffix") {
         DataFrame out = dftu_utils_test::ok(
             make_left().join(make_right(), {"k"}, JoinHow::Inner, "_r"));
-        CHECK(out.names ==
+        CHECK(dstd::to_strings(out.names) ==
               dstd::Vector<dstd::String>{"k", "v", "flag", "name", "v_r"});
     }
 
     TEST_CASE("composite key over int and string") {
         DataFrame l;
-        l.names = {"a", "s", "x"};
+        l.names = dstd::make_shared_strings({"a", "s", "x"});
         l.columns.push_back(i64s({1, 1, 2}));
         l.columns.push_back(Series::strings({"p", "q", "p"}));
         l.columns.push_back(i64s({7, 8, 9}));
         DataFrame r;
-        r.names = {"a", "s", "y"};
+        r.names = dstd::make_shared_strings({"a", "s", "y"});
         r.columns.push_back(i64s({1, 2, 1}));
         r.columns.push_back(Series::strings({"q", "p", "zz"}));
         r.columns.push_back(i64s({100, 200, 300}));
         DataFrame out = dftu_utils_test::ok(l.join(r, {"a", "s"}));
-        CHECK(out.names == dstd::Vector<dstd::String>{"a", "s", "x", "y"});
+        CHECK(dstd::to_strings(out.names) ==
+              dstd::Vector<dstd::String>{"a", "s", "x", "y"});
         CHECK(i64_col(out, "x") == dstd::Vector<I>{8, 9});
         CHECK(i64_col(out, "y") == dstd::Vector<I>{100, 200});
     }
@@ -320,7 +325,7 @@ TEST_SUITE("dataframe join") {
         CHECK(s.fields[4].type.id == TypeId::Int64);
         CHECK(plan.explain().find("join left [k] = [k]") != dstd::String::npos);
         DataFrame out = run(plan.collect());
-        CHECK(out.names == plan.schema());
+        CHECK(dstd::to_strings(out.names) == plan.schema());
         LazyFrame semi = left.join(right, {"k"}, JoinHow::Semi);
         CHECK(semi.schema() == dstd::Vector<dstd::String>{"k", "v", "flag"});
     }
@@ -347,7 +352,7 @@ TEST_SUITE("dataframe join") {
                 .filter(col(2) > std::int64_t{210})
                 .select({"k", "name"});
         DataFrame out = run(left.join(right, {"k"}).collect());
-        CHECK(out.names ==
+        CHECK(dstd::to_strings(out.names) ==
               dstd::Vector<dstd::String>{"k", "v", "flag", "name"});
         CHECK(str_col(out, "name") == dstd::Vector<S>{"bb", "bb"});
         CHECK(i64_col(out, "v") == dstd::Vector<I>{20, 40});
@@ -360,7 +365,7 @@ TEST_SUITE("dataframe join") {
         LazyFrame right =
             LazyFrame::scan(dstd::make_shared<InMemorySource>(make_right()));
         DataFrame out = run(left.join(right, {"k"}, JoinHow::Outer).collect(2));
-        CHECK(out.names ==
+        CHECK(dstd::to_strings(out.names) ==
               dstd::Vector<dstd::String>{"k", "v", "flag", "name", "v_right"});
         CHECK(i64_col(out, "k") == dstd::Vector<I>{2, 4, 2, NI});
         CHECK(i64_col(out, "v") == dstd::Vector<I>{NI, NI, NI, NI});
@@ -372,16 +377,17 @@ TEST_SUITE("dataframe join") {
         "compare_agg: outer join on the keys, l_/r_ metrics, delta and "
         "pct") {
         DataFrame base;
-        base.names = {"k", "n"};
+        base.names = dstd::make_shared_strings({"k", "n"});
         base.columns.push_back(i64s({2, 1}));
         base.columns.push_back(i64s({10, 20}));
         DataFrame variant;
-        variant.names = {"k", "n"};
+        variant.names = dstd::make_shared_strings({"k", "n"});
         variant.columns.push_back(i64s({1, 3}));
         variant.columns.push_back(i64s({15, 7}));
         DataFrame out = dftu_utils_test::ok(base.compare_agg(variant, 1));
-        CHECK(out.names == dstd::Vector<dstd::String>{"k", "l_n", "r_n",
-                                                      "delta_n", "pct_n"});
+        CHECK(
+            dstd::to_strings(out.names) ==
+            dstd::Vector<dstd::String>{"k", "l_n", "r_n", "delta_n", "pct_n"});
         CHECK(i64_col(out, "k") == dstd::Vector<I>{1, 2, 3});
         CHECK(i64_col(out, "l_n") == dstd::Vector<I>{20, 10, NI});
         CHECK(i64_col(out, "r_n") == dstd::Vector<I>{15, NI, 7});
@@ -407,7 +413,7 @@ TEST_SUITE("dataframe join") {
         // left: k = [1, 2, 3, 1, null] (Int64), a = null or `a`
         auto left = [](const dstd::Vector<dstd::String>& a = {}) {
             DataFrame df;
-            df.names = {"k", "a"};
+            df.names = dstd::make_shared_strings({"k", "a"});
             df.columns.push_back(i64s({1, 2, 3, 1, 0}, {0x0f}));
             df.columns.push_back(a.empty() ? Series::nulls(TypeId::String, 5)
                                            : Series::strings(a));
@@ -416,7 +422,7 @@ TEST_SUITE("dataframe join") {
         // right: k = [1.0, 2.0, 2.0] (Float64), a, b = [7, 8, 8]
         auto right = [](const dstd::Vector<dstd::String>& a) {
             DataFrame df;
-            df.names = {"k", "a", "b"};
+            df.names = dstd::make_shared_strings({"k", "a", "b"});
             const double rk[] = {1.0, 2.0, 2.0};
             df.columns.push_back(Series::flat_f64(rk, 3));
             df.columns.push_back(Series::strings(a));
@@ -427,7 +433,8 @@ TEST_SUITE("dataframe join") {
 
         DataFrame out = dftu_utils_test::ok(
             left().join(right(xyy), {"k"}, {"k"}, JoinHow::Lookup));
-        CHECK(out.names == dstd::Vector<dstd::String>{"k", "a", "b"});
+        CHECK(dstd::to_strings(out.names) ==
+              dstd::Vector<dstd::String>{"k", "a", "b"});
         CHECK(i64_col(out, "k") == dstd::Vector<I>{1, 2, 3, 1, NI});
         CHECK(str_col(out, "a") == dstd::Vector<S>{"x", "y", NS, "x", NS});
         CHECK(i64_col(out, "b") == dstd::Vector<I>{7, 8, NI, 7, NI});
@@ -439,7 +446,8 @@ TEST_SUITE("dataframe join") {
         for (std::int64_t morsel : {0, 1, 2})
             check_same(run(ll.join(rl, {"k"}, JoinHow::Lookup).collect(morsel)),
                        out);
-        CHECK(ll.join(rl, {"k"}, JoinHow::Lookup).schema() == out.names);
+        CHECK(ll.join(rl, {"k"}, JoinHow::Lookup).schema() ==
+              dstd::to_strings(out.names));
 
         const auto conflict =
             left().join(right({"x", "y", "z"}), {"k"}, {"k"}, JoinHow::Lookup);
@@ -457,7 +465,7 @@ TEST_SUITE("dataframe join") {
 
         // Strings never equal numbers.
         DataFrame text;
-        text.names = {"k"};
+        text.names = dstd::make_shared_strings({"k"});
         text.columns.push_back(Series::strings({"1", "2"}));
         DataFrame none = dftu_utils_test::ok(
             text.join(right(xyy), {"k"}, {"k"}, JoinHow::Lookup));
@@ -467,14 +475,15 @@ TEST_SUITE("dataframe join") {
     TEST_CASE("nest: every match as a list of structs, empty when none") {
         auto keys = [] {
             DataFrame df;
-            df.names = {"k"};
+            df.names = dstd::make_shared_strings({"k"});
             df.columns.push_back(i64s({2, 5, 0}, {0x03}));
             return df;
         };
         DataFrame left = keys();
         DataFrame out = dftu_utils_test::ok(
             left.join(make_right(), {"k"}, {"k"}, JoinHow::Nest, "m"));
-        CHECK(out.names == dstd::Vector<dstd::String>{"k", "m"});
+        CHECK(dstd::to_strings(out.names) ==
+              dstd::Vector<dstd::String>{"k", "m"});
         const Series m = out.column("m").materialize();
         REQUIRE(m.type() == TypeId::List);
         const std::int32_t* off = m.offsets();

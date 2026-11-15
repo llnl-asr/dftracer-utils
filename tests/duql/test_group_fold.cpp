@@ -36,7 +36,7 @@ dataframe::Series ints(const dstd::Vector<std::int64_t>& v) {
 
 dataframe::DataFrame batch(dataframe::Series k, dataframe::Series v) {
     dataframe::DataFrame f;
-    f.names = {"k", "v"};
+    f.names = dstd::make_shared_strings({"k", "v"});
     f.columns.push_back(std::move(k));
     f.columns.push_back(std::move(v));
     return f;

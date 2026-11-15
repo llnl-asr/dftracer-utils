@@ -5,7 +5,7 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/task.h>
-#include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -49,7 +49,7 @@ Series strs(const dstd::Vector<dstd::String>& v,
 template <class... S>
 DataFrame frame(dstd::Vector<dstd::String> names, S... cols) {
     DataFrame df;
-    df.names = std::move(names);
+    df.names = dstd::make_shared_strings(names);
     (df.columns.push_back(std::move(cols)), ...);
     return df;
 }

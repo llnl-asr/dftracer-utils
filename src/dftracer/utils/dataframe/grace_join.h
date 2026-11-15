@@ -156,8 +156,8 @@ class GraceJoin {
     coro::CoroTask<FrameResult> probe_left(std::int64_t max_rows);
     coro::CoroTask<FrameResult> deferred_left(std::int64_t max_rows);
 
-    dstd::Vector<dstd::String> left_names_;
-    dstd::Vector<dstd::String> right_names_;
+    dstd::Vector<dstd::SharedString> left_names_;
+    dstd::Vector<dstd::SharedString> right_names_;
     dstd::Vector<dstd::String> left_on_;
     dstd::Vector<dstd::String> right_on_;
     dstd::Vector<std::size_t> left_key_;

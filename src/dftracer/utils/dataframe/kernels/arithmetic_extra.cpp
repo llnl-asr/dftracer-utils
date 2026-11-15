@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-#include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/kernels/kernels.h>
 #include <dftracer/utils/dataframe/parallel.h>
@@ -321,8 +321,6 @@ Series bfill(const Series& v) { return Series{dftu_series_bfill(v.handle())}; }
 
 }  // namespace dftracer::utils::dataframe
 
-extern "C" {
-
 dftu_series* dftu_series_floordiv(const dftu_series* a, const dftu_series* b) {
     DFTU_FLAT_OPERAND(a, flat_a, dftu_series_floordiv(flat_a, b));
     DFTU_FLAT_OPERAND(b, flat_b, dftu_series_floordiv(a, flat_b));
@@ -376,5 +374,3 @@ dftu_series* dftu_series_bfill(const dftu_series* v) {
 
     return dftracer::utils::dataframe::fill_along(v, false);
 }
-
-}  // extern "C"

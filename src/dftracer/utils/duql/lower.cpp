@@ -317,7 +317,7 @@ class Lowering {
                 const auto* semi = std::get_if<In>(&t->node);
                 const bool set =
                     semi && semi->subquery && !semi->negated && joins(*t);
-                if (joins(*t) && !set) {
+                if (uses_udf(*t) || (joins(*t) && !set)) {
                     after.push_back(t);
                     continue;
                 }
@@ -361,10 +361,15 @@ class Lowering {
         dstd::Optional<Span> bucket;
         bool open_pivot = false;
         bool called = false;
+        dstd::Optional<Span> sank;
         for (std::size_t first = i; i < steps.size(); ++i) {
             if (called)
                 return fail(steps[i].stage ? steps[i].stage->span : Span{},
                             "a stage after 'call' is not allowed: 'call' ends "
+                            "the pipeline");
+            if (sank)
+                return fail(steps[i].stage ? steps[i].stage->span : *sank,
+                            "a stage after 'sink' is not allowed: 'sink' ends "
                             "the pipeline");
             if (!steps[i].stage) {
                 if (open_pivot)
@@ -408,6 +413,7 @@ class Lowering {
                 continue;
             }
             called = std::holds_alternative<CallStage>(s.node);
+            if (std::holds_alternative<Sink>(s.node)) sank = s.span;
             auto lowered = stage(s);
             if (!lowered) return dstd::Unexpected(lowered.error());
             for (auto& b : before_) out.stages.push_back(std::move(b));
@@ -1541,6 +1547,12 @@ class Lowering {
                     auto call = call_stage(n.call, s.span);
                     if (!call) return dstd::Unexpected(call.error());
                     return std::move(*call);
+                } else if constexpr (std::is_same_v<T, Sink>) {
+                    duql::PipelineSink out;
+                    out.name = n.name;
+                    out.options = n.options;
+                    out.text = text_of(s.span);
+                    return std::move(out);
                 } else if constexpr (std::is_same_v<T, Use>) {
                     return fail(
                         s.span,
@@ -1928,7 +1940,7 @@ class Lowering {
                         "'over' stands after a window function in a 'window' "
                         "block");
         const WinInfo* w = window_info(c.name);
-        bool framed = false;
+        bool framed = !w && !aggregate_info(c.name) && udaf_arity(c.name);
         if (w) switch (w->fn) {
                 case duql::WinFn::Sum:
                 case duql::WinFn::Mean:
@@ -1956,7 +1968,8 @@ class Lowering {
                 dstd::fmt<
                     "'{}' takes no frame; 'over' follows sum, mean, min, "
                     "max, count, count_if, count_distinct, collect, arg_max, "
-                    "arg_min, var, std or quantile">(c.name));
+                    "arg_min, var, std, quantile or a "
+                    "user-defined aggregate">(c.name));
         auto call = window_call(c, span, &o);
         if (!call) return dstd::Unexpected(call.error());
         return std::move(**call);
@@ -1986,6 +1999,8 @@ class Lowering {
                 return fail(
                     span,
                     dstd::fmt<"'{}' does not run in a 'window' block">(c.name));
+            if (const auto udaf = udaf_arity(c.name))
+                return udaf_window_call(c, span, *udaf, over);
             return dstd::Optional<duql::TermPtr>{};
         }
         if ((w->fn == duql::WinFn::Min || w->fn == duql::WinFn::Max) &&
@@ -2073,6 +2088,62 @@ class Lowering {
         return dstd::Optional<duql::TermPtr>(make_term(std::move(f)));
     }
 
+    // A user-defined aggregate in a window entry: over its frame, else over
+    // the whole partition.
+    Result<dstd::Optional<duql::TermPtr>> udaf_window_call(
+        const Call& c, Span span, duql::UdfArity arity_of,
+        const Over* over) const {
+        const std::size_t n = c.args.size();
+        if (n < static_cast<std::size_t>(arity_of.min_args) ||
+            n > static_cast<std::size_t>(arity_of.max_args))
+            return fail(
+                span, arity(c.name, static_cast<std::size_t>(arity_of.min_args),
+                            static_cast<std::size_t>(arity_of.max_args), n));
+        duql::PipelineWinCall call;
+        call.column = dstd::fmt<"__duql_w_{}">(win_->size());
+        call.fn = duql::WinFn::Udaf;
+        call.plugin = c.name;
+        call.text = text_of(span);
+        win_arg_ = true;
+        for (std::size_t k = 0; k < n; ++k) {
+            const auto& a = c.args[k];
+            if (!a.name.empty()) {
+                win_arg_ = false;
+                return fail(a.value->span,
+                            dstd::fmt<"'{}' takes no named argument '{}'">(
+                                c.name, a.name));
+            }
+            auto arg = term(*a.value);
+            if (!arg) {
+                win_arg_ = false;
+                return dstd::Unexpected(arg.error());
+            }
+            if (std::get_if<duql::TConst>(&(*arg)->node)) {
+                win_arg_ = false;
+                return fail(
+                    a.value->span,
+                    dstd::fmt<"'{}' takes a column or an expression as "
+                              "argument {}, not a constant">(c.name, k + 1));
+            }
+            if (k == 0)
+                call.arg = dstd::to_shared_ptr(std::move(*arg));
+            else
+                call.rest.push_back(dstd::to_shared_ptr(std::move(*arg)));
+        }
+        win_arg_ = false;
+        if (over) {
+            const auto frame = frame_of(*over, span);
+            if (!frame) return dstd::Unexpected(frame.error());
+            call.frame = *frame;
+        }
+        duql::TField f;
+        f.base = call.column;
+        f.steps.push_back({call.column, false, dstd::nullopt});
+        f.neg_at = 1;
+        win_->push_back(std::move(call));
+        return dstd::Optional<duql::TermPtr>(make_term(std::move(f)));
+    }
+
     Result<dstd::Vector<duql::PipelineAgg>> aggregates(
         const dstd::Vector<Assign>& block,
         dstd::StringView stage = "group") const {
@@ -2088,6 +2159,15 @@ class Lowering {
                 out.push_back(std::move(*built));
                 continue;
             }
+            if (c && !aggregate_info(c->name))
+                if (const auto udaf = udaf_arity(c->name)) {
+                    if (stage == "pivot")
+                        return fail(e.span, udaf_aggregate_stage(c->name));
+                    auto built = udaf_aggregate(*c, e.span, a.name, *udaf);
+                    if (!built) return dstd::Unexpected(built.error());
+                    out.push_back(std::move(*built));
+                    continue;
+                }
             if (c && plugin_kind(c->name) == duql::PluginKind::Aggregate) {
                 if (stage == "pivot")
                     return fail(e.span, plugin_aggregate_stage(c->name));
@@ -2140,8 +2220,11 @@ class Lowering {
     Result<dstd::Optional<duql::TermPtr>> entry_aggregate(const Call& c,
                                                           Span span) const {
         const bool plug = plugin_kind(c.name) == duql::PluginKind::Aggregate;
+        const auto udaf =
+            aggregate_info(c.name) ? dstd::nullopt : udaf_arity(c.name);
+        if (udaf && !agg_) return fail(span, udaf_aggregate_stage(c.name));
         if (plug && !agg_) return fail(span, plugin_aggregate_stage(c.name));
-        if (!agg_ || (!plug && !aggregate_info(c.name)))
+        if (!agg_ || (!plug && !udaf && !aggregate_info(c.name)))
             return dstd::Optional<duql::TermPtr>{};
         const bool is_fn =
             std::any_of(std::begin(duql::FUNCTIONS), std::end(duql::FUNCTIONS),
@@ -2156,8 +2239,9 @@ class Lowering {
         agg_name_.clear();
         auto* sink = agg_;
         agg_ = nullptr;
-        auto built =
-            plug ? plugin_aggregate(c, span, name) : aggregate(c, span, name);
+        auto built = udaf   ? udaf_aggregate(c, span, name, *udaf)
+                     : plug ? plugin_aggregate(c, span, name)
+                            : aggregate(c, span, name);
         agg_ = sink;
         if (!built) return dstd::Unexpected(built.error());
         sink->push_back(std::move(*built));
@@ -2172,6 +2256,49 @@ class Lowering {
         return dstd::fmt<
             "'{}' is a plugin aggregate; it stands in a 'group' "
             "or 'agg' block">(name);
+    }
+
+    static dstd::String udaf_aggregate_stage(const dstd::String& name) {
+        return dstd::fmt<
+            "'{}' is a user-defined aggregate; it stands in a 'group' or "
+            "'agg' block">(name);
+    }
+
+    Result<duql::PipelineAgg> udaf_aggregate(const Call& c, Span span,
+                                             const dstd::String& name,
+                                             duql::UdfArity arity_of) const {
+        const std::size_t n = c.args.size();
+        if (n < static_cast<std::size_t>(arity_of.min_args) ||
+            n > static_cast<std::size_t>(arity_of.max_args))
+            return fail(
+                span, arity(c.name, static_cast<std::size_t>(arity_of.min_args),
+                            static_cast<std::size_t>(arity_of.max_args), n));
+        duql::PipelineAgg agg;
+        agg.name = name;
+        agg.fn = duql::AggFn::Udaf;
+        agg.plugin = c.name;
+        agg.text = dstd::fmt<"{}(">(c.name);
+        for (std::size_t k = 0; k < n; ++k) {
+            const auto& a = c.args[k];
+            if (!a.name.empty())
+                return fail(a.value->span,
+                            dstd::fmt<"'{}' takes no named argument '{}'">(
+                                c.name, a.name));
+            auto arg = term(*a.value);
+            if (!arg) return dstd::Unexpected(arg.error());
+            if (std::get_if<duql::TConst>(&(*arg)->node))
+                return fail(
+                    a.value->span,
+                    dstd::fmt<"'{}' takes a column or an expression as "
+                              "argument {}, not a constant">(c.name, k + 1));
+            agg.text += (k ? ", " : "") + duql::term_text(**arg);
+            if (k == 0)
+                agg.arg = dstd::to_shared_ptr(std::move(*arg));
+            else
+                agg.rest.push_back(dstd::to_shared_ptr(std::move(*arg)));
+        }
+        agg.text += ")";
+        return agg;
     }
 
     Result<duql::PipelineAgg> plugin_aggregate(const Call& c, Span span,
@@ -2287,7 +2414,7 @@ class Lowering {
             "unpivot",  "sort",       "take",      "skip",   "sample",
             "expand",   "lookup",     "lookup",    "lookup", "union",
             "call",     "time_range", "call_tree", "bucket", "session",
-            "parse",    "use"};
+            "parse",    "use",        "sink"};
         static_assert(std::size(NAMES) == std::variant_size_v<StageNode>);
         return NAMES[s.node.index()];
     }
@@ -2531,6 +2658,7 @@ class Lowering {
                                      std::is_same_v<T, Unpivot> ||
                                      std::is_same_v<T, Union> ||
                                      std::is_same_v<T, CallStage> ||
+                                     std::is_same_v<T, Sink> ||
                                      std::is_same_v<T, CallTree>) {
                     col_units_.clear();
                     record_units_ = false;
@@ -3407,6 +3535,49 @@ class Lowering {
                                       std::move(*cond)});
     }
 
+    dstd::Optional<duql::UdfArity> udf_arity(const dstd::String& name) const {
+        if (!plugins_ || !plugins_->udf) return dstd::nullopt;
+        return plugins_->udf(name);
+    }
+
+    dstd::Optional<duql::UdfArity> udaf_arity(const dstd::String& name) const {
+        if (!plugins_ || !plugins_->udaf) return dstd::nullopt;
+        return plugins_->udaf(name);
+    }
+
+    // Whether `e` calls a plugin UDF, which runs on columns after the scan.
+    bool uses_udf(const Expr& e) const {
+        if (const auto* c = std::get_if<Call>(&e.node))
+            if (udf_arity(c->name)) return true;
+        bool out = false;
+        syntax::children(const_cast<Expr&>(e), [&](ExprPtr& child) {
+            out = out || uses_udf(*child);
+        });
+        return out;
+    }
+
+    Result<duql::TermPtr> udf_call(const Call& c, Span span,
+                                   duql::UdfArity arity_of) const {
+        const std::size_t n = c.args.size();
+        if (n < static_cast<std::size_t>(arity_of.min_args) ||
+            n > static_cast<std::size_t>(arity_of.max_args))
+            return fail(
+                span, arity(c.name, static_cast<std::size_t>(arity_of.min_args),
+                            static_cast<std::size_t>(arity_of.max_args), n));
+        duql::TCall t{duql::Fn::Udf, {}, nullptr, nullptr};
+        t.udf = c.name;
+        for (const auto& a : c.args) {
+            if (!a.name.empty())
+                return fail(a.value->span,
+                            dstd::fmt<"'{}' takes no named argument '{}'">(
+                                c.name, a.name));
+            auto arg = term(*a.value);
+            if (!arg) return dstd::Unexpected(arg.error());
+            t.args.push_back(std::move(*arg));
+        }
+        return make_term(std::move(t));
+    }
+
     Result<duql::TermPtr> call_term(const Call& c, Span span) const {
         auto timed = time_call(c, span);
         if (!timed) return dstd::Unexpected(timed.error());
@@ -3426,6 +3597,9 @@ class Lowering {
                 span,
                 dstd::fmt<"'{}' is an aggregate; it stands in a 'group' or "
                           "'agg' block">(c.name));
+        if (!info)
+            if (const auto udf = udf_arity(c.name))
+                return udf_call(c, span, *udf);
         if (!info && c.name.find('.') != dstd::String::npos)
             return plugin_call(c, span);
         if (!info)
@@ -3595,6 +3769,8 @@ class Lowering {
 };
 
 }  // namespace
+
+bool is_builtin_function(dstd::StringView name) { return builtin_name(name); }
 
 namespace {
 
@@ -3850,6 +4026,7 @@ void for_each_pipeline_term(const duql::Pipeline& p,
                     for (const auto& a : s.aggs) {
                         on(a.arg);
                         on(a.by);
+                        for (const auto& r : a.rest) on(r);
                     }
                 } else if constexpr (std::is_same_v<T,
                                                     duql::PipelineTimeRange>) {
@@ -3862,6 +4039,7 @@ void for_each_pipeline_term(const duql::Pipeline& p,
                     for (const auto& c : s.calls) {
                         on(c.arg);
                         on(c.by);
+                        for (const auto& r : c.rest) on(r);
                     }
                     items(s.items);
                 } else if constexpr (std::is_same_v<T, duql::PipelinePivot>) {

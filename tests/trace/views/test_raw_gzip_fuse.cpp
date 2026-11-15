@@ -90,7 +90,8 @@ bool rows_equal(const dftracer::utils::dataframe::DataFrame& a,
     if (a.num_rows() != b.num_rows()) return false;
     for (std::size_t c = 0; c < a.columns.size(); ++c)
         if (a.columns[c].type() != b.columns[c].type()) return false;
-    return sorted_row_keys(a, a.names) == sorted_row_keys(b, a.names);
+    const auto names = dstd::to_strings(a.names);
+    return sorted_row_keys(a, names) == sorted_row_keys(b, names);
 }
 
 }  // namespace
@@ -475,8 +476,8 @@ class FailingFold final : public Fold {
     void seal_unit(const ScanUnit&) override {}
     void drop_unit(const ScanUnit&) override {}
     dstd::Result<void> merge(Fold&) override { return {}; }
-    dftracer::utils::coro::CoroTask<bool> finalize(
-        const CoverageSet&) override {
+    dftracer::utils::coro::CoroTask<dftracer::utils::dstd::Result<bool>>
+    finalize(const CoverageSet&) override {
         co_return false;
     }
     int batches = 0;
@@ -500,8 +501,8 @@ class RecordingFold final : public Fold {
     void seal_unit(const ScanUnit&) override {}
     void drop_unit(const ScanUnit&) override {}
     dstd::Result<void> merge(Fold&) override { return {}; }
-    dftracer::utils::coro::CoroTask<bool> finalize(
-        const CoverageSet&) override {
+    dftracer::utils::coro::CoroTask<dftracer::utils::dstd::Result<bool>>
+    finalize(const CoverageSet&) override {
         co_return false;
     }
     dstd::Vector<dstd::String> log;

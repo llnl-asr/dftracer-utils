@@ -81,7 +81,27 @@ def test_new_scaffolds_cpp_source(tmp_path):
     assert plugin_cli.main(["new", "mycount", "--cpp", "-o", str(tmp_path)]) == 0
     src = tmp_path / "mycount.cpp"
     assert src.is_file()
-    assert "make_plugin" in src.read_text()
+    assert 'DFTU_PLUGIN("mycount"' in src.read_text()
+    assert "p.fold<mycount>()" in src.read_text()
+
+
+def test_generated_abi_version_header_carries_the_host_version(tmp_path, monkeypatch):
+    from dftracer.utils import _plugin_build
+    from dftracer.utils.dftracer_utils_ext import PLUGIN_ABI_VERSION
+
+    monkeypatch.setenv("DFTRACER_UTILS_JIT_CACHE", str(tmp_path / "cache"))
+    overlay = _plugin_build._ensure_abi_version_header(str(tmp_path / "no_include"))
+    assert overlay is not None
+    text = (
+        tmp_path
+        / "cache"
+        / "abi_version_include"
+        / "dftracer"
+        / "utils"
+        / "plugins"
+        / "abi_version.h"
+    ).read_text()
+    assert f"#define DFTRACER_UTILS_PLUGIN_ABI_VERSION 0x{PLUGIN_ABI_VERSION:X}u" in text
 
 
 def test_build_missing_source_errors(tmp_path):
@@ -133,3 +153,19 @@ def test_new_build_load_run_cpp(tmp_path):
     tbl = pa.table(results["mycount"])
     val = tbl.column("value").to_numpy(zero_copy_only=False)
     assert int(val.sum()) == n
+
+
+@pytest.mark.skipif(not _HAS_CXX, reason="no C++ compiler available")
+def test_plugin_out_of_memory_raises_memory_error(tmp_path):
+    assert plugin_cli.main(["new", "oom", "-o", str(tmp_path)]) == 0
+    src = tmp_path / "oom.c"
+    text = src.read_text()
+    refuse = '(void)slice;\n    return dftu_fail(ctx, DFTU_E_NO_MEMORY, "heap refused");'
+    assert "(void)slice;\n    if (!agg" in text
+    src.write_text(text.replace("(void)slice;", refuse, 1))
+    so = tmp_path / "oom.so"
+    assert plugin_cli.main(["build", str(src), "-o", str(so)]) == 0
+
+    _write_trace(str(tmp_path / "trace.pfw.gz"), 10)
+    with pytest.raises(MemoryError, match="heap refused"):
+        Plugins([str(so)]).run(str(tmp_path))

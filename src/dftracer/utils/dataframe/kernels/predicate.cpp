@@ -4,7 +4,7 @@
 // column. Integer columns never carry NaN/Inf, so those are filled without a
 // kernel.
 
-#include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 
 #include <algorithm>
@@ -119,7 +119,9 @@ dftu_series* predicate_mask(const dftu_series* v, std::int32_t mode) {
 
 }  // namespace
 
-extern "C" {
+}  // namespace dftracer::utils::dataframe
+
+using namespace dftracer::utils::dataframe;
 
 dftu_series* dftu_series_is_nan(const dftu_series* v) {
     if (!v) return nullptr;
@@ -183,7 +185,4 @@ dftu_series* dftu_series_null_mask(const dftu_series* v) {
     return out;
 }
 
-}  // extern "C"
-
-}  // namespace dftracer::utils::dataframe
 #endif  // HWY_ONCE

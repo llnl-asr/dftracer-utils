@@ -100,12 +100,12 @@ class StreamRowFold : public Fold {
     void skip_unit(const ScanUnit& unit) override { end_unit(unit); }
     dstd::Result<void> merge(Fold&) override { return {}; }
 
-    coro::CoroTask<bool> finalize(const CoverageSet&) override {
+    coro::CoroTask<dstd::Result<bool>> finalize(const CoverageSet&) override {
         co_return true;
     }
 
-    ::dftu_task* take_pending() override {
-        ::dftu_task* t = pending_;
+    coro::CoroTask<void>* take_pending() override {
+        coro::CoroTask<void>* t = pending_;
         pending_ = nullptr;
         return t;
     }
@@ -144,7 +144,7 @@ class StreamRowFold : public Fold {
     // fuse() awaits take_pending()'s task right after step() and before the
     // next step() on this fold, so one reused slot is enough.
     dstd::Optional<coro::CoroTask<void>> pending_task_;
-    ::dftu_task* pending_ = nullptr;
+    coro::CoroTask<void>* pending_ = nullptr;
 };
 
 }  // namespace dftracer::utils::trace::views::detail

@@ -71,6 +71,8 @@ TODO
 temp
 
 *.gz
+!src/dftracer/utils/cli/plugin_templates/sample/sample.pfw.gz
+!examples/plugins/tests/data/events.pfw.gz
 traces
 refs
 *.ipynb

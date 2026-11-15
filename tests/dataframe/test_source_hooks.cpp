@@ -1,18 +1,16 @@
 // SPDX-License-Identifier: MIT
 // Source planning hooks: the SourceAbsorption rule offers ops bottom up to
-// Source::apply_*, and ProviderSource mirrors the hooks over
-// dftu_source_vt::apply. A C++ fake exercises the planner contract; a
-// hand-written vtable exercises the C marshaling and derived-source ownership.
+// Source::apply_*. A C++ fake exercises the planner contract.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <coro/failing.h>
 #include <dataframe/expr_ok.h>
 #include <dftracer/utils/coro/task.h>
-#include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/internal/expr_handle.h>
 #include <dftracer/utils/dataframe/internal/lazy_plan.h>
-#include <dftracer/utils/dataframe/internal/provider_source.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/map.h>
@@ -27,7 +25,6 @@
 
 #include <cstdint>
 #include <memory>
-#include <stdexcept>
 #include <utility>
 
 using namespace dftracer::utils;
@@ -56,7 +53,7 @@ DataFrame make_df() {
     dstd::Vector<std::int64_t> b{60, 50, 40, 30, 20, 10};
     dstd::Vector<std::int64_t> g{1, 1, 2, 2, 3, 3};
     DataFrame df;
-    df.names = {"a", "b", "g"};
+    df.names = dstd::make_shared_strings({"a", "b", "g"});
     df.columns.push_back(Series::flat_i64(a.data(), 6));
     df.columns.push_back(Series::flat_i64(b.data(), 6));
     df.columns.push_back(Series::flat_i64(g.data(), 6));
@@ -136,8 +133,9 @@ class SmartSource final : public Source,
         if (!accepts(Kind::Projection)) return dstd::nullopt;
         dstd::Vector<dstd::String> names;
         for (const NamedExpr& e : exprs)
-            names.push_back(
-                frame_.names[static_cast<std::size_t>(expr_col_index(e.expr))]);
+            names.emplace_back(
+                frame_.names[static_cast<std::size_t>(expr_col_index(e.expr))]
+                    .view());
         return derive(dftu_utils_test::ok(frame_.select(names)),
                       policy_->projection_inexact ? ApplyStatus::Inexact
                                                   : ApplyStatus::Exact);
@@ -337,7 +335,8 @@ TEST_SUITE("source_hooks") {
         CHECK(plan.rfind("scan [b, a]", 0) == 0);
         CHECK(plan.find("filter") == dstd::String::npos);
         DataFrame r = run(lf.collect());
-        CHECK(r.names == dstd::Vector<dstd::String>{"b", "a"});
+        CHECK(dstd::to_strings(r.names) ==
+              dstd::Vector<dstd::String>{"b", "a"});
         CHECK(ints(r, "a") == dstd::Vector<std::int64_t>{5, 6});
     }
 
@@ -361,7 +360,8 @@ TEST_SUITE("source_hooks") {
         CHECK(expr_col_index(spec.aggs[1].input) == 0);
         CHECK(spec.aggs[1].out == "sum_b");
         CHECK(lf.explain().find("group_by") == dstd::String::npos);
-        CHECK(r.names == dstd::Vector<dstd::String>{"g", "n", "sum_b"});
+        CHECK(dstd::to_strings(r.names) ==
+              dstd::Vector<dstd::String>{"g", "n", "sum_b"});
         CHECK(nums(r, "sum_b") == dstd::Vector<double>{110, 70, 30});
     }
 
@@ -477,253 +477,8 @@ TEST_SUITE("source_hooks") {
 
 namespace {
 
-// C fixture: 10 rows id 0..9, val = id*10. apply() answers per ApplyFixture.
-struct ApplyFixture {
-    std::int32_t answer = DFTU_APPLY_EXACT;
-    std::int64_t offset = 0;
-    std::int64_t limit = -1;
-    int derived_alive = 0;
-    int derived_destroyed = 0;
-    dstd::Vector<dftu_apply_request> requests;
-    dstd::Vector<dstd::String> key_names;
-    dstd::Vector<dstd::String> agg_ops;
-    dstd::Vector<bool> agg_has_input;
-    bool join_is_ours = false;
-    dstd::Vector<dstd::String> join_on;
-    std::int32_t join_how = -1;
-    dstd::String join_suffix;
-};
-
-struct Derived {
-    ApplyFixture* fx;
-    std::int64_t offset;
-    std::int64_t n;
-};
-
-struct CursorState {
-    dftu_dataframe* frame;
-};
-
-dftu_dataframe* make_rows(std::int64_t offset, std::int64_t n) {
-    dstd::Vector<std::int64_t> ids, vals;
-    for (std::int64_t i = 0; i < 10; ++i) {
-        ids.push_back(i);
-        vals.push_back(i * 10);
-    }
-    dftu_series* id_col =
-        dftu_series_new_flat(DFTU_TYPE_INT64, ids.data(), 10, nullptr);
-    dftu_series* val_col =
-        dftu_series_new_flat(DFTU_TYPE_INT64, vals.data(), 10, nullptr);
-    const char* names[] = {"id", "val"};
-    dftu_series* cols[] = {id_col, val_col};
-    dftu_dataframe* df = dftu_dataframe_new(names, cols, 2);
-    if (n < 0) return df;
-    dftu_dataframe* sliced = dftu_dataframe_slice(df, offset, n);
-    dftu_dataframe_free(df);
-    return sliced;
-}
-
-std::int32_t c_schema(void*, const char* const** out_names) {
-    static const char* names[] = {"id", "val"};
-    *out_names = names;
-    return 2;
-}
-
-dftu_task* c_next(void* self, std::int64_t, dftu_result_frame* out) {
-    auto* cs = static_cast<CursorState*>(self);
-    out->ok = 1;
-    out->u.value = cs->frame;
-    cs->frame = nullptr;
-    return nullptr;
-}
-
-void c_cursor_destroy(void* self) {
-    auto* cs = static_cast<CursorState*>(self);
-    if (cs->frame) dftu_dataframe_free(cs->frame);
-    delete cs;
-}
-
-const dftu_cursor_vt C_CURSOR_VT = {c_next, c_cursor_destroy, nullptr, nullptr,
-                                    nullptr};
-
-void* open_cursor(dftu_dataframe* df, void** out_cursor_self,
-                  const dftu_cursor_vt** out_vt) {
-    auto* cs = new CursorState{df};
-    *out_cursor_self = cs;
-    *out_vt = &C_CURSOR_VT;
-    return cs;
-}
-
-void* c_root_scan(void*, const dftu_scan_request*, std::int32_t*,
-                  void** out_cursor_self, const dftu_cursor_vt** out_vt) {
-    return open_cursor(make_rows(0, -1), out_cursor_self, out_vt);
-}
-
-void* c_derived_scan(void* self, const dftu_scan_request*, std::int32_t*,
-                     void** out_cursor_self, const dftu_cursor_vt** out_vt) {
-    auto* d = static_cast<Derived*>(self);
-    return open_cursor(make_rows(d->offset, d->n), out_cursor_self, out_vt);
-}
-
-void c_derived_destroy(void* self) {
-    auto* d = static_cast<Derived*>(self);
-    --d->fx->derived_alive;
-    ++d->fx->derived_destroyed;
-    delete d;
-}
-
-void c_root_destroy(void*) {}
-
-void c_apply(void* self, const dftu_apply_request* req, dftu_apply_result* out);
-
-const dftu_source_vt DERIVED_VT = {c_schema, c_derived_scan, c_derived_destroy,
-                                   nullptr, nullptr};
-
-void c_apply(void* self, const dftu_apply_request* req,
-             dftu_apply_result* out) {
-    auto* fx = static_cast<ApplyFixture*>(self);
-    fx->requests.push_back(*req);
-    if (req->kind == DFTU_APPLY_AGGREGATION) {
-        const dftu_apply_aggregation_args& a = req->u.aggregation;
-        for (std::int32_t i = 0; i < a.n_keys; ++i)
-            fx->key_names.push_back(a.keys[i].name);
-        for (std::int32_t i = 0; i < a.n_aggs; ++i) {
-            fx->agg_ops.push_back(a.aggs[i].op);
-            fx->agg_has_input.push_back(a.aggs[i].input != nullptr);
-        }
-    }
-    if (req->kind == DFTU_APPLY_JOIN) {
-        const dftu_apply_join_args& j = req->u.join;
-        fx->join_is_ours = j.other_vt && j.other_vt->schema == c_schema;
-        for (std::int32_t i = 0; i < j.n_on; ++i)
-            fx->join_on.push_back(
-                dstd::fmt<"{}={}">(j.left_on[i], j.right_on[i]));
-        fx->join_how = j.how;
-        fx->join_suffix = j.suffix;
-    }
-    if (fx->answer == DFTU_APPLY_NO_CHANGE) return;
-    const bool limit = req->kind == DFTU_APPLY_LIMIT;
-    auto* d = new Derived{fx, limit ? req->u.limit.offset : 0,
-                          limit ? req->u.limit.n : -1};
-    ++fx->derived_alive;
-    out->status = fx->answer;
-    out->self = d;
-    out->vt = &DERIVED_VT;
-}
-
-const dftu_source_vt ROOT_VT = {c_schema, c_root_scan, c_root_destroy, nullptr,
-                                c_apply};
-
-LazyFrame c_frame(ApplyFixture& fx) {
-    return LazyFrame::scan(make_provider_source(ROOT_VT, &fx));
-}
-
-}  // namespace
-
-TEST_SUITE("source_hooks_c_abi") {
-    TEST_CASE("an exact limit reaches the derived source and frees it once") {
-        ApplyFixture fx;
-        {
-            LazyFrame lf = c_frame(fx).slice(2, 3);
-            DataFrame r = run(lf.collect());
-            CHECK(ints(r, "id") == dstd::Vector<std::int64_t>{2, 3, 4});
-            REQUIRE_FALSE(fx.requests.empty());
-            CHECK(fx.requests[0].kind == DFTU_APPLY_LIMIT);
-            CHECK(fx.requests[0].u.limit.offset == 2);
-            CHECK(fx.requests[0].u.limit.n == 3);
-        }
-        CHECK(fx.derived_alive == 0);
-        CHECK(fx.derived_destroyed >= 1);
-    }
-
-    TEST_CASE("an open cursor keeps its derived source alive") {
-        ApplyFixture fx;
-        dstd::UniquePtr<dftracer::utils::dataframe::Cursor> cur;
-        {
-            LazyFrame lf = c_frame(fx).slice(0, 4);
-            cur = dftu_utils_test::ok(lf.open_cursor());
-        }
-        CHECK(fx.derived_alive == 1);
-        cur.reset();
-        CHECK(fx.derived_alive == 0);
-    }
-
-    TEST_CASE("an inexact answer to a projection is refused and freed") {
-        ApplyFixture fx;
-        fx.answer = DFTU_APPLY_INEXACT;
-        LazyFrame lf = c_frame(fx).select({"val"});
-        const dstd::String plan = lf.explain();
-        CHECK(plan.find("select [val]") != dstd::String::npos);
-        CHECK(fx.derived_alive == 0);
-    }
-
-    TEST_CASE("an unknown status reads as no change and is freed") {
-        ApplyFixture fx;
-        fx.answer = 42;
-        LazyFrame lf = c_frame(fx).slice(0, 2);
-        CHECK(lf.explain().find("slice") != dstd::String::npos);
-        CHECK(fx.derived_alive == 0);
-        CHECK(ints(run(lf.collect()), "id") ==
-              dstd::Vector<std::int64_t>{0, 1});
-    }
-
-    TEST_CASE("an aggregation marshals named keys and optional inputs") {
-        ApplyFixture fx;
-        fx.answer = DFTU_APPLY_NO_CHANGE;
-        LazyFrame lf = c_frame(fx).group_by(
-            dstd::Vector<dstd::String>{"id"},
-            {{Agg::Count, "", "n"}, {Agg::Sum, "val", "s"}});
-        lf.explain();
-        CHECK(fx.key_names == dstd::Vector<dstd::String>{"id"});
-        CHECK(fx.agg_ops == dstd::Vector<dstd::String>{"count", "sum"});
-        CHECK(fx.agg_has_input == dstd::Vector<bool>{false, true});
-    }
-
-    TEST_CASE("tail marshals its row count") {
-        ApplyFixture fx;
-        fx.answer = DFTU_APPLY_NO_CHANGE;
-        c_frame(fx).tail(3).explain();
-        REQUIRE(fx.requests.size() == 1);
-        CHECK(fx.requests[0].kind == DFTU_APPLY_TAIL);
-        CHECK(fx.requests[0].u.tail.n == 3);
-    }
-
-    TEST_CASE("a join marshals the other source and keeps it alive") {
-        ApplyFixture fx;
-        dstd::UniquePtr<dftracer::utils::dataframe::Cursor> cur;
-        {
-            LazyFrame right = c_frame(fx).slice(0, 5);
-            LazyFrame lf = c_frame(fx).join(
-                right, {"id"}, dftracer::utils::dataframe::JoinHow::Left, "_r");
-            cur = dftu_utils_test::ok(lf.open_cursor());
-        }
-        CHECK(fx.join_is_ours);
-        CHECK(fx.join_on == dstd::Vector<dstd::String>{"id=id"});
-        CHECK(fx.join_how == DFTU_JOIN_LEFT);
-        CHECK(fx.join_suffix == "_r");
-        // The limit-derived right side and the join-derived source.
-        CHECK(fx.derived_alive == 2);
-        cur.reset();
-        CHECK(fx.derived_alive == 0);
-    }
-
-    TEST_CASE("a source without apply keeps the ScanRequest path") {
-        ApplyFixture fx;
-        const dftu_source_vt vt = {c_schema, c_root_scan, c_root_destroy,
-                                   nullptr, nullptr};
-        LazyFrame lf =
-            LazyFrame::scan(make_provider_source(vt, &fx)).slice(1, 2);
-        CHECK(lf.explain().find("slice") != dstd::String::npos);
-        CHECK(ints(run(lf.collect()), "id") ==
-              dstd::Vector<std::int64_t>{1, 2});
-        CHECK(fx.requests.empty());
-    }
-}
-
-namespace {
-
 struct BatchLog {
-    bool throw_batch = false;
+    bool fail_batch = false;
     bool fail_open = false;
     int opened = 0;
     int scans = 0;
@@ -770,7 +525,7 @@ class KeyedSource final : public Source {
     coro::CoroTask<dstd::Result<dstd::Vector<DataFrame>>> collect_batch(
         dstd::Vector<dstd::SharedPtr<const Source>> members) const override {
         ++log_->batches;
-        if (log_->throw_batch) throw std::runtime_error("batch boom");
+        if (log_->fail_batch) co_await coro_test::failing_task("batch boom");
         log_->last_members = members.size();
         dstd::Vector<DataFrame> out;
         for (const auto& m : members)
@@ -1009,14 +764,14 @@ TEST_SUITE("batch contract") {
 
 namespace {
 
-enum class SourceFault { Throw, Stop, ScanFails };
+enum class SourceFault { Fail, Stop, ScanFails };
 
 class FaultyCursor final : public dftracer::utils::dataframe::Cursor {
    public:
     explicit FaultyCursor(SourceFault fault) : fault_(fault) {}
     coro::CoroTask<MorselResult> next(std::int64_t) override {
-        if (fault_ == SourceFault::Throw)
-            throw std::runtime_error("source boom");
+        if (fault_ == SourceFault::Fail)
+            co_await coro_test::failing_task("source boom");
         co_await coro::stop_here();
         co_return MorselResult(dstd::nullopt);
     }
@@ -1057,7 +812,7 @@ LazyFrame faulty(SourceFault fault) {
 TEST_SUITE("source that fails") {
     TEST_CASE("a source whose task throws ends the collect with an error") {
         const auto collected = dftracer::utils::default_runtime()
-                                   .submit(faulty(SourceFault::Throw).collect())
+                                   .submit(faulty(SourceFault::Fail).collect())
                                    .get();
         REQUIRE_FALSE(collected.has_value());
         CHECK(dstd::String(collected.error().c_str()).find("source boom") !=
@@ -1066,7 +821,7 @@ TEST_SUITE("source that fails") {
 
     TEST_CASE("a source whose task throws fails the ops over it the same way") {
         const auto filtered = dftracer::utils::default_runtime()
-                                  .submit(faulty(SourceFault::Throw)
+                                  .submit(faulty(SourceFault::Fail)
                                               .filter(col(0) > std::int64_t{1})
                                               .head(3)
                                               .collect())
@@ -1075,7 +830,7 @@ TEST_SUITE("source that fails") {
         CHECK(dstd::String(filtered.error().c_str()).find("source boom") !=
               dstd::String::npos);
         const auto joined = dftracer::utils::default_runtime()
-                                .submit(faulty(SourceFault::Throw)
+                                .submit(faulty(SourceFault::Fail)
                                             .join(make_df().lazy(), {"a"})
                                             .collect())
                                 .get();
@@ -1092,10 +847,9 @@ TEST_SUITE("source that fails") {
                 if (!*df) co_return df->error();
             co_return dstd::Result<void>();
         };
-        const auto result =
-            dftracer::utils::default_runtime()
-                .submit(stream_error(faulty(SourceFault::Throw)))
-                .get();
+        const auto result = dftracer::utils::default_runtime()
+                                .submit(stream_error(faulty(SourceFault::Fail)))
+                                .get();
         REQUIRE_FALSE(result.has_value());
         CHECK(dstd::String(result.error().c_str()).find("source boom") !=
               dstd::String::npos);
@@ -1126,7 +880,7 @@ TEST_SUITE("source that fails") {
 
     TEST_CASE("a collect_batch that throws ends the collect with an error") {
         auto log = dstd::make_shared<BatchLog>();
-        log->throw_batch = true;
+        log->fail_batch = true;
         const auto collected =
             dftracer::utils::default_runtime()
                 .submit(keyed("k", log)

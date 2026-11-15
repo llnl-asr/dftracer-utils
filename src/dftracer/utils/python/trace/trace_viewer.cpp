@@ -1,0 +1,1445 @@
+// SPDX-License-Identifier: MIT
+#define PY_SSIZE_T_CLEAN
+#include <dftracer/utils/common/config.h>
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/common/str_format.h>
+#include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dataframe/internal/lazy_plan.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/function.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/scoped_fd.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/duql/macros.h>
+#include <dftracer/utils/duql/query.h>
+#include <dftracer/utils/duql/syntax/parser.h>
+#include <dftracer/utils/duql/syntax/tree.h>
+#include <dftracer/utils/plugins/host/plugins.h>
+#include <dftracer/utils/python/core/dict_helpers.h>
+#include <dftracer/utils/python/core/errors.h>
+#include <dftracer/utils/python/core/list_helpers.h>
+#include <dftracer/utils/python/core/method.h>
+#include <dftracer/utils/python/core/runtime_mixin.h>
+#include <dftracer/utils/python/core/seq_helpers.h>
+#include <dftracer/utils/python/core/str_helpers.h>
+#include <dftracer/utils/python/core/type_helpers.h>
+#include <dftracer/utils/python/frame/agg_helpers.h>
+#include <dftracer/utils/python/frame/dataframe.h>
+#include <dftracer/utils/python/frame/lazyframe.h>
+#include <dftracer/utils/python/plugins/plugin_host.h>
+#include <dftracer/utils/python/trace/gzip_sink.h>
+#include <dftracer/utils/python/trace/trace_viewer.h>
+#include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/trace/index/record_schema.h>
+#include <dftracer/utils/trace/internal/utils.h>
+#include <dftracer/utils/trace/time_metric.h>
+#include <dftracer/utils/trace/views/live_view.h>
+#include <dftracer/utils/trace/views/view.h>
+#include <dftracer/utils/trace/views/view_source.h>
+
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
+#include <utility>
+
+using namespace dftracer::utils;
+
+namespace {
+
+PyObject* str_list_dstd(
+    const dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>& v) {
+    PyObject* list = PyList_New(static_cast<Py_ssize_t>(v.size()));
+    if (!list) return nullptr;
+    for (std::size_t i = 0; i < v.size(); ++i) {
+        PyObject* item = PyUnicode_FromStringAndSize(
+            v[i].data(), static_cast<Py_ssize_t>(v[i].size()));
+        if (!item) {
+            Py_DECREF(list);
+            return nullptr;
+        }
+        PyList_SET_ITEM(list, static_cast<Py_ssize_t>(i), item);
+    }
+    return list;
+}
+
+dftracer::utils::dstd::String DS(const dftracer::utils::dstd::String& v) {
+    return dftracer::utils::dstd::String(v.data(), v.size());
+}
+
+using dftracer::utils::dataframe::DataFrame;
+using dftracer::utils::dataframe::LazyFrame;
+using trace::views::AggOp;
+using trace::views::AggSpec;
+using trace::views::ExportStats;
+using trace::views::GroupKey;
+using trace::views::Phase;
+using trace::views::View;
+
+View& tv_of(PyObject* self) {
+    return *reinterpret_cast<TraceViewerObject*>(self)->tv;
+}
+
+PyObject* make_viewer(View&& t) {
+    auto* self = reinterpret_cast<TraceViewerObject*>(
+        TraceViewerType.tp_alloc(&TraceViewerType, 0));
+    if (!self) return nullptr;
+    self->tv = dftracer::utils::dstd::make_unique<View>(std::move(t)).release();
+    return reinterpret_cast<PyObject*>(self);
+}
+
+// Runs `fn` with the GIL held, turning a C++ exception into the typed Python
+// error.
+template <class Fn>
+PyObject* guarded(Fn&& fn) {
+    try {
+        return fn();
+    } catch (const std::exception& e) {
+        python::core::set_typed_py_error(e);
+        return nullptr;
+    }
+}
+
+// A view or plan that kept an error is that error here: the call that built it
+// raised it before they kept errors.
+LazyFrame checked(LazyFrame lf) {
+    dftracer::utils::python::core::py_unwrap(lf.status());
+    return lf;
+}
+
+View checked(View tv) {
+    dftracer::utils::python::core::py_unwrap(tv.status());
+    return tv;
+}
+
+template <class Fn>
+PyObject* build(PyObject* self, Fn&& fn) {
+    return guarded([&] { return make_viewer(checked(fn(tv_of(self)))); });
+}
+
+PyObject* stats_dict(const ExportStats& s) {
+    PyObject* d = PyDict_New();
+    if (!d) return nullptr;
+    if (dict_set_i64(d, "events_matched",
+                     static_cast<long long>(s.events_matched)) < 0 ||
+        dict_set_i64(d, "events_scanned",
+                     static_cast<long long>(s.events_scanned)) < 0 ||
+        dict_set_i64(d, "lines_invalid",
+                     static_cast<long long>(s.lines_invalid)) < 0 ||
+        dict_set_i64(d, "values_unconverted",
+                     static_cast<long long>(s.values_unconverted)) < 0 ||
+        dict_set_i64(d, "chunks_scanned",
+                     static_cast<long long>(s.chunks_scanned)) < 0 ||
+        dict_set_i64(d, "chunks_skipped",
+                     static_cast<long long>(s.chunks_skipped)) < 0 ||
+        dict_set_i64(d, "chunks_covered",
+                     static_cast<long long>(s.chunks_covered)) < 0 ||
+        dict_set_bool(d, "artifacts_committed", s.artifacts_committed) < 0 ||
+        dict_set_bool(d, "truncated", s.truncated) < 0 ||
+        dict_set_bool(d, "served_from_mv", s.served_from_mv) < 0) {
+        Py_DECREF(d);
+        return nullptr;
+    }
+    return d;
+}
+
+// A Python (done, total) callback as a ProgressFn. It fires on a runtime
+// worker, so each call takes the GIL.
+trace::views::ProgressFn progress_from(PyObject* obj) {
+    if (!obj || obj == Py_None) return {};
+    Py_INCREF(obj);
+    auto cb = dftracer::utils::dstd::adopt_shared_ptr(obj, [](PyObject* p) {
+        PyGILState_STATE g = PyGILState_Ensure();
+        Py_DECREF(p);
+        PyGILState_Release(g);
+    });
+    return [cb](std::size_t done, std::size_t total) {
+        PyGILState_STATE g = PyGILState_Ensure();
+        PyObject* r =
+            PyObject_CallFunction(cb.get(), "nn", static_cast<Py_ssize_t>(done),
+                                  static_cast<Py_ssize_t>(total));
+        if (r)
+            Py_DECREF(r);
+        else
+            PyErr_Clear();
+        PyGILState_Release(g);
+    };
+}
+
+class FileSink : public trace::views::ExportSink {
+   public:
+    explicit FileSink(FILE* f) : f_(f) {}
+    void write(dftracer::utils::dstd::StringView data) override {
+        std::fwrite(data.data(), 1, data.size(), f_.get());
+    }
+    void flush() override { std::fflush(f_.get()); }
+
+   private:
+    dftracer::utils::dstd::ScopedFile f_;
+};
+
+// "fn(key)" or "fn(key, 'a', 'b')" -> transform + inner key text; false when
+// `t` is not a call, leaving `t` to parse as a plain key.
+bool split_transform(
+    const dftracer::utils::dstd::String& t, GroupKey::Transform& tf,
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>& targs,
+    dftracer::utils::dstd::String& inner) {
+    const auto lp = t.find('(');
+    if (lp == dftracer::utils::dstd::String::npos || t.back() != ')')
+        return false;
+    const dftracer::utils::dstd::String fn = t.substr(0, lp);
+    if (fn == "dirname")
+        tf = GroupKey::Transform::Dirname;
+    else if (fn == "basename")
+        tf = GroupKey::Transform::Basename;
+    else if (fn == "lower")
+        tf = GroupKey::Transform::Lower;
+    else if (fn == "bucket")
+        tf = GroupKey::Transform::Bucket;
+    else
+        return false;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> parts;
+    dftracer::utils::dstd::String cur;
+    for (char ch : t.substr(lp + 1, t.size() - lp - 2)) {
+        if (ch == ',') {
+            parts.push_back(cur);
+            cur.clear();
+        } else {
+            cur += ch;
+        }
+    }
+    parts.push_back(cur);
+    auto trim = [](const dftracer::utils::dstd::String& x) {
+        const auto b = x.find_first_not_of(" \t'\"");
+        const auto e = x.find_last_not_of(" \t'\"");
+        return b == dftracer::utils::dstd::String::npos
+                   ? dftracer::utils::dstd::String()
+                   : x.substr(b, e - b + 1);
+    };
+    inner = trim(parts[0]);
+    for (std::size_t i = 1; i < parts.size(); ++i)
+        targs.push_back(trim(parts[i]));
+    return !inner.empty();
+}
+
+// name | cat | pid | tid | fhash | hhash | io_cat | acc_pat | rank |
+// file_path | file_name | host_name | arg:<key> | any other field, each
+// optionally wrapped in a transform call.
+GroupKey parse_group_key(const dftracer::utils::dstd::String& s) {
+    dftracer::utils::dstd::String t = s;
+    GroupKey::Transform tf = GroupKey::Transform::None;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> targs;
+    dftracer::utils::dstd::String inner;
+    if (split_transform(t, tf, targs, inner)) t = inner;
+    GroupKey out;
+    if (t == "name")
+        out = GroupKey::name();
+    else if (t == "cat")
+        out = GroupKey::cat();
+    else if (t == "pid")
+        out = GroupKey::pid();
+    else if (t == "tid")
+        out = GroupKey::tid();
+    else if (t == "fhash")
+        out = GroupKey::fhash();
+    else if (t == "hhash")
+        out = GroupKey::hhash();
+    else if (t == "io_cat")
+        out = GroupKey::io_cat();
+    else if (t == "acc_pat")
+        out = GroupKey::acc_pat();
+    else if (t == "file_path")
+        out = GroupKey::file_path();
+    else if (t == "file_name")
+        out = GroupKey::file_name();
+    else if (t == "host_name")
+        out = GroupKey::host_name();
+    else if (t == "rank")
+        out = GroupKey::rank();
+    else if (t.rfind("arg:", 0) == 0)
+        out = GroupKey::of_arg(DS(t.substr(4)));
+    else
+        out = GroupKey::field(DS(t));
+    out.transform = tf;
+    for (const auto& a : targs) out.transform_args.push_back(DS(a));
+    return out;
+}
+
+// "count" | "op:field" | "argmax:field:by" | "pct:field:q" | "pNN:field".
+// "count" is the group row count; "count:field" counts the rows where the
+// field is present.
+dftracer::utils::dstd::Optional<AggSpec> parse_agg_spec(
+    const dftracer::utils::dstd::String& t) {
+    auto c1 = t.find(':');
+    dftracer::utils::dstd::String op = t.substr(0, c1);
+    dftracer::utils::dstd::String field, by;
+    if (c1 != dftracer::utils::dstd::String::npos) {
+        dftracer::utils::dstd::String rest = t.substr(c1 + 1);
+        auto c2 = rest.find(':');
+        field = rest.substr(0, c2);
+        if (c2 != dftracer::utils::dstd::String::npos) by = rest.substr(c2 + 1);
+    }
+    const dftracer::utils::dstd::String occ = field.empty() ? "dur" : field;
+    if (op == "count") return AggSpec(AggOp::Count, DS(field), "", "");
+    if (op == "sum") return AggSpec(AggOp::Sum, DS(field));
+    if (op == "sumsq") return AggSpec(AggOp::SumSq, DS(field));
+    if (op == "min") return AggSpec(AggOp::Min, DS(field));
+    if (op == "max") return AggSpec(AggOp::Max, DS(field));
+    if (op == "mean") return AggSpec(AggOp::Mean, DS(field));
+    if (op == "var") return AggSpec(AggOp::Var, DS(field));
+    if (op == "std") return AggSpec(AggOp::Std, DS(field));
+    if (op == "skew") return AggSpec(AggOp::Skew, DS(field));
+    if (op == "kurt") return AggSpec(AggOp::Kurt, DS(field));
+    if (op == "hist") return AggSpec(AggOp::Hist, DS(field));
+    if (op == "argmax") return AggSpec(AggOp::ArgMax, DS(field), "", DS(by));
+    if (op == "set_union" || op == "uniq")
+        return AggSpec(AggOp::SetUnion, DS(field));
+    if (op == "busy") return AggSpec(AggOp::Busy, DS(occ));
+    if (op == "concurrency") return AggSpec(AggOp::Concurrency, DS(occ));
+    if (op == "utilization") return AggSpec(AggOp::Utilization, DS(occ));
+    if (op == "active") return AggSpec(AggOp::Active, DS(occ));
+    if (op == "pct")
+        return AggSpec(AggOp::Pct, DS(field), "", "",
+                       by.empty() ? 0.0 : python::frame::parse_double(by));
+    if (op.size() >= 2 && op[0] == 'p') {
+        double denom = 1.0;
+        for (std::size_t i = 1; i < op.size(); ++i) {
+            if (op[i] < '0' || op[i] > '9')
+                return dftracer::utils::dstd::nullopt;
+            denom *= 10.0;
+        }
+        return AggSpec(AggOp::Pct, DS(field), DS(op + "_" + field), "",
+                       python::frame::parse_double(op.substr(1)) / denom);
+    }
+    return dftracer::utils::dstd::nullopt;
+}
+
+bool parse_specs(PyObject* args, dftracer::utils::dstd::Vector<AggSpec>& out) {
+    const Py_ssize_t n = PyTuple_Size(args);
+    for (Py_ssize_t i = 0; i < n; ++i) {
+        const char* s = as_utf8(PyTuple_GetItem(args, i));
+        if (!s) return false;
+        dftracer::utils::dstd::Optional<AggSpec> spec = parse_agg_spec(s);
+        if (!spec) {
+            PyErr_Format(PyExc_ValueError, "unknown agg spec: %s", s);
+            return false;
+        }
+        out.push_back(std::move(*spec));
+    }
+    return true;
+}
+
+bool parse_containment(PyObject* args, PyObject* kwds, bool with_group,
+                       trace::views::ContainmentArgs& out) {
+    static const char* kw_group[] = {"partition", "ts",    "dur",
+                                     "name",      "group", nullptr};
+    static const char* kw_plain[] = {"partition", "ts", "dur", "name", nullptr};
+    PyObject* part = nullptr;
+    PyObject* group = nullptr;
+    const char* ts = "ts";
+    const char* dur = "dur";
+    const char* name = "name";
+    if (!PyArg_ParseTupleAndKeywords(
+            args, kwds, with_group ? "|OsssO" : "|Osss",
+            const_cast<char**>(with_group ? kw_group : kw_plain), &part, &ts,
+            &dur, &name, &group))
+        return false;
+    if (part && part != Py_None) {
+        out.partition.clear();
+        if (!python::core::parse_string_seq(
+                part, "partition must be a sequence", out.partition))
+            return false;
+    }
+    if (group && group != Py_None &&
+        !python::core::parse_string_seq(group, "group must be a sequence",
+                                        out.group))
+        return false;
+    out.ts = ts;
+    out.dur = dur;
+    out.name = name;
+    return true;
+}
+
+// Runs the task `make` builds on the runtime `runtime_arg` names, with the GIL
+// released.
+template <class Make, class T>
+bool run_on(PyObject* runtime_arg, Make&& make, T& out) {
+    dftracer::utils::dstd::SharedPtr<dftracer::utils::Runtime> rt =
+        runtime_from_arg(runtime_arg);
+    if (!rt) return false;
+    return run_blocking([&] {
+        out =
+            dftracer::utils::python::core::py_unwrap(rt->submit(make()).get());
+    });
+}
+
+PyObject* tv_new(PyTypeObject* type, PyObject*, PyObject*) {
+    auto* self = reinterpret_cast<TraceViewerObject*>(type->tp_alloc(type, 0));
+    if (self) self->tv = nullptr;
+    return reinterpret_cast<PyObject*>(self);
+}
+
+void tv_dealloc(TraceViewerObject* self) {
+    dftracer::utils::dstd::UniquePtr<View>(self->tv).reset();
+    Py_TYPE(self)->tp_free(reinterpret_cast<PyObject*>(self));
+}
+
+int tv_init(TraceViewerObject* self, PyObject* args, PyObject* kwds) {
+    static const char* kwlist[] = {"files", "index_path", nullptr};
+    PyObject* files = nullptr;
+    PyObject* index_obj = nullptr;
+    if (!PyArg_ParseTupleAndKeywords(
+            args, kwds, "O|O", const_cast<char**>(kwlist), &files, &index_obj))
+        return -1;
+    dftracer::utils::dstd::String index_dir;
+    if (index_obj && index_obj != Py_None) {
+        const char* s = as_utf8(index_obj);
+        if (!s) return -1;
+        index_dir = s;
+    }
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> paths;
+    dftracer::utils::dstd::Optional<dftracer::utils::dstd::String> dir;
+    if (PyUnicode_Check(files)) {
+        const char* path = PyUnicode_AsUTF8(files);
+        if (!path) return -1;
+        const auto is_dir = dftracer::utils::dstd::fs::is_directory(
+            dftracer::utils::dstd::PathView(
+                dftracer::utils::dstd::StringView(path)));
+        if (is_dir.has_value() && *is_dir)
+            dir = DS(path);
+        else
+            paths.emplace_back(path);
+    } else if (!python::core::parse_string_seq(files,
+                                               "files must be a path or a "
+                                               "sequence of paths",
+                                               paths)) {
+        return -1;
+    }
+    View tv;
+    if (dir) {
+        if (!run_blocking([&] {
+                tv = dftracer::utils::python::core::py_unwrap(
+                    python::runtime::get_default_runtime()
+                        ->submit(View::from_directory(*dir, DS(index_dir)))
+                        .get());
+                dftracer::utils::python::core::py_unwrap(tv.status());
+            }))
+            return -1;
+    } else {
+        dftracer::utils::dstd::Vector<trace::views::ViewFile> vfiles;
+        vfiles.reserve(paths.size());
+        for (const dftracer::utils::dstd::String& p : paths) {
+            const auto index_path =
+                dftracer::utils::trace::internal::determine_index_path(
+                    p, index_dir);
+            vfiles.push_back(trace::views::ViewFile{DS(p), index_path});
+        }
+        if (!run_blocking([&] {
+                tv = View::from_files(std::move(vfiles));
+                dftracer::utils::python::core::py_unwrap(tv.status());
+            }))
+            return -1;
+    }
+    dftracer::utils::dstd::UniquePtr<View>(self->tv).reset();
+    self->tv =
+        dftracer::utils::dstd::make_unique<View>(std::move(tv)).release();
+    return 0;
+}
+
+PyObject* tv_lazy(PyObject* self, PyObject*) {
+    return guarded([&] {
+        return python::frame::wrap_lazyframe(LazyFrame(tv_of(self).lazy()));
+    });
+}
+
+PyObject* tv_with_lazy(PyObject* self, PyObject* arg) {
+    const LazyFrame* lf = python::frame::lazyframe_of(arg);
+    if (!lf) return nullptr;
+    return build(self, [&](const View& t) { return t.with_lazy(*lf); });
+}
+
+PyObject* tv_filter(PyObject* self, PyObject* arg) {
+    PyObject* s = PyObject_Str(arg);
+    if (!s) return nullptr;
+    const char* dsl = PyUnicode_AsUTF8(s);
+    if (!dsl) {
+        Py_DECREF(s);
+        return nullptr;
+    }
+    auto parsed = dftracer::utils::duql::Query::from_string(dsl);
+    Py_DECREF(s);
+    if (!parsed) {
+        PyErr_Format(PyExc_ValueError, "invalid duql filter: %s",
+                     parsed.error().message.c_str());
+        return nullptr;
+    }
+    return build(self, [&](const View& t) {
+        return t.filter(std::move(parsed.value()));
+    });
+}
+
+// A duql parameter from a Python bool, int, float or str.
+bool duql_param(PyObject* v, dftracer::utils::duql::LiteralValue& out) {
+    if (PyBool_Check(v)) {
+        out = v == Py_True;
+    } else if (PyLong_Check(v)) {
+        int overflow = 0;
+        const long long i = PyLong_AsLongLongAndOverflow(v, &overflow);
+        if (overflow > 0) {
+            const unsigned long long u = PyLong_AsUnsignedLongLong(v);
+            if (PyErr_Occurred()) return false;
+            out = static_cast<std::uint64_t>(u);
+        } else if (overflow < 0 || (i == -1 && PyErr_Occurred())) {
+            PyErr_SetString(PyExc_OverflowError,
+                            "a duql integer parameter must fit in 64 bits");
+            return false;
+        } else if (i < 0) {
+            out = static_cast<std::int64_t>(i);
+        } else {
+            out = static_cast<std::uint64_t>(i);
+        }
+    } else if (PyFloat_Check(v)) {
+        out = PyFloat_AsDouble(v);
+    } else if (PyUnicode_Check(v)) {
+        const char* s = PyUnicode_AsUTF8(v);
+        if (!s) return false;
+        out = dftracer::utils::dstd::String(s);
+    } else {
+        PyErr_Format(PyExc_TypeError,
+                     "a duql parameter must be bool, int, float or str, not %s",
+                     Py_TYPE(v)->tp_name);
+        return false;
+    }
+    return true;
+}
+
+// (text, params dict) -> the text and bound parameters, or false with a
+// Python error set.
+bool duql_args(PyObject* args, const char*& text,
+               dftracer::utils::duql::Params& params) {
+    PyObject* dict = nullptr;
+    if (!PyArg_ParseTuple(args, "s|O!", &text, &PyDict_Type, &dict))
+        return false;
+    if (!dict) return true;
+    PyObject* key = nullptr;
+    PyObject* value = nullptr;
+    Py_ssize_t pos = 0;
+    while (PyDict_Next(dict, &pos, &key, &value)) {
+        const char* name = PyUnicode_AsUTF8(key);
+        if (!name) return false;
+        if (PyList_Check(value) || PyTuple_Check(value)) {
+            PyObject* seq = PySequence_Fast(value, "a list parameter");
+            if (!seq) return false;
+            dftracer::utils::dstd::Vector<dftracer::utils::duql::LiteralValue>
+                items;
+            const Py_ssize_t n = PySequence_Fast_GET_SIZE(seq);
+            items.reserve(static_cast<std::size_t>(n));
+            bool ok = true;
+            for (Py_ssize_t i = 0; ok && i < n; ++i) {
+                dftracer::utils::duql::LiteralValue lit;
+                ok = duql_param(PySequence_Fast_GET_ITEM(seq, i), lit);
+                if (ok) items.push_back(std::move(lit));
+            }
+            Py_DECREF(seq);
+            if (!ok) return false;
+            params.insert_or_assign(name, std::move(items));
+            continue;
+        }
+        dftracer::utils::duql::LiteralValue lit;
+        if (!duql_param(value, lit)) return false;
+        params.insert_or_assign(name, std::move(lit));
+    }
+    return true;
+}
+
+PyObject* tv_duql(PyObject* self, PyObject* args) {
+    const char* text = nullptr;
+    dftracer::utils::duql::Params params;
+    if (!duql_args(args, text, params)) return nullptr;
+    return build(self, [&](const View& t) { return t.duql(text, params); });
+}
+
+PyObject* tv_explain_duql(PyObject* self, PyObject* args) {
+    const char* text = nullptr;
+    dftracer::utils::duql::Params params;
+    if (!duql_args(args, text, params)) return nullptr;
+    return guarded([&] {
+        const dftracer::utils::dstd::String plan =
+            dftracer::utils::python::core::py_unwrap(
+                tv_of(self).explain_duql(text, params));
+        return PyUnicode_FromStringAndSize(
+            plan.data(), static_cast<Py_ssize_t>(plan.size()));
+    });
+}
+
+PyObject* tv_select(PyObject* self, PyObject* arg) {
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> names;
+    if (!python::core::parse_string_seq(
+            arg, "select expects a sequence of names", names))
+        return nullptr;
+    return build(self, [&](const View& t) {
+        dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> cols;
+        for (const auto& n : names) cols.push_back(DS(n));
+        return t.select(std::move(cols));
+    });
+}
+
+PyObject* tv_phase(PyObject* self, PyObject* arg) {
+    const char* s = as_utf8(arg);
+    if (!s) return nullptr;
+    const dftracer::utils::dstd::String t(s);
+    Phase ph;
+    if (t == "events")
+        ph = Phase::Events;
+    else if (t == "counters")
+        ph = Phase::Counters;
+    else if (t == "aggregated")
+        ph = Phase::Aggregated;
+    else if (t == "metadata")
+        ph = Phase::Metadata;
+    else if (t == "any")
+        ph = Phase::Any;
+    else {
+        PyErr_SetString(PyExc_ValueError,
+                        "phase must be 'events', 'counters', 'aggregated', "
+                        "'metadata', or 'any'");
+        return nullptr;
+    }
+    return build(self, [&](const View& v) { return v.phase(ph); });
+}
+
+PyObject* tv_time_range(PyObject* self, PyObject* args) {
+    double begin = 0, end = 0;
+    if (!PyArg_ParseTuple(args, "dd", &begin, &end)) return nullptr;
+    return build(self, [&](const View& t) { return t.time_range(begin, end); });
+}
+
+PyObject* tv_time_bucket(PyObject* self, PyObject* args, PyObject* kwds) {
+    long long us = 0;
+    PyObject* normalize_to = nullptr;
+    static const char* kwlist[] = {"interval_us", "normalize_to", nullptr};
+    if (!PyArg_ParseTupleAndKeywords(
+            args, kwds, "L|O", const_cast<char**>(kwlist), &us, &normalize_to))
+        return nullptr;
+    if (us < 0) {
+        PyErr_SetString(PyExc_ValueError, "interval_us must be >= 0");
+        return nullptr;
+    }
+    const auto width = static_cast<std::uint64_t>(us);
+    if (!normalize_to || normalize_to == Py_None)
+        return build(self, [&](const View& t) { return t.time_bucket(width); });
+    if (PyUnicode_Check(normalize_to)) {
+        const char* s = PyUnicode_AsUTF8(normalize_to);
+        if (!s) return nullptr;
+        if (std::strcmp(s, "min") != 0) {
+            PyErr_SetString(PyExc_ValueError,
+                            "normalize_to must be an int origin or 'min'");
+            return nullptr;
+        }
+        return build(self,
+                     [&](const View& t) { return t.time_bucket_min(width); });
+    }
+    const long long origin = PyLong_AsLongLong(normalize_to);
+    if (origin == -1 && PyErr_Occurred()) return nullptr;
+    if (origin < 0) {
+        PyErr_SetString(PyExc_ValueError, "normalize_to must be >= 0");
+        return nullptr;
+    }
+    return build(self, [&](const View& t) {
+        return t.time_bucket(width, static_cast<std::uint64_t>(origin));
+    });
+}
+
+PyObject* tv_resolution(PyObject* self, PyObject* arg) {
+    const long long us = PyLong_AsLongLong(arg);
+    if (us == -1 && PyErr_Occurred()) return nullptr;
+    if (us < 0) {
+        PyErr_SetString(PyExc_ValueError, "resolution must be >= 0");
+        return nullptr;
+    }
+    return build(self, [&](const View& t) {
+        return t.resolution(static_cast<std::uint64_t>(us));
+    });
+}
+
+PyObject* tv_time_scale(PyObject* self, PyObject* arg) {
+    const double ratio = PyFloat_AsDouble(arg);
+    if (ratio == -1.0 && PyErr_Occurred()) return nullptr;
+    return build(self, [&](const View& t) { return t.time_scale(ratio); });
+}
+
+PyObject* tv_time_unit(PyObject* self, PyObject* arg) {
+    const char* s = as_utf8(arg);
+    if (!s) return nullptr;
+    const dftracer::utils::dstd::String t(s);
+    trace::TimeMetric target;
+    if (t == "ns")
+        target = trace::TimeMetric::Ns;
+    else if (t == "us")
+        target = trace::TimeMetric::Us;
+    else if (t == "ms")
+        target = trace::TimeMetric::Ms;
+    else if (t == "sec" || t == "s")
+        target = trace::TimeMetric::Sec;
+    else {
+        PyErr_SetString(PyExc_ValueError, "time_unit must be ns/us/ms/sec/s");
+        return nullptr;
+    }
+    return build(self, [&](const View& v) {
+        const double ratio =
+            static_cast<double>(
+                trace::time_metric_ns_per_unit(v.time_metric())) /
+            static_cast<double>(trace::time_metric_ns_per_unit(target));
+        return v.time_scale(ratio);
+    });
+}
+
+PyObject* tv_group_by(PyObject* self, PyObject* args) {
+    dftracer::utils::dstd::Vector<GroupKey> keys;
+    const Py_ssize_t n = PyTuple_Size(args);
+    for (Py_ssize_t i = 0; i < n; ++i) {
+        const char* s = as_utf8(PyTuple_GetItem(args, i));
+        if (!s) return nullptr;
+        keys.push_back(parse_group_key(s));
+    }
+    return build(self,
+                 [&](const View& t) { return t.group_by(std::move(keys)); });
+}
+
+PyObject* tv_agg(PyObject* self, PyObject* args) {
+    dftracer::utils::dstd::Vector<AggSpec> specs;
+    if (!parse_specs(args, specs)) return nullptr;
+    return build(self, [&](const View& t) { return t.agg(std::move(specs)); });
+}
+
+PyObject* tv_agg_numeric_args(PyObject* self, PyObject* args) {
+    dftracer::utils::dstd::Vector<AggSpec> specs;
+    if (!parse_specs(args, specs)) return nullptr;
+    return build(self, [&](const View& t) {
+        return specs.empty() ? t.agg_numeric_args()
+                             : t.agg_numeric_args(std::move(specs));
+    });
+}
+
+PyObject* tv_record_schema(PyObject* self, PyObject* arg) {
+    const char* id = as_utf8(arg);
+    if (!id) return nullptr;
+    return build(self, [&](const View& t) { return t.record_schema(id); });
+}
+
+PyObject* tv_rollup_root(PyObject* self, PyObject* arg) {
+    const char* dir = as_utf8(arg);
+    if (!dir) return nullptr;
+    return build(self, [&](const View& t) { return t.rollup_root(dir); });
+}
+
+PyObject* tv_views_root(PyObject* self, PyObject* arg) {
+    const char* dir = as_utf8(arg);
+    if (!dir) return nullptr;
+    return build(self, [&](const View& t) { return t.views_root(dir); });
+}
+
+PyObject* tv_memory_budget(PyObject* self, PyObject* arg) {
+    const long long b = PyLong_AsLongLong(arg);
+    if (b == -1 && PyErr_Occurred()) return nullptr;
+    if (b < 0) {
+        PyErr_SetString(PyExc_ValueError, "memory_budget must be >= 0");
+        return nullptr;
+    }
+    return build(self, [&](const View& t) {
+        return t.memory_budget(static_cast<std::uint64_t>(b));
+    });
+}
+
+PyObject* tv_columns(PyObject* self, PyObject*) {
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> cols;
+    if (!run_blocking([&] {
+            dftracer::utils::python::core::py_unwrap(
+                tv_of(self).schema_status());
+            cols =
+                dftracer::utils::python::core::py_unwrap(tv_of(self).columns());
+        }))
+        return nullptr;
+    return str_list_dstd(cols);
+}
+
+PyObject* tv_column_info(PyObject* self, PyObject*) {
+    dftracer::utils::dstd::Vector<trace::views::ColumnInfo> info;
+    if (!run_blocking([&] {
+            dftracer::utils::python::core::py_unwrap(
+                tv_of(self).schema_status());
+            info = dftracer::utils::python::core::py_unwrap(
+                tv_of(self).column_info());
+        }))
+        return nullptr;
+    PyObject* d = PyDict_New();
+    if (!d) return nullptr;
+    for (const auto& c : info) {
+        PyObject* v = PyUnicode_FromString(c.type.c_str());
+        if (!v || PyDict_SetItemString(d, c.name.c_str(), v) < 0) {
+            Py_XDECREF(v);
+            Py_DECREF(d);
+            return nullptr;
+        }
+        Py_DECREF(v);
+    }
+    return d;
+}
+
+PyObject* tv_schema_tree(PyObject* self, PyObject*) {
+    dftracer::utils::dstd::String json;
+    if (!run_blocking([&] {
+            dftracer::utils::python::core::py_unwrap(
+                tv_of(self).schema_status());
+            json = trace::views::schema_tree_json(
+                dftracer::utils::python::core::py_unwrap(
+                    tv_of(self).schema_tree()));
+        }))
+        return nullptr;
+    return PyUnicode_FromStringAndSize(json.data(),
+                                       static_cast<Py_ssize_t>(json.size()));
+}
+
+PyObject* tv_time_metric(PyObject* self, PyObject*) {
+    dftracer::utils::dstd::String s(
+        dftracer::utils::trace::time_metric_to_string(
+            tv_of(self).time_metric()));
+    ::dftracer::utils::common::detail::lower_ascii(s);
+    return PyUnicode_FromString(s.c_str());
+}
+
+PyObject* tv_aggregates(PyObject* self, PyObject*) {
+    return guarded([&] { return PyBool_FromLong(tv_of(self).aggregates()); });
+}
+
+// True while a filter still selects raw events: no trace aggregation and no
+// op but filters on the plan. Reads no index.
+PyObject* tv_filters_events(PyObject* self, PyObject*) {
+    return PyBool_FromLong(tv_of(self).filters_events());
+}
+
+PyObject* tv_call_tree(PyObject* self, PyObject* args, PyObject* kwds) {
+    trace::views::ContainmentArgs a;
+    if (!parse_containment(args, kwds, false, a)) return nullptr;
+    return guarded([&] {
+        return python::frame::wrap_lazyframe(
+            checked(tv_of(self).call_tree(a.partition, a.ts, a.dur, a.name)));
+    });
+}
+
+PyObject* tv_flamegraph(PyObject* self, PyObject* args, PyObject* kwds) {
+    trace::views::ContainmentArgs a;
+    if (!parse_containment(args, kwds, true, a)) return nullptr;
+    return guarded([&] {
+        return python::frame::wrap_lazyframe(checked(
+            tv_of(self).flamegraph(a.partition, a.ts, a.dur, a.name, a.group)));
+    });
+}
+
+PyObject* tv_containment(PyObject* self, PyObject* args, PyObject* kwds) {
+    trace::views::ContainmentArgs a;
+    if (!parse_containment(args, kwds, true, a)) return nullptr;
+    return guarded([&]() -> PyObject* {
+        auto r =
+            tv_of(self).containment(a.partition, a.ts, a.dur, a.name, a.group);
+        PyObject* ct =
+            python::frame::wrap_lazyframe(checked(LazyFrame(r.plans()[0])));
+        if (!ct) return nullptr;
+        PyObject* fg =
+            python::frame::wrap_lazyframe(checked(LazyFrame(r.plans()[1])));
+        if (!fg) {
+            Py_DECREF(ct);
+            return nullptr;
+        }
+        return Py_BuildValue("(NN)", ct, fg);
+    });
+}
+
+PyObject* tv_flamegraph_partial(PyObject* self, PyObject* args,
+                                PyObject* kwds) {
+    trace::views::ContainmentArgs a;
+    if (!parse_containment(args, kwds, true, a)) return nullptr;
+    return guarded([&] {
+        return python::frame::wrap_lazyframe(checked(LazyFrame(
+            tv_of(self)
+                .flamegraph_partial(a.partition, a.ts, a.dur, a.name, a.group)
+                .plans()
+                .front())));
+    });
+}
+
+PyObject* tv_aggregate_partial(PyObject* self, PyObject*) {
+    return guarded([&] {
+        return python::frame::wrap_lazyframe(checked(
+            LazyFrame(tv_of(self).aggregate_partial().plans().front())));
+    });
+}
+
+PyObject* tv_sink_json(PyObject* self, PyObject* arg) {
+    const char* path = as_utf8(arg);
+    if (!path) return nullptr;
+    FILE* f = std::fopen(path, "wb");
+    if (!f) {
+        PyErr_SetFromErrnoWithFilename(PyExc_OSError, path);
+        return nullptr;
+    }
+    auto sink = dftracer::utils::dstd::make_shared<FileSink>(f);
+    return guarded([&] {
+        return python::frame::wrap_lazyframe(checked(LazyFrame(
+            tv_of(self).sink_json(sink, trace::views::LAZY).plans().front())));
+    });
+}
+
+PyObject* tv_typed(PyObject* self, PyObject* args, PyObject* kwds) {
+    int shard_begin = 0, shard_end = 0;
+    PyObject* progress = nullptr;
+    PyObject* runtime_arg = nullptr;
+    static const char* kwlist[] = {"shard_begin", "shard_end", "progress",
+                                   "runtime", nullptr};
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|iiOO",
+                                     const_cast<char**>(kwlist), &shard_begin,
+                                     &shard_end, &progress, &runtime_arg))
+        return nullptr;
+    trace::views::TypedResult typed;
+    trace::views::ProgressFn fn = progress_from(progress);
+    if (!run_on(
+            runtime_arg,
+            [&] {
+                return tv_of(self).collect_typed(shard_begin, shard_end,
+                                                 std::move(fn));
+            },
+            typed))
+        return nullptr;
+    PyObject* d = PyDict_New();
+    if (!d) return nullptr;
+    const dftracer::utils::dstd::Pair<const char*, DataFrame*> parts[] = {
+        {"regular", &typed.regular},
+        {"aggregated", &typed.aggregated},
+        {"counters", &typed.counters}};
+    for (const auto& [key, frame] : parts) {
+        PyObject* v = python::frame::wrap_dataframe(std::move(*frame));
+        if (!v || PyDict_SetItemString(d, key, v) < 0) {
+            Py_XDECREF(v);
+            Py_DECREF(d);
+            return nullptr;
+        }
+        Py_DECREF(v);
+    }
+    return d;
+}
+
+PyObject* tv_materialize(PyObject* self, PyObject* args, PyObject* kwds) {
+    long long checkpoint_size = 0, part_size = 0;
+    PyObject* progress = nullptr;
+    PyObject* runtime_arg = nullptr;
+    static const char* kwlist[] = {"checkpoint_size", "part_size", "progress",
+                                   "runtime", nullptr};
+    if (!PyArg_ParseTupleAndKeywords(
+            args, kwds, "|LLOO", const_cast<char**>(kwlist), &checkpoint_size,
+            &part_size, &progress, &runtime_arg))
+        return nullptr;
+    ExportStats stats;
+    trace::views::ProgressFn fn = progress_from(progress);
+    if (!run_on(
+            runtime_arg,
+            [&] {
+                return tv_of(self).materialize(
+                    static_cast<std::uint64_t>(checkpoint_size),
+                    static_cast<std::uint64_t>(part_size), std::move(fn));
+            },
+            stats))
+        return nullptr;
+    return stats_dict(stats);
+}
+
+// A trace of the aggregation (counter events) when the viewer aggregates, else
+// of the selected events.
+PyObject* tv_export_trace(PyObject* self, PyObject* args, PyObject* kwds) {
+    static const char* kwlist[] = {"path",        "compress", "index",
+                                   "member_size", "level",    "part_size",
+                                   "runtime",     nullptr};
+    const char* path = nullptr;
+    int compress = 1;
+    int index = 0;
+    long long member_size = 0;
+    int level = 6;
+    long long part_size = 0;
+    PyObject* runtime_arg = nullptr;
+    if (!PyArg_ParseTupleAndKeywords(
+            args, kwds, "s|ppLiLO", const_cast<char**>(kwlist), &path,
+            &compress, &index, &member_size, &level, &part_size, &runtime_arg))
+        return nullptr;
+    const View& t = tv_of(self);
+    ExportStats stats;
+    bool aggregates = false;
+    try {
+        aggregates = t.aggregates();
+    } catch (const std::exception& e) {
+        python::core::set_typed_py_error(e);
+        return nullptr;
+    }
+    if (aggregates) {
+        dftracer::utils::dstd::UniquePtr<trace::views::ExportSink> sink;
+        dftracer::utils::python::trace::GzipSink* gzip = nullptr;
+        if (compress) {
+            try {
+                auto made = dftracer::utils::dstd::make_unique<
+                    dftracer::utils::python::trace::GzipSink>(path, level);
+                gzip = made.get();
+                sink = std::move(made);
+            } catch (const std::exception& e) {
+                python::core::set_typed_py_error(e);
+                return nullptr;
+            }
+        } else {
+            FILE* f = std::fopen(path, "wb");
+            if (!f) {
+                PyErr_SetFromErrnoWithFilename(PyExc_OSError, path);
+                return nullptr;
+            }
+            sink = dftracer::utils::dstd::make_unique<FileSink>(f);
+        }
+        const bool ok =
+            run_on(runtime_arg, [&] { return t.sink_counters(*sink); }, stats);
+        if (ok && gzip != nullptr) {
+            try {
+                gzip->close();
+            } catch (const std::exception& e) {
+                python::core::set_typed_py_error(e);
+                return nullptr;
+            }
+        }
+        sink.reset();
+        if (!ok) return nullptr;
+        return stats_dict(stats);
+    }
+    trace::views::TraceWriteOptions opts;
+    opts.output_path = path;
+    opts.member_size = static_cast<std::size_t>(member_size);
+    opts.compress = compress != 0;
+    opts.level = level;
+    opts.build_index = index != 0;
+    opts.part_size = static_cast<std::size_t>(part_size);
+    if (!run_on(
+            runtime_arg, [&] { return t.sink_trace(std::move(opts)); }, stats))
+        return nullptr;
+    return stats_dict(stats);
+}
+
+PyObject* tv_merge_partials(PyObject* self, PyObject* arg) {
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> owned;
+    if (!python::core::parse_bytes_seq(arg, "merge_partials expects a sequence",
+                                       owned))
+        return nullptr;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::StringView> parts(
+        owned.begin(), owned.end());
+    DataFrame out;
+    if (!run_blocking([&] {
+            out = dftracer::utils::python::core::py_unwrap(
+                tv_of(self).merge_partials(parts));
+        }))
+        return nullptr;
+    return python::frame::wrap_dataframe(std::move(out));
+}
+
+PyObject* tv_materialize_partials(PyObject* self, PyObject* args,
+                                  PyObject* kwds) {
+    PyObject* arg = nullptr;
+    PyObject* runtime_arg = nullptr;
+    static const char* kwlist[] = {"partials", "runtime", nullptr};
+    if (!PyArg_ParseTupleAndKeywords(
+            args, kwds, "O|O", const_cast<char**>(kwlist), &arg, &runtime_arg))
+        return nullptr;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> owned;
+    if (!python::core::parse_bytes_seq(
+            arg, "materialize_partials expects a sequence", owned))
+        return nullptr;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::StringView> parts(
+        owned.begin(), owned.end());
+    dftracer::utils::dstd::SharedPtr<dftracer::utils::Runtime> rt =
+        runtime_from_arg(runtime_arg);
+    if (!rt) return nullptr;
+    if (!run_blocking([&] {
+            dftracer::utils::python::core::py_unwrap(
+                rt->submit(tv_of(self).materialize_partials(parts)).get());
+        }))
+        return nullptr;
+    Py_RETURN_NONE;
+}
+
+PyObject* tv_reconstruct_if_cached(PyObject* self, PyObject*) {
+    dftracer::utils::dstd::Optional<DataFrame> out;
+    if (!run_blocking([&] {
+            out = dftracer::utils::python::core::py_unwrap(
+                tv_of(self).reconstruct_if_cached());
+        }))
+        return nullptr;
+    if (!out) Py_RETURN_NONE;
+    return python::frame::wrap_dataframe(std::move(*out));
+}
+
+PyObject* tv_mv_source(PyObject* self, PyObject*) {
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> out;
+    if (!run_blocking([&] {
+            out = dftracer::utils::python::core::py_unwrap(
+                tv_of(self).mv_source());
+        }))
+        return nullptr;
+    return str_list_dstd(out);
+}
+
+PyObject* tv_materialize_dir(PyObject* self, PyObject*) {
+    dftracer::utils::dstd::String out;
+    if (!run_blocking([&] {
+            out = dftracer::utils::python::core::py_unwrap(
+                tv_of(self).materialize_dir());
+        }))
+        return nullptr;
+    return PyUnicode_FromStringAndSize(out.data(),
+                                       static_cast<Py_ssize_t>(out.size()));
+}
+
+PyObject* tv_register_materialized(PyObject* self, PyObject* arg) {
+    const char* dir = as_utf8(arg);
+    if (!dir) return nullptr;
+    const dftracer::utils::dstd::String d{
+        dftracer::utils::dstd::StringView(dir)};
+    if (!run_blocking([&] {
+            dftracer::utils::python::core::py_unwrap(
+                tv_of(self).register_materialized(d));
+        }))
+        return nullptr;
+    Py_RETURN_NONE;
+}
+
+PyObject* tv_compare(PyObject* self, PyObject* arg) {
+    if (!PyObject_TypeCheck(arg, &TraceViewerType)) {
+        PyErr_SetString(PyExc_TypeError, "compare() needs a _TraceViewer");
+        return nullptr;
+    }
+    return guarded([&] {
+        return python::frame::wrap_lazyframe(
+            checked(tv_of(self).compare(tv_of(arg))));
+    });
+}
+
+// A branch that folds `host`'s plugin set over the scan and leaves the named
+// results in the host, where plugin_results() reads them after the collect.
+PyObject* tv_plugins(PyObject* self, PyObject* host) {
+    if (!PyObject_TypeCheck(host, &PluginHostType)) {
+        PyErr_SetString(PyExc_TypeError, "plugins() needs a Plugins instance");
+        return nullptr;
+    }
+    const plugins::host::Plugins* set =
+        python::plugins::plugin_host_plugins(host);
+    if (!set) return nullptr;
+    dftracer::utils::plugins::NamedResultRegistry* results =
+        python::plugins::plugin_host_results(host);
+    if (!results) return nullptr;
+    Py_INCREF(host);
+    auto keep = dftracer::utils::dstd::adopt_shared_ptr(host, [](PyObject* p) {
+        PyGILState_STATE g = PyGILState_Ensure();
+        Py_DECREF(p);
+        PyGILState_Release(g);
+    });
+    trace::views::SessionBranch attach = [set, results,
+                                          keep](trace::views::ViewSession& s) {
+        trace::views::Deferred<plugins::host::PluginRun> h = set->attach(s);
+        return dftracer::utils::dstd::Function<void(const ExportStats&)>(
+            [h, results, keep](const ExportStats&) mutable {
+                *results = std::move(h.get().results);
+            });
+    };
+    return guarded([&] {
+        return python::frame::wrap_lazyframe(
+            checked(tv_of(self).branch(std::move(attach))));
+    });
+}
+
+PyObject* merge_flamegraph_partials_py(PyObject*, PyObject* arg) {
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> owned;
+    if (!python::core::parse_bytes_seq(
+            arg, "merge_flamegraph_partials expects a sequence", owned))
+        return nullptr;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::StringView> parts(
+        owned.begin(), owned.end());
+    return guarded([&] {
+        return python::frame::wrap_dataframe(
+            View::merge_flamegraph_partials(parts));
+    });
+}
+
+PyObject* plugin_results_py(PyObject*, PyObject* host) {
+    if (!PyObject_TypeCheck(host, &PluginHostType)) {
+        PyErr_SetString(PyExc_TypeError,
+                        "plugin_results() needs a Plugins instance");
+        return nullptr;
+    }
+    return python::plugins::plugin_host_results_dict(host);
+}
+
+PyMethodDef tv_methods[] = {
+    {"lazy", tv_lazy, METH_NOARGS, "The plan as a _LazyFrame."},
+    {"with_lazy", tv_with_lazy, METH_O,
+     "This scan with `plan` (a _LazyFrame over it) as its plan."},
+    {"filter", tv_filter, METH_O, "Keep events matching a duql predicate."},
+    {"duql", tv_duql, METH_VARARGS,
+     "duql(text, params) -> the duql pipeline over this view."},
+    {"explain_duql", tv_explain_duql, METH_VARARGS,
+     "explain_duql(text, params) -> the pipeline's plan, one step per line."},
+    {"select", tv_select, METH_O,
+     "Fields the scan reads (raw events), or a projection of the plan."},
+    {"phase", tv_phase, METH_O,
+     "Select 'events', 'counters', 'aggregated', 'metadata', or 'any'."},
+    {"time_range", tv_time_range, METH_VARARGS,
+     "Restrict to a [begin, end) timestamp window."},
+    {"time_bucket", DFTU_PYCFUNCTION(tv_time_bucket),
+     METH_VARARGS | METH_KEYWORDS,
+     "time_bucket(interval_us, normalize_to=None); normalize_to is an int "
+     "origin or 'min'."},
+    {"resolution", tv_resolution, METH_O,
+     "Grid in microseconds the occupancy aggregates snap to; 0 is exact."},
+    {"time_scale", tv_time_scale, METH_O, "Multiply ts/dur by this ratio."},
+    {"time_unit", tv_time_unit, METH_O,
+     "Normalize ts/dur to ns/us/ms/sec from the trace's own unit."},
+    {"group_by", tv_group_by, METH_VARARGS, "Trace group keys."},
+    {"agg", tv_agg, METH_VARARGS, "Trace aggregate specs."},
+    {"agg_numeric_args", tv_agg_numeric_args, METH_VARARGS,
+     "Aggregate every discovered numeric arg."},
+    {"record_schema", tv_record_schema, METH_O,
+     "Read the files as the registered record schema `id`."},
+    {"rollup_root", tv_rollup_root, METH_O, "Rollup root directory."},
+    {"views_root", tv_views_root, METH_O, "Materialized-view root directory."},
+    {"memory_budget", tv_memory_budget, METH_O, "Spill budget in bytes."},
+    {"columns", tv_columns, METH_NOARGS,
+     "Columns discoverable from the index (no scan)."},
+    {"schema_tree", tv_schema_tree, METH_NOARGS,
+     "The index's paths with types, counts and declared fields, as JSON."},
+    {"column_info", tv_column_info, METH_NOARGS,
+     "Index columns mapped to their type name (no scan)."},
+    {"time_metric", tv_time_metric, METH_NOARGS, "The trace's time unit."},
+    {"aggregates", tv_aggregates, METH_NOARGS,
+     "True when the plan absorbs into an aggregating scan."},
+    {"filters_events", tv_filters_events, METH_NOARGS,
+     "True while a filter still selects raw events (reads no index)."},
+    {"call_tree", DFTU_PYCFUNCTION(tv_call_tree), METH_VARARGS | METH_KEYWORDS,
+     "Plan of the events plus level/parent_id."},
+    {"flamegraph", DFTU_PYCFUNCTION(tv_flamegraph),
+     METH_VARARGS | METH_KEYWORDS, "Plan of the folded node frame."},
+    {"containment", DFTU_PYCFUNCTION(tv_containment),
+     METH_VARARGS | METH_KEYWORDS,
+     "(call_tree plan, flamegraph plan) sharing one buffered fold."},
+    {"flamegraph_partial", DFTU_PYCFUNCTION(tv_flamegraph_partial),
+     METH_VARARGS | METH_KEYWORDS, "Plan of a one-row 'partial' frame."},
+    {"aggregate_partial", tv_aggregate_partial, METH_NOARGS,
+     "Plan of a one-row 'partial' frame."},
+    {"sink_json", tv_sink_json, METH_O,
+     "Plan writing the selected events to `path`; yields one stats row."},
+    {"typed", DFTU_PYCFUNCTION(tv_typed), METH_VARARGS | METH_KEYWORDS,
+     "The aggregation index's record families (runs now)."},
+    {"materialize", DFTU_PYCFUNCTION(tv_materialize),
+     METH_VARARGS | METH_KEYWORDS, "Persist this query (runs now)."},
+    {"export_trace", DFTU_PYCFUNCTION(tv_export_trace),
+     METH_VARARGS | METH_KEYWORDS, "Write a trace file (runs now)."},
+    {"merge_partials", tv_merge_partials, METH_O,
+     "Merge aggregate partials with this aggregation."},
+    {"materialize_partials", DFTU_PYCFUNCTION(tv_materialize_partials),
+     METH_VARARGS | METH_KEYWORDS, "Write the rollup from partials."},
+    {"reconstruct_if_cached", tv_reconstruct_if_cached, METH_NOARGS,
+     "The rollup as a DataFrame, or None on a miss."},
+    {"mv_source", tv_mv_source, METH_NOARGS,
+     "Materialized-view files that would serve this query."},
+    {"materialize_dir", tv_materialize_dir, METH_NOARGS,
+     "Create and return the shared materialized-view directory."},
+    {"register_materialized", tv_register_materialized, METH_O,
+     "Write the materialized-view manifest at `dir`."},
+    {"compare", tv_compare, METH_O,
+     "Plan comparing this aggregation against another viewer's events."},
+    {"plugins", tv_plugins, METH_O,
+     "Plan folding a Plugins set over the scan."},
+    {nullptr, nullptr, 0, nullptr}};
+
+PyObject* duql_load_path_py(PyObject*, PyObject* arg) {
+    const char* path = as_utf8(arg);
+    if (!path) return nullptr;
+    return guarded([&]() -> PyObject* {
+        auto loaded = dftracer::utils::duql::load_macros(path);
+        if (!loaded)
+            throw dftracer::utils::python::core::PyErrorException(
+                loaded.error());
+        Py_RETURN_NONE;
+    });
+}
+
+PyObject* duql_canonical_py(PyObject*, PyObject* arg) {
+    const char* text = as_utf8(arg);
+    if (!text) return nullptr;
+    return guarded([&]() -> PyObject* {
+        auto program = dftracer::utils::duql::syntax::parse(text);
+        if (!program)
+            throw std::invalid_argument(program.error().format().c_str());
+        const dftracer::utils::dstd::String out =
+            dftracer::utils::duql::syntax::to_text(*program);
+        return PyUnicode_FromStringAndSize(out.data(),
+                                           static_cast<Py_ssize_t>(out.size()));
+    });
+}
+
+PyMethodDef module_methods[] = {
+    {"merge_flamegraph_partials", merge_flamegraph_partials_py, METH_O,
+     "merge_flamegraph_partials(partials) -> node DataFrame (no scan)."},
+    {"plugin_results", plugin_results_py, METH_O,
+     "plugin_results(plugins) -> {name: result} of its last run."},
+    {"duql_load_path", duql_load_path_py, METH_O,
+     "duql_load_path(path): load the macros of a .duql file or directory."},
+    {"duql_canonical", duql_canonical_py, METH_O,
+     "duql_canonical(text) -> the canonical duql text of `text`."},
+    {nullptr, nullptr, 0, nullptr}};
+
+// -- _LiveTraceViewer -------------------------------------------------------
+
+trace::views::LiveView& live_of(PyObject* self) {
+    return *reinterpret_cast<LiveTraceViewerObject*>(self)->live;
+}
+
+PyObject* ltv_new(PyTypeObject* type, PyObject*, PyObject*) {
+    auto* self =
+        reinterpret_cast<LiveTraceViewerObject*>(type->tp_alloc(type, 0));
+    if (self) self->live = nullptr;
+    return reinterpret_cast<PyObject*>(self);
+}
+
+void ltv_dealloc(LiveTraceViewerObject* self) {
+    dstd::UniquePtr<trace::views::LiveView>(self->live).reset();
+    Py_TYPE(self)->tp_free(reinterpret_cast<PyObject*>(self));
+}
+
+int ltv_init(LiveTraceViewerObject* self, PyObject* args, PyObject* kwds) {
+    static const char* kwlist[] = {"files", "index_path", nullptr};
+    PyObject* files = nullptr;
+    PyObject* index_obj = nullptr;
+    if (!PyArg_ParseTupleAndKeywords(
+            args, kwds, "O|O", const_cast<char**>(kwlist), &files, &index_obj))
+        return -1;
+    dstd::Vector<dstd::String> paths;
+    if (!python::core::parse_string_seq(
+            files, "files must be a sequence of paths", paths))
+        return -1;
+    dstd::String index_dir;
+    if (index_obj && index_obj != Py_None) {
+        const char* text = as_utf8(index_obj);
+        if (!text) return -1;
+        index_dir = text;
+    }
+    dstd::UniquePtr<trace::views::LiveView> live;
+    if (!run_blocking([&] {
+            live = dstd::make_unique<trace::views::LiveView>(
+                std::move(paths), std::move(index_dir));
+        }))
+        return -1;
+    dstd::UniquePtr<trace::views::LiveView>(self->live).reset();
+    self->live = live.release();
+    return 0;
+}
+
+PyObject* ltv_snapshot(PyObject* self, PyObject*) {
+    View tv;
+    if (!run_blocking([&] {
+            tv = dftracer::utils::python::core::py_unwrap(
+                live_of(self).snapshot());
+        }))
+        return nullptr;
+    return guarded([&] { return make_viewer(checked(std::move(tv))); });
+}
+
+PyObject* ltv_new_rows(PyObject* self, PyObject*) {
+    dstd::Optional<View> tv;
+    if (!run_blocking([&] {
+            tv = dftracer::utils::python::core::py_unwrap(
+                live_of(self).new_rows());
+        }))
+        return nullptr;
+    if (!tv) Py_RETURN_NONE;
+    return guarded([&] { return make_viewer(checked(std::move(*tv))); });
+}
+
+const char* live_state_name(trace::views::LiveFileState state) {
+    switch (state) {
+        case trace::views::LiveFileState::Whole:
+            return "whole";
+        case trace::views::LiveFileState::Tail:
+            return "tail";
+        case trace::views::LiveFileState::Hole:
+            return "hole";
+    }
+    return "";
+}
+
+PyObject* ltv_status(PyObject* self, PyObject*) {
+    const auto& status = live_of(self).status();
+    PyObject* out = PyList_New(static_cast<Py_ssize_t>(status.size()));
+    if (!out) return nullptr;
+    for (std::size_t i = 0; i < status.size(); ++i) {
+        const auto& st = status[i];
+        PyObject* t =
+            Py_BuildValue("(ssKKK)", st.path.c_str(), live_state_name(st.state),
+                          static_cast<unsigned long long>(st.verified_bytes),
+                          static_cast<unsigned long long>(st.skipped_bytes),
+                          static_cast<unsigned long long>(st.hole_bytes));
+        if (!t) {
+            Py_DECREF(out);
+            return nullptr;
+        }
+        PyList_SET_ITEM(out, static_cast<Py_ssize_t>(i), t);
+    }
+    return out;
+}
+
+PyMethodDef ltv_methods[] = {
+    {"snapshot", ltv_snapshot, METH_NOARGS,
+     "Index what was written since the last call; a _TraceViewer of every "
+     "whole member."},
+    {"new_rows", ltv_new_rows, METH_NOARGS,
+     "As snapshot; a _TraceViewer of the rows no earlier call returned, or "
+     "None."},
+    {"status", ltv_status, METH_NOARGS,
+     "(path, state, verified_bytes, skipped_bytes, hole_bytes) per file."},
+    {nullptr, nullptr, 0, nullptr}};
+
+}  // namespace
+
+PyTypeObject LiveTraceViewerType = [] {
+    PyTypeObject t{.ob_base = PyVarObject_HEAD_INIT(nullptr, 0)};
+    t.tp_name = "dftracer_utils_ext._LiveTraceViewer";
+    t.tp_basicsize = sizeof(LiveTraceViewerObject);
+    t.tp_dealloc = reinterpret_cast<destructor>(ltv_dealloc);
+    t.tp_flags = Py_TPFLAGS_DEFAULT;
+    t.tp_doc = "Trace files that may still be growing.";
+    t.tp_methods = ltv_methods;
+    t.tp_init = reinterpret_cast<initproc>(ltv_init);
+    t.tp_new = ltv_new;
+    return t;
+}();
+
+PyTypeObject TraceViewerType = [] {
+    PyTypeObject t{.ob_base = PyVarObject_HEAD_INIT(nullptr, 0)};
+    t.tp_name = "dftracer_utils_ext._TraceViewer";
+    t.tp_basicsize = sizeof(TraceViewerObject);
+    t.tp_dealloc = reinterpret_cast<destructor>(tv_dealloc);
+    t.tp_flags = Py_TPFLAGS_DEFAULT;
+    t.tp_doc = "A trace scan and the plan over it.";
+    t.tp_methods = tv_methods;
+    t.tp_init = reinterpret_cast<initproc>(tv_init);
+    t.tp_new = tv_new;
+    return t;
+}();
+
+int dftracer::utils::python::trace::init_trace_viewer(PyObject* m) {
+    if (register_type(m, &TraceViewerType, "_TraceViewer") < 0) return -1;
+    if (register_type(m, &LiveTraceViewerType, "_LiveTraceViewer") < 0)
+        return -1;
+    return PyModule_AddFunctions(m, module_methods);
+}

@@ -3,15 +3,18 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import threading
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import (
     TYPE_CHECKING,
     Callable,
+    Generator,
     Generic,
     List,
     Optional,
+    Tuple,
     TypedDict,
     TypeVar,
     Union,
@@ -38,6 +41,8 @@ if TYPE_CHECKING:
 T_co = TypeVar("T_co", covariant=True)
 # Invariant binder for submit(): ties the callable's return to TaskHandle[R].
 R = TypeVar("R")
+# The result type of a native handle that a wrapper maps to its own type.
+_N = TypeVar("_N")
 
 
 class WorkerProgress(TypedDict):
@@ -105,7 +110,10 @@ def _derive_name(fn: object) -> str:
 class TaskHandle(Generic[T_co]):
     """Unified handle for both C++ and Python tasks.
 
-    Wraps either a C++ _NativeTaskHandle or a concurrent.futures.Future.
+    Wraps either a native task handle, as ``Indexer.build_async()`` and
+    ``LazyFrame.collect_async()`` return, or a concurrent.futures.Future. A
+    native handle runs on the C++ pool; ``get()`` and ``wait()`` release the
+    GIL while they block.
 
     Example::
 
@@ -115,28 +123,126 @@ class TaskHandle(Generic[T_co]):
         assert h.done()
     """
 
-    __slots__ = ("_native", "_future", "_name", "_task_id", "_exception")
+    __slots__ = ("_native", "_get", "_future", "_name", "_task_id", "_exception", "_finished")
 
+    @overload
     def __init__(
         self,
-        native: "Optional[_NativeTaskHandle[T_co]]" = None,
+        native: "_NativeTaskHandle[T_co]",
+        future: None = None,
+        name: str = "",
+        task_id: int = -1,
+    ) -> None: ...
+    @overload
+    def __init__(
+        self,
+        native: "_NativeTaskHandle[_N]",
+        future: None = None,
+        name: str = "",
+        task_id: int = -1,
+        *,
+        finish: "Callable[[_N], T_co]",
+    ) -> None: ...
+    @overload
+    def __init__(
+        self,
+        native: None = None,
         future: "Optional[Future[T_co]]" = None,
         name: str = "",
         task_id: int = -1,
+    ) -> None: ...
+    def __init__(
+        self,
+        native: "Optional[_NativeTaskHandle[_N]]" = None,
+        future: "Optional[Future[T_co]]" = None,
+        name: str = "",
+        task_id: int = -1,
+        finish: "Optional[Callable[[_N], T_co]]" = None,
     ) -> None:
-        self._native = native
+        self._native = cast("Optional[_NativeTaskHandle[T_co]]", native)
+        self._get: Optional[Callable[[], T_co]] = None
+        if native is not None:
+            if finish is not None:
+                convert = finish
+                self._get = lambda: convert(native.get())
+            else:
+                self._get = cast("Callable[[], T_co]", native.get)
         self._future = future
         self._name = name
         self._task_id = task_id
         self._exception: Optional[BaseException] = None
+        self._finished: "Optional[Tuple[T_co]]" = None
 
     def get(self) -> T_co:
-        """Block until task completes and return result. Raises on error."""
-        if self._native is not None:
-            return self._native.get()
+        """Block until task completes and return result. Raises on error.
+
+        A native task converts its result once, so every get() returns the
+        same object."""
+        if self._get is not None:
+            if self._finished is None:
+                self._finished = (self._get(),)
+            return self._finished[0]
         if self._future is not None:
             return self._future.result()
         return None  # type: ignore[return-value]  # ty: ignore[invalid-explicit-return]  # no backing future
+
+    def add_done_callback(self, fn: "Callable[[TaskHandle[T_co]], None]") -> None:
+        """Call ``fn(handle)`` once when the task ends, at once if it has.
+
+        A native task calls it on the pool worker that finished it, which takes
+        the GIL for the call, so a slow callback holds that worker. An
+        exception of ``fn`` is reported as unraisable and does not propagate.
+        """
+        if self._native is not None:
+            self._native.add_done_callback(lambda _native: fn(self))
+        elif self._future is not None:
+            self._future.add_done_callback(lambda _future: fn(self))
+        else:
+            fn(self)
+
+    def cancel(self) -> None:
+        """Ask the task to stop. A native task then ends with a cancelled
+        error; a Python task that already runs is not interrupted."""
+        if self._native is not None:
+            self._native.cancel()
+        elif self._future is not None:
+            self._future.cancel()
+
+    def __await__(self) -> Generator[None, None, T_co]:
+        """Wait for the task from asyncio or uvloop without blocking the loop.
+
+        Cancelling the awaiting task asks a native task to stop. A loop that
+        closes before the task ends drops the result.
+        """
+        if self._native is None:
+            if self._future is None:
+                return None  # type: ignore[return-value]  # ty: ignore[invalid-explicit-return]  # no backing task
+            return (yield from asyncio.wrap_future(self._future).__await__())
+        native = self._native
+        loop = asyncio.get_running_loop()
+        waiting = loop.create_future()
+
+        def settle() -> None:
+            if waiting.done():
+                return
+            try:
+                waiting.set_result(self.get())
+            except Exception as error:
+                waiting.set_exception(error)
+
+        def on_done(_native: "_NativeTaskHandle[T_co]") -> None:
+            try:
+                loop.call_soon_threadsafe(settle)
+            except RuntimeError:
+                pass
+
+        def on_waiting_done(future: "asyncio.Future[T_co]") -> None:
+            if future.cancelled():
+                native.cancel()
+
+        waiting.add_done_callback(on_waiting_done)
+        native.add_done_callback(on_done)
+        return (yield from waiting)
 
     def wait(self) -> None:
         """Block until task completes. Raises on error."""
@@ -234,7 +340,7 @@ class Runtime:
         return self._py_pool
 
     @overload
-    def submit(self, task_or_fn: _NativeTaskHandle) -> TaskHandle[object]: ...
+    def submit(self, task_or_fn: _NativeTaskHandle[R]) -> TaskHandle[R]: ...
     @overload
     def submit(
         self, task_or_fn: Callable[P, R], *args: P.args, **kwargs: P.kwargs
@@ -245,13 +351,13 @@ class Runtime:
     # name is derived from the callable and its source location.
     def submit(
         self,
-        task_or_fn: "Union[_NativeTaskHandle, Callable[..., object]]",
+        task_or_fn: "Union[_NativeTaskHandle[object], Callable[..., object]]",
         *args: object,
         **kwargs: object,
     ) -> TaskHandle[object]:
         """Submit a task for async execution.
 
-        Accepts either a C++ TaskHandle (pass-through) or a Python callable; the
+        Accepts either a native TaskHandle (pass-through) or a Python callable; the
         callable's args are passed through and type-checked against it. The task
         name is derived automatically (qualified name plus source location).
 
@@ -261,9 +367,7 @@ class Runtime:
             result = h.get()  # 7
         """
         if isinstance(task_or_fn, _NativeTaskHandle):
-            # C++ coroutine path: wrap a native TaskHandle from utility
-            # bindings. Currently unused — will be used when utilities
-            # are ported to Python.
+            # Native path: wrap a handle from a build_async-style binding.
             handle: TaskHandle[object] = TaskHandle(native=task_or_fn, name=task_or_fn.name)
             with self._lock:
                 self._handles.append(handle)

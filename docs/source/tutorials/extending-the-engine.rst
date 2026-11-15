@@ -71,42 +71,48 @@ reduce or threading code.
 
    .. tab-item:: C++
 
-      A batch arrives as one ``dftu_dataframe``, where N rows in scan order are N
-      events. An accumulator eats columns straight from it. Save this as
+      A batch arrives as one borrowed ``dataframe::FrameView``, where N rows in
+      scan order are N events. An accumulator eats it straight. Save this as
       ``events_per_pid.cpp``:
 
       .. code-block:: cpp
 
          #include <dftracer/utils/plugins/plugin.h>
 
+         using namespace dftracer::utils;
          using namespace dftracer::utils::plugins;
 
          struct EventsPerPid {
              explicit EventsPerPid(const Config&) {}
 
-             void step(const dftu_dataframe* df, Host h) {
-                 const auto hits = h.agg("hits", {"pid"}, {agg::count("events")});
-                 if (hits) hits.accumulate(df);
+             dstd::Result<void> step(dataframe::FrameView df, Host h) {
+                 DFTRACER_UTILS_TRY(
+                     Agg hits, h.agg("hits", {"pid"}, {agg::count("events")}));
+                 return hits.accumulate(df);
              }
 
              void merge(EventsPerPid&) {}
              void finalize(Host) {}
          };
 
-         extern "C" dftu_plugin* dftracer_plugin(dftu_plugin_host* h,
-                                                 const dftu_value* config) {
-             (void)h;
-             return make_plugin<EventsPerPid>(config);
-         }
+         DFTU_PLUGIN("events_per_pid", "1.0",
+                     [](PluginBuilder& p, const Config& config)
+                         -> dstd::Result<void> {
+                         (void)config;
+                         p.fold<EventsPerPid>();
+                         return {};
+                     })
 
       ``Host::agg`` names the accumulator, its key columns, and its aggregates;
       the ``agg::`` factories take exactly the fields each op uses, so you never
       spell a ``DFTU_AGG_*`` code or mis-fill a spec. ``Host::agg`` is
-      get-or-create, so calling it every batch is the normal shape.
+      get-or-create, so calling it every batch is the normal shape, and
+      ``DFTRACER_UTILS_TRY(decl, expr)`` binds its ``Agg`` or returns its
+      error, which the host reports as the step's message.
       ``accumulate(df)`` folds the batch's ``pid`` column into the host-owned
       state: ``merge`` stays empty and per-worker copies are combined by the
-      host, not by your code. ``plugin.h`` is header-only, so nothing links the
-      library.
+      host, not by your code. ``plugin.h`` is header-only, so a plugin links no
+      library of the engine: the host process provides every function it calls.
 
 3. Run it and read the result
 -----------------------------
@@ -156,6 +162,11 @@ reduce or threading code.
                events_per_pid.cpp -o events_per_pid.so
          $ dftracer_run --plugin ./events_per_pid.so plugin_trace.pfw.gz
 
+      On macOS add ``-undefined dynamic_lookup`` to the ``g++`` line, since the
+      plugin is loaded into the host process rather than pre-linked against it;
+      ``dftracer_plugin build events_per_pid.cpp`` runs the exact flags for your
+      platform.
+
       ``dftracer_run`` folds the plugin over one shared, index-pruned parallel
       scan and reports the scan on stderr:
 
@@ -190,9 +201,9 @@ What you learned
 - A plugin is a **fold over the one fused scan**: see each event once, keep
   mergeable state.
 - Author it in Python with ``@jit.plugin`` + ``jit.map`` + ``@jit.each_event``,
-  or in C++ against the ABI with a ``step``/``on_batch`` over the batch's
-  ``dftu_dataframe`` and ``Host::agg``, exported by the ``dftracer_plugin``
-  factory. Both compile to the same ABI.
+  or in C++ with a ``step`` over the batch's ``dataframe::FrameView`` and
+  ``Host::agg``, registered by a ``DFTU_PLUGIN`` body with ``p.fold<Slice>()``.
+  Both compile to the same ABI.
 - Run it in Python with ``Plugins([...]).run(...)``, or compile the ``.so`` and
   fold it with ``dftracer_run --plugin``.
 

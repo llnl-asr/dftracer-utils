@@ -1385,9 +1385,15 @@ coro::CoroTask<dstd::Result<const VizSummary*>> ensure_viz_summary(
     s = index.viz_summary();
     if (!s) {
         if (!index.load_persisted_viz_summary()) {
+            index.note_viz_summary_compute();
             const auto built = co_await build_viz_summary(index);
             if (!built) co_return built.error();
-            index.persist_viz_summary();
+            const auto persisted = co_await index.persist_viz_summary();
+            if (!persisted) {
+                DFTRACER_UTILS_LOG_WARN(
+                    "viz: failed to cache the summary in the store: {}",
+                    persisted.error().message());
+            }
         }
         s = index.viz_summary();
     }

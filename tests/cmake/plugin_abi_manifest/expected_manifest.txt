@@ -1,0 +1,27 @@
+const DFTU_FIX_BANNER "dftu.fix.banner"
+const DFTU_FIX_LIMIT 3
+const DFTU_FIX_MASK 255
+enum DFTU_FIX_OFF 0
+enum DFTU_FIX_ON 7
+field dftu_fixture.a offset 8 size 4
+field dftu_fixture.b offset 12 size 4
+field dftu_fixture.bytes offset 24 size 4
+field dftu_fixture.callback offset 40 size 8
+field dftu_fixture.kind offset 4 size 4
+field dftu_fixture.on_arm offset 24 size 8
+field dftu_fixture.point.x offset 32 size 4
+field dftu_fixture.point.y offset 36 size 4
+field dftu_fixture.struct_size offset 0 size 4
+field dftu_fixture.value.f64 offset 16 size 8
+field dftu_fixture.value.i64 offset 16 size 8
+field dftu_fixture.whole offset 24 size 4
+field dftu_fixture_member.key offset 0 size 8
+field dftu_fixture_member.key_len offset 8 size 4
+fnptr dftu_fixture.callback void (*)(void*, int32_t)
+fnptr dftu_fixture.on_arm void (*)(void*, int32_t)
+fnptr dftu_fixture_fn void (*)(int32_t)
+struct dftu_fixture size 48 align 8
+struct dftu_fixture_member size 16 align 8
+typedef dftu_fixture_kind int32_t
+typedef dftu_fixture_opaque struct dftu_fixture_opaque
+typedef dftu_fixture_size uint64_t

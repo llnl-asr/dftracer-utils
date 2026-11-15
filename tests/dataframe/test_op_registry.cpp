@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/op.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/duql/abi.h>
+#include <dftracer/utils/duql/c_api.h>
 #include <doctest/doctest.h>
 #include <task_result.h>
 
@@ -472,7 +472,7 @@ TEST_SUITE("op_registry") {
         dftu_series* k_col = dftu_dataframe_column(df, "k");
         dftu_series* v_col = dftu_dataframe_column(df, "v");
         DataFrame cpp_df;
-        cpp_df.names = {"k", "v"};
+        cpp_df.names = dstd::make_shared_strings({"k", "v"});
         cpp_df.columns.emplace_back(k_col);
         cpp_df.columns.emplace_back(v_col);
         DataFrame via_cpp = dftu_utils_test::ok(

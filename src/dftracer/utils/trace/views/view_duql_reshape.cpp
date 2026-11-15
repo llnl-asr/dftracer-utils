@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/error.h>
-#include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
+#include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/internal/dataframe_handle.h>
+#include <dftracer/utils/dataframe/internal/node_registry.h>
+#include <dftracer/utils/dataframe/internal/sink_plan.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/op.h>
 #include <dftracer/utils/dataframe/query/vectorize.h>
@@ -65,8 +67,9 @@ dstd::Result<dataframe::DataFrame> Applier::run_column_op(
 
 Status Applier::stage(const duql::PipelinePlugin& p) {
     leave_scan("plugin function");
-    const dftu_op_desc* op = dftu_op_find(p.op.c_str());
-    if (!op) return refuse<"plugin function '{}' is not registered">(p.op);
+    auto found = dataframe::find_op(p.op.c_str());
+    if (!found) return refuse<"plugin function '{}' is not registered">(p.op);
+    const dftu_op_desc* op = found->get();
     auto compiled = compile(p.arg.term, dstd::String(p.arg.text));
     if (!compiled) return compiled.error();
     if (auto done = with_column(dstd::String(p.arg.name), *compiled,
@@ -126,10 +129,11 @@ Status Applier::stage(const duql::PipelinePlugin& p) {
     dstd::Vector<dataframe::query::VectorColumn> next = cols_;
     next[at].type = type;
     map_rows(
-        [name = p.arg.name, op, second, a, b, str = p.str](
+        [name = p.arg.name, held = std::move(*found), second, a, b,
+         str = p.str](
             dataframe::DataFrame f) -> dstd::Result<dataframe::DataFrame> {
-            return run_column_op(std::move(f), dstd::String(name), op, second,
-                                 a, b, str);
+            return run_column_op(std::move(f), dstd::String(name), held.get(),
+                                 second, a, b, str);
         },
         std::move(next), dstd::fmt<"plugin {} over {}">(p.op, p.arg.name));
     return {};
@@ -138,7 +142,21 @@ Status Applier::stage(const duql::PipelinePlugin& p) {
 Status Applier::stage(const duql::PipelineCall& c) {
     leave_scan("call");
     const dftu_op_desc* op = dftu_op_find(c.op.c_str());
-    if (!op) return refuse<"'call {}' is not registered">(c.op);
+    if (!op) {
+        // A plugin node: a table to table step with no signature, so it takes
+        // no arguments and the plan reads its output schema itself.
+        if (!dataframe::find_node(c.op))
+            return refuse<"'call {}' is not registered">(c.op);
+        if (!c.args.empty())
+            return refuse<
+                "'call {}' takes no arguments; a plugin node has no signature">(
+                c.op);
+        lines.push_back(dstd::fmt<"node {}">(c.op));
+        v_ =
+            v_.with_lazy(v_.lazy().op(dstd::String(c.op), dataframe::OpArgs{}));
+        cols_.clear();
+        return {};
+    }
     const dstd::String what = dstd::fmt<"call {}">(c.op);
     dataframe::OpArgs args;
     std::size_t used = 0;
@@ -191,6 +209,22 @@ Status Applier::stage(const duql::PipelineCall& c) {
     lines.push_back(dstd::fmt<"frame_op {}">(c.op));
     v_ = v_.with_lazy(v_.lazy().frame_op(std_str(c.op), args));
     cols_.clear();
+    return {};
+}
+
+Status Applier::stage(const duql::PipelineSink& s) {
+    if (!main_)
+        return refuse<"'sink {}' is only allowed in the main pipeline">(s.name);
+    leave_scan("sink");
+    auto wrapped = dataframe::sink_plan(v_.lazy(), s.name, s.options, 0);
+    if (!wrapped) return wrapped.error();
+    lines.push_back(dstd::fmt<"sink {}">(s.name));
+    v_ = v_.with_lazy(std::move(*wrapped));
+    cols_.clear();
+    cols_.push_back(dataframe::query::VectorColumn{
+        dstd::String("rows"), dataframe::scalar(dataframe::TypeId::Int64)});
+    cols_.push_back(dataframe::query::VectorColumn{
+        dstd::String("batches"), dataframe::scalar(dataframe::TypeId::Int64)});
     return {};
 }
 
@@ -346,7 +380,8 @@ Status Applier::stage(const duql::PipelineExpand& e) {
                     for (std::int64_t i = 0; i < child.num_children(); ++i) {
                         dstd::String joined_name(name);
                         joined_name.append(".").append(child.field_name(i));
-                        out.names.push_back(std::move(joined_name));
+                        out.names.push_back(
+                            dstd::SharedString{std::move(joined_name)});
                         out.columns.push_back(child.child(i).take(element));
                     }
                 } else if (off) {

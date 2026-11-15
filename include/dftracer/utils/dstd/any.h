@@ -79,16 +79,7 @@ class Any {
         } else {
             void* raw = memory::detail::allocate(sizeof(U), alignof(U));
             U* p;
-#if defined(__cpp_exceptions)
-            try {
-                p = ::new (raw) U(std::forward<Args>(args)...);
-            } catch (...) {
-                memory::detail::deallocate(raw, sizeof(U));
-                throw;
-            }
-#else
             p = ::new (raw) U(std::forward<Args>(args)...);
-#endif
             ::new (static_cast<void*>(buffer_)) void*(raw);
             ops_ = &HEAP_OPS<U>;
             return *p;
@@ -166,16 +157,7 @@ class Any {
         [](void* dst, const void* src) {
             const T& from = *static_cast<const T*>(heap_slot(src));
             void* raw = memory::detail::allocate(sizeof(T), alignof(T));
-#if defined(__cpp_exceptions)
-            try {
-                ::new (raw) T(from);
-            } catch (...) {
-                memory::detail::deallocate(raw, sizeof(T));
-                throw;
-            }
-#else
             ::new (raw) T(from);
-#endif
             ::new (dst) void*(raw);
         },
         [](void* dst, void* src) noexcept {

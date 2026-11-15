@@ -9,6 +9,74 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Added
 
+- `dftu.svc.store`, a plugin service over the store of the index root the scan reads, lent in namespaces the host names `plugin.<plugin name>.<ns>` so a plugin reaches only its own data and a name that would escape it is refused with `DFTU_E_INVALID`. It forwards the store C ABI function for function (namespace, batch, put, fold, erase, erase range, commit, snapshot, get, multi get, prefix and range scans, cursor next/key/value and the matching free calls) with an error on the callback's `ctx`, has no open, close, pack, drop, flush, publish, fail or refresh because the host owns the store, and is NULL on a cursor or build host, which run over no trace folder. A C++ wrapper is `Host::store()` in `dftracer/utils/plugins/plugin/store.h`. A commit only commits: the host flushes its one writer of the directory from the fold's finalize, whichever fold of the plugin committed, and a failed flush fails the run instead of only being logged. A namespace, batch or snapshot handle belongs to the store directory rather than to the fold that made it, so a handle a slice step made works in the master finalize and one of another root is refused; a NULL handle is refused with `DFTU_E_INVALID` and a message, and a refused commit still frees its batch. A scan over two index roots makes every call fail with `DFTU_E_INVALID` and a message that names both roots, so one store never serves two roots.
+
+- The plugin ABI shape is recorded, not only its version: `cmake/plugin_abi_manifest.txt` holds one line per struct size and alignment, field offset and size, enumerator value, integer and string `DFTU_*` constant, typedef underlying type and function pointer spelling, with parameter names stripped so a rename changes nothing. `scripts/plugin_abi_manifest.py` writes it from the plugin ABI headers, ctest `plugin_abi_manifest` fails on any difference, `plugin_abi_manifest_update` records a shape change, ctest `plugin_abi_manifest_self` checks the parser on a fixture header, and `scripts/check_plugin_abi_manifest_diff.py` compares it against the newest release tag of the form `v<major>.<minor>.<patch>`: an added line, and a struct that grew with its alignment and its old fields unchanged, pass; a removed or changed line fails unless the `abi` major in `VERSION` moved.
+
+- `DFTU_PLUGIN(name, version, ...)` in `dftracer/utils/plugins/plugin/register.h` writes a C++ plugin's whole entry point. The body is a lambda or a function name that takes a `PluginBuilder&` and a `const Config&` and returns `dstd::Result<void>`; the macro writes the info record and the `dftracer_plugin` symbol, calls it, and turns a returned error into the failed load with that error's condition and message. The last argument is variadic, so a comma in the body outside parentheses, as in a structured binding or a braced initializer, does not end the macro's arguments. A `PluginBuilder` destroys a fold it still holds when it is destroyed, so a body that registers one and then returns an error, and a caller that drops the builder unbuilt, leak nothing; `build()` hands the descriptor to the host and keeps nothing to destroy. The CLI scaffold, the example plugins and the test fixtures are written with it.
+- `make_error(dstd::Condition, message)` with one helper per condition, `invalid_argument`, `io_error`, `unsupported`, `internal`, `not_found`, `parse_error`, `cancelled` and `out_of_memory`, re-exported by the SDK's `plugins::` namespace, so a plugin reports an error by condition instead of a C status image and never spells a `dstd::Condition` by hand, plus `status_of` and `report`, which carry an outcome to a callback's status.
+- The C++ plugin SDK has a zero-copy frame builder in `dftracer/utils/plugins/plugin/frame.h`. `Column` takes a plugin's buffers by move (`from_int64`, `from_int32`, `from_uint64`, `from_double`, `from_bool`, `from_timestamp`, `from_duration`, `from_strings` from int32 or int64 offsets and bytes, `from_static_*` for memory the plugin owns for the process) and hands them to the engine with `dftu_series_new_flat_borrowed` / `dftu_series_new_string_borrowed`, so no column data is copied; `FrameBuilder::add` and `build()` name the columns and make the frame, a missing row, a null column or a row count that differs from the first is an error, and a failed build frees every column it made. The release callback runs once, when the last column that uses a buffer is gone.
+- One frame owner type for the plugin surface: `OwnedDataFrame` in `dftracer/utils/plugins/plugin/frame.h`, with `get()`, `release()`, `reset()`, `is_null()` and `operator bool`. It replaces both the frame handle of `plugins/result_registry.h` and its own duplicate in the SDK, so a source, a node, a format, a UDF result and a named result all hand back one type. The scaffold templates and the example plugins use the builder in place of raw `dftu_series_new_*`, `dftu_series_free` and `dftu_dataframe_new` calls.
+- The plugin SDK's frame and read types live in the dataframe library: `dataframe::Column`, `dataframe::OwnedDataFrame` and `dataframe::FrameBuilder` in `dftracer/utils/dataframe/plugin_frame.h`, still spelled `Column`, `OwnedDataFrame` and `FrameBuilder` in `plugins::`, plus two borrowed views built in place with no allocation. `ColumnView` (`type`, `size`, `is_null`, `values<T>` over a flat fixed-width column, `string_at` at any encoding, and `flat()` for a column that is not flat, which shares the buffers of a FLAT column and materializes any other) and `FrameView` (`column_count`, `row_count`, `name(i)`, `column(i)`, `column(name)`). A UDF reads a batch through `UdfBatch::arg(i)`, a `ColumnView`, gives `dstd::Result<Column>` from `exec`, and gets `dataframe::TypeId` from `UdfBind::type` and `bind.result`, with a `ScalarView` from `UdfBind::constant` and an `UdfFlag` set in `UdfOptions`; a UDAF gives `dstd::Result<Column>` from `finalize` and sets an `UdafFlag` set. So a C++ plugin writes no `dftu_*` type, call or `DFTU_*` constant outside its entry point. `dftu_dataframe_column_at` lends a frame's own column handle with no allocation.
+- Golden test output prints a double in the shortest form that reads back as the same value (`0.1234567`, `55.74255561017869`), in place of six fixed decimals (`91.500000`), so a recorded golden keeps every digit.
+  A whole value prints as an integer, exactly as the engine's JSON output does; every other value takes the shortest round trip, where the JSON printer uses `dstd::fixed_text`.
+- `dftracer_plugin new <kind> <name> [--dir DIR]` writes one standalone CMake project for a `fold`, `udf`, `aggregate`, `format`, `sink` or `node` plugin: `CMakeLists.txt`, `plugin.cpp`, a `README.md` and a golden test that passes on the generated code. `dftracer_plugin check <lib> [--tests DIR] [--record]` loads a built plugin in a child process with the memory debug mode, the exit check and `DFTRACER_UTILS_PLUGIN_CHECK=1` on, prints its name, version, ABI version and every kind list, runs the golden tests of DIR, and reports a load error, each test result with a diff, the child's leaks or the signal that killed it; it exits 0 only when all pass. `--record` rewrites each expected block with what the query gave.
+- Golden tests are plain `*.test` files in the style of sqllogictest: an `input` path relative to the file, a duql `query` block (with `rowsort`, or `error <text>`), `----`, then the expected rows, tab separated, with the column names first. A blank line ends the block, and one file holds several blocks.
+- A plugin may register a file format or a sink under its own bare name, such as `toy` from plugin `toy`, as well as `<plugin>.<name>`. Any other name, another plugin's name and `dftu.` are still refused at load.
+- Add `examples/plugins/csv_reader.cpp`, `examples/plugins/sessionize.cpp` and `examples/plugins/range_provider.cpp`, one example for the format, node and provider kinds, so every kind the SDK offers has one.
+  `csv_reader` reads a CSV file and types each column and hands each chunk's rows straight out of the shared table, `sessionize.gaps` appends a session number per pid, and `range_provider.numbers` builds its table in code.
+  Each returns a projection as exactly the columns it names, in its order, so a repeated name gives the column twice, and `sessionize.gaps` reads `pid` and `ts` through a materialized flat view, accepts a TIMESTAMP or a DURATION, and gives a row with a null pid or ts the session -1 without touching the walk.
+- Run each example plugin that loads on its own through `dftracer_plugin check` in the default `tests` preset, one ctest each under `ctest -R examples/plugins/`, with the golden tests in `examples/plugins/tests/`.
+  Each example must load, pass the golden tests it ships and leave no leaks, so CI builds and runs one plugin of every kind.
+
+- `Plugins::describe()` reports the names each loaded plugin registered, one list per kind (`ops`, `udfs`, `udafs`, `states`, `providers`, `nodes`, `index_extensions`, `file_formats`, `sinks`) plus `has_fold`, and `dftracer_run --describe` prints them. Python: `Plugins.describe()` returns one `PluginInfo` named tuple per plugin, and `dft.scan_file(path)` plans a read through the plugin format that claims the file.
+- Set `DFTRACER_UTILS_PLUGIN_CHECK=1` to make the plugin host validate every frame and column a plugin returns (provider, file format and node cursors, a UDF's `exec`, a UDAF's `finalize`, a plugin op's result and a fold transform's output), failing the run with an error that names the plugin, the callback and the broken rule. Off by default.
+
+- A plugin can register a file format (`DFTU_SVC_FILE_FORMATS`, `plugins/abi/file_formats.h`): it scores a file 0..100 from its first 4 KiB, opens it, declares its columns, and hands the engine one cursor per chunk. `LazyFrame::scan_file` / `dftu_lazyframe_scan_file` scan a file through the highest-scoring format, `PluginBuilder::file_format<F>()` is the C++ SDK for one.
+
+- A plugin can register an output sink (`DFTU_SVC_FILE_FORMATS`, `dftu_sink_vt`, `PluginBuilder::sink<S>()`), and every surface writes through it: `LazyFrame::sink(name, options, batch_size)` returns a `SinkSummary` of the rows and batches it wrote, `dftu_lazyframe_sink` is the C ABI, `LazyFrame.sink` in Python takes the options as keywords, `dftracer_view --sink NAME --sink-option KEY=VALUE` sends the query to it, and a duql pipeline ends with `sink "name" key "value"`, which returns one row of `rows` and `batches`. A bind, scan or write error aborts the sink once before it returns.
+- A duql `call` stage can name a registered plan node: `select name, dur | call ns.n()` runs the node table to table with no arguments.
+  The node reads the declared columns the plan carries at that point, so after a `select` it reads the columns that `select` names, and its output columns are the schema it declares for that input.
+  A plugin node on a plan with undeclared columns now runs with those columns dropped, where it was refused before; name a field in a `select` to pass it.
+  A name that both a plugin op and a node carry runs the op.
+
+- ``dftracer/utils/arrow/stream.h`` streams a ``dataframe::Series``, a ``dataframe::DataFrame`` and a ``dataframe::LazyFrame`` as an ``ArrowArrayStream`` and imports one back as a chunked column, a frame, or a lazy frame that pulls one batch per scan; Python gains ``Series.__arrow_c_stream__``, a per-chunk ``DataFrame.__arrow_c_stream__`` and ``LazyFrame.__arrow_c_stream__``, and the schema reconciler moved into the arrow library.
+- The arrow library has one owner type, `arrow::Batch`, in `dftracer/utils/arrow/batch.h`, and `dftracer/utils/arrow/ipc.h` has `arrow::Writer`, `arrow::Reader`, `arrow::scan_ipc` and `arrow::read_ipc`; `to_arrow`, `series_from_arrow` and `dataframe_from_arrow` report failure as `dstd::Result`, and `arrow::WriterOptions` picks the IPC compression.
+  `arrow::scan_ipc` decodes several files at once, as many as the request's memory budget holds, gives their batches in file order, and rejects a file whose columns differ from the first file's.
+- Add user-defined aggregates for plugins: `dftu_svc_ops::register_udaf` takes a `dftu_udaf_desc` (`dataframe/c_api_udaf.h`) with `bind`, `init`, `update`, `combine`, `finalize`, `destroy` and a `serialize` pair, and the host owns the memory of every group state.
+  A state that is plain bytes (`DFTU_AGG_STATE_POD`) needs no `destroy` or `serialize`, and any other state needs all three, or the load fails with a message.
+  `update` runs on whole columns and gets a null state pointer for a row with a null argument unless `DFTU_AGG_NULL_AWARE` is set.
+  The SDK has `PluginBuilder::udaf<A>` with `UdafOptions` and `UdafStateSet`, and `dataframe::make_udaf<A>()` registers the same class in the same process and returns an owning `Udaf`.
+- Run a registered UDAF as a window function: a duql `window` block calls it with `over N rows` or `over <width>` (slid with `retract` and `value` when the UDAF has `DFTU_AGG_HAS_RETRACT`, in slices of at least 1024 rows that step together so each call takes many rows, else merged from a segment tree with `combine`, O(log w) merges per row of a frame of `w` rows) or over the whole partition, and the C ABI has `DFTU_WINDOW_FRAME_UDAF` with `udaf`, `args` and `arg_count` in the frame of `dftu_window_spec`.
+- Run a registered UDAF in `DataFrame::group_by`, `LazyFrame::group_by` and the C ABI group-by calls through `GroupAgg::fn` and `Agg::Udaf`, with its states spilled by `serialize` and fed from one thread unless it is `DFTU_AGG_PARALLEL_SAFE`; duql calls one by name in a `group` or `agg` block.
+- Call a registered UDAF from Python as `dft.udaf["name"](dft.col("x"))` inside `DataFrame.group_by`, `LazyFrame.group_by` and `group_by_dynamic`; `dft.udaf` is a read-only mapping of the registered names, like `dft.udf`.
+- Add scalar UDFs for plugins: `dftu_svc_ops::register_udf` takes a `dftu_udf_desc` (`dataframe/c_api_udf.h`) with `bind`, `exec` and `free_bound`, and duql calls the UDF by its name in `derive`, `select`, `where` and join keys.
+  `exec` runs on whole columns, the host nulls the rows with a null argument unless `DFTU_FN_NULL_AWARE` is set, and a name that a built-in function or another UDF holds fails the load.
+  A long `exec` polls `dftu_check`, so a cancelled or timed out query stops within one batch, and a plan that holds a UDF keeps its plugin library loaded.
+  The SDK has `PluginBuilder::udf<U>` with `UdfBind` and `UdfBatch`, and `examples/plugins/duration_udfs.cpp` registers two UDFs.
+  A UDF is one registration for every surface: Python calls it as `dft.udf["name"](...)` or `dft.call("name", ...)`, C++ as `dataframe::udf("name")`, and `dftu_op_find` lists it.
+  `dataframe::make_udf<T>()` registers the same class in the same process and returns an owning `Udf`, which removes the name when it is destroyed while plans that hold it keep running.
+- Add the plugin service `dftu.svc.memory` (`abi/memory.h`), the `dftu_svc_memory` table.
+  Every loaded plugin has one memory pool named after it, so its blocks and reservations show in the pool gauges.
+  A slice reserves bytes with `reserve` and `try_grow`, which returns `DFTU_E_NO_MEMORY` with a message past the budget and leaves the reservation as it was.
+  A reclaimer set with `set_reclaimer` runs when a grow needs room, and the host releases and logs a reservation that a plugin leaves at unload.
+  The SDK has `Host::memory()`, with `Memory` and an RAII `Reservation`.
+- Add the plugin services `dftu.svc.json` and `dftu.svc.yaml` (`abi/format.h`), one `dftu_svc_format` table served under both ids.
+  A plugin parses a text into a `dftu_value` tree, gets `DFTU_E_PARSE` with a `line:column: reason` message for a bad text, and writes a document with a streaming writer that returns `DFTU_E_INVALID` for a misuse.
+  The SDK has `Host::json()` and `Host::yaml()`, with `Doc` and `FormatWriter`.
+  The new `json::Writer` writes compact JSON the way `yaml::Writer` writes YAML.
+- Add `Indexer.build_async()` and `LazyFrame.collect_async()`, which start the work on the native pool and return a `TaskHandle` at once.
+  `get()` releases the GIL while it waits and raises the error that `build()` or `collect()` raises.
+  A handle can be awaited from `asyncio` or `uvloop`, takes `add_done_callback` and `cancel`, and a cancelled await asks the native task to stop.
+  The native `TaskHandle` is now a typed completion handle in place of the empty shell, and `dstd::Any` is no longer included by `trace/views/view.h`.
+- Add `dstd::Condition::OutOfMemory` and the C status `DFTU_E_NO_MEMORY` (-12) for a refused allocation.
+  The error code `MemoryBudgetExceeded` now has the condition `OutOfMemory` in place of `Internal`.
+  The Python bindings raise `MemoryError` for an `OutOfMemory` error, such as a plugin callback that returns `DFTU_E_NO_MEMORY`.
+  The plugin examples and the `dftracer_plugin` and JIT templates report `DFTU_E_NO_MEMORY` when a `malloc` fails.
+- Add `dstd::try_reserve` for `dstd::Vector` and `dstd::String`, which returns `OutOfMemory` in place of ending the process when the heap refuses.
+  The plugin file system service `stat_batch` uses it, so a count the heap cannot hold returns `DFTU_E_NO_MEMORY` with a message.
+- Add the library `libdftracer_utils_plugins`, with its pkg-config file and CMake package, between trace and domains.
+  It holds the plugin host, which moves from `dftracer::utils::domains::plugins` to `dftracer::utils::plugins::host`.
 - Add `Series.name`, kept through `from_pandas`, `to_pandas`, Polars, ops, `df["x"]` and pickle, with `dftu_series_name` and `dftu_series_rename` in the C ABI.
   A binary op keeps the name only when both names are equal, as pandas does, and `Series.rename` and `Series(data, name=...)` set it.
 - Add `yaml::Records` for a YAML text too large for memory.
@@ -18,11 +86,91 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   `Records::next_chunks` gives a batch of `RecordsOptions::batch_chunks` chunks, which the caller can parse and read on its own threads.
 - Add `yaml::Document::parse` with a `yaml::RunJobs` hook that indexes one large text in chunks on the caller's threads and joins them, with the same result and errors as the one-thread parse.
   A 200 MB text parsed 5 to 7 times faster on 14 threads and 7 to 9 times faster on 48.
+- Add the Arrow buffer getters `dftu_series_validity`, `dftu_series_chunk_count`/`dftu_series_chunk`, `dftu_series_dictionary_codes`/`dftu_series_dictionary_values` and `dftu_series_view_buffer_count`/`dftu_series_view_data`/`dftu_series_view_buffer`, add `dftu_series_new_string_borrowed`, and make `dftu_series_new_flat_borrowed` and `dftu_series_new_string_view` borrow the validity bitmap, so a plugin builds Arrow arrays from a column and hands Arrow memory back with no copy (`examples/plugins/arrow_convert.c`).
 
 ### Changed
 
+- `dftracer_server` keeps its viz summary in the index store of each trace folder, namespace `server.viz_summary`, in place of one `.dftviz_summary` file per index directory. A restart serves it from the store, and a changed, added or removed trace file makes the server compute it again. An old `.dftviz_summary` file is ignored.
+- `dftracer_server` caches its viz responses in the index store of each trace folder, namespace `server.viz_result`, so a restart serves a response that a trace file did not invalidate without scanning the trace. A response key carries the folder's fingerprint, so a changed file misses.
+  One scope per folder holds both namespaces, and an added or removed trace file drops that scope, with the summary and every response of the folder in it.
+  `DFTRACER_UTILS_VIZ_RESULT_STORE_BYTES` bounds the stored responses of one folder, 64 MiB by default, and a folder that would pass it drops its stored responses and starts again.
+  A request no longer waits for the store, because the index writes each response in a task of its own and flushes the store once when the index shuts down.
+- The plugin loader accepts an ABI version whose major matches the host's and whose minor is no greater than the host's; the patch is ignored. A refusal names both versions and the rule.
+- Plugin-to-host records are accepted when ``struct_size`` is between the size of that record before its trailing optional callbacks and the host's ``sizeof``; the host copies the declared prefix into a zeroed host record and reads only that copy, so an omitted optional trailing callback reads NULL. The plugin ABI header hash is removed: ``dftu_plugin_info`` has no ``abi_hash`` field, ``abi_version.h`` defines no ``DFTRACER_UTILS_PLUGIN_ABI_HASH`` macro, and the Python extension no longer exports ``PLUGIN_ABI_HASH``. The JIT cache keeps its header fingerprint.
+
+- The plugin SDK's host and config calls are typed: `Host::run_op` gives a `Column`, `run_op_frame` an `OwnedDataFrame` and `run_op_aggregate` a `dataframe::Scalar`; `find_op` gives an `OpRef` and `register_op` takes an `OpSpec`; op arguments come from an `OpArgsBuilder` whose string lists take `dstd::CStringView` spans; `publish` and `consume` take and give a `dstd::ByteView`; `Writer::chunk` takes a `dstd::ByteView`; `Sketch::result` gives `Quantiles`; `log` takes a `LogLevel`, `spawn` a `JobWhere`, config keys a `ValueKind` and aggregates an `AggOp`. A fold's `step` takes a `FrameView`, and a transform or frame `finalize` gives `dstd::Result<OwnedDataFrame>`. `Config` and `ConfigValue` read a plugin's options with no raw `dftu_value`.
+- The plugin SDK's I/O, file-system, file-I/O and format calls are typed: every path is a `dstd::CStringView`, a buffer read in is a `dstd::MutableByteView` and a buffer written a `dstd::ByteView`, and a list of paths a `dstd::Span<const dstd::CStringView>`. `Fs::fstat` and `statx` fill an SDK `Stat` and `Statx`, `stat_batch` fills `FileStat` and `StatStatus` spans and refuses spans shorter than the paths, `find_all` takes `FindOptions`, `PathEntry::kind` gives a `FileKind`, `openat2` takes an `OpenHow`, and `GzWriter::close` gives a `GzSummary`. `co_await` on an `AsyncOp` or `AsyncAll` gives a `dstd::Condition`, and `FormatWriter::value` takes text up to its end, so a `char` buffer writes its string, not its whole size. A C++ plugin names no `dftu_*` type, call or `DFTU_*` constant.
+- A plugin that declares a config key with an empty name fails to load with an error that says so. Before, the SDK ended the key list there and dropped every key after it.
+- The plugin SDK's source, node and file-format views are typed: `SchemaBuilder::add` takes a `TypeId` and an optional `TimeUnit`, which a Timestamp, Time or Duration column reads in; `ExprView::as_compare` gives a `CmpOp` with a `ScalarView` literal, `as_str_pred` a `StrPredOp`, `as_is_in` a `ColumnView`, and `as_logical` a `LogicalOp`; `JoinView::how` is a `JoinHow` and `ScanResult::filters` a `dstd::Vector<Pushed>`, one vote per filter. `SchemaView` reads the names, types, nullability and time unit (`unit`) back out of a schema, and `OpArgs::size()` gives a node its operand count. `FileFormat::probe` takes a `dstd::ByteView` head and a `dstd::CStringView` path, `BindView::types` is a `Vector<TypeId>` and `BindView::options` the SDK `Config`, and `SinkWriter::write` takes a `FrameView`, so a C++ plugin author writes no `dftu_*` type, call or `DFTU_*` constant outside the entry point.
+
+- `OwnedLazyFrame` in `dftracer/utils/plugins/result_registry.h` keeps its handle private, with `get()` and `release()` like `OwnedDataFrame`, and the `AggCol` builders name their columns with a `dstd::CStringView`, so no plugin reads the SDK's own field layout.
+- Move Arrow conversion and IPC out of the core libraries into the arrow library (`dftracer_utils_arrow`, `dftracer/utils/arrow/arrow.h`), which the Python module and the tests link: `Series::to_arrow`, `Series::from_arrow`, `DataFrame::to_arrow`, `DataFrame::from_arrow` and `DataFrame::to_ipc` become `arrow::to_arrow`, `arrow::series_from_arrow`, `arrow::dataframe_from_arrow`, and IPC through `arrow::Writer` and `arrow::Reader`.
+- Remove the CMake options `DFTRACER_UTILS_ENABLE_ARROW` and `DFTRACER_UTILS_ENABLE_ARROW_IPC`; the arrow library always has IPC.
+- Remove the plugin Arrow service `dftu.svc.arrow`, the result kind `DFTU_RESULT_KIND_ARROW`, `ViewScannerBatch::to_arrow` and `ComparisonOutput::to_arrow`.
+- Remove `AggregationConfig::output_format`, `FORMAT_JSON`, `FORMAT_ARROW`, `is_valid_format` and `supported_formats_str`, which nothing read.
+- Remove `dftu_plugin::bytes` and `dftu_plugin::reclaim`, and `dftu_cursor_vt::bytes` and `dftu_cursor_vt::reclaim`.
+  A slice reserves its bytes through `dftu.svc.memory` and sets a reclaimer there, in place of reporting a size for the host to ask about.
+  A Slice no longer gets slots from `bytes()` and `reclaim()`, and a source cursor no longer gets them from `resident_bytes()` and `reclaim()`.
+- Pass a `const dftu_plugin_host*` to `dftu_source_vt::scan` and `dftu_node_vt::open`, and to `scan` and `open` in the SDK source and node classes.
+  The host stays valid until the cursor is destroyed, and it serves the services of a fold callback's host that need no scan.
+  A cursor reserves memory through it, charged to the pool of its plugin, and its reclaimers run between two `next()` calls when another holder of the budget asks the pool for bytes.
+  The host releases and logs a reservation that a cursor leaves.
+- Rename the C API headers `abi.h` to `c_api.h` in `common`, `dataframe`, `duql`, `runtime`, `store`, `trace/index` and `trace/views`.
+  Move the aggregate-over-expression C declarations from `dataframe/agg_expr.h` to the new `dataframe/c_api_agg_expr.h`.
+  The plugin headers `plugins/abi.h` and `plugins/abi/` keep their names.
+- Make the coroutine library throw and catch nothing.
+  A task ends with a `dstd::Error` by `co_await coro::fail_with(error)`, or by `co_await` on a `dstd::Error` or an error `dstd::Result`.
+  `co_await` on a task that ended with an error ends the awaiting task with the same error, and `Scope::join`, `when_all`, `when_any` and `SpawnFuture` do the same for the first error of their children.
+  `coro::settle` gives the error as `Settled::error` without ending the caller, and `RetryPolicy::should_retry` takes a `const dstd::Error&`.
+  `Runtime::block_on`, `sync_wait` and `TaskHandle::get` give the error as a `dstd::Result`.
+  An exception that escapes a coroutine ends the process.
+  `common::error_of_exception`, `common/exception_helpers.h`, `Generator::has_exception` and `AsyncGenerator::rethrow_if_exception` are removed, and the ctest `no_exceptions` always runs.
+- Make the plugin SDK throw and catch nothing, and compile its headers with `-fno-exceptions`.
+  `plugins::Error` and `AsyncOp::nothrow` are removed.
+  A call that can fail returns a `dstd::Result`, and the callbacks of a Slice, source, cursor or node return one too, or `void` where they cannot fail.
+  `co_await` on a `dstd::Result`, or on an `AsyncOp` whose call or task failed, ends the `Task` with that error.
+  `co_await op.expected()` gives the failure as a `dstd::Result` instead, `co_await fail(error)` fails a `Task`, a Slice that can fail at creation provides `static dstd::Result<Slice> from_config(const Config&)`, and `DFTRACER_UTILS_TRY` and `DFTRACER_UTILS_TRY_VOID` in `dstd/result.h` return the error from a plain function.
+  A callback that throws terminates the process.
+  The ctest `plugin_no_exceptions` compiles every SDK header and three example plugins with `-fno-exceptions -Werror`.
+- Remove `dftu_task_run`; run a task with the host task service `run` instead.
+  `dftu_runtime`, `dftu_default_runtime`, `dftu_runtime_new` and `dftu_runtime_free` move from `coro/abi.h` to `runtime/abi.h`, and the `coro` and `runtime` libraries hold no plugin task type.
+  `AbiTask` and `AbiContext` move to `dftracer::utils::plugins`.
+- Add the ctest `lower_no_plugins`, which fails when a library below `plugins` includes a `plugins/` header.
+- Register providers and plan nodes through the plugin host tables only.
+  `dftu_provider_register` and `dftu_node_register` are removed from the dataframe C ABI, and the dataframe library keeps C++ interfaces for both, so it knows no plugin type.
+  The `dftu_source_vt`, `dftu_cursor_vt` and `dftu_node_vt` tables, and the structs that only they use, move to `plugins/abi/providers.h` and `plugins/abi/nodes.h`.
+  Registration refuses an empty name as well as a NULL one.
+  A plan now keeps the node or provider it names alive, so `dftu_node_unregister` and `dftu_provider_unregister` no longer free state that a plan still holds.
+- Add `run` to `dftu_svc_task`: it blocks until a task ends, frees it and returns its status, `DFTU_END` included, with the message on the ctx.
+  The plugin SDK node input cursor uses it, and the factory host serves it.
+- Keep a plugin library loaded while a node, provider, index extension or op from it, or a plan or cursor that holds one, is alive.
+  Unloading a plugin removes its names at once; the plugin's own `destroy` runs after the last holder is gone and the library is closed after it, where it was closed at unload before and a plan could call into unmapped code.
+- Add 26 calls to the plugin `dftu.svc.io` table: `unlink`, `rmdir`, `rename`, `mkdir`, `fadvise`, `linkat`, `symlinkat`, `socket`, `connect`, `bind`, `listen`, `shutdown`, `sendmsg`, `recvmsg`, `poll_add`, `statx`, `fallocate`, `sync_file_range`, `splice`, `openat2`, `getxattr`, `setxattr`, `fgetxattr`, `fsetxattr`, `tee` and `pipe`, each with an `Io` method in the SDK.
+  The host copies paths, names and socket addresses when called, and an errno of ENOSYS, EOPNOTSUPP or ENOTSUP fails a task with `DFTU_E_UNSUPPORTED`.
+  The calls that need Linux return `DFTU_E_UNSUPPORTED`, with no task, on another platform.
+- Add the plugin service `dftu.svc.fs` over the runtime file system layer: `read_file`, `write_file`, `read_at`, `write_at`, `list_dir`, `find_all`, `exists`, `create_directories`, `remove` and `stat_batch`.
+  A listing is a host-owned `dftu_path_list` read through `list_count` and `list_entry` and freed with `list_free`; the SDK has `Host::fs()` with `Fs`, `PathList` and `FileBytes`.
+  A path that `stat_batch` cannot stat fails its own slot with `DFTU_E_NOT_FOUND` or another status and not the task.
+- Redesign the plugin C ABI around a status and a call context.
+  Every plugin callback takes a host-owned `dftu_ctx*` first and returns a `dftu_status`; a callback reports an error with `dftu_fail` and polls `dftu_check` in a long loop.
+  Every host service call takes the caller's `ctx` first and gives results through out-parameters.
+  Every table starts with `struct_size`, and service ids carry no `@N` suffix.
+  The host names the plugin and the callback in the error the caller sees.
+- Make the plugin loader read a `dftracer_plugin_info` record before it runs any plugin code.
+  A plugin defines it with `DFTU_PLUGIN_INFO`; the loader refuses a plugin that exports none, or whose ABI version it does not accept, and names the plugin in the message.
+- Replace `dftu.svc.coro` and `dftu.svc.compose` with `dftu.svc.task`: jobs (`job`, `sleep`, `then`, `all`, `any`, `map`) with typed values, and tasks (`start`, `spawn`, `drive`, `status`, `discard`).
+  `drive` takes a `release` callback that the host calls once when the drive ends, and `discard` gives back a started task that the plugin will not hand to the host.
+  `DFTU_JOB_BLOCKING` gives the run permit back while a leaf blocks, and the first error of `all` or `map` cancels the rest.
+  The C++ SDK has typed `Job<In, Out>` in `plugin/job.h` in place of `Op`.
+- Make the C++ plugin SDK catch every exception at the ABI boundary and give it to the host as an error with its `what()` text.
+  A call the host refuses throws `plugins::Error` out of the plugin code, `Host` carries the call context, and `make_plugin` and `plugin(...).build` take the context and give the descriptor through an out-parameter.
+- Make a plugin index extension whose `step` fails store nothing for the file, where it stored a file payload built from the chunks it did see and pruned matching rows.
+- Make the store and index C functions return a `dftu_status`, give results through out-parameters and take a caller-owned `dftu_error` as the last parameter.
+  The error message is owned by the caller and freed with `dftu_error_release`, the enums are `int32_t` typedefs, and `dftu_store_pack_options` and `dftu_indexer_options` start with `struct_size`.
 - Make `to_pandas()` give pandas' nullable dtypes (`Int64`, `boolean`, `string`) for integer, bool and string columns that hold nulls, and `category` for a dictionary column, so `DataFrame.from_pandas(df).to_pandas()` keeps those dtypes.
-  `from_pandas` keeps a `category` column with string categories as a dictionary column, without its unused categories or their order.
+  `from_pandas` keeps a `category` column with string categories as a dictionary column, in category order where pyarrow is installed, and `to_pandas` gives back only the categories that are used.
+- Make `to_polars()` give `Categorical` for a dictionary column and `from_polars` read a `Categorical` or `Enum` column as a dictionary column, where both were plain strings.
+- Make `DataFrame::names` a `dstd::Vector<dstd::SharedString>`, so reading a column by name copies a reference count and does not copy the name.
 - Pick the best vector instructions of the CPU at run time for `str_len_chars`, `str_len_bytes`, `to_lowercase`, `to_uppercase` and the UTF-8 check of duql patterns, which were built for SSE2 only on x86.
   `str_len_chars` of 1M short rows takes 2.2 ms where it took 12.9 ms on an AVX-512 x86 CPU, and the other three are 10 to 15% faster.
 - Read only the parts of the index store that a query needs.
@@ -451,6 +599,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 - Parse YAML with the reader of `libdftracer_utils_yaml` in place of yaml-cpp, for record schema specs and the `--event-map` file of `dftracer_gen_dlio_config`, in the new library `libdftracer_utils_yaml`, which also holds a block-style YAML writer that the DLIO config uses.
   No yaml-cpp archive is in the link line or the install any more, and the same input is accepted, except that a mapping with a duplicate key is now an error, as YAML 1.2.2 requires.
   No source of ours except `common/error.cpp` builds with exceptions now.
+- Replace `dftu.svc.writer` with `dftu.svc.fileio` (`abi/fileio.h`), the host's file readers and writers.
+  The five writer calls (`merge_shards`, `writer_create`, `writer_open`, `writer_chunk`, `writer_close`) keep their meaning and move into the new table.
+  It adds a line reader over plain and gzip files (`lines_open`, `lines_next`, `lines_close`), a chunk reader, a gzip line writer (`gz_open`, `gz_append`, `gz_close`), whole-file `compress` and `decompress`, and the file helpers `logical_path`, `mtime`, `size` and `sampled_hash`.
+  The C++ SDK gets `Host::fileio()` with `LineReader`, `ChunkReader` and `GzWriter`, and the fileio library gets a plain-file line source, `async_streaming_plain_lines`.
+  `dftu_task_run` now returns the task's status, so a `DFTU_END` task status reaches the caller.
 
 ### Added
 
@@ -627,6 +780,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Fixed
 
+- `dftracer_server` with `--index-dir` shared by several trace folders: a stale folder deleted the whole index store, which held the other folders' index data too. It now drops only its own files, including files removed from it, and a sub-folder counts as a folder of its own. A relative `--dir` now finds removed files.
+- Fix a use after free when a plan ran an op after `dftu_op_unregister` removed it.
+  A plan now keeps the op it uses, and unregistering removes only the name, so a later lookup by name finds nothing.
 - Fix `to_pandas()` giving `int64` and `uint64` columns the numpy types `longlong` and `ulonglong`, so a pandas `merge` on a repeated `uint64` key raised `KeyError`.
   The columns are now numpy's own `int64` and `uint64`.
 - Fix a read of freed memory when a task that waits in `with_timeout` or `when_any` on a timeout is cancelled, which a later cancel on the same executor could hit.
@@ -829,6 +985,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 - Fix a select-all frame that listed `args.*` columns of other traces.
   A plan declared the columns of every file in its index root, which holds all traces of one directory.
   It now declares only the columns of its own files.
+
+### Fixed
+
+- Keep a plugin library mapped while a column still borrows its buffer.
+  `dftu_series_new_flat_borrowed`, `dftu_series_new_string_borrowed` and `dftu_series_new_string_view` keep the release callback's library loaded until the last column that uses that buffer is freed, so unloading a plugin set before its frames die no longer calls the callback in unmapped memory (one `dladdr` per borrowed column, not per row).
 
 ## [0.0.14] - 2026-10-10
 

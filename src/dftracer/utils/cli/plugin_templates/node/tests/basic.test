@@ -1,0 +1,12 @@
+# The query below runs over the sample trace next to this file, with the
+# @NAME@ plugin loaded. `dftracer_plugin check --tests tests` runs it through
+# the @NAME@.pass node, so a broken node fails this test: the node runs over
+# the columns the plan carries, which are the two `select` names.
+input ../data/sample.pfw.gz
+query
+select name, dur | call @NAME@.pass()
+----
+name	dur
+open	100
+read	150
+close	80

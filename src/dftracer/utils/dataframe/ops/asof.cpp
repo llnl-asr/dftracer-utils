@@ -46,23 +46,23 @@ dstd::Result<DataFrame> asof(const DataFrame& left, const DataFrame& right,
             return invalid_argument<"asof: equi column types differ">();
         skip.push_back(*rc);
     }
-    if (!ColumnView::supports(left.columns[lt_at].type()))
+    if (!ColumnReader::supports(left.columns[lt_at].type()))
         return invalid_argument<"asof: ts column must be numeric">();
 
-    dstd::Result<dstd::Vector<ColumnView>> lviews =
+    dstd::Result<dstd::Vector<ColumnReader>> lviews =
         ops::views_of(left, by, "asof");
     if (!lviews) return lviews.error();
-    dstd::Result<dstd::Vector<ColumnView>> rviews =
+    dstd::Result<dstd::Vector<ColumnReader>> rviews =
         ops::views_of(right, by, "asof");
     if (!rviews) return rviews.error();
-    dstd::Vector<ColumnView> lequi = std::move(*lviews);
-    dstd::Vector<ColumnView> requi = std::move(*rviews);
-    dstd::Vector<ColumnView> lkeys = lequi;
-    dstd::Vector<ColumnView> rkeys = requi;
+    dstd::Vector<ColumnReader> lequi = std::move(*lviews);
+    dstd::Vector<ColumnReader> requi = std::move(*rviews);
+    dstd::Vector<ColumnReader> lkeys = lequi;
+    dstd::Vector<ColumnReader> rkeys = requi;
     lkeys.emplace_back(left.columns[lt_at]);
     rkeys.emplace_back(right.columns[rt_at]);
-    const ColumnView& lts = lkeys.back();
-    const ColumnView& rts = rkeys.back();
+    const ColumnReader& lts = lkeys.back();
+    const ColumnReader& rts = rkeys.back();
     if (lts.is_bytes())
         return invalid_argument<"asof: ts column must be numeric">();
 

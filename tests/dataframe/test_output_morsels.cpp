@@ -117,7 +117,7 @@ void expect_same_rows(const DataFrame& got, const DataFrame& want) {
 DataFrame ints(const dstd::Vector<dstd::String>& names, std::int64_t rows,
                std::int64_t mod) {
     DataFrame df;
-    df.names = names;
+    df.names = dstd::make_shared_strings(names);
     for (std::size_t c = 0; c < names.size(); ++c) {
         dstd::Vector<std::int64_t> v(static_cast<std::size_t>(rows));
         for (std::int64_t i = 0; i < rows; ++i)
@@ -222,7 +222,7 @@ TEST_SUITE("output morsels") {
         for (std::int64_t i = 0; i < rows; ++i)
             id[static_cast<std::size_t>(i)] = i;
         DataFrame df;
-        df.names = {"id", "xs"};
+        df.names = dstd::make_shared_strings({"id", "xs"});
         df.columns.push_back(Series::flat_i64(id.data(), rows));
         df.columns.push_back(Series::list(
             offs, Series::flat_i64(items.data(),
@@ -327,7 +327,7 @@ TEST_SUITE("output morsels") {
         dstd::Vector<std::int64_t> t{1, 5, 9, 4, 12};
         dstd::Vector<std::int64_t> v{1, 1, 1, 1, 1};
         DataFrame df;
-        df.names = {"t", "v"};
+        df.names = dstd::make_shared_strings({"t", "v"});
         df.columns.push_back(Series::flat_i64(t.data(), 5));
         df.columns.push_back(Series::flat_i64(v.data(), 5));
         const dstd::Vector<GroupAgg> aggs = {GroupAgg{Agg::Count, "", "n"}};
@@ -362,7 +362,7 @@ TEST_SUITE("output morsels") {
                 .scalar(5, zero)
                 .str(6, "");
             return df.lazy().frame_op("dftu.frame.column_op", args, {},
-                                      df.names);
+                                      dstd::to_strings(df.names));
         };
         const auto add =
             morsels(column_op("dftu.series.add_scalar", five), 1000);
@@ -401,9 +401,10 @@ TEST_SUITE("output morsels") {
             .scalar(5, zero)
             .str(6, "");
         // A running sum needs the whole column, so the input is drained first.
-        const auto parts = morsels(
-            none.lazy().frame_op("dftu.frame.column_op", args, {}, none.names),
-            64);
+        const auto parts =
+            morsels(none.lazy().frame_op("dftu.frame.column_op", args, {},
+                                         dstd::to_strings(none.names)),
+                    64);
         REQUIRE(parts.size() == 1);
         CHECK(parts[0].num_rows() == 0);
         CHECK(parts[0].names == none.names);
@@ -426,7 +427,7 @@ TEST_SUITE("output morsels") {
                 const auto parts = morsels(lf, 64);
                 REQUIRE(parts.size() == 1);
                 CHECK(parts[0].num_rows() == 0);
-                CHECK(parts[0].names == want);
+                CHECK(dstd::to_strings(parts[0].names) == want);
                 CHECK(parts[0].columns.size() == want.size());
             }
         }
@@ -477,7 +478,7 @@ TEST_SUITE("output morsels") {
         dstd::Vector<double> f(6000);
         for (std::size_t i = 0; i < f.size(); ++i)
             f[i] = static_cast<double>(i % 97) * 0.1;
-        df.names.push_back("v");
+        df.names.push_back(dstd::SharedString{"v"});
         df.columns.push_back(Series::flat_f64(f.data(), 6000));
         dftu_scalar zero{};
         zero.kind = DFTU_SCALAR_TAG_I64;
@@ -490,10 +491,10 @@ TEST_SUITE("output morsels") {
             .str(6, "");
         const std::uint64_t before = column_scan_morsels();
         const auto cut = morsels(df.lazy().memory_budget(64 << 10).frame_op(
-            "dftu.frame.column_op", args, {}, df.names));
+            "dftu.frame.column_op", args, {}, dstd::to_strings(df.names)));
         CHECK(column_scan_morsels() == before);
-        const auto whole = morsels(
-            df.lazy().frame_op("dftu.frame.column_op", args, {}, df.names));
+        const auto whole = morsels(df.lazy().frame_op(
+            "dftu.frame.column_op", args, {}, dstd::to_strings(df.names)));
         expect_same_rows(joined(cut), joined(whole));
     }
 
@@ -514,7 +515,7 @@ TEST_SUITE("output morsels") {
                 valid[k >> 3] &= static_cast<std::uint8_t>(~(1u << (k & 7)));
         }
         DataFrame df;
-        df.names = {"t", "a", "b", "c"};
+        df.names = dstd::make_shared_strings({"t", "a", "b", "c"});
         df.columns.push_back(ints({"t"}, ROWS, 5000).columns[0].share());
         df.columns.push_back(Series::flat_i64(a.data(), ROWS, valid.data()));
         df.columns.push_back(
@@ -535,7 +536,8 @@ TEST_SUITE("output morsels") {
                 .str(6, "");
             LazyFrame lf = df.lazy();
             if (budget) lf = lf.memory_budget(64 << 10);
-            return lf.frame_op("dftu.frame.column_op", args, {}, df.names);
+            return lf.frame_op("dftu.frame.column_op", args, {},
+                               dstd::to_strings(df.names));
         };
         struct Case {
             const char* column;

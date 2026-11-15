@@ -1,0 +1,22 @@
+# The examples/plugins/duration_udfs.cpp UDFs over ../data/events.pfw.gz.
+# `to_ms` turns a `dur` in microseconds into milliseconds, `is_slow` is true
+# when `dur` is above the threshold it is given in microseconds.
+input ../data/events.pfw.gz
+query
+derive ms = to_ms(dur) | select name, dur, ms
+----
+name	dur	ms
+open	10	0.01
+read	1500	1.5
+open	10	0.01
+open	10	0.01
+read	2000	2
+open	10	0.01
+
+# The rows whose `dur` is above 1000 us: the second and the fifth.
+query
+select name, dur | where is_slow(dur, 1000)
+----
+name	dur
+read	1500
+read	2000

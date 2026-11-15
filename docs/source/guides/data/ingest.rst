@@ -53,7 +53,8 @@ still import and export every column type:
   becomes columns after the data columns. Polars list, array and struct
   columns import as list and struct columns. A pandas Arrow-backed column
   needs pyarrow (pandas itself needs it to hold one).
-  A pandas ``category`` column whose categories are strings becomes a dictionary-encoded string column, without its unused categories or their order; other categories keep their values.
+  A pandas ``category`` column whose categories are strings becomes a dictionary-encoded string column; other categories keep their values.
+  With pyarrow installed the column is built from the category codes and keeps the category order, and ``to_pandas`` gives back the categories that are used.
 - ``from_parquet`` reads through ``pyarrow.parquet``.
 - ``from_dict`` builds the frame natively from Series, lists of scalars, NumPy
   arrays and pandas or polars Series; a mapping with anything else (a pyarrow
@@ -158,12 +159,13 @@ A worked round trip
 The C++ engine and Arrow
 --------------------------
 
-The C++ ``dataframe::Series``/``dataframe::DataFrame`` API exposes a zero-copy
-Arrow bridge through the installed public header
-``dftracer/utils/dataframe/arrow.h``: ``Series::to_arrow`` /
-``DataFrame::to_arrow`` return an ``OwnedArrow`` (a move-only owner of the
-paired ``ArrowSchema`` / ``ArrowArray``), and ``Series::from_arrow(schema,
-array)`` / ``DataFrame::from_arrow(schema, array)`` import back. A
+The C++ ``dataframe::Series``/``dataframe::DataFrame`` API has a zero-copy
+Arrow bridge in the installed public header
+``dftracer/utils/arrow/arrow.h``: ``arrow::to_arrow`` returns a
+``dstd::Result<arrow::Batch>`` (a move-only owner of the paired
+``ArrowSchema`` / ``ArrowArray``) for a ``Series`` or a ``DataFrame``, and
+``arrow::series_from_arrow`` / ``arrow::dataframe_from_arrow`` take that batch
+back and adopt it. A
 ``DataFrame`` is represented as a struct array with one child per column. The
 bridge sits on the same C ABI a C caller would use: the flat-column functions
 (``dftu_series_new_flat``, ``dftu_series_data``, and the Arrow-layout validity

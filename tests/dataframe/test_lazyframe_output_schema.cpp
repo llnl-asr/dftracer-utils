@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dataframe/builders_types.h>
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
@@ -12,15 +14,10 @@
 #include <cstdint>
 #include <utility>
 
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
-#include <dftracer/utils/dataframe/arrow.h>
-#include <dftracer/utils/dstd/memory.h>
-#include <nanoarrow/nanoarrow.h>
-
 using namespace dftracer::utils;
-#endif
 
 using namespace dftracer::utils::dataframe;
+using namespace dftracer::utils::dataframe::test_types;
 
 namespace {
 
@@ -35,7 +32,8 @@ Schema collected_schema(const DataFrame& df) {
     Schema s;
     s.fields.reserve(df.columns.size());
     for (std::size_t i = 0; i < df.columns.size(); ++i)
-        s.fields.push_back(Field{df.names[i], df.columns[i].data_type(), true});
+        s.fields.push_back(Field{dstd::String{df.names[i].view()},
+                                 df.columns[i].data_type(), true});
     return s;
 }
 
@@ -63,65 +61,9 @@ dstd::SharedPtr<const Source> src(DataFrame df) {
     return dstd::make_shared<const InMemorySource>(std::move(df));
 }
 
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
-
-struct BuiltArrow {
-    ArrowSchema schema{};
-    ArrowArray array{};
-    ~BuiltArrow() {
-        if (array.release) array.release(&array);
-        if (schema.release) schema.release(&schema);
-    }
-};
-
-void finish(ArrowArray* a) {
-    ArrowError err;
-    REQUIRE(ArrowArrayFinishBuildingDefault(a, &err) == NANOARROW_OK);
-}
-
-Series make_timestamp(const dstd::Vector<std::int64_t>& values, TimeUnit unit,
-                      const char* tz) {
-    ArrowTimeUnit au = unit == TimeUnit::Second  ? NANOARROW_TIME_UNIT_SECOND
-                       : unit == TimeUnit::Milli ? NANOARROW_TIME_UNIT_MILLI
-                       : unit == TimeUnit::Micro ? NANOARROW_TIME_UNIT_MICRO
-                                                 : NANOARROW_TIME_UNIT_NANO;
-    BuiltArrow b;
-    ArrowSchemaInit(&b.schema);
-    REQUIRE(ArrowSchemaSetTypeDateTime(&b.schema, NANOARROW_TYPE_TIMESTAMP, au,
-                                       tz) == NANOARROW_OK);
-    REQUIRE(ArrowArrayInitFromSchema(&b.array, &b.schema, nullptr) ==
-            NANOARROW_OK);
-    REQUIRE(ArrowArrayStartAppending(&b.array) == NANOARROW_OK);
-    for (std::int64_t v : values)
-        REQUIRE(ArrowArrayAppendInt(&b.array, v) == NANOARROW_OK);
-    finish(&b.array);
-    return Series::from_arrow(&b.schema, &b.array);
-}
-
-Series make_decimal128(std::int32_t precision, std::int32_t scale,
-                       const dstd::Vector<std::int64_t>& values) {
-    BuiltArrow b;
-    ArrowSchemaInit(&b.schema);
-    REQUIRE(ArrowSchemaSetTypeDecimal(&b.schema, NANOARROW_TYPE_DECIMAL128,
-                                      precision, scale) == NANOARROW_OK);
-    REQUIRE(ArrowArrayInitFromSchema(&b.array, &b.schema, nullptr) ==
-            NANOARROW_OK);
-    REQUIRE(ArrowArrayStartAppending(&b.array) == NANOARROW_OK);
-    for (std::int64_t v : values) {
-        ArrowDecimal dec;
-        ArrowDecimalInit(&dec, 128, precision, scale);
-        ArrowDecimalSetInt(&dec, v);
-        REQUIRE(ArrowArrayAppendDecimal(&b.array, &dec) == NANOARROW_OK);
-    }
-    finish(&b.array);
-    return Series::from_arrow(&b.schema, &b.array);
-}
-
-#endif  // DFTRACER_UTILS_ENABLE_ARROW
-
 DataFrame basic_frame() {
     DataFrame df;
-    df.names = {"a", "b", "cat"};
+    df.names = dstd::make_shared_strings({"a", "b", "cat"});
     df.columns.push_back(i64({1, 2, 3, 4, 5}));
     df.columns.push_back(f64({1.5, 2.5, 3.5, 4.5, 5.5}));
     df.columns.push_back(Series::strings({"x", "y", "x", "z", "y"}));
@@ -133,7 +75,7 @@ DataFrame basic_frame() {
 // ops), a raw-repr string column, and a ts/dur pair for occupancy.
 DataFrame mixed_frame() {
     DataFrame df;
-    df.names = {"cat", "a", "b", "s", "ts", "dur"};
+    df.names = dstd::make_shared_strings({"cat", "a", "b", "s", "ts", "dur"});
     df.columns.push_back(Series::strings({"x", "x", "x", "y", "y", "y"}));
     df.columns.push_back(i64({1, 2, 3, 10, 20, 30}));
     df.columns.push_back(f64({1.5, 2.5, 3.5, 10.5, 20.5, 30.5}));
@@ -208,7 +150,7 @@ TEST_SUITE("LazyFrame output_schema") {
 
     TEST_CASE("explode reports the List element type") {
         DataFrame df;
-        df.names = {"k", "vals"};
+        df.names = dstd::make_shared_strings({"k", "vals"});
         df.columns.push_back(i64({1, 2}));
         dstd::Vector<std::int32_t> off{0, 2, 3};
         df.columns.push_back(Series::list(off, i64({10, 20, 30})));
@@ -229,13 +171,12 @@ TEST_SUITE("LazyFrame output_schema") {
         check_matches_collect(lf);
     }
 
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
     TEST_CASE(
         "fill_null leaves a Timestamp column (and its timezone) untouched") {
         // dftu_series_fillna only runs on a numeric-dispatchable column, so a
         // Timestamp column is passed through unchanged, tz included.
         DataFrame df;
-        df.names = {"ts"};
+        df.names = dstd::make_shared_strings({"ts"});
         df.columns.push_back(
             make_timestamp({1, 2, 3}, TimeUnit::Micro, "America/Chicago"));
         LazyFrame lf =
@@ -251,9 +192,9 @@ TEST_SUITE("LazyFrame output_schema") {
         "select/rename/filter/sort_by preserve a Timestamp's tz and a "
         "Decimal128's precision/scale") {
         DataFrame df;
-        df.names = {"ts", "dec", "n"};
+        df.names = dstd::make_shared_strings({"ts", "dec", "n"});
         df.columns.push_back(make_timestamp({1, 2, 3}, TimeUnit::Nano, "UTC"));
-        df.columns.push_back(make_decimal128(38, 9, {1, 2, 3}));
+        df.columns.push_back(make_decimal128({1, 2, 3}, 38, 9));
         df.columns.push_back(i64({3, 1, 2}));
 
         LazyFrame lf = LazyFrame::scan(src(std::move(df)))
@@ -268,7 +209,6 @@ TEST_SUITE("LazyFrame output_schema") {
         CHECK(s.fields[1] == Field{"dec2", decimal128(38, 9), true});
         check_matches_collect(lf);
     }
-#endif  // DFTRACER_UTILS_ENABLE_ARROW
 
     TEST_CASE("group_by types Count/Sum/Mean/Min/Max from the value column") {
         LazyFrame lf = LazyFrame::scan(src(basic_frame()))
@@ -436,14 +376,13 @@ TEST_SUITE("LazyFrame output_schema") {
         check_matches_collect(lf);
     }
 
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
     TEST_CASE(
         "group_by widens a Decimal128 or Timestamp value column through the "
         "Int64 domain") {
         DataFrame df;
-        df.names = {"cat", "dec", "ts"};
+        df.names = dstd::make_shared_strings({"cat", "dec", "ts"});
         df.columns.push_back(Series::strings({"x", "x", "y"}));
-        df.columns.push_back(make_decimal128(38, 9, {100, 200, 300}));
+        df.columns.push_back(make_decimal128({100, 200, 300}, 38, 9));
         df.columns.push_back(
             make_timestamp({1, 2, 3}, TimeUnit::Micro, "America/Chicago"));
         LazyFrame lf =
@@ -465,5 +404,4 @@ TEST_SUITE("LazyFrame output_schema") {
         CHECK(s.fields[4] == Field{"first_ts", scalar(TypeId::Int64), true});
         check_matches_collect(lf);
     }
-#endif  // DFTRACER_UTILS_ENABLE_ARROW
 }

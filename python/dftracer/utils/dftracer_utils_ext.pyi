@@ -24,18 +24,20 @@ from typing import (
 
 if TYPE_CHECKING:
     import numpy as np  # ty: ignore[import-not-found]
-    import pyarrow as pa  # ty: ignore[import-not-found]
     from pandas._libs.missing import NAType  # ty: ignore[import-not-found]
 
 _T = TypeVar("_T")
 
 # The file name patterns directory discovery lists as input traces: gzip files.
 INPUT_FILE_PATTERNS: Tuple[str, ...]
+
+# An aggregate spec string (`op[:column[:out...]]`), or `(udaf_name, out, [column, ...])`.
+_AggSpec = Union[str, Tuple[str, str, List[str]]]
 # The plugin ABI version this extension accepts: (major << 16) | (minor << 8) | patch.
 PLUGIN_ABI_VERSION: int
 
-# A run() map result value: emitted bytes, or an eager/streamed pyarrow object.
-_RunResultValue = Union[bytes, "pa.Table", "pa.RecordBatchReader"]
+# A run() map result value: emitted bytes, a native frame or a lazy plan.
+_RunResultValue = Union[bytes, "_DataFrame", "_LazyFrame"]
 
 class CollectTypedResult(TypedDict):
     """The three record families returned by _TraceViewer.typed()."""
@@ -157,6 +159,14 @@ class Indexer:
         """
         ...
 
+    def build_async(self) -> "TaskHandle[None]":
+        """Start :meth:`build` on the Runtime and return at once.
+
+        The handle's ``get()`` returns ``None`` or raises the error ``build``
+        would.
+        """
+        ...
+
     def ensure_indexed(self) -> Dict[str, object]:
         """Ensure all files are indexed by calling resolve then build if needed.
 
@@ -259,6 +269,14 @@ class CheckpointIndexer:
         """Build the index."""
         ...
 
+    def build_async(self) -> "TaskHandle[None]":
+        """Start :meth:`build` on the Runtime and return at once.
+
+        The handle's ``get()`` returns ``None`` or raises the error ``build``
+        would.
+        """
+        ...
+
     def need_rebuild(self) -> bool:
         """Check if index needs rebuilding."""
         ...
@@ -312,11 +330,22 @@ class CheckpointIndexer:
         """Release this Python wrapper on context exit."""
         ...
 
+def _close_task_callbacks() -> None:
+    """Drop the done callbacks that have not started and wait for those
+    running. Called at interpreter exit."""
+    ...
+
 class TaskHandle(Generic[_T]):
-    """Handle to a submitted C++ coroutine task."""
+    """Handle to a native task that runs on the Runtime pool.
+
+    Made by ``build_async`` and ``collect_async``; it cannot be constructed.
+    Dropping it before the task ends is safe: the task finishes and its result
+    is discarded.
+    """
 
     def get(self) -> _T:
-        """Block until task completes and return result. Raises on error."""
+        """Block, with the GIL released, until the task ends. Return its result
+        or raise its error. A second call returns the same result."""
         ...
 
     def wait(self) -> None:
@@ -324,7 +353,18 @@ class TaskHandle(Generic[_T]):
         ...
 
     def done(self) -> bool:
-        """Return True if task has completed."""
+        """Return True if task has ended, without blocking."""
+        ...
+
+    def add_done_callback(self, fn: Callable[["TaskHandle[_T]"], None]) -> None:
+        """Call ``fn(handle)`` once when the task ends: on the calling thread
+        if it has, otherwise on the pool worker that finished it, which takes
+        the GIL for the call. A slow callback holds that worker. An exception
+        of ``fn`` is reported as unraisable."""
+        ...
+
+    def cancel(self) -> None:
+        """Ask the task to stop. ``get()`` then raises its cancelled error."""
         ...
 
     @property
@@ -523,6 +563,7 @@ class _Series:
     def logical(self, op: int, other: "_Series") -> "_Series": ...
     def logical_not(self) -> "_Series": ...
     def __arrow_c_array__(self, requested_schema: object = None) -> tuple: ...
+    def __arrow_c_stream__(self, requested_schema: object = None) -> object: ...
     def quantile(self, q: float) -> float: ...
     def median(self) -> float: ...
     def variance(self, sample: bool = True) -> float: ...
@@ -756,7 +797,7 @@ class _LazyFrame:
     def unpivot(self, id_vars: List[str], value_vars: List[str]) -> "_LazyFrame": ...
     def melt(self, id_vars: List[str], value_vars: List[str]) -> "_LazyFrame": ...
     def topk(self, name: str, k: int, largest: bool = True) -> "_LazyFrame": ...
-    def group_by(self, key: "str | Sequence[str]", aggs: List[str]) -> "_LazyFrame": ...
+    def group_by(self, key: "str | Sequence[str]", aggs: Sequence[_AggSpec]) -> "_LazyFrame": ...
     def sort_by(self, name: str, descending: bool = False) -> "_LazyFrame": ...
     def unique(self, subset: "str | Sequence[str] | None" = None) -> "_LazyFrame": ...
     def take(self, indices: Sequence[int]) -> "_LazyFrame": ...
@@ -786,7 +827,7 @@ class _LazyFrame:
         time_col: str,
         every: int,
         period: Optional[int] = ...,
-        aggs: Optional[List[str]] = ...,
+        aggs: Optional[Sequence[_AggSpec]] = ...,
         origin: int = ...,
         origin_min: bool = ...,
     ) -> "_LazyFrame": ...
@@ -804,6 +845,24 @@ class _LazyFrame:
         ...
     def explain(self) -> str: ...
     def collect(self, batch_size: int = 0, runtime: Optional[object] = None) -> "_DataFrame": ...
+    def sink(
+        self,
+        name: str,
+        options: Optional[Mapping[str, str]] = None,
+        batch_size: int = 0,
+        runtime: Optional[object] = None,
+    ) -> Tuple[int, int]:
+        """Write the pipeline's rows to the sink a plugin registered as ``name``;
+        returns ``(rows, batches)``."""
+        ...
+    def __arrow_c_stream__(
+        self, requested_schema: object = None, runtime: Optional[object] = None
+    ) -> object: ...
+    def collect_async(
+        self, batch_size: int = 0, runtime: Optional[object] = None
+    ) -> "TaskHandle[_DataFrame]":
+        """Start :meth:`collect` on the Runtime and return at once."""
+        ...
     def stream(
         self, batch_size: int = 0, runtime: Optional[object] = None
     ) -> Iterator["_DataFrame"]:
@@ -919,7 +978,7 @@ class _DataFrame:
         time_col: str,
         every: int,
         period: "int | None" = None,
-        aggs: "list[str] | None" = None,
+        aggs: "Sequence[_AggSpec] | None" = None,
         origin: "int | Literal['min'] | None" = None,
     ) -> "_DataFrame": ...
     def query(
@@ -938,7 +997,9 @@ class _DataFrame:
     # leading plain key names followed by either legacy specs (inline) or
     # nothing (two-step .agg()); both key count and spec shape are runtime-only.
     def group_by(self, *args: Any) -> object: ...
-    def _group_agg_expr(self, key: "str | Sequence[str]", specs: List[tuple]) -> "_DataFrame": ...
+    def _group_agg_expr(self, key: "str | Sequence[str]", specs: List[tuple]) -> "_DataFrame":
+        """`specs` are `(op, ast, out[, param[, by_ast[, (udaf_name, [arg_ast, ...])]]])`."""
+        ...
     def join(
         self,
         other: "_DataFrame",
@@ -1267,6 +1328,27 @@ class _TraceViewer:
         reads the results after the collect."""
         ...
 
+class PluginRecord(TypedDict):
+    """One plugin's entry in :meth:`Plugins.describe`."""
+
+    path: str
+    abi_version: int
+    has_plan_duql: bool
+    has_fold: bool
+    provides: List[str]
+    consumes: List[str]
+    ops: List[str]
+    udfs: List[str]
+    udafs: List[str]
+    states: List[str]
+    providers: List[str]
+    nodes: List[str]
+    index_extensions: List[str]
+    file_formats: List[str]
+    sinks: List[str]
+    reads: List[str]
+    config_keys: List[str]
+
 class Plugins:
     """A fixed, built set of compiled DFTracer plugins."""
 
@@ -1279,6 +1361,15 @@ class Plugins:
         """Build every ``(path, config_json_or_None)`` spec now; raises
         ImportError on a load/symbol/ABI/capability failure."""
         ...
+    def describe(self) -> List[PluginRecord]:
+        """One plain dict per loaded plugin, in registration order: ``path``,
+        ``abi_version``, ``has_plan_duql``, ``has_fold``, and the names it
+        registered per kind (``ops``, ``udfs``, ``udafs``, ``states``,
+        ``providers``, ``nodes``, ``index_extensions``, ``file_formats``,
+        ``sinks``), plus ``provides``, ``consumes``, ``reads`` and
+        ``config_keys``. Static: nothing is scanned.
+        """
+        ...
     def run(
         self,
         traces: "str | List[str]",
@@ -1286,7 +1377,7 @@ class Plugins:
         auto_index: bool = ...,
     ) -> "Tuple[Dict[str, _RunResultValue], Dict[str, int]]":
         """Fold every plugin in the set over one fused scan; returns
-        ``({name: bytes | pyarrow object}, {events_scanned, events_matched})``.
+        ``({name: bytes | _DataFrame | _LazyFrame}, {events_scanned, events_matched})``.
         """
         ...
 
@@ -1321,6 +1412,33 @@ def vec_eval(ast: List[tuple], columns: List[_Series]) -> _Series:
     run it over `columns` as one fused chunked evaluation."""
     ...
 
+class _UdfHandle:
+    """A registered scalar UDF held for expressions that call it. Opaque."""
+
+def udf_lookup(name: str, /) -> _UdfHandle:
+    """The registered scalar UDF `name`; it stays callable, and its plugin
+    library loaded, while a handle or an expression made from it lives. Raises
+    `LookupError` for an unknown name."""
+    ...
+
+def udf_names() -> List[str]:
+    """The names of the registered scalar UDFs."""
+    ...
+
+class _UdafHandle:
+    """A registered user-defined aggregate held for aggregates that call it.
+    Opaque."""
+
+def udaf_lookup(name: str, /) -> Tuple[_UdafHandle, int, int, int]:
+    """The registered UDAF `name` as `(handle, min_args, max_args, flags)`; it
+    stays callable, and its plugin library loaded, while the handle lives.
+    Raises `LookupError` for an unknown name."""
+    ...
+
+def udaf_names() -> List[str]:
+    """The names of the registered UDAFs."""
+    ...
+
 def vec_eval_many(asts: List[List[tuple]], columns: List[_Series]) -> List[_Series]:
     """Compile several `asts` into one CSE'd program over a shared `columns`
     list and evaluate in one pass."""
@@ -1346,6 +1464,12 @@ def op_info(name: str) -> Dict[str, object]:
 def op_run(name: str, *args: object) -> Union[_Series, int, float]:
     """Run a registered op by name: columns are ``_Series``, other operands
     follow the op's signature. Returns a ``_Series`` or a Python scalar."""
+    ...
+
+def scan_file(path: str, /) -> _LazyFrame:
+    """A deferred scan over `path`, planned by the plugin file format that
+    claims it. collect() returns the error of a file no format claims.
+    """
     ...
 
 def memory_budget_advice(required_bytes: int, available_bytes: int = ...) -> Dict[str, object]:

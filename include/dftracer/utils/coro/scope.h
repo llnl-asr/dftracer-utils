@@ -2,13 +2,13 @@
 #ifndef DFTRACER_UTILS_CORO_SCOPE_H
 #define DFTRACER_UTILS_CORO_SCOPE_H
 
-#include <dftracer/utils/common/exception_helpers.h>
 #include <dftracer/utils/coro/detail/coro.h>
 #include <dftracer/utils/coro/executor.h>
 #include <dftracer/utils/coro/join_handle.h>
 #include <dftracer/utils/coro/spawn_future.h>
 #include <dftracer/utils/coro/stop_token.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/expected.h>
 #include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -16,17 +16,16 @@
 
 #include <atomic>
 #include <coroutine>
-#include <exception>
 #include <memory>
 #include <type_traits>
 #include <utility>
 
 namespace dftracer::utils::coro {
 
-/// What a child error does to its siblings. Both raise the first error from
-/// @ref Scope::join. An error is an exception that code with exceptions on
-/// threw in the child, since a task that returns an error result is not a
-/// @ref Scope::spawn child.
+/// What a child error does to its siblings. Both end the task that awaits
+/// @ref Scope::join with the first error. A child error is a task that ended
+/// with an error through @ref fail_with or an awaited task that did, since a
+/// task that returns an error result is not a @ref Scope::spawn child.
 enum class ScopeMode : std::uint8_t {
     /// Asks the siblings to stop, as @ref Scope::request_stop does.
     FailFast,
@@ -39,12 +38,12 @@ enum class ScopeMode : std::uint8_t {
  * them.
  *
  * A scope that spawned must be joined with `co_await scope.join()` before it
- * is destroyed, or the process terminates. Code that can raise between a
+ * is destroyed, or the process terminates. Code that can end between a
  * spawn and the join uses @ref with_scope, which always joins. The first error
- * of a @ref spawn child is raised by @ref join and, in the default mode,
- * requests stop. The error of a @ref spawn_future child goes only to its
- * future, and cancelling that future ends the child as cancelled at its next
- * wait.
+ * of a @ref spawn child ends the task that awaits @ref join and, in the
+ * default mode, requests stop. The error of a @ref spawn_future child goes only
+ * to its future, and cancelling that future ends the child as cancelled at its
+ * next wait.
  *
  * A stop ends every child as cancelled at its next wait, and wakes one that is
  * parked. A child that stops is not an error of @ref join. A child that
@@ -53,14 +52,12 @@ enum class ScopeMode : std::uint8_t {
  * join. A scope made by @ref with_scope also stops when the task that holds it
  * is cancelled, so scopes and tasks form a tree.
  *
- * Locals of a @ref with_scope body die when the body raises, before the join.
- * A child that uses one must end first, so the body awaits such children
- * before it can raise, or the local lives outside the body.
+ * Locals of a @ref with_scope body die when the body ends with an error,
+ * before the join. A child that uses one must end first, so the body awaits
+ * such children before it can fail, or the local lives outside the body.
  *
  * A spawn on an executor that is shutting down does not run the task and
- * counts as a child that stopped. A function given to @ref spawn that throws
- * before it returns its task fails the child like any other error. A spawn
- * after @ref close or after the
+ * counts as a child that stopped. A spawn after @ref close or after the
  * join, a spawn without a running executor, and a task that joins the scope
  * that spawned it are misuse and end the process. Children may spawn into the
  * scope while it joins, and nothing may spawn after the join.
@@ -117,8 +114,6 @@ class Scope {
             return SpawnFuture<T>(std::move(state));
         }
         detail::Coro child = run_fn_future_child(std::move(fn), this, state);
-        child.handle().promise().exception_sink = &future_sink<T>;
-        child.handle().promise().sink_owner = state.get();
         start(child);
         return SpawnFuture<T>(std::move(state));
     }
@@ -127,7 +122,6 @@ class Scope {
         static constexpr bool CANCEL_EXEMPT = true;
 
         Scope* scope;
-        bool quiet{false};
 
         bool await_ready() const noexcept { return scope->joined_; }
 
@@ -144,28 +138,27 @@ class Scope {
             return inner.await_suspend(awaiting);
         }
 
-        // Raised here and not in the library, whose code has no way to unwind.
-        void await_resume() {
-            scope->finish_join();
-            if (quiet) return;
-            if (std::exception_ptr error = scope->take_error()) {
-                common::rethrow_and_clear(error);
-            }
-        }
+        void await_resume() noexcept { scope->finish_join(); }
     };
 
-    /// Waits for every child, then raises the first @ref spawn error and
-    /// closes the scope. A second join returns at once.
-    [[nodiscard]] JoinAwaiter join() noexcept { return JoinAwaiter{this}; }
+    /// Waits for every child and closes the scope. The awaiting task ends with
+    /// the first @ref spawn error, which a frame that holds the scope sees
+    /// too. A second join returns at once. Runs as a task of its own, so an
+    /// awaiter that is not a task ends the process on an error.
+    [[nodiscard]] CoroTask<void> join();
 
-    /// @ref join that raises nothing: the caller takes the error with
+    /// @ref join that ends nothing: the caller takes the error with
     /// @ref take_error. For code that must also handle an error of its own.
     [[nodiscard]] JoinAwaiter join_quietly() noexcept {
-        return JoinAwaiter{this, true};
+        return JoinAwaiter{this};
     }
 
-    /// The first @ref spawn error, or null, and clears it.
-    std::exception_ptr take_error() noexcept { return std::move(error_); }
+    /// The first @ref spawn error, or nothing, and clears it.
+    dstd::Optional<dstd::Error> take_error() noexcept {
+        dstd::Optional<dstd::Error> out = std::move(error_);
+        error_.reset();
+        return out;
+    }
 
     /// True after a child stopped while the scope had no stop requested.
     bool child_stopped() const noexcept {
@@ -193,9 +186,7 @@ class Scope {
 
     bool admit();
     bool is_refused() const;
-    void fail(std::exception_ptr error) noexcept;
-    void child_failed(std::exception_ptr error) noexcept;
-    static void child_sink(void* scope, std::exception_ptr error) noexcept;
+    void fail(dstd::Error error) noexcept;
     void note_child_stopped() noexcept;
     void finish_join() noexcept;
     void start(detail::Coro& child);
@@ -213,13 +204,6 @@ class Scope {
         scope->bind(task.handle().promise());
         auto outcome = co_await settle(std::move(task));
         scope->finish_child(std::move(outcome));
-    }
-
-    // Where an exception goes that ends a child before its task exists.
-    template <class T>
-    static void future_sink(void* state, std::exception_ptr error) noexcept {
-        static_cast<SharedState<T>*>(state)->complete_with_exception(
-            std::move(error));
     }
 
     template <class T>
@@ -240,8 +224,8 @@ class Scope {
     }
 
     void finish_child(detail::Settled<void> outcome) noexcept {
-        if (outcome.exception) {
-            child_failed(std::move(outcome.exception));
+        if (outcome.error) {
+            fail(std::move(*outcome.error));
         } else if (outcome.stopped) {
             note_child_stopped();
         }
@@ -252,8 +236,8 @@ class Scope {
     template <class T>
     static void publish(SharedState<T>& state,
                         detail::Settled<T> outcome) noexcept {
-        if (outcome.exception) {
-            state.complete_with_exception(std::move(outcome.exception));
+        if (outcome.error) {
+            state.complete_with_error(std::move(*outcome.error));
         } else if (outcome.stopped) {
             state.complete_stopped();
         } else if constexpr (std::is_void_v<T>) {
@@ -268,7 +252,7 @@ class Scope {
     StopToken linked_;
     ScopeMode mode_;
     JoinHandle join_;
-    std::exception_ptr error_;
+    dstd::Optional<dstd::Error> error_;
     std::atomic<bool> failed_{false};
     std::atomic<bool> child_stopped_{false};
     std::atomic<bool> stop_{false};
@@ -293,8 +277,8 @@ struct ScopeResult {
 template <>
 struct ScopeResult<void> {};
 
-// Calls `fn` in a frame of its own, so an exception it throws before it returns
-// its task reaches the caller as an outcome, and the caller still joins.
+// Calls `fn` in a frame of its own, so an error it ends with reaches the caller
+// as an outcome, and the caller still joins.
 template <class R, class Fn>
 CoroTask<R> call_scope_body(Fn& fn, Scope& scope) {
     if constexpr (std::is_void_v<R>) {
@@ -307,10 +291,10 @@ CoroTask<R> call_scope_body(Fn& fn, Scope& scope) {
 
 /**
  * @brief Runs `fn(scope)` with a new @ref Scope on the current executor and
- * always joins it, also when `fn` raises.
+ * always joins it, also when `fn` ends with an error.
  *
- * An error of `fn` requests stop before the join and is raised after it. A
- * child error is raised when `fn` had none. When `fn` stops, or a child
+ * An error of `fn` requests stop before the join and ends the task after it. A
+ * child error ends it when `fn` had none. When `fn` stops, or a child
  * stopped while the scope had no stop requested, the task of `with_scope` stops
  * after the join.
  */
@@ -325,11 +309,16 @@ CoroTask<R> with_scope(Fn fn, ScopeMode mode = ScopeMode::FailFast) {
     if constexpr (!std::is_void_v<R>) {
         if (body.value) result.set(std::move(*body.value));
     }
-    if (body.exception || body.stopped) scope.request_stop();
+    if (body.error || body.stopped) scope.request_stop();
     co_await scope.join_quietly();
-    if (body.exception) common::rethrow_and_clear(body.exception);
-    if (std::exception_ptr join_error = scope.take_error()) {
-        common::rethrow_and_clear(join_error);
+    if (body.error) {
+        auto failure = fail_with(std::move(*body.error));
+        co_await failure;
+    }
+    dstd::Optional<dstd::Error> join_error = scope.take_error();
+    if (join_error) {
+        auto failure = fail_with(std::move(*join_error));
+        co_await failure;
     }
     if (body.stopped || scope.child_stopped()) co_await stop_here();
     if constexpr (!std::is_void_v<R>) co_return result.take();
@@ -350,9 +339,12 @@ CoroTask<T> with_stop_token(CoroTask<T> task, StopToken token) {
     if constexpr (!std::is_void_v<T>) {
         if (settled.value) result.set(std::move(*settled.value));
     }
-    if (settled.exception || settled.stopped) future.cancel();
+    if (settled.error || settled.stopped) future.cancel();
     co_await scope.join_quietly();
-    if (settled.exception) common::rethrow_and_clear(settled.exception);
+    if (settled.error) {
+        auto failure = fail_with(std::move(*settled.error));
+        co_await failure;
+    }
     if (settled.stopped) co_await stop_here();
     if constexpr (!std::is_void_v<T>) co_return result.take();
 }

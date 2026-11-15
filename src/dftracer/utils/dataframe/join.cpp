@@ -68,11 +68,17 @@ Series flat(const Series& c) {
     return c.encoding() == Encoding::Flat ? c.share() : materialize(c);
 }
 
-std::int64_t index_of(const dstd::Vector<dstd::String>& names,
-                      const dstd::String& name) {
+template <class Name>
+std::int64_t index_of(const dstd::Vector<Name>& names, dstd::StringView name) {
     for (std::size_t i = 0; i < names.size(); ++i)
-        if (names[i] == name) return static_cast<std::int64_t>(i);
+        if (dstd::StringView{names[i]} == name)
+            return static_cast<std::int64_t>(i);
     return -1;
+}
+
+dstd::SharedString shared_name(const dstd::SharedString& name) { return name; }
+dstd::SharedString shared_name(const dstd::String& name) {
+    return dstd::SharedString{name};
 }
 
 // The hash every null key cell gets when nulls match each other.
@@ -383,8 +389,9 @@ HashJoin::HashJoin(DataFrame right, dstd::Vector<dstd::String> left_on,
     if (how_ == JoinHow::Lookup) typed_conflicts_ = conflicts(true);
 }
 
+template <class Name>
 dstd::Result<dstd::Vector<std::int64_t>> HashJoin::left_key_indices(
-    const dstd::Vector<dstd::String>& left_names) const {
+    const dstd::Vector<Name>& left_names) const {
     dstd::Vector<std::int64_t> idx;
     idx.reserve(left_on_.size());
     for (const dstd::String& k : left_on_) {
@@ -395,10 +402,12 @@ dstd::Result<dstd::Vector<std::int64_t>> HashJoin::left_key_indices(
     return idx;
 }
 
-std::int64_t HashJoin::shared_key_of(
-    const dstd::Vector<dstd::String>& left_names, std::size_t li) const {
+template <class Name>
+std::int64_t HashJoin::shared_key_of(const dstd::Vector<Name>& left_names,
+                                     std::size_t li) const {
     for (std::size_t p = 0; p < left_on_.size(); ++p)
-        if (left_on_[p] == left_names[li] && right_on_[p] == left_names[li])
+        if (dstd::StringView{left_on_[p]} == dstd::StringView{left_names[li]} &&
+            dstd::StringView{right_on_[p]} == dstd::StringView{left_names[li]})
             return static_cast<std::int64_t>(p);
     return -1;
 }
@@ -411,8 +420,9 @@ dstd::Result<dstd::Vector<dstd::String>> HashJoin::out_names(
 
 namespace {
 
-JoinRightLayout right_layout(const dstd::Vector<dstd::String>& left_names,
-                             const dstd::Vector<dstd::String>& right_names,
+template <class LeftName, class RightName>
+JoinRightLayout right_layout(const dstd::Vector<LeftName>& left_names,
+                             const dstd::Vector<RightName>& right_names,
                              const dstd::Vector<dstd::String>& left_on,
                              const dstd::Vector<dstd::String>& right_on,
                              JoinHow how, const dstd::String& suffix) {
@@ -421,7 +431,7 @@ JoinRightLayout right_layout(const dstd::Vector<dstd::String>& left_names,
     if (how == JoinHow::Nest) {
         for (std::size_t ri = 0; ri < right_names.size(); ++ri) {
             out.keep.push_back(ri);
-            out.names.push_back(right_names[ri]);
+            out.names.push_back(shared_name(right_names[ri]));
             out.fills.push_back(-1);
         }
         return out;
@@ -432,21 +442,23 @@ JoinRightLayout right_layout(const dstd::Vector<dstd::String>& left_names,
                 right_on.end())
                 continue;
             out.keep.push_back(ri);
-            out.names.push_back(right_names[ri]);
+            out.names.push_back(shared_name(right_names[ri]));
             out.fills.push_back(index_of(left_names, right_names[ri]));
         }
         return out;
     }
     const dstd::String& sfx = suffix.empty() ? DEFAULT_SUFFIX : suffix;
     for (std::size_t ri = 0; ri < right_names.size(); ++ri) {
-        const dstd::String& name = right_names[ri];
+        const dstd::StringView name{right_names[ri]};
         bool shared_key = false;
         for (std::size_t p = 0; p < right_on.size(); ++p)
             if (right_on[p] == name && left_on[p] == name) shared_key = true;
         if (shared_key) continue;
         out.keep.push_back(ri);
-        out.names.push_back(index_of(left_names, name) >= 0 ? name + sfx
-                                                            : name);
+        if (index_of(left_names, name) >= 0)
+            out.names.push_back(dstd::SharedString{dstd::String{name} + sfx});
+        else
+            out.names.push_back(shared_name(right_names[ri]));
         out.fills.push_back(-1);
     }
     return out;
@@ -454,9 +466,10 @@ JoinRightLayout right_layout(const dstd::Vector<dstd::String>& left_names,
 
 }  // namespace
 
+template <class LeftName, class RightName>
 dstd::Result<JoinRightLayout> join_right_layout(
-    const dstd::Vector<dstd::String>& left_names,
-    const dstd::Vector<dstd::String>& right_names,
+    const dstd::Vector<LeftName>& left_names,
+    const dstd::Vector<RightName>& right_names,
     const dstd::Vector<dstd::String>& left_on,
     const dstd::Vector<dstd::String>& right_on, JoinHow how,
     const dstd::String& suffix) {
@@ -467,9 +480,10 @@ dstd::Result<JoinRightLayout> join_right_layout(
                         suffix);
 }
 
+template <class RightName>
 dstd::Result<dstd::Vector<dstd::String>> join_out_names(
     const dstd::Vector<dstd::String>& left_names,
-    const dstd::Vector<dstd::String>& right_names,
+    const dstd::Vector<RightName>& right_names,
     const dstd::Vector<dstd::String>& left_on,
     const dstd::Vector<dstd::String>& right_on, JoinHow how,
     const dstd::String& suffix) {
@@ -491,9 +505,30 @@ dstd::Result<dstd::Vector<dstd::String>> join_out_names(
                                     how, suffix);
     if (!layout) return layout.error();
     for (std::size_t i = 0; i < layout->names.size(); ++i)
-        if (layout->fills[i] < 0) out.push_back(layout->names[i]);
+        if (layout->fills[i] < 0) out.emplace_back(layout->names[i].view());
     return out;
 }
+
+template dstd::Result<JoinRightLayout> join_right_layout(
+    const dstd::Vector<dstd::String>&, const dstd::Vector<dstd::String>&,
+    const dstd::Vector<dstd::String>&, const dstd::Vector<dstd::String>&,
+    JoinHow, const dstd::String&);
+template dstd::Result<JoinRightLayout> join_right_layout(
+    const dstd::Vector<dstd::String>&, const dstd::Vector<dstd::SharedString>&,
+    const dstd::Vector<dstd::String>&, const dstd::Vector<dstd::String>&,
+    JoinHow, const dstd::String&);
+template dstd::Result<JoinRightLayout> join_right_layout(
+    const dstd::Vector<dstd::SharedString>&,
+    const dstd::Vector<dstd::SharedString>&, const dstd::Vector<dstd::String>&,
+    const dstd::Vector<dstd::String>&, JoinHow, const dstd::String&);
+template dstd::Result<dstd::Vector<dstd::String>> join_out_names(
+    const dstd::Vector<dstd::String>&, const dstd::Vector<dstd::String>&,
+    const dstd::Vector<dstd::String>&, const dstd::Vector<dstd::String>&,
+    JoinHow, const dstd::String&);
+template dstd::Result<dstd::Vector<dstd::String>> join_out_names(
+    const dstd::Vector<dstd::String>&, const dstd::Vector<dstd::SharedString>&,
+    const dstd::Vector<dstd::String>&, const dstd::Vector<dstd::String>&,
+    JoinHow, const dstd::String&);
 
 dstd::Result<dstd::Vector<Field>> join_out_fields(
     const dstd::Vector<Field>& left, const dstd::Vector<Field>& right,
@@ -523,7 +558,8 @@ dstd::Result<dstd::Vector<Field>> join_out_fields(
     const JoinRightLayout layout =
         right_layout(left_names, right_names, left_on, right_on, how, suffix);
     for (std::size_t i = 0; i < layout.keep.size(); ++i) {
-        const Field f{layout.names[i], right[layout.keep[i]].type, true};
+        const Field f{dstd::String{layout.names[i].view()},
+                      right[layout.keep[i]].type, true};
         if (layout.fills[i] >= 0)
             out[static_cast<std::size_t>(layout.fills[i])] = f;
         else
@@ -906,9 +942,10 @@ dstd::Result<DataFrame> HashJoin::probe_values(
             for (Series& c : out.columns) c = c.take(kept);
         dstd::Vector<Series> parts;
         for (const Series& c : right_.columns) parts.push_back(c.take(rows));
-        out.names.push_back(suffix_);
+        out.names.push_back(dstd::SharedString{suffix_});
         out.columns.push_back(Series::list(
-            offsets, Series::structs(right_.names, std::move(parts))));
+            offsets,
+            Series::structs(dstd::to_strings(right_.names), std::move(parts))));
         return out;
     }
 
@@ -950,6 +987,15 @@ dstd::Result<DataFrame> HashJoin::probe_values(
 }
 
 DataFrame HashJoin::flush(const dstd::Vector<dstd::String>& left_names,
+                          const dstd::Vector<Series>& left_templates) {
+    dstd::Vector<dstd::SharedString> shared;
+    shared.reserve(left_names.size());
+    for (const dstd::String& n : left_names)
+        shared.emplace_back(dstd::StringView{n});
+    return flush(shared, left_templates);
+}
+
+DataFrame HashJoin::flush(const dstd::Vector<dstd::SharedString>& left_names,
                           const dstd::Vector<Series>& left_templates) {
     DataFrame out;
     if (flushed_ || !keeps_unmatched_right(how_)) return out;
@@ -1005,8 +1051,10 @@ DataFrame prefix_metrics(const DataFrame& b, std::size_t n_key,
     out.names.reserve(b.names.size());
     out.columns.reserve(b.columns.size());
     for (std::size_t i = 0; i < b.names.size(); ++i) {
-        out.names.push_back(i < n_key ? b.names[i]
-                                      : dstd::fmt<"{}{}">(prefix, b.names[i]));
+        out.names.push_back(i < n_key
+                                ? b.names[i]
+                                : dstd::SharedString{dstd::fmt<"{}{}">(
+                                      prefix, dstd::StringView{b.names[i]})});
         out.columns.push_back(b.columns[i].share());
     }
     return out;
@@ -1026,9 +1074,10 @@ dstd::Result<DataFrame> compare_agg(const DataFrame& base,
     for (std::size_t i = 0; i < nk; ++i) {
         if (base.names[i] != variant.names[i])
             return invalid_argument<
-                "compare_agg: key column {} is '{}' vs '{}'">(i, base.names[i],
-                                                              variant.names[i]);
-        keys.push_back(base.names[i]);
+                "compare_agg: key column {} is '{}' vs '{}'">(
+                i, dstd::StringView{base.names[i]},
+                dstd::StringView{variant.names[i]});
+        keys.emplace_back(base.names[i].view());
     }
 
     auto outer =
@@ -1043,7 +1092,7 @@ dstd::Result<DataFrame> compare_agg(const DataFrame& base,
     dstd::Vector<double> hundred(static_cast<std::size_t>(n), 100.0);
     Series scale = Series::flat_f64(hundred.data(), n);
     for (std::size_t i = nk; i < base.names.size(); ++i) {
-        const dstd::String& m = base.names[i];
+        const dstd::StringView m{base.names[i]};
         if (joined.column_index(dstd::fmt<"r_{}">(m)) < 0) continue;
         Series l = joined.column(dstd::fmt<"l_{}">(m)).materialize();
         Series r = joined.column(dstd::fmt<"r_{}">(m)).materialize();

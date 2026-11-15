@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import TYPE_CHECKING, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Dict, List, NamedTuple, Optional, Union, cast
 
 from .dataframe import DataFrame
 from .dftracer_utils_ext import Plugins as _NativePlugins
@@ -30,17 +30,17 @@ from .dftracer_utils_ext import _DataFrame
 if TYPE_CHECKING:
     import pyarrow as pa  # ty: ignore[import-not-found]
 
+    from .dftracer_utils_ext import PluginRecord
     from .lazyframe import LazyFrame
     from .runtime import Runtime
 
-__all__ = ["Plugins", "PluginRun", "unnest"]
+__all__ = ["Plugins", "PluginInfo", "PluginRun", "unnest"]
 
 # A JSON-serializable value tree (config is handed straight to json.dumps).
 JSONValue = Union[str, int, float, bool, None, List["JSONValue"], Dict[str, "JSONValue"]]
 
-# One run() result value per emit kind: bytes, a native frame, a lazy plan, or
-# an Arrow table.
-_RunResult = Union[bytes, "DataFrame", "LazyFrame", "pa.Table"]
+# One run() result value per emit kind: bytes, a native frame or a lazy plan.
+_RunResult = Union[bytes, "DataFrame", "LazyFrame"]
 
 
 def unnest(
@@ -52,9 +52,8 @@ def unnest(
     element, repeating the other columns; the inverse of the set/list/top-k
     aggregates.
 
-    ``result`` is any ``run()`` map value (an eager Arrow table, a
-    ``pyarrow.RecordBatchReader``, or a ``pyarrow.RecordBatch``). ``column`` names
-    a ``list<utf8>``, ``list<int64>``, or ``list<struct<...>>`` column; a
+    ``result`` is a ``pyarrow.Table``, a ``pyarrow.RecordBatchReader`` or a
+    ``pyarrow.RecordBatch``. ``column`` names a ``list<utf8>``, ``list<int64>``, or ``list<struct<...>>`` column; a
     ``list<struct>`` flattens its fields into columns (named by the struct
     fields). Returns a ``pyarrow.Table``.
 
@@ -75,6 +74,44 @@ def _plugin_key(plugin: Union[str, type]) -> str:
     if isinstance(plugin, str):
         return Path(plugin).stem
     return getattr(plugin, "__name__", str(plugin))
+
+
+class PluginInfo(NamedTuple):
+    """What one loaded plugin is and what it registered, from
+    :meth:`Plugins.describe`: the path it was loaded from, its ABI version,
+    whether it declares a ``plan_duql`` and whether it carries a fold, and one
+    entry per name it registered, per kind."""
+
+    path: str
+    abi_version: int
+    has_plan_duql: bool
+    has_fold: bool
+    #: The event fields it reads.
+    provides: List[str]
+    #: The event fields it needs from an earlier plugin.
+    consumes: List[str]
+    #: Expression ops, as ``name(arg, ...) -> ret [kind]``.
+    ops: List[str]
+    #: Column ops (``UDF(name, arity)``).
+    udfs: List[str]
+    #: Accumulators (``UDAF(name, kind)``).
+    udafs: List[str]
+    #: State types registered for the fold.
+    states: List[str]
+    #: Scan providers.
+    providers: List[str]
+    #: Plan nodes.
+    nodes: List[str]
+    #: Index extensions.
+    index_extensions: List[str]
+    #: File formats.
+    file_formats: List[str]
+    #: Sinks.
+    sinks: List[str]
+    #: The batch columns it declared it reads; empty means every column.
+    reads: List[str]
+    #: Declared config keys, as ``name (kind[, required]) - doc``.
+    config_keys: List[str]
 
 
 class PluginRun:
@@ -133,6 +170,39 @@ class Plugins:
             specs.append((path, json.dumps(cfg) if cfg is not None else None))
         self._native = _NativePlugins(specs, result_names or None, runtime)
 
+    def describe(self) -> "List[PluginInfo]":
+        """What each plugin in the set is, in the order it was given: its path,
+        its ABI version, whether it declares a ``plan_duql`` and whether it
+        carries a fold, and the names it registered per kind (ops, udfs,
+        udafs, states, providers, nodes, index extensions, file formats,
+        sinks), plus its declared reads and config keys.
+
+        Static: nothing is scanned and no plugin callback runs.
+        """
+        raw: "List[PluginRecord]" = self._native.describe()
+        return [
+            PluginInfo(
+                path=info["path"],
+                abi_version=info["abi_version"],
+                has_plan_duql=info["has_plan_duql"],
+                has_fold=info["has_fold"],
+                provides=info["provides"],
+                consumes=info["consumes"],
+                ops=info["ops"],
+                udfs=info["udfs"],
+                udafs=info["udafs"],
+                states=info["states"],
+                providers=info["providers"],
+                nodes=info["nodes"],
+                index_extensions=info["index_extensions"],
+                file_formats=info["file_formats"],
+                sinks=info["sinks"],
+                reads=info["reads"],
+                config_keys=info["config_keys"],
+            )
+            for info in raw
+        ]
+
     def run(
         self,
         traces: Union[str, List[str]],
@@ -150,8 +220,6 @@ class Plugins:
 
         - ``emit_frame`` -> our :class:`~dftracer.utils.DataFrame`, zero-copy.
           Call ``.to_arrow()`` / ``.to_pandas()`` for other shapes.
-        - ``emit_arrow`` -> a ``pyarrow.Table`` as emitted, nested types
-          included.
         - ``emit_lazyframe`` -> a :class:`~dftracer.utils.LazyFrame`.
         - ``emit_result`` bytes -> ``bytes``.
         """
@@ -164,10 +232,10 @@ class Plugins:
 
         The native layer already hands back one Python type per emit kind and
         has already applied the plugin's wire-id -> attribute-name result
-        renaming, so this only distinguishes a native frame from bytes/Arrow.
+        renaming, so this only distinguishes a native frame from bytes.
         """
         if isinstance(obj, bytes):
             return obj
         if isinstance(obj, _DataFrame):
             return DataFrame(obj)
-        return obj
+        return cast("_RunResult", obj)

@@ -29,27 +29,6 @@ struct AggregationConfig {
     double sketch_accuracy = 0.01;
     dstd::Vector<double> percentiles = {0.25, 0.5, 0.75, 0.90};
 
-    dstd::String output_format = FORMAT_JSON;
-
-    static constexpr const char* FORMAT_JSON = "json";
-    static constexpr const char* FORMAT_ARROW = "arrow";
-
-    static bool is_valid_format(const dstd::String& fmt) {
-        return fmt == FORMAT_JSON
-#ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
-               || fmt == FORMAT_ARROW
-#endif
-            ;
-    }
-
-    static dstd::String supported_formats_str() {
-        dstd::String s = "'json'";
-#ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
-        s += " or 'arrow'";
-#endif
-        return s;
-    }
-
     /// Hash of every field that shapes the stored aggregation: the params hash
     /// of the dftracer.agg extension. Data built with another hash is stale.
     std::uint64_t params_hash() const;

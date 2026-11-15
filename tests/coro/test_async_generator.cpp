@@ -147,28 +147,46 @@ TEST_CASE("AsyncGenerator - Move semantics") {
     CHECK(result[2] == 2);
 }
 
-// Async generator that throws an exception
-static AsyncGenerator<int> async_throwing_generator() {
+// Async generator that ends with an error
+static AsyncGenerator<int> async_failing_generator() {
     co_await async_delay(5);
     co_yield 1;
     co_await async_delay(5);
     co_yield 2;
-    throw std::runtime_error("Async generator exception");
+    dstd::Error error{dstd::Condition::Unknown, "Async generator error"};
+    auto failure = fail_with(std::move(error));
+    co_await failure;
     co_yield 3;  // Never reached
 }
 
-TEST_CASE("AsyncGenerator - Exception propagation") {
-    auto gen = async_throwing_generator();
+TEST_CASE("AsyncGenerator - a plain read ends the reader with the error") {
+    auto task = [](AsyncGenerator<int> g) -> CoroTask<dstd::Vector<int>> {
+        dstd::Vector<int> result;
+        while (auto value = co_await g.next()) {
+            result.push_back(*value);
+        }
+        co_return result;
+    }(async_failing_generator());
+
+    const auto result = task.get();
+    REQUIRE_FALSE(result.has_value());
+    CHECK(dstd::String(result.error().message()) == "Async generator error");
+}
+
+TEST_CASE("AsyncGenerator - Error propagation") {
+    auto gen = async_failing_generator();
 
     auto task = [](AsyncGenerator<int> g) -> CoroTask<dstd::Vector<int>> {
         dstd::Vector<int> result;
-        try {
-            while (auto value = co_await g.next()) {
-                result.push_back(*value);
+        for (;;) {
+            auto next = co_await g.settled_next();
+            if (next.error) {
+                CHECK(dstd::String(next.error->message()) ==
+                      "Async generator error");
+                break;
             }
-        } catch (const std::runtime_error&) {
-            // Exception caught during iteration
-            co_return result;
+            if (!*next.value) break;
+            result.push_back(**next.value);
         }
         co_return result;
     }(std::move(gen));
@@ -179,6 +197,31 @@ TEST_CASE("AsyncGenerator - Exception propagation") {
     CHECK(result.size() == 2);
     CHECK(result[0] == 1);
     CHECK(result[1] == 2);
+}
+
+static AsyncGenerator<int> fail_then_yield(int* ran_after) {
+    co_yield 1;
+    dstd::Error error{dstd::Condition::Unknown, "generator failed"};
+    auto failure = fail_with(std::move(error));
+    co_await failure;
+    ++*ran_after;
+    co_yield 2;
+}
+
+TEST_CASE("AsyncGenerator - a read after an error stays failed") {
+    int ran_after = 0;
+    auto task = [](AsyncGenerator<int> g) -> CoroTask<int> {
+        auto first = co_await g.settled_next();
+        CHECK(first.value.has_value());
+        auto failed = co_await g.settled_next();
+        CHECK(failed.error.has_value());
+        auto again = co_await g.settled_next();
+        CHECK(again.error.has_value());
+        CHECK_FALSE(again.value.has_value());
+        co_return 0;
+    }(fail_then_yield(&ran_after));
+    dftu_utils_test::ok(task.get());
+    CHECK(ran_after == 0);
 }
 
 // Test with larger async data

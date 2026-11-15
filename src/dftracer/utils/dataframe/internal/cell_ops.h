@@ -3,7 +3,7 @@
 #define DFTRACER_UTILS_DATAFRAME_INTERNAL_CELL_OPS_H
 
 #include <dftracer/utils/common/error.h>
-#include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/internal/column_read.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dataframe/types.h>

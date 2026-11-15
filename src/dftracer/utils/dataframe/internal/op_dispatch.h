@@ -2,7 +2,7 @@
 #ifndef DFTRACER_UTILS_DATAFRAME_INTERNAL_OP_DISPATCH_H
 #define DFTRACER_UTILS_DATAFRAME_INTERNAL_OP_DISPATCH_H
 
-#include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dataframe/c_api.h>
 
 namespace dftracer::utils::dataframe::internal {
 

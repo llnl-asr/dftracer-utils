@@ -1,0 +1,10 @@
+# A double keeps every digit in a golden: six fixed decimals would print
+# 0.123457 and 1.000001, which read back as different values.
+input data/precise.csv
+query
+select name, x
+----
+name	x
+a	0.1234567
+b	1.0000005
+c	2

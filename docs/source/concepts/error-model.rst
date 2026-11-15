@@ -24,7 +24,7 @@ A ``dstd::Error`` (``dstd/error.h``) is 16 bytes and carries three things and an
   Every name starts with ``dftracer.utils.``, such as ``dftracer.utils.core`` and ``dftracer.utils.duql``.
 - ``code()`` is that subsystem's own enum value, which means something only together with its domain.
   The duql library's ``DuqlErrc::Pattern`` and another subsystem's code ``1`` are unrelated even when their numbers match.
-- ``condition()`` is a ``dstd::Condition``, a small, closed, cross-domain enum (``Unknown``, ``Internal``, ``InvalidArgument``, ``NotFound``, ``Io``, ``Parse``, ``Compression``, ``Timeout``, ``Unsupported``, ``Cancelled``).
+- ``condition()`` is a ``dstd::Condition``, a small, closed, cross-domain enum (``Unknown``, ``Internal``, ``InvalidArgument``, ``NotFound``, ``Io``, ``Parse``, ``Compression``, ``Timeout``, ``Unsupported``, ``Cancelled``, ``ForkedHandle``, ``OutOfMemory``).
   A caller that does not know which subsystem failed can still switch on it.
 - ``message()`` is the readable text.
   An error with no message takes no heap memory, and copies of an error with a message share one reference-counted block.
@@ -63,11 +63,12 @@ An error holds a pointer to its table entry, so making one costs no lookup.
        Info --> Cond["condition"]
        Info --> Error["dstd::Error{entry, message}"]
 
-Results, fatal errors and foreign exceptions
---------------------------------------------
+Results, task errors and fatal errors
+-------------------------------------
 
-The libraries build without exceptions.
-Only the Python bindings and the few sources that read a foreign exception, such as ``common::error_of_exception``, are built with them.
+The libraries and the tests use no exceptions.
+Only the Python bindings are built with them.
+The ctest ``no_exceptions`` fails on ``throw``, ``try``, ``catch`` and ``std::exception_ptr`` anywhere else.
 A failure takes one of three paths, chosen by who can cause it.
 
 - ``dstd::Result<T>`` (``dstd::Expected<T, dstd::Error>``) carries every failure that input can cause, such as a query that does not parse, a key that is not found or an I/O error.
@@ -80,9 +81,13 @@ A failure takes one of three paths, chosen by who can cause it.
   A caller that may drop an error on purpose calls ``r.discard()`` and says why.
 - ``dstd::fatal`` ends the process with the message and a stack trace when code breaks a contract that correct code never breaks, such as an internal invariant or a size overflow.
   No input from a user reaches this path.
-- Code that is not ours can still throw: a plugin, a Python callback or a task that the caller wrote and built with exceptions.
-  ``coro::settle`` stops such an exception at the task boundary, and ``common::error_of_exception`` turns it into a ``dstd::Error`` with ``dstd::Condition::Unknown`` and the ``what()`` text.
-  ``Runtime::block_on`` gives the original exception back to a caller built with exceptions.
+- A coroutine task ends with an error by ``co_await coro::fail_with(error)`` on a named local, or by ``co_await`` on a ``dstd::Error`` or an error ``dstd::Result``.
+  The task is not resumed and its owner destroys the frame.
+  ``co_await`` on a task that ended with an error ends the awaiting task with the same error, so the error moves up the chain of awaits as ``or_fail`` moves a result.
+  ``Scope::join``, ``when_all``, ``when_any`` and a ``SpawnFuture`` do the same for the first error of their children.
+  ``coro::settle`` is the opt-out: it awaits a task and gives how it ended (a value, a stop or the error) without ending the caller.
+  ``Runtime::block_on``, ``sync_wait`` and ``TaskHandle::get`` give the error as a ``dstd::Result``.
+  An exception that escapes a coroutine ends the process.
 
 The Python bindings turn an error into a typed Python exception by its ``domain()`` and ``condition()``, so a ``try`` and ``except`` in Python can branch on the same identity as a C++ caller.
 

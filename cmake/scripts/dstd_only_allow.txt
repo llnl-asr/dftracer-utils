@@ -56,8 +56,8 @@ tests/runtime/test_task_pool.cpp | set, thread, vector | a dstd container or thr
 # Edges to a library that takes std types.
 include/dftracer/utils/dataframe/agg.h | unique_ptr | dstd::UniquePtr takes no custom deleter and AggState is incomplete
 tests/common/test_memory_report.cpp | string | fresh_process::Result holds a std::string
-tests/index/input_syscalls_interpose.cpp | map, pair, string | the interposer library links no dstd
+tests/trace/index/input_syscalls_interpose.cpp | map, pair, string | the interposer library links no dstd
 
 # Registries that must outlive the memory exit check.
-src/dftracer/utils/dataframe/op_registry.cpp | make_unique, string, unique_ptr, vector | registered at static init, before the exit check
+src/dftracer/utils/dataframe/op_registry.cpp | make_shared, shared_ptr, string, vector | registered at static init, before the exit check
 tests/testing_utilities.cpp | string, vector | test bookkeeping that outlives the exit check

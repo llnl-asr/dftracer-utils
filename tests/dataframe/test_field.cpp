@@ -22,7 +22,7 @@ DataFrame make_frame() {
     dstd::Vector<std::int64_t> b{10, 20, 30, 40};
     dstd::Vector<std::int64_t> dur{50, 150, 200, 80};
     DataFrame df;
-    df.names = {"a", "b", "dur", "cat"};
+    df.names = dstd::make_shared_strings({"a", "b", "dur", "cat"});
     df.columns.push_back(Series::flat_i64(a.data(), 4));
     df.columns.push_back(Series::flat_i64(b.data(), 4));
     df.columns.push_back(Series::flat_i64(dur.data(), 4));

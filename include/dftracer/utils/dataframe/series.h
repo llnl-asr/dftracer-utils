@@ -3,16 +3,18 @@
 #define DFTRACER_UTILS_DATAFRAME_SERIES_H
 
 #include <dftracer/utils/common/config.h>
-#include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/scalar.h>
 #include <dftracer/utils/dataframe/types.h>
 #include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/result.h>
+#include <dftracer/utils/dstd/shared_string.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <span>
 #include <stdexcept>
@@ -21,17 +23,9 @@
 #include <utility>
 #include <vector>
 
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
-struct ArrowSchema;
-struct ArrowArray;
-#endif
-
 namespace dftracer::utils::dataframe {
 
 struct DataFrame;
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
-class OwnedArrow;
-#endif
 
 /// A typed column. Move-only owning wrapper over the C ABI handle; the buffers,
 /// encoding, and null handling live behind it. Typed accessors are inline
@@ -83,9 +77,10 @@ class Series {
     /// which happens exactly once when the column's last reference is dropped
     /// (Series destruction, possibly off the creating thread). Pass a null
     /// `release` to borrow static or otherwise-owned memory. `validity` is
-    /// copied if non-null (usually null). Returns an invalid Series for a
-    /// variable-width type (String/Binary), where borrowing a single flat
-    /// buffer is not meaningful. Mirrors dftu_series_new_flat_borrowed.
+    /// borrowed like `data`: it must live as long as `release` has not run.
+    /// Returns an invalid Series for a variable-width type (String/Binary),
+    /// where borrowing a single flat buffer is not meaningful. Mirrors
+    /// dftu_series_new_flat_borrowed.
     static Series from_borrowed(TypeId type, const void* data, std::int64_t n,
                                 const std::uint8_t* validity = nullptr,
                                 void (*release)(void* ctx) = nullptr,
@@ -101,19 +96,30 @@ class Series {
     /// borrows the buffer with no copy and destroys `owner` exactly once when
     /// its last reference is dropped, freeing whatever backs `data`. On a
     /// variable-width `type` the borrow is rejected and `owner` is destroyed
-    /// before an invalid Series is returned. `validity` is copied if non-null.
+    /// before an invalid Series is returned. `validity` is COPIED, into a
+    /// bitmap released with `owner`, so a caller's local bitmap is safe here
+    /// (dftu_series_new_flat_borrowed itself borrows it).
     template <class Owner, class = std::enable_if_t<!std::is_convertible_v<
                                Owner&&, const std::uint8_t*>>>
     static Series from_borrowed(TypeId type, const void* data, std::int64_t n,
                                 Owner&& owner,
                                 const std::uint8_t* validity = nullptr) {
         using Held = std::decay_t<Owner>;
-        auto* held = new Held(std::forward<Owner>(owner));
+        struct Bundle {
+            Held owner;
+            dstd::Vector<std::uint8_t> validity;
+        };
+        auto* held = new Bundle{std::forward<Owner>(owner), {}};
+        if (validity != nullptr && n > 0) {
+            held->validity.resize(static_cast<std::size_t>((n + 7) / 8));
+            std::memcpy(held->validity.data(), validity, held->validity.size());
+        }
         // A rejected borrow (variable-width) runs release() itself, so `held`
         // is freed there; never double-free it here.
         return Series{dftu_series_new_flat_borrowed(
-            static_cast<dftu_dtype>(type), data, n, validity,
-            [](void* ctx) { delete static_cast<Held*>(ctx); }, held)};
+            static_cast<dftu_dtype>(type), data, n,
+            held->validity.empty() ? nullptr : held->validity.data(),
+            [](void* ctx) { delete static_cast<Bundle*>(ctx); }, held)};
     }
 
     /// Ends the process when `total` bytes do not fit the int32 offsets of a
@@ -365,6 +371,8 @@ class Series {
     Series rename(dstd::StringView name) const {
         return Series{dftu_series_rename(handle_, name.data(), name.size())};
     }
+    /// Like the view overload, but shares @p name's bytes and allocates none.
+    Series rename(const dstd::SharedString& name) const;
 
     /// A new owned column sharing this column's buffers zero-copy (refcount
     /// bump, no data copy).
@@ -535,23 +543,6 @@ class Series {
     /// A deterministic sample of n distinct rows (mix64(index, seed) hash).
     Series sample(std::int64_t n, std::uint64_t seed = 0) const;
 
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
-    /// Export this column through the Arrow C Data Interface (zero copy: the
-    /// exported buffers alias this column's and are kept alive by the returned
-    /// owner's release callbacks). Include
-    /// <dftracer/utils/dataframe/arrow.h> for the OwnedArrow definition.
-    OwnedArrow to_arrow() const;
-
-    /// Import an Arrow array (viewed through `schema`) as a Series, wrapping
-    /// its buffers zero copy. ADOPTS `array`: ownership of its buffers moves
-    /// into the returned Series (the array's release runs when the Series is
-    /// destroyed) and the passed array is marked released, so the caller must
-    /// not release it again. `schema` is only read. An invalid Series on an
-    /// unsupported type.
-    static Series from_arrow(const ArrowSchema* schema,
-                             const ArrowArray* array);
-#endif
-
     Series argsort(bool descending = false) const;
     Series take(const dstd::Vector<std::int64_t>& indices) const;
     Series take(dstd::Span<const std::int64_t> indices) const;
@@ -619,7 +610,7 @@ class Series {
     Series list_get(std::int64_t index) const;
     /// Each row's List<String> joined with `sep`.
     Series list_join(dstd::StringView sep) const;
-    /// The pandas .str batch over ASCII (dataframe/abi.h documents each):
+    /// The pandas .str batch over ASCII (dataframe/c_api.h documents each):
     /// case forms by dftu_str_case, character classes by dftu_str_class.
     Series str_case(std::int32_t op) const;
     Series str_is(std::int32_t cls) const;

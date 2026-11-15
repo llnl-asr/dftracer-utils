@@ -73,7 +73,8 @@ struct CountFold : dftracer::utils::trace::views::detail::Fold {
         local += static_cast<CountFold&>(o).local;
         return {};
     }
-    dftracer::utils::coro::CoroTask<bool> finalize(
+    dftracer::utils::coro::CoroTask<dftracer::utils::dstd::Result<bool>>
+    finalize(
         const dftracer::utils::trace::views::detail::CoverageSet&) override {
         total->fetch_add(local);
         co_return true;

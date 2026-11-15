@@ -16,7 +16,7 @@
 extern "C" {
 #endif
 
-#define DFTU_SVC_SKETCH "dftu.svc.sketch@1"
+#define DFTU_SVC_SKETCH "dftu.svc.sketch"
 
 typedef struct {
     uint64_t count;
@@ -24,6 +24,7 @@ typedef struct {
 } dftu_quantiles;
 
 typedef struct dftu_svc_sketch {
+    uint32_t struct_size; /**< sizeof(dftu_svc_sketch) */
     /** Mergeable quantile accumulator; the plugin must sketch_free what it
        creates. add's w is the sample weight. */
     dftu_sketch* (*sketch_create)(void* h);

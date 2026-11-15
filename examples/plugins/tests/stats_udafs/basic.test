@@ -1,0 +1,18 @@
+# The examples/plugins/stats_udafs.cpp UDAFs over ../data/events.pfw.gz.
+# `geomean` over every `dur` of the trace, and `p50` per `name` group.
+input ../data/events.pfw.gz
+query
+agg { g = geomean(dur) }
+----
+g
+55.74255561017869
+
+# The `open` rows run 10 us and the `read` rows 1500 and 2000 us. `p50` keeps
+# the value at index count/2 of the group, so the group of two `read` rows
+# gives its larger value.
+query
+group name { m = p50(dur) } | sort name
+----
+name	m
+open	10
+read	2000

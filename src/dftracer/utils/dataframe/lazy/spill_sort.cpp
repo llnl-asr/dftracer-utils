@@ -401,7 +401,7 @@ class SortMergeCursor : public Cursor {
     dstd::Result<DataFrame> concat_pending(
         dstd::Vector<dstd::Vector<Series>>& pending) const {
         DataFrame buf;
-        buf.names = sch_;
+        buf.names = dstd::make_shared_strings(sch_);
         buf.columns.reserve(sch_.size());
         for (std::size_t c = 0; c < sch_.size(); ++c) {
             dstd::Vector<const Series*> parts;
@@ -532,7 +532,7 @@ class SortMergeCursor : public Cursor {
                 if (!concatenated) co_return concatenated.error();
                 buf = std::move(*concatenated);
             }
-            if (pending.empty()) buf.names = sch_;
+            if (pending.empty()) buf.names = dstd::make_shared_strings(sch_);
             // An input that sent only rowless morsels (a group-by of no rows)
             // still hands its typed columns on.
             if (!pending.empty() && buf.num_rows() == 0) {

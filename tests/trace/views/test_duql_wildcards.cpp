@@ -67,7 +67,7 @@ dataframe::DataFrame frame(const View& v) {
 }
 
 dstd::Vector<dstd::String> names(const dataframe::DataFrame& f) {
-    return f.names;
+    return dstd::to_strings(f.names);
 }
 
 void same(const View& v, const dstd::String& wild,

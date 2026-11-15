@@ -246,9 +246,9 @@ TEST_SUITE("distinct on ids") {
             for (std::size_t c = 0; c < 4; ++c) {
                 auto ls = layouts(bases[c]);
                 Series pick = std::move(ls[(variant + c) % ls.size()].second);
-                ref.names.push_back(NAMES[c]);
+                ref.names.push_back(dstd::SharedString{NAMES[c]});
                 ref.columns.push_back(flat_copy(pick));
-                df.names.push_back(NAMES[c]);
+                df.names.push_back(dstd::SharedString{NAMES[c]});
                 df.columns.push_back(std::move(pick));
             }
             for (const dstd::Vector<dstd::String>& subset :
@@ -271,7 +271,7 @@ TEST_SUITE("distinct on ids") {
         CHECK(e.nunique() == 0);
         CHECK(dftu_utils_test::ok(e.value_counts()).num_rows() == 0);
         DataFrame df;
-        df.names = {"a"};
+        df.names = dstd::make_shared_strings({"a"});
         df.columns.push_back(e.share());
         CHECK(dftu_utils_test::ok(df.unique()).num_rows() == 0);
     }

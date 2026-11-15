@@ -2,7 +2,7 @@
 #ifndef DFTRACER_UTILS_DATAFRAME_INTERNAL_COMPARE_SIMD_H
 #define DFTRACER_UTILS_DATAFRAME_INTERNAL_COMPARE_SIMD_H
 
-#include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/types.h>
 
 #include <cstdint>

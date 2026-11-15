@@ -135,13 +135,15 @@ dstd::Result<dataframe::DataFrame> join_batches(
     }
     for (std::size_t j = static_cast<std::size_t>(n_key);
          j < left.columns.size(); ++j) {
-        out.names.push_back("l_" + left.names[j]);
+        out.names.emplace_back(
+            dstd::fmt<"l_{}">(dstd::StringView{left.names[j]}));
         out.columns.push_back(dataframe::take(left.columns[j], li));
     }
     if (!left_only)
         for (std::size_t j = static_cast<std::size_t>(n_key);
              j < right.columns.size(); ++j) {
-            out.names.push_back("r_" + right.names[j]);
+            out.names.emplace_back(
+                dstd::fmt<"r_{}">(dstd::StringView{right.names[j]}));
             out.columns.push_back(dataframe::take(right.columns[j], ri));
         }
     return out;

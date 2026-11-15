@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/pair.h>
@@ -687,6 +687,7 @@ TEST_CASE("parse - every stage kind") {
         "session pid gap 1s",
         R"re(parse name ~ "(?<a>x)")re",
         "from data | io_rate(1ms)",
+        R"re(from data | sink "csv" path "out.csv")re",
     };
     dstd::Vector<std::size_t> indexes;
     for (const auto& text : texts) {
@@ -1704,4 +1705,54 @@ TEST_CASE("pipeline - plugin calls lower to plugin stages") {
         CAPTURE(r.error().message);
         CHECK(has(r.error().message, want));
     }
+}
+
+TEST_CASE("pipeline - sink names a sink and its options, and ends") {
+    const dstd::String text =
+        R"re(from data | sink "toy_sink.out" path "out.csv" mode "a")re";
+    const auto q = parsed(text);
+    REQUIRE(q.pipeline->stages.size() == 1);
+    const auto* snk =
+        std::get_if<duql::syntax::Sink>(&q.pipeline->stages[0].node);
+    REQUIRE(snk);
+    CHECK(snk->name == "toy_sink.out");
+    REQUIRE(snk->options.size() == 2);
+    CHECK(snk->options[0].first == "path");
+    CHECK(snk->options[0].second == "out.csv");
+    CHECK(snk->options[1].first == "mode");
+    CHECK(snk->options[1].second == "a");
+    CHECK(has(duql::syntax::to_text(*q.pipeline),
+              R"re(sink "toy_sink.out" path "out.csv" mode "a")re"));
+
+    // A quoted name and a quoted value are required.
+    for (const auto& bad : {R"re(sink csv)re", R"re(sink "csv" path)re"}) {
+        CAPTURE(dstd::String(bad));
+        auto r = duql::syntax::parse(bad);
+        REQUIRE_FALSE(r.has_value());
+        CHECK(has(r.error().message, "quoted"));
+    }
+
+    auto after = duql::syntax::parse(R"re(from data | sink "csv" | take 1)re");
+    REQUIRE_FALSE(after.has_value());
+    CHECK(has(after.error().message, "cannot follow 'sink'"));
+
+    auto lowered_ok = compile_pipeline(
+        R"re(where x > 1 | sink "toy_sink.out" path "o.csv")re", {}, nullptr);
+    REQUIRE_MESSAGE(
+        lowered_ok.has_value(),
+        (lowered_ok ? dstd::String() : lowered_ok.error().format()));
+    const auto& stage = std::get<duql::PipelineSink>(lowered_ok->stages.back());
+    CHECK(stage.name == "toy_sink.out");
+    REQUIRE(stage.options.size() == 1);
+    CHECK(stage.options[0].first == "path");
+    CHECK(stage.options[0].second == "o.csv");
+    CHECK(stage.text == R"re(sink "toy_sink.out" path "o.csv")re");
+    // The registry is the trace layer's: duql lowers the name as data, so the
+    // sink is the one stage after the source.
+    CHECK(lowered_ok->stages.size() == 1);
+
+    auto lowered_after =
+        compile_pipeline(R"re(sink "csv" | take 1)re", {}, nullptr);
+    REQUIRE_FALSE(lowered_after.has_value());
+    CHECK(has(lowered_after.error().message, "after 'sink'"));
 }

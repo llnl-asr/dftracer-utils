@@ -2,7 +2,7 @@
 #ifndef DFTRACER_UTILS_DATAFRAME_INTERNAL_FINGERPRINT_H
 #define DFTRACER_UTILS_DATAFRAME_INTERNAL_FINGERPRINT_H
 
-#include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dstd/hash/hash.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>

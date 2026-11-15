@@ -25,7 +25,7 @@ inline int compare_doubles(double a, double b) noexcept {
 /// does pointer arithmetic instead of a call per cell. Holds its own reference
 /// to the (materialized) column. Numeric types read as Signed, Unsigned or
 /// Float by their physical layout; String and Binary read as Bytes.
-class ColumnView {
+class ColumnReader {
    public:
     enum class Kind : std::uint8_t { Signed, Unsigned, Float, Bytes };
 
@@ -33,13 +33,13 @@ class ColumnView {
     static bool supports(TypeId t) noexcept;
 
     /// Ends the process for an unsupported type: check @ref supports first.
-    explicit ColumnView(const Series& column);
+    explicit ColumnReader(const Series& column);
 
     /// A view of the same buffers.
-    ColumnView(const ColumnView& other);
-    ColumnView(ColumnView&&) noexcept = default;
-    ColumnView& operator=(const ColumnView& other);
-    ColumnView& operator=(ColumnView&&) noexcept = default;
+    ColumnReader(const ColumnReader& other);
+    ColumnReader(ColumnReader&&) noexcept = default;
+    ColumnReader& operator=(const ColumnReader& other);
+    ColumnReader& operator=(ColumnReader&&) noexcept = default;
 
     Kind kind() const noexcept { return kind_; }
     bool is_bytes() const noexcept { return kind_ == Kind::Bytes; }
@@ -73,7 +73,7 @@ class ColumnView {
     }
     /// The same order between row `a` of this column and row `b` of `other`,
     /// which must have the same kind.
-    int compare(std::int64_t a, const ColumnView& other,
+    int compare(std::int64_t a, const ColumnReader& other,
                 std::int64_t b) const noexcept;
 
    private:
@@ -90,16 +90,16 @@ class ColumnView {
 
 /// The row indices [0, n) ordered by `keys` ascending, a null sorting after
 /// every value, ties in row order.
-dstd::Vector<std::int64_t> order_rows(const dstd::Vector<ColumnView>& keys,
+dstd::Vector<std::int64_t> order_rows(const dstd::Vector<ColumnReader>& keys,
                                       std::int64_t n);
 
 /// Whether rows `a` and `b` hold the same key tuple, a null equal to a null.
-bool same_keys(const dstd::Vector<ColumnView>& keys, std::int64_t a,
+bool same_keys(const dstd::Vector<ColumnReader>& keys, std::int64_t a,
                std::int64_t b);
 
 /// Given `order` from order_rows, the end of the run of rows from position
 /// `begin` that share its key tuple.
-std::int64_t run_end(const dstd::Vector<ColumnView>& keys,
+std::int64_t run_end(const dstd::Vector<ColumnReader>& keys,
                      const dstd::Vector<std::int64_t>& order,
                      std::int64_t begin);
 

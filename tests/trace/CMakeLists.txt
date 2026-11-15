@@ -10,18 +10,18 @@ set(TRACE_TEST_SOURCES
     test_chunk_verifier.cpp
     test_trace_config.cpp
     test_chunk_extractor.cpp
-    test_index_builder.cpp
+    index/build/test_batch_builder.cpp
     test_metadata_collector.cpp
     test_time_metric.cpp
     test_index_root_stat.cpp
 
     # Indexing
-    indexing/test_bloom_filter.cpp
-    indexing/test_scalable_bloom_filter.cpp
-    indexing/test_chunk_statistics.cpp
-    indexing/test_chunk_indexer.cpp
-    indexing/test_chunk_pruner.cpp
-    indexing/test_shard_manifest.cpp
+    index/extensions/test_bloom_filter.cpp
+    index/extensions/test_scalable_bloom_filter.cpp
+    index/schemas/dft/test_chunk_statistics.cpp
+    index/build/test_chunk_indexer.cpp
+    index/plan/test_chunk_pruner.cpp
+    index/store/test_shard_manifest.cpp
 
     # Views
     views/test_view_definition.cpp
@@ -52,8 +52,6 @@ set(TRACE_TEST_SOURCES
     views/test_view_agg_parity.cpp
     views/test_view_agg_keys.cpp
     views/test_view_agg_scan.cpp
-    views/test_stats_view.cpp
-    views/test_detail_stats_view.cpp
     views/test_view_mv.cpp
     views/test_coverage.cpp
     views/test_fold.cpp
@@ -64,12 +62,13 @@ set(TRACE_TEST_SOURCES
     views/test_stream_early_out.cpp
     views/test_agg_transform_memory.cpp
     views/test_vectorized_fold.cpp
-    views/test_rollup_store.cpp
-    views/test_query_cache.cpp
-    views/test_lookup_store.cpp
-    views/test_rowset_fold.cpp
-    views/test_bloom_fold.cpp
-    views/test_catalog_fold.cpp
+    index/cache/test_rollup_store.cpp
+    index/cache/test_query_cache.cpp
+    index/cache/test_lookup_store.cpp
+    index/extensions/test_rowset_fold.cpp
+    index/extensions/test_bloom_fold.cpp
+    index/extensions/test_catalog_fold.cpp
+    index/extensions/test_extension_registry.cpp
     views/test_raw_gzip_fuse.cpp
     views/test_restart_scan.cpp
     views/test_event_source.cpp
@@ -77,31 +76,38 @@ set(TRACE_TEST_SOURCES
     views/test_result_join.cpp
     views/test_view_join.cpp
     views/test_compare_view.cpp
-    views/test_view_c_abi.cpp
+    views/test_c_api.cpp
     views/test_duql_paths.cpp
     views/test_duql_wildcards.cpp
     views/test_drop_rename_views.cpp
     views/test_schemaless.cpp
 
-    # Statistics
-    statistics/test_trace_statistics.cpp
-    statistics/test_statistics_query.cpp
-    statistics/test_detailed_statistics.cpp
-
     # Aggregators
-    aggregators/test_aggregation_metrics.cpp
-    aggregators/test_aggregation_config.cpp
-    aggregators/test_system_metrics.cpp
-    aggregators/test_agg_parity.cpp
-    aggregators/test_quantile_store.cpp
-    aggregators/test_agg_partial.cpp
-    aggregators/test_agg_query.cpp
+    index/schemas/dft/agg/test_aggregation_metrics.cpp
+    index/schemas/dft/agg/test_aggregation_config.cpp
+    index/schemas/dft/agg/test_system_metrics.cpp
+    index/schemas/dft/agg/test_quantile_store.cpp
+    index/schemas/dft/agg/test_agg_partial.cpp
+    test_agg_query.cpp
 
-    # Comparator
-    comparator/test_comparison_result.cpp
-    comparator/test_comparison_config.cpp
-    comparator/test_is_data_transfer_op.cpp
-    comparator/test_tree_table_formatter.cpp
+    # Internal
+    internal/test_is_data_transfer_op.cpp
+
+    # Index
+    index/test_index_builder.cpp
+    index/test_hash_table_aggregation.cpp
+
+    # Reader
+    reader/test_trace_reader.cpp
+    reader/test_member_decode_cache.cpp
+    reader/test_member_cache_integration.cpp
+    reader/test_member_cache_exit.cpp
+    reader/test_reader_fatal.cpp
+    reader/test_large_gzip_members.cpp
+    reader/test_gzip_restart_points.cpp
+    reader/test_sigill_regression.cpp
+    reader/test_indexed_file_reader.cpp
+    reader/test_async_indexed_file_line_generator.cpp
 )
 
 # These read counters that exist only when DFTRACER_UTILS_TEST_PROBES is ON.
@@ -172,18 +178,9 @@ set_tests_properties(trace/views/test_dynamic_prune_t224 PROPERTIES
   ENVIRONMENT "DFTRACER_UTILS_THREADS=224")
 
 
-# The parity test replays references recorded from the CLI tools and the View.
-target_compile_definitions(trace_aggregators_test_agg_parity PRIVATE
-  DFTRACER_UTILS_AGG_PARITY_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/aggregators/data")
-add_dependencies(trace_aggregators_test_agg_parity
-                 dftracer_comparator dftracer_gen_dlio_config)
-set_tests_properties(trace/aggregators/test_agg_parity PROPERTIES
-  ENVIRONMENT "DFTRACER_UTILS_COMPARATOR_PATH=$<TARGET_FILE:dftracer_comparator>;DFTRACER_UTILS_GEN_DLIO_CONFIG_PATH=$<TARGET_FILE:dftracer_gen_dlio_config>"
-  TIMEOUT 600)
-
 # The allocator counts its allocations only in debug mode, which is fixed
 # before the first allocation.
-set_tests_properties(trace/aggregators/test_quantile_store PROPERTIES
+set_tests_properties(trace/index/schemas/dft/agg/test_quantile_store PROPERTIES
   ENVIRONMENT "DFTRACER_UTILS_MEMORY_DEBUG=1")
-set_tests_properties(trace/aggregators/test_agg_partial PROPERTIES
+set_tests_properties(trace/index/schemas/dft/agg/test_agg_partial PROPERTIES
   ENVIRONMENT "DFTRACER_UTILS_MEMORY_DEBUG=1")

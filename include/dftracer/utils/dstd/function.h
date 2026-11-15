@@ -47,16 +47,7 @@ class Function<R(Args...)> {
             ops_ = &INLINE_OPS<T>;
         } else {
             void* raw = memory::detail::allocate(sizeof(T), alignof(T));
-#if defined(__cpp_exceptions)
-            try {
-                ::new (raw) T(std::forward<F>(f));
-            } catch (...) {
-                memory::detail::deallocate(raw, sizeof(T));
-                throw;
-            }
-#else
             ::new (raw) T(std::forward<F>(f));
-#endif
             ::new (static_cast<void*>(buffer_)) void*(raw);
             ops_ = &HEAP_OPS<T>;
         }

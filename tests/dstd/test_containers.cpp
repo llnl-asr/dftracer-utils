@@ -60,12 +60,6 @@ struct PlainDerived : PlainBase {
     std::uint64_t extra = 0;
 };
 
-struct Throws {
-    explicit Throws(bool fail) {
-        if (fail) throw std::runtime_error("constructor failed");
-    }
-};
-
 }  // namespace
 
 static_assert(sizeof(dstd::Vector<int>) == sizeof(std::vector<int>));
@@ -313,7 +307,6 @@ TEST_CASE("UniquePtr destroys and frees its object") {
         CHECK(c->value == 3);
     }
     CHECK(Counted::alive == 0);
-    CHECK_THROWS_AS(dstd::make_unique<Throws>(true), std::runtime_error);
     CHECK(pool->live() == 0);
     CHECK(pool->blocks() == 0);
 }

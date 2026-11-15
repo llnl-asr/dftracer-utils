@@ -1,0 +1,26 @@
+# The examples/plugins/csv_reader.cpp format: a .csv file whose header line
+# names the columns and whose data types each column. `name` holds text, `age`
+# holds whole numbers and `score` holds numbers, so the format reports them as
+# a string, an int64 and a double.
+input data/people.csv
+query
+select name, age, score
+----
+name	age	score
+ada	36	91.5
+grace	45	88
+linus	29	77.25
+
+# A projection keeps the columns it names, in the order it names them.
+query
+select score, name
+----
+score	name
+91.5	ada
+88	grace
+77.25	linus
+
+# A column the file does not have fails the scan, and the error names it.
+query error csv_reader: no column
+select nope
+----

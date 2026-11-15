@@ -11,8 +11,8 @@ translation unit.
 
 Two headers cover the pieces most programs need:
 
-- ``dftracer/utils/duql/abi.h`` - parse and build query predicates.
-- ``dftracer/utils/dataframe/abi.h`` - build, inspect, and operate on columns
+- ``dftracer/utils/duql/c_api.h`` - parse and build query predicates.
+- ``dftracer/utils/dataframe/c_api.h`` - build, inspect, and operate on columns
   (``dftu_series``) and frames (``dftu_dataframe``), including evaluating a
   query as a mask.
 
@@ -35,7 +35,7 @@ sidesteps a parse error at runtime:
 
 .. code-block:: c
 
-   #include <dftracer/utils/duql/abi.h>
+   #include <dftracer/utils/duql/c_api.h>
 
    /* From duql text: */
    dftu_duql* q1 = dftu_duql_parse("cat == \"POSIX\" and dur > 1000");
@@ -66,7 +66,7 @@ or borrow an existing buffer to avoid the copy:
 
 .. code-block:: c
 
-   #include <dftracer/utils/dataframe/abi.h>
+   #include <dftracer/utils/dataframe/c_api.h>
 
    /* Element types are the named dftu_dtype enum (DFTU_TYPE_BOOL ...
       DFTU_TYPE_BINARY), whose values mirror dataframe::TypeId's C++ enum
@@ -169,22 +169,44 @@ list the registry, ``dftu_op_signature`` spells a signature
 Errors and results
 ------------------
 
-A call that can fail in more than one way returns a tagged result
-(``DFTU_RESULT_DECL``): ``DFTU_RESULT_OK(r)`` says which half of the union is
-live, ``DFTU_RESULT_VALUE(r)`` is the owned handle, ``DFTU_RESULT_ERROR(r)``
-a ``dftu_error`` with a ``(domain, code)`` identity, a portable
-``condition`` (``DFTU_COND_NOT_FOUND``, ``INVALID_ARGUMENT``, ...) and a
-borrowed ``message``. No exception ever crosses the C boundary. The simpler
-``dftu_series_*`` calls return NULL on failure.
+A call that can fail returns a ``dftu_status``: a negative value is an error
+(``DFTU_E_NOT_FOUND``, ``DFTU_E_INVALID``, ...), ``DFTU_OK`` is success and a
+positive value is a non-error outcome, such as ``DFTU_END`` when a cursor has no
+more items. The result goes through an out-parameter after the inputs, and the
+last parameter is a ``dftu_error* err`` that may be NULL. A failing call
+fills ``err`` with a ``(domain, code)`` identity, the portable ``status`` and an
+owned ``message``, and leaves the other out-parameters unchanged, except an
+out pointer, which it sets to NULL. A successful call leaves ``err`` as it was.
+Start ``err`` with ``DFTU_ERROR_INIT`` and call ``dftu_error_release`` when you
+are done with it.
+
+.. code-block:: c
+
+   dftu_store_t* store = NULL;
+   dftu_error err = DFTU_ERROR_INIT;
+   if (dftu_store_open("/tmp/store", &store, &err) != DFTU_OK) {
+       fprintf(stderr, "%s\n", err.message);
+       dftu_error_release(&err);
+   }
+
+A callback that the host calls, such as a plugin op, reports an error
+through the host-owned ``dftu_ctx`` it receives first: it returns
+``dftu_fail(ctx, code, message)`` and calls ``dftu_check(ctx)`` in long loops.
+No exception ever crosses the C boundary. The simpler ``dftu_series_*`` calls
+return NULL on failure.
+
+A struct that you pass in as options starts with a ``uint32_t struct_size``
+that you set to its ``sizeof``. A library that is newer than your code reads
+zero for the fields your struct does not have.
 
 Plans from C
 ------------
 
 ``dftu_dataframe_lazy(df)`` starts a plan over a frame,
-``dftu_lazyframe_from_provider(name)`` one over a source registered with
-``dftu_provider_register``; every builder step is a ``dftu_lazyframe_*``
-call, ``dftu_lazyframe_op(lf, name, args)`` appends a node registered with
-``dftu_node_register``, ``dftu_lazyframe_explain`` prints the plan and
+``dftu_lazyframe_from_provider(name)`` one over a source registered under that name by a plugin
+(``DFTU_SVC_PROVIDERS``); every builder step is a ``dftu_lazyframe_*``
+call, ``dftu_lazyframe_op(lf, name, args)`` appends a node registered
+by a plugin (``DFTU_SVC_NODES``), ``dftu_lazyframe_explain`` prints the plan and
 ``dftu_lazyframe_collect`` runs it. :doc:`../data/lazyframe` has the
 contract a source and a node fill.
 

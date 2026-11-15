@@ -431,7 +431,7 @@ TEST_SUITE("View - collect_all and sessions") {
     TEST_CASE("collect_all mixes trace and in-memory plans") {
         dataframe::DataFrame small;
         dstd::Vector<std::int64_t> a{1, 2, 3};
-        small.names = {"a"};
+        small.names = dstd::make_shared_strings({"a"});
         small.columns.push_back(
             dftracer::utils::dataframe::Series::flat_i64(a.data(), 3));
         View t = base_viewer();
@@ -888,7 +888,7 @@ TEST_SUITE("View - trace terminals") {
                                                         "dur", "name", "level",
                                                         "parent_id"});
         CHECK(*polls == 0);
-        CHECK(test_view_common::run(fg.collect()).names == fg.schema());
+        CHECK(dstd::to_strings(run(fg.collect()).names) == fg.schema());
         CHECK(*polls > 0);
     }
 
@@ -1265,7 +1265,8 @@ TEST_SUITE("View - trace terminals") {
         View t = View::from_file(dstd::String(gz));
         dataframe::DataFrame rows =
             test_view_common::run(t.select({"name", "size"}).collect());
-        CHECK(rows.names == dstd::Vector<dstd::String>{"name", "args.size"});
+        CHECK(dstd::to_strings(rows.names) ==
+              dstd::Vector<dstd::String>{"name", "args.size"});
         CHECK(rows.num_rows() == 4);
 
         dataframe::DataFrame agg =
@@ -1273,7 +1274,7 @@ TEST_SUITE("View - trace terminals") {
                                       .agg({{AggOp::Count, "", "n"}})
                                       .select({"n"})
                                       .collect());
-        CHECK(agg.names == dstd::Vector<dstd::String>{"n"});
+        CHECK(dstd::to_strings(agg.names) == dstd::Vector<dstd::String>{"n"});
         CHECK(bnum(agg, 0, "n") == 4);
     }
 
@@ -1433,7 +1434,8 @@ TEST_SUITE("View - computed columns over a trace scan") {
                              dataframe::expr_lit_null(dataframe::TypeId::Int64))
                 .select({"t", "z"});
         dataframe::DataFrame out = test_view_common::run(a.collect());
-        REQUIRE(out.names == dstd::Vector<dstd::String>{"t", "z"});
+        REQUIRE(dstd::to_strings(out.names) ==
+                dstd::Vector<dstd::String>{"t", "z"});
         CHECK(cells(out, "t") ==
               dstd::Vector<dstd::String>{"null", "null", "null"});
         CHECK(cells(out, "z") == dstd::Vector<dstd::String>{"1", "1", "1"});
@@ -1718,7 +1720,7 @@ dstd::Vector<dstd::String> sorted_rows(const dataframe::DataFrame& f) {
     for (std::int64_t r = 0; r < f.num_rows(); ++r) {
         dstd::String row;
         for (std::size_t c = 0; c < f.columns.size(); ++c)
-            row += f.names[c] + "=" +
+            row += dstd::String(f.names[c].view()) + "=" +
                    dstd::String(dataframe::cell_to_string(f.columns[c], r)) +
                    ";";
         rows.push_back(std::move(row));

@@ -158,11 +158,9 @@ skip the local script entirely and serve queries over HTTP.
 
       .. code-block:: cpp
 
-         #include <dftracer/utils/dataframe/arrow.h>
+         #include <dftracer/utils/arrow/arrow.h>
 
-         using dftracer::utils::dataframe::OwnedArrow;
-
-         OwnedArrow a = df.to_arrow();   // struct array, one child per column
+         dstd::Result<arrow::Batch> a = arrow::to_arrow(df);  // one child per column
 
    .. tab-item:: CLI (serve)
 

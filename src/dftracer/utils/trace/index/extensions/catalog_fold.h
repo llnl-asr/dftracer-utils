@@ -61,7 +61,7 @@ class CatalogFold : public trace::views::detail::Fold {
     dstd::Result<void> merge(trace::views::detail::Fold& slice) override;
     /// Writes the catalog of each covered file whose index has none current.
     /// A locked index logs a warning and writes nothing.
-    coro::CoroTask<bool> finalize(
+    coro::CoroTask<dstd::Result<bool>> finalize(
         const trace::views::detail::CoverageSet& covered) override;
 
     /// The stats of every path the scan saw, summed over its files.

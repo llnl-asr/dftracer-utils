@@ -2,8 +2,11 @@
 #ifndef DFTRACER_UTILS_DATAFRAME_LAZY_FRAME_OP_H
 #define DFTRACER_UTILS_DATAFRAME_LAZY_FRAME_OP_H
 
+#include <dftracer/utils/dataframe/frame_ops.h>
+#include <dftracer/utils/dataframe/internal/dataframe_handle.h>
 #include <dftracer/utils/dataframe/internal/errors.h>
 #include <dftracer/utils/dataframe/lazy/common.h>
+#include <dftracer/utils/dataframe/op.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
@@ -147,6 +150,13 @@ class OwnedFrameOpArgs {
                         s.strings.emplace_back(w.out ? w.out : "");
                         s.strings.emplace_back(end ? end : "");
                         s.has_end.push_back(end != nullptr);
+                        if (w.func == DFTU_WINDOW_FRAME_UDAF) {
+                            s.udafs.emplace_back(
+                                w.param.udaf.name ? w.param.udaf.name : "");
+                            for (std::int32_t a = 0; a < w.param.udaf.arg_count;
+                                 ++a)
+                                s.udafs.emplace_back(w.param.udaf.args[a]);
+                        }
                         s.wins.push_back(w);
                     }
                     break;
@@ -206,6 +216,7 @@ class OwnedFrameOpArgs {
             c.has_value = s.has_value;
             c.has_time = s.has_time;
             c.has_end = s.has_end;
+            c.udafs = s.udafs;
             c.frame_index = s.frame_index;
             out->slots_.push_back(std::move(c));
         }
@@ -280,7 +291,9 @@ class OwnedFrameOpArgs {
                     v.agglist.items = aggs[i].data();
                     v.agglist.n = static_cast<int32_t>(aggs[i].size());
                     break;
-                case DFTU_TOK_WINLIST:
+                case DFTU_TOK_WINLIST: {
+                    std::size_t udaf_at = 0;
+                    cstrs[i].reserve(s.udafs.size());
                     for (std::size_t k = 0; k < s.wins.size(); ++k) {
                         dftu_window_spec w = s.wins[k];
                         w.value =
@@ -302,11 +315,20 @@ class OwnedFrameOpArgs {
                                 s.has_end[k] ? s.strings[4 * k + 3].c_str()
                                              : nullptr;
                         }
+                        if (w.func == DFTU_WINDOW_FRAME_UDAF) {
+                            w.param.udaf.name = s.udafs[udaf_at++].c_str();
+                            const std::size_t first = cstrs[i].size();
+                            for (std::int32_t a = 0; a < w.param.udaf.arg_count;
+                                 ++a)
+                                cstrs[i].push_back(s.udafs[udaf_at++].c_str());
+                            w.param.udaf.args = cstrs[i].data() + first;
+                        }
                         wins[i].push_back(w);
                     }
                     v.winlist.items = wins[i].data();
                     v.winlist.n = static_cast<int32_t>(wins[i].size());
                     break;
+                }
             }
         }
         return out;
@@ -325,6 +347,7 @@ class OwnedFrameOpArgs {
         dstd::Vector<bool> has_value;
         dstd::Vector<bool> has_time;
         dstd::Vector<bool> has_end;
+        dstd::Vector<dstd::String> udafs;
         std::size_t frame_index = 0;
     };
     dstd::Vector<Slot> slots_;
@@ -441,13 +464,24 @@ inline coro::CoroTask<dstd::Result<DataFrame>> run_frame_op(
     dstd::Vector<dstd::Vector<dftu_group_agg>> aggs;
     const dftu_op_arg bag = args.bind(cstrs, wins, aggs);
     dstd::Vector<const dftu_dataframe*> frames(handles.begin(), handles.end());
-    dftu_dataframe* result = dftu_op_run_frame(
-        op, frames.data(), static_cast<uint32_t>(frames.size()), &bag);
-    if (!result)
-        co_return common::make_error<
-            "lazy frame op '{}' failed: the op returned no frame">(
-            common::ErrorCode::Internal, name.c_str());
-    DataFrame out = dataframe_handle_take(result);
+    DataFrame out;
+    if (name == WINDOW_OP) {
+        // Run here, not through the C runner, which has no error channel.
+        const dftu_op_val* g = bag.args;
+        dstd::Result<DataFrame> win = window_checked(
+            dataframe_handle_view(handles[0]), g[1].list.items, g[1].list.n,
+            g[2].list.items, g[2].list.n, g[3].winlist.items, g[3].winlist.n);
+        if (!win) co_return dstd::Unexpected(std::move(win.error()));
+        out = std::move(*win);
+    } else {
+        dftu_dataframe* result = dftu_op_run_frame(
+            op, frames.data(), static_cast<uint32_t>(frames.size()), &bag);
+        if (!result)
+            co_return common::make_error<
+                "lazy frame op '{}' failed: the op returned no frame">(
+                common::ErrorCode::Internal, name.c_str());
+        out = dataframe_handle_take(result);
+    }
     if (has_rest(sch)) {
         if (column_index_of(out.names, dstd::String(REST_COLUMN)) < 0)
             co_return common::make_error<

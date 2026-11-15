@@ -342,7 +342,8 @@ def generate_collaboration(
 # Bottom-to-top: runtime is the foundation at the base; each arrow points from
 # a library to the one built on top of it (A --> B reads "B is built on A").
 ARCHITECTURE_MMD = """graph BT
-    utilities["dftracer_utils_domains<br/><i>comparison, statistics, genesis,<br/>plugins, server, dlio, replay</i>"]
+    utilities["dftracer_utils_domains<br/><i>comparison, statistics, genesis,<br/>server, dlio, replay</i>"]
+    plugins["dftracer_utils_plugins<br/><i>plugin host, plugin ABI, C++ SDK</i>"]
     trace["dftracer_utils_trace<br/><i>index, views, trace reader, Arrow</i>"]
     dataframe["dftracer_utils_dataframe<br/><i>Series/DataFrame, Highway SIMD kernels,<br/>Arrow bridge, columnar query execution</i>"]
     query["dftracer_utils_duql<br/><i>predicate IR, string codec, evaluator</i>"]
@@ -357,7 +358,8 @@ ARCHITECTURE_MMD = """graph BT
     runtime --> store
     io --> trace
     store --> trace
-    trace --> utilities
+    trace --> plugins
+    plugins --> utilities
     yaml --> trace
     json --> query
     query --> dataframe

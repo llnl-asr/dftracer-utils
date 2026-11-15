@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-#include <dftracer/utils/dataframe/abi.h>                   // dftu_series_data
+#include <dftracer/utils/dataframe/c_api.h>                 // dftu_series_data
 #include <dftracer/utils/dataframe/field_stat.h>            // FieldStat
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/column_read.h>  // read_f64
@@ -1141,8 +1141,6 @@ Series interpolate(const Series& v) {
 
 }  // namespace dftracer::utils::dataframe
 
-extern "C" {
-
 double dftu_series_variance(const dftu_series* v, int32_t sample) {
     if (!v) return 0.0;
     DFTU_FLAT_INPUT(v, dftu_series_variance, sample);
@@ -1331,5 +1329,3 @@ dftu_series* dftu_series_interpolate(const dftu_series* v) {
     c.release();
     return r.release();
 }
-
-}  // extern "C"

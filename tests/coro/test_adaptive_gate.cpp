@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <coro/failing.h>
 #include <dftracer/utils/coro/adaptive_gate.h>
 #include <dftracer/utils/coro/detail/coro.h>
 #include <dftracer/utils/coro/scope.h>
@@ -13,7 +14,6 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
-#include <stdexcept>
 #include <thread>
 #include <vector>
 
@@ -115,9 +115,9 @@ coro::CoroTask<int> gated_unit(coro::AdaptiveGate& gate, Concurrency& c, int i,
     co_return i;
 }
 
-coro::CoroTask<int> throwing_unit(coro::AdaptiveGate& gate) {
+coro::CoroTask<int> failing_unit(coro::AdaptiveGate& gate) {
     auto admitted = co_await gate.enter(1);
-    throw std::runtime_error("stat failed");
+    co_return co_await coro_test::failing_task<int>("stat failed");
 }
 
 }  // namespace
@@ -170,19 +170,14 @@ TEST_SUITE("AdaptiveGate") {
         CHECK(gate.limit() <= 8);
     }
 
-    TEST_CASE("a unit that throws gives its slot back") {
+    TEST_CASE("a unit that fails gives its slot back") {
         coro::AdaptiveGate gate(1);
         Concurrency c;
         int after = 0;
 
         dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
-            bool threw = false;
-            try {
-                co_await throwing_unit(gate);
-            } catch (const std::runtime_error&) {
-                threw = true;
-            }
-            CHECK(threw);
+            auto settled = co_await coro::settle(failing_unit(gate));
+            CHECK(settled.error.has_value());
             after =
                 co_await gated_unit(gate, c, 7, std::chrono::microseconds(1));
             co_return;

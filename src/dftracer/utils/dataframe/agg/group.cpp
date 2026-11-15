@@ -101,7 +101,8 @@ dstd::Result<AggStatePtr> group_agg_state(
     const std::int64_t n = !keys.empty()     ? keys[0]->length()
                            : !values.empty() ? values[0]->length()
                                              : 0;
-    if (n <= AGG_GRAIN) {
+    // A UDAF that two threads must not feed at once takes this single state.
+    if (n <= AGG_GRAIN || agg_specs_serial(specs)) {
         auto st = agg_new(std::move(specs));
         dstd::Result<void> done = agg_accumulate(*st, keys, values);
         if (!done) return done.error();
@@ -134,7 +135,10 @@ dstd::Result<AggStatePtr> group_agg_state(
     if (failed.error) return *failed.error;
     // The merged groups go back into the order the frame first shows them.
     AggStatePtr merged = agg_in_first_seen_order(agg_merge_many(lanes));
-    return merged ? std::move(merged) : agg_new(std::move(specs));
+    if (!merged) return agg_new(std::move(specs));
+    if (dstd::Result<void> checked = agg_check(*merged); !checked)
+        return checked.error();
+    return merged;
 }
 
 namespace {
@@ -268,7 +272,8 @@ dstd::Optional<DataFrame> finalize_in_place(
     for (std::size_t p = 0; p < states.size(); ++p) {
         const AggState* st = states[p].get();
         if (st == nullptr || st->ngroups() == 0) continue;
-        if (st->has_dyn || !agg_first_rows_known(*st)) return dstd::nullopt;
+        if (st->has_dyn || st->has_udaf || !agg_first_rows_known(*st))
+            return dstd::nullopt;
         live.push_back(p);
         base.push_back(G);
         G += st->ngroups();
@@ -411,7 +416,7 @@ dstd::Optional<DataFrame> finalize_in_place(
             std::memcpy(writable(h->validity), null_row.data(), validity_bytes);
             h->null_count = nulls;
         }
-        out.names.push_back(key_names[k]);
+        out.names.push_back(dstd::SharedString{key_names[k]});
         out.columns.push_back(std::move(col));
     }
 
@@ -724,7 +729,7 @@ dstd::Result<dstd::Optional<DataFrame>> group_agg_by_key_hash(
     // per-thread partials win.
     constexpr std::int64_t MIN_ROWS = 4 * AGG_GRAIN;
     const std::int64_t n = in_keys.empty() ? 0 : in_keys[0]->length();
-    if (n <= MIN_ROWS) return none();
+    if (n <= MIN_ROWS || agg_specs_serial(specs)) return none();
     for (const Series* c : in_keys) {
         switch (c->type()) {
             case TypeId::String:
@@ -789,11 +794,13 @@ dstd::Result<dstd::Optional<DataFrame>> group_agg_by_key_hash(
 
     DataFrame src;  // the key and value columns, shared, not copied
     for (const Series* c : keys) {
-        src.names.push_back(dstd::fmt<"k{}">(src.columns.size()));
+        src.names.push_back(
+            dstd::SharedString{dstd::fmt<"k{}">(src.columns.size())});
         src.columns.push_back(c->share());
     }
     for (const Series* c : values) {
-        src.names.push_back(dstd::fmt<"v{}">(src.columns.size()));
+        src.names.push_back(
+            dstd::SharedString{dstd::fmt<"v{}">(src.columns.size())});
         src.columns.push_back(c->share());
     }
     dstd::Vector<AggStatePtr> states(PARTITIONS);
@@ -908,9 +915,11 @@ dstd::Result<dstd::Optional<DataFrame>> group_agg_by_key_hash(
                          }
                          first[pi] = st.group_first_row;
                          parts[pi] = agg_finalize(st, key_names);
+                         failed.note(agg_check(st));
                          states[pi].reset();  // frees the settled moments
                      }
                  });
+    if (failed.error) return *failed.error;
     if (!ok.load()) return none();
     return Maybe(stitch_in_first_seen_order(parts, first, drop_keys));
 }
@@ -932,6 +941,8 @@ dstd::Result<DataFrame> group_agg_whole(
         group_agg_state(keys, values, std::move(specs));
     if (!state) return state.error();
     DataFrame whole = agg_finalize(**state, key_names);
+    if (dstd::Result<void> checked = agg_check(**state); !checked)
+        return checked.error();
     if (drop_keys != 0 && whole.columns.size() >= drop_keys) {
         whole.names.erase(
             whole.names.begin(),
@@ -1076,7 +1087,7 @@ dstd::Result<dstd::Optional<DataFrame>> group_agg_in_batches(
         return group_agg_whole(keys, vs, std::move(sub), key_names,
                                from == 0 ? 0 : keys.size());
     };
-    dstd::Vector<dstd::String> made_names;
+    dstd::Vector<dstd::SharedString> made_names;
     dstd::Vector<Series> made;
     dstd::Vector<Series> key_cols;
     auto keep = [&](DataFrame& df, bool first) {
@@ -1113,7 +1124,7 @@ dstd::Result<dstd::Optional<DataFrame>> group_agg_in_batches(
     // The columns back in the order the aggregates were asked for.
     DataFrame out;
     for (std::size_t k = 0; k < keys.size(); ++k) {
-        out.names.push_back(key_names[k]);
+        out.names.push_back(dstd::SharedString{key_names[k]});
         out.columns.push_back(std::move(key_cols[k]));
     }
     for (const AggSpec& sp : specs)

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/common/env.h>
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/common/logging.h>
@@ -11,18 +12,24 @@
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/hash/constants.h>
+#include <dftracer/utils/dstd/hash/fnv1a.h>
+#include <dftracer/utils/dstd/hash/hex64.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/fileio/file_helpers.h>
 #include <dftracer/utils/runtime/fs/fs.h>
 #include <dftracer/utils/runtime/io/io_backend.h>
 #include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/store/store.h>
 #include <dftracer/utils/trace/index/extensions/kinds/time_bounds.h>
 #include <dftracer/utils/trace/index/index.h>
 #include <dftracer/utils/trace/index/indexer.h>
@@ -37,10 +44,13 @@
 #include <dftracer/utils/trace/reader/trace_reader.h>
 
 #include <algorithm>
+#include <charconv>
+#include <chrono>
 #include <cinttypes>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <future>
 #include <limits>
 
 namespace dftracer::utils::domains::server {
@@ -98,16 +108,25 @@ dstd::Result<dftracer::utils::trace::index::gzip::TimeBounds> timeline_bounds(
     return bounds;
 }
 
-// True when the index at `root` no longer matches `paths`: a path is not
-// indexed, its stat changed, or the index holds a path that is not listed.
+// True when the index at `root` no longer matches `paths` in `directory`: a
+// path is not indexed, its stat changed, or the index holds another path from
+// the same directory that is not listed. `unlisted` reports those entries, the
+// ones a stale rebuild drops from the root: no other directory names them, so
+// keeping them makes this directory stale on every start. A path from another
+// directory that shares the root makes neither stale. A file belongs to the
+// directory only when its parent directory is the directory, because the scan
+// is not recursive and a subfolder is a trace folder of its own.
 dstd::Result<bool> index_is_stale(dstd::StringView root,
-                                  const dstd::Vector<dstd::String>& paths) {
+                                  const dstd::Vector<dstd::String>& paths,
+                                  dstd::StringView directory,
+                                  dstd::Vector<dstd::String>& unlisted) {
     auto opened = trace::index::plan::open_snapshot(root);
     if (!opened) return opened.error();
     const auto& snapshot = *opened;
     dstd::HashSet<dstd::StringView> listed;
     dstd::Vector<dstd::String> logical_paths;
     logical_paths.reserve(paths.size());
+    bool changed = false;
     for (const auto& path : paths) {
         logical_paths.push_back(fileio::get_logical_path(path));
         listed.insert(logical_paths.back());
@@ -119,13 +138,21 @@ dstd::Result<bool> index_is_stale(dstd::StringView root,
         }
         if (snapshot.freshness(logical_paths.back(), now) !=
             trace::index::Freshness::Current)
-            return true;
+            changed = true;
     }
     const auto files = snapshot.files();
     if (!files) return files.error();
-    for (const auto& file : *files)
-        if (listed.find(file.path()) == listed.end()) return true;
-    return false;
+    // The index names a file by its logical path, which is absolute and
+    // normalized, so the folder is built the same way; dstd::normalize alone
+    // keeps a relative folder relative and matches nothing.
+    const dstd::String folder = fileio::get_logical_path(directory);
+    const dstd::StringView folder_view(folder);
+    for (const auto& file : *files) {
+        if (listed.find(file.path()) != listed.end()) continue;
+        if (dstd::PathView(file.path()).parent().str() != folder_view) continue;
+        unlisted.emplace_back(file.path());
+    }
+    return changed || !unlisted.empty();
 }
 
 dstd::Result<dstd::SharedPtr<const TraceIndex::FileChunkMeta>> read_chunk_meta(
@@ -182,9 +209,9 @@ using namespace dftracer::utils::trace;
 
 namespace {
 
-// Bump VERSION when the on-disk layout below changes; the loader then ignores
-// the stale cache.
-constexpr std::uint32_t VIZ_SUMMARY_MAGIC = 0x315A5644;  // "DVZ1"
+// Bump VERSION when the summary value layout below changes; the store namespace
+// version then keeps older copies from loading. It also starts the folder
+// fingerprint, so a bump recomputes the stored viz results as well.
 constexpr std::uint32_t VIZ_SUMMARY_FORMAT_VERSION = 0;
 
 struct BufWriter {
@@ -568,6 +595,86 @@ bool deserialize_summary(BufReader& r, VizSummary& s) {
     return r.ok;
 }
 
+constexpr dstd::StringView VIZ_SUMMARY_NAMESPACE = "server.viz_summary";
+constexpr dstd::StringView VIZ_SUMMARY_KEY = "summary";
+// Bump VERSION when the stored result layout below changes; the store namespace
+// version then keeps older copies from loading.
+constexpr dstd::StringView VIZ_RESULT_NAMESPACE = "server.viz_result";
+constexpr std::uint32_t VIZ_RESULT_FORMAT_VERSION = 0;
+
+dftracer::utils::store::NamespaceSpec viz_summary_namespace() {
+    dftracer::utils::store::NamespaceSpec spec;
+    spec.name.assign(VIZ_SUMMARY_NAMESPACE.data(),
+                     VIZ_SUMMARY_NAMESPACE.size());
+    spec.format_version = VIZ_SUMMARY_FORMAT_VERSION;
+    return spec;
+}
+
+// Shared so a result written by an earlier run is still there: a scope holds
+// every writer's keys, and the fingerprint in a key keeps an old copy from
+// being served.
+dftracer::utils::store::NamespaceSpec viz_result_namespace() {
+    dftracer::utils::store::NamespaceSpec spec;
+    spec.name.assign(VIZ_RESULT_NAMESPACE.data(), VIZ_RESULT_NAMESPACE.size());
+    spec.format_version = VIZ_RESULT_FORMAT_VERSION;
+    spec.shared = true;
+    return spec;
+}
+
+dstd::String viz_store_path(const TraceIndex& index) {
+    return dftracer::utils::trace::index::store_of(
+        dftracer::utils::trace::internal::determine_index_path(
+            index.directory(), index.index_dir()));
+}
+
+// One scope per folder, in both namespaces, so a file added to or removed from
+// the folder keeps the folder's scope: the fingerprint in a result key and in
+// the stored summary is what tells a changed file set from an unchanged one.
+// The folder is named the way the index names a file, absolute and normalized,
+// so a relative folder name and an absolute one land on the same scope.
+dftracer::utils::store::ScopeKey viz_folder_scope(const TraceIndex& index) {
+    const dstd::String folder = fileio::get_logical_path(index.directory());
+    return dftracer::utils::store::ScopeKey::file(dstd::StringView(folder));
+}
+
+// The stored bytes of the folder's responses, under its own key so the store
+// keeps the count across a restart. A result key starts with the fingerprint,
+// never with a NUL.
+constexpr dstd::StringView VIZ_RESULT_BYTES_KEY("\0bytes", 6);
+
+dstd::ByteView viz_result_bytes_key() {
+    return dstd::ByteView(VIZ_RESULT_BYTES_KEY.data(),
+                          VIZ_RESULT_BYTES_KEY.size());
+}
+
+// The most bytes of stored responses one folder keeps.
+std::uint64_t viz_result_store_limit() {
+    const auto parsed = common::Env::get<std::uint64_t>(
+        common::constants::server::VIZ_RESULT_STORE_BYTES_ENV);
+    return parsed.has_value()
+               ? *parsed
+               : common::constants::server::VIZ_RESULT_DEFAULT_STORE_BYTES;
+}
+
+// A stored result key carries the folder's fingerprint, so a re-indexed folder
+// or a changed file misses even before the stale scope is dropped.
+dstd::String viz_result_key(const TraceIndex& index,
+                            const dstd::String& request_key) {
+    return dstd::fmt<"{}|{}">(index.folder_fingerprint(), request_key);
+}
+
+coro::CoroTask<void> flush_viz_store(dftracer::utils::store::Store store,
+                                     dstd::String directory) {
+    const auto flushed = co_await store.flush();
+    if (!flushed) {
+        DFTRACER_UTILS_LOG_WARN(
+            "TraceIndex: failed to flush the viz store of "
+            "{}: {}",
+            directory, flushed.error().message());
+    }
+    co_return;
+}
+
 }  // namespace
 
 TraceIndex::TraceIndex(const dstd::String& directory,
@@ -579,6 +686,8 @@ TraceIndex::TraceIndex(const dstd::String& directory,
       checkpoint_size_(checkpoint_size == 0
                            ? common::constants::indexer::DEFAULT_CHECKPOINT_SIZE
                            : checkpoint_size) {}
+
+TraceIndex::~TraceIndex() { drain_viz_writes(); }
 
 coro::CoroTask<dstd::Result<void>> TraceIndex::initialize() {
     runtime::fs::FindOptions find_options;
@@ -602,6 +711,7 @@ coro::CoroTask<dstd::Result<void>> TraceIndex::initialize() {
 
     dstd::Vector<std::size_t> needs_build;
     dstd::Vector<std::size_t> large_files;
+    dstd::HashSet<dstd::String> dropped_paths;
     dstd::Vector<const dftracer::utils::trace::index::RecordSchema*>
         file_schemas(entries.size(), nullptr);
     auto default_schema = trace::index::get_schema("dftracer");
@@ -609,8 +719,9 @@ coro::CoroTask<dstd::Result<void>> TraceIndex::initialize() {
     record_schema_ = *default_schema;
 
     // The reuse decision below is existence-only, so a changed .pfw would be
-    // served from a stale index. Drop any (shared) index root whose sources
-    // changed since indexing; the loop then rebuilds it as if absent.
+    // served from a stale index. Drop this directory's entries from the shared
+    // index root and summary scope when its sources changed; the loop then
+    // rebuilds the dropped files as if absent.
     {
         dstd::Map<dstd::String, dstd::Vector<dstd::String>> by_root;
         for (const auto& entry : entries)
@@ -625,7 +736,9 @@ coro::CoroTask<dstd::Result<void>> TraceIndex::initialize() {
                 continue;
             }
             bool stale = false;
-            const auto checked = index_is_stale(root, paths);
+            dstd::Vector<dstd::String> unlisted;
+            const auto checked =
+                index_is_stale(root, paths, directory_, unlisted);
             if (checked.has_value()) {
                 stale = *checked;
             } else {
@@ -638,11 +751,65 @@ coro::CoroTask<dstd::Result<void>> TraceIndex::initialize() {
                 DFTRACER_UTILS_LOG_WARN(
                     "TraceIndex: source changed since indexing; rebuilding {}",
                     root);
-                // Drop the cached handle first, as the builder does: a live
-                // handle on a removed directory would serve the old data.
+                for (const auto& path : paths) dropped_paths.insert(path);
+                auto viz_store = dftracer::utils::store::Store::open(store);
+                if (viz_store) {
+                    const auto scope = viz_folder_scope(*this);
+                    const dftracer::utils::store::NamespaceSpec specs[] = {
+                        viz_summary_namespace(), viz_result_namespace()};
+                    for (const auto& spec : specs) {
+                        auto ns = viz_store->ns(spec);
+                        if (!ns) {
+                            DFTRACER_UTILS_LOG_WARN(
+                                "TraceIndex: failed to register {} for {}: "
+                                "{}",
+                                spec.name, root, ns.error().message());
+                            continue;
+                        }
+                        const auto dropped = viz_store->drop(*ns, scope);
+                        if (!dropped) {
+                            DFTRACER_UTILS_LOG_WARN(
+                                "TraceIndex: failed to drop {} of {}: {}",
+                                spec.name, root, dropped.error().message());
+                        }
+                    }
+                    const auto flushed = co_await viz_store->flush();
+                    if (!flushed) {
+                        DFTRACER_UTILS_LOG_WARN(
+                            "TraceIndex: failed to flush the viz cache drops "
+                            "for {}: {}",
+                            root, flushed.error().message());
+                    }
+                } else {
+                    DFTRACER_UTILS_LOG_WARN(
+                        "TraceIndex: failed to open store for {}: {}", root,
+                        viz_store.error().message());
+                }
+                auto index = trace::index::Index::open(root);
+                if (index) {
+                    // Every entry this directory owns: the listed paths, whose
+                    // source changed, and the entries the scan no longer
+                    // finds, whose source is gone.
+                    dstd::Vector<dstd::String> dropped;
+                    dropped.reserve(paths.size() + unlisted.size());
+                    for (const auto& path : paths)
+                        dropped.push_back(fileio::get_logical_path(path));
+                    for (const auto& logical : unlisted)
+                        dropped.push_back(logical);
+                    for (const auto& logical : dropped) {
+                        const auto removed = co_await index->remove(logical);
+                        if (!removed) {
+                            DFTRACER_UTILS_LOG_WARN(
+                                "TraceIndex: failed to drop {} from {}: {}",
+                                logical, root, removed.error().message());
+                        }
+                    }
+                } else {
+                    DFTRACER_UTILS_LOG_WARN(
+                        "TraceIndex: failed to open index for {}: {}", root,
+                        index.error().message());
+                }
                 trace::index::release_root(root);
-                dstd::fs::remove_all(dstd::PathView(store)).discard();
-                common::forget_input(store);
             }
         }
     }
@@ -661,7 +828,9 @@ coro::CoroTask<dstd::Result<void>> TraceIndex::initialize() {
         const auto has_store = dstd::fs::exists(
             dstd::PathView(trace::index::store_of(info.index_path)));
         if (!has_store.has_value()) co_return has_store.error();
-        info.has_bloom_data = *has_store;
+        const bool was_dropped =
+            dropped_paths.find(info.path) != dropped_paths.end();
+        info.has_bloom_data = *has_store && !was_dropped;
         info.has_checkpoint_index = info.has_bloom_data;
         if (!info.has_bloom_data) {
             needs_build.push_back(idx);
@@ -911,6 +1080,7 @@ coro::CoroTask<dstd::Result<void>> TraceIndex::initialize() {
     // Adopt a valid cached summary now rather than on the first request: the
     // viewer opens with several summary-backed requests at once, and all of
     // them would otherwise queue behind the load.
+    folder_fingerprint_ = compute_folder_fingerprint();
     load_persisted_viz_summary();
     co_return dstd::Result<void>{};
 }
@@ -942,84 +1112,281 @@ dstd::String TraceIndex::resolve(dstd::StringView rowset, dstd::StringView key,
     return hit == it->second.end() ? dstd::String() : hit->second;
 }
 
-dstd::Path TraceIndex::viz_summary_cache_path() const {
-    return dstd::PathView(index_dir_) / ".dftviz_summary";
+// A changed source is re-indexed in initialize(), and each file's current
+// mtime and size are folded in here, so a stored value invalidates itself on
+// mismatch. The hash is equality only; it is not used as a table key.
+dstd::String TraceIndex::compute_folder_fingerprint() const {
+    BufWriter w;
+    w.u32(VIZ_SUMMARY_FORMAT_VERSION);
+    w.u32(static_cast<std::uint32_t>(time_metric_));
+    w.u64(record_schema().params_hash());
+    w.u64(global_min_ts_);
+    w.u64(global_max_ts_);
+    for (const auto& f : files_) {
+        w.str(f.path);
+        common::InputFileStat st;
+        std::uint64_t size = f.uncompressed_size;
+        std::uint64_t mtime = 0;
+        if (common::stat_input(f.path, st)) {
+            size = st.size;
+            mtime = static_cast<std::uint64_t>(st.mtime_ns);
+        }
+        w.u64(size);
+        w.u64(mtime);
+        w.u64(f.checkpoint_count);
+        w.u64(f.min_timestamp_us);
+        w.u64(f.max_timestamp_us);
+    }
+    const std::uint64_t h =
+        dftracer::utils::dstd::hash::fnv1a_hash(w.b.data(), w.b.size());
+    return dftracer::utils::dstd::hash::format_hex64(h);
 }
 
-// A changed source is re-indexed in initialize(), shifting these per-file
-// values, so the cache invalidates itself on mismatch.
-dstd::String TraceIndex::viz_summary_fingerprint() const {
-    std::uint64_t h = dftracer::utils::dstd::hash::FNV1A_OFFSET_BASIS_LEGACY;
-    auto mix = [&](const void* data, std::size_t n) {
-        const auto* b = static_cast<const unsigned char*>(data);
-        for (std::size_t i = 0; i < n; ++i) {
-            h ^= b[i];
-            h *= dftracer::utils::dstd::hash::FNV1A_PRIME;
-        }
-    };
-    std::uint32_t ver = VIZ_SUMMARY_FORMAT_VERSION;
-    mix(&ver, sizeof ver);
-    int tm = static_cast<int>(time_metric_);
-    mix(&tm, sizeof tm);
-    const std::uint64_t schema = record_schema().params_hash();
-    mix(&schema, sizeof schema);
-    mix(&global_min_ts_, sizeof global_min_ts_);
-    mix(&global_max_ts_, sizeof global_max_ts_);
-    for (const auto& f : files_) {
-        mix(f.path.data(), f.path.size());
-        mix(&f.uncompressed_size, sizeof f.uncompressed_size);
-        mix(&f.checkpoint_count, sizeof f.checkpoint_count);
-        mix(&f.min_timestamp_us, sizeof f.min_timestamp_us);
-        mix(&f.max_timestamp_us, sizeof f.max_timestamp_us);
+// The folder's store handle, the writes no request waits for and the bytes the
+// folder keeps stored. The writes hold a reference, so it outlives a request
+// that started one; the index's destructor waits for them all.
+struct TraceIndex::VizStore {
+    VizStore(dftracer::utils::store::Store opened,
+             dftracer::utils::store::Namespace result_namespace,
+             dftracer::utils::store::ScopeKey result_scope,
+             dstd::SharedPtr<Runtime> write_runtime)
+        : store(std::move(opened)),
+          ns(std::move(result_namespace)),
+          scope(std::move(result_scope)),
+          runtime(std::move(write_runtime)) {}
+
+    dftracer::utils::store::Store store;
+    dftracer::utils::store::Namespace ns;
+    dftracer::utils::store::ScopeKey scope;
+    /// The runtime the writes run on, so waiting for one never blocks it.
+    dstd::SharedPtr<Runtime> runtime;
+    /// One commit at a time, so the count a write stores never goes back.
+    coro::AsyncMutex commit;
+    /// The bytes of the folder's stored responses, seeded from the store.
+    std::uint64_t bytes = 0;  ///< guarded by `commit`
+    bool seeded = false;      ///< guarded by `commit`
+
+    std::mutex pending_mutex;
+    dstd::Vector<dstd::SharedFuture<dstd::Result<void>>> writes;
+};
+
+dstd::SharedPtr<TraceIndex::VizStore> TraceIndex::viz_store() {
+    std::lock_guard<std::mutex> lock(viz_store_mutex_);
+    if (viz_store_) return viz_store_;
+    const dstd::String store_path = viz_store_path(*this);
+    auto opened = dftracer::utils::store::Store::open(store_path);
+    if (!opened) {
+        DFTRACER_UTILS_LOG_WARN(
+            "TraceIndex: failed to open the store for {}: {}", directory_,
+            opened.error().message());
+        return nullptr;
     }
-    return dstd::fmt<"{:016x}">(h);
+    auto ns = opened->ns(viz_result_namespace());
+    if (!ns) {
+        DFTRACER_UTILS_LOG_WARN("TraceIndex: failed to open {} for {}: {}",
+                                VIZ_RESULT_NAMESPACE, directory_,
+                                ns.error().message());
+        return nullptr;
+    }
+    auto viz = dstd::make_shared<VizStore>(std::move(*opened), std::move(*ns),
+                                           viz_folder_scope(*this),
+                                           default_runtime_shared());
+    viz_store_ = std::move(viz);
+    return viz_store_;
+}
+
+coro::CoroTask<void> TraceIndex::write_viz_result(dstd::SharedPtr<VizStore> viz,
+                                                  dstd::String stored_key,
+                                                  dstd::String body,
+                                                  dstd::String directory) {
+    co_await viz->commit.lock();
+    coro::AsyncMutexGuard guard(viz->commit);
+
+    if (!viz->seeded) {
+        viz->seeded = true;
+        auto snap = viz->store.snapshot();
+        if (snap) {
+            auto found = snap->get(viz->ns, viz->scope, viz_result_bytes_key());
+            if (found && *found) {
+                const dstd::ByteView bytes = (**found).bytes();
+                std::uint64_t stored = 0;
+                dstd::from_chars(
+                    reinterpret_cast<const char*>(bytes.data()),
+                    reinterpret_cast<const char*>(bytes.data()) + bytes.size(),
+                    stored);
+                viz->bytes = stored;
+            }
+        } else {
+            DFTRACER_UTILS_LOG_WARN(
+                "TraceIndex: failed to read the stored bytes of {}: {}",
+                directory, snap.error().message());
+        }
+    }
+
+    // A folder past its bound starts again: the drop clears every stored
+    // response of the folder, and this one is the first of the new set.
+    std::uint64_t total = viz->bytes + body.size();
+    if (total > viz_result_store_limit()) {
+        const auto dropped = viz->store.drop(viz->ns, viz->scope);
+        if (!dropped) {
+            DFTRACER_UTILS_LOG_WARN(
+                "TraceIndex: failed to drop the stored viz results of {}: {}",
+                directory, dropped.error().message());
+        }
+        total = body.size();
+    }
+    viz->bytes = total;
+
+    const dstd::String count = dstd::to_string(total);
+    auto batch = viz->store.batch(viz->ns, viz->scope);
+    batch.put(dstd::ByteView(stored_key),
+              dstd::ByteView(body.data(), body.size()));
+    batch.put(viz_result_bytes_key(),
+              dstd::ByteView(count.data(), count.size()));
+    const auto committed = co_await viz->store.commit(std::move(batch));
+    if (!committed) {
+        DFTRACER_UTILS_LOG_WARN(
+            "TraceIndex: failed to store a viz result of {}: {}", directory,
+            committed.error().message());
+    }
+    co_return;
+}
+
+void TraceIndex::store_viz_result(dstd::String request_key, dstd::String body) {
+    dstd::SharedPtr<VizStore> viz = viz_store();
+    if (!viz || !viz->runtime) return;
+    const dstd::String stored_key = viz_result_key(*this, request_key);
+    auto handle = viz->runtime->submit(
+        write_viz_result(viz, stored_key, std::move(body), directory_),
+        "TraceIndexVizResult");
+
+    // Keep every write that has not finished: the destructor waits for them.
+    std::lock_guard<std::mutex> lock(viz->pending_mutex);
+    dstd::Vector<dstd::SharedFuture<dstd::Result<void>>> running;
+    running.reserve(viz->writes.size() + 1);
+    for (auto& write : viz->writes) {
+        if (write.wait_for(std::chrono::seconds(0)) !=
+            std::future_status::ready)
+            running.push_back(std::move(write));
+    }
+    running.push_back(std::move(handle.future));
+    viz->writes = std::move(running);
+}
+
+dstd::Vector<dstd::Optional<dstd::String>> TraceIndex::load_viz_results(
+    const dstd::Vector<dstd::String>& request_keys) {
+    dstd::Vector<dstd::Optional<dstd::String>> out(request_keys.size());
+    if (request_keys.empty()) return out;
+    viz_result_store_read_count_.fetch_add(1, std::memory_order_relaxed);
+    const dstd::String store_path = viz_store_path(*this);
+    const auto exists = dstd::fs::exists(dstd::PathView(store_path));
+    if (!exists.has_value() || !*exists) return out;
+    dstd::SharedPtr<VizStore> viz = viz_store();
+    if (!viz) return out;
+    auto snap = viz->store.snapshot();
+    if (!snap) return out;
+
+    dstd::Vector<dstd::String> stored_keys;
+    stored_keys.reserve(request_keys.size());
+    for (const auto& key : request_keys)
+        stored_keys.push_back(viz_result_key(*this, key));
+    dstd::Vector<dstd::ByteView> views;
+    views.reserve(stored_keys.size());
+    for (const auto& key : stored_keys)
+        views.emplace_back(key.data(), key.size());
+    auto found = snap->multi_get(viz->ns, viz->scope,
+                                 dstd::Span<const dstd::ByteView>(views));
+    if (!found) return out;
+    for (std::size_t i = 0; i < found->size(); ++i) {
+        if (!(*found)[i]) continue;
+        const dstd::ByteView bytes = (*(*found)[i]).bytes();
+        out[i] = dstd::String(reinterpret_cast<const char*>(bytes.data()),
+                              bytes.size());
+    }
+    return out;
 }
 
 bool TraceIndex::load_persisted_viz_summary() {
-    const auto path = viz_summary_cache_path();
-    const auto loaded = dstd::fs::read_file(path.view());
-    if (!loaded || loaded->empty()) return false;
-    const dstd::String& buf = *loaded;
+    const dstd::String store_path = viz_store_path(*this);
+    const auto exists = dstd::fs::exists(dstd::PathView(store_path));
+    if (!exists.has_value() || !*exists) return false;
 
-    BufReader r{buf.data(), buf.data() + buf.size()};
-    if (r.u32() != VIZ_SUMMARY_MAGIC || r.u32() != VIZ_SUMMARY_FORMAT_VERSION)
-        return false;
+    auto opened = dftracer::utils::store::Store::open(store_path);
+    if (!opened) return false;
+    auto ns = opened->ns(viz_summary_namespace());
+    if (!ns) return false;
+    const auto scope = viz_folder_scope(*this);
+    auto snap = opened->snapshot();
+    if (!snap) return false;
+    const auto found = snap->get(*ns, scope, dstd::ByteView(VIZ_SUMMARY_KEY));
+    if (!found) return false;
+    if (!*found) return false;
+    const dstd::ByteView bytes = (**found).bytes();
+    const char* data = reinterpret_cast<const char*>(bytes.data());
+    BufReader r{data, data + bytes.size()};
     dstd::String fp = r.str();
-    if (!r.ok || fp != viz_summary_fingerprint()) return false;
+    if (!r.ok || fp != folder_fingerprint()) return false;
 
     auto summary = dstd::make_unique<VizSummary>();
     if (!deserialize_summary(r, *summary)) return false;
 
     set_viz_summary(std::move(summary));
     DFTRACER_UTILS_LOG_INFO("TraceIndex: loaded cached viz summary from {}",
-                            path);
+                            store_path);
     return true;
 }
 
-void TraceIndex::persist_viz_summary() const {
+coro::CoroTask<dstd::Result<void>> TraceIndex::persist_viz_summary() {
     if (viz_summary_state_.load(std::memory_order_acquire) != 2 ||
         !viz_summary_)
-        return;
+        co_return dstd::Result<void>{};
     BufWriter w;
-    w.u32(VIZ_SUMMARY_MAGIC);
-    w.u32(VIZ_SUMMARY_FORMAT_VERSION);
-    w.str(viz_summary_fingerprint());
+    w.str(folder_fingerprint());
     serialize_summary(w, *viz_summary_);
 
-    const auto path = viz_summary_cache_path();
-    dstd::String tmp_text(path.str());
-    tmp_text.append(".tmp");
-    const dstd::Path tmp{dstd::StringView(tmp_text)};
-    if (!dstd::fs::write_file(tmp.view(),
-                              dstd::StringView(w.b.data(), w.b.size()))) {
-        dstd::fs::remove(tmp.view()).discard();
+    const dstd::String store_path = viz_store_path(*this);
+    auto opened = dftracer::utils::store::Store::open(store_path);
+    if (!opened) co_return opened.error();
+    auto ns = opened->ns(viz_summary_namespace());
+    if (!ns) co_return ns.error();
+    const auto scope = viz_folder_scope(*this);
+    auto batch = opened->batch(*ns, scope);
+    batch.put(dstd::ByteView(VIZ_SUMMARY_KEY),
+              dstd::ByteView(w.b.data(), w.b.size()));
+    const auto committed = co_await opened->commit(std::move(batch));
+    if (!committed) co_return committed.error();
+    co_return dstd::Result<void>{};
+}
+
+void TraceIndex::drain_viz_writes() {
+    dstd::SharedPtr<VizStore> viz;
+    {
+        std::lock_guard<std::mutex> lock(viz_store_mutex_);
+        viz = viz_store_;
+    }
+    if (!viz) return;
+    dstd::Vector<dstd::SharedFuture<dstd::Result<void>>> writes;
+    {
+        std::lock_guard<std::mutex> lock(viz->pending_mutex);
+        writes.swap(viz->writes);
+    }
+    auto rt = viz->runtime;
+    if (!rt) return;
+    // A worker of this runtime hands its run slot over for the wait, so a
+    // write it waits for is not the one its own thread would run.
+    const bool reentrant = coro::Executor::current() == rt->executor();
+    coro::BlockingRegion block(reentrant ? rt->executor() : nullptr);
+    for (auto& write : writes) write.get().discard();
+    auto flushed =
+        rt->submit(flush_viz_store(viz->store, directory_), "TraceIndexFlush")
+            .get();
+    if (!flushed) {
+        DFTRACER_UTILS_LOG_WARN(
+            "TraceIndex: failed to flush the viz store of {}: {}", directory_,
+            flushed.error().message());
         return;
     }
-    // A cache that cannot be published is dropped, and the next run
-    // builds it again.
-    if (!dstd::fs::rename(tmp.view(), path.view())) {
-        dstd::fs::remove(tmp.view()).discard();
-    }
+    viz_store_flush_count_.fetch_add(1, std::memory_order_relaxed);
 }
 
 const TraceIndex::FileInfo* TraceIndex::find_file(

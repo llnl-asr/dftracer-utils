@@ -110,6 +110,31 @@ Async Task Submission
        # Or get individual results
        result = h1.get()  # blocks until h1 completes
 
+Native work has its own async calls.
+``Indexer.build_async()`` and ``LazyFrame.collect_async()`` start on the native
+pool and return a ``TaskHandle`` at once.
+``get()`` blocks with the GIL released and gives the result ``build()`` or
+``collect()`` would, or raises the same error:
+
+.. code-block:: python
+
+   building = indexer.build_async()
+   frame = lazy_frame.collect_async()
+   building.get()
+   df = frame.get()
+
+A ``TaskHandle`` can be awaited, so native work runs beside other coroutines in
+``asyncio`` or ``uvloop``:
+
+.. code-block:: python
+
+   import asyncio
+
+   async def main():
+       a, b = await asyncio.gather(lf_a.collect_async(), lf_b.collect_async())
+
+   asyncio.run(main())
+
 Task names are auto-derived from the callable (there is no ``name`` argument):
 
 .. code-block:: python
@@ -381,16 +406,16 @@ C Quick Start
 -------------
 
 C programs build the index with the indexer C ABI
-(``dftracer/utils/trace/index/abi.h``) and read events through the View C ABI
-(``dftracer/utils/trace/views/abi.h``). Every returned handle is owned by the
+(``dftracer/utils/trace/index/c_api.h``) and read events through the View C ABI
+(``dftracer/utils/trace/views/c_api.h``). Every returned handle is owned by the
 caller and freed with its ``_free`` call.
 
 .. code-block:: c
 
-   #include <dftracer/utils/dataframe/abi.h>
-   #include <dftracer/utils/trace/index/abi.h>
-   #include <dftracer/utils/duql/abi.h>
-   #include <dftracer/utils/trace/views/abi.h>
+   #include <dftracer/utils/dataframe/c_api.h>
+   #include <dftracer/utils/trace/index/c_api.h>
+   #include <dftracer/utils/duql/c_api.h>
+   #include <dftracer/utils/trace/views/c_api.h>
    #include <inttypes.h>
    #include <stdio.h>
 
@@ -398,15 +423,17 @@ caller and freed with its ``_free`` call.
        const char* paths[] = {"trace.pfw.gz"};
 
        /* Build the checkpoint and bloom tiers; fresh files are skipped. */
-       dftu_indexer_open_result opened = dftu_indexer_open(paths, 1, NULL);
-       if (!DFTU_RESULT_OK(opened)) {
-           fprintf(stderr, "%s\n", DFTU_RESULT_ERROR(opened).message);
+       dftu_indexer* indexer = NULL;
+       dftu_error err = DFTU_ERROR_INIT;
+       if (dftu_indexer_open(paths, 1, NULL, &indexer, &err) != DFTU_OK) {
+           fprintf(stderr, "%s\n", err.message);
+           dftu_error_release(&err);
            return 1;
        }
-       dftu_indexer* indexer = DFTU_RESULT_VALUE(opened);
-       dftu_indexer_status_result built = dftu_indexer_build(indexer);
-       if (!DFTU_RESULT_OK(built)) {
-           fprintf(stderr, "%s\n", DFTU_RESULT_ERROR(built).message);
+       dftu_indexer_report report;
+       if (dftu_indexer_build(indexer, &report, &err) != DFTU_OK) {
+           fprintf(stderr, "%s\n", err.message);
+           dftu_error_release(&err);
            dftu_indexer_free(indexer);
            return 1;
        }

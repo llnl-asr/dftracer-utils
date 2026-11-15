@@ -11,8 +11,6 @@
 #include <doctest/doctest.h>
 #include <task_result.h>
 
-#include <stdexcept>
-
 using namespace dftracer::utils;
 
 using namespace dftracer::utils::coro;
@@ -137,32 +135,6 @@ TEST_CASE("Generator - Move semantics") {
     CHECK(result[2] == 2);
 }
 
-// Generator that throws an exception
-static Generator<int> throwing_generator() {
-    co_yield 1;
-    co_yield 2;
-    throw std::runtime_error("Test exception");
-    co_yield 3;  // Never reached
-}
-
-TEST_CASE("Generator - Exception propagation") {
-    auto gen = throwing_generator();
-
-    dstd::Vector<int> result;
-    CHECK_THROWS_AS(
-        {
-            for (int value : gen) {
-                result.push_back(value);
-            }
-        },
-        std::runtime_error);
-
-    // Should have gotten first two values before exception
-    CHECK(result.size() == 2);
-    CHECK(result[0] == 1);
-    CHECK(result[1] == 2);
-}
-
 // Test with larger data
 TEST_CASE("Generator - Large sequence") {
     constexpr int N = 10000;
@@ -210,11 +182,6 @@ namespace {
 
 Generator<int> sync_numbers(int first, int count) {
     for (int i = 0; i < count; ++i) co_yield first + i;
-}
-
-Generator<int> sync_fails_after(int count) {
-    for (int i = 0; i < count; ++i) co_yield i;
-    throw std::runtime_error("planned failure");
 }
 
 Generator<dstd::UniquePtr<int>> owned_numbers(int count) {
@@ -299,12 +266,6 @@ TEST_CASE("Generator - next moves a move-only item out") {
     CHECK(*out[2] == 3);
 }
 
-TEST_CASE("Generator - an error reaches the reader through an operation") {
-    auto stream = map(sync_fails_after(1), [](int v) { return v; });
-    CHECK(stream.next().has_value());
-    CHECK_THROWS_AS(stream.next(), std::runtime_error);
-}
-
 TEST_CASE("Generator - to_async gives the operations that need an executor") {
     Runtime runtime(4);
     auto collect =
@@ -326,7 +287,4 @@ TEST_CASE("Generator - to_async gives the operations that need an executor") {
         runtime.block_on(collect(to_async(sync_numbers(0, 50)) |
                                  map_unordered([](int v) { return v; }, 4))));
     CHECK(loose.size() == 50);
-    CHECK_THROWS_AS(dftu_utils_test::ok(runtime.block_on(
-                        collect(to_async(sync_fails_after(1))))),
-                    std::runtime_error);
 }

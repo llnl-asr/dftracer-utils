@@ -261,7 +261,7 @@ TEST_SUITE("eval inputs in place") {
     TEST_CASE("lazy filter and with_column over a collected chunked frame") {
         constexpr std::int64_t M = 200;
         DataFrame df;
-        df.names = {"a", "b", "s"};
+        df.names = dstd::make_shared_strings({"a", "b", "s"});
         df.columns.push_back(ints(M, true));
         df.columns.push_back(floats(M, true));
         df.columns.push_back(strings(M, true));

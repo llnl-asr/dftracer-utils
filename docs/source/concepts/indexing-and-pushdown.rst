@@ -104,12 +104,14 @@ internal column, which every step that keeps rows (filter, sort, take,
 derive, distinct, window, fill_null, the left side of a join) moves with the
 rest of the row; a collect turns them back into named columns after the
 declared ones, null where a batch lacked one. Steps that build new columns
-(select, group-by, aggregation, pivot) keep only what they name. A field the
+(select, group-by, aggregation, pivot, a plugin node) keep only what they
+name. A field the
 query names becomes a declared column, and its type is read from each batch,
 so an expression on it gives the same result as with a catalog. In a join,
 the right side's undeclared columns take the join suffix when the left side
 has undeclared columns too, so one output column never mixes the two sides.
-A plugin step refuses a plan that carries undeclared columns.
+A plugin node sees only the declared columns: the undeclared ones are dropped
+before it runs, so a query that needs one names it in a ``select`` first.
 
 The catalog also bounds automatic evidence. Besides the fixed fields and the
 fields you name, each file's most frequent args paths get a zone map and a

@@ -33,7 +33,7 @@ namespace {
 dstd::SharedPtr<const dataframe::DataFrame> runs() {
     auto f = dstd::make_shared<dataframe::DataFrame>();
     const std::int64_t ids[] = {1, 2, 2};
-    f->names = {"run", "app"};
+    f->names = dstd::make_shared_strings({"run", "app"});
     f->columns.push_back(dataframe::Series::flat_i64(ids, 3));
     f->columns.push_back(dataframe::Series::strings(
         dstd::Vector<dstd::String>{"laghos", "amg", "amg"}));
@@ -97,7 +97,7 @@ TEST_CASE("lookups evaluate on JSON and flattened records") {
 TEST_CASE("an arrow's conflicting values fail in a value position") {
     auto f = dstd::make_shared<dataframe::DataFrame>();
     const std::int64_t ids[] = {1, 1};
-    f->names = {"run", "app"};
+    f->names = dstd::make_shared_strings({"run", "app"});
     f->columns.push_back(dataframe::Series::flat_i64(ids, 2));
     f->columns.push_back(dataframe::Series::strings(
         dstd::Vector<dstd::String>{"laghos", "amg"}));
@@ -196,7 +196,8 @@ TEST_CASE("a range sub-query reads the rows between the enclosing bounds") {
     const std::int64_t ts[] = {10, 20, 20, 30, 0, 15};
     const std::uint8_t dur_valid[] = {0b110111};
     const std::uint8_t ts_valid[] = {0b101111};
-    side->names = {"__correlated_value", "__ck0", "__correlated_range"};
+    side->names = dstd::make_shared_strings(
+        {"__correlated_value", "__ck0", "__correlated_range"});
     side->columns.push_back(dataframe::Series::flat_i64(dur, 6, dur_valid));
     side->columns.push_back(dataframe::Series::flat_i64(pid, 6));
     side->columns.push_back(dataframe::Series::flat_i64(ts, 6, ts_valid));

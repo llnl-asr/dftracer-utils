@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/env.h>
 #include <dftracer/utils/common/error.h>
-#include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/expr.h>
+#include <dftracer/utils/dataframe/internal/node_registry.h>
 #include <dftracer/utils/dataframe/query/vectorize.h>
+#include <dftracer/utils/dataframe/udaf_registry.h>
+#include <dftracer/utils/dataframe/udf_registry.h>
 #include <dftracer/utils/dstd/ascii.h>
 #include <dftracer/utils/dstd/hash/splitmix64.h>
 #include <dftracer/utils/dstd/map.h>
@@ -28,7 +31,11 @@ duql::PluginCatalog registry_plugins() {
     duql::PluginCatalog out;
     out.kind = [](dstd::StringView name) {
         const dftu_op_desc* op = dftu_op_find(dstd::String(name).c_str());
-        if (!op) return duql::PluginKind::None;
+        // A plugin node is a table to table step like a frame op, but it has no
+        // signature of its own.
+        if (!op)
+            return dataframe::find_node(name) ? duql::PluginKind::Table
+                                              : duql::PluginKind::None;
         const dftu_op_kind k = dftu_op_kind_of(op->sig);
         if (k == DFTU_OP_KIND_SERIES &&
             DFTU_OP_SIG_ARG(op->sig, 0) == DFTU_TOK_SERIES)
@@ -40,6 +47,16 @@ duql::PluginCatalog registry_plugins() {
             DFTU_OP_SIG_ARG(op->sig, 0) == DFTU_TOK_SERIES)
             return duql::PluginKind::Aggregate;
         return duql::PluginKind::Other;
+    };
+    out.udf = [](dstd::StringView name) -> dstd::Optional<duql::UdfArity> {
+        const auto udf = dataframe::find_udf(name);
+        if (!udf) return dstd::nullopt;
+        return duql::UdfArity{udf->min_args(), udf->max_args()};
+    };
+    out.udaf = [](dstd::StringView name) -> dstd::Optional<duql::UdfArity> {
+        const auto udaf = dataframe::find_udaf(name);
+        if (!udaf) return dstd::nullopt;
+        return duql::UdfArity{udaf->desc().min_args, udaf->desc().max_args};
     };
     for (std::uint32_t k = 0; k < dftu_op_count(); ++k) {
         const dstd::StringView op = dftu_op_at(k)->name;
@@ -124,6 +141,8 @@ dstd::String agg_name(duql::AggFn fn) {
             return "merge";
         case duql::AggFn::Plugin:
             return "plugin function";
+        case duql::AggFn::Udaf:
+            return "user-defined aggregate";
     }
     return {};
 }
@@ -168,6 +187,7 @@ dstd::Optional<AggOp> trace_op(const duql::PipelineAgg& a) {
         case duql::AggFn::Sketch:
         case duql::AggFn::Merge:
         case duql::AggFn::Plugin:
+        case duql::AggFn::Udaf:
             return dstd::nullopt;
     }
     return dstd::nullopt;
@@ -285,6 +305,7 @@ Reads referenced_fields(const dstd::Vector<duql::PipelineStage>& stages,
                     for (const auto& a : s.aggs) {
                         add(a.arg);
                         add(a.by);
+                        for (const auto& r : a.rest) add(r);
                     }
                     define(s.keys);
                     for (const auto& a : s.aggs)
@@ -307,6 +328,7 @@ Reads referenced_fields(const dstd::Vector<duql::PipelineStage>& stages,
                     for (const auto& c : s.calls) {
                         add(c.arg);
                         add(c.by);
+                        for (const auto& r : c.rest) add(r);
                         defined.push_back(dstd::String(c.column));
                     }
                     items(s.items);

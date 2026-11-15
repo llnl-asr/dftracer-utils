@@ -131,7 +131,7 @@ DataFrame make_tvx(const dstd::Vector<std::int64_t>& t,
     for (std::size_t i = 0; i < t.size(); ++i)
         x.emplace_back(900 + static_cast<std::int64_t>(i));
     DataFrame df;
-    df.names = {"t", "v", "x"};
+    df.names = dstd::make_shared_strings({"t", "v", "x"});
     df.columns.push_back(i64s(tt));
     df.columns.push_back(i64s(v));
     df.columns.push_back(i64s(x));
@@ -142,7 +142,7 @@ DataFrame make_tvx(const dstd::Vector<std::int64_t>& t,
 DataFrame make_tvd(const dstd::Vector<std::int64_t>& t,
                    const dstd::Vector<double>& v) {
     DataFrame df;
-    df.names = {"t", "v"};
+    df.names = dstd::make_shared_strings({"t", "v"});
     df.columns.push_back(
         Series::flat_i64(t.data(), static_cast<std::int64_t>(t.size())));
     df.columns.push_back(
@@ -155,7 +155,7 @@ DataFrame make_ptv(const dstd::Vector<std::int64_t>& p,
                    const dstd::Vector<std::int64_t>& t,
                    const dstd::Vector<std::int64_t>& v) {
     DataFrame df;
-    df.names = {"p", "t", "v"};
+    df.names = dstd::make_shared_strings({"p", "t", "v"});
     df.columns.push_back(
         Series::flat_i64(p.data(), static_cast<std::int64_t>(p.size())));
     df.columns.push_back(
@@ -175,7 +175,8 @@ TEST_CASE("gap_fill - None leaves a missing bucket null, preserves real rows") {
     DataFrame out = dftu_utils_test::ok(
         gap_fill(make_tvx({0, 10, 30}, {100, 200, 400}), {}, "t", 10, {"v"},
                  GapFillMode::None, dstd::nullopt));
-    CHECK(out.names == dstd::Vector<dstd::String>{"t", "v", "x"});
+    CHECK(dstd::to_strings(out.names) ==
+          dstd::Vector<dstd::String>{"t", "v", "x"});
     CHECK(int_col(out, "t") == dstd::Vector<I>{0, 10, 20, 30});
     CHECK(int_col(out, "v") == dstd::Vector<I>{100, 200, NI, 400});
     CHECK(int_col(out, "x") == dstd::Vector<I>{900, 901, NI, 902});
@@ -302,7 +303,7 @@ TEST_CASE("gap_fill - rejects unknown columns and unsupported types") {
                  GapFillMode::None, dstd::nullopt),
         dftracer::utils::common::ErrorCode::InvalidArgument);
     DataFrame s = make_tvx({0, 10}, {1, 2});
-    s.names.push_back("s");
+    s.names.push_back(dstd::SharedString{"s"});
     s.columns.push_back(Series::strings(dstd::Vector<dstd::String>{"a", "b"}));
     dftu_utils_test::expect_error(
         gap_fill(s, {}, "t", 10, {"s"}, GapFillMode::Linear, dstd::nullopt),
@@ -466,7 +467,7 @@ TEST_CASE("gap_fill - randomized frames match a naive reference") {
             x.push_back(r.x);
         }
         DataFrame df;
-        df.names = {"p", "s", "t", "v", "w", "x"};
+        df.names = dstd::make_shared_strings({"p", "s", "t", "v", "w", "x"});
         df.columns.push_back(i64s(p));
         df.columns.push_back(Series::strings(s));
         df.columns.push_back(time_series(time_type, t));

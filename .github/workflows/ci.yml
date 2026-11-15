@@ -54,6 +54,21 @@ jobs:
               - 'web/**'
               - '.github/workflows/ci.yml'
 
+  # The plugin ABI must not lose a line that a released tag published unless
+  # the abi major in VERSION moved. fetch-depth 0 brings the tags it compares
+  # against; ctest `plugin_abi_manifest` guards the rest of the work.
+  abi-manifest:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Diff the plugin ABI manifest against the newest tag
+        run: python3 scripts/check_plugin_abi_manifest_diff.py
+
 
 
   # Tier 1, per platform: the dependency installs. Each platform's tests start

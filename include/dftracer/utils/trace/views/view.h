@@ -10,7 +10,6 @@
 #include <dftracer/utils/dataframe/lazy_ops.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/sketch.h>
-#include <dftracer/utils/dstd/any.h>
 #include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/function.h>
@@ -46,7 +45,7 @@ using dftracer::utils::dataframe::field::FieldExpr;
 using duql::Query;
 
 /// `ph="X"` events, `ph="C"` counters, `ph="A"` aggregated (folded events),
-/// `ph="M"` metadata, or all (@ref dftracer::utils::dstd::Any "Any").
+/// `ph="M"` metadata, or all (@ref Phase::Any "Any").
 enum class Phase { Events, Counters, Aggregated, Metadata, Any };
 
 /// One column of a (possibly composite) group-by key. `Arg` groups on an
@@ -965,7 +964,7 @@ class View : public dataframe::LazyOps<View> {
     /// as in for_each_batch.
     dataframe::LazyFrame branch(SessionBranch attach) const;
     /// branch() for a branch whose result is a Deferred<T>, such as
-    /// domains::plugins::Plugins::attach. The result is read from a slot the
+    /// plugins::host::Plugins::attach. The result is read from a slot the
     /// plan owns, so collect one such result at a time.
     template <class T>
     dataframe::LazyResult<T> branch(

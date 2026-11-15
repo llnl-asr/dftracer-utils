@@ -505,12 +505,12 @@ TEST_CASE("line index: records from a sequence and from documents") {
 
 TEST_CASE(
     "line index: a value on a later line, after blank and comment lines") {
-    struct Value {
+    struct Case {
         const char* what;
         dstd::Vector<dstd::String> lines;
         const char* dump;
     };
-    const Value VALUES[] = {
+    const Case VALUES[] = {
         {"plain", {"p"}, "'p'"},
         {"plain over lines", {"p", "q"}, "'p q'"},
         {"double quoted", {"\"q\""}, "'q'"},
@@ -542,7 +542,7 @@ TEST_CASE(
     };
     const char* const GAPS[] = {"\n", "# c\n", "\n# c\n\n", "  # c\n\n"};
     for (const Context& c : CONTEXTS) {
-        for (const Value& v : VALUES) {
+        for (const Case& v : VALUES) {
             for (const char* gap : GAPS) {
                 const dstd::String pad(c.indent, ' ');
                 dstd::String text = dstd::String(c.head) + "\n" + gap;

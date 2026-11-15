@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/task.h>
-#include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -120,7 +120,7 @@ std::int64_t cell(const dataframe::DataFrame& df, const dstd::String& name,
 
 TEST_CASE("drop removes static and dyn columns by name") {
     dataframe::DataFrame df = run(scan().drop({"b", "x"}));
-    CHECK(df.names == Names{"a", "y"});
+    CHECK(dstd::to_strings(df.names) == Names{"a", "y"});
     CHECK(df.num_rows() == MORSELS * ROWS);
     CHECK(cell(df, "y", 0) == 2000);
     CHECK(cell(df, "y", ROWS) == 2010);
@@ -128,7 +128,7 @@ TEST_CASE("drop removes static and dyn columns by name") {
 
 TEST_CASE("drop ignores a missing name") {
     dataframe::DataFrame df = run(scan().drop({"nope"}));
-    CHECK(df.names == Names{"a", "b", "x", "y"});
+    CHECK(dstd::to_strings(df.names) == Names{"a", "b", "x", "y"});
 }
 
 TEST_CASE("drop shrinks the static schema") {
@@ -138,20 +138,20 @@ TEST_CASE("drop shrinks the static schema") {
 TEST_CASE("rename_columns renames static and dyn columns by name") {
     dataframe::DataFrame df =
         run(scan().rename_columns({"b", "x"}, {"B", "X"}));
-    CHECK(df.names == Names{"a", "B", "X", "y"});
+    CHECK(dstd::to_strings(df.names) == Names{"a", "B", "X", "y"});
     CHECK(cell(df, "B", 0) == 100);
     CHECK(cell(df, "X", 0) == 1000);
 }
 
 TEST_CASE("rename_columns ignores a missing name") {
     dataframe::DataFrame df = run(scan().rename_columns({"nope"}, {"z"}));
-    CHECK(df.names == Names{"a", "b", "x", "y"});
+    CHECK(dstd::to_strings(df.names) == Names{"a", "b", "x", "y"});
 }
 
 TEST_CASE("rename_columns swaps two names at once") {
     dataframe::DataFrame df =
         run(scan().rename_columns({"a", "b"}, {"b", "a"}));
-    CHECK(df.names == Names{"b", "a", "x", "y"});
+    CHECK(dstd::to_strings(df.names) == Names{"b", "a", "x", "y"});
     CHECK(cell(df, "b", 0) == 0);
 }
 
@@ -181,7 +181,7 @@ TEST_CASE("rename_columns refuses lists of different lengths") {
 
 TEST_CASE("drop and rename_columns on an eager frame") {
     dataframe::DataFrame df;
-    df.names = {"a", "b", "c"};
+    df.names = dstd::make_shared_strings({"a", "b", "c"});
     df.columns.push_back(i64(0));
     df.columns.push_back(i64(10));
     df.columns.push_back(i64(20));
@@ -190,14 +190,14 @@ TEST_CASE("drop and rename_columns on an eager frame") {
             std::move(df)));
     dataframe::DataFrame out =
         run(lf.drop({"b", "zz"}).rename_columns({"c"}, {"C"}));
-    CHECK(out.names == Names{"a", "C"});
+    CHECK(dstd::to_strings(out.names) == Names{"a", "C"});
     CHECK(cell(out, "C", 1) == 21);
     CHECK_FALSE(collect_result(lf.rename_columns({"a"}, {"c"})).has_value());
 }
 
 TEST_CASE("C ABI drop and rename_columns") {
     dataframe::DataFrame df;
-    df.names = {"a", "b"};
+    df.names = dstd::make_shared_strings({"a", "b"});
     df.columns.push_back(i64(0));
     df.columns.push_back(i64(10));
     dftu_lazyframe* base = nullptr;

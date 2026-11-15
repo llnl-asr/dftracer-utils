@@ -7,12 +7,15 @@
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/scoped_fd.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/pipeline.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/memory/budget.h>  // NO_SPILL_BUDGET
+#include <dftracer/utils/plugins/host/plugins.h>
 #include <dftracer/utils/trace/index/build/resolve_and_build.h>
 #include <dftracer/utils/trace/index/gzip/checkpoint_indexer.h>
 #include <dftracer/utils/trace/index/record_schema.h>
@@ -99,6 +102,9 @@ class ViewArgParse : public cli::ArgParse {
     bool agg_numeric_args = false;
     bool collect_typed = false;
     bool materialize = false;
+    dstd::StringView sink_name;
+    dstd::Vector<dstd::StringView> sink_options;
+    dstd::Vector<dstd::StringView> plugins;
 
     explicit ViewArgParse(cli::ArgParser& p) : ArgParse(p) {
         indexing.with_force = false;
@@ -253,11 +259,55 @@ class ViewArgParse : public cli::ArgParse {
         parser().flag(materialize, {"--materialize"},
                       "Persist this aggregation as a rollup for instant reuse "
                       "(needs --group-by/--agg)");
+
+        parser().option(
+            sink_name, {"--sink"},
+            "Write the result to the plugin sink with this name instead of "
+            "printing it (needs --plugin)");
+
+        parser()
+            .option(sink_options, {"--sink-option"},
+                    "Option of the sink, KEY=VALUE (repeatable)")
+            .append();
+
+        parser()
+            .option(plugins, {"--plugin"},
+                    "Plugin shared library to load (repeatable): its sinks "
+                    "and formats register for this run")
+            .append();
     }
 
     dstd::Result<void> post_parse() override {
         time_bucket = static_cast<std::uint64_t>(std::llround(time_bucket_us));
         occ_cell = static_cast<std::uint64_t>(std::llround(occ_cell_us));
+        if (sink_name.empty() && !sink_options.empty())
+            return common::make_error<
+                "--sink-option needs --sink; name the sink with --sink">(
+                common::ErrorCode::InvalidArgument);
+        if (!sink_name.empty()) {
+            // --sink writes the query's rows; every other terminal writes a
+            // table, a trace or a rollup instead, so the two cannot both run.
+            const dstd::StringView other =
+                counters          ? dstd::StringView("--counters")
+                : collect_typed   ? dstd::StringView("--collect-typed")
+                : materialize     ? dstd::StringView("--materialize")
+                : merge           ? dstd::StringView("--merge")
+                : call_tree       ? dstd::StringView("--call-tree")
+                : flamegraph      ? dstd::StringView("--flamegraph")
+                : verify          ? dstd::StringView("--verify")
+                : !output.empty() ? dstd::StringView("--output")
+                                  : dstd::StringView();
+            if (!other.empty())
+                return common::make_error<
+                    "--sink writes the query's rows and cannot be combined "
+                    "with "
+                    "{}">(common::ErrorCode::InvalidArgument, other);
+        }
+        for (const dstd::StringView option : sink_options)
+            if (option.find('=') == dstd::StringView::npos)
+                return common::make_error<
+                    "--sink-option takes KEY=VALUE, got '{}'">(
+                    common::ErrorCode::InvalidArgument, option);
         return {};
     }
 };
@@ -766,6 +816,8 @@ struct ViewRun {
 
     View configure(View v) const;
     View windowed(View v) const;
+    // The --sink-option KEY=VALUE list, as the sink's option pairs.
+    dstd::Vector<dstd::Pair<dstd::String, dstd::String>> sink_options() const;
     coro::CoroTask<dstd::Result<dataframe::DataFrame>> windowed_table(
         dataframe::DataFrame table) const;
     // The exit code when the probe ends the run, else nothing.
@@ -831,6 +883,17 @@ View ViewRun::configure(View v) const {
     if (!agg_specs.empty()) v = v.agg(agg_specs);
     if (cli->agg_numeric_args) v = v.agg_numeric_args();
     return v;
+}
+
+dstd::Vector<dstd::Pair<dstd::String, dstd::String>> ViewRun::sink_options()
+    const {
+    dstd::Vector<dstd::Pair<dstd::String, dstd::String>> out;
+    for (const dstd::StringView option : cli->sink_options) {
+        const std::size_t at = option.find('=');
+        out.emplace_back(dstd::String(option.substr(0, at)),
+                         dstd::String(option.substr(at + 1)));
+    }
+    return out;
 }
 
 View ViewRun::windowed(View v) const {
@@ -1087,6 +1150,19 @@ coro::CoroTask<dstd::Result<void>> ViewRun::run_local() {
         if (!refreshed) co_return refreshed.error();
     }
 
+    if (!cli->sink_name.empty()) {
+        // The result goes to the plugin's sink instead of the terminal: the
+        // sink streams the plan, so no table is held here.
+        const dataframe::LazyFrame& rows = v.lazy();
+        auto sunk = co_await rows.sink(cli->sink_name, sink_options());
+        if (!sunk) co_return sunk.error();
+        const dstd::String sink_name(cli->sink_name);
+        std::fprintf(stderr, "sink %s: %lld rows in %lld batches\n",
+                     sink_name.c_str(), (long long)sunk->rows,
+                     (long long)sunk->batches);
+        stats.events_matched = static_cast<std::uint64_t>(sunk->rows);
+        co_return dstd::Result<void>{};
+    }
     if (ct_mode || fg_mode) {
         dataframe::LazyFrame tree =
             fg_mode ? v.flamegraph(ct_partition) : v.call_tree(ct_partition);
@@ -1158,6 +1234,17 @@ coro::CoroTask<dstd::Result<void>> ViewRun::run_local() {
 }
 
 coro::CoroTask<dstd::Result<void>> ViewRun::run() {
+    // Held for the whole run: loading a plugin registers its sinks and
+    // formats, and destroying the set unregisters them.
+    dstd::Optional<plugins::host::Plugins> loaded;
+    if (!cli->plugins.empty()) {
+        auto builder = plugins::host::Plugins::builder();
+        for (const dstd::StringView path : cli->plugins)
+            builder.add(dstd::String(path));
+        auto built = builder.build();
+        if (!built) co_return built.error();
+        loaded.emplace(std::move(*built));
+    }
 #ifdef DFTRACER_UTILS_ENABLE_MPI
     distributed::MpiTransport transport;
     // Only the reductions distribute; other modes fall through to rank 0
@@ -1260,6 +1347,14 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
             "{}",
             "A shard set supports only aggregate/counter queries "
             "(--group-by/--agg/--counters).");
+        co_return 1;
+    }
+
+    if (!run.shard_set_root.empty() && !cli->sink_name.empty()) {
+        DFTRACER_UTILS_LOG_ERROR(
+            "{}",
+            "--sink writes a query's rows, and a shard set runs aggregate and "
+            "counter queries only.");
         co_return 1;
     }
 

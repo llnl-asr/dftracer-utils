@@ -42,15 +42,16 @@ TEST_SUITE("testing utilities") {
         CHECK_FALSE(dstd::fs::exists(kept).value());
     }
 
-    TEST_CASE("ScopedTestDir removes its tree even when the scope throws") {
+    TEST_CASE("ScopedTestDir removes its tree when the scope ends early") {
         dstd::Path kept;
-        try {
-            ScopedTestDir dir("throwing_probe");
+        const auto leave_early = [&kept] {
+            ScopedTestDir dir("early_probe");
             kept = dir.path();
             REQUIRE(dstd::fs::exists(kept).value());
-            throw std::runtime_error("unwind");
-        } catch (const std::runtime_error&) {
-        }
+            if (!kept.empty()) return;
+            CHECK(false);
+        };
+        leave_early();
         CHECK_FALSE(dstd::fs::exists(kept).value());
     }
 

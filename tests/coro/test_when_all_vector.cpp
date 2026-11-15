@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <coro/failing.h>
 #include <coro/stopped.h>
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/task.h>
@@ -15,7 +16,6 @@
 #include <atomic>
 #include <coroutine>
 #include <cstddef>
-#include <stdexcept>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::coro;
@@ -30,8 +30,7 @@ CoroTask<int> yielded_value(int value) {
 }
 
 CoroTask<int> failing_value(int) {
-    throw std::runtime_error("child failed");
-    co_return 0;
+    co_return co_await coro_test::failing_task<int>("child failed");
 }
 
 CoroTask<bool> ready_flag(bool value) { co_return value; }
@@ -128,11 +127,9 @@ TEST_CASE("when_all vector - a failing child does not stop the others") {
         valued.push_back(failing_value(2));
         valued.push_back(yielded_value(3));
         valued.push_back(ready_value(4));
-        try {
-            co_await when_all(std::move(valued));
-        } catch (const std::runtime_error&) {
-            caught.fetch_add(1);
-        }
+        auto all = when_all(std::move(valued));
+        auto settled = co_await settle_in_place(all);
+        if (settled.error) caught.fetch_add(1);
         dstd::Vector<CoroTask<void>> children;
         children.push_back(count_ready(&ran));
         children.push_back(count_yielded(&ran));
@@ -206,24 +203,20 @@ TEST_CASE("when_any drops a loser that never started") {
     CHECK(ran.load() == 0);
 }
 
-TEST_CASE("when_any delivers the exception of a winner that threw") {
+TEST_CASE("when_any delivers the error of a winner that failed") {
     std::atomic<int> caught{0};
-    std::atomic<int> other{0};
-    auto body = [&caught, &other]() -> CoroTask<void> {
+    auto body = [&caught]() -> CoroTask<void> {
         dstd::Vector<CoroTask<int>> children;
         children.push_back(failing_value(1));
         children.push_back(ready_value(2));
-        try {
-            co_await when_any(std::move(children));
-        } catch (const std::runtime_error& e) {
-            if (dstd::String(e.what()) == "child failed") caught.fetch_add(1);
-        } catch (...) {
-            other.fetch_add(1);
-        }
+        auto any = when_any(std::move(children));
+        auto settled = co_await settle_in_place(any);
+        if (settled.error &&
+            dstd::String(settled.error->message()) == "child failed")
+            caught.fetch_add(1);
     };
     run_on_pool(body);
     CHECK(caught.load() == 1);
-    CHECK(other.load() == 0);
 }
 
 TEST_CASE("when_any stops its task when the winner stopped") {

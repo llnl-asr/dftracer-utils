@@ -457,18 +457,13 @@ test_environment_handle_t test_environment_create(void) {
 
 test_environment_handle_t test_environment_create_with_lines(
     std::size_t lines) {
-    try {
-        auto* env = new dftu_utils_test::TestEnvironment(
-            lines, dftu_utils_test::Format::Gzip);
-        if (env->is_valid()) {
-            return reinterpret_cast<test_environment_handle_t>(env);
-        } else {
-            delete env;
-            return nullptr;
-        }
-    } catch (...) {
-        return nullptr;
+    auto* env = new dftu_utils_test::TestEnvironment(
+        lines, dftu_utils_test::Format::Gzip);
+    if (env->is_valid()) {
+        return reinterpret_cast<test_environment_handle_t>(env);
     }
+    delete env;
+    return nullptr;
 }
 
 void test_environment_destroy(test_environment_handle_t env) {
@@ -546,35 +541,26 @@ char* test_environment_create_test_file_with_format(
 
     dftu_utils_test::Format cpp_format = dftu_utils_test::Format::Gzip;
 
-    try {
-        dftu_utils_test::TestEnvironment temp_env(100, cpp_format);
-        dstd::String file_path;
+    dftu_utils_test::TestEnvironment temp_env(100, cpp_format);
+    dstd::String file_path;
 
-        file_path = cpp_env->create_test_gzip_file();
+    file_path = cpp_env->create_test_gzip_file();
 
-        if (file_path.empty()) {
-            return nullptr;
-        }
-
-        char* result = static_cast<char*>(malloc(file_path.length() + 1));
-        if (result) {
-            strcpy(result, file_path.c_str());
-        }
-        return result;
-    } catch (...) {
+    if (file_path.empty()) {
         return nullptr;
     }
+
+    char* result = static_cast<char*>(malloc(file_path.length() + 1));
+    if (result) {
+        strcpy(result, file_path.c_str());
+    }
+    return result;
 }
 
 int compress_file_to_gzip_c(const char* input_file, const char* output_file) {
     if (!input_file || !output_file) return 0;
-    try {
-        return dftu_utils_test::compress_file_to_gzip(input_file, output_file)
-                   ? 1
-                   : 0;
-    } catch (...) {
-        return 0;
-    }
+    return dftu_utils_test::compress_file_to_gzip(input_file, output_file) ? 1
+                                                                           : 0;
 }
 }
 

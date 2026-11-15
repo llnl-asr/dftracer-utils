@@ -15,7 +15,6 @@
 
 #include <atomic>
 #include <chrono>
-#include <stdexcept>
 
 using namespace dftracer::utils;
 
@@ -26,10 +25,15 @@ coro::CoroTask<void> bump(std::atomic<int>& count) {
     co_return;
 }
 
+coro::CoroTask<void> fail_with_message(const char* message) {
+    dstd::Error error{dstd::Condition::Unknown, message};
+    auto failure = coro::fail_with(std::move(error));
+    co_await failure;
+}
+
 coro::CoroTask<void> fail_after(std::atomic<int>& count) {
     count.fetch_add(1, std::memory_order_relaxed);
-    throw std::runtime_error("child");
-    co_return;
+    co_await fail_with_message("child");
 }
 
 coro::CoroTask<int> value(int v) { co_return v; }
@@ -57,13 +61,19 @@ coro::CoroTask<bool> one_fails(std::atomic<int>& count) {
     scope.spawn(bump(count));
     scope.spawn(fail_after(count));
     scope.spawn(bump(count));
-    bool raised = false;
-    try {
-        co_await scope.join();
-    } catch (const std::runtime_error&) {
-        raised = true;
-    }
-    co_return raised&& scope.stop_requested();
+    co_await scope.join_quietly();
+    const dstd::Optional<dstd::Error> error = scope.take_error();
+    co_return error.has_value() && dstd::String(error->message()) == "child" &&
+        scope.stop_requested();
+}
+
+coro::CoroTask<void> one_fails_joined(std::atomic<int>& count) {
+    coro::Scope scope;
+    scope.spawn(bump(count));
+    scope.spawn(fail_after(count));
+    scope.spawn(bump(count));
+    co_await scope.join();
+    count.fetch_add(100, std::memory_order_relaxed);
 }
 
 coro::CoroTask<int> futures() {
@@ -74,12 +84,9 @@ coro::CoroTask<int> futures() {
     auto c = scope.spawn_future(fail_after(count));
     int sum = co_await a;
     sum += co_await b;
-    bool raised = false;
-    try {
-        co_await c;
-    } catch (const std::runtime_error&) {
-        raised = true;
-    }
+    auto settled = co_await coro::settle_in_place(c);
+    const bool raised = settled.error.has_value() &&
+                        dstd::String(settled.error->message()) == "child";
     co_await scope.join();
     co_return raised ? sum : -1;
 }
@@ -100,11 +107,66 @@ TEST_CASE("Scope keeps a spawned lambda's captures alive") {
     CHECK(count.load() == 64);
 }
 
-TEST_CASE("Scope join raises the first child error after all children end") {
+TEST_CASE("Scope join_quietly gives the first child error after all end") {
     Runtime rt(4);
     std::atomic<int> count{0};
     CHECK(dftu_utils_test::ok(rt.submit(one_fails(count)).get()));
     CHECK(count.load() == 3);
+}
+
+TEST_CASE("Scope join ends the awaiting task with the first child error") {
+    Runtime rt(4);
+    std::atomic<int> count{0};
+    const auto result = rt.submit(one_fails_joined(count)).get();
+    REQUIRE_FALSE(result.has_value());
+    CHECK(result.error().condition() == dstd::Condition::Unknown);
+    CHECK(dstd::String(result.error().message()) == "child");
+    CHECK(count.load() == 3);
+}
+
+namespace {
+
+struct FrameProbe {
+    std::atomic<int>* destroyed;
+    ~FrameProbe() { destroyed->fetch_add(1); }
+};
+
+}  // namespace
+
+TEST_CASE("an awaited failed child ends the parent and its frame dies once") {
+    Runtime rt(2);
+    std::atomic<int> destroyed{0};
+    std::atomic<int> resumed{0};
+    auto parent = [&]() -> coro::CoroTask<int> {
+        FrameProbe probe{&destroyed};
+        co_await fail_with_message("child failed");
+        resumed.fetch_add(1);
+        co_return 1;
+    };
+    {
+        const auto result = rt.block_on(parent());
+        REQUIRE_FALSE(result.has_value());
+        CHECK(result.error().condition() == dstd::Condition::Unknown);
+        CHECK(dstd::String(result.error().message()) == "child failed");
+    }
+    rt.shutdown();
+    CHECK(resumed.load() == 0);
+    CHECK(destroyed.load() == 1);
+}
+
+TEST_CASE("Scope keeps the first child error when later children fail too") {
+    Runtime rt(4);
+    auto run = []() -> coro::CoroTask<bool> {
+        coro::Scope scope;
+        scope.spawn(fail_with_message("first"));
+        co_await coro::sleep(std::chrono::milliseconds(50));
+        scope.spawn(fail_with_message("second"));
+        co_await scope.join_quietly();
+        const dstd::Optional<dstd::Error> error = scope.take_error();
+        co_return error.has_value() &&
+            dstd::String(error->message()) == "first";
+    };
+    CHECK(dftu_utils_test::ok(rt.block_on(run())));
 }
 
 TEST_CASE("spawn_future returns values and keeps errors off the join") {
@@ -112,16 +174,16 @@ TEST_CASE("spawn_future returns values and keeps errors off the join") {
     CHECK(dftu_utils_test::ok(rt.submit(futures()).get()) == 42);
 }
 
-TEST_CASE("with_scope joins children when the body raises") {
+TEST_CASE("with_scope joins children when the body fails") {
     Runtime rt(4);
     std::atomic<int> count{0};
     auto body = [&count](coro::Scope& s) -> coro::CoroTask<void> {
         for (int i = 0; i < 50; ++i) s.spawn(bump(count));
-        throw std::runtime_error("body");
-        co_return;
+        co_await fail_with_message("body");
     };
-    CHECK_THROWS_AS(dftu_utils_test::ok(rt.block_on(coro::with_scope(body))),
-                    std::runtime_error);
+    const auto result = rt.block_on(coro::with_scope(body));
+    REQUIRE_FALSE(result.has_value());
+    CHECK(dstd::String(result.error().message()) == "body");
     CHECK(count.load() == 50);
 }
 
@@ -136,13 +198,14 @@ TEST_CASE("with_scope returns the body's value") {
     CHECK(got == 6);
 }
 
-TEST_CASE("block_on returns the value and raises the error") {
+TEST_CASE("block_on returns the value and the error") {
     Runtime rt(2);
     CHECK(dftu_utils_test::ok(rt.block_on(coro::named("value", value(9)))) ==
           9);
     std::atomic<int> count{0};
-    CHECK_THROWS_AS(dftu_utils_test::ok(rt.block_on(fail_after(count))),
-                    std::runtime_error);
+    const auto failed = rt.block_on(fail_after(count));
+    REQUIRE_FALSE(failed.has_value());
+    CHECK(dstd::String(failed.error().message()) == "child");
 }
 
 TEST_CASE("block_on from the only worker of a runtime does not deadlock") {
@@ -179,61 +242,53 @@ TEST_CASE("a second join returns at once") {
     CHECK(count.load() == 1);
 }
 
-TEST_CASE(
-    "a spawned function that throws before it returns its task fails the "
-    "scope") {
+TEST_CASE("a spawned function that returns a failing task fails the scope") {
     Runtime rt(4);
     std::atomic<int> count{0};
     auto run = [&count]() -> coro::CoroTask<bool> {
         coro::Scope scope;
         scope.spawn(bump(count));
         scope.spawn([]() -> coro::CoroTask<void> {
-            throw std::runtime_error("before the task");
+            co_await fail_with_message("from the function");
         });
-        bool raised = false;
-        try {
-            co_await scope.join();
-        } catch (const std::runtime_error& e) {
-            raised = dstd::StringView(e.what()).find("before the task") !=
-                     dstd::StringView::npos;
-        }
-        co_return raised&& scope.stop_requested();
+        co_await scope.join_quietly();
+        const dstd::Optional<dstd::Error> error = scope.take_error();
+        co_return error.has_value() &&
+            dstd::String(error->message()) == "from the function" &&
+            scope.stop_requested();
     };
     CHECK(dftu_utils_test::ok(rt.block_on(run())));
 }
 
-TEST_CASE(
-    "a spawned future function that throws before it returns its task "
-    "fails the future") {
+TEST_CASE("a spawned future function that returns a failing task fails it") {
     Runtime rt(2);
     auto run = []() -> coro::CoroTask<bool> {
         coro::Scope scope;
         auto f = scope.spawn_future([]() -> coro::CoroTask<int> {
-            throw std::runtime_error("before the task");
+            co_await fail_with_message("from the function");
+            co_return 0;
         });
-        bool raised = false;
-        try {
-            co_await f;
-        } catch (const std::runtime_error&) {
-            raised = true;
-        }
-        co_await scope.join();
+        auto settled = co_await coro::settle_in_place(f);
+        const bool raised =
+            settled.error.has_value() &&
+            dstd::String(settled.error->message()) == "from the function";
+        co_await scope.join_quietly();
         co_return raised;
     };
     CHECK(dftu_utils_test::ok(rt.block_on(run())));
 }
 
-TEST_CASE(
-    "with_scope joins its children when the body throws before it "
-    "returns its task") {
+TEST_CASE("with_scope joins its children when the body ends with an error") {
     Runtime rt(4);
     std::atomic<int> count{0};
     auto body = [&count](coro::Scope& s) -> coro::CoroTask<void> {
         for (int i = 0; i < 50; ++i) s.spawn(bump(count));
-        throw std::runtime_error("body");
+        dstd::Error error{dstd::Condition::Unknown, "body"};
+        co_await std::move(error);
     };
-    CHECK_THROWS_AS(dftu_utils_test::ok(rt.block_on(coro::with_scope(body))),
-                    std::runtime_error);
+    const auto result = rt.block_on(coro::with_scope(body));
+    REQUIRE_FALSE(result.has_value());
+    CHECK(dstd::String(result.error().message()) == "body");
     CHECK(count.load() == 50);
 }
 

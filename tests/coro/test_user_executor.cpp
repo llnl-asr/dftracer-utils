@@ -120,12 +120,9 @@ coro::CoroTask<void> wait_beyond(std::atomic<bool>& timed_out) {
 /// The frame the driver owns: awaiting the task is the only thing that keeps
 /// it alive, so the driver releases this handle once the coroutine is set up.
 coro::detail::Coro drive(coro::CoroTask<void> task, std::atomic<bool>& done,
-                         std::exception_ptr& error) {
-    try {
-        co_await std::move(task);
-    } catch (...) {
-        error = std::current_exception();
-    }
+                         dstd::Optional<dstd::Error>& error) {
+    auto settled = co_await coro::settle(std::move(task));
+    error = std::move(settled.error);
     done.store(true, std::memory_order_release);
 }
 
@@ -153,8 +150,8 @@ TEST_SUITE("UserExecutor") {
         std::atomic<int> peak{0};
         std::atomic<bool> first_done{false};
         std::atomic<bool> second_done{false};
-        std::exception_ptr first_error;
-        std::exception_ptr second_error;
+        dstd::Optional<dstd::Error> first_error;
+        dstd::Optional<dstd::Error> second_error;
 
         auto first = drive(contender(mutex, total, holding, peak), first_done,
                            first_error);
@@ -166,8 +163,8 @@ TEST_SUITE("UserExecutor") {
 
         CHECK(first_done.load());
         CHECK(second_done.load());
-        CHECK(first_error == nullptr);
-        CHECK(second_error == nullptr);
+        CHECK_FALSE(first_error.has_value());
+        CHECK_FALSE(second_error.has_value());
         CHECK(total == 14);
         CHECK(peak.load() == 1);
         CHECK(holding.load() == 0);
@@ -177,7 +174,7 @@ TEST_SUITE("UserExecutor") {
         MiniExecutor exec;
         std::atomic<bool> timed_out{false};
         std::atomic<bool> done{false};
-        std::exception_ptr error;
+        dstd::Optional<dstd::Error> error;
 
         auto task = drive(wait_beyond(timed_out), done, error);
         exec.post(task.release());
@@ -185,7 +182,7 @@ TEST_SUITE("UserExecutor") {
 
         CHECK(done.load());
         CHECK(timed_out.load());
-        CHECK(error == nullptr);
+        CHECK_FALSE(error.has_value());
     }
 
     TEST_CASE("a tracked task reports completion once, an untracked none") {
@@ -197,14 +194,14 @@ TEST_SUITE("UserExecutor") {
                                             4242};
 
         std::atomic<bool> done{false};
-        std::exception_ptr error;
+        dstd::Optional<dstd::Error> error;
         auto tracked = drive(noop(), done, error);
         tracked.handle().promise().tracking = &tracking;
         exec.post(tracked.release());
         exec.run();
 
         CHECK(done.load());
-        CHECK(error == nullptr);
+        CHECK_FALSE(error.has_value());
         CHECK(calls.load() == 1);
         CHECK(last_id.load() == 4242);
 
@@ -227,7 +224,7 @@ TEST_SUITE("UserExecutor") {
         fresh_process::announce_abort();
         MiniExecutor exec;
         std::atomic<bool> done{false};
-        std::exception_ptr error;
+        dstd::Optional<dstd::Error> error;
         auto task = drive(block_on_own_thread(), done, error);
         exec.post(task.release());
         exec.run();

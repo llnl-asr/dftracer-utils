@@ -56,7 +56,7 @@ named after the time column, then one column per aggregate.
 
       .. code-block:: c
 
-         #include <dftracer/utils/dataframe/abi.h>
+         #include <dftracer/utils/dataframe/c_api.h>
 
          dftu_group_agg aggs[] = {
              {"count", NULL, "n"},

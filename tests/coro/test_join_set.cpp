@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <coro/failing.h>
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/async_event.h>
 #include <dftracer/utils/coro/join_set.h>
@@ -16,7 +17,6 @@
 #include <atomic>
 #include <chrono>
 #include <cstddef>
-#include <stdexcept>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::coro;
@@ -31,7 +31,7 @@ CoroTask<int> after(std::chrono::milliseconds delay, int value) {
 
 CoroTask<int> fails_after(std::chrono::milliseconds delay) {
     co_await sleep(delay);
-    throw std::runtime_error("planned failure");
+    co_return co_await coro_test::failing_task<int>("planned failure");
 }
 
 CoroTask<int> when_set(AsyncEvent& gate, int value) {
@@ -41,7 +41,7 @@ CoroTask<int> when_set(AsyncEvent& gate, int value) {
 
 CoroTask<int> fails_when_set(AsyncEvent& gate) {
     co_await gate.wait();
-    throw std::runtime_error("planned failure");
+    co_return co_await coro_test::failing_task<int>("planned failure");
 }
 
 AsyncGenerator<int> numbers(int first, int count) {
@@ -99,7 +99,7 @@ struct FailsOnThree {
     static constexpr const char* NAME = "fails_on_three";
     CoroTask<int> run(int value) const {
         if (value == 3) {
-            throw std::runtime_error("planned failure");
+            co_return co_await coro_test::failing_task<int>("planned failure");
         }
         co_return value;
     }
@@ -270,17 +270,12 @@ TEST_CASE("ordered and unordered make a stream stage within their tokens") {
     CHECK(peak.load() >= 1);
 }
 
-TEST_CASE("an ordered stage raises a job error and a move-only stage works") {
+TEST_CASE("an ordered stage gives a job error and a move-only stage works") {
     Runtime runtime(4);
     auto failing = FailsOnThree{} | ordered(2);
-    dstd::String raised;
-    try {
-        dftu_utils_test::ok(
-            runtime.block_on(collect(failing.run(numbers(0, 100)))));
-    } catch (const std::runtime_error& e) {
-        raised = e.what();
-    }
-    CHECK(raised == "planned failure");
+    const auto failed = runtime.block_on(collect(failing.run(numbers(0, 100))));
+    REQUIRE_FALSE(failed.has_value());
+    CHECK(dstd::String(failed.error().message()) == "planned failure");
 
     auto erased = erase(SlowFirst{}) | ordered(2);
     auto out = dftu_utils_test::ok(

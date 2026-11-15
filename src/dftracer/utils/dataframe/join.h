@@ -29,21 +29,24 @@ bool valid_join_how(JoinHow how) noexcept;
 /// An InvalidArgument error on an uneven key list.
 struct JoinRightLayout {
     dstd::Vector<std::size_t> keep;
-    dstd::Vector<dstd::String> names;
+    dstd::Vector<dstd::SharedString> names;
     dstd::Vector<std::int64_t> fills;
 };
+/// `LeftName` and `RightName` are dstd::String or dstd::SharedString.
+template <class LeftName, class RightName>
 dstd::Result<JoinRightLayout> join_right_layout(
-    const dstd::Vector<dstd::String>& left_names,
-    const dstd::Vector<dstd::String>& right_names,
+    const dstd::Vector<LeftName>& left_names,
+    const dstd::Vector<RightName>& right_names,
     const dstd::Vector<dstd::String>& left_on,
     const dstd::Vector<dstd::String>& right_on, JoinHow how,
     const dstd::String& suffix);
 
 /// Output column names of a join: `left_names`, then join_right_layout's.
 /// A NotFound error if a key is absent from its side.
+template <class RightName>
 dstd::Result<dstd::Vector<dstd::String>> join_out_names(
     const dstd::Vector<dstd::String>& left_names,
-    const dstd::Vector<dstd::String>& right_names,
+    const dstd::Vector<RightName>& right_names,
     const dstd::Vector<dstd::String>& left_on,
     const dstd::Vector<dstd::String>& right_on, JoinHow how,
     const dstd::String& suffix);
@@ -106,6 +109,8 @@ class HashJoin {
     /// right value. `left_templates` supplies one Series per left column,
     /// read only for its type (any length). Empty for every other `how`, and
     /// empty again after the first call.
+    DataFrame flush(const dstd::Vector<dstd::SharedString>& left_names,
+                    const dstd::Vector<Series>& left_templates);
     DataFrame flush(const dstd::Vector<dstd::String>& left_names,
                     const dstd::Vector<Series>& left_templates);
 
@@ -116,8 +121,9 @@ class HashJoin {
     HashJoin(DataFrame right, dstd::Vector<dstd::String> left_on,
              dstd::Vector<dstd::String> right_on, JoinHow how,
              dstd::String suffix, bool nulls_equal);
+    template <class Name>
     dstd::Result<dstd::Vector<std::int64_t>> left_key_indices(
-        const dstd::Vector<dstd::String>& left_names) const;
+        const dstd::Vector<Name>& left_names) const;
     /// Lookup and Nest: the probe, rows matched by value.
     dstd::Result<DataFrame> probe_values(
         const DataFrame& left, const dstd::Vector<std::int64_t>& key_idx,
@@ -136,7 +142,8 @@ class HashJoin {
     dstd::Vector<std::int64_t> conflicts(bool typed) const;
     /// The key position whose right key shares the name of left column `li`,
     /// or -1.
-    std::int64_t shared_key_of(const dstd::Vector<dstd::String>& left_names,
+    template <class Name>
+    std::int64_t shared_key_of(const dstd::Vector<Name>& left_names,
                                std::size_t li) const;
 
     DataFrame right_;

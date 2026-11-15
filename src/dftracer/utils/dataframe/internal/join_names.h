@@ -10,11 +10,12 @@
 namespace dftracer::utils::dataframe {
 
 /// The names separated by ", ", for error and plan text.
-inline dstd::String join_names(const dstd::Vector<dstd::String>& names) {
+template <class Name>
+inline dstd::String join_names(const dstd::Vector<Name>& names) {
     dstd::String out;
     for (std::size_t i = 0; i < names.size(); ++i) {
         if (i) out += ", ";
-        out += names[i];
+        out += dstd::StringView{names[i]};
     }
     return out;
 }

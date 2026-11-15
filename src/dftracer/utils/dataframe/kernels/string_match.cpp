@@ -4,7 +4,7 @@
 // `plain`, and once, through string_match_jcc.cpp, as `jcc` with the padding
 // flag. The flag acts on the assembler, so it needs a second copy of the
 // code and cannot be a per-function attribute.
-#include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/string_reader.h>
 #include <dftracer/utils/dataframe/kernels/limited_rows.h>

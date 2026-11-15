@@ -496,7 +496,8 @@ struct GzipLineWriter::Impl {
     dstd::UniquePtr<char[]> scratch;  ///< ordered append_with, reused
     std::size_t scratch_cap = 0;
 
-    coro::CoroTask<dstd::Error> fail(std::exception_ptr job_error = {}) {
+    coro::CoroTask<dstd::Error> fail(
+        dstd::Optional<dstd::Error> job_error = dstd::nullopt) {
         // A job a shutdown cancelled ends the join, and the files of the
         // failed write are removed all the same.
         const bool first_pass = !cleaned;
@@ -510,7 +511,10 @@ struct GzipLineWriter::Impl {
                 dstd::fs::remove(dstd::PathView(p)).discard();
         }
         if (!job_error) job_error = scope.take_error();
-        if (job_error) co_await coro::fail_with(std::move(job_error));
+        if (job_error) {
+            auto failure = coro::fail_with(std::move(*job_error));
+            co_await failure;
+        }
         if (first_pass && scope.child_stopped()) co_await coro::stop_here();
         co_return get_error();
     }
@@ -802,8 +806,8 @@ coro::CoroTask<dstd::Result<WriteSummary>> GzipLineWriter::close(
     if (!s.failed() && !s.buf.empty()) co_await s.submit(std::move(s.buf));
     s.buf.clear();
     co_await s.scope.join_quietly();
-    std::exception_ptr job_error = s.scope.take_error();
-    // Never seen: fail() ends the frame for a stopped job or an exception.
+    dstd::Optional<dstd::Error> job_error = s.scope.take_error();
+    // Never seen: fail() ends the frame for a stopped job or an error.
     if (job_error && !s.failed())
         s.set_error(common::ErrorCode::Internal, "write failed");
     if (s.scope.child_stopped() && !s.failed())

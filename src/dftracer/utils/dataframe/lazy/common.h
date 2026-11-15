@@ -2,10 +2,10 @@
 #ifndef DFTRACER_UTILS_DATAFRAME_LAZY_COMMON_H
 #define DFTRACER_UTILS_DATAFRAME_LAZY_COMMON_H
 
+#include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/memory_budget.h>
-#include <dftracer/utils/coro/task_abi.h>        // task_to_abi
 #include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/dataframe/agg.h>        // streaming group-by state
 #include <dftracer/utils/dataframe/batch_ops.h>  // concat_columns, take, concat
@@ -21,10 +21,10 @@
 #include <dftracer/utils/dataframe/internal/fingerprint.h>
 #include <dftracer/utils/dataframe/internal/float16.h>
 #include <dftracer/utils/dataframe/internal/lazy_plan.h>
+#include <dftracer/utils/dataframe/internal/name_cache.h>
 #include <dftracer/utils/dataframe/internal/native_transform.h>
-#include <dftracer/utils/dataframe/internal/node_registry.h>  // find_node
 #include <dftracer/utils/dataframe/internal/rest_column.h>
-#include <dftracer/utils/dataframe/internal/schema_types.h>   // dftu_schema
+#include <dftracer/utils/dataframe/internal/schema_types.h>  // dftu_schema
 #include <dftracer/utils/dataframe/internal/spill.h>  // external-merge spill
 #include <dftracer/utils/dataframe/join.h>            // HashJoin (join cursor)
 #include <dftracer/utils/dataframe/kernels/field_stat.h>  // field_stat_reduce (SIMD)
@@ -80,16 +80,19 @@ inline dstd::Vector<const Series*> column_ptrs(
     return in;
 }
 
-inline int column_index_of(const dstd::Vector<dstd::String>& names,
-                           const dstd::String& name) {
-    auto it = std::find(names.begin(), names.end(), name);
-    return it == names.end() ? -1 : static_cast<int>(it - names.begin());
+template <class Name>
+inline int column_index_of(const dstd::Vector<Name>& names,
+                           dstd::StringView name) {
+    for (std::size_t i = 0; i < names.size(); ++i)
+        if (dstd::StringView{names[i]} == name) return static_cast<int>(i);
+    return -1;
 }
 
 // The index of column `name` of `sch`. A name that is not there is the error of
 // the op `op`: NotFound "<op>: no column named <name>".
-inline dstd::Result<int> require_col(const dstd::Vector<dstd::String>& sch,
-                                     const dstd::String& name, const char* op) {
+template <class Name>
+inline dstd::Result<int> require_col(const dstd::Vector<Name>& sch,
+                                     dstd::StringView name, const char* op) {
     const int at = column_index_of(sch, name);
     if (at < 0)
         return common::make_error<"{}: no column named {}">(
@@ -123,9 +126,9 @@ inline dstd::Result<Series> null_column_of(const Field& f, std::int64_t rows,
 
 // A frame over the columns of a morsel, named `names` or, with none, unnamed.
 inline DataFrame frame_of(dstd::Vector<Series>&& columns,
-                          dstd::Vector<dstd::String> names = {}) {
+                          dstd::Vector<dstd::SharedString> names = {}) {
     DataFrame out;
-    out.names = names.empty() ? dstd::Vector<dstd::String>(columns.size())
+    out.names = names.empty() ? dstd::Vector<dstd::SharedString>(columns.size())
                               : std::move(names);
     out.columns = std::move(columns);
     return out;
@@ -135,7 +138,7 @@ inline DataFrame frame_of(dstd::Vector<Series>&& columns,
 inline Morsel slice_morsel(const Morsel& m, std::int64_t off,
                            std::int64_t len) {
     DataFrame tmp;
-    tmp.names.assign(m.columns.size(), dstd::String());
+    tmp.names.assign(m.columns.size(), dstd::SharedString());
     for (const Series& c : m.columns) tmp.columns.push_back(c.share());
     DataFrame s = tmp.slice(off, len);
     Morsel out;
@@ -310,18 +313,23 @@ inline dstd::Vector<Series> key_columns(const dstd::Vector<Series>& cols,
 }
 
 // Default scan chunk when the caller does not set one (batch_size <= 0).
-inline constexpr std::int64_t DEFAULT_BATCH_SIZE = 65536;
+inline constexpr std::int64_t DEFAULT_BATCH_SIZE =
+    common::constants::dataframe::BATCH_SIZE;
 
-inline bool has_rest(const dstd::Vector<dstd::String>& sch) {
-    return !sch.empty() && sch.back() == REST_COLUMN;
+template <class Name>
+inline bool has_rest(const dstd::Vector<Name>& sch) {
+    return !sch.empty() && dstd::StringView{sch.back()} == REST_COLUMN;
 }
 
-// The fields of a rest column as named columns, flat.
-inline DataFrame rest_fields(const Series& rest) {
+// The fields of a rest column as named columns, flat. With a `cache` the
+// names come from it.
+inline DataFrame rest_fields(const Series& rest, NameCache* cache = nullptr) {
     const Series flat = rest.materialize();
     DataFrame out;
     for (std::int64_t f = 0; f < flat.num_children(); ++f) {
-        out.names.push_back(flat.field_name(f));
+        const dstd::String name = flat.field_name(f);
+        out.names.push_back(cache ? cache->shared(name)
+                                  : dstd::SharedString{name});
         out.columns.push_back(flat.child(f));
     }
     return out;
@@ -332,7 +340,7 @@ inline DataFrame rest_fields(const Series& rest) {
 // which one the caller means.
 // Moves the rest column of `f`, if any, after the others.
 inline DataFrame rest_to_back(DataFrame f) {
-    const int at = column_index_of(f.names, dstd::String(REST_COLUMN));
+    const int at = column_index_of(f.names, REST_COLUMN);
     if (at < 0 || static_cast<std::size_t>(at) + 1 == f.names.size()) return f;
     std::rotate(f.names.begin() + at, f.names.begin() + at + 1, f.names.end());
     std::rotate(f.columns.begin() + at, f.columns.begin() + at + 1,
@@ -377,7 +385,9 @@ inline std::size_t accumulate_batch(std::uint64_t budget,
 // `state`, and calls `after(batch, state)` once per batch. A batch of one folds
 // straight into `state`; a larger one is folded morsel by morsel into partial
 // states in parallel (the mergeable agg IR) that are then merged, so the batch
-// size follows the size of a partial and memory stays near the budget.
+// size follows the size of a partial and memory stays near the budget. A state
+// that holds a UDAF which two threads must not feed at once takes the morsels
+// one at a time, with no partials.
 // `accumulate(state, morsel, row_base)` folds one morsel and returns a
 // dstd::Result<void>, as does `after`; `make()` makes a
 // fresh state, `active()` says whether folding is still wanted and
@@ -411,9 +421,11 @@ inline coro::CoroTask<dstd::Result<void>> accumulate_batches(
             rows_seen += m.rows;
         }
         if (active()) {
-            if (batch.size() == 1) {
-                auto folded = accumulate(*state, batch[0], row_base[0]);
-                if (!folded) co_return folded.error();
+            if (batch.size() == 1 || agg_serial_only(*state)) {
+                for (std::size_t z = 0; z < batch.size(); ++z) {
+                    auto folded = accumulate(*state, batch[z], row_base[z]);
+                    if (!folded) co_return folded.error();
+                }
             } else {
                 dstd::Vector<AggStatePtr> partials(batch.size());
                 dstd::Vector<dstd::Optional<dstd::Error>> failed(batch.size());

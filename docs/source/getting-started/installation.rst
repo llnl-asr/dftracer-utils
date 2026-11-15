@@ -47,7 +47,7 @@ build dirs land under ``build/build-<preset>/``).
    cmake --preset dev            # RelWithDebInfo, shared + static, no Python
    cmake --build --preset dev
 
-The build produces nine layered component libraries, each as shared and static:
+The build produces ten layered component libraries, each as shared and static:
 
 - ``dftracer_utils_runtime``, the async runtime (coroutines, tasks, I/O backend,
   pipelines, common primitives).
@@ -60,8 +60,10 @@ The build produces nine layered component libraries, each as shared and static:
 - ``dftracer_utils_dataframe``, the columnar SIMD engine (``Series`` /
   ``DataFrame``, Highway kernels, the Arrow bridge, query execution / masking).
 - ``dftracer_utils_trace``, the trace layer (index, views, trace reader, Arrow).
+- ``dftracer_utils_plugins``, the plugin host, the plugin ABI and the C++
+  plugin SDK.
 - ``dftracer_utils_domains``, the work done with traces (comparison,
-  statistics, provenance, genesis, DLIO, replay, the server, the plugin host).
+  statistics, provenance, genesis, DLIO, replay, the server).
 
 You do not link these individually, ``find_package(dftracer_utils)`` and the
 ``dftracer::utils`` target pull the whole set transitively (see below).
@@ -162,12 +164,6 @@ Pass with ``-D`` at configure time, for example
    * - Option
      - Default
      - Effect
-   * - ``DFTRACER_UTILS_ENABLE_ARROW``
-     - ``ON``
-     - Arrow C Data Interface via nanoarrow (zero-copy export).
-   * - ``DFTRACER_UTILS_ENABLE_ARROW_IPC``
-     - ``ON``
-     - Arrow IPC file read/write via nanoarrow.
    * - ``DFTRACER_UTILS_ENABLE_VECTORSCAN``
      - ``ON``
      - Vectorscan for yes/no regex matches. ``OFF`` downloads

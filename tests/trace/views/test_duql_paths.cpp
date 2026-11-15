@@ -154,7 +154,7 @@ dataframe::DataFrame frame_of(bool numeric_x) {
                                              "STDIO", "STDIO", "STDIO",
                                              "STDIO", "POSIX", "POSIX"};
     dataframe::DataFrame df;
-    df.names = {"name", "cat", "x", "lvl"};
+    df.names = dstd::make_shared_strings({"name", "cat", "x", "lvl"});
     df.columns.push_back(dataframe::Series::strings(name));
     df.columns.push_back(dataframe::Series::strings(cat));
     if (numeric_x) {
@@ -294,7 +294,7 @@ TEST_SUITE("duql paths") {
                                                       "t5"};
             const std::int64_t x[] = {4, 5, 6, 7, 0};
             const std::uint8_t valid[] = {0b00001111};
-            frame.names = {"name", "x"};
+            frame.names = dstd::make_shared_strings({"name", "x"});
             frame.columns.push_back(dataframe::Series::strings(name));
             frame.columns.push_back(dataframe::Series::flat_i64(x, 5, valid));
         }
@@ -351,7 +351,7 @@ TEST_SUITE("duql paths") {
         dataframe::DataFrame df;
         const dstd::Vector<dstd::StringView> name{"p", "s"};
         const dstd::Vector<dstd::StringView> cat{"POSIX", "STDIO"};
-        df.names = {"name", "cat"};
+        df.names = dstd::make_shared_strings({"name", "cat"});
         df.columns.push_back(dataframe::Series::strings(name));
         df.columns.push_back(dataframe::Series::strings(cat));
         auto kept = [&](const char* filter) {

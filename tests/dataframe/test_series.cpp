@@ -20,7 +20,10 @@
 #include <dftracer/utils/dataframe/op.h>
 #include <dftracer/utils/dstd/hash/fnv1a.h>
 #include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/memory/detail/manager.h>
 #include <doctest/doctest.h>
 #include <memory/fresh_process.h>
 #include <task_result.h>
@@ -30,17 +33,9 @@
 #include <cstring>
 #include <limits>
 #include <utility>
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
-#include <dftracer/utils/dataframe/arrow_bridge.h>
-#include <dftracer/utils/dstd/span.h>
-#include <dftracer/utils/dstd/string.h>
-#include <nanoarrow/nanoarrow.h>
-
-#include <cstring>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::dataframe;
-#endif
 
 static bool mask_bit(const Series& m, std::int64_t i) {
     const std::uint8_t* b = m.data<std::uint8_t>();
@@ -1375,8 +1370,9 @@ TEST_SUITE("vec") {
             dftu_utils_test::ok(dataframe::group_agg(key, vals, specs, "cat"));
         REQUIRE(one.num_rows() == 2);
         REQUIRE(one.names.size() == 5);
-        REQUIRE(one.names == dstd::Vector<dstd::String>{"cat", "n", "sum_dur",
-                                                        "mean_dur", "max_dur"});
+        REQUIRE(dstd::to_strings(one.names) ==
+                dstd::Vector<dstd::String>{"cat", "n", "sum_dur", "mean_dur",
+                                           "max_dur"});
         // first-seen order: io then cpu; columns are key + specs in order.
         CHECK(one.columns[0].string_at(0) == "io");
         CHECK(one.columns[1].data<std::int64_t>()[0] == 3);   // io count
@@ -1436,7 +1432,7 @@ TEST_SUITE("vec") {
         DataFrame g = dftu_utils_test::ok(
             dataframe::group_agg(keys, vals, specs, {"cat", "pid"}));
         REQUIRE(g.num_rows() == 3);  // (io,1) (cpu,1) (io,2) - first-seen order
-        REQUIRE(g.names ==
+        REQUIRE(dstd::to_strings(g.names) ==
                 dstd::Vector<dstd::String>{"cat", "pid", "n", "sum_dur"});
         CHECK(g.columns[0].type() == TypeId::String);
         CHECK(g.columns[1].type() == TypeId::Int64);
@@ -1509,7 +1505,7 @@ TEST_SUITE("vec") {
         DataFrame g =
             dftu_utils_test::ok(dataframe::group_agg(key, vals, specs, "k"));
         REQUIRE(g.num_rows() == 2);
-        REQUIRE(g.names ==
+        REQUIRE(dstd::to_strings(g.names) ==
                 dstd::Vector<dstd::String>{"k", "var", "std", "skew", "kurt"});
         // Reference: the same group's values through the kernels directly.
         dstd::Vector<double> ga{2, 4, 8, 16};  // group "a", first-seen row 0
@@ -1592,7 +1588,7 @@ TEST_SUITE("vec") {
         DataFrame out = dftu_utils_test::ok(
             dataframe::group_agg_expr(keyx, specs, in, "k"));
         REQUIRE(out.num_rows() == 2);
-        REQUIRE(out.names ==
+        REQUIRE(dstd::to_strings(out.names) ==
                 dstd::Vector<dstd::String>{"k", "n", "sum_ab", "mean_ab"});
         // group "x": rows 0,2,4 -> (a+b) = 11,33,55; sum=99, mean=33, n=3.
         CHECK(out.columns[0].string_at(0) == "x");
@@ -1784,7 +1780,7 @@ TEST_SUITE("vec") {
 
     TEST_CASE("batch take/filter/slice apply across every column") {
         DataFrame b;
-        b.names = {"name", "count"};
+        b.names = dstd::make_shared_strings({"name", "count"});
         b.columns.push_back(Series::strings({"a", "b", "c", "d"}));
         dstd::Vector<std::int64_t> cnt{10, 20, 30, 40};
         b.columns.push_back(Series::flat_i64(cnt.data(), 4));
@@ -1809,7 +1805,7 @@ TEST_SUITE("vec") {
     TEST_CASE(
         "frame ops: select/rename/with_column zero-copy, argsort/sort_by") {
         DataFrame b;
-        b.names = {"name", "count"};
+        b.names = dstd::make_shared_strings({"name", "count"});
         b.columns.push_back(Series::strings({"a", "b", "c"}));
         dstd::Vector<std::int64_t> cnt{30, 10, 20};
         b.columns.push_back(Series::flat_i64(cnt.data(), 3));
@@ -2111,7 +2107,7 @@ TEST_SUITE("vec") {
 
     TEST_CASE("batch group_by re-aggregates a materialized batch") {
         DataFrame b;
-        b.names = {"cat", "dur"};
+        b.names = dstd::make_shared_strings({"cat", "dur"});
         b.columns.push_back(Series::strings({"io", "io", "cpu", "io", "cpu"}));
         dstd::Vector<std::int64_t> dur{10, 20, 5, 30, 15};
         b.columns.push_back(Series::flat_i64(dur.data(), 5));
@@ -2135,7 +2131,7 @@ TEST_SUITE("vec") {
 
     TEST_CASE("hash_partition co-locates equal keys and preserves rows") {
         DataFrame b;
-        b.names = {"cat", "dur"};
+        b.names = dstd::make_shared_strings({"cat", "dur"});
         b.columns.push_back(
             Series::strings({"io", "cpu", "io", "net", "cpu", "io"}));
         dstd::Vector<std::int64_t> dur{1, 2, 3, 4, 5, 6};
@@ -2208,7 +2204,7 @@ TEST_SUITE("vec") {
 
     TEST_CASE("topk: k largest/smallest via partial sort") {
         DataFrame b;
-        b.names = {"name", "dur"};
+        b.names = dstd::make_shared_strings({"name", "dur"});
         b.columns.push_back(Series::strings({"a", "b", "c", "d", "e"}));
         dstd::Vector<std::int64_t> dur{50, 10, 90, 30, 70};
         b.columns.push_back(Series::flat_i64(dur.data(), 5));
@@ -2228,12 +2224,12 @@ TEST_SUITE("vec") {
 
     TEST_CASE("concat vertically merges batches (numeric + string)") {
         DataFrame a;
-        a.names = {"k", "n"};
+        a.names = dstd::make_shared_strings({"k", "n"});
         a.columns.push_back(Series::strings({"x", "y"}));
         dstd::Vector<std::int64_t> an{1, 2};
         a.columns.push_back(Series::flat_i64(an.data(), 2));
         DataFrame b;
-        b.names = {"k", "n"};
+        b.names = dstd::make_shared_strings({"k", "n"});
         b.columns.push_back(Series::strings({"z"}));
         dstd::Vector<std::int64_t> bn{3};
         b.columns.push_back(Series::flat_i64(bn.data(), 1));
@@ -2248,14 +2244,14 @@ TEST_SUITE("vec") {
         // Part a: {k(str), n(i64)}; part b: {k(str), r(f64)} - disjoint n/r,
         // plus a shared numeric column m that is i64 in a and f64 in b.
         DataFrame a;
-        a.names = {"k", "n", "m"};
+        a.names = dstd::make_shared_strings({"k", "n", "m"});
         a.columns.push_back(Series::strings({"x", "y"}));
         dstd::Vector<std::int64_t> an{1, 2};
         a.columns.push_back(Series::flat_i64(an.data(), 2));
         dstd::Vector<std::int64_t> am{10, 20};
         a.columns.push_back(Series::flat_i64(am.data(), 2));
         DataFrame b;
-        b.names = {"k", "r", "m"};
+        b.names = dstd::make_shared_strings({"k", "r", "m"});
         b.columns.push_back(Series::strings({"z"}));
         dstd::Vector<double> br{2.5};
         b.columns.push_back(Series::flat_f64(br.data(), 1));
@@ -2266,7 +2262,8 @@ TEST_SUITE("vec") {
             dataframe::concat({&a, &b}, dataframe::ConcatHow::Diagonal));
         REQUIRE(m.num_rows() == 3);
         // Column order = first appearance: k, n, m, r.
-        REQUIRE(m.names == dstd::Vector<dstd::String>{"k", "n", "m", "r"});
+        REQUIRE(dstd::to_strings(m.names) ==
+                dstd::Vector<dstd::String>{"k", "n", "m", "r"});
 
         const std::int64_t ki = m.column_index("k");
         const std::int64_t ni = m.column_index("n");
@@ -2293,14 +2290,14 @@ TEST_SUITE("vec") {
         // (build_row_frame infers an arg column's type per batch) keeps each
         // value's JSON type, so the text "1" and the number 1 stay apart.
         DataFrame a;
-        a.names = {"v"};
+        a.names = dstd::make_shared_strings({"v"});
         a.columns.push_back(Series::strings({"1"}));
         DataFrame b;
-        b.names = {"v"};
+        b.names = dstd::make_shared_strings({"v"});
         dstd::Vector<std::int64_t> bn{1};
         b.columns.push_back(Series::flat_i64(bn.data(), 1));
         DataFrame c;
-        c.names = {"v"};
+        c.names = dstd::make_shared_strings({"v"});
         dstd::Vector<double> cn{2.5};
         c.columns.push_back(Series::flat_f64(cn.data(), 1));
         DataFrame m = dftu_utils_test::ok(
@@ -2322,13 +2319,13 @@ TEST_SUITE("vec") {
     TEST_CASE("concat diagonal throws on a nested/scalar type clash") {
         // A List column against a scalar has no meaningful unification.
         DataFrame a;
-        a.names = {"v"};
+        a.names = dstd::make_shared_strings({"v"});
         dstd::Vector<std::int32_t> offs{0, 1};
         dstd::Vector<std::int64_t> child{7};
         a.columns.push_back(
             Series::list(offs, Series::flat_i64(child.data(), 1)));
         DataFrame b;
-        b.names = {"v"};
+        b.names = dstd::make_shared_strings({"v"});
         dstd::Vector<std::int64_t> bn{1};
         b.columns.push_back(Series::flat_i64(bn.data(), 1));
         dftu_utils_test::expect_error(
@@ -2943,190 +2940,6 @@ TEST_SUITE("vec") {
         CHECK(releases == 1);  // rejection still runs release once
     }
 }
-
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
-
-TEST_SUITE("vec_arrow") {
-    TEST_CASE("flat int64 round-trips through Arrow zero-copy") {
-        dstd::Vector<std::int64_t> a{10, 20, 30};
-        Series col = Series::flat_i64(a.data(), 3);
-
-        ArrowSchema schema;
-        ArrowArray array;
-        to_arrow(col, &schema, &array);
-        CHECK(std::strcmp(schema.format, "l") == 0);
-        REQUIRE(array.length == 3);
-        REQUIRE(array.n_buffers == 2);
-        // Exported buffer aliases the source (zero copy).
-        const std::int64_t* raw =
-            static_cast<const std::int64_t*>(array.buffers[1]);
-        CHECK(raw[0] == 10);
-        CHECK(raw[2] == 30);
-
-        Series back = from_arrow(&schema, &array);
-        REQUIRE(back.valid());
-        CHECK(back.type() == TypeId::Int64);
-        REQUIRE(back.length() == 3);
-        const std::int64_t* p = back.data<std::int64_t>();
-        CHECK(p[0] == 10);
-        CHECK(p[1] == 20);
-        CHECK(p[2] == 30);
-
-        schema.release(&schema);
-    }
-
-    TEST_CASE("selection exports as a dictionary array (no flatten)") {
-        dstd::Vector<std::int64_t> v{5, 1, 9, 3, 7};
-        Series col = Series::flat_i64(v.data(), 5);
-        Series sel = filter_gt(col, 4);  // indices 0,2,4 -> values 5,9,7
-
-        ArrowSchema schema;
-        ArrowArray array;
-        to_arrow(sel, &schema, &array);
-
-        CHECK(std::strcmp(schema.format, "l") == 0);  // int64 indices
-        REQUIRE(schema.dictionary != nullptr);
-        CHECK(std::strcmp(schema.dictionary->format, "l") == 0);  // int64 base
-        REQUIRE(array.dictionary != nullptr);
-        CHECK(array.length == 3);
-        CHECK(array.dictionary->length == 5);
-
-        const std::int64_t* idx =
-            static_cast<const std::int64_t*>(array.buffers[1]);
-        const std::int64_t* dict =
-            static_cast<const std::int64_t*>(array.dictionary->buffers[1]);
-        CHECK(dict[idx[0]] == 5);
-        CHECK(dict[idx[1]] == 9);
-        CHECK(dict[idx[2]] == 7);
-
-        array.release(&array);
-        schema.release(&schema);
-    }
-
-    TEST_CASE("string round-trips through Arrow zero-copy") {
-        Series s = Series::strings({"foo", "bar", "bazz"});
-
-        ArrowSchema schema;
-        ArrowArray array;
-        to_arrow(s, &schema, &array);
-        CHECK(std::strcmp(schema.format, "u") == 0);  // utf8
-        REQUIRE(array.n_buffers == 3);
-        REQUIRE(array.length == 3);
-
-        Series back = from_arrow(&schema, &array);
-        REQUIRE(back.valid());
-        CHECK(back.type() == TypeId::String);
-        REQUIRE(back.length() == 3);
-        CHECK(back.string_at(0) == "foo");
-        CHECK(back.string_at(1) == "bar");
-        CHECK(back.string_at(2) == "bazz");
-
-        schema.release(&schema);
-    }
-
-    TEST_CASE("dictionary string exports as an Arrow dictionary of strings") {
-        Series d = dictionary_encode(Series::strings({"x", "y", "x", "z"}));
-
-        ArrowSchema schema;
-        ArrowArray array;
-        to_arrow(d, &schema, &array);
-        CHECK(std::strcmp(schema.format, "i") == 0);              // int32 codes
-        REQUIRE(schema.dictionary != nullptr);
-        CHECK(std::strcmp(schema.dictionary->format, "u") == 0);  // string dict
-        REQUIRE(array.dictionary != nullptr);
-        CHECK(array.length == 4);
-        CHECK(array.dictionary->length == 3);  // x, y, z distinct
-
-        array.release(&array);
-        schema.release(&schema);
-    }
-
-    TEST_CASE("list<struct> exports as a nested Arrow array") {
-        dstd::Vector<double> lo{0.0, 1.0, 5.0};
-        dstd::Vector<double> hi{1.0, 2.0, 6.0};
-        dstd::Vector<std::int64_t> cnt{10, 20, 30};
-        dstd::Vector<Series> fields;
-        fields.push_back(Series::flat_f64(lo.data(), 3));
-        fields.push_back(Series::flat_f64(hi.data(), 3));
-        fields.push_back(Series::flat_i64(cnt.data(), 3));
-        Series hist = Series::list(
-            dstd::Vector<std::int32_t>{0, 2, 3},
-            Series::structs({"lo", "hi", "count"}, std::move(fields)));
-
-        ArrowSchema schema;
-        ArrowArray array;
-        to_arrow(hist, &schema, &array);
-
-        CHECK(std::strcmp(schema.format, "+l") == 0);               // list
-        REQUIRE(schema.n_children == 1);
-        CHECK(std::strcmp(schema.children[0]->format, "+s") == 0);  // struct
-        REQUIRE(schema.children[0]->n_children == 3);
-        CHECK(std::strcmp(schema.children[0]->children[0]->name, "lo") == 0);
-        CHECK(std::strcmp(schema.children[0]->children[2]->name, "count") == 0);
-
-        REQUIRE(array.length == 2);
-        REQUIRE(array.n_children == 1);
-        const std::int32_t* off =
-            static_cast<const std::int32_t*>(array.buffers[1]);
-        CHECK(off[0] == 0);
-        CHECK(off[1] == 2);
-        CHECK(off[2] == 3);
-        ArrowArray* sa = array.children[0];
-        REQUIRE(sa->length == 3);  // flattened bins
-        REQUIRE(sa->n_children == 3);
-        const double* lod =
-            static_cast<const double*>(sa->children[0]->buffers[1]);
-        const std::int64_t* cntd =
-            static_cast<const std::int64_t*>(sa->children[2]->buffers[1]);
-        CHECK(lod[2] == doctest::Approx(5.0));
-        CHECK(cntd[1] == 20);
-
-        array.release(&array);
-        schema.release(&schema);
-    }
-
-    TEST_CASE("string_at reads a SELECTION column from filter") {
-        Series s = Series::strings({"alpha", "beta", "gamma"});
-        // Bool is bit-packed: keep rows 0 and 2.
-        dstd::Vector<std::uint8_t> keep{0b0000'0101};
-        Series mask = Series::flat(TypeId::Bool, keep.data(), 3);
-        Series sel = s.filter(mask);
-
-        REQUIRE(sel.valid());
-        REQUIRE(sel.length() == 2);
-        CHECK(sel.string_at(0) == "alpha");
-        CHECK(sel.string_at(1) == "gamma");
-
-        Series flat = sel.materialize();
-        REQUIRE(flat.is_flat());
-        REQUIRE(flat.length() == 2);
-        CHECK(flat.string_at(0) == "alpha");
-        CHECK(flat.string_at(1) == "gamma");
-    }
-
-    TEST_CASE("bool round-trips through Arrow (bit-packed)") {
-        dstd::Vector<std::int64_t> v{5, 1, 9, 3, 7};
-        Series b = gt(Series::flat_i64(v.data(), 5), 4);
-
-        ArrowSchema schema;
-        ArrowArray array;
-        to_arrow(b, &schema, &array);
-        CHECK(std::strcmp(schema.format, "b") == 0);
-
-        Series back = from_arrow(&schema, &array);
-        REQUIRE(back.valid());
-        CHECK(back.type() == TypeId::Bool);
-        REQUIRE(back.length() == 5);
-        const std::uint8_t* bits = back.data<std::uint8_t>();
-        CHECK(((bits[0] >> 0) & 1) == 1);
-        CHECK(((bits[0] >> 1) & 1) == 0);
-        CHECK(((bits[0] >> 2) & 1) == 1);
-
-        schema.release(&schema);
-    }
-}
-#endif  // DFTRACER_UTILS_ENABLE_ARROW
-
 TEST_CASE("slicing a Bool column respects bit packing") {
     // Bool data is bit-packed ((n+7)/8 bytes) while byte_width(Bool) is 1, so
     // a byte-stride slice both read the wrong bits and ran past the end of the
@@ -3401,6 +3214,30 @@ TEST_CASE("DataFrame::column names the series with the column name") {
     CHECK(!f.column("missing").valid());
 }
 
+TEST_CASE(
+    "DataFrame::column shares the frame's name bytes and allocates none") {
+    const std::int64_t v[2] = {1, 2};
+    DataFrame f;
+    f.names.emplace_back("a_column_name_longer_than_any_small_buffer");
+    f.columns.push_back(Series::flat_i64(v, 2));
+    const dstd::StringView name = f.names[0].view();
+
+    memory::PoolHandle pool =
+        memory::detail::Manager::get().root().child("series_name");
+    memory::detail::Scope scope{*pool};
+    const std::size_t before_share = pool->blocks();
+    Series shared = f.columns[0].share();
+    const std::size_t share_blocks = pool->blocks() - before_share;
+
+    const std::size_t before = pool->blocks();
+    Series first = f.column(name);
+    Series second = f.column(name);
+    CHECK(pool->blocks() - before == 2 * share_blocks);
+    CHECK(first.name().data() == f.names[0].data());
+    CHECK(second.name().data() == f.names[0].data());
+    CHECK(first.name() == name);
+}
+
 TEST_CASE("the name survives the native byte form") {
     const std::int64_t v[2] = {1, 2};
     Series s = Series::flat_i64(v, 2).rename("kept");
@@ -3417,4 +3254,23 @@ TEST_CASE("the name survives the native byte form") {
     auto bare = spill::get_series(p, p + plain.size());
     REQUIRE(bare);
     CHECK(bare->name().empty());
+}
+
+TEST_CASE("string_at reads a SELECTION column from filter") {
+    Series s = Series::strings({"alpha", "beta", "gamma"});
+    // Bool is bit-packed: keep rows 0 and 2.
+    dstd::Vector<std::uint8_t> keep{0b0000'0101};
+    Series mask = Series::flat(TypeId::Bool, keep.data(), 3);
+    Series sel = s.filter(mask);
+
+    REQUIRE(sel.valid());
+    REQUIRE(sel.length() == 2);
+    CHECK(sel.string_at(0) == "alpha");
+    CHECK(sel.string_at(1) == "gamma");
+
+    Series flat = sel.materialize();
+    REQUIRE(flat.is_flat());
+    REQUIRE(flat.length() == 2);
+    CHECK(flat.string_at(0) == "alpha");
+    CHECK(flat.string_at(1) == "gamma");
 }

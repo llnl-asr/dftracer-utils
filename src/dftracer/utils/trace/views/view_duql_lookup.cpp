@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-#include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/query/overlap.h>
@@ -519,7 +519,8 @@ Status Applier::overlap_lookup(
                 out.names.emplace_back(into);
                 out.columns.push_back(dataframe::Series::list(
                     offsets,
-                    dataframe::Series::structs(side.names, std::move(parts))));
+                    dataframe::Series::structs(dstd::to_strings(side.names),
+                                               std::move(parts))));
                 return out;
             }
             dstd::Vector<std::int64_t> from_rows;

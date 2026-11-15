@@ -162,6 +162,30 @@ only at the edge (and ``DataFrame`` is picklable and zero-copy Arrow-importable
 via ``__arrow_c_stream__``). ``to_ipc()`` serializes the frame to an Arrow IPC
 stream (``bytes`` any Arrow IPC reader opens, no pyarrow needed) for transport.
 
+Arrow interop goes through the Arrow C Stream Interface, so a column or a frame
+crosses without a materialized copy in between: ``__arrow_c_stream__`` is on
+``Series`` (``pa.chunked_array(series)``), on ``DataFrame`` (``pa.table(df)``) and on
+``LazyFrame`` (``pa.table(lf)``, ``pl.from_arrow(lf)``,
+``pa.RecordBatchReader.from_stream(lf)``). A ``LazyFrame`` stream runs the query in a
+background task, converts one batch per ``get_next``, and its ``release`` cancels the
+query and waits for the task. C++ has the same in
+``dftracer/utils/arrow/stream.h``: ``to_arrow_stream`` for a ``dataframe::Series``, a
+``dataframe::DataFrame`` and a ``dataframe::LazyFrame`` with a runtime, and
+``series_from_arrow_stream``, ``dataframe_from_arrow_stream`` and
+``lazyframe_from_arrow_stream`` for the way back, where a lazy frame pulls one batch
+per scan from the stream it owns and rejects a second scan. ``get_next`` returns
+``EIO`` with our message in ``get_last_error`` after a failure and keeps failing the
+same way; a non-``None`` ``requested_schema`` is rejected.
+
+The first batch of a ``LazyFrame`` stream fixes its schema. When every source of
+the query declares its columns, each later batch must have the same columns, and a
+batch with other columns ends the stream with ``EIO``; ``collect()`` the query in
+that case. When a source can return columns it does not declare (a schemaless trace
+scan), the stream adds an ``_extra`` string column and moves each column that the
+first batch lacked, or whose type changed, into it as one JSON object per row.
+``Series.from_arrow`` also takes a ``pyarrow.ChunkedArray`` and keeps one chunk per
+batch.
+
 The full op catalog is below; each operation links to its Python reference (the
 C++ ``dataframe`` methods mirror them one-to-one, see :doc:`cpp_api/dataframe`).
 ``hash_partition`` plus ``concat`` are the distributed shuffle/merge pair: split

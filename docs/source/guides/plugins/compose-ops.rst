@@ -54,7 +54,9 @@ concatenates their outputs, ``any`` races them and takes the first to finish,
 and ``map`` runs one body per item with a ceiling on how many run at once. A
 ``sleep`` job beside the others under ``any`` is a deadline: it fails with
 ``DFTU_E_TIMEOUT``. The first error in ``all`` or ``map`` cancels the rest, and
-a leaf polls ``dftu_check(ctx)`` to stop early.
+a leaf polls to stop early: ``dftu_check(ctx)`` in C, ``h.check()`` in the SDK,
+which returns a ``dstd::Result<void>`` carrying a cancelled error once the call
+was cancelled.
 
 The C++ SDK (``dftracer/utils/plugins/plugin/job.h``) types this layer, so a
 mismatched pipe does not compile. Values must be trivially copyable, since they

@@ -207,22 +207,22 @@ consumer reads it back during the same batch.
 The ordering rule
 -------------------
 
-A consumer sees nothing published (``std::nullopt`` in C++, NULL in C, ``0``
-in JIT) whenever the producer has not published for the current batch - most
-commonly because it runs after the consumer. Name the port in the consumer's
-``consumes`` and the producer's ``provides`` (a single NULL-terminated name
-array per plugin, one namespace shared with accumulator names, section 6 of
-:doc:`../../plugins`): the host orders the fold from that declaration, running
-every provider of a consumed name first, and refuses to run the set at all if
-no loaded plugin provides it. There is no ``--plugin`` flag order to get
-right.
+A consumer sees nothing published (an empty ``dstd::Optional`` in C++, NULL in
+C, ``0`` in JIT) whenever the producer has not published for the current batch
+- most commonly because it runs after the consumer. Name the port in the
+consumer's ``consumes`` and the producer's ``provides`` (a single
+NULL-terminated name array per plugin, one namespace shared with accumulator
+names, section 6 of :doc:`../../plugins`): the host orders the fold from that
+declaration, running every provider of a consumed name first, and refuses to
+run the set at all if no loaded plugin provides it. There is no ``--plugin``
+flag order to get right.
 
 A value published in one batch does not carry over to the next: the host
 clears every port between batches, so a consumer sees nothing published until
 that batch's producer publishes again.
 
 In C++, ``recv()`` copies the published bytes into the returned
-``std::optional<T>``, so the result is safe to keep past the current
+``dstd::Optional<T>``, so the result is safe to keep past the current
 ``on_batch``/``step`` call without any manual copying. In C, ``consume``
 returns a pointer that is only valid until ``on_batch`` returns; copy it out
 if you need it longer.
@@ -242,9 +242,10 @@ give the plugin a ``transform`` in place of ``on_batch``:
 
          struct Sessionize {
              explicit Sessionize(const Config&) {}
-             // The rewritten batch (the host frees it), or nullptr for
+             // The rewritten batch (the host frees it), or an empty frame for
              // "unchanged". Takes the place of step().
-             dftu_dataframe* transform(const dftu_dataframe* df, Host h);
+             dstd::Result<OwnedDataFrame> transform(dataframe::FrameView df,
+                                                    Host h);
              void merge(Sessionize&) {}
              void finalize(Host) {}
              static auto provides() { return std::array{"sessions.batch"}; }

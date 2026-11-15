@@ -459,12 +459,15 @@ frame's own buffers, no interned-id round trip needed at the row level. Every
      - ``args.<key>``
      - the arg value for this row
 
-A plugin working straight off the columns (no per-row cursor) reads the
+In C, a plugin working straight off the columns (no per-row cursor) reads the
 ``dftu_dataframe`` with the dataframe C ABI
 (``dftracer/utils/dataframe/c_api.h``) - ``dftu_dataframe_column`` by name,
 ``dftu_series_type`` / ``dftu_series_data``. A string column can be a
 dictionary column, for which ``dftu_series_data`` and ``dftu_series_offsets``
-are null: read its strings with ``dftu_series_string_at(col, row, &len)``.
+are null: read its strings with ``dftu_series_string_at(col, row, &len)``. In
+C++ the same access is ``FrameView::column(name)``, a borrowed ``ColumnView``
+whose ``values<T>()`` gives the column's values as a span, and whose
+``flat()`` turns any other encoding into a FLAT column.
 
 .. tab-set::
 
@@ -665,9 +668,9 @@ the registry is settled.
       .. code-block:: cpp
 
          struct Graph {
-             void update(const dftu_dataframe* batch);
+             void update(dataframe::FrameView batch);
              void merge(Graph& other);
-             dftu_dataframe* finalize();               // or a bytes result
+             dstd::Result<OwnedDataFrame> finalize();  // or a dstd::String of bytes
              std::uint64_t bytes() const;              // optional: the budget measure
              dstd::String serialize() const;           // optional pair: spill
              static Graph* deserialize(dstd::StringView);
@@ -681,9 +684,11 @@ the registry is settled.
                          return {};
                      })
 
+      ``state<T>`` reads ``update``, ``merge`` and ``finalize`` off ``T``, and
+      takes ``bytes`` and the ``serialize`` pair only when ``T`` provides them.
       A plugin may have a fold and several states; the ``PluginBuilder`` the
       ``DFTU_PLUGIN`` body receives is the builder for all of them
-      (``fold<Slice>()``, ``state<T>(name)``, ``op(desc)``), and an error the
+      (``fold<Slice>()``, ``state<T>(name)``, ``op(spec)``), and an error the
       body returns fails the load.
 
    .. tab-item:: C (raw ABI)
@@ -1294,17 +1299,26 @@ registered it is reachable from anywhere: ``run`` / ``run_frame`` /
 ``op_run`` from Python, and a ``LazyFrame`` plan through
 ``dftu_lazyframe_op``. The same service runs any built-in on handles the
 plugin already holds (``Host::run_op("dftu.hash.fnv1a", {column})``), so a
-plugin does not link the dataframe ABI to use the engine. A scalar UDF plugin
-is the exception: it builds its result column with ``dftu_series_new_*``, so it
-links the dataframe library, and the process must hold exactly one copy of that
-library, the one the host runs on, because the host frees the column.
+plugin does not link the dataframe ABI to use the engine. A plugin that reads or
+builds a column's buffers does link the dataframe library, and the process must
+hold exactly one copy of it, the one the host runs on, because the host frees
+the column. The SDK registers one op shape, an aggregate over one borrowed
+column returning an int64 (``OpSpec::series_i64``); any other signature token
+needs the ``dftu_op_desc`` form of the C ABI, which the same registry takes.
 
 .. code-block:: cpp
 
-   static dftu_series* zscore(const dftu_series* v);   // series -> series
-   static const dftu_op_desc ZSCORE = {"me.zscore",
-       DFTU_OP_SIG(SERIES, SERIES, NONE, NONE), (dftu_op_generic_fn)&zscore};
-   return plugin(ctx, h, config).op(ZSCORE).fold<MySlice>().build(out);
+   // The op body: a borrowed column in, one int64 aggregate out.
+   std::int64_t row_count(const dataframe::ColumnView& v);
+
+   DFTU_PLUGIN("me", "1.0",
+               [](PluginBuilder& p, const Config& config)
+                   -> dstd::Result<void> {
+                   (void)config;
+                   p.op(OpSpec::series_i64<&row_count>("me.row_count"));
+                   p.fold<MySlice>();   // the fold or state that runs it
+                   return {};
+               })
 
 **A scalar UDF** (``dftu_svc_ops::register_udf``). A function that duql
 calls by name, such as ``to_ms(dur)`` or ``is_slow(dur, 1000)``, in a ``derive``,
@@ -1331,15 +1345,18 @@ only what it owns. By default the UDF is deterministic and a row with a null
 argument gives a null result: the host nulls those rows after ``exec``, which
 may compute anything for them. ``DFTU_FN_NULL_AWARE`` passes the columns as they
 are and keeps the result's validity. ``DFTU_FN_VOLATILE`` marks a result that
-can differ for the same arguments; the flag is advisory. A UDF call is never
+can differ for the same arguments; the flag is advisory. The SDK spells the same
+two flags ``pl::UdfFlag::NullAware`` and ``pl::UdfFlag::Volatile``, declared in
+the ``FLAGS`` of a class you name or returned from ``bind``. A UDF call is never
 folded to a constant either way, and a ``lookup`` side that calls a UDF is not
 stored in the lookup cache. A ``bind`` that fails owns its own cleanup: the host
 ignores ``*bound`` and calls ``free_bound`` only for a ``bind`` that succeeded.
 
-A long ``exec`` polls ``dftu_check`` once per few thousand rows and returns its
-status. A cancelled query, such as one past a deadline, then stops within one
-batch; a UDF that never polls delays the stop until its batch is done. An error
-status with a message from ``exec`` fails the query with that message.
+A long ``exec`` polls once per few thousand rows, with ``dftu_check`` in C or
+``UdfBatch::check()`` in C++, and returns the error it reports. A cancelled
+query, such as one past a deadline, then stops within one batch; a UDF that
+never polls delays the stop until its batch is done. An error status with a
+message from ``exec`` fails the query with that message.
 duql has no join predicate, so a UDF joins as a key function, and a Bool UDF as
 a key too: ``lookup flags on is_slow(dur, 1000) == slow``.
 
@@ -1397,20 +1414,21 @@ never row by row. ``free_bound`` releases ``bound``, after the last state.
 
 Without ``DFTU_AGG_NULL_AWARE`` the host passes a NULL state pointer for a row
 where any argument is null, so ``update`` skips it; with the flag the plugin
-sees every row. ``DFTU_AGG_STATE_POD`` marks a state that is plain bytes: the
-host zero-fills it, and may copy it to spill or move it, so it needs no
-``destroy``, ``serialize`` or ``deserialize``. Any other state needs all
-three: ``destroy`` runs on every state that ``init`` made, and ``serialize``
-writes a state as bytes with a two-call size query (a NULL ``out``, or a
-``cap`` that is too small, only sets ``*size``) for a spill or a merge across
-processes. A UDAF with neither a POD state nor the serialize pair fails the
-load. ``DFTU_AGG_PARALLEL_SAFE`` lets the host feed several state sets on
-different threads and merge them with ``combine``; one set is never used by
-two threads at once. Without the flag no callback of the UDAF runs on two
+sees every row (``pl::UdafFlag::NullAware`` in the SDK). ``DFTU_AGG_STATE_POD``
+marks a state that is plain bytes: the host zero-fills it, and may copy it to
+spill or move it, so it needs no ``destroy``, ``serialize`` or ``deserialize``.
+In the SDK the adapter adds that flag itself, from the state type. Any other
+state needs all three: ``destroy`` runs on every state that ``init`` made, and
+``serialize`` writes a state as bytes with a two-call size query (a NULL
+``out``, or a ``cap`` that is too small, only sets ``*size``) for a spill or a
+merge across processes. A UDAF with neither a POD state nor the serialize pair
+fails the load. ``DFTU_AGG_PARALLEL_SAFE`` lets the host feed several state
+sets on different threads and merge them with ``combine``; one set is never
+used by two threads at once. Without the flag no callback of the UDAF runs on two
 threads at once (``bind``, ``init``, ``update``, ``combine``, ``finalize``,
 ``destroy``, ``serialize``, ``deserialize`` and ``free_bound``), so a group-by
-with such a UDAF runs on one state set. ``DFTU_AGG_HAS_RETRACT`` needs ``retract`` and ``value``
-for a sliding window.
+with such a UDAF runs on one state set. ``DFTU_AGG_HAS_RETRACT`` needs
+``retract`` and ``value`` for a sliding window.
 
 A UDAF is also a window function: a ``window`` block of duql calls it with
 ``over`` (``usum(x) over 10 rows``, ``usum(x) over 5s``), and the C ABI runs it
@@ -1854,8 +1872,9 @@ format. A negative status from ``probe``, ``open``, ``schema``, ``chunks`` or
 ``scan`` surfaces to the caller with the message the callback set on the ctx.
 
 In C++, derive from ``pl::FileFormat<F>`` (``plugins/plugin/file_format.h``)
-and call ``.file_format<F>()`` on the builder. The trampolines catch an
-exception per callback and report it as a status.
+and call ``.file_format<F>()`` on the builder. The trampolines hold no catch: a
+callback returns a ``dstd::Result``, which becomes its status and message, so a
+callback that throws terminates the process.
 
 .. code-block:: cpp
 

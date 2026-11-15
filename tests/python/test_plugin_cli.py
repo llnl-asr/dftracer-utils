@@ -169,3 +169,25 @@ def test_plugin_out_of_memory_raises_memory_error(tmp_path):
     _write_trace(str(tmp_path / "trace.pfw.gz"), 10)
     with pytest.raises(MemoryError, match="heap refused"):
         Plugins([str(so)]).run(str(tmp_path))
+
+
+@pytest.mark.skipif(os.name != "posix", reason="fake compiler is a shell script")
+@pytest.mark.parametrize(
+    ("banner", "wanted"),
+    [
+        ("g++ (GCC) 12.1.1 20220628\nCopyright (C) 2022 Free Software Foundation, Inc.", True),
+        ("Apple clang version 17.0.0 (clang-1700.0.13.5)", False),
+    ],
+)
+def test_cflags_drop_gnu_unique_only_for_gcc(tmp_path, monkeypatch, banner, wanted):
+    from dftracer.utils import _plugin_build
+
+    fake = tmp_path / "fake-cxx"
+    fake.write_text(f"#!/bin/sh\ncat <<'EOF'\n{banner}\nEOF\n")
+    fake.chmod(0o755)
+    monkeypatch.setenv("CXX", str(fake))
+    _plugin_build._is_gcc.cache_clear()
+    try:
+        assert ("-fno-gnu-unique" in _plugin_build.cflags()) is wanted
+    finally:
+        _plugin_build._is_gcc.cache_clear()

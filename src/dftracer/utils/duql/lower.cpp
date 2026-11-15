@@ -1552,7 +1552,7 @@ class Lowering {
                     out.name = n.name;
                     out.options = n.options;
                     out.text = text_of(s.span);
-                    return std::move(out);
+                    return out;
                 } else if constexpr (std::is_same_v<T, Use>) {
                     return fail(
                         s.span,

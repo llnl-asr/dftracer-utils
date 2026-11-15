@@ -246,6 +246,10 @@ foreach(cxx_plugin builder_plugin config_keys_plugin reads_projection_plugin
                              PRIVATE ${CMAKE_SOURCE_DIR}/include
                                      ${CMAKE_BINARY_DIR}/include)
   target_enable_coroutine(${cxx_plugin})
+  # GCC binds the statics of inline functions and templates as GNU unique
+  # symbols, which keep a plugin mapped after the host unloads it.
+  target_compile_options(${cxx_plugin}
+                         PRIVATE $<$<CXX_COMPILER_ID:GNU>:-fno-gnu-unique>)
 endforeach()
 
 # It reads the batch dataframe and runs its own registered op, so it links the

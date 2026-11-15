@@ -258,7 +258,8 @@ void check_same_tree(const Pipe& built, const dstd::String& text) {
     auto want = syntax::parse(text);
     REQUIRE(want.has_value());
     auto got = syntax::parse(built.raw());
-    REQUIRE_MESSAGE(got.has_value(), got.error().format());
+    REQUIRE_MESSAGE(got.has_value(),
+                    (got ? dstd::String() : got.error().format()));
     CHECK(syntax::equal(*got, *want));
     auto text_of_built = built.text();
     REQUIRE(text_of_built.has_value());

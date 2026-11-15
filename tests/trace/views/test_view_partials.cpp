@@ -397,7 +397,8 @@ TEST_SUITE("ViewPartials") {
             auto r = dftracer::utils::default_runtime()
                          .submit(trace::run_agg_query(q))
                          .get();
-            REQUIRE_MESSAGE(r.has_value(), r.error().format());
+            REQUIRE_MESSAGE(r.has_value(),
+                            (r ? dstd::String() : r.error().format()));
             return std::move(*r);
         };
 
@@ -442,7 +443,8 @@ TEST_SUITE("ViewPartials") {
         auto r = dftracer::utils::default_runtime()
                      .submit(trace::run_agg_query(q))
                      .get();
-        REQUIRE_MESSAGE(r.has_value(), r.error().format());
+        REQUIRE_MESSAGE(r.has_value(),
+                        (r ? dstd::String() : r.error().format()));
         CHECK(r->stats.chunks_reread == 0);
         CHECK(r->stats.unanswered > 0);
         CHECK(r->rows.empty());
@@ -523,7 +525,8 @@ TEST_SUITE("ViewPartials") {
         auto r = dftracer::utils::default_runtime()
                      .submit(trace::run_agg_query(q))
                      .get();
-        REQUIRE_MESSAGE(r.has_value(), r.error().format());
+        REQUIRE_MESSAGE(r.has_value(),
+                        (r ? dstd::String() : r.error().format()));
         CHECK(r->stats.chunks_reread == 0);
         dstd::Map<int, std::uint64_t> counts;
         for (const auto& [k, p] : r->rows)

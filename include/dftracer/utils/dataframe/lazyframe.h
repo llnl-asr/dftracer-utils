@@ -139,14 +139,6 @@ struct Schema {
     dstd::Vector<Field> fields;
 };
 
-/// How completely a source applied a pushed-down filter, per @ref ScanRequest
-/// filter. Guides whether the engine must re-apply it over the survivors.
-enum class Pushed {
-    No = 0,       ///< Not applied by the source; engine applies it.
-    Inexact = 1,  ///< Pruned I/O but did not filter; re-apply.
-    Exact = 2,    ///< Fully applied by the source; engine drops it.
-};
-
 /// A pushdown request the optimizer hands a Source at scan time.
 struct ScanRequest {
     /// Columns the plan needs, in the order the scan must return them. Empty

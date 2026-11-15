@@ -13,15 +13,14 @@
 // node, so the threshold is the constant below: one second, because a trace's
 // `ts` is in microseconds.
 //
-// Both inputs are read through a materialized flat view: dftu_series_data
-// answers NULL for every other encoding, so a `where` or a `select` above the
-// node (which hands it filtered or dictionary columns) would otherwise fail.
-// dftu_series_materialize shares the buffers of a column that is already flat,
-// so the common case allocates a handle and copies no data. `pid` and `ts`
-// may be int64, uint64, int32, uint32, a TIMESTAMP or a DURATION. A row whose
-// `pid` or `ts` is null is skipped: it takes no part in the walk, does not
-// update a pid's last `ts`, and gets the session -1, so a null never opens,
-// extends or breaks a session.
+// Both inputs are read through a flat view: ColumnView::values needs a FLAT
+// column, so a `where` or a `select` above the node (which hands it filtered or
+// dictionary columns) would otherwise fail. ColumnView::flat shares the
+// buffers of a column that is already flat, so the common case allocates a
+// handle and copies no data. `pid` and `ts` may be int64, uint64, int32,
+// uint32, a TIMESTAMP or a DURATION. A row whose `pid` or `ts` is null is
+// skipped: it takes no part in the walk, does not update a pid's last `ts`, and
+// gets the session -1, so a null never opens, extends or breaks a session.
 //
 // Use: dftracer_view ./traces -q 'select pid, ts | call sessionize.gaps()'
 //
@@ -71,18 +70,31 @@ dstd::Optional<IntKind> int_kind(dataframe::TypeId type) {
     }
 }
 
-std::int64_t int_at(const void* data, IntKind kind, std::int64_t row) {
+std::int64_t int_at(ColumnView column, IntKind kind, std::int64_t row) {
+    const std::size_t at = static_cast<std::size_t>(row);
     switch (kind) {
-        case IntKind::Int64:
-            return static_cast<const std::int64_t*>(data)[row];
-        case IntKind::Uint64:
-            return static_cast<std::int64_t>(
-                static_cast<const std::uint64_t*>(data)[row]);
-        case IntKind::Int32:
-            return static_cast<const std::int32_t*>(data)[row];
-        case IntKind::Uint32:
-            return static_cast<std::int64_t>(
-                static_cast<const std::uint32_t*>(data)[row]);
+        case IntKind::Int64: {
+            const dstd::Span<const std::int64_t> values =
+                column.values<std::int64_t>();
+            return at < values.size() ? values[at] : 0;
+        }
+        case IntKind::Uint64: {
+            const dstd::Span<const std::uint64_t> values =
+                column.values<std::uint64_t>();
+            return at < values.size() ? static_cast<std::int64_t>(values[at])
+                                      : 0;
+        }
+        case IntKind::Int32: {
+            const dstd::Span<const std::int32_t> values =
+                column.values<std::int32_t>();
+            return at < values.size() ? values[at] : 0;
+        }
+        case IntKind::Uint32: {
+            const dstd::Span<const std::uint32_t> values =
+                column.values<std::uint32_t>();
+            return at < values.size() ? static_cast<std::int64_t>(values[at])
+                                      : 0;
+        }
     }
     return 0;
 }
@@ -97,7 +109,7 @@ class SessionGaps {
     void output_schema(const SchemaView& in, const OpArgs&,
                        SchemaBuilder& out) const {
         in.copy_all(out);
-        out.add("session", DFTU_TYPE_INT64, false);
+        out.add("session", TypeId::Int64, false);
     }
 
     struct Cursor {
@@ -109,40 +121,33 @@ class SessionGaps {
                                in.next(rows));
             if (!frame) return dstd::Optional<OwnedDataFrame>();
 
-            Column pid(dftu_dataframe_column(frame->get(), "pid"));
-            Column ts(dftu_dataframe_column(frame->get(), "ts"));
+            const FrameView batch(frame->get());
+            const dstd::Optional<ColumnView> pid = batch.column("pid");
+            const dstd::Optional<ColumnView> ts = batch.column("ts");
             if (!pid || !ts)
                 return dstd::Unexpected(invalid_argument(
                     "sessionize.gaps needs the columns pid and ts"));
-            const dstd::Optional<IntKind> pid_kind = int_kind(pid.dtype());
-            const dstd::Optional<IntKind> ts_kind = int_kind(ts.dtype());
+            const dstd::Optional<IntKind> pid_kind = int_kind(pid->type());
+            const dstd::Optional<IntKind> ts_kind = int_kind(ts->type());
             if (!pid_kind || !ts_kind)
                 return dstd::Unexpected(invalid_argument(
                     "sessionize.gaps reads pid and ts as integers"));
             // A flat column is shared, not gathered; anything else is.
-            Column pid_flat(dftu_series_materialize(pid.get()));
-            Column ts_flat(dftu_series_materialize(ts.get()));
+            dstd::Result<Column> pid_flat = pid->flat();
+            dstd::Result<Column> ts_flat = ts->flat();
             if (!pid_flat || !ts_flat)
                 return dstd::Unexpected(invalid_argument(
                     "sessionize.gaps cannot flatten its input"));
-            const void* pid_data = dftu_series_data(pid_flat.get());
-            const void* ts_data = dftu_series_data(ts_flat.get());
-            if (pid_data == nullptr || ts_data == nullptr)
-                return dstd::Unexpected(invalid_argument(
-                    "sessionize.gaps reads pid and ts as integers"));
+            const ColumnView pid_values(pid_flat->get());
+            const ColumnView ts_values(ts_flat->get());
 
-            const std::int64_t count = pid_flat.size();
-            const bool has_nulls = dftu_series_null_count(pid_flat.get()) > 0 ||
-                                   dftu_series_null_count(ts_flat.get()) > 0;
+            const std::int64_t count = pid_values.size();
             dstd::Vector<std::int64_t> sessions(static_cast<std::size_t>(count),
                                                 NO_SESSION);
             for (std::int64_t row = 0; row < count; ++row) {
-                if (has_nulls &&
-                    (dftu_series_is_null(pid_flat.get(), row) != 0 ||
-                     dftu_series_is_null(ts_flat.get(), row) != 0))
-                    continue;
-                const std::int64_t key = int_at(pid_data, *pid_kind, row);
-                const std::int64_t start = int_at(ts_data, *ts_kind, row);
+                if (pid_values.is_null(row) || ts_values.is_null(row)) continue;
+                const std::int64_t key = int_at(pid_values, *pid_kind, row);
+                const std::int64_t start = int_at(ts_values, *ts_kind, row);
                 auto seen_at = seen.find(key);
                 if (seen_at == seen.end()) {
                     seen.emplace(key, LastSeen{start, 0});
@@ -157,15 +162,12 @@ class SessionGaps {
             }
 
             FrameBuilder builder;
-            const std::int32_t columns =
-                dftu_dataframe_num_columns(frame->get());
-            for (std::int32_t i = 0; i < columns; ++i) {
-                const char* name = dftu_dataframe_column_name(frame->get(), i);
-                if (name == nullptr)
+            for (std::int32_t i = 0; i < batch.column_count(); ++i) {
+                dstd::Result<Column> column = batch.column(i).share();
+                if (!column)
                     return dstd::Unexpected(invalid_argument(
                         "sessionize.gaps cannot read its input"));
-                builder.add(name,
-                            Column(dftu_dataframe_column(frame->get(), name)));
+                builder.add(batch.name(i), std::move(*column));
             }
             builder.add("session", Column::from_int64(std::move(sessions)));
             auto out = builder.build();

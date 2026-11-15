@@ -135,6 +135,10 @@ enum class ScalarKind : std::int32_t {
 /// so it is valid only while the operand it views lives.
 class ScalarView {
    public:
+    ScalarView() noexcept = default;
+    /// A view of @p scalar, which stays owned by the caller and must outlive
+    /// the view. NULL views no operand.
+    explicit ScalarView(const dftu_scalar* scalar) noexcept : scalar_(scalar) {}
     /// The domain of the operand.
     ScalarKind kind() const noexcept {
         return scalar_ != nullptr ? static_cast<ScalarKind>(scalar_->kind)
@@ -164,10 +168,6 @@ class ScalarView {
     }
 
    private:
-    friend class UdfBind;
-
-    explicit ScalarView(const dftu_scalar* scalar) noexcept : scalar_(scalar) {}
-
     const dftu_scalar* scalar_ = nullptr;
 };
 

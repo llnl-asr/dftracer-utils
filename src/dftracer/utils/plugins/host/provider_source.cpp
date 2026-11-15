@@ -66,6 +66,13 @@ struct ProviderHandle {
 // Any dftu_pushed value the host has not defined is untrusted and treated as
 // DFTU_PUSHED_NO (always sound: the engine re-applies) rather than trusted,
 // since a source has no way to prove an Exact claim at runtime.
+static_assert(static_cast<std::int32_t>(dataframe::Pushed::No) ==
+              DFTU_PUSHED_NO);
+static_assert(static_cast<std::int32_t>(dataframe::Pushed::Inexact) ==
+              DFTU_PUSHED_INEXACT);
+static_assert(static_cast<std::int32_t>(dataframe::Pushed::Exact) ==
+              DFTU_PUSHED_EXACT);
+
 dataframe::Pushed to_pushed(std::int32_t v) {
     switch (v) {
         case DFTU_PUSHED_NO:

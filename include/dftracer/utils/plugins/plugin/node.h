@@ -11,6 +11,7 @@
 #include <dftracer/utils/plugins/plugin/source.h>
 #include <dftracer/utils/plugins/plugin/types.h>
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <utility>
@@ -38,38 +39,86 @@ namespace dftracer::utils::plugins {
 /// The plan's schema at the node's input, read without a scan.
 class SchemaView {
    public:
+    SchemaView() = default;
     explicit SchemaView(const dftu_schema* s) noexcept : s_(s) {}
-    std::int32_t size() const { return dftu_schema_field_count(s_); }
+
+    /// The number of columns.
+    std::int32_t size() const noexcept { return dftu_schema_field_count(s_); }
+    /// The name of column `i`, borrowed from the plan; empty when there is no
+    /// such column.
+    dstd::StringView name(std::int32_t i) const noexcept {
+        const char* const n = dftu_schema_field_name(s_, i);
+        return n != nullptr ? dstd::StringView(n) : dstd::StringView();
+    }
+    /// The type of column `i`, @ref TypeId "TypeId::Unknown" when there is no
+    /// such column.
+    TypeId type(std::int32_t i) const noexcept {
+        const std::int32_t t = dftu_schema_field_type(s_, i);
+        return t < 0 ? TypeId::Unknown : static_cast<TypeId>(t);
+    }
+    /// Whether column `i` admits a null; false when there is no such column.
+    bool nullable(std::int32_t i) const noexcept {
+        return dftu_schema_field_nullable(s_, i) == 1;
+    }
+    /// The granularity of column `i`, which a Timestamp, Time or Duration
+    /// column uses; @ref TimeUnit "TimeUnit::Micro" for any other type and for
+    /// a column that is not there.
+    TimeUnit unit(std::int32_t i) const noexcept {
+        const std::int32_t u = dftu_schema_field_time_unit(s_, i);
+        return u < 0 ? TimeUnit::Micro : static_cast<TimeUnit>(u);
+    }
+    /// The index of the first column named `name`, or -1.
+    std::int32_t find(dstd::StringView name) const {
+        for (std::int32_t i = 0; i < size(); ++i)
+            if (this->name(i) == name) return i;
+        return -1;
+    }
+
     /// Append input column `i`, unchanged, to `out`.
     void copy_to(SchemaBuilder& out, std::int32_t i) const {
-        dftu_schema_copy_field(out.raw(), s_, i);
+        dftu_schema_copy_field(detail::schema_raw(out), s_, i);
     }
     void copy_all(SchemaBuilder& out) const {
         for (std::int32_t i = 0; i < size(); ++i) copy_to(out, i);
     }
-    const dftu_schema* raw() const noexcept { return s_; }
 
    private:
-    const dftu_schema* s_;
+    const dftu_schema* s_ = nullptr;
 };
 
 /// The operands dftu_lazyframe_op was given, zero-filled when it was given
 /// none. Read only the slots the node's own contract names.
 class OpArgs {
    public:
+    OpArgs() = default;
     explicit OpArgs(const dftu_op_arg* a) noexcept : a_(a) {}
-    const dftu_op_val& operator[](int i) const { return a_->args[i]; }
-    std::int64_t i64(int i) const { return a_->args[i].i64; }
-    double f64(int i) const { return a_->args[i].f64; }
-    dstd::StringView str(int i) const {
-        const auto& s = a_->args[i].str;
-        return s.ptr ? dstd::StringView(s.ptr, static_cast<std::size_t>(s.len))
-                     : dstd::StringView();
+
+    /// The number of operand slots a node may read, one per token of its op
+    /// signature.
+    static constexpr std::size_t size() noexcept { return DFTU_OP_MAX_ARGS; }
+
+    std::int64_t i64(std::size_t i) const noexcept {
+        return a_ != nullptr ? a_->args[i].i64 : 0;
     }
-    const dftu_op_arg* raw() const noexcept { return a_; }
+    double f64(std::size_t i) const noexcept {
+        return a_ != nullptr ? a_->args[i].f64 : 0.0;
+    }
+    /// The text of a string operand, borrowed from the plan.
+    dstd::StringView str(std::size_t i) const noexcept {
+        if (a_ == nullptr || a_->args[i].str.ptr == nullptr)
+            return dstd::StringView();
+        return dstd::StringView(a_->args[i].str.ptr,
+                                static_cast<std::size_t>(a_->args[i].str.len));
+    }
+    /// The name of the column operand at `i`.
+    dstd::StringView column(std::size_t i) const noexcept { return str(i); }
+    /// The positional index of the column operand at `i`, or -1.
+    std::int32_t column_index(std::size_t i) const noexcept {
+        return a_ != nullptr ? a_->args[i].i32 : -1;
+    }
 
    private:
-    const dftu_op_arg* a_;
+    const dftu_op_arg* a_ = nullptr;
 };
 
 namespace detail {
@@ -180,8 +229,8 @@ class InputCursor {
         detail::LocalCtx ctx;
         std::int32_t applied = 0;
         dftu_task* pending = nullptr;
-        dftu_status st =
-            vt_->narrow(&ctx.base, self_, predicate.raw(), &applied, &pending);
+        dftu_status st = vt_->narrow(
+            &ctx.base, self_, detail::expr_raw(predicate), &applied, &pending);
         if (st >= 0 && pending) st = runner_.run(&ctx.base, pending);
         return st >= 0 && applied != 0;
     }

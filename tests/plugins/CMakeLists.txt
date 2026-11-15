@@ -56,6 +56,7 @@ set(PLUGINS_TEST_SOURCES
     host/test_host_ops.cpp
     host/test_host_ops_autoregister.cpp
     plugin/test_plugin_sdk.cpp
+    plugin/test_plugin_sdk_types.cpp
     plugin/test_plugin_frame.cpp
 )
 

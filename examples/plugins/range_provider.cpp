@@ -46,8 +46,8 @@ class RangeTable {
     }
 
     void schema(SchemaBuilder& out) const {
-        out.add("i", DFTU_TYPE_INT64, false);
-        out.add("square", DFTU_TYPE_INT64, false);
+        out.add("i", TypeId::Int64, false);
+        out.add("square", TypeId::Int64, false);
     }
 
     struct Cursor {
@@ -112,7 +112,7 @@ class RangeTable {
         }
 
         ScanResult<Cursor> result;
-        result.filters.assign(view.filters.size(), DFTU_PUSHED_NO);
+        result.filters.assign(view.filters.size(), Pushed::No);
         result.cursor = dstd::UniquePtr<Cursor>(
             dstd::make_unique<Cursor>(std::move(cursor)));
         return result;

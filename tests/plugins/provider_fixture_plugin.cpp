@@ -217,12 +217,14 @@ class SdkRange {
     dstd::Result<dstd::Optional<dftracer::utils::plugins::Applied<SdkRange>>>
     apply_filter(dftracer::utils::plugins::ExprView pred) const {
         auto cmp = pred.as_compare();
-        if (!cmp || cmp->column != 0 || cmp->op != DFTU_CMP_GT ||
-            cmp->rhs.kind != DFTU_SCALAR_TAG_I64 || cmp->rhs.value.i + 1 <= lo_)
+        if (!cmp || cmp->column != 0 ||
+            cmp->op != dftracer::utils::plugins::CmpOp::Gt ||
+            cmp->rhs().kind() != dftracer::utils::plugins::ScalarKind::I64 ||
+            cmp->rhs().i64() + 1 <= lo_)
             return dstd::nullopt;
         ++g_sdk_filters;
         return dftracer::utils::plugins::Applied<SdkRange>{
-            dstd::make_unique<SdkRange>(cmp->rhs.value.i + 1, hi_)};
+            dstd::make_unique<SdkRange>(cmp->rhs().i64() + 1, hi_)};
     }
 
    private:

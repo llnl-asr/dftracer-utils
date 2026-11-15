@@ -379,6 +379,10 @@ Column borrow_string(dftu_dtype type, dstd::Vector<Offset> offsets,
 
 }  // namespace detail
 
+namespace detail {
+class ColumnViewAccess;
+}  // namespace detail
+
 /// A borrowed view of one column of a frame the host owns. It holds no
 /// reference, copies no data and allocates nothing, so it is built in place and
 /// stays valid only while the frame, or the batch it came from, is alive.
@@ -391,6 +395,9 @@ Column borrow_string(dftu_dtype type, dstd::Vector<Offset> offsets,
 class ColumnView {
    public:
     ColumnView() noexcept = default;
+    /// A view of @p series, which stays owned by the caller and must outlive
+    /// the view. NULL views no column.
+    explicit ColumnView(const dftu_series* series) noexcept : series_(series) {}
 
     /// The element type of the column, or @ref TypeId "TypeId::Unknown" for a
     /// view of no column.
@@ -406,6 +413,20 @@ class ColumnView {
     /// Whether row @p row is null.
     bool is_null(std::int64_t row) const noexcept {
         return series_ != nullptr && dftu_series_is_null(series_, row) != 0;
+    }
+
+    /// Whether row @p row of a FLAT Bool column is true; false for a null row,
+    /// a column of another type, a column that is not FLAT and a view of no
+    /// column. Call @ref flat on a DICTIONARY, SELECTION, CONSTANT or CHUNKED
+    /// column first.
+    bool boolean_at(std::int64_t row) const noexcept {
+        if (series_ == nullptr || type() != TypeId::Bool || row < 0 ||
+            row >= size() || is_null(row))
+            return false;
+        const void* const data = dftu_series_data(series_);
+        if (data == nullptr) return false;
+        const auto* const bits = static_cast<const std::uint8_t*>(data);
+        return ((bits[row >> 3] >> (row & 7)) & 1u) != 0;
     }
 
     /// The values of row 0 upwards of a FLAT fixed-width column, as a borrowed
@@ -460,14 +481,46 @@ class ColumnView {
         return Column(flat);
     }
 
+    /// The column as an owned handle in the encoding it has, sharing its
+    /// buffers (a reference count, no data copy). Hold the handle for as long
+    /// as the column is read, which is how a stage passes a column through
+    /// without flattening it.
+    dstd::Result<Column> share() const {
+        if (series_ == nullptr) {
+            return dstd::Unexpected(
+                dstd::Error::from_format<"dataframe: no column to share">(
+                    dstd::Condition::InvalidArgument));
+        }
+        dftu_series* const held = dftu_series_share(series_);
+        if (held == nullptr) {
+            return dstd::Unexpected(
+                dstd::Error::from_format<"dataframe: the column was not held">(
+                    dstd::Condition::OutOfMemory));
+        }
+        return Column(held);
+    }
+
    private:
-    friend class FrameView;
-    friend class UdfBatch;
-
-    explicit ColumnView(const dftu_series* series) noexcept : series_(series) {}
-
+    friend class detail::ColumnViewAccess;
     const dftu_series* series_ = nullptr;
 };
+
+namespace detail {
+
+/// The C column a @ref ColumnView borrows. SDK plumbing, not plugin surface.
+class ColumnViewAccess {
+   public:
+    static const dftu_series* get(const ColumnView& view) noexcept {
+        return view.series_;
+    }
+};
+
+/// @see ColumnViewAccess
+inline const dftu_series* column_series(const ColumnView& view) noexcept {
+    return ColumnViewAccess::get(view);
+}
+
+}  // namespace detail
 
 /// A borrowed view of a frame the host owns. It holds no reference and
 /// allocates nothing, so it is built in place and stays valid only while the

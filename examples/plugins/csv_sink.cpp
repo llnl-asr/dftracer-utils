@@ -12,120 +12,93 @@
 // Build: c++ -std=c++20 -shared -fPIC -I<repo>/include -o csv.dylib
 // csv_sink.cpp
 
-#include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/plugins/plugin.h>
 
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <type_traits>
+#include <utility>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::plugins;
 
 namespace {
 
-const char* option_of(const dftu_value* options, const char* key) {
-    if (options == nullptr || options->kind != DFTU_VAL_OBJECT) return nullptr;
-    for (std::uint64_t i = 0; i < options->count; ++i) {
-        const dftu_value* value = options->as.members[i].value;
-        if (value != nullptr && value->kind == DFTU_VAL_STR &&
-            std::strcmp(options->as.members[i].key, key) == 0)
-            return value->as.str;
+// One value of a numeric column, printed the way its own type reads: an
+// unsigned type unsigned, a floating type as %g. A row past the end of the
+// values prints nothing, which is how a column of another length shows.
+template <class T>
+void put_number(std::FILE* file, ColumnView column, std::int64_t row) {
+    const dstd::Span<const T> values = column.values<T>();
+    if (row < 0 || static_cast<std::size_t>(row) >= values.size()) return;
+    const T value = values[static_cast<std::size_t>(row)];
+    if constexpr (std::is_floating_point_v<T>) {
+        std::fprintf(file, "%g", static_cast<double>(value));
+    } else if constexpr (std::is_unsigned_v<T>) {
+        std::fprintf(file, "%llu", static_cast<unsigned long long>(value));
+    } else {
+        std::fprintf(file, "%lld", static_cast<long long>(value));
     }
-    return nullptr;
 }
 
-// The column `index` of `frame`, flattened. Null when the C ABI refuses it.
-Column flat_column(const dftu_dataframe* frame, std::int32_t index,
-                   dstd::String* name) {
-    const char* text = dftu_dataframe_column_name(frame, index);
-    if (text == nullptr) return Column();
-    *name = dstd::String(text);
-    Column column(dftu_dataframe_column(frame, name->c_str()));
-    if (!column) return Column();
-    return Column(dftu_series_materialize(column.get()));
-}
-
-void put_int(std::FILE* file, const dftu_series* column, std::int32_t type,
-             std::int64_t row) {
-    const void* data = dftu_series_data(column);
-    if (data == nullptr) return;
-    switch (type) {
-        case DFTU_TYPE_INT8:
-            std::fprintf(
-                file, "%d",
-                static_cast<int>(static_cast<const std::int8_t*>(data)[row]));
+void put_value(std::FILE* file, ColumnView column, std::int64_t row) {
+    switch (column.type()) {
+        case TypeId::String: {
+            const dstd::StringView text = column.string_at(row);
+            if (text.data() == nullptr) return;
+            // A field holding a comma, a quote or a newline is quoted, and a
+            // quote inside it doubles.
+            const bool quote =
+                text.find_first_of(",\"\n") != dstd::StringView::npos;
+            if (!quote) {
+                std::fwrite(text.data(), 1, text.size(), file);
+                return;
+            }
+            std::fputc('"', file);
+            for (const char c : text) {
+                if (c == '"') std::fputc('"', file);
+                std::fputc(c, file);
+            }
+            std::fputc('"', file);
             return;
-        case DFTU_TYPE_INT16:
-            std::fprintf(
-                file, "%d",
-                static_cast<int>(static_cast<const std::int16_t*>(data)[row]));
+        }
+        case TypeId::Float32:
+            put_number<float>(file, column, row);
             return;
-        case DFTU_TYPE_INT32:
-            std::fprintf(file, "%d",
-                         static_cast<const std::int32_t*>(data)[row]);
+        case TypeId::Float64:
+            put_number<double>(file, column, row);
             return;
-        case DFTU_TYPE_UINT8:
-            std::fprintf(file, "%u",
-                         static_cast<unsigned>(
-                             static_cast<const std::uint8_t*>(data)[row]));
+        case TypeId::Bool:
+            std::fputs(column.boolean_at(row) ? "true" : "false", file);
             return;
-        case DFTU_TYPE_UINT16:
-            std::fprintf(file, "%u",
-                         static_cast<unsigned>(
-                             static_cast<const std::uint16_t*>(data)[row]));
+        case TypeId::Int8:
+            put_number<std::int8_t>(file, column, row);
             return;
-        case DFTU_TYPE_UINT32:
-            std::fprintf(file, "%u",
-                         static_cast<const std::uint32_t*>(data)[row]);
+        case TypeId::Int16:
+            put_number<std::int16_t>(file, column, row);
             return;
-        case DFTU_TYPE_UINT64:
-            std::fprintf(file, "%llu",
-                         static_cast<unsigned long long>(
-                             static_cast<const std::uint64_t*>(data)[row]));
+        case TypeId::Int32:
+        case TypeId::Date32:
+        case TypeId::Time32:
+            put_number<std::int32_t>(file, column, row);
+            return;
+        case TypeId::Uint8:
+            put_number<std::uint8_t>(file, column, row);
+            return;
+        case TypeId::Uint16:
+            put_number<std::uint16_t>(file, column, row);
+            return;
+        case TypeId::Uint32:
+            put_number<std::uint32_t>(file, column, row);
+            return;
+        case TypeId::Uint64:
+            put_number<std::uint64_t>(file, column, row);
             return;
         default:
-            std::fprintf(file, "%lld",
-                         static_cast<long long>(
-                             static_cast<const std::int64_t*>(data)[row]));
+            put_number<std::int64_t>(file, column, row);
             return;
-    }
-}
-
-void put_value(std::FILE* file, const dftu_series* column, std::int64_t row) {
-    const std::int32_t type = dftu_series_type(column);
-    if (type == DFTU_TYPE_STRING) {
-        std::int64_t size = 0;
-        const char* text = dftu_series_string_at(column, row, &size);
-        if (text == nullptr) return;
-        // A field holding a comma, a quote or a newline is quoted, and a
-        // quote inside it doubles.
-        const bool quote = std::strpbrk(text, ",\"\n") != nullptr;
-        if (!quote) {
-            std::fwrite(text, 1, static_cast<std::size_t>(size), file);
-            return;
-        }
-        std::fputc('"', file);
-        for (std::int64_t i = 0; i < size; ++i) {
-            if (text[i] == '"') std::fputc('"', file);
-            std::fputc(text[i], file);
-        }
-        std::fputc('"', file);
-    } else if (type == DFTU_TYPE_FLOAT32) {
-        const auto* data = static_cast<const float*>(dftu_series_data(column));
-        if (data != nullptr)
-            std::fprintf(file, "%g", static_cast<double>(data[row]));
-    } else if (type == DFTU_TYPE_FLOAT64) {
-        const auto* data = static_cast<const double*>(dftu_series_data(column));
-        if (data != nullptr) std::fprintf(file, "%g", data[row]);
-    } else if (type == DFTU_TYPE_BOOL) {
-        const auto* data =
-            static_cast<const std::uint8_t*>(dftu_series_data(column));
-        if (data != nullptr)
-            std::fputs(data[row] != 0 ? "true" : "false", file);
-    } else {
-        put_int(file, column, type, row);
     }
 }
 
@@ -136,21 +109,38 @@ class CsvWriter : public SinkWriter {
         if (file_ != nullptr) std::fclose(file_);
     }
 
-    dstd::Result<void> write(const dftu_dataframe* frame) override {
-        if (frame == nullptr || file_ == nullptr)
+    dstd::Result<void> write(FrameView frame) override {
+        if (file_ == nullptr)
             return invalid_argument(dstd::fmt<"csv: no frame">());
-        const std::int32_t columns = dftu_dataframe_num_columns(frame);
-        const std::int64_t rows = dftu_dataframe_num_rows(frame);
-        dstd::Vector<Column> already;
+        const std::int32_t columns = frame.column_count();
+        const std::int64_t rows = frame.row_count();
+        // A column the batch holds in another encoding is flattened once, so
+        // values<T>() reads a flat span; a column that already is FLAT is read
+        // in place.
+        held_.clear();
+        held_.reserve(static_cast<std::size_t>(columns));
+        views_.clear();
+        views_.reserve(static_cast<std::size_t>(columns));
         for (std::int32_t i = 0; i < columns; ++i) {
-            dstd::String name;
-            Column column = flat_column(frame, i, &name);
-            if (!column)
-                return invalid_argument(dstd::fmt<"csv: no column {}">(i));
-            already.push_back(std::move(column));
+            const ColumnView column = frame.column(i);
             if (!header_) {
                 if (i != 0) std::fputc(',', file_);
-                std::fputs(name.c_str(), file_);
+                const dstd::StringView name = frame.name(i);
+                std::fwrite(name.data(), 1, name.size(), file_);
+            }
+            switch (column.type()) {
+                case TypeId::String:
+                    views_.push_back(column);
+                    break;
+                default: {
+                    dstd::Result<Column> flat = column.flat();
+                    if (!flat)
+                        return invalid_argument(
+                            dstd::fmt<"csv: no column {}">(i));
+                    held_.push_back(std::move(*flat));
+                    views_.push_back(ColumnView(held_.back().get()));
+                    break;
+                }
             }
         }
         if (!header_) {
@@ -160,8 +150,7 @@ class CsvWriter : public SinkWriter {
         for (std::int64_t row = 0; row < rows; ++row) {
             for (std::int32_t i = 0; i < columns; ++i) {
                 if (i != 0) std::fputc(',', file_);
-                put_value(file_, already[static_cast<std::size_t>(i)].get(),
-                          row);
+                put_value(file_, views_[static_cast<std::size_t>(i)], row);
             }
             std::fputc('\n', file_);
             if (std::ferror(file_) != 0)
@@ -189,18 +178,23 @@ class CsvWriter : public SinkWriter {
    private:
     std::FILE* file_ = nullptr;
     bool header_ = false;
+    dstd::Vector<Column> held_;
+    dstd::Vector<ColumnView> views_;
 };
 
 class CsvSink : public Sink {
    public:
     dstd::Result<dstd::UniquePtr<SinkWriter>> bind(
         const BindView& view) override {
-        const char* path = option_of(view.options, "path");
-        if (path == nullptr || path[0] == '\0')
+        const dstd::StringView option = view.options.get("path");
+        if (option.empty())
             return invalid_argument(
                 dstd::fmt<"csv.write: bind needs the option path, e.g. path "
                           "\"out.csv\"">());
-        std::FILE* file = std::fopen(path, "wb");
+        // The config text is a view into the caller's tree and is not
+        // NUL-terminated, so the path is copied once here.
+        const dstd::String path(option);
+        std::FILE* file = std::fopen(path.c_str(), "wb");
         if (file == nullptr)
             return invalid_argument(dstd::fmt<"csv: cannot open {}">(path));
         return dstd::UniquePtr<SinkWriter>(dstd::make_unique<CsvWriter>(file));

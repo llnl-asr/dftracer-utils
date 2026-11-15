@@ -18,6 +18,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <string>
 
 using namespace dftracer::utils;
 
@@ -40,21 +41,17 @@ class ToyWriter : public plugins::SinkWriter {
     ToyWriter() { ++g_made; }
     ~ToyWriter() override { ++g_killed; }
 
-    dstd::Result<void> write(const dftu_dataframe* batch) override {
-        if (batch == nullptr)
-            return plugins::invalid_argument(dstd::fmt<"toy_sink: no frame">());
+    dstd::Result<void> write(plugins::FrameView batch) override {
         ++g_written;
         if (g_fail_after >= 0 && g_written > g_fail_after)
             return plugins::invalid_argument(
                 dstd::fmt<"toy_sink: write refused">());
-        dftu_series* ids = dftu_dataframe_column(batch, "id");
-        if (ids != nullptr) {
-            const auto* data =
-                static_cast<const std::int64_t*>(dftu_series_data(ids));
-            const std::int64_t n = dftu_series_length(ids);
-            for (std::int64_t i = 0; i < n && g_row_count < 64; ++i)
+        const dstd::Optional<plugins::ColumnView> ids = batch.column("id");
+        if (ids) {
+            const dstd::Span<const std::int64_t> data =
+                ids->values<std::int64_t>();
+            for (std::size_t i = 0; i < data.size() && g_row_count < 64; ++i)
                 g_rows[g_row_count++] = data[i];
-            dftu_series_free(ids);
         }
         return {};
     }
@@ -72,24 +69,23 @@ class ToySink : public plugins::Sink {
     dstd::Result<dstd::UniquePtr<plugins::SinkWriter>> bind(
         const plugins::BindView& view) override {
         g_bound_columns = static_cast<std::int64_t>(view.names.size());
-        const dftu_value* root = view.options;
-        if (root != nullptr && root->kind == DFTU_VAL_OBJECT &&
-            root->count > 0 && root->as.members[0].value != nullptr &&
-            root->as.members[0].value->kind == DFTU_VAL_STR) {
-            std::snprintf(g_option_key, sizeof(g_option_key), "%s",
-                          root->as.members[0].key);
-            std::snprintf(g_option_value, sizeof(g_option_value), "%s",
-                          root->as.members[0].value->as.str);
-        }
-        if (root != nullptr && root->kind == DFTU_VAL_OBJECT) {
-            g_fail_after = -1;
-            for (std::uint64_t i = 0; i < root->count; ++i) {
-                const dftu_value* v = root->as.members[i].value;
-                if (v != nullptr && v->kind == DFTU_VAL_STR &&
-                    std::snprintf(nullptr, 0, "%s", root->as.members[i].key) >
-                        0 &&
-                    std::strcmp(root->as.members[i].key, "fail") == 0)
-                    g_fail_after = std::atoi(v->as.str);
+        // The first key of the options object, whatever it is, so the test can
+        // see that the tree reached the plugin.
+        g_fail_after = -1;
+        const plugins::ConfigValue root(view.options.raw());
+        if (root.is_object() && root.size() > 0) {
+            for (std::uint32_t i = 0; i < root.size(); ++i) {
+                const dstd::StringView key = root.key_at(i);
+                const dstd::StringView value = root.value_at(i).as_str();
+                if (i == 0 && value.data() != nullptr) {
+                    std::snprintf(g_option_key, sizeof(g_option_key), "%.*s",
+                                  static_cast<int>(key.size()), key.data());
+                    std::snprintf(g_option_value, sizeof(g_option_value),
+                                  "%.*s", static_cast<int>(value.size()),
+                                  value.data());
+                }
+                if (key == "fail" && value.data() != nullptr)
+                    g_fail_after = std::atoi(dstd::String(value).c_str());
             }
         }
         return dstd::UniquePtr<plugins::SinkWriter>(

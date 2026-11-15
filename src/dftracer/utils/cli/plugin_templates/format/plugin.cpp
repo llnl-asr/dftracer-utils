@@ -49,8 +49,7 @@ class IdFile : public FormatFile {
     explicit IdFile(dstd::Vector<std::int64_t> rows) : rows_(std::move(rows)) {}
 
     void schema(SchemaBuilder& out) const override {
-        dftu_schema_add_field(out.raw(), "id", DFTU_TYPE_INT64, 0,
-                              DFTU_TIME_UNIT_MICRO, nullptr, 0, 0, 0);
+        out.add("id", TypeId::Int64, false);
     }
 
     std::uint64_t chunks() const override { return 1; }
@@ -70,7 +69,7 @@ class IdFile : public FormatFile {
         dstd::Vector<std::int64_t> rows = rows_;
         result.cursor = dstd::UniquePtr<FormatCursor>(
             dstd::make_unique<IdCursor>(std::move(rows)));
-        result.filters.assign(view.filters.size(), DFTU_PUSHED_NO);
+        result.filters.assign(view.filters.size(), Pushed::No);
         return result;
     }
 
@@ -80,9 +79,8 @@ class IdFile : public FormatFile {
 
 class IdFormat : public FileFormat {
    public:
-    std::int32_t probe(const std::uint8_t*, std::uint64_t,
-                       dstd::StringView path) override {
-        return path.ends_with(".ids") ? 100 : 0;
+    std::int32_t probe(dstd::ByteView, dstd::CStringView path) override {
+        return dstd::StringView(path.c_str()).ends_with(".ids") ? 100 : 0;
     }
 
     dstd::Result<dstd::UniquePtr<FormatFile>> open(

@@ -2338,6 +2338,28 @@ DFTU_EXPORT int32_t dftu_schema_add_child_field(
    otherwise exposes no way to enumerate what an upstream stage declared. */
 DFTU_EXPORT int32_t dftu_schema_field_count(const dftu_schema* schema);
 
+/** The name of top-level field `i` of `schema`, borrowed from the schema, or
+   NULL if `schema` is NULL or `i` is out of range. */
+DFTU_EXPORT const char* dftu_schema_field_name(const dftu_schema* schema,
+                                               int32_t i);
+
+/** The dftu_dtype code of top-level field `i`, or -1 if `schema` is NULL or
+   `i` is out of range (DFTU_TYPE_UNKNOWN is a valid field type, so it cannot
+   double as the error). */
+DFTU_EXPORT int32_t dftu_schema_field_type(const dftu_schema* schema,
+                                           int32_t i);
+
+/** Whether top-level field `i` is nullable: 1 or 0, or -1 if `schema` is NULL
+   or `i` is out of range. */
+DFTU_EXPORT int32_t dftu_schema_field_nullable(const dftu_schema* schema,
+                                               int32_t i);
+
+/** The dftu_time_unit code field `i` carries, which a Timestamp, Time32,
+   Time64 or Duration field uses (DFTU_TIME_UNIT_MICRO for any other type), or
+   -1 if `schema` is NULL or `i` is out of range. */
+DFTU_EXPORT int32_t dftu_schema_field_time_unit(const dftu_schema* schema,
+                                                int32_t i);
+
 /** Appends top-level field `i` of `schema` (name, type, and every parameter,
    including nested children) as a new field of `out`. Returns the new
    field's index in `out` (same convention as dftu_schema_add_field), or -1 if

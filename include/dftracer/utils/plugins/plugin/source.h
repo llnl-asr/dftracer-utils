@@ -3,8 +3,11 @@
 #define DFTRACER_UTILS_PLUGINS_PLUGIN_SOURCE_H
 
 #include <dftracer/utils/dataframe/c_api.h>
+#include <dftracer/utils/dataframe/types.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/plugin/frame.h>
@@ -12,7 +15,9 @@
 #include <dftracer/utils/plugins/plugin/types.h>
 
 #include <algorithm>
+#include <array>
 #include <concepts>
+#include <cstddef>
 #include <cstdint>
 #include <utility>
 
@@ -54,6 +59,22 @@
 
 namespace dftracer::utils::plugins {
 
+namespace detail {
+struct ExprAccess;
+struct SchemaAccess;
+}  // namespace detail
+
+/// The query-language enums of the dataframe library, spelled as themselves: a
+/// plugin writes @ref CmpOp "CmpOp::Gt" and @ref Pushed "Pushed::No", never a
+/// status code.
+using dataframe::CmpOp;
+using dataframe::JoinHow;
+using dataframe::LogicalOp;
+using dataframe::Pushed;
+using dataframe::ScalarKind;
+using dataframe::StrPredOp;
+using dataframe::TimeUnit;
+
 class OwnedExpr;
 
 /// A borrowed expression, positional against the source's schema().
@@ -61,8 +82,6 @@ class ExprView {
    public:
     ExprView() = default;
     explicit ExprView(const dftu_expr* e) noexcept : e_(e) {}
-
-    const dftu_expr* raw() const noexcept { return e_; }
     explicit operator bool() const noexcept { return e_ != nullptr; }
 
     /// The column when this is a bare column reference.
@@ -72,26 +91,39 @@ class ExprView {
         return c;
     }
 
+    /// `column <op> literal`.
     struct Compare {
-        std::int32_t column;
-        dftu_cmp_op op;
-        dftu_scalar rhs;  ///< a string borrows from this expression
+        std::int32_t column = -1;
+        CmpOp op = CmpOp::Eq;
+
+        /// The literal, read in its own domain. It borrows this Compare, so it
+        /// is valid only while this object lives.
+        ScalarView rhs() const noexcept { return ScalarView(&literal_); }
+
+       private:
+        friend class ExprView;
+        dftu_scalar literal_{};  ///< a string borrows from the expression
     };
     dstd::Optional<Compare> as_compare() const {
         std::int32_t col = -1, op = 0;
         dftu_scalar rhs{};
         if (!e_ || !dftu_expr_as_col_cmp(e_, &col, &op, &rhs))
             return dstd::nullopt;
-        return Compare{col, static_cast<dftu_cmp_op>(op), rhs};
+        Compare cmp;
+        cmp.column = col;
+        cmp.op = static_cast<CmpOp>(op);
+        cmp.literal_ = rhs;
+        return cmp;
     }
 
     struct Logical;
     dstd::Optional<Logical> as_logical() const;
     dstd::Optional<OwnedExpr> as_not() const;
 
+    /// `column <op> pattern`.
     struct StrPred {
-        std::int32_t column;
-        dftu_str_pred_op op;
+        std::int32_t column = -1;
+        StrPredOp op = StrPredOp::Contains;
         dstd::StringView pattern;  ///< borrows from this expression
     };
     dstd::Optional<StrPred> as_str_pred() const {
@@ -99,30 +131,60 @@ class ExprView {
         const char* pat = nullptr;
         if (!e_ || !dftu_expr_as_col_str_pred(e_, &col, &op, &pat, &len))
             return dstd::nullopt;
-        return StrPred{col, static_cast<dftu_str_pred_op>(op),
+        return StrPred{col, static_cast<StrPredOp>(op),
                        dstd::StringView(pat, static_cast<std::size_t>(len))};
     }
 
+    /// `column is_in values`.
     struct IsIn {
-        std::int32_t column;
-        Column values;
+        std::int32_t column = -1;
+
+        /// The candidate values. They borrow this IsIn, so the view is valid
+        /// only while this object lives.
+        ColumnView values() const noexcept { return ColumnView(values_.get()); }
+
+       private:
+        friend class ExprView;
+        Column values_;
     };
     dstd::Optional<IsIn> as_is_in() const {
         std::int32_t col = -1;
         dftu_series* values = nullptr;
         if (!e_ || !dftu_expr_as_col_is_in(e_, &col, &values))
             return dstd::nullopt;
-        return IsIn{col, Column(values)};
+        IsIn in;
+        in.column = col;
+        in.values_ = Column(values);
+        return in;
     }
 
-    /// Evaluate over `inputs`; an empty result on a malformed expression.
-    Column eval(const dstd::Vector<const dftu_series*>& inputs) const {
-        if (!e_) return {};
-        return Column(dftu_expr_eval(e_, inputs.data(),
-                                     static_cast<std::int32_t>(inputs.size())));
+    /// Evaluate over `inputs`, one column per positional index the expression
+    /// reads. An empty column on a malformed expression and on an expression
+    /// that reads more columns than it was given.
+    Column eval(dstd::Span<const ColumnView> inputs) const {
+        if (!e_) return Column();
+        const std::size_t n = inputs.size();
+        // The C call takes one pointer per column, so the common small frame
+        // evaluates without allocating.
+        std::array<const dftu_series*, 8> stack{};
+        dstd::Vector<const dftu_series*> heap;
+        const dftu_series* const* columns = nullptr;
+        if (n <= stack.size()) {
+            for (std::size_t i = 0; i < n; ++i)
+                stack[i] = dataframe::detail::column_series(inputs[i]);
+            columns = stack.data();
+        } else {
+            heap.reserve(n);
+            for (const ColumnView& input : inputs)
+                heap.push_back(dataframe::detail::column_series(input));
+            columns = heap.data();
+        }
+        return Column(
+            dftu_expr_eval(e_, columns, static_cast<std::int32_t>(n)));
     }
 
    private:
+    friend struct detail::ExprAccess;
     const dftu_expr* e_ = nullptr;
 };
 
@@ -153,7 +215,7 @@ class OwnedExpr {
 };
 
 struct ExprView::Logical {
-    dftu_logical_op op;
+    LogicalOp op = LogicalOp::And;
     OwnedExpr lhs;
     OwnedExpr rhs;
 };
@@ -163,8 +225,7 @@ inline dstd::Optional<ExprView::Logical> ExprView::as_logical() const {
     dftu_expr* a = nullptr;
     dftu_expr* b = nullptr;
     if (!e_ || !dftu_expr_as_logical(e_, &op, &a, &b)) return dstd::nullopt;
-    return Logical{static_cast<dftu_logical_op>(op), OwnedExpr(a),
-                   OwnedExpr(b)};
+    return Logical{static_cast<LogicalOp>(op), OwnedExpr(a), OwnedExpr(b)};
 }
 
 inline dstd::Optional<OwnedExpr> ExprView::as_not() const {
@@ -172,6 +233,20 @@ inline dstd::Optional<OwnedExpr> ExprView::as_not() const {
     if (!e_ || !dftu_expr_as_not(e_, &a)) return dstd::nullopt;
     return OwnedExpr(a);
 }
+
+namespace detail {
+
+/// The C expression a @ref ExprView borrows. SDK plumbing, not plugin surface.
+struct ExprAccess {
+    static const dftu_expr* raw(const ExprView& e) noexcept { return e.e_; }
+};
+
+/// @see ExprAccess
+inline const dftu_expr* expr_raw(const ExprView& e) noexcept {
+    return ExprAccess::raw(e);
+}
+
+}  // namespace detail
 
 struct NamedExpr {
     dstd::StringView name;
@@ -201,7 +276,7 @@ struct JoinView {
     const S& other;  ///< the right side, fully absorbed into its own source
     dstd::Vector<dstd::StringView> left_on;
     dstd::Vector<dstd::StringView> right_on;
-    dftu_join_how how;
+    JoinHow how = JoinHow::Inner;
     dstd::StringView suffix;
 };
 
@@ -215,8 +290,8 @@ struct ScanView {
 template <class Cursor>
 struct ScanResult {
     dstd::UniquePtr<Cursor> cursor;
-    /// One entry per ScanView::filters; missing entries read as NO.
-    dstd::Vector<dftu_pushed> filters;
+    /// One entry per ScanView::filters; missing entries read as Pushed::No.
+    dstd::Vector<Pushed> filters;
 };
 
 enum class Apply { Exact, Inexact };
@@ -230,16 +305,43 @@ struct Applied {
 class SchemaBuilder {
    public:
     explicit SchemaBuilder(dftu_schema* s) noexcept : s_(s) {}
-    /// Appends a column; returns its index, or -1 on a bad argument.
-    std::int32_t add(const char* name, dftu_dtype type, bool nullable = true) {
-        return dftu_schema_add_field(s_, name, type, nullable ? 1 : 0,
-                                     DFTU_TIME_UNIT_MICRO, nullptr, 0, 0, 0);
+
+    /// Append a column whose time values are microseconds, the unit an ABI
+    /// column that declares none reads in.
+    std::int32_t add(dstd::CStringView name, TypeId type,
+                     bool nullable = true) {
+        return add(name, type, TimeUnit::Micro, nullable);
     }
-    dftu_schema* raw() const noexcept { return s_; }
+    /// Append a column read in `unit`, which a Timestamp, Time or Duration
+    /// column uses and every other type ignores. Returns the field's index, or
+    /// -1 for a type cast from outside @ref TypeId; a call that names a
+    /// @ref TypeId value cannot fail, so it may ignore the result.
+    std::int32_t add(dstd::CStringView name, TypeId type, TimeUnit unit,
+                     bool nullable = true) {
+        return dftu_schema_add_field(
+            s_, name.c_str(), static_cast<dftu_dtype>(type), nullable ? 1 : 0,
+            static_cast<dftu_time_unit>(unit), nullptr, 0, 0, 0);
+    }
 
    private:
-    dftu_schema* s_;
+    friend struct detail::SchemaAccess;
+    dftu_schema* s_ = nullptr;
 };
+
+namespace detail {
+
+/// The C schema a @ref SchemaBuilder appends to. SDK plumbing, not plugin
+/// surface.
+struct SchemaAccess {
+    static dftu_schema* raw(const SchemaBuilder& b) noexcept { return b.s_; }
+};
+
+/// @see SchemaAccess
+inline dftu_schema* schema_raw(const SchemaBuilder& b) noexcept {
+    return SchemaAccess::raw(b);
+}
+
+}  // namespace detail
 
 namespace detail {
 
@@ -469,7 +571,7 @@ struct SourceVt {
                     const S& other = *static_cast<Box*>(j.other_self)->source;
                     JoinView<S> v{other, string_views(j.left_on, j.n_on),
                                   string_views(j.right_on, j.n_on),
-                                  static_cast<dftu_join_how>(j.how),
+                                  static_cast<JoinHow>(j.how),
                                   j.suffix ? j.suffix : ""};
                     return s.apply_join(v);
                 }

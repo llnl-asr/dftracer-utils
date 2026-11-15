@@ -87,27 +87,27 @@ dstd::StringView next_line(dstd::StringView body, std::size_t* at) {
 
 struct CsvColumn {
     dstd::String name;
-    dftu_dtype type = DFTU_TYPE_STRING;
+    TypeId type = TypeId::String;
     dstd::Vector<dstd::String> cells;  ///< one per row of the file
 };
 
-dftu_dtype type_of(const dstd::Vector<dstd::String>& cells) {
-    if (cells.empty()) return DFTU_TYPE_STRING;
+TypeId type_of(const dstd::Vector<dstd::String>& cells) {
+    if (cells.empty()) return TypeId::String;
     bool integral = true;
     bool numeric = true;
     for (const dstd::String& cell : cells) {
         const dstd::StringView text(cell);
         if (integral && !is_integer(text)) integral = false;
         if (numeric && !is_number(text)) numeric = false;
-        if (!integral && !numeric) return DFTU_TYPE_STRING;
+        if (!integral && !numeric) return TypeId::String;
     }
-    if (integral) return DFTU_TYPE_INT64;
-    if (numeric) return DFTU_TYPE_FLOAT64;
-    return DFTU_TYPE_STRING;
+    if (integral) return TypeId::Int64;
+    if (numeric) return TypeId::Float64;
+    return TypeId::String;
 }
 
 Column make_column(const CsvColumn& column, std::int64_t from, std::int64_t n) {
-    if (column.type == DFTU_TYPE_STRING) {
+    if (column.type == TypeId::String) {
         dstd::Vector<std::int32_t> offsets;
         dstd::String data;
         offsets.reserve(static_cast<std::size_t>(n) + 1);
@@ -120,7 +120,7 @@ Column make_column(const CsvColumn& column, std::int64_t from, std::int64_t n) {
         }
         return Column::from_strings(std::move(offsets), std::move(data));
     }
-    if (column.type == DFTU_TYPE_INT64) {
+    if (column.type == TypeId::Int64) {
         dstd::Vector<std::int64_t> values(static_cast<std::size_t>(n), 0);
         for (std::int64_t i = 0; i < n; ++i)
             is_integer(column.cells[static_cast<std::size_t>(from + i)],
@@ -240,7 +240,7 @@ class CsvFile : public FormatFile {
         const std::int64_t rows = first < end ? end - first : 0;
 
         ScanResult<FormatCursor> result;
-        result.filters.assign(view.filters.size(), DFTU_PUSHED_NO);
+        result.filters.assign(view.filters.size(), Pushed::No);
         result.cursor =
             dstd::UniquePtr<FormatCursor>(dstd::make_unique<CsvCursor>(
                 columns_, std::move(picked), first, rows));
@@ -254,11 +254,10 @@ class CsvFile : public FormatFile {
 
 class CsvFormat : public FileFormat {
    public:
-    std::int32_t probe(const std::uint8_t* head, std::uint64_t n,
-                       dstd::StringView path) override {
-        if (!path.ends_with(".csv")) return 0;
-        const dstd::StringView text(reinterpret_cast<const char*>(head),
-                                    static_cast<std::size_t>(n));
+    std::int32_t probe(dstd::ByteView head, dstd::CStringView path) override {
+        if (!dstd::StringView(path.c_str()).ends_with(".csv")) return 0;
+        const dstd::StringView text(reinterpret_cast<const char*>(head.data()),
+                                    head.size());
         std::size_t at = 0;
         const dstd::StringView first = next_line(text, &at);
         if (first.empty() || first.find(',') == dstd::StringView::npos)

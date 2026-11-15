@@ -1529,9 +1529,11 @@ in place of ``(std::int64_t)`` gets a ``Host`` that is good for that call.
        // `id > k` becomes a narrower range; anything else stays with the engine.
        dstd::Optional<pl::Applied<Range>> apply_filter(pl::ExprView p) const {
            auto c = p.as_compare();
-           if (!c || c->column != 0 || c->op != DFTU_CMP_GT) return dstd::nullopt;
-           return pl::Applied<Range>{
-               dstd::make_unique<Range>(c->rhs.value.i + 1, hi_)};
+           if (!c || c->column != 0 || c->op != pl::CmpOp::Gt)
+               return dstd::nullopt;
+           const pl::ScalarView k = c->rhs();
+           if (k.kind() != pl::ScalarKind::I64) return dstd::nullopt;
+           return pl::Applied<Range>{dstd::make_unique<Range>(k.i64() + 1, hi_)};
        }
        // ...
    };
@@ -1539,6 +1541,12 @@ in place of ``(std::int64_t)`` gets a ``Host`` that is good for that call.
    return pl::plugin(ctx, h, config)
        .source<Range>("me.range", dstd::make_unique<Range>(0, 1000))
        .build(out);
+
+A source also votes on the filters it absorbed: ``ScanResult::filters`` holds one
+``Pushed`` per ``ScanView::filters`` entry (``Pushed::Exact`` when the rows the
+cursor hands out already satisfy it, ``Pushed::No`` or no entry when the engine
+must apply it). A node reads its operands through ``OpArgs``: ``i64``, ``f64``,
+``str``, ``column`` and ``column_index`` by position, plus ``OpArgs::size()``.
 
 **Building a frame.** ``plugins/plugin/frame.h`` makes the frames and columns
 that a plugin gives away, and copies no data. ``Column`` takes the plugin's
@@ -1844,19 +1852,29 @@ exception per callback and report it as a status.
    #include <dftracer/utils/plugins/plugin.h>
    namespace pl = dftracer::utils::plugins;
 
-   class Rows {                       // a text file of "<id> <name>" lines
+   class Rows : public pl::FileFormat {     // a file of "<id> <name>" lines
     public:
-       int probe(const std::uint8_t* head, std::uint64_t n,
-                 dstd::StringView path) const {
+       std::int32_t probe(dstd::ByteView head,
+                          dstd::CStringView path) override {
            (void)path;
-           return n >= 4 && std::memcmp(head, "TOY1", 4) == 0 ? 90 : 0;
+           return head.size() >= 4 &&
+                          std::memcmp(head.data(), "TOY1", 4) == 0
+                      ? 90
+                      : 0;
        }
-       class File { /* the parsed rows */ };
-       dstd::Result<File> open(dstd::StringView path);
-       dstd::Vector<pl::Field> schema(const File&) const;   // id: Int64, name: String
-       std::uint64_t chunks(const File&) const { return 2; }
-       std::unique_ptr<pl::FormatCursor> scan(File&, std::uint64_t chunk,
-                                             const pl::ScanRequest&);
+       dstd::Result<dstd::UniquePtr<pl::FormatFile>> open(
+           dstd::StringView path) override;
+   };
+
+   class File : public pl::FormatFile {     // the parsed rows
+    public:
+       void schema(pl::SchemaBuilder& out) const override {
+           out.add("id", pl::TypeId::Int64, false);
+           out.add("name", pl::TypeId::String);
+       }
+       std::uint64_t chunks() const override { return 2; }
+       dstd::Result<pl::ScanResult<pl::FormatCursor>> scan(
+           std::uint64_t chunk, const pl::ScanView&) override;
    };
 
    return plugin(ctx, h, config).file_format<Rows>().fold<MySlice>().build(out);
@@ -1870,9 +1888,12 @@ exactly the projected columns, and votes on no filter. Its golden test is
 ``examples/plugins/tests/csv_reader/basic.test``.
 
 **Sinks.** ``DFTU_SVC_FILE_FORMATS`` also takes a ``dftu_sink_vt``
-(``register_sink``, ``PluginBuilder::sink<S>``): an output format that names
-the columns and options it accepts (``bind``), takes one borrowed frame per
-call (``write``), and finishes with ``finalize`` or ``abort``.
+(``register_sink``, ``PluginBuilder::sink<S>``): an output format whose ``bind``
+gets a ``BindView`` of the caller's column ``names``, their ``types`` and the
+``options`` tree, and hands back a ``SinkWriter`` whose ``write`` takes one
+borrowed ``FrameView`` per call and whose ``finalize`` or ``abort`` ends the
+run. A column of the frame is a ``ColumnView``, which shares its buffers, so
+``write`` reads the rows in place.
 
 A sink name is the plugin's own name, such as ``toy`` from plugin ``toy``, or
 ``<plugin>.<name>``. Any other name fails the load. Every surface reaches it:

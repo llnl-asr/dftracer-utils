@@ -3,12 +3,15 @@
 #define DFTRACER_UTILS_PLUGINS_PLUGIN_FILE_FORMAT_H
 
 #include <dftracer/utils/dataframe/c_api.h>
+#include <dftracer/utils/dstd/byte_view.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi/file_formats.h>
+#include <dftracer/utils/plugins/plugin/frame.h>
 #include <dftracer/utils/plugins/plugin/source.h>
 #include <dftracer/utils/plugins/plugin/types.h>
 
@@ -65,11 +68,12 @@ class FormatFile {
 class FileFormat {
    public:
     virtual ~FileFormat() = default;
-    /// How well `head[0..n)` matches this format: 0 (not mine) to 100
-    /// (certain). `path` is the file's path, for a format that decides by
-    /// name. Called without a host, from any thread.
-    virtual std::int32_t probe(const std::uint8_t* head, std::uint64_t n,
-                               dstd::StringView path) = 0;
+    /// How well the first bytes of a file match this format: 0 (not mine) to
+    /// 100 (certain). @p head is the file's first bytes, borrowed for the call
+    /// and possibly empty; @p path is the file's path, borrowed for the call,
+    /// for a format that decides by name. Called without a host, from any
+    /// thread.
+    virtual std::int32_t probe(dstd::ByteView head, dstd::CStringView path) = 0;
     /// Open `path`; the returned file is closed when the last plan or cursor
     /// holding it is gone.
     virtual dstd::Result<dstd::UniquePtr<FormatFile>> open(
@@ -79,8 +83,10 @@ class FileFormat {
 /// What one bound output is for.
 struct BindView {
     dstd::Vector<dstd::StringView> names;  ///< output columns, in order
-    dstd::Vector<std::int32_t> types;      ///< dftu_dtype codes, same order
-    const dftu_value* options = nullptr;   ///< NULL when the caller gave none
+    dstd::Vector<TypeId> types;            ///< one type per name, same order
+    /// The caller's config for this output; a null @ref Config when it gave
+    /// none.
+    Config options;
 };
 
 /// A writer for one bound output. Derived by the plugin.
@@ -89,7 +95,7 @@ class SinkWriter {
     virtual ~SinkWriter() = default;
     /// Write one frame. @p batch is borrowed for the call, and every frame of
     /// one output carries the bound columns in that order.
-    virtual dstd::Result<void> write(const dftu_dataframe* batch) = 0;
+    virtual dstd::Result<void> write(FrameView batch) = 0;
     /// Finish the output. Called once, after the last write().
     virtual dstd::Result<void> finalize() = 0;
     /// Give up on the output. Called once instead of finalize(), and never
@@ -131,8 +137,9 @@ struct FileFormatVt {
 
     static std::int32_t probe(void* self, const std::uint8_t* head,
                               std::uint64_t n, const char* path) noexcept {
-        return static_cast<Box*>(self)->format->probe(head, n,
-                                                      path ? path : "");
+        return static_cast<Box*>(self)->format->probe(
+            dstd::ByteView(head, static_cast<std::size_t>(n)),
+            dstd::CStringView(path != nullptr ? path : ""));
     }
 
     static dftu_status open(dftu_ctx* ctx, void* self, const char* path,
@@ -199,7 +206,7 @@ struct FileFormatVt {
                 std::min<std::size_t>(result.filters.size(),
                                       static_cast<std::size_t>(req->n_filters));
             for (std::size_t i = 0; i < n; ++i)
-                out_pushed[i] = result.filters[i];
+                out_pushed[i] = static_cast<std::int32_t>(result.filters[i]);
             *out_cursor_self =
                 new CursorBox<FormatCursor>{std::move(result.cursor), host};
             *out_vt = CursorVt<FormatCursor>::vt();
@@ -243,9 +250,11 @@ struct SinkVt {
             view.types.reserve(n_columns);
             for (std::uint32_t i = 0; i < n_columns; ++i) {
                 view.names.emplace_back(names && names[i] ? names[i] : "");
-                view.types.push_back(types ? types[i] : DFTU_TYPE_UNKNOWN);
+                view.types.push_back(types != nullptr
+                                         ? static_cast<TypeId>(types[i])
+                                         : TypeId::Unknown);
             }
-            view.options = options;
+            view.options = Config(options);
             auto writer = static_cast<Box*>(self)->sink->bind(view);
             if (!writer.has_value()) return report(ctx, writer.error());
             if (!*writer)
@@ -259,7 +268,8 @@ struct SinkVt {
     static dftu_status write(dftu_ctx* ctx, void* sink,
                              const dftu_dataframe* batch) noexcept {
         return to_status(ctx, [&] {
-            return static_cast<WriterBox*>(sink)->writer->write(batch);
+            return static_cast<WriterBox*>(sink)->writer->write(
+                FrameView(batch));
         });
     }
 

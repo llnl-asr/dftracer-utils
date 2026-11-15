@@ -18,7 +18,8 @@ Write it
 
 A sink is one class with a ``bind`` and a writer class with ``write``,
 ``finalize`` and ``abort``. ``bind`` names the columns it takes and reads the
-options; ``write`` gets one borrowed frame per call, so keep no pointer to it.
+options; ``write`` gets one borrowed ``FrameView`` per call, so keep no pointer
+to it.
 
 .. code-block:: cpp
 
@@ -27,8 +28,17 @@ options; ``write`` gets one borrowed frame per call, so keep no pointer to it.
    class Writer : public pl::SinkWriter {
     public:
        explicit Writer(FILE* out) : out_(out) {}
-       dstd::Result<void> write(const dftu_dataframe* batch) override {
-           // one CSV line per row of `batch`
+       dstd::Result<void> write(pl::FrameView batch) override {
+           // One CSV line per row. bind took only "id", so it is column 0.
+           // flat() shares a FLAT column's buffer with no copy, and turns a
+           // selection or dictionary column into a FLAT one.
+           dstd::Result<pl::Column> id = batch.column(0).flat();
+           if (!id) return pl::invalid_argument("csv: no id column");
+           const dstd::Span<const std::int64_t> ids =
+               pl::ColumnView(id->get()).values<std::int64_t>();
+           for (const std::int64_t value : ids)
+               std::fprintf(out_, "%lld\n", static_cast<long long>(value));
+           return {};
        }
        dstd::Result<void> finalize() override { std::fclose(out_); return {}; }
        void abort() override { std::fclose(out_); }
@@ -40,7 +50,10 @@ options; ``write`` gets one borrowed frame per call, so keep no pointer to it.
     public:
        dstd::Result<dstd::UniquePtr<pl::SinkWriter>> bind(
            const pl::BindView& view) override {
-           return {dstd::make_unique<Writer>(open_path(view.options))};
+           // view.names and view.types are the caller's columns in order;
+           // view.options is the option tree it passed.
+           return {dstd::make_unique<Writer>(
+               open_path(view.options.get("path")))};
        }
    };
 

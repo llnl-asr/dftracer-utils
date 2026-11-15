@@ -156,6 +156,35 @@ int32_t dftu_schema_field_count(const dftu_schema* schema) {
     return static_cast<int32_t>(schema->top.size());
 }
 
+// Top-level field `i` of a schema, or NULL when `schema` is NULL or `i` is out
+// of range. Internal to this file; `schema->top` mirrors dataframe::Schema.
+static const dftracer::utils::dataframe::Field* field_at(
+    const ::dftu_schema* schema, int32_t i) {
+    if (!schema || i < 0 || static_cast<std::size_t>(i) >= schema->top.size())
+        return nullptr;
+    return &schema->top[static_cast<std::size_t>(i)];
+}
+
+const char* dftu_schema_field_name(const dftu_schema* schema, int32_t i) {
+    const auto* const f = field_at(schema, i);
+    return f != nullptr ? f->name.c_str() : nullptr;
+}
+
+int32_t dftu_schema_field_type(const dftu_schema* schema, int32_t i) {
+    const auto* const f = field_at(schema, i);
+    return f != nullptr ? static_cast<int32_t>(f->type.id) : -1;
+}
+
+int32_t dftu_schema_field_nullable(const dftu_schema* schema, int32_t i) {
+    const auto* const f = field_at(schema, i);
+    return f != nullptr ? (f->nullable ? 1 : 0) : -1;
+}
+
+int32_t dftu_schema_field_time_unit(const dftu_schema* schema, int32_t i) {
+    const auto* const f = field_at(schema, i);
+    return f != nullptr ? static_cast<int32_t>(f->type.time_unit()) : -1;
+}
+
 int32_t dftu_schema_copy_field(dftu_schema* out, const dftu_schema* schema,
                                int32_t i) {
     if (!out || !schema) return -1;

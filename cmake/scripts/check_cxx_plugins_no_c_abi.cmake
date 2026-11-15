@@ -32,7 +32,10 @@ set(ALLOW_FILES
     tests/plugins/provider_fixture_plugin.cpp
     # Registers a raw provider vtable to feed a raw dftu_dataframe into the node
     # under test.
-    tests/plugins/sessionize_input_plugin.cpp)
+    tests/plugins/sessionize_input_plugin.cpp
+    # Exports its own toy_sink_stats/option/rows symbols for the host test to
+    # read with dlsym; that export spelling is what the fixture is about.
+    tests/plugins/toy_sink_plugin.cpp)
 
 file(GLOB examples "${SOURCE_DIR}/examples/plugins/*.cpp")
 file(GLOB templates "${SOURCE_DIR}/src/dftracer/utils/cli/plugin_templates/*/plugin.cpp")

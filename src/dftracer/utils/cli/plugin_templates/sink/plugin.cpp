@@ -18,9 +18,8 @@ class LineWriter : public SinkWriter {
    public:
     explicit LineWriter(std::FILE* file) : file_(file) {}
 
-    dstd::Result<void> write(const dftu_dataframe* batch) override {
-        for (std::int64_t row = 0; row < dftu_dataframe_num_rows(batch);
-             ++row) {
+    dstd::Result<void> write(FrameView batch) override {
+        for (std::int64_t row = 0; row < batch.row_count(); ++row) {
             std::fputs("row\n", file_);
         }
         if (std::ferror(file_) != 0)
@@ -50,11 +49,12 @@ class LineSink : public Sink {
    public:
     dstd::Result<dstd::UniquePtr<SinkWriter>> bind(
         const BindView& view) override {
-        const dftu_value* path = dftu_obj_get(view.options, "path");
-        if (path == nullptr || path->kind != DFTU_VAL_STR)
+        const dstd::StringView path = view.options.get("path");
+        if (path.empty())
             return dstd::Unexpected(invalid_argument(
                 "@NAME@: bind needs the option path, e.g. path \"out.txt\""));
-        std::FILE* file = std::fopen(path->as.str, "wb");
+        const dstd::String file_path(path);
+        std::FILE* file = std::fopen(file_path.c_str(), "wb");
         if (file == nullptr)
             return dstd::Unexpected(io_error("@NAME@: cannot open the output"));
         return dstd::UniquePtr<SinkWriter>(dstd::make_unique<LineWriter>(file));

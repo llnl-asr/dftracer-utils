@@ -68,8 +68,8 @@ class RangeSource {
     dstd::Vector<dstd::String> names() const { return {"id", "val"}; }
 
     void schema(plugins::SchemaBuilder& b) const {
-        b.add("id", DFTU_TYPE_INT64, false);
-        b.add("val", DFTU_TYPE_INT64, false);
+        b.add("id", plugins::TypeId::Int64, false);
+        b.add("val", plugins::TypeId::Int64, false);
     }
 
     class Cursor {
@@ -128,15 +128,16 @@ class RangeSource {
     dstd::Result<dstd::Optional<plugins::Applied<RangeSource>>> apply_filter(
         plugins::ExprView pred) const {
         auto cmp = pred.as_compare();
-        if (!cmp || cmp->column != 0 || cmp->rhs.kind != DFTU_SCALAR_TAG_I64)
+        if (!cmp || cmp->column != 0 ||
+            cmp->rhs().kind() != plugins::ScalarKind::I64)
             return dstd::nullopt;
-        if (cmp->rhs.value.i == APPLY_THROWS)
+        if (cmp->rhs().i64() == APPLY_THROWS)
             return plugins::internal("range apply broke");
         std::int64_t lo = lo_;
-        if (cmp->op == DFTU_CMP_GT)
-            lo = cmp->rhs.value.i + 1;
-        else if (cmp->op == DFTU_CMP_GE)
-            lo = cmp->rhs.value.i;
+        if (cmp->op == plugins::CmpOp::Gt)
+            lo = cmp->rhs().i64() + 1;
+        else if (cmp->op == plugins::CmpOp::Ge)
+            lo = cmp->rhs().i64();
         else
             return dstd::nullopt;
         if (lo <= lo_) return dstd::nullopt;
@@ -159,7 +160,7 @@ class RangeSource {
     // Records the offer of an inner join on id, then leaves it to the engine.
     dstd::Result<dstd::Optional<plugins::Applied<RangeSource>>> apply_join(
         const plugins::JoinView<RangeSource>& j) const {
-        if (j.how != DFTU_JOIN_INNER || j.left_on.size() != 1 ||
+        if (j.how != plugins::JoinHow::Inner || j.left_on.size() != 1 ||
             j.left_on[0] != "id" || j.right_on[0] != "id")
             return dstd::nullopt;
         ++c_->joins_absorbed;

@@ -574,25 +574,26 @@ TEST_CASE("SDK: Json and Yaml parse, report errors and write a document") {
     Ctx c;
     dftu_plugin_host& host = fx.host();
 
-    plugins::Json json(&host, c.get());
+    plugins::Host h = plugins::detail::host_from_raw(&host, c.get());
+    plugins::Json json = h.json();
     auto doc = json.parse(R"({"a":{"b":[1,2,3]},"s":"x"})");
     REQUIRE(doc.has_value());
-    const dftu_value* b = dftu_obj_get(dftu_obj_get(doc->root(), "a"), "b");
-    REQUIRE(b != nullptr);
-    CHECK(b->count == 3);
-    CHECK(dftu_as_i64(&b->as.items[2], 0) == 3);
+    const plugins::ConfigValue root = doc->root();
+    CHECK(root["s"].as_str() == "x");
+    REQUIRE(root["a"]["b"].size() == 3);
+    CHECK(root["a"]["b"][2u].as_i64() == 3);
 
     auto bad = json.parse("{\"a\": tru}");
     REQUIRE(!bad.has_value());
     CHECK(plugins::status_of(bad.error()) == DFTU_E_PARSE);
     CHECK(c.message().find("1:7:") != dstd::String::npos);
 
-    plugins::Yaml yaml(&host, c.get());
+    plugins::Yaml yaml = h.yaml();
     auto writer = yaml.writer();
     REQUIRE(writer.has_value());
     CHECK(writer->begin_object().has_value());
     CHECK(writer->key("name").has_value());
-    CHECK(writer->value("demo").has_value());
+    CHECK(writer->value(dstd::StringView("demo")).has_value());
     auto refused = writer->end_array();
     REQUIRE(!refused.has_value());
     CHECK(plugins::status_of(refused.error()) == DFTU_E_INVALID);
@@ -602,7 +603,41 @@ TEST_CASE("SDK: Json and Yaml parse, report errors and write a document") {
     CHECK(*text == "name: demo");
     auto back = yaml.parse(*text);
     REQUIRE(back.has_value());
-    CHECK(dftu_obj_get(back->root(), "name") != nullptr);
+    CHECK(back->root()["name"].as_str() == "demo");
+}
+
+TEST_CASE("SDK: FormatWriter::value writes a literal, a buffer and a String") {
+    HostFixture fx;
+    Ctx c;
+    dftu_plugin_host& host = fx.host();
+
+    plugins::Host h = plugins::detail::host_from_raw(&host, c.get());
+    plugins::Json json = h.json();
+    auto writer = json.writer();
+    REQUIRE(writer.has_value());
+    CHECK(writer->begin_object().has_value());
+
+    CHECK(writer->key(dstd::StringView("lit")).has_value());
+    CHECK(writer->value("literal").has_value());
+
+    // A 64-byte buffer whose text is 3 bytes: the array overload writes the
+    // text, not 63 bytes of the buffer.
+    char buf[64] = "abc";
+    CHECK(writer->key(dstd::StringView("buf")).has_value());
+    CHECK(writer->value(buf).has_value());
+
+    dstd::String owned = "own";
+    CHECK(writer->key(dstd::StringView("own")).has_value());
+    CHECK(writer->value(owned).has_value());
+
+    CHECK(writer->end_object().has_value());
+    auto text = writer->finish();
+    REQUIRE(text.has_value());
+    auto back = json.parse(*text);
+    REQUIRE(back.has_value());
+    CHECK(back->root()["lit"].as_str() == "literal");
+    CHECK(back->root()["buf"].as_str() == "abc");
+    CHECK(back->root()["own"].as_str() == "own");
 }
 
 TEST_CASE("C ABI: dftu_svc_fileio writer create/open/chunk/close from C") {

@@ -42,7 +42,7 @@ struct OpArgsBuilderAccess;
 inline AsyncOp started(const dftu_plugin_host* host, dftu_status st,
                        dftu_task* const& t) {
     if (st < 0) return AsyncOp{dataframe::error_of(st)};
-    return AsyncOp{t, host};
+    return async_op(t, host);
 }
 
 }  // namespace detail
@@ -195,16 +195,20 @@ class Host {
         h_->log(h_->h, static_cast<std::uint8_t>(level), msg.data(),
                 static_cast<std::uint32_t>(msg.size()));
     }
-    AsyncOp await(dftu_task* t) const { return AsyncOp{t, h_}; }
-    /// The op of a task handed over by @ref AsyncOp::release; an op that never
-    /// started fails with its own error.
+    AsyncOp await(dftu_task* t) const { return detail::async_op(t, h_); }
+    /// The op of a task handed over by @ref detail::release_op; an op that
+    /// never started fails with its own error.
     AsyncOp await(dstd::Result<dftu_task*> t) const {
         if (!t.has_value()) return AsyncOp{std::move(t).error()};
-        return AsyncOp{*t, h_};
+        return detail::async_op(*t, h_);
     }
     /// Await every task together; see @ref AsyncAll.
     AsyncAll all(std::initializer_list<dstd::Result<dftu_task*>> ts) const {
         return AsyncAll(ts, h_);
+    }
+    /// Await every task in `ts` together, taking them over.
+    AsyncAll all(dstd::Vector<dstd::Result<dftu_task*>> ts) const {
+        return AsyncAll(std::move(ts), h_);
     }
 
     /// The task service: jobs, spawn and drive; see abi/task.h.
@@ -598,6 +602,10 @@ struct HostAccess {
         const Host& host, std::initializer_list<dstd::Result<dftu_task*>> ts) {
         return host.all(ts);
     }
+    static AsyncAll all_raw(const Host& host,
+                            dstd::Vector<dstd::Result<dftu_task*>> ts) {
+        return host.all(std::move(ts));
+    }
 };
 
 inline Host host_from_raw(const dftu_plugin_host* host,
@@ -633,6 +641,11 @@ inline AsyncOp await_result(const Host& host, dstd::Result<dftu_task*> t) {
 inline AsyncAll all_raw(const Host& host,
                         std::initializer_list<dstd::Result<dftu_task*>> ts) {
     return HostAccess::all_raw(host, ts);
+}
+
+inline AsyncAll all_raw(const Host& host,
+                        dstd::Vector<dstd::Result<dftu_task*>> ts) {
+    return HostAccess::all_raw(host, std::move(ts));
 }
 
 inline Quantiles quantiles_from_raw(dftu_quantiles q) noexcept {

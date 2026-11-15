@@ -47,9 +47,9 @@ struct DurationReport {
             co_await writer.append(
                 dstd::StringView{line, static_cast<std::size_t>(n)});
         }
-        dftu_gz_summary summary = co_await writer.close();
+        GzSummary summary = co_await writer.close();
         std::fprintf(stderr, "duration_report: lines=%llu path=%s\n",
-                     static_cast<unsigned long long>(summary.lines),
+                     static_cast<unsigned long long>(summary.lines()),
                      out.c_str());
     }
 };

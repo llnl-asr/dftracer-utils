@@ -8,6 +8,7 @@
 #include <dftracer/utils/dataframe/scalar.h>
 #include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/result.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/duql/builder.h>
 #include <dftracer/utils/plugins/abi.h>
@@ -120,6 +121,25 @@ static_assert(static_cast<dftu_job_where>(JobWhere::Inline) == DFTU_JOB_INLINE);
 static_assert(static_cast<dftu_job_where>(JobWhere::Blocking) ==
               DFTU_JOB_BLOCKING);
 
+/// Scoped mirror of dftu_file_kind for @ref FileStat::kind and
+/// @ref PathEntry::kind; each enumerator is its ABI constant, so
+/// static_cast<dftu_file_kind> recovers the raw value.
+enum class FileKind : std::int32_t {
+    Unknown = DFTU_FILE_UNKNOWN,
+    File = DFTU_FILE_FILE,
+    Directory = DFTU_FILE_DIRECTORY,
+    Symlink = DFTU_FILE_SYMLINK,
+    Other = DFTU_FILE_OTHER
+};
+static_assert(static_cast<dftu_file_kind>(FileKind::Unknown) ==
+              DFTU_FILE_UNKNOWN);
+static_assert(static_cast<dftu_file_kind>(FileKind::File) == DFTU_FILE_FILE);
+static_assert(static_cast<dftu_file_kind>(FileKind::Directory) ==
+              DFTU_FILE_DIRECTORY);
+static_assert(static_cast<dftu_file_kind>(FileKind::Symlink) ==
+              DFTU_FILE_SYMLINK);
+static_assert(static_cast<dftu_file_kind>(FileKind::Other) == DFTU_FILE_OTHER);
+
 /// The quantile summary a @ref Sketch returns; the SDK spelling of
 /// dftu_quantiles.
 struct Quantiles {
@@ -209,7 +229,103 @@ namespace detail {
 struct AggColAccess;
 struct ConfigAccess;
 struct ConfigKeyAccess;
+struct ConfigValueAccess;
+struct FileStatAccess;
 struct OpSpecAccess;
+struct StatAccess;
+struct StatxAccess;
+}  // namespace detail
+
+/// What an @ref Io::fstat reports; the SDK spelling of the C ABI's stat
+/// subset. The call fills it, so it must outlive the call's task.
+class Stat {
+   public:
+    std::uint64_t size() const noexcept { return raw_.size; }
+    /// Nanoseconds since the epoch.
+    std::uint64_t mtime_ns() const noexcept { return raw_.mtime_ns; }
+    std::uint32_t mode() const noexcept { return raw_.mode; }
+
+   private:
+    friend struct detail::StatAccess;
+
+    dftu_stat raw_{};
+};
+static_assert(sizeof(Stat) == sizeof(dftu_stat));
+
+/// What an @ref Io::statx reports, with the fields the kernel left unfilled at
+/// zero and @ref mask saying which it filled. The call fills it, so it must
+/// outlive the call's task.
+class Statx {
+   public:
+    std::uint32_t mask() const noexcept { return raw_.mask; }
+    std::uint64_t attributes() const noexcept { return raw_.attributes; }
+    std::uint64_t attributes_mask() const noexcept {
+        return raw_.attributes_mask;
+    }
+    std::uint64_t ino() const noexcept { return raw_.ino; }
+    std::uint64_t size() const noexcept { return raw_.size; }
+    std::uint64_t blocks() const noexcept { return raw_.blocks; }
+    std::int64_t atime_ns() const noexcept { return raw_.atime_ns; }
+    std::int64_t btime_ns() const noexcept { return raw_.btime_ns; }
+    std::int64_t ctime_ns() const noexcept { return raw_.ctime_ns; }
+    std::int64_t mtime_ns() const noexcept { return raw_.mtime_ns; }
+    std::uint32_t blksize() const noexcept { return raw_.blksize; }
+    std::uint32_t nlink() const noexcept { return raw_.nlink; }
+    std::uint32_t uid() const noexcept { return raw_.uid; }
+    std::uint32_t gid() const noexcept { return raw_.gid; }
+    std::uint32_t mode() const noexcept { return raw_.mode; }
+    std::uint32_t rdev_major() const noexcept { return raw_.rdev_major; }
+    std::uint32_t rdev_minor() const noexcept { return raw_.rdev_minor; }
+    std::uint32_t dev_major() const noexcept { return raw_.dev_major; }
+    std::uint32_t dev_minor() const noexcept { return raw_.dev_minor; }
+
+   private:
+    friend struct detail::StatxAccess;
+
+    dftu_statx raw_{};
+};
+static_assert(sizeof(Statx) == sizeof(dftu_statx));
+
+/// What an @ref Fs::stat_batch slot reports for one path, which it follows if
+/// it is a symlink. The call fills an array of them, so the array must outlive
+/// the call's task.
+class FileStat {
+   public:
+    std::uint64_t size() const noexcept { return raw_.size; }
+    /// Nanoseconds since the epoch.
+    std::uint64_t mtime_ns() const noexcept { return raw_.mtime_ns; }
+    std::uint64_t dev() const noexcept { return raw_.dev; }
+    std::uint64_t ino() const noexcept { return raw_.ino; }
+    std::uint32_t mode() const noexcept { return raw_.mode; }
+    FileKind kind() const noexcept { return static_cast<FileKind>(raw_.kind); }
+
+   private:
+    friend struct detail::FileStatAccess;
+
+    dftu_fs_stat raw_{};
+};
+static_assert(sizeof(FileStat) == sizeof(dftu_fs_stat));
+
+namespace detail {
+
+struct StatAccess {
+    static dftu_stat* raw(Stat& stat) noexcept { return &stat.raw_; }
+};
+
+struct StatxAccess {
+    static dftu_statx* raw(Statx& stat) noexcept { return &stat.raw_; }
+};
+
+struct FileStatAccess {
+    static dftu_fs_stat* raw(FileStat& stat) noexcept { return &stat.raw_; }
+    /// A @ref FileStat holds nothing but its record, so a span of them is the
+    /// one contiguous array the ABI fills.
+    static dftu_fs_stat* raw(dstd::Span<FileStat> stats) noexcept {
+        return stats.empty() ? nullptr
+                             : reinterpret_cast<dftu_fs_stat*>(stats.data());
+    }
+};
+
 }  // namespace detail
 
 /// Fluent builder for one dftu_agg_col spec passed to Host::agg. Every name
@@ -607,6 +723,7 @@ class ConfigValue {
 
    private:
     friend class Config;
+    friend struct detail::ConfigValueAccess;
 
     explicit ConfigValue(const dftu_value* v) noexcept : v_(v) {}
 
@@ -732,6 +849,12 @@ struct ConfigKeyAccess {
     }
 };
 
+struct ConfigValueAccess {
+    static ConfigValue from_raw(const dftu_value* value) noexcept {
+        return ConfigValue{value};
+    }
+};
+
 struct OpSpecAccess {
     static const dftu_op_desc* raw(const OpSpec& spec) noexcept {
         return spec.raw();
@@ -740,6 +863,11 @@ struct OpSpecAccess {
 
 inline Config config_from_raw(const dftu_value* value) noexcept {
     return ConfigAccess::from_raw(value);
+}
+
+/// The SDK view of one node a host handed over, such as a @ref Doc root.
+inline ConfigValue config_value_from_raw(const dftu_value* value) noexcept {
+    return ConfigValueAccess::from_raw(value);
 }
 
 inline dftu_config_key config_key_raw(const ConfigKey& key) noexcept {

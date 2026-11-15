@@ -852,7 +852,8 @@ Use ``Host::emit_result`` / ``emit_result_frame`` / ``emit_result_lazyframe``
 nothing, for ``step``) and stays CPU-bound. Only ``on_finalize`` may set
 ``*pending`` to a task for overlapped I/O or a custom fan-out; the host awaits
 it before considering the fold done. Offload real blocking work through the
-task service (``DFTU_JOB_BLOCKING``), never inside ``on_batch``.
+task service (``JobWhere::Blocking``; ``DFTU_JOB_BLOCKING`` in C), never inside
+``on_batch``.
 
 A task is owned by whoever awaits it: the host, once the task comes back
 through ``*pending`` or a ``drive`` wait slot. A plugin must hand back every
@@ -872,7 +873,7 @@ cancelled task reports ``DFTU_E_CANCELLED``.
       ``fstat``, the vectored ``readv`` / ``writev`` / ``preadv`` / ``pwritev``,
       ``lseek``, ``sendfile``, and the socket ops ``accept`` / ``recv`` /
       ``send``. ``Host::spawn`` runs a callable on a pool worker (pass
-      ``DFTU_JOB_BLOCKING`` for a call that blocks, so the worker gives back its
+      ``JobWhere::Blocking`` for a call that blocks, so the worker gives back its
       run permit), and ``Host::all`` awaits several spawned tasks together. A
       step after a task is the next ``co_await``. Typed jobs (``job.h``,
       ``make_job<In, Out>``) pipe with ``|`` and fan out with ``when_all`` /
@@ -905,7 +906,8 @@ cancelled task reports ``DFTU_E_CANCELLED``.
                                       O_WRONLY | O_CREAT | O_TRUNC, 0644, &fd);
                  std::int64_t n = 0;
                  const char msg[] = "done";
-                 co_await h.io().write(fd, msg, sizeof(msg) - 1, &n);
+                 co_await h.io().write(fd, dstd::ByteView(msg, sizeof(msg) - 1),
+                                      &n);
                  co_await h.io().close(fd);
              }
          };
@@ -951,7 +953,10 @@ cancelled task reports ``DFTU_E_CANCELLED``.
 socket address when called; a buffer, message header or result slot stays valid
 until the task finishes. ``statx``, ``fallocate``, ``sync_file_range``,
 ``splice``, ``openat2``, the ``xattr`` calls, ``tee`` and ``pipe`` need Linux;
-elsewhere the call returns ``DFTU_E_UNSUPPORTED`` and starts no task.
+elsewhere the call returns ``DFTU_E_UNSUPPORTED`` and starts no task. From C++
+the SDK spells a path or a name ``dstd::CStringView``, a buffer
+``dstd::ByteView`` in and ``dstd::MutableByteView`` out, the ``openat2``
+arguments ``OpenHow``, and the two stat results ``Stat`` and ``Statx``.
 
 ``DFTU_SVC_FS`` (``Host::fs()``) is the runtime file system layer: ``read_file``,
 ``write_file``, ``read_at``, ``write_at``, ``list_dir``, ``find_all``,
@@ -961,13 +966,17 @@ the plugin frees through ``free_fn``. ``list_dir`` and ``find_all`` give a
 host-owned ``dftu_path_list``, read with ``list_count`` and ``list_entry`` and
 freed with ``list_free`` (the SDK ``PathList`` does that). ``stat_batch`` gives
 one stat and one status per path, and a missing path is
-``DFTU_E_NOT_FOUND`` in its slot, not a failed task.
+``DFTU_E_NOT_FOUND`` in its slot, not a failed task. From C++ the SDK spells a
+path ``dstd::CStringView``, a buffer ``dstd::ByteView`` or
+``dstd::MutableByteView``, the result slots ``FileStat`` and ``StatStatus``, the
+``find_all`` options ``FindOptions`` and a reported bool ``Flag``.
 
 ``DFTU_SVC_JSON`` and ``DFTU_SVC_YAML`` (``Host::json()``, ``Host::yaml()``)
 serve one table type, ``dftu_svc_format``, so a plugin reads and writes either
 format with the same calls. The calls are synchronous. ``parse`` copies the text
 and gives a ``dftu_doc``; ``root`` gives its ``dftu_value`` tree, built once and
-valid until ``doc_free`` (the SDK ``Doc`` frees it). A parse error is
+valid until ``doc_free`` (the SDK ``Doc`` frees it, and hands the root over as a
+``ConfigValue``). A parse error is
 ``DFTU_E_PARSE`` with the message ``line:column: reason``. A JSON number is
 ``I64`` or ``F64``; a YAML scalar is untyped text, so it is ``STR``, and ``NULL``
 for an empty value, ``~`` or ``null``. The writer streams ``begin_object``,
@@ -1140,7 +1149,7 @@ removed). Calls on one handle must not overlap.
              auto gz = co_await h.fileio().gz("/tmp/out.pfw.gz");
              co_await gz.open();
              co_await gz.append("{\"name\":\"x\"}\n");
-             dftu_gz_summary summary = co_await gz.close();
+             GzSummary summary = co_await gz.close();
 
              Writer w = co_await h.writer("/tmp/out2.pfw.gz", /*worker_count=*/4,
                                           /*gzip=*/true);

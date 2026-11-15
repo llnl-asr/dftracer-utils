@@ -3,6 +3,8 @@
 #define DFTRACER_UTILS_PLUGINS_PLUGIN_ASYNC_H
 
 #include <dftracer/utils/dataframe/plugin_error.h>
+#include <dftracer/utils/dstd/byte_view.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi.h>
@@ -19,6 +21,9 @@
 namespace dftracer::utils::plugins {
 
 namespace detail {
+
+/// @see AsyncOp: the only code that names a task the SDK holds.
+struct AsyncOpAccess;
 
 /// A dftu_ctx that forwards to the ctx of the step the host is running. A
 /// coroutine outlives the callback that created it, so the Host it holds points
@@ -97,6 +102,8 @@ struct [[nodiscard]] RefAwait {
 /// its locals and so gives back every task they still own.
 class Task {
    public:
+    /// The state the host driver reads and writes between suspends; it is not
+    /// part of the plugin API.
     struct promise_type {
         dftu_task* const* wait = nullptr;
         std::uint32_t n_wait = 0;
@@ -230,18 +237,21 @@ inline detail::FailAwait fail(dstd::Error error) noexcept {
     return detail::FailAwait{std::move(error)};
 }
 
+/// The awaited form of a call that turns its status into a value, such as a
+/// line batch; see fileio.h.
+template <class T, class Finish>
+class AsyncValue;
+
 /// Owns a started task until it is awaited or released, or the error of a call
 /// the host refused to start. `co_await op` hands the task to the host and ends
 /// the awaiting @ref Task with the task's error if it failed; the awaited value
-/// is the task's success status. `co_await op.expected()` gives the failure as
-/// a @ref dstd::Result instead. An op dropped without either, for example when
-/// its coroutine frame is destroyed, gives its task back to the host.
+/// is the call's @ref dstd::Condition, @ref dstd::Condition
+/// "Condition::Unknown" when it succeeded. `co_await op.expected()` gives the
+/// failure as a
+/// @ref dstd::Result instead. An op dropped without either, for example
+/// when its coroutine frame is destroyed, gives its task back to the host.
 class [[nodiscard]] AsyncOp {
    public:
-    AsyncOp(dftu_task* t, const dftu_plugin_host* host) noexcept
-        : task_(t),
-          svc_(detail::task_service(host)),
-          h_(host ? host->h : nullptr) {}
     /// An op that never started: awaiting it fails with `error`.
     explicit AsyncOp(dstd::Error error) noexcept
         : error_(std::move(error)), start_failed_(true) {}
@@ -268,15 +278,6 @@ class [[nodiscard]] AsyncOp {
         return detail::Settled<AsyncOp>(*this);
     }
 
-    /// Hand the task over raw, for @ref AsyncAll, Host::await or a `pending`
-    /// slot; the caller then owns it. The start error of an op that never
-    /// started, so that it reaches the one who awaits it.
-    dstd::Result<dftu_task*> release() noexcept {
-        if (start_failed_) return std::move(error_);
-        handed_ = true;
-        return task_;
-    }
-
     bool await_ready() const noexcept { return false; }
     void await_suspend(std::coroutine_handle<Task::promise_type> h) noexcept {
         p_ = &h.promise();
@@ -288,19 +289,45 @@ class [[nodiscard]] AsyncOp {
         p_->wait = &task_;
         p_->n_wait = 1;
     }
-    dftu_status await_resume() noexcept {
-        return detail::settle(*p_, &task_, 1);
+    /// @ref dstd::Condition "Condition::Unknown" when the call succeeded, else
+    /// its condition; the host already holds its message on the ctx.
+    dstd::Condition await_resume() noexcept {
+        const dftu_status status = settle_status();
+        return status < 0 ? dataframe::error_of(status).condition()
+                          : dstd::Condition::Unknown;
     }
 
     bool resolved() const noexcept { return start_failed_; }
-    dstd::Result<dftu_status> resume_expected() noexcept {
+    dstd::Result<void> resume_expected() noexcept {
         if (start_failed_) return std::move(error_);
-        const dftu_status status = detail::settle(*p_, &task_, 1);
-        if (status < 0) return dataframe::error_of(status);
-        return status;
+        return detail::reported(settle_status());
     }
 
    private:
+    friend struct detail::AsyncOpAccess;
+    friend class Host;
+    template <class T, class Finish>
+    friend class AsyncValue;
+
+    /// The status the awaited task ended with; the host already holds its
+    /// message on the ctx.
+    dftu_status settle_status() noexcept {
+        return detail::settle(*p_, &task_, 1);
+    }
+    AsyncOp(dftu_task* t, const dftu_plugin_host* host) noexcept
+        : task_(t),
+          svc_(detail::task_service(host)),
+          h_(host ? host->h : nullptr) {}
+
+    /// Hand the task over raw, for @ref AsyncAll, Host::await or a `pending`
+    /// slot; the caller then owns it. The start error of an op that never
+    /// started, so that it reaches the one who awaits it.
+    dstd::Result<dftu_task*> release() noexcept {
+        if (start_failed_) return std::move(error_);
+        handed_ = true;
+        return task_;
+    }
+
     dftu_task* task_ = nullptr;
     const dftu_svc_task* svc_ = nullptr;
     void* h_ = nullptr;
@@ -311,7 +338,7 @@ class [[nodiscard]] AsyncOp {
 };
 
 /// Several tasks awaited together: the host resumes the Task when all of them
-/// finished. It takes what @ref AsyncOp::release gives, so an op that never
+/// finished. It takes what the SDK's release_op gives, so an op that never
 /// started fails the awaiting @ref Task with its own status and message, and
 /// the tasks that did start are given back to the host unrun. `co_await` ends
 /// the awaiting Task with the first error; `co_await all.expected()` gives it
@@ -319,16 +346,6 @@ class [[nodiscard]] AsyncOp {
 /// the host when dropped unawaited.
 class [[nodiscard]] AsyncAll {
    public:
-    AsyncAll(std::initializer_list<dstd::Result<dftu_task*>> ts,
-             const dftu_plugin_host* host)
-        : svc_(detail::task_service(host)), h_(host_h(host)) {
-        for (const auto& t : ts) adopt(t);
-    }
-    AsyncAll(dstd::Vector<dstd::Result<dftu_task*>> ts,
-             const dftu_plugin_host* host)
-        : svc_(detail::task_service(host)), h_(host_h(host)) {
-        for (const auto& t : ts) adopt(t);
-    }
     AsyncAll(AsyncAll&& other) noexcept
         : tasks_(std::move(other.tasks_)),
           svc_(other.svc_),
@@ -365,22 +382,43 @@ class [[nodiscard]] AsyncAll {
         p_->wait = tasks_.data();
         p_->n_wait = static_cast<std::uint32_t>(tasks_.size());
     }
-    dftu_status await_resume() noexcept {
+    /// @ref dstd::Condition "Condition::Unknown" when every task succeeded,
+    /// else the condition of the first failure; the host already holds its
+    /// message on the ctx.
+    dstd::Condition await_resume() noexcept {
+        const dftu_status status = settle_status();
+        return status < 0 ? dataframe::error_of(status).condition()
+                          : dstd::Condition::Unknown;
+    }
+
+    bool resolved() const noexcept { return start_failed_ || tasks_.empty(); }
+    dstd::Result<void> resume_expected() noexcept {
+        if (start_failed_) return std::move(error_);
+        return detail::reported(settle_status());
+    }
+
+   private:
+    friend class Host;
+
+    /// The status the first failed task ended with; the host already holds its
+    /// message on the ctx.
+    dftu_status settle_status() noexcept {
         return tasks_.empty()
                    ? DFTU_OK
                    : detail::settle(*p_, tasks_.data(),
                                     static_cast<std::uint32_t>(tasks_.size()));
     }
-
-    bool resolved() const noexcept { return start_failed_ || tasks_.empty(); }
-    dstd::Result<dftu_status> resume_expected() noexcept {
-        if (start_failed_) return std::move(error_);
-        const dftu_status status = await_resume();
-        if (status < 0) return dataframe::error_of(status);
-        return status;
+    AsyncAll(std::initializer_list<dstd::Result<dftu_task*>> ts,
+             const dftu_plugin_host* host)
+        : svc_(detail::task_service(host)), h_(host_h(host)) {
+        for (const auto& t : ts) adopt(t);
+    }
+    AsyncAll(dstd::Vector<dstd::Result<dftu_task*>> ts,
+             const dftu_plugin_host* host)
+        : svc_(detail::task_service(host)), h_(host_h(host)) {
+        for (const auto& t : ts) adopt(t);
     }
 
-   private:
     static void* host_h(const dftu_plugin_host* host) noexcept {
         return host ? host->h : nullptr;
     }
@@ -412,53 +450,96 @@ class [[nodiscard]] AsyncAll {
     bool handed_ = false;
 };
 
+namespace detail {
+
+struct AsyncOpAccess {
+    static AsyncOp make(dftu_task* task,
+                        const dftu_plugin_host* host) noexcept {
+        return AsyncOp{task, host};
+    }
+    static dstd::Result<dftu_task*> release(AsyncOp& op) noexcept {
+        return op.release();
+    }
+};
+
+/// The op of a task a service call started; when the call failed, an op that
+/// fails with its status when awaited. `t` is taken by reference: callers write
+/// started(h, call(..., &t), t), and the order of argument evaluation is
+/// unspecified.
+inline AsyncOp async_op(dftu_task* task,
+                        const dftu_plugin_host* host) noexcept {
+    return AsyncOpAccess::make(task, host);
+}
+
+/// The task inside `op`, which the caller then owns; see @ref AsyncOp.
+inline dstd::Result<dftu_task*> release_op(AsyncOp& op) noexcept {
+    return AsyncOpAccess::release(op);
+}
+
+/// @overload release_op
+inline dstd::Result<dftu_task*> release_op(AsyncOp&& op) noexcept {
+    return AsyncOpAccess::release(op);
+}
+
+}  // namespace detail
+
+/// The arguments of @ref Io::openat2, as the kernel's open_how names them. The
+/// call copies them.
+struct OpenHow {
+    std::uint64_t flags = 0;
+    std::uint64_t mode = 0;
+    std::uint64_t resolve = 0;
+};
+
 /// Thin typed wrapper over the io service; each call starts the operation and
 /// returns an @ref AsyncOp to `co_await`. A call the host refuses, or a host
 /// without the io group, gives an AsyncOp that fails when awaited, as does a
 /// failed operation: DFTU_E_NOT_FOUND for a missing file, DFTU_E_IO or
 /// DFTU_E_INVALID otherwise, with the system message.
+///
+/// A path or a name is copied when the call is made. A buffer, a result slot or
+/// an out struct the call names must stay valid until the await ends.
 class Io {
    public:
-    Io(const dftu_plugin_host* h, dftu_ctx* ctx)
-        : h_(h),
-          ctx_(ctx),
-          io_(h && h->get_service ? static_cast<const dftu_io*>(
-                                        h->get_service(h->h, DFTU_SVC_IO))
-                                  : nullptr) {}
-
-    AsyncOp open(const char* path, int flags, int mode, int* out_fd) const {
+    AsyncOp open(dstd::CStringView path, int flags, int mode,
+                 int* out_fd) const {
         if (!io_) return unsupported();
         dftu_task* t = nullptr;
-        return done(io_->open(ctx_, h_->h, path, flags, mode, out_fd, &t), t);
+        return done(
+            io_->open(ctx_, h_->h, path.c_str(), flags, mode, out_fd, &t), t);
     }
     AsyncOp close(int fd) const {
         if (!io_) return unsupported();
         dftu_task* t = nullptr;
         return done(io_->close(ctx_, h_->h, fd, &t), t);
     }
-    AsyncOp read(int fd, void* buf, std::uint64_t len,
-                 std::int64_t* out_n) const {
+    AsyncOp read(int fd, dstd::MutableByteView buf, std::int64_t* out_n) const {
         if (!io_) return unsupported();
         dftu_task* t = nullptr;
-        return done(io_->read(ctx_, h_->h, fd, buf, len, out_n, &t), t);
+        return done(
+            io_->read(ctx_, h_->h, fd, buf.data(), buf.size(), out_n, &t), t);
     }
-    AsyncOp write(int fd, const void* buf, std::uint64_t len,
+    AsyncOp write(int fd, dstd::ByteView buf, std::int64_t* out_n) const {
+        if (!io_) return unsupported();
+        dftu_task* t = nullptr;
+        return done(
+            io_->write(ctx_, h_->h, fd, buf.data(), buf.size(), out_n, &t), t);
+    }
+    AsyncOp pread(int fd, dstd::MutableByteView buf, std::uint64_t off,
                   std::int64_t* out_n) const {
         if (!io_) return unsupported();
         dftu_task* t = nullptr;
-        return done(io_->write(ctx_, h_->h, fd, buf, len, out_n, &t), t);
+        return done(
+            io_->pread(ctx_, h_->h, fd, buf.data(), buf.size(), off, out_n, &t),
+            t);
     }
-    AsyncOp pread(int fd, void* buf, std::uint64_t len, std::uint64_t off,
-                  std::int64_t* out_n) const {
+    AsyncOp pwrite(int fd, dstd::ByteView buf, std::uint64_t off,
+                   std::int64_t* out_n) const {
         if (!io_) return unsupported();
         dftu_task* t = nullptr;
-        return done(io_->pread(ctx_, h_->h, fd, buf, len, off, out_n, &t), t);
-    }
-    AsyncOp pwrite(int fd, const void* buf, std::uint64_t len,
-                   std::uint64_t off, std::int64_t* out_n) const {
-        if (!io_) return unsupported();
-        dftu_task* t = nullptr;
-        return done(io_->pwrite(ctx_, h_->h, fd, buf, len, off, out_n, &t), t);
+        return done(io_->pwrite(ctx_, h_->h, fd, buf.data(), buf.size(), off,
+                                out_n, &t),
+                    t);
     }
     AsyncOp fsync(int fd) const {
         if (!io_) return unsupported();
@@ -470,39 +551,46 @@ class Io {
         dftu_task* t = nullptr;
         return done(io_->ftruncate(ctx_, h_->h, fd, len, &t), t);
     }
-    AsyncOp fstat(int fd, dftu_stat* out) const {
+    AsyncOp fstat(int fd, Stat& out) const {
         if (!io_) return unsupported();
         dftu_task* t = nullptr;
-        return done(io_->fstat(ctx_, h_->h, fd, out, &t), t);
+        return done(
+            io_->fstat(ctx_, h_->h, fd, detail::StatAccess::raw(out), &t), t);
     }
-    /// Scatter-gather sequential read; `iov`/`iovcnt` borrowed for the await.
-    AsyncOp readv(int fd, const struct iovec* iov, int iovcnt,
+    /// Scatter-gather sequential read; `iov` is borrowed for the await.
+    AsyncOp readv(int fd, dstd::Span<const struct iovec> iov,
                   std::int64_t* out_n) const {
         if (!io_) return unsupported();
         dftu_task* t = nullptr;
-        return done(io_->readv(ctx_, h_->h, fd, iov, iovcnt, out_n, &t), t);
+        return done(io_->readv(ctx_, h_->h, fd, iov.data(),
+                               static_cast<int>(iov.size()), out_n, &t),
+                    t);
     }
-    /// Scatter-gather sequential write; `iov`/`iovcnt` borrowed for the await.
-    AsyncOp writev(int fd, const struct iovec* iov, int iovcnt,
+    /// Scatter-gather sequential write; `iov` is borrowed for the await.
+    AsyncOp writev(int fd, dstd::Span<const struct iovec> iov,
                    std::int64_t* out_n) const {
         if (!io_) return unsupported();
         dftu_task* t = nullptr;
-        return done(io_->writev(ctx_, h_->h, fd, iov, iovcnt, out_n, &t), t);
+        return done(io_->writev(ctx_, h_->h, fd, iov.data(),
+                                static_cast<int>(iov.size()), out_n, &t),
+                    t);
     }
     /// Scatter-gather positional read (seekable fds only).
-    AsyncOp preadv(int fd, const struct iovec* iov, int iovcnt,
+    AsyncOp preadv(int fd, dstd::Span<const struct iovec> iov,
                    std::uint64_t off, std::int64_t* out_n) const {
         if (!io_) return unsupported();
         dftu_task* t = nullptr;
-        return done(io_->preadv(ctx_, h_->h, fd, iov, iovcnt, off, out_n, &t),
+        return done(io_->preadv(ctx_, h_->h, fd, iov.data(),
+                                static_cast<int>(iov.size()), off, out_n, &t),
                     t);
     }
     /// Scatter-gather positional write (seekable fds only).
-    AsyncOp pwritev(int fd, const struct iovec* iov, int iovcnt,
+    AsyncOp pwritev(int fd, dstd::Span<const struct iovec> iov,
                     std::uint64_t off, std::int64_t* out_n) const {
         if (!io_) return unsupported();
         dftu_task* t = nullptr;
-        return done(io_->pwritev(ctx_, h_->h, fd, iov, iovcnt, off, out_n, &t),
+        return done(io_->pwritev(ctx_, h_->h, fd, iov.data(),
+                                 static_cast<int>(iov.size()), off, out_n, &t),
                     t);
     }
     /// Reposition the file offset; `whence` is SEEK_SET/CUR/END. `out_off`
@@ -532,18 +620,22 @@ class Io {
         return done(io_->accept(ctx_, h_->h, fd, addr, addrlen, out_fd, &t), t);
     }
     /// Socket receive; `flags` are the recv(2) flags.
-    AsyncOp recv(int fd, void* buf, std::uint64_t len, int flags,
+    AsyncOp recv(int fd, dstd::MutableByteView buf, int flags,
                  std::int64_t* out_n) const {
         if (!io_) return unsupported();
         dftu_task* t = nullptr;
-        return done(io_->recv(ctx_, h_->h, fd, buf, len, flags, out_n, &t), t);
+        return done(io_->recv(ctx_, h_->h, fd, buf.data(), buf.size(), flags,
+                              out_n, &t),
+                    t);
     }
     /// Socket send; `flags` are the send(2) flags.
-    AsyncOp send(int fd, const void* buf, std::uint64_t len, int flags,
+    AsyncOp send(int fd, dstd::ByteView buf, int flags,
                  std::int64_t* out_n) const {
         if (!io_) return unsupported();
         dftu_task* t = nullptr;
-        return done(io_->send(ctx_, h_->h, fd, buf, len, flags, out_n, &t), t);
+        return done(io_->send(ctx_, h_->h, fd, buf.data(), buf.size(), flags,
+                              out_n, &t),
+                    t);
     }
 
     /// The calls below follow the table in abi/io.h: paths, names and socket
@@ -551,25 +643,25 @@ class Io {
     /// until the await ends. statx, fallocate, sync_file_range, splice,
     /// openat2, the xattr calls, tee and pipe fail with DFTU_E_UNSUPPORTED off
     /// Linux.
-    AsyncOp unlink(const char* path) const {
+    AsyncOp unlink(dstd::CStringView path) const {
         if (!io_) return unsupported();
         dftu_task* t = nullptr;
-        return done(io_->unlink(ctx_, h_->h, path, &t), t);
+        return done(io_->unlink(ctx_, h_->h, path.c_str(), &t), t);
     }
-    AsyncOp rmdir(const char* path) const {
+    AsyncOp rmdir(dstd::CStringView path) const {
         if (!io_) return unsupported();
         dftu_task* t = nullptr;
-        return done(io_->rmdir(ctx_, h_->h, path, &t), t);
+        return done(io_->rmdir(ctx_, h_->h, path.c_str(), &t), t);
     }
-    AsyncOp rename(const char* from, const char* to) const {
+    AsyncOp rename(dstd::CStringView from, dstd::CStringView to) const {
         if (!io_) return unsupported();
         dftu_task* t = nullptr;
-        return done(io_->rename(ctx_, h_->h, from, to, &t), t);
+        return done(io_->rename(ctx_, h_->h, from.c_str(), to.c_str(), &t), t);
     }
-    AsyncOp mkdir(const char* path, int mode) const {
+    AsyncOp mkdir(dstd::CStringView path, int mode) const {
         if (!io_) return unsupported();
         dftu_task* t = nullptr;
-        return done(io_->mkdir(ctx_, h_->h, path, mode, &t), t);
+        return done(io_->mkdir(ctx_, h_->h, path.c_str(), mode, &t), t);
     }
     AsyncOp fadvise(int fd, std::uint64_t off, std::uint64_t len,
                     int advice) const {
@@ -577,18 +669,21 @@ class Io {
         dftu_task* t = nullptr;
         return done(io_->fadvise(ctx_, h_->h, fd, off, len, advice, &t), t);
     }
-    AsyncOp linkat(int from_dirfd, const char* from, int to_dirfd,
-                   const char* to, int flags) const {
+    AsyncOp linkat(int from_dirfd, dstd::CStringView from, int to_dirfd,
+                   dstd::CStringView to, int flags) const {
         if (!io_) return unsupported();
         dftu_task* t = nullptr;
-        return done(
-            io_->linkat(ctx_, h_->h, from_dirfd, from, to_dirfd, to, flags, &t),
-            t);
+        return done(io_->linkat(ctx_, h_->h, from_dirfd, from.c_str(), to_dirfd,
+                                to.c_str(), flags, &t),
+                    t);
     }
-    AsyncOp symlinkat(const char* target, int dirfd, const char* link) const {
+    AsyncOp symlinkat(dstd::CStringView target, int dirfd,
+                      dstd::CStringView link) const {
         if (!io_) return unsupported();
         dftu_task* t = nullptr;
-        return done(io_->symlinkat(ctx_, h_->h, target, dirfd, link, &t), t);
+        return done(io_->symlinkat(ctx_, h_->h, target.c_str(), dirfd,
+                                   link.c_str(), &t),
+                    t);
     }
     AsyncOp socket(int domain, int type, int protocol, int* out_fd) const {
         if (!io_) return unsupported();
@@ -635,12 +730,13 @@ class Io {
         dftu_task* t = nullptr;
         return done(io_->poll_add(ctx_, h_->h, fd, events, out_events, &t), t);
     }
-    AsyncOp statx(int dirfd, const char* path, int flags, std::uint32_t mask,
-                  dftu_statx* out_st) const {
+    AsyncOp statx(int dirfd, dstd::CStringView path, int flags,
+                  std::uint32_t mask, Statx& out) const {
         if (!io_) return unsupported();
         dftu_task* t = nullptr;
-        return done(
-            io_->statx(ctx_, h_->h, dirfd, path, flags, mask, out_st, &t), t);
+        return done(io_->statx(ctx_, h_->h, dirfd, path.c_str(), flags, mask,
+                               detail::StatxAccess::raw(out), &t),
+                    t);
     }
     AsyncOp fallocate(int fd, int mode, std::uint64_t off,
                       std::uint64_t len) const {
@@ -664,39 +760,46 @@ class Io {
                                 len, flags, out_n, &t),
                     t);
     }
-    AsyncOp openat2(int dirfd, const char* path, const dftu_open_how* how,
+    AsyncOp openat2(int dirfd, dstd::CStringView path, const OpenHow& how,
                     int* out_fd) const {
         if (!io_) return unsupported();
-        dftu_task* t = nullptr;
-        return done(io_->openat2(ctx_, h_->h, dirfd, path, how, out_fd, &t), t);
-    }
-    AsyncOp getxattr(const char* path, const char* name, void* value,
-                     std::uint64_t size, std::int64_t* out_n) const {
-        if (!io_) return unsupported();
+        const dftu_open_how raw{how.flags, how.mode, how.resolve};
         dftu_task* t = nullptr;
         return done(
-            io_->getxattr(ctx_, h_->h, path, name, value, size, out_n, &t), t);
+            io_->openat2(ctx_, h_->h, dirfd, path.c_str(), &raw, out_fd, &t),
+            t);
     }
-    AsyncOp setxattr(const char* path, const char* name, const void* value,
-                     std::uint64_t size, int flags) const {
+    AsyncOp getxattr(dstd::CStringView path, dstd::CStringView name,
+                     dstd::MutableByteView value, std::int64_t* out_n) const {
         if (!io_) return unsupported();
         dftu_task* t = nullptr;
-        return done(
-            io_->setxattr(ctx_, h_->h, path, name, value, size, flags, &t), t);
+        return done(io_->getxattr(ctx_, h_->h, path.c_str(), name.c_str(),
+                                  value.data(), value.size(), out_n, &t),
+                    t);
     }
-    AsyncOp fgetxattr(int fd, const char* name, void* value, std::uint64_t size,
-                      std::int64_t* out_n) const {
+    AsyncOp setxattr(dstd::CStringView path, dstd::CStringView name,
+                     dstd::ByteView value, int flags) const {
         if (!io_) return unsupported();
         dftu_task* t = nullptr;
-        return done(
-            io_->fgetxattr(ctx_, h_->h, fd, name, value, size, out_n, &t), t);
+        return done(io_->setxattr(ctx_, h_->h, path.c_str(), name.c_str(),
+                                  value.data(), value.size(), flags, &t),
+                    t);
     }
-    AsyncOp fsetxattr(int fd, const char* name, const void* value,
-                      std::uint64_t size, int flags) const {
+    AsyncOp fgetxattr(int fd, dstd::CStringView name,
+                      dstd::MutableByteView value, std::int64_t* out_n) const {
         if (!io_) return unsupported();
         dftu_task* t = nullptr;
-        return done(
-            io_->fsetxattr(ctx_, h_->h, fd, name, value, size, flags, &t), t);
+        return done(io_->fgetxattr(ctx_, h_->h, fd, name.c_str(), value.data(),
+                                   value.size(), out_n, &t),
+                    t);
+    }
+    AsyncOp fsetxattr(int fd, dstd::CStringView name, dstd::ByteView value,
+                      int flags) const {
+        if (!io_) return unsupported();
+        dftu_task* t = nullptr;
+        return done(io_->fsetxattr(ctx_, h_->h, fd, name.c_str(), value.data(),
+                                   value.size(), flags, &t),
+                    t);
     }
     AsyncOp tee(int in_fd, int out_fd, std::uint64_t len, std::uint32_t flags,
                 std::int64_t* out_n) const {
@@ -712,6 +815,15 @@ class Io {
     }
 
    private:
+    friend class Host;
+
+    Io(const dftu_plugin_host* h, dftu_ctx* ctx)
+        : h_(h),
+          ctx_(ctx),
+          io_(h && h->get_service ? static_cast<const dftu_io*>(
+                                        h->get_service(h->h, DFTU_SVC_IO))
+                                  : nullptr) {}
+
     static AsyncOp unsupported() {
         return AsyncOp{
             make_error(dstd::Condition::Unsupported, "host lacks dftu.svc.io")};
@@ -720,7 +832,7 @@ class Io {
     // argument evaluation is unspecified, so a copy could predate the call.
     AsyncOp done(dftu_status st, dftu_task* const& t) const {
         if (st < 0) return AsyncOp{dataframe::error_of(st)};
-        return AsyncOp{t, h_};
+        return detail::async_op(t, h_);
     }
 
     const dftu_plugin_host* h_;

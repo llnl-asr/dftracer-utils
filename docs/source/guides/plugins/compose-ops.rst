@@ -78,7 +78,7 @@ awaits it: a refused call ends the ``Task`` with its error:
    }
 
 ``when_all(a, b)`` and ``when_any(a, b)`` build the fan-out and the race. A
-leaf takes ``DFTU_JOB_BLOCKING`` as its ``where`` when it blocks, so its worker
+leaf takes ``JobWhere::Blocking`` as its ``where`` when it blocks, so its worker
 gives back its run permit while it runs. ``Host::spawn`` is the short form of a
 leaf with no input and no output.
 

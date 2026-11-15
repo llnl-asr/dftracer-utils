@@ -104,7 +104,7 @@ dftracer::utils::plugins::Task vectored_roundtrip(
     wv[0].iov_len = 6;  // no NUL
     wv[1].iov_base = const_cast<char*>(b);
     wv[1].iov_len = 14;
-    co_await io.writev(fd, wv, 2, wrote);
+    co_await io.writev(fd, dstd::Span<const struct iovec>(wv, 2), wrote);
 
     // Confirm the offset advanced to the total written via SEEK_CUR(0).
     co_await io.lseek(fd, 0, SEEK_CUR, off);
@@ -117,7 +117,7 @@ dftracer::utils::plugins::Task vectored_roundtrip(
     rv[1].iov_base = buf1;
     rv[1].iov_len = 14;
     std::int64_t rn = 0;
-    co_await io.preadv(fd, rv, 2, 0, &rn);
+    co_await io.preadv(fd, dstd::Span<const struct iovec>(rv, 2), 0, &rn);
     got->assign(buf0, 6);
     got->append(buf1, 14);
 
@@ -147,7 +147,7 @@ dftracer::utils::plugins::Task positional_vectored(
     if (fd < 0) co_return;
     const char head[] = "AAAA";
     std::int64_t n = 0;
-    co_await io.pwrite(fd, head, 4, 0, &n);
+    co_await io.pwrite(fd, dstd::ByteView(head, 4), 0, &n);
     const char t0[] = "BB";
     const char t1[] = "CC";
     struct iovec wv[2];
@@ -155,9 +155,9 @@ dftracer::utils::plugins::Task positional_vectored(
     wv[0].iov_len = 2;
     wv[1].iov_base = const_cast<char*>(t1);
     wv[1].iov_len = 2;
-    co_await io.pwritev(fd, wv, 2, 4, &n);
+    co_await io.pwritev(fd, dstd::Span<const struct iovec>(wv, 2), 4, &n);
     char buf[8] = {};
-    co_await io.pread(fd, buf, 8, 0, &n);
+    co_await io.pread(fd, dstd::MutableByteView(buf, 8), 0, &n);
     got->assign(buf, 8);
     co_await io.close(fd);
 }
@@ -173,7 +173,8 @@ dftracer::utils::plugins::Task spawn_then(dftracer::utils::plugins::Host h,
     // GCC 12.1 rejects a braced list inside a co_await expression ("array used
     // as initializer"), so the op is built in its own statement.
     auto both = dftracer::utils::plugins::detail::all_raw(
-        h, {ta.release(), tb.release()});
+        h, {dftracer::utils::plugins::detail::release_op(ta),
+            dftracer::utils::plugins::detail::release_op(tb)});
     co_await both;
     *order = (a_done && b_done) ? 1 : 0;
 
@@ -246,7 +247,8 @@ Task read_chunks_sdk(Host h, const char* path, std::uint64_t chunk_size,
     }
 }
 
-Task gz_roundtrip_sdk(Host h, const char* path, dftu_gz_summary* summary,
+Task gz_roundtrip_sdk(Host h, const char* path,
+                      dftracer::utils::plugins::GzSummary* summary,
                       dstd::Vector<dstd::String>* back) {
     auto fio = h.fileio();
     auto writer = co_await fio.gz(path);
@@ -290,14 +292,38 @@ Task helpers_sdk(Host h, const char* path, dstd::String* logical,
                  std::int64_t* mtime, std::uint64_t* size,
                  std::uint64_t* hash) {
     auto fio = h.fileio();
-    *logical = co_await fio.logical_path(path);
-    *mtime = co_await fio.mtime(path);
-    *size = co_await fio.size(path);
-    *hash = co_await fio.sampled_hash(path);
+    const dstd::CStringView given(path);
+    *logical = co_await fio.logical_path(given);
+    *mtime = co_await fio.mtime(given);
+    *size = co_await fio.size(given);
+    *hash = co_await fio.sampled_hash(given);
 }
 
 Task size_missing_sdk(Host h, const char* path) {
     (void)co_await h.fileio().size(path);
+}
+
+// Write a payload with io.write and read it back with io.read, both through a
+// view, then fstat the file and report its size.
+Task buffer_roundtrip_sdk(Host h, dstd::CStringView path, dstd::ByteView in,
+                          std::uint64_t* written, std::uint64_t* seen,
+                          std::uint64_t* stat_size, dstd::String* got) {
+    dftracer::utils::plugins::Io io = h.io();
+    int fd = -1;
+    co_await io.open(path, O_RDWR | O_CREAT | O_TRUNC, 0644, &fd);
+    if (fd < 0) co_return;
+    std::int64_t n = 0;
+    co_await io.write(fd, in, &n);
+    *written = static_cast<std::uint64_t>(n);
+    co_await io.lseek(fd, 0, SEEK_SET, &n);
+    char back[16] = {};
+    co_await io.read(fd, dstd::MutableByteView(back, in.size()), &n);
+    *seen = static_cast<std::uint64_t>(n);
+    got->assign(back, static_cast<std::size_t>(n));
+    dftracer::utils::plugins::Stat st;
+    co_await io.fstat(fd, st);
+    *stat_size = st.size();
+    co_await io.close(fd);
 }
 
 }  // namespace
@@ -327,6 +353,25 @@ TEST_CASE("plugin cxx: positional vectored pwritev/pwrite round-trip") {
         return positional_vectored(h, path.c_str(), &got);
     });
     CHECK(got == "AAAABBCC");
+}
+
+TEST_CASE("plugin cxx: io.write and io.read round-trip a ByteView") {
+    dftu_utils_test::TestEnvironment env(0);
+    const dstd::String path = env.dir() + "/sdk_view.bin";
+    const dstd::String body = "view-bytes";
+
+    HostFixture fx;
+    std::uint64_t written = 0, seen = 0, stat_size = 0;
+    dstd::String got;
+    drive_task(fx.host(), [&](Host h) {
+        return buffer_roundtrip_sdk(h, dstd::CStringView(path),
+                                    dstd::ByteView(body.data(), body.size()),
+                                    &written, &seen, &stat_size, &got);
+    });
+    CHECK(written == body.size());
+    CHECK(seen == body.size());
+    CHECK(got == body);
+    CHECK(stat_size == body.size());
 }
 
 TEST_CASE("plugin cxx: sendfile transfers a file into a socket") {
@@ -426,11 +471,10 @@ namespace {
 
 // mkdir, rename and rmdir through the SDK, then a failing unlink read as a
 // status and a Linux-only op, which refuses off Linux.
-dftracer::utils::plugins::Task sdk_dir_ops(dftracer::utils::plugins::Host h,
-                                           const char* dir, const char* a,
-                                           const char* b, const char* missing,
-                                           dftu_status* unlink_status,
-                                           dftu_statx* sx) {
+dftracer::utils::plugins::Task sdk_dir_ops(
+    dftracer::utils::plugins::Host h, const char* dir, const char* a,
+    const char* b, const char* missing, dftu_status* unlink_status,
+    dftracer::utils::plugins::Statx* sx) {
     dftracer::utils::plugins::Io io = h.io();
     co_await io.mkdir(dir, 0755);
     co_await io.rename(dir, a);
@@ -440,7 +484,7 @@ dftracer::utils::plugins::Task sdk_dir_ops(dftracer::utils::plugins::Host h,
     auto outcome = co_await bad.expected();
     *unlink_status =
         outcome.has_value() ? DFTU_OK : plugins::status_of(outcome.error());
-    co_await io.statx(AT_FDCWD, a, 0, 0xfff, sx);
+    co_await io.statx(AT_FDCWD, a, 0, 0xfff, *sx);
     co_await io.rmdir(a);
 }
 
@@ -494,7 +538,7 @@ TEST_CASE("plugin cxx: Io directory and link ops, a failed op, a platform op") {
     HostFixture fx;
     test_plugin_common::TaskDriver driver(fx.host());
     dftu_status unlink_status = DFTU_OK;
-    dftu_statx sx{};
+    dftracer::utils::plugins::Statx sx;
     dstd::String message;
     const dftu_status st = driver.run(
         sdk_dir_ops(driver.host(), dir.c_str(), renamed.c_str(), link.c_str(),
@@ -503,7 +547,7 @@ TEST_CASE("plugin cxx: Io directory and link ops, a failed op, a platform op") {
     CHECK(unlink_status == DFTU_E_NOT_FOUND);
 #ifdef __linux__
     CHECK(st == DFTU_OK);
-    CHECK(sx.mask != 0);
+    CHECK(sx.mask() != 0);
 #else
     CHECK(st == DFTU_E_UNSUPPORTED);
     CHECK(message.find("statx") != dstd::String::npos);
@@ -527,9 +571,13 @@ struct FsSdkResult {
     std::uint64_t listed = 0;
     std::uint64_t found = 0;
     dstd::String first_found;
+    std::uint64_t first_size = 0;
+    bool created = false;
+    bool removed = false;
     dftu_status missing_status = DFTU_OK;
-    dftu_status stat_status[2] = {DFTU_OK, DFTU_OK};
+    dftracer::utils::plugins::StatStatus stat_status[2] = {};
     std::uint64_t stat_size = 0;
+    std::uint64_t stat_ino = 0;
 };
 
 // write_file, read_file, positioned I/O, listing, find_all and stat_batch
@@ -538,37 +586,49 @@ dftracer::utils::plugins::Task sdk_fs_ops(dftracer::utils::plugins::Host h,
                                           const char* dir, const char* file,
                                           const char* missing,
                                           FsSdkResult* out) {
+    using plugins::FileStat;
+    using plugins::FindOptions;
+    using plugins::Flag;
+    using plugins::StatStatus;
+
     dftracer::utils::plugins::Fs fs = h.fs();
-    std::int32_t created = 0;
-    co_await fs.create_directories(dir, &created);
-    co_await fs.write_file(file, "sdk file", 8);
+    Flag created;
+    co_await fs.create_directories(dir, created);
+    co_await fs.write_file(file, dstd::ByteView("sdk file", 8));
+    out->created = created.set();
 
     dftracer::utils::plugins::FileBytes bytes;
     co_await fs.read_file(file, bytes);
     out->read_back.assign(bytes.view().data(), bytes.view().size());
 
     std::int64_t n = 0;
-    co_await fs.write_at(file, 4, "FILE", 4, &n);
+    co_await fs.write_at(file, 4, dstd::ByteView("FILE", 4), &n);
     char buf[8] = {};
-    co_await fs.read_at(file, 0, buf, 8, &n);
+    co_await fs.read_at(file, 0, dstd::MutableByteView(buf, 8), &n);
     out->at_back.assign(buf, static_cast<std::size_t>(n));
 
     dftracer::utils::plugins::PathList entries = fs.new_list();
     co_await fs.list_dir(dir, entries);
     out->listed = entries.size();
 
+    FindOptions options;
+    options.limit = 4;
     dftracer::utils::plugins::PathList files = fs.new_list();
-    co_await fs.find_all(dir, nullptr, files);
+    co_await fs.find_all(dir, &options, files);
     out->found = files.size();
     if (files.size() > 0) {
         auto first = co_await files.entry(0);
         out->first_found.assign(first.path.data(), first.path.size());
+        out->first_size = first.size;
     }
 
-    const char* paths[2] = {file, missing};
-    dftu_fs_stat stats[2] = {};
-    co_await fs.stat_batch(paths, 2, stats, out->stat_status);
-    out->stat_size = stats[0].size;
+    const dstd::CStringView paths[2] = {file, missing};
+    FileStat stats[2];
+    co_await fs.stat_batch(dstd::Span<const dstd::CStringView>(paths, 2),
+                           dstd::Span<FileStat>(stats, 2),
+                           dstd::Span<StatStatus>(out->stat_status, 2));
+    out->stat_size = stats[0].size();
+    out->stat_ino = stats[0].ino();
 
     dftracer::utils::plugins::FileBytes none;
     auto bad = fs.read_file(missing, none);
@@ -576,9 +636,10 @@ dftracer::utils::plugins::Task sdk_fs_ops(dftracer::utils::plugins::Host h,
     out->missing_status =
         outcome.has_value() ? DFTU_OK : plugins::status_of(outcome.error());
 
-    std::int32_t removed = 0;
-    co_await fs.remove(file, &removed);
-    co_await fs.remove(dir, &removed);
+    Flag removed;
+    co_await fs.remove(file, removed);
+    out->removed = removed.set();
+    co_await fs.remove(dir, removed);
 }
 
 }  // namespace
@@ -598,10 +659,15 @@ TEST_CASE("plugin cxx: Fs reads, writes, lists, finds and stats files") {
     CHECK(r.listed == 1);
     CHECK(r.found == 1);
     CHECK(r.first_found == file);
+    CHECK(r.first_size == 8);
+    CHECK(r.created);
+    CHECK(r.removed);
     CHECK(r.missing_status == DFTU_E_NOT_FOUND);
-    CHECK(r.stat_status[0] == DFTU_OK);
-    CHECK(r.stat_status[1] == DFTU_E_NOT_FOUND);
+    CHECK(r.stat_status[0].ok());
     CHECK(r.stat_size == 8);
+    CHECK(r.stat_ino != 0);
+    CHECK(!r.stat_status[1].ok());
+    CHECK(r.stat_status[1].condition() == dstd::Condition::NotFound);
 }
 
 TEST_CASE("plugin cxx: LineReader batches a plain file by line range") {
@@ -654,13 +720,13 @@ TEST_CASE("plugin cxx: GzWriter writes lines that LineReader reads back") {
     dftu_utils_test::TestEnvironment env(0);
     dstd::String path = env.dir() + "/sdk_gz.pfw.gz";
     HostFixture fx;
-    dftu_gz_summary summary{};
+    dftracer::utils::plugins::GzSummary summary;
     dstd::Vector<dstd::String> back;
     drive_task(fx.host(), [&](Host h) {
         return gz_roundtrip_sdk(h, path.c_str(), &summary, &back);
     });
-    CHECK(summary.lines == 3);
-    CHECK(summary.uc_bytes == 17);
+    CHECK(summary.lines() == 3);
+    CHECK(summary.uc_bytes() == 17);
     REQUIRE(back.size() == 3);
     CHECK(back[0] == "alpha");
     CHECK(back[2] == "gamma");
@@ -711,6 +777,213 @@ TEST_CASE("plugin cxx: Fileio compress of a missing input is NOT_FOUND") {
         &message);
     CHECK(status == DFTU_E_NOT_FOUND);
     CHECK(message.find("compress") != dstd::String::npos);
+}
+
+namespace {
+
+using namespace dftracer::utils::plugins;
+
+// stat_batch takes one stat and one status slot per path; a shorter span is
+// refused before the host writes into it.
+Task stat_batch_short_sdk(Host h, dstd::Span<const dstd::CStringView> paths,
+                          dstd::Span<FileStat> out,
+                          dstd::Span<StatStatus> statuses) {
+    co_await h.fs().stat_batch(paths, out, statuses);
+}
+
+struct FoundSdk {
+    dstd::Vector<dstd::String> paths;
+    dstd::Vector<std::uint64_t> sizes;
+    dstd::Vector<FileKind> kinds;
+};
+
+Task find_patterns_sdk(Host h, dstd::CStringView root,
+                       dstd::Span<const dstd::CStringView> patterns,
+                       dstd::Span<const dstd::CStringView> skip,
+                       FoundSdk* out) {
+    dftracer::utils::plugins::Fs fs = h.fs();
+    FindOptions options;
+    options.patterns = patterns;
+    options.skip_dirs = skip;
+    PathList found = fs.new_list();
+    co_await fs.find_all(root, &options, found);
+    const std::uint64_t n = found.size();
+    for (std::uint64_t i = 0; i < n; ++i) {
+        const PathEntry entry = co_await found.entry(i);
+        out->paths.push_back(dstd::String(entry.path));
+        out->sizes.push_back(entry.size);
+        out->kinds.push_back(entry.kind);
+    }
+}
+
+Task list_kinds_sdk(Host h, dstd::CStringView root, FoundSdk* out) {
+    dftracer::utils::plugins::Fs fs = h.fs();
+    PathList listed = fs.new_list();
+    co_await fs.list_dir(root, listed);
+    const std::uint64_t n = listed.size();
+    for (std::uint64_t i = 0; i < n; ++i) {
+        const PathEntry entry = co_await listed.entry(i);
+        out->paths.push_back(dstd::String(entry.path));
+        out->kinds.push_back(entry.kind);
+    }
+}
+
+Task openat2_sdk(Host h, dstd::CStringView path, std::uint64_t* size) {
+    dftracer::utils::plugins::Io io = h.io();
+    int fd = -1;
+    OpenHow how;
+    how.flags = O_RDONLY;
+    co_await io.openat2(AT_FDCWD, path, how, &fd);
+    if (fd < 0) co_return;
+    dftracer::utils::plugins::Stat st;
+    co_await io.fstat(fd, st);
+    *size = st.size();
+    co_await io.close(fd);
+}
+
+Task xattr_roundtrip_sdk(Host h, dstd::CStringView path, dstd::String* got,
+                         std::int64_t* out_n) {
+    dftracer::utils::plugins::Io io = h.io();
+    const dstd::CStringView name("user.sdk");
+    co_await io.setxattr(path, name, dstd::ByteView("view-xattr", 10), 0);
+    char buf[32] = {};
+    co_await io.getxattr(path, name, dstd::MutableByteView(buf, sizeof(buf)),
+                         out_n);
+    got->assign(buf, static_cast<std::size_t>(*out_n));
+}
+
+}  // namespace
+
+TEST_CASE("plugin cxx: Fs stat_batch refuses a span shorter than the paths") {
+    dftu_utils_test::TestEnvironment env(0);
+    const dstd::String a = env.dir() + "/short_a.txt";
+    const dstd::String b = env.dir() + "/short_b.txt";
+    const dstd::CStringView paths[2] = {a, b};
+    HostFixture fx;
+    test_plugin_common::TaskDriver driver(fx.host());
+    FileStat stats[2];
+    StatStatus statuses[2];
+    dstd::String message;
+    // Two paths, two stats, one status slot: the host would write two entries
+    // into a one-entry span.
+    const dftu_status st = driver.run(
+        stat_batch_short_sdk(driver.host(),
+                             dstd::Span<const dstd::CStringView>(paths, 2),
+                             dstd::Span<FileStat>(stats, 2),
+                             dstd::Span<StatStatus>(statuses, 1)),
+        &message);
+    CHECK(st == DFTU_E_INVALID);
+    CHECK(message.find("stat_batch") != dstd::String::npos);
+    CHECK(message.find("2 paths") != dstd::String::npos);
+    CHECK(message.find("got 2 and 1") != dstd::String::npos);
+}
+
+TEST_CASE("plugin cxx: Fs find_all takes patterns and skip_dirs") {
+    dftu_utils_test::TestEnvironment env(0);
+    const dstd::String root = env.dir() + "/sdk_find";
+    dstd::fs::create_directories(dstd::PathView(root + "/sub")).discard();
+    dstd::fs::create_directories(dstd::PathView(root + "/skipme")).discard();
+    for (const dstd::String& f :
+         {root + "/top.txt", root + "/keep.log", root + "/sub/a.txt",
+          root + "/sub/b.log", root + "/skipme/deep.txt"}) {
+        dstd::fs::write_file(dstd::PathView(f), dstd::String("x")).discard();
+    }
+
+    const dstd::CStringView patterns[2] = {"*.txt", "*/*.txt"};
+    const dstd::CStringView skip[1] = {"skipme"};
+    HostFixture fx;
+    FoundSdk found;
+    drive_task(fx.host(), [&](Host h) {
+        return find_patterns_sdk(
+            h, root, dstd::Span<const dstd::CStringView>(patterns, 2),
+            dstd::Span<const dstd::CStringView>(skip, 1), &found);
+    });
+
+    REQUIRE(found.paths.size() == 2);
+    bool saw_top = false, saw_sub = false;
+    for (std::size_t i = 0; i < found.paths.size(); ++i) {
+        CHECK(found.kinds[i] == FileKind::File);
+        CHECK(found.paths[i].find("skipme") == dstd::String::npos);
+        CHECK(found.paths[i].find(".log") == dstd::String::npos);
+        if (found.paths[i] == root + "/top.txt") {
+            saw_top = true;
+            CHECK(found.sizes[i] == 1);
+        }
+        if (found.paths[i] == root + "/sub/a.txt") saw_sub = true;
+    }
+    CHECK(saw_top);
+    CHECK(saw_sub);
+}
+
+TEST_CASE("plugin cxx: Fs list_dir reports the kind of a file and a dir") {
+    dftu_utils_test::TestEnvironment env(0);
+    const dstd::String root = env.dir() + "/sdk_kinds";
+    dstd::fs::create_directories(dstd::PathView(root + "/sub")).discard();
+    dstd::fs::write_file(dstd::PathView(root + "/top.txt"), dstd::String("xy"))
+        .discard();
+
+    HostFixture fx;
+    FoundSdk listed;
+    drive_task(fx.host(),
+               [&](Host h) { return list_kinds_sdk(h, root, &listed); });
+
+    REQUIRE(listed.paths.size() == 2);
+    bool saw_file = false, saw_dir = false;
+    for (std::size_t i = 0; i < listed.paths.size(); ++i) {
+        if (listed.paths[i] == root + "/top.txt") {
+            saw_file = true;
+            CHECK(listed.kinds[i] == FileKind::File);
+        }
+        if (listed.paths[i] == root + "/sub") {
+            saw_dir = true;
+            CHECK(listed.kinds[i] == FileKind::Directory);
+        }
+    }
+    CHECK(saw_file);
+    CHECK(saw_dir);
+}
+
+TEST_CASE("plugin cxx: Io openat2 opens through an OpenHow") {
+    dftu_utils_test::TestEnvironment env(0);
+    const dstd::String path = env.dir() + "/sdk_openat2.bin";
+    dstd::fs::write_file(dstd::PathView(path), dstd::String("how")).discard();
+
+    HostFixture fx;
+    std::uint64_t size = 0;
+    dstd::String message;
+    const dftu_status st = drive_status(
+        fx.host(), [&](Host h) { return openat2_sdk(h, path, &size); },
+        &message);
+#ifdef __linux__
+    CHECK(st == DFTU_OK);
+    CHECK(size == 3);
+#else
+    CHECK(st == DFTU_E_UNSUPPORTED);
+    MESSAGE("openat2 needs Linux: " << message);
+#endif
+}
+
+TEST_CASE("plugin cxx: Io xattr round-trips through the byte views") {
+    dftu_utils_test::TestEnvironment env(0);
+    const dstd::String path = env.dir() + "/sdk_xattr.bin";
+    dstd::fs::write_file(dstd::PathView(path), dstd::String("xattr")).discard();
+
+    HostFixture fx;
+    dstd::String got;
+    std::int64_t out_n = 0;
+    dstd::String message;
+    const dftu_status st = drive_status(
+        fx.host(),
+        [&](Host h) { return xattr_roundtrip_sdk(h, path, &got, &out_n); },
+        &message);
+    if (st == DFTU_E_UNSUPPORTED ||
+        message.find("not supported") != dstd::String::npos) {
+        MESSAGE("no xattr on this file system: " << message);
+        return;
+    }
+    CHECK(st == DFTU_OK);
+    CHECK(out_n == 10);
+    CHECK(got == "view-xattr");
 }
 
 TEST_CASE("plugin cxx: Fileio helpers answer and fail on a missing file") {

@@ -117,8 +117,9 @@ dftu_status append2_fn(dftu_ctx*, void* p) {
 plugins::Task fanout_all(plugins::Host h, std::atomic<int>* ran, int n) {
     dstd::Vector<dstd::Result<dftu_task*>> kids;
     for (int i = 0; i < n; ++i)
-        kids.push_back(plugins::detail::spawn_raw(h, inc_fn, ran).release());
-    plugins::AsyncAll all(std::move(kids), plugins::detail::host_raw(h));
+        kids.push_back(plugins::detail::release_op(
+            plugins::detail::spawn_raw(h, inc_fn, ran)));
+    plugins::AsyncAll all = plugins::detail::all_raw(h, std::move(kids));
     co_await all;
 }
 
@@ -232,7 +233,8 @@ plugins::Task all_refused(plugins::Host h, std::atomic<int>* ran,
     plugins::AsyncOp first = plugins::detail::spawn_raw(h, inc_fn, ran);
     plugins::AsyncOp second = plugins::detail::spawn_raw(h, inc_fn, ran);
     plugins::AsyncAll both =
-        plugins::detail::all_raw(h, {first.release(), second.release()});
+        plugins::detail::all_raw(h, {plugins::detail::release_op(first),
+                                     plugins::detail::release_op(second)});
     co_await std::move(both);
     *reached = true;
 }
@@ -240,7 +242,7 @@ plugins::Task all_refused(plugins::Host h, std::atomic<int>* ran,
 plugins::Task await_released_refused(plugins::Host h, std::atomic<int>* ran,
                                      bool* reached) {
     plugins::AsyncOp op = plugins::detail::spawn_raw(h, inc_fn, ran);
-    co_await plugins::detail::await_result(h, op.release());
+    co_await plugins::detail::await_result(h, plugins::detail::release_op(op));
     *reached = true;
 }
 
@@ -248,8 +250,9 @@ plugins::Task all_one_fails(plugins::Host h, std::atomic<int>* ran) {
     plugins::AsyncOp bad =
         plugins::detail::spawn_raw(h, spawn_fails_fn, nullptr);
     plugins::AsyncOp good = plugins::detail::spawn_raw(h, inc_fn, ran);
-    plugins::AsyncAll both =
-        plugins::detail::all_raw(h, {bad.release(), good.release()});
+    plugins::AsyncAll both = plugins::detail::all_raw(
+        h,
+        {plugins::detail::release_op(bad), plugins::detail::release_op(good)});
     co_await std::move(both);
 }
 
@@ -898,13 +901,13 @@ TEST_CASE("plugin SDK: an AsyncOp dropped unawaited discards its task") {
     };
     auto* fake = reinterpret_cast<dftu_task*>(&host);
     {
-        plugins::AsyncOp dropped(fake, &host);
+        plugins::AsyncOp dropped = plugins::detail::async_op(fake, &host);
     }
     CHECK(discarded == 1);
     CHECK(seen == fake);
     {
-        plugins::AsyncOp handed(fake, &host);
-        CHECK(*handed.release() == fake);
+        plugins::AsyncOp handed = plugins::detail::async_op(fake, &host);
+        CHECK(*plugins::detail::release_op(handed) == fake);
     }
     CHECK(discarded == 1);
 }

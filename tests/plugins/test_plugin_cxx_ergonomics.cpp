@@ -82,10 +82,10 @@ dftracer::utils::plugins::Task read_probe(dftracer::utils::plugins::Host h,
     if (fd < 0) co_return;
     char buf[128];
     std::int64_t n = 0;
-    co_await io.read(fd, buf, sizeof(buf), &n);
+    co_await io.read(fd, dstd::MutableByteView(buf, sizeof(buf)), &n);
     if (n > 0) *bytes += n;
     co_await dftracer::utils::plugins::detail::await_result(
-        h, io.close(fd).release());
+        h, dftracer::utils::plugins::detail::release_op(io.close(fd)));
 }
 
 }  // namespace

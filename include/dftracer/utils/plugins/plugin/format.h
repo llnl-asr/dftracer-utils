@@ -3,12 +3,14 @@
 #define DFTRACER_UTILS_PLUGINS_PLUGIN_FORMAT_H
 
 #include <dftracer/utils/dataframe/plugin_error.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <dftracer/utils/plugins/plugin/map.h>
 #include <dftracer/utils/plugins/plugin/types.h>
 
+#include <cstddef>
 #include <cstdint>
 #include <type_traits>
 
@@ -28,9 +30,11 @@ class Doc {
         if (doc_) e_->doc_free(doc_);
     }
 
-    /// The root of the tree, valid until this document is destroyed. Read it
-    /// with the dftu_obj_get and dftu_as_* helpers of abi/value.h.
-    const dftu_value* root() const noexcept { return e_->root(doc_); }
+    /// The root of the tree, valid until this document is destroyed; read it
+    /// with @ref ConfigValue.
+    ConfigValue root() const noexcept {
+        return detail::config_value_from_raw(e_->root(doc_));
+    }
 
    private:
     friend class Format;
@@ -80,12 +84,20 @@ class FormatWriter {
     dstd::Result<void> value(dstd::StringView v) const {
         return detail::reported(e_->str(ctx_, w_, v.data(), v.size()));
     }
-    dstd::Result<void> value(const char* v) const {
+    /// The text of a literal or a `char` array, up to its NUL terminator; a
+    /// buffer writes what it holds, not `N - 1` bytes.
+    template <class S>
+        requires(std::is_array_v<std::remove_reference_t<S>> &&
+                 std::is_same_v<char, std::remove_cv_t<std::remove_extent_t<
+                                          std::remove_reference_t<S>>>>)
+    dstd::Result<void> value(S&& v) const {
         return value(dstd::StringView(v));
     }
+    /// A bare pointer carries no length, so only its holder knows its text.
     template <class T>
-        requires(std::is_pointer_v<T> && !std::is_same_v<T, const char*>)
-    dstd::Result<void> value(T) const = delete;
+        requires(std::is_pointer_v<std::remove_reference_t<T>>)
+    dstd::Result<void> value(T&&) const = delete;
+    dstd::Result<void> value(std::nullptr_t) const = delete;
     dstd::Result<void> value(bool v) const {
         return detail::reported(e_->boolean(ctx_, w_, v ? 1 : 0));
     }
@@ -142,12 +154,13 @@ class Format {
     }
 
    protected:
-    Format(const dftu_plugin_host* h, dftu_ctx* ctx, const char* id)
+    /// `id` names the service, such as DFTU_SVC_JSON.
+    Format(const dftu_plugin_host* h, dftu_ctx* ctx, dstd::CStringView id)
         : h_(h),
           ctx_(ctx),
-          e_(h && h->get_service
-                 ? static_cast<const dftu_svc_format*>(h->get_service(h->h, id))
-                 : nullptr) {}
+          e_(h && h->get_service ? static_cast<const dftu_svc_format*>(
+                                       h->get_service(h->h, id.c_str()))
+                                 : nullptr) {}
 
    private:
     static dstd::Error unsupported() noexcept {
@@ -162,14 +175,18 @@ class Format {
 
 /// The `dftu.svc.json` service.
 class Json : public Format {
-   public:
+   private:
+    friend class Host;
+
     Json(const dftu_plugin_host* h, dftu_ctx* ctx)
         : Format(h, ctx, DFTU_SVC_JSON) {}
 };
 
 /// The `dftu.svc.yaml` service.
 class Yaml : public Format {
-   public:
+   private:
+    friend class Host;
+
     Yaml(const dftu_plugin_host* h, dftu_ctx* ctx)
         : Format(h, ctx, DFTU_SVC_YAML) {}
 };

@@ -37,12 +37,12 @@ class [[nodiscard]] AsyncValue {
     void await_suspend(std::coroutine_handle<Task::promise_type> h) noexcept {
         op_.await_suspend(h);
     }
-    T await_resume() { return finish_(op_.await_resume()); }
+    T await_resume() { return finish_(op_.settle_status()); }
 
     bool resolved() const noexcept { return op_.resolved(); }
     dstd::Result<T> resume_expected() {
-        return op_.resume_expected().transform(
-            [this](dftu_status status) { return finish_(status); });
+        DFTRACER_UTILS_TRY_VOID(op_.resume_expected());
+        return finish_(op_.settle_status());
     }
 
    private:
@@ -56,7 +56,6 @@ class LineBatch {
    public:
     class Iterator {
        public:
-        explicit Iterator(const dftu_bytes* p) : p_(p) {}
         dstd::StringView operator*() const {
             return dstd::StringView(static_cast<const char*>(p_->data),
                                     static_cast<std::size_t>(p_->len));
@@ -68,10 +67,12 @@ class LineBatch {
         bool operator!=(const Iterator& other) const { return p_ != other.p_; }
 
        private:
+        friend class LineBatch;
+
+        explicit Iterator(const dftu_bytes* p) : p_(p) {}
+
         const dftu_bytes* p_;
     };
-
-    explicit LineBatch(const dftu_line_batch& raw) : raw_(raw) {}
 
     /// The 1-based number of the first line.
     std::uint64_t first_line() const noexcept { return raw_.first_line; }
@@ -83,6 +84,10 @@ class LineBatch {
     Iterator end() const { return Iterator(raw_.lines + raw_.count); }
 
    private:
+    friend class LineReader;
+
+    explicit LineBatch(const dftu_line_batch& raw) : raw_(raw) {}
+
     dftu_line_batch raw_;
 };
 
@@ -228,6 +233,42 @@ struct GzOptions {
     std::uint32_t workers = 0;
 };
 
+namespace detail {
+
+/// @see GzSummary: the only code that names a summary slot.
+struct GzSummaryAccess;
+
+}  // namespace detail
+
+/// What a @ref GzWriter::close reports: the files, members, lines and bytes it
+/// wrote.
+class GzSummary {
+   public:
+    std::uint64_t parts() const noexcept { return raw_.parts; }
+    std::uint64_t members() const noexcept { return raw_.members; }
+    std::uint64_t lines() const noexcept { return raw_.lines; }
+    /// Uncompressed bytes.
+    std::uint64_t uc_bytes() const noexcept { return raw_.uc_bytes; }
+    /// Compressed bytes.
+    std::uint64_t c_bytes() const noexcept { return raw_.c_bytes; }
+
+   private:
+    friend struct detail::GzSummaryAccess;
+
+    dftu_gz_summary raw_{};
+};
+static_assert(sizeof(GzSummary) == sizeof(dftu_gz_summary));
+
+namespace detail {
+
+struct GzSummaryAccess {
+    static dftu_gz_summary* raw(GzSummary& summary) noexcept {
+        return &summary.raw_;
+    }
+};
+
+}  // namespace detail
+
 /// A gzip line writer. `co_await open()` once, then `append()` whole lines and
 /// `co_await close()` for the summary. The host owns the writer: one that is
 /// not closed is aborted at the end of the fold and its files are removed.
@@ -255,15 +296,14 @@ class GzWriter {
     /// Finishes the file; the awaited value is its summary.
     auto close() const {
         dftu_task* t = nullptr;
-        const dftu_status st =
-            e_->gz_close(ctx_, h_->h, w_, summary_.get(), &t);
-        const dftu_gz_summary* summary = summary_.get();
+        const dftu_status st = e_->gz_close(
+            ctx_, h_->h, w_, detail::GzSummaryAccess::raw(*summary_.get()), &t);
+        const GzSummary* summary = summary_.get();
         auto finish = [summary](dftu_status) { return *summary; };
-        return AsyncValue<dftu_gz_summary, decltype(finish)>(
+        return AsyncValue<GzSummary, decltype(finish)>(
             detail::started(h_, st, t), finish);
     }
 
-    dftu_gz_writer* raw() const noexcept { return w_; }
     explicit operator bool() const noexcept { return w_ != nullptr; }
 
    private:
@@ -274,7 +314,7 @@ class GzWriter {
           ctx_(ctx),
           e_(e),
           w_(w),
-          summary_(dstd::make_unique<dftu_gz_summary>()) {
+          summary_(dstd::make_unique<GzSummary>()) {
         open_op_.emplace(std::move(open_op));
     }
 
@@ -282,7 +322,7 @@ class GzWriter {
     dftu_ctx* ctx_ = nullptr;
     const dftu_svc_fileio* e_ = nullptr;
     dftu_gz_writer* w_ = nullptr;
-    dstd::UniquePtr<dftu_gz_summary> summary_;
+    dstd::UniquePtr<GzSummary> summary_;
     dstd::Optional<AsyncOp> open_op_;
 };
 
@@ -291,6 +331,97 @@ class GzWriter {
 /// a task gives an @ref AsyncOp that fails when awaited, as does a failed task.
 class Fileio {
    public:
+    /// Lines `start_line` to `end_line` (1-based; 0 is the first and the last
+    /// line) of a plain or gzip file. DFTU_E_NOT_FOUND for a missing file.
+    dstd::Result<LineReader> lines(dstd::CStringView path,
+                                   std::uint64_t start_line = 0,
+                                   std::uint64_t end_line = 0) const {
+        if (!e_) return unsupported();
+        dftu_line_reader* r = nullptr;
+        DFTRACER_UTILS_TRY_VOID(detail::reported(e_->lines_open(
+            ctx_, h_->h, path.c_str(), start_line, end_line, &r)));
+        return LineReader(h_, ctx_, e_, r);
+    }
+
+    dstd::Result<ChunkReader> chunks(dstd::CStringView path,
+                                     std::uint64_t chunk_size = 0) const {
+        if (!e_) return unsupported();
+        dftu_chunk_reader* r = nullptr;
+        DFTRACER_UTILS_TRY_VOID(detail::reported(
+            e_->chunks_open(ctx_, h_->h, path.c_str(), chunk_size, &r)));
+        return ChunkReader(h_, ctx_, e_, r);
+    }
+
+    dstd::Result<GzWriter> gz(dstd::CStringView path,
+                              const GzOptions& options = {}) const {
+        if (!e_) return unsupported();
+        dftu_gz_options raw{sizeof(dftu_gz_options), options.level,
+                            options.member_size, options.workers};
+        dftu_gz_writer* w = nullptr;
+        dftu_task* t = nullptr;
+        DFTRACER_UTILS_TRY_VOID(detail::reported(
+            e_->gz_open(ctx_, h_->h, path.c_str(), &raw, &w, &t)));
+        return GzWriter(h_, ctx_, e_, w, detail::async_op(t, h_));
+    }
+
+    /// `*out_size` receives the output size; it must outlive the await.
+    AsyncOp compress(dstd::CStringView in_path, dstd::CStringView out_path,
+                     std::uint64_t* out_size, std::int32_t level = 0,
+                     std::uint64_t member_size = 0) const {
+        if (!e_) return AsyncOp{unsupported()};
+        dftu_task* t = nullptr;
+        return detail::started(
+            h_,
+            e_->compress(ctx_, h_->h, in_path.c_str(), out_path.c_str(), level,
+                         member_size, out_size, &t),
+            t);
+    }
+    AsyncOp decompress(dstd::CStringView in_path, dstd::CStringView out_path,
+                       std::uint64_t* out_size) const {
+        if (!e_) return AsyncOp{unsupported()};
+        dftu_task* t = nullptr;
+        return detail::started(h_,
+                               e_->decompress(ctx_, h_->h, in_path.c_str(),
+                                              out_path.c_str(), out_size, &t),
+                               t);
+    }
+
+    /// The absolute normalized path; DFTU_E_NOT_FOUND for a missing file.
+    dstd::Result<dstd::String> logical_path(dstd::CStringView path) const {
+        if (!e_) return unsupported();
+        dftu_bytes out{};
+        DFTRACER_UTILS_TRY_VOID(detail::reported(
+            e_->logical_path(ctx_, h_->h, path.c_str(), &out)));
+        dstd::String text(static_cast<const char*>(out.data),
+                          static_cast<std::size_t>(out.len));
+        if (out.free_fn) out.free_fn(const_cast<void*>(out.data), out.ud);
+        return text;
+    }
+    dstd::Result<std::int64_t> mtime(dstd::CStringView path) const {
+        if (!e_) return unsupported();
+        std::int64_t seconds = 0;
+        DFTRACER_UTILS_TRY_VOID(
+            detail::reported(e_->mtime(ctx_, h_->h, path.c_str(), &seconds)));
+        return seconds;
+    }
+    dstd::Result<std::uint64_t> size(dstd::CStringView path) const {
+        if (!e_) return unsupported();
+        std::uint64_t bytes = 0;
+        DFTRACER_UTILS_TRY_VOID(
+            detail::reported(e_->size(ctx_, h_->h, path.c_str(), &bytes)));
+        return bytes;
+    }
+    dstd::Result<std::uint64_t> sampled_hash(dstd::CStringView path) const {
+        if (!e_) return unsupported();
+        std::uint64_t hash = 0;
+        DFTRACER_UTILS_TRY_VOID(detail::reported(
+            e_->sampled_hash(ctx_, h_->h, path.c_str(), &hash)));
+        return hash;
+    }
+
+   private:
+    friend class Host;
+
     Fileio(const dftu_plugin_host* h, dftu_ctx* ctx)
         : h_(h),
           ctx_(ctx),
@@ -298,93 +429,6 @@ class Fileio {
                                        h->get_service(h->h, DFTU_SVC_FILEIO))
                                  : nullptr) {}
 
-    /// Lines `start_line` to `end_line` (1-based; 0 is the first and the last
-    /// line) of a plain or gzip file. DFTU_E_NOT_FOUND for a missing file.
-    dstd::Result<LineReader> lines(const char* path,
-                                   std::uint64_t start_line = 0,
-                                   std::uint64_t end_line = 0) const {
-        if (!e_) return unsupported();
-        dftu_line_reader* r = nullptr;
-        DFTRACER_UTILS_TRY_VOID(detail::reported(
-            e_->lines_open(ctx_, h_->h, path, start_line, end_line, &r)));
-        return LineReader(h_, ctx_, e_, r);
-    }
-
-    dstd::Result<ChunkReader> chunks(const char* path,
-                                     std::uint64_t chunk_size = 0) const {
-        if (!e_) return unsupported();
-        dftu_chunk_reader* r = nullptr;
-        DFTRACER_UTILS_TRY_VOID(detail::reported(
-            e_->chunks_open(ctx_, h_->h, path, chunk_size, &r)));
-        return ChunkReader(h_, ctx_, e_, r);
-    }
-
-    dstd::Result<GzWriter> gz(const char* path,
-                              const GzOptions& options = {}) const {
-        if (!e_) return unsupported();
-        dftu_gz_options raw{sizeof(dftu_gz_options), options.level,
-                            options.member_size, options.workers};
-        dftu_gz_writer* w = nullptr;
-        dftu_task* t = nullptr;
-        DFTRACER_UTILS_TRY_VOID(
-            detail::reported(e_->gz_open(ctx_, h_->h, path, &raw, &w, &t)));
-        return GzWriter(h_, ctx_, e_, w, AsyncOp{t, h_});
-    }
-
-    /// `*out_size` receives the output size; it must outlive the await.
-    AsyncOp compress(const char* in_path, const char* out_path,
-                     std::uint64_t* out_size, std::int32_t level = 0,
-                     std::uint64_t member_size = 0) const {
-        if (!e_) return AsyncOp{unsupported()};
-        dftu_task* t = nullptr;
-        return detail::started(h_,
-                               e_->compress(ctx_, h_->h, in_path, out_path,
-                                            level, member_size, out_size, &t),
-                               t);
-    }
-    AsyncOp decompress(const char* in_path, const char* out_path,
-                       std::uint64_t* out_size) const {
-        if (!e_) return AsyncOp{unsupported()};
-        dftu_task* t = nullptr;
-        return detail::started(
-            h_, e_->decompress(ctx_, h_->h, in_path, out_path, out_size, &t),
-            t);
-    }
-
-    /// The absolute normalized path; DFTU_E_NOT_FOUND for a missing file.
-    dstd::Result<dstd::String> logical_path(const char* path) const {
-        if (!e_) return unsupported();
-        dftu_bytes out{};
-        DFTRACER_UTILS_TRY_VOID(
-            detail::reported(e_->logical_path(ctx_, h_->h, path, &out)));
-        dstd::String text(static_cast<const char*>(out.data),
-                          static_cast<std::size_t>(out.len));
-        if (out.free_fn) out.free_fn(const_cast<void*>(out.data), out.ud);
-        return text;
-    }
-    dstd::Result<std::int64_t> mtime(const char* path) const {
-        if (!e_) return unsupported();
-        std::int64_t seconds = 0;
-        DFTRACER_UTILS_TRY_VOID(
-            detail::reported(e_->mtime(ctx_, h_->h, path, &seconds)));
-        return seconds;
-    }
-    dstd::Result<std::uint64_t> size(const char* path) const {
-        if (!e_) return unsupported();
-        std::uint64_t bytes = 0;
-        DFTRACER_UTILS_TRY_VOID(
-            detail::reported(e_->size(ctx_, h_->h, path, &bytes)));
-        return bytes;
-    }
-    dstd::Result<std::uint64_t> sampled_hash(const char* path) const {
-        if (!e_) return unsupported();
-        std::uint64_t hash = 0;
-        DFTRACER_UTILS_TRY_VOID(
-            detail::reported(e_->sampled_hash(ctx_, h_->h, path, &hash)));
-        return hash;
-    }
-
-   private:
     static dstd::Error unsupported() noexcept {
         return make_error(dstd::Condition::Unsupported,
                           "host lacks dftu.svc.fileio");

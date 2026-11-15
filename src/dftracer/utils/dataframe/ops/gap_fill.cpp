@@ -111,18 +111,18 @@ dstd::Result<DataFrame> gap_fill(
         value_at.push_back(at);
     }
 
-    dstd::Result<dstd::Vector<ColumnView>> part_views =
+    dstd::Result<dstd::Vector<ColumnReader>> part_views =
         ops::views_of(df, partition_by, "gap_fill");
     if (!part_views) return part_views.error();
-    const dstd::Vector<ColumnView> parts = std::move(*part_views);
-    dstd::Vector<ColumnView> keys = parts;
+    const dstd::Vector<ColumnReader> parts = std::move(*part_views);
+    dstd::Vector<ColumnReader> keys = parts;
     keys.emplace_back(df.columns[time_at]);
-    const ColumnView& times = keys.back();
-    dstd::Vector<ColumnView> linear;
+    const ColumnReader& times = keys.back();
+    dstd::Vector<ColumnReader> linear;
     if (mode == GapFillMode::Linear)
         for (const std::size_t at : value_at)
             linear.emplace_back(df.columns[at]);
-    const bool unsigned_time = times.kind() == ColumnView::Kind::Unsigned;
+    const bool unsigned_time = times.kind() == ColumnReader::Kind::Unsigned;
     const auto read_time = [&](std::int64_t row) {
         return unsigned_time ? static_cast<std::int64_t>(times.get_uint(row))
                              : times.get_int(row);
@@ -191,7 +191,7 @@ dstd::Result<DataFrame> gap_fill(
                         time_out.push_back(k * bucket);
                     }
                     for (std::size_t v = 0; v < linear.size(); ++v) {
-                        const ColumnView& col = linear[v];
+                        const ColumnReader& col = linear[v];
                         double out = 0.0;
                         bool valid = false;
                         if (has_real) {

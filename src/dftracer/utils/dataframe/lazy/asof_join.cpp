@@ -18,9 +18,9 @@ namespace {
 // of an interval join. The views read the columns of `cols`.
 struct Seg {
     dstd::Vector<Series> cols;
-    dstd::Vector<ColumnView> keys;
-    dstd::Optional<ColumnView> t;   // asof time, or interval lo
-    dstd::Optional<ColumnView> hi;  // interval hi
+    dstd::Vector<ColumnReader> keys;
+    dstd::Optional<ColumnReader> t;   // asof time, or interval lo
+    dstd::Optional<ColumnReader> hi;  // interval hi
     std::int64_t rows = 0;
     std::int64_t live = 0;
     std::uint64_t bytes = 0;
@@ -51,8 +51,8 @@ struct Layout {
 
 struct LeftBlock {
     Morsel m;
-    dstd::Vector<ColumnView> by;
-    dstd::Optional<ColumnView> t;
+    dstd::Vector<ColumnReader> by;
+    dstd::Optional<ColumnReader> t;
 };
 
 bool is_bytes_type(TypeId t) {
@@ -92,13 +92,13 @@ dstd::Result<void> check_field_types(
         if (known(l) && known(r) && l->type.id != r->type.id)
             return invalid_argument<"{}: equi column types differ">(who);
         for (const Field* f : {l, r})
-            if (known(f) && !ColumnView::supports(f->type.id))
+            if (known(f) && !ColumnReader::supports(f->type.id))
                 return invalid_argument<
                     "{}: column '{}' of type {} has no order">(
                     who, n, dstd::String(type_name(f->type.id)));
     }
     if (known(lt) &&
-        (!ColumnView::supports(lt->type.id) || is_bytes_type(lt->type.id)))
+        (!ColumnReader::supports(lt->type.id) || is_bytes_type(lt->type.id)))
         return invalid_argument<"{}: time columns must be numeric">(who);
     return {};
 }
@@ -500,7 +500,7 @@ class AsofCursor : public OrderedJoin {
             push_row(r, Ref{});
             co_return dstd::Result<void>{};
         }
-        const ColumnView& lt = *L.t;
+        const ColumnReader& lt = *L.t;
         for (;;) {
             auto filling = feed_.fill(max_rows_);
             const auto fill_ok = co_await std::move(filling).or_fail();

@@ -9,8 +9,11 @@
 namespace dftracer::utils::plugins {
 
 // A plugin UDF and an in-process one are the same classes and one adapter.
+using dataframe::ColumnView;
+using dataframe::ScalarView;
 using dataframe::UdfBatch;
 using dataframe::UdfBind;
+using dataframe::UdfFlag;
 using dataframe::UdfOptions;
 using dataframe::UdfType;
 

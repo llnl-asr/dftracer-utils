@@ -16,27 +16,27 @@ namespace dftracer::utils::dataframe {
 
 namespace {
 
-dstd::Optional<ColumnView::Kind> kind_of(TypeId t) {
+dstd::Optional<ColumnReader::Kind> kind_of(TypeId t) {
     switch (physical_type(t)) {
         case TypeId::Bool:
         case TypeId::Int8:
         case TypeId::Int16:
         case TypeId::Int32:
         case TypeId::Int64:
-            return ColumnView::Kind::Signed;
+            return ColumnReader::Kind::Signed;
         case TypeId::Uint8:
         case TypeId::Uint16:
         case TypeId::Uint32:
         case TypeId::Uint64:
-            return ColumnView::Kind::Unsigned;
+            return ColumnReader::Kind::Unsigned;
         case TypeId::Float32:
         case TypeId::Float64:
-            return ColumnView::Kind::Float;
+            return ColumnReader::Kind::Float;
         case TypeId::String:
         case TypeId::Binary:
         case TypeId::LargeString:
         case TypeId::LargeBinary:
-            return ColumnView::Kind::Bytes;
+            return ColumnReader::Kind::Bytes;
         default:
             return dstd::nullopt;
     }
@@ -49,9 +49,11 @@ int three_way(T a, T b) {
 
 }  // namespace
 
-bool ColumnView::supports(TypeId t) noexcept { return kind_of(t).has_value(); }
+bool ColumnReader::supports(TypeId t) noexcept {
+    return kind_of(t).has_value();
+}
 
-ColumnView::ColumnView(const Series& column)
+ColumnReader::ColumnReader(const Series& column)
     : column_(column.encoding() == Encoding::Flat ? column.share()
                                                   : column.materialize()) {
     type_ = column_.type();
@@ -59,7 +61,7 @@ ColumnView::ColumnView(const Series& column)
     if (!kind)
         dstd::fatal(
             dstd::fmt<
-                "column type '{}' has no order; check ColumnView::supports "
+                "column type '{}' has no order; check ColumnReader::supports "
                 "first">(type_name(type_))
                 .c_str());
     kind_ = *kind;
@@ -76,7 +78,7 @@ ColumnView::ColumnView(const Series& column)
     }
 }
 
-ColumnView::ColumnView(const ColumnView& other)
+ColumnReader::ColumnReader(const ColumnReader& other)
     : column_(other.column_.share()),
       kind_(other.kind_),
       type_(other.type_),
@@ -87,12 +89,12 @@ ColumnView::ColumnView(const ColumnView& other)
       off32_(other.off32_),
       off64_(other.off64_) {}
 
-ColumnView& ColumnView::operator=(const ColumnView& other) {
-    if (this != &other) *this = ColumnView(other);
+ColumnReader& ColumnReader::operator=(const ColumnReader& other) {
+    if (this != &other) *this = ColumnReader(other);
     return *this;
 }
 
-std::int64_t ColumnView::get_int(std::int64_t i) const noexcept {
+std::int64_t ColumnReader::get_int(std::int64_t i) const noexcept {
     const auto at = static_cast<std::size_t>(i);
     switch (physical_) {
         case TypeId::Bool:
@@ -108,7 +110,7 @@ std::int64_t ColumnView::get_int(std::int64_t i) const noexcept {
     }
 }
 
-std::uint64_t ColumnView::get_uint(std::int64_t i) const noexcept {
+std::uint64_t ColumnReader::get_uint(std::int64_t i) const noexcept {
     const auto at = static_cast<std::size_t>(i);
     switch (physical_) {
         case TypeId::Uint8:
@@ -122,7 +124,7 @@ std::uint64_t ColumnView::get_uint(std::int64_t i) const noexcept {
     }
 }
 
-double ColumnView::get_double(std::int64_t i) const noexcept {
+double ColumnReader::get_double(std::int64_t i) const noexcept {
     switch (kind_) {
         case Kind::Signed:
             return static_cast<double>(get_int(i));
@@ -137,7 +139,7 @@ double ColumnView::get_double(std::int64_t i) const noexcept {
     }
 }
 
-dstd::StringView ColumnView::get_bytes(std::int64_t i) const noexcept {
+dstd::StringView ColumnReader::get_bytes(std::int64_t i) const noexcept {
     const auto at = static_cast<std::size_t>(i);
     const char* d = reinterpret_cast<const char*>(data_);
     if (off64_ != nullptr)
@@ -148,8 +150,8 @@ dstd::StringView ColumnView::get_bytes(std::int64_t i) const noexcept {
         d + off32_[at], static_cast<std::size_t>(off32_[at + 1] - off32_[at]));
 }
 
-int ColumnView::compare(std::int64_t a, const ColumnView& other,
-                        std::int64_t b) const noexcept {
+int ColumnReader::compare(std::int64_t a, const ColumnReader& other,
+                          std::int64_t b) const noexcept {
     switch (kind_) {
         case Kind::Signed:
             return three_way(get_int(a), other.get_int(b));
@@ -166,13 +168,13 @@ int ColumnView::compare(std::int64_t a, const ColumnView& other,
     }
 }
 
-dstd::Vector<std::int64_t> order_rows(const dstd::Vector<ColumnView>& keys,
+dstd::Vector<std::int64_t> order_rows(const dstd::Vector<ColumnReader>& keys,
                                       std::int64_t n) {
     dstd::Vector<std::int64_t> order(static_cast<std::size_t>(n));
     std::iota(order.begin(), order.end(), 0);
     if (keys.empty()) return order;
     std::sort(order.begin(), order.end(), [&](std::int64_t a, std::int64_t b) {
-        for (const ColumnView& k : keys) {
+        for (const ColumnReader& k : keys) {
             const bool na = k.is_null(a);
             const bool nb = k.is_null(b);
             if (na || nb) {
@@ -187,9 +189,9 @@ dstd::Vector<std::int64_t> order_rows(const dstd::Vector<ColumnView>& keys,
     return order;
 }
 
-bool same_keys(const dstd::Vector<ColumnView>& keys, std::int64_t a,
+bool same_keys(const dstd::Vector<ColumnReader>& keys, std::int64_t a,
                std::int64_t b) {
-    for (const ColumnView& k : keys) {
+    for (const ColumnReader& k : keys) {
         const bool na = k.is_null(a);
         const bool nb = k.is_null(b);
         if (na != nb) return false;
@@ -198,7 +200,7 @@ bool same_keys(const dstd::Vector<ColumnView>& keys, std::int64_t a,
     return true;
 }
 
-std::int64_t run_end(const dstd::Vector<ColumnView>& keys,
+std::int64_t run_end(const dstd::Vector<ColumnReader>& keys,
                      const dstd::Vector<std::int64_t>& order,
                      std::int64_t begin) {
     const auto n = static_cast<std::int64_t>(order.size());

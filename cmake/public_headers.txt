@@ -65,6 +65,7 @@ dftracer/utils/dataframe/field_stat.h
 dftracer/utils/dataframe/lazy_ops.h
 dftracer/utils/dataframe/lazyframe.h
 dftracer/utils/dataframe/op.h
+dftracer/utils/dataframe/plugin_frame.h
 dftracer/utils/dataframe/scalar.h
 dftracer/utils/dataframe/series.h
 dftracer/utils/dataframe/sketch.h

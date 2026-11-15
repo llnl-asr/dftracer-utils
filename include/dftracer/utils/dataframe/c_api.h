@@ -219,12 +219,12 @@ DFTU_EXPORT int64_t dftu_series_null_count(const dftu_series* col);
 DFTU_EXPORT int32_t dftu_series_is_null(const dftu_series* col, int64_t i);
 
 /** Bytes of row `i` of a String/Binary/LargeString/LargeBinary column, for a
- * FLAT, VIEW, DICTIONARY or SELECTION column (resolved through its base,
- * recursing when the base is itself not FLAT). Writes the byte count to `*len`
- * (`len` must not be NULL) and returns a pointer into a buffer owned by `col`:
- * no allocation, valid while `col` lives, not NUL-terminated. Returns NULL with
- * `*len` 0 for a null row, an out-of-range row, or a column of another type.
- */
+ * FLAT, VIEW, DICTIONARY, SELECTION or CHUNKED column (resolved through its
+ * base, recursing when the base is itself not FLAT). Writes the byte count to
+ * `*len` (`len` must not be NULL) and returns a pointer into a buffer owned by
+ * `col`: no allocation, valid while `col` lives, not NUL-terminated. Returns
+ * NULL with `*len` 0 for a null row, an out-of-range row, or a column of
+ * another type. */
 DFTU_EXPORT const char* dftu_series_string_at(const dftu_series* col, int64_t i,
                                               int64_t* len);
 
@@ -1262,6 +1262,11 @@ DFTU_EXPORT const char* dftu_dataframe_column_name(const dftu_dataframe* df,
  * dftu_series_free), or NULL if absent. */
 DFTU_EXPORT dftu_series* dftu_dataframe_column(const dftu_dataframe* df,
                                                const char* name);
+/** Column `i` of `df`, borrowed: the pointer indexes the frame's own column, so
+ * it allocates nothing, and it stays valid only while `df` lives and is not
+ * modified. NULL for an index out of range. */
+DFTU_EXPORT const dftu_series* dftu_dataframe_column_at(
+    const dftu_dataframe* df, int32_t i);
 
 /* Row ops (return a new frame). */
 DFTU_EXPORT dftu_dataframe* dftu_dataframe_take(const dftu_dataframe* df,

@@ -10,6 +10,7 @@
 namespace dftracer::utils::plugins {
 
 // A plugin UDAF and an in-process one are the same classes and one adapter.
+using dataframe::UdafFlag;
 using dataframe::UdafOptions;
 using dataframe::UdafStateSet;
 using dataframe::UdafType;

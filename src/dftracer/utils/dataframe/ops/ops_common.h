@@ -27,16 +27,16 @@ inline dstd::Result<std::size_t> column_named(const DataFrame& df,
 
 /// One view per named column of `df`, in order; an unsupported type is an
 /// InvalidArgument error naming `who` and the column.
-inline dstd::Result<dstd::Vector<ColumnView>> views_of(
+inline dstd::Result<dstd::Vector<ColumnReader>> views_of(
     const DataFrame& df, const dstd::Vector<dstd::String>& names,
     const char* who) {
-    dstd::Vector<ColumnView> out;
+    dstd::Vector<ColumnReader> out;
     out.reserve(names.size());
     for (const dstd::String& n : names) {
         const dstd::Result<std::size_t> at = column_named(df, n, who);
         if (!at) return at.error();
         const Series& c = df.columns[*at];
-        if (!ColumnView::supports(c.type()))
+        if (!ColumnReader::supports(c.type()))
             return invalid_argument<"{}: column '{}' of type {} has no order">(
                 who, n, type_name(c.type()));
         out.emplace_back(c);
@@ -55,10 +55,11 @@ inline void set_null(dstd::Vector<std::uint8_t>& bits, std::size_t i) {
 }
 
 /// The order of the key tuple of row `a` of `left` against row `b` of `right`
-/// (each a run of ColumnViews of equal kinds): a null sorts after every value
+/// (each a run of ColumnReaders of equal kinds): a null sorts after every value
 /// and equals a null.
-inline int compare_keys(const dstd::Vector<ColumnView>& left, std::int64_t a,
-                        const dstd::Vector<ColumnView>& right, std::int64_t b) {
+inline int compare_keys(const dstd::Vector<ColumnReader>& left, std::int64_t a,
+                        const dstd::Vector<ColumnReader>& right,
+                        std::int64_t b) {
     for (std::size_t k = 0; k < left.size(); ++k) {
         const bool na = left[k].is_null(a);
         const bool nb = right[k].is_null(b);
@@ -74,18 +75,18 @@ inline int compare_keys(const dstd::Vector<ColumnView>& left, std::int64_t a,
 
 // |left - right| <= tol in the column's own units; a negative tol rejects.
 // Integer distances compare against floor(tol), exact for any tol.
-inline bool within(const ColumnView& l, std::int64_t il, const ColumnView& r,
-                   std::int64_t ir, double tol) {
+inline bool within(const ColumnReader& l, std::int64_t il,
+                   const ColumnReader& r, std::int64_t ir, double tol) {
     if (!(tol >= 0)) return false;
     const bool unbounded = tol >= 18446744073709551616.0;
     const std::uint64_t itol =
         unbounded ? 0 : static_cast<std::uint64_t>(std::floor(tol));
     switch (l.kind()) {
-        case ColumnView::Kind::Unsigned: {
+        case ColumnReader::Kind::Unsigned: {
             const std::uint64_t x = l.get_uint(il), y = r.get_uint(ir);
             return unbounded || (x >= y ? x - y : y - x) <= itol;
         }
-        case ColumnView::Kind::Float:
+        case ColumnReader::Kind::Float:
             return std::fabs(l.get_double(il) - r.get_double(ir)) <= tol;
         default: {
             const std::int64_t x = l.get_int(il), y = r.get_int(ir);
@@ -99,16 +100,16 @@ inline bool within(const ColumnView& l, std::int64_t il, const ColumnView& r,
 }
 
 // |left - ra[a]| <= |left - rb[b]|.
-inline bool closer_or_equal(const ColumnView& l, std::int64_t il,
-                            const ColumnView& ra, std::int64_t a,
-                            const ColumnView& rb, std::int64_t b) {
+inline bool closer_or_equal(const ColumnReader& l, std::int64_t il,
+                            const ColumnReader& ra, std::int64_t a,
+                            const ColumnReader& rb, std::int64_t b) {
     switch (l.kind()) {
-        case ColumnView::Kind::Unsigned: {
+        case ColumnReader::Kind::Unsigned: {
             const std::uint64_t x = l.get_uint(il);
             const std::uint64_t ya = ra.get_uint(a), yb = rb.get_uint(b);
             return (x >= ya ? x - ya : ya - x) <= (x >= yb ? x - yb : yb - x);
         }
-        case ColumnView::Kind::Float: {
+        case ColumnReader::Kind::Float: {
             const double x = l.get_double(il);
             return std::fabs(x - ra.get_double(a)) <=
                    std::fabs(x - rb.get_double(b));

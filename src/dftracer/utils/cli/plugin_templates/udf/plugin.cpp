@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // The @NAME@ udf plugin, made by `dftracer_plugin new`.
-#include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/plugin.h>
 
@@ -12,43 +12,60 @@ using namespace dftracer::utils;
 using namespace dftracer::utils::plugins;
 
 /// A scalar UDF runs on whole columns, never row by row. A row with a null
-/// argument gives a null result without the UDF running for it.
+/// argument gives a null result without the UDF running for it. The argument
+/// is a borrowed view of the column, so a read copies nothing.
 struct Doubled {
-    dftu_dtype type;
+    dataframe::TypeId type = dataframe::TypeId::Unknown;
 
     /// Called once per query with the argument types: check them and declare
     /// the result type.
     static dstd::Result<dstd::UniquePtr<Doubled>> bind(UdfBind& bind) {
-        const dftu_dtype type = bind.type(0);
-        if (type != DFTU_TYPE_INT64 && type != DFTU_TYPE_UINT64 &&
-            type != DFTU_TYPE_FLOAT64)
-            return dstd::Unexpected(
-                make_error(DFTU_E_INVALID, "doubled takes a number column"));
-        bind.result(DFTU_TYPE_FLOAT64);
+        const dataframe::TypeId type = bind.type(0);
+        if (type != dataframe::TypeId::Int64 &&
+            type != dataframe::TypeId::Uint64 &&
+            type != dataframe::TypeId::Float64)
+            return dstd::Unexpected<dstd::Error>(
+                dstd::Error(dstd::Condition::InvalidArgument,
+                            "doubled takes a number column"));
+        bind.result(dataframe::TypeId::Float64);
         return dstd::make_unique<Doubled>(Doubled{type});
     }
 
-    dstd::Result<dftu_series*> exec(UdfBatch& batch) const {
+    dstd::Result<Column> exec(UdfBatch& batch) const {
         const auto rows = static_cast<std::int64_t>(batch.rows());
+        const ColumnView values = batch.arg(0);
         dstd::Vector<double> out(static_cast<std::size_t>(rows));
-        const void* data = dftu_series_data(batch.arg(0));
-        for (std::int64_t r = 0; r < rows; ++r) {
-            double value = 0;
-            if (type == DFTU_TYPE_INT64)
-                value = static_cast<double>(
-                    static_cast<const std::int64_t*>(data)[r]);
-            else if (type == DFTU_TYPE_UINT64)
-                value = static_cast<double>(
-                    static_cast<const std::uint64_t*>(data)[r]);
-            else
-                value = static_cast<const double*>(data)[r];
-            out[static_cast<std::size_t>(r)] = 2 * value;
+        switch (type) {
+            case dataframe::TypeId::Int64: {
+                const dstd::Span<const std::int64_t> v =
+                    values.values<std::int64_t>();
+                for (std::int64_t r = 0; r < rows; ++r)
+                    out[static_cast<std::size_t>(r)] =
+                        2 * static_cast<double>(v[static_cast<std::size_t>(r)]);
+                break;
+            }
+            case dataframe::TypeId::Uint64: {
+                const dstd::Span<const std::uint64_t> v =
+                    values.values<std::uint64_t>();
+                for (std::int64_t r = 0; r < rows; ++r)
+                    out[static_cast<std::size_t>(r)] =
+                        2 * static_cast<double>(v[static_cast<std::size_t>(r)]);
+                break;
+            }
+            default: {
+                const dstd::Span<const double> v = values.values<double>();
+                for (std::int64_t r = 0; r < rows; ++r)
+                    out[static_cast<std::size_t>(r)] =
+                        2 * v[static_cast<std::size_t>(r)];
+                break;
+            }
         }
         Column column = Column::from_double(std::move(out));
-        if (!column)
-            return dstd::Unexpected(
-                make_error(DFTU_E_INVALID, "doubled could not build a column"));
-        return column.release();
+        if (column.is_null())
+            return dstd::Unexpected<dstd::Error>(
+                dstd::Error(dstd::Condition::InvalidArgument,
+                            "doubled could not build a column"));
+        return column;
     }
 };
 

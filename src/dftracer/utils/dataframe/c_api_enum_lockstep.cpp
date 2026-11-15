@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/c_api.h>
+#include <dftracer/utils/dataframe/scalar.h>
 #include <dftracer/utils/dataframe/types.h>
+#include <dftracer/utils/dataframe/udaf_adapter.h>
+#include <dftracer/utils/dataframe/udf_adapter.h>
 #include <dftracer/utils/dstd/error.h>
 
 namespace dftracer::utils::dataframe {
@@ -14,6 +17,26 @@ constexpr std::int32_t code(E e) {
 
 static_assert(code(Encoding::View) == 4);
 static_assert(code(Encoding::Chunked) == 5);
+
+// The flag sets and tags of the plugin SDK (udf_adapter.h, udaf_adapter.h,
+// scalar.h) are the bits and tags of the C ABI they translate to.
+static_assert(code(UdfFlag::None) == 0);
+static_assert(code(UdfFlag::Volatile) == DFTU_FN_VOLATILE);
+static_assert(code(UdfFlag::NullAware) == DFTU_FN_NULL_AWARE);
+static_assert(code(UdafFlag::None) == 0);
+static_assert(code(UdafFlag::ParallelSafe) == DFTU_AGG_PARALLEL_SAFE);
+static_assert(code(UdafFlag::NullAware) == DFTU_AGG_NULL_AWARE);
+// The plain-bytes flag the UDAF adapter derives from the state type is a bit of
+// its own, never one a declaration sets.
+static_assert((static_cast<std::uint32_t>(DFTU_AGG_STATE_POD) &
+               static_cast<std::uint32_t>(UdafFlag::ParallelSafe)) == 0);
+static_assert((static_cast<std::uint32_t>(DFTU_AGG_STATE_POD) &
+               static_cast<std::uint32_t>(UdafFlag::NullAware)) == 0);
+static_assert(code(ScalarKind::I64) == DFTU_SCALAR_TAG_I64);
+static_assert(code(ScalarKind::U64) == DFTU_SCALAR_TAG_U64);
+static_assert(code(ScalarKind::F64) == DFTU_SCALAR_TAG_F64);
+static_assert(code(ScalarKind::Str) == DFTU_SCALAR_TAG_STR);
+static_assert(code(ScalarKind::Err) == DFTU_SCALAR_TAG_ERR);
 
 static_assert(-(code(dstd::Condition::Unknown) + 1) == DFTU_E_UNKNOWN);
 static_assert(-(code(dstd::Condition::Internal) + 1) == DFTU_E_INTERNAL);

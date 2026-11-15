@@ -54,17 +54,17 @@ constexpr std::int64_t NO_SESSION = -1;
 enum class IntKind { Int64, Uint64, Int32, Uint32 };
 
 /// The reader for @p type, or nothing for a type that is not an integer.
-dstd::Optional<IntKind> int_kind(int32_t type) {
+dstd::Optional<IntKind> int_kind(dataframe::TypeId type) {
     switch (type) {
-        case DFTU_TYPE_INT64:
-        case DFTU_TYPE_TIMESTAMP:
-        case DFTU_TYPE_DURATION:
+        case dataframe::TypeId::Int64:
+        case dataframe::TypeId::Timestamp:
+        case dataframe::TypeId::Duration:
             return IntKind::Int64;
-        case DFTU_TYPE_UINT64:
+        case dataframe::TypeId::Uint64:
             return IntKind::Uint64;
-        case DFTU_TYPE_INT32:
+        case dataframe::TypeId::Int32:
             return IntKind::Int32;
-        case DFTU_TYPE_UINT32:
+        case dataframe::TypeId::Uint32:
             return IntKind::Uint32;
         default:
             return dstd::Optional<IntKind>();

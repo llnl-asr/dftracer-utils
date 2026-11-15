@@ -14,6 +14,7 @@
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/result.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 
 #include <concepts>
@@ -30,25 +31,35 @@ namespace dftracer::utils::dataframe {
 template <class State>
 class UdafStateSet {
    public:
-    UdafStateSet(void* const* states, std::uint64_t n) noexcept
-        : states_(states), n_(n) {}
+    explicit UdafStateSet(dstd::Span<void* const> states) noexcept
+        : states_(states) {}
 
-    std::uint64_t size() const noexcept { return n_; }
+    std::uint64_t size() const noexcept { return states_.size(); }
 
     State* operator[](std::uint64_t i) const noexcept {
         return static_cast<State*>(states_[i]);
     }
 
    private:
-    void* const* states_;
-    std::uint64_t n_;
+    dstd::Span<void* const> states_;
 };
 
-/// How a UDAF is called: the DFTU_AGG_* flags it sets (DFTU_AGG_PARALLEL_SAFE,
-/// DFTU_AGG_NULL_AWARE) and the argument counts it takes. The adapter derives
-/// only DFTU_AGG_STATE_POD, from the state type.
+/// What a user-defined aggregate promises the host about how it is fed. The
+/// adapter adds the plain-bytes flag itself, from the state type.
+enum class UdafFlag : std::uint32_t {
+    None = 0,
+    /// The host may feed several state sets on different threads and merge
+    /// them with combine; one set is never used by two threads at once.
+    ParallelSafe = DFTU_AGG_PARALLEL_SAFE,
+    /// update sees every row, null arguments included, and skips the states it
+    /// must not feed.
+    NullAware = DFTU_AGG_NULL_AWARE,
+};
+
+/// How a UDAF is called: the @ref UdafFlag set it declares and the argument
+/// counts it takes.
 struct UdafOptions {
-    std::uint32_t flags = 0;
+    UdafFlag flags = UdafFlag::None;
     std::int32_t min_args = 1;
     std::int32_t max_args = 1;
 };
@@ -63,8 +74,8 @@ struct UdafOptions {
 ///
 /// bind gives a new `A` or an error, which fails the query. update feeds a
 /// batch to the states of its rows (null entries are skipped rows), combine
-/// merges `from` into `into` and leaves `from` unchanged, and finalize gives an
-/// owned result column with one row per state, of the type bind chose. They
+/// merges `from` into `into` and leaves `from` unchanged, and finalize gives a
+/// @ref Column of one row per state, of the type bind chose (or an error). They
 /// only read `A`, so one `A` serves every state set. A UDAF that retracts rows
 /// is not written through this class.
 template <class A>
@@ -80,7 +91,7 @@ concept UdafType =
         { A::bind(bind) } -> std::same_as<dstd::Result<dstd::UniquePtr<A>>>;
         { udaf.update(states, batch) } -> std::same_as<dstd::Result<void>>;
         { udaf.combine(state, from) } -> std::same_as<dstd::Result<void>>;
-        { udaf.finalize(states) } -> std::same_as<dstd::Result<dftu_series*>>;
+        { udaf.finalize(states) } -> std::same_as<dstd::Result<Column>>;
     } &&
     (std::is_trivially_copyable_v<typename A::State> ||
      requires(const A& udaf, const typename A::State& cstate,
@@ -107,7 +118,7 @@ dftu_udaf_desc udaf_desc_of(const char* name, UdafOptions options) noexcept {
     dftu_udaf_desc d{};
     d.struct_size = sizeof(dftu_udaf_desc);
     d.name = name;
-    d.flags = options.flags |
+    d.flags = static_cast<std::uint32_t>(options.flags) |
               (IS_POD ? static_cast<std::uint32_t>(DFTU_AGG_STATE_POD) : 0u);
     d.min_args = options.min_args;
     d.max_args = options.max_args;
@@ -116,7 +127,11 @@ dftu_udaf_desc udaf_desc_of(const char* name, UdafOptions options) noexcept {
     d.bind = [](dftu_ctx* ctx, void*, const dftu_type_info* args,
                 std::uint32_t n, const dftu_scalar* const* consts,
                 dftu_type_info* out, void** bound) noexcept -> dftu_status {
-        UdfBind bind(args, n, consts, out);
+        UdfBind bind(dstd::Span<const dftu_type_info>(args, n),
+                     consts != nullptr
+                         ? dstd::Span<const dftu_scalar* const>(consts, n)
+                         : dstd::Span<const dftu_scalar* const>(),
+                     out);
         dstd::Result<dstd::UniquePtr<A>> made = A::bind(bind);
         if (!made) return udf_report(ctx, made.error());
         *bound = made->release();
@@ -128,8 +143,9 @@ dftu_udaf_desc udaf_desc_of(const char* name, UdafOptions options) noexcept {
     d.update = [](dftu_ctx* ctx, void* bound, void* const* states,
                   const dftu_series* const* args, std::uint32_t nargs,
                   std::uint64_t rows) noexcept -> dftu_status {
-        const UdfBatch batch(ctx, args, nargs, rows);
-        UdafStateSet<State> set(states, rows);
+        const UdfBatch batch(
+            ctx, dstd::Span<const dftu_series* const>(args, nargs), rows);
+        UdafStateSet<State> set(dstd::Span<void* const>(states, rows));
         dstd::Result<void> done =
             static_cast<const A*>(bound)->update(set, batch);
         return done ? DFTU_OK : udf_report(ctx, done.error());
@@ -148,11 +164,10 @@ dftu_udaf_desc udaf_desc_of(const char* name, UdafOptions options) noexcept {
     d.finalize = [](dftu_ctx* ctx, void* bound, void* const* states,
                     std::uint64_t n,
                     dftu_series** out) noexcept -> dftu_status {
-        UdafStateSet<State> set(states, n);
-        dstd::Result<dftu_series*> made =
-            static_cast<const A*>(bound)->finalize(set);
+        UdafStateSet<State> set(dstd::Span<void* const>(states, n));
+        dstd::Result<Column> made = static_cast<const A*>(bound)->finalize(set);
         if (!made) return udf_report(ctx, made.error());
-        *out = *made;
+        *out = made->release();
         return DFTU_OK;
     };
     if constexpr (!IS_POD) {

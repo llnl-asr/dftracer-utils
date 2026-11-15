@@ -118,6 +118,59 @@ struct Scalar {
     }
 };
 
+/// The domain an operand carries, one value per scalar tag: a signed integer,
+/// an unsigned integer, a float, borrowed text or an error. The tag of a value
+/// does not name its column type; read a literal with @ref ScalarView::as and
+/// cast it to the type the argument has.
+enum class ScalarKind : std::int32_t {
+    I64 = DFTU_SCALAR_TAG_I64,
+    U64 = DFTU_SCALAR_TAG_U64,
+    F64 = DFTU_SCALAR_TAG_F64,
+    Str = DFTU_SCALAR_TAG_STR,
+    Err = DFTU_SCALAR_TAG_ERR,
+};
+
+/// A borrowed view of an operand the caller owns, such as a constant argument a
+/// query writes. It copies nothing, allocates nothing and holds no reference,
+/// so it is valid only while the operand it views lives.
+class ScalarView {
+   public:
+    /// The domain of the operand.
+    ScalarKind kind() const noexcept {
+        return scalar_ != nullptr ? static_cast<ScalarKind>(scalar_->kind)
+                                  : ScalarKind::Err;
+    }
+    /// Whether the operand is borrowed text, read with @ref str.
+    bool is_str() const noexcept { return kind() == ScalarKind::Str; }
+
+    /// The text of a Str operand, borrowed; empty for any other kind.
+    dstd::StringView str() const noexcept {
+        return is_str() && scalar_->value.s != nullptr
+                   ? dstd::StringView{scalar_->value.s, scalar_->len}
+                   : dstd::StringView{};
+    }
+
+    std::int64_t i64() const noexcept { return as<std::int64_t>(); }
+    std::uint64_t u64() const noexcept { return as<std::uint64_t>(); }
+    double f64() const noexcept { return as<double>(); }
+    /// A Bool operand carried as 0/1, non-zero being true.
+    bool boolean() const noexcept { return i64() != 0; }
+
+    /// The operand as `T`, converting from its own domain; `T` for text and for
+    /// an error operand.
+    template <class T>
+    T as() const noexcept {
+        return scalar_ != nullptr ? scalar_value<T>(*scalar_) : T{};
+    }
+
+   private:
+    friend class UdfBind;
+
+    explicit ScalarView(const dftu_scalar* scalar) noexcept : scalar_(scalar) {}
+
+    const dftu_scalar* scalar_ = nullptr;
+};
+
 }  // namespace dftracer::utils::dataframe
 
 #endif  // DFTRACER_UTILS_DATAFRAME_SCALAR_H

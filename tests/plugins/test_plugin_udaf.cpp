@@ -116,32 +116,31 @@ struct SumAgg {
 
     static dstd::Result<dstd::UniquePtr<SumAgg>> bind(
         dataframe::UdfBind& bind) {
-        if (bind.type(0) != DFTU_TYPE_INT64)
+        if (bind.type(0) != dataframe::TypeId::Int64)
             return common::make_error<"cxx_sum takes an Int64">(
                 common::ErrorCode::InvalidArgument);
-        bind.result(DFTU_TYPE_INT64);
+        bind.result(dataframe::TypeId::Int64);
         return dstd::make_unique<SumAgg>();
     }
     dstd::Result<void> update(dataframe::UdafStateSet<State>& states,
                               const dataframe::UdfBatch& batch) const {
-        const auto* in =
-            static_cast<const std::int64_t*>(dftu_series_data(batch.arg(0)));
+        const dstd::Span<const std::int64_t> in =
+            batch.arg(0).values<std::int64_t>();
         for (std::uint64_t i = 0; i < states.size(); ++i)
-            if (State* s = states[i]) s->total += in[i];
+            if (State* s = states[i])
+                s->total += in[static_cast<std::size_t>(i)];
         return {};
     }
     dstd::Result<void> combine(State& into, const State& from) const {
         into.total += from.total;
         return {};
     }
-    dstd::Result<dftu_series*> finalize(
+    dstd::Result<dataframe::Column> finalize(
         dataframe::UdafStateSet<State>& states) const {
         Ints out;
         for (std::uint64_t i = 0; i < states.size(); ++i)
             out.push_back(states[i]->total);
-        return dftu_series_new_flat(DFTU_TYPE_INT64, out.data(),
-                                    static_cast<std::int64_t>(out.size()),
-                                    nullptr);
+        return dataframe::Column::from_int64(std::move(out));
     }
 };
 
@@ -170,14 +169,12 @@ struct BothUdf {
     static constexpr const char* NAME = "cxx_both";
     static dstd::Result<dstd::UniquePtr<BothUdf>> bind(
         dataframe::UdfBind& bind) {
-        bind.result(DFTU_TYPE_INT64);
+        bind.result(dataframe::TypeId::Int64);
         return dstd::make_unique<BothUdf>();
     }
-    dstd::Result<dftu_series*> exec(dataframe::UdfBatch& batch) const {
+    dstd::Result<dataframe::Column> exec(dataframe::UdfBatch& batch) const {
         Ints out(batch.rows(), 0);
-        return dftu_series_new_flat(DFTU_TYPE_INT64, out.data(),
-                                    static_cast<std::int64_t>(out.size()),
-                                    nullptr);
+        return dataframe::Column::from_int64(std::move(out));
     }
 };
 
@@ -199,29 +196,27 @@ struct ListAgg {
 
     static dstd::Result<dstd::UniquePtr<ListAgg>> bind(
         dataframe::UdfBind& bind) {
-        bind.result(DFTU_TYPE_INT64);
+        bind.result(dataframe::TypeId::Int64);
         return dstd::make_unique<ListAgg>();
     }
     dstd::Result<void> update(dataframe::UdafStateSet<State>& states,
                               const dataframe::UdfBatch& batch) const {
-        const auto* in =
-            static_cast<const std::int64_t*>(dftu_series_data(batch.arg(0)));
+        const dstd::Span<const std::int64_t> in =
+            batch.arg(0).values<std::int64_t>();
         for (std::uint64_t i = 0; i < states.size(); ++i)
-            if (State* s = states[i]) s->add(in[i]);
+            if (State* s = states[i]) s->add(in[static_cast<std::size_t>(i)]);
         return {};
     }
     dstd::Result<void> combine(State& into, const State& from) const {
         for (const std::int64_t x : from.seen) into.add(x);
         return {};
     }
-    dstd::Result<dftu_series*> finalize(
+    dstd::Result<dataframe::Column> finalize(
         dataframe::UdafStateSet<State>& states) const {
         Ints out;
         for (std::uint64_t i = 0; i < states.size(); ++i)
             out.push_back(static_cast<std::int64_t>(states[i]->seen.size()));
-        return dftu_series_new_flat(DFTU_TYPE_INT64, out.data(),
-                                    static_cast<std::int64_t>(out.size()),
-                                    nullptr);
+        return dataframe::Column::from_int64(std::move(out));
     }
     void serialize(const State& s, dstd::String& out) const {
         out.append(reinterpret_cast<const char*>(s.seen.data()),

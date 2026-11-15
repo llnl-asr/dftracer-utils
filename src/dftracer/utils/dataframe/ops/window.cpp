@@ -26,14 +26,14 @@ namespace dftracer::utils::dataframe {
 
 namespace {
 
-using Kind = ColumnView::Kind;
+using Kind = ColumnReader::Kind;
 
 // The rows in (partition, order) sorted order and the partitions in it.
 struct Layout {
     std::int64_t n = 0;
     dstd::Vector<std::int64_t> idx;
     dstd::Vector<dstd::Pair<std::int64_t, std::int64_t>> parts;
-    const dstd::Vector<ColumnView>* order_keys = nullptr;
+    const dstd::Vector<ColumnReader>* order_keys = nullptr;
 
     // Whether the rows at sorted positions `a` and `b` tie on the order keys.
     bool tie(std::int64_t a, std::int64_t b) const {
@@ -71,17 +71,17 @@ Series pass_through(const Series& column,
     return column.take(source);
 }
 
-dstd::Result<void> numeric(const ColumnView& v, const char* what) {
+dstd::Result<void> numeric(const ColumnReader& v, const char* what) {
     if (v.is_bytes())
         return invalid_argument<"window: {} over a non-numeric column">(what);
     return {};
 }
 
-dstd::Result<ColumnView> view_of(const Series& column, const char* what) {
-    if (!ColumnView::supports(column.type()))
+dstd::Result<ColumnReader> view_of(const Series& column, const char* what) {
+    if (!ColumnReader::supports(column.type()))
         return invalid_argument<"window: {} over an unsupported column type">(
             what);
-    return ColumnView(column);
+    return ColumnReader(column);
 }
 
 dstd::Result<const Series*> value_column(const DataFrame& df,
@@ -113,7 +113,7 @@ dstd::Unexpected<dstd::Error> overflow_error(const char* func,
 }
 
 // The extreme (min when `smallest`) present row of a running or frame scan.
-bool better(const ColumnView& v, std::int64_t candidate, std::int64_t current,
+bool better(const ColumnReader& v, std::int64_t candidate, std::int64_t current,
             bool smallest) {
     const int c = v.compare(candidate, current);
     return smallest ? c < 0 : c > 0;
@@ -246,9 +246,10 @@ Series positional(const Layout& lay, const Series& column,
 
 dstd::Result<Series> running(const Layout& lay, const Series& column,
                              const WindowColumn& w) {
-    const dstd::Result<ColumnView> view = view_of(column, "running aggregate");
+    const dstd::Result<ColumnReader> view =
+        view_of(column, "running aggregate");
     if (!view) return view.error();
-    const ColumnView& v = *view;
+    const ColumnReader& v = *view;
     switch (w.func) {
         case WindowFunc::RunningSum: {
             if (auto ok = numeric(v, "running aggregate"); !ok)
@@ -353,9 +354,9 @@ dstd::Result<Series> running(const Layout& lay, const Series& column,
 }
 
 dstd::Result<Series> delta(const Layout& lay, const Series& column) {
-    const dstd::Result<ColumnView> view = view_of(column, "DELTA/RATE");
+    const dstd::Result<ColumnReader> view = view_of(column, "DELTA/RATE");
     if (!view) return view.error();
-    const ColumnView& v = *view;
+    const ColumnReader& v = *view;
     if (auto ok = numeric(v, "DELTA/RATE"); !ok) return ok.error();
     const bool floating = v.kind() == Kind::Float;
     Column<double> fout(floating ? lay.n : 0);
@@ -392,13 +393,14 @@ dstd::Result<Series> delta(const Layout& lay, const Series& column) {
 
 dstd::Result<Series> rate(const Layout& lay, const Series& column,
                           const Series& time, bool counter) {
-    const dstd::Result<ColumnView> value_view = view_of(column, "DELTA/RATE");
+    const dstd::Result<ColumnReader> value_view = view_of(column, "DELTA/RATE");
     if (!value_view) return value_view.error();
-    const ColumnView& v = *value_view;
+    const ColumnReader& v = *value_view;
     if (auto ok = numeric(v, "DELTA/RATE"); !ok) return ok.error();
-    const dstd::Result<ColumnView> time_view = view_of(time, "RATE/SESSIONIZE");
+    const dstd::Result<ColumnReader> time_view =
+        view_of(time, "RATE/SESSIONIZE");
     if (!time_view) return time_view.error();
-    const ColumnView& t = *time_view;
+    const ColumnReader& t = *time_view;
     if (t.is_bytes())
         return invalid_argument<
             "window: RATE/SESSIONIZE over a non-numeric time column">();
@@ -432,15 +434,17 @@ dstd::Result<Series> sessionize(const Layout& lay, const Series& time,
     if (!(gap >= 0.0) || !(span >= 0.0))
         return invalid_argument<
             "window: SESSIONIZE gap and span must not be negative">();
-    const dstd::Result<ColumnView> time_view = view_of(time, "RATE/SESSIONIZE");
+    const dstd::Result<ColumnReader> time_view =
+        view_of(time, "RATE/SESSIONIZE");
     if (!time_view) return time_view.error();
-    const ColumnView& t = *time_view;
+    const ColumnReader& t = *time_view;
     if (t.is_bytes())
         return invalid_argument<
             "window: RATE/SESSIONIZE over a non-numeric time column">();
-    dstd::Optional<ColumnView> e;
+    dstd::Optional<ColumnReader> e;
     if (end_column != nullptr) {
-        dstd::Result<ColumnView> end_view = view_of(*end_column, "SESSIONIZE");
+        dstd::Result<ColumnReader> end_view =
+            view_of(*end_column, "SESSIONIZE");
         if (!end_view) return end_view.error();
         e.emplace(std::move(*end_view));
         if (e->is_bytes())
@@ -489,15 +493,15 @@ dstd::Result<Series> frame(const Layout& lay, const Series& column,
         return invalid_argument<
             "window: frame bounds and min_count must not be negative">();
     const bool range = f.mode == WindowFrameMode::Range;
-    const dstd::Vector<ColumnView>& order = *lay.order_keys;
+    const dstd::Vector<ColumnReader>& order = *lay.order_keys;
     if (range && (order.size() != 1 || order[0].is_bytes()))
         return invalid_argument<
             "window: RANGE frame needs exactly one numeric order column">();
 
     const bool counting = w.func == WindowFunc::FrameCount;
-    dstd::Optional<ColumnView> vv;
+    dstd::Optional<ColumnReader> vv;
     if (!counting) {
-        dstd::Result<ColumnView> value_view =
+        dstd::Result<ColumnReader> value_view =
             view_of(column, "frame aggregate");
         if (!value_view) return value_view.error();
         vv.emplace(std::move(*value_view));
@@ -668,7 +672,7 @@ dstd::Result<FrameCtx> frame_context(const Layout& lay, const WindowColumn& w) {
         return invalid_argument<
             "window: frame bounds and min_count must not be negative">();
     const bool range = f.mode == WindowFrameMode::Range;
-    const dstd::Vector<ColumnView>& order = *lay.order_keys;
+    const dstd::Vector<ColumnReader>& order = *lay.order_keys;
     if (range && (order.size() != 1 || order[0].is_bytes()))
         return invalid_argument<
             "window: RANGE frame needs exactly one numeric order column">();
@@ -683,7 +687,7 @@ void walk_frame(const FrameCtx& c, std::int64_t p, std::int64_t q,
                 Enter&& enter, Leave&& leave, Emit&& emit) {
     const Layout& lay = c.lay;
     const WindowParams::Frame& f = c.f;
-    const dstd::Vector<ColumnView>& order = *lay.order_keys;
+    const dstd::Vector<ColumnReader>& order = *lay.order_keys;
     const std::int64_t sz = q - p;
     std::int64_t win_lo = 0, win_hi = -1, first_missing = -1;
     for (std::int64_t r = p; r < q; ++r) {
@@ -741,7 +745,7 @@ struct Ranks {
     dstd::Vector<double> value;
     std::int32_t count = 0;
 
-    void build(const Layout& lay, const ColumnView& v, std::int64_t p,
+    void build(const Layout& lay, const ColumnReader& v, std::int64_t p,
                std::int64_t q, bool keep_values) {
         const std::int64_t sz = q - p;
         of.assign(static_cast<std::size_t>(sz), -1);
@@ -796,10 +800,10 @@ struct Fenwick {
 
 dstd::Result<Series> frame_variance(const FrameCtx& c, const Series& column,
                                     bool root, std::int64_t min_count) {
-    const dstd::Result<ColumnView> view =
+    const dstd::Result<ColumnReader> view =
         view_of(column, "FRAME_VAR/FRAME_STD");
     if (!view) return view.error();
-    const ColumnView& v = *view;
+    const ColumnReader& v = *view;
     if (auto ok = numeric(v, "FRAME_VAR/FRAME_STD"); !ok) return ok.error();
     Column<double> out(c.lay.n);
     dstd::Vector<std::int64_t> next_present, prev_present, run_start;
@@ -884,9 +888,9 @@ dstd::Result<Series> frame_quantile(const FrameCtx& c, const Series& column,
     if (!(level >= 0.0 && level <= 1.0))
         return invalid_argument<
             "window: FRAME_QUANTILE level must be in [0, 1]">();
-    const dstd::Result<ColumnView> view = view_of(column, "FRAME_QUANTILE");
+    const dstd::Result<ColumnReader> view = view_of(column, "FRAME_QUANTILE");
     if (!view) return view.error();
-    const ColumnView& v = *view;
+    const ColumnReader& v = *view;
     if (auto ok = numeric(v, "FRAME_QUANTILE"); !ok) return ok.error();
     Column<double> out(c.lay.n);
     Ranks ranks;
@@ -936,10 +940,10 @@ dstd::Result<Series> frame_quantile(const FrameCtx& c, const Series& column,
 
 dstd::Result<Series> frame_count_distinct(const FrameCtx& c,
                                           const Series& column) {
-    const dstd::Result<ColumnView> view =
+    const dstd::Result<ColumnReader> view =
         view_of(column, "FRAME_COUNT_DISTINCT");
     if (!view) return view.error();
-    const ColumnView& v = *view;
+    const ColumnReader& v = *view;
     Column<std::int64_t> out(c.lay.n);
     Ranks ranks;
     dstd::Vector<std::int32_t> freq;
@@ -969,10 +973,10 @@ dstd::Result<Series> frame_count_distinct(const FrameCtx& c,
 dstd::Result<Series> frame_arg(const FrameCtx& c, const Series& column,
                                const Series& by, bool smallest,
                                std::int64_t min_count) {
-    const dstd::Result<ColumnView> by_view =
+    const dstd::Result<ColumnReader> by_view =
         view_of(by, "FRAME_ARG_MAX/FRAME_ARG_MIN");
     if (!by_view) return by_view.error();
-    const ColumnView& b = *by_view;
+    const ColumnReader& b = *by_view;
     dstd::Vector<std::int64_t> source(static_cast<std::size_t>(c.lay.n), -1);
     steps::SlidingExtreme dq;
     for (const auto& [p, q] : c.lay.parts) {
@@ -1654,15 +1658,15 @@ dstd::Result<DataFrame> window(const DataFrame& df,
                                const dstd::Vector<dstd::String>& partition_by,
                                const dstd::Vector<dstd::String>& order_by,
                                const dstd::Vector<WindowColumn>& specs) {
-    dstd::Result<dstd::Vector<ColumnView>> part_views =
+    dstd::Result<dstd::Vector<ColumnReader>> part_views =
         ops::views_of(df, partition_by, "window");
     if (!part_views) return part_views.error();
-    dstd::Result<dstd::Vector<ColumnView>> order_views =
+    dstd::Result<dstd::Vector<ColumnReader>> order_views =
         ops::views_of(df, order_by, "window");
     if (!order_views) return order_views.error();
-    dstd::Vector<ColumnView> parts = std::move(*part_views);
-    dstd::Vector<ColumnView> order = std::move(*order_views);
-    dstd::Vector<ColumnView> keys = parts;
+    dstd::Vector<ColumnReader> parts = std::move(*part_views);
+    dstd::Vector<ColumnReader> order = std::move(*order_views);
+    dstd::Vector<ColumnReader> keys = parts;
     keys.insert(keys.end(), order.begin(), order.end());
 
     Layout lay;

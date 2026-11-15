@@ -1312,9 +1312,9 @@ a key too: ``lookup flags on is_slow(dur, 1000) == slow``.
 .. code-block:: cpp
 
    struct ToMs {                                  // plugins/plugin/udf.h
-       dftu_dtype type;
+       dataframe::TypeId type;
        static dstd::Result<dstd::UniquePtr<ToMs>> bind(pl::UdfBind& bind);
-       dstd::Result<dftu_series*> exec(pl::UdfBatch& batch) const;
+       dstd::Result<dataframe::Column> exec(pl::UdfBatch& batch) const;
    };
    return plugin(ctx, h, config).udf<ToMs>("to_ms").build(out);
 
@@ -1333,7 +1333,7 @@ or an op is an error with a message.
    struct PlusOne {
        static constexpr const char* NAME = "plus_one";
        static dstd::Result<dstd::UniquePtr<PlusOne>> bind(dataframe::UdfBind&);
-       dstd::Result<dftu_series*> exec(dataframe::UdfBatch&) const;
+       dstd::Result<dataframe::Column> exec(dataframe::UdfBatch&) const;
    };
    auto plus_one = dataframe::make_udf<PlusOne>();   // owns the registration
    Expr e = (*plus_one)(col(0));                     // Udf is callable
@@ -1441,7 +1441,8 @@ the UDAF by name when it runs, so the plugin must still be loaded then.
        dstd::Result<void> update(pl::UdafStateSet<State>& states,
                                  const pl::UdfBatch& batch) const;
        dstd::Result<void> combine(State& into, const State& from) const;
-       dstd::Result<dftu_series*> finalize(pl::UdafStateSet<State>& states) const;
+       dstd::Result<dataframe::Column> finalize(
+           pl::UdafStateSet<State>& states) const;
        void serialize(const State& state, dstd::String& out) const;
        dstd::Result<void> deserialize(State& state, dstd::StringView in) const;
    };
@@ -1524,6 +1525,13 @@ buffers by move and borrows them through ``dftu_series_new_flat_borrowed`` or
 ``from_duration`` (the ABI carries no time unit, so both read as micro),
 ``from_strings`` from offsets and bytes, and ``from_static_*`` for memory that
 the plugin owns for the whole process, which it neither copies nor frees.
+Every one takes its values as a ``dstd::Span`` (``bytes`` as a
+``dstd::StringView``), so a borrowed table needs no separate row count:
+``from_static_int64``, ``from_static_int32``, ``from_static_uint64``,
+``from_static_double``, ``from_static_timestamp`` and ``from_static_duration``
+over a ``dstd::Span<const T>``, ``from_static_bool`` over its bit-packed bytes
+and a row count, and ``from_static_strings`` over the offsets and the bytes,
+where the rows are the offsets minus one.
 ``FrameBuilder`` names each column and builds the frame with
 ``dftu_dataframe_new``. A null column, or a column whose row count differs from
 the first, is an error, and the builder frees everything it made.

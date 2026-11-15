@@ -5,6 +5,7 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dataframe/c_api.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/memory/detail/manager.h>
@@ -173,7 +174,7 @@ TEST_CASE("a static column copies nothing and frees nothing") {
     const std::size_t before = live_bytes();
     {
         FrameBuilder builder;
-        builder.add("v", Column::from_static_int64(TABLE, 3));
+        builder.add("v", Column::from_static_int64(TABLE));
         auto built = builder.build();
         REQUIRE(built.has_value());
         OwnedDataFrame frame = std::move(*built);
@@ -185,6 +186,123 @@ TEST_CASE("a static column copies nothing and frees nothing") {
         dftu_series_free(column);
     }
     CHECK(live_bytes() == before);
+}
+
+TEST_CASE("every static column takes a span and borrows its bytes") {
+    static const std::int32_t I32[] = {1, 2};
+    static const std::uint64_t U64[] = {7, 8};
+    static const double F64[] = {1.5, 2.5};
+    static const std::int64_t STAMPS[] = {10, 20};
+    static const std::uint8_t BITS[] = {0b00000010};
+    static const std::int32_t OFFSETS32[] = {0, 3, 7};
+    static const std::int64_t OFFSETS64[] = {0, 3, 7};
+    static const char BYTES[] = "abcdefg";
+
+    const std::size_t before = live_bytes();
+    {
+        FrameBuilder builder;
+        builder.add("i32", Column::from_static_int32(I32));
+        builder.add("u64", Column::from_static_uint64(U64));
+        builder.add("f64", Column::from_static_double(F64));
+        builder.add("stamp", Column::from_static_timestamp(STAMPS));
+        builder.add("dur", Column::from_static_duration(STAMPS));
+        auto built = builder.build();
+        REQUIRE(built.has_value());
+        OwnedDataFrame frame = std::move(*built);
+        CHECK(dftu_dataframe_num_rows(frame.get()) == 2);
+
+        dftu_series* i32 = dftu_dataframe_column(frame.get(), "i32");
+        REQUIRE(i32 != nullptr);
+        CHECK(dftu_series_type(i32) == DFTU_TYPE_INT32);
+        CHECK(dftu_series_data(i32) == I32);
+        dftu_series_free(i32);
+
+        dftu_series* u64 = dftu_dataframe_column(frame.get(), "u64");
+        REQUIRE(u64 != nullptr);
+        CHECK(dftu_series_data(u64) == U64);
+        dftu_series_free(u64);
+
+        dftu_series* f64 = dftu_dataframe_column(frame.get(), "f64");
+        REQUIRE(f64 != nullptr);
+        CHECK(dftu_series_data(f64) == F64);
+        CHECK(static_cast<const double*>(dftu_series_data(f64))[1] == 2.5);
+        dftu_series_free(f64);
+
+        dftu_series* stamp = dftu_dataframe_column(frame.get(), "stamp");
+        REQUIRE(stamp != nullptr);
+        CHECK(dftu_series_type(stamp) == DFTU_TYPE_TIMESTAMP);
+        CHECK(dftu_series_data(stamp) == STAMPS);
+        dftu_series_free(stamp);
+
+        dftu_series* dur = dftu_dataframe_column(frame.get(), "dur");
+        REQUIRE(dur != nullptr);
+        CHECK(dftu_series_type(dur) == DFTU_TYPE_DURATION);
+        dftu_series_free(dur);
+    }
+    CHECK(live_bytes() == before);
+
+    // A Bool column takes its rows as well, because its bits are packed.
+    {
+        FrameBuilder builder;
+        builder.add("b", Column::from_static_bool(BITS, 2));
+        auto built = builder.build();
+        REQUIRE(built.has_value());
+        OwnedDataFrame frame = std::move(*built);
+        dftu_series* bits = dftu_dataframe_column(frame.get(), "b");
+        REQUIRE(bits != nullptr);
+        CHECK(dftu_series_type(bits) == DFTU_TYPE_BOOL);
+        CHECK(dftu_series_length(bits) == 2);
+        CHECK(dftu_series_data(bits) == BITS);
+        dftu_series_free(bits);
+    }
+    // Bits too short for the rows give a null column, not a read past them.
+    CHECK_FALSE(Column::from_static_bool(BITS, 9));
+
+    // A String column takes its offsets and its bytes, and the rows are the
+    // offsets minus one.
+    {
+        FrameBuilder builder;
+        builder.add("s", Column::from_static_strings(
+                             dstd::Span<const std::int32_t>(OFFSETS32),
+                             dstd::StringView(BYTES, 7)));
+        auto built = builder.build();
+        REQUIRE(built.has_value());
+        OwnedDataFrame frame = std::move(*built);
+        dftu_series* text = dftu_dataframe_column(frame.get(), "s");
+        REQUIRE(text != nullptr);
+        CHECK(dftu_series_type(text) == DFTU_TYPE_STRING);
+        CHECK(dftu_series_length(text) == 2);
+        CHECK(dftu_series_offsets(text) == OFFSETS32);
+        CHECK(dftu_series_data(text) == BYTES);
+        std::int64_t len = -1;
+        const char* row = dftu_series_string_at(text, 1, &len);
+        REQUIRE(row != nullptr);
+        CHECK(dstd::StringView(row, static_cast<std::size_t>(len)) == "defg");
+        dftu_series_free(text);
+    }
+
+    // int64 offsets make a LargeString column.
+    {
+        FrameBuilder builder;
+        builder.add("s", Column::from_static_strings(
+                             dstd::Span<const std::int64_t>(OFFSETS64),
+                             dstd::StringView(BYTES, 7)));
+        auto built = builder.build();
+        REQUIRE(built.has_value());
+        OwnedDataFrame frame = std::move(*built);
+        dftu_series* text = dftu_dataframe_column(frame.get(), "s");
+        REQUIRE(text != nullptr);
+        CHECK(dftu_series_type(text) == DFTU_TYPE_LARGE_STRING);
+        CHECK(dftu_series_length(text) == 2);
+        CHECK(dftu_series_offsets64(text) == OFFSETS64);
+        dftu_series_free(text);
+    }
+
+    // No offsets is no column, not a column of -1 rows.
+    CHECK_FALSE(Column::from_static_strings(dstd::Span<const std::int32_t>(),
+                                            dstd::StringView()));
+    CHECK_FALSE(Column::from_static_strings(dstd::Span<const std::int64_t>(),
+                                            dstd::StringView()));
 }
 
 TEST_CASE("a validity bitmap too short for the rows is refused") {

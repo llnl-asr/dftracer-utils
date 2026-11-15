@@ -193,22 +193,31 @@ class PlusOneT {
 
     static dstd::Result<dstd::UniquePtr<PlusOneT>> bind(
         dataframe::UdfBind& bind) {
-        if (bind.type(0) != DFTU_TYPE_INT64 && bind.type(0) != DFTU_TYPE_UINT64)
+        if (bind.type(0) != dataframe::TypeId::Int64 &&
+            bind.type(0) != dataframe::TypeId::Uint64)
             return common::make_error<"cxx_plus1 takes an integer">(
                 common::ErrorCode::InvalidArgument);
-        bind.result(DFTU_TYPE_INT64);
+        bind.result(dataframe::TypeId::Int64);
         return dstd::make_unique<PlusOneT>();
     }
 
-    dstd::Result<dftu_series*> exec(dataframe::UdfBatch& batch) const {
-        const auto* in =
-            static_cast<const std::int64_t*>(dftu_series_data(batch.arg(0)));
+    dstd::Result<dataframe::Column> exec(dataframe::UdfBatch& batch) const {
+        const dataframe::ColumnView arg = batch.arg(0);
         dstd::Vector<std::int64_t> out;
-        for (std::uint64_t i = 0; i < batch.rows(); ++i)
-            out.push_back(in[i] + 1);
-        return dftu_series_new_flat(DFTU_TYPE_INT64, out.data(),
-                                    static_cast<std::int64_t>(out.size()),
-                                    nullptr);
+        if (arg.type() == dataframe::TypeId::Uint64) {
+            const dstd::Span<const std::uint64_t> in =
+                arg.values<std::uint64_t>();
+            for (std::uint64_t i = 0; i < batch.rows(); ++i)
+                out.push_back(
+                    static_cast<std::int64_t>(in[static_cast<std::size_t>(i)]) +
+                    1);
+        } else {
+            const dstd::Span<const std::int64_t> in =
+                arg.values<std::int64_t>();
+            for (std::uint64_t i = 0; i < batch.rows(); ++i)
+                out.push_back(in[static_cast<std::size_t>(i)] + 1);
+        }
+        return dataframe::Column::from_int64(std::move(out));
     }
 };
 
@@ -599,6 +608,32 @@ TEST_CASE("make_udf<T> serves duql, expressions and the op registry") {
     CHECK(eval_i64((*call)(dataframe::col(0))*dataframe::lit(std::int64_t{2}),
                    series) == dstd::Vector<std::int64_t>{4, 6, 8});
     CHECK(dftu_op_find("cxx_plus1") != nullptr);
+}
+
+TEST_CASE("make_udf<T> reads a Uint64 argument as uint64") {
+    // The trace view gives `dur` as a Uint64 column, and bind accepts one, so
+    // exec must read it as uint64 rather than as an empty int64 span.
+    auto reg = dataframe::make_udf<PlusOne>();
+    REQUIRE(reg.has_value());
+
+    const std::uint64_t big = 5'000'000'000ULL;
+    const std::uint64_t wide[] = {1, big, 3};
+    const auto uints =
+        dataframe::Series::flat(dataframe::TypeId::Uint64, wide, 3);
+    REQUIRE(uints.type() == dataframe::TypeId::Uint64);
+    auto call = dataframe::udf("cxx_plus1");
+    REQUIRE(call.has_value());
+    dstd::Vector<std::int64_t> want;
+    want.push_back(2);
+    want.push_back(static_cast<std::int64_t>(big + 1));
+    want.push_back(4);
+    CHECK(eval_i64((*call)(dataframe::col(0)), uints) == want);
+
+    // An Int64 column still reads as int64.
+    const std::int64_t narrow[] = {1, 2, 3};
+    const auto ints = dataframe::Series::flat_i64(narrow, 3);
+    CHECK(eval_i64((*call)(dataframe::col(0)), ints) ==
+          dstd::Vector<std::int64_t>{2, 3, 4});
 }
 
 TEST_CASE("udf(name) fails for an unknown name") {

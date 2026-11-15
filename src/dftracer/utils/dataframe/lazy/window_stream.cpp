@@ -1018,7 +1018,7 @@ class WindowStreamCursor : public Cursor {
                         // first row: the sorted spool read backwards gives it
                         // for every row (suffix_pass).
                         if (w.range || w.value < 0 ||
-                            !ColumnView::supports(vt) || !stats_ ||
+                            !ColumnReader::supports(vt) || !stats_ ||
                             !stats_->sorted)
                             return false;
                     } else if (!is_count && !numeric) {
@@ -1060,7 +1060,7 @@ class WindowStreamCursor : public Cursor {
                         // A text min or max up to the row, or to a few rows
                         // after it, carries its best value across the cut.
                         if (is_sum || w.range || w.value < 0 ||
-                            !ColumnView::supports(vt))
+                            !ColumnReader::supports(vt))
                             return false;
                         n.after = std::max(n.after, w.after);
                         s.kind = Kind::Extreme;
@@ -1424,8 +1424,8 @@ class WindowStreamCursor : public Cursor {
         struct Work {
             NumCells cells;
             NumClass cls = NumClass::Signed;
-            dstd::Optional<ColumnView> view;
-            dstd::Optional<ColumnView> carried_view;
+            dstd::Optional<ColumnReader> view;
+            dstd::Optional<ColumnReader> carried_view;
             Series carried;
             dstd::Vector<std::int64_t> out;
             std::int64_t best = -1;  // the row of the best, -1 the carried
@@ -2317,10 +2317,10 @@ class WindowStreamCursor : public Cursor {
         const WindowSpecInfo& w = s.info;
         const Series& vcol = cols[static_cast<std::size_t>(w.value)];
         const bool smallest = w.func == DFTU_WINDOW_FRAME_MIN;
-        const ColumnView view(vcol);
+        const ColumnReader view(vcol);
         const dstd::Vector<std::int64_t> null_row{-1};
         const Series carried = s.have_ext ? s.ext.share() : vcol.take(null_row);
-        const ColumnView carried_view(carried);
+        const ColumnReader carried_view(carried);
         // 0 is the carried row, 1 + i the row i of the chunk, -1 a null.
         dstd::Vector<std::int64_t> src(emit, -1);
         bool have = s.have_ext;

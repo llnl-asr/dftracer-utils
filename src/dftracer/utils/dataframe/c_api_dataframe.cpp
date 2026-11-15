@@ -191,6 +191,13 @@ dftu_series* dftu_dataframe_column(const dftu_dataframe* df, const char* name) {
     return col.valid() ? col.release() : nullptr;
 }
 
+const dftu_series* dftu_dataframe_column_at(const dftu_dataframe* df,
+                                            int32_t i) {
+    if (!df || i < 0 || static_cast<std::size_t>(i) >= df->df.columns.size())
+        return nullptr;
+    return df->df.columns[static_cast<std::size_t>(i)].handle();
+}
+
 dftu_dataframe* dftu_dataframe_take(const dftu_dataframe* df,
                                     const int64_t* idx, int64_t n) {
     if (!df) return nullptr;

@@ -33,9 +33,9 @@ dataframe::Series ints(const dstd::Vector<std::int64_t>& v,
                                        valid.empty() ? nullptr : bits.data());
 }
 
-dstd::Vector<dataframe::ColumnView> views(
+dstd::Vector<dataframe::ColumnReader> views(
     std::initializer_list<const dataframe::Series*> s) {
-    dstd::Vector<dataframe::ColumnView> out;
+    dstd::Vector<dataframe::ColumnReader> out;
     for (const dataframe::Series* c : s) out.emplace_back(*c);
     return out;
 }
@@ -88,8 +88,8 @@ TEST_CASE("run_end finds the run of equal keys, nulls equal nulls") {
 }
 
 TEST_CASE("a column view supports ordered types only") {
-    CHECK(dataframe::ColumnView::supports(dataframe::TypeId::Int64));
-    CHECK_FALSE(dataframe::ColumnView::supports(dataframe::TypeId::List));
+    CHECK(dataframe::ColumnReader::supports(dataframe::TypeId::Int64));
+    CHECK_FALSE(dataframe::ColumnReader::supports(dataframe::TypeId::List));
 }
 
 TEST_CASE("every float order in the library is the order of compare_doubles") {
@@ -133,7 +133,7 @@ TEST_CASE("every float order in the library is the order of compare_doubles") {
     CHECK(order_of(dataframe::argsort(f32, false).materialize()) == want);
 
     // The column view the window kernels and the spill merge read through.
-    const dataframe::ColumnView view(f64);
+    const dataframe::ColumnReader view(f64);
     for (std::int64_t a = 0; a < 20; ++a)
         for (std::int64_t b = 0; b < 20; ++b) {
             const int c = view.compare(a, b);
@@ -224,12 +224,12 @@ TEST_CASE("a column view of a nested type ends the process" * doctest::skip()) {
     dstd::Vector<std::int64_t> leaf{1, 2, 3};
     const dataframe::Series nested = dataframe::Series::list(
         {0, 1, 3}, dataframe::Series::flat_i64(leaf.data(), 3));
-    const dataframe::ColumnView view(nested);
+    const dataframe::ColumnReader view(nested);
     (void)view;
 }
 
 TEST_CASE("a column view of a nested type is fatal") {
-    CHECK_FALSE(dataframe::ColumnView::supports(dataframe::TypeId::List));
+    CHECK_FALSE(dataframe::ColumnReader::supports(dataframe::TypeId::List));
     auto result =
         fresh_process::run("a column view of a nested type ends the process");
     CHECK(result.aborted_with("has no order"));

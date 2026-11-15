@@ -9,13 +9,15 @@
 //   derive ms = to_ms(dur) | where is_slow(dur, 1000) | select name, ms
 //
 // A UDF runs on whole columns, never row by row. A row with a null argument
-// gives a null result without the UDF doing anything for it.
+// gives a null result without the UDF doing anything for it. The arguments
+// arrive as borrowed column views, so a read copies nothing, and the result is
+// a Column the host takes over.
 //
 // Build: c++ -std=c++20 -shared -fPIC -I<repo>/include -o duration_udfs.so
 // duration_udfs.cpp
 
-#include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/plugin.h>
 
@@ -28,91 +30,131 @@ using namespace dftracer::utils::plugins;
 namespace {
 
 constexpr std::int64_t CHECK_EVERY = 4096;
+constexpr double MICROS_PER_MS = 1000.0;
 
-bool is_number(dftu_dtype type) {
-    return type == DFTU_TYPE_INT64 || type == DFTU_TYPE_UINT64 ||
-           type == DFTU_TYPE_FLOAT64;
-}
-
-double number_at(const dftu_series* column, dftu_dtype type, std::int64_t row) {
-    const void* data = dftu_series_data(column);
-    switch (type) {
-        case DFTU_TYPE_INT64:
-            return static_cast<double>(
-                static_cast<const std::int64_t*>(data)[row]);
-        case DFTU_TYPE_UINT64:
-            return static_cast<double>(
-                static_cast<const std::uint64_t*>(data)[row]);
-        default:
-            return static_cast<const double*>(data)[row];
-    }
+bool is_number(dataframe::TypeId type) {
+    return type == dataframe::TypeId::Int64 ||
+           type == dataframe::TypeId::Uint64 ||
+           type == dataframe::TypeId::Float64;
 }
 
 dstd::Unexpected<dstd::Error> refuse(const char* why) {
-    return dstd::Unexpected(make_error(DFTU_E_INVALID, why));
+    return dstd::Unexpected<dstd::Error>(
+        dstd::Error(dstd::Condition::InvalidArgument, why));
+}
+
+/// `out[r] = values[r] / 1000`, straight out of the column's buffers.
+template <class T>
+dstd::Result<void> to_ms_into(dstd::Span<const T> values,
+                              dstd::Span<double> out, UdfBatch& batch) {
+    for (std::int64_t r = 0; r < static_cast<std::int64_t>(values.size());
+         ++r) {
+        if (r % CHECK_EVERY == 0) {
+            DFTRACER_UTILS_TRY_VOID(batch.check());
+        }
+        out[static_cast<std::size_t>(r)] =
+            static_cast<double>(values[static_cast<std::size_t>(r)]) /
+            MICROS_PER_MS;
+    }
+    return {};
+}
+
+/// One bit per row of `bits`, set where the value is above `limit`.
+template <class T>
+dstd::Result<void> mark_above(dstd::Span<const T> values, double limit,
+                              dstd::Span<std::uint8_t> bits, UdfBatch& batch) {
+    for (std::int64_t r = 0; r < static_cast<std::int64_t>(values.size());
+         ++r) {
+        if (r % CHECK_EVERY == 0) {
+            DFTRACER_UTILS_TRY_VOID(batch.check());
+        }
+        if (static_cast<double>(values[static_cast<std::size_t>(r)]) > limit) {
+            bits[static_cast<std::size_t>(r >> 3)] |=
+                static_cast<std::uint8_t>(1u << (r & 7));
+        }
+    }
+    return {};
 }
 
 }  // namespace
 
 struct ToMs {
-    dftu_dtype type;
-
     static dstd::Result<dstd::UniquePtr<ToMs>> bind(UdfBind& bind) {
-        if (!is_number(bind.type(0)))
+        if (!is_number(bind.type(0))) {
             return refuse("to_ms takes a number column");
-        bind.result(DFTU_TYPE_FLOAT64);
-        return dstd::make_unique<ToMs>(ToMs{bind.type(0)});
+        }
+        bind.result(dataframe::TypeId::Float64);
+        return dstd::make_unique<ToMs>();
     }
 
-    dstd::Result<dftu_series*> exec(UdfBatch& batch) const {
+    dstd::Result<Column> exec(UdfBatch& batch) const {
+        const ColumnView values = batch.arg(0);
         const auto rows = static_cast<std::int64_t>(batch.rows());
         dstd::Vector<double> out(static_cast<std::size_t>(rows));
-        for (std::int64_t r = 0; r < rows; ++r) {
-            if (r % CHECK_EVERY == 0) {
-                DFTRACER_UTILS_TRY_VOID(batch.check());
-            }
-            out[static_cast<std::size_t>(r)] =
-                number_at(batch.arg(0), type, r) / 1000.0;
+        const dstd::Span<double> into(out.data(), out.size());
+        switch (values.type()) {
+            case dataframe::TypeId::Int64:
+                DFTRACER_UTILS_TRY_VOID(
+                    to_ms_into(values.values<std::int64_t>(), into, batch));
+                break;
+            case dataframe::TypeId::Uint64:
+                DFTRACER_UTILS_TRY_VOID(
+                    to_ms_into(values.values<std::uint64_t>(), into, batch));
+                break;
+            case dataframe::TypeId::Float64:
+                DFTRACER_UTILS_TRY_VOID(
+                    to_ms_into(values.values<double>(), into, batch));
+                break;
+            default:
+                return refuse("to_ms takes a number column");
         }
         Column column = Column::from_double(std::move(out));
-        if (!column) return refuse("to_ms could not build its column");
-        return column.release();
+        if (column.is_null()) return refuse("to_ms could not build its column");
+        return column;
     }
 };
 
 struct IsSlow {
-    dftu_dtype type;
-    double limit;
+    double limit = 0.0;
 
     static dstd::Result<dstd::UniquePtr<IsSlow>> bind(UdfBind& bind) {
-        if (!is_number(bind.type(0)))
+        if (!is_number(bind.type(0))) {
             return refuse("is_slow takes a number column");
-        const dftu_scalar* limit = bind.constant(1);
-        if (!limit || limit->kind == DFTU_SCALAR_TAG_STR)
+        }
+        const dstd::Optional<ScalarView> limit = bind.constant(1);
+        if (!limit || limit->is_str()) {
             return refuse("is_slow takes a constant number as its limit");
-        const double value = limit->kind == DFTU_SCALAR_TAG_F64 ? limit->value.d
-                             : limit->kind == DFTU_SCALAR_TAG_U64
-                                 ? static_cast<double>(limit->value.u)
-                                 : static_cast<double>(limit->value.i);
-        bind.result(DFTU_TYPE_BOOL);
-        return dstd::make_unique<IsSlow>(IsSlow{bind.type(0), value});
+        }
+        bind.result(dataframe::TypeId::Bool);
+        return dstd::make_unique<IsSlow>(IsSlow{limit->f64()});
     }
 
-    dstd::Result<dftu_series*> exec(UdfBatch& batch) const {
+    dstd::Result<Column> exec(UdfBatch& batch) const {
+        const ColumnView values = batch.arg(0);
         const auto rows = static_cast<std::int64_t>(batch.rows());
-        dstd::Vector<std::uint8_t> bits(
+        dstd::Vector<std::uint8_t> bytes(
             static_cast<std::size_t>((rows + 7) / 8), 0);
-        for (std::int64_t r = 0; r < rows; ++r) {
-            if (r % CHECK_EVERY == 0) {
-                DFTRACER_UTILS_TRY_VOID(batch.check());
-            }
-            if (number_at(batch.arg(0), type, r) > limit)
-                bits[static_cast<std::size_t>(r >> 3)] |=
-                    static_cast<std::uint8_t>(1u << (r & 7));
+        const dstd::Span<std::uint8_t> bits(bytes.data(), bytes.size());
+        switch (values.type()) {
+            case dataframe::TypeId::Int64:
+                DFTRACER_UTILS_TRY_VOID(mark_above(
+                    values.values<std::int64_t>(), limit, bits, batch));
+                break;
+            case dataframe::TypeId::Uint64:
+                DFTRACER_UTILS_TRY_VOID(mark_above(
+                    values.values<std::uint64_t>(), limit, bits, batch));
+                break;
+            case dataframe::TypeId::Float64:
+                DFTRACER_UTILS_TRY_VOID(
+                    mark_above(values.values<double>(), limit, bits, batch));
+                break;
+            default:
+                return refuse("is_slow takes a number column");
         }
-        Column column = Column::from_bool(std::move(bits), rows);
-        if (!column) return refuse("is_slow could not build its column");
-        return column.release();
+        Column column = Column::from_bool(std::move(bytes), rows);
+        if (column.is_null())
+            return refuse("is_slow could not build its column");
+        return column;
     }
 };
 
@@ -123,6 +165,6 @@ dftracer_plugin(dftu_ctx* ctx, dftu_plugin_host* h, const dftu_value* config,
                 dftu_plugin** out) {
     return plugin(ctx, h, config)
         .udf<ToMs>("to_ms")
-        .udf<IsSlow>("is_slow", UdfOptions{0, 2, 2})
+        .udf<IsSlow>("is_slow", UdfOptions{UdfFlag::None, 2, 2})
         .build(out);
 }

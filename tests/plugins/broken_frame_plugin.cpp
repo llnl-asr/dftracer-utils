@@ -380,6 +380,9 @@ void destroy(void* self) { (void)self; }
 
 }  // namespace
 
+// Raw C entry on purpose: it hands the host malformed and wrongly-sized C
+// frame and column handles, because the host frame checks are what this
+// fixture asserts.
 DFTU_PLUGIN_INFO("broken_frame", "1.0")
 
 DFTU_PLUGIN_EXPORT dftu_status dftracer_plugin(dftu_ctx* ctx,

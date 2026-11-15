@@ -35,7 +35,7 @@ class IdCursor : public FormatCursor {
         auto built = builder.build();
         if (!built)
             return dstd::Unexpected(
-                make_error(DFTU_E_INVALID, "@NAME@ could not build a frame"));
+                invalid_argument("@NAME@ could not build a frame"));
         return dstd::Optional<OwnedDataFrame>(std::move(*built));
     }
 
@@ -64,7 +64,7 @@ class IdFile : public FormatFile {
         for (const dstd::StringView& name : view.projection) {
             if (name != "id")
                 return dstd::Unexpected(
-                    make_error(DFTU_E_INVALID, "@NAME@ has one column, id"));
+                    invalid_argument("@NAME@ has one column, id"));
         }
         ScanResult<FormatCursor> result;
         dstd::Vector<std::int64_t> rows = rows_;
@@ -89,8 +89,7 @@ class IdFormat : public FileFormat {
         dstd::StringView path) override {
         auto text = dstd::fs::read_file(dstd::PathView(path));
         if (!text)
-            return dstd::Unexpected(
-                make_error(DFTU_E_IO, "@NAME@: cannot read the file"));
+            return dstd::Unexpected(io_error("@NAME@: cannot read the file"));
         dstd::Vector<std::int64_t> rows;
         const dstd::StringView body(*text);
         std::size_t at = 0;
@@ -111,12 +110,10 @@ class IdFormat : public FileFormat {
 
 }  // namespace
 
-DFTU_PLUGIN_INFO("@NAME@", "1.0")
-
-extern "C" DFTU_PLUGIN_EXPORT dftu_status
-dftracer_plugin(dftu_ctx* ctx, dftu_plugin_host* h, const dftu_value* config,
-                dftu_plugin** out) {
-    return plugin(ctx, h, config)
-        .file_format<IdFormat>("@NAME@", dstd::make_unique<IdFormat>())
-        .build(out);
-}
+DFTU_PLUGIN("@NAME@", "1.0",
+            [](PluginBuilder& p, const Config& config) -> dstd::Result<void> {
+                (void)config;
+                p.file_format<IdFormat>("@NAME@",
+                                        dstd::make_unique<IdFormat>());
+                return {};
+            })

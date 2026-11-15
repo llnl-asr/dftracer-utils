@@ -120,6 +120,8 @@ void destroy(void* self) { (void)self; }
 
 }  // namespace
 
+// Raw C entry on purpose: it registers a raw provider vtable to feed a
+// raw dftu_dataframe into the node under test.
 DFTU_PLUGIN_INFO("sessionize_input", "1.0")
 
 extern "C" DFTU_PLUGIN_EXPORT dftu_status

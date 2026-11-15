@@ -116,13 +116,12 @@ struct {cls} {{
     void finalize(Host) {{}}
 }};
 
-DFTU_PLUGIN_INFO("{name}", "1.0")
-
-extern "C" DFTU_PLUGIN_EXPORT dftu_status dftracer_plugin(
-    dftu_ctx* ctx, dftu_plugin_host* h, const dftu_value* config,
-    dftu_plugin** out) {{
-    return plugin(ctx, h, config).fold<{cls}>().build(out);
-}}
+DFTU_PLUGIN("{name}", "1.0",
+            [](PluginBuilder& p, const Config& config) -> dstd::Result<void> {{
+                (void)config;
+                p.fold<{cls}>();
+                return {{}};
+            }})
 """
 
 

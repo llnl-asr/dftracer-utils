@@ -38,8 +38,7 @@ bool is_number(dataframe::TypeId type) {
 }
 
 dstd::Unexpected<dstd::Error> refuse(const char* why) {
-    return dstd::Unexpected<dstd::Error>(
-        dstd::Error(dstd::Condition::InvalidArgument, why));
+    return dstd::Unexpected<dstd::Error>(invalid_argument(why));
 }
 
 /// A number column resolved once per batch: the span of the type its values
@@ -182,13 +181,11 @@ struct P50 {
     }
 };
 
-DFTU_PLUGIN_INFO("stats_udafs", "1.0")
-
-extern "C" DFTU_PLUGIN_EXPORT dftu_status
-dftracer_plugin(dftu_ctx* ctx, dftu_plugin_host* h, const dftu_value* config,
-                dftu_plugin** out) {
-    return plugin(ctx, h, config)
-        .udaf<Geomean>("geomean", UdafOptions{UdafFlag::ParallelSafe, 1, 1})
-        .udaf<P50>("p50", UdafOptions{UdafFlag::ParallelSafe, 1, 1})
-        .build(out);
-}
+DFTU_PLUGIN("stats_udafs", "1.0",
+            [](PluginBuilder& p, const Config& config) -> dstd::Result<void> {
+                (void)config;
+                p.udaf<Geomean>("geomean",
+                                UdafOptions{UdafFlag::ParallelSafe, 1, 1});
+                p.udaf<P50>("p50", UdafOptions{UdafFlag::ParallelSafe, 1, 1});
+                return {};
+            })

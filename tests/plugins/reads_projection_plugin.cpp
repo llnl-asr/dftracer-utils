@@ -100,13 +100,11 @@ struct UndeclaredReadsSlice : ColumnProbe {
 
 }  // namespace
 
-DFTU_PLUGIN_INFO("reads_projection_plugin", "1.0")
-
-extern "C" DFTU_PLUGIN_EXPORT dftu_status
-dftracer_plugin(dftu_ctx* ctx, dftu_plugin_host* h, const dftu_value* config,
-                dftu_plugin** out) {
-    Config cfg(config);
-    if (cfg.get_bool("declare_reads", false))
-        return plugin(ctx, h, config).fold<DeclaredReadsSlice>().build(out);
-    return plugin(ctx, h, config).fold<UndeclaredReadsSlice>().build(out);
-}
+DFTU_PLUGIN("reads_projection_plugin", "1.0",
+            [](PluginBuilder& p, const Config& config) -> dstd::Result<void> {
+                if (config.get_bool("declare_reads", false))
+                    p.fold<DeclaredReadsSlice>();
+                else
+                    p.fold<UndeclaredReadsSlice>();
+                return {};
+            })

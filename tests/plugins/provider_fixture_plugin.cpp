@@ -318,6 +318,9 @@ DFTU_PLUGIN_EXPORT int provider_fixture_sdk_filters(void) {
     return g_sdk_filters.load();
 }
 
+// Raw C entry on purpose: it registers providers through the raw
+// dftu_svc_providers vtable and asserts which names the host refuses,
+// so the C registration is what this fixture tests.
 DFTU_PLUGIN_INFO("provider_fixture", "1.0")
 
 DFTU_PLUGIN_EXPORT dftu_status dftracer_plugin(dftu_ctx* ctx,

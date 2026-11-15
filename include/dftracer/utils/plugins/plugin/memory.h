@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_PLUGINS_PLUGIN_MEMORY_H
 #define DFTRACER_UTILS_PLUGINS_PLUGIN_MEMORY_H
 
+#include <dftracer/utils/dataframe/plugin_error.h>
 #include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <dftracer/utils/plugins/plugin/map.h>
@@ -96,7 +97,7 @@ class Memory {
     /// An empty reservation; `label` names it in the host's messages.
     dstd::Result<Reservation> reserve(const char* label = nullptr) const {
         if (!e_)
-            return make_error(DFTU_E_UNSUPPORTED,
+            return make_error(dstd::Condition::Unsupported,
                               "host lacks the memory service");
         dftu_reservation* r = nullptr;
         DFTRACER_UTILS_TRY_VOID(

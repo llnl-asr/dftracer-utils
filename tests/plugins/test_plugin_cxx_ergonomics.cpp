@@ -143,19 +143,18 @@ TEST_CASE("plugin cxx: StrId hides the raw interned-id integer") {
     CHECK(h.intern("POSIX") == id);  // interning is stable
     CHECK(h.intern("STDIO") != id);
 
-    // A default StrId is the DFTU_STR_NONE sentinel and resolves to nothing.
+    // A default StrId is the absent sentinel and resolves to nothing.
     const dftracer::utils::plugins::StrId none;
     CHECK(none.absent());
-    CHECK(none.raw() == DFTU_STR_NONE);
     CHECK(h.str(none).empty());
 }
 
 TEST_CASE("plugin cxx: AggCol builds a dftu_agg_col without hand casts") {
-    const dftu_agg_col raw = plugins::AggCol(plugins::AggOp::Pct)
-                                 .value("dur")
-                                 .out("p90_dur")
-                                 .param(0.9)
-                                 .raw();
+    const dftu_agg_col raw =
+        plugins::detail::agg_col_raw(plugins::AggCol(plugins::AggOp::Pct)
+                                         .value("dur")
+                                         .out("p90_dur")
+                                         .param(0.9));
     CHECK(raw.op == DFTU_AGG_PCT);
     CHECK(dstd::String(raw.value) == "dur");
     CHECK(dstd::String(raw.out) == "p90_dur");
@@ -181,31 +180,35 @@ TEST_CASE("plugin cxx: agg:: factories fill only the fields their op takes") {
           plugins::agg::set_union("name", "names"),
           plugins::agg::hist("dur", "hist_dur"),
           plugins::agg::count_valid("dur", "n_dur")}) {
-        const dftu_agg_col raw = c.raw();
+        const dftu_agg_col raw = plugins::detail::agg_col_raw(c);
         CHECK(raw.value != nullptr);
         CHECK(raw.out != nullptr);
         CHECK(raw.by == nullptr);
         CHECK(raw.param == doctest::Approx(0.0));
     }
-    CHECK(plugins::agg::sumsq("dur", "sumsq_dur").raw().op == DFTU_AGG_SUMSQ);
-    CHECK(plugins::agg::hist("dur", "hist_dur").raw().op == DFTU_AGG_HIST);
-    CHECK(plugins::agg::count_valid("dur", "n_dur").raw().op ==
-          DFTU_AGG_COUNT_VALID);
+    CHECK(plugins::detail::agg_col_raw(plugins::agg::sumsq("dur", "sumsq_dur"))
+              .op == DFTU_AGG_SUMSQ);
+    CHECK(plugins::detail::agg_col_raw(plugins::agg::hist("dur", "hist_dur"))
+              .op == DFTU_AGG_HIST);
+    CHECK(
+        plugins::detail::agg_col_raw(plugins::agg::count_valid("dur", "n_dur"))
+            .op == DFTU_AGG_COUNT_VALID);
 
     // The occupancy ops take the (ts, dur) pair plus the snap tolerance.
-    const dftu_agg_col conc =
-        plugins::agg::concurrency("ts", "dur", "conc", 4.0).raw();
+    const dftu_agg_col conc = plugins::detail::agg_col_raw(
+        plugins::agg::concurrency("ts", "dur", "conc", 4.0));
     CHECK(conc.op == DFTU_AGG_CONCURRENCY);
     CHECK(dstd::String(conc.value) == "ts");
     CHECK(dstd::String(conc.by) == "dur");
     CHECK(conc.param == doctest::Approx(4.0));
 
-    const dftu_agg_col util =
-        plugins::agg::utilization("ts", "dur", "util").raw();
+    const dftu_agg_col util = plugins::detail::agg_col_raw(
+        plugins::agg::utilization("ts", "dur", "util"));
     CHECK(util.op == DFTU_AGG_UTILIZATION);
     CHECK(util.param == doctest::Approx(0.0));  // exact endpoints by default
 
-    const dftu_agg_col act = plugins::agg::active("ts", "dur", "peak").raw();
+    const dftu_agg_col act =
+        plugins::detail::agg_col_raw(plugins::agg::active("ts", "dur", "peak"));
     CHECK(act.op == DFTU_AGG_ACTIVE);
     CHECK(dstd::String(act.by) == "dur");
 }

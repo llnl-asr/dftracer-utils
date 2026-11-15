@@ -13,6 +13,7 @@
 // csv_sink.cpp
 
 #include <dftracer/utils/dataframe/c_api.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/plugins/plugin.h>
 
 #include <cstdint>
@@ -137,8 +138,7 @@ class CsvWriter : public SinkWriter {
 
     dstd::Result<void> write(const dftu_dataframe* frame) override {
         if (frame == nullptr || file_ == nullptr)
-            return dstd::Error::from_format<"csv: no frame">(
-                dstd::Condition::InvalidArgument);
+            return invalid_argument(dstd::fmt<"csv: no frame">());
         const std::int32_t columns = dftu_dataframe_num_columns(frame);
         const std::int64_t rows = dftu_dataframe_num_rows(frame);
         dstd::Vector<Column> already;
@@ -146,8 +146,7 @@ class CsvWriter : public SinkWriter {
             dstd::String name;
             Column column = flat_column(frame, i, &name);
             if (!column)
-                return dstd::Error::from_format<"csv: no column {}">(
-                    dstd::Condition::InvalidArgument, i);
+                return invalid_argument(dstd::fmt<"csv: no column {}">(i));
             already.push_back(std::move(column));
             if (!header_) {
                 if (i != 0) std::fputc(',', file_);
@@ -166,19 +165,16 @@ class CsvWriter : public SinkWriter {
             }
             std::fputc('\n', file_);
             if (std::ferror(file_) != 0)
-                return dstd::Error::from_format<"csv: write failed">(
-                    dstd::Condition::InvalidArgument);
+                return invalid_argument(dstd::fmt<"csv: write failed">());
         }
         return {};
     }
 
     dstd::Result<void> finalize() override {
         if (file_ == nullptr)
-            return dstd::Error::from_format<"csv: already closed">(
-                dstd::Condition::InvalidArgument);
+            return invalid_argument(dstd::fmt<"csv: already closed">());
         if (std::fflush(file_) != 0 || std::ferror(file_) != 0)
-            return dstd::Error::from_format<"csv: write failed">(
-                dstd::Condition::InvalidArgument);
+            return invalid_argument(dstd::fmt<"csv: write failed">());
         std::fclose(file_);
         file_ = nullptr;
         return {};
@@ -201,25 +197,22 @@ class CsvSink : public Sink {
         const BindView& view) override {
         const char* path = option_of(view.options, "path");
         if (path == nullptr || path[0] == '\0')
-            return dstd::Error::from_format<
-                "csv.write: bind needs the option path, e.g. path \"out.csv\"">(
-                dstd::Condition::InvalidArgument);
+            return invalid_argument(
+                dstd::fmt<"csv.write: bind needs the option path, e.g. path "
+                          "\"out.csv\"">());
         std::FILE* file = std::fopen(path, "wb");
         if (file == nullptr)
-            return dstd::Error::from_format<"csv: cannot open {}">(
-                dstd::Condition::InvalidArgument, path);
+            return invalid_argument(dstd::fmt<"csv: cannot open {}">(path));
         return dstd::UniquePtr<SinkWriter>(dstd::make_unique<CsvWriter>(file));
     }
 };
 
 }  // namespace
 
-DFTU_PLUGIN_INFO("csv", "1.0")
-
-extern "C" DFTU_PLUGIN_EXPORT dftu_status
-dftracer_plugin(dftu_ctx* ctx, dftu_plugin_host* host, const dftu_value* config,
-                dftu_plugin** out) {
-    return plugin(ctx, host, config)
-        .sink("csv.write", dstd::UniquePtr<Sink>(dstd::make_unique<CsvSink>()))
-        .build(out);
-}
+DFTU_PLUGIN("csv", "1.0",
+            [](PluginBuilder& p, const Config& config) -> dstd::Result<void> {
+                (void)config;
+                p.sink("csv.write",
+                       dstd::UniquePtr<Sink>(dstd::make_unique<CsvSink>()));
+                return {};
+            })

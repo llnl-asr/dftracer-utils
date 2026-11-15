@@ -88,8 +88,8 @@ TEST_CASE("lazyframe facade: chained plan matches the equivalent direct plan") {
     plugins::OwnedLazyFrame out = lf.filter(gt15).sort_by("dur", true).head(3);
     dftu_expr_free(gt15);
 
-    REQUIRE(out.handle);
-    dftu_dataframe* collected = dftu_lazyframe_collect(out.handle, -1);
+    REQUIRE(out.get());
+    dftu_dataframe* collected = dftu_lazyframe_collect(out.get(), -1);
     REQUIRE(collected);
     REQUIRE(dftu_dataframe_num_rows(collected) == 3);
 
@@ -146,21 +146,21 @@ TEST_CASE(
     // this fails mid-chain rather than only surfacing at collect.
     plugins::OwnedLazyFrame out =
         lf.filter_mask(nullptr).head(1).sort_by("dur", false);
-    CHECK_FALSE(out.handle);
+    CHECK_FALSE(out.get());
     // The chain borrowed lf, so a failure inside it leaves the source intact
     // and still usable rather than emptying it as a side effect.
-    CHECK(lf.handle);
-    CHECK(lf.head(1).handle);
+    CHECK(lf.get());
+    CHECK(lf.head(1).get());
 
     // Calling a method again on an already-empty OwnedLazyFrame must not
     // crash or double-free; it stays empty.
     plugins::OwnedLazyFrame still_empty = out.head(5);
-    CHECK_FALSE(still_empty.handle);
+    CHECK_FALSE(still_empty.get());
 
     // With no ops extension wired up at all, every op rejects the same way.
     plugins::OwnedLazyFrame unwired{dftu_dataframe_lazy(source)};
     plugins::OwnedLazyFrame unwired_out = unwired.head(1);
-    CHECK_FALSE(unwired_out.handle);
+    CHECK_FALSE(unwired_out.get());
 
     dftu_dataframe_free(source);
 }
@@ -177,12 +177,12 @@ TEST_CASE(
     plugins::OwnedLazyFrame first = lf.head(2);
     plugins::OwnedLazyFrame second = lf.head(3);
 
-    REQUIRE(lf.handle);  // still usable after both
-    REQUIRE(first.handle);
-    REQUIRE(second.handle);
+    REQUIRE(lf.get());  // still usable after both
+    REQUIRE(first.get());
+    REQUIRE(second.get());
 
-    dftu_dataframe* a = dftu_lazyframe_collect(first.handle, -1);
-    dftu_dataframe* b = dftu_lazyframe_collect(second.handle, -1);
+    dftu_dataframe* a = dftu_lazyframe_collect(first.get(), -1);
+    dftu_dataframe* b = dftu_lazyframe_collect(second.get(), -1);
     REQUIRE(a);
     REQUIRE(b);
     CHECK(dftu_dataframe_num_rows(a) == 2);
@@ -199,8 +199,8 @@ TEST_CASE("lazyframe facade: take and group_by_dynamic reach the host") {
 
     const std::int64_t idx[2] = {4, 0};
     plugins::OwnedLazyFrame taken = lf.take(idx);
-    REQUIRE(taken.handle);
-    dftu_dataframe* taken_df = dftu_lazyframe_collect(taken.handle, -1);
+    REQUIRE(taken.get());
+    dftu_dataframe* taken_df = dftu_lazyframe_collect(taken.get(), -1);
     REQUIRE(taken_df);
     REQUIRE(dftu_dataframe_num_rows(taken_df) == 2);
     dftu_series* id_col = dftu_dataframe_column(taken_df, "id");
@@ -215,8 +215,8 @@ TEST_CASE("lazyframe facade: take and group_by_dynamic reach the host") {
     dftu_group_agg aggs[1] = {{"sum", "dur", "dur_sum"}};
     plugins::OwnedLazyFrame windowed =
         lf.group_by_dynamic("id", 2, 2, {aggs, 1}, 1, false);
-    REQUIRE(windowed.handle);
-    dftu_dataframe* windowed_df = dftu_lazyframe_collect(windowed.handle, -1);
+    REQUIRE(windowed.get());
+    dftu_dataframe* windowed_df = dftu_lazyframe_collect(windowed.get(), -1);
     REQUIRE(windowed_df);
     CHECK(dftu_dataframe_num_rows(windowed_df) == 3);
     dftu_dataframe_free(windowed_df);

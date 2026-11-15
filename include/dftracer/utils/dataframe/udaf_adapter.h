@@ -10,6 +10,7 @@
 // argument types, the constants and a batch of argument columns are the same.
 
 #include <dftracer/utils/dataframe/c_api_udaf.h>
+#include <dftracer/utils/dataframe/plugin_error.h>
 #include <dftracer/utils/dataframe/udf_adapter.h>
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -133,7 +134,7 @@ dftu_udaf_desc udaf_desc_of(const char* name, UdafOptions options) noexcept {
                          : dstd::Span<const dftu_scalar* const>(),
                      out);
         dstd::Result<dstd::UniquePtr<A>> made = A::bind(bind);
-        if (!made) return udf_report(ctx, made.error());
+        if (!made) return report(ctx, made.error());
         *bound = made->release();
         return DFTU_OK;
     };
@@ -148,7 +149,7 @@ dftu_udaf_desc udaf_desc_of(const char* name, UdafOptions options) noexcept {
         UdafStateSet<State> set(dstd::Span<void* const>(states, rows));
         dstd::Result<void> done =
             static_cast<const A*>(bound)->update(set, batch);
-        return done ? DFTU_OK : udf_report(ctx, done.error());
+        return done ? DFTU_OK : report(ctx, done.error());
     };
     d.combine = [](dftu_ctx* ctx, void* bound, void* const* into,
                    void* const* from, std::uint64_t n) noexcept -> dftu_status {
@@ -157,7 +158,7 @@ dftu_udaf_desc udaf_desc_of(const char* name, UdafOptions options) noexcept {
             dstd::Result<void> done =
                 udaf.combine(*static_cast<State*>(into[i]),
                              *static_cast<const State*>(from[i]));
-            if (!done) return udf_report(ctx, done.error());
+            if (!done) return report(ctx, done.error());
         }
         return DFTU_OK;
     };
@@ -166,7 +167,7 @@ dftu_udaf_desc udaf_desc_of(const char* name, UdafOptions options) noexcept {
                     dftu_series** out) noexcept -> dftu_status {
         UdafStateSet<State> set(dstd::Span<void* const>(states, n));
         dstd::Result<Column> made = static_cast<const A*>(bound)->finalize(set);
-        if (!made) return udf_report(ctx, made.error());
+        if (!made) return report(ctx, made.error());
         *out = made->release();
         return DFTU_OK;
     };
@@ -192,7 +193,7 @@ dftu_udaf_desc udaf_desc_of(const char* name, UdafOptions options) noexcept {
             dstd::Result<void> done = static_cast<const A*>(bound)->deserialize(
                 *static_cast<State*>(state),
                 dstd::StringView(reinterpret_cast<const char*>(in), n));
-            return done ? DFTU_OK : udf_report(ctx, done.error());
+            return done ? DFTU_OK : report(ctx, done.error());
         };
     }
     d.free_bound = [](void* bound) noexcept {

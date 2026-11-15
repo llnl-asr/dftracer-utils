@@ -41,10 +41,9 @@ struct Counted {
 
 }  // namespace
 
-DFTU_PLUGIN_INFO("config_keys_plugin", "1.0")
-
-extern "C" DFTU_PLUGIN_EXPORT dftu_status
-dftracer_plugin(dftu_ctx* ctx, dftu_plugin_host* h, const dftu_value* config,
-                dftu_plugin** out) {
-    return plugin(ctx, h, config).fold<Counted>().build(out);
-}
+DFTU_PLUGIN("config_keys_plugin", "1.0",
+            [](PluginBuilder& p, const Config& config) -> dstd::Result<void> {
+                (void)config;
+                p.fold<Counted>();
+                return {};
+            })

@@ -65,14 +65,14 @@ consumer reads it back during the same batch.
              void finalize(dftracer::utils::plugins::Host) {}
          };
 
-         DFTU_PLUGIN_INFO("producer", "1.0")
-
-         extern "C" DFTU_PLUGIN_EXPORT dftu_status dftracer_plugin(
-             dftu_ctx* ctx, dftu_plugin_host* h, const dftu_value* config,
-             dftu_plugin** out) {
-             return dftracer::utils::plugins::make_plugin<ProducerSlice>(
-                 ctx, config, out);
-         }
+         DFTU_PLUGIN("producer", "1.0",
+                     [](dftracer::utils::plugins::PluginBuilder& p,
+                        const dftracer::utils::plugins::Config& config)
+                         -> dftracer::utils::dstd::Result<void> {
+                         (void)config;
+                         p.fold<ProducerSlice>();
+                         return {};
+                     })
 
       A consumer reads it back with the same port name, named in its own
       static ``consumes()`` so the host runs the producer first:

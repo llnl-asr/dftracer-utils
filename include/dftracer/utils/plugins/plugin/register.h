@@ -662,6 +662,24 @@ class PluginBuilder {
     PluginBuilder(dftu_ctx* ctx, dftu_plugin_host* host,
                   const dftu_value* config)
         : ctx_(ctx), host_(host), config_(config) {}
+    PluginBuilder(const PluginBuilder&) = delete;
+    PluginBuilder& operator=(const PluginBuilder&) = delete;
+    PluginBuilder(PluginBuilder&& other) noexcept
+        : ctx_(other.ctx_),
+          host_(other.host_),
+          config_(other.config_),
+          vt_(other.vt_),
+          status_(other.status_) {
+        other.vt_ = nullptr;
+    }
+    PluginBuilder& operator=(PluginBuilder&&) = delete;
+
+    /// Destroys a fold registered through @ref fold that @ref build never
+    /// handed to the host, so a body that registers one and then returns an
+    /// error, or a caller that drops the builder unbuilt, leaks nothing.
+    ~PluginBuilder() {
+        if (vt_) vt_->destroy(vt_->self);
+    }
 
     /// The fold half, exactly as make_plugin<Slice> builds it. At most one.
     template <class Slice>
@@ -679,8 +697,9 @@ class PluginBuilder {
     }
 
     /// Register `U` as the scalar UDF duql calls `name`, which no built-in
-    /// function or other UDF may hold; see @ref UdfType for what U provides
-    /// and @ref UdfOptions for the argument counts and flags. The host copies
+    /// function or other UDF may hold; see
+    /// @ref dftracer::utils::dataframe::UdfType for what U provides and
+    /// @ref UdfOptions for the argument counts and flags. The host copies
     /// the name and unregisters the UDF before the plugin unloads.
     template <UdfType U>
     PluginBuilder& udf(const char* name, UdfOptions options = {}) {
@@ -693,9 +712,9 @@ class PluginBuilder {
     /// Register `A` as the user-defined aggregate `name`, which no built-in
     /// function or aggregate, op, UDF or other UDAF may hold. It is registered
     /// but not yet callable from queries; see
-    /// @ref UdafType for what A provides and @ref UdafOptions for the argument
-    /// counts and flags. The host copies the name and unregisters the UDAF
-    /// before the plugin unloads.
+    /// @ref dftracer::utils::dataframe::UdafType for what A provides and
+    /// @ref UdafOptions for the argument counts and flags. The host copies the
+    /// name and unregisters the UDAF before the plugin unloads.
     template <UdafType A>
     PluginBuilder& udaf(const char* name, UdafOptions options = {}) {
         const dftu_svc_ops* ops = ext<dftu_svc_ops>(DFTU_SVC_OPS);
@@ -788,16 +807,24 @@ class PluginBuilder {
 
     /// Set `*out` to the finished descriptor and return DFTU_OK, or return
     /// the first error a step hit. A plugin with no fold still gets one: the
-    /// host drives its registered states through it.
+    /// host drives its registered states through it. The host owns the
+    /// descriptor afterwards, so a later @ref PluginBuilder destruction does
+    /// not destroy it again. Call once.
     dftu_status build(dftu_plugin** out) {
+        if (built_) return dftu_fail(ctx_, DFTU_E_INVALID, "build() ran twice");
+        built_ = true;
         if (status_ >= 0 && !vt_) fold<detail::EmptySlice>();
-        if (status_ < 0) {
-            if (vt_) vt_->destroy(vt_->self);
-            vt_ = nullptr;
-            return status_;
+        dftu_plugin* made = vt_;
+        vt_ = nullptr;
+        if (made) {
+            if (status_ < 0) {
+                made->destroy(made->self);
+                return status_;
+            }
+            *out = made;
+            return DFTU_OK;
         }
-        *out = vt_;
-        return DFTU_OK;
+        return status_;
     }
 
    private:
@@ -825,6 +852,7 @@ class PluginBuilder {
     const dftu_value* config_;
     dftu_plugin* vt_ = nullptr;
     dftu_status status_ = DFTU_OK;
+    bool built_ = false;
 };
 
 /// Entry point for the builder; see @ref PluginBuilder.
@@ -832,6 +860,60 @@ inline PluginBuilder plugin(dftu_ctx* ctx, dftu_plugin_host* host,
                             const dftu_value* config) {
     return PluginBuilder{ctx, host, config};
 }
+
+namespace detail {
+
+/// A plugin body @ref DFTU_PLUGIN accepts: callable as
+/// `dstd::Result<void>(PluginBuilder&, const Config&)`.
+template <class Fn>
+concept PluginEntry =
+    requires(Fn& fn, PluginBuilder& builder, const Config& config) {
+        { fn(builder, config) } -> std::same_as<dstd::Result<void>>;
+    };
+
+/// Run `fn` and produce the descriptor the host loads: the builder it filled,
+/// then @ref PluginBuilder::build. An error from `fn` fails the load with its
+/// condition, and its message on `ctx` when it has one, and the builder
+/// releases a fold `fn` registered before it returned.
+template <class Fn>
+    requires PluginEntry<Fn>
+dftu_status plugin_entry(Fn&& fn, dftu_ctx* ctx, dftu_plugin_host* host,
+                         const dftu_value* config, dftu_plugin** out) noexcept {
+    PluginBuilder builder(ctx, host, config);
+    const dstd::Result<void> body = fn(builder, Config(config));
+    if (!body.has_value()) return report(ctx, body.error());
+    return builder.build(out);
+}
+
+}  // namespace detail
+
+/** The two exported entry points of a plugin, from its body:
+
+       DFTU_PLUGIN("my_plugin", "1.0", [](PluginBuilder& p, const Config& cfg)
+                                            -> dstd::Result<void> {
+           p.fold<MySlice>().state<MyGraph>("me.graph");
+           return {};
+       })
+
+   The body is variadic, so a comma in the body's text that is not inside
+   parentheses, as in a structured binding (`auto [a, b] = ...`) or a braced
+   initializer, does not end the macro's arguments.
+
+   `fn` is a lambda or a function name callable as
+   `dstd::Result<void>(PluginBuilder&, const Config&)`; it fills the builder and
+   returns the first error it hit, which fails the load with that error's
+   condition and message. Emits @ref DFTU_PLUGIN_INFO(name, version) and the
+   `dftracer_plugin` factory, so a C++ plugin writes no dftu_* type, call or
+   constant. Use once per plugin library. */
+#define DFTU_PLUGIN(name, version, ...)                                        \
+    DFTU_PLUGIN_INFO(name, version)                                            \
+    extern "C" DFTU_PLUGIN_EXPORT dftu_status dftracer_plugin(                 \
+        dftu_ctx* dftu_plugin_ctx, dftu_plugin_host* dftu_plugin_host_,        \
+        const dftu_value* dftu_plugin_config, dftu_plugin** dftu_plugin_out) { \
+        return ::dftracer::utils::plugins::detail::plugin_entry(               \
+            __VA_ARGS__, dftu_plugin_ctx, dftu_plugin_host_,                   \
+            dftu_plugin_config, dftu_plugin_out);                              \
+    }
 
 }  // namespace dftracer::utils::plugins
 

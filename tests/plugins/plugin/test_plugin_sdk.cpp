@@ -81,9 +81,7 @@ class RangeSource {
         ~Cursor() { ++c_->cursors_destroyed; }
         dstd::Result<dstd::Optional<plugins::OwnedDataFrame>> next(
             std::int64_t) {
-            if (fail_)
-                return plugins::make_error(DFTU_E_INTERNAL,
-                                           "range cursor broke");
+            if (fail_) return plugins::internal("range cursor broke");
             if (!f_) return dstd::nullopt;
             return std::move(f_);
         }
@@ -133,7 +131,7 @@ class RangeSource {
         if (!cmp || cmp->column != 0 || cmp->rhs.kind != DFTU_SCALAR_TAG_I64)
             return dstd::nullopt;
         if (cmp->rhs.value.i == APPLY_THROWS)
-            return plugins::make_error(DFTU_E_INTERNAL, "range apply broke");
+            return plugins::internal("range apply broke");
         std::int64_t lo = lo_;
         if (cmp->op == DFTU_CMP_GT)
             lo = cmp->rhs.value.i + 1;
@@ -324,8 +322,7 @@ class DoubleVal {
     dstd::Result<dstd::UniquePtr<Cursor>> open(
         plugins::InputCursor in, const plugins::OpArgs&, std::uint64_t,
         const plugins::Host& host) const {
-        if (mode_ == OpenMode::Fail)
-            return plugins::make_error(DFTU_E_INTERNAL, "no open");
+        if (mode_ == OpenMode::Fail) return plugins::internal("no open");
         DFTRACER_UTILS_TRY(plugins::Reservation reservation,
                            host.memory().reserve("sdk node"));
         if (mode_ == OpenMode::DropInput)

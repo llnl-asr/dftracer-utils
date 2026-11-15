@@ -39,46 +39,48 @@ namespace dftracer::utils::plugins {
 /// dftracer::utils::dataframe::LazyFrame "LazyFrame"'s own methods are const. A
 /// method that fails for any reason (no ops extension wired up, an unregistered
 /// name, or a kind/arity/shape/argument rejection) returns an EMPTY
-/// OwnedLazyFrame (`!out.handle`); every method short-circuits on an
-/// already-empty OwnedLazyFrame, so a failure partway through a chain
-/// propagates to the end without corrupting or leaking anything, and the
-/// caller checks `handle` once at the end of the chain rather than after
-/// every step.
+/// OwnedLazyFrame (`!out`); every method short-circuits on an already-empty
+/// OwnedLazyFrame, so a failure partway through a chain propagates to the end
+/// without corrupting or leaking anything, and the caller checks the result
+/// once at the end of the chain rather than after every step.
 struct OwnedLazyFrame {
     OwnedLazyFrame() = default;
-    explicit OwnedLazyFrame(dftu_lazyframe* h) noexcept : handle(h) {}
+    explicit OwnedLazyFrame(dftu_lazyframe* h) noexcept : handle_(h) {}
     OwnedLazyFrame(dftu_lazyframe* h, const dftu_svc_ops* ops,
                    void* host) noexcept
-        : handle(h), ops_(ops), host_(host) {}
+        : handle_(h), ops_(ops), host_(host) {}
     OwnedLazyFrame(OwnedLazyFrame&& o) noexcept
-        : handle(o.handle), ops_(o.ops_), host_(o.host_) {
-        o.handle = nullptr;
+        : handle_(o.handle_), ops_(o.ops_), host_(o.host_) {
+        o.handle_ = nullptr;
     }
     OwnedLazyFrame& operator=(OwnedLazyFrame&& o) noexcept {
         if (this != &o) {
-            if (handle) dftu_lazyframe_free(handle);
-            handle = o.handle;
+            if (handle_) dftu_lazyframe_free(handle_);
+            handle_ = o.handle_;
             ops_ = o.ops_;
             host_ = o.host_;
-            o.handle = nullptr;
+            o.handle_ = nullptr;
         }
         return *this;
     }
     OwnedLazyFrame(const OwnedLazyFrame&) = delete;
     OwnedLazyFrame& operator=(const OwnedLazyFrame&) = delete;
     ~OwnedLazyFrame() {
-        if (handle) dftu_lazyframe_free(handle);
+        if (handle_) dftu_lazyframe_free(handle_);
     }
+
+    /// The plan, or null when there is none. It stays owned by this object.
+    dftu_lazyframe* get() const noexcept { return handle_; }
+    explicit operator bool() const noexcept { return handle_ != nullptr; }
+    bool is_null() const noexcept { return handle_ == nullptr; }
 
     /// Releases ownership to the caller, who must free it (or hand it to
     /// something that will); the destructor no longer will.
     dftu_lazyframe* release() noexcept {
-        dftu_lazyframe* h = handle;
-        handle = nullptr;
+        dftu_lazyframe* h = handle_;
+        handle_ = nullptr;
         return h;
     }
-
-    dftu_lazyframe* handle = nullptr;
 
     OwnedLazyFrame auto_spill() const {
         return apply("dftu.lazy.auto_spill", nullptr);
@@ -247,7 +249,7 @@ struct OwnedLazyFrame {
         if (left_on.size() != right_on.size()) return OwnedLazyFrame{};
         dstd::Vector<const char*> l(left_on);
         dstd::Vector<const char*> r(right_on);
-        const dftu_lazyframe* in[2] = {handle, other.handle};
+        const dftu_lazyframe* in[2] = {handle_, other.handle_};
         return apply(
             "dftu.lazy.join", in, 2,
             dataframe::OpArgs()
@@ -291,14 +293,14 @@ struct OwnedLazyFrame {
     // `auto a = lf.head(1); auto b = lf.tail(1);` silently hand back an empty
     // `b`, with no error and nothing to see at the call site.
     OwnedLazyFrame apply(const char* name, const dftu_op_arg* args) const {
-        const dftu_lazyframe* src = handle;
+        const dftu_lazyframe* src = handle_;
         return apply(name, &src, 1, args);
     }
     /// The multi-input form: `in[0]` is this handle, the rest are borrowed
     /// operand plans; empty if any of them is empty.
     OwnedLazyFrame apply(const char* name, const dftu_lazyframe* const* in,
                          std::uint32_t n, const dftu_op_arg* args) const {
-        if (!handle) return OwnedLazyFrame{};
+        if (!handle_) return OwnedLazyFrame{};
         for (std::uint32_t i = 0; i < n; ++i)
             if (!in[i]) return OwnedLazyFrame{};
         if (!ops_ || !ops_->run_lazy) return OwnedLazyFrame{};
@@ -316,6 +318,7 @@ struct OwnedLazyFrame {
         return OwnedLazyFrame{made, ops_, host_};
     }
 
+    dftu_lazyframe* handle_ = nullptr;
     const dftu_svc_ops* ops_ = nullptr;
     void* host_ = nullptr;
 };

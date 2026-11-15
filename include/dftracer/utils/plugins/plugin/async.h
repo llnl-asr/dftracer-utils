@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_PLUGINS_PLUGIN_ASYNC_H
 #define DFTRACER_UTILS_PLUGINS_PLUGIN_ASYNC_H
 
+#include <dftracer/utils/dataframe/plugin_error.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi.h>
@@ -295,7 +296,7 @@ class [[nodiscard]] AsyncOp {
     dstd::Result<dftu_status> resume_expected() noexcept {
         if (start_failed_) return std::move(error_);
         const dftu_status status = detail::settle(*p_, &task_, 1);
-        if (status < 0) return make_error(status);
+        if (status < 0) return dataframe::error_of(status);
         return status;
     }
 
@@ -375,7 +376,7 @@ class [[nodiscard]] AsyncAll {
     dstd::Result<dftu_status> resume_expected() noexcept {
         if (start_failed_) return std::move(error_);
         const dftu_status status = await_resume();
-        if (status < 0) return make_error(status);
+        if (status < 0) return dataframe::error_of(status);
         return status;
     }
 
@@ -713,12 +714,12 @@ class Io {
    private:
     static AsyncOp unsupported() {
         return AsyncOp{
-            make_error(DFTU_E_UNSUPPORTED, "host lacks dftu.svc.io")};
+            make_error(dstd::Condition::Unsupported, "host lacks dftu.svc.io")};
     }
     // `t` by reference: callers write done(call(..., &t), t), and the order of
     // argument evaluation is unspecified, so a copy could predate the call.
     AsyncOp done(dftu_status st, dftu_task* const& t) const {
-        if (st < 0) return AsyncOp{make_error(st)};
+        if (st < 0) return AsyncOp{dataframe::error_of(st)};
         return AsyncOp{t, h_};
     }
 

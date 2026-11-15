@@ -145,7 +145,7 @@ TEST_SUITE("DFTracerPlugin") {
             CHECK(has(cmake, name));
 
             const dstd::String source = read(project + "/plugin.cpp");
-            CHECK(has(source, "DFTU_PLUGIN_INFO(\"my_"));
+            CHECK(has(source, "DFTU_PLUGIN(\"my_"));
 
             // A README of 5 to 10 lines, with the name in it.
             const dstd::String readme = read(project + "/README.md");

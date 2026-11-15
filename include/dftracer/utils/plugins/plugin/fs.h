@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_PLUGINS_PLUGIN_FS_H
 #define DFTRACER_UTILS_PLUGINS_PLUGIN_FS_H
 
+#include <dftracer/utils/dataframe/plugin_error.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <dftracer/utils/plugins/plugin/async.h>
@@ -48,7 +49,7 @@ class PathList {
         const dftu_status st = list_ && fs_
                                    ? fs_->list_entry(ctx_, list_, i, &raw)
                                    : DFTU_E_INVALID;
-        if (st < 0) return make_error(st);
+        if (st < 0) return dataframe::error_of(st);
         return PathEntry{dstd::StringView(raw.path, raw.path_len), raw.size,
                          raw.mtime_ns, raw.kind};
     }
@@ -170,12 +171,12 @@ class Fs {
    private:
     static AsyncOp unsupported() {
         return AsyncOp{
-            make_error(DFTU_E_UNSUPPORTED, "host lacks dftu.svc.fs")};
+            make_error(dstd::Condition::Unsupported, "host lacks dftu.svc.fs")};
     }
     // `t` by reference: callers write done(call(..., &t), t), and the order of
     // argument evaluation is unspecified, so a copy could predate the call.
     AsyncOp done(dftu_status st, dftu_task* const& t) const {
-        if (st < 0) return AsyncOp{make_error(st)};
+        if (st < 0) return AsyncOp{dataframe::error_of(st)};
         return AsyncOp{t, h_};
     }
 

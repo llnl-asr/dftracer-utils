@@ -112,28 +112,24 @@ class SessionGaps {
             Column pid(dftu_dataframe_column(frame->get(), "pid"));
             Column ts(dftu_dataframe_column(frame->get(), "ts"));
             if (!pid || !ts)
-                return dstd::Unexpected(
-                    make_error(DFTU_E_INVALID,
-                               "sessionize.gaps needs the columns pid and ts"));
+                return dstd::Unexpected(invalid_argument(
+                    "sessionize.gaps needs the columns pid and ts"));
             const dstd::Optional<IntKind> pid_kind = int_kind(pid.dtype());
             const dstd::Optional<IntKind> ts_kind = int_kind(ts.dtype());
             if (!pid_kind || !ts_kind)
-                return dstd::Unexpected(
-                    make_error(DFTU_E_INVALID,
-                               "sessionize.gaps reads pid and ts as integers"));
+                return dstd::Unexpected(invalid_argument(
+                    "sessionize.gaps reads pid and ts as integers"));
             // A flat column is shared, not gathered; anything else is.
             Column pid_flat(dftu_series_materialize(pid.get()));
             Column ts_flat(dftu_series_materialize(ts.get()));
             if (!pid_flat || !ts_flat)
-                return dstd::Unexpected(
-                    make_error(DFTU_E_INVALID,
-                               "sessionize.gaps cannot flatten its input"));
+                return dstd::Unexpected(invalid_argument(
+                    "sessionize.gaps cannot flatten its input"));
             const void* pid_data = dftu_series_data(pid_flat.get());
             const void* ts_data = dftu_series_data(ts_flat.get());
             if (pid_data == nullptr || ts_data == nullptr)
-                return dstd::Unexpected(
-                    make_error(DFTU_E_INVALID,
-                               "sessionize.gaps reads pid and ts as integers"));
+                return dstd::Unexpected(invalid_argument(
+                    "sessionize.gaps reads pid and ts as integers"));
 
             const std::int64_t count = pid_flat.size();
             const bool has_nulls = dftu_series_null_count(pid_flat.get()) > 0 ||
@@ -166,17 +162,16 @@ class SessionGaps {
             for (std::int32_t i = 0; i < columns; ++i) {
                 const char* name = dftu_dataframe_column_name(frame->get(), i);
                 if (name == nullptr)
-                    return dstd::Unexpected(
-                        make_error(DFTU_E_INVALID,
-                                   "sessionize.gaps cannot read its input"));
+                    return dstd::Unexpected(invalid_argument(
+                        "sessionize.gaps cannot read its input"));
                 builder.add(name,
                             Column(dftu_dataframe_column(frame->get(), name)));
             }
             builder.add("session", Column::from_int64(std::move(sessions)));
             auto out = builder.build();
             if (!out)
-                return dstd::Unexpected(make_error(
-                    DFTU_E_INVALID, "sessionize.gaps cannot build its frame"));
+                return dstd::Unexpected(
+                    invalid_argument("sessionize.gaps cannot build its frame"));
             return dstd::Optional<OwnedDataFrame>(std::move(*out));
         }
     };
@@ -190,12 +185,10 @@ class SessionGaps {
 
 }  // namespace
 
-DFTU_PLUGIN_INFO("sessionize", "1.0")
-
-extern "C" DFTU_PLUGIN_EXPORT dftu_status
-dftracer_plugin(dftu_ctx* ctx, dftu_plugin_host* host, const dftu_value* config,
-                dftu_plugin** out) {
-    return plugin(ctx, host, config)
-        .node<SessionGaps>("sessionize.gaps", dstd::make_unique<SessionGaps>())
-        .build(out);
-}
+DFTU_PLUGIN("sessionize", "1.0",
+            [](PluginBuilder& p, const Config& config) -> dstd::Result<void> {
+                (void)config;
+                p.node<SessionGaps>("sessionize.gaps",
+                                    dstd::make_unique<SessionGaps>());
+                return {};
+            })

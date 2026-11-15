@@ -31,10 +31,9 @@ struct EventCount {
     }
 };
 
-DFTU_PLUGIN_INFO("@NAME@", "1.0")
-
-extern "C" DFTU_PLUGIN_EXPORT dftu_status
-dftracer_plugin(dftu_ctx* ctx, dftu_plugin_host* h, const dftu_value* config,
-                dftu_plugin** out) {
-    return plugin(ctx, h, config).fold<EventCount>().build(out);
-}
+DFTU_PLUGIN("@NAME@", "1.0",
+            [](PluginBuilder& p, const Config& config) -> dstd::Result<void> {
+                (void)config;
+                p.fold<EventCount>();
+                return {};
+            })

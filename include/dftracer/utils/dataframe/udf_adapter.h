@@ -12,6 +12,7 @@
 // translates to the C ABI.
 
 #include <dftracer/utils/dataframe/c_api_udf.h>
+#include <dftracer/utils/dataframe/plugin_error.h>
 #include <dftracer/utils/dataframe/plugin_frame.h>
 #include <dftracer/utils/dataframe/scalar.h>
 #include <dftracer/utils/dataframe/types.h>
@@ -138,36 +139,6 @@ class UdfBind {
     dftu_type_info* out_;
 };
 
-namespace detail {
-
-/// The status of `error`, the numbering of dftu_status.
-inline dftu_status udf_status_of(const dstd::Error& error) noexcept {
-    return -static_cast<dftu_status>(error.condition()) - 1;
-}
-
-inline dstd::Error udf_error(dftu_status status,
-                             dstd::StringView message = {}) noexcept {
-    const std::int32_t code = -status - 1;
-    const auto condition =
-        status < 0 &&
-                code <= static_cast<std::int32_t>(dstd::Condition::OutOfMemory)
-            ? static_cast<dstd::Condition>(code)
-            : dstd::Condition::Unknown;
-    return dstd::Error(condition, message);
-}
-
-/// The status a callback returns for `error`, with its message on `ctx`. A null
-/// `ctx` takes only the status.
-inline dftu_status udf_report(dftu_ctx* ctx,
-                              const dstd::Error& error) noexcept {
-    const dftu_status status = udf_status_of(error);
-    return error.message().empty() || ctx == nullptr
-               ? status
-               : dftu_fail(ctx, status, error.c_str());
-}
-
-}  // namespace detail
-
 /// One batch a scalar UDF runs on: the argument columns the host borrowed, and
 /// the row count they share. It holds no reference and allocates nothing.
 class UdfBatch {
@@ -192,7 +163,7 @@ class UdfBatch {
     /// per few thousand rows of a long batch and return what it gives.
     dstd::Result<void> check() const noexcept {
         const dftu_status status = dftu_check(ctx_);
-        if (status < 0) return detail::udf_error(status);
+        if (status < 0) return error_of(status);
         return {};
     }
 
@@ -247,7 +218,7 @@ dftu_udf_desc udf_desc_of(const char* name, UdfOptions options) noexcept {
                          : dstd::Span<const dftu_scalar* const>(),
                      out);
         dstd::Result<dstd::UniquePtr<U>> made = U::bind(bind);
-        if (!made) return udf_report(ctx, made.error());
+        if (!made) return report(ctx, made.error());
         *bound = made->release();
         return DFTU_OK;
     };
@@ -257,7 +228,7 @@ dftu_udf_desc udf_desc_of(const char* name, UdfOptions options) noexcept {
         UdfBatch batch(ctx, dstd::Span<const dftu_series* const>(args, n),
                        rows);
         dstd::Result<Column> made = static_cast<const U*>(bound)->exec(batch);
-        if (!made) return udf_report(ctx, made.error());
+        if (!made) return report(ctx, made.error());
         *out = made->release();
         return DFTU_OK;
     };

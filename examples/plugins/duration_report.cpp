@@ -54,10 +54,9 @@ struct DurationReport {
     }
 };
 
-DFTU_PLUGIN_INFO("duration_report", "1.0")
-
-extern "C" DFTU_PLUGIN_EXPORT dftu_status
-dftracer_plugin(dftu_ctx* ctx, dftu_plugin_host* h, const dftu_value* config,
-                dftu_plugin** out) {
-    return plugin(ctx, h, config).fold<DurationReport>().build(out);
-}
+DFTU_PLUGIN("duration_report", "1.0",
+            [](PluginBuilder& p, const Config& config) -> dstd::Result<void> {
+                (void)config;
+                p.fold<DurationReport>();
+                return {};
+            })

@@ -51,6 +51,8 @@ set(PLUGINS_TEST_SOURCES
     test_abi_task.cpp
     test_source_hooks_vtable.cpp
     test_plugin_reference.cpp
+    test_plugin_entry_macro.cpp
+    test_plugin_entry_cleanup.cpp
     host/test_host_ops.cpp
     host/test_host_ops_autoregister.cpp
     plugin/test_plugin_sdk.cpp
@@ -197,7 +199,8 @@ endforeach()
 foreach(cxx_plugin builder_plugin config_keys_plugin reads_projection_plugin
                   provider_fixture_plugin toy_sink_plugin toy_node_plugin
                   broken_frame_plugin borrowed_frame_plugin
-                  sessionize_input_plugin)
+                  sessionize_input_plugin macro_plugin macro_error_plugin
+                  error_after_register_plugin)
   add_library(${cxx_plugin} MODULE ${cxx_plugin}.cpp)
   target_set_warnings(${cxx_plugin})
   set_target_properties(
@@ -225,6 +228,8 @@ foreach(df_plugin toy_format_plugin toy_format_tie_plugin toy_sink_plugin
                   config_keys_plugin reads_projection_plugin
                   provider_fixture_plugin broken_frame_plugin
                   borrowed_frame_plugin sessionize_input_plugin
+                  macro_plugin macro_error_plugin
+                  error_after_register_plugin
                   leaky_plugin crash_plugin)
   if(TARGET dftracer_utils_dataframe::shared)
     target_link_libraries(${df_plugin} PRIVATE dftracer_utils_dataframe::shared)
@@ -254,6 +259,23 @@ if(TARGET plugins_test_plugin_reads)
     READS_PROJECTION_PLUGIN_PATH="$<TARGET_FILE:reads_projection_plugin>")
   add_dependencies(plugins_test_plugin_reads
                    reads_projection_plugin)
+endif()
+
+if(TARGET plugins_test_plugin_entry_macro)
+  target_compile_definitions(
+    plugins_test_plugin_entry_macro
+    PRIVATE MACRO_PLUGIN_PATH="$<TARGET_FILE:macro_plugin>"
+            MACRO_ERROR_PLUGIN_PATH="$<TARGET_FILE:macro_error_plugin>")
+  add_dependencies(plugins_test_plugin_entry_macro macro_plugin
+                   macro_error_plugin)
+endif()
+
+if(TARGET plugins_test_plugin_entry_cleanup)
+  target_compile_definitions(
+    plugins_test_plugin_entry_cleanup
+    PRIVATE ERROR_AFTER_REGISTER_PLUGIN_PATH="$<TARGET_FILE:error_after_register_plugin>")
+  add_dependencies(plugins_test_plugin_entry_cleanup
+                   error_after_register_plugin)
 endif()
 
 if(TARGET plugins_test_plugin_factory_host)

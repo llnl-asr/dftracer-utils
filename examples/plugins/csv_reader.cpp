@@ -156,7 +156,7 @@ class CsvCursor : public FormatCursor {
         OwnedDataFrame frame = build(take);
         if (!frame)
             return dstd::Unexpected(
-                make_error(DFTU_E_INVALID, "csv_reader: cannot build a frame"));
+                invalid_argument("csv_reader: cannot build a frame"));
         row_ += take;
         return dstd::Optional<OwnedDataFrame>(std::move(frame));
     }
@@ -227,7 +227,7 @@ class CsvFile : public FormatFile {
                     dstd::String message("csv_reader: no column ");
                     message += wanted;
                     return dstd::Unexpected(
-                        make_error(DFTU_E_INVALID, dstd::StringView(message)));
+                        invalid_argument(dstd::StringView(message)));
                 }
                 picked.push_back(found);
             }
@@ -275,14 +275,14 @@ class CsvFormat : public FileFormat {
         auto text = dstd::fs::read_file(dstd::PathView(path));
         if (!text)
             return dstd::Unexpected(
-                make_error(DFTU_E_IO, "csv_reader: cannot read the file"));
+                io_error("csv_reader: cannot read the file"));
 
         const dstd::StringView body(*text);
         std::size_t at = 0;
         const Fields header = split_fields(next_line(body, &at));
         if (header.empty())
-            return dstd::Unexpected(make_error(
-                DFTU_E_INVALID, "csv_reader: the file has no header"));
+            return dstd::Unexpected(
+                invalid_argument("csv_reader: the file has no header"));
 
         dstd::Vector<CsvColumn> columns;
         columns.reserve(header.size());
@@ -299,9 +299,8 @@ class CsvFormat : public FileFormat {
             const Fields cells = split_fields(line);
             if (cells.size() != header.size())
                 return dstd::Unexpected(
-                    make_error(DFTU_E_INVALID,
-                               "csv_reader: a row has a different number "
-                               "of cells than the header"));
+                    invalid_argument("csv_reader: a row has a different number "
+                                     "of cells than the header"));
             for (std::size_t i = 0; i < cells.size(); ++i)
                 columns[i].cells.emplace_back(cells[i].data(), cells[i].size());
             ++rows;
@@ -317,12 +316,10 @@ class CsvFormat : public FileFormat {
 
 }  // namespace
 
-DFTU_PLUGIN_INFO("csv_reader", "1.0")
-
-extern "C" DFTU_PLUGIN_EXPORT dftu_status
-dftracer_plugin(dftu_ctx* ctx, dftu_plugin_host* host, const dftu_value* config,
-                dftu_plugin** out) {
-    return plugin(ctx, host, config)
-        .file_format<CsvFormat>("csv_reader", dstd::make_unique<CsvFormat>())
-        .build(out);
-}
+DFTU_PLUGIN("csv_reader", "1.0",
+            [](PluginBuilder& p, const Config& config) -> dstd::Result<void> {
+                (void)config;
+                p.file_format<CsvFormat>("csv_reader",
+                                         dstd::make_unique<CsvFormat>());
+                return {};
+            })

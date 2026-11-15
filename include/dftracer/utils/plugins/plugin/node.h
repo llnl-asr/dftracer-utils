@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_PLUGINS_PLUGIN_NODE_H
 
 #include <dftracer/utils/dataframe/c_api.h>
+#include <dftracer/utils/dataframe/plugin_error.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
@@ -164,9 +165,9 @@ class InputCursor {
         if (st >= 0 && pending) st = runner_.run(&ctx.base, pending);
         if (st < 0) {
             if (out) dftu_dataframe_free(out);
-            return make_error(st, ctx.message.empty()
-                                      ? dstd::StringView("upstream failed")
-                                      : dstd::StringView(ctx.message));
+            return dataframe::error_of(
+                st, ctx.message.empty() ? dstd::StringView("upstream failed")
+                                        : dstd::StringView(ctx.message));
         }
         if (st == DFTU_END || !out) return dstd::Optional<OwnedDataFrame>();
         return dstd::Optional<OwnedDataFrame>(OwnedDataFrame(out));

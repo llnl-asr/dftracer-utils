@@ -64,8 +64,7 @@ struct Total {
             type != dataframe::TypeId::Uint64 &&
             type != dataframe::TypeId::Float64)
             return dstd::Unexpected<dstd::Error>(
-                dstd::Error(dstd::Condition::InvalidArgument,
-                            "total takes a number column"));
+                invalid_argument("total takes a number column"));
         bind.result(dataframe::TypeId::Float64);
         return dstd::make_unique<Total>(Total{type});
     }
@@ -93,18 +92,15 @@ struct Total {
         Column column = Column::from_double(std::move(out));
         if (column.is_null())
             return dstd::Unexpected<dstd::Error>(
-                dstd::Error(dstd::Condition::InvalidArgument,
-                            "total could not build a column"));
+                invalid_argument("total could not build a column"));
         return column;
     }
 };
 
-DFTU_PLUGIN_INFO("@NAME@", "1.0")
-
-extern "C" DFTU_PLUGIN_EXPORT dftu_status
-dftracer_plugin(dftu_ctx* ctx, dftu_plugin_host* h, const dftu_value* config,
-                dftu_plugin** out) {
-    return plugin(ctx, h, config)
-        .udaf<Total>("@NAME@.total", UdafOptions{UdafFlag::ParallelSafe, 1, 1})
-        .build(out);
-}
+DFTU_PLUGIN("@NAME@", "1.0",
+            [](PluginBuilder& p, const Config& config) -> dstd::Result<void> {
+                (void)config;
+                p.udaf<Total>("@NAME@.total",
+                              UdafOptions{UdafFlag::ParallelSafe, 1, 1});
+                return {};
+            })

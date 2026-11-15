@@ -2,7 +2,8 @@
 #ifndef DFTRACER_UTILS_PLUGINS_PLUGIN_TYPES_H
 #define DFTRACER_UTILS_PLUGINS_PLUGIN_TYPES_H
 
-#include <dftracer/utils/dstd/error.h>
+#include <dftracer/utils/dataframe/plugin_error.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/duql/builder.h>
@@ -14,43 +15,34 @@
 namespace dftracer::utils::plugins {
 
 /// The error a failed SDK call or plugin callback carries is a @ref
-/// dstd::Error. Its condition is the status the host sees: `status =
-/// -(condition
-/// + 1)`, the numbering of dftu_status. A failed host service call returns an
-/// Error with no message, because the host already holds the message on the
-/// call's dftu_ctx; @ref report then returns the status as it is.
-inline dstd::Error make_error(dftu_status status,
-                              dstd::StringView message = {}) noexcept {
-    const std::int32_t code = -status - 1;
-    const auto condition =
-        status < 0 &&
-                code <= static_cast<std::int32_t>(dstd::Condition::OutOfMemory)
-            ? static_cast<dstd::Condition>(code)
-            : dstd::Condition::Unknown;
-    return dstd::Error(condition, message);
-}
-
-/// The dftu_status of `error`.
-inline dftu_status status_of(const dstd::Error& error) noexcept {
-    return -static_cast<dftu_status>(error.condition()) - 1;
-}
+/// dstd::Error; see @ref dftracer::utils::dataframe::make_error. Its condition
+/// is the status the host sees: `status = -(condition + 1)`, the numbering of
+/// dftu_status, which @ref report turns back into the callback's status.
+///
+/// Name a condition with these helpers rather than with @ref dstd::Condition,
+/// and fall back to @ref make_error for a condition none of them names.
+/// @ref dftracer::utils::dataframe::error_of goes the other way for a host call
+/// that returned a dftu_status.
+using dataframe::cancelled;
+using dataframe::internal;
+using dataframe::invalid_argument;
+using dataframe::io_error;
+using dataframe::make_error;
+using dataframe::not_found;
+using dataframe::out_of_memory;
+using dataframe::parse_error;
+using dataframe::report;
+using dataframe::status_of;
+using dataframe::unsupported;
 
 /// The success value of a callback or a task that returns @ref dstd::Result.
 inline dstd::Result<void> ok() noexcept { return {}; }
-
-/// The status a callback returns for `error`. Sets the error's message on `ctx`
-/// unless it has none, in which case the host already holds it.
-inline dftu_status report(dftu_ctx* ctx, const dstd::Error& error) noexcept {
-    const dftu_status status = status_of(error);
-    return error.message().empty() ? status
-                                   : dftu_fail(ctx, status, error.c_str());
-}
 
 namespace detail {
 
 /// The result of a host service call that returned `status`.
 inline dstd::Result<void> reported(dftu_status status) noexcept {
-    if (status < 0) return make_error(status);
+    if (status < 0) return dataframe::error_of(status);
     return {};
 }
 
@@ -184,18 +176,23 @@ static_assert(static_cast<dftu_agg_op>(AggOp::Active) == DFTU_AGG_ACTIVE);
 static_assert(static_cast<dftu_agg_op>(AggOp::CountValid) ==
               DFTU_AGG_COUNT_VALID);
 
-/// Fluent builder for one dftu_agg_col spec passed to Host::agg. All names
-/// (value/out/by) are borrowed const char* held only for the agg_new call, per
-/// the SDK's borrowed-name convention; they must outlive that call.
+namespace detail {
+struct AggColAccess;
+}  // namespace detail
+
+/// Fluent builder for one dftu_agg_col spec passed to Host::agg. Every name
+/// (value/out/by) is a @ref dstd::CStringView the builder only borrows, so it
+/// must outlive the Host::agg call it is passed to; a literal, a dstd::String
+/// and a dstd::CStringView all work. An empty name is the same as no name.
 class AggCol {
    public:
     explicit AggCol(AggOp op) noexcept : op_(op) {}
 
-    AggCol& value(const char* v) noexcept {
+    AggCol& value(dstd::CStringView v) noexcept {
         value_ = v;
         return *this;
     }
-    AggCol& out(const char* o) noexcept {
+    AggCol& out(dstd::CStringView o) noexcept {
         out_ = o;
         return *this;
     }
@@ -203,22 +200,30 @@ class AggCol {
         param_ = p;
         return *this;
     }
-    AggCol& by(const char* b) noexcept {
+    AggCol& by(dstd::CStringView b) noexcept {
         by_ = b;
         return *this;
     }
 
+   private:
+    friend struct detail::AggColAccess;
+
+    /// The C ABI spec this builder names, with the names still borrowed from
+    /// the views it was given. Reached through @ref detail::agg_col_raw.
     dftu_agg_col raw() const noexcept {
-        return dftu_agg_col{static_cast<std::int32_t>(op_), value_, out_,
-                            param_, by_};
+        return dftu_agg_col{static_cast<std::int32_t>(op_), c_name(value_),
+                            c_name(out_), param_, c_name(by_)};
     }
 
-   private:
+    static const char* c_name(dstd::CStringView name) noexcept {
+        return name.empty() ? nullptr : name.c_str();
+    }
+
     AggOp op_;
-    const char* value_ = nullptr;
-    const char* out_ = nullptr;
+    dstd::CStringView value_;
+    dstd::CStringView out_;
     double param_ = 0.0;
-    const char* by_ = nullptr;
+    dstd::CStringView by_;
 };
 
 /// Per-op @ref AggCol factories: each function's signature takes exactly the
@@ -228,58 +233,59 @@ class AggCol {
 namespace agg {
 
 /// Group row count; no value column.
-inline AggCol count(const char* out) noexcept {
+inline AggCol count(dstd::CStringView out) noexcept {
     return AggCol(AggOp::Count).out(out);
 }
 
 /// Count of non-null values in `value` (Int64), distinct from count()'s row
 /// count.
-inline AggCol count_valid(const char* value, const char* out) noexcept {
+inline AggCol count_valid(dstd::CStringView value,
+                          dstd::CStringView out) noexcept {
     return AggCol(AggOp::CountValid).value(value).out(out);
 }
 
-inline AggCol sum(const char* value, const char* out) noexcept {
+inline AggCol sum(dstd::CStringView value, dstd::CStringView out) noexcept {
     return AggCol(AggOp::Sum).value(value).out(out);
 }
-inline AggCol min(const char* value, const char* out) noexcept {
+inline AggCol min(dstd::CStringView value, dstd::CStringView out) noexcept {
     return AggCol(AggOp::Min).value(value).out(out);
 }
-inline AggCol max(const char* value, const char* out) noexcept {
+inline AggCol max(dstd::CStringView value, dstd::CStringView out) noexcept {
     return AggCol(AggOp::Max).value(value).out(out);
 }
-inline AggCol mean(const char* value, const char* out) noexcept {
+inline AggCol mean(dstd::CStringView value, dstd::CStringView out) noexcept {
     return AggCol(AggOp::Mean).value(value).out(out);
 }
 /// Sample variance.
-inline AggCol var(const char* value, const char* out) noexcept {
+inline AggCol var(dstd::CStringView value, dstd::CStringView out) noexcept {
     return AggCol(AggOp::Var).value(value).out(out);
 }
 /// Sample standard deviation.
-inline AggCol std_dev(const char* value, const char* out) noexcept {
+inline AggCol std_dev(dstd::CStringView value, dstd::CStringView out) noexcept {
     return AggCol(AggOp::Std).value(value).out(out);
 }
 /// Population skewness.
-inline AggCol skew(const char* value, const char* out) noexcept {
+inline AggCol skew(dstd::CStringView value, dstd::CStringView out) noexcept {
     return AggCol(AggOp::Skew).value(value).out(out);
 }
 /// Excess (population) kurtosis.
-inline AggCol kurt(const char* value, const char* out) noexcept {
+inline AggCol kurt(dstd::CStringView value, dstd::CStringView out) noexcept {
     return AggCol(AggOp::Kurt).value(value).out(out);
 }
 /// First non-null value in row order (order-independent merge).
-inline AggCol first(const char* value, const char* out) noexcept {
+inline AggCol first(dstd::CStringView value, dstd::CStringView out) noexcept {
     return AggCol(AggOp::First).value(value).out(out);
 }
 /// Last non-null value in row order.
-inline AggCol last(const char* value, const char* out) noexcept {
+inline AggCol last(dstd::CStringView value, dstd::CStringView out) noexcept {
     return AggCol(AggOp::Last).value(value).out(out);
 }
-inline AggCol sumsq(const char* value, const char* out) noexcept {
+inline AggCol sumsq(dstd::CStringView value, dstd::CStringView out) noexcept {
     return AggCol(AggOp::Sumsq).value(value).out(out);
 }
 /// Distinct String values of `value`, sorted and joined; with `typed`, a list
 /// of the values in their own type, ascending.
-inline AggCol set_union(const char* value, const char* out,
+inline AggCol set_union(dstd::CStringView value, dstd::CStringView out,
                         bool typed = false) noexcept {
     return AggCol(AggOp::SetUnion)
         .value(value)
@@ -288,18 +294,19 @@ inline AggCol set_union(const char* value, const char* out,
 }
 /// The DDSketch histogram over `value`: a list<struct{lo,hi,count}> column of
 /// the sketch's occupied bins (no bin-count parameter).
-inline AggCol hist(const char* value, const char* out) noexcept {
+inline AggCol hist(dstd::CStringView value, dstd::CStringView out) noexcept {
     return AggCol(AggOp::Hist).value(value).out(out);
 }
 
 /// A DDSketch quantile of `value`; `q` is the level in [0, 1].
-inline AggCol pct(const char* value, const char* out, double q) noexcept {
+inline AggCol pct(dstd::CStringView value, dstd::CStringView out,
+                  double q) noexcept {
     return AggCol(AggOp::Pct).value(value).out(out).param(q);
 }
 
 /// The String repr of `value` at the row maximizing `by`.
-inline AggCol argmax(const char* value, const char* out,
-                     const char* by) noexcept {
+inline AggCol argmax(dstd::CStringView value, dstd::CStringView out,
+                     dstd::CStringView by) noexcept {
     return AggCol(AggOp::Argmax).value(value).out(out).by(by);
 }
 
@@ -307,12 +314,13 @@ inline AggCol argmax(const char* value, const char* out,
 /// event start column, `dur` its duration column, and `occ_cell_us` an
 /// optional endpoint-snap tolerance (0 = exact). Busy is the exact
 /// interval-union length (us) where depth > 0.
-inline AggCol busy(const char* ts, const char* dur, const char* out,
-                   double occ_cell_us = 0.0) noexcept {
+inline AggCol busy(dstd::CStringView ts, dstd::CStringView dur,
+                   dstd::CStringView out, double occ_cell_us = 0.0) noexcept {
     return AggCol(AggOp::Busy).value(ts).by(dur).out(out).param(occ_cell_us);
 }
 /// sum(dur) / busy over the same (ts, dur) window; see busy().
-inline AggCol concurrency(const char* ts, const char* dur, const char* out,
+inline AggCol concurrency(dstd::CStringView ts, dstd::CStringView dur,
+                          dstd::CStringView out,
                           double occ_cell_us = 0.0) noexcept {
     return AggCol(AggOp::Concurrency)
         .value(ts)
@@ -321,7 +329,8 @@ inline AggCol concurrency(const char* ts, const char* dur, const char* out,
         .param(occ_cell_us);
 }
 /// busy / (max_end - min_ts) over the same (ts, dur) window; see busy().
-inline AggCol utilization(const char* ts, const char* dur, const char* out,
+inline AggCol utilization(dstd::CStringView ts, dstd::CStringView dur,
+                          dstd::CStringView out,
                           double occ_cell_us = 0.0) noexcept {
     return AggCol(AggOp::Utilization)
         .value(ts)
@@ -330,30 +339,51 @@ inline AggCol utilization(const char* ts, const char* dur, const char* out,
         .param(occ_cell_us);
 }
 /// Peak overlap depth over the same (ts, dur) window; see busy().
-inline AggCol active(const char* ts, const char* dur, const char* out,
-                     double occ_cell_us = 0.0) noexcept {
+inline AggCol active(dstd::CStringView ts, dstd::CStringView dur,
+                     dstd::CStringView out, double occ_cell_us = 0.0) noexcept {
     return AggCol(AggOp::Active).value(ts).by(dur).out(out).param(occ_cell_us);
 }
 
 }  // namespace agg
 
+class Host;
+
 /// Opaque strong handle for an interned-string id (the C ABI's dftu_str, which
 /// is an id, not bytes). Compare and hash by identity; resolve to bytes with
-/// Host::str. absent() is the DFTU_STR_NONE sentinel. raw() exposes the
-/// underlying id only to cross the C ABI seam - it is never an integer to a
-/// plugin author.
+/// @ref Host::str. absent() is the DFTU_STR_NONE sentinel. The id itself
+/// crosses the C ABI seam inside @ref Host and nowhere else: it is never an
+/// integer to a plugin author.
 class StrId {
    public:
     StrId() = default;
     constexpr explicit StrId(dftu_str id) noexcept : id_(id) {}
-    constexpr dftu_str raw() const noexcept { return id_; }
     constexpr bool absent() const noexcept { return id_ == DFTU_STR_NONE; }
     constexpr bool operator==(StrId o) const noexcept { return id_ == o.id_; }
     constexpr bool operator!=(StrId o) const noexcept { return id_ != o.id_; }
 
    private:
+    friend class Host;
+
+    constexpr dftu_str raw() const noexcept { return id_; }
+
     dftu_str id_ = DFTU_STR_NONE;
 };
+
+namespace detail {
+
+/// The C ABI spec an @ref AggCol names. @ref Host::agg is its only caller in
+/// the SDK, and a plugin author passes the builder itself instead of naming a
+/// spec; this exists so a test can assert the builder's field mapping.
+struct AggColAccess {
+    static dftu_agg_col raw(const AggCol& col) noexcept { return col.raw(); }
+};
+
+/// @see AggColAccess
+inline dftu_agg_col agg_col_raw(const AggCol& col) noexcept {
+    return AggColAccess::raw(col);
+}
+
+}  // namespace detail
 
 }  // namespace dftracer::utils::plugins
 

@@ -224,22 +224,20 @@ struct FailingSlice {
     explicit FailingSlice(const plugins::Config&) {}
     static dstd::Result<FailingSlice> from_config(const plugins::Config& c) {
         if (is(At::MakeSlice))
-            return plugins::make_error(DFTU_E_PARSE, "sdk failed in make");
+            return plugins::parse_error("sdk failed in make");
         return FailingSlice(c);
     }
     dstd::Result<void> step(const dftu_dataframe*, plugins::Host) {
-        if (is(At::OnBatch))
-            return plugins::make_error(DFTU_E_PARSE, "sdk failed in step");
+        if (is(At::OnBatch)) return plugins::parse_error("sdk failed in step");
         return plugins::ok();
     }
     dstd::Result<void> merge(FailingSlice&) {
-        if (is(At::Merge))
-            return plugins::make_error(DFTU_E_PARSE, "sdk failed in merge");
+        if (is(At::Merge)) return plugins::parse_error("sdk failed in merge");
         return plugins::ok();
     }
     dstd::Result<void> finalize(plugins::Host) {
         if (is(At::OnFinalize))
-            return plugins::make_error(DFTU_E_PARSE, "sdk failed in finalize");
+            return plugins::parse_error("sdk failed in finalize");
         return plugins::ok();
     }
 };
@@ -304,7 +302,7 @@ TEST_CASE("an Error returned from a Slice keeps its status") {
     struct CodedSlice {
         explicit CodedSlice(const plugins::Config&) {}
         dstd::Result<void> step(const dftu_dataframe*, plugins::Host) {
-            return plugins::make_error(DFTU_E_NOT_FOUND, "no such column");
+            return plugins::not_found("no such column");
         }
         void merge(CodedSlice&) {}
         void finalize(plugins::Host) {}

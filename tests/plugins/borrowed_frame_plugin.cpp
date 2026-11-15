@@ -79,6 +79,9 @@ dftu_plugin g_plugin;
 
 }  // namespace
 
+// Raw C entry on purpose: it registers through the raw dftu_svc_ops
+// struct and returns a hand-built descriptor with no fold, because that
+// plugin shape and its borrowed column are what this fixture asserts.
 DFTU_PLUGIN_INFO("borrowed_frame_plugin", "1.0")
 
 extern "C" DFTU_PLUGIN_EXPORT dftu_status

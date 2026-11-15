@@ -140,7 +140,7 @@ TEST_SUITE("PluginResults") {
         REQUIRE(std::holds_alternative<plugins::OwnedLazyFrame>(it->second));
 
         dftu_lazyframe* got =
-            std::get<plugins::OwnedLazyFrame>(it->second).handle;
+            std::get<plugins::OwnedLazyFrame>(it->second).get();
         REQUIRE(got != nullptr);
         dftu_dataframe* out = dftu_lazyframe_collect(got, 0);
         REQUIRE(out != nullptr);

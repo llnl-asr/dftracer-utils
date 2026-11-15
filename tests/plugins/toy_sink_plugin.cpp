@@ -10,6 +10,7 @@
  */
 
 #include <dftracer/utils/dataframe/c_api.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <dftracer/utils/plugins/plugin.h>
 
@@ -41,12 +42,11 @@ class ToyWriter : public plugins::SinkWriter {
 
     dstd::Result<void> write(const dftu_dataframe* batch) override {
         if (batch == nullptr)
-            return dstd::Error::from_format<"toy_sink: no frame">(
-                dstd::Condition::InvalidArgument);
+            return plugins::invalid_argument(dstd::fmt<"toy_sink: no frame">());
         ++g_written;
         if (g_fail_after >= 0 && g_written > g_fail_after)
-            return dstd::Error::from_format<"toy_sink: write refused">(
-                dstd::Condition::InvalidArgument);
+            return plugins::invalid_argument(
+                dstd::fmt<"toy_sink: write refused">());
         dftu_series* ids = dftu_dataframe_column(batch, "id");
         if (ids != nullptr) {
             const auto* data =
@@ -99,8 +99,6 @@ class ToySink : public plugins::Sink {
 
 }  // namespace
 
-DFTU_PLUGIN_INFO("toy_sink", "1.0")
-
 extern "C" DFTU_PLUGIN_EXPORT void toy_sink_stats(std::int64_t* out) {
     out[0] = g_made;
     out[1] = g_killed;
@@ -126,11 +124,11 @@ extern "C" DFTU_PLUGIN_EXPORT std::int64_t toy_sink_row_count() {
     return g_row_count;
 }
 
-extern "C" DFTU_PLUGIN_EXPORT dftu_status
-dftracer_plugin(dftu_ctx* ctx, dftu_plugin_host* h, const dftu_value* config,
-                dftu_plugin** out) {
-    return plugins::plugin(ctx, h, config)
-        .sink("toy_sink.out",
-              dstd::UniquePtr<plugins::Sink>(dstd::make_unique<ToySink>()))
-        .build(out);
-}
+DFTU_PLUGIN("toy_sink", "1.0",
+            [](plugins::PluginBuilder& p,
+               const plugins::Config& config) -> dstd::Result<void> {
+                (void)config;
+                p.sink("toy_sink.out", dstd::UniquePtr<plugins::Sink>(
+                                           dstd::make_unique<ToySink>()));
+                return {};
+            })

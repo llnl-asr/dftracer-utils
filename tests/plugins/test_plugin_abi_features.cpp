@@ -124,7 +124,7 @@ plugins::Task fanout_all(plugins::Host h, std::atomic<int>* ran, int n) {
 plugins::Task drop_then_fail(plugins::Host h, std::atomic<int>* ran) {
     plugins::AsyncOp dropped = h.spawn(inc_fn, ran);
     if (ran != nullptr) {
-        dstd::Error gave_up = plugins::make_error(DFTU_E_IO, "gave up");
+        dstd::Error gave_up = plugins::io_error("gave up");
         co_await plugins::fail(std::move(gave_up));
     }
     co_await std::move(dropped);
@@ -174,8 +174,7 @@ plugins::Task await_expected(plugins::Host h, dstd::Optional<dftu_status>* seen,
 plugins::Task return_error(plugins::Host, bool* reached) {
     FrameCounter counter;
     *reached = true;
-    dstd::Error gave_up =
-        plugins::make_error(DFTU_E_PARSE, "gave up with a parse error");
+    dstd::Error gave_up = plugins::parse_error("gave up with a parse error");
     co_await plugins::fail(std::move(gave_up));
 }
 
@@ -251,7 +250,7 @@ plugins::Task all_one_fails(plugins::Host h, std::atomic<int>* ran) {
 
 plugins::Task fail_on_entry() {
     FrameCounter counter;
-    dstd::Error gave_up = plugins::make_error(DFTU_E_PARSE, "failed on entry");
+    dstd::Error gave_up = plugins::parse_error("failed on entry");
     co_await plugins::fail(std::move(gave_up));
 }
 

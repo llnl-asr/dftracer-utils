@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_PLUGINS_PLUGIN_MAP_H
 
 #include <dftracer/utils/dataframe/c_api.h>
+#include <dftracer/utils/dataframe/plugin_error.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
@@ -31,7 +32,7 @@ namespace detail {
 /// the order of argument evaluation is unspecified.
 inline AsyncOp started(const dftu_plugin_host* host, dftu_status st,
                        dftu_task* const& t) {
-    if (st < 0) return AsyncOp{make_error(st)};
+    if (st < 0) return AsyncOp{dataframe::error_of(st)};
     return AsyncOp{t, host};
 }
 
@@ -82,7 +83,7 @@ class Host {
     /// per morsel in a long loop.
     dstd::Result<void> check() const {
         const dftu_status st = dftu_check(ctx_);
-        if (st < 0) return make_error(st, "cancelled");
+        if (st < 0) return dataframe::error_of(st, "cancelled");
         return {};
     }
 
@@ -299,7 +300,7 @@ class Host {
 
     /// The cross-worker-merged, finalized result of the accumulator named
     /// `name` (any plugin's), as an owned frame. Call at on_finalize; the
-    /// producing plugin must be registered first. Empty (`!frame.handle`) when
+    /// producing plugin must be registered first. Empty (`!frame`) when
     /// no plugin produced that name.
     dstd::Result<OwnedDataFrame> agg_result(const char* name) const;
 
@@ -397,7 +398,7 @@ class Host {
     /// `lf` intact so it frees normally.
     dstd::Result<void> emit_result_lazyframe(const char* name,
                                              OwnedLazyFrame&& lf) const {
-        DFTRACER_UTILS_TRY_VOID(emit_result_lazyframe(name, lf.handle));
+        DFTRACER_UTILS_TRY_VOID(emit_result_lazyframe(name, lf.get()));
         lf.release();
         return {};
     }
@@ -427,7 +428,7 @@ class Host {
     dstd::Result<const T*> need(const char* id, const T*& slot) const {
         const T* e = ext(id, slot);
         if (!e)
-            return make_error(DFTU_E_UNSUPPORTED,
+            return make_error(dstd::Condition::Unsupported,
                               dstd::String("host lacks the service ") + id);
         return e;
     }
@@ -526,7 +527,7 @@ inline dstd::Result<Agg> Host::agg(const char* name,
     dstd::Vector<const char*> keys(key_names.begin(), key_names.end());
     dstd::Vector<dftu_agg_col> specs;
     specs.reserve(cols.size());
-    for (const AggCol& c : cols) specs.push_back(c.raw());
+    for (const AggCol& c : cols) specs.push_back(detail::agg_col_raw(c));
     DFTRACER_UTILS_TRY(
         dftu_agg * a,
         agg_new(name, keys.data(), static_cast<std::uint32_t>(keys.size()),

@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_PLUGINS_PLUGIN_FILEIO_H
 #define DFTRACER_UTILS_PLUGINS_PLUGIN_FILEIO_H
 
+#include <dftracer/utils/dataframe/plugin_error.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
@@ -385,7 +386,8 @@ class Fileio {
 
    private:
     static dstd::Error unsupported() noexcept {
-        return make_error(DFTU_E_UNSUPPORTED, "host lacks dftu.svc.fileio");
+        return make_error(dstd::Condition::Unsupported,
+                          "host lacks dftu.svc.fileio");
     }
 
     const dftu_plugin_host* h_;

@@ -45,13 +45,12 @@ class PassThrough {
 
 }  // namespace
 
-DFTU_PLUGIN_INFO("toy_node", "1.0")
-
-extern "C" DFTU_PLUGIN_EXPORT dftu_status
-dftracer_plugin(dftu_ctx* ctx, dftu_plugin_host* h, const dftu_value* config,
-                dftu_plugin** out) {
-    return plugin(ctx, h, config)
-        .node<PassThrough>("toy_node.pass", dstd::make_unique<PassThrough>())
-        .node<PassThrough>("toy_node.dup", dstd::make_unique<PassThrough>())
-        .build(out);
-}
+DFTU_PLUGIN("toy_node", "1.0",
+            [](PluginBuilder& p, const Config& config) -> dstd::Result<void> {
+                (void)config;
+                p.node<PassThrough>("toy_node.pass",
+                                    dstd::make_unique<PassThrough>());
+                p.node<PassThrough>("toy_node.dup",
+                                    dstd::make_unique<PassThrough>());
+                return {};
+            })

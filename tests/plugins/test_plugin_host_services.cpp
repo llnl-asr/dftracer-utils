@@ -366,8 +366,7 @@ TEST_CASE(
     auto failed = h.trace_read(
         gz.c_str(), [&](const dftu_dataframe*) -> dstd::Result<void> {
             ++calls;
-            return dftracer::utils::plugins::make_error(DFTU_E_INTERNAL,
-                                                        "boom");
+            return dftracer::utils::plugins::internal("boom");
         });
     REQUIRE_FALSE(failed.has_value());
     CHECK(dftracer::utils::plugins::status_of(failed.error()) < 0);

@@ -25,8 +25,7 @@ struct Doubled {
             type != dataframe::TypeId::Uint64 &&
             type != dataframe::TypeId::Float64)
             return dstd::Unexpected<dstd::Error>(
-                dstd::Error(dstd::Condition::InvalidArgument,
-                            "doubled takes a number column"));
+                invalid_argument("doubled takes a number column"));
         bind.result(dataframe::TypeId::Float64);
         return dstd::make_unique<Doubled>(Doubled{type});
     }
@@ -63,16 +62,14 @@ struct Doubled {
         Column column = Column::from_double(std::move(out));
         if (column.is_null())
             return dstd::Unexpected<dstd::Error>(
-                dstd::Error(dstd::Condition::InvalidArgument,
-                            "doubled could not build a column"));
+                invalid_argument("doubled could not build a column"));
         return column;
     }
 };
 
-DFTU_PLUGIN_INFO("@NAME@", "1.0")
-
-extern "C" DFTU_PLUGIN_EXPORT dftu_status
-dftracer_plugin(dftu_ctx* ctx, dftu_plugin_host* h, const dftu_value* config,
-                dftu_plugin** out) {
-    return plugin(ctx, h, config).udf<Doubled>("@NAME@.doubled").build(out);
-}
+DFTU_PLUGIN("@NAME@", "1.0",
+            [](PluginBuilder& p, const Config& config) -> dstd::Result<void> {
+                (void)config;
+                p.udf<Doubled>("@NAME@.doubled");
+                return {};
+            })

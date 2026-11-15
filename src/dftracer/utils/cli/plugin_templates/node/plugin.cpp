@@ -34,12 +34,10 @@ struct PassThrough {
     }
 };
 
-DFTU_PLUGIN_INFO("@NAME@", "1.0")
-
-extern "C" DFTU_PLUGIN_EXPORT dftu_status
-dftracer_plugin(dftu_ctx* ctx, dftu_plugin_host* h, const dftu_value* config,
-                dftu_plugin** out) {
-    return plugin(ctx, h, config)
-        .node<PassThrough>("@NAME@.pass", dstd::make_unique<PassThrough>())
-        .build(out);
-}
+DFTU_PLUGIN("@NAME@", "1.0",
+            [](PluginBuilder& p, const Config& config) -> dstd::Result<void> {
+                (void)config;
+                p.node<PassThrough>("@NAME@.pass",
+                                    dstd::make_unique<PassThrough>());
+                return {};
+            })

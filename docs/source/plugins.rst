@@ -18,9 +18,9 @@ There are two co-equal ways to author one:
 
 - **The C++ SDK** (``<dftracer/utils/plugins/plugin.h>``, namespace
   ``dftracer::utils::plugins``): a plain ``Slice`` struct with ``step`` / ``merge`` /
-  ``finalize`` methods, assembled with
-  ``plugin(ctx, h, config).fold<Slice>().build(out)``
-  (or ``make_plugin<Slice>(config)`` directly, what ``fold`` calls underneath).
+  ``finalize`` methods, registered from a ``DFTU_PLUGIN`` body with
+  ``p.fold<Slice>()`` (or, from C++ that already holds a host, with
+  ``plugin(ctx, h, config).fold<Slice>().build(out)``).
   Typed ``Batch`` / ``Event`` views, host-owned ``Agg`` accumulators, and an
   RAII ``Host`` read like ordinary C++.
 - **The raw C ABI** (``<dftracer/utils/plugins/abi.h>``): a small set of C
@@ -58,11 +58,30 @@ Overview
 ----------------------------
 
 A plugin is a shared library exporting two symbols: ``dftracer_plugin_info``
-(the ``DFTRACER_UTILS_PLUGIN_INFO_SYMBOL``, defined with
-``DFTU_PLUGIN_INFO(name, version)``) and ``dftracer_plugin`` (the
-``DFTRACER_UTILS_PLUGIN_FACTORY_SYMBOL`` the loader resolves via ``dlsym``). It
-receives the parsed config tree (NULL when none given) and returns a
-``dftu_plugin``. The host then drives that plugin as a data-parallel fold:
+(the ``DFTRACER_UTILS_PLUGIN_INFO_SYMBOL``) and ``dftracer_plugin`` (the
+``DFTRACER_UTILS_PLUGIN_FACTORY_SYMBOL``, which the loader resolves via
+``dlsym``). The factory receives the parsed config tree (NULL when none given)
+and returns a ``dftu_plugin``.
+
+In C++, ``DFTU_PLUGIN(name, version, ...)`` writes both symbols and the entry
+body, and it is the one way to write a C++ entry point: the only ``DFTU_`` name
+a C++ plugin file spells. The body is a lambda or a function name callable as
+``dstd::Result<void>(PluginBuilder&, const Config&)``; it fills the builder and
+returns the first error it hit, which fails the load with that error's condition
+and its message. The last argument is variadic, so a comma in the body outside
+parentheses, as in a structured binding or a braced initializer, does not end the
+macro's arguments. A body that registers a fold and then returns an error
+unregisters nothing itself: the builder destroys the fold it still holds when it
+goes away. Nothing throws. The C ABI described below is what the SDK
+translates to, so a C++ plugin never writes a ``dftu_*`` type, call or
+``DFTU_*`` constant: name a ``dstd::Condition`` through ``make_error`` or a
+named helper (``invalid_argument``, ``io_error``, ``unsupported``,
+``internal``, ``not_found``, ``parse_error``, ``cancelled``,
+``out_of_memory``) for an error, and a
+``dstd::CStringView`` or ``dstd::StringView`` for a string. Each ``C++ (SDK)``
+tab below gives the C++ spelling of that part.
+
+The host then drives that plugin as a data-parallel fold:
 
 .. mermaid::
 
@@ -141,9 +160,10 @@ is never called into. Rebuild the plugin against the host you run.
 
    .. tab-item:: C++ (SDK)
 
-      A ``Slice`` provides the constructor and methods; ``plugin(ctx, h,
-      config).fold<Slice>().build(out)`` fills the ``dftu_plugin`` struct and
-      adapts errors at the boundary. The SDK throws nothing and catches
+      A ``Slice`` provides the constructor and methods; the ``DFTU_PLUGIN``
+      body registers it with ``p.fold<Slice>()``, and the ``dstd::Result<void>``
+      the body returns is adapted at the boundary - an error fails the load with
+      its condition and its message. The SDK throws nothing and catches
       nothing, and its headers compile with ``-fno-exceptions``. A call that
       can fail returns a ``dstd::Result``, and a callback returns a
       ``dstd::Result<void>`` (or ``void`` where it cannot fail); the SDK turns
@@ -157,6 +177,7 @@ is never called into. Rebuild the plugin against the host you run.
 
          #include <dftracer/utils/plugins/plugin.h>
 
+         using namespace dftracer::utils;
          using namespace dftracer::utils::plugins;
 
          struct MyPlugin {
@@ -169,13 +190,13 @@ is never called into. Rebuild the plugin against the host you run.
              void finalize(Host) {}                 // emit output
          };
 
-         DFTU_PLUGIN_INFO("my_plugin", "1.0")
-
-         extern "C" DFTU_PLUGIN_EXPORT dftu_status dftracer_plugin(
-             dftu_ctx* ctx, dftu_plugin_host* h, const dftu_value* config,
-             dftu_plugin** out) {
-             return plugin(ctx, h, config).fold<MyPlugin>().build(out);
-         }
+         DFTU_PLUGIN("my_plugin", "1.0",
+                     [](PluginBuilder& p, const Config& config)
+                         -> dstd::Result<void> {
+                         (void)config;
+                         p.fold<MyPlugin>();
+                         return {};
+                     })
 
    .. tab-item:: C (raw ABI)
 
@@ -651,15 +672,18 @@ the registry is settled.
              static Graph* deserialize(dstd::StringView);
          };
 
-         extern "C" DFTU_PLUGIN_EXPORT dftu_status dftracer_plugin(
-             dftu_ctx* ctx, dftu_plugin_host* h, const dftu_value* config,
-             dftu_plugin** out) {
-             return plugin(ctx, h, config).state<Graph>("me.graph").build(out);
-         }
+         DFTU_PLUGIN("me", "1.0",
+                     [](PluginBuilder& p, const Config& config)
+                         -> dstd::Result<void> {
+                         (void)config;
+                         p.state<Graph>("me.graph");
+                         return {};
+                     })
 
-      A plugin may have a fold and several states; ``plugin(ctx, h, config)``
-      is the builder for all of them (``fold<Slice>()``, ``state<T>(name)``,
-      ``op(desc)``), and ``build(out)`` fails the load when any step failed.
+      A plugin may have a fold and several states; the ``PluginBuilder`` the
+      ``DFTU_PLUGIN`` body receives is the builder for all of them
+      (``fold<Slice>()``, ``state<T>(name)``, ``op(desc)``), and an error the
+      body returns fails the load.
 
    .. tab-item:: C (raw ABI)
 
@@ -885,13 +909,13 @@ cancelled task reports ``DFTU_E_CANCELLED``.
              }
          };
 
-         DFTU_PLUGIN_INFO("writer", "1.0")
-
-         extern "C" DFTU_PLUGIN_EXPORT dftu_status dftracer_plugin(
-             dftu_ctx* ctx, dftu_plugin_host* h, const dftu_value* config,
-             dftu_plugin** out) {
-             return plugin(ctx, h, config).fold<Writer>().build(out);
-         }
+         DFTU_PLUGIN("writer", "1.0",
+                     [](PluginBuilder& p, const Config& config)
+                         -> dstd::Result<void> {
+                         (void)config;
+                         p.fold<Writer>();
+                         return {};
+                     })
 
    .. tab-item:: C (raw ABI)
 

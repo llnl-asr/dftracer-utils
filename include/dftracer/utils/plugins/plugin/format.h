@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_PLUGINS_PLUGIN_FORMAT_H
 #define DFTRACER_UTILS_PLUGINS_PLUGIN_FORMAT_H
 
+#include <dftracer/utils/dataframe/plugin_error.h>
 #include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/plugins/abi.h>
@@ -150,7 +151,8 @@ class Format {
 
    private:
     static dstd::Error unsupported() noexcept {
-        return make_error(DFTU_E_UNSUPPORTED, "host lacks the format service");
+        return make_error(dstd::Condition::Unsupported,
+                          "host lacks the format service");
     }
 
     const dftu_plugin_host* h_;

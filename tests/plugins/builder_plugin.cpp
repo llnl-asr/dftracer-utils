@@ -73,14 +73,11 @@ struct RowCount {
 
 }  // namespace
 
-DFTU_PLUGIN_INFO("builder_plugin", "1.0")
-
-extern "C" DFTU_PLUGIN_EXPORT dftu_status
-dftracer_plugin(dftu_ctx* ctx, dftu_plugin_host* h, const dftu_value* config,
-                dftu_plugin** out) {
-    return plugin(ctx, h, config)
-        .fold<RowCount>()
-        .op(OP)
-        .state<TotalDur>(STATE_NAME)
-        .build(out);
-}
+DFTU_PLUGIN("builder_plugin", "1.0",
+            [](PluginBuilder& p, const Config& config) -> dstd::Result<void> {
+                (void)config;
+                p.fold<RowCount>();
+                p.op(OP);
+                p.state<TotalDur>(STATE_NAME);
+                return {};
+            })

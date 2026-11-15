@@ -81,8 +81,8 @@ def test_new_scaffolds_cpp_source(tmp_path):
     assert plugin_cli.main(["new", "mycount", "--cpp", "-o", str(tmp_path)]) == 0
     src = tmp_path / "mycount.cpp"
     assert src.is_file()
-    assert "DFTU_PLUGIN_INFO" in src.read_text()
-    assert ".fold<mycount>().build(out)" in src.read_text()
+    assert 'DFTU_PLUGIN("mycount"' in src.read_text()
+    assert "p.fold<mycount>()" in src.read_text()
 
 
 def test_generated_abi_version_header_carries_the_host_hash(tmp_path, monkeypatch):

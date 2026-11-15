@@ -202,7 +202,7 @@ PyObject* result_to_py(NamedResult& result) {
         // OwnedLazyFrame frees the emptied handle. The plan must be
         // self-contained (see the emit_lazyframe contract).
         dataframe::LazyFrame lf =
-            std::move(dataframe::lazyframe_handle_unwrap(lazy->handle));
+            std::move(dataframe::lazyframe_handle_unwrap(lazy->get()));
         return dftracer::utils::python::frame::wrap_lazyframe(std::move(lf));
     }
     PyErr_SetString(PyExc_RuntimeError, "plugin emitted an unknown result");

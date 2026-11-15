@@ -24,15 +24,13 @@ class LineWriter : public SinkWriter {
             std::fputs("row\n", file_);
         }
         if (std::ferror(file_) != 0)
-            return dstd::Unexpected(
-                make_error(DFTU_E_IO, "@NAME@: write failed"));
+            return dstd::Unexpected(io_error("@NAME@: write failed"));
         return {};
     }
 
     dstd::Result<void> finalize() override {
         if (file_ == nullptr)
-            return dstd::Unexpected(
-                make_error(DFTU_E_INVALID, "@NAME@: already closed"));
+            return dstd::Unexpected(invalid_argument("@NAME@: already closed"));
         std::fclose(file_);
         file_ = nullptr;
         return {};
@@ -54,25 +52,21 @@ class LineSink : public Sink {
         const BindView& view) override {
         const dftu_value* path = dftu_obj_get(view.options, "path");
         if (path == nullptr || path->kind != DFTU_VAL_STR)
-            return dstd::Unexpected(make_error(
-                DFTU_E_INVALID,
+            return dstd::Unexpected(invalid_argument(
                 "@NAME@: bind needs the option path, e.g. path \"out.txt\""));
         std::FILE* file = std::fopen(path->as.str, "wb");
         if (file == nullptr)
-            return dstd::Unexpected(
-                make_error(DFTU_E_IO, "@NAME@: cannot open the output"));
+            return dstd::Unexpected(io_error("@NAME@: cannot open the output"));
         return dstd::UniquePtr<SinkWriter>(dstd::make_unique<LineWriter>(file));
     }
 };
 
 }  // namespace
 
-DFTU_PLUGIN_INFO("@NAME@", "1.0")
-
-extern "C" DFTU_PLUGIN_EXPORT dftu_status
-dftracer_plugin(dftu_ctx* ctx, dftu_plugin_host* h, const dftu_value* config,
-                dftu_plugin** out) {
-    return plugin(ctx, h, config)
-        .sink("@NAME@", dstd::UniquePtr<Sink>(dstd::make_unique<LineSink>()))
-        .build(out);
-}
+DFTU_PLUGIN("@NAME@", "1.0",
+            [](PluginBuilder& p, const Config& config) -> dstd::Result<void> {
+                (void)config;
+                p.sink("@NAME@",
+                       dstd::UniquePtr<Sink>(dstd::make_unique<LineSink>()));
+                return {};
+            })

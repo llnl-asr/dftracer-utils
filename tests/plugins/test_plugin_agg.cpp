@@ -494,31 +494,33 @@ TEST_CASE(
     "agg:: factories build the same dftu_agg_col wire fields as the raw "
     "builder") {
     const plugins::AggCol mean_c = plugins::agg::mean("dur", "mean_dur");
-    const dftu_agg_col mean_raw = mean_c.raw();
+    const dftu_agg_col mean_raw = plugins::detail::agg_col_raw(mean_c);
     CHECK(mean_raw.op == DFTU_AGG_MEAN);
     CHECK(dstd::String(mean_raw.value) == "dur");
     CHECK(dstd::String(mean_raw.out) == "mean_dur");
     CHECK(mean_raw.by == nullptr);
 
-    const dftu_agg_col pct_raw = plugins::agg::pct("dur", "p50_dur", 0.5).raw();
+    const dftu_agg_col pct_raw =
+        plugins::detail::agg_col_raw(plugins::agg::pct("dur", "p50_dur", 0.5));
     CHECK(pct_raw.op == DFTU_AGG_PCT);
     CHECK(dstd::String(pct_raw.value) == "dur");
     CHECK(pct_raw.param == doctest::Approx(0.5));
     CHECK(pct_raw.by == nullptr);
 
-    const dftu_agg_col count_raw = plugins::agg::count("n").raw();
+    const dftu_agg_col count_raw =
+        plugins::detail::agg_col_raw(plugins::agg::count("n"));
     CHECK(count_raw.op == DFTU_AGG_COUNT);
     CHECK(count_raw.value == nullptr);
     CHECK(dstd::String(count_raw.out) == "n");
 
-    const dftu_agg_col argmax_raw =
-        plugins::agg::argmax("name", "name_at_max", "dur").raw();
+    const dftu_agg_col argmax_raw = plugins::detail::agg_col_raw(
+        plugins::agg::argmax("name", "name_at_max", "dur"));
     CHECK(argmax_raw.op == DFTU_AGG_ARGMAX);
     CHECK(dstd::String(argmax_raw.value) == "name");
     CHECK(dstd::String(argmax_raw.by) == "dur");
 
-    const dftu_agg_col busy_raw =
-        plugins::agg::busy("ts", "dur", "busy_us", 2.0).raw();
+    const dftu_agg_col busy_raw = plugins::detail::agg_col_raw(
+        plugins::agg::busy("ts", "dur", "busy_us", 2.0));
     CHECK(busy_raw.op == DFTU_AGG_BUSY);
     CHECK(dstd::String(busy_raw.value) == "ts");
     CHECK(dstd::String(busy_raw.by) == "dur");

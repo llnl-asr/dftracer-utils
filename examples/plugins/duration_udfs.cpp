@@ -39,8 +39,7 @@ bool is_number(dataframe::TypeId type) {
 }
 
 dstd::Unexpected<dstd::Error> refuse(const char* why) {
-    return dstd::Unexpected<dstd::Error>(
-        dstd::Error(dstd::Condition::InvalidArgument, why));
+    return dstd::Unexpected<dstd::Error>(invalid_argument(why));
 }
 
 /// `out[r] = values[r] / 1000`, straight out of the column's buffers.
@@ -158,13 +157,10 @@ struct IsSlow {
     }
 };
 
-DFTU_PLUGIN_INFO("duration_udfs", "1.0")
-
-extern "C" DFTU_PLUGIN_EXPORT dftu_status
-dftracer_plugin(dftu_ctx* ctx, dftu_plugin_host* h, const dftu_value* config,
-                dftu_plugin** out) {
-    return plugin(ctx, h, config)
-        .udf<ToMs>("to_ms")
-        .udf<IsSlow>("is_slow", UdfOptions{UdfFlag::None, 2, 2})
-        .build(out);
-}
+DFTU_PLUGIN("duration_udfs", "1.0",
+            [](PluginBuilder& p, const Config& config) -> dstd::Result<void> {
+                (void)config;
+                p.udf<ToMs>("to_ms");
+                p.udf<IsSlow>("is_slow", UdfOptions{UdfFlag::None, 2, 2});
+                return {};
+            })

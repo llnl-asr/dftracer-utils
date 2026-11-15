@@ -76,8 +76,8 @@ class RangeTable {
             }
             auto out = builder.build();
             if (!out)
-                return dstd::Unexpected(make_error(
-                    DFTU_E_INVALID, "range_provider: cannot build a frame"));
+                return dstd::Unexpected(
+                    invalid_argument("range_provider: cannot build a frame"));
             at += take;
             return dstd::Optional<OwnedDataFrame>(std::move(*out));
         }
@@ -107,7 +107,7 @@ class RangeTable {
                 dstd::String message("range_provider: no column ");
                 message += wanted;
                 return dstd::Unexpected(
-                    make_error(DFTU_E_INVALID, dstd::StringView(message)));
+                    invalid_argument(dstd::StringView(message)));
             }
         }
 
@@ -124,15 +124,10 @@ class RangeTable {
 
 }  // namespace
 
-DFTU_PLUGIN_INFO("range_provider", "1.0")
-
-extern "C" DFTU_PLUGIN_EXPORT dftu_status
-dftracer_plugin(dftu_ctx* ctx, dftu_plugin_host* host, const dftu_value* config,
-                dftu_plugin** out) {
-    const Config cfg(config);
-    const std::int64_t rows = cfg.get_int("rows", DEFAULT_ROWS);
-    return plugin(ctx, host, config)
-        .source<RangeTable>("range_provider.numbers",
-                            dstd::make_unique<RangeTable>(rows))
-        .build(out);
-}
+DFTU_PLUGIN("range_provider", "1.0",
+            [](PluginBuilder& p, const Config& config) -> dstd::Result<void> {
+                const std::int64_t rows = config.get_int("rows", DEFAULT_ROWS);
+                p.source<RangeTable>("range_provider.numbers",
+                                     dstd::make_unique<RangeTable>(rows));
+                return {};
+            })

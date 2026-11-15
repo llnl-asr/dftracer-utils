@@ -9,9 +9,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Added
 
+- The C++ plugin SDK has a zero-copy frame builder in `dftracer/utils/plugins/plugin/frame.h`. `Column` takes a plugin's buffers by move (`from_int64`, `from_int32`, `from_uint64`, `from_double`, `from_bool`, `from_timestamp`, `from_duration`, `from_strings` from int32 or int64 offsets and bytes, `from_static_*` for memory the plugin owns for the process) and hands them to the engine with `dftu_series_new_flat_borrowed` / `dftu_series_new_string_borrowed`, so no column data is copied; `FrameBuilder::add` and `build()` name the columns and make the frame, a missing row, a null column or a row count that differs from the first is an error, and a failed build frees every column it made. The release callback runs once, when the last column that uses a buffer is gone.
+- One frame owner type for the plugin surface: `OwnedDataFrame` in `dftracer/utils/plugins/plugin/frame.h`, with `get()`, `release()`, `reset()`, `is_null()` and `operator bool`. It replaces both the frame handle of `plugins/result_registry.h` and its own duplicate in the SDK, so a source, a node, a format, a UDF result and a named result all hand back one type. The scaffold templates and the example plugins use the builder in place of raw `dftu_series_new_*`, `dftu_series_free` and `dftu_dataframe_new` calls.
+- Golden test output prints a double in the shortest form that reads back as the same value (`0.1234567`, `55.74255561017869`), in place of six fixed decimals (`91.500000`), so a recorded golden keeps every digit.
+  A whole value prints as an integer, exactly as the engine's JSON output does; every other value takes the shortest round trip, where the JSON printer uses `dstd::fixed_text`.
 - `dftracer_plugin new <kind> <name> [--dir DIR]` writes one standalone CMake project for a `fold`, `udf`, `aggregate`, `format`, `sink` or `node` plugin: `CMakeLists.txt`, `plugin.cpp`, a `README.md` and a golden test that passes on the generated code. `dftracer_plugin check <lib> [--tests DIR] [--record]` loads a built plugin in a child process with the memory debug mode, the exit check and `DFTRACER_UTILS_PLUGIN_CHECK=1` on, prints its name, version, ABI version and every kind list, runs the golden tests of DIR, and reports a load error, each test result with a diff, the child's leaks or the signal that killed it; it exits 0 only when all pass. `--record` rewrites each expected block with what the query gave.
 - Golden tests are plain `*.test` files in the style of sqllogictest: an `input` path relative to the file, a duql `query` block (with `rowsort`, or `error <text>`), `----`, then the expected rows, tab separated, with the column names first. A blank line ends the block, and one file holds several blocks.
 - A plugin may register a file format or a sink under its own bare name, such as `toy` from plugin `toy`, as well as `<plugin>.<name>`. Any other name, another plugin's name and `dftu.` are still refused at load.
+- Add `examples/plugins/csv_reader.cpp`, `examples/plugins/sessionize.cpp` and `examples/plugins/range_provider.cpp`, one example for the format, node and provider kinds, so every kind the SDK offers has one.
+  `csv_reader` reads a CSV file and types each column and hands each chunk's rows straight out of the shared table, `sessionize.gaps` appends a session number per pid, and `range_provider.numbers` builds its table in code.
+  Each returns a projection as exactly the columns it names, in its order, so a repeated name gives the column twice, and `sessionize.gaps` reads `pid` and `ts` through a materialized flat view, accepts a TIMESTAMP or a DURATION, and gives a row with a null pid or ts the session -1 without touching the walk.
+- Run each example plugin that loads on its own through `dftracer_plugin check` in the default `tests` preset, one ctest each under `ctest -R examples/plugins/`, with the golden tests in `examples/plugins/tests/`.
+  Each example must load, pass the golden tests it ships and leave no leaks, so CI builds and runs one plugin of every kind.
 
 - `Plugins::describe()` reports the names each loaded plugin registered, one list per kind (`ops`, `udfs`, `udafs`, `states`, `providers`, `nodes`, `index_extensions`, `file_formats`, `sinks`) plus `has_fold`, and `dftracer_run --describe` prints them. Python: `Plugins.describe()` returns one `PluginInfo` named tuple per plugin, and `dft.scan_file(path)` plans a read through the plugin format that claims the file.
 - Set `DFTRACER_UTILS_PLUGIN_CHECK=1` to make the plugin host validate every frame and column a plugin returns (provider, file format and node cursors, a UDF's `exec`, a UDAF's `finalize`, a plugin op's result and a fold transform's output), failing the run with an error that names the plugin, the callback and the broken rule. Off by default.
@@ -955,6 +964,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 - Fix a select-all frame that listed `args.*` columns of other traces.
   A plan declared the columns of every file in its index root, which holds all traces of one directory.
   It now declares only the columns of its own files.
+
+### Fixed
+
+- Keep a plugin library mapped while a column still borrows its buffer.
+  `dftu_series_new_flat_borrowed`, `dftu_series_new_string_borrowed` and `dftu_series_new_string_view` keep the release callback's library loaded until the last column that uses that buffer is freed, so unloading a plugin set before its frames die no longer calls the callback in unmapped memory (one `dladdr` per borrowed column, not per row).
 
 ## [0.0.14] - 2026-10-10
 

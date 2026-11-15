@@ -7,6 +7,7 @@
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/plugins/plugin/frame.h>
 #include <dftracer/utils/plugins/plugin/map.h>
 #include <dftracer/utils/plugins/plugin/types.h>
 
@@ -24,7 +25,7 @@
  *   dstd::Vector<dstd::String> names() const;
  *   dstd::Result<ScanResult<C>> scan(const ScanView&, const Host&) const;
  * where C is a cursor type with
- *   dstd::Result<dstd::Optional<OwnedFrame>> next(std::int64_t max_rows);
+ *   dstd::Result<dstd::Optional<OwnedDataFrame>> next(std::int64_t max_rows);
  * and optionally, each wired only when present,
  *   bool narrow(ExprView predicate);          // advisory, see dftu_cursor_vt
  * and optionally
@@ -52,62 +53,6 @@
  * in place of next(max_rows), and gets a Host that is good for that call. */
 
 namespace dftracer::utils::plugins {
-
-class OwnedFrame {
-   public:
-    OwnedFrame() = default;
-    explicit OwnedFrame(dftu_dataframe* df) noexcept : df_(df) {}
-    OwnedFrame(OwnedFrame&& o) noexcept : df_(std::exchange(o.df_, nullptr)) {}
-    OwnedFrame& operator=(OwnedFrame&& o) noexcept {
-        if (this != &o) {
-            reset();
-            df_ = std::exchange(o.df_, nullptr);
-        }
-        return *this;
-    }
-    OwnedFrame(const OwnedFrame&) = delete;
-    OwnedFrame& operator=(const OwnedFrame&) = delete;
-    ~OwnedFrame() { reset(); }
-
-    dftu_dataframe* get() const noexcept { return df_; }
-    dftu_dataframe* release() noexcept { return std::exchange(df_, nullptr); }
-    explicit operator bool() const noexcept { return df_ != nullptr; }
-
-   private:
-    void reset() noexcept {
-        if (df_) dftu_dataframe_free(df_);
-        df_ = nullptr;
-    }
-    dftu_dataframe* df_ = nullptr;
-};
-
-class OwnedSeries {
-   public:
-    OwnedSeries() = default;
-    explicit OwnedSeries(dftu_series* s) noexcept : s_(s) {}
-    OwnedSeries(OwnedSeries&& o) noexcept : s_(std::exchange(o.s_, nullptr)) {}
-    OwnedSeries& operator=(OwnedSeries&& o) noexcept {
-        if (this != &o) {
-            reset();
-            s_ = std::exchange(o.s_, nullptr);
-        }
-        return *this;
-    }
-    OwnedSeries(const OwnedSeries&) = delete;
-    OwnedSeries& operator=(const OwnedSeries&) = delete;
-    ~OwnedSeries() { reset(); }
-
-    dftu_series* get() const noexcept { return s_; }
-    dftu_series* release() noexcept { return std::exchange(s_, nullptr); }
-    explicit operator bool() const noexcept { return s_ != nullptr; }
-
-   private:
-    void reset() noexcept {
-        if (s_) dftu_series_free(s_);
-        s_ = nullptr;
-    }
-    dftu_series* s_ = nullptr;
-};
 
 class OwnedExpr;
 
@@ -160,21 +105,21 @@ class ExprView {
 
     struct IsIn {
         std::int32_t column;
-        OwnedSeries values;
+        Column values;
     };
     dstd::Optional<IsIn> as_is_in() const {
         std::int32_t col = -1;
         dftu_series* values = nullptr;
         if (!e_ || !dftu_expr_as_col_is_in(e_, &col, &values))
             return dstd::nullopt;
-        return IsIn{col, OwnedSeries(values)};
+        return IsIn{col, Column(values)};
     }
 
     /// Evaluate over `inputs`; an empty result on a malformed expression.
-    OwnedSeries eval(const dstd::Vector<const dftu_series*>& inputs) const {
+    Column eval(const dstd::Vector<const dftu_series*>& inputs) const {
         if (!e_) return {};
-        return OwnedSeries(dftu_expr_eval(
-            e_, inputs.data(), static_cast<std::int32_t>(inputs.size())));
+        return Column(dftu_expr_eval(e_, inputs.data(),
+                                     static_cast<std::int32_t>(inputs.size())));
     }
 
    private:
@@ -318,7 +263,7 @@ struct CursorVt {
                             dftu_dataframe** out, dftu_task**) noexcept {
         auto* box = static_cast<CursorBox<C>*>(self);
         return to_status(ctx, [&]() -> dftu_status {
-            dstd::Result<dstd::Optional<OwnedFrame>> next = [&] {
+            dstd::Result<dstd::Optional<OwnedDataFrame>> next = [&] {
                 if constexpr (requires(C& c, const Host& h) {
                                   c.next(std::int64_t{}, h);
                               })
@@ -327,7 +272,7 @@ struct CursorVt {
                     return box->cursor->next(max_rows);
             }();
             if (!next.has_value()) return report(ctx, next.error());
-            dstd::Optional<OwnedFrame>& f = *next;
+            dstd::Optional<OwnedDataFrame>& f = *next;
             if (!f) {
                 *out = nullptr;
                 return DFTU_END;

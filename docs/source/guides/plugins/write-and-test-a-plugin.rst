@@ -69,6 +69,19 @@ written: only the line ending is dropped.
 A plugin that carries a fold also runs that fold over every trace input, so the
 golden test of a fold plugin proves that the fold ran.
 
+How a value prints
+------------------
+
+A column header and every cell go in the file as they read, with a tab between
+cells. A double follows the same rule as the engine's JSON output: a whole
+value prints as an integer with no dot (``2``, ``91``), and any other value in
+the shortest form that reads back as the same double (``0.1234567``, ``91.5``,
+``55.74255561017869``). There is no fixed number of decimals, so no value is
+rounded away. Write the value you expect as the engine prints it, and let
+``--record`` fill it in the first time. A string cell keeps its own text, with a
+tab, a newline, a carriage return and a backslash escaped as ``\t``, ``\n``,
+``\r`` and ``\\``, so a row stays on one line. A null prints as ``null``.
+
 ``query rowsort`` sorts the rows before the compare. ``query error <text>``
 passes when the query fails with an error whose message holds ``text``.
 

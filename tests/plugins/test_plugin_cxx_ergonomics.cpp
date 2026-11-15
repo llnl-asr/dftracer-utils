@@ -498,7 +498,7 @@ TEST_CASE("plugin cxx: Host::agg merges a count and an argmax across slices") {
     auto it = named.results().find("by_pid");
     REQUIRE(it != named.results().end());
     REQUIRE(std::holds_alternative<plugins::OwnedDataFrame>(it->second));
-    dftu_dataframe* out = std::get<plugins::OwnedDataFrame>(it->second).handle;
+    dftu_dataframe* out = std::get<plugins::OwnedDataFrame>(it->second).get();
     REQUIRE(out != nullptr);
     REQUIRE(dftu_dataframe_num_rows(out) == 2);
 

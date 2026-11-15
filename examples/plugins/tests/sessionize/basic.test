@@ -1,0 +1,52 @@
+# The examples/plugins/sessionize.cpp node over ../data/events.pfw.gz. The node
+# numbers a run of rows of one pid a session and starts a new one when the gap
+# from the previous `ts` of that pid is more than one second (1000000 us).
+#
+# pid 1: 1000, 1500, 3000000, 3100000 -- the 2998500 us jump opens session 1.
+# pid 2: 2000, 5000000 -- the 4998000 us jump opens session 1.
+input ../data/events.pfw.gz
+query
+select pid, ts | call sessionize.gaps()
+----
+pid	ts	session
+1	1000	0
+1	1500	0
+2	2000	0
+1	3000000	1
+1	3100000	1
+2	5000000	1
+
+# The input columns come through unchanged beside `session`.
+query
+select pid, ts, name | call sessionize.gaps()
+----
+pid	ts	name	session
+1	1000	open	0
+1	1500	read	0
+2	2000	open	0
+1	3000000	open	1
+1	3100000	read	1
+2	5000000	open	1
+
+# A `where` above the call hands the node filtered columns, which are not stored
+# flat: it still reads them as integers. The rows below 1500 are gone, so pid 1
+# starts at 1500 and its 2998500 us jump still opens session 1.
+query
+select pid, ts | where ts > 1000 | call sessionize.gaps()
+----
+pid	ts	session
+1	1500	0
+2	2000	0
+1	3000000	1
+1	3100000	1
+2	5000000	1
+
+# A call hands a node no arguments: the threshold is the node's own constant.
+query error takes no arguments
+select pid | call sessionize.gaps(2000000)
+----
+
+# Without the columns it reads, the node fails and names them.
+query error sessionize.gaps needs the columns pid and ts
+select dur | call sessionize.gaps()
+----

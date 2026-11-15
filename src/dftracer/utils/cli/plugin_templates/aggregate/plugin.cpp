@@ -69,13 +69,11 @@ struct Total {
         dstd::Vector<double> out(states.size());
         for (std::size_t i = 0; i < states.size(); ++i)
             out[i] = states[i] ? states[i]->sum : 0.0;
-        dftu_series* column = dftu_series_new_flat(
-            DFTU_TYPE_FLOAT64, out.data(),
-            static_cast<std::int64_t>(out.size()), nullptr);
+        Column column = Column::from_double(std::move(out));
         if (!column)
             return dstd::Unexpected(
                 make_error(DFTU_E_INVALID, "total could not build a column"));
-        return column;
+        return column.release();
     }
 };
 

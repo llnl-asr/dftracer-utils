@@ -138,7 +138,7 @@ dftu_dataframe* result_frame(plugins::NamedResultRegistry& named,
     if (it == named.results().end()) return nullptr;
     if (!std::holds_alternative<plugins::OwnedDataFrame>(it->second))
         return nullptr;
-    return std::get<plugins::OwnedDataFrame>(it->second).handle;
+    return std::get<plugins::OwnedDataFrame>(it->second).get();
 }
 
 double num_at(const dftu_series* col, std::int64_t r) {
@@ -304,7 +304,7 @@ TEST_SUITE("PluginCxxWrappers") {
         const dstd::Result<plugins::OwnedDataFrame> miss =
             h.agg_result("no_such_accumulator");
         REQUIRE(miss.has_value());
-        CHECK(miss->handle == nullptr);
+        CHECK(miss->get() == nullptr);
         fold.reset();
     }
 }

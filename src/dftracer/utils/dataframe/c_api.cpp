@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dataframe/c_api.h>
+#include <dftracer/utils/dataframe/internal/borrow_release_pin.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -18,7 +19,45 @@ using dftracer::utils::dataframe::writable;
 
 namespace {
 
-void no_release(void*) {}
+using dftracer::utils::dataframe::BorrowRelease;
+using dftracer::utils::dataframe::drop_borrow_release_pin;
+using dftracer::utils::dataframe::pin_borrow_release;
+
+// Everything a deferred `release` needs: the callback, its context and the
+// pin that keeps the library holding that code mapped until it has run. The
+// pin is dropped after the call, never before, because dropping it can unmap
+// the code.
+struct BorrowOwner {
+    BorrowRelease release = nullptr;
+    void* ctx = nullptr;
+    void* pin = nullptr;
+};
+
+void release_borrowed(void* owner) noexcept {
+    dftracer::utils::dstd::UniquePtr<BorrowOwner> hold(
+        static_cast<BorrowOwner*>(owner));
+    if (hold->release != nullptr) hold->release(hold->ctx);
+    drop_borrow_release_pin(hold->pin);
+}
+
+dftracer::utils::dstd::UniquePtr<BorrowOwner> make_borrow_owner(
+    BorrowRelease release, void* ctx) {
+    dftracer::utils::dstd::UniquePtr<BorrowOwner> hold =
+        dftracer::utils::dstd::make_unique<BorrowOwner>();
+    hold->release = release;
+    hold->ctx = ctx;
+    hold->pin = pin_borrow_release(release);
+    return hold;
+}
+
+// One owner shared by the buffers of a borrowed column, so `release` runs once
+// when the last of them dies rather than once per buffer.
+dftracer::utils::dstd::SharedPtr<void> borrow_owner(BorrowRelease release,
+                                                    void* ctx) {
+    BorrowOwner* const held = make_borrow_owner(release, ctx).release();
+    return dftracer::utils::dstd::SharedPtr<void>(
+        nullptr, [held](void*) { release_borrowed(held); });
+}
 
 constexpr std::int64_t VIEW_BYTES = 16;
 constexpr std::int32_t VIEW_INLINE_BYTES = 12;
@@ -84,17 +123,12 @@ dftu_series* dftu_series_new_flat_borrowed(dftu_dtype type, const void* data,
     auto* base = static_cast<std::uint8_t*>(const_cast<void*>(data));
     if (validity == nullptr) {
         col->data = BufferView(dftracer::utils::memory::Block::borrow(
-            base, bytes, release != nullptr ? release : no_release,
-            release_ctx));
+            base, bytes, release_borrowed,
+            make_borrow_owner(release, release_ctx).release()));
         return col;
     }
-    // One owner shared by the value and validity borrows, so `release` runs
-    // once when the last of them dies rather than once per buffer.
-    dftracer::utils::dstd::SharedPtr<void> owner(nullptr,
-                                                 [release, release_ctx](void*) {
-                                                     if (release != nullptr)
-                                                         release(release_ctx);
-                                                 });
+    dftracer::utils::dstd::SharedPtr<void> owner =
+        borrow_owner(release, release_ctx);
     col->data = borrow_buffer(base, bytes, owner);
     col->validity = borrow_buffer(
         validity, static_cast<std::size_t>(validity_bytes(n)), owner);
@@ -108,11 +142,7 @@ dftu_series* dftu_series_new_string_view(
     void (*release)(void* ctx), void* ctx) {
     // Runs `release` once when the last column or buffer using it dies, and
     // on every early return below.
-    dftracer::utils::dstd::SharedPtr<void> owner(nullptr,
-                                                 [release, ctx](void*) {
-                                                     if (release != nullptr)
-                                                         release(ctx);
-                                                 });
+    dftracer::utils::dstd::SharedPtr<void> owner = borrow_owner(release, ctx);
     TypeId t = static_cast<TypeId>(type);
     if (t != TypeId::String && t != TypeId::Binary) return nullptr;
     if (n < 0 || n_buffers < 0) return nullptr;
@@ -200,11 +230,7 @@ dftu_series* dftu_series_new_string_borrowed(
     int64_t n, const uint8_t* validity, void (*release)(void* ctx), void* ctx) {
     // Runs `release` once when the last column or buffer using it dies, and on
     // every early return below.
-    dftracer::utils::dstd::SharedPtr<void> owner(nullptr,
-                                                 [release, ctx](void*) {
-                                                     if (release != nullptr)
-                                                         release(ctx);
-                                                 });
+    dftracer::utils::dstd::SharedPtr<void> owner = borrow_owner(release, ctx);
     TypeId t = static_cast<TypeId>(type);
     const bool wide = t == TypeId::LargeString || t == TypeId::LargeBinary;
     if (!wide && t != TypeId::String && t != TypeId::Binary) return nullptr;

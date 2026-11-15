@@ -48,14 +48,19 @@ std::atomic<int> g_gate_ok{0};
 const char* ROWS_NAMES[] = {"id", "val"};
 const char* FAILING_NAMES[] = {"x"};
 
+using dftracer::utils::plugins::Column;
+using dftracer::utils::plugins::FrameBuilder;
+
 ::dftu_dataframe* make_rows_frame(const int64_t* ids, const int64_t* vals,
                                   int64_t n) {
-    ::dftu_series* id_col =
-        ::dftu_series_new_flat(DFTU_TYPE_INT64, ids, n, nullptr);
-    ::dftu_series* val_col =
-        ::dftu_series_new_flat(DFTU_TYPE_INT64, vals, n, nullptr);
-    ::dftu_series* cols[2] = {id_col, val_col};
-    return ::dftu_dataframe_new(ROWS_NAMES, cols, 2);
+    FrameBuilder builder;
+    // Copied: the caller's buffers do not outlive the frame it hands out.
+    builder.add(ROWS_NAMES[0],
+                Column::from_int64(dstd::Vector<int64_t>(ids, ids + n)));
+    builder.add(ROWS_NAMES[1],
+                Column::from_int64(dstd::Vector<int64_t>(vals, vals + n)));
+    auto built = builder.build();
+    return built ? built->release() : nullptr;
 }
 
 /* ---- provider_fixture.rows: two frames, then EOS ---- */
@@ -182,16 +187,16 @@ class SdkRange {
 
     class Cursor {
        public:
-        explicit Cursor(dftracer::utils::plugins::OwnedFrame f)
+        explicit Cursor(dftracer::utils::plugins::OwnedDataFrame f)
             : f_(std::move(f)) {}
-        dstd::Result<dstd::Optional<dftracer::utils::plugins::OwnedFrame>> next(
-            int64_t) {
+        dstd::Result<dstd::Optional<dftracer::utils::plugins::OwnedDataFrame>>
+        next(int64_t) {
             if (!f_) return dstd::nullopt;
             return std::move(f_);
         }
 
        private:
-        dftracer::utils::plugins::OwnedFrame f_;
+        dftracer::utils::plugins::OwnedDataFrame f_;
     };
 
     dstd::Result<dftracer::utils::plugins::ScanResult<Cursor>> scan(
@@ -203,7 +208,7 @@ class SdkRange {
             vals.push_back(i * 10);
         }
         return dftracer::utils::plugins::ScanResult<Cursor>{
-            dstd::make_unique<Cursor>(dftracer::utils::plugins::OwnedFrame(
+            dstd::make_unique<Cursor>(dftracer::utils::plugins::OwnedDataFrame(
                 make_rows_frame(ids.data(), vals.data(),
                                 static_cast<int64_t>(ids.size())))),
             {}};
@@ -237,25 +242,26 @@ class DoubleVal {
        public:
         explicit Cursor(dftracer::utils::plugins::InputCursor in)
             : in_(std::move(in)) {}
-        dstd::Result<dstd::Optional<dftracer::utils::plugins::OwnedFrame>> next(
-            int64_t max_rows) {
+        dstd::Result<dstd::Optional<dftracer::utils::plugins::OwnedDataFrame>>
+        next(int64_t max_rows) {
             DFTRACER_UTILS_TRY(
-                dstd::Optional<dftracer::utils::plugins::OwnedFrame> f,
+                dstd::Optional<dftracer::utils::plugins::OwnedDataFrame> f,
                 in_.next(max_rows));
             if (!f) return dstd::nullopt;
-            ::dftu_series* id = ::dftu_dataframe_column(f->get(), "id");
-            ::dftu_series* val = ::dftu_dataframe_column(f->get(), "val");
-            const int64_t n = ::dftu_series_length(val);
+            Column id(::dftu_dataframe_column(f->get(), "id"));
+            Column val(::dftu_dataframe_column(f->get(), "val"));
+            const int64_t n = val.size();
             const auto* v =
-                static_cast<const int64_t*>(::dftu_series_data(val));
+                static_cast<const int64_t*>(::dftu_series_data(val.get()));
             dstd::Vector<int64_t> doubled(v, v + n);
             for (int64_t& x : doubled) x *= 2;
-            ::dftu_series* cols[] = {
-                id, ::dftu_series_new_flat(DFTU_TYPE_INT64, doubled.data(), n,
-                                           nullptr)};
-            ::dftu_series_free(val);
-            return dftracer::utils::plugins::OwnedFrame(
-                ::dftu_dataframe_new(ROWS_NAMES, cols, 2));
+            FrameBuilder builder;
+            builder.add(ROWS_NAMES[0], std::move(id));
+            builder.add(ROWS_NAMES[1], Column::from_int64(std::move(doubled)));
+            auto built = builder.build();
+            if (!built) return std::move(built).error();
+            return dstd::Optional<dftracer::utils::plugins::OwnedDataFrame>(
+                std::move(*built));
         }
 
        private:

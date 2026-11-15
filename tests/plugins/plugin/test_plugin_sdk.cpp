@@ -74,11 +74,13 @@ class RangeSource {
 
     class Cursor {
        public:
-        Cursor(plugins::OwnedFrame f, bool fail, dstd::SharedPtr<Counters> c)
+        Cursor(plugins::OwnedDataFrame f, bool fail,
+               dstd::SharedPtr<Counters> c)
             : f_(std::move(f)), fail_(fail), c_(std::move(c)) {}
         Cursor(const Cursor&) = delete;
         ~Cursor() { ++c_->cursors_destroyed; }
-        dstd::Result<dstd::Optional<plugins::OwnedFrame>> next(std::int64_t) {
+        dstd::Result<dstd::Optional<plugins::OwnedDataFrame>> next(
+            std::int64_t) {
             if (fail_)
                 return plugins::make_error(DFTU_E_INTERNAL,
                                            "range cursor broke");
@@ -87,7 +89,7 @@ class RangeSource {
         }
 
        private:
-        plugins::OwnedFrame f_;
+        plugins::OwnedDataFrame f_;
         bool fail_;
         dstd::SharedPtr<Counters> c_;
     };
@@ -118,7 +120,7 @@ class RangeSource {
             cols.push_back(
                 dftu_series_new_flat(DFTU_TYPE_INT64, vals.data(), n, nullptr));
         }
-        plugins::OwnedFrame f(dftu_dataframe_new(
+        plugins::OwnedDataFrame f(dftu_dataframe_new(
             names.data(), cols.data(), static_cast<std::int32_t>(cols.size())));
         return plugins::ScanResult<Cursor>{
             dstd::make_unique<Cursor>(std::move(f), fail_, c_), {}};
@@ -292,11 +294,11 @@ class DoubleVal {
         Cursor(dstd::Optional<plugins::InputCursor> in,
                plugins::Reservation reservation)
             : in_(std::move(in)), reservation_(std::move(reservation)) {}
-        dstd::Result<dstd::Optional<plugins::OwnedFrame>> next(
+        dstd::Result<dstd::Optional<plugins::OwnedDataFrame>> next(
             std::int64_t max_rows, const plugins::Host& host) {
             DFTRACER_UTILS_TRY_VOID(reservation_.try_grow(host, 64));
             if (!in_) return dstd::nullopt;
-            DFTRACER_UTILS_TRY(dstd::Optional<plugins::OwnedFrame> f,
+            DFTRACER_UTILS_TRY(dstd::Optional<plugins::OwnedDataFrame> f,
                                in_->next(max_rows));
             if (!f) return dstd::nullopt;
             dftu_series* id = dftu_dataframe_column(f->get(), "id");
@@ -311,7 +313,7 @@ class DoubleVal {
                 id, dftu_series_new_flat(DFTU_TYPE_INT64, doubled.data(), n,
                                          nullptr)};
             dftu_series_free(val);
-            return plugins::OwnedFrame(dftu_dataframe_new(names, cols, 2));
+            return plugins::OwnedDataFrame(dftu_dataframe_new(names, cols, 2));
         }
 
        private:
@@ -442,7 +444,7 @@ TEST_SUITE("plugin sdk batch strings") {
 
         const char* col_names[] = {"cat", "name"};
         dftu_series* cols[] = {cat.release(), name.release()};
-        plugins::OwnedFrame f(dftu_dataframe_new(col_names, cols, 2));
+        plugins::OwnedDataFrame f(dftu_dataframe_new(col_names, cols, 2));
         REQUIRE(f.get() != nullptr);
 
         const plugins::Batch batch(f.get());
@@ -486,7 +488,7 @@ TEST_SUITE("plugin sdk batch strings") {
 
         const char* col_names[] = {"name"};
         dftu_series* cols[] = {name};
-        plugins::OwnedFrame f(dftu_dataframe_new(col_names, cols, 1));
+        plugins::OwnedDataFrame f(dftu_dataframe_new(col_names, cols, 1));
         REQUIRE(f.get() != nullptr);
 
         const plugins::Batch batch(f.get());

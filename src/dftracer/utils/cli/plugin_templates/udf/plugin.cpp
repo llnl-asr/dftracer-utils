@@ -44,12 +44,11 @@ struct Doubled {
                 value = static_cast<const double*>(data)[r];
             out[static_cast<std::size_t>(r)] = 2 * value;
         }
-        dftu_series* column =
-            dftu_series_new_flat(DFTU_TYPE_FLOAT64, out.data(), rows, nullptr);
+        Column column = Column::from_double(std::move(out));
         if (!column)
             return dstd::Unexpected(
                 make_error(DFTU_E_INVALID, "doubled could not build a column"));
-        return column;
+        return column.release();
     }
 };
 

@@ -211,7 +211,7 @@ dftu_dataframe* result_frame(plugins::NamedResultRegistry& named,
     if (it == named.results().end()) return nullptr;
     if (!std::holds_alternative<plugins::OwnedDataFrame>(it->second))
         return nullptr;
-    return std::get<plugins::OwnedDataFrame>(it->second).handle;
+    return std::get<plugins::OwnedDataFrame>(it->second).get();
 }
 
 // Group rows come back in accumulate order, not key order, so every assertion
@@ -370,9 +370,9 @@ dftu_status read_other_agg(dftu_ctx* ctx, void*, const dftu_plugin_host* host,
     const dstd::Result<plugins::OwnedDataFrame> other =
         h.agg_result("whole_scan");
     if (!other.has_value()) return plugins::status_of(other.error());
-    if (other->handle) {
-        g_seen_rows = dftu_dataframe_num_rows(other->handle);
-        if (dftu_series* s = dftu_dataframe_column(other->handle, "sum_dur")) {
+    if (other->get()) {
+        g_seen_rows = dftu_dataframe_num_rows(other->get());
+        if (dftu_series* s = dftu_dataframe_column(other->get(), "sum_dur")) {
             g_seen_sum = num_at(s, 0);
             dftu_series_free(s);
         }
@@ -380,7 +380,7 @@ dftu_status read_other_agg(dftu_ctx* ctx, void*, const dftu_plugin_host* host,
     const dstd::Result<plugins::OwnedDataFrame> unknown =
         h.agg_result("no_such_accumulator");
     if (!unknown.has_value()) return plugins::status_of(unknown.error());
-    g_unknown_is_null = unknown->handle == nullptr;
+    g_unknown_is_null = unknown->get() == nullptr;
     return DFTU_OK;
 }
 
@@ -411,7 +411,7 @@ TEST_CASE("DFTU_SVC_AGG: cross-batch grouped aggregation, engine-backed") {
     auto it = named.results().find("by_cat");
     REQUIRE(it != named.results().end());
     REQUIRE(std::holds_alternative<plugins::OwnedDataFrame>(it->second));
-    dftu_dataframe* out = std::get<plugins::OwnedDataFrame>(it->second).handle;
+    dftu_dataframe* out = std::get<plugins::OwnedDataFrame>(it->second).get();
     REQUIRE(out != nullptr);
     const std::int64_t n = dftu_dataframe_num_rows(out);
     REQUIRE(n == 2);
@@ -551,7 +551,7 @@ TEST_CASE(
     auto it = named.results().find("by_cat_factory");
     REQUIRE(it != named.results().end());
     REQUIRE(std::holds_alternative<plugins::OwnedDataFrame>(it->second));
-    dftu_dataframe* out = std::get<plugins::OwnedDataFrame>(it->second).handle;
+    dftu_dataframe* out = std::get<plugins::OwnedDataFrame>(it->second).get();
     REQUIRE(out != nullptr);
     const std::int64_t n = dftu_dataframe_num_rows(out);
     REQUIRE(n == 2);

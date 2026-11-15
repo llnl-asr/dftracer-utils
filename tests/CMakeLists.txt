@@ -959,6 +959,56 @@ foreach(test_file ${TEST_BINARY_SOURCES})
   endif()
 
 endforeach()
+
+# +++++++++++++++++++++++++++++++++++++++++
+# Example plugins: `dftracer_plugin check` on each one examples/plugins/
+# builds, so every kind the SDK offers - fold, udf, aggregate, format, sink,
+# node, provider - is built and run by the default `tests` preset. A plugin
+# whose golden test folder exists under examples/plugins/tests/<name> is
+# checked against it; one without still has to load, print the kinds it
+# provides and leave no leaks.
+# +++++++++++++++++++++++++++++++++++++++++
+if(TARGET dftracer_plugin)
+  # One entry per example plugin that loads on its own. The two consumers,
+  # perbatch_consumer and dur_stats_consumer, are left out: each refuses to load
+  # without the producer that provides its port, and `check` takes one library.
+  set(EXAMPLE_PLUGINS
+      duration_report_plugin # fold, writes a report file
+      duration_histogram_plugin # fold, emits named results
+      event_counter_plugin # fold in C
+      query_filter_plugin # fold with its own filter dir
+      process_counts_plugin # fold in C over the process tree
+      process_file_edges_plugin # fold in C over file edges
+      process_collections_plugin # fold in C over collections
+      process_pid_argstats_plugin # fold in C over per-pid arguments
+      process_topk_plugin # fold in C over the top events
+      process_regr_stats_plugin # fold in C over regression statistics
+      perbatch_producer_plugin # fold in C, provides a port
+      dur_stats_producer_plugin # fold in C, provides a stats port
+      duration_udfs_plugin # udf
+      stats_udafs_plugin # aggregate
+      csv_sink_plugin # sink
+      csv_reader_plugin # format
+      sessionize_plugin # node
+      range_provider_plugin) # provider
+  foreach(plugin IN LISTS EXAMPLE_PLUGINS)
+    if(NOT TARGET ${plugin})
+      continue()
+    endif()
+    string(REPLACE "_plugin" "" example "${plugin}")
+    set(golden_args "")
+    set(golden_dir "${CMAKE_SOURCE_DIR}/examples/plugins/tests/${example}")
+    if(EXISTS "${golden_dir}")
+      list(APPEND golden_args --tests "${golden_dir}")
+    endif()
+    add_test(
+      NAME examples/plugins/${example}
+      COMMAND $<TARGET_FILE:dftracer_plugin> check $<TARGET_FILE:${plugin}>
+              ${golden_args})
+    set_tests_properties(examples/plugins/${example} PROPERTIES TIMEOUT 300)
+  endforeach()
+endif()
+
 # +++++++++++++++++++++++++++++++++++++++++
 # Python Tests (SKBUILD only)
 # +++++++++++++++++++++++++++++++++++++++++

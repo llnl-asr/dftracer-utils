@@ -184,7 +184,7 @@ PyObject* result_to_py(NamedResult& result) {
         // Adopt the handle's columns into a native DataFrame (shared buffers,
         // zero-copy) and hand it back as a _DataFrame; the OwnedDataFrame frees
         // the emptied handle.
-        dftu_dataframe* h = frame->handle;
+        dftu_dataframe* h = frame->get();
         dataframe::DataFrame df;
         std::int32_t n = dftu_dataframe_num_columns(h);
         df.names.reserve(static_cast<std::size_t>(n));

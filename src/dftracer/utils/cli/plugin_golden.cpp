@@ -12,6 +12,7 @@
 #include <dftracer/utils/trace/views/view.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 
 using namespace dftracer::utils;
@@ -131,12 +132,36 @@ dstd::Result<dstd::Vector<dstd::String>> select_stage(dstd::StringView query) {
     return names;
 }
 
+/// A double as one tab-separated field. A whole value prints as an integer,
+/// exactly as the JSON cell printer prints a float cell; every other value
+/// prints in the shortest form that reads back as the same double ("91.5",
+/// "0.1234567"), where the JSON printer falls back to dstd::fixed_text and
+/// would print "0.123457". A golden must survive a round trip through its own
+/// text, and six fixed decimals round a value and lose it.
+dstd::String double_text(double v) {
+    constexpr double INT64_LOW = -9223372036854775808.0;
+    constexpr double INT64_HIGH = 9223372036854775808.0;
+    if (v > INT64_LOW && v < INT64_HIGH && v == std::trunc(v)) {
+        return dstd::int_text(static_cast<std::int64_t>(v));
+    }
+    return dstd::double_text(v);
+}
+
 /// One cell as one tab-separated field. A string keeps its own text, with a
 /// tab, a newline and a backslash escaped so a row stays on one line; every
 /// other type prints as its JSON value (numbers bare, null as `null`).
 dstd::String cell_text(const dataframe::Series& column, std::int64_t row) {
     dstd::String out;
     switch (column.type()) {
+        case dataframe::TypeId::Float16:
+        case dataframe::TypeId::Float32:
+        case dataframe::TypeId::Float64:
+            if (column.is_null(row)) {
+                out = "null";
+                break;
+            }
+            out = double_text(dataframe::read_f64(column, row));
+            break;
         case dataframe::TypeId::String:
         case dataframe::TypeId::Binary:
         case dataframe::TypeId::LargeString:

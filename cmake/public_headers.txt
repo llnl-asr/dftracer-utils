@@ -187,6 +187,7 @@ dftracer/utils/plugins/plugin/async.h
 dftracer/utils/plugins/plugin/file_format.h
 dftracer/utils/plugins/plugin/fileio.h
 dftracer/utils/plugins/plugin/format.h
+dftracer/utils/plugins/plugin/frame.h
 dftracer/utils/plugins/plugin/fs.h
 dftracer/utils/plugins/plugin/job.h
 dftracer/utils/plugins/plugin/map.h

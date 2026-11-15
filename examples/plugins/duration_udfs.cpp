@@ -74,10 +74,9 @@ struct ToMs {
             out[static_cast<std::size_t>(r)] =
                 number_at(batch.arg(0), type, r) / 1000.0;
         }
-        dftu_series* column =
-            dftu_series_new_flat(DFTU_TYPE_FLOAT64, out.data(), rows, nullptr);
+        Column column = Column::from_double(std::move(out));
         if (!column) return refuse("to_ms could not build its column");
-        return column;
+        return column.release();
     }
 };
 
@@ -111,10 +110,9 @@ struct IsSlow {
                 bits[static_cast<std::size_t>(r >> 3)] |=
                     static_cast<std::uint8_t>(1u << (r & 7));
         }
-        dftu_series* column =
-            dftu_series_new_flat(DFTU_TYPE_BOOL, bits.data(), rows, nullptr);
+        Column column = Column::from_bool(std::move(bits), rows);
         if (!column) return refuse("is_slow could not build its column");
-        return column;
+        return column.release();
     }
 };
 

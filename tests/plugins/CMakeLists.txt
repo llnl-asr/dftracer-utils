@@ -42,7 +42,11 @@ set(PLUGINS_TEST_SOURCES
     test_plugin_node_duql.cpp
     test_provider_pushdown.cpp
     test_plugin_library_lifetime.cpp
+    test_plugin_borrowed_column.cpp
+    test_example_sessionize.cpp
+    test_example_csv_reader.cpp
     test_provider_schema_types.cpp
+    test_example_range_provider.cpp
     test_lazyframe_plugin_node.cpp
     test_abi_task.cpp
     test_source_hooks_vtable.cpp
@@ -50,6 +54,7 @@ set(PLUGINS_TEST_SOURCES
     host/test_host_ops.cpp
     host/test_host_ops_autoregister.cpp
     plugin/test_plugin_sdk.cpp
+    plugin/test_plugin_frame.cpp
 )
 
 foreach(test_file ${PLUGINS_TEST_SOURCES})
@@ -191,7 +196,8 @@ endforeach()
 
 foreach(cxx_plugin builder_plugin config_keys_plugin reads_projection_plugin
                   provider_fixture_plugin toy_sink_plugin toy_node_plugin
-                  broken_frame_plugin)
+                  broken_frame_plugin borrowed_frame_plugin
+                  sessionize_input_plugin)
   add_library(${cxx_plugin} MODULE ${cxx_plugin}.cpp)
   target_set_warnings(${cxx_plugin})
   set_target_properties(
@@ -218,6 +224,7 @@ foreach(df_plugin toy_format_plugin toy_format_tie_plugin toy_sink_plugin
                   udaf_plugin
                   config_keys_plugin reads_projection_plugin
                   provider_fixture_plugin broken_frame_plugin
+                  borrowed_frame_plugin sessionize_input_plugin
                   leaky_plugin crash_plugin)
   if(TARGET dftracer_utils_dataframe::shared)
     target_link_libraries(${df_plugin} PRIVATE dftracer_utils_dataframe::shared)
@@ -291,6 +298,14 @@ if(TARGET plugins_test_plugin_frame_check_off)
     plugins_test_plugin_frame_check_off PRIVATE
     BROKEN_FRAME_PLUGIN_PATH="$<TARGET_FILE:broken_frame_plugin>")
   add_dependencies(plugins_test_plugin_frame_check_off broken_frame_plugin)
+endif()
+
+if(TARGET plugins_test_example_range_provider)
+  target_compile_definitions(
+    plugins_test_example_range_provider
+    PRIVATE
+      RANGE_PROVIDER_PLUGIN_PATH="$<TARGET_FILE:range_provider_plugin>")
+  add_dependencies(plugins_test_example_range_provider range_provider_plugin)
 endif()
 
 if(TARGET plugins_test_plugin_udf)
@@ -385,6 +400,32 @@ if(TARGET plugins_test_plugin_library_lifetime)
     plugins_test_plugin_library_lifetime PRIVATE
     LIFETIME_PLUGIN_PATH="$<TARGET_FILE:lifetime_plugin>")
   add_dependencies(plugins_test_plugin_library_lifetime lifetime_plugin)
+endif()
+
+if(TARGET plugins_test_plugin_borrowed_column)
+  target_compile_definitions(
+    plugins_test_plugin_borrowed_column PRIVATE
+    BORROWED_FRAME_PLUGIN_PATH="$<TARGET_FILE:borrowed_frame_plugin>")
+  add_dependencies(plugins_test_plugin_borrowed_column borrowed_frame_plugin)
+endif()
+
+if(TARGET plugins_test_example_csv_reader AND TARGET csv_reader_plugin)
+  target_compile_definitions(
+    plugins_test_example_csv_reader
+    PRIVATE
+    CSV_READER_PLUGIN_PATH="$<TARGET_FILE:csv_reader_plugin>"
+    CSV_READER_CHUNKS_CSV="${CMAKE_SOURCE_DIR}/examples/plugins/tests/csv_reader/data/chunks.csv"
+  )
+  add_dependencies(plugins_test_example_csv_reader csv_reader_plugin)
+endif()
+
+if(TARGET plugins_test_example_sessionize AND TARGET sessionize_plugin)
+  target_compile_definitions(
+    plugins_test_example_sessionize PRIVATE
+    SESSIONIZE_PLUGIN_PATH="$<TARGET_FILE:sessionize_plugin>"
+    SESSIONIZE_INPUT_PLUGIN_PATH="$<TARGET_FILE:sessionize_input_plugin>")
+  add_dependencies(plugins_test_example_sessionize sessionize_plugin
+                   sessionize_input_plugin)
 endif()
 
 if(TARGET plugins_test_plugin_file_formats)

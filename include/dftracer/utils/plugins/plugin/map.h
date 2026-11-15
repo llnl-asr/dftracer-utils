@@ -378,7 +378,7 @@ class Host {
                                          OwnedDataFrame&& df) const {
         dftu_result_value v{};
         v.kind = DFTU_RESULT_KIND_FRAME;
-        v.u.frame = df.handle;
+        v.u.frame = df.get();
         DFTRACER_UTILS_TRY_VOID(emit(name, &v));
         df.release();
         return {};
@@ -505,7 +505,7 @@ class Agg {
         return host_.agg_accumulate(a_, df);
     }
     dstd::Result<void> accumulate(const OwnedDataFrame& df) const {
-        return accumulate(df.handle);
+        return accumulate(df.get());
     }
 
     /// Borrowed handle; the host retains ownership.

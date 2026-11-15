@@ -16,6 +16,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <dftracer/utils/plugins/abi_context.h>
+#include <dftracer/utils/plugins/host/borrow_release_pin.h>
 #include <dftracer/utils/plugins/host/build_host.h>
 #include <dftracer/utils/plugins/host/config.h>
 #include <dftracer/utils/plugins/host/fold_adapter.h>
@@ -340,6 +341,12 @@ dstd::Result<Plugins::Impl::Loaded> load_plugin(const dstd::String& path,
             static_cast<std::uint32_t>(DFTRACER_UTILS_PLUGIN_ABI_VERSION),
             static_cast<std::uint64_t>(DFTRACER_UTILS_PLUGIN_ABI_HASH));
     }
+
+    // A column that borrows a buffer of this plugin keeps its release callback
+    // mapped until the column dies, which is often after this set is gone.
+    Dl_info image{};
+    if (dladdr(reinterpret_cast<const void*>(info_fn), &image) != 0)
+        track_plugin_library(image.dli_fbase, library);
 
     auto factory = reinterpret_cast<dftu_plugin_factory>(
         dlsym(handle, DFTRACER_UTILS_PLUGIN_FACTORY_SYMBOL));

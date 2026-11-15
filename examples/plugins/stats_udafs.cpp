@@ -58,11 +58,9 @@ dstd::Result<dftu_series*> float_column(std::uint64_t rows, Make value) {
     dstd::Vector<double> out(static_cast<std::size_t>(rows));
     for (std::uint64_t i = 0; i < rows; ++i)
         out[static_cast<std::size_t>(i)] = value(i);
-    dftu_series* column =
-        dftu_series_new_flat(DFTU_TYPE_FLOAT64, out.data(),
-                             static_cast<std::int64_t>(rows), nullptr);
+    Column column = Column::from_double(std::move(out));
     if (!column) return refuse("could not build the result column");
-    return column;
+    return column.release();
 }
 
 }  // namespace

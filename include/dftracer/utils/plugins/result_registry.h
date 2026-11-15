@@ -10,6 +10,7 @@
 #include <dftracer/utils/dstd/variant.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi/ops.h>
+#include <dftracer/utils/plugins/plugin/frame.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -20,41 +21,6 @@
 // Host-side named result channel backing dft.ext.result. Policy-free: it moves
 // opaque bytes, a frame or a lazy plan and never interprets any of them.
 namespace dftracer::utils::plugins {
-
-/// A native columnar result carried across the ABI as a dftu_dataframe handle
-/// (the dataframe engine's own boundary type), freed via the dataframe C ABI.
-/// Lets an engine-backed result (the aggregation accumulator) cross as our own
-/// @ref dftracer::utils::dataframe::DataFrame "DataFrame" with no Arrow
-/// round-trip.
-struct OwnedDataFrame {
-    dftu_dataframe* handle = nullptr;
-    OwnedDataFrame() = default;
-    explicit OwnedDataFrame(dftu_dataframe* h) noexcept : handle(h) {}
-    OwnedDataFrame(OwnedDataFrame&& o) noexcept : handle(o.handle) {
-        o.handle = nullptr;
-    }
-    OwnedDataFrame& operator=(OwnedDataFrame&& o) noexcept {
-        if (this != &o) {
-            if (handle) dftu_dataframe_free(handle);
-            handle = o.handle;
-            o.handle = nullptr;
-        }
-        return *this;
-    }
-    OwnedDataFrame(const OwnedDataFrame&) = delete;
-    OwnedDataFrame& operator=(const OwnedDataFrame&) = delete;
-    ~OwnedDataFrame() {
-        if (handle) dftu_dataframe_free(handle);
-    }
-
-    /// Releases ownership to the caller, who must free it (or hand it to
-    /// something that will); the destructor no longer will.
-    dftu_dataframe* release() noexcept {
-        dftu_dataframe* h = handle;
-        handle = nullptr;
-        return h;
-    }
-};
 
 /// A deferred columnar result carried across the ABI as a dftu_lazyframe
 /// handle, freed via the dataframe C ABI. Lets a plugin return a lazy plan the

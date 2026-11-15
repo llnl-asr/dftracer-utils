@@ -95,6 +95,16 @@ def test_group_by_agg_matches_the_reference_with_nulls_and_several_groups():
     del plugins
 
 
+def test_a_result_stays_readable_after_its_plugin_is_unloaded():
+    plugins = Plugins([_PLUGIN])
+    out = _df().group_by("k").agg(dft.udaf["geomean"](col("v")))
+    del plugins
+    index, table = _by_key(out)
+    for k, values in _groups().items():
+        assert table["geomean_v"][index[k]] == pytest.approx(_geomean(values))
+    del out
+
+
 def test_alias_and_named_keyword_name_the_output():
     plugins = Plugins([_PLUGIN])
     p50 = dft.udaf["p50"]

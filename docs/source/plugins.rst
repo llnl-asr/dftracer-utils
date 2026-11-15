@@ -1478,7 +1478,7 @@ is optional, and only the ones it defines are wired up. Requests arrive as
 views (``ExprView`` with ``as_compare`` / ``as_logical`` / ``as_not`` /
 ``as_str_pred`` / ``as_is_in``, ``SortView``, ``AggregationView``,
 ``JoinView<S>`` with the other side as ``S``), and results are owned C++
-values (``OwnedFrame``, ``Applied<S>``). ``scan``, ``next`` and the planning
+values (``OwnedDataFrame``, ``Applied<S>``). ``scan``, ``next`` and the planning
 hooks return a ``dstd::Result``, and an error fails the call with its status
 and message. A failed cursor fails the scan with it; for a failed planning hook
 the host logs the message and applies the op itself. ``scan`` also receives the
@@ -1494,8 +1494,8 @@ in place of ``(std::int64_t)`` gets a ``Host`` that is good for that call.
     public:
        dstd::Vector<dstd::String> names() const { return {"id"}; }
        struct Cursor {
-           pl::OwnedFrame frame;
-           dstd::Optional<pl::OwnedFrame> next(std::int64_t) {
+           pl::OwnedDataFrame frame;
+           dstd::Optional<pl::OwnedDataFrame> next(std::int64_t) {
                if (!frame) return dstd::nullopt;
                return std::move(frame);
            }
@@ -1514,6 +1514,47 @@ in place of ``(std::int64_t)`` gets a ``Host`` that is good for that call.
    return pl::plugin(ctx, h, config)
        .source<Range>("me.range", dstd::make_unique<Range>(0, 1000))
        .build(out);
+
+**Building a frame.** ``plugins/plugin/frame.h`` makes the frames and columns
+that a plugin gives away, and copies no data. ``Column`` takes the plugin's
+buffers by move and borrows them through ``dftu_series_new_flat_borrowed`` or
+``dftu_series_new_string_borrowed`` (see the borrowed-column section above):
+``from_int64``, ``from_int32``, ``from_uint64``, ``from_double``,
+``from_bool`` (bit-packed, one bit per row), ``from_timestamp`` and
+``from_duration`` (the ABI carries no time unit, so both read as micro),
+``from_strings`` from offsets and bytes, and ``from_static_*`` for memory that
+the plugin owns for the whole process, which it neither copies nor frees.
+``FrameBuilder`` names each column and builds the frame with
+``dftu_dataframe_new``. A null column, or a column whose row count differs from
+the first, is an error, and the builder frees everything it made.
+
+``OwnedDataFrame`` is the one owner of a frame in the plugin surface: a
+source, a node, a format, a UDF result and a named result all hand it back.
+``get()`` borrows the handle, ``release()`` gives it away, and the destructor
+frees it with ``dftu_dataframe_free``. It owns the columns it was built from,
+so the buffer a ``Column`` borrowed is freed exactly once: when the last column
+that uses it is gone - the base column, and any column that a filter, slice,
+take or share made from it.
+
+.. code-block:: cpp
+
+   dstd::Vector<std::int64_t> ids(1024, 0);
+   dstd::Vector<std::int32_t> offsets{0, 3, 7};
+   dstd::String bytes("abcd");
+   pl::FrameBuilder builder;
+   builder.add("id", pl::Column::from_int64(std::move(ids)));
+   builder.add("name",
+               pl::Column::from_strings(std::move(offsets), std::move(bytes)));
+   dstd::Result<pl::OwnedDataFrame> frame = builder.build();
+   if (!frame) return std::move(frame).error();
+   return std::move(*frame);  // the host frees the frame and its buffers
+
+``examples/plugins/range_provider.cpp`` is the smallest complete provider:
+it registers ``range_provider.numbers``, a table of ``rows`` rows (its config
+key, 10 by default) with the int64 columns ``i`` and ``square``, hands the
+rows out in frames of 1024, honors a projection and leaves filters and sorting
+to the engine. ``tests/plugins/test_example_range_provider.cpp`` collects it,
+projects it and sets ``rows``.
 
 **The cursor host.** A provider's ``scan`` and a node's ``open`` receive a
 ``const dftu_plugin_host*`` that stays valid until the cursor's ``destroy`` has
@@ -1581,7 +1622,7 @@ node when ``open`` succeeds and by the host when it fails.
                           pl::SchemaBuilder& out) const { in.copy_all(out); }
        struct Cursor {
            pl::InputCursor in;
-           dstd::Optional<pl::OwnedFrame> next(std::int64_t rows);  // pull, transform
+           dstd::Optional<pl::OwnedDataFrame> next(std::int64_t rows);  // pull, transform
        };
        dstd::UniquePtr<Cursor> open(pl::InputCursor in, const pl::OpArgs&,
                                     std::uint64_t, const pl::Host&) const {
@@ -1591,6 +1632,12 @@ node when ``open`` succeeds and by the host when it fails.
 
    return pl::plugin(ctx, h, config).node<Double>(
        "me.double", dstd::make_unique<Double>()).build(out);
+
+``examples/plugins/sessionize.cpp`` is a complete streaming node: it keeps the
+last ``ts`` of each ``pid`` across frames and appends an int64 ``session``
+column, opening a new session when the gap from one row of that pid to the
+next is more than a second (``ts`` is in microseconds). ``select pid, ts |
+call sessionize.gaps()`` runs it from duql.
 
 **Plans inside a plugin.** ``OwnedLazyFrame`` (``result_registry.h``) is the
 fluent facade over ``dftu.lazy.*``: build a plan from a frame
@@ -1607,6 +1654,46 @@ frame the same way.
 ``tests/plugins/reference_plugin.c`` is the conformance plugin: it
 touches every service slot, registers an op, a source, a state and a node,
 and is the one file to read for the exact C of each.
+
+**Examples by kind.** ``examples/plugins/`` builds one small plugin per kind,
+and ``ctest -R examples/plugins/`` loads each example that loads on its own
+through ``dftracer_plugin check`` and runs the golden tests it ships in
+``examples/plugins/tests/``:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 14 34 52
+
+   * - Kind
+     - File
+     - What it shows
+   * - fold
+     - ``examples/plugins/duration_report.cpp``
+     - A fold that writes its report through the host fileio service.
+   * - fold
+     - ``examples/plugins/duration_histogram.cpp``
+     - A fold that emits its histogram as named results.
+   * - fold
+     - ``examples/plugins/event_counter.c``, ``process_*.c``
+     - The C fold ABI: a batch, a port pair, cross-worker accumulators.
+   * - udf
+     - ``examples/plugins/duration_udfs.cpp``
+     - Two scalar UDFs duql calls by name.
+   * - aggregate
+     - ``examples/plugins/stats_udafs.cpp``
+     - Two UDAFs, one of them parallel-safe over a group.
+   * - sink
+     - ``examples/plugins/csv_sink.cpp``
+     - A sink that writes every frame of a plan to a CSV file.
+   * - format
+     - ``examples/plugins/csv_reader.cpp``
+     - A format that reads a CSV file, typed per column and chunked.
+   * - node
+     - ``examples/plugins/sessionize.cpp``
+     - A streaming node that appends a session number per pid.
+   * - provider
+     - ``examples/plugins/range_provider.cpp``
+     - A provider whose table is built in code, honoring a projection.
 
 14. Index extensions (DFTU_SVC_INDEX)
 -------------------------------------
@@ -1741,6 +1828,14 @@ exception per callback and report it as a status.
    };
 
    return plugin(ctx, h, config).file_format<Rows>().fold<MySlice>().build(out);
+
+``examples/plugins/csv_reader.cpp`` is a complete format: it claims a file
+whose name ends in ``.csv`` and whose first line reads as a CSV header, names
+its columns from that line, types each column from its data (int64 when every
+cell is a whole number, double when every cell is a number, string otherwise),
+splits the rows into chunks of 1024 so the chunks scan in parallel, keeps
+exactly the projected columns, and votes on no filter. Its golden test is
+``examples/plugins/tests/csv_reader/basic.test``.
 
 **Sinks.** ``DFTU_SVC_FILE_FORMATS`` also takes a ``dftu_sink_vt``
 (``register_sink``, ``PluginBuilder::sink<S>``): an output format that names

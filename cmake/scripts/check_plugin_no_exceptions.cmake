@@ -31,11 +31,16 @@ foreach(header IN LISTS sdk_headers)
   file(WRITE "${source}" "#include <${header}>\n")
   list(APPEND sources "${source}")
 endforeach()
-list(APPEND sources "${SOURCE_DIR}/examples/plugins/duration_report.cpp"
+set(examples "${SOURCE_DIR}/examples/plugins/duration_report.cpp"
      "${SOURCE_DIR}/examples/plugins/duration_histogram.cpp"
      "${SOURCE_DIR}/examples/plugins/query_filter.cpp"
      "${SOURCE_DIR}/examples/plugins/duration_udfs.cpp"
-     "${SOURCE_DIR}/examples/plugins/stats_udafs.cpp")
+     "${SOURCE_DIR}/examples/plugins/stats_udafs.cpp"
+     "${SOURCE_DIR}/examples/plugins/csv_reader.cpp"
+     "${SOURCE_DIR}/examples/plugins/sessionize.cpp"
+     "${SOURCE_DIR}/examples/plugins/range_provider.cpp")
+list(LENGTH examples example_count)
+list(APPEND sources ${examples})
 
 file(WRITE "${PROJECT_DIR}/CMakeLists.txt"
      "cmake_minimum_required(VERSION 3.20)\n"
@@ -72,5 +77,5 @@ if(rc)
                       "-fno-exceptions: ${rc}")
 endif()
 list(LENGTH sdk_headers header_count)
-message(STATUS "plugin_no_exceptions: ${header_count} SDK headers and 3 "
-               "examples compile with -fno-exceptions")
+message(STATUS "plugin_no_exceptions: ${header_count} SDK headers and "
+               "${example_count} examples compile with -fno-exceptions")

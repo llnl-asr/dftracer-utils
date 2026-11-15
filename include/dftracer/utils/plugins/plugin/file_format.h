@@ -25,7 +25,7 @@ class FormatCursor {
     virtual ~FormatCursor() = default;
     /// The next frame, owned by the caller; dstd::nullopt at the end of the
     /// chunk, or the error that ended the read.
-    virtual dstd::Result<dstd::Optional<OwnedFrame>> next(
+    virtual dstd::Result<dstd::Optional<OwnedDataFrame>> next(
         std::int64_t max_rows) = 0;
 };
 

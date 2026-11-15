@@ -36,16 +36,14 @@ const char* option_of(const dftu_value* options, const char* key) {
 }
 
 // The column `index` of `frame`, flattened. Null when the C ABI refuses it.
-dftu_series* flat_column(const dftu_dataframe* frame, std::int32_t index,
-                         dstd::String* name) {
+Column flat_column(const dftu_dataframe* frame, std::int32_t index,
+                   dstd::String* name) {
     const char* text = dftu_dataframe_column_name(frame, index);
-    if (text == nullptr) return nullptr;
+    if (text == nullptr) return Column();
     *name = dstd::String(text);
-    dftu_series* column = dftu_dataframe_column(frame, name->c_str());
-    if (column == nullptr) return nullptr;
-    dftu_series* flat = dftu_series_materialize(column);
-    dftu_series_free(column);
-    return flat;
+    Column column(dftu_dataframe_column(frame, name->c_str()));
+    if (!column) return Column();
+    return Column(dftu_series_materialize(column.get()));
 }
 
 void put_int(std::FILE* file, const dftu_series* column, std::int32_t type,
@@ -143,14 +141,14 @@ class CsvWriter : public SinkWriter {
                 dstd::Condition::InvalidArgument);
         const std::int32_t columns = dftu_dataframe_num_columns(frame);
         const std::int64_t rows = dftu_dataframe_num_rows(frame);
-        dstd::Vector<dftu_series*> already;
+        dstd::Vector<Column> already;
         for (std::int32_t i = 0; i < columns; ++i) {
             dstd::String name;
-            dftu_series* column = flat_column(frame, i, &name);
-            if (column == nullptr)
+            Column column = flat_column(frame, i, &name);
+            if (!column)
                 return dstd::Error::from_format<"csv: no column {}">(
                     dstd::Condition::InvalidArgument, i);
-            already.push_back(column);
+            already.push_back(std::move(column));
             if (!header_) {
                 if (i != 0) std::fputc(',', file_);
                 std::fputs(name.c_str(), file_);
@@ -163,14 +161,14 @@ class CsvWriter : public SinkWriter {
         for (std::int64_t row = 0; row < rows; ++row) {
             for (std::int32_t i = 0; i < columns; ++i) {
                 if (i != 0) std::fputc(',', file_);
-                put_value(file_, already[static_cast<std::size_t>(i)], row);
+                put_value(file_, already[static_cast<std::size_t>(i)].get(),
+                          row);
             }
             std::fputc('\n', file_);
             if (std::ferror(file_) != 0)
                 return dstd::Error::from_format<"csv: write failed">(
                     dstd::Condition::InvalidArgument);
         }
-        for (dftu_series* column : already) dftu_series_free(column);
         return {};
     }
 

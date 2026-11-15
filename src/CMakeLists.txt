@@ -347,6 +347,7 @@ endif()
 set(DFTRACER_UTILS_PLUGINS_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/abi_context.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/task_abi.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/host/borrow_release_pin.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/host/host_ops.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/host/build_host.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/host/plugin_memory.cpp
@@ -900,6 +901,7 @@ use_precompiled_header(dftracer_utils_store_objects MIN_COUNT 1)
 
 set(DFTRACER_UTILS_VEC_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/c_api.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/borrow_release_pin.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/c_api_enum_lockstep.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/op_registry.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/udf.cpp

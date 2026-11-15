@@ -31,7 +31,7 @@ class PassThrough {
     struct Cursor {
         InputCursor in;
 
-        dstd::Result<dstd::Optional<OwnedFrame>> next(std::int64_t rows) {
+        dstd::Result<dstd::Optional<OwnedDataFrame>> next(std::int64_t rows) {
             return in.next(rows);
         }
     };

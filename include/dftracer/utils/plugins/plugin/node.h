@@ -156,7 +156,7 @@ class InputCursor {
 
     /// The next upstream frame, or dstd::nullopt at the end of the stream. An
     /// error with the upstream's status and message when it fails.
-    dstd::Result<dstd::Optional<OwnedFrame>> next(std::int64_t max_rows) {
+    dstd::Result<dstd::Optional<OwnedDataFrame>> next(std::int64_t max_rows) {
         detail::LocalCtx ctx;
         dftu_dataframe* out = nullptr;
         dftu_task* pending = nullptr;
@@ -168,8 +168,8 @@ class InputCursor {
                                       ? dstd::StringView("upstream failed")
                                       : dstd::StringView(ctx.message));
         }
-        if (st == DFTU_END || !out) return dstd::Optional<OwnedFrame>();
-        return dstd::Optional<OwnedFrame>(OwnedFrame(out));
+        if (st == DFTU_END || !out) return dstd::Optional<OwnedDataFrame>();
+        return dstd::Optional<OwnedDataFrame>(OwnedDataFrame(out));
     }
 
     /// Offer `predicate` upstream. Only sound when it is positional against

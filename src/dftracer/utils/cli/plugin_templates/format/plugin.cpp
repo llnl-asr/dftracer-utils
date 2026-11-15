@@ -27,22 +27,16 @@ class IdCursor : public FormatCursor {
     explicit IdCursor(dstd::Vector<std::int64_t> rows)
         : rows_(std::move(rows)) {}
 
-    dstd::Result<dstd::Optional<OwnedFrame>> next(std::int64_t) override {
-        if (done_) return dstd::Optional<OwnedFrame>();
+    dstd::Result<dstd::Optional<OwnedDataFrame>> next(std::int64_t) override {
+        if (done_) return dstd::Optional<OwnedDataFrame>();
         done_ = true;
-        dftu_series* column = dftu_series_new_flat(
-            DFTU_TYPE_INT64, rows_.empty() ? nullptr : rows_.data(),
-            static_cast<std::int64_t>(rows_.size()), nullptr);
-        if (!column)
-            return dstd::Unexpected(
-                make_error(DFTU_E_INVALID, "@NAME@ could not build id"));
-        const char* names[] = {"id"};
-        dftu_series* columns[] = {column};
-        dftu_dataframe* frame = dftu_dataframe_new(names, columns, 1);
-        if (!frame)
+        FrameBuilder builder;
+        builder.add("id", Column::from_int64(std::move(rows_)));
+        auto built = builder.build();
+        if (!built)
             return dstd::Unexpected(
                 make_error(DFTU_E_INVALID, "@NAME@ could not build a frame"));
-        return dstd::Optional<OwnedFrame>(OwnedFrame(frame));
+        return dstd::Optional<OwnedDataFrame>(std::move(*built));
     }
 
    private:

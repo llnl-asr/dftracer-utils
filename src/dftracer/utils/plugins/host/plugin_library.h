@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_PLUGINS_HOST_PLUGIN_LIBRARY_H
 #define DFTRACER_UTILS_PLUGINS_HOST_PLUGIN_LIBRARY_H
 
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/plugins/abi/plugin.h>
 #include <dlfcn.h>
 
@@ -28,14 +29,22 @@ class PluginLibrary {
         if (handle_) dlclose(handle_);
     }
 
-    /// The plugin instance whose destroy runs before the library closes.
-    void adopt(::dftu_plugin* plugin) noexcept { plugin_ = plugin; }
+    /// The checked copy of the plugin instance, owned by the library so it
+    /// stays alive exactly as long as the library is mapped, which outlives a
+    /// Plugins set when a plan still holds a node, provider or op from it.
+    void adopt(dstd::UniquePtr<::dftu_plugin> plugin) noexcept {
+        plugin_ = plugin.get();
+        plugin_storage_ = std::move(plugin);
+    }
+
+    ::dftu_plugin* plugin() const noexcept { return plugin_; }
 
     void* handle() const noexcept { return handle_; }
 
    private:
     void* handle_;
     ::dftu_plugin* plugin_ = nullptr;
+    dstd::UniquePtr<::dftu_plugin> plugin_storage_;
 };
 
 }  // namespace dftracer::utils::plugins::host

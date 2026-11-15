@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/c_api_error.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/internal/file_format_registry.h>
@@ -20,6 +21,7 @@
 #include <dftracer/utils/plugins/host/build_host.h>
 #include <dftracer/utils/plugins/host/config.h>
 #include <dftracer/utils/plugins/host/fold_adapter.h>
+#include <dftracer/utils/plugins/host/plugin_abi.h>
 #include <dftracer/utils/plugins/host/plugin_memory.h>
 #include <dftracer/utils/plugins/host/plugins.h>
 #include <dftracer/utils/plugins/host/plugins_internal.h>
@@ -327,21 +329,28 @@ dstd::Result<Plugins::Impl::Loaded> load_plugin(const dstd::String& path,
                                 DFTRACER_UTILS_PLUGIN_INFO_SYMBOL);
     }
     const dftu_plugin_info* info = info_fn();
-    if (!info || info->struct_size != sizeof(dftu_plugin_info)) {
+    if (!info || !plugin_struct_size_ok(
+                     PluginStruct::PluginInfo, info->struct_size,
+                     static_cast<std::uint32_t>(sizeof(dftu_plugin_info)))) {
         return common::make_error<
-            "plugin '{}' has no valid dftu_plugin_info (NULL or wrong "
-            "struct_size)">(common::ErrorCode::InvalidArgument, path);
+            "plugin '{}' has no valid dftu_plugin_info (NULL or struct_size "
+            "outside [{}, {}])">(
+            common::ErrorCode::InvalidArgument, path,
+            plugin_struct_min_size(PluginStruct::PluginInfo),
+            static_cast<std::uint32_t>(sizeof(dftu_plugin_info)));
     }
-    if (info->abi_version != DFTRACER_UTILS_PLUGIN_ABI_VERSION ||
-        info->abi_hash != DFTRACER_UTILS_PLUGIN_ABI_HASH) {
-        const std::uint32_t got_version = info->abi_version;
-        const std::uint64_t got_hash = info->abi_hash;
+    dftu_plugin_info info_copy{};
+    common::copy_struct(&info_copy, sizeof(info_copy), info, info->struct_size,
+                        plugin_struct_min_size(PluginStruct::PluginInfo));
+    if (!abi_compatible(DFTRACER_UTILS_PLUGIN_ABI_VERSION,
+                        info_copy.abi_version)) {
         return common::make_error<
-            "plugin '{}' was built against other plugin ABI headers (version "
-            "{}, hash {:x}; this host has version {}, hash {:x}); rebuild it">(
-            common::ErrorCode::InvalidArgument, path, got_version, got_hash,
-            static_cast<std::uint32_t>(DFTRACER_UTILS_PLUGIN_ABI_VERSION),
-            static_cast<std::uint64_t>(DFTRACER_UTILS_PLUGIN_ABI_HASH));
+            "plugin '{}' was built against plugin ABI version {}; this host "
+            "has version {} (major must match and the plugin minor must be no "
+            "greater than the host minor); rebuild it">(
+            common::ErrorCode::InvalidArgument, path,
+            abi_version_string(info_copy.abi_version),
+            abi_version_string(DFTRACER_UTILS_PLUGIN_ABI_VERSION));
     }
 
     // A column that borrows a buffer of this plugin keeps its release callback
@@ -359,14 +368,12 @@ dstd::Result<Plugins::Impl::Loaded> load_plugin(const dstd::String& path,
     }
 
     BuildHost build_host(plugin_name_from_path(path), library);
-    build_host.set_declared_name(dstd::String(info->name ? info->name : ""));
+    build_host.set_declared_name(
+        dstd::String(info_copy.name ? info_copy.name : ""));
     plugins::AbiContext factory_ctx;
     dftu_plugin* plugin = nullptr;
     const dftu_status built =
         factory(factory_ctx.get(), build_host.host(), config, &plugin);
-    // The library runs the plugin's destroy once the last node, provider or
-    // extension it made is gone; a failed load below relies on the same.
-    if (plugin) library->adopt(plugin);
 
     // A rejected load never reaches Loaded, so nothing will later walk
     // registered_ops()/registered_providers() and unregister them: a factory
@@ -412,21 +419,28 @@ dstd::Result<Plugins::Impl::Loaded> load_plugin(const dstd::String& path,
             common::ErrorCode::InvalidArgument, path, why.message());
     }
 
-    if (!plugin) {
-        unregister_all();
-        return common::make_error<"plugin '{}' factory gave no descriptor">(
-            common::ErrorCode::InvalidArgument, path);
-    }
-
-    if (plugin->struct_size != sizeof(dftu_plugin)) {
-        const std::uint32_t got = plugin->struct_size;
+    if (!plugin || !plugin_struct_size_ok(
+                       PluginStruct::Plugin, plugin->struct_size,
+                       static_cast<std::uint32_t>(sizeof(dftu_plugin)))) {
+        const std::uint32_t got = plugin ? plugin->struct_size : 0;
         unregister_all();
         return common::make_error<
-            "plugin '{}' descriptor struct_size {} is not {}; set it to "
-            "sizeof(dftu_plugin)">(
-            common::ErrorCode::InvalidArgument, path, got,
-            static_cast<std::uint32_t>(sizeof(dftu_plugin)));
+            "plugin '{}' descriptor dftu_plugin struct_size {} is outside "
+            "[{}, {}]">(common::ErrorCode::InvalidArgument, path, got,
+                        plugin_struct_min_size(PluginStruct::Plugin),
+                        static_cast<std::uint32_t>(sizeof(dftu_plugin)));
     }
+    auto plugin_copy = dstd::make_unique<dftu_plugin>();
+    if (!common::copy_struct(plugin_copy.get(), sizeof(dftu_plugin), plugin,
+                             plugin->struct_size,
+                             plugin_struct_min_size(PluginStruct::Plugin))) {
+        unregister_all();
+        return common::make_error<
+            "plugin '{}' descriptor dftu_plugin struct_size {} is below {}">(
+            common::ErrorCode::InvalidArgument, path, plugin->struct_size,
+            plugin_struct_min_size(PluginStruct::Plugin));
+    }
+    plugin = plugin_copy.get();
 
     if (dstd::String bad = config_violation(plugin, config); !bad.empty()) {
         unregister_all();
@@ -457,6 +471,13 @@ dstd::Result<Plugins::Impl::Loaded> load_plugin(const dstd::String& path,
         }
     }
 
+    // The library runs the checked copy's destroy once the last object the
+    // plugin made is gone. It owns that copy, so the pointer stays valid for
+    // as long as the library is mapped. It must adopt only after the size
+    // check, and only through the checked copy, so the destructor never reads
+    // a field beyond the descriptor's declared size.
+    library->adopt(std::move(plugin_copy));
+
     return Plugins::Impl::Loaded{
         std::move(library),
         plugin,
@@ -474,7 +495,7 @@ dstd::Result<Plugins::Impl::Loaded> load_plugin(const dstd::String& path,
         build_host.take_registered_index_extensions(),
         build_host.memory(),
         build_host.declared_name(),
-        dstd::String(info->version ? info->version : "")};
+        dstd::String(info_copy.version ? info_copy.version : "")};
 }
 
 // Kahn topological sort of `n` nodes over `from -> to` edges (from must precede

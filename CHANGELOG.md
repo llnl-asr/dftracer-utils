@@ -86,6 +86,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- The plugin loader accepts an ABI version whose major matches the host's and whose minor is no greater than the host's; the patch is ignored. A refusal names both versions and the rule.
+- Plugin-to-host records are accepted when ``struct_size`` is between the size of that record before its trailing optional callbacks and the host's ``sizeof``; the host copies the declared prefix into a zeroed host record and reads only that copy, so an omitted optional trailing callback reads NULL. The plugin ABI header hash is removed: ``dftu_plugin_info`` has no ``abi_hash`` field, ``abi_version.h`` defines no ``DFTRACER_UTILS_PLUGIN_ABI_HASH`` macro, and the Python extension no longer exports ``PLUGIN_ABI_HASH``. The JIT cache keeps its header fingerprint.
+
 - The plugin SDK's host and config calls are typed: `Host::run_op` gives a `Column`, `run_op_frame` an `OwnedDataFrame` and `run_op_aggregate` a `dataframe::Scalar`; `find_op` gives an `OpRef` and `register_op` takes an `OpSpec`; op arguments come from an `OpArgsBuilder` whose string lists take `dstd::CStringView` spans; `publish` and `consume` take and give a `dstd::ByteView`; `Writer::chunk` takes a `dstd::ByteView`; `Sketch::result` gives `Quantiles`; `log` takes a `LogLevel`, `spawn` a `JobWhere`, config keys a `ValueKind` and aggregates an `AggOp`. A fold's `step` takes a `FrameView`, and a transform or frame `finalize` gives `dstd::Result<OwnedDataFrame>`. `Config` and `ConfigValue` read a plugin's options with no raw `dftu_value`.
 - The plugin SDK's I/O, file-system, file-I/O and format calls are typed: every path is a `dstd::CStringView`, a buffer read in is a `dstd::MutableByteView` and a buffer written a `dstd::ByteView`, and a list of paths a `dstd::Span<const dstd::CStringView>`. `Fs::fstat` and `statx` fill an SDK `Stat` and `Statx`, `stat_batch` fills `FileStat` and `StatStatus` spans and refuses spans shorter than the paths, `find_all` takes `FindOptions`, `PathEntry::kind` gives a `FileKind`, `openat2` takes an `OpenHow`, and `GzWriter::close` gives a `GzSummary`. `co_await` on an `AsyncOp` or `AsyncAll` gives a `dstd::Condition`, and `FormatWriter::value` takes text up to its end, so a `char` buffer writes its string, not its whole size. A C++ plugin names no `dftu_*` type, call or `DFTU_*` constant.
 - A plugin that declares a config key with an empty name fails to load with an error that says so. Before, the SDK ended the key list there and dropped every key after it.
@@ -145,8 +148,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   Every table starts with `struct_size`, and service ids carry no `@N` suffix.
   The host names the plugin and the callback in the error the caller sees.
 - Make the plugin loader read a `dftracer_plugin_info` record before it runs any plugin code.
-  A plugin defines it with `DFTU_PLUGIN_INFO`; the loader refuses a plugin that exports none, or that was built against another ABI version or other ABI headers, and names the plugin in the message.
-  `PLUGIN_ABI_HASH` in the Python extension gives the header hash that a JIT plugin stamps.
+  A plugin defines it with `DFTU_PLUGIN_INFO`; the loader refuses a plugin that exports none, or whose ABI version it does not accept, and names the plugin in the message.
 - Replace `dftu.svc.coro` and `dftu.svc.compose` with `dftu.svc.task`: jobs (`job`, `sleep`, `then`, `all`, `any`, `map`) with typed values, and tasks (`start`, `spawn`, `drive`, `status`, `discard`).
   `drive` takes a `release` callback that the host calls once when the drive ends, and `discard` gives back a started task that the plugin will not hand to the host.
   `DFTU_JOB_BLOCKING` gives the run permit back while a leaf blocks, and the first error of `all` or `map` cancels the rest.

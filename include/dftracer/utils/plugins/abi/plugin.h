@@ -15,11 +15,10 @@ extern "C" {
 #endif
 
 /** What the loader reads before it runs any plugin code: the plugin's
-   name, and the ABI version and header hash it was built against. */
+   name, and the ABI version it was built against. */
 typedef struct dftu_plugin_info {
     uint32_t struct_size;
     uint32_t abi_version; /**< DFTRACER_UTILS_PLUGIN_ABI_VERSION */
-    uint64_t abi_hash;    /**< DFTRACER_UTILS_PLUGIN_ABI_HASH */
     const char* name;     /**< the plugin's own name; may be NULL */
     const char* version;  /**< the plugin's own version text; may be NULL */
 } dftu_plugin_info;
@@ -171,7 +170,7 @@ DFTU_PLUGIN_EXPORT dftu_status dftracer_plugin(dftu_ctx* ctx,
 /**
  * @brief The record the loader checks before it runs the factory; a plugin
  * defines it with @ref DFTU_PLUGIN_INFO. A missing symbol, or an ABI version
- * or header hash that differs from the host's, refuses the plugin.
+ * the host does not accept, refuses the plugin.
  */
 DFTU_PLUGIN_EXPORT const dftu_plugin_info* dftracer_plugin_info(void);
 
@@ -181,7 +180,7 @@ DFTU_PLUGIN_EXPORT const dftu_plugin_info* dftracer_plugin_info(void);
     DFTU_PLUGIN_EXPORT const dftu_plugin_info* dftracer_plugin_info(void) { \
         static const dftu_plugin_info info = {                              \
             sizeof(dftu_plugin_info), DFTRACER_UTILS_PLUGIN_ABI_VERSION,    \
-            DFTRACER_UTILS_PLUGIN_ABI_HASH, (name), (version)};             \
+            (name), (version)};                                             \
         return &info;                                                       \
     }
 

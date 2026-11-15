@@ -23,10 +23,19 @@ copies the message, and it names the plugin and the callback in the error the
 caller sees.
 
 A plugin library exports two symbols. ``dftracer_plugin_info`` returns a
-``dftu_plugin_info`` with the ABI version and header hash the plugin was built
-against; define it with ``DFTU_PLUGIN_INFO(name, version)``. The loader reads it
-before it runs any plugin code and refuses a plugin that has none, or whose
-version or hash differs from the host's. ``dftracer_plugin`` is the factory.
+``dftu_plugin_info`` with the ABI version the plugin was built against; define
+it with ``DFTU_PLUGIN_INFO(name, version)``. The loader reads it before it runs
+any plugin code and refuses a plugin that has none, whose ABI major differs from
+the host's, or whose ABI minor is newer than the host's. ``dftracer_plugin`` is
+the factory.
+
+Every record a plugin hands the host starts with ``struct_size``. The host
+accepts a size from the size of that record before its trailing optional
+callbacks up to the host's own ``sizeof``, copies that many bytes into a zeroed
+record of its own and reads only that copy: a callback the plugin's headers did
+not have reads NULL, and the host skips it. A smaller or a larger size is
+refused at the call that hands the record over, with a message that names the
+record.
 
 .. code-block:: c
 

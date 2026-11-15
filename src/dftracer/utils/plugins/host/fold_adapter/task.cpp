@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/c_api_error.h>
 #include <dftracer/utils/coro/combinators.h>
 #include <dftracer/utils/coro/executor.h>
 #include <dftracer/utils/coro/named.h>
@@ -12,6 +13,7 @@
 #include <dftracer/utils/plugins/abi_context.h>
 #include <dftracer/utils/plugins/host/fold_adapter.h>
 #include <dftracer/utils/plugins/host/fold_adapter/ext.h>
+#include <dftracer/utils/plugins/host/plugin_abi.h>
 #include <dftracer/utils/plugins/task_abi.h>
 #include <dftracer/utils/runtime/runtime.h>
 
@@ -385,24 +387,37 @@ coro::CoroTask<void> run_drive(::dftu_step_fn step, DriveState state,
 
 dftu_status host_job(::dftu_ctx* ctx, void* h, const ::dftu_job_desc* desc,
                      ::dftu_job** out) {
-    if (desc == nullptr || out == nullptr || desc->fn == nullptr) {
-        return fail(ctx, DFTU_E_INVALID, "job: NULL descriptor, out or fn");
+    if (desc == nullptr || out == nullptr) {
+        return fail(ctx, DFTU_E_INVALID, "job: NULL descriptor or out");
     }
-    if (desc->struct_size != sizeof(::dftu_job_desc)) {
-        return fail(ctx, DFTU_E_INVALID, "job: struct_size is not sizeof");
+    if (!plugin_struct_size_ok(
+            PluginStruct::JobDesc, desc->struct_size,
+            static_cast<std::uint32_t>(sizeof(::dftu_job_desc)))) {
+        const dstd::String message =
+            dstd::fmt<"job: struct_size {} is outside [{}, {}]">(
+                desc->struct_size,
+                plugin_struct_min_size(PluginStruct::JobDesc),
+                static_cast<std::uint32_t>(sizeof(::dftu_job_desc)));
+        return fail(ctx, DFTU_E_INVALID, message.c_str());
     }
-    if (desc->where < DFTU_JOB_CPU || desc->where > DFTU_JOB_BLOCKING) {
+    ::dftu_job_desc desc_copy{};
+    common::copy_struct(&desc_copy, sizeof(desc_copy), desc, desc->struct_size,
+                        plugin_struct_min_size(PluginStruct::JobDesc));
+    if (desc_copy.fn == nullptr) {
+        return fail(ctx, DFTU_E_INVALID, "job: NULL fn");
+    }
+    if (desc_copy.where < DFTU_JOB_CPU || desc_copy.where > DFTU_JOB_BLOCKING) {
         return fail(ctx, DFTU_E_INVALID, "job: unknown where");
     }
     Job& job = fold_of(h).new_job(Job::Kind::Leaf);
-    job.where = desc->where;
-    job.fn = desc->fn;
-    job.state = desc->state;
-    job.free_state = desc->free_state;
-    job.in_ty = desc->in_ty;
-    job.in_size = desc->in_size;
-    job.out_ty = desc->out_ty;
-    job.out_size = desc->out_size;
+    job.where = desc_copy.where;
+    job.fn = desc_copy.fn;
+    job.state = desc_copy.state;
+    job.free_state = desc_copy.free_state;
+    job.in_ty = desc_copy.in_ty;
+    job.in_size = desc_copy.in_size;
+    job.out_ty = desc_copy.out_ty;
+    job.out_size = desc_copy.out_size;
     *out = as_abi(job);
     return DFTU_OK;
 }

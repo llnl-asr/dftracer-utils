@@ -60,12 +60,6 @@ def _host_abi_version() -> int:
     return int(PLUGIN_ABI_VERSION)
 
 
-def _host_abi_hash() -> int:
-    from .dftracer_utils_ext import PLUGIN_ABI_HASH
-
-    return int(PLUGIN_ABI_HASH)
-
-
 def _ensure_abi_version_header(include: str) -> str | None:
     """Write dftracer/utils/plugins/abi_version.h into the JIT cache when
     ``include`` has none (a source checkout, where CMake writes the header into
@@ -76,7 +70,6 @@ def _ensure_abi_version_header(include: str) -> str | None:
     if (Path(include) / rel).is_file():
         return None
     version = _host_abi_version()
-    abi_hash = _host_abi_hash()
     overlay = cache_dir() / "abi_version_include"
     header_path = overlay / rel
     header_path.parent.mkdir(parents=True, exist_ok=True)
@@ -86,8 +79,7 @@ def _ensure_abi_version_header(include: str) -> str | None:
         f"#define DFTRACER_UTILS_PLUGIN_ABI_VERSION_MAJOR {version >> 16}\n"
         f"#define DFTRACER_UTILS_PLUGIN_ABI_VERSION_MINOR {(version >> 8) & 0xFF}\n"
         f"#define DFTRACER_UTILS_PLUGIN_ABI_VERSION_PATCH {version & 0xFF}\n"
-        f"#define DFTRACER_UTILS_PLUGIN_ABI_VERSION 0x{version:X}u\n"
-        f"#define DFTRACER_UTILS_PLUGIN_ABI_HASH 0x{abi_hash:X}ULL\n\n"
+        f"#define DFTRACER_UTILS_PLUGIN_ABI_VERSION 0x{version:X}u\n\n"
         "#endif  // DFTRACER_UTILS_PLUGINS_ABI_VERSION_H\n"
     )
     if not header_path.is_file() or header_path.read_text() != text:
@@ -140,7 +132,6 @@ def source_digest(source: str, include: str, cxx: str) -> str:
         sys.platform,
         _abi_fingerprint(include),
         str(_host_abi_version()),
-        str(_host_abi_hash()),
     ]
     return hashlib.sha256("\0".join(parts).encode("utf-8")).hexdigest()[:16]
 

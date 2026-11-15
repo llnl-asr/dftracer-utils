@@ -149,12 +149,12 @@ The delivered ``dftu_dataframe`` is owned by the host and valid only for the
 call - N rows in scan order is N events, never retain the pointer.
 
 ``DFTRACER_UTILS_PLUGIN_ABI_VERSION`` comes from the ``abi`` line of the
-``VERSION`` file, packed as ``(major << 16) | (minor << 8) | patch``.
-``DFTRACER_UTILS_PLUGIN_ABI_HASH`` is a hash of the plugin ABI headers. The
+``VERSION`` file, packed as ``(major << 16) | (minor << 8) | patch``. The
 loader reads ``dftracer_plugin_info`` before it runs any plugin code. A plugin
-that exports no ``dftracer_plugin_info``, or was built against another ABI
-version or other headers, is refused at load with a message that names it and
-is never called into. Rebuild the plugin against the host you run.
+that exports no ``dftracer_plugin_info``, or was built against an ABI version
+whose major differs from the host's or whose minor is greater than the host's,
+is refused at load with a message that names both versions and is never called
+into. Rebuild the plugin against the host you run.
 
 .. tab-set::
 
@@ -200,7 +200,7 @@ is never called into. Rebuild the plugin against the host you run.
 
    .. tab-item:: C (raw ABI)
 
-      Fill the ``dftu_plugin`` struct by hand. ``struct_size`` must be set to
+      Fill the ``dftu_plugin`` struct by hand. Set ``struct_size`` to
       ``sizeof(dftu_plugin)``; ``self`` is the read-only config shared across
       slices.
 

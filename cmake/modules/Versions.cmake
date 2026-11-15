@@ -92,36 +92,6 @@ function(dftracer_utils_interface_versions version_file out_include_dir)
        "(${_abi_major} << 16) | (${_abi_minor} << 8) | ${_abi_patch}"
        OUTPUT_FORMAT HEXADECIMAL)
 
-  # A hash of every header that shapes the plugin boundary, so a plugin built
-  # against other headers fails to load even when VERSION did not change.
-  get_filename_component(_root "${version_file}" DIRECTORY)
-  set(_inc "${_root}/include/dftracer/utils")
-  file(GLOB _abi_headers "${_inc}/plugins/abi/*.h")
-  list(
-    APPEND
-    _abi_headers
-    "${_inc}/common/c_api.h"
-    "${_inc}/common/export.h"
-    "${_inc}/dataframe/c_api.h"
-    "${_inc}/dataframe/c_api_udaf.h"
-    "${_inc}/dataframe/c_api_udf.h"
-    "${_inc}/dataframe/agg_op_codes.h"
-    "${_inc}/duql/c_api.h"
-    "${_inc}/plugins/abi.h")
-  list(SORT _abi_headers)
-  set_property(
-    DIRECTORY
-    APPEND
-    PROPERTY CMAKE_CONFIGURE_DEPENDS ${_abi_headers})
-  set(_abi_digests "")
-  foreach(_h IN LISTS _abi_headers)
-    file(RELATIVE_PATH _rel "${_inc}" "${_h}")
-    file(SHA256 "${_h}" _d)
-    string(APPEND _abi_digests "${_rel}:${_d}\n")
-  endforeach()
-  string(SHA256 _abi_hash "${_abi_digests}")
-  string(SUBSTRING "${_abi_hash}" 0 16 _abi_hash)
-
   file(
     WRITE "${out_include_dir}/dftracer/utils/plugins/abi_version.h.tmp"
     "// Generated from VERSION by cmake/modules/Versions.cmake. Do not edit.
@@ -132,7 +102,6 @@ function(dftracer_utils_interface_versions version_file out_include_dir)
 #define DFTRACER_UTILS_PLUGIN_ABI_VERSION_MINOR ${_abi_minor}
 #define DFTRACER_UTILS_PLUGIN_ABI_VERSION_PATCH ${_abi_patch}
 #define DFTRACER_UTILS_PLUGIN_ABI_VERSION ${_abi_packed}u
-#define DFTRACER_UTILS_PLUGIN_ABI_HASH 0x${_abi_hash}ull
 
 #endif  // DFTRACER_UTILS_PLUGINS_ABI_VERSION_H
 ")

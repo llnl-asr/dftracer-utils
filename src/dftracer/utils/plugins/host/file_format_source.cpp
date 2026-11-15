@@ -4,6 +4,7 @@
 // SinkFactory. The frame marshalling and checks a plugin cursor needs are the
 // provider ones (provider_source.h), shared rather than copied.
 
+#include <dftracer/utils/common/c_api_error.h>
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/dataframe.h>
@@ -25,6 +26,7 @@
 #include <dftracer/utils/plugins/abi_context.h>
 #include <dftracer/utils/plugins/host/cursor_host.h>
 #include <dftracer/utils/plugins/host/file_format_source.h>
+#include <dftracer/utils/plugins/host/plugin_abi.h>
 #include <dftracer/utils/plugins/host/plugin_task.h>
 #include <dftracer/utils/plugins/host/provider_source.h>
 
@@ -318,11 +320,17 @@ dstd::Result<OpenedChunk> FormatSource::scan_chunk(
 
     // A cursor trusts `host` until its destroy() returns, so every error after
     // a successful scan destroys the cursor first and releases the host after.
-    const bool cursor_ok = cursor_vt &&
-                           cursor_vt->struct_size == sizeof(::dftu_cursor_vt) &&
-                           cursor_vt->next;
+    const bool cursor_ok =
+        cursor_vt &&
+        plugin_struct_size_ok(
+            PluginStruct::CursorVt, cursor_vt->struct_size,
+            static_cast<std::uint32_t>(sizeof(::dftu_cursor_vt))) &&
+        cursor_vt->next;
     auto discard_cursor = [&] {
-        if (cursor_vt && cursor_vt->struct_size == sizeof(::dftu_cursor_vt) &&
+        if (cursor_vt &&
+            plugin_struct_size_ok(
+                PluginStruct::CursorVt, cursor_vt->struct_size,
+                static_cast<std::uint32_t>(sizeof(::dftu_cursor_vt))) &&
             cursor_vt->destroy)
             cursor_vt->destroy(cursor_self);
         host.reset();
@@ -530,18 +538,26 @@ dstd::Result<void> register_file_format_vtable(
         return dstd::Error::from_format<
             "file format register: the name and the vtable must be set">(
             dstd::Condition::InvalidArgument);
-    if (vt->struct_size != sizeof(::dftu_file_format_vt))
+    if (!plugin_struct_size_ok(
+            PluginStruct::FileFormatVt, vt->struct_size,
+            static_cast<std::uint32_t>(sizeof(::dftu_file_format_vt))))
         return dstd::Error::from_format<
-            "file format '{}': struct_size is not sizeof(dftu_file_format_vt)">(
-            dstd::Condition::InvalidArgument, name);
-    if (!vt->probe || !vt->open || !vt->schema || !vt->chunks || !vt->scan)
+            "file format '{}': struct_size {} is outside [{}, {}]">(
+            dstd::Condition::InvalidArgument, name, vt->struct_size,
+            plugin_struct_min_size(PluginStruct::FileFormatVt),
+            static_cast<std::uint32_t>(sizeof(::dftu_file_format_vt)));
+    ::dftu_file_format_vt vt_copy{};
+    common::copy_struct(&vt_copy, sizeof(vt_copy), vt, vt->struct_size,
+                        plugin_struct_min_size(PluginStruct::FileFormatVt));
+    if (!vt_copy.probe || !vt_copy.open || !vt_copy.schema || !vt_copy.chunks ||
+        !vt_copy.scan)
         return dstd::Error::from_format<
             "file format '{}': probe, open, schema, chunks and scan must all "
             "be set">(dstd::Condition::InvalidArgument, name);
     // Not owned until registered, so a refused registration leaves `self` to
     // the caller.
     auto handle = dstd::make_shared<FormatHandle>(
-        std::move(library), std::move(memory), name, *vt, self, false);
+        std::move(library), std::move(memory), name, vt_copy, self, false);
     auto registered = dataframe::register_file_format(
         dstd::make_shared<VtableFormat>(handle));
     if (registered) handle->owned = true;
@@ -555,19 +571,26 @@ dstd::Result<void> register_sink_vtable(
         return dstd::Error::from_format<
             "sink register: the name and the vtable must be set">(
             dstd::Condition::InvalidArgument);
-    if (vt->struct_size != sizeof(::dftu_sink_vt))
+    if (!plugin_struct_size_ok(
+            PluginStruct::SinkVt, vt->struct_size,
+            static_cast<std::uint32_t>(sizeof(::dftu_sink_vt))))
         return dstd::Error::from_format<
-            "sink '{}': struct_size is not sizeof(dftu_sink_vt)">(
-            dstd::Condition::InvalidArgument, name);
-    if (!vt->bind || !vt->write || !vt->finalize) {
-        const char* missing = !vt->bind    ? "bind"
-                              : !vt->write ? "write"
-                                           : "finalize";
+            "sink '{}': struct_size {} is outside [{}, {}]">(
+            dstd::Condition::InvalidArgument, name, vt->struct_size,
+            plugin_struct_min_size(PluginStruct::SinkVt),
+            static_cast<std::uint32_t>(sizeof(::dftu_sink_vt)));
+    ::dftu_sink_vt vt_copy{};
+    common::copy_struct(&vt_copy, sizeof(vt_copy), vt, vt->struct_size,
+                        plugin_struct_min_size(PluginStruct::SinkVt));
+    if (!vt_copy.bind || !vt_copy.write || !vt_copy.finalize) {
+        const char* missing = !vt_copy.bind    ? "bind"
+                              : !vt_copy.write ? "write"
+                                               : "finalize";
         return dstd::Error::from_format<"sink '{}': {} must be set">(
             dstd::Condition::InvalidArgument, name, missing);
     }
-    auto handle = dstd::make_shared<SinkHandle>(std::move(library), name, *vt,
-                                                self, false);
+    auto handle = dstd::make_shared<SinkHandle>(std::move(library), name,
+                                                vt_copy, self, false);
     auto registered =
         dataframe::register_sink(dstd::make_shared<VtableSink>(handle));
     if (registered) handle->owned = true;

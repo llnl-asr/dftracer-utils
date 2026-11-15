@@ -107,8 +107,8 @@ includes headers only, and the host process provides every function it calls.
 uses. They select C++20, position-independent code and a shared library, and
 add the plugin include directory it resolved. When that directory carries no
 generated ``abi_version.h``, as in a source checkout, they add a second include
-directory holding one, stamped with the plugin ABI version and the ABI hash the
-host checks. On macOS they add ``-undefined dynamic_lookup``, since a plugin
+directory holding one, stamped with the plugin ABI version the host checks.
+On macOS they add ``-undefined dynamic_lookup``, since a plugin
 ``.so`` is loaded into a host process rather than pre-linked against one:
 
 .. code-block:: console

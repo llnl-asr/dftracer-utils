@@ -129,12 +129,15 @@ set_target_properties(${cabi_target} PROPERTIES OUTPUT_NAME test_plugin_c_abi
 add_test(NAME plugins/test_plugin_c_abi COMMAND ${cabi_target})
 
 # +++++++++++++++++++++++++++++++++++++++++
-# ABI gate: real .so files the loader must refuse - a wrong
-# DFTRACER_UTILS_PLUGIN_ABI_VERSION, a wrong header hash, and no info symbol -
-# loaded by plugins/test_plugin_abi_gate through a real dlopen.
+# ABI gate: real .so files loaded by plugins/test_plugin_abi_gate through a
+# real dlopen - a wrong DFTRACER_UTILS_PLUGIN_ABI_VERSION, no info symbol, a
+# plugin descriptor below the first published size, and one that omits the
+# last optional callback and must still run.
 # +++++++++++++++++++++++++++++++++++++++++
 
-foreach(gate_plugin bad_abi_version_plugin bad_abi_hash_plugin no_info_plugin)
+foreach(gate_plugin bad_abi_version_plugin no_info_plugin short_plugin
+                    too_small_plugin short_info_plugin oversize_plugin
+                    oversize_udf_plugin)
   add_library(${gate_plugin} MODULE ${gate_plugin}.c)
   target_set_warnings(${gate_plugin})
   set_target_properties(
@@ -151,14 +154,23 @@ foreach(gate_plugin bad_abi_version_plugin bad_abi_hash_plugin no_info_plugin)
                                      ${CMAKE_BINARY_DIR}/include)
 endforeach()
 
+if(APPLE)
+  target_link_options(short_plugin PRIVATE -undefined dynamic_lookup)
+endif()
+
 if(TARGET plugins_test_plugin_abi_gate)
   target_compile_definitions(
     plugins_test_plugin_abi_gate
     PRIVATE BAD_ABI_VERSION_PLUGIN_PATH="$<TARGET_FILE:bad_abi_version_plugin>"
-            BAD_ABI_HASH_PLUGIN_PATH="$<TARGET_FILE:bad_abi_hash_plugin>"
-            NO_INFO_PLUGIN_PATH="$<TARGET_FILE:no_info_plugin>")
-  add_dependencies(plugins_test_plugin_abi_gate
-                   bad_abi_version_plugin bad_abi_hash_plugin no_info_plugin)
+            NO_INFO_PLUGIN_PATH="$<TARGET_FILE:no_info_plugin>"
+            SHORT_PLUGIN_PATH="$<TARGET_FILE:short_plugin>"
+            TOO_SMALL_PLUGIN_PATH="$<TARGET_FILE:too_small_plugin>"
+            SHORT_INFO_PLUGIN_PATH="$<TARGET_FILE:short_info_plugin>"
+            OVERSIZE_PLUGIN_PATH="$<TARGET_FILE:oversize_plugin>"
+            OVERSIZE_UDF_PLUGIN_PATH="$<TARGET_FILE:oversize_udf_plugin>")
+  add_dependencies(plugins_test_plugin_abi_gate bad_abi_version_plugin
+                   no_info_plugin short_plugin too_small_plugin
+                   short_info_plugin oversize_plugin oversize_udf_plugin)
 endif()
 
 if(TARGET plugins_test_plugin_index_extension)

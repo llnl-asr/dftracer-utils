@@ -3,6 +3,7 @@
 // Cursor interfaces. A task a cursor callback hands back through `pending` is
 // awaited and freed here, the driving side.
 
+#include <dftracer/utils/common/c_api_error.h>
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dataframe/c_api.h>
@@ -21,6 +22,7 @@
 #include <dftracer/utils/plugins/abi_context.h>
 #include <dftracer/utils/plugins/host/cursor_host.h>
 #include <dftracer/utils/plugins/host/frame_check.h>
+#include <dftracer/utils/plugins/host/plugin_abi.h>
 #include <dftracer/utils/plugins/host/plugin_task.h>
 #include <dftracer/utils/plugins/host/provider_source.h>
 #include <dftracer/utils/plugins/task_abi.h>
@@ -98,17 +100,20 @@ class ProviderCursor final : public dataframe::Cursor {
         dftracer::utils::dstd::SharedPtr<const dataframe::Source> source,
         dstd::String label)
         : source_(std::move(source)),
-          vt_(vt),
+          vt_(),
           self_(self),
           host_(std::move(host)),
           expected_projection_(std::move(expected_projection)),
           expected_types_(std::move(expected_types)),
-          label_(std::move(label)) {}
+          label_(std::move(label)) {
+        common::copy_struct(&vt_, sizeof(vt_), vt, vt->struct_size,
+                            plugin_struct_min_size(PluginStruct::CursorVt));
+    }
 
     ~ProviderCursor() override {
         if (pending_task_) plugins::free_abi_task(pending_task_);
         if (pending_frame_) ::dftu_dataframe_free(pending_frame_);
-        if (vt_->destroy) vt_->destroy(self_);
+        if (vt_.destroy) vt_.destroy(self_);
         host_.reset();
     }
 
@@ -151,7 +156,7 @@ class ProviderCursor final : public dataframe::Cursor {
 
     // The three optional slots, each absent when the provider left it NULL.
     coro::CoroTask<bool> narrow(const dataframe::Expr& predicate) override {
-        if (!vt_->narrow) co_return false;
+        if (!vt_.narrow) co_return false;
         std::int32_t applied = 0;
         AbiHandle<::dftu_expr, ::dftu_expr_free> h(
             dataframe::expr_handle_wrap(predicate));
@@ -159,7 +164,7 @@ class ProviderCursor final : public dataframe::Cursor {
         plugins::AbiContext ctx(cancel);
         ::dftu_task* t = nullptr;
         const dftu_status status =
-            vt_->narrow(ctx.get(), self_, h.get(), &applied, &t);
+            vt_.narrow(ctx.get(), self_, h.get(), &applied, &t);
         bool awaited_ok = status >= 0;
         if (status < 0) {
             if (t) plugins::free_abi_task(t);
@@ -188,7 +193,7 @@ class ProviderCursor final : public dataframe::Cursor {
         // call returns, so it must outlive the task.
         ::dftu_task* pending = nullptr;
         const dftu_status status =
-            vt_->next(ctx.get(), self_, max_rows, &pending_frame_, &pending);
+            vt_.next(ctx.get(), self_, max_rows, &pending_frame_, &pending);
         if (pending != nullptr && status >= 0) {
             pending_task_ = pending;
             return false;
@@ -254,7 +259,7 @@ class ProviderCursor final : public dataframe::Cursor {
     // Released after the cursor itself: a derived source's destroy() runs
     // only once every cursor it opened is gone.
     dftracer::utils::dstd::SharedPtr<const dataframe::Source> source_;
-    const ::dftu_cursor_vt* vt_;
+    ::dftu_cursor_vt vt_;
     void* self_;
     // After the plugin's cursor is destroyed, so what it left is released then.
     dstd::UniquePtr<CursorHost> host_;
@@ -474,7 +479,11 @@ class ProviderSource final
         for (dftu_expr* h : owned_filters) dftu_expr_free(h);
 
         if (status < 0) return plugin_error(ctx, status, "provider scan");
-        if (!vt || vt->struct_size != sizeof(::dftu_cursor_vt) || !vt->next)
+        if (!vt ||
+            !plugin_struct_size_ok(
+                PluginStruct::CursorVt, vt->struct_size,
+                static_cast<std::uint32_t>(sizeof(::dftu_cursor_vt))) ||
+            !vt->next)
             return common::make_error<
                 "provider scan: the provider gave no valid cursor vtable">(
                 common::ErrorCode::Internal);
@@ -575,19 +584,25 @@ class ProviderSource final
             return dftracer::utils::dstd::nullopt;
         dftracer::utils::dstd::Optional<dataframe::ApplyStatus> status =
             to_apply_status(out.status);
-        if (!out.vt) return dftracer::utils::dstd::nullopt;
-        if (out.vt->struct_size != sizeof(::dftu_source_vt)) {
+        if (!out.vt ||
+            !plugin_struct_size_ok(
+                PluginStruct::SourceVt, out.vt->struct_size,
+                static_cast<std::uint32_t>(sizeof(::dftu_source_vt)))) {
             DFTRACER_UTILS_LOG_ERROR(
                 "provider apply: the derived source's vtable has a wrong "
                 "struct_size; the engine applies the operation itself");
             return dftracer::utils::dstd::nullopt;
         }
+        ::dftu_source_vt derived_vt{};
+        common::copy_struct(&derived_vt, sizeof(derived_vt), out.vt,
+                            out.vt->struct_size,
+                            plugin_struct_min_size(PluginStruct::SourceVt));
         dstd::Vector<dftracer::utils::dstd::SharedPtr<const dataframe::Source>>
             inputs{shared_from_this()};
         if (other) inputs.push_back(std::move(other));
         auto derived = dstd::make_shared<ProviderSource>(
             dstd::make_shared<ProviderHandle>(handle_->library, handle_->memory,
-                                              *out.vt, out.self, true,
+                                              derived_vt, out.self, true,
                                               handle_->name),
             std::move(inputs));
         // Constructed first so an answer refused below is still destroyed.
@@ -654,8 +669,11 @@ dstd::Vector<dataframe::TypeId> declared_types(
 dstd::SharedPtr<dataframe::Source> make_provider_source(
     const ::dftu_source_vt& vt, void* self,
     dstd::SharedPtr<PluginMemory> memory) {
+    ::dftu_source_vt vt_copy{};
+    common::copy_struct(&vt_copy, sizeof(vt_copy), &vt, vt.struct_size,
+                        plugin_struct_min_size(PluginStruct::SourceVt));
     return dstd::make_shared<ProviderSource>(dstd::make_shared<ProviderHandle>(
-        nullptr, std::move(memory), vt, self, false));
+        nullptr, std::move(memory), vt_copy, self, false));
 }
 
 dstd::Result<void> register_provider_vtable(
@@ -667,16 +685,23 @@ dstd::Result<void> register_provider_vtable(
             "provider register: the name and the vtable must be set">(
             dstd::Condition::InvalidArgument);
     }
-    if (vt->struct_size != sizeof(::dftu_source_vt)) {
+    if (!plugin_struct_size_ok(
+            PluginStruct::SourceVt, vt->struct_size,
+            static_cast<std::uint32_t>(sizeof(::dftu_source_vt)))) {
         return dstd::Error::from_format<
-            "provider '{}': struct_size is not sizeof(dftu_source_vt)">(
-            dstd::Condition::InvalidArgument, name);
+            "provider '{}': struct_size {} is outside [{}, {}]">(
+            dstd::Condition::InvalidArgument, name, vt->struct_size,
+            plugin_struct_min_size(PluginStruct::SourceVt),
+            static_cast<std::uint32_t>(sizeof(::dftu_source_vt)));
     }
+    ::dftu_source_vt vt_copy{};
+    common::copy_struct(&vt_copy, sizeof(vt_copy), vt, vt->struct_size,
+                        plugin_struct_min_size(PluginStruct::SourceVt));
     // Not owned until registered, so a refused registration leaves `self` to
     // the caller.
-    auto handle =
-        dstd::make_shared<ProviderHandle>(std::move(library), std::move(memory),
-                                          *vt, self, false, dstd::String(name));
+    auto handle = dstd::make_shared<ProviderHandle>(
+        std::move(library), std::move(memory), vt_copy, self, false,
+        dstd::String(name));
     auto registered = dataframe::register_provider(
         name, dstd::make_shared<VtableProvider>(handle));
     if (registered) handle->owned = true;

@@ -85,11 +85,10 @@ def test_new_scaffolds_cpp_source(tmp_path):
     assert "p.fold<mycount>()" in src.read_text()
 
 
-def test_generated_abi_version_header_carries_the_host_hash(tmp_path, monkeypatch):
+def test_generated_abi_version_header_carries_the_host_version(tmp_path, monkeypatch):
     from dftracer.utils import _plugin_build
-    from dftracer.utils.dftracer_utils_ext import PLUGIN_ABI_HASH, PLUGIN_ABI_VERSION
+    from dftracer.utils.dftracer_utils_ext import PLUGIN_ABI_VERSION
 
-    assert isinstance(PLUGIN_ABI_HASH, int) and PLUGIN_ABI_HASH > 0
     monkeypatch.setenv("DFTRACER_UTILS_JIT_CACHE", str(tmp_path / "cache"))
     overlay = _plugin_build._ensure_abi_version_header(str(tmp_path / "no_include"))
     assert overlay is not None
@@ -102,7 +101,6 @@ def test_generated_abi_version_header_carries_the_host_hash(tmp_path, monkeypatc
         / "plugins"
         / "abi_version.h"
     ).read_text()
-    assert f"#define DFTRACER_UTILS_PLUGIN_ABI_HASH 0x{PLUGIN_ABI_HASH:X}ULL" in text
     assert f"#define DFTRACER_UTILS_PLUGIN_ABI_VERSION 0x{PLUGIN_ABI_VERSION:X}u" in text
 
 

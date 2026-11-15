@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/c_api_error.h>
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -7,6 +8,7 @@
 #include <dftracer/utils/plugins/abi/index.h>
 #include <dftracer/utils/plugins/abi_context.h>
 #include <dftracer/utils/plugins/host/fold_adapter/ext.h>
+#include <dftracer/utils/plugins/host/plugin_abi.h>
 #include <dftracer/utils/plugins/host/reserved_names.h>
 #include <dftracer/utils/trace/index/extensions/extension_registry.h>
 
@@ -103,6 +105,7 @@ class PluginIndexQuery final : public trace::index::extensions::ExtensionQuery {
     }
 
     bool file_may_match(dstd::StringView payload) const override {
+        if (!vt_.file_may_match) return true;
         return vt_.file_may_match(
                    compiled_,
                    reinterpret_cast<const std::uint8_t*>(payload.data()),
@@ -178,22 +181,32 @@ class PluginIndexExtension final : public trace::index::extensions::Extension {
     static dstd::Result<trace::index::extensions::ExtensionPtr> make(
         dstd::StringView name, const ::dftu_index_extension* vt, void* self,
         dstd::SharedPtr<PluginLibrary> library) {
-        if (!vt || vt->struct_size != sizeof(::dftu_index_extension)) {
+        if (!vt ||
+            !plugin_struct_size_ok(
+                PluginStruct::IndexExtension, vt->struct_size,
+                static_cast<std::uint32_t>(sizeof(::dftu_index_extension)))) {
             return common::make_error<
-                "index extension '{}' refused: its struct_size is not "
-                "sizeof(dftu_index_extension)">(
-                common::ErrorCode::InvalidArgument, name);
+                "index extension '{}' refused: struct_size {} is outside "
+                "[{}, {}]">(
+                common::ErrorCode::InvalidArgument, name,
+                vt ? vt->struct_size : 0,
+                plugin_struct_min_size(PluginStruct::IndexExtension),
+                static_cast<std::uint32_t>(sizeof(::dftu_index_extension)));
         }
-        if (!vt->make_builder || !vt->step || !vt->finish_granule ||
-            !vt->destroy_builder || !vt->compile || !vt->may_match ||
-            !vt->release) {
+        ::dftu_index_extension vt_copy{};
+        common::copy_struct(
+            &vt_copy, sizeof(vt_copy), vt, vt->struct_size,
+            plugin_struct_min_size(PluginStruct::IndexExtension));
+        if (!vt_copy.make_builder || !vt_copy.step || !vt_copy.finish_granule ||
+            !vt_copy.destroy_builder || !vt_copy.compile ||
+            !vt_copy.may_match || !vt_copy.release) {
             return common::make_error<
                 "index extension '{}' refused: a required callback is NULL">(
                 common::ErrorCode::InvalidArgument, name);
         }
         return trace::index::extensions::ExtensionPtr(
             dstd::make_shared<PluginIndexExtension>(
-                std::move(library), dstd::String(name), *vt, self));
+                std::move(library), dstd::String(name), vt_copy, self));
     }
 
     PluginIndexExtension(dstd::SharedPtr<PluginLibrary> library,

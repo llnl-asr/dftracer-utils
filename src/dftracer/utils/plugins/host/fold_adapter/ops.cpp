@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/c_api_error.h>
 #include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/internal/validate.h>
 #include <dftracer/utils/dataframe/op.h>
@@ -7,6 +8,7 @@
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/duql/lower.h>
 #include <dftracer/utils/plugins/host/fold_adapter/ext.h>
+#include <dftracer/utils/plugins/host/plugin_abi.h>
 #include <dftracer/utils/plugins/host/reserved_names.h>
 
 #include <cstdint>
@@ -178,13 +180,19 @@ dftu_status detail::register_plugin_udf(
     if (desc == nullptr || desc->name == nullptr)
         return host_fail(ctx, DFTU_E_INVALID,
                          "register_udf: desc or its name is NULL");
-    if (desc->struct_size < sizeof(::dftu_udf_desc))
+    if (!plugin_struct_size_ok(
+            PluginStruct::UdfDesc, desc->struct_size,
+            static_cast<std::uint32_t>(sizeof(::dftu_udf_desc))))
         return host_fail(
             ctx, DFTU_E_INVALID,
-            dstd::fmt<"udf '{}' refused: struct_size {} is below {}">(
+            dstd::fmt<"udf '{}' refused: struct_size {} is outside [{}, {}]">(
                 dstd::StringView(desc->name), desc->struct_size,
+                plugin_struct_min_size(PluginStruct::UdfDesc),
                 static_cast<std::uint32_t>(sizeof(::dftu_udf_desc))));
-    auto registered = dataframe::add_udf(*desc, self, std::move(library));
+    ::dftu_udf_desc desc_copy{};
+    common::copy_struct(&desc_copy, sizeof(desc_copy), desc, desc->struct_size,
+                        plugin_struct_min_size(PluginStruct::UdfDesc));
+    auto registered = dataframe::add_udf(desc_copy, self, std::move(library));
     if (!registered) return host_fail(ctx, registered.error());
     return DFTU_OK;
 }
@@ -195,13 +203,19 @@ dftu_status detail::register_plugin_udaf(
     if (desc == nullptr || desc->name == nullptr)
         return host_fail(ctx, DFTU_E_INVALID,
                          "register_udaf: desc or its name is NULL");
-    if (desc->struct_size < sizeof(::dftu_udaf_desc))
+    if (!plugin_struct_size_ok(
+            PluginStruct::UdafDesc, desc->struct_size,
+            static_cast<std::uint32_t>(sizeof(::dftu_udaf_desc))))
         return host_fail(
             ctx, DFTU_E_INVALID,
-            dstd::fmt<"udaf '{}' refused: struct_size {} is below {}">(
+            dstd::fmt<"udaf '{}' refused: struct_size {} is outside [{}, {}]">(
                 dstd::StringView(desc->name), desc->struct_size,
+                plugin_struct_min_size(PluginStruct::UdafDesc),
                 static_cast<std::uint32_t>(sizeof(::dftu_udaf_desc))));
-    auto registered = dataframe::add_udaf(*desc, self, std::move(library));
+    ::dftu_udaf_desc desc_copy{};
+    common::copy_struct(&desc_copy, sizeof(desc_copy), desc, desc->struct_size,
+                        plugin_struct_min_size(PluginStruct::UdafDesc));
+    auto registered = dataframe::add_udaf(desc_copy, self, std::move(library));
     if (!registered) return host_fail(ctx, registered.error());
     return DFTU_OK;
 }

@@ -2,6 +2,7 @@
 // The adapter from a registered dftu_node_vt to the dataframe NodeImpl, and the
 // bridge that hands a plugin node its input cursor as a dftu_cursor_vt.
 
+#include <dftracer/utils/common/c_api_error.h>
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dataframe/c_api.h>
@@ -21,6 +22,7 @@
 #include <dftracer/utils/plugins/host/cursor_host.h>
 #include <dftracer/utils/plugins/host/frame_check.h>
 #include <dftracer/utils/plugins/host/node_adapter.h>
+#include <dftracer/utils/plugins/host/plugin_abi.h>
 #include <dftracer/utils/plugins/host/plugin_task.h>
 #include <dftracer/utils/plugins/task_abi.h>
 
@@ -181,13 +183,17 @@ class PluginNodeCursor final : public dataframe::Cursor {
         : node_(std::move(node)),
           host_(std::move(host)),
           out_self_(out_self),
-          out_vt_(out_vt),
+          out_vt_(),
           // Once per cursor: building it per frame would cost every scan the
           // check is off for.
-          label_(dstd::fmt<"node '{}' next">(node_->name)) {}
+          label_(dstd::fmt<"node '{}' next">(node_->name)) {
+        common::copy_struct(&out_vt_, sizeof(out_vt_), out_vt,
+                            out_vt->struct_size,
+                            plugin_struct_min_size(PluginStruct::CursorVt));
+    }
 
     ~PluginNodeCursor() override {
-        if (out_vt_->destroy) out_vt_->destroy(out_self_);
+        if (out_vt_.destroy) out_vt_.destroy(out_self_);
         host_.reset();
     }
 
@@ -201,8 +207,8 @@ class PluginNodeCursor final : public dataframe::Cursor {
         plugins::AbiContext ctx(cancel);
         AbiHandle<::dftu_dataframe, ::dftu_dataframe_free> frame;
         ::dftu_task* pending = nullptr;
-        dftu_status status = out_vt_->next(ctx.get(), out_self_, max_rows,
-                                           frame.slot(), &pending);
+        dftu_status status = out_vt_.next(ctx.get(), out_self_, max_rows,
+                                          frame.slot(), &pending);
         if (status < 0) {
             if (pending) plugins::free_abi_task(pending);
             co_return plugin_error(ctx, status,
@@ -235,7 +241,7 @@ class PluginNodeCursor final : public dataframe::Cursor {
     }
 
     coro::CoroTask<bool> narrow(const dataframe::Expr& predicate) override {
-        if (!out_vt_->narrow) co_return false;
+        if (!out_vt_.narrow) co_return false;
         std::int32_t applied = 0;
         AbiHandle<::dftu_expr, ::dftu_expr_free> h(
             dataframe::expr_handle_wrap(predicate));
@@ -243,7 +249,7 @@ class PluginNodeCursor final : public dataframe::Cursor {
         plugins::AbiContext ctx(cancel);
         ::dftu_task* t = nullptr;
         const dftu_status status =
-            out_vt_->narrow(ctx.get(), out_self_, h.get(), &applied, &t);
+            out_vt_.narrow(ctx.get(), out_self_, h.get(), &applied, &t);
         bool awaited_ok = status >= 0;
         if (status < 0) {
             if (t) plugins::free_abi_task(t);
@@ -265,7 +271,7 @@ class PluginNodeCursor final : public dataframe::Cursor {
     // After the plugin's cursor is destroyed, so what it left is released then.
     dstd::UniquePtr<CursorHost> host_;
     void* out_self_;
-    const ::dftu_cursor_vt* out_vt_;
+    ::dftu_cursor_vt out_vt_;
     dstd::String label_;
 };
 
@@ -313,7 +319,10 @@ class VtableNode final : public dataframe::NodeImpl {
         if (status < 0)
             return plugin_error(ctx, status,
                                 dstd::fmt<"lazy op '{}' open">(handle_->name));
-        if (!out_vt || out_vt->struct_size != sizeof(::dftu_cursor_vt) ||
+        if (!out_vt ||
+            !plugin_struct_size_ok(
+                PluginStruct::CursorVt, out_vt->struct_size,
+                static_cast<std::uint32_t>(sizeof(::dftu_cursor_vt))) ||
             !out_vt->next)
             return common::make_error<
                 "lazy op '{}': open() gave no valid cursor vtable">(
@@ -342,15 +351,22 @@ dstd::Result<void> register_node_vtable(dstd::StringView name,
             "node register: the name, output_schema and open must be set">(
             dstd::Condition::InvalidArgument);
     }
-    if (vt->struct_size != sizeof(::dftu_node_vt)) {
+    if (!plugin_struct_size_ok(
+            PluginStruct::NodeVt, vt->struct_size,
+            static_cast<std::uint32_t>(sizeof(::dftu_node_vt)))) {
         return dstd::Error::from_format<
-            "node '{}': struct_size is not sizeof(dftu_node_vt)">(
-            dstd::Condition::InvalidArgument, name);
+            "node '{}': struct_size {} is outside [{}, {}]">(
+            dstd::Condition::InvalidArgument, name, vt->struct_size,
+            plugin_struct_min_size(PluginStruct::NodeVt),
+            static_cast<std::uint32_t>(sizeof(::dftu_node_vt)));
     }
+    ::dftu_node_vt vt_copy{};
+    common::copy_struct(&vt_copy, sizeof(vt_copy), vt, vt->struct_size,
+                        plugin_struct_min_size(PluginStruct::NodeVt));
     // Not owned until registered, so a refused registration leaves `self` to
     // the caller.
     auto handle = dstd::make_shared<NodeHandle>(
-        std::move(library), std::move(memory), *vt, self, name, false);
+        std::move(library), std::move(memory), vt_copy, self, name, false);
     auto registered =
         dataframe::register_node(name, dstd::make_shared<VtableNode>(handle));
     if (registered) handle->owned = true;

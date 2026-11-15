@@ -10,8 +10,8 @@
 DFTU_PLUGIN_EXPORT const dftu_plugin_info* dftracer_plugin_info(void) {
     static const dftu_plugin_info info = {
         sizeof(dftu_plugin_info),
-        DFTRACER_UTILS_PLUGIN_ABI_VERSION ^ 0xFFFFFFFFu,
-        DFTRACER_UTILS_PLUGIN_ABI_HASH, "bad_abi_version", "1.0"};
+        DFTRACER_UTILS_PLUGIN_ABI_VERSION ^ 0xFFFFFFFFu, "bad_abi_version",
+        "1.0"};
     return &info;
 }
 

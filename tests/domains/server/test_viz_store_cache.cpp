@@ -1,12 +1,17 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/detail/coro.h>
+#include <dftracer/utils/domains/server/http_request.h>
+#include <dftracer/utils/domains/server/http_response.h>
+#include <dftracer/utils/domains/server/router.h>
 #include <dftracer/utils/domains/server/trace_index.h>
 #include <dftracer/utils/domains/server/viz/summary_build.h>
+#include <dftracer/utils/domains/server/viz_api.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/store/store.h>
 #include <dftracer/utils/trace/index/index.h>
 #include <dftracer/utils/trace/index/indexer.h>
 #include <dftracer/utils/trace/index/store/root_layout.h>
@@ -14,6 +19,8 @@
 #include <task_result.h>
 #include <testing_utilities.h>
 #include <unistd.h>
+
+#include <cstdlib>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::domains::server;
@@ -78,6 +85,100 @@ void write_trace(const dstd::String& path, int n) {
     dftu_utils_test::write_gz_trace(path, make_trace(n));
 }
 
+// A narrow window: the summary answers a whole-trace one, so only the live scan
+// reaches the result cache.
+constexpr const char* VIZ_RESULT_TARGET =
+    "/api/viz/stats?begin=1000&end=1200&ts_normalize=0";
+
+// One server over one trace folder: its index, its runtime and the viz routes,
+// so several requests share one result cache. A destroyed server drops the
+// index roots it held, as a restart does.
+class FolderServer {
+   public:
+    FolderServer(const dstd::String& directory, const dstd::String& index_dir)
+        : index_(directory, index_dir), rt_(4) {
+        auto task = coro::with_scope(
+            [&](coro::Scope&) -> coro::CoroTask<dstd::Result<void>> {
+                auto initialized = co_await index_.initialize();
+                if (!initialized) co_return initialized.error();
+                register_viz_api(router_, index_);
+                co_return dstd::Result<void>{};
+            });
+        dftu_utils_test::ok(rt_.submit(std::move(task), "viz_folder").wait());
+    }
+    FolderServer(const FolderServer&) = delete;
+    FolderServer& operator=(const FolderServer&) = delete;
+    ~FolderServer() {
+        index_.drain_viz_writes();
+        rt_.shutdown();
+        trace::index::release_all_roots();
+    }
+
+    dstd::String request(const dstd::String& target) {
+        HttpRequest req;
+        req.method = "GET";
+        req.path = target;
+        dstd::String body;
+        Router* router = &router_;
+        auto task = coro::with_scope(
+            [router, &req, &body](coro::Scope&) -> coro::CoroTask<void> {
+                HttpResponse response = co_await router->handle(req);
+                CHECK(response.status_code == 200);
+                body = std::move(response.body);
+                co_return;
+            });
+        dftu_utils_test::ok(rt_.submit(std::move(task), "viz_request").wait());
+        return body;
+    }
+
+    // All of `targets` at once, the bodies in order. The requests share the
+    // index, so they miss together and put together.
+    dstd::Vector<dstd::String> request_all(
+        const dstd::Vector<dstd::String>& targets) {
+        struct Slot {
+            HttpRequest req;
+            dstd::String body;
+        };
+        dstd::Vector<Slot> slots(targets.size());
+        dstd::Vector<TaskHandle> handles;
+        handles.reserve(targets.size());
+        Router* router = &router_;
+        for (std::size_t i = 0; i < targets.size(); ++i) {
+            slots[i].req.method = "GET";
+            slots[i].req.path = targets[i];
+            Slot* slot = &slots[i];
+            auto task = coro::with_scope(
+                [router, slot](coro::Scope&) -> coro::CoroTask<void> {
+                    HttpResponse response = co_await router->handle(slot->req);
+                    CHECK(response.status_code == 200);
+                    slot->body = std::move(response.body);
+                    co_return;
+                });
+            handles.push_back(
+                rt_.submit(std::move(task), "viz_request_parallel"));
+        }
+        for (auto& handle : handles) dftu_utils_test::ok(handle.wait());
+        dstd::Vector<dstd::String> out;
+        out.reserve(slots.size());
+        for (auto& slot : slots) out.push_back(std::move(slot.body));
+        return out;
+    }
+
+    std::size_t computes() const { return index_.viz_result_compute_count(); }
+    std::size_t summary_computes() const {
+        return index_.viz_summary_compute_count();
+    }
+    std::size_t store_reads() const {
+        return index_.viz_result_store_read_count();
+    }
+    std::size_t flush_count() const { return index_.viz_store_flush_count(); }
+
+   private:
+    TraceIndex index_;
+    Runtime rt_;
+    Router router_;
+};
+
 // The index root of `index_dir`, the way the server names it.
 dstd::String index_root(const dstd::String& index_dir) {
     return trace::index::normalize_index_root(index_dir);
@@ -94,6 +195,86 @@ dstd::Vector<dstd::String> indexed_paths(const dstd::String& root) {
     trace::index::release_all_roots();
     return out;
 }
+
+// One record of the index store, key and value.
+struct StoreRecord {
+    dstd::String key;
+    dstd::String value;
+};
+
+constexpr dstd::StringView VIZ_RESULT_NAMESPACE = "server.viz_result";
+constexpr dstd::StringView VIZ_SUMMARY_NAMESPACE = "server.viz_summary";
+
+// Every record of `name` the store under `index_dir` holds, in key order: the
+// keys and bytes a scan of the namespace reports.
+dstd::Vector<StoreRecord> stored_records(const dstd::String& index_dir,
+                                         dstd::StringView name) {
+    dstd::Vector<StoreRecord> out;
+    const dstd::String store_path =
+        trace::index::store_of(index_root(index_dir));
+    const auto exists = dstd::fs::exists(dstd::PathView(store_path));
+    if (!exists.has_value() || !*exists) return out;
+    auto store = dftu_utils_test::ok(store::Store::open(store_path));
+    auto snapshot = dftu_utils_test::ok(store.snapshot());
+    store::Namespace ns;
+    ns.spec.name.assign(name.data(), name.size());
+    auto cursor = snapshot.scan_all(ns, {}, {});
+    for (; !cursor.at_end(); cursor.next()) {
+        StoreRecord record;
+        const auto key = cursor.key();
+        record.key.assign(key.as<char>(), key.size());
+        const auto value = cursor.value();
+        REQUIRE(value.has_value());
+        record.value.assign(value->as<char>(), value->size());
+        out.push_back(std::move(record));
+    }
+    REQUIRE_FALSE(cursor.error().has_value());
+    return out;
+}
+
+// The stored responses of the folder: every record of the result namespace but
+// the folder's byte count, whose key starts with a NUL.
+dstd::Vector<StoreRecord> result_records(const dstd::String& index_dir) {
+    dstd::Vector<StoreRecord> out;
+    for (auto& record : stored_records(index_dir, VIZ_RESULT_NAMESPACE)) {
+        if (!record.key.empty() && record.key.front() == '\0') continue;
+        out.push_back(std::move(record));
+    }
+    return out;
+}
+
+std::size_t stored_bytes(const dstd::Vector<StoreRecord>& records) {
+    std::size_t total = 0;
+    for (const auto& record : records) total += record.value.size();
+    return total;
+}
+
+// A stats window of the trace: one cache key of its own.
+dstd::String window_target(int i) {
+    return dstd::fmt<"/api/viz/stats?begin={}&end={}&ts_normalize=0">(1000 + i,
+                                                                      1100 + i);
+}
+
+dstd::Vector<dstd::String> window_targets(int from, int to) {
+    dstd::Vector<dstd::String> out;
+    out.reserve(static_cast<std::size_t>(to - from));
+    for (int i = from; i < to; ++i) out.push_back(window_target(i));
+    return out;
+}
+
+// Sets an environment variable for one test case.
+class EnvVar {
+   public:
+    EnvVar(const char* name, const dstd::String& value) : name_(name) {
+        REQUIRE(::setenv(name, value.c_str(), 1) == 0);
+    }
+    EnvVar(const EnvVar&) = delete;
+    EnvVar& operator=(const EnvVar&) = delete;
+    ~EnvVar() { CHECK(::unsetenv(name_) == 0); }
+
+   private:
+    const char* name_;
+};
 
 // Changes the working directory for one test case, so a folder can be named
 // relatively. Each test file is a process of its own and doctest runs one case
@@ -300,5 +481,292 @@ TEST_SUITE("viz_store_cache") {
         const BuiltSummary second_sub = build_and_ensure(sub, index_dir);
         CHECK(second_sub.computes == 0);
         CHECK(second_sub.events == first_sub.events);
+    }
+
+    TEST_CASE("a stored viz result is served by a new index") {
+        auto dir = dftu_utils_test::make_unique_test_path("viz_result_restart");
+        REQUIRE(dstd::fs::create_directories(dir).has_value());
+        const dstd::String directory = dstd::String(dir.str());
+        const dstd::String index_dir = dstd::String((dir / "idx").str());
+        write_trace(dstd::String((dir / "trace.pfw.gz").str()), 12);
+
+        dstd::String first;
+        {
+            FolderServer server(directory, index_dir);
+            first = server.request(VIZ_RESULT_TARGET);
+            REQUIRE(!first.empty());
+            REQUIRE(server.computes() == 1);
+        }
+
+        FolderServer server(directory, index_dir);
+        const dstd::String second = server.request(VIZ_RESULT_TARGET);
+        CHECK(second == first);
+        CHECK(server.computes() == 0);
+        CHECK(server.store_reads() == 1);
+    }
+
+    TEST_CASE("a touched trace file invalidates its stored viz results") {
+        auto dir = dftu_utils_test::make_unique_test_path("viz_result_touch");
+        REQUIRE(dstd::fs::create_directories(dir).has_value());
+        const dstd::String directory = dstd::String(dir.str());
+        const dstd::String index_dir = dstd::String((dir / "idx").str());
+        const dstd::String trace = dstd::String((dir / "trace.pfw.gz").str());
+        write_trace(trace, 12);
+
+        dstd::String first;
+        {
+            FolderServer server(directory, index_dir);
+            first = server.request(VIZ_RESULT_TARGET);
+            REQUIRE(server.computes() == 1);
+        }
+
+        // The rewrite changes the file size, so the folder is stale and its
+        // stored results belong to another fingerprint.
+        write_trace(trace, 13);
+
+        FolderServer server(directory, index_dir);
+        const dstd::String second = server.request(VIZ_RESULT_TARGET);
+        CHECK(second != first);
+        CHECK(server.computes() == 1);
+    }
+
+    TEST_CASE("one folder stale keeps another folder's stored results") {
+        auto base =
+            dftu_utils_test::make_unique_test_path("viz_result_two_folders");
+        REQUIRE(dstd::fs::create_directories(base).has_value());
+        const dstd::String dir_a = dstd::String((base / "a").str());
+        const dstd::String dir_b = dstd::String((base / "b").str());
+        REQUIRE(
+            dstd::fs::create_directories(dstd::PathView(dir_a)).has_value());
+        REQUIRE(
+            dstd::fs::create_directories(dstd::PathView(dir_b)).has_value());
+        const dstd::String index_dir = dstd::String((base / "idx").str());
+        const dstd::String trace_a =
+            dstd::String((dstd::PathView(dir_a) / "trace.pfw.gz").str());
+        const dstd::String trace_b =
+            dstd::String((dstd::PathView(dir_b) / "trace.pfw.gz").str());
+        write_trace(trace_a, 12);
+        write_trace(trace_b, 12);
+
+        dstd::String first_a;
+        dstd::String first_b;
+        {
+            FolderServer server_a(dir_a, index_dir);
+            first_a = server_a.request(VIZ_RESULT_TARGET);
+            REQUIRE(server_a.computes() == 1);
+            FolderServer server_b(dir_b, index_dir);
+            first_b = server_b.request(VIZ_RESULT_TARGET);
+            REQUIRE(server_b.computes() == 1);
+        }
+
+        // Folder a is stale, so its stored results go with its index entries.
+        write_trace(trace_a, 13);
+        {
+            FolderServer server_a(dir_a, index_dir);
+            const dstd::String second_a = server_a.request(VIZ_RESULT_TARGET);
+            CHECK(second_a != first_a);
+            CHECK(server_a.computes() == 1);
+        }
+
+        FolderServer server_b(dir_b, index_dir);
+        CHECK(server_b.request(VIZ_RESULT_TARGET) == first_b);
+        CHECK(server_b.computes() == 0);
+        CHECK(server_b.store_reads() == 1);
+    }
+
+    TEST_CASE("a second identical request reads no store") {
+        auto dir = dftu_utils_test::make_unique_test_path("viz_result_memory");
+        REQUIRE(dstd::fs::create_directories(dir).has_value());
+        const dstd::String directory = dstd::String(dir.str());
+        const dstd::String index_dir = dstd::String((dir / "idx").str());
+        write_trace(dstd::String((dir / "trace.pfw.gz").str()), 12);
+
+        FolderServer server(directory, index_dir);
+        const dstd::String first = server.request(VIZ_RESULT_TARGET);
+        REQUIRE(server.computes() == 1);
+        const std::size_t reads = server.store_reads();
+        REQUIRE(reads == 1);
+
+        const dstd::String second = server.request(VIZ_RESULT_TARGET);
+        CHECK(second == first);
+        CHECK(server.computes() == 1);
+        CHECK(server.store_reads() == reads);
+    }
+
+    TEST_CASE(
+        "a run after a stale rebuild serves the rebuilt summary and result") {
+        auto dir = dftu_utils_test::make_unique_test_path("viz_result_rebuilt");
+        REQUIRE(dstd::fs::create_directories(dir).has_value());
+        const dstd::String directory = dstd::String(dir.str());
+        const dstd::String index_dir = dstd::String((dir / "idx").str());
+        const dstd::String trace = dstd::String((dir / "trace.pfw.gz").str());
+        write_trace(trace, 12);
+
+        {
+            FolderServer server(directory, index_dir);
+            CHECK(!server.request(VIZ_RESULT_TARGET).empty());
+            REQUIRE(server.computes() == 1);
+            REQUIRE(server.summary_computes() == 1);
+        }
+
+        // The rewrite makes the folder stale, so the second run re-indexes and
+        // computes both again, and stores what it computed.
+        write_trace(trace, 13);
+        dstd::String rebuilt;
+        {
+            FolderServer server(directory, index_dir);
+            rebuilt = server.request(VIZ_RESULT_TARGET);
+            CHECK(server.computes() == 1);
+            CHECK(server.summary_computes() == 1);
+        }
+
+        FolderServer server(directory, index_dir);
+        CHECK(server.request(VIZ_RESULT_TARGET) == rebuilt);
+        CHECK(server.computes() == 0);
+        CHECK(server.summary_computes() == 0);
+        CHECK(server.store_reads() == 1);
+    }
+
+    TEST_CASE(
+        "a file added to the folder drops its stored summary and results") {
+        auto dir = dftu_utils_test::make_unique_test_path("viz_store_added");
+        REQUIRE(dstd::fs::create_directories(dir).has_value());
+        const dstd::String directory = dstd::String(dir.str());
+        const dstd::String index_dir = dstd::String((dir / "idx").str());
+        write_trace(dstd::String((dir / "a.pfw.gz").str()), 12);
+
+        {
+            FolderServer server(directory, index_dir);
+            CHECK(!server.request(VIZ_RESULT_TARGET).empty());
+            REQUIRE(server.computes() == 1);
+        }
+        REQUIRE(result_records(index_dir).size() == 1);
+        REQUIRE(stored_records(index_dir, VIZ_SUMMARY_NAMESPACE).size() == 1);
+
+        // A new file makes the folder stale, and the folder scope it drops is
+        // the only one either namespace has.
+        write_trace(dstd::String((dir / "b.pfw.gz").str()), 12);
+        {
+            FolderServer server(directory, index_dir);
+        }
+        CHECK(result_records(index_dir).empty());
+        CHECK(stored_records(index_dir, VIZ_SUMMARY_NAMESPACE).empty());
+    }
+
+    TEST_CASE("parallel distinct requests are all stored") {
+        auto dir = dftu_utils_test::make_unique_test_path("viz_store_parallel");
+        REQUIRE(dstd::fs::create_directories(dir).has_value());
+        const dstd::String directory = dstd::String(dir.str());
+        const dstd::String index_dir = dstd::String((dir / "idx").str());
+        write_trace(dstd::String((dir / "trace.pfw.gz").str()), 12);
+        const auto targets = window_targets(0, 12);
+
+        dstd::Vector<dstd::String> bodies;
+        {
+            FolderServer server(directory, index_dir);
+            bodies = server.request_all(targets);
+            CHECK(server.computes() == targets.size());
+            CHECK(server.flush_count() == 0);
+        }
+
+        // Every write the requests started is committed, so a restart serves
+        // all of them, the summary with them.
+        REQUIRE(result_records(index_dir).size() == targets.size());
+        FolderServer server(directory, index_dir);
+        for (std::size_t i = 0; i < targets.size(); ++i)
+            CHECK(server.request(targets[i]) == bodies[i]);
+        CHECK(server.computes() == 0);
+        CHECK(server.store_reads() == targets.size());
+    }
+
+    TEST_CASE(
+        "a put does not flush the store and shutdown commits every write") {
+        auto dir = dftu_utils_test::make_unique_test_path("viz_store_flush");
+        REQUIRE(dstd::fs::create_directories(dir).has_value());
+        const dstd::String directory = dstd::String(dir.str());
+        const dstd::String index_dir = dstd::String((dir / "idx").str());
+        write_trace(dstd::String((dir / "trace.pfw.gz").str()), 12);
+        const auto targets = window_targets(0, 4);
+
+        {
+            FolderServer server(directory, index_dir);
+            for (const auto& target : targets)
+                CHECK(!server.request(target).empty());
+            REQUIRE(server.computes() == targets.size());
+            // The requests waited for no store write and flushed none.
+            CHECK(server.flush_count() == 0);
+        }
+        CHECK(result_records(index_dir).size() == targets.size());
+    }
+
+    TEST_CASE("the folder's stored results stay under the byte bound") {
+        auto dir = dftu_utils_test::make_unique_test_path("viz_store_bound");
+        REQUIRE(dstd::fs::create_directories(dir).has_value());
+        const dstd::String directory = dstd::String(dir.str());
+        const dstd::String index_dir = dstd::String((dir / "idx").str());
+        write_trace(dstd::String((dir / "trace.pfw.gz").str()), 12);
+
+        // What ten windows cost to store, with no bound.
+        {
+            FolderServer server(directory, index_dir);
+            server.request_all(window_targets(0, 10));
+        }
+        const auto full = result_records(index_dir);
+        REQUIRE(full.size() == 10);
+        REQUIRE(stored_bytes(full) > 0);
+
+        // Ten more windows, with the bound at a third of that: the folder drops
+        // its stored results as it passes it.
+        const auto targets = window_targets(10, 20);
+        const std::size_t limit = stored_bytes(full) / 3;
+        REQUIRE(limit > 0);
+        dstd::Vector<dstd::String> bodies;
+        {
+            const EnvVar bound("DFTRACER_UTILS_VIZ_RESULT_STORE_BYTES",
+                               dstd::to_string(limit));
+            FolderServer server(directory, index_dir);
+            bodies = server.request_all(targets);
+            CHECK(server.computes() == targets.size());
+        }
+        const auto kept = result_records(index_dir);
+        CHECK(kept.size() < targets.size());
+        CHECK(stored_bytes(kept) <= limit);
+
+        // What it kept still serves from the store, with no bound set so a miss
+        // cannot drop the rest.
+        FolderServer server(directory, index_dir);
+        std::size_t served = 0;
+        for (std::size_t i = 0; i < targets.size(); ++i) {
+            const std::size_t before = server.computes();
+            const dstd::String body = server.request(targets[i]);
+            if (server.computes() != before) continue;
+            ++served;
+            CHECK(body == bodies[i]);
+        }
+        CHECK(served == kept.size());
+        CHECK(served > 0);
+    }
+
+    TEST_CASE("an untimed events request reads the store once") {
+        auto dir = dftu_utils_test::make_unique_test_path("viz_store_events");
+        REQUIRE(dstd::fs::create_directories(dir).has_value());
+        const dstd::String directory = dstd::String(dir.str());
+        const dstd::String index_dir = dstd::String((dir / "idx").str());
+        write_trace(dstd::String((dir / "trace.pfw.gz").str()), 12);
+        const dstd::String target = "/api/viz/untimed?limit=5";
+
+        dstd::String first;
+        {
+            FolderServer server(directory, index_dir);
+            first = server.request(target);
+            REQUIRE(!first.empty());
+            // The whole text and the page are two keys of one read.
+            CHECK(server.store_reads() == 1);
+            REQUIRE(server.computes() == 1);
+        }
+
+        FolderServer server(directory, index_dir);
+        CHECK(server.request(target) == first);
+        CHECK(server.store_reads() == 1);
     }
 }

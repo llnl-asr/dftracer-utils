@@ -323,6 +323,7 @@ list(APPEND DFTRACER_UTILS_DOMAINS_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/domains/server/tcp_listener.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/domains/server/trace_index.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/domains/server/trace_api.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/domains/server/viz_result_cache.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/domains/server/viz/api.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/domains/server/viz/prov.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/domains/server/viz/calltree.cpp

@@ -121,6 +121,18 @@ inline constexpr std::size_t STORE_DEFAULT_PAGE_CACHE_BYTES = std::size_t{64}
                                                               << 20;
 }  // namespace store
 
+/// The server's stored caches.
+namespace server {
+/// The most bytes of stored viz responses one trace folder keeps in the index
+/// store under `server.viz_result`. A folder that would pass it drops its
+/// stored responses and starts again. VIZ_RESULT_STORE_BYTES_ENV overrides it
+/// with a plain number of bytes.
+inline constexpr const char* VIZ_RESULT_STORE_BYTES_ENV =
+    "DFTRACER_UTILS_VIZ_RESULT_STORE_BYTES";
+inline constexpr std::uint64_t VIZ_RESULT_DEFAULT_STORE_BYTES =
+    std::uint64_t{64} << 20;
+}  // namespace server
+
 /// What a file in flight and each piece parsed at once reserve from the memory
 /// budget, in bytes held per byte of plaintext. Set from the manager's peak on
 /// traces of 1 to 30 MiB compressed.

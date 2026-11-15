@@ -89,6 +89,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 ### Changed
 
 - `dftracer_server` keeps its viz summary in the index store of each trace folder, namespace `server.viz_summary`, in place of one `.dftviz_summary` file per index directory. A restart serves it from the store, and a changed, added or removed trace file makes the server compute it again. An old `.dftviz_summary` file is ignored.
+- `dftracer_server` caches its viz responses in the index store of each trace folder, namespace `server.viz_result`, so a restart serves a response that a trace file did not invalidate without scanning the trace. A response key carries the folder's fingerprint, so a changed file misses.
+  One scope per folder holds both namespaces, and an added or removed trace file drops that scope, with the summary and every response of the folder in it.
+  `DFTRACER_UTILS_VIZ_RESULT_STORE_BYTES` bounds the stored responses of one folder, 64 MiB by default, and a folder that would pass it drops its stored responses and starts again.
+  A request no longer waits for the store, because the index writes each response in a task of its own and flushes the store once when the index shuts down.
 - The plugin loader accepts an ABI version whose major matches the host's and whose minor is no greater than the host's; the patch is ignored. A refusal names both versions and the rule.
 - Plugin-to-host records are accepted when ``struct_size`` is between the size of that record before its trailing optional callbacks and the host's ``sizeof``; the host copies the declared prefix into a zeroed host record and reads only that copy, so an omitted optional trailing callback reads NULL. The plugin ABI header hash is removed: ``dftu_plugin_info`` has no ``abi_hash`` field, ``abi_version.h`` defines no ``DFTRACER_UTILS_PLUGIN_ABI_HASH`` macro, and the Python extension no longer exports ``PLUGIN_ABI_HASH``. The JIT cache keeps its header fingerprint.
 

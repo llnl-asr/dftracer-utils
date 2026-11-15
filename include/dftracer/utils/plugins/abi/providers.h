@@ -256,7 +256,8 @@ typedef struct dftu_source_vt {
        DFTU_SVC_NODES and DFTU_SVC_INDEX as a fold callback's host does, and
        returns NULL for the services that belong to one scan: DFTU_SVC_TASK,
        DFTU_SVC_FILEIO, DFTU_SVC_AGG, DFTU_SVC_RESULT, DFTU_SVC_PORTS,
-       DFTU_SVC_DUQL and DFTU_SVC_TRACE. Its resolve returns NULL and its
+       DFTU_SVC_DUQL, DFTU_SVC_TRACE and DFTU_SVC_STORE, which needs the trace
+       folder of one scan (see abi/store.h). Its resolve returns NULL and its
        intern returns DFTU_STR_NONE, since a cursor has no intern table. A
        reservation made through it is charged to the plugin's pool, and a
        reclaimer set on it runs on the thread that drives the cursor, between

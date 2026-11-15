@@ -196,3 +196,49 @@ cleanly and may carry a reclaimer that the host calls when a grow needs room.
 
 .. doxygenfile:: dftracer/utils/plugins/abi/memory.h
    :project: dftracer-utils
+
+``dftu.svc.store``: the store of the index root the scan reads, in the
+plugin's own namespaces. Every call forwards one function of the store C ABI
+(``dftracer/utils/store/c_api.h``) with the same arguments, handles and
+meaning, except that an error goes to the callback's ``ctx``. The host owns
+the store, so a plugin opens nothing: no open, close, pack, drop, flush,
+publish, fail or refresh, and it never sees a directory.
+
+The plugin passes a name of its own, ``<ns>``, and the host registers it as
+``plugin.<plugin name>.<ns>``. A plugin therefore reaches only its own
+namespaces, and two plugins that choose the same ``<ns>`` keep separate data.
+A name that is empty, contains ``..``, starts with ``.``, starts with
+``dftu.`` or ``server.``, or holds a byte outside ``[a-z0-9_.-]`` is refused
+with ``DFTU_E_INVALID`` and a message that names it.
+
+A commit is not durable by itself. A snapshot of the same process sees the
+batch once its bytes reach a published extent, and a reader in another process
+sees it after the host flushes its writer at the end of the fold, or earlier
+once the batch's extent fills. A snapshot can be up to a second old, so read a
+value back in a later fold, not in the call that wrote it. The plugin has no
+flush of its own, because the host holds the one writer of the directory; the
+host flushes that writer once, from the fold's finalize, whichever fold of the
+plugin committed, and a failed flush fails the run. ``commit`` consumes its
+batch whether it commits or is refused. Only a durable namespace is synced to disk, so a machine crash
+can still lose a committed batch of any other namespace.
+
+The store is the one writer per process of that directory, so a batch needs no
+open or close of its own. A scan covers one index root: a unit of a second root
+makes every call of this group fail with ``DFTU_E_INVALID`` and a message that
+names both roots.
+
+A namespace, batch or snapshot handle belongs to the store directory the host
+lent, compared by that directory rather than by the fold's address. Every fold
+of one index root lends the same directory, so a handle a slice step made works
+in the same plugin's master finalize. A handle of another root, or a stale one
+from a fold that ended, is refused with ``DFTU_E_INVALID``, because namespace
+ids are sequential per writer and an id alone would reach another store's
+namespace. A NULL handle of any of those, and of a cursor, is refused with
+``DFTU_E_INVALID`` and a message that names it.
+
+A fold callback's host answers this group from its first unit on, since the
+unit's index carries the root. A handle's cursor host and the build host answer
+NULL, because neither runs over one trace folder.
+
+.. doxygenfile:: dftracer/utils/plugins/abi/store.h
+   :project: dftracer-utils

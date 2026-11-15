@@ -23,6 +23,7 @@
 #include <dftracer/utils/plugins/plugin/fileio.h>
 #include <dftracer/utils/plugins/plugin/format.h>
 #include <dftracer/utils/plugins/plugin/memory.h>
+#include <dftracer/utils/plugins/plugin/store.h>
 // clang-format on
 
 #endif /* DFTRACER_UTILS_PLUGINS_PLUGIN_H */

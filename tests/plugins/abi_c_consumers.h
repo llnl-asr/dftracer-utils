@@ -91,6 +91,53 @@ void dftu_test_format_ops(dftu_ctx*, const dftu_plugin_host*,
                           const dftu_test_harness*, const char* id);
 void dftu_test_memory_ops(dftu_ctx*, const dftu_plugin_host*,
                           const dftu_test_harness*);
+/* dftu.svc.store consumers: what one call saw, for the C++ test to assert. */
+typedef struct dftu_store_report {
+    int has_service;          /* the host lent DFTU_SVC_STORE */
+    int namespace_registered; /* ns() returned a handle */
+    int committed;            /* the batch committed */
+    int found;                /* the read found a value */
+    int refused_read;   /* a read through another host's namespace failed */
+    int null_refused;   /* NULL handles the host refused with DFTU_E_INVALID */
+    dftu_status status; /* the status of the last ns() */
+    char value[128];    /* the value read, NUL terminated */
+    char message[512];  /* the ctx message of a refusal */
+} dftu_store_report;
+void dftu_test_store_write(dftu_ctx*, const dftu_plugin_host*,
+                           const dftu_test_harness*, const char* ns,
+                           const char* path, const char* value,
+                           const dftu_store_source_stat*, dftu_store_report*);
+void dftu_test_store_write_at(dftu_ctx*, const dftu_plugin_host*,
+                              const dftu_test_harness*, const char* ns,
+                              const char* path, const char* key,
+                              const char* value, const dftu_store_source_stat*,
+                              dftu_store_report*);
+void dftu_test_store_nulls(dftu_ctx*, const dftu_plugin_host*,
+                           const dftu_test_harness*, const char* ns,
+                           const char* path, dftu_store_report*);
+dftu_status dftu_test_store_make_batch(dftu_ctx*, const dftu_plugin_host*,
+                                       const dftu_test_harness*, const char* ns,
+                                       const char* path, dftu_store_batch_t**,
+                                       dftu_store_report*);
+void dftu_test_store_commit(dftu_ctx*, const dftu_plugin_host*,
+                            const dftu_test_harness*, dftu_store_batch_t*,
+                            dftu_store_report*);
+void dftu_test_store_probe_ns(dftu_ctx*, const dftu_plugin_host*,
+                              const dftu_test_harness*, const char* ns,
+                              dftu_store_ns_t**, dftu_store_report*);
+void dftu_test_store_use(dftu_ctx*, const dftu_plugin_host*,
+                         const dftu_test_harness*, dftu_store_ns_t*,
+                         const char* path, dftu_store_report*);
+void dftu_test_store_read(dftu_ctx*, const dftu_plugin_host*,
+                          const dftu_test_harness*, const char* ns,
+                          const char* path, dftu_store_report*);
+void dftu_test_store_cross(dftu_ctx*, const dftu_plugin_host*,
+                           const dftu_plugin_host*, const dftu_test_harness*,
+                           const char* ns, const char* path,
+                           dftu_store_report*);
+void dftu_test_store_probe(dftu_ctx*, const dftu_plugin_host*,
+                           const dftu_test_harness*, const char* ns,
+                           dftu_store_report*);
 /* The file format and sink vtables, registered through a service table of the
  * consumer's own: no host involved. */
 void dftu_test_file_format_ops(dftu_ctx*, const dftu_test_harness*);

@@ -27,6 +27,7 @@
 #include <dftracer/utils/plugins/abi/providers.h>
 #include <dftracer/utils/plugins/abi/result.h>
 #include <dftracer/utils/plugins/abi/sketch.h>
+#include <dftracer/utils/plugins/abi/store.h>
 #include <dftracer/utils/plugins/abi/task.h>
 #include <dftracer/utils/plugins/abi/trace.h>
 #include <dftracer/utils/plugins/abi/value.h>

@@ -1145,6 +1145,8 @@ const void* host_get_service(void*, const char* ext_id) {
     if (std::strcmp(ext_id, DFTU_SVC_AGG) == 0) return detail::agg_ext_vtable();
     if (std::strcmp(ext_id, DFTU_SVC_MEMORY) == 0)
         return detail::memory_ext_vtable();
+    if (std::strcmp(ext_id, DFTU_SVC_STORE) == 0)
+        return detail::store_ext_vtable();
     return detail::stateless_service(ext_id);
 }
 
@@ -1345,6 +1347,7 @@ PluginFold::PluginFold(const dftu_plugin* plugin,
 }
 
 PluginFold::~PluginFold() {
+    if (store_ != nullptr) ::dftu_store_free(store_);
     if (slice_) plugin_->destroy_slice(slice_);
     memory_->release_tagged(this);
 }
@@ -1436,6 +1439,7 @@ bool PluginFold::passes_query(const FoldEvent& ev) {
 // plugin runs SIMD column ops instead of a per-event loop. build_row_frame is
 // the same columnar materializer NativeRowFold uses.
 dstd::Result<void> PluginFold::step(const FoldBatch& batch) {
+    note_index_path(batch.unit.index_path);
     if (slice_error_) return *slice_error_;
     // A transform steps by rewriting the batch; on_batch is not called
     // beside it (the transform accumulates inside its own call).
@@ -1571,6 +1575,11 @@ dataframe::DataFrame PluginFold::rewritten_batch(
 
 dstd::Result<void> PluginFold::merge(Fold& other) {
     auto& o = static_cast<PluginFold&>(other);
+    // The slices saw the units, so the master takes the index root from them
+    // and finalize can reach the store service.
+    // The slices saw the units and each handed out its own handle over the one
+    // writer of the directory, so the master takes the root and does the flush.
+    take_store_notes(o);
     memory_->retag(&o, this);
     if (auto states = states_merge(o); !states) return states.error();
     if (!slice_) return {};
@@ -1644,6 +1653,8 @@ coro::CoroTask<dstd::Result<bool>> PluginFold::finalize(const CoverageSet&) {
             }
         }
     }
+    auto flushed = store_flush();
+    if (!flushed) co_return flushed.error();
     co_return false;
 }
 

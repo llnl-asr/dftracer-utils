@@ -355,6 +355,10 @@ class Host {
     class Json json() const;
     class Yaml yaml() const;
 
+    /// The store service: the index root's store of the trace folder the scan
+    /// reads, in the plugin's own namespaces; see plugin/store.h.
+    class Store store() const;
+
     /// The memory service: blocks in the plugin's pool and reservations with
     /// reclaimers; see plugin/memory.h.
     class Memory memory() const;

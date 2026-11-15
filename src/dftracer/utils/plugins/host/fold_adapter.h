@@ -17,6 +17,7 @@
 #include <dftracer/utils/plugins/host/plugin_memory.h>
 #include <dftracer/utils/plugins/host/state_registry.h>
 #include <dftracer/utils/plugins/result_registry.h>
+#include <dftracer/utils/trace/index/store/root_layout.h>
 #include <dftracer/utils/trace/views/fold.h>
 
 #include <cstddef>
@@ -183,8 +184,12 @@ class PluginFold : public trace::views::detail::Fold {
     const dstd::String& plugin_name() const { return plugin_name_; }
 
     dstd::Result<void> step(const FoldBatch& batch) override;
-    void seal_unit(const ScanUnit&) override {}
-    void drop_unit(const ScanUnit&) override {}
+    void seal_unit(const ScanUnit& unit) override {
+        note_index_path(unit.index_path);
+    }
+    void drop_unit(const ScanUnit& unit) override {
+        note_index_path(unit.index_path);
+    }
     dstd::Result<void> merge(Fold& other) override;
     coro::CoroTask<dstd::Result<bool>> finalize(
         const CoverageSet& covered) override;
@@ -264,6 +269,61 @@ class PluginFold : public trace::views::detail::Fold {
     }
     ::dftu_trace_writer* make_trace_writer(const char* path);
     dstd::Result<void> close_trace_writer(::dftu_trace_writer* w);
+
+    /// The store of the scan's index root (dftu.svc.store), opened on the
+    /// first call and freed with the fold; fails until a unit names its index.
+    dftu_status store_for(::dftu_ctx* ctx, ::dftu_store_t** out);
+    /// The store directory this fold lends. Every fold over one index root
+    /// names the same one, since the store state is shared per directory, and a
+    /// handle the host made carries it so another directory's fold can refuse
+    /// it.
+    const dstd::String& store_identity();
+    /// Flushes the plugin's store once, from finalize, so a reader in another
+    /// process sees what the fold committed; the error is the run's. A slice
+    /// that used the store left its handle behind, so the master opens the
+    /// shared state here and flushes it.
+    dstd::Result<void> store_flush();
+    /// Notes the index path of a unit the scan hands this fold. The first one
+    /// names the index root the store service opens; a unit of a second root is
+    /// a conflict the store call reports, since one store serves one root.
+    /// Units of one root may name its directory or a file inside it, so the two
+    /// index paths are compared by the store directory they resolve to.
+    void note_index_path(dstd::StringView index_path) {
+        if (index_path.empty() || index_path == last_index_path_) return;
+        last_index_path_ = dstd::String(index_path);
+        const dstd::String dir = trace::index::store_of(index_path);
+        if (dir.empty()) return;
+        if (store_dir_.empty()) {
+            store_root_ = dstd::String(index_path);
+            store_dir_ = dir;
+            return;
+        }
+        if (store_dir_ == dir) return;
+        if (store_conflict_.empty()) {
+            store_conflict_ = dstd::String(index_path);
+            store_conflict_dir_ = dir;
+        }
+    }
+
+    /// Takes another fold's notes: a slice saw the units, so the master learns
+    /// the root, a conflict and that the store was handed out from it.
+    void take_store_notes(const PluginFold& other) {
+        if (!other.store_dir_.empty()) {
+            if (store_dir_.empty()) {
+                store_root_ = dstd::String(other.store_root_);
+                store_dir_ = dstd::String(other.store_dir_);
+            } else if (store_dir_ != other.store_dir_ &&
+                       store_conflict_.empty()) {
+                store_conflict_ = dstd::String(other.store_root_);
+                store_conflict_dir_ = dstd::String(other.store_dir_);
+            }
+        }
+        if (store_conflict_.empty() && !other.store_conflict_.empty()) {
+            store_conflict_ = dstd::String(other.store_conflict_);
+            store_conflict_dir_ = dstd::String(other.store_conflict_dir_);
+        }
+        if (other.store_used_) store_used_ = true;
+    }
 
     /// The plugin's name for an error message.
     dstd::StringView plugin_label() const {
@@ -362,6 +422,20 @@ class PluginFold : public trace::views::detail::Fold {
     // construction. Empty means the plugin declared none, which build_row_frame
     // reads as "every column".
     dstd::Vector<dstd::String> projection_;
+
+    // The index path of the scan's first unit, which names the index root of
+    // the store dftu.svc.store lends, that root's store directory, and the
+    // handle once opened. `store_used_` records that this fold or a slice it
+    // merged handed the store out, so finalize flushes the shared writer.
+    dstd::String store_root_;
+    dstd::String store_conflict_;
+    dstd::String store_dir_;
+    dstd::String store_conflict_dir_;
+    /// The index path note_index_path saw last, so a batch of the same unit
+    /// skips resolving its store directory again.
+    dstd::String last_index_path_;
+    bool store_used_ = false;
+    ::dftu_store_t* store_ = nullptr;
 };
 
 }  // namespace dftracer::utils::plugins::host

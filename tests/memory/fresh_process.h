@@ -3,10 +3,13 @@
 #define DFTRACER_UTILS_TESTS_MEMORY_FRESH_PROCESS_H
 
 #include <no_core_dump.h>
+#include <poll.h>
 #include <signal.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include <cerrno>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -72,7 +75,7 @@ inline void announce_abort() {
 /// Runs one test case of this binary that is skipped by default in a new
 /// process, so it starts with no heap, cache or thread state from the tests
 /// that ran before it.
-inline Result run(const char* test_case) {
+inline Result run(const char* test_case, int timeout_ms = 0) {
     std::string self = self_path();
     std::string filter = std::string("--test-case=") + test_case;
     int fds[2];
@@ -99,14 +102,49 @@ inline Result run(const char* test_case) {
     }
     ::close(fds[1]);
     ::close(err[1]);
+    // A timeout bounds the read as well as the wait, so a hung child that
+    // keeps its stderr open fails the test instead of hanging it.
+    const auto deadline = std::chrono::steady_clock::now() +
+                          std::chrono::milliseconds(timeout_ms);
+    bool timed_out = false;
     char chunk[512];
-    ssize_t got;
-    while ((got = ::read(err[0], chunk, sizeof(chunk))) > 0) {
+    for (;;) {
+        int wait_ms = -1;
+        if (timeout_ms > 0) {
+            const auto left =
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    deadline - std::chrono::steady_clock::now());
+            if (left.count() <= 0) {
+                timed_out = true;
+                break;
+            }
+            wait_ms = static_cast<int>(left.count());
+        }
+        pollfd pfd{err[0], POLLIN, 0};
+        const int ready = ::poll(&pfd, 1, wait_ms);
+        if (ready < 0 && errno == EINTR) continue;
+        if (ready == 0) {
+            timed_out = true;
+            break;
+        }
+        const ssize_t got = ::read(err[0], chunk, sizeof(chunk));
+        if (got <= 0) break;
         result.output.append(chunk, static_cast<std::size_t>(got));
     }
     ::close(err[0]);
     std::fputs(result.output.c_str(), stderr);
-    ::waitpid(pid, &result.status, 0);
+    while (!timed_out && timeout_ms > 0 &&
+           ::waitpid(pid, &result.status, WNOHANG) == 0) {
+        if (std::chrono::steady_clock::now() >= deadline) {
+            timed_out = true;
+            break;
+        }
+        ::usleep(10000);
+    }
+    if (timed_out || timeout_ms <= 0) {
+        if (timed_out) ::kill(pid, SIGKILL);
+        ::waitpid(pid, &result.status, 0);
+    }
     char byte = 0;
     result.announced = ::read(fds[0], &byte, 1) == 1;
     ::close(fds[0]);

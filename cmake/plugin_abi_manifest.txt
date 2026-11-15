@@ -16,6 +16,7 @@ const DFTU_SVC_PORTS "dftu.svc.ports"
 const DFTU_SVC_PROVIDERS "dftu.svc.providers"
 const DFTU_SVC_RESULT "dftu.svc.result"
 const DFTU_SVC_SKETCH "dftu.svc.sketch"
+const DFTU_SVC_STORE "dftu.svc.store"
 const DFTU_SVC_TASK "dftu.svc.task"
 const DFTU_SVC_TRACE "dftu.svc.trace"
 const DFTU_SVC_YAML "dftu.svc.yaml"
@@ -853,6 +854,31 @@ field dftu_svc_sketch.sketch_free offset 40 size 8
 field dftu_svc_sketch.sketch_merge offset 24 size 8
 field dftu_svc_sketch.sketch_result offset 32 size 8
 field dftu_svc_sketch.struct_size offset 0 size 4
+field dftu_svc_store.batch offset 24 size 8
+field dftu_svc_store.batch_free offset 72 size 8
+field dftu_svc_store.commit offset 64 size 8
+field dftu_svc_store.cursor_free offset 152 size 8
+field dftu_svc_store.cursor_key offset 136 size 8
+field dftu_svc_store.cursor_next offset 128 size 8
+field dftu_svc_store.cursor_value offset 144 size 8
+field dftu_svc_store.erase offset 48 size 8
+field dftu_svc_store.erase_range offset 56 size 8
+field dftu_svc_store.fold offset 40 size 8
+field dftu_svc_store.get offset 96 size 8
+field dftu_svc_store.multi_get offset 104 size 8
+field dftu_svc_store.ns offset 8 size 8
+field dftu_svc_store.ns_free offset 16 size 8
+field dftu_svc_store.put offset 32 size 8
+field dftu_svc_store.scan_prefix offset 112 size 8
+field dftu_svc_store.scan_range offset 120 size 8
+field dftu_svc_store.snapshot offset 80 size 8
+field dftu_svc_store.snapshot_free offset 88 size 8
+field dftu_svc_store.struct_size offset 0 size 4
+field dftu_svc_store.value_bytes offset 160 size 8
+field dftu_svc_store.value_free offset 168 size 8
+field dftu_svc_store.value_list_at offset 184 size 8
+field dftu_svc_store.value_list_count offset 176 size 8
+field dftu_svc_store.value_list_free offset 192 size 8
 field dftu_svc_task.all offset 32 size 8
 field dftu_svc_task.any offset 40 size 8
 field dftu_svc_task.discard offset 88 size 8
@@ -1128,6 +1154,30 @@ fnptr dftu_svc_sketch.sketch_create dftu_sketch* (*)(void*)
 fnptr dftu_svc_sketch.sketch_free void (*)(void*, dftu_sketch*)
 fnptr dftu_svc_sketch.sketch_merge void (*)(void*, dftu_sketch*, const dftu_sketch*)
 fnptr dftu_svc_sketch.sketch_result dftu_quantiles (*)(void*, const dftu_sketch*)
+fnptr dftu_svc_store.batch dftu_status (*)(dftu_ctx*, void*, const dftu_store_ns_t*, const dftu_store_scope*, uint64_t, const dftu_store_source_stat*, uint64_t, dftu_store_batch_t**)
+fnptr dftu_svc_store.batch_free void (*)(dftu_store_batch_t*)
+fnptr dftu_svc_store.commit dftu_status (*)(dftu_ctx*, void*, dftu_store_batch_t*)
+fnptr dftu_svc_store.cursor_free void (*)(dftu_store_cursor_t*)
+fnptr dftu_svc_store.cursor_key dftu_store_bytes (*)(const dftu_store_cursor_t*)
+fnptr dftu_svc_store.cursor_next dftu_status (*)(dftu_ctx*, dftu_store_cursor_t*)
+fnptr dftu_svc_store.cursor_value dftu_status (*)(dftu_ctx*, dftu_store_cursor_t*, dftu_store_bytes*)
+fnptr dftu_svc_store.erase dftu_status (*)(dftu_ctx*, dftu_store_batch_t*, const uint8_t*, uint64_t)
+fnptr dftu_svc_store.erase_range dftu_status (*)(dftu_ctx*, dftu_store_batch_t*, const uint8_t*, uint64_t, const uint8_t*, uint64_t)
+fnptr dftu_svc_store.fold dftu_status (*)(dftu_ctx*, dftu_store_batch_t*, const uint8_t*, uint64_t, const uint8_t*, uint64_t)
+fnptr dftu_svc_store.get dftu_status (*)(dftu_ctx*, const dftu_store_snapshot_t*, const dftu_store_ns_t*, const dftu_store_scope*, const uint8_t*, uint64_t, dftu_store_value_t**)
+fnptr dftu_svc_store.multi_get dftu_status (*)(dftu_ctx*, const dftu_store_snapshot_t*, const dftu_store_ns_t*, const dftu_store_scope*, const dftu_store_bytes*, uint64_t, dftu_store_value_list_t**)
+fnptr dftu_svc_store.ns dftu_status (*)(dftu_ctx*, void*, const char*, uint32_t, dftu_store_fold_kind, int32_t, int32_t, dftu_store_ns_t**)
+fnptr dftu_svc_store.ns_free void (*)(dftu_store_ns_t*)
+fnptr dftu_svc_store.put dftu_status (*)(dftu_ctx*, dftu_store_batch_t*, const uint8_t*, uint64_t, const uint8_t*, uint64_t)
+fnptr dftu_svc_store.scan_prefix dftu_status (*)(dftu_ctx*, const dftu_store_snapshot_t*, const dftu_store_ns_t*, const dftu_store_scope*, const uint8_t*, uint64_t, dftu_store_cursor_t**)
+fnptr dftu_svc_store.scan_range dftu_status (*)(dftu_ctx*, const dftu_store_snapshot_t*, const dftu_store_ns_t*, const dftu_store_scope*, const uint8_t*, uint64_t, const uint8_t*, uint64_t, dftu_store_cursor_t**)
+fnptr dftu_svc_store.snapshot dftu_status (*)(dftu_ctx*, void*, dftu_store_snapshot_t**)
+fnptr dftu_svc_store.snapshot_free void (*)(dftu_store_snapshot_t*)
+fnptr dftu_svc_store.value_bytes dftu_store_bytes (*)(const dftu_store_value_t*)
+fnptr dftu_svc_store.value_free void (*)(dftu_store_value_t*)
+fnptr dftu_svc_store.value_list_at int32_t (*)(const dftu_store_value_list_t*, uint64_t, dftu_store_bytes*)
+fnptr dftu_svc_store.value_list_count uint64_t (*)(const dftu_store_value_list_t*)
+fnptr dftu_svc_store.value_list_free void (*)(dftu_store_value_list_t*)
 fnptr dftu_svc_task.all dftu_status (*)(dftu_ctx*, void*, dftu_job* const*, uint32_t, dftu_job**)
 fnptr dftu_svc_task.any dftu_status (*)(dftu_ctx*, void*, dftu_job* const*, uint32_t, dftu_job**)
 fnptr dftu_svc_task.discard void (*)(void*, dftu_task*)
@@ -1226,6 +1276,7 @@ struct dftu_svc_ports size 32 align 8
 struct dftu_svc_providers size 16 align 8
 struct dftu_svc_result size 16 align 8
 struct dftu_svc_sketch size 48 align 8
+struct dftu_svc_store size 200 align 8
 struct dftu_svc_task size 104 align 8
 struct dftu_svc_trace size 40 align 8
 struct dftu_type_info size 8 align 4

@@ -50,3 +50,4 @@ include/dftracer/utils/dstd/vendor/* | vendored upstream text
 
 # Immortal on purpose.
 src/dftracer/utils/runtime/runtime.cpp | Vector | holds the runtime a fork child inherited and is never destroyed
+src/dftracer/utils/plugins/host/fold_adapter/store.cpp | Owned | derives dstd::HeapObject

@@ -63,6 +63,12 @@ const void* fileio_ext_vtable();
 const void* json_ext_vtable();
 const void* yaml_ext_vtable();
 const void* memory_ext_vtable();
+/// The dftu.svc.store table: the index root's store of the scan's trace
+/// folder, in the plugin's own namespaces.
+const void* store_ext_vtable();
+/// Test only: makes the next store flush a fold runs fail, so a test can prove
+/// the error reaches the run's result.
+void fail_next_store_flush_for_test();
 /// The dftu.svc.memory table for the host of a provider or node cursor.
 const void* cursor_memory_ext_vtable();
 

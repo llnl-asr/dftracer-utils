@@ -181,6 +181,7 @@ dftracer/utils/plugins/abi/ports.h
 dftracer/utils/plugins/abi/providers.h
 dftracer/utils/plugins/abi/result.h
 dftracer/utils/plugins/abi/sketch.h
+dftracer/utils/plugins/abi/store.h
 dftracer/utils/plugins/abi/task.h
 dftracer/utils/plugins/abi/trace.h
 dftracer/utils/plugins/abi/value.h
@@ -197,6 +198,7 @@ dftracer/utils/plugins/plugin/memory.h
 dftracer/utils/plugins/plugin/node.h
 dftracer/utils/plugins/plugin/register.h
 dftracer/utils/plugins/plugin/source.h
+dftracer/utils/plugins/plugin/store.h
 dftracer/utils/plugins/plugin/types.h
 dftracer/utils/plugins/plugin/udaf.h
 dftracer/utils/plugins/plugin/udf.h

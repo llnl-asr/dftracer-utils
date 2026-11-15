@@ -129,6 +129,22 @@ set_target_properties(${cabi_target} PROPERTIES OUTPUT_NAME test_plugin_c_abi
 add_test(NAME plugins/test_plugin_c_abi COMMAND ${cabi_target})
 
 # +++++++++++++++++++++++++++++++++++++++++
+# dftu.svc.store: a C consumer writes through the store C ABI and a C++ host
+# drives it, so the forwarding and the namespace rule are exercised from C.
+# +++++++++++++++++++++++++++++++++++++++++
+
+set(store_target plugins_test_plugin_store)
+add_executable(${store_target} test_plugin_store.cpp store_abi_c_consumer.c)
+target_include_directories(${store_target} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+target_link_libraries(${store_target} PRIVATE doctest::doctest dftracer_utils
+                                                 testing_utilities)
+target_enable_coroutine(${store_target})
+target_set_warnings(${store_target})
+set_target_properties(${store_target} PROPERTIES OUTPUT_NAME test_plugin_store
+  RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
+add_test(NAME plugins/test_plugin_store COMMAND ${store_target})
+
+# +++++++++++++++++++++++++++++++++++++++++
 # ABI gate: real .so files loaded by plugins/test_plugin_abi_gate through a
 # real dlopen - a wrong DFTRACER_UTILS_PLUGIN_ABI_VERSION, no info symbol, a
 # plugin descriptor below the first published size, and one that omits the

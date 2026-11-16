@@ -3047,7 +3047,9 @@ if(DFTRACER_UTILS_BUILD_BENCHMARKS)
     add_test(NAME bench_smoke/fs COMMAND fs_bench --smoke)
     add_test(NAME bench_smoke/pool COMMAND pool_bench --smoke)
     add_test(NAME bench_smoke/io COMMAND io_bench --smoke)
-    set_tests_properties(bench_smoke/coro PROPERTIES LABELS bench_smoke)
+    set_tests_properties(
+      bench_smoke/coro bench_smoke/channel bench_smoke/fs bench_smoke/pool
+      bench_smoke/io PROPERTIES LABELS bench_smoke)
 
     add_test(NAME bench_smoke/fmt COMMAND fmt_bench --smoke)
     set_tests_properties(bench_smoke/fmt PROPERTIES LABELS bench_smoke)
@@ -3083,6 +3085,20 @@ if(DFTRACER_UTILS_BUILD_BENCHMARKS)
     add_test(NAME bench_smoke/memory_probe COMMAND memory_probe_test)
     set_tests_properties(bench_smoke/memory_probe PROPERTIES LABELS
                                                             bench_smoke)
+
+    # Each smoke run also runs the memory exit check, so a benchmark that ends
+    # with a live pool, a store still open or a runtime not stopped fails the
+    # process that ran it.
+    set_tests_properties(
+      view_api_bench_smoke view_batch_bench_smoke index_bench_smoke
+      fold_read_bench_smoke duql_eval_bench_smoke group_transform_bench_smoke
+      bench_smoke/memory_attribution bench_smoke/counter_contention
+      bench_smoke/heap bench_smoke/coro bench_smoke/channel bench_smoke/fs
+      bench_smoke/pool bench_smoke/io bench_smoke/fmt bench_smoke/log
+      bench_smoke/string_intern bench_smoke/slice bench_smoke/spill_harness
+      bench_smoke/pressure_read bench_smoke/store bench_smoke/yaml_read
+      bench_smoke/memory_probe
+      PROPERTIES ENVIRONMENT "DFTRACER_UTILS_MEMORY_EXIT_CHECK=1")
   endif()
 endif()
 

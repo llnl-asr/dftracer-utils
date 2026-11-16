@@ -996,6 +996,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Fixed
 
+- The memory exit check runs the `dstd` shutdown hooks before it counts, so a program that does not replace the global operator new, such as a benchmark, no longer reports its runtime, its stores and its query pools as live at exit and exits with status 70. The hooks were registered only with `atexit`, and the exit check registers its own handler at the first pool allocation, which can come later, so the check ran first. The first `dstd::add_shutdown_hook` call now registers `dstd::shutdown` as a memory exit hook as well. The `bench_smoke` ctests run with the exit check on, and the smoke tests of `channel_bench`, `fs_bench`, `pool_bench` and `io_bench` now carry the `bench_smoke` label, so `ctest -L bench_smoke` runs them.
+
 - Keep a plugin library mapped while a column still borrows its buffer.
   `dftu_series_new_flat_borrowed`, `dftu_series_new_string_borrowed` and `dftu_series_new_string_view` keep the release callback's library loaded until the last column that uses that buffer is freed, so unloading a plugin set before its frames die no longer calls the callback in unmapped memory (one `dladdr` per borrowed column, not per row).
 

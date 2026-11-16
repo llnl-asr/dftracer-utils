@@ -5,6 +5,7 @@
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
 
 #include <cfloat>
@@ -308,6 +309,27 @@ TEST_CASE("fmt_join puts the separator between plain holes") {
     CHECK(dstd::fmt_join<",">().empty());
     CHECK(dstd::fmt_join<"">('a', 'b') == "ab");
     CHECK(dstd::fmt_join<"\t">(1, 2, 3) == dstd::fmt<"{}\t{}\t{}">(1, 2, 3));
+}
+
+TEST_CASE("fmt_append_join puts the separator between the items of a range") {
+    dstd::String out("ranks: ");
+    const dstd::Vector<std::uint32_t> ranks{1, 3, 42};
+    dstd::fmt_append_join<", ">(out, ranks);
+    CHECK(out == "ranks: 1, 3, 42");
+
+    dstd::String one;
+    const dstd::Vector<dstd::String> words{dstd::String("x")};
+    dstd::fmt_append_join<", ">(one, words);
+    CHECK(one == "x");
+
+    dstd::String none("kept");
+    dstd::fmt_append_join<", ">(none, dstd::Vector<int>{});
+    CHECK(none == "kept");
+
+    dstd::String mixed;
+    const double values[] = {0.5, 2.0};
+    dstd::fmt_append_join<"">(mixed, values);
+    CHECK(mixed == dstd::fmt<"{}{}">(0.5, 2.0));
 }
 
 TEST_CASE("fmt_join_to writes the joined text and reports a cut") {

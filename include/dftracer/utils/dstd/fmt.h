@@ -590,6 +590,21 @@ String fmt_join(const A&... a) {
     return fmt<fmt_detail::join_format<Sep, sizeof...(A)>()>(a...);
 }
 
+/// Appends each item of `range` to `out` as a plain `{}` hole with `Sep`
+/// between them; an empty range appends nothing. As @ref fmt_append, no item
+/// may point into `out`.
+template <FixedString Sep, class R>
+void fmt_append_join(String& out, const R& range) {
+    static_assert(fmt_detail::plain_separator<Sep>(),
+                  "dstd::fmt_append_join: the separator must not hold a brace");
+    bool first = true;
+    for (const auto& item : range) {
+        if (!first) out.append(Sep.v, sizeof(Sep.v) - 1);
+        first = false;
+        fmt_append<"{}">(out, item);
+    }
+}
+
 /// @ref fmt_join into `buf`, with the contract of @ref fmt_to.
 template <FixedString Sep, class... A>
 FmtResult fmt_join_to(char* buf, std::size_t cap, const A&... a) {

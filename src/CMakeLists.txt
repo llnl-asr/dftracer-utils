@@ -216,18 +216,25 @@ endif()
 # -----------------------------------------
 
 set(DFTRACER_UTILS_COMM_SOURCES
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/comm/transport.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/comm/codec.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/comm/op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/comm/channel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/comm/group.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/comm/backend/loader.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/comm/backend/local.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/comm/backend/linear_collectives.cpp)
 
-# MPI is compiled into comm alone; the headers without it build everywhere.
-if(DFTRACER_UTILS_ENABLE_MPI)
-  list(APPEND DFTRACER_UTILS_COMM_SOURCES
-       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/comm/mpi/mpi_utils.cpp)
-endif()
+# The MPI backend is its own library, loaded at run time by comm. The stamp
+# names this configure, so a comm_mpi built by another one is refused.
+string(TIMESTAMP DFTU_COMM_STAMP_TIME "%Y%m%d%H%M%S")
+set(DFTU_COMM_BUILD_STAMP "${PROJECT_VERSION}-${DFTU_COMM_STAMP_TIME}"
+    CACHE INTERNAL "The stamp of this configure of comm")
+set(DFTRACER_UTILS_COMM_MPI_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/comm/mpi/bootstrap.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/comm/mpi/c_api.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/comm/mpi/context.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/comm/mpi/messaging.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/comm/mpi/mpi_backend.cpp)
 
 # -----------------------------------------
 # Utilities library sources
@@ -817,17 +824,14 @@ use_precompiled_header(dftracer_utils_runtime_objects)
 # Comm Library (MPI and other transports)
 # +++++++++++++++++++++++++++++++++++++++++
 
-# MPI is in the link interface of comm alone, so its package config, and only
-# that one, has to find MPI again on the consuming side.
+# MPI is not in comm: the library comm_mpi below links it and comm loads that
+# library at run time.
 set(DFTRACER_UTILS_COMM_FIND_DEPENDENCIES
     dftracer_utils_memory
     dftracer_utils_dstd
     dftracer_utils_common
     dftracer_utils_coro
     dftracer_utils_runtime)
-if(DFTRACER_UTILS_ENABLE_MPI)
-  list(APPEND DFTRACER_UTILS_COMM_FIND_DEPENDENCIES MPI)
-endif()
 
 create_library(
   NAME
@@ -839,7 +843,7 @@ create_library(
   VERSION
   ${PROJECT_VERSION}
   DESCRIPTION
-  "DFTracer utils comm library (distributed transports, MPI helpers)"
+  "DFTracer utils comm library (communicator, groups and collectives)"
   URL
   "https://github.com/llnl-asr/dftracer-utils"
   BUILD_SHARED
@@ -876,14 +880,9 @@ foreach(variant objects shared static)
   dftu_variant_target(VARIANT_TARGET dftracer_utils_comm ${variant})
   set(VARIANT_UPPER ${DFTU_LINK_TYPE_${variant}})
   if(TARGET ${VARIANT_TARGET})
-    # MPI is a dependency of comm alone, so runtime and the libraries above it
-    # never see <mpi.h>.
-    if(DFTRACER_UTILS_ENABLE_MPI)
-      target_compile_definitions(${VARIANT_TARGET}
-                                 PUBLIC DFTRACER_UTILS_MPI_ENABLED)
-      target_link_libraries(${VARIANT_TARGET} PUBLIC MPI::MPI_CXX)
-    endif()
-
+    target_compile_definitions(
+      ${VARIANT_TARGET}
+      PRIVATE DFTRACER_UTILS_COMM_BUILD_STAMP="${DFTU_COMM_BUILD_STAMP}")
     if(variant STREQUAL "objects")
       target_set_warnings(dftracer_utils_comm_objects)
       target_compile_options(dftracer_utils_comm_objects
@@ -894,6 +893,66 @@ foreach(variant objects shared static)
     endif()
   endif()
 endforeach()
+
+# +++++++++++++++++++++++++++++++++++++++++
+# Comm MPI Library (the MPI backend of comm, built only with MPI ON)
+# +++++++++++++++++++++++++++++++++++++++++
+
+if(DFTRACER_UTILS_ENABLE_MPI)
+  create_library(
+    NAME
+    dftracer_utils_comm_mpi
+    NAMESPACE
+    dftracer_utils_comm_mpi
+    SOURCES
+    ${DFTRACER_UTILS_COMM_MPI_SOURCES}
+    VERSION
+    ${PROJECT_VERSION}
+    DESCRIPTION
+    "DFTracer utils MPI backend of comm"
+    URL
+    "https://github.com/llnl-asr/dftracer-utils"
+    BUILD_SHARED
+    ${DFTRACER_UTILS_BUILD_SHARED}
+    BUILD_STATIC
+    ${DFTRACER_UTILS_BUILD_STATIC}
+    SHARED_LINK_LIBRARIES
+    dftracer_utils_comm::shared
+    STATIC_LINK_LIBRARIES
+    dftracer_utils_comm::static
+    PUBLIC_INCLUDE_DIRS
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+    $<BUILD_INTERFACE:${CMAKE_BINARY_DIR}/include>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+    PRIVATE_COMPILE_OPTIONS
+    ${COVERAGE_COMPILE_OPTIONS}
+    PKG_CONFIG_REQUIRES
+    "dftracer_utils_comm"
+    FIND_DEPENDENCIES
+    dftracer_utils_comm
+    MPI)
+
+  foreach(variant objects shared static)
+    dftu_variant_target(VARIANT_TARGET dftracer_utils_comm_mpi ${variant})
+    if(TARGET ${VARIANT_TARGET})
+      # MPI is linked here and nowhere else.
+      target_link_libraries(${VARIANT_TARGET} PUBLIC MPI::MPI_CXX)
+      target_compile_definitions(
+        ${VARIANT_TARGET}
+        PRIVATE DFTRACER_UTILS_COMM_BUILD_STAMP="${DFTU_COMM_BUILD_STAMP}")
+      if(variant STREQUAL "objects")
+        target_set_warnings(dftracer_utils_comm_mpi_objects)
+        target_compile_options(
+          dftracer_utils_comm_mpi_objects
+          PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions>)
+      elseif(COVERAGE_LINK_OPTIONS)
+        target_link_libraries(${VARIANT_TARGET}
+                              PRIVATE ${COVERAGE_LINK_OPTIONS})
+      endif()
+    endif()
+  endforeach()
+endif()
 
 # +++++++++++++++++++++++++++++++++++++++++
 # Store Library (key-value store engine: data files, writer, snapshot)
@@ -2106,7 +2165,7 @@ if(NOT DFTRACER_UTILS_SINGLE_LIBRARY)
     VERSION
     ${PROJECT_VERSION}
     DESCRIPTION
-    "DFTracer utils comm library (distributed transports, MPI helpers)"
+    "DFTracer utils comm library (communicator, groups and collectives)"
     URL
     "https://github.com/llnl-asr/dftracer-utils"
     PKG_CONFIG_REQUIRES
@@ -2737,11 +2796,10 @@ if(DFTRACER_UTILS_BUILD_BINARIES)
   add_custom_target(dftracer_plugin_templates
                     DEPENDS ${DFTRACER_UTILS_PLUGIN_TEMPLATES_HEADER})
 
-  set(DFTRACER_UTILS_MPI_BINARIES "")
-
   add_library(
     dftracer_utils_cli STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/cli/cli_args.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/cli/comm_args.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/cli/plugin_info.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/cli/plugin_golden.cpp)
   target_link_libraries(dftracer_utils_cli PUBLIC dftracer_utils)
@@ -2884,38 +2942,6 @@ if(DFTRACER_UTILS_BUILD_BINARIES)
       PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/domains/server/viz/ui.cpp
               ${DFTRACER_UTILS_WEB_GENERATED} ${DFTRACER_UTILS_API_GENERATED})
   endif()
-
-  foreach(bin ${DFTRACER_UTILS_MPI_BINARIES})
-    string(REPLACE ".cpp" "" bin_exec ${bin})
-    string(REPLACE "${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/cli/" ""
-                   bin_exec ${bin_exec})
-
-    add_executable(${bin_exec} ${bin})
-    set_target_properties(
-      ${bin_exec} PROPERTIES OUTPUT_NAME "${bin_exec}" RUNTIME_OUTPUT_DIRECTORY
-                                                       ${CMAKE_BINARY_DIR}/bin)
-    target_add_rpath(${bin_exec})
-
-    target_link_libraries(${bin_exec} PRIVATE dftracer_utils dftracer_utils_cli
-                                              MPI::MPI_CXX)
-    target_include_directories(
-      ${bin_exec} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../include
-                          ${CMAKE_CURRENT_SOURCE_DIR})
-    target_set_warnings(${bin_exec})
-    target_compile_options(${bin_exec}
-                           PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions>)
-
-    if(DFTRACER_UTILS_COVERAGE AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-      target_compile_options(${bin_exec} PRIVATE --coverage -fprofile-arcs
-                                                 -ftest-coverage)
-      target_link_libraries(${bin_exec} PRIVATE --coverage)
-    endif()
-
-    install(TARGETS ${bin_exec} RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
-    if(SKBUILD)
-      create_python_wrapper(${bin_exec})
-    endif()
-  endforeach()
 endif()
 
 # ##############################################################################

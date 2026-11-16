@@ -180,9 +180,14 @@ if(DFTRACER_UTILS_SINGLE_LIBRARY)
         ${CMAKE_SOURCE_DIR}/cmake/scripts/check_single_library.cmake)
   endif()
 elseif(DFTRACER_UTILS_BUILD_SHARED)
+  set(_skipped_libraries "")
+  if(NOT DFTRACER_UTILS_ENABLE_MPI)
+    set(_skipped_libraries dftracer_utils_comm_mpi)
+  endif()
   add_test(NAME library_versions
            COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR}
-                   -DLIB_DIR=${CMAKE_BINARY_DIR}/lib -P
+                   -DLIB_DIR=${CMAKE_BINARY_DIR}/lib
+                   "-DSKIP_LIBS=${_skipped_libraries}" -P
                    ${CMAKE_SOURCE_DIR}/cmake/scripts/check_library_versions.cmake)
 endif()
 if(DFTRACER_UTILS_BUILD_SHARED)
@@ -225,7 +230,19 @@ add_test(
   NAME comm_no_upward
   COMMAND
     sh -c
-    [=[bad=$(grep -rnE '^[[:space:]]*#[[:space:]]*include[[:space:]]*<dftracer/utils/' "$0/src/dftracer/utils/comm" "$0/include/dftracer/utils/comm" 2>/dev/null | grep -vE '<dftracer/utils/(memory|dstd|common|coro|runtime|comm)/'); if [ -n "$bad" ]; then echo "include from comm into a library above it:"; echo "$bad"; exit 1; fi]=]
+    [=[bad=$(grep -rnE '^[[:space:]]*#[[:space:]]*include[[:space:]]*<dftracer/utils/' "$0/src/dftracer/utils/comm" "$0/include/dftracer/utils/comm" 2>/dev/null | grep -vE '<dftracer/utils/(memory|dstd|common|coro|runtime|comm)/'); if [ -n "$bad" ]; then echo "include from comm into a library above it:"; echo "$bad"; exit 1; fi; bad=$(grep -rnE --exclude-dir=mpi '^[[:space:]]*#[[:space:]]*include[[:space:]]*<dftracer/utils/comm/mpi/' "$0/src/dftracer/utils/comm" "$0/include/dftracer/utils/comm" 2>/dev/null); if [ -n "$bad" ]; then echo "include of comm/mpi from comm:"; echo "$bad"; exit 1; fi]=]
+    ${CMAKE_SOURCE_DIR})
+add_test(
+  NAME comm_mpi_below
+  COMMAND
+    sh -c
+    [=[bad=$(grep -rnE '^[[:space:]]*#[[:space:]]*include[[:space:]]*<dftracer/utils/' "$0/src/dftracer/utils/comm/mpi" 2>/dev/null | grep -vE '<dftracer/utils/(memory|dstd|common|coro|runtime|comm)/'); if [ -n "$bad" ]; then echo "include from comm/mpi into a library above comm:"; echo "$bad"; exit 1; fi]=]
+    ${CMAKE_SOURCE_DIR})
+add_test(
+  NAME mpi_only_in_comm_mpi
+  COMMAND
+    sh -c
+    [=[bad=$(grep -rnE '^[[:space:]]*#[[:space:]]*include[[:space:]]*<mpi\.h>' "$0/include" "$0/src" "$0/tests" 2>/dev/null | grep -vE '/(src/dftracer/utils|tests)/comm/mpi/'); if [ -n "$bad" ]; then echo "mpi.h included outside comm/mpi:"; echo "$bad"; exit 1; fi]=]
     ${CMAKE_SOURCE_DIR})
 add_test(
   NAME fileio_no_upward
@@ -533,6 +550,8 @@ set(TEST_CPP_SOURCES
     comm/test_backend.cpp
     comm/test_collectives.cpp
     comm/test_collectives_more.cpp
+    comm/test_loader.cpp
+    comm/test_codec.cpp
     # Async I/O tests
     runtime/io/test_async_io.cpp
     # Task Graph tests
@@ -947,8 +966,90 @@ set(TEST_BINARY_SOURCES
     binaries/test_cli_read_only_dir.cpp
     )
 
+# A backend library that carries the stamp of another comm: the loader refuses
+# it. Built where the loader test points its path variable.
+if(DFTRACER_UTILS_BUILD_SHARED)
+  add_library(dftu_fake_comm_backend MODULE comm/fake_backend/c_api.cpp)
+  target_link_libraries(dftu_fake_comm_backend PRIVATE dftracer_utils)
+  set_target_properties(
+    dftu_fake_comm_backend
+    PROPERTIES PREFIX "lib"
+               OUTPUT_NAME dftracer_utils_comm_mpi
+               SUFFIX "${CMAKE_SHARED_LIBRARY_SUFFIX}"
+               LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tests/fake_backend")
+  # The same library with this build's stamp and another API version.
+  add_library(dftu_fake_comm_api_backend MODULE comm/fake_backend/api/c_api.cpp)
+  target_link_libraries(dftu_fake_comm_api_backend PRIVATE dftracer_utils)
+  target_compile_definitions(
+    dftu_fake_comm_api_backend
+    PRIVATE DFTU_FAKE_STAMP="${DFTU_COMM_BUILD_STAMP}")
+  set_target_properties(
+    dftu_fake_comm_api_backend
+    PROPERTIES PREFIX "lib"
+               OUTPUT_NAME dftracer_utils_comm_mpi
+               SUFFIX "${CMAKE_SHARED_LIBRARY_SUFFIX}"
+               LIBRARY_OUTPUT_DIRECTORY
+               "${CMAKE_BINARY_DIR}/tests/fake_api_backend")
+  add_dependencies(comm_test_loader dftu_fake_comm_backend
+                   dftu_fake_comm_api_backend)
+  set_tests_properties(
+    comm/test_loader
+    PROPERTIES ENVIRONMENT
+               "DFTU_TEST_FAKE_BACKEND_DIR=${CMAKE_BINARY_DIR}/tests/fake_backend;DFTU_TEST_FAKE_API_BACKEND_DIR=${CMAKE_BINARY_DIR}/tests/fake_api_backend")
+endif()
+
+# The MPI backend tests: one process per rank under the launcher, with the
+# backend library loaded at run time. They exist only when the option is ON.
+if(DFTRACER_UTILS_ENABLE_MPI AND DFTRACER_UTILS_BUILD_SHARED)
+  dftu_variant_target(_comm_mpi_shared dftracer_utils_comm_mpi shared)
+  foreach(mpi_test comm/mpi/test_mpi_messaging)
+    string(REPLACE "/" "_" mpi_target ${mpi_test})
+    add_executable(${mpi_target} ${mpi_test}.cpp)
+    target_include_directories(${mpi_target} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
+                                                  ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(${mpi_target} PRIVATE doctest::doctest testing_utilities)
+    target_set_warnings(${mpi_target})
+    target_enable_coroutine(${mpi_target})
+    target_add_rpath(${mpi_target})
+    add_dependencies(${mpi_target} ${_comm_mpi_shared})
+    set_target_properties(
+      ${mpi_target}
+      PROPERTIES OUTPUT_NAME test_mpi_messaging
+                 RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/comm/mpi")
+    foreach(np 1 2 4)
+      add_test(NAME ${mpi_test}_np${np}
+               COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} ${np}
+                       ${MPIEXEC_PREFLAGS} $<TARGET_FILE:${mpi_target}>)
+      set_tests_properties(
+        ${mpi_test}_np${np} PROPERTIES TIMEOUT 300 ENVIRONMENT
+                                       "DFTU_TEST_NP=${np}")
+    endforeach()
+  endforeach()
+
+  # A process ends with a started communicator, in three ways. The exit hook
+  # stops the threads of the backend before MPI ends.
+  add_executable(comm_mpi_exit_probe comm/mpi/exit_probe.cpp)
+  target_include_directories(comm_mpi_exit_probe PRIVATE ${CMAKE_SOURCE_DIR}/src)
+  target_link_libraries(comm_mpi_exit_probe PRIVATE dftracer_utils)
+  target_set_warnings(comm_mpi_exit_probe)
+  target_add_rpath(comm_mpi_exit_probe)
+  add_dependencies(comm_mpi_exit_probe ${_comm_mpi_shared})
+  set_target_properties(
+    comm_mpi_exit_probe
+    PROPERTIES OUTPUT_NAME exit_probe
+               RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/comm/mpi")
+  foreach(mode scope leak exit)
+    add_test(NAME comm/mpi/exit_probe_${mode}_np2
+             COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 2
+                     ${MPIEXEC_PREFLAGS} $<TARGET_FILE:comm_mpi_exit_probe>
+                     ${mode})
+    set_tests_properties(comm/mpi/exit_probe_${mode}_np2 PROPERTIES TIMEOUT 120)
+  endforeach()
+endif()
+
 if(TARGET dftracer_utils_cli)
-  list(APPEND TEST_BINARY_SOURCES binaries/test_cli_args.cpp)
+  list(APPEND TEST_BINARY_SOURCES binaries/test_cli_args.cpp
+       binaries/test_comm_args.cpp)
 endif()
 
 if(DFTRACER_UTILS_ENABLE_MPI)
@@ -1065,6 +1166,20 @@ foreach(test_file ${TEST_BINARY_SOURCES})
   endif()
 
 endforeach()
+
+# The tools load the MPI backend at run time, so no tool links it. The listing
+# of the dynamic dependencies must name the bundle, or the check proves nothing.
+if(DFTRACER_UTILS_ENABLE_MPI AND DFTRACER_UTILS_BUILD_SHARED
+   AND TARGET dftracer_view AND TARGET dftracer_genesis_gen_dist
+   AND TARGET dftracer_replay)
+  add_test(
+    NAME tools_do_not_link_comm_mpi
+    COMMAND
+      sh -c
+      [=[for tool in "$@"; do if command -v otool >/dev/null 2>&1; then deps=$(otool -L "$tool"); else deps=$(ldd "$tool"); fi; case "$deps" in *dftracer_utils*) ;; *) echo "no dftracer_utils in the dependencies of $tool"; exit 1;; esac; case "$deps" in *comm_mpi*) echo "$tool links comm_mpi"; exit 1;; esac; done]=]
+      sh $<TARGET_FILE:dftracer_view> $<TARGET_FILE:dftracer_genesis_gen_dist>
+      $<TARGET_FILE:dftracer_replay>)
+endif()
 
 # +++++++++++++++++++++++++++++++++++++++++
 # Example plugins: `dftracer_plugin check` on each one examples/plugins/

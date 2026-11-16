@@ -44,14 +44,12 @@ Error closed_error() {
 
 class LocalBootstrap : public Bootstrap {
    public:
-    LocalBootstrap(std::uint32_t ranks, coro::Executor& executor)
-        : ranks_(ranks),
-          timers_(executor.timers() != nullptr ? executor.timers()
-                                               : &coro::process_timers()) {}
+    LocalBootstrap(std::uint32_t ranks, coro::TimerService* timers)
+        : ranks_(ranks), timers_(timers) {}
 
     std::uint32_t ranks() const noexcept override { return ranks_; }
 
-    dstd::Vector<std::uint32_t> node_members() const override {
+    dstd::Vector<std::uint32_t> node_members(std::uint32_t) const override {
         dstd::Vector<std::uint32_t> members(ranks_);
         for (std::uint32_t rank = 0; rank < ranks_; ++rank)
             members[rank] = rank;
@@ -1063,7 +1061,13 @@ class LocalCollectives : public Collectives {
 
 dstd::SharedPtr<Bootstrap> make_local_bootstrap(std::uint32_t ranks,
                                                 coro::Executor& executor) {
-    return dstd::make_shared<LocalBootstrap>(ranks, executor);
+    return dstd::make_shared<LocalBootstrap>(
+        ranks, executor.timers() != nullptr ? executor.timers()
+                                            : &coro::process_timers());
+}
+
+dstd::SharedPtr<Bootstrap> make_local_bootstrap(std::uint32_t ranks) {
+    return dstd::make_shared<LocalBootstrap>(ranks, &coro::process_timers());
 }
 
 dstd::SharedPtr<Messaging> make_local_messaging() {

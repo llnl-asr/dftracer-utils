@@ -28,9 +28,14 @@ class Bootstrap {
     /// How many ranks the run has.
     virtual std::uint32_t ranks() const noexcept = 0;
 
-    /// The world ranks that share a node with this rank, in node order, so the
-    /// node rank is the place of a rank in the result.
-    virtual dstd::Vector<std::uint32_t> node_members() const = 0;
+    /// The rank this process runs when the backend has one rank per process; 0
+    /// for a backend whose ranks are all in this process.
+    virtual std::uint32_t own_rank() const noexcept { return 0; }
+
+    /// The world ranks that share a node with world rank @p rank, in node
+    /// order, so the node rank is the place of a rank in the result.
+    virtual dstd::Vector<std::uint32_t> node_members(
+        std::uint32_t rank) const = 0;
 
     /// Where a group measures its deadlines. Must outlive the communicator.
     virtual coro::TimerService* timers() const noexcept = 0;

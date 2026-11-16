@@ -21,6 +21,8 @@ namespace dftracer::utils::comm::backend {
 /// every member under one lock.
 dstd::SharedPtr<Bootstrap> make_local_bootstrap(std::uint32_t ranks,
                                                 coro::Executor& executor);
+/// As above, measuring deadlines on the timers of the process.
+dstd::SharedPtr<Bootstrap> make_local_bootstrap(std::uint32_t ranks);
 dstd::SharedPtr<Messaging> make_local_messaging();
 dstd::SharedPtr<Collectives> make_local_collectives();
 

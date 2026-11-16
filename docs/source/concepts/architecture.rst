@@ -18,10 +18,11 @@ static variant (``src/CMakeLists.txt``), aggregated behind
   executor and scheduler, the io backend, the pipeline machinery, and shared
   primitives (string interning, sharded maps, the error type). It knows
   nothing about traces.
-- ``dftracer_utils_comm`` is the distributed layer: the transport interface
-  with ``LocalTransport``, and the MPI helpers and MPI transport. It links the
-  runtime, and it is the only library that links MPI, so a build without
-  ``-DDFTRACER_UTILS_ENABLE_MPI=ON`` builds it with no MPI at all.
+- ``dftracer_utils_comm`` is the distributed layer: the communicator, its
+  groups, collectives and channels, and the local backend. It links the
+  runtime and no MPI. The MPI backend is ``dftracer_utils_comm_mpi``, built
+  with ``-DDFTRACER_UTILS_ENABLE_MPI=ON`` and loaded at run time, so it is the
+  only library that links MPI.
 - ``dftracer_utils_store`` is the key-value store engine: data files, the
   writer and its committer, and the snapshot that reads them. It links only
   the runtime and knows nothing about traces.

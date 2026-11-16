@@ -70,6 +70,11 @@ struct Backend {
     dstd::Vector<std::uint32_t> protocol_version;
     /// The id the next group made on this backend takes.
     std::atomic<std::uint64_t> next_group_id{1};
+    /// The groups alive on this backend by id, which an abort that a peer
+    /// announces finds, and the aborts of groups this process has not made yet.
+    std::mutex groups_mutex;
+    dstd::Map<std::uint64_t, dstd::WeakPtr<GroupState>> live_groups;
+    dstd::Map<std::uint64_t, dstd::Error> early_aborts;
 
     std::uint32_t ranks() const noexcept { return bootstrap->ranks(); }
 };
@@ -139,6 +144,12 @@ struct GroupState {
 dstd::SharedPtr<GroupState> make_group_state(
     const dstd::SharedPtr<Backend>& backend,
     dstd::Vector<std::uint32_t> members);
+
+/// Aborts group @p id of @p backend with the error a peer process announced,
+/// without announcing it again. A group this process has not made yet aborts
+/// when it is made.
+void peer_abort(const dstd::SharedPtr<Backend>& backend, std::uint64_t id,
+                const dstd::Error& why);
 
 /// Groups that are alive now, which the tests read to prove a finished call
 /// pins no state.

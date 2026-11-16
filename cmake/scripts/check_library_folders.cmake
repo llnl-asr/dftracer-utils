@@ -1,7 +1,9 @@
 # SPDX-License-Identifier: MIT
 # Check that every source of a library sits in that library's folder: a file
 # compiled into dftracer_utils_<name>_objects must be under
-# src/dftracer/utils/<name>/.
+# src/dftracer/utils/<name>/. A nested backend library has its own folder
+# inside its parent's: the sources of comm_mpi sit in comm/mpi/, and no source
+# of another library, comm included, sits there.
 #
 # Usage: cmake -DCOMPILE_COMMANDS=<build>/compile_commands.json -P check_library_folders.cmake
 
@@ -20,7 +22,7 @@ foreach(i RANGE ${last})
   if(no_command)
     string(JSON command GET "${json}" ${i} output)
   endif()
-  if(NOT command MATCHES "dftracer_utils_([a-z]+)_objects\\.dir")
+  if(NOT command MATCHES "dftracer_utils_([a-z_]+)_objects\\.dir")
     continue()
   endif()
   set(lib "${CMAKE_MATCH_1}")
@@ -28,6 +30,9 @@ foreach(i RANGE ${last})
     continue()
   endif()
   set(folder "${CMAKE_MATCH_1}")
+  if(file MATCHES "/src/dftracer/utils/comm/mpi/")
+    set(folder "comm_mpi")
+  endif()
   math(EXPR checked "${checked} + 1")
   if(NOT folder STREQUAL lib)
     string(REGEX REPLACE "^.*/src/" "src/" rel "${file}")

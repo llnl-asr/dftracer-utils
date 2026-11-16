@@ -26,8 +26,14 @@ MPI support is off by default. Configure with the option on:
    cmake -S . -B build -DDFTRACER_UTILS_ENABLE_MPI=ON
    cmake --build build
 
-The same ``dftracer_view`` binary distributes under MPI; there is no separate
-``_mpi`` binary.
+The option builds ``libdftracer_utils_comm_mpi``, which the tools load at run
+time, so the tools themselves do not link MPI. The same ``dftracer_view``,
+``dftracer_genesis_gen_dist`` and ``dftracer_replay`` binaries run under any
+MPI or PMIx launcher, and with no launcher they run as one rank. Set
+``DFTRACER_UTILS_COMM_PATH`` to the directory that holds the library when it
+is not next to the tools or on the loader path. ``--comm local|mpi|auto`` (or
+``DFTRACER_UTILS_COMM``) picks the backend; the default, ``auto``, is MPI under
+a launcher and local otherwise.
 
 Invoke it
 ---------

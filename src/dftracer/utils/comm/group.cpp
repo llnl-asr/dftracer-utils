@@ -101,6 +101,10 @@ GroupState::~GroupState() {
     // would keep for later messages of it.
     backend->collectives->release(id);
     backend->messaging->release(id);
+    {
+        std::lock_guard<std::mutex> lock(backend->groups_mutex);
+        backend->live_groups.erase(id);
+    }
     g_live_groups.fetch_sub(1, std::memory_order_relaxed);
 }
 
@@ -145,11 +149,23 @@ dstd::SharedPtr<GroupState> make_group_state(
     dstd::Vector<std::uint32_t> members) {
     auto state = dstd::make_shared<GroupState>();
     state->backend = backend;
-    state->id = backend->next_group_id.fetch_add(1, std::memory_order_relaxed);
     const std::size_t size = members.size();
     state->next_seq.resize(size, 0);
     state->default_timeout_ns.resize(size, 0);
     state->members = std::move(members);
+    {
+        // The id is taken and the group registered under one lock, which
+        // peer_abort also holds: it sees the group, or an id not made yet.
+        std::lock_guard<std::mutex> lock(backend->groups_mutex);
+        state->id =
+            backend->next_group_id.fetch_add(1, std::memory_order_relaxed);
+        backend->live_groups[state->id] = state;
+        const auto early = backend->early_aborts.find(state->id);
+        if (early != backend->early_aborts.end()) {
+            state->aborted = std::move(early->second);
+            backend->early_aborts.erase(early);
+        }
+    }
     return state;
 }
 
@@ -204,10 +220,11 @@ void abort_locked(GroupState& group, Error why, AbortTail& tail) {
 /// provider slot ends before the first call fails, so a completion a slot ends
 /// on this thread finds the calls still pending and takes a free mutex.
 void finish_abort(const dstd::SharedPtr<Backend>& backend, std::uint64_t id,
-                  AbortTail& tail) {
+                  AbortTail& tail, bool announce = true) {
     if (!tail.why) return;
     // The parked calls of the channels of the group end with the collectives.
     backend->messaging->abort(id, *tail.why);
+    if (announce) backend->messaging->announce_abort(id, *tail.why);
     for (auto& entry : tail.slots)
         backend->collectives->drop(id, entry.first, nullptr);
     for (auto& entry : tail.slots)
@@ -371,8 +388,10 @@ void decide_call(Slot& slot, const backend::SlotEnd& end, GroupState& group,
     if (!accept_slot(slot, end, group, tail)) return;
     const std::uint32_t size = group.size();
     if constexpr (std::is_void_v<T>) {
-        for (std::uint32_t member = 0; member < size; ++member)
+        for (std::uint32_t member = 0; member < size; ++member) {
+            if (!slot.ops[member]) continue;
             static_cast<OpState<T>*>(slot.ops[member].get())->succeed();
+        }
     } else {
         struct Colored {
             std::uint32_t rank;
@@ -404,6 +423,8 @@ void decide_call(Slot& slot, const backend::SlotEnd& end, GroupState& group,
             dstd::SharedPtr<GroupState> child =
                 make_group_state(group.backend, std::move(members));
             for (std::size_t at = begin; at < stop; ++at) {
+                // A rank of another process has no call here to end.
+                if (!slot.ops[colored[at].rank]) continue;
                 auto* op = static_cast<OpState<Group>*>(
                     slot.ops[colored[at].rank].get());
                 op->succeed(Group{group.backend, child,
@@ -413,6 +434,7 @@ void decide_call(Slot& slot, const backend::SlotEnd& end, GroupState& group,
         }
         for (std::uint32_t member = 0; member < size; ++member) {
             if (end.records[member].color != Group::NO_COLOR) continue;
+            if (!slot.ops[member]) continue;
             static_cast<OpState<Group>*>(slot.ops[member].get())
                 ->succeed(Group{});
         }
@@ -871,6 +893,29 @@ void cancel_group(GroupState& group, const PendingOp* op,
     finish_abort(group.backend, group.id, tail);
 }
 
+void peer_abort(const dstd::SharedPtr<Backend>& backend, std::uint64_t id,
+                const Error& why) {
+    dstd::SharedPtr<GroupState> group;
+    {
+        std::lock_guard<std::mutex> lock(backend->groups_mutex);
+        const auto at = backend->live_groups.find(id);
+        if (at != backend->live_groups.end()) group = at->second.lock();
+        if (!group) {
+            // Ids only grow, so a group below the next id was made and is gone;
+            // only a group not made yet needs the abort kept for its birth.
+            if (id >= backend->next_group_id.load(std::memory_order_relaxed))
+                backend->early_aborts.emplace(id, why);
+            return;
+        }
+    }
+    AbortTail tail;
+    {
+        std::lock_guard<std::mutex> lock(group->mutex);
+        abort_locked(*group, why, tail);
+    }
+    finish_abort(backend, id, tail, false);
+}
+
 void abandon_group(const dstd::SharedPtr<GroupState>& group, std::uint32_t rank,
                    coro::Executor* executor) noexcept {
     if (!group) return;
@@ -1153,7 +1198,7 @@ dstd::Vector<Group> make_node_groups(
     for (std::uint32_t rank = 0; rank < ranks; ++rank) {
         if (nodes[rank].size() != 0) continue;
         dstd::Vector<std::uint32_t> members =
-            backend->bootstrap->node_members();
+            backend->bootstrap->node_members(rank);
         dstd::SharedPtr<detail::GroupState> state =
             members == world->members
                 ? world
@@ -1166,18 +1211,32 @@ dstd::Vector<Group> make_node_groups(
 
 }  // namespace
 
-dstd::Result<Communicator> Communicator::start_local(std::uint32_t ranks,
-                                                     coro::Executor& executor) {
+dstd::Result<Communicator> Communicator::start(Providers providers) {
+    if (!providers.bootstrap || !providers.messaging ||
+        !providers.collectives) {
+        return dstd::Unexpected(dstd::Error::from_format<
+                                "a communicator needs a bootstrap, messaging "
+                                "and collectives">(Condition::InvalidArgument));
+    }
+    const std::uint32_t ranks = providers.bootstrap->ranks();
     if (ranks == 0) {
         return dstd::Unexpected(
             dstd::Error::from_format<"a communicator needs at least one rank">(
                 Condition::InvalidArgument));
     }
     auto made = dstd::make_shared<detail::Backend>();
-    made->bootstrap = backend::make_local_bootstrap(ranks, executor);
-    made->messaging = backend::make_local_messaging();
-    made->collectives = backend::make_local_collectives();
+    made->bootstrap = std::move(providers.bootstrap);
+    made->messaging = std::move(providers.messaging);
+    made->collectives = std::move(providers.collectives);
     made->protocol_version.resize(ranks, detail::PROTOCOL_VERSION);
+    // Weak: the messaging belongs to the backend, which must not be kept alive
+    // by the handler its own provider holds.
+    made->messaging->on_peer_abort(
+        [weak = dstd::WeakPtr<detail::Backend>(made)](std::uint64_t id,
+                                                      const Error& why) {
+            if (const auto backend = weak.lock())
+                detail::peer_abort(backend, id, why);
+        });
     dstd::Vector<std::uint32_t> members;
     members.reserve(ranks);
     for (std::uint32_t rank = 0; rank < ranks; ++rank) members.push_back(rank);
@@ -1185,6 +1244,39 @@ dstd::Result<Communicator> Communicator::start_local(std::uint32_t ranks,
     comm.world_ = detail::make_group_state(made, std::move(members));
     comm.node_ = make_node_groups(made, comm.world_);
     return comm;
+}
+
+dstd::Result<Communicator> Communicator::start_local(std::uint32_t ranks,
+                                                     coro::Executor& executor) {
+    if (ranks == 0) {
+        return dstd::Unexpected(
+            dstd::Error::from_format<"a communicator needs at least one rank">(
+                Condition::InvalidArgument));
+    }
+    return start(Providers{backend::make_local_bootstrap(ranks, executor),
+                           backend::make_local_messaging(),
+                           backend::make_local_collectives()});
+}
+
+dstd::Result<Communicator> Communicator::start(BackendKind kind,
+                                               const StartOptions& options) {
+    const bool wanted = kind == BackendKind::Mpi;
+    kind = backend::resolve_kind(kind);
+    if (kind == BackendKind::Local) {
+        return start(Providers{backend::make_local_bootstrap(1),
+                               backend::make_local_messaging(),
+                               backend::make_local_collectives()});
+    }
+    auto loaded = backend::load_backend(options);
+    if (!loaded) {
+        if (wanted) return dstd::Unexpected(loaded.error());
+        return dstd::Unexpected(
+            dstd::Error::from_format<
+                "a launcher started this process but the MPI backend is "
+                "unavailable, so the ranks would run as unrelated copies: {}">(
+                loaded.error().condition(), loaded.error().message()));
+    }
+    return start(std::move(*loaded));
 }
 
 Group Communicator::world(std::uint32_t rank) noexcept {
@@ -1201,6 +1293,10 @@ Group Communicator::local(std::uint32_t rank) noexcept {
 
 std::uint32_t Communicator::size() const noexcept {
     return backend_ ? backend_->ranks() : 0;
+}
+
+std::uint32_t Communicator::rank() const noexcept {
+    return backend_ ? backend_->bootstrap->own_rank() : 0;
 }
 
 void detail::Hooks::set_protocol_version(Communicator& comm, std::uint32_t rank,
@@ -1232,6 +1328,23 @@ void detail::Hooks::release_groups(Communicator& comm) noexcept {
         if (!known) ids.push_back(group.id());
     }
     for (const std::uint64_t id : ids) comm.backend_->collectives->release(id);
+}
+
+void detail::Hooks::peer_abort(Communicator& comm, std::uint64_t id,
+                               const dstd::Error& why) {
+    if (comm.backend_) detail::peer_abort(comm.backend_, id, why);
+}
+
+std::uint64_t detail::Hooks::next_group_id(const Communicator& comm) noexcept {
+    return comm.backend_
+               ? comm.backend_->next_group_id.load(std::memory_order_relaxed)
+               : 0;
+}
+
+std::size_t detail::Hooks::early_abort_count(const Communicator& comm) {
+    if (!comm.backend_) return 0;
+    std::lock_guard<std::mutex> lock(comm.backend_->groups_mutex);
+    return comm.backend_->early_aborts.size();
 }
 
 std::size_t detail::Hooks::live_ops() noexcept {

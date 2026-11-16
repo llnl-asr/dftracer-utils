@@ -82,6 +82,20 @@ inline constexpr const char* SQPOLL_IDLE_ENV =
 inline constexpr std::uint64_t DEFAULT_SQPOLL_IDLE_MS = 0;
 }  // namespace io_settings
 
+namespace comm_settings {
+/// local, mpi or auto: the backend a tool starts its communicator on. The
+/// option --comm overrides it.
+inline constexpr const char* COMM_ENV = "DFTRACER_UTILS_COMM";
+/// A directory that holds the MPI backend library. When set, it is the only
+/// place searched.
+inline constexpr const char* COMM_PATH_ENV = "DFTRACER_UTILS_COMM_PATH";
+/// The most bytes one MPI message of the MPI backend carries; a longer payload
+/// goes in several. The default is the largest size that fits an int count.
+inline constexpr const char* MPI_CHUNK_BYTES_ENV =
+    "DFTRACER_UTILS_COMM_MPI_CHUNK_BYTES";
+inline constexpr std::uint64_t MPI_CHUNK_BYTES = std::uint64_t{1} << 30;
+}  // namespace comm_settings
+
 namespace executor_settings {
 /// Seconds without progress before the executor reports a stall, for a tool
 /// that runs one long task. The executor's own default is 10.

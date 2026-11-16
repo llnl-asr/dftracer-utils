@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_COMM_GROUP_H
 #define DFTRACER_UTILS_COMM_GROUP_H
 
+#include <dftracer/utils/comm/backend/loader.h>
 #include <dftracer/utils/comm/codec.h>
 #include <dftracer/utils/comm/collective.h>
 #include <dftracer/utils/comm/error.h>
@@ -1188,6 +1189,22 @@ class Communicator {
     static dstd::Result<Communicator> start_local(std::uint32_t ranks,
                                                   coro::Executor& executor);
 
+    /**
+     * @brief Starts the communicator of this process on @p kind.
+     *
+     * Local is one rank in this process. Mpi loads the MPI backend library at
+     * run time and gives one rank per process; it fails with an error that
+     * names every path tried when the library is missing or built for another
+     * comm. Auto is Mpi when a launcher started this process and Local
+     * otherwise, and it fails, rather than run copies that do not talk to each
+     * other, when a launcher started the process and the library is missing.
+     */
+    static dstd::Result<Communicator> start(BackendKind kind,
+                                            const StartOptions& options = {});
+
+    /// Starts a communicator on providers a backend library made.
+    static dstd::Result<Communicator> start(Providers providers);
+
     /// Made by @ref start_local.
     explicit Communicator(dstd::SharedPtr<detail::Backend> backend) noexcept
         : backend_(std::move(backend)) {}
@@ -1200,6 +1217,10 @@ class Communicator {
 
     /// How many ranks the run has.
     std::uint32_t size() const noexcept;
+
+    /// The rank this process runs when the backend has one rank per process; 0
+    /// for the local-threads backend, whose ranks all run here.
+    std::uint32_t rank() const noexcept;
 
    private:
     friend struct detail::Hooks;
@@ -1244,6 +1265,17 @@ struct Hooks {
     static void set_collectives(
         Communicator& comm,
         dstd::SharedPtr<backend::Collectives> collectives) noexcept;
+
+    /// Delivers to @p comm the abort that a peer process announced for group
+    /// @p id, as a messaging provider does.
+    static void peer_abort(Communicator& comm, std::uint64_t id,
+                           const dstd::Error& why);
+
+    /// The id the next group made on @p comm takes.
+    static std::uint64_t next_group_id(const Communicator& comm) noexcept;
+
+    /// How many aborts of groups not made yet @p comm keeps.
+    static std::size_t early_abort_count(const Communicator& comm);
 
     /// Releases the groups of @p comm on their provider, as the end of a
     /// communicator does, so a test can ask what a dead group left behind.

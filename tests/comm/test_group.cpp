@@ -537,4 +537,53 @@ TEST_SUITE("CommGroup") {
         for (std::uint32_t slot = 0; slot < 2 * GROUPS; ++slot)
             CHECK_FALSE(errors[slot].has_value());
     }
+
+    TEST_CASE("an abort a peer announced reaches a group with its own error") {
+        Runtime rt(4);
+        comm::Communicator communicator = make_communicator(2, *rt.executor());
+        const dstd::Error announced{dstd::Condition::Internal,
+                                    "group 1: aborted by rank 5: far away"};
+        auto errors = dftu_comm_test::run_ranks(
+            rt, 2,
+            [&](std::uint32_t rank) -> coro::CoroTask<dstd::Result<void>> {
+                comm::Group group = communicator.world(rank);
+                if (rank == 0) {
+                    comm::detail::Hooks::peer_abort(communicator, group.id(),
+                                                    announced);
+                }
+                co_return co_await group.barrier();
+            });
+        for (std::uint32_t rank = 0; rank < 2; ++rank) {
+            REQUIRE(errors[rank].has_value());
+            CHECK(dftu_comm_test::has_text(*errors[rank], "aborted by rank 5"));
+            CHECK(dftu_comm_test::count_text(*errors[rank], "aborted by") == 1);
+        }
+    }
+
+    TEST_CASE("an abort for a group not made yet is kept for its birth only") {
+        Runtime rt(4);
+        comm::Communicator communicator = make_communicator(2, *rt.executor());
+        const dstd::Error announced{dstd::Condition::Internal,
+                                    "group 2: aborted by rank 9: early"};
+        const std::uint64_t next =
+            comm::detail::Hooks::next_group_id(communicator);
+        // A group id below the next one was made and is gone: nothing to keep.
+        comm::detail::Hooks::peer_abort(communicator, 0, announced);
+        CHECK(comm::detail::Hooks::early_abort_count(communicator) == 0);
+        comm::detail::Hooks::peer_abort(communicator, next, announced);
+        CHECK(comm::detail::Hooks::early_abort_count(communicator) == 1);
+        auto errors = dftu_comm_test::run_ranks(
+            rt, 2,
+            [&](std::uint32_t rank) -> coro::CoroTask<dstd::Result<void>> {
+                comm::Group world = communicator.world(rank);
+                auto child = co_await world.split(0, rank);
+                if (!child) co_return std::move(child).error();
+                co_return co_await child->barrier();
+            });
+        for (std::uint32_t rank = 0; rank < 2; ++rank) {
+            REQUIRE(errors[rank].has_value());
+            CHECK(dftu_comm_test::has_text(*errors[rank], "aborted by rank 9"));
+        }
+        CHECK(comm::detail::Hooks::early_abort_count(communicator) == 0);
+    }
 }

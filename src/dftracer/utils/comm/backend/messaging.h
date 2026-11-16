@@ -208,7 +208,10 @@ class Messaging {
     /// it, and gives whether it did. A receive it held keeps its message for a
     /// later receive. A call it no longer holds, a send its stream stored and a
     /// call it already paired are not cancelled: they keep their outcome, which
-    /// reaches the call through its completion.
+    /// reaches the call through its completion. A provider whose peer is
+    /// another process decides at that peer: it gives true while it asks the
+    /// peer, and the call ends with @p why only when the peer still held the
+    /// message, and from the peer's own result otherwise.
     virtual bool cancel(const MessageKey& key, OpId op, dstd::Error why) = 0;
 
     /// Sends the close of the stream of @p key behind every message its sender
@@ -221,6 +224,25 @@ class Messaging {
     /// every later one of that group at once, so a caller that gave up on a
     /// group holds nothing of it. The first abort of a group keeps its error.
     virtual void abort(std::uint64_t group, dstd::Error why) = 0;
+
+    /// Told by a provider that has other processes, when a peer announced that
+    /// it aborted @p group: the group of this process aborts with the same
+    /// error. Called on a thread of the provider, never under a lock of it.
+    using PeerAbort =
+        dstd::Function<void(std::uint64_t group, const dstd::Error& why)>;
+
+    /// Sets what a peer's abort calls. A provider with no other process never
+    /// calls it.
+    virtual void on_peer_abort(PeerAbort handler) { (void)handler; }
+
+    /// Tells every other process that @p group aborted with @p why, so their
+    /// calls on it end with the same error. Called once per group by the
+    /// first abort, after @ref abort; a provider with no other process does
+    /// nothing.
+    virtual void announce_abort(std::uint64_t group, const dstd::Error& why) {
+        (void)group;
+        (void)why;
+    }
 
     /// Forgets a group whose last handle is gone: fails the messages of @p
     /// group that are still parked with @ref dstd::Condition::Cancelled, erases

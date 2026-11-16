@@ -9,6 +9,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Added
 
+- Add `--comm local|mpi|auto` and `DFTRACER_UTILS_COMM` to `dftracer_view`, `dftracer_genesis_gen_dist` and `dftracer_replay`.
+  The option wins over the variable, and the default is `auto`, which is MPI under a launcher and one local rank otherwise.
+- Add `DFTRACER_UTILS_COMM_PATH`, a directory that holds `libdftracer_utils_comm_mpi`.
+  When it is set, the tools search only that directory for the MPI backend.
+- Load the MPI backend at run time from `libdftracer_utils_comm_mpi`, built with `-DDFTRACER_UTILS_ENABLE_MPI=ON`, so the tools no longer link MPI.
+- Run `dftracer_view`, `dftracer_genesis_gen_dist` and `dftracer_replay` under any MPI or PMIx launcher with one binary.
+  A run with no launcher is one rank, with the same code path.
+- Share each node's cores between its ranks, by the CPUs each rank may use on Linux and by the rank count on macOS, so ranks that a launcher bound to their own CPUs keep them.
+  One rank on a node keeps its `--executor-threads` and `--io-threads` values.
+
 - `dstd::fmt_append_join<", ">(out, range)` appends the items of a range with a separator between them, each as a plain `{}` hole, for lists whose length is known only at run time.
 
 - `dftu.svc.store`, a plugin service over the store of the index root the scan reads, lent in namespaces the host names `plugin.<plugin name>.<ns>` so a plugin reaches only its own data and a name that would escape it is refused with `DFTU_E_INVALID`. It forwards the store C ABI function for function (namespace, batch, put, fold, erase, erase range, commit, snapshot, get, multi get, prefix and range scans, cursor next/key/value and the matching free calls) with an error on the callback's `ctx`, has no open, close, pack, drop, flush, publish, fail or refresh because the host owns the store, and is NULL on a cursor or build host, which run over no trace folder. A C++ wrapper is `Host::store()` in `dftracer/utils/plugins/plugin/store.h`. A commit only commits: the host flushes its one writer of the directory from the fold's finalize, whichever fold of the plugin committed, and a failed flush fails the run instead of only being logged. A namespace, batch or snapshot handle belongs to the store directory rather than to the fold that made it, so a handle a slice step made works in the master finalize and one of another root is refused; a NULL handle is refused with `DFTU_E_INVALID` and a message, and a refused commit still frees its batch. A scan over two index roots makes every call fail with `DFTU_E_INVALID` and a message that names both roots, so one store never serves two roots.
@@ -92,7 +102,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
-- The distributed code is its own library, `libdftracer_utils_comm`: the MPI helpers and the transports (`transport.h` with `LocalTransport`, `mpi_transport.h` with `MpiTransport`) moved out of `runtime` into `src/dftracer/utils/comm/` under `dftracer::utils::comm`, a single implementation file was added for `LocalTransport`, and `libdftracer_utils_runtime` no longer links MPI. MPI is linked by the `comm` library alone, so a build with `-DDFTRACER_UTILS_ENABLE_MPI=ON` puts `<mpi.h>` in that one library and `dftracer_utils_commConfig.cmake` is the only package config that finds MPI. The ctest `comm_no_upward` keeps `comm` below `store`.
+- The distributed code is its own library, `libdftracer_utils_comm`, in `src/dftracer/utils/comm/` under `dftracer::utils::comm`, and `libdftracer_utils_runtime` no longer links MPI. The ctest `comm_no_upward` keeps `comm` below `store`, and `mpi_only_in_comm_mpi` keeps `<mpi.h>` inside `comm/mpi/`.
 
 - `dftracer_server` keeps its viz summary in the index store of each trace folder, namespace `server.viz_summary`, in place of one `.dftviz_summary` file per index directory. A restart serves it from the store, and a changed, added or removed trace file makes the server compute it again. An old `.dftviz_summary` file is ignored.
 - `dftracer_server` caches its viz responses in the index store of each trace folder, namespace `server.viz_result`, so a restart serves a response that a trace file did not invalidate without scanning the trace. A response key carries the folder's fingerprint, so a changed file misses.

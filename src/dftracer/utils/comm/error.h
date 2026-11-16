@@ -21,6 +21,8 @@ enum class ChannelError : std::int32_t {
     Closed,
     /// The two ends opened another channel, or another value size.
     WrongChannel,
+    /// A receiver ended a send because its sender asked to cancel it.
+    Cancelled,
 };
 
 inline constexpr dstd::ErrorDomain COMM_ERROR_DOMAIN =
@@ -35,6 +37,8 @@ inline constexpr dstd::ErrorCodeInfo COMM_ERROR_INFOS[] = {
      dstd::Condition::Unknown, "CHANNEL_CLOSED"},
     {&COMM_ERROR_DOMAIN, static_cast<std::int32_t>(ChannelError::WrongChannel),
      dstd::Condition::InvalidArgument, "CHANNEL_WRONG_CHANNEL"},
+    {&COMM_ERROR_DOMAIN, static_cast<std::int32_t>(ChannelError::Cancelled),
+     dstd::Condition::Cancelled, "CHANNEL_CANCELLED"},
 };
 
 constexpr const dstd::ErrorCodeInfo& error_info(ChannelError code) noexcept {

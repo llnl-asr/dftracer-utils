@@ -1,12 +1,16 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/cli/comm_args.h>
 #include <dftracer/utils/cli/common_cli.h>
 #include <dftracer/utils/cli/json_cell_printer.h>
+#include <dftracer/utils/comm/codec.h>
+#include <dftracer/utils/comm/group.h>
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/scoped_fd.h>
 #include <dftracer/utils/dstd/string.h>
@@ -14,6 +18,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/pipeline.h>
 #include <dftracer/utils/duql/query.h>
+#include <dftracer/utils/fileio/parallel/merge.h>
 #include <dftracer/utils/memory/budget.h>  // NO_SPILL_BUDGET
 #include <dftracer/utils/plugins/host/plugins.h>
 #include <dftracer/utils/trace/index/build/resolve_and_build.h>
@@ -30,34 +35,21 @@
 #include <cstdlib>
 #include <limits>
 
-// MPI is compiled in only when the build enabled it (config.h macro). The same
-// source then produces a distribution-capable dftracer_view; without MPI it is
-// the plain single-node binary.
-#ifdef DFTRACER_UTILS_ENABLE_MPI
-#include <dftracer/utils/comm/mpi_transport.h>
-#include <dftracer/utils/dstd/optional.h>
-#include <dftracer/utils/dstd/pair.h>
-#include <dftracer/utils/dstd/string.h>
-#include <dftracer/utils/fileio/parallel/merge.h>
-
-#endif
-
 using namespace dftracer::utils;
 using namespace dftracer::utils::trace;
 using namespace dftracer::utils::trace::index::store;
 using namespace dftracer::utils::trace::views;
 
-#ifdef DFTRACER_UTILS_ENABLE_MPI
 // The files owned by `rank` of `size`: a deterministic round-robin split, so
 // every rank derives the same assignment from the same sorted file list.
 static dstd::Vector<dstd::String> shard_files(
-    const dstd::Vector<dstd::String>& all_files, int rank, int size) {
+    const dstd::Vector<dstd::String>& all_files, std::uint32_t rank,
+    std::uint32_t size) {
     dstd::Vector<dstd::String> shard;
     for (std::size_t i = 0; i < all_files.size(); ++i)
-        if (static_cast<int>(i % size) == rank) shard.push_back(all_files[i]);
+        if (i % size == rank) shard.push_back(all_files[i]);
     return shard;
 }
-#endif
 
 class ViewArgParse : public cli::ArgParse {
    public:
@@ -67,6 +59,7 @@ class ViewArgParse : public cli::ArgParse {
     cli::RuntimeArgs runtime_args;
     cli::IndexingArgs indexing;
     cli::DuqlArgs duql_args;
+    cli::CommArgs comm_args;
 
     dstd::StringView preset;
     dstd::StringView recipe;
@@ -113,7 +106,7 @@ class ViewArgParse : public cli::ArgParse {
         duql_args.help =
             "duql filter or pipeline (e.g., 'cat == \"POSIX\" | derive ms = "
             "dur / 1000 | sort -ms | take 5')";
-        schema(inputs, runtime_args, indexing, duql_args);
+        schema(inputs, runtime_args, indexing, duql_args, comm_args);
     }
 
    protected:
@@ -822,12 +815,16 @@ struct ViewRun {
         dataframe::DataFrame table) const;
     // The exit code when the probe ends the run, else nothing.
     dstd::Optional<int> probe_duql();
-#ifdef DFTRACER_UTILS_ENABLE_MPI
+    // The part of a distributed run a rank does before it gathers: a rank that
+    // fails here aborts the group, so no peer waits for it at the gather.
+    coro::CoroTask<dstd::Result<dstd::String>> shard_partial(
+        comm::Group& world);
+    coro::CoroTask<dstd::Result<dstd::String>> shard_write(comm::Group& world);
+    bool distributes(const comm::Group& world) const;
     coro::CoroTask<dstd::Result<void>> run_distributed_aggregate(
-        comm::MpiTransport& transport);
+        comm::Group& world);
     coro::CoroTask<dstd::Result<void>> run_distributed_write(
-        comm::MpiTransport& transport);
-#endif
+        comm::Group& world);
     coro::CoroTask<dstd::Result<void>> run_shard_set();
     coro::CoroTask<dstd::Result<void>> run_local();
     coro::CoroTask<dstd::Result<void>> run();
@@ -960,19 +957,16 @@ dstd::Optional<int> ViewRun::probe_duql() {
     return dstd::nullopt;
 }
 
-#ifdef DFTRACER_UTILS_ENABLE_MPI
-// Distributed aggregation: each rank aggregates its shard into a serialized
-// partial, the partials are gathered, and rank 0 merges and emits.
-coro::CoroTask<dstd::Result<void>> ViewRun::run_distributed_aggregate(
-    comm::MpiTransport& transport) {
-    auto shard = shard_files(files, transport.rank(), transport.size());
+coro::CoroTask<dstd::Result<dstd::String>> ViewRun::shard_partial(
+    comm::Group& world) {
+    auto shard = shard_files(files, world.rank(), world.size());
     // Each rank builds its own shard of the root, on node-local scratch when
     // the destination warrants it, and publishes it as <root>/shards/<rank>.
     // Rank 0 merges the shards once every rank published its own.
     const dstd::String idx_root =
         internal::determine_index_path(files.front(), index_dir);
     const dstd::String rank_idx = dftracer::utils::trace::index::shard_root(
-        idx_root, static_cast<std::size_t>(transport.rank()));
+        idx_root, static_cast<std::size_t>(world.rank()));
     if (!no_auto_index) {
         // Build each rank's index with its aggregation tier.
         dftracer::utils::trace::index::build::ResolveAndBuildInput bin;
@@ -994,9 +988,27 @@ coro::CoroTask<dstd::Result<void>> ViewRun::run_distributed_aggregate(
                 : shard_view.aggregate_partial();
     auto collected = co_await partial_plan.collect();
     if (!collected) co_return collected.error();
-    dstd::String partial = std::move(*collected);
-    auto partials = transport.all_gather(partial);
-    if (transport.rank() == 0) {
+    co_return std::move(*collected);
+}
+
+// Distributed aggregation: each rank aggregates its shard into a serialized
+// partial, the partials are gathered, and rank 0 merges and emits.
+coro::CoroTask<dstd::Result<void>> ViewRun::run_distributed_aggregate(
+    comm::Group& world) {
+    auto made = co_await shard_partial(world);
+    if (!made) {
+        world.abort(made.error());
+        co_return made.error();
+    }
+    dstd::String partial = std::move(*made);
+    const dstd::String idx_root =
+        internal::determine_index_path(files.front(), index_dir);
+    auto gather =
+        world.all_gather_object(std::move(partial), comm::StringCodec{});
+    auto gathered = co_await gather;
+    if (!gathered) co_return gathered.error();
+    const auto& partials = *gathered;
+    if (world.rank() == 0) {
         // Every rank published its shard before the gather, so the set is
         // complete: catalog it and merge the shards into the root's own store,
         // leaving one index for a later query. A failed merge keeps the
@@ -1004,7 +1016,7 @@ coro::CoroTask<dstd::Result<void>> ViewRun::run_distributed_aggregate(
         // rebuild.
         if (!no_auto_index) {
             dstd::Vector<dstd::String> shard_dirs;
-            for (int r = 0; r < transport.size(); ++r) {
+            for (std::uint32_t r = 0; r < world.size(); ++r) {
                 dstd::String d(dftracer::utils::trace::index::shard_root(
                     idx_root, static_cast<std::size_t>(r)));
                 auto shard_exists = dstd::fs::exists(dstd::PathView(
@@ -1029,7 +1041,9 @@ coro::CoroTask<dstd::Result<void>> ViewRun::run_distributed_aggregate(
             }
         }
 
-        dstd::Vector<dstd::StringView> pv(partials.begin(), partials.end());
+        dstd::Vector<dstd::StringView> pv;
+        pv.reserve(partials.size());
+        for (const auto& part : partials) pv.push_back(dstd::StringView(*part));
         View merger = configure(View::from_files({}));
         if (fg_mode) {
             dataframe::DataFrame table = View::merge_flamegraph_partials(pv);
@@ -1052,14 +1066,13 @@ coro::CoroTask<dstd::Result<void>> ViewRun::run_distributed_aggregate(
     co_return dstd::Result<void>{};
 }
 
-// Distributed: each rank writes its shard, rank 0 concatenates.
-coro::CoroTask<dstd::Result<void>> ViewRun::run_distributed_write(
-    comm::MpiTransport& transport) {
-    auto shard = shard_files(files, transport.rank(), transport.size());
+coro::CoroTask<dstd::Result<dstd::String>> ViewRun::shard_write(
+    comm::Group& world) {
+    auto shard = shard_files(files, world.rank(), world.size());
     dstd::String idx_base(index_dir);
     if (idx_base.empty())
         idx_base = dstd::String(dstd::PathView(files.front()).parent().str());
-    dstd::String rank_idx = dstd::fmt<"{}/rank_{}">(idx_base, transport.rank());
+    dstd::String rank_idx = dstd::fmt<"{}/rank_{}">(idx_base, world.rank());
     if (!no_auto_index) {
         auto refreshed = co_await refresh_indexes(shard, rank_idx);
         if (!refreshed) co_return refreshed.error();
@@ -1070,7 +1083,7 @@ coro::CoroTask<dstd::Result<void>> ViewRun::run_distributed_write(
             f, internal::determine_index_path(f, rank_idx), checkpoint_size));
     }
     const dstd::String rank_out =
-        dstd::fmt<"{}.rank_{}">(final_output, transport.rank());
+        dstd::fmt<"{}.rank_{}">(final_output, world.rank());
     TraceWriteOptions topts;
     topts.output_path = rank_out;
     topts.member_size = member_size;
@@ -1081,8 +1094,25 @@ coro::CoroTask<dstd::Result<void>> ViewRun::run_distributed_write(
     auto written = co_await shard_view.sink_trace(topts);
     if (!written) co_return written.error();
     stats = *written;
-    auto rank_outs = transport.all_gather(rank_out);
-    if (transport.rank() == 0) {
+    co_return rank_out;
+}
+
+// Distributed: each rank writes its shard, rank 0 concatenates.
+coro::CoroTask<dstd::Result<void>> ViewRun::run_distributed_write(
+    comm::Group& world) {
+    auto made = co_await shard_write(world);
+    if (!made) {
+        world.abort(made.error());
+        co_return made.error();
+    }
+    const dstd::String rank_out = std::move(*made);
+    auto gather = world.all_gather_object(rank_out, comm::StringCodec{});
+    auto gathered = co_await gather;
+    if (!gathered) co_return gathered.error();
+    if (world.rank() == 0) {
+        dstd::Vector<dstd::String> rank_outs;
+        rank_outs.reserve(gathered->size());
+        for (const auto& out : *gathered) rank_outs.push_back(*out);
         const auto merge_rc =
             co_await fileio::parallel::merge_shards(final_output, rank_outs);
         if (merge_rc != 0) {
@@ -1098,7 +1128,6 @@ coro::CoroTask<dstd::Result<void>> ViewRun::run_distributed_write(
     }
     co_return dstd::Result<void>{};
 }
-#endif
 
 // Shard set: merge the query across the immutable shards read-only, no
 // trace-file scan when each shard's aggregation tier covers it.
@@ -1233,7 +1262,14 @@ coro::CoroTask<dstd::Result<void>> ViewRun::run_local() {
     co_return dstd::Result<void>{};
 }
 
+bool ViewRun::distributes(const comm::Group& world) const {
+    if (world.size() < 2) return false;
+    return ((counters || aggregate || fg_mode) && shard_set_root.empty()) ||
+           write_trace;
+}
+
 coro::CoroTask<dstd::Result<void>> ViewRun::run() {
+    comm::Group world = cli->comm_args.world();
     // Held for the whole run: loading a plugin registers its sinks and
     // formats, and destroying the set unregisters them.
     dstd::Optional<plugins::host::Plugins> loaded;
@@ -1242,31 +1278,31 @@ coro::CoroTask<dstd::Result<void>> ViewRun::run() {
         for (const dstd::StringView path : cli->plugins)
             builder.add(dstd::String(path));
         auto built = builder.build();
-        if (!built) co_return built.error();
+        if (!built) {
+            if (distributes(world)) world.abort(built.error());
+            co_return built.error();
+        }
         loaded.emplace(std::move(*built));
     }
-#ifdef DFTRACER_UTILS_ENABLE_MPI
-    comm::MpiTransport transport;
     // Only the reductions distribute; other modes fall through to rank 0
     // (single-node) below.
-    if ((counters || aggregate || fg_mode) && transport.size() > 1 &&
-        shard_set_root.empty()) {
-        co_return co_await run_distributed_aggregate(transport);
-    }
-    if (write_trace && transport.size() > 1) {
-        co_return co_await run_distributed_write(transport);
+    if (distributes(world)) {
+        if ((counters || aggregate || fg_mode) && shard_set_root.empty())
+            co_return co_await run_distributed_aggregate(world);
+        co_return co_await run_distributed_write(world);
     }
     // Non-distributed modes run on rank 0 only (correct, not sharded).
-    if (transport.rank() != 0) co_return dstd::Result<void>{};
-#endif
+    if (world.rank() != 0) co_return dstd::Result<void>{};
     if (!shard_set_root.empty()) {
         co_return co_await run_shard_set();
     }
     co_return co_await run_local();
 }
 
-static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
-    ViewRun run(cli);
+// `entered` turns true when the run starts, which is where the ranks begin to
+// call collectives.
+static coro::CoroTask<int> run_view_body(const ViewArgParse* cli, ViewRun& run,
+                                         bool& entered) {
     const dstd::StringView save_recipe = cli->save_recipe;
 
     if (!resolve_view_definition(*cli, run.view)) co_return 1;
@@ -1410,6 +1446,7 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
     FileSink sink(run.out_target);
     run.sink = &sink;
 
+    entered = true;
     auto ran = cli::run_on_pool(
         "DFTracer View", cli->runtime_args,
         [&run](coro::Scope&) -> coro::CoroTask<dstd::Result<void>> {
@@ -1425,20 +1462,31 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
     co_return (run.verify_failed || run.index_merge_failed) ? 1 : 0;
 }
 
+// A rank that ends before the run, on input that only it found wrong, aborts
+// the group, so its peers do not wait for it at the gather.
+static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
+    ViewRun run(cli);
+    bool entered = false;
+    const int code = co_await run_view_body(cli, run, entered);
+    comm::Group world = cli->comm_args.world();
+    if (code != 0 && !entered && run.distributes(world)) {
+        world.abort(dstd::Error::from_format<
+                    "dftracer_view ended before the distributed run">(
+            dstd::Condition::Internal));
+    }
+    co_return code;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
-#ifdef DFTRACER_UTILS_ENABLE_MPI
-    MPI_Init(&argc, &argv);
-    // Local ranks share the node's cores (Dask-style) before any runtime work.
-    comm::set_local_thread_budget();
-#endif
-    int rc = cli::cli_main<ViewArgParse>(
+    return cli::cli_main<ViewArgParse>(
         argc, argv, "dftracer_view",
         "Apply filtered views to DFTracer trace files. Uses bloom filter "
         "indices for efficient chunk-skipping. Supports predefined views "
-        "(io, compute, dlio), custom recipes, and inline queries. Built with "
-        "MPI, run under mpirun to aggregate counters distributively.",
+        "(io, compute, dlio), custom recipes, and inline queries. Run under "
+        "mpirun or another MPI launcher to aggregate counters "
+        "distributively.",
         [](ViewArgParse& cli) -> int {
             auto code = run_view(&cli).get();
             if (!code) {
@@ -1447,8 +1495,4 @@ int main(int argc, char** argv) {
             }
             return *code;
         });
-#ifdef DFTRACER_UTILS_ENABLE_MPI
-    MPI_Finalize();
-#endif
-    return rc;
 }

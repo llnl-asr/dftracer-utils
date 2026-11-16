@@ -4,11 +4,13 @@
 #include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/fatal.h>
+#include <dftracer/utils/dstd/string.h>
 
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <thread>
 #include <utility>
 
@@ -43,6 +45,21 @@ void finalize_at_exit() {
 dstd::Error mpi_error(const char* what) {
     return dstd::Error::from_format<"MPI could not {}">(
         dstd::Condition::Unsupported, dstd::StringView(what));
+}
+
+/// Waits for @p request with @p mpi held only while MPI is called, so the
+/// progress thread of a context that is still stopping can post its last
+/// messages, which a peer may need before it joins this collective.
+bool wait_unlocked(MPI_Request& request, std::unique_lock<std::mutex>& mpi) {
+    for (;;) {
+        int done = 0;
+        if (MPI_Test(&request, &done, MPI_STATUS_IGNORE) != MPI_SUCCESS)
+            return false;
+        if (done) return true;
+        mpi.unlock();
+        std::this_thread::yield();
+        mpi.lock();
+    }
 }
 
 /// What stops the threads when the last handle goes.
@@ -102,27 +119,47 @@ dstd::Result<dstd::SharedPtr<Context>> Context::make(const void* app_comm) {
                               : MPI_COMM_WORLD;
     int rank = 0;
     int size = 1;
+    MPI_Request request = MPI_REQUEST_NULL;
     if (MPI_Comm_rank(base, &rank) != MPI_SUCCESS ||
         MPI_Comm_size(base, &size) != MPI_SUCCESS ||
-        MPI_Comm_dup(base, &context->messages_) != MPI_SUCCESS) {
+        MPI_Comm_idup(base, &context->messages_, &request) != MPI_SUCCESS ||
+        !wait_unlocked(request, mpi)) {
         return dstd::Unexpected(mpi_error("duplicate the communicator"));
     }
     context->rank_ = static_cast<std::uint32_t>(rank);
     context->size_ = static_cast<std::uint32_t>(size);
 
-    MPI_Comm node = MPI_COMM_NULL;
-    if (MPI_Comm_split_type(context->messages_, MPI_COMM_TYPE_SHARED, 0,
-                            MPI_INFO_NULL, &node) != MPI_SUCCESS) {
-        return dstd::Unexpected(mpi_error("split the communicator by node"));
+    // The ranks that report one processor name share a node; the lowest of
+    // them leads it.
+    const auto stride = static_cast<std::size_t>(MPI_MAX_PROCESSOR_NAME);
+    dstd::Vector<char> names(static_cast<std::size_t>(size) * stride, '\0');
+    dstd::Vector<char> own(stride, '\0');
+    int own_size = 0;
+    const bool named =
+        MPI_Get_processor_name(own.data(), &own_size) == MPI_SUCCESS;
+    own[stride - 1] = '\0';
+    if (!named ||
+        MPI_Iallgather(own.data(), MPI_MAX_PROCESSOR_NAME, MPI_CHAR,
+                       names.data(), MPI_MAX_PROCESSOR_NAME, MPI_CHAR,
+                       context->messages_, &request) != MPI_SUCCESS ||
+        !wait_unlocked(request, mpi)) {
+        return dstd::Unexpected(mpi_error("gather the node of every rank"));
     }
-    int leader = rank;
-    MPI_Allreduce(MPI_IN_PLACE, &leader, 1, MPI_INT, MPI_MIN, node);
-    MPI_Comm_free(&node);
-    dstd::Vector<int> leaders(static_cast<std::size_t>(size), 0);
-    MPI_Allgather(&leader, 1, MPI_INT, leaders.data(), 1, MPI_INT,
-                  context->messages_);
-    context->node_leaders_.assign(leaders.begin(), leaders.end());
     mpi.unlock();
+    context->node_leaders_.resize(static_cast<std::size_t>(size), 0);
+    for (std::size_t at = 0; at < static_cast<std::size_t>(size); ++at) {
+        const char* slot = names.data() + at * stride;
+        const dstd::StringView name(slot, ::strnlen(slot, stride));
+        std::size_t leader = at;
+        for (std::size_t other = 0; other < at; ++other) {
+            const char* prior = names.data() + other * stride;
+            if (dstd::StringView(prior, ::strnlen(prior, stride)) == name) {
+                leader = other;
+                break;
+            }
+        }
+        context->node_leaders_[at] = static_cast<std::uint32_t>(leader);
+    }
 
     context->running_.store(2, std::memory_order_release);
     context->progress_ = dstd::Thread([context] { context->progress_loop(); },

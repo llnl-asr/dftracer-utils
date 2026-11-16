@@ -41,7 +41,8 @@ dataframe::DataFrame frame(std::int64_t rows) {
         name.push_back(NAMES[i % 6]);
     }
     dataframe::DataFrame f;
-    f.names = {"dur", "size", "retry", "name"};
+    f.names = {dstd::SharedString("dur"), dstd::SharedString("size"),
+               dstd::SharedString("retry"), dstd::SharedString("name")};
     f.columns.push_back(dataframe::Series::flat_i64(dur.data(), rows));
     f.columns.push_back(dataframe::Series::flat_i64(size.data(), rows));
     f.columns.push_back(

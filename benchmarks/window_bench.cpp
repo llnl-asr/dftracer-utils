@@ -70,7 +70,9 @@ DataFrame make_frame(std::int64_t n) {
         s[i] = dstd::fmt<"str{}">(rng() % DISTINCT_STRINGS);
     }
     DataFrame d;
-    d.names = {"key", "ts", "v", "by", "s"};
+    d.names = {dstd::SharedString("key"), dstd::SharedString("ts"),
+               dstd::SharedString("v"), dstd::SharedString("by"),
+               dstd::SharedString("s")};
     d.columns.push_back(Series::flat_i64(key.data(), n));
     d.columns.push_back(Series::flat_i64(ts.data(), n));
     d.columns.push_back(Series::flat_f64(v.data(), n));

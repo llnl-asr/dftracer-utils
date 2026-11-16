@@ -73,7 +73,8 @@ int main(int argc, char** argv) {
         f[z] = static_cast<double>(i % 977) * 0.5;
     }
     DataFrame frame;
-    frame.names = {"k", "v", "f"};
+    frame.names = {dstd::SharedString("k"), dstd::SharedString("v"),
+                   dstd::SharedString("f")};
     frame.columns.push_back(Series::flat_i64(k.data(), n));
     frame.columns.push_back(Series::flat_i64(v.data(), n));
     frame.columns.push_back(Series::flat_f64(f.data(), n));

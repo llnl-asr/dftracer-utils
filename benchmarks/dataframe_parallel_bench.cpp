@@ -39,6 +39,7 @@
 #include <cstdlib>
 #include <utility>
 
+using namespace dftracer::utils;
 using namespace dftracer::utils::dataframe;
 
 namespace {
@@ -122,7 +123,8 @@ int main(int argc, char** argv) {
             (static_cast<std::uint64_t>(i) * 2654435761ULL) % 1000003ULL);
     }
     DataFrame df;
-    df.names = {"k", "v", "s"};
+    df.names = {dstd::SharedString("k"), dstd::SharedString("v"),
+                dstd::SharedString("s")};
     df.columns.push_back(Series::flat_i64(k.data(), rows));
     df.columns.push_back(Series::flat_i64(v.data(), rows));
     df.columns.push_back(Series::flat_i64(s.data(), rows));
@@ -310,7 +312,7 @@ int main(int argc, char** argv) {
     // is_duplicated / is_unique / unique are actually used for, and where the
     // radix-partitioned dedup / group_agg-count reuse pays off.
     DataFrame dup_df;
-    dup_df.names = {"k"};
+    dup_df.names = {dstd::SharedString("k")};
     dup_df.columns.push_back(Series::flat_i64(k.data(), rows));
 
     auto bit_at = [](const Series& col, std::int64_t idx) -> int {
@@ -622,7 +624,7 @@ int main(int argc, char** argv) {
     const std::int64_t drows = std::min<std::int64_t>(rows, 4'000'000);
     const std::int64_t dgroups = std::min<std::int64_t>(groups, 64);
     DataFrame dummy_df;
-    dummy_df.names = {"cat"};
+    dummy_df.names = {dstd::SharedString("cat")};
     {
         dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> cats(
             static_cast<std::size_t>(drows));
@@ -792,7 +794,7 @@ int main(int argc, char** argv) {
 
     // sort_by_multi: stable sort of indices with a multi-col comparator.
     DataFrame multi_df;
-    multi_df.names = {"k", "v"};
+    multi_df.names = {dstd::SharedString("k"), dstd::SharedString("v")};
     multi_df.columns.push_back(Series::flat_i64(k.data(), rows));
     multi_df.columns.push_back(Series::flat_i64(v.data(), rows));
     auto time_sbm = [&](int reps) {

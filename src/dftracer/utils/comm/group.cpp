@@ -3,6 +3,7 @@
 #include <dftracer/utils/comm/group.h>
 #include <dftracer/utils/coro/executor.h>
 #include <dftracer/utils/coro/timer_service.h>
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/fmt.h>
@@ -113,13 +114,6 @@ dstd::SharedPtr<GroupState> make_group_state(
 }
 
 namespace {
-
-std::uint64_t steady_now_ns() noexcept {
-    return static_cast<std::uint64_t>(
-        std::chrono::duration_cast<std::chrono::nanoseconds>(
-            std::chrono::steady_clock::now().time_since_epoch())
-            .count());
-}
 
 /// One error for every member of the group, naming the rank that caused it.
 /// The inner text is copied because an @ref Error holds one block; building
@@ -295,9 +289,9 @@ Op<T> make_call(const dstd::SharedPtr<Backend>& backend,
         const std::uint64_t seq = group->next_seq[rank]++;
         std::uint64_t deadline = opts.deadline_ns;
         if (deadline == 0 && group->default_timeout_ns[rank] != 0)
-            deadline = steady_now_ns() + group->default_timeout_ns[rank];
+            deadline = dstd::steady_now_ns() + group->default_timeout_ns[rank];
         if (deadline != 0 && backend->timers != nullptr) {
-            const std::uint64_t now = steady_now_ns();
+            const std::uint64_t now = dstd::steady_now_ns();
             const std::chrono::nanoseconds delay{deadline > now ? deadline - now
                                                                 : 0};
             auto target = dstd::make_shared<detail::TimerTarget>();

@@ -10,6 +10,7 @@
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/coro/yield.h>
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/result.h>
@@ -37,17 +38,9 @@ using dftracer::utils::dstd::Result;
 using dftracer::utils::dstd::StringView;
 using dftracer::utils::dstd::Vector;
 
-/// Nanoseconds on the steady clock: the unit of the comm deadlines.
-inline std::uint64_t steady_ns() noexcept {
-    return static_cast<std::uint64_t>(
-        std::chrono::duration_cast<std::chrono::nanoseconds>(
-            std::chrono::steady_clock::now().time_since_epoch())
-            .count());
-}
-
 /// A deadline @p ns nanoseconds from now, in the unit of the deadlines.
 inline std::uint64_t deadline_after(std::uint64_t ns) noexcept {
-    return steady_ns() + ns;
+    return dftracer::utils::dstd::steady_now_ns() + ns;
 }
 
 /// True when @p error names @p text.
@@ -172,9 +165,9 @@ inline CoroTask<void> wait_count(std::atomic<int>& counter, int wanted) {
 template <class Pred>
 bool spin_until(Pred holds,
                 std::chrono::seconds limit = std::chrono::seconds(20)) {
-    const auto stop = std::chrono::steady_clock::now() + limit;
+    const auto stop = dftracer::utils::dstd::steady_now() + limit;
     while (!holds()) {
-        if (std::chrono::steady_clock::now() >= stop) return false;
+        if (dftracer::utils::dstd::steady_now() >= stop) return false;
         std::this_thread::yield();
     }
     return true;

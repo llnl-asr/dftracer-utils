@@ -218,10 +218,14 @@ endif()
 set(DFTRACER_UTILS_COMM_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/comm/codec.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/comm/op.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/comm/bulk.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/comm/channel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/comm/group.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/comm/backend/loader.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/comm/backend/local.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/comm/backend/bulk_support.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/comm/backend/local_bulk.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/comm/backend/message_bulk.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/comm/backend/linear_collectives.cpp)
 
 # The MPI backend is its own library, loaded at run time by comm. The stamp

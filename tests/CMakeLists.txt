@@ -553,6 +553,7 @@ set(TEST_CPP_SOURCES
     comm/test_object_processes.cpp
     comm/test_loader.cpp
     comm/test_codec.cpp
+    comm/test_bulk.cpp
     # Async I/O tests
     runtime/io/test_async_io.cpp
     # Task Graph tests
@@ -1003,7 +1004,8 @@ endif()
 # backend library loaded at run time. They exist only when the option is ON.
 if(DFTRACER_UTILS_ENABLE_MPI AND DFTRACER_UTILS_BUILD_SHARED)
   dftu_variant_target(_comm_mpi_shared dftracer_utils_comm_mpi shared)
-  foreach(mpi_test comm/mpi/test_mpi_messaging comm/mpi/test_mpi_collectives)
+  foreach(mpi_test comm/mpi/test_mpi_messaging comm/mpi/test_mpi_collectives
+                 comm/mpi/test_mpi_bulk)
     string(REPLACE "/" "_" mpi_target ${mpi_test})
     get_filename_component(mpi_name ${mpi_test} NAME)
     add_executable(${mpi_target} ${mpi_test}.cpp)

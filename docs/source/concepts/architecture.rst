@@ -44,6 +44,24 @@ static variant (``src/CMakeLists.txt``), aggregated behind
   sender's object itself, shared and read-only, with no codec call. A value is
   serialized once, and only when a rank in another process reads it, and each
   receiving process deserializes it once and shares that copy among its ranks.
+  A rank also exposes memory to its peers, which is the bulk capability
+  (``Group::expose``, ``pull``, ``push`` and ``unexpose``). ``expose`` gives a
+  small descriptor, ``BufferRef``, that the owner sends to a peer by any other
+  call; it holds the owner, an id, a 64-bit size, an access mode (read only,
+  write only or read write) and a memory kind, of which only host memory works
+  now. A peer copies the exposure into its own buffer with ``pull`` and writes
+  into it with ``push``; a buffer too short for the range is an error
+  (``ChannelError::TooBig``), never a silent cut, and the call gives the byte
+  count. The owner keeps the memory valid until the ``Op`` of ``unexpose`` has
+  completed, which happens when no transfer on it is left. In one process a
+  transfer is a copy in ranges. Between processes a range of at most 64 KiB
+  moves in one message, and a larger one is driven by its receiver: it asks for
+  one range at a time, and the bytes in flight toward it from one peer never
+  pass a credit that is a share of the memory budget of its process, so a
+  transfer of any size streams and is never refused for its size. A cancel, a
+  deadline or a stopped token ends one transfer and leaves the group alone; an
+  abort of the group or of the owner's process ends it with the error of the
+  group.
 - ``dftracer_utils_store`` is the key-value store engine: data files, the
   writer and its committer, and the snapshot that reads them. It links only
   the runtime and knows nothing about traces.

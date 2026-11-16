@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_COMM_DETAIL_GROUP_STATE_H
 
 #include <dftracer/utils/comm/backend/bootstrap.h>
+#include <dftracer/utils/comm/backend/bulk.h>
 #include <dftracer/utils/comm/backend/collectives.h>
 #include <dftracer/utils/comm/backend/messaging.h>
 #include <dftracer/utils/comm/collective.h>
@@ -61,7 +62,7 @@ struct TimerTarget {
 /// The backend a communicator runs on, shared with the groups it made.
 ///
 /// The providers are the capabilities the groups use, one of each per backend,
-/// all three bound before a group makes a call.
+/// all four bound before a group makes a call.
 /// An abort that a peer announced for a group this process has not made yet,
 /// and the group it will be made from, or 0.
 struct EarlyAbort {
@@ -73,6 +74,7 @@ struct Backend {
     dstd::SharedPtr<backend::Bootstrap> bootstrap;
     dstd::SharedPtr<backend::Messaging> messaging;
     dstd::SharedPtr<backend::Collectives> collectives;
+    dstd::SharedPtr<backend::Bulk> bulk;
     /// The version each rank reports at the handshake, by world rank.
     dstd::Vector<std::uint32_t> protocol_version;
     /// The id the next group made on this backend takes.

@@ -842,8 +842,8 @@ TEST_SUITE("CommChannel") {
         using comm::backend::tag_purpose;
         using comm::backend::TagPurpose;
 
-        // Every purpose takes a quarter of the tag space, so no index of one
-        // reaches another.
+        // Every purpose takes its own slice of the tag space, so no index of
+        // one reaches another.
         CHECK(tag_purpose(message_tag(TagPurpose::ChannelMessage, 0)) ==
               TagPurpose::ChannelMessage);
         CHECK(tag_purpose(message_tag(TagPurpose::CollectiveTable, 0)) ==

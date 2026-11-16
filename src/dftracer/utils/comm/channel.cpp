@@ -583,15 +583,21 @@ void watch_deadline(const dstd::SharedPtr<ChannelState>& channel,
                     const dstd::SharedPtr<PendingOp>& call,
                     const CallOpts& opts) {
     if (!channel || !call || call->is_done()) return;
-    const dstd::SharedPtr<Backend>& backend = channel->backend();
-    if (!backend) return;
+    watch_deadline(channel->backend(),
+                   opts.deadline_ns == 0 ? channel->default_timeout() : 0, call,
+                   opts);
+}
+
+void watch_deadline(const dstd::SharedPtr<Backend>& backend,
+                    std::uint64_t default_timeout,
+                    const dstd::SharedPtr<PendingOp>& call,
+                    const CallOpts& opts) {
+    if (!backend || !call || call->is_done()) return;
     coro::TimerService* timers = backend->bootstrap->timers();
     if (timers == nullptr) return;
     std::uint64_t deadline = opts.deadline_ns;
-    if (deadline == 0) {
-        const std::uint64_t timeout = channel->default_timeout();
-        if (timeout != 0) deadline = dstd::steady_now_ns() + timeout;
-    }
+    if (deadline == 0 && default_timeout != 0)
+        deadline = dstd::steady_now_ns() + default_timeout;
     if (deadline == 0) return;
     const std::uint64_t now = dstd::steady_now_ns();
     const std::chrono::nanoseconds delay{deadline > now ? deadline - now : 0};

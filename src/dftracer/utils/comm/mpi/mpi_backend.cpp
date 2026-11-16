@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/comm/backend/bulk.h>
 #include <dftracer/utils/comm/mpi/collectives.h>
 #include <dftracer/utils/comm/mpi/mpi_backend.h>
 
@@ -11,6 +12,7 @@ dstd::Result<Providers> start(const StartOptions& options) {
     providers.bootstrap = make_bootstrap(*context);
     providers.messaging = make_messaging(*context);
     providers.collectives = make_collectives(*context);
+    providers.bulk = backend::make_message_bulk(providers.messaging);
     return providers;
 }
 

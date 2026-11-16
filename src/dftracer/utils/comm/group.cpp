@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/comm/backend/bulk.h>
 #include <dftracer/utils/comm/backend/local.h>
 #include <dftracer/utils/comm/detail/group_state.h>
 #include <dftracer/utils/comm/group.h>
@@ -100,6 +101,7 @@ GroupState::~GroupState() {
     // go first, since their abort of the group leaves an end the messaging
     // would keep for later messages of it.
     backend->collectives->release(id);
+    backend->bulk->release(id);
     backend->messaging->release(id);
     {
         std::lock_guard<std::mutex> lock(backend->groups_mutex);
@@ -202,6 +204,7 @@ dstd::SharedPtr<GroupState> make_group_state(
                                                     state->members.size());
         backend->messaging->bind_group(state->id, ranks);
         backend->collectives->bind_group(state->id, ranks);
+        backend->bulk->bind_group(state->id, ranks);
     }
     return state;
 }
@@ -260,6 +263,7 @@ void finish_abort(const dstd::SharedPtr<Backend>& backend, std::uint64_t id,
                   std::uint64_t parent, AbortTail& tail, bool announce = true) {
     if (!tail.why) return;
     // The parked calls of the channels of the group end with the collectives.
+    backend->bulk->abort(id, *tail.why);
     backend->messaging->abort(id, *tail.why);
     if (announce) backend->messaging->announce_abort(id, parent, *tail.why);
     for (auto& entry : tail.slots)
@@ -1293,6 +1297,8 @@ dstd::Result<Communicator> Communicator::start(Providers providers) {
     made->bootstrap = std::move(providers.bootstrap);
     made->messaging = std::move(providers.messaging);
     made->collectives = std::move(providers.collectives);
+    made->bulk = providers.bulk ? std::move(providers.bulk)
+                                : backend::make_message_bulk(made->messaging);
     made->protocol_version.resize(ranks, detail::PROTOCOL_VERSION);
     // Weak: the messaging belongs to the backend, which must not be kept alive
     // by the handler its own provider holds.
@@ -1320,7 +1326,8 @@ dstd::Result<Communicator> Communicator::start_local(std::uint32_t ranks,
     }
     return start(Providers{backend::make_local_bootstrap(ranks, executor),
                            backend::make_local_messaging(),
-                           backend::make_local_collectives()});
+                           backend::make_local_collectives(),
+                           backend::make_local_bulk()});
 }
 
 dstd::Result<Communicator> Communicator::start(BackendKind kind,
@@ -1328,9 +1335,9 @@ dstd::Result<Communicator> Communicator::start(BackendKind kind,
     const bool wanted = kind == BackendKind::Mpi;
     kind = backend::resolve_kind(kind);
     if (kind == BackendKind::Local) {
-        return start(Providers{backend::make_local_bootstrap(1),
-                               backend::make_local_messaging(),
-                               backend::make_local_collectives()});
+        return start(Providers{
+            backend::make_local_bootstrap(1), backend::make_local_messaging(),
+            backend::make_local_collectives(), backend::make_local_bulk()});
     }
     auto loaded = backend::load_backend(options);
     if (!loaded) {
@@ -1380,6 +1387,18 @@ dstd::SharedPtr<comm::backend::Collectives> detail::Hooks::collectives(
     const Communicator& comm) noexcept {
     return comm.backend_ ? comm.backend_->collectives
                          : dstd::SharedPtr<comm::backend::Collectives>{};
+}
+
+dstd::SharedPtr<comm::backend::Bulk> detail::Hooks::bulk(
+    const Communicator& comm) noexcept {
+    return comm.backend_ ? comm.backend_->bulk
+                         : dstd::SharedPtr<comm::backend::Bulk>{};
+}
+
+void detail::Hooks::set_bulk(
+    Communicator& comm, dstd::SharedPtr<comm::backend::Bulk> bulk) noexcept {
+    if (!comm.backend_) return;
+    comm.backend_->bulk = std::move(bulk);
 }
 
 void detail::Hooks::set_collectives(

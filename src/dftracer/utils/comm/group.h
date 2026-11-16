@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_COMM_GROUP_H
 
 #include <dftracer/utils/comm/backend/loader.h>
+#include <dftracer/utils/comm/bulk.h>
 #include <dftracer/utils/comm/codec.h>
 #include <dftracer/utils/comm/collective.h>
 #include <dftracer/utils/comm/error.h>
@@ -28,6 +29,7 @@
 namespace dftracer::utils::comm {
 
 namespace backend {
+class Bulk;
 class Collectives;
 class Messaging;
 }  // namespace backend
@@ -124,6 +126,89 @@ class Group {
     /// @ref channel for a tag type, with the depth and overflow of @p opts.
     template <class Tag>
     Channel<typename Tag::value_type> channel(ChannelOpts opts);
+
+    /**
+     * @brief Exposes @p memory to the ranks of this group and gives the
+     * descriptor they use to pull from it and push into it.
+     *
+     * Not collective and not a call of the group's sequence: it makes no
+     * handshake and matches nothing, so a rank exposes when it wants. The owner
+     * sends the descriptor to a peer with any channel or collective, and the
+     * peer passes it to @ref pull or @ref push of this group.
+     *
+     * The exposing rank keeps @p memory valid, and does not move or free it,
+     * until it has called @ref unexpose and the Op that call gave has
+     * completed: that is when no pull or push on the exposure is left. The
+     * caller orders overlapping transfers on one exposure, which the group does
+     * not, and orders its own reads and writes of the memory against the
+     * transfers that run on it. The
+     * descriptor itself keeps nothing alive. A group that is released or
+     * aborted ends its transfers, but the memory is still the owner's to keep
+     * until its transfers ended. The memory kind must be host; a device kind
+     * fails with @ref dstd::Condition::Unsupported.
+     */
+    dstd::Result<BufferRef> expose(dstd::Span<std::byte> memory,
+                                   Access access = Access::ReadWrite,
+                                   MemoryKind kind = MemoryKind::Host);
+
+    /// Exposes memory that nothing may write: @p access must be
+    /// @ref Access::ReadOnly.
+    dstd::Result<BufferRef> expose(dstd::Span<const std::byte> memory,
+                                   Access access,
+                                   MemoryKind kind = MemoryKind::Host);
+
+    /**
+     * @brief Closes the exposure @p ref, which this rank made.
+     *
+     * No new pull or push on it starts: each fails with
+     * @ref dstd::Condition::NotFound. The pulls and pushes that already started
+     * run to their end, and the Op completes when the last one ended, so the
+     * owner may free the memory after it. It completes at once for a ref that
+     * is not open. A second call on a ref that is still draining completes
+     * when the first does. It cannot be cancelled.
+     *
+     * A transfer between processes holds the exposure one range at a time, so
+     * a pull of several ranges that is running when this is called may fail
+     * with @ref dstd::Condition::NotFound at its next range, while a transfer
+     * in one process runs to its end.
+     */
+    Op<void> unexpose(const BufferRef& ref);
+
+    /**
+     * @brief Copies the exposure @p ref, from @p offset to its end, into
+     * @p dst, and gives the byte count.
+     *
+     * A @p dst shorter than that range fails with @ref ChannelError::TooBig and
+     * copies nothing: the call never cuts a range silently. A @p ref past its
+     * end, a write only exposure, a device memory kind, an unknown or closed
+     * exposure and a ref of another group fail with an error that names the
+     * ref. @p dst must stay valid until the Op ends, also after
+     * @ref Op::cancel.
+     *
+     * A cancel, a deadline and a stopped token end this call alone, never the
+     * group. An abort of the group, or of the owner's process, ends it with the
+     * error of the group. Between processes a range up to a threshold moves in
+     * one message, and a larger one is asked for in ranges that the pulling
+     * rank paces by the credit it grants its peer from its memory budget, so a
+     * pull of any size streams and is never refused for its size.
+     */
+    Op<std::uint64_t> pull(const BufferRef& ref, dstd::Span<std::byte> dst,
+                           std::uint64_t offset = 0, CallOpts opts = {});
+
+    /**
+     * @brief Copies @p src into the exposure @p ref at @p offset, and gives the
+     * byte count.
+     *
+     * Fails with @ref ChannelError::TooBig, and writes nothing, when @p src
+     * does not fit between @p offset and the end of the exposure. A read only
+     * exposure refuses it. The other failures and the cancel rules are those
+     * of @ref pull; @p src must stay valid until the Op ends. The owner's
+     * memory is written in ranges, so a call that fails midway may have
+     * written some of them.
+     */
+    Op<std::uint64_t> push(const BufferRef& ref,
+                           dstd::Span<const std::byte> src,
+                           std::uint64_t offset = 0, CallOpts opts = {});
 
     /**
      * @brief Collective: each member picks a color and a key, and the members
@@ -1283,6 +1368,15 @@ struct Hooks {
     /// The provider that collects the calls of @p comm.
     static dstd::SharedPtr<backend::Collectives> collectives(
         const Communicator& comm) noexcept;
+
+    /// The provider that moves the bulk transfers of @p comm.
+    static dstd::SharedPtr<backend::Bulk> bulk(
+        const Communicator& comm) noexcept;
+
+    /// Runs the bulk transfers of @p comm on @p bulk from now on. A test binds
+    /// another one before the first group exposes memory.
+    static void set_bulk(Communicator& comm,
+                         dstd::SharedPtr<backend::Bulk> bulk) noexcept;
 
     /// Collects the calls of @p comm with @p collectives from now on. A test
     /// binds another one before it makes the first call.

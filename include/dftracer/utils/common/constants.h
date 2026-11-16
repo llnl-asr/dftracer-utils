@@ -100,6 +100,16 @@ inline constexpr std::uint64_t MPI_NATIVE_DRAIN_MS = 1000;
 /// How long a deadline waits for the members to say whether they reached the
 /// call that timed out.
 inline constexpr std::uint64_t MPI_ARRIVAL_PROBE_MS = 200;
+/// A pull or push of at most this many bytes between processes moves in one
+/// message with no credit; a larger one is driven by its receiver in ranges.
+inline constexpr std::uint64_t BULK_EAGER_BYTES = std::uint64_t{64} << 10;
+/// The most bytes one range of a bulk transfer between processes asks for.
+inline constexpr std::uint64_t BULK_RANGE_BYTES = std::uint64_t{8} << 20;
+/// The bytes a process lets one peer have in flight toward it, as a share of
+/// the memory budget divided by the peers, kept between the two bounds.
+inline constexpr std::uint64_t BULK_CREDIT_BUDGET_PERCENT = 5;
+inline constexpr std::uint64_t BULK_MIN_CREDIT_BYTES = std::uint64_t{16} << 20;
+inline constexpr std::uint64_t BULK_MAX_CREDIT_BYTES = std::uint64_t{512} << 20;
 }  // namespace comm_settings
 
 namespace executor_settings {

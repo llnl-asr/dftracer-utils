@@ -6,6 +6,7 @@
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/vector.h>
 
@@ -52,9 +53,17 @@ enum class TagPurpose : std::uint8_t {
     CollectiveTable = 1,
     ChannelOpen = 2,
     ChannelMessage = 3,
+    /// The requests a rank answers for the bulk transfers of its peers.
+    BulkRequest = 4,
+    /// What the answering end of one bulk transfer sends the other end.
+    BulkReply = 5,
+    /// The bytes the pushing end of one bulk transfer sends.
+    BulkData = 6,
+    /// The bytes the answering end of one pull sends.
+    BulkPullData = 7,
 };
 
-inline constexpr std::uint64_t TAG_PURPOSE_SHIFT = 62;
+inline constexpr std::uint64_t TAG_PURPOSE_SHIFT = 60;
 inline constexpr std::uint64_t TAG_INDEX_MASK =
     (std::uint64_t{1} << TAG_PURPOSE_SHIFT) - 1;
 
@@ -139,6 +148,14 @@ class Payload {
     bool is_owned_ = false;
 };
 
+/// A parked receive into a caller buffer that a provider handed out, so the
+/// bytes of its message land in the buffer straight from the wire.
+struct Landing {
+    dstd::Span<std::byte> buffer;
+    /// Ends the receive with the bytes that landed, after they did.
+    dstd::Function<void(std::size_t bytes)> done;
+};
+
 /**
  * @brief Ordered point-to-point bytes between two ranks of a group.
  *
@@ -203,6 +220,25 @@ class Messaging {
     /// @p senders is as for @ref recv_any_source.
     virtual OpId recv_into(const MessageKey& key, std::uint32_t senders,
                            dstd::Span<std::byte> buffer, RecvIntoDone done) = 0;
+
+    /// Takes the receive into a buffer that the next message of @p key of
+    /// @p bytes bytes would pair with, when that is the first receive of its
+    /// stream, no earlier message waits, no receive of any source would take
+    /// it, and its buffer holds @p bytes. The caller then writes the bytes into
+    /// the buffer and ends the receive with @ref Landing::done; the receive can
+    /// no longer be cancelled. Gives nothing when any of that fails, and then
+    /// the message goes through @ref send as any other. A provider that never
+    /// receives into a caller's buffer straight from a wire gives nothing.
+    virtual dstd::Optional<Landing> claim_landing(const MessageKey& key,
+                                                  std::size_t bytes) {
+        (void)key;
+        (void)bytes;
+        return {};
+    }
+
+    /// A test hook: how many bytes this provider received straight into the
+    /// buffer of a receive, with no copy through a message of its own.
+    virtual std::uint64_t landed_bytes() const noexcept { return 0; }
 
     /// Ends the call @p op of @p key with @p why when the provider still holds
     /// it, and gives whether it did. A receive it held keeps its message for a

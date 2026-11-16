@@ -185,6 +185,29 @@ class LocalMessaging : public Messaging {
                     std::move(done), buffer);
     }
 
+    dstd::Optional<Landing> claim_landing(const MessageKey& key,
+                                          std::size_t bytes) override {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (ended(key.group)) return {};
+        const auto at = streams_.find(key);
+        if (at == streams_.end()) return {};
+        Stream& stream = at->second;
+        if (stream.closed || !stream.messages.empty() || !stream.held.empty() ||
+            stream.recvs.empty())
+            return {};
+        const auto any = streams_.find(any_key(key));
+        if (any != streams_.end() && !any->second.recvs.empty()) return {};
+        Recv& front = stream.recvs.front();
+        if (front.kind != Kind::Into || front.buffer.size() < bytes) return {};
+        Landing landing;
+        landing.buffer = front.buffer;
+        landing.done = [into = std::move(front.into), source = key.source](
+                           std::size_t taken) { into(source, taken, nullptr); };
+        stream.recvs.pop_front();
+        sweep(key);
+        return landing;
+    }
+
     bool cancel(const MessageKey& key, OpId op, Error why) override {
         if (op.value == 0) return false;
         Deliveries out;

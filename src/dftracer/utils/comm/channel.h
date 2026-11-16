@@ -114,6 +114,13 @@ void watch_deadline(const dstd::SharedPtr<ChannelState>& channel,
                     const dstd::SharedPtr<PendingOp>& call,
                     const CallOpts& opts);
 
+/// As above for a call of any provider: @p default_timeout is the timeout of
+/// the group, used when @p opts names no deadline.
+void watch_deadline(const dstd::SharedPtr<Backend>& backend,
+                    std::uint64_t default_timeout,
+                    const dstd::SharedPtr<PendingOp>& call,
+                    const CallOpts& opts);
+
 /// Reads what every peer declared of the channel. Gives the error of the first
 /// peer that opened another channel or another value size; otherwise it lists
 /// in

@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_COMM_BACKEND_LOADER_H
 
 #include <dftracer/utils/comm/backend/bootstrap.h>
+#include <dftracer/utils/comm/backend/bulk.h>
 #include <dftracer/utils/comm/backend/collectives.h>
 #include <dftracer/utils/comm/backend/messaging.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -26,6 +27,8 @@ struct Providers {
     dstd::SharedPtr<backend::Bootstrap> bootstrap;
     dstd::SharedPtr<backend::Messaging> messaging;
     dstd::SharedPtr<backend::Collectives> collectives;
+    /// Null makes the communicator run bulk transfers over @ref messaging.
+    dstd::SharedPtr<backend::Bulk> bulk{};
 };
 
 /// What a start gives a backend library. @ref app_comm is null for the world of

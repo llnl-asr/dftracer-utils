@@ -10,6 +10,7 @@
 #include <dftracer/utils/dstd/string.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cstring>
 #include <mutex>
 #include <utility>
@@ -328,20 +329,29 @@ class Impl : public backend::Messaging,
             MPI_Recv(&header, static_cast<int>(sizeof(Wire)), MPI_BYTE,
                      status.MPI_SOURCE, TAG_HEADER, context_->messages(),
                      MPI_STATUS_IGNORE);
-            dstd::Vector<std::byte> body(header.payload);
-            // The sender cut the payload in pieces of its own size, none above
-            // MAX_CHUNK_BYTES, so each receive asks for all that is left.
-            for (std::size_t at = 0; at < body.size();) {
-                const std::size_t room =
-                    std::min(MAX_CHUNK_BYTES, body.size() - at);
-                MPI_Status got;
-                MPI_Recv(body.data() + at, static_cast<int>(room), MPI_BYTE,
-                         status.MPI_SOURCE, TAG_PAYLOAD, context_->messages(),
-                         &got);
-                int count = 0;
-                MPI_Get_count(&got, MPI_BYTE, &count);
-                at += static_cast<std::size_t>(count);
+            const MessageKey key{header.group, header.source,
+                                 header.destination, header.tag};
+            const bool data = static_cast<Kind>(header.kind) == Kind::Data;
+            // A receive into a caller's buffer takes the bytes straight from
+            // the wire, unless an earlier message of its stream still waits
+            // for the completion thread: that one must pair first.
+            dstd::Optional<backend::Landing> landing;
+            if (data && header.payload > 0 && !stream_busy(key))
+                landing = engine_->claim_landing(key, header.payload);
+            if (landing) {
+                receive_payload(landing->buffer.data(), header.payload,
+                                status.MPI_SOURCE);
+                landed_.fetch_add(header.payload, std::memory_order_relaxed);
+                context_->complete([self = shared_from_this(), header,
+                                    taken = std::move(*landing)]() mutable {
+                    taken.done(header.payload);
+                    self->acknowledge(header.origin, header.op, nullptr);
+                });
+                continue;
             }
+            dstd::Vector<std::byte> body(header.payload);
+            receive_payload(body.data(), body.size(), status.MPI_SOURCE);
+            if (data) hold_stream(key);
             context_->complete([self = shared_from_this(), header,
                                 held = std::move(body)]() mutable {
                 self->handle(header, std::move(held));
@@ -350,12 +360,55 @@ class Impl : public backend::Messaging,
         return progressed;
     }
 
+    std::uint64_t landed_bytes() const noexcept override {
+        return landed_.load(std::memory_order_relaxed);
+    }
+
+    dstd::Optional<backend::Landing> claim_landing(const MessageKey& key,
+                                                   std::size_t bytes) override {
+        return engine_->claim_landing(key, bytes);
+    }
+
+    /// Receives @p total bytes of a payload from @p source into @p into. The
+    /// sender cut the payload in pieces of its own size, none above
+    /// MAX_CHUNK_BYTES, so each receive asks for all that is left.
+    void receive_payload(std::byte* into, std::size_t total, int source) {
+        for (std::size_t at = 0; at < total;) {
+            const std::size_t room = std::min(MAX_CHUNK_BYTES, total - at);
+            MPI_Status got;
+            MPI_Recv(into + at, static_cast<int>(room), MPI_BYTE, source,
+                     TAG_PAYLOAD, context_->messages(), &got);
+            int count = 0;
+            MPI_Get_count(&got, MPI_BYTE, &count);
+            at += static_cast<std::size_t>(count);
+        }
+    }
+
+    /// Whether messages of @p key wait for the completion thread.
+    bool stream_busy(const MessageKey& key) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return held_streams_.find(key) != held_streams_.end();
+    }
+
+    void hold_stream(const MessageKey& key) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        ++held_streams_[key];
+    }
+
+    void release_stream(const MessageKey& key) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        const auto at = held_streams_.find(key);
+        if (at != held_streams_.end() && --at->second == 0)
+            held_streams_.erase(at);
+    }
+
     void handle(const Wire& wire, dstd::Vector<std::byte> bytes) {
         const MessageKey key{wire.group, wire.source, wire.destination,
                              wire.tag};
         switch (static_cast<Kind>(wire.kind)) {
             case Kind::Data:
                 receive_data(wire, key, std::move(bytes));
+                release_stream(key);
                 return;
             case Kind::Ack: {
                 PendingSend taken;
@@ -505,6 +558,10 @@ class Impl : public backend::Messaging,
     std::uint64_t next_op_ = 0;
     dstd::Map<std::uint64_t, PendingSend> pending_;
     dstd::Map<RemoteKey, RemoteOp> remote_;
+    /// How many messages of each stream the completion thread has not paired
+    /// yet.
+    dstd::Map<MessageKey, std::size_t> held_streams_;
+    std::atomic<std::uint64_t> landed_{0};
     dstd::Map<std::uint64_t, dstd::Vector<std::uint32_t>> groups_;
     dstd::Set<std::uint64_t> announced_;
     dstd::SharedPtr<PeerAbort> peer_abort_;

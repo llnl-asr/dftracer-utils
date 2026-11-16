@@ -27,6 +27,7 @@
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/fileio/compress/libdeflate_gzip.h>
+#include <dftracer/utils/memory/clock.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/views/view.h>
 
@@ -244,7 +245,7 @@ std::uint64_t checksum(const dataframe::DataFrame& f,
 
 double now_ms() {
     return std::chrono::duration<double, std::milli>(
-               std::chrono::steady_clock::now().time_since_epoch())
+               memory::steady_now().time_since_epoch())
         .count();
 }
 

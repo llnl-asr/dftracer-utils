@@ -10,6 +10,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/memory/clock.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/store/store.h>
 #include <dftracer/utils/store/writer.h>
@@ -640,9 +641,8 @@ TEST_SUITE("store api") {
         put_all(store, ns, scope, rows);
         dstd::Optional<dstd::String> seen =
             get_value(store, ns, scope, "k1000");
-        const auto deadline =
-            std::chrono::steady_clock::now() + std::chrono::seconds(5);
-        while (!seen && std::chrono::steady_clock::now() < deadline) {
+        const auto deadline = memory::steady_now() + std::chrono::seconds(5);
+        while (!seen && memory::steady_now() < deadline) {
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
             seen = get_value(store, ns, scope, "k1000");
         }

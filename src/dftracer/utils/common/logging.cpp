@@ -6,6 +6,7 @@
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/ptr_hash.h>
+#include <dftracer/utils/memory/clock.h>
 #include <unistd.h>
 
 #include <chrono>
@@ -85,12 +86,9 @@ const char* base_name(const char* path) {
 }
 
 dstd::StringView make_timestamp(char* out, std::size_t n) {
-    auto now = std::chrono::system_clock::now();
-    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                  now.time_since_epoch())
-                  .count() %
-              1000;
-    std::time_t t = std::chrono::system_clock::to_time_t(now);
+    const std::uint64_t now_ns = memory::system_now_ns();
+    const auto ms = (now_ns / 1000000ULL) % 1000ULL;
+    const std::time_t t = static_cast<std::time_t>(now_ns / 1000000000ULL);
     std::tm tm;
     localtime_r(&t, &tm);
     const dstd::FmtResult r =
@@ -105,7 +103,7 @@ struct ScopeFrame : dstd::HeapObject {
     dstd::String label;
     const char* file;
     int line;
-    long long start_ns;
+    std::int64_t start_ns;
 };
 
 }  // namespace
@@ -213,13 +211,17 @@ void emit(Level lvl, const char* file, int line, dstd::StringView msg) {
 
 void* scope_open(const char* file, int line, dstd::StringView label) {
     write<"-> {}">(Level::Trace, file, line, label);
-    return new ScopeFrame{{}, dstd::String(label), file, line, steady_now_ns()};
+    return new ScopeFrame{{},
+                          dstd::String(label),
+                          file,
+                          line,
+                          static_cast<std::int64_t>(memory::steady_now_ns())};
 }
 
 void scope_close(void* handle) {
     auto* frame = static_cast<ScopeFrame*>(handle);
     const double ms =
-        static_cast<double>(steady_now_ns() - frame->start_ns) / 1e6;
+        static_cast<double>(memory::steady_now_ns() - frame->start_ns) / 1e6;
     write<"<- {} [{:.2f} ms]">(Level::Trace, frame->file, frame->line,
                                frame->label, ms);
     delete frame;

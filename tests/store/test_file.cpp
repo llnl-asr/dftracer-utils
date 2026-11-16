@@ -11,6 +11,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/memory/clock.h>
 #include <dftracer/utils/memory/detail/manager.h>
 #include <dftracer/utils/store/crc.h>
 #include <dftracer/utils/store/data_file.h>
@@ -171,8 +172,7 @@ struct TempDir {
     dstd::Path path;
 
     TempDir() {
-        const auto now =
-            std::chrono::steady_clock::now().time_since_epoch().count();
+        const auto now = memory::steady_now().time_since_epoch().count();
         path = dstd::fs::temp_directory() /
                (dstd::fmt<"dftu_store_file_{}_{}">(::getpid(), now));
         REQUIRE(dstd::fs::create_directories(path).has_value());

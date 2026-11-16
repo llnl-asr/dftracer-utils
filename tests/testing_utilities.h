@@ -11,6 +11,7 @@
 #include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/memory/clock.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -161,9 +162,10 @@ inline dftracer::utils::dstd::Path make_unique_test_path(
     // mid-test, which surfaces as a file that was just written having
     // vanished.
     const auto pid = static_cast<unsigned long long>(::getpid());
-    const auto now = std::chrono::duration_cast<std::chrono::nanoseconds>(
-                         std::chrono::steady_clock::now().time_since_epoch())
-                         .count();
+    const auto now =
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            dftracer::utils::memory::steady_now().time_since_epoch())
+            .count();
     const auto tid =
         dftracer::utils::dstd::Hash<dftracer::utils::dstd::Thread::Id>{}(
             dftracer::utils::dstd::Thread::current_id());

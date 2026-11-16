@@ -9,6 +9,7 @@
 #include <dftracer/utils/coro/time.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/memory/clock.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 #include <task_result.h>
@@ -153,13 +154,13 @@ TEST_CASE("a join set wait can time out and lose nothing") {
 
 TEST_CASE("ending a join set stops the tasks it left running") {
     Runtime runtime(2);
-    const auto start = std::chrono::steady_clock::now();
+    const auto start = memory::steady_now();
     dftu_utils_test::ok(runtime.block_on(
         with_join_set<int>([](JoinSet<int>& set) -> CoroTask<void> {
             set.spawn(after(30s, 1));
             co_await sleep(1ms);
         })));
-    CHECK(std::chrono::steady_clock::now() - start < 5s);
+    CHECK(memory::steady_now() - start < 5s);
 }
 
 TEST_CASE("a join set task that a stop ends reports as cancelled") {

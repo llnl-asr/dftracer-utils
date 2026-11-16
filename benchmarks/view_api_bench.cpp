@@ -25,6 +25,7 @@
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/fileio/compress/libdeflate_gzip.h>
+#include <dftracer/utils/memory/clock.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/views/typed_rows.h>
 #include <dftracer/utils/trace/views/view.h>
@@ -230,10 +231,9 @@ dstd::Vector<Row> rows_via_collect(const View& v,
 }
 
 double seconds(dstd::FunctionRef<void()> f) {
-    const auto t0 = std::chrono::steady_clock::now();
+    const auto t0 = memory::steady_now();
     f();
-    return std::chrono::duration<double>(std::chrono::steady_clock::now() - t0)
-        .count();
+    return std::chrono::duration<double>(memory::steady_now() - t0).count();
 }
 
 double median(dstd::Vector<double> v) {

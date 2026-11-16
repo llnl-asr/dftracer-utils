@@ -5,6 +5,7 @@
 #include <dftracer/utils/coro/yield.h>
 #include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/no_destructor.h>
+#include <dftracer/utils/memory/clock.h>
 
 #include <chrono>
 #include <condition_variable>
@@ -19,7 +20,7 @@ static thread_local Clock::time_point t_timeslice_start = Clock::time_point{};
 static thread_local std::chrono::microseconds t_timeslice_duration =
     DEFAULT_TIMESLICE;
 
-void reset_timeslice() noexcept { t_timeslice_start = Clock::now(); }
+void reset_timeslice() noexcept { t_timeslice_start = memory::steady_now(); }
 
 bool timeslice_exceeded() noexcept {
     if (t_timeslice_duration.count() == 0) {
@@ -28,7 +29,7 @@ bool timeslice_exceeded() noexcept {
     if (!Executor::current()) {
         return false;  // Not on a worker thread
     }
-    auto elapsed = Clock::now() - t_timeslice_start;
+    auto elapsed = memory::steady_now() - t_timeslice_start;
     return elapsed >=
            std::chrono::duration_cast<Clock::duration>(t_timeslice_duration);
 }

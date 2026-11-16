@@ -13,6 +13,7 @@
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/memory/clock.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 #include <task_result.h>
@@ -397,7 +398,7 @@ TEST_CASE("a stream frees its limit slot when it is dropped early") {
 TEST_CASE("timeout ends a slow batch stage and a slow task") {
     Runtime runtime(2);
     auto bounded = SlowStage{} | timeout(10ms);
-    const auto start = std::chrono::steady_clock::now();
+    const auto start = memory::steady_now();
     CHECK(condition_of(runtime, [&] { return bounded.run(1); }) ==
           dstd::Condition::Timeout);
     CHECK(condition_of(runtime, [] {
@@ -405,7 +406,7 @@ TEST_CASE("timeout ends a slow batch stage and a slow task") {
           }) == dstd::Condition::Timeout);
     // Far below the sleeps, so only a timeout that waits a sleep out fails,
     // while a slow shared runner still passes.
-    CHECK(std::chrono::steady_clock::now() - start < 20s);
+    CHECK(memory::steady_now() - start < 20s);
     auto chained = Doubler{} | timeout(5s) |
                    then([](dstd::Result<int> doubled) { return *doubled * 3; });
     CHECK(dftu_utils_test::ok(runtime.block_on(chained.run(1))) == 6);
@@ -525,7 +526,7 @@ TEST_CASE("timeout bounds each item of a stream") {
     };
     dstd::Condition condition = dstd::Condition::Unknown;
     int seen = 0;
-    const auto start = std::chrono::steady_clock::now();
+    const auto start = memory::steady_now();
     dftu_utils_test::ok(runtime.block_on([&]() -> CoroTask<void> {
         auto stream = slow_stream() | timeout(20ms);
         for (;;) {
@@ -542,7 +543,7 @@ TEST_CASE("timeout bounds each item of a stream") {
     CHECK(condition == dstd::Condition::Timeout);
     // Far below the sleep, so only a timeout that waits the sleep out fails,
     // while a slow shared runner still passes.
-    CHECK(std::chrono::steady_clock::now() - start < 20s);
+    CHECK(memory::steady_now() - start < 20s);
 
     auto fast = dftu_utils_test::ok(
         runtime.block_on(collect(numbers(0, 100) | timeout(5s))));

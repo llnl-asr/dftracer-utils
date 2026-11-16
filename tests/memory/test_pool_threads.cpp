@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/memory/clock.h>
 #include <dftracer/utils/memory/detail/heap.h>
 #include <dftracer/utils/memory/detail/manager.h>
 #include <doctest/doctest.h>
@@ -232,8 +233,8 @@ TEST_CASE("closing a pool while threads flush their charges reports no leak") {
             }
         });
     }
-    const auto end = std::chrono::steady_clock::now() + RUN_FOR;
-    for (int r = 1; std::chrono::steady_clock::now() < end; ++r) {
+    const auto end = steady_now() + RUN_FOR;
+    for (int r = 1; steady_now() < end; ++r) {
         PoolHandle pool = root().child("flushed");
         current.store(pool.get(), std::memory_order_release);
         charged.store(0, std::memory_order_release);

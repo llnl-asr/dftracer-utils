@@ -58,6 +58,7 @@
 #include <dftracer/utils/json/record_parser.h>
 #include <dftracer/utils/json/value.h>
 #include <dftracer/utils/json/value_access.h>
+#include <dftracer/utils/memory/clock.h>
 #include <dftracer/utils/trace/parse_inflated.h>
 #include <dftracer/utils/trace/views/fold_event.h>
 #include <simdjson.h>
@@ -589,9 +590,9 @@ double median(dstd::Vector<double> v) {
 
 template <class Row>
 double timed(Row& row, Acc& acc, std::size_t lines) {
-    const auto start = Clock::now();
+    const auto start = memory::steady_now();
     row.template run<false>(acc);
-    const auto stop = Clock::now();
+    const auto stop = memory::steady_now();
     return std::chrono::duration<double, std::nano>(stop - start).count() /
            static_cast<double>(lines);
 }

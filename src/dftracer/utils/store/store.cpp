@@ -15,6 +15,7 @@
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/shutdown.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/memory/clock.h>
 #include <dftracer/utils/memory/detail/manager.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/store/fold.h>
@@ -359,9 +360,9 @@ struct Store::State {
     mutable std::shared_mutex published_mutex;
     dstd::SharedPtr<const engine::Snapshot> published;
     std::uint64_t published_version = 0;
-    /// steady_clock ticks before which no look at other processes is due. 0
-    /// makes every snapshot() look.
-    std::atomic<std::int64_t> next_look{0};
+    /// Nanoseconds on the steady clock before which no look at other processes
+    /// is due. 0 makes every snapshot() look.
+    std::atomic<std::uint64_t> next_look{0};
 
     using Registry = dstd::Map<dstd::String, dstd::WeakPtr<State>>;
 
@@ -584,16 +585,14 @@ void Store::State::refresh_if_changed_locked() {
         common::Env::get<std::uint64_t>(
             common::constants::indexer::INDEX_STORE_REFRESH_MS_ENV)
             .value_or(common::constants::indexer::INDEX_STORE_REFRESH_MS);
-    const auto now = std::chrono::steady_clock::now();
+    const auto now = memory::steady_now();
     if (interval_ms > 0 && foreign_checked.time_since_epoch().count() != 0 &&
         now - foreign_checked < std::chrono::milliseconds(interval_ms)) {
         return;
     }
     foreign_checked = now;
     if (interval_ms > 0) {
-        next_look.store((now + std::chrono::milliseconds(interval_ms))
-                            .time_since_epoch()
-                            .count(),
+        next_look.store(memory::steady_now_ns() + interval_ms * 1000000ULL,
                         std::memory_order_release);
     }
     auto files = foreign_files_locked();
@@ -604,7 +603,7 @@ void Store::State::refresh_if_changed_locked() {
 
 dstd::Expected<dstd::SharedPtr<const engine::Snapshot>, dstd::Error>
 Store::State::snapshot() {
-    if (common::steady_now_ns() < next_look.load(std::memory_order_acquire)) {
+    if (memory::steady_now_ns() < next_look.load(std::memory_order_acquire)) {
         std::shared_lock<std::shared_mutex> shared(published_mutex);
         if (published != nullptr &&
             published_version == version.load(std::memory_order_acquire)) {
@@ -831,9 +830,7 @@ coro::CoroTask<dstd::Expected<PackReport, dstd::Error>> Store::State::pack_task(
     auto settled =
         after->pack_plan(std::numeric_limits<std::uint64_t>::max(), 2.0);
     if (!settled) co_return Failure(settled.error());
-    const auto now = std::chrono::duration_cast<std::chrono::nanoseconds>(
-                         std::chrono::system_clock::now().time_since_epoch())
-                         .count();
+    const std::uint64_t now = memory::system_now_ns();
     const std::uint64_t keep_ns = options.keep_seconds * 1000000000ULL;
     coro::BlockingRegion blocking;
     for (const engine::ReplacedFile& file : settled->replaced) {

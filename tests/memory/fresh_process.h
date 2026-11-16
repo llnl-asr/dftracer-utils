@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_TESTS_MEMORY_FRESH_PROCESS_H
 #define DFTRACER_UTILS_TESTS_MEMORY_FRESH_PROCESS_H
 
+#include <dftracer/utils/memory/clock.h>
 #include <no_core_dump.h>
 #include <poll.h>
 #include <signal.h>
@@ -104,7 +105,7 @@ inline Result run(const char* test_case, int timeout_ms = 0) {
     ::close(err[1]);
     // A timeout bounds the read as well as the wait, so a hung child that
     // keeps its stderr open fails the test instead of hanging it.
-    const auto deadline = std::chrono::steady_clock::now() +
+    const auto deadline = dftracer::utils::memory::steady_now() +
                           std::chrono::milliseconds(timeout_ms);
     bool timed_out = false;
     char chunk[512];
@@ -113,7 +114,7 @@ inline Result run(const char* test_case, int timeout_ms = 0) {
         if (timeout_ms > 0) {
             const auto left =
                 std::chrono::duration_cast<std::chrono::milliseconds>(
-                    deadline - std::chrono::steady_clock::now());
+                    deadline - dftracer::utils::memory::steady_now());
             if (left.count() <= 0) {
                 timed_out = true;
                 break;
@@ -135,7 +136,7 @@ inline Result run(const char* test_case, int timeout_ms = 0) {
     std::fputs(result.output.c_str(), stderr);
     while (!timed_out && timeout_ms > 0 &&
            ::waitpid(pid, &result.status, WNOHANG) == 0) {
-        if (std::chrono::steady_clock::now() >= deadline) {
+        if (dftracer::utils::memory::steady_now() >= deadline) {
             timed_out = true;
             break;
         }

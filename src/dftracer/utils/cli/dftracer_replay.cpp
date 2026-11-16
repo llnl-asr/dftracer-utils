@@ -32,6 +32,7 @@
 
 #include <dftracer/utils/cli/common_cli.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/memory/clock.h>
 
 #include <chrono>
 #include <cinttypes>
@@ -251,7 +252,7 @@ struct RunCtx {
 };
 
 coro::CoroTask<void> task_scan(RunCtx* ctx, coro::Scope& scope) {
-    const auto t0 = std::chrono::steady_clock::now();
+    const auto t0 = memory::steady_now();
 
     auto collected = co_await cli::collect_input_trace_files(
         scope, ctx->cli->inputs, /*recursive=*/true, [](dstd::StringView in) {
@@ -266,9 +267,9 @@ coro::CoroTask<void> task_scan(RunCtx* ctx, coro::Scope& scope) {
     }
     for (const auto& file : *collected) ctx->trace_files.emplace_back(file);
 
-    ctx->scan_ms = std::chrono::duration<double, std::milli>(
-                       std::chrono::steady_clock::now() - t0)
-                       .count();
+    ctx->scan_ms =
+        std::chrono::duration<double, std::milli>(memory::steady_now() - t0)
+            .count();
 
     if (ctx->trace_files.empty()) {
         if (ctx->is_root) {
@@ -367,7 +368,7 @@ void print_filters(const RunCtx& ctx) {
 coro::CoroTask<void> task_execute(RunCtx* ctx, coro::Scope* scope) {
     if (ctx->failed) co_return;
 
-    const auto t0 = std::chrono::steady_clock::now();
+    const auto t0 = memory::steady_now();
 
     if (ctx->is_root) {
         print_configuration(*ctx);
@@ -423,9 +424,9 @@ coro::CoroTask<void> task_execute(RunCtx* ctx, coro::Scope* scope) {
         }
     }
 
-    ctx->execute_ms = std::chrono::duration<double, std::milli>(
-                          std::chrono::steady_clock::now() - t0)
-                          .count();
+    ctx->execute_ms =
+        std::chrono::duration<double, std::milli>(memory::steady_now() - t0)
+            .count();
 
     if (ctx->is_root) {
         std::printf("\n=== Replay Completed ===\n");

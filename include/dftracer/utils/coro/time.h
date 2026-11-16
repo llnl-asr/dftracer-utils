@@ -6,6 +6,7 @@
 #include <dftracer/utils/coro/when_any.h>
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/result.h>
+#include <dftracer/utils/memory/clock.h>
 
 #include <chrono>
 #include <type_traits>
@@ -47,10 +48,11 @@ CoroTask<dstd::Result<T>> with_timeout(
 
 /// @ref with_timeout with a point in time. A time in the past still starts the
 /// task and then cancels it at its first wait.
-template <typename T, typename Clock, typename Duration>
+template <typename T, typename Duration>
 CoroTask<dstd::Result<T>> with_deadline(
-    CoroTask<T> task, std::chrono::time_point<Clock, Duration> deadline) {
-    return with_timeout(std::move(task), deadline - Clock::now());
+    CoroTask<T> task,
+    std::chrono::time_point<std::chrono::steady_clock, Duration> deadline) {
+    return with_timeout(std::move(task), deadline - memory::steady_now());
 }
 
 }  // namespace dftracer::utils::coro

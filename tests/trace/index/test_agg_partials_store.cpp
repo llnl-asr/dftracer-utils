@@ -13,6 +13,7 @@
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/fileio/file_helpers.h>
+#include <dftracer/utils/memory/clock.h>
 #include <dftracer/utils/store/store.h>
 #include <dftracer/utils/trace/index/index.h>
 #include <dftracer/utils/trace/index/indexer.h>
@@ -107,10 +108,9 @@ IndexerOptions options(dstd::StringView index_dir) {
 double build_seconds(const dstd::Vector<dstd::String>& files,
                      dstd::StringView index_dir) {
     auto ix = dftu_utils_test::ok(Indexer::open(files, options(index_dir)));
-    const auto t0 = std::chrono::steady_clock::now();
+    const auto t0 = memory::steady_now();
     dftu_utils_test::ok(ix.build());
-    return std::chrono::duration<double>(std::chrono::steady_clock::now() - t0)
-        .count();
+    return std::chrono::duration<double>(memory::steady_now() - t0).count();
 }
 
 struct Stored {

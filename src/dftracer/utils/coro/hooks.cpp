@@ -2,6 +2,7 @@
 #include <dftracer/utils/common/timer.h>
 #include <dftracer/utils/coro/hooks.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/memory/clock.h>
 
 #include <algorithm>
 #include <mutex>
@@ -122,8 +123,8 @@ namespace {
 
 CoroutineEvent make_event(const void* coroutine, CoroutineEventKind kind,
                           CoroutineOrigin origin) noexcept {
-    return CoroutineEvent{common::steady_now_ns(), coroutine, t_worker_index,
-                          kind, origin};
+    return CoroutineEvent{static_cast<std::int64_t>(memory::steady_now_ns()),
+                          coroutine, t_worker_index, kind, origin};
 }
 
 }  // namespace

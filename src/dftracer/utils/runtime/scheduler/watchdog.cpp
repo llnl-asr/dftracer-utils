@@ -2,6 +2,7 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/memory/clock.h>
 #include <dftracer/utils/runtime/scheduler/task_executor.h>
 #include <dftracer/utils/runtime/scheduler/watchdog.h>
 
@@ -58,7 +59,7 @@ void Watchdog::stop() {
 }
 
 void Watchdog::mark_execution_start() {
-    execution_start_time_ = std::chrono::steady_clock::now();
+    execution_start_time_ = memory::steady_now();
 
     DFTRACER_UTILS_LOG_DEBUG("{}", "Watchdog: execution started");
 }
@@ -76,7 +77,7 @@ void Watchdog::register_task_start(common::TaskIndex task_id,
 
     TaskExecution exec;
     exec.name = dstd::String(name);
-    exec.start_time = std::chrono::steady_clock::now();
+    exec.start_time = memory::steady_now();
     exec.timeout = effective_timeout;
     exec.warning_logged = false;
     active_tasks_[task_id] = exec;
@@ -166,7 +167,7 @@ bool Watchdog::check_global_timeout() {
         return false;
     }
 
-    auto now = std::chrono::steady_clock::now();
+    auto now = memory::steady_now();
     auto elapsed = now - execution_start_time_;
 
     if (elapsed > global_timeout_) {
@@ -190,7 +191,7 @@ bool Watchdog::check_global_timeout() {
 bool Watchdog::check_task_timeouts() {
     std::lock_guard<std::mutex> lock(active_tasks_mutex_);
 
-    auto now = std::chrono::steady_clock::now();
+    auto now = memory::steady_now();
 
     for (auto& [task_id, execution] : active_tasks_) {
         auto elapsed = now - execution.start_time;

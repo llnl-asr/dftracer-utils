@@ -7,6 +7,7 @@
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/memory/clock.h>
 #include <doctest/doctest.h>
 #include <netinet/in.h>
 #include <signal.h>
@@ -131,9 +132,9 @@ bool can_bind_local_tcp_socket() {
 
 /// Wait until port is listening or timeout expires.
 bool wait_for_port(int port, int timeout_s = 10) {
-    auto deadline = std::chrono::steady_clock::now() +
+    auto deadline = memory::steady_now() +
                     std::chrono::seconds(timeout_s * valgrind_timeout_scale());
-    while (std::chrono::steady_clock::now() < deadline) {
+    while (memory::steady_now() < deadline) {
         if (port_is_listening(port)) return true;
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
@@ -261,9 +262,9 @@ dstd::String extract_body(const dstd::String& response) {
 
 /// Wait until the HTTP handler responds, not just the TCP port.
 bool wait_for_http(int port, int timeout_s = 30) {
-    auto deadline = std::chrono::steady_clock::now() +
+    auto deadline = memory::steady_now() +
                     std::chrono::seconds(timeout_s * valgrind_timeout_scale());
-    while (std::chrono::steady_clock::now() < deadline) {
+    while (memory::steady_now() < deadline) {
         auto probe = http_request(port,
                                   "GET /api/files HTTP/1.1\r\n"
                                   "Host: localhost\r\n"

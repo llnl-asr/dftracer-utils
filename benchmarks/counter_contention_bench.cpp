@@ -44,6 +44,7 @@
 #include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/fileio/compress/libdeflate_gzip.h>
+#include <dftracer/utils/memory/clock.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <memory_probe.h>
 #include <memory_workloads.h>
@@ -385,7 +386,7 @@ void remote_worker(RemoteShared& sh, std::size_t t, std::size_t threads,
             st.allocated += n;
         }
         sh.barrier.arrive_and_wait();
-        const auto push_begin = std::chrono::steady_clock::now();
+        const auto push_begin = memory::steady_now();
         for (std::size_t g = 0; g < groups; ++g) {
             const std::size_t owner = (t + threads - g) % threads;
             Node** blocks = sh.outbox[owner].data() + g * SLICE;
@@ -406,7 +407,7 @@ void remote_worker(RemoteShared& sh, std::size_t t, std::size_t threads,
         }
         st.push_ns += static_cast<std::uint64_t>(
             std::chrono::duration_cast<std::chrono::nanoseconds>(
-                std::chrono::steady_clock::now() - push_begin)
+                memory::steady_now() - push_begin)
                 .count());
         sh.barrier.arrive_and_wait();
         Node* p =
@@ -439,9 +440,9 @@ double time_threads(std::size_t threads, Body body) {
             body(t);
         });
     gate.arrive_and_wait();
-    const auto t0 = std::chrono::steady_clock::now();
+    const auto t0 = memory::steady_now();
     for (dstd::Thread& th : pool) th.join();
-    const auto t1 = std::chrono::steady_clock::now();
+    const auto t1 = memory::steady_now();
     return std::chrono::duration<double, std::nano>(t1 - t0).count();
 }
 

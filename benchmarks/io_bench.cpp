@@ -26,6 +26,7 @@
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/memory/clock.h>
 #include <dftracer/utils/runtime/io/io_backend.h>
 #include <dftracer/utils/runtime/io/ops.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -344,10 +345,10 @@ int main(int argc, char** argv) {
         dstd::Vector<double> times;
         for (int rep = 0; rep < config.reps; ++rep) {
             Runtime rt(ExecutorConfig{.thread_count = config.threads}, false);
-            const auto start = Clock::now();
+            const auto start = memory::steady_now();
             const std::uint64_t ops = item.run(config, rt, shared);
             const std::chrono::duration<double, std::nano> took =
-                Clock::now() - start;
+                memory::steady_now() - start;
             times.push_back(took.count() / static_cast<double>(ops));
         }
         std::sort(times.begin(), times.end());

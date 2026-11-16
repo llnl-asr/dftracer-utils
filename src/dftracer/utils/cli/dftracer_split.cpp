@@ -18,6 +18,7 @@
 #include <dftracer/utils/fileio/hash/hasher_utility.h>
 #include <dftracer/utils/fileio/lines/sources/async_streaming_gz_line_generator.h>
 #include <dftracer/utils/memory/budget.h>
+#include <dftracer/utils/memory/clock.h>
 #include <dftracer/utils/runtime/io/io.h>
 #include <dftracer/utils/trace/chunk_extractor_utility.h>
 #include <dftracer/utils/trace/chunk_verifier_utility.h>
@@ -131,7 +132,7 @@ struct RechunkDir {
         std::lock_guard<std::mutex> lock(mu);
         if (path.empty()) {
             const dstd::String name = dstd::fmt<"dftracer_rechunk_{}_{}">(
-                std::time(nullptr), getpid());
+                memory::system_now_ns() / 1000000000ULL, getpid());
             path = dstd::fs::temp_directory().view() / dstd::PathView(name);
             auto created = dstd::fs::create_directories(path.view());
             if (!created.has_value()) {
@@ -604,7 +605,7 @@ static coro::CoroTask<int> run_split(const SplitArgParse* cli) {
         if (!created.has_value()) co_return cli::report_error(created.error());
     }
 
-    auto start_time = std::chrono::high_resolution_clock::now();
+    auto start_time = memory::steady_now();
 
     DFTRACER_UTILS_LOG_INFO("{}", "Discovering input files...");
 
@@ -651,7 +652,7 @@ static coro::CoroTask<int> run_split(const SplitArgParse* cli) {
         });
     if (!ran) co_return cli::report_error(ran.error());
 
-    auto end_time = std::chrono::high_resolution_clock::now();
+    auto end_time = memory::steady_now();
     std::chrono::duration<double, std::milli> duration = end_time - start_time;
 
     const int exit_code = print_report(split_results, input_count,

@@ -6,6 +6,7 @@
 #include <dftracer/utils/coro/yield.h>
 #include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/memory/clock.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 #include <task_result.h>
@@ -50,10 +51,10 @@ TEST_SUITE("PoolScheduling") {
                 for (std::size_t i = 0; i < THREADS; ++i) {
                     scope.spawn([&]() -> coro::CoroTask<void> {
                         started.fetch_add(1, std::memory_order_acq_rel);
-                        const auto until = Clock::now() + DEADLINE;
+                        const auto until = memory::steady_now() + DEADLINE;
                         while (started.load(std::memory_order_acquire) <
                                THREADS) {
-                            if (Clock::now() > until) {
+                            if (memory::steady_now() > until) {
                                 all_met.store(false);
                                 break;
                             }
@@ -78,13 +79,14 @@ TEST_SUITE("PoolScheduling") {
             coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
                 scope.spawn([&]() -> coro::CoroTask<void> {
                     co_await gate.acquire(1);
-                    woken_at.store(Clock::now().time_since_epoch().count());
+                    woken_at.store(
+                        memory::steady_now().time_since_epoch().count());
                 });
                 scope.spawn([&]() -> coro::CoroTask<void> {
                     std::this_thread::sleep_for(50ms);
-                    const auto start = Clock::now();
+                    const auto start = memory::steady_now();
                     gate.release(1);
-                    while (Clock::now() - start < COMPUTE) {
+                    while (memory::steady_now() - start < COMPUTE) {
                     }
                     const auto woken =
                         Clock::time_point(Clock::duration(woken_at.load()));
@@ -145,9 +147,9 @@ TEST_SUITE("PoolScheduling") {
         dstd::Vector<std::chrono::nanoseconds> latencies;
         for (int round = 0; round < ROUNDS; ++round) {
             std::this_thread::sleep_for(1ms);
-            const auto start = Clock::now();
+            const auto start = memory::steady_now();
             dftu_utils_test::ok(rt.submit(tiny(), "Tiny").wait());
-            latencies.push_back(Clock::now() - start);
+            latencies.push_back(memory::steady_now() - start);
         }
         // A round or two can stall on a loaded machine. Lost wakes repeat.
         const auto slow_rounds =

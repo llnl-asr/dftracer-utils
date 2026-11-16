@@ -4,6 +4,7 @@
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/memory/clock.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 #include <sys/resource.h>
@@ -150,10 +151,9 @@ TEST_SUITE("ProcessRuntime") {
     TEST_CASE("an elastic pool of one stays elastic when it grows") {
         configure_default_runtime({.threads = 1, .eager = false});
         // Let the pool retire down to its floor of one.
-        const auto deadline =
-            std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        const auto deadline = memory::steady_now() + std::chrono::seconds(5);
         while (default_runtime().progress().workers.size() > 1 &&
-               std::chrono::steady_clock::now() < deadline)
+               memory::steady_now() < deadline)
             std::this_thread::sleep_for(std::chrono::milliseconds(20));
         REQUIRE(default_runtime().progress().workers.size() == 1);
         configure_default_runtime({.threads = 8});

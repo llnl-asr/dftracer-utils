@@ -25,6 +25,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/fileio/gzip_line_writer.h>
 #include <dftracer/utils/memory/budget.h>
+#include <dftracer/utils/memory/clock.h>
 #include <fcntl.h>
 #include <sys/resource.h>
 
@@ -323,7 +324,10 @@ class Progress {
         print(now, last_group);
     }
 
-    std::int64_t elapsed_ms() const { return common::elapsed_ms(start_ms_); }
+    std::int64_t elapsed_ms() const {
+        return static_cast<std::int64_t>(memory::steady_now_ns() / 1000000ULL) -
+               start_ms_;
+    }
 
     dstd::String prefix(std::int64_t now_ms) const {
         return dstd::fmt<"{} {}]">(
@@ -398,7 +402,7 @@ class Progress {
                               std::chrono::milliseconds(GROUP_INTERVAL).count())
             return;
         last_groups_ms_ = now_ms;
-        const std::int64_t now_ns = common::steady_now_ns();
+        const std::int64_t now_ns = memory::steady_now_ns();
         for (std::size_t w = 0; w < workers_; ++w) {
             const Slot& s = slots_[w];
             const domains::workload::genesis::RunGroup* g = s.group.load();
@@ -429,7 +433,8 @@ class Progress {
     }
 
     const dstd::String tag_;
-    const std::int64_t start_ms_ = common::steady_now_ms();
+    const std::int64_t start_ms_ =
+        static_cast<std::int64_t>(memory::steady_now_ns() / 1000000ULL);
     const std::size_t total_groups_;
     const std::uint64_t total_bytes_;
     const std::uint64_t budget_;

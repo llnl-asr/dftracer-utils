@@ -50,6 +50,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/memory/clock.h>
 #include <dftracer/utils/memory/detail/manager.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/yaml/document.h>
@@ -256,11 +257,11 @@ template <class Fn>
 Outcome measure(Fn&& fn) {
     const std::size_t before = memory::detail::Manager::get().stats().live;
     PeakSampler sampler;
-    const auto start = Clock::now();
+    const auto start = memory::steady_now();
     Outcome outcome;
     fn(outcome.answer);
     outcome.seconds =
-        std::chrono::duration<double>(Clock::now() - start).count();
+        std::chrono::duration<double>(memory::steady_now() - start).count();
     const std::size_t peak = sampler.finish();
     outcome.extra_bytes = peak > before ? peak - before : 0;
     return outcome;

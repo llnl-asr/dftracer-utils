@@ -13,6 +13,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/memory/clock.h>
 #include <dftracer/utils/runtime/fs/fs.h>
 #include <dftracer/utils/runtime/runtime.h>
 
@@ -140,10 +141,10 @@ int main(int argc, char** argv) {
         if (std::strcmp(argv[i], "--reps") == 0) reps = std::atoi(argv[i + 1]);
     }
     for (int rep = 0; rep < reps; ++rep) {
-        const auto start = std::chrono::steady_clock::now();
+        const auto start = memory::steady_now();
         Row row = scan_with_find_all(root, threads, io_threads);
         const double ms = std::chrono::duration<double, std::milli>(
-                              std::chrono::steady_clock::now() - start)
+                              memory::steady_now() - start)
                               .count();
         const std::size_t count = row.paths.size();
         std::printf(

@@ -17,6 +17,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/fileio/file_helpers.h>
 #include <dftracer/utils/memory/budget.h>
+#include <dftracer/utils/memory/clock.h>
 #include <dftracer/utils/runtime/io/ops.h>
 #include <dftracer/utils/trace/index/build/batch_builder.h>
 #include <dftracer/utils/trace/index/build/file_admission.h>
@@ -160,7 +161,7 @@ static coro::CoroTask<void> commit_group(
     BlockWriter* writer, dstd::Vector<IndexBuildResult>* results,
     trace::index::build::FileGroup& group) {
     if (group.size() == 0) co_return;
-    const auto w0 = std::chrono::steady_clock::now();
+    const auto w0 = memory::steady_now();
     auto result = co_await group.commit();
     for (const auto& failure : result.failures) {
         (*results)[failure.tag].success = false;
@@ -176,7 +177,7 @@ static coro::CoroTask<void> commit_group(
     writer->metrics->write_ns.fetch_add(
         static_cast<std::uint64_t>(
             std::chrono::duration_cast<std::chrono::nanoseconds>(
-                std::chrono::steady_clock::now() - w0)
+                memory::steady_now() - w0)
                 .count()),
         std::memory_order_relaxed);
 }
@@ -248,7 +249,7 @@ static coro::CoroTask<void> parse_and_write_worker(
             IndexBuildResult result;
             result.file_path = pf.file_path;
             result.index_path = pf.index_path;
-            auto t0 = std::chrono::steady_clock::now();
+            auto t0 = memory::steady_now();
 
             ParsedBloomJob job;
             dstd::Optional<trace::index::FileBuild> build;
@@ -322,7 +323,7 @@ static coro::CoroTask<void> parse_and_write_worker(
                 pf.file_hash =
                     fileio::calculate_file_hash(*input_fd, pf.file_size);
                 job.identity = pf;
-                const auto s0 = std::chrono::steady_clock::now();
+                const auto s0 = memory::steady_now();
                 const auto schema_found =
                     admission->schema.empty()
                         ? trace::index::detect_file_schema(
@@ -332,7 +333,7 @@ static coro::CoroTask<void> parse_and_write_worker(
                 writer->metrics->schema_ns.fetch_add(
                     static_cast<std::uint64_t>(
                         std::chrono::duration_cast<std::chrono::nanoseconds>(
-                            std::chrono::steady_clock::now() - s0)
+                            memory::steady_now() - s0)
                             .count()),
                     std::memory_order_relaxed);
                 if (!schema_found) {
@@ -508,7 +509,7 @@ static coro::CoroTask<void> parse_and_write_worker(
             } while (false);
             input_fd.reset();
 
-            auto t1 = std::chrono::steady_clock::now();
+            auto t1 = memory::steady_now();
             auto file_ns = static_cast<std::uint64_t>(
                 std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0)
                     .count());
@@ -540,7 +541,7 @@ static coro::CoroTask<void> parse_and_write_worker(
                 continue;
             }
 
-            const auto w0 = std::chrono::steady_clock::now();
+            const auto w0 = memory::steady_now();
             {
                 trace::index::build::ParsedIndexJob write_job;
                 write_job.file_path = pf.file_path;
@@ -577,7 +578,7 @@ static coro::CoroTask<void> parse_and_write_worker(
             writer->metrics->write_ns.fetch_add(
                 static_cast<std::uint64_t>(
                     std::chrono::duration_cast<std::chrono::nanoseconds>(
-                        std::chrono::steady_clock::now() - w0)
+                        memory::steady_now() - w0)
                         .count()),
                 std::memory_order_relaxed);
             ticket = {};

@@ -17,6 +17,7 @@
 #include <dftracer/utils/dstd/singleton.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/memory/clock.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/index/cache/cache_store.h>
 #include <dftracer/utils/trace/index/store/root_layout.h>
@@ -97,12 +98,7 @@ dstd::String usage_value(std::uint64_t bytes, std::uint64_t last_used) {
     return v;
 }
 
-std::uint64_t now_micros() {
-    return static_cast<std::uint64_t>(
-        std::chrono::duration_cast<std::chrono::microseconds>(
-            std::chrono::system_clock::now().time_since_epoch())
-            .count());
-}
+std::uint64_t now_micros() { return memory::system_now_ns() / 1000ULL; }
 
 dstd::Expected<void, dstd::Error> wait(
     coro::CoroTask<dstd::Expected<void, dstd::Error>> task) {

@@ -8,6 +8,7 @@
 #include <dftracer/utils/coro/when_any.h>
 #include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/memory/clock.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 #include <memory/fresh_process.h>
@@ -175,9 +176,8 @@ TEST_SUITE("RunLoop") {
         }).detach();
 
         // Wide, as Valgrind runs this file many times slower.
-        const auto deadline =
-            std::chrono::steady_clock::now() + std::chrono::seconds(60);
-        while (!finished.load() && std::chrono::steady_clock::now() < deadline)
+        const auto deadline = memory::steady_now() + std::chrono::seconds(60);
+        while (!finished.load() && memory::steady_now() < deadline)
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
         CHECK(finished.load());
         CHECK(timed_out.load());

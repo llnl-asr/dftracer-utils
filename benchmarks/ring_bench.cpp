@@ -6,6 +6,7 @@
 
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/memory/clock.h>
 #include <dftracer/utils/runtime/io/io_uring_prep.h>
 #include <dftracer/utils/runtime/io/io_uring_register.h>
 #include <dftracer/utils/runtime/io/io_uring_wrapper.h>
@@ -91,7 +92,7 @@ double run_round(Prepared& prepared, const Setup& setup,
                  dstd::Vector<char>& buf, unsigned batch,
                  std::uint64_t& position) {
     runtime::io::uring::Ring& ring = prepared.ring;
-    const auto begin = std::chrono::steady_clock::now();
+    const auto begin = memory::steady_now();
     std::uint64_t done = 0;
     while (done < READS_PER_ROUND) {
         for (unsigned i = 0; i < batch; ++i) {
@@ -125,7 +126,7 @@ double run_round(Prepared& prepared, const Setup& setup,
         done += batch;
     }
     const std::chrono::duration<double, std::nano> took =
-        std::chrono::steady_clock::now() - begin;
+        memory::steady_now() - begin;
     return took.count() / static_cast<double>(done);
 }
 

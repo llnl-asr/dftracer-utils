@@ -15,6 +15,7 @@
 #include <dftracer/utils/fileio/file_helpers.h>
 #include <dftracer/utils/json/value.h>
 #include <dftracer/utils/json/value_access.h>
+#include <dftracer/utils/memory/clock.h>
 #include <dftracer/utils/runtime/io/io.h>
 #include <dftracer/utils/trace/index/build/resolver.h>
 #include <dftracer/utils/trace/index/plan/prune.h>
@@ -268,7 +269,7 @@ static int run_event_count(const EventCountArgParse* cli) {
         return 1;
     }
 
-    auto start_time = std::chrono::high_resolution_clock::now();
+    auto start_time = memory::steady_now();
 
     std::atomic<std::size_t> total_events{0};
     std::atomic<std::size_t> files_processed{0};
@@ -332,7 +333,7 @@ static int run_event_count(const EventCountArgParse* cli) {
         });
     if (!ran) return cli::report_error(ran.error());
 
-    auto end_time = std::chrono::high_resolution_clock::now();
+    auto end_time = memory::steady_now();
     std::chrono::duration<double, std::milli> duration = end_time - start_time;
 
     if (failed.load()) return 1;

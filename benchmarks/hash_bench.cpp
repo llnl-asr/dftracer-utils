@@ -18,6 +18,7 @@
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/dstd/vendor/unordered_dense.h>
+#include <dftracer/utils/memory/clock.h>
 
 #include <algorithm>
 #include <chrono>
@@ -121,11 +122,11 @@ double time_once(const KeySet& set, Fn fn, std::uint64_t& sink) {
     const std::size_t mask = set.keys.size() - 1;
     const dstd::String* keys = set.keys.data();
     std::uint64_t acc = 0;
-    const auto start = Clock::now();
+    const auto start = memory::steady_now();
     for (std::size_t i = 0; i < CALLS; ++i) {
         acc += fn(keys[(i + (acc & 1)) & mask]);
     }
-    const auto stop = Clock::now();
+    const auto stop = memory::steady_now();
     sink += acc;
     return std::chrono::duration<double, std::nano>(stop - start).count() /
            static_cast<double>(CALLS);

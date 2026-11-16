@@ -55,6 +55,7 @@
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/memory/clock.h>
 #include <dftracer/utils/runtime/io/io.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <fcntl.h>
@@ -107,14 +108,14 @@ struct Meter {
 };
 
 Meter begin_meter() {
-    return {Clock::now(), dftu::bench::instructions_retired(),
+    return {memory::steady_now(), dftu::bench::instructions_retired(),
             dftu::bench::allocations()};
 }
 
 void finish_meter(const Meter &start, Result &r) {
     std::uint64_t instructions = dftu::bench::instructions_retired();
     std::uint64_t allocations = dftu::bench::allocations();
-    r.total_ns = elapsed_ns(start.time, Clock::now());
+    r.total_ns = elapsed_ns(start.time, memory::steady_now());
     r.instructions = instructions - start.instructions;
     r.allocations = allocations - start.allocations;
     r.peak_heap = dftu::bench::peak_heap_bytes();

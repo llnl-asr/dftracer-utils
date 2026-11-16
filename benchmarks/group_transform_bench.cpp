@@ -18,6 +18,7 @@
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/memory/clock.h>
 #include <dftracer/utils/runtime/runtime.h>
 
 #include <algorithm>
@@ -99,13 +100,13 @@ int main(int argc, char** argv) {
         if (!only.empty() && only != c.name) continue;
         dftracer::utils::dstd::Vector<double> native, composed;
         for (int r = 0; r < reps; ++r) {
-            auto t0 = std::chrono::steady_clock::now();
+            auto t0 = memory::steady_now();
             collect(dftu::bench::ok(frame.lazy().group_by(keys).transform(
                 c.op, c.n, RankMethod::Average, true)));
-            auto t1 = std::chrono::steady_clock::now();
+            auto t1 = memory::steady_now();
             collect(dftu::bench::ok(dataframe::composed_group_transform(
                 frame.lazy(), keys, c.op, c.n, RankMethod::Average, true)));
-            auto t2 = std::chrono::steady_clock::now();
+            auto t2 = memory::steady_now();
             native.push_back(
                 std::chrono::duration<double, std::milli>(t1 - t0).count());
             composed.push_back(

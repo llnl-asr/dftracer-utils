@@ -13,6 +13,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
+#include <dftracer/utils/memory/clock.h>
 
 #include <algorithm>
 #include <chrono>
@@ -70,12 +71,12 @@ int main(int argc, char** argv) {
         dftracer::utils::dstd::Vector<double> t;
         std::int64_t kept = 0;
         for (int r = 0; r < rounds; ++r) {
-            const auto t0 = std::chrono::steady_clock::now();
+            const auto t0 = memory::steady_now();
             const dataframe::Series m =
                 dftu::bench::ok(dataframe::evaluate_mask(
                     duql::detail::QueryAccess::root(*parsed), f));
             t.push_back(std::chrono::duration<double, std::milli>(
-                            std::chrono::steady_clock::now() - t0)
+                            memory::steady_now() - t0)
                             .count());
             kept = m.length() - m.null_count();
         }

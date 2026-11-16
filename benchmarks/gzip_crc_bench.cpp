@@ -12,6 +12,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/fileio/compress/gzip_stream_inflater.h>
 #include <dftracer/utils/fileio/compress/libdeflate_gzip.h>
+#include <dftracer/utils/memory/clock.h>
 #include <zlib-ng.h>
 
 #include <algorithm>
@@ -44,10 +45,10 @@ template <typename Inflate>
 double run(const dftracer::utils::dstd::Vector<std::uint8_t>& gz,
            std::size_t expect, Inflate&& inflate_fn) {
     dftracer::utils::dstd::Vector<unsigned char> out(OUT_CHUNK);
-    const auto t0 = std::chrono::steady_clock::now();
+    const auto t0 = memory::steady_now();
     std::size_t total = 0;
     inflate_fn(gz, out, total);
-    const auto t1 = std::chrono::steady_clock::now();
+    const auto t1 = memory::steady_now();
     if (total != expect) {
         std::fprintf(stderr, "decoded %zu bytes, expected %zu\n", total,
                      expect);
@@ -118,13 +119,13 @@ int main(int argc, char** argv) {
     double crc_new = 1e9;
     std::uint32_t sink = 0;
     for (int r = 0; r < rounds; ++r) {
-        auto t0 = std::chrono::steady_clock::now();
+        auto t0 = memory::steady_now();
         sink += static_cast<std::uint32_t>(
             zng_crc32_z(0, reinterpret_cast<const std::uint8_t*>(text.data()),
                         text.size()));
-        auto t1 = std::chrono::steady_clock::now();
+        auto t1 = memory::steady_now();
         sink += fileio::compress::gzip_crc32(0, text.data(), text.size());
-        auto t2 = std::chrono::steady_clock::now();
+        auto t2 = memory::steady_now();
         crc_zlib =
             std::min(crc_zlib, std::chrono::duration<double>(t1 - t0).count());
         crc_new =

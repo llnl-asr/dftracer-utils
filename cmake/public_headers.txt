@@ -156,6 +156,7 @@ dftracer/utils/trace/index/c_api.h
 dftracer/utils/trace/index/indexer.h
 dftracer/utils/trace/index/schemas/dft/agg/aggregation_config.h
 dftracer/utils/json/value.h
+dftracer/utils/memory/clock.h
 dftracer/utils/memory/allocator.h
 dftracer/utils/memory/config.h
 dftracer/utils/memory/detail/constants.h

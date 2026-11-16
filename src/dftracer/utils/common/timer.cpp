@@ -3,6 +3,7 @@
 #include <dftracer/utils/common/timer.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/memory/clock.h>
 
 #include <algorithm>
 #include <cinttypes>
@@ -41,13 +42,13 @@ Timer::~Timer() {
 }
 
 void Timer::start() {
-    start_time_ = Clock::now();
+    start_time_ = memory::steady_now();
     running_ = true;
 }
 
 void Timer::stop() {
     if (running_) {
-        end_time_ = Clock::now();
+        end_time_ = memory::steady_now();
         running_ = false;
     }
 }
@@ -55,7 +56,7 @@ void Timer::stop() {
 std::int64_t Timer::elapsed() const {
     if (running_) {
         return std::chrono::duration_cast<std::chrono::nanoseconds>(
-                   Clock::now() - start_time_)
+                   memory::steady_now() - start_time_)
             .count();
     } else {
         return std::chrono::duration_cast<std::chrono::nanoseconds>(end_time_ -

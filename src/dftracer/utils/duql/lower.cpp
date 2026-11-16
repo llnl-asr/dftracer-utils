@@ -22,6 +22,7 @@
 #include <dftracer/utils/duql/syntax/walk.h>
 #include <dftracer/utils/duql/term.h>
 #include <dftracer/utils/duql/wildcard.h>
+#include <dftracer/utils/memory/clock.h>
 
 #include <algorithm>
 #include <charconv>
@@ -2745,11 +2746,9 @@ class Lowering {
             return fail(span, arity(c.name, want, want, c.args.size()));
         if (c.name == "now") {
             if (!now_) {
-                const auto ns =
-                    std::chrono::duration_cast<std::chrono::nanoseconds>(
-                        std::chrono::system_clock::now().time_since_epoch())
-                        .count();
-                now_ = static_cast<std::int64_t>(ns) / roles_->time_ns_per_unit;
+                const std::int64_t ns =
+                    static_cast<std::int64_t>(memory::system_now_ns());
+                now_ = ns / roles_->time_ns_per_unit;
             }
             return dstd::Optional<duql::TermPtr>(
                 make_term(duql::TConst{*now_}));

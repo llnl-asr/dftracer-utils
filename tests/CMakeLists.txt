@@ -306,6 +306,14 @@ add_test(
     sh -c
     "bad=$(grep -rnE '^[[:space:]]*namespace[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]*=' \"$0/include\" \"$0/src\" \"$0/tests\" \"$0/benchmarks\" \"$0/examples\" --include='*.h' --include='*.hpp' --include='*.c' --include='*.cc' --include='*.cpp' --include='*.inl' | grep -v 'dftracer/utils/dstd/vendor/'); if [ -n \"$bad\" ]; then echo \"namespace alias; write the area name after using namespace dftracer::utils (CLAUDE.md: no namespace aliases):\"; echo \"$bad\"; exit 1; fi"
     ${CMAKE_SOURCE_DIR})
+# Every clock read goes through <dftracer/utils/memory/clock.h>, so the clock kind
+# and its cost are one decision. Vendored third-party code keeps its own reads.
+add_test(
+  NAME one_clock
+  COMMAND
+    sh -c
+    "bad=$(grep -rnE '[A-Za-z_][A-Za-z_0-9]*::now[[:space:]]*\\(\\)|clock_gettime|gettimeofday|mach_absolute_time|rdtsc|timespec_get|(::|[^A-Za-z0-9_.:])time[[:space:]]*\\([[:space:]]*(nullptr|NULL|0)[[:space:]]*\\)' \"$0/include\" \"$0/src\" \"$0/tests\" \"$0/benchmarks\" \"$0/examples\" --include='*.h' --include='*.hpp' --include='*.c' --include='*.cc' --include='*.cpp' --include='*.inl' | grep -v 'dftracer/utils/dstd/vendor/' | grep -vE '^[^:]*/dftracer/utils/memory/clock\\.(h|cpp):'); if [ -n \"$bad\" ]; then echo \"direct clock read; use memory::steady_now(), memory::steady_now_ns(), memory::coarse_now_ns(), memory::system_now_ns() or, for a clock a syscall names, memory::posix_clock_now_ns():\"; echo \"$bad\"; exit 1; fi"
+    ${CMAKE_SOURCE_DIR})
 add_test(
   NAME store_no_upward
   COMMAND

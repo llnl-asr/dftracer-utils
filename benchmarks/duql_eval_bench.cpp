@@ -20,6 +20,7 @@
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/json/json_value.h>
 #include <dftracer/utils/json/value.h>
+#include <dftracer/utils/memory/clock.h>
 #include <simdjson.h>
 
 #include <algorithm>
@@ -75,9 +76,9 @@ template <class F>
 double ns_per_record(std::size_t n, int rounds, F&& body) {
     dftracer::utils::dstd::Vector<double> times;
     for (int r = 0; r < rounds; ++r) {
-        const auto t0 = std::chrono::steady_clock::now();
+        const auto t0 = memory::steady_now();
         body();
-        const auto t1 = std::chrono::steady_clock::now();
+        const auto t1 = memory::steady_now();
         times.push_back(
             std::chrono::duration<double, std::nano>(t1 - t0).count() /
             static_cast<double>(n));

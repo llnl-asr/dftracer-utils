@@ -9,6 +9,7 @@
 #include <dftracer/utils/dstd/scope_exit.h>
 #include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/memory/clock.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 #include <task_result.h>
@@ -195,7 +196,7 @@ TEST_CASE("when_any - a spawned loser stops when cancelled") {
     std::atomic<long long> elapsed_ms{0};
 
     auto body = [&]() -> coro::CoroTask<void> {
-        const auto start = Clock::now();
+        const auto start = memory::steady_now();
         co_await coro::with_scope(
             [&](coro::Scope& scope) -> coro::CoroTask<void> {
                 auto winner = scope.spawn_future([]() -> coro::CoroTask<int> {
@@ -205,13 +206,13 @@ TEST_CASE("when_any - a spawned loser stops when cancelled") {
                 // The loser waits at each step, where the cancel that
                 // when_any sends through its future ends it.
                 auto loser = scope.spawn_future([&]() -> coro::CoroTask<int> {
-                    const auto deadline = Clock::now() + LOSER_TIME;
+                    const auto deadline = memory::steady_now() + LOSER_TIME;
                     auto mark = [&] {
-                        loser_saw_cancel.store(Clock::now() < deadline);
+                        loser_saw_cancel.store(memory::steady_now() < deadline);
                         loser_finished.store(true);
                     };
                     dstd::ScopeExit<decltype(mark)> finished(mark);
-                    while (Clock::now() < deadline) {
+                    while (memory::steady_now() < deadline) {
                         std::this_thread::sleep_for(
                             std::chrono::milliseconds(5));
                         co_await coro::yield();
@@ -228,7 +229,7 @@ TEST_CASE("when_any - a spawned loser stops when cancelled") {
                 co_return;
             });
         elapsed_ms.store(std::chrono::duration_cast<std::chrono::milliseconds>(
-                             Clock::now() - start)
+                             memory::steady_now() - start)
                              .count());
         co_return;
     };
@@ -313,11 +314,11 @@ TEST_CASE("when_any with a timeout loser returns when the winner does") {
             std::this_thread::sleep_for(WINNER_TIME);
             co_return;
         };
-        const auto start = Clock::now();
+        const auto start = memory::steady_now();
         auto result = co_await coro::when_any(
             winner(), coro::timeout(TIMEOUT, rt.executor()->timers()));
         elapsed_ms.store(std::chrono::duration_cast<std::chrono::milliseconds>(
-                             Clock::now() - start)
+                             memory::steady_now() - start)
                              .count());
         winner_index.store(result.index);
         co_return;
@@ -378,12 +379,12 @@ TEST_CASE("when_any - a cancelled CoroTask loser stops without resuming") {
 
     auto run = [&](auto make_loser) {
         auto body = [&]() -> coro::CoroTask<void> {
-            const auto start = Clock::now();
+            const auto start = memory::steady_now();
             auto result = co_await coro::when_any(make_loser(seen),
                                                   finishes_after(WINNER_TIME));
             elapsed_ms.store(
                 std::chrono::duration_cast<std::chrono::milliseconds>(
-                    Clock::now() - start)
+                    memory::steady_now() - start)
                     .count());
             winner_index.store(result.index);
             co_return;

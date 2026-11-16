@@ -12,6 +12,7 @@
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/fileio/parallel/parallel_writer.h>
+#include <dftracer/utils/memory/clock.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 #include <task_result.h>
@@ -400,10 +401,9 @@ TEST_CASE("PaddedStripedWriter - a drop without close on an executor joins") {
                     "padded_dropped")
             .get());
     REQUIRE(result == 0);
-    const auto deadline =
-        std::chrono::steady_clock::now() + std::chrono::seconds(30);
+    const auto deadline = memory::steady_now() + std::chrono::seconds(30);
     while (gunzip_all(path).find(payload) == dstd::String::npos &&
-           std::chrono::steady_clock::now() < deadline)
+           memory::steady_now() < deadline)
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     CHECK(gunzip_all(path).find(payload) != dstd::String::npos);
     CHECK(on_executor.load());
@@ -491,10 +491,9 @@ TEST_CASE(
     CHECK(stopped);
     // The dropped writer drains its packer in the background and the chunk
     // reaches the file.
-    const auto deadline =
-        std::chrono::steady_clock::now() + std::chrono::seconds(30);
+    const auto deadline = memory::steady_now() + std::chrono::seconds(30);
     while (gunzip_all(path).find(payload) == dstd::String::npos &&
-           std::chrono::steady_clock::now() < deadline)
+           memory::steady_now() < deadline)
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     CHECK(gunzip_all(path).find(payload) != dstd::String::npos);
     runtime.shutdown();

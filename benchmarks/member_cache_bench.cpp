@@ -22,6 +22,7 @@
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/fileio/compress/libdeflate_gzip.h>
+#include <dftracer/utils/memory/clock.h>
 #include <dftracer/utils/runtime/runtime.h>
 
 #include <atomic>
@@ -143,7 +144,7 @@ double run_round(Runtime& rt, Strategy& strat, const Blob& blob, int members,
                  int readers) {
     g_decodes.store(0, std::memory_order_relaxed);
     const auto* blob_ptr = &blob;
-    auto t0 = std::chrono::steady_clock::now();
+    auto t0 = memory::steady_now();
 
     auto task = coro::with_scope([&strat, blob_ptr, members, readers](
                                      coro::Scope&) -> coro::CoroTask<void> {
@@ -161,7 +162,7 @@ double run_round(Runtime& rt, Strategy& strat, const Blob& blob, int members,
     });
     require_ok(rt.submit(std::move(task), "bench").wait(), "task");
 
-    auto t1 = std::chrono::steady_clock::now();
+    auto t1 = memory::steady_now();
     return std::chrono::duration<double, std::milli>(t1 - t0).count();
 }
 
@@ -176,7 +177,7 @@ coro::CoroTask<int> cheap_producer() {
 }
 
 double bench_mutex_wake(Runtime& rt, int rounds, int waiters) {
-    auto t0 = std::chrono::steady_clock::now();
+    auto t0 = memory::steady_now();
     auto task = coro::with_scope(
         [rounds, waiters](coro::Scope&) -> coro::CoroTask<void> {
             for (int r = 0; r < rounds; ++r) {
@@ -205,12 +206,12 @@ double bench_mutex_wake(Runtime& rt, int rounds, int waiters) {
             co_return;
         });
     require_ok(rt.submit(std::move(task), "bench").wait(), "task");
-    auto t1 = std::chrono::steady_clock::now();
+    auto t1 = memory::steady_now();
     return std::chrono::duration<double, std::milli>(t1 - t0).count();
 }
 
 double bench_once_wake(Runtime& rt, int rounds, int waiters) {
-    auto t0 = std::chrono::steady_clock::now();
+    auto t0 = memory::steady_now();
     auto task = coro::with_scope(
         [rounds, waiters](coro::Scope&) -> coro::CoroTask<void> {
             for (int r = 0; r < rounds; ++r) {
@@ -228,7 +229,7 @@ double bench_once_wake(Runtime& rt, int rounds, int waiters) {
             co_return;
         });
     require_ok(rt.submit(std::move(task), "bench").wait(), "task");
-    auto t1 = std::chrono::steady_clock::now();
+    auto t1 = memory::steady_now();
     return std::chrono::duration<double, std::milli>(t1 - t0).count();
 }
 

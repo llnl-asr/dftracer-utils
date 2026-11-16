@@ -7,6 +7,7 @@
 #include <dftracer/utils/coro/time.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/memory/clock.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 #include <task_result.h>
@@ -295,12 +296,12 @@ TEST_CASE("a dropped stream stops its background sources") {
 
 TEST_CASE("a timeout ends a wait inside a generator") {
     Runtime runtime(2);
-    const auto start = std::chrono::steady_clock::now();
+    const auto start = memory::steady_now();
     auto result =
         runtime.block_on(with_timeout(collect(slow_numbers(0, 3, 30s)), 10ms));
     REQUIRE_FALSE(result);
     CHECK(result.error().condition() == dstd::Condition::Timeout);
-    CHECK(std::chrono::steady_clock::now() - start < 5s);
+    CHECK(memory::steady_now() - start < 5s);
 }
 
 TEST_CASE("a cancel reaches through generators and a task they await") {
@@ -309,14 +310,14 @@ TEST_CASE("a cancel reaches through generators and a task they await") {
         co_await sleep(30s);
         co_return 1;
     };
-    const auto start = std::chrono::steady_clock::now();
+    const auto start = memory::steady_now();
     auto result = runtime.block_on(with_timeout(
         collect(numbers(0, 1) | map([waits](int) { return waits(); }) |
                 filter([](int) { return true; })),
         10ms));
     REQUIRE_FALSE(result);
     CHECK(result.error().condition() == dstd::Condition::Timeout);
-    CHECK(std::chrono::steady_clock::now() - start < 5s);
+    CHECK(memory::steady_now() - start < 5s);
 }
 
 TEST_CASE("with_item_timeout gives items in time and ends a slow wait") {
@@ -325,17 +326,17 @@ TEST_CASE("with_item_timeout gives items in time and ends a slow wait") {
         runtime.block_on(collect(with_item_timeout(numbers(0, 100), 5s))));
     CHECK(fast.size() == 100);
 
-    const auto start = std::chrono::steady_clock::now();
+    const auto start = memory::steady_now();
     auto items = dftu_utils_test::ok(runtime.block_on(
         collect(with_item_timeout(slow_numbers(0, 3, 30s), 10ms))));
     REQUIRE_FALSE(items.empty());
     REQUIRE_FALSE(items.back());
     CHECK(items.back().error().condition() == dstd::Condition::Timeout);
-    CHECK(std::chrono::steady_clock::now() - start < 5s);
+    CHECK(memory::steady_now() - start < 5s);
 }
 
 TEST_CASE("a dropped stream ends a source blocked in a long wait") {
-    const auto start = std::chrono::steady_clock::now();
+    const auto start = memory::steady_now();
     {
         Runtime runtime(2);
         dftu_utils_test::ok(runtime.block_on([]() -> CoroTask<void> {
@@ -353,7 +354,7 @@ TEST_CASE("a dropped stream ends a source blocked in a long wait") {
             CHECK(first.has_value());
         }()));
     }
-    CHECK(std::chrono::steady_clock::now() - start < 5s);
+    CHECK(memory::steady_now() - start < 5s);
 }
 
 TEST_CASE("a generator can ask for its executor and for a stop") {

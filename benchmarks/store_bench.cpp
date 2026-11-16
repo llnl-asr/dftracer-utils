@@ -77,6 +77,7 @@
 #include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/memory/clock.h>
 #include <dftracer/utils/runtime/io/io_backend.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/store/data_file.h>
@@ -1197,10 +1198,9 @@ bool Bench::report_single_thread_open(const dstd::String& dir,
     const std::size_t previous = dftracer::utils::default_runtime().threads();
     dftracer::utils::configure_default_runtime({.threads = 1});
     const std::uint64_t rss = dftu::bench::peak_heap_bytes();
-    const auto started = std::chrono::steady_clock::now();
+    const auto started = memory::steady_now();
     auto opened = Snapshot::open(dir);
-    const std::uint64_t nanos =
-        nanos_between(started, std::chrono::steady_clock::now());
+    const std::uint64_t nanos = nanos_between(started, memory::steady_now());
     dftracer::utils::configure_default_runtime({.threads = previous});
     if (!opened) {
         fail(dstd::fmt<"one-thread snapshot of {}: {}">(
@@ -1336,7 +1336,7 @@ WriteRow Bench::run_write_case(Runtime& runtime, const Workload& workload,
     const ValuePool values(workload.value_bytes, opt.trace_values);
     std::atomic<int> errors{0};
     store::engine::io_fault::start_counting();
-    const auto started = std::chrono::steady_clock::now();
+    const auto started = memory::steady_now();
     require_ran(runtime.block_on(coro::named(
         "store_bench write",
         coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
@@ -1374,7 +1374,7 @@ WriteRow Bench::run_write_case(Runtime& runtime, const Workload& workload,
             co_return;
         }))));
     close_writers(runtime, writers, errors);
-    const auto stopped = std::chrono::steady_clock::now();
+    const auto stopped = memory::steady_now();
     row.counts = store::engine::io_fault::stop_counting();
     row.seconds = seconds_between(started, stopped);
     row.seconds_flushed = row.seconds;
@@ -1458,13 +1458,12 @@ bool Bench::query_store(const Workload& workload, const dstd::String& dir,
     // set of a process only rises, so the memory an open holds is the growth of
     // the first one and not of the second, which reuses it.
     const std::uint64_t cold_rss = dftu::bench::peak_heap_bytes();
-    const auto cold_started = std::chrono::steady_clock::now();
+    const auto cold_started = memory::steady_now();
     std::uint64_t cold_nanos = 0;
     dftracer::utils::dstd::Optional<Snapshot> cold;
     {
         auto opened_cold = Snapshot::open(dir);
-        cold_nanos =
-            nanos_between(cold_started, std::chrono::steady_clock::now());
+        cold_nanos = nanos_between(cold_started, memory::steady_now());
         if (!opened_cold) {
             fail(dstd::fmt<"cold snapshot of {}: {}">(
                 dir, to_std(opened_cold.error())));
@@ -1472,10 +1471,10 @@ bool Bench::query_store(const Workload& workload, const dstd::String& dir,
         }
         cold = std::move(*opened_cold);
     }
-    const auto open_started = std::chrono::steady_clock::now();
+    const auto open_started = memory::steady_now();
     auto opened = Snapshot::open(dir);
     const std::uint64_t open_nanos =
-        nanos_between(open_started, std::chrono::steady_clock::now());
+        nanos_between(open_started, memory::steady_now());
     if (!opened) {
         fail(dstd::fmt<"snapshot of {}: {}">(dir, to_std(opened.error())));
         return false;
@@ -1493,13 +1492,13 @@ bool Bench::query_store(const Workload& workload, const dstd::String& dir,
     // that hold the copy, which the open above did not make.
     if (cold.has_value()) {
         const std::uint64_t rss = dftu::bench::peak_heap_bytes();
-        const auto started = std::chrono::steady_clock::now();
+        const auto started = memory::steady_now();
         auto first =
             cold->get(namespace_spec, plan.scopes[plan.hits.front().scope],
                       ByteView{plan.hits.front().key.data(),
                                plan.hits.front().key.size()});
         const std::uint64_t nanos =
-            nanos_between(started, std::chrono::steady_clock::now());
+            nanos_between(started, memory::steady_now());
         if (first.has_value() && first->has_value()) {
             query_rows.push_back(
                 query_row("first_get", 1, nanos, rss,
@@ -1518,7 +1517,7 @@ bool Bench::query_store(const Workload& workload, const dstd::String& dir,
     std::uint64_t mismatches = 0;
     {
         const std::uint64_t rss = dftu::bench::peak_heap_bytes();
-        const auto started = std::chrono::steady_clock::now();
+        const auto started = memory::steady_now();
         for (const QueryItem& item : plan.hits) {
             auto found =
                 snapshot.get(namespace_spec, plan.scopes[item.scope],
@@ -1537,7 +1536,7 @@ bool Bench::query_store(const Workload& workload, const dstd::String& dir,
             }
         }
         const std::uint64_t nanos =
-            nanos_between(started, std::chrono::steady_clock::now());
+            nanos_between(started, memory::steady_now());
         query_rows.push_back(query_row(
             "get_hit", plan.hits.size(), nanos, rss,
             dstd::fmt<"mismatches={} {}">(
@@ -1550,7 +1549,7 @@ bool Bench::query_store(const Workload& workload, const dstd::String& dir,
     mismatches = 0;
     {
         const std::uint64_t rss = dftu::bench::peak_heap_bytes();
-        const auto started = std::chrono::steady_clock::now();
+        const auto started = memory::steady_now();
         for (const QueryItem& item : plan.misses) {
             auto found =
                 snapshot.get(namespace_spec, plan.scopes[item.scope],
@@ -1562,7 +1561,7 @@ bool Bench::query_store(const Workload& workload, const dstd::String& dir,
             if (found->has_value()) ++mismatches;
         }
         const std::uint64_t nanos =
-            nanos_between(started, std::chrono::steady_clock::now());
+            nanos_between(started, memory::steady_now());
         query_rows.push_back(query_row(
             "get_miss", plan.misses.size(), nanos, rss,
             dstd::fmt<"mismatches={} {}">(
@@ -1576,7 +1575,7 @@ bool Bench::query_store(const Workload& workload, const dstd::String& dir,
     std::uint64_t wrong_scopes = 0;
     {
         const std::uint64_t rss = dftu::bench::peak_heap_bytes();
-        const auto started = std::chrono::steady_clock::now();
+        const auto started = memory::steady_now();
         for (const QueryScan& scan : plan.scans) {
             std::uint64_t rows = 0;
             auto cursor =
@@ -1592,7 +1591,7 @@ bool Bench::query_store(const Workload& workload, const dstd::String& dir,
             if (rows != scan.rows) ++wrong_scopes;
         }
         const std::uint64_t nanos =
-            nanos_between(started, std::chrono::steady_clock::now());
+            nanos_between(started, memory::steady_now());
         const dstd::String extra = dstd::fmt<"scopes={} rows_per_scope={} {}">(
             plan.scans.size(),
             fixed(plan.scans.empty()
@@ -1611,7 +1610,7 @@ bool Bench::query_store(const Workload& workload, const dstd::String& dir,
 
     {
         const std::uint64_t rss = dftu::bench::peak_heap_bytes();
-        const auto started = std::chrono::steady_clock::now();
+        const auto started = memory::steady_now();
         std::uint64_t rows = 0;
         auto cursor = snapshot.scan_all(namespace_spec, {}, {});
         while (!cursor.at_end()) {
@@ -1622,7 +1621,7 @@ bool Bench::query_store(const Workload& workload, const dstd::String& dir,
             fail(dstd::fmt<"scan of {}: {}">(dir, to_std(*cursor.error())));
         }
         const std::uint64_t nanos =
-            nanos_between(started, std::chrono::steady_clock::now());
+            nanos_between(started, memory::steady_now());
         query_rows.push_back(
             query_row("full_scan", rows, nanos, rss,
                       dstd::fmt<"rows_per_s={} rows_expected={} {}">(
@@ -1676,7 +1675,7 @@ ScopeRow Bench::run_scope_case(Runtime& runtime, std::uint64_t scopes) {
     require_ran(runtime.block_on(
         coro::named("store_bench scopes", [&]() -> coro::CoroTask<void> {
             std::uint32_t ordinal = 0;
-            const auto new_started = std::chrono::steady_clock::now();
+            const auto new_started = memory::steady_now();
             for (std::uint64_t at = 0; at < scopes; ++at) {
                 const ScopeKey scope_key =
                     ScopeKey::file(dstd::fmt<"/bench/s{}.dft">(at));
@@ -1693,11 +1692,11 @@ ScopeRow Bench::run_scope_case(Runtime& runtime, std::uint64_t scopes) {
                     co_return;
                 }
             }
-            const auto new_stopped = std::chrono::steady_clock::now();
+            const auto new_stopped = memory::steady_now();
             new_scope_nanos = nanos_between(new_started, new_stopped);
 
             std::mt19937_64 random(0x5EEDBEEFULL);
-            const auto commit_started = std::chrono::steady_clock::now();
+            const auto commit_started = memory::steady_now();
             for (std::uint64_t at = 0; at < opt.commits; ++at) {
                 const std::uint64_t scope_index = random() % scopes;
                 const ScopeKey scope_key =
@@ -1715,8 +1714,7 @@ ScopeRow Bench::run_scope_case(Runtime& runtime, std::uint64_t scopes) {
                     co_return;
                 }
             }
-            commit_nanos =
-                nanos_between(commit_started, std::chrono::steady_clock::now());
+            commit_nanos = nanos_between(commit_started, memory::steady_now());
         }())));
     require_ran(runtime.block_on(
         coro::named("store_bench scopes close", [&]() -> coro::CoroTask<void> {
@@ -1829,7 +1827,7 @@ FoldScan Bench::fold_scan(const Snapshot& snapshot,
         static_cast<std::size_t>(threads),
         dstd::Vector<std::int64_t>(static_cast<std::size_t>(keys), 0));
     std::atomic<int> errors{0};
-    const auto started = std::chrono::steady_clock::now();
+    const auto started = memory::steady_now();
     dstd::Vector<dstd::Thread> workers;
     workers.reserve(static_cast<std::size_t>(threads));
     for (std::uint64_t at = 0; at < threads; ++at) {
@@ -1863,7 +1861,7 @@ FoldScan Bench::fold_scan(const Snapshot& snapshot,
         });
     }
     for (auto& worker : workers) worker.join();
-    scan.nanos = nanos_between(started, std::chrono::steady_clock::now());
+    scan.nanos = nanos_between(started, memory::steady_now());
     if (errors.load() > 0) {
         fail(
             "fold scan: a key or a value of the fold namespace is not the one "
@@ -1893,10 +1891,10 @@ bool Bench::run_fold_case(Runtime& runtime, std::uint64_t scopes) {
     if (!write_fold(runtime, dir, scopes, keys)) {
         ok = false;
     } else {
-        const auto open_started = std::chrono::steady_clock::now();
+        const auto open_started = memory::steady_now();
         auto opened = Snapshot::open(dir);
         const std::uint64_t open_nanos =
-            nanos_between(open_started, std::chrono::steady_clock::now());
+            nanos_between(open_started, memory::steady_now());
         const double ms_open = static_cast<double>(open_nanos) / 1e6;
         if (!opened) {
             fail(dstd::fmt<"snapshot of {}: {}">(dir, to_std(opened.error())));
@@ -1969,10 +1967,10 @@ bool Bench::grow_reads(const dstd::String& label, const char* state,
                        const NamespaceSpec& namespace_spec,
                        const ScopeKey& scope, std::uint64_t total,
                        std::uint64_t last_refresh) {
-    const auto open_started = std::chrono::steady_clock::now();
+    const auto open_started = memory::steady_now();
     auto opened = Snapshot::open(dir);
     const std::uint64_t open_nanos =
-        nanos_between(open_started, std::chrono::steady_clock::now());
+        nanos_between(open_started, memory::steady_now());
     if (!opened) {
         fail(dstd::fmt<"snapshot of {}: {}">(dir, to_std(opened.error())));
         return false;
@@ -1994,7 +1992,7 @@ bool Bench::grow_reads(const dstd::String& label, const char* state,
     std::uint64_t mismatches = 0;
     {
         std::mt19937_64 random(QUERY_SEED);
-        const auto started = std::chrono::steady_clock::now();
+        const auto started = memory::steady_now();
         for (std::uint64_t at = 0; at < opt.gets; ++at) {
             const auto key = grow_key(random() % total);
             auto found = snapshot.get(namespace_spec, scope,
@@ -2010,7 +2008,7 @@ bool Bench::grow_reads(const dstd::String& label, const char* state,
             }
         }
         const std::uint64_t nanos =
-            nanos_between(started, std::chrono::steady_clock::now());
+            nanos_between(started, memory::steady_now());
         print_grow_row(grow_row(
             label, state, "get_chunk", opt.gets, nanos,
             dstd::fmt<"mismatches={} {}">(
@@ -2024,7 +2022,7 @@ bool Bench::grow_reads(const dstd::String& label, const char* state,
 
     mismatches = 0;
     {
-        const auto started = std::chrono::steady_clock::now();
+        const auto started = memory::steady_now();
         for (std::uint64_t at = 0; at < opt.gets; ++at) {
             auto found = snapshot.get(namespace_spec, scope, meta_key);
             if (!found) {
@@ -2038,7 +2036,7 @@ bool Bench::grow_reads(const dstd::String& label, const char* state,
             }
         }
         const std::uint64_t nanos =
-            nanos_between(started, std::chrono::steady_clock::now());
+            nanos_between(started, memory::steady_now());
         print_grow_row(grow_row(label, state, "get_meta", opt.gets, nanos,
                                 dstd::fmt<"mismatches={}">(mismatches)));
     }
@@ -2055,7 +2053,7 @@ bool Bench::grow_reads(const dstd::String& label, const char* state,
         const std::uint64_t scans =
             std::max<std::uint64_t>(1, opt.gets / GETS_PER_GROW_SCAN);
         std::mt19937_64 random(QUERY_SEED ^ dstd::hash::GOLDEN_RATIO);
-        const auto started = std::chrono::steady_clock::now();
+        const auto started = memory::steady_now();
         for (std::uint64_t at = 0; at < scans; ++at) {
             const std::uint64_t first = random() % (total - span + 1);
             const auto begin = grow_key(first);
@@ -2087,7 +2085,7 @@ bool Bench::grow_reads(const dstd::String& label, const char* state,
             if (rows != span) ++mismatches;
         }
         const std::uint64_t nanos =
-            nanos_between(started, std::chrono::steady_clock::now());
+            nanos_between(started, memory::steady_now());
         print_grow_row(
             grow_row(label, state, "scan_range", scans, nanos,
                      dstd::fmt<"keys_per_scan={} ns_per_key={} mismatches={}">(
@@ -2106,7 +2104,7 @@ bool Bench::grow_reads(const dstd::String& label, const char* state,
     mismatches = 0;
     {
         const dstd::String meta_name(GROW_META_KEY, GROW_META_KEY_BYTES);
-        const auto started = std::chrono::steady_clock::now();
+        const auto started = memory::steady_now();
         std::uint64_t rows = 0;
         auto cursor =
             snapshot.scan(namespace_spec, scope, ByteView{}, ByteView{});
@@ -2136,7 +2134,7 @@ bool Bench::grow_reads(const dstd::String& label, const char* state,
             return false;
         }
         const std::uint64_t nanos =
-            nanos_between(started, std::chrono::steady_clock::now());
+            nanos_between(started, memory::steady_now());
         print_grow_row(grow_row(label, state, "full_scan", rows, nanos,
                                 dstd::fmt<"rows_expected={} mismatches={} {}">(
                                     total + 1, mismatches,
@@ -2185,7 +2183,7 @@ bool Bench::run_grow_case(const dstd::String& label, std::uint64_t copies,
     std::uint64_t write_nanos = 0;
     for (std::uint64_t refresh = 0; refresh < copies; ++refresh) {
         const dstd::String meta = grow_meta(refresh);
-        const auto started = std::chrono::steady_clock::now();
+        const auto started = memory::steady_now();
         Batch batch = grown.building_batch(*handle, scope);
         for (std::uint64_t at = 0; at < per_refresh; ++at) {
             const auto key = grow_key(refresh * per_refresh + at);
@@ -2220,7 +2218,7 @@ bool Bench::run_grow_case(const dstd::String& label, std::uint64_t copies,
             return false;
         }
         const std::uint64_t nanos =
-            nanos_between(started, std::chrono::steady_clock::now());
+            nanos_between(started, memory::steady_now());
         refresh_nanos.push_back(nanos);
         write_nanos += nanos;
     }
@@ -2242,10 +2240,10 @@ bool Bench::run_grow_case(const dstd::String& label, std::uint64_t copies,
     if (ok && do_pack) {
         store::PackOptions pack_options;
         pack_options.keep_seconds = 0;
-        const auto started = std::chrono::steady_clock::now();
+        const auto started = memory::steady_now();
         auto packed = default_runtime().submit(grown.pack(pack_options)).get();
         const std::uint64_t nanos =
-            nanos_between(started, std::chrono::steady_clock::now());
+            nanos_between(started, memory::steady_now());
         if (!packed) {
             print_grow_row(grow_row(label, "grown", "pack_refused", 1, nanos,
                                     to_std(packed.error())));

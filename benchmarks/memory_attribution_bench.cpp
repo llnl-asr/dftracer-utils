@@ -281,7 +281,9 @@ coro::CoroTask<void> read_lines(dstd::String file) {
     simdjson::dom::parser parser;
     auto gen = fileio::lines::sources::async_streaming_gz_lines(file);
     std::uint64_t parsed = 0;
-    while (auto next = co_await gen.next()) {
+    while (true) {
+        auto next = co_await gen.next();
+        if (!next) break;
         if (!*next) dftu::bench::fail(next->error());
         dstd::StringView l = (*next)->content;
         simdjson::dom::object o;

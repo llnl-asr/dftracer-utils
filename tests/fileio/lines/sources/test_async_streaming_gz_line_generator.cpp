@@ -31,7 +31,9 @@ struct Collected {
 
 CoroTask<Collected> collect_lines(AsyncGenerator<dstd::Result<Line>> gen) {
     Collected out;
-    while (auto next = co_await gen.next()) {
+    while (true) {
+        auto next = co_await gen.next();
+        if (!next) break;
         if (!*next) {
             out.error = next->error();
             break;

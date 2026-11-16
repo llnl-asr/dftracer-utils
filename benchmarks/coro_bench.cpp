@@ -288,12 +288,14 @@ Result parallel_for_small(std::size_t n) {
         std::atomic<std::int64_t> sum{0};
         Meter start = begin_meter();
         for (std::size_t i = 0; i < n; ++i) {
+            const coro::ParallelForOptions options{.grain = 16,
+                                                   .max_in_flight = 4};
             co_await coro::parallel_for(
                 64,
                 [&sum](std::int64_t begin, std::int64_t end) {
                     sum.fetch_add(end - begin, std::memory_order_relaxed);
                 },
-                coro::ParallelForOptions{.grain = 16, .max_in_flight = 4});
+                options);
         }
         finish_meter(start, r);
         r.correct = sum.load() == static_cast<std::int64_t>(n) * 64;

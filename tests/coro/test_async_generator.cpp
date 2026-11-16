@@ -50,7 +50,9 @@ static AsyncGenerator<dstd::String> async_words() {
 static CoroTask<dstd::Vector<int>> consume_int_generator(
     AsyncGenerator<int> gen) {
     dstd::Vector<int> result;
-    while (auto value = co_await gen.next()) {
+    while (true) {
+        auto value = co_await gen.next();
+        if (!value) break;
         result.push_back(*value);
     }
     co_return result;
@@ -59,7 +61,9 @@ static CoroTask<dstd::Vector<int>> consume_int_generator(
 static CoroTask<dstd::Vector<dstd::String>> consume_string_generator(
     AsyncGenerator<dstd::String> gen) {
     dstd::Vector<dstd::String> result;
-    while (auto value = co_await gen.next()) {
+    while (true) {
+        auto value = co_await gen.next();
+        if (!value) break;
         result.push_back(*value);
     }
     co_return result;
@@ -75,7 +79,11 @@ static CoroTask<long> sum_ready(int n) {
     long sum = 0;
     for (int i = 0; i < n; ++i) sum += co_await parity(i);
     auto gen = ready_range(n);
-    while (auto v = co_await gen.next()) sum += *v;
+    while (true) {
+        auto v = co_await gen.next();
+        if (!v) break;
+        sum += *v;
+    }
     co_return sum;
 }
 
@@ -162,7 +170,9 @@ static AsyncGenerator<int> async_failing_generator() {
 TEST_CASE("AsyncGenerator - a plain read ends the reader with the error") {
     auto task = [](AsyncGenerator<int> g) -> CoroTask<dstd::Vector<int>> {
         dstd::Vector<int> result;
-        while (auto value = co_await g.next()) {
+        while (true) {
+            auto value = co_await g.next();
+            if (!value) break;
             result.push_back(*value);
         }
         co_return result;
@@ -231,7 +241,9 @@ TEST_CASE("AsyncGenerator - Large async sequence") {
 
     auto task = [](AsyncGenerator<int> g) -> CoroTask<int> {
         int sum = 0;
-        while (auto value = co_await g.next()) {
+        while (true) {
+            auto value = co_await g.next();
+            if (!value) break;
             sum += *value;
         }
         co_return sum;
@@ -265,7 +277,9 @@ TEST_CASE("AsyncGenerator - Complex types with async operations") {
 
     auto task = [](AsyncGenerator<Point> g) -> CoroTask<dstd::Vector<Point>> {
         dstd::Vector<Point> result;
-        while (auto value = co_await g.next()) {
+        while (true) {
+            auto value = co_await g.next();
+            if (!value) break;
             result.push_back(*value);
         }
         co_return result;

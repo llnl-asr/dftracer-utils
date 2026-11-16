@@ -83,7 +83,9 @@ static coro::CoroTask<CollectedViewOutput> collect_view_coro(
     ViewScannerUtility* reader, ViewScannerInput input) {
     CollectedViewOutput output;
     auto gen = dftu_utils_test::ok_items((*reader)(input));
-    while (auto batch = co_await gen.next()) {
+    while (true) {
+        auto batch = co_await gen.next();
+        if (!batch) break;
         output.events_matched += batch->events_matched;
         output.events_scanned += batch->events_scanned;
         output.lines_invalid += batch->lines_invalid;

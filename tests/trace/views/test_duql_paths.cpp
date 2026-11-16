@@ -131,15 +131,22 @@ View view_of(const dstd::String& gz, const char* filter) {
 coro::CoroTask<Names> reader_lines(
     coro::AsyncGenerator<fileio::lines::Line> gen) {
     Names out;
-    while (auto line = co_await gen.next()) out.insert(name_of(line->content));
+    while (true) {
+        auto line = co_await gen.next();
+        if (!line) break;
+        out.insert(name_of(line->content));
+    }
     co_return out;
 }
 
 coro::CoroTask<Names> reader_json(
     coro::AsyncGenerator<trace::reader::JsonLine> gen) {
     Names out;
-    while (auto opt = co_await gen.next())
+    while (true) {
+        auto opt = co_await gen.next();
+        if (!opt) break;
         if (auto v = opt->parser->get_string("name")) out.emplace(*v);
+    }
     co_return out;
 }
 

@@ -451,7 +451,9 @@ dftracer::utils::dstd::Vector<Case> make_cases() {
 coro::CoroTask<std::int64_t> drain(LazyFrame plan) {
     auto gen = plan.stream(BATCH_SIZE);
     std::int64_t rows = 0;
-    while (auto part = co_await gen.next()) {
+    while (true) {
+        auto part = co_await gen.next();
+        if (!part) break;
         if (!*part) co_return -1;
         rows += (*part)->num_rows();
     }

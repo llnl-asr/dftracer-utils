@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 # Fail when a lambda with a by-value capture sits inside a co_await expression
-# under src/ and include/. GCC 12.1 destroys such a lambda temporary twice, so
+# under src/, include/, tests/ and benchmarks/. GCC 12.1 destroys such a lambda temporary twice, so
 # the lambda must be a named local that is awaited after it. A capture list may
 # hold only `&`, `&name` and `this`. The expression runs from the co_await to
 # the `;` at its own depth. Comments, string literals and the bodies of lambdas
@@ -161,9 +161,12 @@ endif()
 
 file(GLOB_RECURSE _files
      "${SOURCE_DIR}/src/*.h" "${SOURCE_DIR}/src/*.cpp" "${SOURCE_DIR}/src/*.inc"
-     "${SOURCE_DIR}/include/*.h" "${SOURCE_DIR}/include/*.hpp")
-# Vendored third-party text is not ours to check.
-list(FILTER _files EXCLUDE REGEX "/dftracer/utils/dstd/vendor/")
+     "${SOURCE_DIR}/include/*.h" "${SOURCE_DIR}/include/*.hpp"
+     "${SOURCE_DIR}/tests/*.h" "${SOURCE_DIR}/tests/*.cpp" "${SOURCE_DIR}/tests/*.inc"
+     "${SOURCE_DIR}/benchmarks/*.h" "${SOURCE_DIR}/benchmarks/*.cpp")
+# Vendored third-party text is not ours to check, and the self-test samples
+# hold bad code on purpose.
+list(FILTER _files EXCLUDE REGEX "/dftracer/utils/dstd/vendor/|/tests/cmake/")
 
 set(_candidates "")
 foreach(_file ${_files})

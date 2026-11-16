@@ -142,7 +142,9 @@ inline dftracer::utils::coro::CoroTask<std::int64_t> drain_count(
     dftracer::utils::dataframe::LazyFrame lf) {
     std::int64_t n = 0;
     auto g = lf.stream(BATCH_SIZE);
-    while (auto frame = co_await g.next()) {
+    while (true) {
+        auto frame = co_await g.next();
+        if (!frame) break;
         if (!*frame) {
             std::fprintf(stderr, "drain_count: %s\n", frame->error().c_str());
             std::exit(1);

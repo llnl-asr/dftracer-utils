@@ -121,8 +121,8 @@ void finalize_now(plugins::host::PluginFold& f) {
     Runtime rt(1);
     dftu_utils_test::ok(
         rt.submit(coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-                      auto finalized = co_await f.finalize(
-                          trace::views::detail::CoverageSet{});
+                      const trace::views::detail::CoverageSet covered{};
+                      auto finalized = co_await f.finalize(covered);
                       CHECK(finalized.has_value());
                   }),
                   "fin")

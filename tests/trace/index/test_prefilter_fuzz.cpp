@@ -210,8 +210,11 @@ ViewCounts view_counts(const dstd::String& gz, const duql::Query& q) {
                 sin.with_batch_size(READ_BUFFER_BYTES);
                 trace::views::ViewScannerUtility scanner;
                 auto gen = dftu_utils_test::ok_items(scanner(sin));
-                while (auto b = co_await gen.next())
+                while (true) {
+                    auto b = co_await gen.next();
+                    if (!b) break;
                     matched += b->events_matched;
+                }
             }
             (prefilter ? out.prefiltered : out.plain) = matched;
         }
@@ -228,7 +231,11 @@ std::size_t reader_count(dstd::StringView gz, const dstd::String& text) {
         cfg.buffer_size = READ_BUFFER_BYTES;
         auto gen = dftu_utils_test::ok_items(r.read_json(cfg));
         std::size_t n = 0;
-        while (auto line = co_await gen.next()) ++n;
+        while (true) {
+            auto line = co_await gen.next();
+            if (!line) break;
+            ++n;
+        }
         co_return n;
     };
     return dftu_utils_test::ok(run().get());

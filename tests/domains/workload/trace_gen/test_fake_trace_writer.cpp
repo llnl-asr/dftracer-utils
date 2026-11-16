@@ -24,7 +24,9 @@ namespace {
 CoroTask<dstd::Vector<dstd::String>> collect_lines(
     AsyncGenerator<dftracer::utils::fileio::lines::Line> gen) {
     dstd::Vector<dstd::String> lines;
-    while (auto line = co_await gen.next()) {
+    while (true) {
+        auto line = co_await gen.next();
+        if (!line) break;
         lines.emplace_back(line->content);
     }
     co_return lines;

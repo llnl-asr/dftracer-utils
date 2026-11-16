@@ -325,7 +325,11 @@ std::size_t count_json(const dstd::String& trace, const dstd::String& index_dir,
         cfg.buffer_size = SCAN_BUFFER_BYTES;
         auto gen = dftu_utils_test::ok_items(reader.read_json(cfg));
         std::size_t n = 0;
-        while (auto line = co_await gen.next()) ++n;
+        while (true) {
+            auto line = co_await gen.next();
+            if (!line) break;
+            ++n;
+        }
         co_return n;
     };
     return dftu_utils_test::ok(run().get());
@@ -339,7 +343,11 @@ coro::CoroTask<std::uint64_t> scan_unit(
     trace::views::ViewScannerUtility scanner;
     auto gen = dftu_utils_test::ok_items(scanner(sin));
     std::uint64_t n = 0;
-    while (auto b = co_await gen.next()) n += b->events_matched;
+    while (true) {
+        auto b = co_await gen.next();
+        if (!b) break;
+        n += b->events_matched;
+    }
     co_return n;
 }
 

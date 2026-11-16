@@ -67,7 +67,11 @@ TEST_CASE("member cache: fills from a read then returns" * doctest::skip()) {
             dstd::String(gz), dstd::String(index_dir)});
         auto gen = dftu_utils_test::ok_items(
             reader.read_lines(trace::reader::ReadConfig{}));
-        while (co_await gen.next()) ++lines;
+        while (true) {
+            auto has_next = co_await gen.next();
+            if (!has_next) break;
+            ++lines;
+        }
         co_return;
     });
     CHECK(lines >= 4000);

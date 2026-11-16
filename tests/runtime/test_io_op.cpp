@@ -1255,8 +1255,9 @@ TEST_CASE("io op: fadvise gives zero") {
         ssize_t advised_long = 1;
         auto body = [&]() -> coro::CoroTask<void> {
             advised = co_await runtime::io::fadvise(file.fd(), 0, 0, 0);
-            advised_long = co_await runtime::io::fadvise(
-                file.fd(), 0, std::uint64_t{5} << 30, 0);
+            const std::uint64_t long_length = std::uint64_t{5} << 30;
+            advised_long =
+                co_await runtime::io::fadvise(file.fd(), 0, long_length, 0);
         };
         dftu_utils_test::ok(rt.block_on(body()));
         CHECK(advised == 0);

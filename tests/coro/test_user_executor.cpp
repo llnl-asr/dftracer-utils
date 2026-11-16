@@ -113,7 +113,8 @@ coro::CoroTask<void> block_on_own_thread() {
 /// Waits on a timeout the executor cannot serve itself, so the wait lands on
 /// the process-wide timer thread.
 coro::CoroTask<void> wait_beyond(std::atomic<bool>& timed_out) {
-    co_await coro::timeout(std::chrono::milliseconds{20}, nullptr);
+    const std::chrono::milliseconds wait{20};
+    co_await coro::timeout(wait, nullptr);
     timed_out.store(true, std::memory_order_release);
 }
 

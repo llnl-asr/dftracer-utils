@@ -43,7 +43,9 @@ namespace {
 static CoroTask<std::size_t> count_lines(
     AsyncGenerator<dftracer::utils::fileio::lines::Line> gen) {
     std::size_t n = 0;
-    while (auto line = co_await gen.next()) {
+    while (true) {
+        auto line = co_await gen.next();
+        if (!line) break;
         ++n;
     }
     co_return n;
@@ -54,7 +56,9 @@ static CoroTask<std::size_t> count_lines(
 static CoroTask<dstd::Result<std::size_t>> count_lines_until_error(
     AsyncGenerator<dstd::Result<dftracer::utils::fileio::lines::Line>> gen) {
     std::size_t n = 0;
-    while (auto item = co_await gen.next()) {
+    while (true) {
+        auto item = co_await gen.next();
+        if (!item) break;
         if (!item->has_value()) co_return item->error();
         ++n;
     }
@@ -64,7 +68,9 @@ static CoroTask<dstd::Result<std::size_t>> count_lines_until_error(
 static CoroTask<std::size_t> count_raw_bytes(
     AsyncGenerator<dstd::Span<const char>> gen) {
     std::size_t total = 0;
-    while (auto chunk = co_await gen.next()) {
+    while (true) {
+        auto chunk = co_await gen.next();
+        if (!chunk) break;
         total += chunk->size();
     }
     co_return total;
@@ -73,7 +79,9 @@ static CoroTask<std::size_t> count_raw_bytes(
 static CoroTask<std::size_t> count_raw_chunks(
     AsyncGenerator<dstd::Span<const char>> gen) {
     std::size_t n = 0;
-    while (auto chunk = co_await gen.next()) {
+    while (true) {
+        auto chunk = co_await gen.next();
+        if (!chunk) break;
         ++n;
     }
     co_return n;
@@ -83,7 +91,9 @@ static CoroTask<std::size_t> count_raw_chunks(
 static CoroTask<dstd::Vector<std::size_t>> collect_line_numbers(
     AsyncGenerator<dftracer::utils::fileio::lines::Line> gen) {
     dstd::Vector<std::size_t> nums;
-    while (auto line = co_await gen.next()) {
+    while (true) {
+        auto line = co_await gen.next();
+        if (!line) break;
         nums.push_back(line->line_number);
     }
     co_return nums;
@@ -92,7 +102,9 @@ static CoroTask<dstd::Vector<std::size_t>> collect_line_numbers(
 static CoroTask<dstd::Vector<dstd::String>> collect_lines(
     AsyncGenerator<dftracer::utils::fileio::lines::Line> gen) {
     dstd::Vector<dstd::String> lines;
-    while (auto line = co_await gen.next()) {
+    while (true) {
+        auto line = co_await gen.next();
+        if (!line) break;
         lines.emplace_back(line->content);
     }
     co_return lines;
@@ -107,7 +119,9 @@ struct ParsedEvent {
 static CoroTask<dstd::Vector<ParsedEvent>> collect_json_events(
     AsyncGenerator<JsonLine> gen) {
     dstd::Vector<ParsedEvent> events;
-    while (auto opt = co_await gen.next()) {
+    while (true) {
+        auto opt = co_await gen.next();
+        if (!opt) break;
         auto* p = opt->parser;
         ParsedEvent ev;
         if (auto v = p->get_string("name")) ev.name = dstd::String(*v);
@@ -120,7 +134,9 @@ static CoroTask<dstd::Vector<ParsedEvent>> collect_json_events(
 
 static CoroTask<std::size_t> count_json_lines(AsyncGenerator<JsonLine> gen) {
     std::size_t n = 0;
-    while (auto opt = co_await gen.next()) {
+    while (true) {
+        auto opt = co_await gen.next();
+        if (!opt) break;
         ++n;
     }
     co_return n;
@@ -1387,7 +1403,11 @@ namespace {
 static CoroTask<dstd::Vector<dstd::String>> collect_json_text(
     AsyncGenerator<JsonLine> gen) {
     dstd::Vector<dstd::String> out;
-    while (auto line = co_await gen.next()) out.emplace_back(line->content);
+    while (true) {
+        auto line = co_await gen.next();
+        if (!line) break;
+        out.emplace_back(line->content);
+    }
     co_return out;
 }
 
@@ -1510,7 +1530,9 @@ struct OddRead {
 
 static CoroTask<void> collect_odd_json(AsyncGenerator<JsonLine> gen,
                                        OddRead& out) {
-    while (auto opt = co_await gen.next()) {
+    while (true) {
+        auto opt = co_await gen.next();
+        if (!opt) break;
         out.lines.emplace_back(opt->content);
         auto* p = opt->parser;
         out.json_doubles.push_back(p->get_double("x"));
@@ -1982,8 +2004,11 @@ WindowFixture long_line_fixture(bool indexed) {
 static CoroTask<dstd::String> collect_raw_text(
     AsyncGenerator<dstd::Span<const char>> gen) {
     dstd::String out;
-    while (auto chunk = co_await gen.next())
+    while (true) {
+        auto chunk = co_await gen.next();
+        if (!chunk) break;
         out.append(chunk->data(), chunk->size());
+    }
     co_return out;
 }
 

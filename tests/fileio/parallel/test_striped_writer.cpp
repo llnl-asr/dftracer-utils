@@ -42,14 +42,21 @@ TEST_CASE("StripedWriter - header, chunks, footer land in single file") {
     Runtime runtime(2);
     auto task = [&]() -> CoroTask<int> {
         auto w = make_striped_writer();
-        if (co_await w->open(dstd::String(path), 4, false, nullptr) != 0)
-            co_return 1;
-        if (co_await w->write_header(sv("HDR\n")) != 0) co_return 2;
-        if (co_await w->write_chunk(0, sv("worker0\n")) != 0) co_return 3;
-        if (co_await w->write_chunk(1, sv("worker1\n")) != 0) co_return 4;
-        if (co_await w->write_chunk(2, sv("worker2\n")) != 0) co_return 5;
-        if (co_await w->write_footer(sv("END\n")) != 0) co_return 6;
-        if (co_await w->close() != 0) co_return 7;
+        auto open_result =
+            co_await w->open(dstd::String(path), 4, false, nullptr);
+        if (open_result != 0) co_return 1;
+        auto write_header_result = co_await w->write_header(sv("HDR\n"));
+        if (write_header_result != 0) co_return 2;
+        auto write_chunk_result = co_await w->write_chunk(0, sv("worker0\n"));
+        if (write_chunk_result != 0) co_return 3;
+        auto write_chunk_result2 = co_await w->write_chunk(1, sv("worker1\n"));
+        if (write_chunk_result2 != 0) co_return 4;
+        auto write_chunk_result3 = co_await w->write_chunk(2, sv("worker2\n"));
+        if (write_chunk_result3 != 0) co_return 5;
+        auto write_footer_result = co_await w->write_footer(sv("END\n"));
+        if (write_footer_result != 0) co_return 6;
+        auto close_result = co_await w->close();
+        if (close_result != 0) co_return 7;
         co_return 0;
     };
 
@@ -85,11 +92,15 @@ TEST_CASE("StripedWriter - empty chunks are no-ops") {
     Runtime runtime(2);
     auto task = [&]() -> CoroTask<int> {
         auto w = make_striped_writer();
-        if (co_await w->open(dstd::String(path), 2, false, nullptr) != 0)
-            co_return 1;
-        if (co_await w->write_chunk(0, dstd::ByteView()) != 0) co_return 2;
-        if (co_await w->write_chunk(1, dstd::ByteView()) != 0) co_return 3;
-        if (co_await w->close() != 0) co_return 4;
+        auto open_result =
+            co_await w->open(dstd::String(path), 2, false, nullptr);
+        if (open_result != 0) co_return 1;
+        auto write_chunk_result = co_await w->write_chunk(0, dstd::ByteView());
+        if (write_chunk_result != 0) co_return 2;
+        auto write_chunk_result2 = co_await w->write_chunk(1, dstd::ByteView());
+        if (write_chunk_result2 != 0) co_return 3;
+        auto close_result = co_await w->close();
+        if (close_result != 0) co_return 4;
         co_return 0;
     };
     CHECK(dftu_utils_test::ok(runtime.submit(task(), "striped_empty").get()) ==
@@ -107,8 +118,9 @@ TEST_CASE("StripedWriter - output_paths returns single entry") {
     dstd::Vector<dstd::String> paths;
     auto task = [&]() -> CoroTask<int> {
         auto w = make_striped_writer();
-        if (co_await w->open(dstd::String(path), 4, false, nullptr) != 0)
-            co_return 1;
+        auto open_result =
+            co_await w->open(dstd::String(path), 4, false, nullptr);
+        if (open_result != 0) co_return 1;
         paths = w->output_paths();
         co_await w->close();
         co_return 0;

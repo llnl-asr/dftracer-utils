@@ -125,7 +125,8 @@ struct NeverReady {
 };
 
 coro::CoroTask<void> stuck_child(Gate* gate) {
-    co_await NeverReady{gate};
+    NeverReady awaiter{gate};
+    co_await awaiter;
     co_return;
 }
 
@@ -356,7 +357,7 @@ TEST_CASE("a generator dropped after a scope fan-out does not terminate") {
 
     struct Source {
         static coro::AsyncGenerator<int> numbers(std::atomic<int>* fanned) {
-            co_await coro::with_scope(
+            auto op = coro::with_scope(
                 [fanned](coro::Scope& scope) -> coro::CoroTask<void> {
                     auto a =
                         scope.spawn_future([fanned]() -> coro::CoroTask<int> {
@@ -371,6 +372,7 @@ TEST_CASE("a generator dropped after a scope fan-out does not terminate") {
                     co_await a;
                     co_await b;
                 });
+            co_await op;
             co_yield 1;
             co_yield 2;
         }

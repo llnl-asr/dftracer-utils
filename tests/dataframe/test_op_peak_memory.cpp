@@ -670,7 +670,9 @@ dstd::Set<dstd::String> registry_ops() {
 coro::CoroTask<std::int64_t> drain_count(LazyFrame lf) {
     std::int64_t n = 0;
     auto g = lf.stream(BATCH_SIZE);
-    while (auto df = co_await g.next()) {
+    while (true) {
+        auto df = co_await g.next();
+        if (!df) break;
         if (!*df) {
             std::fprintf(stderr, "stream failed: %s\n", df->error().c_str());
             co_return -1;

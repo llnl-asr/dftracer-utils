@@ -68,7 +68,11 @@ std::size_t count_rows(dstd::StringView trace, dstd::StringView index_dir,
         cfg.skip_pruning = skip_pruning;
         auto gen = dftu_utils_test::ok_items(reader.read_json(cfg));
         std::size_t n = 0;
-        while (auto line = co_await gen.next()) ++n;
+        while (true) {
+            auto line = co_await gen.next();
+            if (!line) break;
+            ++n;
+        }
         co_return n;
     };
     return dftu_utils_test::ok(run().get());

@@ -37,7 +37,9 @@ static CoroTask<dstd::Result<Line>> first_item(
 static CoroTask<dstd::Vector<dstd::String>> collect_lines(
     AsyncGenerator<Line> gen) {
     dstd::Vector<dstd::String> result;
-    while (auto line = co_await gen.next()) {
+    while (true) {
+        auto line = co_await gen.next();
+        if (!line) break;
         result.push_back(dstd::String(line->content));
     }
     co_return result;
@@ -52,7 +54,9 @@ struct LineCopy {
 static CoroTask<dstd::Vector<LineCopy>> collect_line_copies(
     AsyncGenerator<Line> gen) {
     dstd::Vector<LineCopy> result;
-    while (auto line = co_await gen.next()) {
+    while (true) {
+        auto line = co_await gen.next();
+        if (!line) break;
         result.push_back(
             LineCopy{dstd::String(line->content), line->line_number});
     }

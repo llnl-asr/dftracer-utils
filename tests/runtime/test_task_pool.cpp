@@ -102,7 +102,8 @@ struct ResumeOnOtherWorker {
 CoroTask<void> allocate_across_workers(Blocks* out, Hops* hops) {
     out->held.push_back(memory::detail::allocate(out->size, ALIGN));
     const std::thread::id first = std::this_thread::get_id();
-    co_await ResumeOnOtherWorker{*hops};
+    ResumeOnOtherWorker awaiter{*hops};
+    co_await awaiter;
     out->moved = std::this_thread::get_id() != first;
     out->held.push_back(memory::detail::allocate(out->size, ALIGN));
 }
@@ -126,14 +127,15 @@ CoroTask<void> allocate_and_yield_once(Blocks* out) {
 }
 
 CoroTask<void> hop_then_allocate(Blocks* out, Hops* hops) {
-    co_await ResumeFromThread{*hops};
+    ResumeFromThread awaiter{*hops};
+    co_await awaiter;
     out->held.push_back(memory::detail::allocate(out->size, ALIGN));
 }
 
 CoroTask<void> parent_with_children(Blocks* direct, Blocks* spawned, Hops* hops,
                                     coro::Executor* exec) {
     co_await hop_then_allocate(direct, hops);
-    co_await coro::run_on(
+    auto op = coro::run_on(
         *exec,
         coro::with_scope([spawned, hops](coro::Scope& s) -> CoroTask<void> {
             s.spawn([spawned, hops]() -> CoroTask<void> {
@@ -141,6 +143,7 @@ CoroTask<void> parent_with_children(Blocks* direct, Blocks* spawned, Hops* hops,
             });
             co_return;
         }));
+    co_await op;
 }
 
 memory::PoolHandle open_pool(const char* name) {

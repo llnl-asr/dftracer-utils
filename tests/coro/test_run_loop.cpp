@@ -54,13 +54,16 @@ coro::CoroTask<int> produce_consume(int producers, int per_producer) {
                          per_producer]() mutable -> coro::CoroTask<void> {
                 auto guard = ch.guard();
                 for (int i = 0; i < per_producer; ++i) {
-                    if (!co_await ch.send(1)) co_return;
+                    auto send_result = co_await ch.send(1);
+                    if (!send_result) co_return;
                 }
             });
         }
 
         scope.spawn([&channel, &total]() -> coro::CoroTask<void> {
-            while (auto item = co_await channel->receive()) {
+            while (true) {
+                auto item = co_await channel->receive();
+                if (!item) break;
                 total += *item;
             }
         });

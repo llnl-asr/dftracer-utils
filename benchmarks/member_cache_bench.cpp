@@ -133,9 +133,10 @@ struct OnceCoalesce {
             if (!slot) slot = dstd::make_shared<coro::AsyncOnce<Bytes>>();
             once = slot;
         }
-        co_return co_await once->get([blob]() -> coro::CoroTask<Bytes> {
+        auto op = once->get([blob]() -> coro::CoroTask<Bytes> {
             co_return co_await decode(blob);
         });
+        co_return co_await op;
     }
 };
 

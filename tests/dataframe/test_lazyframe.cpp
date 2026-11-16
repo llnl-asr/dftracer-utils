@@ -153,7 +153,9 @@ coro::CoroTask<dstd::Pair<dstd::Vector<std::int64_t>, DataFrame>> probe_stream(
     Gen gen) {
     dstd::Vector<std::int64_t> chunk_rows;
     dstd::Vector<DataFrame> chunks;
-    while (auto next_frame = co_await gen.next()) {
+    while (true) {
+        auto next_frame = co_await gen.next();
+        if (!next_frame) break;
         DataFrame df = take_frame(std::move(*next_frame));
         chunk_rows.push_back(df.num_rows());
         chunks.push_back(std::move(df));
@@ -176,8 +178,11 @@ dstd::Pair<dstd::Vector<std::int64_t>, DataFrame> run_stream_probe(Gen gen) {
 coro::CoroTask<dstd::Vector<DataFrame>> stream_parts(
     dftracer::utils::coro::AsyncGenerator<dstd::Result<DataFrame>> gen) {
     dstd::Vector<DataFrame> parts;
-    while (auto df = co_await gen.next())
+    while (true) {
+        auto df = co_await gen.next();
+        if (!df) break;
         parts.push_back(dftu_utils_test::ok(std::move(*df)));
+    }
     co_return parts;
 }
 
@@ -186,8 +191,11 @@ coro::CoroTask<dstd::Vector<DataFrame>> stream_parts(
 coro::CoroTask<dstd::Vector<dstd::Vector<dstd::SharedString>>> stream_names(
     dftracer::utils::coro::AsyncGenerator<dstd::Result<DataFrame>> gen) {
     dstd::Vector<dstd::Vector<dstd::SharedString>> all;
-    while (auto df = co_await gen.next())
+    while (true) {
+        auto df = co_await gen.next();
+        if (!df) break;
         all.push_back(dftu_utils_test::ok(std::move(*df)).names);
+    }
     co_return all;
 }
 

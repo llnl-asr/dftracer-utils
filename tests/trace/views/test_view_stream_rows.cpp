@@ -250,7 +250,9 @@ TEST_SUITE("trace scan - streaming row query") {
                         rows;
                     auto gen = dftu_utils_test::ok_items(
                         views::detail::scan::stream(vv));
-                    while (auto chunk = co_await gen.next()) {
+                    while (true) {
+                        auto chunk = co_await gen.next();
+                        if (!chunk) break;
                         auto part = row_key_set(*chunk);
                         rows.insert(rows.end(), part.begin(), part.end());
                     }
@@ -304,7 +306,9 @@ TEST_SUITE("trace scan - streaming row query") {
                     std::int64_t nrows = 0;
                     auto gen = dftu_utils_test::ok_items(
                         views::detail::scan::stream(vv, 10));
-                    while (auto chunk = co_await gen.next()) {
+                    while (true) {
+                        auto chunk = co_await gen.next();
+                        if (!chunk) break;
                         ++n;
                         nrows += chunk->num_rows();
                     }
@@ -340,7 +344,9 @@ TEST_SUITE("trace scan - streaming row query") {
                     std::int64_t nrows = 0;
                     auto gen = dftu_utils_test::ok_items(
                         views::detail::scan::stream(vv, 5));
-                    while (auto chunk = co_await gen.next()) {
+                    while (true) {
+                        auto chunk = co_await gen.next();
+                        if (!chunk) break;
                         ++n;
                         nrows += chunk->num_rows();
                     }
@@ -804,8 +810,11 @@ TEST_SUITE("trace scan - streaming row query") {
                                         std::size_t n = 0;
                                         auto gen =
                                             views::detail::scan::stream(vv, 1);
-                                        while (auto chunk = co_await gen.next())
+                                        while (true) {
+                                            auto chunk = co_await gen.next();
+                                            if (!chunk) break;
                                             ++n;
+                                        }
                                         co_return n;
                                     }(v))
                                     .get());

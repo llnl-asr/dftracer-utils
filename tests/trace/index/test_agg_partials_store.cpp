@@ -464,7 +464,8 @@ TEST_SUITE("AggPartialsStore") {
                         }
                         build->finish(trace::index::store::IndexExtension::Agg,
                                       old.params_hash);
-                        if (!co_await build->commit()) marked = false;
+                        auto commit_result = co_await build->commit();
+                        if (!commit_result) marked = false;
                     }
                 },
                 "stale aggregation index");

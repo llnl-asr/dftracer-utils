@@ -216,7 +216,11 @@ dstd::Map<dstd::String, std::uint64_t> namespace_digests(
 coro::CoroTask<std::size_t> count_json(
     coro::AsyncGenerator<trace::reader::JsonLine> gen) {
     std::size_t n = 0;
-    while (auto line = co_await gen.next()) ++n;
+    while (true) {
+        auto line = co_await gen.next();
+        if (!line) break;
+        ++n;
+    }
     co_return n;
 }
 

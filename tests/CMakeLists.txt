@@ -282,7 +282,7 @@ add_test(
   NAME no_coro_temp_awaiters
   COMMAND
     sh -c
-    "bad=$(grep -rnE 'co_await[[:space:]]+[A-Za-z_][A-Za-z0-9_:<>]*[[:space:]]*\\{' \"$0/include\" \"$0/src\" --include='*.h' --include='*.hpp' --include='*.cpp' --include='*.inl' | grep -v 'dftracer/utils/dstd/vendor/'); if [ -n \"$bad\" ]; then echo \"co_await on a braced temporary; GCC 12.1 destroys it twice, await a named local:\"; echo \"$bad\"; exit 1; fi"
+    "bad=$(grep -rnE 'co_await[[:space:]]+[A-Za-z_][A-Za-z0-9_:<>]*[[:space:]]*\\{' \"$0/include\" \"$0/src\" \"$0/tests\" \"$0/benchmarks\" --include='*.h' --include='*.hpp' --include='*.cpp' --include='*.inl' | grep -v -e 'dftracer/utils/dstd/vendor/' -e '/tests/cmake/'); if [ -n \"$bad\" ]; then echo \"co_await on a braced temporary; GCC 12.1 destroys it twice, await a named local:\"; echo \"$bad\"; exit 1; fi"
     ${CMAKE_SOURCE_DIR})
 add_test(
   NAME no_quoted_includes
@@ -395,6 +395,12 @@ add_test(
 add_test(NAME coro_lambdas
          COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -P
                  ${CMAKE_SOURCE_DIR}/cmake/scripts/check_coro_lambdas.cmake)
+add_test(NAME coro_temp_args
+         COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -P
+                 ${CMAKE_SOURCE_DIR}/cmake/scripts/check_coro_temp_args.cmake)
+add_test(NAME coro_temp_args_self
+         COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -DSELF_TEST=ON -P
+                 ${CMAKE_SOURCE_DIR}/cmake/scripts/check_coro_temp_args.cmake)
 add_test(NAME coro_lambdas_self
          COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -DSELF_TEST=ON -P
                  ${CMAKE_SOURCE_DIR}/cmake/scripts/check_coro_lambdas.cmake)

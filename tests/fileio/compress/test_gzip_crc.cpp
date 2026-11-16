@@ -197,9 +197,9 @@ PathResult indexer_stream(const dstd::String& path) {
     dstd::Optional<trace::index::gzip::GzipBuildArtifacts> art;
     dftu_utils_test::run_coro([&](coro::Scope& scope) -> coro::CoroTask<void> {
         CrcWindow window;
+        const trace::index::gzip::CheckpointIndexer::VisitorList no_visitors{};
         auto built = co_await trace::index::gzip::build_gzip_index_artifacts(
-            dstd::String(path), CKPT,
-            trace::index::gzip::CheckpointIndexer::VisitorList{}, &scope);
+            dstd::String(path), CKPT, no_visitors, &scope);
         if (built) art = std::move(*built);
     });
     // A corrupt member is flagged as damaged, and what it gave before the

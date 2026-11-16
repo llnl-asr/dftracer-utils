@@ -50,15 +50,22 @@ TEST_CASE("ShardedWriter - one shard per worker with header/footer placement") {
     dstd::Vector<dstd::String> paths;
     auto task = [&]() -> CoroTask<int> {
         auto w = make_sharded_writer();
-        if (co_await w->open(dstd::String(base), 3, false, nullptr) != 0)
-            co_return 1;
-        if (co_await w->write_header(sv("HDR\n")) != 0) co_return 2;
-        if (co_await w->write_chunk(0, sv("A\n")) != 0) co_return 3;
-        if (co_await w->write_chunk(1, sv("B\n")) != 0) co_return 4;
-        if (co_await w->write_chunk(2, sv("C\n")) != 0) co_return 5;
-        if (co_await w->write_footer(sv("END\n")) != 0) co_return 6;
+        auto open_result =
+            co_await w->open(dstd::String(base), 3, false, nullptr);
+        if (open_result != 0) co_return 1;
+        auto write_header_result = co_await w->write_header(sv("HDR\n"));
+        if (write_header_result != 0) co_return 2;
+        auto write_chunk_result = co_await w->write_chunk(0, sv("A\n"));
+        if (write_chunk_result != 0) co_return 3;
+        auto write_chunk_result2 = co_await w->write_chunk(1, sv("B\n"));
+        if (write_chunk_result2 != 0) co_return 4;
+        auto write_chunk_result3 = co_await w->write_chunk(2, sv("C\n"));
+        if (write_chunk_result3 != 0) co_return 5;
+        auto write_footer_result = co_await w->write_footer(sv("END\n"));
+        if (write_footer_result != 0) co_return 6;
         paths = w->output_paths();
-        if (co_await w->close() != 0) co_return 7;
+        auto close_result = co_await w->close();
+        if (close_result != 0) co_return 7;
         co_return 0;
     };
     CHECK(dftu_utils_test::ok(runtime.submit(task(), "sharded_basic").get()) ==
@@ -84,12 +91,16 @@ TEST_CASE("ShardedWriter - gzip_extension appends .gz to shard names") {
     dstd::Vector<dstd::String> paths;
     auto task = [&]() -> CoroTask<int> {
         auto w = make_sharded_writer();
-        if (co_await w->open(dstd::String(base), 2, true, nullptr) != 0)
-            co_return 1;
-        if (co_await w->write_chunk(0, sv("X")) != 0) co_return 2;
-        if (co_await w->write_chunk(1, sv("Y")) != 0) co_return 3;
+        auto open_result =
+            co_await w->open(dstd::String(base), 2, true, nullptr);
+        if (open_result != 0) co_return 1;
+        auto write_chunk_result = co_await w->write_chunk(0, sv("X"));
+        if (write_chunk_result != 0) co_return 2;
+        auto write_chunk_result2 = co_await w->write_chunk(1, sv("Y"));
+        if (write_chunk_result2 != 0) co_return 3;
         paths = w->output_paths();
-        if (co_await w->close() != 0) co_return 4;
+        auto close_result = co_await w->close();
+        if (close_result != 0) co_return 4;
         co_return 0;
     };
     CHECK(dftu_utils_test::ok(runtime.submit(task(), "sharded_gz").get()) == 0);
@@ -105,8 +116,9 @@ TEST_CASE("ShardedWriter - out-of-range worker_idx fails") {
     Runtime runtime(2);
     auto task = [&]() -> CoroTask<int> {
         auto w = make_sharded_writer();
-        if (co_await w->open(dstd::String(base), 1, false, nullptr) != 0)
-            co_return 1;
+        auto open_result =
+            co_await w->open(dstd::String(base), 1, false, nullptr);
+        if (open_result != 0) co_return 1;
         auto rc = co_await w->write_chunk(5, sv("oops"));
         co_await w->close();
         co_return rc == 0 ? 99 : 0;

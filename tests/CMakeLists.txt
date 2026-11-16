@@ -1045,6 +1045,10 @@ if(DFTRACER_UTILS_ENABLE_MPI AND DFTRACER_UTILS_BUILD_SHARED)
                      ${mode})
     set_tests_properties(comm/mpi/exit_probe_${mode}_np2 PROPERTIES TIMEOUT 120)
   endforeach()
+  # leak and exit end the process with the communicator alive on purpose, so
+  # the memory exit check would report it; scope keeps the check.
+  set_tests_properties(comm/mpi/exit_probe_leak_np2 comm/mpi/exit_probe_exit_np2
+                       PROPERTIES ENVIRONMENT DFTRACER_UTILS_MEMORY_EXIT_CHECK=0)
 endif()
 
 if(TARGET dftracer_utils_cli)

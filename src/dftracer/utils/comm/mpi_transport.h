@@ -62,7 +62,9 @@ class MpiTransport : public Transport {
 
 /// Cap this rank's worker threads to its node-local share of cores so N ranks
 /// on a node do not each spawn `cores` threads and oversubscribe (ranks on
-/// separate nodes are independent). Applied via DFTRACER_UTILS_THREADS, so call
+/// separate nodes are independent). A rank the launcher already bound keeps its
+/// own CPUs (@ref common::threads_per_local_rank). Applied via
+/// DFTRACER_UTILS_THREADS, so call
 /// it before any runtime work. This is Dask's per-node worker/thread split for
 /// MPI.
 inline void set_local_thread_budget(MPI_Comm comm = MPI_COMM_WORLD) {
@@ -75,10 +77,8 @@ inline void set_local_thread_budget(MPI_Comm comm = MPI_COMM_WORLD) {
     MPI_Comm_size(local, &local_size);
     MPI_Comm_free(&local);
 
-    const auto cores = static_cast<unsigned>(common::hardware_concurrency());
-    unsigned per_rank =
-        std::max(1u, cores / static_cast<unsigned>(std::max(1, local_size)));
-    const dstd::String n = dstd::to_string(per_rank);
+    const dstd::String n = dstd::to_string(common::threads_per_local_rank(
+        static_cast<std::size_t>(std::max(1, local_size))));
     ::setenv("DFTRACER_UTILS_THREADS", n.c_str(), 1);
     ::setenv("DFTRACER_UTILS_IO_THREADS", n.c_str(), 1);
 }

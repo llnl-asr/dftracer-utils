@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/timer_service.h>
-#include <dftracer/utils/memory/clock.h>
+#include <dftracer/utils/dstd/clock.h>
 #include <doctest/doctest.h>
 
 #include <chrono>
@@ -41,8 +41,8 @@ TEST_CASE("each timer registered on an idle timer thread fires") {
         timers.start();
         std::mutex m;
         std::condition_variable cv;
-        const auto until = memory::steady_now() + RUN_FOR;
-        while (memory::steady_now() < until) {
+        const auto until = dstd::steady_now() + RUN_FOR;
+        while (dstd::steady_now() < until) {
             ++rounds;
             bool fired = false;
             timers.register_timeout(std::chrono::microseconds(0), [&] {
@@ -65,8 +65,8 @@ TEST_CASE("each timer registered on an idle timer thread fires") {
 
 TEST_CASE("stop wakes an idle timer thread") {
     run_with_deadline("start and stop", [] {
-        const auto until = memory::steady_now() + RUN_FOR;
-        while (memory::steady_now() < until) {
+        const auto until = dstd::steady_now() + RUN_FOR;
+        while (dstd::steady_now() < until) {
             coro::TimerService timers;
             timers.start();
             timers.stop();

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/dstd/ascii.h>
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
@@ -13,7 +14,6 @@
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/duql/subsumption.h>
 #include <dftracer/utils/json/json_escape.h>
-#include <dftracer/utils/memory/clock.h>
 #include <dftracer/utils/trace/index/cache/mv_store.h>
 #include <dftracer/utils/trace/index/cache/rollup_store.h>
 #include <dftracer/utils/trace/index/index.h>
@@ -311,7 +311,7 @@ void touch_last_used(dstd::StringView dir) {
                                        .mode = 0666});
     if (!file) return;
     file->close().discard();
-    dstd::fs::set_mtime_ns(path.view(), memory::system_now_ns()).discard();
+    dstd::fs::set_mtime_ns(path.view(), dstd::system_now_ns()).discard();
 }
 
 // Removes the least recently used views under `root` until they hold at most

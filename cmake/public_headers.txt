@@ -83,6 +83,7 @@ dftracer/utils/dstd/big_endian.h
 dftracer/utils/dstd/bits.h
 dftracer/utils/dstd/byte_view.h
 dftracer/utils/dstd/cache/eviction_policy.h
+dftracer/utils/dstd/clock.h
 dftracer/utils/dstd/concurrent_queue.h
 dftracer/utils/dstd/const_string.h
 dftracer/utils/dstd/coroutine_traits.h
@@ -156,7 +157,6 @@ dftracer/utils/trace/index/c_api.h
 dftracer/utils/trace/index/indexer.h
 dftracer/utils/trace/index/schemas/dft/agg/aggregation_config.h
 dftracer/utils/json/value.h
-dftracer/utils/memory/clock.h
 dftracer/utils/memory/allocator.h
 dftracer/utils/memory/config.h
 dftracer/utils/memory/detail/constants.h

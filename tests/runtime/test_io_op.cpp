@@ -5,12 +5,12 @@
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/coro/yield.h>
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/memory/clock.h>
 #include <dftracer/utils/runtime/io/io_backend.h>
 #include <dftracer/utils/runtime/io/io_uring_backend.h>
 #include <dftracer/utils/runtime/io/ops.h>
@@ -615,7 +615,7 @@ TEST_CASE("io op: new work wakes a worker parked on its own ring") {
 
     constexpr int ROUNDS = 20;
     int ran = 0;
-    const auto began = memory::steady_now();
+    const auto began = dstd::steady_now();
     for (int i = 0; i < ROUNDS; ++i) {
         ::usleep(2000);
         auto step = [&]() -> coro::CoroTask<void> {
@@ -624,7 +624,7 @@ TEST_CASE("io op: new work wakes a worker parked on its own ring") {
         };
         dftu_utils_test::ok(rt.block_on(step()));
     }
-    const auto elapsed = memory::steady_now() - began;
+    const auto elapsed = dstd::steady_now() - began;
     CHECK(ran == ROUNDS);
     // A lost wake costs each round the park timeout of 256 ms.
     CHECK(elapsed < std::chrono::seconds(2));
@@ -1073,9 +1073,9 @@ TEST_CASE("io op: a timed park ends with nothing done, with no timed enter") {
         for (int round = 0; round < 8; ++round) {
             void* token = backend.prepare_park();
             REQUIRE(token != nullptr);
-            const auto began = memory::steady_now();
+            const auto began = dstd::steady_now();
             backend.park(token, 20);
-            const auto elapsed = memory::steady_now() - began;
+            const auto elapsed = dstd::steady_now() - began;
             backend.finish_park(token);
             // Each timeout expired before the next arms, so none ends it early.
             CHECK(elapsed >= std::chrono::milliseconds(20));
@@ -1126,9 +1126,9 @@ TEST_CASE("io op: a long armed timeout does not hold a shorter park") {
 
         token = backend.prepare_park();
         REQUIRE(token != nullptr);
-        const auto began = memory::steady_now();
+        const auto began = dstd::steady_now();
         backend.park(token, 1);
-        const auto elapsed = memory::steady_now() - began;
+        const auto elapsed = dstd::steady_now() - began;
         backend.finish_park(token);
         CHECK(elapsed < std::chrono::milliseconds(LONG_MS / 2));
         co_return;

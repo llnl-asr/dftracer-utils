@@ -13,6 +13,7 @@
 #include <dftracer/utils/domains/workload/genesis/genesis.h>
 #include <dftracer/utils/dstd/algorithm.h>
 #include <dftracer/utils/dstd/byte_view.h>
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
@@ -25,7 +26,6 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/fileio/gzip_line_writer.h>
 #include <dftracer/utils/memory/budget.h>
-#include <dftracer/utils/memory/clock.h>
 #include <fcntl.h>
 #include <sys/resource.h>
 
@@ -325,7 +325,7 @@ class Progress {
     }
 
     std::int64_t elapsed_ms() const {
-        return static_cast<std::int64_t>(memory::steady_now_ns() / 1000000ULL) -
+        return static_cast<std::int64_t>(dstd::steady_now_ns() / 1000000ULL) -
                start_ms_;
     }
 
@@ -402,7 +402,7 @@ class Progress {
                               std::chrono::milliseconds(GROUP_INTERVAL).count())
             return;
         last_groups_ms_ = now_ms;
-        const std::int64_t now_ns = memory::steady_now_ns();
+        const std::int64_t now_ns = dstd::steady_now_ns();
         for (std::size_t w = 0; w < workers_; ++w) {
             const Slot& s = slots_[w];
             const domains::workload::genesis::RunGroup* g = s.group.load();
@@ -434,7 +434,7 @@ class Progress {
 
     const dstd::String tag_;
     const std::int64_t start_ms_ =
-        static_cast<std::int64_t>(memory::steady_now_ns() / 1000000ULL);
+        static_cast<std::int64_t>(dstd::steady_now_ns() / 1000000ULL);
     const std::size_t total_groups_;
     const std::uint64_t total_bytes_;
     const std::uint64_t budget_;

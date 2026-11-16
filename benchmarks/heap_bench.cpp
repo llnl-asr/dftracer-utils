@@ -56,6 +56,7 @@
 // up. Instructions are counted over the whole run of a case, set-up included.
 
 #include <bench_counters.h>
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -64,7 +65,6 @@
 #include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/memory/clock.h>
 #include <dftracer/utils/memory/heap_page.h>
 #include <sys/resource.h>
 #include <sys/wait.h>
@@ -144,7 +144,7 @@ double elapsed_ns(Clock::time_point start, Clock::time_point end) {
 template <class A>
 Outcome small_case(std::size_t size, bool lifo, const Scale &scale) {
     std::vector<void *> blocks(scale.batch);
-    auto start = memory::steady_now();
+    auto start = dstd::steady_now();
     for (std::size_t rep = 0; rep < scale.reps; ++rep) {
         for (std::size_t i = 0; i < scale.batch; ++i) {
             blocks[i] = A::allocate(size);
@@ -160,7 +160,7 @@ Outcome small_case(std::size_t size, bool lifo, const Scale &scale) {
             }
         }
     }
-    auto end = memory::steady_now();
+    auto end = dstd::steady_now();
     auto ops = static_cast<double>(scale.batch * scale.reps);
     return {elapsed_ns(start, end) / ops, ops};
 }
@@ -175,9 +175,9 @@ Outcome medium_free_case(const Scale &scale) {
             b = A::allocate(MEDIUM_FREE_SIZE);
             touch(b);
         }
-        auto start = memory::steady_now();
+        auto start = dstd::steady_now();
         for (void *b : blocks) A::release(b, MEDIUM_FREE_SIZE);
-        total_ns += elapsed_ns(start, memory::steady_now());
+        total_ns += elapsed_ns(start, dstd::steady_now());
         frees += blocks.size();
     }
     return {total_ns / static_cast<double>(frees), static_cast<double>(frees)};
@@ -244,10 +244,10 @@ Outcome cross_case(std::size_t pairs, const Scale &scale) {
         threads.emplace_back(body, false, i);
     }
     while (ready.load() < 2 * pairs) std::this_thread::yield();
-    auto start = memory::steady_now();
+    auto start = dstd::steady_now();
     go.store(true, std::memory_order_release);
     for (auto &t : threads) t.join();
-    auto end = memory::steady_now();
+    auto end = dstd::steady_now();
     return {elapsed_ns(start, end) / static_cast<double>(scale.cross_blocks),
             static_cast<double>(scale.cross_blocks * pairs)};
 }
@@ -284,7 +284,7 @@ Outcome mixed_case(const Scale &scale) {
     std::vector<Step> trace = mixed_trace(scale);
     std::vector<void *> live(scale.mixed_slots, nullptr);
     std::vector<std::uint32_t> sizes(scale.mixed_slots, 0);
-    auto start = memory::steady_now();
+    auto start = dstd::steady_now();
     for (const Step &step : trace) {
         if (live[step.slot] != nullptr) {
             A::release(live[step.slot], sizes[step.slot]);
@@ -293,7 +293,7 @@ Outcome mixed_case(const Scale &scale) {
         sizes[step.slot] = step.size;
         touch(live[step.slot]);
     }
-    auto end = memory::steady_now();
+    auto end = dstd::steady_now();
     for (std::size_t i = 0; i < live.size(); ++i) {
         if (live[i] != nullptr) A::release(live[i], sizes[i]);
     }

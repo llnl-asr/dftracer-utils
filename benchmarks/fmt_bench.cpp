@@ -17,12 +17,12 @@
 
 #define DFTRACER_UTILS_BENCH_COUNT_NEW
 #include <bench_counters.h>
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/json/fmt.h>
-#include <dftracer/utils/memory/clock.h>
 #include <dftracer/utils/memory/detail/manager.h>
 
 #include <algorithm>
@@ -62,9 +62,9 @@ Metric measure(std::size_t iterations, F&& f) {
     best.ns = 1e300;
     for (int r = 0; r < ROUNDS; ++r) {
         const std::uint64_t i0 = dftu::bench::instructions_retired();
-        const auto t0 = memory::steady_now();
+        const auto t0 = dstd::steady_now();
         for (std::size_t i = 0; i < iterations; ++i) f();
-        const auto t1 = memory::steady_now();
+        const auto t1 = dstd::steady_now();
         const std::uint64_t i1 = dftu::bench::instructions_retired();
         const double ns =
             std::chrono::duration<double, std::nano>(t1 - t0).count() /

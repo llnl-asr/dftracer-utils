@@ -2,13 +2,13 @@
 #ifndef DFTRACER_UTILS_CORO_TIMER_SERVICE_H
 #define DFTRACER_UTILS_CORO_TIMER_SERVICE_H
 
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/concurrent_queue.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/queue.h>
 #include <dftracer/utils/dstd/thread.h>
-#include <dftracer/utils/memory/clock.h>
 #include <dftracer/utils/memory/detail/manager.h>
 
 #include <atomic>
@@ -120,7 +120,7 @@ class TimerService {
     TimerId register_timeout(Duration duration, Callback callback) {
         // Nothing would fire it, so the caller waits without a timeout.
         if (retired_.load(std::memory_order_acquire)) return NO_TIMER;
-        auto expiry = memory::steady_now() + duration;
+        auto expiry = dstd::steady_now() + duration;
         TimerId id = next_id_.fetch_add(1, std::memory_order_relaxed);
 
         // On the general pool: the timer keeps these past the caller's pool.
@@ -156,7 +156,7 @@ class TimerService {
         while (running_.load(std::memory_order_acquire)) {
             process_pending_timers();
 
-            auto now = memory::steady_now();
+            auto now = dstd::steady_now();
 
             if (timer_heap_.empty()) {
                 std::unique_lock<std::mutex> lock(wake_mutex_);

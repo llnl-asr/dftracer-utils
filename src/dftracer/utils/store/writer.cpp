@@ -3,6 +3,7 @@
 #include <dftracer/utils/common/timer.h>
 #include <dftracer/utils/coro/executor.h>
 #include <dftracer/utils/dstd/bits.h>
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -11,7 +12,6 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/varint.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/memory/clock.h>
 #include <dftracer/utils/runtime/scheduler/task_executor.h>
 #include <dftracer/utils/store/extent_size.h>
 #include <dftracer/utils/store/writer.h>
@@ -113,7 +113,7 @@ struct SegmentSizer {
 
 std::uint64_t random_bits() {
     static std::atomic<std::uint64_t> counter{0};
-    const auto now = memory::steady_now_ns();
+    const auto now = dstd::steady_now_ns();
     std::uint64_t seed = static_cast<std::uint64_t>(now) ^
                          (static_cast<std::uint64_t>(::getpid()) << 32U) ^
                          reinterpret_cast<std::uintptr_t>(&seed) ^

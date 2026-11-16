@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/calendar.h>
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/map.h>
@@ -22,7 +23,6 @@
 #include <dftracer/utils/duql/syntax/walk.h>
 #include <dftracer/utils/duql/term.h>
 #include <dftracer/utils/duql/wildcard.h>
-#include <dftracer/utils/memory/clock.h>
 
 #include <algorithm>
 #include <charconv>
@@ -2747,7 +2747,7 @@ class Lowering {
         if (c.name == "now") {
             if (!now_) {
                 const std::int64_t ns =
-                    static_cast<std::int64_t>(memory::system_now_ns());
+                    static_cast<std::int64_t>(dstd::system_now_ns());
                 now_ = ns / roles_->time_ns_per_unit;
             }
             return dstd::Optional<duql::TermPtr>(

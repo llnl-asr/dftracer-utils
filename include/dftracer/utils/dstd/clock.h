@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: MIT
-#ifndef DFTRACER_UTILS_MEMORY_CLOCK_H
-#define DFTRACER_UTILS_MEMORY_CLOCK_H
+#ifndef DFTRACER_UTILS_DSTD_CLOCK_H
+#define DFTRACER_UTILS_DSTD_CLOCK_H
 
 #include <time.h>
 
 #include <chrono>
 #include <cstdint>
 
-namespace dftracer::utils::memory {
+namespace dftracer::utils::dstd {
 
 /// Nanoseconds on the steady clock. Only differences are meaningful: the epoch
 /// is arbitrary and the value is not comparable across processes.
@@ -55,6 +55,6 @@ inline std::chrono::steady_clock::time_point steady_now() noexcept {
     return std::chrono::steady_clock::now();
 }
 
-}  // namespace dftracer::utils::memory
+}  // namespace dftracer::utils::dstd
 
-#endif  // DFTRACER_UTILS_MEMORY_CLOCK_H
+#endif  // DFTRACER_UTILS_DSTD_CLOCK_H

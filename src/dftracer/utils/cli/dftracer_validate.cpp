@@ -7,13 +7,13 @@
 #include <dftracer/utils/coro/channel.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/fileio/lines/sources/async_streaming_gz_line_generator.h>
 #include <dftracer/utils/json/line.h>
-#include <dftracer/utils/memory/clock.h>
 #include <dftracer/utils/trace/index/gzip/checkpoint_indexer_factory.h>
 #include <simdjson.h>
 
@@ -127,7 +127,7 @@ static coro::CoroTask<int> run_validate(const ValidateArgParse* cli) {
     dstd::Vector<FileValResult> results;
     const auto executor_threads = cli->runtime_args.executor_threads;
 
-    auto start_time = memory::steady_now();
+    auto start_time = dstd::steady_now();
     auto ran = cli::run_on_pool(
         "DFTracer Validate", cli->runtime_args,
         [cli, files, &results, executor_threads](
@@ -148,7 +148,7 @@ static coro::CoroTask<int> run_validate(const ValidateArgParse* cli) {
             co_return dstd::Result<void>{};
         });
     if (!ran) co_return cli::report_error(ran.error());
-    auto end_time = memory::steady_now();
+    auto end_time = dstd::steady_now();
     std::chrono::duration<double, std::milli> duration = end_time - start_time;
 
     if (results.empty()) {

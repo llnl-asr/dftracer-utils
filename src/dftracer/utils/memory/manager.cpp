@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 #include <cxxabi.h>
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/memory/attrib.h>
 #include <dftracer/utils/memory/budget.h>
-#include <dftracer/utils/memory/clock.h>
 #include <dftracer/utils/memory/debug.h>
 #include <dftracer/utils/memory/detail/manager.h>
 #include <dftracer/utils/memory/detail/pool_access.h>
@@ -801,7 +801,7 @@ std::size_t ManagerAccess::reported_total(const Manager& m) noexcept {
 
 namespace {
 
-std::uint64_t now_ms() noexcept { return steady_now_ns() / 1000000ULL; }
+std::uint64_t now_ms() noexcept { return dstd::steady_now_ns() / 1000000ULL; }
 
 std::size_t heap_reserved() noexcept {
     return active_backend() == Backend::PageHeap

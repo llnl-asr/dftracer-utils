@@ -3,7 +3,7 @@
 #include <dftracer/utils/coro/executor.h>
 #include <dftracer/utils/coro/run_on.h>
 #include <dftracer/utils/coro/scope.h>
-#include <dftracer/utils/memory/clock.h>
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/memory/detail/heap.h>
 #include <dftracer/utils/memory/detail/manager.h>
 #include <dftracer/utils/memory/detail/pool_access.h>
@@ -159,9 +159,9 @@ auto under(memory::Pool& pool, Make make) {
 // that held it reaches `want` blocks a little later. A leaked block never goes
 // away, so the wait still fails then.
 bool settles_at(const memory::Pool& pool, std::size_t want) {
-    const auto deadline = memory::steady_now() + std::chrono::seconds(5);
+    const auto deadline = dstd::steady_now() + std::chrono::seconds(5);
     while (pool.blocks() != want) {
-        if (memory::steady_now() > deadline) return false;
+        if (dstd::steady_now() > deadline) return false;
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     return true;

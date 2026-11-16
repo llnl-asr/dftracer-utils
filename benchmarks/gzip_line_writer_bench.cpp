@@ -8,6 +8,7 @@
 //
 //   gzip_line_writer_bench <input.pfw> [workdir]
 
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/function_ref.h>
 #include <dftracer/utils/dstd/map.h>
@@ -17,7 +18,6 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/fileio/compress/libdeflate_gzip.h>
 #include <dftracer/utils/fileio/gzip_line_writer.h>
-#include <dftracer/utils/memory/clock.h>
 
 #include <algorithm>
 #include <chrono>
@@ -161,7 +161,7 @@ double memcpy_loop(const dftracer::utils::dstd::Vector<
                        dftracer::utils::dstd::StringView>& appends,
                    std::size_t member) {
     dftracer::utils::dstd::Vector<char> buf(member + 2 * MIB);
-    auto t0 = memory::steady_now();
+    auto t0 = dstd::steady_now();
     std::size_t fill = 0;
     for (auto a : appends) {
         std::memcpy(buf.data() + fill, a.data(), a.size());
@@ -170,7 +170,7 @@ double memcpy_loop(const dftracer::utils::dstd::Vector<
     }
     volatile char sink = buf[0];
     (void)sink;
-    return std::chrono::duration<double, std::milli>(memory::steady_now() - t0)
+    return std::chrono::duration<double, std::milli>(dstd::steady_now() - t0)
         .count();
 }
 
@@ -183,10 +183,10 @@ double run_case(const char* name, std::size_t in_bytes,
     std::uint64_t out = 0;
     const dftracer::utils::dstd::String path((dir / "out.pfw.gz").str());
     for (int r = 0; r < ROUNDS; ++r) {
-        auto t0 = memory::steady_now();
+        auto t0 = dstd::steady_now();
         out = fn(path);
         ms.push_back(
-            std::chrono::duration<double, std::milli>(memory::steady_now() - t0)
+            std::chrono::duration<double, std::milli>(dstd::steady_now() - t0)
                 .count());
         dftracer::utils::dstd::fs::remove(path).discard();
     }

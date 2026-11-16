@@ -11,6 +11,7 @@
 #include <dftracer/utils/domains/analysis/comparator/comparison_result.h>
 #include <dftracer/utils/domains/analysis/comparator/comparison_utility.h>
 #include <dftracer/utils/domains/analysis/comparator/tree_table_formatter.h>
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -18,7 +19,6 @@
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
-#include <dftracer/utils/memory/clock.h>
 #include <dftracer/utils/trace/index/build/resolve_and_build.h>
 #include <dftracer/utils/trace/index/gzip/checkpoint_indexer.h>
 #include <dftracer/utils/trace/internal/utils.h>
@@ -292,7 +292,7 @@ coro::CoroTask<dstd::Result<int>> compare_sides(ComparatorState& state,
     output.baseline_meta = state.baseline_side.meta;
     output.variant_meta = variant_ref.meta;
 
-    auto start_time = memory::steady_now();
+    auto start_time = dstd::steady_now();
 
     std::size_t visitor_index = 0;
     for (std::size_t ni = 0; ni < state.agg_plans.size(); ++ni) {
@@ -329,7 +329,7 @@ coro::CoroTask<dstd::Result<int>> compare_sides(ComparatorState& state,
                                  meta_rows.end());
     }
 
-    auto end_time = memory::steady_now();
+    auto end_time = dstd::steady_now();
     std::chrono::duration<double, std::milli> duration = end_time - start_time;
     output.execution_time_ms = duration.count();
 

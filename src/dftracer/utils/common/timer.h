@@ -2,9 +2,9 @@
 #ifndef DFTRACER_UTILS_COMMON_TIMER_H
 #define DFTRACER_UTILS_COMMON_TIMER_H
 
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/string.h>
-#include <dftracer/utils/memory/clock.h>
 
 #include <chrono>
 #include <cstdint>
@@ -32,7 +32,7 @@ class Timer {
     inline bool is_verbose() const { return verbose_; }
 
     inline Timer& reset() {
-        start_time_ = memory::steady_now();
+        start_time_ = dstd::steady_now();
         end_time_ = Clock::time_point();
         running_ = false;
         return *this;
@@ -64,15 +64,15 @@ class Timer {
 class ScopedTimer {
    public:
     ScopedTimer(Timer& timer, dstd::String key)
-        : timer_(&timer), key_(std::move(key)), start_(memory::steady_now()) {}
+        : timer_(&timer), key_(std::move(key)), start_(dstd::steady_now()) {}
 
     ScopedTimer(Timer* timer, dstd::String key)
-        : timer_(timer), key_(std::move(key)), start_(memory::steady_now()) {}
+        : timer_(timer), key_(std::move(key)), start_(dstd::steady_now()) {}
 
     ~ScopedTimer() {
         if (!timer_) return;
         auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
-                      memory::steady_now() - start_)
+                      dstd::steady_now() - start_)
                       .count();
         timer_->set_counter(key_, static_cast<std::uint64_t>(ns));
     }

@@ -4,7 +4,7 @@
 
 #include <dftracer/utils/coro/async_semaphore.h>
 #include <dftracer/utils/coro/task.h>
-#include <dftracer/utils/memory/clock.h>
+#include <dftracer/utils/dstd/clock.h>
 
 #include <algorithm>
 #include <chrono>
@@ -104,7 +104,7 @@ class AdaptiveGate {
         friend class AdaptiveGate;
         Ticket(AdaptiveGate& gate, bool saturated, std::size_t ops) noexcept
             : gate_(&gate),
-              start_(memory::steady_now()),
+              start_(dstd::steady_now()),
               ops_(std::max<std::size_t>(ops, 1)),
               saturated_(saturated) {}
 
@@ -119,7 +119,7 @@ class AdaptiveGate {
             if (!gate_) return;
             const auto ns =
                 std::chrono::duration_cast<std::chrono::nanoseconds>(
-                    memory::steady_now() - start_)
+                    dstd::steady_now() - start_)
                     .count();
             std::exchange(gate_, nullptr)
                 ->end(static_cast<std::uint64_t>(ns) / ops_, saturated_);

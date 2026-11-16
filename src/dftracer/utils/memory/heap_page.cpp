@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/memory/asan.h>
 #include <dftracer/utils/memory/attrib.h>
-#include <dftracer/utils/memory/clock.h>
 #include <dftracer/utils/memory/heap_page.h>
 #include <dftracer/utils/memory/heap_system.h>
 #include <dftracer/utils/memory/link.h>
@@ -655,7 +655,7 @@ std::uint64_t run_bits(std::size_t index, std::size_t n) noexcept {
     return ones << index;
 }
 
-std::uint64_t now_ms() noexcept { return coarse_now_ns() / 1000000ULL; }
+std::uint64_t now_ms() noexcept { return dstd::coarse_now_ns() / 1000000ULL; }
 
 bool purge_range(void* p, std::size_t n) noexcept {
 #if defined(__APPLE__)

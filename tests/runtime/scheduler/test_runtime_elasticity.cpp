@@ -6,8 +6,8 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/platform_compat.h>
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/string.h>
-#include <dftracer/utils/memory/clock.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 #include <sys/wait.h>
@@ -67,9 +67,9 @@ std::size_t eager_full_width() {
 
 // Waits up to five seconds for the pool to reach `want` live workers.
 bool settles_at(std::size_t want) {
-    const auto deadline = memory::steady_now() + std::chrono::seconds(5);
+    const auto deadline = dstd::steady_now() + std::chrono::seconds(5);
     while (live_workers() != want) {
-        if (memory::steady_now() > deadline) return false;
+        if (dstd::steady_now() > deadline) return false;
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
     return true;

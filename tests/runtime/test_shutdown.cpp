@@ -15,11 +15,11 @@
 #include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/coro/when_any.h>
 #include <dftracer/utils/coro/yield.h>
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/future.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/memory/clock.h>
 #include <dftracer/utils/memory/detail/manager.h>
 #include <dftracer/utils/memory/detail/pool_access.h>
 #include <dftracer/utils/runtime/io/ops.h>
@@ -84,9 +84,9 @@ void shutdown_or_fail(Runtime& rt) {
 }
 
 void wait_until_entered(const Probe& probe) {
-    const auto deadline = memory::steady_now() + HANG_LIMIT;
+    const auto deadline = dstd::steady_now() + HANG_LIMIT;
     while (!probe.entered.load(std::memory_order_acquire)) {
-        if (memory::steady_now() > deadline) {
+        if (dstd::steady_now() > deadline) {
             fail_hung("frame start");
         }
         std::this_thread::sleep_for(1ms);
@@ -480,9 +480,9 @@ TEST_CASE("a runtime can end as soon as a foreign thread resumes its frame") {
             while (!released.load(std::memory_order_acquire))
                 std::this_thread::yield();
         });
-        const auto deadline = memory::steady_now() + HANG_LIMIT;
+        const auto deadline = dstd::steady_now() + HANG_LIMIT;
         while (!finished.load(std::memory_order_acquire)) {
-            if (memory::steady_now() > deadline) fail_hung("foreign resume");
+            if (dstd::steady_now() > deadline) fail_hung("foreign resume");
             std::this_thread::yield();
         }
         rt.reset();
@@ -518,9 +518,9 @@ TEST_CASE("a foreign thread can exit while the runtime it resumed ends") {
                 handoff.executor,
                 std::coroutine_handle<>::from_address(handle));
         });
-        const auto deadline = memory::steady_now() + HANG_LIMIT;
+        const auto deadline = dstd::steady_now() + HANG_LIMIT;
         while (!finished.load(std::memory_order_acquire)) {
-            if (memory::steady_now() > deadline) fail_hung("foreign resume");
+            if (dstd::steady_now() > deadline) fail_hung("foreign resume");
             std::this_thread::yield();
         }
         rt.reset();

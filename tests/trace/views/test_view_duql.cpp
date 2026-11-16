@@ -3,6 +3,7 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dstd/algorithm.h>
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -10,7 +11,6 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/memory/clock.h>
 #include <dftracer/utils/trace/index/indexer.h>
 #include <doctest/doctest.h>
 #include <task_result.h>
@@ -422,7 +422,7 @@ TEST_SUITE("View duql pipeline") {
     TEST_CASE("now is read once per query") {
         TestEnvironment env(10);
         const auto micros = [] {
-            return static_cast<std::int64_t>(memory::system_now_ns() / 1000ULL);
+            return static_cast<std::int64_t>(dstd::system_now_ns() / 1000ULL);
         };
         const std::int64_t stamp = micros();
         const auto at = [](std::int64_t ts) {

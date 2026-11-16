@@ -15,9 +15,9 @@
 #include <dftracer/utils/coro/channel.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/memory/clock.h>
 #include <dftracer/utils/runtime/runtime.h>
 
 #include <algorithm>
@@ -145,9 +145,9 @@ int main(int argc, char** argv) {
             std::atomic<std::uint64_t> seen{0};
             const std::uint64_t instr_start =
                 dftu::bench::instructions_retired();
-            const auto start = memory::steady_now();
+            const auto start = dstd::steady_now();
             dftu::bench::ok(runtime.block_on(run_case(c, items, sum, seen)));
-            const auto stop = memory::steady_now();
+            const auto stop = dstd::steady_now();
             const std::uint64_t instr_stop =
                 dftu::bench::instructions_retired();
             if (sum.load() != expected || seen.load() != total) {

@@ -20,6 +20,7 @@
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/op.h>
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/hash/fnv1a.h>
 #include <dftracer/utils/dstd/map.h>
@@ -29,7 +30,6 @@
 #include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/memory/clock.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 #include <fcntl.h>
@@ -718,7 +718,7 @@ constexpr std::size_t MAX_PARALLEL_CHILDREN = 4;
 // Runs on worker threads, so it makes no assertion. The caller checks `piped`
 // and `forked`.
 ChildResult run_child(const dstd::String& op) {
-    const auto started = memory::steady_now();
+    const auto started = dstd::steady_now();
     ChildResult r;
     int fds[2];
     pid_t pid;
@@ -754,7 +754,7 @@ ChildResult run_child(const dstd::String& op) {
     char buf[256];
     bool timed_out = false;
     for (;;) {
-        const auto left = CHILD_TIMEOUT - (memory::steady_now() - started);
+        const auto left = CHILD_TIMEOUT - (dstd::steady_now() - started);
         if (left <= std::chrono::steady_clock::duration::zero()) {
             timed_out = true;
             break;
@@ -783,7 +783,7 @@ ChildResult run_child(const dstd::String& op) {
     struct rusage ru{};
     ::wait4(pid, &status, 0, &ru);
     r.seconds =
-        std::chrono::duration<double>(memory::steady_now() - started).count();
+        std::chrono::duration<double>(dstd::steady_now() - started).count();
     r.status = WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status);
     if (timed_out) r.status = -2;
 #if defined(__APPLE__)

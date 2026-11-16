@@ -21,13 +21,13 @@
 
 #include <bench_counters.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/fileio/compress/libdeflate_gzip.h>
-#include <dftracer/utils/memory/clock.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/views/view.h>
 
@@ -245,7 +245,7 @@ std::uint64_t checksum(const dataframe::DataFrame& f,
 
 double now_ms() {
     return std::chrono::duration<double, std::milli>(
-               memory::steady_now().time_since_epoch())
+               dstd::steady_now().time_since_epoch())
         .count();
 }
 

@@ -5,6 +5,7 @@
 #include <dftracer/utils/dataframe/agg_spill.h>
 #include <dftracer/utils/dataframe/internal/spill.h>
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -13,7 +14,6 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/memory/clock.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 #include <fcntl.h>
@@ -462,8 +462,8 @@ TEST_SUITE("spill errors") {
         rt.submit(open_task(), "open");
         rt.submit(other_task(), "other");
 
-        const auto deadline = memory::steady_now() + std::chrono::seconds(5);
-        while (!other_ran.load() && memory::steady_now() < deadline)
+        const auto deadline = dstd::steady_now() + std::chrono::seconds(5);
+        while (!other_ran.load() && dstd::steady_now() < deadline)
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         const bool ran_while_blocked = other_ran.load() && !opened.load();
 

@@ -4,9 +4,9 @@
 
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/coro/when_any.h>
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/result.h>
-#include <dftracer/utils/memory/clock.h>
 
 #include <chrono>
 #include <type_traits>
@@ -52,7 +52,7 @@ template <typename T, typename Duration>
 CoroTask<dstd::Result<T>> with_deadline(
     CoroTask<T> task,
     std::chrono::time_point<std::chrono::steady_clock, Duration> deadline) {
-    return with_timeout(std::move(task), deadline - memory::steady_now());
+    return with_timeout(std::move(task), deadline - dstd::steady_now());
 }
 
 }  // namespace dftracer::utils::coro

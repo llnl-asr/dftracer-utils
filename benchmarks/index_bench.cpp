@@ -26,6 +26,7 @@
 #include <bench_ok.h>
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/function_ref.h>
 #include <dftracer/utils/dstd/hash_map.h>
@@ -39,7 +40,6 @@
 #include <dftracer/utils/fileio/compress/libdeflate_gzip.h>
 #include <dftracer/utils/fileio/file_helpers.h>
 #include <dftracer/utils/fileio/lines/sources/async_streaming_gz_line_generator.h>
-#include <dftracer/utils/memory/clock.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/index/indexer.h>
 #include <dftracer/utils/trace/index/plan/chunk_pruner.h>
@@ -110,9 +110,9 @@ void run_scoped(Fn fn) {
 }
 
 double seconds(dstd::FunctionRef<void()> f) {
-    const auto t0 = memory::steady_now();
+    const auto t0 = dstd::steady_now();
     f();
-    return std::chrono::duration<double>(memory::steady_now() - t0).count();
+    return std::chrono::duration<double>(dstd::steady_now() - t0).count();
 }
 
 double median(dstd::Vector<double> v) {

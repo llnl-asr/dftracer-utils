@@ -5,13 +5,13 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/coro/detail/coro.h>
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/fileio/gzip_line_writer.h>
-#include <dftracer/utils/memory/clock.h>
 #include <dftracer/utils/runtime/fs/fs.h>
 #include <dftracer/utils/runtime/io/ops.h>
 #include <fcntl.h>
@@ -214,7 +214,7 @@ static int run_pgzip(const PgzipArgParse& cli) {
     std::printf("  Executor threads: %zu\n", executor_threads);
     std::printf("==========================================\n\n");
 
-    auto start_time = memory::steady_now();
+    auto start_time = dstd::steady_now();
 
     dstd::Vector<FileResult> results;
     std::mutex results_mutex;
@@ -303,7 +303,7 @@ static int run_pgzip(const PgzipArgParse& cli) {
         });
     if (!ran) return cli::report_error(ran.error());
 
-    auto end_time = memory::steady_now();
+    auto end_time = dstd::steady_now();
     std::chrono::duration<double, std::milli> duration = end_time - start_time;
 
     std::size_t successful = 0;

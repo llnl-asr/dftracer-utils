@@ -5,11 +5,11 @@
 #include <dftracer/utils/common/timer.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/memory/clock.h>
 
 #include <atomic>
 #include <chrono>
@@ -129,8 +129,7 @@ struct GroupProgress {
     dstd::Function<void()> on_update;
 
     void enter(Phase p) noexcept {
-        phase_since_ns.store(memory::steady_now_ns(),
-                             std::memory_order_relaxed);
+        phase_since_ns.store(dstd::steady_now_ns(), std::memory_order_relaxed);
         phase.store(p, std::memory_order_relaxed);
     }
 

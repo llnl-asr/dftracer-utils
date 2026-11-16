@@ -3,10 +3,10 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/symbolize.h>
 #include <dftracer/utils/common/timer.h>
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/ptr_hash.h>
-#include <dftracer/utils/memory/clock.h>
 #include <unistd.h>
 
 #include <chrono>
@@ -86,7 +86,7 @@ const char* base_name(const char* path) {
 }
 
 dstd::StringView make_timestamp(char* out, std::size_t n) {
-    const std::uint64_t now_ns = memory::system_now_ns();
+    const std::uint64_t now_ns = dstd::system_now_ns();
     const auto ms = (now_ns / 1000000ULL) % 1000ULL;
     const std::time_t t = static_cast<std::time_t>(now_ns / 1000000000ULL);
     std::tm tm;
@@ -215,13 +215,13 @@ void* scope_open(const char* file, int line, dstd::StringView label) {
                           dstd::String(label),
                           file,
                           line,
-                          static_cast<std::int64_t>(memory::steady_now_ns())};
+                          static_cast<std::int64_t>(dstd::steady_now_ns())};
 }
 
 void scope_close(void* handle) {
     auto* frame = static_cast<ScopeFrame*>(handle);
     const double ms =
-        static_cast<double>(memory::steady_now_ns() - frame->start_ns) / 1e6;
+        static_cast<double>(dstd::steady_now_ns() - frame->start_ns) / 1e6;
     write<"<- {} [{:.2f} ms]">(Level::Trace, frame->file, frame->line,
                                frame->label, ms);
     delete frame;

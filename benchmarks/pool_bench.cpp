@@ -24,9 +24,9 @@
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/coro/yield.h>
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/memory/clock.h>
 #include <dftracer/utils/runtime/runtime.h>
 
 #include <algorithm>
@@ -227,10 +227,10 @@ int main(int argc, char** argv) {
         dstd::Vector<double> times;
         for (int rep = 0; rep < config.reps; ++rep) {
             Runtime rt(ExecutorConfig{.thread_count = config.threads}, false);
-            const auto start = memory::steady_now();
+            const auto start = dstd::steady_now();
             const Outcome outcome = item.run(config, rt);
             const std::chrono::duration<double, std::nano> took =
-                memory::steady_now() - start;
+                dstd::steady_now() - start;
             if (outcome.ops != outcome.counted) {
                 std::fprintf(stderr, "%s: %llu ops, counted %llu\n", item.name,
                              static_cast<unsigned long long>(outcome.ops),

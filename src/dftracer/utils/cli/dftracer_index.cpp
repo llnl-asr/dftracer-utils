@@ -3,6 +3,7 @@
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -11,7 +12,6 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/fileio/file_helpers.h>
-#include <dftracer/utils/memory/clock.h>
 #include <dftracer/utils/plugins/host/plugins.h>
 #include <dftracer/utils/trace/index/build/aggregation_run.h>
 #include <dftracer/utils/trace/index/build/batch_builder.h>
@@ -225,9 +225,9 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
     }
     std::printf("==========================================\n\n");
 
-    auto stage_start = memory::steady_now();
+    auto stage_start = dstd::steady_now();
     auto log_stage = [&stage_start](const char* name) {
-        const auto now = memory::steady_now();
+        const auto now = dstd::steady_now();
         DFTRACER_UTILS_LOG_DEBUG(
             "dftracer_index: stage={} ms={:.2f}", name,
             std::chrono::duration<double, std::milli>(now - stage_start)
@@ -240,7 +240,7 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
     if (!scanned) co_return cli::report_error(scanned.error());
     auto matched_entries = std::move(*scanned);
 
-    const auto start_time = memory::steady_now();
+    const auto start_time = dstd::steady_now();
     if (matched_entries.empty()) {
         DFTRACER_UTILS_LOG_ERROR("No trace files found in: {}", log_dir);
         co_return 1;
@@ -274,7 +274,7 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
 
     if (matched_entries.empty()) {
         print_summary(
-            std::chrono::duration<double>(memory::steady_now() - start_time)
+            std::chrono::duration<double>(dstd::steady_now() - start_time)
                 .count(),
             0, skipped_fresh, 0, 0, all_dimensions);
         co_return 0;
@@ -373,7 +373,7 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
         batch_result.metrics.max_spill_runs);
 
     log_stage("close");
-    auto end_time = memory::steady_now();
+    auto end_time = dstd::steady_now();
     std::chrono::duration<double, std::milli> duration = end_time - start_time;
 
     print_summary(duration.count() / 1000.0, batch_result.indexed,

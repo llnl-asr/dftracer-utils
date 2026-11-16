@@ -4,13 +4,13 @@
 #include <dftracer/utils/coro/generator.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/yield.h>
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/memory/clock.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 #include <task_result.h>
@@ -230,9 +230,9 @@ TEST_CASE("Channel - receive waits before first producer registration") {
         CHECK(blocking_send(channel, 123));
     });
 
-    const auto deadline = memory::steady_now() + std::chrono::seconds(5);
+    const auto deadline = dstd::steady_now() + std::chrono::seconds(5);
     while (!consumer_done.load(std::memory_order_acquire) &&
-           memory::steady_now() < deadline) {
+           dstd::steady_now() < deadline) {
         std::this_thread::sleep_for(std::chrono::microseconds(100));
     }
 
@@ -606,11 +606,11 @@ TEST_CASE("Channel - close wakes blocked receive" * doctest::test_suite("vg")) {
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
 
-    auto t0 = memory::steady_now();
+    auto t0 = dstd::steady_now();
     channel.close();
     receiver.join();
     auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-        memory::steady_now() - t0);
+        dstd::steady_now() - t0);
 
     CHECK(receive_result == false);
     CHECK(receive_done.load(std::memory_order_acquire) == true);
@@ -640,11 +640,11 @@ TEST_CASE("Channel - last producer release wakes blocked receive") {
 
     CHECK(channel.producer_count() == 1);
 
-    auto t0 = memory::steady_now();
+    auto t0 = dstd::steady_now();
     guard.reset();
     receiver.join();
     auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-        memory::steady_now() - t0);
+        dstd::steady_now() - t0);
 
     CHECK(receive_result == false);
     CHECK(channel.producer_count() == 0);

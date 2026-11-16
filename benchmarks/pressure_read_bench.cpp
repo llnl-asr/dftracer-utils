@@ -15,10 +15,10 @@
 //   pressure_read_bench --smoke   (5 runs of 100 reads, checks each read is
 //   nonzero)
 
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/memory/clock.h>
 #include <memory_probe.h>
 
 #include <algorithm>
@@ -51,13 +51,13 @@ bool measure(const dftracer::utils::dstd::String& name, std::size_t reads,
     dftracer::utils::dstd::Vector<double> runs;
     bool nonzero = true;
     for (std::size_t r = 0; r < RUNS; ++r) {
-        const auto t0 = dftracer::utils::memory::steady_now();
+        const auto t0 = dftracer::utils::dstd::steady_now();
         for (std::size_t i = 0; i < reads; ++i) {
             const std::uint64_t v = read_once();
             if (v == 0) nonzero = false;
             sink = sink + v;
         }
-        const auto t1 = dftracer::utils::memory::steady_now();
+        const auto t1 = dftracer::utils::dstd::steady_now();
         runs.push_back(
             std::chrono::duration<double, std::nano>(t1 - t0).count() /
             static_cast<double>(reads));

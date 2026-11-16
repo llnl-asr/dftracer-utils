@@ -15,6 +15,7 @@
 #include <dftracer/utils/dataframe/parallel.h>
 #include <dftracer/utils/dataframe/udf.h>
 #include <dftracer/utils/dataframe/udf_registry.h>
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -22,7 +23,6 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/memory/clock.h>
 #include <dftracer/utils/plugins/host/plugins.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/index/indexer.h>
@@ -371,12 +371,12 @@ TEST_CASE("a slow UDF stops within one step after a deadline") {
 
     // 400 rows in steps of 4 rows at 10 ms each take a second.
     const std::int64_t before = counter("udf_plugin_slow_steps");
-    const auto start = memory::steady_now();
+    const auto start = dstd::steady_now();
     auto task =
         coro::with_timeout(v.duql("derive y = uslow(dur) | select y").collect(),
                            std::chrono::milliseconds(100));
     auto got = default_runtime().submit(std::move(task)).get();
-    const auto elapsed = memory::steady_now() - start;
+    const auto elapsed = dstd::steady_now() - start;
 
     REQUIRE_FALSE(got.has_value());
     CHECK(got.error().condition() == dstd::Condition::Timeout);
@@ -556,12 +556,12 @@ TEST_CASE("a cancel reaches a UDF running in the parallel windows of eval") {
     REQUIRE(call.has_value());
 
     const std::int64_t before = counter("udf_plugin_slow_steps");
-    const auto start = memory::steady_now();
+    const auto start = dstd::steady_now();
     auto task = coro::with_timeout(
         eval_cancellable((*call)(dataframe::col(0)), &series),
         std::chrono::milliseconds(100));
     auto got = default_runtime().submit(std::move(task)).get();
-    const auto elapsed = memory::steady_now() - start;
+    const auto elapsed = dstd::steady_now() - start;
 
     REQUIRE_FALSE(got.has_value());
     CHECK(got.error().condition() == dstd::Condition::Timeout);

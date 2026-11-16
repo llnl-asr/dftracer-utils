@@ -15,9 +15,9 @@
 // instructions can be subtracted from a perf stat run.
 
 #include <dftracer/utils/dataframe/sketch.h>
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/memory/clock.h>
 #include <dftracer/utils/trace/index/schemas/dft/agg/quantile_store.h>
 
 #include <chrono>
@@ -46,7 +46,7 @@ int main(int argc, char** argv) {
     Vector<double> v(VALUES);
     for (auto& x : v) x = dist(rng);
 
-    const auto t0 = memory::steady_now();
+    const auto t0 = dstd::steady_now();
     double sink = 0.0;
     if (!std::strcmp(name, "dd_add")) {
         dataframe::DDSketch s;
@@ -69,7 +69,7 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "unknown case %s\n", name);
         return 2;
     }
-    const auto t1 = memory::steady_now();
+    const auto t1 = dstd::steady_now();
     const double ns =
         std::chrono::duration<double, std::nano>(t1 - t0).count() / VALUES;
     std::printf("%s: %.2f ns/value (median %.1f)\n", name, ns, sink);

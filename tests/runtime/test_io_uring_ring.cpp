@@ -7,11 +7,11 @@
 #ifdef DFTRACER_UTILS_HAVE_IO_URING
 
 #include <arpa/inet.h>
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/memory/clock.h>
 #include <dftracer/utils/runtime/io/io_uring_prep.h>
 #include <dftracer/utils/runtime/io/io_uring_register.h>
 #include <dirent.h>
@@ -71,7 +71,7 @@ unsigned done_buffer_id(const Done& done) {
 bool reap(Ring& ring, std::size_t count, Dones& all,
           int limit_ms = WAIT_LIMIT_MS) {
     const auto deadline =
-        memory::steady_now() + std::chrono::milliseconds(limit_ms);
+        dstd::steady_now() + std::chrono::milliseconds(limit_ms);
     for (;;) {
         ring.flush_completions();
         while (struct io_uring_cqe* cqe = ring.peek_cqe()) {
@@ -81,7 +81,7 @@ bool reap(Ring& ring, std::size_t count, Dones& all,
         if (all.size() >= count) return true;
         const std::int64_t left =
             std::chrono::duration_cast<std::chrono::milliseconds>(
-                deadline - memory::steady_now())
+                deadline - dstd::steady_now())
                 .count();
         if (left <= 0) return false;
         const int ret = ring.enter_wait(left < 50 ? left : 50);
@@ -1332,7 +1332,7 @@ TEST_CASE("uring register: a registered clock times an absolute wait") {
     boot.clockid = CLOCK_BOOTTIME;
     REQUIRE(register_clock(ring, boot) == 0);
 
-    const std::uint64_t now_ns = memory::posix_clock_now_ns(CLOCK_BOOTTIME);
+    const std::uint64_t now_ns = dstd::posix_clock_now_ns(CLOCK_BOOTTIME);
     KernelTimespec target = {
         static_cast<std::int64_t>(now_ns / 1000000000ULL),
         static_cast<long long>(now_ns % 1000000000ULL) + 100000000};
@@ -1344,14 +1344,14 @@ TEST_CASE("uring register: a registered clock times an absolute wait") {
     std::memset(&arg, 0, sizeof(arg));
     arg.sigmask_sz = _NSIG / 8;
     arg.ts = reinterpret_cast<std::uint64_t>(&target);
-    const auto start = memory::steady_now();
+    const auto start = dstd::steady_now();
     const long ret = ::syscall(
         __NR_io_uring_enter, ring.fd(), 0U, 1U,
         IORING_ENTER_GETEVENTS | IORING_ENTER_EXT_ARG | IORING_ENTER_ABS_TIMER,
         &arg, sizeof(arg));
     const int err = errno;
     const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-        memory::steady_now() - start);
+        dstd::steady_now() - start);
     CHECK(ret == -1);
     CHECK(err == ETIME);
     CHECK(elapsed.count() >= 80);
@@ -1454,14 +1454,14 @@ TEST_CASE("uring register: a wait region times an enter by its slot") {
 
     // EXT_ARG_REG alone is not enough: without EXT_ARG the kernel takes the
     // argument as a sigmask pointer, reads no slot and waits with no timeout.
-    const auto start = memory::steady_now();
+    const auto start = dstd::steady_now();
     const long ret = ::syscall(__NR_io_uring_enter, ring.fd(), 0U, 1U,
                                IORING_ENTER_GETEVENTS | IORING_ENTER_EXT_ARG |
                                    IORING_ENTER_EXT_ARG_REG,
                                0UL, sizeof(RegWait));
     const int err = errno;
     const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-        memory::steady_now() - start);
+        dstd::steady_now() - start);
     CHECK(ret == -1);
     CHECK(err == ETIME);
     CHECK(elapsed.count() >= 20);

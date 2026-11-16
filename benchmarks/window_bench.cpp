@@ -12,11 +12,11 @@
 #include <dftracer/utils/dataframe/frame_ops.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dataframe/types.h>
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/memory/clock.h>
 
 #include <algorithm>
 #include <chrono>
@@ -121,10 +121,10 @@ int main(int argc, char** argv) {
                     make_spec(c, mode, width)};
                 dftracer::utils::dstd::Vector<double> ms;
                 for (int r = 0; r < reps; ++r) {
-                    const auto t0 = memory::steady_now();
+                    const auto t0 = dstd::steady_now();
                     DataFrame out = dftu::bench::ok(
                         dataframe::window(frame, part, order, specs));
-                    const auto t1 = memory::steady_now();
+                    const auto t1 = dstd::steady_now();
                     ms.push_back(
                         std::chrono::duration<double, std::milli>(t1 - t0)
                             .count());

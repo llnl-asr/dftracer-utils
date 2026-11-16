@@ -17,6 +17,7 @@
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/op.h>
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/function_ref.h>
@@ -25,7 +26,6 @@
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/fileio/compress/libdeflate_gzip.h>
-#include <dftracer/utils/memory/clock.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/views/typed_rows.h>
 #include <dftracer/utils/trace/views/view.h>
@@ -231,9 +231,9 @@ dstd::Vector<Row> rows_via_collect(const View& v,
 }
 
 double seconds(dstd::FunctionRef<void()> f) {
-    const auto t0 = memory::steady_now();
+    const auto t0 = dstd::steady_now();
     f();
-    return std::chrono::duration<double>(memory::steady_now() - t0).count();
+    return std::chrono::duration<double>(dstd::steady_now() - t0).count();
 }
 
 double median(dstd::Vector<double> v) {

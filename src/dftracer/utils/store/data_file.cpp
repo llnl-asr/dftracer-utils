@@ -5,6 +5,7 @@
 #include <dftracer/utils/dstd/algorithm.h>
 #include <dftracer/utils/dstd/ascii.h>
 #include <dftracer/utils/dstd/bits.h>
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/little_endian.h>
@@ -15,7 +16,6 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/memory/clock.h>
 #include <dftracer/utils/memory/detail/heap.h>
 #include <dftracer/utils/store/crc.h>
 #include <dftracer/utils/store/data_file.h>
@@ -176,7 +176,7 @@ dstd::ByteView bytes_of(const dstd::RawBuffer<std::uint8_t>& bytes) {
 }
 
 std::uint64_t random_writer_id() {
-    const auto now = memory::steady_now_ns();
+    const auto now = dstd::steady_now_ns();
     std::uint64_t seed = static_cast<std::uint64_t>(now) ^
                          (static_cast<std::uint64_t>(::getpid()) << 32U) ^
                          reinterpret_cast<std::uintptr_t>(&seed);
@@ -650,7 +650,7 @@ dstd::Expected<DataFileWriter, dstd::Error> DataFileWriter::create(
     writer.label_.assign(label.data(), label.size());
     writer.pid_ = static_cast<std::uint32_t>(::getpid());
     writer.writer_random_ = random_writer_id();
-    writer.creation_time_ = memory::system_now_ns();
+    writer.creation_time_ = dstd::system_now_ns();
 
     auto header = writer.write_header();
     if (!header) return dstd::Unexpected<dstd::Error>(header.error());

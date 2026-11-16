@@ -4,6 +4,7 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/dstd/algorithm.h>
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/deque.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
@@ -17,7 +18,6 @@
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/memory/clock.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/store/scope_filter.h>
 #include <dftracer/utils/store/snapshot.h>
@@ -105,8 +105,7 @@ bool has_data_file_suffix(dstd::StringView name) {
 }
 
 double ms_since(std::chrono::steady_clock::time_point start) {
-    return std::chrono::duration<double, std::milli>(memory::steady_now() -
-                                                     start)
+    return std::chrono::duration<double, std::milli>(dstd::steady_now() - start)
         .count();
 }
 
@@ -592,7 +591,7 @@ dstd::Expected<void, dstd::Error> Snapshot::load(dstd::StringView dir) {
     }
     pages_ = dstd::make_unique<PageCache>(cache_bytes);
     groups_ = dstd::make_unique<detail::GroupIndex>();
-    const auto start = memory::steady_now();
+    const auto start = dstd::steady_now();
     dstd::Vector<dstd::String> names;
     const auto dir_handle = dstd::fs::Dir::open(dstd::PathView(dir));
     if (!dir_handle) return io_error();
@@ -611,7 +610,7 @@ dstd::Expected<void, dstd::Error> Snapshot::load(dstd::StringView dir) {
             summarized.emplace(entry.name, &entry);
         }
     }
-    const auto listed = memory::steady_now();
+    const auto listed = dstd::steady_now();
 
     Runtime* const runtime =
         names.size() >= PARALLEL_OPEN_FILES ? fork_join_runtime() : nullptr;
@@ -651,7 +650,7 @@ dstd::Expected<void, dstd::Error> Snapshot::load(dstd::StringView dir) {
     if (auto ran = for_each_index(runtime, names.size(), 1, open_one); !ran) {
         return dstd::Unexpected<dstd::Error>(ran.error());
     }
-    const auto open_done = memory::steady_now();
+    const auto open_done = dstd::steady_now();
 
     for (std::size_t index = 0; index < names.size(); ++index) {
         if (open_errors[index]) {
@@ -698,7 +697,7 @@ dstd::Expected<void, dstd::Error> Snapshot::load(dstd::StringView dir) {
             commit->file_index = index;
         }
     }
-    const auto built = memory::steady_now();
+    const auto built = dstd::steady_now();
 
     reads_ = dstd::make_unique<detail::ReadCounters>();
     open_stats_ = OpenStats{};

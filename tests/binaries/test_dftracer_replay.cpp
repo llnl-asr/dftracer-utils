@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/memory/clock.h>
 #include <doctest/doctest.h>
 #include <spawn.h>
 #include <sys/wait.h>
@@ -511,10 +511,10 @@ TEST_SUITE("DFTracerReplay") {
             dstd::String((temp_dir / "perf_trace.pfw.gz").str());
         create_sample_trace(trace_file, 50);
 
-        auto start = memory::steady_now();
+        auto start = dstd::steady_now();
         int rc = run_replay(binary, {"--dftracer-mode", "--no-sleep",
                                      "--no-timing", trace_file});
-        auto end = memory::steady_now();
+        auto end = dstd::steady_now();
 
         CHECK(rc == 0);
 
@@ -857,9 +857,9 @@ TEST_SUITE("DFTracerReplay") {
             dstd::String((temp_dir / "large_trace.pfw.gz").str());
         create_sample_trace(large_trace, 1000);
 
-        auto start = memory::steady_now();
+        auto start = dstd::steady_now();
         int rc = run_replay(binary, {"--dry-run", large_trace});
-        auto end = memory::steady_now();
+        auto end = dstd::steady_now();
 
         CHECK(rc == 0);
 

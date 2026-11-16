@@ -633,9 +633,9 @@ TEST_SUITE("CommGroup") {
             rt, 2,
             [&](std::uint32_t rank) -> coro::CoroTask<dstd::Result<void>> {
                 comm::Group world = communicator.world(rank);
-                auto child = co_await world.split(0, rank);
-                if (!child) co_return std::move(child).error();
-                co_return co_await child->barrier();
+                auto made = co_await world.split(0, rank);
+                if (!made) co_return std::move(made).error();
+                co_return co_await made->barrier();
             });
         for (std::uint32_t rank = 0; rank < 2; ++rank) {
             REQUIRE(errors[rank].has_value());

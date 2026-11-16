@@ -350,8 +350,9 @@ TEST_SUITE("CommCollectivesMore") {
                             for (std::size_t at = 0; at < block; ++at)
                                 values.push_back(static_cast<std::int32_t>(
                                     rank * 100 + dest * 10 + at));
-                        auto out = co_await group.all_to_all(
+                        auto out_op = group.all_to_all(
                             dstd::Span<const std::int32_t>(values));
+                        auto out = co_await out_op;
                         if (!out) co_return std::move(out).error();
                         got[rank] = *out;
                         co_return {};
@@ -383,9 +384,10 @@ TEST_SUITE("CommCollectivesMore") {
                 dstd::Vector<dstd::Span<const std::byte>> blocks;
                 for (const std::string& text : texts)
                     blocks.push_back(bytes_of(text));
-                auto out = co_await group.all_to_all(
+                auto out_op = group.all_to_all(
                     dstd::Span<const dstd::Span<const std::byte>>(
                         blocks.data(), blocks.size()));
+                auto out = co_await out_op;
                 if (!out) co_return std::move(out).error();
                 got[rank] = *out;
                 co_return {};
@@ -430,38 +432,45 @@ TEST_SUITE("CommCollectivesMore") {
                         bytes_of(text), bytes_of(text), bytes_of(text)};
                     dstd::Result<void> outcome;
                     if (which == "split") {
-                        auto got = co_await group.all_to_all(
+                        auto got_op = group.all_to_all(
                             dstd::Span<const std::int32_t>(four));
+                        auto got = co_await got_op;
                         if (!got) outcome = std::move(got).error();
                     } else if (which == "blocks") {
-                        auto got = co_await group.all_to_all(
+                        auto got_op = group.all_to_all(
                             dstd::Span<const dstd::Span<const std::byte>>(
                                 two.data(), two.size()));
+                        auto got = co_await got_op;
                         if (!got) outcome = std::move(got).error();
                     } else if (which == "count") {
-                        auto got = co_await group.all_to_all(
-                            dstd::Span<const std::int32_t>(rank == 0 ? three
-                                                                     : six));
+                        auto got_op =
+                            group.all_to_all(dstd::Span<const std::int32_t>(
+                                rank == 0 ? three : six));
+                        auto got = co_await got_op;
                         if (!got) outcome = std::move(got).error();
                     } else if (which == "layout") {
                         if (rank == 0) {
-                            auto got = co_await group.all_to_all(
+                            auto got_op = group.all_to_all(
                                 dstd::Span<const std::int32_t>(three));
+                            auto got = co_await got_op;
                             if (!got) outcome = std::move(got).error();
                         } else {
-                            auto got = co_await group.all_to_all(
+                            auto got_op = group.all_to_all(
                                 dstd::Span<const dstd::Span<const std::byte>>(
                                     blocks.data(), blocks.size()));
+                            auto got = co_await got_op;
                             if (!got) outcome = std::move(got).error();
                         }
                     } else {
                         if (rank == 0) {
-                            auto got = co_await group.all_to_all(
+                            auto got_op = group.all_to_all(
                                 dstd::Span<const std::int32_t>(three));
+                            auto got = co_await got_op;
                             if (!got) outcome = std::move(got).error();
                         } else {
-                            auto got = co_await group.all_gather(
+                            auto got_op = group.all_gather(
                                 dstd::Span<const std::int32_t>(three));
+                            auto got = co_await got_op;
                             if (!got) outcome = std::move(got).error();
                         }
                     }
@@ -490,9 +499,10 @@ TEST_SUITE("CommCollectivesMore") {
                 comm::Group group = communicator.world(rank);
                 const dstd::Vector<Row> rows = rows_of(rank);
                 const std::uint32_t count = ranks;
-                auto out = co_await group.exchange_by(
+                auto out_op = group.exchange_by(
                     dstd::Span<const Row>(rows),
                     [count](const Row& row) { return row.key % count; });
+                auto out = co_await out_op;
                 if (!out) co_return std::move(out).error();
                 got[rank] = *out;
                 co_return {};
@@ -523,10 +533,11 @@ TEST_SUITE("CommCollectivesMore") {
                 const dstd::Vector<Row> rows = {Row{0, 0, 0}, Row{1, 1, 0}};
                 const std::uint32_t count = ranks;
                 const std::uint32_t me = rank;
-                auto out = co_await group.exchange_by(
+                auto out_op = group.exchange_by(
                     dstd::Span<const Row>(rows), [count, me](const Row& row) {
                         return me == 0 && row.seq == 1 ? count : 0u;
                     });
+                auto out = co_await out_op;
                 if (!out) co_return std::move(out).error();
                 co_return {};
             });
@@ -560,32 +571,36 @@ TEST_SUITE("CommCollectivesMore") {
                 dstd::Vector<std::int64_t> values;
                 for (std::size_t at = 0; at < block * ranks; ++at)
                     values.push_back(value(rank, at));
-                auto one = co_await group.reduce_scatter(
-                    dstd::Span<const std::int64_t>(values),
-                    comm::ReduceOp::Sum);
+                auto one_op =
+                    group.reduce_scatter(dstd::Span<const std::int64_t>(values),
+                                         comm::ReduceOp::Sum);
+                auto one = co_await one_op;
                 if (!one) co_return std::move(one).error();
                 equal[rank] = *one;
                 comm::CallOpts any_order;
                 any_order.reduce_order = comm::ReduceOrder::Any;
-                auto loose = co_await group.reduce_scatter(
-                    dstd::Span<const std::int64_t>(values), comm::ReduceOp::Sum,
-                    any_order);
+                auto loose_op =
+                    group.reduce_scatter(dstd::Span<const std::int64_t>(values),
+                                         comm::ReduceOp::Sum, any_order);
+                auto loose = co_await loose_op;
                 if (!loose) co_return std::move(loose).error();
                 any[rank] = *loose;
                 dstd::Vector<std::int64_t> uneven;
                 for (std::size_t at = 0; at < total; ++at)
                     uneven.push_back(value(rank, at));
-                auto split = co_await group.reduce_scatter(
+                auto split_op = group.reduce_scatter(
                     dstd::Span<const std::int64_t>(uneven),
                     dstd::Span<const std::size_t>(counts), comm::ReduceOp::Max);
+                auto split = co_await split_op;
                 if (!split) co_return std::move(split).error();
                 counted[rank] = *split;
                 auto fold = [](const std::int64_t& left,
                                const std::int64_t& right) {
                     return left * 3 + right;
                 };
-                auto custom = co_await group.reduce_scatter(
+                auto custom_op = group.reduce_scatter(
                     dstd::Span<const std::int64_t>(values), fold);
+                auto custom = co_await custom_op;
                 if (!custom) co_return std::move(custom).error();
                 picked[rank] = *custom;
                 co_return {};
@@ -630,13 +645,15 @@ TEST_SUITE("CommCollectivesMore") {
                     run_ranks(rt, ranks, [&](std::uint32_t rank) -> Task {
                         comm::Group group = communicator.world(rank);
                         const dstd::Vector<float> values(ranks, value(rank));
-                        auto one = co_await group.reduce_scatter(
+                        auto one_op = group.reduce_scatter(
                             dstd::Span<const float>(values),
                             comm::ReduceOp::Sum);
+                        auto one = co_await one_op;
                         if (!one) co_return std::move(one).error();
                         scattered[rank] = (*one)[0];
-                        auto two = co_await group.scan(value(rank),
-                                                       comm::ReduceOp::Sum);
+                        auto two_op =
+                            group.scan(value(rank), comm::ReduceOp::Sum);
+                        auto two = co_await two_op;
                         if (!two) co_return std::move(two).error();
                         prefix[rank] = *two;
                         co_return {};
@@ -687,9 +704,10 @@ TEST_SUITE("CommCollectivesMore") {
                             opts.reduce_order = order;
                             dstd::Result<void> outcome;
                             if (which == "equal") {
-                                auto got = co_await group.reduce_scatter(
+                                auto got_op = group.reduce_scatter(
                                     dstd::Span<const std::int32_t>(values),
                                     comm::ReduceOp::Sum, opts);
+                                auto got = co_await got_op;
                                 if (!got) outcome = std::move(got).error();
                             } else {
                                 const auto& counts =
@@ -697,10 +715,11 @@ TEST_SUITE("CommCollectivesMore") {
                                     : which == "overflow"
                                         ? wrap
                                         : (rank == 1 ? second : first);
-                                auto got = co_await group.reduce_scatter(
+                                auto got_op = group.reduce_scatter(
                                     dstd::Span<const std::int32_t>(values),
                                     dstd::Span<const std::size_t>(counts),
                                     comm::ReduceOp::Sum, opts);
+                                auto got = co_await got_op;
                                 if (!got) outcome = std::move(got).error();
                             }
                             co_return outcome;
@@ -720,10 +739,11 @@ TEST_SUITE("CommCollectivesMore") {
             auto errors = run_ranks(rt, ranks, [&](std::uint32_t rank) -> Task {
                 comm::Group group = communicator.world(rank);
                 const dstd::Vector<Row> rows = {Row{0, 0, 0}};
-                auto out = co_await group.exchange_by(
+                auto out_op = group.exchange_by(
                     dstd::Span<const Row>(rows), [](const Row&) {
                         return std::uint64_t{(std::uint64_t{1} << 32) + 1};
                     });
+                auto out = co_await out_op;
                 if (!out) co_return std::move(out).error();
                 co_return {};
             });
@@ -746,28 +766,31 @@ TEST_SUITE("CommCollectivesMore") {
                 comm::Group group = communicator.world(rank);
                 const std::int64_t mine = rank + 1;
                 const dstd::Vector<std::int64_t> values = {mine, mine * 10};
-                auto a =
-                    co_await group.scan(dstd::Span<const std::int64_t>(values),
-                                        comm::ReduceOp::Sum);
+                auto a_op = group.scan(dstd::Span<const std::int64_t>(values),
+                                       comm::ReduceOp::Sum);
+                auto a = co_await a_op;
                 if (!a) co_return std::move(a).error();
                 inclusive[rank] = *a;
-                auto b = co_await group.exclusive_scan(
-                    dstd::Span<const std::int64_t>(values),
-                    comm::ReduceOp::Max);
+                auto b_op =
+                    group.exclusive_scan(dstd::Span<const std::int64_t>(values),
+                                         comm::ReduceOp::Max);
+                auto b = co_await b_op;
                 if (!b) co_return std::move(b).error();
                 exclusive[rank] = *b;
                 auto join = [](const std::int64_t& left,
                                const std::int64_t& right) {
                     return left * 10 + right;
                 };
-                auto c = co_await group.scan(mine, join);
+                auto c_op = group.scan(mine, join);
+                auto c = co_await c_op;
                 if (!c) co_return std::move(c).error();
                 digits[rank] = *c;
-                auto d =
-                    co_await group.exclusive_scan(mine, comm::ReduceOp::Sum);
+                auto d_op = group.exclusive_scan(mine, comm::ReduceOp::Sum);
+                auto d = co_await d_op;
                 if (!d) co_return std::move(d).error();
                 before[rank] = *d;
-                auto e = co_await group.exclusive_scan(mine, join);
+                auto e_op = group.exclusive_scan(mine, join);
+                auto e = co_await e_op;
                 if (!e) co_return std::move(e).error();
                 before_digits[rank] = *e;
                 co_return {};
@@ -815,27 +838,30 @@ TEST_SUITE("CommCollectivesMore") {
                     dstd::Result<void> outcome;
                     if (which == 0) {
                         if (rank == 0) {
-                            auto got = co_await group.scan(
-                                dstd::Span<const std::int32_t>(one),
-                                comm::ReduceOp::Sum);
+                            auto got_op =
+                                group.scan(dstd::Span<const std::int32_t>(one),
+                                           comm::ReduceOp::Sum);
+                            auto got = co_await got_op;
                             if (!got) outcome = std::move(got).error();
                         } else {
-                            auto got = co_await group.exclusive_scan(
+                            auto got_op = group.exclusive_scan(
                                 dstd::Span<const std::int32_t>(one),
                                 comm::ReduceOp::Sum);
+                            auto got = co_await got_op;
                             if (!got) outcome = std::move(got).error();
                         }
                     } else if (which == 1) {
-                        auto got =
-                            co_await group.scan(dstd::Span<const std::int32_t>(
-                                                    rank == 0 ? two : one),
-                                                comm::ReduceOp::Sum);
+                        auto got_op = group.scan(dstd::Span<const std::int32_t>(
+                                                     rank == 0 ? two : one),
+                                                 comm::ReduceOp::Sum);
+                        auto got = co_await got_op;
                         if (!got) outcome = std::move(got).error();
                     } else {
-                        auto got = co_await group.scan(
-                            dstd::Span<const std::int32_t>(one),
-                            rank == 0 ? comm::ReduceOp::Sum
-                                      : comm::ReduceOp::Max);
+                        auto got_op =
+                            group.scan(dstd::Span<const std::int32_t>(one),
+                                       rank == 0 ? comm::ReduceOp::Sum
+                                                 : comm::ReduceOp::Max);
+                        auto got = co_await got_op;
                         if (!got) outcome = std::move(got).error();
                     }
                     co_return outcome;
@@ -880,8 +906,9 @@ TEST_SUITE("CommCollectivesMore") {
                     run_ranks(rt, ranks, [&](std::uint32_t rank) -> Task {
                         comm::Group group = communicator.world(rank);
                         const dstd::Vector<std::uint32_t> out = out_of(rank);
-                        auto made = co_await group.neighbors(
+                        auto made_op = group.neighbors(
                             dstd::Span<const std::uint32_t>(out));
+                        auto made = co_await made_op;
                         if (!made) co_return std::move(made).error();
                         comm::Neighborhood hood = *made;
                         const auto in_ranks = hood.in_neighbors();
@@ -894,9 +921,10 @@ TEST_SUITE("CommCollectivesMore") {
                             dstd::Vector<dstd::Span<const std::byte>> blocks;
                             for (const std::string& one : texts)
                                 blocks.push_back(bytes_of(one));
-                            auto got = co_await hood.neighbor_exchange(
+                            auto got_op = hood.neighbor_exchange(
                                 dstd::Span<const dstd::Span<const std::byte>>(
                                     blocks.data(), blocks.size()));
+                            auto got = co_await got_op;
                             if (!got) co_return std::move(got).error();
                             for (std::uint32_t at = 0; at < got->size(); ++at)
                                 (round == 0 ? first : second)[rank].push_back(
@@ -905,8 +933,9 @@ TEST_SUITE("CommCollectivesMore") {
                         dstd::Vector<std::uint32_t> numbers;
                         for (const std::uint32_t to : out)
                             numbers.push_back(rank * 100 + to);
-                        auto sent = co_await hood.neighbor_exchange(
+                        auto sent_op = hood.neighbor_exchange(
                             dstd::Span<const std::uint32_t>(numbers));
+                        auto sent = co_await sent_op;
                         if (!sent) co_return std::move(sent).error();
                         for (std::uint32_t at = 0; at < sent->size(); ++at)
                             typed[rank].push_back(
@@ -953,8 +982,9 @@ TEST_SUITE("CommCollectivesMore") {
                                 else
                                     out = {ranks};
                             }
-                            auto made = co_await group.neighbors(
+                            auto made_op = group.neighbors(
                                 dstd::Span<const std::uint32_t>(out));
+                            auto made = co_await made_op;
                             if (!made) co_return std::move(made).error();
                             co_return {};
                         });
@@ -975,14 +1005,16 @@ TEST_SUITE("CommCollectivesMore") {
             auto errors = run_ranks(rt, ranks, [&](std::uint32_t rank) -> Task {
                 comm::Group group = communicator.world(rank);
                 const dstd::Vector<std::uint32_t> out = {(rank + 1) % ranks};
-                auto made = co_await group.neighbors(
-                    dstd::Span<const std::uint32_t>(out));
+                auto made_op =
+                    group.neighbors(dstd::Span<const std::uint32_t>(out));
+                auto made = co_await made_op;
                 if (!made) co_return std::move(made).error();
                 comm::Neighborhood hood = *made;
                 dstd::Vector<std::uint32_t> values = {1};
                 if (rank == 0) values.push_back(2);
-                auto got = co_await hood.neighbor_exchange(
+                auto got_op = hood.neighbor_exchange(
                     dstd::Span<const std::uint32_t>(values));
+                auto got = co_await got_op;
                 if (!got) co_return std::move(got).error();
                 co_return {};
             });
@@ -1013,16 +1045,19 @@ TEST_SUITE("CommCollectivesMore") {
                         comm::Group group = communicator.world(rank);
                         const Person mine{"rank" + std::to_string(rank),
                                           static_cast<std::int32_t>(rank + 20)};
-                        auto a = co_await group.all_gather_object(
-                            mine, PersonCodec{});
+                        auto a_op =
+                            group.all_gather_object(mine, PersonCodec{});
+                        auto a = co_await a_op;
                         if (!a) co_return std::move(a).error();
                         everyone[rank] = *a;
-                        auto b = co_await group.gather_object(root, mine,
-                                                              PersonCodec{});
+                        auto b_op =
+                            group.gather_object(root, mine, PersonCodec{});
+                        auto b = co_await b_op;
                         if (!b) co_return std::move(b).error();
                         rooted[rank] = *b;
-                        auto c = co_await group.broadcast_object(root, mine,
-                                                                 PersonCodec{});
+                        auto c_op =
+                            group.broadcast_object(root, mine, PersonCodec{});
+                        auto c = co_await c_op;
                         if (!c) co_return std::move(c).error();
                         cast[rank] = *c;
                         dstd::Vector<Person> sends;
@@ -1032,8 +1067,9 @@ TEST_SUITE("CommCollectivesMore") {
                                     std::to_string(dest),
                                 static_cast<std::int32_t>(100 + rank * 10 +
                                                           dest)});
-                        auto d = co_await group.all_to_all_object(
-                            std::move(sends), PersonCodec{});
+                        auto d_op = group.all_to_all_object(std::move(sends),
+                                                            PersonCodec{});
+                        auto d = co_await d_op;
                         if (!d) co_return std::move(d).error();
                         swapped[rank] = *d;
                         co_return {};
@@ -1091,12 +1127,14 @@ TEST_SUITE("CommCollectivesMore") {
                         for (std::uint32_t dest = 0; dest < ranks; ++dest)
                             sends.push_back(
                                 Person{"x", rank == 0 && dest == 1 ? 13 : 1});
-                        auto got = co_await group.all_to_all_object(
-                            std::move(sends), PersonCodec{});
+                        auto got_op = group.all_to_all_object(std::move(sends),
+                                                              PersonCodec{});
+                        auto got = co_await got_op;
                         if (!got) co_return std::move(got).error();
                         if (rank == 1 && binding == Binding::Linear)
                             co_return {};
-                        auto later = co_await group.barrier();
+                        auto later_op = group.barrier();
+                        auto later = co_await later_op;
                         co_return later;
                     });
                 if (binding == Binding::Local) {
@@ -1128,8 +1166,9 @@ TEST_SUITE("CommCollectivesMore") {
                     run_ranks(rt, ranks, [&](std::uint32_t rank) -> Task {
                         comm::Group group = communicator.world(rank);
                         const Person mine{"x", rank == 0 ? 13 : 1};
-                        auto got = co_await group.broadcast_object(
-                            0, mine, PersonCodec{});
+                        auto got_op =
+                            group.broadcast_object(0, mine, PersonCodec{});
+                        auto got = co_await got_op;
                         if (!got) co_return std::move(got).error();
                         co_return {};
                     });
@@ -1159,17 +1198,20 @@ TEST_SUITE("CommCollectivesMore") {
                         const Person mine{"x", rank == 0 ? 99 : 1};
                         dstd::Result<void> outcome;
                         if (which == 0) {
-                            auto got = co_await group.all_gather_object(
-                                mine, PersonCodec{});
+                            auto got_op =
+                                group.all_gather_object(mine, PersonCodec{});
+                            auto got = co_await got_op;
                             if (!got) outcome = std::move(got).error();
                         } else if (which == 1) {
-                            auto got = co_await group.broadcast_object(
-                                0, mine, PersonCodec{});
+                            auto got_op =
+                                group.broadcast_object(0, mine, PersonCodec{});
+                            auto got = co_await got_op;
                             if (!got) outcome = std::move(got).error();
                         } else {
                             dstd::Vector<Person> sends(ranks, mine);
-                            auto got = co_await group.all_to_all_object(
+                            auto got_op = group.all_to_all_object(
                                 std::move(sends), PersonCodec{});
+                            auto got = co_await got_op;
                             if (!got) outcome = std::move(got).error();
                         }
                         co_return outcome;
@@ -1210,12 +1252,14 @@ TEST_SUITE("CommCollectivesMore") {
                         };
                         dstd::Result<void> outcome;
                         if (which == "short" || which == "huge gather") {
-                            auto got = co_await group.all_gather_object(
+                            auto got_op = group.all_gather_object(
                                 edge(which == "short" ? -4 : -1), EdgeCodec{});
+                            auto got = co_await got_op;
                             if (!got) outcome = std::move(got).error();
                         } else if (which == "huge broadcast") {
-                            auto got = co_await group.broadcast_object(
-                                0, edge(-1), EdgeCodec{});
+                            auto got_op = group.broadcast_object(0, edge(-1),
+                                                                 EdgeCodec{});
+                            auto got = co_await got_op;
                             if (!got) outcome = std::move(got).error();
                         } else {
                             dstd::Vector<Person> sends(ranks, Person{"x", 1});
@@ -1231,8 +1275,9 @@ TEST_SUITE("CommCollectivesMore") {
                                     sends[1].age = -4;
                                 }
                             }
-                            auto got = co_await group.all_to_all_object(
+                            auto got_op = group.all_to_all_object(
                                 std::move(sends), EdgeCodec{});
+                            auto got = co_await got_op;
                             if (!got) outcome = std::move(got).error();
                         }
                         co_return outcome;
@@ -1259,17 +1304,20 @@ TEST_SUITE("CommCollectivesMore") {
                         comm::Group group = communicator.world(rank);
                         dstd::Result<void> outcome;
                         if (rank != 0) {
-                            auto got = co_await group.all_gather_object(
+                            auto got_op = group.all_gather_object(
                                 Person{"x", 1}, PersonCodec{});
+                            auto got = co_await got_op;
                             if (!got) outcome = std::move(got).error();
                         } else if (which == 0) {
-                            auto got = co_await group.all_gather_object(
+                            auto got_op = group.all_gather_object(
                                 Number{1}, NumberCodec{});
+                            auto got = co_await got_op;
                             if (!got) outcome = std::move(got).error();
                         } else if (which == 1) {
                             const dstd::Vector<std::int32_t> one = {1};
-                            auto got = co_await group.all_gather(
+                            auto got_op = group.all_gather(
                                 dstd::Span<const std::int32_t>(one));
+                            auto got = co_await got_op;
                             if (!got) outcome = std::move(got).error();
                         }
                         co_return outcome;
@@ -1383,27 +1431,32 @@ TEST_SUITE("CommCollectivesMore") {
                     const dstd::Vector<std::uint32_t> out = {1};
                     dstd::Result<void> outcome;
                     if (which == 0) {
-                        auto got = co_await group.all_to_all(
+                        auto got_op = group.all_to_all(
                             dstd::Span<const std::int32_t>(values), opts);
+                        auto got = co_await got_op;
                         if (!got) outcome = std::move(got).error();
                     } else if (which == 1) {
-                        auto got = co_await group.reduce_scatter(
+                        auto got_op = group.reduce_scatter(
                             dstd::Span<const std::int32_t>(values),
                             comm::ReduceOp::Sum, opts);
+                        auto got = co_await got_op;
                         if (!got) outcome = std::move(got).error();
                     } else if (which == 2) {
-                        auto got = co_await group.scan(
-                            dstd::Span<const std::int32_t>(values),
-                            comm::ReduceOp::Sum, opts);
+                        auto got_op =
+                            group.scan(dstd::Span<const std::int32_t>(values),
+                                       comm::ReduceOp::Sum, opts);
+                        auto got = co_await got_op;
                         if (!got) outcome = std::move(got).error();
                     } else if (which == 3) {
-                        auto got = co_await group.exclusive_scan(
+                        auto got_op = group.exclusive_scan(
                             dstd::Span<const std::int32_t>(values),
                             comm::ReduceOp::Sum, opts);
+                        auto got = co_await got_op;
                         if (!got) outcome = std::move(got).error();
                     } else {
-                        auto got = co_await group.neighbors(
+                        auto got_op = group.neighbors(
                             dstd::Span<const std::uint32_t>(out), opts);
+                        auto got = co_await got_op;
                         if (!got) outcome = std::move(got).error();
                     }
                     co_return outcome;
@@ -1484,38 +1537,43 @@ TEST_SUITE("CommCollectivesMore") {
                 dstd::Vector<dstd::Span<const std::byte>> blocks;
                 for (const std::string& text : texts)
                     blocks.push_back(bytes_of(text));
-                auto a = co_await group.all_to_all(
+                auto a_op = group.all_to_all(
                     dstd::Span<const dstd::Span<const std::byte>>(
                         blocks.data(), blocks.size()));
+                auto a = co_await a_op;
                 if (!a) co_return std::move(a).error();
                 swapped[rank] = *a;
                 const dstd::Vector<Row> mine = {
                     Row{0, 0, rank}, Row{1, 1, rank}, Row{2, 2, rank}};
                 const std::uint32_t count = ranks;
-                auto b = co_await group.exchange_by(
+                auto b_op = group.exchange_by(
                     dstd::Span<const Row>(mine),
                     [count](const Row& row) { return row.key % count; });
+                auto b = co_await b_op;
                 if (!b) co_return std::move(b).error();
                 rows[rank] = *b;
                 const dstd::Vector<std::uint32_t> out = {(rank + 1) % ranks};
-                auto c = co_await group.neighbors(
-                    dstd::Span<const std::uint32_t>(out));
+                auto c_op =
+                    group.neighbors(dstd::Span<const std::uint32_t>(out));
+                auto c = co_await c_op;
                 if (!c) co_return std::move(c).error();
                 comm::Neighborhood hood = *c;
                 const dstd::Vector<std::uint32_t> numbers = {rank};
-                auto d = co_await hood.neighbor_exchange(
+                auto d_op = hood.neighbor_exchange(
                     dstd::Span<const std::uint32_t>(numbers));
+                auto d = co_await d_op;
                 if (!d) co_return std::move(d).error();
                 from_neighbor[rank] = d->as<std::uint32_t>(0)[0];
                 const dstd::Vector<std::int64_t> values(ranks, rank + 1);
-                auto e =
-                    co_await group.scan(dstd::Span<const std::int64_t>(values),
-                                        comm::ReduceOp::Sum);
+                auto e_op = group.scan(dstd::Span<const std::int64_t>(values),
+                                       comm::ReduceOp::Sum);
+                auto e = co_await e_op;
                 if (!e) co_return std::move(e).error();
                 prefix[rank] = *e;
-                auto f = co_await group.reduce_scatter(
-                    dstd::Span<const std::int64_t>(values),
-                    comm::ReduceOp::Sum);
+                auto f_op =
+                    group.reduce_scatter(dstd::Span<const std::int64_t>(values),
+                                         comm::ReduceOp::Sum);
+                auto f = co_await f_op;
                 if (!f) co_return std::move(f).error();
                 scattered[rank] = *f;
                 co_return {};

@@ -92,16 +92,19 @@ TEST_SUITE("CommChannel") {
                 CHECK(channel.size() == 2);
                 CHECK(channel.rank() == rank);
                 if (rank == 0) {
-                    auto sent = co_await channel.send(1, 42);
+                    auto sent_op = channel.send(1, 42);
+                    auto sent = co_await sent_op;
                     if (!sent) co_return sent;
                     channel.close();
                     co_return {};
                 }
-                auto message = co_await channel.recv_from(0);
+                auto message_op = channel.recv_from(0);
+                auto message = co_await message_op;
                 if (!message) co_return std::move(message).error();
                 CHECK(message->from() == 0);
                 CHECK(message->value() == 42);
-                auto again = co_await channel.recv_from(0);
+                auto again_op = channel.recv_from(0);
+                auto again = co_await again_op;
                 CHECK_FALSE(again.has_value());
                 co_return {};
             });
@@ -121,9 +124,11 @@ TEST_SUITE("CommChannel") {
                     group.channel<Tokens>();
                 CHECK(channel.name() == Tokens::name);
                 if (rank == 0) {
-                    co_return co_await channel.send(1, 7u);
+                    auto returned_op = channel.send(1, 7u);
+                    co_return co_await returned_op;
                 }
-                auto message = co_await channel.recv();
+                auto message_op = channel.recv();
+                auto message = co_await message_op;
                 if (!message) co_return std::move(message).error();
                 CHECK(message->from() == 0);
                 CHECK(message->value() == 7u);
@@ -143,9 +148,11 @@ TEST_SUITE("CommChannel") {
                 comm::Group group = communicator.world(rank);
                 auto channel = group.channel<Pair>("pair");
                 if (rank == 0) {
-                    co_return co_await channel.send(1, Pair{7, 9});
+                    auto returned_op = channel.send(1, Pair{7, 9});
+                    co_return co_await returned_op;
                 }
-                auto message = co_await channel.recv_from(0);
+                auto message_op = channel.recv_from(0);
+                auto message = co_await message_op;
                 if (!message) co_return std::move(message).error();
                 CHECK(message->value().first == 7);
                 CHECK(message->value().second == 9);
@@ -165,10 +172,12 @@ TEST_SUITE("CommChannel") {
                 comm::Group group = communicator.world(rank);
                 auto channel = group.channel<std::uint32_t>("any");
                 if (rank != 0) {
-                    co_return co_await channel.send(0, rank);
+                    auto returned_op = channel.send(0, rank);
+                    co_return co_await returned_op;
                 }
                 for (std::uint32_t seen = 0; seen < 2; ++seen) {
-                    auto message = co_await channel.recv();
+                    auto message_op = channel.recv();
+                    auto message = co_await message_op;
                     if (!message) co_return std::move(message).error();
                     CHECK(message->value() == message->from());
                 }
@@ -189,13 +198,15 @@ TEST_SUITE("CommChannel") {
                 comm::Group group = communicator.world(rank);
                 auto channel = group.channel<Bytes>("bytes");
                 if (rank == 0) {
-                    co_return co_await channel.send(
+                    auto returned_op = channel.send(
                         1,
                         dstd::Span<const std::byte>(sent.data(), sent.size()));
+                    co_return co_await returned_op;
                 }
                 Bytes buffer(8);
-                auto taken = co_await channel.recv_into(
+                auto taken_op = channel.recv_into(
                     dstd::Span<std::byte>(buffer.data(), buffer.size()));
+                auto taken = co_await taken_op;
                 if (!taken) co_return std::move(taken).error();
                 CHECK(*taken == sent.size());
                 CHECK(buffer[0] == sent[0]);
@@ -217,13 +228,15 @@ TEST_SUITE("CommChannel") {
                 comm::Group group = communicator.world(rank);
                 auto channel = group.channel<Bytes>("too-big");
                 if (rank == 0) {
-                    co_return co_await channel.send(
+                    auto returned_op = channel.send(
                         1,
                         dstd::Span<const std::byte>(sent.data(), sent.size()));
+                    co_return co_await returned_op;
                 }
                 Bytes small(2);
-                auto refused = co_await channel.recv_into(
+                auto refused_op = channel.recv_into(
                     dstd::Span<std::byte>(small.data(), small.size()));
+                auto refused = co_await refused_op;
                 REQUIRE_FALSE(refused.has_value());
                 CHECK(refused.error().is_code(comm::ChannelError::TooBig));
                 CHECK(dftu_comm_test::has_text(refused.error(), "too-big"));
@@ -231,8 +244,9 @@ TEST_SUITE("CommChannel") {
 
                 // The message the short buffer refused is still first.
                 Bytes big(8);
-                auto taken = co_await channel.recv_into(
+                auto taken_op = channel.recv_into(
                     dstd::Span<std::byte>(big.data(), big.size()));
+                auto taken = co_await taken_op;
                 REQUIRE(taken.has_value());
                 CHECK(*taken == sent.size());
                 CHECK(big[0] == sent[0]);
@@ -255,13 +269,15 @@ TEST_SUITE("CommChannel") {
                     "fifo", depth_of(4, comm::Overflow::Block));
                 if (rank == 0) {
                     for (std::uint32_t value = 0; value < COUNT; ++value) {
-                        auto sent = co_await channel.send(1, value);
+                        auto sent_op = channel.send(1, value);
+                        auto sent = co_await sent_op;
                         if (!sent) co_return sent;
                     }
                     co_return {};
                 }
                 for (std::uint32_t expected = 0; expected < COUNT; ++expected) {
-                    auto message = co_await channel.recv_from(0);
+                    auto message_op = channel.recv_from(0);
+                    auto message = co_await message_op;
                     if (!message) co_return std::move(message).error();
                     if (message->value() != expected)
                         co_return dstd::Error{
@@ -287,14 +303,16 @@ TEST_SUITE("CommChannel") {
                     "many", depth_of(2, comm::Overflow::Block));
                 if (rank != 0) {
                     for (std::uint32_t value = 0; value < COUNT; ++value) {
-                        auto sent = co_await channel.send(0, value);
+                        auto sent_op = channel.send(0, value);
+                        auto sent = co_await sent_op;
                         if (!sent) co_return sent;
                     }
                     co_return {};
                 }
                 for (std::uint32_t round = 0; round < COUNT; ++round) {
                     for (std::uint32_t peer = 1; peer < 3; ++peer) {
-                        auto message = co_await channel.recv_from(peer);
+                        auto message_op = channel.recv_from(peer);
+                        auto message = co_await message_op;
                         if (!message) co_return std::move(message).error();
                         if (message->from() != peer ||
                             message->value() != round)
@@ -322,14 +340,16 @@ TEST_SUITE("CommChannel") {
                 auto channel = group.channel<std::uint32_t>("rank-order");
                 if (rank != 0) {
                     for (std::uint32_t value = 0; value < COUNT; ++value) {
-                        auto sent = co_await channel.send(0, rank);
+                        auto sent_op = channel.send(0, rank);
+                        auto sent = co_await sent_op;
                         if (!sent) co_return sent;
                     }
                     co_return {};
                 }
                 for (std::uint32_t round = 0; round < COUNT; ++round) {
                     for (std::uint32_t order = 1; order < 4; ++order) {
-                        auto message = co_await channel.recv_in_rank_order();
+                        auto message_op = channel.recv_in_rank_order();
+                        auto message = co_await message_op;
                         if (!message) co_return std::move(message).error();
                         if (message->from() != order)
                             co_return dstd::Error{
@@ -355,22 +375,27 @@ TEST_SUITE("CommChannel") {
                 auto channel = group.channel<std::uint32_t>(
                     "full", depth_of(1, comm::Overflow::Fail));
                 if (rank == 0) {
-                    auto first = co_await channel.send(1, 1u);
+                    auto first_op = channel.send(1, 1u);
+                    auto first = co_await first_op;
                     if (!first) co_return first;
-                    auto second = co_await channel.send(1, 2u);
+                    auto second_op = channel.send(1, 2u);
+                    auto second = co_await second_op;
                     REQUIRE_FALSE(second.has_value());
                     CHECK(second.error().is_code(comm::ChannelError::Full));
                     CHECK(dftu_comm_test::has_text(second.error(), "full"));
                     CHECK(dftu_comm_test::has_text(second.error(), "rank 1"));
                     refused.store(true, std::memory_order_release);
                     // The group of the two ranks still barrierks together.
-                    co_return co_await group.barrier();
+                    auto returned_op = group.barrier();
+                    co_return co_await returned_op;
                 }
                 co_await dftu_comm_test::wait_flag(refused);
-                auto message = co_await channel.recv_from(0);
+                auto message_op = channel.recv_from(0);
+                auto message = co_await message_op;
                 if (!message) co_return std::move(message).error();
                 CHECK(message->value() == 1u);
-                co_return co_await group.barrier();
+                auto returned_op = group.barrier();
+                co_return co_await returned_op;
             });
         CHECK_FALSE(errors[0].has_value());
         CHECK_FALSE(errors[1].has_value());
@@ -387,12 +412,15 @@ TEST_SUITE("CommChannel") {
                 auto channel = group.channel<std::uint32_t>(
                     "two", depth_of(1, comm::Overflow::Block));
                 if (rank == 0) {
-                    auto first = co_await channel.send(1, 10u);
+                    auto first_op = channel.send(1, 10u);
+                    auto first = co_await first_op;
                     if (!first) co_return first;
-                    co_return co_await channel.send(1, 11u);
+                    auto returned_op = channel.send(1, 11u);
+                    co_return co_await returned_op;
                 }
                 for (std::uint32_t expected = 10; expected <= 11; ++expected) {
-                    auto message = co_await channel.recv_from(0);
+                    auto message_op = channel.recv_from(0);
+                    auto message = co_await message_op;
                     if (!message) co_return std::move(message).error();
                     if (message->value() != expected)
                         co_return dstd::Error{dstd::Condition::Internal,
@@ -416,7 +444,8 @@ TEST_SUITE("CommChannel") {
                 auto channel = group.channel<std::uint32_t>(
                     "block", depth_of(1, comm::Overflow::Block));
                 if (rank == 0) {
-                    auto first = co_await channel.send(1, 1u);
+                    auto first_op = channel.send(1, 1u);
+                    auto first = co_await first_op;
                     if (!first) co_return first;
                     // The stream holds one message, so this send waits.
                     comm::Op<void> second = channel.send(1, 2u);
@@ -424,11 +453,13 @@ TEST_SUITE("CommChannel") {
                     posted.store(true, std::memory_order_release);
                     auto waited = co_await second;
                     if (!waited) co_return waited;
-                    co_return co_await channel.send(1, 3u);
+                    auto returned_op = channel.send(1, 3u);
+                    co_return co_await returned_op;
                 }
                 co_await dftu_comm_test::wait_flag(posted);
                 for (std::uint32_t expected = 1; expected <= 3; ++expected) {
-                    auto message = co_await channel.recv_from(0);
+                    auto message_op = channel.recv_from(0);
+                    auto message = co_await message_op;
                     if (!message) co_return std::move(message).error();
                     if (message->value() != expected)
                         co_return dstd::Error{
@@ -454,14 +485,16 @@ TEST_SUITE("CommChannel") {
                     "newest", depth_of(1, comm::Overflow::DropOldest));
                 if (rank == 0) {
                     for (std::uint32_t value = 1; value <= 3; ++value) {
-                        auto sent = co_await channel.send(1, value);
+                        auto sent_op = channel.send(1, value);
+                        auto sent = co_await sent_op;
                         if (!sent) co_return sent;
                     }
                     sent_all.store(true, std::memory_order_release);
                     co_return {};
                 }
                 co_await dftu_comm_test::wait_flag(sent_all);
-                auto message = co_await channel.recv_from(0);
+                auto message_op = channel.recv_from(0);
+                auto message = co_await message_op;
                 if (!message) co_return std::move(message).error();
                 CHECK(message->value() == 3u);
                 co_return {};
@@ -481,31 +514,36 @@ TEST_SUITE("CommChannel") {
                 auto channel = group.channel<std::uint32_t>("closing");
                 if (rank == 0) {
                     for (std::uint32_t value = 0; value < 3; ++value) {
-                        auto sent = co_await channel.send(1, value);
+                        auto sent_op = channel.send(1, value);
+                        auto sent = co_await sent_op;
                         if (!sent) co_return sent;
                     }
                     channel.close();
-                    auto late = co_await channel.send(1, 3u);
+                    auto late_op = channel.send(1, 3u);
+                    auto late = co_await late_op;
                     REQUIRE_FALSE(late.has_value());
                     CHECK(late.error().is_code(comm::ChannelError::Closed));
                     CHECK(dftu_comm_test::has_text(late.error(), "closing"));
                     co_return {};
                 }
                 for (std::uint32_t expected = 0; expected < 3; ++expected) {
-                    auto message = co_await channel.recv_from(0);
+                    auto message_op = channel.recv_from(0);
+                    auto message = co_await message_op;
                     if (!message) co_return std::move(message).error();
                     if (message->value() != expected)
                         co_return dstd::Error{
                             dstd::Condition::Internal,
                             "the messages before a close differ"};
                 }
-                auto closed = co_await channel.recv_from(0);
+                auto closed_op = channel.recv_from(0);
+                auto closed = co_await closed_op;
                 REQUIRE_FALSE(closed.has_value());
                 CHECK(closed.error().is_code(comm::ChannelError::Closed));
                 CHECK(dftu_comm_test::has_text(closed.error(), "closing"));
                 CHECK(dftu_comm_test::has_text(closed.error(), "rank 0"));
                 // A close stands, so the next receive says so at once.
-                auto again = co_await channel.recv();
+                auto again_op = channel.recv();
+                auto again = co_await again_op;
                 REQUIRE_FALSE(again.has_value());
                 CHECK(again.error().is_code(comm::ChannelError::Closed));
                 co_return {};
@@ -533,14 +571,16 @@ TEST_SUITE("CommChannel") {
                     CHECK(waiting.status() == comm::OpStatus::Canceled);
                     cancelled.store(true, std::memory_order_release);
                     // The message the cancelled receive never took arrives.
-                    auto message = co_await channel.recv_from(1);
+                    auto message_op = channel.recv_from(1);
+                    auto message = co_await message_op;
                     if (!message) co_return std::move(message).error();
                     CHECK(message->from() == 1);
                     CHECK(message->value() == 9u);
                     co_return {};
                 }
                 co_await dftu_comm_test::wait_flag(cancelled);
-                co_return co_await channel.send(0, 9u);
+                auto returned_op = channel.send(0, 9u);
+                co_return co_await returned_op;
             });
         CHECK_FALSE(errors[0].has_value());
         CHECK_FALSE(errors[1].has_value());
@@ -558,7 +598,8 @@ TEST_SUITE("CommChannel") {
                 auto channel = group.channel<std::uint32_t>(
                     "cancel-send", depth_of(1, comm::Overflow::Block));
                 if (rank == 0) {
-                    auto first = co_await channel.send(1, 1u);
+                    auto first_op = channel.send(1, 1u);
+                    auto first = co_await first_op;
                     if (!first) co_return first;
                     comm::Op<void> waiting = channel.send(1, 2u);
                     CHECK_FALSE(waiting.test());
@@ -566,13 +607,16 @@ TEST_SUITE("CommChannel") {
                     CHECK(waiting.status() == comm::OpStatus::Canceled);
                     cancelled.store(true, std::memory_order_release);
                     // The group of the call stands, so the collective works.
-                    co_return co_await group.barrier();
+                    auto returned_op = group.barrier();
+                    co_return co_await returned_op;
                 }
                 co_await dftu_comm_test::wait_flag(cancelled);
-                auto message = co_await channel.recv_from(0);
+                auto message_op = channel.recv_from(0);
+                auto message = co_await message_op;
                 if (!message) co_return std::move(message).error();
                 CHECK(message->value() == 1u);
-                auto together = co_await group.barrier();
+                auto together_op = group.barrier();
+                auto together = co_await together_op;
                 if (!together) co_return together;
                 co_return {};
             });
@@ -603,7 +647,8 @@ TEST_SUITE("CommChannel") {
                     parked.fetch_add(1, std::memory_order_release);
                     co_return {};
                 }
-                auto first = co_await sending.send(0, 1u);
+                auto first_op = sending.send(0, 1u);
+                auto first = co_await first_op;
                 if (!first) co_return first;
                 comm::Op<void> waiting = sending.send(0, 2u);
                 CHECK_FALSE(waiting.test());
@@ -616,7 +661,8 @@ TEST_SUITE("CommChannel") {
                 CHECK(dftu_comm_test::has_text(ended.error(), "gives up"));
                 // A call made after the abort fails at once, with the same
                 // error.
-                auto later = co_await sending.send(0, 3u);
+                auto later_op = sending.send(0, 3u);
+                auto later = co_await later_op;
                 REQUIRE_FALSE(later.has_value());
                 CHECK(later.error().message() == ended.error().message());
                 co_return {};
@@ -638,14 +684,18 @@ TEST_SUITE("CommChannel") {
                 auto right = group.channel<std::uint32_t>("right");
                 for (std::uint32_t round = 0; round < ROUNDS; ++round) {
                     if (rank == 0) {
-                        auto first = co_await left.send(1, round);
+                        auto first_op = left.send(1, round);
+                        auto first = co_await first_op;
                         if (!first) co_return first;
-                        auto second = co_await right.send(1, round + 100);
+                        auto second_op = right.send(1, round + 100);
+                        auto second = co_await second_op;
                         if (!second) co_return second;
                     } else {
-                        auto first = co_await left.recv_from(0);
+                        auto first_op = left.recv_from(0);
+                        auto first = co_await first_op;
                         if (!first) co_return std::move(first).error();
-                        auto second = co_await right.recv_from(0);
+                        auto second_op = right.recv_from(0);
+                        auto second = co_await second_op;
                         if (!second) co_return std::move(second).error();
                         if (first->value() != round ||
                             second->value() != round + 100)
@@ -653,7 +703,8 @@ TEST_SUITE("CommChannel") {
                                 dstd::Condition::Internal,
                                 "a channel took the message of another"};
                     }
-                    auto together = co_await group.barrier();
+                    auto together_op = group.barrier();
+                    auto together = co_await together_op;
                     if (!together) co_return together;
                 }
                 co_return {};
@@ -674,10 +725,12 @@ TEST_SUITE("CommChannel") {
                     auto wide = group.channel<std::uint64_t>("same");
                     comm::Op<void> sent = wide.send(1, 1ull);
                     CHECK(sent.test());
-                    co_return co_await group.barrier();
+                    auto returned_op = group.barrier();
+                    co_return co_await returned_op;
                 }
                 auto narrow = group.channel<std::uint32_t>("same");
-                auto message = co_await narrow.recv_from(0);
+                auto message_op = narrow.recv_from(0);
+                auto message = co_await message_op;
                 REQUIRE_FALSE(message.has_value());
                 CHECK(
                     message.error().is_code(comm::ChannelError::WrongChannel));
@@ -686,7 +739,8 @@ TEST_SUITE("CommChannel") {
                 CHECK(dftu_comm_test::has_text(message.error(), "rank 1"));
                 CHECK(dftu_comm_test::has_text(message.error(), "4 bytes"));
                 CHECK(dftu_comm_test::has_text(message.error(), "8 bytes"));
-                co_return co_await group.barrier();
+                auto returned_op = group.barrier();
+                co_return co_await returned_op;
             });
         CHECK_FALSE(errors[0].has_value());
         CHECK_FALSE(errors[1].has_value());
@@ -705,17 +759,20 @@ TEST_SUITE("CommChannel") {
                     auto elsewhere = group.channel<std::uint32_t>("elsewhere");
                     comm::Op<void> sent = elsewhere.send(1, 1u);
                     CHECK(sent.test());
-                    co_return co_await group.barrier();
+                    auto returned_op = group.barrier();
+                    co_return co_await returned_op;
                 }
                 auto awaited = group.channel<std::uint32_t>("awaited");
-                auto message =
-                    co_await awaited.recv_from(0, deadline_in(100'000'000ull));
+                auto message_op =
+                    awaited.recv_from(0, deadline_in(100'000'000ull));
+                auto message = co_await message_op;
                 REQUIRE_FALSE(message.has_value());
                 CHECK(message.error().is(dstd::Condition::Timeout));
                 CHECK(
                     dftu_comm_test::has_text(message.error(), "did not open"));
                 CHECK(dftu_comm_test::has_text(message.error(), "rank 0"));
-                co_return co_await group.barrier();
+                auto returned_op = group.barrier();
+                co_return co_await returned_op;
             });
         CHECK_FALSE(errors[0].has_value());
         CHECK_FALSE(errors[1].has_value());
@@ -734,17 +791,21 @@ TEST_SUITE("CommChannel") {
                 // A half is a handle, so a copy names the same channel.
                 comm::ChannelTx<std::uint32_t> tx = halves.tx;
                 if (rank == 0) {
-                    auto up = co_await tx.send(1, 10u);
+                    auto up_op = tx.send(1, 10u);
+                    auto up = co_await up_op;
                     if (!up) co_return up;
-                    auto back = co_await halves.rx.recv_from(1);
+                    auto back_op = halves.rx.recv_from(1);
+                    auto back = co_await back_op;
                     if (!back) co_return std::move(back).error();
                     CHECK(back->value() == 20u);
                     co_return {};
                 }
-                auto down = co_await halves.rx.recv_from(0);
+                auto down_op = halves.rx.recv_from(0);
+                auto down = co_await down_op;
                 if (!down) co_return std::move(down).error();
                 CHECK(down->value() == 10u);
-                co_return co_await tx.send(0, 20u);
+                auto returned_op = tx.send(0, 20u);
+                co_return co_await returned_op;
             });
         CHECK_FALSE(errors[0].has_value());
         CHECK_FALSE(errors[1].has_value());
@@ -760,11 +821,13 @@ TEST_SUITE("CommChannel") {
                 comm::Group group = communicator.world(rank);
                 auto channel = group.channel<std::uint32_t>("alone");
                 CHECK(channel.id() == 0);
-                auto sent = co_await channel.send(0, 1u);
+                auto sent_op = channel.send(0, 1u);
+                auto sent = co_await sent_op;
                 REQUIRE_FALSE(sent.has_value());
                 CHECK(sent.error().is(dstd::Condition::InvalidArgument));
                 CHECK(dftu_comm_test::has_text(sent.error(), "two ranks"));
-                auto message = co_await channel.recv();
+                auto message_op = channel.recv();
+                auto message = co_await message_op;
                 REQUIRE_FALSE(message.has_value());
                 CHECK(message.error().is(dstd::Condition::InvalidArgument));
                 co_return {};
@@ -819,16 +882,19 @@ TEST_SUITE("CommChannel") {
                 if (rank == 0) {
                     const std::uint64_t started = dstd::steady_now_ns();
                     for (std::uint32_t round = 0; round < ROUNDS; ++round) {
-                        auto sent = co_await channel.send(1, round);
+                        auto sent_op = channel.send(1, round);
+                        auto sent = co_await sent_op;
                         if (!sent) co_return sent;
-                        auto back = co_await channel.recv_from(1);
+                        auto back_op = channel.recv_from(1);
+                        auto back = co_await back_op;
                         if (!back) co_return std::move(back).error();
                     }
                     ping_pong_ns.store(dstd::steady_now_ns() - started,
                                        std::memory_order_release);
                     const std::uint64_t streaming = dstd::steady_now_ns();
                     for (std::uint32_t round = 0; round < ROUNDS; ++round) {
-                        auto sent = co_await channel.send(1, round);
+                        auto sent_op = channel.send(1, round);
+                        auto sent = co_await sent_op;
                         if (!sent) co_return sent;
                     }
                     stream_ns.store(dstd::steady_now_ns() - streaming,
@@ -836,13 +902,16 @@ TEST_SUITE("CommChannel") {
                     co_return {};
                 }
                 for (std::uint32_t round = 0; round < ROUNDS; ++round) {
-                    auto message = co_await channel.recv_from(0);
+                    auto message_op = channel.recv_from(0);
+                    auto message = co_await message_op;
                     if (!message) co_return std::move(message).error();
-                    auto sent = co_await channel.send(0, message->value());
+                    auto sent_op = channel.send(0, message->value());
+                    auto sent = co_await sent_op;
                     if (!sent) co_return sent;
                 }
                 for (std::uint32_t round = 0; round < ROUNDS; ++round) {
-                    auto message = co_await channel.recv_from(0);
+                    auto message_op = channel.recv_from(0);
+                    auto message = co_await message_op;
                     if (!message) co_return std::move(message).error();
                 }
                 co_return {};
@@ -880,8 +949,9 @@ TEST_SUITE("CommChannel") {
                     co_return {};
                 }
                 co_await dftu_comm_test::wait_flag(cancelled);
-                auto message = co_await channel.recv_from(
-                    0, deadline_in(5'000'000'000ull));
+                auto message_op =
+                    channel.recv_from(0, deadline_in(5'000'000'000ull));
+                auto message = co_await message_op;
                 if (!message) co_return std::move(message).error();
                 CHECK(message->value() == 7u);
                 co_return {};
@@ -903,8 +973,9 @@ TEST_SUITE("CommChannel") {
                     "cancel-race", depth_of(4, comm::Overflow::Block));
                 if (rank == 1) {
                     for (std::uint32_t value = 0; value < COUNT; ++value) {
-                        auto sent = co_await channel.send(
+                        auto sent_op = channel.send(
                             0, value, deadline_in(20'000'000'000ull));
+                        auto sent = co_await sent_op;
                         if (!sent) co_return sent;
                     }
                     co_return {};
@@ -958,19 +1029,22 @@ TEST_SUITE("CommChannel") {
                     receive_cancelled.store(true, std::memory_order_release);
                     // The receive that was stopped took nothing, so the
                     // message of the sender reaches this one.
-                    auto message = co_await channel.recv_from(
-                        1, deadline_in(5'000'000'000ull));
+                    auto message_op =
+                        channel.recv_from(1, deadline_in(5'000'000'000ull));
+                    auto message = co_await message_op;
                     if (!message) co_return std::move(message).error();
                     CHECK(message->value() == 9u);
                     co_await dftu_comm_test::wait_flag(send_cancelled);
-                    auto never = co_await channel.recv_from(
-                        1, deadline_in(100'000'000ull));
+                    auto never_op =
+                        channel.recv_from(1, deadline_in(100'000'000ull));
+                    auto never = co_await never_op;
                     REQUIRE_FALSE(never.has_value());
                     CHECK(never.error().is(dstd::Condition::Timeout));
                     co_return {};
                 }
                 co_await dftu_comm_test::wait_flag(receive_cancelled);
-                auto sent = co_await channel.send(0, 9u);
+                auto sent_op = channel.send(0, 9u);
+                auto sent = co_await sent_op;
                 if (!sent) co_return sent;
                 comm::Op<void> refused = channel.send(0, 10u, stopped);
                 CHECK(refused.status() == comm::OpStatus::Canceled);
@@ -998,14 +1072,16 @@ TEST_SUITE("CommChannel") {
                     waiting.cancel();
                     CHECK(waiting.status() == comm::OpStatus::Canceled);
                     cancelled.store(true, std::memory_order_release);
-                    auto message = co_await channel.recv_from(
-                        1, deadline_in(5'000'000'000ull));
+                    auto message_op =
+                        channel.recv_from(1, deadline_in(5'000'000'000ull));
+                    auto message = co_await message_op;
                     if (!message) co_return std::move(message).error();
                     CHECK(message->value() == 3u);
                     co_return {};
                 }
                 co_await dftu_comm_test::wait_flag(cancelled);
-                co_return co_await channel.send(0, 3u);
+                auto returned_op = channel.send(0, 3u);
+                co_return co_await returned_op;
             });
         CHECK_FALSE(errors[0].has_value());
         CHECK_FALSE(errors[1].has_value());
@@ -1024,8 +1100,9 @@ TEST_SUITE("CommChannel") {
                     channel.close();
                     co_return {};
                 }
-                auto closed = co_await channel.recv_from(
-                    0, deadline_in(5'000'000'000ull));
+                auto closed_op =
+                    channel.recv_from(0, deadline_in(5'000'000'000ull));
+                auto closed = co_await closed_op;
                 REQUIRE_FALSE(closed.has_value());
                 CHECK(closed.error().is_code(comm::ChannelError::Closed));
                 co_return {};
@@ -1046,7 +1123,8 @@ TEST_SUITE("CommChannel") {
                 comm::Group group = communicator.world(rank);
                 auto channel = group.channel<std::uint32_t>("any-close");
                 if (rank == 1) {
-                    auto sent = co_await channel.send(0, 1u);
+                    auto sent_op = channel.send(0, 1u);
+                    auto sent = co_await sent_op;
                     if (!sent) co_return sent;
                     channel.close();
                     one_closed.store(true, std::memory_order_release);
@@ -1054,13 +1132,14 @@ TEST_SUITE("CommChannel") {
                 }
                 if (rank == 2) {
                     co_await dftu_comm_test::wait_flag(second_posted);
-                    auto sent = co_await channel.send(0, 2u);
+                    auto sent_op = channel.send(0, 2u);
+                    auto sent = co_await sent_op;
                     if (!sent) co_return sent;
                     channel.close();
                     co_return {};
                 }
-                auto first =
-                    co_await channel.recv(deadline_in(5'000'000'000ull));
+                auto first_op = channel.recv(deadline_in(5'000'000'000ull));
+                auto first = co_await first_op;
                 if (!first) co_return std::move(first).error();
                 CHECK(first->from() == 1);
                 CHECK(first->value() == 1u);
@@ -1074,8 +1153,8 @@ TEST_SUITE("CommChannel") {
                 if (!got) co_return std::move(got).error();
                 CHECK(got->from() == 2);
                 CHECK(got->value() == 2u);
-                auto closed =
-                    co_await channel.recv(deadline_in(5'000'000'000ull));
+                auto closed_op = channel.recv(deadline_in(5'000'000'000ull));
+                auto closed = co_await closed_op;
                 REQUIRE_FALSE(closed.has_value());
                 CHECK(closed.error().is_code(comm::ChannelError::Closed));
                 CHECK(dftu_comm_test::has_text(closed.error(), "any-close"));
@@ -1099,9 +1178,11 @@ TEST_SUITE("CommChannel") {
                 auto second = group.channel<std::uint32_t>("open-second");
                 if (rank == 1) {
                     co_await dftu_comm_test::wait_flag(posted);
-                    auto sent = co_await second.send(0, 5u);
+                    auto sent_op = second.send(0, 5u);
+                    auto sent = co_await sent_op;
                     if (!sent) co_return sent;
-                    co_return co_await first.send(0, 4u);
+                    auto returned_op = first.send(0, 4u);
+                    co_return co_await returned_op;
                 }
                 comm::Op<comm::Message<std::uint32_t>> on_first =
                     first.recv_from(1, deadline_in(5'000'000'000ull));
@@ -1130,11 +1211,12 @@ TEST_SUITE("CommChannel") {
                 comm::Group group = communicator.world(rank);
                 if (rank == 1) {
                     auto elsewhere = group.channel<std::uint32_t>("elsewhere");
-                    co_return co_await elsewhere.send(0, 5u);
+                    auto returned_op = elsewhere.send(0, 5u);
+                    co_return co_await returned_op;
                 }
                 auto awaited = group.channel<std::uint32_t>("awaited");
-                auto message =
-                    co_await awaited.recv(deadline_in(100'000'000ull));
+                auto message_op = awaited.recv(deadline_in(100'000'000ull));
+                auto message = co_await message_op;
                 REQUIRE_FALSE(message.has_value());
                 CHECK(message.error().is(dstd::Condition::Timeout));
                 CHECK(
@@ -1157,15 +1239,17 @@ TEST_SUITE("CommChannel") {
                 if (rank == 1) {
                     auto elsewhere = group.channel<Bytes>("elsewhere-bytes");
                     const Bytes sent = message_of(4);
-                    co_return co_await elsewhere.send(
+                    auto returned_op = elsewhere.send(
                         0,
                         dstd::Span<const std::byte>(sent.data(), sent.size()));
+                    co_return co_await returned_op;
                 }
                 auto awaited = group.channel<Bytes>("awaited-bytes");
                 Bytes buffer(8);
-                auto taken = co_await awaited.recv_into(
+                auto taken_op = awaited.recv_into(
                     dstd::Span<std::byte>(buffer.data(), buffer.size()),
                     deadline_in(100'000'000ull));
+                auto taken = co_await taken_op;
                 REQUIRE_FALSE(taken.has_value());
                 CHECK(taken.error().is(dstd::Condition::Timeout));
                 CHECK(dftu_comm_test::has_text(taken.error(), "did not open"));
@@ -1188,7 +1272,8 @@ TEST_SUITE("CommChannel") {
                     "turns", depth_of(8, comm::Overflow::Block));
                 if (rank != 0) {
                     for (std::uint32_t at = 0; at < 4; ++at) {
-                        auto sent = co_await channel.send(0, rank);
+                        auto sent_op = channel.send(0, rank);
+                        auto sent = co_await sent_op;
                         if (!sent) co_return sent;
                     }
                     sent_all.fetch_add(1, std::memory_order_release);
@@ -1196,8 +1281,9 @@ TEST_SUITE("CommChannel") {
                 }
                 co_await dftu_comm_test::wait_count(sent_all, 2);
                 for (std::uint32_t at = 0; at < 8; ++at) {
-                    auto message =
-                        co_await channel.recv(deadline_in(5'000'000'000ull));
+                    auto message_op =
+                        channel.recv(deadline_in(5'000'000'000ull));
+                    auto message = co_await message_op;
                     if (!message) co_return std::move(message).error();
                     CHECK(message->from() == 1 + at % 2);
                 }
@@ -1219,7 +1305,8 @@ TEST_SUITE("CommChannel") {
                 auto channel = group.channel<std::uint32_t>("turn-order");
                 if (rank != 0) {
                     co_await dftu_comm_test::wait_flag(cancelled);
-                    co_return co_await channel.send(0, rank);
+                    auto returned_op = channel.send(0, rank);
+                    co_return co_await returned_op;
                 }
                 comm::Op<comm::Message<std::uint32_t>> skipped =
                     channel.recv_in_rank_order();
@@ -1228,8 +1315,9 @@ TEST_SUITE("CommChannel") {
                 CHECK(skipped.status() == comm::OpStatus::Canceled);
                 cancelled.store(true, std::memory_order_release);
                 for (std::uint32_t expected = 1; expected <= 2; ++expected) {
-                    auto message = co_await channel.recv_in_rank_order(
+                    auto message_op = channel.recv_in_rank_order(
                         deadline_in(5'000'000'000ull));
+                    auto message = co_await message_op;
                     if (!message) co_return std::move(message).error();
                     CHECK(message->from() == expected);
                 }
@@ -1297,7 +1385,8 @@ TEST_SUITE("CommChannel") {
                     co_return {};
                 }
                 co_await dftu_comm_test::wait_flag(cancelled);
-                co_return co_await first.send(0, 1u);
+                auto returned_op = first.send(0, 1u);
+                co_return co_await returned_op;
             });
         CHECK_FALSE(errors[0].has_value());
         CHECK_FALSE(errors[1].has_value());
@@ -1327,12 +1416,14 @@ TEST_SUITE("CommChannel") {
                     auto unrelated = group.channel<std::uint32_t>("unrelated");
                     auto shared = group.channel<std::uint32_t>("shared");
                     unrelated.close();
-                    co_return co_await shared.send(0, 5u);
+                    auto returned_op = shared.send(0, 5u);
+                    co_return co_await returned_op;
                 }
                 if (rank == 0) {
                     auto shared = group.channel<std::uint32_t>("shared");
-                    auto message = co_await shared.recv_from(
-                        1, deadline_in(5'000'000'000ull));
+                    auto message_op =
+                        shared.recv_from(1, deadline_in(5'000'000'000ull));
+                    auto message = co_await message_op;
                     if (!message) co_return std::move(message).error();
                     CHECK(message->value() == 5u);
                 }
@@ -1371,8 +1462,9 @@ TEST_SUITE("CommChannel") {
                 CHECK(one.error().is_code(comm::ChannelError::WrongChannel));
                 CHECK(two.error().is_code(comm::ChannelError::WrongChannel));
                 co_await dftu_comm_test::wait_flag(sent);
-                auto later =
-                    co_await narrow.recv_from(1, deadline_in(5'000'000'000ull));
+                auto later_op =
+                    narrow.recv_from(1, deadline_in(5'000'000'000ull));
+                auto later = co_await later_op;
                 REQUIRE_FALSE(later.has_value());
                 CHECK(later.error().is_code(comm::ChannelError::WrongChannel));
                 co_return {};
@@ -1393,20 +1485,24 @@ TEST_SUITE("CommChannel") {
                 if (rank == 1) {
                     auto early = group.channel<std::uint32_t>("early");
                     auto other = group.channel<std::uint32_t>("other");
-                    auto sent = co_await early.send(0, 2u);
+                    auto sent_op = early.send(0, 2u);
+                    auto sent = co_await sent_op;
                     if (!sent) co_return sent;
                     declared.store(true, std::memory_order_release);
-                    co_return co_await other.send(0, 3u);
+                    auto returned_op = other.send(0, 3u);
+                    co_return co_await returned_op;
                 }
                 auto other = group.channel<std::uint32_t>("other");
                 co_await dftu_comm_test::wait_flag(declared);
-                auto first =
-                    co_await other.recv_from(1, deadline_in(5'000'000'000ull));
+                auto first_op =
+                    other.recv_from(1, deadline_in(5'000'000'000ull));
+                auto first = co_await first_op;
                 if (!first) co_return std::move(first).error();
                 CHECK(first->value() == 3u);
                 auto early = group.channel<std::uint32_t>("early");
-                auto second =
-                    co_await early.recv_from(1, deadline_in(5'000'000'000ull));
+                auto second_op =
+                    early.recv_from(1, deadline_in(5'000'000'000ull));
+                auto second = co_await second_op;
                 if (!second) co_return std::move(second).error();
                 CHECK(second->value() == 2u);
                 co_return {};
@@ -1427,7 +1523,8 @@ TEST_SUITE("CommChannel") {
                 auto channel = group.channel<std::uint32_t>("turn-oldest");
                 if (rank != 0) {
                     co_await dftu_comm_test::wait_flag(cancelled);
-                    co_return co_await channel.send(0, rank);
+                    auto returned_op = channel.send(0, rank);
+                    co_return co_await returned_op;
                 }
                 comm::Op<comm::Message<std::uint32_t>> first =
                     channel.recv_in_rank_order();
@@ -1437,8 +1534,9 @@ TEST_SUITE("CommChannel") {
                 second.cancel();
                 cancelled.store(true, std::memory_order_release);
                 for (std::uint32_t expected = 1; expected <= 2; ++expected) {
-                    auto message = co_await channel.recv_in_rank_order(
+                    auto message_op = channel.recv_in_rank_order(
                         deadline_in(5'000'000'000ull));
+                    auto message = co_await message_op;
                     if (!message) co_return std::move(message).error();
                     CHECK(message->from() == expected);
                 }
@@ -1460,7 +1558,8 @@ TEST_SUITE("CommChannel") {
                 if (rank != 0) {
                     co_await dftu_comm_test::wait_flag(cancelled);
                     for (std::uint32_t at = 0; at < 3 - rank; ++at) {
-                        auto sent = co_await channel.send(0, rank);
+                        auto sent_op = channel.send(0, rank);
+                        auto sent = co_await sent_op;
                         if (!sent) co_return sent;
                     }
                     co_return {};
@@ -1476,8 +1575,9 @@ TEST_SUITE("CommChannel") {
                 cancelled.store(true, std::memory_order_release);
                 const std::uint32_t expected[3] = {1, 2, 1};
                 for (std::uint32_t at = 0; at < 3; ++at) {
-                    auto message = co_await channel.recv_in_rank_order(
+                    auto message_op = channel.recv_in_rank_order(
                         deadline_in(5'000'000'000ull));
+                    auto message = co_await message_op;
                     if (!message) co_return std::move(message).error();
                     CHECK(message->from() == expected[at]);
                 }

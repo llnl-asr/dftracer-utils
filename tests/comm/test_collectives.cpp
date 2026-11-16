@@ -70,17 +70,20 @@ TEST_SUITE("CommCollectives") {
                 [&](std::uint32_t rank) -> coro::CoroTask<dstd::Result<void>> {
                     comm::Group group = communicator.world(rank);
                     const std::int64_t mine = rank == root ? 1234 : -1;
-                    auto one = co_await group.broadcast(root, mine);
+                    auto one_op = group.broadcast(root, mine);
+                    auto one = co_await one_op;
                     if (!one) co_return std::move(one).error();
                     scalar[rank] = *one;
                     dstd::Vector<std::int32_t> values = {7, 8, 9};
                     if (rank != root) values = {0, 0, 0};
-                    auto many = co_await group.broadcast(
+                    auto many_op = group.broadcast(
                         root, dstd::Span<const std::int32_t>(values));
+                    auto many = co_await many_op;
                     if (!many) co_return std::move(many).error();
                     bulk[rank] = *many;
                     const std::string word = rank == root ? "payload" : "";
-                    auto bytes = co_await group.broadcast(root, bytes_of(word));
+                    auto bytes_op = group.broadcast(root, bytes_of(word));
+                    auto bytes = co_await bytes_op;
                     if (!bytes) co_return std::move(bytes).error();
                     text[rank] = text_of(bytes->view);
                     co_return {};
@@ -102,8 +105,9 @@ TEST_SUITE("CommCollectives") {
                 rt, ranks,
                 [&](std::uint32_t rank) -> coro::CoroTask<dstd::Result<void>> {
                     comm::Group group = communicator.world(rank);
-                    auto bytes = co_await group.broadcast(
+                    auto bytes_op = group.broadcast(
                         ranks - 1, dstd::Span<const std::byte>());
+                    auto bytes = co_await bytes_op;
                     if (!bytes) co_return std::move(bytes).error();
                     if (bytes->size() == 0) empty.fetch_add(1);
                     co_return {};
@@ -125,12 +129,14 @@ TEST_SUITE("CommCollectives") {
                     comm::Group group = communicator.world(rank);
                     const dstd::Vector<std::uint32_t> values = {rank * 10,
                                                                 rank * 10 + 1};
-                    auto one = co_await group.gather(
+                    auto one_op = group.gather(
                         root, dstd::Span<const std::uint32_t>(values));
+                    auto one = co_await one_op;
                     if (!one) co_return std::move(one).error();
                     typed[rank] = *one;
                     const std::string word = word_of(rank);
-                    auto two = co_await group.gather(root, bytes_of(word));
+                    auto two_op = group.gather(root, bytes_of(word));
+                    auto two = co_await two_op;
                     if (!two) co_return std::move(two).error();
                     variable[rank] = *two;
                     co_return {};
@@ -165,7 +171,8 @@ TEST_SUITE("CommCollectives") {
                 [&](std::uint32_t rank) -> coro::CoroTask<dstd::Result<void>> {
                     comm::Group group = communicator.world(rank);
                     const std::string word = word_of(rank);
-                    auto all = co_await group.all_gather(bytes_of(word));
+                    auto all_op = group.all_gather(bytes_of(word));
+                    auto all = co_await all_op;
                     if (!all) co_return std::move(all).error();
                     got[rank] = *all;
                     co_return {};
@@ -197,8 +204,9 @@ TEST_SUITE("CommCollectives") {
                     comm::Group group = communicator.world(rank);
                     const dstd::Vector<double> values = {rank + 0.5,
                                                          rank + 0.25};
-                    auto all = co_await group.all_gather(
-                        dstd::Span<const double>(values));
+                    auto all_op =
+                        group.all_gather(dstd::Span<const double>(values));
+                    auto all = co_await all_op;
                     if (!all) co_return std::move(all).error();
                     got[rank] = *all;
                     co_return {};
@@ -225,12 +233,14 @@ TEST_SUITE("CommCollectives") {
                 rt, ranks,
                 [&](std::uint32_t rank) -> coro::CoroTask<dstd::Result<void>> {
                     comm::Group group = communicator.world(rank);
-                    auto one = co_await group.all_gather(
-                        dstd::Span<const std::byte>());
+                    auto one_op =
+                        group.all_gather(dstd::Span<const std::byte>());
+                    auto one = co_await one_op;
                     if (!one) co_return std::move(one).error();
                     all[rank] = *one;
-                    auto two = co_await group.gather(
-                        0, dstd::Span<const std::int32_t>());
+                    auto two_op =
+                        group.gather(0, dstd::Span<const std::int32_t>());
+                    auto two = co_await two_op;
                     if (!two) co_return std::move(two).error();
                     root_only[rank] = *two;
                     co_return {};
@@ -267,13 +277,15 @@ TEST_SUITE("CommCollectives") {
                         for (const std::string& word : words)
                             pieces.push_back(bytes_of(word));
                     }
-                    auto one = co_await group.scatter(
+                    auto one_op = group.scatter(
                         root, dstd::Span<const std::int32_t>(values));
+                    auto one = co_await one_op;
                     if (!one) co_return std::move(one).error();
                     typed[rank] = *one;
-                    auto two = co_await group.scatter(
+                    auto two_op = group.scatter(
                         root,
                         dstd::Span<const dstd::Span<const std::byte>>(pieces));
+                    auto two = co_await two_op;
                     if (!two) co_return std::move(two).error();
                     variable[rank] = text_of(two->view);
                     co_return {};
@@ -299,9 +311,10 @@ TEST_SUITE("CommCollectives") {
                 [&](std::uint32_t rank) -> coro::CoroTask<dstd::Result<void>> {
                     comm::Group group = communicator.world(rank);
                     const dstd::Vector<std::int32_t> values = {1, 2, 3, 4};
-                    auto got = co_await group.scatter(
+                    auto got_op = group.scatter(
                         0, rank == 0 ? dstd::Span<const std::int32_t>(values)
                                      : dstd::Span<const std::int32_t>());
+                    auto got = co_await got_op;
                     if (!got) co_return std::move(got).error();
                     co_return {};
                 });
@@ -325,22 +338,23 @@ TEST_SUITE("CommCollectives") {
                 [&](std::uint32_t rank) -> coro::CoroTask<dstd::Result<void>> {
                     comm::Group group = communicator.world(rank);
                     const std::int64_t mine = rank + 1;
-                    auto a =
-                        co_await group.all_reduce(mine, comm::ReduceOp::Sum);
+                    auto a_op = group.all_reduce(mine, comm::ReduceOp::Sum);
+                    auto a = co_await a_op;
                     if (!a) co_return std::move(a).error();
                     sum[rank] = *a;
-                    auto b =
-                        co_await group.all_reduce(mine, comm::ReduceOp::Min);
+                    auto b_op = group.all_reduce(mine, comm::ReduceOp::Min);
+                    auto b = co_await b_op;
                     if (!b) co_return std::move(b).error();
                     low[rank] = *b;
-                    auto c =
-                        co_await group.all_reduce(mine, comm::ReduceOp::Max);
+                    auto c_op = group.all_reduce(mine, comm::ReduceOp::Max);
+                    auto c = co_await c_op;
                     if (!c) co_return std::move(c).error();
                     high[rank] = *c;
                     const dstd::Vector<double> values = {rank * 1.5, 2.0};
-                    auto d = co_await group.reduce(
-                        root, dstd::Span<const double>(values),
-                        comm::ReduceOp::Sum);
+                    auto d_op =
+                        group.reduce(root, dstd::Span<const double>(values),
+                                     comm::ReduceOp::Sum);
+                    auto d = co_await d_op;
                     if (!d) co_return std::move(d).error();
                     rooted[rank] = *d;
                     co_return {};
@@ -371,18 +385,20 @@ TEST_SUITE("CommCollectives") {
                 [&](std::uint32_t rank) -> coro::CoroTask<dstd::Result<void>> {
                     comm::Group group = communicator.world(rank);
                     const std::int64_t mine = rank + 1;
-                    auto a = co_await group.all_reduce(
+                    auto a_op = group.all_reduce(
                         mine, [](const std::int64_t& x, const std::int64_t& y) {
                             return x * y;
                         });
+                    auto a = co_await a_op;
                     if (!a) co_return std::move(a).error();
                     product[rank] = *a;
                     const Best entry{static_cast<std::int32_t>((rank * 7) % 5),
                                      static_cast<std::int32_t>(rank)};
-                    auto b = co_await group.all_reduce(
+                    auto b_op = group.all_reduce(
                         entry, [](const Best& x, const Best& y) {
                             return y.score > x.score ? y : x;
                         });
+                    auto b = co_await b_op;
                     if (!b) co_return std::move(b).error();
                     best[rank] = *b;
                     co_return {};
@@ -420,8 +436,9 @@ TEST_SUITE("CommCollectives") {
                               [&](std::uint32_t rank)
                                   -> coro::CoroTask<dstd::Result<void>> {
                                   comm::Group group = communicator.world(rank);
-                                  auto sum = co_await group.all_reduce(
+                                  auto sum_op = group.all_reduce(
                                       VALUES[rank], comm::ReduceOp::Sum);
+                                  auto sum = co_await sum_op;
                                   if (!sum) co_return std::move(sum).error();
                                   got[rank] = *sum;
                                   co_return {};
@@ -453,14 +470,16 @@ TEST_SUITE("CommCollectives") {
                     comm::CallOpts opts;
                     opts.reduce_order = comm::ReduceOrder::Any;
                     const std::int64_t mine = rank + 1;
-                    auto a = co_await group.all_reduce(
-                        mine, comm::ReduceOp::Sum, opts);
+                    auto a_op =
+                        group.all_reduce(mine, comm::ReduceOp::Sum, opts);
+                    auto a = co_await a_op;
                     if (!a) co_return std::move(a).error();
                     sum[rank] = *a;
                     const dstd::Vector<std::int64_t> values = {mine, 10};
-                    auto b = co_await group.reduce(
+                    auto b_op = group.reduce(
                         ranks - 1, dstd::Span<const std::int64_t>(values),
                         comm::ReduceOp::Max, opts);
+                    auto b = co_await b_op;
                     if (!b) co_return std::move(b).error();
                     rooted[rank] = *b;
                     co_return {};
@@ -495,18 +514,20 @@ TEST_SUITE("CommCollectives") {
                 [&](std::uint32_t rank) -> coro::CoroTask<dstd::Result<void>> {
                     comm::Group group = communicator.world(rank);
                     const std::string& mine = expected[rank];
-                    auto all = co_await group.all_gather(bytes_of(mine));
+                    auto all_op = group.all_gather(bytes_of(mine));
+                    auto all = co_await all_op;
                     if (!all) co_return std::move(all).error();
                     got[rank] = *all;
-                    auto cast =
-                        co_await group.broadcast(ranks - 1, bytes_of(mine));
+                    auto cast_op = group.broadcast(ranks - 1, bytes_of(mine));
+                    auto cast = co_await cast_op;
                     if (!cast) co_return std::move(cast).error();
                     sent[rank] = *cast;
                     const dstd::Vector<std::int32_t> values(
                         COUNT, static_cast<std::int32_t>(rank + 1));
-                    auto sum = co_await group.all_reduce(
-                        dstd::Span<const std::int32_t>(values),
-                        comm::ReduceOp::Sum);
+                    auto sum_op =
+                        group.all_reduce(dstd::Span<const std::int32_t>(values),
+                                         comm::ReduceOp::Sum);
+                    auto sum = co_await sum_op;
                     if (!sum) co_return std::move(sum).error();
                     sums[rank] = *sum;
                     co_return {};
@@ -545,11 +566,13 @@ TEST_SUITE("CommCollectives") {
                         -> coro::CoroTask<dstd::Result<void>> {
                         comm::Group group = communicator.world(rank);
                         const std::string word = word_of(rank) + "!";
-                        auto all = co_await group.all_gather(bytes_of(word));
+                        auto all_op = group.all_gather(bytes_of(word));
+                        auto all = co_await all_op;
                         if (!all) co_return std::move(all).error();
                         got[rank] = *all;
                         const std::string tail = rank == 2 ? "tail" : "";
-                        auto one = co_await group.broadcast(2, bytes_of(tail));
+                        auto one_op = group.broadcast(2, bytes_of(tail));
+                        auto one = co_await one_op;
                         if (!one) co_return std::move(one).error();
                         cast[rank] = *one;
                         co_return {};
@@ -576,7 +599,8 @@ TEST_SUITE("CommCollectives") {
                 [&](std::uint32_t rank) -> coro::CoroTask<dstd::Result<void>> {
                     comm::Group group = communicator.world(rank);
                     const std::string word = "rank" + std::to_string(rank);
-                    auto all = co_await group.all_gather(bytes_of(word));
+                    auto all_op = group.all_gather(bytes_of(word));
+                    auto all = co_await all_op;
                     if (!all) co_return std::move(all).error();
                     got[rank] = *all;
                     co_return {};
@@ -611,7 +635,8 @@ TEST_SUITE("CommCollectives") {
                     if (rank == 0) {
                         value = comm::Bytes::borrowed(bytes_of(*owner), owner);
                     }
-                    auto got = co_await group.broadcast(0, std::move(value));
+                    auto got_op = group.broadcast(0, std::move(value));
+                    auto got = co_await got_op;
                     if (!got) co_return std::move(got).error();
                     CHECK(text_of(got->view) == "owned by the caller");
                     co_return {};
@@ -652,50 +677,59 @@ TEST_SUITE("CommCollectives") {
                         dstd::Result<void> outcome;
                         if (which == "call") {
                             if (rank == 0) {
-                                auto got = co_await group.all_gather(
+                                auto got_op = group.all_gather(
                                     dstd::Span<const std::int32_t>(values));
+                                auto got = co_await got_op;
                                 if (!got) outcome = std::move(got).error();
                             } else {
-                                auto got = co_await group.all_reduce(
+                                auto got_op = group.all_reduce(
                                     std::int32_t{1}, comm::ReduceOp::Sum);
+                                auto got = co_await got_op;
                                 if (!got) outcome = std::move(got).error();
                             }
                         } else if (which == "root") {
-                            auto got = co_await group.broadcast(
+                            auto got_op = group.broadcast(
                                 rank == 0 ? 0u : 1u,
                                 dstd::Span<const std::int32_t>(values));
+                            auto got = co_await got_op;
                             if (!got) outcome = std::move(got).error();
                         } else if (which == "element size") {
                             if (rank == 0) {
-                                auto got = co_await group.broadcast(
+                                auto got_op = group.broadcast(
                                     0, dstd::Span<const std::int32_t>(values));
+                                auto got = co_await got_op;
                                 if (!got) outcome = std::move(got).error();
                             } else {
-                                auto got = co_await group.broadcast(
+                                auto got_op = group.broadcast(
                                     0, dstd::Span<const std::int64_t>(wide));
+                                auto got = co_await got_op;
                                 if (!got) outcome = std::move(got).error();
                             }
                         } else if (which == "count") {
                             const dstd::Span<const std::int32_t> span(
                                 values.data(), rank == 0 ? 2 : 3);
-                            auto got = co_await group.all_gather(span);
+                            auto got_op = group.all_gather(span);
+                            auto got = co_await got_op;
                             if (!got) outcome = std::move(got).error();
                         } else if (which == "reduce op") {
-                            auto got = co_await group.all_reduce(
+                            auto got_op = group.all_reduce(
                                 std::int32_t{1}, rank == 0
                                                      ? comm::ReduceOp::Sum
                                                      : comm::ReduceOp::Max);
+                            auto got = co_await got_op;
                             if (!got) outcome = std::move(got).error();
                         } else if (which == "reduce order") {
                             comm::CallOpts opts;
                             if (rank != 0)
                                 opts.reduce_order = comm::ReduceOrder::Any;
-                            auto got = co_await group.all_reduce(
+                            auto got_op = group.all_reduce(
                                 std::int32_t{1}, comm::ReduceOp::Sum, opts);
+                            auto got = co_await got_op;
                             if (!got) outcome = std::move(got).error();
                         } else {
-                            auto got = co_await group.broadcast(
+                            auto got_op = group.broadcast(
                                 3, dstd::Span<const std::int32_t>(values));
+                            auto got = co_await got_op;
                             if (!got) outcome = std::move(got).error();
                         }
                         co_return outcome;
@@ -723,8 +757,9 @@ TEST_SUITE("CommCollectives") {
                     opts.deadline_ns = dftu_comm_test::deadline_after(
                         rank == 0 ? 40'000'000 : 400'000'000);
                     const dstd::Vector<std::int32_t> values = {1};
-                    auto got = co_await group.all_gather(
+                    auto got_op = group.all_gather(
                         dstd::Span<const std::int32_t>(values), opts);
+                    auto got = co_await got_op;
                     if (!got) co_return std::move(got).error();
                     co_return {};
                 });
@@ -930,42 +965,49 @@ TEST_SUITE("CommCollectives") {
                 rt, ranks,
                 [&](std::uint32_t rank) -> coro::CoroTask<dstd::Result<void>> {
                     comm::Group group = communicator.world(rank);
-                    auto barrier = co_await group.barrier();
+                    auto barrier_op = group.barrier();
+                    auto barrier = co_await barrier_op;
                     if (!barrier) co_return barrier;
                     const std::string word = word_of(rank);
-                    auto all = co_await group.all_gather(bytes_of(word));
+                    auto all_op = group.all_gather(bytes_of(word));
+                    auto all = co_await all_op;
                     if (!all) co_return std::move(all).error();
                     gathered[rank] = *all;
-                    auto some = co_await group.gather(root, bytes_of(word));
+                    auto some_op = group.gather(root, bytes_of(word));
+                    auto some = co_await some_op;
                     if (!some) co_return std::move(some).error();
                     rooted[rank] = *some;
                     const std::int64_t mine = rank + 1;
-                    auto total =
-                        co_await group.all_reduce(mine, comm::ReduceOp::Sum);
+                    auto total_op = group.all_reduce(mine, comm::ReduceOp::Sum);
+                    auto total = co_await total_op;
                     if (!total) co_return std::move(total).error();
                     sum[rank] = *total;
                     comm::CallOpts any;
                     any.reduce_order = comm::ReduceOrder::Any;
-                    auto total_any = co_await group.all_reduce(
-                        mine, comm::ReduceOp::Sum, any);
+                    auto total_any_op =
+                        group.all_reduce(mine, comm::ReduceOp::Sum, any);
+                    auto total_any = co_await total_any_op;
                     if (!total_any) co_return std::move(total_any).error();
                     sum_any[rank] = *total_any;
                     const dstd::Vector<std::int64_t> values = {mine, 10};
-                    auto one = co_await group.reduce(
+                    auto one_op = group.reduce(
                         root, dstd::Span<const std::int64_t>(values),
                         comm::ReduceOp::Max);
+                    auto one = co_await one_op;
                     if (!one) co_return std::move(one).error();
                     reduced[rank] = *one;
                     const std::string tail = rank == root ? "tail" : "";
-                    auto sent = co_await group.broadcast(root, bytes_of(tail));
+                    auto sent_op = group.broadcast(root, bytes_of(tail));
+                    auto sent = co_await sent_op;
                     if (!sent) co_return std::move(sent).error();
                     cast[rank] = text_of(sent->view);
                     dstd::Vector<std::int32_t> to_scatter;
                     if (rank == root)
                         for (std::uint32_t at = 0; at < ranks * 2; ++at)
                             to_scatter.push_back(static_cast<std::int32_t>(at));
-                    auto part = co_await group.scatter(
+                    auto part_op = group.scatter(
                         root, dstd::Span<const std::int32_t>(to_scatter));
+                    auto part = co_await part_op;
                     if (!part) co_return std::move(part).error();
                     piece[rank] = *part;
                     co_return {};
@@ -999,8 +1041,9 @@ TEST_SUITE("CommCollectives") {
             [&](std::uint32_t rank) -> coro::CoroTask<dstd::Result<void>> {
                 comm::Group group = communicator.world(rank);
                 const dstd::Vector<std::int32_t> values = {1};
-                auto result = co_await group.gather(
-                    0, dstd::Span<const std::int32_t>(values));
+                auto result_op =
+                    group.gather(0, dstd::Span<const std::int32_t>(values));
+                auto result = co_await result_op;
                 if (!result) co_return std::move(result).error();
                 got[rank] = *result;
                 co_return {};
@@ -1021,13 +1064,14 @@ TEST_SUITE("CommCollectives") {
                 [&](std::uint32_t rank) -> coro::CoroTask<dstd::Result<void>> {
                     comm::Group group = communicator.world(rank);
                     comm::Group solo;
-                    auto split = co_await group.split(rank, 0);
+                    auto split_op = group.split(rank, 0);
+                    auto split = co_await split_op;
                     if (!split) co_return std::move(split).error();
                     solo = *split;
                     comm::CallOpts opts;
                     opts.reduce_order = comm::ReduceOrder::Any;
                     const std::int64_t mine = rank + 1;
-                    auto total = co_await group.all_reduce(
+                    auto total_op = group.all_reduce(
                         mine,
                         [&solo, &calls](const std::int64_t& a,
                                         const std::int64_t& b) {
@@ -1038,6 +1082,7 @@ TEST_SUITE("CommCollectives") {
                             return a + b;
                         },
                         opts);
+                    auto total = co_await total_op;
                     if (!total) co_return std::move(total).error();
                     sum[rank] = *total;
                     co_return {};

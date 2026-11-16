@@ -522,6 +522,7 @@ set(TEST_CPP_SOURCES
     # Comm tests
     comm/test_op.cpp
     comm/test_group.cpp
+    comm/test_channel.cpp
     comm/test_split.cpp
     comm/test_backend.cpp
     # Async I/O tests

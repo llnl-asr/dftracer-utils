@@ -17,15 +17,10 @@ namespace dftracer::utils::comm::backend {
 
 namespace {
 
-/// The two messages of the linear protocol: a member's record to group rank 0,
-/// and the table of every record back from it. Each call of a group has its own
-/// two streams, so a message of one call never answers the receive of another.
-constexpr std::uint64_t PURPOSE_RECORD = 0;
-constexpr std::uint64_t PURPOSE_TABLE = 1;
-
-std::uint64_t message_tag(std::uint64_t seq, std::uint64_t purpose) noexcept {
-    return (seq << 1) | purpose;
-}
+/// The two messages of the linear protocol carry the purposes of a collective:
+/// a member's record to group rank 0, and the table of every record back from
+/// it. Each call of a group has its own two streams, so a message of one call
+/// never answers the receive of another, and no channel message meets either.
 
 // The bytes of a message belong to the message, so both directions copy the
 // records: one copy of 16 bytes per record and per message.
@@ -205,18 +200,21 @@ class LinearCollectives : public Collectives {
             if (slot->ended) return;
             bytes = pack_record(slot->records[rank]);
         }
-        const MessageKey key{slot->key.group, rank, 0,
-                             message_tag(slot->key.seq, PURPOSE_RECORD)};
+        const MessageKey key{
+            slot->key.group, rank, 0,
+            message_tag(TagPurpose::CollectiveRecord, slot->key.seq)};
         Messaging::SendDone sent = [this, slot, rank](const dstd::Error* why) {
             if (why != nullptr) finish_slot(slot, Arrival{}, rank, why);
         };
-        messaging_->send(key, std::move(bytes), std::move(sent));
+        messaging_->send(key, std::move(bytes), HOLD_EVERYTHING,
+                         std::move(sent));
         take_table(slot, rank);
     }
 
     void take_table(const dstd::SharedPtr<Slot>& slot, std::uint32_t rank) {
-        const MessageKey key{slot->key.group, 0, rank,
-                             message_tag(slot->key.seq, PURPOSE_TABLE)};
+        const MessageKey key{
+            slot->key.group, 0, rank,
+            message_tag(TagPurpose::CollectiveTable, slot->key.seq)};
         Messaging::RecvDone took = [this, slot, rank](
                                        dstd::Span<const std::byte> bytes,
                                        const dstd::Error* why) {
@@ -247,8 +245,9 @@ class LinearCollectives : public Collectives {
     /// Receives the record of every other member, as group rank 0.
     void collect(const dstd::SharedPtr<Slot>& slot) {
         for (std::uint32_t member = 1; member < slot->members; ++member) {
-            const MessageKey key{slot->key.group, member, 0,
-                                 message_tag(slot->key.seq, PURPOSE_RECORD)};
+            const MessageKey key{
+                slot->key.group, member, 0,
+                message_tag(TagPurpose::CollectiveRecord, slot->key.seq)};
             Messaging::RecvDone took = [this, slot, member](
                                            dstd::Span<const std::byte> bytes,
                                            const dstd::Error* why) {
@@ -295,13 +294,15 @@ class LinearCollectives : public Collectives {
         // each message, so each send takes its own copy.
         for (std::uint32_t member = 1; member < slot->members; ++member) {
             dstd::Vector<std::byte> bytes(table);
-            const MessageKey key{slot->key.group, 0, member,
-                                 message_tag(slot->key.seq, PURPOSE_TABLE)};
+            const MessageKey key{
+                slot->key.group, 0, member,
+                message_tag(TagPurpose::CollectiveTable, slot->key.seq)};
             Messaging::SendDone sent = [this, slot,
                                         member](const dstd::Error* why) {
                 if (why != nullptr) finish_slot(slot, Arrival{}, member, why);
             };
-            messaging_->send(key, std::move(bytes), std::move(sent));
+            messaging_->send(key, std::move(bytes), HOLD_EVERYTHING,
+                             std::move(sent));
         }
         finish_slot(slot, Arrival{}, 0, nullptr);
     }

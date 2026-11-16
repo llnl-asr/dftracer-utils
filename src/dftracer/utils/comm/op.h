@@ -74,7 +74,7 @@ class PendingOp {
     PendingOp& operator=(const PendingOp&) = delete;
     PendingOp(PendingOp&&) = delete;
     PendingOp& operator=(PendingOp&&) = delete;
-    ~PendingOp();
+    virtual ~PendingOp();
 
     bool is_done() const noexcept {
         return done_.load(std::memory_order_acquire);
@@ -104,6 +104,16 @@ class PendingOp {
     /// Removes the waiter @p handle when the call is still pending, and gives
     /// true. False once the call ended or while another thread holds the call.
     bool withdraw(std::coroutine_handle<> handle) noexcept;
+
+    /// Ends the call on its own, with @p why, for a call that stands alone.
+    ///
+    /// A call of a group has peers that already matched it, so ending one of
+    /// those ends the group; a call that no group holds, such as a channel
+    /// call, ends alone and leaves every other call alone. Such a call asks its
+    /// provider to drop what it still holds of it, and ends through the
+    /// provider, so a cancelled receive keeps its message for a later one and a
+    /// call the provider already paired keeps its outcome.
+    virtual void cancel_alone(const dstd::Error& why) noexcept { (void)why; }
 
     /// Notes the timeout that guards the call, so that any end of the call
     /// cancels it, and hands @p target to it. A call that already ended
@@ -255,12 +265,21 @@ class Op {
     /**
      * @brief Cancels the call and returns at once.
      *
-     * The peers have already matched it, so a call still in flight aborts the
-     * group and every member ends with the same cancelled error. A call that
-     * ended before the cancel keeps its outcome.
+     * The peers of a call of a group have already matched it, so a call still
+     * in flight aborts the group and every member ends with the same cancelled
+     * error. A call that no group holds, such as a channel call, ends alone and
+     * leaves the group of the others alone: its provider ends it with the
+     * cancel when it still holds the call, and a call it already paired keeps
+     * its outcome, which arrives through the provider, so wait for it with @ref
+     * wait after a cancel. A call that ended before the cancel keeps its
+     * outcome.
      */
     void cancel() noexcept {
-        if (!group_) return;
+        if (!group_) {
+            state_->cancel_alone(
+                dstd::Error{dstd::Condition::Cancelled, "canceled a call"});
+            return;
+        }
         detail::cancel_group(*group_, state_.get(), rank_);
     }
 
@@ -280,6 +299,10 @@ class Op {
             await_.park = nullptr;
         }
         if (!await_.cancelled) return state_->take();
+        if (!group_) {
+            state_->wait_done();
+            return state_->take();
+        }
         return dstd::Unexpected<dstd::Error>(
             detail::cancel_group(*group_, rank_));
     }
@@ -295,7 +318,12 @@ class Op {
         if (await_.executor == nullptr) return;
         if (!state_->withdraw(await_.handle)) return;
         await_.cancelled = true;
-        detail::abandon_group(group_, rank_, await_.executor);
+        if (group_) {
+            detail::abandon_group(group_, rank_, await_.executor);
+        } else {
+            state_->cancel_alone(
+                dstd::Error{dstd::Condition::Cancelled, "canceled a call"});
+        }
         coro::detail::stop_or_resume(await_.executor, await_.park,
                                      await_.handle);
     }

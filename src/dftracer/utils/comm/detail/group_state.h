@@ -33,6 +33,7 @@ enum class CallKind : std::uint8_t { Barrier, MonitoredBarrier, Split };
 dstd::StringView call_name(CallKind kind) noexcept;
 
 struct GroupState;
+class ChannelHub;
 
 /**
  * @brief What the timeout of one call holds: the call and its group, and
@@ -48,6 +49,9 @@ struct TimerTarget {
     /// ended.
     bool take(dstd::SharedPtr<GroupState>& out_group,
               dstd::SharedPtr<PendingOp>& out_op) noexcept;
+
+    /// Gives the call of a channel to a callback, or false once the call ended.
+    bool take_call(dstd::SharedPtr<PendingOp>& out_op) noexcept;
 
     /// Drops both, so a callback that has not taken them does nothing.
     void clear() noexcept;
@@ -117,6 +121,9 @@ struct GroupState {
     std::mutex mutex;
     dstd::Map<std::uint64_t, dstd::SharedPtr<Slot>> slots;
     dstd::Optional<dstd::Error> aborted;
+    /// What the channels each group rank opened share, made by its first
+    /// channel: what it opened, and what its peers declared to it.
+    dstd::Vector<dstd::SharedPtr<ChannelHub>> channel_hubs;
 
     std::uint32_t size() const noexcept {
         return static_cast<std::uint32_t>(members.size());

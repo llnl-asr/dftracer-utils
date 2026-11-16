@@ -2,14 +2,17 @@
 #ifndef DFTRACER_UTILS_COMM_GROUP_H
 #define DFTRACER_UTILS_COMM_GROUP_H
 
+#include <dftracer/utils/comm/error.h>
 #include <dftracer/utils/comm/op.h>
 #include <dftracer/utils/coro/executor.h>
 #include <dftracer/utils/coro/stop_token.h>
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/result.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 
+#include <cstddef>
 #include <cstdint>
 #include <utility>
 
@@ -26,15 +29,28 @@ struct GroupState;
 struct Hooks;
 }  // namespace detail
 
+template <class T>
+class Channel;
+
+/// How a channel opens: the depth of the stream of one sender and one receiver,
+/// and what a send does when that stream is full. A depth below 1 holds one
+/// message, so no channel is ever unbounded.
+struct ChannelOpts {
+    std::size_t depth = 16;
+    Overflow overflow = Overflow::Block;
+};
+
 /// What one call may add to the defaults of its group.
 struct CallOpts {
     /// A deadline on the steady clock, in nanoseconds since its epoch, or 0 for
     /// the default timeout of the group, counted from the moment of this call.
-    /// A deadline that passes on one rank aborts the group.
+    /// A deadline that passes on one rank aborts the group of a collective; it
+    /// ends a call of a channel alone, with @ref dstd::Condition::Timeout.
     std::uint64_t deadline_ns = 0;
     /// A token already stopped when the call is made cancels the call, which
-    /// aborts the group. A stop that arrives while the call is in flight is not
-    /// observed; use @ref Op::cancel or a deadline for that.
+    /// aborts the group of a collective and ends a call of a channel alone. A
+    /// stop that arrives while the call is in flight is not observed; use
+    /// @ref Op::cancel or a deadline for that.
     coro::StopToken stop{};
 };
 
@@ -76,6 +92,25 @@ class Group {
     /// The id the group was made with, unique among the groups of one
     /// @ref Communicator.
     std::uint64_t id() const noexcept;
+
+    /// Opens the channel @p name of this group, which carries values of @p T
+    /// between the ranks. Opening is collective-free: both ends check their
+    /// name and value size at the first message.
+    template <class T>
+    Channel<T> channel(dstd::StringView name);
+
+    /// @ref channel with the depth and overflow of @p opts.
+    template <class T>
+    Channel<T> channel(dstd::StringView name, ChannelOpts opts);
+
+    /// Opens the channel the tag type @p Tag names, and declares its
+    /// @c value_type.
+    template <class Tag>
+    Channel<typename Tag::value_type> channel();
+
+    /// @ref channel for a tag type, with the depth and overflow of @p opts.
+    template <class Tag>
+    Channel<typename Tag::value_type> channel(ChannelOpts opts);
 
     /**
      * @brief Collective: each member picks a color and a key, and the members

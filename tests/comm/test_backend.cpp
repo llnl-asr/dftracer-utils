@@ -3,6 +3,7 @@
 #include <comm/support.h>
 #include <dftracer/utils/comm/backend/linear_collectives.h>
 #include <dftracer/utils/comm/backend/local.h>
+#include <dftracer/utils/comm/detail/channel_state.h>
 #include <dftracer/utils/comm/group.h>
 #include <dftracer/utils/comm/op.h>
 #include <dftracer/utils/dstd/error.h>
@@ -33,6 +34,16 @@ const char* binding_name(Binding binding) noexcept {
                : "linear collectives over local messaging";
 }
 
+/// Sends one message that its stream holds for a later receive, which is what a
+/// test of the plain send of a collective wants.
+comm::backend::OpId send_held(comm::backend::Messaging& messaging,
+                              const comm::backend::MessageKey& key,
+                              dstd::Vector<std::byte> bytes,
+                              comm::backend::Messaging::SendDone done) {
+    return messaging.send(key, std::move(bytes), comm::backend::HOLD_EVERYTHING,
+                          std::move(done));
+}
+
 /// How much a run used its messaging, so a test proves the linear binding ran.
 struct Traffic {
     std::atomic<std::size_t> sends{0};
@@ -47,15 +58,40 @@ class CountingMessaging : public comm::backend::Messaging {
                       Traffic& traffic)
         : moved_(std::move(moved)), traffic_(traffic) {}
 
-    void send(const comm::backend::MessageKey& key,
-              dstd::Vector<std::byte> bytes, SendDone done) override {
+    comm::backend::OpId send(const comm::backend::MessageKey& key,
+                             dstd::Vector<std::byte> bytes,
+                             comm::backend::StreamOpts opts,
+                             SendDone done) override {
         traffic_.sends.fetch_add(1, std::memory_order_relaxed);
-        moved_->send(key, std::move(bytes), std::move(done));
+        return moved_->send(key, std::move(bytes), opts, std::move(done));
     }
 
-    void recv(const comm::backend::MessageKey& key, RecvDone done) override {
+    comm::backend::OpId recv(const comm::backend::MessageKey& key,
+                             RecvDone done) override {
         traffic_.recvs.fetch_add(1, std::memory_order_relaxed);
-        moved_->recv(key, std::move(done));
+        return moved_->recv(key, std::move(done));
+    }
+
+    comm::backend::OpId recv_any_source(const comm::backend::MessageKey& key,
+                                        std::uint32_t senders,
+                                        RecvFromDone done) override {
+        return moved_->recv_any_source(key, senders, std::move(done));
+    }
+
+    comm::backend::OpId recv_into(const comm::backend::MessageKey& key,
+                                  std::uint32_t senders,
+                                  dstd::Span<std::byte> buffer,
+                                  RecvIntoDone done) override {
+        return moved_->recv_into(key, senders, buffer, std::move(done));
+    }
+
+    bool cancel(const comm::backend::MessageKey& key, comm::backend::OpId op,
+                dstd::Error why) override {
+        return moved_->cancel(key, op, std::move(why));
+    }
+
+    void close(const comm::backend::MessageKey& key) override {
+        moved_->close(key);
     }
 
     void abort(std::uint64_t group, dstd::Error why) override {
@@ -438,18 +474,43 @@ class FailingMessaging : public comm::backend::Messaging {
     explicit FailingMessaging(dstd::SharedPtr<comm::backend::Messaging> moved)
         : moved_(std::move(moved)) {}
 
-    void send(const comm::backend::MessageKey& key,
-              dstd::Vector<std::byte> bytes, SendDone done) override {
+    comm::backend::OpId send(const comm::backend::MessageKey& key,
+                             dstd::Vector<std::byte> bytes,
+                             comm::backend::StreamOpts opts,
+                             SendDone done) override {
         if (key.source != 0 && !failed_.exchange(true)) {
             lost_ = dstd::Error{dstd::Condition::Io, "the message was lost"};
             done(&lost_);
-            return;
+            return comm::backend::NO_OP;
         }
-        moved_->send(key, std::move(bytes), std::move(done));
+        return moved_->send(key, std::move(bytes), opts, std::move(done));
     }
 
-    void recv(const comm::backend::MessageKey& key, RecvDone done) override {
-        moved_->recv(key, std::move(done));
+    comm::backend::OpId recv(const comm::backend::MessageKey& key,
+                             RecvDone done) override {
+        return moved_->recv(key, std::move(done));
+    }
+
+    comm::backend::OpId recv_any_source(const comm::backend::MessageKey& key,
+                                        std::uint32_t senders,
+                                        RecvFromDone done) override {
+        return moved_->recv_any_source(key, senders, std::move(done));
+    }
+
+    comm::backend::OpId recv_into(const comm::backend::MessageKey& key,
+                                  std::uint32_t senders,
+                                  dstd::Span<std::byte> buffer,
+                                  RecvIntoDone done) override {
+        return moved_->recv_into(key, senders, buffer, std::move(done));
+    }
+
+    bool cancel(const comm::backend::MessageKey& key, comm::backend::OpId op,
+                dstd::Error why) override {
+        return moved_->cancel(key, op, std::move(why));
+    }
+
+    void close(const comm::backend::MessageKey& key) override {
+        moved_->close(key);
     }
 
     void abort(std::uint64_t group, dstd::Error why) override {
@@ -632,8 +693,10 @@ TEST_SUITE("CommBackend") {
             ++sent;
         };
         for (std::uint32_t value = 1; value <= 3; ++value)
-            messaging->send(stream, bytes_of(value), on_send);
-        CHECK(sent == 0);
+            send_held(*messaging, stream, bytes_of(value), on_send);
+        // A stream that holds everything takes each message as it comes, so
+        // every send ends once its message is in it.
+        CHECK(sent == 3);
 
         dstd::Vector<std::uint32_t> took;
         bool other_ran = false;
@@ -651,7 +714,7 @@ TEST_SUITE("CommBackend") {
         REQUIRE(took.size() == 2);
         CHECK(took[0] == 1);
         CHECK(took[1] == 2);
-        CHECK(sent == 2);
+        CHECK(sent == 3);
         CHECK_FALSE(other_ran);
 
         messaging->recv(stream, on_recv);
@@ -676,10 +739,11 @@ TEST_SUITE("CommBackend") {
         CHECK(took == 0);
         CHECK(order.empty());
 
-        messaging->send(stream, bytes_of(11), [&order](const dstd::Error* why) {
-            CHECK(why == nullptr);
-            order.push_back("send");
-        });
+        send_held(*messaging, stream, bytes_of(11),
+                  [&order](const dstd::Error* why) {
+                      CHECK(why == nullptr);
+                      order.push_back("send");
+                  });
         CHECK(took == 11);
         REQUIRE(order.size() == 2);
         CHECK(std::strcmp(order[0], "recv") == 0);
@@ -691,15 +755,28 @@ TEST_SUITE("CommBackend") {
         const std::uint64_t group = 3;
         const std::uint64_t other_group = 4;
 
+        const comm::backend::StreamOpts one{1, comm::Overflow::Block};
+        const comm::backend::MessageKey stream{group, 0, 1, 1};
+
+        std::size_t held_sends = 0;
         std::size_t failed_sends = 0;
         std::size_t failed_recvs = 0;
         bool other_ran = false;
-        messaging->send(comm::backend::MessageKey{group, 0, 1, 1}, bytes_of(1),
-                        [&failed_sends](const dstd::Error* why) {
-                            REQUIRE(why != nullptr);
-                            CHECK(why->is(dstd::Condition::Cancelled));
-                            ++failed_sends;
-                        });
+        auto send = [&](std::uint32_t value) {
+            messaging->send(
+                stream, bytes_of(value), one,
+                [&held_sends, &failed_sends](const dstd::Error* why) {
+                    if (why == nullptr) {
+                        ++held_sends;
+                        return;
+                    }
+                    CHECK(why->is(dstd::Condition::Cancelled));
+                    ++failed_sends;
+                });
+        };
+        // The first message fills the stream, so the second waits in it.
+        send(1);
+        send(2);
         messaging->recv(comm::backend::MessageKey{group, 1, 0, 2},
                         [&failed_recvs](dstd::Span<const std::byte>,
                                         const dstd::Error* why) {
@@ -713,6 +790,7 @@ TEST_SUITE("CommBackend") {
 
         messaging->abort(
             group, dstd::Error{dstd::Condition::Cancelled, "the group ended"});
+        CHECK(held_sends == 1);
         CHECK(failed_sends == 1);
         CHECK(failed_recvs == 1);
         CHECK_FALSE(other_ran);
@@ -774,8 +852,9 @@ TEST_SUITE("CommBackend") {
         };
 
         // A message a receive took leaves no stream behind.
-        messaging->send(comm::backend::MessageKey{1, 0, 1, 1}, bytes_of(5),
-                        [](const dstd::Error* why) { CHECK(why == nullptr); });
+        send_held(*messaging, comm::backend::MessageKey{1, 0, 1, 1},
+                  bytes_of(5),
+                  [](const dstd::Error* why) { CHECK(why == nullptr); });
         messaging->recv(comm::backend::MessageKey{1, 0, 1, 1},
                         [](dstd::Span<const std::byte>,
                            const dstd::Error* why) { CHECK(why == nullptr); });
@@ -784,20 +863,27 @@ TEST_SUITE("CommBackend") {
         CHECK(counts().streams == 0);
 
         // A parked message of an aborted group ends with the group.
+        const comm::backend::StreamOpts one{1, comm::Overflow::Block};
         std::size_t failed_sends = 0;
         std::size_t failed_recvs = 0;
-        messaging->send(comm::backend::MessageKey{2, 0, 1, 1}, bytes_of(5),
-                        [&failed_sends](const dstd::Error* why) {
-                            REQUIRE(why != nullptr);
-                            ++failed_sends;
-                        });
+        auto send = [&](std::uint32_t value) {
+            messaging->send(comm::backend::MessageKey{2, 0, 1, 1},
+                            bytes_of(value), one,
+                            [&failed_sends](const dstd::Error* why) {
+                                if (why != nullptr) ++failed_sends;
+                            });
+        };
+        // The first message fills the stream, so the second waits in it.
+        send(1);
+        send(2);
         messaging->recv(comm::backend::MessageKey{2, 1, 0, 2},
                         [&failed_recvs](dstd::Span<const std::byte>,
                                         const dstd::Error* why) {
                             REQUIRE(why != nullptr);
                             ++failed_recvs;
                         });
-        CHECK(counts().parked == 2);
+        // The message the stream holds, the one it holds back, and the receive.
+        CHECK(counts().parked == 3);
         CHECK(counts().streams == 2);
 
         messaging->abort(
@@ -827,12 +913,17 @@ TEST_SUITE("CommBackend") {
         // A release of a group that never aborted fails what it still parks.
         std::size_t parked_sends = 0;
         std::size_t parked_recvs = 0;
-        messaging->send(comm::backend::MessageKey{5, 0, 1, 1}, bytes_of(5),
-                        [&parked_sends](const dstd::Error* why) {
-                            REQUIRE(why != nullptr);
-                            CHECK(why->is(dstd::Condition::Cancelled));
-                            ++parked_sends;
-                        });
+        auto park_send = [&](std::uint32_t value) {
+            messaging->send(comm::backend::MessageKey{5, 0, 1, 1},
+                            bytes_of(value), one,
+                            [&parked_sends](const dstd::Error* why) {
+                                if (why == nullptr) return;
+                                CHECK(why->is(dstd::Condition::Cancelled));
+                                ++parked_sends;
+                            });
+        };
+        park_send(1);
+        park_send(2);
         messaging->recv(comm::backend::MessageKey{5, 1, 0, 2},
                         [&parked_recvs](dstd::Span<const std::byte>,
                                         const dstd::Error* why) {
@@ -840,12 +931,196 @@ TEST_SUITE("CommBackend") {
                             CHECK(why->is(dstd::Condition::Cancelled));
                             ++parked_recvs;
                         });
-        CHECK(counts().parked == 2);
+        CHECK(counts().parked == 3);
         messaging->release(5);
         CHECK(parked_sends == 1);
         CHECK(parked_recvs == 1);
         CHECK(counts().parked == 0);
         CHECK(counts().streams == 0);
         CHECK(counts().ended == 0);
+    }
+    TEST_CASE("a recv answered by a send leaves no stream behind") {
+        auto messaging = comm::backend::make_local_messaging();
+        std::size_t took = 0;
+        for (std::uint64_t tag = 0; tag < 100; ++tag) {
+            const comm::backend::MessageKey key{1, 0, 1, tag};
+            messaging->recv(key, [&took](dstd::Span<const std::byte>,
+                                         const dstd::Error* why) {
+                CHECK(why == nullptr);
+                ++took;
+            });
+            send_held(*messaging, key, bytes_of(1), [](const dstd::Error*) {});
+        }
+        CHECK(took == 100);
+        CHECK(comm::backend::local_counts(*messaging).streams == 0);
+    }
+
+    TEST_CASE(
+        "a send its stream stored has no handle and cannot be cancelled") {
+        auto messaging = comm::backend::make_local_messaging();
+        const comm::backend::MessageKey key{1, 0, 1, 1};
+        std::size_t sent = 0;
+        const comm::backend::OpId stored = send_held(
+            *messaging, key, bytes_of(5), [&sent](const dstd::Error* why) {
+                CHECK(why == nullptr);
+                ++sent;
+            });
+        CHECK(sent == 1);
+        CHECK(stored.value == 0);
+        CHECK_FALSE(messaging->cancel(
+            key, stored, dstd::Error{dstd::Condition::Cancelled, "late"}));
+        std::uint32_t took = 0;
+        messaging->recv(key, [&took](dstd::Span<const std::byte> bytes,
+                                     const dstd::Error* why) {
+            CHECK(why == nullptr);
+            took = value_of(bytes);
+        });
+        CHECK(took == 5);
+    }
+
+    TEST_CASE("a send a full stream holds is cancelled and never delivered") {
+        auto messaging = comm::backend::make_local_messaging();
+        const comm::backend::MessageKey key{1, 0, 1, 1};
+        const comm::backend::StreamOpts one{1, comm::Overflow::Block};
+        messaging->send(key, bytes_of(1), one, [](const dstd::Error*) {});
+        bool cancelled = false;
+        const comm::backend::OpId held = messaging->send(
+            key, bytes_of(2), one, [&cancelled](const dstd::Error* why) {
+                REQUIRE(why != nullptr);
+                CHECK(why->is(dstd::Condition::Cancelled));
+                cancelled = true;
+            });
+        CHECK(held.value != 0);
+        CHECK(messaging->cancel(
+            key, held, dstd::Error{dstd::Condition::Cancelled, "stop"}));
+        CHECK(cancelled);
+        CHECK_FALSE(messaging->cancel(
+            key, held, dstd::Error{dstd::Condition::Cancelled, "twice"}));
+        dstd::Vector<std::uint32_t> took;
+        for (int at = 0; at < 2; ++at)
+            messaging->recv(key, [&took](dstd::Span<const std::byte> bytes,
+                                         const dstd::Error* why) {
+                if (why == nullptr) took.push_back(value_of(bytes));
+            });
+        REQUIRE(took.size() == 1);
+        CHECK(took[0] == 1);
+    }
+
+    TEST_CASE("a close of a stream nothing was sent on answers its receive") {
+        auto messaging = comm::backend::make_local_messaging();
+        const comm::backend::MessageKey before{1, 0, 1, 1};
+        const comm::backend::MessageKey after{1, 0, 1, 2};
+        std::size_t closed = 0;
+        auto on_recv = [&closed](dstd::Span<const std::byte>,
+                                 const dstd::Error* why) {
+            REQUIRE(why != nullptr);
+            CHECK(why->is_code(comm::ChannelError::Closed));
+            ++closed;
+        };
+        messaging->recv(before, on_recv);
+        messaging->close(before);
+        CHECK(closed == 1);
+        messaging->close(after);
+        messaging->recv(after, on_recv);
+        CHECK(closed == 2);
+    }
+
+    TEST_CASE("a receive of any source ends Closed once every sender closed") {
+        auto messaging = comm::backend::make_local_messaging();
+        const comm::backend::MessageKey any{1, comm::backend::ANY_SOURCE, 0, 1};
+        const comm::backend::MessageKey from_one{1, 1, 0, 1};
+        const comm::backend::MessageKey from_two{1, 2, 0, 1};
+        std::size_t closed = 0;
+        std::size_t took = 0;
+        auto on_recv = [&closed, &took](std::uint32_t,
+                                        dstd::Span<const std::byte>,
+                                        const dstd::Error* why) {
+            if (why == nullptr) {
+                ++took;
+                return;
+            }
+            CHECK(why->is_code(comm::ChannelError::Closed));
+            ++closed;
+        };
+        send_held(*messaging, from_one, bytes_of(1), [](const dstd::Error*) {});
+        messaging->close(from_one);
+        messaging->recv_any_source(any, 2, on_recv);
+        CHECK(took == 1);
+        // One sender closed and the other did not, so this receive waits.
+        messaging->recv_any_source(any, 2, on_recv);
+        CHECK(closed == 0);
+        send_held(*messaging, from_two, bytes_of(2), [](const dstd::Error*) {});
+        CHECK(took == 2);
+        messaging->recv_any_source(any, 2, on_recv);
+        CHECK(closed == 0);
+        messaging->close(from_two);
+        CHECK(closed == 1);
+        messaging->recv_any_source(any, 2, on_recv);
+        CHECK(closed == 2);
+    }
+
+    TEST_CASE("a receive of any source serves the senders in turn") {
+        auto messaging = comm::backend::make_local_messaging();
+        const comm::backend::MessageKey any{1, comm::backend::ANY_SOURCE, 0, 1};
+        for (std::uint32_t source = 1; source <= 3; ++source)
+            for (std::uint32_t at = 0; at < 3; ++at)
+                send_held(*messaging,
+                          comm::backend::MessageKey{1, source, 0, 1},
+                          bytes_of(source), [](const dstd::Error*) {});
+        dstd::Vector<std::uint32_t> order;
+        for (int at = 0; at < 9; ++at)
+            messaging->recv_any_source(
+                any, 3,
+                [&order](std::uint32_t source, dstd::Span<const std::byte>,
+                         const dstd::Error* why) {
+                    CHECK(why == nullptr);
+                    order.push_back(source);
+                });
+        REQUIRE(order.size() == 9);
+        for (std::size_t at = 0; at < order.size(); ++at)
+            CHECK(order[at] == 1 + at % 3);
+    }
+    TEST_CASE("a declaration between a read and a watch is not lost") {
+        auto messaging = comm::backend::make_local_messaging();
+        auto hub =
+            dstd::make_shared<comm::detail::ChannelHub>(messaging, 1, 1, 2);
+        const std::uint64_t first = 111;
+        const std::uint64_t second = 222;
+        hub->note_open(first, 4);
+        hub->note_open(second, 4);
+        auto call_a = dstd::make_shared<comm::OpState<void>>();
+        auto call_b = dstd::make_shared<comm::OpState<void>>();
+        dstd::WeakPtr<comm::PendingOp> weak_a = call_a;
+        dstd::WeakPtr<comm::PendingOp> weak_b = call_b;
+        std::size_t woke_a = 0;
+        std::size_t woke_b = 0;
+        REQUIRE(hub->watch(
+            0, hub->make_ticket(), weak_a,
+            [&woke_a](const dstd::Error*) { ++woke_a; }, 0));
+
+        comm::detail::ChannelOpen wrong;
+        std::uint64_t seen = 0;
+        CHECK(hub->open(0, first, wrong, seen) ==
+              comm::detail::ChannelHub::Open::Waiting);
+
+        // The peer declares the channel after the read and before the watch.
+        comm::detail::ChannelOpen declared{first, 4, 0};
+        dstd::Vector<std::byte> bytes(sizeof(declared));
+        std::memcpy(bytes.data(), &declared, sizeof(declared));
+        send_held(*messaging,
+                  comm::backend::MessageKey{
+                      1, 0, 1,
+                      comm::backend::message_tag(
+                          comm::backend::TagPurpose::ChannelOpen, 0)},
+                  std::move(bytes), [](const dstd::Error*) {});
+        CHECK(woke_a == 1);
+
+        const bool is_waiting = hub->watch(
+            0, hub->make_ticket(), weak_b,
+            [&woke_b](const dstd::Error*) { ++woke_b; }, seen);
+        CHECK_FALSE(is_waiting);
+        CHECK(woke_b == 0);
+        CHECK(hub->open(0, first, wrong, seen) ==
+              comm::detail::ChannelHub::Open::Matched);
     }
 }

@@ -71,6 +71,13 @@ bool TimerTarget::take(dstd::SharedPtr<GroupState>& out_group,
     return true;
 }
 
+bool TimerTarget::take_call(dstd::SharedPtr<PendingOp>& out_op) noexcept {
+    std::lock_guard<std::mutex> lock(mutex);
+    if (!op) return false;
+    out_op = op;
+    return true;
+}
+
 void TimerTarget::clear() noexcept {
     dstd::SharedPtr<GroupState> released_group;
     dstd::SharedPtr<PendingOp> released_op;
@@ -174,6 +181,8 @@ void abort_locked(GroupState& group, Error why, AbortTail& tail) {
 void finish_abort(const dstd::SharedPtr<Backend>& backend, std::uint64_t id,
                   AbortTail& tail) {
     if (!tail.why) return;
+    // The parked calls of the channels of the group end with the collectives.
+    backend->messaging->abort(id, *tail.why);
     for (auto& entry : tail.slots)
         backend->collectives->drop(id, entry.first, nullptr);
     for (auto& entry : tail.slots)

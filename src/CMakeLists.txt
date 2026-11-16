@@ -218,6 +218,7 @@ endif()
 set(DFTRACER_UTILS_COMM_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/comm/transport.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/comm/op.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/comm/channel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/comm/group.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/comm/backend/local.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/comm/backend/linear_collectives.cpp)

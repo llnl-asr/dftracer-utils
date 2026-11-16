@@ -49,6 +49,10 @@ class LocalBootstrap : public Bootstrap {
 
     std::uint32_t ranks() const noexcept override { return ranks_; }
 
+    std::uint32_t process_of(std::uint32_t) const noexcept override {
+        return 0;
+    }
+
     dstd::Vector<std::uint32_t> node_members(std::uint32_t) const override {
         dstd::Vector<std::uint32_t> members(ranks_);
         for (std::uint32_t rank = 0; rank < ranks_; ++rank)
@@ -916,8 +920,6 @@ PersonalTables assemble_personal(LocalSlot& slot) {
 
 class LocalCollectives : public Collectives {
    public:
-    bool shares_memory() const noexcept override { return true; }
-
     bool arrive(std::uint64_t group_id, std::uint64_t seq,
                 std::uint32_t members, std::uint32_t rank, const Record& record,
                 Contribution&& contribution, Done done) override {

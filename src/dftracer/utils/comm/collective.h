@@ -5,6 +5,7 @@
 #include <dftracer/utils/comm/backend/collectives.h>
 #include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/function.h>
+#include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/result.h>
@@ -216,13 +217,21 @@ inline constexpr std::uint32_t SPLIT_EQUAL = 0;
 inline constexpr std::uint32_t SPLIT_COUNTS = 1;
 inline constexpr std::uint32_t SPLIT_BAD = 2;
 
+/// The objects a call deserialized, by the process that reads them and the rank
+/// that sent them, so the ranks of one process share one copy.
+using DecodedObjects = dstd::Map<std::uint64_t, dstd::SharedPtr<const void>>;
+
 /// What every rank got out of one call: the table the provider gave, or the
 /// fold of it.
 struct Outcome {
     backend::Table table;
-    /// What each rank of this process put in its slot of the call, for a call
-    /// that shares its objects instead of serializing them; null otherwise.
+    /// What each rank of this process put in its slot of the call, for an
+    /// object call; null otherwise. A rank outside this process has no entry.
     const dstd::Vector<dstd::SharedPtr<const void>>* objects = nullptr;
+    /// The process of each group rank, for an object call.
+    dstd::Span<const std::uint32_t> processes;
+    /// What the finishers of this call deserialized, for an object call.
+    DecodedObjects* decoded = nullptr;
 };
 
 /// Ends the call of one rank with its share of an @ref Outcome. Gives the error
@@ -546,18 +555,19 @@ dstd::Result<dstd::SharedPtr<const T>> deserialize_from(
         dstd::make_shared<const T>(std::move(*made)));
 }
 
-/// The objects of every entry of @p table, in rank order.
+/// The error the ranks of other processes get when they read @p bytes, which
+/// @p owner serialized, or nothing when they read them. The owner reads its own
+/// bytes once, so that a value no rank can decode ends the call with an error
+/// on every rank, the owner included, while the call still matches its peers.
+/// This takes a codec that decodes the same bytes the same way on every
+/// process.
 template <class T, class C>
-dstd::Result<dstd::Vector<dstd::SharedPtr<const T>>> deserialize_all(
-    const C& codec, const backend::Table& table) {
-    dstd::Vector<dstd::SharedPtr<const T>> out;
-    out.reserve(table.size());
-    for (std::uint32_t from = 0; from < table.size(); ++from) {
-        auto one = deserialize_from<T>(codec, table.at(from), from);
-        if (!one) return dstd::Unexpected(one.error());
-        out.push_back(std::move(*one));
-    }
-    return dstd::Result<dstd::Vector<dstd::SharedPtr<const T>>>(std::move(out));
+dstd::Optional<dstd::Error> check_readable(const C& codec,
+                                           dstd::Span<const std::byte> bytes,
+                                           std::uint32_t owner) {
+    auto read = deserialize_from<T>(codec, bytes, owner);
+    if (read) return {};
+    return read.error();
 }
 
 /// The object that rank @p from put in its slot of a call of the shared path,
@@ -573,6 +583,43 @@ dstd::Result<dstd::SharedPtr<const T>> shared_object(
     }
     return dstd::Result<dstd::SharedPtr<const T>>(
         std::static_pointer_cast<const T>((*objects)[from]));
+}
+
+/// The object of rank @p from for rank @p rank: the one @p from put in its slot
+/// when both are in one process, else the one @p codec reads from the entry of
+/// @p from, deserialized once for every rank of the process of @p rank.
+template <class T, class C>
+dstd::Result<dstd::SharedPtr<const T>> object_from(const C& codec,
+                                                   const Outcome& out,
+                                                   std::uint32_t rank,
+                                                   std::uint32_t from) {
+    if (out.processes[from] == out.processes[rank])
+        return shared_object<T>(out.objects, from);
+    const std::uint64_t key = (std::uint64_t{out.processes[rank]} << 32) | from;
+    if (out.decoded != nullptr) {
+        const auto seen = out.decoded->find(key);
+        if (seen != out.decoded->end())
+            return dstd::Result<dstd::SharedPtr<const T>>(
+                std::static_pointer_cast<const T>(seen->second));
+    }
+    auto made = deserialize_from<T>(codec, out.table.at(from), from);
+    if (made && out.decoded != nullptr)
+        out.decoded->emplace(key, dstd::SharedPtr<const void>(*made));
+    return made;
+}
+
+/// The objects of every rank for rank @p rank, in rank order.
+template <class T, class C>
+dstd::Result<dstd::Vector<dstd::SharedPtr<const T>>> objects_from_all(
+    const C& codec, const Outcome& out, std::uint32_t rank) {
+    dstd::Vector<dstd::SharedPtr<const T>> got;
+    got.reserve(out.processes.size());
+    for (std::uint32_t from = 0; from < out.processes.size(); ++from) {
+        auto one = object_from<T>(codec, out, rank, from);
+        if (!one) return dstd::Unexpected(one.error());
+        got.push_back(std::move(*one));
+    }
+    return dstd::Result<dstd::Vector<dstd::SharedPtr<const T>>>(std::move(got));
 }
 
 /// The element-wise merge of runs of @p T by @p fn.

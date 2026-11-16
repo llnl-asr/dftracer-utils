@@ -88,6 +88,9 @@ class PendingOp {
     /// resumed through its executor, never on this thread.
     void fail(dstd::Error why) noexcept;
 
+    /// Ends the call with the value it staged, unless it already ended.
+    virtual void commit() noexcept {}
+
     /**
      * @brief Parks @p handle until the call ends, and registers @p awaiter
      * with @p executor so a cancel of the waiting task or a shutdown reaches
@@ -166,6 +169,14 @@ class OpState : public PendingOp {
    public:
     void succeed(T value) noexcept {
         this->settle([this, &value] { value_.emplace(std::move(value)); });
+    }
+
+    /// Keeps @p value for @ref commit, so the ranks of one slot all end with a
+    /// value or none does. The call stays pending.
+    void stage(T value) noexcept { value_.emplace(std::move(value)); }
+
+    void commit() noexcept override {
+        this->settle([] {});
     }
 
     /// The outcome; read only once the call ended. Every read gives a copy.

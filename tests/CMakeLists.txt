@@ -550,6 +550,7 @@ set(TEST_CPP_SOURCES
     comm/test_backend.cpp
     comm/test_collectives.cpp
     comm/test_collectives_more.cpp
+    comm/test_object_processes.cpp
     comm/test_loader.cpp
     comm/test_codec.cpp
     # Async I/O tests

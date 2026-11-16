@@ -175,6 +175,14 @@ dstd::SharedPtr<GroupState> make_group_state(
     state->next_seq.resize(size, 0);
     state->default_timeout_ns.resize(size, 0);
     state->members = std::move(members);
+    state->processes.reserve(size);
+    for (const std::uint32_t world_rank : state->members) {
+        const std::uint32_t process =
+            backend->bootstrap->process_of(world_rank);
+        if (!state->processes.empty() && process != state->processes[0])
+            state->single_process = false;
+        state->processes.push_back(process);
+    }
     {
         // The id is taken and the group registered under one lock, which
         // peer_abort also holds: it sees the group, or an id not made yet.
@@ -840,39 +848,55 @@ void finish_data(Slot& slot, const backend::SlotEnd& end) {
     if (!claimed) return;
     Outcome outcome = make_outcome(end, folds);
     outcome.objects = &objects;
+    DecodedObjects decoded;
+    outcome.decoded = &decoded;
+    outcome.processes = dstd::Span<const std::uint32_t>(
+        group->processes.data(), group->processes.size());
     // A provider that gives each member its own table serves only the members
     // it knows; the others cannot end with data.
     const bool personal = !end.tables.empty();
     dstd::Optional<Error> unusable;
     std::uint32_t unusable_rank = 0;
-    for (std::uint32_t rank = 0; rank < finishers.size(); ++rank) {
+    // Every rank stages its value first, so a rank that cannot use the outcome
+    // fails the calls of all ranks of the slot, and none ends with a value.
+    for (std::uint32_t rank = 0; rank < finishers.size() && !unusable; ++rank) {
         // A rank that is not in this process has no call here to end.
         if (!finishers[rank] || !slot.ops[rank]) continue;
         Outcome mine;
         mine.objects = &objects;
+        mine.decoded = &decoded;
+        mine.processes = outcome.processes;
         if (personal) {
             if (end.tables[rank].offsets.empty()) {
-                slot.ops[rank]->fail(
-                    Error::from_format<"seq {}: the provider gave no table for "
-                                       "rank {}">(Condition::Internal, slot.seq,
-                                                  rank));
-                continue;
+                unusable = Error::from_format<
+                    "seq {}: the provider gave no table for rank {}">(
+                    Condition::Internal, slot.seq, rank);
+                unusable_rank = rank;
+                break;
             }
             mine.table = end.tables[rank];
         }
         dstd::Optional<Error> why = finishers[rank](personal ? mine : outcome);
-        if (why && !unusable) {
+        if (why) {
             unusable = std::move(why);
             unusable_rank = rank;
         }
     }
-    if (!unusable) return;
+    if (!unusable) {
+        for (std::uint32_t rank = 0; rank < finishers.size(); ++rank)
+            if (finishers[rank] && slot.ops[rank]) slot.ops[rank]->commit();
+        return;
+    }
     AbortTail after;
+    Error shared;
     {
         std::lock_guard<std::mutex> lock(group->mutex);
         abort_locked(*group, abort_error(*group, unusable_rank, *unusable),
                      after);
+        shared = *group->aborted;
     }
+    for (std::uint32_t rank = 0; rank < finishers.size(); ++rank)
+        if (finishers[rank] && slot.ops[rank]) slot.ops[rank]->fail(shared);
     finish_abort(group->backend, group->id, group->parent, after);
 }
 
@@ -972,8 +996,12 @@ std::uint32_t Group::size() const noexcept {
 
 std::uint64_t Group::id() const noexcept { return state_ ? state_->id : 0; }
 
-bool Group::shares_memory() const noexcept {
-    return state_ && state_->backend->collectives->shares_memory();
+bool Group::in_one_process() const noexcept {
+    return !state_ || state_->single_process;
+}
+
+bool Group::same_process(std::uint32_t other) const noexcept {
+    return state_->processes[other] == state_->processes[rank_];
 }
 
 Op<Group> Group::split(std::uint32_t color, std::uint32_t key, CallOpts opts) {

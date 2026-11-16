@@ -627,16 +627,18 @@ class Group {
      * copyable. Each result holds its objects as `SharedPtr<const T>`: shared
      * and read-only, so copy an object with `T mine = *object` to change it.
      *
-     * A call whose ranks all live in this process does not serialize. It moves
-     * each value into one shared holder, and every rank that reads the value
-     * holds that same object, with no copy; the codec does not run. Any other
-     * call has the codec size each value, writes it in place into the one block
-     * the call owns, and has the receiving rank deserialize it into an owned
-     * object on the thread that ends the call, never under a lock of a
-     * provider. Every rank takes the same path, or the call fails on every
-     * rank. A codec that fails to serialize aborts the group. A value that does
-     * not deserialize ends that rank's call with the error of the codec and
-     * aborts the group too, since the ranks no longer agree on their data.
+     * Whether a value is serialized is decided for each pair of ranks, from
+     * the process of each rank, which every rank knows. A rank in the process
+     * of the sender holds the object the sender gave, with no copy and no
+     * codec call. A value is serialized once, into the one block the call owns,
+     * and only when a rank in another process reads it; a rank deserializes it
+     * on the thread that ends the call, never under a lock of a provider, into
+     * one object that all ranks of its process share. A call whose ranks are
+     * all in one process never runs the codec. A codec that fails to serialize
+     * aborts the group. A value that does not deserialize aborts the group too,
+     * since the ranks no longer agree on their data, and ends the call of every
+     * rank with the error of the group, which names the rank and the error of
+     * the codec.
      * @ref all_gather_object gives every rank one object per rank. The types
      * are default constructible.
      */
@@ -647,7 +649,9 @@ class Group {
                                    std::move(value), std::move(codec), opts);
     }
 
-    /// @ref gather of one object per rank; only @p root gets objects.
+    /// @ref gather of one object per rank; only @p root gets objects. A value
+    /// that cannot be decoded fails @p root and the rank that owns it; the
+    /// other ranks receive nothing and may end with success.
     template <class T, Codec<T> C>
     Op<dstd::Vector<dstd::SharedPtr<const T>>> gather_object(
         std::uint32_t root, T value, C codec, CallOpts opts = {}) {
@@ -661,38 +665,39 @@ class Group {
     Op<dstd::SharedPtr<const T>> broadcast_object(std::uint32_t root, T value,
                                                   C codec, CallOpts opts = {}) {
         using Out = dstd::SharedPtr<const T>;
-        if (shares_memory()) {
-            detail::DataCall call = detail::make_data_call(
-                detail::CallKind::Broadcast, root, 1, backend::UNCHECKED_COUNT,
-                backend::RECORD_WANTS, {});
-            call.record.color = detail::OBJECT_SHARED;
-            detail::set_type_key<T>(call.record);
-            if (rank_ == root)
-                call.object = dstd::make_shared<const T>(std::move(value));
-            return data_op<Out>(
-                std::move(call),
-                [root](const detail::Outcome& out) -> dstd::Result<Out> {
-                    return detail::shared_object<T>(out.objects, root);
-                },
-                opts);
-        }
+        const bool one = in_one_process();
+        dstd::SharedPtr<const T> holder;
         backend::Contribution contribution;
+        dstd::Optional<dstd::Error> unreadable;
         if (rank_ == root) {
-            auto made = detail::serialize_owned<T>(codec, value);
-            if (made)
-                contribution = std::move(*made);
-            else
-                abort(made.error());
+            holder = dstd::make_shared<const T>(std::move(value));
+            if (!one) {
+                auto made = detail::serialize_owned<T>(codec, *holder);
+                if (made) {
+                    contribution = std::move(*made);
+                    unreadable = detail::check_readable<T>(
+                        codec, contribution.bytes, rank_);
+                } else {
+                    abort(made.error());
+                }
+            }
         }
         detail::DataCall call = detail::make_data_call(
             detail::CallKind::Broadcast, root, 1, backend::UNCHECKED_COUNT,
             backend::RECORD_WANTS, std::move(contribution));
+        if (one) {
+            call.record.color = detail::OBJECT_SHARED;
+            detail::set_type_key<T>(call.record);
+        }
+        call.object = std::move(holder);
+        const std::uint32_t rank = rank_;
         return data_op<Out>(
             std::move(call),
-            [root, codec = std::move(codec)](
+            [root, rank, unreadable = std::move(unreadable),
+             codec = std::move(codec)](
                 const detail::Outcome& out) -> dstd::Result<Out> {
-                return detail::deserialize_from<T>(codec, out.table.at(root),
-                                                   root);
+                if (unreadable) return dstd::Unexpected(*unreadable);
+                return detail::object_from<T>(codec, out, rank, root);
             },
             opts);
     }
@@ -704,87 +709,100 @@ class Group {
     Op<dstd::Vector<dstd::SharedPtr<const T>>> all_to_all_object(
         dstd::Vector<T> values, C codec, CallOpts opts = {}) {
         using Out = dstd::Vector<dstd::SharedPtr<const T>>;
+        const bool one = in_one_process();
         const std::uint32_t members = size();
         const std::size_t count = values.size();
-        if (shares_memory()) {
-            auto holder =
-                dstd::make_shared<const dstd::Vector<T>>(std::move(values));
-            detail::DataCall call =
-                detail::make_data_call(detail::CallKind::AllToAll, 0, 1, count,
-                                       backend::RECORD_WANTS, {});
+        auto holder =
+            dstd::make_shared<const dstd::Vector<T>>(std::move(values));
+        std::uint32_t flags = backend::RECORD_WANTS;
+        backend::Contribution contribution;
+        dstd::Optional<dstd::Error> unreadable;
+        if (!one) {
+            flags |= backend::RECORD_PERSONAL;
+            dstd::Vector<std::size_t> sizes(members, 0);
+            std::size_t total = 0;
+            dstd::Optional<dstd::Error> failed;
+            for (std::size_t dest = 0; dest < members && dest < count; ++dest) {
+                if (same_process(static_cast<std::uint32_t>(dest))) continue;
+                sizes[dest] = codec.serialized_size((*holder)[dest]);
+                if (sizes[dest] >
+                    std::numeric_limits<std::size_t>::max() - total) {
+                    failed = dstd::Error::from_format<
+                        "the objects of an all_to_all name more bytes than "
+                        "fit">(dstd::Condition::OutOfMemory);
+                    break;
+                }
+                total += sizes[dest];
+            }
+            if (!failed) {
+                auto made = detail::PersonalBlock::make(members, total);
+                if (!made) {
+                    failed = made.error();
+                } else {
+                    for (std::uint32_t dest = 0; dest < members && !failed;
+                         ++dest) {
+                        const dstd::Span<std::byte> piece =
+                            made->piece(sizes[dest]);
+                        if (dest >= count || same_process(dest)) continue;
+                        dstd::Result<std::size_t> done =
+                            codec.serialize((*holder)[dest], piece);
+                        if (!done) {
+                            failed = done.error();
+                        } else if (*done != sizes[dest]) {
+                            failed = detail::wrong_size(*done, sizes[dest]);
+                        } else {
+                            if (!unreadable)
+                                unreadable = detail::check_readable<T>(
+                                    codec, piece, rank_);
+                        }
+                    }
+                    if (!failed) contribution = made->finish();
+                }
+            }
+            if (failed) abort(*failed);
+        }
+        detail::DataCall call =
+            detail::make_data_call(detail::CallKind::AllToAll, 0, 1, count,
+                                   flags, std::move(contribution));
+        if (one) {
             call.record.color = detail::OBJECT_SHARED;
             detail::set_type_key<T>(call.record);
-            call.object = holder;
-            const std::uint32_t rank = rank_;
-            return data_op<Out>(
-                std::move(call),
-                [rank](const detail::Outcome& out) -> dstd::Result<Out> {
-                    Out got;
-                    got.reserve(out.table.size());
-                    for (std::uint32_t from = 0; from < out.table.size();
-                         ++from) {
-                        auto theirs = detail::shared_object<dstd::Vector<T>>(
-                            out.objects, from);
-                        if (!theirs) return dstd::Unexpected(theirs.error());
-                        if (rank >= (*theirs)->size()) {
-                            return dstd::Unexpected(dstd::Error::from_format<
-                                                    "rank {} gave {} objects "
-                                                    "to an all_to_all">(
-                                dstd::Condition::Internal, from,
-                                (*theirs)->size()));
-                        }
-                        got.push_back(dstd::SharedPtr<const T>(
-                            *theirs, &(**theirs)[rank]));
-                    }
-                    return dstd::Result<Out>(std::move(got));
-                },
-                opts);
+        } else {
+            call.record.color = detail::ALL_TO_ALL_BLOCKS;
         }
-        dstd::Vector<std::size_t> sizes(members, 0);
-        std::size_t total = 0;
-        dstd::Optional<dstd::Error> failed;
-        for (std::size_t dest = 0; dest < members && dest < count; ++dest) {
-            sizes[dest] = codec.serialized_size(values[dest]);
-            if (sizes[dest] > std::numeric_limits<std::size_t>::max() - total) {
-                failed = dstd::Error::from_format<
-                    "the objects of an all_to_all name more bytes than fit">(
-                    dstd::Condition::OutOfMemory);
-                break;
-            }
-            total += sizes[dest];
-        }
-        backend::Contribution contribution;
-        if (!failed) {
-            auto made = detail::PersonalBlock::make(members, total);
-            if (!made) {
-                failed = made.error();
-            } else {
-                for (std::uint32_t dest = 0; dest < members && !failed;
-                     ++dest) {
-                    const dstd::Span<std::byte> piece =
-                        made->piece(sizes[dest]);
-                    if (dest >= count) continue;
-                    dstd::Result<std::size_t> done =
-                        codec.serialize(values[dest], piece);
-                    if (!done)
-                        failed = done.error();
-                    else if (*done != sizes[dest])
-                        failed = detail::wrong_size(*done, sizes[dest]);
-                }
-                if (!failed) contribution = made->finish();
-            }
-        }
-        if (failed) abort(*failed);
-        detail::DataCall call = detail::make_data_call(
-            detail::CallKind::AllToAll, 0, 1, count,
-            backend::RECORD_WANTS | backend::RECORD_PERSONAL,
-            std::move(contribution));
-        call.record.color = detail::ALL_TO_ALL_BLOCKS;
+        call.object = holder;
+        const std::uint32_t rank = rank_;
         return data_op<Out>(
             std::move(call),
-            [codec = std::move(codec)](
+            [rank, unreadable = std::move(unreadable),
+             codec = std::move(codec)](
                 const detail::Outcome& out) -> dstd::Result<Out> {
-                return detail::deserialize_all<T>(codec, out.table);
+                if (unreadable) return dstd::Unexpected(*unreadable);
+                Out got;
+                got.reserve(out.processes.size());
+                for (std::uint32_t from = 0; from < out.processes.size();
+                     ++from) {
+                    if (out.processes[from] != out.processes[rank]) {
+                        auto sent = detail::deserialize_from<T>(
+                            codec, out.table.at(from), from);
+                        if (!sent) return dstd::Unexpected(sent.error());
+                        got.push_back(std::move(*sent));
+                        continue;
+                    }
+                    auto theirs = detail::shared_object<dstd::Vector<T>>(
+                        out.objects, from);
+                    if (!theirs) return dstd::Unexpected(theirs.error());
+                    if (rank >= (*theirs)->size()) {
+                        return dstd::Unexpected(
+                            dstd::Error::from_format<"rank {} gave {} objects "
+                                                     "to an all_to_all">(
+                                dstd::Condition::Internal, from,
+                                (*theirs)->size()));
+                    }
+                    got.push_back(
+                        dstd::SharedPtr<const T>(*theirs, &(**theirs)[rank]));
+                }
+                return dstd::Result<Out>(std::move(got));
             },
             opts);
     }
@@ -806,12 +824,18 @@ class Group {
     friend class Neighborhood;
     friend struct detail::Hooks;
 
-    /// True when every rank of the group is in this process, so an object call
-    /// shares its objects instead of serializing them.
-    bool shares_memory() const noexcept;
+    /// True when every rank of the group is in one process, so an object call
+    /// serializes nothing.
+    bool in_one_process() const noexcept;
+
+    /// True when group rank @p other is in the process of this rank. The group
+    /// must not be empty.
+    bool same_process(std::uint32_t other) const noexcept;
 
     /// Starts @p call, which ends with the value @p convert makes of its
-    /// outcome, or of the error it gives: a @c dstd::Result.
+    /// outcome, or of the error it gives: a @c dstd::Result. The value stays
+    /// staged until every rank of the slot in this process has one; an error
+    /// of any rank ends the call of every rank with the abort of the group.
     template <class T, class Convert>
     Op<T> data_op(detail::DataCall call, Convert convert,
                   const CallOpts& opts) {
@@ -827,14 +851,10 @@ class Group {
                 if constexpr (detail::IS_RESULT_V<std::invoke_result_t<
                                   Convert&, const detail::Outcome&>>) {
                     auto made = convert(out);
-                    if (!made) {
-                        dstd::Error why = made.error();
-                        state->fail(why);
-                        return why;
-                    }
-                    state->succeed(std::move(*made));
+                    if (!made) return made.error();
+                    state->stage(std::move(*made));
                 } else {
-                    state->succeed(convert(out));
+                    state->stage(convert(out));
                 }
                 return {};
             },
@@ -851,43 +871,38 @@ class Group {
         const CallOpts& opts) {
         using Out = dstd::Vector<dstd::SharedPtr<const T>>;
         const std::uint32_t flags = takes ? backend::RECORD_WANTS : 0;
-        if (shares_memory()) {
-            detail::DataCall call = detail::make_data_call(
-                kind, root, 1, backend::UNCHECKED_COUNT, flags, {});
-            call.record.color = detail::OBJECT_SHARED;
-            detail::set_type_key<T>(call.record);
-            call.object = dstd::make_shared<const T>(std::move(value));
-            return data_op<Out>(
-                std::move(call),
-                [takes](const detail::Outcome& out) -> dstd::Result<Out> {
-                    Out got;
-                    if (!takes) return got;
-                    got.reserve(out.table.size());
-                    for (std::uint32_t from = 0; from < out.table.size();
-                         ++from) {
-                        auto one = detail::shared_object<T>(out.objects, from);
-                        if (!one) return dstd::Unexpected(one.error());
-                        got.push_back(std::move(*one));
-                    }
-                    return dstd::Result<Out>(std::move(got));
-                },
-                opts);
-        }
+        const bool one = in_one_process();
+        auto holder = dstd::make_shared<const T>(std::move(value));
         backend::Contribution contribution;
-        auto made = detail::serialize_owned<T>(codec, value);
-        if (made)
-            contribution = std::move(*made);
-        else
-            abort(made.error());
+        dstd::Optional<dstd::Error> unreadable;
+        if (!one &&
+            (kind == detail::CallKind::AllGather || !same_process(root))) {
+            auto made = detail::serialize_owned<T>(codec, *holder);
+            if (made) {
+                contribution = std::move(*made);
+                unreadable =
+                    detail::check_readable<T>(codec, contribution.bytes, rank_);
+            } else {
+                abort(made.error());
+            }
+        }
         detail::DataCall call =
             detail::make_data_call(kind, root, 1, backend::UNCHECKED_COUNT,
                                    flags, std::move(contribution));
+        if (one) {
+            call.record.color = detail::OBJECT_SHARED;
+            detail::set_type_key<T>(call.record);
+        }
+        call.object = std::move(holder);
+        const std::uint32_t rank = rank_;
         return data_op<Out>(
             std::move(call),
-            [takes, codec = std::move(codec)](
+            [takes, rank, unreadable = std::move(unreadable),
+             codec = std::move(codec)](
                 const detail::Outcome& out) -> dstd::Result<Out> {
+                if (unreadable) return dstd::Unexpected(*unreadable);
                 if (!takes) return Out{};
-                return detail::deserialize_all<T>(codec, out.table);
+                return detail::objects_from_all<T>(codec, out, rank);
             },
             opts);
     }

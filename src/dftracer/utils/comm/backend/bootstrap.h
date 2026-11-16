@@ -32,6 +32,13 @@ class Bootstrap {
     /// for a backend whose ranks are all in this process.
     virtual std::uint32_t own_rank() const noexcept { return 0; }
 
+    /// The process that runs world rank @p rank, as an id that is the same
+    /// for the ranks of one process and differs between processes. Two ranks of
+    /// one process hand objects to each other without serializing them.
+    /// @p rank is a world rank below @ref ranks. Every process gives the same
+    /// answer for it, for the life of the communicator.
+    virtual std::uint32_t process_of(std::uint32_t rank) const noexcept = 0;
+
     /// The world ranks that share a node with world rank @p rank, in node
     /// order, so the node rank is the place of a rank in the result.
     virtual dstd::Vector<std::uint32_t> node_members(

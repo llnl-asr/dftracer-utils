@@ -51,6 +51,28 @@ comm::Communicator start_mpi() {
     return communicator;
 }
 
+/// The string codec, refusing to decode the text "bad".
+struct PickyCodec {
+    std::size_t serialized_size(const dstd::String& value) const noexcept {
+        return comm::StringCodec{}.serialized_size(value);
+    }
+
+    dstd::Result<std::size_t> serialize(const dstd::String& value,
+                                        dstd::Span<std::byte> out) const {
+        return comm::StringCodec{}.serialize(value, out);
+    }
+
+    dstd::Result<dstd::String> deserialize(
+        dstd::Span<const std::byte> bytes) const {
+        auto made = comm::StringCodec{}.deserialize(bytes);
+        if (made && *made == dstd::String("bad")) {
+            return dstd::Unexpected(dstd::Error::from_format<"refused bad">(
+                dstd::Condition::InvalidArgument));
+        }
+        return made;
+    }
+};
+
 std::string text_of(const dstd::Error& error) {
     const dstd::StringView message = error.message();
     return std::string(message.data(), message.size());
@@ -476,6 +498,98 @@ TEST_SUITE("CommMpiCollectives") {
             co_return {};
         });
         CHECK(native_calls(communicator, CallKind::AllToAll) == 1);
+    }
+
+    TEST_CASE("object calls carry vectors through the codec") {
+        comm::Communicator communicator = start_mpi();
+        run_one([&]() -> Task {
+            comm::Group group = communicator.world(communicator.rank());
+            const std::uint32_t n = group.size();
+            const std::uint32_t me = group.rank();
+            const comm::VectorCodec<std::uint32_t> codec;
+            auto vector_of = [](std::uint32_t owner, std::uint32_t to) {
+                dstd::Vector<std::uint32_t> out;
+                for (std::uint32_t at = 0; at <= (owner + to) % 3; ++at)
+                    out.push_back(owner * 100 + to * 10 + at);
+                return out;
+            };
+            auto everyone =
+                co_await group.all_gather_object(vector_of(me, 0), codec);
+            if (!everyone) co_return std::move(everyone).error();
+            CHECK(everyone->size() == n);
+            for (std::uint32_t at = 0; at < n; ++at)
+                CHECK(*(*everyone)[at] == vector_of(at, 0));
+
+            auto rooted =
+                co_await group.gather_object(0, vector_of(me, 1), codec);
+            if (!rooted) co_return std::move(rooted).error();
+            if (me == 0) {
+                CHECK(rooted->size() == n);
+                for (std::uint32_t at = 0; at < n; ++at)
+                    CHECK(*(*rooted)[at] == vector_of(at, 1));
+            } else {
+                CHECK(rooted->empty());
+            }
+
+            auto shared =
+                co_await group.broadcast_object(n - 1, vector_of(me, 2), codec);
+            if (!shared) co_return std::move(shared).error();
+            CHECK(**shared == vector_of(n - 1, 2));
+
+            dstd::Vector<dstd::Vector<std::uint32_t>> out;
+            for (std::uint32_t dest = 0; dest < n; ++dest)
+                out.push_back(vector_of(me, dest));
+            auto swapped =
+                co_await group.all_to_all_object(std::move(out), codec);
+            if (!swapped) co_return std::move(swapped).error();
+            CHECK(swapped->size() == n);
+            for (std::uint32_t from = 0; from < n; ++from)
+                CHECK(*(*swapped)[from] == vector_of(from, me));
+            co_return {};
+        });
+    }
+
+    TEST_CASE("a value that cannot be decoded fails every rank, owner too") {
+        for (const int call : {0, 1, 2}) {
+            CAPTURE(call);
+            comm::Communicator communicator = start_mpi();
+            if (communicator.size() < 2) return;
+            run_one([&]() -> Task {
+                comm::Group group = communicator.world(communicator.rank());
+                const std::uint32_t n = group.size();
+                const std::uint32_t me = group.rank();
+                const std::uint32_t owner = call == 2 ? n - 1 : 0;
+                const dstd::String mine =
+                    me == owner ? dstd::String("bad") : dstd::String("ok");
+                const PickyCodec codec;
+                dstd::Result<void> outcome;
+                if (call == 0) {
+                    auto got_op = group.broadcast_object(0, mine, codec);
+                    auto got = co_await got_op;
+                    if (!got) outcome = std::move(got).error();
+                } else if (call == 1) {
+                    auto got_op = group.all_gather_object(mine, codec);
+                    auto got = co_await got_op;
+                    if (!got) outcome = std::move(got).error();
+                } else {
+                    auto got_op = group.gather_object(0, mine, codec);
+                    auto got = co_await got_op;
+                    if (!got) outcome = std::move(got).error();
+                }
+                // A rank of a gather that is neither the root nor the owner
+                // ends its call when its piece is sent, before anyone fails.
+                const bool must_fail = call != 2 || me == 0 || me == owner;
+                if (must_fail) CHECK(!outcome.has_value());
+                if (!outcome) {
+                    const std::string text = text_of(outcome.error());
+                    CHECK(text.find("refused bad") != std::string::npos);
+                    CHECK(text.find("deserialize the object of rank " +
+                                    std::to_string(owner)) !=
+                          std::string::npos);
+                }
+                co_return {};
+            });
+        }
     }
 
     TEST_CASE("a channel carries a value around the ring") {

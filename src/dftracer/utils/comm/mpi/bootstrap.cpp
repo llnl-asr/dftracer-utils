@@ -18,6 +18,10 @@ class MpiBootstrap : public backend::Bootstrap {
         return context_->rank();
     }
 
+    std::uint32_t process_of(std::uint32_t rank) const noexcept override {
+        return rank;
+    }
+
     dstd::Vector<std::uint32_t> node_members(
         std::uint32_t rank) const override {
         const dstd::Vector<std::uint32_t>& leaders = context_->node_leaders();

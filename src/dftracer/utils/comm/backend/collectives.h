@@ -204,10 +204,6 @@ class Collectives {
     Collectives& operator=(const Collectives&) = delete;
     virtual ~Collectives() = default;
 
-    /// True when every member of every slot lives in this process, so a call
-    /// may hand an object to the other members without serializing it.
-    virtual bool shares_memory() const noexcept { return false; }
-
     /// Tells the provider the members of group @p group_id, as world ranks in
     /// group order, when this process makes the group, so a provider that runs
     /// one transport channel per group can make it. The world and node groups

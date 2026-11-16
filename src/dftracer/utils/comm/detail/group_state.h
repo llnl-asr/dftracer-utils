@@ -119,8 +119,9 @@ struct Slot {
  * @brief The state of one group, shared by its handles and its calls.
  *
  * @ref members holds the world ranks in group order, so group rank `r` is
- * world rank `members[r]`. Everything but @ref id, @ref members and
- * @ref backend is guarded by @ref mutex.
+ * world rank `members[r]`. Everything but @ref id, @ref members,
+ * @ref processes, @ref single_process and @ref backend is guarded by @ref
+ * mutex.
  */
 struct GroupState {
     GroupState() noexcept;
@@ -133,6 +134,11 @@ struct GroupState {
     /// The group a split made this one from, or 0.
     std::uint64_t parent = 0;
     dstd::Vector<std::uint32_t> members;
+    /// The process of each group rank, from the bootstrap, so a call hands an
+    /// object to the ranks of its own process without serializing it.
+    dstd::Vector<std::uint32_t> processes;
+    /// True when every group rank is in one process.
+    bool single_process = true;
     /// The sequence number the next call of each group rank takes.
     dstd::Vector<std::uint64_t> next_seq;
     /// The timeout each group rank uses when a call names no deadline, from

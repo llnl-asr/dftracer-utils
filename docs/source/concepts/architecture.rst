@@ -38,6 +38,12 @@ static variant (``src/CMakeLists.txt``), aggregated behind
   A call moves its data in rounds of at most 1 GiB, so the size of a call has
   no limit of the int count of MPI. The communicator of a group is made on a
   thread of its own, and freed when the group is released.
+  The ``_object`` calls of a group (``all_gather_object``, ``gather_object``,
+  ``broadcast_object`` and ``all_to_all_object``) decide per pair of ranks
+  whether a value crosses a codec. A rank in the process of the sender gets the
+  sender's object itself, shared and read-only, with no codec call. A value is
+  serialized once, and only when a rank in another process reads it, and each
+  receiving process deserializes it once and shares that copy among its ranks.
 - ``dftracer_utils_store`` is the key-value store engine: data files, the
   writer and its committer, and the snapshot that reads them. It links only
   the runtime and knows nothing about traces.

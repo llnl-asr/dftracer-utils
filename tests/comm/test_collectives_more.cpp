@@ -144,14 +144,11 @@ class PerRankAll : public comm::backend::Collectives {
 comm::Communicator start_per_rank_all(std::uint32_t ranks,
                                       coro::Executor& executor,
                                       std::uint32_t driver) {
-    auto started = comm::Communicator::start_local(ranks, executor);
-    REQUIRE(started.has_value());
-    comm::Communicator communicator = std::move(*started);
-    comm::detail::Hooks::set_collectives(
-        communicator,
-        dstd::make_shared<PerRankAll>(
-            comm::detail::Hooks::messaging(communicator), ranks, driver));
-    return communicator;
+    return dftu_comm_test::start_processes(
+        ranks, executor, dftu_comm_test::process_per_rank(ranks),
+        [ranks, driver](const auto& messaging) {
+            return dstd::make_shared<PerRankAll>(messaging, ranks, driver);
+        });
 }
 
 /// The provider of one process of a run that has a rank per process: it ends a
@@ -1095,7 +1092,7 @@ TEST_SUITE("CommCollectivesMore") {
                             static_cast<std::int32_t>(100 + from * 10 + rank));
                     }
                 }
-                if (binding == Binding::Local) {
+                if (binding == Binding::Local || ranks == 1) {
                     CHECK(PersonCodec::serialized.load() == 0);
                     for (std::uint32_t rank = 1; rank < ranks; ++rank) {
                         CHECK(everyone[rank][0].get() == everyone[0][0].get());
@@ -1141,14 +1138,13 @@ TEST_SUITE("CommCollectivesMore") {
                     CHECK(all_ok(errors));
                     continue;
                 }
-                REQUIRE(errors[1].has_value());
-                CHECK(has_text(*errors[1],
-                               "could not deserialize the object of rank 0"));
-                CHECK(has_text(*errors[1], "unlucky age"));
                 for (std::uint32_t rank = 0; rank < ranks; ++rank) {
-                    if (rank == 1) continue;
                     REQUIRE(errors[rank].has_value());
-                    CHECK(has_text(*errors[rank], "aborted by rank 1"));
+                    CHECK(has_text(*errors[rank],
+                                   "could not deserialize the object of "
+                                   "rank 0"));
+                    CHECK(has_text(*errors[rank], "unlucky age"));
+                    CHECK(has_text(*errors[rank], "aborted by rank 0"));
                 }
             }
         }
@@ -1172,7 +1168,7 @@ TEST_SUITE("CommCollectivesMore") {
                         if (!got) co_return std::move(got).error();
                         co_return {};
                     });
-                if (binding == Binding::Local) {
+                if (binding == Binding::Local || ranks == 1) {
                     CHECK(all_ok(errors));
                     continue;
                 }
@@ -1265,11 +1261,12 @@ TEST_SUITE("CommCollectivesMore") {
                             dstd::Vector<Person> sends(ranks, Person{"x", 1});
                             if (bad) {
                                 if (which == "huge sum") {
-                                    sends[0].age = -1;
-                                    sends[1].age = -1;
+                                    for (std::uint32_t at = 1;
+                                         at < ranks && at < 3; ++at)
+                                        sends[at].age = -1;
                                 } else if (which == "huge block") {
-                                    sends[0].age = -2;
-                                    for (std::uint32_t at = 1; at < ranks; ++at)
+                                    sends[1].age = -2;
+                                    for (std::uint32_t at = 2; at < ranks; ++at)
                                         sends[at].age = -3;
                                 } else {
                                     sends[1].age = -4;
@@ -1284,7 +1281,13 @@ TEST_SUITE("CommCollectivesMore") {
                     });
                 for (std::uint32_t rank = 0; rank < ranks; ++rank) {
                     REQUIRE(errors[rank].has_value());
-                    CHECK(has_text(*errors[rank], one.text));
+                    // A rank keeps its own piece without serializing it, so
+                    // with two ranks the one piece it sends cannot overflow the
+                    // sum and fails as a block too large.
+                    const bool one_piece = which == "huge sum" && ranks == 2;
+                    CHECK(has_text(*errors[rank], one_piece
+                                                      ? "do not fit one block"
+                                                      : one.text));
                 }
             }
         }

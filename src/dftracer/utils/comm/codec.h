@@ -26,7 +26,10 @@ namespace dftracer::utils::comm {
  * of the call. It gives an error when @p out does not fit the value.
  * `deserialize(bytes)` reads one value from exactly the bytes one `serialize`
  * wrote, into an owned @p T, and gives an error for bytes that are not such a
- * value: they come from another rank and are never trusted.
+ * value: they come from another rank and are never trusted. It must be
+ * deterministic: the same bytes decode the same way, or fail the same way, on
+ * every process, since the rank that serialized a value reads the bytes back
+ * once to know that the others can.
  */
 template <class C, class T>
 concept Codec =

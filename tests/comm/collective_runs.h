@@ -7,7 +7,9 @@
 // linear instance per rank.
 
 #include <comm/support.h>
+#include <dftracer/utils/comm/backend/bootstrap.h>
 #include <dftracer/utils/comm/backend/linear_collectives.h>
+#include <dftracer/utils/comm/backend/loader.h>
 #include <dftracer/utils/comm/backend/local.h>
 #include <dftracer/utils/comm/group.h>
 #include <dftracer/utils/coro/executor.h>
@@ -38,20 +40,82 @@ inline const char* binding_name(Binding binding) noexcept {
                : "linear collectives over local messaging";
 }
 
+/// The local bootstrap with the processes a test names, so a group of one test
+/// process behaves as one of several.
+class ProcessBootstrap : public dftracer::utils::comm::backend::Bootstrap {
+   public:
+    ProcessBootstrap(dftracer::utils::dstd::SharedPtr<
+                         dftracer::utils::comm::backend::Bootstrap>
+                         inner,
+                     dftracer::utils::dstd::Vector<std::uint32_t> processes)
+        : inner_(std::move(inner)), processes_(std::move(processes)) {}
+
+    std::uint32_t ranks() const noexcept override { return inner_->ranks(); }
+
+    std::uint32_t own_rank() const noexcept override {
+        return inner_->own_rank();
+    }
+
+    std::uint32_t process_of(std::uint32_t rank) const noexcept override {
+        return processes_[rank];
+    }
+
+    dftracer::utils::dstd::Vector<std::uint32_t> node_members(
+        std::uint32_t rank) const override {
+        return inner_->node_members(rank);
+    }
+
+    dftracer::utils::coro::TimerService* timers() const noexcept override {
+        return inner_->timers();
+    }
+
+   private:
+    dftracer::utils::dstd::SharedPtr<dftracer::utils::comm::backend::Bootstrap>
+        inner_;
+    dftracer::utils::dstd::Vector<std::uint32_t> processes_;
+};
+
+/// A process id per rank, each rank in a process of its own.
+inline dftracer::utils::dstd::Vector<std::uint32_t> process_per_rank(
+    std::uint32_t ranks) {
+    dftracer::utils::dstd::Vector<std::uint32_t> processes(ranks);
+    for (std::uint32_t rank = 0; rank < ranks; ++rank) processes[rank] = rank;
+    return processes;
+}
+
+/// A communicator of @p ranks ranks that live in the processes @p processes
+/// names, over local messaging and the collectives @p make builds from it.
+template <class Make>
+dftracer::utils::comm::Communicator start_processes(
+    std::uint32_t ranks, dftracer::utils::coro::Executor& executor,
+    dftracer::utils::dstd::Vector<std::uint32_t> processes, Make make) {
+    auto messaging = dftracer::utils::comm::backend::make_local_messaging();
+    auto collectives = make(messaging);
+    auto started = dftracer::utils::comm::Communicator::start(
+        dftracer::utils::comm::Providers{
+            dftracer::utils::dstd::make_shared<ProcessBootstrap>(
+                dftracer::utils::comm::backend::make_local_bootstrap(ranks,
+                                                                     executor),
+                std::move(processes)),
+            std::move(messaging), std::move(collectives)});
+    REQUIRE(started.has_value());
+    return std::move(*started);
+}
+
 inline dftracer::utils::comm::Communicator start(
     std::uint32_t ranks, dftracer::utils::coro::Executor& executor,
     Binding binding) {
-    auto started =
-        dftracer::utils::comm::Communicator::start_local(ranks, executor);
-    REQUIRE(started.has_value());
-    dftracer::utils::comm::Communicator communicator = std::move(*started);
+    using dftracer::utils::comm::backend::make_linear_collectives;
+    using dftracer::utils::comm::backend::make_local_collectives;
     if (binding == Binding::Linear) {
-        dftracer::utils::comm::detail::Hooks::set_collectives(
-            communicator,
-            dftracer::utils::comm::backend::make_linear_collectives(
-                dftracer::utils::comm::detail::Hooks::messaging(communicator)));
+        return start_processes(ranks, executor, process_per_rank(ranks),
+                               [](const auto& messaging) {
+                                   return make_linear_collectives(messaging);
+                               });
     }
-    return communicator;
+    return start_processes(
+        ranks, executor, dftracer::utils::dstd::Vector<std::uint32_t>(ranks, 0),
+        [](const auto&) { return make_local_collectives(); });
 }
 
 /// Runs @p body(runtime, communicator, ranks) for every binding and every rank
@@ -129,16 +193,12 @@ class PerRank : public dftracer::utils::comm::backend::Collectives {
 inline dftracer::utils::comm::Communicator start_per_rank(
     std::uint32_t ranks, dftracer::utils::coro::Executor& executor,
     std::uint32_t driver) {
-    auto started =
-        dftracer::utils::comm::Communicator::start_local(ranks, executor);
-    REQUIRE(started.has_value());
-    dftracer::utils::comm::Communicator communicator = std::move(*started);
-    dftracer::utils::comm::detail::Hooks::set_collectives(
-        communicator,
-        dftracer::utils::dstd::make_shared<PerRank>(
-            dftracer::utils::comm::detail::Hooks::messaging(communicator),
-            ranks, driver));
-    return communicator;
+    return start_processes(
+        ranks, executor, process_per_rank(ranks),
+        [ranks, driver](const auto& messaging) {
+            return dftracer::utils::dstd::make_shared<PerRank>(messaging, ranks,
+                                                               driver);
+        });
 }
 
 inline bool

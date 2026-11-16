@@ -161,14 +161,17 @@ TEST_SUITE("CommMpiMessaging") {
                                         "rank zero gave up"));
                 co_return {};
             }
-            auto joined = co_await group.barrier();
-            CHECK_FALSE(joined.has_value());
-            if (!joined) {
-                CHECK(dftu_comm_test::has_text(joined.error(),
+            // A receive that waits for rank 0: unlike a native collective it
+            // can end with the abort and leave nothing pending.
+            auto channel = group.channel<std::uint64_t>("never sent");
+            auto message = co_await channel.recv_from(0);
+            CHECK_FALSE(message.has_value());
+            if (!message) {
+                CHECK(dftu_comm_test::has_text(message.error(),
                                                "aborted by rank 0"));
-                CHECK(dftu_comm_test::has_text(joined.error(),
+                CHECK(dftu_comm_test::has_text(message.error(),
                                                "rank zero gave up"));
-                CHECK(dftu_comm_test::count_text(joined.error(),
+                CHECK(dftu_comm_test::count_text(message.error(),
                                                  "aborted by") == 1);
             }
             co_return {};

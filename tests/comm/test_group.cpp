@@ -20,6 +20,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <mutex>
 #include <thread>
 #include <utility>
 
@@ -548,7 +549,7 @@ TEST_SUITE("CommGroup") {
             [&](std::uint32_t rank) -> coro::CoroTask<dstd::Result<void>> {
                 comm::Group group = communicator.world(rank);
                 if (rank == 0) {
-                    comm::detail::Hooks::peer_abort(communicator, group.id(),
+                    comm::detail::Hooks::peer_abort(communicator, group.id(), 0,
                                                     announced);
                 }
                 co_return co_await group.barrier();
@@ -560,6 +561,58 @@ TEST_SUITE("CommGroup") {
         }
     }
 
+    TEST_CASE("an abort of a split child is kept only for a live parent") {
+        Runtime rt(4);
+        comm::Communicator communicator = make_communicator(2, *rt.executor());
+        const dstd::Error announced{dstd::Condition::Internal,
+                                    "group 2: aborted by rank 9: early"};
+        const std::uint64_t next =
+            comm::detail::Hooks::next_group_id(communicator);
+        // A parent that is not alive here: a process that is not a member of
+        // it keeps nothing, however many aborts come.
+        for (std::uint64_t at = 0; at < 3000; ++at)
+            comm::detail::Hooks::peer_abort(
+                communicator, comm::detail::split_child_id(777, at, 0), 777,
+                announced);
+        CHECK(comm::detail::Hooks::early_abort_count(communicator) == 0);
+        // The abort of a group that comes next in sequence is still kept.
+        comm::detail::Hooks::peer_abort(communicator, next, 0, announced);
+        CHECK(comm::detail::Hooks::early_abort_count(communicator) == 1);
+        // A child of the world group, which is alive, is kept as well.
+        comm::detail::Hooks::peer_abort(
+            communicator, comm::detail::split_child_id(next - 1, 0, 0),
+            next - 1, announced);
+        CHECK(comm::detail::Hooks::early_abort_count(communicator) == 2);
+    }
+
+    TEST_CASE("the aborts of the children of a released group go with it") {
+        Runtime rt(4);
+        comm::Communicator communicator = make_communicator(2, *rt.executor());
+        const dstd::Error announced{dstd::Condition::Internal,
+                                    "group 2: aborted by rank 9: early"};
+        dstd::Vector<comm::Group> kids;
+        std::mutex kept;
+        auto errors = dftu_comm_test::run_ranks(
+            rt, 2,
+            [&](std::uint32_t rank) -> coro::CoroTask<dstd::Result<void>> {
+                comm::Group world = communicator.world(rank);
+                auto child = co_await world.split(0, rank);
+                if (!child) co_return std::move(child).error();
+                std::lock_guard<std::mutex> lock(kept);
+                kids.push_back(*child);
+                co_return dstd::Result<void>{};
+            });
+        for (const auto& error : errors) REQUIRE_FALSE(error.has_value());
+        REQUIRE(kids.size() == 2);
+        const std::uint64_t parent = kids[0].id();
+        comm::detail::Hooks::peer_abort(
+            communicator, comm::detail::split_child_id(parent, 0, 0), parent,
+            announced);
+        CHECK(comm::detail::Hooks::early_abort_count(communicator) == 1);
+        kids.clear();
+        CHECK(comm::detail::Hooks::early_abort_count(communicator) == 0);
+    }
+
     TEST_CASE("an abort for a group not made yet is kept for its birth only") {
         Runtime rt(4);
         comm::Communicator communicator = make_communicator(2, *rt.executor());
@@ -568,9 +621,13 @@ TEST_SUITE("CommGroup") {
         const std::uint64_t next =
             comm::detail::Hooks::next_group_id(communicator);
         // A group id below the next one was made and is gone: nothing to keep.
-        comm::detail::Hooks::peer_abort(communicator, 0, announced);
+        comm::detail::Hooks::peer_abort(communicator, 0, 0, announced);
         CHECK(comm::detail::Hooks::early_abort_count(communicator) == 0);
-        comm::detail::Hooks::peer_abort(communicator, next, announced);
+        // The first split of the world group, which has the id before next.
+        const std::uint64_t child =
+            comm::detail::split_child_id(next - 1, 0, 0);
+        comm::detail::Hooks::peer_abort(communicator, child, next - 1,
+                                        announced);
         CHECK(comm::detail::Hooks::early_abort_count(communicator) == 1);
         auto errors = dftu_comm_test::run_ranks(
             rt, 2,

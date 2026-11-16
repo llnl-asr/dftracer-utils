@@ -82,10 +82,26 @@ class Context {
     /// How many requests the progress thread still watches.
     std::size_t watched() const;
 
+    /// Counts a native collective request in flight, from its post to the end
+    /// of its watch. A native request cannot be cancelled, so a context that
+    /// stops with some still pending ends the job: see @ref shutdown.
+    void native_begin() noexcept {
+        native_pending_.fetch_add(1, std::memory_order_acq_rel);
+    }
+    void native_end() noexcept {
+        native_pending_.fetch_sub(1, std::memory_order_acq_rel);
+    }
+    std::size_t native_pending() const noexcept {
+        return native_pending_.load(std::memory_order_acquire);
+    }
+
     /// Stops both threads and waits for them, except the one this call runs
-    /// on, which it detaches. @p force ends the progress thread with requests
-    /// still watched, which only the end of the process may do. Does nothing
-    /// for a context that already stopped.
+    /// on, which it detaches. A context with native requests still pending
+    /// waits a short while for them, and then ends the job with MPI_Abort and
+    /// one line on stderr instead of finalizing MPI, so the job never hangs on
+    /// a collective that a peer never matched. @p force ends the progress
+    /// thread with requests still watched, which only the end of the process
+    /// may do. Does nothing for a context that already stopped.
     void shutdown(bool force);
 
     /// Stops the threads of every live context, for the exit hook.
@@ -115,6 +131,7 @@ class Context {
     std::condition_variable finished_wake_;
     dstd::Vector<Watched> watched_;
     std::atomic<std::size_t> watched_count_{0};
+    std::atomic<std::size_t> native_pending_{0};
     struct Poller {
         std::uint64_t id;
         dstd::SharedPtr<dstd::Function<bool()>> run;

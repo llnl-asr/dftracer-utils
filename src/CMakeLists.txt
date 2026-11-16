@@ -232,6 +232,7 @@ set(DFTU_COMM_BUILD_STAMP "${PROJECT_VERSION}-${DFTU_COMM_STAMP_TIME}"
 set(DFTRACER_UTILS_COMM_MPI_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/comm/mpi/bootstrap.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/comm/mpi/c_api.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/comm/mpi/collectives.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/comm/mpi/context.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/comm/mpi/messaging.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/comm/mpi/mpi_backend.cpp)

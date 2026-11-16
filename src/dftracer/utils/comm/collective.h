@@ -609,8 +609,9 @@ backend::Combine builtin_combine(ReduceOp op) {
                   "function for another one");
     switch (op) {
         case ReduceOp::Sum:
-            return make_combine<T>(
-                [](const T& a, const T& b) { return a + b; });
+            return make_combine<T>([](const T& a, const T& b) -> T {
+                return static_cast<T>(a + b);
+            });
         case ReduceOp::Min:
             return make_combine<T>(
                 [](const T& a, const T& b) { return b < a ? b : a; });
@@ -619,6 +620,49 @@ backend::Combine builtin_combine(ReduceOp op) {
                 [](const T& a, const T& b) { return a < b ? b : a; });
     }
     return {};
+}
+
+/// What @ref backend::Record::color names for a built-in reduction: the element
+/// type, which a provider with a native reduction maps to its own type.
+inline constexpr std::uint32_t ELEM_OPAQUE = 0;
+inline constexpr std::uint32_t ELEM_INT8 = 1;
+inline constexpr std::uint32_t ELEM_INT16 = 2;
+inline constexpr std::uint32_t ELEM_INT32 = 3;
+inline constexpr std::uint32_t ELEM_INT64 = 4;
+inline constexpr std::uint32_t ELEM_UINT8 = 5;
+inline constexpr std::uint32_t ELEM_UINT16 = 6;
+inline constexpr std::uint32_t ELEM_UINT32 = 7;
+inline constexpr std::uint32_t ELEM_UINT64 = 8;
+inline constexpr std::uint32_t ELEM_FLOAT32 = 9;
+inline constexpr std::uint32_t ELEM_FLOAT64 = 10;
+
+/// The element code of @p T: the integer and floating types of a fixed width,
+/// and @ref ELEM_OPAQUE for any other.
+template <class T>
+constexpr std::uint32_t elem_code() noexcept {
+    if constexpr (std::is_same_v<T, bool> || std::is_same_v<T, char> ||
+                  std::is_same_v<T, wchar_t> || std::is_same_v<T, char8_t> ||
+                  std::is_same_v<T, char16_t> || std::is_same_v<T, char32_t>) {
+        return ELEM_OPAQUE;
+    } else if constexpr (std::is_integral_v<T> && std::is_signed_v<T>) {
+        if constexpr (sizeof(T) == 1) return ELEM_INT8;
+        if constexpr (sizeof(T) == 2) return ELEM_INT16;
+        if constexpr (sizeof(T) == 4) return ELEM_INT32;
+        if constexpr (sizeof(T) == 8) return ELEM_INT64;
+        return ELEM_OPAQUE;
+    } else if constexpr (std::is_integral_v<T>) {
+        if constexpr (sizeof(T) == 1) return ELEM_UINT8;
+        if constexpr (sizeof(T) == 2) return ELEM_UINT16;
+        if constexpr (sizeof(T) == 4) return ELEM_UINT32;
+        if constexpr (sizeof(T) == 8) return ELEM_UINT64;
+        return ELEM_OPAQUE;
+    } else if constexpr (std::is_same_v<T, float>) {
+        return ELEM_FLOAT32;
+    } else if constexpr (std::is_same_v<T, double>) {
+        return ELEM_FLOAT64;
+    } else {
+        return ELEM_OPAQUE;
+    }
 }
 
 constexpr std::uint32_t reduce_code(ReduceOp op) noexcept {

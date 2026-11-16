@@ -1002,8 +1002,9 @@ endif()
 # backend library loaded at run time. They exist only when the option is ON.
 if(DFTRACER_UTILS_ENABLE_MPI AND DFTRACER_UTILS_BUILD_SHARED)
   dftu_variant_target(_comm_mpi_shared dftracer_utils_comm_mpi shared)
-  foreach(mpi_test comm/mpi/test_mpi_messaging)
+  foreach(mpi_test comm/mpi/test_mpi_messaging comm/mpi/test_mpi_collectives)
     string(REPLACE "/" "_" mpi_target ${mpi_test})
+    get_filename_component(mpi_name ${mpi_test} NAME)
     add_executable(${mpi_target} ${mpi_test}.cpp)
     target_include_directories(${mpi_target} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
                                                   ${CMAKE_SOURCE_DIR}/src)
@@ -1014,7 +1015,7 @@ if(DFTRACER_UTILS_ENABLE_MPI AND DFTRACER_UTILS_BUILD_SHARED)
     add_dependencies(${mpi_target} ${_comm_mpi_shared})
     set_target_properties(
       ${mpi_target}
-      PROPERTIES OUTPUT_NAME test_mpi_messaging
+      PROPERTIES OUTPUT_NAME ${mpi_name}
                  RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/comm/mpi")
     foreach(np 1 2 4)
       add_test(NAME ${mpi_test}_np${np}
@@ -1023,6 +1024,48 @@ if(DFTRACER_UTILS_ENABLE_MPI AND DFTRACER_UTILS_BUILD_SHARED)
       set_tests_properties(
         ${mpi_test}_np${np} PROPERTIES TIMEOUT 300 ENVIRONMENT
                                        "DFTU_TEST_NP=${np}")
+    endforeach()
+  endforeach()
+
+  # A native collective that a peer never matches cannot be cancelled: the call
+  # fails at once, and the context ends the job with MPI_Abort when it stops.
+  add_executable(comm_mpi_native_probe comm/mpi/native_probe.cpp)
+  target_include_directories(comm_mpi_native_probe PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
+                                                           ${CMAKE_SOURCE_DIR}/src)
+  target_link_libraries(comm_mpi_native_probe PRIVATE dftracer_utils doctest::doctest testing_utilities)
+  target_set_warnings(comm_mpi_native_probe)
+  target_enable_coroutine(comm_mpi_native_probe)
+  target_add_rpath(comm_mpi_native_probe)
+  add_dependencies(comm_mpi_native_probe ${_comm_mpi_shared})
+  set_target_properties(
+    comm_mpi_native_probe
+    PROPERTIES OUTPUT_NAME native_probe
+               RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/comm/mpi")
+  # A timing run, not a test: native and linear collectives side by side. See
+  # the header of the source for how to run it.
+  add_executable(comm_mpi_native_bench comm/mpi/native_bench.cpp)
+  target_include_directories(comm_mpi_native_bench PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
+                                                           ${CMAKE_SOURCE_DIR}/src)
+  target_link_libraries(comm_mpi_native_bench PRIVATE dftracer_utils doctest::doctest testing_utilities)
+  target_set_warnings(comm_mpi_native_bench)
+  target_enable_coroutine(comm_mpi_native_bench)
+  target_add_rpath(comm_mpi_native_bench)
+  add_dependencies(comm_mpi_native_bench ${_comm_mpi_shared})
+  set_target_properties(
+    comm_mpi_native_bench
+    PROPERTIES OUTPUT_NAME native_bench
+               RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/comm/mpi")
+  foreach(mode abort deadline create)
+    foreach(np 2 4)
+      add_test(NAME comm/mpi/native_probe_${mode}_np${np}
+               COMMAND ${CMAKE_COMMAND} -DMPIEXEC=${MPIEXEC_EXECUTABLE}
+                       -DNUMPROC_FLAG=${MPIEXEC_NUMPROC_FLAG} -DNP=${np}
+                       "-DPREFLAGS=${MPIEXEC_PREFLAGS}"
+                       -DPROBE=$<TARGET_FILE:comm_mpi_native_probe>
+                       -DMODE=${mode} -P
+                       ${CMAKE_CURRENT_SOURCE_DIR}/comm/mpi/run_native_probe.cmake)
+      set_tests_properties(comm/mpi/native_probe_${mode}_np${np}
+                           PROPERTIES TIMEOUT 150)
     endforeach()
   endforeach()
 

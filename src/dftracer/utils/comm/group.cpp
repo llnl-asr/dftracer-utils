@@ -104,6 +104,13 @@ GroupState::~GroupState() {
     {
         std::lock_guard<std::mutex> lock(backend->groups_mutex);
         backend->live_groups.erase(id);
+        for (auto at = backend->early_aborts.begin();
+             at != backend->early_aborts.end();) {
+            if (at->second.parent == id)
+                at = backend->early_aborts.erase(at);
+            else
+                ++at;
+        }
     }
     g_live_groups.fetch_sub(1, std::memory_order_relaxed);
 }
@@ -144,11 +151,26 @@ dstd::StringView call_name(CallKind kind) noexcept {
     return "unknown";
 }
 
+std::uint64_t split_child_id(std::uint64_t parent, std::uint64_t seq,
+                             std::uint32_t ordinal) noexcept {
+    std::uint64_t x = parent * 0x9E3779B97F4A7C15ull;
+    x ^= (seq + 1) * 0xC2B2AE3D27D4EB4Full;
+    x ^= (std::uint64_t{ordinal} + 1) * 0x165667B19E3779F9ull;
+    x ^= x >> 30;
+    x *= 0xBF58476D1CE4E5B9ull;
+    x ^= x >> 27;
+    x *= 0x94D049BB133111EBull;
+    x ^= x >> 31;
+    return x | (std::uint64_t{1} << 63);
+}
+
 dstd::SharedPtr<GroupState> make_group_state(
     const dstd::SharedPtr<Backend>& backend,
-    dstd::Vector<std::uint32_t> members) {
+    dstd::Vector<std::uint32_t> members, std::uint64_t id,
+    std::uint64_t parent) {
     auto state = dstd::make_shared<GroupState>();
     state->backend = backend;
+    state->parent = parent;
     const std::size_t size = members.size();
     state->next_seq.resize(size, 0);
     state->default_timeout_ns.resize(size, 0);
@@ -157,14 +179,21 @@ dstd::SharedPtr<GroupState> make_group_state(
         // The id is taken and the group registered under one lock, which
         // peer_abort also holds: it sees the group, or an id not made yet.
         std::lock_guard<std::mutex> lock(backend->groups_mutex);
-        state->id =
-            backend->next_group_id.fetch_add(1, std::memory_order_relaxed);
+        state->id = id != 0 ? id
+                            : backend->next_group_id.fetch_add(
+                                  1, std::memory_order_relaxed);
         backend->live_groups[state->id] = state;
         const auto early = backend->early_aborts.find(state->id);
         if (early != backend->early_aborts.end()) {
-            state->aborted = std::move(early->second);
+            state->aborted = std::move(early->second.why);
             backend->early_aborts.erase(early);
         }
+        // Under the same lock, so a process binds its groups in the order it
+        // made them.
+        const dstd::Span<const std::uint32_t> ranks(state->members.data(),
+                                                    state->members.size());
+        backend->messaging->bind_group(state->id, ranks);
+        backend->collectives->bind_group(state->id, ranks);
     }
     return state;
 }
@@ -220,11 +249,11 @@ void abort_locked(GroupState& group, Error why, AbortTail& tail) {
 /// provider slot ends before the first call fails, so a completion a slot ends
 /// on this thread finds the calls still pending and takes a free mutex.
 void finish_abort(const dstd::SharedPtr<Backend>& backend, std::uint64_t id,
-                  AbortTail& tail, bool announce = true) {
+                  std::uint64_t parent, AbortTail& tail, bool announce = true) {
     if (!tail.why) return;
     // The parked calls of the channels of the group end with the collectives.
     backend->messaging->abort(id, *tail.why);
-    if (announce) backend->messaging->announce_abort(id, *tail.why);
+    if (announce) backend->messaging->announce_abort(id, parent, *tail.why);
     for (auto& entry : tail.slots)
         backend->collectives->drop(id, entry.first, nullptr);
     for (auto& entry : tail.slots)
@@ -268,7 +297,7 @@ void expire(const dstd::SharedPtr<TimerTarget>& target, std::uint32_t rank,
         }
         abort_locked(*group, abort_error(*group, rank, why), tail);
     }
-    finish_abort(group->backend, group->id, tail);
+    finish_abort(group->backend, group->id, group->parent, tail);
 }
 
 /// The handshake: the members of a group must speak one protocol version.
@@ -329,7 +358,7 @@ void finish_call(Slot& slot, const backend::SlotEnd& end) {
         std::lock_guard<std::mutex> lock(group->mutex);
         decide_call<T>(slot, end, *group, tail);
     }
-    finish_abort(group->backend, group->id, tail);
+    finish_abort(group->backend, group->id, group->parent, tail);
 }
 
 /// The checks every completion passes, with the group mutex held: the slot is
@@ -411,6 +440,7 @@ void decide_call(Slot& slot, const backend::SlotEnd& end, GroupState& group,
                       return a.rank < b.rank;
                   });
         std::size_t begin = 0;
+        std::uint32_t ordinal = 0;
         while (begin < colored.size()) {
             std::size_t stop = begin + 1;
             while (stop < colored.size() &&
@@ -420,8 +450,9 @@ void decide_call(Slot& slot, const backend::SlotEnd& end, GroupState& group,
             dstd::Vector<std::uint32_t> members;
             for (std::size_t at = begin; at < stop; ++at)
                 members.push_back(group.members[colored[at].rank]);
-            dstd::SharedPtr<GroupState> child =
-                make_group_state(group.backend, std::move(members));
+            dstd::SharedPtr<GroupState> child = make_group_state(
+                group.backend, std::move(members),
+                split_child_id(group.id, slot.seq, ordinal++), group.id);
             for (std::size_t at = begin; at < stop; ++at) {
                 // A rank of another process has no call here to end.
                 if (!slot.ops[colored[at].rank]) continue;
@@ -748,7 +779,7 @@ Outcome make_outcome(const backend::SlotEnd& end,
     // A scan keeps every entry, each rank merges its own prefix.
     const CallKind kind = static_cast<CallKind>(base.kind);
     if (base.reduce == REDUCE_NONE || kind == CallKind::Scan ||
-        kind == CallKind::ExclusiveScan ||
+        kind == CallKind::ExclusiveScan || end.folded ||
         (base.flags & backend::RECORD_COMBINE) != 0 ||
         end.table.offsets.empty())
         return outcome;
@@ -805,7 +836,7 @@ void finish_data(Slot& slot, const backend::SlotEnd& end) {
             }
         }
     }
-    finish_abort(group->backend, group->id, tail);
+    finish_abort(group->backend, group->id, group->parent, tail);
     if (!claimed) return;
     Outcome outcome = make_outcome(end, folds);
     outcome.objects = &objects;
@@ -842,7 +873,7 @@ void finish_data(Slot& slot, const backend::SlotEnd& end) {
         abort_locked(*group, abort_error(*group, unusable_rank, *unusable),
                      after);
     }
-    finish_abort(group->backend, group->id, after);
+    finish_abort(group->backend, group->id, group->parent, after);
 }
 
 /// Runs one abort on the executor. The frame holds the group until it runs, so
@@ -876,7 +907,7 @@ dstd::Error cancel_group(GroupState& group, std::uint32_t rank) noexcept {
         abort_locked(group, abort_error(group, rank, canceled_call()), tail);
         out = group.aborted ? *group.aborted : canceled_call();
     }
-    finish_abort(group.backend, group.id, tail);
+    finish_abort(group.backend, group.id, group.parent, tail);
     return out;
 }
 
@@ -890,21 +921,27 @@ void cancel_group(GroupState& group, const PendingOp* op,
         if (op != nullptr && op->is_done()) return;
         abort_locked(group, abort_error(group, rank, canceled_call()), tail);
     }
-    finish_abort(group.backend, group.id, tail);
+    finish_abort(group.backend, group.id, group.parent, tail);
 }
 
 void peer_abort(const dstd::SharedPtr<Backend>& backend, std::uint64_t id,
-                const Error& why) {
+                std::uint64_t parent, const Error& why) {
     dstd::SharedPtr<GroupState> group;
     {
         std::lock_guard<std::mutex> lock(backend->groups_mutex);
         const auto at = backend->live_groups.find(id);
         if (at != backend->live_groups.end()) group = at->second.lock();
         if (!group) {
-            // Ids only grow, so a group below the next id was made and is gone;
-            // only a group not made yet needs the abort kept for its birth.
-            if (id >= backend->next_group_id.load(std::memory_order_relaxed))
-                backend->early_aborts.emplace(id, why);
+            // Ids in sequence only grow, so one below the next id was made and
+            // is gone. A child of a split has a derived id: its abort is kept
+            // for its birth only while its parent is alive here, and goes with
+            // the parent. A process outside the parent keeps nothing.
+            const bool needed = parent != 0
+                                    ? backend->live_groups.count(parent) != 0
+                                    : id >= backend->next_group_id.load(
+                                                std::memory_order_relaxed);
+            if (needed)
+                backend->early_aborts.emplace(id, EarlyAbort{why, parent});
             return;
         }
     }
@@ -913,7 +950,7 @@ void peer_abort(const dstd::SharedPtr<Backend>& backend, std::uint64_t id,
         std::lock_guard<std::mutex> lock(group->mutex);
         abort_locked(*group, why, tail);
     }
-    finish_abort(backend, id, tail, false);
+    finish_abort(backend, id, group->parent, tail, false);
 }
 
 void abandon_group(const dstd::SharedPtr<GroupState>& group, std::uint32_t rank,
@@ -1183,7 +1220,7 @@ void Group::abort(Error why) noexcept {
         detail::abort_locked(*state_, detail::abort_error(*state_, rank_, why),
                              tail);
     }
-    detail::finish_abort(state_->backend, state_->id, tail);
+    detail::finish_abort(state_->backend, state_->id, state_->parent, tail);
 }
 
 namespace {
@@ -1232,10 +1269,10 @@ dstd::Result<Communicator> Communicator::start(Providers providers) {
     // Weak: the messaging belongs to the backend, which must not be kept alive
     // by the handler its own provider holds.
     made->messaging->on_peer_abort(
-        [weak = dstd::WeakPtr<detail::Backend>(made)](std::uint64_t id,
-                                                      const Error& why) {
+        [weak = dstd::WeakPtr<detail::Backend>(made)](
+            std::uint64_t id, std::uint64_t parent, const Error& why) {
             if (const auto backend = weak.lock())
-                detail::peer_abort(backend, id, why);
+                detail::peer_abort(backend, id, parent, why);
         });
     dstd::Vector<std::uint32_t> members;
     members.reserve(ranks);
@@ -1311,11 +1348,33 @@ dstd::SharedPtr<comm::backend::Messaging> detail::Hooks::messaging(
                          : dstd::SharedPtr<comm::backend::Messaging>{};
 }
 
+dstd::SharedPtr<comm::backend::Collectives> detail::Hooks::collectives(
+    const Communicator& comm) noexcept {
+    return comm.backend_ ? comm.backend_->collectives
+                         : dstd::SharedPtr<comm::backend::Collectives>{};
+}
+
 void detail::Hooks::set_collectives(
     Communicator& comm,
     dstd::SharedPtr<comm::backend::Collectives> collectives) noexcept {
     if (!comm.backend_) return;
     comm.backend_->collectives = std::move(collectives);
+}
+
+void detail::Hooks::set_chunk_limit(Communicator& comm,
+                                    std::uint64_t bytes) noexcept {
+    if (comm.backend_) comm.backend_->collectives->limit_chunk_bytes(bytes);
+}
+
+Op<Gathered> detail::Hooks::all_to_all_raw(Group& group,
+                                           backend::Contribution contribution,
+                                           const CallOpts& opts) {
+    detail::DataCall call =
+        detail::make_data_call(detail::CallKind::AllToAll, 0, 1, group.size(),
+                               backend::RECORD_WANTS | backend::RECORD_PERSONAL,
+                               std::move(contribution));
+    call.record.color = detail::ALL_TO_ALL_BLOCKS;
+    return group.table_call(std::move(call), opts);
 }
 
 void detail::Hooks::release_groups(Communicator& comm) noexcept {
@@ -1331,8 +1390,8 @@ void detail::Hooks::release_groups(Communicator& comm) noexcept {
 }
 
 void detail::Hooks::peer_abort(Communicator& comm, std::uint64_t id,
-                               const dstd::Error& why) {
-    if (comm.backend_) detail::peer_abort(comm.backend_, id, why);
+                               std::uint64_t parent, const dstd::Error& why) {
+    if (comm.backend_) detail::peer_abort(comm.backend_, id, parent, why);
 }
 
 std::uint64_t detail::Hooks::next_group_id(const Communicator& comm) noexcept {

@@ -1,10 +1,13 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/comm/mpi/context.h>
+#include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/fatal.h>
 
 #include <algorithm>
 #include <chrono>
+#include <cstdio>
 #include <cstdlib>
 #include <thread>
 #include <utility>
@@ -13,10 +16,16 @@ namespace dftracer::utils::comm::mpi {
 
 namespace {
 
+/// How many turns without progress the progress thread polls with no sleep
+/// while a native collective is in flight.
+constexpr std::size_t NATIVE_SPIN_TURNS = 5000;
+
 std::mutex g_process_mutex;
-/// Every MPI call of this library runs under it, whatever the thread. A context
-/// that is still stopping on a thread of its backend must not call MPI at the
-/// same time as the next context starts, or Open MPI stalls in its collectives.
+/// Every MPI call of this library that the progress thread, a poller or a
+/// caller makes runs under it. The creation of a communicator does not: it
+/// waits for other processes on a thread of its own. A context that is still
+/// stopping on a thread of its backend must not call MPI at the same time as
+/// the next context starts, or Open MPI stalls in its collectives.
 std::mutex g_mpi_mutex;
 dstd::Vector<dstd::WeakPtr<Context>> g_live;
 bool g_exit_hook = false;
@@ -136,9 +145,8 @@ dstd::Result<dstd::SharedPtr<Context>> Context::make(const void* app_comm) {
         dstd::SharedPtr<Context>(guard, context.get()));
 }
 
-// The duplicated communicators are not freed one by one: a free is collective,
-// and contexts of different ranks end at different times. MPI_Finalize frees
-// them.
+// The messages communicator is not freed here: a free is collective, and
+// contexts of different ranks end at different times. MPI_Finalize frees it.
 Context::~Context() = default;
 
 void Context::shutdown(bool force) {
@@ -153,6 +161,25 @@ void Context::shutdown(bool force) {
         life.lock();
     }
     if (!stopped_) {
+        if (native_pending() > 0) {
+            if (!on_progress && !on_completion) {
+                const std::uint64_t stop =
+                    dstd::steady_now_ns() +
+                    common::constants::comm_settings::MPI_NATIVE_DRAIN_MS *
+                        1'000'000;
+                while (native_pending() > 0 && dstd::steady_now_ns() < stop)
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+            if (native_pending() > 0) {
+                std::fprintf(stderr,
+                             "comm_mpi: %zu native collective requests are "
+                             "still pending at shutdown and cannot be "
+                             "cancelled; ending the job with MPI_Abort\n",
+                             native_pending());
+                std::fflush(stderr);
+                MPI_Abort(MPI_COMM_WORLD, 1);
+            }
+        }
         stopped_ = true;
         {
             std::lock_guard<std::mutex> lock(mutex_);
@@ -248,6 +275,7 @@ std::size_t Context::watched() const {
 void Context::progress_loop() {
     const Leaving leaving(running_);
     auto idle = std::chrono::microseconds(0);
+    std::size_t quiet = 0;
     for (;;) {
         dstd::Deque<Job> jobs;
         dstd::Vector<dstd::SharedPtr<dstd::Function<bool()>>> pollers;
@@ -291,6 +319,15 @@ void Context::progress_loop() {
         if (stop && (forced || (watched_.empty() && jobs.empty()))) return;
         if (progressed) {
             idle = std::chrono::microseconds(0);
+            quiet = 0;
+            continue;
+        }
+        if (native_pending() > 0 && quiet < NATIVE_SPIN_TURNS) {
+            // A nonblocking collective moves only while this thread calls
+            // MPI, so it polls without a sleep for a while after the last
+            // progress, and then backs off like any other wait.
+            ++quiet;
+            std::this_thread::yield();
             continue;
         }
         if (idle < std::chrono::microseconds(1000))

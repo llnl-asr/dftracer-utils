@@ -23,6 +23,21 @@ static variant (``src/CMakeLists.txt``), aggregated behind
   runtime and no MPI. The MPI backend is ``dftracer_utils_comm_mpi``, built
   with ``-DDFTRACER_UTILS_ENABLE_MPI=ON`` and loaded at run time, so it is the
   only library that links MPI.
+  The MPI backend runs the collectives of a group on the nonblocking
+  collectives of MPI, each group on a communicator of its own: a barrier, a
+  reduction whose result is the same bit for bit as the fold in rank order
+  (an integer ``Sum``, ``Min`` or ``Max``, or any built-in operation when the
+  call allows any order), a broadcast, a gather and an all-gather, and an
+  all-to-all. Other reductions gather the contributions and fold them in rank
+  order. An MPI request cannot be cancelled, so a call that ends early (an
+  abort, a deadline or a cancel) fails at once with the error of its group
+  while the request stays with the context. If a context stops while a native
+  request is still pending after a short wait, because a peer never matched
+  the call, it prints one line on stderr and ends the job with ``MPI_Abort``
+  with a non-zero status instead of ``MPI_Finalize``, so the job never hangs.
+  A call moves its data in rounds of at most 1 GiB, so the size of a call has
+  no limit of the int count of MPI. The communicator of a group is made on a
+  thread of its own, and freed when the group is released.
 - ``dftracer_utils_store`` is the key-value store engine: data files, the
   writer and its committer, and the snapshot that reads them. It links only
   the runtime and knows nothing about traces.

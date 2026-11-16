@@ -227,21 +227,36 @@ class Messaging {
 
     /// Told by a provider that has other processes, when a peer announced that
     /// it aborted @p group: the group of this process aborts with the same
-    /// error. Called on a thread of the provider, never under a lock of it.
-    using PeerAbort =
-        dstd::Function<void(std::uint64_t group, const dstd::Error& why)>;
+    /// error. @p parent is the group the aborted one was made from by a split,
+    /// or 0. Called on a thread of the provider, never under a lock of it.
+    using PeerAbort = dstd::Function<void(
+        std::uint64_t group, std::uint64_t parent, const dstd::Error& why)>;
 
     /// Sets what a peer's abort calls. A provider with no other process never
     /// calls it.
     virtual void on_peer_abort(PeerAbort handler) { (void)handler; }
 
-    /// Tells every other process that @p group aborted with @p why, so their
+    /// Tells every other process that @p group, made from @p parent by a split
+    /// or 0, aborted with @p why, so their
     /// calls on it end with the same error. Called once per group by the
     /// first abort, after @ref abort; a provider with no other process does
     /// nothing.
-    virtual void announce_abort(std::uint64_t group, const dstd::Error& why) {
+    virtual void announce_abort(std::uint64_t group, std::uint64_t parent,
+                                const dstd::Error& why) {
         (void)group;
+        (void)parent;
         (void)why;
+    }
+
+    /// Tells the provider the members of @p group as world ranks in group
+    /// order, when this process makes the group, so a provider that has other
+    /// processes sends to the process of a group rank, and tells only the
+    /// members of an abort. A group made by a split is made by the members of
+    /// its parent only. A group never bound names its ranks as world ranks.
+    virtual void bind_group(std::uint64_t group,
+                            dstd::Span<const std::uint32_t> members) {
+        (void)group;
+        (void)members;
     }
 
     /// Forgets a group whose last handle is gone: fails the messages of @p

@@ -62,6 +62,13 @@ struct TimerTarget {
 ///
 /// The providers are the capabilities the groups use, one of each per backend,
 /// all three bound before a group makes a call.
+/// An abort that a peer announced for a group this process has not made yet,
+/// and the group it will be made from, or 0.
+struct EarlyAbort {
+    dstd::Error why;
+    std::uint64_t parent = 0;
+};
+
 struct Backend {
     dstd::SharedPtr<backend::Bootstrap> bootstrap;
     dstd::SharedPtr<backend::Messaging> messaging;
@@ -74,7 +81,9 @@ struct Backend {
     /// announces finds, and the aborts of groups this process has not made yet.
     std::mutex groups_mutex;
     dstd::Map<std::uint64_t, dstd::WeakPtr<GroupState>> live_groups;
-    dstd::Map<std::uint64_t, dstd::Error> early_aborts;
+    /// An abort of a split child stays only while its parent is alive here, and
+    /// goes with the parent.
+    dstd::Map<std::uint64_t, EarlyAbort> early_aborts;
 
     std::uint32_t ranks() const noexcept { return bootstrap->ranks(); }
 };
@@ -121,6 +130,8 @@ struct GroupState {
 
     dstd::SharedPtr<Backend> backend;
     std::uint64_t id = 0;
+    /// The group a split made this one from, or 0.
+    std::uint64_t parent = 0;
     dstd::Vector<std::uint32_t> members;
     /// The sequence number the next call of each group rank takes.
     dstd::Vector<std::uint64_t> next_seq;
@@ -139,17 +150,27 @@ struct GroupState {
     }
 };
 
-/// A group of @p members (world ranks, in group order) on @p backend, taking
-/// the next id of that backend and no default timeout.
+/// A group of @p members (world ranks, in group order) on @p backend and no
+/// default timeout. An @p id of 0 takes the next id of that backend, which
+/// every process takes in the same order for the world and node groups; a group
+/// made by a split names its id, which the members of the parent derive alike
+/// (@ref split_child_id), since the processes outside the parent make no group.
 dstd::SharedPtr<GroupState> make_group_state(
     const dstd::SharedPtr<Backend>& backend,
-    dstd::Vector<std::uint32_t> members);
+    dstd::Vector<std::uint32_t> members, std::uint64_t id = 0,
+    std::uint64_t parent = 0);
+
+/// The id of child @p ordinal of the split at slot @p seq of group @p parent:
+/// the same on every member of the parent, and never an id that
+/// @ref make_group_state hands out in sequence.
+std::uint64_t split_child_id(std::uint64_t parent, std::uint64_t seq,
+                             std::uint32_t ordinal) noexcept;
 
 /// Aborts group @p id of @p backend with the error a peer process announced,
 /// without announcing it again. A group this process has not made yet aborts
 /// when it is made.
 void peer_abort(const dstd::SharedPtr<Backend>& backend, std::uint64_t id,
-                const dstd::Error& why);
+                std::uint64_t parent, const dstd::Error& why);
 
 /// Groups that are alive now, which the tests read to prove a finished call
 /// pins no state.

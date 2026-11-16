@@ -172,6 +172,10 @@ struct SlotEnd {
     /// that collects at another process serves its own rank. @ref table is
     /// empty. Empty for any other slot.
     dstd::Span<const Table> tables;
+    /// True when @ref table holds one entry, the fold of every contribution in
+    /// rank order, which the provider made natively; the caller then merges
+    /// nothing.
+    bool folded = false;
 };
 
 /// One byte per member, 1 for a member a provider saw arrive. Empty means the
@@ -203,6 +207,39 @@ class Collectives {
     /// True when every member of every slot lives in this process, so a call
     /// may hand an object to the other members without serializing it.
     virtual bool shares_memory() const noexcept { return false; }
+
+    /// Tells the provider the members of group @p group_id, as world ranks in
+    /// group order, when this process makes the group, so a provider that runs
+    /// one transport channel per group can make it. The world and node groups
+    /// are made by every process in the same order. A group made by a split is
+    /// made by the members of its parent only, in the order that process made
+    /// its groups, so a process that is outside the parent never binds it and
+    /// the order of two groups of different parents is not the same on every
+    /// process. Does nothing by default.
+    virtual void bind_group(std::uint64_t group_id,
+                            dstd::Span<const std::uint32_t> members) {
+        (void)group_id;
+        (void)members;
+    }
+
+    /// How many slots of the call @p kind (a @ref Record::kind) this provider
+    /// ended on a native collective of its transport. A test reads it to prove
+    /// which path ran; 0 for a provider with none.
+    virtual std::uint64_t native_slots(std::uint32_t kind) const noexcept {
+        (void)kind;
+        return 0;
+    }
+
+    /// A test hook: makes a provider with a size limit per transport call move
+    /// at most @p bytes in one, so its rounds run on small data. Does nothing
+    /// by default.
+    virtual void limit_chunk_bytes(std::uint64_t bytes) noexcept {
+        (void)bytes;
+    }
+
+    /// How many reductions this provider folded natively, so the group merged
+    /// nothing. A test reads it; 0 for a provider with none.
+    virtual std::uint64_t native_folds() const noexcept { return 0; }
 
     /**
      * @brief Arrives at slot @p seq of group @p group_id with @p record and

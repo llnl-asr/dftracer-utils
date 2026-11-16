@@ -14,6 +14,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 - Add `DFTRACER_UTILS_COMM_PATH`, a directory that holds `libdftracer_utils_comm_mpi`.
   When it is set, the tools search only that directory for the MPI backend.
 - Load the MPI backend at run time from `libdftracer_utils_comm_mpi`, built with `-DDFTRACER_UTILS_ENABLE_MPI=ON`, so the tools no longer link MPI.
+- Run the collectives of the MPI backend on the nonblocking collectives of MPI, one communicator per group, and route the messages of groups made by `split` to the right processes; move calls of any size in rounds of at most 1 GiB; a native collective that a peer never matches ends the job with `MPI_Abort` and a non-zero status instead of a hang.
 - Run `dftracer_view`, `dftracer_genesis_gen_dist` and `dftracer_replay` under any MPI or PMIx launcher with one binary.
   A run with no launcher is one rank, with the same code path.
 - Share each node's cores between its ranks, by the CPUs each rank may use on Linux and by the rank count on macOS, so ranks that a launcher bound to their own CPUs keep them.

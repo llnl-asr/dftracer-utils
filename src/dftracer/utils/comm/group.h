@@ -804,6 +804,7 @@ class Group {
 
    private:
     friend class Neighborhood;
+    friend struct detail::Hooks;
 
     /// True when every rank of the group is in this process, so an object call
     /// shares its objects instead of serializing them.
@@ -1057,6 +1058,8 @@ class Group {
             kind, root, sizeof(T), values.size(), reduce_flags(takes, opts),
             detail::own_bytes(std::as_bytes(values)));
         call.record.reduce = code;
+        if (code != detail::REDUCE_CUSTOM)
+            call.record.color = detail::elem_code<T>();
         call.fold = std::move(fold);
         return data_op<dstd::Vector<T>>(
             std::move(call),
@@ -1077,6 +1080,8 @@ class Group {
             kind, root, sizeof(T), 1, reduce_flags(takes, opts),
             detail::own_value(value));
         call.record.reduce = code;
+        if (code != detail::REDUCE_CUSTOM)
+            call.record.color = detail::elem_code<T>();
         call.fold = std::move(fold);
         return data_op<T>(
             std::move(call),
@@ -1260,16 +1265,33 @@ struct Hooks {
     static dstd::SharedPtr<backend::Messaging> messaging(
         const Communicator& comm) noexcept;
 
+    /// The provider that collects the calls of @p comm.
+    static dstd::SharedPtr<backend::Collectives> collectives(
+        const Communicator& comm) noexcept;
+
     /// Collects the calls of @p comm with @p collectives from now on. A test
     /// binds another one before it makes the first call.
     static void set_collectives(
         Communicator& comm,
         dstd::SharedPtr<backend::Collectives> collectives) noexcept;
 
+    /// Makes the native collectives of @p comm move at most @p bytes in one
+    /// MPI call, so a test runs the rounds of a large call on small data. Every
+    /// process must set the same limit before its first call.
+    static void set_chunk_limit(Communicator& comm,
+                                std::uint64_t bytes) noexcept;
+
+    /// An all_to_all whose personal contribution is @p contribution as it is,
+    /// well formed or not.
+    static Op<Gathered> all_to_all_raw(Group& group,
+                                       backend::Contribution contribution,
+                                       const CallOpts& opts = {});
+
     /// Delivers to @p comm the abort that a peer process announced for group
-    /// @p id, as a messaging provider does.
+    /// @p id, made from group @p parent by a split or 0, as a messaging
+    /// provider does.
     static void peer_abort(Communicator& comm, std::uint64_t id,
-                           const dstd::Error& why);
+                           std::uint64_t parent, const dstd::Error& why);
 
     /// The id the next group made on @p comm takes.
     static std::uint64_t next_group_id(const Communicator& comm) noexcept;

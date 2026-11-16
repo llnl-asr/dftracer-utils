@@ -38,7 +38,9 @@ enum class Kind : std::uint32_t {
 
 /// The fixed header of every message between processes. A payload follows it
 /// in messages of at most CHUNK_BYTES each, on the payload tag; an Ack and an
-/// Abort carry the text of their error as payload.
+/// Abort carry the text of their error as payload. The source and destination
+/// are group ranks, which name the stream; origin is the world rank of the
+/// sender, where a reply goes.
 struct Wire {
     std::uint32_t kind = 0;
     std::uint32_t source = 0;
@@ -53,16 +55,21 @@ struct Wire {
     std::int32_t has_error = 0;
     std::int32_t code = -1;
     std::uint32_t condition = 0;
+    /// For a CancelReply: 1 when the receiver held the message.
+    std::uint32_t won = 0;
+    std::uint32_t origin = 0;
     std::uint32_t reserved = 0;
 };
 
-static_assert(sizeof(Wire) == 72);
+static_assert(sizeof(Wire) == 80);
 
 /// What stays alive until MPI finished with a message: the header and the
 /// bytes it borrows.
 struct Outgoing {
     Wire wire;
     Payload payload;
+    /// The world rank the message goes to.
+    std::uint32_t to = 0;
 };
 
 dstd::Error make_peer_error(const Wire& wire, dstd::StringView text) {
@@ -123,7 +130,8 @@ class Impl : public backend::Messaging,
 
     OpId send(const MessageKey& key, Payload payload, StreamOpts opts,
               SendDone done) override {
-        if (key.destination == rank_)
+        const std::uint32_t to = world_of(key.group, key.destination);
+        if (to == rank_)
             return engine_->send(key, std::move(payload), opts,
                                  std::move(done));
         std::uint64_t id = 0;
@@ -133,6 +141,7 @@ class Impl : public backend::Messaging,
             pending_[id] = PendingSend{key, std::move(done), {}};
         }
         auto out = dstd::make_shared<Outgoing>();
+        out->to = to;
         out->wire.kind = static_cast<std::uint32_t>(Kind::Data);
         out->wire.source = key.source;
         out->wire.destination = key.destination;
@@ -162,7 +171,8 @@ class Impl : public backend::Messaging,
     }
 
     bool cancel(const MessageKey& key, OpId op, dstd::Error why) override {
-        if (key.destination == rank_) return engine_->cancel(key, op, why);
+        const std::uint32_t to = world_of(key.group, key.destination);
+        if (to == rank_) return engine_->cancel(key, op, why);
         {
             std::lock_guard<std::mutex> lock(mutex_);
             auto at = pending_.find(op.value);
@@ -170,6 +180,7 @@ class Impl : public backend::Messaging,
             at->second.cancel_reason = std::move(why);
         }
         auto out = dstd::make_shared<Outgoing>();
+        out->to = to;
         out->wire.kind = static_cast<std::uint32_t>(Kind::Cancel);
         out->wire.source = key.source;
         out->wire.destination = key.destination;
@@ -181,11 +192,13 @@ class Impl : public backend::Messaging,
     }
 
     void close(const MessageKey& key) override {
-        if (key.destination == rank_) {
+        const std::uint32_t to = world_of(key.group, key.destination);
+        if (to == rank_) {
             engine_->close(key);
             return;
         }
         auto out = dstd::make_shared<Outgoing>();
+        out->to = to;
         out->wire.kind = static_cast<std::uint32_t>(Kind::Close);
         out->wire.source = key.source;
         out->wire.destination = key.destination;
@@ -217,19 +230,33 @@ class Impl : public backend::Messaging,
         peer_abort_ = dstd::make_shared<PeerAbort>(std::move(handler));
     }
 
-    void announce_abort(std::uint64_t group, const dstd::Error& why) override {
+    void announce_abort(std::uint64_t group, std::uint64_t parent,
+                        const dstd::Error& why) override {
         {
             std::lock_guard<std::mutex> lock(mutex_);
             if (!announced_.insert(group).second) return;
         }
         const dstd::StringView text = why.message();
-        for (std::uint32_t peer = 0; peer < context_->size(); ++peer) {
+        dstd::Vector<std::uint32_t> peers;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            const auto at = groups_.find(group);
+            if (at != groups_.end()) {
+                peers = at->second;
+            } else {
+                for (std::uint32_t peer = 0; peer < context_->size(); ++peer)
+                    peers.push_back(peer);
+            }
+        }
+        for (const std::uint32_t peer : peers) {
             if (peer == rank_) continue;
             auto out = dstd::make_shared<Outgoing>();
+            out->to = peer;
             out->wire.kind = static_cast<std::uint32_t>(Kind::Abort);
             out->wire.source = rank_;
             out->wire.destination = peer;
             out->wire.group = group;
+            out->wire.tag = parent;
             fill_error(out->wire, &why);
             dstd::Vector<std::byte> bytes(text.size());
             if (!text.empty())
@@ -240,18 +267,35 @@ class Impl : public backend::Messaging,
         }
     }
 
+    void bind_group(std::uint64_t group,
+                    dstd::Span<const std::uint32_t> members) override {
+        std::lock_guard<std::mutex> lock(mutex_);
+        groups_[group].assign(members.begin(), members.end());
+    }
+
     void release(std::uint64_t group) override {
         engine_->release(group);
         std::lock_guard<std::mutex> lock(mutex_);
         announced_.erase(group);
+        groups_.erase(group);
     }
 
    private:
+    /// The world rank of group rank @p rank of @p group; a group that was
+    /// never bound names world ranks.
+    std::uint32_t world_of(std::uint64_t group, std::uint32_t rank) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        const auto at = groups_.find(group);
+        if (at == groups_.end() || rank >= at->second.size()) return rank;
+        return at->second[rank];
+    }
+
     /// Hands the message to the progress thread, which posts its sends.
     void transmit(dstd::SharedPtr<Outgoing> message) {
+        message->wire.origin = rank_;
         context_->submit([self = shared_from_this(),
                           out = std::move(message)]() mutable {
-            const int dest = static_cast<int>(out->wire.destination);
+            const int dest = static_cast<int>(out->to);
             MPI_Request request = MPI_REQUEST_NULL;
             MPI_Isend(&out->wire, static_cast<int>(sizeof(Wire)), MPI_BYTE,
                       dest, TAG_HEADER, self->context_->messages(), &request);
@@ -347,7 +391,7 @@ class Impl : public backend::Messaging,
                 bool found = false;
                 {
                     std::lock_guard<std::mutex> lock(mutex_);
-                    auto at = remote_.find(RemoteKey{wire.source, wire.op});
+                    auto at = remote_.find(RemoteKey{wire.origin, wire.op});
                     if (at != remote_.end()) {
                         op = at->second;
                         found = true;
@@ -362,13 +406,14 @@ class Impl : public backend::Messaging,
                 out->wire.kind = static_cast<std::uint32_t>(Kind::CancelReply);
                 out->wire.source = rank_;
                 out->wire.destination = wire.source;
+                out->to = wire.origin;
                 out->wire.op = wire.op;
-                out->wire.reserved = won ? 1 : 0;
+                out->wire.won = won ? 1 : 0;
                 transmit(std::move(out));
                 return;
             }
             case Kind::CancelReply: {
-                if (wire.reserved == 0) return;
+                if (wire.won == 0) return;
                 PendingSend taken;
                 {
                     std::lock_guard<std::mutex> lock(mutex_);
@@ -395,7 +440,7 @@ class Impl : public backend::Messaging,
                     handler = peer_abort_;
                 }
                 if (handler)
-                    (*handler)(wire.group, why);
+                    (*handler)(wire.group, wire.tag, why);
                 else
                     engine_->abort(wire.group, why);
                 return;
@@ -405,10 +450,10 @@ class Impl : public backend::Messaging,
 
     void receive_data(const Wire& wire, const MessageKey& key,
                       dstd::Vector<std::byte> bytes) {
-        const RemoteKey remote{wire.source, wire.op};
+        const RemoteKey remote{wire.origin, wire.op};
         auto state = dstd::make_shared<RemoteOp>();
         state->key = key;
-        const std::uint32_t source = wire.source;
+        const std::uint32_t source = wire.origin;
         const std::uint64_t op = wire.op;
         StreamOpts opts;
         opts.depth = wire.depth;
@@ -437,6 +482,7 @@ class Impl : public backend::Messaging,
         out->wire.kind = static_cast<std::uint32_t>(Kind::Ack);
         out->wire.source = rank_;
         out->wire.destination = source;
+        out->to = source;
         out->wire.op = op;
         fill_error(out->wire, why);
         if (why != nullptr) {
@@ -459,6 +505,7 @@ class Impl : public backend::Messaging,
     std::uint64_t next_op_ = 0;
     dstd::Map<std::uint64_t, PendingSend> pending_;
     dstd::Map<RemoteKey, RemoteOp> remote_;
+    dstd::Map<std::uint64_t, dstd::Vector<std::uint32_t>> groups_;
     dstd::Set<std::uint64_t> announced_;
     dstd::SharedPtr<PeerAbort> peer_abort_;
 };

@@ -94,6 +94,12 @@ inline constexpr const char* COMM_PATH_ENV = "DFTRACER_UTILS_COMM_PATH";
 inline constexpr const char* MPI_CHUNK_BYTES_ENV =
     "DFTRACER_UTILS_COMM_MPI_CHUNK_BYTES";
 inline constexpr std::uint64_t MPI_CHUNK_BYTES = std::uint64_t{1} << 30;
+/// How long a stopping MPI context waits for native requests that no peer
+/// matched before it ends the job.
+inline constexpr std::uint64_t MPI_NATIVE_DRAIN_MS = 1000;
+/// How long a deadline waits for the members to say whether they reached the
+/// call that timed out.
+inline constexpr std::uint64_t MPI_ARRIVAL_PROBE_MS = 200;
 }  // namespace comm_settings
 
 namespace executor_settings {

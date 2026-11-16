@@ -8,11 +8,17 @@
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/result.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <cstdint>
 #include <utility>
 
 namespace dftracer::utils::comm {
+
+namespace backend {
+class Collectives;
+class Messaging;
+}  // namespace backend
 
 namespace detail {
 struct Backend;
@@ -119,7 +125,8 @@ class Group {
 class Communicator {
    public:
     /// Starts the local-threads backend with @p ranks ranks on @p executor,
-    /// which must outlive the communicator and every group it made.
+    /// which must outlive the communicator and every group it made. Binds the
+    /// bootstrap, the messaging and the collectives of the local backend.
     static dstd::Result<Communicator> start_local(std::uint32_t ranks,
                                                   coro::Executor& executor);
 
@@ -140,6 +147,8 @@ class Communicator {
     friend struct detail::Hooks;
     dstd::SharedPtr<detail::Backend> backend_;
     dstd::SharedPtr<detail::GroupState> world_;
+    /// One group per node of the run, by world rank.
+    dstd::Vector<Group> node_;
 };
 
 namespace detail {
@@ -167,6 +176,20 @@ struct Hooks {
     /// test waits on these instead of on time.
     static bool expire_at_lock() noexcept;
     static bool expire_returned() noexcept;
+
+    /// The provider that moves the messages of @p comm.
+    static dstd::SharedPtr<backend::Messaging> messaging(
+        const Communicator& comm) noexcept;
+
+    /// Collects the calls of @p comm with @p collectives from now on. A test
+    /// binds another one before it makes the first call.
+    static void set_collectives(
+        Communicator& comm,
+        dstd::SharedPtr<backend::Collectives> collectives) noexcept;
+
+    /// Releases the groups of @p comm on their provider, as the end of a
+    /// communicator does, so a test can ask what a dead group left behind.
+    static void release_groups(Communicator& comm) noexcept;
 };
 
 }  // namespace detail

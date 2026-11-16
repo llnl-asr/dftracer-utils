@@ -2,6 +2,9 @@
 #ifndef DFTRACER_UTILS_COMM_DETAIL_GROUP_STATE_H
 #define DFTRACER_UTILS_COMM_DETAIL_GROUP_STATE_H
 
+#include <dftracer/utils/comm/backend/bootstrap.h>
+#include <dftracer/utils/comm/backend/collectives.h>
+#include <dftracer/utils/comm/backend/messaging.h>
 #include <dftracer/utils/comm/op.h>
 #include <dftracer/utils/coro/executor.h>
 #include <dftracer/utils/coro/timer_service.h>
@@ -55,37 +58,39 @@ struct TimerTarget {
 };
 
 /// The backend a communicator runs on, shared with the groups it made.
+///
+/// The providers are the capabilities the groups use, one of each per backend,
+/// all three bound before a group makes a call.
 struct Backend {
-    std::uint32_t ranks = 0;
-    coro::Executor* executor = nullptr;
-    coro::TimerService* timers = nullptr;
+    dstd::SharedPtr<backend::Bootstrap> bootstrap;
+    dstd::SharedPtr<backend::Messaging> messaging;
+    dstd::SharedPtr<backend::Collectives> collectives;
     /// The version each rank reports at the handshake, by world rank.
     dstd::Vector<std::uint32_t> protocol_version;
     /// The id the next group made on this backend takes.
     std::atomic<std::uint64_t> next_group_id{1};
+
+    std::uint32_t ranks() const noexcept { return bootstrap->ranks(); }
 };
 
 /**
  * @brief One rendezvous: the calls the ranks made at one sequence number.
  *
- * Written and read only under the mutex of its @ref GroupState.
+ * The records the members bring to the slot live in the @ref backend
+ * provider, which reports the slot complete. Written and read only under the
+ * mutex of its @ref GroupState.
  */
 struct Slot {
-    explicit Slot(std::size_t size)
-        : has_arrived(size, 0),
-          ops(size),
-          color(size, 0),
-          key(size, 0),
-          version(size, 0) {}
+    explicit Slot(std::uint64_t seq, std::size_t size) : seq(seq), ops(size) {}
 
-    CallKind kind = CallKind::Barrier;
-    std::uint32_t first_rank = 0;
-    std::uint32_t arrived = 0;
-    dstd::Vector<char> has_arrived;
+    /// The group of the slot, so a completion that outlives the handles finds
+    /// it. Weak, because the group holds its slots.
+    dstd::WeakPtr<GroupState> group;
+    std::uint64_t seq = 0;
+    /// Set by the first completion of the slot, which is the only one that ends
+    /// the calls of its members.
+    std::atomic<bool> finished{false};
     dstd::Vector<dstd::SharedPtr<PendingOp>> ops;
-    dstd::Vector<std::uint32_t> color;
-    dstd::Vector<std::uint32_t> key;
-    dstd::Vector<std::uint32_t> version;
 };
 
 /**

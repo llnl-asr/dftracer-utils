@@ -815,6 +815,7 @@ struct LocalSlot {
     dstd::SharedPtr<ArrivalFold> fold;
     bool has_table = false;
     bool combines = false;
+    bool personal = false;
     std::uint32_t members = 0;
     std::uint32_t arrived = 0;
     /// The rank of the first member that arrived. Its call is the base of the
@@ -847,8 +848,78 @@ Table assemble_table(LocalSlot& slot) {
     return make_table(std::move(buffer));
 }
 
+/// What a slot of personal contributions holds for every member, in one
+/// buffer laid out by destination: the pieces for member 0 in source order,
+/// then those for member 1, and on. Each member's table views its own run of
+/// it, so every piece is copied once, from the memory of its caller.
+struct PersonalTables {
+    dstd::Vector<Table> tables;
+    dstd::Error why;
+    bool ok = true;
+};
+
+PersonalTables assemble_personal(LocalSlot& slot) {
+    PersonalTables out;
+    const std::uint32_t members = slot.members;
+    for (std::uint32_t rank = 0; rank < members; ++rank) {
+        const Record& record = slot.records[rank];
+        const bool personal = !slot.combines && !slot.contributions.empty() &&
+                              (record.flags & RECORD_PERSONAL) != 0 &&
+                              (record.flags & RECORD_TABLE) != 0;
+        if (personal && personal_fits(slot.contributions[rank].bytes, members))
+            continue;
+        out.ok = false;
+        out.why = dstd::Error::from_format<
+            "the contribution of rank {} does not hold one piece per member">(
+            dstd::Condition::InvalidArgument, rank);
+        return out;
+    }
+    auto buffer = dstd::make_shared<TableBuffer>();
+    std::uint64_t total = 0;
+    for (const Contribution& contribution : slot.contributions)
+        total += contribution.bytes.size() -
+                 std::uint64_t{members} * sizeof(std::uint64_t);
+    buffer->data.reserve(total);
+    buffer->offsets.reserve(std::size_t{members} * (members + 1));
+    dstd::Vector<std::uint64_t> cursor(members);
+    for (std::uint32_t rank = 0; rank < members; ++rank)
+        cursor[rank] = std::uint64_t{members} * sizeof(std::uint64_t);
+    dstd::Vector<std::size_t> starts;
+    starts.reserve(members + 1);
+    for (std::uint32_t dest = 0; dest < members; ++dest) {
+        starts.push_back(buffer->data.size());
+        buffer->offsets.push_back(0);
+        for (std::uint32_t rank = 0; rank < members; ++rank) {
+            const dstd::Span<const std::byte> bytes =
+                slot.contributions[rank].bytes;
+            const std::uint64_t size = personal_size(bytes, dest);
+            const dstd::Span<const std::byte> piece =
+                bytes.subspan(cursor[rank], size);
+            cursor[rank] += size;
+            buffer->data.insert(buffer->data.end(), piece.begin(), piece.end());
+            buffer->offsets.push_back(buffer->data.size() - starts[dest]);
+        }
+    }
+    starts.push_back(buffer->data.size());
+    out.tables.reserve(members);
+    for (std::uint32_t dest = 0; dest < members; ++dest) {
+        Table table;
+        table.data =
+            dstd::Span<const std::byte>(buffer->data.data() + starts[dest],
+                                        starts[dest + 1] - starts[dest]);
+        table.offsets = dstd::Span<const std::uint64_t>(
+            buffer->offsets.data() + std::size_t{dest} * (members + 1),
+            members + 1);
+        table.keep = buffer;
+        out.tables.push_back(std::move(table));
+    }
+    return out;
+}
+
 class LocalCollectives : public Collectives {
    public:
+    bool shares_memory() const noexcept override { return true; }
+
     bool arrive(std::uint64_t group_id, std::uint64_t seq,
                 std::uint32_t members, std::uint32_t rank, const Record& record,
                 Contribution&& contribution, Done done) override {
@@ -901,14 +972,24 @@ class LocalCollectives : public Collectives {
         LocalSlot& slot = *ended_slot;
         // Outside the lock: the copy of a large payload takes as long as it
         // takes, and every contribution is owned by the slot by now.
-        const Table table =
-            (!broken && slot.has_table) ? assemble_table(slot) : Table{};
+        Table table;
+        PersonalTables personal;
+        if (!broken && slot.has_table) {
+            if (slot.personal)
+                personal = assemble_personal(slot);
+            else
+                table = assemble_table(slot);
+        }
         const SlotEnd end{
             dstd::Span<const Record>(slot.records.data(), slot.records.size()),
             broken ? dstd::Span<const std::uint8_t>(slot.seen.data(),
                                                     slot.seen.size())
                    : dstd::Span<const std::uint8_t>(),
-            rank, nullptr, table};
+            rank,
+            personal.ok ? nullptr : &personal.why,
+            table,
+            dstd::Span<const Table>(personal.tables.data(),
+                                    personal.tables.size())};
         slot.done(end);
         return false;
     }
@@ -957,6 +1038,7 @@ class LocalCollectives : public Collectives {
                                   Contribution contribution,
                                   ArrivalFold::Batch& batch) {
         slot.has_table = true;
+        if ((record.flags & RECORD_PERSONAL) != 0) slot.personal = true;
         if ((record.flags & RECORD_COMBINE) == 0) {
             if (slot.contributions.empty())
                 slot.contributions.resize(slot.members);

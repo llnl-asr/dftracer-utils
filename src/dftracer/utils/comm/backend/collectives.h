@@ -10,6 +10,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <utility>
 
 namespace dftracer::utils::comm::backend {
@@ -21,6 +22,7 @@ inline constexpr std::uint64_t UNCHECKED_COUNT = ~std::uint64_t{0};
 inline constexpr std::uint32_t RECORD_TABLE = 1u;
 inline constexpr std::uint32_t RECORD_WANTS = 2u;
 inline constexpr std::uint32_t RECORD_COMBINE = 4u;
+inline constexpr std::uint32_t RECORD_PERSONAL = 8u;
 
 /**
  * @brief The fixed record one member brings to one slot of a group.
@@ -31,7 +33,9 @@ inline constexpr std::uint32_t RECORD_COMBINE = 4u;
  * @ref kind and @ref flags. A call with @ref RECORD_TABLE brings a
  * @ref Contribution that goes into the table of the slot, @ref RECORD_WANTS
  * says that this member takes the table, and @ref RECORD_COMBINE asks the
- * provider to fold the contributions in arrival order.
+ * provider to fold the contributions in arrival order. @ref RECORD_PERSONAL
+ * says that the contribution holds one piece per member, which the provider
+ * splits: see @ref Contribution.
  */
 struct Record {
     std::uint32_t kind = 0;
@@ -69,6 +73,35 @@ struct Contribution {
     /// the provider, but not the group of its own slot.
     Combine combine;
 };
+
+/**
+ * The bytes of a contribution of a @ref RECORD_PERSONAL record: `members`
+ * 64-bit sizes, then the pieces, piece `d` for member `d`. The sizes must add
+ * up to the rest of the bytes, which a provider checks before it splits them.
+ */
+inline bool personal_fits(dstd::Span<const std::byte> bytes,
+                          std::uint32_t members) noexcept {
+    const std::uint64_t head = std::uint64_t{members} * sizeof(std::uint64_t);
+    if (bytes.size() < head) return false;
+    std::uint64_t total = 0;
+    for (std::uint32_t at = 0; at < members; ++at) {
+        std::uint64_t size = 0;
+        std::memcpy(&size, bytes.data() + at * sizeof(std::uint64_t),
+                    sizeof(size));
+        if (size > bytes.size() - head - total) return false;
+        total += size;
+    }
+    return total == bytes.size() - head;
+}
+
+/// The size of piece @p dest of a contribution that @ref personal_fits.
+inline std::uint64_t personal_size(dstd::Span<const std::byte> bytes,
+                                   std::uint32_t dest) noexcept {
+    std::uint64_t size = 0;
+    std::memcpy(&size, bytes.data() + dest * sizeof(std::uint64_t),
+                sizeof(size));
+    return size;
+}
 
 /**
  * @brief The contributions of every member in one owned buffer, as a slot ends.
@@ -132,6 +165,13 @@ struct SlotEnd {
     const dstd::Error* why = nullptr;
     /// What the members brought, when the records carry @ref RECORD_TABLE.
     Table table;
+    /// For records with @ref RECORD_PERSONAL, the table of each member, by
+    /// group rank: entry `s` of the table of member `d` is piece `d` of the
+    /// contribution of member `s`. A member this provider does not serve has an
+    /// empty table: a provider that sees every member serves them all, and one
+    /// that collects at another process serves its own rank. @ref table is
+    /// empty. Empty for any other slot.
+    dstd::Span<const Table> tables;
 };
 
 /// One byte per member, 1 for a member a provider saw arrive. Empty means the
@@ -159,6 +199,10 @@ class Collectives {
     Collectives(const Collectives&) = delete;
     Collectives& operator=(const Collectives&) = delete;
     virtual ~Collectives() = default;
+
+    /// True when every member of every slot lives in this process, so a call
+    /// may hand an object to the other members without serializing it.
+    virtual bool shares_memory() const noexcept { return false; }
 
     /**
      * @brief Arrives at slot @p seq of group @p group_id with @p record and

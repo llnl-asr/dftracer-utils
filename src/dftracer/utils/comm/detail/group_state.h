@@ -97,6 +97,8 @@ struct Slot {
     /// for a data call; empty for any other.
     dstd::Vector<Finisher> finishers;
     dstd::Vector<backend::Combine> folds;
+    /// The object each rank of this process gave to a call of the shared path.
+    dstd::Vector<dstd::SharedPtr<const void>> objects;
 };
 
 /**

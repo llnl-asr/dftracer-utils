@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <comm/collective_runs.h>
 #include <comm/support.h>
 #include <dftracer/utils/comm/backend/arrival_fold.h>
 #include <dftracer/utils/comm/backend/linear_collectives.h>
@@ -29,124 +30,24 @@ using namespace dftracer::utils;
 
 namespace {
 
+using dftu_comm_test::all_ok;
+using dftu_comm_test::Binding;
+using dftu_comm_test::binding_name;
+using dftu_comm_test::BINDINGS;
+using dftu_comm_test::bytes_of;
+using dftu_comm_test::for_each_run;
 using dftu_comm_test::has_text;
+using dftu_comm_test::PerRank;
+using dftu_comm_test::RANK_COUNTS;
 using dftu_comm_test::run_ranks;
-
-/// Which collectives a communicator of the test runs on.
-enum class Binding : std::uint8_t { Local, Linear };
-
-constexpr Binding BINDINGS[] = {Binding::Local, Binding::Linear};
-constexpr std::uint32_t RANK_COUNTS[] = {1, 2, 3, 4};
-
-const char* binding_name(Binding binding) noexcept {
-    return binding == Binding::Local
-               ? "local collectives"
-               : "linear collectives over local messaging";
-}
-
-comm::Communicator start(std::uint32_t ranks, coro::Executor& executor,
-                         Binding binding) {
-    auto started = comm::Communicator::start_local(ranks, executor);
-    REQUIRE(started.has_value());
-    comm::Communicator communicator = std::move(*started);
-    if (binding == Binding::Linear) {
-        comm::detail::Hooks::set_collectives(
-            communicator, comm::backend::make_linear_collectives(
-                              comm::detail::Hooks::messaging(communicator)));
-    }
-    return communicator;
-}
-
-/// Runs @p body(runtime, communicator, ranks) for every binding and every rank
-/// count.
-template <class Body>
-void for_each_run(Body body) {
-    for (const Binding binding : BINDINGS) {
-        for (const std::uint32_t ranks : RANK_COUNTS) {
-            CAPTURE(binding_name(binding));
-            CAPTURE(ranks);
-            Runtime rt(4);
-            comm::Communicator communicator =
-                start(ranks, *rt.executor(), binding);
-            body(rt, communicator, ranks);
-        }
-    }
-}
-
-dstd::Span<const std::byte> bytes_of(const std::string& text) {
-    return std::as_bytes(dstd::Span<const char>(text.data(), text.size()));
-}
-
-std::string text_of(dstd::Span<const std::byte> bytes) {
-    return std::string(reinterpret_cast<const char*>(bytes.data()),
-                       bytes.size());
-}
+using dftu_comm_test::start;
+using dftu_comm_test::start_per_rank;
+using dftu_comm_test::text_of;
 
 /// The text rank @p rank brings: its size differs by rank, and rank 1 of a
 /// run brings none.
 std::string word_of(std::uint32_t rank) {
     return rank == 1 ? std::string() : std::string(rank + 2, char('a' + rank));
-}
-
-/// One linear provider per rank over one messaging, as separate processes have
-/// them. Only the Done of @p driver ends the calls of the group, which a test
-/// shares in one process, so the table that rank parsed is the one that counts.
-class PerRank : public comm::backend::Collectives {
-   public:
-    PerRank(dstd::SharedPtr<comm::backend::Messaging> messaging,
-            std::uint32_t ranks, std::uint32_t driver_rank)
-        : driver_(driver_rank) {
-        for (std::uint32_t rank = 0; rank < ranks; ++rank)
-            instances_.push_back(
-                comm::backend::make_linear_collectives(messaging));
-    }
-
-    bool arrive(std::uint64_t group_id, std::uint64_t seq,
-                std::uint32_t members, std::uint32_t rank,
-                const comm::backend::Record& record,
-                comm::backend::Contribution&& contribution,
-                Done done) override {
-        if (rank != driver_) done = [](const comm::backend::SlotEnd&) {};
-        return instances_[rank]->arrive(group_id, seq, members, rank, record,
-                                        std::move(contribution),
-                                        std::move(done));
-    }
-
-    void drop(std::uint64_t group_id, std::uint64_t seq,
-              comm::backend::Arrival* arrived) override {
-        for (auto& instance : instances_)
-            instance->drop(group_id, seq, arrived);
-    }
-
-    void release(std::uint64_t group_id) override {
-        for (auto& instance : instances_) instance->release(group_id);
-    }
-
-   private:
-    std::uint32_t driver_;
-    dstd::Vector<dstd::SharedPtr<comm::backend::Collectives>> instances_;
-};
-
-comm::Communicator start_per_rank(std::uint32_t ranks, coro::Executor& executor,
-                                  std::uint32_t driver) {
-    auto started = comm::Communicator::start_local(ranks, executor);
-    REQUIRE(started.has_value());
-    comm::Communicator communicator = std::move(*started);
-    comm::detail::Hooks::set_collectives(
-        communicator,
-        dstd::make_shared<PerRank>(comm::detail::Hooks::messaging(communicator),
-                                   ranks, driver));
-    return communicator;
-}
-
-bool all_ok(const dstd::Vector<dstd::Optional<dstd::Error>>& errors) {
-    bool ok = true;
-    for (const auto& error : errors) {
-        if (!error.has_value()) continue;
-        MESSAGE(error->message());
-        ok = false;
-    }
-    return ok;
 }
 
 struct Best {

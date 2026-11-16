@@ -353,15 +353,23 @@ class LinearCollectives : public Collectives {
             Table table;
             dstd::Error malformed;
             bool parsed = false;
+            bool personal = false;
             {
                 std::lock_guard<std::mutex> lock(mutex_);
                 // Ended under this lock, so another callback already finished
                 // the slot and the span its completion reads is gone.
                 if (slot->ended) return;
                 parsed = parse_table(*slot, rank, bytes, table, malformed);
+                personal = (slot->records[rank].flags & RECORD_PERSONAL) != 0;
+            }
+            dstd::Vector<Table> tables;
+            if (parsed && personal && table.size() != 0) {
+                tables.resize(slot->members);
+                tables[rank] = std::move(table);
+                table = Table{};
             }
             finish_slot(slot, Arrival{}, rank, parsed ? nullptr : &malformed,
-                        std::move(table));
+                        std::move(table), std::move(tables));
         };
         messaging_->recv(key, std::move(took));
     }
@@ -523,6 +531,10 @@ class LinearCollectives : public Collectives {
                 wants[member] =
                     (slot->records[member].flags & RECORD_WANTS) != 0;
         }
+        if (input.personal) {
+            broadcast_personal(slot, input, wants);
+            return;
+        }
         // Outside the mutex: the copy of every contribution takes as long as
         // it takes, and the slot is sealed, so nothing else reads them.
         wire = build_wire(input);
@@ -560,6 +572,7 @@ class LinearCollectives : public Collectives {
         std::uint32_t members = 0;
         bool has_table = false;
         bool combines = false;
+        bool personal = false;
     };
 
     /// Moves what the table message needs out of the sealed @p slot. Called
@@ -573,7 +586,101 @@ class LinearCollectives : public Collectives {
         input.members = slot.members;
         input.has_table = slot.has_table;
         input.combines = slot.combines;
+        for (const Record& record : slot.records)
+            if ((record.flags & RECORD_PERSONAL) != 0) input.personal = true;
         return input;
+    }
+
+    /// Sends each member of a sealed personal slot the table message of its own
+    /// pieces, and reports the one of rank 0. A member gets only the bytes
+    /// addressed to it, so no message holds the whole exchange.
+    void broadcast_personal(const dstd::SharedPtr<Slot>& slot, WireInput& input,
+                            const dstd::Vector<std::uint8_t>& wants) {
+        dstd::Vector<dstd::SharedPtr<Wire>> wires;
+        dstd::Error bad;
+        if (!build_personal_wires(input, wires, bad)) {
+            finish_slot(slot, Arrival{}, 0, &bad, Table{});
+            return;
+        }
+        // Rank 0 holds every member's table message to send it, so the ranks
+        // that share this provider end with theirs.
+        dstd::Vector<Table> tables(input.members);
+        for (std::uint32_t member = 0; member < input.members; ++member)
+            if (wants[member] != 0)
+                tables[member] =
+                    table_of(dstd::SharedPtr<const Wire>(wires[member]));
+        finish_slot(slot, Arrival{}, 0, nullptr, Table{}, std::move(tables));
+        const std::size_t head = header_size(input.members, true);
+        for (std::uint32_t member = 1; member < input.members; ++member) {
+            const dstd::SharedPtr<const Wire> wire = wires[member];
+            const std::size_t size = wants[member] ? wire->bytes.size() : head;
+            const MessageKey key{
+                slot->key.group, 0, member,
+                message_tag(TagPurpose::CollectiveTable, slot->key.seq)};
+            messaging_->send(key,
+                             Payload::borrowed(dstd::Span<const std::byte>(
+                                                   wire->bytes.data(), size),
+                                               wire),
+                             HOLD_EVERYTHING, failed_send(slot, member));
+        }
+    }
+
+    /// The table message of every member of a personal slot: the records, the
+    /// offsets of the pieces addressed to that member, and the pieces, taken in
+    /// source order. Each piece is copied once, from the copy out of its
+    /// message. Gives false with the error when a contribution does not hold
+    /// one piece per member.
+    static bool build_personal_wires(WireInput& slot,
+                                     dstd::Vector<dstd::SharedPtr<Wire>>& wires,
+                                     dstd::Error& why) {
+        const std::uint32_t members = slot.members;
+        dstd::Vector<dstd::Span<const std::byte>> sources(members);
+        for (std::uint32_t member = 0; member < members; ++member) {
+            sources[member] = member == 0 ? slot.own.bytes
+                                          : dstd::Span<const std::byte>(
+                                                slot.staged[member].data(),
+                                                slot.staged[member].size());
+            const std::uint32_t flags = slot.records[member].flags;
+            const bool ok = (flags & RECORD_PERSONAL) != 0 &&
+                            (flags & RECORD_TABLE) != 0 && !slot.combines &&
+                            personal_fits(sources[member], members);
+            if (ok) continue;
+            why = dstd::Error::from_format<
+                "the contribution of rank {} does not hold one piece per "
+                "member">(dstd::Condition::InvalidArgument, member);
+            return false;
+        }
+        const std::size_t head = header_size(members, true);
+        dstd::Vector<std::uint64_t> cursor(members);
+        for (std::uint32_t member = 0; member < members; ++member)
+            cursor[member] = std::uint64_t{members} * sizeof(std::uint64_t);
+        wires.reserve(members);
+        for (std::uint32_t dest = 0; dest < members; ++dest) {
+            auto wire = dstd::make_shared<Wire>();
+            wire->data_at = head;
+            std::uint64_t total = 0;
+            for (std::uint32_t member = 0; member < members; ++member)
+                total += personal_size(sources[member], dest);
+            wire->bytes.reserve(head + total);
+            wire->bytes.resize(head);
+            std::memcpy(wire->bytes.data(), slot.records.data(),
+                        members * sizeof(Record));
+            wire->offsets.push_back(0);
+            for (std::uint32_t member = 0; member < members; ++member) {
+                const std::uint64_t size = personal_size(sources[member], dest);
+                const dstd::Span<const std::byte> piece =
+                    sources[member].subspan(cursor[member], size);
+                cursor[member] += size;
+                wire->bytes.insert(wire->bytes.end(), piece.begin(),
+                                   piece.end());
+                wire->offsets.push_back(wire->offsets.back() + size);
+            }
+            std::memcpy(wire->bytes.data() + members * sizeof(Record),
+                        wire->offsets.data(),
+                        wire->offsets.size() * sizeof(std::uint64_t));
+            wires.push_back(std::move(wire));
+        }
+        return true;
     }
 
     /// The table message of a complete slot: the one copy of every
@@ -653,7 +760,8 @@ class LinearCollectives : public Collectives {
     /// Ends @p slot once, with @p seen empty when every member arrived, and
     /// reports it outside the lock so the caller's group lock is free.
     void finish_slot(const dstd::SharedPtr<Slot>& slot, const Arrival& seen,
-                     std::uint32_t rank, const dstd::Error* why, Table table) {
+                     std::uint32_t rank, const dstd::Error* why, Table table,
+                     dstd::Vector<Table> tables = {}) {
         Done done;
         {
             std::lock_guard<std::mutex> lock(mutex_);
@@ -672,8 +780,11 @@ class LinearCollectives : public Collectives {
         const SlotEnd end{
             dstd::Span<const Record>(slot->records.data(),
                                      slot->records.size()),
-            dstd::Span<const std::uint8_t>(mask.data(), mask.size()), rank, why,
-            std::move(table)};
+            dstd::Span<const std::uint8_t>(mask.data(), mask.size()),
+            rank,
+            why,
+            std::move(table),
+            dstd::Span<const Table>(tables.data(), tables.size())};
         done(end);
     }
 

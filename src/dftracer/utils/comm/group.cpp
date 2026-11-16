@@ -20,6 +20,7 @@
 #include <coroutine>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <mutex>
 #include <type_traits>
 #include <utility>
@@ -123,6 +124,18 @@ dstd::StringView call_name(CallKind kind) noexcept {
             return "reduce";
         case CallKind::AllReduce:
             return "all_reduce";
+        case CallKind::AllToAll:
+            return "all_to_all";
+        case CallKind::ReduceScatter:
+            return "reduce_scatter";
+        case CallKind::Scan:
+            return "scan";
+        case CallKind::ExclusiveScan:
+            return "exclusive_scan";
+        case CallKind::Neighbors:
+            return "neighbors";
+        case CallKind::NeighborExchange:
+            return "neighbor_exchange";
     }
     return "unknown";
 }
@@ -423,7 +436,8 @@ void start_call(const dstd::SharedPtr<Backend>& backend,
                 CallKind kind, backend::Record record,
                 backend::Contribution&& contribution, const CallOpts& opts,
                 const dstd::SharedPtr<PendingOp>& state, FinishFn finish,
-                Finisher* finisher, backend::Combine* fold) {
+                Finisher* finisher, backend::Combine* fold,
+                dstd::SharedPtr<const void>* object) {
     if (opts.stop.stop_requested()) (void)cancel_group(*group, rank);
 
     dstd::SharedPtr<Slot> slot;
@@ -468,6 +482,10 @@ void start_call(const dstd::SharedPtr<Backend>& backend,
                 slot->folds.resize(group->size());
             }
             slot->finishers[rank] = std::move(*finisher);
+            if (object != nullptr && *object) {
+                if (slot->objects.empty()) slot->objects.resize(group->size());
+                slot->objects[rank] = std::move(*object);
+            }
             if (fold != nullptr && *fold) {
                 if ((record.flags & backend::RECORD_COMBINE) != 0)
                     contribution.combine = std::move(*fold);
@@ -516,7 +534,7 @@ Op<T> make_call(const dstd::SharedPtr<Backend>& backend,
     record.color = color;
     record.key = key;
     start_call(backend, group, rank, kind, record, backend::Contribution{},
-               opts, state, &finish_call<T>, nullptr, nullptr);
+               opts, state, &finish_call<T>, nullptr, nullptr, nullptr);
     return Op<T>(std::move(state), group, rank);
 }
 
@@ -539,6 +557,76 @@ bool packed_block_fits(dstd::Span<const std::byte> block,
     return total == block.size() - head;
 }
 
+/// The checks of the calls that split values into one block per rank, which
+/// the records allow: the counts divide, and the ranks that send rows or
+/// blocks to neighbors name valid ones. Gives false with the error and the rank
+/// that names it.
+bool check_split(const Slot& slot, const backend::SlotEnd& end, CallKind kind,
+                 std::uint32_t size, std::uint32_t& who, Error& why) {
+    const backend::Record& base = end.records[0];
+    who = 0;
+    switch (kind) {
+        case CallKind::AllToAll:
+            if (base.color == ALL_TO_ALL_EQUAL && base.count % size != 0) {
+                why = Error::from_format<
+                    "seq {}: the {} values of each rank do not split into {} "
+                    "blocks">(Condition::InvalidArgument, slot.seq, base.count,
+                              size);
+                return false;
+            }
+            if ((base.color == ALL_TO_ALL_BLOCKS ||
+                 base.color == OBJECT_SHARED) &&
+                base.count != size) {
+                why = Error::from_format<
+                    "seq {}: the ranks gave {} blocks for a group of {}">(
+                    Condition::InvalidArgument, slot.seq, base.count, size);
+                return false;
+            }
+            if (base.color == ALL_TO_ALL_ROWS) {
+                for (std::uint32_t rank = 0; rank < size; ++rank) {
+                    if (end.records[rank].key == 0) continue;
+                    who = rank;
+                    why = Error::from_format<
+                        "seq {}: rank {} sent a row to rank {}, which is not "
+                        "below the group size {}">(
+                        Condition::InvalidArgument, slot.seq, rank,
+                        end.records[rank].key - 1, size);
+                    return false;
+                }
+            }
+            return true;
+        case CallKind::ReduceScatter:
+            if (base.key == SPLIT_BAD) {
+                why = Error::from_format<
+                    "seq {}: the counts of the ranks do not split {} values "
+                    "into {} blocks">(Condition::InvalidArgument, slot.seq,
+                                      base.count, size);
+                return false;
+            }
+            if (base.key == SPLIT_EQUAL && base.count % size != 0) {
+                why = Error::from_format<
+                    "seq {}: the {} values of each rank do not split into {} "
+                    "blocks">(Condition::InvalidArgument, slot.seq, base.count,
+                              size);
+                return false;
+            }
+            return true;
+        case CallKind::NeighborExchange:
+            for (std::uint32_t rank = 0; rank < size; ++rank) {
+                if (end.records[rank].count == end.records[rank].key) continue;
+                who = rank;
+                why = Error::from_format<
+                    "seq {}: rank {} gave {} blocks for {} out-neighbors">(
+                    Condition::InvalidArgument, slot.seq, rank,
+                    end.records[rank].count, end.records[rank].key);
+                return false;
+            }
+            return true;
+        default:
+            return true;
+    }
+}
+
 /// The checks of a data call that the records and the table allow once every
 /// member arrived: the members agree on the root, the element type, the count
 /// where it must match and the merge, and the root's data fits a scatter.
@@ -549,7 +637,7 @@ bool check_shape(const GroupState& group, const Slot& slot,
     const std::uint32_t size = group.size();
     const backend::Record& base = end.records[0];
     // A member that did not ask for the table may end the slot with none.
-    const bool has_table = !end.table.offsets.empty();
+    const bool has_table = !end.table.offsets.empty() || !end.tables.empty();
     if (!has_table &&
         (end.records[end.rank].flags & backend::RECORD_WANTS) != 0) {
         who = end.rank;
@@ -569,7 +657,8 @@ bool check_shape(const GroupState& group, const Slot& slot,
                               0, base.elem_size);
             return false;
         }
-        if (kind != CallKind::Scatter && other.count != base.count) {
+        if (kind != CallKind::Scatter && kind != CallKind::NeighborExchange &&
+            other.count != base.count) {
             why = shape_error(slot.seq, "count", rank, other.count, 0,
                               base.count);
             return false;
@@ -590,6 +679,14 @@ bool check_shape(const GroupState& group, const Slot& slot,
                               base.flags & backend::RECORD_COMBINE);
             return false;
         }
+        if ((kind == CallKind::ReduceScatter || base.color == OBJECT_SHARED) &&
+            other.key != base.key) {
+            why = shape_error(
+                slot.seq,
+                kind == CallKind::ReduceScatter ? "block split" : "object type",
+                rank, other.key, 0, base.key);
+            return false;
+        }
     }
     who = base.root;
     if (kind != CallKind::AllGather && kind != CallKind::AllReduce &&
@@ -599,6 +696,7 @@ bool check_shape(const GroupState& group, const Slot& slot,
             Condition::InvalidArgument, slot.seq, base.root, size);
         return false;
     }
+    if (!check_split(slot, end, kind, size, who, why)) return false;
     if (kind == CallKind::Scatter && has_table) {
         const backend::Record& root = end.records[base.root];
         const dstd::Span<const std::byte> block = end.table.at(base.root);
@@ -625,7 +723,10 @@ Outcome make_outcome(const backend::SlotEnd& end,
     Outcome outcome;
     outcome.table = end.table;
     const backend::Record& base = end.records[0];
-    if (base.reduce == REDUCE_NONE ||
+    // A scan keeps every entry, each rank merges its own prefix.
+    const CallKind kind = static_cast<CallKind>(base.kind);
+    if (base.reduce == REDUCE_NONE || kind == CallKind::Scan ||
+        kind == CallKind::ExclusiveScan ||
         (base.flags & backend::RECORD_COMBINE) != 0 ||
         end.table.offsets.empty())
         return outcome;
@@ -662,6 +763,7 @@ void finish_data(Slot& slot, const backend::SlotEnd& end) {
     AbortTail tail;
     dstd::Vector<Finisher> finishers;
     dstd::Vector<backend::Combine> folds;
+    dstd::Vector<dstd::SharedPtr<const void>> objects;
     bool claimed = false;
     {
         std::lock_guard<std::mutex> lock(group->mutex);
@@ -671,6 +773,7 @@ void finish_data(Slot& slot, const backend::SlotEnd& end) {
             if (check_shape(*group, slot, end, who, why)) {
                 finishers = std::move(slot.finishers);
                 folds = std::move(slot.folds);
+                objects = std::move(slot.objects);
                 claimed = true;
                 const auto at = group->slots.find(slot.seq);
                 if (at != group->slots.end() && at->second.get() == &slot)
@@ -682,8 +785,42 @@ void finish_data(Slot& slot, const backend::SlotEnd& end) {
     }
     finish_abort(group->backend, group->id, tail);
     if (!claimed) return;
-    const Outcome outcome = make_outcome(end, folds);
-    for (Finisher& finisher : finishers) finisher(outcome);
+    Outcome outcome = make_outcome(end, folds);
+    outcome.objects = &objects;
+    // A provider that gives each member its own table serves only the members
+    // it knows; the others cannot end with data.
+    const bool personal = !end.tables.empty();
+    dstd::Optional<Error> unusable;
+    std::uint32_t unusable_rank = 0;
+    for (std::uint32_t rank = 0; rank < finishers.size(); ++rank) {
+        // A rank that is not in this process has no call here to end.
+        if (!finishers[rank] || !slot.ops[rank]) continue;
+        Outcome mine;
+        mine.objects = &objects;
+        if (personal) {
+            if (end.tables[rank].offsets.empty()) {
+                slot.ops[rank]->fail(
+                    Error::from_format<"seq {}: the provider gave no table for "
+                                       "rank {}">(Condition::Internal, slot.seq,
+                                                  rank));
+                continue;
+            }
+            mine.table = end.tables[rank];
+        }
+        dstd::Optional<Error> why = finishers[rank](personal ? mine : outcome);
+        if (why && !unusable) {
+            unusable = std::move(why);
+            unusable_rank = rank;
+        }
+    }
+    if (!unusable) return;
+    AbortTail after;
+    {
+        std::lock_guard<std::mutex> lock(group->mutex);
+        abort_locked(*group, abort_error(*group, unusable_rank, *unusable),
+                     after);
+    }
+    finish_abort(group->backend, group->id, after);
 }
 
 /// Runs one abort on the executor. The frame holds the group until it runs, so
@@ -753,6 +890,10 @@ std::uint32_t Group::size() const noexcept {
 
 std::uint64_t Group::id() const noexcept { return state_ ? state_->id : 0; }
 
+bool Group::shares_memory() const noexcept {
+    return state_ && state_->backend->collectives->shares_memory();
+}
+
 Op<Group> Group::split(std::uint32_t color, std::uint32_t key, CallOpts opts) {
     return detail::make_call<Group>(backend_, state_, rank_,
                                     detail::CallKind::Split, color, key, opts);
@@ -774,7 +915,111 @@ void Group::start_data(detail::DataCall call, detail::Finisher finisher,
                        const CallOpts& opts) {
     detail::start_call(backend_, state_, rank_, call.kind, call.record,
                        std::move(call.contribution), opts, state,
-                       &detail::finish_data, &finisher, &call.fold);
+                       &detail::finish_data, &finisher, &call.fold,
+                       &call.object);
+}
+
+Op<Gathered> Group::table_call(detail::DataCall call, const CallOpts& opts) {
+    return data_op<Gathered>(
+        std::move(call),
+        [](const detail::Outcome& out) { return Gathered(out.table); }, opts);
+}
+
+Op<Gathered> Group::all_to_all(
+    dstd::Span<const dstd::Span<const std::byte>> blocks, CallOpts opts) {
+    detail::DataCall call = detail::make_data_call(
+        detail::CallKind::AllToAll, 0, 1, blocks.size(),
+        backend::RECORD_WANTS | backend::RECORD_PERSONAL,
+        detail::own_personal(size(), [&](std::uint32_t dest) {
+            return dest < blocks.size() ? blocks[dest]
+                                        : dstd::Span<const std::byte>();
+        }));
+    call.record.color = detail::ALL_TO_ALL_BLOCKS;
+    return table_call(std::move(call), opts);
+}
+
+Op<Neighborhood> Group::neighbors(dstd::Span<const std::uint32_t> out_neighbors,
+                                  CallOpts opts) {
+    detail::DataCall call = detail::make_data_call(
+        detail::CallKind::Neighbors, 0, sizeof(std::uint32_t),
+        backend::UNCHECKED_COUNT, backend::RECORD_WANTS,
+        detail::own_bytes(std::as_bytes(out_neighbors)));
+    dstd::Vector<std::uint32_t> mine(out_neighbors.begin(),
+                                     out_neighbors.end());
+    // Weak, because the slot that holds this call lives in the group.
+    dstd::WeakPtr<detail::GroupState> weak = state_;
+    return data_op<Neighborhood>(
+        std::move(call),
+        [owner = backend_, weak = std::move(weak), rank = rank_,
+         mine = std::move(mine)](
+            const detail::Outcome& out) -> dstd::Result<Neighborhood> {
+            const std::uint32_t members = out.table.size();
+            dstd::Vector<std::uint32_t> in;
+            dstd::Vector<std::uint32_t> stamp(members, 0);
+            for (std::uint32_t from = 0; from < members; ++from) {
+                const dstd::Span<const std::byte> bytes = out.table.at(from);
+                if (bytes.size() % sizeof(std::uint32_t) != 0) {
+                    return dstd::Unexpected(
+                        Error::from_format<"rank {} named its neighbors in {} "
+                                           "bytes, which is not a list of "
+                                           "ranks">(Condition::InvalidArgument,
+                                                    from, bytes.size()));
+                }
+                bool names_me = false;
+                for (std::size_t at = 0; at < bytes.size();
+                     at += sizeof(std::uint32_t)) {
+                    std::uint32_t to = 0;
+                    std::memcpy(&to, bytes.data() + at, sizeof(to));
+                    if (to >= members) {
+                        return dstd::Unexpected(
+                            Error::from_format<"rank {} names rank {}, which "
+                                               "is not below the group size "
+                                               "{}">(Condition::InvalidArgument,
+                                                     from, to, members));
+                    }
+                    if (stamp[to] == from + 1) {
+                        return dstd::Unexpected(
+                            Error::from_format<"rank {} names rank {} twice">(
+                                Condition::InvalidArgument, from, to));
+                    }
+                    stamp[to] = from + 1;
+                    if (to == rank) names_me = true;
+                }
+                if (names_me) in.push_back(from);
+            }
+            const dstd::SharedPtr<detail::GroupState> state = weak.lock();
+            if (!state) {
+                return dstd::Unexpected(
+                    Error::from_format<"the group ended before its "
+                                       "neighbors were fixed">(
+                        Condition::Cancelled));
+            }
+            return dstd::Result<Neighborhood>(Neighborhood(
+                Group{owner, state, rank}, mine,
+                dstd::make_shared<const dstd::Vector<std::uint32_t>>(
+                    std::move(in))));
+        },
+        opts);
+}
+
+Op<NeighborBlocks> Neighborhood::neighbor_exchange(
+    dstd::Span<const dstd::Span<const std::byte>> blocks, CallOpts opts) {
+    const std::uint32_t members = group_.size();
+    dstd::Vector<dstd::Span<const std::byte>> by_dest(members);
+    const std::size_t used = std::min(blocks.size(), out_.size());
+    for (std::size_t at = 0; at < used; ++at) by_dest[out_[at]] = blocks[at];
+    detail::DataCall call = detail::make_data_call(
+        detail::CallKind::NeighborExchange, 0, 1, blocks.size(),
+        backend::RECORD_WANTS | backend::RECORD_PERSONAL,
+        detail::own_personal(
+            members, [&](std::uint32_t dest) { return by_dest[dest]; }));
+    call.record.key = static_cast<std::uint32_t>(out_.size());
+    return group_.data_op<NeighborBlocks>(
+        std::move(call),
+        [in = in_](const detail::Outcome& out) {
+            return NeighborBlocks(Gathered(out.table), in);
+        },
+        opts);
 }
 
 Op<Bytes> Group::broadcast(std::uint32_t root, Bytes value, CallOpts opts) {

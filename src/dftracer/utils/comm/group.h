@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_COMM_GROUP_H
 #define DFTRACER_UTILS_COMM_GROUP_H
 
+#include <dftracer/utils/comm/codec.h>
 #include <dftracer/utils/comm/collective.h>
 #include <dftracer/utils/comm/error.h>
 #include <dftracer/utils/comm/op.h>
@@ -9,6 +10,7 @@
 #include <dftracer/utils/coro/stop_token.h>
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
@@ -16,6 +18,8 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
+#include <limits>
 #include <span>
 #include <type_traits>
 #include <utility>
@@ -35,6 +39,8 @@ struct Hooks;
 
 template <class T>
 class Channel;
+
+class Neighborhood;
 
 /// How a channel opens: the depth of the stream of one sender and one receiver,
 /// and what a send does when that stream is full. A depth below 1 holds one
@@ -155,7 +161,7 @@ class Group {
             rank_ == root ? detail::own_value(value) : backend::Contribution{});
         return data_op<T>(
             std::move(call),
-            [root](const detail::Outcome& out) {
+            [root](const detail::Outcome& out) -> dstd::Result<T> {
                 return detail::scalar_of<T>(out.table.at(root));
             },
             opts);
@@ -174,7 +180,8 @@ class Group {
                           : backend::Contribution{});
         return data_op<dstd::Vector<T>>(
             std::move(call),
-            [root](const detail::Outcome& out) {
+            [root](
+                const detail::Outcome& out) -> dstd::Result<dstd::Vector<T>> {
                 return detail::vector_of<T>(out.table.at(root));
             },
             opts);
@@ -247,7 +254,8 @@ class Group {
                           : backend::Contribution{});
         return data_op<dstd::Vector<T>>(
             std::move(call),
-            [root, rank](const detail::Outcome& out) {
+            [root, rank](
+                const detail::Outcome& out) -> dstd::Result<dstd::Vector<T>> {
                 const dstd::Span<const std::byte> all = out.table.at(root);
                 const std::size_t piece = all.size() / out.table.size();
                 return detail::vector_of<T>(all.subspan(rank * piece, piece));
@@ -352,6 +360,434 @@ class Group {
                              detail::make_combine<T>(std::move(fn)), opts);
     }
 
+    /**
+     * @brief Collective: every rank sends block `d` of its values to rank `d`
+     * and gets one block from every rank.
+     *
+     * Every rank passes `size() * k` values for the same `k`, so the blocks
+     * have equal size; a count that `size()` does not divide ends the call with
+     * an error on every rank. The result is one owned buffer with a view per
+     * source rank: view `s` holds the `k` values rank `s` sent to this rank.
+     */
+    template <class T>
+    Op<Gathered> all_to_all(dstd::Span<const T> values, CallOpts opts = {}) {
+        static_assert(std::is_trivially_copyable_v<T>);
+        const std::uint32_t members = size();
+        const std::size_t block = members == 0 ? 0 : values.size() / members;
+        detail::DataCall call = detail::make_data_call(
+            detail::CallKind::AllToAll, 0, sizeof(T), values.size(),
+            backend::RECORD_WANTS | backend::RECORD_PERSONAL,
+            detail::own_personal(members, [&](std::uint32_t dest) {
+                return std::as_bytes(values.subspan(dest * block, block));
+            }));
+        call.record.color = detail::ALL_TO_ALL_EQUAL;
+        return table_call(std::move(call), opts);
+    }
+
+    /**
+     * @brief @ref all_to_all of blocks of any size: rank `d` gets the bytes of
+     * `blocks[d]`.
+     *
+     * Every rank passes one block per rank, which may be empty, and the sizes
+     * may differ by block and by rank. The blocks are copied into one block of
+     * the call. A count other than `size()` ends the call with an error on
+     * every rank.
+     */
+    Op<Gathered> all_to_all(
+        dstd::Span<const dstd::Span<const std::byte>> blocks,
+        CallOpts opts = {});
+
+    /**
+     * @brief Collective: every rank sends each of its rows to the rank that
+     * @p key_fn names, and gets the rows sent to it.
+     *
+     * @p key_fn maps a row to a rank below `size()` and runs once per row on
+     * the calling thread. A row that maps to another rank ends the call with an
+     * error on every rank. The result is one owned buffer with a view per
+     * source rank, in rank order, and the rows of one source keep their order;
+     * read a view with @ref Gathered::as. Every rank passes the same @p T.
+     */
+    template <class T, class KeyFn>
+    Op<Gathered> exchange_by(dstd::Span<const T> rows, KeyFn key_fn,
+                             CallOpts opts = {}) {
+        static_assert(std::is_trivially_copyable_v<T>);
+        const std::uint32_t members = size();
+        dstd::Vector<std::uint32_t> dest(rows.size());
+        dstd::Vector<std::size_t> start(std::size_t{members} + 1, 0);
+        bool has_bad = false;
+        std::uint32_t bad = 0;
+        for (std::size_t at = 0; at < rows.size(); ++at) {
+            const auto key = key_fn(rows[at]);
+            static_assert(
+                std::is_integral_v<std::remove_cvref_t<decltype(key)>>,
+                "the key function gives an integer rank");
+            if (std::cmp_less(key, members) && std::cmp_greater_equal(key, 0)) {
+                dest[at] = static_cast<std::uint32_t>(key);
+                ++start[dest[at] + 1];
+                continue;
+            }
+            dest[at] = members;
+            if (has_bad) continue;
+            has_bad = true;
+            bad = std::in_range<std::uint32_t>(key)
+                      ? static_cast<std::uint32_t>(key)
+                      : 0xFFFFFFFEu;
+        }
+        for (std::uint32_t at = 0; at < members; ++at)
+            start[at + 1] += start[at];
+        backend::Contribution contribution;
+        auto made =
+            detail::PersonalBlock::make(members, start[members] * sizeof(T));
+        if (!made) {
+            abort(made.error());
+        } else {
+            dstd::Vector<std::byte>& bytes = made->bytes();
+            const std::size_t head =
+                std::size_t{members} * sizeof(std::uint64_t);
+            for (std::uint32_t at = 0; at < members; ++at) {
+                const std::uint64_t size =
+                    (start[at + 1] - start[at]) * sizeof(T);
+                std::memcpy(bytes.data() + at * sizeof(std::uint64_t), &size,
+                            sizeof(size));
+            }
+            for (std::size_t at = 0; at < rows.size(); ++at) {
+                if (dest[at] >= members) continue;
+                std::memcpy(bytes.data() + head + start[dest[at]]++ * sizeof(T),
+                            &rows[at], sizeof(T));
+            }
+            contribution = made->finish();
+        }
+        detail::DataCall call = detail::make_data_call(
+            detail::CallKind::AllToAll, 0, sizeof(T), backend::UNCHECKED_COUNT,
+            backend::RECORD_WANTS | backend::RECORD_PERSONAL,
+            std::move(contribution));
+        call.record.color = detail::ALL_TO_ALL_ROWS;
+        call.record.key =
+            has_bad ? (bad < 0xFFFFFFFEu ? bad : 0xFFFFFFFEu) + 1 : 0;
+        return table_call(std::move(call), opts);
+    }
+
+    /**
+     * @brief Collective: the element-wise merge of the values of every rank, of
+     * which rank `r` gets block `r`.
+     *
+     * Every rank passes the same number of values and the same @p op. This form
+     * cuts equal blocks, so the count must be a multiple of `size()`; the form
+     * with @p counts cuts blocks of those sizes, which must add up to the count
+     * and be the same on every rank. The ranks compare the counts exactly, so
+     * counts that differ are an error on every rank. The merge follows the
+     * rules of @ref all_reduce: rank order unless @ref CallOpts::reduce_order
+     * says otherwise, and the function of rank 0. A provider that collects at
+     * rank 0 sends each rank the whole merge, of which the rank keeps its
+     * block.
+     */
+    template <class T>
+    Op<dstd::Vector<T>> reduce_scatter(dstd::Span<const T> values, ReduceOp op,
+                                       CallOpts opts = {}) {
+        return reduce_scatter_call<T>(values, {}, false,
+                                      detail::reduce_code(op),
+                                      detail::builtin_combine<T>(op), opts);
+    }
+
+    /// @ref reduce_scatter with the merge @p fn.
+    template <class T>
+    Op<dstd::Vector<T>> reduce_scatter(dstd::Span<const T> values,
+                                       std::type_identity_t<ReduceFn<T>> fn,
+                                       CallOpts opts = {}) {
+        return reduce_scatter_call<T>(values, {}, false, detail::REDUCE_CUSTOM,
+                                      detail::make_combine<T>(std::move(fn)),
+                                      opts);
+    }
+
+    /// @ref reduce_scatter into blocks of the sizes @p counts, one per rank.
+    template <class T>
+    Op<dstd::Vector<T>> reduce_scatter(dstd::Span<const T> values,
+                                       dstd::Span<const std::size_t> counts,
+                                       ReduceOp op, CallOpts opts = {}) {
+        return reduce_scatter_call<T>(values, counts, true,
+                                      detail::reduce_code(op),
+                                      detail::builtin_combine<T>(op), opts);
+    }
+
+    /// @ref reduce_scatter into blocks of the sizes @p counts with the merge
+    /// @p fn.
+    template <class T>
+    Op<dstd::Vector<T>> reduce_scatter(dstd::Span<const T> values,
+                                       dstd::Span<const std::size_t> counts,
+                                       std::type_identity_t<ReduceFn<T>> fn,
+                                       CallOpts opts = {}) {
+        return reduce_scatter_call<T>(
+            values, counts, true, detail::REDUCE_CUSTOM,
+            detail::make_combine<T>(std::move(fn)), opts);
+    }
+
+    /**
+     * @brief Collective: rank `r` gets the merge of the values of ranks 0 to
+     * `r`.
+     *
+     * Every rank passes the same number of values, the same @p op and, for the
+     * forms with a function, the same function. The merge always folds in rank
+     * order, so a float result is the same on every run and @ref
+     * CallOpts::reduce_order has no effect. Every rank receives every
+     * contribution and merges its own prefix, which costs `r` merges on rank
+     * `r`.
+     */
+    template <class T>
+    Op<dstd::Vector<T>> scan(dstd::Span<const T> values, ReduceOp op,
+                             CallOpts opts = {}) {
+        return scan_call<T>(detail::CallKind::Scan, values,
+                            detail::reduce_code(op),
+                            detail::builtin_combine<T>(op), opts);
+    }
+
+    /// @ref scan with the merge @p fn.
+    template <class T>
+    Op<dstd::Vector<T>> scan(dstd::Span<const T> values,
+                             std::type_identity_t<ReduceFn<T>> fn,
+                             CallOpts opts = {}) {
+        return scan_call<T>(detail::CallKind::Scan, values,
+                            detail::REDUCE_CUSTOM,
+                            detail::make_combine<T>(std::move(fn)), opts);
+    }
+
+    /// @ref scan of one value.
+    template <detail::Scalar T>
+    Op<T> scan(const T& value, ReduceOp op, CallOpts opts = {}) {
+        return scan_one<T>(detail::CallKind::Scan, value,
+                           detail::reduce_code(op),
+                           detail::builtin_combine<T>(op), opts);
+    }
+
+    /// @ref scan of one value with the merge @p fn.
+    template <detail::Scalar T>
+    Op<T> scan(const T& value, std::type_identity_t<ReduceFn<T>> fn,
+               CallOpts opts = {}) {
+        return scan_one<T>(detail::CallKind::Scan, value, detail::REDUCE_CUSTOM,
+                           detail::make_combine<T>(std::move(fn)), opts);
+    }
+
+    /**
+     * @brief @ref scan without the own values: rank `r` gets the merge of ranks
+     * 0 to `r - 1`.
+     *
+     * Rank 0 has nothing to merge and gets an empty vector, or no value for the
+     * form of one value.
+     */
+    template <class T>
+    Op<dstd::Vector<T>> exclusive_scan(dstd::Span<const T> values, ReduceOp op,
+                                       CallOpts opts = {}) {
+        return scan_call<T>(detail::CallKind::ExclusiveScan, values,
+                            detail::reduce_code(op),
+                            detail::builtin_combine<T>(op), opts);
+    }
+
+    /// @ref exclusive_scan with the merge @p fn.
+    template <class T>
+    Op<dstd::Vector<T>> exclusive_scan(dstd::Span<const T> values,
+                                       std::type_identity_t<ReduceFn<T>> fn,
+                                       CallOpts opts = {}) {
+        return scan_call<T>(detail::CallKind::ExclusiveScan, values,
+                            detail::REDUCE_CUSTOM,
+                            detail::make_combine<T>(std::move(fn)), opts);
+    }
+
+    /// @ref exclusive_scan of one value, which is empty on rank 0.
+    template <detail::Scalar T>
+    Op<dstd::Optional<T>> exclusive_scan(const T& value, ReduceOp op,
+                                         CallOpts opts = {}) {
+        return exclusive_one<T>(value, detail::reduce_code(op),
+                                detail::builtin_combine<T>(op), opts);
+    }
+
+    /// @ref exclusive_scan of one value with the merge @p fn.
+    template <detail::Scalar T>
+    Op<dstd::Optional<T>> exclusive_scan(const T& value,
+                                         std::type_identity_t<ReduceFn<T>> fn,
+                                         CallOpts opts = {}) {
+        return exclusive_one<T>(value, detail::REDUCE_CUSTOM,
+                                detail::make_combine<T>(std::move(fn)), opts);
+    }
+
+    /**
+     * @brief Collective: fixes a graph of the ranks, where each rank names the
+     * ranks it sends to.
+     *
+     * The in-neighbors of a rank are the ranks that name it, which the call
+     * works out and checks once: a rank beyond the group or named twice by one
+     * rank ends the call with an error on every rank and aborts the group. The
+     * order of @p out_neighbors is the order of the blocks of
+     * @ref Neighborhood::neighbor_exchange. A rank may name itself.
+     */
+    Op<Neighborhood> neighbors(dstd::Span<const std::uint32_t> out_neighbors,
+                               CallOpts opts = {});
+
+    /**
+     * @brief The `_object` forms move a value of @p T that is not trivially
+     * copyable. Each result holds its objects as `SharedPtr<const T>`: shared
+     * and read-only, so copy an object with `T mine = *object` to change it.
+     *
+     * A call whose ranks all live in this process does not serialize. It moves
+     * each value into one shared holder, and every rank that reads the value
+     * holds that same object, with no copy; the codec does not run. Any other
+     * call has the codec size each value, writes it in place into the one block
+     * the call owns, and has the receiving rank deserialize it into an owned
+     * object on the thread that ends the call, never under a lock of a
+     * provider. Every rank takes the same path, or the call fails on every
+     * rank. A codec that fails to serialize aborts the group. A value that does
+     * not deserialize ends that rank's call with the error of the codec and
+     * aborts the group too, since the ranks no longer agree on their data.
+     * @ref all_gather_object gives every rank one object per rank. The types
+     * are default constructible.
+     */
+    template <class T, Codec<T> C>
+    Op<dstd::Vector<dstd::SharedPtr<const T>>> all_gather_object(
+        T value, C codec, CallOpts opts = {}) {
+        return object_gather<T, C>(detail::CallKind::AllGather, 0, true,
+                                   std::move(value), std::move(codec), opts);
+    }
+
+    /// @ref gather of one object per rank; only @p root gets objects.
+    template <class T, Codec<T> C>
+    Op<dstd::Vector<dstd::SharedPtr<const T>>> gather_object(
+        std::uint32_t root, T value, C codec, CallOpts opts = {}) {
+        return object_gather<T, C>(detail::CallKind::Gather, root,
+                                   rank_ == root, std::move(value),
+                                   std::move(codec), opts);
+    }
+
+    /// @ref broadcast of the object of @p root; the other ranks pass any value.
+    template <class T, Codec<T> C>
+    Op<dstd::SharedPtr<const T>> broadcast_object(std::uint32_t root, T value,
+                                                  C codec, CallOpts opts = {}) {
+        using Out = dstd::SharedPtr<const T>;
+        if (shares_memory()) {
+            detail::DataCall call = detail::make_data_call(
+                detail::CallKind::Broadcast, root, 1, backend::UNCHECKED_COUNT,
+                backend::RECORD_WANTS, {});
+            call.record.color = detail::OBJECT_SHARED;
+            detail::set_type_key<T>(call.record);
+            if (rank_ == root)
+                call.object = dstd::make_shared<const T>(std::move(value));
+            return data_op<Out>(
+                std::move(call),
+                [root](const detail::Outcome& out) -> dstd::Result<Out> {
+                    return detail::shared_object<T>(out.objects, root);
+                },
+                opts);
+        }
+        backend::Contribution contribution;
+        if (rank_ == root) {
+            auto made = detail::serialize_owned<T>(codec, value);
+            if (made)
+                contribution = std::move(*made);
+            else
+                abort(made.error());
+        }
+        detail::DataCall call = detail::make_data_call(
+            detail::CallKind::Broadcast, root, 1, backend::UNCHECKED_COUNT,
+            backend::RECORD_WANTS, std::move(contribution));
+        return data_op<Out>(
+            std::move(call),
+            [root, codec = std::move(codec)](
+                const detail::Outcome& out) -> dstd::Result<Out> {
+                return detail::deserialize_from<T>(codec, out.table.at(root),
+                                                   root);
+            },
+            opts);
+    }
+
+    /// @ref all_to_all of one object per rank: rank `d` gets `values[d]` from
+    /// every rank, so each rank gets one object per source rank. The count must
+    /// be `size()` on every rank.
+    template <class T, Codec<T> C>
+    Op<dstd::Vector<dstd::SharedPtr<const T>>> all_to_all_object(
+        dstd::Vector<T> values, C codec, CallOpts opts = {}) {
+        using Out = dstd::Vector<dstd::SharedPtr<const T>>;
+        const std::uint32_t members = size();
+        const std::size_t count = values.size();
+        if (shares_memory()) {
+            auto holder =
+                dstd::make_shared<const dstd::Vector<T>>(std::move(values));
+            detail::DataCall call =
+                detail::make_data_call(detail::CallKind::AllToAll, 0, 1, count,
+                                       backend::RECORD_WANTS, {});
+            call.record.color = detail::OBJECT_SHARED;
+            detail::set_type_key<T>(call.record);
+            call.object = holder;
+            const std::uint32_t rank = rank_;
+            return data_op<Out>(
+                std::move(call),
+                [rank](const detail::Outcome& out) -> dstd::Result<Out> {
+                    Out got;
+                    got.reserve(out.table.size());
+                    for (std::uint32_t from = 0; from < out.table.size();
+                         ++from) {
+                        auto theirs = detail::shared_object<dstd::Vector<T>>(
+                            out.objects, from);
+                        if (!theirs) return dstd::Unexpected(theirs.error());
+                        if (rank >= (*theirs)->size()) {
+                            return dstd::Unexpected(dstd::Error::from_format<
+                                                    "rank {} gave {} objects "
+                                                    "to an all_to_all">(
+                                dstd::Condition::Internal, from,
+                                (*theirs)->size()));
+                        }
+                        got.push_back(dstd::SharedPtr<const T>(
+                            *theirs, &(**theirs)[rank]));
+                    }
+                    return dstd::Result<Out>(std::move(got));
+                },
+                opts);
+        }
+        dstd::Vector<std::size_t> sizes(members, 0);
+        std::size_t total = 0;
+        dstd::Optional<dstd::Error> failed;
+        for (std::size_t dest = 0; dest < members && dest < count; ++dest) {
+            sizes[dest] = codec.serialized_size(values[dest]);
+            if (sizes[dest] > std::numeric_limits<std::size_t>::max() - total) {
+                failed = dstd::Error::from_format<
+                    "the objects of an all_to_all name more bytes than fit">(
+                    dstd::Condition::OutOfMemory);
+                break;
+            }
+            total += sizes[dest];
+        }
+        backend::Contribution contribution;
+        if (!failed) {
+            auto made = detail::PersonalBlock::make(members, total);
+            if (!made) {
+                failed = made.error();
+            } else {
+                for (std::uint32_t dest = 0; dest < members && !failed;
+                     ++dest) {
+                    const dstd::Span<std::byte> piece =
+                        made->piece(sizes[dest]);
+                    if (dest >= count) continue;
+                    dstd::Result<std::size_t> done =
+                        codec.serialize(values[dest], piece);
+                    if (!done)
+                        failed = done.error();
+                    else if (*done != sizes[dest])
+                        failed = detail::wrong_size(*done, sizes[dest]);
+                }
+                if (!failed) contribution = made->finish();
+            }
+        }
+        if (failed) abort(*failed);
+        detail::DataCall call = detail::make_data_call(
+            detail::CallKind::AllToAll, 0, 1, count,
+            backend::RECORD_WANTS | backend::RECORD_PERSONAL,
+            std::move(contribution));
+        call.record.color = detail::ALL_TO_ALL_BLOCKS;
+        return data_op<Out>(
+            std::move(call),
+            [codec = std::move(codec)](
+                const detail::Outcome& out) -> dstd::Result<Out> {
+                return detail::deserialize_all<T>(codec, out.table);
+            },
+            opts);
+    }
+
     /// The timeout the later calls of this rank use when @ref CallOpts names
     /// no deadline, counted from the moment each call is made. 0, the default,
     /// sets none.
@@ -366,6 +802,14 @@ class Group {
     void abort(dstd::Error why) noexcept;
 
    private:
+    friend class Neighborhood;
+
+    /// True when every rank of the group is in this process, so an object call
+    /// shares its objects instead of serializing them.
+    bool shares_memory() const noexcept;
+
+    /// Starts @p call, which ends with the value @p convert makes of its
+    /// outcome, or of the error it gives: a @c dstd::Result.
     template <class T, class Convert>
     Op<T> data_op(detail::DataCall call, Convert convert,
                   const CallOpts& opts) {
@@ -376,11 +820,229 @@ class Group {
         }
         start_data(
             std::move(call),
-            [state, convert = std::move(convert)](const detail::Outcome& out) {
-                state->succeed(convert(out));
+            [state, convert = std::move(convert)](
+                const detail::Outcome& out) -> dstd::Optional<dstd::Error> {
+                if constexpr (detail::IS_RESULT_V<std::invoke_result_t<
+                                  Convert&, const detail::Outcome&>>) {
+                    auto made = convert(out);
+                    if (!made) {
+                        dstd::Error why = made.error();
+                        state->fail(why);
+                        return why;
+                    }
+                    state->succeed(std::move(*made));
+                } else {
+                    state->succeed(convert(out));
+                }
+                return {};
             },
             state, opts);
         return Op<T>(std::move(state), state_, rank_);
+    }
+
+    /// A call whose result is the table of this rank.
+    Op<Gathered> table_call(detail::DataCall call, const CallOpts& opts);
+
+    template <class T, class C>
+    Op<dstd::Vector<dstd::SharedPtr<const T>>> object_gather(
+        detail::CallKind kind, std::uint32_t root, bool takes, T value, C codec,
+        const CallOpts& opts) {
+        using Out = dstd::Vector<dstd::SharedPtr<const T>>;
+        const std::uint32_t flags = takes ? backend::RECORD_WANTS : 0;
+        if (shares_memory()) {
+            detail::DataCall call = detail::make_data_call(
+                kind, root, 1, backend::UNCHECKED_COUNT, flags, {});
+            call.record.color = detail::OBJECT_SHARED;
+            detail::set_type_key<T>(call.record);
+            call.object = dstd::make_shared<const T>(std::move(value));
+            return data_op<Out>(
+                std::move(call),
+                [takes](const detail::Outcome& out) -> dstd::Result<Out> {
+                    Out got;
+                    if (!takes) return got;
+                    got.reserve(out.table.size());
+                    for (std::uint32_t from = 0; from < out.table.size();
+                         ++from) {
+                        auto one = detail::shared_object<T>(out.objects, from);
+                        if (!one) return dstd::Unexpected(one.error());
+                        got.push_back(std::move(*one));
+                    }
+                    return dstd::Result<Out>(std::move(got));
+                },
+                opts);
+        }
+        backend::Contribution contribution;
+        auto made = detail::serialize_owned<T>(codec, value);
+        if (made)
+            contribution = std::move(*made);
+        else
+            abort(made.error());
+        detail::DataCall call =
+            detail::make_data_call(kind, root, 1, backend::UNCHECKED_COUNT,
+                                   flags, std::move(contribution));
+        return data_op<Out>(
+            std::move(call),
+            [takes, codec = std::move(codec)](
+                const detail::Outcome& out) -> dstd::Result<Out> {
+                if (!takes) return Out{};
+                return detail::deserialize_all<T>(codec, out.table);
+            },
+            opts);
+    }
+
+    template <class T>
+    Op<dstd::Vector<T>> reduce_scatter_call(
+        dstd::Span<const T> values, dstd::Span<const std::size_t> counts,
+        bool by_counts, std::uint32_t code, backend::Combine fold,
+        const CallOpts& opts) {
+        static_assert(std::is_trivially_copyable_v<T>);
+        const std::uint32_t members = size();
+        bool fits = !by_counts || counts.size() == members;
+        std::size_t total = 0;
+        for (std::size_t at = 0; fits && at < counts.size(); ++at) {
+            fits = counts[at] <= values.size() &&
+                   total <= values.size() - counts[at];
+            if (fits) total += counts[at];
+        }
+        fits = fits && (!by_counts || total == values.size());
+        detail::DataCall call = detail::make_data_call(
+            detail::CallKind::ReduceScatter, 0, sizeof(T), values.size(),
+            reduce_flags(true, opts),
+            detail::own_split(
+                std::as_bytes(values),
+                by_counts && fits ? counts : dstd::Span<const std::size_t>(),
+                members));
+        call.record.reduce = code;
+        call.record.key = !by_counts ? detail::SPLIT_EQUAL
+                          : fits     ? detail::SPLIT_COUNTS
+                                     : detail::SPLIT_BAD;
+        call.fold = detail::make_split_combine(std::move(fold),
+                                               detail::split_head(members));
+        dstd::Vector<std::size_t> kept;
+        if (by_counts && fits) kept.assign(counts.begin(), counts.end());
+        const std::uint32_t rank = rank_;
+        return data_op<dstd::Vector<T>>(
+            std::move(call),
+            [rank, members, by_counts, kept = std::move(kept)](
+                const detail::Outcome& out) -> dstd::Result<dstd::Vector<T>> {
+                const dstd::Span<const std::byte> entry = out.table.at(0);
+                const std::size_t head = detail::split_head(members);
+                if (entry.size() < head ||
+                    (entry.size() - head) % sizeof(T) != 0) {
+                    return dstd::Unexpected(
+                        dstd::Error::from_format<"a reduce_scatter merge of {} "
+                                                 "bytes does not fit its head">(
+                            dstd::Condition::InvalidArgument, entry.size()));
+                }
+                std::uint64_t differ = 0;
+                std::memcpy(&differ, entry.data(), sizeof(differ));
+                if (differ != 0) {
+                    return dstd::Unexpected(dstd::Error::from_format<
+                                            "the ranks gave different counts "
+                                            "to a reduce_scatter">(
+                        dstd::Condition::InvalidArgument));
+                }
+                const dstd::Span<const std::byte> whole = entry.subspan(head);
+                const std::size_t all = whole.size() / sizeof(T);
+                std::size_t begin = 0;
+                std::size_t count = 0;
+                if (!by_counts) {
+                    count = all / members;
+                    begin = rank * count;
+                } else {
+                    for (std::uint32_t at = 0; at < rank; ++at)
+                        begin += kept[at];
+                    count = kept[rank];
+                }
+                if (begin > all || count > all - begin) {
+                    return dstd::Unexpected(
+                        dstd::Error::from_format<"the merge has {} values but "
+                                                 "block {} starts at {} and "
+                                                 "holds {}">(
+                            dstd::Condition::Internal, all, rank, begin,
+                            count));
+                }
+                return detail::vector_of<T>(
+                    whole.subspan(begin * sizeof(T), count * sizeof(T)));
+            },
+            opts);
+    }
+
+    template <class T>
+    Op<dstd::Vector<T>> scan_call(detail::CallKind kind,
+                                  dstd::Span<const T> values,
+                                  std::uint32_t code, backend::Combine fold,
+                                  const CallOpts& opts) {
+        static_assert(std::is_trivially_copyable_v<T>);
+        detail::DataCall call = detail::make_data_call(
+            kind, 0, sizeof(T), values.size(), backend::RECORD_WANTS,
+            detail::own_bytes(std::as_bytes(values)));
+        call.record.reduce = code;
+        const std::uint32_t rank = rank_;
+        const bool inclusive = kind == detail::CallKind::Scan;
+        const std::size_t count = values.size();
+        return data_op<dstd::Vector<T>>(
+            std::move(call),
+            [rank, inclusive, count, fold = std::move(fold)](
+                const detail::Outcome& out) -> dstd::Result<dstd::Vector<T>> {
+                if (!inclusive && rank == 0) return dstd::Vector<T>{};
+                return detail::prefix_values<T>(
+                    out.table, inclusive ? rank : rank - 1, fold, count);
+            },
+            opts);
+    }
+
+    template <class T>
+    Op<T> scan_one(detail::CallKind kind, const T& value, std::uint32_t code,
+                   backend::Combine fold, const CallOpts& opts) {
+        detail::DataCall call =
+            detail::make_data_call(kind, 0, sizeof(T), 1, backend::RECORD_WANTS,
+                                   detail::own_value(value));
+        call.record.reduce = code;
+        const std::uint32_t rank = rank_;
+        return data_op<T>(
+            std::move(call),
+            [rank, fold = std::move(fold)](
+                const detail::Outcome& out) -> dstd::Result<T> {
+                auto merged =
+                    detail::prefix_values<T>(out.table, rank, fold, 1);
+                if (!merged) return dstd::Unexpected(merged.error());
+                if (merged->empty()) {
+                    return dstd::Unexpected(dstd::Error::from_format<
+                                            "a scan of one value merged none">(
+                        dstd::Condition::Internal));
+                }
+                return dstd::Result<T>((*merged)[0]);
+            },
+            opts);
+    }
+
+    template <class T>
+    Op<dstd::Optional<T>> exclusive_one(const T& value, std::uint32_t code,
+                                        backend::Combine fold,
+                                        const CallOpts& opts) {
+        detail::DataCall call = detail::make_data_call(
+            detail::CallKind::ExclusiveScan, 0, sizeof(T), 1,
+            backend::RECORD_WANTS, detail::own_value(value));
+        call.record.reduce = code;
+        const std::uint32_t rank = rank_;
+        return data_op<dstd::Optional<T>>(
+            std::move(call),
+            [rank, fold = std::move(fold)](
+                const detail::Outcome& out) -> dstd::Result<dstd::Optional<T>> {
+                if (rank == 0) return dstd::Optional<T>{};
+                auto merged =
+                    detail::prefix_values<T>(out.table, rank - 1, fold, 1);
+                if (!merged) return dstd::Unexpected(merged.error());
+                if (merged->empty()) {
+                    return dstd::Unexpected(dstd::Error::from_format<
+                                            "a scan of one value merged none">(
+                        dstd::Condition::Internal));
+                }
+                return dstd::Result<dstd::Optional<T>>(
+                    dstd::Optional<T>((*merged)[0]));
+            },
+            opts);
     }
 
     template <class T>
@@ -397,9 +1059,10 @@ class Group {
         call.fold = std::move(fold);
         return data_op<dstd::Vector<T>>(
             std::move(call),
-            [takes](const detail::Outcome& out) {
-                return takes ? detail::vector_of<T>(out.table.at(0))
-                             : dstd::Vector<T>{};
+            [takes](
+                const detail::Outcome& out) -> dstd::Result<dstd::Vector<T>> {
+                if (!takes) return dstd::Vector<T>{};
+                return detail::vector_of<T>(out.table.at(0));
             },
             opts);
     }
@@ -416,8 +1079,9 @@ class Group {
         call.fold = std::move(fold);
         return data_op<T>(
             std::move(call),
-            [takes](const detail::Outcome& out) {
-                return takes ? detail::scalar_of<T>(out.table.at(0)) : T{};
+            [takes](const detail::Outcome& out) -> dstd::Result<T> {
+                if (!takes) return T{};
+                return detail::scalar_of<T>(out.table.at(0));
             },
             opts);
     }
@@ -441,6 +1105,71 @@ class Group {
     dstd::SharedPtr<detail::Backend> backend_;
     dstd::SharedPtr<detail::GroupState> state_;
     std::uint32_t rank_ = 0;
+};
+
+/**
+ * @brief A fixed graph of the ranks of a group, made by @ref Group::neighbors,
+ * and the exchanges along its edges.
+ *
+ * A handle with value semantics. Every rank of the group makes the same calls
+ * on its own copy in the same order, as with the collectives of the group.
+ */
+class Neighborhood {
+   public:
+    /// An empty graph on an empty group.
+    Neighborhood() noexcept = default;
+
+    /// The ranks this rank sends to, in the order the blocks of
+    /// @ref neighbor_exchange follow.
+    dstd::Span<const std::uint32_t> out_neighbors() const noexcept {
+        return dstd::Span<const std::uint32_t>(out_.data(), out_.size());
+    }
+
+    /// The ranks that name this rank, in rank order, which is the order of the
+    /// blocks @ref neighbor_exchange gives back.
+    dstd::Span<const std::uint32_t> in_neighbors() const noexcept {
+        return in_ ? dstd::Span<const std::uint32_t>(in_->data(), in_->size())
+                   : dstd::Span<const std::uint32_t>();
+    }
+
+    /**
+     * @brief Collective: sends @p blocks, one to each out-neighbor, and gets
+     * one block from each in-neighbor.
+     *
+     * `blocks[i]` goes to out-neighbor `i`; a block may be empty and the sizes
+     * may differ. The blocks are copied into one block of the call. A rank that
+     * passes another count than its out-degree ends the call with an error on
+     * every rank. The result is one owned buffer with a view per in-neighbor.
+     */
+    Op<NeighborBlocks> neighbor_exchange(
+        dstd::Span<const dstd::Span<const std::byte>> blocks,
+        CallOpts opts = {});
+
+    /// @ref neighbor_exchange of one value of @p T per out-neighbor; read a
+    /// block with @ref NeighborBlocks::as.
+    template <class T>
+    Op<NeighborBlocks> neighbor_exchange(dstd::Span<const T> values,
+                                         CallOpts opts = {}) {
+        static_assert(std::is_trivially_copyable_v<T>);
+        dstd::Vector<dstd::Span<const std::byte>> blocks;
+        blocks.reserve(values.size());
+        for (const T& value : values)
+            blocks.push_back(std::as_bytes(dstd::Span<const T>(&value, 1)));
+        return neighbor_exchange(dstd::Span<const dstd::Span<const std::byte>>(
+                                     blocks.data(), blocks.size()),
+                                 opts);
+    }
+
+   private:
+    friend class Group;
+
+    Neighborhood(Group group, dstd::Vector<std::uint32_t> out,
+                 dstd::SharedPtr<const dstd::Vector<std::uint32_t>> in) noexcept
+        : group_(std::move(group)), out_(std::move(out)), in_(std::move(in)) {}
+
+    Group group_;
+    dstd::Vector<std::uint32_t> out_;
+    dstd::SharedPtr<const dstd::Vector<std::uint32_t>> in_;
 };
 
 /**

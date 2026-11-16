@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 // The cases count work, not time.
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
@@ -41,28 +41,27 @@ dstd::String write_trace(const dstd::String& dir) {
     for (int i = 0; i < EVENTS; ++i) {
         const int pid = 1 + i % 4;
         const int ts = 1000 + i * 10;
-        out += common::str_cat(R"({"id":)", i);
+        dstd::fmt_append<"{\"id\":{}">(out, i);
         switch (i % SHAPES) {
             case 0:
-                out += common::str_cat(
-                    R"(,"name":"read","cat":"POSIX","pid":)", pid,
-                    R"(,"tid":1,"ph":"X","ts":)", ts,
-                    R"(,"dur":3,"args":{"fname":"/data/f)", i % 37,
-                    R"(","size":)", i % 4096,
-                    R"(,"hhash":"a1b2c3d4e5f60718","level":)", i % 3, "}}\n");
+                dstd::fmt_append<
+                    ",\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":{},\"tid\":1,"
+                    "\"ph\":\"X\",\"ts\":{},\"dur\":3,\"args\":{\"fname\":\"/"
+                    "data/"
+                    "f{}\",\"size\":{},\"hhash\":\"a1b2c3d4e5f60718\","
+                    "\"level\":{}}}\n">(out, pid, ts, i % 37, i % 4096, i % 3);
                 break;
             case 1:
-                out += common::str_cat(
-                    R"(,"name":"compute","cat":"APP","pid":)", pid,
-                    R"(,"tid":2,"ph":"X","ts":)", ts, R"(,"dur":7})", "\n");
+                dstd::fmt_append<
+                    ",\"name\":\"compute\",\"cat\":\"APP\",\"pid\":{},\"tid\":"
+                    "2,\"ph\":\"X\",\"ts\":{},\"dur\":7}\n">(out, pid, ts);
                 break;
             default:
-                out += common::str_cat(
-                    R"(,"name":"write","cat":"POSIX","pid":)", pid,
-                    R"(,"tid":1,"ph":"X","ts":)", ts,
-                    R"(,"dur":5,"args":{"io":{"off":)", i,
-                    R"(,"len":512},"hosts":["n1","n2"],"note":null,)",
-                    R"("ratio":0.5}})", "\n");
+                dstd::fmt_append<
+                    ",\"name\":\"write\",\"cat\":\"POSIX\",\"pid\":{},\"tid\":"
+                    "1,\"ph\":\"X\",\"ts\":{},\"dur\":5,\"args\":{\"io\":{"
+                    "\"off\":{},\"len\":512},\"hosts\":[\"n1\",\"n2\"],"
+                    "\"note\":null,\"ratio\":0.5}}\n">(out, pid, ts, i);
         }
     }
     out += "]\n";

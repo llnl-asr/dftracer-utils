@@ -6,8 +6,8 @@
 // plugin's result.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/dataframe/c_api.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/path.h>
@@ -104,10 +104,10 @@ dstd::String make_homog_trace(dftu_utils_test::TestEnvironment& env,
     dstd::String pfw = dir + "/trace.pfw";
     dstd::String ofs;
     for (int i = 0; i < n; ++i)
-        ofs +=
-            common::str_cat(R"({"ph":"X","name":")", name, R"(","cat":")", cat,
-                            R"(","pid":1,"tid":1,"ts":)", (1000 + i * 100),
-                            R"(,"dur":)", (10 + i), R"(,"args":{}})", "\n");
+        dstd::fmt_append<
+            "{\"ph\":\"X\",\"name\":\"{}\",\"cat\":\"{}\",\"pid\":1,\"tid\":1,"
+            "\"ts\":{},\"dur\":{}{}\n">(ofs, name, cat, (1000 + i * 100),
+                                        (10 + i), R"(,"args":{}})");
     dstd::fs::write_file(dstd::PathView(pfw), ofs).discard();
     dstd::String gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);

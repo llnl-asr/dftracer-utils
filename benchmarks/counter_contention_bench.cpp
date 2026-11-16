@@ -33,12 +33,12 @@
 // allocated bytes and that both equal the bytes the size tables imply.
 
 #define DFTRACER_UTILS_MEMORY_PROBE_DEFINE_NEW
-#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/domains/workload/genesis/genesis.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/thread.h>
@@ -171,10 +171,9 @@ dstd::String prepare_genesis(const dstd::String& dir, const Sizes& s) {
     require_ok(
         dstd::fs::write_file(
             run + "/summary.json",
-            common::str_cat(
-                R"({"ok":true,"app":"app1","system":"sys1","input":"in1",)"
-                R"("nodes":1,"ppn":)",
-                RANKS, R"(,"sets":["set1"]})")),
+            dstd::fmt<
+                "{\"ok\":true,\"app\":\"app1\",\"system\":\"sys1\",\"input\":"
+                "\"in1\",\"nodes\":1,\"ppn\":{},\"sets\":[\"set1\"]}">(RANKS)),
         "write summary.json");
     write_gz(run + "/compacted/set1.pfw.gz", genesis_text(s.genesis_calls));
     return dir + "/genesis";

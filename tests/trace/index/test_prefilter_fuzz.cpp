@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/common/str_format.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
@@ -243,7 +243,7 @@ TEST_CASE("the pre-filter never drops a match") {
     const dstd::String plain = env.dir() + "/fuzz.pfw";
     {
         dstd::String out;
-        for (const auto& l : lines) out += common::str_cat(l, "\n");
+        for (const auto& l : lines) dstd::fmt_append<"{}\n">(out, l);
         dstd::fs::write_file(dstd::PathView(plain), out).discard();
     }
     const dstd::String gz = plain + ".gz";
@@ -294,7 +294,7 @@ TEST_CASE("the pre-filter never drops a match on generic records") {
     const dstd::String plain = env.dir() + "/fuzz.ndjson";
     {
         dstd::String out;
-        for (const auto& l : lines) out += common::str_cat(l, "\n");
+        for (const auto& l : lines) dstd::fmt_append<"{}\n">(out, l);
         dstd::fs::write_file(dstd::PathView(plain), out).discard();
     }
     const dstd::String gz = plain + ".gz";

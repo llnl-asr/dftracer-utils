@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/thread.h>
@@ -31,13 +31,12 @@ dstd::String write_trace(const dstd::String& dir, int n) {
     dstd::String out;
     out += "[\n";
     for (int i = 0; i < EVENTS; ++i) {
-        out += common::str_cat(
-            R"({"id":)", i, R"(,"name":"op)", (i + n) % 40,
-            R"(","cat":"POSIX","pid":)", 1 + n % 7, R"(,"tid":)", 10 + i % 5,
-            R"(,"ph":"X","ts":)", 1000 + i * 10 + n * 7, R"(,"dur":)",
-            3 + i % 50, R"(,"args":{"fname":"/data/d)", n % 9, "/f",
-            (i * 31 + n) % 700, R"(","size":)", (i * 17) % 4096,
-            R"(,"hhash":"h)", n, R"("}})", "\n");
+        dstd::fmt_append<
+            "{\"id\":{},\"name\":\"op{}\",\"cat\":\"POSIX\",\"pid\":{},\"tid\":"
+            "{},\"ph\":\"X\",\"ts\":{},\"dur\":{},\"args\":{\"fname\":\"/data/"
+            "d{}/f{}\",\"size\":{},\"hhash\":\"h{}\"}}\n">(
+            out, i, (i + n) % 40, 1 + n % 7, 10 + i % 5, 1000 + i * 10 + n * 7,
+            3 + i % 50, n % 9, (i * 31 + n) % 700, (i * 17) % 4096, n);
     }
     out += "]\n";
     return dftu_utils_test::write_gz_trace(

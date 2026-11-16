@@ -17,56 +17,6 @@
 
 namespace dftracer::utils::common {
 
-namespace detail {
-
-inline void str_append(dstd::String& out, dstd::StringView s) { out.append(s); }
-inline void str_append(dstd::String& out, const char* s) {
-    if (s) out.append(s);
-}
-inline void str_append(dstd::String& out, const dstd::String& s) {
-    out.append(s);
-}
-inline void str_append(dstd::String& out, char c) { out.push_back(c); }
-inline void str_append(dstd::String& out, bool b) {
-    out.append(b ? "true" : "false");
-}
-
-/// Integral types (excluding bool/char, handled above) via dstd::to_chars - the
-/// integer overload is available on every supported platform (only the
-/// floating-point one is availability-gated, see to_chars.h).
-template <typename T,
-          std::enable_if_t<std::is_integral_v<T> && !std::is_same_v<T, bool> &&
-                               !std::is_same_v<T, char>,
-                           int> = 0>
-void str_append(dstd::String& out, T v) {
-    char buf[24];
-    auto [p, ec] = dstd::to_chars(buf, buf + sizeof(buf), v);
-    if (ec == std::errc{}) out.append(buf, p);
-}
-
-inline void str_append(dstd::String& out, double v) {
-    char buf[32];
-    char* end = dstd::to_chars_double(buf, buf + sizeof(buf), v);
-    if (end) out.append(buf, end);
-}
-inline void str_append(dstd::String& out, float v) {
-    str_append(out, static_cast<double>(v));
-}
-
-}  // namespace detail
-
-/// Type-safe concatenation: appends each argument to one string, routing
-/// numbers through to_chars (faster than std::to_string, portable unlike
-/// std::format). Strings/string_views/char append directly; integers/floats
-/// convert via to_chars; bool -> "true"/"false". No format string to parse.
-///   str_cat("Cannot open ", path, ": errno=", errno)
-template <typename... Args>
-dstd::String str_cat(const Args&... args) {
-    dstd::String out;
-    (detail::str_append(out, args), ...);
-    return out;
-}
-
 /// Human-readable byte count, e.g. "1.5 MB" or "3.0 MB/s". `per_suffix` appends
 /// a rate unit (e.g. "/s"); `precision` sets the fractional digits.
 inline dstd::String human_bytes(double value, const char* per_suffix = "",

@@ -1,24 +1,22 @@
 // SPDX-License-Identifier: MIT
-// Benchmark: dstd::fmt against snprintf, str_cat and a "a" + s + "b" chain.
+// Benchmark: dstd::fmt against snprintf and a "a" + s + "b" chain.
 //
 // Every format is taken from an error message or a line in the tree. Each is
-// built five ways with the same arguments: dstd::fmt<S> (form B), dstd::fmt
-// with a "..."_f value (form C), snprintf into a stack buffer, str_cat, and a
-// chain of operator+ on dstd::String. The table has instructions retired per
-// call and ns per call (best of the rounds). The chain and str_cat floats use
-// to_string, which prints six decimals, so only the instruction cost of that
-// row compares. The second table counts allocations per call: fmt holds one
-// block (the result, counted through the live blocks of the memory manager
-// while 256 results are held); the chain and the appends are run on std::string
-// and counted at the global operator new, since the memory manager keeps no
-// running call count.
+// built four ways with the same arguments: dstd::fmt<S> (form B), dstd::fmt
+// with a "..."_f value (form C), snprintf into a stack buffer, and a chain of
+// operator+ on dstd::String. The table has instructions retired per call and ns
+// per call (best of the rounds). The chain row uses to_string, which prints six
+// decimals, so only the instruction cost of that row compares. The second table
+// counts allocations per call: fmt holds one block (the result, counted through
+// the live blocks of the memory manager while 256 results are held); the chain
+// is run on std::string and counted at the global operator new, since the
+// memory manager keeps no running call count.
 //
 //   fmt_bench            (table)
-//   fmt_bench --smoke    (few iterations; the five outputs must agree)
+//   fmt_bench --smoke    (few iterations; the four outputs must agree)
 
 #define DFTRACER_UTILS_BENCH_COUNT_NEW
 #include <bench_counters.h>
-#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
@@ -79,8 +77,8 @@ Metric measure(std::size_t iterations, F&& f) {
 
 struct Row {
     const char* name;
-    Metric fmt_b, fmt_c, snprintf_m, cat, chain;
-    double fmt_blocks, chain_new, cat_new;
+    Metric fmt_b, fmt_c, snprintf_m, chain;
+    double fmt_blocks, chain_new;
 };
 
 struct Inputs {
@@ -122,12 +120,10 @@ void same(const char* what, const dstd::String& a, const dstd::String& b) {
     }
 }
 
-template <class MakeFmt, class MakeSnprintf, class MakeCat, class MakeChain,
-          class CountChain, class CountCat>
+template <class MakeFmt, class MakeSnprintf, class MakeChain, class CountChain>
 Row run_row(const char* name, std::size_t iterations, MakeFmt&& make_fmt,
-            MakeSnprintf&& make_snprintf, MakeCat&& make_cat,
-            MakeChain&& make_chain, CountChain&& count_chain,
-            CountCat&& count_cat, bool compare_text) {
+            MakeSnprintf&& make_snprintf, MakeChain&& make_chain,
+            CountChain&& count_chain, bool compare_text) {
     Row row{};
     row.name = name;
     const auto form_b = [&] { sink(make_fmt(std::true_type{})); };
@@ -135,13 +131,11 @@ Row run_row(const char* name, std::size_t iterations, MakeFmt&& make_fmt,
     row.fmt_b = measure(iterations, form_b);
     row.fmt_c = measure(iterations, form_c);
     row.snprintf_m = measure(iterations, [&] { sink(make_snprintf()); });
-    row.cat = measure(iterations, [&] { sink(make_cat()); });
     row.chain = measure(iterations, [&] { sink(make_chain()); });
     if (compare_text) {
         const dstd::String b = make_fmt(std::true_type{});
         same(name, b, make_fmt(std::false_type{}));
         same(name, b, make_snprintf());
-        same(name, b, make_cat());
         same(name, b, make_chain());
     } else {
         same(name, make_fmt(std::true_type{}), make_fmt(std::false_type{}));
@@ -162,10 +156,6 @@ Row run_row(const char* name, std::size_t iterations, MakeFmt&& make_fmt,
     for (std::size_t i = 0; i < HELD; ++i) count_chain();
     row.chain_new = static_cast<double>(dftu::bench::allocations() - n0) /
                     static_cast<double>(HELD);
-    const std::uint64_t c0 = dftu::bench::allocations();
-    for (std::size_t i = 0; i < HELD; ++i) count_cat();
-    row.cat_new = static_cast<double>(dftu::bench::allocations() - c0) /
-                  static_cast<double>(HELD);
     return row;
 }
 
@@ -177,25 +167,23 @@ dstd::String via_snprintf(F&& f) {
 }
 
 void print(const dstd::Vector<Row>& rows) {
-    std::printf("%-26s | %-13s | %-13s | %-13s | %-13s | %-13s\n",
-                "format (instr, ns)", "fmt<S>", "fmt(_f)", "snprintf",
-                "str_cat", "chain");
+    std::printf("%-26s | %-13s | %-13s | %-13s | %-13s\n", "format (instr, ns)",
+                "fmt<S>", "fmt(_f)", "snprintf", "chain");
     for (const Row& r : rows) {
         std::printf(
-            "%-26s | %5.0f %6.1f | %5.0f %6.1f | %5.0f %6.1f | %5.0f %6.1f | "
-            "%5.0f %6.1f\n",
+            "%-26s | %5.0f %6.1f | %5.0f %6.1f | %5.0f %6.1f | %5.0f %6.1f\n",
             r.name, r.fmt_b.instructions, r.fmt_b.ns, r.fmt_c.instructions,
             r.fmt_c.ns, r.snprintf_m.instructions, r.snprintf_m.ns,
-            r.cat.instructions, r.cat.ns, r.chain.instructions, r.chain.ns);
+            r.chain.instructions, r.chain.ns);
     }
-    std::printf("\n%-26s | %-12s | %-14s | %-14s\n", "allocations per call",
-                "fmt<S>", "chain", "str_cat");
+    std::printf("\n%-26s | %-12s | %-14s\n", "allocations per call", "fmt<S>",
+                "chain");
     for (const Row& r : rows)
-        std::printf("%-26s | %12.2f | %14.2f | %14.2f\n", r.name, r.fmt_blocks,
-                    r.chain_new, r.cat_new);
+        std::printf("%-26s | %12.2f | %14.2f\n", r.name, r.fmt_blocks,
+                    r.chain_new);
     std::printf(
-        "\nfmt<S>: live memory-manager blocks per result. chain, str_cat: "
-        "operator new calls per call on std::string.\n");
+        "\nfmt<S>: live memory-manager blocks per result. chain: operator new "
+        "calls per call on std::string.\n");
 }
 
 // The escape policy before the exact count: 6 bytes a byte as the bound and a
@@ -323,10 +311,6 @@ int main(int argc, char** argv) {
                 });
             },
             [&] {
-                return common::str_cat("spill: write failed (", why,
-                                       "); the spill directory may be full");
-            },
-            [&] {
                 return dstd::String("spill: write failed (") + why +
                        "); the spill directory may be full";
             },
@@ -334,13 +318,6 @@ int main(int argc, char** argv) {
                 std::string w(why.data(), why.size());
                 std::string r = std::string("spill: write failed (") + w +
                                 "); the spill directory may be full";
-                asm volatile("" : : "r"(r.data()) : "memory");
-            },
-            [&] {
-                std::string r;
-                r.append("spill: write failed (");
-                r.append(why.data(), why.size());
-                r.append("); the spill directory may be full");
                 asm volatile("" : : "r"(r.data()) : "memory");
             },
             true));
@@ -365,10 +342,6 @@ int main(int argc, char** argv) {
                 });
             },
             [&] {
-                return common::str_cat("failed to publish ", a, " to ", b, ": ",
-                                       why);
-            },
-            [&] {
                 return dstd::String("failed to publish ") + a + " to " + b +
                        ": " + why;
             },
@@ -377,16 +350,6 @@ int main(int argc, char** argv) {
                                 std::string(a.data(), a.size()) + " to " +
                                 std::string(b.data(), b.size()) + ": " +
                                 std::string(why.data(), why.size());
-                asm volatile("" : : "r"(r.data()) : "memory");
-            },
-            [&] {
-                std::string r;
-                r.append("failed to publish ");
-                r.append(a.data(), a.size());
-                r.append(" to ");
-                r.append(b.data(), b.size());
-                r.append(": ");
-                r.append(why.data(), why.size());
                 asm volatile("" : : "r"(r.data()) : "memory");
             },
             true));
@@ -418,11 +381,6 @@ int main(int argc, char** argv) {
                 });
             },
             [&] {
-                return common::str_cat("spill: read of ", n,
-                                       " bytes at offset ", off, " failed (",
-                                       why, ")");
-            },
-            [&] {
                 return dstd::String("spill: read of ") + dstd::to_string(n) +
                        " bytes at offset " + dstd::to_string(off) +
                        " failed (" + why + ")";
@@ -432,17 +390,6 @@ int main(int argc, char** argv) {
                                 std::to_string(n) + " bytes at offset " +
                                 std::to_string(off) + " failed (" +
                                 std::string(why.data(), why.size()) + ")";
-                asm volatile("" : : "r"(r.data()) : "memory");
-            },
-            [&] {
-                std::string r;
-                r.append("spill: read of ");
-                r.append(std::to_string(n));
-                r.append(" bytes at offset ");
-                r.append(std::to_string(off));
-                r.append(" failed (");
-                r.append(why.data(), why.size());
-                r.append(")");
                 asm volatile("" : : "r"(r.data()) : "memory");
             },
             true));
@@ -470,25 +417,12 @@ int main(int argc, char** argv) {
                 });
             },
             [&] {
-                return common::str_cat("Global timeout after ", el,
-                                       " ms (limit: ", lim, " ms)");
-            },
-            [&] {
                 return "Global timeout after " + dstd::to_string(el) +
                        " ms (limit: " + dstd::to_string(lim) + " ms)";
             },
             [&] {
                 std::string r = "Global timeout after " + std::to_string(el) +
                                 " ms (limit: " + std::to_string(lim) + " ms)";
-                asm volatile("" : : "r"(r.data()) : "memory");
-            },
-            [&] {
-                std::string r;
-                r.append("Global timeout after ");
-                r.append(std::to_string(el));
-                r.append(" ms (limit: ");
-                r.append(std::to_string(lim));
-                r.append(" ms)");
                 asm volatile("" : : "r"(r.data()) : "memory");
             },
             true));
@@ -516,13 +450,6 @@ int main(int argc, char** argv) {
                 char hex[24];
                 const auto r = dstd::to_chars(hex, hex + sizeof(hex), id, 16);
                 const std::size_t len = static_cast<std::size_t>(r.ptr - hex);
-                return common::str_cat("chunk ", dstd::String(16 - len, '0'),
-                                       dstd::StringView(hex, len), " of ", a);
-            },
-            [&] {
-                char hex[24];
-                const auto r = dstd::to_chars(hex, hex + sizeof(hex), id, 16);
-                const std::size_t len = static_cast<std::size_t>(r.ptr - hex);
                 return dstd::String("chunk ") + dstd::String(16 - len, '0') +
                        dstd::String(hex, len) + " of " + a;
             },
@@ -534,18 +461,6 @@ int main(int argc, char** argv) {
                                 std::string(16 - len, '0') +
                                 std::string(hex, len) + " of " +
                                 std::string(a.data(), a.size());
-                asm volatile("" : : "r"(s.data()) : "memory");
-            },
-            [&] {
-                char hex[24];
-                const auto r = dstd::to_chars(hex, hex + sizeof(hex), id, 16);
-                const std::size_t len = static_cast<std::size_t>(r.ptr - hex);
-                std::string s;
-                s.append("chunk ");
-                s.append(16 - len, '0');
-                s.append(hex, len);
-                s.append(" of ");
-                s.append(a.data(), a.size());
                 asm volatile("" : : "r"(s.data()) : "memory");
             },
             true));
@@ -569,22 +484,10 @@ int main(int argc, char** argv) {
                                          sec);
                 });
             },
-            [&] {
-                return common::str_cat(a, " took ", dstd::fixed_text(sec),
-                                       " s");
-            },
             [&] { return a + " took " + dstd::to_string(sec) + " s"; },
             [&] {
                 std::string s = std::string(a.data(), a.size()) + " took " +
                                 std::to_string(sec) + " s";
-                asm volatile("" : : "r"(s.data()) : "memory");
-            },
-            [&] {
-                std::string s;
-                s.append(a.data(), a.size());
-                s.append(" took ");
-                s.append(std::to_string(sec));
-                s.append(" s");
                 asm volatile("" : : "r"(s.data()) : "memory");
             },
             false));
@@ -617,11 +520,6 @@ int main(int argc, char** argv) {
                 });
             },
             [&] {
-                return common::str_cat(nm, ": '", raw,
-                                       "' is not a byte size (use e.g. "
-                                       "4294967296, 512MB, 4GB)");
-            },
-            [&] {
                 return nm + ": '" + raw +
                        "' is not a byte size (use e.g. 4294967296, 512MB, "
                        "4GB)";
@@ -631,16 +529,6 @@ int main(int argc, char** argv) {
                                 std::string(raw.data(), raw.size()) +
                                 "' is not a byte size (use e.g. 4294967296, "
                                 "512MB, 4GB)";
-                asm volatile("" : : "r"(s.data()) : "memory");
-            },
-            [&] {
-                std::string s;
-                s.append(nm.data(), nm.size());
-                s.append(": '");
-                s.append(raw.data(), raw.size());
-                s.append(
-                    "' is not a byte size (use e.g. 4294967296, 512MB, "
-                    "4GB)");
                 asm volatile("" : : "r"(s.data()) : "memory");
             },
             true));
@@ -675,11 +563,6 @@ int main(int argc, char** argv) {
                 });
             },
             [&] {
-                return common::str_cat(R"({"id":)", pid, R"(,"name":")", nm,
-                                       R"(","ts":)", ts, R"(,"dur":)", dur,
-                                       "}");
-            },
-            [&] {
                 return dstd::String(R"({"id":)") + dstd::to_string(pid) +
                        R"(,"name":")" + nm + R"(","ts":)" +
                        dstd::to_string(ts) + R"(,"dur":)" +
@@ -691,19 +574,6 @@ int main(int argc, char** argv) {
                                 std::string(nm.data(), nm.size()) +
                                 R"(","ts":)" + std::to_string(ts) +
                                 R"(,"dur":)" + std::to_string(dur) + "}";
-                asm volatile("" : : "r"(s.data()) : "memory");
-            },
-            [&] {
-                std::string s;
-                s.append(R"({"id":)");
-                s.append(std::to_string(pid));
-                s.append(R"(,"name":")");
-                s.append(nm.data(), nm.size());
-                s.append(R"(","ts":)");
-                s.append(std::to_string(ts));
-                s.append(R"(,"dur":)");
-                s.append(std::to_string(dur));
-                s.append("}");
                 asm volatile("" : : "r"(s.data()) : "memory");
             },
             true));

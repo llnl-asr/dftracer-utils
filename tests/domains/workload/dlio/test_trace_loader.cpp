@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/domains/workload/dlio/trace_loader.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
@@ -52,11 +52,11 @@ dstd::String write_rank(const dstd::String& dir, int file,
                 const std::uint64_t dur =
                     c.base_dur + static_cast<std::uint64_t>((i * 7) % 90);
                 if (dstd::String(c.name) == "fetch.block") dur_sum += dur;
-                ofs += common::str_cat(R"({"id":)", id++, R"(,"pid":)", pid,
-                                       R"(,"tid":)", pid, R"(,"name":")",
-                                       c.name, R"(","cat":")", c.cat,
-                                       R"(","ph":"X","ts":)", ts, R"(,"dur":)",
-                                       dur, R"(,"args":{}})", "\n");
+                dstd::fmt_append<
+                    "{\"id\":{},\"pid\":{},\"tid\":{},\"name\":\"{}\",\"cat\":"
+                    "\"{}\",\"ph\":\"X\",\"ts\":{},\"dur\":{}{}\n">(
+                    ofs, id++, pid, pid, c.name, c.cat, ts, dur,
+                    R"(,"args":{}})");
                 ts += dur;
             }
         }

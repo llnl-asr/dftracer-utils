@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/error.h>
-#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/path.h>
@@ -34,11 +34,11 @@ const char* OPS[] = {"read", "write", "open", "close"};
 dstd::String write_ndjson(const dstd::String& dir, int records) {
     dstd::String out;
     for (int i = 0; i < records; ++i)
-        out += common::str_cat(R"({"host":"n)", i % 3, R"(","lat":)", i % 17,
-                               ".5", R"(,"op":")", OPS[(i / 400) % 4],
-                               R"(","io":{"off":)", i,
-                               R"(},"hosts":["h1","h2"],"ok":)",
-                               (i % 2 ? "true" : "false"), "}\n");
+        dstd::fmt_append<
+            "{\"host\":\"n{}\",\"lat\":{}.5,\"op\":\"{}\",\"io\":{\"off\":{}},"
+            "\"hosts\":[\"h1\",\"h2\"],\"ok\":{}}\n">(
+            out, i % 3, i % 17, OPS[(i / 400) % 4], i,
+            (i % 2 ? "true" : "false"));
     const auto plain = dir + "/generic.ndjson";
     {
         dstd::fs::write_file(dstd::PathView(plain), out).discard();

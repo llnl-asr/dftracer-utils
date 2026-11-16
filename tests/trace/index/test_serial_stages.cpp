@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/constants.h>
-#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/coro/named.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
@@ -51,10 +51,10 @@ dstd::String write_small_trace(const dstd::String& dir, int n) {
     dstd::String out;
     out += "[\n";
     for (int i = 0; i < 40; ++i) {
-        out += common::str_cat(
-            R"({"id":)", i, R"(,"name":"read","cat":"POSIX","pid":1,)",
-            R"("tid":1,"ph":"X","ts":)", 1000 + i * 10,
-            R"(,"dur":3,"args":{"fname":"/data/f)", n, R"("}})", "\n");
+        dstd::fmt_append<
+            "{\"id\":{},\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,\"tid\":"
+            "1,\"ph\":\"X\",\"ts\":{},\"dur\":3,\"args\":{\"fname\":\"/data/"
+            "f{}\"}}\n">(out, i, 1000 + i * 10, n);
     }
     out += "]\n";
     char name[32];

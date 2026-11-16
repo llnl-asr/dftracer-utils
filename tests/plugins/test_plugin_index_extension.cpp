@@ -4,7 +4,7 @@
 // min and max of "v" per chunk as "index_minmax.range".
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/common/str_format.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/path.h>
@@ -38,7 +38,7 @@ dstd::String write_records(dftu_utils_test::TestEnvironment& env,
     {
         dstd::String out;
         for (int i = 0; i < RECORDS; ++i)
-            out += common::str_cat(R"({"op":"read","v":)", i, "}\n");
+            dstd::fmt_append<"{\"op\":\"read\",\"v\":{}}\n">(out, i);
         dstd::fs::write_file(dstd::PathView(plain), out).discard();
     }
     const dstd::String gz = plain + ".gz";

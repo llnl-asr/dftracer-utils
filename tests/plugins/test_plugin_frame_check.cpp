@@ -9,7 +9,6 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT
 #include <dftracer/utils/common/constants.h>
-#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/expr.h>
@@ -21,6 +20,7 @@
 #include <dftracer/utils/dataframe/udaf_registry.h>
 #include <dftracer/utils/dataframe/udaf_states.h>
 #include <dftracer/utils/dataframe/udf.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
@@ -90,10 +90,10 @@ dstd::String make_trace(dftu_utils_test::TestEnvironment& env) {
     dstd::String pfw = dir + "/trace.pfw";
     dstd::String ofs;
     for (int i = 0; i < 8; ++i)
-        ofs +=
-            common::str_cat(R"({"ph":"X","name":"read","cat":"POSIX","pid":1)",
-                            R"(,"tid":1,"ts":)", (1000 + i * 100), R"(,"dur":)",
-                            (10 + i), R"(,"args":{}})", "\n");
+        dstd::fmt_append<
+            "{\"ph\":\"X\",\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,"
+            "\"tid\":1,\"ts\":{},\"dur\":{}{}\n">(ofs, (1000 + i * 100),
+                                                  (10 + i), R"(,"args":{}})");
     dstd::fs::write_file(dstd::PathView(pfw), ofs).discard();
     dstd::String gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);

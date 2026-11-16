@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/constants.h>
-#include <dftracer/utils/common/str_format.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/intern_cache.h>
 #include <dftracer/utils/dstd/string.h>
@@ -285,18 +285,16 @@ dstd::Vector<String> generated_lines(std::size_t count) {
     std::uint64_t state = dstd::hash::GOLDEN_RATIO;
     for (std::size_t i = 0; i < count; ++i) {
         const std::uint64_t r = next_random(state);
-        String line = common::str_cat(
-            R"({"id":)", i, R"(,"name":")", NAMES[r % 6], R"(","cat":")",
-            CATS[(r >> 8) % 4], R"(","pid":)", 1000 + (r >> 16) % 8,
-            R"(,"tid":)", 10000 + (r >> 20) % 64, R"(,"ts":)",
-            1000000000 + i * 100, R"(,"dur":)", (r >> 24) % 5000, R"(,"ph":)",
-            1 + (r >> 40) % 3, R"(,"type":)", 1 + (r >> 44) % 9,
-            R"(,"args":{"hhash":"h)", (r >> 48) % 4, R"(","level":)",
-            (r >> 52) % 4);
-        if ((r >> 56) & 1)
-            line += common::str_cat(R"(,"fhash":"f)", r % 16, "\"");
-        if ((r >> 57) & 1) line += common::str_cat(",", EXTRAS[(r >> 58) % 7]);
-        if ((r >> 61) & 1) line += common::str_cat(",", EXTRAS[(r >> 3) % 7]);
+        String line = dstd::fmt<
+            "{\"id\":{},\"name\":\"{}\",\"cat\":\"{}\",\"pid\":{},\"tid\":{},"
+            "\"ts\":{},\"dur\":{},\"ph\":{},\"type\":{},\"args\":{\"hhash\":"
+            "\"h{}\",\"level\":{}">(
+            i, NAMES[r % 6], CATS[(r >> 8) % 4], 1000 + (r >> 16) % 8,
+            10000 + (r >> 20) % 64, 1000000000 + i * 100, (r >> 24) % 5000,
+            1 + (r >> 40) % 3, 1 + (r >> 44) % 9, (r >> 48) % 4, (r >> 52) % 4);
+        if ((r >> 56) & 1) dstd::fmt_append<",\"fhash\":\"f{}\"">(line, r % 16);
+        if ((r >> 57) & 1) dstd::fmt_append<",{}">(line, EXTRAS[(r >> 58) % 7]);
+        if ((r >> 61) & 1) dstd::fmt_append<",{}">(line, EXTRAS[(r >> 3) % 7]);
         line += "}}";
         lines.push_back(std::move(line));
     }
@@ -846,15 +844,16 @@ TEST_SUITE("FoldOnDemand") {
                                         "1e",  "1e+", "0x1", "1e400x"};
         for (const char* token : bad_args) {
             INFO(String("token ") << token);
-            const String line = common::str_cat(
-                R"({"ph":1,"ts":5,"args":{"a":)", token, R"(,"b":2}})");
+            const String line =
+                dstd::fmt<"{\"ph\":1,\"ts\":5,\"args\":{\"a\":{},\"b\":2}}">(
+                    token);
             const OnDemandRead got = read_on_demand(doc, line, true);
             CHECK_FALSE((got.parsed && !got.broken));
             // A field the reader only type-checks never looks at an atom that
             // starts like no number.
             if (token[0] < '0' || token[0] > '9') continue;
             const String top =
-                common::str_cat(R"({"ph":1,"ts":)", token, R"(,"name":"n"})");
+                dstd::fmt<"{\"ph\":1,\"ts\":{},\"name\":\"n\"}">(token);
             const OnDemandRead top_got = read_on_demand(doc, top, true);
             CHECK_FALSE((top_got.parsed && !top_got.broken));
         }

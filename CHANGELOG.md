@@ -367,7 +367,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 - Make `TaskProgress::state` a `TaskState` enum and `TaskProgress::location` a `TaskLocation` enum with a `worker` index, where both were strings.
   Python's `Runtime.get_progress()` returns the same strings as before.
 - Report a task submitted with `Runtime::submit` that raises as failed in `get_progress()`, where it was reported as completed, and count a failed task only in `failed`.
-- Make the `common` helpers return dstd types: `str_cat`, `string_format` and `human_bytes` return `dstd::String`, and `Env::get` and `parse_bytes` return `dstd::Optional`.
+- Make the `common` helpers return dstd types: `string_format` and `human_bytes` return `dstd::String`, and `Env::get` and `parse_bytes` return `dstd::Optional`.
 - Move the store, json, duql and plugin C++ APIs onto dstd types: the plugin SDK builder, configs and results take and return `dstd::String`, `dstd::Vector` and `dstd::Optional`.
 - Build each `distributed_index` worker's files as a shard on node-local disk, then merge the shards into the index root by moving their data files.
   Shard sets live in `.dftindex/shards/` with `.dftindex/shards.json`, where they lived in `.dftindex-shards`.
@@ -725,6 +725,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Removed
 
+- Remove `common::str_cat`. Build a message with `dstd::fmt<"...">(args)` and append text in a loop with `dstd::fmt_append<"...">(out, args)`, both in `dftracer/utils/dstd/fmt.h`: the format string is checked at compile time and the result is sized once.
 - Remove `common::DFTUtilsException`, `common::throw_error`, `common::unwrap` and `duql::DuqlParseError`.
   Library calls return `dstd::Result`, so check the result where you called `unwrap` before.
 - Remove `common::string_format`, `common::vstring_format` and the `DFTRACER_UTILS_PRINTF_FORMAT` macro. Use `dstd::fmt`.

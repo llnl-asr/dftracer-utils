@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 // The cases count walks, not time.
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/coro/async_generator.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -60,62 +60,59 @@ dstd::String write_trace(const dstd::String& dir) {
     for (int i = 0; i < RECORDS; ++i) {
         const int pid = 1 + i % 4;
         const int ts = 1000 + i * 10;
-        out += common::str_cat(R"({"id":)", i);
+        dstd::fmt_append<"{\"id\":{}">(out, i);
         switch (shape_of(i)) {
             case 0:
-                out += common::str_cat(
-                    R"(,"name":"read","cat":"POSIX","pid":)", pid,
-                    R"(,"tid":1,"ph":"X","ts":)", ts,
-                    R"(,"dur":3,"args":{"fname":"/data/f)", i % 37,
-                    R"(","size":)", i % 4096,
-                    R"(,"fhash":"f00d","hhash":"a1b2c3d4e5f60718","level":)",
-                    i % 3, "}}\n");
+                dstd::fmt_append<
+                    ",\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":{},\"tid\":1,"
+                    "\"ph\":\"X\",\"ts\":{},\"dur\":3,\"args\":{\"fname\":\"/"
+                    "data/"
+                    "f{}\",\"size\":{},\"fhash\":\"f00d\",\"hhash\":"
+                    "\"a1b2c3d4e5f60718\",\"level\":{}}}\n">(
+                    out, pid, ts, i % 37, i % 4096, i % 3);
                 break;
             case 1:
-                out += common::str_cat(
-                    R"(,"name":"compute","cat":"APP","pid":)", pid,
-                    R"(,"tid":2,"ph":"X","ts":)", ts, R"(,"dur":7})", "\n");
+                dstd::fmt_append<
+                    ",\"name\":\"compute\",\"cat\":\"APP\",\"pid\":{},\"tid\":"
+                    "2,\"ph\":\"X\",\"ts\":{},\"dur\":7}\n">(out, pid, ts);
                 break;
             case 2:
-                out += common::str_cat(
-                    R"(,"name":"write","cat":"POSIX","pid":)", pid,
-                    R"(,"tid":1,"ph":"X","ts":)", ts,
-                    R"(,"dur":5,"args":{"io":{"off":)", i,
-                    R"(,"len":512},"hosts":["n1","n2"],"note":null,)",
-                    R"("ratio":0.5}})", "\n");
+                dstd::fmt_append<
+                    ",\"name\":\"write\",\"cat\":\"POSIX\",\"pid\":{},\"tid\":"
+                    "1,\"ph\":\"X\",\"ts\":{},\"dur\":5,\"args\":{\"io\":{"
+                    "\"off\":{},\"len\":512},\"hosts\":[\"n1\",\"n2\"],"
+                    "\"note\":null,\"ratio\":0.5}}\n">(out, pid, ts, i);
                 break;
             case 3:
-                out += common::str_cat(R"(,"name":"open","cat":"POSIX","pid":)",
-                                       pid, R"(,"tid":1,"ph":"X","ts":)", ts,
-                                       R"(,"dur":1,"args":{}})", "\n");
+                dstd::fmt_append<
+                    ",\"name\":\"open\",\"cat\":\"POSIX\",\"pid\":{},\"tid\":1,"
+                    "\"ph\":\"X\",\"ts\":{}{}\n">(out, pid, ts,
+                                                  R"(,"dur":1,"args":{}})");
                 break;
             case 4:
-                out +=
-                    common::str_cat(R"(,"name":"close","cat":"POSIX","pid":)",
-                                    pid, R"(,"tid":1,"ph":"X","ts":)", ts,
-                                    R"(,"dur":1,"args":7})", "\n");
+                dstd::fmt_append<
+                    ",\"name\":\"close\",\"cat\":\"POSIX\",\"pid\":{},\"tid\":"
+                    "1,\"ph\":\"X\",\"ts\":{},\"dur\":1,\"args\":7}\n">(
+                    out, pid, ts);
                 break;
             case 5:
-                out += common::str_cat(
-                    R"(,"name":"stat","cat":"POSIX","pid":)", pid,
-                    R"(,"tid":3,"ph":"X","ts":)", ts,
-                    R"(,"dur":2,"extra":"tag)", i % 5,
-                    R"(","meta":{"k":[1,2],"z":null},"args":{"fname":"/d/s)",
-                    i % 11, R"(","ret":-)", i, "}}\n");
+                dstd::fmt_append<
+                    ",\"name\":\"stat\",\"cat\":\"POSIX\",\"pid\":{},\"tid\":3,"
+                    "\"ph\":\"X\",\"ts\":{},\"dur\":2,\"extra\":\"tag{}\","
+                    "\"meta\":{\"k\":[1,2],\"z\":null},\"args\":{\"fname\":\"/"
+                    "d/s{}\",\"ret\":-{}}}\n">(out, pid, ts, i % 5, i % 11, i);
                 break;
             case 6:
-                out += common::str_cat(
-                    R"(,"name":"seek","cat":"STDIO","pid":"7","tid":1,)",
-                    R"("ph":"X","ts":)", ts,
-                    R"(,"dur":2.5,"args":{"neg":-3,"big":)",
-                    "18446744073709551615",
-                    R"(,"flag":true,"off":false,"ratio":1.25,)",
-                    R"("tag":"x"}})", "\n");
+                dstd::fmt_append<
+                    ",\"name\":\"seek\",\"cat\":\"STDIO\",\"pid\":\"7\","
+                    "\"tid\":1,\"ph\":\"X\",\"ts\":{},\"dur\":2.5,\"args\":{"
+                    "\"neg\":-3,\"big\":18446744073709551615,\"flag\":true,"
+                    "\"off\":false,\"ratio\":1.25,\"tag\":\"x\"}}\n">(out, ts);
                 break;
             default:
-                out +=
-                    common::str_cat(R"(,"name":"nophase","cat":"POSIX","pid":)",
-                                    pid, R"(,"ts":)", ts, "}\n");
+                dstd::fmt_append<
+                    ",\"name\":\"nophase\",\"cat\":\"POSIX\",\"pid\":{},\"ts\":"
+                    "{}}\n">(out, pid, ts);
         }
     }
     out += "]\n";
@@ -231,23 +228,23 @@ dstd::String describe(const trace::views::detail::FoldEvent& ev,
                                                : dstd::String(in.resolve(id));
     };
     dstd::String o;
-    o += common::str_cat(
-        "cat=", text(ev.cat_id), " name=", text(ev.name_id),
-        " fhash=", text(ev.fhash_id), " hhash=", text(ev.hhash_id),
-        " pid=", ev.pid, " tid=", ev.tid, " ts=", ev.ts, " dur=", ev.dur,
-        " phase=", static_cast<int>(ev.phase), " has_dur=", ev.has_dur,
-        " by_path=", ev.by_path, " unconverted=", ev.unconverted, "\n");
+    dstd::fmt_append<
+        "cat={} name={} fhash={} hhash={} pid={} tid={} ts={} dur={} phase={} "
+        "has_dur={} by_path={} unconverted={}\n">(
+        o, text(ev.cat_id), text(ev.name_id), text(ev.fhash_id),
+        text(ev.hhash_id), ev.pid, ev.tid, ev.ts, ev.dur,
+        static_cast<int>(ev.phase), ev.has_dur, ev.by_path, ev.unconverted);
     const auto list = [&](const char* label, const auto& pairs) {
-        o += common::str_cat(label, ":");
+        dstd::fmt_append<"{}:">(o, label);
         for (const auto& [k, v] : pairs) {
-            o += common::str_cat(" ", text(k), "=");
+            dstd::fmt_append<" {}=">(o, text(k));
             std::visit(
                 [&](const auto& x) {
                     using T = std::decay_t<decltype(x)>;
                     if constexpr (std::is_same_v<T, std::uint32_t>)
-                        o += common::str_cat("s:", text(x));
+                        dstd::fmt_append<"s:{}">(o, text(x));
                     else
-                        o += common::str_cat(typeid(T).name(), ":", x);
+                        dstd::fmt_append<"{}:{}">(o, typeid(T).name(), x);
                 },
                 v);
         }
@@ -257,11 +254,11 @@ dstd::String describe(const trace::views::detail::FoldEvent& ev,
     list("top", ev.top_fields);
     o += "specials:";
     for (const auto& sp : ev.specials)
-        o += common::str_cat(" ", text(sp.key), "/", static_cast<int>(sp.kind),
-                             "/", sp.top);
+        dstd::fmt_append<" {}/{}/{}">(o, text(sp.key),
+                                      static_cast<int>(sp.kind), sp.top);
     o += "\nleaves:";
     for (const auto& [id, tag] : ev.schema_leaves)
-        o += common::str_cat(" ", text(id), "#", static_cast<int>(tag));
+        dstd::fmt_append<" {}#{}">(o, text(id), static_cast<int>(tag));
     return o;
 }
 
@@ -320,13 +317,14 @@ TEST_SUITE("IndexParseWalks") {
         dstd::String out;
         out += "[\n";
         for (int i = 0; i < GOOD; ++i) {
-            out += common::str_cat(
-                R"({"id":)", i,
-                R"(,"name":"read","cat":"POSIX","pid":1,"tid":1,"ph":"X",)",
-                R"("ts":)", 1000 + i, R"(,"dur":2,"args":{"size":)", i,
-                R"(,"huge":123456789012345678901234567890,"neg":-5}})", "\n");
+            dstd::fmt_append<
+                "{\"id\":{},\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,"
+                "\"tid\":1,\"ph\":\"X\",\"ts\":{},\"dur\":2,\"args\":{\"size\":"
+                "{},\"huge\":123456789012345678901234567890,\"neg\":-5}}\n">(
+                out, i, 1000 + i, i);
             if (i % 600 == 0)
-                for (const auto& line : bad) out += common::str_cat(line, "\n");
+                for (const auto& line : bad)
+                    dstd::fmt_append<"{}\n">(out, line);
         }
         out += "]\n";
         dftu_utils_test::TestEnvironment env(10);
@@ -350,8 +348,8 @@ TEST_SUITE("IndexParseWalks") {
         for (int i = 0; i < 3000; ++i) deep += "}";
         const Odd odds[] = {
             {"9 MiB string",
-             common::str_cat(R"("s":")", dstd::String(9 * 1024 * 1024, 'x'),
-                             R"(","tag":"n8")"),
+             dstd::fmt<"\"s\":\"{}\",\"tag\":\"n8\"">(
+                 dstd::String(9 * 1024 * 1024, 'x')),
              "n8", nullptr},
             {"1e400", R"("big":1e400,"tag":"n1")", "n1", nullptr},
             {"invalid escape", R"("s":"a\qb","tag":"n2")", "n2", nullptr},
@@ -361,9 +359,8 @@ TEST_SUITE("IndexParseWalks") {
              "a?z"},
             {"control byte", dstd::String("\"s\":\"a\tz\",\"tag\":\"n5\""),
              "n5", "a?z"},
-            {"deep nesting",
-             common::str_cat(R"("deep":)", deep, R"(,"tag":"n6")"), "n6",
-             nullptr},
+            {"deep nesting", dstd::fmt<"\"deep\":{},\"tag\":\"n6\"">(deep),
+             "n6", nullptr},
             {"invalid escape in a key", R"("k\q":1,"tag":"n7")", "n7", nullptr},
         };
         constexpr int GOOD = 2000;
@@ -375,25 +372,25 @@ TEST_SUITE("IndexParseWalks") {
                 const dstd::String where = dftracer ? "args." : "";
                 dstd::String out;
                 for (int i = 0; i < GOOD; ++i) {
-                    out += dftracer
-                               ? common::str_cat(
-                                     R"({"id":)", i,
-                                     R"(,"name":"read","cat":"POSIX","pid":1,)",
-                                     R"("tid":1,"ph":"X","ts":)", 1000 + i,
-                                     R"(,"dur":2,"args":{"size":)", i,
-                                     R"(,"tag":"plain"}})", "\n")
-                               : common::str_cat(
-                                     R"({"op":"read","host":"h1","size":)", i,
-                                     R"(,"tag":"plain"})", "\n");
+                    out +=
+                        dftracer
+                            ? dstd::fmt<
+                                  "{\"id\":{},\"name\":\"read\",\"cat\":"
+                                  "\"POSIX\",\"pid\":1,\"tid\":1,\"ph\":\"X\","
+                                  "\"ts\":{},\"dur\":2,\"args\":{\"size\":{},"
+                                  "\"tag\":\"plain\"}}\n">(i, 1000 + i, i)
+                            : dstd::fmt<
+                                  "{\"op\":\"read\",\"host\":\"h1\",\"size\":{}"
+                                  ",\"tag\":\"plain\"}\n">(i);
                     if (i == GOOD / 2)
-                        out +=
-                            dftracer
-                                ? common::str_cat(
-                                      R"({"id":9,"name":"odd","cat":"c",)",
-                                      R"("pid":1,"tid":1,"ph":"X","ts":5,)",
-                                      R"("dur":2,"args":{)", odd.fields, "}}\n")
-                                : common::str_cat(R"({"op":"odd",)", odd.fields,
-                                                  "}\n");
+                        out += dftracer
+                                   ? dstd::fmt<
+                                         "{}\"pid\":1,\"tid\":1,\"ph\":\"X\","
+                                         "\"ts\":5,{}{}}}\n">(
+                                         R"({"id":9,"name":"odd","cat":"c",)",
+                                         R"("dur":2,"args":{)", odd.fields)
+                                   : dstd::fmt<"{\"op\":\"odd\",{}}\n">(
+                                         odd.fields);
                 }
                 dftu_utils_test::TestEnvironment env(10);
                 const dstd::String file = dftu_utils_test::write_gz_trace(
@@ -415,11 +412,11 @@ TEST_SUITE("IndexParseWalks") {
                             dftu_utils_test::ok_items(reader.read_json(rc)))
                             .get());
                 };
-                CHECK(found(common::str_cat(where, "tag == \"", odd.needle,
-                                            '"')) == 1);
+                CHECK(found(dstd::fmt<"{}tag == \"{}{}">(where, odd.needle,
+                                                         '"')) == 1);
                 if (odd.equals)
-                    CHECK(found(common::str_cat(where, "s == \"", odd.equals,
-                                                '"')) == 1);
+                    CHECK(found(dstd::fmt<"{}s == \"{}{}">(where, odd.equals,
+                                                           '"')) == 1);
             }
         }
     }
@@ -428,7 +425,7 @@ TEST_SUITE("IndexParseWalks") {
         const auto run = [](const dstd::Vector<dstd::String>& lines,
                             std::size_t& dom_parses) {
             dstd::String text;
-            for (const auto& line : lines) text += common::str_cat(line, "\n");
+            for (const auto& line : lines) dstd::fmt_append<"{}\n">(text, line);
             text += dstd::String(simdjson::SIMDJSON_PADDING, '\0');
             simdjson::dom::parser parser;
             dstd::Vector<dstd::String> seen;
@@ -437,11 +434,11 @@ TEST_SUITE("IndexParseWalks") {
                 parser, text.data(), text.size() - simdjson::SIMDJSON_PADDING,
                 [&](simdjson::dom::element, dstd::StringView src) {
                     ++dom_parses;
-                    seen.push_back(common::str_cat("D:", src));
+                    seen.push_back(dstd::fmt<"D:{}">(src));
                 },
                 [&](dstd::StringView line, std::size_t capacity) {
                     CHECK(capacity >= line.size() + simdjson::SIMDJSON_PADDING);
-                    seen.push_back(common::str_cat("R:", line));
+                    seen.push_back(dstd::fmt<"R:{}">(line));
                 });
             return seen;
         };
@@ -472,15 +469,15 @@ TEST_SUITE("IndexParseWalks") {
                "D:" + g6});
         CHECK(dom_parses == 4);
 
-        check(run({g1, common::str_cat(g4, g5), g6}, dom_parses),
+        check(run({g1, dstd::fmt<"{}{}">(g4, g5), g6}, dom_parses),
               {"D:" + g1, "D:" + g4, "D:" + g5, "D:" + g6});
         CHECK(dom_parses == 4);
 
-        check(run({common::str_cat(g1, " ", o1), g2}, dom_parses),
+        check(run({dstd::fmt<"{} {}">(g1, o1), g2}, dom_parses),
               {"D:" + g1, "R:" + o1, "D:" + g2});
         CHECK(dom_parses == 2);
 
-        check(run({common::str_cat(g1, ", ", o1), g2}, dom_parses),
+        check(run({dstd::fmt<"{}, {}">(g1, o1), g2}, dom_parses),
               {"D:" + g1, "R:" + o1, "D:" + g2});
 
         const dstd::String cut_nested =
@@ -507,21 +504,19 @@ TEST_SUITE("IndexParseWalks") {
         int id = 0;
         for (int r = 0; r < ROUNDS; ++r) {
             for (int k = 0; k < 3; ++k) {
-                const dstd::String tag = common::str_cat("g", id);
-                out += common::str_cat(
-                    R"({"id":)", id,
-                    R"(,"name":"read","cat":"POSIX","pid":1,"tid":1,"ph":"X",)",
-                    R"("ts":)", 1000 + id, R"(,"dur":2,"args":{"tag":")", tag,
-                    R"("}})", "\n");
+                const dstd::String tag = dstd::fmt<"g{}">(id);
+                dstd::fmt_append<
+                    "{\"id\":{},\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,"
+                    "\"tid\":1,\"ph\":\"X\",\"ts\":{},\"dur\":2,\"args\":{"
+                    "\"tag\":\"{}\"}}\n">(out, id, 1000 + id, tag);
                 tags.push_back(tag);
                 ++id;
             }
-            const dstd::String tag = common::str_cat("o", id);
-            out += common::str_cat(
-                R"({"id":)", id,
-                R"(,"name":"read","cat":"POSIX","pid":1,"tid":1,"ph":"X",)",
-                R"("ts":)", 1000 + id, R"(,"dur":2,"args":{"tag":")", tag,
-                R"(",)", odd[r % 3], "}}\n");
+            const dstd::String tag = dstd::fmt<"o{}">(id);
+            dstd::fmt_append<
+                "{\"id\":{},\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,"
+                "\"tid\":1,\"ph\":\"X\",\"ts\":{},\"dur\":2,\"args\":{\"tag\":"
+                "\"{}\",{}}}\n">(out, id, 1000 + id, tag, odd[r % 3]);
             tags.push_back(tag);
             ++id;
         }
@@ -538,7 +533,7 @@ TEST_SUITE("IndexParseWalks") {
         REQUIRE(reader.has_index());
         for (const auto& tag : tags) {
             trace::reader::ReadConfig rc;
-            rc.query = common::str_cat("args.tag == \"", tag, '"');
+            rc.query = dstd::fmt<"args.tag == \"{}{}">(tag, '"');
             INFO(tag);
             CHECK(dftu_utils_test::ok(count_json(dftu_utils_test::ok_items(
                                                      reader.read_json(rc)))
@@ -551,23 +546,22 @@ TEST_SUITE("IndexParseWalks") {
         dstd::String out;
         out += "[\n";
         const auto record = [](const char* tag, int id) {
-            return common::str_cat(
-                R"({"id":)", id,
-                R"(,"name":"read","cat":"POSIX","pid":1,"tid":1,"ph":"X",)",
-                R"("ts":)", 1000 + id, R"(,"dur":2,"args":{"tag":")", tag,
-                R"("}})");
+            return dstd::fmt<
+                "{\"id\":{},\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,"
+                "\"tid\":1,\"ph\":\"X\",\"ts\":{},\"dur\":2,\"args\":{\"tag\":"
+                "\"{}\"}}">(id, 1000 + id, tag);
         };
         for (int i = 0; i < GOOD; ++i) {
-            out += common::str_cat(record(common::str_cat("g", i).c_str(), i),
-                                   "\n");
+            dstd::fmt_append<"{}\n">(out,
+                                     record(dstd::fmt<"g{}">(i).c_str(), i));
             if (i == 10)
-                out +=
-                    common::str_cat(record("a1", 100), record("a2", 101), "\n");
+                dstd::fmt_append<"{}{}\n">(out, record("a1", 100),
+                                           record("a2", 101));
             if (i == 20) {
                 const dstd::String whole = record("s1", 102);
                 const std::size_t cut = whole.find(R"("pid")");
-                out += common::str_cat(whole.substr(0, cut), "\n",
-                                       whole.substr(cut), "\n");
+                dstd::fmt_append<"{}\n{}\n">(out, whole.substr(0, cut),
+                                             whole.substr(cut));
             }
         }
         out += "]\n";
@@ -583,7 +577,7 @@ TEST_SUITE("IndexParseWalks") {
         REQUIRE(reader.has_index());
         for (const char* tag : {"g0", "g39"}) {
             trace::reader::ReadConfig rc;
-            rc.query = common::str_cat("args.tag == \"", tag, '"');
+            rc.query = dstd::fmt<"args.tag == \"{}{}">(tag, '"');
             INFO(tag);
             CHECK(dftu_utils_test::ok(count_json(dftu_utils_test::ok_items(
                                                      reader.read_json(rc)))
@@ -594,18 +588,18 @@ TEST_SUITE("IndexParseWalks") {
     TEST_CASE("a refused record after another on one line is indexed") {
         constexpr int GOOD = 40;
         const auto record = [](int id, const char* extra) {
-            return common::str_cat(
-                R"({"id":)", id,
-                R"(,"name":"read","cat":"POSIX","pid":1,"tid":1,"ph":"X",)",
-                R"("ts":)", 1000 + id, R"(,"dur":2,"args":{)", extra, "}}");
+            return dstd::fmt<
+                "{}{},\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,\"tid\":1,"
+                "\"ph\":\"X\",\"ts\":{}{}{}}}">(R"({"id":)", id, 1000 + id,
+                                                R"(,"dur":2,"args":{)", extra);
         };
         dstd::String out;
         out += "[\n";
         for (int i = 0; i < GOOD; ++i) {
-            out += common::str_cat(record(i, R"("a":1)"), "\n");
+            dstd::fmt_append<"{}\n">(out, record(i, R"("a":1)"));
             if (i == 10)
-                out += common::str_cat(record(100, R"("a":1)"), " ",
-                                       record(101, R"("a":1e400)"), "\n");
+                dstd::fmt_append<"{} {}\n">(out, record(100, R"("a":1)"),
+                                            record(101, R"("a":1e400)"));
         }
         out += "]\n";
         dftu_utils_test::TestEnvironment env(10);
@@ -622,10 +616,10 @@ TEST_SUITE("IndexParseWalks") {
         dstd::String out;
         out += "[\n";
         for (int i = 0; i < GOOD; ++i) {
-            out += common::str_cat(
-                R"({"id":)", i,
-                R"(,"name":"read","cat":"POSIX","pid":1,"tid":1,"ph":"X",)",
-                R"("ts":)", 1000 + i, R"(,"dur":2,"args":{"a":1}})", "\n");
+            dstd::fmt_append<
+                "{\"id\":{},\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,"
+                "\"tid\":1,\"ph\":\"X\",\"ts\":{},\"dur\":2,\"args\":{\"a\":1}}"
+                "\n">(out, i, 1000 + i);
             if (i == 10)
                 out += R"({"id":99,"name":"cut","ph":"X","a":1e400,"b":{"c":1})"
                        "\n";
@@ -646,13 +640,13 @@ TEST_SUITE("IndexParseWalks") {
         dstd::String out;
         out += "[\n";
         for (int i = 0; i < LINES; ++i) {
-            out += common::str_cat(
-                R"({"id":)", i,
-                R"(,"name":"read","cat":"POSIX","pid":1,"tid":1,"ph":"X",)",
-                R"("ts":)", 1000 + i, R"(,"dur":2,"args":{"size":)", i);
+            dstd::fmt_append<
+                "{\"id\":{},\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,"
+                "\"tid\":1,\"ph\":\"X\",\"ts\":{},\"dur\":2,\"args\":{\"size\":"
+                "{}">(out, i, 1000 + i, i);
             if (i == 20)
-                out += common::str_cat(R"(,"note":")",
-                                       dstd::String(LONG_BYTES, 'x'), '"');
+                dstd::fmt_append<",\"note\":\"{}{}">(
+                    out, dstd::String(LONG_BYTES, 'x'), '"');
             out += "}}\n";
         }
         out += "]\n";

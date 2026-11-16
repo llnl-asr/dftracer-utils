@@ -7,8 +7,8 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 
-#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/dataframe/c_api.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
@@ -202,10 +202,10 @@ dstd::String make_trace(dftu_utils_test::TestEnvironment& env) {
     dstd::String pfw = dir + "/trace.pfw";
     dstd::String ofs;
     for (int i = 0; i < EVENTS; ++i)
-        ofs +=
-            common::str_cat(R"({"ph":"X","name":"read","cat":"POSIX","pid":)",
-                            (i % 2 + 1), R"(,"tid":1,"ts":)", (1000 + i * 100),
-                            R"(,"dur":)", (10 + i), R"(,"args":{}})", "\n");
+        dstd::fmt_append<
+            "{\"ph\":\"X\",\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":{},"
+            "\"tid\":1,\"ts\":{},\"dur\":{}{}\n">(
+            ofs, (i % 2 + 1), (1000 + i * 100), (10 + i), R"(,"args":{}})");
     dstd::fs::write_file(dstd::PathView(pfw), ofs).discard();
     dstd::String gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);

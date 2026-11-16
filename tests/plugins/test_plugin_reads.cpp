@@ -4,7 +4,7 @@
 // distinct arg key in the batch - the cost this feature exists to avoid.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/common/str_format.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
@@ -39,9 +39,10 @@ ViewFile make_trace(dftu_utils_test::TestEnvironment& env) {
     const dstd::String pfw = env.dir() + "/reads_projection.pfw";
     dstd::String ofs;
     for (int i = 0; i < NUM_EVENTS; ++i) {
-        ofs += common::str_cat(
-            R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)",
-            (1000 + i * 100), R"(,"dur":)", (10 + i), R"(,"args":{"x":)", i);
+        dstd::fmt_append<
+            "{\"ph\":\"X\",\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,"
+            "\"tid\":1,\"ts\":{},\"dur\":{},\"args\":{\"x\":{}">(
+            ofs, (1000 + i * 100), (10 + i), i);
         if (i == 0) ofs += R"(,"y":1)";
         if (i == 1) ofs += R"(,"z":1)";
         if (i == 2) ofs += R"(,"w":1)";
@@ -132,7 +133,7 @@ TEST_CASE("a path-decoded file hands the plugin its own columns") {
     {
         dstd::String ofs;
         for (int i = 0; i < NUM_EVENTS; ++i)
-            ofs += common::str_cat(R"({"x":)", i, R"(,"k":"a"})", "\n");
+            dstd::fmt_append<"{\"x\":{},\"k\":\"a\"}\n">(ofs, i);
         dstd::fs::write_file(dstd::PathView(plain), ofs).discard();
     }
     const dstd::String gz = plain + ".gz";

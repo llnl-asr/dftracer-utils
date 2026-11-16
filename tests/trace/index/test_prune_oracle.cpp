@@ -7,7 +7,7 @@
 // DFTRACER_UTILS_PRUNE_ORACLE_RECORD=<path> to write a new recording instead.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/common/str_format.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -86,17 +86,17 @@ dstd::String write_trace(const dstd::String& dir, int seed, int events) {
     dstd::String out;
     out += "[\n";
     for (int f = 0; f < 3; ++f)
-        out += common::str_cat(
-            R"({"name":"FH","ph":"M","pid":1,"tid":1,"args":{"name":")",
-            FILES[f], R"(","value":")", FHASH[f], "\"}}\n");
+        dstd::fmt_append<
+            "{\"name\":\"FH\",\"ph\":\"M\",\"pid\":1,\"tid\":1,\"args\":{"
+            "\"name\":\"{}\",\"value\":\"{}\"}}\n">(out, FILES[f], FHASH[f]);
     for (int h = 0; h < 2; ++h)
-        out += common::str_cat(
-            R"({"name":"HH","ph":"M","pid":1,"tid":1,"args":{"name":")",
-            HOSTS[h], R"(","value":")", HHASH[h], "\"}}\n");
+        dstd::fmt_append<
+            "{\"name\":\"HH\",\"ph\":\"M\",\"pid\":1,\"tid\":1,\"args\":{"
+            "\"name\":\"{}\",\"value\":\"{}\"}}\n">(out, HOSTS[h], HHASH[h]);
     for (int x = 0; x < 2; ++x)
-        out += common::str_cat(
-            R"({"name":"SH","ph":"M","pid":1,"tid":1,"args":{"name":")",
-            EXECS[x], R"(","value":")", SHASH[x], "\"}}\n");
+        dstd::fmt_append<
+            "{\"name\":\"SH\",\"ph\":\"M\",\"pid\":1,\"tid\":1,\"args\":{"
+            "\"name\":\"{}\",\"value\":\"{}\"}}\n">(out, EXECS[x], SHASH[x]);
     std::uint64_t ts = 1000000 + static_cast<std::uint64_t>(seed) * 50000;
     int run_left = 0, name = 0, cat = 0, pid = 1, file = 0, host = 0;
     for (int i = 0; i < events; ++i) {
@@ -111,9 +111,9 @@ dstd::String write_trace(const dstd::String& dir, int seed, int events) {
         --run_left;
         if (seed == 2 && i == events / 3)
             for (int t = 0; t < 2000; ++t)
-                out += common::str_cat(
-                    R"({"name":"thread_name","ph":"M","pid":1,"tid":)",
-                    1000 + t, R"(,"args":{"name":"worker-)", t, "\"}}\n");
+                dstd::fmt_append<
+                    "{\"name\":\"thread_name\",\"ph\":\"M\",\"pid\":1,\"tid\":{"
+                    "},\"args\":{\"name\":\"worker-{}\"}}\n">(out, 1000 + t, t);
         ts += 5 + rng.next() % 50;
         if (i == events / 2) ts += 400000;
         const auto dur = 10 + (rng.next() % 1000);
@@ -129,12 +129,12 @@ dstd::String write_trace(const dstd::String& dir, int seed, int events) {
             std::snprintf(buf, sizeof(buf), "n%08llx%08llx%08llx", a, b, c);
             op = (i < 200 && i % 5 == 0) ? "target_op" : buf;
         }
-        out += common::str_cat(
-            R"({"id":)", i, R"(,"name":")", op, R"(","cat":")", CATS[cat],
-            R"(","pid":)", pid, R"(,"tid":)", pid * 10, R"(,"ph":"X","ts":)",
-            ts, R"(,"dur":)", dur, R"(,"args":{"size":)", size, R"(,"fhash":")",
-            FHASH[file], R"(","hhash":")", HHASH[host], R"(","shash":")",
-            SHASH[pid % 2], "\"}}\n");
+        dstd::fmt_append<
+            "{\"id\":{},\"name\":\"{}\",\"cat\":\"{}\",\"pid\":{},\"tid\":{},"
+            "\"ph\":\"X\",\"ts\":{},\"dur\":{},\"args\":{\"size\":{},\"fhash\":"
+            "\"{}\",\"hhash\":\"{}\",\"shash\":\"{}\"}}\n">(
+            out, i, op, CATS[cat], pid, pid * 10, ts, dur, size, FHASH[file],
+            HHASH[host], SHASH[pid % 2]);
     }
     out += "]\n";
     const auto plain = dir + "/trace" + dstd::to_string(seed) + ".pfw";
@@ -397,7 +397,7 @@ TEST_CASE("prune decisions match the recording") {
 
     if (const char* out = std::getenv("DFTRACER_UTILS_PRUNE_ORACLE_RECORD")) {
         dstd::String f;
-        for (const auto& l : lines) f += common::str_cat(l, "\n");
+        for (const auto& l : lines) dstd::fmt_append<"{}\n">(f, l);
         MESSAGE("recorded " << lines.size() << " lines to "
                             << dstd::String(out));
         dstd::fs::write_file(dstd::PathView(out), f).discard();
@@ -674,14 +674,14 @@ TEST_CASE("a name two traces hash differently is an arrow to both hashes") {
     dstd::Vector<dstd::String> traces;
     for (const char* hash : {"aaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbb"}) {
         dstd::String out;
-        out += common::str_cat(
-            R"({"name":"FH","ph":"M","pid":1,"tid":1,"args":{"name":"/x",)",
-            R"("value":")", hash, "\"}}\n");
+        dstd::fmt_append<
+            "{\"name\":\"FH\",\"ph\":\"M\",\"pid\":1,\"tid\":1,\"args\":{"
+            "\"name\":\"/x\",\"value\":\"{}\"}}\n">(out, hash);
         for (int i = 0; i < 20; ++i)
-            out += common::str_cat(
-                R"({"id":)", i, R"(,"name":"read","cat":"POSIX","pid":1,)",
-                R"("tid":1,"ph":"X","ts":)", 1000 + i,
-                R"(,"dur":5,"args":{"fhash":")", hash, "\"}}\n");
+            dstd::fmt_append<
+                "{\"id\":{},\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,"
+                "\"tid\":1,\"ph\":\"X\",\"ts\":{},\"dur\":5,\"args\":{"
+                "\"fhash\":\"{}\"}}\n">(out, i, 1000 + i, hash);
         const auto plain =
             env.dir() + "/t" + dstd::to_string(traces.size()) + ".pfw";
         dstd::fs::write_file(dstd::PathView(plain), out).discard();

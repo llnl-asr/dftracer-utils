@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/comm/mpi/context.h>
 #include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/common/env.h>
+#include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/fatal.h>
@@ -62,6 +64,31 @@ bool wait_unlocked(MPI_Request& request, std::unique_lock<std::mutex>& mpi) {
     }
 }
 
+/// MVAPICH2 builds a node communicator with blocking collectives inside the
+/// 16th collective call on a communicator, MPI_I* calls included. Groups whose
+/// calls start in a different order on different ranks then deadlock inside
+/// that build, so its shared-memory collectives must be off.
+constexpr const char* MV2_SHMEM_COLL_ENV = "MV2_USE_SHMEM_COLL";
+bool g_shmem_warned = false;
+
+/// Warns once, with g_process_mutex held, when MVAPICH2 runs with its
+/// shared-memory collectives on, as when the application started MPI itself.
+void warn_shmem_coll_once() {
+    if (g_shmem_warned) return;
+    g_shmem_warned = true;
+    char version[MPI_MAX_LIBRARY_VERSION_STRING] = {};
+    int length = 0;
+    if (MPI_Get_library_version(version, &length) != MPI_SUCCESS) return;
+    if (std::strstr(version, "MVAPICH2") == nullptr) return;
+    const auto value = common::Env::get<dstd::StringView>(MV2_SHMEM_COLL_ENV);
+    if (value && *value == "0") return;
+    DFTRACER_UTILS_LOG_WARN(
+        "MVAPICH2 runs with {} unset or not 0; groups whose collectives start "
+        "in a different order on different ranks can deadlock. Set {}=0 "
+        "before MPI starts.",
+        MV2_SHMEM_COLL_ENV, MV2_SHMEM_COLL_ENV);
+}
+
 /// What stops the threads when the last handle goes.
 struct Guard {
     explicit Guard(dstd::SharedPtr<Context> held) : context(std::move(held)) {}
@@ -96,6 +123,8 @@ dstd::Result<dstd::SharedPtr<Context>> Context::make(const void* app_comm) {
         }
         int provided = 0;
         if (!ready) {
+            // A value the user set wins.
+            ::setenv(MV2_SHMEM_COLL_ENV, "0", 0);
             MPI_Init_thread(nullptr, nullptr, MPI_THREAD_MULTIPLE, &provided);
             if (!g_exit_hook) {
                 g_exit_hook = true;
@@ -104,6 +133,7 @@ dstd::Result<dstd::SharedPtr<Context>> Context::make(const void* app_comm) {
         } else {
             MPI_Query_thread(&provided);
         }
+        warn_shmem_coll_once();
         if (provided < MPI_THREAD_MULTIPLE) {
             return dstd::Unexpected(dstd::Error::from_format<
                                     "MPI gave thread level {} and the backend "

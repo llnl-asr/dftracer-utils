@@ -35,6 +35,14 @@ is not next to the tools or on the loader path. ``--comm local|mpi|auto`` (or
 ``DFTRACER_UTILS_COMM``) picks the backend; the default, ``auto``, is MPI under
 a launcher and local otherwise.
 
+MVAPICH2 sets up a per-node communicator with blocking calls inside the 16th
+collective on a communicator, nonblocking ones included, so two groups whose
+calls start in a different order on different ranks can deadlock there. When
+the backend starts MPI it sets ``MV2_USE_SHMEM_COLL=0`` first, unless the
+variable is already set. A program that starts MPI itself must set it before
+``MPI_Init``; the backend logs a warning when it finds MVAPICH2 without it.
+Other MPI libraries ignore the variable.
+
 Invoke it
 ---------
 

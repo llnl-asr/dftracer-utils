@@ -63,13 +63,13 @@ target_set_warnings(schema_class_bad_member)
 add_test(NAME schema_class_bad_member
          COMMAND ${CMAKE_COMMAND} --build ${CMAKE_BINARY_DIR} --target
                  schema_class_bad_member --config $<CONFIG>)
-# Both tests run a build in this build tree; two at once corrupt its log.
+# Both tests run a build in this build tree. That build can relink the shared
+# libraries other tests load, so they run alone.
 set_tests_properties(
   schema_class_bad_member
   PROPERTIES PASS_REGULAR_EXPRESSION
-             "schema class members must be trace::index::Field"
-             RESOURCE_LOCK build_tree)
-set_tests_properties(c_abi_guard PROPERTIES RESOURCE_LOCK build_tree)
+             "schema class members must be trace::index::Field" RUN_SERIAL TRUE)
+set_tests_properties(c_abi_guard PROPERTIES RUN_SERIAL TRUE)
 
 # The plugin ABI manifest: the recorded shape of the headers a plugin compiles
 # against (struct sizes, field offsets, enum values, integer constants and

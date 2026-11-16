@@ -56,8 +56,11 @@ struct SlotKey {
 
 /// What the provider knows of one slot.
 struct Slot {
-    Slot(const SlotKey& key, std::uint32_t members)
-        : key(key), members(members), records(members), seen(members, 0) {}
+    Slot(const SlotKey& slot_key, std::uint32_t member_count)
+        : key(slot_key),
+          members(member_count),
+          records(member_count),
+          seen(member_count, 0) {}
 
     SlotKey key;
     std::uint32_t members = 0;

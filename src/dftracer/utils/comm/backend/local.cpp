@@ -744,11 +744,11 @@ struct SlotKey {
 /// The calls the members made at one slot. A local provider sees every member,
 /// so one slot holds the call of every rank that arrived.
 struct LocalSlot {
-    LocalSlot(std::uint32_t members, Collectives::Done done)
-        : records(members),
-          seen(members, 0),
-          members(members),
-          done(std::move(done)) {}
+    LocalSlot(std::uint32_t member_count, Collectives::Done on_done)
+        : records(member_count),
+          seen(member_count, 0),
+          members(member_count),
+          done(std::move(on_done)) {}
 
     dstd::Vector<Record> records;
     dstd::Vector<std::uint8_t> seen;

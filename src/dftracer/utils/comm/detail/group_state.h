@@ -85,7 +85,8 @@ struct Backend {
  * mutex of its @ref GroupState.
  */
 struct Slot {
-    explicit Slot(std::uint64_t seq, std::size_t size) : seq(seq), ops(size) {}
+    explicit Slot(std::uint64_t slot_seq, std::size_t size)
+        : seq(slot_seq), ops(size) {}
 
     /// The group of the slot, so a completion that outlives the handles finds
     /// it. Weak, because the group holds its slots.

@@ -4,26 +4,115 @@
 
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/function.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/vector.h>
 
+#include <cstddef>
 #include <cstdint>
+#include <utility>
 
 namespace dftracer::utils::comm::backend {
+
+/// The count a member that does not check its element count names.
+inline constexpr std::uint64_t UNCHECKED_COUNT = ~std::uint64_t{0};
+
+/// Bits of @ref Record::flags.
+inline constexpr std::uint32_t RECORD_TABLE = 1u;
+inline constexpr std::uint32_t RECORD_WANTS = 2u;
+inline constexpr std::uint32_t RECORD_COMBINE = 4u;
 
 /**
  * @brief The fixed record one member brings to one slot of a group.
  *
  * @ref kind is the call the member makes: two members of one slot must name the
  * same one, and a provider that sees two different ones ends the slot early.
- * The caller gives @ref version, @ref color and @ref key their meaning.
+ * The caller gives the other fields their meaning; a provider reads only
+ * @ref kind and @ref flags. A call with @ref RECORD_TABLE brings a
+ * @ref Contribution that goes into the table of the slot, @ref RECORD_WANTS
+ * says that this member takes the table, and @ref RECORD_COMBINE asks the
+ * provider to fold the contributions in arrival order.
  */
 struct Record {
     std::uint32_t kind = 0;
     std::uint32_t version = 0;
     std::uint32_t color = 0;
     std::uint32_t key = 0;
+    std::uint32_t root = 0;
+    std::uint32_t elem_size = 0;
+    std::uint64_t count = 0;
+    std::uint32_t flags = 0;
+    std::uint32_t reduce = 0;
 };
+
+static_assert(sizeof(Record) == 40, "the wire record has a fixed size");
+
+/// Folds @p bytes bytes of @p in into @p acc.
+using Combine = dstd::Function<void(std::byte* acc, const std::byte* in,
+                                    std::size_t bytes)>;
+
+/**
+ * @brief The bytes one member brings to a slot with a @ref RECORD_TABLE record.
+ *
+ * @ref keep owns the block that @ref bytes views, so the provider reads it
+ * until it ended the slot, also when the call that made it already failed.
+ */
+struct Contribution {
+    dstd::Span<const std::byte> bytes;
+    dstd::SharedPtr<const void> keep;
+    /// The fold of a @ref RECORD_COMBINE call. The provider runs it on the
+    /// thread that folds, outside its own lock, once per contribution and never
+    /// at the same time for one slot. After the provider dropped, released or
+    /// ended the slot it starts no further merge, except at most one that had
+    /// already passed its check and may still run once after that call
+    /// returns; the memory it reads stays valid until it returns. It may call
+    /// the provider, but not the group of its own slot.
+    Combine combine;
+};
+
+/**
+ * @brief The contributions of every member in one owned buffer, as a slot ends.
+ *
+ * The bytes of member `r` are `data[offsets[r], offsets[r + 1])`, with 64-bit
+ * offsets. @ref keep owns what @ref data and @ref offsets view, so a copy of
+ * the keep-alive lets a view outlive the slot. A provider that folded the
+ * contributions gives the fold as entry 0. @ref offsets is empty when the slot
+ * carried no table.
+ */
+struct Table {
+    dstd::Span<const std::byte> data;
+    dstd::Span<const std::uint64_t> offsets;
+    dstd::SharedPtr<const void> keep;
+
+    /// How many entries the table has.
+    std::uint32_t size() const noexcept {
+        return offsets.empty() ? 0
+                               : static_cast<std::uint32_t>(offsets.size() - 1);
+    }
+
+    /// The bytes of entry @p index.
+    dstd::Span<const std::byte> at(std::uint32_t index) const noexcept {
+        return data.subspan(offsets[index],
+                            offsets[index + 1] - offsets[index]);
+    }
+};
+
+/// The memory a provider's @ref Table views.
+struct TableBuffer {
+    dstd::Vector<std::byte> data;
+    dstd::Vector<std::uint64_t> offsets;
+};
+
+/// The table over @p buffer, which it keeps alive.
+inline Table make_table(dstd::SharedPtr<const TableBuffer> buffer) {
+    Table table;
+    table.data =
+        dstd::Span<const std::byte>(buffer->data.data(), buffer->data.size());
+    table.offsets = dstd::Span<const std::uint64_t>(buffer->offsets.data(),
+                                                    buffer->offsets.size());
+    table.keep = std::move(buffer);
+    return table;
+}
 
 /**
  * @brief How one slot ended, as its provider reports it.
@@ -41,6 +130,8 @@ struct SlotEnd {
     /// Null when the slot ended with the record of every member; the error that
     /// ended it otherwise.
     const dstd::Error* why = nullptr;
+    /// What the members brought, when the records carry @ref RECORD_TABLE.
+    Table table;
 };
 
 /// One byte per member, 1 for a member a provider saw arrive. Empty means the
@@ -48,12 +139,14 @@ struct SlotEnd {
 using Arrival = dstd::Vector<std::uint8_t>;
 
 /**
- * @brief Collects one @ref Record from every member of a group at one slot of
- * that group.
+ * @brief Collects one @ref Record, and the @ref Contribution of a call that
+ * carries a table, from every member of a group at one slot of that group.
  *
  * A slot is a group id and a sequence number of a member, so the calls of one
- * group match their peers by both. A provider reports arrival only: the
- * handshake, the error text, the abort and the deadlines belong to the caller.
+ * group match their peers by both. A provider reports arrival and moves
+ * the bytes of the contributions into one @ref Table: the handshake, the error
+ * text, the abort, the merge of a reduction in rank order and the deadlines
+ * belong to the caller.
  * It never runs a @ref Done under its own lock, so neither the caller's group
  * lock nor a provider lock is held when one runs.
  */
@@ -68,8 +161,9 @@ class Collectives {
     virtual ~Collectives() = default;
 
     /**
-     * @brief Arrives at slot @p seq of group @p group_id with @p record, for
-     * @p rank of @p members, and gives true while the slot waits for members.
+     * @brief Arrives at slot @p seq of group @p group_id with @p record and
+     * @p contribution, for @p rank of @p members, and gives true while the slot
+     * waits for members.
      *
      * The provider keeps the @p done of the first arrival at a slot and calls
      * it once. It calls it before the last member arrives when two members of
@@ -78,7 +172,8 @@ class Collectives {
      */
     virtual bool arrive(std::uint64_t group_id, std::uint64_t seq,
                         std::uint32_t members, std::uint32_t rank,
-                        const Record& record, Done done) = 0;
+                        const Record& record, Contribution&& contribution,
+                        Done done) = 0;
 
     /**
      * @brief Ends slot @p seq of @p group_id without its completion and frees

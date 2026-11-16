@@ -525,6 +525,7 @@ set(TEST_CPP_SOURCES
     comm/test_channel.cpp
     comm/test_split.cpp
     comm/test_backend.cpp
+    comm/test_collectives.cpp
     # Async I/O tests
     runtime/io/test_async_io.cpp
     # Task Graph tests

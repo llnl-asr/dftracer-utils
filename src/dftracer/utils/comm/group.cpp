@@ -111,6 +111,18 @@ dstd::StringView call_name(CallKind kind) noexcept {
             return "monitored_barrier";
         case CallKind::Split:
             return "split";
+        case CallKind::Broadcast:
+            return "broadcast";
+        case CallKind::Gather:
+            return "gather";
+        case CallKind::Scatter:
+            return "scatter";
+        case CallKind::AllGather:
+            return "all_gather";
+        case CallKind::Reduce:
+            return "reduce";
+        case CallKind::AllReduce:
+            return "all_reduce";
     }
     return "unknown";
 }
@@ -201,7 +213,9 @@ void expire(const dstd::SharedPtr<TimerTarget>& target, std::uint32_t rank,
     dstd::SharedPtr<PendingOp> op;
     if (!target->take(group, op)) return;
     backend::Arrival arrived;
-    if (kind == CallKind::MonitoredBarrier)
+    const bool names_missing =
+        kind == CallKind::MonitoredBarrier || carries_data(kind);
+    if (names_missing)
         // Outside the group mutex: ending the slot runs its parked messages.
         group->backend->collectives->drop(group->id, seq, &arrived);
     if (void (*gate)() = g_expire_gate.load(std::memory_order_acquire)) gate();
@@ -213,7 +227,7 @@ void expire(const dstd::SharedPtr<TimerTarget>& target, std::uint32_t rank,
         // outcome, and does not abort its peers.
         if (!op || op->is_done() || group->aborted) return;
         Error why;
-        if (kind == CallKind::MonitoredBarrier) {
+        if (names_missing) {
             why = Error::from_format<
                 "{} at seq {}: deadline {} passed; missing ranks: {}">(
                 Condition::Timeout, call_name(kind), seq, deadline_ns,
@@ -288,16 +302,17 @@ void finish_call(Slot& slot, const backend::SlotEnd& end) {
     finish_abort(group->backend, group->id, tail);
 }
 
-/// The decision of one completion, with the group mutex held: completes the
-/// calls of @p slot, or gives @p group and its slots to @p tail.
-template <class T>
-void decide_call(Slot& slot, const backend::SlotEnd& end, GroupState& group,
+/// The checks every completion passes, with the group mutex held: the slot is
+/// the first to end, the group did not abort, and the members agree on the call
+/// and on the protocol. Gives false when the completion is over, which is also
+/// when it gave @p group and its slots to @p tail.
+bool accept_slot(Slot& slot, const backend::SlotEnd& end, GroupState& group,
                  AbortTail& tail) {
-    if (slot.finished.exchange(true)) return;
-    if (group.aborted) return;
+    if (slot.finished.exchange(true)) return false;
+    if (group.aborted) return false;
     if (end.why != nullptr) {
         abort_locked(group, abort_error(group, end.rank, *end.why), tail);
-        return;
+        return false;
     }
     const Disagreement broken = disagreement(end.records, end.seen);
     if (broken.other != 0) {
@@ -308,7 +323,7 @@ void decide_call(Slot& slot, const backend::SlotEnd& end, GroupState& group,
             broken.other,
             call_name(static_cast<CallKind>(end.records[broken.other].kind)));
         abort_locked(group, abort_error(group, broken.other, inner), tail);
-        return;
+        return false;
     }
     if (!end.seen.empty()) {
         // The members that did arrive agree, so the provider gave up on one
@@ -317,7 +332,7 @@ void decide_call(Slot& slot, const backend::SlotEnd& end, GroupState& group,
             "seq {}: the provider ended a slot before every member arrived">(
             Condition::Internal, slot.seq);
         abort_locked(group, abort_error(group, end.rank, inner), tail);
-        return;
+        return false;
     }
     if (end.records.size() != group.size()) {
         const Error inner =
@@ -325,13 +340,22 @@ void decide_call(Slot& slot, const backend::SlotEnd& end, GroupState& group,
                 Condition::Internal, slot.seq, group.size(),
                 end.records.size());
         abort_locked(group, abort_error(group, end.rank, inner), tail);
-        return;
+        return false;
     }
     Error why;
     if (!check_handshake(group, end.records, why)) {
         abort_locked(group, std::move(why), tail);
-        return;
+        return false;
     }
+    return true;
+}
+
+/// The decision of one completion, with the group mutex held: completes the
+/// calls of @p slot, or gives @p group and its slots to @p tail.
+template <class T>
+void decide_call(Slot& slot, const backend::SlotEnd& end, GroupState& group,
+                 AbortTail& tail) {
+    if (!accept_slot(slot, end, group, tail)) return;
     const std::uint32_t size = group.size();
     if constexpr (std::is_void_v<T>) {
         for (std::uint32_t member = 0; member < size; ++member)
@@ -385,25 +409,21 @@ void decide_call(Slot& slot, const backend::SlotEnd& end, GroupState& group,
         group.slots.erase(at);
 }
 
+/// Ends the calls of a slot with the end the provider gave.
+using FinishFn = void (*)(Slot&, const backend::SlotEnd&);
+
 /**
- * Records the call of @p rank and completes its slot once every member
- * arrived. The call is registered before anything can fail it, so an abort
- * reaches it like the calls of the peers.
+ * Records the call of @p rank at its next sequence number and arrives at the
+ * provider. The call is registered before anything can fail it, so an abort
+ * reaches it like the calls of the peers. @p finisher and @p fold, when given,
+ * are those of a data call and move into the slot.
  */
-template <class T>
-Op<T> make_call(const dstd::SharedPtr<Backend>& backend,
+void start_call(const dstd::SharedPtr<Backend>& backend,
                 const dstd::SharedPtr<GroupState>& group, std::uint32_t rank,
-                CallKind kind, std::uint32_t color, std::uint32_t key,
-                const CallOpts& opts) {
-    auto state = dstd::make_shared<OpState<T>>();
-    if (!group) {
-        if constexpr (std::is_void_v<T>) {
-            state->succeed();
-        } else {
-            state->succeed(T{});
-        }
-        return Op<T>(std::move(state), nullptr, rank);
-    }
+                CallKind kind, backend::Record record,
+                backend::Contribution&& contribution, const CallOpts& opts,
+                const dstd::SharedPtr<PendingOp>& state, FinishFn finish,
+                Finisher* finisher, backend::Combine* fold) {
     if (opts.stop.stop_requested()) (void)cancel_group(*group, rank);
 
     dstd::SharedPtr<Slot> slot;
@@ -412,7 +432,7 @@ Op<T> make_call(const dstd::SharedPtr<Backend>& backend,
         std::lock_guard<std::mutex> lock(group->mutex);
         if (group->aborted) {
             state->fail(*group->aborted);
-            return Op<T>(std::move(state), group, rank);
+            return;
         }
         seq = group->next_seq[rank]++;
         std::uint64_t deadline = opts.deadline_ns;
@@ -442,29 +462,228 @@ Op<T> make_call(const dstd::SharedPtr<Backend>& backend,
         }
         slot = holder;
         slot->ops[rank] = state;
+        if (finisher != nullptr) {
+            if (slot->finishers.empty()) {
+                slot->finishers.resize(group->size());
+                slot->folds.resize(group->size());
+            }
+            slot->finishers[rank] = std::move(*finisher);
+            if (fold != nullptr && *fold) {
+                if ((record.flags & backend::RECORD_COMBINE) != 0)
+                    contribution.combine = std::move(*fold);
+                else
+                    slot->folds[rank] = std::move(*fold);
+            }
+        }
     }
     // Outside the group mutex: a local provider completes the call on this
     // thread, and the completion takes that mutex.
-    const backend::Record record{
-        static_cast<std::uint32_t>(kind),
-        backend->protocol_version[group->members[rank]], color, key};
+    record.kind = static_cast<std::uint32_t>(kind);
+    record.version = backend->protocol_version[group->members[rank]];
     const std::uint64_t group_id = group->id;
     const std::uint32_t members = group->size();
     const dstd::SharedPtr<backend::Collectives> collectives =
         backend->collectives;
-    // Two words for one slot, so the completion fits the inline buffer of the
-    // function and a call allocates nothing for it.
-    auto notify = [slot](const backend::SlotEnd& end) {
-        finish_call<T>(*slot, end);
+    // Two words for one slot and a function pointer, so the completion fits
+    // the inline buffer of the function and a call allocates nothing for it.
+    auto notify = [slot, finish](const backend::SlotEnd& end) {
+        finish(*slot, end);
     };
     if (collectives->arrive(group_id, seq, members, rank, record,
-                            std::move(notify)) &&
+                            std::move(contribution), std::move(notify)) &&
         state->is_done()) {
         // The group aborted between the registration and the arrival, so that
         // abort did not see this slot. A later abort never does.
         collectives->drop(group_id, seq, nullptr);
     }
+}
+
+template <class T>
+Op<T> make_call(const dstd::SharedPtr<Backend>& backend,
+                const dstd::SharedPtr<GroupState>& group, std::uint32_t rank,
+                CallKind kind, std::uint32_t color, std::uint32_t key,
+                const CallOpts& opts) {
+    auto state = dstd::make_shared<OpState<T>>();
+    if (!group) {
+        if constexpr (std::is_void_v<T>) {
+            state->succeed();
+        } else {
+            state->succeed(T{});
+        }
+        return Op<T>(std::move(state), nullptr, rank);
+    }
+    backend::Record record;
+    record.color = color;
+    record.key = key;
+    start_call(backend, group, rank, kind, record, backend::Contribution{},
+               opts, state, &finish_call<T>, nullptr, nullptr);
     return Op<T>(std::move(state), group, rank);
+}
+
+Error shape_error(std::uint64_t seq, dstd::StringView field, std::uint32_t rank,
+                  std::uint64_t value, std::uint32_t base,
+                  std::uint64_t base_value) {
+    return Error::from_format<"seq {}: rank {} gave {} {} but rank {} gave {}">(
+        Condition::InvalidArgument, seq, rank, field, value, base, base_value);
+}
+
+/// Whether the packed block of a scatter holds @p members pieces whose sizes
+/// add up to the rest of the block.
+bool packed_block_fits(dstd::Span<const std::byte> block,
+                       std::uint32_t members) {
+    const std::uint64_t head = std::uint64_t{members} * sizeof(std::uint64_t);
+    if (block.size() < head) return false;
+    std::uint64_t total = 0;
+    for (std::uint32_t at = 0; at < members; ++at)
+        total += packed_size(block, at);
+    return total == block.size() - head;
+}
+
+/// The checks of a data call that the records and the table allow once every
+/// member arrived: the members agree on the root, the element type, the count
+/// where it must match and the merge, and the root's data fits a scatter.
+/// Gives false with the error and the rank that names it.
+bool check_shape(const GroupState& group, const Slot& slot,
+                 const backend::SlotEnd& end, std::uint32_t& who, Error& why) {
+    const CallKind kind = static_cast<CallKind>(end.records[0].kind);
+    const std::uint32_t size = group.size();
+    const backend::Record& base = end.records[0];
+    // A member that did not ask for the table may end the slot with none.
+    const bool has_table = !end.table.offsets.empty();
+    if (!has_table &&
+        (end.records[end.rank].flags & backend::RECORD_WANTS) != 0) {
+        who = end.rank;
+        why = Error::from_format<"seq {}: the provider gave no table">(
+            Condition::Internal, slot.seq);
+        return false;
+    }
+    for (std::uint32_t rank = 1; rank < size; ++rank) {
+        const backend::Record& other = end.records[rank];
+        who = rank;
+        if (other.root != base.root) {
+            why = shape_error(slot.seq, "root", rank, other.root, 0, base.root);
+            return false;
+        }
+        if (other.elem_size != base.elem_size) {
+            why = shape_error(slot.seq, "element size", rank, other.elem_size,
+                              0, base.elem_size);
+            return false;
+        }
+        if (kind != CallKind::Scatter && other.count != base.count) {
+            why = shape_error(slot.seq, "count", rank, other.count, 0,
+                              base.count);
+            return false;
+        }
+        if (other.color != base.color) {
+            why = shape_error(slot.seq, "layout", rank, other.color, 0,
+                              base.color);
+            return false;
+        }
+        if (other.reduce != base.reduce) {
+            why = shape_error(slot.seq, "reduce op", rank, other.reduce, 0,
+                              base.reduce);
+            return false;
+        }
+        const std::uint32_t order = other.flags & backend::RECORD_COMBINE;
+        if (order != (base.flags & backend::RECORD_COMBINE)) {
+            why = shape_error(slot.seq, "reduce order", rank, order, 0,
+                              base.flags & backend::RECORD_COMBINE);
+            return false;
+        }
+    }
+    who = base.root;
+    if (kind != CallKind::AllGather && kind != CallKind::AllReduce &&
+        base.root >= size) {
+        why = Error::from_format<
+            "seq {}: root {} is not below the group size {}">(
+            Condition::InvalidArgument, slot.seq, base.root, size);
+        return false;
+    }
+    if (kind == CallKind::Scatter && has_table) {
+        const backend::Record& root = end.records[base.root];
+        const dstd::Span<const std::byte> block = end.table.at(base.root);
+        const bool fits =
+            root.color == SCATTER_PACKED
+                ? root.count == size && packed_block_fits(block, size)
+                : root.count % size == 0 &&
+                      block.size() == root.count * root.elem_size;
+        if (!fits) {
+            why = Error::from_format<
+                "seq {}: the {} values of root {} do not split into {} "
+                "pieces">(Condition::InvalidArgument, slot.seq, root.count,
+                          base.root, size);
+            return false;
+        }
+    }
+    return true;
+}
+
+/// The outcome of a data call: the table of the provider, or for a reduction
+/// that the group merges, the fold of its entries in rank order.
+Outcome make_outcome(const backend::SlotEnd& end,
+                     const dstd::Vector<backend::Combine>& folds) {
+    Outcome outcome;
+    outcome.table = end.table;
+    const backend::Record& base = end.records[0];
+    if (base.reduce == REDUCE_NONE ||
+        (base.flags & backend::RECORD_COMBINE) != 0 ||
+        end.table.offsets.empty())
+        return outcome;
+    // The merge of the root, or of rank 0 for an all_reduce, whose record names
+    // root 0; any other rank's only when that one is not in this process.
+    const backend::Combine* fold = nullptr;
+    if (base.root < folds.size() && folds[base.root]) fold = &folds[base.root];
+    for (const backend::Combine& candidate : folds) {
+        if (fold != nullptr) break;
+        if (candidate) fold = &candidate;
+    }
+    auto buffer = dstd::make_shared<backend::TableBuffer>();
+    const dstd::Span<const std::byte> first = end.table.at(0);
+    buffer->data.assign(first.begin(), first.end());
+    if (fold != nullptr) {
+        for (std::uint32_t rank = 1; rank < end.records.size(); ++rank) {
+            const dstd::Span<const std::byte> in = end.table.at(rank);
+            if (in.size() == buffer->data.size())
+                (*fold)(buffer->data.data(), in.data(), in.size());
+        }
+    }
+    buffer->offsets.push_back(0);
+    buffer->offsets.push_back(buffer->data.size());
+    outcome.table = backend::make_table(std::move(buffer));
+    return outcome;
+}
+
+/// Completes the calls of a data slot, or aborts the group when the members
+/// disagree. The group mutex covers only the decision: the merge and the ends
+/// of the calls run after it, so a user function never runs under it.
+void finish_data(Slot& slot, const backend::SlotEnd& end) {
+    const dstd::SharedPtr<GroupState> group = slot.group.lock();
+    if (!group) return;
+    AbortTail tail;
+    dstd::Vector<Finisher> finishers;
+    dstd::Vector<backend::Combine> folds;
+    bool claimed = false;
+    {
+        std::lock_guard<std::mutex> lock(group->mutex);
+        if (accept_slot(slot, end, *group, tail)) {
+            std::uint32_t who = 0;
+            Error why;
+            if (check_shape(*group, slot, end, who, why)) {
+                finishers = std::move(slot.finishers);
+                folds = std::move(slot.folds);
+                claimed = true;
+                const auto at = group->slots.find(slot.seq);
+                if (at != group->slots.end() && at->second.get() == &slot)
+                    group->slots.erase(at);
+            } else {
+                abort_locked(*group, abort_error(*group, who, why), tail);
+            }
+        }
+    }
+    finish_abort(group->backend, group->id, tail);
+    if (!claimed) return;
+    const Outcome outcome = make_outcome(end, folds);
+    for (Finisher& finisher : finishers) finisher(outcome);
 }
 
 /// Runs one abort on the executor. The frame holds the group until it runs, so
@@ -548,6 +767,116 @@ Op<void> Group::monitored_barrier(CallOpts opts) {
     return detail::make_call<void>(backend_, state_, rank_,
                                    detail::CallKind::MonitoredBarrier, 0, 0,
                                    opts);
+}
+
+void Group::start_data(detail::DataCall call, detail::Finisher finisher,
+                       const dstd::SharedPtr<PendingOp>& state,
+                       const CallOpts& opts) {
+    detail::start_call(backend_, state_, rank_, call.kind, call.record,
+                       std::move(call.contribution), opts, state,
+                       &detail::finish_data, &finisher, &call.fold);
+}
+
+Op<Bytes> Group::broadcast(std::uint32_t root, Bytes value, CallOpts opts) {
+    backend::Contribution contribution;
+    if (rank_ == root)
+        contribution =
+            backend::Contribution{value.view, std::move(value.keep), {}};
+    detail::DataCall call = detail::make_data_call(
+        detail::CallKind::Broadcast, root, 1, backend::UNCHECKED_COUNT,
+        backend::RECORD_WANTS, std::move(contribution));
+    return data_op<Bytes>(
+        std::move(call),
+        [root](const detail::Outcome& out) {
+            return Bytes{out.table.at(root), out.table.keep};
+        },
+        opts);
+}
+
+Op<Bytes> Group::broadcast(std::uint32_t root,
+                           dstd::Span<const std::byte> value, CallOpts opts) {
+    return broadcast(root, rank_ == root ? Bytes::copy_of(value) : Bytes{},
+                     opts);
+}
+
+Op<Gathered> Group::gather_call(detail::CallKind kind, std::uint32_t root,
+                                std::uint32_t elem_size, std::uint64_t count,
+                                backend::Contribution contribution,
+                                const CallOpts& opts) {
+    const bool takes = kind == detail::CallKind::AllGather || rank_ == root;
+    detail::DataCall call = detail::make_data_call(
+        kind, root, elem_size, count, takes ? backend::RECORD_WANTS : 0,
+        std::move(contribution));
+    return data_op<Gathered>(
+        std::move(call),
+        [takes](const detail::Outcome& out) {
+            return takes ? Gathered(out.table) : Gathered{};
+        },
+        opts);
+}
+
+Op<Gathered> Group::gather(std::uint32_t root, Bytes value, CallOpts opts) {
+    return gather_call(
+        detail::CallKind::Gather, root, 1, backend::UNCHECKED_COUNT,
+        backend::Contribution{value.view, std::move(value.keep), {}}, opts);
+}
+
+Op<Gathered> Group::gather(std::uint32_t root,
+                           dstd::Span<const std::byte> value, CallOpts opts) {
+    return gather(root, Bytes::copy_of(value), opts);
+}
+
+Op<Gathered> Group::all_gather(Bytes value, CallOpts opts) {
+    return gather_call(
+        detail::CallKind::AllGather, 0, 1, backend::UNCHECKED_COUNT,
+        backend::Contribution{value.view, std::move(value.keep), {}}, opts);
+}
+
+Op<Gathered> Group::all_gather(dstd::Span<const std::byte> value,
+                               CallOpts opts) {
+    return all_gather(Bytes::copy_of(value), opts);
+}
+
+Op<Bytes> Group::scatter(std::uint32_t root,
+                         dstd::Span<const dstd::Span<const std::byte>> pieces,
+                         CallOpts opts) {
+    backend::Contribution contribution;
+    std::uint64_t count = 0;
+    if (rank_ == root) {
+        auto block = dstd::make_shared<dstd::Vector<std::byte>>();
+        std::size_t total = pieces.size() * sizeof(std::uint64_t);
+        for (const dstd::Span<const std::byte>& piece : pieces)
+            total += piece.size();
+        block->reserve(total);
+        for (const dstd::Span<const std::byte>& piece : pieces) {
+            const std::uint64_t size = piece.size();
+            const auto raw =
+                std::as_bytes(dstd::Span<const std::uint64_t>(&size, 1));
+            block->insert(block->end(), raw.begin(), raw.end());
+        }
+        for (const dstd::Span<const std::byte>& piece : pieces)
+            block->insert(block->end(), piece.begin(), piece.end());
+        const dstd::Span<const std::byte> view(block->data(), block->size());
+        contribution = backend::Contribution{view, std::move(block), {}};
+        count = pieces.size();
+    }
+    detail::DataCall call =
+        detail::make_data_call(detail::CallKind::Scatter, root, 1, count,
+                               backend::RECORD_WANTS, std::move(contribution));
+    call.record.color = detail::SCATTER_PACKED;
+    const std::uint32_t rank = rank_;
+    return data_op<Bytes>(
+        std::move(call),
+        [root, rank](const detail::Outcome& out) {
+            const dstd::Span<const std::byte> block = out.table.at(root);
+            std::uint64_t at =
+                std::uint64_t{out.table.size()} * sizeof(std::uint64_t);
+            for (std::uint32_t before = 0; before < rank; ++before)
+                at += detail::packed_size(block, before);
+            return Bytes{block.subspan(at, detail::packed_size(block, rank)),
+                         out.table.keep};
+        },
+        opts);
 }
 
 void Group::set_default_deadline(std::uint64_t timeout_ns) noexcept {

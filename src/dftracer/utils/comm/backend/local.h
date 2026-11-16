@@ -32,6 +32,8 @@ struct LocalCounts {
     std::size_t parked = 0;
     /// Groups it remembers an end of, which a release erases.
     std::size_t ended = 0;
+    /// Ranges of released group ids it remembers, which neighbours coalesce.
+    std::size_t released_ranges = 0;
 };
 
 /// What @p messaging holds, which a test reads to prove it releases a group.

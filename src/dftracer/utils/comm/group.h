@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_COMM_GROUP_H
 #define DFTRACER_UTILS_COMM_GROUP_H
 
+#include <dftracer/utils/comm/collective.h>
 #include <dftracer/utils/comm/error.h>
 #include <dftracer/utils/comm/op.h>
 #include <dftracer/utils/coro/executor.h>
@@ -9,11 +10,14 @@
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/result.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 
 #include <cstddef>
 #include <cstdint>
+#include <span>
+#include <type_traits>
 #include <utility>
 
 namespace dftracer::utils::comm {
@@ -52,6 +56,8 @@ struct CallOpts {
     /// stop that arrives while the call is in flight is not observed; use
     /// @ref Op::cancel or a deadline for that.
     coro::StopToken stop{};
+    /// How a reduction orders its merges.
+    ReduceOrder reduce_order = ReduceOrder::Rank;
 };
 
 /**
@@ -130,6 +136,222 @@ class Group {
     /// deadline passes.
     Op<void> monitored_barrier(CallOpts opts = {});
 
+    /**
+     * @brief Collective: every rank gets the value of rank @p root.
+     *
+     * Every rank passes the same root, and for the typed forms the same number
+     * of values; only the root's values are read. The typed forms copy the
+     * values into the call, because the call may end while the provider still
+     * reads them. The @ref Bytes form takes them as they are: its owner stays
+     * alive until the call ends, and the result is a view of one buffer that
+     * all ranks of a local provider share. The @c Span<const std::byte> form
+     * copies the bytes and has no count to match.
+     */
+    template <detail::Scalar T>
+    Op<T> broadcast(std::uint32_t root, const T& value, CallOpts opts = {}) {
+        detail::DataCall call = detail::make_data_call(
+            detail::CallKind::Broadcast, root, sizeof(T), 1,
+            backend::RECORD_WANTS,
+            rank_ == root ? detail::own_value(value) : backend::Contribution{});
+        return data_op<T>(
+            std::move(call),
+            [root](const detail::Outcome& out) {
+                return detail::scalar_of<T>(out.table.at(root));
+            },
+            opts);
+    }
+
+    /// @ref broadcast of @p values, which every rank passes with one count.
+    template <class T>
+    Op<dstd::Vector<T>> broadcast(std::uint32_t root,
+                                  dstd::Span<const T> values,
+                                  CallOpts opts = {}) {
+        static_assert(std::is_trivially_copyable_v<T>);
+        detail::DataCall call = detail::make_data_call(
+            detail::CallKind::Broadcast, root, sizeof(T), values.size(),
+            backend::RECORD_WANTS,
+            rank_ == root ? detail::own_bytes(std::as_bytes(values))
+                          : backend::Contribution{});
+        return data_op<dstd::Vector<T>>(
+            std::move(call),
+            [root](const detail::Outcome& out) {
+                return detail::vector_of<T>(out.table.at(root));
+            },
+            opts);
+    }
+
+    /// @ref broadcast of bytes of any size; a rank other than @p root passes
+    /// an empty one.
+    Op<Bytes> broadcast(std::uint32_t root, Bytes value, CallOpts opts = {});
+
+    /// @ref broadcast of a copy of @p value.
+    Op<Bytes> broadcast(std::uint32_t root, dstd::Span<const std::byte> value,
+                        CallOpts opts = {});
+
+    /**
+     * @brief Collective: the root gets the values of every rank in one buffer,
+     * and the other ranks an empty @ref Gathered.
+     *
+     * Every rank passes the same number of values; the byte forms let the
+     * sizes differ. The result is one owned buffer with a view per rank, and a
+     * copy of it keeps every view alive.
+     */
+    template <class T>
+    Op<Gathered> gather(std::uint32_t root, dstd::Span<const T> values,
+                        CallOpts opts = {}) {
+        static_assert(std::is_trivially_copyable_v<T>);
+        return gather_call(detail::CallKind::Gather, root, sizeof(T),
+                           values.size(),
+                           detail::own_bytes(std::as_bytes(values)), opts);
+    }
+
+    /// @ref gather of bytes of any size.
+    Op<Gathered> gather(std::uint32_t root, Bytes value, CallOpts opts = {});
+
+    /// @ref gather of a copy of @p value.
+    Op<Gathered> gather(std::uint32_t root, dstd::Span<const std::byte> value,
+                        CallOpts opts = {});
+
+    /// @ref gather whose result every rank gets.
+    template <class T>
+    Op<Gathered> all_gather(dstd::Span<const T> values, CallOpts opts = {}) {
+        static_assert(std::is_trivially_copyable_v<T>);
+        return gather_call(detail::CallKind::AllGather, 0, sizeof(T),
+                           values.size(),
+                           detail::own_bytes(std::as_bytes(values)), opts);
+    }
+
+    /// @ref all_gather of bytes of any size.
+    Op<Gathered> all_gather(Bytes value, CallOpts opts = {});
+
+    /// @ref all_gather of a copy of @p value.
+    Op<Gathered> all_gather(dstd::Span<const std::byte> value,
+                            CallOpts opts = {});
+
+    /**
+     * @brief Collective: rank `r` gets piece `r` of the values of @p root.
+     *
+     * The root passes `size() * k` values and every rank gets `k` of them; the
+     * other ranks pass an empty span. A count that `size()` does not divide
+     * ends the call with an error on every rank.
+     */
+    template <class T>
+    Op<dstd::Vector<T>> scatter(std::uint32_t root, dstd::Span<const T> values,
+                                CallOpts opts = {}) {
+        static_assert(std::is_trivially_copyable_v<T>);
+        const std::uint32_t rank = rank_;
+        detail::DataCall call = detail::make_data_call(
+            detail::CallKind::Scatter, root, sizeof(T),
+            rank_ == root ? values.size() : 0, backend::RECORD_WANTS,
+            rank_ == root ? detail::own_bytes(std::as_bytes(values))
+                          : backend::Contribution{});
+        return data_op<dstd::Vector<T>>(
+            std::move(call),
+            [root, rank](const detail::Outcome& out) {
+                const dstd::Span<const std::byte> all = out.table.at(root);
+                const std::size_t piece = all.size() / out.table.size();
+                return detail::vector_of<T>(all.subspan(rank * piece, piece));
+            },
+            opts);
+    }
+
+    /**
+     * @brief @ref scatter of pieces of any size: rank `r` gets the bytes of
+     * `pieces[r]`.
+     *
+     * The root passes one piece per rank and packs them into one block, which
+     * is a copy; the other ranks pass an empty span. The result is a view of
+     * the root's block.
+     */
+    Op<Bytes> scatter(std::uint32_t root,
+                      dstd::Span<const dstd::Span<const std::byte>> pieces,
+                      CallOpts opts = {});
+
+    /**
+     * @brief Collective: the root gets the element-wise merge of the values of
+     * every rank, and the other ranks an empty result.
+     *
+     * Every rank passes the same number of values and the same @p op. The merge
+     * folds the ranks in rank order unless @ref CallOpts::reduce_order says
+     * otherwise. A built-in @p op needs an arithmetic @p T; the forms with a
+     * function take any trivially copyable one. Every rank passes the same
+     * function: the merge runs the function of @p root for @ref reduce and of
+     * rank 0 for @ref all_reduce, in both orders. A provider that collects at
+     * rank 0 and cannot see the function of another rank, such as the linear
+     * one, runs the function of rank 0.
+     */
+    template <class T>
+    Op<dstd::Vector<T>> reduce(std::uint32_t root, dstd::Span<const T> values,
+                               ReduceOp op, CallOpts opts = {}) {
+        return reduce_call<T>(detail::CallKind::Reduce, root, values,
+                              detail::reduce_code(op),
+                              detail::builtin_combine<T>(op), opts);
+    }
+
+    /// @ref reduce with the merge @p fn.
+    template <class T>
+    Op<dstd::Vector<T>> reduce(std::uint32_t root, dstd::Span<const T> values,
+                               std::type_identity_t<ReduceFn<T>> fn,
+                               CallOpts opts = {}) {
+        return reduce_call<T>(detail::CallKind::Reduce, root, values,
+                              detail::REDUCE_CUSTOM,
+                              detail::make_combine<T>(std::move(fn)), opts);
+    }
+
+    /// @ref reduce of one value.
+    template <detail::Scalar T>
+    Op<T> reduce(std::uint32_t root, const T& value, ReduceOp op,
+                 CallOpts opts = {}) {
+        return reduce_one<T>(detail::CallKind::Reduce, root, value,
+                             detail::reduce_code(op),
+                             detail::builtin_combine<T>(op), opts);
+    }
+
+    /// @ref reduce of one value with the merge @p fn.
+    template <detail::Scalar T>
+    Op<T> reduce(std::uint32_t root, const T& value,
+                 std::type_identity_t<ReduceFn<T>> fn, CallOpts opts = {}) {
+        return reduce_one<T>(detail::CallKind::Reduce, root, value,
+                             detail::REDUCE_CUSTOM,
+                             detail::make_combine<T>(std::move(fn)), opts);
+    }
+
+    /// @ref reduce whose result every rank gets.
+    template <class T>
+    Op<dstd::Vector<T>> all_reduce(dstd::Span<const T> values, ReduceOp op,
+                                   CallOpts opts = {}) {
+        return reduce_call<T>(detail::CallKind::AllReduce, 0, values,
+                              detail::reduce_code(op),
+                              detail::builtin_combine<T>(op), opts);
+    }
+
+    /// @ref all_reduce with the merge @p fn.
+    template <class T>
+    Op<dstd::Vector<T>> all_reduce(dstd::Span<const T> values,
+                                   std::type_identity_t<ReduceFn<T>> fn,
+                                   CallOpts opts = {}) {
+        return reduce_call<T>(detail::CallKind::AllReduce, 0, values,
+                              detail::REDUCE_CUSTOM,
+                              detail::make_combine<T>(std::move(fn)), opts);
+    }
+
+    /// @ref all_reduce of one value.
+    template <detail::Scalar T>
+    Op<T> all_reduce(const T& value, ReduceOp op, CallOpts opts = {}) {
+        return reduce_one<T>(detail::CallKind::AllReduce, 0, value,
+                             detail::reduce_code(op),
+                             detail::builtin_combine<T>(op), opts);
+    }
+
+    /// @ref all_reduce of one value with the merge @p fn.
+    template <detail::Scalar T>
+    Op<T> all_reduce(const T& value, std::type_identity_t<ReduceFn<T>> fn,
+                     CallOpts opts = {}) {
+        return reduce_one<T>(detail::CallKind::AllReduce, 0, value,
+                             detail::REDUCE_CUSTOM,
+                             detail::make_combine<T>(std::move(fn)), opts);
+    }
+
     /// The timeout the later calls of this rank use when @ref CallOpts names
     /// no deadline, counted from the moment each call is made. 0, the default,
     /// sets none.
@@ -144,6 +366,78 @@ class Group {
     void abort(dstd::Error why) noexcept;
 
    private:
+    template <class T, class Convert>
+    Op<T> data_op(detail::DataCall call, Convert convert,
+                  const CallOpts& opts) {
+        auto state = dstd::make_shared<OpState<T>>();
+        if (!state_) {
+            state->succeed(T{});
+            return Op<T>(std::move(state), nullptr, rank_);
+        }
+        start_data(
+            std::move(call),
+            [state, convert = std::move(convert)](const detail::Outcome& out) {
+                state->succeed(convert(out));
+            },
+            state, opts);
+        return Op<T>(std::move(state), state_, rank_);
+    }
+
+    template <class T>
+    Op<dstd::Vector<T>> reduce_call(detail::CallKind kind, std::uint32_t root,
+                                    dstd::Span<const T> values,
+                                    std::uint32_t code, backend::Combine fold,
+                                    const CallOpts& opts) {
+        static_assert(std::is_trivially_copyable_v<T>);
+        const bool takes = kind == detail::CallKind::AllReduce || rank_ == root;
+        detail::DataCall call = detail::make_data_call(
+            kind, root, sizeof(T), values.size(), reduce_flags(takes, opts),
+            detail::own_bytes(std::as_bytes(values)));
+        call.record.reduce = code;
+        call.fold = std::move(fold);
+        return data_op<dstd::Vector<T>>(
+            std::move(call),
+            [takes](const detail::Outcome& out) {
+                return takes ? detail::vector_of<T>(out.table.at(0))
+                             : dstd::Vector<T>{};
+            },
+            opts);
+    }
+
+    template <class T>
+    Op<T> reduce_one(detail::CallKind kind, std::uint32_t root, const T& value,
+                     std::uint32_t code, backend::Combine fold,
+                     const CallOpts& opts) {
+        const bool takes = kind == detail::CallKind::AllReduce || rank_ == root;
+        detail::DataCall call = detail::make_data_call(
+            kind, root, sizeof(T), 1, reduce_flags(takes, opts),
+            detail::own_value(value));
+        call.record.reduce = code;
+        call.fold = std::move(fold);
+        return data_op<T>(
+            std::move(call),
+            [takes](const detail::Outcome& out) {
+                return takes ? detail::scalar_of<T>(out.table.at(0)) : T{};
+            },
+            opts);
+    }
+
+    static std::uint32_t reduce_flags(bool takes, const CallOpts& opts) {
+        std::uint32_t flags = takes ? backend::RECORD_WANTS : 0;
+        if (opts.reduce_order == ReduceOrder::Any)
+            flags |= backend::RECORD_COMBINE;
+        return flags;
+    }
+
+    Op<Gathered> gather_call(detail::CallKind kind, std::uint32_t root,
+                             std::uint32_t elem_size, std::uint64_t count,
+                             backend::Contribution contribution,
+                             const CallOpts& opts);
+
+    void start_data(detail::DataCall call, detail::Finisher finisher,
+                    const dstd::SharedPtr<PendingOp>& state,
+                    const CallOpts& opts);
+
     dstd::SharedPtr<detail::Backend> backend_;
     dstd::SharedPtr<detail::GroupState> state_;
     std::uint32_t rank_ = 0;

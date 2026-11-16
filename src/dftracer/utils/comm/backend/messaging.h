@@ -5,11 +5,13 @@
 #include <dftracer/utils/comm/error.h>
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/function.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/vector.h>
 
 #include <cstddef>
 #include <cstdint>
+#include <utility>
 
 namespace dftracer::utils::comm::backend {
 
@@ -98,6 +100,46 @@ struct StreamOpts {
 inline constexpr StreamOpts HOLD_EVERYTHING{};
 
 /**
+ * @brief The bytes of one message: owned by it, or borrowed from a block that a
+ * keep-alive holds.
+ *
+ * A borrowed payload makes a send copy nothing: its @ref bytes stay valid until
+ * the message is delivered or dropped, because the message holds @p keep until
+ * then. A caller that has an owned vector passes it as is.
+ */
+class Payload {
+   public:
+    Payload() noexcept = default;
+
+    /// The message owns @p bytes.
+    Payload(dstd::Vector<std::byte> bytes) noexcept  // NOLINT: owned form
+        : owned_(std::move(bytes)), is_owned_(true) {}
+
+    /// The message borrows @p view, which @p keep keeps alive.
+    static Payload borrowed(dstd::Span<const std::byte> view,
+                            dstd::SharedPtr<const void> keep) noexcept {
+        Payload payload;
+        payload.view_ = view;
+        payload.keep_ = std::move(keep);
+        return payload;
+    }
+
+    dstd::Span<const std::byte> bytes() const noexcept {
+        return is_owned_
+                   ? dstd::Span<const std::byte>(owned_.data(), owned_.size())
+                   : view_;
+    }
+
+    std::size_t size() const noexcept { return bytes().size(); }
+
+   private:
+    dstd::Vector<std::byte> owned_;
+    dstd::Span<const std::byte> view_;
+    dstd::SharedPtr<const void> keep_;
+    bool is_owned_ = false;
+};
+
+/**
  * @brief Ordered point-to-point bytes between two ranks of a group.
  *
  * A send takes the bytes and parks while its peer has no receive waiting for
@@ -106,8 +148,9 @@ inline constexpr StreamOpts HOLD_EVERYTHING{};
  * with no error or with the error that ended them; an error pointer is valid
  * during the call only. A provider that runs its own progress thread completes
  * on an executor of the program, never on that thread. The bytes of a message
- * belong to the message once it is sent, so a send takes them and a receive
- * gives a view of them for the call only.
+ * belong to the message once it is sent, or stay alive under its keep-alive,
+ * so a send takes the @ref Payload and a receive gives a view of its bytes for
+ * the call only.
  *
  * A call that parks gives its handle, so its owner cancels that call alone
  * without ending the group of the others. The provider decides the outcome of a
@@ -135,12 +178,12 @@ class Messaging {
     Messaging& operator=(const Messaging&) = delete;
     virtual ~Messaging() = default;
 
-    /// Sends @p bytes on the stream of @p key, which holds at most
+    /// Sends @p payload on the stream of @p key, which holds at most
     /// @p opts.depth messages for a receive and does what @p opts.overflow
     /// names when it does; a receive already parked on that stream takes them
     /// here.
-    virtual OpId send(const MessageKey& key, dstd::Vector<std::byte> bytes,
-                      StreamOpts opts, SendDone done) = 0;
+    virtual OpId send(const MessageKey& key, Payload payload, StreamOpts opts,
+                      SendDone done) = 0;
 
     /// Receives the first message of @p key that no earlier receive took.
     virtual OpId recv(const MessageKey& key, RecvDone done) = 0;

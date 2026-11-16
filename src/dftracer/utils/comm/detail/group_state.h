@@ -5,6 +5,7 @@
 #include <dftracer/utils/comm/backend/bootstrap.h>
 #include <dftracer/utils/comm/backend/collectives.h>
 #include <dftracer/utils/comm/backend/messaging.h>
+#include <dftracer/utils/comm/collective.h>
 #include <dftracer/utils/comm/op.h>
 #include <dftracer/utils/coro/executor.h>
 #include <dftracer/utils/coro/timer_service.h>
@@ -25,10 +26,6 @@ namespace dftracer::utils::comm::detail {
 
 /// The protocol version the members of a group must agree on at the handshake.
 inline constexpr std::uint32_t PROTOCOL_VERSION = 1;
-
-/// Which collective a call makes. Two ranks that arrive at one sequence number
-/// must name the same one.
-enum class CallKind : std::uint8_t { Barrier, MonitoredBarrier, Split };
 
 dstd::StringView call_name(CallKind kind) noexcept;
 
@@ -96,6 +93,10 @@ struct Slot {
     /// the calls of its members.
     std::atomic<bool> finished{false};
     dstd::Vector<dstd::SharedPtr<PendingOp>> ops;
+    /// What ends the call of each group rank and what folds its contribution,
+    /// for a data call; empty for any other.
+    dstd::Vector<Finisher> finishers;
+    dstd::Vector<backend::Combine> folds;
 };
 
 /**

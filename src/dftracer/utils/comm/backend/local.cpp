@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/comm/backend/arrival_fold.h>
 #include <dftracer/utils/comm/backend/local.h>
 #include <dftracer/utils/coro/executor.h>
 #include <dftracer/utils/coro/timer_service.h>
@@ -14,6 +15,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <iterator>
 #include <mutex>
 #include <utility>
 
@@ -63,10 +65,48 @@ class LocalBootstrap : public Bootstrap {
     coro::TimerService* timers_;
 };
 
+/// The group ids a messaging released, as ranges that coalesce with their
+/// neighbours. Ids come from one counter and are not reused, so the set stays
+/// near one range per group that is still alive.
+class ReleasedIds {
+   public:
+    bool contains(std::uint64_t id) const {
+        auto next = ranges_.upper_bound(id);
+        if (next == ranges_.begin()) return false;
+        --next;
+        return id <= next->second;
+    }
+
+    void insert(std::uint64_t id) {
+        if (contains(id)) return;
+        std::uint64_t first = id;
+        std::uint64_t last = id;
+        auto next = ranges_.upper_bound(id);
+        if (next != ranges_.begin()) {
+            auto before = std::prev(next);
+            if (before->second + 1 == id) {
+                first = before->first;
+                ranges_.erase(before);
+            }
+        }
+        if (next != ranges_.end() && next->first == id + 1) {
+            last = next->second;
+            ranges_.erase(next);
+        }
+        ranges_[first] = last;
+    }
+
+    std::size_t ranges() const noexcept { return ranges_.size(); }
+
+   private:
+    /// First id of a range to its last, both included.
+    dstd::Map<std::uint64_t, std::uint64_t> ranges_;
+};
+
 class LocalMessaging : public Messaging {
    public:
-    OpId send(const MessageKey& key, dstd::Vector<std::byte> bytes,
-              StreamOpts opts, SendDone done) override {
+    OpId send(const MessageKey& key, Payload payload, StreamOpts opts,
+              SendDone done) override {
         Deliveries out;
         OpId id;
         {
@@ -81,7 +121,7 @@ class LocalMessaging : public Messaging {
                 Stream& stream = streams_[key];
                 stream.depth = opts.depth;
                 stream.overflow = opts.overflow;
-                Sent message{OpId{next_op_++}, std::move(bytes),
+                Sent message{OpId{next_op_++}, std::move(payload),
                              std::move(done)};
                 // A receive of any source takes the message before the receives
                 // of the stream it came from.
@@ -107,7 +147,7 @@ class LocalMessaging : public Messaging {
                     } else if (opts.overflow == Overflow::Fail) {
                         out.push_back(send_failed(
                             std::move(message.done),
-                            full_error(depth, message.bytes.size())));
+                            full_error(depth, message.payload.size())));
                     } else {
                         // The oldest message goes, its send completes as sent,
                         // and the new one takes its place.
@@ -203,6 +243,7 @@ class LocalMessaging : public Messaging {
         Deliveries out;
         {
             std::lock_guard<std::mutex> lock(mutex_);
+            if (released_.contains(group)) return;
             // The first abort of a group keeps its error.
             if (ended_.find(group) == ended_.end())
                 ended_[group] = dstd::make_shared<const Error>(why);
@@ -225,6 +266,7 @@ class LocalMessaging : public Messaging {
         LocalCounts out;
         out.streams = streams_.size();
         out.ended = ended_.size();
+        out.released_ranges = released_.ranges();
         for (const auto& entry : streams_) {
             out.parked += entry.second.messages.size() +
                           entry.second.held.size() + entry.second.recvs.size();
@@ -240,7 +282,7 @@ class LocalMessaging : public Messaging {
     /// stream.
     struct Sent {
         OpId op;
-        dstd::Vector<std::byte> bytes;
+        Payload payload;
         SendDone done;
     };
 
@@ -391,10 +433,11 @@ class LocalMessaging : public Messaging {
                     delivery.recv.any = std::move(any);
                     delivery.recv.into = std::move(into);
                     if (kind == Kind::Into &&
-                        message.bytes.size() > buffer.size()) {
+                        message.payload.size() > buffer.size()) {
                         delivery.what = Delivery::What::TooBig;
-                        delivery.why = dstd::make_shared<const Error>(
-                            too_big_error(buffer.size(), message.bytes.size()));
+                        delivery.why =
+                            dstd::make_shared<const Error>(too_big_error(
+                                buffer.size(), message.payload.size()));
                         out.push_back(std::move(delivery));
                     } else {
                         delivery.what = Delivery::What::Message;
@@ -437,9 +480,8 @@ class LocalMessaging : public Messaging {
         const Error* why = delivery.why.get();
         switch (delivery.what) {
             case Delivery::What::Message: {
-                const dstd::Span<const std::byte> bytes(
-                    delivery.message.bytes.data(),
-                    delivery.message.bytes.size());
+                const dstd::Span<const std::byte> bytes =
+                    delivery.message.payload.bytes();
                 switch (delivery.recv.kind) {
                     case Kind::Plain:
                         delivery.recv.plain(bytes, nullptr);
@@ -495,13 +537,13 @@ class LocalMessaging : public Messaging {
             Recv taker = std::move(stream.recvs.front());
             stream.recvs.pop_front();
             if (taker.kind == Kind::Into &&
-                message.bytes.size() > taker.buffer.size()) {
+                message.payload.size() > taker.buffer.size()) {
                 Delivery delivery;
                 delivery.what = Delivery::What::TooBig;
                 delivery.source = source;
                 delivery.recv = std::move(taker);
                 delivery.why = dstd::make_shared<const Error>(too_big_error(
-                    delivery.recv.buffer.size(), message.bytes.size()));
+                    delivery.recv.buffer.size(), message.payload.size()));
                 out.push_back(std::move(delivery));
                 continue;
             }
@@ -641,10 +683,18 @@ class LocalMessaging : public Messaging {
         return any;
     }
 
-    /// The error of the end of @p group, or nothing when it did not end.
+    /// The error of the end of @p group, or nothing when it did not end. A
+    /// released group ended too: a message of it that arrives late, such as a
+    /// send of a collective that was still in flight, fails at once and leaves
+    /// no stream behind.
     dstd::SharedPtr<const Error> ended(std::uint64_t group) const {
         const auto at = ended_.find(group);
-        return at != ended_.end() ? at->second : dstd::SharedPtr<const Error>{};
+        if (at != ended_.end()) return at->second;
+        if (released_.contains(group))
+            return dstd::make_shared<const Error>(
+                Error::from_format<"the group was released">(
+                    dstd::Condition::Cancelled));
+        return dstd::SharedPtr<const Error>{};
     }
 
     /// Fails every parked call of @p group with the error of its end, and
@@ -675,7 +725,10 @@ class LocalMessaging : public Messaging {
             else
                 ++at;
         }
-        if (forget) ended_.erase(group);
+        if (forget) {
+            ended_.erase(group);
+            released_.insert(group);
+        }
     }
 
     bool cancel_send(dstd::Deque<Sent>& sends, OpId op, const Error& why,
@@ -726,6 +779,9 @@ class LocalMessaging : public Messaging {
     dstd::Map<MessageKey, std::uint32_t> served_;
     /// The error that ended each group, which every later call of it takes.
     dstd::Map<std::uint64_t, dstd::SharedPtr<const Error>> ended_;
+    /// Groups whose last handle is gone. Ids are never reused, so a late call
+    /// of one fails instead of parking a message nobody frees.
+    ReleasedIds released_;
     /// The id the next parked call takes, under @ref mutex_.
     std::uint64_t next_op_ = 1;
 };
@@ -752,6 +808,13 @@ struct LocalSlot {
 
     dstd::Vector<Record> records;
     dstd::Vector<std::uint8_t> seen;
+    /// What each member brought, until the last one arrives.
+    dstd::Vector<Contribution> contributions;
+    /// The fold of the contributions, for a call that combines. Shared with
+    /// the caller that folds, which runs outside the provider mutex.
+    dstd::SharedPtr<ArrivalFold> fold;
+    bool has_table = false;
+    bool combines = false;
     std::uint32_t members = 0;
     std::uint32_t arrived = 0;
     /// The rank of the first member that arrived. Its call is the base of the
@@ -760,16 +823,43 @@ struct LocalSlot {
     Collectives::Done done;
 };
 
+/// One buffer with every contribution, in rank order: the only copy of them
+/// that the local provider makes, straight from the memory of the callers.
+Table assemble_table(LocalSlot& slot) {
+    auto buffer = dstd::make_shared<TableBuffer>();
+    if (slot.combines) {
+        buffer->offsets.push_back(0);
+        if (slot.fold) buffer->data = slot.fold->take_folded();
+        buffer->offsets.push_back(buffer->data.size());
+        return make_table(std::move(buffer));
+    }
+    std::uint64_t total = 0;
+    for (const Contribution& contribution : slot.contributions)
+        total += contribution.bytes.size();
+    buffer->data.reserve(total);
+    buffer->offsets.reserve(slot.members + 1);
+    buffer->offsets.push_back(0);
+    for (const Contribution& contribution : slot.contributions) {
+        buffer->data.insert(buffer->data.end(), contribution.bytes.begin(),
+                            contribution.bytes.end());
+        buffer->offsets.push_back(buffer->data.size());
+    }
+    return make_table(std::move(buffer));
+}
+
 class LocalCollectives : public Collectives {
    public:
     bool arrive(std::uint64_t group_id, std::uint64_t seq,
                 std::uint32_t members, std::uint32_t rank, const Record& record,
-                Done done) override {
+                Contribution&& contribution, Done done) override {
+        const SlotKey key{group_id, seq};
         dstd::Optional<LocalSlot> ended_slot;
         bool broken = false;
+        bool folder = false;
+        dstd::SharedPtr<ArrivalFold> fold;
+        ArrivalFold::Batch batch;
         {
             std::lock_guard<std::mutex> lock(mutex_);
-            const SlotKey key{group_id, seq};
             auto at = slots_.find(key);
             if (at == slots_.end())
                 at = slots_.try_emplace(key, members, std::move(done)).first;
@@ -783,17 +873,42 @@ class LocalCollectives : public Collectives {
             // that is not coming.
             broken = !opens && slot.records[slot.anchor].kind != record.kind;
             ++slot.arrived;
-            if (!broken && slot.arrived < slot.members) return true;
-            ended_slot.emplace(std::move(slot));
-            slots_.erase(at);
+            if (!broken && (record.flags & RECORD_TABLE) != 0) {
+                folder = keep_contribution(slot, rank, record,
+                                           std::move(contribution), batch);
+                fold = slot.fold;
+            }
+            if (!complete_locked(slot, broken)) {
+                if (!folder) return true;
+            } else {
+                if (slot.fold) slot.fold->cancel_locked();
+                ended_slot.emplace(std::move(slot));
+                slots_.erase(at);
+            }
         }
-        const LocalSlot& slot = *ended_slot;
+        while (folder) {
+            fold->apply(batch);
+            std::lock_guard<std::mutex> lock(mutex_);
+            folder = fold->refill_locked(batch);
+            if (folder) continue;
+            const auto at = slots_.find(key);
+            if (at != slots_.end() && complete_locked(at->second, false)) {
+                ended_slot.emplace(std::move(at->second));
+                slots_.erase(at);
+            }
+        }
+        if (!ended_slot) return true;
+        LocalSlot& slot = *ended_slot;
+        // Outside the lock: the copy of a large payload takes as long as it
+        // takes, and every contribution is owned by the slot by now.
+        const Table table =
+            (!broken && slot.has_table) ? assemble_table(slot) : Table{};
         const SlotEnd end{
             dstd::Span<const Record>(slot.records.data(), slot.records.size()),
             broken ? dstd::Span<const std::uint8_t>(slot.seen.data(),
                                                     slot.seen.size())
                    : dstd::Span<const std::uint8_t>(),
-            rank, nullptr};
+            rank, nullptr, table};
         slot.done(end);
         return false;
     }
@@ -807,6 +922,7 @@ class LocalCollectives : public Collectives {
             if (at == slots_.end()) return;
             gone.emplace(std::move(at->second));
             slots_.erase(at);
+            if (gone->fold) gone->fold->cancel_locked();
             if (arrived != nullptr) *arrived = gone->seen;
         }
     }
@@ -815,6 +931,7 @@ class LocalCollectives : public Collectives {
         std::lock_guard<std::mutex> lock(mutex_);
         for (auto at = slots_.begin(); at != slots_.end();) {
             if (at->first.group == group_id) {
+                if (at->second.fold) at->second.fold->cancel_locked();
                 at = slots_.erase(at);
                 continue;
             }
@@ -823,6 +940,39 @@ class LocalCollectives : public Collectives {
     }
 
    private:
+    /// Whether @p slot ended: every member arrived and no fold is still
+    /// running, or the members disagree. Called under the mutex.
+    static bool complete_locked(const LocalSlot& slot, bool broken) {
+        if (broken) return true;
+        return slot.arrived == slot.members &&
+               !(slot.fold && slot.fold->busy_locked());
+    }
+
+    /// Keeps the bytes of one arrival, or hands them to the fold of the slot
+    /// when the call combines in arrival order. The merge is the one of the
+    /// member named by @ref Record::root. Gives true when the caller folds.
+    /// Called under the mutex.
+    static bool keep_contribution(LocalSlot& slot, std::uint32_t rank,
+                                  const Record& record,
+                                  Contribution contribution,
+                                  ArrivalFold::Batch& batch) {
+        slot.has_table = true;
+        if ((record.flags & RECORD_COMBINE) == 0) {
+            if (slot.contributions.empty())
+                slot.contributions.resize(slot.members);
+            slot.contributions[rank] = std::move(contribution);
+            return false;
+        }
+        slot.combines = true;
+        if (!slot.fold) slot.fold = dstd::make_shared<ArrivalFold>();
+        if (rank == record.root)
+            slot.fold->set_combine_locked(std::move(contribution.combine));
+        return slot.fold->take_locked(
+            ArrivalFold::Held::borrowed(contribution.bytes,
+                                        std::move(contribution.keep)),
+            batch);
+    }
+
     std::mutex mutex_;
     dstd::Map<SlotKey, LocalSlot> slots_;
 };

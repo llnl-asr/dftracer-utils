@@ -59,11 +59,11 @@ class CountingMessaging : public comm::backend::Messaging {
         : moved_(std::move(moved)), traffic_(traffic) {}
 
     comm::backend::OpId send(const comm::backend::MessageKey& key,
-                             dstd::Vector<std::byte> bytes,
+                             comm::backend::Payload payload,
                              comm::backend::StreamOpts opts,
                              SendDone done) override {
         traffic_.sends.fetch_add(1, std::memory_order_relaxed);
-        return moved_->send(key, std::move(bytes), opts, std::move(done));
+        return moved_->send(key, std::move(payload), opts, std::move(done));
     }
 
     comm::backend::OpId recv(const comm::backend::MessageKey& key,
@@ -475,7 +475,7 @@ class FailingMessaging : public comm::backend::Messaging {
         : moved_(std::move(moved)) {}
 
     comm::backend::OpId send(const comm::backend::MessageKey& key,
-                             dstd::Vector<std::byte> bytes,
+                             comm::backend::Payload payload,
                              comm::backend::StreamOpts opts,
                              SendDone done) override {
         if (key.source != 0 && !failed_.exchange(true)) {
@@ -483,7 +483,7 @@ class FailingMessaging : public comm::backend::Messaging {
             done(&lost_);
             return comm::backend::NO_OP;
         }
-        return moved_->send(key, std::move(bytes), opts, std::move(done));
+        return moved_->send(key, std::move(payload), opts, std::move(done));
     }
 
     comm::backend::OpId recv(const comm::backend::MessageKey& key,

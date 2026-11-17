@@ -5,6 +5,8 @@
 # `const char*` outside the C ABI. The C ABI is a function named dftu_*, a file
 # named c_api* or *abi*, a file under plugins/abi, python/ or vendor/, a file
 # with an extern "C" line, io_uring_wrapper.h (it mirrors the kernel sqe ABI),
+# the parameter list of a function or function-pointer type such as
+# `R (*)(const char*)` (a C ABI signature, not a parameter of ours),
 # and main. A constructor of a dstd view type (ByteView, MutableByteView,
 # CStringView, PathView) is exempt for every parameter kind: it is where a
 # view is made. A pointer pair such as (const char* first, const char* last)
@@ -118,6 +120,7 @@ function site(T, s, e, exempt_file,    m, kind, p, c, q, depth, n, i, opener, j,
   if (!opener) return 0
   j = opener - 1
   while (j > 0 && substr(T, j, 1) ~ /[ \t\n]/) j--
+  if (substr(T, j, 1) == ")" && substr(T, j - 9 > 0 ? j - 9 : 1, 10) != "operator()") return 0
   w = ""
   while (j > 0 && substr(T, j, 1) ~ /[A-Za-z0-9_:~]/) { w = substr(T, j, 1) w; j-- }
   while (j > 0 && substr(T, j, 1) ~ /[ \t\n*&]/) j--

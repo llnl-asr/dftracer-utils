@@ -33,7 +33,7 @@ examples/plugins/duration_udfs.cpp 1
 examples/plugins/stats_udafs.cpp 1
 include/dftracer/utils/dataframe/agg.h 23
 include/dftracer/utils/dataframe/agg_expr.h 7
-include/dftracer/utils/dataframe/dataframe.h 43
+include/dftracer/utils/dataframe/dataframe.h 42
 include/dftracer/utils/dataframe/expr.h 9
 include/dftracer/utils/dataframe/field.h 5
 include/dftracer/utils/dataframe/lazyframe.h 7
@@ -84,12 +84,12 @@ src/dftracer/utils/dataframe/agg/state.cpp 22
 src/dftracer/utils/dataframe/agg/udaf.cpp 7
 src/dftracer/utils/dataframe/agg_expr.cpp 8
 src/dftracer/utils/dataframe/agg_spill.h 1
-src/dftracer/utils/dataframe/batch_ops.cpp 64
-src/dftracer/utils/dataframe/batch_ops.h 43
+src/dftracer/utils/dataframe/batch_ops.cpp 62
+src/dftracer/utils/dataframe/batch_ops.h 42
 src/dftracer/utils/dataframe/c_api_dataframe.cpp 1
 src/dftracer/utils/dataframe/c_api_schema.cpp 1
 src/dftracer/utils/dataframe/column_op.cpp 1
-src/dftracer/utils/dataframe/dataframe_methods.cpp 43
+src/dftracer/utils/dataframe/dataframe_methods.cpp 42
 src/dftracer/utils/dataframe/expr.cpp 27
 src/dftracer/utils/dataframe/flame_arena.h 2
 src/dftracer/utils/dataframe/frame_ops.cpp 1
@@ -107,7 +107,6 @@ src/dftracer/utils/dataframe/internal/morsel_frame.h 1
 src/dftracer/utils/dataframe/internal/name_cache.h 2
 src/dftracer/utils/dataframe/internal/native_transform.h 2
 src/dftracer/utils/dataframe/internal/node_registry.h 1
-src/dftracer/utils/dataframe/internal/op_dispatch.h 70
 src/dftracer/utils/dataframe/internal/radix_dedup.h 2
 src/dftracer/utils/dataframe/internal/rest_column.h 1
 src/dftracer/utils/dataframe/internal/schema_types.h 1
@@ -127,7 +126,6 @@ src/dftracer/utils/dataframe/kernels/running.h 2
 src/dftracer/utils/dataframe/kernels/select.cpp 1
 src/dftracer/utils/dataframe/kernels/stats.cpp 5
 src/dftracer/utils/dataframe/kernels/string_match.cpp 4
-src/dftracer/utils/dataframe/kernels/string_match.h 4
 src/dftracer/utils/dataframe/kernels/string_ops.cpp 7
 src/dftracer/utils/dataframe/lazy/asof_join.cpp 22
 src/dftracer/utils/dataframe/lazy/column_scan.cpp 7
@@ -268,8 +266,8 @@ src/dftracer/utils/python/runtime/runtime.cpp 1
 src/dftracer/utils/python/trace/trace_viewer.cpp 6
 src/dftracer/utils/trace/agg_query.cpp 16
 src/dftracer/utils/trace/chunk_verifier_utility.h 1
-src/dftracer/utils/trace/index/build/aggregation_run.cpp 1
-src/dftracer/utils/trace/index/build/aggregation_run.h 1
+src/dftracer/utils/trace/index/build/aggregation_run.cpp 3
+src/dftracer/utils/trace/index/build/aggregation_run.h 3
 src/dftracer/utils/trace/index/build/batch_builder.cpp 4
 src/dftracer/utils/trace/index/build/chunk_indexer.h 4
 src/dftracer/utils/trace/index/build/corrupt_index.h 1
@@ -429,7 +427,7 @@ tests/dataframe/test_hash_arena.cpp 2
 tests/dataframe/test_join.cpp 8
 tests/dataframe/test_join_null_keys.cpp 4
 tests/dataframe/test_join_spill.cpp 4
-tests/dataframe/test_kernels_keep_layouts.cpp 6
+tests/dataframe/test_kernels_keep_layouts.cpp 5
 tests/dataframe/test_lazy_asof_interval.cpp 7
 tests/dataframe/test_lazy_frame_ops.cpp 3
 tests/dataframe/test_lazy_ops.cpp 4
@@ -439,6 +437,7 @@ tests/dataframe/test_mask.cpp 2
 tests/dataframe/test_native_frame_alignment.cpp 2
 tests/dataframe/test_node_registry.cpp 2
 tests/dataframe/test_op_peak_memory.cpp 6
+tests/dataframe/test_op_registry.cpp 1
 tests/dataframe/test_order.cpp 2
 tests/dataframe/test_output_morsels.cpp 8
 tests/dataframe/test_plugin_frame.cpp 1
@@ -449,7 +448,8 @@ tests/dataframe/test_rest_column.cpp 3
 tests/dataframe/test_series.cpp 1
 tests/dataframe/test_set_union.cpp 2
 tests/dataframe/test_sketch_quantile.cpp 4
-tests/dataframe/test_source_hooks.cpp 4
+tests/dataframe/test_sort_nulls.cpp 2
+tests/dataframe/test_source_hooks.cpp 5
 tests/dataframe/test_spill.cpp 5
 tests/dataframe/test_string_match.cpp 1
 tests/dataframe/test_string_simd.cpp 30
@@ -459,7 +459,7 @@ tests/dataframe/test_type_parameter_propagation.cpp 1
 tests/dataframe/test_types_reshape.cpp 1
 tests/dataframe/test_udf_adapter.cpp 1
 tests/dataframe/test_variance_stable.cpp 3
-tests/domains/analysis/comparator/test_agg_parity.cpp 22
+tests/domains/analysis/comparator/test_agg_parity.cpp 21
 tests/domains/analysis/comparator/test_comparison_result.cpp 1
 tests/domains/analysis/comparator/test_tree_table_formatter.cpp 2
 tests/domains/analysis/statistics/test_stats_view.cpp 2
@@ -556,8 +556,8 @@ tests/trace/index/test_index_api.cpp 9
 tests/trace/index/test_index_builder.cpp 3
 tests/trace/index/test_index_pass_parallel.cpp 7
 tests/trace/index/test_index_skip.cpp 5
-tests/trace/index/test_indexer.cpp 6
-tests/trace/index/test_input_syscalls.cpp 39
+tests/trace/index/test_indexer.cpp 11
+tests/trace/index/test_input_syscalls.cpp 36
 tests/trace/index/test_kinds.cpp 5
 tests/trace/index/test_layout.cpp 3
 tests/trace/index/test_member_pieces.cpp 1

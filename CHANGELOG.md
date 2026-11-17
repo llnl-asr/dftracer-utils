@@ -867,6 +867,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Fixed
 
+- `Series.rfloordiv`, `rmod`, `rpow`, `rdiv` and `rtruediv` with a Series operand compute `other <op> self`, as pandas does; `rdiv` and `rtruediv` raised `TypeError` for a Series operand. `s == None` is a mask (all False) and `s != None` all True, as pandas; a comparison with an operand that is not a number, a string, a bool or None returns `NotImplemented`, so the other operand answers.
 - `dftracer_view` and `dftracer_genesis_gen_dist` under MPI no longer drop every rank to one thread when the launcher binds ranks to CPUs: a rank whose affinity mask is smaller than the node keeps its own CPUs, and only unbound ranks split the node.
 - On Linux with GCC, a C++ plugin now unloads when the host closes it: the Python JIT, the test build and every module that links `dftracer_utils_dataframe` (the plugin templates, the examples and plugins built against the installed package) compile with `-fno-gnu-unique`, since GCC binds the statics of inline functions and templates as GNU unique symbols and `dlclose` then keeps the library mapped.
 - The CLI tools print the right default and help text for an option whose text is built at start-up, such as `dftracer_server --checkpoint-size` and `--member-cache-size`; `--help` printed freed memory there.

@@ -830,14 +830,13 @@ class Series(_SeriesPandasMixin, _ext.Series[T_co]):
         return super().item(i)
 
     def rfloordiv(self, other: _Scalar) -> "Series[Scalar]":
-        # A Series operand keeps the order of the left operand: self // other.
-        return self // other if isinstance(other, Series) else self.__rfloordiv__(other)
+        return other // self if isinstance(other, Series) else self.__rfloordiv__(other)
 
     def rmod(self, other: _Scalar) -> "Series[Scalar]":
-        return self % other if isinstance(other, Series) else self.__rmod__(other)
+        return other % self if isinstance(other, Series) else self.__rmod__(other)
 
     def rpow(self, other: _Scalar) -> "Series[Scalar]":
-        return self**other if isinstance(other, Series) else self.__rpow__(other)
+        return other**self if isinstance(other, Series) else self.__rpow__(other)
 
     def divmod(self, other: _SeriesOrScalar) -> "Tuple[Series[Scalar], Series[Scalar]]":
         return self // other, self % other

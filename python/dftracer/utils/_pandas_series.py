@@ -463,9 +463,11 @@ class _SeriesPandasMixin:
         return self._s() * other  # type: ignore[operator]
 
     def rdiv(self, other: _Scalar) -> "Series":
-        """``other / self``: the scalar broadcast to a Series, then the div
-        kernel."""
+        """``other / self``: a Series operand divides directly, a scalar is
+        broadcast to a Series first."""
         s = self._s()
+        if isinstance(other, type(s)):
+            return other / s
         return s.full_like(other) / s  # type: ignore[operator]
 
     def __rtruediv__(self, other: _Scalar) -> "Series":

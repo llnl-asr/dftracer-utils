@@ -75,3 +75,14 @@ class WrongConfigured:
         self.hits[(e.pid,)] += e.dur + self.config.label  # str into int arithmetic
         self.config.threshold = 5  # a frozen config field cannot be assigned
         _ = self.config.missing  # no such config field
+
+
+@jit.plugin
+class WrongStore:
+    seen: jit.Store[int, int]
+
+    @jit.each_event
+    def step(self, e: Event) -> None:
+        self.seen.put(e.pid, "x")  # a str value into a Store[int, int]
+        self.seen.put("k", 1)  # a str key into a Store[int, ...]
+        self.seen.get(e.pid)  # get needs a default

@@ -118,9 +118,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   A `str` field is copied into the instance, compares with an event string and may be a key, and an `Optional` field set to `None` stays unset even when its default is a value.
 - Name the position of every JIT compile error, `JitOpError` included (it is now a `JitError`): a `JitError` reads `<file>:<line>:<col>: <reason>` and then the source line, and carries `file`, `line`, `col`, `source` and `reason`.
 - Check the public `jit` surface with `mypy --strict` as well as `ty`, from the fixtures in `tests/python/typing/`, and type `jit.each_event`, `jit.record`, `jit.vfold`, `jit.series` and `JitPackage.plugin` and `JitPackage.series` so a wrong use is a type error.
+- Add plain-container scan state for `@jit.plugin`: annotated class fields `Dict`, `DefaultDict`, `Set`, `List` (with `Tuple` keys) and `int` or `float` scalars lower to the existing accumulators, and the merge across worker slices is inferred from the update code only: `d[k] += x` and `d[k] = d.get(k, 0) + x` sum, `d[k] = max(d[k], x)` and `max(d.get(k, x), x)` (and `min`) take the extremum, `s.add(x)` unions, `lst.append(x)` concatenates in event timestamp order and `n += x` sums a scalar.
+  Any other update, a read of the field in the body, a field the body never updates and a non-empty start is a compile error at its line, and a missing key follows Python: `d[k] += x` on a plain `dict` is a compile error unless the field is a `defaultdict`.
+  `jit.map` descriptors stay for `mean`, `variance`, `quantiles`, `topk`, `argmax`, `distinct`, product values and `order_by=`.
+- Add `jit.Store[K, V]`, a persistent key-value field lowered to the plugin store ABI: `self.runs.get(key, default)` and `self.runs.put(key, value)` with an `int`, `str` or `Tuple` key and an `int` or `float` value, written in the encoding of `store.Namespace[K, V]`.
+  The namespace is the plugin name plus the field name, and a field annotated with a `Series`, `DataFrame` or `Expr`, or a `Store` of one, is a compile error.
 
 ### Changed
 
+- A `jit` plugin built into the cache is now `<cache>/<digest>/<plugin name>.so`, and a plugin that has a `jit.Store` loads under its class identity, so its store namespace stays the same when its body changes.
+- `jit.Str` is a `str` to a type checker, so `Set[str]` and `Dict[Tuple[int, str], int]` take `e.name`.
 - Replace `jit.config(jit.i64)` with the dataclass config above, read as `self.config.threshold` in place of `self.threshold`, and declare a `jit.record` as monoid values (`count = jit.count()`) in place of annotations (`count: jit.count`), so a type checker accepts both.
 - The distributed code is its own library, `libdftracer_utils_comm`, in `src/dftracer/utils/comm/` under `dftracer::utils::comm`, and `libdftracer_utils_runtime` no longer links MPI. The ctest `comm_no_upward` keeps `comm` below `store`, and `mpi_only_in_comm_mpi` keeps `<mpi.h>` inside `comm/mpi/`.
 

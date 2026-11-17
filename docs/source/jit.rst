@@ -203,6 +203,183 @@ body, and calling one directly in Python raises ``JitError``. The same helpers
 are available to hand-written and raw-body plugins as ``dftu_*`` from
 ``<dftracer/utils/plugins/prims.h>``.
 
+.. _jit-plain-state:
+
+Plain-container state
+---------------------
+
+A plugin can keep its scan state in ordinary annotated class fields instead of
+``jit.map`` descriptors. The annotation gives the types, the update code gives
+the merge, and the plugin lowers to the same accumulators the descriptors use, so
+the host merges the slices of the workers in the same way and each field comes
+back under its name as the same one-key-per-row frame.
+
+.. code-block:: python
+
+   from collections import defaultdict
+   from typing import Dict, List, Set, Tuple
+
+   @jit.plugin
+   class Ops:
+       by_name: Dict[Tuple[int, str], int] = defaultdict(int)
+       bytes_by_pid: Dict[int, int] = {}
+       names: Set[str] = set()
+       order: List[int] = []
+       total: int = 0
+       secs: float = 0.0
+
+       @jit.each_event
+       def step(self, e):
+           self.by_name[(e.pid, e.name)] += 1
+           self.bytes_by_pid[e.pid] = self.bytes_by_pid.get(e.pid, 0) + e.arg_i64("ret")
+           self.names.add(e.name)
+           self.order.append(e.ts)
+           self.total += 1
+           self.secs += e.dur * 0.5
+
+The field types are ``Dict[K, V]`` or ``DefaultDict[K, V]`` (``K`` is an ``int``,
+a ``str`` or a ``Tuple`` of those, ``V`` an ``int`` or a ``float``),
+``Set[T]`` and ``List[T]`` (``T`` an ``int`` or a ``str``), and a bare ``int`` or
+``float`` for a whole-scan scalar. Builtin generics (``dict[int, int]``) work
+where the running Python allows them; use ``typing.Dict`` on Python 3.8. A field
+starts empty or at 0: the default is the empty container, ``defaultdict(int)``
+or ``defaultdict(float)``, or absent, and any other default is a compile error,
+because every worker slice starts from it. Declare each field on the plugin class
+itself; a base class is not read.
+
+The merge is inferred from the update code only. A field is accepted when every
+update to it has one of these forms and all of them agree:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 40 20 40
+
+   * - Update
+     - Merge
+     - Needs
+   * - ``d[k] += x``
+     - sum
+     - a ``defaultdict``
+   * - ``d[k] = d.get(k, 0) + x``
+     - sum
+     - any dict
+   * - ``d[k] = max(d[k], x)``, ``min(d[k], x)``
+     - max, min
+     - a ``defaultdict``
+   * - ``d[k] = max(d.get(k, x), x)``, ``min(d.get(k, x), x)``
+     - max, min
+     - any dict
+   * - ``s.add(x)``
+     - union
+     - a ``Set``
+   * - ``lst.append(x)``
+     - concatenation
+     - a ``List``
+   * - ``n += x``
+     - sum
+     - an ``int`` or ``float`` field
+
+``max(x, d[k])`` and ``d.get(k, 0)`` on either side of the ``+`` are the same
+forms. Any other update to a container field is a compile error at that line:
+the merge cannot be inferred. It says so and points at a future ``merge()`` hook;
+no ``merge()`` is implemented yet. A field that the body never updates, and a
+read of a field inside the body (a worker holds only its own slice, so a read
+would see a partial value), are compile errors too.
+
+A missing key follows Python. On a plain ``dict``, ``d[k] += x`` and
+``max(d[k], x)`` raise ``KeyError`` for a missing key, so they are a compile
+error; write ``d[k] = d.get(k, 0) + x`` or declare the field
+``defaultdict(int)``. A ``defaultdict`` creates the key with 0 first, so
+``d[k] = max(d[k], x)`` on a ``defaultdict`` keeps the 0 when every ``x`` is
+negative, exactly as Python would. A guard such as ``if k in d`` is not an
+accepted form: nothing else fills a plain dict, so it would never run.
+
+A ``List`` merges by concatenation in order of the event timestamp
+(``e.ts``). The host merges the worker slices in a fixed worker order, but
+which events a worker sees depends on scheduling, so arrival order is not
+stable; sorting by timestamp is. Events with equal timestamps sort by the text
+of the value, which is deterministic, so a list is the same with one worker or
+many. A ``List[int]`` and a ``List[str]`` cell, like a ``Set`` cell, comes back
+as strings (the list as strings, the set joined into one string).
+A ``Set`` comes
+back as one string cell of the distinct values sorted and joined by ``\x1e``, as
+``jit.set`` does.
+
+Float sums (``float`` scalars and ``Dict[K, float]`` values) are not
+bit-stable: the order in which worker slices add differs between worker counts
+and runs, so the last bits can differ. Compare them with a tolerance; integer
+sums, extrema, sets and lists are exact.
+
+Keys and elements are event fields and expressions of the declared family: a
+``str`` key or element needs a string field such as ``e.name`` or
+``e.arg_str(...)``, and an ``int`` one cannot be a string field.
+
+Plain state and ``jit.map`` descriptors can share one plugin, and the
+descriptors stay. They express what the update code cannot: ``mean``,
+``variance``, ``quantiles``, ``topk``, ``argmax``, ``distinct``, ``hist``,
+product and record values, an ``order_by=`` of your choice, and the fixed-width
+``of=`` types. Use the plain form for counts, sums, extrema, sets and lists, and
+a descriptor for the rest.
+
+.. _jit-store:
+
+Persistent state: ``jit.Store``
+-------------------------------
+
+``jit.Store[K, V]`` is a persistent key-value field. Declare it by annotation
+and read and write it with explicit keys from the body:
+
+.. code-block:: python
+
+   @jit.plugin
+   class Seen:
+       runs: jit.Store[int, int]
+       first_seen = jit.map(key=(jit.i64,), value=jit.min(of=jit.i64))
+
+       @jit.each_event
+       def step(self, e):
+           self.first_seen[(e.pid,)].observe(self.runs.get(e.pid, 0))
+           self.runs.put(e.pid, self.runs.get(e.pid, 0) + 1)
+
+``K`` is an ``int``, a ``str`` or a ``Tuple`` of those and ``V`` is an ``int``
+or a ``float``. ``get(key, default)`` returns the stored value or the default;
+``put(key, value)`` writes one. The methods mirror :class:`dftracer.utils.store.Namespace`,
+and keys and values go through the same encoding, so Python reads and writes the
+namespace as a ``Namespace[K, V]``:
+
+.. code-block:: python
+
+   from dftracer.utils.store import Store
+
+   store = Store.open(f"{index_dir}/.dftindex/store")  # the store of that index root
+   ns = store.namespace("plugin.<plugin name>.runs", 1, durable=True, shared=True)
+   store.snapshot().get(ns, None, 1)
+
+The namespace is the plugin name plus the field name: the host registers the
+field ``runs`` as ``plugin.<plugin name>.runs``, so the same plugin keeps one
+namespace across runs and two plugins that use the same field name keep separate
+data. The plugin name is the stem of the plugin's ``.so``: for a plugin built
+into the cache it is the class identity (the package, module and class, each
+byte outside ``[a-z0-9_-]`` written as ``_``), so a change of the body keeps the
+data; for ``build(out=...)`` it is the file name. The field name must be
+lowercase ASCII ``[a-z0-9_]``. The namespace is ``durable`` and ``shared`` with
+format version 1: a shared namespace keeps the keys of every writer, and the
+newest write of a key wins.
+
+Scope rules follow :doc:`plugins`. The store is the store of the index root the
+scan reads and is lent only while a fold callback runs; a scan over two index
+roots fails the call. The keys live in the whole-root scope. ``get`` reads from a
+snapshot taken when the batch starts, so it sees what earlier runs and earlier
+folds committed and not what this fold's own ``put`` calls wrote; those are
+committed when the batch ends and read back in the next run. Keep totals of the
+scan in plain state and use a ``Store`` to carry a value to the next run. A
+stored value of the other type (a ``float`` in an ``int`` field), a missing
+string key and a failed commit fail the run with an error that names the field.
+
+A ``Series``, ``DataFrame`` or ``Expr`` is valid only inside one ``step`` call
+and cannot outlive it, so a field annotated with one, or a ``Store`` whose
+value is one, is a compile error; fold the batch into plain state instead.
+
 Talking to another plugin
 --------------------------
 

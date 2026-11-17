@@ -6,8 +6,9 @@ proving IDE autocomplete + static checking work with zero annotations. The one
 annotation, ``e: Event``, is what lets the body be checked (it is optional).
 """
 
+from collections import defaultdict
 from dataclasses import dataclass
-from typing import Callable, Dict, Optional, Tuple, Union
+from typing import Callable, DefaultDict, Dict, List, Optional, Set, Tuple, Union
 
 from typing_extensions import assert_type
 
@@ -344,3 +345,37 @@ class Configured:
 checked_config: Optional[Dict[str, JSONValue]] = jit.plugin_config(Configured, {"threshold": 3})
 
 jit_error: type[Exception] = jit.JitError
+
+
+# Plain-container scan state: the merge across worker slices is inferred from
+# the update code; a jit.Store[K, V] is a persistent key-value field.
+
+
+@jit.plugin
+class PlainState:
+    by_pid_name: Dict[Tuple[int, str], int] = defaultdict(int)
+    total: int = 0
+    secs: float = 0.0
+    names: Set[str] = set()
+    order: List[int] = []
+    hi: DefaultDict[int, int] = defaultdict(int)
+    lo: dict[int, int] = {}
+    runs: jit.Store[int, int]
+    weights: jit.Store[Tuple[int, str], float]
+
+    @jit.each_event
+    def step(self, e: Event) -> None:
+        self.by_pid_name[(e.pid, e.name)] += 1
+        self.total += 1
+        self.secs += e.dur * 0.5
+        self.names.add(e.name)
+        self.order.append(e.ts)
+        self.hi[e.pid] = max(self.hi[e.pid], e.dur)
+        self.lo[e.pid] = min(self.lo.get(e.pid, e.dur), e.dur)
+        self.runs.put(e.pid, self.runs.get(e.pid, 0) + 1)
+        self.weights.put((e.pid, e.name), self.weights.get((e.pid, e.name), 0.0) + 1.0)
+
+
+def use_store(handle: jit.Store[int, int]) -> int:
+    handle.put(1, 2)
+    return handle.get(1, 0)

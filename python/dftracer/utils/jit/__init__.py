@@ -11,6 +11,11 @@ comparison on ``e.<field>``) wrapping ``self.<map>[(<key>)] += <1 | e.<field>>``
 Anything outside it raises :class:`JitError` at decoration time, pointing at the
 raw-C++ escape hatch, never a silent miscompile.
 
+Scan state is a :func:`map` descriptor or, with the merge inferred from the update
+code, an annotated plain field (``counts: Dict[int, int] = defaultdict(int)``,
+``names: Set[str] = set()``, ``total: int = 0``); a persistent key-value field is
+``seen: Store[int, int]``.
+
 Every :func:`map` is one named accumulator on the dataframe engine's ``AggState``,
 reached through the host's ``DFTU_SVC_AGG`` service: the key tuple names its
 grouping columns (an empty tuple makes it a whole-scan scalar) and each value
@@ -34,10 +39,12 @@ from __future__ import annotations
 
 import ast
 import builtins
+import collections
 import dataclasses
 import inspect
 import math
 import subprocess
+import sys
 import textwrap
 import types
 from pathlib import Path
@@ -45,11 +52,13 @@ from typing import (
     TYPE_CHECKING,
     Any,
     Callable,
+    ClassVar,
     Dict,
     Generic,
     List,
     Literal,
     Mapping,
+    NamedTuple,
     NoReturn,
     Optional,
     Protocol,
@@ -57,6 +66,8 @@ from typing import (
     TypeVar,
     Union,
     cast,
+    get_args,
+    get_origin,
     get_type_hints,
     overload,
 )
@@ -177,6 +188,7 @@ __all__ = [
     "lerp",
     "copysign",
     "Map",
+    "Store",
     "Event",
     "Str",
     "Counter",
@@ -224,14 +236,18 @@ K2 = TypeVar("K2")
 K3 = TypeVar("K3")
 K4 = TypeVar("K4")
 _C = TypeVar("_C")
+SK = TypeVar("SK")
+SV = TypeVar("SV")
+_MISSING: Any = object()
 
 
-class Str(Protocol):
+class Str(str):
     """An interned-string id: usable as a STR key / SET_STR|LIST_STR element and
-    comparable to a ``str`` literal. Authoring-only, never instantiated."""
+    comparable to a ``str`` literal. Authoring-only, never instantiated; it is a
+    ``str`` to the type checker so a plain ``Set[str]`` or ``Dict[Tuple[int, str], int]``
+    state field takes ``e.name``."""
 
-    def __eq__(self, other: object) -> bool: ...
-    def __ne__(self, other: object) -> bool: ...
+    __slots__ = ()
 
 
 class _Type(Generic[T_co]):
@@ -262,6 +278,14 @@ f64: _Type[float] = _Type("DFTU_T_F64")
 
 class _Sentinel:
     __slots__ = ()
+
+    # Custom equality keeps ``e.fhash != jit.NONE`` valid for a ``str``-typed Str
+    # under mypy --strict (strict equality skips an operand that defines __eq__).
+    def __eq__(self, other: object) -> bool:
+        return self is other
+
+    def __hash__(self) -> int:
+        return id(self)
 
 
 NONE = _Sentinel()
@@ -1073,6 +1097,288 @@ class Port(Protocol):
     def __iadd__(self, x: float) -> "Port": ...
 
 
+class Store(Generic[SK, SV]):
+    """A persistent key-value field of a plugin, lowered to the plugin store ABI.
+
+    Declare it by annotation only, ``seen: jit.Store[int, int]``; the field name
+    is the namespace name and the host registers it as
+    ``plugin.<plugin name>.<field name>``, so the same plugin keeps one
+    namespace across runs. The plugin name is the stem of its ``.so``: the class
+    identity for a plugin built from the cache, the file name for ``build(out=)``.
+    Keys and values go through the :mod:`dftracer.utils.store_codec` encoding, so
+    ``Store.namespace(name, 1, durable=True, shared=True)`` of the same index
+    root reads and writes it from Python as a ``Namespace[K, V]``.
+
+    ``K`` is an ``int``, a ``str`` or a ``Tuple`` of those; ``V`` is an ``int``
+    or a ``float``. Authoring-only, never instantiated: the body of
+    ``@jit.each_event`` is compiled, and each use below is an explicit key.
+
+    ``get`` reads from a snapshot taken when the batch starts, so it sees what
+    earlier folds committed and not what this fold's ``put`` calls wrote, which
+    land when the batch ends. A ``put`` of a key that other workers or later runs
+    wrote also replaces it (last writer wins), so keep per-scan totals in plain
+    state and use a ``Store`` to carry a value to the next run. The store is
+    lent only inside a fold, to the one index root of the scan. A
+    :class:`~dftracer.utils.columnar.Series` or any other batch value cannot be a
+    stored value."""
+
+    def get(self, key: SK, default: SV) -> SV:
+        """The value of ``key`` as of this batch's snapshot, or ``default``."""
+        raise NotImplementedError
+
+    def put(self, key: SK, value: SV) -> None:
+        """Write ``value`` under ``key`` when the batch ends."""
+        raise NotImplementedError
+
+
+class _StoreField:
+    """A :class:`Store` field: key components (``"i64"`` or ``"str"``), the value
+    family (``"i64"`` or ``"f64"``) and its index among the plugin's stores."""
+
+    __slots__ = ("name", "key_kinds", "value_kind", "index", "is_tuple")
+
+    def __init__(
+        self,
+        name: str,
+        key_kinds: Tuple[str, ...],
+        value_kind: str,
+        index: int,
+        is_tuple: bool,
+    ) -> None:
+        self.name = name
+        self.key_kinds = key_kinds
+        self.value_kind = value_kind
+        self.index = index
+        self.is_tuple = is_tuple
+
+
+class _PlainField:
+    """A plain-container scan-state field: ``kind`` is ``dict``, ``set``, ``list``
+    or ``scalar``; ``elem`` is the value (dict, scalar) or element (set, list)
+    family; ``factory`` is whether a dict is a ``defaultdict``."""
+
+    __slots__ = ("name", "kind", "key_types", "elem", "factory")
+
+    def __init__(
+        self,
+        name: str,
+        kind: str,
+        key_types: "Tuple[_Type[object], ...]",
+        elem: str,
+        factory: bool,
+    ) -> None:
+        self.name = name
+        self.kind = kind
+        self.key_types = key_types
+        self.elem = elem
+        self.factory = factory
+
+
+_STATE_SKIP = frozenset({"config", "plan_duql"})
+
+
+def _state_elem(tp: object) -> "str | None":
+    if tp is int:
+        return "i64"
+    if tp is float:
+        return "f64"
+    if tp is str or tp is Str:
+        return "str"
+    return None
+
+
+def _state_key(tp: object) -> "Tuple[str, ...] | None":
+    """The key components (``"i64"`` or ``"str"``) of a state key annotation: an
+    ``int``, a ``str`` or a non-empty ``Tuple`` of those."""
+    parts: Tuple[object, ...] = (tp,)
+    if get_origin(tp) is tuple:
+        parts = get_args(tp)
+        if not parts or parts == ((),) or parts[-1] is Ellipsis:
+            return None
+    kinds: List[str] = []
+    for part in parts:
+        kind = _state_elem(part)
+        if kind is None or kind == "f64":
+            return None
+        kinds.append(kind)
+    return tuple(kinds)
+
+
+def _resolve_hint(cls: type, attr: str, tp: object) -> object:
+    """``tp`` with a string annotation evaluated in the class's module."""
+    if not isinstance(tp, str):
+        return tp
+    module = sys.modules.get(getattr(cls, "__module__", ""))
+    scope = dict(vars(module)) if module is not None else {}
+    try:
+        return eval(tp, scope, dict(vars(cls)))  # noqa: S307 - the author's own annotation
+    except Exception as exc:
+        raise _class_error(
+            cls,
+            f"cannot resolve the annotation '{tp}' of '{attr}' ({exc}); "
+            "declare the types it names at module scope",
+            attr,
+        ) from None
+
+
+def _state_default(cls: type, field: _PlainField, declared_default: bool) -> None:
+    """Refuse a default that is not the empty state a worker starts from."""
+    val = cls.__dict__.get(field.name, _MISSING)
+    if field.kind == "dict":
+        if declared_default and not isinstance(val, collections.defaultdict):
+            raise _class_error(
+                cls,
+                f"'{field.name}' is a DefaultDict; its default must be defaultdict(int) "
+                "or defaultdict(float)",
+                field.name,
+            )
+        if isinstance(val, collections.defaultdict):
+            want = int if field.elem == "i64" else float
+            if val.default_factory is not want or val:
+                raise _class_error(
+                    cls,
+                    f"'{field.name}' must start as defaultdict({want.__name__}) with no "
+                    "items; a worker slice starts empty",
+                    field.name,
+                )
+        elif val is not _MISSING and (type(val) is not dict or val):
+            raise _class_error(
+                cls, f"'{field.name}' must start as {{}} or as an empty defaultdict", field.name
+            )
+        return
+    if val is _MISSING:
+        return
+    empty: object = {"set": builtins.set, "list": builtins.list}.get(field.kind)
+    if empty is not None:
+        if type(val) is not empty or val:
+            raise _class_error(
+                cls, f"'{field.name}' must start empty; a worker slice starts empty", field.name
+            )
+        return
+    if isinstance(val, bool) or not isinstance(val, (int, float)) or val != 0:
+        raise _class_error(
+            cls,
+            f"'{field.name}' must start at 0, because a non-zero start would be added once per "
+            "worker; use ClassVar[int] for a constant, or config for a setting",
+            field.name,
+        )
+
+
+_BATCH_TYPES = frozenset({"Series", "DataFrame", "LazyFrame", "Expr"})
+
+
+def _is_batch_type(tp: object) -> bool:
+    base = get_origin(tp) or tp
+    return (
+        isinstance(base, type)
+        and base.__name__ in _BATCH_TYPES
+        and base.__module__.startswith("dftracer.utils")
+    )
+
+
+def _escape_error(cls: type, attr: str, tp: object) -> JitError:
+    return _class_error(
+        cls,
+        f"'{attr}: {tp!r}' keeps a Series, DataFrame or Expr on self, but a batch value is valid "
+        "only inside one step call and cannot outlive it; fold it into scan state (a Dict, Set, "
+        "List or number) instead",
+        attr,
+    )
+
+
+def _plain_field(cls: type, attr: str, tp: object) -> _PlainField:
+    if _is_batch_type(tp):
+        raise _escape_error(cls, attr, tp)
+    origin = get_origin(tp)
+    args = get_args(tp)
+    scalar = _state_elem(tp)
+    if scalar in ("i64", "f64"):
+        field = _PlainField(attr, "scalar", (), scalar, False)
+        _state_default(cls, field, False)
+        return field
+    if origin in (dict, collections.defaultdict):
+        keys = _state_key(args[0]) if len(args) == 2 else None
+        elem = _state_elem(args[1]) if len(args) == 2 else None
+        if keys is None or elem not in ("i64", "f64"):
+            raise _class_error(
+                cls,
+                f"'{attr}' needs Dict[K, V] with K an int, a str or a Tuple of those and V an "
+                f"int or a float, got {tp!r}",
+                attr,
+            )
+        types = tuple(str_ if k == "str" else i64 for k in keys)
+        field = _PlainField(attr, "dict", types, elem, False)
+        _state_default(cls, field, origin is collections.defaultdict)
+        field.factory = isinstance(cls.__dict__.get(attr), collections.defaultdict)
+        return field
+    if origin in (builtins.set, builtins.list):
+        elem = _state_elem(args[0]) if len(args) == 1 else None
+        if elem not in ("i64", "str"):
+            raise _class_error(cls, f"'{attr}' needs an int or str element type, got {tp!r}", attr)
+        kind = "set" if origin is builtins.set else "list"
+        field = _PlainField(attr, kind, (), elem, False)
+        _state_default(cls, field, False)
+        return field
+    raise _class_error(
+        cls,
+        f"'{attr}: {tp!r}' is not scan state; a state field is a Dict, DefaultDict, Set or List "
+        "of int, float or str, a Tuple-keyed Dict, an int, a float, or a jit.Store[K, V]",
+        attr,
+    )
+
+
+def _store_field(cls: type, attr: str, tp: object, index: int) -> _StoreField:
+    if attr in cls.__dict__:
+        raise _class_error(cls, f"'{attr}' is a jit.Store; declare it by annotation only", attr)
+    if not attr or any(c not in "abcdefghijklmnopqrstuvwxyz0123456789_" for c in attr):
+        raise _class_error(
+            cls,
+            f"the jit.Store field '{attr}' names a store namespace, so it must be lowercase "
+            "ASCII [a-z0-9_]",
+            attr,
+        )
+    args = get_args(tp)
+    if len(args) == 2 and _is_batch_type(args[1]):
+        raise _escape_error(cls, attr, tp)
+    keys = _state_key(args[0]) if len(args) == 2 else None
+    value = _state_elem(args[1]) if len(args) == 2 else None
+    if keys is None or value not in ("i64", "f64"):
+        raise _class_error(
+            cls,
+            f"'{attr}' needs jit.Store[K, V] with K an int, a str or a Tuple of those and V "
+            f"an int or a float, got {tp!r}",
+            attr,
+        )
+    return _StoreField(attr, keys, value, index, get_origin(args[0]) is tuple)
+
+
+def _own_annotations(cls: type) -> Dict[str, object]:
+    get = getattr(inspect, "get_annotations", None)
+    if get is not None:
+        return dict(get(cls))
+    return dict(cls.__dict__.get("__annotations__", {}))
+
+
+def _state_fields(cls: type) -> "Tuple[Dict[str, _PlainField], Dict[str, _StoreField]]":
+    """The plain-container scan-state and :class:`Store` fields ``cls`` declares
+    by annotation."""
+    plains: Dict[str, _PlainField] = {}
+    stores: Dict[str, _StoreField] = {}
+    own = _own_annotations(cls)
+    hints = _type_hints(cls)
+    for attr in own:
+        if attr in _STATE_SKIP or isinstance(cls.__dict__.get(attr), (_MapDecl, _Port, _EachEvent)):
+            continue
+        tp = _resolve_hint(cls, attr, hints.get(attr, own[attr]))
+        if get_origin(tp) is ClassVar or tp is ClassVar:
+            continue
+        if get_origin(tp) is Store:
+            stores[attr] = _store_field(cls, attr, tp, len(stores))
+        else:
+            plains[attr] = _plain_field(cls, attr, tp)
+    return plains, stores
+
+
 _PORT_ID_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789._/-")
 
 # The registry namespace reserved for host ops (see _HOST_NAME_PREFIX below);
@@ -1647,6 +1953,30 @@ def _out_name(decl: _AnyMap, comp: int) -> str:
     return f"v{comp}"
 
 
+class _Update(NamedTuple):
+    """One merge-inferable update to a plain-container field: its ``form``
+    (``sum``, ``max``, ``min``, ``add`` or ``append``), the key and value
+    expressions, and whether a missing key contributes the type's zero first."""
+
+    attr: str
+    form: str
+    keys: List[ast.expr]
+    value: ast.expr
+    identity: bool
+
+
+_STATE_FORMS = {
+    "dict": (
+        "d[k] += x on a defaultdict, d[k] = d.get(k, 0) + x, d[k] = max(d[k], x) on a "
+        "defaultdict, d[k] = max(d.get(k, x), x), or the same with min"
+    ),
+    "set": "s.add(x)",
+    "list": "lst.append(x)",
+    "scalar": "n += x",
+}
+_STATE_PY = {"i64": "int", "f64": "float"}
+
+
 class _Compiler:
     def __init__(
         self,
@@ -1654,8 +1984,16 @@ class _Compiler:
         ops: Dict[str, Op] | None = None,
         ports: Dict[str, _Port] | None = None,
         config_fields: "Dict[str, _CfgField] | None" = None,
+        plain: "Dict[str, _PlainField] | None" = None,
+        stores: "Dict[str, _StoreField] | None" = None,
     ) -> None:
         self.maps = maps
+        self.plain = plain if plain is not None else {}
+        self.stores = stores if stores is not None else {}
+        # Per plain field: the (form, identity) its updates agree on.
+        self.plain_forms: Dict[str, Tuple[str, bool]] = {}
+        self.store_gets: builtins.set[str] = builtins.set()
+        self.store_puts: builtins.set[str] = builtins.set()
         self.ports = ports if ports is not None else {}
         # The plugin's config dataclass fields; each_event reads them as
         # self.config.<name>, lowering to the file-scope _cfg_<name> static set
@@ -1703,6 +2041,9 @@ class _Compiler:
             _reject("each_event must take exactly (self, e)", fn_ast)
         self.self_name = params[0].arg
         self.event_name = params[1].arg
+        if self.plain:
+            self._infer_plain(fn_ast.body)
+            self._declare_plain()
         defs, lines = self._compile_scope(fn_ast.body)
         return defs + lines
 
@@ -1721,6 +2062,354 @@ class _Compiler:
         if field is None:
             _reject(f"unknown config field self.config.{node.attr}", node)
         return field
+
+    # ---- plain-container scan state and jit.Store ----------------------------
+
+    def _self_base(self, node: ast.expr) -> "str | None":
+        """The attribute name of the ``self.<attr>`` at the base of a chain of
+        subscripts, attributes and calls, else None."""
+        cur: ast.expr = node
+        while True:
+            if isinstance(cur, ast.Subscript):
+                cur = cur.value
+            elif isinstance(cur, ast.Call):
+                cur = cur.func
+            elif isinstance(cur, ast.Attribute):
+                if isinstance(cur.value, ast.Name) and cur.value.id == self.self_name:
+                    return cur.attr
+                cur = cur.value
+            else:
+                return None
+
+    def _plain_attr(self, node: ast.expr) -> "str | None":
+        base = self._self_base(node)
+        return base if base is not None and base in self.plain else None
+
+    def _mentions_state(self, node: ast.AST) -> bool:
+        for sub in ast.walk(node):
+            if isinstance(sub, ast.Attribute) and isinstance(sub.value, ast.Name):
+                if sub.value.id == self.self_name and (
+                    sub.attr in self.plain or sub.attr in self.stores
+                ):
+                    return True
+        return False
+
+    def _merge_error(self, field: _PlainField, node: ast.AST, what: str) -> NoReturn:
+        _reject_at(
+            f"cannot infer how worker slices merge self.{field.name} from {what}; "
+            f"a {field.kind} is merged only when every update is {_STATE_FORMS[field.kind]} "
+            "(an explicit merge() for any other update is not implemented yet)",
+            node,
+        )
+
+    def _reject_expr(self, node: ast.expr) -> NoReturn:
+        base = self._self_base(node)
+        if base is not None and base in self.plain:
+            _reject_at(
+                f"self.{base} is scan state and is write-only in the body: each worker "
+                "holds only its own slice, so a read would see a partial value",
+                node,
+            )
+        if base is not None and base in self.stores:
+            _reject_at(
+                f"self.{base} is a jit.Store: use self.{base}.get(key, default) "
+                f"and self.{base}.put(key, value)",
+                node,
+            )
+        _reject(_describe(node), node)
+
+    def _dict_keys(self, field: _PlainField, target: ast.expr) -> List[ast.expr]:
+        if not (
+            isinstance(target, ast.Subscript)
+            and isinstance(target.value, ast.Attribute)
+            and target.value.attr == field.name
+        ):
+            self._merge_error(field, target, "this target")
+        keys = self._keys(target.slice)
+        if len(keys) != len(field.key_types):
+            _reject_at(
+                f"self.{field.name} takes {len(field.key_types)} key components, got {len(keys)}",
+                target,
+            )
+        return keys
+
+    def _state_call(
+        self, field: _PlainField, node: ast.expr, method: str, key_dump: str
+    ) -> "List[ast.expr] | None":
+        """The arguments of ``self.<field>.<method>(key, ...)`` for that key."""
+        if not (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == method
+            and self._plain_attr(node.func.value) == field.name
+            and isinstance(node.func.value, ast.Attribute)
+            and len(node.args) == 2
+            and not node.keywords
+            and ast.dump(_unwrap_index(node.args[0])) == key_dump
+        ):
+            return None
+        return builtins.list(node.args)
+
+    def _dict_assign(self, field: _PlainField, stmt: ast.Assign) -> "_Update":
+        target = stmt.targets[0]
+        keys = self._dict_keys(field, target)
+        assert isinstance(target, ast.Subscript)
+        key_dump = ast.dump(_unwrap_index(target.slice))
+        value = stmt.value
+        if isinstance(value, ast.BinOp) and isinstance(value.op, ast.Add):
+            for state_side, other in ((value.left, value.right), (value.right, value.left)):
+                got = self._state_call(field, state_side, "get", key_dump)
+                zero = got[1] if got is not None else None
+                if (
+                    zero is not None
+                    and isinstance(zero, ast.Constant)
+                    and not isinstance(zero.value, bool)
+                    and isinstance(zero.value, (int, float))
+                    and zero.value == 0
+                ):
+                    return _Update(field.name, "sum", keys, other, False)
+        if (
+            isinstance(value, ast.Call)
+            and isinstance(value.func, ast.Name)
+            and value.func.id in ("max", "min")
+            and len(value.args) == 2
+            and not value.keywords
+        ):
+            form = value.func.id
+            for state_side, other in (
+                (value.args[0], value.args[1]),
+                (value.args[1], value.args[0]),
+            ):
+                if (
+                    isinstance(state_side, ast.Subscript)
+                    and self._plain_attr(state_side.value) == field.name
+                    and isinstance(state_side.value, ast.Attribute)
+                    and ast.dump(_unwrap_index(state_side.slice)) == key_dump
+                ):
+                    if not field.factory:
+                        _reject_at(
+                            f"self.{field.name}[k] raises KeyError for a missing key on a plain "
+                            f"dict: declare {field.name} = defaultdict({_STATE_PY[field.elem]}) "
+                            f"or write self.{field.name}[k] = {form}(self.{field.name}.get(k, x), x)",
+                            state_side,
+                        )
+                    return _Update(field.name, form, keys, other, True)
+                got = self._state_call(field, state_side, "get", key_dump)
+                if got is not None and ast.dump(got[1]) == ast.dump(other):
+                    return _Update(field.name, form, keys, other, False)
+        self._merge_error(field, stmt, "this assignment")
+
+    def _plain_update(self, stmt: ast.stmt) -> "_Update | None":
+        """The merge-inferable update ``stmt`` makes to a plain-container
+        field, None when ``stmt`` touches none, and a compile error when it
+        touches one in a form whose merge cannot be inferred."""
+        if isinstance(stmt, ast.AugAssign):
+            attr = self._plain_attr(stmt.target)
+            if attr is None:
+                return None
+            field = self.plain[attr]
+            if not isinstance(stmt.op, ast.Add):
+                self._merge_error(field, stmt, "an augmented operator other than +=")
+            if field.kind == "scalar":
+                if not (isinstance(stmt.target, ast.Attribute) and stmt.target.attr == attr):
+                    self._merge_error(field, stmt, "this target")
+                return _Update(attr, "sum", [], stmt.value, False)
+            if field.kind == "dict":
+                keys = self._dict_keys(field, stmt.target)
+                if not field.factory:
+                    _reject_at(
+                        f"self.{attr}[k] += x raises KeyError for a missing key on a plain "
+                        f"dict: declare {attr} = defaultdict({_STATE_PY[field.elem]}) or write "
+                        f"self.{attr}[k] = self.{attr}.get(k, 0) + x",
+                        stmt,
+                    )
+                return _Update(attr, "sum", keys, stmt.value, False)
+            self._merge_error(field, stmt, "+=")
+        if isinstance(stmt, ast.Assign):
+            for tgt in stmt.targets:
+                attr = self._plain_attr(tgt)
+                if attr is None:
+                    continue
+                field = self.plain[attr]
+                if len(stmt.targets) != 1 or field.kind != "dict":
+                    self._merge_error(field, stmt, "this assignment")
+                return self._dict_assign(field, stmt)
+            return None
+        if isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call):
+            call = stmt.value
+            func = call.func
+            attr = self._plain_attr(call)
+            if attr is None:
+                return None
+            field = self.plain[attr]
+            method = {"set": "add", "list": "append"}.get(field.kind)
+            if (
+                isinstance(func, ast.Attribute)
+                and method is not None
+                and func.attr == method
+                and isinstance(func.value, ast.Attribute)
+                and func.value.attr == attr
+                and len(call.args) == 1
+                and not call.keywords
+            ):
+                return _Update(
+                    attr, "add" if method == "add" else "append", [], call.args[0], False
+                )
+            self._merge_error(field, stmt, "this call")
+        if not isinstance(stmt, ast.If) and self._mentions_state(stmt):
+            attr = self._plain_attr_in(stmt)
+            if attr is not None:
+                self._merge_error(self.plain[attr], stmt, "this statement")
+        return None
+
+    def _plain_attr_in(self, node: ast.AST) -> "str | None":
+        for sub in ast.walk(node):
+            if isinstance(sub, ast.Attribute) and isinstance(sub.value, ast.Name):
+                if sub.value.id == self.self_name and sub.attr in self.plain:
+                    return sub.attr
+        return None
+
+    def _infer_plain(self, stmts: List[ast.stmt]) -> None:
+        """Pass one: the merge of each plain field from its updates, which must
+        agree, then its accumulator declaration."""
+        for stmt in stmts:
+            if isinstance(stmt, ast.If):
+                self._infer_plain(stmt.body)
+                self._infer_plain(stmt.orelse)
+                continue
+            self._cur = stmt
+            update = self._plain_update(stmt)
+            if update is None:
+                continue
+            sig = (update.form, update.identity)
+            prev = self.plain_forms.get(update.attr)
+            if prev is not None and prev != sig:
+                _reject_at(
+                    f"self.{update.attr} is updated as {prev[0]} elsewhere and as {sig[0]} here "
+                    "(or with a different missing-key rule); a field has one merge",
+                    stmt,
+                )
+            self.plain_forms[update.attr] = sig
+
+    def _declare_plain(self) -> None:
+        for attr, (form, _) in self.plain_forms.items():
+            field = self.plain[attr]
+            monoid: _Monoid
+            if form == "sum":
+                monoid = (
+                    Counter("DFTU_AGG_SUM", elem="i64")
+                    if field.elem == "i64"
+                    else Sum("DFTU_AGG_SUM", elem="f64")
+                )
+            elif form == "max":
+                monoid = Max("DFTU_AGG_MAX", elem=field.elem)
+            elif form == "min":
+                monoid = Min("DFTU_AGG_MIN", elem=field.elem)
+            elif form == "add":
+                monoid = SetV("DFTU_AGG_SET_UNION", elem=field.elem)
+            else:
+                monoid = ListV("DFTU_AGG_LIST_SORTED", needs_by=True, elem=field.elem)
+            self.maps[attr] = _MapDecl(field.key_types, (monoid,), False)
+
+    def _check_family(self, node: ast.expr, kind: str, what: str) -> None:
+        is_str = self._is_str_element(node)
+        if kind == "str" and not is_str:
+            _reject_at(f"{what} is a str and needs a string field such as e.name", node)
+        if kind != "str" and is_str:
+            _reject_at(f"{what} is a number and cannot be a string field", node)
+
+    def _plain_stmt(self, stmt: ast.stmt) -> "List[str] | None":
+        """Pass two: the contribution rows of one plain-container update."""
+        update = self._plain_update(stmt)
+        if update is None:
+            return None
+        field = self.plain[update.attr]
+        decl = self.maps[update.attr]
+        monoid = decl.values[0]
+        for kn, kt in zip(update.keys, decl.key_types):
+            self._check_family(kn, "str" if kt.dft == "DFTU_T_STR" else "i64", "this key component")
+        if update.form in ("add", "append"):
+            self._check_family(update.value, field.elem, "this element")
+        lines: List[str] = []
+        if update.identity:
+            zero = ast.copy_location(ast.Constant(0), update.value)
+            lines += self._emit_row(update.attr, update.keys, 0, monoid, zero, None)
+        by: ast.expr | None = None
+        if update.form == "append":
+            by = ast.copy_location(
+                ast.Attribute(ast.Name(self.event_name, ast.Load()), "ts", ast.Load()),
+                update.value,
+            )
+        lines += self._emit_row(update.attr, update.keys, 0, monoid, update.value, by)
+        return lines
+
+    def _store_method(self, node: ast.expr) -> "Tuple[_StoreField, str] | None":
+        if not (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Attribute)
+            and isinstance(node.func.value.value, ast.Name)
+            and node.func.value.value.id == self.self_name
+            and node.func.value.attr in self.stores
+        ):
+            return None
+        return self.stores[node.func.value.attr], node.func.attr
+
+    def _store_key_args(self, field: _StoreField, node: ast.expr) -> List[str]:
+        keys = self._keys(node)
+        if len(keys) != len(field.key_kinds):
+            _reject_at(
+                f"self.{field.name} takes {len(field.key_kinds)} key components, got {len(keys)}",
+                node,
+            )
+        out: List[str] = []
+        for kn, kind in zip(keys, field.key_kinds):
+            self._check_family(kn, kind, "this key component")
+            if kind == "str":
+                out.append(f"(dftu_str)({self._value(kn)})")
+            else:
+                expr, is_float = self._arith(kn)
+                if is_float:
+                    _reject_at("a float expression cannot be an int store key", kn)
+                out.append(f"(int64_t)({expr})")
+        return out
+
+    def _store_get(self, node: ast.expr) -> "Tuple[str, bool] | None":
+        found = self._store_method(node)
+        if found is None:
+            return None
+        field, method = found
+        assert isinstance(node, ast.Call)
+        if method != "get":
+            if method == "put":
+                _reject_at("self.<store>.put(...) is a statement, not a value", node)
+            _reject_at(f"store method .{method}; use get(key, default) and put(key, value)", node)
+        if len(node.args) != 2 or node.keywords:
+            _reject_at(f"self.{field.name}.get takes a key and a default value", node)
+        keys = self._store_key_args(field, node.args[0])
+        self._check_family(node.args[1], "i64", "this default")
+        default = self._rhs(node.args[1], field.value_kind)
+        self.store_gets.add(field.name)
+        args = ", ".join(["&_se", "host", *keys, default])
+        return f"_st_get_{field.name}({args})", field.value_kind == "f64"
+
+    def _store_put(self, call: ast.Call) -> "List[str] | None":
+        found = self._store_method(call)
+        if found is None:
+            return None
+        field, method = found
+        if method != "put":
+            _reject_at(
+                f"store method .{method} as a statement; use put(key, value) (get returns a value)",
+                call,
+            )
+        if len(call.args) != 2 or call.keywords:
+            _reject_at(f"self.{field.name}.put takes a key and a value", call)
+        keys = self._store_key_args(field, call.args[0])
+        self._check_family(call.args[1], "i64", "this value")
+        value = self._rhs(call.args[1], field.value_kind)
+        self.store_puts.add(field.name)
+        return [f"_st_put_{field.name}({', '.join(['&_se', 'host', *keys, value])});"]
 
     def _slice_elts(self, sl: ast.expr) -> List[ast.expr]:
         sl = _unwrap_index(sl)
@@ -1766,6 +2455,8 @@ class _Compiler:
         return defs, lines
 
     def _is_cse_candidate(self, node: ast.expr) -> bool:
+        if self._mentions_state(node):
+            return False
         if isinstance(node, ast.BinOp) and type(node.op) in _ARITH_OP:
             return True
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
@@ -1792,13 +2483,29 @@ class _Compiler:
         return self._add_stmt(stmt)
 
     def _add_stmt(self, stmt: ast.stmt) -> List[str]:
+        if self.plain:
+            plain_lines = self._plain_stmt(stmt)
+            if plain_lines is not None:
+                return plain_lines
         if isinstance(stmt, ast.AugAssign):
             return self._aug(stmt)
         if isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call):
+            if self.stores:
+                store_lines = self._store_put(stmt.value)
+                if store_lines is not None:
+                    return store_lines
             func = stmt.value.func
             if isinstance(func, ast.Attribute) and func.attr == "append":
                 return self._append(stmt.value)
             return self._observe(stmt.value)
+        if isinstance(stmt, (ast.Assign, ast.AnnAssign)) and stmt.value is not None:
+            attr = self._plain_attr_in(stmt.value)
+            if attr is not None:
+                _reject_at(
+                    f"self.{attr} is scan state and is write-only in the body: each worker "
+                    "holds only its own slice, so a read would see a partial value",
+                    stmt.value,
+                )
         _reject(_describe(stmt), stmt)
 
     def _compare(self, node: ast.expr) -> str:
@@ -1917,7 +2624,12 @@ class _Compiler:
 
     def _op_call(self, node: ast.expr) -> Tuple[str, bool] | None:
         """(c-expr, is_float) for a call to a referenced ``@jit.op`` transform,
-        inlining its C body on first use; None when not an op call."""
+        inlining its C body on first use; None when not an op call. A
+        ``self.<store>.get(...)`` call is lowered here too."""
+        if self.stores:
+            store_get = self._store_get(node)
+            if store_get is not None:
+                return store_get
         if not (
             isinstance(node, ast.Call)
             and isinstance(node.func, ast.Name)
@@ -2137,6 +2849,8 @@ class _Compiler:
         """Append one contribution row to ``attr``'s per-batch column buffers;
         the buffers are folded into the DFTU_SVC_AGG accumulator after the loop."""
         decl = self.maps[attr]
+        if monoid.elem != "str" and monoid.dft != "DFTU_AGG_DISTINCT":
+            self._check_family(value, "i64", "this value")
         self.rows_per_event[attr] = self.rows_per_event.get(attr, 0) + 1
         lines = ["{", f"    uint32_t _r = _n_{attr}++;"]
         for idx, kn in enumerate(keys):
@@ -2219,7 +2933,7 @@ class _Compiler:
                 return "DFTU_STR_NONE"
         if isinstance(node, ast.Constant):
             return self._const(node)
-        _reject(_describe(node), node)
+        self._reject_expr(node)
 
     def _rhs(self, node: ast.expr, elem: str) -> str:
         """Cast an expression into a value buffer of family ``elem``."""
@@ -2239,6 +2953,9 @@ class _Compiler:
             sym = _ARITH_OP.get(type(node.op))
             if sym is None:
                 _reject("arithmetic operator (only + - * / are allowed)", node)
+            for operand in (node.left, node.right):
+                if self._is_str_element(operand):
+                    _reject_at("a string field cannot be an arithmetic operand", operand)
             left, lf = self._arith(node.left)
             right, rf = self._arith(node.right)
             return f"({left} {sym} {right})", lf or rf or isinstance(node.op, ast.Div)
@@ -2273,7 +2990,7 @@ class _Compiler:
             if isinstance(v, float):
                 return repr(v), True
             _reject("literal (only integer or float literals are allowed)", node)
-        _reject(_describe(node), node)
+        self._reject_expr(node)
 
     def _const(self, node: ast.Constant) -> str:
         v = node.value
@@ -2596,6 +3313,261 @@ def _emit_frees(attr: str, decl: _AnyMap) -> List[str]:
     return out
 
 
+# The store codec of dftracer.utils.store_codec in C, for int, float, str and
+# tuple keys and int and float values, so a Python Namespace reads and writes
+# what compiled code does.
+_STORE_HELPERS = [
+    "struct DftuBuf {",
+    "    uint8_t* p;",
+    "    uint32_t n;",
+    "    uint32_t cap;",
+    "    int bad;",
+    "};",
+    "",
+    "struct DftuStoreEnv {",
+    "    dftu_ctx* ctx;",
+    "    void* h;",
+    "    const dftu_svc_store* e;",
+    "    dftu_store_snapshot_t* snap;",
+    "    dftu_status st;",
+    "    DftuBuf kb;",
+    "    DftuBuf vb;",
+    "    dftu_store_ns_t* ns[DFTU_ST_COUNT];",
+    "    dftu_store_batch_t* batch[DFTU_ST_COUNT];",
+    "};",
+    "",
+    "static void dftu_buf_byte(DftuBuf* b, uint8_t c) {",
+    "    if (b->bad) return;",
+    "    if (b->n == b->cap) {",
+    "        uint32_t cap = b->cap ? b->cap * 2u : 32u;",
+    "        uint8_t* p = (uint8_t*)realloc(b->p, cap);",
+    "        if (!p) {",
+    "            b->bad = 1;",
+    "            return;",
+    "        }",
+    "        b->p = p;",
+    "        b->cap = cap;",
+    "    }",
+    "    b->p[b->n++] = c;",
+    "}",
+    "",
+    "static void dftu_enc_int(DftuBuf* b, int64_t v) {",
+    "    if (v == 0) {",
+    "        dftu_buf_byte(b, 0x14);",
+    "        return;",
+    "    }",
+    "    uint64_t mag = v < 0 ? (uint64_t)0 - (uint64_t)v : (uint64_t)v;",
+    "    int size = 0;",
+    "    for (uint64_t t = mag; t; t >>= 8) ++size;",
+    "    uint64_t bits = mag;",
+    "    if (v > 0) {",
+    "        dftu_buf_byte(b, (uint8_t)(0x14 + size));",
+    "    } else {",
+    "        dftu_buf_byte(b, (uint8_t)(0x14 - size));",
+    "        bits = (size == 8 ? ~(uint64_t)0 : (((uint64_t)1 << (8 * size)) - 1)) - mag;",
+    "    }",
+    "    for (int i = size - 1; i >= 0; --i) dftu_buf_byte(b, (uint8_t)(bits >> (8 * i)));",
+    "}",
+    "",
+    "static void dftu_enc_f64(DftuBuf* b, double v) {",
+    "    uint64_t bits;",
+    "    memcpy(&bits, &v, sizeof(bits));",
+    "    bits = (bits >> 63) ? ~bits : (bits ^ ((uint64_t)1 << 63));",
+    "    dftu_buf_byte(b, 0x21);",
+    "    for (int i = 7; i >= 0; --i) dftu_buf_byte(b, (uint8_t)(bits >> (8 * i)));",
+    "}",
+    "",
+    "static void dftu_enc_str(DftuStoreEnv* s, const dftu_plugin_host* host, DftuBuf* b,",
+    "                         dftu_str id, const char* field) {",
+    "    uint32_t len = 0;",
+    "    const char* text = id == DFTU_STR_NONE ? NULL : host->resolve(host->h, id, &len);",
+    "    if (!text) {",
+    "        char msg[160];",
+    '        snprintf(msg, sizeof(msg), "store %s: a store key is a missing string", field);',
+    "        s->st = dftu_fail(s->ctx, DFTU_E_INVALID, msg);",
+    "        return;",
+    "    }",
+    "    dftu_buf_byte(b, 0x02);",
+    "    for (uint32_t i = 0; i < len; ++i) {",
+    "        dftu_buf_byte(b, (uint8_t)text[i]);",
+    "        if (text[i] == 0) dftu_buf_byte(b, 0xff);",
+    "    }",
+    "    dftu_buf_byte(b, 0x00);",
+    "}",
+    "",
+    "static int dftu_dec_int(dftu_store_bytes v, int64_t* out) {",
+    "    if (v.size < 1) return 0;",
+    "    uint8_t t = v.data[0];",
+    "    if (t == 0x14) {",
+    "        *out = 0;",
+    "        return v.size == 1;",
+    "    }",
+    "    int size = t > 0x14 ? (int)t - 0x14 : 0x14 - (int)t;",
+    "    if (size < 1 || size > 8 || v.size != (uint64_t)size + 1) return 0;",
+    "    uint64_t m = 0;",
+    "    for (int i = 0; i < size; ++i) m = (m << 8) | v.data[1 + i];",
+    "    if (t > 0x14) {",
+    "        if (m > (uint64_t)INT64_MAX) return 0;",
+    "        *out = (int64_t)m;",
+    "        return 1;",
+    "    }",
+    "    uint64_t mag = (size == 8 ? ~(uint64_t)0 : (((uint64_t)1 << (8 * size)) - 1)) - m;",
+    "    if (mag > ((uint64_t)1 << 63)) return 0;",
+    "    *out = (int64_t)((uint64_t)0 - mag);",
+    "    return 1;",
+    "}",
+    "",
+    "static int dftu_dec_f64(dftu_store_bytes v, double* out) {",
+    "    if (v.size != 9 || v.data[0] != 0x21) return 0;",
+    "    uint64_t bits = 0;",
+    "    for (int i = 1; i < 9; ++i) bits = (bits << 8) | v.data[i];",
+    "    bits = (bits >> 63) ? (bits ^ ((uint64_t)1 << 63)) : ~bits;",
+    "    memcpy(out, &bits, sizeof(bits));",
+    "    return 1;",
+    "}",
+    "",
+]
+
+
+def _store_key_lines(field: "_StoreField", buf: str) -> List[str]:
+    lines = [f"    dftu_buf_byte({buf}, 0x05);"] if field.is_tuple else []
+    for idx, kind in enumerate(field.key_kinds):
+        if kind == "str":
+            lines.append(f"    dftu_enc_str(s, host, {buf}, k{idx}, {_c_str_literal(field.name)});")
+        else:
+            lines.append(f"    dftu_enc_int({buf}, k{idx});")
+    if field.is_tuple:
+        lines.append(f"    dftu_buf_byte({buf}, 0x00);")
+    return lines
+
+
+def _emit_store_defs(
+    stores: "Dict[str, _StoreField]",
+    gets: "builtins.set[str]",
+    puts: "builtins.set[str]",
+) -> List[str]:
+    """File-scope C for the plugin's :class:`Store` fields: the codec, one typed
+    ``get`` and ``put`` per field the body uses, and the per-batch open/close."""
+    count = len(stores)
+    names = ", ".join(_c_str_literal(f.name) for f in stores.values())
+    put_flags = ", ".join("1" if f.name in puts else "0" for f in stores.values())
+    out = [f"#define DFTU_ST_COUNT {count}", ""]
+    out += _STORE_HELPERS
+    out += [
+        f"static const char* const _ST_NAMES[] = {{{names}}};",
+        f"static const int _ST_PUT[] = {{{put_flags}}};",
+        f"static const int _ST_HAS_GETS = {1 if gets else 0};",
+        "",
+    ]
+    for f in stores.values():
+        params = "".join(
+            f", {'dftu_str' if k == 'str' else 'int64_t'} k{i}" for i, k in enumerate(f.key_kinds)
+        )
+        ctype = "double" if f.value_kind == "f64" else "int64_t"
+        dec = "dftu_dec_f64" if f.value_kind == "f64" else "dftu_dec_int"
+        enc = "dftu_enc_f64" if f.value_kind == "f64" else "dftu_enc_int"
+        kind_name = "a float" if f.value_kind == "f64" else "an int"
+        if f.name in gets:
+            out += [
+                f"static {ctype} _st_get_{f.name}(DftuStoreEnv* s, const dftu_plugin_host* host{params},",
+                f"                         {ctype} dflt) {{",
+                "    if (s->st < 0) return dflt;",
+                "    s->kb.n = 0;",
+                *_store_key_lines(f, "&s->kb"),
+                "    if (s->st < 0) return dflt;",
+                "    if (s->kb.bad) {",
+                '        s->st = dftu_fail(s->ctx, DFTU_E_NO_MEMORY, "out of memory");',
+                "        return dflt;",
+                "    }",
+                "    dftu_store_scope sc = {DFTU_STORE_SCOPE_ROOT, NULL, 0};",
+                "    dftu_store_value_t* v = NULL;",
+                f"    dftu_status r = s->e->get(s->ctx, s->snap, s->ns[{f.index}], &sc, s->kb.p, s->kb.n, &v);",
+                "    if (r < 0) {",
+                "        s->st = r;",
+                "        return dflt;",
+                "    }",
+                "    if (!v) return dflt;",
+                f"    {ctype} out = dflt;",
+                f"    int ok = {dec}(s->e->value_bytes(v), &out);",
+                "    s->e->value_free(v);",
+                "    if (!ok) {",
+                "        s->st = dftu_fail(s->ctx, DFTU_E_INVALID,",
+                f'                          "store {f.name}: a stored value is not {kind_name}");',
+                "        return dflt;",
+                "    }",
+                "    return out;",
+                "}",
+                "",
+            ]
+        if f.name in puts:
+            out += [
+                f"static void _st_put_{f.name}(DftuStoreEnv* s, const dftu_plugin_host* host{params},",
+                f"                         {ctype} value) {{",
+                "    if (s->st < 0) return;",
+                "    s->kb.n = 0;",
+                "    s->vb.n = 0;",
+                *_store_key_lines(f, "&s->kb"),
+                f"    {enc}(&s->vb, value);",
+                "    if (s->st < 0) return;",
+                "    if (s->kb.bad || s->vb.bad) {",
+                '        s->st = dftu_fail(s->ctx, DFTU_E_NO_MEMORY, "out of memory");',
+                "        return;",
+                "    }",
+                f"    dftu_status r = s->e->put(s->ctx, s->batch[{f.index}], s->kb.p, s->kb.n, s->vb.p, s->vb.n);",
+                "    if (r < 0) s->st = r;",
+                "}",
+                "",
+            ]
+    out += [
+        "static dftu_status _st_open(DftuStoreEnv* s, dftu_ctx* ctx, const dftu_plugin_host* host) {",
+        "    memset(s, 0, sizeof(*s));",
+        "    s->ctx = ctx;",
+        "    s->h = host->h;",
+        "    s->e = (const dftu_svc_store*)host->get_service(host->h, DFTU_SVC_STORE);",
+        '    if (!s->e) return dftu_fail(ctx, DFTU_E_UNSUPPORTED, "the host has no store service");',
+        "    dftu_store_scope sc = {DFTU_STORE_SCOPE_ROOT, NULL, 0};",
+        "    for (int i = 0; i < DFTU_ST_COUNT; ++i) {",
+        "        dftu_status r = s->e->ns(ctx, host->h, _ST_NAMES[i], 1, DFTU_STORE_FOLD_NONE, 1, 1, &s->ns[i]);",
+        "        if (r < 0) return r;",
+        "        if (_ST_PUT[i]) {",
+        "            r = s->e->batch(ctx, host->h, s->ns[i], &sc, 0, NULL, 0, &s->batch[i]);",
+        "            if (r < 0) return r;",
+        "        }",
+        "    }",
+        "    if (_ST_HAS_GETS) {",
+        "        dftu_status r = s->e->snapshot(ctx, host->h, &s->snap);",
+        "        if (r < 0) return r;",
+        "    }",
+        "    return DFTU_OK;",
+        "}",
+        "",
+        "static void _st_close(DftuStoreEnv* s, int commit) {",
+        "    if (s->e) {",
+        "        for (int i = 0; i < DFTU_ST_COUNT; ++i) {",
+        "            if (s->batch[i]) {",
+        "                if (commit) {",
+        "                    dftu_status r = s->e->commit(s->ctx, s->h, s->batch[i]);",
+        "                    if (r < 0 && s->st >= 0) {",
+        "                        char msg[160];",
+        '                        snprintf(msg, sizeof(msg), "store %s: the commit failed (status %d)", _ST_NAMES[i], (int)r);',
+        "                        s->st = dftu_fail(s->ctx, r, msg);",
+        "                    }",
+        "                } else {",
+        "                    s->e->batch_free(s->batch[i]);",
+        "                }",
+        "            }",
+        "            if (s->ns[i]) s->e->ns_free(s->ns[i]);",
+        "        }",
+        "        if (s->snap) s->e->snapshot_free(s->snap);",
+        "    }",
+        "    free(s->kb.p);",
+        "    free(s->vb.p);",
+        "}",
+        "",
+    ]
+    return out
+
+
 def _emit(
     maps: Dict[str, _AnyMap],
     body: List[str],
@@ -2610,8 +3582,12 @@ def _emit(
     config_fields: "Dict[str, _CfgField] | None" = None,
     raw_event: bool = False,
     map_ids: "Dict[str, str] | None" = None,
+    stores: "Dict[str, _StoreField] | None" = None,
+    store_gets: "builtins.set[str] | None" = None,
+    store_puts: "builtins.set[str] | None" = None,
 ) -> str:
     op_defs = op_defs or []
+    stores = stores or {}
     ports = ports or {}
     map_ids = map_ids if map_ids is not None else {attr: attr for attr in maps}
     pub_ports = [(n, p) for n, p in ports.items() if p.role == "publish"]
@@ -2628,6 +3604,7 @@ def _emit(
         "",
         "#include <cstring>",
         "#include <stdint.h>",
+        "#include <stdio.h>",
         "#include <stdlib.h>",
         "",
     ]
@@ -2642,6 +3619,8 @@ def _emit(
         out += _STR_COL_HELPER
     if needs_bitmap:
         out += _BITMAP_HELPER
+    if stores:
+        out += _emit_store_defs(stores, store_gets or builtins.set(), store_puts or builtins.set())
     for fn_src in op_defs:
         out += [fn_src, ""]
     cfgs = config_fields if config_fields is not None else {}
@@ -2779,6 +3758,14 @@ def _emit(
         )
     else:
         out.append("    (void)_agg;")
+    if stores:
+        out += [
+            "    DftuStoreEnv _se;",
+            "    {",
+            "        dftu_status _so = _st_open(&_se, ctx, host);",
+            "        if (_so < 0) _st = _so;",
+            "    }",
+        ]
     out.append("    int64_t n = dftu_dataframe_num_rows(df);")
     if has_slice:
         out.append("    DftuSlice* _sl = (DftuSlice*)slice;")
@@ -2813,7 +3800,7 @@ def _emit(
     out.append("    int _alloc_ok = 1;")
     for attr, decl in maps.items():
         out += _emit_buffers(attr, decl, builtins.max(1, rows_per_event.get(attr, 1)))
-    out.append("    if (_alloc_ok) {")
+    out.append("    if (_alloc_ok && _st >= 0) {")
     inner: List[str] = []
     if ports:
         inner += _emit_port_pre(pub_ports, sub_ports)
@@ -2822,6 +3809,8 @@ def _emit(
         inner += ["        " + ln for ln in _RAW_EVENT_SHIM_POPULATE]
     for line in body:
         inner.append("        " + line)
+    if stores:
+        inner.append("        if (_se.st < 0) break;")
     inner.append("    }")
     if ports:
         inner += _emit_port_flush(pub_ports)
@@ -2829,6 +3818,11 @@ def _emit(
         inner += _emit_flush(attr, decl, map_ids[attr])
     out += ["    " + ln for ln in inner]
     out.append("    }")
+    if stores:
+        out += [
+            "    _st_close(&_se, _st >= 0 && _se.st >= 0);",
+            "    if (_st >= 0 && _se.st < 0) _st = _se.st;",
+        ]
     out.append('    if (!_alloc_ok) _st = dftu_fail(ctx, DFTU_E_NO_MEMORY, "out of memory");')
     for attr, decl in maps.items():
         out += _emit_frees(attr, decl)
@@ -3189,6 +4183,29 @@ def plugin_config(
     return out
 
 
+def _store_plugin_name(identity: str) -> str:
+    """The plugin name a store-using plugin loads under, which is the stem of its
+    ``.so`` and the host's namespace prefix: its identity with every byte outside
+    ``[a-z0-9-]`` escaped (``_`` as ``__``, ``.`` as ``_d``, ``/`` as ``_s``, any other
+    as ``_u<hex>_``), so two identities never share a name."""
+    out: List[str] = []
+    for c in identity:
+        if c in _STORE_NAME_CHARS and c != "_":
+            out.append(c)
+        elif c == "_":
+            out.append("__")
+        elif c == ".":
+            out.append("_d")
+        elif c == "/":
+            out.append("_s")
+        else:
+            out.append(f"_u{ord(c):x}_")
+    return "".join(out)
+
+
+_STORE_NAME_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789_-")
+
+
 def _build_plugin(cls: type, package: "JitPackage | None" = None) -> type:
     pkg = package if package is not None else _DEFAULT_PACKAGE
     maps: Dict[str, _AnyMap] = {}
@@ -3201,9 +4218,18 @@ def _build_plugin(cls: type, package: "JitPackage | None" = None) -> type:
             ports[attr] = val
         elif isinstance(val, _EachEvent):
             each.append(val)
-    if not maps and not ports:
+    plains, stores = _state_fields(cls)
+    if not maps and not ports and not plains and not stores:
         raise _class_error(
-            cls, "@jit.plugin needs at least one jit.map or jit.publish/jit.consume attribute"
+            cls,
+            "@jit.plugin needs at least one jit.map, plain-container state field, jit.Store "
+            "or jit.publish/jit.consume attribute",
+        )
+    if len(each) != 1:
+        raise _class_error(cls, "@jit.plugin needs exactly one @jit.each_event method")
+    if (plains or stores) and each[0].raw:
+        raise _class_error(
+            cls, "plain-container state and jit.Store need an AST-compiled each_event body, not raw"
         )
     # A publish port's wire id is only knowable once its class is built: it is
     # package + module + class + attribute, resolved here so a later
@@ -3211,7 +4237,6 @@ def _build_plugin(cls: type, package: "JitPackage | None" = None) -> type:
     for attr, port in ports.items():
         if port.role == "publish":
             port.name = pkg.identity(cls, attr)
-    map_ids = {attr: pkg.identity(cls, attr) for attr in maps}
     for attr, decl in maps.items():
         if decl.is_product and any(m.elem == "str" for m in decl.values):
             raise _class_error(
@@ -3221,8 +4246,6 @@ def _build_plugin(cls: type, package: "JitPackage | None" = None) -> type:
                 "product component; declare it as its own jit.map",
                 attr,
             )
-    if len(each) != 1:
-        raise _class_error(cls, "@jit.plugin needs exactly one @jit.each_event method")
     plan_duql = getattr(cls, "plan_duql", None)
     if plan_duql is not None and not isinstance(plan_duql, str):
         raise _class_error(cls, "@jit.plugin plan_duql must be a query DSL string", "plan_duql")
@@ -3245,14 +4268,25 @@ def _build_plugin(cls: type, package: "JitPackage | None" = None) -> type:
             _referenced_ops(each[0].fn),
             ports=ports,
             config_fields=configs,
+            plain=plains,
+            stores=stores,
         )
         body = compiler.lower(each[0].fn)
+        for attr in plains:
+            if attr not in compiler.plain_forms:
+                raise _class_error(
+                    cls,
+                    f"'{attr}' is never updated in the each_event body, so its merge "
+                    "cannot be inferred; remove it or update it",
+                    attr,
+                )
         fields_used = compiler.fields_used
         str_literals = compiler.str_literals
         arg_keys = compiler.arg_keys
         arg_helpers = compiler.arg_helpers
         op_defs = compiler.op_defs
         rows_per_event = compiler.rows_per_event
+    map_ids = {attr: pkg.identity(cls, attr) for attr in maps}
     source = _emit(
         maps,
         body,
@@ -3267,9 +4301,13 @@ def _build_plugin(cls: type, package: "JitPackage | None" = None) -> type:
         configs,
         raw_event=each[0].raw,
         map_ids=map_ids,
+        stores=stores,
+        store_gets=compiler.store_gets if not each[0].raw else None,
+        store_puts=compiler.store_puts if not each[0].raw else None,
     )
     result_names = {qid: attr for attr, qid in map_ids.items()}
-    plugin = JitPlugin(cls.__name__, source, {}, result_names, pkg.shippable(cls))
+    name = _store_plugin_name(pkg.identity(cls)) if stores else cls.__name__
+    plugin = JitPlugin(name, source, {}, result_names, pkg.shippable(cls))
     setattr(cls, "_jit_plugin", plugin)
     if configs:
         setattr(cls, "_jit_config", configs)
@@ -3785,9 +4823,12 @@ def compile_plugin(
             out_path = Path(out)
         else:
             digest = _plugin_build.source_digest(spec.source, include, cxx)
-            out_path = cache / f"{spec.name}.{digest}.so"
+            # The digest is the directory, not part of the file name: the host
+            # names a plugin, and its store namespaces, after the .so stem.
+            out_path = cache / digest / f"{spec.name}.so"
             if out_path.is_file():
                 return str(out_path)
+            out_path.parent.mkdir(parents=True, exist_ok=True)
         src_path = out_path.with_suffix(".cpp")
         src_path.write_text(spec.source, encoding="utf-8")
         cmd = [cxx, *flags, "-o", str(out_path), str(src_path)]

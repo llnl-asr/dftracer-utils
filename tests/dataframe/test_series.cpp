@@ -1618,7 +1618,7 @@ TEST_SUITE("vec") {
 
         dftu_series* outk = nullptr;
         dftu_series* outv[2] = {nullptr, nullptr};
-        int32_t w =
+        std::int32_t w =
             dftu_dataframe_group_agg_expr(kexpr, specs, 2, in, 3, &outk, outv);
         REQUIRE(w == 2);
         Series rk{outk};
@@ -2196,8 +2196,8 @@ TEST_SUITE("vec") {
         dftu_series* via_op = dftu_op_run(op, nullptr, 0, arg);
         REQUIRE(via_op);
         CHECK(dftu_series_length(via_op) == 6);
-        CHECK(std::memcmp(dftu_series_data(via_op), id, 6 * sizeof(int32_t)) ==
-              0);
+        CHECK(std::memcmp(dftu_series_data(via_op), id,
+                          6 * sizeof(std::int32_t)) == 0);
         dftu_series_free(via_op);
         dftu_dataframe_free(const_cast<dftu_dataframe*>(h));
     }

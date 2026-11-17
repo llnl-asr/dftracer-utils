@@ -399,7 +399,7 @@ dftu_scalar dftu_series_reduce(const dftu_series* v, dftu_reduce_op op) {
     return out;
 }
 
-int64_t dftu_series_count(const dftu_series* v) {
+std::int64_t dftu_series_count(const dftu_series* v) {
     if (v->rowwise_nulls()) {
         std::int64_t n = 0;
         for (std::int64_t i = 0; i < v->length; ++i)
@@ -440,7 +440,7 @@ dftu_scalar dftu_series_product(const dftu_series* v) {
     return out;
 }
 
-int32_t dftu_series_all(const dftu_series* v) {
+std::int32_t dftu_series_all(const dftu_series* v) {
     DFTU_FLAT_OPERAND(v, flat_v, dftu_series_all(flat_v));
 
     using dftracer::utils::dataframe::TypeId;
@@ -450,7 +450,7 @@ int32_t dftu_series_all(const dftu_series* v) {
     return dftracer::utils::dataframe::all_bits(*v) ? 1 : 0;
 }
 
-int32_t dftu_series_any(const dftu_series* v) {
+std::int32_t dftu_series_any(const dftu_series* v) {
     DFTU_FLAT_OPERAND(v, flat_v, dftu_series_any(flat_v));
 
     using dftracer::utils::dataframe::TypeId;
@@ -460,7 +460,7 @@ int32_t dftu_series_any(const dftu_series* v) {
     return dftracer::utils::dataframe::any_bits(*v) ? 1 : 0;
 }
 
-int64_t dftu_series_arg_min(const dftu_series* v) {
+std::int64_t dftu_series_arg_min(const dftu_series* v) {
     DFTU_FLAT_OPERAND(v, flat_v, dftu_series_arg_min(flat_v));
 
     using dftracer::utils::dataframe::is_arithmetic_type;
@@ -489,7 +489,7 @@ int64_t dftu_series_arg_min(const dftu_series* v) {
     return idx;
 }
 
-int64_t dftu_series_arg_max(const dftu_series* v) {
+std::int64_t dftu_series_arg_max(const dftu_series* v) {
     DFTU_FLAT_OPERAND(v, flat_v, dftu_series_arg_max(flat_v));
 
     using dftracer::utils::dataframe::is_arithmetic_type;

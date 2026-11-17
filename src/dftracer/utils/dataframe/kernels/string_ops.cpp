@@ -358,7 +358,7 @@ dftu_series* regex_replace_w(const dftu_series* v,
         offsets[i + 1] = static_cast<std::int32_t>(data.size());
     }
     return dftu_series_new_string(DFTU_TYPE_STRING, offsets.data(), data.data(),
-                                  static_cast<int64_t>(n),
+                                  static_cast<std::int64_t>(n),
                                   any_null ? valid.data() : nullptr);
 }
 
@@ -390,36 +390,36 @@ duql::PatternPtr compiled(duql::PatternResult r) {
 }
 
 dftracer::utils::dstd::StringView pattern_text(const char* pattern,
-                                               int32_t len) {
+                                               std::int32_t len) {
     return {pattern, static_cast<std::size_t>(len)};
 }
 
 }  // namespace
 
 dftu_series* dftu_series_str_eq(const dftu_series* v, const char* rhs,
-                                int32_t rhs_size) {
+                                std::int32_t rhs_size) {
     return dataframe::kernels::string_match().eq(v, rhs, rhs_size);
 }
 
 dftu_series* dftu_series_str_contains(const dftu_series* v, const char* needle,
-                                      int32_t needle_size) {
+                                      std::int32_t needle_size) {
     return dataframe::kernels::string_match().contains(v, needle, needle_size);
 }
 
 dftu_series* dftu_series_str_starts_with(const dftu_series* v,
                                          const char* prefix,
-                                         int32_t prefix_size) {
+                                         std::int32_t prefix_size) {
     return dataframe::kernels::string_match().starts_with(v, prefix,
                                                           prefix_size);
 }
 
 dftu_series* dftu_series_str_ends_with(const dftu_series* v, const char* suffix,
-                                       int32_t suffix_size) {
+                                       std::int32_t suffix_size) {
     return dataframe::kernels::string_match().ends_with(v, suffix, suffix_size);
 }
 
 dftu_series* dftu_series_str_matches(const dftu_series* v, const char* pattern,
-                                     int32_t pattern_size) {
+                                     std::int32_t pattern_size) {
     const auto p = compiled(duql::compile_regex(
         pattern_text(pattern, pattern_size), false, /*whole=*/true));
     if (!p) return nullptr;
@@ -459,14 +459,15 @@ dftu_series* str_extract_w(const dftu_series* v,
         offsets[i + 1] = static_cast<std::int32_t>(data.size());
     }
     return dftu_series_new_string(DFTU_TYPE_STRING, offsets.data(), data.data(),
-                                  static_cast<int64_t>(n),
+                                  static_cast<std::int64_t>(n),
                                   any_null ? valid.data() : nullptr);
 }
 
 }  // namespace
 
 dftu_series* dftu_series_str_extract(const dftu_series* v, const char* pattern,
-                                     int32_t pattern_size, int64_t group) {
+                                     std::int32_t pattern_size,
+                                     std::int64_t group) {
     if (!v || !pattern || group < 0) return nullptr;
     DFTU_FLAT_OPERAND(
         v, flat_v,
@@ -483,8 +484,9 @@ dftu_series* dftu_series_str_extract(const dftu_series* v, const char* pattern,
 
 dftu_series* dftu_series_str_regex_replace(const dftu_series* v,
                                            const char* pattern,
-                                           int32_t pattern_size, const char* to,
-                                           int32_t to_size) {
+                                           std::int32_t pattern_size,
+                                           const char* to,
+                                           std::int32_t to_size) {
     if (!v || !pattern || !to) return nullptr;
     DFTU_FLAT_OPERAND(v, flat_v,
                       dftu_series_str_regex_replace(flat_v, pattern,
@@ -500,7 +502,7 @@ dftu_series* dftu_series_str_regex_replace(const dftu_series* v,
 }
 
 dftu_series* dftu_series_str_search(const dftu_series* v, const char* pattern,
-                                    int32_t pattern_size) {
+                                    std::int32_t pattern_size) {
     const auto p = compiled(
         duql::compile_regex(pattern_text(pattern, pattern_size), false));
     if (!p) return nullptr;
@@ -508,7 +510,7 @@ dftu_series* dftu_series_str_search(const dftu_series* v, const char* pattern,
 }
 
 dftu_series* dftu_series_str_like(const dftu_series* v, const char* pattern,
-                                  int32_t pattern_size) {
+                                  std::int32_t pattern_size) {
     const auto p = compiled(
         duql::compile_like(pattern_text(pattern, pattern_size), false, '\\'));
     if (!p) return nullptr;
@@ -559,7 +561,7 @@ dftu_series* dftu_series_str_len_chars(const dftu_series* v) {
 }
 
 dftu_series* dftu_series_str_find(const dftu_series* v, const char* needle,
-                                  int32_t needle_size) {
+                                  std::int32_t needle_size) {
     dftracer::utils::dstd::StringView n(needle,
                                         static_cast<std::size_t>(needle_size));
     return string_int64(v, [n](dftracer::utils::dstd::StringView s) {
@@ -698,8 +700,8 @@ dftu_series* dftu_series_str_rstrip(const dftu_series* v) {
 }
 
 dftu_series* dftu_series_str_replace(const dftu_series* v, const char* pat,
-                                     int32_t pat_size, const char* repl,
-                                     int32_t repl_size) {
+                                     std::int32_t pat_size, const char* repl,
+                                     std::int32_t repl_size) {
     DFTU_FLAT_OPERAND(
         v, flat_v,
         dftu_series_str_replace(flat_v, pat, pat_size, repl, repl_size));
@@ -713,8 +715,9 @@ dftu_series* dftu_series_str_replace(const dftu_series* v, const char* pat,
     });
 }
 dftu_series* dftu_series_str_replace_all(const dftu_series* v, const char* pat,
-                                         int32_t pat_size, const char* repl,
-                                         int32_t repl_size) {
+                                         std::int32_t pat_size,
+                                         const char* repl,
+                                         std::int32_t repl_size) {
     DFTU_FLAT_OPERAND(
         v, flat_v,
         dftu_series_str_replace_all(flat_v, pat, pat_size, repl, repl_size));
@@ -818,7 +821,7 @@ dftu_series* dftu_series_list_len(const dftu_series* v) {
     return out;
 }
 
-dftu_series* dftu_series_list_get(const dftu_series* v, int64_t index) {
+dftu_series* dftu_series_list_get(const dftu_series* v, std::int64_t index) {
     DFTU_FLAT_OPERAND(v, flat_v, dftu_series_list_get(flat_v, index));
 
     if (!v || v->type != TypeId::List || v->encoding != Encoding::Flat)
@@ -840,7 +843,7 @@ dftu_series* dftu_series_list_get(const dftu_series* v, int64_t index) {
     dftu_series* child = dftu_series_child(v, 0);
     if (!child) return nullptr;
     dftu_series* out =
-        dftu_series_take(child, idx.data(), static_cast<int64_t>(n));
+        dftu_series_take(child, idx.data(), static_cast<std::int64_t>(n));
     dftu_series_free(child);
     return out;
 }
@@ -1582,40 +1585,40 @@ std::int64_t count_literal(dftracer::utils::dstd::StringView s,
 
 }  // namespace
 
-dftu_series* dftu_series_str_slice(const dftu_series* v, int64_t start,
-                                   int64_t length) {
+dftu_series* dftu_series_str_slice(const dftu_series* v, std::int64_t start,
+                                   std::int64_t length) {
     if (!v || !is_string_kind(v->type)) return nullptr;
     DFTU_FLAT_OPERAND(v, flat_v, dftu_series_str_slice(flat_v, start, length));
     return slice_impl(v, start, length);
 }
 
-dftu_series* dftu_series_str_pad_start(const dftu_series* v, int64_t width,
+dftu_series* dftu_series_str_pad_start(const dftu_series* v, std::int64_t width,
                                        char fill) {
     if (!v || !is_string_kind(v->type)) return nullptr;
     DFTU_FLAT_OPERAND(v, flat_v,
                       dftu_series_str_pad_start(flat_v, width, fill));
     return pad_impl(v, width, fill, 0);
 }
-dftu_series* dftu_series_str_pad_end(const dftu_series* v, int64_t width,
+dftu_series* dftu_series_str_pad_end(const dftu_series* v, std::int64_t width,
                                      char fill) {
     if (!v || !is_string_kind(v->type)) return nullptr;
     DFTU_FLAT_OPERAND(v, flat_v, dftu_series_str_pad_end(flat_v, width, fill));
     return pad_impl(v, width, fill, 1);
 }
-dftu_series* dftu_series_str_center(const dftu_series* v, int64_t width,
+dftu_series* dftu_series_str_center(const dftu_series* v, std::int64_t width,
                                     char fill) {
     if (!v || !is_string_kind(v->type)) return nullptr;
     DFTU_FLAT_OPERAND(v, flat_v, dftu_series_str_center(flat_v, width, fill));
     return pad_impl(v, width, fill, 2);
 }
-dftu_series* dftu_series_str_zfill(const dftu_series* v, int64_t width) {
+dftu_series* dftu_series_str_zfill(const dftu_series* v, std::int64_t width) {
     if (!v || !is_string_kind(v->type)) return nullptr;
     DFTU_FLAT_OPERAND(v, flat_v, dftu_series_str_zfill(flat_v, width));
     return zfill_impl(v, width);
 }
 
 dftu_series* dftu_series_str_split(const dftu_series* v, const char* sep,
-                                   int32_t sep_size) {
+                                   std::int32_t sep_size) {
     if (!v || !is_string_kind(v->type)) return nullptr;
     DFTU_FLAT_OPERAND(v, flat_v, dftu_series_str_split(flat_v, sep, sep_size));
     // An empty separator is no split point: one part, the whole row.
@@ -1625,7 +1628,8 @@ dftu_series* dftu_series_str_split(const dftu_series* v, const char* sep,
 }
 
 dftu_series* dftu_series_str_partition(const dftu_series* v, const char* sep,
-                                       int32_t sep_size, int32_t from_right) {
+                                       std::int32_t sep_size,
+                                       std::int32_t from_right) {
     if (!v || !is_string_kind(v->type) || sep_size <= 0) return nullptr;
     DFTU_FLAT_OPERAND(
         v, flat_v,
@@ -1638,7 +1642,7 @@ dftu_series* dftu_series_str_partition(const dftu_series* v, const char* sep,
 }
 
 dftu_series* dftu_series_str_rfind(const dftu_series* v, const char* needle,
-                                   int32_t needle_size) {
+                                   std::int32_t needle_size) {
     if (!v || !is_string_kind(v->type)) return nullptr;
     DFTU_FLAT_OPERAND(v, flat_v,
                       dftu_series_str_rfind(flat_v, needle, needle_size));
@@ -1647,7 +1651,7 @@ dftu_series* dftu_series_str_rfind(const dftu_series* v, const char* needle,
     return with_flat(v, [&](const auto& f) { return rfind_impl(v, f, n); });
 }
 
-dftu_series* dftu_series_str_case(const dftu_series* v, int32_t op) {
+dftu_series* dftu_series_str_case(const dftu_series* v, std::int32_t op) {
     if (!v || !is_string_kind(v->type)) return nullptr;
     DFTU_FLAT_OPERAND(v, flat_v, dftu_series_str_case(flat_v, op));
     switch (static_cast<dftu_str_case>(op)) {
@@ -1661,14 +1665,14 @@ dftu_series* dftu_series_str_case(const dftu_series* v, int32_t op) {
     return nullptr;
 }
 
-dftu_series* dftu_series_str_is(const dftu_series* v, int32_t cls) {
+dftu_series* dftu_series_str_is(const dftu_series* v, std::int32_t cls) {
     if (!v) return nullptr;
     DFTU_FLAT_OPERAND(v, flat_v, dftu_series_str_is(flat_v, cls));
     return is_impl(v, cls);
 }
 
 dftu_series* dftu_series_str_count(const dftu_series* v, const char* pat,
-                                   int32_t pat_size) {
+                                   std::int32_t pat_size) {
     if (!v || !is_string_kind(v->type)) return nullptr;
     dftracer::utils::dstd::StringView p(pat,
                                         static_cast<std::size_t>(pat_size));
@@ -1678,7 +1682,8 @@ dftu_series* dftu_series_str_count(const dftu_series* v, const char* pat,
 }
 
 dftu_series* dftu_series_str_remove_prefix(const dftu_series* v,
-                                           const char* prefix, int32_t len) {
+                                           const char* prefix,
+                                           std::int32_t len) {
     if (!v || !is_string_kind(v->type)) return nullptr;
     DFTU_FLAT_OPERAND(v, flat_v,
                       dftu_series_str_remove_prefix(flat_v, prefix, len));
@@ -1689,7 +1694,8 @@ dftu_series* dftu_series_str_remove_prefix(const dftu_series* v,
 }
 
 dftu_series* dftu_series_str_remove_suffix(const dftu_series* v,
-                                           const char* suffix, int32_t len) {
+                                           const char* suffix,
+                                           std::int32_t len) {
     if (!v || !is_string_kind(v->type)) return nullptr;
     DFTU_FLAT_OPERAND(v, flat_v,
                       dftu_series_str_remove_suffix(flat_v, suffix, len));
@@ -1699,7 +1705,7 @@ dftu_series* dftu_series_str_remove_suffix(const dftu_series* v,
                              false);
 }
 
-dftu_series* dftu_series_str_repeat(const dftu_series* v, int64_t n) {
+dftu_series* dftu_series_str_repeat(const dftu_series* v, std::int64_t n) {
     if (!v || !is_string_kind(v->type) || n < 0) return nullptr;
     DFTU_FLAT_OPERAND(v, flat_v, dftu_series_str_repeat(flat_v, n));
     return repeat_impl(v, n);
@@ -1721,7 +1727,7 @@ dftu_series* dftu_series_str_cat(const dftu_series* a, const dftu_series* b) {
 }
 
 dftu_series* dftu_series_list_join(const dftu_series* v, const char* sep,
-                                   int32_t sep_size) {
+                                   std::int32_t sep_size) {
     DFTU_FLAT_OPERAND(v, flat_v, dftu_series_list_join(flat_v, sep, sep_size));
     if (!v || v->type != TypeId::List || v->encoding != Encoding::Flat)
         return nullptr;
@@ -1737,7 +1743,7 @@ dftu_series* dftu_series_list_join(const dftu_series* v, const char* sep,
 }
 
 dftu_series* dftu_series_str_findall(const dftu_series* v, const char* pattern,
-                                     int32_t pattern_size) {
+                                     std::int32_t pattern_size) {
     if (!v || !is_string_kind(v->type)) return nullptr;
     DFTU_FLAT_OPERAND(v, flat_v,
                       dftu_series_str_findall(flat_v, pattern, pattern_size));
@@ -1865,7 +1871,7 @@ dftu_series* transform_rows_w(const dftu_series* v, Fn& fn) {
         offsets[i + 1] = static_cast<std::int32_t>(data.size());
     }
     return dftu_series_new_string(DFTU_TYPE_STRING, offsets.data(), data.data(),
-                                  static_cast<int64_t>(n),
+                                  static_cast<std::int64_t>(n),
                                   any_null ? valid.data() : nullptr);
 }
 
@@ -2199,7 +2205,8 @@ class Wrapper {
 
 }  // namespace
 
-dftu_series* dftu_series_str_normalize(const dftu_series* v, int32_t form) {
+dftu_series* dftu_series_str_normalize(const dftu_series* v,
+                                       std::int32_t form) {
     if (!is_utf8_string(v)) return nullptr;
     int options = UTF8PROC_STABLE;
     switch (form) {
@@ -2279,8 +2286,8 @@ dftu_series* dftu_series_str_translate(const dftu_series* v,
     });
 }
 
-dftu_series* dftu_series_str_wrap(const dftu_series* v, int64_t width,
-                                  int32_t flags) {
+dftu_series* dftu_series_str_wrap(const dftu_series* v, std::int64_t width,
+                                  std::int32_t flags) {
     constexpr std::int32_t ALL_FLAGS =
         DFTU_WRAP_EXPAND_TABS | DFTU_WRAP_REPLACE_WHITESPACE |
         DFTU_WRAP_DROP_WHITESPACE | DFTU_WRAP_BREAK_LONG_WORDS |

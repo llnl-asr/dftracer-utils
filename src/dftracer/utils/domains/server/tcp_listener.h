@@ -23,7 +23,7 @@ namespace dftracer::utils::domains::server {
 /// coroutine handlers using structured concurrency.
 class TcpListener {
    public:
-    TcpListener(const dstd::String& addr, uint16_t port);
+    TcpListener(const dstd::String& addr, std::uint16_t port);
     ~TcpListener();
 
     TcpListener(const TcpListener&) = delete;
@@ -46,7 +46,7 @@ class TcpListener {
     void stop();
 
     int fd() const { return listen_fd_; }
-    uint16_t port() const { return port_; }
+    std::uint16_t port() const { return port_; }
 
    private:
     /// Track live client fds so shutdown can interrupt handlers parked in recv
@@ -57,7 +57,7 @@ class TcpListener {
     void shutdown_active();
 
     dstd::String bind_addr_;
-    uint16_t port_;
+    std::uint16_t port_;
     int listen_fd_ = -1;
     std::atomic<bool> stopped_{false};
     std::mutex active_mu_;

@@ -190,8 +190,9 @@ dftu_status checked_pair(dftu_ctx* ctx, const dftu_store_snapshot_t* snapshot,
 }
 
 dftu_status store_ns(dftu_ctx* ctx, void* h, const char* name,
-                     uint32_t format_version, dftu_store_fold_kind fold,
-                     int32_t durable, int32_t shared, dftu_store_ns_t** out) {
+                     std::uint32_t format_version, dftu_store_fold_kind fold,
+                     std::int32_t durable, std::int32_t shared,
+                     dftu_store_ns_t** out) {
     if (out == nullptr)
         return host_fail(ctx, DFTU_E_INVALID, "dftu.svc.store: ns out is NULL");
     *out = nullptr;
@@ -219,9 +220,10 @@ void store_ns_free(::dftu_store_ns_t* ns) {
 }
 
 dftu_status store_batch(dftu_ctx* ctx, void* h, const dftu_store_ns_t* ns,
-                        const dftu_store_scope* scope, uint64_t params_hash,
+                        const dftu_store_scope* scope,
+                        std::uint64_t params_hash,
                         const dftu_store_source_stat* sources,
-                        uint64_t source_count, dftu_store_batch_t** out) {
+                        std::uint64_t source_count, dftu_store_batch_t** out) {
     if (out == nullptr)
         return host_fail(ctx, DFTU_E_INVALID,
                          "dftu.svc.store: batch out is NULL");
@@ -248,8 +250,8 @@ void store_batch_free(::dftu_store_batch_t* batch) {
 }
 
 dftu_status store_put(dftu_ctx* ctx, dftu_store_batch_t* batch,
-                      const uint8_t* key, uint64_t key_size,
-                      const uint8_t* value, uint64_t value_size) {
+                      const std::uint8_t* key, std::uint64_t key_size,
+                      const std::uint8_t* value, std::uint64_t value_size) {
     dftu_store_batch_t* inner = nullptr;
     if (const dftu_status st = handle_inner(ctx, batch, "batch", &inner);
         st < 0)
@@ -261,8 +263,8 @@ dftu_status store_put(dftu_ctx* ctx, dftu_store_batch_t* batch,
 }
 
 dftu_status store_fold(dftu_ctx* ctx, dftu_store_batch_t* batch,
-                       const uint8_t* key, uint64_t key_size,
-                       const uint8_t* value, uint64_t value_size) {
+                       const std::uint8_t* key, std::uint64_t key_size,
+                       const std::uint8_t* value, std::uint64_t value_size) {
     dftu_store_batch_t* inner = nullptr;
     if (const dftu_status st = handle_inner(ctx, batch, "batch", &inner);
         st < 0)
@@ -274,7 +276,7 @@ dftu_status store_fold(dftu_ctx* ctx, dftu_store_batch_t* batch,
 }
 
 dftu_status store_erase(dftu_ctx* ctx, dftu_store_batch_t* batch,
-                        const uint8_t* key, uint64_t key_size) {
+                        const std::uint8_t* key, std::uint64_t key_size) {
     dftu_store_batch_t* inner = nullptr;
     if (const dftu_status st = handle_inner(ctx, batch, "batch", &inner);
         st < 0)
@@ -285,8 +287,9 @@ dftu_status store_erase(dftu_ctx* ctx, dftu_store_batch_t* batch,
 }
 
 dftu_status store_erase_range(dftu_ctx* ctx, dftu_store_batch_t* batch,
-                              const uint8_t* begin, uint64_t begin_size,
-                              const uint8_t* end, uint64_t end_size) {
+                              const std::uint8_t* begin,
+                              std::uint64_t begin_size, const std::uint8_t* end,
+                              std::uint64_t end_size) {
     dftu_store_batch_t* inner = nullptr;
     if (const dftu_status st = handle_inner(ctx, batch, "batch", &inner);
         st < 0)
@@ -346,7 +349,7 @@ void store_snapshot_free(::dftu_store_snapshot_t* snapshot) {
 
 dftu_status store_get(dftu_ctx* ctx, const dftu_store_snapshot_t* snapshot,
                       const dftu_store_ns_t* ns, const dftu_store_scope* scope,
-                      const uint8_t* key, uint64_t key_size,
+                      const std::uint8_t* key, std::uint64_t key_size,
                       dftu_store_value_t** out) {
     if (const dftu_status st = checked_pair(ctx, snapshot, ns); st < 0)
         return st;
@@ -361,7 +364,7 @@ dftu_status store_multi_get(dftu_ctx* ctx,
                             const dftu_store_snapshot_t* snapshot,
                             const dftu_store_ns_t* ns,
                             const dftu_store_scope* scope,
-                            const dftu_store_bytes* keys, uint64_t n,
+                            const dftu_store_bytes* keys, std::uint64_t n,
                             dftu_store_value_list_t** out) {
     if (const dftu_status st = checked_pair(ctx, snapshot, ns); st < 0)
         return st;
@@ -376,7 +379,8 @@ dftu_status store_scan_prefix(dftu_ctx* ctx,
                               const dftu_store_snapshot_t* snapshot,
                               const dftu_store_ns_t* ns,
                               const dftu_store_scope* scope,
-                              const uint8_t* prefix, uint64_t prefix_size,
+                              const std::uint8_t* prefix,
+                              std::uint64_t prefix_size,
                               dftu_store_cursor_t** out) {
     if (const dftu_status st = checked_pair(ctx, snapshot, ns); st < 0)
         return st;
@@ -392,8 +396,9 @@ dftu_status store_scan_range(dftu_ctx* ctx,
                              const dftu_store_snapshot_t* snapshot,
                              const dftu_store_ns_t* ns,
                              const dftu_store_scope* scope,
-                             const uint8_t* begin, uint64_t begin_size,
-                             const uint8_t* end, uint64_t end_size,
+                             const std::uint8_t* begin,
+                             std::uint64_t begin_size, const std::uint8_t* end,
+                             std::uint64_t end_size,
                              dftu_store_cursor_t** out) {
     if (const dftu_status st = checked_pair(ctx, snapshot, ns); st < 0)
         return st;

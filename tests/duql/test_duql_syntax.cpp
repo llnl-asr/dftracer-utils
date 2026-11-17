@@ -1541,7 +1541,9 @@ dftu_series* plug_unary(const dftu_series*) { return nullptr; }
 dftu_series* plug_binary(const dftu_series*, const dftu_series*) {
     return nullptr;
 }
-dftu_dataframe* plug_frame(const dftu_dataframe*, int64_t) { return nullptr; }
+dftu_dataframe* plug_frame(const dftu_dataframe*, std::int64_t) {
+    return nullptr;
+}
 double plug_total(const dftu_series*, double) { return 0; }
 
 struct PluginOps {

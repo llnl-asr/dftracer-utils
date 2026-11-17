@@ -21,7 +21,7 @@ namespace {
 dftu_op_val str_val(const dstd::String& s) {
     dftu_op_val v{};
     v.str.ptr = s.c_str();
-    v.str.len = static_cast<int32_t>(s.size());
+    v.str.len = static_cast<std::int32_t>(s.size());
     return v;
 }
 

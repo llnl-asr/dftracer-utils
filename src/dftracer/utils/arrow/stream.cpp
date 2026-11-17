@@ -359,7 +359,7 @@ coro::CoroTask<void> drain_query(
 dstd::Vector<DataFrame> frame_parts(const DataFrame& frame) {
     const std::size_t ncolumns = frame.columns.size();
     dstd::Vector<DataFrame> parts;
-    const int32_t chunks =
+    const std::int32_t chunks =
         ncolumns == 0 ? 1 : dftu_series_chunk_count(frame.columns[0].handle());
     bool per_chunk = ncolumns > 0 && chunks > 1;
     for (std::size_t i = 1; per_chunk && i < ncolumns; ++i)
@@ -367,7 +367,7 @@ dstd::Vector<DataFrame> frame_parts(const DataFrame& frame) {
             dftu_series_chunk_count(frame.columns[i].handle()) == chunks;
     if (per_chunk) {
         parts.reserve(static_cast<std::size_t>(chunks));
-        for (int32_t k = 0; per_chunk && k < chunks; ++k) {
+        for (std::int32_t k = 0; per_chunk && k < chunks; ++k) {
             DataFrame part;
             part.names = frame.names;
             part.columns.reserve(ncolumns);
@@ -691,11 +691,11 @@ dstd::Result<void> to_arrow_stream(const Series& col, ArrowArrayStream* out) {
     if (!col.valid())
         return common::make_error<"to_arrow_stream: a column with no buffers">(
             common::ErrorCode::InvalidArgument);
-    const int32_t count = dftu_series_chunk_count(col.handle());
+    const std::int32_t count = dftu_series_chunk_count(col.handle());
     dstd::Vector<Series> chunks;
     chunks.reserve(static_cast<std::size_t>(count));
     bool same_encoding = true;
-    for (int32_t i = 0; i < count; ++i) {
+    for (std::int32_t i = 0; i < count; ++i) {
         chunks.emplace_back(dftu_series_chunk(col.handle(), i));
         same_encoding = same_encoding &&
                         chunks.back().encoding() == chunks.front().encoding();

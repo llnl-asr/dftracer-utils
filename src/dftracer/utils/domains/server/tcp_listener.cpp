@@ -18,7 +18,7 @@
 
 namespace dftracer::utils::domains::server {
 
-TcpListener::TcpListener(const dstd::String& addr, uint16_t port)
+TcpListener::TcpListener(const dstd::String& addr, std::uint16_t port)
     : bind_addr_(addr), port_(port) {}
 
 TcpListener::~TcpListener() {

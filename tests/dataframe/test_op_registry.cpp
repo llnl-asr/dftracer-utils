@@ -148,10 +148,10 @@ TEST_SUITE("op_registry") {
             CHECK(dftu_op_find(name) != nullptr);
         CHECK(dftu_op_find("no_such_op") == nullptr);
 
-        uint32_t n = op_count();
+        std::uint32_t n = op_count();
         REQUIRE(n >= 120);  // ~100 column ops + ~23 frame ops
         bool saw_add = false, saw_frame = false;
-        for (uint32_t i = 0; i < n; ++i) {
+        for (std::uint32_t i = 0; i < n; ++i) {
             auto op = op_at(i);
             REQUIRE(static_cast<bool>(op));
             if (op.name() == "dftu.series.add") saw_add = true;

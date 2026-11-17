@@ -74,18 +74,18 @@ struct Fixture {
 };
 
 dftu_status fixture_schema(dftu_ctx*, void* self, const char* const** out_names,
-                           int32_t* out_count) {
+                           std::int32_t* out_count) {
     auto* fx = static_cast<Fixture*>(self);
     static thread_local dstd::Vector<const char*> storage;
     storage.clear();
     for (const dstd::String& n : fx->names) storage.push_back(n.c_str());
     *out_names = storage.data();
-    *out_count = static_cast<int32_t>(storage.size());
+    *out_count = static_cast<std::int32_t>(storage.size());
     return DFTU_OK;
 }
 
 dftu_status fixture_scan(dftu_ctx*, void* self, const dftu_plugin_host*,
-                         const dftu_scan_request*, int32_t*,
+                         const dftu_scan_request*, std::int32_t*,
                          void** out_cursor_self,
                          const dftu_cursor_vt** out_vt) {
     auto* fx = static_cast<Fixture*>(self);
@@ -126,12 +126,12 @@ dftu_status parameterized(dftu_ctx*, void*, dftu_schema* s) {
 }
 
 dftu_status nested(dftu_ctx*, void*, dftu_schema* s) {
-    int32_t list_idx = dftu_schema_add_field(
+    std::int32_t list_idx = dftu_schema_add_field(
         s, "tags", DFTU_TYPE_LIST, 1, DFTU_TIME_UNIT_MICRO, nullptr, 0, 0, 0);
     dftu_schema_add_child_field(s, list_idx, "item", DFTU_TYPE_INT64, 1,
                                 DFTU_TIME_UNIT_MICRO, nullptr, 0, 0, 0);
 
-    int32_t struct_idx =
+    std::int32_t struct_idx =
         dftu_schema_add_field(s, "point", DFTU_TYPE_STRUCT, 1,
                               DFTU_TIME_UNIT_MICRO, nullptr, 0, 0, 0);
     dftu_schema_add_child_field(s, struct_idx, "x", DFTU_TYPE_INT64, 1,
@@ -147,7 +147,7 @@ dftu_status nested(dftu_ctx*, void*, dftu_schema* s) {
 std::int32_t g_second_child_result = 0;
 
 dftu_status malformed_list(dftu_ctx*, void*, dftu_schema* s) {
-    int32_t list_idx = dftu_schema_add_field(
+    std::int32_t list_idx = dftu_schema_add_field(
         s, "tags", DFTU_TYPE_LIST, 1, DFTU_TIME_UNIT_MICRO, nullptr, 0, 0, 0);
     dftu_schema_add_child_field(s, list_idx, "a", DFTU_TYPE_INT64, 1,
                                 DFTU_TIME_UNIT_MICRO, nullptr, 0, 0, 0);

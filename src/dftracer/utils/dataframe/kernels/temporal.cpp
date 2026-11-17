@@ -134,8 +134,8 @@ std::int64_t part_of(std::int64_t t, std::int64_t per_second, bool days,
 }  // namespace
 }  // namespace dftracer::utils::dataframe
 
-dftu_series* dftu_series_dt_part(const dftu_series* in, int32_t part,
-                                 int32_t unit) {
+dftu_series* dftu_series_dt_part(const dftu_series* in, std::int32_t part,
+                                 std::int32_t unit) {
     DFTU_FLAT_OPERAND(in, flat_in, dftu_series_dt_part(flat_in, part, unit));
 
     using namespace dftracer::utils::dataframe;
@@ -161,7 +161,7 @@ dftu_series* dftu_series_dt_part(const dftu_series* in, int32_t part,
 }
 
 dftu_series* dftu_series_dt_format(const dftu_series* in, const char* fmt,
-                                   int32_t fmt_size, int32_t unit) {
+                                   std::int32_t fmt_size, std::int32_t unit) {
     DFTU_FLAT_OPERAND(in, flat_in,
                       dftu_series_dt_format(flat_in, fmt, fmt_size, unit));
 
@@ -208,8 +208,8 @@ dftu_series* dftu_series_dt_format(const dftu_series* in, const char* fmt,
     return out;
 }
 
-dftu_series* dftu_series_dt_round(const dftu_series* in, int64_t every,
-                                  int32_t mode) {
+dftu_series* dftu_series_dt_round(const dftu_series* in, std::int64_t every,
+                                  std::int32_t mode) {
     DFTU_FLAT_OPERAND(in, flat_in, dftu_series_dt_round(flat_in, every, mode));
 
     using namespace dftracer::utils::dataframe;
@@ -253,7 +253,7 @@ dftu_series* dftu_series_dt_round(const dftu_series* in, int64_t every,
 }
 
 dftu_series* dftu_series_with_timezone(const dftu_series* v, const char* tz,
-                                       int32_t tz_size) {
+                                       std::int32_t tz_size) {
     DFTU_FLAT_OPERAND(v, flat_v,
                       dftu_series_with_timezone(flat_v, tz, tz_size));
 

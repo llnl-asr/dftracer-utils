@@ -69,7 +69,7 @@ dftu_series* plug_scale(const dftu_series* in, double f) {
     return dftu_series_new_flat(DFTU_TYPE_FLOAT64, v.data(), n, nullptr);
 }
 
-dftu_dataframe* plug_head(const dftu_dataframe* df, int64_t n) {
+dftu_dataframe* plug_head(const dftu_dataframe* df, std::int64_t n) {
     return dftu_dataframe_head(df, n);
 }
 

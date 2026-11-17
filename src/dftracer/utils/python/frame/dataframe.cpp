@@ -1342,8 +1342,8 @@ PyObject* DataFrame_arrow_c_stream(PyObject* self, PyObject* args) {
     dataframe::DataFrame frame;
     frame.names = b->names;
     for (std::size_t i = 0; i < b->names.size(); ++i)
-        frame.columns.push_back(
-            Series(dftu_series_child(b->st.handle(), static_cast<int32_t>(i))));
+        frame.columns.push_back(Series(
+            dftu_series_child(b->st.handle(), static_cast<std::int32_t>(i))));
     auto stream = dftracer::utils::dstd::make_unique<ArrowArrayStream>();
     auto status = arrow::to_arrow_stream(frame, stream.get());
     if (!status) {

@@ -38,21 +38,21 @@ dftu_duql* wrap_string(const dftracer::utils::dstd::String& s) {
     return new dftu_duql{{}, std::move(*q)};
 }
 
-dftu_duql* build_in_i64(const char* field, const int64_t* values, int32_t n,
-                        bool negate) {
+dftu_duql* build_in_i64(const char* field, const std::int64_t* values,
+                        std::int32_t n, bool negate) {
     if (!field || (n > 0 && !values)) return nullptr;
     dftracer::utils::dstd::Vector<std::int64_t> vals;
-    for (int32_t i = 0; i < n; ++i) vals.push_back(values[i]);
+    for (std::int32_t i = 0; i < n; ++i) vals.push_back(values[i]);
     auto e = negate ? dftracer::utils::duql::field_not_in(field, vals)
                     : dftracer::utils::duql::field_in(field, vals);
     return wrap_expr(e);
 }
 
-dftu_duql* build_in_str(const char* field, const char* const* values, int32_t n,
-                        bool negate) {
+dftu_duql* build_in_str(const char* field, const char* const* values,
+                        std::int32_t n, bool negate) {
     if (!field || (n > 0 && !values)) return nullptr;
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> vals;
-    for (int32_t i = 0; i < n; ++i) {
+    for (std::int32_t i = 0; i < n; ++i) {
         if (!values[i]) return nullptr;
         vals.emplace_back(values[i]);
     }
@@ -86,7 +86,7 @@ char* dftu_duql_to_string(const dftu_duql* q) {
 void dftu_duql_string_free(char* s) { std::free(s); }
 
 dftu_duql* dftu_duql_cmp_i64(const char* field, dftu_duql_cmp_op op,
-                             int64_t value) {
+                             std::int64_t value) {
     if (!field) return nullptr;
     return wrap_expr(dftracer::utils::duql::field_cmp(
         field, static_cast<CompareOp>(op),
@@ -111,23 +111,23 @@ dftu_duql* dftu_duql_cmp_str(const char* field, dftu_duql_cmp_op op,
             dftracer::utils::dstd::StringView(value))));
 }
 
-dftu_duql* dftu_duql_in_i64(const char* field, const int64_t* values,
-                            int32_t n) {
+dftu_duql* dftu_duql_in_i64(const char* field, const std::int64_t* values,
+                            std::int32_t n) {
     return build_in_i64(field, values, n, /*negate=*/false);
 }
 
 dftu_duql* dftu_duql_in_str(const char* field, const char* const* values,
-                            int32_t n) {
+                            std::int32_t n) {
     return build_in_str(field, values, n, /*negate=*/false);
 }
 
-dftu_duql* dftu_duql_not_in_i64(const char* field, const int64_t* values,
-                                int32_t n) {
+dftu_duql* dftu_duql_not_in_i64(const char* field, const std::int64_t* values,
+                                std::int32_t n) {
     return build_in_i64(field, values, n, /*negate=*/true);
 }
 
 dftu_duql* dftu_duql_not_in_str(const char* field, const char* const* values,
-                                int32_t n) {
+                                std::int32_t n) {
     return build_in_str(field, values, n, /*negate=*/true);
 }
 

@@ -66,7 +66,7 @@ plugins::host::PluginRun run_single(const plugins::host::Plugins& set,
     return out;
 }
 
-int32_t reference_ok(plugins::host::PluginRun& run) {
+std::int32_t reference_ok(plugins::host::PluginRun& run) {
     auto it = run.results.results().find("reference_ok");
     REQUIRE(it != run.results.results().end());
     const auto& bytes = std::get<dstd::Vector<std::byte>>(it->second);

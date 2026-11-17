@@ -36,8 +36,8 @@ static dstd::String create_test_trace_file(const dstd::String& dir,
 
     for (int i = 1; i <= event_count; ++i) {
         // Create valid JSON events similar to DFTracer format
-        uint64_t timestamp_us =
-            1000000000ULL + static_cast<uint64_t>(i * 100000);
+        std::uint64_t timestamp_us =
+            1000000000ULL + static_cast<std::uint64_t>(i * 100000);
         const char* op_name = io_names[i % name_count];
         int size = 1024 * i;
 

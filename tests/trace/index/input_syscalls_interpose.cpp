@@ -214,12 +214,12 @@ static int hook_openat(int fd, const char* p, int flags, ...) {
     track_open(opened, p);
     return opened;
 }
-static ssize_t hook_pread(int fd, void* b, size_t n, off_t off) {
+static ssize_t hook_pread(int fd, void* b, std::size_t n, off_t off) {
     const ssize_t got = ::pread(fd, b, n, off);
     count_bytes(fd, got);
     return got;
 }
-static ssize_t hook_read(int fd, void* b, size_t n) {
+static ssize_t hook_read(int fd, void* b, std::size_t n) {
     const ssize_t got = ::read(fd, b, n);
     count_bytes(fd, got);
     return got;
@@ -278,10 +278,10 @@ using CanonFn = char* (*)(const char*);
 using OpenFn = int (*)(const char*, int, ...);
 using OpenAtFn = int (*)(int, const char*, int, ...);
 using FopenFn = FILE* (*)(const char*, const char*);
-using PreadFn = ssize_t (*)(int, void*, size_t, off_t);
-using ReadFn = ssize_t (*)(int, void*, size_t);
-using PreadChkFn = ssize_t (*)(int, void*, size_t, off_t, size_t);
-using ReadChkFn = ssize_t (*)(int, void*, size_t, size_t);
+using PreadFn = ssize_t (*)(int, void*, std::size_t, off_t);
+using ReadFn = ssize_t (*)(int, void*, std::size_t);
+using PreadChkFn = ssize_t (*)(int, void*, std::size_t, off_t, std::size_t);
+using ReadChkFn = ssize_t (*)(int, void*, std::size_t, std::size_t);
 using CloseFn = int (*)(int);
 
 mode_t fetch_mode(int flags, va_list& ap) {
@@ -419,22 +419,22 @@ DFTU_OPEN_HOOK(dftu_open64, "open64")
 DFTU_OPENAT_HOOK(dftu_openat, "openat")
 DFTU_OPENAT_HOOK(dftu_openat64, "openat64")
 
-#define DFTU_PREAD_HOOK(hook, sym)                                  \
-    extern "C" ssize_t hook(int fd, void* b, size_t n,              \
-                            off_t off) __asm__(sym);                \
-    extern "C" ssize_t hook(int fd, void* b, size_t n, off_t off) { \
-        const ssize_t fail = -1;                                    \
-        DFTU_NEXT(PreadFn, sym)                                     \
-        const ssize_t got = fn(fd, b, n, off);                      \
-        count_bytes(fd, got);                                       \
-        return got;                                                 \
+#define DFTU_PREAD_HOOK(hook, sym)                                       \
+    extern "C" ssize_t hook(int fd, void* b, std::size_t n,              \
+                            off_t off) __asm__(sym);                     \
+    extern "C" ssize_t hook(int fd, void* b, std::size_t n, off_t off) { \
+        const ssize_t fail = -1;                                         \
+        DFTU_NEXT(PreadFn, sym)                                          \
+        const ssize_t got = fn(fd, b, n, off);                           \
+        count_bytes(fd, got);                                            \
+        return got;                                                      \
     }
 
 DFTU_PREAD_HOOK(dftu_pread, "pread")
 DFTU_PREAD_HOOK(dftu_pread64, "pread64")
 
-extern "C" ssize_t dftu_read(int fd, void* b, size_t n) __asm__("read");
-extern "C" ssize_t dftu_read(int fd, void* b, size_t n) {
+extern "C" ssize_t dftu_read(int fd, void* b, std::size_t n) __asm__("read");
+extern "C" ssize_t dftu_read(int fd, void* b, std::size_t n) {
     const ssize_t fail = -1;
     DFTU_NEXT(ReadFn, "read")
     const ssize_t got = fn(fd, b, n);
@@ -445,24 +445,25 @@ extern "C" ssize_t dftu_read(int fd, void* b, size_t n) {
 // With _FORTIFY_SOURCE, which Ubuntu's GCC turns on when it optimizes, a read
 // into a buffer of known size calls these, and glibc then reads without its
 // own pread or read symbol.
-#define DFTU_PREAD_CHK_HOOK(hook, sym)                            \
-    extern "C" ssize_t hook(int fd, void* b, size_t n, off_t off, \
-                            size_t cap) __asm__(sym);             \
-    extern "C" ssize_t hook(int fd, void* b, size_t n, off_t off, \
-                            size_t cap) {                         \
-        const ssize_t fail = -1;                                  \
-        DFTU_NEXT(PreadChkFn, sym)                                \
-        const ssize_t got = fn(fd, b, n, off, cap);               \
-        count_bytes(fd, got);                                     \
-        return got;                                               \
+#define DFTU_PREAD_CHK_HOOK(hook, sym)                                 \
+    extern "C" ssize_t hook(int fd, void* b, std::size_t n, off_t off, \
+                            std::size_t cap) __asm__(sym);             \
+    extern "C" ssize_t hook(int fd, void* b, std::size_t n, off_t off, \
+                            std::size_t cap) {                         \
+        const ssize_t fail = -1;                                       \
+        DFTU_NEXT(PreadChkFn, sym)                                     \
+        const ssize_t got = fn(fd, b, n, off, cap);                    \
+        count_bytes(fd, got);                                          \
+        return got;                                                    \
     }
 
 DFTU_PREAD_CHK_HOOK(dftu_pread_chk, "__pread_chk")
 DFTU_PREAD_CHK_HOOK(dftu_pread64_chk, "__pread64_chk")
 
-extern "C" ssize_t dftu_read_chk(int fd, void* b, size_t n,
-                                 size_t cap) __asm__("__read_chk");
-extern "C" ssize_t dftu_read_chk(int fd, void* b, size_t n, size_t cap) {
+extern "C" ssize_t dftu_read_chk(int fd, void* b, std::size_t n,
+                                 std::size_t cap) __asm__("__read_chk");
+extern "C" ssize_t dftu_read_chk(int fd, void* b, std::size_t n,
+                                 std::size_t cap) {
     const ssize_t fail = -1;
     DFTU_NEXT(ReadChkFn, "__read_chk")
     const ssize_t got = fn(fd, b, n, cap);

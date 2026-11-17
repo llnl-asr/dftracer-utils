@@ -19,7 +19,7 @@ inline std::size_t byte_size(const MemoryViewBatchData &b) {
 inline std::size_t arrow_array_byte_size(const ArrowArray *arr) {
     if (!arr || !arr->release) return 0;
     std::size_t total = 0;
-    for (int64_t i = 0; i < arr->n_buffers; ++i) {
+    for (std::int64_t i = 0; i < arr->n_buffers; ++i) {
         if (arr->buffers[i]) {
             // For variable-length buffers, use length * estimated element size
             // For validity/offset buffers, use (length + 7) / 8 or length * 4
@@ -28,7 +28,7 @@ inline std::size_t arrow_array_byte_size(const ArrowArray *arr) {
             total += static_cast<std::size_t>(arr->length) * 8;
         }
     }
-    for (int64_t i = 0; i < arr->n_children; ++i) {
+    for (std::int64_t i = 0; i < arr->n_children; ++i) {
         total += arrow_array_byte_size(arr->children[i]);
     }
     return total;

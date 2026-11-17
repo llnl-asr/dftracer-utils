@@ -108,26 +108,28 @@ dstd::Optional<Schema> to_schema(const ::dftu_schema& built,
 
 extern "C" {
 
-int32_t dftu_schema_add_field(dftu_schema* schema, const char* name,
-                              dftu_dtype type, int32_t nullable,
-                              dftu_time_unit time_unit, const char* tz,
-                              int32_t decimal_precision, int32_t decimal_scale,
-                              int32_t fixed_size) {
+std::int32_t dftu_schema_add_field(dftu_schema* schema, const char* name,
+                                   dftu_dtype type, std::int32_t nullable,
+                                   dftu_time_unit time_unit, const char* tz,
+                                   std::int32_t decimal_precision,
+                                   std::int32_t decimal_scale,
+                                   std::int32_t fixed_size) {
     if (!schema || !name) return -1;
     if (type < DFTU_TYPE_UNKNOWN || type > DFTU_TYPE_MAP) return -1;
     schema->top.push_back(dftracer::utils::dataframe::to_field(
         name, type, nullable, time_unit, tz, decimal_precision, decimal_scale,
         fixed_size));
-    const int32_t idx = static_cast<int32_t>(schema->paths.size());
-    schema->paths.push_back({static_cast<int32_t>(schema->top.size() - 1)});
+    const std::int32_t idx = static_cast<std::int32_t>(schema->paths.size());
+    schema->paths.push_back(
+        {static_cast<std::int32_t>(schema->top.size() - 1)});
     return idx;
 }
 
-int32_t dftu_schema_add_child_field(dftu_schema* schema, int32_t parent_index,
-                                    const char* name, dftu_dtype type,
-                                    int32_t nullable, dftu_time_unit time_unit,
-                                    const char* tz, int32_t decimal_precision,
-                                    int32_t decimal_scale, int32_t fixed_size) {
+std::int32_t dftu_schema_add_child_field(
+    dftu_schema* schema, std::int32_t parent_index, const char* name,
+    dftu_dtype type, std::int32_t nullable, dftu_time_unit time_unit,
+    const char* tz, std::int32_t decimal_precision, std::int32_t decimal_scale,
+    std::int32_t fixed_size) {
     if (!schema || !name) return -1;
     if (type < DFTU_TYPE_UNKNOWN || type > DFTU_TYPE_MAP) return -1;
     dftracer::utils::dataframe::Field* parent =
@@ -143,55 +145,57 @@ int32_t dftu_schema_add_child_field(dftu_schema* schema, int32_t parent_index,
         name, type, nullable, time_unit, tz, decimal_precision, decimal_scale,
         fixed_size));
 
-    dftracer::utils::dstd::Vector<int32_t> path =
+    dftracer::utils::dstd::Vector<std::int32_t> path =
         schema->paths[static_cast<std::size_t>(parent_index)];
-    path.push_back(static_cast<int32_t>(parent->type.fields.size() - 1));
-    const int32_t idx = static_cast<int32_t>(schema->paths.size());
+    path.push_back(static_cast<std::int32_t>(parent->type.fields.size() - 1));
+    const std::int32_t idx = static_cast<std::int32_t>(schema->paths.size());
     schema->paths.push_back(std::move(path));
     return idx;
 }
 
-int32_t dftu_schema_field_count(const dftu_schema* schema) {
+std::int32_t dftu_schema_field_count(const dftu_schema* schema) {
     if (!schema) return -1;
-    return static_cast<int32_t>(schema->top.size());
+    return static_cast<std::int32_t>(schema->top.size());
 }
 
 // Top-level field `i` of a schema, or NULL when `schema` is NULL or `i` is out
 // of range. Internal to this file; `schema->top` mirrors dataframe::Schema.
 static const dftracer::utils::dataframe::Field* field_at(
-    const ::dftu_schema* schema, int32_t i) {
+    const ::dftu_schema* schema, std::int32_t i) {
     if (!schema || i < 0 || static_cast<std::size_t>(i) >= schema->top.size())
         return nullptr;
     return &schema->top[static_cast<std::size_t>(i)];
 }
 
-const char* dftu_schema_field_name(const dftu_schema* schema, int32_t i) {
+const char* dftu_schema_field_name(const dftu_schema* schema, std::int32_t i) {
     const auto* const f = field_at(schema, i);
     return f != nullptr ? f->name.c_str() : nullptr;
 }
 
-int32_t dftu_schema_field_type(const dftu_schema* schema, int32_t i) {
+std::int32_t dftu_schema_field_type(const dftu_schema* schema, std::int32_t i) {
     const auto* const f = field_at(schema, i);
-    return f != nullptr ? static_cast<int32_t>(f->type.id) : -1;
+    return f != nullptr ? static_cast<std::int32_t>(f->type.id) : -1;
 }
 
-int32_t dftu_schema_field_nullable(const dftu_schema* schema, int32_t i) {
+std::int32_t dftu_schema_field_nullable(const dftu_schema* schema,
+                                        std::int32_t i) {
     const auto* const f = field_at(schema, i);
     return f != nullptr ? (f->nullable ? 1 : 0) : -1;
 }
 
-int32_t dftu_schema_field_time_unit(const dftu_schema* schema, int32_t i) {
+std::int32_t dftu_schema_field_time_unit(const dftu_schema* schema,
+                                         std::int32_t i) {
     const auto* const f = field_at(schema, i);
-    return f != nullptr ? static_cast<int32_t>(f->type.time_unit()) : -1;
+    return f != nullptr ? static_cast<std::int32_t>(f->type.time_unit()) : -1;
 }
 
-int32_t dftu_schema_copy_field(dftu_schema* out, const dftu_schema* schema,
-                               int32_t i) {
+std::int32_t dftu_schema_copy_field(dftu_schema* out, const dftu_schema* schema,
+                                    std::int32_t i) {
     if (!out || !schema) return -1;
     if (i < 0 || static_cast<std::size_t>(i) >= schema->top.size()) return -1;
     out->top.push_back(schema->top[static_cast<std::size_t>(i)]);
-    const int32_t idx = static_cast<int32_t>(out->paths.size());
-    out->paths.push_back({static_cast<int32_t>(out->top.size() - 1)});
+    const std::int32_t idx = static_cast<std::int32_t>(out->paths.size());
+    out->paths.push_back({static_cast<std::int32_t>(out->top.size() - 1)});
     return idx;
 }
 

@@ -25,8 +25,8 @@ dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> names_of(
 
 dftu_dataframe* dftu_dataframe_window(
     const dftu_dataframe* frame, const char* const* partition_by,
-    int32_t n_part, const char* const* order_by, int32_t n_order,
-    const dftu_window_spec* specs, int32_t n_specs) {
+    std::int32_t n_part, const char* const* order_by, std::int32_t n_order,
+    const dftu_window_spec* specs, std::int32_t n_specs) {
     if (!frame) return nullptr;
     dftracer::utils::dstd::Result<dataframe::DataFrame> out =
         dataframe::window_checked(dataframe::dataframe_handle_view(frame),
@@ -38,9 +38,9 @@ dftu_dataframe* dftu_dataframe_window(
 
 dftu_dataframe* dftu_dataframe_gap_fill(
     const dftu_dataframe* frame, const char* const* partition_by,
-    int32_t n_part, const char* time, int64_t bucket, const char* const* values,
-    int32_t n_values, dftu_gap_fill_mode mode, const int64_t* range,
-    int32_t n_range) {
+    std::int32_t n_part, const char* time, std::int64_t bucket,
+    const char* const* values, std::int32_t n_values, dftu_gap_fill_mode mode,
+    const std::int64_t* range, std::int32_t n_range) {
     if (!frame || !time || (n_part > 0 && !partition_by) ||
         (n_values > 0 && !values) || (n_range != 0 && n_range != 2) ||
         (n_range == 2 && !range))
@@ -49,10 +49,11 @@ dftu_dataframe* dftu_dataframe_gap_fill(
         mode != DFTU_GAP_FILL_LINEAR)
         return nullptr;
     dftracer::utils::dstd::Optional<
-        dftracer::utils::dstd::Pair<int64_t, int64_t>>
+        dftracer::utils::dstd::Pair<std::int64_t, std::int64_t>>
         r;
     if (n_range == 2)
-        r = dftracer::utils::dstd::Pair<int64_t, int64_t>{range[0], range[1]};
+        r = dftracer::utils::dstd::Pair<std::int64_t, std::int64_t>{range[0],
+                                                                    range[1]};
     dftracer::utils::dstd::Result<dataframe::DataFrame> out =
         dataframe::gap_fill(dataframe::dataframe_handle_view(frame),
                             names_of(partition_by, n_part), time, bucket,
@@ -64,7 +65,7 @@ dftu_dataframe* dftu_dataframe_gap_fill(
 
 dftu_dataframe* dftu_dataframe_asof(const dftu_dataframe* left,
                                     const dftu_dataframe* right, const char* on,
-                                    const char* const* by, int32_t n_by,
+                                    const char* const* by, std::int32_t n_by,
                                     dftu_asof_direction direction,
                                     double tolerance) {
     if (!left || !right || !on || (n_by > 0 && !by)) return nullptr;
@@ -85,7 +86,7 @@ dftu_dataframe* dftu_dataframe_interval(const dftu_dataframe* left,
                                         const dftu_dataframe* right,
                                         const char* point, const char* lo,
                                         const char* hi, const char* const* by,
-                                        int32_t n_by, int32_t outer) {
+                                        std::int32_t n_by, std::int32_t outer) {
     if (!left || !right || !point || !lo || !hi || (n_by > 0 && !by))
         return nullptr;
     dftracer::utils::dstd::Result<dataframe::DataFrame> out =

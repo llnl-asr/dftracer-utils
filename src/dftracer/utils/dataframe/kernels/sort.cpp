@@ -443,7 +443,8 @@ Series topk_indices(const Series& v, std::int64_t k, bool largest) {
 
 }  // namespace dftracer::utils::dataframe
 
-dftu_series* dftu_series_argsort(const dftu_series* v, int32_t descending) {
+dftu_series* dftu_series_argsort(const dftu_series* v,
+                                 std::int32_t descending) {
     if (!v) return nullptr;
     if (!dftracer::utils::dataframe::is_string_column(*v))
         DFTU_FLAT_INPUT(v, dftu_series_argsort, descending);

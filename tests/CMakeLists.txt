@@ -380,6 +380,14 @@ add_test(NAME no_raw_new
          COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR}
                  -DWORK_DIR=${CMAKE_BINARY_DIR}/no_raw_new -P
                  ${CMAKE_SOURCE_DIR}/cmake/scripts/check_no_raw_new.cmake)
+add_test(NAME std_int_types
+         COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR}
+                 -DWORK_DIR=${CMAKE_BINARY_DIR}/std_int_types -P
+                 ${CMAKE_SOURCE_DIR}/cmake/scripts/check_std_int_types.cmake)
+add_test(NAME std_int_types_self
+         COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR}
+                 -DWORK_DIR=${CMAKE_BINARY_DIR}/std_int_types_self -DSELF_TEST=ON -P
+                 ${CMAKE_SOURCE_DIR}/cmake/scripts/check_std_int_types.cmake)
 add_test(NAME no_raw_new_self
          COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR}
                  -DWORK_DIR=${CMAKE_BINARY_DIR}/no_raw_new_self -DSELF_TEST=ON -P

@@ -117,7 +117,7 @@ void Watchdog::set_default_task_timeout(std::chrono::milliseconds timeout) {
     default_task_timeout_ = timeout;
 }
 
-size_t Watchdog::active_task_count() const {
+std::size_t Watchdog::active_task_count() const {
     std::lock_guard<std::mutex> lock(active_tasks_mutex_);
     return active_tasks_.size();
 }
@@ -264,7 +264,8 @@ void Watchdog::trigger_timeout(dstd::StringView reason) {
     }
 }
 
-void Watchdog::trigger_warning(dstd::StringView task_name, int64_t elapsed_ms) {
+void Watchdog::trigger_warning(dstd::StringView task_name,
+                               std::int64_t elapsed_ms) {
     if (warning_callback_) {
         warning_callback_(task_name, elapsed_ms);
     }

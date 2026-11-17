@@ -118,7 +118,7 @@ class OwnedFrameOpArgs {
                                                      : dstd::String());
                     break;
                 case DFTU_TOK_STRLIST:
-                    for (int32_t k = 0; k < v.list.n; ++k)
+                    for (std::int32_t k = 0; k < v.list.n; ++k)
                         s.strings.emplace_back(v.list.items[k]);
                     break;
                 case DFTU_TOK_I32LIST:
@@ -130,7 +130,7 @@ class OwnedFrameOpArgs {
                                   v.i64list.items + v.i64list.n);
                     break;
                 case DFTU_TOK_AGGLIST:
-                    for (int32_t k = 0; k < v.agglist.n; ++k) {
+                    for (std::int32_t k = 0; k < v.agglist.n; ++k) {
                         const dftu_group_agg& a = v.agglist.items[k];
                         s.strings.emplace_back(a.op ? a.op : "");
                         s.strings.emplace_back(a.column ? a.column : "");
@@ -139,7 +139,7 @@ class OwnedFrameOpArgs {
                     }
                     break;
                 case DFTU_TOK_WINLIST:
-                    for (int32_t k = 0; k < v.winlist.n; ++k) {
+                    for (std::int32_t k = 0; k < v.winlist.n; ++k) {
                         const dftu_window_spec& w = v.winlist.items[k];
                         s.strings.emplace_back(w.value ? w.value : "");
                         s.has_value.push_back(w.value != nullptr);
@@ -264,21 +264,22 @@ class OwnedFrameOpArgs {
                     break;
                 case DFTU_TOK_STR:
                     v.str.ptr = s.strings.front().c_str();
-                    v.str.len = static_cast<int32_t>(s.strings.front().size());
+                    v.str.len =
+                        static_cast<std::int32_t>(s.strings.front().size());
                     break;
                 case DFTU_TOK_STRLIST:
                     for (const dstd::String& str : s.strings)
                         cstrs[i].push_back(str.c_str());
                     v.list.items = cstrs[i].data();
-                    v.list.n = static_cast<int32_t>(cstrs[i].size());
+                    v.list.n = static_cast<std::int32_t>(cstrs[i].size());
                     break;
                 case DFTU_TOK_I32LIST:
                     v.i32list.items = s.i32s.data();
-                    v.i32list.n = static_cast<int32_t>(s.i32s.size());
+                    v.i32list.n = static_cast<std::int32_t>(s.i32s.size());
                     break;
                 case DFTU_TOK_I64LIST:
                     v.i64list.items = s.i64s.data();
-                    v.i64list.n = static_cast<int32_t>(s.i64s.size());
+                    v.i64list.n = static_cast<std::int32_t>(s.i64s.size());
                     break;
                 case DFTU_TOK_AGGLIST:
                     for (std::size_t k = 0; k < s.aggs.size(); ++k) {
@@ -289,7 +290,7 @@ class OwnedFrameOpArgs {
                         aggs[i].push_back(a);
                     }
                     v.agglist.items = aggs[i].data();
-                    v.agglist.n = static_cast<int32_t>(aggs[i].size());
+                    v.agglist.n = static_cast<std::int32_t>(aggs[i].size());
                     break;
                 case DFTU_TOK_WINLIST: {
                     std::size_t udaf_at = 0;
@@ -326,7 +327,7 @@ class OwnedFrameOpArgs {
                         wins[i].push_back(w);
                     }
                     v.winlist.items = wins[i].data();
-                    v.winlist.n = static_cast<int32_t>(wins[i].size());
+                    v.winlist.n = static_cast<std::int32_t>(wins[i].size());
                     break;
                 }
             }
@@ -475,7 +476,7 @@ inline coro::CoroTask<dstd::Result<DataFrame>> run_frame_op(
         out = std::move(*win);
     } else {
         dftu_dataframe* result = dftu_op_run_frame(
-            op, frames.data(), static_cast<uint32_t>(frames.size()), &bag);
+            op, frames.data(), static_cast<std::uint32_t>(frames.size()), &bag);
         if (!result)
             co_return common::make_error<
                 "lazy frame op '{}' failed: the op returned no frame">(

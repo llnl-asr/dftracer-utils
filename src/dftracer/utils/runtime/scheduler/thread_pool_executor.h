@@ -78,7 +78,7 @@ class ThreadPoolExecutor final : public TaskExecutor {
 
         // Health monitoring for watchdog
         std::atomic<bool> is_idle{false};
-        std::atomic<uint64_t> tasks_executed{0};
+        std::atomic<std::uint64_t> tasks_executed{0};
         // Run-queue entries this worker resumed. Written only by its own
         // thread, and is_responsive() sums them to see progress.
         std::atomic<std::uint64_t> resumes{0};

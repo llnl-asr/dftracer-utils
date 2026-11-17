@@ -39,7 +39,7 @@ class KqueueThreadPoolBackend : public ThreadPoolFileOps {
     dstd::ScopedFd kqueue_fd_;
 
     /// User event identifier for shutdown signaling.
-    static constexpr uintptr_t SHUTDOWN_IDENT = 0xDEAD;
+    static constexpr std::uintptr_t SHUTDOWN_IDENT = 0xDEAD;
 };
 
 }  // namespace dftracer::utils::runtime::io

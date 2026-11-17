@@ -64,7 +64,7 @@ dftu_dataframe* to_abi(const DataFrame& df) {
         cols.push_back(df.columns[i].share().release());
     }
     return dftu_dataframe_new(names.data(), cols.data(),
-                              static_cast<int32_t>(names.size()));
+                              static_cast<std::int32_t>(names.size()));
 }
 
 }  // namespace

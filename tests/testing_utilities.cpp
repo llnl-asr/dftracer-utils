@@ -70,7 +70,9 @@ void dftu_utils_test::remember_test_path(const dstd::Path& path) {
 }
 
 extern "C" {
-size_t mb_to_b(double mb) { return static_cast<std::size_t>(mb * 1024 * 1024); }
+std::size_t mb_to_b(double mb) {
+    return static_cast<std::size_t>(mb * 1024 * 1024);
+}
 }  // extern "C"
 
 namespace dftu_utils_test {
@@ -294,8 +296,8 @@ dstd::String TestEnvironment::create_dft_test_file(int event_count) {
 
     ofs << "[\n";
     for (int i = 1; i <= event_count; ++i) {
-        uint64_t timestamp_us =
-            1000000000ULL + static_cast<uint64_t>(i * 100000);
+        std::uint64_t timestamp_us =
+            1000000000ULL + static_cast<std::uint64_t>(i * 100000);
         int size = 1024 * i;
         const char* op_name = io_names[i % name_count];
         const char* op_cat = io_cats[i % name_count];

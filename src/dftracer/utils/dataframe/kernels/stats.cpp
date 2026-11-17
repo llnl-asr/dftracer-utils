@@ -1141,7 +1141,7 @@ Series interpolate(const Series& v) {
 
 }  // namespace dftracer::utils::dataframe
 
-double dftu_series_variance(const dftu_series* v, int32_t sample) {
+double dftu_series_variance(const dftu_series* v, std::int32_t sample) {
     if (!v) return 0.0;
     DFTU_FLAT_INPUT(v, dftu_series_variance, sample);
     dftracer::utils::dataframe::Series c{const_cast<dftu_series*>(v)};
@@ -1149,7 +1149,7 @@ double dftu_series_variance(const dftu_series* v, int32_t sample) {
     c.release();
     return r;
 }
-double dftu_series_stddev(const dftu_series* v, int32_t sample) {
+double dftu_series_stddev(const dftu_series* v, std::int32_t sample) {
     if (!v) return 0.0;
     DFTU_FLAT_INPUT(v, dftu_series_stddev, sample);
     dftracer::utils::dataframe::Series c{const_cast<dftu_series*>(v)};
@@ -1181,10 +1181,10 @@ double dftu_series_quantile(const dftu_series* v, double q) {
     c.release();
     return r;
 }
-int64_t dftu_series_nunique(const dftu_series* v) {
+std::int64_t dftu_series_nunique(const dftu_series* v) {
     if (!v) return 0;
     dftracer::utils::dataframe::Series c{const_cast<dftu_series*>(v)};
-    int64_t r = dftracer::utils::dataframe::nunique(c);
+    std::int64_t r = dftracer::utils::dataframe::nunique(c);
     c.release();
     return r;
 }
@@ -1197,7 +1197,7 @@ dftu_series* dftu_series_unique(const dftu_series* v) {
     return r.release();
 }
 dftu_series* dftu_series_rank(const dftu_series* v, dftu_rank_method method,
-                              int32_t flags) {
+                              std::int32_t flags) {
     if (!v) return nullptr;
     DFTU_FLAT_INPUT(v, dftu_series_rank, method, flags);
     dftracer::utils::dataframe::Series c{const_cast<dftu_series*>(v)};
@@ -1208,7 +1208,7 @@ dftu_series* dftu_series_rank(const dftu_series* v, dftu_rank_method method,
     c.release();
     return r.release();
 }
-dftu_series* dftu_series_rolling(const dftu_series* v, int64_t window,
+dftu_series* dftu_series_rolling(const dftu_series* v, std::int64_t window,
                                  dftu_rolling_op op) {
     if (!v) return nullptr;
     DFTU_FLAT_INPUT(v, dftu_series_rolling, window, op);
@@ -1218,7 +1218,8 @@ dftu_series* dftu_series_rolling(const dftu_series* v, int64_t window,
     c.release();
     return r.release();
 }
-dftu_series* dftu_series_rolling_var(const dftu_series* v, int64_t window) {
+dftu_series* dftu_series_rolling_var(const dftu_series* v,
+                                     std::int64_t window) {
     if (!v) return nullptr;
     DFTU_FLAT_INPUT(v, dftu_series_rolling_var, window);
     dftracer::utils::dataframe::Series c{const_cast<dftu_series*>(v)};
@@ -1227,7 +1228,8 @@ dftu_series* dftu_series_rolling_var(const dftu_series* v, int64_t window) {
     c.release();
     return r.release();
 }
-dftu_series* dftu_series_rolling_std(const dftu_series* v, int64_t window) {
+dftu_series* dftu_series_rolling_std(const dftu_series* v,
+                                     std::int64_t window) {
     if (!v) return nullptr;
     DFTU_FLAT_INPUT(v, dftu_series_rolling_std, window);
     dftracer::utils::dataframe::Series c{const_cast<dftu_series*>(v)};
@@ -1236,7 +1238,8 @@ dftu_series* dftu_series_rolling_std(const dftu_series* v, int64_t window) {
     c.release();
     return r.release();
 }
-dftu_series* dftu_series_rolling_median(const dftu_series* v, int64_t window) {
+dftu_series* dftu_series_rolling_median(const dftu_series* v,
+                                        std::int64_t window) {
     if (!v) return nullptr;
     DFTU_FLAT_INPUT(v, dftu_series_rolling_median, window);
     dftracer::utils::dataframe::Series c{const_cast<dftu_series*>(v)};
@@ -1245,8 +1248,8 @@ dftu_series* dftu_series_rolling_median(const dftu_series* v, int64_t window) {
     c.release();
     return r.release();
 }
-dftu_series* dftu_series_rolling_quantile(const dftu_series* v, int64_t window,
-                                          double q) {
+dftu_series* dftu_series_rolling_quantile(const dftu_series* v,
+                                          std::int64_t window, double q) {
     if (!v) return nullptr;
     DFTU_FLAT_INPUT(v, dftu_series_rolling_quantile, window, q);
     dftracer::utils::dataframe::Series c{const_cast<dftu_series*>(v)};
@@ -1274,7 +1277,7 @@ dftu_series* dftu_series_ewm_std(const dftu_series* v, double alpha) {
     return r.release();
 }
 dftu_series* dftu_series_cut(const dftu_series* v, const dftu_series* breaks,
-                             int32_t flags) {
+                             std::int32_t flags) {
     if (!v || !breaks) return nullptr;
     DFTU_FLAT_INPUT(v, dftu_series_cut, breaks, flags);
     if (breaks->encoding != dftracer::utils::dataframe::Encoding::Flat) {
@@ -1292,7 +1295,7 @@ dftu_series* dftu_series_cut(const dftu_series* v, const dftu_series* breaks,
     b.release();
     return r.release();
 }
-dftu_series* dftu_series_qcut(const dftu_series* v, int32_t q) {
+dftu_series* dftu_series_qcut(const dftu_series* v, std::int32_t q) {
     if (!v) return nullptr;
     DFTU_FLAT_INPUT(v, dftu_series_qcut, q);
     dftracer::utils::dataframe::Series c{const_cast<dftu_series*>(v)};

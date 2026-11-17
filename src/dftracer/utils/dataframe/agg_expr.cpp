@@ -223,8 +223,9 @@ dstd::Result<DataFrame> group_agg_expr(
 }  // namespace dftracer::utils::dataframe
 
 namespace {
-dftu_agg_spec make_spec(int32_t op, const dftu_expr* value, const char* out,
-                        double param = 0.0, const dftu_expr* by = nullptr) {
+dftu_agg_spec make_spec(std::int32_t op, const dftu_expr* value,
+                        const char* out, double param = 0.0,
+                        const dftu_expr* by = nullptr) {
     return {op, value, out, param, by};
 }
 }  // namespace
@@ -279,20 +280,18 @@ dftu_agg_spec dftu_agg_argmax(const dftu_expr* value, const dftu_expr* by,
     return make_spec(DFTU_AGG_ARGMAX, value, out, 0.0, by);
 }
 dftu_agg_spec dftu_agg_set_union(const dftu_expr* value, const char* out,
-                                 int32_t typed) {
+                                 std::int32_t typed) {
     return make_spec(DFTU_AGG_SET_UNION, value, out, typed ? 1.0 : 0.0);
 }
 
-int32_t dftu_dataframe_group_agg_expr(const dftu_expr* key,
-                                      const dftu_agg_spec* specs,
-                                      int32_t n_specs,
-                                      const dftu_series* const* inputs,
-                                      int32_t n_inputs, dftu_series** out_key,
-                                      dftu_series** out_values) {
+std::int32_t dftu_dataframe_group_agg_expr(
+    const dftu_expr* key, const dftu_agg_spec* specs, std::int32_t n_specs,
+    const dftu_series* const* inputs, std::int32_t n_inputs,
+    dftu_series** out_key, dftu_series** out_values) {
     if (!key || !specs || n_specs <= 0) return -1;
     dftracer::utils::dstd::Vector<dataframe::AggExprSpec> cxx;
     cxx.reserve(static_cast<std::size_t>(n_specs));
-    for (int32_t i = 0; i < n_specs; ++i) {
+    for (std::int32_t i = 0; i < n_specs; ++i) {
         dataframe::AggExprSpec s;
         s.op = static_cast<dataframe::AggOp>(specs[i].op);
         if (specs[i].value)
@@ -306,11 +305,11 @@ int32_t dftu_dataframe_group_agg_expr(const dftu_expr* key,
     dftracer::utils::dstd::Vector<const dataframe::Series*> cols;
     owned.reserve(static_cast<std::size_t>(n_inputs));
     cols.reserve(static_cast<std::size_t>(n_inputs));
-    for (int32_t i = 0; i < n_inputs; ++i) {
+    for (std::int32_t i = 0; i < n_inputs; ++i) {
         owned.emplace_back(const_cast<dftu_series*>(inputs[i]));
         cols.push_back(&owned.back());
     }
-    int32_t written = -1;
+    std::int32_t written = -1;
     if (auto out = dataframe::group_agg_expr(dataframe::expr_handle_unwrap(key),
                                              cxx, cols, "key")) {
         *out_key = out->columns[0].release();

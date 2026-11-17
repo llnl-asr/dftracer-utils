@@ -33,12 +33,12 @@ extern "C" {
 
 dftu_series* dftu_dataframe_mask(const dftu_duql* q,
                                  const dftu_series* const* columns,
-                                 const char* const* names, int32_t n) {
+                                 const char* const* names, std::int32_t n) {
     if (!q || n < 0) return nullptr;
     dataframe::DataFrame b;
     b.names.reserve(static_cast<std::size_t>(n));
     b.columns.reserve(static_cast<std::size_t>(n));
-    for (int32_t i = 0; i < n; ++i) {
+    for (std::int32_t i = 0; i < n; ++i) {
         b.names.emplace_back(names[i] ? names[i] : "");
         b.columns.emplace_back(const_cast<dftu_series*>(columns[i]));
     }

@@ -25,7 +25,7 @@ static bool read_gzip_magic(const dstd::File& file) {
 }
 
 // Read GZIP ISIZE from last 4 bytes (uncompressed size modulo 2^32)
-static bool read_isize_last4(const dstd::File& file, uint32_t& out) {
+static bool read_isize_last4(const dstd::File& file, std::uint32_t& out) {
     const auto size = file.size();
     if (!size || *size < 4) return false;
     unsigned char b[4]{};
@@ -187,7 +187,7 @@ std::size_t determine_checkpoint_size(std::size_t user_checkpoint_size,
     auto file = dstd::File::open(dstd::PathView(path), {});
     if (file) {
         if (read_gzip_magic(*file)) {
-            uint32_t isize = 0;
+            std::uint32_t isize = 0;
             bool has_isize = read_isize_last4(*file, isize);
             bool multi = false;
             if (has_isize) {

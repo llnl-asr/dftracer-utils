@@ -477,7 +477,7 @@ TEST_CASE("Channel - Chained transform tasks") {
     CHECK(consumed_values.size() == 10);
 
     // Verify transformation
-    for (size_t i = 0; i < produced_values.size(); ++i) {
+    for (std::size_t i = 0; i < produced_values.size(); ++i) {
         CHECK(transformed_values[i] == produced_values[i] * 2);
         CHECK(consumed_values[i] == produced_values[i] * 2);
     }
@@ -921,7 +921,7 @@ TEST_CASE("Channel - receive_async() with transform chain") {
     CHECK(consumed_values.size() == 20);
 
     // Verify transformation (squares)
-    for (size_t i = 0; i < produced_values.size(); ++i) {
+    for (std::size_t i = 0; i < produced_values.size(); ++i) {
         CHECK(transformed_values[i] == produced_values[i] * produced_values[i]);
         CHECK(consumed_values[i] == produced_values[i] * produced_values[i]);
     }

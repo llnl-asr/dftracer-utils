@@ -42,9 +42,9 @@ dstd::String literal_to_string(const duql::LiteralNode& lit) {
                 return dstd::String(v);
             else if constexpr (std::is_same_v<T, bool>)
                 return v ? "1" : "0";
-            else if constexpr (std::is_same_v<T, int64_t>)
+            else if constexpr (std::is_same_v<T, std::int64_t>)
                 return dstd::to_string(v);
-            else if constexpr (std::is_same_v<T, uint64_t>)
+            else if constexpr (std::is_same_v<T, std::uint64_t>)
                 return dstd::to_string(v);
             else if constexpr (std::is_same_v<T, double>)
                 return trace::index::extensions::canonical_number_text(v);

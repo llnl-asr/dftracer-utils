@@ -196,7 +196,7 @@ TEST_CASE("C ABI builder in / not_in / match") {
     REQUIRE(in_parsed.h != nullptr);
     CHECK(in.str() == in_parsed.str());
 
-    int64_t pids[] = {1, 2, 3};
+    std::int64_t pids[] = {1, 2, 3};
     AbiDuql nin(dftu_duql_not_in_i64("pid", pids, 3));
     REQUIRE(nin.h != nullptr);
     AbiDuql nin_parsed(dftu_duql_parse("pid not in [1, 2, 3]"));

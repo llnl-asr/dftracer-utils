@@ -67,7 +67,7 @@ struct FixtureConfig {
 };
 
 dftu_status fixture_schema(dftu_ctx*, void*, const char* const** out_names,
-                           int32_t* out_count) {
+                           std::int32_t* out_count) {
     static const char* names[] = {"id", "val"};
     *out_names = names;
     *out_count = 2;
@@ -79,7 +79,7 @@ struct CursorState {
     bool done = false;
 };
 
-dftu_status fixture_cursor_next(dftu_ctx*, void* self, int64_t,
+dftu_status fixture_cursor_next(dftu_ctx*, void* self, std::int64_t,
                                 dftu_dataframe** out, dftu_task** pending) {
     auto* cs = static_cast<CursorState*>(self);
     *pending = nullptr;
@@ -123,7 +123,7 @@ dftu_dataframe* make_base_frame() {
 // one filter per cfg->filter_behavior, so a single vtable drives every test
 // below by varying `self`.
 dftu_status fixture_scan(dftu_ctx*, void* self, const dftu_plugin_host*,
-                         const dftu_scan_request* req, int32_t* out_pushed,
+                         const dftu_scan_request* req, std::int32_t* out_pushed,
                          void** out_cursor_self,
                          const dftu_cursor_vt** out_vt) {
     auto* cfg = static_cast<FixtureConfig*>(self);
@@ -132,13 +132,13 @@ dftu_status fixture_scan(dftu_ctx*, void* self, const dftu_plugin_host*,
     if (req->n_projection > 0 && cfg->honor_projection) {
         dstd::Vector<const char*> proj_names;
         dstd::Vector<dftu_series*> proj_cols;
-        for (int32_t i = 0; i < req->n_projection; ++i) {
+        for (std::int32_t i = 0; i < req->n_projection; ++i) {
             proj_names.push_back(req->projection[i]);
             proj_cols.push_back(dftu_dataframe_column(df, req->projection[i]));
         }
         dftu_dataframe* projected =
             dftu_dataframe_new(proj_names.data(), proj_cols.data(),
-                               static_cast<int32_t>(proj_cols.size()));
+                               static_cast<std::int32_t>(proj_cols.size()));
         dftu_dataframe_free(df);
         df = projected;
     }
@@ -148,10 +148,10 @@ dftu_status fixture_scan(dftu_ctx*, void* self, const dftu_plugin_host*,
             case FilterBehavior::Ignore:
                 break;  // leave out_pushed[0] at the host's pre-filled No.
             case FilterBehavior::ApplyExact: {
-                const int32_t nc = dftu_dataframe_num_columns(df);
+                const std::int32_t nc = dftu_dataframe_num_columns(df);
                 dstd::Vector<dftu_series*> owned;
                 dstd::Vector<const dftu_series*> inputs;
-                for (int32_t c = 0; c < nc; ++c) {
+                for (std::int32_t c = 0; c < nc; ++c) {
                     dftu_series* col_c = dftu_dataframe_column(
                         df, dftu_dataframe_column_name(df, c));
                     owned.push_back(col_c);
@@ -211,13 +211,13 @@ dstd::SharedPtr<dataframe::Source> make_fixture_source(FixtureConfig& cfg) {
 }
 
 dftu_status no_cursor_scan(dftu_ctx*, void*, const dftu_plugin_host*,
-                           const dftu_scan_request*, int32_t*, void**,
+                           const dftu_scan_request*, std::int32_t*, void**,
                            const dftu_cursor_vt**) {
     return DFTU_OK;
 }
 
 dftu_status failing_scan(dftu_ctx* ctx, void*, const dftu_plugin_host*,
-                         const dftu_scan_request*, int32_t*, void**,
+                         const dftu_scan_request*, std::int32_t*, void**,
                          const dftu_cursor_vt**) {
     return dftu_fail(ctx, DFTU_E_INVALID, "scan refused by the provider");
 }
@@ -225,7 +225,7 @@ dftu_status failing_scan(dftu_ctx* ctx, void*, const dftu_plugin_host*,
 dstd::SharedPtr<dataframe::Source> make_scan_source(
     FixtureConfig& cfg,
     dftu_status (*scan)(dftu_ctx*, void*, const dftu_plugin_host*,
-                        const dftu_scan_request*, int32_t*, void**,
+                        const dftu_scan_request*, std::int32_t*, void**,
                         const dftu_cursor_vt**)) {
     const dftu_source_vt vt = {sizeof(dftu_source_vt), fixture_schema, scan,
                                fixture_destroy,        nullptr,        nullptr};

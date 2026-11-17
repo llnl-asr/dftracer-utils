@@ -109,7 +109,8 @@ class JsonValue {
             auto ru = elem_.get_uint64();
             if (!ru.error() &&
                 ru.value_unsafe() <=
-                    static_cast<uint64_t>(std::numeric_limits<int64_t>::max()))
+                    static_cast<std::uint64_t>(
+                        std::numeric_limits<std::int64_t>::max()))
                 return static_cast<std::int64_t>(ru.value_unsafe());
             return default_val;
         } else if constexpr (std::is_same_v<T, double>) {

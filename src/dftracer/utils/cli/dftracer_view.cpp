@@ -631,11 +631,13 @@ static bool add_duration_filter(const ViewArgParse& cli, ViewDefinition& view) {
     dstd::String extra;
     if (min_duration > 0) {
         if (!extra.empty()) extra += " and ";
-        extra += dstd::fmt<"dur >= {}">(static_cast<uint64_t>(min_duration));
+        extra +=
+            dstd::fmt<"dur >= {}">(static_cast<std::uint64_t>(min_duration));
     }
     if (max_duration > 0) {
         if (!extra.empty()) extra += " and ";
-        extra += dstd::fmt<"dur <= {}">(static_cast<uint64_t>(max_duration));
+        extra +=
+            dstd::fmt<"dur <= {}">(static_cast<std::uint64_t>(max_duration));
     }
     auto query = duql::Query::from_string(extra);
     if (!query) {

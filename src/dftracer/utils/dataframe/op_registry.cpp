@@ -21,12 +21,13 @@
 #include <type_traits>
 #include <vector>
 
-dftu_series* dftu_series_take_i32(const dftu_series* v, const int64_t* idx,
-                                  int32_t n) {
+dftu_series* dftu_series_take_i32(const dftu_series* v, const std::int64_t* idx,
+                                  std::int32_t n) {
     return dftu_series_take(v, idx, n);
 }
 dftu_dataframe* dftu_dataframe_take_i32(const dftu_dataframe* df,
-                                        const int64_t* idx, int32_t n) {
+                                        const std::int64_t* idx,
+                                        std::int32_t n) {
     return dftu_dataframe_take(df, idx, n);
 }
 
@@ -51,8 +52,8 @@ const dftu_op_desc BUILTINS[] = {
      reinterpret_cast<dftu_op_generic_fn>(&fn)},
 #include <dftracer/utils/dataframe/exported_lazy_ops.def>
 };
-constexpr uint32_t BUILTIN_COUNT =
-    static_cast<uint32_t>(sizeof(BUILTINS) / sizeof(BUILTINS[0]));
+constexpr std::uint32_t BUILTIN_COUNT =
+    static_cast<std::uint32_t>(sizeof(BUILTINS) / sizeof(BUILTINS[0]));
 
 // Checks every .def row's fn against the type op_fn<sig> says the runner will
 // cast it to; op_fn is undefined for a signature with no runner case, so an
@@ -115,7 +116,7 @@ dftracer::utils::dataframe::OpDesc handle_of(
 }
 
 dftracer::utils::dataframe::OpDesc find_handle_locked(const char* name) {
-    for (uint32_t i = 0; i < BUILTIN_COUNT; ++i)
+    for (std::uint32_t i = 0; i < BUILTIN_COUNT; ++i)
         if (std::strcmp(BUILTINS[i].name, name) == 0)
             return dftracer::utils::dataframe::OpDesc(&BUILTINS[i]);
     for (const auto& op : user_ops())
@@ -302,7 +303,7 @@ dftu_op_kind dftu_op_kind_of(dftu_op_sig sig) {
     return DFTU_OP_KIND_AGGREGATE;
 }
 
-uint32_t dftu_op_arity(dftu_op_sig sig) {
+std::uint32_t dftu_op_arity(dftu_op_sig sig) {
     // The primary positional operand: FRAME for a frame op (in frames[]), LAZY
     // for a lazy op (in in[]), else SERIES (in in[]). Every other operand
     // rides dftu_op_arg.
@@ -310,7 +311,7 @@ uint32_t dftu_op_arity(dftu_op_sig sig) {
     dftu_op_tok primary = kind == DFTU_OP_KIND_FRAME  ? DFTU_TOK_FRAME
                           : kind == DFTU_OP_KIND_LAZY ? DFTU_TOK_LAZY
                                                       : DFTU_TOK_SERIES;
-    uint32_t n = 0;
+    std::uint32_t n = 0;
     for (int i = 0; i < DFTU_OP_MAX_ARGS; ++i)
         if (DFTU_OP_SIG_ARG(sig, i) == primary) ++n;
     return n;
@@ -338,12 +339,12 @@ const dftu_op_desc* dftu_op_find(const char* name) {
     return find_handle_locked(name).get();
 }
 
-uint32_t dftu_op_count(void) {
+std::uint32_t dftu_op_count(void) {
     std::lock_guard<std::mutex> lock(reg_mutex());
-    return BUILTIN_COUNT + static_cast<uint32_t>(user_ops().size());
+    return BUILTIN_COUNT + static_cast<std::uint32_t>(user_ops().size());
 }
 
-const dftu_op_desc* dftu_op_at(uint32_t i) {
+const dftu_op_desc* dftu_op_at(std::uint32_t i) {
     std::lock_guard<std::mutex> lock(reg_mutex());
     if (i < BUILTIN_COUNT) return &BUILTINS[i];
     i -= BUILTIN_COUNT;
@@ -383,7 +384,7 @@ namespace {
 // One signature's dispatch to the function it names, split from dftu_op_run so
 // a plugin's result is checked on the way out.
 dftu_series* run_series(const dftu_op_desc* op, const dftu_series* const* in,
-                        uint32_t n, const dftu_op_arg* a) {
+                        std::uint32_t n, const dftu_op_arg* a) {
     if (!op || !op->fn) return nullptr;
     if (dftu_op_kind_of(op->sig) != DFTU_OP_KIND_SERIES) return nullptr;
     if (n != dftu_op_arity(op->sig)) return nullptr;
@@ -486,7 +487,7 @@ dftu_series* run_series(const dftu_op_desc* op, const dftu_series* const* in,
         case DFTU_OP_SIG(SERIES, SERIES, RANK, I64):
             return as_op<DFTU_OP_SIG(SERIES, SERIES, RANK, I64)>(op->fn)(
                 in[0], static_cast<dftu_rank_method>(g[1].i32),
-                static_cast<int32_t>(g[2].i64));
+                static_cast<std::int32_t>(g[2].i64));
         case DFTU_OP_SIG(SERIES, SERIES, I64, U64):
             return as_op<DFTU_OP_SIG(SERIES, SERIES, I64, U64)>(op->fn)(
                 in[0], g[1].i64, g[2].u64);
@@ -549,7 +550,7 @@ dftu_dataframe* check_frame_result(const dftu_op_desc* op,
 }  // namespace
 
 dftu_series* dftu_op_run(const dftu_op_desc* op, const dftu_series* const* in,
-                         uint32_t n, const dftu_op_arg* a) {
+                         std::uint32_t n, const dftu_op_arg* a) {
     return check_series_result(op, run_series(op, in, n, a));
 }
 
@@ -628,7 +629,7 @@ dftu_scalar dftu_op_run_aggregate(const dftu_op_desc* op, const dftu_series* v,
 namespace {
 
 dftu_dataframe* run_frame(const dftu_op_desc* op,
-                          const dftu_dataframe* const* frames, uint32_t n,
+                          const dftu_dataframe* const* frames, std::uint32_t n,
                           const dftu_op_arg* a) {
     if (!op || !op->fn) return nullptr;
     if (dftu_op_kind_of(op->sig) != DFTU_OP_KIND_FRAME) return nullptr;
@@ -774,13 +775,13 @@ dftu_dataframe* run_frame(const dftu_op_desc* op,
 
 dftu_dataframe* dftu_op_run_frame(const dftu_op_desc* op,
                                   const dftu_dataframe* const* frames,
-                                  uint32_t n, const dftu_op_arg* a) {
+                                  std::uint32_t n, const dftu_op_arg* a) {
     return check_frame_result(op, run_frame(op, frames, n, a));
 }
 
 dftu_lazyframe* dftu_op_run_lazy(const dftu_op_desc* op,
-                                 const dftu_lazyframe* const* in, uint32_t n,
-                                 const dftu_op_arg* a) {
+                                 const dftu_lazyframe* const* in,
+                                 std::uint32_t n, const dftu_op_arg* a) {
     if (!op || !op->fn) return nullptr;
     if (dftu_op_kind_of(op->sig) != DFTU_OP_KIND_LAZY) return nullptr;
     if (n != dftu_op_arity(op->sig)) return nullptr;

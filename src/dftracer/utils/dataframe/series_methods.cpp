@@ -59,7 +59,7 @@ DataType Series::data_type() const {
     for (std::int64_t i = 0; i < n; ++i) {
         Series c = child(i);
         const char* name =
-            dftu_series_field_name(handle_, static_cast<int32_t>(i));
+            dftu_series_field_name(handle_, static_cast<std::int32_t>(i));
         bool default_named =
             dt.id == TypeId::List || dt.id == TypeId::LargeList ||
             dt.id == TypeId::FixedSizeList || dt.id == TypeId::Map;

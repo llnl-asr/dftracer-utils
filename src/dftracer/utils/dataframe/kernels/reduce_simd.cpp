@@ -85,7 +85,7 @@ std::int64_t find_first_eq(const T* p, std::int64_t n, T target) {
     const auto vt = hwy::HWY_NAMESPACE::Set(d, target);
     std::int64_t i = 0;
     for (; i + lanes <= n; i += lanes) {
-        const intptr_t lane = hwy::HWY_NAMESPACE::FindFirstTrue(
+        const std::intptr_t lane = hwy::HWY_NAMESPACE::FindFirstTrue(
             d, hwy::HWY_NAMESPACE::Eq(hwy::HWY_NAMESPACE::LoadU(d, p + i), vt));
         if (lane >= 0) return i + static_cast<std::int64_t>(lane);
     }

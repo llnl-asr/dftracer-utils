@@ -67,7 +67,7 @@ double abi_num(dftu_dataframe* df, std::int64_t row, const char* name) {
 dstd::String abi_str(dftu_dataframe* df, std::int64_t row, const char* name) {
     dftu_series* c = dftu_dataframe_column(df, name);
     REQUIRE(c != nullptr);
-    int64_t len = 0;
+    std::int64_t len = 0;
     const char* data = dftu_series_string_at(c, row, &len);
     dstd::String s(data ? data : "", static_cast<std::size_t>(len));
     dftu_series_free(c);

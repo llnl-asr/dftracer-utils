@@ -39,7 +39,7 @@ class ServerArgParse : public cli::ArgParse {
     dstd::StringView index_dir;
     dstd::StringView bind_addr = "127.0.0.1";
     dstd::StringView auth_token;
-    uint16_t port = 8080;
+    std::uint16_t port = 8080;
     std::size_t checkpoint_size =
         common::constants::indexer::DEFAULT_CHECKPOINT_SIZE;
     std::size_t member_cache_size = 1024ull * 1024 * 1024;  // 1 GB

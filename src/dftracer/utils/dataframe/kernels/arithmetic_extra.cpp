@@ -343,7 +343,7 @@ dftu_series* dftu_series_pow(const dftu_series* a, const dftu_series* b) {
         a, b, dftracer::utils::dataframe::ExtraOp::Pow);
 }
 dftu_series* dftu_series_floordiv_scalar(const dftu_series* a, dftu_scalar s,
-                                         int32_t reverse) {
+                                         std::int32_t reverse) {
     DFTU_FLAT_OPERAND(a, flat_a,
                       dftu_series_floordiv_scalar(flat_a, s, reverse));
 
@@ -351,14 +351,14 @@ dftu_series* dftu_series_floordiv_scalar(const dftu_series* a, dftu_scalar s,
         a, s, dftracer::utils::dataframe::ExtraOp::FloorDiv, reverse != 0);
 }
 dftu_series* dftu_series_mod_scalar(const dftu_series* a, dftu_scalar s,
-                                    int32_t reverse) {
+                                    std::int32_t reverse) {
     DFTU_FLAT_OPERAND(a, flat_a, dftu_series_mod_scalar(flat_a, s, reverse));
 
     return dftracer::utils::dataframe::extra_scalar(
         a, s, dftracer::utils::dataframe::ExtraOp::Mod, reverse != 0);
 }
 dftu_series* dftu_series_pow_scalar(const dftu_series* a, dftu_scalar s,
-                                    int32_t reverse) {
+                                    std::int32_t reverse) {
     DFTU_FLAT_OPERAND(a, flat_a, dftu_series_pow_scalar(flat_a, s, reverse));
 
     return dftracer::utils::dataframe::extra_scalar(

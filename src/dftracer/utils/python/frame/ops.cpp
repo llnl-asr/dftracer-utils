@@ -16,10 +16,10 @@ namespace dftracer::utils::python::frame {
 namespace {
 
 PyObject* op_list(PyObject*, PyObject*) {
-    uint32_t n = dftu_op_count();
+    std::uint32_t n = dftu_op_count();
     PyObject* out = PyList_New(n);
     if (!out) return nullptr;
-    for (uint32_t i = 0; i < n; ++i) {
+    for (std::uint32_t i = 0; i < n; ++i) {
         const dftu_op_desc* op = dftu_op_at(i);
         PyObject* name = PyUnicode_FromString(op ? op->name : "");
         if (!name) {
@@ -93,7 +93,7 @@ PyObject* op_run(PyObject*, PyObject* args) {
     // positional argument: a column into `in`, every other operand into the
     // matching args[i] slot.
     const dftu_series* in[2] = {nullptr, nullptr};
-    uint32_t n_series = 0;
+    std::uint32_t n_series = 0;
     dftu_op_arg arg{};
     Py_ssize_t next = 1;
     for (int i = 0; i < DFTU_OP_MAX_ARGS; ++i) {
@@ -138,7 +138,7 @@ PyObject* op_run(PyObject*, PyObject* args) {
             case DFTU_TOK_I32:
             case DFTU_TOK_RANK:
             case DFTU_TOK_ROLLING:
-                slot.i32 = static_cast<int32_t>(PyLong_AsLong(a));
+                slot.i32 = static_cast<std::int32_t>(PyLong_AsLong(a));
                 if (slot.i32 == -1 && PyErr_Occurred()) return nullptr;
                 break;
             case DFTU_TOK_STR: {
@@ -146,7 +146,7 @@ PyObject* op_run(PyObject*, PyObject* args) {
                 const char* p = PyUnicode_AsUTF8AndSize(a, &len);
                 if (!p) return nullptr;
                 slot.str.ptr = p;
-                slot.str.len = static_cast<int32_t>(len);
+                slot.str.len = static_cast<std::int32_t>(len);
                 break;
             }
             case DFTU_TOK_I64: {

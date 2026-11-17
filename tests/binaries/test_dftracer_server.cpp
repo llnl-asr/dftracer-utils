@@ -98,7 +98,7 @@ bool port_is_listening(int port, int timeout_ms = 100) {
 
     struct sockaddr_in addr{};
     addr.sin_family = AF_INET;
-    addr.sin_port = htons(static_cast<uint16_t>(port));
+    addr.sin_port = htons(static_cast<std::uint16_t>(port));
     ::inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
 
     struct timeval tv{};
@@ -160,7 +160,7 @@ dstd::String http_request(int port, const dstd::String& request,
 
     struct sockaddr_in addr{};
     addr.sin_family = AF_INET;
-    addr.sin_port = htons(static_cast<uint16_t>(port));
+    addr.sin_port = htons(static_cast<std::uint16_t>(port));
     ::inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
 
     if (::connect(sock, reinterpret_cast<struct sockaddr*>(&addr),

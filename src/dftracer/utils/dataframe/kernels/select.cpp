@@ -304,7 +304,8 @@ dftu_series* dftu_series_is_duplicated(const dftu_series* v) {
     c.release();
     return r.release();
 }
-int32_t dftu_series_is_sorted(const dftu_series* v, int32_t descending) {
+std::int32_t dftu_series_is_sorted(const dftu_series* v,
+                                   std::int32_t descending) {
     if (!v) return 0;
     DFTU_FLAT_INPUT(v, dftu_series_is_sorted, descending);
     Series c = borrow(v);
@@ -337,7 +338,7 @@ dftu_series* dftu_series_is_in(const dftu_series* v,
     cv.release();
     return r.release();
 }
-dftu_series* dftu_series_sort(const dftu_series* v, int32_t descending) {
+dftu_series* dftu_series_sort(const dftu_series* v, std::int32_t descending) {
     if (!v) return nullptr;
     DFTU_FLAT_INPUT(v, dftu_series_sort, descending);
     Series c = borrow(v);
@@ -350,14 +351,14 @@ dftu_series* dftu_series_sort(const dftu_series* v, int32_t descending) {
     c.release();
     return r.release();
 }
-dftu_series* dftu_series_head(const dftu_series* v, int64_t n) {
+dftu_series* dftu_series_head(const dftu_series* v, std::int64_t n) {
     if (!v) return nullptr;
     Series c = borrow(v);
     Series r = dftracer::utils::dataframe::head_impl(c, n);
     c.release();
     return r.release();
 }
-dftu_series* dftu_series_tail(const dftu_series* v, int64_t n) {
+dftu_series* dftu_series_tail(const dftu_series* v, std::int64_t n) {
     if (!v) return nullptr;
     Series c = borrow(v);
     Series r = dftracer::utils::dataframe::tail_impl(c, n);
@@ -371,14 +372,14 @@ dftu_series* dftu_series_reverse(const dftu_series* v) {
     c.release();
     return r.release();
 }
-dftu_series* dftu_series_shift(const dftu_series* v, int64_t n) {
+dftu_series* dftu_series_shift(const dftu_series* v, std::int64_t n) {
     if (!v) return nullptr;
     Series c = borrow(v);
     Series r = dftracer::utils::dataframe::shift_impl(c, n);
     c.release();
     return r.release();
 }
-dftu_series* dftu_series_top_k(const dftu_series* v, int64_t k) {
+dftu_series* dftu_series_top_k(const dftu_series* v, std::int64_t k) {
     if (!v) return nullptr;
     DFTU_FLAT_INPUT(v, dftu_series_top_k, k);
     Series c = borrow(v);
@@ -391,7 +392,7 @@ dftu_series* dftu_series_top_k(const dftu_series* v, int64_t k) {
     c.release();
     return r.release();
 }
-dftu_series* dftu_series_bottom_k(const dftu_series* v, int64_t k) {
+dftu_series* dftu_series_bottom_k(const dftu_series* v, std::int64_t k) {
     if (!v) return nullptr;
     DFTU_FLAT_INPUT(v, dftu_series_bottom_k, k);
     Series c = borrow(v);
@@ -404,8 +405,8 @@ dftu_series* dftu_series_bottom_k(const dftu_series* v, int64_t k) {
     c.release();
     return r.release();
 }
-dftu_series* dftu_series_sample(const dftu_series* v, int64_t n,
-                                uint64_t seed) {
+dftu_series* dftu_series_sample(const dftu_series* v, std::int64_t n,
+                                std::uint64_t seed) {
     if (!v) return nullptr;
     DFTU_FLAT_OPERAND(v, flat_v, dftu_series_sample(flat_v, n, seed));
     Series c = borrow(v);

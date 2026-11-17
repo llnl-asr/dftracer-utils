@@ -223,16 +223,18 @@ void aggregate(const dftu_series& v,
 
 }  // namespace
 
-int32_t dftu_series_group_by(const dftu_series* keys, const dftu_series* values,
-                             int32_t op_mask, dftu_series** out_keys,
-                             dftu_series** out_values, int32_t max_values) {
+std::int32_t dftu_series_group_by(const dftu_series* keys,
+                                  const dftu_series* values,
+                                  std::int32_t op_mask, dftu_series** out_keys,
+                                  dftu_series** out_values,
+                                  std::int32_t max_values) {
     *out_keys = nullptr;
     if (keys->length != values->length) return 0;
     if (values->encoding != Encoding::Flat) {
         dftu_series* flat = dftu_series_materialize(values);
         if (!flat) return 0;
-        const int32_t n = dftu_series_group_by(keys, flat, op_mask, out_keys,
-                                               out_values, max_values);
+        const std::int32_t n = dftu_series_group_by(
+            keys, flat, op_mask, out_keys, out_values, max_values);
         dftu_series_free(flat);
         return n;
     }

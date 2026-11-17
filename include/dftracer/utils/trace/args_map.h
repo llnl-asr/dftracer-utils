@@ -72,16 +72,17 @@ class ArgsValueProxy {
                 if (*p >= 0) return static_cast<std::uint64_t>(*p);
             }
             if (auto* p = std::get_if<double>(val_)) {
-                if (*p >= 0 && *p <= static_cast<double>(
-                                         std::numeric_limits<uint64_t>::max()))
+                if (*p >= 0 &&
+                    *p <= static_cast<double>(
+                              std::numeric_limits<std::uint64_t>::max()))
                     return static_cast<std::uint64_t>(*p);
             }
             return default_val;
         } else if constexpr (std::is_same_v<T, std::int64_t>) {
             if (auto* p = std::get_if<std::int64_t>(val_)) return *p;
             if (auto* p = std::get_if<std::uint64_t>(val_)) {
-                if (*p <=
-                    static_cast<uint64_t>(std::numeric_limits<int64_t>::max()))
+                if (*p <= static_cast<std::uint64_t>(
+                              std::numeric_limits<std::int64_t>::max()))
                     return static_cast<std::int64_t>(*p);
             }
             if (auto* p = std::get_if<double>(val_)) {
@@ -131,8 +132,8 @@ class ArgsValueProxy {
         } else if constexpr (std::is_same_v<T, std::int64_t>) {
             if (auto* p = std::get_if<std::int64_t>(val_)) return *p;
             if (auto* p = std::get_if<std::uint64_t>(val_)) {
-                if (*p <=
-                    static_cast<uint64_t>(std::numeric_limits<int64_t>::max()))
+                if (*p <= static_cast<std::uint64_t>(
+                              std::numeric_limits<std::int64_t>::max()))
                     return static_cast<std::int64_t>(*p);
             }
             return dstd::nullopt;

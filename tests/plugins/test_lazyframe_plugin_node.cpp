@@ -60,13 +60,13 @@ struct IntSource {
 };
 
 dftu_status src_schema(dftu_ctx*, void* self, const char* const** out_names,
-                       int32_t* out_count) {
+                       std::int32_t* out_count) {
     auto* s = static_cast<IntSource*>(self);
     static thread_local dstd::Vector<const char*> storage;
     storage.clear();
     for (const dstd::String& n : s->names) storage.push_back(n.c_str());
     *out_names = storage.data();
-    *out_count = static_cast<int32_t>(storage.size());
+    *out_count = static_cast<std::int32_t>(storage.size());
     return DFTU_OK;
 }
 
@@ -99,8 +99,8 @@ const dftu_cursor_vt SRC_CURSOR_VT = {sizeof(dftu_cursor_vt), src_cursor_next,
                                       src_cursor_destroy, nullptr};
 
 dftu_status src_scan(dftu_ctx*, void* self, const dftu_plugin_host*,
-                     const dftu_scan_request*, int32_t*, void** out_cursor_self,
-                     const dftu_cursor_vt** out_vt) {
+                     const dftu_scan_request*, std::int32_t*,
+                     void** out_cursor_self, const dftu_cursor_vt** out_vt) {
     auto* s = static_cast<IntSource*>(self);
     dftu_series* c = dftu_series_new_flat(
         DFTU_TYPE_INT64, s->col0.data(),
@@ -231,8 +231,8 @@ dftu_status double_node_open(dftu_ctx*, void*, const dftu_plugin_host*,
 // its declared type, including a parameterized one (Timestamp + timezone).
 dftu_status double_node_schema(dftu_ctx*, void*, const dftu_schema* in,
                                const dftu_op_arg*, dftu_schema* out) {
-    const int32_t n = dftu_schema_field_count(in);
-    for (int32_t i = 0; i < n; ++i) dftu_schema_copy_field(out, in, i);
+    const std::int32_t n = dftu_schema_field_count(in);
+    for (std::int32_t i = 0; i < n; ++i) dftu_schema_copy_field(out, in, i);
     return DFTU_OK;
 }
 
@@ -269,8 +269,8 @@ struct RecordingNode {
 
 dftu_status recording_node_schema(dftu_ctx*, void*, const dftu_schema* in,
                                   const dftu_op_arg*, dftu_schema* out) {
-    const int32_t n = dftu_schema_field_count(in);
-    for (int32_t i = 0; i < n; ++i) dftu_schema_copy_field(out, in, i);
+    const std::int32_t n = dftu_schema_field_count(in);
+    for (std::int32_t i = 0; i < n; ++i) dftu_schema_copy_field(out, in, i);
     return DFTU_OK;
 }
 
@@ -322,8 +322,8 @@ const dftu_cursor_vt PROBE_CURSOR_VT = {
 
 dftu_status probe_node_schema(dftu_ctx*, void*, const dftu_schema* in,
                               const dftu_op_arg*, dftu_schema* out) {
-    const int32_t n = dftu_schema_field_count(in);
-    for (int32_t i = 0; i < n; ++i) dftu_schema_copy_field(out, in, i);
+    const std::int32_t n = dftu_schema_field_count(in);
+    for (std::int32_t i = 0; i < n; ++i) dftu_schema_copy_field(out, in, i);
     return DFTU_OK;
 }
 
@@ -400,13 +400,13 @@ const dftu_cursor_vt NARROW_CURSOR_VT = {
 
 dftu_status narrow_src_schema(dftu_ctx* ctx, void* self,
                               const char* const** out_names,
-                              int32_t* out_count) {
+                              std::int32_t* out_count) {
     return src_schema(ctx, &static_cast<NarrowSource*>(self)->src, out_names,
                       out_count);
 }
 
 dftu_status narrow_src_scan(dftu_ctx*, void* self, const dftu_plugin_host*,
-                            const dftu_scan_request*, int32_t*,
+                            const dftu_scan_request*, std::int32_t*,
                             void** out_cursor_self,
                             const dftu_cursor_vt** out_vt) {
     auto* s = static_cast<NarrowSource*>(self);
@@ -470,8 +470,8 @@ const dftu_cursor_vt FORWARD_CURSOR_VT = {
 
 dftu_status forward_node_schema(dftu_ctx*, void*, const dftu_schema* in,
                                 const dftu_op_arg*, dftu_schema* out) {
-    const int32_t n = dftu_schema_field_count(in);
-    for (int32_t i = 0; i < n; ++i) dftu_schema_copy_field(out, in, i);
+    const std::int32_t n = dftu_schema_field_count(in);
+    for (std::int32_t i = 0; i < n; ++i) dftu_schema_copy_field(out, in, i);
     return DFTU_OK;
 }
 
@@ -595,7 +595,7 @@ struct ChunkCursor {
 };
 
 dftu_status chunk_schema(dftu_ctx*, void*, const char* const** out_names,
-                         int32_t* out_count) {
+                         std::int32_t* out_count) {
     static const char* const NAMES[1] = {"val"};
     *out_names = NAMES;
     *out_count = 1;
@@ -625,7 +625,7 @@ const dftu_cursor_vt CHUNK_CURSOR_VT = {
     sizeof(dftu_cursor_vt), chunk_cursor_next, chunk_cursor_destroy, nullptr};
 
 dftu_status chunk_scan(dftu_ctx* ctx, void* self, const dftu_plugin_host* host,
-                       const dftu_scan_request*, int32_t*,
+                       const dftu_scan_request*, std::int32_t*,
                        void** out_cursor_self, const dftu_cursor_vt** out_vt) {
     auto* fx = static_cast<ChunkSource*>(self);
     auto* cs = new ChunkCursor{{}, fx};

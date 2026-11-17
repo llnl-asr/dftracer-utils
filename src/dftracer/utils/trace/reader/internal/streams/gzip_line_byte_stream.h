@@ -334,7 +334,8 @@ class GzipLineByteStream : public GzipStream {
 
     std::size_t adjust_to_boundary(char *buffer, std::size_t buffer_size) {
         std::size_t newline_pos = SIZE_MAX;
-        for (int64_t i = static_cast<int64_t>(buffer_size) - 1; i >= 0; i--) {
+        for (std::int64_t i = static_cast<std::int64_t>(buffer_size) - 1;
+             i >= 0; i--) {
             if (buffer[i] == '\n') {
                 newline_pos = static_cast<std::size_t>(i) + 1;
                 break;

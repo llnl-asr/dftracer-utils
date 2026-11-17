@@ -24,7 +24,7 @@ namespace dftracer::utils::coro {
 class TimerService {
    public:
     using Callback = dstd::Function<void()>;
-    using TimerId = uint64_t;
+    using TimerId = std::uint64_t;
 
     /// The id of a timeout that was not registered, so nothing fires it.
     static constexpr TimerId NO_TIMER = 0;

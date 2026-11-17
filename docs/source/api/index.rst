@@ -16,6 +16,7 @@ This section contains the Python API documentation for dftracer utilities.
    series
    enums
    runtime
+   errors
    indexer
    schemas
    dfanalyzer
@@ -36,6 +37,7 @@ The dftracer utilities Python package provides the following main modules:
 - :doc:`enums` - typed vocabularies (``Phase``, ``GroupKey``, ``AggOp``) and the
   ``TimeUnit`` scaling target for the builder API
 - :doc:`runtime` - Coroutine runtime and Dask integration
+- :doc:`errors` - The ``DFTUtilsError`` hierarchy every call raises
 - :doc:`indexer` - Indexing and searching capabilities
 - :doc:`schemas` - Record schemas: declare, register, detect and explain record formats
 - :doc:`dfanalyzer` - dfanalyzer bridge: View-based HLM, Arrow IPC, index build

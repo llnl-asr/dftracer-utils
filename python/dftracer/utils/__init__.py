@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: MIT
-import atexit
-from importlib.metadata import PackageNotFoundError, version
-from typing import Optional
+import atexit as _atexit
+from importlib.metadata import PackageNotFoundError as _PackageNotFoundError
+from importlib.metadata import version as _version
+from typing import Optional as _Optional
 
 from . import schemas  # noqa: F401
 from .columnar import (  # noqa: F401
@@ -70,9 +71,9 @@ from .runtime import Runtime, TaskHandle  # noqa: F401
 from .series import Series  # noqa: F401
 from .store import Store  # noqa: F401
 from .time_unit import TimeUnit  # noqa: F401
-from .trace_viewer import Containment, Handle, Session, TraceViewer  # noqa: F401
+from .trace_viewer import Containment, TraceViewer  # noqa: F401
 
-_default_wrapper: Optional["Runtime"] = None
+_default_wrapper: _Optional["Runtime"] = None
 
 
 def get_default_runtime() -> "Runtime":
@@ -84,7 +85,7 @@ def get_default_runtime() -> "Runtime":
     return _default_wrapper
 
 
-def peek_default_runtime() -> Optional["Runtime"]:
+def peek_default_runtime() -> _Optional["Runtime"]:
     """Return the process runtime, or None before its first use.
 
     Never makes one, so a caller that only looks does not start a
@@ -100,7 +101,7 @@ def peek_default_runtime() -> Optional["Runtime"]:
     return _default_wrapper
 
 
-@atexit.register
+@_atexit.register
 def _shutdown_default_runtime() -> None:
     # Wait for this handle's tasks and stop its Python threads while the
     # interpreter is still alive. The native exit handler stops the runtime.
@@ -117,12 +118,12 @@ def _shutdown_default_runtime() -> None:
 
 # Registered after the shutdown above, so it runs first: done callbacks of
 # native tasks that have not started are dropped before the interpreter ends.
-atexit.register(_close_task_callbacks)
+_atexit.register(_close_task_callbacks)
 
 
 try:
-    __version__ = version("dftracer-utils")
-except PackageNotFoundError:
+    __version__ = _version("dftracer-utils")
+except _PackageNotFoundError:
     __version__ = "0.0.0"
 
 
@@ -144,10 +145,11 @@ __all__ = [
     "Agg",
     "GroupBy",
     "count",
-    "schemas",
+    "eval_many",
     "Indexer",
     "IndexStatus",
     "AggOp",
+    "DType",
     "GroupKey",
     "Phase",
     "TimeUnit",
@@ -156,8 +158,6 @@ __all__ = [
     "LiveFileStatus",
     "LiveTraceViewer",
     "Containment",
-    "Session",
-    "Handle",
     "DataFrame",
     "LazyFrame",
     "LazyResult",
@@ -177,4 +177,15 @@ __all__ = [
     "set_log_level",
     "write_shard_set",
     "consolidate_shard_set",
+    "DFTUtilsError",
+    "DFTUtilsAggregationError",
+    "DFTUtilsCompressionError",
+    "DFTUtilsDuqlError",
+    "DFTUtilsIndexerError",
+    "DFTUtilsIOError",
+    "DFTUtilsNotFoundError",
+    "DFTUtilsParseError",
+    "DFTUtilsPipelineError",
+    "DFTUtilsReaderError",
+    "DFTUtilsValueError",
 ]

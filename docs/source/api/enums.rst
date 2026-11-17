@@ -36,6 +36,16 @@ entry of the event args map, which has no fixed member.
 by="dur")`` is ``"argmax:name:dur"`` (the row with the maximum ``dur``, keyed by
 ``name``). ``AggOp.COUNT`` needs no field.
 
+Series dtypes
+-------------
+
+.. autoclass:: dftracer.utils.DType
+   :members:
+   :undoc-members:
+
+``DType`` is an ``IntEnum`` that mirrors the engine's type ids; it is also
+exported at the package top level.
+
 Time units
 ----------
 

@@ -49,7 +49,7 @@ Python
 
 ``s.collect(root)`` registers any :class:`~dftracer.utils.LazyFrame` (a
 ``TraceViewer`` plan included) or :class:`~dftracer.utils.LazyResult` and
-returns a :class:`~dftracer.utils.Handle`. ``s.sink_json(viewer, path)``,
+returns a :class:`~dftracer.utils.trace_viewer.Handle`. ``s.sink_json(viewer, path)``,
 ``s.materialize(viewer)`` and ``s.attach(plugins)`` register an export, a
 materialization and a plugin set the same way. A ``with`` block executes on
 exit, or call ``s.execute()`` (the first ``handle.result()`` also triggers it):

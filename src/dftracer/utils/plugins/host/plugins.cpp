@@ -145,6 +145,8 @@ struct Plugins::Impl {
     // declarations, which the hub of each scan is built from.
     dstd::Vector<ChannelDecl> channels;
     dstd::Vector<PhaseDecl> phases;
+    // Every channel end, owner or reference, that declared SENDS.
+    dstd::Vector<ChannelDecl> senders;
 };
 
 struct Plugins::Builder::State {
@@ -607,6 +609,9 @@ dstd::Result<void> settle_ports(
             owners.emplace(decl.name, Owner{i, &decl});
             impl.channels.push_back(decl);
         }
+        for (const ChannelDecl& decl : impl.plugins[i].ports.channels) {
+            if (decl.sends) impl.senders.push_back(decl);
+        }
     }
 
     dstd::HashMap<dstd::String, bool> ends_in_tasks;
@@ -941,7 +946,7 @@ coro::CoroTask<dstd::Result<PluginRun>> Plugins::run(const View& view) const {
     // One registry for the whole scan; every plugin's finalize publishes its
     // merged accumulators here and later plugins read them by name.
     SharedResultRegistry shared;
-    PortHub hub(impl_->channels, impl_->phases);
+    PortHub hub(impl_->channels, impl_->phases, impl_->senders);
     if (auto kept = view.status(); !kept) co_return kept.error();
     auto seeding = seed_phases(trace::views::detail::scan_plan_of(view),
                                impl_->phases, &hub);
@@ -993,7 +998,8 @@ trace::views::Deferred<PluginRun> Plugins::attach(
     auto shared = dstd::make_shared<SharedResultRegistry>();
     auto out = dstd::make_shared<PluginRun>();
     auto executed = dstd::make_shared<bool>(false);
-    auto hub = dstd::make_shared<PortHub>(impl_->channels, impl_->phases);
+    auto hub = dstd::make_shared<PortHub>(impl_->channels, impl_->phases,
+                                          impl_->senders);
     utils::plugins::NamedResultRegistry* named = &out->results;
     const std::size_t n = impl_->order.size();
     if (n == 0) {
@@ -1110,7 +1116,7 @@ dstd::Result<Plugins> build_injected_plugins_declaring(
 
 dstd::UniquePtr<PortHub> make_port_hub(const Plugins& set) {
     const Plugins::Impl& impl = PluginsInternalAccess::impl(set);
-    return dstd::make_unique<PortHub>(impl.channels, impl.phases);
+    return dstd::make_unique<PortHub>(impl.channels, impl.phases, impl.senders);
 }
 
 dstd::Vector<std::size_t> fold_order(const Plugins& set) {

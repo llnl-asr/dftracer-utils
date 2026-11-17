@@ -838,6 +838,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 - The CLI tools print the right default and help text for an option whose text is built at start-up, such as `dftracer_server --checkpoint-size` and `--member-cache-size`; `--help` printed freed memory there.
 - `dftracer_server` with `--index-dir` shared by several trace folders: a stale folder deleted the whole index store, which held the other folders' index data too. It now drops only its own files, including files removed from it, and a sub-folder counts as a folder of its own. A relative `--dir` now finds removed files.
 - Fix a use after free when a plan ran an op after `dftu_op_unregister` removed it.
+- Close a plugin channel once every plugin that declared a sending end of it has finished `on_finalize`, and not only when the scan ends, so a receiver whose finalize reads until `DFTU_PORT_CLOSED` no longer hangs when its sender never calls `channel_close`.
   A plan now keeps the op it uses, and unregistering removes only the name, so a later lookup by name finds nothing.
 - Fix `to_pandas()` giving `int64` and `uint64` columns the numpy types `longlong` and `ulonglong`, so a pandas `merge` on a repeated `uint64` key raised `KeyError`.
   The columns are now numpy's own `int64` and `uint64`.

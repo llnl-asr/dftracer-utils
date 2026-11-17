@@ -1615,6 +1615,15 @@ dstd::Result<void> PluginFold::merge(Fold& other) {
 }
 
 coro::CoroTask<dstd::Result<bool>> PluginFold::finalize(const CoverageSet&) {
+    // Every way out, including a failure, ends this plugin's sends, so a
+    // receiver later in the order never waits on a channel it will not fill.
+    struct SendsDone {
+        PortHub* hub;
+        const dstd::String& space;
+        ~SendsDone() {
+            if (hub) hub->sender_finished(space);
+        }
+    } sends_done{port_hub_, port_namespace_};
     if (slice_error_) co_return *slice_error_;
     // Publish before on_finalize so a plugin finalizing later in fold order can
     // read this one's merged accumulators via agg_result().

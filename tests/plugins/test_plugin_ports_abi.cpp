@@ -448,6 +448,99 @@ coro::CoroTask<void> run_for_message(const plugins::host::Plugins* set,
     if (!run) *message = run.error().message();
 }
 
+// Senders that end their finalize without a close. Each sends G_SEND_COUNT
+// values; the receiver's finalize receives until the host closes the channel.
+constexpr std::uint64_t G_SEND_COUNT = 3;
+dftu_port_status g_last_send_status = DFTU_PORT_FULL;
+std::uint64_t g_received = 0;
+dftu_port_status g_end_status = DFTU_PORT_FULL;
+
+dftu_status send_values_on_finalize(dftu_ctx* ctx, void*,
+                                    const dftu_plugin_host* host, dftu_task**) {
+    std::uint64_t ch = 0;
+    dftu_status st = dftu_test_ports_open(ctx, host, "plugin.first.events", 0,
+                                          0, DFTU_OVERFLOW_FAIL, 0, &ch);
+    if (st < 0) return st;
+    for (std::uint64_t i = 0; i < G_SEND_COUNT; ++i) {
+        st =
+            dftu_test_ports_try_send(ctx, host, ch, &i, 8, &g_last_send_status);
+        if (st < 0) return st;
+    }
+    return DFTU_OK;
+}
+
+dftu_status failing_on_finalize(dftu_ctx*, void*, const dftu_plugin_host*,
+                                dftu_task**) {
+    return DFTU_E_INVALID;
+}
+
+dftu_status count_until_closed_on_finalize(dftu_ctx* ctx, void*,
+                                           const dftu_plugin_host* host,
+                                           dftu_task**) {
+    std::uint64_t ch = 0;
+    dftu_status st = dftu_test_ports_open(ctx, host, "plugin.first.events", 0,
+                                          0, DFTU_OVERFLOW_FAIL, 0, &ch);
+    if (st < 0) return st;
+    for (;;) {
+        Got got;
+        st = recv_raw(host, ch, 8, &got);
+        if (st < 0) return st;
+        g_end_status = got.status;
+        if (got.status != DFTU_PORT_OK) return DFTU_OK;
+        ++g_received;
+    }
+}
+
+dftu_status declare_first_sender(dftu_ctx* ctx, const dftu_plugin_host* host) {
+    std::uint64_t ch = 0;
+    return dftu_test_ports_open(ctx, host, "events", SENDS, 0,
+                                DFTU_OVERFLOW_FAIL, 0, &ch);
+}
+
+dftu_status declare_second_sender(dftu_ctx* ctx, const dftu_plugin_host* host) {
+    std::uint64_t ch = 0;
+    return dftu_test_ports_open(ctx, host, "plugin.first.events", SENDS, 0,
+                                DFTU_OVERFLOW_FAIL, 0, &ch);
+}
+
+dftu_status declare_counting_receiver(dftu_ctx* ctx,
+                                      const dftu_plugin_host* host) {
+    std::uint64_t ch = 0;
+    return dftu_test_ports_open(ctx, host, "plugin.first.events", RECEIVES, 0,
+                                DFTU_OVERFLOW_FAIL, 0, &ch);
+}
+
+void reset_end_state() {
+    g_last_send_status = DFTU_PORT_FULL;
+    g_received = 0;
+    g_end_status = DFTU_PORT_FULL;
+}
+
+// A run of `plugins` over a 40 line trace, with the error message of a failed
+// run.
+dstd::String run_plugins_message(dstd::Vector<InjectedPlugin> plugins) {
+    dftu_utils_test::TestEnvironment env(40);
+    trace::views::ViewFile file =
+        test_plugin_common::index_trace(make_trace(env, 40));
+    auto set =
+        plugins::host::build_injected_plugins_declaring(std::move(plugins));
+    REQUIRE(set.has_value());
+    dstd::String message;
+    dstd::Vector<trace::views::ViewFile> files;
+    files.push_back(file);
+    const trace::views::View view = trace::views::View::from_files(files);
+    const plugins::host::Plugins* planned = &*set;
+    Runtime rt(2);
+    auto task = coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+        auto body = run_for_message(planned, &view, &message);
+        co_await body;
+        co_return;
+    });
+    dftu_utils_test::ok(rt.submit(std::move(task), "ports-senders").wait());
+    rt.shutdown();
+    return message;
+}
+
 }  // namespace
 
 TEST_SUITE("plugin ports: run") {
@@ -473,6 +566,51 @@ TEST_SUITE("plugin ports: run") {
             *set, trace::views::View::from_files({file}), "ports-run");
         CHECK(g_recv_status == DFTU_PORT_OK);
         CHECK(g_recv_len == 8);
+    }
+
+    TEST_CASE("a channel closes when its sender finalized without closing it") {
+        dftu_plugin first = make_bare_plugin();
+        first.on_finalize = send_values_on_finalize;
+        dftu_plugin reader = make_bare_plugin();
+        reader.on_finalize = count_until_closed_on_finalize;
+        reset_end_state();
+        const dstd::String message = run_plugins_message(
+            {InjectedPlugin{&first, "first", declare_first_sender},
+             InjectedPlugin{&reader, "reader", declare_counting_receiver}});
+        CHECK(message.empty());
+        CHECK(g_received == G_SEND_COUNT);
+        CHECK(g_end_status == DFTU_PORT_CLOSED);
+    }
+
+    TEST_CASE("a channel with two senders closes after both finalized") {
+        dftu_plugin first = make_bare_plugin();
+        first.on_finalize = send_values_on_finalize;
+        dftu_plugin second = make_bare_plugin();
+        second.on_finalize = send_values_on_finalize;
+        dftu_plugin reader = make_bare_plugin();
+        reader.on_finalize = count_until_closed_on_finalize;
+        reset_end_state();
+        const dstd::String message = run_plugins_message(
+            {InjectedPlugin{&first, "first", declare_first_sender},
+             InjectedPlugin{&second, "second", declare_second_sender},
+             InjectedPlugin{&reader, "reader", declare_counting_receiver}});
+        CHECK(message.empty());
+        CHECK(g_last_send_status == DFTU_PORT_OK);
+        CHECK(g_received == 2 * G_SEND_COUNT);
+        CHECK(g_end_status == DFTU_PORT_CLOSED);
+    }
+
+    TEST_CASE("a sender whose finalize fails ends the run with its error") {
+        dftu_plugin first = make_bare_plugin();
+        first.on_finalize = failing_on_finalize;
+        dftu_plugin reader = make_bare_plugin();
+        reader.on_finalize = count_until_closed_on_finalize;
+        reset_end_state();
+        const dstd::String message = run_plugins_message(
+            {InjectedPlugin{&first, "first", declare_first_sender},
+             InjectedPlugin{&reader, "reader", declare_counting_receiver}});
+        CHECK(message.find("on_finalize") != dstd::String::npos);
+        CHECK(message.find("first") != dstd::String::npos);
     }
 }
 

@@ -855,9 +855,13 @@ fixed-size values: a message whose length is not ``cap`` is taken off the queue
 and dropped, and the status is ``DFTU_PORT_TOO_BIG`` with the length it had. A send under ``DFTU_OVERFLOW_BLOCK`` waits for a credit,
 and ``DFTU_OVERFLOW_DROP_OLDEST`` drops the oldest message to make room.
 ``channel_try_send`` never waits. ``channel_close`` ends the sends; a receive
-still drains the queue and then gives ``DFTU_PORT_CLOSED``. The host closes
-every channel when the scan ends, for a scan that ``Plugins::run`` drives and
-for one that ``Plugins::attach`` joins to a session.
+still drains the queue and then gives ``DFTU_PORT_CLOSED``. The host closes a
+channel when every plugin that opened it with ``DFTU_CHANNEL_F_SENDS`` has
+finished its ``on_finalize`` (its pending task included, or a failure of it) or
+has none, so a plugin need not call ``channel_close``. A channel that no plugin
+opened with ``DFTU_CHANNEL_F_SENDS`` closes when the scan ends, as does every
+channel left open, for a scan that ``Plugins::run`` drives and for one that
+``Plugins::attach`` joins to a session.
 
 *Call contract.* Every call except ``port_key``, ``publish`` and ``consume``
 takes a ``dftu_ctx*`` and returns a status. A negative status sets its message

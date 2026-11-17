@@ -127,8 +127,12 @@ class PortPhase {
 /// one mutex that a lookup takes once, and the caller keeps the slot.
 class PortHub {
    public:
+    /// `senders` holds every end, owner or reference, that declared
+    /// DFTU_CHANNEL_F_SENDS; the hub closes a channel once each declarer of
+    /// such an end has finished (see @ref sender_finished).
     PortHub(const dstd::Vector<ChannelDecl>& channels,
-            const dstd::Vector<PhaseDecl>& phases);
+            const dstd::Vector<PhaseDecl>& phases,
+            const dstd::Vector<ChannelDecl>& senders);
     ~PortHub();
     PortHub(const PortHub&) = delete;
     PortHub& operator=(const PortHub&) = delete;
@@ -139,6 +143,11 @@ class PortHub {
     PortChannel* channel(std::uint64_t handle) const;
     /// Closes every channel, which wakes every waiting send and receive.
     void close_all();
+    /// Marks the plugin `declarer` as done sending. A channel it declared a
+    /// sending end of closes when the last such plugin is done, after its
+    /// queued messages are still received. Repeated calls for one plugin count
+    /// once.
+    void sender_finished(dstd::StringView declarer);
 
     /// The slot of `name`, made on first use; it lives as long as the hub.
     PortLatest* latest(dstd::StringView name);
@@ -148,6 +157,10 @@ class PortHub {
    private:
     dstd::HashMap<std::uint64_t, dstd::UniquePtr<PortChannel>> channels_;
     dstd::HashMap<dstd::String, std::uint64_t> handles_;
+    std::mutex senders_mutex_;
+    // The channels each plugin still sends on, and the plugins left on each.
+    dstd::HashMap<dstd::String, dstd::Vector<std::uint64_t>> sends_of_;
+    dstd::HashMap<std::uint64_t, std::uint32_t> senders_left_;
     std::mutex latest_mutex_;
     dstd::HashMap<dstd::String, dstd::UniquePtr<PortLatest>> latest_;
     dstd::HashMap<dstd::String, dstd::UniquePtr<PortPhase>> phases_;

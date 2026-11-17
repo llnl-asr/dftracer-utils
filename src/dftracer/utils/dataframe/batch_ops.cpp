@@ -1817,6 +1817,24 @@ bool reduce_broadcasts(Agg agg) noexcept {
 }
 
 namespace {
+// The temporal columns a reduction keeps in their own type (agg_output_type):
+// min and max of any of them, the sum of a Duration, the mean of a Timestamp
+// or a Duration.
+bool reduces_temporal(Agg agg, TypeId t) noexcept {
+    const bool instant = is_temporal_type(t);
+    switch (agg) {
+        case Agg::Min:
+        case Agg::Max:
+            return instant;
+        case Agg::Sum:
+            return t == TypeId::Duration;
+        case Agg::Mean:
+            return t == TypeId::Timestamp || t == TypeId::Duration;
+        default:
+            return false;
+    }
+}
+
 template <class Name>
 dstd::Result<dstd::Vector<GroupAgg>> reduce_specs_of(
     const dstd::Vector<Name>& names, const dstd::Vector<TypeId>& types, Agg agg,
@@ -1832,7 +1850,8 @@ dstd::Result<dstd::Vector<GroupAgg>> reduce_specs_of(
         const dstd::String name{dstd::StringView{names[i]}};
         if (std::find(keys.begin(), keys.end(), name) != keys.end()) continue;
         if (any_type || types[i] == TypeId::Unknown ||
-            is_numeric_dispatchable(types[i]))
+            is_numeric_dispatchable(types[i]) ||
+            reduces_temporal(agg, types[i]))
             out.push_back(GroupAgg{agg, name, name});
     }
     return out;

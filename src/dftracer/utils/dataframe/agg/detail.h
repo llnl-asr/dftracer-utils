@@ -315,6 +315,13 @@ class AggState : public dstd::HeapObject {
     dstd::Vector<int> spec_field;         // spec -> field index, or -1 (Count)
     dstd::Vector<std::int32_t> field_vc;  // field -> value_col
     dstd::Vector<FieldStatDomain> field_domain;  // field -> accumulation domain
+    // field -> the value column's exact type, with the unit and timezone of a
+    // temporal one (all widen to the I64 domain above); finalize types the
+    // aggregate through agg_output_type from this. Unknown where the state
+    // never saw the column (a seeded state).
+    dstd::Vector<TypeId> field_type;
+    dstd::Vector<TimeUnit> field_time_unit;
+    dstd::Vector<dstd::String> field_timezone;
     std::size_t nf = 0;
     bool inited = false;
 
@@ -1052,6 +1059,9 @@ class AggState : public dstd::HeapObject {
         // accumulate) so a state finalized with no accumulate/seed still has
         // valid slots.
         field_domain.assign(nf, FieldStatDomain::F64);
+        field_type.assign(nf, TypeId::Unknown);
+        field_time_unit.assign(nf, TimeUnit::Micro);
+        field_timezone.assign(nf, dstd::String());
         field_is_str.assign(nf, 0);
         has_fl = false;
         for (const AggSpec& sp : specs)
@@ -1801,6 +1811,9 @@ class AggState : public dstd::HeapObject {
         spec_field = other.spec_field;
         field_vc = other.field_vc;
         field_domain = other.field_domain;
+        field_type = other.field_type;
+        field_time_unit = other.field_time_unit;
+        field_timezone = other.field_timezone;
         field_is_str = other.field_is_str;
         nf = other.nf;
         has_fl = other.has_fl;

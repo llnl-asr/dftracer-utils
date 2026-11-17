@@ -393,15 +393,77 @@ TEST_SUITE("LazyFrame output_schema") {
                                   GroupAgg{Agg::First, "ts", "first_ts"}});
         Schema s = lf.output_schema();
         REQUIRE(s.fields.size() == 5);
-        // Decimal128 and Timestamp both fall through col_domain's default
-        // branch to I64, so Sum/First widen to plain Int64: the decimal's
-        // scale and the timestamp's unit/timezone are both lost. Documented
-        // in agg_output_type's contract; agg_finalize does the same, so this
-        // is a real limitation, not a schema/collect() disagreement.
+        // Decimal128 falls through col_domain's default branch to I64, so its
+        // scale is lost; a Timestamp keeps its unit and zone under First and
+        // widens to Int64 under Sum.
         CHECK(s.fields[1] == Field{"sum_dec", scalar(TypeId::Int64), true});
         CHECK(s.fields[2] == Field{"first_dec", scalar(TypeId::Int64), true});
         CHECK(s.fields[3] == Field{"sum_ts", scalar(TypeId::Int64), true});
-        CHECK(s.fields[4] == Field{"first_ts", scalar(TypeId::Int64), true});
+        CHECK(s.fields[4] ==
+              Field{"first_ts", timestamp(TimeUnit::Micro, "America/Chicago"),
+                    true});
         check_matches_collect(lf);
+    }
+
+    TEST_CASE(
+        "group_by keeps a temporal column's type under min/max/first/last") {
+        DataFrame df;
+        df.names =
+            dstd::make_shared_strings({"cat", "ts", "d32", "d64", "dur"});
+        df.columns.push_back(Series::strings({"x", "x", "y", "y"}));
+        df.columns.push_back(
+            make_timestamp({1, 2, 3, 4}, TimeUnit::Nano, "UTC"));
+        df.columns.push_back(make_date32({1, 2, 3, 4}));
+        df.columns.push_back(make_date64({1, 2, 3, 4}));
+        df.columns.push_back(make_duration({1, 2, 3, 4}, TimeUnit::Milli));
+        LazyFrame lf =
+            LazyFrame::scan(src(std::move(df)))
+                .group_by("cat", {GroupAgg{Agg::Max, "ts", "max_ts"},
+                                  GroupAgg{Agg::Min, "d32", "min_d32"},
+                                  GroupAgg{Agg::First, "d64", "first_d64"},
+                                  GroupAgg{Agg::Last, "dur", "last_dur"},
+                                  GroupAgg{Agg::Sum, "dur", "sum_dur"},
+                                  GroupAgg{Agg::Mean, "ts", "mean_ts"},
+                                  GroupAgg{Agg::Count, "", "n"}});
+        Schema s = lf.output_schema();
+        REQUIRE(s.fields.size() == 8);
+        CHECK(s.fields[0] == Field{"cat", scalar(TypeId::String), true});
+        CHECK(s.fields[1].type == timestamp(TimeUnit::Nano, "UTC"));
+        CHECK(s.fields[2].type == scalar(TypeId::Date32));
+        CHECK(s.fields[3].type == scalar(TypeId::Date64));
+        CHECK(s.fields[4].type == duration_of(TimeUnit::Milli));
+        CHECK(s.fields[5].type == duration_of(TimeUnit::Milli));
+        CHECK(s.fields[6].type == timestamp(TimeUnit::Nano, "UTC"));
+        CHECK(s.fields[7].type == scalar(TypeId::Int64));
+        check_matches_collect(lf);
+    }
+
+    TEST_CASE(
+        "the reduce shortcut takes the temporal columns an aggregate "
+        "keeps in their type") {
+        DataFrame df;
+        df.names = dstd::make_shared_strings({"cat", "ts", "d32", "dur", "s"});
+        df.columns.push_back(Series::strings({"x", "x", "y", "y"}));
+        df.columns.push_back(
+            make_timestamp({1, 2, 3, 4}, TimeUnit::Nano, "UTC"));
+        df.columns.push_back(make_date32({1, 2, 3, 4}));
+        df.columns.push_back(make_duration({1, 2, 3, 4}, TimeUnit::Milli));
+        df.columns.push_back(Series::strings({"a", "b", "c", "d"}));
+        LazyFrame lf = LazyFrame::scan(src(std::move(df)));
+        auto names = [&](Agg agg) {
+            dstd::Vector<dstd::String> out;
+            for (const GroupAgg& a : dftu_utils_test::ok(
+                     lf.reduce_specs(agg, dstd::Vector<dstd::String>{"cat"})))
+                out.push_back(a.out);
+            return out;
+        };
+        using Names = dstd::Vector<dstd::String>;
+        CHECK(names(Agg::Max) == Names{"ts", "d32", "dur"});
+        CHECK(names(Agg::Min) == Names{"ts", "d32", "dur"});
+        CHECK(names(Agg::Sum) == Names{"dur"});
+        CHECK(names(Agg::Mean) == Names{"ts", "dur"});
+        CHECK(names(Agg::First) == Names{"ts", "d32", "dur", "s"});
+        check_matches_collect(lf.group_by(
+            "cat", dftu_utils_test::ok(lf.reduce_specs(Agg::Max, {"cat"}))));
     }
 }

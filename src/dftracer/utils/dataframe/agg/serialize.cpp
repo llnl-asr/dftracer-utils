@@ -257,6 +257,16 @@ dstd::String agg_serialize(const AggState& st_in, bool compact) {
     put(s, static_cast<std::uint32_t>(st.nf));
     for (FieldStatDomain d : st.field_domain)
         put(s, static_cast<std::uint8_t>(d));
+    for (std::size_t fj = 0; fj < st.nf; ++fj) {
+        put(s, static_cast<std::uint8_t>(fj < st.field_type.size()
+                                             ? st.field_type[fj]
+                                             : TypeId::Unknown));
+        put(s, static_cast<std::int32_t>(fj < st.field_time_unit.size()
+                                             ? st.field_time_unit[fj]
+                                             : TimeUnit::Micro));
+        put_bytes(s, fj < st.field_timezone.size() ? st.field_timezone[fj]
+                                                   : dstd::String());
+    }
     put(s, static_cast<std::uint8_t>(st.has_fl ? 1 : 0));
     if (st.has_fl)
         for (std::size_t fj = 0; fj < st.nf; ++fj)
@@ -477,6 +487,17 @@ dstd::String agg_serialize(const AggState& st_in, bool compact) {
     return s;
 }
 
+// A unit above Nano is a corrupt blob: the reader goes bad, as for a short
+// read.
+static TimeUnit read_time_unit(Reader& r) {
+    const std::int32_t u = r.get<std::int32_t>();
+    if (u < 0 || u > static_cast<std::int32_t>(TimeUnit::Nano)) {
+        r.fail();
+        return TimeUnit::Micro;
+    }
+    return static_cast<TimeUnit>(u);
+}
+
 dstd::Result<AggStatePtr> agg_deserialize(const dstd::String& blob,
                                           bool compact, const AggState* like) {
     Reader r{blob.data(), blob.data() + blob.size()};
@@ -519,7 +540,7 @@ dstd::Result<AggStatePtr> agg_deserialize(const dstd::String& blob,
     if (!r.count(nkeys)) return corrupt_blob();
     st->key_time_unit.resize(nkeys);
     for (std::uint32_t k = 0; k < nkeys; ++k)
-        st->key_time_unit[k] = static_cast<TimeUnit>(r.get<std::int32_t>());
+        st->key_time_unit[k] = read_time_unit(r);
     if (!r.count(nkeys)) return corrupt_blob();
     st->key_timezone.resize(nkeys);
     for (std::uint32_t k = 0; k < nkeys; ++k)
@@ -567,6 +588,17 @@ dstd::Result<AggStatePtr> agg_deserialize(const dstd::String& blob,
     for (std::uint32_t i = 0; i < nf; ++i)
         st->field_domain[i] =
             static_cast<FieldStatDomain>(r.get<std::uint8_t>());
+    if (!r.count(nf)) return corrupt_blob();
+    st->field_type.resize(nf);
+    st->field_time_unit.resize(nf);
+    st->field_timezone.resize(nf);
+    for (std::uint32_t i = 0; i < nf; ++i) {
+        const std::uint8_t t = r.get<std::uint8_t>();
+        if (t > static_cast<std::uint8_t>(TypeId::Map)) return corrupt_blob();
+        st->field_type[i] = static_cast<TypeId>(t);
+        st->field_time_unit[i] = read_time_unit(r);
+        st->field_timezone[i] = r.get_bytes();
+    }
     if (st->has_fl != (r.get<std::uint8_t>() != 0)) return corrupt_blob();
     if (st->has_fl) {
         if (!r.count(nf)) return corrupt_blob();
@@ -957,7 +989,7 @@ dstd::Result<AggStatePtr> agg_deserialize(const dstd::String& blob,
                 return done.error();
         }
     }
-    if (r.bad) return corrupt_blob();
+    if (r.bad || r.p != r.end) return corrupt_blob();
     st->inited = true;
     return st;
 }

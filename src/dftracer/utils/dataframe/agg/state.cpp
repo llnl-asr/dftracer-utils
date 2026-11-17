@@ -1263,11 +1263,22 @@ dstd::Result<void> agg_accumulate(AggState& st,
             }
         }
         st.field_domain.resize(st.nf);
+        st.field_type.assign(st.nf, TypeId::Unknown);
+        st.field_time_unit.assign(st.nf, TimeUnit::Micro);
+        st.field_timezone.assign(st.nf, dstd::String());
         st.field_is_str.resize(st.nf);
         for (std::size_t fj = 0; fj < st.nf; ++fj) {
             const Series* vc =
                 values[static_cast<std::size_t>(st.field_vc[fj])];
             st.field_domain[fj] = col_domain(vc->type());
+            st.field_type[fj] = vc->type();
+            if (vc->type() == TypeId::Time32 || vc->type() == TypeId::Time64 ||
+                vc->type() == TypeId::Timestamp ||
+                vc->type() == TypeId::Duration) {
+                const DataType dt = vc->data_type();
+                st.field_time_unit[fj] = dt.time_unit();
+                st.field_timezone[fj] = dt.timezone();
+            }
             st.field_is_str[fj] = vc->type() == TypeId::String ? 1 : 0;
         }
         // A String field keeps only its presence count (n) and its
@@ -1703,10 +1714,61 @@ void agg_merge(AggState& into, const AggState& other) {
     agg_merge(into, other, order);
 }
 
+namespace {
+
+bool is_timed_type(TypeId t) {
+    return t == TypeId::Timestamp || t == TypeId::Time32 ||
+           t == TypeId::Time64 || t == TypeId::Duration;
+}
+
+// Two partials of one aggregate must hold the same temporal value column: its
+// type, unit and zone decide the type of the result. A side that never saw the
+// column (a seeded state) is unknown and matches. Another mismatch (an integer
+// column in one partial, a float in the other) stays a merge into the wider
+// domain, as the schemaless readers rely on.
+dstd::Result<void> check_field_types(const AggState& into,
+                                     const AggState& other) {
+    const std::size_t n =
+        std::min(into.field_type.size(), other.field_type.size());
+    for (std::size_t j = 0; j < n; ++j) {
+        const TypeId a = into.field_type[j];
+        const TypeId b = other.field_type[j];
+        if (a == TypeId::Unknown || b == TypeId::Unknown) continue;
+        if (!is_temporal_type(a) && !is_temporal_type(b)) continue;
+        const bool timed = is_timed_type(a);
+        if (a != b ||
+            (timed && (into.field_time_unit[j] != other.field_time_unit[j])) ||
+            (a == TypeId::Timestamp &&
+             into.field_timezone[j] != other.field_timezone[j]))
+            return common::make_error<
+                "agg_merge: value column {} is {} in one partial and {} "
+                "(or another unit or zone) in the other">(
+                common::ErrorCode::InvalidArgument, j, type_name(a),
+                type_name(b));
+    }
+    return {};
+}
+
+}  // namespace
+
 void agg_merge(AggState& into, const AggState& other,
                const dstd::Vector<std::int64_t>& order) {
     into.settle_light();
     if (!other.inited) return;
+    if (into.inited) {
+        if (dstd::Result<void> same = check_field_types(into, other); !same) {
+            into.udaf_note(std::move(same.error()));
+            return;
+        }
+        for (std::size_t j = 0;
+             j < std::min(into.field_type.size(), other.field_type.size()); ++j)
+            if (into.field_type[j] == TypeId::Unknown &&
+                other.field_type[j] != TypeId::Unknown) {
+                into.field_type[j] = other.field_type[j];
+                into.field_time_unit[j] = other.field_time_unit[j];
+                into.field_timezone[j] = other.field_timezone[j];
+            }
+    }
     if (!into.inited) {
         into.adopt_layout(other);
         into.nkeys = other.nkeys;

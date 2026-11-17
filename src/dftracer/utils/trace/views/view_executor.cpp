@@ -1765,8 +1765,10 @@ namespace {
 // One-byte wire tag prefixing every aggregate partial (distributed merge; never
 // persisted), so the merge side can reject a foreign blob. Every partial is now
 // a mergeable engine AggState (the scan path and the index-only tier fast path
-// both emit it); a partial with any other leading byte is rejected loudly.
-enum class AggWireTag : std::uint8_t { AggState = 2 };
+// both emit it); a partial with any other leading byte is rejected loudly. The
+// value changes with the AggState blob layout, so a rank of another build fails
+// on the tag instead of misreading the blob.
+enum class AggWireTag : std::uint8_t { AggState = 3 };
 
 dstd::String encode_agg_partial(const dataframe::AggState& st) {
     dstd::String out(1, static_cast<char>(AggWireTag::AggState));
@@ -1795,6 +1797,8 @@ dstd::Result<dataframe::AggStatePtr> decode_partials(
             state = std::move(st);
         else
             dataframe::agg_merge(*state, *st);
+        if (dstd::Result<void> checked = dataframe::agg_check(*state); !checked)
+            return checked.error();
     }
     return state;
 }

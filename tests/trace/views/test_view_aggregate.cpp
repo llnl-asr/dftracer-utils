@@ -1445,6 +1445,12 @@ TEST_SUITE("View") {
         dftu_utils_test::expect_error(
             v.merge_partials({bad}),
             dftracer::utils::common::ErrorCode::Aggregation);
+        // The tag of the previous blob layout is refused as well.
+        dstd::String old_layout = good;
+        old_layout[0] = static_cast<char>(2);
+        dftu_utils_test::expect_error(
+            v.merge_partials({old_layout}),
+            dftracer::utils::common::ErrorCode::Aggregation);
         // A present-but-empty partial (no tag byte) is also rejected loudly.
         dftu_utils_test::expect_error(
             v.merge_partials({dstd::StringView()}),

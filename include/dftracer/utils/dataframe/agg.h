@@ -133,18 +133,24 @@ inline bool agg_uses_raw_value(AggOp op) {
 }
 
 /// The @ref DataType agg_finalize actually writes for `op` over a value column
-/// of `value_type`: Sum/Min/Max/First/Last widen through the same
-/// integer/unsigned/float domain agg_finalize keys on (Int64/Uint64/Float64),
-/// String columns pass First/Last through unchanged, and every other op's
-/// type is fixed regardless of `value_type`. An Unknown `value_type` gives
-/// Unknown for the widening ops: collect() settles it from the data. Never
-/// guesses: every AggOp is covered, so schema code built on this can never
-/// disagree with collect().
+/// of `value_type`. The one rule for eager and lazy execution and for the plan
+/// schema:
+/// - Min, Max, First and Last keep a temporal column's whole type (Timestamp
+///   with its unit and zone, Date32, Date64, Time32, Time64, Duration); Sum
+///   keeps a Duration; Mean keeps a Timestamp or a Duration (the mean is
+///   truncated to the unit). A String column passes First/Last through.
+/// - Any other column widens through the integer/unsigned/float domain
+///   agg_finalize keys on (Int64/Uint64/Float64) for Sum/Min/Max/First/Last.
+/// - Every other op's type is fixed regardless of `value_type`.
+/// An Unknown `value_type` gives Unknown for the widening ops: collect()
+/// settles it from the data. Never guesses: every AggOp is covered, so schema
+/// code built on this can never disagree with collect().
 ///
 /// SetUnion with a nonzero `param` is the typed result: a list of the value
 /// column's element type (set_union_element_type), or of Unknown when the
 /// column is itself a list (the caller reads that element type from the field).
-DataType agg_output_type(AggOp op, TypeId value_type, double param = 0.0);
+DataType agg_output_type(AggOp op, const DataType& value_type,
+                         double param = 0.0);
 
 /// The element type a typed SetUnion over a column of type `t` lists: String
 /// and Bool as is, integers widened to Int64 or Uint64, floats to Float64,
@@ -242,6 +248,9 @@ dstd::Result<void> agg_accumulate(AggState& state, const Series& key,
 void agg_set_row_base(AggState& state, std::int64_t base);
 
 /// Combine `other` into `into` (associative; for spill + distributed merge).
+/// Two partials that hold a temporal value column of another type, unit or zone
+/// are not merged: `into` is left as it was and the error is held for
+/// @ref agg_check, as for a failing UDAF.
 void agg_merge(AggState& into, const AggState& other);
 /// The same, other's groups taken in `order` (indices into its groups).
 void agg_merge(AggState& into, const AggState& other,

@@ -132,6 +132,8 @@ AggStatePtr agg_extract_groups(const AggState& st_in,
     out->key_domain = st.key_domain;
     out->key_type = st.key_type;
     out->key_json = st.key_json;
+    out->key_time_unit = st.key_time_unit;
+    out->key_timezone = st.key_timezone;
     out->key_byte_width = st.key_byte_width;
     out->key_decimal_precision = st.key_decimal_precision;
     out->key_decimal_scale = st.key_decimal_scale;
@@ -139,6 +141,9 @@ AggStatePtr agg_extract_groups(const AggState& st_in,
     out->skey_cols.assign(out->nkeys, {});
     out->nkey_cols.assign(out->nkeys, {});
     out->field_domain = st.field_domain;
+    out->field_type = st.field_type;
+    out->field_time_unit = st.field_time_unit;
+    out->field_timezone = st.field_timezone;
     out->field_is_str = st.field_is_str;
     for (std::size_t o = 0; o < groups.size(); ++o) {
         const std::int64_t g = groups[o];

@@ -3391,8 +3391,9 @@ dstd::Vector<Field> group_agg_fields(const Schema& in,
     dstd::Vector<Field> out;
     out.reserve(aggs.size());
     for (const GroupAgg& a : aggs) {
-        TypeId vt = a.column.empty() ? TypeId::Unknown
-                                     : field_type_or_unknown(in, a.column);
+        const Field* vf = a.column.empty() ? nullptr : find_field(in, a.column);
+        const DataType vtype = vf ? vf->type : scalar(TypeId::Unknown);
+        const TypeId vt = vtype.id;
         if (a.op == Agg::Udaf) {
             dstd::Vector<DataType> types;
             if (!a.column.empty()) types.push_back(scalar(vt));
@@ -3405,7 +3406,7 @@ dstd::Vector<Field> group_agg_fields(const Schema& in,
                       true});
             continue;
         }
-        DataType t = agg_output_type(to_agg_op(a.op), vt, a.param);
+        DataType t = agg_output_type(to_agg_op(a.op), vtype, a.param);
         if (a.op == Agg::SetUnion && a.param != 0.0 &&
             (vt == TypeId::List || vt == TypeId::LargeList))
             t = list_of(set_union_element_type(

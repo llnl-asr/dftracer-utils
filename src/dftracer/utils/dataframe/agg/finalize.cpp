@@ -79,7 +79,8 @@ double kmv_estimate(const KmvMap& m, std::size_t k) {
 // parametric constructor, so this builds the dftu_series directly to carry
 // the source's own time_unit (and, for Timestamp, timezone).
 Series flat_temporal(TypeId type, TimeUnit unit, const dstd::String& timezone,
-                     const void* data, std::int64_t n) {
+                     const void* data, std::int64_t n,
+                     const std::uint8_t* validity = nullptr) {
     auto* col = new dftu_series();
     col->type = type;
     col->encoding = Encoding::Flat;
@@ -89,7 +90,48 @@ Series flat_temporal(TypeId type, TimeUnit unit, const dstd::String& timezone,
     const std::size_t bytes = buffer_bytes(type, n);
     col->data = new_buffer(bytes);
     if (bytes != 0) std::memcpy(writable(col->data), data, bytes);
+    if (validity != nullptr) {
+        const std::size_t vbytes = static_cast<std::size_t>((n + 7) / 8);
+        col->validity = new_buffer(vbytes);
+        std::memcpy(writable(col->validity), validity, vbytes);
+        for (std::int64_t i = 0; i < n; ++i)
+            if ((validity[i >> 3] & (1u << (i & 7))) == 0) ++col->null_count;
+    }
     return Series{col};
+}
+
+// The aggregate column of a temporal output type from per-group I64 values:
+// Date32 and Time32 narrow to 32 bits, the rest keep 64.
+Series temporal_column(const DataType& t, const dstd::Vector<std::int64_t>& v,
+                       const std::uint8_t* validity) {
+    const std::int64_t n = static_cast<std::int64_t>(v.size());
+    if (t.id == TypeId::Date32 || t.id == TypeId::Time32) {
+        dstd::Vector<std::int32_t> narrow(v.size());
+        for (std::size_t i = 0; i < v.size(); ++i)
+            narrow[i] = static_cast<std::int32_t>(v[i]);
+        return flat_temporal(t.id, t.time_unit(), dstd::String(t.timezone()),
+                             narrow.data(), n, validity);
+    }
+    return flat_temporal(t.id, t.time_unit(), dstd::String(t.timezone()),
+                         v.data(), n, validity);
+}
+
+// The value column of field `fi` as agg_output_type sees it.
+DataType field_data_type(const AggState& st, int fi) {
+    if (fi < 0) return scalar(TypeId::Unknown);
+    const std::size_t i = static_cast<std::size_t>(fi);
+    const TypeId id =
+        i < st.field_type.size() ? st.field_type[i] : TypeId::Unknown;
+    const TimeUnit unit =
+        i < st.field_time_unit.size() ? st.field_time_unit[i] : TimeUnit::Micro;
+    DataType dt = scalar(id);
+    if (id == TypeId::Timestamp || id == TypeId::Duration ||
+        id == TypeId::Time32 || id == TypeId::Time64)
+        dt.set_time_unit(unit);
+    if (id == TypeId::Timestamp)
+        dt.set_timezone(i < st.field_timezone.size() ? st.field_timezone[i]
+                                                     : dstd::String());
+    return dt;
 }
 
 // A String/Binary (32-bit offset) group key column: skey_cols already holds
@@ -505,33 +547,55 @@ static DataFrame finalize_impl(const AggState& st_in,
                 first ? st.fl_first : st.fl_last;
             const dstd::Vector<dstd::String>& strs =
                 first ? st.fl_first_s : st.fl_last_s;
+            const dstd::Vector<std::int64_t>& idx =
+                first ? st.fl_first_idx : st.fl_last_idx;
             auto slot = [&](std::int64_t g) {
                 return static_cast<std::size_t>(g) * st.nf +
                        static_cast<std::size_t>(fi);
             };
+            // A group with no present value has no first or last: null.
+            dstd::Vector<std::uint8_t> valid(
+                static_cast<std::size_t>((ng + 7) / 8), 0);
+            bool any_null = false;
+            for (std::int64_t g = 0; g < ng; ++g) {
+                if (idx[slot(g)] >= 0)
+                    valid[static_cast<std::size_t>(g >> 3)] |=
+                        static_cast<std::uint8_t>(1u << (g & 7));
+                else
+                    any_null = true;
+            }
+            const std::uint8_t* validity = any_null ? valid.data() : nullptr;
             if (fi >= 0 && st.field_is_str[static_cast<std::size_t>(fi)]) {
-                dstd::Vector<dstd::String> v(static_cast<std::size_t>(ng));
+                dstd::Vector<dstd::StringView> v(static_cast<std::size_t>(ng));
                 for (std::int64_t g = 0; g < ng; ++g)
                     v[static_cast<std::size_t>(g)] = strs[slot(g)];
-                out.columns.push_back(Series::strings(v));
+                out.columns.push_back(Series::strings(
+                    dstd::Span<const dstd::StringView>(v.data(), v.size()),
+                    validity));
             } else if (dom == FieldStatDomain::F64) {
                 dstd::Vector<double> v(static_cast<std::size_t>(ng));
                 for (std::int64_t g = 0; g < ng; ++g)
                     v[static_cast<std::size_t>(g)] =
                         std::bit_cast<double>(bits[slot(g)]);
-                out.columns.push_back(Series::flat_f64(v.data(), ng));
+                out.columns.push_back(Series::flat_f64(v.data(), ng, validity));
             } else if (dom == FieldStatDomain::U64) {
                 dstd::Vector<std::uint64_t> v(static_cast<std::size_t>(ng));
                 for (std::int64_t g = 0; g < ng; ++g)
                     v[static_cast<std::size_t>(g)] = bits[slot(g)];
                 out.columns.push_back(
-                    Series::flat(TypeId::Uint64, v.data(), ng));
+                    Series::flat(TypeId::Uint64, v.data(), ng, validity));
             } else {
                 dstd::Vector<std::int64_t> v(static_cast<std::size_t>(ng));
                 for (std::int64_t g = 0; g < ng; ++g)
                     v[static_cast<std::size_t>(g)] =
                         std::bit_cast<std::int64_t>(bits[slot(g)]);
-                out.columns.push_back(Series::flat_i64(v.data(), ng));
+                const DataType want =
+                    agg_output_type(sp.op, field_data_type(st, fi), sp.param);
+                if (is_temporal_type(want.id))
+                    out.columns.push_back(temporal_column(want, v, validity));
+                else
+                    out.columns.push_back(
+                        Series::flat_i64(v.data(), ng, validity));
             }
         } else if (sp.op == AggOp::SumSq) {
             dstd::Vector<double> v(static_cast<std::size_t>(ng));
@@ -774,7 +838,13 @@ static DataFrame finalize_impl(const AggState& st_in,
                 dstd::Vector<std::int64_t> v(static_cast<std::size_t>(ng));
                 for (std::int64_t g = 0; g < ng; ++g)
                     v[static_cast<std::size_t>(g)] = exact(fs_at(g));
-                out.columns.push_back(Series::flat_i64(v.data(), ng, validity));
+                const DataType want =
+                    agg_output_type(sp.op, field_data_type(st, fi), sp.param);
+                if (is_temporal_type(want.id))
+                    out.columns.push_back(temporal_column(want, v, validity));
+                else
+                    out.columns.push_back(
+                        Series::flat_i64(v.data(), ng, validity));
             } else {
                 dstd::Vector<double> v(static_cast<std::size_t>(ng));
                 for (std::int64_t g = 0; g < ng; ++g)
@@ -820,8 +890,18 @@ static DataFrame finalize_impl(const AggState& st_in,
                 else
                     any_missing = true;
             }
-            out.columns.push_back(Series::flat_f64(
-                v.data(), ng, any_missing ? valid.data() : nullptr));
+            const DataType want =
+                agg_output_type(sp.op, field_data_type(st, fi), sp.param);
+            if (is_temporal_type(want.id)) {
+                dstd::Vector<std::int64_t> t(static_cast<std::size_t>(ng));
+                for (std::size_t g = 0; g < t.size(); ++g)
+                    t[g] = fs_at(static_cast<std::int64_t>(g)).mean_int();
+                out.columns.push_back(temporal_column(
+                    want, t, any_missing ? valid.data() : nullptr));
+            } else {
+                out.columns.push_back(Series::flat_f64(
+                    v.data(), ng, any_missing ? valid.data() : nullptr));
+            }
         }
     }
 

@@ -256,7 +256,10 @@ bool reduce_broadcasts(Agg agg) noexcept;
 
 /// The specs that broadcast `agg` over a frame with these names and types:
 /// every non-key column for CountValid / First / Last, the numeric (or as yet
-/// unknown-typed) non-key columns for the rest, each under its own name. The
+/// unknown-typed) non-key columns for the rest plus the temporal columns the
+/// aggregate keeps in their own type (min and max of a Timestamp, Date, Time or
+/// Duration, the sum of a Duration, the mean of a Timestamp or a Duration),
+/// each under its own name. The
 /// one rule behind reduce(b, agg) (`keys` empty) and the grouped
 /// group_by(b, keys, reduce_specs(b, agg, keys)) (pandas
 /// `df.groupby(keys).sum()`). An InvalidArgument error for an `agg`

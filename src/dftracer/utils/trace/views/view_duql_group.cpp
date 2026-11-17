@@ -739,7 +739,7 @@ void Applier::fold_group(const dstd::Vector<dstd::String>& keys,
         switch (f.op) {
             case dataframe::query::FoldOp::Engine:
                 if (f.engine != dataframe::AggOp::Udaf)
-                    f.type = dataframe::agg_output_type(f.engine, t.id);
+                    f.type = dataframe::agg_output_type(f.engine, t);
                 break;
             case dataframe::query::FoldOp::CountDistinct:
                 f.type = dataframe::scalar(dataframe::TypeId::Int64);

@@ -869,6 +869,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Fixed
 
+- `group_by(...).agg(...)` keeps the type of a temporal column: `min`, `max`, `first` and `last` of a Timestamp (any unit and zone), Date32, Date64, Time32, Time64 or Duration give that type, the `sum` of a Duration is a Duration and the `mean` of a Timestamp or a Duration keeps its type, as pandas and Polars do; they gave an Int64 column that later `.dt` calls read as microseconds.
+  The lazy plan `schema` after `group_by(...).agg(...)` and `group_by_dynamic` carries the same types, from one rule in `agg_output_type`.
+- `group_by(...).agg(...)` with `first` or `last` gives null for a group with no present value, for every column type; it gave `0` or an empty string.
+  The sum of such a group stays `0` and `count_valid` `0`, as Polars gives.
+- The mean of an integer, Timestamp or Duration column in `group_by(...).agg(...)` divides the exact 128-bit sum; it divided a rounded double sum, which put a mean of nanosecond timestamps near 1.7e18 off by over a millisecond.
+  A Timestamp or Duration mean is cut toward zero to its unit.
+- `agg_merge` leaves two partials of another Timestamp, Date, Time or Duration type, unit or zone unmerged and holds the error for `agg_check`; `agg_deserialize` refuses a blob with trailing bytes or a time unit above nanoseconds; the on-disk rollup tag is `accumfmt3` and the distributed partial tag is 3, so a rollup or a partial of the old layout is recomputed or refused, not misread.
+- A `group_by` that spills to disk keeps the unit and the zone of a Timestamp, Time or Duration key; they came back as microseconds with no zone.
+- `group_by(keys).min()`, `max()`, `sum()` and `mean()` and the whole-frame forms include the Timestamp, Date, Time and Duration columns that the aggregate keeps in their own type (min and max of any of them, the sum of a Duration, the mean of a Timestamp or a Duration); they skipped them.
 - `Series.rfloordiv`, `rmod`, `rpow`, `rdiv` and `rtruediv` with a Series operand compute `other <op> self`, as pandas does; `rdiv` and `rtruediv` raised `TypeError` for a Series operand. `s == None` is a mask (all False) and `s != None` all True, as pandas; a comparison with an operand that is not a number, a string, a bool or None returns `NotImplemented`, so the other operand answers.
 - `dftracer_view` and `dftracer_genesis_gen_dist` under MPI no longer drop every rank to one thread when the launcher binds ranks to CPUs: a rank whose affinity mask is smaller than the node keeps its own CPUs, and only unbound ranks split the node.
 - On Linux with GCC, a C++ plugin now unloads when the host closes it: the Python JIT, the test build and every module that links `dftracer_utils_dataframe` (the plugin templates, the examples and plugins built against the installed package) compile with `-fno-gnu-unique`, since GCC binds the statics of inline functions and templates as GNU unique symbols and `dlclose` then keeps the library mapped.

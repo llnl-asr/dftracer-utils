@@ -192,7 +192,9 @@ DataType set_union_element_type(TypeId t) {
     }
 }
 
-DataType agg_output_type(AggOp op, TypeId value_type, double param) {
+DataType agg_output_type(AggOp op, const DataType& value, double param) {
+    const TypeId value_type = value.id;
+    const bool temporal = is_temporal_type(value_type);
     auto widened = [&] {
         if (value_type == TypeId::Unknown) return scalar(TypeId::Unknown);
         switch (col_domain(value_type)) {
@@ -210,14 +212,20 @@ DataType agg_output_type(AggOp op, TypeId value_type, double param) {
         case AggOp::Distinct:
             return scalar(TypeId::Int64);
         case AggOp::Sum:
+            return value_type == TypeId::Duration ? value : widened();
         case AggOp::Min:
         case AggOp::Max:
-            return widened();
+            return temporal ? value : widened();
         case AggOp::First:
         case AggOp::Last:
+            if (temporal) return value;
             return value_type == TypeId::String ? scalar(TypeId::String)
                                                 : widened();
         case AggOp::Mean:
+            return value_type == TypeId::Timestamp ||
+                           value_type == TypeId::Duration
+                       ? value
+                       : scalar(TypeId::Float64);
         case AggOp::Var:
         case AggOp::Std:
         case AggOp::Skew:

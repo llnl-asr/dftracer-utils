@@ -256,6 +256,43 @@ named ``sum`` / ``min`` / ``max`` / ``count`` / ``mean`` / ``var`` / ``std`` /
 value in row order). ``first`` / ``last`` merge order-independently, so the
 parallel and distributed path is exact.
 
+The type of an aggregate comes from one rule, the same for ``collect()``, the
+lazy plan ``schema`` and the aggregate state that is merged or spilled:
+
+.. list-table::
+   :header-rows: 1
+
+   * - Aggregate
+     - Column type
+     - Result type
+   * - ``min`` / ``max`` / ``first`` / ``last``
+     - Timestamp (any unit and zone), Date32, Date64, Time32, Time64, Duration
+     - the column's own type, with its unit and zone
+   * - ``sum``
+     - Duration
+     - the same Duration
+   * - ``mean``
+     - Timestamp, Duration
+     - the same type; the mean is the exact integer sum over the count, cut toward zero to the unit (pandas and Polars give the same type; Polars casts its float mean the same way)
+   * - ``sum`` / ``min`` / ``max`` / ``first`` / ``last``
+     - any other number
+     - Int64, Uint64 or Float64, as the column is signed, unsigned or float
+   * - ``count`` / ``count_valid``
+     - any
+     - Int64
+   * - ``mean`` / ``var`` / ``std`` / ``skew`` / ``kurt`` and the other moment aggregates
+     - any other column
+     - Float64
+
+The sum of a Timestamp has no unit of time as a result and stays Int64.
+
+A group with no present value gives null for ``min``, ``max``, ``first``,
+``last`` and ``mean`` of every column type, a sum of zero and a
+``count_valid`` of zero (the Polars defaults, which the engine follows). The
+reduce shortcuts (``group_by(keys).max()``, ``min``, ``sum``, ``mean`` and the
+whole-frame forms) include the temporal columns that the aggregate keeps in
+their own type.
+
 The moment statistics (``variance``/``stddev``/``skewness``/``kurtosis``) reduce
 their values with a Highway SIMD pass; ``abs``/``clip``/``round`` are Highway
 kernels; ``rank`` reuses the SIMD ``argsort``; ``cumsum``/``cummax``/``cummin``

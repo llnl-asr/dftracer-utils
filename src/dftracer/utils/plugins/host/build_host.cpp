@@ -301,13 +301,75 @@ dftu_status build_phase_result(::dftu_ctx* ctx, void* h, const char*,
     return denied(ctx, self_of(h), DFTU_SVC_PORTS "::phase_result");
 }
 
+dftu_status build_phase_seed(::dftu_ctx* ctx, void* h, const char* name,
+                             std::uint64_t generation, ::dftu_phase_seed seed) {
+    BuildHost& bh = self_of(h);
+    if (name == nullptr) {
+        return host_fail(ctx, DFTU_E_INVALID, "phase_seed: NULL name");
+    }
+    bool is_own = false;
+    auto full = qualify_port_name(bh.declared_name(), name, &is_own);
+    if (!full) return host_fail(ctx, full.error());
+    if (!is_own) {
+        return host_fail(
+            ctx, DFTU_E_INVALID,
+            dstd::fmt<"phase result '{}' belongs to another plugin; only its "
+                      "owner seeds generations">(*full));
+    }
+    const std::int32_t merge = phase_seed_merge(seed);
+    if (merge < 0) {
+        return host_fail(ctx, DFTU_E_INVALID,
+                         dstd::fmt<"phase result '{}': {} is not a phase seed">(
+                             *full, seed));
+    }
+    PhaseDecl* decl = nullptr;
+    const PhaseDecl* before = nullptr;
+    for (PhaseDecl& seen : bh.ports().phases) {
+        if (seen.name != *full) continue;
+        if (seen.generation == generation) decl = &seen;
+        if (seen.generation + 1 == generation) before = &seen;
+    }
+    if (decl == nullptr) {
+        return host_fail(
+            ctx, DFTU_E_NOT_FOUND,
+            dstd::fmt<"phase result '{}' generation {} was not declared; "
+                      "declare it with phase_declare before seeding it">(
+                *full, generation));
+    }
+    if (decl->op != merge || decl->type != DFTU_T_U64) {
+        return host_fail(
+            ctx, DFTU_E_INVALID,
+            dstd::fmt<"phase result '{}' generation {}: seed {} takes merge {} "
+                      "and value type U64, but it was declared with merge {} "
+                      "and value type {}">(*full, generation,
+                                           phase_seed_name(seed), merge,
+                                           decl->op, decl->type));
+    }
+    if (decl->seed != 0) {
+        return host_fail(
+            ctx, DFTU_E_INVALID,
+            dstd::fmt<"phase result '{}' generation {} is already seeded">(
+                *full, generation));
+    }
+    if (generation > 1 && (before == nullptr || before->seed == 0)) {
+        return host_fail(
+            ctx, DFTU_E_INVALID,
+            dstd::fmt<"phase result '{}' generation {}: a seed needs every "
+                      "earlier generation seeded too, since generations seal "
+                      "in order">(*full, generation));
+    }
+    decl->seed = seed;
+    return DFTU_OK;
+}
+
 const ::dftu_svc_ports g_build_ports = {
     sizeof(::dftu_svc_ports), build_port_key,         build_port_publish,
     build_port_consume,       build_port_try_publish, build_port_try_consume,
     build_channel_open,       build_channel_send,     build_channel_recv,
     build_channel_try_send,   build_channel_close,    build_latest_set,
     build_latest_get,         build_phase_declare,    build_phase_contribute,
-    build_phase_seal,         build_phase_result,     build_channel_recv_exact};
+    build_phase_seal,         build_phase_result,     build_channel_recv_exact,
+    build_phase_seed};
 
 dftu_status build_register_provider(::dftu_ctx* ctx, void* h, const char* name,
                                     const ::dftu_source_vt* vt, void* self) {

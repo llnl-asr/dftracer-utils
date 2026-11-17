@@ -217,6 +217,9 @@ enum DFTU_OVERFLOW_BLOCK 0
 enum DFTU_OVERFLOW_DROP_OLDEST 2
 enum DFTU_OVERFLOW_FAIL 1
 enum DFTU_PENDING 2
+enum DFTU_PHASE_SEED_EVENT_COUNT 3
+enum DFTU_PHASE_SEED_TS_MAX 2
+enum DFTU_PHASE_SEED_TS_MIN 1
 enum DFTU_PH_AGGREGATED 3
 enum DFTU_PH_COMPLETE 1
 enum DFTU_PH_COUNTER 2
@@ -879,6 +882,7 @@ field dftu_svc_ports.phase_contribute offset 112 size 8
 field dftu_svc_ports.phase_declare offset 104 size 8
 field dftu_svc_ports.phase_result offset 128 size 8
 field dftu_svc_ports.phase_seal offset 120 size 8
+field dftu_svc_ports.phase_seed offset 144 size 8
 field dftu_svc_ports.port_key offset 8 size 8
 field dftu_svc_ports.publish offset 16 size 8
 field dftu_svc_ports.struct_size offset 0 size 4
@@ -1201,6 +1205,7 @@ fnptr dftu_svc_ports.phase_contribute dftu_status (*)(dftu_ctx*, void*, const ch
 fnptr dftu_svc_ports.phase_declare dftu_status (*)(dftu_ctx*, void*, const char*, dftu_merge_op, dftu_type, uint64_t, uint64_t*)
 fnptr dftu_svc_ports.phase_result dftu_status (*)(dftu_ctx*, void*, const char*, uint64_t, void*, uint32_t, uint32_t*, dftu_port_status*)
 fnptr dftu_svc_ports.phase_seal dftu_status (*)(dftu_ctx*, void*, const char*, uint64_t)
+fnptr dftu_svc_ports.phase_seed dftu_status (*)(dftu_ctx*, void*, const char*, uint64_t, dftu_phase_seed)
 fnptr dftu_svc_ports.port_key uint64_t (*)(void*, const char*)
 fnptr dftu_svc_ports.publish void (*)(void*, uint64_t, const void*, uint32_t)
 fnptr dftu_svc_ports.try_consume dftu_status (*)(dftu_ctx*, void*, uint64_t, void*, uint32_t, uint32_t*, dftu_port_status*)
@@ -1335,7 +1340,7 @@ struct dftu_svc_index size 16 align 8
 struct dftu_svc_memory size 72 align 8
 struct dftu_svc_nodes size 16 align 8
 struct dftu_svc_ops size 72 align 8
-struct dftu_svc_ports size 144 align 8
+struct dftu_svc_ports size 152 align 8
 struct dftu_svc_providers size 16 align 8
 struct dftu_svc_result size 16 align 8
 struct dftu_svc_sketch size 48 align 8
@@ -1386,6 +1391,7 @@ typedef dftu_op_tok int32_t
 typedef dftu_overflow int32_t
 typedef dftu_path_list struct dftu_path_list
 typedef dftu_phase int32_t
+typedef dftu_phase_seed int32_t
 typedef dftu_plugin_host struct dftu_plugin_host
 typedef dftu_port_status int32_t
 typedef dftu_prim_op int32_t

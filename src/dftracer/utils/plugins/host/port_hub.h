@@ -93,6 +93,10 @@ class PortPhase {
                                               const void* data,
                                               std::uint32_t len);
     dstd::Result<void> seal(std::uint64_t generation);
+    /// Fills the u64 scalar of generation `generation` with `value` and seals
+    /// it, as the host does before the scan for a seeded generation. From then
+    /// on a plugin's contribute to it is an error.
+    dstd::Result<void> seed(std::uint64_t generation, std::uint64_t value);
     dstd::Result<dftu_port_status> result(std::uint64_t generation, void* buf,
                                           std::uint32_t cap,
                                           std::uint32_t* out_len);
@@ -100,6 +104,7 @@ class PortPhase {
    private:
     struct Generation {
         bool sealed = false;
+        bool seeded = false;
         bool any = false;
         std::uint64_t scalar = 0;
         dstd::Vector<std::uint64_t> set;

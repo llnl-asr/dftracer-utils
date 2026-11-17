@@ -31,6 +31,9 @@ struct PhaseDecl {
     std::uint64_t generation = 0;
     std::int32_t op = 0;
     std::int32_t type = 0;
+    /// A dftu_phase_seed the host fills the generation with before the scan,
+    /// or 0 when plugins contribute to it.
+    std::int32_t seed = 0;
 };
 
 /// What one plugin factory declared through dftu_svc_ports.
@@ -49,6 +52,13 @@ struct PortDecls {
 dstd::Result<dstd::String> qualify_port_name(dstd::StringView plugin,
                                              dstd::StringView name,
                                              bool* is_own);
+
+/// The merge a dftu_phase_seed takes (a dftu_merge_op), or -1 for a value that
+/// is not a seed.
+std::int32_t phase_seed_merge(std::int32_t seed);
+
+/// The name of a dftu_phase_seed for a message.
+dstd::StringView phase_seed_name(std::int32_t seed);
 
 /// Whether the merge `op` (a dftu_merge_op) takes the value type `type` (a
 /// dftu_type).

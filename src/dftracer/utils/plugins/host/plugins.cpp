@@ -21,6 +21,7 @@
 #include <dftracer/utils/plugins/host/build_host.h>
 #include <dftracer/utils/plugins/host/config.h>
 #include <dftracer/utils/plugins/host/fold_adapter.h>
+#include <dftracer/utils/plugins/host/phase_seed.h>
 #include <dftracer/utils/plugins/host/plugin_abi.h>
 #include <dftracer/utils/plugins/host/plugin_memory.h>
 #include <dftracer/utils/plugins/host/plugins.h>
@@ -943,6 +944,12 @@ coro::CoroTask<dstd::Result<PluginRun>> Plugins::run(const View& view) const {
     // merged accumulators here and later plugins read them by name.
     SharedResultRegistry shared;
     PortHub hub(impl_->channels, impl_->phases);
+    if (auto kept = view.status(); !kept) co_return kept.error();
+    auto seeding = seed_phases(trace::views::detail::scan_plan_of(view),
+                               impl_->phases, &hub);
+    auto seeded = co_await seeding;
+    if (!seeded) co_return seeded.error();
+    out.seed_source = *seeded;
     dstd::Vector<dstd::UniquePtr<PluginFold>> owned;
     owned.reserve(impl_->plugins.size());
     dstd::Vector<Fold*> folds;
@@ -964,6 +971,23 @@ coro::CoroTask<dstd::Result<PluginRun>> Plugins::run(const View& view) const {
     co_return out;
 }
 
+namespace {
+
+// The pre-scan of an attached set: seeds the phases and notes where the values
+// came from, before the folds the session builds see a first batch. By value,
+// so the frame owns what it reads.
+coro::CoroTask<dstd::Result<void>> seed_attached(
+    trace::views::detail::ScanPlan plan, dstd::Vector<PhaseDecl> phases,
+    dstd::SharedPtr<PortHub> hub, dstd::SharedPtr<PluginRun> out) {
+    auto seeding = seed_phases(std::move(plan), std::move(phases), hub.get());
+    auto seeded = co_await seeding;
+    if (!seeded) co_return seeded.error();
+    out->seed_source = *seeded;
+    co_return dstd::Result<void>{};
+}
+
+}  // namespace
+
 trace::views::Deferred<PluginRun> Plugins::attach(
     trace::views::ViewSession& session) const {
     // Captured by the factory closures (owned by the session through execute)
@@ -982,6 +1006,16 @@ trace::views::Deferred<PluginRun> Plugins::attach(
     // other branch joins, since the scan they share must stay wide enough for
     // all of them; only execute() knows the final branch set.
     if (impl_->prune) session.propose_base_prune(*impl_->prune);
+    const bool seeded =
+        std::any_of(impl_->phases.begin(), impl_->phases.end(),
+                    [](const PhaseDecl& phase) { return phase.seed != 0; });
+    if (seeded) {
+        session.attach_pre_scan(
+            [phases = impl_->phases, hub,
+             out](const trace::views::detail::ScanPlan& plan) {
+                return seed_attached(plan, phases, hub, out);
+            });
+    }
     for (std::size_t idx = 0; idx < n; ++idx) {
         std::size_t i = impl_->order[idx];
         const dftu_plugin* plugin = impl_->plugins[i].plugin;

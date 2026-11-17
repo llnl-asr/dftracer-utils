@@ -371,13 +371,21 @@ dftu_status host_phase_result(::dftu_ctx* ctx, void* h, const char* name,
     return DFTU_OK;
 }
 
+dftu_status host_phase_seed(::dftu_ctx* ctx, void*, const char*, std::uint64_t,
+                            ::dftu_phase_seed) {
+    return host_fail(ctx, DFTU_E_UNSUPPORTED,
+                     "phase_seed: generations are seeded in the plugin "
+                     "factory, before the plan is settled");
+}
+
 const ::dftu_svc_ports g_ports = {
     sizeof(::dftu_svc_ports), host_port_key,      host_port_publish,
     host_port_consume,        host_try_publish,   host_try_consume,
     host_channel_open,        host_channel_send,  host_channel_recv,
     host_channel_try_send,    host_channel_close, host_latest_set,
     host_latest_get,          host_phase_declare, host_phase_contribute,
-    host_phase_seal,          host_phase_result,  host_channel_recv_exact};
+    host_phase_seal,          host_phase_result,  host_channel_recv_exact,
+    host_phase_seed};
 
 }  // namespace
 

@@ -58,6 +58,7 @@ set(ALLOWED
   "index/cache/lookup_store.cpp|trace/views/view_plan.h"
   "index/cache/mv_store.cpp|trace/views/view_plan.h"
   "index/cache/mv_store.h|trace/views/view.h"
+  "index/cache/phase_seed_store.cpp|trace/views/view_plan.h"
   "index/cache/rollup_store.cpp|trace/views/view_agg_engine.h"
   "index/cache/rollup_store.cpp|trace/views/view_plan.h"
   "index/cache/rollup_store.h|trace/views/view_aggregate.h"

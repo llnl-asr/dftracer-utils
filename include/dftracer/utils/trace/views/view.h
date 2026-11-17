@@ -462,6 +462,13 @@ class ViewSession {
                                  make,
                              dstd::Function<dstd::Result<void>()> finalize);
 
+    /// Run `pre` at the start of execute(), before any scan, with the session's
+    /// base scan plan; an error it returns ends execute() with it. For work
+    /// that must finish before the attached folds see their first batch.
+    void attach_pre_scan(dstd::Function<coro::CoroTask<dstd::Result<void>>(
+                             const detail::ScanPlan&)>
+                             pre);
+
     /// Offer `q` as a narrowing of this session's shared scan, so the index can
     /// skip chunks the attached fold does not want. APPLIED ONLY when no other
     /// branch is registered: the scan feeds every branch, so narrowing it for
@@ -650,6 +657,9 @@ View with_named_columns(const View& v, dstd::Vector<dataframe::Field> columns);
 /// The leaves of `v`'s catalogs as they stand; unlike View::schema_tree it
 /// builds none.
 dstd::Result<dstd::Vector<SchemaLeaf>> catalog_leaves(const View& v);
+/// The scan plan `v` was built over, without the ops above the scan. For a
+/// host that needs the files the view reads.
+ScanPlan scan_plan_of(const View& v);
 }  // namespace detail
 
 /// Plans registered here run together on execute(), as collect_all() runs
@@ -1033,6 +1043,7 @@ class View : public dataframe::LazyOps<View> {
         const View& v, dstd::Vector<dataframe::Field> columns);
     friend dstd::Result<dstd::Vector<SchemaLeaf>> detail::catalog_leaves(
         const View& v);
+    friend detail::ScanPlan detail::scan_plan_of(const View& v);
     dstd::Result<dstd::Pair<View, dstd::Vector<dstd::String>>> duql_plan(
         dstd::StringView text, const duql::Params& params) const;
 

@@ -65,6 +65,7 @@ set(TRACE_TEST_SOURCES
     index/cache/test_rollup_store.cpp
     index/cache/test_query_cache.cpp
     index/cache/test_lookup_store.cpp
+    index/cache/test_phase_seed_store.cpp
     index/extensions/test_rowset_fold.cpp
     index/extensions/test_bloom_fold.cpp
     index/extensions/test_catalog_fold.cpp

@@ -14,6 +14,7 @@
 #include <dftracer/utils/plugins/plugin/async.h>
 #include <dftracer/utils/plugins/plugin/fileio.h>
 #include <dftracer/utils/plugins/plugin/map.h>
+#include <dftracer/utils/plugins/plugin/register.h>
 #include <dftracer/utils/plugins/plugin/types.h>
 
 #include <cstddef>
@@ -74,6 +75,14 @@ enum class PhaseType : std::int32_t {
     U64 = DFTU_T_U64,
     F64 = DFTU_T_F64,
     Bytes = DFTU_T_BYTES
+};
+
+/// What the host seeds a phase result generation with from the input files; see
+/// dftu_phase_seed for the merge each one takes.
+enum class PhaseSeed : std::int32_t {
+    TsMin = DFTU_PHASE_SEED_TS_MIN,
+    TsMax = DFTU_PHASE_SEED_TS_MAX,
+    EventCount = DFTU_PHASE_SEED_EVENT_COUNT
 };
 
 /// What a channel declaration sets; a field left empty takes the host default.
@@ -294,6 +303,18 @@ class Ports {
         return assigned;
     }
 
+    /// In a plugin factory, make generation `generation` of `name` (already
+    /// declared with @ref phase_declare, with the merge and U64 type the seed
+    /// takes) a host seed: the host fills and seals it before the scan, so
+    /// @ref phase_result is ready in the first batch. See dftu_phase_seed.
+    dstd::Result<void> seed(dstd::CStringView name, std::uint64_t generation,
+                            PhaseSeed kind) const {
+        DFTRACER_UTILS_TRY(const dftu_svc_ports* e, service());
+        return detail::reported(
+            e->phase_seed(ctx_, h_->h, name.c_str(), generation,
+                          static_cast<dftu_phase_seed>(kind)));
+    }
+
     /// Merge `data` into generation `generation`; Closed once it is sealed.
     dstd::Result<void> phase_contribute(dstd::CStringView name,
                                         std::uint64_t generation, MergeOp op,
@@ -355,6 +376,8 @@ class Ports {
 };
 
 inline Ports Host::ports() const { return Ports{h_, ctx_}; }
+
+inline Ports PluginBuilder::ports() const { return Ports{host_, ctx_}; }
 
 /// A channel of fixed-size values of `T`: a send copies `sizeof(T)` bytes and a
 /// receive gives one back. `T` has no pointers, since the receiver may run in

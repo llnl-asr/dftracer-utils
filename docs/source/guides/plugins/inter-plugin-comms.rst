@@ -310,6 +310,78 @@ a phase result: declare each generation in the factory, ``phase_contribute``
 from the slices, ``phase_seal`` the generation, and read it with
 ``phase_result``. See :doc:`../../plugins` for the full list of rules.
 
+Two phases in one plan
+----------------------
+
+Some plugins need a fact about the whole input before they look at the first
+batch: the first timestamp, to report times from the start of the run, or the
+number of events, to size a table. A scan cannot give it, because a slice sees
+only the batches it reads. Pick the cheapest tool that is exact enough:
+
+- *The value is an index statistic: use a seed.* ``Ports::seed`` makes a phase
+  generation hold the earliest start (``PhaseSeed::TsMin``), the latest end
+  (``TsMax``) or the event count (``EventCount``) of the input files. The host
+  fills and seals it before the scan from the index, from its cache of an
+  earlier pass, or from a pass of its own, and the value is ready in the first
+  batch.
+- *An approximate answer in one pass is enough: use a sketch.* A quantile
+  sketch (``Host::make_sketch()``) takes a value at a time, merges across
+  slices and answers in the same scan, but only at the end.
+- *Anything else: run two plans.* Compute your value in a first run and keep it
+  in the plugin store (``Host::store()``), keyed by the sources it was computed
+  from; the second run reads it and checks the key.
+
+A seed. ``examples/plugins/two_phase_normalize.cpp`` reports event times
+relative to the start of all the files:
+
+.. code-block:: cpp
+
+   // in the factory
+   plugins::Ports ports = p.ports();
+   DFTRACER_UTILS_TRY(std::uint64_t gen,
+                      ports.phase_declare("origin", plugins::MergeOp::Min,
+                                          plugins::PhaseType::U64));
+   DFTRACER_UTILS_TRY_VOID(ports.seed("origin", gen, plugins::PhaseSeed::TsMin));
+
+   // in step(), at the first batch
+   std::uint64_t origin = 0;
+   DFTRACER_UTILS_TRY(auto size, h.ports().phase_result(
+       "origin", 1, dstd::MutableByteView(
+                        reinterpret_cast<std::byte*>(&origin), sizeof origin)));
+   // every event is at e.ts() - origin from here on
+
+A seed covers the input files, not the view: a filter on the view does not
+change it, which is why it is the same for every slice and every run over the
+same files. The plugin may not contribute to a seeded generation.
+
+A one-pass sketch. Slices keep a sketch, merge them, and finalize reads the
+quantiles; no second pass is needed when the answer may be approximate:
+
+.. code-block:: cpp
+
+   struct DurationQuantiles {
+       dstd::Optional<plugins::Sketch> sketch;
+       explicit DurationQuantiles(const plugins::Config&) {}
+
+       void step(const plugins::Batch& b, plugins::Host h) {
+           if (!sketch) sketch.emplace(h);
+           for (const plugins::Event& e : b)
+               if (e.has_dur()) sketch->add(static_cast<double>(e.dur()));
+       }
+       void merge(DurationQuantiles& other) {
+           if (sketch && other.sketch) sketch->merge(*other.sketch);
+       }
+       dstd::Result<void> finalize(plugins::Host h) {
+           if (!sketch) return {};
+           const plugins::Quantiles q = sketch->result();
+           const dstd::String text = dstd::fmt<"p50={} p99={}">(q.p50, q.p99);
+           return h.emit_result("duration_quantiles.text", text);
+       }
+   };
+
+A sketch gives each quantile within a bounded relative error, not the exact
+value; use a seed or two runs when you need the exact one.
+
 See also
 --------
 

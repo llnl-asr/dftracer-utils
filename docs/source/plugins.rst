@@ -822,7 +822,8 @@ plan before the scan and refuses it, naming the cause, when:
   plugin declares a channel twice;
 - a plugin opens a channel no loaded plugin declares, or declares another
   credit count, overflow mode or message size than the owner;
-- a phase result skips a generation;
+- a phase result skips a generation, or a phase seed breaks one of the rules
+  below;
 - the ``DFTU_OVERFLOW_BLOCK`` channels and the ``provides`` / ``consumes``
   names hold a cycle. A Block channel orders every plugin that declares
   ``DFTU_CHANNEL_F_SENDS`` at one of its ends before every plugin that declares
@@ -871,6 +872,62 @@ order from 1, and a request that skips one fails the load.
 ``phase_contribute`` merges into an open generation, ``phase_seal`` closes
 generations in order, and ``phase_result`` gives the merged value of a sealed
 one (``DFTU_PORT_NOT_READY`` while it is open).
+
+*Phase seeds.* A plugin that needs a number about the whole input before its
+first batch, such as the start time of the trace, asks the host for it.
+``phase_seed(name, generation, seed)`` in the plugin factory, after
+``phase_declare`` of that generation, makes the generation a seed. The host
+fills it and seals it before the scan starts, so ``phase_result`` is ready in
+the first batch of every slice. The values are exact for the input files and
+cover every event that is not a metadata record, whatever filter the view
+carries:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 20 50
+
+   * - Seed
+     - Declared with
+     - Value (``DFTU_T_U64``, 8 bytes)
+   * - ``DFTU_PHASE_SEED_TS_MIN``
+     - ``DFTU_MERGE_MIN``
+     - The earliest event start above 0. Events recorded without a clock, at
+       ``ts`` 0, are left out. 0 when there is none.
+   * - ``DFTU_PHASE_SEED_TS_MAX``
+     - ``DFTU_MERGE_MAX``
+     - The latest event end, ``ts`` + ``dur``. 0 for an empty input.
+   * - ``DFTU_PHASE_SEED_EVENT_COUNT``
+     - ``DFTU_MERGE_SUM``
+     - The number of events.
+
+The plan is refused, naming the phase, when the generation was not declared,
+was declared with another merge or value type than the seed takes, is already
+seeded, belongs to another plugin, or follows a generation that is not seeded
+(generations seal in order). A plugin that calls ``phase_contribute`` on a
+seeded generation gets an error that names it. ``phase_seed`` is a factory
+call; a callback gets ``DFTU_E_UNSUPPORTED``. In C++, ``Ports::seed(name,
+generation, PhaseSeed::TsMin)`` and ``PluginBuilder::ports()``.
+
+The host takes the values from the first source that is exact for the input,
+in this order, and never from a stale one:
+
+1. *The index.* When every file of the run has an index that is current for the
+   file's mtime and size and holds its statistics, the host merges them. Nothing
+   is scanned.
+2. *The seed cache.* The host keeps the values of an earlier pass in the store
+   under the index root, in ``phase_seeds``. The key is a hash of the file
+   paths, nanosecond mtimes, sizes and a sample of the bytes of every file, with
+   the api and index versions. An entry is used only on an exact match, so a
+   file that changed is a miss.
+3. *A pass of the host.* One scan of the files, with no plugin code and none of
+   the view's filters, computes the three values and writes them to the cache.
+   A stale index is rebuilt first, as the files' view does when it is made.
+
+The cache needs one index root for the files and is skipped, with the index
+route, for a view that pins a file, such as a live view. ``Plugins::run`` and
+``Plugins::attach`` seed alike; an attached set seeds when its session starts
+executing, before the scan. ``PluginRun::seed_source`` tells which source
+filled the seeds.
 
 ``publish`` and ``consume`` keep their shape. ``try_publish`` and
 ``try_consume`` are their status forms: ``DFTU_PORT_FULL`` when the batch's

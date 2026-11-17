@@ -97,6 +97,22 @@ enum {
     DFTU_MERGE_UNION = 3,
     DFTU_MERGE_CONCAT = 4
 };
+/** What the host seeds a phase result generation with before the scan, from
+   the input files of the run; see dftu_svc_ports::phase_seed. Every seed is a
+   DFTU_T_U64 scalar, 8 bytes. The values cover every non-metadata event of the
+   files, whatever filter the view has. An empty input gives 0. */
+typedef int32_t dftu_phase_seed;
+enum {
+    /** The earliest event start above 0, in the trace's time unit (events
+       recorded without a clock, at ts 0, are left out). Takes DFTU_MERGE_MIN.
+       */
+    DFTU_PHASE_SEED_TS_MIN = 1,
+    /** The latest event end, ts + dur, in the trace's time unit. Takes
+       DFTU_MERGE_MAX. */
+    DFTU_PHASE_SEED_TS_MAX = 2,
+    /** The number of events. Takes DFTU_MERGE_SUM. */
+    DFTU_PHASE_SEED_EVENT_COUNT = 3
+};
 /** Batch-scoped ports for intra-batch producer -> consumer communication. A
    port is a name; a producer and a consumer are wired by naming the same one,
    and a name that ever needs a version carries it in the name. The bus resets
@@ -217,6 +233,22 @@ typedef struct dftu_svc_ports {
                                       uint32_t* out_len,
                                       dftu_port_status* out_status,
                                       dftu_task** out_task);
+
+    /** In a plugin factory, make generation `generation` of the phase result
+       `name`, already declared with phase_declare, a seed: the host fills and
+       seals it before the scan from the index statistics of the input files,
+       from a cache keyed by the files' stat and sample hash, or from a first
+       host pass over the files, in that order, and never from a stale source.
+       The phase must have been declared with the merge the seed takes
+       (DFTU_PHASE_SEED_TS_MIN with DFTU_MERGE_MIN, TS_MAX with MAX,
+       EVENT_COUNT with SUM) and DFTU_T_U64, and every earlier generation must
+       be a seed too, since generations seal in order; otherwise the call fails
+       and the plan error names the phase. A plugin reads the value with
+       phase_result, which is ready from the first batch, and contributing to a
+       seeded generation is refused with an error that names it. Refused
+       outside a plugin factory. */
+    dftu_status (*phase_seed)(dftu_ctx* ctx, void* h, const char* name,
+                              uint64_t generation, dftu_phase_seed seed);
 } dftu_svc_ports;
 
 #ifdef __cplusplus

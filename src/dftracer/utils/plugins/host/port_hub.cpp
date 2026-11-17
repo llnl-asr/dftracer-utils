@@ -80,6 +80,32 @@ dftu_port_status copy_out(const dstd::Vector<std::byte>& from, void* buf,
 
 }  // namespace
 
+std::int32_t phase_seed_merge(std::int32_t seed) {
+    switch (seed) {
+        case DFTU_PHASE_SEED_TS_MIN:
+            return DFTU_MERGE_MIN;
+        case DFTU_PHASE_SEED_TS_MAX:
+            return DFTU_MERGE_MAX;
+        case DFTU_PHASE_SEED_EVENT_COUNT:
+            return DFTU_MERGE_SUM;
+        default:
+            return -1;
+    }
+}
+
+dstd::StringView phase_seed_name(std::int32_t seed) {
+    switch (seed) {
+        case DFTU_PHASE_SEED_TS_MIN:
+            return "TsMin";
+        case DFTU_PHASE_SEED_TS_MAX:
+            return "TsMax";
+        case DFTU_PHASE_SEED_EVENT_COUNT:
+            return "EventCount";
+        default:
+            return "unknown";
+    }
+}
+
 bool phase_merge_accepts(std::int32_t op, std::int32_t type) {
     switch (op) {
         case DFTU_MERGE_SUM:
@@ -290,6 +316,12 @@ dstd::Result<dftu_port_status> PortPhase::contribute(std::uint64_t generation,
             common::ErrorCode::InvalidArgument, name_);
     }
     Generation& gen = generations_[static_cast<std::size_t>(generation - 1)];
+    if (gen.seeded) {
+        return common::make_error<
+            "phase result '{}' generation {} is seeded by the host; a plugin "
+            "cannot contribute to it">(common::ErrorCode::InvalidArgument,
+                                       name_, generation);
+    }
     if (gen.sealed) return DFTU_PORT_CLOSED;
     if (len > common::constants::plugins::PORT_VALUE_MAX_BYTES) {
         return DFTU_PORT_TOO_BIG;
@@ -335,6 +367,20 @@ dstd::Result<void> PortPhase::seal(std::uint64_t generation) {
                                              name_, generation, generation - 1);
     }
     generations_[at].sealed = true;
+    return {};
+}
+
+dstd::Result<void> PortPhase::seed(std::uint64_t generation,
+                                   std::uint64_t value) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (generation == 0 || generation > generations_.size()) {
+        return undeclared(generation);
+    }
+    Generation& gen = generations_[static_cast<std::size_t>(generation - 1)];
+    gen.scalar = value;
+    gen.any = true;
+    gen.seeded = true;
+    gen.sealed = true;
     return {};
 }
 

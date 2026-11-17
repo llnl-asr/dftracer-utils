@@ -3022,8 +3022,8 @@ def _reduce_specs(frame: "Union[DataFrame, LazyFrame]", agg: str, keys: Sequence
     """The group-by spec strings of the engine aggregate ``agg`` over the
     non-key columns of ``frame``, a frame or a plan."""
     if isinstance(frame, _ext.LazyFrame):
-        return _ext.LazyFrame.reduce_specs(frame, agg, list(keys))
-    return _ext.DataFrame.reduce_specs(frame, agg, list(keys))
+        return _ext.LazyFrame._reduce_specs(frame, agg, list(keys))
+    return _ext.DataFrame._reduce_specs(frame, agg, list(keys))
 
 
 def _agg_specs_from_pandas_forms(
@@ -3185,7 +3185,7 @@ class GroupBy:
             return _ext.DataFrame.reduce(native, agg)
         return self._sorted(
             _ext.DataFrame.group_by(
-                native, *self._keys, *_ext.DataFrame.reduce_specs(native, agg, self._keys)
+                native, *self._keys, *_ext.DataFrame._reduce_specs(native, agg, self._keys)
             )
         )
 
@@ -3233,7 +3233,7 @@ class GroupBy:
     def _transform(
         self, kind: str, n: int = 0, method: str = "average", ascending: bool = True
     ) -> DataFrame:
-        return _ext.DataFrame.group_transform(
+        return _ext.DataFrame._group_transform(
             self._batch, self._keys, kind, int(n), method, bool(ascending)
         )
 

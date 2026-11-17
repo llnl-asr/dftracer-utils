@@ -82,7 +82,7 @@ def _viewer(trace, rt):
 
 def _rows(df):
     cols = list(df.column_names)
-    return list(zip(*[df[c].to_pylist() for c in cols]))
+    return list(zip(*[df[c].to_list() for c in cols]))
 
 
 def _counters():

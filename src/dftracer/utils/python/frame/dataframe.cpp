@@ -1546,14 +1546,14 @@ PyMethodDef DataFrame_methods[] = {
     {"reduce", DataFrame_reduce, METH_O,
      "reduce(agg) -> one-row DataFrame: the aggregate named `agg` over every "
      "eligible column."},
-    {"group_transform", DFTU_PYCFUNCTION(DataFrame_group_transform),
+    {"_group_transform", DFTU_PYCFUNCTION(DataFrame_group_transform),
      METH_VARARGS | METH_KEYWORDS,
-     "group_transform(keys, kind, n=0, method='average', ascending=True) -> "
+     "_group_transform(keys, kind, n=0, method='average', ascending=True) -> "
      "DataFrame: the group-wise transform `kind` (cumsum, cummax, cummin, "
      "cumcount, shift, diff, pct_change, rank, ngroup, head, tail, nth) over "
      "the groups of `keys`, one value per input row in input order."},
-    {"reduce_specs", DataFrame_reduce_specs, METH_VARARGS,
-     "reduce_specs(agg, keys=None) -> list[str]: the 'op:column:out' specs "
+    {"_reduce_specs", DataFrame_reduce_specs, METH_VARARGS,
+     "_reduce_specs(agg, keys=None) -> list[str]: the 'op:column:out' specs "
      "that broadcast `agg` over every eligible non-key column, for group_by."},
     {"is_duplicated", DataFrame_is_duplicated, METH_NOARGS,
      "is_duplicated() -> Bool Series, true where the whole row is duplicated."},

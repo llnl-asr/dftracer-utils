@@ -940,7 +940,7 @@ class LazyGroupBy:
         native = self._source
         if not self._keys:
             return self._source._new(_ext.LazyFrame.reduce(native, agg))
-        specs = _ext.LazyFrame.reduce_specs(native, agg, self._keys)
+        specs = _ext.LazyFrame._reduce_specs(native, agg, self._keys)
         return self._grouped(_ext.LazyFrame.group_by(native, self._keys, specs))
 
     def sum(self) -> LazyFrame:
@@ -988,7 +988,7 @@ class LazyGroupBy:
         self, kind: str, n: int = 0, method: str = "average", ascending: bool = True
     ) -> LazyFrame:
         return self._plan._new(
-            _ext.LazyFrame.group_transform(
+            _ext.LazyFrame._group_transform(
                 self._plan, self._keys, kind, int(n), method, bool(ascending)
             )
         )
@@ -1122,7 +1122,7 @@ class LazyGroupBy:
 
     # -- the rest of the pandas GroupBy surface, as streaming compositions ----
     def _value_columns(self, agg: str = "sum") -> List[str]:
-        return [s.split(":")[1] for s in _ext.LazyFrame.reduce_specs(self._plan, agg, self._keys)]
+        return [s.split(":")[1] for s in _ext.LazyFrame._reduce_specs(self._plan, agg, self._keys)]
 
     def pipe(self, func: Callable[..., object], *args: object, **kwargs: object) -> object:
         return func(self, *args, **kwargs)

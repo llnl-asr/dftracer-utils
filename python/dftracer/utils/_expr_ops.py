@@ -290,7 +290,7 @@ def lower_column_ops(plan: "LazyFrame", expr: "Expr") -> "Tuple[LazyFrame, Expr,
                 plan = plan.with_column(column2, spec.column2)
                 temps.append(column2)
         if spec.over is None:
-            plan = _ext.LazyFrame.column_op(
+            plan = _ext.LazyFrame._column_op(
                 plan, name, spec.op, column2=column2, a=spec.a, b=spec.b, text=spec.text
             )
         else:

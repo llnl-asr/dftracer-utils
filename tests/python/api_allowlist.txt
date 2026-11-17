@@ -90,12 +90,12 @@ Series.is_in | needs-token:SERIES | -
 Series.is_json | python-semantics | metadata property read from the column, not an op
 Series.is_monotonic_decreasing | python-semantics | pandas or polars semantics written over several native calls
 Series.is_monotonic_increasing | python-semantics | pandas or polars semantics written over several native calls
-Series.is_not_null | alias-of:valid_mask | -
+Series.is_not_null | alias-of:_valid_mask | -
 Series.is_null | python-semantics | pandas or polars semantics written over several native calls
 Series.is_sorted | needs-token:FLAG | -
 Series.isin | python-semantics | pandas or polars semantics written over several native calls
-Series.isna | alias-of:null_mask | -
-Series.isnull | alias-of:null_mask | -
+Series.isna | alias-of:_null_mask | -
+Series.isnull | alias-of:_null_mask | -
 Series.item | python-semantics | pandas or polars semantics written over several native calls
 Series.items | conversion | items gives the data in another form
 Series.keys | conversion | keys gives the data in another form
@@ -128,15 +128,13 @@ Series.nbytes | python-semantics | metadata property read from the column, not a
 Series.ndim | python-semantics | accessor or shape property of the column, not an op
 Series.ne | python-semantics | Python logic around native calls
 Series.nlargest | python-semantics | pandas or polars semantics written over several native calls
-Series.notna | alias-of:valid_mask | -
-Series.notnull | alias-of:valid_mask | -
-Series.np_parts | conversion | np_parts gives the data in another form
+Series.notna | alias-of:_valid_mask | -
+Series.notnull | alias-of:_valid_mask | -
 Series.nsmallest | python-semantics | pandas or polars semantics written over several native calls
 Series.null_count | python-semantics | the null count from the column's metadata, not a kernel
 Series.num_children | python-semantics | metadata property read from the column, not an op
 Series.ops | python-semantics | accessor or shape property of the column, not an op
 Series.pad | alias-of:ffill | -
-Series.physical | python-semantics | a view of the column's integer storage with buffers shared
 Series.pipe | python-semantics | pandas container API on the Series, not an op
 Series.pop | python-semantics | pandas container API on the Series, not an op
 Series.pow | needs-token:SERIES_OR_SCALAR | -
@@ -193,7 +191,6 @@ Series.str_eq | needs-token:STR_ARG | -
 Series.str_extract | needs-token:STR_ARG | -
 Series.str_find | needs-token:STR_ARG | -
 Series.str_findall | needs-token:STR_ARG | -
-Series.str_into | conversion | str_into gives the data in another form
 Series.str_is | needs-token:STR_ARG | -
 Series.str_like | needs-token:STR_ARG | -
 Series.str_matches | needs-token:STR_ARG | -
@@ -233,7 +230,6 @@ Series.to_list | conversion | to_list gives the data in another form
 Series.to_numpy | conversion | to_numpy gives the data in another form
 Series.to_pandas | conversion | to_pandas gives the data in another form
 Series.to_polars | conversion | to_polars gives the data in another form
-Series.to_pylist | conversion | to_pylist gives the data in another form
 Series.to_string | conversion | to_string gives the data in another form
 Series.tolist | conversion | tolist gives the data in another form
 Series.top_k | needs-token:I64_ARG | -

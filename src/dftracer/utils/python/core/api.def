@@ -74,9 +74,9 @@ PY_METHOD(Series, exp, "dftu.series.exp", NONE, FLOAT, KEEP, NO, "", "", "",
           "Exponential -> Float64 Series.")
 PY_METHOD(Series, log, "dftu.series.log", NONE, FLOAT, KEEP, NO, "", "", "",
           "Natural log -> Float64 Series.")
-PY_METHOD(Series, null_mask, "dftu.series.null_mask", NONE, BOOL, KEEP, NO, "", "", "",
+PY_METHOD(Series, _null_mask, "dftu.series.null_mask", NONE, BOOL, KEEP, NO, "", "", "",
           "Bool mask: row is null.")
-PY_METHOD(Series, valid_mask, "dftu.series.valid_mask", NONE, BOOL, KEEP, NO, "", "", "",
+PY_METHOD(Series, _valid_mask, "dftu.series.valid_mask", NONE, BOOL, KEEP, NO, "", "", "",
           "Bool mask: row is present.")
 PY_METHOD(Series, is_nan, "dftu.series.is_nan", NONE, BOOL, KEEP, YES, "", "", "",
           "Bool mask: value is NaN (SIMD).")

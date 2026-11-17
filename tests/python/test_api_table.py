@@ -106,8 +106,8 @@ def test_a_row_the_column_does_not_fit_raises_its_error():
 
 def test_scalar_rows_take_their_keywords_and_refuse_others():
     s = _float_series()
-    assert s.fillna(value=0.0).to_pylist() == s.fillna(0.0).to_pylist()
-    assert ext.Series.clip(s, lo=0, hi=1).to_pylist() == ext.Series.clip(s, 0, 1).to_pylist()
+    assert s.fillna(value=0.0).to_list() == s.fillna(0.0).to_list()
+    assert ext.Series.clip(s, lo=0, hi=1).to_list() == ext.Series.clip(s, 0, 1).to_list()
     with pytest.raises(TypeError):
         ext.Series.clip(s, lo=0, hi=1, extra=2)
     with pytest.raises(TypeError):
@@ -132,7 +132,7 @@ def test_the_expr_rows_evaluate_like_the_series_methods():
             continue
         got = getattr(dft.col("x"), row.name)().apply(dft.DataFrame({"x": s}))
         want = getattr(s, row.name)()
-        assert got.to_pylist() == want.to_pylist(), row.name
+        assert got.to_list() == want.to_list(), row.name
 
 
 def test_committed_declarations_equal_the_generated_ones():

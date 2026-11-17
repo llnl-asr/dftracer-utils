@@ -1136,14 +1136,14 @@ PyMethodDef LazyFrame_methods[] = {
     {"reduce", LazyFrame_reduce, METH_O,
      "reduce(agg) -> LazyFrame: the aggregate named `agg` over every eligible "
      "column, a streaming one-group group-by."},
-    {"group_transform", DFTU_PYCFUNCTION(LazyFrame_group_transform),
+    {"_group_transform", DFTU_PYCFUNCTION(LazyFrame_group_transform),
      METH_VARARGS | METH_KEYWORDS,
-     "group_transform(keys, kind, n=0, method='average', ascending=True) -> "
+     "_group_transform(keys, kind, n=0, method='average', ascending=True) -> "
      "LazyFrame: the group-wise transform `kind` (cumsum, cummax, cummin, "
      "cumcount, shift, diff, pct_change, rank, ngroup, head, tail, nth) over "
      "the groups of `keys`, one value per input row in input order."},
-    {"reduce_specs", LazyFrame_reduce_specs, METH_VARARGS,
-     "reduce_specs(agg, keys=None) -> list[str]: the 'op:column:out' specs "
+    {"_reduce_specs", LazyFrame_reduce_specs, METH_VARARGS,
+     "_reduce_specs(agg, keys=None) -> list[str]: the 'op:column:out' specs "
      "that broadcast `agg` over every eligible non-key column, for group_by."},
     {"explode", LazyFrame_explode, METH_O,
      "explode(column) -> LazyFrame with the List column expanded per element."},
@@ -1157,9 +1157,9 @@ PyMethodDef LazyFrame_methods[] = {
     {"window", DFTU_PYCFUNCTION(LazyFrame_window), METH_VARARGS | METH_KEYWORDS,
      "window(partition_by, order_by, specs) -> LazyFrame: SQL window "
      "functions over the collected plan; specs are normalized 12-tuples."},
-    {"column_op", DFTU_PYCFUNCTION(LazyFrame_column_op),
+    {"_column_op", DFTU_PYCFUNCTION(LazyFrame_column_op),
      METH_VARARGS | METH_KEYWORDS,
-     "column_op(column, op, column2=None, a=0, b=0, text=None) -> the "
+     "_column_op(column, op, column2=None, a=0, b=0, text=None) -> the "
      "registered column op over `column` as a plan step (a breaker)."},
     {"gap_fill", DFTU_PYCFUNCTION(LazyFrame_gap_fill),
      METH_VARARGS | METH_KEYWORDS,

@@ -431,18 +431,18 @@ PyMethodDef Series_methods[] = {
      "argsort(descending=False) -> Int64 Series of the sorted row order."},
     {"dictionary_encode", Series_dictionary_encode, METH_NOARGS,
      "Dictionary-encode a String/Binary column -> Series."},
-    {"str_into", Series_str_into, METH_VARARGS,
-     "str_into(out, na=None): a String column's rows into a numpy object "
+    {"_str_into", Series_str_into, METH_VARARGS,
+     "_str_into(out, na=None): a String column's rows into a numpy object "
      "array of its length, null rows holding `na`."},
-    {"np_parts", Series_np_parts, METH_VARARGS,
-     "np_parts(nullable=False, na=None) -> (values, mask, dtype): the column "
+    {"_np_parts", Series_np_parts, METH_VARARGS,
+     "_np_parts(nullable=False, na=None) -> (values, mask, dtype): the column "
      "in one native pass for numpy.frombuffer (bytearrays; a list of str for "
      "a String column, null rows holding `na`); mask is 1 = null or None."},
-    {"to_pylist", Series_to_pylist, METH_NOARGS,
-     "to_pylist() -> list of Python values, None for null; TypeError for a "
+    {"_to_pylist", Series_to_pylist, METH_NOARGS,
+     "_to_pylist() -> list of Python values, None for null; TypeError for a "
      "column type with no native conversion."},
-    {"physical", Series_physical, METH_NOARGS,
-     "physical() -> Series: the integers of a date, time, timestamp, "
+    {"_physical", Series_physical, METH_NOARGS,
+     "_physical() -> Series: the integers of a date, time, timestamp, "
      "duration or float16 column (buffers shared)."},
     {"to_bytes", Series_to_bytes, METH_NOARGS,
      "to_bytes() -> bytes: the column in the native frame format."},

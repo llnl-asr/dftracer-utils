@@ -141,7 +141,6 @@ ALLOWLIST = {
         "schema",
         "output_schema",
         "has_undeclared_columns",
-        "reduce_specs",
         "sink",
         "stream",
         "open_cursor",
@@ -456,13 +455,7 @@ PY_ALLOWLIST = {
         "to_numpy",
         "to_pandas",
         "to_polars",
-        "to_pylist",
-        # The column as raw NumPy buffers, and its strings into an object array:
-        # conversion handles of the Python extension, not engine operations.
-        "np_parts",
-        "str_into",
         "to_bytes",
-        "physical",
         "ops",
         # The str, list and dt accessors: properties of the Python class now,
         # served by a forwarder before.
@@ -550,8 +543,6 @@ PY_ALLOWLIST = {
         "apply",
         # A formula as text, lowered with apply's source tier to one column expression; no op of its own.
         "eval",
-        # The spec list a broadcast lowers to; the op is group_by.
-        "reduce_specs",
         # The index column's name is wrapper metadata; the column is data.
         "set_index",
         "index",
@@ -585,7 +576,6 @@ PY_ALLOWLIST = {
         "columns",
         "explain",
         "output_schema",
-        "reduce_specs",
         "schema",
         "set_index",
         "sink",
@@ -613,11 +603,12 @@ REACHED_AS = {
     "frame": {
         "sort_by_multi_per_col": "sort_by_multi",
         "mask": "query",
-        "column_op": "LazyFrame.column_op",
+        "column_op": "LazyFrame._column_op",
+        "group_transform": "DataFrame._group_transform",
         "value_counts": "Series.value_counts",
         "unique_by": "unique",
     },
-    "lazy": {"unique_by": "unique"},
+    "lazy": {"unique_by": "unique", "group_transform": "LazyFrame._group_transform"},
 }
 
 

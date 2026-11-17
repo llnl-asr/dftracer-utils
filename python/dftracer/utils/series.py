@@ -190,7 +190,7 @@ def _temporal_numpy(native: "Series", dtype: DType) -> "np.ndarray":
     import numpy as np  # ty: ignore[import-not-found]
 
     unit = _TEMPORAL_KINDS[dtype] or _NUMPY_UNITS[native.time_unit]
-    phys = native.physical()
+    phys = native._physical()
     if dtype == DType.DATE32:
         phys = phys.cast(int(DType.INT64))
     if phys.null_count:
@@ -212,8 +212,8 @@ def _parts(
     native: "Series", nullable: bool, na: "Optional[NAType]" = None
 ) -> Tuple[bytearray, Optional[bytearray], str]:
     """The column's values, null mask and numpy dtype string from one native
-    pass (``Series.np_parts``): bytearrays that numpy wraps without a copy."""
-    return native.np_parts(nullable, na)
+    pass (``Series._np_parts``): bytearrays that numpy wraps without a copy."""
+    return native._np_parts(nullable, na)
 
 
 def _frombuffer(data: Union[bytes, bytearray, memoryview], dtype: str) -> "np.ndarray":
@@ -236,7 +236,7 @@ def _native_numpy(native: "Series") -> "np.ndarray":
         pass
     if DType(native.type) in (DType.STRING, DType.LARGE_STRING):
         out = np.empty(native.length, dtype=object)
-        native.str_into(out, None)
+        native._str_into(out, None)
         return out
     if native.encoding != 0:
         native = native.materialize()
@@ -249,13 +249,13 @@ def _native_numpy(native: "Series") -> "np.ndarray":
         return _temporal_numpy(native, dtype)
     if dtype == DType.FLOAT16:
         return np.array(
-            [float("nan") if v is None else v for v in native.to_pylist()], dtype=np.float16
+            [float("nan") if v is None else v for v in native._to_pylist()], dtype=np.float16
         )
     if dtype == DType.BOOL and not nulls:
         values, _, _ = _parts(native, False)
         return _frombuffer(values, "u1").view(np.bool_)
     if dtype == DType.BOOL or dtype in _NATIVE_OBJECT_TYPES or dtype in _PYTHON_OBJECT_TYPES:
-        return _object_numpy(native.to_pylist())
+        return _object_numpy(native._to_pylist())
     raise TypeError(f"no native conversion for column type '{dtype.name.lower()}'")
 
 
@@ -283,7 +283,7 @@ def _polars_native(native: "Series", pl: Any) -> "pl.Series":
         import numpy as np  # ty: ignore[import-not-found]
 
         return pl.Series(_native_numpy(native).astype(np.float32))  # type: ignore[union-attr]
-    values: Any = native.to_pylist()
+    values: Any = native._to_pylist()
     if native.encoding == 2 and dtype in (DType.STRING, DType.LARGE_STRING):
         return pl.Series(values, dtype=pl.Categorical)
     if dtype == DType.MAP:
@@ -349,7 +349,7 @@ def _pandas_categorical(native: "Series") -> "pd.Categorical":
                 out = pd.Categorical.from_codes(codes, categories=pd.Index(categories))
                 return out.remove_unused_categories()
     values = np.empty(native.length, dtype=object)
-    native.str_into(values, None)
+    native._str_into(values, None)
     return pd.Categorical(values)
 
 
@@ -395,7 +395,7 @@ def _pandas_nullable(native: "Series") -> "Optional[ExtensionArray]":
         return _pandas_categorical(native)
     if dtype in (DType.STRING, DType.LARGE_STRING):
         out = np.empty(native.length, dtype=object)
-        native.str_into(out, pd.NA)
+        native._str_into(out, pd.NA)
         string = pd.StringDtype()
         if getattr(string, "storage", "python") == "python":
             return cast(Any, string.construct_array_type())(out)
@@ -1217,10 +1217,10 @@ class Series(_SeriesPandasMixin, _ext.Series[T_co]):
         """With ``i``, whether row ``i`` is null; without, the Bool mask of
         null rows (polars ``is_null()``, pandas ``isna()``)."""
         if i is None:
-            return self.null_mask()
+            return self._null_mask()
         return super().is_null(i)
 
-    is_not_null = _ext.Series.valid_mask
+    is_not_null = _ext.Series._valid_mask
 
     @property
     def is_unique(self) -> bool:
@@ -1281,7 +1281,7 @@ class Series(_SeriesPandasMixin, _ext.Series[T_co]):
         return self.length
 
     def to_list(self) -> List[Optional[T_co]]:  # ty: ignore[invalid-generic-class]
-        values = self.to_pylist()
+        values = self._to_pylist()
         if self.is_json:
             return [None if v is None else json.loads(cast(str, v)) for v in values]
         return values
@@ -1289,13 +1289,13 @@ class Series(_SeriesPandasMixin, _ext.Series[T_co]):
     def tolist(self) -> List[Optional[T_co]]:  # ty: ignore[invalid-generic-class]
         return self.to_list()
 
-    isna = _ext.Series.null_mask
+    isna = _ext.Series._null_mask
 
-    isnull = _ext.Series.null_mask
+    isnull = _ext.Series._null_mask
 
-    notna = _ext.Series.valid_mask
+    notna = _ext.Series._valid_mask
 
-    notnull = _ext.Series.valid_mask
+    notnull = _ext.Series._valid_mask
 
     def isin(self, values: "Union[Series, Sequence[object]]") -> "Series[bool]":
         return self.is_in(values)

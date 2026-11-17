@@ -68,14 +68,14 @@ def test_to_list_equals_pyarrow_for_every_type():
         if sys.version_info < (3, 9) and getattr(arr.type, "tz", None):
             continue  # a zoned value needs zoneinfo
         s = dftu.Series.from_arrow(arr)
-        assert s.to_pylist() == arr.to_pylist(), name
+        assert s._to_pylist() == arr.to_pylist(), name
         assert s.to_list() == arr.to_pylist(), name
         assert s[0] == arr.to_pylist()[0], name
 
 
 def test_physical_shares_the_integers():
     s = dftu.Series.from_arrow(_pa().array([1, None, 3], _pa().timestamp("ms")))
-    phys = s.physical()
+    phys = s._physical()
     assert phys.type == int(DType.INT64)
     assert phys.null_count == 1
     assert s.nbytes >= 24

@@ -166,34 +166,22 @@ consumer reads it back during the same batch.
 
    .. tab-item:: Python (JIT)
 
-      A ``@jit.plugin`` class declares a port with ``jit.publish`` /
-      ``jit.consume`` as a class attribute, then writes or reads it inside
-      ``@jit.each_event``. A publish port accumulates a per-batch total with
-      ``self.<port> += <expr>``; the host sums the per-event contributions and
-      publishes the total once the batch finishes. A consume port is read as a
-      plain scalar, ``self.<port>`` (``0`` when no producer has published yet):
+      A ``@jit.plugin`` class declares a port with ``jit.publish`` or
+      ``jit.consume(Producer.sig)`` as a class attribute, then writes or reads it
+      inside ``@jit.each_event``. A publish port accumulates a per-batch total
+      with ``self.<port> += <expr>``; the host sums the per-event contributions
+      and publishes the total once the batch finishes. A consume port is read as
+      a plain scalar, ``self.<port>`` (``0`` when no producer has published yet).
+      ``jit.consume`` takes the producer's attribute itself, so the producer
+      class comes first:
 
-      .. code-block:: python
+      .. literalinclude:: ../../../../examples/jit/ref_state.py
+         :language: python
+         :pyobject: Producer
 
-         from dftracer.utils import jit
-
-         @jit.plugin
-         class Producer:
-             sig = jit.publish("com.example.perbatch", of=jit.u64)
-
-             @jit.each_event
-             def step(self, e):
-                 if e.has_dur:
-                     self.sig += 1
-
-         @jit.plugin
-         class Consumer:
-             sig = jit.consume("com.example.perbatch", of=jit.u64)
-
-             @jit.each_event
-             def step(self, e):
-                 if self.sig > 0:               # a producer published this batch
-                     pass                        # ... use self.sig for this batch
+      .. literalinclude:: ../../../../examples/jit/ref_state.py
+         :language: python
+         :pyobject: Consumer
 
       ``of`` picks the wire width shared by both ends (``jit.u64`` / ``jit.i64``
       / ``jit.f64``); it must match on both the publisher and the consumer. A

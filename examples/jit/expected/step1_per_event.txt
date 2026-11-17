@@ -1,0 +1,4 @@
+   k0  value
+0   1     76
+1   2     38
+lowering: mask

@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Added
 
+- Add a tutorial on the JIT plugin API, `docs/source/tutorials/extending-the-engine.rst`, with plain state, a batch hook, a config, a finalize task, a channel and a UDF, and run every example of it and of `docs/source/jit.rst` from `examples/jit/` in `tests/python/test_docs_examples_jit.py`.
 - Add `@dft.udf` to register a Python function as a scalar UDF in two forms.
   A typed `def f(x: float, n: int) -> float` is compiled to a native UDF (per-row arithmetic, comparisons, conditions, `abs`, `min`, `max` and `math` functions) that expressions and duql call by name and that never takes the GIL; a body outside the subset is a located `JitError`, never a silent fallback.
   `@dft.udf(batch=True)` calls the function once per batch with read-only numpy views of the argument columns, on one dedicated Python lane thread that holds the GIL for the batch; workers queue a batch and wait without the GIL, and the engine releases the GIL while it waits for its workers.

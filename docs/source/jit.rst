@@ -5,7 +5,8 @@ JIT Plugins
 
 .. seealso::
 
-   :doc:`api/jit` for the JIT module API reference.
+   :doc:`api/jit` for the JIT module API reference, :doc:`tutorials/extending-the-engine`
+   for a guided path, and :doc:`concepts/jit-design` for the reasons behind the rules.
 
 The JIT layer lets you author a plugin in Python and get a native one. A class
 decorated with ``@jit.plugin`` is AST-compiled to a C plugin against the stable
@@ -16,9 +17,11 @@ so a Python-authored plugin runs at native speed inside the same fused scan.
 Overview
 --------
 
-- **Declare maps, write one method**: a plugin is a class with ``jit.map``
-  attributes (the aggregations it maintains) and a single ``@jit.each_event``
-  method (what to do per event).
+- **Declare state, write one method**: a plugin is a class with scan state
+  (plain annotated fields or ``jit.map`` attributes) and one ``@jit.each_event``
+  method (what to do per event) or one ``@jit.each_batch`` method (what to do per
+  batch of columns). Optional ``@jit.finalize`` and ``@jit.task`` methods run
+  after the scan.
 - **Typed keys and rich values**: a map's key is a tuple of typed fields
   (``jit.i64``, ``jit.str_``, ``jit.bytes``) and its value is an aggregate. The
   vocabulary is broad: ``count``, ``sum``, ``min`` / ``max``, ``mean``,
@@ -27,10 +30,9 @@ Overview
   ``distinct``, ``set``, ``list``, and ``record`` (several aggregates on one
   key). A ``jit.map`` lowers to a host aggregation accumulator keyed by its key
   columns - the same ``DFTU_SVC_AGG`` surface a C plugin uses.
-- **Statically checked**: the structured ``each_event`` body is a deliberately
-  small subset (conditions, locals, exceptions, files and JSON values, then map or
-  state updates); anything outside
-  it raises ``JitError`` at decoration time - never a silent miscompile - and
+- **Statically checked**: a body is a deliberately small subset (conditions,
+  locals, exceptions, files and JSON values, then map or state updates); anything
+  outside it raises ``JitError`` at decoration time, never a silent miscompile, and
   ``jit.map`` infers the ``Map[tuple[K], V]`` type so a type checker validates
   your keys and values.
 - **Compiled once, computed once**: a subexpression used by more than one map in
@@ -44,25 +46,18 @@ Overview
   them instead of once per map. They still come back as the separate tables you
   declared - the coalescing is invisible, like the CSE above.
 
-Tutorial: a per-file event counter
------------------------------------
+Example: a per-file event counter
+---------------------------------
 
-This is the Python equivalent of the C plugin in :doc:`plugins` - it counts,
-per ``(pid, event-name)``, how many events referenced a file. Declare the map,
-write the one per-event method:
+Every example on this page is a file in ``examples/jit/`` that a test runs, and
+each starts with ``from dftracer.utils import jit``. This one is the Python
+equivalent of the C plugin in :doc:`plugins`: it counts, per
+``(pid, event-name)``, how many events referenced a file. Declare the map, write
+the one per-event method:
 
-.. code-block:: python
-
-   from dftracer.utils import jit
-
-   @jit.plugin
-   class NameEdges:
-       edges = jit.map(key=(jit.i64, jit.str_), value=jit.count())
-
-       @jit.each_event
-       def step(self, e):
-           if e.fhash != jit.NONE:            # only file-referencing events
-               self.edges[(e.pid, e.name)] += 1
+.. literalinclude:: ../../examples/jit/ref_maps.py
+   :language: python
+   :pyobject: NameEdges
 
 The event ``e`` exposes the parsed fields (``pid``, ``tid``, ``name``, ``cat``,
 ``ts``, ``dur``, ``fhash``, ``hhash``, and args when declared); ``jit.NONE`` is
@@ -73,17 +68,16 @@ Running it
 ----------
 
 There is no build step to run yourself - passing the class to
-:class:`~dftracer.utils.plugins.Plugins` compiles it to a cached native ``.so``
+:class:`~dftracer.utils.plugins.Plugins` (``from dftracer.utils.plugins import
+Plugins``) compiles it to a cached native ``.so``
 and loads it, exactly like a hand-written plugin. Each map comes back keyed by
 its attribute name in the run's results:
 
-.. code-block:: python
-
-   from dftracer.utils.plugins import Plugins
-
-   plugins = Plugins([NameEdges])        # compiles + caches the .so, then loads
-   run = plugins.run("./traces")
-   df = run.results["edges"].to_pandas()  # columns: pid, name, value
+.. literalinclude:: ../../examples/jit/ref_maps.py
+   :language: python
+   :start-at: plugins = Plugins([NameEdges])
+   :end-at: df = run.results["edges"]
+   :dedent: 4
 
 Working with results (NumPy / pandas)
 -------------------------------------
@@ -93,15 +87,11 @@ loop, which is the point. The interop happens on the *output*: each map comes
 back as a small :class:`~dftracer.utils.DataFrame` that crosses to NumPy,
 pandas, or Arrow cheaply (zero-copy where the dtype allows).
 
-.. code-block:: python
-
-   tbl = run.results["edges"]                    # DataFrame
-   values = tbl.to_arrow().column("value").to_numpy(zero_copy_only=False)
-   df = tbl.to_pandas()                          # pandas.DataFrame
-
-   # from here it is ordinary NumPy / pandas
-   top = df.sort_values("value", ascending=False).head(10)
-   total = int(values.sum())
+.. literalinclude:: ../../examples/jit/ref_maps.py
+   :language: python
+   :start-at: tbl = run.results["n"]
+   :end-at: total = int(values.sum())
+   :dedent: 4
 
 So the pattern is: aggregate in the fused native scan, then do the NumPy / pandas
 analysis on the (much smaller) result tables. If you instead want vectorized math
@@ -115,25 +105,9 @@ The value is any aggregate, and a plugin can keep several maps. This one, per
 category, keeps the event count, the total and mean duration, the slowest event
 name, and an approximate top-k of event names - in one pass:
 
-.. code-block:: python
-
-   @jit.plugin
-   class CatStats:
-       n      = jit.map(key=(jit.str_,), value=jit.count())
-       total  = jit.map(key=(jit.str_,), value=jit.sum())
-       avg    = jit.map(key=(jit.str_,), value=jit.mean())
-       slow   = jit.map(key=(jit.str_,), value=jit.max())
-       worst  = jit.map(key=(jit.str_,), value=jit.argmax(of=jit.str_))
-       hot    = jit.map(key=(jit.str_,), value=jit.approx_topk(16))
-
-       @jit.each_event
-       def step(self, e):
-           self.n[(e.cat,)]     += 1               # additive aggregates use +=
-           self.total[(e.cat,)] += e.dur           # (an arithmetic expr is fine)
-           self.avg[(e.cat,)].observe(e.dur)       # others observe a value
-           self.slow[(e.cat,)].observe(e.dur)
-           self.worst[(e.cat,)].observe(e.name, by=e.dur)   # name at the max dur
-           self.hot[(e.cat,)].observe(e.name)               # frequent event names
+.. literalinclude:: ../../examples/jit/ref_maps.py
+   :language: python
+   :pyobject: CatStats
 
 Two contribution shapes cover the vocabulary: additive aggregates (``count``,
 ``sum``) take ``+= <expr>``, and every other aggregate takes ``.observe(x)`` -
@@ -150,15 +124,9 @@ Percentiles
 latency percentiles come out of the one pass without collecting the values.
 Pass the quantiles you want; each becomes a result column:
 
-.. code-block:: python
-
-   @jit.plugin
-   class Lat:
-       lat = jit.map(key=(jit.str_,), value=jit.quantiles(qs=(0.5, 0.9, 0.99)))
-
-       @jit.each_event
-       def step(self, e):
-           self.lat[(e.cat,)].observe(e.dur)
+.. literalinclude:: ../../examples/jit/ref_maps.py
+   :language: python
+   :pyobject: Lat
 
 The map materializes to a ``count`` column plus one f64 column per quantile,
 named ``p50``, ``p90``, ``p99`` (a non-integer like ``0.999`` becomes
@@ -174,15 +142,9 @@ to the matching header-only helper in ``prims.h`` (``jit.ilog2`` ->
 ``dftu_ilog2_u64``), so there is no Python cost and no divergence from the C. A
 log2 duration histogram, keyed by bucket:
 
-.. code-block:: python
-
-   @jit.plugin
-   class DurHist:
-       hist = jit.map(key=(jit.i64,), value=jit.count())
-
-       @jit.each_event
-       def step(self, e):
-           self.hist[(jit.ilog2(e.dur),)] += 1     # 0..63 log-scale bucket
+.. literalinclude:: ../../examples/jit/ref_maps.py
+   :language: python
+   :pyobject: DurHist
 
 The vocabulary. The integer ops are 64-bit (a Python ``int`` is unbounded, but
 these compile to 64-bit C and wrap there); the float ops are ``double``:
@@ -215,28 +177,9 @@ the merge, and the plugin lowers to the same accumulators the descriptors use, s
 the host merges the slices of the workers in the same way and each field comes
 back under its name as the same one-key-per-row frame.
 
-.. code-block:: python
-
-   from collections import defaultdict
-   from typing import Dict, List, Set, Tuple
-
-   @jit.plugin
-   class Ops:
-       by_name: Dict[Tuple[int, str], int] = defaultdict(int)
-       bytes_by_pid: Dict[int, int] = {}
-       names: Set[str] = set()
-       order: List[int] = []
-       total: int = 0
-       secs: float = 0.0
-
-       @jit.each_event
-       def step(self, e):
-           self.by_name[(e.pid, e.name)] += 1
-           self.bytes_by_pid[e.pid] = self.bytes_by_pid.get(e.pid, 0) + e.arg_i64("ret")
-           self.names.add(e.name)
-           self.order.append(e.ts)
-           self.total += 1
-           self.secs += e.dur * 0.5
+.. literalinclude:: ../../examples/jit/ref_state.py
+   :language: python
+   :pyobject: Ops
 
 The field types are ``Dict[K, V]`` or ``DefaultDict[K, V]`` (``K`` is an ``int``,
 a ``str`` or a ``Tuple`` of those, ``V`` an ``int`` or a ``float``),
@@ -330,17 +273,9 @@ Persistent state: ``jit.Store``
 ``jit.Store[K, V]`` is a persistent key-value field. Declare it by annotation
 and read and write it with explicit keys from the body:
 
-.. code-block:: python
-
-   @jit.plugin
-   class Seen:
-       runs: jit.Store[int, int]
-       first_seen = jit.map(key=(jit.i64,), value=jit.min(of=jit.i64))
-
-       @jit.each_event
-       def step(self, e):
-           self.first_seen[(e.pid,)].observe(self.runs.get(e.pid, 0))
-           self.runs.put(e.pid, self.runs.get(e.pid, 0) + 1)
+.. literalinclude:: ../../examples/jit/ref_state.py
+   :language: python
+   :pyobject: Seen
 
 ``K`` is an ``int``, a ``str`` or a ``Tuple`` of those and ``V`` is an ``int``
 or a ``float``. ``get(key, default)`` returns the stored value or the default;
@@ -348,13 +283,11 @@ or a ``float``. ``get(key, default)`` returns the stored value or the default;
 and keys and values go through the same encoding, so Python reads and writes the
 namespace as a ``Namespace[K, V]``:
 
-.. code-block:: python
-
-   from dftracer.utils.store import Store
-
-   store = Store.open(f"{index_dir}/.dftindex/store")  # the store of that index root
-   ns = store.namespace("plugin.<plugin name>.runs", 1, durable=True, shared=True)
-   store.snapshot().get(ns, None, 1)
+.. literalinclude:: ../../examples/jit/ref_state.py
+   :language: python
+   :start-at: store = Store.open
+   :end-at: value = store.snapshot()
+   :dedent: 8
 
 The namespace is the plugin name plus the field name: the host registers the
 field ``runs`` as ``plugin.<plugin name>.runs``, so the same plugin keeps one
@@ -386,9 +319,12 @@ Talking to another plugin
 
 Two JIT plugins loaded in the same run can pass a batch-scoped value between
 them: ``jit.publish`` declares a port this plugin writes, ``jit.consume`` one
-it reads - both keyed by a port name, the same mechanism the hand-written C++
+it reads, the same mechanism the hand-written C++
 ``Host::publish_port`` / ``consume_port`` API uses (see
-:doc:`guides/plugins/inter-plugin-comms`). Declaring a port compiles to a name
+:doc:`guides/plugins/inter-plugin-comms`). The wire id of a port comes from the class and the attribute it is assigned to.
+``jit.consume(Producer.sig)`` names the producer's attribute itself, so the
+producer class is declared first, and a string name is for a hand-written
+producer only. Declaring a port compiles to a name
 in the plugin's ``provides`` / ``consumes``, so the host orders the fold
 itself; there is no load order to get right.
 
@@ -398,27 +334,13 @@ total and publishes it once the batch finishes. A consume port is read as a
 plain scalar, ``self.<port>``, giving the value the producer published for
 the current batch (``0`` when no producer has published yet):
 
-.. code-block:: python
+.. literalinclude:: ../../examples/jit/ref_state.py
+   :language: python
+   :pyobject: Producer
 
-   @jit.plugin
-   class Producer:
-       seen = jit.map(key=(jit.i64,), value=jit.count())
-       sig = jit.publish("com.example.batchsig", of=jit.u64)
-
-       @jit.each_event
-       def step(self, e):
-           self.seen[(e.pid,)] += 1
-           self.sig += 1
-
-   @jit.plugin
-   class Consumer:
-       got = jit.map(key=(jit.i64,), value=jit.count())
-       sig = jit.consume("com.example.batchsig", of=jit.u64)
-
-       @jit.each_event
-       def step(self, e):
-           if self.sig > 0:               # a producer published this batch
-               self.got[(e.pid,)] += 1
+.. literalinclude:: ../../examples/jit/ref_state.py
+   :language: python
+   :pyobject: Consumer
 
 ``of`` picks the wire width shared by both ends (``jit.u64`` / ``jit.i64`` /
 ``jit.f64``); it must match on both the publisher and the consumer. A
@@ -441,28 +363,16 @@ A plugin takes load-time settings through a dataclass. Annotate the class with
 ``config: Cfg``, where ``Cfg`` is a (frozen) dataclass, and read each field in
 the body as ``self.config.<field>``:
 
-.. code-block:: python
+.. literalinclude:: ../../examples/jit/ref_state.py
+   :language: python
+   :start-at: @dataclass(frozen=True)
+   :end-at: self.slow[(e.pid,)] += 1
 
-   from dataclasses import dataclass
-   from typing import Optional
-
-   @dataclass(frozen=True)
-   class Cfg:
-       threshold: int = 0         # int, float, bool and str are native values
-       label: str = "read"
-       cap: Optional[int] = None  # Optional of one of them may be unset
-
-   @jit.plugin
-   class Slow:
-       config: Cfg
-       slow = jit.map(key=(jit.i64,), value=jit.count())
-
-       @jit.each_event
-       def step(self, e):
-           if e.dur > self.config.threshold and e.name == self.config.label:
-               self.slow[(e.pid,)] += 1
-
-   Plugins([Slow], config={"Slow": {"threshold": 45}})
+.. literalinclude:: ../../examples/jit/ref_state.py
+   :language: python
+   :start-at: plugins = Plugins([Slow]
+   :end-at: plugins = Plugins([Slow]
+   :dedent: 4
 
 Defaults come from the dataclass: a field the config leaves out takes its
 default, and a field with no default is required. Plugins checks the values
@@ -527,7 +437,8 @@ The compiler chooses one of two lowerings, and ``Plugin._jit_plugin.lowering``
 says which:
 
 ``"mask"``
-   The whole body is one ``if`` with no ``else`` around its updates. The
+   The whole body is one ``if`` with no ``else`` around its updates, and the
+   plugin has no ``jit.Store`` field. The
    emitted code makes two passes over the batch (two-pass index selection):
    the first evaluates the condition and writes the index of each matching
    event, the second runs the updates over those events only. A nested ``if``
@@ -566,24 +477,9 @@ folds column reductions into scan state. Nothing runs per event: the body is
 lowered to engine expressions that run fused over the batch, the same way
 ``@jit.series`` and the dataframe ``Expr`` do.
 
-.. code-block:: python
-
-   from dftracer.utils import jit
-
-   @jit.plugin
-   class SlowReads:
-       secs: float = 0.0
-       kept: int = 0
-       worst = jit.map(key=(), value=jit.max(of=jit.i64))
-
-       @jit.each_batch
-       def step(self, df: jit.Frame) -> None:
-           dur = df["dur"]
-           keep = (dur > 30) & (df["pid"] != 3)
-           slow = dur[keep]
-           self.secs += (slow * 0.5).sum()
-           self.kept += keep.sum()
-           self.worst[()].observe(slow.max())
+.. literalinclude:: ../../examples/jit/ref_hooks.py
+   :language: python
+   :pyobject: SlowReads
 
 The vocabulary is closed. In a column expression:
 
@@ -653,8 +549,10 @@ Rules that follow from the lowering:
   ``count``, ``min`` and ``max`` into a field with the matching merge; float
   sums can differ in the last digits between runs, as for ``each_event``.
 
-A batch hook plugin takes no config, ports or ``jit.Store``, and one class has
-one ``@jit.each_event`` or one ``@jit.each_batch``, not both. ``@jit.vfold``
+A batch hook plugin takes no config, no ``jit.publish`` / ``jit.consume`` port and
+no ``jit.Store``, and one class has one ``@jit.each_event`` or one
+``@jit.each_batch``, not both. It may send, set and contribute to channels, latest
+values and phases (see :ref:`jit-channels`). ``@jit.vfold``
 keeps its own, narrower form for keyed column folds.
 
 ``benchmarks/jit_batch_bench.py`` times a batch hook against the per-event form
@@ -705,32 +603,19 @@ set, a map key or a result.
 Exceptions
 ----------
 
-A compiled body raises three exceptions, each lowered to a status of the plugin
-ABI with the message copied (``dftu_fail``). The caller of ``Plugins.run`` gets
-the matching Python exception, with ``message``, ``file``, ``line`` and ``col`` of
-the ``raise``; ``str(error)`` is ``<file>:<line>:<col>: <message>``.
+A compiled body raises ``jit.Fatal("msg")``, ``jit.Cancelled()`` or
+``jit.SkipRest()``. ``Fatal`` and ``Cancelled`` are lowered to a status of the
+plugin ABI with the message copied (``dftu_fail``), and the caller of
+``Plugins.run`` gets the matching Python exception, with ``message``, ``file``,
+``line`` and ``col`` of the ``raise``; ``str(error)`` is
+``<file>:<line>:<col>: <message>``. The classes, statuses and what a body can
+catch are in :ref:`jit-errors`.
 
-.. list-table::
-   :header-rows: 1
-   :widths: 24 28 48
-
-   * - Raise
-     - Status
-     - Effect
-   * - ``jit.Fatal("msg")``
-     - ``DFTU_E_UNKNOWN``
-     - Fails the run. The caller gets ``jit.Fatal``. A body cannot catch it.
-   * - ``jit.SkipRest()``
-     - none
-     - Stops the rest of the current batch of ``each_event`` (or the rest of a
-       task) with no error: what the batch folded so far is kept, and no
-       exception reaches the caller. It cannot stop a whole file, because
-       ``on_batch`` is not told where a file ends.
-   * - ``jit.Cancelled()``
-     - ``DFTU_E_CANCELLED``
-     - Ends the run as cancelled. The caller gets ``jit.Cancelled``, a
-       ``BaseException``, so ``except Exception`` does not swallow it. A body
-       cannot catch it.
+``jit.SkipRest()`` has no status and is not an error. It stops the rest of the
+current batch of ``each_event`` (or the rest of a task): what the batch folded
+so far is kept, no exception reaches the caller, and a task ends with its result
+so far (0 unless it returned). It cannot stop a whole file, because ``on_batch``
+is not told where a file ends.
 
 The message is one string literal (a missing one is the class name). A raise of
 any other class, a bare ``raise`` and ``raise ... from ...`` are compile errors
@@ -740,20 +625,11 @@ A call that can fail raises a ``jit.Error`` of its own: a store get (the stored
 value has the other type), a file (``jit.open``, ``for line in f``) and a JSON or
 YAML parse. ``except`` catches it:
 
-.. code-block:: python
+.. literalinclude:: ../../examples/jit/ref_flow.py
+   :language: python
+   :pyobject: Totals
 
-   try:
-       with jit.open(self.config.path) as f:
-           for line in f:
-               d = jit.json(line)
-               self.total += d.find("n").as_int()
-   except jit.NotFound:
-       self.missing += 1
-   except (jit.ParseError, jit.IoError):
-       self.bad += 1
-
-``jit.NotFound`` is ``DFTU_E_NOT_FOUND``, ``jit.IoError`` is ``DFTU_E_IO`` and
-``jit.ParseError`` is ``DFTU_E_PARSE``; ``jit.Error`` is any failed call. A
+A
 ``jit.Fatal``, a cancel and an allocation failure always end the run, whatever
 ``except`` is in the way. The handlers are tried in order, and an error that no
 handler names goes on out of the ``try``. These are compile errors: a bare
@@ -871,27 +747,9 @@ maps, not in the plugin.
 parameters and the file or JSON handles it holds live in one frame that the host
 keeps across each ``await``. The awaits are a closed set:
 
-.. code-block:: python
-
-   @jit.plugin
-   class Fan:
-       n: int = 0
-
-       @jit.each_event
-       def step(self, e):
-           self.n += 1
-
-       @jit.task
-       async def fetch(self, a: int, secs: float) -> int:
-           await jit.sleep(secs)
-           return a * 10
-
-       @jit.finalize
-       async def done(self) -> None:
-           one = await self.fetch(1, 0.1)
-           x, y = await jit.all(self.fetch(2, 0.1), self.fetch(3, 0.1))
-           first = await jit.any(self.fetch(4, 5.0), self.fetch(5, 0.01))
-           jit.emit("sum", one + x + y + first)
+.. literalinclude:: ../../examples/jit/ref_flow.py
+   :language: python
+   :pyobject: Fan
 
 - ``await jit.sleep(seconds)`` waits, then goes on.
 - ``x, y = await jit.all(t1, t2, ...)`` runs the tasks at once and unpacks their
@@ -918,20 +776,17 @@ its ``await`` and never runs on: no code after the
 ``await`` runs, and the host releases its frame exactly once. Every frame is
 released once, whether its task finished, failed or was cancelled. A ``raise`` in
 a task is the status of that task, and the awaiter gets it: ``Fatal`` and
-``Cancelled`` end the run, a ``jit.Error`` can be caught with ``except`` around
-the ``await``, and ``SkipRest`` ends the task with its result so far (0 unless it
-returned).
+``Cancelled`` end the run, and a ``jit.Error`` can be caught with ``except`` around
+the ``await``.
 
-A task is started from the ``finalize`` body, or from another task, and not from
-``each_event``: ``on_batch`` is synchronous, its row buffers die when it returns
-and the ABI gives it no slot for a pending task, so a task started there could not
-add to scan state and waiting for it would be a plain call. A plugin that has a
-task needs a ``finalize``.
+A task is started from the ``finalize`` body or from another task, never from
+``each_event`` (see :doc:`concepts/jit-design`). A plugin that has a task needs a
+``finalize``.
 
 A plugin that uses files, JSON, tasks or channels exports ``dftu_jit_stat(k)``, which counts
 the task frames started (0), released (1), files opened (2) and closed (3) and
-task frames completed (4); the tests read it to check that every open is closed and
-every frame released once.
+task frames completed (4), strings interned (5) and task frames cancelled (6); the
+tests read it to check that every open is closed and every frame released once.
 
 .. _jit-channels:
 
@@ -944,38 +799,20 @@ element type, ``int`` or ``float`` (a ``str`` is a view or an interned id that
 lives only in the body that read it, so ``jit.Sender[str]`` is a compile error),
 and the value says what the port is.
 
-.. code-block:: python
+.. literalinclude:: ../../examples/jit/ref_flow.py
+   :language: python
+   :pyobject: Source
 
-   @jit.plugin
-   class Producer:
-       out: jit.Sender[int] = jit.sender(credits=64)
-
-       @jit.each_event
-       def step(self, e):
-           self.out.send(e.dur)               # stored now, or raises jit.Error
-
-   @jit.plugin
-   class Consumer:
-       inp: jit.Receiver[int] = jit.receiver(Producer.out)
-       n: int = 0
-
-       @jit.each_event
-       def step(self, e):
-           self.n += 1
-
-       @jit.finalize
-       async def done(self) -> None:
-           total = 0
-           async for v in self.inp:           # until the channel is closed
-               total += v
-           jit.emit("total", total)
+.. literalinclude:: ../../examples/jit/ref_flow.py
+   :language: python
+   :pyobject: Sink
 
 The plugin factory declares each end to the host, with the plugin's identity as
 its name (the host prefixes a port with ``plugin.<plugin>.``), and the host checks
 the whole plan before the scan: a receiver whose sender is not in the set, ends
 that differ in credits, policy or size, a cycle and two plugins of one name are
 refused. The host's message reaches ``Plugins(...)`` as a ``JitError`` located at
-the port that it names. A ``jit.receiver(Producer.out)`` takes its options and its
+the port that it names. A ``jit.receiver(Source.out)`` takes its options and its
 element type from the sender it names, so the two cannot disagree: a different
 element type is a compile error at the receiver. The string form,
 ``jit.receiver("plugin.owner.name", credits=..., policy=...)``, names a channel of
@@ -1053,6 +890,10 @@ scan. ``result`` of a phase that is still open and ``contribute`` after the seal
 raise ``jit.Error``; a phase nobody contributed to reads as ``default``.
 ``jit.phase(Other.total)`` contributes to and reads another plugin's.
 
+.. literalinclude:: ../../examples/jit/ref_flow.py
+   :language: python
+   :pyobject: Tally
+
 A call on a port is a statement of its own or the whole right side of an
 assignment (``ok = self.out.try_send(v)``, ``x = self.cfg.get(0)``,
 ``x = self.total.result(0)``, ``x = await self.inp.recv()``); inside an expression
@@ -1061,8 +902,13 @@ location: a send on a receiver, ``recv`` or ``close`` in the per-event body,
 ``seal`` or ``result`` while the scan runs, a float into an ``int`` port, a missing
 annotation, an unsupported element type.
 
+.. _jit-errors:
+
+Errors
+------
+
 Compile errors
---------------
+~~~~~~~~~~~~~~
 
 Every compile error is a ``JitError`` with one stable form: the position of the
 offending node, the reason, then the source line.
@@ -1074,11 +920,138 @@ offending node, the reason, then the source line.
 
 ``<file>:<line>:<col>:`` is where the JIT stopped, with 1-based line and column.
 ``JitError`` also carries them as ``file``, ``line``, ``col``, ``source`` and
-``reason``. A construct in the ``each_event`` body or a ``vfold`` body points at
-the node inside it; a class-level mistake points at the class or at the
-attribute; a bad ``jit.map(...)`` or ``jit.topk(...)`` call points at the call
-in your code. ``@jit.op`` bodies raise ``JitOpError``, a subclass of
-``JitError``, with the same position form.
+``reason``. A construct in an ``each_event``, ``each_batch``, ``finalize`` or
+``task`` body points at the node inside it; a class-level mistake points at the
+class or at the attribute; a bad ``jit.map(...)`` or ``jit.topk(...)`` call points
+at the call in your code. ``@jit.op`` bodies raise ``JitOpError``, a subclass of
+``JitError``, with the same position form. ``Plugins(...)`` raises ``JitError`` too
+for a config that does not fit its dataclass and for a port plan that the host
+refuses, located at the field or port.
+
+Run-time errors
+~~~~~~~~~~~~~~~
+
+A failure of a compiled body reaches the caller of ``Plugins.run`` as one of these,
+each with ``message``, ``file``, ``line`` and ``col``:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 22 24 54
+
+   * - Class
+     - Status
+     - Raised by
+   * - ``jit.Fatal``
+     - ``DFTU_E_UNKNOWN``
+     - ``raise jit.Fatal("msg")``. Fails the run. A body cannot catch it.
+   * - ``jit.Cancelled``
+     - ``DFTU_E_CANCELLED``
+     - ``raise jit.Cancelled()``. Ends the run as cancelled. A ``BaseException``,
+       so ``except Exception`` does not swallow it. A body cannot catch it.
+   * - ``jit.Error``
+     - any failed call
+     - A store get of the other type, a failed file or parse call, a full or
+       closed channel, a phase used out of order. ``except jit.Error`` catches it.
+   * - ``jit.NotFound``
+     - ``DFTU_E_NOT_FOUND``
+     - A missing file or key. A ``jit.Error``.
+   * - ``jit.IoError``
+     - ``DFTU_E_IO``
+     - A failed read or write. A ``jit.Error``.
+   * - ``jit.ParseError``
+     - ``DFTU_E_PARSE``
+     - A JSON or YAML text that does not parse. A ``jit.Error``.
+   * - ``jit.Closed``
+     - ``DFTU_E_NOT_FOUND``
+     - A receive on a channel that is closed and drained. A ``jit.NotFound``.
+
+A message of a failed call has the form
+``<what> <path or name>: <host text>``, and ``str(error)`` is
+``<file>:<line>:<col>: <message>``.
+
+.. _jit-lowering:
+
+What lowers where
+-----------------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 34 66
+
+   * - Source form
+     - Lowers to
+   * - ``@jit.each_event`` body
+     - A C loop in ``on_batch``, one iteration for each event: ``"mask"`` or
+       ``"branch"`` (see :ref:`jit-conditions`).
+   * - ``@jit.each_batch`` body
+     - Engine expressions fused over the batch, folded once for each batch.
+   * - Plain state fields, ``jit.map``
+     - Host accumulators of the ``DFTU_SVC_AGG`` service, merged by name across
+       workers.
+   * - ``jit.Store``
+     - The plugin store service (``dftu.svc.store``), one namespace for each field.
+   * - ``jit.publish``, ``jit.consume``, ``jit.sender``, ``jit.receiver``,
+       ``jit.channel``, ``jit.latest``, ``jit.phase``
+     - The ``DFTU_SVC_PORTS`` service, with the names in ``provides`` and
+       ``consumes``.
+   * - ``jit.open``, ``for line in f``, ``f.read(n)``
+     - The file service (``dftu.svc.fileio``).
+   * - ``jit.json``, ``jit.yaml``
+     - The parsers of the host, with the value as a handle that the body frees.
+   * - ``@jit.finalize``, ``@jit.task``, ``await``
+     - A ``dftu_step_fn`` state machine of the task service, with one frame for
+       each task.
+   * - ``raise``, ``try``
+     - Plugin ABI statuses (``dftu_fail``) and a status check after each call.
+   * - ``jit.ilog2`` and the other primitives
+     - The ``dftu_*`` helpers of ``prims.h``.
+   * - ``@dft.udf``
+     - A native scalar UDF, or with ``batch=True`` a Python function called on one
+       lane (see :ref:`jit-scalar-udfs`).
+   * - ``@jit.op``, ``@jit.series``
+     - A compose op or an engine expression (see :doc:`guides/plugins/compose-ops`).
+
+Which form each body takes:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 34 16 16 16 18
+
+   * - Form
+     - ``each_event``
+     - ``each_batch``
+     - ``finalize``
+     - ``task``
+   * - Locals
+     - yes
+     - column names only
+     - yes
+     - yes
+   * - ``raise``, ``try``
+     - yes
+     - no
+     - yes
+     - yes
+   * - ``with jit.open``, ``jit.json``
+     - yes, once for each event
+     - no
+     - yes
+     - yes
+   * - ``await``
+     - no
+     - no
+     - yes
+     - yes
+   * - ``send``, ``try_send``, ``set``, ``contribute``
+     - yes
+     - a batch reduction
+     - yes
+     - yes
+   * - ``recv``, ``close``, ``seal``, ``result``
+     - no
+     - no
+     - yes
+     - yes
 
 Raw bodies: the full ABI without leaving JIT
 --------------------------------------------

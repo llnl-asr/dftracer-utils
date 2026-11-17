@@ -211,7 +211,8 @@ C_CAPTURE = [
 ]
 
 # Counters a test reads through dlsym: 0 task frames started, 1 task frames
-# released, 2 files opened, 3 files closed, 4 task frames completed.
+# released, 2 files opened, 3 files closed, 4 task frames completed, 5 strings
+# interned, 6 task frames cancelled.
 C_STATS = [
     "static std::atomic<long long> g_dftu_stat[7];",
     "",

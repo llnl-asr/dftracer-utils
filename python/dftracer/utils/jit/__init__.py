@@ -1,27 +1,28 @@
 # SPDX-License-Identifier: MIT
 """Author a DFTracer plugin in Python and get a native one.
 
-Decorate a class with :func:`plugin`; its :func:`map` attributes and single
-:func:`each_event` method are AST-compiled to a C plugin against the stable ABI,
-built to a cached ``.so``, and loaded through
+Decorate a class with :func:`plugin`; its scan state and its one
+:func:`each_event` or :func:`each_batch` method are AST-compiled to a C plugin
+against the stable ABI, built to a cached ``.so``, and loaded through
 :class:`dftracer.utils.plugins.Plugins` exactly like a hand-written plugin.
 
-The ``each_event`` subset is deliberately small: an optional ``if`` guard (one
-comparison on ``e.<field>``) wrapping ``self.<map>[(<key>)] += <1 | e.<field>>``.
-Anything outside it raises :class:`JitError` at decoration time, pointing at the
-raw-C++ escape hatch, never a silent miscompile.
+A body is a deliberately small subset: conditions, locals, ``raise`` and ``try``,
+files and JSON values, then state updates. Anything outside it raises
+:class:`JitError` at decoration time, with the line and column, never a silent
+miscompile. The guide is ``docs/source/jit.rst``.
 
 Scan state is a :func:`map` descriptor or, with the merge inferred from the update
 code, an annotated plain field (``counts: Dict[int, int] = defaultdict(int)``,
 ``names: Set[str] = set()``, ``total: int = 0``); a persistent key-value field is
-``seen: Store[int, int]``.
+``seen: Store[int, int]``, and the settings of a load are ``config: Cfg`` for a
+dataclass ``Cfg``. :func:`finalize` and :func:`task` methods run after the scan, and
+:func:`sender`, :func:`receiver`, :func:`latest` and :func:`phase` connect plugins.
 
 Every :func:`map` is one named accumulator on the dataframe engine's ``AggState``,
 reached through the host's ``DFTU_SVC_AGG`` service: the key tuple names its
 grouping columns (an empty tuple makes it a whole-scan scalar) and each value
-reduction is one aggregate. Per-event contributions buffer into per-batch columns
-that are folded into that accumulator at the end of each batch; the host merges
-same-named accumulators across worker slices and finalizes each to a frame.
+reduction is one aggregate. The host merges same-named accumulators across worker
+slices and finalizes each to a frame.
 
 Example::
 
@@ -7278,7 +7279,8 @@ def plugin(cls: type[_C]) -> type[_C]: ...
 @overload
 def plugin(cls: None = None) -> Callable[[type[_C]], type[_C]]: ...
 def plugin(cls: type | None = None) -> type | Callable[[type], type]:
-    """Class decorator: AST-compile the map decls + ``each_event`` to a C plugin.
+    """Class decorator: AST-compile the state, the ``each_event`` or ``each_batch``
+    body and any ``finalize`` and ``task`` methods to a C plugin.
 
     Attaches the emitted source under ``cls._jit_plugin``; the native ``.so`` is
     built lazily on first load. The batch columns the body reads are declared

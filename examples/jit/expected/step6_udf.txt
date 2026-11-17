@@ -1,0 +1,5 @@
+     count    max
+pid              
+1       36   59.0
+2       68  118.0
+cost registered after scope: False

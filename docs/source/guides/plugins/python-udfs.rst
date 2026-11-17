@@ -8,25 +8,10 @@ registers a Python function as one, in two forms. Both give an owning
 ``Udf`` that you call on expressions, and both register the
 name for duql.
 
-.. code-block:: python
-
-   import math
-   import numpy as np
-   import numpy.typing as npt
-   import dftracer.utils as dft
-   from dftracer.utils import col
-
-   @dft.udf                                   # compiled to native code
-   def score(dur: float, size: int) -> float:
-       if size > 4096:
-           return dur * 2.0 + math.sqrt(abs(dur))
-       return min(dur, 10.0)
-
-   @dft.udf(batch=True)                       # called once per batch
-   def zscore(x: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
-       return (x - x.mean()) / x.std()
-
-   lazy.with_columns(s=score(col("dur"), col("size")), z=zscore(col("dur")))
+.. literalinclude:: ../../../../examples/jit/ref_udf.py
+   :language: python
+   :start-at: @dft.udf  # compiled
+   :end-at: out = lazy.with_columns
 
 In duql the UDF is a function, ``derive s = score(dur, size)``.
 
@@ -130,14 +115,9 @@ removed because the object was garbage collected, so a decorated function keeps
 working when only its name is used. Close it with ``score.close()`` (twice is
 fine), ``with score:``, or the end of a scope:
 
-.. code-block:: python
-
-   with dft.udf.scope():
-       @dft.udf
-       def tmp(x: float) -> float:
-           return x + 1.0
-       lazy.with_columns(t=tmp(col("x"))).collect()
-   # "tmp" is not registered here
+.. literalinclude:: ../../../../examples/jit/ref_udf.py
+   :language: python
+   :start-at: with dft.udf.scope():
 
 After ``close`` the name is gone and ``score(...)`` raises ``RuntimeError``, but
 an expression or plan that was built before keeps the UDF and still runs. A scope

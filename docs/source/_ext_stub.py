@@ -625,6 +625,23 @@ def install_extension_stub() -> None:
         """The names of the registered scalar UDFs."""
         return []
 
+    def udf_register_library(path: str) -> None:
+        """Register the jit scalar UDF in the shared library `path`."""
+
+    def udf_register_batch(name: str, fn: object, arg_count: int, returns: str, volatile: bool) -> None:
+        """Register `fn` as a per-batch Python UDF."""
+
+    def udf_unregister(name: str) -> bool:
+        """Remove `name` from the UDF registry."""
+        return False
+
+    def udf_lane_stats() -> dict:
+        """The Python lane's thread, batch and user counts."""
+        return {}
+
+    def udf_lane_shutdown() -> None:
+        """Stop the Python lane."""
+
     def udaf_lookup(name: str) -> tuple:
         """The registered UDAF `name`: (handle, min_args, max_args, flags)."""
         return (object(), 0, 0, 0)
@@ -692,6 +709,11 @@ def install_extension_stub() -> None:
         "scan_files",
         "udf_lookup",
         "udf_names",
+        "udf_register_library",
+        "udf_register_batch",
+        "udf_unregister",
+        "udf_lane_stats",
+        "udf_lane_shutdown",
         "udaf_lookup",
         "udaf_names",
         "set_log_color",

@@ -20,6 +20,7 @@
 #include <dftracer/utils/python/frame/op_runner.h>
 #include <dftracer/utils/python/frame/ops.h>
 #include <dftracer/utils/python/frame/series.h>
+#include <dftracer/utils/python/frame/udf_python.h>
 #include <dftracer/utils/python/index/batch_indexer.h>
 #include <dftracer/utils/python/index/index.h>
 #include <dftracer/utils/python/index/indexer.h>
@@ -221,5 +222,6 @@ PyMODINIT_FUNC PyInit_dftracer_utils_ext(void) {
     if (dftracer::utils::python::frame::init_dataframe(m) < 0) return NULL;
     if (dftracer::utils::python::frame::init_lazyframe(m) < 0) return NULL;
     if (dftracer::utils::python::frame::init_columnar_eval(m) < 0) return NULL;
+    if (dftracer::utils::python::frame::init_udf_python(m) < 0) return NULL;
     return m;
 }

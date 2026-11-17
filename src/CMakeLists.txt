@@ -3206,6 +3206,8 @@ if(DFTRACER_UTILS_BUILD_PYTHON)
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/frame/lazyframe.h
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/frame/columnar_eval.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/frame/columnar_eval.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/frame/udf_python.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/frame/udf_python.h
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/core/scalar_helpers.h
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/frame/agg_helpers.h
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/index/batch_indexer.cpp

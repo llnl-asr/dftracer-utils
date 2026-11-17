@@ -9,6 +9,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Added
 
+- Add `@dft.udf` to register a Python function as a scalar UDF in two forms.
+  A typed `def f(x: float, n: int) -> float` is compiled to a native UDF (per-row arithmetic, comparisons, conditions, `abs`, `min`, `max` and `math` functions) that expressions and duql call by name and that never takes the GIL; a body outside the subset is a located `JitError`, never a silent fallback.
+  `@dft.udf(batch=True)` calls the function once per batch with read-only numpy views of the argument columns, on one dedicated Python lane thread that holds the GIL for the batch; workers queue a batch and wait without the GIL, and the engine releases the GIL while it waits for its workers.
+  A wrong result length or dtype and an exception in the function fail the query with the UDF name, a queued batch fails as cancelled when the lane stops, and interpreter exit with an open UDF does not hang.
+- Add `with dft.udf.scope():` and `Udf.close()`: a UDF that `@dft.udf` made stays registered until it is closed or its scope ends, never because it was garbage collected, and a name clash is an error that names both definitions.
+  `dft.udf` stays the read-only mapping of UDFs.
+- Release the GIL around `DataFrame.group_by(...).agg(...)` and `Expr.apply`, so an aggregate over a per-batch Python UDF no longer deadlocks, and keep a view that a per-batch UDF holds valid after the call.
 - Add `dftracer::utils::comm` in `libdftracer_utils_comm`: a `Communicator` that makes `Group` handles (`world`, `local`, `split` with `NO_COLOR`), and every call returns an `Op<T>` that can be tested, waited for, cancelled or awaited, and ends exactly once.
   A group has `barrier`, `monitored_barrier` (names the ranks that did not arrive), `broadcast`, `gather`, `all_gather`, `scatter`, `reduce`, `all_reduce`, `reduce_scatter`, `all_to_all`, `exchange_by`, `scan`, `exclusive_scan` and `neighbors`, and a reduction folds in rank order, so a floating point result is the same on every run, unless `CallOpts::reduce_order` says `Any`.
   A channel (`Group::channel<T>(name, ChannelOpts)`) is a named stream with a depth, `Overflow::Block`, `Fail` or `DropOldest`, `recv_from`, `recv`, `recv_in_rank_order`, `recv_into` (a short buffer gives `ChannelError::TooBig` and keeps the message) and an ordered `close`.

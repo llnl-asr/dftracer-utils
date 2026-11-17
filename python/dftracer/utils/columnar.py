@@ -27,12 +27,15 @@ comparison.
 
 from __future__ import annotations
 
+import contextlib
 import math
 from typing import (
     TYPE_CHECKING,
     Any,
     Callable,
+    ContextManager,
     Dict,
+    Generator,
     Iterator,
     List,
     Literal,
@@ -42,6 +45,7 @@ from typing import (
     Sequence,
     Tuple,
     Union,
+    overload,
 )
 
 from . import dftracer_utils_ext as _ext
@@ -2034,34 +2038,177 @@ class _Udf(Expr):
 class Udf:
     """A registered scalar UDF, called over expressions: ``udf["f"](col("x"))``
     is the expression that calls ``f``. The handle keeps the UDF, and the plugin
-    library that holds it, alive while it or an expression made from it lives."""
+    library that holds it, alive while it or an expression made from it lives.
 
-    __slots__ = ("_name", "_handle")
+    A :class:`Udf` that ``@dft.udf`` made owns its registration: the name stays
+    registered until :meth:`close` (or the end of a ``with dft.udf.scope():``
+    block), never because the object was garbage collected, so a decorated
+    function keeps working while only its name is referenced. An expression
+    that was built before :meth:`close` keeps running; a call on a closed
+    :class:`Udf` raises ``RuntimeError``."""
 
-    def __init__(self, name: str, handle: "_ext._UdfHandle") -> None:
+    __slots__ = ("_name", "_handle", "_owning", "_closed", "_func", "_origin")
+
+    def __init__(
+        self,
+        name: str,
+        handle: "_ext._UdfHandle",
+        *,
+        owning: bool = False,
+        func: "Optional[Callable[..., Any]]" = None,
+        origin: str = "",
+    ) -> None:
         self._name = name
         self._handle = handle
+        self._owning = owning
+        self._closed = False
+        self._func = func
+        self._origin = origin
 
     @property
     def name(self) -> str:
         return self._name
 
-    def __call__(self, *args: Expr) -> Expr:
+    @property
+    def is_owning(self) -> bool:
+        """Whether this object registered the UDF and :meth:`close` removes it."""
+        return self._owning
+
+    @property
+    def is_closed(self) -> bool:
+        return self._closed
+
+    @property
+    def func(self) -> "Optional[Callable[..., Any]]":
+        """The Python function behind a ``@dft.udf`` UDF, or ``None``."""
+        return self._func
+
+    def close(self) -> None:
+        """Remove the name from the registry. Expressions made before keep
+        running. A second call, and a call on a handle that does not own its
+        registration, do nothing."""
+        if not self._owning or self._closed:
+            return
+        self._closed = True
+        if _OWNED_UDFS.get(self._name) is self:
+            del _OWNED_UDFS[self._name]
+            _ext.udf_unregister(self._name)
+
+    def __enter__(self) -> "Udf":
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
+
+    def __call__(self, *args: Any) -> Expr:
+        if self._closed:
+            raise RuntimeError(f"udf {self._name!r} is closed")
         return _Udf(self._name, self._handle, tuple(_wrap(a) for a in args))
 
     def __repr__(self) -> str:
         return f"Udf({self._name!r})"
 
 
+# The UDFs that @dft.udf registered and not yet closed, by name. They are held
+# strongly: only close() or the end of a scope removes one.
+_OWNED_UDFS: "Dict[str, Udf]" = {}
+_UDF_SCOPES: "List[List[Udf]]" = []
+_UDF_EXIT_HOOK = False
+
+_BATCH_DTYPES = frozenset(
+    (
+        "bool",
+        "int8",
+        "int16",
+        "int32",
+        "int64",
+        "uint8",
+        "uint16",
+        "uint32",
+        "uint64",
+        "float32",
+        "float64",
+    )
+)
+
+
+def _close_udfs_at_exit() -> None:
+    for owned in list(_OWNED_UDFS.values()):
+        owned.close()
+    _ext.udf_lane_shutdown()
+
+
+def _udf_origin(fn: Callable[..., Any]) -> str:
+    code = getattr(fn, "__code__", None)
+    if code is None:
+        return getattr(fn, "__name__", "a callable")
+    return f"{code.co_filename}:{code.co_firstlineno}"
+
+
+def _batch_result_dtype(fn: Callable[..., Any], returns: object) -> str:
+    """The result dtype name of a batch UDF from ``returns=`` or the return
+    annotation (``np.ndarray`` needs ``returns=``; ``npt.NDArray[np.float64]`` names it)."""
+    import typing
+
+    try:
+        import numpy as np
+    except ImportError as exc:  # pragma: no cover - numpy is a hard need here
+        raise RuntimeError("@dft.udf(batch=True) needs numpy") from exc
+    if returns is None:
+        try:
+            hint = typing.get_type_hints(fn).get("return")
+        except Exception:
+            hint = getattr(fn, "__annotations__", {}).get("return")
+        args = typing.get_args(hint)
+        if len(args) == 1:
+            returns = args[0]
+        elif len(args) == 2:
+            inner = typing.get_args(args[1])
+            if inner:
+                returns = inner[0]
+    if returns is None:
+        raise TypeError(
+            f"udf {fn.__name__!r} needs a result dtype: pass returns=np.float64 (or another "
+            "dtype) or annotate the return as npt.NDArray[np.float64]"
+        )
+    try:
+        name = np.dtype(returns).name  # type: ignore[call-overload]
+    except TypeError as exc:
+        raise TypeError(f"udf {fn.__name__!r}: {returns!r} is not a numpy dtype") from exc
+    if name not in _BATCH_DTYPES:
+        raise TypeError(
+            f"udf {fn.__name__!r} returns {name}, which a udf cannot give; "
+            f"the result is one of {sorted(_BATCH_DTYPES)}"
+        )
+    return name
+
+
 class _UdfRegistry(Mapping[str, Udf]):
-    """The registered scalar UDFs by name, read only: ``udf[name]``,
-    ``udf.get(name)``, ``name in udf``, iteration and ``len``. ``udf["f"]`` is the
-    non-owning :class:`Udf` handle and raises ``KeyError`` here, not when an
-    expression runs, for an unknown name."""
+    """The registered scalar UDFs by name: ``udf[name]``, ``udf.get(name)``,
+    ``name in udf``, iteration and ``len``. ``udf["f"]`` raises ``KeyError`` here,
+    not when an expression runs, for an unknown name.
+
+    The object is also the decorator that registers a Python function as a scalar
+    UDF, in one of two forms:
+
+    - ``@dft.udf`` on a typed scalar function compiles it to native code (the
+      per-row subset of ``dftracer.utils.jit``); no GIL is taken when it runs.
+      A body outside the subset is a located :class:`~dftracer.utils.jit.JitError`.
+    - ``@dft.udf(batch=True)`` keeps it as Python: it is called once per batch with
+      read-only numpy views of the argument columns (a bool column is a new
+      array) and returns an array of the batch length. The GIL is held while it
+      runs; every such call runs on one dedicated lane thread, so the engine's
+      workers never wait on the GIL themselves.
+
+    Either way the result is an owning :class:`Udf`. ``with dft.udf.scope():``
+    closes the UDFs registered inside it when the block ends."""
 
     def __getitem__(self, name: str) -> Udf:
         if not isinstance(name, str):
             raise KeyError(name)
+        owned = _OWNED_UDFS.get(name)
+        if owned is not None:
+            return owned
         try:
             return Udf(name, _ext.udf_lookup(name))
         except LookupError:
@@ -2076,8 +2223,114 @@ class _UdfRegistry(Mapping[str, Udf]):
     def __repr__(self) -> str:
         return f"udf({list(self)!r})"
 
+    @overload
+    def __call__(self, fn: Callable[..., Any], /) -> Udf: ...
+    @overload
+    def __call__(
+        self,
+        *,
+        batch: bool = False,
+        name: "Optional[str]" = None,
+        returns: object = None,
+        volatile: bool = False,
+    ) -> Callable[[Callable[..., Any]], Udf]: ...
+    def __call__(
+        self,
+        fn: "Optional[Callable[..., Any]]" = None,
+        *,
+        batch: bool = False,
+        name: "Optional[str]" = None,
+        returns: object = None,
+        volatile: bool = False,
+    ) -> "Union[Udf, Callable[[Callable[..., Any]], Udf]]":
+        """Register ``fn`` as a scalar UDF; see the class doc. ``name`` defaults
+        to the function name, ``returns`` is the result dtype of a batch UDF
+        when its annotation does not name it, ``volatile=True`` says the result
+        can differ for the same arguments."""
+        if fn is None:
+            return lambda f: self._register(f, batch, name, returns, volatile)
+        return self._register(fn, batch, name, returns, volatile)
 
-udf: Mapping[str, Udf] = _UdfRegistry()
+    def _register(
+        self,
+        fn: Callable[..., Any],
+        batch: bool,
+        name: "Optional[str]",
+        returns: object,
+        volatile: bool,
+    ) -> Udf:
+        global _UDF_EXIT_HOOK
+        if not callable(fn):
+            raise TypeError("@dft.udf decorates a function")
+        udf_name = name if name is not None else getattr(fn, "__name__", "")
+        if not isinstance(udf_name, str) or not udf_name:
+            raise ValueError("a udf needs a name: pass name=")
+        origin = _udf_origin(fn)
+        if udf_name in self:
+            held = _OWNED_UDFS.get(udf_name)
+            where = (
+                f"defined at {held._origin}" if held is not None else "from a plugin or native code"
+            )
+            raise ValueError(
+                f"udf {udf_name!r} defined at {origin} clashes with the udf {udf_name!r} that is "
+                f"already registered ({where}); close it first or choose another name"
+            )
+        if batch:
+            import inspect
+
+            params = list(inspect.signature(fn).parameters.values())
+            if not params or any(
+                p.kind not in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)
+                or p.default is not p.empty
+                for p in params
+            ):
+                raise TypeError(
+                    f"udf {udf_name!r}: a batch udf takes one or more positional column arguments"
+                )
+            dtype = _batch_result_dtype(fn, returns)
+            if not _UDF_EXIT_HOOK:
+                import atexit
+
+                atexit.register(_close_udfs_at_exit)
+                _UDF_EXIT_HOOK = True
+            _ext.udf_register_batch(udf_name, fn, len(params), dtype, volatile)
+        else:
+            if returns is not None:
+                raise TypeError("returns= is only for @dft.udf(batch=True)")
+            from .jit._udf import compile_udf
+
+            _ext.udf_register_library(compile_udf(fn, udf_name, volatile))
+        owned = Udf(udf_name, _ext.udf_lookup(udf_name), owning=True, func=fn, origin=origin)
+        _OWNED_UDFS[udf_name] = owned
+        if _UDF_SCOPES:
+            _UDF_SCOPES[-1].append(owned)
+        return owned
+
+    def scope(self) -> "ContextManager[None]":
+        """``with dft.udf.scope():`` closes the UDFs that ``@dft.udf`` registered
+        inside the block when it ends, in reverse order. Scopes nest. The scope is
+        process wide, not per thread."""
+        return _udf_scope()
+
+
+@contextlib.contextmanager
+def _udf_scope() -> Generator[None, None, None]:
+    mine: "List[Udf]" = []
+    _UDF_SCOPES.append(mine)
+    try:
+        yield
+    finally:
+        # By identity: two empty scopes compare equal, and remove() would take
+        # the outer one.
+        for i in range(len(_UDF_SCOPES) - 1, -1, -1):
+            if _UDF_SCOPES[i] is mine:
+                del _UDF_SCOPES[i]
+                break
+        for owned in reversed(mine):
+            owned.close()
+
+
+udf: _UdfRegistry = _UdfRegistry()
 
 
 def call(name: str, *args: Expr) -> Expr:

@@ -546,7 +546,10 @@ static PyObject* vec_eval(PyObject* /*self*/, PyObject* args) {
     }
     Py_DECREF(seq);
 
+    // A per-batch Python udf runs on the Python lane, which needs the GIL.
+    PyThreadState* saved = PyEval_SaveThread();
     auto out = dataframe::eval(expr, inputs);
+    PyEval_RestoreThread(saved);
     if (!out) {
         const dftracer::utils::dstd::String message(out.error().message());
         PyErr_SetString(PyExc_RuntimeError, message.c_str());
@@ -594,7 +597,9 @@ static PyObject* vec_eval_many(PyObject* /*self*/, PyObject* args) {
     }
     Py_DECREF(seq);
 
+    PyThreadState* saved = PyEval_SaveThread();
     auto res = dataframe::eval_many(roots, inputs);
+    PyEval_RestoreThread(saved);
     if (!res) {
         const dftracer::utils::dstd::String message(res.error().message());
         PyErr_SetString(PyExc_RuntimeError, message.c_str());

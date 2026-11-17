@@ -540,6 +540,21 @@ says which:
 The result is the same either way; the mask lowering keeps the condition out of
 the update loop, so the updates run only on the matching events.
 
+.. _jit-scalar-udfs:
+
+Scalar UDFs
+-----------
+
+``@dft.udf`` applies the same idea to one function: a typed scalar
+``def f(x: float, n: int) -> float`` is compiled to a native scalar UDF that
+expressions and duql call by name, with no GIL at run time. Its body is a
+per-row subset (arithmetic, comparisons, ``and`` / ``or`` / ``not``,
+``a if c else b``, ``abs``, ``min``, ``max``, ``math`` functions, ``if`` /
+``elif`` / ``else``), and a body outside it is a located
+``JitError``. ``@dft.udf(batch=True)`` keeps a function
+as Python, called once per batch on numpy arrays. See
+:doc:`guides/plugins/python-udfs`.
+
 .. _jit-batch-hooks:
 
 Batch hooks

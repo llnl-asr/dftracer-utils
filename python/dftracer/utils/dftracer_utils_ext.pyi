@@ -1427,6 +1427,37 @@ def udf_names() -> List[str]:
     """The names of the registered scalar UDFs."""
     ...
 
+def udf_register_library(path: str, /) -> None:
+    """Load the shared library `path` that a jit scalar UDF compiled to and
+    register the UDF it exports. The library stays loaded while the UDF or a plan
+    that holds it lives. Raises `OSError` for a library that cannot load and
+    `ValueError` for a name that is taken."""
+    ...
+
+def udf_register_batch(
+    name: str, fn: Callable[..., object], arg_count: int, returns: str, volatile: bool, /
+) -> None:
+    """Register `fn` as the per-batch Python UDF `name`: one call per batch on
+    the Python lane thread, with read-only numpy views of the argument columns,
+    giving the dtype named by `returns`. Raises `ValueError` for a name that is
+    taken."""
+    ...
+
+def udf_unregister(name: str, /) -> bool:
+    """Remove `name` from the UDF registry; a plan that holds the UDF keeps it.
+    False when `name` is not registered."""
+    ...
+
+def udf_lane_stats() -> Dict[str, int]:
+    """The Python lane's `threads_started`, `threads_alive`, `batches` run and
+    `users` (registered batch UDFs)."""
+    ...
+
+def udf_lane_shutdown() -> None:
+    """Stop the Python lane for the rest of the process; queued and later
+    batches fail as cancelled."""
+    ...
+
 class _UdafHandle:
     """A registered user-defined aggregate held for aggregates that call it.
     Opaque."""

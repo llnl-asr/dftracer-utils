@@ -466,17 +466,11 @@ class Expr:
         plan a breaker step. ``.over(keys)`` makes it group-wise."""
         return self._op("dftu.series.cumsum")
 
-    def cum_prod(self) -> "Expr":
-        return self._op("dftu.series.cum_prod")
-
     def cum_max(self) -> "Expr":
         return self._op("dftu.series.cummax")
 
     def cum_min(self) -> "Expr":
         return self._op("dftu.series.cummin")
-
-    def cum_count(self) -> "Expr":
-        return self._op("dftu.series.cum_count")
 
     # pandas names of the methods above.
     def cumsum(self) -> "Expr":
@@ -525,12 +519,6 @@ class Expr:
     def shift(self, n: int = 1) -> "Expr":
         return self._op("dftu.series.shift", a=int(n), n=int(n))
 
-    def diff(self) -> "Expr":
-        return self._op("dftu.series.diff")
-
-    def pct_change(self) -> "Expr":
-        return self._op("dftu.series.pct_change")
-
     def rank(self, method: str = "average", descending: bool = False) -> "Expr":
         from ._expr_ops import _RANK_METHODS
 
@@ -546,9 +534,6 @@ class Expr:
 
     def fill_null(self, value: Union[int, float]) -> "Expr":
         return self.fillna(value)
-
-    def interpolate(self) -> "Expr":
-        return self._op("dftu.series.interpolate")
 
     def rolling_sum(self, window_size: int) -> "Expr":
         """The trailing window of ``window_size`` rows (``rolling_mean`` /
@@ -604,12 +589,6 @@ class Expr:
     def arg_sort(self, descending: bool = False) -> "Expr":
         return self._op("dftu.series.argsort", a=1 if descending else 0)
 
-    def reverse(self) -> "Expr":
-        return self._op("dftu.series.reverse")
-
-    def is_duplicated(self) -> "Expr":
-        return self._op("dftu.series.is_duplicated")
-
     def duplicated(self, keep: "Union[Literal['first', 'last'], bool]" = "first") -> "Expr":
         """Bool mask of the values that repeat an earlier one (pandas
         ``Series.duplicated``): ``keep="first"`` leaves the first of equal
@@ -627,18 +606,6 @@ class Expr:
         if keep == "first":
             return nth > 1
         return nth < one.sum().over(self.name)
-
-    def is_unique(self) -> "Expr":
-        return self._op("dftu.series.is_unique")
-
-    def is_nan(self) -> "Expr":
-        return self._op("dftu.series.is_nan")
-
-    def is_finite(self) -> "Expr":
-        return self._op("dftu.series.is_finite")
-
-    def is_infinite(self) -> "Expr":
-        return self._op("dftu.series.is_infinite")
 
     def hash(self) -> "Expr":
         """A 64-bit hash of each value (``fnv1a`` over its repr)."""
@@ -1164,6 +1131,19 @@ class Expr:
     if TYPE_CHECKING:
         # Prims/unary math (dispatched via __getattr__) and aggs (installed by
         # setattr below), declared so consumers get precise types not Any.
+        # BEGIN GENERATED from api.def by scripts/gen_pyi.py
+        def cum_prod(self) -> "Expr": ...
+        def cum_count(self) -> "Expr": ...
+        def diff(self) -> "Expr": ...
+        def pct_change(self) -> "Expr": ...
+        def is_nan(self) -> "Expr": ...
+        def is_finite(self) -> "Expr": ...
+        def is_infinite(self) -> "Expr": ...
+        def is_unique(self) -> "Expr": ...
+        def is_duplicated(self) -> "Expr": ...
+        def reverse(self) -> "Expr": ...
+        def interpolate(self) -> "Expr": ...
+        # END GENERATED
         def ilog2(self) -> "Expr": ...
         def bit_width(self) -> "Expr": ...
         def popcount(self) -> "Expr": ...
@@ -1180,9 +1160,6 @@ class Expr:
         def sign(self) -> "Expr": ...
         def negate(self) -> "Expr": ...
         def trunc(self) -> "Expr": ...
-        def is_nan(self) -> "Expr": ...
-        def is_finite(self) -> "Expr": ...
-        def is_infinite(self) -> "Expr": ...
         def sum(self) -> "Agg": ...
         def min(self) -> "Agg": ...
         def max(self) -> "Agg": ...
@@ -1212,6 +1189,28 @@ class Expr:
 
 
 ColumnExpr = Expr
+
+
+def _expr_method(name: str, op: str, doc: str) -> "Callable[[Expr], Expr]":
+    def method(self: Expr) -> Expr:
+        return self._op(op)
+
+    method.__name__ = method.__qualname__ = name
+    method.__doc__ = doc
+    return method
+
+
+def _install_api_methods() -> None:
+    """The Expr methods that are one registry op each: the rows of the native
+    API table (api.def) with ``on_expr``, so the table is their only source."""
+    for cls, name, op, args, _result, _rule, on_expr, _keywords, doc in _ext._api_rows():
+        if on_expr:
+            if cls != "Series" or args != "NONE":
+                raise RuntimeError(f"api.def row {cls}.{name}: Expr takes only no-argument rows")
+            setattr(Expr, name, _expr_method(name, op, doc))
+
+
+_install_api_methods()
 
 
 def _wrap(x: object) -> Expr:

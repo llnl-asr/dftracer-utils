@@ -97,18 +97,6 @@ Series named_like(Series out, const Series& a, const Series& b);
 // Defined in series/reduce.cpp.
 PyObject* scalar_to_py(dftu_scalar v);
 
-// A no-argument column op that forwards to a dftu_series_* C ABI function and
-// wraps the resulting column. Fn is the native op, bound as a template argument
-// so each method is one PyMethodDef line.
-template <dftu_series* (*Fn)(const dftu_series*)>
-PyObject* series_unary(PyObject* self, PyObject*) {
-    Held held_a(self);
-    Series* a = held_a.get();
-    if (!a) return nullptr;
-    return make_series(named_like(
-        without_gil(a->length(), [&] { return Series{Fn(a->handle())}; }), *a));
-}
-
 // No-argument reducers that call a Series member and wrap the result. Method is
 // the member (returning dftu_scalar / double / int64), bound as a template
 // argument so each stays one PyMethodDef line.
@@ -174,9 +162,6 @@ PyObject* Series_logical(PyObject* self, PyObject* args);
 PyObject* Series_logical_not(PyObject* self, PyObject*);
 
 // series/math.cpp
-PyObject* Series_clip(PyObject* self, PyObject* args);
-PyObject* Series_fillna(PyObject* self, PyObject* value);
-PyObject* Series_is_between(PyObject* self, PyObject* args);
 
 // series/window.cpp
 PyObject* Series_rolling(PyObject* self, PyObject* args, PyObject* kwds);

@@ -3182,6 +3182,8 @@ if(DFTRACER_UTILS_BUILD_PYTHON)
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/core/errors.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/core/errors.h
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/core/call.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/core/api.def
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/core/api_methods.h
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/index/indexer.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/index/indexer.h
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/index/index.cpp
@@ -3192,7 +3194,7 @@ if(DFTRACER_UTILS_BUILD_PYTHON)
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/frame/series.h
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/frame/series_detail.h
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/frame/series/arith.cpp
-      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/frame/series/math.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/frame/series/api.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/frame/series/window.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/frame/series/stats.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/frame/series/reduce.cpp

@@ -1,0 +1,426 @@
+# Public methods of Series and Expr that api.def does not generate, one reason each.
+# tests/python/test_api_table.py fails on a public name that is in neither api.def nor here,
+# and on a name here that no longer exists or that api.def now generates.
+# Format: Class.name | reason
+Series.add | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.add_scalar | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.agg | pandas spelling and semantics written in Python; becomes a PY_ALIAS row in Phase 2
+Series.aggregate | pandas spelling and semantics written in Python; becomes a PY_ALIAS row in Phase 2
+Series.all | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.any | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.apply | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.arg_max | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.arg_min | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.arg_sort | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.argmax | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.argmin | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.argsort | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.array | pandas spelling and semantics written in Python; becomes a PY_ALIAS row in Phase 2
+Series.asof | pandas spelling and semantics written in Python; becomes a PY_ALIAS row in Phase 2
+Series.astype | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.at | pandas spelling and semantics written in Python; becomes a PY_ALIAS row in Phase 2
+Series.autocorr | pandas spelling and semantics written in Python; becomes a PY_ALIAS row in Phase 2
+Series.backfill | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.between | pandas spelling and semantics written in Python; becomes a PY_ALIAS row in Phase 2
+Series.bottom_k | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.case_when | pandas spelling and semantics written in Python; becomes a PY_ALIAS row in Phase 2
+Series.cast | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.child | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.combine_first | pandas spelling and semantics written in Python; becomes a PY_ALIAS row in Phase 2
+Series.compare | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.compare_series | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.copy | pandas spelling and semantics written in Python; becomes a PY_ALIAS row in Phase 2
+Series.corr | pandas spelling and semantics written in Python; becomes a PY_ALIAS row in Phase 2
+Series.count | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.cov | pandas spelling and semantics written in Python; becomes a PY_ALIAS row in Phase 2
+Series.cum_max | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.cum_min | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.cum_sum | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.cumprod | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.cut | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.describe | pandas spelling and semantics written in Python; becomes a PY_ALIAS row in Phase 2
+Series.dictionary_encode | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.div | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.div_scalar | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.divide | pandas spelling and semantics written in Python; becomes a PY_ALIAS row in Phase 2
+Series.divmod | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.dot | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.drop | pandas spelling and semantics written in Python; becomes a PY_ALIAS row in Phase 2
+Series.drop_duplicates | pandas spelling and semantics written in Python; becomes a PY_ALIAS row in Phase 2
+Series.dropna | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.dt | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.dt_format | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.dt_part | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.dt_round | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.dtype | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.duplicated | pandas spelling and semantics written in Python; becomes a PY_ALIAS row in Phase 2
+Series.empty | pandas spelling and semantics written in Python; becomes a PY_ALIAS row in Phase 2
+Series.encoding | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.eq | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.equals | pandas spelling and semantics written in Python; becomes a PY_ALIAS row in Phase 2
+Series.ewm | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.ewm_mean | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.ewm_std | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.expanding | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.explode | pandas spelling and semantics written in Python; becomes a PY_ALIAS row in Phase 2
+Series.factorize | pandas spelling and semantics written in Python; becomes a PY_ALIAS row in Phase 2
+Series.fill_null | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.filter | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.first_valid_index | pandas spelling and semantics written in Python; becomes a PY_ALIAS row in Phase 2
+Series.floordiv | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.fnv1a | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.from_arrow | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.from_list | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.from_numpy | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.from_pandas | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.from_polars | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.full_like | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.gather | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.ge | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.get | pandas spelling and semantics written in Python; becomes a PY_ALIAS row in Phase 2
+Series.groupby | pandas spelling and semantics written in Python; becomes a PY_ALIAS row in Phase 2
+Series.gt | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.hasnans | pandas spelling and semantics written in Python; becomes a PY_ALIAS row in Phase 2
+Series.head | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.hex64_format | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.hex64_parse | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.iat | pandas spelling and semantics written in Python; becomes a PY_ALIAS row in Phase 2
+Series.idxmax | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.idxmin | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.iloc | pandas spelling and semantics written in Python; becomes a PY_ALIAS row in Phase 2
+Series.is_in | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.is_json | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.is_monotonic_decreasing | pandas spelling and semantics written in Python; becomes a PY_ALIAS row in Phase 2
+Series.is_monotonic_increasing | pandas spelling and semantics written in Python; becomes a PY_ALIAS row in Phase 2
+Series.is_not_null | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.is_null | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.is_sorted | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.isin | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.isna | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.isnull | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.item | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.items | pandas spelling and semantics written in Python; becomes a PY_ALIAS row in Phase 2
+Series.keys | pandas spelling and semantics written in Python; becomes a PY_ALIAS row in Phase 2
+Series.kurt | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.kurtosis | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.last_valid_index | pandas spelling and semantics written in Python; becomes a PY_ALIAS row in Phase 2
+Series.le | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.len | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.length | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.list | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.list_get | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.list_join | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.list_len | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.loc | pandas spelling and semantics written in Python; becomes a PY_ALIAS row in Phase 2
+Series.logical | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.logical_not | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.lt | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.map | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.mask | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.materialize | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.max | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.mean | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.median | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.memory_usage | pandas spelling and semantics written in Python; becomes a PY_ALIAS row in Phase 2
+Series.min | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.mod | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.mode | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.mul | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.mul_scalar | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.multiply | pandas spelling and semantics written in Python; becomes a PY_ALIAS row in Phase 2
+Series.n_unique | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.name | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.nbytes | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.ndim | pandas spelling and semantics written in Python; becomes a PY_ALIAS row in Phase 2
+Series.ne | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.nlargest | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.notna | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.notnull | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.np_parts | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.nsmallest | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.null_count | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.num_children | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.nunique | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.ops | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.pad | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.physical | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.pipe | pandas spelling and semantics written in Python; becomes a PY_ALIAS row in Phase 2
+Series.pop | pandas spelling and semantics written in Python; becomes a PY_ALIAS row in Phase 2
+Series.pow | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.prim | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.prod | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.product | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.qcut | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.quantile | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.radd | pandas spelling and semantics written in Python; becomes a PY_ALIAS row in Phase 2
+Series.rank | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.rdiv | pandas spelling and semantics written in Python; becomes a PY_ALIAS row in Phase 2
+Series.rdivmod | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.rename | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.repeat | pandas spelling and semantics written in Python; becomes a PY_ALIAS row in Phase 2
+Series.replace | pandas spelling and semantics written in Python; becomes a PY_ALIAS row in Phase 2
+Series.reset_index | pandas spelling and semantics written in Python; becomes a PY_ALIAS row in Phase 2
+Series.rfloordiv | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.rmod | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.rmul | pandas spelling and semantics written in Python; becomes a PY_ALIAS row in Phase 2
+Series.rolling | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.rolling_max | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.rolling_mean | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.rolling_median | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.rolling_min | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.rolling_quantile | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.rolling_std | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.rolling_sum | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.rolling_var | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.rpow | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.rsub | pandas spelling and semantics written in Python; becomes a PY_ALIAS row in Phase 2
+Series.rtruediv | pandas spelling and semantics written in Python; becomes a PY_ALIAS row in Phase 2
+Series.sample | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.search_sorted | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.searchsorted | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.sem | pandas spelling and semantics written in Python; becomes a PY_ALIAS row in Phase 2
+Series.shape | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.share | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.shift | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.size | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.skew | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.skewness | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.slice | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.sort | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.sort_index | pandas spelling and semantics written in Python; becomes a PY_ALIAS row in Phase 2
+Series.sort_values | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.std | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.stddev | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.str | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.str_case | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.str_cat | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.str_center | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.str_contains | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.str_count | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.str_ends_with | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.str_eq | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.str_extract | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.str_find | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.str_findall | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.str_into | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.str_is | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.str_len_bytes | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.str_len_chars | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.str_like | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.str_lstrip | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.str_matches | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.str_normalize | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.str_pad_end | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.str_pad_start | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.str_partition | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.str_regex_replace | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.str_remove_prefix | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.str_remove_suffix | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.str_repeat | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.str_replace | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.str_replace_all | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.str_rfind | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.str_rstrip | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.str_search | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.str_slice | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.str_split | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.str_starts_with | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.str_strip | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.str_translate | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.str_wrap | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.str_zfill | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.sub | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.sub_scalar | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.subtract | pandas spelling and semantics written in Python; becomes a PY_ALIAS row in Phase 2
+Series.sum | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.tail | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.take | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.time_unit | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.timezone | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.to_arrow | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.to_bytes | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.to_csv | pandas spelling and semantics written in Python; becomes a PY_ALIAS row in Phase 2
+Series.to_dict | pandas spelling and semantics written in Python; becomes a PY_ALIAS row in Phase 2
+Series.to_frame | pandas spelling and semantics written in Python; becomes a PY_ALIAS row in Phase 2
+Series.to_json | pandas spelling and semantics written in Python; becomes a PY_ALIAS row in Phase 2
+Series.to_list | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.to_lowercase | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.to_numpy | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.to_pandas | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.to_polars | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.to_pylist | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.to_string | pandas spelling and semantics written in Python; becomes a PY_ALIAS row in Phase 2
+Series.to_uppercase | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.tolist | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.top_k | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.transform | pandas spelling and semantics written in Python; becomes a PY_ALIAS row in Phase 2
+Series.truediv | pandas spelling and semantics written in Python; becomes a PY_ALIAS row in Phase 2
+Series.truncate | pandas spelling and semantics written in Python; becomes a PY_ALIAS row in Phase 2
+Series.type | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.unique_mask | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.update | pandas spelling and semantics written in Python; becomes a PY_ALIAS row in Phase 2
+Series.value_counts | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.values | pandas spelling and semantics written in Python; becomes a PY_ALIAS row in Phase 2
+Series.var | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.variance | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.where | Python-side method: construction, conversion, display, indexing or Python semantics around native calls
+Series.with_timezone | native method with its own argument handling or result type, not one registry op with no logic around it
+Series.xs | pandas spelling and semantics written in Python; becomes a PY_ALIAS row in Phase 2
+Expr.active | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.alias | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.apply | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.approx_topk | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.arg_sort | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.argmax | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.argmin | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.astype | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.backward_fill | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.between | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.bfill | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.bit_or | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.bottomk | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.busy | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.capitalize | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.casefold | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.cast | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.cat | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.center | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.clip | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.concurrency | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.contains | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.corr | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.count | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.covar_pop | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.covar_samp | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.cum_max | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.cum_min | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.cum_sum | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.cummax | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.cummin | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.cumprod | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.cumsum | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.decode | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.distinct | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.dt | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.duplicated | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.encode | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.ends_with | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.endswith | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.eq | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.ewm_mean | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.ewm_std | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.extract | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.ffill | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.fill_null | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.fillna | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.find | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.findall | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.first | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.forward_fill | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.fullmatch | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.get | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.get_dummies | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.hash | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.hist | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.ilike | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.index | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.iregex | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.is_between | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.is_in | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.is_not_null | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.is_null | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.isalnum | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.isalpha | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.isascii | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.isdecimal | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.isdigit | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.isin | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.islower | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.isna | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.isnull | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.isnumeric | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.isspace | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.istitle | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.isupper | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.join | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.kurt | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.last | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.len_bytes | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.len_chars | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.like | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.list_sorted | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.ljust | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.log10 | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.log1p | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.lower | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.lstrip | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.mask | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.match | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.max | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.mean | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.min | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.ne | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.normalize | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.not_in | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.notna | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.notnull | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.over | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.pad | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.pad_end | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.pad_start | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.partition | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.percentile | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.prod | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.quantile | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.rank | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.regex | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.regex_replace | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.regr_intercept | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.regr_r2 | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.regr_slope | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.removeprefix | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.removesuffix | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.repeat | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.replace | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.replace_all | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.rfind | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.rindex | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.rjust | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.rolling_max | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.rolling_mean | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.rolling_median | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.rolling_min | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.rolling_quantile | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.rolling_std | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.rolling_sum | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.rolling_var | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.rpartition | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.rsplit | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.rstrip | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.sample | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.set_union | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.shift | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.sketch_quantile | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.skew | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.slice | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.slice_replace | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.sort | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.split | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.starts_with | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.startswith | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.std | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.str | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.strip | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.sum | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.sumsq | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.swapcase | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.title | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.to_duql | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.topk | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.translate | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.upper | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.utilization | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.var | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.where | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.wrap | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op
+Expr.zfill | Expr builder written by hand; moves to an api.def row with on_expr when it is exactly one op

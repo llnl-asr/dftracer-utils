@@ -13,6 +13,7 @@
 #include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
+#include <dftracer/utils/python/core/api_methods.h>
 #include <dftracer/utils/python/core/method.h>
 #include <dftracer/utils/python/core/type_helpers.h>
 #include <dftracer/utils/python/frame/series.h>
@@ -314,12 +315,6 @@ PyMethodDef Series_methods[] = {
      METH_VARARGS | METH_KEYWORDS,
      "pow(other, reverse=False) -> a ** other; Int64 for two integers (a "
      "negative exponent is null), else Float64."},
-    {"ffill", series_unary<dftu_series_ffill>, METH_NOARGS,
-     "ffill() -> nulls filled from the nearest present value before them "
-     "(pad)."},
-    {"bfill", series_unary<dftu_series_bfill>, METH_NOARGS,
-     "bfill() -> nulls filled from the nearest present value after them "
-     "(backfill)."},
     {"cast", Series_cast, METH_O,
      "Cast to a TypeId code; TypeError names both types for a pair the engine "
      "refuses."},
@@ -349,68 +344,11 @@ PyMethodDef Series_methods[] = {
     {"skewness", Series_skewness, METH_NOARGS, "Population skewness."},
     {"kurtosis", Series_kurtosis, METH_NOARGS, "Excess kurtosis."},
     {"nunique", Series_nunique, METH_NOARGS, "Number of distinct values."},
-    {"unique", series_unary<dftu_series_unique>, METH_NOARGS,
-     "Distinct values (ascending) -> Series."},
     {"value_counts", Series_value_counts, METH_NOARGS,
      "value_counts() -> DataFrame of distinct values and counts, "
      "most-frequent first."},
-    {"abs", series_unary<dftu_series_abs>, METH_NOARGS,
-     "Elementwise absolute value (SIMD)."},
-    {"clip", Series_clip, METH_VARARGS,
-     "clip(lo, hi) -> Series clamped to [lo, hi] (SIMD)."},
-    {"round", series_unary<dftu_series_round>, METH_NOARGS,
-     "Round floats to nearest (SIMD)."},
-    {"fillna", DFTU_PYCFUNCTION((core::kw_one<"value", Series_fillna>)),
-     METH_VARARGS | METH_KEYWORDS,
-     "fillna(value) -> Series with nulls replaced."},
-    {"cumsum", series_unary<dftu_series_cumsum>, METH_NOARGS,
-     "Cumulative sum -> Series."},
-    {"cummax", series_unary<dftu_series_cummax>, METH_NOARGS,
-     "Running maximum -> Series."},
-    {"cummin", series_unary<dftu_series_cummin>, METH_NOARGS,
-     "Running minimum -> Series."},
-    {"cum_prod", series_unary<dftu_series_cum_prod>, METH_NOARGS,
-     "Running product -> Series."},
-    {"cum_count", series_unary<dftu_series_cum_count>, METH_NOARGS,
-     "Running count of non-null rows -> Int64 Series."},
-    {"ceil", series_unary<dftu_series_ceil>, METH_NOARGS,
-     "Round floats toward +inf (SIMD)."},
-    {"floor", series_unary<dftu_series_floor>, METH_NOARGS,
-     "Round floats toward -inf (SIMD)."},
-    {"trunc", series_unary<dftu_series_trunc>, METH_NOARGS,
-     "Round floats toward zero (SIMD)."},
-    {"sign", series_unary<dftu_series_sign>, METH_NOARGS,
-     "Sign as -1/0/1 (SIMD)."},
-    {"negate", series_unary<dftu_series_negate>, METH_NOARGS,
-     "Unary minus (SIMD)."},
-    {"diff", series_unary<dftu_series_diff>, METH_NOARGS,
-     "First difference x[i]-x[i-1]; row 0 null."},
-    {"pct_change", series_unary<dftu_series_pct_change>, METH_NOARGS,
-     "Percent change -> Float64 Series; row 0 null."},
-    {"sqrt", series_unary<dftu_series_sqrt>, METH_NOARGS,
-     "Square root -> Float64 Series (SIMD)."},
-    {"exp", series_unary<dftu_series_exp>, METH_NOARGS,
-     "Exponential -> Float64 Series."},
-    {"log", series_unary<dftu_series_log>, METH_NOARGS,
-     "Natural log -> Float64 Series."},
-    {"null_mask", series_unary<dftu_series_null_mask>, METH_NOARGS,
-     "Bool mask: row is null."},
-    {"valid_mask", series_unary<dftu_series_valid_mask>, METH_NOARGS,
-     "Bool mask: row is present."},
-    {"is_nan", series_unary<dftu_series_is_nan>, METH_NOARGS,
-     "Bool mask: value is NaN (SIMD)."},
-    {"is_finite", series_unary<dftu_series_is_finite>, METH_NOARGS,
-     "Bool mask: value is finite (SIMD)."},
-    {"is_infinite", series_unary<dftu_series_is_infinite>, METH_NOARGS,
-     "Bool mask: value is +/-Inf (SIMD)."},
-    {"is_unique", series_unary<dftu_series_is_unique>, METH_NOARGS,
-     "Bool mask: value occurs exactly once."},
-    {"is_duplicated", series_unary<dftu_series_is_duplicated>, METH_NOARGS,
-     "Bool mask: value is repeated."},
     {"is_sorted", DFTU_PYCFUNCTION(Series_is_sorted),
      METH_VARARGS | METH_KEYWORDS, "is_sorted(descending=False) -> bool."},
-    {"drop_nulls", series_unary<dftu_series_drop_nulls>, METH_NOARGS,
-     "Drop null rows -> Series."},
     {"is_in", Series_is_in, METH_O,
      "is_in(values) -> Bool mask where the value is in the values Series."},
     {"sort", DFTU_PYCFUNCTION(Series_sort), METH_VARARGS | METH_KEYWORDS,
@@ -419,8 +357,6 @@ PyMethodDef Series_methods[] = {
      "head(n=5) -> first n rows Series."},
     {"tail", DFTU_PYCFUNCTION(Series_tail), METH_VARARGS | METH_KEYWORDS,
      "tail(n=5) -> last n rows Series."},
-    {"reverse", series_unary<dftu_series_reverse>, METH_NOARGS,
-     "Rows in reverse order -> Series."},
     {"shift", Series_shift, METH_O,
      "shift(n) -> Series shifted by n (vacated rows null)."},
     {"top_k", DFTU_PYCFUNCTION((core::kw_one<"k", Series_top_k>)),
@@ -468,12 +404,6 @@ PyMethodDef Series_methods[] = {
      DFTU_PYCFUNCTION((core::kw_one<"values", Series_search_sorted>)),
      METH_VARARGS | METH_KEYWORDS,
      "search_sorted(values) -> Int64 Series of lower-bound insertion indices."},
-    {"interpolate", series_unary<dftu_series_interpolate>, METH_NOARGS,
-     "interpolate() -> Float64 Series with null interiors linearly filled."},
-    {"is_between",
-     DFTU_PYCFUNCTION((core::kw_pair<Series_is_between, "lo", "hi">)),
-     METH_VARARGS | METH_KEYWORDS,
-     "is_between(lo, hi) -> Bool mask where lo <= value <= hi (SIMD)."},
     {"dot", DFTU_PYCFUNCTION((core::kw_one<"other", Series_dot>)),
      METH_VARARGS | METH_KEYWORDS,
      "dot(other) -> scalar sum of x[i]*y[i] over non-null pairs (SIMD)."},
@@ -732,6 +662,11 @@ PyMethodDef Series_methods[] = {
     {"child", DFTU_PYCFUNCTION((core::kw_one<"i", Series_child>)),
      METH_VARARGS | METH_KEYWORDS,
      "child(i) -> child Series (List: 0=values; Struct: field i)."},
+#define API_PICK_Series(id, name, args, doc) API_ENTRY(id, name, args, doc)
+#define PY_METHOD(cls, name, op, args, result, name_rule, on_expr, kw0, kw1, \
+                  doc)                                                       \
+    API_PICK_##cls(core::api::row_id(#cls, #name), #name, args, doc)
+#include <dftracer/utils/python/core/api.def>
     {nullptr, nullptr, 0, nullptr}};
 
 PySequenceMethods Series_as_sequence = {};
@@ -807,6 +742,19 @@ int init_series(PyObject* m) {
     // subclass builds one from Python data in its own __new__.
     SeriesType.tp_new = nullptr;
     if (register_type(m, &SeriesType, "Series") < 0) return -1;
+
+    static PyMethodDef api_rows_def = {
+        "_api_rows",
+        [](PyObject*, PyObject*) { return core::api::rows_as_tuple(); },
+        METH_NOARGS,
+        "_api_rows() -> the rows of api.def: (class, name, op, args, result, "
+        "name_rule, on_expr, keywords, doc)."};
+    PyObject* api_rows_fn = PyCFunction_NewEx(&api_rows_def, nullptr, nullptr);
+    if (!api_rows_fn) return -1;
+    if (PyModule_AddObject(m, "_api_rows", api_rows_fn) < 0) {
+        Py_DECREF(api_rows_fn);
+        return -1;
+    }
 
     static PyMethodDef from_arrow_def = {
         "_series_from_arrow", vec_from_arrow, METH_O,

@@ -623,6 +623,18 @@ def install_extension_stub() -> None:
         def __arrow_c_stream__(self, requested_schema: object = None) -> object:
             return None
 
+    def _api_rows() -> tuple[tuple[object, ...], ...]:
+        """The rows of the native API table, read from api.def."""
+        import importlib.util
+        from pathlib import Path
+
+        path = Path(__file__).resolve().parents[2] / "scripts" / "api_def.py"
+        spec = importlib.util.spec_from_file_location("api_def", path)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return tuple(tuple(row) for row in module.rows())
+
     def _bind_types(**types_: type) -> None:
         """Make the native factories build the given Python subclasses."""
         return None
@@ -716,6 +728,7 @@ def install_extension_stub() -> None:
         "TaskHandle",
     ]
     _function_symbols = [
+        "_api_rows",
         "_bind_types",
         "_close_task_callbacks",
         "_dataframe_from_arrow",

@@ -1,0 +1,100 @@
+// SPDX-License-Identifier: MIT
+/* The Python API table: one row per method that is one registry op. X-macro,
+ * read by the C++ build (core/api_methods.h) and by scripts/gen_pyi.py.
+ *
+ *   PY_METHOD(class, name, op, args, result, name_rule, on_expr, kw0, kw1, doc)
+ *     class      Series (Expr gets the rows with on_expr YES at import time)
+ *     name       the method name
+ *     op         the registry op id, as in exported_series_ops.def
+ *     args       NONE, SCALAR (one scalar, keyword kw0) or NUMBER2 (two
+ *                numbers, keywords kw0 and kw1)
+ *     result     SAME (a Series of the same element type), BOOL, INT or FLOAT
+ *     name_rule  KEEP: the result takes the name of the Series it came from
+ *     on_expr    YES: Expr has the same method, building a column op node
+ *     kw0, kw1   keyword names of the arguments, "" when unused
+ *     doc        the method's docstring
+ *
+ *   PY_ALIAS(face, class, alias, target, adapter)
+ *     Another name for a row, with a shared adapter; none yet.
+ *
+ * Append a row only when the method is exactly the op: no extra arguments and
+ * no logic around the call. Anything else is hand-written in its class file and
+ * listed in the op-parity allowlist.
+ */
+
+#ifndef PY_METHOD
+#define PY_METHOD(cls, name, op, args, result, name_rule, on_expr, kw0, kw1, doc)
+#endif
+#ifndef PY_ALIAS
+#define PY_ALIAS(face, cls, alias, target, adapter)
+#endif
+
+PY_METHOD(Series, ffill, "dftu.series.ffill", NONE, SAME, KEEP, NO, "", "",
+          "ffill() -> nulls filled from the nearest present value before them (pad).")
+PY_METHOD(Series, bfill, "dftu.series.bfill", NONE, SAME, KEEP, NO, "", "",
+          "bfill() -> nulls filled from the nearest present value after them (backfill).")
+PY_METHOD(Series, unique, "dftu.series.unique", NONE, SAME, KEEP, NO, "", "",
+          "Distinct values (ascending) -> Series.")
+PY_METHOD(Series, abs, "dftu.series.abs", NONE, SAME, KEEP, NO, "", "",
+          "Elementwise absolute value (SIMD).")
+PY_METHOD(Series, round, "dftu.series.round", NONE, SAME, KEEP, NO, "", "",
+          "Round floats to nearest (SIMD).")
+PY_METHOD(Series, cumsum, "dftu.series.cumsum", NONE, SAME, KEEP, NO, "", "",
+          "Cumulative sum -> Series.")
+PY_METHOD(Series, cummax, "dftu.series.cummax", NONE, SAME, KEEP, NO, "", "",
+          "Running maximum -> Series.")
+PY_METHOD(Series, cummin, "dftu.series.cummin", NONE, SAME, KEEP, NO, "", "",
+          "Running minimum -> Series.")
+PY_METHOD(Series, cum_prod, "dftu.series.cum_prod", NONE, SAME, KEEP, YES, "", "",
+          "Running product -> Series.")
+PY_METHOD(Series, cum_count, "dftu.series.cum_count", NONE, INT, KEEP, YES, "", "",
+          "Running count of non-null rows -> Int64 Series.")
+PY_METHOD(Series, ceil, "dftu.series.ceil", NONE, SAME, KEEP, NO, "", "",
+          "Round floats toward +inf (SIMD).")
+PY_METHOD(Series, floor, "dftu.series.floor", NONE, SAME, KEEP, NO, "", "",
+          "Round floats toward -inf (SIMD).")
+PY_METHOD(Series, trunc, "dftu.series.trunc", NONE, SAME, KEEP, NO, "", "",
+          "Round floats toward zero (SIMD).")
+PY_METHOD(Series, sign, "dftu.series.sign", NONE, SAME, KEEP, NO, "", "",
+          "Sign as -1/0/1 (SIMD).")
+PY_METHOD(Series, negate, "dftu.series.negate", NONE, SAME, KEEP, NO, "", "",
+          "Unary minus (SIMD).")
+PY_METHOD(Series, diff, "dftu.series.diff", NONE, SAME, KEEP, YES, "", "",
+          "First difference x[i]-x[i-1]; row 0 null.")
+PY_METHOD(Series, pct_change, "dftu.series.pct_change", NONE, FLOAT, KEEP, YES, "", "",
+          "Percent change -> Float64 Series; row 0 null.")
+PY_METHOD(Series, sqrt, "dftu.series.sqrt", NONE, FLOAT, KEEP, NO, "", "",
+          "Square root -> Float64 Series (SIMD).")
+PY_METHOD(Series, exp, "dftu.series.exp", NONE, FLOAT, KEEP, NO, "", "",
+          "Exponential -> Float64 Series.")
+PY_METHOD(Series, log, "dftu.series.log", NONE, FLOAT, KEEP, NO, "", "",
+          "Natural log -> Float64 Series.")
+PY_METHOD(Series, null_mask, "dftu.series.null_mask", NONE, BOOL, KEEP, NO, "", "",
+          "Bool mask: row is null.")
+PY_METHOD(Series, valid_mask, "dftu.series.valid_mask", NONE, BOOL, KEEP, NO, "", "",
+          "Bool mask: row is present.")
+PY_METHOD(Series, is_nan, "dftu.series.is_nan", NONE, BOOL, KEEP, YES, "", "",
+          "Bool mask: value is NaN (SIMD).")
+PY_METHOD(Series, is_finite, "dftu.series.is_finite", NONE, BOOL, KEEP, YES, "", "",
+          "Bool mask: value is finite (SIMD).")
+PY_METHOD(Series, is_infinite, "dftu.series.is_infinite", NONE, BOOL, KEEP, YES, "", "",
+          "Bool mask: value is +/-Inf (SIMD).")
+PY_METHOD(Series, is_unique, "dftu.series.is_unique", NONE, BOOL, KEEP, YES, "", "",
+          "Bool mask: value occurs exactly once.")
+PY_METHOD(Series, is_duplicated, "dftu.series.is_duplicated", NONE, BOOL, KEEP, YES, "", "",
+          "Bool mask: value is repeated.")
+PY_METHOD(Series, drop_nulls, "dftu.series.drop_nulls", NONE, SAME, KEEP, NO, "", "",
+          "Drop null rows -> Series.")
+PY_METHOD(Series, reverse, "dftu.series.reverse", NONE, SAME, KEEP, YES, "", "",
+          "Rows in reverse order -> Series.")
+PY_METHOD(Series, interpolate, "dftu.series.interpolate", NONE, FLOAT, KEEP, YES, "", "",
+          "interpolate() -> Float64 Series with null interiors linearly filled.")
+PY_METHOD(Series, fillna, "dftu.series.fillna", SCALAR, SAME, KEEP, NO, "value", "",
+          "fillna(value) -> Series with nulls replaced.")
+PY_METHOD(Series, clip, "dftu.series.clip", NUMBER2, SAME, KEEP, NO, "lo", "hi",
+          "clip(lo, hi) -> Series clamped to [lo, hi] (SIMD).")
+PY_METHOD(Series, is_between, "dftu.series.is_between", NUMBER2, BOOL, KEEP, NO, "lo", "hi",
+          "is_between(lo, hi) -> Bool mask where lo <= value <= hi (SIMD).")
+
+#undef PY_METHOD
+#undef PY_ALIAS

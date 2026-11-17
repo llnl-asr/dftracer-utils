@@ -9,6 +9,7 @@
 #include <arpa/inet.h>
 #include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -119,7 +120,7 @@ bool is_environment_error(int ret) {
 
 // True, with a message, when `ret` is an unsupported error on a kernel older
 // than the one that has the feature. Any other error is the test's to report.
-bool skip_unsupported(int ret, int major, int minor, const char* what) {
+bool skip_unsupported(int ret, int major, int minor, dstd::StringView what) {
     if (ret >= 0 || !is_unsupported_error(ret) ||
         kernel_at_least(major, minor)) {
         return false;
@@ -141,7 +142,7 @@ bool skip_refused_buf_ring(int ret) {
     return true;
 }
 
-bool has_op(Ring& ring, unsigned op, const char* name) {
+bool has_op(Ring& ring, unsigned op, dstd::StringView name) {
     Probe probe;
     if (!ring.probe(probe)) {
         MESSAGE("skipped: the kernel has no probe, so " << dstd::String(name)
@@ -1137,7 +1138,7 @@ dstd::Vector<pid_t> iowq_workers() {
     return workers;
 }
 
-bool find_new_iowq_worker(const dstd::Vector<pid_t>& before, pid_t& worker) {
+bool find_new_iowq_worker(dstd::Span<const pid_t> before, pid_t& worker) {
     for (const pid_t tid : iowq_workers()) {
         if (std::find(before.begin(), before.end(), tid) == before.end()) {
             worker = tid;

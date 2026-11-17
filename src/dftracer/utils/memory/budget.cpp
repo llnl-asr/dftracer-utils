@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <string_view>
 
 #ifdef __APPLE__
 #include <mach/mach.h>
@@ -17,21 +18,6 @@ namespace dftracer::utils::memory {
 
 static constexpr std::size_t FALLBACK_AVAILABLE_BYTES =
     1ULL * 1024 * 1024 * 1024;
-
-static std::size_t read_size_from_file(const char *path) {
-    FILE *f = std::fopen(path, "r");
-    if (!f) return 0;
-    char buf[64];
-    std::size_t n = std::fread(buf, 1, sizeof(buf) - 1, f);
-    std::fclose(f);
-    if (n == 0) return 0;
-    buf[n] = '\0';
-    if (std::strncmp(buf, "max", 3) == 0) return 0;
-    char *end = nullptr;
-    unsigned long long val = std::strtoull(buf, &end, 10);
-    if (end == buf) return 0;
-    return static_cast<std::size_t>(val);
-}
 
 static constexpr std::size_t CGROUP_LIMIT_SENTINEL =
     1ULL * 1024 * 1024 * 1024 * 1024;
@@ -71,15 +57,26 @@ static void read_self_cgroup_paths(std::string &v2_path, std::string &v1_path) {
 }
 
 // The memory library links nothing of ours, so no dstd::fmt here.
-static std::size_t read_size_at(const std::string &dir, const char *leaf) {
+static std::size_t read_size_at(std::string_view dir, std::string_view leaf) {
     std::string path;
-    path.reserve(dir.size() + std::strlen(leaf));
+    path.reserve(dir.size() + leaf.size());
     path.append(dir);
     path.append(leaf);
-    return read_size_from_file(path.c_str());
+    FILE *f = std::fopen(path.c_str(), "r");
+    if (!f) return 0;
+    char buf[64];
+    std::size_t n = std::fread(buf, 1, sizeof(buf) - 1, f);
+    std::fclose(f);
+    if (n == 0) return 0;
+    buf[n] = '\0';
+    if (std::strncmp(buf, "max", 3) == 0) return 0;
+    char *end = nullptr;
+    unsigned long long val = std::strtoull(buf, &end, 10);
+    if (end == buf) return 0;
+    return static_cast<std::size_t>(val);
 }
 
-static std::size_t cgroup_v2_limit_at(const std::string &cg_path) {
+static std::size_t cgroup_v2_limit_at(std::string_view cg_path) {
     std::string dir("/sys/fs/cgroup");
     dir.append(cg_path);
     while (true) {
@@ -98,7 +95,7 @@ static std::size_t cgroup_v2_limit_at(const std::string &cg_path) {
     return 0;
 }
 
-static std::size_t cgroup_v1_limit_at(const std::string &cg_path) {
+static std::size_t cgroup_v1_limit_at(std::string_view cg_path) {
     std::string dir("/sys/fs/cgroup/memory");
     dir.append(cg_path);
     while (true) {

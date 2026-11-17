@@ -16,12 +16,13 @@
 
 namespace dftracer::utils::memory::detail {
 
-void abort_with(const char* message) noexcept {
-    std::size_t left = std::strlen(message);
+void abort_with(std::string_view message) noexcept {
+    const char* data = message.data();
+    std::size_t left = message.size();
     while (left > 0) {
-        ssize_t n = ::write(STDERR_FILENO, message, left);
+        ssize_t n = ::write(STDERR_FILENO, data, left);
         if (n <= 0) break;
-        message += n;
+        data += n;
         left -= static_cast<std::size_t>(n);
     }
     std::abort();

@@ -376,6 +376,12 @@ add_test(NAME dstd_only
 add_test(NAME dstd_only_self
          COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/dstd_only_self_work -DSELF_TEST=ON -P
                  ${CMAKE_SOURCE_DIR}/cmake/scripts/check_dstd_only.cmake)
+add_test(NAME param_ownership
+         COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/param_ownership_work -P
+                 ${CMAKE_SOURCE_DIR}/cmake/scripts/check_param_ownership.cmake)
+add_test(NAME param_ownership_self
+         COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/param_ownership_self_work -DSELF_TEST=ON -P
+                 ${CMAKE_SOURCE_DIR}/cmake/scripts/check_param_ownership.cmake)
 add_test(NAME no_raw_new
          COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR}
                  -DWORK_DIR=${CMAKE_BINARY_DIR}/no_raw_new -P

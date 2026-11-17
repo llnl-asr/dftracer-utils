@@ -3,6 +3,7 @@
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/memory_config.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/memory/detail/constants.h>
 #include <dftracer/utils/memory/detail/pool_access.h>
@@ -18,8 +19,8 @@ namespace {
 constexpr std::size_t MIB = std::size_t{1} << 20;
 
 struct EnvVar {
-    EnvVar(const char* var, const char* value) : name(var) {
-        ::setenv(var, value, 1);
+    EnvVar(dstd::CStringView var, dstd::CStringView value) : name(var.c_str()) {
+        ::setenv(var.c_str(), value.c_str(), 1);
     }
     ~EnvVar() { ::unsetenv(name); }
     const char* name;

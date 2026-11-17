@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_RUNTIME_IO_OPS_H
 
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/runtime/io/awaitable.h>
 #include <fcntl.h>
@@ -36,7 +37,8 @@ IoAwaitable pwrite(dstd::NativeHandle fd, const void* buf, std::size_t len,
                    std::uint64_t offset) noexcept;
 
 /// Asynchronous open. Returns fd (>= 0) or negative errno.
-IoAwaitable open(const char* path, int flags, mode_t mode = 0644) noexcept;
+IoAwaitable open(dstd::CStringView path, int flags,
+                 mode_t mode = 0644) noexcept;
 
 /// Asynchronous open of a file as a @ref dstd::File. The error has the shape
 /// @ref dstd::File::open reports. @p path need not end with a NUL byte and
@@ -58,31 +60,31 @@ IoAwaitable fstat(dstd::NativeHandle fd, struct stat* buf) noexcept;
 
 /// Asynchronous unlink of a file or symlink. @p path must stay valid until the
 /// await ends.
-IoAwaitable unlink(const char* path) noexcept;
+IoAwaitable unlink(dstd::CStringView path) noexcept;
 
 /// Asynchronous rmdir. Gives -ENOTEMPTY for a directory that has entries.
 /// @p path must stay valid until the await ends.
-IoAwaitable rmdir(const char* path) noexcept;
+IoAwaitable rmdir(dstd::CStringView path) noexcept;
 
 /// Asynchronous rename. @p from and @p to must stay valid until the await ends.
-IoAwaitable rename(const char* from, const char* to) noexcept;
+IoAwaitable rename(dstd::CStringView from, dstd::CStringView to) noexcept;
 
 /// Asynchronous mkdir. @p path must stay valid until the await ends.
-IoAwaitable mkdir(const char* path, mode_t mode = 0777) noexcept;
+IoAwaitable mkdir(dstd::CStringView path, mode_t mode = 0777) noexcept;
 
 /// Asynchronous posix_fadvise. Gives 0 where the platform has none.
 IoAwaitable fadvise(dstd::NativeHandle fd, std::uint64_t offset,
                     std::uint64_t length, int advice) noexcept;
 
 /// Asynchronous linkat. @p from and @p to must stay valid until the await ends.
-IoAwaitable linkat(dstd::NativeHandle from_dirfd, const char* from,
-                   dstd::NativeHandle to_dirfd, const char* to,
+IoAwaitable linkat(dstd::NativeHandle from_dirfd, dstd::CStringView from,
+                   dstd::NativeHandle to_dirfd, dstd::CStringView to,
                    int flags) noexcept;
 
 /// Asynchronous symlinkat. @p target and @p link must stay valid until the
 /// await ends.
-IoAwaitable symlinkat(const char* target, dstd::NativeHandle dirfd,
-                      const char* link) noexcept;
+IoAwaitable symlinkat(dstd::CStringView target, dstd::NativeHandle dirfd,
+                      dstd::CStringView link) noexcept;
 
 /// Asynchronous socket. Gives the descriptor.
 IoAwaitable socket(int domain, int type, int protocol) noexcept;
@@ -127,7 +129,7 @@ IoAwaitable poll_add(dstd::NativeHandle fd, unsigned events) noexcept;
 #ifdef __linux__
 /// Asynchronous statx. @p path and @p out must stay valid until the await
 /// ends. @p dirfd is AT_FDCWD for a path that is not relative to a directory.
-IoAwaitable statx(dstd::NativeHandle dirfd, const char* path, int flags,
+IoAwaitable statx(dstd::NativeHandle dirfd, dstd::CStringView path, int flags,
                   std::uint32_t mask, Statx* out) noexcept;
 
 /// Asynchronous fallocate.
@@ -147,16 +149,16 @@ IoAwaitable splice(dstd::NativeHandle in_fd, std::int64_t in_offset,
 
 /// Asynchronous openat2. Gives the descriptor. @p path and @p how must stay
 /// valid until the await ends.
-IoAwaitable openat2(dstd::NativeHandle dirfd, const char* path,
+IoAwaitable openat2(dstd::NativeHandle dirfd, dstd::CStringView path,
                     const OpenHow& how) noexcept;
 
 /// Asynchronous getxattr. Gives the size of the value. @p path and @p args,
 /// and what it names, must stay valid until the await ends.
-IoAwaitable getxattr(const char* path, const XattrArgs& args) noexcept;
+IoAwaitable getxattr(dstd::CStringView path, const XattrArgs& args) noexcept;
 
 /// Asynchronous setxattr. @p path and @p args, and what it names, must stay
 /// valid until the await ends.
-IoAwaitable setxattr(const char* path, const XattrArgs& args) noexcept;
+IoAwaitable setxattr(dstd::CStringView path, const XattrArgs& args) noexcept;
 
 /// Asynchronous fgetxattr. @p args, and what it names, must stay valid until
 /// the await ends.

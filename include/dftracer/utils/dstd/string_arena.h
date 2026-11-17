@@ -34,13 +34,14 @@ struct StringArena {
         blocks.emplace_back(first_block);
     }
 
-    StringView push(const char *data, std::size_t len) {
+    StringView push(StringView text) {
+        const std::size_t len = text.size();
         if (pos + len > blocks.back().size) {
             blocks.emplace_back(std::max(BLOCK_SIZE, len));
             pos = 0;
         }
         char *dst = blocks.back().data.get() + pos;
-        std::memcpy(dst, data, len);
+        std::memcpy(dst, text.data(), len);
         pos += len;
         return {dst, len};
     }

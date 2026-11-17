@@ -671,7 +671,10 @@ class CoroTask {
         if (common::logger::detail::enabled(common::logger::Level::Trace))
             [[unlikely]] {
             p.trace_handle = common::logger::detail::coro_trace_enter(
-                coro_handle_.address(), p.trace_file, p.trace_line);
+                coro_handle_.address(),
+                p.trace_file != nullptr ? dstd::StringView{p.trace_file}
+                                        : dstd::StringView{},
+                p.trace_line);
         }
 #endif
         p.started = true;

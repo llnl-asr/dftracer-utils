@@ -96,7 +96,7 @@ int QueryParams::get_int(dstd::StringView key, int default_value) const {
     auto sv = get(key);
     if (sv.empty()) return default_value;
     int val = default_value;
-    dstd::from_chars(sv.data(), sv.data() + sv.size(), val);
+    dstd::from_chars(sv, val);
     return val;
 }
 

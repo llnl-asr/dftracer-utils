@@ -58,10 +58,12 @@ bool number_holds(const char* p, const char* end, const Prefilter::Range& r) {
     std::int64_t iv = 0;
     double dv = 0;
     if (integer) {
-        auto [q, ec] = dstd::from_chars(tok, p, iv);
+        auto [q, ec] =
+            dstd::from_chars({tok, static_cast<std::size_t>(p - tok)}, iv);
         if (ec != std::errc() || q != p) return true;
     } else {
-        auto [q, ec] = dstd::from_chars_double(tok, p, dv);
+        auto [q, ec] = dstd::from_chars_double(
+            {tok, static_cast<std::size_t>(p - tok)}, dv);
         if (ec != std::errc() || q != p || std::fabs(dv) >= EXACT_DOUBLE)
             return true;
     }

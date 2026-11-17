@@ -586,9 +586,9 @@ dstd::Optional<V> parse_number(dstd::StringView s) {
     V out{};
     std::from_chars_result res{};
     if constexpr (std::is_same_v<V, double>)
-        res = dstd::from_chars_double(s.data(), s.data() + s.size(), out);
+        res = dstd::from_chars_double(s, out);
     else
-        res = dstd::from_chars(s.data(), s.data() + s.size(), out);
+        res = dstd::from_chars(s, out);
     if (res.ec != std::errc{} || res.ptr != s.data() + s.size())
         return dstd::nullopt;
     return out;
@@ -1765,16 +1765,15 @@ OdLeaf read_leaf(const OnDemandEvent& ev, OnDemand& v) {
     }
     std::int64_t as_i64;
     std::uint64_t as_u64;
-    const char* const first = token.data();
-    const char* const last = first + token.size();
-    const auto i = dstd::from_chars(first, last, as_i64);
+    const char* const last = token.data() + token.size();
+    const auto i = dstd::from_chars(token, as_i64);
     if (i.ec == std::errc() && i.ptr == last) {
         code = v.get_int64().get(out.i);
         if (code) ev.broken = true;
         if (!code) out.kind = OdLeaf::Kind::Int;
         return out;
     }
-    const auto u = dstd::from_chars(first, last, as_u64);
+    const auto u = dstd::from_chars(token, as_u64);
     if (u.ec == std::errc() && u.ptr == last) {
         code = v.get_uint64().get(out.u);
         if (code) ev.broken = true;

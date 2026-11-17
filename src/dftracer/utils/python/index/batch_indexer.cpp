@@ -650,8 +650,7 @@ std::uint64_t pid_of(dftracer::utils::dstd::StringView key) {
         colon == dftracer::utils::dstd::StringView::npos ? key
                                                          : key.substr(0, colon);
     std::uint64_t pid = 0;
-    dftracer::utils::dstd::from_chars(digits.data(),
-                                      digits.data() + digits.size(), pid);
+    dftracer::utils::dstd::from_chars(digits, pid);
     return pid;
 }
 

@@ -18,12 +18,6 @@ struct TransparentStringHash {
     std::size_t operator()(StringView sv) const noexcept {
         return Hash<StringView>{}(sv);
     }
-    std::size_t operator()(const String& s) const noexcept {
-        return Hash<StringView>{}(s);
-    }
-    std::size_t operator()(const char* s) const noexcept {
-        return Hash<StringView>{}(s);
-    }
 };
 
 struct TransparentStringEqual {

@@ -25,11 +25,11 @@ coro::CoroTask<void> idle() { co_return; }
 coro::CoroTask<void> (*volatile MAKE_IDLE)() = idle;
 
 // Writes `label` and `value` in hex to stderr without allocating.
-void write_hex(const char* label, std::uint64_t value) {
+void write_hex(dstd::StringView label, std::uint64_t value) {
     static const char DIGITS[] = "0123456789abcdef";
     char text[64];
     std::size_t at = 0;
-    while (*label != '\0') text[at++] = *label++;
+    for (const char c : label) text[at++] = c;
     text[at++] = '0';
     text[at++] = 'x';
     for (int shift = 60; shift >= 0; shift -= 4) {

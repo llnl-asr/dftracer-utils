@@ -148,8 +148,7 @@ dftu_status io_open(::dftu_ctx* ctx, void*, const char* path,
     // the call.
     const dstd::String copy(path);
     return io_start(ctx, out, "open", out_fd, [=] {
-        return runtime::io::open(copy.c_str(), flags,
-                                 static_cast<mode_t>(mode));
+        return runtime::io::open(copy, flags, static_cast<mode_t>(mode));
     });
 }
 
@@ -301,7 +300,7 @@ dftu_status io_unlink(::dftu_ctx* ctx, void*, const char* path,
         return host_fail(ctx, DFTU_E_INVALID, "unlink: path is NULL");
     const dstd::String copy(path);
     return io_start(ctx, out, "unlink", static_cast<std::int64_t*>(nullptr),
-                    [=] { return runtime::io::unlink(copy.c_str()); });
+                    [=] { return runtime::io::unlink(copy); });
 }
 
 dftu_status io_rmdir(::dftu_ctx* ctx, void*, const char* path,
@@ -310,7 +309,7 @@ dftu_status io_rmdir(::dftu_ctx* ctx, void*, const char* path,
         return host_fail(ctx, DFTU_E_INVALID, "rmdir: path is NULL");
     const dstd::String copy(path);
     return io_start(ctx, out, "rmdir", static_cast<std::int64_t*>(nullptr),
-                    [=] { return runtime::io::rmdir(copy.c_str()); });
+                    [=] { return runtime::io::rmdir(copy); });
 }
 
 dftu_status io_rename(::dftu_ctx* ctx, void*, const char* from, const char* to,
@@ -319,10 +318,8 @@ dftu_status io_rename(::dftu_ctx* ctx, void*, const char* from, const char* to,
         return host_fail(ctx, DFTU_E_INVALID, "rename: a path is NULL");
     const dstd::String from_copy(from);
     const dstd::String to_copy(to);
-    return io_start(
-        ctx, out, "rename", static_cast<std::int64_t*>(nullptr), [=] {
-            return runtime::io::rename(from_copy.c_str(), to_copy.c_str());
-        });
+    return io_start(ctx, out, "rename", static_cast<std::int64_t*>(nullptr),
+                    [=] { return runtime::io::rename(from_copy, to_copy); });
 }
 
 dftu_status io_mkdir(::dftu_ctx* ctx, void*, const char* path,
@@ -331,9 +328,8 @@ dftu_status io_mkdir(::dftu_ctx* ctx, void*, const char* path,
         return host_fail(ctx, DFTU_E_INVALID, "mkdir: path is NULL");
     const dstd::String copy(path);
     return io_start(
-        ctx, out, "mkdir", static_cast<std::int64_t*>(nullptr), [=] {
-            return runtime::io::mkdir(copy.c_str(), static_cast<mode_t>(mode));
-        });
+        ctx, out, "mkdir", static_cast<std::int64_t*>(nullptr),
+        [=] { return runtime::io::mkdir(copy, static_cast<mode_t>(mode)); });
 }
 
 dftu_status io_fadvise(::dftu_ctx* ctx, void*, std::int32_t fd,
@@ -350,11 +346,11 @@ dftu_status io_linkat(::dftu_ctx* ctx, void*, std::int32_t from_dirfd,
         return host_fail(ctx, DFTU_E_INVALID, "linkat: a path is NULL");
     const dstd::String from_copy(from);
     const dstd::String to_copy(to);
-    return io_start(
-        ctx, out, "linkat", static_cast<std::int64_t*>(nullptr), [=] {
-            return runtime::io::linkat(from_dirfd, from_copy.c_str(), to_dirfd,
-                                       to_copy.c_str(), flags);
-        });
+    return io_start(ctx, out, "linkat", static_cast<std::int64_t*>(nullptr),
+                    [=] {
+                        return runtime::io::linkat(from_dirfd, from_copy,
+                                                   to_dirfd, to_copy, flags);
+                    });
 }
 
 dftu_status io_symlinkat(::dftu_ctx* ctx, void*, const char* target,
@@ -364,11 +360,9 @@ dftu_status io_symlinkat(::dftu_ctx* ctx, void*, const char* target,
         return host_fail(ctx, DFTU_E_INVALID, "symlinkat: a path is NULL");
     const dstd::String target_copy(target);
     const dstd::String link_copy(link);
-    return io_start(ctx, out, "symlinkat", static_cast<std::int64_t*>(nullptr),
-                    [=] {
-                        return runtime::io::symlinkat(target_copy.c_str(),
-                                                      dirfd, link_copy.c_str());
-                    });
+    return io_start(
+        ctx, out, "symlinkat", static_cast<std::int64_t*>(nullptr),
+        [=] { return runtime::io::symlinkat(target_copy, dirfd, link_copy); });
 }
 
 dftu_status io_socket(::dftu_ctx* ctx, void*, std::int32_t domain,
@@ -466,7 +460,7 @@ coro::CoroTask<void> statx_body(plugins::AbiTask* task, std::int32_t dirfd,
                                 std::uint32_t mask, dftu_statx* out) {
     runtime::io::Statx st{};
     const ssize_t rc =
-        co_await runtime::io::statx(dirfd, path.c_str(), flags, mask, &st);
+        co_await runtime::io::statx(dirfd, path, flags, mask, &st);
     if (!io_ok(task, "statx", rc) || out == nullptr) co_return;
     out->attributes = st.attributes;
     out->ino = st.ino;
@@ -546,7 +540,7 @@ coro::CoroTask<void> openat2_body(plugins::AbiTask* task, std::int32_t dirfd,
                                   std::int32_t* out_fd) {
     const runtime::io::OpenHow open_how{how.flags, how.mode, how.resolve};
     const std::int64_t result = static_cast<std::int64_t>(
-        co_await runtime::io::openat2(dirfd, path.c_str(), open_how));
+        co_await runtime::io::openat2(dirfd, path, open_how));
     if (io_ok(task, "openat2", result) && out_fd != nullptr)
         *out_fd = static_cast<std::int32_t>(result);
 }
@@ -577,11 +571,11 @@ coro::CoroTask<void> xattr_body(plugins::AbiTask* task, XattrKind kind,
     switch (kind) {
         case XattrKind::Get:
             result = static_cast<std::int64_t>(
-                co_await runtime::io::getxattr(path.c_str(), args));
+                co_await runtime::io::getxattr(path, args));
             break;
         case XattrKind::Set:
             result = static_cast<std::int64_t>(
-                co_await runtime::io::setxattr(path.c_str(), args));
+                co_await runtime::io::setxattr(path, args));
             break;
         case XattrKind::FGet:
             result = static_cast<std::int64_t>(

@@ -65,12 +65,14 @@ class Parser {
             const char* end = v.text.data() + v.text.size();
             int major = 0;
             int minor = 0;
-            auto [p, ec] = dstd::from_chars(v.text.data(), end, major);
+            auto [p, ec] = dstd::from_chars(v.text, major);
             bool ok = ec == std::errc{};
             if (ok && p != end) {
                 ok = *p == '.';
                 if (ok) {
-                    auto [p2, ec2] = dstd::from_chars(p + 1, end, minor);
+                    auto [p2, ec2] = dstd::from_chars(
+                        {p + 1, static_cast<std::size_t>(end - (p + 1))},
+                        minor);
                     ok = ec2 == std::errc{} && p2 == end;
                 }
             }
@@ -1437,8 +1439,7 @@ class Parser {
             if (!tok) return dstd::Unexpected(tok.error());
             const Token& n = **tok;
             std::int64_t v = 0;
-            const auto r = dstd::from_chars(n.text.data(),
-                                            n.text.data() + n.text.size(), v);
+            const auto r = dstd::from_chars(n.text, v);
             if (r.ec != std::errc{}) return fail(n, "Array index out of range");
             auto close = expect(Tok::Rbracket, "']'");
             if (!close) return dstd::Unexpected(close.error());
@@ -1564,8 +1565,7 @@ class Parser {
         lit.number_text = dstd::String(t.text);
         if (t.kind == Tok::Int) {
             std::int64_t v = 0;
-            const auto r = dstd::from_chars(t.text.data(),
-                                            t.text.data() + t.text.size(), v);
+            const auto r = dstd::from_chars(t.text, v);
             if (r.ec != std::errc{})
                 return fail(t, dstd::fmt<"Invalid integer: '{}'">(t.text));
             lit.value = static_cast<std::uint64_t>(v);

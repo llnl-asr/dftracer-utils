@@ -394,24 +394,25 @@ FmtResult write_clamped_impl(const F& f, char* d, char* end,
                              std::index_sequence<I...>, const A&... a) {
     bool cut = false;
     char* const begin = d;
-    const auto put = [&](const char* s, std::size_t n) {
+    const auto put = [&](StringView s) {
+        std::size_t n = s.size();
         const std::size_t room = static_cast<std::size_t>(end - d);
         if (n > room) {
             n = room;
             cut = true;
         }
-        if (n != 0) std::memcpy(d, s, n);
+        if (n != 0) std::memcpy(d, s.data(), n);
         d += n;
     };
-    const auto piece = [&](std::size_t i) { put(f.text(i), f.size(i)); };
+    const auto piece = [&](std::size_t i) { put({f.text(i), f.size(i)}); };
     [[maybe_unused]] const auto arg = [&](Spec s, const auto& v) {
         using D = std::decay_t<decltype(v)>;
         if constexpr (StrLike<D> || std::is_same_v<D, RawText>) {
             if constexpr (std::is_same_v<D, RawText>) {
-                put(v.s.data(), v.s.size());
+                put(v.s);
             } else if constexpr (std::is_same_v<E, PlainEscape>) {
                 const StringView t = to_view(v);
-                put(t.data(), t.size());
+                put(t);
             } else {
                 // Escape in stack pieces so fmt_to never allocates. This
                 // needs a policy that escapes each byte on its own.
@@ -422,14 +423,14 @@ FmtResult write_clamped_impl(const F& f, char* d, char* end,
                     while (n > 1 && E::bound(t.substr(0, n)) > sizeof escaped)
                         n /= 2;
                     char* const last = E::write(escaped, t.substr(0, n));
-                    put(escaped, static_cast<std::size_t>(last - escaped));
+                    put({escaped, static_cast<std::size_t>(last - escaped)});
                     t.remove_prefix(n);
                 }
             }
         } else {
             char scratch[CLAMP_SCRATCH];
             char* e = put_arg<E>(scratch, s, v);
-            put(scratch, static_cast<std::size_t>(e - scratch));
+            put({scratch, static_cast<std::size_t>(e - scratch)});
         }
     };
     ((piece(I), arg(f.spec(I), a)), ...);

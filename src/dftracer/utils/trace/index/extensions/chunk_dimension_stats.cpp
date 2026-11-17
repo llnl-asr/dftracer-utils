@@ -54,18 +54,15 @@ void ChunkDimensionStats::observe(dstd::StringView value) {
 
     if (value_type == "uint") {
         std::uint64_t val = 0;
-        auto [ptr, ec] =
-            dstd::from_chars(value.data(), value.data() + value.size(), val);
+        auto [ptr, ec] = dstd::from_chars(value, val);
         if (ec == std::errc()) {
             if (min_value.empty()) {
                 min_value.assign(val_ref);
                 max_value.assign(val_ref);
             } else {
                 std::uint64_t cur_min = 0, cur_max = 0;
-                dstd::from_chars(min_value.data(),
-                                 min_value.data() + min_value.size(), cur_min);
-                dstd::from_chars(max_value.data(),
-                                 max_value.data() + max_value.size(), cur_max);
+                dstd::from_chars(min_value, cur_min);
+                dstd::from_chars(max_value, cur_max);
                 if (val < cur_min) min_value.assign(val_ref);
                 if (val > cur_max) max_value.assign(val_ref);
             }
@@ -105,10 +102,8 @@ void ChunkDimensionStats::observe_range_only(std::uint64_t value) {
         max_value = min_value;
     } else {
         std::uint64_t cur_min = 0, cur_max = 0;
-        dstd::from_chars(min_value.data(), min_value.data() + min_value.size(),
-                         cur_min);
-        dstd::from_chars(max_value.data(), max_value.data() + max_value.size(),
-                         cur_max);
+        dstd::from_chars(min_value, cur_min);
+        dstd::from_chars(max_value, cur_max);
         if (value < cur_min) min_value = text();
         if (value > cur_max) max_value = text();
     }

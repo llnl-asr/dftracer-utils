@@ -742,13 +742,12 @@ TEST_CASE("evaluate - regex_replace") {
 namespace {
 
 dstd::Optional<Number> parse_number_with_strtod_only(dstd::StringView text) {
-    const char* first = text.data();
-    const char* last = first + text.size();
+    const char* last = text.data() + text.size();
     if (std::int64_t i = 0;
-        dstd::from_chars(first, last, i).ptr == last && !text.empty())
+        dstd::from_chars(text, i).ptr == last && !text.empty())
         return Number{i};
     if (std::uint64_t u = 0;
-        dstd::from_chars(first, last, u).ptr == last && !text.empty())
+        dstd::from_chars(text, u).ptr == last && !text.empty())
         return Number{u};
     const dstd::String copy(text);
     char* end = nullptr;

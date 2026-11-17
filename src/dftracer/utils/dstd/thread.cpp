@@ -72,7 +72,7 @@ void Thread::detach() noexcept {
     (void)pthread_detach(handle_);
 }
 
-void Thread::set_current_name(const String& name) noexcept {
+void Thread::set_current_name(StringView name) noexcept {
     char cut[16];
     const std::size_t n = name.size() < 15 ? name.size() : 15;
     std::memcpy(cut, name.data(), n);

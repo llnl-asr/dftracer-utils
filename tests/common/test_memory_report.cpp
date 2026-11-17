@@ -3,6 +3,7 @@
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/memory_config.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/memory/detail/manager.h>
 #include <dftracer/utils/memory/settings.h>
 #include <doctest/doctest.h>
@@ -11,7 +12,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <string>
+#include <system_error>
 
 using namespace dftracer::utils;
 
@@ -20,12 +21,12 @@ namespace {
 constexpr std::size_t MIB = std::size_t{1} << 20;
 constexpr const char* PREFIX = "dftracer-utils memory: peak=";
 
-bool read_peak(const std::string& output, std::size_t& peak) {
+bool read_peak(dstd::StringView output, std::size_t& peak) {
     std::size_t at = output.find(PREFIX);
     if (at == output.npos) return false;
+    const dstd::StringView number = output.substr(at + std::strlen(PREFIX));
     unsigned long long value = 0;
-    if (std::sscanf(output.c_str() + at, "dftracer-utils memory: peak=%llu",
-                    &value) != 1) {
+    if (dstd::from_chars(number, value).ec != std::errc{}) {
         return false;
     }
     peak = static_cast<std::size_t>(value);

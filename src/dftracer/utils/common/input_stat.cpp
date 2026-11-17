@@ -58,9 +58,9 @@ InputStatScope::~InputStatScope() {
 
 bool stat_input(dstd::CStringView path, InputFileStat& out) {
     const dstd::SharedPtr<InputStatCache> cache = published();
-    if (!cache) return stat_path(path.c_str(), out);
+    if (!cache) return stat_path(path.view(), out);
     if (cache->find(path.view(), out)) return true;
-    if (!stat_path(path.c_str(), out)) return false;
+    if (!stat_path(path.view(), out)) return false;
     cache->insert(path.view(), out);
     return true;
 }

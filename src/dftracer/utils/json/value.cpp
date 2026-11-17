@@ -242,7 +242,7 @@ dstd::Optional<dstd::StringView> decode_string(dstd::StringView text,
                                                dstd::StringArena& arena) {
     if (!std::memchr(text.data(), '\\', text.size())) return text;
     // Reserve the whole escaped length: the decoded text is never longer.
-    const dstd::StringView room = arena.push(text.data(), text.size());
+    const dstd::StringView room = arena.push(text);
     char* dst = const_cast<char*>(room.data());
     std::size_t length;
     // The copy in the arena is the source, so decode over it in place: a
@@ -588,8 +588,7 @@ Value::Type Value::type() {
     }
     if (!integer) return Type::Double;
     std::int64_t ignored;
-    const auto r =
-        dstd::from_chars(token.data(), token.data() + token.size(), ignored);
+    const auto r = dstd::from_chars(token, ignored);
     return r.ec == std::errc() && r.ptr == token.data() + token.size()
                ? Type::Int
                : Type::Double;
@@ -654,8 +653,7 @@ dstd::Optional<std::int64_t> Value::as_int() {
     // parser would only raise an error.
     const dstd::StringView token = raw();
     std::int64_t out;
-    const auto parsed =
-        dstd::from_chars(token.data(), token.data() + token.size(), out);
+    const auto parsed = dstd::from_chars(token, out);
     if (parsed.ec != std::errc() || parsed.ptr != token.data() + token.size())
         return dstd::nullopt;
     if (Access::inner(*this).get_int64().get(out)) {

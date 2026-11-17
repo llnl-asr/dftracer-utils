@@ -21,7 +21,7 @@ namespace dftracer::utils::common {
 
 namespace {
 
-dstd::String env_str(const char* name) {
+dstd::String env_str(dstd::StringView name) {
     auto v = Env::get(name);
     return v ? dstd::String(*v) : dstd::String();
 }
@@ -233,7 +233,7 @@ ScratchSession::~ScratchSession() {
 }
 
 dstd::Optional<ScratchSession> staged_build_scratch(
-    const dstd::Vector<dstd::String>& files) {
+    dstd::Span<const dstd::String> files) {
     std::uint64_t input_bytes = 0;
     for (const auto& file : files) {
         InputFileStat st;

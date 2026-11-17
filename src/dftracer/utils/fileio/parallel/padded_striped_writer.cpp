@@ -284,7 +284,7 @@ class PaddedStripedWriter : public ParallelWriter {
         PaddedStripedImpl& s = *impl_;
         s.path = std::move(path);
         ssize_t fd = co_await ::dftracer::utils::runtime::io::open(
-            s.path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+            s.path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
         if (fd < 0) {
             DFTRACER_UTILS_LOG_ERROR("Failed to open padded output: {}",
                                      s.path);

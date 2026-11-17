@@ -95,12 +95,12 @@ void write_report(std::string_view text) noexcept {
     }
 }
 
-void report(const char* text, std::size_t size) noexcept {
+void report(std::string_view text) noexcept {
     Reporter reporter = g_reporter.load(std::memory_order_acquire);
     if (reporter == nullptr) {
-        write_report({text, size});
+        write_report(text);
     } else {
-        reporter({text, size});
+        reporter(text);
     }
 }
 
@@ -372,8 +372,8 @@ void ManagerAccess::report_sites(Manager& m, std::uint16_t pool) noexcept {
                                   static_cast<unsigned long long>(group.site),
                                   group.bytes, group.blocks);
             }
-            report(text, std::min<std::size_t>(static_cast<std::size_t>(n),
-                                               sizeof(text) - 1));
+            report({text, std::min<std::size_t>(static_cast<std::size_t>(n),
+                                                sizeof(text) - 1)});
         },
         &context);
 }
@@ -418,7 +418,7 @@ static void report_top_sites(DebugRank rank) noexcept {
         "dftracer-utils memory: top %zu sites by %s, allocations=%llu\n",
         TOP_SITES, order,
         static_cast<unsigned long long>(debug_allocation_count()));
-    report(text, static_cast<std::size_t>(n));
+    report({text, static_cast<std::size_t>(n)});
     debug_top_sites(
         TOP_SITES, rank,
         [](void*, const DebugSiteTotal& total) noexcept {
@@ -430,8 +430,8 @@ static void report_top_sites(DebugRank rank) noexcept {
                               "dftracer-utils memory: site live=%zu peak=%zu "
                               "allocations=%zu %s\n",
                               total.live, total.peak, total.allocations, where);
-            report(line, std::min<std::size_t>(static_cast<std::size_t>(len),
-                                               sizeof(line) - 1));
+            report({line, std::min<std::size_t>(static_cast<std::size_t>(len),
+                                                sizeof(line) - 1)});
         },
         nullptr);
 }
@@ -467,10 +467,10 @@ static void report_peak_sites() noexcept {
         "dftracer-utils memory: at the process peak %zu live bytes, the top "
         "%zu sites hold %zu, blocks above 1 MiB hold %zu\n",
         peak.total, count, sum.covered, peak.big);
-    report(text, std::min<std::size_t>(static_cast<std::size_t>(n),
-                                       sizeof(text) - 1));
+    report({text, std::min<std::size_t>(static_cast<std::size_t>(n),
+                                        sizeof(text) - 1)});
     for (std::size_t i = 0; i < count; ++i) {
-        report(lines[i], std::strlen(lines[i]));
+        report(lines[i]);
     }
 }
 
@@ -498,8 +498,8 @@ void ManagerAccess::exit_check() noexcept {
             st.peak, st.live, st.measured, st.limit,
             active_backend() == Backend::PageHeap ? page_reserved_peak() : 0,
             active_backend() == Backend::PageHeap ? page_used_peak() : 0);
-        report(line, std::min<std::size_t>(static_cast<std::size_t>(len),
-                                           sizeof(line) - 1));
+        report({line, std::min<std::size_t>(static_cast<std::size_t>(len),
+                                            sizeof(line) - 1)});
     }
     if (sites) {
         report_top_sites(DebugRank::Live);
@@ -525,8 +525,8 @@ void ManagerAccess::exit_check() noexcept {
                           "dftracer-utils memory: exit check failed: %lld "
                           "live bytes not exported, pool leak flag %d\n",
                           static_cast<long long>(live), leaked ? 1 : 0);
-    report(text, std::min<std::size_t>(static_cast<std::size_t>(n),
-                                       sizeof(text) - 1));
+    report({text, std::min<std::size_t>(static_cast<std::size_t>(n),
+                                        sizeof(text) - 1)});
     std::size_t slots = slot_count(m);
     for (std::size_t i = 0; i < slots; ++i) {
         std::ptrdiff_t bytes = 0;
@@ -543,8 +543,8 @@ void ManagerAccess::exit_check() noexcept {
                           "bytes in %lld blocks\n",
                           where, static_cast<long long>(bytes),
                           static_cast<long long>(blocks));
-        report(text, std::min<std::size_t>(static_cast<std::size_t>(n),
-                                           sizeof(text) - 1));
+        report({text, std::min<std::size_t>(static_cast<std::size_t>(n),
+                                            sizeof(text) - 1)});
     }
     if (debug_enabled()) report_sites(m, DEBUG_ALL_POOLS);
     ::_Exit(constants::EXIT_CHECK_STATUS);
@@ -1189,8 +1189,8 @@ void PoolInternals::close(Pool& p, std::uint32_t generation) noexcept {
             where, static_cast<long long>(bytes),
             static_cast<long long>(blocks));
         m.leaked_.store(true, std::memory_order_relaxed);
-        report(text, std::min<std::size_t>(static_cast<std::size_t>(n),
-                                           sizeof(text) - 1));
+        report({text, std::min<std::size_t>(static_cast<std::size_t>(n),
+                                            sizeof(text) - 1)});
         if (debug_enabled()) ManagerAccess::report_sites(m, p.id_);
     }
     std::uint32_t open = p.open_children_.load(std::memory_order_relaxed);
@@ -1200,8 +1200,8 @@ void PoolInternals::close(Pool& p, std::uint32_t generation) noexcept {
                               "with %u open children\n",
                               where, open);
         m.leaked_.store(true, std::memory_order_relaxed);
-        report(text, std::min<std::size_t>(static_cast<std::size_t>(n),
-                                           sizeof(text) - 1));
+        report({text, std::min<std::size_t>(static_cast<std::size_t>(n),
+                                            sizeof(text) - 1)});
     }
     if (take_closed(m, p)) retire(m, p);
 }

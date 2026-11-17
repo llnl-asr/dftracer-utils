@@ -319,7 +319,7 @@ Series set_list_column(const AggState& st, std::size_t spec, std::int64_t ng) {
             dstd::Vector<double> v;
             for (const dstd::StringView x : sorted) {
                 double d = 0.0;
-                dstd::from_chars_double(x.data(), x.data() + x.size(), d);
+                dstd::from_chars_double(x, d);
                 if (et == TypeId::Float32)
                     d = static_cast<double>(static_cast<float>(d));
                 v.push_back(d);
@@ -332,7 +332,7 @@ Series set_list_column(const AggState& st, std::size_t spec, std::int64_t ng) {
             dstd::Vector<std::uint64_t> v;
             for (const dstd::StringView x : sorted) {
                 std::uint64_t d = 0;
-                dstd::from_chars(x.data(), x.data() + x.size(), d);
+                dstd::from_chars(x, d);
                 v.push_back(d);
             }
             std::sort(v.begin(), v.end());
@@ -341,7 +341,7 @@ Series set_list_column(const AggState& st, std::size_t spec, std::int64_t ng) {
             dstd::Vector<std::int64_t> v;
             for (const dstd::StringView x : sorted) {
                 std::int64_t d = 0;
-                dstd::from_chars(x.data(), x.data() + x.size(), d);
+                dstd::from_chars(x, d);
                 v.push_back(d);
             }
             std::sort(v.begin(), v.end());

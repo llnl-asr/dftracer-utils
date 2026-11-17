@@ -19,7 +19,7 @@ namespace dftracer::utils::common {
 
 /// Human-readable byte count, e.g. "1.5 MB" or "3.0 MB/s". `per_suffix` appends
 /// a rate unit (e.g. "/s"); `precision` sets the fractional digits.
-inline dstd::String human_bytes(double value, const char* per_suffix = "",
+inline dstd::String human_bytes(double value, dstd::StringView per_suffix = "",
                                 int precision = 1) {
     static const char* const UNITS[] = {"B", "KB", "MB", "GB", "TB", "PB"};
     int i = 0;

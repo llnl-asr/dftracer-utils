@@ -1211,8 +1211,7 @@ coro::CoroTask<void> TraceIndex::write_viz_result(dstd::SharedPtr<VizStore> viz,
                 const dstd::ByteView bytes = (**found).bytes();
                 std::uint64_t stored = 0;
                 dstd::from_chars(
-                    reinterpret_cast<const char*>(bytes.data()),
-                    reinterpret_cast<const char*>(bytes.data()) + bytes.size(),
+                    {reinterpret_cast<const char*>(bytes.data()), bytes.size()},
                     stored);
                 viz->bytes = stored;
             }

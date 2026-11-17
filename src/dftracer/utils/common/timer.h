@@ -8,14 +8,19 @@
 
 #include <chrono>
 #include <cstdint>
+#include <type_traits>
 
 namespace dftracer::utils::common {
 
 class Timer {
    public:
     Timer(bool autostart = false, bool verbose = false);
-    Timer(dstd::StringView name, bool autostart = false, bool verbose = false);
-    Timer(const char* name, bool autostart = false, bool verbose = false);
+    /// A template so that a string literal picks the name, not the bool
+    /// conversion of its pointer.
+    template <class S>
+        requires std::is_convertible_v<const S&, dstd::StringView>
+    Timer(const S& name, bool autostart = false, bool verbose = false)
+        : Timer(dstd::StringView(name), autostart, verbose, NameTag{}) {}
     ~Timer();
     void start();
     void stop();
@@ -49,6 +54,9 @@ class Timer {
     }
 
    private:
+    struct NameTag {};
+    Timer(dstd::StringView name, bool autostart, bool verbose, NameTag);
+
     bool verbose_ = false;
     bool running_ = false;
     dstd::String name_;

@@ -47,8 +47,8 @@ dstd::String capture_log(dftracer::utils::common::logger::Config cfg, F&& fn) {
     return out;
 }
 
-bool contains(const dstd::String& hay, const char* needle) {
-    return hay.find(needle) != dstd::String::npos;
+bool contains(dstd::StringView hay, dstd::StringView needle) {
+    return hay.find(needle) != dstd::StringView::npos;
 }
 
 }  // namespace
@@ -130,8 +130,7 @@ namespace {
 
 // The text after "[YYYY-MM-DD HH:MM:SS.mmm] ", or an empty view when the line
 // does not start with a 23-byte timestamp.
-dstd::StringView after_stamp(const dstd::String& line) {
-    const dstd::StringView v(line);
+dstd::StringView after_stamp(dstd::StringView v) {
     if (v.size() < 26 || v[0] != '[' || v[24] != ']' || v[25] != ' ') return {};
     return v.substr(26);
 }

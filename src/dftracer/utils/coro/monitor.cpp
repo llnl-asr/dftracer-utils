@@ -13,6 +13,7 @@
 #include <dftracer/utils/dstd/scoped_fd.h>
 #include <dftracer/utils/dstd/shutdown.h>
 #include <dftracer/utils/dstd/singleton.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -129,7 +130,7 @@ dstd::String thread_str(int spawn_tid, int finish_tid) {
     return dstd::fmt<" @t{}">(finish_tid >= 0 ? finish_tid : spawn_tid);
 }
 
-void render_table(const dstd::Vector<Done>& recs) {
+void render_table(dstd::Span<const Done> recs) {
     dstd::HashMap<const void*, dstd::String, dstd::PtrHash> cache;
     struct Agg {
         long long count = 0, total = 0, min = 0, max = 0;
@@ -165,7 +166,7 @@ void render_table(const dstd::Vector<Done>& recs) {
 }
 
 void render_tree_node(
-    const dstd::Vector<Done>& recs,
+    dstd::Span<const Done> recs,
     const dstd::HashMap<long long, dstd::Vector<std::size_t>>& children,
     dstd::HashMap<const void*, dstd::String, dstd::PtrHash>& cache,
     std::size_t idx, int depth) {
@@ -182,7 +183,7 @@ void render_tree_node(
     }
 }
 
-void render_tree(const dstd::Vector<Done>& recs) {
+void render_tree(dstd::Span<const Done> recs) {
     std::fprintf(stderr, "\n=== dftracer-utils monitor coroutine tree ===\n");
     dstd::HashMap<const void*, dstd::String, dstd::PtrHash> cache;
     dstd::HashMap<long long, dstd::Vector<std::size_t>> children;

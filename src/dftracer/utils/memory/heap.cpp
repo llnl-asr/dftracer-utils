@@ -17,6 +17,7 @@
 #include <cstring>
 #include <limits>
 #include <new>
+#include <string_view>
 
 namespace dftracer::utils::memory::detail {
 
@@ -53,14 +54,20 @@ struct Resolved {
     bool exit_check = constants::DEFAULT_EXIT_CHECK;
 };
 
-bool read_flag(const char* name, bool fallback) noexcept {
-    const char* value = std::getenv(name);
+bool read_flag(std::string_view name, bool fallback) noexcept {
+    char terminated[64];
+    if (name.size() >= sizeof(terminated))
+        abort_with("dftracer-utils memory: environment name too long\n");
+    std::memcpy(terminated, name.data(), name.size());
+    terminated[name.size()] = '\0';
+    const char* value = std::getenv(terminated);
     if (value == nullptr || value[0] == '\0') return fallback;
     if (std::strcmp(value, "1") == 0) return true;
     if (std::strcmp(value, "0") == 0) return false;
     char message[160];
     std::snprintf(message, sizeof(message),
-                  "dftracer-utils memory: %s must be 0 or 1\n", name);
+                  "dftracer-utils memory: %.*s must be 0 or 1\n",
+                  static_cast<int>(name.size()), name.data());
     abort_with(message);
 }
 

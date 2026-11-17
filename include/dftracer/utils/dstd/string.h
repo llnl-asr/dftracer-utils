@@ -21,8 +21,7 @@ using StringView = std::string_view;
 /// 3705). The value matches std::hash<std::string> for the same text.
 template <>
 struct std::hash<dftracer::utils::dstd::String> {
-    std::size_t operator()(
-        const dftracer::utils::dstd::String& s) const noexcept {
+    std::size_t operator()(dftracer::utils::dstd::StringView s) const noexcept {
         return std::hash<std::string_view>{}(s);
     }
 };

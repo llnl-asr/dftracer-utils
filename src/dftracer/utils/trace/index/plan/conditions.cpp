@@ -109,7 +109,7 @@ dstd::Optional<std::uint64_t> timestamp_bound(
     const duql::detail::CompareNode& n) {
     std::uint64_t out = 0;
     const char* end = text.data() + text.size();
-    const auto parsed = dstd::from_chars(text.data(), end, out);
+    const auto parsed = dstd::from_chars(text, out);
     if (parsed.ec == std::errc{} && parsed.ptr == end) return out;
     if (std::holds_alternative<dstd::String>(n.value.value))
         data.fail(common::make_error<

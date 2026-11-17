@@ -3111,11 +3111,9 @@ dftracer::utils::dstd::Optional<V> parse_number(
     V out{};
     std::from_chars_result res{};
     if constexpr (std::is_same_v<V, double>)
-        res = dftracer::utils::dstd::from_chars_double(
-            s.data(), s.data() + s.size(), out);
+        res = dftracer::utils::dstd::from_chars_double(s, out);
     else
-        res = dftracer::utils::dstd::from_chars(s.data(), s.data() + s.size(),
-                                                out);
+        res = dftracer::utils::dstd::from_chars(s, out);
     if (res.ec != std::errc{} || res.ptr != s.data() + s.size())
         return dftracer::utils::dstd::nullopt;
     return out;

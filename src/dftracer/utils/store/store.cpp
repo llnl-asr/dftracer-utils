@@ -152,8 +152,8 @@ ByteView Batch::keep(ByteView bytes) {
     if (bytes.empty()) return {};
     if (!arena_)
         arena_ = dstd::make_unique<dstd::StringArena>(FIRST_ARENA_BLOCK);
-    const dstd::StringView kept =
-        arena_->push(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+    const dstd::StringView kept = arena_->push(
+        {reinterpret_cast<const char*>(bytes.data()), bytes.size()});
     return {reinterpret_cast<const std::byte*>(kept.data()), kept.size()};
 }
 

@@ -25,7 +25,7 @@ coro::CoroTask<void> bump(std::atomic<int>& count) {
     co_return;
 }
 
-coro::CoroTask<void> fail_with_message(const char* message) {
+coro::CoroTask<void> fail_with_message(dstd::String message) {
     dstd::Error error{dstd::Condition::Unknown, message};
     auto failure = coro::fail_with(std::move(error));
     co_await failure;

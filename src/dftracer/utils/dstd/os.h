@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_DSTD_OS_H
 #define DFTRACER_UTILS_DSTD_OS_H
 
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/string.h>
@@ -29,7 +30,7 @@ fs::FileStat make_file_stat(const struct stat& info) noexcept;
 /// into one dstd::String.
 class PathCString {
    public:
-    explicit PathCString(StringView path) noexcept {
+    explicit PathCString(StringView path) noexcept : size_(path.size()) {
         if (path.size() < PATH_MAX) {
             if (!path.empty()) std::memcpy(stack_, path.data(), path.size());
             stack_[path.size()] = '\0';
@@ -42,8 +43,13 @@ class PathCString {
         return heap_.empty() ? stack_ : heap_.c_str();
     }
 
+    CStringView view() const noexcept {
+        return CStringView::unchecked(StringView(c_str(), size_));
+    }
+
    private:
     String heap_;
+    std::size_t size_;
     char stack_[PATH_MAX];
 };
 

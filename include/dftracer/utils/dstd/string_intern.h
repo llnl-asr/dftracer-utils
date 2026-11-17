@@ -205,11 +205,11 @@ class StringIntern {
     };
 
     const char* slot_value(std::uint32_t id) const;
-    static StringView record_view(const char* rec);
-    static std::uint32_t record_chunk(const char* rec);
+    static StringView record_view(const void* rec);
+    static std::uint32_t record_chunk(const void* rec);
     const ChunkRef* chunk_ref(std::uint32_t i) const;
     static std::size_t shard_of(std::size_t h);
-    static Error collision(const char* existing, StringView sv);
+    static Error collision(const void* existing, StringView sv);
     std::uint32_t add_chunk(std::size_t bytes);
     const char* write_record(Shard& sh, StringView sv);
     Index* make_index(std::size_t slots);
@@ -219,7 +219,7 @@ class StringIntern {
     Index* grow_index(Shard& sh);
     void advance_string_count(std::uint32_t id);
     void log_entry(std::uint32_t id);
-    bool bind_slot(std::uint32_t id, const char* str, bool cas);
+    bool bind_slot(std::uint32_t id, const void* record, bool cas);
     std::size_t hash(StringView sv) const;
     template <class T>
     T* make_array(std::size_t n) const;

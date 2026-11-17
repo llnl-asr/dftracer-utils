@@ -25,7 +25,9 @@ inline double parse_double(dftracer::utils::dstd::StringView text) {
         ++first;
     if (first < last && *first == '+') ++first;
     double value = 0.0;
-    if (dftracer::utils::dstd::from_chars(first, last, value).ec != std::errc{})
+    if (dftracer::utils::dstd::from_chars(
+            {first, static_cast<std::size_t>(last - first)}, value)
+            .ec != std::errc{})
         throw std::invalid_argument("stod: no conversion");
     return value;
 }

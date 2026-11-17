@@ -1153,8 +1153,7 @@ class Lowering {
             return fail(span, "a row count must be a non-negative integer");
         }
         std::int64_t n = 0;
-        const auto r =
-            dstd::from_chars(text.data(), text.data() + text.size(), n);
+        const auto r = dstd::from_chars(text, n);
         if (r.ec != std::errc{} || n < 0)
             return fail(span, "a row count must be a non-negative integer");
         return n;
@@ -1633,8 +1632,7 @@ class Lowering {
                 return fail(span, "a sample size parameter must be a number");
             out.amount = *v;
         } else {
-            const auto r = dstd::from_chars_double(
-                n.amount.data(), n.amount.data() + n.amount.size(), out.amount);
+            const auto r = dstd::from_chars_double(n.amount, out.amount);
             if (r.ec != std::errc{}) return fail(span, "Invalid sample size");
         }
         if (n.percent) {
@@ -1648,9 +1646,7 @@ class Lowering {
             if (!seed) return dstd::Unexpected(seed.error());
             out.seed = static_cast<decltype(out.seed)>(*seed);
         } else if (!n.seed.empty() &&
-                   dstd::from_chars(n.seed.data(),
-                                    n.seed.data() + n.seed.size(), out.seed)
-                           .ec != std::errc{}) {
+                   dstd::from_chars(n.seed, out.seed).ec != std::errc{}) {
             return fail(span, "Invalid seed");
         }
         return out;
@@ -1753,10 +1749,7 @@ class Lowering {
                 return fail(e.span,
                             dstd::fmt<"Unknown duration unit '{}'">(d->unit));
             double amount = 0;
-            if (dstd::from_chars_double(d->amount.data(),
-                                        d->amount.data() + d->amount.size(),
-                                        amount)
-                    .ec != std::errc{})
+            if (dstd::from_chars_double(d->amount, amount).ec != std::errc{})
                 return fail(e.span, "Invalid duration");
             return amount * static_cast<double>(*per) /
                    static_cast<double>(roles_->time_ns_per_unit);
@@ -2681,8 +2674,7 @@ class Lowering {
             return fail(dur.span,
                         dstd::fmt<"Unknown duration unit '{}'">(d.unit));
         double amount = 0;
-        const auto r = dstd::from_chars_double(
-            d.amount.data(), d.amount.data() + d.amount.size(), amount);
+        const auto r = dstd::from_chars_double(d.amount, amount);
         if (r.ec != std::errc{}) return fail(dur.span, "Invalid duration");
         const auto unit = unit_of(other);
         if (!unit) return dstd::Unexpected(unit.error());

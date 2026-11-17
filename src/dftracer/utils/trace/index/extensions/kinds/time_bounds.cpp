@@ -18,7 +18,7 @@ namespace dftracer::utils::trace::index::extensions::kinds {
 namespace {
 bool parse(const dstd::String& text, std::uint64_t& out) {
     const auto* end = text.data() + text.size();
-    auto [ptr, ec] = dstd::from_chars(text.data(), end, out);
+    auto [ptr, ec] = dstd::from_chars(text, out);
     return ec == std::errc() && ptr == end;
 }
 

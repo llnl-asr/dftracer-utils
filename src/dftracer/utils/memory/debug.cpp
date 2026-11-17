@@ -14,6 +14,7 @@
 #include <cstring>
 #include <limits>
 #include <new>
+#include <string_view>
 
 namespace dftracer::utils::memory::detail {
 
@@ -73,13 +74,14 @@ std::size_t hash_of(std::uintptr_t key, std::uint16_t extra = 0) noexcept {
     return static_cast<std::size_t>(h >> 24);
 }
 
-[[noreturn]] void die(const char* what, const void* p, std::size_t size,
+[[noreturn]] void die(std::string_view what, const void* p, std::size_t size,
                       std::uintptr_t site) noexcept {
     char message[256];
     std::snprintf(message, sizeof(message),
-                  "dftracer-utils memory: debug: %s: block %p of %zu bytes "
+                  "dftracer-utils memory: debug: %.*s: block %p of %zu bytes "
                   "allocated at site 0x%llx\n",
-                  what, p, size, static_cast<unsigned long long>(site));
+                  static_cast<int>(what.size()), what.data(), p, size,
+                  static_cast<unsigned long long>(site));
     abort_with(message);
 }
 

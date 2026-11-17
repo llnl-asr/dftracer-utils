@@ -7,9 +7,9 @@
 
 # The memory library is below dstd, so its tests link only memory.
 tests/memory/* | thread, vector | memory tests link only memory
-tests/memory/fresh_process.h | string, to_string | memory tests link only memory
+tests/memory/fresh_process.h | string, string_view, to_string | memory tests link only memory
 tests/memory/test_allocator.cpp | list | memory tests link only memory
-tests/memory/test_debug.cpp | string | memory tests link only memory
+tests/memory/test_debug.cpp | string, string_view | memory tests link only memory
 tests/memory/test_global_new.cpp | make_unique, string | memory tests link only memory
 tests/memory/test_heap.cpp | set | memory tests link only memory
 tests/memory/test_heap_interposed.cpp | make_unique | memory tests link only memory
@@ -55,7 +55,6 @@ tests/runtime/test_task_pool.cpp | set, thread, vector | a dstd container or thr
 
 # Edges to a library that takes std types.
 include/dftracer/utils/dataframe/agg.h | unique_ptr | dstd::UniquePtr takes no custom deleter and AggState is incomplete
-tests/common/test_memory_report.cpp | string | fresh_process::Result holds a std::string
 tests/trace/index/input_syscalls_interpose.cpp | map, pair, string | the interposer library links no dstd
 
 # Registries that must outlive the memory exit check.

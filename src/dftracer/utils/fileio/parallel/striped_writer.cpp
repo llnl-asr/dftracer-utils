@@ -26,7 +26,7 @@ class StripedWriter final : public ParallelWriter {
                              coro::Scope* /*scope*/) override {
         path_ = std::move(path);
         ssize_t fd = co_await ::dftracer::utils::runtime::io::open(
-            path_.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+            path_, O_WRONLY | O_CREAT | O_TRUNC, 0644);
         if (fd < 0) {
             DFTRACER_UTILS_LOG_ERROR("Failed to open striped output: {}",
                                      path_);

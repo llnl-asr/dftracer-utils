@@ -88,7 +88,7 @@ _VIEW_OPS = [
     ("dftu.series.diff", ()),
     ("dftu.series.rank", (0, 0)),
     ("dftu.series.ffill", ()),
-    ("dftu.series.sort", (0,)),
+    ("dftu.series.sort", (0, 1)),
     ("dftu.series.rolling", (3, 1)),
     ("dftu.series.rolling_std", (3,)),
     ("dftu.series.ewm_mean", (0.3,)),

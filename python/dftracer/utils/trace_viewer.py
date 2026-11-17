@@ -281,8 +281,10 @@ class TraceViewer(_LazyOps, _ext.TraceViewer):
     def rename(self, names: Any) -> "TraceViewer":
         return self._absorbed(self._plan().rename(names))
 
-    def sort_by(self, name: str, descending: bool = False) -> "TraceViewer":
-        return self._absorbed(self._plan().sort_by(name, descending))
+    def sort_by(
+        self, name: str, descending: bool = False, nulls_last: bool = True
+    ) -> "TraceViewer":
+        return self._absorbed(self._plan().sort_by(name, descending, nulls_last))
 
     def topk(self, name: str, k: int, largest: bool = True) -> "TraceViewer":
         return self._absorbed(self._plan().topk(name, k, largest))

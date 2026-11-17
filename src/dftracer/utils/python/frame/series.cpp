@@ -357,7 +357,8 @@ PyMethodDef Series_methods[] = {
     {"is_in", Series_is_in, METH_O,
      "is_in(values) -> Bool mask where the value is in the values Series."},
     {"sort", DFTU_PYCFUNCTION(Series_sort), METH_VARARGS | METH_KEYWORDS,
-     "sort(descending=False) -> sorted Series."},
+     "sort(descending=False, nulls_last=False) -> sorted Series; nulls first "
+     "unless nulls_last."},
     {"head", DFTU_PYCFUNCTION(Series_head), METH_VARARGS | METH_KEYWORDS,
      "head(n=5) -> first n rows Series."},
     {"tail", DFTU_PYCFUNCTION(Series_tail), METH_VARARGS | METH_KEYWORDS,
@@ -421,11 +422,17 @@ PyMethodDef Series_methods[] = {
     {"qcut", DFTU_PYCFUNCTION((core::kw_one<"qcut", "q", Series_qcut>)),
      METH_VARARGS | METH_KEYWORDS,
      "qcut(q) -> Int32 Series binning by the column's q-quantile edges."},
-    {"search_sorted",
-     DFTU_PYCFUNCTION(
-         (core::kw_one<"search_sorted", "values", Series_search_sorted>)),
+    {"search_sorted", DFTU_PYCFUNCTION(Series_search_sorted),
      METH_VARARGS | METH_KEYWORDS,
-     "search_sorted(values) -> Int64 Series of lower-bound insertion indices."},
+     "search_sorted(element, side='left') -> Int64 Series of the insertion "
+     "indices; side 'right' inserts after equal values ('any' is 'left')."},
+    {"unique", DFTU_PYCFUNCTION(Series_unique), METH_VARARGS | METH_KEYWORDS,
+     "unique(maintain_order=False) -> the distinct values, a null kept once: "
+     "sorted with the null first, or in order of first occurrence."},
+    {"duplicated", DFTU_PYCFUNCTION(Series_duplicated),
+     METH_VARARGS | METH_KEYWORDS,
+     "duplicated(keep='first') -> Bool mask of the repeats; keep 'first' or "
+     "'last' leaves that row unmarked, False marks every repeated row."},
     {"dot", DFTU_PYCFUNCTION((core::kw_one<"dot", "other", Series_dot>)),
      METH_VARARGS | METH_KEYWORDS,
      "dot(other) -> scalar sum of x[i]*y[i] over non-null pairs (SIMD)."},
@@ -456,7 +463,12 @@ PyMethodDef Series_methods[] = {
      METH_VARARGS | METH_KEYWORDS,
      "filter(mask) -> Series keeping rows where the Bool mask is true."},
     {"argsort", DFTU_PYCFUNCTION(Series_argsort), METH_VARARGS | METH_KEYWORDS,
-     "argsort(descending=False) -> Int64 Series of the sorted row order."},
+     "argsort(descending=False, nulls_last=True) -> Int64 Series of the "
+     "sorted row order; nulls last unless nulls_last is False."},
+    {"arg_sort", DFTU_PYCFUNCTION(Series_arg_sort),
+     METH_VARARGS | METH_KEYWORDS,
+     "arg_sort(descending=False, nulls_last=False) -> Int64 Series of the "
+     "sorted row order; nulls first unless nulls_last."},
     {"dictionary_encode", Series_dictionary_encode, METH_NOARGS,
      "Dictionary-encode a String/Binary column -> Series."},
     {"_str_into", Series_str_into, METH_VARARGS,

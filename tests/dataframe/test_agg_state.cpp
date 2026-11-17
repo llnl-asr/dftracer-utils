@@ -1226,3 +1226,25 @@ TEST_CASE("agg_merge refuses partials of another temporal type, unit or zone") {
     dataframe::agg_merge(*into, *same);
     CHECK(dataframe::agg_check(*into));
 }
+
+TEST_CASE("every row of agg_ops.def survives a serialize and deserialize") {
+    std::int32_t rows = 0;
+#define DFTU_AGG_OP(id, code, name)                          \
+    {                                                        \
+        ++rows;                                              \
+        AggSpec sp{AggOp::id, 0, name};                      \
+        sp.param = 0.5;                                      \
+        if (agg_uses_by_col(AggOp::id)) sp.by_col = 1;       \
+        auto st = agg_new({sp});                             \
+        INFO("row " name);                                   \
+        if (AggOp::id != AggOp::Udaf) {                      \
+            auto back = agg_deserialize(agg_serialize(*st)); \
+            REQUIRE(back.has_value());                       \
+            CHECK((*back)->specs.size() == 1);               \
+            CHECK((*back)->specs[0].op == AggOp::id);        \
+        }                                                    \
+    }
+#include <dftracer/utils/dataframe/agg_ops.def>
+#undef DFTU_AGG_OP
+    CHECK(rows == static_cast<std::int32_t>(AGG_OP_LAST) + 1);
+}

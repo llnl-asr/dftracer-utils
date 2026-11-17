@@ -61,17 +61,20 @@ coro::AsyncGenerator<DataFrame> DataFrame::stream(
 }
 DataFrame DataFrame::reverse() const { return dataframe::reverse(*this); }
 dstd::Result<DataFrame> DataFrame::sort_by(const dstd::String& name,
-                                           bool descending) const {
-    return dataframe::sort_by(*this, name, descending);
+                                           bool descending,
+                                           bool nulls_last) const {
+    return dataframe::sort_by(*this, name, descending, nulls_last);
 }
 dstd::Result<DataFrame> DataFrame::sort_by_multi(
-    const dstd::Vector<dstd::String>& by, bool descending) const {
-    return dataframe::sort_by_multi(*this, by, descending);
+    const dstd::Vector<dstd::String>& by, bool descending,
+    bool nulls_last) const {
+    return dataframe::sort_by_multi(*this, by, descending, nulls_last);
 }
 dstd::Result<DataFrame> DataFrame::sort_by_multi(
     const dstd::Vector<dstd::String>& by,
-    const dstd::Vector<bool>& descending) const {
-    return dataframe::sort_by_multi(*this, by, descending);
+    dstd::Span<const std::uint8_t> descending,
+    dstd::Span<const std::uint8_t> nulls_last) const {
+    return dataframe::sort_by_multi(*this, by, descending, nulls_last);
 }
 DataFrame DataFrame::drop_nulls() const { return dataframe::drop_nulls(*this); }
 DataFrame DataFrame::fill_null(Scalar value) const {

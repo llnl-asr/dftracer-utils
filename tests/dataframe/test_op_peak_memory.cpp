@@ -409,8 +409,9 @@ const dstd::Map<dstd::String, Recipe>& recipes() {
          [](const LazyFrame& b) {
              const char* by[] = {"k", "v"};
              const std::int32_t descending[] = {1, 0};
+             const std::int32_t last[] = {1};
              OpArgs args;
-             args.strlist(1, by, 2).i32list(2, descending);
+             args.strlist(1, by, 2).i32list(2, descending).i32list(3, last);
              return b.frame_op("dftu.frame.sort_by_multi_per_col", args);
          }},
         // One partition far past the budget, with the functions that used to

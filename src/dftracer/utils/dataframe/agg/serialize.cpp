@@ -561,7 +561,7 @@ dstd::Result<AggStatePtr> agg_deserialize(const dstd::String& blob,
     st->specs.resize(ns);
     for (std::uint32_t i = 0; i < ns; ++i) {
         const std::int32_t op = r.get<std::int32_t>();
-        if (op < 0 || op > static_cast<std::int32_t>(AggOp::Udaf))
+        if (op < 0 || op > static_cast<std::int32_t>(AGG_OP_LAST))
             return corrupt_blob();
         st->specs[i].op = static_cast<AggOp>(op);
         st->specs[i].value_col = r.get<std::int32_t>();
@@ -756,7 +756,7 @@ dstd::Result<AggStatePtr> agg_deserialize(const dstd::String& blob,
         st->dyn_specs.resize(nd);
         for (std::uint32_t i = 0; i < nd; ++i) {
             const std::int32_t op = r.get<std::int32_t>();
-            if (op < 0 || op > static_cast<std::int32_t>(AggOp::SketchQuantile))
+            if (op < 0 || op > static_cast<std::int32_t>(AGG_OP_LAST))
                 return corrupt_blob();
             st->dyn_specs[i].op = static_cast<AggOp>(op);
             st->dyn_specs[i].param = r.get<double>();

@@ -15,6 +15,7 @@ from typing import (
     Dict,
     Iterator,
     List,
+    Literal,
     Mapping,
     Optional,
     Sequence,
@@ -165,32 +166,12 @@ class _SeriesPandasMixin:
             raise ValueError("between: inclusive must be both, neither, left or right")
         return lo.logical(0, hi)
 
-    def drop_duplicates(self, keep: Union[str, bool] = "first") -> "Series":
+    def drop_duplicates(self, keep: Union[Literal["first", "last"], bool] = "first") -> "Series":
         """The pandas ``drop_duplicates``: the values that are not a repeat,
         in order, one null kept. ``keep`` is ``"first"`` (default), ``"last"``
         or ``False`` (drop every value that repeats). See :meth:`unique`."""
         s = self._s()
         return s.filter(~s.duplicated(keep))
-
-    def duplicated(self, keep: Union[str, bool] = "first") -> "Series":
-        """Bool mask of the repeated occurrences: with ``keep="first"`` the
-        first occurrence is not marked, with ``"last"`` the last is not, with
-        ``False`` every occurrence is (:meth:`is_duplicated`). The kept
-        occurrence is found by a group-by of the row positions."""
-        from .columnar import GroupBy
-        from .dataframe import DataFrame
-
-        s = self._s()
-        every = s.is_duplicated()
-        if keep is False:
-            return every
-        if keep not in ("first", "last"):
-            raise ValueError("duplicated: keep must be 'first', 'last' or False")
-        rows = DataFrame({"v": s}).with_row_index("r")
-        agg = f"{'min' if keep == 'first' else 'max'}:r:r"
-        kept = GroupBy(rows, ["v"]).agg(agg)["r"]
-        first = rows["r"].is_in(kept)
-        return every.logical(0, first.logical_not()).rename(s.name)
 
     @property
     def is_monotonic_increasing(self) -> bool:

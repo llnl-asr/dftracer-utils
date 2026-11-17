@@ -2526,7 +2526,7 @@ TEST_SUITE("lazyframe") {
                     .sort_by_multi({"k", "v"}, dstd::Vector<bool>{false, true})
                     .collect(2));
         DataFrame eg2 = dftu_utils_test::ok(
-            df.sort_by_multi({"k", "v"}, dstd::Vector<bool>{false, true}));
+            df.sort_by_multi({"k", "v"}, dstd::Vector<std::uint8_t>{0, 1}));
         REQUIRE(lz2.num_rows() == eg2.num_rows());
         const std::int64_t* lk = lz2.column("k").data<std::int64_t>();
         const std::int64_t* ek = eg2.column("k").data<std::int64_t>();

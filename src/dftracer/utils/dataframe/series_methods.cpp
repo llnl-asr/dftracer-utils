@@ -155,6 +155,12 @@ double Series::stddev(bool sample) const {
 }
 double Series::skewness() const { return dftu_series_skewness(handle_); }
 double Series::kurtosis() const { return dftu_series_kurtosis(handle_); }
+double Series::skewness_unbiased() const {
+    return dftu_series_skewness_unbiased(handle_);
+}
+double Series::kurtosis_unbiased() const {
+    return dftu_series_kurtosis_unbiased(handle_);
+}
 double Series::quantile(double q) const {
     return dftu_series_quantile(handle_, q);
 }
@@ -195,8 +201,9 @@ Series Series::cut(const Series& breaks, std::int32_t flags) const {
 Series Series::qcut(std::int32_t q) const {
     return derived(dftu_series_qcut(handle_, q));
 }
-Series Series::search_sorted(const Series& values) const {
-    return Series{dftu_series_search_sorted(handle_, values.handle_)};
+Series Series::search_sorted(const Series& values, bool right) const {
+    return Series{
+        dftu_series_search_sorted_side(handle_, values.handle_, right ? 1 : 0)};
 }
 Series Series::interpolate() const {
     return derived(dftu_series_interpolate(handle_));
@@ -240,7 +247,9 @@ Series Series::pct_change() const {
 Series Series::sqrt() const { return derived(dftu_series_sqrt(handle_)); }
 Series Series::exp() const { return derived(dftu_series_exp(handle_)); }
 Series Series::log() const { return derived(dftu_series_log(handle_)); }
-Series Series::unique() const { return derived(dftu_series_unique(handle_)); }
+Series Series::unique(bool maintain_order) const {
+    return derived(dftu_series_unique_nulls(handle_, maintain_order ? 1 : 0));
+}
 Series Series::dictionary_encode() const {
     return derived(dftu_series_dictionary_encode(handle_));
 }
@@ -260,6 +269,9 @@ Series Series::is_infinite() const {
 Series Series::is_unique() const {
     return derived(dftu_series_is_unique(handle_));
 }
+Series Series::duplicated(std::int32_t keep) const {
+    return derived(dftu_series_duplicated(handle_, keep));
+}
 Series Series::is_duplicated() const {
     return derived(dftu_series_is_duplicated(handle_));
 }
@@ -272,8 +284,9 @@ Series Series::drop_nulls() const {
 Series Series::is_in(const Series& values) const {
     return derived(dftu_series_is_in(handle_, values.handle_));
 }
-Series Series::sort(bool descending) const {
-    return derived(dftu_series_sort(handle_, descending ? 1 : 0));
+Series Series::sort(bool descending, bool nulls_last) const {
+    return derived(dftu_series_sort_nulls(handle_, descending ? 1 : 0,
+                                          nulls_last ? 1 : 0));
 }
 Series Series::head(std::int64_t n) const {
     return derived(dftu_series_head(handle_, n));
@@ -294,8 +307,9 @@ Series Series::bottom_k(std::int64_t k) const {
 Series Series::sample(std::int64_t n, std::uint64_t seed) const {
     return derived(dftu_series_sample(handle_, n, seed));
 }
-Series Series::argsort(bool descending) const {
-    return derived(dftu_series_argsort(handle_, descending ? 1 : 0));
+Series Series::argsort(bool descending, bool nulls_last) const {
+    return derived(dftu_series_argsort_nulls(handle_, descending ? 1 : 0,
+                                             nulls_last ? 1 : 0));
 }
 Series Series::take(const dstd::Vector<std::int64_t>& indices) const {
     return take(dstd::Span<const std::int64_t>(indices));

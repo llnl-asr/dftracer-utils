@@ -36,6 +36,10 @@ dftu_agg_spec dftu_agg_var(const dftu_expr* value, const char* out);
 dftu_agg_spec dftu_agg_std(const dftu_expr* value, const char* out);
 dftu_agg_spec dftu_agg_skew(const dftu_expr* value, const char* out);
 dftu_agg_spec dftu_agg_kurt(const dftu_expr* value, const char* out);
+/** The pandas sample skewness / sample excess kurtosis of `value` (NaN below
+ * three / four present values and for a constant column). */
+dftu_agg_spec dftu_agg_skew_unbiased(const dftu_expr* value, const char* out);
+dftu_agg_spec dftu_agg_kurt_unbiased(const dftu_expr* value, const char* out);
 dftu_agg_spec dftu_agg_first(const dftu_expr* value, const char* out);
 dftu_agg_spec dftu_agg_last(const dftu_expr* value, const char* out);
 dftu_agg_spec dftu_agg_pct(const dftu_expr* value, double q, const char* out);

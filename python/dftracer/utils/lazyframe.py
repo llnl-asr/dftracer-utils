@@ -476,14 +476,14 @@ class LazyFrame(_ext.LazyFrame):
         return self.reduce("std")
 
     def skew(self) -> "LazyFrame":
-        return self.reduce("skew")
+        return self.reduce("skew_unbiased")
 
     def kurt(self) -> "LazyFrame":
-        return self.reduce("kurt")
+        return self.reduce("kurt_unbiased")
 
-    def sort_by(self, name: str, descending: bool = False) -> "LazyFrame":
+    def sort_by(self, name: str, descending: bool = False, nulls_last: bool = True) -> "LazyFrame":
         """Sort by one column (external merge sort, bounded memory)."""
-        return self._like(_ext.LazyFrame.sort_by(self, name, descending))
+        return self._like(_ext.LazyFrame.sort_by(self, name, descending, nulls_last))
 
     def gather(self, indices: Sequence[int]) -> "LazyFrame":
         """Keep the rows at ``indices`` (any order, repeats allowed); ``take``
@@ -501,11 +501,14 @@ class LazyFrame(_ext.LazyFrame):
         return self._like(_ext.LazyFrame.reverse(self))
 
     def sort_by_multi(
-        self, names: Sequence[str], descending: Union[bool, Sequence[bool]] = False
+        self,
+        names: Sequence[str],
+        descending: Union[bool, Sequence[bool]] = False,
+        nulls_last: Union[bool, Sequence[bool]] = True,
     ) -> "LazyFrame":
-        """Stable lexicographic sort by several key columns (nulls last). A
-        single flag broadcasts; a sequence maps one flag per name."""
-        return self._like(_ext.LazyFrame.sort_by_multi(self, list(names), descending))
+        """Stable lexicographic sort by several key columns. A single flag
+        broadcasts; a sequence maps one flag per name."""
+        return self._like(_ext.LazyFrame.sort_by_multi(self, list(names), descending, nulls_last))
 
     def sort(
         self,
@@ -519,19 +522,9 @@ class LazyFrame(_ext.LazyFrame):
         rows come first, or last with ``nulls_last=True`` (the polars keywords
         and default): a hidden 0 / 1 presence column sorts ahead of each key."""
         names = [by] if isinstance(by, str) else list(by)
-        if not nulls_last:
-            from .dataframe import _nulls_first_keys
-
-            keys, flags = _nulls_first_keys(names, descending)
-            out = self
-            for name, key in zip(keys[::2], names):
-                out = out.with_column(name, col(key).is_not_null().cast("int64"))
-            return out._new(
-                _ext.LazyFrame.select(_ext.LazyFrame.sort_by_multi(out, keys, flags), self.columns)
-            )
-        if isinstance(by, str) and isinstance(descending, bool):
-            return self._like(_ext.LazyFrame.sort_by(self, by, descending))
-        return self._like(_ext.LazyFrame.sort_by_multi(self, names, descending))
+        if isinstance(by, str) and isinstance(descending, bool) and isinstance(nulls_last, bool):
+            return self._like(_ext.LazyFrame.sort_by(self, by, descending, nulls_last))
+        return self._like(_ext.LazyFrame.sort_by_multi(self, names, descending, nulls_last))
 
     def sort_values(
         self,
@@ -966,10 +959,10 @@ class LazyGroupBy:
         return self.reduce("std")
 
     def skew(self) -> LazyFrame:
-        return self.reduce("skew")
+        return self.reduce("skew_unbiased")
 
     def kurt(self) -> LazyFrame:
-        return self.reduce("kurt")
+        return self.reduce("kurt_unbiased")
 
     def first(self) -> LazyFrame:
         return self.reduce("first")

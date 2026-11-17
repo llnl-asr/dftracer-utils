@@ -105,8 +105,18 @@ enum class AggOp {
     /// A registered user-defined aggregate (see @ref make_udaf), named by
     /// AggSpec::fn and fed the columns `value_col` and AggSpec::args; the
     /// result type is the one its bind chose.
-    Udaf = 37
+    Udaf = 37,
+    /// The pandas sample skewness G1 of `value_col`'s present values, Float64:
+    /// NaN below three values and when they are all equal.
+    SkewUnbiased = 38,
+    /// The pandas sample excess kurtosis G2, Float64: NaN below four values
+    /// and when they are all equal.
+    KurtUnbiased = 39
 };
+
+/// The last row of agg_ops.def, which bounds every serialized op code. A row
+/// appended to the table moves it (c_api_enum_lockstep.cpp checks).
+inline constexpr AggOp AGG_OP_LAST = AggOp::KurtUnbiased;
 
 /// Ops taking a second input through `by_col`: the extremum ArgMax/ArgMin
 /// maximize/minimize, the ordered list/top-k ops order by, the co-moment ops

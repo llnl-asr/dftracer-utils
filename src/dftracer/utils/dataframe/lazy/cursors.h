@@ -14,7 +14,8 @@ CursorResult make_sort_merge(dstd::UniquePtr<Cursor> in,
                              dstd::Vector<dstd::String> sch,
                              dstd::Vector<dstd::String> keys,
                              dstd::Vector<bool> descending,
-                             std::uint64_t budget);
+                             std::uint64_t budget,
+                             dstd::Vector<bool> nulls_last = {});
 
 CursorResult make_group_by(dstd::UniquePtr<Cursor> in,
                            dstd::Vector<dstd::String> sch,

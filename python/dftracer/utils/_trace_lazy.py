@@ -212,11 +212,14 @@ class _LazyOps(_ext.TraceViewer):
         return self.lazy().reverse()
 
     def sort_by_multi(
-        self, names: Sequence[str], descending: Union[bool, Sequence[bool]] = False
+        self,
+        names: Sequence[str],
+        descending: Union[bool, Sequence[bool]] = False,
+        nulls_last: Union[bool, Sequence[bool]] = True,
     ) -> "LazyFrame":
-        """Stable lexicographic sort by several key columns (nulls last). A
-        single flag broadcasts; a sequence maps one flag per name."""
-        return self.lazy().sort_by_multi(names, descending)
+        """Stable lexicographic sort by several key columns. A single flag
+        broadcasts; a sequence maps one flag per name."""
+        return self.lazy().sort_by_multi(names, descending, nulls_last)
 
     def sort(
         self,

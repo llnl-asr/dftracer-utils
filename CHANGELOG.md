@@ -9,6 +9,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Added
 
+- Add `nulls_last` to the engine sort: `Series.sort` and `argsort`, `DataFrame` and `LazyFrame` `sort_by` and `sort_by_multi` (one flag, or one per key), the registry rows and the C functions `dftu_series_sort`, `dftu_series_argsort`, `dftu_dataframe_sort_by`, `dftu_dataframe_sort_by_multi`, `dftu_dataframe_sort_by_multi_per_col`, `dftu_lazyframe_sort_by` and `dftu_lazyframe_sort_by_multi`.
+  Every mode is stable, also for equal values and for nulls first with `descending=True`, in memory and in the external merge sort, so Python no longer sorts over a presence key and `Expr.arg_sort` no longer reverses the opposite sort.
+  A lazy sort with nulls first is not pushed down into a source.
+- Add `maintain_order` to `Series.unique`: the distinct values with one null kept, sorted with the null first or in order of first occurrence.
+  Add `dftu_series_duplicated(v, keep)` and `Series.duplicated(keep)`, and `side` to `Series.search_sorted`, which are native; `dftu_series_unique` and `dftu_series_search_sorted` take the new argument.
+- Add the aggregates `SkewUnbiased` and `KurtUnbiased` (`skew_unbiased`, `kurt_unbiased`, `DFTU_AGG_SKEW_UNBIASED`, `DFTU_AGG_KURT_UNBIASED`) and the series reducers `dftu_series_skewness_unbiased` and `dftu_series_kurtosis_unbiased`: the pandas sample skewness and excess kurtosis, from the same moment state as the population forms, so a merged or spilled state gives the same value.
+  `Expr.skew` and `Expr.kurt` take `bias=False` for them, and `agg` takes the pandas names `skew` and `kurt` for them.
 - Add the methods `Series.is_null_at(i)`, `Series.str.count_matches`, `strip_chars_start`, `strip_chars_end`, `strip_prefix`, `strip_suffix`, `to_titlecase`, `Series.dt.epoch`, `iso_year`, `ordinal_day`, `week`, `truncate`, and on `Expr.dt` `ceil`, `floor`, `normalize`, `total_seconds`, `tz_localize`, `tz_convert`, `dayofweek`, `dayofyear`, `days_in_month` and the `is_month_start` family.
 - Add the native types `StrAccessor`, `DtAccessor` and `ListAccessor` behind `Series.str`, `Series.dt` and `Series.list`.
   The accessor methods that are exactly one kernel (`lower`, `strip`, `len_chars`, `startswith`, `find`, `replace_all`, `zfill`, `list.len`, `list.get` and the rest of the rows with class `Str` or `List` in `core/api.def`) are generated from that table and typed in the `.pyi` by `scripts/gen_pyi.py`; a wrong call count or keyword now gives the message of the native argument parser.

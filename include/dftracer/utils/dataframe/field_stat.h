@@ -7,6 +7,7 @@
 #include <bit>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 
 namespace dftracer::utils::dataframe {
 
@@ -357,6 +358,26 @@ struct FieldStat {
         const double c2 = cm2 / dn;
         if (c2 <= 0.0) return 0.0;
         return (cm4 / dn) / (c2 * c2) - 3.0;
+    }
+    /// The pandas estimators: the sample skewness G1 (needs three values) and
+    /// the sample excess kurtosis G2 (needs four), NaN below that and for a
+    /// column with no spread. From the same moments as the population forms,
+    /// so a merged or spilled state gives the same value.
+    double skewness_unbiased() const {
+        if (n < 3) return std::numeric_limits<double>::quiet_NaN();
+        const double dn = static_cast<double>(n);
+        const double c2 = cm2 / dn;
+        if (c2 <= 0.0) return std::numeric_limits<double>::quiet_NaN();
+        return (cm3 / dn) / std::pow(c2, 1.5) * std::sqrt(dn * (dn - 1.0)) /
+               (dn - 2.0);
+    }
+    double kurtosis_unbiased() const {
+        if (n < 4) return std::numeric_limits<double>::quiet_NaN();
+        const double dn = static_cast<double>(n);
+        const double c2 = cm2 / dn;
+        if (c2 <= 0.0) return std::numeric_limits<double>::quiet_NaN();
+        const double g2 = (cm4 / dn) / (c2 * c2) - 3.0;
+        return (dn - 1.0) / ((dn - 2.0) * (dn - 3.0)) * ((dn + 1.0) * g2 + 6.0);
     }
 
    private:

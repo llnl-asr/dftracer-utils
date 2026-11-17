@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 /* Built-in dataframe column ops seeded into the op registry, one per line.
  * APPEND ONLY - a name is a stable public key; never rename or repurpose one.
+ * A later row with the same name supersedes an earlier one for lookup by name.
  *
  *   DFTU_SERIES_OP(name, fn, ret, o0, o1, o2)
  *     name        - registry key (lower_snake), under the host namespace:
@@ -162,6 +163,10 @@ DFTU_SERIES_OP(dftu.series.search_sorted, dftu_series_search_sorted, SERIES, SER
  * flag via the I32 operand. */
 DFTU_SERIES_OP(dftu.series.skewness, dftu_series_skewness, F64, SERIES, NONE, NONE)
 DFTU_SERIES_OP(dftu.series.kurtosis, dftu_series_kurtosis, F64, SERIES, NONE, NONE)
+DFTU_SERIES_OP(dftu.series.skewness_unbiased, dftu_series_skewness_unbiased, F64, SERIES, NONE,
+               NONE)
+DFTU_SERIES_OP(dftu.series.kurtosis_unbiased, dftu_series_kurtosis_unbiased, F64, SERIES, NONE,
+               NONE)
 DFTU_SERIES_OP(dftu.series.variance, dftu_series_variance, F64, SERIES, I32, NONE)
 DFTU_SERIES_OP(dftu.series.stddev, dftu_series_stddev, F64, SERIES, I32, NONE)
 DFTU_SERIES_OP(dftu.series.quantile, dftu_series_quantile, F64, SERIES, F64, NONE)
@@ -249,5 +254,19 @@ DFTU_SERIES_OP(dftu.series.dt_format, dftu_series_dt_format, SERIES, SERIES, STR
 DFTU_SERIES_OP(dftu.series.str_normalize, dftu_series_str_normalize, SERIES, SERIES, I32, NONE)
 DFTU_SERIES_OP(dftu.series.str_translate, dftu_series_str_translate, SERIES, SERIES, SERIES, SERIES)
 DFTU_SERIES_OP(dftu.series.str_wrap, dftu_series_str_wrap, SERIES, SERIES, I64, I32)
+
+/* The repeats of a value by which occurrence is kept (0 first, 1 last, else
+ * none). */
+DFTU_SERIES_OP(dftu.series.duplicated, dftu_series_duplicated, SERIES, SERIES, I32, NONE)
+
+/* Rows that supersede the same-named rows above, which stay as they were: the
+ * registry resolves a name to the last row that carries it. Sorts take the null
+ * placement as a second flag; unique keeps one null and takes maintain_order;
+ * search_sorted takes the side (nonzero is right). */
+DFTU_SERIES_OP(dftu.series.sort, dftu_series_sort_nulls, SERIES, SERIES, I32, I32)
+DFTU_SERIES_OP(dftu.series.argsort, dftu_series_argsort_nulls, SERIES, SERIES, I32, I32)
+DFTU_SERIES_OP(dftu.series.unique, dftu_series_unique_nulls, SERIES, SERIES, I32, NONE)
+DFTU_SERIES_OP(dftu.series.search_sorted, dftu_series_search_sorted_side, SERIES, SERIES, SERIES,
+               I32)
 
 #undef DFTU_SERIES_OP

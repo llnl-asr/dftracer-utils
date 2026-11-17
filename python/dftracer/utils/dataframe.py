@@ -259,24 +259,6 @@ def _single_index(index: Optional[List[str]], op: str) -> str:
     return index[0]
 
 
-def _nulls_first_keys(
-    names: List[str], descending: Union[bool, Sequence[bool]]
-) -> Tuple[List[str], List[bool]]:
-    """The sort keys and directions that put null keys first: a hidden 0 / 1
-    presence column ahead of each key, ascending."""
-    flags = [descending] * len(names) if isinstance(descending, bool) else list(descending)
-    if len(flags) == 1:
-        flags = flags * len(names)
-    if len(flags) != len(names):
-        raise ValueError("sort: one direction per key, or a single flag")
-    keys: List[str] = []
-    dirs: List[bool] = []
-    for i, (name, desc) in enumerate(zip(names, flags)):
-        keys += [f"__dftu_present_{i}__", name]
-        dirs += [False, bool(desc)]
-    return keys, dirs
-
-
 def _norm_window_spec(spec: Sequence[Any]) -> Tuple[object, ...]:
     # Normalize to the fixed 12-tuple the native kernel reads: (func,
     # value|None, offset, name, time|None, threshold, counter, frame_pre,
@@ -1222,25 +1204,9 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _ext.DataFrame):
         after every number and apart from the nulls."""
         names = [by] if isinstance(by, str) else list(by)
         flags = descending if isinstance(descending, bool) else list(descending)
-        if not nulls_last and any(_ext.DataFrame.__getitem__(self, n).null_count for n in names):
-            return self._sort_nulls_first(names, flags)
-        if len(names) == 1 and isinstance(flags, bool):
-            return self._like(_ext.DataFrame.sort_by(self, names[0], flags))
-        return self._like(_ext.DataFrame.sort_by_multi(self, names, flags))
-
-    def _sort_nulls_first(
-        self, names: List[str], descending: Union[bool, "list[bool]"]
-    ) -> "DataFrame":
-        # The sort kernels place nulls last. Nulls first is a lexicographic
-        # sort over (present(key), key) per key: the 0 / 1 presence column
-        # sorts the null rows ahead, then the key orders the rest.
-        keys, flags = _nulls_first_keys(names, descending)
-        native: DataFrame = self
-        for name, key in zip(keys[::2], names):
-            col = _ext.DataFrame.__getitem__(native, key).is_not_null().astype("int64")
-            native = _ext.DataFrame.with_column(native, name, col)
-        sorted_ = _ext.DataFrame.sort_by_multi(native, keys, flags)
-        return _ext.DataFrame.select(sorted_, *self.columns)
+        if len(names) == 1 and isinstance(flags, bool) and isinstance(nulls_last, bool):
+            return self._like(_ext.DataFrame.sort_by(self, names[0], flags, nulls_last))
+        return self._like(_ext.DataFrame.sort_by_multi(self, names, flags, nulls_last))
 
     def union(self, *others: "DataFrame") -> "DataFrame":
         """Vertically concatenate with ``others`` and drop duplicate rows (SQL
@@ -1347,11 +1313,15 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _ext.DataFrame):
         return out
 
     def sort_by_multi(
-        self, names: "list[str]", descending: Union[bool, Sequence[bool]] = False
+        self,
+        names: "list[str]",
+        descending: Union[bool, Sequence[bool]] = False,
+        nulls_last: Union[bool, Sequence[bool]] = True,
     ) -> "DataFrame":
         """A single flag broadcasts to every key; a sequence maps one flag per
-        name (size must be 1 or ``len(names)``)."""
-        return self._like(_ext.DataFrame.sort_by_multi(self, names, descending))
+        name (size must be 1 or ``len(names)``). ``nulls_last`` places the
+        nulls of each key."""
+        return self._like(_ext.DataFrame.sort_by_multi(self, names, descending, nulls_last))
 
     def sample(self, n: int, seed: int = 0, *, random_state: Optional[int] = None) -> "DataFrame":
         """A deterministic ``n``-row sample (``random_state`` is the pandas
@@ -1378,8 +1348,8 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _ext.DataFrame):
     def slice(self, offset: int, length: int) -> "DataFrame":
         return self._like(_ext.DataFrame.slice(self, offset, length))
 
-    def sort_by(self, name: str, descending: bool = False) -> "DataFrame":
-        return self._like(_ext.DataFrame.sort_by(self, name, descending))
+    def sort_by(self, name: str, descending: bool = False, nulls_last: bool = True) -> "DataFrame":
+        return self._like(_ext.DataFrame.sort_by(self, name, descending, nulls_last))
 
     def topk(self, name: str, k: int, largest: bool = True) -> "DataFrame":
         return self._like(_ext.DataFrame.topk(self, name, k, largest))
@@ -1669,15 +1639,11 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _ext.DataFrame):
 
     def skew(self) -> "DataFrame":
         """The pandas unbiased skewness of every column, one row (see :meth:`Series.skew`)."""
-        from .columnar import GroupBy
-
-        return GroupBy(self, []).skew()
+        return self.reduce("skew_unbiased")
 
     def kurt(self) -> "DataFrame":
         """The pandas unbiased excess kurtosis of every column, one row."""
-        from .columnar import GroupBy
-
-        return GroupBy(self, []).kurt()
+        return self.reduce("kurt_unbiased")
 
     # BEGIN GENERATED aliases from _aliases.py by scripts/gen_pyi.py
     if TYPE_CHECKING:

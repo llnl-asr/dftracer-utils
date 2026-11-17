@@ -11,6 +11,7 @@
 #include <dftracer/utils/dataframe/internal/compare_simd.h>  // pack_flags
 #include <dftracer/utils/dataframe/internal/radix_dedup.h>   // parallel dedup
 #include <dftracer/utils/dataframe/internal/string_reader.h>
+#include <dftracer/utils/dataframe/internal/value_ids.h>
 #include <dftracer/utils/dataframe/kernels/sort.h>
 #include <dftracer/utils/dataframe/parallel.h>
 #include <dftracer/utils/dataframe/series.h>
@@ -100,6 +101,30 @@ Series occurrence_mask(const Series& v, bool keep_when_unique) {
                 (keep_when_unique ? unique : !unique) ? 1 : 0;
         }
     });
+    return bool_from_flags(flags);
+}
+
+// keep 0: mark every repeat of a value but its first row; 1: but its last row;
+// otherwise every row of a repeated value (is_duplicated). A null is one value.
+Series duplicated_keep(const Series& v, std::int32_t keep) {
+    if (keep != 0 && keep != 1) return occurrence_mask(v, false);
+    if (refuse_nested_value("duplicated", v.type())) return Series{};
+    ValueIds ids;
+    if (!value_ids(*v.handle(), ids)) return Series{};
+    const std::int64_t n = v.length();
+    dstd::Vector<std::int64_t> last;
+    if (keep == 1) {
+        last.assign(ids.first.size(), 0);
+        for (std::int64_t i = 0; i < n; ++i)
+            last[static_cast<std::size_t>(
+                ids.ids[static_cast<std::size_t>(i)])] = i;
+    }
+    const dstd::Vector<std::int64_t>& kept = keep == 0 ? ids.first : last;
+    dstd::Vector<char> flags(static_cast<std::size_t>(n), 0);
+    for (std::int64_t i = 0; i < n; ++i)
+        flags[static_cast<std::size_t>(i)] =
+            kept[static_cast<std::size_t>(
+                ids.ids[static_cast<std::size_t>(i)])] != i;
     return bool_from_flags(flags);
 }
 
@@ -304,6 +329,14 @@ dftu_series* dftu_series_is_duplicated(const dftu_series* v) {
     c.release();
     return r.release();
 }
+dftu_series* dftu_series_duplicated(const dftu_series* v, std::int32_t keep) {
+    if (!v) return nullptr;
+    DFTU_FLAT_INPUT(v, dftu_series_duplicated, keep);
+    Series c = borrow(v);
+    Series r = dftracer::utils::dataframe::duplicated_keep(c, keep);
+    c.release();
+    return r.release();
+}
 std::int32_t dftu_series_is_sorted(const dftu_series* v,
                                    std::int32_t descending) {
     if (!v) return 0;
@@ -339,10 +372,16 @@ dftu_series* dftu_series_is_in(const dftu_series* v,
     return r.release();
 }
 dftu_series* dftu_series_sort(const dftu_series* v, std::int32_t descending) {
+    return dftu_series_sort_nulls(v, descending, 1);
+}
+dftu_series* dftu_series_sort_nulls(const dftu_series* v,
+                                    std::int32_t descending,
+                                    std::int32_t nulls_last) {
     if (!v) return nullptr;
-    DFTU_FLAT_INPUT(v, dftu_series_sort, descending);
+    DFTU_FLAT_INPUT(v, dftu_series_sort_nulls, descending, nulls_last);
     Series c = borrow(v);
-    Series order = dftracer::utils::dataframe::argsort(c, descending != 0);
+    Series order = dftracer::utils::dataframe::argsort(c, descending != 0,
+                                                       nulls_last != 0);
     if (!order.valid()) {
         c.release();
         return nullptr;

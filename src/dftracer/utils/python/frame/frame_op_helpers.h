@@ -22,11 +22,13 @@ struct WindowSpecs {
     dftracer::utils::dstd::Vector<dftu_window_spec> specs;
 };
 
-/// The sort directions of a multi-key sort: one bool or a sequence of bool,
+/// The sort directions (or null positions) of a multi-key sort: one bool or a
+/// sequence of bool,
 /// never a truthy-coerced list. Appends to @p out; false with a Python error
 /// set.
-inline bool descending_from_obj(PyObject* obj,
-                                dftracer::utils::dstd::Vector<bool>& out) {
+inline bool descending_from_obj(
+    PyObject* obj, dftracer::utils::dstd::Vector<bool>& out,
+    const char* what = "descending must be a bool or a sequence of bool") {
     if (!obj) {
         out.push_back(false);
         return true;
@@ -36,7 +38,7 @@ inline bool descending_from_obj(PyObject* obj,
         return true;
     }
     return core::parse_seq<bool>(
-        obj, "descending must be a bool or a sequence of bool", out,
+        obj, what, out,
         [](PyObject* item, dftracer::utils::dstd::Vector<bool>& o) {
             const int truth = PyObject_IsTrue(item);
             if (truth < 0) return false;

@@ -12,10 +12,8 @@ polars spellings. ``dataframe.DataFrame`` is the frame counterpart.
 
 from __future__ import annotations
 
-import bisect
 import builtins
 import json
-import math
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -1250,66 +1248,13 @@ class Series(_SeriesPandasMixin, _ext.Series[T_co]):
             return float("nan")
         return self.stddev(_ddof_sample(ddof))
 
-    def arg_sort(self, descending: bool = False, nulls_last: bool = False) -> "Series[int]":
-        """The row indices that sort the values, so ``s.gather(s.arg_sort())``
-        is ``s.sort()`` for the same keywords. Nulls come first, or last with
-        ``nulls_last=True`` (the polars keywords and default)."""
-        order = self.argsort(descending)
-        nulls = self.null_count
-        if nulls_last or not nulls:
-            return order
-        size = len(order)
-        return order.gather(list(range(size - nulls, size)) + list(range(size - nulls)))
-
-    def unique(self, *, maintain_order: bool = False) -> Self:
-        """The distinct values, a null kept as one value (the polars
-        ``unique``). With ``maintain_order=False`` (default) they are sorted,
-        nulls first; with ``True`` they are in order of first occurrence.
-        ``drop_duplicates`` is the pandas name."""
-        if not self.null_count and not maintain_order:
-            return super().unique()
-        kept = self.filter(~self.duplicated())
-        return kept if maintain_order else kept.sort()
-
-    @overload
-    def search_sorted(self, element: "Union[int, float]", side: builtins.str = "left") -> int: ...
-
-    @overload
-    def search_sorted(
-        self, element: "Union[Series, Sequence[Union[int, float]]]", side: builtins.str = "left"
-    ) -> "Series[int]": ...
-
-    def search_sorted(self, element: Any, side: builtins.str = "left") -> Any:
-        """The insertion index of ``element`` into this sorted numeric Series:
-        an int for a scalar, a Series for a Series or a list. ``side`` is
-        ``"left"`` (default; ``"any"`` is the same), or ``"right"`` to insert
-        after equal values."""
-        if side not in ("left", "right", "any"):
-            raise ValueError("search_sorted: side must be 'left', 'right' or 'any'")
-        scalar = isinstance(element, (int, float))
-        needles = Series([element]) if scalar else element
-        if not isinstance(needles, Series):
-            needles = Series(list(needles))
-        if side == "right":
-            values = cast("List[Any]", self.to_list())
-            found = Series(
-                [bisect.bisect_right(values, v) for v in cast("List[Any]", needles.to_list())]
-            )
-        else:
-            found = _ext.Series.search_sorted(self, needles)
-        return found.to_list()[0] if scalar else found
-
     def skew(self, bias: bool = False) -> Optional[float]:
         """The pandas ``skew`` (unbiased; NaN below three values and for a
         constant column, as pandas 3) by default; ``bias=True`` is the polars population
         skewness (NaN for a constant column, null for no values)."""
-        n = self.count()
-        pop = _ext.Series.skew(self)
         if bias:
-            return _population(self, n, pop)
-        if n < 3 or _is_constant(self):
-            return float("nan")
-        return pop * math.sqrt(n * (n - 1)) / (n - 2)
+            return _population(self, self.count(), _ext.Series.skew(self))
+        return _ext.Series.skew_unbiased(self)
 
     def kurtosis(self, fisher: bool = True, bias: bool = True) -> Optional[float]:
         """The polars ``kurtosis``, with the polars defaults: the population
@@ -1323,10 +1268,8 @@ class Series(_SeriesPandasMixin, _ext.Series[T_co]):
             value = _population(self, n, pop)
         elif n < 4:
             return None
-        elif _is_constant(self):
-            value = float("nan")
         else:
-            value = _unbiased_kurtosis(pop, n)
+            value = _ext.Series.kurt_unbiased(self)
         if value is not None and not fisher:
             value += 3.0
         return value
@@ -1334,21 +1277,7 @@ class Series(_SeriesPandasMixin, _ext.Series[T_co]):
     def kurt(self) -> float:
         """The pandas ``kurt``: unbiased excess kurtosis, NaN below four
         values and for a constant column (pandas 3)."""
-        n = self.count()
-        if n < 4 or _is_constant(self):
-            return float("nan")
-        return _unbiased_kurtosis(_ext.Series.kurtosis(self), n)
-
-    def sort(self, *, descending: bool = False, nulls_last: bool = False) -> Self:
-        """The values in order. Nulls come first, or last with
-        ``nulls_last=True`` (the polars keywords and default); a NaN sorts
-        after every number and apart from the nulls, as polars."""
-        out = super().sort(descending)
-        nulls = self.null_count
-        if not nulls or nulls_last:
-            return out
-        size = len(out)
-        return out.gather(list(range(size - nulls, size)) + list(range(size - nulls)))
+        return _ext.Series.kurt_unbiased(self)
 
     def sort_values(self, ascending: bool = True, na_position: builtins.str = "last") -> Self:
         """The pandas ``sort_values``: :meth:`sort` with ``ascending`` and
@@ -1406,7 +1335,7 @@ class Series(_SeriesPandasMixin, _ext.Series[T_co]):
         cumprod = _ext.Series.cum_prod
         cummax = _ext.Series.cum_max
         cummin = _ext.Series.cum_min
-        searchsorted = search_sorted
+        searchsorted = _ext.Series.search_sorted
         tolist = to_list
         ffill = _ext.Series.forward_fill
         pad = _ext.Series.forward_fill
@@ -1437,10 +1366,6 @@ def _population(s: "Series", n: int, value: float) -> Optional[float]:
     if n == 1 or _is_constant(s):
         return float("nan")
     return value
-
-
-def _unbiased_kurtosis(population: float, n: int) -> float:
-    return (n - 1) / ((n - 2) * (n - 3)) * ((n + 1) * population + 6)
 
 
 def _indices(indices: "Union[Series, Sequence[int]]") -> List[int]:

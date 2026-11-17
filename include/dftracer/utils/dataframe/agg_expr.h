@@ -56,6 +56,10 @@ AggExprSpec agg_var(Expr value, dstd::String out = "var");
 AggExprSpec agg_std(Expr value, dstd::String out = "std");
 AggExprSpec agg_skew(Expr value, dstd::String out = "skew");
 AggExprSpec agg_kurt(Expr value, dstd::String out = "kurt");
+/// The pandas sample skewness (NaN below three values) and sample excess
+/// kurtosis (NaN below four); NaN for a constant column.
+AggExprSpec agg_skew_unbiased(Expr value, dstd::String out = "skew");
+AggExprSpec agg_kurt_unbiased(Expr value, dstd::String out = "kurt");
 /// A DDSketch quantile at level `q` in [0, 1] (mergeable, order-independent).
 AggExprSpec agg_pct(Expr value, double q, dstd::String out = "pct");
 /// The DDSketch histogram of `value`, a list<struct{lo,hi,count}> per group.

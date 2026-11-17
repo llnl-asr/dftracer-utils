@@ -519,8 +519,9 @@ PyObject* DataFrame_sort_by_multi(PyObject* self, PyObject* args,
     if (!b) return nullptr;
     PyObject* names_obj = nullptr;
     PyObject* descending_obj = nullptr;
-    if (!parse_kw<"O|O">(args, kwds, {"names", "descending"}, &names_obj,
-                         &descending_obj))
+    PyObject* nulls_last_obj = nullptr;
+    if (!parse_kw<"O|OO">(args, kwds, {"names", "descending", "nulls_last"},
+                          &names_obj, &descending_obj, &nulls_last_obj))
         return nullptr;
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> names;
     if (!parse_string_seq(names_obj, "names must be a sequence", names))
@@ -531,8 +532,18 @@ PyObject* DataFrame_sort_by_multi(PyObject* self, PyObject* args,
     // old "any non-empty list sorts descending" bug).
     dftracer::utils::dstd::Vector<bool> descending;
     if (!descending_from_obj(descending_obj, descending)) return nullptr;
+    dftracer::utils::dstd::Vector<bool> nulls_last;
+    if (!nulls_last_obj)
+        nulls_last.push_back(true);
+    else if (!descending_from_obj(
+                 nulls_last_obj, nulls_last,
+                 "nulls_last must be a bool or a sequence of bool"))
+        return nullptr;
+    dftracer::utils::dstd::Vector<std::uint8_t> desc_flags, last_flags;
+    for (bool d : descending) desc_flags.push_back(d ? 1 : 0);
+    for (bool l : nulls_last) last_flags.push_back(l ? 1 : 0);
     return run_batch_op(b, [&](const DataFrame& frame) {
-        return dataframe::sort_by_multi(frame, names, descending);
+        return dataframe::sort_by_multi(frame, names, desc_flags, last_flags);
     });
 }
 
@@ -700,11 +711,13 @@ PyObject* DataFrame_sort_by(PyObject* self, PyObject* args, PyObject* kwds) {
     if (!b) return nullptr;
     const char* name = nullptr;
     int descending = 0;
-    if (!parse_kw<"s|p">(args, kwds, {"name", "descending"}, &name,
-                         &descending))
+    int nulls_last = 1;
+    if (!parse_kw<"s|pp">(args, kwds, {"name", "descending", "nulls_last"},
+                          &name, &descending, &nulls_last))
         return nullptr;
     return run_batch_op(b, [&](const DataFrame& frame) {
-        return dataframe::sort_by(frame, name, descending != 0);
+        return dataframe::sort_by(frame, name, descending != 0,
+                                  nulls_last != 0);
     });
 }
 
@@ -1531,7 +1544,8 @@ PyMethodDef DataFrame_methods[] = {
      "(alias of unique)."},
     {"sort_by_multi", DFTU_PYCFUNCTION(DataFrame_sort_by_multi),
      METH_VARARGS | METH_KEYWORDS,
-     "sort_by_multi(names, descending=False) -> DataFrame stably sorted "
+     "sort_by_multi(names, descending=False, nulls_last=True) -> DataFrame "
+     "stably sorted "
      "lexicographically by several key columns."},
     {"sample", DFTU_PYCFUNCTION(DataFrame_sample), METH_VARARGS | METH_KEYWORDS,
      "sample(n, seed=0) -> DataFrame deterministic n-row sample."},
@@ -1561,7 +1575,8 @@ PyMethodDef DataFrame_methods[] = {
      "slice(offset, length) -> DataFrame of a row range."},
     {"sort_by", DFTU_PYCFUNCTION(DataFrame_sort_by),
      METH_VARARGS | METH_KEYWORDS,
-     "sort_by(name, descending=False) -> DataFrame ordered by a column."},
+     "sort_by(name, descending=False, nulls_last=True) -> DataFrame ordered "
+     "by a column."},
     {"topk", DFTU_PYCFUNCTION(DataFrame_topk), METH_VARARGS | METH_KEYWORDS,
      "topk(name, k, largest=True) -> DataFrame of the k best rows by a "
      "column."},

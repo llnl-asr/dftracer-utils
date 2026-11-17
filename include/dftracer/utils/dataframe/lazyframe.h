@@ -205,6 +205,8 @@ struct AggregateSpec {
 };
 
 /// A lexicographic ordering: `by[i]` sorts descending when `descending[i]`.
+/// Nulls go last for every key: a sort that puts them first is not offered to a
+/// source.
 struct SortSpec {
     dstd::Vector<dstd::String> by;
     dstd::Vector<bool> descending;
@@ -474,17 +476,22 @@ class LazyFrame {
     /// Group by N expression keys; each desugars like the single-key overload.
     LazyFrame group_by(dstd::Vector<Expr> keys,
                        dstd::Vector<AggExprSpec> aggs) const;
-    /// Sort by `name`. External merge sort: spills sorted runs past the memory
-    /// budget and k-way merges them, so peak memory stays bounded.
-    LazyFrame sort_by(dstd::String name, bool descending = false) const;
-    /// Stable lexicographic sort by several key columns (nulls last), as
-    /// DataFrame::sort_by_multi. Not streaming: needs every row to compare
-    /// across the whole frame.
+    /// Sort by `name`, nulls last (or first when `nulls_last` is false).
+    /// External merge sort: spills sorted runs past the memory budget and
+    /// k-way merges them, so peak memory stays bounded.
+    LazyFrame sort_by(dstd::String name, bool descending = false,
+                      bool nulls_last = true) const;
+    /// Stable lexicographic sort by several key columns (nulls last, or first
+    /// when `nulls_last` is false), as DataFrame::sort_by_multi. Not
+    /// streaming: needs every row to compare across the whole frame.
     LazyFrame sort_by_multi(dstd::Vector<dstd::String> by,
-                            bool descending = false) const;
-    /// Per-column direction form: `descending[i]` applies to `by[i]`.
+                            bool descending = false,
+                            bool nulls_last = true) const;
+    /// Per-column form: `descending[i]` and `nulls_last[i]` apply to `by[i]`; a
+    /// single flag broadcasts, and an empty `nulls_last` is nulls last.
     LazyFrame sort_by_multi(dstd::Vector<dstd::String> by,
-                            dstd::Vector<bool> descending) const;
+                            dstd::Vector<bool> descending,
+                            dstd::Vector<bool> nulls_last = {}) const;
     /// Distinct rows, first occurrence, in original order, keyed on every
     /// column or on `subset` (empty = all). Streams input and output; holds
     /// only the distinct key set. A NotFound error (kept as @ref status()) for

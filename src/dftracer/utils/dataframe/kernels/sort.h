@@ -20,9 +20,10 @@ namespace dftracer::utils::dataframe {
 int compare_rows(const Series& v, std::int64_t a, std::int64_t b);
 
 /// Stable argsort: an Int64 column of row indices ordering `v` ascending, or
-/// descending when `descending`. Null rows sort last in both directions.
-/// An invalid Series for a nested column, which has no order.
-Series argsort(const Series& v, bool descending);
+/// descending when `descending`. Null rows sort last in both directions, or
+/// first when `nulls_last` is false; ties and nulls keep input order in every
+/// mode. An invalid Series for a nested column, which has no order.
+Series argsort(const Series& v, bool descending, bool nulls_last = true);
 
 /// An Int64 column of the k row indices of the k largest (or smallest) values,
 /// ordered best-first (partial sort). k is clamped to [0, length].

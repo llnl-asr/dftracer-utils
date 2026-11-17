@@ -32,6 +32,12 @@ using namespace dftracer::utils::dataframe;
 
 namespace {
 
+dstd::Vector<std::uint8_t> flags_of(const dstd::Vector<bool>& flags) {
+    dstd::Vector<std::uint8_t> out;
+    for (bool f : flags) out.push_back(f ? 1 : 0);
+    return out;
+}
+
 template <class T>
 T run(coro::CoroTask<dstd::Result<T>> t) {
     T out = dftu_utils_test::ok(
@@ -170,9 +176,9 @@ class SmartSource final : public Source,
         log_->offered.push_back(Kind::Sort);
         log_->last_sort = spec;
         if (!accepts(Kind::Sort)) return dstd::nullopt;
-        return derive(
-            dftu_utils_test::ok(frame_.sort_by_multi(spec.by, spec.descending)),
-            ApplyStatus::Exact);
+        return derive(dftu_utils_test::ok(frame_.sort_by_multi(
+                          spec.by, flags_of(spec.descending))),
+                      ApplyStatus::Exact);
     }
 
     dstd::Optional<SourceApplication> apply_topn(
@@ -182,7 +188,8 @@ class SmartSource final : public Source,
         log_->last_k = k;
         if (!accepts(Kind::TopN)) return dstd::nullopt;
         return derive(
-            dftu_utils_test::ok(frame_.sort_by_multi(spec.by, spec.descending))
+            dftu_utils_test::ok(
+                frame_.sort_by_multi(spec.by, flags_of(spec.descending)))
                 .head(k),
             ApplyStatus::Exact);
     }

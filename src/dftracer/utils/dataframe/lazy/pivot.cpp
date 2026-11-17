@@ -190,7 +190,7 @@ class PivotCursor : public Cursor {
         if (!distinct.empty()) {
             auto all = concat_columns(column_ptrs(distinct));
             if (!all) co_return all.error();
-            uniq_col_ = all->unique().materialize();
+            uniq_col_ = all->drop_nulls().unique().materialize();
         }
         const std::int64_t C = uniq_col_.length();
         dstd::Vector<Series> one;

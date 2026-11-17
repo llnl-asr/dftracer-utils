@@ -274,6 +274,8 @@ static bool agg_op_seedable(AggOp op) {
         case AggOp::Std:
         case AggOp::Skew:
         case AggOp::Kurt:
+        case AggOp::SkewUnbiased:
+        case AggOp::KurtUnbiased:
         case AggOp::Pct:
         case AggOp::Hist:
         case AggOp::SumSq:

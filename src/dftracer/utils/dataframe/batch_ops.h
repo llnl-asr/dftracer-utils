@@ -6,6 +6,7 @@
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/shared_string.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 
@@ -64,11 +65,12 @@ dstd::Result<DataFrame> rename(const DataFrame& b,
 DataFrame with_column(const DataFrame& b, const dstd::String& name,
                       const Series& col);
 
-/// Order every column by the values of column `name` (stable; nulls last),
-/// ascending or `descending`. A NotFound error if `name` is absent, an
-/// InvalidArgument error if its type has no order (a nested type).
+/// Order every column by the values of column `name` (stable; nulls last, or
+/// first when `nulls_last` is false), ascending or `descending`. A NotFound
+/// error if `name` is absent, an InvalidArgument error if its type has no
+/// order (a nested type).
 dstd::Result<DataFrame> sort_by(const DataFrame& b, const dstd::String& name,
-                                bool descending);
+                                bool descending, bool nulls_last = true);
 
 /// The k rows with the largest (or smallest) values of column `name`, ordered
 /// best-first. A NotFound error if `name` is absent, an InvalidArgument error
@@ -209,18 +211,23 @@ dstd::Result<DataFrame> unique(const DataFrame& b,
                                const dstd::Vector<dstd::String>& subset = {});
 
 /// Stable lexicographic sort by several key columns, ascending or `descending`
-/// (nulls last in both directions). A NotFound error if a name is absent, an
-/// InvalidArgument error for a column type with no per-row order.
+/// (nulls last in both directions, or first when `nulls_last` is false). A
+/// NotFound error if a name is absent, an InvalidArgument error for a column
+/// type with no per-row order.
 dstd::Result<DataFrame> sort_by_multi(const DataFrame& b,
                                       const dstd::Vector<dstd::String>& names,
-                                      bool descending);
+                                      bool descending, bool nulls_last = true);
 
-/// Per-column direction form: `descending[i]` applies to `names[i]`. A single
-/// flag broadcasts to every key. A NotFound error if a name is absent; an
-/// InvalidArgument error if `descending` is neither size 1 nor `names.size()`.
-dstd::Result<DataFrame> sort_by_multi(const DataFrame& b,
-                                      const dstd::Vector<dstd::String>& names,
-                                      const dstd::Vector<bool>& descending);
+/// Per-column form: `descending[i]` and `nulls_last[i]` (0 or 1) apply to
+/// `names[i]`. A span of size 1 broadcasts to every key, and an empty span
+/// means every key ascending for `descending` and nulls last for `nulls_last`.
+/// A NotFound error if a name is absent; an InvalidArgument error if a span is
+/// not empty, of size 1 or `names.size()`, or for a column type with no
+/// per-row order.
+dstd::Result<DataFrame> sort_by_multi(
+    const DataFrame& b, const dstd::Vector<dstd::String>& names,
+    dstd::Span<const std::uint8_t> descending,
+    dstd::Span<const std::uint8_t> nulls_last = {});
 
 /// The last `n` rows (clamped), across every column.
 DataFrame tail(const DataFrame& b, std::int64_t n);

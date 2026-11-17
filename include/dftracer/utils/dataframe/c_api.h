@@ -909,6 +909,13 @@ DFTU_EXPORT dftu_series* dftu_series_take_i32(const dftu_series* v,
  * directions. The caller owns the returned column. */
 DFTU_EXPORT dftu_series* dftu_series_argsort(const dftu_series* v,
                                              int32_t descending);
+/** The same with the nulls placed by `nulls_last`: last when nonzero, first
+ * otherwise. Ties and nulls keep input order in every mode. The caller frees
+ * the Int64 result with dftu_series_free. NULL if `v` is NULL or has a nested
+ * type (no order). */
+DFTU_EXPORT dftu_series* dftu_series_argsort_nulls(const dftu_series* v,
+                                                   int32_t descending,
+                                                   int32_t nulls_last);
 
 /** Summary statistics over the non-null values of a FLAT column. Moment stats
  * are numeric-only; quantile sorts (SIMD); nunique/unique work for any type. */
@@ -916,10 +923,21 @@ DFTU_EXPORT double dftu_series_variance(const dftu_series* v, int32_t sample);
 DFTU_EXPORT double dftu_series_stddev(const dftu_series* v, int32_t sample);
 DFTU_EXPORT double dftu_series_skewness(const dftu_series* v);
 DFTU_EXPORT double dftu_series_kurtosis(const dftu_series* v);
+/** The pandas sample skewness G1 (NaN below three values) and sample excess
+ * kurtosis G2 (NaN below four values); NaN for a column with no spread. 0.0 if
+ * `v` is NULL or not numeric. Nothing is allocated for the caller. */
+DFTU_EXPORT double dftu_series_skewness_unbiased(const dftu_series* v);
+DFTU_EXPORT double dftu_series_kurtosis_unbiased(const dftu_series* v);
 DFTU_EXPORT double dftu_series_quantile(const dftu_series* v, double q);
 DFTU_EXPORT int64_t dftu_series_nunique(const dftu_series* v);
 /** The distinct non-null values, ascending. Caller owns the column. */
 DFTU_EXPORT dftu_series* dftu_series_unique(const dftu_series* v);
+/** The distinct values, a null kept once: in first-occurrence order when
+ * `maintain_order` is nonzero, otherwise ascending with the null first. The
+ * caller frees the result with dftu_series_free. NULL if `v` is NULL or has a
+ * nested type. */
+DFTU_EXPORT dftu_series* dftu_series_unique_nulls(const dftu_series* v,
+                                                  int32_t maintain_order);
 
 /** Elementwise transforms -> a new FLAT column (caller owns). abs/clip/round
  * are SIMD; fillna clears nulls; cumsum is a running sum. */
@@ -977,6 +995,12 @@ DFTU_EXPORT dftu_series* dftu_series_valid_mask(const dftu_series* v);
  * group. */
 DFTU_EXPORT dftu_series* dftu_series_is_unique(const dftu_series* v);
 DFTU_EXPORT dftu_series* dftu_series_is_duplicated(const dftu_series* v);
+/** A Bool mask of the repeats of a value: `keep` 0 leaves the first row of each
+ * value unmarked, 1 the last, any other value marks every row of a repeated
+ * value (is_duplicated). A null is one value. The caller frees the result with
+ * dftu_series_free. NULL if `v` is NULL or has a nested type. */
+DFTU_EXPORT dftu_series* dftu_series_duplicated(const dftu_series* v,
+                                                int32_t keep);
 
 /** Whether `v` is sorted ascending (or descending when `descending` is
  * nonzero); a single scan. An empty or single-row column is sorted. */
@@ -996,6 +1020,12 @@ DFTU_EXPORT dftu_series* dftu_series_is_in(const dftu_series* v,
  * take(argsort(v, descending)). */
 DFTU_EXPORT dftu_series* dftu_series_sort(const dftu_series* v,
                                           int32_t descending);
+/** The same with the nulls placed by `nulls_last`, as argsort_nulls. The
+ * caller frees the result with dftu_series_free. NULL if `v` is NULL or has a
+ * nested type. */
+DFTU_EXPORT dftu_series* dftu_series_sort_nulls(const dftu_series* v,
+                                                int32_t descending,
+                                                int32_t nulls_last);
 
 /** First / last `n` rows (n clamped to [0, length]) as a new FLAT column. */
 DFTU_EXPORT dftu_series* dftu_series_head(const dftu_series* v, int64_t n);
@@ -1185,6 +1215,11 @@ DFTU_EXPORT dftu_series* dftu_series_qcut(const dftu_series* v, int32_t q);
  * length values length. */
 DFTU_EXPORT dftu_series* dftu_series_search_sorted(const dftu_series* v,
                                                    const dftu_series* values);
+/** The same, inserting after the equal values when `right` is nonzero. The
+ * caller frees the Int64 result with dftu_series_free. NULL if `v` or `values`
+ * is NULL or either is not numeric. */
+DFTU_EXPORT dftu_series* dftu_series_search_sorted_side(
+    const dftu_series* v, const dftu_series* values, int32_t right);
 
 /** Linearly interpolate null interior values between their nearest non-null
  * neighbors (by row index); leading/trailing nulls stay null. Returns
@@ -1284,6 +1319,14 @@ DFTU_EXPORT dftu_dataframe* dftu_dataframe_head(const dftu_dataframe* df,
 DFTU_EXPORT dftu_dataframe* dftu_dataframe_sort_by(const dftu_dataframe* df,
                                                    const char* name,
                                                    int32_t descending);
+/** Order every row by the column `name`, ascending unless `descending`; null
+ * keys go last when `nulls_last` is nonzero, first otherwise. Stable: rows
+ * that tie, nulls included, keep their input order. Returns a new frame that
+ * the caller frees with dftu_dataframe_free, or NULL if `df` or `name` is NULL
+ * or `name` is absent or has no order (a nested type). */
+DFTU_EXPORT dftu_dataframe* dftu_dataframe_sort_by_nulls(
+    const dftu_dataframe* df, const char* name, int32_t descending,
+    int32_t nulls_last);
 DFTU_EXPORT dftu_dataframe* dftu_dataframe_topk(const dftu_dataframe* df,
                                                 const char* name, int64_t k,
                                                 int32_t largest);
@@ -1320,11 +1363,29 @@ DFTU_EXPORT dftu_dataframe* dftu_dataframe_unique_by(const dftu_dataframe* df,
 DFTU_EXPORT dftu_dataframe* dftu_dataframe_sort_by_multi(
     const dftu_dataframe* df, const char* const* names, int32_t n,
     int32_t descending);
+/** The same with the nulls placed by `nulls_last` (last when nonzero). The
+ * caller frees the new frame with dftu_dataframe_free. NULL if `df` is NULL,
+ * `n` is negative, `names` is NULL while `n` is above 0, or a name is absent
+ * or has no order. */
+DFTU_EXPORT dftu_dataframe* dftu_dataframe_sort_by_multi_nulls(
+    const dftu_dataframe* df, const char* const* names, int32_t n,
+    int32_t descending, int32_t nulls_last);
 /** Per-column direction form: `descending[i]` (0/1) applies to `names[i]`.
  * `descending_n` must be 1 (broadcast to every key) or equal `n`. */
 DFTU_EXPORT dftu_dataframe* dftu_dataframe_sort_by_multi_per_col(
     const dftu_dataframe* df, const char* const* names, int32_t n,
     const int32_t* descending, int32_t descending_n);
+/** Per-column form: `descending[i]` and `nulls_last[i]` (0/1) apply to
+ * `names[i]`. `descending_n` and `nulls_last_n` must each be 1 (broadcast to
+ * every key) or equal `n`. Returns a new frame that the caller frees with
+ * dftu_dataframe_free. NULL if `df` is NULL, a count is negative, `names`,
+ * `descending` or `nulls_last` is NULL while its count is above 0, a size is
+ * neither 1 nor `n`, or a name is absent or has no order. The arrays are only
+ * read during the call. */
+DFTU_EXPORT dftu_dataframe* dftu_dataframe_sort_by_multi_per_col_nulls(
+    const dftu_dataframe* df, const char* const* names, int32_t n,
+    const int32_t* descending, int32_t descending_n, const int32_t* nulls_last,
+    int32_t nulls_last_n);
 /** The last `n` rows (clamped). */
 DFTU_EXPORT dftu_dataframe* dftu_dataframe_tail(const dftu_dataframe* df,
                                                 int64_t n);
@@ -1864,6 +1925,12 @@ DFTU_EXPORT dftu_lazyframe* dftu_lazyframe_group_by(const dftu_lazyframe* lf,
 DFTU_EXPORT dftu_lazyframe* dftu_lazyframe_sort_by(const dftu_lazyframe* lf,
                                                    const char* name,
                                                    int32_t descending);
+/** The same with the null keys last when `nulls_last` is nonzero, first
+ * otherwise. The caller frees the new plan with dftu_lazyframe_free. NULL if
+ * `lf` or `name` is NULL. */
+DFTU_EXPORT dftu_lazyframe* dftu_lazyframe_sort_by_nulls(
+    const dftu_lazyframe* lf, const char* name, int32_t descending,
+    int32_t nulls_last);
 
 /** First / last `n` rows (head is the row-limit form). */
 DFTU_EXPORT dftu_lazyframe* dftu_lazyframe_head(const dftu_lazyframe* lf,
@@ -2047,11 +2114,16 @@ DFTU_EXPORT dftu_lazyframe* dftu_lazyframe_take(const dftu_lazyframe* lf,
                                                 const int64_t* idx, int32_t n);
 
 /** Stable lexicographic sort by the `n` key columns named by `by`, ascending
- * unless `descending` (nulls last in both directions), as
- * DataFrame::sort_by_multi. */
+ * unless `descending`, as DataFrame::sort_by_multi. */
 DFTU_EXPORT dftu_lazyframe* dftu_lazyframe_sort_by_multi(
     const dftu_lazyframe* lf, const char* const* by, int32_t n,
     int32_t descending);
+/** The same with the null keys last when `nulls_last` is nonzero, first
+ * otherwise. The caller frees the new plan with dftu_lazyframe_free. NULL if
+ * `lf` is NULL, `n` is negative, or `by` is NULL while `n` is above 0. */
+DFTU_EXPORT dftu_lazyframe* dftu_lazyframe_sort_by_multi_nulls(
+    const dftu_lazyframe* lf, const char* const* by, int32_t n,
+    int32_t descending, int32_t nulls_last);
 
 /** Join `lf` (left) with `other` (right), as dftu_dataframe_join. The right
  * plan is collected in full when the joined plan runs (the hash build side);

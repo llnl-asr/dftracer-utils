@@ -2094,7 +2094,7 @@ class ToDummiesCursor : public Cursor {
         if (!chunks.empty()) {
             auto joined = concat_columns(column_ptrs(chunks));
             if (!joined) co_return joined.error();
-            uniq = joined->unique().materialize();
+            uniq = joined->drop_nulls().unique().materialize();
         }
         const std::int64_t d = uniq.length();
         dstd::Vector<Series> one;
@@ -3031,6 +3031,7 @@ struct GroupByOp {
 struct SortByOp {
     dstd::String name;
     bool descending;
+    bool nulls_last = true;
 };
 struct UniqueOp {
     dstd::Vector<dstd::String> subset;
@@ -3071,6 +3072,7 @@ struct FilterMaskOp {
 struct SortByMultiOp {
     dstd::Vector<dstd::String> by;
     dstd::Vector<bool> descending;
+    dstd::Vector<bool> nulls_last;
 };
 struct JoinOp {
     LazyFrame other;
@@ -4114,10 +4116,15 @@ dstd::Optional<SourceApplication> offer_op(
     }
     if (const auto* u = std::get_if<UniqueOp>(&op.node))
         return source.apply_distinct(u->subset);
-    if (const auto* o = std::get_if<SortByOp>(&op.node))
+    if (const auto* o = std::get_if<SortByOp>(&op.node)) {
+        if (!o->nulls_last) return dstd::nullopt;
         return source.apply_sort({{o->name}, {o->descending}});
-    if (const auto* o = std::get_if<SortByMultiOp>(&op.node))
+    }
+    if (const auto* o = std::get_if<SortByMultiOp>(&op.node)) {
+        for (bool last : o->nulls_last)
+            if (!last) return dstd::nullopt;
         return source.apply_sort({o->by, o->descending});
+    }
     if (const auto* o = std::get_if<TopkOp>(&op.node))
         return source.apply_topn({{o->name}, {o->largest}}, o->k);
     if (const auto* o = std::get_if<SliceOp>(&op.node)) {
@@ -4471,13 +4478,14 @@ CursorResult make_cursor(const LazyOp& op, dstd::UniquePtr<Cursor> in,
                                      o.dyn, o.dyn_prefix);
             },
             [&](const SortByOp& o) -> CursorResult {
-                return make_sort_merge(
-                    std::move(in), sch, dstd::Vector<dstd::String>{o.name},
-                    dstd::Vector<bool>{o.descending}, budget);
+                return make_sort_merge(std::move(in), sch,
+                                       dstd::Vector<dstd::String>{o.name},
+                                       dstd::Vector<bool>{o.descending}, budget,
+                                       dstd::Vector<bool>{o.nulls_last});
             },
             [&](const SortByMultiOp& o) -> CursorResult {
                 return make_sort_merge(std::move(in), sch, o.by, o.descending,
-                                       budget);
+                                       budget, o.nulls_last);
             },
             [&](const ReverseOp&) -> CursorResult {
                 dstd::Vector<dstd::String> numbered{"row_index"};
@@ -4713,10 +4721,13 @@ coro::CoroTask<dstd::Result<DataFrame>> LazyFrame::run_ops_in_memory(
                     return df.fill_null(o.value);
                 },
                 [&](const SortByOp& o) {
-                    return df.sort_by(o.name, o.descending);
+                    return df.sort_by(o.name, o.descending, o.nulls_last);
                 },
                 [&](const SortByMultiOp& o) {
-                    return df.sort_by_multi(o.by, o.descending);
+                    dstd::Vector<std::uint8_t> desc, last;
+                    for (bool d : o.descending) desc.push_back(d ? 1 : 0);
+                    for (bool l : o.nulls_last) last.push_back(l ? 1 : 0);
+                    return df.sort_by_multi(o.by, desc, last);
                 },
                 [&](const ReverseOp&) -> dstd::Result<DataFrame> {
                     return df.reverse();
@@ -5084,24 +5095,27 @@ LazyFrame LazyFrame::group_by(dstd::Vector<Expr> keys,
                                  /*single_key=*/false);
 }
 
-LazyFrame LazyFrame::sort_by(dstd::String name, bool descending) const {
+LazyFrame LazyFrame::sort_by(dstd::String name, bool descending,
+                             bool nulls_last) const {
     auto ops = ops_;
     ops.push_back(dstd::make_shared<LazyOp>(
-        LazyOp{SortByOp{std::move(name), descending}}));
+        LazyOp{SortByOp{std::move(name), descending, nulls_last}}));
     return with_ops(std::move(ops));
 }
 
 LazyFrame LazyFrame::sort_by_multi(dstd::Vector<dstd::String> by,
-                                   bool descending) const {
+                                   bool descending, bool nulls_last) const {
     dstd::Vector<bool> flags(by.size(), descending);
-    return sort_by_multi(std::move(by), std::move(flags));
+    return sort_by_multi(std::move(by), std::move(flags),
+                         dstd::Vector<bool>{nulls_last});
 }
 
 LazyFrame LazyFrame::sort_by_multi(dstd::Vector<dstd::String> by,
-                                   dstd::Vector<bool> descending) const {
+                                   dstd::Vector<bool> descending,
+                                   dstd::Vector<bool> nulls_last) const {
     auto ops = ops_;
-    ops.push_back(dstd::make_shared<LazyOp>(
-        LazyOp{SortByMultiOp{std::move(by), std::move(descending)}}));
+    ops.push_back(dstd::make_shared<LazyOp>(LazyOp{SortByMultiOp{
+        std::move(by), std::move(descending), std::move(nulls_last)}}));
     return with_ops(std::move(ops));
 }
 
@@ -5334,12 +5348,18 @@ LazyFrame LazyFrame::frame_op(dstd::String name, OpArgs args,
     if (name == "dftu.frame.sort_by_multi_per_col" && others.empty()) {
         const auto& names = args.raw().args[1].list;
         const auto& flags = args.raw().args[2].i32list;
-        if (names.n > 0 && names.n == flags.n) {
+        const auto& last = args.raw().args[3].i32list;
+        if (names.n > 0 && names.n == flags.n &&
+            (last.n == 1 || last.n == names.n)) {
             dstd::Vector<dstd::String> by(names.items, names.items + names.n);
             dstd::Vector<bool> descending;
             for (std::int32_t i = 0; i < flags.n; ++i)
                 descending.push_back(flags.items[i] != 0);
-            return sort_by_multi(std::move(by), std::move(descending));
+            dstd::Vector<bool> nulls_last;
+            for (std::int32_t i = 0; i < last.n; ++i)
+                nulls_last.push_back(last.items[i] != 0);
+            return sort_by_multi(std::move(by), std::move(descending),
+                                 std::move(nulls_last));
         }
     }
     if (const dftu_op_desc* lazy = native_twin(name, *op, others.size())) {
@@ -6549,6 +6569,7 @@ void fingerprint_op(Fingerprint& fp, const LazyOp& op) {
             [&](const SortByOp& o) {
                 fp.str(o.name);
                 fp.pod(o.descending);
+                fp.pod(o.nulls_last);
             },
             [&](const UniqueOp& o) { fp.strs(o.subset); },
             [&](const SampleOp& o) {
@@ -6591,6 +6612,8 @@ void fingerprint_op(Fingerprint& fp, const LazyOp& op) {
                 fp.strs(o.by);
                 fp.pod(static_cast<std::uint64_t>(o.descending.size()));
                 for (bool d : o.descending) fp.pod(d);
+                fp.pod(static_cast<std::uint64_t>(o.nulls_last.size()));
+                for (bool d : o.nulls_last) fp.pod(d);
             },
             [&](const JoinOp& o) {
                 fp.pod(plan_fingerprint(o.other));

@@ -9,6 +9,7 @@
 #include <dftracer/utils/dataframe/types.h>
 #include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/shared_string.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
@@ -64,7 +65,11 @@ enum class Agg {
     Prod,    ///< product of `column`'s present values, Float64
     SketchQuantile,  ///< `param` quantile of the merged base64 DDSketch cells
                      ///< of a String `column`, Float64
-    Udaf  ///< the registered user-defined aggregate named by GroupAgg::fn
+    Udaf,  ///< the registered user-defined aggregate named by GroupAgg::fn
+    SkewUnbiased,  ///< pandas sample skewness of `column`, Float64 (NaN below
+                   ///< three values and for a constant column)
+    KurtUnbiased   ///< pandas sample excess kurtosis of `column`, Float64 (NaN
+                   ///< below four values and for a constant column)
 };
 
 /// Canonical lowercase name of `agg` (the string the C ABI accepts).
@@ -135,16 +140,22 @@ struct DataFrame {
     /// Sort by column `name`; the errors of @ref dataframe::sort_by (a NotFound
     /// error for an absent column, an InvalidArgument error for a nested one).
     dstd::Result<DataFrame> sort_by(const dstd::String& name,
-                                    bool descending = false) const;
-    /// Stable lexicographic sort by several key columns (nulls last); the
-    /// errors of @ref dataframe::sort_by_multi.
+                                    bool descending = false,
+                                    bool nulls_last = true) const;
+    /// Stable lexicographic sort by several key columns (nulls last, or first
+    /// when `nulls_last` is false); the errors of @ref
+    /// dataframe::sort_by_multi.
     dstd::Result<DataFrame> sort_by_multi(const dstd::Vector<dstd::String>& by,
-                                          bool descending = false) const;
-    /// Per-column direction form: `descending[i]` applies to `by[i]`; a single
-    /// flag broadcasts to every key.
+                                          bool descending = false,
+                                          bool nulls_last = true) const;
+    /// Per-column form: `descending[i]` and `nulls_last[i]` (0 or 1) apply to
+    /// `by[i]`. A span of size 1 broadcasts to every key; an empty span means
+    /// ascending for `descending` and nulls last for `nulls_last`. The errors
+    /// of @ref dataframe::sort_by_multi.
     dstd::Result<DataFrame> sort_by_multi(
         const dstd::Vector<dstd::String>& by,
-        const dstd::Vector<bool>& descending) const;
+        dstd::Span<const std::uint8_t> descending,
+        dstd::Span<const std::uint8_t> nulls_last = {}) const;
     /// The k rows with the largest (or smallest) values of `name`; the errors
     /// of @ref dataframe::topk.
     dstd::Result<DataFrame> topk(const dstd::String& name, std::int64_t k,

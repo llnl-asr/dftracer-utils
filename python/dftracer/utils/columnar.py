@@ -246,6 +246,8 @@ _AGG_CODE = {
     "std": 6,
     "skew": 7,
     "kurt": 8,
+    "skew_unbiased": 38,
+    "kurt_unbiased": 39,
     "first": 9,
     "last": 10,
     "pct": 11,
@@ -539,20 +541,13 @@ class Expr:
     def sort(self, *, descending: bool = False, nulls_last: bool = False) -> "Expr":
         """This column's values in order (the other columns do not move, as
         polars ``col.sort()`` inside ``with_columns``). Nulls come first, or
-        last with ``nulls_last=True``. The kernel places nulls last, so nulls
-        first is the opposite sort, reversed."""
-        if nulls_last:
-            return self._op("dftu.series.sort", a=1 if descending else 0)
-        return self._op("dftu.series.sort", a=0 if descending else 1).reverse()
+        last with ``nulls_last=True``."""
+        return self._op("dftu.series.sort", a=1 if descending else 0, b=1 if nulls_last else 0)
 
     def arg_sort(self, descending: bool = False, nulls_last: bool = False) -> "Expr":
         """The row indices that sort this column; nulls first by default, or
-        last with ``nulls_last=True``. Nulls first is the opposite argsort,
-        reversed, so equal values and several nulls come in reverse index order
-        (the sorted values are the same)."""
-        if nulls_last:
-            return self._op("dftu.series.argsort", a=1 if descending else 0)
-        return self._op("dftu.series.argsort", a=0 if descending else 1).reverse()
+        last with ``nulls_last=True``. Ties keep input order."""
+        return self._op("dftu.series.argsort", a=1 if descending else 0, b=1 if nulls_last else 0)
 
     def duplicated(self, keep: "Union[Literal['first', 'last'], bool]" = "first") -> "Expr":
         """Bool mask of the values that repeat an earlier one (pandas
@@ -1131,8 +1126,8 @@ class Expr:
         def mean(self) -> "Agg": ...
         def var(self) -> "Agg": ...
         def std(self) -> "Agg": ...
-        def skew(self) -> "Agg": ...
-        def kurt(self) -> "Agg": ...
+        def skew(self, bias: bool = True) -> "Agg": ...
+        def kurt(self, bias: bool = True) -> "Agg": ...
         def first(self) -> "Agg": ...
         def last(self) -> "Agg": ...
         def sumsq(self) -> "Agg": ...
@@ -3070,8 +3065,6 @@ for _op in (
     "mean",
     "var",
     "std",
-    "skew",
-    "kurt",
     "first",
     "last",
     "sumsq",
@@ -3079,6 +3072,24 @@ for _op in (
     "prod",
 ):
     setattr(Expr, _op, _make_agg_method(_op))
+
+
+def _expr_skew(self: Expr, bias: bool = True) -> Agg:
+    """The skewness of this expression per group (an :class:`Agg`): the
+    population one by default (polars), the pandas sample estimator with
+    ``bias=False``."""
+    return Agg("skew" if bias else "skew_unbiased", self)
+
+
+def _expr_kurt(self: Expr, bias: bool = True) -> Agg:
+    """The excess kurtosis of this expression per group (an :class:`Agg`): the
+    population one by default (polars), the pandas sample estimator with
+    ``bias=False``."""
+    return Agg("kurt" if bias else "kurt_unbiased", self)
+
+
+Expr.skew = _expr_skew  # type: ignore[assignment,method-assign]
+Expr.kurt = _expr_kurt  # type: ignore[assignment,method-assign]
 
 
 def _to_agg(spec: object) -> Agg:
@@ -3102,7 +3113,12 @@ def _to_agg(spec: object) -> Agg:
 # value and the sketch an approximate one, so those are spelled out as
 # ``col("x").quantile(0.5)`` / ``.distinct()`` by the caller who accepts that,
 # or taken exactly through ``GroupBy.median() / quantile(q) / nunique()``.
-_PANDAS_AGG_NAMES = {"count": "count_valid", "size": "count"}
+_PANDAS_AGG_NAMES = {
+    "count": "count_valid",
+    "size": "count",
+    "skew": "skew_unbiased",
+    "kurt": "kurt_unbiased",
+}
 _PANDAS_AGG_APPROXIMATE = {
     "median": "quantile(0.5)",
     "quantile": "quantile(q)",
@@ -3194,14 +3210,6 @@ def _agg_specs_from_pandas_forms(
         else:
             raise TypeError(f"agg() keyword {out!r} must be (column, name) or an Agg")
     return specs
-
-
-def _unbiased_moment(agg: str, value: Any, n: Any, constant: bool, minimum: int) -> float:
-    if value is None or n < minimum or constant:
-        return float("nan")
-    if agg == "skew":
-        return value * math.sqrt(n * (n - 1)) / (n - 2)
-    return (n - 1) / ((n - 2) * (n - 3)) * ((n + 1) * value + 6)
 
 
 class GroupBy:
@@ -3331,35 +3339,12 @@ class GroupBy:
     def skew(self) -> DataFrame:
         """The pandas unbiased skewness per group and column (NaN below three
         values and for a constant column, as pandas 3)."""
-        return self._unbiased("skew", 3)
+        return self.reduce("skew_unbiased")
 
     def kurt(self) -> DataFrame:
         """The pandas unbiased excess kurtosis per group and column (NaN below
         four values and for a constant column, as pandas 3)."""
-        return self._unbiased("kurt", 4)
-
-    def _unbiased(self, agg: str, minimum: int) -> DataFrame:
-        # The engine aggregates are the population moments; the pandas
-        # estimators rescale them by the group's count.
-        pop = self.reduce(agg)
-        counts = self.reduce("count_valid")
-        lows = self.reduce("min")
-        highs = self.reduce("max")
-        out = pop
-        for name in pop.columns:
-            if name in self._keys:
-                continue
-            values = [
-                _unbiased_moment(agg, v, n, lo == hi, minimum)
-                for v, n, lo, hi in zip(
-                    pop[name].to_list(),
-                    counts[name].to_list(),
-                    lows[name].to_list(),
-                    highs[name].to_list(),
-                )
-            ]
-            out = _ext.DataFrame.with_column(out, name, Series(values, dtype="float64"))
-        return out
+        return self.reduce("kurt_unbiased")
 
     def first(self) -> DataFrame:
         return self.reduce("first")

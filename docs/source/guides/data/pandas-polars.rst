@@ -71,9 +71,15 @@ column, null for no values), ``kurtosis(bias=False)`` the unbiased one (null
 below four values), and ``DataFrame.kurtosis`` gives the same value per
 column. ``skew`` is one name in both libraries; our ``Series``
 attribute names are pandas-shaped, so ``Series.skew()`` follows pandas and
-``Expr.skew()`` follows polars (the population value). The ``"skew:col"`` and
-``"kurt:col"`` aggregate strings, ``col(...).skew()`` and the lazy ``skew()`` and
-``kurt()`` are the engine's population moments.
+``Expr.skew()`` follows polars (the population value) and takes ``bias=False``
+for the pandas estimator, as does ``Expr.kurt``. The engine has both: the
+aggregates ``skew`` and ``kurt`` are the population moments, and ``skew_unbiased``
+and ``kurt_unbiased`` are the pandas estimators (NaN below three and four
+values and for a constant column). The ``"skew:col"`` and ``"kurt:col"``
+strings are the population ones; the pandas names in ``agg("skew")``,
+``agg({"x": "kurt"})`` and ``agg(out=("x", "skew"))``, the lazy ``skew()`` and
+``kurt()``, ``DataFrame.skew`` and the group-by methods use the pandas
+estimators, in memory and when a plan spills.
 
 The keywords that a name shares across ``Series``, ``DataFrame``,
 ``LazyFrame`` and ``Expr`` are the same: ``fill_null(value)``, ``shift(n)``,
@@ -82,17 +88,17 @@ The keywords that a name shares across ``Series``, ``DataFrame``,
 come first by default, as in polars; a NaN sorts after every number and apart
 from the nulls. ``sort_values(by, ascending=True, na_position="last")`` keeps
 the pandas defaults (nulls last); pandas treats a NaN as missing, ours stays a
-value. A null-first sort of a frame runs the engine sort over a 0 / 1 presence
-key ahead of each key (only when a key has nulls, in an eager frame; always in
-a lazy plan); ``Expr.sort`` runs the opposite sort and reverses it.
+value. The engine sort takes ``nulls_last`` itself, per key for a frame, and is
+stable in every mode: equal values and nulls keep their input order, also with
+``descending=True`` and nulls first. A lazy sort that asks for nulls first is
+not pushed into a source that sorts, which orders nulls last.
 
 ``unique(maintain_order=False)`` is the polars one: the distinct values, a null
 kept once, sorted with nulls first, or in order of first occurrence with
 ``maintain_order=True``; ``drop_duplicates(keep="first")`` is the pandas result
 (first-occurrence order, one null kept). ``arg_sort(descending, nulls_last=False)``
 has the ``sort`` keywords and default, so ``s.gather(s.arg_sort())`` is
-``s.sort()`` (on an ``Expr``, equal values and several nulls come in reverse index
-order). ``search_sorted(element, side="left")`` takes a scalar (an int) or
+``s.sort()``, and equal values and several nulls keep their index order. ``search_sorted(element, side="left")`` takes a scalar (an int) or
 values, and ``side`` ``"left"``, ``"right"`` or ``"any"``. ``mul``, ``sub``,
 ``add`` and ``truediv`` take a Series or a scalar.
 

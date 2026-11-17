@@ -97,14 +97,14 @@ int cmp_row(const Series& v, std::int64_t a, std::int64_t b) {
     }
 }
 
-Series argsort_string(const Series& v, bool descending) {
+Series argsort_string(const Series& v, bool descending, bool nulls_last) {
     const dftu_series* h = v.handle();
     const std::int64_t n = v.length();
     dstd::Vector<std::int64_t> idx(static_cast<std::size_t>(n));
     dstd::Vector<std::int32_t> ranks;
     std::int32_t nranks = 0;
     if (string_ranks(h, ranks, nranks)) {
-        counting_order(ranks, nranks, descending, idx.data());
+        counting_order(ranks, nranks, descending, idx.data(), nulls_last);
         return Series::flat_i64(idx.data(), n);
     }
     std::iota(idx.begin(), idx.end(), 0);
@@ -113,7 +113,10 @@ Series argsort_string(const Series& v, bool descending) {
                           dstd::StringView x, y;
                           const bool va = str_at(h, a, x);
                           const bool vb = str_at(h, b, y);
-                          if (!va || !vb) return va && !vb;
+                          if (!va || !vb) {
+                              if (!va && !vb) return false;
+                              return nulls_last ? va : vb;
+                          }
                           return descending ? y < x : x < y;
                       });
     return Series::flat_i64(idx.data(), n);
@@ -138,8 +141,9 @@ int cmp_sort_row(const Series& v, std::int64_t a, std::int64_t b) {
     }
 }
 
-Series argsort_scalar(const Series& v, bool descending) {
-    if (is_string_column(*v.handle())) return argsort_string(v, descending);
+Series argsort_scalar(const Series& v, bool descending, bool nulls_last) {
+    if (is_string_column(*v.handle()))
+        return argsort_string(v, descending, nulls_last);
     const std::int64_t n = v.length();
     dstd::Vector<std::int64_t> idx(static_cast<std::size_t>(n));
     std::iota(idx.begin(), idx.end(), 0);
@@ -148,7 +152,10 @@ Series argsort_scalar(const Series& v, bool descending) {
                       [&](std::int64_t a, std::int64_t b) {
                           if (has_nulls) {
                               bool na = v.is_null(a), nb = v.is_null(b);
-                              if (na || nb) return nb && !na;  // nulls last
+                              if (na || nb) {
+                                  if (na && nb) return false;
+                                  return nulls_last ? nb : na;
+                              }
                           }
                           int c = cmp_sort_row(v, a, b);
                           return descending ? c > 0 : c < 0;
@@ -417,13 +424,13 @@ int compare_rows(const Series& v, std::int64_t a, std::int64_t b) {
     return cmp_row(v, a, b);
 }
 
-Series argsort(const Series& v, bool descending) {
+Series argsort(const Series& v, bool descending, bool nulls_last) {
     if (v.encoding() == Encoding::Chunked)
-        return argsort(v.materialize(), descending);
+        return argsort(v.materialize(), descending, nulls_last);
     if (refuse_nested_value("argsort", v.type())) return Series{};
     Series simd = argsort_simd(v, descending, -1);
     if (simd.valid()) return simd;
-    return argsort_scalar(v, descending);
+    return argsort_scalar(v, descending, nulls_last);
 }
 
 Series topk_indices(const Series& v, std::int64_t k, bool largest) {
@@ -435,7 +442,7 @@ Series topk_indices(const Series& v, std::int64_t k, bool largest) {
     // largest -> descending key order; the first k are the k largest.
     Series simd = argsort_simd(v, largest, k);
     if (simd.valid()) return simd;
-    Series full = argsort_scalar(v, largest);  // strings / nulls / nested
+    Series full = argsort_scalar(v, largest, true);  // strings / nulls / nested
     const std::int64_t* idx = full.data<std::int64_t>();
     dstd::Vector<std::int64_t> head(idx, idx + k);
     return Series::flat_i64(head.data(), k);
@@ -445,12 +452,18 @@ Series topk_indices(const Series& v, std::int64_t k, bool largest) {
 
 dftu_series* dftu_series_argsort(const dftu_series* v,
                                  std::int32_t descending) {
+    return dftu_series_argsort_nulls(v, descending, 1);
+}
+dftu_series* dftu_series_argsort_nulls(const dftu_series* v,
+                                       std::int32_t descending,
+                                       std::int32_t nulls_last) {
     if (!v) return nullptr;
     if (!dftracer::utils::dataframe::is_string_column(*v))
-        DFTU_FLAT_INPUT(v, dftu_series_argsort, descending);
+        DFTU_FLAT_INPUT(v, dftu_series_argsort_nulls, descending, nulls_last);
     dftracer::utils::dataframe::Series col{const_cast<dftu_series*>(v)};
     dftracer::utils::dataframe::Series out =
-        dftracer::utils::dataframe::argsort(col, descending != 0);
+        dftracer::utils::dataframe::argsort(col, descending != 0,
+                                            nulls_last != 0);
     col.release();  // do not free the borrowed input
     return out.release();
 }

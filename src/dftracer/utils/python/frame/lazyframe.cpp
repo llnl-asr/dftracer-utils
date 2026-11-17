@@ -253,15 +253,24 @@ PyObject* LazyFrame_sort_by_multi(PyObject* self, PyObject* args,
     if (!b) return nullptr;
     PyObject* names_obj = nullptr;
     PyObject* descending_obj = nullptr;
-    if (!parse_kw<"O|O">(args, kwds, {"names", "descending"}, &names_obj,
-                         &descending_obj))
+    PyObject* nulls_last_obj = nullptr;
+    if (!parse_kw<"O|OO">(args, kwds, {"names", "descending", "nulls_last"},
+                          &names_obj, &descending_obj, &nulls_last_obj))
         return nullptr;
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> names;
     if (!strings_from_str_or_seq(names_obj, names)) return nullptr;
     dftracer::utils::dstd::Vector<bool> descending;
     if (!descending_from_obj(descending_obj, descending)) return nullptr;
+    dftracer::utils::dstd::Vector<bool> nulls_last;
+    if (!nulls_last_obj)
+        nulls_last.push_back(true);
+    else if (!descending_from_obj(
+                 nulls_last_obj, nulls_last,
+                 "nulls_last must be a bool or a sequence of bool"))
+        return nullptr;
     return run_lazy_op([&] {
-        return b->lf.sort_by_multi(std::move(names), std::move(descending));
+        return b->lf.sort_by_multi(std::move(names), std::move(descending),
+                                   std::move(nulls_last));
     });
 }
 
@@ -631,10 +640,12 @@ PyObject* LazyFrame_sort_by(PyObject* self, PyObject* args, PyObject* kwds) {
     if (!b) return nullptr;
     const char* name = nullptr;
     int descending = 0;
-    if (!parse_kw<"s|p">(args, kwds, {"name", "descending"}, &name,
-                         &descending))
+    int nulls_last = 1;
+    if (!parse_kw<"s|pp">(args, kwds, {"name", "descending", "nulls_last"},
+                          &name, &descending, &nulls_last))
         return nullptr;
-    return run_lazy_op([&] { return b->lf.sort_by(name, descending != 0); });
+    return run_lazy_op(
+        [&] { return b->lf.sort_by(name, descending != 0, nulls_last != 0); });
 }
 
 PyObject* LazyFrame_join(PyObject* self, PyObject* args, PyObject* kwds) {
@@ -1191,7 +1202,8 @@ PyMethodDef LazyFrame_methods[] = {
      "group_by(key, aggs) -> LazyFrame grouped by key with string-spec aggs."},
     {"sort_by", DFTU_PYCFUNCTION(LazyFrame_sort_by),
      METH_VARARGS | METH_KEYWORDS,
-     "sort_by(name, descending=False) -> LazyFrame sorted by one column."},
+     "sort_by(name, descending=False, nulls_last=True) -> LazyFrame sorted "
+     "by one column."},
     {"take", LazyFrame_take, METH_O,
      "take(indices) -> LazyFrame keeping the rows at indices (any order, "
      "repeats allowed)."},

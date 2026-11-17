@@ -43,8 +43,6 @@ PY_METHOD(Series, forward_fill, "dftu.series.ffill", NONE, SAME, KEEP, NO, "", "
           "forward_fill() -> nulls filled from the nearest present value before them.")
 PY_METHOD(Series, backward_fill, "dftu.series.bfill", NONE, SAME, KEEP, NO, "", "", "",
           "backward_fill() -> nulls filled from the nearest present value after them.")
-PY_METHOD(Series, unique, "dftu.series.unique", NONE, SAME, KEEP, NO, "", "", "",
-          "Distinct values (ascending) -> Series.")
 PY_METHOD(Series, abs, "dftu.series.abs", NONE, SAME, KEEP, NO, "", "", "",
           "Elementwise absolute value (SIMD).")
 PY_METHOD(Series, round, "dftu.series.round", NONE, SAME, KEEP, NO, "", "", "",
@@ -147,6 +145,10 @@ PY_METHOD(Series, skew, "dftu.series.skewness", NONE, F64, KEEP, NO, "", "", "",
           "Population skewness.")
 PY_METHOD(Series, kurtosis, "dftu.series.kurtosis", NONE, F64, KEEP, NO, "", "", "",
           "Excess kurtosis.")
+PY_METHOD(Series, skew_unbiased, "dftu.series.skewness_unbiased", NONE, F64, KEEP, NO, "", "",
+          "", "pandas sample skewness (NaN below three values or for a constant column).")
+PY_METHOD(Series, kurt_unbiased, "dftu.series.kurtosis_unbiased", NONE, F64, KEEP, NO, "", "",
+          "", "pandas sample excess kurtosis (NaN below four values or for a constant column).")
 PY_METHOD(Series, product, "dftu.series.product", NONE, SCALAR, KEEP, NO, "", "", "",
           "Product of non-null values -> scalar.")
 PY_METHOD(Series, mode, "dftu.series.mode", NONE, ELEMENT, KEEP, NO, "", "", "",

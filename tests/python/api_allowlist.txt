@@ -40,7 +40,7 @@ Series.dt_format | needs-token:STR_ARG | -
 Series.dt_part | needs-token:STR_ARG | -
 Series.dt_round | needs-token:STR_ARG | -
 Series.dtype | python-semantics | accessor or shape property of the column, not an op
-Series.duplicated | python-semantics | pandas or polars semantics written over several native calls
+Series.duplicated | needs-token:FLAG | -
 Series.empty | python-semantics | accessor or shape property of the column, not an op
 Series.encoding | python-semantics | metadata property read from the column, not an op
 Series.eq | python-semantics | Python logic around native calls
@@ -195,6 +195,7 @@ Series.transform | python-semantics | pandas container API on the Series, not an
 Series.truediv | python-semantics | the polars name of true division; takes a Series or a scalar, integers widen to Float64
 Series.truncate | python-semantics | pandas or polars semantics written over several native calls
 Series.type | python-semantics | metadata property read from the column, not an op
+Series.unique | needs-token:FLAG | -
 Series.unique_mask | python-semantics | pandas or polars semantics written over several native calls
 Series.update | python-semantics | pandas container API on the Series, not an op
 Series.value_counts | python-semantics | pandas or polars semantics written over several native calls

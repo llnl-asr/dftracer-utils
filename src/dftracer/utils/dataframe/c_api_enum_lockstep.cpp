@@ -15,6 +15,18 @@ constexpr std::int32_t code(E e) {
     return static_cast<std::int32_t>(e);
 }
 
+constexpr AggOp last_agg_row() {
+    AggOp last = AggOp::Sum;
+#define DFTU_AGG_OP(id, code, name) last = AggOp::id;
+#include <dftracer/utils/dataframe/agg_ops.def>
+#undef DFTU_AGG_OP
+    return last;
+}
+static_assert(AGG_OP_LAST == last_agg_row());
+static_assert(code(AggOp::SkewUnbiased) == DFTU_AGG_SKEW_UNBIASED);
+static_assert(code(AggOp::KurtUnbiased) == DFTU_AGG_KURT_UNBIASED);
+static_assert(code(Agg::SkewUnbiased) == DFTU_AGG_SKEW_UNBIASED);
+static_assert(code(Agg::KurtUnbiased) == DFTU_AGG_KURT_UNBIASED);
 static_assert(code(Encoding::View) == 4);
 static_assert(code(Encoding::Chunked) == 5);
 

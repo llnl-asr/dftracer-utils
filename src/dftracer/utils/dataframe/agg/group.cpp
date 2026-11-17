@@ -967,6 +967,8 @@ bool one_column_state(AggOp op) {
         case AggOp::Std:
         case AggOp::Skew:
         case AggOp::Kurt:
+        case AggOp::SkewUnbiased:
+        case AggOp::KurtUnbiased:
         case AggOp::SumSq:
             return true;
         default:

@@ -431,6 +431,10 @@ class Series {
     double stddev(bool sample = true) const;
     double skewness() const;
     double kurtosis() const;
+    /// The pandas sample skewness (NaN below three values) and sample excess
+    /// kurtosis (NaN below four); NaN for a column with no spread.
+    double skewness_unbiased() const;
+    double kurtosis_unbiased() const;
     double quantile(double q) const;
     double median() const;
     std::int64_t nunique() const;
@@ -470,7 +474,7 @@ class Series {
     Series qcut(std::int32_t q) const;
     /// Lower-bound insertion index of each `values` element into this (assumed
     /// sorted) column -> Int64.
-    Series search_sorted(const Series& values) const;
+    Series search_sorted(const Series& values, bool right = false) const;
     /// Linearly interpolate null interior values; leading/trailing nulls stay
     /// null -> Float64.
     Series interpolate() const;
@@ -515,7 +519,9 @@ class Series {
     Series sqrt() const;
     Series exp() const;
     Series log() const;
-    Series unique() const;
+    /// The distinct values, a null kept once; first-occurrence order when
+    /// `maintain_order`, otherwise ascending with the null first.
+    Series unique(bool maintain_order = false) const;
     Series dictionary_encode() const;
 
     Series null_mask() const;      ///< Bool mask: row is null.
@@ -525,13 +531,17 @@ class Series {
     Series is_infinite() const;    ///< Bool mask: value is +/-Inf (floats).
     Series is_unique() const;      ///< Bool mask: value occurs exactly once.
     Series is_duplicated() const;  ///< Bool mask: value is repeated.
+    /// Bool mask of the repeats: `keep` 0 leaves the first row of each value
+    /// unmarked, 1 the last; another value marks every row of a repeated value.
+    Series duplicated(std::int32_t keep = 0) const;
     /// Whether the column is sorted ascending (or descending); single scan.
     bool is_sorted(bool descending = false) const;
     Series drop_nulls() const;  ///< Selection over the non-null rows.
     /// Bool mask, true where the value is present in `values`.
     Series is_in(const Series& values) const;
-    /// Rows sorted ascending (or descending): take(argsort(v, descending)).
-    Series sort(bool descending = false) const;
+    /// Rows sorted ascending (or descending): take(argsort(v, descending,
+    /// nulls_last)). Nulls go last, or first when `nulls_last` is false.
+    Series sort(bool descending = false, bool nulls_last = true) const;
     Series head(std::int64_t n) const;  ///< First n rows (n clamped to length).
     Series tail(std::int64_t n) const;  ///< Last n rows (n clamped to length).
     Series reverse() const;             ///< Rows in reverse order.
@@ -542,7 +552,7 @@ class Series {
     /// A deterministic sample of n distinct rows (mix64(index, seed) hash).
     Series sample(std::int64_t n, std::uint64_t seed = 0) const;
 
-    Series argsort(bool descending = false) const;
+    Series argsort(bool descending = false, bool nulls_last = true) const;
     Series take(const dstd::Vector<std::int64_t>& indices) const;
     Series take(dstd::Span<const std::int64_t> indices) const;
     Series materialize() const;

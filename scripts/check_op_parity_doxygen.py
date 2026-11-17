@@ -165,6 +165,8 @@ PY_ALIASES = {
         "var": "variance",
         "std": "stddev",
         "skew": "skewness",
+        "skew_unbiased": "skewness_unbiased",
+        "kurt_unbiased": "kurtosis_unbiased",
         "n_unique": "nunique",
         "arg_sort": "argsort",
         "cum_sum": "cumsum",

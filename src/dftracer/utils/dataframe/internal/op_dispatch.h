@@ -127,17 +127,25 @@ DFTU_OP_FN(DFTU_OP_SIG(FRAME, FRAME, STRLIST, NONE),
            DF (*)(CDF, const char* const*, std::int32_t))
 DFTU_OP_FN(DFTU_OP_SIG(FRAME, FRAME, STRLIST, I32),
            DF (*)(CDF, const char* const*, std::int32_t, std::int32_t))
-DFTU_OP_FN(DFTU_OP_SIG(FRAME, FRAME, STRLIST, STRLIST),
-           DF (*)(CDF, const char* const*, std::int32_t, const char* const*,
-                  std::int32_t))
 DFTU_OP_FN(DFTU_OP_SIG(FRAME, FRAME, STRLIST, I32LIST),
            DF (*)(CDF, const char* const*, std::int32_t, const std::int32_t*,
+                  std::int32_t))
+DFTU_OP_FN(DFTU_OP_SIG(FRAME, FRAME, STRLIST, STRLIST),
+           DF (*)(CDF, const char* const*, std::int32_t, const char* const*,
                   std::int32_t))
 DFTU_OP_FN(DFTU_OP_SIG(FRAME, FRAME, STRLIST, AGGLIST),
            DF (*)(CDF, const char* const*, std::int32_t, const dftu_group_agg*,
                   std::int32_t))
 DFTU_OP_FN(DFTU_OP_SIG6(FRAME, FRAME, STR, I64, I32, NONE),
            DF (*)(CDF, const char*, std::int64_t, std::int32_t))
+DFTU_OP_FN(DFTU_OP_SIG6(FRAME, FRAME, STR, I32, I32, NONE),
+           DF (*)(CDF, const char*, std::int32_t, std::int32_t))
+DFTU_OP_FN(DFTU_OP_SIG6(FRAME, FRAME, STRLIST, I32, I32, NONE),
+           DF (*)(CDF, const char* const*, std::int32_t, std::int32_t,
+                  std::int32_t))
+DFTU_OP_FN(DFTU_OP_SIG6(FRAME, FRAME, STRLIST, I32LIST, I32LIST, NONE),
+           DF (*)(CDF, const char* const*, std::int32_t, const std::int32_t*,
+                  std::int32_t, const std::int32_t*, std::int32_t))
 DFTU_OP_FN(DFTU_OP_SIG6(FRAME, FRAME, STR, STR, STR, STR),
            DF (*)(CDF, const char*, const char*, const char*, const char*))
 DFTU_OP_FN(DFTU_OP_SIG(FRAME, SERIES, NONE, NONE), DF (*)(CS))
@@ -211,6 +219,11 @@ DFTU_OP_FN(DFTU_OP_SIG(LAZY, LAZY, STRLIST, I64),
 DFTU_OP_FN(DFTU_OP_SIG(LAZY, LAZY, I32, NONE), LF (*)(CLF, std::int32_t))
 DFTU_OP_FN(DFTU_OP_SIG6(LAZY, LAZY, STR, I64, I32, NONE),
            LF (*)(CLF, const char*, std::int64_t, std::int32_t))
+DFTU_OP_FN(DFTU_OP_SIG6(LAZY, LAZY, STR, I32, I32, NONE),
+           LF (*)(CLF, const char*, std::int32_t, std::int32_t))
+DFTU_OP_FN(DFTU_OP_SIG6(LAZY, LAZY, STRLIST, I32, I32, NONE),
+           LF (*)(CLF, const char* const*, std::int32_t, std::int32_t,
+                  std::int32_t))
 DFTU_OP_FN(DFTU_OP_SIG6(LAZY, LAZY, STR, STR, STR, STR),
            LF (*)(CLF, const char*, const char*, const char*, const char*))
 DFTU_OP_FN(DFTU_OP_SIG(LAZY, LAZY, I64LIST, NONE),

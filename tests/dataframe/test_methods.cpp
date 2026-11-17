@@ -895,7 +895,7 @@ TEST_CASE(
     df.columns.push_back(
         Series::flat(dftracer::utils::dataframe::TypeId::Int32, c.data(), n));
     df.columns.push_back(i64(id));
-    const dstd::Vector<bool> desc{false, true, true};
+    const dstd::Vector<std::uint8_t> desc{0, 1, 1};
     const DataFrame s =
         dftu_utils_test::ok(df.sort_by_multi({"a", "w", "c"}, desc));
 
@@ -970,8 +970,9 @@ TEST_CASE("float keys sort as one total order: NaN last, -0.0 equals 0.0") {
                 if (equal(f[ux], f[uy])) return x < y;
                 return desc ? less(f[uy], f[ux]) : less(f[ux], f[uy]);
             });
-        const DataFrame two =
-            dftu_utils_test::ok(df.sort_by_multi({"g", "f"}, {false, desc}));
+        const DataFrame two = dftu_utils_test::ok(df.sort_by_multi(
+            {"g", "f"},
+            dstd::Vector<std::uint8_t>{0, static_cast<std::uint8_t>(desc)}));
         for (std::int64_t i = 0; i < n; ++i)
             REQUIRE(two.column("id").data<std::int64_t>()[i] ==
                     want[static_cast<std::size_t>(i)]);
@@ -986,7 +987,7 @@ TEST_CASE("DataFrame sort_by_multi per-column direction") {
 
     // [false, true]: a asc, b desc -> (1,8),(1,6),(2,9),(2,7).
     DataFrame mixed = dftu_utils_test::ok(
-        df.sort_by_multi({"a", "b"}, dstd::Vector<bool>{false, true}));
+        df.sort_by_multi({"a", "b"}, dstd::Vector<std::uint8_t>{0, 1}));
     const std::int64_t* a = mixed.column("a").data<std::int64_t>();
     const std::int64_t* b = mixed.column("b").data<std::int64_t>();
     CHECK(a[0] == 1);
@@ -1000,7 +1001,7 @@ TEST_CASE("DataFrame sort_by_multi per-column direction") {
 
     // Distinct from [true, true] (both descending).
     DataFrame both = dftu_utils_test::ok(
-        df.sort_by_multi({"a", "b"}, dstd::Vector<bool>{true, true}));
+        df.sort_by_multi({"a", "b"}, dstd::Vector<std::uint8_t>{1, 1}));
     const std::int64_t* a2 = both.column("a").data<std::int64_t>();
     const std::int64_t* b2 = both.column("b").data<std::int64_t>();
     CHECK(a2[0] == 2);
@@ -1009,17 +1010,21 @@ TEST_CASE("DataFrame sort_by_multi per-column direction") {
 
     // A single-flag list broadcasts to every key.
     DataFrame broadcast = dftu_utils_test::ok(
-        df.sort_by_multi({"a", "b"}, dstd::Vector<bool>{true}));
+        df.sort_by_multi({"a", "b"}, dstd::Vector<std::uint8_t>{1}));
     CHECK(broadcast.column("a").data<std::int64_t>()[0] ==
           both.column("a").data<std::int64_t>()[0]);
     CHECK(broadcast.column("b").data<std::int64_t>()[0] ==
           both.column("b").data<std::int64_t>()[0]);
 
+    // An empty list is every key ascending, as a list of zeros.
+    DataFrame ascending = dftu_utils_test::ok(
+        df.sort_by_multi({"a", "b"}, dstd::Vector<std::uint8_t>{}));
+    DataFrame zeros = dftu_utils_test::ok(
+        df.sort_by_multi({"a", "b"}, dstd::Vector<std::uint8_t>{0, 0}));
+    CHECK(ascending.column("b").data<std::int64_t>()[0] ==
+          zeros.column("b").data<std::int64_t>()[0]);
     dftu_utils_test::expect_error(
-        df.sort_by_multi({"a", "b"}, dstd::Vector<bool>{}),
-        dftracer::utils::common::ErrorCode::InvalidArgument);
-    dftu_utils_test::expect_error(
-        df.sort_by_multi({"a", "b"}, dstd::Vector<bool>{true, true, false}),
+        df.sort_by_multi({"a", "b"}, dstd::Vector<std::uint8_t>{1, 1, 0}),
         dftracer::utils::common::ErrorCode::InvalidArgument);
 }
 

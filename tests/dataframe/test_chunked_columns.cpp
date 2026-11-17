@@ -575,10 +575,10 @@ TEST_SUITE("chunked columns") {
                      dftu_utils_test::ok(joined.sort_by("s")));
                 same(dftu_utils_test::ok(chunked.sort_by("f", true)),
                      dftu_utils_test::ok(joined.sort_by("f", true)));
-                same(dftu_utils_test::ok(
-                         chunked.sort_by_multi({"key", "i"}, {false, true})),
-                     dftu_utils_test::ok(
-                         joined.sort_by_multi({"key", "i"}, {false, true})));
+                same(dftu_utils_test::ok(chunked.sort_by_multi(
+                         {"key", "i"}, dstd::Vector<std::uint8_t>{0, 1})),
+                     dftu_utils_test::ok(joined.sort_by_multi(
+                         {"key", "i"}, dstd::Vector<std::uint8_t>{0, 1})));
 
                 if (kind == Kind::Bool) continue;
                 dstd::Vector<GroupAgg> aggs;

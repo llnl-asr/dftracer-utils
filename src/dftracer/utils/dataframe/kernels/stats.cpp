@@ -152,6 +152,16 @@ double kurtosis(const Series& v) {
     return field_stat_reduce(v, 0, v.length()).kurtosis();
 }
 
+double skewness_unbiased(const Series& v) {
+    if (refuse_non_numeric("skewness", v.type())) return 0.0;
+    return field_stat_reduce(v, 0, v.length()).skewness_unbiased();
+}
+
+double kurtosis_unbiased(const Series& v) {
+    if (refuse_non_numeric("kurtosis", v.type())) return 0.0;
+    return field_stat_reduce(v, 0, v.length()).kurtosis_unbiased();
+}
+
 namespace {
 
 // The order-preserving bit pattern of a double (the sort kernels' key).
@@ -298,56 +308,49 @@ double median(const Series& v) { return quantile(v, 0.5); }
 std::int64_t nunique(const Series& v) {
     if (v.length() == 0) return 0;
     if (refuse_nested_value("nunique", v.type())) return 0;
-    return unique(v).length();
+    return unique(v).length() - (v.null_count() > 0 ? 1 : 0);
 }
 
-Series unique(const Series& v) {
-    if (refuse_nested_value("unique", v.type())) return Series{};
-    const TypeId t = v.type();
-    // Floats keep the sort over every row: NaN != NaN keeps each NaN row, and
-    // which of 0.0 and -0.0 survives depends on that sort, so ids keyed by
-    // bits would change the result.
+// The first row of every distinct value, ascending: one null row stands for
+// all the nulls. Floats compare as equal_at does (NaN != NaN, so every NaN row
+// is its own value; -0.0 is +0.0); every other type compares as value_ids does.
+static dstd::Vector<std::int64_t> distinct_first_rows(const Series& f) {
+    const TypeId t = f.type();
+    dstd::Vector<std::int64_t> firsts;
     if (t == TypeId::Float64 || t == TypeId::Float32 || t == TypeId::Float16) {
-        const Series f =
-            v.encoding() == Encoding::Flat ? v.share() : v.materialize();
         const std::int64_t n = f.length();
         Series order = argsort(f, false);
         const std::int64_t* idx = order.data<std::int64_t>();
         const bool has_nulls = f.null_count() > 0;
-        dstd::Vector<std::int64_t> keep;
         std::int64_t prev = -1;
-        for (std::int64_t k = 0; k < n; ++k) {
-            std::int64_t i = idx[k];
+        std::int64_t k = 0;
+        for (; k < n; ++k) {
+            const std::int64_t i = idx[k];
             if (has_nulls && f.is_null(i)) break;
             if (prev < 0 || !equal_at(f, i, prev)) {
-                keep.push_back(i);
+                firsts.push_back(i);
                 prev = i;
             }
         }
-        return take(f, keep);
+        if (k < n) firsts.push_back(idx[k]);
+        std::sort(firsts.begin(), firsts.end());
+        return firsts;
     }
     ValueIds ids;
-    value_ids(*v.handle(), ids);
-    dstd::Vector<std::int64_t> firsts;
-    firsts.reserve(ids.first.size());
-    for (std::size_t id = 0; id < ids.first.size(); ++id)
-        if (static_cast<std::int32_t>(id) != ids.null_id)
-            firsts.push_back(ids.first[id]);
-    Series d = v.take(firsts);
+    value_ids(*f.handle(), ids);
+    firsts.assign(ids.first.begin(), ids.first.end());
+    return firsts;
+}
+
+Series unique(const Series& v, bool maintain_order) {
+    if (refuse_nested_value("unique", v.type())) return Series{};
+    const Series f =
+        v.encoding() == Encoding::Flat ? v.share() : v.materialize();
+    const dstd::Vector<std::int64_t> firsts = distinct_first_rows(f);
+    Series d = f.take(firsts);
     if (d.encoding() != Encoding::Flat) d = d.materialize();
-    const std::int64_t n = d.length();
-    Series order = argsort(d, false);
-    const std::int64_t* idx = order.data<std::int64_t>();
-    dstd::Vector<std::int64_t> keep;
-    std::int64_t prev = -1;
-    for (std::int64_t k = 0; k < n; ++k) {
-        std::int64_t i = idx[k];
-        if (prev < 0 || !equal_at(d, i, prev)) {
-            keep.push_back(i);
-            prev = i;
-        }
-    }
-    return take(d, keep);
+    if (maintain_order) return d;
+    return d.sort(false, false);
 }
 
 Series rank(const Series& v, RankMethod method, bool descending, bool pct) {
@@ -1042,7 +1045,7 @@ Series qcut(const Series& v, std::int32_t q) {
     return Series::flat(TypeId::Int32, out.data(), n, valid.data());
 }
 
-Series search_sorted(const Series& v, const Series& values) {
+Series search_sorted(const Series& v, const Series& values, bool right) {
     if (refuse_non_numeric("search_sorted", v.type())) return Series{};
     if (refuse_non_numeric("search_sorted", values.type())) return Series{};
     const std::int64_t n = v.length();
@@ -1053,7 +1056,8 @@ Series search_sorted(const Series& v, const Series& values) {
     dstd::Vector<std::int64_t> out(static_cast<std::size_t>(m), 0);
     for (std::int64_t k = 0; k < m; ++k) {
         const double qv = read_f64(values, k);
-        auto it = std::lower_bound(self.begin(), self.end(), qv);
+        auto it = right ? std::upper_bound(self.begin(), self.end(), qv)
+                        : std::lower_bound(self.begin(), self.end(), qv);
         out[static_cast<std::size_t>(k)] =
             static_cast<std::int64_t>(it - self.begin());
     }
@@ -1173,6 +1177,22 @@ double dftu_series_kurtosis(const dftu_series* v) {
     c.release();
     return r;
 }
+double dftu_series_skewness_unbiased(const dftu_series* v) {
+    if (!v) return 0.0;
+    DFTU_FLAT_INPUT(v, dftu_series_skewness_unbiased);
+    dftracer::utils::dataframe::Series c{const_cast<dftu_series*>(v)};
+    double r = dftracer::utils::dataframe::skewness_unbiased(c);
+    c.release();
+    return r;
+}
+double dftu_series_kurtosis_unbiased(const dftu_series* v) {
+    if (!v) return 0.0;
+    DFTU_FLAT_INPUT(v, dftu_series_kurtosis_unbiased);
+    dftracer::utils::dataframe::Series c{const_cast<dftu_series*>(v)};
+    double r = dftracer::utils::dataframe::kurtosis_unbiased(c);
+    c.release();
+    return r;
+}
 double dftu_series_quantile(const dftu_series* v, double q) {
     if (!v) return 0.0;
     DFTU_FLAT_INPUT(v, dftu_series_quantile, q);
@@ -1192,7 +1212,16 @@ dftu_series* dftu_series_unique(const dftu_series* v) {
     if (!v) return nullptr;
     dftracer::utils::dataframe::Series c{const_cast<dftu_series*>(v)};
     dftracer::utils::dataframe::Series r =
-        dftracer::utils::dataframe::unique(c);
+        dftracer::utils::dataframe::unique(c.drop_nulls(), false);
+    c.release();
+    return r.release();
+}
+dftu_series* dftu_series_unique_nulls(const dftu_series* v,
+                                      std::int32_t maintain_order) {
+    if (!v) return nullptr;
+    dftracer::utils::dataframe::Series c{const_cast<dftu_series*>(v)};
+    dftracer::utils::dataframe::Series r =
+        dftracer::utils::dataframe::unique(c, maintain_order != 0);
     c.release();
     return r.release();
 }
@@ -1306,19 +1335,24 @@ dftu_series* dftu_series_qcut(const dftu_series* v, std::int32_t q) {
 }
 dftu_series* dftu_series_search_sorted(const dftu_series* v,
                                        const dftu_series* values) {
+    return dftu_series_search_sorted_side(v, values, 0);
+}
+dftu_series* dftu_series_search_sorted_side(const dftu_series* v,
+                                            const dftu_series* values,
+                                            std::int32_t right) {
     if (!v || !values) return nullptr;
-    DFTU_FLAT_INPUT(v, dftu_series_search_sorted, values);
+    DFTU_FLAT_INPUT(v, dftu_series_search_sorted_side, values, right);
     if (values->encoding != dftracer::utils::dataframe::Encoding::Flat) {
         dftu_series* flat = dftu_series_materialize(values);
         if (!flat) return nullptr;
-        dftu_series* r = dftu_series_search_sorted(v, flat);
+        dftu_series* r = dftu_series_search_sorted_side(v, flat, right);
         dftu_series_free(flat);
         return r;
     }
     dftracer::utils::dataframe::Series c{const_cast<dftu_series*>(v)};
     dftracer::utils::dataframe::Series q{const_cast<dftu_series*>(values)};
     dftracer::utils::dataframe::Series r =
-        dftracer::utils::dataframe::search_sorted(c, q);
+        dftracer::utils::dataframe::search_sorted(c, q, right != 0);
     c.release();
     q.release();
     return r.release();

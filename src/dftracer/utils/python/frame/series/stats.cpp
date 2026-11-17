@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dataframe/batch_ops.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/python/core/seq_helpers.h>
 #include <dftracer/utils/python/frame/dataframe.h>
@@ -89,13 +90,17 @@ PyObject* Series_sort(PyObject* self, PyObject* args, PyObject* kwds) {
     Series* a = held_a.get();
     if (!a) return nullptr;
     int descending = 0;
-    if (!parse_kw<"|p">(args, kwds, {"descending"}, &descending))
+    int nulls_last = 0;
+    if (!parse_kw<"|pp">(args, kwds, {"descending", "nulls_last"}, &descending,
+                         &nulls_last))
         return nullptr;
-    return make_series(named_like(
-        kernel(
-            *a,
-            [&] { return Series{dftu_series_sort(a->handle(), descending)}; }),
-        *a));
+    return make_series(
+        named_like(kernel(*a,
+                          [&] {
+                              return Series{dftu_series_sort_nulls(
+                                  a->handle(), descending, nulls_last)};
+                          }),
+                   *a));
 }
 PyObject* Series_head(PyObject* self, PyObject* args, PyObject* kwds) {
     Held held_a(self);
@@ -204,16 +209,109 @@ PyObject* Series_rank(PyObject* self, PyObject* args, PyObject* kwds) {
             [&] { return Series{dftu_series_rank(a->handle(), code, flags)}; }),
         *a));
 }
-PyObject* Series_search_sorted(PyObject* self, PyObject* other) {
+PyObject* Series_search_sorted(PyObject* self, PyObject* args, PyObject* kwds) {
     Held held_a(self);
     Series* a = held_a.get();
     if (!a) return nullptr;
-    Held held_values(other);
-    Series* values = held_values.get();
-    if (!values) return nullptr;
-    return make_series(kernel(*a, [&] {
-        return Series{dftu_series_search_sorted(a->handle(), values->handle())};
+    PyObject* other = nullptr;
+    const char* side = "left";
+    if (!parse_kw<"O|s">(args, kwds, {"element", "side"}, &other, &side))
+        return nullptr;
+    const dftracer::utils::dstd::StringView which = side;
+    if (which != "left" && which != "right" && which != "any") {
+        PyErr_SetString(PyExc_ValueError,
+                        "search_sorted: side must be 'left', 'right' or 'any'");
+        return nullptr;
+    }
+    const int right = which == "right" ? 1 : 0;
+    // A scalar gives its insertion index, a Series or a sequence of numbers a
+    // Series of them.
+    const bool scalar = PyFloat_Check(other) || PyLong_Check(other);
+    Series needles;
+    Held held_values(other, Held::Optional);
+    if (Series* given = held_values.get()) {
+        needles = given->share();
+    } else if (scalar || PySequence_Check(other)) {
+        PyObject* seq = scalar ? PyTuple_Pack(1, other)
+                               : PySequence_Fast(other,
+                                                 "values must be a "
+                                                 "sequence of numbers");
+        if (!seq) return nullptr;
+        const Py_ssize_t count = PySequence_Fast_GET_SIZE(seq);
+        dftracer::utils::dstd::Vector<double> numbers(
+            static_cast<std::size_t>(count));
+        for (Py_ssize_t i = 0; i < count; ++i) {
+            const double x = PyFloat_AsDouble(PySequence_Fast_GET_ITEM(seq, i));
+            if (x == -1.0 && PyErr_Occurred()) {
+                Py_DECREF(seq);
+                return nullptr;
+            }
+            numbers[static_cast<std::size_t>(i)] = x;
+        }
+        Py_DECREF(seq);
+        needles = Series::flat_f64(numbers.data(), count);
+    } else {
+        PyErr_SetString(PyExc_TypeError,
+                        "values must be a number, a sequence of numbers or a "
+                        "Series");
+        return nullptr;
+    }
+    PyObject* found = make_series(kernel(*a, [&] {
+        return Series{dftu_series_search_sorted_side(a->handle(),
+                                                     needles.handle(), right)};
     }));
+    if (!found || !scalar) return found;
+    PyObject* first = PySequence_GetItem(found, 0);
+    Py_DECREF(found);
+    return first;
+}
+
+PyObject* Series_unique(PyObject* self, PyObject* args, PyObject* kwds) {
+    Held held_a(self);
+    Series* a = held_a.get();
+    if (!a) return nullptr;
+    int maintain_order = 0;
+    if (!parse_kw<"|p">(args, kwds, {"maintain_order"}, &maintain_order))
+        return nullptr;
+    return make_series(
+        named_like(kernel(*a,
+                          [&] {
+                              return Series{dftu_series_unique_nulls(
+                                  a->handle(), maintain_order)};
+                          }),
+                   *a));
+}
+
+PyObject* Series_duplicated(PyObject* self, PyObject* args, PyObject* kwds) {
+    Held held_a(self);
+    Series* a = held_a.get();
+    if (!a) return nullptr;
+    PyObject* keep_obj = nullptr;
+    if (!parse_kw<"|O">(args, kwds, {"keep"}, &keep_obj)) return nullptr;
+    int keep = 0;
+    if (keep_obj == Py_False) {
+        keep = 2;
+    } else if (keep_obj && PyUnicode_Check(keep_obj)) {
+        const char* text = PyUnicode_AsUTF8(keep_obj);
+        if (!text) return nullptr;
+        const dftracer::utils::dstd::StringView which = text;
+        if (which == "last")
+            keep = 1;
+        else if (which != "first")
+            keep = -1;
+    } else if (keep_obj && keep_obj != Py_None) {
+        keep = -1;
+    }
+    if (keep < 0) {
+        PyErr_SetString(PyExc_ValueError,
+                        "duplicated: keep must be 'first', 'last' or False");
+        return nullptr;
+    }
+    return make_series(named_like(
+        kernel(
+            *a,
+            [&] { return Series{dftu_series_duplicated(a->handle(), keep)}; }),
+        *a));
 }
 
 PyObject* Series_take(PyObject* self, PyObject* seq) {
@@ -265,14 +363,26 @@ PyObject* Series_where(PyObject* self, PyObject* args) {
     return make_series(std::move(out));
 }
 
-PyObject* Series_argsort(PyObject* self, PyObject* args, PyObject* kwds) {
+static PyObject* argsort_with_default(PyObject* self, PyObject* args,
+                                      PyObject* kwds, int default_nulls_last) {
     Held held_a(self);
     Series* a = held_a.get();
     if (!a) return nullptr;
     int descending = 0;
-    if (!parse_kw<"|p">(args, kwds, {"descending"}, &descending))
+    int nulls_last = default_nulls_last;
+    if (!parse_kw<"|pp">(args, kwds, {"descending", "nulls_last"}, &descending,
+                         &nulls_last))
         return nullptr;
-    return make_series(kernel(*a, [&] { return a->argsort(descending != 0); }));
+    return make_series(kernel(
+        *a, [&] { return a->argsort(descending != 0, nulls_last != 0); }));
+}
+
+PyObject* Series_argsort(PyObject* self, PyObject* args, PyObject* kwds) {
+    return argsort_with_default(self, args, kwds, 1);
+}
+
+PyObject* Series_arg_sort(PyObject* self, PyObject* args, PyObject* kwds) {
+    return argsort_with_default(self, args, kwds, 0);
 }
 
 PyObject* Series_dictionary_encode(PyObject* self, PyObject*) {

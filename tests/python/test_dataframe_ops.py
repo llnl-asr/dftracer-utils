@@ -921,7 +921,7 @@ def test_sort_nulls_first_select_expr_and_with_columns():
         assert ours.columns == ["a", "b"]
         lazy = two.lazy().sort_values(["a", "b"], ascending=ascending, na_position="first")
         assert _dict(lazy.collect()) == _dict(ours)
-    with pytest.raises(ValueError, match="one direction per key"):
+    with pytest.raises(ValueError, match="descending must be empty"):
         two.sort(["a", "b"], descending=[True, False, True], nulls_last=False)
 
     out = df.select("k", (col("v") * 2).alias("w"))

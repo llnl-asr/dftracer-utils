@@ -632,14 +632,16 @@ TEST_SUITE("output morsels") {
         {
             const char* by[] = {"v", "w"};
             const std::int32_t flags[] = {1, 0};
+            const std::int32_t last[] = {1};
             OpArgs args;
-            args.strlist(1, by, 2).i32list(2, flags);
+            args.strlist(1, by, 2).i32list(2, flags).i32list(3, last);
             const LazyFrame lf =
                 df.lazy().frame_op("dftu.frame.sort_by_multi_per_col", args);
             CHECK(streamed(lf));
-            expect_same_rows(joined(morsels(lf, 1000)),
-                             dftu_utils_test::ok(df.sort_by_multi(
-                                 {"v", "w"}, dstd::Vector<bool>{true, false})));
+            expect_same_rows(
+                joined(morsels(lf, 1000)),
+                dftu_utils_test::ok(df.sort_by_multi(
+                    {"v", "w"}, dstd::Vector<std::uint8_t>{1, 0})));
         }
         {
             const dstd::Vector<GroupAgg> aggs = {GroupAgg{Agg::Sum, "v", "s"}};

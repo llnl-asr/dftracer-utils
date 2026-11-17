@@ -933,8 +933,7 @@ dstd::Result<bool> fill_missing_rows(const FillSpec& spec,
     if (carry) keep.push_back("__duql_added");
     auto kept = out.select(std_strs(keep));
     if (!kept) return kept.error();
-    auto ordered = kept->sort_by_multi(
-        std_strs(key_names), dstd::Vector<bool>(key_names.size(), false));
+    auto ordered = kept->sort_by_multi(std_strs(key_names), false);
     if (!ordered) return ordered.error();
     out = std::move(*ordered);
     return true;

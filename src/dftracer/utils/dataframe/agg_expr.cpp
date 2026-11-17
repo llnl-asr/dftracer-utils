@@ -54,6 +54,12 @@ AggExprSpec agg_skew(Expr value, dstd::String out) {
 AggExprSpec agg_kurt(Expr value, dstd::String out) {
     return {AggOp::Kurt, std::move(value), std::move(out)};
 }
+AggExprSpec agg_skew_unbiased(Expr value, dstd::String out) {
+    return {AggOp::SkewUnbiased, std::move(value), std::move(out)};
+}
+AggExprSpec agg_kurt_unbiased(Expr value, dstd::String out) {
+    return {AggOp::KurtUnbiased, std::move(value), std::move(out)};
+}
 AggExprSpec agg_pct(Expr value, double q, dstd::String out) {
     return {AggOp::Pct, std::move(value), std::move(out), q};
 }
@@ -259,6 +265,12 @@ dftu_agg_spec dftu_agg_skew(const dftu_expr* value, const char* out) {
 }
 dftu_agg_spec dftu_agg_kurt(const dftu_expr* value, const char* out) {
     return make_spec(DFTU_AGG_KURT, value, out);
+}
+dftu_agg_spec dftu_agg_skew_unbiased(const dftu_expr* value, const char* out) {
+    return make_spec(DFTU_AGG_SKEW_UNBIASED, value, out);
+}
+dftu_agg_spec dftu_agg_kurt_unbiased(const dftu_expr* value, const char* out) {
+    return make_spec(DFTU_AGG_KURT_UNBIASED, value, out);
 }
 dftu_agg_spec dftu_agg_first(const dftu_expr* value, const char* out) {
     return make_spec(DFTU_AGG_FIRST, value, out);

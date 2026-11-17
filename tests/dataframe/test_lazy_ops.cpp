@@ -567,7 +567,7 @@ TEST_SUITE("lazy_ops") {
         dftu_lazyframe* lf1 = dftu_dataframe_lazy(df);
         dftu_lazyframe* lf2 = dftu_dataframe_lazy(df);
         OpArgs a;
-        a.str(1, "k").i32(2, 0);
+        a.str(1, "k").i32(2, 0).i32(3, 1);
         dftu_dataframe* via_registry =
             run_registry("dftu.lazy.sort_by", lf1, a);
         dftu_lazyframe* direct = dftu_lazyframe_sort_by(lf2, "k", 0);
@@ -674,7 +674,7 @@ TEST_SUITE("lazy_ops") {
         dftu_lazyframe* lf2 = dftu_dataframe_lazy(df);
         const char* by[2] = {"k", "v"};
         OpArgs a;
-        a.strlist(1, by, 2).i32(2, 0);
+        a.strlist(1, by, 2).i32(2, 0).i32(3, 1);
         dftu_dataframe* via_registry =
             run_registry("dftu.lazy.sort_by_multi", lf1, a);
         dftu_lazyframe* direct = dftu_lazyframe_sort_by_multi(lf2, by, 2, 0);

@@ -248,10 +248,11 @@ DataFrame with_column(const DataFrame& b, const dstd::String& name,
 }
 
 dstd::Result<DataFrame> sort_by(const DataFrame& b, const dstd::String& name,
-                                bool descending) {
+                                bool descending, bool nulls_last) {
     const dstd::Result<std::int64_t> k = require_index(b, name, "sort_by");
     if (!k) return k.error();
-    Series order = argsort(b.columns[static_cast<std::size_t>(*k)], descending);
+    Series order = argsort(b.columns[static_cast<std::size_t>(*k)], descending,
+                           nulls_last);
     if (!order.valid())
         return invalid_argument<
             "sort_by: column {} has no order (nested type)">(name);
@@ -1521,7 +1522,8 @@ bool permutation_order(const Series& c, bool descending, std::int64_t n,
 // keys qualify, floats too (NaN is one value above infinity and -0.0 equals
 // +0.0); false means a key does not, and `order` is then unusable.
 bool radix_order(const dstd::Vector<const Series*>& keys,
-                 const dstd::Vector<bool>& desc, std::int64_t n,
+                 dstd::Span<const std::uint8_t> desc,
+                 dstd::Span<const std::uint8_t> nulls_last, std::int64_t n,
                  dstd::Vector<std::int64_t>& order) {
     dstd::Vector<Series> passes(keys.size());
     for (std::size_t i = 0; i < keys.size(); ++i) {
@@ -1530,10 +1532,12 @@ bool radix_order(const dstd::Vector<const Series*>& keys,
             dstd::Vector<std::int32_t> ranks;
             std::int32_t nranks = 0;
             if (!string_ranks(c.handle(), ranks, nranks)) return false;
-            // Nulls sort last in both directions.
+            // A descending pass negates the rank, so the extreme that ends
+            // last ascending ends first descending.
+            const bool high = (nulls_last[i] != 0) != (desc[i] != 0);
             const std::int32_t null_rank =
-                desc[i] ? std::numeric_limits<std::int32_t>::min()
-                        : std::numeric_limits<std::int32_t>::max();
+                high ? std::numeric_limits<std::int32_t>::max()
+                     : std::numeric_limits<std::int32_t>::min();
             for (std::int32_t& r : ranks)
                 if (r < 0) r = null_rank;
             passes[i] = Series::flat(TypeId::Int32, ranks.data(), n);
@@ -1561,7 +1565,7 @@ bool radix_order(const dstd::Vector<const Series*>& keys,
     dstd::Vector<std::int64_t> next(order.size());
     for (std::size_t i = keys.size(); i-- > 0;) {
         const Series gathered = passes[i].take(order);
-        const Series perm = gathered.argsort(desc[i]);
+        const Series perm = gathered.argsort(desc[i] != 0, nulls_last[i] != 0);
         const std::int64_t* p = perm.data<std::int64_t>();
         for (std::int64_t j = 0; j < n; ++j)
             next[static_cast<std::size_t>(j)] =
@@ -1573,16 +1577,29 @@ bool radix_order(const dstd::Vector<const Series*>& keys,
 
 }  // namespace
 
-dstd::Result<DataFrame> sort_by_multi(const DataFrame& b,
-                                      const dstd::Vector<dstd::String>& names,
-                                      const dstd::Vector<bool>& descending) {
-    if (descending.empty())
+dstd::Result<DataFrame> sort_by_multi(
+    const DataFrame& b, const dstd::Vector<dstd::String>& names,
+    dstd::Span<const std::uint8_t> descending,
+    dstd::Span<const std::uint8_t> nulls_last) {
+    if (descending.size() > 1 && descending.size() != names.size())
         return invalid_argument<
-            "sort_by_multi: descending must not be empty">();
-    if (descending.size() != 1 && descending.size() != names.size())
-        return invalid_argument<
-            "sort_by_multi: descending must have size 1 or match "
+            "sort_by_multi: descending must be empty, have size 1 or match "
             "names.size()">();
+    if (nulls_last.size() > 1 && nulls_last.size() != names.size())
+        return invalid_argument<
+            "sort_by_multi: nulls_last must be empty, have size 1 or match "
+            "names.size()">();
+    // An empty span is every key ascending, nulls last; one flag broadcasts.
+    const auto desc_of = [&](std::size_t i) {
+        return descending.empty()       ? false
+               : descending.size() == 1 ? descending[0] != 0
+                                        : descending[i] != 0;
+    };
+    const auto last_of = [&](std::size_t i) {
+        return nulls_last.empty()       ? true
+               : nulls_last.size() == 1 ? nulls_last[0] != 0
+                                        : nulls_last[i] != 0;
+    };
     dstd::Vector<const Series*> keys;
     keys.reserve(names.size());
     dstd::Vector<Series> joined;
@@ -1606,15 +1623,14 @@ dstd::Result<DataFrame> sort_by_multi(const DataFrame& b,
             return invalid_argument<
                 "sort_by_multi: column '{}' has type '{}' with no per-row "
                 "order">(names[i], type_name(keys[i]->type()));
-    const bool broadcast = descending.size() == 1;
     const std::int64_t n = b.num_rows();
     dstd::Vector<std::int64_t> order(static_cast<std::size_t>(n));
-    if (keys.size() == 1 &&
-        permutation_order(*keys[0], descending[0], n, order))
+    if (keys.size() == 1 && permutation_order(*keys[0], desc_of(0), n, order))
         return take(b, order);
     struct KeyRead {
         const dftu_series* h;
         bool desc;
+        bool nulls_last;
         bool text;
         dstd::Vector<std::int32_t> ranks;
         std::int32_t nranks = 0;
@@ -1623,19 +1639,24 @@ dstd::Result<DataFrame> sort_by_multi(const DataFrame& b,
     for (std::size_t i = 0; i < keys.size(); ++i) {
         KeyRead& kr = reads[i];
         kr.h = keys[i]->handle();
-        kr.desc = broadcast ? descending[0] : descending[i];
+        kr.desc = desc_of(i);
+        kr.nulls_last = last_of(i);
         kr.text = is_string_column(*kr.h);
         if (kr.text) string_ranks(kr.h, kr.ranks, kr.nranks);
     }
     if (reads.size() == 1 && !reads[0].ranks.empty()) {
         counting_order(reads[0].ranks, reads[0].nranks, reads[0].desc,
-                       order.data());
+                       order.data(), reads[0].nulls_last);
         return take(b, order);
     }
     {
-        dstd::Vector<bool> desc(keys.size());
-        for (std::size_t i = 0; i < keys.size(); ++i) desc[i] = reads[i].desc;
-        if (radix_order(keys, desc, n, order)) return take(b, order);
+        dstd::Vector<std::uint8_t> desc(keys.size());
+        dstd::Vector<std::uint8_t> last(keys.size());
+        for (std::size_t i = 0; i < keys.size(); ++i) {
+            desc[i] = reads[i].desc ? 1 : 0;
+            last[i] = reads[i].nulls_last ? 1 : 0;
+        }
+        if (radix_order(keys, desc, last, n, order)) return take(b, order);
     }
     for (std::int64_t i = 0; i < n; ++i) order[static_cast<std::size_t>(i)] = i;
     parallel_stable_sort_indices(order, [&](std::int64_t a, std::int64_t bb) {
@@ -1647,7 +1668,7 @@ dstd::Result<DataFrame> sort_by_multi(const DataFrame& b,
                 const std::int32_t rb = kr.ranks[static_cast<std::size_t>(bb)];
                 if (ra < 0 || rb < 0) {
                     if (ra < 0 && rb < 0) continue;
-                    return rb < 0;
+                    return kr.nulls_last ? rb < 0 : ra < 0;
                 }
                 r = ra < rb ? -1 : (ra > rb ? 1 : 0);
             } else if (kr.text) {
@@ -1656,7 +1677,7 @@ dstd::Result<DataFrame> sort_by_multi(const DataFrame& b,
                 const bool vb = str_at(kr.h, bb, y);
                 if (!va || !vb) {
                     if (!va && !vb) continue;
-                    return va;
+                    return kr.nulls_last ? va : vb;
                 }
                 const int c = x.compare(y);
                 r = c < 0 ? -1 : (c > 0 ? 1 : 0);
@@ -1666,7 +1687,7 @@ dstd::Result<DataFrame> sort_by_multi(const DataFrame& b,
                 const bool nb = c->is_null(bb);
                 if (na || nb) {
                     if (na && nb) continue;
-                    return !na;  // nulls last in both directions
+                    return kr.nulls_last ? !na : na;
                 }
                 r = compare_rows(*c, a, bb);
             }
@@ -1680,8 +1701,11 @@ dstd::Result<DataFrame> sort_by_multi(const DataFrame& b,
 
 dstd::Result<DataFrame> sort_by_multi(const DataFrame& b,
                                       const dstd::Vector<dstd::String>& names,
-                                      bool descending) {
-    return sort_by_multi(b, names, dstd::Vector<bool>{descending});
+                                      bool descending, bool nulls_last) {
+    const std::uint8_t desc = descending ? 1 : 0;
+    const std::uint8_t last = nulls_last ? 1 : 0;
+    return sort_by_multi(b, names, dstd::Span<const std::uint8_t>(&desc, 1),
+                         dstd::Span<const std::uint8_t>(&last, 1));
 }
 
 DataFrame tail(const DataFrame& b, std::int64_t n) {
@@ -1781,6 +1805,8 @@ bool reduce_broadcasts(Agg agg) noexcept {
         case Agg::Std:
         case Agg::Skew:
         case Agg::Kurt:
+        case Agg::SkewUnbiased:
+        case Agg::KurtUnbiased:
         case Agg::SumSq:
         case Agg::First:
         case Agg::Last:
@@ -2089,7 +2115,7 @@ dstd::Result<DataFrame> to_dummies(const DataFrame& b,
     const std::int64_t n = mat.length();
 
     // Distinct non-null values, ascending, for a deterministic column order.
-    Series uniq = flat_copy(mat.unique());
+    Series uniq = flat_copy(mat.drop_nulls().unique());
     const std::int64_t d = uniq.length();
 
     TypeId refused = TypeId::Unknown;
@@ -2112,15 +2138,17 @@ dstd::Result<DataFrame> to_dummies(const DataFrame& b,
     dstd::Vector<std::int64_t> bucket(static_cast<std::size_t>(n));
     for (std::int64_t i = 0; i < n; ++i)
         bucket[static_cast<std::size_t>(i)] =
-            bucket_of.at(row_key[static_cast<std::size_t>(i)]);
+            mat.is_null(i) ? -1
+                           : bucket_of.at(row_key[static_cast<std::size_t>(i)]);
 
     // One flag byte per (row, dummy) is set once, in row-major order.
     dstd::Vector<dstd::Vector<std::int8_t>> bits(
         static_cast<std::size_t>(d),
         dstd::Vector<std::int8_t>(static_cast<std::size_t>(n), 0));
     for (std::int64_t i = 0; i < n; ++i)
-        bits[static_cast<std::size_t>(bucket[static_cast<std::size_t>(i)])]
-            [static_cast<std::size_t>(i)] = 1;
+        if (bucket[static_cast<std::size_t>(i)] >= 0)
+            bits[static_cast<std::size_t>(bucket[static_cast<std::size_t>(i)])]
+                [static_cast<std::size_t>(i)] = 1;
 
     DataFrame out;
     out.names.reserve(b.names.size() + static_cast<std::size_t>(d) - 1);
@@ -2195,8 +2223,8 @@ dstd::Result<DataFrame> pivot(const DataFrame& b,
 
     // Output rows = distinct index values (sorted asc, non-null); output value
     // columns = distinct column values (sorted asc, non-null).
-    Series uniq_idx = flat_copy(idx_col.unique());
-    Series uniq_col = flat_copy(col_col.unique());
+    Series uniq_idx = flat_copy(idx_col.drop_nulls().unique());
+    Series uniq_col = flat_copy(col_col.drop_nulls().unique());
     const std::int64_t R = uniq_idx.length();
     const std::int64_t C = uniq_col.length();
 

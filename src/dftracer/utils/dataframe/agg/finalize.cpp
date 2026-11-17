@@ -855,11 +855,15 @@ static DataFrame finalize_impl(const AggState& st_in,
             // Each moment needs that many present values to exist at all
             // (one for a mean, two for a sample variance, three and four for
             // the higher moments); below that the cell is null, not 0.
-            const std::uint64_t needed = sp.op == AggOp::Mean   ? 1
-                                         : sp.op == AggOp::Var  ? 2
-                                         : sp.op == AggOp::Std  ? 2
-                                         : sp.op == AggOp::Skew ? 3
-                                                                : 4;
+            // The unbiased moments are NaN below their count, as pandas has
+            // them, and never null.
+            const std::uint64_t needed = sp.op == AggOp::Mean           ? 1
+                                         : sp.op == AggOp::Var          ? 2
+                                         : sp.op == AggOp::Std          ? 2
+                                         : sp.op == AggOp::Skew         ? 3
+                                         : sp.op == AggOp::SkewUnbiased ? 0
+                                         : sp.op == AggOp::KurtUnbiased ? 0
+                                                                        : 4;
             dstd::Vector<double> v(static_cast<std::size_t>(ng));
             dstd::Vector<std::uint8_t> valid(
                 static_cast<std::size_t>((ng + 7) / 8), 0);
@@ -879,6 +883,12 @@ static DataFrame finalize_impl(const AggState& st_in,
                         break;
                     case AggOp::Skew:
                         r = f.skewness();
+                        break;
+                    case AggOp::SkewUnbiased:
+                        r = f.skewness_unbiased();
+                        break;
+                    case AggOp::KurtUnbiased:
+                        r = f.kurtosis_unbiased();
                         break;
                     default:
                         r = f.kurtosis();
@@ -1019,6 +1029,12 @@ static DataFrame finalize_impl(const AggState& st_in,
                                 break;
                             case AggOp::Kurt:
                                 r = f->kurtosis();
+                                break;
+                            case AggOp::SkewUnbiased:
+                                r = f->skewness_unbiased();
+                                break;
+                            case AggOp::KurtUnbiased:
+                                r = f->kurtosis_unbiased();
                                 break;
                             default:
                                 r = 0.0;

@@ -1,13 +1,13 @@
 # SPDX-License-Identifier: MIT
-"""The ``Series`` Python wrapper over the native columnar engine.
+"""The public ``Series``: the native columnar type, subclassed.
 
-The C extension exposes a low-level ``_Series`` handle carrying the SIMD ops and
-the Arrow C Data Interface capsule, but no Arrow/pandas/polars conversion. That
-conversion lives here: ``Series`` wraps the handle, forwards every native op
-(re-wrapping the handles it hands back), and adds ``to_arrow`` / ``to_pandas`` /
-``to_numpy`` / ``to_polars``, NumPy-style ``+ - * /`` and ``s[i]`` indexing, the
-``np.asarray`` protocol, and pickling. ``dataframe.DataFrame`` is the frame
-counterpart.
+The C extension's ``Series`` carries the SIMD ops and the Arrow C Data Interface
+capsule, and its factories build the class bound here (``_bind_types``), so a
+native op returns a ``Series`` with no wrapper object in between. What needs
+Python lives in this class: the constructor from Python data, ``to_arrow`` /
+``to_pandas`` / ``to_numpy`` / ``to_polars``, NumPy-style ``+ - * /`` and
+``s[i]`` indexing, the ``np.asarray`` protocol, pickling and the pandas and
+polars spellings. ``dataframe.DataFrame`` is the frame counterpart.
 """
 
 from __future__ import annotations
@@ -30,6 +30,7 @@ from typing import (
     TypeVar,
     Union,
     cast,
+    overload,
 )
 
 from . import dftracer_utils_ext as _ext
@@ -45,12 +46,19 @@ if TYPE_CHECKING:
     import pyarrow as pa  # ty: ignore[import-not-found]
     from pandas._libs.missing import NAType  # ty: ignore[import-not-found]
     from pandas.api.extensions import ExtensionArray  # ty: ignore[import-not-found]
+    from typing_extensions import Self
 
     from .dataframe import DataFrame
+    from .dftracer_utils_ext import Scalar, T_co
+else:
+    # The checkers read T_co (covariant, defaulting to Scalar) from the stub.
+    T_co = TypeVar("T_co", covariant=True)
 
-# (native handle type, Python wrapper) pairs, filled as each wrapper module
-# imports. _wrap consults it so the base forwarder can wrap any handle a native
-# op returns without this module importing the frame/viewer wrappers.
+# (native handle type, Python wrapper) pairs for the frame and viewer wrappers,
+# filled as each wrapper module imports. _wrap consults it so the base
+# forwarder can wrap any handle a native op returns without this module
+# importing them. The native Series is the public class itself and needs no
+# wrapper.
 _WRAP: List[Tuple[type, Type["_Wrapper"]]] = []
 
 
@@ -128,6 +136,7 @@ def _resolve_dtype(dtype: "Union[str, int, DType, type]") -> int:
 
 
 _N = TypeVar("_N")
+_R = TypeVar("_R", bound="Scalar")
 
 
 # Any: a `_Wrapper[_N] -> _N` overload mis-resolves on union-typed arguments.
@@ -238,7 +247,7 @@ _PYTHON_OBJECT_TYPES = (
 )
 
 
-def _temporal_numpy(native: "_ext._Series", dtype: DType) -> "np.ndarray":
+def _temporal_numpy(native: "Series", dtype: DType) -> "np.ndarray":
     """A date, timestamp or duration column as ``datetime64`` or ``timedelta64``
     (UTC values for a zoned timestamp), with ``NaT`` for null."""
     import numpy as np  # ty: ignore[import-not-found]
@@ -253,7 +262,7 @@ def _temporal_numpy(native: "_ext._Series", dtype: DType) -> "np.ndarray":
     return np.array(memoryview(phys)).view(f"{kind}[{unit}]")  # ty: ignore[invalid-argument-type]
 
 
-def _object_numpy(values: List[object]) -> "np.ndarray":
+def _object_numpy(values: Sequence[object]) -> "np.ndarray":
     import numpy as np  # ty: ignore[import-not-found]
 
     out = np.empty(len(values), dtype=object)
@@ -263,7 +272,7 @@ def _object_numpy(values: List[object]) -> "np.ndarray":
 
 
 def _parts(
-    native: "_ext._Series", nullable: bool, na: "Optional[NAType]" = None
+    native: "Series", nullable: bool, na: "Optional[NAType]" = None
 ) -> Tuple[bytearray, Optional[bytearray], str]:
     """The column's values, null mask and numpy dtype string from one native
     pass (``Series.np_parts``): bytearrays that numpy wraps without a copy."""
@@ -276,7 +285,7 @@ def _frombuffer(data: Union[bytes, bytearray, memoryview], dtype: str) -> "np.nd
     return np.frombuffer(data, dtype=dtype)
 
 
-def _native_numpy(native: "_ext._Series") -> "np.ndarray":
+def _native_numpy(native: "Series") -> "np.ndarray":
     """The native column as a NumPy array without pyarrow; TypeError for a
     type with no native conversion."""
     import numpy as np  # ty: ignore[import-not-found]
@@ -284,7 +293,7 @@ def _native_numpy(native: "_ext._Series") -> "np.ndarray":
     try:
         # memoryview forces the native buffer protocol (a plain
         # np.asarray(handle) can fall back to a 0-d object array).
-        # _Series's C buffer support is not in the stub (PEP 688 is 3.12+).
+        # The native buffer support is not in the stub (PEP 688 is 3.12+).
         return np.asarray(memoryview(native))  # ty: ignore[invalid-argument-type]
     except (BufferError, TypeError):
         pass
@@ -316,13 +325,13 @@ def _native_numpy(native: "_ext._Series") -> "np.ndarray":
 _POLARS_NATIVE_ONLY = (DType.FLOAT16, DType.DECIMAL128, DType.DECIMAL256)
 
 
-def _polars_via_arrow(native: "_ext._Series") -> bool:
+def _polars_via_arrow(native: "Series") -> bool:
     """Whether the Arrow capsule gives polars the dtype the native path does: not
     for Float16 and decimals."""
     return hasattr(native, "__arrow_c_array__") and DType(native.type) not in _POLARS_NATIVE_ONLY
 
 
-def _polars_native(native: "_ext._Series", pl: Any) -> "pl.Series":
+def _polars_native(native: "Series", pl: Any) -> "pl.Series":
     """The column as a polars Series built natively, with no pyarrow."""
     dtype = DType(native.type)
     if dtype in _TEMPORAL_KINDS:
@@ -348,7 +357,7 @@ def _polars_native(native: "_ext._Series", pl: Any) -> "pl.Series":
     return pl.Series(values, dtype=getattr(pl, polars_dtype) if polars_dtype else None)
 
 
-def _pandas_values(native: "_ext._Series") -> "Union[pd.Series, np.ndarray]":
+def _pandas_values(native: "Series") -> "Union[pd.Series, np.ndarray]":
     """The column as a pandas Series or NumPy array built without pyarrow: a
     zoned timestamp gets its zone, everything else its NumPy array."""
     import pandas as pd  # ty: ignore[import-not-found]
@@ -378,7 +387,7 @@ def _pandas_values(native: "_ext._Series") -> "Union[pd.Series, np.ndarray]":
     return pd.Series(values).dt.tz_localize("UTC").dt.tz_convert(native.timezone)
 
 
-def _pandas_categorical(native: "_ext._Series") -> "pd.Categorical":
+def _pandas_categorical(native: "Series") -> "pd.Categorical":
     """A dictionary-encoded string column as ``pd.Categorical``. With pyarrow the
     codes and the dictionary are taken as they are, so no string is built per
     row, and the categories keep the dictionary order without its unused
@@ -407,7 +416,7 @@ def _pandas_categorical(native: "_ext._Series") -> "pd.Categorical":
     return pd.Categorical(values)
 
 
-def _pandas_default(native: "_ext._Series") -> "Union[pd.Series, np.ndarray, ExtensionArray]":
+def _pandas_default(native: "Series") -> "Union[pd.Series, np.ndarray, ExtensionArray]":
     """The default ``to_pandas`` column: ``pd.Categorical`` for a dictionary
     column, pandas' nullable dtype for an integer, bool or (where the default
     string dtype is ``object``) string column that holds nulls, and the NumPy
@@ -436,7 +445,7 @@ def _default_string_dtype() -> bool:
     return isinstance(pd.Series(np.array(["x"], dtype=object)).dtype, pd.StringDtype)
 
 
-def _pandas_nullable(native: "_ext._Series") -> "Optional[ExtensionArray]":
+def _pandas_nullable(native: "Series") -> "Optional[ExtensionArray]":
     """The column as pandas' own nullable extension array (``Int8`` .. ``UInt64``,
     ``Float32``, ``Float64``, ``boolean``, ``string``), built without pyarrow; a
     null is ``pd.NA`` and a float NaN stays NaN. ``None`` for a type with no such
@@ -608,7 +617,7 @@ class _OpsAccessor:
         return call
 
 
-class Series(_SeriesPandasMixin, _Wrapper["_ext._Series"]):
+class Series(_SeriesPandasMixin, _ext.Series[T_co]):
     """A typed column: SIMD ops from the native engine plus Arrow/NumPy conversion.
 
     Supports NumPy-style ``+ - * /`` against another Series (elementwise) or a
@@ -620,23 +629,79 @@ class Series(_SeriesPandasMixin, _Wrapper["_ext._Series"]):
     ``Series([1, 2, 3])`` builds one from a Python sequence, the pandas / polars
     constructor; an Arrow array (anything with ``__arrow_c_array__``) imports
     zero-copy with its own type, so an empty or all-null one keeps it;
-    ``Series(native)`` wraps a native handle. ``name=`` names the Series
-    (see :attr:`name`); without it a Series or native handle keeps its own
-    name."""
+    ``Series(series)`` shares the values of another Series. ``name=`` names the
+    Series (see :attr:`name`); without it a Series keeps its own name."""
 
-    def __init__(
-        self, data: "Union[_ext._Series, Sequence[object]]", name: Optional[str] = None
-    ) -> None:
+    __slots__ = ()
+
+    # The native type has no constructor of its own: its factories build this
+    # class directly (_bind_types), so only a Python-data call comes through
+    # here, and __new__ hands back the Series a native importer built.
+    def __new__(
+        cls,
+        data: "Union[Series[Scalar], Sequence[object]]" = (),
+        name: Optional[builtins.str] = None,
+        dtype: "Union[DType, int, pa.DataType, None]" = None,
+    ) -> "Series[Scalar]":
+        if cls is not Series:
+            raise TypeError(
+                "Series cannot be subclassed: the native calls build the class bound by "
+                "_bind_types, so an instance of a subclass would come back as a Series"
+            )
         if isinstance(data, Series):
-            data = data._native
-        elif not isinstance(data, _ext._Series):
-            if hasattr(data, "__arrow_c_array__"):
-                data = _unwrap(_series_from_arrow(data))
-            else:
-                data = _unwrap(Series.from_list(list(data)))
-        super().__init__(data)
+            out = data.share() if dtype is None else data.cast(int(dtype))
+        elif hasattr(data, "__arrow_c_array__"):
+            out = _series_from_arrow(data)
+        else:
+            out = Series.from_list(list(data), dtype)
         if name is not None:
-            self.name = name
+            out.name = name
+        return out
+
+    # Only the checkers read these overloads; the runtime __init__ has nothing
+    # left to do after __new__.
+    @overload
+    def __init__(
+        self: "Series[bool]",
+        data: Sequence[bool],
+        name: Optional[builtins.str] = None,
+        dtype: "Union[DType, int, pa.DataType, None]" = None,
+    ) -> None: ...
+    @overload
+    def __init__(
+        self: "Series[int]",
+        data: Sequence[int],
+        name: Optional[builtins.str] = None,
+        dtype: "Union[DType, int, pa.DataType, None]" = None,
+    ) -> None: ...
+    @overload
+    def __init__(
+        self: "Series[float]",
+        data: Sequence[float],
+        name: Optional[builtins.str] = None,
+        dtype: "Union[DType, int, pa.DataType, None]" = None,
+    ) -> None: ...
+    @overload
+    def __init__(
+        self: "Series[builtins.str]",
+        data: Sequence[builtins.str],
+        name: Optional[builtins.str] = None,
+        dtype: "Union[DType, int, pa.DataType, None]" = None,
+    ) -> None: ...
+    @overload
+    def __init__(
+        self,
+        data: "Union[Series[Scalar], Sequence[object]]" = (),
+        name: Optional[builtins.str] = None,
+        dtype: "Union[DType, int, pa.DataType, None]" = None,
+    ) -> None: ...
+    def __init__(
+        self,
+        data: "Union[Series[Scalar], Sequence[object]]" = (),
+        name: Optional[builtins.str] = None,
+        dtype: "Union[DType, int, pa.DataType, None]" = None,
+    ) -> None:
+        pass
 
     @classmethod
     def from_arrow(cls, arr: "Union[pa.Array, pa.ChunkedArray]") -> "Series":
@@ -655,7 +720,7 @@ class Series(_SeriesPandasMixin, _Wrapper["_ext._Series"]):
         from ._import import NeedsArrow, pandas_to_native
 
         try:
-            out = Series(pandas_to_native(s))
+            out = pandas_to_native(s)
         except NeedsArrow:
             out = _series_from_arrow(_require_pyarrow().Array.from_pandas(s))
         if isinstance(s.name, str):
@@ -669,7 +734,7 @@ class Series(_SeriesPandasMixin, _Wrapper["_ext._Series"]):
         from ._import import NeedsArrow, polars_to_native
 
         try:
-            out = Series(polars_to_native(s))
+            out = polars_to_native(s)
         except NeedsArrow:
             _require_pyarrow()
             out = _series_from_arrow(s.to_arrow())
@@ -687,11 +752,11 @@ class Series(_SeriesPandasMixin, _Wrapper["_ext._Series"]):
 
         if not type(a).__module__.startswith("numpy.ma"):
             try:
-                return Series(_ext._series_from_numpy(a))
+                return _ext._series_from_numpy(a)
             except (TypeError, BufferError, RuntimeError, ValueError):
                 pass
         try:
-            return Series(numpy_to_native(a))
+            return numpy_to_native(a)
         except TypeError:
             pa = _require_pyarrow()
             return _series_from_arrow(pa.array(a))
@@ -716,8 +781,8 @@ class Series(_SeriesPandasMixin, _Wrapper["_ext._Series"]):
         if dtype is None or isinstance(dtype, (DType, int)):
             try:
                 if dtype is None:
-                    return Series(_ext._series_from_list(values))
-                return Series(_ext._series_from_list(values, int(dtype)))
+                    return _ext._series_from_list(values)
+                return _ext._series_from_list(values, int(dtype))
             except TypeError:
                 if dtype is not None:
                     raise
@@ -727,7 +792,7 @@ class Series(_SeriesPandasMixin, _Wrapper["_ext._Series"]):
     def to_arrow(self) -> "pa.Array":
         """This column as a ``pyarrow.Array`` (zero-copy via the C Data
         Interface)."""
-        return _require_pyarrow().array(self._native)
+        return _require_pyarrow().array(self)
 
     def to_pandas(self, *, arrow: bool = False, nullable: bool = False) -> "pd.Series":
         """This column as a pandas Series: a NumPy dtype by default (a copy,
@@ -752,9 +817,9 @@ class Series(_SeriesPandasMixin, _Wrapper["_ext._Series"]):
         else:
             import pandas as pd  # ty: ignore[import-not-found]
 
-            values = _pandas_nullable(self._native) if nullable else None
+            values = _pandas_nullable(self) if nullable else None
             if values is None:
-                values = _pandas_default(self._native)
+                values = _pandas_default(self)
             out = values if isinstance(values, pd.Series) else pd.Series(values)
         out.name = self.name
         return out
@@ -770,7 +835,7 @@ class Series(_SeriesPandasMixin, _Wrapper["_ext._Series"]):
         (UTC values for a zoned timestamp), durations ``timedelta64``, both with
         ``NaT`` for null; times, decimals, fixed-size binary, fixed-size lists
         and maps are object arrays of Python objects."""
-        return _native_numpy(self._native)
+        return _native_numpy(self)
 
     def to_polars(self) -> "pl.Series":
         """This column as a polars Series. Where the extension has Arrow
@@ -786,10 +851,10 @@ class Series(_SeriesPandasMixin, _Wrapper["_ext._Series"]):
             raise ImportError(
                 "polars is required for to_polars(). Install with: pip install polars"
             ) from None
-        if _polars_via_arrow(self._native):
+        if _polars_via_arrow(self):
             out = pl.Series(self)  # type: ignore[arg-type]
         else:
-            out = _polars_native(self._native, pl)
+            out = _polars_native(self, pl)
         return out.alias(self.name or "")
 
     def __array__(
@@ -800,16 +865,17 @@ class Series(_SeriesPandasMixin, _Wrapper["_ext._Series"]):
 
         return np.asarray(self.to_numpy(), dtype=dtype)
 
-    def __len__(self) -> int:
-        return self._native.length
-
-    def __repr__(self) -> str:
+    def __repr__(self) -> builtins.str:
         from ._repr import series_repr
 
         return series_repr(self)
 
     # builtins.slice (not bare `slice`): ty otherwise binds it to Series.slice.
-    def __getitem__(self, key: "Union[int, builtins.slice]") -> "Union[Series, object]":
+    @overload
+    def __getitem__(self, key: int) -> Optional[T_co]: ...
+    @overload
+    def __getitem__(self, key: builtins.slice) -> Self: ...
+    def __getitem__(self, key: "Union[int, builtins.slice]") -> "Union[Self, Optional[T_co]]":
         """``s[i]`` returns the element as a Python scalar; ``s[a:b]`` returns a
         Series (step-1 slices only)."""
         if isinstance(key, slice):
@@ -818,204 +884,213 @@ class Series(_SeriesPandasMixin, _Wrapper["_ext._Series"]):
                 raise ValueError("Series slicing supports step 1 only")
             stop = max(stop, start)
             try:
-                return Series(self._native.slice(start, stop - start))
+                return self.slice(start, stop - start)
             except RuntimeError:
-                return Series(self._native.take(list(range(start, stop))))
+                return super().take(list(range(start, stop)))
         idx = key + len(self) if key < 0 else key
-        return self._native.item(idx)
+        return super().item(idx)
+
+    def item(self, i: Optional[int] = None) -> Optional[T_co]:
+        """The element at row ``i``; with no ``i`` the only element of a
+        one-element Series (pandas ``item()``)."""
+        if i is None:
+            if len(self) != 1:
+                raise ValueError(f"item: the Series has {len(self)} elements, not one")
+            i = 0
+        return super().item(i)
 
     # Returns a Series, or NotImplemented for an unsupported right operand.
-    def _elementwise(self, other: _SeriesOrScalar, series_op: str, scalar_op: str) -> "Series":
+    def _elementwise(
+        self: "Series[Scalar]",
+        other: _SeriesOrScalar,
+        series_op: "Callable[[Series, Series], Series]",
+        scalar_op: "Callable[[Series, Union[int, float]], Series]",
+    ) -> "Series[Scalar]":
         if isinstance(other, Series):
-            return getattr(self, series_op)(other)
+            return series_op(self, other)
         if isinstance(other, (int, float)) and not isinstance(other, bool):
-            return getattr(self, scalar_op)(other)
+            return scalar_op(self, other)
         return NotImplemented
 
-    def __add__(self, other: _SeriesOrScalar) -> "Series":
-        return self._elementwise(other, "add", "add_scalar")
+    @overload
+    def __add__(self: "Series[int]", other: "Union[int, Series[int]]") -> "Series[int]": ...
+    @overload
+    def __add__(self: "Series[float]", other: "Union[float, Series[float]]") -> "Series[float]": ...
+    @overload
+    def __add__(self, other: _SeriesOrScalar) -> "Series[Scalar]": ...
+    def __add__(self, other: _SeriesOrScalar) -> "Series[Scalar]":
+        return self._elementwise(other, _ext.Series.add, _ext.Series.add_scalar)
 
-    def __radd__(self, other: _Scalar) -> "Series":
-        return self._elementwise(other, "add", "add_scalar")
+    @overload
+    def __radd__(self: "Series[int]", other: int) -> "Series[int]": ...
+    @overload
+    def __radd__(self: "Series[float]", other: float) -> "Series[float]": ...
+    @overload
+    def __radd__(self, other: _Scalar) -> "Series[Scalar]": ...
+    def __radd__(self, other: _Scalar) -> "Series[Scalar]":
+        return self._elementwise(other, _ext.Series.add, _ext.Series.add_scalar)
 
-    def __sub__(self, other: _SeriesOrScalar) -> "Series":
-        return self._elementwise(other, "sub", "sub_scalar")
+    @overload
+    def __sub__(self: "Series[int]", other: "Union[int, Series[int]]") -> "Series[int]": ...
+    @overload
+    def __sub__(self: "Series[float]", other: "Union[float, Series[float]]") -> "Series[float]": ...
+    @overload
+    def __sub__(self, other: _SeriesOrScalar) -> "Series[Scalar]": ...
+    def __sub__(self, other: _SeriesOrScalar) -> "Series[Scalar]":
+        return self._elementwise(other, _ext.Series.sub, _ext.Series.sub_scalar)
 
-    def __rsub__(self, other: _Scalar) -> "Series":
+    @overload
+    def __rsub__(self: "Series[int]", other: int) -> "Series[int]": ...
+    @overload
+    def __rsub__(self: "Series[float]", other: float) -> "Series[float]": ...
+    @overload
+    def __rsub__(self, other: _Scalar) -> "Series[Scalar]": ...
+    def __rsub__(self, other: _Scalar) -> "Series[Scalar]":
         # other - self; a Series left operand would take __sub__, so other is a scalar.
         if isinstance(other, (int, float)) and not isinstance(other, bool):
             return self.mul_scalar(-1).add_scalar(other)
         return NotImplemented
 
-    def __mul__(self, other: _SeriesOrScalar) -> "Series":
-        return self._elementwise(other, "mul", "mul_scalar")
+    @overload
+    def __mul__(self: "Series[int]", other: "Union[int, Series[int]]") -> "Series[int]": ...
+    @overload
+    def __mul__(self: "Series[float]", other: "Union[float, Series[float]]") -> "Series[float]": ...
+    @overload
+    def __mul__(self, other: _SeriesOrScalar) -> "Series[Scalar]": ...
+    def __mul__(self, other: _SeriesOrScalar) -> "Series[Scalar]":
+        return self._elementwise(other, _ext.Series.mul, _ext.Series.mul_scalar)
 
-    def __rmul__(self, other: _Scalar) -> "Series":
-        return self._elementwise(other, "mul", "mul_scalar")
+    @overload
+    def __rmul__(self: "Series[int]", other: int) -> "Series[int]": ...
+    @overload
+    def __rmul__(self: "Series[float]", other: float) -> "Series[float]": ...
+    @overload
+    def __rmul__(self, other: _Scalar) -> "Series[Scalar]": ...
+    def __rmul__(self, other: _Scalar) -> "Series[Scalar]":
+        return self._elementwise(other, _ext.Series.mul, _ext.Series.mul_scalar)
 
-    def __truediv__(self, other: _SeriesOrScalar) -> "Series":
+    def __truediv__(self, other: _SeriesOrScalar) -> "Series[float]":
         # True division, as pandas / polars `/`: an integer operand is widened
         # to Float64 first (the engine's div over two integers truncates; that
         # form is `ops.series.div`; `//` is floordiv).
-        me = self.astype(DType.FLOAT64) if self.dtype in _INTEGRAL else self
+        me: "Series[Scalar]" = self.astype(DType.FLOAT64) if self.dtype in _INTEGRAL else self
         if isinstance(other, Series) and other.dtype in _INTEGRAL:
             other = other.astype(DType.FLOAT64)
         elif isinstance(other, int) and not isinstance(other, bool):
             other = float(other)
         if isinstance(other, Series):
-            return _wrap(me._native.div(_unwrap(other)))
+            return cast("Series[float]", _ext.Series.div(me, other))
         if isinstance(other, float):
-            return me.div_scalar(other)
+            return cast("Series[float]", me.div_scalar(other))
         return NotImplemented
 
-    def _extra(self, name: str, other: _SeriesOrScalar, reverse: bool = False) -> "Series":
+    def _extra(
+        self: "Series[Scalar]",
+        op: "Callable[..., Series]",
+        other: _SeriesOrScalar,
+        reverse: bool = False,
+    ) -> "Series[Scalar]":
         if isinstance(other, Series):
-            return _wrap(getattr(self._native, name)(_unwrap(other)))
+            return op(self, other)
         if isinstance(other, (int, float)) and not isinstance(other, bool):
-            return _wrap(getattr(self._native, name)(other, reverse))
+            return op(self, other, reverse)
         return NotImplemented
 
-    def __floordiv__(self, other: _SeriesOrScalar) -> "Series":
+    def __floordiv__(self, other: _SeriesOrScalar) -> "Series[Scalar]":
         """Floor division (Python's rule; a zero divisor is null)."""
-        return self._extra("floordiv", other)
+        return self._extra(_ext.Series.floordiv, other)
 
-    def __rfloordiv__(self, other: _Scalar) -> "Series":
-        return self._extra("floordiv", other, reverse=True)
+    def __rfloordiv__(self, other: _Scalar) -> "Series[Scalar]":
+        return self._extra(_ext.Series.floordiv, other, reverse=True)
 
-    def __mod__(self, other: _SeriesOrScalar) -> "Series":
+    def __mod__(self, other: _SeriesOrScalar) -> "Series[Scalar]":
         """Remainder with the divisor's sign (Python's rule)."""
-        return self._extra("mod", other)
+        return self._extra(_ext.Series.mod, other)
 
-    def __rmod__(self, other: _Scalar) -> "Series":
-        return self._extra("mod", other, reverse=True)
+    def __rmod__(self, other: _Scalar) -> "Series[Scalar]":
+        return self._extra(_ext.Series.mod, other, reverse=True)
 
-    def __pow__(self, other: _SeriesOrScalar) -> "Series":
+    def __pow__(self, other: _SeriesOrScalar) -> "Series[Scalar]":
         """Power: Int64 for two integers (a negative exponent is null), else
         Float64."""
-        return self._extra("pow", other)
+        return self._extra(_ext.Series.pow, other)
 
-    def __rpow__(self, other: _Scalar) -> "Series":
-        return self._extra("pow", other, reverse=True)
+    def __rpow__(self, other: _Scalar) -> "Series[Scalar]":
+        return self._extra(_ext.Series.pow, other, reverse=True)
 
-    def floordiv(self, other: _SeriesOrScalar) -> "Series":
-        return self._extra("floordiv", other)
+    def rfloordiv(self, other: _Scalar) -> "Series[Scalar]":
+        return self._extra(_ext.Series.floordiv, other, reverse=True)
 
-    def rfloordiv(self, other: _Scalar) -> "Series":
-        return self._extra("floordiv", other, reverse=True)
+    def rmod(self, other: _Scalar) -> "Series[Scalar]":
+        return self._extra(_ext.Series.mod, other, reverse=True)
 
-    def mod(self, other: _SeriesOrScalar) -> "Series":
-        return self._extra("mod", other)
+    def rpow(self, other: _Scalar) -> "Series[Scalar]":
+        return self._extra(_ext.Series.pow, other, reverse=True)
 
-    def rmod(self, other: _Scalar) -> "Series":
-        return self._extra("mod", other, reverse=True)
-
-    def pow(self, other: _SeriesOrScalar) -> "Series":
-        return self._extra("pow", other)
-
-    def rpow(self, other: _Scalar) -> "Series":
-        return self._extra("pow", other, reverse=True)
-
-    def divmod(self, other: _SeriesOrScalar) -> "Tuple[Series, Series]":
+    def divmod(self, other: _SeriesOrScalar) -> "Tuple[Series[Scalar], Series[Scalar]]":
         return self // other, self % other
 
-    def rdivmod(self, other: _Scalar) -> "Tuple[Series, Series]":
+    def rdivmod(self, other: _Scalar) -> "Tuple[Series[Scalar], Series[Scalar]]":
         return other // self, other % self
 
-    def ffill(self) -> "Series":
-        """Nulls filled from the nearest present value before them (``pad``)."""
-        return _wrap(self._native.ffill())
-
-    def bfill(self) -> "Series":
-        """Nulls filled from the nearest present value after them (``backfill``)."""
-        return _wrap(self._native.bfill())
-
-    pad = ffill
-    backfill = bfill
+    pad = _ext.Series.ffill
+    backfill = _ext.Series.bfill
 
     # Comparisons return a boolean mask Series, ``==`` and ``!=`` included,
     # as pandas and polars; a Series is therefore unhashable, as theirs are.
     # A string scalar compares the text of a String column.
     __hash__ = None  # type: ignore[assignment]
 
-    def __eq__(self, other: object) -> "Series":  # type: ignore[override]  # ty: ignore[incompatible-method-override]
+    def __eq__(self, other: object) -> "Series[bool]":  # type: ignore[override]  # ty: ignore[incompatible-method-override]
         return self._cmp(_CMP_EQ, other)
 
-    def __ne__(self, other: object) -> "Series":  # type: ignore[override]  # ty: ignore[incompatible-method-override]
+    def __ne__(self, other: object) -> "Series[bool]":  # type: ignore[override]  # ty: ignore[incompatible-method-override]
         return self._cmp(_CMP_NE, other)
 
-    def __lt__(self, other: _Scalar) -> "Series":
+    def __lt__(self, other: _Scalar) -> "Series[bool]":
         return self._cmp(_CMP_LT, other)
 
-    def __le__(self, other: _Scalar) -> "Series":
+    def __le__(self, other: _Scalar) -> "Series[bool]":
         return self._cmp(_CMP_LE, other)
 
-    def __gt__(self, other: _Scalar) -> "Series":
+    def __gt__(self, other: _Scalar) -> "Series[bool]":
         return self._cmp(_CMP_GT, other)
 
-    def __ge__(self, other: _Scalar) -> "Series":
+    def __ge__(self, other: _Scalar) -> "Series[bool]":
         return self._cmp(_CMP_GE, other)
 
-    def gt(self, value: _Scalar) -> "Series":
+    def gt(self, value: _Scalar) -> "Series[bool]":
         """Boolean mask where the value is greater than ``value``."""
         return self._cmp(_CMP_GT, value)
 
-    def ge(self, value: _Scalar) -> "Series":
+    def ge(self, value: _Scalar) -> "Series[bool]":
         """Boolean mask where the value is greater than or equal to ``value``."""
         return self._cmp(_CMP_GE, value)
 
-    def lt(self, value: _Scalar) -> "Series":
+    def lt(self, value: _Scalar) -> "Series[bool]":
         """Boolean mask where the value is less than ``value``."""
         return self._cmp(_CMP_LT, value)
 
-    def le(self, value: _Scalar) -> "Series":
+    def le(self, value: _Scalar) -> "Series[bool]":
         """Boolean mask where the value is less than or equal to ``value``."""
         return self._cmp(_CMP_LE, value)
 
-    def eq(self, value: _Scalar) -> "Series":
+    def eq(self, value: _Scalar) -> "Series[bool]":
         """Boolean mask where the value equals ``value``."""
         return self._cmp(_CMP_EQ, value)
 
-    def ne(self, value: _Scalar) -> "Series":
+    def ne(self, value: _Scalar) -> "Series[bool]":
         """Boolean mask where the value does not equal ``value``."""
         return self._cmp(_CMP_NE, value)
 
     # -- native engine ops (SIMD kernels, wrapped from the C extension) --------
-    def add(self, other: "Series") -> "Series":
-        """Element-wise addition; mixed dtypes promote to a common type
-        (numpy rules, e.g. uint64 + float64 -> float64)."""
-        return _wrap(self._native.add(_unwrap(other)))
 
-    def sub(self, other: "Series") -> "Series":
-        """Element-wise subtraction; mixed dtypes promote to a common type
-        (numpy rules). Note: uint64 - uint64 wraps on underflow (like numpy);
-        cast to a signed or float dtype first for interval/signed math."""
-        return _wrap(self._native.sub(_unwrap(other)))
-
-    def mul(self, other: "Series") -> "Series":
-        return _wrap(self._native.mul(_unwrap(other)))
-
-    def div(self, other: "Union[Series, int, float]") -> "Series":
+    def div(self, other: "Union[Series, int, float]") -> "Series[float]":
         """True division (pandas ``div``): integer operands widen to Float64
         first. The engine's integer-truncating kernel is ``ops.series.div``."""
         return self / other
 
-    def add_scalar(self, v: Union[int, float]) -> "Series":
-        return _wrap(self._native.add_scalar(_unwrap(v)))
-
-    def sub_scalar(self, v: Union[int, float]) -> "Series":
-        """Subtract a scalar; a float ``v`` promotes an integer column to
-        Float64 (numpy's weak-scalar rule). Note: uint64 - v wraps on
-        underflow (like numpy); cast to a signed or float dtype first for
-        interval/signed math."""
-        return _wrap(self._native.sub_scalar(_unwrap(v)))
-
-    def mul_scalar(self, v: Union[int, float]) -> "Series":
-        return _wrap(self._native.mul_scalar(_unwrap(v)))
-
-    def div_scalar(self, v: Union[int, float]) -> "Series":
-        return _wrap(self._native.div_scalar(_unwrap(v)))
-
-    def apply(self, func: Callable[..., object]) -> "Series":
+    def apply(self, func: "Callable[[T_co], _R]") -> "Series[_R]":
         """``func`` over each element (pandas ``Series.apply``), engine-first:
         the function is traced once with a symbolic column and, when it builds
         a column expression, runs fused in the engine; a ``@jit.series`` or
@@ -1023,16 +1098,50 @@ class Series(_SeriesPandasMixin, _Wrapper["_ext._Series"]):
         Python per element with a warning naming why. See ``_apply``."""
         from ._apply import apply_series
 
-        return apply_series(self, func, "Series.apply")
+        return cast("Series[_R]", apply_series(self, func, "Series.apply"))
 
-    def map(self, func: Callable[..., object]) -> "Series":
+    def map(self, func: "Callable[[T_co], _R]") -> "Series[_R]":
         """``func`` over each element; the pandas ``Series.map`` spelling of
         :meth:`apply`."""
         from ._apply import apply_series
 
-        return apply_series(self, func, "Series.map")
+        return cast("Series[_R]", apply_series(self, func, "Series.map"))
 
-    def astype(self, dtype: "Union[str, int, DType, builtins.type]") -> "Series":
+    @overload
+    def astype(
+        self,
+        dtype: Literal[
+            DType.INT8,
+            DType.INT16,
+            DType.INT32,
+            DType.INT64,
+            DType.UINT8,
+            DType.UINT16,
+            DType.UINT32,
+            DType.UINT64,
+        ],
+    ) -> "Series[int]": ...
+    @overload
+    def astype(self, dtype: Literal[DType.FLOAT32, DType.FLOAT64]) -> "Series[float]": ...
+    @overload
+    def astype(self, dtype: Literal[DType.BOOL]) -> "Series[bool]": ...
+    @overload
+    def astype(
+        self, dtype: Literal[DType.STRING, DType.LARGE_STRING]
+    ) -> "Series[builtins.str]": ...
+    @overload
+    def astype(self, dtype: "builtins.type[int]") -> "Series[int]": ...
+    @overload
+    def astype(self, dtype: "builtins.type[float]") -> "Series[float]": ...
+    @overload
+    def astype(self, dtype: "builtins.type[bool]") -> "Series[bool]": ...
+    @overload
+    def astype(self, dtype: "builtins.type[builtins.str]") -> "Series[builtins.str]": ...
+    @overload
+    def astype(
+        self, dtype: "Union[builtins.str, int, DType, builtins.type]"
+    ) -> "Series[Scalar]": ...
+    def astype(self, dtype: "Union[builtins.str, int, DType, builtins.type]") -> "Series[Scalar]":
         """Cast to ``dtype``: a :class:`~dftracer.utils.enums.DType`, its
         int code, a dtype name (``"int64"``, ``"Float64"``, case-insensitive;
         matches the ``DType`` member names), a Python type (``str``, ``int``,
@@ -1045,30 +1154,25 @@ class Series(_SeriesPandasMixin, _Wrapper["_ext._Series"]):
         support raises ``TypeError`` naming both types. The pandas-style primary
         spelling of :meth:`cast`."""
         target = _resolve_dtype(dtype)
-        out = _wrap(self._native.cast(_unwrap(target)))
+        out = super().cast(target)
         if int(target) == int(DType.STRING) and int(self.dtype) == int(DType.BOOL):
-            out = out.str.capitalize()  # the engine says true/false; Python says True/False
+            out = _StrAccessor(
+                out
+            ).capitalize()  # the engine says true/false; Python says True/False
         return out
 
-    def cast(self, type_id: "Union[str, int, DType]") -> "Series":
-        """Alias of :meth:`astype`."""
-        return self.astype(type_id)
+    cast = astype
 
-    def prim(self, op: int) -> "Series":
-        return _wrap(self._native.prim(_unwrap(op)))
-
-    def _cmp(self, op: int, scalar: object) -> "Series":
+    def _cmp(self: "Series[Scalar]", op: int, scalar: object) -> "Series[bool]":
         if isinstance(scalar, Series):
             return self.compare_series(scalar, op)
-        return _wrap(self._native.compare(_unwrap(op), _unwrap(scalar)))
+        return super().compare(op, cast("Union[int, float, str]", scalar))
 
-    def compare_series(self, other: "Series", op: int) -> "Series":
+    def compare_series(self, other: "Series", op: int) -> "Series[bool]":
         """Row by row against ``other`` (``op`` a ``_CMP_*`` code): a Bool
         mask, null where either side is null; the engine's
         ``dftu.series.compare_series``. ``==`` / ``<`` / ... spell it."""
-        from . import dftracer_utils_ext as _ext
-
-        return _wrap(_ext.op_run("dftu.series.compare_series", self._native, other._native, op))
+        return cast("Series[bool]", _ext.op_run("dftu.series.compare_series", self, other, op))
 
     def compare(
         self, other: "Series", keep_shape: bool = False, keep_equal: bool = False
@@ -1097,7 +1201,7 @@ class Series(_SeriesPandasMixin, _Wrapper["_ext._Series"]):
             keep_left.append(not same or keep_equal)
             keep_right.append(not same or keep_equal)
         # Typed columns, so no difference at all is still a well-typed frame.
-        dtype = DType(self._native.type)
+        dtype = DType(self.type)
 
         def picked(column: "Series", keep: List[bool]) -> "Series":
             rows = column.take(idx)
@@ -1113,44 +1217,14 @@ class Series(_SeriesPandasMixin, _Wrapper["_ext._Series"]):
             }
         )
 
-    def logical(self, op: int, other: "Series") -> "Series":
-        return _wrap(self._native.logical(_unwrap(op), _unwrap(other)))
-
-    def logical_not(self) -> "Series":
-        return _wrap(self._native.logical_not())
-
-    def __and__(self, other: "Series") -> "Series":
+    def __and__(self, other: "Series") -> "Series[bool]":
         return self.logical(_LOGICAL_AND, other)
 
-    def __or__(self, other: "Series") -> "Series":
+    def __or__(self, other: "Series") -> "Series[bool]":
         return self.logical(_LOGICAL_OR, other)
 
-    def __invert__(self) -> "Series":
+    def __invert__(self) -> "Series[bool]":
         return self.logical_not()
-
-    def quantile(self, q: float) -> float:
-        return self._native.quantile(_unwrap(q))
-
-    def median(self) -> float:
-        return self._native.median()
-
-    def variance(self, sample: bool = True) -> float:
-        return self._native.variance(_unwrap(sample))
-
-    def stddev(self, sample: bool = True) -> float:
-        return self._native.stddev(_unwrap(sample))
-
-    def skewness(self) -> float:
-        return self._native.skewness()
-
-    def kurtosis(self) -> float:
-        return self._native.kurtosis()
-
-    def nunique(self) -> int:
-        return self._native.nunique()
-
-    def unique(self) -> "Series":
-        return _wrap(self._native.unique())
 
     def value_counts(
         self, normalize: bool = False, sort: bool = True, ascending: bool = False
@@ -1160,18 +1234,17 @@ class Series(_SeriesPandasMixin, _Wrapper["_ext._Series"]):
         column instead, ``ascending`` flips the order, ``sort=False`` keeps
         first-seen order). A frame rather than an indexed Series: this engine
         has no index."""
-        vc = _wrap(self._native.value_counts())
+        from .dataframe import DataFrame
+
+        vc = DataFrame(super().value_counts())
         if normalize:
-            total = float(self._native.length)
+            total = float(self.length)
             vc = vc.with_column("proportion", vc["count"].astype("float64") / total).select(
                 "value", "proportion"
             )
         if sort and ascending:
             vc = vc.reverse()
         return vc
-
-    def abs(self) -> "Series":
-        return _wrap(self._native.abs())
 
     def clip(
         self,
@@ -1182,7 +1255,7 @@ class Series(_SeriesPandasMixin, _Wrapper["_ext._Series"]):
         upper: Union[int, float, None] = None,
         lower_bound: Union[int, float, None] = None,
         upper_bound: Union[int, float, None] = None,
-    ) -> "Series":
+    ) -> Self:
         """Clamp to ``[lo, hi]``. ``lower`` / ``upper`` (pandas) and
         ``lower_bound`` / ``upper_bound`` (polars) name the same two bounds. One
         bound is enough: ``clip(lower=0)`` raises values below 0 to 0 and leaves
@@ -1200,69 +1273,21 @@ class Series(_SeriesPandasMixin, _Wrapper["_ext._Series"]):
                 )
             lo = limits[0] if lo is None else lo
             hi = limits[1] if hi is None else hi
-        return _wrap(self._native.clip(_unwrap(lo), _unwrap(hi)))
+        return super().clip(lo, hi)
 
-    def round(self, decimals: int = 0) -> "Series":
+    def round(self, decimals: int = 0) -> Self:
         """Round to ``decimals`` places, halves to even, as numpy and pandas:
         the value scaled by ``10**decimals``, rounded and scaled back. A
         negative ``decimals`` rounds to tens, hundreds and so on. An integer
         column stays integer."""
         if decimals == 0 or (decimals > 0 and self.dtype in _INTEGERS):
-            return _wrap(self._native.round())
+            return super().round()
         scale = 10.0**decimals if decimals > 0 else 10.0 ** (-decimals)
         if decimals > 0:
             out = (self * scale).round() / scale
         else:
             out = (self / scale).round() * scale
-        return out.astype(self.dtype) if self.dtype in _INTEGERS else out
-
-    def fillna(self, value: Union[bool, int, float, str]) -> "Series":
-        return _wrap(self._native.fillna(_unwrap(value)))
-
-    def cumsum(self) -> "Series":
-        return _wrap(self._native.cumsum())
-
-    def cummax(self) -> "Series":
-        return _wrap(self._native.cummax())
-
-    def cummin(self) -> "Series":
-        return _wrap(self._native.cummin())
-
-    def cum_prod(self) -> "Series":
-        return _wrap(self._native.cum_prod())
-
-    def cum_count(self) -> "Series":
-        return _wrap(self._native.cum_count())
-
-    def ceil(self) -> "Series":
-        return _wrap(self._native.ceil())
-
-    def floor(self) -> "Series":
-        return _wrap(self._native.floor())
-
-    def trunc(self) -> "Series":
-        return _wrap(self._native.trunc())
-
-    def sign(self) -> "Series":
-        return _wrap(self._native.sign())
-
-    def negate(self) -> "Series":
-        return _wrap(self._native.negate())
-
-    def diff(self) -> "Series":
-        return _wrap(self._native.diff())
-
-    def pct_change(self) -> "Series":
-        return _wrap(self._native.pct_change())
-
-    def sqrt(self) -> "Series":
-        return _wrap(self._native.sqrt())
-
-    def exp(self) -> "Series":
-        return _wrap(self._native.exp())
-
-    def log(self) -> "Series":
-        return _wrap(self._native.log())
+        return cast("Self", out.astype(self.dtype) if self.dtype in _INTEGERS else out)
 
     def rank(
         self,
@@ -1271,7 +1296,7 @@ class Series(_SeriesPandasMixin, _Wrapper["_ext._Series"]):
         *,
         ascending: Optional[bool] = None,
         pct: bool = False,
-    ) -> "Series":
+    ) -> "Series[float]":
         """Rank each element (1-based); ties per ``method``. Always returns a
         Float64 Series, matching pandas ``rank()`` (even ``method="dense"``,
         which pandas also returns as float). Call ``.astype("int64")`` on the
@@ -1283,50 +1308,36 @@ class Series(_SeriesPandasMixin, _Wrapper["_ext._Series"]):
         counted."""
         if ascending is not None:
             descending = not ascending
-        return _wrap(self._native.rank(_unwrap(method), _unwrap(descending), _unwrap(pct)))
+        return super().rank(method, descending, pct)
 
+    @overload
+    def rolling(self, window: int) -> "_Rolling": ...
+    @overload
+    def rolling(self, window: int, op: Literal["sum", "mean", "min", "max"]) -> "Series[float]": ...
     def rolling(
         self,
         window: int,
         op: Optional[Literal["sum", "mean", "min", "max"]] = None,
-    ) -> "Union[Series, _Rolling]":
+    ) -> "Union[Series[float], _Rolling]":
         """A trailing window of ``window`` rows. With ``op`` the reduced Series;
         without it a window object with ``.sum() .mean() .min() .max() .var()
         .std() .median() .quantile(q)``, the pandas ``s.rolling(n).mean()``
         spelling."""
         if op is None:
             return _Rolling(self, window)
-        return _wrap(self._native.rolling(_unwrap(window), _unwrap(op)))
+        return super().rolling(window, op)
 
-    def rolling_sum(self, window: int) -> "Series":
-        return _wrap(self._native.rolling(_unwrap(window), "sum"))
+    def rolling_sum(self, window: int) -> "Series[float]":
+        return super().rolling(window, "sum")
 
-    def rolling_mean(self, window: int) -> "Series":
-        return _wrap(self._native.rolling(_unwrap(window), "mean"))
+    def rolling_mean(self, window: int) -> "Series[float]":
+        return super().rolling(window, "mean")
 
-    def rolling_min(self, window: int) -> "Series":
-        return _wrap(self._native.rolling(_unwrap(window), "min"))
+    def rolling_min(self, window: int) -> "Series[float]":
+        return super().rolling(window, "min")
 
-    def rolling_max(self, window: int) -> "Series":
-        return _wrap(self._native.rolling(_unwrap(window), "max"))
-
-    def rolling_var(self, window: int) -> "Series":
-        return _wrap(self._native.rolling_var(_unwrap(window)))
-
-    def rolling_std(self, window: int) -> "Series":
-        return _wrap(self._native.rolling_std(_unwrap(window)))
-
-    def rolling_median(self, window: int) -> "Series":
-        return _wrap(self._native.rolling_median(_unwrap(window)))
-
-    def rolling_quantile(self, window: int, q: float) -> "Series":
-        return _wrap(self._native.rolling_quantile(_unwrap(window), _unwrap(q)))
-
-    def ewm_mean(self, alpha: float) -> "Series":
-        return _wrap(self._native.ewm_mean(_unwrap(alpha)))
-
-    def ewm_std(self, alpha: float) -> "Series":
-        return _wrap(self._native.ewm_std(_unwrap(alpha)))
+    def rolling_max(self, window: int) -> "Series[float]":
+        return super().rolling(window, "max")
 
     def ewm(
         self,
@@ -1347,7 +1358,7 @@ class Series(_SeriesPandasMixin, _Wrapper["_ext._Series"]):
         the cumulative kernels."""
         return _Expanding(self)
 
-    def cut(self, breaks: "Series", right: bool = False, outer: bool = True) -> "Series":
+    def cut(self, breaks: "Series", right: bool = False, outer: bool = True) -> "Series[int]":
         """Bin each value by the ascending ``breaks``. By default the intervals are
         ``[a, b)`` and the bin is the count of breaks at or below the value
         (0 to ``len(breaks)``). ``right=True`` closes each interval on the right,
@@ -1355,37 +1366,34 @@ class Series(_SeriesPandasMixin, _Wrapper["_ext._Series"]):
         intervals and numbers them from 0; ``cut(breaks, right=True, outer=False)``
         equals ``pandas.cut(labels=False)``. A null value gives a null bin."""
         flags = (1 if right else 0) | (0 if outer else 2)
-        return _wrap(self._native.cut(_unwrap(breaks), flags))
+        return super().cut(breaks, flags)
 
-    def qcut(self, q: int) -> "Series":
-        return _wrap(self._native.qcut(_unwrap(q)))
-
-    def search_sorted(self, values: "Series") -> "Series":
-        return _wrap(self._native.search_sorted(_unwrap(values)))
-
-    def interpolate(self) -> "Series":
-        return _wrap(self._native.interpolate())
-
-    def where(self, cond: "Series", other: "Union[Series, int, float, None]" = None) -> "Series":
+    def where(
+        self, cond: "Series", other: "Union[Series, int, float, None]" = None
+    ) -> "Series[Scalar]":
         """This value where ``cond`` is true, else ``other`` (pandas
         ``Series.where``; a scalar ``other`` broadcasts, a float one widens
         the result to Float64; a null ``other`` (``None`` or ``pd.NA``, the
         default) makes every row where ``cond`` is false null, in this
         column's own type; a null in ``cond`` takes ``other``)."""
         a, b = self._arms(other)
-        return _wrap(a._native.where(_unwrap(cond), _unwrap(b)))
+        return _ext.Series.where(a, cond, b)
 
-    def mask(self, cond: "Series", other: "Union[Series, int, float, None]" = None) -> "Series":
+    def mask(
+        self, cond: "Series", other: "Union[Series, int, float, None]" = None
+    ) -> "Series[Scalar]":
         """``other`` where ``cond`` is true (null by default), else this value
         (pandas ``Series.mask``)."""
         a, b = self._arms(other)
-        return _wrap(b._native.where(_unwrap(cond), _unwrap(a)))
+        return _ext.Series.where(b, cond, a)
 
-    def _arms(self, other: "Union[Series, int, float, None]") -> "Tuple[Series, Series]":
+    def _arms(
+        self, other: "Union[Series, int, float, None]"
+    ) -> "Tuple[Series[Scalar], Series[Scalar]]":
         if isinstance(other, Series):
             return self, other
         if other is None or type(other).__name__ == "NAType":
-            return self, Series(_ext._series_nulls(int(self.dtype), len(self)))
+            return self, _ext._series_nulls(int(self.dtype), len(self))
         if isinstance(other, bool) or not isinstance(other, (int, float)):
             raise TypeError("other must be a Series, a number or null")
         me = self
@@ -1393,7 +1401,7 @@ class Series(_SeriesPandasMixin, _Wrapper["_ext._Series"]):
             me = self.astype(DType.FLOAT64)
         return me, me.full_like(other)
 
-    def full_like(self, value: Union[int, float]) -> "Series":
+    def full_like(self, value: Union[int, float]) -> "Series[Scalar]":
         """A Series of this length holding ``value`` on every row, in this
         Series' numeric type (Float64 for a float value, Int64 when this
         Series is not numeric). The constant rides the null mask (0 / 1,
@@ -1403,125 +1411,38 @@ class Series(_SeriesPandasMixin, _Wrapper["_ext._Series"]):
             target = DType.FLOAT64 if isinstance(value, float) else DType.INT64
         return self.isna().astype(target).mul_scalar(0).add_scalar(value)
 
-    def is_between(self, lo: Union[int, float], hi: Union[int, float]) -> "Series":
-        return _wrap(self._native.is_between(_unwrap(lo), _unwrap(hi)))
-
-    def dot(self, other: "Series") -> Union[int, float]:
-        return self._native.dot(_unwrap(other))
-
-    def sum(self) -> Union[int, float]:
-        """Sum of the valid values; a bool column counts ``True`` as 1, so
-        ``(x > 2).sum()`` counts the matches. Raises ``TypeError`` for a
-        column type with no sum (string, most temporal types)."""
-        return self._native.sum()
-
-    def min(self) -> Union[int, float, str]:
-        """Smallest valid value. A bool column gives 0 or 1 and a string
-        column the bytewise smallest string (empty when no value is valid);
-        raises ``TypeError`` for a type with no order here."""
-        return self._native.min()
-
-    def max(self) -> Union[int, float, str]:
-        """Largest valid value, over the same column types as :meth:`min`."""
-        return self._native.max()
-
-    def mean(self) -> float:
-        """Mean of the valid values; a bool column gives the fraction that is
-        ``True``. Raises ``TypeError`` for a column type with no sum."""
-        return self._native.mean()
-
-    def count(self) -> int:
-        return self._native.count()
-
-    def product(self) -> Union[int, float]:
-        return self._native.product()
-
-    def mode(self) -> "Series":
+    def mode(self) -> "Series[Scalar]":
         """The most frequent value as a one-element Series (pandas returns every
         mode; the engine keeps one)."""
-        return Series([self._native.mode()])
+        return Series([super().mode()])
 
-    def all(self) -> bool:
-        return self._native.all()
-
-    def any(self) -> bool:
-        return self._native.any()
-
-    def arg_min(self) -> int:
-        return self._native.arg_min()
-
-    def arg_max(self) -> int:
-        return self._native.arg_max()
-
-    def take(self, indices: "Union[Series, Sequence[int]]") -> "Series":
+    def take(self, indices: "Union[Series, Sequence[int]]") -> Self:
         """The rows at ``indices`` (a Series or a list; any order, repeats
         allowed)."""
-        return _wrap(self._native.take(_indices(indices)))
+        return super().take(_indices(indices))
 
-    def filter(self, mask: "Series") -> "Series":
-        return _wrap(self._native.filter(_unwrap(mask)))
-
-    def argsort(self, descending: bool = False) -> "Series":
-        return _wrap(self._native.argsort(_unwrap(descending)))
-
-    def dictionary_encode(self) -> "Series":
-        return _wrap(self._native.dictionary_encode())
-
-    def materialize(self) -> "Series":
-        return _wrap(self._native.materialize())
-
-    def share(self) -> "Series":
-        return _wrap(self._native.share())
-
-    def slice(self, offset: int, length: int) -> "Series":
-        return _wrap(self._native.slice(_unwrap(offset), _unwrap(length)))
-
-    def is_null(self, i: Optional[int] = None) -> "Union[bool, Series]":
+    @overload
+    def is_null(self) -> "Series[bool]": ...
+    @overload
+    def is_null(self, i: int) -> bool: ...
+    def is_null(self, i: Optional[int] = None) -> "Union[bool, Series[bool]]":
         """With ``i``, whether row ``i`` is null; without, the Bool mask of
         null rows (polars ``is_null()``, pandas ``isna()``)."""
         if i is None:
-            return _wrap(self._native.null_mask())
-        return self._native.is_null(_unwrap(i))
+            return self.null_mask()
+        return super().is_null(i)
 
-    def is_not_null(self) -> "Series":
-        """Bool mask of present rows."""
-        return _wrap(self._native.valid_mask())
-
-    def num_children(self) -> int:
-        return self._native.num_children()
-
-    def child(self, i: int) -> "Series":
-        return _wrap(self._native.child(_unwrap(i)))
-
-    def is_nan(self) -> "Series":
-        return _wrap(self._native.is_nan())
-
-    def is_finite(self) -> "Series":
-        return _wrap(self._native.is_finite())
-
-    def is_infinite(self) -> "Series":
-        return _wrap(self._native.is_infinite())
+    is_not_null = _ext.Series.valid_mask
 
     @property
     def is_unique(self) -> bool:
         """Whether every value occurs once (the pandas property). The per-row
         mask is :meth:`unique_mask`."""
-        return not _wrap(self._native.is_duplicated()).any()
+        return not self.is_duplicated().any()
 
-    def unique_mask(self) -> "Series":
-        """Bool mask: the value occurs exactly once (polars ``is_unique``)."""
-        return _wrap(self._native.is_unique())
+    unique_mask = _ext.Series.is_unique
 
-    def is_duplicated(self) -> "Series":
-        return _wrap(self._native.is_duplicated())
-
-    def is_sorted(self, descending: bool = False) -> bool:
-        return self._native.is_sorted(_unwrap(descending))
-
-    def drop_nulls(self) -> "Series":
-        return _wrap(self._native.drop_nulls())
-
-    def is_in(self, values: "Union[Series, Sequence[object]]") -> "Series":
+    def is_in(self, values: "Union[Series, Sequence[object]]") -> "Series[bool]":
         """Bool mask: the value is one of ``values`` (a Series or a list; an
         empty list matches nothing)."""
         if not isinstance(values, Series):
@@ -1530,220 +1451,23 @@ class Series(_SeriesPandasMixin, _Wrapper["_ext._Series"]):
                 # Present and null at once: false on every row.
                 return self.isna().logical(0, self.notna())
             values = Series.from_list(items)
-        return _wrap(self._native.is_in(_unwrap(values)))
+        return super().is_in(values)
 
-    def sort(self, descending: bool = False) -> "Series":
-        return _wrap(self._native.sort(_unwrap(descending)))
-
-    def head(self, n: int = 5) -> "Series":
-        return _wrap(self._native.head(_unwrap(n)))
-
-    def tail(self, n: int = 5) -> "Series":
-        return _wrap(self._native.tail(_unwrap(n)))
-
-    def reverse(self) -> "Series":
-        return _wrap(self._native.reverse())
-
-    def shift(self, n: int = 1, *, periods: Optional[int] = None) -> "Series":
+    def shift(self, n: int = 1, *, periods: Optional[int] = None) -> Self:
         """Shift by ``n`` rows (``periods`` is the pandas spelling)."""
         if periods is not None:
             n = periods
-        return _wrap(self._native.shift(_unwrap(n)))
+        return super().shift(n)
 
-    def top_k(self, k: int) -> "Series":
-        return _wrap(self._native.top_k(_unwrap(k)))
-
-    def bottom_k(self, k: int) -> "Series":
-        return _wrap(self._native.bottom_k(_unwrap(k)))
-
-    def sample(self, n: int, seed: int = 0, *, random_state: Optional[int] = None) -> "Series":
+    def sample(self, n: int, seed: int = 0, *, random_state: Optional[int] = None) -> Self:
         """A deterministic ``n``-row sample (``random_state`` is the pandas
         spelling of ``seed``)."""
         if random_state is not None:
             seed = random_state
-        return _wrap(self._native.sample(_unwrap(n), _unwrap(seed)))
-
-    def str_eq(self, rhs: str) -> "Series":
-        return _wrap(self._native.str_eq(_unwrap(rhs)))
-
-    def str_contains(self, needle: str) -> "Series":
-        return _wrap(self._native.str_contains(_unwrap(needle)))
-
-    def str_starts_with(self, prefix: str) -> "Series":
-        return _wrap(self._native.str_starts_with(_unwrap(prefix)))
-
-    def str_ends_with(self, suffix: str) -> "Series":
-        return _wrap(self._native.str_ends_with(_unwrap(suffix)))
-
-    def str_matches(self, pattern: str) -> "Series":
-        return _wrap(self._native.str_matches(_unwrap(pattern)))
-
-    def str_search(self, pattern: str) -> "Series":
-        return _wrap(self._native.str_search(_unwrap(pattern)))
-
-    def str_like(self, pattern: str) -> "Series":
-        return _wrap(self._native.str_like(_unwrap(pattern)))
-
-    def str_len_bytes(self) -> "Series":
-        return _wrap(self._native.str_len_bytes())
-
-    def str_len_chars(self) -> "Series":
-        return _wrap(self._native.str_len_chars())
-
-    def str_find(self, needle: str) -> "Series":
-        return _wrap(self._native.str_find(_unwrap(needle)))
-
-    def fnv1a(self) -> "Series":
-        return _wrap(self._native.fnv1a())
-
-    def hex64_parse(self) -> "Series":
-        return _wrap(self._native.hex64_parse())
-
-    def hex64_format(self) -> "Series":
-        return _wrap(self._native.hex64_format())
-
-    def to_lowercase(self) -> "Series":
-        return _wrap(self._native.to_lowercase())
-
-    def to_uppercase(self) -> "Series":
-        return _wrap(self._native.to_uppercase())
-
-    def str_strip(self) -> "Series":
-        return _wrap(self._native.str_strip())
-
-    def str_lstrip(self) -> "Series":
-        return _wrap(self._native.str_lstrip())
-
-    def str_rstrip(self) -> "Series":
-        return _wrap(self._native.str_rstrip())
-
-    def str_replace(self, pat: str, repl: str) -> "Series":
-        return _wrap(self._native.str_replace(_unwrap(pat), _unwrap(repl)))
-
-    def str_replace_all(self, pat: str, repl: str) -> "Series":
-        return _wrap(self._native.str_replace_all(_unwrap(pat), _unwrap(repl)))
-
-    def str_slice(self, start: int, length: int = -1) -> "Series":
-        return _wrap(self._native.str_slice(_unwrap(start), _unwrap(length)))
-
-    def str_pad_start(self, width: int, fill: str = " ") -> "Series":
-        return _wrap(self._native.str_pad_start(_unwrap(width), _unwrap(fill)))
-
-    def str_pad_end(self, width: int, fill: str = " ") -> "Series":
-        return _wrap(self._native.str_pad_end(_unwrap(width), _unwrap(fill)))
-
-    def str_zfill(self, width: int) -> "Series":
-        return _wrap(self._native.str_zfill(_unwrap(width)))
-
-    def str_split(self, sep: str) -> "Series":
-        return _wrap(self._native.str_split(_unwrap(sep)))
-
-    def str_regex_replace(self, pattern: str, to: str) -> "Series":
-        """Replace every regex match of ``pattern`` with ``to``; ``$n``,
-        ``${n}``, ``${name}`` insert a group and ``$$`` a dollar sign. Raises
-        ``ValueError`` for an invalid pattern or replacement."""
-        return _wrap(self._native.str_regex_replace(_unwrap(pattern), _unwrap(to)))
-
-    def str_extract(self, pattern: str, group: int = 1) -> "Series":
-        return _wrap(self._native.str_extract(pattern, group))
-
-    def list_len(self) -> "Series":
-        return _wrap(self._native.list_len())
-
-    def list_get(self, index: int) -> "Series":
-        return _wrap(self._native.list_get(index))
-
-    def list_join(self, sep: str) -> "Series":
-        return _wrap(self._native.list_join(sep))
-
-    def str_case(self, code: int) -> "Series":
-        return _wrap(self._native.str_case(code))
-
-    def str_is(self, code: int) -> "Series":
-        return _wrap(self._native.str_is(code))
-
-    def str_count(self, pat: str) -> "Series":
-        return _wrap(self._native.str_count(pat))
-
-    def str_rfind(self, needle: str) -> "Series":
-        return _wrap(self._native.str_rfind(needle))
-
-    def str_remove_prefix(self, prefix: str) -> "Series":
-        return _wrap(self._native.str_remove_prefix(prefix))
-
-    def str_remove_suffix(self, suffix: str) -> "Series":
-        return _wrap(self._native.str_remove_suffix(suffix))
-
-    def str_repeat(self, n: int) -> "Series":
-        return _wrap(self._native.str_repeat(n))
-
-    def str_center(self, width: int, fill: str = " ") -> "Series":
-        return _wrap(self._native.str_center(width, fill))
-
-    def str_cat(self, other: "Series") -> "Series":
-        return _wrap(self._native.str_cat(_unwrap(other)))
-
-    def str_findall(self, pattern: str) -> "Series":
-        return _wrap(self._native.str_findall(pattern))
-
-    def str_partition(self, sep: str, from_right: bool = False) -> "Series":
-        return _wrap(self._native.str_partition(sep, from_right))
-
-    def str_normalize(self, form: int) -> "Series":
-        return _wrap(self._native.str_normalize(form))
-
-    def str_translate(self, from_: "Series", to: "Series") -> "Series":
-        return _wrap(self._native.str_translate(_unwrap(from_), _unwrap(to)))
-
-    def str_wrap(self, width: int, flags: int) -> "Series":
-        return _wrap(self._native.str_wrap(width, flags))
-
-    def dt_part(self, code: int, unit: int = 2) -> "Series":
-        return _wrap(self._native.dt_part(code, unit))
-
-    def dt_format(self, fmt: str, unit: int = 2) -> "Series":
-        """Each instant formatted by strftime ``fmt`` as a String column.
-        ``unit`` reads an Int64 column (0 s, 1 ms, 2 us, 3 ns); a Timestamp
-        uses its own unit. Directives: %Y %y %m %d %H %I %M %S %f %j %a %A
-        %b %B %p %F %T %s %z %Z %%. Raises ValueError for another directive."""
-        return _wrap(self._native.dt_format(fmt, unit))
-
-    def dt_round(self, every: int, mode: int) -> "Series":
-        return _wrap(self._native.dt_round(every, mode))
-
-    def with_timezone(self, tz: str) -> "Series":
-        """This Timestamp column under zone ``tz`` (``""`` for naive), the
-        same instants and buffers."""
-        return _wrap(self._native.with_timezone(tz))
-
-    # -- native property accessors --------------------------------------------
-    # These are attributes, not methods: read as ``s.type``, never ``s.type()``.
-    @property
-    def type(self) -> int:
-        """(property, not a method) The native element type of the column, a
-        :class:`~dftracer.utils.enums.DType` value. Read as ``s.type``."""
-        return self._native.type
+        return super().sample(n, seed)
 
     @property
-    def encoding(self) -> int:
-        """(property, not a method) The native storage encoding: 0 flat,
-        1 constant, 2 dictionary, 3 selection, 4 view, 5 chunked. Read as ``s.encoding``."""
-        return self._native.encoding
-
-    @property
-    def length(self) -> int:
-        """(property, not a method) Number of elements in the column. Read as
-        ``s.length``."""
-        return self._native.length
-
-    @property
-    def null_count(self) -> int:
-        """(property, not a method) Number of null elements. Read as
-        ``s.null_count``."""
-        return self._native.null_count
-
-    @property
-    def ops(self) -> "_OpsAccessor":
+    def ops(self: "Series[Scalar]") -> "_OpsAccessor":
         """Call any registered op (built-in or @jit.series user op) as a method,
         e.g. ``s.ops.series.add(other)``, ``s.ops.series.count()``, ``s.ops.stats.zscore()``."""
         return _OpsAccessor(self)
@@ -1755,55 +1479,42 @@ class Series(_SeriesPandasMixin, _Wrapper["_ext._Series"]):
     @property
     def dtype(self) -> DType:
         """The element type as a :class:`~dftracer.utils.enums.DType`."""
-        return DType(self._native.type)
+        return DType(self.type)
 
     @property
     def size(self) -> int:
-        return self._native.length
+        return self.length
 
     @property
     def shape(self) -> Tuple[int]:
-        return (self._native.length,)
+        return (self.length,)
 
     def len(self) -> int:
-        return self._native.length
+        return self.length
 
-    @property
-    def is_json(self) -> bool:
-        """Whether each value is JSON text: a field whose records mix numbers,
-        text or bools, or a declared ``json`` field. :meth:`to_list` parses
-        it."""
-        return bool(self._native.is_json)
-
-    def to_list(self) -> List[object]:
-        values = self._native.to_pylist()
-        if self._native.is_json:
-            return [None if v is None else json.loads(v) for v in values]
+    def to_list(self) -> List[Optional[T_co]]:  # ty: ignore[invalid-generic-class]
+        values = self.to_pylist()
+        if self.is_json:
+            return [None if v is None else json.loads(cast(str, v)) for v in values]
         return values
 
-    def tolist(self) -> List[object]:
+    def tolist(self) -> List[Optional[T_co]]:  # ty: ignore[invalid-generic-class]
         return self.to_list()
 
-    def isna(self) -> "Series":
-        return _wrap(self._native.null_mask())
+    isna = _ext.Series.null_mask
 
-    def isnull(self) -> "Series":
-        return _wrap(self._native.null_mask())
+    isnull = _ext.Series.null_mask
 
-    def notna(self) -> "Series":
-        return _wrap(self._native.valid_mask())
+    notna = _ext.Series.valid_mask
 
-    def notnull(self) -> "Series":
-        return _wrap(self._native.valid_mask())
+    notnull = _ext.Series.valid_mask
 
-    def isin(self, values: "Union[Series, Sequence[object]]") -> "Series":
+    def isin(self, values: "Union[Series, Sequence[object]]") -> "Series[bool]":
         return self.is_in(values)
 
-    def dropna(self) -> "Series":
-        return _wrap(self._native.drop_nulls())
+    dropna = _ext.Series.drop_nulls
 
-    def fill_null(self, value: Union[int, float]) -> "Series":
-        return _wrap(self._native.fillna(_unwrap(value)))
+    fill_null = _ext.Series.fillna
 
     def var(self, ddof: int = 1) -> float:
         """Variance with ``ddof`` degrees of freedom (0 = population, 1 =
@@ -1812,85 +1523,73 @@ class Series(_SeriesPandasMixin, _Wrapper["_ext._Series"]):
         readout is 0)."""
         if self.count() < ddof + 1:
             return float("nan")
-        return self._native.variance(_ddof_sample(ddof))
+        return self.variance(_ddof_sample(ddof))
 
     def std(self, ddof: int = 1) -> float:
         if self.count() < ddof + 1:
             return float("nan")
-        return self._native.stddev(_ddof_sample(ddof))
+        return self.stddev(_ddof_sample(ddof))
 
-    def skew(self) -> float:
-        return self._native.skewness()
+    skew = _ext.Series.skewness
 
-    def kurt(self) -> float:
-        return self._native.kurtosis()
+    kurt = _ext.Series.kurtosis
 
-    def n_unique(self) -> int:
-        return self._native.nunique()
+    n_unique = _ext.Series.nunique
 
-    def prod(self) -> Union[int, float]:
-        return self._native.product()
+    prod = _ext.Series.product
 
-    def argmin(self) -> int:
-        return self._native.arg_min()
+    argmin = _ext.Series.arg_min
 
-    def argmax(self) -> int:
-        return self._native.arg_max()
+    argmax = _ext.Series.arg_max
 
-    def idxmin(self) -> int:
-        return self._native.arg_min()
+    idxmin = _ext.Series.arg_min
 
-    def idxmax(self) -> int:
-        return self._native.arg_max()
+    idxmax = _ext.Series.arg_max
 
-    def arg_sort(self, descending: bool = False) -> "Series":
-        return _wrap(self._native.argsort(_unwrap(descending)))
+    def arg_sort(self, descending: bool = False) -> "Series[int]":
+        return self.argsort(descending)
 
-    def cumprod(self) -> "Series":
-        return _wrap(self._native.cum_prod())
+    cumprod = _ext.Series.cum_prod
 
-    def cum_sum(self) -> "Series":
-        return _wrap(self._native.cumsum())
+    cum_sum = _ext.Series.cumsum
 
-    def cum_max(self) -> "Series":
-        return _wrap(self._native.cummax())
+    cum_max = _ext.Series.cummax
 
-    def cum_min(self) -> "Series":
-        return _wrap(self._native.cummin())
+    cum_min = _ext.Series.cummin
 
-    def sort_values(self, ascending: bool = True) -> "Series":
-        return _wrap(self._native.sort(not ascending))
+    def sort_values(self, ascending: bool = True) -> Self:
+        return self.sort(not ascending)
 
-    def nlargest(self, n: int = 5) -> "Series":
-        return _wrap(self._native.top_k(_unwrap(n)))
+    def nlargest(self, n: int = 5) -> Self:
+        return self.top_k(n)
 
-    def nsmallest(self, n: int = 5) -> "Series":
-        return _wrap(self._native.bottom_k(_unwrap(n)))
+    def nsmallest(self, n: int = 5) -> Self:
+        return self.bottom_k(n)
 
-    def searchsorted(self, values: "Series") -> "Series":
-        return _wrap(self._native.search_sorted(_unwrap(values)))
+    searchsorted = _ext.Series.search_sorted
 
-    def gather(self, indices: "Union[Series, Sequence[int]]") -> "Series":
+    def gather(self, indices: "Union[Series, Sequence[int]]") -> Self:
         return self.take(indices)
 
     # ``s.str``: string methods under both spellings, pandas (``s.str.lower()``,
     # ``s.str.contains("x")``, ``s.str.len()``) and polars
-    # (``s.str.to_lowercase()``, ``s.str.len_bytes()``). Served from the
-    # forwarder rather than a property: a class-scope name ``str`` would shadow
-    # the builtin in every annotation of this class.
-    if not TYPE_CHECKING:
+    # (``s.str.to_lowercase()``, ``s.str.len_bytes()``). The class-scope names
+    # ``str`` and ``list`` shadow the builtins in this class's annotations, so
+    # they read ``builtins.str`` and ``builtins.list`` here.
+    @property
+    def str(self: "Series[builtins.str]") -> "_StrAccessor":
+        return _StrAccessor(self)
 
-        def __getattr__(self, name):
-            if name == "str":
-                return _StrAccessor(self)
-            if name == "list":
-                return _ListAccessor(self)
-            if name == "dt":
-                return _DtAccessor(self)
-            return super().__getattr__(name)
+    @property
+    def list(self: "Series[Scalar]") -> "_ListAccessor":
+        return _ListAccessor(self)
+
+    @property
+    def dt(self: "Series[Scalar]") -> "_DtAccessor":
+        return _DtAccessor(self)
 
     def __reduce__(self) -> "Tuple[Callable[[bytes], Series], Tuple[bytes, ...]]":
-        return (_series_from_bytes, (self._native.to_bytes(),))
+        return (_series_from_bytes, (self.to_bytes(),))
 
 
 def _indices(indices: "Union[Series, Sequence[int]]") -> List[int]:
@@ -1923,28 +1622,28 @@ class _Rolling:
         self._series = series
         self._window = window
 
-    def sum(self) -> Series:
+    def sum(self) -> "Series[float]":
         return self._series.rolling_sum(self._window)
 
-    def mean(self) -> Series:
+    def mean(self) -> "Series[float]":
         return self._series.rolling_mean(self._window)
 
-    def min(self) -> Series:
+    def min(self) -> "Series[float]":
         return self._series.rolling_min(self._window)
 
-    def max(self) -> Series:
+    def max(self) -> "Series[float]":
         return self._series.rolling_max(self._window)
 
-    def var(self) -> Series:
+    def var(self) -> "Series[float]":
         return self._series.rolling_var(self._window)
 
-    def std(self) -> Series:
+    def std(self) -> "Series[float]":
         return self._series.rolling_std(self._window)
 
-    def median(self) -> Series:
+    def median(self) -> "Series[float]":
         return self._series.rolling_median(self._window)
 
-    def quantile(self, q: float) -> Series:
+    def quantile(self, q: float) -> "Series[float]":
         return self._series.rolling_quantile(self._window, q)
 
 
@@ -1993,13 +1692,13 @@ class _Expanding:
     def max(self) -> Series:
         return self._series.cummax().ffill()
 
-    def count(self) -> Series:
-        return self._series.notna().astype("int64").cumsum()
+    def count(self) -> "Series[int]":
+        return self._series.notna().astype(DType.INT64).cumsum()
 
-    def mean(self) -> Series:
+    def mean(self) -> "Series[float]":
         return self.sum().astype("float64") / self.count()
 
-    def var(self) -> Series:
+    def var(self) -> "Series[float]":
         s = self._series.astype("float64")
         n = self.count()
         total = s.cumsum().ffill()
@@ -2008,7 +1707,7 @@ class _Expanding:
         divisor = n.sub_scalar(1).where(n.ge(2), n.shift(len(n)))
         return (squares - total * total / n) / divisor
 
-    def std(self) -> Series:
+    def std(self) -> "Series[float]":
         return self.var().sqrt()
 
 
@@ -2021,10 +1720,10 @@ class _Ewm:
         self._series = series
         self._alpha = alpha
 
-    def mean(self) -> Series:
+    def mean(self) -> "Series[float]":
         return self._series.ewm_mean(self._alpha)
 
-    def std(self) -> Series:
+    def std(self) -> "Series[float]":
         return self._series.ewm_std(self._alpha)
 
 
@@ -2069,7 +1768,7 @@ class _DtAccessor:
             # A temporal column carries its own unit; an Int64 reads as us.
             unit = "us"
             if series.dtype in (DType.TIMESTAMP, DType.DURATION, DType.TIME64):
-                unit = ("s", "ms", "us", "ns")[series._native.time_unit]
+                unit = ("s", "ms", "us", "ns")[series.time_unit]
             elif series.dtype == DType.DATE64:
                 unit = "ms"
         if unit not in _TIME_UNITS:
@@ -2222,7 +1921,7 @@ class _DtAccessor:
     @property
     def tz(self) -> Optional[str]:
         """The zone name of a Timestamp column, or None when naive."""
-        return self._s._native.timezone or None
+        return self._s.timezone or None
 
     def tz_localize(self, tz: Optional[str]) -> Series:
         """A naive Timestamp column marked as ``tz`` (pandas
@@ -2281,26 +1980,26 @@ class _StrAccessor:
         self._s = series
 
     # pandas
-    def lower(self) -> Series:
+    def lower(self) -> "Series[builtins.str]":
         return self._s.to_lowercase()
 
-    def upper(self) -> Series:
+    def upper(self) -> "Series[builtins.str]":
         return self._s.to_uppercase()
 
-    def strip(self) -> Series:
+    def strip(self) -> "Series[builtins.str]":
         return self._s.str_strip()
 
-    def lstrip(self) -> Series:
+    def lstrip(self) -> "Series[builtins.str]":
         return self._s.str_lstrip()
 
-    def rstrip(self) -> Series:
+    def rstrip(self) -> "Series[builtins.str]":
         return self._s.str_rstrip()
 
-    def len(self) -> Series:
+    def len(self) -> "Series[int]":
         """Codepoint count, as pandas ``str.len()``."""
         return self._s.str_len_chars()
 
-    def contains(self, pat: str, case: bool = True, regex: bool = False) -> Series:
+    def contains(self, pat: str, case: bool = True, regex: bool = False) -> "Series[bool]":
         """Substring (or with ``regex=True`` a regex search) predicate."""
         if regex:
             if not case:
@@ -2310,23 +2009,23 @@ class _StrAccessor:
             return self._s.str_contains(pat)
         return self._s.to_lowercase().str_contains(pat.lower())
 
-    def startswith(self, pat: str) -> Series:
+    def startswith(self, pat: str) -> "Series[bool]":
         return self._s.str_starts_with(pat)
 
-    def endswith(self, pat: str) -> Series:
+    def endswith(self, pat: str) -> "Series[bool]":
         return self._s.str_ends_with(pat)
 
-    def match(self, pat: str) -> Series:
+    def match(self, pat: str) -> "Series[bool]":
         """Regex anchored at the start, as pandas ``str.match``."""
         return self._s.str_search("^(?:" + pat + ")")
 
-    def fullmatch(self, pat: str) -> Series:
+    def fullmatch(self, pat: str) -> "Series[bool]":
         return self._s.str_matches(pat)
 
-    def find(self, sub: str) -> Series:
+    def find(self, sub: str) -> "Series[int]":
         return self._s.str_find(sub)
 
-    def replace(self, pat: str, repl: str, n: int = -1) -> Series:
+    def replace(self, pat: str, repl: str, n: int = -1) -> "Series[builtins.str]":
         """Literal replace: every occurrence (``n=-1``) or the first (``n=1``)."""
         if n == -1:
             return self._s.str_replace_all(pat, repl)
@@ -2334,21 +2033,21 @@ class _StrAccessor:
             return self._s.str_replace(pat, repl)
         raise NotImplementedError("replace() supports n=-1 (all) or n=1 (first)")
 
-    def slice(self, start: int = 0, stop: Optional[int] = None) -> Series:
+    def slice(self, start: int = 0, stop: Optional[int] = None) -> "Series[builtins.str]":
         """Byte substring ``[start, stop)``, as pandas ``str.slice``."""
         length = -1 if stop is None else max(stop - start, 0)
         return self._s.str_slice(start, length)
 
     def pad(
         self, width: int, side: Literal["left", "right"] = "left", fillchar: str = " "
-    ) -> Series:
+    ) -> "Series[builtins.str]":
         if side == "left":
             return self._s.str_pad_start(width, fillchar)
         if side == "right":
             return self._s.str_pad_end(width, fillchar)
         raise ValueError("side must be 'left' or 'right'")
 
-    def zfill(self, width: int) -> Series:
+    def zfill(self, width: int) -> "Series[builtins.str]":
         return self._s.str_zfill(width)
 
     def split(self, pat: str, expand: bool = False) -> "Union[Series, DataFrame]":
@@ -2364,61 +2063,61 @@ class _StrAccessor:
         n = int(width) if width is not None else 0
         return DataFrame.from_dict({str(i): parts.list_get(i) for i in range(n)})
 
-    def regex_replace(self, pat: str, to: str) -> Series:
+    def regex_replace(self, pat: str, to: str) -> "Series[builtins.str]":
         """:meth:`Series.str_regex_replace`: ``$n``/``${name}`` group references."""
         return self._s.str_regex_replace(pat, to)
 
-    def extract(self, pat: str, group: int = 1) -> Series:
+    def extract(self, pat: str, group: int = 1) -> "Series[builtins.str]":
         """The capture ``group`` of the first regex ``pat`` match per row, null
         where there is no match (pandas ``str.extract`` for one group)."""
         return self._s.str_extract(pat, group)
 
     # polars
-    def to_lowercase(self) -> Series:
+    def to_lowercase(self) -> "Series[builtins.str]":
         return self._s.to_lowercase()
 
-    def to_uppercase(self) -> Series:
+    def to_uppercase(self) -> "Series[builtins.str]":
         return self._s.to_uppercase()
 
-    def strip_chars(self) -> Series:
+    def strip_chars(self) -> "Series[builtins.str]":
         return self._s.str_strip()
 
-    def len_bytes(self) -> Series:
+    def len_bytes(self) -> "Series[int]":
         return self._s.str_len_bytes()
 
-    def len_chars(self) -> Series:
+    def len_chars(self) -> "Series[int]":
         return self._s.str_len_chars()
 
-    def starts_with(self, prefix: str) -> Series:
+    def starts_with(self, prefix: str) -> "Series[bool]":
         return self._s.str_starts_with(prefix)
 
-    def ends_with(self, suffix: str) -> Series:
+    def ends_with(self, suffix: str) -> "Series[bool]":
         return self._s.str_ends_with(suffix)
 
-    def replace_all(self, pat: str, repl: str) -> Series:
+    def replace_all(self, pat: str, repl: str) -> "Series[builtins.str]":
         return self._s.str_replace_all(pat, repl)
 
-    def pad_start(self, width: int, fill: str = " ") -> Series:
+    def pad_start(self, width: int, fill: str = " ") -> "Series[builtins.str]":
         return self._s.str_pad_start(width, fill)
 
-    def pad_end(self, width: int, fill: str = " ") -> Series:
+    def pad_end(self, width: int, fill: str = " ") -> "Series[builtins.str]":
         return self._s.str_pad_end(width, fill)
 
     # pandas, the rest of the surface (ASCII; a byte outside ASCII is left as
     # it is by the case forms and fails the character classes).
-    def capitalize(self) -> Series:
+    def capitalize(self) -> "Series[builtins.str]":
         return self._s.str_case(0)
 
-    def title(self) -> Series:
+    def title(self) -> "Series[builtins.str]":
         return self._s.str_case(1)
 
-    def swapcase(self) -> Series:
+    def swapcase(self) -> "Series[builtins.str]":
         return self._s.str_case(2)
 
-    def casefold(self) -> Series:
+    def casefold(self) -> "Series[builtins.str]":
         return self._s.to_lowercase()
 
-    def isalnum(self) -> Series:
+    def isalnum(self) -> "Series[bool]":
         return self._s.str_is(0)
 
     def encode(self, encoding: str = "utf-8", errors: str = "strict") -> Series:
@@ -2443,44 +2142,44 @@ class _StrAccessor:
             raise ValueError("decode: a value is not valid utf-8")
         return out
 
-    def isascii(self) -> Series:
+    def isascii(self) -> "Series[bool]":
         """True where every character is ASCII, as ``str.isascii`` (an empty
         string too)."""
         return self.fullmatch("[\\x00-\\x7f]*")
 
-    def isalpha(self) -> Series:
+    def isalpha(self) -> "Series[bool]":
         return self._s.str_is(1)
 
-    def isdigit(self) -> Series:
+    def isdigit(self) -> "Series[bool]":
         return self._s.str_is(2)
 
-    def isdecimal(self) -> Series:
+    def isdecimal(self) -> "Series[bool]":
         return self._s.str_is(3)
 
-    def isnumeric(self) -> Series:
+    def isnumeric(self) -> "Series[bool]":
         return self._s.str_is(4)
 
-    def isspace(self) -> Series:
+    def isspace(self) -> "Series[bool]":
         return self._s.str_is(5)
 
-    def islower(self) -> Series:
+    def islower(self) -> "Series[bool]":
         return self._s.str_is(6)
 
-    def isupper(self) -> Series:
+    def isupper(self) -> "Series[bool]":
         return self._s.str_is(7)
 
-    def istitle(self) -> Series:
+    def istitle(self) -> "Series[bool]":
         return self._s.str_is(8)
 
-    def count(self, pat: str) -> Series:
+    def count(self, pat: str) -> "Series[int]":
         """Non-overlapping occurrences of the literal ``pat`` per row."""
         return self._s.str_count(pat)
 
-    def rfind(self, sub: str) -> Series:
+    def rfind(self, sub: str) -> "Series[int]":
         """Byte index of the last ``sub`` per row, or -1."""
         return self._s.str_rfind(sub)
 
-    def index(self, sub: str) -> Series:
+    def index(self, sub: str) -> "Series[int]":
         """As :meth:`find`, but a row without ``sub`` raises (``ValueError``),
         as Python's ``str.index``."""
         out = self._s.str_find(sub)
@@ -2488,28 +2187,28 @@ class _StrAccessor:
             raise ValueError(f"index: substring {sub!r} not found in every row")
         return out
 
-    def rindex(self, sub: str) -> Series:
+    def rindex(self, sub: str) -> "Series[int]":
         out = self._s.str_rfind(sub)
         if out.eq(-1).any():
             raise ValueError(f"rindex: substring {sub!r} not found in every row")
         return out
 
-    def removeprefix(self, prefix: str) -> Series:
+    def removeprefix(self, prefix: str) -> "Series[builtins.str]":
         return self._s.str_remove_prefix(prefix)
 
-    def removesuffix(self, suffix: str) -> Series:
+    def removesuffix(self, suffix: str) -> "Series[builtins.str]":
         return self._s.str_remove_suffix(suffix)
 
-    def repeat(self, repeats: int) -> Series:
+    def repeat(self, repeats: int) -> "Series[builtins.str]":
         return self._s.str_repeat(repeats)
 
-    def center(self, width: int, fillchar: str = " ") -> Series:
+    def center(self, width: int, fillchar: str = " ") -> "Series[builtins.str]":
         return self._s.str_center(width, fillchar)
 
-    def ljust(self, width: int, fillchar: str = " ") -> Series:
+    def ljust(self, width: int, fillchar: str = " ") -> "Series[builtins.str]":
         return self._s.str_pad_end(width, fillchar)
 
-    def rjust(self, width: int, fillchar: str = " ") -> Series:
+    def rjust(self, width: int, fillchar: str = " ") -> "Series[builtins.str]":
         return self._s.str_pad_start(width, fillchar)
 
     def cat(self, others: "Union[Series, str, None]" = None, sep: str = "") -> "Union[Series, str]":
@@ -2529,13 +2228,15 @@ class _StrAccessor:
         """Every regex match per row, as a List<String>."""
         return self._s.str_findall(pat)
 
-    def normalize(self, form: _NormForm) -> Series:
+    def normalize(self, form: _NormForm) -> "Series[builtins.str]":
         """Each string in the Unicode normalization ``form`` (``"NFC"``,
         ``"NFKC"``, ``"NFD"`` or ``"NFKD"``); a value that is not valid UTF-8
         is null."""
         return self._s.str_normalize(_norm_form_code(form))
 
-    def translate(self, table: Mapping[Union[int, str], Union[str, int, None]]) -> Series:
+    def translate(
+        self, table: Mapping[Union[int, str], Union[str, int, None]]
+    ) -> "Series[builtins.str]":
         """Each codepoint replaced by ``table`` (as ``str.translate``): a key is
         a codepoint or a one-character string, a value a string, a codepoint or
         ``None`` to delete it. A codepoint not in the table is kept."""
@@ -2588,7 +2289,7 @@ class _StrAccessor:
             return DataFrame.from_dict({**ints, **text})
         rows = rows.assign(match=rows.groupby("row").cumcount()["cumcount"])
         m = rows["m"]
-        groups = {c: m.str.extract(pat, g) for g, c in enumerate(labels, 1)}
+        groups = {c: _StrAccessor(m).extract(pat, g) for g, c in enumerate(labels, 1)}
         return DataFrame.from_dict({"row": rows["row"], "match": rows["match"], **groups})
 
     def partition(self, sep: str = " ", expand: bool = True) -> "Union[Series, DataFrame]":
@@ -2630,7 +2331,9 @@ class _StrAccessor:
         nulls = Series.from_list([None] * len(s), dtype=DType.STRING)
         return s.str_slice(i, 1).where(s.str_len_bytes().gt(i), nulls)
 
-    def slice_replace(self, start: int = 0, stop: Optional[int] = None, repl: str = "") -> Series:
+    def slice_replace(
+        self, start: int = 0, stop: Optional[int] = None, repl: str = ""
+    ) -> "Series[builtins.str]":
         """Bytes ``[start, stop)`` of each row replaced with ``repl``."""
         s = self._s
         head = s.str_slice(0, start)
@@ -2647,31 +2350,28 @@ class _StrAccessor:
         wide = exploded.pivot(index="r", on="v", values="v", agg="count").drop("r").fillna(0)
         # Presence (1), not a count; an empty token is no category.
         names = [c for c in wide.columns if c != ""]
-        return DataFrame({c: Series(wide._native[c]).gt(0).astype("int64") for c in names})
-
-
-_register(_ext._Series, Series)
+        return DataFrame({c: wide._native[c].gt(0).astype("int64") for c in names})
 
 
 def _like(ints: Series, template: Series) -> Series:
     """The int64 column ``ints`` read as the type of ``template``: a timestamp,
     duration, time or date keeps its unit and zone."""
-    t = template._native
-    dtype = DType(t.type)
+    dtype = DType(template.type)
     if dtype in (DType.TIMESTAMP, DType.DURATION, DType.TIME64, DType.DATE64):
-        return Series(_ext._series_retype(ints._native, int(dtype), t.time_unit, t.timezone))
+        return _ext._series_retype(ints, int(dtype), template.time_unit, template.timezone)
     if dtype in (DType.DATE32, DType.TIME32):
-        return Series(
-            _ext._series_retype(ints.astype(DType.INT32)._native, int(dtype), t.time_unit, "")
-        )
+        return _ext._series_retype(ints.astype(DType.INT32), int(dtype), template.time_unit, "")
     return ints.astype(dtype)
 
 
 def _series_from_bytes(data: bytes) -> Series:
     """The Series a pickle holds (``Series.to_bytes`` of the native frame format)."""
-    return Series(_ext._series_from_bytes(data))
+    return _ext._series_from_bytes(data)
 
 
 def _series_from_arrow(array: "Union[pa.Array, pa.ChunkedArray]") -> Series:
     """Import a pyarrow Array into a native Series wrapper."""
-    return Series(_arrow_native("_series_from_arrow")(array))
+    return _arrow_native("_series_from_arrow")(array)
+
+
+_ext._bind_types(Series=Series)

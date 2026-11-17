@@ -87,9 +87,13 @@ View& tv_of(PyObject* self) {
     return *reinterpret_cast<TraceViewerObject*>(self)->tv;
 }
 
+// The type the factories allocate: TraceViewerType until _bind_types gives the
+// Python subclass.
+PyTypeObject* g_trace_viewer_type = &TraceViewerType;
+
 PyObject* make_viewer(View&& t) {
     auto* self = reinterpret_cast<TraceViewerObject*>(
-        TraceViewerType.tp_alloc(&TraceViewerType, 0));
+        g_trace_viewer_type->tp_alloc(g_trace_viewer_type, 0));
     if (!self) return nullptr;
     self->tv = dftracer::utils::dstd::make_unique<View>(std::move(t)).release();
     return reinterpret_cast<PyObject*>(self);
@@ -374,6 +378,8 @@ PyObject* tv_new(PyTypeObject* type, PyObject*, PyObject*) {
 }
 
 void tv_dealloc(TraceViewerObject* self) {
+    if (self->weaklist)
+        PyObject_ClearWeakRefs(reinterpret_cast<PyObject*>(self));
     dftracer::utils::dstd::UniquePtr<View>(self->tv).reset();
     Py_TYPE(self)->tp_free(reinterpret_cast<PyObject*>(self));
 }
@@ -1083,7 +1089,7 @@ PyObject* tv_register_materialized(PyObject* self, PyObject* arg) {
 
 PyObject* tv_compare(PyObject* self, PyObject* arg) {
     if (!PyObject_TypeCheck(arg, &TraceViewerType)) {
-        PyErr_SetString(PyExc_TypeError, "compare() needs a _TraceViewer");
+        PyErr_SetString(PyExc_TypeError, "compare() needs a TraceViewer");
         return nullptr;
     }
     return guard([&] {
@@ -1148,9 +1154,9 @@ PyObject* plugin_results_py(PyObject*, PyObject* host) {
 }
 
 PyMethodDef tv_methods[] = {
-    {"lazy", tv_lazy, METH_NOARGS, "The plan as a _LazyFrame."},
+    {"lazy", tv_lazy, METH_NOARGS, "The plan as a LazyFrame."},
     {"with_lazy", tv_with_lazy, METH_O,
-     "This scan with `plan` (a _LazyFrame over it) as its plan."},
+     "This scan with `plan` (a LazyFrame over it) as its plan."},
     {"filter", tv_filter, METH_O, "Keep events matching a duql predicate."},
     {"duql", tv_duql, METH_VARARGS,
      "duql(text, params) -> the duql pipeline over this view."},
@@ -1365,10 +1371,10 @@ PyObject* ltv_status(PyObject* self, PyObject*) {
 
 PyMethodDef ltv_methods[] = {
     {"snapshot", ltv_snapshot, METH_NOARGS,
-     "Index what was written since the last call; a _TraceViewer of every "
+     "Index what was written since the last call; a TraceViewer of every "
      "whole member."},
     {"new_rows", ltv_new_rows, METH_NOARGS,
-     "As snapshot; a _TraceViewer of the rows no earlier call returned, or "
+     "As snapshot; a TraceViewer of the rows no earlier call returned, or "
      "None."},
     {"status", ltv_status, METH_NOARGS,
      "(path, state, verified_bytes, skipped_bytes, hole_bytes) per file."},
@@ -1391,10 +1397,11 @@ PyTypeObject LiveTraceViewerType = [] {
 
 PyTypeObject TraceViewerType = [] {
     PyTypeObject t{.ob_base = PyVarObject_HEAD_INIT(nullptr, 0)};
-    t.tp_name = "dftracer_utils_ext._TraceViewer";
+    t.tp_name = "dftracer_utils_ext.TraceViewer";
     t.tp_basicsize = sizeof(TraceViewerObject);
+    t.tp_weaklistoffset = WEAKLIST_OFFSET;
     t.tp_dealloc = reinterpret_cast<destructor>(tv_dealloc);
-    t.tp_flags = Py_TPFLAGS_DEFAULT;
+    t.tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE;
     t.tp_doc = "A trace scan and the plan over it.";
     t.tp_methods = tv_methods;
     t.tp_init = reinterpret_cast<initproc>(tv_init);
@@ -1402,8 +1409,12 @@ PyTypeObject TraceViewerType = [] {
     return t;
 }();
 
+TypeBinding dftracer::utils::python::trace::trace_viewer_binding() {
+    return {"TraceViewer", &TraceViewerType, &g_trace_viewer_type};
+}
+
 int dftracer::utils::python::trace::init_trace_viewer(PyObject* m) {
-    if (register_type(m, &TraceViewerType, "_TraceViewer") < 0) return -1;
+    if (register_type(m, &TraceViewerType, "TraceViewer") < 0) return -1;
     if (register_type(m, &LiveTraceViewerType, "_LiveTraceViewer") < 0)
         return -1;
     return PyModule_AddFunctions(m, module_methods);

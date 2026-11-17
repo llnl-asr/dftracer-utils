@@ -18,7 +18,7 @@ from .common import Environment
 
 pytest.importorskip("pyarrow")
 
-_HAS_LAZY = hasattr(_ext, "_LazyFrame")
+_HAS_LAZY = hasattr(_ext, "LazyFrame")
 lazy_only = pytest.mark.skipif(not _HAS_LAZY, reason="extension built without Arrow support")
 
 

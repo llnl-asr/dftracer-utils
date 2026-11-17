@@ -17,6 +17,8 @@ from .enums import DType
 if TYPE_CHECKING:
     import numpy as np
 
+    from .series import Series
+
 _UNIT_CODES = {"s": 0, "ms": 1, "us": 2, "ns": 3}
 
 
@@ -24,13 +26,11 @@ class NeedsArrow(TypeError):
     """Data that only pyarrow can import."""
 
 
-def _retype(
-    native: "_ext._Series", dtype: DType, unit: str = "us", zone: str = ""
-) -> "_ext._Series":
+def _retype(native: "Series", dtype: DType, unit: str = "us", zone: str = "") -> "Series":
     return _ext._series_retype(native, int(dtype), _UNIT_CODES[unit], zone)
 
 
-def _objects(values: Sequence[object], mask: "Optional[np.ndarray]") -> "_ext._Series":
+def _objects(values: Sequence[object], mask: "Optional[np.ndarray]") -> "Series":
     items = list(values)
     if mask is not None:
         items = [None if m else v for v, m in zip(items, mask.tolist())]
@@ -39,7 +39,7 @@ def _objects(values: Sequence[object], mask: "Optional[np.ndarray]") -> "_ext._S
     return _ext._series_from_list(items)
 
 
-def _temporal(a: "np.ndarray", mask: "Optional[np.ndarray]", zone: str = "") -> "_ext._Series":
+def _temporal(a: "np.ndarray", mask: "Optional[np.ndarray]", zone: str = "") -> "Series":
     import numpy as np
 
     unit = np.datetime_data(a.dtype)[0]
@@ -66,7 +66,7 @@ def _temporal(a: "np.ndarray", mask: "Optional[np.ndarray]", zone: str = "") -> 
     return _retype(native, DType.TIMESTAMP, unit, zone)
 
 
-def numpy_to_native(a: Any, mask: "Optional[np.ndarray]" = None) -> "_ext._Series":
+def numpy_to_native(a: Any, mask: "Optional[np.ndarray]" = None) -> "Series":
     """A 1-D NumPy array (or masked array) as a native column; ``mask`` is true
     where null."""
     import numpy as np
@@ -104,7 +104,7 @@ def _zone_name(tz: Any) -> str:
     return str(tz)
 
 
-def _dictionary(codes: "np.ndarray", categories: "List[str]") -> "Optional[_ext._Series]":
+def _dictionary(codes: "np.ndarray", categories: "List[str]") -> "Optional[Series]":
     """A dictionary column from integer codes (negative for null) and their
     strings, built through pyarrow so no string is made per row; None without
     pyarrow or an Arrow-enabled extension."""
@@ -120,7 +120,7 @@ def _dictionary(codes: "np.ndarray", categories: "List[str]") -> "Optional[_ext.
     )
 
 
-def _arrow_dictionary(s: Any) -> "Optional[_ext._Series]":
+def _arrow_dictionary(s: Any) -> "Optional[Series]":
     """A polars ``Categorical`` or ``Enum`` as a dictionary column from its
     Arrow export, which carries the codes and the values together; None
     without pyarrow or an Arrow-enabled extension."""
@@ -133,7 +133,7 @@ def _arrow_dictionary(s: Any) -> "Optional[_ext._Series]":
     return _ext._series_from_arrow(s.to_arrow())
 
 
-def pandas_to_native(s: Any) -> "_ext._Series":
+def pandas_to_native(s: Any) -> "Series":
     """A ``pandas.Series`` as a native column: a NaN in a float column and a
     ``NaT`` or ``NA`` anywhere read as null. A ``category`` column whose
     categories are strings becomes a dictionary-encoded string column, in
@@ -175,7 +175,7 @@ def pandas_to_native(s: Any) -> "_ext._Series":
     raise TypeError(f"cannot import a pandas column of dtype {dtype}")
 
 
-def polars_to_native(s: Any) -> "_ext._Series":
+def polars_to_native(s: Any) -> "Series":
     """A ``polars.Series`` as a native column."""
     import polars as pl
 

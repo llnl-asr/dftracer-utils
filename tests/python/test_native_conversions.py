@@ -68,17 +68,17 @@ def test_to_list_equals_pyarrow_for_every_type():
         if sys.version_info < (3, 9) and getattr(arr.type, "tz", None):
             continue  # a zoned value needs zoneinfo
         s = dftu.Series.from_arrow(arr)
-        assert s._native.to_pylist() == arr.to_pylist(), name
+        assert s.to_pylist() == arr.to_pylist(), name
         assert s.to_list() == arr.to_pylist(), name
         assert s[0] == arr.to_pylist()[0], name
 
 
 def test_physical_shares_the_integers():
     s = dftu.Series.from_arrow(_pa().array([1, None, 3], _pa().timestamp("ms")))
-    phys = s._native.physical()
+    phys = s.physical()
     assert phys.type == int(DType.INT64)
     assert phys.null_count == 1
-    assert s._native.nbytes >= 24
+    assert s.nbytes >= 24
 
 
 def test_to_numpy_temporal():
@@ -131,7 +131,7 @@ def test_frame_to_pandas_with_zone():
 
 
 def _types(s):
-    return (DType(s._native.type), s._native.time_unit, s._native.timezone)
+    return (DType(s.type), s.time_unit, s.timezone)
 
 
 def test_from_list_temporal_and_decimal():
@@ -154,17 +154,17 @@ def test_from_list_temporal_and_decimal():
         dftu.Series.from_list([dt.datetime(2020, 1, 1), dt.datetime(2020, 1, 1, tzinfo=paris)])
 
     dates = dftu.Series.from_list([dt.date(1969, 7, 20), None, dt.date(2023, 12, 8)])
-    assert DType(dates._native.type) == DType.DATE32
+    assert DType(dates.type) == DType.DATE32
     assert dates.to_list() == [dt.date(1969, 7, 20), None, dt.date(2023, 12, 8)]
     times = dftu.Series.from_list([dt.time(1, 2, 3, 4), None])
-    assert DType(times._native.type) == DType.TIME64
+    assert DType(times.type) == DType.TIME64
     assert times.to_list() == [dt.time(1, 2, 3, 4), None]
     deltas = dftu.Series.from_list([dt.timedelta(days=-2, microseconds=5), None])
-    assert DType(deltas._native.type) == DType.DURATION
+    assert DType(deltas.type) == DType.DURATION
     assert deltas.to_list() == [dt.timedelta(days=-2, microseconds=5), None]
 
     decs = dftu.Series.from_list([D("1.5"), None, D("-20.125"), 3])
-    assert DType(decs._native.type) == DType.DECIMAL128
+    assert DType(decs.type) == DType.DECIMAL128
     assert decs.to_list() == [D("1.500"), None, D("-20.125"), D("3.000")]
     assert dftu.Series.from_list([D("1E+3")]).to_list() == [D("1000")]
     with pytest.raises(ValueError, match="38 digits"):
@@ -177,11 +177,11 @@ def test_from_list_temporal_and_decimal():
 
 def test_from_list_with_a_native_dtype():
     nulls = dftu.Series.from_list([None, None], dtype=DType.STRING)
-    assert DType(nulls._native.type) == DType.STRING and nulls.to_list() == [None, None]
+    assert DType(nulls.type) == DType.STRING and nulls.to_list() == [None, None]
     empty = dftu.Series.from_list([], dtype=DType.INT64)
-    assert DType(empty._native.type) == DType.INT64 and len(empty) == 0
+    assert DType(empty.type) == DType.INT64 and len(empty) == 0
     stamps = dftu.Series.from_list([None], dtype=DType.TIMESTAMP)
-    assert DType(stamps._native.type) == DType.TIMESTAMP
+    assert DType(stamps.type) == DType.TIMESTAMP
     as_float = dftu.Series.from_list([1, 2], dtype=DType.FLOAT64)
     assert as_float.to_list() == [1.0, 2.0]
 
@@ -204,7 +204,7 @@ def test_from_numpy_temporal_text_and_masks():
     assert ns.to_numpy().tolist()[1] is None or np.isnat(ns.to_numpy()[1])
     assert ns[0] == dt.datetime(2020, 1, 2, 3, 4, 5, 123456) and ns[1] is None
     days = dftu.Series.from_numpy(np.array(["2020-01-02", "NaT"], dtype="M8[D]"))
-    assert DType(days._native.type) == DType.DATE32 and days.to_list() == [
+    assert DType(days.type) == DType.DATE32 and days.to_list() == [
         dt.date(2020, 1, 2),
         None,
     ]
@@ -223,7 +223,7 @@ def test_from_numpy_temporal_text_and_masks():
         == np.float16
     )
     flags = dftu.Series.from_numpy(np.array([True, False, True]))
-    assert DType(flags._native.type) == DType.BOOL and flags.to_list() == [True, False, True]
+    assert DType(flags.type) == DType.BOOL and flags.to_list() == [True, False, True]
     assert dftu.Series.from_numpy(np.array(["a", "bc"])).to_list() == ["a", "bc"]
     assert dftu.Series.from_numpy(np.array([b"a", b"bc"])).to_list() == [b"a", b"bc"]
     obj = np.array(["x", None, "y"], dtype=object)
@@ -340,12 +340,12 @@ def test_from_polars_without_pyarrow():
 
 def test_from_list_nested():
     lists = dftu.Series.from_list([[1, 2], None, [], (3,)])
-    assert DType(lists._native.type) == DType.LIST
+    assert DType(lists.type) == DType.LIST
     assert lists.to_list() == [[1, 2], None, [], [3]]
     deep = dftu.Series.from_list([[[1], [2, 3]], [[]]])
     assert deep.to_list() == [[[1], [2, 3]], [[]]]
     recs = dftu.Series.from_list([{"a": 1, "b": "x"}, {"a": 2}, None, {"c": [dt.date(2020, 1, 2)]}])
-    assert DType(recs._native.type) == DType.STRUCT
+    assert DType(recs.type) == DType.STRUCT
     assert recs.to_list() == [
         {"a": 1, "b": "x", "c": None},
         {"a": 2, "b": None, "c": None},
@@ -378,7 +378,7 @@ def test_pickle_round_trip():
     assert back.columns == frame.columns
     for name in frame.columns:
         assert back[name].to_list() == frame[name].to_list(), name
-        assert DType(back[name]._native.type) == DType(frame[name]._native.type)
+        assert DType(back[name].type) == DType(frame[name].type)
     col = pickle.loads(pickle.dumps(frame["t"]))
     assert col.to_list() == frame["t"].to_list() and _types(col) == _types(frame["t"])
     with pytest.raises(ValueError):

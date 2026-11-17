@@ -30,7 +30,7 @@ def test_constructors_take_python_data():
     assert _dict(df) == {"a": [1, 2, 3], "b": ["x", "y", "z"]}
     s = Series([3, 1, 2])
     assert _lst(s) == [3, 1, 2]
-    assert isinstance(Series(s._native), Series)
+    assert isinstance(Series(s), Series)
 
 
 def test_dataframe_properties_and_indexing():

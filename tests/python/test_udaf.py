@@ -23,7 +23,7 @@ _PLUGIN = find_installed_example_plugin("stats_udafs")
 
 pytestmark = [
     pytest.mark.skipif(
-        not hasattr(_ext, "_LazyFrame"), reason="extension built without Arrow support"
+        not hasattr(_ext, "LazyFrame"), reason="extension built without Arrow support"
     ),
     pytest.mark.skipif(not _PLUGIN, reason="no stats_udafs plugin installed next to the extension"),
 ]

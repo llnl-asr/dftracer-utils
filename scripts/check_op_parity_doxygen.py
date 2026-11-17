@@ -464,6 +464,11 @@ PY_ALLOWLIST = {
         "to_bytes",
         "physical",
         "ops",
+        # The str, list and dt accessors: properties of the Python class now,
+        # served by a forwarder before.
+        "str",
+        "list",
+        "dt",
         "child",
         "encoding",
         "is_null",
@@ -622,9 +627,9 @@ def python_surface():
     from dftracer.utils import dftracer_utils_ext as ext
 
     pairs = {
-        "Series": (u.Series, ext._Series),
-        "DataFrame": (u.DataFrame, ext._DataFrame),
-        "LazyFrame": (u.LazyFrame, ext._LazyFrame),
+        "Series": (u.Series, ext.Series),
+        "DataFrame": (u.DataFrame, ext.DataFrame),
+        "LazyFrame": (u.LazyFrame, ext.LazyFrame),
     }
     surface = {}
     for name, (wrapper, native) in pairs.items():

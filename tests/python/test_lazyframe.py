@@ -21,7 +21,7 @@ from dftracer.utils import (  # noqa: E402
 )
 from dftracer.utils import dftracer_utils_ext as _ext  # noqa: E402
 
-_HAS_ARROW = hasattr(_ext, "_LazyFrame")
+_HAS_ARROW = hasattr(_ext, "LazyFrame")
 pytestmark = pytest.mark.skipif(not _HAS_ARROW, reason="extension built without Arrow support")
 
 

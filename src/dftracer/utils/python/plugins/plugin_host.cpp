@@ -185,7 +185,7 @@ PyObject* result_to_py(NamedResult& result) {
             static_cast<Py_ssize_t>(blob->size()));
     if (auto* frame = std::get_if<OwnedDataFrame>(&result)) {
         // Adopt the handle's columns into a native DataFrame (shared buffers,
-        // zero-copy) and hand it back as a _DataFrame; the OwnedDataFrame frees
+        // zero-copy) and hand it back as a DataFrame; the OwnedDataFrame frees
         // the emptied handle.
         dftu_dataframe* h = frame->get();
         dataframe::DataFrame df;

@@ -71,9 +71,9 @@ def _needs_capsule(native, name):
 @pytest.mark.parametrize("layout,chunked", _layouts())
 def test_series_to_polars_matches_native(layout, chunked):
     s = _series(layout, chunked)
-    _needs_capsule(s._native, "__arrow_c_array__")
+    _needs_capsule(s, "__arrow_c_array__")
     got = s.to_polars()
-    want = _polars_native(s._native, pl)
+    want = _polars_native(s, pl)
     assert got.dtype == want.dtype
     assert got.to_list() == want.to_list() == VALUES
 
@@ -83,7 +83,7 @@ def test_dataframe_to_polars_matches_native(layout, chunked):
     df = _frame(layout, chunked)
     _needs_capsule(df._native, "__arrow_c_stream__")
     got = df.to_polars()
-    want = pl.DataFrame({name: _polars_native(df[name]._native, pl) for name in df.columns})
+    want = pl.DataFrame({name: _polars_native(df[name], pl) for name in df.columns})
     assert got.schema == want.schema
     assert got.equals(want)
 
@@ -105,7 +105,7 @@ def test_float16_and_decimal_stay_native():
 
 
 def _pandas_native_strings(s):
-    return pd.Series(_native_numpy(s._native))
+    return pd.Series(_native_numpy(s))
 
 
 def _arrow_pandas_strings():
@@ -121,7 +121,7 @@ def _arrow_pandas_strings():
 def test_series_to_pandas_strings_match_native(layout, chunked):
     _arrow_pandas_strings()
     s = _series(layout, chunked)
-    _needs_capsule(s._native, "__arrow_c_array__")
+    _needs_capsule(s, "__arrow_c_array__")
     got = s.to_pandas()
     want = _pandas_native_strings(s)
     assert got.dtype == want.dtype
@@ -134,9 +134,9 @@ def test_series_to_pandas_strings_match_native(layout, chunked):
 def test_dataframe_to_pandas_matches_native(layout, chunked):
     _arrow_pandas_strings()
     df = _frame(layout, chunked)
-    _needs_capsule(df["s"]._native, "__arrow_c_array__")
+    _needs_capsule(df["s"], "__arrow_c_array__")
     got = df.to_pandas()
-    want = pd.DataFrame({name: _native_numpy(df[name]._native) for name in df.columns})
+    want = pd.DataFrame({name: _native_numpy(df[name]) for name in df.columns})
     assert (got.dtypes == want.dtypes).all()
     assert got.equals(want)
 

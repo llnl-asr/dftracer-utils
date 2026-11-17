@@ -378,7 +378,7 @@ def _per_column(value: object) -> Optional[List[Series]]:
     from .dataframe import DataFrame
 
     if isinstance(value, DataFrame):
-        return [Series(value._native[c]) for c in value.columns]
+        return [value._native[c] for c in value.columns]
     if isinstance(value, (list, tuple)) and value and all(isinstance(v, Series) for v in value):
         return list(value)
     return None
@@ -424,7 +424,7 @@ def assign_rows(df: "DataFrame", rows: Rows, columns: List[str], value: object) 
         value = _scatter(value, mask, n)
     native = df._native
     for name in columns:
-        existing = Series(native[name]) if name in df else None
+        existing = native[name] if name in df else None
         try:
             new = _broadcast(value, n, existing)
         except Exception as e:
@@ -459,11 +459,11 @@ class ILoc:
         cols, one_col = columns_by_position(df.columns, ck)
         out = _apply_rows(df, rows)
         if one_row and one_col:
-            return Series(out._native[cols[0]])[0]
+            return out._native[cols[0]][0]
         if one_row:
-            return Row({c: Series(out._native[c])[0] for c in cols})
+            return Row({c: out._native[c][0] for c in cols})
         if one_col:
-            return Series(out._native[cols[0]])
+            return out._native[cols[0]]
         return out.select(*cols) if ck is not None else out
 
     def __setitem__(self, key: object, value: object) -> None:
@@ -494,7 +494,7 @@ class Loc:
         cols, one_col = columns_by_name(df.columns, ck)
         out = _apply_rows(df, rows)
         if one_col:
-            return Series(out._native[cols[0]])
+            return out._native[cols[0]]
         return out.select(*cols) if ck is not None else out
 
     def __setitem__(self, key: object, value: object) -> None:
@@ -532,7 +532,7 @@ class At:
         out = _apply_rows(self._df, rows)
         if len(out) != 1:
             raise KeyError(f"at: the row key matches {len(out)} rows, not one")
-        return Series(out._native[name])[0]
+        return out._native[name][0]
 
     def __setitem__(self, key: object, value: object) -> None:
         rows, name = self._cell(key)

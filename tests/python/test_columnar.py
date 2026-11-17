@@ -1515,5 +1515,5 @@ def test_host_ops_registered_by_name(tmp_path):
     assert _ext.op_run("dftu.file.compress", str(tmp_path / "absent"), str(gz)) == 0
 
     lines = _series_from_arrow(pa.array(["ERROR: full", "INFO: ok", "ERROR: slow"], pa.string()))
-    kept = _ext.op_run("dftu.text.line_filter", lines._native, "ERROR")
+    kept = _ext.op_run("dftu.text.line_filter", lines, "ERROR")
     assert pa.array(kept).to_pylist() == ["ERROR: full", "ERROR: slow"]

@@ -37,7 +37,7 @@ def _built_fixture(name: str) -> str:
 
 
 def test_a_file_no_format_claims_is_a_notfound_error(tmp_path):
-    if not hasattr(_ext, "_LazyFrame"):
+    if not hasattr(_ext, "LazyFrame"):
         pytest.skip("extension built without Arrow support")
     plain = tmp_path / "plain.dft"
     plain.write_text("nothing here claims this file\n")
@@ -85,7 +85,7 @@ def test_describe_of_an_example_plugin_lists_its_udfs():
 _TOY_FORMAT_PLUGIN = _built_fixture("toy_format_plugin")
 
 
-@pytest.mark.skipif(not hasattr(_ext, "_LazyFrame"), reason="extension built without Arrow support")
+@pytest.mark.skipif(not hasattr(_ext, "LazyFrame"), reason="extension built without Arrow support")
 @pytest.mark.skipif(not _TOY_FORMAT_PLUGIN, reason="no built toy_format_plugin")
 def test_describe_lists_a_file_format_and_scan_file_reads_through_it(tmp_path):
     plugins = Plugins([_TOY_FORMAT_PLUGIN])

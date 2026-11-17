@@ -25,8 +25,8 @@ from typing import TYPE_CHECKING, Dict, List, NamedTuple, Optional, Union, cast
 
 from ._jit_errors import check_port_wiring, translate_plan_error, translate_run_error
 from .dataframe import DataFrame
+from .dftracer_utils_ext import DataFrame as _NativeDataFrame
 from .dftracer_utils_ext import Plugins as _NativePlugins
-from .dftracer_utils_ext import _DataFrame
 
 if TYPE_CHECKING:
     import pyarrow as pa  # ty: ignore[import-not-found]
@@ -256,6 +256,6 @@ class Plugins:
         """
         if isinstance(obj, bytes):
             return obj
-        if isinstance(obj, _DataFrame):
+        if isinstance(obj, _NativeDataFrame):
             return DataFrame(obj)
         return cast("_RunResult", obj)

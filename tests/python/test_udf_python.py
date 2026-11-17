@@ -27,7 +27,7 @@ from dftracer.utils import dftracer_utils_ext as _ext  # noqa: E402
 from dftracer.utils.jit import JitError  # noqa: E402
 
 pytestmark = pytest.mark.skipif(
-    not hasattr(_ext, "_LazyFrame") or not hasattr(_ext, "udf_register_batch"),
+    not hasattr(_ext, "LazyFrame") or not hasattr(_ext, "udf_register_batch"),
     reason="extension built without Arrow support",
 )
 

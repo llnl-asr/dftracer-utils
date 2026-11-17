@@ -109,8 +109,8 @@ def test_view_equals_flat_twin(values, mask):
     nested = view.filter(Series(pa.array([True] * len(view), pa.bool_())))
     for op, args in _VIEW_OPS:
         for candidate in (view, nested):
-            got = Series(_ext.op_run(op, candidate._native, *args)).to_list()
-            want = Series(_ext.op_run(op, twin._native, *args)).to_list()
+            got = _ext.op_run(op, candidate, *args).to_list()
+            want = _ext.op_run(op, twin, *args).to_list()
             assert _same(got, want), (op, got, want)
 
 

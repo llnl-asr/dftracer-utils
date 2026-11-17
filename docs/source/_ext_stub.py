@@ -563,14 +563,34 @@ def install_extension_stub() -> None:
         directories. Returns the number of trace files the shards indexed."""
         return 0
 
-    class _Series(_BaseNative):
-        """Native columnar Series handle (SIMD ops + Arrow C Data Interface).
+    class _NativeMethods(type):
+        """Any public attribute of a stubbed native type is a placeholder
+        method, so the Python subclass that aliases native methods in its class
+        body imports without the compiled extension."""
 
-        The Python :class:`dftracer.utils.Series` wrapper forwards every native
-        op to this handle; the ops are documented on the wrapper.
+        def __getattr__(cls, name: str) -> Callable[..., None]:
+            if name.startswith("_"):
+                raise AttributeError(name)
+
+            def method(self: object, *args: object, **kwargs: object) -> None:
+                return None
+
+            method.__name__ = name
+            method.__doc__ = "Native method of the compiled extension."
+            return method
+
+    class Series(_BaseNative, metaclass=_NativeMethods):
+        """Native columnar Series (SIMD ops + Arrow C Data Interface).
+
+        :class:`dftracer.utils.Series` subclasses it; the native ops are
+        documented on the compiled extension's methods.
         """
 
         length = 0
+
+        @classmethod
+        def __class_getitem__(cls, item: object) -> type:
+            return cls
 
         def __len__(self) -> int:
             return 0
@@ -578,8 +598,8 @@ def install_extension_stub() -> None:
         def __arrow_c_array__(self, requested_schema: object = None) -> tuple[object, object]:
             return (None, None)
 
-    class _DataFrame(_BaseNative):
-        """Native columnar DataFrame handle (a set of named :class:`_Series`).
+    class DataFrame(_BaseNative):
+        """Native columnar DataFrame handle (a set of named :class:`Series`).
 
         The Python :class:`dftracer.utils.DataFrame` wrapper forwards to it.
         """
@@ -590,32 +610,36 @@ def install_extension_stub() -> None:
         def column_names(self) -> list[str]:
             return []
 
-        def join(self, other: "_DataFrame", how: str = "inner", on: int = 1) -> "_DataFrame":
+        def join(self, other: "DataFrame", how: str = "inner", on: int = 1) -> "DataFrame":
             """Equi-join on the leading ``on`` shared key columns."""
-            return _DataFrame()
+            return DataFrame()
 
-        def compare_agg(self, variant: "_DataFrame", n_key: int) -> "_DataFrame":
+        def compare_agg(self, variant: "DataFrame", n_key: int) -> "DataFrame":
             """Compare two aggregations on ``n_key`` group keys (delta_/pct_ columns)."""
-            return _DataFrame()
+            return DataFrame()
 
         def __arrow_c_stream__(self, requested_schema: object = None) -> object:
             return None
 
-    def _series_from_arrow(array: object) -> "_Series":
+    def _bind_types(**types_: type) -> None:
+        """Make the native factories build the given Python subclasses."""
+        return None
+
+    def _series_from_arrow(array: object) -> "Series":
         """Import a pyarrow Array into a native Series (zero-copy)."""
-        return _Series()
+        return Series()
 
-    def _series_from_numpy(array: object) -> "_Series":
+    def _series_from_numpy(array: object) -> "Series":
         """Import a 1-D numpy array into a native Series, borrowing its buffer."""
-        return _Series()
+        return Series()
 
-    def _dataframe_from_arrow(table: object) -> "_DataFrame":
+    def _dataframe_from_arrow(table: object) -> "DataFrame":
         """Import a pyarrow Table into a native DataFrame (zero-copy)."""
-        return _DataFrame()
+        return DataFrame()
 
-    def vec_eval(ast: object, columns: object) -> "_Series":
+    def vec_eval(ast: object, columns: object) -> "Series":
         """Compile and evaluate one column expression on the SIMD engine."""
-        return _Series()
+        return Series()
 
     def udf_lookup(name: str) -> object:
         """The registered scalar UDF `name`, held for expressions."""
@@ -669,8 +693,8 @@ def install_extension_stub() -> None:
     _class_symbols = [
         "_ArrowBatchCapsule",
         "_ArrowBatchStream",
-        "_DataFrame",
-        "_Series",
+        "DataFrame",
+        "Series",
         "CheckpointIndexer",
         "DFTUtilsAggregationError",
         "DFTUtilsCompressionError",
@@ -690,6 +714,7 @@ def install_extension_stub() -> None:
         "TaskHandle",
     ]
     _function_symbols = [
+        "_bind_types",
         "_close_task_callbacks",
         "_dataframe_from_arrow",
         "_series_from_arrow",
@@ -738,7 +763,7 @@ def install_extension_stub() -> None:
     ext.PLUGIN_ABI_VERSION = 0
     ext.INPUT_FILE_PATTERNS = ("*.gz",)
 
-    # Fallback: any other native symbol (the _Native*/_TraceViewer handles, the
+    # Fallback: any other native symbol (the _Native* handles, LazyFrame, TraceViewer, the
     # arrow ops _join/_window/..., future additions) resolves to a permissive
     # stub class so `from ..._ext import X`, `_ext.X`, and isinstance all work
     # without enumerating every symbol here.

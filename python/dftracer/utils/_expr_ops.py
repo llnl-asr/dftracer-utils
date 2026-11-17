@@ -98,7 +98,7 @@ def run_column_op(series: Series, spec: ColumnOp, series2: Optional[Series]) -> 
         if tok == "series":
             if series2 is None:
                 raise TypeError(f"{spec.op}: needs a second column")
-            args.append(series2._native)
+            args.append(series2)
         elif tok in (
             "i64",
             "u64",
@@ -129,10 +129,10 @@ def run_column_op(series: Series, spec: ColumnOp, series2: Optional[Series]) -> 
             used_text = True
         else:
             raise TypeError(f"{spec.op}: operand {tok!r} cannot ride a column op")
-    out = _ext.op_run(spec.op, series._native, *args)
-    if not isinstance(out, _ext._Series):
+    out = _ext.op_run(spec.op, series, *args)
+    if not isinstance(out, Series):
         raise TypeError(f"{spec.op}: not a column -> column op")
-    return Series(out)
+    return out
 
 
 def has_column_op(expr: "Expr") -> bool:
@@ -225,7 +225,7 @@ def _eager_over(
         raise TypeError(f"{spec.op}: over() has no group-wise form for this op")
     frame = DataFrame({**{k: columns[k] for k in keys}, "__dftu_v__": value})
     out = GroupBy(frame, keys)._transform(spec.kind, spec.n, _rank_name(spec), _ascending(spec))
-    return Series(out._native["__dftu_v__"])
+    return out._native["__dftu_v__"]
 
 
 def _eager_agg_over(columns: Dict[str, Series], spec: ColumnOp) -> Series:
@@ -238,7 +238,7 @@ def _eager_agg_over(columns: Dict[str, Series], spec: ColumnOp) -> Series:
     value = "__dftu_over_v__"
     grouped = GroupBy(frame, keys).agg(spec.agg.alias(value))
     if not keys:
-        v = Series(grouped._native[value])[0]
+        v = grouped._native[value][0]
         assert isinstance(v, (int, float))
         first = next(iter(columns.values()))
         return first.full_like(float(v))
@@ -249,7 +249,7 @@ def _eager_agg_over(columns: Dict[str, Series], spec: ColumnOp) -> Series:
         .join(grouped, on=keys, how="left", nulls_equal=True)
         .sort_values(row)
     )
-    return Series(joined._native[value])
+    return joined._native[value]
 
 
 def _rank_name(spec: ColumnOp) -> str:

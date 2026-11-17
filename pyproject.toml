@@ -178,6 +178,17 @@ import-not-found = "ignore"
 missing-attribute = "ignore"
 unused-ignore-comment = "ignore"
 
+# The public Series overrides native methods whose engine form takes codes
+# (cast, compare, rolling, ...) with the user-shaped spelling, until those
+# methods take the user-shaped arguments natively.
+[[tool.ty.overrides]]
+include = ["python/dftracer/utils/series.py"]
+
+[tool.ty.overrides.rules]
+incompatible-method-override = "ignore"
+incompatible-property-override = "ignore"
+lost-keyword-for-regular-parameter = "ignore"
+
 [tool.mypy]
 # Used only by tests/python/test_jit_typing.py: `mypy --strict` on the typed JIT
 # fixtures and the JIT modules. The rest of the package is followed silently.

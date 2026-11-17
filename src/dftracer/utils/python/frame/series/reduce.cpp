@@ -32,19 +32,23 @@ PyObject* scalar_to_py(dftu_scalar v) {
 }
 
 PyObject* Series_all(PyObject* self, PyObject*) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     return PyBool_FromLong(without_gil(a->length(), [&] { return a->all(); }));
 }
 PyObject* Series_any(PyObject* self, PyObject*) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     return PyBool_FromLong(without_gil(a->length(), [&] { return a->any(); }));
 }
 PyObject* Series_dot(PyObject* self, PyObject* other) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
-    Series* b = as_native<Series>(other);
+    Held held_b(other);
+    Series* b = held_b.get();
     if (!b) return nullptr;
     return scalar_to_py(without_gil(a->length(), [&] {
         return dftu_series_dot(a->handle(), b->handle());

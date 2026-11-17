@@ -146,8 +146,6 @@ class _SeriesPandasMixin:
 
     __slots__ = ()
 
-    _native: Any
-
     def _s(self) -> "Series":
         from .series import Series
 
@@ -178,7 +176,6 @@ class _SeriesPandasMixin:
         occurrence is found by a group-by of the row positions."""
         from .columnar import GroupBy
         from .dataframe import DataFrame
-        from .series import Series
 
         s = self._s()
         every = s.is_duplicated()
@@ -188,8 +185,8 @@ class _SeriesPandasMixin:
             raise ValueError("duplicated: keep must be 'first', 'last' or False")
         rows = DataFrame({"v": s}).with_row_index("r")
         agg = f"{'min' if keep == 'first' else 'max'}:r:r"
-        kept = Series(GroupBy(rows, ["v"]).agg(agg)._native["r"])
-        first = Series(rows._native["r"]).is_in(kept)
+        kept = GroupBy(rows, ["v"]).agg(agg)._native["r"]
+        first = rows._native["r"].is_in(kept)
         return every.logical(0, first.logical_not()).rename(s.name)
 
     @property
@@ -213,46 +210,12 @@ class _SeriesPandasMixin:
         return 1
 
     @property
-    def nbytes(self) -> int:
-        return int(self._s()._native.nbytes)
-
-    @property
     def values(self) -> Any:
         return self._s().to_numpy()
 
     @property
     def array(self) -> Any:
         return self._s().to_arrow()
-
-    @property
-    def name(self) -> Optional[str]:
-        """The name of the Series, ``None`` when it has none. Ops keep it as
-        pandas does: an elementwise or transform op gives the result this name,
-        a binary op between two Series keeps it only when both names are equal.
-        A frame column holds the name of its column."""
-        return self._native.name
-
-    @name.setter
-    def name(self, value: Optional[str]) -> None:
-        if value is not None and not isinstance(value, str):
-            raise TypeError(f"a Series name must be a str or None, not {type(value).__name__}")
-        self._native = self._native.rename(value)
-
-    def rename(self, name: Optional[str]) -> "Series":
-        """A new Series sharing this one's values under ``name`` (``None``
-        clears the name). Only the scalar form of pandas' ``rename`` is
-        supported."""
-        if name is not None and not isinstance(name, str):
-            raise TypeError(f"rename: the name must be a str or None, not {type(name).__name__}")
-        from .series import Series
-
-        return Series(self._native.rename(name))
-
-    def item(self) -> object:
-        s = self._s()
-        if len(s) != 1:
-            raise ValueError(f"item: the Series has {len(s)} elements, not one")
-        return s[0]
 
     def items(self) -> Iterator[Tuple[int, object]]:
         return enumerate(self._s().to_list())
@@ -425,7 +388,6 @@ class _SeriesPandasMixin:
     def _pair(self, other: "Series", agg: str) -> float:
         from .columnar import Agg, GroupBy, _Col
         from .dataframe import DataFrame
-        from .series import Series
 
         s = self._s()
         # pandas gives NaN below two complete pairs; the engine's readout 0.
@@ -439,7 +401,7 @@ class _SeriesPandasMixin:
             if s.filter(pairs).var() == 0 or other.filter(pairs).var() == 0:
                 return float("nan")
         out = GroupBy(frame, []).agg(Agg(agg, _Col("y"), "r", by=_Col("x")))
-        value = Series(out._native["r"])[0]
+        value = out._native["r"][0]
         assert isinstance(value, float)
         return value
 
@@ -530,9 +492,8 @@ class _SeriesPandasMixin:
     def explode(self) -> "Series":
         """A List Series flattened to one row per element."""
         from .dataframe import DataFrame
-        from .series import Series
 
-        return Series(DataFrame({"v": self._s()}).explode("v")._native["v"])
+        return DataFrame({"v": self._s()}).explode("v")._native["v"]
 
     # -- accessors: a Series is positional, so loc is iloc ----------------------------
     @property

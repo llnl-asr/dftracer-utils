@@ -77,7 +77,7 @@ def test_error_reaches_the_generic_op_runner():
     # error scalar; it must raise, never return a number.
     s = DataFrame.from_dict({"s": ["a", "b"]})["s"]
     with pytest.raises(TypeError, match="sum.*string"):
-        _ext.op_run("dftu.series.reduce", s._native, 1)
+        _ext.op_run("dftu.series.reduce", s, 1)
 
 
 def test_numeric_reductions_are_unchanged():

@@ -588,9 +588,9 @@ def _run_fused(
     op_obj: Op, ast_tokens: List[tuple], values: Sequence[_ArrayValue]
 ) -> List[_ArrayValue]:
     from .dftracer_utils_ext import vec_eval
-    from .series import Series, _unwrap
+    from .series import Series
 
     dtype = DType.FLOAT64 if is_float_type(op_obj.in_type) else DType.INT64
     col = Series.from_list(list(values), dtype=dtype)
-    out = Series(vec_eval(ast_tokens, [_unwrap(col)]))
+    out = vec_eval(ast_tokens, [col])
     return cast(List[_ArrayValue], out.to_list())

@@ -34,113 +34,132 @@ bool as_fill_char(PyObject* arg, char* out) {
 }  // namespace
 
 PyObject* Series_str_eq(PyObject* self, PyObject* arg) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     dstd::StringView rhs;
     if (!as_str_view(arg, &rhs)) return nullptr;
     return make_series(kernel(*a, [&] { return a->str_eq(rhs); }));
 }
 PyObject* Series_str_contains(PyObject* self, PyObject* arg) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     dstd::StringView needle;
     if (!as_str_view(arg, &needle)) return nullptr;
     return make_series(kernel(*a, [&] { return a->str_contains(needle); }));
 }
 PyObject* Series_str_starts_with(PyObject* self, PyObject* arg) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     dstd::StringView prefix;
     if (!as_str_view(arg, &prefix)) return nullptr;
     return make_series(kernel(*a, [&] { return a->str_starts_with(prefix); }));
 }
 PyObject* Series_str_ends_with(PyObject* self, PyObject* arg) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     dstd::StringView suffix;
     if (!as_str_view(arg, &suffix)) return nullptr;
     return make_series(kernel(*a, [&] { return a->str_ends_with(suffix); }));
 }
 PyObject* Series_str_matches(PyObject* self, PyObject* arg) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     dstd::StringView pattern;
     if (!as_str_view(arg, &pattern)) return nullptr;
     return make_series(kernel(*a, [&] { return a->str_matches(pattern); }));
 }
 PyObject* Series_str_search(PyObject* self, PyObject* arg) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     dstd::StringView pattern;
     if (!as_str_view(arg, &pattern)) return nullptr;
     return make_series(kernel(*a, [&] { return a->str_search(pattern); }));
 }
 PyObject* Series_str_like(PyObject* self, PyObject* arg) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     dstd::StringView pattern;
     if (!as_str_view(arg, &pattern)) return nullptr;
     return make_series(kernel(*a, [&] { return a->str_like(pattern); }));
 }
 PyObject* Series_str_len_bytes(PyObject* self, PyObject*) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     return make_series(kernel(*a, [&] { return a->str_len_bytes(); }));
 }
 PyObject* Series_str_len_chars(PyObject* self, PyObject*) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     return make_series(kernel(*a, [&] { return a->str_len_chars(); }));
 }
 PyObject* Series_str_find(PyObject* self, PyObject* arg) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     dstd::StringView needle;
     if (!as_str_view(arg, &needle)) return nullptr;
     return make_series(kernel(*a, [&] { return a->str_find(needle); }));
 }
 PyObject* Series_fnv1a(PyObject* self, PyObject*) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     return make_series(kernel(*a, [&] { return a->fnv1a(); }));
 }
 PyObject* Series_hex64_parse(PyObject* self, PyObject*) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     return make_series(kernel(*a, [&] { return a->hex64_parse(); }));
 }
 PyObject* Series_hex64_format(PyObject* self, PyObject*) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     return make_series(kernel(*a, [&] { return a->hex64_format(); }));
 }
 PyObject* Series_to_lowercase(PyObject* self, PyObject*) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     return make_series(kernel(*a, [&] { return a->to_lowercase(); }));
 }
 PyObject* Series_to_uppercase(PyObject* self, PyObject*) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     return make_series(kernel(*a, [&] { return a->to_uppercase(); }));
 }
 PyObject* Series_str_strip(PyObject* self, PyObject*) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     return make_series(kernel(*a, [&] { return a->str_strip(); }));
 }
 PyObject* Series_str_lstrip(PyObject* self, PyObject*) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     return make_series(kernel(*a, [&] { return a->str_lstrip(); }));
 }
 PyObject* Series_str_rstrip(PyObject* self, PyObject*) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     return make_series(kernel(*a, [&] { return a->str_rstrip(); }));
 }
 PyObject* Series_str_replace(PyObject* self, PyObject* args) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     PyObject* pat = nullptr;
     PyObject* repl = nullptr;
@@ -150,7 +169,8 @@ PyObject* Series_str_replace(PyObject* self, PyObject* args) {
     return make_series(kernel(*a, [&] { return a->str_replace(p, r); }));
 }
 PyObject* Series_str_replace_all(PyObject* self, PyObject* args) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     PyObject* pat = nullptr;
     PyObject* repl = nullptr;
@@ -160,7 +180,8 @@ PyObject* Series_str_replace_all(PyObject* self, PyObject* args) {
     return make_series(kernel(*a, [&] { return a->str_replace_all(p, r); }));
 }
 PyObject* Series_str_slice(PyObject* self, PyObject* args) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     long long start = 0;
     long long length = -1;
@@ -171,7 +192,8 @@ PyObject* Series_str_slice(PyObject* self, PyObject* args) {
     }));
 }
 PyObject* Series_str_pad_start(PyObject* self, PyObject* args, PyObject* kwds) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     long long width = 0;
     PyObject* fill = nullptr;
@@ -184,7 +206,8 @@ PyObject* Series_str_pad_start(PyObject* self, PyObject* args, PyObject* kwds) {
     }));
 }
 PyObject* Series_str_pad_end(PyObject* self, PyObject* args, PyObject* kwds) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     long long width = 0;
     PyObject* fill = nullptr;
@@ -197,7 +220,8 @@ PyObject* Series_str_pad_end(PyObject* self, PyObject* args, PyObject* kwds) {
     }));
 }
 PyObject* Series_str_zfill(PyObject* self, PyObject* arg) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     long long width = PyLong_AsLongLong(arg);
     if (width == -1 && PyErr_Occurred()) return nullptr;
@@ -205,14 +229,16 @@ PyObject* Series_str_zfill(PyObject* self, PyObject* arg) {
         *a, [&] { return a->str_zfill(static_cast<std::int64_t>(width)); }));
 }
 PyObject* Series_str_split(PyObject* self, PyObject* arg) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     dstd::StringView sep;
     if (!as_str_view(arg, &sep)) return nullptr;
     return make_series(kernel(*a, [&] { return a->str_split(sep); }));
 }
 PyObject* Series_str_extract(PyObject* self, PyObject* args) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     PyObject* pat = nullptr;
     long long group = 1;
@@ -234,7 +260,8 @@ PyObject* Series_str_extract(PyObject* self, PyObject* args) {
     return make_series(std::move(out));
 }
 PyObject* Series_str_regex_replace(PyObject* self, PyObject* args) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     PyObject *pat = nullptr, *to = nullptr;
     if (!PyArg_ParseTuple(args, "OO", &pat, &to)) return nullptr;
@@ -251,7 +278,8 @@ PyObject* Series_str_regex_replace(PyObject* self, PyObject* args) {
     return make_series(std::move(out));
 }
 PyObject* Series_list_len(PyObject* self, PyObject*) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     Series out = kernel(*a, [&] { return a->list_size(); });
     if (!out.valid()) {
@@ -261,7 +289,8 @@ PyObject* Series_list_len(PyObject* self, PyObject*) {
     return make_series(std::move(out));
 }
 PyObject* Series_list_get(PyObject* self, PyObject* arg) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     long long index = PyLong_AsLongLong(arg);
     if (index == -1 && PyErr_Occurred()) return nullptr;
@@ -279,7 +308,8 @@ namespace {
 // A kernel that takes one str argument, refusing a non-String column.
 template <Series (Series::*Method)(dstd::StringView) const>
 PyObject* str_arg_op(PyObject* self, PyObject* arg, const char* name) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     dstd::StringView s;
     if (!as_str_view(arg, &s)) return nullptr;
@@ -294,7 +324,8 @@ PyObject* str_arg_op(PyObject* self, PyObject* arg, const char* name) {
 }  // namespace
 
 PyObject* Series_str_case(PyObject* self, PyObject* arg) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     const long code = PyLong_AsLong(arg);
     if (code == -1 && PyErr_Occurred()) return nullptr;
@@ -313,7 +344,8 @@ PyObject* Series_str_case(PyObject* self, PyObject* arg) {
     return make_series(std::move(out));
 }
 PyObject* Series_str_is(PyObject* self, PyObject* arg) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     const long code = PyLong_AsLong(arg);
     if (code == -1 && PyErr_Occurred()) return nullptr;
@@ -346,7 +378,8 @@ PyObject* Series_str_remove_suffix(PyObject* self, PyObject* arg) {
                                                   "str_remove_suffix");
 }
 PyObject* Series_str_findall(PyObject* self, PyObject* arg) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     dstd::StringView pattern;
     if (!as_str_view(arg, &pattern)) return nullptr;
@@ -360,7 +393,8 @@ PyObject* Series_str_findall(PyObject* self, PyObject* arg) {
     return make_series(std::move(out));
 }
 PyObject* Series_list_join(PyObject* self, PyObject* arg) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     dstd::StringView sep;
     if (!as_str_view(arg, &sep)) return nullptr;
@@ -373,7 +407,8 @@ PyObject* Series_list_join(PyObject* self, PyObject* arg) {
     return make_series(std::move(out));
 }
 PyObject* Series_str_repeat(PyObject* self, PyObject* arg) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     const long long n = PyLong_AsLongLong(arg);
     if (n == -1 && PyErr_Occurred()) return nullptr;
@@ -390,7 +425,8 @@ PyObject* Series_str_repeat(PyObject* self, PyObject* arg) {
     return make_series(std::move(out));
 }
 PyObject* Series_str_center(PyObject* self, PyObject* args, PyObject* kwds) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     long long width = 0;
     PyObject* fill = nullptr;
@@ -407,9 +443,11 @@ PyObject* Series_str_center(PyObject* self, PyObject* args, PyObject* kwds) {
     return make_series(std::move(out));
 }
 PyObject* Series_str_cat(PyObject* self, PyObject* other) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
-    Series* b = as_native<Series>(other);
+    Held held_b(other);
+    Series* b = held_b.get();
     if (!b) return nullptr;
     Series out = kernel(*a, [&] { return a->str_cat(*b); });
     if (!out.valid()) {
@@ -420,7 +458,8 @@ PyObject* Series_str_cat(PyObject* self, PyObject* other) {
     return make_series(std::move(out));
 }
 PyObject* Series_str_partition(PyObject* self, PyObject* args, PyObject* kwds) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     PyObject* sep_obj = nullptr;
     int from_right = 0;
@@ -442,7 +481,8 @@ PyObject* Series_str_partition(PyObject* self, PyObject* args, PyObject* kwds) {
     return make_series(std::move(out));
 }
 PyObject* Series_str_normalize(PyObject* self, PyObject* arg) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     const long form = PyLong_AsLong(arg);
     if (form == -1 && PyErr_Occurred()) return nullptr;
@@ -460,14 +500,17 @@ PyObject* Series_str_normalize(PyObject* self, PyObject* arg) {
     return make_series(std::move(out));
 }
 PyObject* Series_str_translate(PyObject* self, PyObject* args) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     PyObject* from_obj = nullptr;
     PyObject* to_obj = nullptr;
     if (!PyArg_ParseTuple(args, "OO", &from_obj, &to_obj)) return nullptr;
-    Series* from = as_native<Series>(from_obj);
+    Held held_from(from_obj);
+    Series* from = held_from.get();
     if (!from) return nullptr;
-    Series* to = as_native<Series>(to_obj);
+    Held held_to(to_obj);
+    Series* to = held_to.get();
     if (!to) return nullptr;
     Series out = kernel(*a, [&] { return a->str_translate(*from, *to); });
     if (!out.valid()) {
@@ -479,7 +522,8 @@ PyObject* Series_str_translate(PyObject* self, PyObject* args) {
     return make_series(std::move(out));
 }
 PyObject* Series_str_wrap(PyObject* self, PyObject* args) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     long long width = 0;
     int flags = 0;
@@ -500,7 +544,8 @@ PyObject* Series_str_wrap(PyObject* self, PyObject* args) {
 }
 
 PyObject* Series_dt_part(PyObject* self, PyObject* args) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     int part = 0;
     int unit = DFTU_TIME_UNIT_MICRO;
@@ -523,7 +568,8 @@ PyObject* Series_dt_part(PyObject* self, PyObject* args) {
     return make_series(std::move(out));
 }
 PyObject* Series_dt_format(PyObject* self, PyObject* args) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     PyObject* fmt_obj = nullptr;
     int unit = DFTU_TIME_UNIT_MICRO;
@@ -547,7 +593,8 @@ PyObject* Series_dt_format(PyObject* self, PyObject* args) {
     return make_series(std::move(out));
 }
 PyObject* Series_dt_round(PyObject* self, PyObject* args) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     long long every = 0;
     int mode = 0;
@@ -574,7 +621,8 @@ PyObject* Series_dt_round(PyObject* self, PyObject* args) {
 }
 
 PyObject* Series_with_timezone(PyObject* self, PyObject* arg) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     dstd::StringView tz;
     if (!as_str_view(arg, &tz)) return nullptr;

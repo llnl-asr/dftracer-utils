@@ -27,7 +27,8 @@ using dataframe::Series;
 using dataframe::TypeId;
 
 struct SeriesObject {
-    PyObject_HEAD Series col;
+    PyObject_HEAD PyObject* weaklist;
+    Series col;
     // Buffer-protocol shape[0] and strides[0]; a column is immutable, so these
     // are constant and every export can point at them (no per-export alloc).
     Py_ssize_t buf_shape;
@@ -49,6 +50,33 @@ struct dftracer::utils::python::core::NativeTraits<
 };
 
 namespace dftracer::utils::python::frame::series_detail {
+
+// The column behind a Series object, for a method that runs a kernel with the
+// GIL released. `s.name = x` swaps the name of the object's own handle, which
+// a released kernel copies into its result. A column long enough to release
+// the GIL is therefore read through a share taken under the GIL, which has its
+// own name; a shorter one is read in place, as no other thread runs meanwhile.
+class Held {
+   public:
+    enum Mode { Required, Optional };
+
+    explicit Held(PyObject* o, Mode mode = Required)
+        : p_(mode == Required ? as_native<Series>(o)
+                              : as_native_or_null<Series>(o)) {
+        if (p_ && p_->length() >= core::GIL_RELEASE_ROWS) {
+            copy_ = p_->share();
+            p_ = &copy_;
+        }
+    }
+    Held(const Held&) = delete;
+    Held& operator=(const Held&) = delete;
+
+    Series* get() const { return p_; }
+
+   private:
+    Series* p_;
+    Series copy_;
+};
 
 // Runs a kernel over `a` with the GIL released when `a` is long. The body
 // touches no Python object.
@@ -74,7 +102,8 @@ PyObject* scalar_to_py(dftu_scalar v);
 // so each method is one PyMethodDef line.
 template <dftu_series* (*Fn)(const dftu_series*)>
 PyObject* series_unary(PyObject* self, PyObject*) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     return make_series(named_like(
         without_gil(a->length(), [&] { return Series{Fn(a->handle())}; }), *a));
@@ -89,7 +118,8 @@ PyObject* series_unary(PyObject* self, PyObject*) {
 // refusal's message.
 template <auto Method>
 PyObject* series_reduce_scalar(PyObject* self, PyObject*) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     auto out = without_gil(a->length(), [&] { return (a->*Method)(); });
     if constexpr (std::is_same_v<decltype(out),
@@ -106,7 +136,8 @@ PyObject* series_reduce_scalar(PyObject* self, PyObject*) {
 }
 template <auto Method>
 PyObject* series_reduce_f64(PyObject* self, PyObject*) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     auto out = without_gil(a->length(), [&] { return (a->*Method)(); });
     if (!out) {
@@ -117,7 +148,8 @@ PyObject* series_reduce_f64(PyObject* self, PyObject*) {
 }
 template <auto Method>
 PyObject* series_reduce_i64(PyObject* self, PyObject*) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     return PyLong_FromLongLong(
         without_gil(a->length(), [&] { return (a->*Method)(); }));
@@ -160,8 +192,8 @@ PyObject* Series_qcut(PyObject* self, PyObject* arg);
 // series/stats.cpp
 PyObject* Series_quantile(PyObject* self, PyObject* arg);
 PyObject* Series_median(PyObject* self, PyObject*);
-PyObject* Series_variance(PyObject* self, PyObject* args);
-PyObject* Series_stddev(PyObject* self, PyObject* args);
+PyObject* Series_variance(PyObject* self, PyObject* args, PyObject* kwds);
+PyObject* Series_stddev(PyObject* self, PyObject* args, PyObject* kwds);
 PyObject* Series_skewness(PyObject* self, PyObject*);
 PyObject* Series_kurtosis(PyObject* self, PyObject*);
 PyObject* Series_nunique(PyObject* self, PyObject*);
@@ -169,8 +201,8 @@ PyObject* Series_value_counts(PyObject* self, PyObject*);
 PyObject* Series_is_sorted(PyObject* self, PyObject* args, PyObject* kwds);
 PyObject* Series_is_in(PyObject* self, PyObject* other);
 PyObject* Series_sort(PyObject* self, PyObject* args, PyObject* kwds);
-PyObject* Series_head(PyObject* self, PyObject* arg);
-PyObject* Series_tail(PyObject* self, PyObject* arg);
+PyObject* Series_head(PyObject* self, PyObject* args, PyObject* kwds);
+PyObject* Series_tail(PyObject* self, PyObject* args, PyObject* kwds);
 PyObject* Series_shift(PyObject* self, PyObject* arg);
 PyObject* Series_top_k(PyObject* self, PyObject* arg);
 PyObject* Series_bottom_k(PyObject* self, PyObject* arg);

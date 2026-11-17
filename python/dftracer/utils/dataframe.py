@@ -44,6 +44,7 @@ from .series import (
     _polars_via_arrow,
     _register,
     _require_pyarrow,
+    _StrAccessor,
     _to_pandas,
     _unwrap,
     _wrap,
@@ -349,7 +350,7 @@ def _norm_window_spec(spec: Sequence[Any]) -> Tuple[object, ...]:
     return (func, value, offset, name, time, threshold, counter, pre, post, end, span, range_frame)
 
 
-class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"]):
+class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext.DataFrame"]):
     """A named set of columns: native frame ops plus Arrow conversion.
 
     ``DataFrame({"a": [1, 2]})`` builds one from a ``{name: array-like}``
@@ -358,7 +359,7 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
 
     __slots__ = ("_index",)
 
-    def __init__(self, data: "Union[_ext._DataFrame, Mapping[str, object]]") -> None:
+    def __init__(self, data: "Union[_ext.DataFrame, Mapping[str, object]]") -> None:
         if isinstance(data, Mapping):
             data = _unwrap(DataFrame.from_dict(data))
         super().__init__(data)
@@ -382,7 +383,7 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
         if self._index is None:
             return Series.from_list(list(range(len(self))))
         if len(self._index) == 1:
-            return Series(self._native[self._index[0]])
+            return self._native[self._index[0]]
         return _wrap(self._native.select(*self._index))
 
     def index_levels(self) -> List[Series]:
@@ -390,7 +391,7 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
         index is set."""
         if self._index is None:
             return [Series.from_list(list(range(len(self))))]
-        return [Series(self._native[name]) for name in self._index]
+        return [self._native[name] for name in self._index]
 
     def set_index(self, names: "Union[str, Sequence[str]]") -> "DataFrame":
         """Name the column(s) ``loc`` / ``at`` / ``resample`` read labels
@@ -675,7 +676,7 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
         """``df["a"]`` is a column; ``df[["a", "b"]]`` a projection; ``df[mask]``
         with a Bool Series the matching rows (the pandas spellings)."""
         if isinstance(key, str):
-            return Series(self._native[key])
+            return self._native[key]
         if isinstance(key, Series):
             return self._like(self._native.filter(_unwrap(key)))
         return self._like(self._native.select(*[str(k) for k in key]))
@@ -753,11 +754,11 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
         )
         n = len(self)
         if n == 0:
-            return Series(_ext._series_from_list([], int(kind)))
+            return _ext._series_from_list([], int(kind))
         # Built from the row count alone, so no other column's nulls reach it.
         if value is None:
-            return Series(_ext._series_nulls(int(kind), n))
-        return Series(_ext._series_nulls(int(kind), n).fillna(value))
+            return _ext._series_nulls(int(kind), n)
+        return _ext._series_nulls(int(kind), n).fillna(value)
 
     def assign(
         self, **columns: "Union[Series, ColumnExpr, bool, int, float, str, None]"
@@ -804,7 +805,7 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
         casted: Dict[str, Series] = {}
         for name, dtype in dtypes.items():
             try:
-                casted[name] = Series(self._native[name]).astype(dtype)
+                casted[name] = self._native[name].astype(dtype)
             except TypeError as e:
                 raise TypeError(f"astype: column {name!r}: {e}") from None
         out = self
@@ -820,7 +821,7 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
             # A bool column that became text is spelled True/False, as Series.astype does.
             was_bool = int(self[name].dtype) == int(DType.BOOL)
             if was_bool and int(out[name].dtype) == int(DType.STRING):
-                out = out.with_column(name, out[name].str.capitalize())
+                out = out.with_column(name, _StrAccessor(out[name]).capitalize())
         return out
 
     def dropna(self) -> "DataFrame":
@@ -906,7 +907,7 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
         out = names.merge(wide, on=row).sort_values(keys)
         return out.drop(columns=[row])
 
-    def to_dict(self) -> "Dict[str, List[object]]":
+    def to_dict(self) -> "Dict[str, Sequence[object]]":
         return {name: self[name].to_list() for name in self.columns}
 
     # Opaque Arrow C Data Interface capsule; Python has no capsule type.
@@ -946,7 +947,7 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
             return apply_rows(self, func, "DataFrame.apply(axis=1)")
         if axis != 0:
             raise ValueError("axis must be 0 (per column) or 1 (per row)")
-        results = {name: func(Series(self._native[name])) for name in self.columns}
+        results = {name: func(self._native[name]) for name in self.columns}
         if all(isinstance(r, Series) for r in results.values()):
             out = self
             for name, r in results.items():
@@ -961,7 +962,7 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
     def partition_id(self, keys: Union[str, List[str]], n_parts: int) -> "Series":
         """Int32 column: the part in ``[0, n_parts)`` each row lands in under a
         stable hash of ``keys`` (equal keys share a part)."""
-        return Series(self._native.partition_id(keys, n_parts))
+        return self._native.partition_id(keys, n_parts)
 
     def hash_partition(self, keys: Union[str, List[str]], n_parts: int) -> "list[DataFrame]":
         """Hash-partition the rows into ``n_parts`` frames by
@@ -1279,9 +1280,7 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
         keys, flags = _nulls_first_keys(names, descending)
         native = self._native
         for name, key in zip(keys[::2], names):
-            native = native.with_column(
-                name, _unwrap(Series(native[key]).is_not_null().astype("int64"))
-            )
+            native = native.with_column(name, _unwrap(native[key].is_not_null().astype("int64")))
         return _wrap(native.sort_by_multi(keys, flags).select(*self.columns))
 
     def union(self, *others: "DataFrame") -> "DataFrame":
@@ -1583,7 +1582,7 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
             with_null = NULL_COLUMN in Columnar(column_expr).columns
             work = (
                 frame.with_columns(
-                    **{NULL_COLUMN: Series(_ext._series_nulls(int(DType.FLOAT64), len(frame)))}
+                    **{NULL_COLUMN: _ext._series_nulls(int(DType.FLOAT64), len(frame))}
                 )
                 if with_null
                 else frame
@@ -1685,7 +1684,7 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
             DType.FLOAT32,
             DType.FLOAT64,
         }
-        cols: List[Series] = [Series(self._native[name]) for name in self.columns]
+        cols: List[Series] = [self._native[name] for name in self.columns]
         cols = [c for c in cols if c.dtype in numeric]
         if not cols:
             raise ValueError("agg(axis=1): no numeric columns")
@@ -1750,7 +1749,7 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
         return self.reduce("kurt")
 
 
-_register(_ext._DataFrame, DataFrame)
+_register(_ext.DataFrame, DataFrame)
 
 
 def _frame_of(columns: "List[Tuple[str, object]]", read: "Callable[[Any], Series]") -> DataFrame:
@@ -1764,16 +1763,14 @@ def _frame_of(columns: "List[Tuple[str, object]]", read: "Callable[[Any], Series
 
 def _native_columns(
     mapping: Mapping[str, object],
-) -> "Optional[Tuple[List[str], List[_ext._Series]]]":
+) -> "Optional[Tuple[List[str], List[Series]]]":
     """The names and native columns of a mapping whose values are all Series,
     lists of scalars, NumPy arrays or pandas and polars Series that import
     without Arrow; None otherwise."""
     names: "List[str]" = []
-    cols: "List[_ext._Series]" = []
+    cols: "List[Series]" = []
     for name, value in mapping.items():
         if isinstance(value, Series):
-            cols.append(_unwrap(value))
-        elif isinstance(value, _ext._Series):
             cols.append(value)
         elif isinstance(value, (list, tuple)):
             items = list(value)
@@ -1785,17 +1782,17 @@ def _native_columns(
                 return None
         elif type(value).__module__.startswith("pandas") and type(value).__name__ == "Series":
             try:
-                cols.append(_unwrap(Series.from_pandas(cast(Any, value))))
+                cols.append(Series.from_pandas(cast(Any, value)))
             except TypeError:
                 return None
         elif type(value).__module__.startswith("polars") and type(value).__name__ == "Series":
             try:
-                cols.append(_unwrap(Series.from_polars(cast(Any, value))))
+                cols.append(Series.from_polars(cast(Any, value)))
             except TypeError:
                 return None
         elif type(value).__module__ == "numpy" and type(value).__name__ == "ndarray":
             try:
-                cols.append(_unwrap(Series.from_numpy(cast(Any, value))))
+                cols.append(Series.from_numpy(cast(Any, value)))
             except (TypeError, BufferError, RuntimeError, ImportError):
                 return None
         else:

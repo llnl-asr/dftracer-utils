@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // A native LazyFrame exposed to Python: a deferred query over an in-memory
 // dataframe::DataFrame. Builder methods record ops and return a new LazyFrame;
-// nothing runs until collect(), which materializes a native _DataFrame. A
+// nothing runs until collect(), which materializes a native DataFrame. A
 // filter/with_column expr's col(i) refers to the i-th column of the frame at
 // that point, so the Python wrapper resolves names to indices against schema().
 
@@ -58,10 +58,14 @@ using dftracer::utils::python::frame::group_agg_from_spec;
 using dftracer::utils::python::frame::strings_from_str_or_seq;
 
 struct LazyFrameObject {
-    PyObject_HEAD LazyFrame lf;
+    PyObject_HEAD PyObject* weaklist;
+    LazyFrame lf;
 };
 
 PyTypeObject LazyFrameType;
+// The type the factories allocate: LazyFrameType until _bind_types gives the
+// Python subclass.
+PyTypeObject* g_lazyframe_type = &LazyFrameType;
 
 }  // namespace
 
@@ -78,13 +82,15 @@ namespace {
 
 PyObject* make_lazyframe(LazyFrame&& lf) {
     auto* self = reinterpret_cast<LazyFrameObject*>(
-        LazyFrameType.tp_alloc(&LazyFrameType, 0));
+        g_lazyframe_type->tp_alloc(g_lazyframe_type, 0));
     if (!self) return nullptr;
     new (&self->lf) LazyFrame(std::move(lf));
     return reinterpret_cast<PyObject*>(self);
 }
 
 void LazyFrame_dealloc(LazyFrameObject* self) {
+    if (self->weaklist)
+        PyObject_ClearWeakRefs(reinterpret_cast<PyObject*>(self));
     self->lf.~LazyFrame();
     Py_TYPE(self)->tp_free(reinterpret_cast<PyObject*>(self));
 }
@@ -1219,14 +1225,14 @@ PyMethodDef LazyFrame_methods[] = {
      "explain() -> str of the optimized plan."},
     {"collect", DFTU_PYCFUNCTION(LazyFrame_collect),
      METH_VARARGS | METH_KEYWORDS,
-     "collect(batch_size=65536) -> _DataFrame, running the pipeline."},
+     "collect(batch_size=65536) -> DataFrame, running the pipeline."},
     {"sink", DFTU_PYCFUNCTION(LazyFrame_sink), METH_VARARGS | METH_KEYWORDS,
      "sink(name, options=None, batch_size=0, runtime=None) -> (rows, "
      "batches), writing the pipeline's rows to the sink the plugin "
      "registered as name."},
     {"collect_async", DFTU_PYCFUNCTION(LazyFrame_collect_async),
      METH_VARARGS | METH_KEYWORDS,
-     "collect_async(batch_size=0) -> TaskHandle[_DataFrame], running the "
+     "collect_async(batch_size=0) -> TaskHandle[DataFrame], running the "
      "pipeline on the Runtime and returning at once."},
     {nullptr, nullptr, 0, nullptr}};
 
@@ -1282,15 +1288,20 @@ namespace dftracer::utils::python::frame {
 int init_lazyframe(PyObject* m) {
     LazyFrameType = {};
     LazyFrameType.ob_base = {PyObject_HEAD_INIT(nullptr) 0};
-    LazyFrameType.tp_name = "dftracer_utils_ext._LazyFrame";
+    LazyFrameType.tp_name = "dftracer_utils_ext.LazyFrame";
     LazyFrameType.tp_basicsize = sizeof(LazyFrameObject);
-    LazyFrameType.tp_flags = Py_TPFLAGS_DEFAULT;
+    LazyFrameType.tp_weaklistoffset = WEAKLIST_OFFSET;
+    LazyFrameType.tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE;
     LazyFrameType.tp_doc = "A deferred query over a native vec batch.";
     LazyFrameType.tp_dealloc = reinterpret_cast<destructor>(LazyFrame_dealloc);
     LazyFrameType.tp_methods = LazyFrame_methods;
     LazyFrameType.tp_new = nullptr;  // created only by DataFrame.lazy()
-    if (register_type(m, &LazyFrameType, "_LazyFrame") < 0) return -1;
+    if (register_type(m, &LazyFrameType, "LazyFrame") < 0) return -1;
     return PyModule_AddFunctions(m, lazyframe_module_methods);
+}
+
+TypeBinding lazyframe_binding() {
+    return {"LazyFrame", &LazyFrameType, &g_lazyframe_type};
 }
 
 PyObject* wrap_lazyframe(dataframe::LazyFrame&& lf) {

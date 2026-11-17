@@ -95,6 +95,34 @@ bool parse_kw(PyObject *args, PyObject *kw, const char *const (&names)[N],
     return PyArg_ParseTupleAndKeywords(args, kw, Fmt.text, kwlist, out...) != 0;
 }
 
+/// A method whose body takes its one argument as a METH_O does, called with
+/// the argument by position or by the keyword @p Name.
+template <detail::FormatString Name, PyObject *(*Impl)(PyObject *, PyObject *)>
+PyObject *kw_one(PyObject *self, PyObject *args, PyObject *kwds) {
+    PyObject *arg = nullptr;
+    const char *const names[1] = {Name.text};
+    if (!parse_kw<"O">(args, kwds, names, &arg)) return nullptr;
+    return Impl(self, arg);
+}
+
+/// A method whose body takes a METH_VARARGS tuple of one required and one
+/// optional argument, called by position or by the keywords @p First and
+/// @p Second. The body sees the tuple it always saw.
+template <PyObject *(*Impl)(PyObject *, PyObject *), detail::FormatString First,
+          detail::FormatString Second>
+PyObject *kw_pair(PyObject *self, PyObject *args, PyObject *kwds) {
+    PyObject *given[2] = {nullptr, nullptr};
+    const char *const names[2] = {First.text, Second.text};
+    if (!parse_kw<"O|O">(args, kwds, names, &given[0], &given[1]))
+        return nullptr;
+    PyObject *tuple = given[1] ? PyTuple_Pack(2, given[0], given[1])
+                               : PyTuple_Pack(1, given[0]);
+    if (!tuple) return nullptr;
+    PyObject *out = Impl(self, tuple);
+    Py_DECREF(tuple);
+    return out;
+}
+
 /// Runs @p fn, which returns a pointer, an int status or a bool, and turns a
 /// C++ exception into the matching typed Python error. The failure value is
 /// nullptr, -1 or false. An @ref PyErrorException keeps its error domain; see

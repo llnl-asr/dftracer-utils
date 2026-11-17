@@ -7,7 +7,8 @@
 namespace dftracer::utils::python::frame::series_detail {
 
 PyObject* Series_rolling(PyObject* self, PyObject* args, PyObject* kwds) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     Py_ssize_t window = 0;
     const char* op = "sum";
@@ -38,7 +39,8 @@ PyObject* Series_rolling(PyObject* self, PyObject* args, PyObject* kwds) {
         *a));
 }
 PyObject* Series_rolling_var(PyObject* self, PyObject* arg) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     long long window = PyLong_AsLongLong(arg);
     if (window == -1 && PyErr_Occurred()) return nullptr;
@@ -51,7 +53,8 @@ PyObject* Series_rolling_var(PyObject* self, PyObject* arg) {
         *a));
 }
 PyObject* Series_rolling_std(PyObject* self, PyObject* arg) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     long long window = PyLong_AsLongLong(arg);
     if (window == -1 && PyErr_Occurred()) return nullptr;
@@ -64,7 +67,8 @@ PyObject* Series_rolling_std(PyObject* self, PyObject* arg) {
         *a));
 }
 PyObject* Series_rolling_median(PyObject* self, PyObject* arg) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     long long window = PyLong_AsLongLong(arg);
     if (window == -1 && PyErr_Occurred()) return nullptr;
@@ -77,7 +81,8 @@ PyObject* Series_rolling_median(PyObject* self, PyObject* arg) {
         *a));
 }
 PyObject* Series_rolling_quantile(PyObject* self, PyObject* args) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     long long window = 0;
     double q = 0.0;
@@ -91,7 +96,8 @@ PyObject* Series_rolling_quantile(PyObject* self, PyObject* args) {
         *a));
 }
 PyObject* Series_ewm_mean(PyObject* self, PyObject* arg) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     double alpha = PyFloat_AsDouble(arg);
     if (alpha == -1.0 && PyErr_Occurred()) return nullptr;
@@ -102,7 +108,8 @@ PyObject* Series_ewm_mean(PyObject* self, PyObject* arg) {
         *a));
 }
 PyObject* Series_ewm_std(PyObject* self, PyObject* arg) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     double alpha = PyFloat_AsDouble(arg);
     if (alpha == -1.0 && PyErr_Occurred()) return nullptr;
@@ -112,12 +119,14 @@ PyObject* Series_ewm_std(PyObject* self, PyObject* arg) {
         *a));
 }
 PyObject* Series_cut(PyObject* self, PyObject* args) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     PyObject* other = nullptr;
     int flags = 0;
     if (!PyArg_ParseTuple(args, "O|i", &other, &flags)) return nullptr;
-    Series* breaks = as_native<Series>(other);
+    Held held_breaks(other);
+    Series* breaks = held_breaks.get();
     if (!breaks) return nullptr;
     return make_series(
         named_like(kernel(*a,
@@ -128,7 +137,8 @@ PyObject* Series_cut(PyObject* self, PyObject* args) {
                    *a));
 }
 PyObject* Series_qcut(PyObject* self, PyObject* arg) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     long q = PyLong_AsLong(arg);
     if (q == -1 && PyErr_Occurred()) return nullptr;

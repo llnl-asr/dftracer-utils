@@ -147,6 +147,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 - Release the GIL around every `Series` kernel and every eager `DataFrame` op on 16384 or more rows, so two Python threads run two long kernels at once.
   `Series.to_pylist`, `np_parts` and the other calls that build Python objects keep the GIL.
+- Make the native `Series` the public class: `dftracer.utils.Series` subclasses the extension's `Series`, and the native calls return it directly, so a call such as `s.abs()` runs the native method with no Python wrapper in between (`s.abs()` 252 ns to 46 ns and `df["x"]` 228 ns to 82 ns, in `benchmarks/python/call_bench.py`).
+  `Series._native` is gone.
+  The extension types are `Series`, `DataFrame`, `LazyFrame` and `TraceViewer`, without the underscore, can be subclassed, and `_bind_types` tells the native calls which Python subclass to build.
+  `s.name = "x"` renames that one Series in place, as pandas and polars do, and the values stay shared with the Series it came from.
+  `Series` cannot be subclassed from user code: `Series.__new__` raises a `TypeError` for a subclass, because the native calls build the class that `_bind_types` bound and would hand back a plain `Series`.
+  The native types take weak references.
+- Type `Series` by its element: `Series[int]` is a column of integers, covariant, so a `Series[bool]` is a `Series[int]`.
+  A comparison is a `Series[bool]`, an arithmetic op follows promotion (`Series[int] + float` is a `Series[float]`), `cast` and `astype` on a `DType` member give the element type of that member, a method that keeps the type returns `Self`, and `.str` reads on a `Series[str]` only.
+  `Series([1, 2, 3])` is a `Series[int]` to mypy, and `tests/python/test_series_typing.py` holds the typed sample and the wrong-use fixture.
 - Raise the typed errors from the native `Series`, `DataFrame` and `LazyFrame` calls, chosen by the error code, in place of a bare `ValueError` or `RuntimeError`.
   An invalid-argument error is a `DFTUtilsValueError`, which is also a `ValueError`, so `except ValueError` still catches it.
   A not-found error, such as an unknown column on an eager or a lazy op, is a `DFTUtilsNotFoundError`, which is also a `KeyError`, with the plain message as its `str`.

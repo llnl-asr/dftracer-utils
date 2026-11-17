@@ -152,7 +152,7 @@ def test_a_json_field_reads_canonical_text(tmp_path):
     ]
     path.write_bytes(gzip.compress(("\n".join(lines) + "\n").encode()))
     tv = dftu.TraceViewer(str(path), record_schema=PyTagged)
-    tags = tv.select("tags").collect()["tags"]._native.to_pylist()
+    tags = tv.select("tags").collect()["tags"].to_pylist()
     assert tags == ['["a","b"]', '{"a":2,"b":1}', None]
     assert len(tv.duql('json(tags) == \'{"a":2,"b":1}\'').collect()) == 1
     assert len(tv.duql('tags == \'{"a":2,"b":1}\'').collect()) == 0

@@ -4,6 +4,7 @@
 
 #include <Python.h>
 #include <dftracer/utils/common/config.h>
+#include <dftracer/utils/python/core/type_helpers.h>
 
 namespace dftracer::utils::dataframe {
 class Series;
@@ -14,6 +15,9 @@ namespace dftracer::utils::python::frame {
 // Register the Series type and its factories on module `m`.
 // Returns 0 on success, -1 with the Python error set on failure.
 int init_series(PyObject* m);
+
+// The Series type and the slot its factories allocate, for _bind_types.
+TypeBinding series_binding();
 
 // Wrap an owned dataframe::Series in a new Series Python object (steals the
 // column). Used by the trace view to hand its scanned batch to Python.

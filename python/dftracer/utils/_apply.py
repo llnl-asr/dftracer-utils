@@ -80,9 +80,8 @@ def _from_python(values: Sequence[object]) -> "Series":
 
 
 def _column(frame: "DataFrame", name: str) -> "Series":
-    from .series import Series
 
-    return Series(frame._native[name])
+    return frame._native[name]
 
 
 def apply_series(series: "Series", func: Callable[..., object], what: str) -> "Series":
@@ -210,9 +209,7 @@ def _apply_jit_op(series: "Series", op_obj: Any, what: str) -> "Series":
 
     tokens = lower_to_expr(op_obj)
     if tokens is not None:
-        from .series import Series
-
-        return Series(_ext.vec_eval(tokens, [series._native]))
+        return _ext.vec_eval(tokens, [series])
     _warn_fallback(what, op_obj, "the @jit.op body has no columnar Expr form")
     values: List[object] = [
         None if v is None else run_op(op_obj, cast(float, v)) for v in series.to_list()

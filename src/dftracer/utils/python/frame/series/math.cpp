@@ -5,7 +5,8 @@
 namespace dftracer::utils::python::frame::series_detail {
 
 PyObject* Series_is_between(PyObject* self, PyObject* args) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     PyObject* lo = nullptr;
     PyObject* hi = nullptr;
@@ -20,7 +21,8 @@ PyObject* Series_is_between(PyObject* self, PyObject* args) {
         *a));
 }
 PyObject* Series_fillna(PyObject* self, PyObject* value) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     dftu_scalar s{};
     if (!py_to_scalar(value, &s)) return nullptr;
@@ -29,7 +31,8 @@ PyObject* Series_fillna(PyObject* self, PyObject* value) {
         *a));
 }
 PyObject* Series_clip(PyObject* self, PyObject* args) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     PyObject* lo = nullptr;
     PyObject* hi = nullptr;

@@ -32,7 +32,8 @@ PyObject* make_arith_series(Series&& col, TypeId a_type, TypeId b_type) {
 enum class ScalarOp { Add, Sub, Mul, Div };
 
 PyObject* scalar_op(PyObject* self, PyObject* value, ScalarOp op) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     TypeId a_type = a->type();
     if (PyFloat_Check(value)) {
@@ -85,32 +86,40 @@ PyObject* scalar_op(PyObject* self, PyObject* value, ScalarOp op) {
 }  // namespace
 
 PyObject* Series_add(PyObject* self, PyObject* other) {
-    Series* a = as_native<Series>(self);
-    Series* b = as_native<Series>(other);
+    Held held_a(self);
+    Series* a = held_a.get();
+    Held held_b(other);
+    Series* b = held_b.get();
     if (!a || !b) return nullptr;
     return make_arith_series(
         named_like(kernel(*a, [&] { return dataframe::add(*a, *b); }), *a, *b),
         a->type(), b->type());
 }
 PyObject* Series_sub(PyObject* self, PyObject* other) {
-    Series* a = as_native<Series>(self);
-    Series* b = as_native<Series>(other);
+    Held held_a(self);
+    Series* a = held_a.get();
+    Held held_b(other);
+    Series* b = held_b.get();
     if (!a || !b) return nullptr;
     return make_arith_series(
         named_like(kernel(*a, [&] { return dataframe::sub(*a, *b); }), *a, *b),
         a->type(), b->type());
 }
 PyObject* Series_mul(PyObject* self, PyObject* other) {
-    Series* a = as_native<Series>(self);
-    Series* b = as_native<Series>(other);
+    Held held_a(self);
+    Series* a = held_a.get();
+    Held held_b(other);
+    Series* b = held_b.get();
     if (!a || !b) return nullptr;
     return make_arith_series(
         named_like(kernel(*a, [&] { return dataframe::mul(*a, *b); }), *a, *b),
         a->type(), b->type());
 }
 PyObject* Series_div(PyObject* self, PyObject* other) {
-    Series* a = as_native<Series>(self);
-    Series* b = as_native<Series>(other);
+    Held held_a(self);
+    Series* a = held_a.get();
+    Held held_b(other);
+    Series* b = held_b.get();
     if (!a || !b) return nullptr;
     return make_arith_series(
         named_like(kernel(*a, [&] { return dataframe::div(*a, *b); }), *a, *b),
@@ -122,12 +131,14 @@ PyObject* Series_div(PyObject* self, PyObject* other) {
 enum class ExtraOp { FloorDiv, Mod, Pow };
 
 static PyObject* extra_op(PyObject* self, PyObject* args, ExtraOp op) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     PyObject* other = nullptr;
     int reverse = 0;
     if (!PyArg_ParseTuple(args, "O|p", &other, &reverse)) return nullptr;
-    if (Series* b = as_native_or_null<Series>(other)) {
+    Held held_b(other, Held::Optional);
+    if (Series* b = held_b.get()) {
         Series out = kernel(*a, [&] {
             return op == ExtraOp::FloorDiv ? dataframe::floordiv(*a, *b)
                    : op == ExtraOp::Mod    ? dataframe::mod(*a, *b)
@@ -184,7 +195,8 @@ PyObject* Series_pow(PyObject* self, PyObject* args) {
 }
 
 PyObject* Series_cast(PyObject* self, PyObject* target) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     long tid = PyLong_AsLong(target);
     if (tid == -1 && PyErr_Occurred()) return nullptr;
@@ -201,7 +213,8 @@ PyObject* Series_cast(PyObject* self, PyObject* target) {
 }
 
 PyObject* Series_prim(PyObject* self, PyObject* code) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     long op = PyLong_AsLong(code);
     if (op == -1 && PyErr_Occurred()) return nullptr;
@@ -216,7 +229,8 @@ PyObject* Series_prim(PyObject* self, PyObject* code) {
 // Compare a column against a scalar (op is a DFTU_CMP_* code) -> Bool
 // column.
 PyObject* Series_compare(PyObject* self, PyObject* args) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     int op = 0;
     PyObject* value = nullptr;
@@ -234,12 +248,14 @@ PyObject* Series_compare(PyObject* self, PyObject* args) {
 
 // Boolean AND/OR of two Bool columns (op is a DFTU_LOGICAL_* code).
 PyObject* Series_logical(PyObject* self, PyObject* args) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     int op = 0;
     PyObject* other = nullptr;
     if (!PyArg_ParseTuple(args, "iO", &op, &other)) return nullptr;
-    Series* b = as_native<Series>(other);
+    Held held_b(other);
+    Series* b = held_b.get();
     if (!b) return nullptr;
     return make_series(
         named_like(kernel(*a,
@@ -252,7 +268,8 @@ PyObject* Series_logical(PyObject* self, PyObject* args) {
 }
 
 PyObject* Series_logical_not(PyObject* self, PyObject*) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     return make_series(named_like(
         kernel(*a,

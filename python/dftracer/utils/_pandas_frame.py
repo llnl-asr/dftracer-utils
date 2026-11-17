@@ -31,6 +31,7 @@ if TYPE_CHECKING:
     from ._pandas_series import ReplaceKey, ReplaceValue, _Omitted
     from .columnar import GroupBy
     from .dataframe import DataFrame
+    from .dftracer_utils_ext import Scalar
 
 _NUMERIC = {
     DType.INT8,
@@ -61,7 +62,7 @@ def _group(frame: "DataFrame", keys: Sequence[str]) -> "GroupBy":
 
 
 def _series(frame: "DataFrame", name: str) -> Series:
-    return Series(frame._native[name])
+    return frame._native[name]
 
 
 class _FramePandasMixin:
@@ -83,7 +84,7 @@ class _FramePandasMixin:
         return self
 
     def _col(self, name: str) -> Series:
-        return Series(self._native[name])
+        return self._native[name]
 
     def _rebuild(self, columns: Dict[str, Series], keep_others: bool = True) -> "DataFrame":
         """A frame with ``columns`` replacing (or, with ``keep_others`` off,
@@ -122,7 +123,7 @@ class _FramePandasMixin:
         if isinstance(other, DataFrame):
             if name not in other:
                 raise KeyError(f"no column named {name!r} in the other frame")
-            return Series(other._native[name])
+            return other._native[name]
         if isinstance(other, Series):
             if len(other) != len(self._frame()):
                 raise ValueError(
@@ -409,7 +410,7 @@ class _FramePandasMixin:
         out = {name: _replace_in(self._col(name), pairs, name, False) for name in self.columns}
         return self._rebuild(out, True)
 
-    def applymap(self, func: Callable[[object], object]) -> "DataFrame":
+    def applymap(self, func: "Callable[[Scalar], Scalar]") -> "DataFrame":
         """``func`` over every element, column by column (:meth:`Series.apply`
         per column; the pandas ``map``)."""
         return self._map_columns(lambda s: s.apply(func), numeric_only=False)
@@ -614,7 +615,7 @@ class _FramePandasMixin:
         from ._apply import Row
 
         cols = {c: self._col(c).to_list() for c in self.columns}
-        labels: List[object] = list(range(len(self._frame())))
+        labels: Sequence[object] = list(range(len(self._frame())))
         if self._index is not None and len(self._index) == 1:
             labels = _series(self._frame(), self._index[0]).to_list()
         for i in range(len(self._frame())):
@@ -771,7 +772,7 @@ class _FramePandasMixin:
         """One row: the bytes each column's Arrow buffers hold."""
         from .dataframe import DataFrame
 
-        return DataFrame({c: [self._col(c)._native.nbytes] for c in self.columns})
+        return DataFrame({c: [self._col(c).nbytes] for c in self.columns})
 
     def isin(
         self, values: "Union[Sequence[object], Series, Mapping[str, Sequence[object]]]"
@@ -807,7 +808,7 @@ class _FramePandasMixin:
         out: Dict[str, Series] = {}
         for name in self.columns:
             if name in other:
-                out[name] = func(self._col(name), Series(other._native[name]))
+                out[name] = func(self._col(name), other._native[name])
         return self._rebuild(out, keep_others=False)
 
     def compare(self, other: "DataFrame") -> "DataFrame":
@@ -824,7 +825,7 @@ class _FramePandasMixin:
         mine: List[Optional[str]] = []
         theirs: List[Optional[str]] = []
         for name in self.columns:
-            diff = self._col(name).compare(Series(other._native[name])).to_dict()
+            diff = self._col(name).compare(other._native[name]).to_dict()
             for i, va, vb in zip(diff["index"], diff["self"], diff["other"]):
                 assert isinstance(i, int)
                 rows.append(i)
@@ -849,7 +850,7 @@ class _FramePandasMixin:
         for name in self.columns:
             s = self._col(name)
             if name in other and _is_numeric(s):
-                out[name] = [s.corr(Series(other._native[name]))]
+                out[name] = [s.corr(other._native[name])]
         return DataFrame(out)
 
     def info(self) -> str:
@@ -860,7 +861,7 @@ class _FramePandasMixin:
         total = 0
         for name in self.columns:
             s = self._col(name)
-            nbytes = int(s._native.nbytes)
+            nbytes = int(s.nbytes)
             total += nbytes
             lines.append(
                 f"  {name}: {s.dtype.name.lower()}, {n - s.null_count} present, {nbytes} bytes"
@@ -892,7 +893,7 @@ class _FramePandasMixin:
         for name in self.columns:
             if name in other:
                 s = self._col(name)
-                out[name] = s.where(s.notna(), Series(other._native[name]))
+                out[name] = s.where(s.notna(), other._native[name])
         return self._rebuild(out)
 
     def update(self, other: "DataFrame") -> None:
@@ -901,7 +902,7 @@ class _FramePandasMixin:
         out: Dict[str, Series] = {}
         for name in self.columns:
             if name in other:
-                o = Series(other._native[name])
+                o = other._native[name]
                 out[name] = o.where(o.notna(), self._col(name))
         self._native = self._rebuild(out)._native
 
@@ -914,7 +915,7 @@ class _FramePandasMixin:
         if isinstance(other, Series):
             return Series.from_list([self._col(c).dot(other) for c in names])
         return DataFrame(
-            {o: [self._col(c).dot(Series(other._native[o])) for c in names] for o in other.columns}
+            {o: [self._col(c).dot(other._native[o]) for c in names] for o in other.columns}
         )
 
     @classmethod
@@ -1077,7 +1078,7 @@ class _FramePandasMixin:
 
     @staticmethod
     def _col_of(frame: "DataFrame", name: str) -> Series:
-        return Series(frame._native[name])
+        return frame._native[name]
 
     # -- exports through pandas / pyarrow -----------------------------------------
     def to_csv(

@@ -94,7 +94,7 @@ PyObject* py_memory_budget_advice(PyObject*, PyObject* args, PyObject* kwds) {
         (unsigned long long)a.suggested_nodes, "warning", warning.c_str());
 }
 
-// scan_file(path) -> _LazyFrame: a deferred scan over `path`, planned by the
+// scan_file(path) -> LazyFrame: a deferred scan over `path`, planned by the
 // plugin file format that claims it. A file no format claims, a tie between
 // two, or a beta feature the host does not support is an error the plan keeps
 // and collect() returns.
@@ -106,9 +106,37 @@ PyObject* py_scan_file(PyObject*, PyObject* args) {
             dftracer::utils::dstd::StringView(path)));
 }
 
+// _bind_types(*, Series=None, DataFrame=None, LazyFrame=None,
+// TraceViewer=None): the Python classes the native factories build. Each is
+// checked to derive from its native type; one that is not given keeps the
+// native type.
+PyObject* py_bind_types(PyObject*, PyObject* args, PyObject* kwds) {
+    PyObject* given[4] = {};
+    if (!dftracer::utils::python::core::parse_kw<"|$OOOO">(
+            args, kwds, {"Series", "DataFrame", "LazyFrame", "TraceViewer"},
+            &given[0], &given[1], &given[2], &given[3]))
+        return nullptr;
+    const TypeBinding bindings[4] = {
+        dftracer::utils::python::frame::series_binding(),
+        dftracer::utils::python::frame::dataframe_binding(),
+        dftracer::utils::python::frame::lazyframe_binding(),
+        dftracer::utils::python::trace::trace_viewer_binding()};
+    for (int i = 0; i < 4; ++i)
+        if (given[i] && !check_binding(bindings[i], given[i])) return nullptr;
+    for (int i = 0; i < 4; ++i)
+        if (given[i]) bind_type(bindings[i], given[i]);
+    Py_RETURN_NONE;
+}
+
 PyMethodDef dftracer_utils_methods[] = {
+    {"_bind_types", DFTU_PYCFUNCTION(py_bind_types),
+     METH_VARARGS | METH_KEYWORDS,
+     "_bind_types(*, Series=None, DataFrame=None, LazyFrame=None, "
+     "TraceViewer=None) -> None\n\n"
+     "Make the native factories build these Python subclasses of the native\n"
+     "types, so a native method returns the public class."},
     {"scan_file", py_scan_file, METH_VARARGS,
-     "scan_file(path: str) -> _LazyFrame\n\n"
+     "scan_file(path: str) -> LazyFrame\n\n"
      "A deferred scan over `path`, decompressed and parsed by the plugin file\n"
      "format that claims it. Nothing runs until collect(), which returns the\n"
      "error of a file no format claims."},

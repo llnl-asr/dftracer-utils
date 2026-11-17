@@ -12,7 +12,8 @@
 namespace dftracer::utils::python::frame::series_detail {
 
 PyObject* Series_quantile(PyObject* self, PyObject* arg) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     double q = PyFloat_AsDouble(arg);
     if (q == -1.0 && PyErr_Occurred()) return nullptr;
@@ -20,48 +21,55 @@ PyObject* Series_quantile(PyObject* self, PyObject* arg) {
         a->length(), [&] { return dftu_series_quantile(a->handle(), q); }));
 }
 PyObject* Series_median(PyObject* self, PyObject*) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     return PyFloat_FromDouble(without_gil(
         a->length(), [&] { return dftu_series_quantile(a->handle(), 0.5); }));
 }
-PyObject* Series_variance(PyObject* self, PyObject* args) {
-    Series* a = as_native<Series>(self);
+PyObject* Series_variance(PyObject* self, PyObject* args, PyObject* kwds) {
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     int sample = 1;
-    if (!PyArg_ParseTuple(args, "|p", &sample)) return nullptr;
+    if (!parse_kw<"|p">(args, kwds, {"sample"}, &sample)) return nullptr;
     return PyFloat_FromDouble(without_gil(a->length(), [&] {
         return dftu_series_variance(a->handle(), sample);
     }));
 }
-PyObject* Series_stddev(PyObject* self, PyObject* args) {
-    Series* a = as_native<Series>(self);
+PyObject* Series_stddev(PyObject* self, PyObject* args, PyObject* kwds) {
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     int sample = 1;
-    if (!PyArg_ParseTuple(args, "|p", &sample)) return nullptr;
+    if (!parse_kw<"|p">(args, kwds, {"sample"}, &sample)) return nullptr;
     return PyFloat_FromDouble(without_gil(
         a->length(), [&] { return dftu_series_stddev(a->handle(), sample); }));
 }
 PyObject* Series_skewness(PyObject* self, PyObject*) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     return PyFloat_FromDouble(without_gil(
         a->length(), [&] { return dftu_series_skewness(a->handle()); }));
 }
 PyObject* Series_kurtosis(PyObject* self, PyObject*) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     return PyFloat_FromDouble(without_gil(
         a->length(), [&] { return dftu_series_kurtosis(a->handle()); }));
 }
 PyObject* Series_nunique(PyObject* self, PyObject*) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     return PyLong_FromLongLong(without_gil(
         a->length(), [&] { return dftu_series_nunique(a->handle()); }));
 }
 PyObject* Series_value_counts(PyObject* self, PyObject*) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     auto out =
         without_gil(a->length(), [&] { return dataframe::value_counts(*a); });
@@ -72,7 +80,8 @@ PyObject* Series_value_counts(PyObject* self, PyObject*) {
     return dftracer::utils::python::frame::wrap_dataframe(std::move(*out));
 }
 PyObject* Series_is_sorted(PyObject* self, PyObject* args, PyObject* kwds) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     int descending = 0;
     if (!parse_kw<"|p">(args, kwds, {"descending"}, &descending))
@@ -82,9 +91,11 @@ PyObject* Series_is_sorted(PyObject* self, PyObject* args, PyObject* kwds) {
     }));
 }
 PyObject* Series_is_in(PyObject* self, PyObject* other) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
-    Series* values = as_native<Series>(other);
+    Held held_values(other);
+    Series* values = held_values.get();
     if (!values) return nullptr;
     return make_series(
         named_like(kernel(*a,
@@ -95,7 +106,8 @@ PyObject* Series_is_in(PyObject* self, PyObject* other) {
                    *a));
 }
 PyObject* Series_sort(PyObject* self, PyObject* args, PyObject* kwds) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     int descending = 0;
     if (!parse_kw<"|p">(args, kwds, {"descending"}, &descending))
@@ -106,11 +118,12 @@ PyObject* Series_sort(PyObject* self, PyObject* args, PyObject* kwds) {
             [&] { return Series{dftu_series_sort(a->handle(), descending)}; }),
         *a));
 }
-PyObject* Series_head(PyObject* self, PyObject* arg) {
-    Series* a = as_native<Series>(self);
+PyObject* Series_head(PyObject* self, PyObject* args, PyObject* kwds) {
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
-    long long n = PyLong_AsLongLong(arg);
-    if (n == -1 && PyErr_Occurred()) return nullptr;
+    long long n = 5;
+    if (!parse_kw<"|L">(args, kwds, {"n"}, &n)) return nullptr;
     return make_series(
         named_like(kernel(*a,
                           [&] {
@@ -119,11 +132,12 @@ PyObject* Series_head(PyObject* self, PyObject* arg) {
                           }),
                    *a));
 }
-PyObject* Series_tail(PyObject* self, PyObject* arg) {
-    Series* a = as_native<Series>(self);
+PyObject* Series_tail(PyObject* self, PyObject* args, PyObject* kwds) {
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
-    long long n = PyLong_AsLongLong(arg);
-    if (n == -1 && PyErr_Occurred()) return nullptr;
+    long long n = 5;
+    if (!parse_kw<"|L">(args, kwds, {"n"}, &n)) return nullptr;
     return make_series(
         named_like(kernel(*a,
                           [&] {
@@ -133,7 +147,8 @@ PyObject* Series_tail(PyObject* self, PyObject* arg) {
                    *a));
 }
 PyObject* Series_shift(PyObject* self, PyObject* arg) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     long long n = PyLong_AsLongLong(arg);
     if (n == -1 && PyErr_Occurred()) return nullptr;
@@ -146,7 +161,8 @@ PyObject* Series_shift(PyObject* self, PyObject* arg) {
                    *a));
 }
 PyObject* Series_top_k(PyObject* self, PyObject* arg) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     long long k = PyLong_AsLongLong(arg);
     if (k == -1 && PyErr_Occurred()) return nullptr;
@@ -159,7 +175,8 @@ PyObject* Series_top_k(PyObject* self, PyObject* arg) {
                    *a));
 }
 PyObject* Series_bottom_k(PyObject* self, PyObject* arg) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     long long k = PyLong_AsLongLong(arg);
     if (k == -1 && PyErr_Occurred()) return nullptr;
@@ -172,7 +189,8 @@ PyObject* Series_bottom_k(PyObject* self, PyObject* arg) {
                    *a));
 }
 PyObject* Series_sample(PyObject* self, PyObject* args, PyObject* kwds) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     long long n = 0;
     unsigned long long seed = 0;
@@ -187,7 +205,8 @@ PyObject* Series_sample(PyObject* self, PyObject* args, PyObject* kwds) {
                    *a));
 }
 PyObject* Series_rank(PyObject* self, PyObject* args, PyObject* kwds) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     const char* method = "average";
     int descending = 0;
@@ -207,9 +226,11 @@ PyObject* Series_rank(PyObject* self, PyObject* args, PyObject* kwds) {
         *a));
 }
 PyObject* Series_search_sorted(PyObject* self, PyObject* other) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
-    Series* values = as_native<Series>(other);
+    Held held_values(other);
+    Series* values = held_values.get();
     if (!values) return nullptr;
     return make_series(kernel(*a, [&] {
         return Series{dftu_series_search_sorted(a->handle(), values->handle())};
@@ -217,7 +238,8 @@ PyObject* Series_search_sorted(PyObject* self, PyObject* other) {
 }
 
 PyObject* Series_take(PyObject* self, PyObject* seq) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     dstd::Vector<std::int64_t> idx;
     if (!core::parse_int_seq(seq, "take() expects a sequence of ints", idx))
@@ -232,22 +254,27 @@ PyObject* Series_take(PyObject* self, PyObject* seq) {
 }
 
 PyObject* Series_filter(PyObject* self, PyObject* other) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
-    Series* mask = as_native<Series>(other);
+    Held held_mask(other);
+    Series* mask = held_mask.get();
     if (!mask) return nullptr;
     return make_series(kernel(*a, [&] { return a->filter(*mask); }));
 }
 
 PyObject* Series_where(PyObject* self, PyObject* args) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     PyObject* mask_obj = nullptr;
     PyObject* other_obj = nullptr;
     if (!PyArg_ParseTuple(args, "OO", &mask_obj, &other_obj)) return nullptr;
-    Series* mask = as_native<Series>(mask_obj);
+    Held held_mask(mask_obj);
+    Series* mask = held_mask.get();
     if (!mask) return nullptr;
-    Series* other = as_native<Series>(other_obj);
+    Held held_other(other_obj);
+    Series* other = held_other.get();
     if (!other) return nullptr;
     Series out = kernel(*a, [&] { return a->where(*mask, *other); });
     if (!out.valid()) {
@@ -260,7 +287,8 @@ PyObject* Series_where(PyObject* self, PyObject* args) {
 }
 
 PyObject* Series_argsort(PyObject* self, PyObject* args, PyObject* kwds) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     int descending = 0;
     if (!parse_kw<"|p">(args, kwds, {"descending"}, &descending))
@@ -269,12 +297,14 @@ PyObject* Series_argsort(PyObject* self, PyObject* args, PyObject* kwds) {
 }
 
 PyObject* Series_dictionary_encode(PyObject* self, PyObject*) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     return make_series(kernel(*a, [&] { return a->dictionary_encode(); }));
 }
 PyObject* Series_materialize(PyObject* self, PyObject*) {
-    Series* a = as_native<Series>(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     return make_series(kernel(*a, [&] { return a->materialize(); }));
 }

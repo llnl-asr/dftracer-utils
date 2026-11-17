@@ -513,14 +513,17 @@ static PyObject* udaf_names(PyObject* /*self*/, PyObject* /*unused*/) {
     return list;
 }
 
-// The Series behind each item of `obj`, as borrowed pointers into `held`, which
-// must outlive their use; `msg` is the TypeError for an item that is not a
-// Series.
+// A share of the Series behind each item of `obj`, as pointers into `copies`,
+// which must outlive their use; `msg` is the TypeError for an item that is not
+// a Series. The caller evaluates with the GIL released, and `s.name = x` swaps
+// the name of a Series object's own handle, so the evaluation reads the shares.
 bool columns_from_seq(
     PyObject* obj, const char* msg,
     dftracer::utils::python::core::FastSeq& held,
+    dftracer::utils::dstd::Vector<dataframe::Series>& copies,
     dftracer::utils::dstd::Vector<const dataframe::Series*>& out) {
     if (!held.open(obj, "columns must be a sequence")) return false;
+    copies.reserve(static_cast<std::size_t>(held.size()));
     out.reserve(static_cast<std::size_t>(held.size()));
     for (Py_ssize_t i = 0; i < held.size(); ++i) {
         const dataframe::Series* c = unwrap_vec_column(held.item(i));
@@ -528,7 +531,8 @@ bool columns_from_seq(
             PyErr_SetString(PyExc_TypeError, msg);
             return false;
         }
-        out.push_back(c);
+        copies.push_back(c->share());
+        out.push_back(&copies.back());
     }
     return true;
 }
@@ -543,8 +547,10 @@ static PyObject* vec_eval(PyObject* /*self*/, PyObject* args) {
     if (!build_expr(ast, &expr)) return nullptr;
 
     dftracer::utils::python::core::FastSeq held;
+    dftracer::utils::dstd::Vector<dataframe::Series> copies;
     dftracer::utils::dstd::Vector<const dataframe::Series*> inputs;
-    if (!columns_from_seq(cols_obj, "columns must be SeriesList", held, inputs))
+    if (!columns_from_seq(cols_obj, "columns must be SeriesList", held, copies,
+                          inputs))
         return nullptr;
 
     // A per-batch Python udf runs on the Python lane, which needs the GIL.
@@ -577,8 +583,10 @@ static PyObject* vec_eval_many(PyObject* /*self*/, PyObject* args) {
         return nullptr;
 
     dftracer::utils::python::core::FastSeq held;
+    dftracer::utils::dstd::Vector<dataframe::Series> copies;
     dftracer::utils::dstd::Vector<const dataframe::Series*> inputs;
-    if (!columns_from_seq(cols_obj, "columns must be Series", held, inputs))
+    if (!columns_from_seq(cols_obj, "columns must be Series", held, copies,
+                          inputs))
         return nullptr;
 
     auto res = release_gil([&] { return dataframe::eval_many(roots, inputs); });

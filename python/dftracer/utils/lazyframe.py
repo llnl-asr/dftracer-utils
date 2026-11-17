@@ -59,16 +59,16 @@ class LazyFrame:
 
     __slots__ = ("_native", "_index", "_runtime")
 
-    def __init__(self, native: "_ext._LazyFrame", runtime: "Optional[Runtime]" = None) -> None:
+    def __init__(self, native: "_ext.LazyFrame", runtime: "Optional[Runtime]" = None) -> None:
         self._native = native
         self._index: Optional[List[str]] = None
         self._runtime = runtime
 
-    def _new(self, native: "_ext._LazyFrame") -> "LazyFrame":
+    def _new(self, native: "_ext.LazyFrame") -> "LazyFrame":
         """Wrap a native plan built from this one, on this plan's runtime."""
         return LazyFrame(native, self._runtime)
 
-    def _like(self, native: "_ext._LazyFrame") -> "LazyFrame":
+    def _like(self, native: "_ext.LazyFrame") -> "LazyFrame":
         """:meth:`_new`, also carrying this plan's index column names when the
         result's schema still holds every one of them."""
         out = self._new(native)
@@ -863,7 +863,7 @@ class LazyGroupBy:
                 rows = rows.filter(_Col(k).is_not_null())
         self._plan = rows
 
-    def _grouped(self, native: "_ext._LazyFrame") -> LazyFrame:
+    def _grouped(self, native: "_ext.LazyFrame") -> LazyFrame:
         out = self._source._new(native)
         return _drop_null_key_groups(out, self._keys) if self._dropna else out
 

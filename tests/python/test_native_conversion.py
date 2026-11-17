@@ -138,8 +138,8 @@ def test_frame_round_trips_every_column_kind():
 def test_str_into_checks_its_destination():
     col = DataFrame.from_dict({"s": ["a", "b", "c"]})["s"]
     with pytest.raises(ValueError):
-        col._native.str_into(np.empty(2, dtype=object), None)  # wrong length
+        col.str_into(np.empty(2, dtype=object), None)  # wrong length
     with pytest.raises(ValueError):
-        col._native.str_into(np.empty(3, dtype=np.int64), None)  # not an object array
+        col.str_into(np.empty(3, dtype=np.int64), None)  # not an object array
     with pytest.raises(TypeError):
-        DataFrame.from_dict({"x": [1, 2]})["x"]._native.str_into(np.empty(2, dtype=object), None)
+        DataFrame.from_dict({"x": [1, 2]})["x"].str_into(np.empty(2, dtype=object), None)

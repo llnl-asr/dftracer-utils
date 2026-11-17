@@ -69,9 +69,9 @@ if TYPE_CHECKING:
 
 # A source of columns for in-memory evaluation: a wrapped or native DataFrame, a
 # {name: Series} mapping, or a pyarrow Table imported at the Arrow boundary.
-_Source = Union["DataFrame", "_ext._DataFrame", Dict[str, "Series"], "pa.Table"]
+_Source = Union["DataFrame", "_ext.DataFrame", Dict[str, "Series"], "pa.Table"]
 # where(): a frame in, the same kind of frame out.
-_Frame = Union["DataFrame", "_ext._DataFrame", "pa.Table"]
+_Frame = Union["DataFrame", "_ext.DataFrame", "pa.Table"]
 
 __all__ = [
     "col",
@@ -1602,11 +1602,11 @@ def _format_value(v: object) -> str:
 
 
 # Import Arrow data into the native columnar engine (the boundary for the DSL).
-def _series_from_arrow(array: "pa.Array") -> "_ext._Series":
+def _series_from_arrow(array: "pa.Array") -> "Series":
     return _arrow_native("_series_from_arrow")(array)
 
 
-def _dataframe_from_arrow(table: "pa.Table") -> "_ext._DataFrame":
+def _dataframe_from_arrow(table: "pa.Table") -> "_ext.DataFrame":
     return _arrow_native("_dataframe_from_arrow")(table)
 
 
@@ -2500,13 +2500,13 @@ def where(table: _Frame, pred: "Expr | str") -> _Frame:
     a filtered ``pyarrow.Table``."""
     native = _unwrap(table)  # a wrapped DataFrame -> its native handle
     if isinstance(pred, str):
-        if isinstance(native, _ext._DataFrame):
+        if isinstance(native, _ext.DataFrame):
             return DataFrame(native.query(pred))
         import pyarrow as pa
 
         return pa.table(_arrow_native("_dataframe_from_arrow")(native).query(pred))
     mask = columnar(pred).apply(native)  # a wrapped Series
-    if isinstance(native, _ext._DataFrame):
+    if isinstance(native, _ext.DataFrame):
         return DataFrame(native.filter(_unwrap(mask)))
     import pyarrow as pa
 
@@ -2544,21 +2544,21 @@ class Columnar:
             ast: List[tuple] = []
             self._serialize(self._expr, ast)
             inputs = [cols[name] for name in self._columns]
-            return Series(_ext.vec_eval(ast, inputs))
+            return _ext.vec_eval(ast, inputs)
         # Constant expression (no columns): broadcast to the row count.
         out_float = _is_float(self._expr, cols)
         result = _eval(self._expr, cols, out_float)
         if isinstance(result, _ScalarVal):
             sized = cols or _first_column(source)
-            return Series(_broadcast_scalar(result.value, out_float, sized))
-        return Series(result.value)
+            return _broadcast_scalar(result.value, out_float, sized)
+        return result.value
 
     # Serialize `expr` to a post-order AST (a list of (op, args...) tuples) that
     # the C++ engine rebuilds and compiles. Structural only - no type logic.
     def _serialize(self, expr: Expr, ast: List[tuple]) -> None:
         _emit_ast(expr, self._columns.index, ast)
 
-    def _to_vec_columns(self, source: _Source) -> Dict[str, "_ext._Series"]:
+    def _to_vec_columns(self, source: _Source) -> Dict[str, "Series"]:
         return _import_vec_columns(self._columns, source)
 
 
@@ -2567,9 +2567,9 @@ def _unwrap_source_columns(source: object) -> Dict[str, Series]:
     Series}`` mapping or a pyarrow Table) as wrapped Series, by name."""
     native = _unwrap(source)
     if isinstance(native, dict):
-        return {k: (v if isinstance(v, Series) else Series(v)) for k, v in native.items()}
-    if isinstance(native, _ext._DataFrame):
-        return {name: Series(native[name]) for name in native.column_names}
+        return dict(native)
+    if isinstance(native, _ext.DataFrame):
+        return {name: native[name] for name in native.column_names}
     import pyarrow as pa
 
     out: Dict[str, Series] = {}
@@ -2577,11 +2577,11 @@ def _unwrap_source_columns(source: object) -> Dict[str, Series]:
         arr = native.column(name)
         if isinstance(arr, pa.ChunkedArray):
             arr = arr.combine_chunks()
-        out[name] = Series(_arrow_native("_series_from_arrow")(arr))
+        out[name] = _arrow_native("_series_from_arrow")(arr)
     return out
 
 
-def _first_column(source: _Source) -> Dict[str, "_ext._Series"]:
+def _first_column(source: _Source) -> Dict[str, "Series"]:
     """One column of ``source`` to give a constant expression its length (empty
     when the source has no column)."""
     native = _unwrap(source)
@@ -2589,17 +2589,17 @@ def _first_column(source: _Source) -> Dict[str, "_ext._Series"]:
     return _import_vec_columns(names, source) if names else {}
 
 
-def _import_vec_columns(names: List[str], source: _Source) -> Dict[str, "_ext._Series"]:
+def _import_vec_columns(names: List[str], source: _Source) -> Dict[str, "Series"]:
     """Resolve `names` to native vec columns from `source` (a native batch or a
     pyarrow Table), importing at the Arrow boundary only when needed."""
     source = _unwrap(source)  # a wrapped DataFrame -> its native handle
     # A native batch (_DataFrame or a {name: Series} dict) is used directly.
-    if isinstance(source, (dict, _ext._DataFrame)):
+    if isinstance(source, (dict, _ext.DataFrame)):
         return {name: _unwrap(source[name]) for name in names}
     # A pyarrow Table: import each needed column into vec at the boundary.
     import pyarrow as pa
 
-    cols: Dict[str, "_ext._Series"] = {}
+    cols: Dict[str, "Series"] = {}
     for name in names:
         arr = source.column(name)
         if isinstance(arr, pa.ChunkedArray):
@@ -2632,12 +2632,10 @@ def eval_many(exprs: "List[Expr | Columnar]", source: _Source) -> "List[Series]"
         ast: List[tuple] = []
         _emit_ast(c._expr, index.__getitem__, ast)
         asts.append(ast)
-    return [Series(s) for s in _ext.vec_eval_many(asts, inputs)]
+    return list(_ext.vec_eval_many(asts, inputs))
 
 
-def _broadcast_scalar(
-    value: _Scalar, out_float: bool, cols: Dict[str, "_ext._Series"]
-) -> "_ext._Series":
+def _broadcast_scalar(value: _Scalar, out_float: bool, cols: Dict[str, "Series"]) -> "Series":
     # Only the length of an input column is used, never its values: a null,
     # NaN or infinity in that column must not reach the constant. An all-null
     # column of the target type, filled with the value, has no other source.
@@ -3090,7 +3088,7 @@ class GroupBy:
 
     def __init__(
         self,
-        batch: "Union[DataFrame, _ext._DataFrame]",
+        batch: "Union[DataFrame, _ext.DataFrame]",
         keys: "Union[str, Sequence[str], None]" = None,
     ) -> None:
         self._batch = batch
@@ -3426,7 +3424,7 @@ class GroupBy:
 
     @staticmethod
     def _col(frame: DataFrame, name: str) -> Series:
-        return Series(frame._native[name])
+        return frame._native[name]
 
     @property
     def ngroups(self) -> int:
@@ -3990,7 +3988,7 @@ _STRING_NODES = (
 )
 
 
-def _is_float(expr: Expr, cols: Dict[str, "_ext._Series"]) -> bool:
+def _is_float(expr: Expr, cols: Dict[str, "Series"]) -> bool:
     if isinstance(expr, _Lit):
         return isinstance(expr.value, float)
     if isinstance(expr, _Col):
@@ -4021,19 +4019,19 @@ class _ScalarVal(NamedTuple):
 
 
 class _ColVal(NamedTuple):
-    value: "_ext._Series"
+    value: "Series"
 
 
 _EvalResult = Union[_ScalarVal, _ColVal]
 
 
-def _need_col(r: _EvalResult, message: str) -> "_ext._Series":
+def _need_col(r: _EvalResult, message: str) -> "Series":
     if isinstance(r, _ColVal):
         return r.value
     raise TypeError(message)
 
 
-def _eval(expr: Expr, cols: Dict[str, "_ext._Series"], out_float: bool) -> _EvalResult:
+def _eval(expr: Expr, cols: Dict[str, "Series"], out_float: bool) -> _EvalResult:
     if isinstance(expr, _Lit):
         return _ScalarVal(float(expr.value) if out_float else int(expr.value))
     if isinstance(expr, _Col):
@@ -4069,7 +4067,7 @@ def _eval(expr: Expr, cols: Dict[str, "_ext._Series"], out_float: bool) -> _Eval
             _eval(expr.left, cols, out_float=_is_float(expr.left, cols)),
             "columnar comparison needs a column on the left",
         )
-        return _ColVal(v.compare(_CMP_CODES[expr.op], expr.rhs))
+        return _ColVal(_ext.Series.compare(v, _CMP_CODES[expr.op], expr.rhs))
     if isinstance(expr, _Logical):
         lv = _need_col(_eval(expr.left, cols, out_float=False), "columnar logical needs a column")
         if expr.op == "not" or expr.right is None:
@@ -4093,11 +4091,11 @@ _COL_OP = {"+": "add", "-": "sub", "*": "mul", "/": "div"}
 _SCALAR_OP = {"+": "add_scalar", "-": "sub_scalar", "*": "mul_scalar", "/": "div_scalar"}
 
 
-def _binop(op: str, left: _EvalResult, right: _EvalResult) -> "_ext._Series":
+def _binop(op: str, left: _EvalResult, right: _EvalResult) -> "Series":
     if isinstance(left, _ColVal) and isinstance(right, _ColVal):
-        return getattr(left.value, _COL_OP[op])(right.value)
+        return getattr(_ext.Series, _COL_OP[op])(left.value, right.value)
     if isinstance(left, _ColVal):  # col op scalar
-        return getattr(left.value, _SCALAR_OP[op])(right.value)
+        return getattr(_ext.Series, _SCALAR_OP[op])(left.value, right.value)
     if isinstance(right, _ColVal) and op in ("+", "*"):  # scalar op col (commutes)
-        return getattr(right.value, _SCALAR_OP[op])(left.value)
+        return getattr(_ext.Series, _SCALAR_OP[op])(right.value, left.value)
     raise NotImplementedError(f"scalar {op} column needs a vec kernel (not yet available)")

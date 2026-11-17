@@ -74,11 +74,15 @@ using dftracer::utils::python::frame::strings_from_str_or_seq;
 // column sharing the struct's buffers (O(1)), and the struct exports to Arrow
 // in one zero-copy step.
 struct DataFrameObject {
-    PyObject_HEAD Series st;
+    PyObject_HEAD PyObject* weaklist;
+    Series st;
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::SharedString> names;
 };
 
 PyTypeObject DataFrameType;
+// The type the factories allocate: DataFrameType until _bind_types gives the
+// Python subclass.
+PyTypeObject* g_dataframe_type = &DataFrameType;
 
 }  // namespace
 
@@ -97,7 +101,7 @@ PyObject* make_dataframe(DataFrame&& b) {
     Series st = Series::structs(dftracer::utils::dstd::to_strings(b.names),
                                 std::move(b.columns));
     auto* self = reinterpret_cast<DataFrameObject*>(
-        DataFrameType.tp_alloc(&DataFrameType, 0));
+        g_dataframe_type->tp_alloc(g_dataframe_type, 0));
     if (!self) return nullptr;
     new (&self->st) Series(std::move(st));
     new (&self->names)
@@ -107,6 +111,8 @@ PyObject* make_dataframe(DataFrame&& b) {
 }
 
 void DataFrame_dealloc(DataFrameObject* self) {
+    if (self->weaklist)
+        PyObject_ClearWeakRefs(reinterpret_cast<PyObject*>(self));
     self->names.~vector();
     self->st.~Series();
     Py_TYPE(self)->tp_free(reinterpret_cast<PyObject*>(self));
@@ -133,7 +139,9 @@ DataFrame to_dataframe(const DataFrameObject* self) {
 // Wrap a batch_ops call over the frame `b` that returns a frame or a frame
 // result, turning its error and any C++ exception into a typed Python error.
 // `fn` runs with the GIL released for a large frame, so it touches no Python
-// object; the frame is immutable, so reading it unlocked is safe.
+// object; the frame is immutable, so reading it unlocked is safe. A Series
+// argument is shared under the GIL first, as `s.name = x` renames a Series
+// object in place.
 template <class Fn>
 PyObject* run_batch_op(const DataFrameObject* b, Fn&& fn) {
     return guard([&]() -> PyObject* {
@@ -203,8 +211,9 @@ PyObject* DataFrame_filter(PyObject* self, PyObject* mask) {
                         "filter() expects a Series boolean mask");
         return nullptr;
     }
-    return run_batch_op(b,
-                        [&] { return dataframe::filter(to_dataframe(b), *m); });
+    const Series mask_copy = m->share();
+    return run_batch_op(
+        b, [&] { return dataframe::filter(to_dataframe(b), mask_copy); });
 }
 
 // query(dsl=None, *, group_by=None, aggs=None, select=None, order_by=None,
@@ -335,8 +344,10 @@ PyObject* DataFrame_with_column(PyObject* self, PyObject* args) {
                         "with_column() expects (name, Series)");
         return nullptr;
     }
-    return run_batch_op(
-        b, [&] { return dataframe::with_column(to_dataframe(b), name, *c); });
+    const Series col_copy = c->share();
+    return run_batch_op(b, [&] {
+        return dataframe::with_column(to_dataframe(b), name, col_copy);
+    });
 }
 
 PyObject* DataFrame_take(PyObject* self, PyObject* seq) {
@@ -1355,7 +1366,7 @@ PyObject* DataFrame_get_column_names(PyObject* self, void*) {
     return DataFrame_keys(self, nullptr);
 }
 
-// lazy() -> _LazyFrame: start a deferred query over a copy of this batch.
+// lazy() -> LazyFrame: start a deferred query over a copy of this batch.
 PyObject* DataFrame_lazy(PyObject* self, PyObject*) {
     DataFrameObject* b = as_native<DataFrameObject>(self);
     if (!b) return nullptr;
@@ -1367,7 +1378,7 @@ PyObject* DataFrame_lazy(PyObject* self, PyObject*) {
 
 PyMethodDef DataFrame_methods[] = {
     {"lazy", DataFrame_lazy, METH_NOARGS,
-     "lazy() -> _LazyFrame, a deferred query over this batch."},
+     "lazy() -> LazyFrame, a deferred query over this batch."},
     {"keys", DataFrame_keys, METH_NOARGS, "Series names, in order."},
     {"filter", DataFrame_filter, METH_O,
      "filter(mask) -> DataFrame keeping rows where the Bool mask is true."},
@@ -1655,6 +1666,10 @@ PyObject* dataframe_from_columns(PyObject* /*self*/, PyObject* args) {
 
 namespace dftracer::utils::python::frame {
 
+TypeBinding dataframe_binding() {
+    return {"DataFrame", &DataFrameType, &g_dataframe_type};
+}
+
 PyObject* wrap_dataframe(dftracer::utils::dataframe::DataFrame&& batch) {
     return make_dataframe(std::move(batch));
 }
@@ -1664,9 +1679,10 @@ int init_dataframe(PyObject* m) {
     DataFrame_as_sequence.sq_contains = DataFrame_contains;
     DataFrameType = {};
     DataFrameType.ob_base = {PyObject_HEAD_INIT(nullptr) 0};
-    DataFrameType.tp_name = "dftracer_utils_ext._DataFrame";
+    DataFrameType.tp_name = "dftracer_utils_ext.DataFrame";
     DataFrameType.tp_basicsize = sizeof(DataFrameObject);
-    DataFrameType.tp_flags = Py_TPFLAGS_DEFAULT;
+    DataFrameType.tp_weaklistoffset = WEAKLIST_OFFSET;
+    DataFrameType.tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE;
     DataFrameType.tp_doc =
         "A native vec batch (named vec columns; Arrow only at the edge).";
     DataFrameType.tp_dealloc = reinterpret_cast<destructor>(DataFrame_dealloc);
@@ -1675,7 +1691,7 @@ int init_dataframe(PyObject* m) {
     DataFrameType.tp_methods = DataFrame_methods;
     DataFrameType.tp_getset = DataFrame_getset;
     DataFrameType.tp_new = nullptr;  // created only by a trace view
-    if (register_type(m, &DataFrameType, "_DataFrame") < 0) return -1;
+    if (register_type(m, &DataFrameType, "DataFrame") < 0) return -1;
 
     static PyMethodDef from_arrow_def = {
         "_dataframe_from_arrow", vec_batch_from_arrow, METH_O,

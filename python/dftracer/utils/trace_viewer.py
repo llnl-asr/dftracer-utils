@@ -31,6 +31,7 @@ from typing import (
     Type,
     TypeVar,
     Union,
+    cast,
     overload,
 )
 
@@ -154,7 +155,7 @@ class TraceViewer(LazyFrame):
         record_schema: "Union[str, Type[RecordSchema], None]" = ...,
     ) -> None: ...
     @overload
-    def __init__(self, files: "_ext._TraceViewer", /) -> None: ...
+    def __init__(self, files: "_ext.TraceViewer", /) -> None: ...
 
     def __init__(
         self,
@@ -164,7 +165,7 @@ class TraceViewer(LazyFrame):
         record_schema: "Union[str, Type[RecordSchema], None]" = None,
     ) -> None:
         native = (
-            files if isinstance(files, _ext._TraceViewer) else _ext._TraceViewer(files, index_path)
+            files if isinstance(files, _ext.TraceViewer) else _ext.TraceViewer(files, index_path)
         )
         if record_schema is not None:
             native = native.record_schema(schema_id(record_schema))
@@ -172,7 +173,7 @@ class TraceViewer(LazyFrame):
         self._tv = native
 
     # -- constructing results ----------------------------------------------------
-    def _trace(self, native: "_ext._TraceViewer") -> "TraceViewer":
+    def _trace(self, native: "_ext.TraceViewer") -> "TraceViewer":
         out = TraceViewer(native)
         out._runtime = self._runtime
         return out
@@ -353,7 +354,7 @@ class TraceViewer(LazyFrame):
             for name in cls._json:
                 path = paths[name]
                 if path in data:
-                    data[path] = frame[path]._native.to_pylist()
+                    data[path] = cast("List[object]", frame[path].to_pylist())
             columns = {name: data.get(path) for name, path in paths.items()}
             for i in range(len(frame)):
                 yield cls(

@@ -104,17 +104,64 @@ def resolve_round(spec: ColumnOp, unit: str) -> ColumnOp:
     return ColumnOp(spec.op, spec.column2, _round_every(spec, unit), spec.b)
 
 
+_EPOCH_NS = {"ns": 1, "us": 1_000, "ms": 1_000_000, "s": 1_000_000_000, "d": 86_400_000_000_000}
+
+
+def is_epoch(spec: ColumnOp) -> bool:
+    return spec.kind == "epoch"
+
+
+def epoch_steps(spec: ColumnOp, own: str) -> "List[ColumnOp]":
+    """The column ops that turn a temporal column counted in ``own`` ("d" for
+    a date32) into integers of the unit ``spec.text``: a cast to Int64, then a
+    multiplication or a floor division by the ratio of the two units."""
+    from .columnar import _CAST_CODES
+
+    assert spec.text is not None
+    want, have = _EPOCH_NS[spec.text], _EPOCH_NS[own]
+    steps = [ColumnOp("dftu.series.cast", None, _CAST_CODES["int64"])]
+    if have > want:
+        steps.append(ColumnOp("dftu.series.mul_scalar", None, have // want))
+    elif have < want:
+        steps.append(ColumnOp("dftu.series.floordiv_scalar", None, want // have, 0))
+    return steps
+
+
+def _own_unit(kind: int, time_unit: int, given: Optional[str]) -> str:
+    from .enums import DType
+    from .series import _dt_unit
+
+    if given is None and kind == DType.DATE32:
+        return "d"
+    return _dt_unit(kind, time_unit, given)
+
+
+def _plan_column(plan: "LazyFrame", name: str) -> "Tuple[int, int]":
+    """The type code and the time unit code of column ``name`` of a plan."""
+    for column, kind, time_unit, _zone in _ext.LazyFrame.output_schema(plan):
+        if column == name:
+            return kind, time_unit
+    raise ValueError(
+        f"dt: the column type of {name!r} is not known before the plan runs "
+        "(after a data-dependent op); collect first"
+    )
+
+
 def run_column_op(series: Series, spec: ColumnOp, series2: Optional[Series]) -> Series:
     """``spec`` over ``series`` through the registry, the operands placed by
     the op's signature tokens exactly as the lazy ``column_op`` step places
     them."""
+    if is_epoch(spec):
+        for step in epoch_steps(spec, _own_unit(series.type, series.time_unit, spec.unit)):
+            series = run_column_op(series, step, None)
+        return series
     tokens, ret = _tokens(spec.op)
     if not tokens or tokens[0] != "series" or ret != "series":
         raise TypeError(f"{spec.op}: not a column -> column op")
     if spec.op == "dftu.series.dt_round" and spec.text is not None:
-        from .series import _DtAccessor
+        from .series import _dt_unit
 
-        spec = resolve_round(spec, _DtAccessor(series, spec.unit)._unit)
+        spec = resolve_round(spec, _dt_unit(series.type, series.time_unit, spec.unit))
     scalars = [spec.a, spec.b]
     args: List[object] = []
     used_text = False
@@ -289,17 +336,6 @@ def _ascending(spec: ColumnOp) -> bool:
 # ---- lazy ------------------------------------------------------------------
 
 
-def _plan_unit(plan: "LazyFrame", name: str, spec: ColumnOp) -> str:
-    """The unit a dt_round rule counts in on column ``name`` of a plan: the
-    caller's, else date64 milliseconds; a plan schema holds no unit for the
-    other temporal types, so they read as microseconds, as an Int64 does."""
-    from .enums import DType
-
-    if spec.unit is not None:
-        return spec.unit
-    return "ms" if plan.schema[name] == DType.DATE64 else "us"
-
-
 def lower_column_ops(plan: "LazyFrame", expr: "Expr") -> "Tuple[LazyFrame, Expr, List[str]]":
     """The plan with every column op of ``expr`` appended as steps (each
     argument computed into a temporary column, the op run over it in
@@ -324,8 +360,18 @@ def lower_column_ops(plan: "LazyFrame", expr: "Expr") -> "Tuple[LazyFrame, Expr,
                 column2 = f"{name}b"
                 plan = plan.with_column(column2, spec.column2)
                 temps.append(column2)
+        if is_epoch(spec):
+            kind, time_unit = _plan_column(plan, name)
+            for step in epoch_steps(spec, _own_unit(kind, time_unit, spec.unit)):
+                plan = _ext.LazyFrame._column_op(
+                    plan, name, step.op, column2=None, a=step.a, b=step.b, text=None
+                )
+            continue
         if spec.op == "dftu.series.dt_round" and spec.text is not None:
-            spec = resolve_round(spec, _plan_unit(plan, name, spec))
+            from .series import _dt_unit
+
+            kind, time_unit = _plan_column(plan, name)
+            spec = resolve_round(spec, _dt_unit(kind, time_unit, spec.unit))
         if spec.over is None:
             plan = _ext.LazyFrame._column_op(
                 plan, name, spec.op, column2=column2, a=spec.a, b=spec.b, text=spec.text

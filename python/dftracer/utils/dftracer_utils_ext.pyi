@@ -1020,9 +1020,11 @@ class LazyFrame:
     def schema(self) -> List[str]:
         """Output column names without running, or [] when data-dependent."""
         ...
-    def output_schema(self) -> List[Tuple[str, int]]:
-        """``[(name, dtype id)]`` without running; a type the plan cannot know
-        statically is 0 (unknown)."""
+    def output_schema(self) -> List[Tuple[str, int, int, str]]:
+        """``[(name, dtype id, time unit, timezone)]`` without running; the
+        unit (0 s, 1 ms, 2 us, 3 ns) and the zone are those of a Timestamp,
+        Time or Duration column. A type the plan cannot know statically is 0
+        (unknown)."""
         ...
     def explain(self) -> str: ...
     def collect(

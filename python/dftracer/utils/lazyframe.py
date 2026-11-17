@@ -191,7 +191,9 @@ class LazyFrame(_ext.LazyFrame):
         :attr:`columns` is."""
         from .enums import DType
 
-        return {name: DType(code) for name, code in _ext.LazyFrame.output_schema(self)}
+        return {
+            name: DType(code) for name, code, _unit, _zone in _ext.LazyFrame.output_schema(self)
+        }
 
     def _resolve(self, op: str) -> Callable[[str], int]:
         names = _ext.LazyFrame.schema(self)

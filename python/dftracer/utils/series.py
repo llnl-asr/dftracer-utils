@@ -1542,6 +1542,17 @@ _FREQ_UNITS = {
 }
 
 
+def _dt_unit(kind: int, time_unit: int, given: Optional[str]) -> str:
+    """The unit ``.dt`` reads a column of type code ``kind`` in: ``given``, else
+    a temporal column's own unit (date64 counts milliseconds), else
+    microseconds, as an Int64 is read."""
+    if given is not None:
+        return given
+    if kind in _OWN_UNIT_TYPES:
+        return ("s", "ms", "us", "ns")[time_unit]
+    return "ms" if kind == DType.DATE64 else "us"
+
+
 _dt_accessor_new = _ext.DtAccessor.__new__
 _OWN_UNIT_TYPES = frozenset((int(DType.TIMESTAMP), int(DType.DURATION), int(DType.TIME64)))
 
@@ -1556,14 +1567,7 @@ class _DtAccessor(_ext.DtAccessor):
 
     def __new__(cls, series: Series, unit: Optional[str] = None) -> "_DtAccessor":
         self = _dt_accessor_new(cls, series)
-        if unit is None:
-            # A temporal column carries its own unit; an Int64 reads as us.
-            unit = "us"
-            kind = series.type
-            if kind in _OWN_UNIT_TYPES:
-                unit = ("s", "ms", "us", "ns")[series.time_unit]
-            elif kind == DType.DATE64:
-                unit = "ms"
+        unit = _dt_unit(series.type, series.time_unit, unit)
         if unit not in _TIME_UNITS:
             raise ValueError("dt: unit must be s, ms, us or ns")
         self._unit = unit

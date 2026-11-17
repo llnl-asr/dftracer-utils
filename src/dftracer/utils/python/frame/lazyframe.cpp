@@ -1010,8 +1010,16 @@ PyObject* LazyFrame_output_schema(PyObject* self, PyObject*) {
     if (!out) return nullptr;
     for (std::size_t i = 0; i < schema.fields.size(); ++i) {
         const dataframe::Field& f = schema.fields[i];
+        const dstd::StringView zone = f.type.timezone();
+        PyObject* zone_name = PyUnicode_FromStringAndSize(
+            zone.data(), static_cast<Py_ssize_t>(zone.size()));
+        if (!zone_name) {
+            Py_DECREF(out);
+            return nullptr;
+        }
         PyObject* item =
-            Py_BuildValue("(si)", f.name.c_str(), static_cast<int>(f.type.id));
+            Py_BuildValue("(siiN)", f.name.c_str(), static_cast<int>(f.type.id),
+                          static_cast<int>(f.type.time_unit()), zone_name);
         if (!item) {
             Py_DECREF(out);
             return nullptr;
@@ -1240,7 +1248,9 @@ PyMethodDef LazyFrame_methods[] = {
     {"auto_spill", LazyFrame_auto_spill, METH_NOARGS,
      "auto_spill() -> LazyFrame with the spill budget at ~1/3 of memory."},
     {"output_schema", LazyFrame_output_schema, METH_NOARGS,
-     "output_schema() -> [(name, dtype id)] without running; a type the "
+     "output_schema() -> [(name, dtype id, time unit, timezone)] without "
+     "running; the unit (0 s, 1 ms, 2 us, 3 ns) and the zone are those of "
+     "a Timestamp, Time or Duration column. A type the "
      "plan cannot know statically is 0 (unknown)."},
     {"stream", DFTU_PYCFUNCTION(LazyFrame_stream), METH_VARARGS | METH_KEYWORDS,
      "stream(batch_size=0, runtime=None) -> iterator of DataFrame chunks."},

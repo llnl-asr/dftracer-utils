@@ -1984,7 +1984,14 @@ class _ExprDt:
         return self._part(15)
 
     def epoch(self, time_unit: str = "us") -> Expr:
-        return self._e.cast("int64")
+        """Each instant as an integer count of ``time_unit`` (``"ns"``, ``"us"``,
+        ``"ms"``, ``"s"`` or ``"d"``) since the epoch, from the column's own
+        unit; a coarser unit floors."""
+        from ._expr_ops import _EPOCH_NS
+
+        if time_unit not in _EPOCH_NS:
+            raise ValueError("epoch: time_unit must be ns, us, ms, s or d")
+        return self._e._op("dftu.series.cast", text=time_unit, kind="epoch", unit=self._given)
 
     def truncate(self, every: "Union[int, str]") -> Expr:
         """Each instant floored to a multiple of ``every`` (a pandas offset

@@ -2171,8 +2171,10 @@ def _batch_result_dtype(fn: Callable[..., Any], returns: object) -> str:
             f"udf {fn.__name__!r} needs a result dtype: pass returns=np.float64 (or another "
             "dtype) or annotate the return as npt.NDArray[np.float64]"
         )
+    if not isinstance(returns, (type, str, np.dtype)):
+        raise TypeError(f"udf {fn.__name__!r}: {returns!r} is not a numpy dtype")
     try:
-        name = np.dtype(returns).name  # type: ignore[call-overload]
+        name = np.dtype(returns).name
     except TypeError as exc:
         raise TypeError(f"udf {fn.__name__!r}: {returns!r} is not a numpy dtype") from exc
     if name not in _BATCH_DTYPES:

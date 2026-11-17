@@ -47,7 +47,7 @@ def call(
     buffer alive for as long as the array lives. A bool column arrives
     bit-packed and is unpacked to a new ``bool`` array.
     """
-    import numpy as np  # ty: ignore[import-not-found]
+    import numpy as np
 
     args = []
     for dtype, ptr, keep in specs:

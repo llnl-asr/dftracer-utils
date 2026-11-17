@@ -160,6 +160,7 @@ include = [
   "python/dftracer/utils/_pandas_frame.py",
   "python/dftracer/utils/_pandas_series.py",
   "python/dftracer/utils/_polars_frame.py",
+  "python/dftracer/utils/_udf_lane.py",
   "python/dftracer/utils/arrow.py",
   "python/dftracer/utils/columnar.py",
   "python/dftracer/utils/dask.py",
